@@ -212,37 +212,30 @@
     .main { padding: 16px; }
     .cat-layout { grid-template-columns: 200px 1fr; }
   }
-  /* Mobile category dropdown */
-  .cat-mobile-select { display: none; margin-bottom: 14px; }
-  @media (max-width: 640px) {
-    .cat-mobile-select { display: block; }
-    .cat-sidebar { display: none !important; }
-    .cat-layout { grid-template-columns: 1fr !important; }
-  }
-
+  /* ── Category pill nav (mobile/tablet ≤900px) ── */
+  .cat-pill-nav { display: none; }
   @media (max-width: 900px) {
     .cat-layout { grid-template-columns: 1fr; }
-    .cat-sidebar { position: static !important; top: auto !important; max-width: 100%; overflow: hidden; }
-    .cat-list {
-      display: flex !important;
-      flex-direction: row !important;
-      max-height: none !important;
-      overflow-x: auto !important;
-      overflow-y: hidden !important;
-      gap: 4px;
-      padding: 0 4px 6px;
-      scrollbar-width: thin;
+    .cat-sidebar { display: none !important; }
+    .cat-pill-nav {
+      display: flex;
+      flex-direction: row;
+      gap: 8px;
+      overflow-x: auto;
+      padding: 4px 2px 12px;
+      margin-bottom: 10px;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+      position: sticky;
+      top: 56px;
+      z-index: 5;
+      background: var(--bg);
     }
-    .cat-list::-webkit-scrollbar { height: 4px; }
-    .cat-list button {
-      flex-shrink: 0;
-      border-left: none !important;
-      border-bottom: 3px solid transparent !important;
-      white-space: nowrap;
-    }
-    .cat-list button[style*="border-left"] {
-      /* active state — handled by JS inline style */
-    }
+    .cat-pill-nav::-webkit-scrollbar { display: none; }
+    .cat-layout { gap: 12px; }
+  }
+  @media (max-width: 640px) {
+    .cat-layout { grid-template-columns: 1fr !important; }
   }
   /* ── iPad portrait (768px) ── */
   @media (max-width: 768px) {
@@ -382,6 +375,9 @@
   @media (max-width: 640px) {
     .product-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 10px !important; }
     .cat-layout { gap: 12px; }
+    /* Slightly compact pills on small phones */
+    .cat-pill-nav button { min-width: 54px !important; min-height: 56px !important; padding: 6px 8px !important; }
+    .cat-pill-nav button span:first-child { font-size: 20px !important; }
 
     /* Compact KPI on mobile — fit 4 KPIs nicely */
     .kpi { padding: 10px 12px !important; }
@@ -395,17 +391,6 @@
     /* Tighter page head spacing */
     .page-head { margin-bottom: 10px !important; flex-wrap: wrap; }
     .page-sub { font-size: 11px !important; }
-
-    /* Sticky category dropdown — easy nav */
-    .cat-mobile-select {
-      position: sticky;
-      top: 56px;
-      z-index: 5;
-      background: var(--bg);
-      padding: 6px 0;
-      margin-bottom: 10px !important;
-    }
-    .cat-mobile-select select { font-size: 13px !important; padding: 8px 12px !important; }
 
     /* Compact product cards */
     .product-grid .card { padding: 0 !important; }

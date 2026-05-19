@@ -864,6 +864,14 @@ function CategoryView({ data, role }) {
   const [supplierFilter, setSupplierFilter] = uS(null);
   const [newStockFilter, setNewStockFilter] = uS(false);
   const [orderProduct, setOrderProduct] = uS(null);
+  const pillNavRef = React.useRef(null);
+
+  // Scroll active pill into view when category changes
+  uE(() => {
+    if (!pillNavRef.current) return;
+    const activeBtn = pillNavRef.current.querySelector('[data-active="true"]');
+    if (activeBtn) activeBtn.scrollIntoView({ behavior:"smooth", block:"nearest", inline:"center" });
+  }, [active]);
 
   // ── helper: parse DD/MM/YYYY → Date ──
   const parseStockDate = (str) => {
@@ -1045,22 +1053,48 @@ function CategoryView({ data, role }) {
         )}
       </div>
 
-      {/* Mobile dropdown — hidden on desktop */}
-      <div className="cat-mobile-select">
-        <select value={active}
-                onChange={e => { setActive(e.target.value); setColorFilter(null); setSupplierFilter(null); setNewStockFilter(false); setShowAll(false); }}
-                style={{
-                  width:"100%", padding:"10px 14px", borderRadius:10, fontSize:14, fontWeight:600,
-                  border:"1.5px solid var(--bdr)", background:"var(--paper)", fontFamily:"inherit",
-                  color:"var(--text)", cursor:"pointer",
-                }}>
-          {allCats.map(c => {
-            const isMto = c === "Made to Order จัดแบบพิเศษ";
-            const n = products.filter(p => p.cat === c).length;
-            const em = CAT_EMOJI[c] || "";
-            return <option key={c} value={c}>{em ? em+" " : ""}{isMto ? "งานจัดพิเศษ (MTO)" : c} ({n})</option>;
-          })}
-        </select>
+      {/* ── Category Pill Nav — shown on mobile/tablet ≤900px, hidden on desktop ── */}
+      <div className="cat-pill-nav" ref={pillNavRef}>
+        {allCats.map(c => {
+          const em = CAT_EMOJI[c] || "📁";
+          const isMto = c === "Made to Order จัดแบบพิเศษ";
+          const n = products.filter(p => p.cat === c).length;
+          const isActive = active === c;
+          const cc = catColor(c, allCats);
+          const shortName = isMto ? "MTO 🎁" : c.length > 7 ? c.slice(0,6)+"…" : c;
+          return (
+            <button key={c}
+              data-active={isActive ? "true" : "false"}
+              onClick={() => { setActive(c); setColorFilter(null); setSupplierFilter(null); setNewStockFilter(false); setShowAll(false); }}
+              style={{
+                display:"inline-flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
+                gap:2, padding:"8px 10px", minWidth:60, minHeight:60,
+                borderRadius:14,
+                border: isActive ? `2px solid ${cc}` : "1.5px solid var(--bdr)",
+                background: isActive ? cc+"20" : "var(--paper)",
+                cursor:"pointer", flexShrink:0,
+                fontFamily:"inherit", transition:"all .15s",
+                boxShadow: isActive ? `0 2px 8px ${cc}40` : "none",
+              }}>
+              <span style={{fontSize:24, lineHeight:1}}>{em}</span>
+              <span style={{
+                fontSize:10, fontWeight: isActive?700:500,
+                color: isActive ? cc : "var(--muted)",
+                lineHeight:1.3, textAlign:"center",
+                maxWidth:64, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
+              }}>{shortName}</span>
+              <span style={{
+                fontSize:9, fontWeight:700,
+                color: isActive ? "#fff" : "var(--light)",
+                background: isActive ? cc : "transparent",
+                padding: isActive ? "1px 5px" : "0",
+                borderRadius:99, lineHeight:1.4,
+                minWidth: isActive ? 16 : 0,
+                textAlign:"center",
+              }}>{n}</span>
+            </button>
+          );
+        })}
       </div>
 
       <div className="cat-layout">
@@ -1217,9 +1251,10 @@ function CategoryView({ data, role }) {
           {!isGlobalSearch && (
             <div className="sec-head" style={{margin:"4px 0 14px"}}>
               <div>
-                <div className="sec-title" style={{display:"flex",alignItems:"center",gap:10}}>
-                  <span style={{width:14,height:14,borderRadius:"50%",background:color}}/>
-                  {isMtoCat ? "งานจัดพิเศษ" : active}
+                <div className="sec-title" style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontSize:20,lineHeight:1}}>{CAT_EMOJI[active] || "📁"}</span>
+                  <span style={{width:10,height:10,borderRadius:"50%",background:color,flexShrink:0}}/>
+                  {isMtoCat ? "งานจัดพิเศษ (MTO)" : active}
                   <span style={{fontSize:12, fontWeight:500, color:"var(--muted)"}}>
                     · {filtered.length} รายการ
                   </span>
