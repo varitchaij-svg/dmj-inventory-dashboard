@@ -1487,19 +1487,22 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role }) {
            style={{position:"relative", padding:8, background: "linear-gradient(180deg, var(--g-50), #fff)",
                    cursor: hasImg ? "zoom-in" : "default", flex:"none"}}>
         {hasImg ? (
-          /* padding-bottom:100% trick — works on ALL browsers, no aspect-ratio needed */
+          /* padding-bottom:100% creates 1:1 square — works on ALL browsers */
           <div style={{
             position:"relative", width:"100%", paddingBottom:"100%",
             borderRadius:10, overflow:"hidden",
             border:"1px solid var(--bdr)", backgroundColor:"#fff",
+            boxSizing:"border-box",
           }}>
             <img src={p.imageUrl} alt={p.name}
                  style={{
-                   position:"absolute", inset:0,
+                   position:"absolute",
+                   top:0, left:0, right:0, bottom:0,
                    width:"100%", height:"100%",
                    objectFit:"contain",
+                   display:"block",
                  }}
-                 onError={e => { e.currentTarget.parentElement.style.display="none"; }}/>
+                 onError={e => { e.currentTarget.parentElement.style.visibility="hidden"; }}/>
           </div>
         ) : (
           <div className="pimg" style={{

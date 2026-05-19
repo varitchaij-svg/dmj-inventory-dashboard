@@ -181,11 +181,14 @@
   }
   .cat-sidebar { align-self: start; position: sticky; top: 80px; }
 
-  /* Product grid — base */
+  /* Product grid — mobile-first: 2 cols default, expand on larger screens */
   .product-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-    gap: 14px;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+  @media (min-width: 900px) {
+    .product-grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
   }
 
   /* Grid utilities */
@@ -241,13 +244,9 @@
     }
     .cat-pill-nav::-webkit-scrollbar { display: none; }
     .cat-layout { gap: 12px; }
-    /* Force 2-column product grid on tablet */
-    .product-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
   }
   @media (max-width: 640px) {
     .cat-layout { grid-template-columns: 1fr !important; }
-    /* 2-column grid on mobile — no inline style conflict */
-    .product-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 10px !important; }
   }
   /* ── iPad portrait (768px) ── */
   @media (max-width: 768px) {
@@ -610,9 +609,9 @@
     overflow: hidden;
     position: relative; /* children use position:absolute */
   }
-  .pimg > * { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
+  .pimg > * { position: absolute; top:0; left:0; right:0; bottom:0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
   .pimg::after {
-    content: ""; position: absolute; inset: 0;
+    content: ""; position: absolute; top:0; left:0; right:0; bottom:0;
     background: radial-gradient(circle at 30% 30%, transparent 40%, rgba(31,127,68,.06));
     pointer-events: none;
   }
