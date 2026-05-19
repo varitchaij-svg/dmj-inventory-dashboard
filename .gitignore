@@ -1,0 +1,18 @@
+# ข้อมูลจริงของธุรกิจ — ไม่ขึ้น GitHub
+data.json
+data-bundle.js
+
+# Backup folder
+backup/
+
+# Claude Code internal
+.claude/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+*.swp
