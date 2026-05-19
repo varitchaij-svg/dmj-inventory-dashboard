@@ -1276,7 +1276,7 @@ function CategoryView({ data, role }) {
           {filtered.length === 0 ? (
             <Empty title="ไม่พบสินค้า" sub={isGlobalSearch || search ? "ลองค้นหาด้วยคำอื่น" : "หมวดนี้ยังไม่มีสินค้า"}/>
           ) : (
-            <div className="product-grid" style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(200px, 1fr))",gap:14}}>
+            <div className="product-grid">
               {visible.map((p, idx) => (
                 <div key={p.sku} style={{position:"relative"}}>
                   {/* Category badge overlay in global search mode */}
@@ -1483,7 +1483,7 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role }) {
     <>
     <div className="card hover" style={{padding:0, overflow:"hidden", display:"flex", flexDirection:"column"}}>
       {/* Image */}
-      <div onClick={hasImg ? () => setLightbox(true) : null}
+      <div className="pcard-img" onClick={hasImg ? () => setLightbox(true) : null}
            style={{position:"relative", padding:10, background: "linear-gradient(180deg, var(--g-50), #fff)",
                    cursor: hasImg ? "zoom-in" : "default", flex:"none"}}>
         {hasImg ? (
@@ -1543,7 +1543,7 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role }) {
       </div>
 
       {/* Body */}
-      <div style={{padding:"8px 12px 12px"}}>
+      <div className="pcard-body" style={{padding:"8px 12px 12px"}}>
         <div style={{display:"flex", alignItems:"center", gap:6, marginBottom:5, flexWrap:"wrap"}}>
           <span className="skucode">{p.sku}</span>
           {p.color && (
@@ -1575,7 +1575,7 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role }) {
           </div>
         )}
         {(p.lastSupplier || p.vendor) && (
-          <div style={{display:"flex",alignItems:"center",gap:4,fontSize:10.5,color:"var(--muted)",marginBottom:3}}>
+          <div className="vendor-line" style={{display:"flex",alignItems:"center",gap:4,fontSize:10.5,color:"var(--muted)",marginBottom:3}}>
             {React.cloneElement(I.store, {size:11})}
             <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.lastSupplier || p.vendor}</span>
           </div>
@@ -1612,7 +1612,7 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role }) {
 
       {/* Order button */}
       {onOrder && (
-        <div style={{padding:"0 12px 12px", marginTop:"auto"}}>
+        <div className="pcard-order" style={{padding:"0 12px 12px", marginTop:"auto"}}>
           <button onClick={() => !outOfStock && onOrder(p)}
                   disabled={outOfStock}
                   style={{width:"100%", padding:"9px 12px", borderRadius:8,

@@ -115,6 +115,7 @@
   .main {
     max-width: 1480px; margin: 0 auto;
     padding: 28px;
+    overflow-x: hidden; /* prevent horizontal overflow from cards/grid */
   }
 
   /* Page header */
@@ -180,6 +181,13 @@
   }
   .cat-sidebar { align-self: start; position: sticky; top: 80px; }
 
+  /* Product grid — base */
+  .product-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 14px;
+  }
+
   /* Grid utilities */
   .row { display: grid; gap: 16px; }
   .row-2 { grid-template-columns: 1fr 1fr; }
@@ -227,15 +235,19 @@
       scrollbar-width: none;
       -webkit-overflow-scrolling: touch;
       position: sticky;
-      top: 56px;
-      z-index: 5;
+      top: 100px;   /* below the 2-row sticky nav (~95px) */
+      z-index: 45;  /* below nav z-index:50 */
       background: var(--bg);
     }
     .cat-pill-nav::-webkit-scrollbar { display: none; }
     .cat-layout { gap: 12px; }
+    /* Force 2-column product grid on tablet */
+    .product-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
   }
   @media (max-width: 640px) {
     .cat-layout { grid-template-columns: 1fr !important; }
+    /* 2-column grid on mobile — no inline style conflict */
+    .product-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 10px !important; }
   }
   /* ── iPad portrait (768px) ── */
   @media (max-width: 768px) {
@@ -276,8 +288,8 @@
     .brand-name { font-size: 14px; }
     .page-title { font-size: 18px; }
 
-    /* Controls card — more compact */
-    .cat-layout .card { padding: 12px !important; }
+    /* Controls card — more compact (exclude product cards with .hover class) */
+    .cat-layout .card:not(.hover) { padding: 12px !important; }
 
     /* Filter bar labels — hide, just show emoji/chips */
     .filter-bar-label { display: none !important; }
@@ -335,8 +347,9 @@
       width: 100% !important;
     }
 
-    /* Universal mobile optimization for all views */
-    .card { padding: 12px !important; border-radius: var(--r) !important; }
+    /* Universal mobile optimization for all views — exclude product cards */
+    .card:not(.hover) { padding: 12px !important; border-radius: var(--r) !important; }
+    .card.hover { border-radius: var(--r) !important; }
     .card-head { padding: 0 0 8px 0 !important; gap: 8px !important; }
     .card-title { font-size: 15px !important; }
     .page-actions { width: 100% !important; }
@@ -371,9 +384,8 @@
     .sec-head { margin: 14px 0 10px !important; }
   }
 
-  /* Product grid — 2 columns on mobile */
+  /* ── Mobile 640px — product cards + pill buttons ── */
   @media (max-width: 640px) {
-    .product-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 10px !important; }
     .cat-layout { gap: 12px; }
     /* Slightly compact pills on small phones */
     .cat-pill-nav button { min-width: 54px !important; min-height: 56px !important; padding: 6px 8px !important; }
@@ -392,18 +404,23 @@
     .page-head { margin-bottom: 10px !important; flex-wrap: wrap; }
     .page-sub { font-size: 11px !important; }
 
-    /* Compact product cards */
-    .product-grid .card { padding: 0 !important; }
-    .product-grid .card .pimg { padding: 6px !important; }
+    /* Compact product cards — fit more on screen */
+    .product-grid .card { padding: 0 !important; overflow: hidden !important; }
+    .product-grid .pcard-img { padding: 6px !important; } /* image wrapper */
+    .product-grid .pcard-img .pimg { padding: 0 !important; } /* placeholder inside wrapper */
     .product-grid .skucode { font-size: 9px !important; padding: 1px 5px !important; }
+    .product-grid .pcard-body { padding: 6px 10px 8px !important; }
+    .product-grid .pcard-order { padding: 0 10px 10px !important; }
+    /* Vendor line — hide to save space on compact cards */
+    .product-grid .vendor-line { display: none !important; }
 
     /* Tighter section header */
     .sec-head { margin: 4px 0 10px !important; flex-wrap: wrap; gap: 8px; }
     .sec-title { font-size: 13.5px !important; }
     .sec-sub { font-size: 10.5px !important; }
 
-    /* Tighten control card (search + sort) */
-    .cat-layout .card { padding: 10px 12px !important; }
+    /* Tighten control card (search + sort) — exclude product cards */
+    .cat-layout > div > .card:not(.hover) { padding: 10px 12px !important; }
   }
 
   /* ── Orders tabs — mobile ── */
