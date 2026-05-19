@@ -597,28 +597,20 @@
     white-space: nowrap;
   }
 
-  /* Real product image — <img> tag with 1:1 crop */
-  .pcard-realimg {
-    display: block;
-    width: 100%;
-    aspect-ratio: 1 / 1;
-    object-fit: contain;
-  }
-
-  /* Product image placeholder */
+  /* Product image placeholder — padding-bottom trick for universal browser support */
   .pimg {
-    width: 100%; aspect-ratio: 1 / 1;
+    width: 100%; padding-bottom: 100%; /* creates 1:1 square without aspect-ratio CSS */
     background:
       repeating-linear-gradient(135deg, #ffffff 0 6px, #f1f5ec 6px 12px);
     border-radius: 10px;
     border: 1px solid var(--bdr);
-    display: flex; align-items: center; justify-content: center;
     color: var(--light);
     font-family: "JetBrains Mono", monospace;
     font-size: 10px;
     overflow: hidden;
-    position: relative;
+    position: relative; /* children use position:absolute */
   }
+  .pimg > * { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
   .pimg::after {
     content: ""; position: absolute; inset: 0;
     background: radial-gradient(circle at 30% 30%, transparent 40%, rgba(31,127,68,.06));

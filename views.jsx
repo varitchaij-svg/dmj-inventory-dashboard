@@ -1484,13 +1484,23 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role }) {
     <div className="card hover" style={{padding:0, overflow:"hidden", display:"flex", flexDirection:"column"}}>
       {/* Image */}
       <div className="pcard-img" onClick={hasImg ? () => setLightbox(true) : null}
-           style={{position:"relative", padding:10, background: "linear-gradient(180deg, var(--g-50), #fff)",
+           style={{position:"relative", padding:8, background: "linear-gradient(180deg, var(--g-50), #fff)",
                    cursor: hasImg ? "zoom-in" : "default", flex:"none"}}>
         {hasImg ? (
-          <img src={p.imageUrl} alt={p.name}
-               className="pcard-realimg"
-               onError={e => { e.currentTarget.style.display="none"; e.currentTarget.nextSibling && (e.currentTarget.nextSibling.style.display="flex"); }}
-               style={{borderRadius:10, border:"1px solid var(--bdr)", backgroundColor:"#fff"}}/>
+          /* padding-bottom:100% trick — works on ALL browsers, no aspect-ratio needed */
+          <div style={{
+            position:"relative", width:"100%", paddingBottom:"100%",
+            borderRadius:10, overflow:"hidden",
+            border:"1px solid var(--bdr)", backgroundColor:"#fff",
+          }}>
+            <img src={p.imageUrl} alt={p.name}
+                 style={{
+                   position:"absolute", inset:0,
+                   width:"100%", height:"100%",
+                   objectFit:"contain",
+                 }}
+                 onError={e => { e.currentTarget.parentElement.style.display="none"; }}/>
+          </div>
         ) : (
           <div className="pimg" style={{
             background: p.color
