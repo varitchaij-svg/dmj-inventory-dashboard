@@ -4,6 +4,107 @@ const { ResponsiveContainer, AreaChart, Area, BarChart, Bar, LineChart, Line,
         XAxis, YAxis, CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell } = window.Recharts;
 
 // ─────────────────────────────────────────────────────────────────────
+// VISUAL CONFIRM MODAL (replaces native confirm() — readable without Thai)
+// ─────────────────────────────────────────────────────────────────────
+function ConfirmModal({ open, type="warn", emoji, title, detail, confirmLabel="ยืนยัน", cancelLabel="ยกเลิก", onConfirm, onCancel }) {
+  if (!open) return null;
+  const colors = {
+    warn:    { bg:"#fff8e1", accent:"#a07417", btn:"#f59e0b", emoji:emoji || "⚠️" },
+    danger:  { bg:"#ffebee", accent:"#c62828", btn:"#c62828", emoji:emoji || "🗑️" },
+    success: { bg:"#e8f5e9", accent:"#1b5e20", btn:"#1b5e20", emoji:emoji || "✅" },
+    ship:    { bg:"#e3f2fd", accent:"#0d47a1", btn:"#1565c0", emoji:emoji || "📦" },
+  };
+  const c = colors[type] || colors.warn;
+  return (
+    <div onClick={onCancel} style={{
+      position:"fixed", inset:0, background:"rgba(0,0,0,.6)", zIndex:2000,
+      display:"flex", alignItems:"center", justifyContent:"center", padding:16,
+      backdropFilter:"blur(4px)",
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background:"#fff", borderRadius:18, maxWidth:380, width:"100%",
+        overflow:"hidden", boxShadow:"0 20px 60px rgba(0,0,0,.3)",
+      }}>
+        {/* Big emoji header */}
+        <div style={{
+          background:c.bg, padding:"24px 20px 18px", textAlign:"center",
+          borderBottom:`3px solid ${c.accent}33`,
+        }}>
+          <div style={{fontSize:56, lineHeight:1, marginBottom:6}}>{c.emoji}</div>
+          {title && <div style={{fontSize:16, fontWeight:700, color:c.accent}}>{title}</div>}
+        </div>
+        {/* Detail (numbers/SKU prominent) */}
+        {detail && (
+          <div style={{padding:"18px 20px", textAlign:"center", fontSize:14,
+                       color:"var(--g-800)", lineHeight:1.5, whiteSpace:"pre-line"}}>
+            {detail}
+          </div>
+        )}
+        {/* Buttons — large, full-width */}
+        <div style={{display:"flex", gap:8, padding:"0 16px 16px"}}>
+          <button onClick={onCancel} style={{
+            flex:1, padding:"16px", borderRadius:12, border:"none",
+            background:"var(--g-100)", color:"var(--g-700)",
+            fontSize:15, fontWeight:700, cursor:"pointer", fontFamily:"inherit",
+            minHeight:56,
+          }}>❌ {cancelLabel}</button>
+          <button onClick={onConfirm} style={{
+            flex:1, padding:"16px", borderRadius:12, border:"none",
+            background:c.btn, color:"#fff",
+            fontSize:15, fontWeight:700, cursor:"pointer", fontFamily:"inherit",
+            minHeight:56,
+          }}>✅ {confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// TOAST (replaces native alert() — emoji + color, auto-dismiss)
+// ─────────────────────────────────────────────────────────────────────
+function Toast({ toast, onClose }) {
+  uE(() => {
+    if (!toast) return;
+    const t = setTimeout(onClose, toast.duration || 4000);
+    return () => clearTimeout(t);
+  }, [toast, onClose]);
+  if (!toast) return null;
+  const styles = {
+    error:   { bg:"#ffebee", border:"#c62828", color:"#c62828", emoji:"❌" },
+    warn:    { bg:"#fff8e1", border:"#f59e0b", color:"#a07417", emoji:"⚠️" },
+    success: { bg:"#e8f5e9", border:"#1b5e20", color:"#1b5e20", emoji:"✅" },
+    info:    { bg:"#e3f2fd", border:"#1565c0", color:"#0d47a1", emoji:"ℹ️" },
+  };
+  const s = styles[toast.type] || styles.info;
+  return (
+    <div onClick={onClose} style={{
+      position:"fixed", top:20, left:"50%", transform:"translateX(-50%)",
+      zIndex:3000, background:s.bg, border:`2px solid ${s.border}`,
+      borderRadius:14, padding:"14px 20px", display:"flex", alignItems:"center",
+      gap:12, minWidth:200, maxWidth:"calc(100vw - 32px)", cursor:"pointer",
+      boxShadow:"0 8px 24px rgba(0,0,0,.18)", animation:"toastIn .25s ease",
+    }}>
+      <span style={{fontSize:28, lineHeight:1}}>{toast.emoji || s.emoji}</span>
+      <span style={{fontSize:15, fontWeight:700, color:s.color, lineHeight:1.3}}>
+        {toast.message}
+      </span>
+      <style>{`@keyframes toastIn { from {opacity:0; transform:translate(-50%, -12px)} to {opacity:1; transform:translate(-50%, 0)} }`}</style>
+    </div>
+  );
+}
+
+// Hook for using toast — returns [toast, showToast, hideToast]
+function useToast() {
+  const [toast, setToast] = uS(null);
+  const showToast = uC((type, message, emoji, duration) => {
+    setToast({ type, message, emoji, duration });
+  }, []);
+  const hideToast = uC(() => setToast(null), []);
+  return [toast, showToast, hideToast];
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // OVERVIEW
 // ─────────────────────────────────────────────────────────────────────
 function OverviewView({ data, range, setRange, role }) {
@@ -1222,7 +1323,7 @@ function OrderModal({ product, onClose }) {
         <div style={{padding:"16px 20px 14px", borderBottom:"1px solid var(--bdr)",
                      display:"flex", justifyContent:"space-between", alignItems:"center"}}>
           <div style={{fontWeight:700, fontSize:16}}>🛒 สั่งไปขาย</div>
-          <button onClick={onClose} style={{...btnBase, width:32, height:32, padding:0, fontSize:18, color:"var(--muted)"}}>×</button>
+          <button onClick={onClose} style={{...btnBase, width:44, height:44, padding:0, fontSize:22, color:"var(--muted)"}}>×</button>
         </div>
 
         {done ? (
@@ -2104,8 +2205,8 @@ function ProductModal({ p, onClose, allCats }) {
             <div style={{fontSize:16, fontWeight:700, lineHeight:1.3}}>{p.name}</div>
           </div>
           <button onClick={onClose} style={{
-            border:"1px solid var(--bdr)", background:"#fff", borderRadius:8,
-            width:32, height:32, cursor:"pointer", fontSize:18, color:"var(--muted)",
+            border:"1px solid var(--bdr)", background:"#fff", borderRadius:10,
+            width:44, height:44, cursor:"pointer", fontSize:22, color:"var(--muted)",
             fontFamily:"inherit"
           }}>×</button>
         </div>
@@ -3427,10 +3528,10 @@ function ImageLightbox({ url, name, onClose }) {
         </div>
       </div>
       <button onClick={onClose} style={{
-        position:"absolute", top:20, right:20,
+        position:"absolute", top:16, right:16,
         background:"rgba(255,255,255,.15)", border:"1px solid rgba(255,255,255,.3)",
-        color:"#fff", borderRadius:8, width:36, height:36,
-        cursor:"pointer", fontSize:18, fontFamily:"inherit"
+        color:"#fff", borderRadius:10, width:48, height:48,
+        cursor:"pointer", fontSize:24, fontFamily:"inherit"
       }}>×</button>
     </div>
   );
@@ -3793,6 +3894,7 @@ const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty
 // ─── FrontStoreView ───
 function FrontStoreView({ data, role }) {
   const products = data.products || [];
+  const [toast, showToast, hideToast] = useToast();
   const CAT_ORDER = ["Realtouch","ดอกไม้","บูช","ไม้แซม","ดอกหญ้า","ใบ","ใบบูช","ใบไม้แขวน","กิ่งไม้","กุหลาบหิน","ต้นไม้","แจกันแก้ว","เรซิ่น"];
 
   const allCats = uM(() => {
@@ -3888,7 +3990,10 @@ function FrontStoreView({ data, role }) {
     if (!sku) return;
     const clean = sku.trim().toUpperCase();
     const p = products.find(x => x.sku === clean);
-    if (!p) { alert(`ไม่พบสินค้า: ${clean}`); return; }
+    if (!p) {
+      showToast("error", `ไม่พบ ${clean}`, "🔍");
+      return;
+    }
     setActiveCat("ALL");
     setSearch(clean);
     setScrollToSku(clean);
@@ -3912,16 +4017,19 @@ function FrontStoreView({ data, role }) {
     const entries = [...touched]
       .filter(sku => checkedQtys[sku] !== "" && checkedQtys[sku] != null)
       .map(sku => ({ sku, qty: parseInt(checkedQtys[sku]) || 0 }));
-    if (entries.length === 0) { alert("กรอกจำนวนก่อนบันทึก"); return; }
+    if (entries.length === 0) {
+      showToast("warn", "ยังไม่ได้กรอกจำนวน", "✏️");
+      return;
+    }
     setSaving(true);
     const result = await syncFrontStoreData(entries);
     setSaving(false);
     if (result.success !== false) {
       setSavedSkus(prev => new Set([...prev, ...entries.map(e => e.sku)]));
       setTouched(new Set());
-      alert(`✅ บันทึก ${entries.length} รายการเรียบร้อย`);
+      showToast("success", `บันทึก ${entries.length} รายการ`, "💾");
     } else {
-      alert("บันทึกไม่สำเร็จ: " + (result.error || "ตรวจสอบ SHEET_DEPLOY_URL"));
+      showToast("error", "บันทึกไม่สำเร็จ", "❌");
     }
   };
 
@@ -4079,6 +4187,7 @@ function FrontStoreView({ data, role }) {
       </div>
     </div>
     {lightbox && <ImageLightbox url={lightbox.url} name={lightbox.name} onClose={() => setLightbox(null)}/>}
+    <Toast toast={toast} onClose={hideToast}/>
     </>
   );
 }
@@ -4116,10 +4225,13 @@ async function syncDeleteLockEntry(lockKey, sku) {
 
 function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, onClose }) {
   const [lightbox, setLightbox] = uS(null);
-  const [editMode, setEditMode] = uS(false); // เปิด/ปิด add-SKU panel
+  const [editMode, setEditMode] = uS(false);
   const [addSku, setAddSku] = uS("");
   const [saving, setSaving] = uS(false);
   const [savedSkus, setSavedSkus] = uS(new Set());
+  const [toast, showToast, hideToast] = useToast();
+  // confirm modal state for delete
+  const [delConfirm, setDelConfirm] = uS(null); // { sku, isLocal }
   // เช็คจริง: { sku: qty } — กรอกได้ทุก SKU
   const [checkedQtys, setCheckedQtys] = uS(() => {
     const init = {};
@@ -4153,12 +4265,18 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
     onUpdateLock(lockOv.filter(s => s !== sku));
   };
 
-  const handleDelete = async (sku, isLocal) => {
-    if (!confirm(`ลบ ${sku} ออกจากล็อค ${lockKey}?\n\nข้อมูลจะถูกลบออกจาก sheet "ตำแหน่งจัดเก็บ" จริงๆ`)) return;
+  const handleDelete = (sku, isLocal) => {
+    setDelConfirm({ sku, isLocal });
+  };
+  const doDelete = async () => {
+    const { sku, isLocal } = delConfirm || {};
+    setDelConfirm(null);
+    if (!sku) return;
     if (isLocal) {
       onUpdateLock(lockOv.filter(s => s !== sku));
       setNewSkus(prev => { const n = new Set(prev); n.delete(sku); return n; });
       setCheckedQtys(prev => { const n = {...prev}; delete n[sku]; return n; });
+      showToast("success", `ลบ ${sku} แล้ว`, "🗑️");
     } else {
       const result = await syncDeleteLockEntry(lockKey, sku);
       if (result.success !== false) {
@@ -4166,8 +4284,9 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
         setCheckedQtys(prev => { const n = {...prev}; delete n[sku]; return n; });
         setSavedSkus(prev => { const n = new Set(prev); n.delete(sku); return n; });
         if (ovSet.has(sku)) onUpdateLock(lockOv.filter(s => s !== sku));
+        showToast("success", `ลบ ${sku} แล้ว`, "🗑️");
       } else {
-        alert("ลบไม่สำเร็จ: " + (result.error || "ตรวจสอบ SHEET_DEPLOY_URL"));
+        showToast("error", "ลบไม่สำเร็จ", "❌");
       }
     }
   };
@@ -4176,7 +4295,10 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
     const entries = Object.entries(checkedQtys)
       .filter(([, v]) => v !== "" && v !== null && v !== undefined)
       .map(([sku, qty]) => ({ sku, qty: parseInt(qty) || 0, isNew: newSkus.has(sku) }));
-    if (entries.length === 0) { alert("ยังไม่ได้กรอกจำนวนเช็คจริง"); return; }
+    if (entries.length === 0) {
+      showToast("warn", "ยังไม่ได้กรอกจำนวน", "✏️");
+      return;
+    }
     setSaving(true);
     const result = await syncLockData(lockKey, entries);
     setSaving(false);
@@ -4184,9 +4306,9 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
       const done = new Set([...savedSkus, ...entries.map(e => e.sku)]);
       setSavedSkus(done);
       setNewSkus(new Set());
-      alert(`✅ บันทึก ${entries.length} รายการเรียบร้อย`);
+      showToast("success", `บันทึก ${entries.length} รายการ`, "💾");
     } else {
-      alert("บันทึกไม่สำเร็จ: " + (result.error || "ตรวจสอบ SHEET_DEPLOY_URL"));
+      showToast("error", "บันทึกไม่สำเร็จ", "❌");
     }
   };
 
@@ -4235,8 +4357,8 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
               cursor:"pointer", fontSize:12, fontWeight:700, fontFamily:"inherit",
             }}>{editMode ? "✓ เสร็จ" : "✏️ เพิ่มสินค้า"}</button>
             <button onClick={onClose} style={{
-              border:"1px solid var(--bdr)", background:"#fff", borderRadius:8,
-              width:32, height:32, cursor:"pointer", fontSize:18, color:"var(--muted)", fontFamily:"inherit"
+              border:"1px solid var(--bdr)", background:"#fff", borderRadius:10,
+              width:44, height:44, cursor:"pointer", fontSize:22, color:"var(--muted)", fontFamily:"inherit"
             }}>×</button>
           </div>
         </div>
@@ -4382,6 +4504,17 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
       </div>
     </div>
     {lightbox && <ImageLightbox url={lightbox.url} name={lightbox.name} onClose={() => setLightbox(null)}/>}
+    <ConfirmModal
+      open={!!delConfirm}
+      type="danger"
+      emoji="🗑️"
+      title="ยืนยันลบสินค้าออกจากล็อค"
+      detail={delConfirm ? `${delConfirm.sku}\n📍 ${lockKey}` : ""}
+      confirmLabel="ลบ"
+      onConfirm={doDelete}
+      onCancel={() => setDelConfirm(null)}
+    />
+    <Toast toast={toast} onClose={hideToast}/>
     </>
   );
 }
@@ -4557,9 +4690,9 @@ async function syncOrderUpdate(order, updates) {
 // ─────────────────────────────────────────────────────────────────────
 function OrderItemRow({ order, onPatch, productMap }) {
   const isPending = !order.status || order.status === "รอ" || order.status === "pending";
-  // default จัด = orderQty (ถ้ายังไม่ได้แก้)
   const [prepQty, setPrepQty] = uS(() => order.preparedQty > 0 ? order.preparedQty : (order.orderQty || 0));
   const [imgOpen, setImgOpen] = uS(false);
+  const [toast, showToast, hideToast] = useToast();
   uE(() => {
     setPrepQty(prev => prev === 0 ? (order.orderQty || 0) : prev);
   }, [order.orderQty]);
@@ -4576,9 +4709,13 @@ function OrderItemRow({ order, onPatch, productMap }) {
   };
   const setCarryMode = m => onPatch(order.id, {carryMode: m});
   const markComplete = () => {
-    if (!order.printFlag) { alert("กรุณาเลือก PRINT หรือ SKIP ก่อน"); return; }
+    if (!order.printFlag) {
+      showToast("warn", "เลือก PRINT หรือ SKIP ก่อน", "🖨️");
+      return;
+    }
     onPatch(order.id, { status: "สำเร็จ" });
     syncOrderUpdate(order, { status: "สำเร็จ" });
+    showToast("success", "บันทึกแล้ว", "✅", 2500);
   };
 
   const pf = order.printFlag;
@@ -4656,16 +4793,16 @@ function OrderItemRow({ order, onPatch, productMap }) {
             <div style={{fontSize:15,fontWeight:800,color:"var(--dang)"}}>{order.orderQty}</div>
           </div>
 
-          {/* จัด — with +/- buttons */}
-          <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+          {/* จัด — with +/- buttons (≥44px for mobile) */}
+          <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5}}>
             <div style={{fontSize:10,color:"var(--muted)"}}>📦 จัด</div>
-            <div style={{display:"flex",alignItems:"center",gap:3,flexWrap:"wrap",justifyContent:"center"}}>
+            <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap",justifyContent:"center"}}>
               {[-10,-5,-1].map(d => (
                 <button key={d} className="order-adj-btn" onClick={() => savePrepQty(prepQty+d)} disabled={!isPending}
                   style={{
-                    width:30,height:30,borderRadius:6,border:"1px solid var(--bdr)",
-                    background:"#fee2e2",color:"#e53e3e",fontWeight:700,fontSize:11,
-                    cursor:isPending?"pointer":"default",padding:0,fontFamily:"inherit",
+                    minWidth:44,height:44,padding:"0 6px",borderRadius:8,border:"1.5px solid #ef9a9a",
+                    background:"#fee2e2",color:"#c62828",fontWeight:800,fontSize:13,
+                    cursor:isPending?"pointer":"default",fontFamily:"inherit",
                   }}>{d}</button>
               ))}
               <input type="number" value={prepQty} min={0} max={9999}
@@ -4673,16 +4810,16 @@ function OrderItemRow({ order, onPatch, productMap }) {
                 disabled={!isPending}
                 className="order-adj-input"
                 style={{
-                  width:52,textAlign:"center",padding:"4px 0",borderRadius:6,
-                  border:"2px solid var(--g-500)",fontSize:16,fontWeight:800,
+                  width:64,height:44,textAlign:"center",borderRadius:8,
+                  border:"2px solid var(--g-500)",fontSize:18,fontWeight:800,
                   background:isPending?"#f0fdf4":"var(--g-50)",fontFamily:"inherit",
                 }}/>
               {[+1,+5,+10].map(d => (
                 <button key={d} className="order-adj-btn" onClick={() => savePrepQty(prepQty+d)} disabled={!isPending}
                   style={{
-                    width:30,height:30,borderRadius:6,border:"1px solid var(--bdr)",
-                    background:"#e8f5e9",color:"#1f7f44",fontWeight:700,fontSize:11,
-                    cursor:isPending?"pointer":"default",padding:0,fontFamily:"inherit",
+                    minWidth:44,height:44,padding:"0 6px",borderRadius:8,border:"1.5px solid #81c784",
+                    background:"#e8f5e9",color:"#1b5e20",fontWeight:800,fontSize:13,
+                    cursor:isPending?"pointer":"default",fontFamily:"inherit",
                   }}>+{d}</button>
               ))}
             </div>
@@ -4777,12 +4914,14 @@ function OrderItemRow({ order, onPatch, productMap }) {
               <span>เหลือ: <b>{order.remaining??"—"}</b></span>
             </div>
             <button onClick={() => setImgOpen(false)} style={{
-              width:"100%",padding:"10px",background:"var(--g-700)",color:"#fff",
-              border:"none",borderRadius:8,cursor:"pointer",fontSize:14,fontWeight:600,
-            }}>ปิด</button>
+              width:"100%",padding:"14px",background:"var(--g-700)",color:"#fff",
+              border:"none",borderRadius:10,cursor:"pointer",fontSize:15,fontWeight:700,
+              minHeight:48,
+            }}>❌ ปิด</button>
           </div>
         </div>
       )}
+      <Toast toast={toast} onClose={hideToast}/>
     </>
   );
 }
@@ -4883,8 +5022,11 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const [printed, setPrinted] = uS(getPrintedOrders);
   const [shipped, setShipped] = uS(getShippedOrders);
   const [missed,  setMissed]  = uS(getMissedOrders);
-  const [sending, setSending] = uS(null); // order.id กำลัง deduct
+  const [sending, setSending] = uS(null);
   const [bigImg, setBigImg]   = uS(null);
+  const [toast, showToast, hideToast] = useToast();
+  const [shipConfirm, setShipConfirm]    = uS(null); // single order
+  const [shipAllConfirm, setShipAllConfirm] = uS(null); // ready[] array
 
   const productMap = uM(() => { const m={}; products.forEach(p => m[p.sku]=p); return m; }, [products]);
 
@@ -4909,12 +5051,14 @@ function OrderSummaryView({ data, onPrintRequest }) {
     localStorage.setItem(LS_PRINTED_ORDERS, JSON.stringify(p2));
   };
 
-  const handleShip = async (order) => {
+  const handleShip = (order) => setShipConfirm(order);
+  const doShip = async () => {
+    const order = shipConfirm;
+    setShipConfirm(null);
+    if (!order) return;
     const qty = order.preparedQty || order.orderQty || 0;
-    if (!confirm(`📦 ยืนยันส่งสินค้า?\n\n${order.name}\nจำนวน ${qty} ชิ้น\n\n🏭→🏪 โอนสต็อกคลัง→ร้าน\n🗑️ ลบออกจากรายการสั่งของ`)) return;
     setSending(order.id);
     await syncStockDeduct(order.sku, qty);
-    // ลบ order ออกจาก sheet
     try {
       await fetch(SHEET_DEPLOY_URL, {
         method: "POST", mode: "no-cors",
@@ -4927,6 +5071,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
     setShipped(next);
     localStorage.setItem(LS_SHIPPED_ORDERS, JSON.stringify(next));
     setSt(patchOrderState(order.id, { status: "ส่งแล้ว" }));
+    showToast("success", `ส่ง ${qty} ชิ้นแล้ว`, "📦");
   };
 
   const toggleMissed = (order) => {
@@ -4938,10 +5083,15 @@ function OrderSummaryView({ data, onPrintRequest }) {
   };
 
   // ship all ready (not missed, not already shipped) in a group
-  const handleShipAll = async (orders) => {
+  const handleShipAll = (orders) => {
     const ready = orders.filter(o => !shipped[o.id] && !missed[o.id]);
     if (!ready.length) return;
-    if (!confirm(`ยืนยันส่งสินค้าทั้งหมด ${ready.length} รายการ?\nระบบจะหักสต็อกออกจาก sheet`)) return;
+    setShipAllConfirm(ready);
+  };
+  const doShipAll = async () => {
+    const ready = shipAllConfirm;
+    setShipAllConfirm(null);
+    if (!ready || !ready.length) return;
     const nextShipped = { ...shipped };
     let nextSt = getOrdersState();
     for (const order of ready) {
@@ -4958,6 +5108,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
     localStorage.setItem(LS_SHIPPED_ORDERS, JSON.stringify(nextShipped));
     localStorage.setItem(LS_ORDERS_STATE, JSON.stringify(nextSt));
     setSt(nextSt);
+    showToast("success", `ส่ง ${ready.length} รายการแล้ว`, "📦");
   };
 
   if (!orders.length) return (
@@ -5185,13 +5336,35 @@ function OrderSummaryView({ data, onPrintRequest }) {
               </div>
             )}
             <button onClick={() => setBigImg(null)} style={{
-              marginTop:14,width:"100%",padding:"9px",
+              marginTop:14,width:"100%",padding:"14px",
               background:"var(--g-700)",color:"#fff",border:"none",
-              borderRadius:8,cursor:"pointer",fontSize:13,fontWeight:600,
-            }}>ปิด</button>
+              borderRadius:10,cursor:"pointer",fontSize:15,fontWeight:700,
+              minHeight:48,
+            }}>❌ ปิด</button>
           </div>
         </div>
       )}
+      <ConfirmModal
+        open={!!shipConfirm}
+        type="ship"
+        emoji="📦"
+        title="ยืนยันส่งสินค้า"
+        detail={shipConfirm ? `${shipConfirm.name}\n\n📦 ${shipConfirm.preparedQty || shipConfirm.orderQty || 0} ชิ้น\n\n🏭 → 🏪 (คลัง → ร้าน)\n🗑️ ลบจากรายการสั่ง` : ""}
+        confirmLabel="ส่ง"
+        onConfirm={doShip}
+        onCancel={() => setShipConfirm(null)}
+      />
+      <ConfirmModal
+        open={!!shipAllConfirm}
+        type="ship"
+        emoji="📦"
+        title="ยืนยันส่งสินค้าทั้งหมด"
+        detail={shipAllConfirm ? `📦 ${shipAllConfirm.length} รายการ\n\n🏭 → 🏪 (คลัง → ร้าน)` : ""}
+        confirmLabel={`ส่งทั้งหมด`}
+        onConfirm={doShipAll}
+        onCancel={() => setShipAllConfirm(null)}
+      />
+      <Toast toast={toast} onClose={hideToast}/>
     </div>
   );
 }
