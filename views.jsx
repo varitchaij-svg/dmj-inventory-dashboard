@@ -1487,13 +1487,10 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role }) {
            style={{position:"relative", padding:10, background: "linear-gradient(180deg, var(--g-50), #fff)",
                    cursor: hasImg ? "zoom-in" : "default", flex:"none"}}>
         {hasImg ? (
-          <div style={{
-            width:"100%", aspectRatio:"1/1", borderRadius:10,
-            backgroundImage: `url("${p.imageUrl}")`,
-            backgroundSize:"contain", backgroundPosition:"center",
-            backgroundRepeat:"no-repeat", backgroundColor:"#fff",
-            border:"1px solid var(--bdr)",
-          }}/>
+          <img src={p.imageUrl} alt={p.name}
+               className="pcard-realimg"
+               onError={e => { e.currentTarget.style.display="none"; e.currentTarget.nextSibling && (e.currentTarget.nextSibling.style.display="flex"); }}
+               style={{borderRadius:10, border:"1px solid var(--bdr)", backgroundColor:"#fff"}}/>
         ) : (
           <div className="pimg" style={{
             background: p.color
