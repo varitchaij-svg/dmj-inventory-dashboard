@@ -3,6 +3,36 @@ const { useState: uS, useEffect: uE, useMemo: uM, useCallback: uC } = React;
 const { ResponsiveContainer, AreaChart, Area, BarChart, Bar, LineChart, Line,
         XAxis, YAxis, CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell } = window.Recharts;
 
+// ─── Toast ───────────────────────────────────────────────────────────────────
+let _toastFn = null;
+function showToast(msg, type = "ok") {
+  if (_toastFn) _toastFn(msg, type);
+}
+function ToastHost() {
+  const [toasts, setToasts] = uS([]);
+  _toastFn = (msg, type) => {
+    const id = Date.now() + Math.random();
+    setToasts(t => [...t, { id, msg, type }]);
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 3000);
+  };
+  if (!toasts.length) return null;
+  return (
+    <div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",
+                 zIndex:9999,display:"flex",flexDirection:"column",gap:8,alignItems:"center",
+                 pointerEvents:"none"}}>
+      {toasts.map(t => (
+        <div key={t.id} style={{
+          padding:"10px 20px", borderRadius:12, fontSize:14, fontWeight:600,
+          color:"#fff", boxShadow:"0 4px 16px rgba(0,0,0,.2)",
+          background: t.type==="err" ? "#c62828" : t.type==="warn" ? "#e65100" : "#2e7d32",
+          animation:"fadeInUp .2s ease"
+        }}>{t.msg}</div>
+      ))}
+      <style>{`@keyframes fadeInUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}`}</style>
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // OVERVIEW
 // ─────────────────────────────────────────────────────────────────────
@@ -2242,7 +2272,7 @@ function UploadView({ onDataLoaded, currentData }) {
       // --- Product file ---
       const productFile = files.find(f => f.type === "product");
       if (!productFile || !productFile.rawRows) {
-        alert("ไม่พบไฟล์ข้อมูลสินค้า (product*.xlsx) กรุณาอัปโหลดก่อน");
+        showToast("ไม่พบไฟล์สินค้า กรุณาอัปโหลดก่อน", "err");
         setProcessing(false);
         return;
       }
@@ -2530,7 +2560,7 @@ function UploadView({ onDataLoaded, currentData }) {
       setProcessing(false);
       setTimeout(() => onDataLoaded && onDataLoaded(newData), 800);
     } catch(e) {
-      alert("เกิดข้อผิดพลาด: " + e.message);
+      showToast("เกิดข้อผิดพลาด: " + e.message, "err");
       setProcessing(false);
     }
   }, [files, onDataLoaded, currentData]);
@@ -3888,7 +3918,7 @@ function FrontStoreView({ data, role }) {
     if (!sku) return;
     const clean = sku.trim().toUpperCase();
     const p = products.find(x => x.sku === clean);
-    if (!p) { alert(`ไม่พบสินค้า: ${clean}`); return; }
+    if (!p) { showToast(`ไม่พบสินค้า: ${clean}`, "err"); return; }
     setActiveCat("ALL");
     setSearch(clean);
     setScrollToSku(clean);
@@ -3912,16 +3942,16 @@ function FrontStoreView({ data, role }) {
     const entries = [...touched]
       .filter(sku => checkedQtys[sku] !== "" && checkedQtys[sku] != null)
       .map(sku => ({ sku, qty: parseInt(checkedQtys[sku]) || 0 }));
-    if (entries.length === 0) { alert("กรอกจำนวนก่อนบันทึก"); return; }
+    if (entries.length === 0) { showToast("กรอกจำนวนก่อนบันทึก", "warn"); return; }
     setSaving(true);
     const result = await syncFrontStoreData(entries);
     setSaving(false);
     if (result.success !== false) {
       setSavedSkus(prev => new Set([...prev, ...entries.map(e => e.sku)]));
       setTouched(new Set());
-      alert(`✅ บันทึก ${entries.length} รายการเรียบร้อย`);
+      showToast(`✅ บันทึก ${entries.length} รายการแล้ว`);
     } else {
-      alert("บันทึกไม่สำเร็จ: " + (result.error || "ตรวจสอบ SHEET_DEPLOY_URL"));
+      showToast("บันทึกไม่สำเร็จ: " + (result.error || "ตรวจสอบ SHEET_DEPLOY_URL"), "err");
     }
   };
 
@@ -4154,7 +4184,6 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
   };
 
   const handleDelete = async (sku, isLocal) => {
-    if (!confirm(`ลบ ${sku} ออกจากล็อค ${lockKey}?\n\nข้อมูลจะถูกลบออกจาก sheet "ตำแหน่งจัดเก็บ" จริงๆ`)) return;
     if (isLocal) {
       onUpdateLock(lockOv.filter(s => s !== sku));
       setNewSkus(prev => { const n = new Set(prev); n.delete(sku); return n; });
@@ -4167,7 +4196,7 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
         setSavedSkus(prev => { const n = new Set(prev); n.delete(sku); return n; });
         if (ovSet.has(sku)) onUpdateLock(lockOv.filter(s => s !== sku));
       } else {
-        alert("ลบไม่สำเร็จ: " + (result.error || "ตรวจสอบ SHEET_DEPLOY_URL"));
+        showToast("ลบไม่สำเร็จ: " + (result.error || "ตรวจสอบ SHEET_DEPLOY_URL"), "err");
       }
     }
   };
@@ -4176,7 +4205,7 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
     const entries = Object.entries(checkedQtys)
       .filter(([, v]) => v !== "" && v !== null && v !== undefined)
       .map(([sku, qty]) => ({ sku, qty: parseInt(qty) || 0, isNew: newSkus.has(sku) }));
-    if (entries.length === 0) { alert("ยังไม่ได้กรอกจำนวนเช็คจริง"); return; }
+    if (entries.length === 0) { showToast("ยังไม่ได้กรอกจำนวนเช็คจริง", "warn"); return; }
     setSaving(true);
     const result = await syncLockData(lockKey, entries);
     setSaving(false);
@@ -4184,9 +4213,9 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
       const done = new Set([...savedSkus, ...entries.map(e => e.sku)]);
       setSavedSkus(done);
       setNewSkus(new Set());
-      alert(`✅ บันทึก ${entries.length} รายการเรียบร้อย`);
+      showToast(`✅ บันทึก ${entries.length} รายการแล้ว`);
     } else {
-      alert("บันทึกไม่สำเร็จ: " + (result.error || "ตรวจสอบ SHEET_DEPLOY_URL"));
+      showToast("บันทึกไม่สำเร็จ: " + (result.error || "ตรวจสอบ SHEET_DEPLOY_URL"), "err");
     }
   };
 
@@ -4576,7 +4605,7 @@ function OrderItemRow({ order, onPatch, productMap }) {
   };
   const setCarryMode = m => onPatch(order.id, {carryMode: m});
   const markComplete = () => {
-    if (!order.printFlag) { alert("กรุณาเลือก PRINT หรือ SKIP ก่อน"); return; }
+    if (!order.printFlag) { showToast("กรุณาเลือก PRINT หรือ SKIP ก่อน", "warn"); return; }
     onPatch(order.id, { status: "สำเร็จ" });
     syncOrderUpdate(order, { status: "สำเร็จ" });
   };
@@ -4911,7 +4940,6 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
   const handleShip = async (order) => {
     const qty = order.preparedQty || order.orderQty || 0;
-    if (!confirm(`📦 ยืนยันส่งสินค้า?\n\n${order.name}\nจำนวน ${qty} ชิ้น\n\n🏭→🏪 โอนสต็อกคลัง→ร้าน\n🗑️ ลบออกจากรายการสั่งของ`)) return;
     setSending(order.id);
     await syncStockDeduct(order.sku, qty);
     // ลบ order ออกจาก sheet
@@ -4941,7 +4969,6 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const handleShipAll = async (orders) => {
     const ready = orders.filter(o => !shipped[o.id] && !missed[o.id]);
     if (!ready.length) return;
-    if (!confirm(`ยืนยันส่งสินค้าทั้งหมด ${ready.length} รายการ?\nระบบจะหักสต็อกออกจาก sheet`)) return;
     const nextShipped = { ...shipped };
     let nextSt = getOrdersState();
     for (const order of ready) {

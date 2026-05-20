@@ -360,6 +360,7 @@ function App() {
                                     onSync={fetchFromSheet}
                                     onClearLocal={handleClearLocal}/>}
       </main>
+      <ToastHost/>
     </div>
   );
 }
