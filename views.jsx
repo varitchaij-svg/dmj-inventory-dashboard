@@ -105,6 +105,28 @@ function useToast() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// SKELETON — shimmer placeholder card for loading states
+// ─────────────────────────────────────────────────────────────────────
+function SkeletonCard() {
+  return (
+    <div style={{background:"#fff",border:"1.5px solid var(--bdr)",borderRadius:12,padding:12,
+                 display:"flex",flexDirection:"column",gap:10}}>
+      <div className="skel" style={{width:"100%",aspectRatio:"4/3",borderRadius:10}}/>
+      <div style={{display:"flex",flexDirection:"column",gap:5}}>
+        <div className="skel" style={{height:10,width:"40%"}}/>
+        <div className="skel" style={{height:13,width:"80%"}}/>
+        <div className="skel" style={{height:11,width:"55%"}}/>
+      </div>
+      <div style={{display:"flex",gap:6}}>
+        <div className="skel" style={{flex:1,height:40,borderRadius:8}}/>
+        <div className="skel" style={{flex:1,height:40,borderRadius:8}}/>
+      </div>
+      <div className="skel" style={{height:48,borderRadius:9}}/>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // OVERVIEW
 // ─────────────────────────────────────────────────────────────────────
 function OverviewView({ data, range, setRange, role }) {
@@ -1487,23 +1509,13 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role }) {
            style={{position:"relative", padding:8, background: "linear-gradient(180deg, var(--g-50), #fff)",
                    cursor: hasImg ? "zoom-in" : "default", flex:"none"}}>
         {hasImg ? (
-          /* padding-bottom:100% creates 1:1 square — works on ALL browsers */
           <div style={{
-            position:"relative", width:"100%", paddingBottom:"100%",
-            borderRadius:10, overflow:"hidden",
-            border:"1px solid var(--bdr)", backgroundColor:"#fff",
-            boxSizing:"border-box",
-          }}>
-            <img src={p.imageUrl} alt={p.name}
-                 style={{
-                   position:"absolute",
-                   top:0, left:0, right:0, bottom:0,
-                   width:"100%", height:"100%",
-                   objectFit:"contain",
-                   display:"block",
-                 }}
-                 onError={e => { e.currentTarget.parentElement.style.visibility="hidden"; }}/>
-          </div>
+            width:"100%", aspectRatio:"1/1", borderRadius:10,
+            backgroundImage:`url("${p.imageUrl}")`,
+            backgroundSize:"contain", backgroundPosition:"center",
+            backgroundRepeat:"no-repeat", backgroundColor:"#fff",
+            border:"1px solid var(--bdr)",
+          }}/>
         ) : (
           <div className="pimg" style={{
             background: p.color
@@ -2318,6 +2330,7 @@ function UploadView({ onDataLoaded, currentData }) {
   const [dragOver, setDragOver] = uS(false);
   const [processing, setProcessing] = uS(false);
   const [done, setDone] = uS(false);
+  const [toast, showToast, hideToast] = useToast();
 
   const detectFileType = (name, headers, titleRow, rawRows) => {
     const n = name.toLowerCase();
@@ -2388,7 +2401,7 @@ function UploadView({ onDataLoaded, currentData }) {
       // --- Product file ---
       const productFile = files.find(f => f.type === "product");
       if (!productFile || !productFile.rawRows) {
-        alert("ไม่พบไฟล์ข้อมูลสินค้า (product*.xlsx) กรุณาอัปโหลดก่อน");
+        showToast("error", "ไม่พบไฟล์สินค้า · อัปโหลด product*.xlsx ก่อน", "📁");
         setProcessing(false);
         return;
       }
@@ -2433,9 +2446,9 @@ function UploadView({ onDataLoaded, currentData }) {
 
       const products = dataRows
         .map(r => {
-          const qtyStore = iQtyStore >= 0 ? (parseFloat(r[iQtyStore]) || 0) : 0;
-          const qtyWH    = iQtyWH    >= 0 ? (parseFloat(r[iQtyWH])    || 0) : 0;
-          const qtyTot   = iQty      >= 0 ? (parseFloat(r[iQty])      || 0) : (qtyStore + qtyWH);
+          const qtyStore = (iQtyStore >= 0 && iQtyStore < r.length) ? (parseFloat(r[iQtyStore]) || 0) : 0;
+          const qtyWH    = (iQtyWH    >= 0 && iQtyWH    < r.length) ? (parseFloat(r[iQtyWH])    || 0) : 0;
+          const qtyTot   = (iQty      >= 0 && iQty      < r.length) ? (parseFloat(r[iQty])      || 0) : (qtyStore + qtyWH);
           const sku      = String(r[iSku]  || "").trim();
           const name     = String(r[iName] || "").trim();
           const existing = existingMap[sku.toUpperCase()];
@@ -2551,8 +2564,8 @@ function UploadView({ onDataLoaded, currentData }) {
           const daily = [];
           for (let di = 0; di < days.length; di++) {
             const qtyCol = dayCols[di];
-            const qtyVal = parseFloat(r[qtyCol])     || 0;
-            const revVal = parseFloat(r[qtyCol + 1]) || 0;
+            const qtyVal = (qtyCol != null && qtyCol < r.length)     ? (parseFloat(r[qtyCol])     || 0) : 0;
+            const revVal = (qtyCol != null && qtyCol+1 < r.length)   ? (parseFloat(r[qtyCol + 1]) || 0) : 0;
             daily.push({ day: days[di], qty: qtyVal, sales: revVal });
 
             if (!dailyByCat[days[di]]) dailyByCat[days[di]] = {};
@@ -2676,12 +2689,14 @@ function UploadView({ onDataLoaded, currentData }) {
       setProcessing(false);
       setTimeout(() => onDataLoaded && onDataLoaded(newData), 800);
     } catch(e) {
-      alert("เกิดข้อผิดพลาด: " + e.message);
+      showToast("error", "เกิดข้อผิดพลาด: " + e.message, "❌");
       setProcessing(false);
     }
-  }, [files, onDataLoaded, currentData]);
+  }, [files, onDataLoaded, currentData, showToast]);
 
   return (
+    <>
+    <Toast toast={toast} onClose={hideToast}/>
     <div>
       <div className="page-head">
         <div>
@@ -2781,6 +2796,7 @@ function UploadView({ onDataLoaded, currentData }) {
         </Card>
       )}
     </div>
+    </>
   );
 }
 
@@ -3510,16 +3526,16 @@ function UnassignedProductCards({ products, lockData, shelves, onAssigned }) {
 }
 
 function ShelfBlock({ side, shelf, locks, lockData, searchMatches, onClick, allowEmpty }) {
-  // locks display: right-to-left columns, top-to-bottom rows
-  // col 0 (leftmost display) = highest numbers, col 4 (rightmost) = lowest
-  // row 0 top → row 2 bottom
-  // e.g. 15 locks: top row = 13,10,7,4,1  (col4→0 reversed from rightmost=1)
+  // locks display:
+  // 15 12  9  6  3
+  // 14 11  8  5  2
+  // 13 10  7  4  1
   const cols = 5, rows = 3;
   const cells = [];
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
-      // rightmost col (col = cols-1) = locks 1,2,3; leftmost col (col=0) = 13,14,15
-      const num = (cols - 1 - col) * rows + row + 1;
+      // rightmost col (col=cols-1) → locks 3,2,1 top-to-bottom; leftmost col (col=0) → 15,14,13
+      const num = (cols - 1 - col) * rows + (rows - row);
       if (num > locks) { cells.push(<div key={`e${row}-${col}`} style={{visibility:'hidden'}}/>); continue; }
       const key = `${side}${shelf}/${num}`;
       const d = lockData[key];
@@ -3617,7 +3633,7 @@ function QRScanModal({ onDetected, onClose }) {
         scannerRef.current = h5q;
         await h5q.start(
           { facingMode: "environment" },
-          { fps: 10, qrbox: { width: 220, height: 220 }, aspectRatio: 1.333 },
+          { fps: 10, qrbox: { width: 220, height: 220 } },
           (decoded) => {
             const sku = String(decoded || "").trim().toUpperCase();
             if (!sku) return;
@@ -3631,7 +3647,20 @@ function QRScanModal({ onDetected, onClose }) {
         );
         if (!cancelled) setReady(true);
       } catch (e) {
-        if (!cancelled) setErr("ไม่สามารถเปิดกล้องได้: " + (e?.message || e) + "\nตรวจสอบว่าอนุญาต permission กล้องแล้ว");
+        if (!cancelled) {
+          const msg = e?.name || e?.message || String(e);
+          const friendly =
+            msg.includes("NotAllowed") || msg.includes("Permission")
+              ? "🚫 ไม่ได้รับอนุญาตใช้กล้อง — กดอนุญาต (Allow) ใน browser แล้วลองใหม่"
+            : msg.includes("NotFound") || msg.includes("Devices")
+              ? "📵 ไม่พบกล้อง — ตรวจสอบว่าอุปกรณ์มีกล้องและเสียบแล้ว"
+            : msg.includes("NotReadable") || msg.includes("busy")
+              ? "⚠️ กล้องถูกใช้งานอยู่ — ปิดแอปอื่นที่ใช้กล้องแล้วลองใหม่"
+            : msg.includes("https") || msg.includes("secure")
+              ? "🔒 ต้องการ HTTPS — ไม่สามารถใช้กล้องบน HTTP ได้"
+              : "❌ เปิดกล้องไม่ได้ — ลองรีโหลดหน้าหรือเปลี่ยน browser";
+          setErr(friendly);
+        }
       }
     };
     start();
@@ -3671,7 +3700,7 @@ function QRScanModal({ onDetected, onClose }) {
           </div>
           <button onClick={handleClose} style={{
             border:"1px solid var(--bdr)",background:"none",borderRadius:8,
-            width:32,height:32,cursor:"pointer",fontSize:18,color:"var(--muted)",fontFamily:"inherit"
+            width:44,height:44,cursor:"pointer",fontSize:22,color:"var(--muted)",fontFamily:"inherit"
           }}>×</button>
         </div>
 
@@ -3838,6 +3867,11 @@ const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty
   const cardBg = isSaved ? "#f0fdf4"
     : isTouched ? "#fffbeb"
     : "#fff";
+  const numVal = hasVal ? (parseInt(val) || 0) : 0;
+  const adjustQty = (delta) => {
+    const nv = Math.max(0, numVal + delta);
+    onSetQty(p.sku, String(nv));
+  };
 
   return (
     <div id={`fs-row-${p.sku}`}
@@ -3892,44 +3926,59 @@ const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty
           <div style={{fontSize:20,fontWeight:800,color:"#111"}}>{fmtN(wh)}</div>
         </div>
       </div>
-      <div style={{display:"flex",alignItems:"center",gap:8}}>
-        <div style={{flex:1}}>
-          <div style={{fontSize:10,color:"var(--muted)",fontWeight:600,marginBottom:3}}>
-            ✏️ เช็คจริงที่นับได้
-          </div>
-          <input type="number" min="0" inputMode="numeric"
-            value={val ?? ""}
-            onChange={e => onSetQty(p.sku, e.target.value)}
-            placeholder="กรอกจำนวน..."
-            style={{
-              width:"100%", padding:"10px 12px", borderRadius:9,
-              fontSize:18, fontWeight:800, fontFamily:"inherit",
-              textAlign:"center", outline:"none",
-              border: hasVal
-                ? (matched ? "2px solid var(--g-500)" : "2px solid var(--dang)")
-                : "1.5px solid var(--bdr)",
-              background: hasVal
-                ? (matched ? "#f0fdf4" : "#fff5f5")
-                : "#fff",
-              color: hasVal ? (matched ? "var(--g-700)" : "var(--dang)") : "var(--text)",
-            }}/>
+      <div>
+        <div style={{fontSize:10,color:"var(--muted)",fontWeight:600,marginBottom:4}}>
+          ✏️ เช็คจริงที่นับได้
         </div>
-        <div style={{minWidth:60,textAlign:"center"}}>
-          {!hasVal ? (
-            <div style={{fontSize:11,color:"var(--g-300)",fontWeight:600}}>รอเช็ค</div>
-          ) : matched ? (
-            <div>
-              <div style={{fontSize:18}}>✓</div>
-              <div style={{fontSize:10,fontWeight:700,color:"var(--g-700)"}}>ตรง</div>
-            </div>
-          ) : (
-            <div>
-              <div style={{fontSize:18}}>✗</div>
-              <div style={{fontSize:10,fontWeight:700,color:"var(--dang)"}}>
-                {diff > 0 ? `+${diff}` : diff}
+        {/* ±qty buttons + input row */}
+        <div style={{display:"flex",alignItems:"center",gap:5}}>
+          <button onClick={() => adjustQty(-5)}
+            style={{minWidth:44,height:48,borderRadius:8,
+                    border:"1.5px solid var(--bdr)",background:"#fff",
+                    cursor:"pointer",fontSize:13,fontWeight:700,
+                    fontFamily:"inherit",color:"var(--dang)",
+                    opacity: numVal >= 5 ? 1 : 0.3}}>−5</button>
+          <button onClick={() => adjustQty(-1)}
+            style={{minWidth:44,height:48,borderRadius:8,
+                    border:"1.5px solid var(--bdr)",background:"#fff",
+                    cursor:"pointer",fontSize:15,fontWeight:800,
+                    fontFamily:"inherit",color:"var(--dang)",
+                    opacity: numVal >= 1 ? 1 : 0.3}}>−</button>
+          <div style={{flex:1,position:"relative"}}>
+            <input type="number" min="0" inputMode="numeric"
+              value={val ?? ""}
+              onChange={e => onSetQty(p.sku, e.target.value)}
+              placeholder="0"
+              style={{
+                width:"100%", padding:"10px 6px", borderRadius:9,
+                fontSize:20, fontWeight:800, fontFamily:"inherit",
+                textAlign:"center", outline:"none",
+                border: hasVal
+                  ? (matched ? "2px solid var(--g-500)" : "2px solid var(--dang)")
+                  : "1.5px solid var(--bdr)",
+                background: hasVal
+                  ? (matched ? "#f0fdf4" : "#fff5f5")
+                  : "#fff",
+                color: hasVal ? (matched ? "var(--g-700)" : "var(--dang)") : "var(--text)",
+              }}/>
+            {hasVal && (
+              <div style={{position:"absolute",top:-8,right:4,fontSize:10,
+                fontWeight:700,
+                color: matched ? "var(--g-700)" : "var(--dang)"}}>
+                {!matched && diff !== null ? (diff > 0 ? `+${diff}` : diff) : "✓"}
               </div>
-            </div>
-          )}
+            )}
+          </div>
+          <button onClick={() => adjustQty(1)}
+            style={{minWidth:44,height:48,borderRadius:8,
+                    border:"1.5px solid var(--bdr)",background:"#f0fdf4",
+                    cursor:"pointer",fontSize:15,fontWeight:800,
+                    fontFamily:"inherit",color:"var(--g-700)"}}>+</button>
+          <button onClick={() => adjustQty(5)}
+            style={{minWidth:44,height:48,borderRadius:8,
+                    border:"1.5px solid var(--bdr)",background:"#f0fdf4",
+                    cursor:"pointer",fontSize:13,fontWeight:700,
+                    fontFamily:"inherit",color:"var(--g-700)"}}>+5</button>
         </div>
       </div>
     </div>
@@ -3967,6 +4016,8 @@ function FrontStoreView({ data, role }) {
   const [savedSkus, setSavedSkus] = uS(new Set());
   const [scrollToSku, setScrollToSku] = uS(null);
   const [showMode, setShowMode] = uS("all");
+  const [mounted, setMounted] = uS(false);
+  uE(() => { const t = setTimeout(() => setMounted(true), 350); return () => clearTimeout(t); }, []);
 
   const [checkedQtys, setCheckedQtys] = uS(() => {
     const init = {};
@@ -3977,6 +4028,7 @@ function FrontStoreView({ data, role }) {
     return init;
   });
   const [touched, setTouched] = uS(new Set());
+  const [lastSavedTime, setLastSavedTime] = uS(null); // timestamp of last successful save
 
   const setQty = uC((sku, val) => {
     setCheckedQtys(prev => ({ ...prev, [sku]: val === "" ? "" : parseInt(val) || 0 }));
@@ -4072,6 +4124,7 @@ function FrontStoreView({ data, role }) {
     if (result.success !== false) {
       setSavedSkus(prev => new Set([...prev, ...entries.map(e => e.sku)]));
       setTouched(new Set());
+      setLastSavedTime(new Date());
       showToast("success", `บันทึก ${entries.length} รายการ`, "💾");
     } else {
       showToast("error", "บันทึกไม่สำเร็จ", "❌");
@@ -4104,15 +4157,22 @@ function FrontStoreView({ data, role }) {
         </div>
         <ScanButton size={40} continuous onScan={handleScanDetected}
           style={{border:"1.5px solid var(--g-300)", borderRadius:10, flexShrink:0}}/>
-        <button onClick={handleSave}
-          disabled={saving || touchedWithValue === 0}
-          className="btn primary"
-          style={{padding:"9px 18px", fontWeight:700, flexShrink:0,
-                  opacity: (saving || touchedWithValue === 0) ? 0.45 : 1}}>
-          {saving
-            ? <><span className="spin" style={{width:13,height:13,borderWidth:2,marginRight:6}}/> บันทึก...</>
-            : touchedWithValue > 0 ? `💾 บันทึก (${touchedWithValue})` : "💾 บันทึก"}
-        </button>
+        <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2,flexShrink:0}}>
+          <button onClick={handleSave}
+            disabled={saving || touchedWithValue === 0}
+            className="btn primary"
+            style={{padding:"9px 18px", fontWeight:700,
+                    opacity: (saving || touchedWithValue === 0) ? 0.45 : 1}}>
+            {saving
+              ? <><span className="spin" style={{width:13,height:13,borderWidth:2,marginRight:6}}/> บันทึก...</>
+              : touchedWithValue > 0 ? `💾 บันทึก (${touchedWithValue})` : "💾 บันทึก"}
+          </button>
+          {lastSavedTime && (
+            <div style={{fontSize:10,color:"var(--g-600)",fontWeight:600}}>
+              ✓ บันทึกแล้ว {lastSavedTime.getHours().toString().padStart(2,"0")}:{lastSavedTime.getMinutes().toString().padStart(2,"0")}
+            </div>
+          )}
+        </div>
       </div>
 
       <Card padding={true} style={{paddingTop:12,paddingBottom:12}}>
@@ -4166,7 +4226,12 @@ function FrontStoreView({ data, role }) {
         </div>
       </Card>
 
-      {filtered.length === 0 ? (
+      {!mounted ? (
+        <div style={{display:"grid",gap:10,
+                     gridTemplateColumns:"repeat(auto-fill, minmax(260px, 1fr))"}}>
+          {Array.from({length:6}).map((_,i) => <SkeletonCard key={i}/>)}
+        </div>
+      ) : filtered.length === 0 ? (
         <Card padding={true}>
           <Empty title="ไม่พบสินค้า" sub="ลองเปลี่ยน filter หรือค้นหาใหม่"/>
         </Card>
@@ -4490,7 +4555,8 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
                           title="ลบออกจากล็อคนี้"
                           style={{marginLeft:8,background:"#fee2e2",border:"none",
                             borderRadius:6,cursor:"pointer",color:"#e53e3e",
-                            fontWeight:700,fontSize:14,padding:"2px 8px",fontFamily:"inherit",
+                            fontWeight:700,fontSize:16,
+                            minWidth:36,height:36,padding:"0 8px",fontFamily:"inherit",
                             flexShrink:0}}>×</button>
                       </div>
                     </td>
@@ -4652,8 +4718,8 @@ function TransferView({ data }) {
             }
             style={{marginTop:16}}>
         {filtered.length === 0 ? (
-          <div style={{textAlign:'center',padding:40,color:'var(--muted)',fontSize:13}}>
-            ไม่พบข้อมูล
+          <div style={{padding:"20px 0"}}>
+            <Empty title="ไม่พบข้อมูล" sub={search ? `ไม่พบ "${search}" · ลองค้นหาใหม่` : "ลองเลือก filter อื่น"}/>
           </div>
         ) : (
           <div className="t-transfer-wrap" style={{maxHeight:600,overflowY:'auto',overflowX:'auto',WebkitOverflowScrolling:'touch'}}>
@@ -5029,8 +5095,8 @@ function OrderListView({ data }) {
       </div>
 
       {filtered.length === 0 ? (
-        <div style={{textAlign:"center",padding:"40px 20px",color:"var(--muted)"}}>
-          ไม่มีรายการใน filter นี้
+        <div style={{padding:"40px 20px"}}>
+          <Empty title="ไม่มีรายการใน filter นี้" sub="ลองเลือก filter อื่น"/>
         </div>
       ) : (
         filtered.map(order => <OrderItemRow key={order.id} order={order} onPatch={patch} productMap={productMap}/>)
@@ -5428,6 +5494,7 @@ const LOGO_FALLBACK_SVG = `data:image/svg+xml;charset=utf-8,${encodeURIComponent
 function LabelPrintView({ data, initItems, onInitConsumed }) {
   const { products } = data;
   const [items, setItems] = uS([]);
+  const [printMode, setPrintMode] = uS("a4"); // "a4" | "sticker"
 
   // Auto-populate from order summary "Print Label" button
   uE(() => {
@@ -5496,7 +5563,7 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
     return flat;
   }, [items, productMap]);
 
-  // Group into pages of 70
+  // 70 labels per A4 page (5 cols × 14 rows)
   const pages = uM(() => {
     const ps = [];
     for (let i = 0; i < labelList.length; i += 70) ps.push(labelList.slice(i, i + 70));
@@ -5505,10 +5572,102 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
 
   const totalQty = items.reduce((s, i) => s + i.qty, 0);
 
+  // Safely escape HTML entities to prevent XSS in popup
+  const escHtml = (s) => String(s || "")
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+
+  // Print sticker labels in a popup window (50mm thermal printer, single column, gap 3mm)
+  const printVaseLabels = uC(() => {
+    if (!labelList.length) return;
+
+    const labelsHTML = labelList.map(p => {
+      const qrImg = qrMap[p.sku]
+        ? `<img src="${qrMap[p.sku]}" style="width:100%;height:100%;display:block;"/>`
+        : `<div style="width:100%;height:100%;background:#f0f0f0;display:flex;align-items:center;justify-content:center;font-size:5px;color:#aaa;">QR</div>`;
+      const priceStr = p.price != null && p.price > 0 ? `${escHtml(String(p.price))} ฿` : "";
+      return `
+      <div class="lbl">
+        <div class="ltop">
+          <span class="lname">${escHtml(p.name)}</span>
+          ${priceStr ? `<span class="lprice">${priceStr}</span>` : ""}
+        </div>
+        <div class="lmid">
+          <div class="lqr">${qrImg}</div>
+          <img src="${logoSrc}" class="llogo" onerror="this.style.display='none'"/>
+        </div>
+        <div class="lsku">${p.sku}</div>
+      </div>`;
+    }).join("");
+
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Kanit:wght@400;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Kanit","Noto Sans Thai",sans-serif; background:#f0f0f0; padding:16px; }
+  .print-btn {
+    display:block; margin:0 auto 16px; padding:10px 32px;
+    background:#1f7f44; color:#fff; border:none; border-radius:8px;
+    font-size:16px; font-weight:700; cursor:pointer; font-family:inherit;
+  }
+  .print-btn:hover { background:#176035; }
+  /* Screen: readable card size */
+  .lbl {
+    width:300px; height:150px; box-sizing:border-box;
+    display:flex; flex-direction:column;
+    padding:9px 12px; overflow:hidden;
+    background:#fff; border-radius:6px;
+    box-shadow:0 1px 4px rgba(0,0,0,.12);
+    margin:0 auto 9px;
+  }
+  .ltop { display:flex; justify-content:space-between; align-items:flex-start; gap:6px; flex-shrink:0; margin-bottom:4px; }
+  .lname { font-size:13px; font-weight:700; color:#111; flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .lprice { font-size:13px; font-weight:700; color:#111; white-space:nowrap; }
+  .lmid { flex:1; position:relative; display:flex; align-items:center; justify-content:center; }
+  .lqr { width:78px; height:78px; }
+  .llogo { position:absolute; bottom:0; right:0; width:36px; height:36px; object-fit:contain; opacity:.65; }
+  .lsku { font-size:11px; font-family:"Kanit",sans-serif; font-weight:500; color:#333; text-align:center; letter-spacing:0.5px; flex-shrink:0; }
+  /* Print: 50×25mm */
+  @media print {
+    @page { size: 50mm 25mm; margin: 0; }
+    body { background:#fff; padding:0; }
+    .print-btn { display:none; }
+    .lbl {
+      width:50mm; height:25mm; border-radius:0;
+      padding:1.5mm 2mm; box-shadow:none; margin:0 0 3mm;
+      page-break-after:always;
+    }
+    .lbl:last-child { page-break-after:avoid; margin-bottom:0; }
+    .ltop { margin-bottom:0; gap:1mm; }
+    .lname { font-size:6.5pt; }
+    .lprice { font-size:6.5pt; }
+    .lqr { width:13mm; height:13mm; }
+    .llogo { width:8mm; height:8mm; }
+    .lsku { font-size:5pt; }
+  }
+</style>
+</head><body>
+<button class="print-btn" onclick="window.print()">🖨️ พิมพ์ ${labelList.length} ใบ</button>
+${labelsHTML}
+</body></html>`;
+
+    const win = window.open("", "_blank", "width=520,height=700");
+    if (!win) {
+      // Popup blocked — show toast instead of alert
+      if (window.__dmjToast) window.__dmjToast({ type:"warn", message:"🔒 Browser บล็อก Pop-up — กด Allow ใน address bar แล้วลองใหม่" });
+      else alert("กรุณาอนุญาต Pop-up ใน address bar แล้วลองใหม่");
+      return;
+    }
+    win.document.write(html);
+    win.document.close();
+    win.focus(); // bring popup to front
+  }, [labelList, qrMap, logoSrc]);
+
   const addItem = () => {
     const raw = searchVal.trim();
     const sku = raw.includes(" — ") ? raw.split(" — ")[0].trim() : raw.toUpperCase().trim();
-    const qty = Math.max(1, parseInt(qtyVal) || 1);
+    const qty = Math.min(700, Math.max(1, parseInt(qtyVal) || 1)); // clamp 1–700
     if (!sku || !productMap[sku]) return;
     setItems(prev => {
       const ex = prev.find(i => i.sku === sku);
@@ -5520,7 +5679,7 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
   };
 
   const removeItem = sku => setItems(prev => prev.filter(i => i.sku !== sku));
-  const updateQty  = (sku, qty) => setItems(prev => prev.map(i => i.sku === sku ? { ...i, qty: Math.max(1, qty) } : i));
+  const updateQty  = (sku, qty) => setItems(prev => prev.map(i => i.sku === sku ? { ...i, qty: Math.min(700, Math.max(1, qty || 1)) } : i));
 
   return (
     <div>
@@ -5529,16 +5688,47 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
         <div className="page-head">
           <div>
             <div className="page-title">พิมพ์ Label สินค้า</div>
-            <div className="page-sub">QR Code สำหรับสแกนคิดเงิน · A4 · 5 คอลัมน์ · พิมพ์ตามจำนวนจริง</div>
+            <div className="page-sub">
+              {printMode === "a4"
+                ? "A4 · 5 คอลัมน์ · 70 ใบ/หน้า"
+                : "สติ๊กเกอร์ · 50×25mm · gap 3mm · แถวเดียว"}
+            </div>
           </div>
           {labelList.length > 0 && (
             <div className="page-actions">
-              <button className="btn primary" onClick={() => window.print()}
-                      style={{padding:"10px 20px",fontWeight:700,fontSize:14}}>
-                🖨️ พิมพ์ {labelList.length} ใบ ({pages.length} หน้า)
-              </button>
+              {printMode === "a4" ? (
+                <button className="btn primary" onClick={() => window.print()}
+                        style={{padding:"10px 20px",fontWeight:700,fontSize:14}}>
+                  🖨️ พิมพ์ {labelList.length} ใบ ({pages.length} หน้า A4)
+                </button>
+              ) : (
+                <button className="btn primary" onClick={printVaseLabels}
+                        style={{padding:"10px 20px",fontWeight:700,fontSize:14}}>
+                  🖨️ พิมพ์ {labelList.length} ใบ (Sticker)
+                </button>
+              )}
             </div>
           )}
+        </div>
+
+        {/* ── Print mode toggle ── */}
+        <div style={{display:"flex",gap:8,marginBottom:14}}>
+          {[
+            {id:"a4",      label:"📄 A4",       sub:"42×21mm · 70/หน้า"},
+            {id:"sticker", label:"🏷️ สติ๊กเกอร์", sub:"50×25mm · แถวเดียว"},
+          ].map(m => (
+            <button key={m.id} onClick={() => setPrintMode(m.id)} style={{
+              padding:"8px 14px", borderRadius:10, cursor:"pointer", fontFamily:"inherit",
+              border: printMode===m.id ? "2px solid var(--accent)" : "1.5px solid var(--bdr)",
+              background: printMode===m.id ? "#e8f5e9" : "var(--paper)",
+              fontWeight: printMode===m.id ? 700 : 500, fontSize:13,
+              color: printMode===m.id ? "var(--accent)" : "var(--text)",
+              display:"flex", flexDirection:"column", alignItems:"flex-start", gap:1,
+            }}>
+              <span>{m.label}</span>
+              <span style={{fontSize:10,color:"var(--muted)",fontWeight:400}}>{m.sub}</span>
+            </button>
+          ))}
         </div>
 
         {/* Add product row */}
@@ -5601,18 +5791,19 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
                   <span style={{fontSize:11,color:"var(--muted)",minWidth:28}}>ใบ</span>
                   <button onClick={() => removeItem(item.sku)}
                     style={{background:"none",border:"none",cursor:"pointer",color:"var(--dang)",
-                            fontSize:16,padding:"0 4px",fontWeight:700}}>×</button>
+                            fontSize:18,padding:"4px 8px",fontWeight:700,
+                            minWidth:36,height:36,borderRadius:6}}>×</button>
                 </div>
               );
             })}
             <div style={{marginTop:10,display:"flex",gap:16,fontSize:12,color:"var(--muted)",flexWrap:"wrap"}}>
               <span>รวม <b style={{color:"var(--g-700)"}}>{totalQty}</b> ใบ</span>
-              <span>= <b style={{color:"var(--g-700)"}}>{pages.length}</b> หน้า A4</span>
-              {totalQty % 70 !== 0 && pages.length > 0 && (
-                <span style={{color:"var(--muted)"}}>
-                  (หน้าสุดท้ายมี <b style={{color:"var(--g-700)"}}>{totalQty - (pages.length - 1) * 70}</b> ใบ)
-                </span>
-              )}
+              {printMode === "a4" && <>
+                <span>= <b style={{color:"var(--g-700)"}}>{pages.length}</b> หน้า A4</span>
+                {totalQty % 70 !== 0 && pages.length > 0 && (
+                  <span>(หน้าสุดท้ายมี <b style={{color:"var(--g-700)"}}>{totalQty - (pages.length-1)*70}</b> ใบ)</span>
+                )}
+              </>}
             </div>
           </div>
         ) : (
@@ -5632,42 +5823,73 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
         )}
       </div>
 
-      {/* ── Label pages (visible on print + preview) ── */}
-      {pages.map((page, pi) => (
-        <div key={pi} className="label-page">
-          <div className="label-grid">
-            {page.map((p, i) => (
-              <div key={i} className="label-cell">
-                {/* row 1: name left, price right */}
-                <div className="label-top-row">
-                  <span className="label-name">{p.name}</span>
-                  <span className="label-price">{p.price != null && p.price > 0 && sessionStorage.getItem("dmj_role") === "owner" ? `${p.price} ฿` : ""}</span>
-                </div>
-                {/* row 2: QR centered, logo corner right */}
-                <div className="label-mid-row">
-                  <div className="label-qr-center" style={{width:"10mm",height:"10mm"}}>
-                    {qrMap[p.sku]
-                      ? <img src={qrMap[p.sku]} alt={p.sku}
-                             style={{width:"100%",height:"100%",objectFit:"contain"}}/>
-                      : <div style={{width:"100%",height:"100%",background:"#f0f0f0",
-                                     display:"flex",alignItems:"center",justifyContent:"center",
-                                     fontSize:5,color:"#aaa"}}>QR</div>
-                    }
+      {/* ── Preview area — switches by printMode ── */}
+      {printMode === "a4" ? (
+        /* A4 pages (visible on print too) */
+        pages.map((page, pi) => (
+          <div key={pi} className="label-page">
+            <div className="label-grid">
+              {page.map((p, i) => (
+                <div key={i} className="label-cell">
+                  <div className="label-top-row">
+                    <span className="label-name">{p.name}</span>
+                    <span className="label-price">{p.price != null && p.price > 0 ? `${p.price} ฿` : ""}</span>
                   </div>
-                  <div className="label-logo-corner">
-                    <img src={logoSrc} alt="logo"
-                         onError={() => setLogoSrc(LOGO_FALLBACK_SVG)}/>
+                  <div className="label-mid-row">
+                    <div className="label-qr-center" style={{width:"10mm",height:"10mm"}}>
+                      {qrMap[p.sku]
+                        ? <img src={qrMap[p.sku]} alt={p.sku} style={{width:"100%",height:"100%",objectFit:"contain"}}/>
+                        : <div style={{width:"100%",height:"100%",background:"#f0f0f0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:5,color:"#aaa"}}>QR</div>
+                      }
+                    </div>
+                    <div className="label-logo-corner">
+                      <img src={logoSrc} alt="logo" onError={() => setLogoSrc(LOGO_FALLBACK_SVG)}/>
+                    </div>
                   </div>
+                  <div className="label-sku-text">{p.sku}</div>
                 </div>
-                {/* row 3: SKU */}
-                <div className="label-sku-text">{p.sku}</div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
+        ))
+      ) : (
+        /* Sticker preview — actual 50×25mm proportions (2:1), scaled up 3× for readability */
+        <div className="no-print" style={{display:"flex",flexDirection:"column",gap:9,padding:"4px 0"}}>
+          {labelList.map((p, i) => (
+            <div key={i} style={{
+              width:300, height:150, boxSizing:"border-box",
+              background:"#fff", boxShadow:"0 1px 4px rgba(0,0,0,.12)",
+              display:"flex", flexDirection:"column",
+              padding:"9px 12px", overflow:"hidden", flexShrink:0,
+            }}>
+              {/* Row 1: name + price */}
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6,flexShrink:0,marginBottom:4}}>
+                <span style={{fontSize:13,fontWeight:600,color:"#111",fontFamily:"Kanit,sans-serif",flex:1,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{p.name}</span>
+                {p.price != null && p.price > 0 && (
+                  <span style={{fontSize:13,fontWeight:700,color:"#111",fontFamily:"Kanit,sans-serif",flexShrink:0,whiteSpace:"nowrap"}}>{p.price} ฿</span>
+                )}
+              </div>
+              {/* Row 2: QR center + logo corner */}
+              <div style={{flex:1,position:"relative",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                <div style={{width:78,height:78}}>
+                  {qrMap[p.sku]
+                    ? <img src={qrMap[p.sku]} alt={p.sku} style={{width:"100%",height:"100%",objectFit:"contain"}}/>
+                    : <div style={{width:"100%",height:"100%",background:"#f0f0f0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#aaa"}}>QR</div>
+                  }
+                </div>
+                <div style={{position:"absolute",bottom:0,right:0,width:36,height:36,opacity:.65}}>
+                  <img src={logoSrc} alt="logo" style={{width:"100%",height:"100%",objectFit:"contain"}}
+                       onError={e => e.currentTarget.style.display="none"}/>
+                </div>
+              </div>
+              {/* Row 3: SKU */}
+              <div style={{fontSize:11,fontFamily:"Kanit,sans-serif",fontWeight:500,color:"#333",textAlign:"center",letterSpacing:.5,flexShrink:0}}>{p.sku}</div>
+            </div>
+          ))}
         </div>
-      ))}
+      )}
     </div>
   );
 }
 
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView });
+Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView });

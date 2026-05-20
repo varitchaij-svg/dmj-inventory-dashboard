@@ -182,6 +182,9 @@ function App() {
   const [syncing, setSyncing] = usS(false);
   const [lastSync, setLastSync] = usS(localStorage.getItem("dmj_last_sync") || null);
   const [labelInitItems, setLabelInitItems] = usS(null); // for auto-populate from order summary
+  const [isOnline, setIsOnline] = usS(() => navigator.onLine);
+  const [lastSaved, setLastSaved] = usS(null); // auto-save timestamp
+  const [confirmAction, setConfirmAction] = usS(null); // { type:"clearLocal"|"logout" }
 
   const sheetUrl = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : "data.json";
   const sheetViewUrl = "https://docs.google.com/spreadsheets/d/11yL4u-XLUTCBObMppAj12nnmG0YlDZWsDn2XPCneoHQ/edit";
@@ -213,6 +216,18 @@ function App() {
     fetchFromSheet(); // refresh ใน background เสมอ
   }, [role, fetchFromSheet]);
 
+  // ── Offline / online detection ──
+  usE(() => {
+    const goOnline  = () => setIsOnline(true);
+    const goOffline = () => setIsOnline(false);
+    window.addEventListener("online",  goOnline);
+    window.addEventListener("offline", goOffline);
+    return () => {
+      window.removeEventListener("online",  goOnline);
+      window.removeEventListener("offline", goOffline);
+    };
+  }, []);
+
   const handleDataLoaded = usC((newData) => {
     const enriched = enrichData(newData);
     setData(enriched);
@@ -230,11 +245,21 @@ function App() {
   }, []);
 
   const handleClearLocal = usC(() => {
-    if (!confirm("ล้างไฟล์ที่อัปโหลดและกลับไปใช้ Google Sheet?")) return;
-    localStorage.removeItem(LS_KEY);
-    localStorage.removeItem(LS_SRC_KEY);
-    fetchFromSheet();
-  }, [fetchFromSheet]);
+    setConfirmAction({ type: "clearLocal" });
+  }, []);
+
+  const doConfirmedAction = usC(() => {
+    if (!confirmAction) return;
+    if (confirmAction.type === "clearLocal") {
+      localStorage.removeItem(LS_KEY);
+      localStorage.removeItem(LS_SRC_KEY);
+      fetchFromSheet();
+    } else if (confirmAction.type === "logout") {
+      sessionStorage.removeItem("dmj_role");
+      setRole(null);
+    }
+    setConfirmAction(null);
+  }, [confirmAction, fetchFromSheet]);
 
   // ── Conditional renders AFTER all hooks ──
   if (!role) {
@@ -275,6 +300,26 @@ function App() {
 
   return (
     <div>
+      {/* ─── Confirm modals ─── */}
+      <ConfirmModal
+        open={confirmAction?.type === "clearLocal"}
+        type="warn" emoji="🔄"
+        title="ล้างไฟล์อัปโหลด?"
+        detail={"ลบข้อมูลที่อัปโหลดออกทั้งหมด\nและโหลดข้อมูลจาก Google Sheet ใหม่"}
+        confirmLabel="ล้างและ Sync"
+        onConfirm={doConfirmedAction}
+        onCancel={() => setConfirmAction(null)}
+      />
+      <ConfirmModal
+        open={confirmAction?.type === "logout"}
+        type="warn" emoji="🚪"
+        title="ออกจากระบบ?"
+        detail="กลับไปหน้าเลือกสิทธิ์"
+        confirmLabel="ออกจากระบบ"
+        onConfirm={doConfirmedAction}
+        onCancel={() => setConfirmAction(null)}
+      />
+
       {/* ─── Top Nav ─── */}
       <nav className="topnav">
         <div className="topnav-inner">
@@ -313,7 +358,7 @@ function App() {
               {syncing ? <span className="spin" style={{width:14,height:14,borderWidth:2}}/> : I.refresh}
             </button>
             <div title={`${ROLE_LABELS[role]} · คลิกเพื่อออกจากระบบ`}
-                 onClick={() => { if(confirm("ออกจากระบบ?")) { sessionStorage.removeItem("dmj_role"); setRole(null); }}}
+                 onClick={() => setConfirmAction({ type: "logout" })}
                  style={{width:32,height:32,borderRadius:"50%",
                          background:
                            role==="owner"      ? "var(--g-700)" :
@@ -332,6 +377,20 @@ function App() {
           </div>
         </div>
       </nav>
+
+      {/* ─── Offline banner ─── */}
+      {!isOnline && (
+        <div style={{
+          background:"#1a1a1a", color:"#fff", padding:"8px 20px",
+          textAlign:"center", fontSize:13, fontWeight:600,
+          display:"flex", alignItems:"center", justifyContent:"center", gap:8,
+          position:"sticky", top:0, zIndex:900,
+        }}>
+          <span style={{fontSize:18}}>📵</span>
+          <span>ไม่มีอินเทอร์เน็ต — ข้อมูลอาจไม่ใช่ล่าสุด</span>
+          <span style={{fontSize:11,fontWeight:400,opacity:.7}}>No connection · cached data</span>
+        </div>
+      )}
 
       {/* ─── Zort staleness banner ─── */}
       <ZortBanner data={data}/>
