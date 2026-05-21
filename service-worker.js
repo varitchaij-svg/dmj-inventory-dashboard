@@ -1,4 +1,4 @@
-const CACHE_NAME = "dmj-v1";
+const CACHE_NAME = "dmj-v2";
 
 // ไฟล์ static ที่ cache ได้เลย
 const STATIC_ASSETS = [
