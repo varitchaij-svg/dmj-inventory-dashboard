@@ -4620,8 +4620,9 @@ function StockCountView({ data }) {
   const [lastSavedTime, setLastSavedTime]   = uS(null);
   const [toast, showToast, hideToast]       = useToast();
   const [calcPad, setCalcPad]               = uS(null); // {sku, val, name}
+  const [stockSearch, setStockSearch]       = uS('');
 
-  uE(() => { setCheckedQtys({}); setSavedSkus(new Set()); setLastSavedTime(null); }, [selLockKey]);
+  uE(() => { setCheckedQtys({}); setSavedSkus(new Set()); setLastSavedTime(null); setStockSearch(''); }, [selLockKey]);
 
   const openCalc = (sku, name) => {
     const cur = checkedQtys[sku];
@@ -4954,13 +4955,45 @@ function StockCountView({ data }) {
           </div>
         )}
 
+        {/* ── Search + Scan ── */}
+        {lockSkus.length > 0 && (
+          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+            <input
+              type="text"
+              placeholder="🔍 ค้นหา SKU หรือชื่อสินค้า..."
+              value={stockSearch}
+              onChange={function(e){ setStockSearch(e.target.value.toUpperCase()); }}
+              style={{flex:1,padding:'9px 12px',borderRadius:10,
+                      border:'1.5px solid var(--bdr)',fontSize:13,
+                      fontFamily:'inherit',background:'#fff'}}
+            />
+            <ScanButton
+              size={44}
+              onScan={function(sku){ setStockSearch(sku); }}
+            />
+            {stockSearch && (
+              <button onClick={function(){ setStockSearch(''); }}
+                style={{width:44,height:44,borderRadius:10,border:'1.5px solid var(--bdr)',
+                        background:'#fff',cursor:'pointer',fontSize:18,fontFamily:'inherit',
+                        color:'var(--muted)',flexShrink:0}}>
+                ✕
+              </button>
+            )}
+          </div>
+        )}
+
         {lockSkus.length === 0 ? (
           <Card padding={true}>
             <Empty title="ล็อคนี้ยังไม่มีสินค้า" sub="เพิ่มสินค้าในหน้าตำแหน่งคลัง"/>
           </Card>
         ) : (
           <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:14}}>
-            {lockSkus.map(function(sku){
+            {lockSkus.filter(function(sku){
+              if (!stockSearch) return true;
+              const sq = stockSearch.trim().toUpperCase();
+              const p = productMap[sku];
+              return sku.toUpperCase().includes(sq) || (p && p.name && p.name.toUpperCase().includes(sq));
+            }).map(function(sku){
               const p      = productMap[sku];
               const sys    = p
                 ? (p.warehouseQty != null ? p.warehouseQty
@@ -5173,11 +5206,12 @@ function TransferView({ data }) {
       <Card title="📋 รายการโอน/ปรับ/ยกมา"
             sub={`ทั้งหมด ${fmtN(totalCount)} รายการ · ${fmtN(totalQty)} ชิ้น`}
             action={
-              <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+              <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                 <input type="text" placeholder="🔍 ค้นหา SKU..."
                        value={search} onChange={e => setSearch(e.target.value)}
                        style={{padding:"6px 10px",border:"1px solid var(--bdr)",
-                              borderRadius:8,fontSize:12,width:140}}/>
+                              borderRadius:8,fontSize:12,width:130}}/>
+                <ScanButton size={36} onScan={sku => setSearch(sku)}/>
                 <Seg value={filterType} onChange={setFilterType} options={[
                   {value:'all',label:'ทั้งหมด'},{value:'โอน',label:'โอน'},{value:'ปรับ',label:'ปรับ'},{value:'ยกมา',label:'ยกมา'},
                 ]}/>
