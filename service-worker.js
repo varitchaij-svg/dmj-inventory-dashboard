@@ -1,26 +1,20 @@
-const CACHE_NAME = "dmj-v2";
+const CACHE_NAME = "dmj-v3";
 
-// ไฟล์ static ที่ cache ได้เลย
-const STATIC_ASSETS = [
-  "/",
-  "/Doomuenjing Dashboard.html",
-  "/ui.jsx",
-  "/views.jsx",
-  "/app.jsx",
-  "/config.js",
+// ไฟล์ที่ cache เพื่อ offline (รูปและ manifest เท่านั้น)
+const PRECACHE_ASSETS = [
   "/manifest.json",
   "/logo.png",
 ];
 
-// Install — cache static assets
+// Install — pre-cache รูปและ manifest เท่านั้น
 self.addEventListener("install", (e) => {
   e.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS))
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_ASSETS))
   );
   self.skipWaiting();
 });
 
-// Activate — ลบ cache เก่า
+// Activate — ลบ cache เก่าทุก version
 self.addEventListener("activate", (e) => {
   e.waitUntil(
     caches.keys().then((keys) =>
@@ -31,13 +25,16 @@ self.addEventListener("activate", (e) => {
 });
 
 // Fetch strategy:
-// - Google Fonts / CDN libs → network first, fallback cache
-// - Google Sheet data       → network only (ต้องการ live data เสมอ)
-// - static assets           → cache first, fallback network
+//
+//  ① Google Sheet / API          → network only (live data เสมอ)
+//  ② .jsx / .js / .html / .css   → network first, fallback cache (อัปเดตทันที)
+//  ③ CDN libs (React, Recharts)  → cache first, fallback network (ไฟล์ใหญ่ไม่เปลี่ยน)
+//  ④ รูป / font / manifest       → cache first, fallback network
+
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
 
-  // Google Sheet / API calls — ไม่ cache
+  // ① API / Sheet — ไม่ cache เลย
   if (
     url.hostname.includes("script.google.com") ||
     url.hostname.includes("sheets.googleapis.com") ||
@@ -48,18 +45,24 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
-  // CDN (fonts, react, recharts) — network first
-  if (
-    url.hostname.includes("fonts.googleapis.com") ||
-    url.hostname.includes("fonts.gstatic.com") ||
-    url.hostname.includes("unpkg.com") ||
-    url.hostname.includes("cdnjs.cloudflare.com")
-  ) {
+  // ② ไฟล์ app เราเอง (.jsx .js .html .css) — network first
+  //    โหลดจากเน็ตก่อนเสมอ จึงได้ version ล่าสุดทุกครั้ง
+  //    ถ้า offline ค่อยใช้ cache ที่มี
+  const isAppFile =
+    url.hostname === self.location.hostname &&
+    (url.pathname.endsWith(".jsx") ||
+     url.pathname.endsWith(".js")  ||
+     url.pathname.endsWith(".html")||
+     url.pathname === "/");
+
+  if (isAppFile) {
     e.respondWith(
       fetch(e.request)
         .then((res) => {
-          const clone = res.clone();
-          caches.open(CACHE_NAME).then((c) => c.put(e.request, clone));
+          if (res.ok) {
+            const clone = res.clone();
+            caches.open(CACHE_NAME).then((c) => c.put(e.request, clone));
+          }
           return res;
         })
         .catch(() => caches.match(e.request))
@@ -67,7 +70,29 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
-  // Static assets — cache first
+  // ③ CDN libs — cache first (ไฟล์ใหญ่ version เดิม ไม่ต้องโหลดซ้ำ)
+  if (
+    url.hostname.includes("fonts.googleapis.com") ||
+    url.hostname.includes("fonts.gstatic.com") ||
+    url.hostname.includes("unpkg.com") ||
+    url.hostname.includes("cdnjs.cloudflare.com")
+  ) {
+    e.respondWith(
+      caches.match(e.request).then((cached) => {
+        if (cached) return cached;
+        return fetch(e.request).then((res) => {
+          if (res.ok) {
+            const clone = res.clone();
+            caches.open(CACHE_NAME).then((c) => c.put(e.request, clone));
+          }
+          return res;
+        });
+      })
+    );
+    return;
+  }
+
+  // ④ อื่นๆ (รูป, font, manifest) — cache first
   e.respondWith(
     caches.match(e.request).then((cached) => {
       if (cached) return cached;

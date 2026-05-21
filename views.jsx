@@ -3856,7 +3856,7 @@ function SupplierSearch({ value, onChange, allSuppliers }) {
 }
 
 // ─── Memoized FrontStore Card ───
-const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty, onImageClick }) {
+const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty, onImageClick, onOpenCalc }) {
   const sysStore  = p.qtyStore ?? 0;
   const wh        = p.qtyWH ?? 0;
   const hasVal    = val !== "" && val != null;
@@ -4031,6 +4031,7 @@ function FrontStoreView({ data, role }) {
   });
   const [touched, setTouched] = uS(new Set());
   const [lastSavedTime, setLastSavedTime] = uS(null); // timestamp of last successful save
+  const [fsCalcPad, setFsCalcPad] = uS(null); // {sku, name, val} for CalcPadModal
 
   const setQty = uC((sku, val) => {
     setCheckedQtys(prev => ({ ...prev, [sku]: val === "" ? "" : parseInt(val) || 0 }));
@@ -4892,93 +4893,19 @@ function StockCountView({ data }) {
     <>
       <Toast toast={toast} onClose={hideToast}/>
 
-      {/* ── Calculator modal ── */}
-      {calcPad && (
-        <div style={{position:'fixed',inset:0,zIndex:9999,
-                     background:'rgba(0,0,0,.6)',
-                     display:'flex',alignItems:'flex-end',justifyContent:'center'}}
-             onClick={() => calcPress('CANCEL')}>
-          <div style={{background:'#fff',borderRadius:'22px 22px 0 0',
-                       width:'100%',maxWidth:420,padding:'18px 16px 32px',
-                       boxShadow:'0 -8px 32px rgba(0,0,0,.18)'}}
-               onClick={function(e){ e.stopPropagation(); }}>
-
-            {/* Product name */}
-            <div style={{fontSize:12,color:'var(--muted)',fontWeight:600,
-                         textAlign:'center',marginBottom:10,
-                         overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>
-              🧮 {calcPad.name || calcPad.sku}
-            </div>
-
-            {/* Display */}
-            <div style={{background:'#0f172a',borderRadius:14,padding:'12px 18px 8px',
-                         marginBottom:12,minHeight:80,
-                         display:'flex',flexDirection:'column',alignItems:'flex-end',gap:2}}>
-              {/* Expression */}
-              <div style={{fontSize:13,color:'#64748b',fontFamily:'monospace',
-                           wordBreak:'break-all',textAlign:'right',minHeight:18}}>
-                {calcPad.expr || ''}
-              </div>
-              {/* Main number */}
-              <div style={{fontSize:44,fontWeight:800,color:'#f8fafc',
-                           fontFamily:'monospace',lineHeight:1}}>
-                {calcDisplay}
-              </div>
-              {/* Preview of result */}
-              {calcEvalPreview !== null && calcEvalPreview !== parseFloat(calcDisplay) && (
-                <div style={{fontSize:13,color:'#94a3b8',fontFamily:'monospace'}}>
-                  {'= '+calcEvalPreview}
-                </div>
-              )}
-            </div>
-
-            {/* Button grid 4×4 */}
-            <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:7}}>
-              {[
-                {k:'C',    label:'C',   bg:'#fee2e2', c:'var(--dang)',   fs:18},
-                {k:'DEL',  label:'⌫',   bg:'#fef3c7', c:'#b45309',       fs:22},
-                {k:'(',    label:'(',   bg:'#f1f5f9', c:'var(--text)',    fs:20},
-                {k:'/',    label:'÷',   bg:'#ede9fe', c:'#7c3aed',       fs:22},
-
-                {k:'7',    label:'7',   bg:'#fff',    c:'var(--text)',    fs:26},
-                {k:'8',    label:'8',   bg:'#fff',    c:'var(--text)',    fs:26},
-                {k:'9',    label:'9',   bg:'#fff',    c:'var(--text)',    fs:26},
-                {k:'*',    label:'×',   bg:'#ede9fe', c:'#7c3aed',       fs:22},
-
-                {k:'4',    label:'4',   bg:'#fff',    c:'var(--text)',    fs:26},
-                {k:'5',    label:'5',   bg:'#fff',    c:'var(--text)',    fs:26},
-                {k:'6',    label:'6',   bg:'#fff',    c:'var(--text)',    fs:26},
-                {k:'-',    label:'−',   bg:'#ede9fe', c:'#7c3aed',       fs:26},
-
-                {k:'1',    label:'1',   bg:'#fff',    c:'var(--text)',    fs:26},
-                {k:'2',    label:'2',   bg:'#fff',    c:'var(--text)',    fs:26},
-                {k:'3',    label:'3',   bg:'#fff',    c:'var(--text)',    fs:26},
-                {k:'+',    label:'+',   bg:'#ede9fe', c:'#7c3aed',       fs:26},
-
-                {k:')',    label:')',   bg:'#f1f5f9', c:'var(--text)',    fs:20},
-                {k:'0',    label:'0',   bg:'#fff',    c:'var(--text)',    fs:26},
-                {k:'=',    label:'=',   bg:'#1f7f44', c:'#fff',          fs:26},
-                {k:'CONFIRM',label:'✓ ใช้',bg:'#1f7f44',c:'#fff',       fs:15},
-              ].map(function(btn){
-                return (
-                  <button key={btn.k} onClick={function(){ calcPress(btn.k); }}
-                    style={{
-                      height:58, borderRadius:12, fontFamily:'inherit',
-                      fontSize:btn.fs, fontWeight:800, cursor:'pointer',
-                      border:'none',
-                      background:btn.bg, color:btn.c,
-                      WebkitTapHighlightColor:'transparent',
-                      transition:'opacity .1s',
-                      gridColumn: btn.k==='CONFIRM' ? 'span 1' : undefined,
-                    }}>
-                    {btn.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* ── CalcPadModal ── */}
+      <CalcPadModal
+        open={!!calcPad}
+        name={calcPad ? (calcPad.name || calcPad.sku) : ''}
+        initialVal={calcPad ? calcPad.val : ''}
+        onConfirm={function(qty){
+          if (calcPad) {
+            setCheckedQtys(function(prev){ const o=Object.assign({},prev); o[calcPad.sku]=qty; return o; });
+          }
+          setCalcPad(null);
+        }}
+        onClose={function(){ setCalcPad(null); }}
+      />
 
       <div style={{display:'flex',flexDirection:'column',gap:12}}>
 
@@ -6432,4 +6359,141 @@ ${labelsHTML}
   );
 }
 
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView });
+// ─────────────────────────────────────────────────────────────────────
+// CALC PAD MODAL — reusable calculator overlay for qty input
+// Props: { open, name, initialVal, onConfirm, onClose }
+// ─────────────────────────────────────────────────────────────────────
+function CalcPadModal({ open, name, initialVal, onConfirm, onClose }) {
+  const [expr, setExpr]     = uS('');
+  const [result, setResult] = uS(null);
+  const [justOp, setJustOp] = uS(false);
+
+  // Reset when opened
+  uE(() => {
+    if (open) {
+      const init = (initialVal != null && initialVal !== '') ? String(initialVal) : '';
+      setExpr(init); setResult(null); setJustOp(false);
+    }
+  }, [open, initialVal]);
+
+  if (!open) return null;
+
+  const evalExpr = (e) => {
+    try {
+      const clean = e.replace(/[^0-9+\-*/.()]/g,'');
+      if (!clean) return null;
+      // eslint-disable-next-line no-new-func
+      const v = Function('return (' + clean + ')')();
+      if (!isFinite(v)) return null;
+      return Math.max(0, Math.round(v * 100) / 100);
+    } catch(_) { return null; }
+  };
+
+  const display = result !== null ? String(result) : (expr || '0');
+  const preview = expr && !justOp ? evalExpr(expr) : null;
+
+  const press = (key) => {
+    if (key === 'CONFIRM') {
+      const base = result !== null ? String(result) : expr;
+      const v = evalExpr(base);
+      onConfirm(v !== null ? String(Math.max(0, Math.floor(v))) : '');
+      return;
+    }
+    if (key === 'CANCEL') { onClose(); return; }
+    if (key === 'DEL') {
+      if (result !== null) { setExpr(String(result)); setResult(null); setJustOp(false); }
+      else { setExpr(p => p.length > 1 ? p.slice(0,-1) : ''); setJustOp(false); }
+      return;
+    }
+    if (key === 'C') { setExpr(''); setResult(null); setJustOp(false); return; }
+    if (key === '=') {
+      const base = result !== null ? String(result) : expr;
+      const v = evalExpr(base);
+      if (v !== null) { setResult(v); setJustOp(false); }
+      return;
+    }
+    const isOp = ['+','-','*','/'].includes(key);
+    if (isOp) {
+      const base = result !== null ? String(result) : expr;
+      setExpr(base.replace(/[+\-*\/]$/, '') + key);
+      setResult(null); setJustOp(true);
+      return;
+    }
+    // digit / dot
+    if (result !== null && !justOp) { setExpr(key); setResult(null); setJustOp(false); }
+    else { setExpr(p => p.length >= 16 ? p : p + key); setResult(null); setJustOp(false); }
+  };
+
+  const BTNS = [
+    {k:'C',    lb:'C',   bg:'#fee2e2', c:'var(--dang)', fs:16},
+    {k:'DEL',  lb:'⌫',   bg:'#fef3c7', c:'#b45309',    fs:22},
+    {k:'(',    lb:'(',   bg:'#f1f5f9', c:'var(--text)', fs:20},
+    {k:'/',    lb:'÷',   bg:'#ede9fe', c:'#7c3aed',    fs:20},
+    {k:'7',    lb:'7',   bg:'#fff',    c:'var(--text)', fs:26},
+    {k:'8',    lb:'8',   bg:'#fff',    c:'var(--text)', fs:26},
+    {k:'9',    lb:'9',   bg:'#fff',    c:'var(--text)', fs:26},
+    {k:'*',    lb:'×',   bg:'#ede9fe', c:'#7c3aed',    fs:20},
+    {k:'4',    lb:'4',   bg:'#fff',    c:'var(--text)', fs:26},
+    {k:'5',    lb:'5',   bg:'#fff',    c:'var(--text)', fs:26},
+    {k:'6',    lb:'6',   bg:'#fff',    c:'var(--text)', fs:26},
+    {k:'-',    lb:'−',   bg:'#ede9fe', c:'#7c3aed',    fs:26},
+    {k:'1',    lb:'1',   bg:'#fff',    c:'var(--text)', fs:26},
+    {k:'2',    lb:'2',   bg:'#fff',    c:'var(--text)', fs:26},
+    {k:'3',    lb:'3',   bg:'#fff',    c:'var(--text)', fs:26},
+    {k:'+',    lb:'+',   bg:'#ede9fe', c:'#7c3aed',    fs:26},
+    {k:')',    lb:')',   bg:'#f1f5f9', c:'var(--text)', fs:20},
+    {k:'0',    lb:'0',   bg:'#fff',    c:'var(--text)', fs:26},
+    {k:'=',    lb:'=',   bg:'#475569', c:'#fff',       fs:26},
+    {k:'CONFIRM',lb:'✓ ใช้', bg:'var(--g-600)', c:'#fff', fs:15},
+  ];
+
+  return (
+    <div style={{position:'fixed',inset:0,zIndex:9999,
+                 background:'rgba(0,0,0,.6)',
+                 display:'flex',alignItems:'flex-end',justifyContent:'center'}}
+         onClick={onClose}>
+      <div style={{background:'#fff',borderRadius:'22px 22px 0 0',
+                   width:'100%',maxWidth:420,padding:'18px 16px 32px',
+                   boxShadow:'0 -8px 32px rgba(0,0,0,.18)'}}
+           onClick={function(e){ e.stopPropagation(); }}>
+        <div style={{fontSize:12,color:'var(--muted)',fontWeight:600,
+                     textAlign:'center',marginBottom:10,
+                     overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>
+          🧮 {name || ''}
+        </div>
+        <div style={{background:'#0f172a',borderRadius:14,padding:'12px 18px 8px',
+                     marginBottom:12,minHeight:76,
+                     display:'flex',flexDirection:'column',alignItems:'flex-end',gap:2}}>
+          <div style={{fontSize:12,color:'#64748b',fontFamily:'monospace',
+                       wordBreak:'break-all',textAlign:'right',minHeight:16}}>
+            {expr || ''}
+          </div>
+          <div style={{fontSize:44,fontWeight:800,color:'#f8fafc',
+                       fontFamily:'monospace',lineHeight:1}}>
+            {display}
+          </div>
+          {preview !== null && preview !== parseFloat(display) && (
+            <div style={{fontSize:12,color:'#94a3b8',fontFamily:'monospace'}}>
+              {'= '+preview}
+            </div>
+          )}
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:7}}>
+          {BTNS.map(function(btn){
+            return (
+              <button key={btn.k} onClick={function(){ press(btn.k); }}
+                style={{height:56,borderRadius:12,fontFamily:'inherit',
+                        fontSize:btn.fs,fontWeight:800,cursor:'pointer',
+                        border:'none',background:btn.bg,color:btn.c,
+                        WebkitTapHighlightColor:'transparent'}}>
+                {btn.lb}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal });
