@@ -186,6 +186,7 @@ function App() {
   const [isOnline, setIsOnline] = usS(() => navigator.onLine);
   const [lastSaved, setLastSaved] = usS(null); // auto-save timestamp
   const [confirmAction, setConfirmAction] = usS(null); // { type:"clearLocal"|"logout" }
+  const tabHistoryRef = React.useRef([]); // track tab navigation for Android back
 
   const sheetUrl = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : "data.json";
   const sheetViewUrl = "https://docs.google.com/spreadsheets/d/11yL4u-XLUTCBObMppAj12nnmG0YlDZWsDn2XPCneoHQ/edit";
@@ -243,6 +244,23 @@ function App() {
   const handleOrderPrint = usC((items) => {
     setLabelInitItems(items);
     setTab("labels");
+  }, []);
+
+  // Tab navigation with Android back-button support
+  const handleSetTab = usC((newId) => {
+    setTab(prev => {
+      if (newId === prev) return prev;
+      if (window.__dmjBackStack) {
+        const from = prev;
+        tabHistoryRef.current.push(newId);
+        window.__dmjBackStack.push(function() {
+          tabHistoryRef.current.pop();
+          setTab(from);
+        });
+        history.pushState({ _dmj: 1 }, '');
+      }
+      return newId;
+    });
   }, []);
 
   const handleClearLocal = usC(() => {
@@ -342,7 +360,7 @@ function App() {
             {visibleTabs.map(t => (
               <button key={t.id} role="tab"
                       className={`navtab${activeTab===t.id?' active':''}`}
-                      onClick={() => setTab(t.id)}>
+                      onClick={() => handleSetTab(t.id)}>
                 {t.icon}<span>{t.label}</span>
               </button>
             ))}

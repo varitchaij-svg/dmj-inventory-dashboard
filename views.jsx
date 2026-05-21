@@ -1,6 +1,38 @@
-// views.jsx v20260521-fix3
+// views.jsx v20260521-fix4
 // Tab views — Overview, Categories, Stock, Upload, Connect
 const { useState: uS, useEffect: uE, useMemo: uM, useCallback: uC } = React;
+
+// ── Android back-button handler ──────────────────────────────────────────────
+// Global LIFO stack — each modal/step pushes a handler on open, pops on close.
+// Single popstate listener fires the top handler (most recently opened thing).
+(function(){
+  if (window.__dmjBackStack) return; // already initialised
+  window.__dmjBackStack = [];
+  window.addEventListener('popstate', function() {
+    var stack = window.__dmjBackStack;
+    if (stack.length > 0) {
+      stack[stack.length - 1](); // call top handler
+      history.pushState({ _dmj: 1 }, ''); // re-push so next back is also caught
+    }
+  });
+})();
+
+// Hook: register a back handler for the lifetime of the component (or while onBack != null).
+// Pass null to temporarily deregister (e.g. modal is closed but component stays mounted).
+function useBackHandler(onBack) {
+  var ref = React.useRef(onBack);
+  React.useEffect(function(){ ref.current = onBack; }); // always keep ref fresh
+  React.useEffect(function(){
+    if (!onBack || !window.__dmjBackStack) return;
+    var h = function(){ ref.current && ref.current(); };
+    window.__dmjBackStack.push(h);
+    history.pushState({ _dmj: 1 }, '');
+    return function(){                              // cleanup: pop this handler
+      var i = window.__dmjBackStack.lastIndexOf(h);
+      if (i >= 0) window.__dmjBackStack.splice(i, 1);
+    };
+  }, [!!onBack]); // re-run only when active/inactive state changes
+}
 const { ResponsiveContainer, AreaChart, Area, BarChart, Bar, LineChart, Line,
         XAxis, YAxis, CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell } = window.Recharts;
 
@@ -8,6 +40,7 @@ const { ResponsiveContainer, AreaChart, Area, BarChart, Bar, LineChart, Line,
 // VISUAL CONFIRM MODAL (replaces native confirm() — readable without Thai)
 // ─────────────────────────────────────────────────────────────────────
 function ConfirmModal({ open, type="warn", emoji, title, detail, confirmLabel="ยืนยัน", cancelLabel="ยกเลิก", onConfirm, onCancel }) {
+  useBackHandler(open ? onCancel : null); // Android back = ยกเลิก
   if (!open) return null;
   const colors = {
     warn:    { bg:"#fff8e1", accent:"#a07417", btn:"#f59e0b", emoji:emoji || "⚠️" },
@@ -3569,6 +3602,7 @@ function ShelfBlock({ side, shelf, locks, lockData, searchMatches, onClick, allo
 }
 
 function ImageLightbox({ url, name, onClose }) {
+  useBackHandler(onClose); // Android back = ปิดรูป
   return (
     <div onClick={onClose} style={{
       position:"fixed", inset:0, zIndex:2000,
@@ -3679,6 +3713,8 @@ function QRScanModal({ onDetected, onClose }) {
     try { if (s) { await s.stop(); s.clear(); } } catch(e) {}
     onClose();
   };
+
+  useBackHandler(handleClose); // Android back = ปิด scanner
 
   return (
     <div onClick={handleClose} style={{
@@ -4652,6 +4688,18 @@ function StockCountView({ data }) {
   const [stockSearch, setStockSearch]       = uS('');
 
   uE(() => { setCheckedQtys({}); setSavedSkus(new Set()); setLastSavedTime(null); setStockSearch(''); }, [selLockKey]);
+
+  // Android back button: step 3 → 2 → 1
+  uE(function(){
+    if (step === 1 || !window.__dmjBackStack) return;
+    var handler = function(){ setStep(function(s){ return s > 1 ? s - 1 : 1; }); };
+    window.__dmjBackStack.push(handler);
+    history.pushState({ _dmj: 1 }, '');
+    return function(){
+      var i = window.__dmjBackStack.lastIndexOf(handler);
+      if (i >= 0) window.__dmjBackStack.splice(i, 1);
+    };
+  }, [step]);
 
   const openCalc = (sku, name) => {
     const cur = checkedQtys[sku];
@@ -6427,6 +6475,7 @@ ${labelsHTML}
 // Props: { open, name, initialVal, onConfirm, onClose }
 // ─────────────────────────────────────────────────────────────────────
 function CalcPadModal({ open, name, initialVal, onConfirm, onClose }) {
+  useBackHandler(open ? onClose : null); // Android back = ปิดเครื่องคิดเลข
   const [expr, setExpr]     = uS('');
   const [result, setResult] = uS(null);
   const [justOp, setJustOp] = uS(false);
