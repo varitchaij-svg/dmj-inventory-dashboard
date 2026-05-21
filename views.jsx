@@ -6468,8 +6468,12 @@ function CalcPadModal({ open, name, initialVal, onConfirm, onClose }) {
                        wordBreak:'break-all',textAlign:'right',minHeight:16}}>
             {expr || ''}
           </div>
-          <div style={{fontSize:44,fontWeight:800,color:'#f8fafc',
-                       fontFamily:'monospace',lineHeight:1}}>
+          <div style={{
+                       fontSize: display.length > 10 ? 22 : display.length > 7 ? 30 : display.length > 4 ? 38 : 44,
+                       fontWeight:800,color:'#f8fafc',
+                       fontFamily:'monospace',lineHeight:1,
+                       width:'100%',textAlign:'right',
+                       overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>
             {display}
           </div>
           {preview !== null && preview !== parseFloat(display) && (
