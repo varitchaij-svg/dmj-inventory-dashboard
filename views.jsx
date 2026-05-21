@@ -4449,17 +4449,6 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
             </div>
           </div>
           <div style={{display:"flex",gap:8,alignItems:"center"}}>
-            <button onClick={handleSave}
-              disabled={saving}
-              style={{
-                border:"1.5px solid var(--g-300)",
-                background:"var(--g-700)", color:"#fff",
-                borderRadius:8, padding:"5px 12px",
-                cursor:"pointer", fontSize:12, fontWeight:700, fontFamily:"inherit",
-                opacity: saving ? 0.6 : 1,
-              }}>
-              {saving ? "⏳ กำลังบันทึก..." : "💾 บันทึก"}
-            </button>
             <button onClick={() => setEditMode(e => !e)} style={{
               border:"1.5px solid var(--g-300)",
               background: editMode ? "#f0fdf4" : "#fff",
@@ -4505,8 +4494,6 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
             <thead><tr>
               <th>สินค้า</th>
               <th className="num">คงเหลือ<br/><span style={{fontWeight:400,fontSize:10,color:"var(--muted)"}}>ในระบบ</span></th>
-              <th className="num">เช็คจริง<br/><span style={{fontWeight:400,fontSize:10,color:"var(--muted)"}}>กรอกเพื่อบันทึก</span></th>
-              <th>สถานะ</th>
             </tr></thead>
             <tbody>
               {prods.map(({sku, p, isLocal}) => {
@@ -4569,44 +4556,6 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
                       </span>
                     </td>
 
-                    {/* เช็คจริง — editable input เสมอ */}
-                    <td className="num">
-                      <input type="number" min="0"
-                        value={checkedVal ?? ""}
-                        onChange={e => setCheckedQtys(prev => ({
-                          ...prev, [sku]: e.target.value === "" ? "" : parseInt(e.target.value) || 0
-                        }))}
-                        placeholder="—"
-                        style={{
-                          width:72, textAlign:"center", padding:"5px 6px",
-                          borderRadius:7,
-                          border: hasChecked ? "2px solid var(--g-500)" : "1.5px solid var(--bdr)",
-                          fontSize:14, fontWeight:700, fontFamily:"inherit",
-                          background: hasChecked ? "#f0fdf4" : "#fafafa",
-                          outline:"none",
-                        }}/>
-                    </td>
-
-                    {/* สถานะ */}
-                    <td>
-                      {!hasChecked ? (
-                        <span style={{fontSize:11,color:"var(--muted)"}}>รอเช็ค</span>
-                      ) : (
-                        <div>
-                          <span style={{
-                            fontSize:11, fontWeight:700,
-                            color: matched ? "var(--g-700)" : "var(--dang)",
-                          }}>
-                            {matched ? "✓ ตรง" : "✗ ไม่ตรง"}
-                          </span>
-                          {!matched && diff !== null && (
-                            <div style={{fontSize:10,color:"var(--dang)"}}>
-                              {diff > 0 ? `+${diff}` : diff} จากระบบ
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </td>
                   </tr>
                 );
               })}
@@ -4627,6 +4576,286 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
       onCancel={() => setDelConfirm(null)}
     />
     <Toast toast={toast} onClose={hideToast}/>
+    </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// STOCK COUNT VIEW — นับ stock คลัง ทีละล็อค (Owner + WH เท่านั้น)
+// ─────────────────────────────────────────────────────────────────────
+function StockCountView({ data }) {
+  const storage    = data.storage || {};
+  const lockData   = storage.lockData || {};
+  const products   = data.products || [];
+
+  const productMap = uM(() => {
+    const m = {};
+    products.forEach(p => { m[p.sku] = p; });
+    return m;
+  }, [products]);
+
+  // รายการล็อคทั้งหมด เรียงตาม key
+  const allLockKeys = uM(() =>
+    Object.keys(lockData).sort((a, b) => a.localeCompare(b, "th"))
+  , [lockData]);
+
+  const [selectedLock, setSelectedLock] = uS(allLockKeys[0] || "");
+  const [checkedQtys, setCheckedQtys]   = uS({});
+  const [savedSkus, setSavedSkus]       = uS(new Set());
+  const [saving, setSaving]             = uS(false);
+  const [lastSavedTime, setLastSavedTime] = uS(null);
+  const [toast, showToast, hideToast]   = useToast();
+
+  // Reset เมื่อเปลี่ยนล็อค
+  uE(() => {
+    setCheckedQtys({});
+    setSavedSkus(new Set());
+    setLastSavedTime(null);
+  }, [selectedLock]);
+
+  const lockInfo = selectedLock ? lockData[selectedLock] : null;
+  const allSkus  = lockInfo ? [...new Set([...(lockInfo.skus || []])]) : [];
+
+  // Summary
+  const summary = uM(() => {
+    let waiting = 0, matched = 0, mismatched = 0;
+    allSkus.forEach(sku => {
+      const p = productMap[sku];
+      const sysQty = p ? (p.warehouseQty ?? p.qtyWH ?? p.qty ?? 0) : null;
+      const val    = checkedQtys[sku];
+      const hasVal = val !== "" && val != null;
+      if (!hasVal) { waiting++; return; }
+      if (sysQty !== null && (parseInt(val) || 0) === sysQty) matched++;
+      else mismatched++;
+    });
+    return { waiting, matched, mismatched };
+  }, [allSkus, checkedQtys, productMap]);
+
+  const adjustQty = (sku, delta) => {
+    const cur = checkedQtys[sku];
+    const curNum = (cur !== "" && cur != null) ? (parseInt(cur) || 0) : 0;
+    setCheckedQtys(prev => ({ ...prev, [sku]: String(Math.max(0, curNum + delta)) }));
+  };
+
+  const handleSave = async () => {
+    const entries = Object.entries(checkedQtys)
+      .filter(([, v]) => v !== "" && v != null)
+      .map(([sku, qty]) => ({ sku, qty: parseInt(qty) || 0 }));
+    if (!entries.length) { showToast("warn", "ยังไม่ได้กรอกจำนวน", "✏️"); return; }
+    setSaving(true);
+    const result = await syncLockData(selectedLock, entries);
+    setSaving(false);
+    if (result.success !== false) {
+      setSavedSkus(new Set(entries.map(e => e.sku)));
+      setLastSavedTime(new Date());
+      showToast("success", `บันทึก ${entries.length} รายการ`, "💾");
+    } else {
+      showToast("error", "บันทึกไม่สำเร็จ", "❌");
+    }
+  };
+
+  const filledCount = Object.values(checkedQtys).filter(v => v !== "" && v != null).length;
+
+  return (
+    <>
+    <Toast toast={toast} onClose={hideToast}/>
+    <div style={{display:"flex",flexDirection:"column",gap:12}}>
+
+      {/* Header */}
+      <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+        <div style={{flex:1}}>
+          <div style={{fontSize:15,fontWeight:700}}>📊 นับ stock คลัง</div>
+          <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>
+            เลือกล็อค → กรอกจำนวนที่นับได้จริง
+          </div>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2}}>
+          <button onClick={handleSave}
+            disabled={saving || filledCount === 0}
+            className="btn primary"
+            style={{padding:"9px 18px",fontWeight:700,
+                    opacity:(saving||filledCount===0)?0.45:1}}>
+            {saving
+              ? <><span className="spin" style={{width:13,height:13,borderWidth:2,marginRight:6}}/> บันทึก...</>
+              : filledCount > 0 ? `💾 บันทึก (${filledCount})` : "💾 บันทึก"}
+          </button>
+          {lastSavedTime && (
+            <div style={{fontSize:10,color:"var(--g-600)",fontWeight:600}}>
+              ✓ บันทึกแล้ว {lastSavedTime.getHours().toString().padStart(2,"0")}:{lastSavedTime.getMinutes().toString().padStart(2,"0")}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Lock selector */}
+      <Card padding={true} style={{paddingTop:12,paddingBottom:12}}>
+        <div style={{fontSize:11,fontWeight:600,color:"var(--muted)",marginBottom:6}}>
+          เลือกล็อคที่จะนับ
+        </div>
+        {allLockKeys.length === 0 ? (
+          <Empty title="ยังไม่มีข้อมูลล็อค" sub="อัปโหลดข้อมูลก่อน"/>
+        ) : (
+          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+            {allLockKeys.map(key => {
+              const d = lockData[key];
+              const skuCount = (d?.skus||[]).length;
+              const isSelected = key === selectedLock;
+              return (
+                <button key={key} onClick={() => setSelectedLock(key)}
+                  style={{
+                    padding:"8px 12px", borderRadius:10, cursor:"pointer",
+                    fontFamily:"inherit", fontSize:12, fontWeight:700,
+                    border: isSelected ? "2px solid var(--g-600)" : "1.5px solid var(--bdr)",
+                    background: isSelected ? "var(--g-600)" : "#fff",
+                    color: isSelected ? "#fff" : "var(--text)",
+                    minWidth:60, textAlign:"center",
+                  }}>
+                  {key}
+                  <div style={{fontSize:9,fontWeight:400,opacity:.8,marginTop:1}}>
+                    {skuCount} SKU
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
+      {/* Summary bar */}
+      {selectedLock && allSkus.length > 0 && (
+        <div style={{display:"flex",gap:8}}>
+          <div style={{flex:1,textAlign:"center",padding:"8px 6px",borderRadius:10,
+                       background:"#f1f5f9"}}>
+            <div style={{fontSize:18,fontWeight:800,color:"var(--muted)"}}>{summary.waiting}</div>
+            <div style={{fontSize:10,color:"var(--muted)",fontWeight:600}}>⬜ รอนับ</div>
+          </div>
+          <div style={{flex:1,textAlign:"center",padding:"8px 6px",borderRadius:10,
+                       background:"#f0fdf4"}}>
+            <div style={{fontSize:18,fontWeight:800,color:"var(--g-700)"}}>{summary.matched}</div>
+            <div style={{fontSize:10,color:"var(--g-700)",fontWeight:600}}>✅ นับตรง</div>
+          </div>
+          <div style={{flex:1,textAlign:"center",padding:"8px 6px",borderRadius:10,
+                       background: summary.mismatched > 0 ? "#fff5f5" : "#f1f5f9"}}>
+            <div style={{fontSize:18,fontWeight:800,
+                         color: summary.mismatched > 0 ? "var(--dang)" : "var(--muted)"}}>
+              {summary.mismatched}
+            </div>
+            <div style={{fontSize:10,fontWeight:600,
+                         color: summary.mismatched > 0 ? "var(--dang)" : "var(--muted)"}}>
+              ⚠️ ไม่ตรง
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Product rows */}
+      {selectedLock && (
+        allSkus.length === 0 ? (
+          <Card padding={true}>
+            <Empty title="ล็อคนี้ยังไม่มีสินค้า" sub="เพิ่มสินค้าในหน้าตำแหน่งคลัง"/>
+          </Card>
+        ) : (
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {allSkus.map(sku => {
+              const p = productMap[sku];
+              const sysQty  = p ? (p.warehouseQty ?? p.qtyWH ?? p.qty ?? 0) : null;
+              const val     = checkedQtys[sku];
+              const hasVal  = val !== "" && val != null;
+              const numVal  = hasVal ? (parseInt(val) || 0) : 0;
+              const matched = hasVal && sysQty !== null && numVal === sysQty;
+              const diff    = hasVal && sysQty !== null ? numVal - sysQty : null;
+              const isSaved = savedSkus.has(sku);
+
+              // สถานะ: ⬜ รอนับ / ✅ นับตรง / ⚠️ ไม่ตรง
+              const statusBg    = !hasVal ? "#f8f9fa" : matched ? "#f0fdf4" : "#fff5f5";
+              const borderColor = !hasVal ? "var(--bdr)" : matched ? "var(--g-500)" : "var(--dang)";
+
+              return (
+                <div key={sku} style={{
+                  background: isSaved ? "#f0fdf4" : statusBg,
+                  border:`2px solid ${borderColor}`,
+                  borderRadius:12, padding:12,
+                  display:"flex", alignItems:"center", gap:10,
+                  transition:"border-color .2s",
+                }}>
+                  {/* รูปสินค้า */}
+                  {p?.imageUrl ? (
+                    <div style={{
+                      width:52, height:52, borderRadius:8, flexShrink:0,
+                      backgroundImage:`url("${p.imageUrl}")`,
+                      backgroundSize:"contain", backgroundPosition:"center",
+                      backgroundRepeat:"no-repeat", backgroundColor:"#fff",
+                      border:"1px solid var(--bdr)",
+                    }}/>
+                  ) : (
+                    <div style={{width:52,height:52,borderRadius:8,background:"var(--g-50)",
+                                 border:"1px solid var(--bdr)",flexShrink:0,
+                                 display:"flex",alignItems:"center",justifyContent:"center",
+                                 fontSize:22,color:"var(--g-300)"}}>📦</div>
+                  )}
+
+                  {/* ชื่อ + SKU */}
+                  <div style={{flex:1,minWidth:0}}>
+                    <span className="skucode" style={{fontSize:10}}>{sku}</span>
+                    <div style={{fontWeight:600,fontSize:13,lineHeight:1.3,marginTop:2,
+                                 overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>
+                      {p ? p.name : <span style={{color:"var(--muted)",fontStyle:"italic"}}>ไม่พบในระบบ</span>}
+                    </div>
+                    <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>
+                      ระบบ: <b style={{color:"var(--text)"}}>{sysQty != null ? fmtN(sysQty) : "—"}</b>
+                      {isSaved && <span style={{marginLeft:6,fontSize:9,background:"#dcfce7",
+                        color:"#166534",borderRadius:8,padding:"1px 6px",fontWeight:700}}>✓ บันทึก</span>}
+                    </div>
+                  </div>
+
+                  {/* ±qty input */}
+                  <div style={{display:"flex",alignItems:"center",gap:4,flexShrink:0}}>
+                    <button onClick={() => adjustQty(sku, -1)}
+                      style={{width:44,height:44,borderRadius:8,border:"1.5px solid var(--bdr)",
+                              background:"#fff",cursor:"pointer",fontSize:18,fontWeight:800,
+                              fontFamily:"inherit",color:"var(--dang)",
+                              opacity: numVal >= 1 ? 1 : 0.3}}>−</button>
+                    <input type="number" min="0" inputMode="numeric"
+                      value={val ?? ""}
+                      onChange={e => setCheckedQtys(prev => ({
+                        ...prev, [sku]: e.target.value === "" ? "" : String(parseInt(e.target.value)||0)
+                      }))}
+                      placeholder="0"
+                      style={{
+                        width:60, textAlign:"center", padding:"8px 4px",
+                        borderRadius:9, fontSize:18, fontWeight:800,
+                        fontFamily:"inherit", outline:"none",
+                        border: hasVal
+                          ? (matched ? "2px solid var(--g-500)" : "2px solid var(--dang)")
+                          : "1.5px solid var(--bdr)",
+                        background: hasVal ? (matched ? "#f0fdf4" : "#fff5f5") : "#fff",
+                        color: hasVal ? (matched ? "var(--g-700)" : "var(--dang)") : "var(--text)",
+                      }}/>
+                    <button onClick={() => adjustQty(sku, 1)}
+                      style={{width:44,height:44,borderRadius:8,border:"1.5px solid var(--bdr)",
+                              background:"#f0fdf4",cursor:"pointer",fontSize:18,fontWeight:800,
+                              fontFamily:"inherit",color:"var(--g-700)"}}>+</button>
+                  </div>
+
+                  {/* Status badge */}
+                  <div style={{width:52,textAlign:"center",flexShrink:0}}>
+                    {!hasVal ? (
+                      <div style={{fontSize:10,color:"var(--muted)",fontWeight:600}}>⬜<br/>รอนับ</div>
+                    ) : matched ? (
+                      <div style={{fontSize:10,fontWeight:700,color:"var(--g-700)"}}>✅<br/>นับตรง</div>
+                    ) : (
+                      <div style={{fontSize:10,fontWeight:700,color:"var(--dang)"}}>
+                        ⚠️<br/>{diff !== null ? (diff > 0 ? `+${diff}` : diff) : ""}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )
+      )}
+    </div>
     </>
   );
 }
@@ -5893,4 +6122,4 @@ ${labelsHTML}
   );
 }
 
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView });
+Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView });
