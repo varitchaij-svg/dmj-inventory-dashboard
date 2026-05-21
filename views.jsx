@@ -3982,6 +3982,17 @@ const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty
                     cursor:"pointer",fontSize:13,fontWeight:700,
                     fontFamily:"inherit",color:"var(--g-700)"}}>+5</button>
         </div>
+        {onOpenCalc && (
+          <button onClick={() => onOpenCalc(p.sku, p.name || p.sku)}
+            style={{width:"100%",marginTop:4,height:40,borderRadius:9,
+                    border:"1.5px solid var(--bdr)",background:"#f8fafc",
+                    cursor:"pointer",fontSize:13,fontWeight:700,
+                    fontFamily:"inherit",color:"var(--muted)",
+                    display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+            <span style={{fontSize:16}}>🧮</span>
+            <span>เครื่องคิดเลข</span>
+          </button>
+        )}
       </div>
     </div>
   );
@@ -4147,6 +4158,20 @@ function FrontStoreView({ data, role }) {
 
   return (
     <>
+    {/* ── CalcPadModal for FrontStoreView ── */}
+    <CalcPadModal
+      open={!!fsCalcPad}
+      name={fsCalcPad ? (fsCalcPad.name || fsCalcPad.sku) : ''}
+      initialVal={fsCalcPad ? fsCalcPad.val : ''}
+      onConfirm={function(qty){
+        if (fsCalcPad) {
+          setCheckedQtys(prev => ({ ...prev, [fsCalcPad.sku]: qty === '' ? '' : parseInt(qty)||0 }));
+          setTouched(prev => new Set([...prev, fsCalcPad.sku]));
+        }
+        setFsCalcPad(null);
+      }}
+      onClose={function(){ setFsCalcPad(null); }}
+    />
     <div style={{display:"flex", flexDirection:"column", gap:12}}>
       <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
         <div style={{flex:1, minWidth:160}}>
@@ -4247,7 +4272,11 @@ function FrontStoreView({ data, role }) {
               isSaved={savedSkus.has(p.sku)}
               isTouched={touched.has(p.sku)}
               onSetQty={setQty}
-              onImageClick={setLightbox}/>
+              onImageClick={setLightbox}
+              onOpenCalc={(sku, name) => {
+                const cur = checkedQtys[sku];
+                setFsCalcPad({ sku, name, val: (cur != null && cur !== '') ? String(cur) : '' });
+              }}/>
           ))}
         </div>
       )}
