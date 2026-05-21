@@ -1,3 +1,4 @@
+// views.jsx v20260521-fix3
 // Tab views — Overview, Categories, Stock, Upload, Connect
 const { useState: uS, useEffect: uE, useMemo: uM, useCallback: uC } = React;
 const { ResponsiveContainer, AreaChart, Area, BarChart, Bar, LineChart, Line,
