@@ -4622,7 +4622,7 @@ function StockCountView({ data }) {
   uE(() => { setCheckedQtys({}); setSavedSkus(new Set()); setLastSavedTime(null); }, [selLockKey]);
 
   const locksN = shelves.locksPerShelf || 15;
-  const COLS = 3, ROWS = Math.ceil(locksN / COLS);
+  const COLS = 5, ROWS = 3; // match ShelfBlock exactly
 
   const shelfList = uM(() => {
     const list = [];
@@ -4677,8 +4677,8 @@ function StockCountView({ data }) {
   const isRight  = shelfNum % 2 !== 0;
   const lockNumAt = (row, col) =>
     isRight
-      ? (COLS - 1 - col) * ROWS + (row + 1)
-      : col * ROWS + (row + 1);
+      ? (COLS - 1 - col) * ROWS + (row + 1)      // ขวา: 1 บนขวา
+      : (COLS - 1 - col) * ROWS + (ROWS - row);  // ซ้าย: 15 บนซ้าย
 
   const shelfStats = uM(() => {
     const s = {};
@@ -4769,7 +4769,7 @@ function StockCountView({ data }) {
             {isRight ? '🔢 ล็อค 1 อยู่มุมบน-ขวา' : '🔢 ล็อค 1 อยู่มุมบน-ซ้าย'}
           </div>
           <div style={{display:'grid',
-                       gridTemplateColumns:'repeat('+COLS+',1fr)',gap:8}}>
+                       gridTemplateColumns:'repeat('+COLS+',1fr)',maxWidth:480,margin:'0 auto',gap:8}}>
             {Array.from({length:ROWS}, (_, row) =>
               Array.from({length:COLS}, (_, col) => {
                 const n   = lockNumAt(row, col);
