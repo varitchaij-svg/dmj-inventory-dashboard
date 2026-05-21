@@ -3094,7 +3094,7 @@ function StorageView({ data }) {
                       </div>
                       <ShelfBlock side={s} shelf={right} locks={locksN}
                                   lockData={lockData} searchMatches={searchMatches}
-                                  onClick={setSelectedLock} allowEmpty={true}/>
+                                  onClick={setSelectedLock} allowEmpty={true} isRight={true}/>
                       {/* Aisle divider */}
                       <div className="bay-aisle-div">── ทางเดิน ──</div>
                       {/* Left shelf grid + label */}
@@ -3525,17 +3525,18 @@ function UnassignedProductCards({ products, lockData, shelves, onAssigned }) {
   );
 }
 
-function ShelfBlock({ side, shelf, locks, lockData, searchMatches, onClick, allowEmpty }) {
-  // locks display:
-  // 15 12  9  6  3
-  // 14 11  8  5  2
-  // 13 10  7  4  1
+function ShelfBlock({ side, shelf, locks, lockData, searchMatches, onClick, allowEmpty, isRight }) {
+  // ฝั่งซ้าย (isRight=false):   ฝั่งขวา (isRight=true):
+  // 15 12  9  6  3              13 10  7  4  1
+  // 14 11  8  5  2              14 11  8  5  2
+  // 13 10  7  4  1              15 12  9  6  3
   const cols = 5, rows = 3;
   const cells = [];
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
-      // rightmost col (col=cols-1) → locks 3,2,1 top-to-bottom; leftmost col (col=0) → 15,14,13
-      const num = (cols - 1 - col) * rows + (rows - row);
+      const num = isRight
+        ? (cols - 1 - col) * rows + (row + 1)        // ขวา: 1 บนขวา, 15 ล่างซ้าย
+        : (cols - 1 - col) * rows + (rows - row);    // ซ้าย: 15 บนซ้าย, 1 ล่างขวา
       if (num > locks) { cells.push(<div key={`e${row}-${col}`} style={{visibility:'hidden'}}/>); continue; }
       const key = `${side}${shelf}/${num}`;
       const d = lockData[key];
