@@ -4614,7 +4614,7 @@ function StockCountView({ data }) {
   }, [selectedLock]);
 
   const lockInfo = selectedLock ? lockData[selectedLock] : null;
-  const allSkus  = lockInfo ? [...new Set([...(lockInfo.skus || []])]) : [];
+  const allSkus  = lockInfo ? [...new Set(lockInfo.skus || [])] : [];
 
   // Summary
   const summary = uM(() => {
