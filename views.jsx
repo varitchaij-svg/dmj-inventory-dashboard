@@ -940,6 +940,15 @@ function stockQty(p) {
     : (p.qty || 0);
 }
 
+// Warehouse-only qty: warehouseQty (from Sheet) → qtyWH (from Zort upload) → qty fallback.
+// Used in StockCount/Storage views where we want warehouse stock only (not store+WH combined).
+function whQty(p) {
+  if (!p) return 0;
+  if (p.warehouseQty != null) return p.warehouseQty;
+  if (p.qtyWH        != null) return p.qtyWH;
+  return p.qty != null ? p.qty : 0;
+}
+
 // Strip "#1", "#10", trailing numbers, etc. from MTO product names
 // "แจกันชุด#1" → "แจกันชุด", "แจกันชุด 5 อะไร" → "แจกันชุด"
 function mtoBase(name) {
@@ -3210,7 +3219,7 @@ function StorageView({ data }) {
       // เปรียบจำนวนจริงกับระบบ — ไม่ใช้ string status เพราะอาจล้าสมัย
       const mismatch = verifiedLockMap[key].some(v => {
         const sysP = products.find(p => p.sku === v.sku);
-        const sysQty = sysP ? (sysP.warehouseQty ?? sysP.qtyWH ?? sysP.qty) : v.sysQty;
+        const sysQty = sysP ? whQty(sysP) : v.sysQty;
         return sysQty != null && v.qty != null && v.qty !== sysQty;
       });
       const allSkus = merged[key] ? [...new Set([...merged[key].skus, ...verifiedSkus])] : verifiedSkus;
@@ -3538,7 +3547,7 @@ function UnassignedProductCards({ products, lockData, shelves, onAssigned }) {
 
   const noLock = uM(() =>
     products
-      .filter(p => Number(p.qtyWH ?? p.warehouseQty ?? 0) > 0 && !assignedSkus.has(p.sku))
+      .filter(p => whQty(p) > 0 && !assignedSkus.has(p.sku))
       .sort(compareSku),
     [products, assignedSkus]);
 
@@ -3582,7 +3591,7 @@ function UnassignedProductCards({ products, lockData, shelves, onAssigned }) {
     onAssigned(sku, lockKey);
     // 2. บันทึกขึ้น Google Sheet
     const prod = products.find(p => p.sku === sku);
-    const qty = prod ? Number(prod.qtyWH ?? prod.warehouseQty ?? 0) : 0;
+    const qty = prod ? whQty(prod) : 0;
     const result = await syncLockData(lockKey, [{ sku, qty, isNew: true }]);
     setSaving(s => ({ ...s, [sku]: false }));
     if (result.success !== false) {
@@ -3639,7 +3648,7 @@ function UnassignedProductCards({ products, lockData, shelves, onAssigned }) {
       {/* Product cards */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(230px,1fr))",gap:12}}>
         {paginated.map(p => {
-          const whQty = Number(p.qtyWH ?? p.warehouseQty ?? 0);
+          const pWhQty = whQty(p);
           const isDone = !!done[p.sku];
           const isSaving = !!saving[p.sku];
           const isOpen = openPicker === p.sku;
@@ -3675,7 +3684,7 @@ function UnassignedProductCards({ products, lockData, shelves, onAssigned }) {
                   </span>
                   <span style={{fontSize:11,fontWeight:700,color:"#1b5e20",
                                 background:"#e8f5e9",padding:"1px 7px",borderRadius:12}}>
-                    คลัง {whQty}
+                    คลัง {pWhQty}
                   </span>
                 </div>
 
@@ -4778,7 +4787,7 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
             </tr></thead>
             <tbody>
               {prods.map(({sku, p, isLocal}) => {
-                const warehouseQty = p ? (p.warehouseQty ?? p.qty) : null;
+                const warehouseQty = p ? whQty(p) : null;
                 const checkedVal = checkedQtys[sku];
                 const isSaved = savedSkus.has(sku);
                 const hasChecked = checkedVal !== "" && checkedVal !== undefined && checkedVal !== null;
@@ -5030,7 +5039,7 @@ function StockCountView({ data }) {
     let waiting = 0, matched = 0, mismatched = 0;
     lockSkus.forEach(sku => {
       const p   = productMap[sku];
-      const sys = p ? (p.warehouseQty != null ? p.warehouseQty : p.qtyWH != null ? p.qtyWH : p.qty != null ? p.qty : 0) : null;
+      const sys = p ? whQty(p) : null;
       const val = checkedQtys[sku];
       const has = val !== '' && val != null;
       if (!has) { waiting++; return; }
@@ -5096,7 +5105,7 @@ function StockCountView({ data }) {
   const allSuppliersWH = uM(() => {
     const s = new Set();
     products.forEach(p => {
-      if (Number(p.qtyWH ?? p.warehouseQty ?? 0) > 0) {
+      if (whQty(p) > 0) {
         const v = p.lastSupplier || p.vendor;
         if (v) s.add(v);
       }
@@ -5114,8 +5123,7 @@ function StockCountView({ data }) {
   const supplierProducts = uM(() => {
     if (!selSupplier) return [];
     return products
-      .filter(p => (p.lastSupplier || p.vendor) === selSupplier &&
-                   Number(p.qtyWH ?? p.warehouseQty ?? 0) > 0)
+      .filter(p => (p.lastSupplier || p.vendor) === selSupplier && whQty(p) > 0)
       .sort((a, b) => {
         const la = skuToLock[a.sku] || 'zzz';
         const lb = skuToLock[b.sku] || 'zzz';
@@ -5126,7 +5134,7 @@ function StockCountView({ data }) {
   const supplierSummary = uM(() => {
     let waiting = 0, matched = 0, mismatched = 0;
     supplierProducts.forEach(p => {
-      const sys = p.warehouseQty != null ? p.warehouseQty : p.qtyWH != null ? p.qtyWH : p.qty != null ? p.qty : 0;
+      const sys = whQty(p);
       const val = checkedQtys[p.sku];
       const has = val !== '' && val != null;
       if (!has) { waiting++; return; }
@@ -5242,8 +5250,7 @@ function StockCountView({ data }) {
                 )}
                 {filteredSuppliers.map(sup => {
                   const prods = products.filter(p =>
-                    (p.lastSupplier || p.vendor) === sup &&
-                    Number(p.qtyWH ?? p.warehouseQty ?? 0) > 0);
+                    (p.lastSupplier || p.vendor) === sup && whQty(p) > 0);
                   const locks = new Set(prods.map(p => skuToLock[p.sku]).filter(Boolean));
                   return (
                     <div key={sup} onClick={() => setSelSupplier(sup)}
@@ -5322,7 +5329,7 @@ function StockCountView({ data }) {
                     return p.sku.toUpperCase().includes(sq) || (p.name||'').toUpperCase().includes(sq);
                   }).map(p => {
                     const lockKey = skuToLock[p.sku];
-                    const sys  = p.warehouseQty != null ? p.warehouseQty : p.qtyWH != null ? p.qtyWH : p.qty != null ? p.qty : 0;
+                    const sys  = whQty(p);
                     const val  = checkedQtys[p.sku];
                     const has  = val !== '' && val != null;
                     const num  = has ? (parseInt(val)||0) : 0;
@@ -5678,11 +5685,7 @@ function StockCountView({ data }) {
               return sku.toUpperCase().includes(sq) || (p && p.name && p.name.toUpperCase().includes(sq));
             }).map(function(sku){
               const p      = productMap[sku];
-              const sys    = p
-                ? (p.warehouseQty != null ? p.warehouseQty
-                 : p.qtyWH != null       ? p.qtyWH
-                 : p.qty   != null       ? p.qty : 0)
-                : null;
+              const sys    = p ? whQty(p) : null;
               const val    = checkedQtys[sku];
               const has    = val !== '' && val != null;
               const num    = has ? (parseInt(val)||0) : 0;
