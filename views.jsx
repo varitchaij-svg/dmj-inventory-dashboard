@@ -1045,7 +1045,7 @@ function CategoryView({ data, role }) {
       if (!v) return;
       if (!m[v]) m[v] = { code: v, count: 0, totalQty: 0 };
       m[v].count++;
-      m[v].totalQty += (p.qty || 0);
+      m[v].totalQty += stockQty(p);
     });
     return Object.values(m).sort((a, b) => b.count - a.count);
   }, [products]);
@@ -1098,7 +1098,7 @@ function CategoryView({ data, role }) {
       const soldMonths = m.filter(x => x.qty > 0).length;
       if (soldMonths >= 3 && idx > 0) tags.push({ text:"ขายสม่ำเสมอ", color:"#1f6f8b" });
       // High turnover: soldQty > stock
-      if (p.qty > 0 && p.soldQty > p.qty * 2) tags.push({ text:"ขายเร็ว ⚡", color:"#c2570a" });
+      if (stockQty(p) > 0 && p.soldQty > stockQty(p) * 2) tags.push({ text:"ขายเร็ว ⚡", color:"#c2570a" });
       // Top revenue contributor in cat
       if (totalCatRev > 0 && p.soldRev / totalCatRev > 0.15 && idx > 0)
         tags.push({ text:`${(p.soldRev/totalCatRev*100).toFixed(0)}% รายได้หมวด`, color:"#a07417" });
@@ -1116,10 +1116,10 @@ function CategoryView({ data, role }) {
     const f = products.filter(p => p.cat === active);
     return {
       n: f.length,
-      stock: f.reduce((s,p)=>s+p.qty,0),
+      stock: f.reduce((s,p)=>s+stockQty(p),0),
       sold: f.reduce((s,p)=>s+p.soldQty,0),
       rev: f.reduce((s,p)=>s+p.soldRev,0),
-      stockValue: f.reduce((s,p)=>s+(p.qty*p.price),0),
+      stockValue: f.reduce((s,p)=>s+(stockQty(p)*p.price),0),
     };
   }, [products, active]);
 
@@ -1281,8 +1281,8 @@ function CategoryView({ data, role }) {
               </button>
             );
           };
-          const withStock = allCats.filter(c => products.some(p => p.cat === c && p.qty > 0));
-          const noStock   = allCats.filter(c => !products.some(p => p.cat === c && p.qty > 0));
+          const withStock = allCats.filter(c => products.some(p => p.cat === c && stockQty(p) > 0));
+          const noStock   = allCats.filter(c => !products.some(p => p.cat === c && stockQty(p) > 0));
           return [
             ...withStock.map(c => renderPill(c, false)),
             noStock.length > 0 && (
@@ -1492,7 +1492,7 @@ function CategoryView({ data, role }) {
                   </span>
                 </div>
                 <div className="sec-sub">
-                  stock รวม {filtered.reduce((s,p)=>s+(p.qty||0),0).toLocaleString()} ชิ้น ·
+                  stock รวม {filtered.reduce((s,p)=>s+stockQty(p),0).toLocaleString()} ชิ้น ·
                   เรียงตาม {SORT_OPTIONS.find(o=>o.value===sortBy)?.label}
                 </div>
               </div>
@@ -2894,8 +2894,8 @@ function UploadView({ onDataLoaded, currentData }) {
 
       const totals = {
         nSold: products.filter(p => p.soldQty > 0 && !p.isMTO).length,
-        nWithStock: products.filter(p => p.qty > 0).length,
-        totalStockValue: products.reduce((s, p) => s + p.qty * p.price, 0),
+        nWithStock: products.filter(p => stockQty(p) > 0).length,
+        totalStockValue: products.reduce((s, p) => s + stockQty(p) * p.price, 0),
         totalSoldRev: products.reduce((s, p) => s + p.soldRev, 0),
       };
 
