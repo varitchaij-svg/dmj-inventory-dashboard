@@ -3556,6 +3556,7 @@ function UnassignedProductCards({ products, lockData, shelves, onAssigned }) {
   const [saving, setSaving] = uS({});
   const [done, setDone] = uS({});
   const [openPicker, setOpenPicker] = uS(null);
+  const [toast, showToast, hideToast] = useToast();
 
   const filtered = uM(() => {
     let f = catFilter === "ALL" ? noLock : noLock.filter(p => p.cat === catFilter);
@@ -3577,15 +3578,27 @@ function UnassignedProductCards({ products, lockData, shelves, onAssigned }) {
     const lockKey = picks[sku];
     if (!lockKey) return;
     setSaving(s => ({ ...s, [sku]: true }));
-    await onAssigned(sku, lockKey);
+    // 1. บันทึก localStorage ทันที
+    onAssigned(sku, lockKey);
+    // 2. บันทึกขึ้น Google Sheet
+    const prod = products.find(p => p.sku === sku);
+    const qty = prod ? Number(prod.qtyWH ?? prod.warehouseQty ?? 0) : 0;
+    const result = await syncLockData(lockKey, [{ sku, qty, isNew: true }]);
     setSaving(s => ({ ...s, [sku]: false }));
-    setDone(d => ({ ...d, [sku]: lockKey }));
-    setOpenPicker(null);
+    if (result.success !== false) {
+      setDone(d => ({ ...d, [sku]: lockKey }));
+      setOpenPicker(null);
+      showToast("success", `บันทึก ${sku} → ล็อค ${lockKey}`, "💾");
+    } else {
+      showToast("error", "บันทึก Sheet ไม่สำเร็จ — ลองใหม่อีกครั้ง", "❌");
+    }
   };
 
   if (noLock.length === 0) return null;
 
   return (
+    <>
+    <Toast toast={toast} onClose={hideToast}/>
     <Card title={`📦 สินค้าในคลังที่ยังไม่มีตำแหน่งล็อค (${noLock.length} รายการ)`}
           sub="ของมีอยู่ที่คลัง แต่ยังไม่ระบุตำแหน่ง — กดการ์ดเพื่อระบุล็อค"
           style={{marginTop:16}}>
@@ -3748,6 +3761,7 @@ function UnassignedProductCards({ products, lockData, shelves, onAssigned }) {
         </div>
       )}
     </Card>
+    </>
   );
 }
 
