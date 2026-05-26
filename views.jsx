@@ -708,7 +708,7 @@ function OverviewView({ data, range, setRange, role }) {
                   </td>
                   <td className="num" style={{fontWeight:600}}>{fmtN(p.soldQty)}</td>
                   {role === "owner" && <td className="num" style={{fontWeight:700,color:"var(--g-700)"}}>{fmtB(p.soldRev)}</td>}
-                  <td className="num" style={{color:p.qty<=36?"var(--dang)":"var(--muted)"}}>{fmtN(p.qty)}</td>
+                  <td className="num" style={{color:stockQty(p)<=36?"var(--dang)":"var(--muted)"}}>{fmtN(stockQty(p))}</td>
                   <td style={{padding:"4px 10px"}}>
                     <div style={{width:100}}>
                       <Sparkline values={p.monthly.map(m=>m.sales)}
@@ -787,7 +787,7 @@ function OverviewView({ data, range, setRange, role }) {
                           {p.name}
                         </div>
                         <div style={{fontSize:10, color:"var(--muted)", marginTop:1}}>
-                          {fmtN(p.soldQty)} ชิ้น · คงเหลือ {fmtN(p.qty)}
+                          {fmtN(p.soldQty)} ชิ้น · คงเหลือ {fmtN(stockQty(p))}
                         </div>
                       </div>
                       {role === "owner" && <div style={{fontSize:11.5, fontWeight:700, color:"var(--g-700)", flexShrink:0}}>
@@ -929,6 +929,15 @@ function detectColor(text) {
   const s = String(text);
   for (const k of COLOR_KEYS) if (s.indexOf(k) >= 0) return COLOR_MAP[k];
   return null;
+}
+
+// Consistent stock quantity: prefer qtyStore+qtyWH when those fields exist,
+// fall back to p.qty (Zort grand-total which may include other branches).
+// Used everywhere a "current stock" number is needed.
+function stockQty(p) {
+  return (p.qtyStore > 0 || p.qtyWH > 0)
+    ? (p.qtyStore || 0) + (p.qtyWH || 0)
+    : (p.qty || 0);
 }
 
 // Strip "#1", "#10", trailing numbers, etc. from MTO product names
@@ -2261,7 +2270,7 @@ function TrendsView({ data }) {
 
   // 🔥 มาแรง — late > early × 1.4, has stock, sold this period
   const rising = uM(() => enriched
-    .filter(p => p.earlyAvg >= 1 && p.lateAvg >= p.earlyAvg * 1.4 && p.qty > 0)
+    .filter(p => p.earlyAvg >= 1 && p.lateAvg >= p.earlyAvg * 1.4 && stockQty(p) > 0)
     .map(p => ({...p, growthPct: p.earlyAvg > 0 ? ((p.lateAvg/p.earlyAvg - 1) * 100) : 0}))
     .sort((a,b) => b.growthPct - a.growthPct),
     [enriched]);
@@ -2269,7 +2278,7 @@ function TrendsView({ data }) {
   // 🆕 สินค้าใหม่น่าจับตา — เข้าสต๊อกใน 60 วัน หรือขายได้แค่ 1-2 เดือน
   const newArrivals = uM(() => enriched
     .filter(p => {
-      if (p.qty <= 0) return false;
+      if (stockQty(p) <= 0) return false;
       // มี lastStockInISO และเข้าใน 60 วัน
       if (p.daysAgoStockIn != null && p.daysAgoStockIn <= 60) return true;
       // ไม่มี lastStockInISO แต่ขายได้แค่ 1-2 เดือนแรก (สินค้าใหม่)
@@ -2292,7 +2301,7 @@ function TrendsView({ data }) {
   // 🆘 สินค้าเสี่ยงหายจากตลาด — has stock but no/very low recent sales, no recent restock
   const fading = uM(() => enriched
     .filter(p => {
-      if (p.qty <= 0) return false;
+      if (stockQty(p) <= 0) return false;
       if (p.soldMonths === 0) return true;   // never sold in tracked months
       if (p.soldQty === 0) return true;
       // sold in early but not in recent half
@@ -2303,13 +2312,13 @@ function TrendsView({ data }) {
       const lateSold  = m.slice(half).reduce((s,x) => s + (x.qty||0), 0);
       return earlySold >= 2 && lateSold === 0;
     })
-    .sort((a,b) => (b.qty * b.price) - (a.qty * a.price)),
+    .sort((a,b) => (stockQty(b) * b.price) - (stockQty(a) * a.price)),
     [enriched]);
 
   // 💀 ไม่ขายเลย — soldQty = 0, has stock
   const zeroSales = uM(() => enriched
-    .filter(p => p.soldQty === 0 && p.qty > 0)
-    .sort((a,b) => (b.qty * b.price) - (a.qty * a.price)),
+    .filter(p => p.soldQty === 0 && stockQty(p) > 0)
+    .sort((a,b) => (stockQty(b) * b.price) - (stockQty(a) * a.price)),
     [enriched]);
 
   const sections = {
@@ -2422,7 +2431,7 @@ function TrendsView({ data }) {
                              paddingTop:6, borderTop:"1px dashed var(--bdr)"}}>
                   <div>
                     <div style={{fontSize:9.5,color:"var(--muted)",fontWeight:600,textTransform:"uppercase"}}>คงเหลือ</div>
-                    <div style={{fontSize:13,fontWeight:700}}>{fmtN(p.qty)} <span style={{fontSize:9.5,color:"var(--muted)"}}>ชิ้น</span></div>
+                    <div style={{fontSize:13,fontWeight:700}}>{fmtN(stockQty(p))} <span style={{fontSize:9.5,color:"var(--muted)"}}>ชิ้น</span></div>
                   </div>
                   <div style={{textAlign:"right"}}>
                     <div style={{fontSize:9.5,color:"var(--muted)",fontWeight:600,textTransform:"uppercase"}}>ขาย</div>
@@ -2520,11 +2529,7 @@ function ProductModal({ p, onClose, allCats }) {
             <div style={{gridColumn:"1 / -1", paddingTop:8, borderTop:"1px dashed var(--bdr)"}}>
               <div style={{fontSize:10, color:"var(--muted)", fontWeight:600, textTransform:"uppercase", letterSpacing:".05em"}}>📊 คงเหลือรวม</div>
               <div style={{marginTop:3, fontSize:20, fontWeight:800, color:"var(--g-700)"}}>
-                {fmtN(
-                  (p.qtyStore > 0 || p.qtyWH > 0)
-                    ? (p.qtyStore || 0) + (p.qtyWH || 0)
-                    : (p.qty || 0)
-                )}
+                {fmtN(stockQty(p))}
                 {" "}<span style={{fontSize:12, color:"var(--muted)", fontWeight:500}}>ชิ้น</span>
               </div>
             </div>
