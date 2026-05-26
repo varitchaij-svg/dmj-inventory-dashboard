@@ -5476,6 +5476,38 @@ function StockCountView({ data }) {
     }
   };
 
+  // ── step 1 global search — must be declared before any early return (Rules of Hooks) ──
+  const step1SearchResults = uM(() => {
+    const q = stockSearch.trim().toUpperCase();
+    if (!q) return [];
+    const hits = [];
+    Object.entries(lockData).forEach(([lk, d]) => {
+      (d.skus || []).forEach(sku => {
+        if (hits.length >= 30) return;
+        const p = productMap[sku];
+        const skuUp = sku.toUpperCase();
+        const nameUp = (p && p.name ? p.name : '').toUpperCase();
+        if (skuUp.includes(q) || nameUp.includes(q)) {
+          hits.push({ sku, lockKey: lk, p });
+        }
+      });
+    });
+    // also include products in no lock
+    if (hits.length < 30) {
+      products.forEach(p => {
+        if (hits.length >= 30) return;
+        if (!skuToLock[p.sku]) {
+          const skuUp = p.sku.toUpperCase();
+          const nameUp = (p.name || '').toUpperCase();
+          if (skuUp.includes(q) || nameUp.includes(q)) {
+            hits.push({ sku: p.sku, lockKey: null, p });
+          }
+        }
+      });
+    }
+    return hits;
+  }, [stockSearch, lockData, productMap, products, skuToLock]);
+
   // ── SUPPLIER MODE — นับตามซัพพลายเออร์ ──────────────────────────
   if (supplierMode) {
     const suppFilledCount = Object.values(checkedQtys).filter(v => v !== '' && v != null).length;
@@ -5485,7 +5517,7 @@ function StockCountView({ data }) {
         <CalcPadModal
           open={!!calcPad}
           name={calcPad ? (calcPad.name || calcPad.sku) : ''}
-          initialVal={calcPad ? calcPad.val : ''}
+          initialVal={calcPad ? calcPad.expr : ''}
           onConfirm={function(qty){
             if (calcPad) setCheckedQtys(function(prev){ const o=Object.assign({},prev); o[calcPad.sku]=qty; return o; });
             setCalcPad(null);
@@ -5754,38 +5786,6 @@ function StockCountView({ data }) {
   }
 
   // ── STEP 1: เลือกชั้น ────────────────────────────────────────────
-  // ── product quick-search across all locks (step 1 global search) ──
-  const step1SearchResults = uM(() => {
-    const q = stockSearch.trim().toUpperCase();
-    if (!q) return [];
-    const hits = [];
-    Object.entries(lockData).forEach(([lk, d]) => {
-      (d.skus || []).forEach(sku => {
-        if (hits.length >= 30) return;
-        const p = productMap[sku];
-        const skuUp = sku.toUpperCase();
-        const nameUp = (p && p.name ? p.name : '').toUpperCase();
-        if (skuUp.includes(q) || nameUp.includes(q)) {
-          hits.push({ sku, lockKey: lk, p });
-        }
-      });
-    });
-    // also include products in no lock
-    if (hits.length < 30) {
-      products.forEach(p => {
-        if (hits.length >= 30) return;
-        if (!skuToLock[p.sku]) {
-          const skuUp = p.sku.toUpperCase();
-          const nameUp = (p.name || '').toUpperCase();
-          if (skuUp.includes(q) || nameUp.includes(q)) {
-            hits.push({ sku: p.sku, lockKey: null, p });
-          }
-        }
-      });
-    }
-    return hits;
-  }, [stockSearch, lockData, productMap, products, skuToLock]);
-
   if (step === 1) return (
     <>
       <Toast toast={toast} onClose={hideToast}/>
