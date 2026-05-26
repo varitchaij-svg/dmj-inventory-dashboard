@@ -4908,8 +4908,13 @@ function StockCountView({ data }) {
   const [toast, showToast, hideToast]       = useToast();
   const [calcPad, setCalcPad]               = uS(null); // {sku, val, name}
   const [stockSearch, setStockSearch]       = uS('');
+  // Supplier mode
+  const [supplierMode, setSupplierMode]     = uS(false);
+  const [selSupplier, setSelSupplier]       = uS(null);
+  const [suppSearch, setSuppSearch]         = uS('');
 
   uE(() => { setCheckedQtys({}); setSavedSkus(new Set()); setLastSavedTime(null); setStockSearch(''); }, [selLockKey]);
+  uE(() => { setCheckedQtys({}); setSavedSkus(new Set()); setLastSavedTime(null); setStockSearch(''); }, [selSupplier]);
 
   // Android back button: step 3 → 2 → 1
   uE(function(){
@@ -5077,6 +5082,371 @@ function StockCountView({ data }) {
     return s;
   }, [shelfList, lockData, locksN]);
 
+  // ── SUPPLIER MODE memos ──────────────────────────────────────────
+  // sku → lockKey reverse map
+  const skuToLock = uM(() => {
+    const m = {};
+    Object.entries(lockData).forEach(([lk, d]) => {
+      (d.skus || []).forEach(sku => { m[sku] = lk; });
+    });
+    return m;
+  }, [lockData]);
+
+  // suppliers that have at least one product with warehouse stock
+  const allSuppliersWH = uM(() => {
+    const s = new Set();
+    products.forEach(p => {
+      if (Number(p.qtyWH ?? p.warehouseQty ?? 0) > 0) {
+        const v = p.lastSupplier || p.vendor;
+        if (v) s.add(v);
+      }
+    });
+    return [...s].sort();
+  }, [products]);
+
+  const filteredSuppliers = uM(() => {
+    if (!suppSearch.trim()) return allSuppliersWH;
+    const q = suppSearch.trim().toLowerCase();
+    return allSuppliersWH.filter(s => s.toLowerCase().includes(q));
+  }, [allSuppliersWH, suppSearch]);
+
+  // products from selected supplier in warehouse, sorted by lock position
+  const supplierProducts = uM(() => {
+    if (!selSupplier) return [];
+    return products
+      .filter(p => (p.lastSupplier || p.vendor) === selSupplier &&
+                   Number(p.qtyWH ?? p.warehouseQty ?? 0) > 0)
+      .sort((a, b) => {
+        const la = skuToLock[a.sku] || 'zzz';
+        const lb = skuToLock[b.sku] || 'zzz';
+        return la.localeCompare(lb, undefined, { numeric: true }) || compareSku(a, b);
+      });
+  }, [selSupplier, products, skuToLock]);
+
+  const supplierSummary = uM(() => {
+    let waiting = 0, matched = 0, mismatched = 0;
+    supplierProducts.forEach(p => {
+      const sys = p.warehouseQty != null ? p.warehouseQty : p.qtyWH != null ? p.qtyWH : p.qty != null ? p.qty : 0;
+      const val = checkedQtys[p.sku];
+      const has = val !== '' && val != null;
+      if (!has) { waiting++; return; }
+      ((parseInt(val)||0) === sys) ? matched++ : mismatched++;
+    });
+    return { waiting, matched, mismatched };
+  }, [supplierProducts, checkedQtys]);
+
+  const handleSaveSupplier = async () => {
+    // group checked entries by lockKey
+    const byLock = {};
+    let noLockCount = 0;
+    supplierProducts.forEach(p => {
+      const qty = checkedQtys[p.sku];
+      if (qty === '' || qty == null) return;
+      const lk = skuToLock[p.sku];
+      if (!lk) { noLockCount++; return; }
+      if (!byLock[lk]) byLock[lk] = [];
+      byLock[lk].push({ sku: p.sku, qty: parseInt(qty)||0 });
+    });
+    const lockEntries = Object.entries(byLock);
+    if (lockEntries.length === 0) {
+      showToast('warn', noLockCount > 0 ? 'สินค้าที่กรอกยังไม่มีตำแหน่งล็อค' : 'ยังไม่ได้กรอกจำนวน', '✏️');
+      return;
+    }
+    setSaving(true);
+    let anyError = false;
+    for (const [lk, entries] of lockEntries) {
+      const result = await syncLockData(lk, entries);
+      if (result.success === false) anyError = true;
+    }
+    setSaving(false);
+    const totalSaved = lockEntries.reduce((s, [, e]) => s + e.length, 0);
+    if (!anyError) {
+      setSavedSkus(new Set(lockEntries.flatMap(([, e]) => e.map(x => x.sku))));
+      setLastSavedTime(new Date());
+      showToast('success', `บันทึก ${totalSaved} รายการ ใน ${lockEntries.length} ล็อค`, '💾');
+    } else {
+      showToast('error', 'บันทึกบางรายการไม่สำเร็จ', '❌');
+    }
+  };
+
+  // ── SUPPLIER MODE — นับตามซัพพลายเออร์ ──────────────────────────
+  if (supplierMode) {
+    const suppFilledCount = Object.values(checkedQtys).filter(v => v !== '' && v != null).length;
+    return (
+      <>
+        <Toast toast={toast} onClose={hideToast}/>
+        <CalcPadModal
+          open={!!calcPad}
+          name={calcPad ? (calcPad.name || calcPad.sku) : ''}
+          initialVal={calcPad ? calcPad.val : ''}
+          onConfirm={function(qty){
+            if (calcPad) setCheckedQtys(function(prev){ const o=Object.assign({},prev); o[calcPad.sku]=qty; return o; });
+            setCalcPad(null);
+          }}
+          onClose={function(){ setCalcPad(null); }}
+        />
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+
+          {/* Header */}
+          <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+            {selSupplier ? (
+              <button onClick={() => { setSelSupplier(null); setSuppSearch(''); }}
+                style={{width:44,height:44,borderRadius:10,border:'1.5px solid var(--bdr)',
+                        background:'#fff',cursor:'pointer',fontSize:20,fontFamily:'inherit',flexShrink:0}}>
+                ←
+              </button>
+            ) : (
+              <button onClick={() => { setSupplierMode(false); }}
+                style={{width:44,height:44,borderRadius:10,border:'1.5px solid var(--bdr)',
+                        background:'#fff',cursor:'pointer',fontSize:20,fontFamily:'inherit',flexShrink:0}}>
+                ←
+              </button>
+            )}
+            <div style={{flex:1}}>
+              <div style={{fontSize:15,fontWeight:800}}>
+                🏭 {selSupplier || 'เลือกซัพพลายเออร์'}
+              </div>
+              <div style={{fontSize:11,color:'var(--muted)'}}>
+                {selSupplier
+                  ? `${supplierProducts.length} SKU ในคลัง — กรอกจำนวนที่นับได้`
+                  : `${allSuppliersWH.length} ซัพพลายเออร์ที่มีของในคลัง`}
+              </div>
+            </div>
+            {selSupplier && (
+              <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:2}}>
+                <button onClick={handleSaveSupplier} disabled={saving||suppFilledCount===0}
+                  className="btn primary"
+                  style={{padding:'10px 20px',fontWeight:700,fontSize:14,
+                          opacity:(saving||suppFilledCount===0)?0.4:1}}>
+                  {saving ? '⏳ บันทึก...' : suppFilledCount>0 ? `💾 บันทึก (${suppFilledCount})` : '💾 บันทึก'}
+                </button>
+                {lastSavedTime && (
+                  <div style={{fontSize:10,color:'var(--g-600)',fontWeight:600}}>
+                    {'✓ '+lastSavedTime.getHours().toString().padStart(2,'0')+':'+lastSavedTime.getMinutes().toString().padStart(2,'0')}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* ── ยังไม่ได้เลือก supplier → แสดง list ── */}
+          {!selSupplier && (
+            <>
+              <input type="text" placeholder="🔍 ค้นหาซัพพลายเออร์..."
+                value={suppSearch} onChange={e => setSuppSearch(e.target.value)}
+                style={{padding:'10px 14px',borderRadius:10,border:'1.5px solid var(--bdr)',
+                        fontSize:13,fontFamily:'inherit',background:'#fff'}}/>
+              <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                {filteredSuppliers.length === 0 && (
+                  <Empty title="ไม่พบซัพพลายเออร์" sub="ลองค้นหาด้วยคำอื่น"/>
+                )}
+                {filteredSuppliers.map(sup => {
+                  const prods = products.filter(p =>
+                    (p.lastSupplier || p.vendor) === sup &&
+                    Number(p.qtyWH ?? p.warehouseQty ?? 0) > 0);
+                  const locks = new Set(prods.map(p => skuToLock[p.sku]).filter(Boolean));
+                  return (
+                    <div key={sup} onClick={() => setSelSupplier(sup)}
+                      style={{background:'#fff',border:'1.5px solid var(--bdr)',borderRadius:14,
+                              padding:'14px 16px',cursor:'pointer',
+                              display:'flex',alignItems:'center',gap:12,
+                              boxShadow:'0 1px 4px rgba(0,0,0,.04)'}}>
+                      <div style={{width:40,height:40,borderRadius:12,background:'#f0fdf4',
+                                   display:'flex',alignItems:'center',justifyContent:'center',
+                                   fontSize:20,flexShrink:0}}>🏭</div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontWeight:700,fontSize:14,color:'var(--g-800)',
+                                     overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                          {sup}
+                        </div>
+                        <div style={{fontSize:11,color:'var(--muted)',marginTop:2}}>
+                          {prods.length} SKU · {locks.size > 0 ? `${locks.size} ล็อค` : 'ยังไม่มีตำแหน่ง'}
+                        </div>
+                      </div>
+                      <div style={{fontSize:18,color:'var(--muted)'}}>›</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {/* ── เลือก supplier แล้ว → แสดงสินค้า ── */}
+          {selSupplier && (
+            <>
+              {/* Summary chips */}
+              {supplierProducts.length > 0 && (
+                <div style={{display:'flex',gap:8}}>
+                  {[
+                    {n:supplierSummary.waiting,    label:'⬜ รอนับ',  bg:'#f1f5f9', c:'var(--muted)'},
+                    {n:supplierSummary.matched,    label:'✅ ตรง',    bg:'#f0fdf4', c:'var(--g-700)'},
+                    {n:supplierSummary.mismatched, label:'⚠️ ไม่ตรง',
+                     bg:supplierSummary.mismatched>0?'#fff5f5':'#f1f5f9',
+                     c:supplierSummary.mismatched>0?'var(--dang)':'var(--muted)'},
+                  ].map(function(item){
+                    return (
+                      <div key={item.label} style={{flex:1,textAlign:'center',padding:'10px 4px',
+                                                    borderRadius:12,background:item.bg}}>
+                        <div style={{fontSize:22,fontWeight:800,color:item.c}}>{item.n}</div>
+                        <div style={{fontSize:11,color:item.c,fontWeight:600}}>{item.label}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Search */}
+              <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                <input type="text" placeholder="🔍 ค้นหา SKU หรือชื่อสินค้า..."
+                  value={stockSearch}
+                  onChange={e => setStockSearch(e.target.value.toUpperCase())}
+                  style={{flex:1,padding:'9px 12px',borderRadius:10,border:'1.5px solid var(--bdr)',
+                          fontSize:13,fontFamily:'inherit',background:'#fff'}}/>
+                <ScanButton size={44} onScan={sku => setStockSearch(sku)}/>
+                {stockSearch && (
+                  <button onClick={() => setStockSearch('')}
+                    style={{width:44,height:44,borderRadius:10,border:'1.5px solid var(--bdr)',
+                            background:'#fff',cursor:'pointer',fontSize:18,fontFamily:'inherit',
+                            color:'var(--muted)',flexShrink:0}}>✕</button>
+                )}
+              </div>
+
+              {/* Product cards */}
+              {supplierProducts.length === 0 ? (
+                <Empty title="ไม่มีสินค้าในคลัง" sub="ซัพพลายเออร์นี้ไม่มีสินค้าในคลังขณะนี้"/>
+              ) : (
+                <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:14}}>
+                  {supplierProducts.filter(p => {
+                    if (!stockSearch) return true;
+                    const sq = stockSearch.trim().toUpperCase();
+                    return p.sku.toUpperCase().includes(sq) || (p.name||'').toUpperCase().includes(sq);
+                  }).map(p => {
+                    const lockKey = skuToLock[p.sku];
+                    const sys  = p.warehouseQty != null ? p.warehouseQty : p.qtyWH != null ? p.qtyWH : p.qty != null ? p.qty : 0;
+                    const val  = checkedQtys[p.sku];
+                    const has  = val !== '' && val != null;
+                    const num  = has ? (parseInt(val)||0) : 0;
+                    const matched = has && num === sys;
+                    const diff = has ? num - sys : null;
+                    const saved = savedSkus.has(p.sku);
+                    const bdr   = !has ? 'var(--bdr)' : matched ? 'var(--g-500)' : 'var(--dang)';
+                    const bgCard = saved ? '#f0fdf4' : !has ? '#fff' : matched ? '#f0fdf4' : '#fff5f5';
+
+                    return (
+                      <div key={p.sku} style={{
+                        background:bgCard, border:'2px solid '+bdr, borderRadius:16, overflow:'hidden',
+                        display:'flex', flexDirection:'column', transition:'border-color .15s,background .15s',
+                        boxShadow:'0 2px 8px rgba(0,0,0,.06)',
+                      }}>
+                        {/* Image */}
+                        <div style={{position:'relative',paddingTop:'75%',background:'var(--g-50)',flexShrink:0}}>
+                          {p.imageUrl ? (
+                            <img src={p.imageUrl} alt={p.name}
+                                 style={{position:'absolute',inset:0,width:'100%',height:'100%',
+                                         objectFit:'contain',background:'var(--g-50)'}}/>
+                          ) : (
+                            <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',
+                                         justifyContent:'center',fontSize:32}}>
+                              {CAT_EMOJI[p.cat] || '📦'}
+                            </div>
+                          )}
+                          {/* Lock badge — prominent position indicator */}
+                          {lockKey ? (
+                            <div style={{
+                              position:'absolute',top:6,left:6,
+                              background:'rgba(27,94,32,.88)',color:'#fff',
+                              borderRadius:8,padding:'3px 8px',
+                              fontSize:11,fontWeight:800,fontFamily:'monospace',
+                              backdropFilter:'blur(4px)',
+                              display:'flex',alignItems:'center',gap:4,
+                            }}>
+                              📍 {lockKey}
+                            </div>
+                          ) : (
+                            <div style={{
+                              position:'absolute',top:6,left:6,
+                              background:'rgba(180,83,9,.85)',color:'#fff',
+                              borderRadius:8,padding:'3px 8px',
+                              fontSize:10,fontWeight:700,
+                              backdropFilter:'blur(4px)',
+                            }}>
+                              ⚠️ ไม่มีตำแหน่ง
+                            </div>
+                          )}
+                          {p.color && (
+                            <span style={{
+                              position:'absolute',bottom:6,right:6,
+                              width:14,height:14,borderRadius:'50%',
+                              background:p.color.hex,
+                              border:'2px solid rgba(255,255,255,.9)',
+                              boxShadow:'0 1px 3px rgba(0,0,0,.3)',
+                            }}/>
+                          )}
+                        </div>
+
+                        <div style={{padding:'10px 12px',display:'flex',flexDirection:'column',gap:8,flex:1}}>
+                          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:6}}>
+                            <span style={{fontSize:10,fontWeight:700,color:'var(--g-500)',fontFamily:'monospace'}}>
+                              {p.sku}
+                            </span>
+                            <span style={{fontSize:11,fontWeight:700,color:'#1b5e20',
+                                          background:'#e8f5e9',padding:'1px 7px',borderRadius:10,flexShrink:0}}>
+                              คลัง {sys}
+                            </span>
+                          </div>
+                          <div style={{fontSize:12,fontWeight:600,color:'var(--g-800)',lineHeight:1.35,
+                                        overflow:'hidden',display:'-webkit-box',
+                                        WebkitLineClamp:2,WebkitBoxOrient:'vertical'}}>
+                            {p.name || '—'}
+                          </div>
+
+                          {/* Count result */}
+                          {has && (
+                            <div style={{fontSize:11,fontWeight:700,textAlign:'center',borderRadius:8,padding:'4px 6px',
+                                          background:matched?'#dcfce7':'#fee2e2',color:matched?'#166534':'#991b1b'}}>
+                              {matched ? `✅ นับได้ ${num} ตรง` : `⚠️ นับได้ ${num} (${diff>0?'+':''}${diff} จากระบบ)`}
+                            </div>
+                          )}
+
+                          {/* ± controls */}
+                          <div style={{display:'flex',gap:5,alignItems:'center',marginTop:'auto'}}>
+                            {[-5,-1].map(d => (
+                              <button key={d} onClick={() => adjustQty(p.sku, d)}
+                                style={{flex:1,height:44,borderRadius:8,border:'1.5px solid var(--bdr)',
+                                        background:'#fff',cursor:'pointer',fontSize:13,fontWeight:700,
+                                        fontFamily:'inherit',color:'var(--g-700)'}}>
+                                {d}
+                              </button>
+                            ))}
+                            <button onClick={() => openCalc(p.sku, p.name)}
+                              style={{flex:2,height:44,borderRadius:8,border:'1.5px solid var(--g-400)',
+                                      background:has?'#f0fdf4':'#fff',cursor:'pointer',
+                                      fontSize:14,fontWeight:800,fontFamily:'monospace',
+                                      color:has?'var(--g-700)':'var(--muted)'}}>
+                              {has ? num : '—'}
+                            </button>
+                            {[1,5].map(d => (
+                              <button key={d} onClick={() => adjustQty(p.sku, d)}
+                                style={{flex:1,height:44,borderRadius:8,border:'1.5px solid var(--bdr)',
+                                        background:'#fff',cursor:'pointer',fontSize:13,fontWeight:700,
+                                        fontFamily:'inherit',color:'var(--g-700)'}}>
+                                +{d}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </>
+    );
+  }
+
   // ── STEP 1: เลือกชั้น ────────────────────────────────────────────
   if (step === 1) return (
     <>
@@ -5085,6 +5455,20 @@ function StockCountView({ data }) {
         <div>
           <div style={{fontSize:16,fontWeight:800}}>📊 นับ stock คลัง</div>
           <div style={{fontSize:12,color:'var(--muted)',marginTop:2}}>ขั้น 1 — เลือกชั้น</div>
+        </div>
+        {/* Mode toggle */}
+        <div style={{display:'flex',gap:8}}>
+          <button style={{flex:1,padding:'10px 0',borderRadius:10,border:'2px solid #1b5e20',
+                          background:'#1b5e20',color:'#fff',fontWeight:700,fontSize:13,
+                          cursor:'pointer',fontFamily:'inherit'}}>
+            📦 ตามล็อค
+          </button>
+          <button onClick={() => setSupplierMode(true)}
+            style={{flex:1,padding:'10px 0',borderRadius:10,border:'2px solid var(--bdr)',
+                    background:'#fff',color:'var(--g-700)',fontWeight:700,fontSize:13,
+                    cursor:'pointer',fontFamily:'inherit'}}>
+            🏭 ตามซัพพลายเออร์
+          </button>
         </div>
         {['A','B'].map(side => (
           <div key={side}>
