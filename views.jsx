@@ -3195,6 +3195,14 @@ function StorageView({ data }) {
   const [search, setSearch] = uS('');
   const [selectedLock, setSelectedLock] = uS(null);
 
+  // Quick-assign mode state
+  const [qaMode, setQaMode]         = uS(false);
+  const [qaSku, setQaSku]           = uS('');
+  const [qaLockKey, setQaLockKey]   = uS('');
+  const [qaLog, setQaLog]           = uS([]);
+  const [qaSaving, setQaSaving]     = uS(false);
+  const [qaToast, showQaToast, hideQaToast] = useToast();
+
   // Local overrides stored in localStorage
   const LS_LOCK_OV = "dmj_lock_overrides_v1";
   const [lockOv, setLockOv] = uS(() => {
@@ -3245,14 +3253,314 @@ function StorageView({ data }) {
     const matches = new Set();
     Object.entries(lockData).forEach(([key, d]) => {
       if (d.skus.some(s => s.toUpperCase().includes(searchSku))) matches.add(key);
+      // also match product name
+      if (d.skus.some(s => {
+        const p = productMap[s];
+        return p && (p.name||'').toUpperCase().includes(searchSku);
+      })) matches.add(key);
     });
     return matches;
-  }, [searchSku, lockData]);
+  }, [searchSku, lockData, productMap]);
+
+  // sku → [lockKey, ...] reverse map
+  const skuToLocks = uM(() => {
+    const m = {};
+    Object.entries(lockData).forEach(([lk, d]) => {
+      (d.skus || []).forEach(sku => {
+        if (!m[sku]) m[sku] = [];
+        m[sku].push(lk);
+      });
+    });
+    return m;
+  }, [lockData]);
+
+  // Enhanced search results (product cards with lock positions)
+  const searchResults = uM(() => {
+    if (!searchSku || searchSku.length < 1) return [];
+    const results = [];
+    products.forEach(p => {
+      if (p.sku.toUpperCase().includes(searchSku) ||
+          (p.name||'').toUpperCase().includes(searchSku)) {
+        results.push({ p, locks: skuToLocks[p.sku] || [] });
+      }
+    });
+    return results.slice(0, 12);
+  }, [searchSku, products, skuToLocks]);
+
+  // Quick-assign: save sku → lock
+  const handleQuickAssign = async () => {
+    const sku = qaSku.trim().toUpperCase();
+    const lk  = qaLockKey.trim().toUpperCase();
+    if (!sku || !lk) return;
+    setQaSaving(true);
+    const existingSkus = (lockData[lk]?.skus || []).filter(s => s !== sku);
+    handleUpdateLock(lk, [...existingSkus, sku]);
+    const prod   = productMap[sku];
+    const qty    = prod ? whQty(prod) : 0;
+    const result = await syncLockData(lk, [{ sku, qty, isNew: true }]);
+    setQaSaving(false);
+    if (result.success !== false) {
+      setQaLog(prev => [
+        { sku, lockKey: lk, name: prod?.name || '', ts: new Date() },
+        ...prev.slice(0, 9),
+      ]);
+      setQaSku('');
+      setQaLockKey('');
+      showQaToast('success', `✅ ${sku} → ${lk}`, '💾');
+    } else {
+      showQaToast('error', 'บันทึกไม่สำเร็จ', '❌');
+    }
+  };
 
   const sides = side === 'all' ? ['A', 'B'] : [side];
 
+  // ── QUICK ASSIGN MODE ─────────────────────────────────────────────
+  if (qaMode) {
+    const qaProduct = productMap[qaSku.trim().toUpperCase()];
+    const canSave   = qaSku.trim() && qaLockKey.trim() && !qaSaving;
+    return (
+      <>
+        <Toast toast={qaToast} onClose={hideQaToast}/>
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+
+          {/* Header */}
+          <div style={{display:'flex',alignItems:'center',gap:12}}>
+            <button onClick={() => setQaMode(false)}
+              style={{width:44,height:44,borderRadius:10,border:'1.5px solid var(--bdr)',
+                      background:'#fff',cursor:'pointer',fontSize:20,fontFamily:'inherit',flexShrink:0}}>
+              ←
+            </button>
+            <div>
+              <div style={{fontSize:16,fontWeight:800}}>📥 บันทึกตำแหน่งด่วน</div>
+              <div style={{fontSize:12,color:'var(--muted)',marginTop:1}}>
+                สแกน/พิมพ์ SKU แล้วระบุล็อค — บันทึกทันที
+              </div>
+            </div>
+          </div>
+
+          {/* Step 1 — SKU */}
+          <Card padding={true}>
+            <div style={{fontSize:12,fontWeight:700,color:'var(--muted)',marginBottom:8}}>
+              ① สินค้าที่จะบันทึกตำแหน่ง
+            </div>
+            <div style={{display:'flex',gap:8,alignItems:'center'}}>
+              <input autoFocus type="text"
+                placeholder="พิมพ์หรือสแกน SKU..."
+                value={qaSku}
+                onChange={e => setQaSku(e.target.value.toUpperCase())}
+                onKeyDown={e => e.key === 'Enter' && document.getElementById('qa-lock-input')?.focus()}
+                style={{flex:1,padding:'12px 14px',borderRadius:10,fontSize:14,fontWeight:700,
+                        fontFamily:'monospace',border:'2px solid ' + (qaProduct ? '#1b5e20' : 'var(--bdr)'),
+                        background: qaProduct ? '#f0fdf4' : '#fff'}}/>
+              <ScanButton size={46} onScan={sku => setQaSku(sku.toUpperCase())}/>
+              {qaSku && <button onClick={() => setQaSku('')}
+                style={{width:46,height:46,borderRadius:10,border:'1.5px solid var(--bdr)',
+                        background:'#fff',cursor:'pointer',fontSize:18,color:'var(--muted)',fontFamily:'inherit'}}>✕</button>}
+            </div>
+            {qaProduct && (
+              <div style={{display:'flex',alignItems:'center',gap:10,marginTop:10,
+                           padding:'10px 12px',background:'#f0fdf4',borderRadius:10}}>
+                {qaProduct.imageUrl
+                  ? <img src={qaProduct.imageUrl} alt={qaProduct.name}
+                      style={{width:44,height:44,objectFit:'contain',borderRadius:8,background:'#fff',flexShrink:0}}/>
+                  : <div style={{width:44,height:44,borderRadius:8,background:'#e8f5e9',
+                                 display:'flex',alignItems:'center',justifyContent:'center',fontSize:22,flexShrink:0}}>
+                      {CAT_EMOJI[qaProduct.cat] || '📦'}
+                    </div>}
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:700,fontSize:13,color:'var(--g-800)',
+                               overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                    {qaProduct.name}
+                  </div>
+                  <div style={{fontSize:11,color:'var(--muted)',marginTop:2}}>
+                    คลัง {whQty(qaProduct)} ชิ้น
+                    {(skuToLocks[qaSku.trim().toUpperCase()] || []).length > 0 && (
+                      <span style={{marginLeft:8,color:'#1b5e20',fontWeight:700}}>
+                        ปัจจุบัน: {(skuToLocks[qaSku.trim().toUpperCase()] || []).join(', ')}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+            {qaSku.trim() && !qaProduct && (
+              <div style={{marginTop:8,fontSize:12,color:'var(--warn)',fontWeight:600}}>
+                ⚠️ ไม่พบ SKU นี้ในระบบ — จะบันทึกตำแหน่งได้แต่ไม่มีข้อมูลสินค้า
+              </div>
+            )}
+          </Card>
+
+          {/* Step 2 — Lock */}
+          <Card padding={true}>
+            <div style={{fontSize:12,fontWeight:700,color:'var(--muted)',marginBottom:8}}>
+              ② ตำแหน่งล็อคที่วางของ (เช่น A3/7)
+            </div>
+            <div style={{display:'flex',gap:8,alignItems:'center'}}>
+              <input id="qa-lock-input" type="text"
+                placeholder="พิมพ์ตำแหน่ง เช่น A3/7..."
+                value={qaLockKey}
+                onChange={e => setQaLockKey(e.target.value.toUpperCase())}
+                onKeyDown={e => e.key === 'Enter' && canSave && handleQuickAssign()}
+                style={{flex:1,padding:'12px 14px',borderRadius:10,fontSize:16,fontWeight:800,
+                        fontFamily:'monospace',border:'2px solid ' + (qaLockKey.trim() ? '#1b5e20' : 'var(--bdr)'),
+                        background: qaLockKey.trim() ? '#f0fdf4' : '#fff', letterSpacing:2}}/>
+              {qaLockKey && <button onClick={() => setQaLockKey('')}
+                style={{width:46,height:46,borderRadius:10,border:'1.5px solid var(--bdr)',
+                        background:'#fff',cursor:'pointer',fontSize:18,color:'var(--muted)',fontFamily:'inherit'}}>✕</button>}
+            </div>
+            {/* Quick lock picker — tap shelf buttons */}
+            <div style={{marginTop:10}}>
+              <LockPicker shelves={shelves} value={qaLockKey} onChange={v => setQaLockKey(v)}/>
+            </div>
+          </Card>
+
+          {/* Save button */}
+          <button onClick={handleQuickAssign} disabled={!canSave}
+            style={{width:'100%',padding:'16px',borderRadius:12,border:'none',
+                    fontSize:16,fontWeight:800,fontFamily:'inherit',cursor: canSave ? 'pointer' : 'default',
+                    background: canSave ? '#1b5e20' : 'var(--g-200)',
+                    color: canSave ? '#fff' : 'var(--muted)',
+                    transition:'background .15s'}}>
+            {qaSaving ? '⏳ กำลังบันทึก...'
+              : canSave ? `💾 บันทึก ${qaSku.trim().toUpperCase()} → ${qaLockKey.trim()}`
+              : 'กรอก SKU และตำแหน่งก่อน'}
+          </button>
+
+          {/* Log of recent assignments */}
+          {qaLog.length > 0 && (
+            <Card title="✅ บันทึกล่าสุด" padding={true}>
+              <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                {qaLog.map((entry, i) => (
+                  <div key={i} style={{display:'flex',alignItems:'center',gap:10,
+                                        padding:'8px 10px',background: i===0 ? '#f0fdf4' : '#f8fafc',
+                                        borderRadius:8,border:'1px solid ' + (i===0?'#bbf7d0':'var(--bdr)')}}>
+                    <span style={{fontSize:11,fontWeight:800,fontFamily:'monospace',
+                                  color:'var(--g-500)',minWidth:80}}>{entry.sku}</span>
+                    <span style={{fontSize:13,fontWeight:800,color:'#1b5e20',
+                                  background:'#dcfce7',borderRadius:6,padding:'2px 8px',
+                                  fontFamily:'monospace'}}>{entry.lockKey}</span>
+                    <span style={{flex:1,fontSize:11,color:'var(--muted)',
+                                  overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                      {entry.name}
+                    </span>
+                    <span style={{fontSize:10,color:'var(--muted)',flexShrink:0}}>
+                      {entry.ts.getHours().toString().padStart(2,'0')}:{entry.ts.getMinutes().toString().padStart(2,'0')}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+        </div>
+      </>
+    );
+  }
+
+  // ── NORMAL VIEW ───────────────────────────────────────────────────
   return (
     <div className="storage-view">
+
+      {/* ── Prominent search + quick-assign button ── */}
+      <div style={{display:'flex',gap:8,marginBottom:16,alignItems:'center'}}>
+        <div style={{flex:1,position:'relative'}}>
+          <input type="text" placeholder="🔍 ค้นหาสินค้า / สแกนบาร์โค้ด..."
+            value={search} onChange={e => setSearch(e.target.value)}
+            style={{width:'100%',padding:'12px 14px 12px 44px',borderRadius:12,
+                    border:'2px solid ' + (search.trim() ? '#1b5e20' : 'var(--bdr)'),
+                    fontSize:14,fontFamily:'inherit',background:'#fff',
+                    boxSizing:'border-box'}}/>
+          <span style={{position:'absolute',left:14,top:'50%',transform:'translateY(-50%)',
+                        fontSize:18,pointerEvents:'none'}}>🔍</span>
+          {search && <button onClick={() => setSearch('')}
+            style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',
+                    width:28,height:28,borderRadius:8,border:'none',background:'var(--g-100)',
+                    cursor:'pointer',fontSize:14,color:'var(--muted)',fontFamily:'inherit'}}>✕</button>}
+        </div>
+        <ScanButton size={46} onScan={sku => setSearch(sku)}/>
+        <button onClick={() => { setQaMode(true); setQaSku(''); setQaLockKey(''); }}
+          style={{height:46,padding:'0 16px',borderRadius:12,border:'2px solid #1b5e20',
+                  background:'#1b5e20',color:'#fff',fontWeight:700,fontSize:13,
+                  cursor:'pointer',fontFamily:'inherit',flexShrink:0,whiteSpace:'nowrap'}}>
+          📥 บันทึกตำแหน่ง
+        </button>
+      </div>
+
+      {/* ── Search results panel (replaces grid while searching) ── */}
+      {search.trim() && (
+        <div style={{marginBottom:16}}>
+          {searchResults.length === 0 ? (
+            <div style={{padding:'20px',textAlign:'center',color:'var(--muted)',
+                         background:'#fff',borderRadius:12,border:'1.5px solid var(--bdr)',fontSize:13}}>
+              ไม่พบสินค้า "{search.trim().toUpperCase()}" ในระบบ
+            </div>
+          ) : (
+            <div style={{display:'flex',flexDirection:'column',gap:8}}>
+              <div style={{fontSize:11,color:'var(--muted)',fontWeight:600,paddingLeft:2}}>
+                พบ {searchResults.length} รายการ
+              </div>
+              {searchResults.map(({ p, locks }) => (
+                <div key={p.sku}
+                  onClick={() => locks.length > 0 ? setSelectedLock(locks[0]) : null}
+                  style={{display:'flex',alignItems:'center',gap:12,padding:'12px 14px',
+                          background:'#fff',borderRadius:12,
+                          border:'2px solid ' + (locks.length > 0 ? '#1b5e20' : '#fbbf24'),
+                          cursor: locks.length > 0 ? 'pointer' : 'default',
+                          boxShadow:'0 1px 4px rgba(0,0,0,.05)'}}>
+                  {p.imageUrl
+                    ? <img src={p.imageUrl} alt={p.name}
+                        style={{width:52,height:52,objectFit:'contain',borderRadius:8,
+                                background:'var(--g-50)',flexShrink:0}}/>
+                    : <div style={{width:52,height:52,borderRadius:8,background:'var(--g-50)',
+                                   display:'flex',alignItems:'center',justifyContent:'center',
+                                   fontSize:26,flexShrink:0}}>
+                        {CAT_EMOJI[p.cat] || '📦'}
+                      </div>}
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',marginBottom:3}}>
+                      <span style={{fontSize:11,fontWeight:700,color:'var(--g-500)',fontFamily:'monospace'}}>
+                        {p.sku}
+                      </span>
+                      {locks.length > 0 ? locks.map(lk => (
+                        <span key={lk} style={{fontSize:12,fontWeight:800,color:'#fff',
+                                               background:'#1b5e20',borderRadius:6,
+                                               padding:'2px 8px',fontFamily:'monospace'}}>
+                          📍 {lk}
+                        </span>
+                      )) : (
+                        <span style={{fontSize:11,fontWeight:700,color:'#92400e',
+                                      background:'#fef3c7',borderRadius:6,padding:'2px 8px'}}>
+                          ⚠️ ยังไม่มีตำแหน่ง
+                        </span>
+                      )}
+                    </div>
+                    <div style={{fontSize:13,fontWeight:600,color:'var(--g-800)',
+                                 overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                      {p.name}
+                    </div>
+                  </div>
+                  <div style={{textAlign:'right',flexShrink:0}}>
+                    <div style={{fontSize:15,fontWeight:800,color:'#1b5e20'}}>
+                      {whQty(p)} <span style={{fontSize:10,fontWeight:500,color:'var(--muted)'}}>ชิ้น</span>
+                    </div>
+                    {locks.length === 0 && (
+                      <button onClick={e => { e.stopPropagation(); setQaMode(true); setQaSku(p.sku); setQaLockKey(''); }}
+                        style={{marginTop:4,fontSize:11,padding:'3px 8px',borderRadius:6,
+                                border:'1px solid #1b5e20',background:'#fff',color:'#1b5e20',
+                                cursor:'pointer',fontWeight:700,fontFamily:'inherit'}}>
+                        + ระบุตำแหน่ง
+                      </button>
+                    )}
+                    {locks.length > 0 && (
+                      <div style={{fontSize:11,color:'var(--muted)',marginTop:2}}>แตะเพื่อดูล็อค</div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="row row-4" style={{marginBottom:16}}>
         <KPI label="📦 ล็อคที่ใช้แล้ว" value={`${fmtN(usedCount)}/${fmtN(totalLocks)}`}
              sub={`${(usedCount/totalLocks*100).toFixed(1)}% ของคลัง`}
@@ -3271,25 +3579,16 @@ function StorageView({ data }) {
       <Card title="📍 แผนผังคลังสินค้า"
             sub={`ฝั่ง A: ${shelves.A} ชั้น · ฝั่ง B: ${shelves.B} ชั้น · ${shelves.locksPerShelf} ล็อค/ชั้น`}
             action={
-              <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                  <input type="text" placeholder="🔍 ค้นหา SKU..."
-                         value={search} onChange={e => setSearch(e.target.value)}
-                         style={{padding:"6px 10px",border:"1px solid var(--bdr)",
-                                borderRadius:8,fontSize:12,width:140}}/>
-                  <ScanButton onScan={sku => setSearch(sku)}/>
-                </div>
-                <Seg value={side} onChange={setSide} options={[
-                  {value:'A',label:'🟩 ซอย A'},{value:'B',label:'🟦 ซอย B'},{value:'all',label:'🗂️ ทั้งหมด'},
-                ]}/>
-              </div>
+              <Seg value={side} onChange={setSide} options={[
+                {value:'A',label:'🟩 ซอย A'},{value:'B',label:'🟦 ซอย B'},{value:'all',label:'🗂️ ทั้งหมด'},
+              ]}/>
             }>
         {searchSku && (
           <div style={{marginBottom:12,padding:"8px 12px",background:"#fff8e1",
                        borderRadius:8,fontSize:12,border:"1px solid #ffe082"}}>
             {searchMatches.size > 0
-              ? <>พบ <b>{searchMatches.size}</b> ล็อคที่มี "{searchSku}" — กดที่ล็อคไฮไลต์ส้มเพื่อดูรายละเอียด</>
-              : <span style={{color:"var(--muted)"}}>ไม่พบ SKU "{searchSku}" ในล็อคใดเลย</span>}
+              ? <>ไฮไลต์ <b>{searchMatches.size}</b> ล็อคที่มี "{searchSku}" — กดล็อคสีส้มเพื่อดูรายละเอียด</>
+              : <span style={{color:"var(--muted)"}}>ไม่พบ "{searchSku}" ในล็อคใดเลย</span>}
           </div>
         )}
 
