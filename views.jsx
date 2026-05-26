@@ -5455,15 +5455,149 @@ function StockCountView({ data }) {
   }
 
   // ── STEP 1: เลือกชั้น ────────────────────────────────────────────
+  // ── product quick-search across all locks (step 1 global search) ──
+  const step1SearchResults = uM(() => {
+    const q = stockSearch.trim().toUpperCase();
+    if (!q) return [];
+    const hits = [];
+    Object.entries(lockData).forEach(([lk, d]) => {
+      (d.skus || []).forEach(sku => {
+        if (hits.length >= 30) return;
+        const p = productMap[sku];
+        const skuUp = sku.toUpperCase();
+        const nameUp = (p && p.name ? p.name : '').toUpperCase();
+        if (skuUp.includes(q) || nameUp.includes(q)) {
+          hits.push({ sku, lockKey: lk, p });
+        }
+      });
+    });
+    // also include products in no lock
+    if (hits.length < 30) {
+      products.forEach(p => {
+        if (hits.length >= 30) return;
+        if (!skuToLock[p.sku]) {
+          const skuUp = p.sku.toUpperCase();
+          const nameUp = (p.name || '').toUpperCase();
+          if (skuUp.includes(q) || nameUp.includes(q)) {
+            hits.push({ sku: p.sku, lockKey: null, p });
+          }
+        }
+      });
+    }
+    return hits;
+  }, [stockSearch, lockData, productMap, products, skuToLock]);
+
   if (step === 1) return (
     <>
       <Toast toast={toast} onClose={hideToast}/>
       <div style={{display:'flex',flexDirection:'column',gap:16}}>
         <div>
           <div style={{fontSize:16,fontWeight:800}}>📊 นับ stock คลัง</div>
-          <div style={{fontSize:12,color:'var(--muted)',marginTop:2}}>ขั้น 1 — เลือกชั้น</div>
+          <div style={{fontSize:12,color:'var(--muted)',marginTop:2}}>ขั้น 1 — เลือกชั้น หรือค้นหาสินค้า</div>
         </div>
-        {/* Mode toggle */}
+
+        {/* ── Search + Scan (global) ── */}
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <input type="text" placeholder="🔍 ค้นหา SKU หรือชื่อสินค้า..."
+            value={stockSearch}
+            onChange={e => setStockSearch(e.target.value.toUpperCase())}
+            style={{flex:1,padding:'11px 14px',borderRadius:10,border:'1.5px solid var(--bdr)',
+                    fontSize:13,fontFamily:'inherit',background:'#fff'}}/>
+          <ScanButton size={46} onScan={sku => setStockSearch(sku.toUpperCase())}/>
+          {stockSearch && (
+            <button onClick={() => setStockSearch('')}
+              style={{width:46,height:46,borderRadius:10,border:'1.5px solid var(--bdr)',
+                      background:'#fff',cursor:'pointer',fontSize:18,fontFamily:'inherit',
+                      color:'var(--muted)',flexShrink:0}}>✕</button>
+          )}
+        </div>
+
+        {/* ── Search results ── */}
+        {stockSearch.trim().length > 0 && (
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            {step1SearchResults.length === 0 ? (
+              <div style={{textAlign:'center',padding:'20px 0',color:'var(--muted)',fontSize:13}}>
+                ไม่พบสินค้าที่ตรงกัน
+              </div>
+            ) : (
+              <>
+                <div style={{fontSize:11,color:'var(--muted)',fontWeight:600}}>
+                  พบ {step1SearchResults.length} รายการ — แตะเพื่อไปนับล็อคนั้นเลย
+                </div>
+                {step1SearchResults.map(({ sku, lockKey, p }) => {
+                  const sys = p ? whQty(p) : null;
+                  const shelf = lockKey ? lockKey.split('/')[0] : null;
+                  return (
+                    <div key={sku + (lockKey||'')}
+                      onClick={() => {
+                        if (!lockKey) return;
+                        setSelShelf(shelf);
+                        setSelLockKey(lockKey);
+                        setStockSearch('');
+                        setStep(3);
+                      }}
+                      style={{
+                        display:'flex', alignItems:'center', gap:12,
+                        background: lockKey ? '#fff' : '#fffbf0',
+                        border:'1.5px solid ' + (lockKey ? 'var(--bdr)' : '#fbbf24'),
+                        borderRadius:12, padding:'10px 14px',
+                        cursor: lockKey ? 'pointer' : 'default',
+                        boxShadow:'0 1px 4px rgba(0,0,0,.04)',
+                      }}>
+                      {/* Image or emoji */}
+                      {p && p.imageUrl ? (
+                        <img src={p.imageUrl} alt={p.name}
+                          style={{width:44,height:44,objectFit:'contain',borderRadius:8,
+                                  background:'var(--g-50)',flexShrink:0}}/>
+                      ) : (
+                        <div style={{width:44,height:44,borderRadius:8,background:'var(--g-50)',
+                                     display:'flex',alignItems:'center',justifyContent:'center',
+                                     fontSize:22,flexShrink:0}}>
+                          {(p && CAT_EMOJI[p.cat]) || '📦'}
+                        </div>
+                      )}
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+                          <span style={{fontSize:11,fontWeight:700,color:'var(--g-500)',
+                                        fontFamily:'monospace'}}>{sku}</span>
+                          {lockKey ? (
+                            <span style={{fontSize:11,fontWeight:800,color:'#fff',
+                                          background:'#1b5e20',borderRadius:6,
+                                          padding:'1px 7px',fontFamily:'monospace'}}>
+                              📍 {lockKey}
+                            </span>
+                          ) : (
+                            <span style={{fontSize:10,fontWeight:700,color:'#92400e',
+                                          background:'#fef3c7',borderRadius:6,padding:'1px 7px'}}>
+                              ⚠️ ไม่มีตำแหน่ง
+                            </span>
+                          )}
+                        </div>
+                        <div style={{fontSize:12,fontWeight:600,color:'var(--g-800)',marginTop:2,
+                                      overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                          {(p && p.name) || '—'}
+                        </div>
+                      </div>
+                      <div style={{textAlign:'right',flexShrink:0}}>
+                        {sys != null && (
+                          <div style={{fontSize:13,fontWeight:800,color:'#1b5e20'}}>
+                            {sys} <span style={{fontSize:10,fontWeight:500,color:'var(--muted)'}}>ชิ้น</span>
+                          </div>
+                        )}
+                        {lockKey && (
+                          <div style={{fontSize:11,color:'var(--muted)',marginTop:2}}>แตะเพื่อนับ ›</div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Mode toggle — ซ่อนเมื่อกำลังค้นหา */}
+        {!stockSearch.trim() && (
         <div style={{display:'flex',gap:8}}>
           <button style={{flex:1,padding:'10px 0',borderRadius:10,border:'2px solid #1b5e20',
                           background:'#1b5e20',color:'#fff',fontWeight:700,fontSize:13,
@@ -5477,45 +5611,52 @@ function StockCountView({ data }) {
             🏭 ตามซัพพลายเออร์
           </button>
         </div>
-        {['A','B'].map(side => (
-          <div key={side}>
-            <div style={{fontSize:12,fontWeight:700,color:'var(--muted)',
-                         textTransform:'uppercase',letterSpacing:'.06em',marginBottom:8}}>
-              ซอย {side}
-            </div>
-            <div style={{display:'grid',
-                         gridTemplateColumns:'repeat(auto-fill,minmax(120px,1fr))',gap:10}}>
-              {shelfList.filter(s => s[0] === side).map(sh => {
-                const shN = parseInt(sh.replace(/[A-Za-z]/g,''));
-                const isR = shN % 2 !== 0;
-                const stat = shelfStats[sh] || { total:0 };
-                return (
-                  <div key={sh}
-                    onClick={() => { setSelShelf(sh); setStep(2); }}
-                    style={{
-                      background:'#fff',
-                      border:'2px solid ' + (stat.total>0 ? 'var(--bdr)' : '#e2e8f0'),
-                      borderRadius:14, padding:'16px 8px', cursor:'pointer',
-                      display:'flex', flexDirection:'column', alignItems:'center', gap:6,
-                      boxShadow:'0 1px 4px rgba(0,0,0,.05)',
-                      minHeight:96,
-                    }}>
-                    <div style={{fontSize:22,fontWeight:800,color:'var(--g-700)',
-                                 fontFamily:'monospace'}}>{sh}</div>
-                    <div style={{fontSize:10,fontWeight:700,borderRadius:8,padding:'2px 8px',
-                                 background:isR?'#fef3c7':'#e0f2fe',
-                                 color:isR?'#b45309':'#1f6f8b'}}>
-                      {isR ? '🧱 ขวา' : '🚪 ซ้าย'}
-                    </div>
-                    <div style={{fontSize:11,color:'var(--muted)'}}>
-                      {stat.total>0 ? stat.total+' SKU' : 'ว่าง'}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+        )}
+
+        {/* Shelf grid — ซ่อนเมื่อกำลังค้นหา */}
+        {!stockSearch.trim() && (
+          <div style={{display:'flex',flexDirection:'column',gap:16}}>
+            {['A','B'].map(side => (
+              <div key={side}>
+                <div style={{fontSize:12,fontWeight:700,color:'var(--muted)',
+                             textTransform:'uppercase',letterSpacing:'.06em',marginBottom:8}}>
+                  ซอย {side}
+                </div>
+                <div style={{display:'grid',
+                             gridTemplateColumns:'repeat(auto-fill,minmax(120px,1fr))',gap:10}}>
+                  {shelfList.filter(s => s[0] === side).map(sh => {
+                    const shN = parseInt(sh.replace(/[A-Za-z]/g,''));
+                    const isR = shN % 2 !== 0;
+                    const stat = shelfStats[sh] || { total:0 };
+                    return (
+                      <div key={sh}
+                        onClick={() => { setSelShelf(sh); setStep(2); }}
+                        style={{
+                          background:'#fff',
+                          border:'2px solid ' + (stat.total>0 ? 'var(--bdr)' : '#e2e8f0'),
+                          borderRadius:14, padding:'16px 8px', cursor:'pointer',
+                          display:'flex', flexDirection:'column', alignItems:'center', gap:6,
+                          boxShadow:'0 1px 4px rgba(0,0,0,.05)',
+                          minHeight:96,
+                        }}>
+                        <div style={{fontSize:22,fontWeight:800,color:'var(--g-700)',
+                                     fontFamily:'monospace'}}>{sh}</div>
+                        <div style={{fontSize:10,fontWeight:700,borderRadius:8,padding:'2px 8px',
+                                     background:isR?'#fef3c7':'#e0f2fe',
+                                     color:isR?'#b45309':'#1f6f8b'}}>
+                          {isR ? '🧱 ขวา' : '🚪 ซ้าย'}
+                        </div>
+                        <div style={{fontSize:11,color:'var(--muted)'}}>
+                          {stat.total>0 ? stat.total+' SKU' : 'ว่าง'}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
-        ))}
+        )}
       </div>
     </>
   );
