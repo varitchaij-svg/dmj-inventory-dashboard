@@ -5802,26 +5802,31 @@ function OrderListView({ data }) {
   const [st, setSt] = uS(getOrdersState);
   const productMap = uM(() => { const m={}; (data.products||[]).forEach(p=>m[p.sku]=p); return m; }, [data.products]);
 
-  const enriched = uM(() => orders.map((o, i) => {
-    const id = stableOrderId(o, i);
-    const local = st[id] || {};
-    // Guard: if sheet says "รอ" but localStorage says "สำเร็จ",
-    // check whether this is a NEW order placed after we marked done (ID collision).
-    // If so, trust the sheet — it's a fresh order, not the one we completed.
-    const sheetPending = !o.status || o.status === "รอ" || o.status === "pending";
-    if (sheetPending && (local.status === "สำเร็จ" || local.status === "completed")) {
-      if (local.markedAt && o.date) {
-        const orderMs  = new Date(o.date).getTime();
-        const markedMs = new Date(local.markedAt).getTime();
-        if (!isNaN(orderMs) && !isNaN(markedMs) && orderMs > markedMs) {
-          // order date is AFTER we marked done → new order, clear stale status
-          const { status: _s, markedAt: _m, ...rest } = local;
+  const enriched = uM(() => {
+    const DONE_ST = new Set(["สำเร็จ","completed","ส่งแล้ว","shipped"]);
+    return orders.map((o, i) => {
+      const id = stableOrderId(o, i);
+      const local = st[id] || {};
+      // Guard: sheet says "รอ" but localStorage says a terminal status.
+      // Only keep localStorage if we can positively confirm it's the SAME order
+      // (order date ≤ markedAt). Otherwise trust the sheet — new order / ID collision.
+      const sheetPending = !o.status || o.status === "รอ" || o.status === "pending";
+      if (sheetPending && DONE_ST.has(local.status)) {
+        let keepLocal = false;
+        if (local.markedAt && o.date) {
+          const orderMs  = new Date(o.date).getTime();
+          const markedMs = new Date(local.markedAt).getTime();
+          keepLocal = !isNaN(orderMs) && !isNaN(markedMs) && orderMs <= markedMs;
+        }
+        if (!keepLocal) {
+          // strip all terminal-state fields → show as pending
+          const { status:_s, markedAt:_m, shipped:_sh, ...rest } = local;
           return { ...o, id, ...rest };
         }
       }
-    }
-    return { ...o, id, ...local };
-  }), [orders, st]);
+      return { ...o, id, ...local };
+    });
+  }, [orders, st]);
 
   const sorted = uM(() => [...enriched].sort((a,b) => {
     const aP = !a.status||a.status==="รอ"||a.status==="pending";
@@ -5909,23 +5914,27 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
   const productMap = uM(() => { const m={}; products.forEach(p => m[p.sku]=p); return m; }, [products]);
 
-  const enriched = uM(() => orders.map((o, i) => {
-    const id = stableOrderId(o, i);
-    const local = st[id] || {};
-    // Same collision guard as OrderListView
-    const sheetPending = !o.status || o.status === "รอ" || o.status === "pending";
-    if (sheetPending && (local.status === "สำเร็จ" || local.status === "completed")) {
-      if (local.markedAt && o.date) {
-        const orderMs  = new Date(o.date).getTime();
-        const markedMs = new Date(local.markedAt).getTime();
-        if (!isNaN(orderMs) && !isNaN(markedMs) && orderMs > markedMs) {
-          const { status: _s, markedAt: _m, ...rest } = local;
-          return { ...o, id, ...local, ...rest, product: productMap[o.sku] };
+  const enriched = uM(() => {
+    const DONE_ST = new Set(["สำเร็จ","completed","ส่งแล้ว","shipped"]);
+    return orders.map((o, i) => {
+      const id = stableOrderId(o, i);
+      const local = st[id] || {};
+      const sheetPending = !o.status || o.status === "รอ" || o.status === "pending";
+      if (sheetPending && DONE_ST.has(local.status)) {
+        let keepLocal = false;
+        if (local.markedAt && o.date) {
+          const orderMs  = new Date(o.date).getTime();
+          const markedMs = new Date(local.markedAt).getTime();
+          keepLocal = !isNaN(orderMs) && !isNaN(markedMs) && orderMs <= markedMs;
+        }
+        if (!keepLocal) {
+          const { status:_s, markedAt:_m, shipped:_sh, ...rest } = local;
+          return { ...o, id, ...rest, product: productMap[o.sku] };
         }
       }
-    }
-    return { ...o, id, ...local, product: productMap[o.sku] };
-  }), [orders, st, productMap]);
+      return { ...o, id, ...local, product: productMap[o.sku] };
+    });
+  }, [orders, st, productMap]);
 
   // แสดงเฉพาะที่กด Done แล้ว
   const isDone = o => o.status === "สำเร็จ" || o.status === "completed" || o.status === "done";
