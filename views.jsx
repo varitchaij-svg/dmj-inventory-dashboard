@@ -1156,54 +1156,21 @@ function CategoryView({ data, role }) {
                 <button key={v.code}
                   onClick={() => { setGlobalVendor(isActive ? null : v.code); setShowAll(false); }}
                   style={{
-                    display:"flex", alignItems:"center", width:"100%",
-                    padding:"13px 14px",
-                    background: isActive ? "var(--g-700)" : idx%2===0 ? "#fff" : "#fafafa",
+                    display:"flex", alignItems:"center", gap:10, width:"100%",
+                    padding:"11px 14px",
+                    background: isActive ? "var(--g-700)" : "#fff",
                     border:"none",
                     borderBottom: isLast ? "none" : "1px solid #f1f5f9",
                     cursor:"pointer", fontFamily:"inherit", textAlign:"left",
-                    transition:"background .1s",
                   }}>
-                  {/* Vendor code */}
-                  <span style={{
-                    fontSize:15, fontWeight:800, fontFamily:"monospace",
-                    color: isActive ? "#fff" : "var(--g-700)",
-                    minWidth:70,
-                  }}>{v.code}</span>
-                  {/* Bar */}
-                  <div style={{flex:1, margin:"0 12px"}}>
-                    <div style={{
-                      height:6, borderRadius:3,
-                      background: isActive ? "rgba(255,255,255,.35)" : "var(--g-200)",
-                      overflow:"hidden",
-                    }}>
-                      <div style={{
-                        height:"100%", borderRadius:3,
-                        width: (v.count / allVendors[0].count * 100) + "%",
-                        background: isActive ? "#fff" : "var(--g-500)",
-                      }}/>
-                    </div>
-                  </div>
-                  {/* Stats */}
-                  <span style={{
-                    fontSize:13, fontWeight:700,
-                    color: isActive ? "rgba(255,255,255,.9)" : "var(--text)",
-                    minWidth:30, textAlign:"right",
-                  }}>{v.count}</span>
-                  <span style={{
-                    fontSize:11, color: isActive ? "rgba(255,255,255,.6)" : "var(--muted)",
-                    marginLeft:4, minWidth:28,
-                  }}>รายการ</span>
-                  <span style={{
-                    fontSize:11, fontWeight:600,
-                    color: isActive ? "rgba(255,255,255,.7)" : "var(--muted)",
-                    marginLeft:10, minWidth:60, textAlign:"right",
-                  }}>
-                    {v.totalQty > 0 ? "stock "+v.totalQty.toLocaleString() : "—"}
+                  <span style={{fontSize:14, fontWeight:800, fontFamily:"monospace",
+                                color: isActive ? "#fff" : "var(--g-700)", flex:1}}>
+                    {v.code}
                   </span>
-                  {/* Arrow */}
-                  <span style={{marginLeft:8, fontSize:14,
-                                color: isActive ? "rgba(255,255,255,.8)" : "var(--muted)"}}>
+                  <span style={{fontSize:12, color: isActive ? "rgba(255,255,255,.7)" : "var(--muted)"}}>
+                    {v.count} รายการ
+                  </span>
+                  <span style={{fontSize:14, color: isActive ? "rgba(255,255,255,.6)" : "var(--muted)"}}>
                     {isActive ? "✓" : "›"}
                   </span>
                 </button>
