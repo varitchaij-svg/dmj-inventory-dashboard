@@ -2262,9 +2262,17 @@ function TrendsView({ data }) {
       lateAvg  = m.slice(half).reduce((s,x) => s + (x.qty||0), 0) / Math.max(m.length - half, 1);
       soldMonths = m.filter(x => x.qty > 0).length;
     }
-    const daysAgoStockIn = p.lastStockInISO
-      ? (Date.now() - new Date(p.lastStockInISO).getTime()) / 86400000
-      : null;
+    // Prefer ISO (set by transaction-file upload), fall back to DD/MM/YYYY string from Sheet
+    let daysAgoStockIn = null;
+    if (p.lastStockInISO) {
+      daysAgoStockIn = (Date.now() - new Date(p.lastStockInISO).getTime()) / 86400000;
+    } else if (p.lastStockInDate) {
+      const pts = String(p.lastStockInDate).split('/');
+      if (pts.length === 3) {
+        const d = new Date(parseInt(pts[2]), parseInt(pts[1]) - 1, parseInt(pts[0]));
+        if (!isNaN(d.getTime())) daysAgoStockIn = (Date.now() - d.getTime()) / 86400000;
+      }
+    }
     return { ...p, earlyAvg, lateAvg, soldMonths, daysAgoStockIn };
   }), [products]);
 
@@ -2279,9 +2287,9 @@ function TrendsView({ data }) {
   const newArrivals = uM(() => enriched
     .filter(p => {
       if (stockQty(p) <= 0) return false;
-      // มี lastStockInISO และเข้าใน 60 วัน
+      // มีวันที่เข้าสต๊อก (ISO หรือ DD/MM/YYYY) และเข้าใน 60 วัน
       if (p.daysAgoStockIn != null && p.daysAgoStockIn <= 60) return true;
-      // ไม่มี lastStockInISO แต่ขายได้แค่ 1-2 เดือนแรก (สินค้าใหม่)
+      // ไม่มีวันที่เข้าเลย — ใช้ยอดขายเป็น proxy (≤ 2 เดือน = น่าจะใหม่)
       if (p.daysAgoStockIn == null && p.soldMonths <= 2 && p.soldQty > 0) return true;
       return false;
     })
@@ -2298,18 +2306,18 @@ function TrendsView({ data }) {
     }),
     [enriched]);
 
-  // 🆘 สินค้าเสี่ยงหายจากตลาด — has stock but no/very low recent sales, no recent restock
+  // 🆘 สินค้าเสี่ยงหายจากตลาด — เคยขายได้ แต่ครึ่งหลังหยุดขายเลย
+  // (soldQty===0 → "ไม่ขายเลย" เท่านั้น ไม่ overlap ที่นี่)
   const fading = uM(() => enriched
     .filter(p => {
       if (stockQty(p) <= 0) return false;
-      if (p.soldMonths === 0) return true;   // never sold in tracked months
-      if (p.soldQty === 0) return true;
-      // sold in early but not in recent half
+      if (p.soldQty === 0) return false;   // ← ไปอยู่ "ไม่ขายเลย" แทน
       const m = p.monthly || [];
       if (m.length < 4) return false;
       const half = Math.floor(m.length / 2);
       const earlySold = m.slice(0, half).reduce((s,x) => s + (x.qty||0), 0);
       const lateSold  = m.slice(half).reduce((s,x) => s + (x.qty||0), 0);
+      // เคยขายในช่วงแรกอย่างน้อย 2 ชิ้น แต่ช่วงหลังไม่ขายเลย
       return earlySold >= 2 && lateSold === 0;
     })
     .sort((a,b) => (stockQty(b) * b.price) - (stockQty(a) * a.price)),
