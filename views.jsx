@@ -2519,7 +2519,14 @@ function ProductModal({ p, onClose, allCats }) {
             </div>
             <div style={{gridColumn:"1 / -1", paddingTop:8, borderTop:"1px dashed var(--bdr)"}}>
               <div style={{fontSize:10, color:"var(--muted)", fontWeight:600, textTransform:"uppercase", letterSpacing:".05em"}}>📊 คงเหลือรวม</div>
-              <div style={{marginTop:3, fontSize:20, fontWeight:800, color:"var(--g-700)"}}>{fmtN(p.qty)} <span style={{fontSize:12, color:"var(--muted)", fontWeight:500}}>ชิ้น</span></div>
+              <div style={{marginTop:3, fontSize:20, fontWeight:800, color:"var(--g-700)"}}>
+                {fmtN(
+                  (p.qtyStore > 0 || p.qtyWH > 0)
+                    ? (p.qtyStore || 0) + (p.qtyWH || 0)
+                    : (p.qty || 0)
+                )}
+                {" "}<span style={{fontSize:12, color:"var(--muted)", fontWeight:500}}>ชิ้น</span>
+              </div>
             </div>
           </div>
         </div>
