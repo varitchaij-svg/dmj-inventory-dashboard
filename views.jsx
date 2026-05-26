@@ -1212,11 +1212,12 @@ function CategoryView({ data, role }) {
         })}
       </div>
 
-      <div className="cat-layout">
-        {/* Sidebar — hidden on mobile and in vendor mode */}
+      <div className="cat-layout"
+           style={isGlobalVendor || isGlobalSearch ? {gridTemplateColumns:"1fr"} : undefined}>
+        {/* Sidebar — hidden on mobile and in vendor/search mode */}
         <Card padding={false} className="cat-sidebar"
               style={{padding:"12px 8px",alignSelf:"start",position:"sticky",top:80,
-                      display: isGlobalVendor ? "none" : undefined}}>
+                      display: (isGlobalVendor || isGlobalSearch) ? "none" : undefined}}>
           <div style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",
                        letterSpacing:".08em",padding:"6px 12px"}}>
             หมวดหมู่ ({allCats.length})
