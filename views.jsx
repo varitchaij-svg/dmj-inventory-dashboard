@@ -1130,69 +1130,85 @@ function CategoryView({ data, role }) {
           </div>
         )}
 
-        {/* ── Supplier quick-filter row ── */}
+        {/* ── Supplier list ── */}
         {allVendors.length > 0 && !isGlobalSearch && (
-          <div style={{marginTop:10}}>
-            <div style={{fontSize:11,fontWeight:700,color:"var(--muted)",
-                         textTransform:"uppercase",letterSpacing:".06em",marginBottom:6}}>
-              🏭 ดูตาม Supplier
-            </div>
-            <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
-              {allVendors.map(v => {
-                const isActive = globalVendor === v.code;
-                return (
-                  <button key={v.code}
-                    onClick={() => {
-                      setGlobalVendor(isActive ? null : v.code);
-                      setShowAll(false);
-                    }}
-                    style={{
-                      padding:"6px 12px", borderRadius:20,
-                      border: isActive ? "2px solid var(--g-600)" : "1.5px solid var(--bdr)",
-                      background: isActive ? "var(--g-700)" : "#fff",
-                      color: isActive ? "#fff" : "var(--text)",
-                      fontSize:13, fontWeight:700, cursor:"pointer",
-                      fontFamily:"inherit", whiteSpace:"nowrap",
-                      display:"flex", alignItems:"center", gap:6,
-                      boxShadow: isActive ? "0 2px 8px rgba(0,0,0,.15)" : "none",
-                      transition:"all .12s",
-                    }}>
-                    <span>{v.code}</span>
-                    <span style={{
-                      fontSize:10, fontWeight:600, opacity:.75,
-                      background: isActive ? "rgba(255,255,255,.25)" : "var(--g-100)",
-                      color: isActive ? "#fff" : "var(--g-700)",
-                      padding:"1px 6px", borderRadius:99,
-                    }}>{v.count}</span>
-                  </button>
-                );
-              })}
-            </div>
-            {/* Active vendor banner */}
-            {globalVendor && (
-              <div style={{
-                marginTop:10, padding:"10px 14px",
-                background:"#f0fdf4", borderRadius:10,
-                border:"1.5px solid var(--g-300)",
-                display:"flex", alignItems:"center", gap:10, flexWrap:"wrap",
-              }}>
-                <span style={{fontSize:16}}>🏭</span>
-                <span style={{fontWeight:800, fontSize:14, color:"var(--g-700)"}}>
-                  Supplier: {globalVendor}
-                </span>
-                <span style={{fontSize:12, color:"var(--muted)"}}>
-                  · {filtered.length} รายการ
-                  · stock รวม {filtered.reduce((s,p)=>s+(p.qty||0),0).toLocaleString()} ชิ้น
-                </span>
+          <div style={{marginTop:10,
+                       border:"1.5px solid var(--bdr)", borderRadius:12, overflow:"hidden"}}>
+            {/* Header row */}
+            <div style={{display:"flex", alignItems:"center", justifyContent:"space-between",
+                         padding:"10px 14px", background:"#f8fafc",
+                         borderBottom:"1.5px solid var(--bdr)"}}>
+              <span style={{fontSize:13, fontWeight:700}}>🏭 ดูตาม Supplier</span>
+              {globalVendor && (
                 <button onClick={() => { setGlobalVendor(null); setShowAll(false); }}
-                  style={{marginLeft:"auto", padding:"4px 12px", borderRadius:20,
-                          border:"1.5px solid var(--g-400)", background:"#fff",
-                          fontSize:12, fontWeight:700, cursor:"pointer",
-                          fontFamily:"inherit", color:"var(--g-700)"}}>
+                  style={{padding:"4px 12px", borderRadius:20, border:"1.5px solid var(--bdr)",
+                          background:"#fff", fontSize:12, fontWeight:700, cursor:"pointer",
+                          fontFamily:"inherit", color:"var(--muted)"}}>
                   ✕ ล้าง
                 </button>
-              </div>
-            )}
+              )}
+            </div>
+            {/* List rows */}
+            {allVendors.map((v, idx) => {
+              const isActive = globalVendor === v.code;
+              const isLast = idx === allVendors.length - 1;
+              return (
+                <button key={v.code}
+                  onClick={() => { setGlobalVendor(isActive ? null : v.code); setShowAll(false); }}
+                  style={{
+                    display:"flex", alignItems:"center", width:"100%",
+                    padding:"13px 14px",
+                    background: isActive ? "var(--g-700)" : idx%2===0 ? "#fff" : "#fafafa",
+                    border:"none",
+                    borderBottom: isLast ? "none" : "1px solid #f1f5f9",
+                    cursor:"pointer", fontFamily:"inherit", textAlign:"left",
+                    transition:"background .1s",
+                  }}>
+                  {/* Vendor code */}
+                  <span style={{
+                    fontSize:15, fontWeight:800, fontFamily:"monospace",
+                    color: isActive ? "#fff" : "var(--g-700)",
+                    minWidth:70,
+                  }}>{v.code}</span>
+                  {/* Bar */}
+                  <div style={{flex:1, margin:"0 12px"}}>
+                    <div style={{
+                      height:6, borderRadius:3,
+                      background: isActive ? "rgba(255,255,255,.35)" : "var(--g-200)",
+                      overflow:"hidden",
+                    }}>
+                      <div style={{
+                        height:"100%", borderRadius:3,
+                        width: (v.count / allVendors[0].count * 100) + "%",
+                        background: isActive ? "#fff" : "var(--g-500)",
+                      }}/>
+                    </div>
+                  </div>
+                  {/* Stats */}
+                  <span style={{
+                    fontSize:13, fontWeight:700,
+                    color: isActive ? "rgba(255,255,255,.9)" : "var(--text)",
+                    minWidth:30, textAlign:"right",
+                  }}>{v.count}</span>
+                  <span style={{
+                    fontSize:11, color: isActive ? "rgba(255,255,255,.6)" : "var(--muted)",
+                    marginLeft:4, minWidth:28,
+                  }}>รายการ</span>
+                  <span style={{
+                    fontSize:11, fontWeight:600,
+                    color: isActive ? "rgba(255,255,255,.7)" : "var(--muted)",
+                    marginLeft:10, minWidth:60, textAlign:"right",
+                  }}>
+                    {v.totalQty > 0 ? "stock "+v.totalQty.toLocaleString() : "—"}
+                  </span>
+                  {/* Arrow */}
+                  <span style={{marginLeft:8, fontSize:14,
+                                color: isActive ? "rgba(255,255,255,.8)" : "var(--muted)"}}>
+                    {isActive ? "✓" : "›"}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         )}
       </div>
