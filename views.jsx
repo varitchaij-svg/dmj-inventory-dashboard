@@ -6612,4 +6612,319 @@ function CalcPadModal({ open, name, initialVal, onConfirm, onClose }) {
   );
 }
 
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal });
+// ─────────────────────────────────────────────────────────────────────────────
+// SUPPLIER VIEW — ดูสินค้าแยกตาม Supplier (2 step)
+// ─────────────────────────────────────────────────────────────────────────────
+function SupplierView({ data }) {
+  const products = data.products || [];
+
+  // Build vendor list with stats
+  const vendorMap = uM(() => {
+    const m = {};
+    products.forEach(p => {
+      if (!p.vendor) return;
+      if (!m[p.vendor]) m[p.vendor] = { code: p.vendor, items: [], totalQty: 0, totalCost: 0 };
+      m[p.vendor].items.push(p);
+      m[p.vendor].totalQty  += (p.qty  || 0);
+      m[p.vendor].totalCost += (p.cost || 0);
+    });
+    return m;
+  }, [products]);
+
+  const vendors = uM(() =>
+    Object.values(vendorMap).sort((a, b) => b.items.length - a.items.length)
+  , [vendorMap]);
+
+  const [step, setStep]         = uS(1);
+  const [selVendor, setSelVendor] = uS(null);
+  const [search, setSearch]     = uS('');
+  const [sort, setSort]         = uS('name'); // name | qty | date
+  const [vendorSearch, setVendorSearch] = uS('');
+
+  // Android back: step 2 → step 1
+  uE(function(){
+    if (step === 1 || !window.__dmjBackStack) return;
+    var h = function(){ setStep(1); setSearch(''); };
+    window.__dmjBackStack.push(h);
+    history.pushState({ _dmj: 1 }, '');
+    return function(){
+      var i = window.__dmjBackStack.lastIndexOf(h);
+      if (i >= 0) window.__dmjBackStack.splice(i, 1);
+    };
+  }, [step]);
+
+  // Products for selected vendor, filtered + sorted
+  const visibleProducts = uM(() => {
+    if (!selVendor) return [];
+    let list = vendorMap[selVendor]?.items || [];
+    const sq = search.trim().toUpperCase();
+    if (sq) list = list.filter(p =>
+      (p.sku  || '').toUpperCase().includes(sq) ||
+      (p.name || '').toUpperCase().includes(sq) ||
+      (p.barcode || '').toUpperCase().includes(sq)
+    );
+    if (sort === 'qty')  list = [...list].sort((a, b) => (b.qty||0) - (a.qty||0));
+    if (sort === 'date') list = [...list].sort((a, b) => {
+      const parse = s => { if(!s) return 0; const [d,m,y] = s.split('/'); return new Date(y,m-1,d)||0; };
+      return parse(b.lastPurchaseDate) - parse(a.lastPurchaseDate);
+    });
+    if (sort === 'name') list = [...list].sort((a, b) => (a.name||'').localeCompare(b.name||'', 'th'));
+    return list;
+  }, [selVendor, vendorMap, search, sort]);
+
+  const filteredVendors = uM(() => {
+    const sq = vendorSearch.trim().toUpperCase();
+    if (!sq) return vendors;
+    return vendors.filter(v => v.code.toUpperCase().includes(sq));
+  }, [vendors, vendorSearch]);
+
+  const fmtDate = (s) => {
+    if (!s) return '—';
+    const [d, m, y] = s.split('/');
+    return d + '/' + m + '/' + (y ? y.slice(-2) : '');
+  };
+
+  // ── STEP 1: เลือก Supplier ───────────────────────────────────────────────
+  if (step === 1) return (
+    <div style={{display:'flex', flexDirection:'column', gap:16}}>
+      <div>
+        <div style={{fontSize:16, fontWeight:800}}>🏭 สินค้าตาม Supplier</div>
+        <div style={{fontSize:12, color:'var(--muted)', marginTop:2}}>
+          {vendors.length} Supplier · {products.filter(p=>p.vendor).length} รายการที่มีข้อมูล
+        </div>
+      </div>
+
+      {/* Search vendor */}
+      <div style={{display:'flex', gap:8, alignItems:'center'}}>
+        <input type="text" placeholder="🔍 ค้นหา Supplier..."
+          value={vendorSearch} onChange={e => setVendorSearch(e.target.value.toUpperCase())}
+          style={{flex:1, padding:'9px 12px', borderRadius:10,
+                  border:'1.5px solid var(--bdr)', fontSize:13, fontFamily:'inherit'}}/>
+        {vendorSearch && (
+          <button onClick={() => setVendorSearch('')}
+            style={{width:40,height:40,borderRadius:9,border:'1.5px solid var(--bdr)',
+                    background:'#fff',cursor:'pointer',fontSize:18,color:'var(--muted)',fontFamily:'inherit'}}>
+            ✕
+          </button>
+        )}
+      </div>
+
+      {/* Vendor cards grid */}
+      <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(150px,1fr))', gap:10}}>
+        {filteredVendors.map(v => {
+          const hasLow = v.items.some(p => (p.qty||0) <= 5);
+          return (
+            <div key={v.code}
+              onClick={() => { setSelVendor(v.code); setSearch(''); setStep(2); }}
+              style={{
+                background:'#fff', border:'2px solid var(--bdr)',
+                borderRadius:14, padding:'16px 12px', cursor:'pointer',
+                display:'flex', flexDirection:'column', gap:6,
+                boxShadow:'0 1px 4px rgba(0,0,0,.05)',
+                position:'relative',
+              }}>
+              {hasLow && (
+                <div style={{position:'absolute',top:8,right:8,fontSize:14}}>⚠️</div>
+              )}
+              <div style={{fontSize:22, fontWeight:900, color:'var(--g-700)',
+                           fontFamily:'monospace', letterSpacing:'-0.5px'}}>
+                {v.code}
+              </div>
+              <div style={{fontSize:12, color:'var(--muted)', fontWeight:600}}>
+                {v.items.length} รายการ
+              </div>
+              <div style={{display:'flex', gap:6, flexWrap:'wrap'}}>
+                <span style={{fontSize:11, fontWeight:700, borderRadius:7,
+                               padding:'2px 8px', background:'#e0f2fe', color:'#1f6f8b'}}>
+                  คงเหลือ {v.totalQty.toLocaleString()} ชิ้น
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {filteredVendors.length === 0 && (
+        <div style={{textAlign:'center', padding:'40px 20px', color:'var(--muted)', fontSize:14}}>
+          ไม่พบ Supplier "{vendorSearch}"
+        </div>
+      )}
+
+      {/* Products without vendor */}
+      {!vendorSearch && (
+        <div style={{fontSize:11, color:'var(--muted)', textAlign:'center', padding:'4px 0'}}>
+          มีสินค้าอีก {products.filter(p=>!p.vendor).length} รายการที่ยังไม่ระบุ Supplier
+        </div>
+      )}
+    </div>
+  );
+
+  // ── STEP 2: สินค้าใน Supplier ────────────────────────────────────────────
+  const vendor = vendorMap[selVendor];
+  return (
+    <div style={{display:'flex', flexDirection:'column', gap:12}}>
+
+      {/* Header */}
+      <div style={{display:'flex', alignItems:'center', gap:10}}>
+        <button onClick={() => { setStep(1); setSearch(''); }}
+          style={{width:44,height:44,borderRadius:10,border:'1.5px solid var(--bdr)',
+                  background:'#fff',cursor:'pointer',fontSize:20,fontFamily:'inherit',flexShrink:0}}>
+          ←
+        </button>
+        <div style={{flex:1}}>
+          <div style={{fontSize:18, fontWeight:900, color:'var(--g-700)', fontFamily:'monospace'}}>
+            Supplier: {selVendor}
+          </div>
+          <div style={{fontSize:12, color:'var(--muted)'}}>
+            {vendor?.items.length || 0} รายการ · stock รวม {(vendor?.totalQty||0).toLocaleString()} ชิ้น
+          </div>
+        </div>
+      </div>
+
+      {/* Search + Scan + Sort */}
+      <div style={{display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'}}>
+        <input type="text" placeholder="🔍 ค้นหา SKU / ชื่อ / บาร์โค้ด..."
+          value={search} onChange={e => setSearch(e.target.value.toUpperCase())}
+          style={{flex:1, minWidth:160, padding:'9px 12px', borderRadius:10,
+                  border:'1.5px solid var(--bdr)', fontSize:13, fontFamily:'inherit'}}/>
+        <ScanButton size={44} onScan={sku => setSearch(sku)}/>
+        {search && (
+          <button onClick={() => setSearch('')}
+            style={{width:44,height:44,borderRadius:10,border:'1.5px solid var(--bdr)',
+                    background:'#fff',cursor:'pointer',fontSize:18,color:'var(--muted)',
+                    fontFamily:'inherit',flexShrink:0}}>
+            ✕
+          </button>
+        )}
+      </div>
+
+      {/* Sort tabs */}
+      <div style={{display:'flex', gap:6}}>
+        {[
+          {v:'name', l:'🔤 ชื่อ'},
+          {v:'qty',  l:'📦 stock'},
+          {v:'date', l:'📅 ซื้อล่าสุด'},
+        ].map(opt => (
+          <button key={opt.v} onClick={() => setSort(opt.v)}
+            style={{padding:'6px 14px', borderRadius:20, border:'1.5px solid var(--bdr)',
+                    background: sort===opt.v ? 'var(--g-700)' : '#fff',
+                    color: sort===opt.v ? '#fff' : 'var(--text)',
+                    fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'inherit',
+                    whiteSpace:'nowrap'}}>
+            {opt.l}
+          </button>
+        ))}
+        <div style={{marginLeft:'auto',fontSize:12,color:'var(--muted)',alignSelf:'center'}}>
+          {visibleProducts.length} รายการ
+        </div>
+      </div>
+
+      {/* Product table */}
+      {visibleProducts.length === 0 ? (
+        <div style={{textAlign:'center', padding:'40px 16px', color:'var(--muted)'}}>
+          {search ? 'ไม่พบ "'+search+'"' : 'ไม่มีสินค้า'}
+        </div>
+      ) : (
+        <div style={{display:'flex', flexDirection:'column', gap:0,
+                     border:'1.5px solid var(--bdr)', borderRadius:12, overflow:'hidden'}}>
+          {/* Table header */}
+          <div style={{display:'grid',
+                       gridTemplateColumns:'1fr 60px 60px 80px',
+                       background:'#f8fafc', padding:'10px 14px',
+                       fontSize:11, fontWeight:800, color:'var(--muted)',
+                       borderBottom:'1.5px solid var(--bdr)',
+                       gap:8, textAlign:'right'}}>
+            <div style={{textAlign:'left'}}>สินค้า</div>
+            <div>stock</div>
+            <div>ต้นทุน</div>
+            <div>ซื้อล่าสุด</div>
+          </div>
+
+          {visibleProducts.map(function(p, idx){
+            const isLow  = (p.qty||0) <= 5;
+            const isZero = (p.qty||0) === 0;
+            const bg = isZero ? '#fff5f5' : isLow ? '#fffbeb' : idx%2===0 ? '#fff' : '#fafafa';
+
+            return (
+              <div key={p.sku}
+                style={{display:'grid',
+                        gridTemplateColumns:'1fr 60px 60px 80px',
+                        padding:'10px 14px', gap:8,
+                        background:bg,
+                        borderBottom: idx < visibleProducts.length-1 ? '1px solid #f1f5f9' : 'none',
+                        alignItems:'center'}}>
+
+                {/* Name + SKU */}
+                <div>
+                  <div style={{fontSize:13, fontWeight:700, color:'var(--text)',
+                               whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>
+                    {p.name || p.sku}
+                  </div>
+                  <div style={{fontSize:11, color:'var(--muted)', marginTop:1, display:'flex', gap:6, flexWrap:'wrap'}}>
+                    <span style={{fontFamily:'monospace'}}>{p.sku}</span>
+                    {p.cat && <span style={{background:'#e0f2fe',color:'#1f6f8b',
+                                            borderRadius:5,padding:'0 5px'}}>{p.cat}</span>}
+                  </div>
+                </div>
+
+                {/* Stock qty */}
+                <div style={{textAlign:'right'}}>
+                  <div style={{
+                    fontSize:18, fontWeight:800, fontFamily:'monospace',
+                    color: isZero ? 'var(--dang)' : isLow ? '#b45309' : 'var(--g-700)',
+                  }}>
+                    {p.qty ?? '—'}
+                  </div>
+                  {isZero && <div style={{fontSize:9,color:'var(--dang)',fontWeight:700}}>หมด</div>}
+                  {isLow && !isZero && <div style={{fontSize:9,color:'#b45309',fontWeight:700}}>น้อย</div>}
+                </div>
+
+                {/* Cost */}
+                <div style={{textAlign:'right', fontSize:12, color:'var(--muted)', fontWeight:600}}>
+                  {p.cost ? '฿'+p.cost.toLocaleString() : '—'}
+                </div>
+
+                {/* Last purchase */}
+                <div style={{textAlign:'right'}}>
+                  {p.lastPurchaseQty
+                    ? <div style={{fontSize:12, fontWeight:700, color:'var(--text)'}}>
+                        {p.lastPurchaseQty} ชิ้น
+                      </div>
+                    : <div style={{fontSize:12, color:'var(--muted)'}}>—</div>}
+                  <div style={{fontSize:10, color:'var(--muted)', marginTop:1}}>
+                    {fmtDate(p.lastPurchaseDate)}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Summary bar */}
+      {visibleProducts.length > 0 && (
+        <div style={{display:'flex', gap:12, padding:'12px 14px',
+                     background:'#f8fafc', borderRadius:10,
+                     border:'1.5px solid var(--bdr)', flexWrap:'wrap'}}>
+          {[
+            { label:'รายการ',   val: visibleProducts.length,
+              c:'var(--text)' },
+            { label:'หมดสต็อก', val: visibleProducts.filter(p=>(p.qty||0)===0).length,
+              c:'var(--dang)' },
+            { label:'stock น้อย', val: visibleProducts.filter(p=>(p.qty||0)>0&&(p.qty||0)<=5).length,
+              c:'#b45309' },
+            { label:'stock รวม', val: visibleProducts.reduce((s,p)=>s+(p.qty||0),0).toLocaleString(),
+              c:'var(--g-700)' },
+          ].map(item => (
+            <div key={item.label} style={{textAlign:'center', flex:1, minWidth:60}}>
+              <div style={{fontSize:18, fontWeight:800, color:item.c}}>{item.val}</div>
+              <div style={{fontSize:10, color:'var(--muted)', fontWeight:600}}>{item.label}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, SupplierView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal });

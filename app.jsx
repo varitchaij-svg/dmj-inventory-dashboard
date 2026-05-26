@@ -8,6 +8,7 @@ const TABS = [
   { id: "stock",         label: "⚠️ สต๊อก & แจ้งเตือน",    icon: I.alert },
   { id: "storage",       label: "🗺️ ตำแหน่งคลัง",           icon: I.warehouse },
   { id: "stockcount",    label: "📊 นับ stock คลัง",         icon: I.alert },
+  { id: "supplier",      label: "🏭 สินค้าตาม Supplier",     icon: I.warehouse },
   { id: "frontstore",    label: "🏪 เช็คหน้าร้าน",           icon: I.store },
   { id: "transfers",     label: "🔄 โอน/ปรับ/ยกมา",        icon: I.arrowR },
   { id: "orders",        label: "📋 รายการสั่งของ",         icon: I.cart },
@@ -26,9 +27,9 @@ const ROLE_PASSWORDS = {
   "SALE":  "saler",        // พนักงานขาย
 };
 const ROLE_TABS = {
-  owner:      ["overview","categories","trends","stock","storage","stockcount","frontstore","transfers","orders","ordersummary","upload","connect","labels"],
+  owner:      ["overview","categories","trends","stock","storage","stockcount","supplier","frontstore","transfers","orders","ordersummary","upload","connect","labels"],
   employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","labels"],
-  warehouse:  ["categories","stock","storage","stockcount","transfers","orders","ordersummary","labels"],
+  warehouse:  ["categories","stock","storage","stockcount","supplier","transfers","orders","ordersummary","labels"],
   frontstore: ["categories","stock","frontstore","orders","labels"],
   saler:      ["categories","stock","orders","labels"],
 };
@@ -422,6 +423,7 @@ function App() {
         {activeTab === "stock"        && <StockView data={data} role={role}/>}
         {activeTab === "storage"      && <StorageView data={data}/>}
         {activeTab === "stockcount"   && <StockCountView data={data}/>}
+        {activeTab === "supplier"     && <SupplierView data={data}/>}
         {activeTab === "frontstore"   && <FrontStoreView data={data} role={role}/>}
         {activeTab === "transfers"    && <TransferView data={data}/>}
         {activeTab === "orders"       && <OrderListView data={data}/>}
