@@ -230,6 +230,17 @@ function App() {
     };
   }, []);
 
+  // ── Auto-sync when on orders tab ──
+  // Fetch immediately when entering orders/ordersummary, then poll every 60 s
+  usE(() => {
+    if (!role) return;
+    const ORDER_TABS = ["orders", "ordersummary"];
+    if (!ORDER_TABS.includes(tab)) return;
+    if (navigator.onLine) fetchFromSheet();
+    const id = setInterval(() => { if (navigator.onLine) fetchFromSheet(); }, 60000);
+    return () => clearInterval(id);
+  }, [tab, role]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleDataLoaded = usC((newData) => {
     const enriched = enrichData(newData);
     setData(enriched);
