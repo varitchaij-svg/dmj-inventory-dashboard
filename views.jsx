@@ -1130,52 +1130,39 @@ function CategoryView({ data, role }) {
           </div>
         )}
 
-        {/* ── Supplier list ── */}
+        {/* ── Supplier input ── */}
         {allVendors.length > 0 && !isGlobalSearch && (
-          <div style={{marginTop:10,
-                       border:"1.5px solid var(--bdr)", borderRadius:12, overflow:"hidden"}}>
-            {/* Header row */}
-            <div style={{display:"flex", alignItems:"center", justifyContent:"space-between",
-                         padding:"10px 14px", background:"#f8fafc",
-                         borderBottom:"1.5px solid var(--bdr)"}}>
-              <span style={{fontSize:13, fontWeight:700}}>🏭 ดูตาม Supplier</span>
-              {globalVendor && (
-                <button onClick={() => { setGlobalVendor(null); setShowAll(false); }}
-                  style={{padding:"4px 12px", borderRadius:20, border:"1.5px solid var(--bdr)",
-                          background:"#fff", fontSize:12, fontWeight:700, cursor:"pointer",
-                          fontFamily:"inherit", color:"var(--muted)"}}>
-                  ✕ ล้าง
-                </button>
-              )}
-            </div>
-            {/* List rows */}
-            {allVendors.map((v, idx) => {
-              const isActive = globalVendor === v.code;
-              const isLast = idx === allVendors.length - 1;
-              return (
-                <button key={v.code}
-                  onClick={() => { setGlobalVendor(isActive ? null : v.code); setShowAll(false); }}
-                  style={{
-                    display:"flex", alignItems:"center", gap:10, width:"100%",
-                    padding:"11px 14px",
-                    background: isActive ? "var(--g-700)" : "#fff",
-                    border:"none",
-                    borderBottom: isLast ? "none" : "1px solid #f1f5f9",
-                    cursor:"pointer", fontFamily:"inherit", textAlign:"left",
-                  }}>
-                  <span style={{fontSize:14, fontWeight:800, fontFamily:"monospace",
-                                color: isActive ? "#fff" : "var(--g-700)", flex:1}}>
-                    {v.code}
-                  </span>
-                  <span style={{fontSize:12, color: isActive ? "rgba(255,255,255,.7)" : "var(--muted)"}}>
-                    {v.count} รายการ
-                  </span>
-                  <span style={{fontSize:14, color: isActive ? "rgba(255,255,255,.6)" : "var(--muted)"}}>
-                    {isActive ? "✓" : "›"}
-                  </span>
-                </button>
-              );
-            })}
+          <div style={{marginTop:10, position:"relative"}}>
+            <datalist id="vendor-list">
+              {allVendors.map(v => <option key={v.code} value={v.code}/>)}
+            </datalist>
+            <input
+              list="vendor-list"
+              placeholder="🏭 พิมพ์ชื่อ Supplier..."
+              value={globalVendor || ""}
+              onChange={e => {
+                const val = e.target.value.trim();
+                const match = allVendors.find(v => v.code.toUpperCase() === val.toUpperCase());
+                setGlobalVendor(match ? match.code : (val === "" ? null : val || null));
+                setShowAll(false);
+              }}
+              style={{
+                width:"100%", padding:"11px 40px 11px 14px",
+                borderRadius:10, fontSize:14, fontFamily:"monospace",
+                fontWeight:700,
+                border: globalVendor ? "2px solid var(--g-500)" : "1.5px solid var(--bdr)",
+                background: globalVendor ? "#f0fdf4" : "#fff",
+                boxSizing:"border-box", outline:"none",
+              }}
+            />
+            {globalVendor && (
+              <button onClick={() => { setGlobalVendor(null); setShowAll(false); }}
+                style={{position:"absolute", right:10, top:"50%", transform:"translateY(-50%)",
+                        background:"none", border:"none", cursor:"pointer",
+                        fontSize:18, color:"var(--muted)", lineHeight:1, padding:"4px"}}>
+                ✕
+              </button>
+            )}
           </div>
         )}
       </div>
