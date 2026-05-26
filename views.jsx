@@ -676,17 +676,24 @@ function OverviewView({ data, range, setRange, role }) {
                   <td style={{color:"var(--light)",fontWeight:700}}>{i+1}</td>
                   <td>
                     <div style={{display:"flex",alignItems:"center",gap:10}}>
-                      {p.imageUrl ? (
-                        <div style={{width:36,height:36,borderRadius:6,
-                                     backgroundImage:`url("${p.imageUrl}")`,
-                                     backgroundSize:"contain",backgroundPosition:"center",
-                                     backgroundRepeat:"no-repeat",backgroundColor:"#fff",
-                                     border:"1px solid var(--bdr)",flexShrink:0}}/>
-                      ) : (
-                        <div style={{width:36,height:36,borderRadius:6,
-                                     background:p.color?p.color.hex+"33":"var(--g-50)",
-                                     border:p.color?`2px solid ${p.color.hex}`:"1px solid var(--bdr)",flexShrink:0}}/>
-                      )}
+                      <div style={{position:"relative",flexShrink:0}}>
+                        {p.imageUrl ? (
+                          <div style={{width:36,height:36,borderRadius:6,
+                                       backgroundImage:`url("${p.imageUrl}")`,
+                                       backgroundSize:"contain",backgroundPosition:"center",
+                                       backgroundRepeat:"no-repeat",backgroundColor:"#fff",
+                                       border:"1px solid var(--bdr)"}}/>
+                        ) : (
+                          <div style={{width:36,height:36,borderRadius:6,
+                                       background:p.color?p.color.hex+"33":"var(--g-50)",
+                                       border:p.color?`2px solid ${p.color.hex}`:"1px solid var(--bdr)"}}/>
+                        )}
+                        {p.imageUrl && p.color && (
+                          <span style={{position:"absolute",bottom:2,right:2,width:9,height:9,
+                                        borderRadius:"50%",background:p.color.hex,
+                                        border:"1.5px solid #fff",boxShadow:"0 1px 3px rgba(0,0,0,.3)"}}/>
+                        )}
+                      </div>
                       <div>
                         <span className="skucode" style={{fontSize:10}}>{p.sku}</span>
                         <div style={{fontWeight:500,marginTop:2}}>{p.name}</div>
@@ -756,17 +763,24 @@ function OverviewView({ data, range, setRange, role }) {
                       }}>
                         {i===0?"🥇":i===1?"🥈":i===2?"🥉":`#${i+1}`}
                       </span>
-                      {p.imageUrl ? (
-                        <div style={{width:36,height:36,borderRadius:6,
-                                     backgroundImage:`url("${p.imageUrl}")`,
-                                     backgroundSize:"contain",backgroundPosition:"center",
-                                     backgroundRepeat:"no-repeat",backgroundColor:"#fff",
-                                     border:"1px solid var(--bdr)",flexShrink:0}}/>
-                      ) : (
-                        <div style={{width:36,height:36,borderRadius:6,flexShrink:0,
-                                     background: p.color ? p.color.hex+"33" : "var(--g-50)",
-                                     border: p.color ? `2px solid ${p.color.hex}` : "1px solid var(--bdr)"}}/>
-                      )}
+                      <div style={{position:"relative",flexShrink:0}}>
+                        {p.imageUrl ? (
+                          <div style={{width:36,height:36,borderRadius:6,
+                                       backgroundImage:`url("${p.imageUrl}")`,
+                                       backgroundSize:"contain",backgroundPosition:"center",
+                                       backgroundRepeat:"no-repeat",backgroundColor:"#fff",
+                                       border:"1px solid var(--bdr)"}}/>
+                        ) : (
+                          <div style={{width:36,height:36,borderRadius:6,
+                                       background: p.color ? p.color.hex+"33" : "var(--g-50)",
+                                       border: p.color ? `2px solid ${p.color.hex}` : "1px solid var(--bdr)"}}/>
+                        )}
+                        {p.imageUrl && p.color && (
+                          <span style={{position:"absolute",bottom:2,right:2,width:9,height:9,
+                                        borderRadius:"50%",background:p.color.hex,
+                                        border:"1.5px solid #fff",boxShadow:"0 1px 3px rgba(0,0,0,.3)"}}/>
+                        )}
+                      </div>
                       <div style={{flex:1, minWidth:0}}>
                         <div style={{fontSize:11.5, fontWeight:600,
                                      overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
@@ -2303,6 +2317,11 @@ function TrendsView({ data }) {
                                    border:"2px solid #fff",boxShadow:"0 2px 8px rgba(0,0,0,.12)"}}/>
                     ) : <div style={{fontSize:22,opacity:.4,color:"var(--g-500)"}}>{I.leaf}</div>}
                   </div>
+                )}
+                {p.imageUrl && p.color && (
+                  <span style={{position:"absolute",bottom:14,right:14,width:14,height:14,
+                                borderRadius:"50%",background:p.color.hex,
+                                border:"2px solid #fff",boxShadow:"0 1px 4px rgba(0,0,0,.3)"}}/>
                 )}
                 <span className="chip" style={{
                   position:"absolute", top:6, left:6,
@@ -4006,18 +4025,26 @@ const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty
            transition:"border-color .2s, background .2s",
            boxShadow: hasVal ? "0 1px 3px rgba(0,0,0,.05)" : "none",
          }}>
-      {p.imageUrl ? (
-        <div onClick={() => onImageClick({url:p.imageUrl,name:p.name})}
-             style={{width:"100%",aspectRatio:"4/3",borderRadius:10,cursor:"zoom-in",
-                     backgroundImage:`url("${p.imageUrl}")`,backgroundSize:"contain",
-                     backgroundPosition:"center",backgroundRepeat:"no-repeat",
-                     backgroundColor:"#f8f9fa",border:"1px solid var(--bdr)"}}/>
-      ) : (
-        <div style={{width:"100%",aspectRatio:"4/3",borderRadius:10,
-                     background:"var(--g-50)",border:"1px solid var(--bdr)",
-                     display:"flex",alignItems:"center",justifyContent:"center",
-                     fontSize:48,color:"var(--g-300)"}}>📦</div>
-      )}
+      <div style={{position:"relative"}}>
+        {p.imageUrl ? (
+          <div onClick={() => onImageClick({url:p.imageUrl,name:p.name})}
+               style={{width:"100%",aspectRatio:"4/3",borderRadius:10,cursor:"zoom-in",
+                       backgroundImage:`url("${p.imageUrl}")`,backgroundSize:"contain",
+                       backgroundPosition:"center",backgroundRepeat:"no-repeat",
+                       backgroundColor:"#f8f9fa",border:"1px solid var(--bdr)"}}/>
+        ) : (
+          <div style={{width:"100%",aspectRatio:"4/3",borderRadius:10,
+                       background:"var(--g-50)",border:"1px solid var(--bdr)",
+                       display:"flex",alignItems:"center",justifyContent:"center",
+                       fontSize:48,color:"var(--g-300)"}}>📦</div>
+        )}
+        {p.imageUrl && p.color && (
+          <span style={{position:"absolute",bottom:8,right:8,width:12,height:12,
+                        borderRadius:"50%",background:p.color.hex,
+                        border:"2px solid #fff",boxShadow:"0 1px 4px rgba(0,0,0,.3)",
+                        pointerEvents:"none"}}/>
+        )}
+      </div>
       <div>
         <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap",marginBottom:2}}>
           <span className="skucode" style={{fontSize:10}}>{p.sku}</span>
@@ -4662,23 +4689,31 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
                   <tr key={sku} style={{background: isSaved ? "#f0fdf4" : undefined}}>
                     <td>
                       <div style={{display:"flex",alignItems:"center",gap:10}}>
-                        {p && p.imageUrl ? (
-                          <div onClick={() => setLightbox({url:p.imageUrl, name:p.name})}
-                               style={{width:52,height:52,borderRadius:8,
-                                       backgroundImage:`url("${p.imageUrl}")`,
-                                       backgroundSize:"contain",backgroundPosition:"center",
-                                       backgroundRepeat:"no-repeat",backgroundColor:"#fff",
-                                       border:"1px solid var(--bdr)",flexShrink:0,
-                                       cursor:"zoom-in", transition:"transform .15s, box-shadow .15s"}}
-                               onMouseEnter={e=>{e.currentTarget.style.transform="scale(1.1)";e.currentTarget.style.boxShadow="0 4px 12px rgba(0,0,0,.15)"}}
-                               onMouseLeave={e=>{e.currentTarget.style.transform="scale(1)";e.currentTarget.style.boxShadow=""}}
-                               title="คลิกเพื่อขยายรูป"/>
-                        ) : (
-                          <div style={{width:52,height:52,borderRadius:8,background:"var(--g-50)",
-                                       border:"1px solid var(--bdr)",flexShrink:0,
-                                       display:"flex",alignItems:"center",justifyContent:"center",
-                                       fontSize:18,color:"var(--g-300)"}}>📦</div>
-                        )}
+                        <div style={{position:"relative",flexShrink:0}}>
+                          {p && p.imageUrl ? (
+                            <div onClick={() => setLightbox({url:p.imageUrl, name:p.name})}
+                                 style={{width:52,height:52,borderRadius:8,
+                                         backgroundImage:`url("${p.imageUrl}")`,
+                                         backgroundSize:"contain",backgroundPosition:"center",
+                                         backgroundRepeat:"no-repeat",backgroundColor:"#fff",
+                                         border:"1px solid var(--bdr)",
+                                         cursor:"zoom-in", transition:"transform .15s, box-shadow .15s"}}
+                                 onMouseEnter={e=>{e.currentTarget.style.transform="scale(1.1)";e.currentTarget.style.boxShadow="0 4px 12px rgba(0,0,0,.15)"}}
+                                 onMouseLeave={e=>{e.currentTarget.style.transform="scale(1)";e.currentTarget.style.boxShadow=""}}
+                                 title="คลิกเพื่อขยายรูป"/>
+                          ) : (
+                            <div style={{width:52,height:52,borderRadius:8,background:"var(--g-50)",
+                                         border:"1px solid var(--bdr)",
+                                         display:"flex",alignItems:"center",justifyContent:"center",
+                                         fontSize:18,color:"var(--g-300)"}}>📦</div>
+                          )}
+                          {p && p.imageUrl && p.color && (
+                            <span style={{position:"absolute",bottom:2,right:2,width:9,height:9,
+                                          borderRadius:"50%",background:p.color.hex,
+                                          border:"1.5px solid #fff",boxShadow:"0 1px 3px rgba(0,0,0,.3)",
+                                          pointerEvents:"none"}}/>
+                          )}
+                        </div>
                         <div style={{flex:1}}>
                           <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
                             <span className="skucode" style={{fontSize:10}}>{sku}</span>
@@ -5190,6 +5225,12 @@ function StockCountView({ data }) {
                                    alignItems:'center',justifyContent:'center',fontSize:36}}>
                         📦
                       </div>
+                    )}
+                    {p && p.imageUrl && p.color && (
+                      <span style={{position:'absolute',bottom:8,left:8,width:12,height:12,
+                                    borderRadius:'50%',background:p.color.hex,
+                                    border:'2px solid #fff',boxShadow:'0 1px 4px rgba(0,0,0,.3)',
+                                    pointerEvents:'none'}}/>
                     )}
                     <div style={{position:'absolute',top:6,right:6,
                                  fontSize:10,fontWeight:800,borderRadius:10,padding:'3px 8px',
