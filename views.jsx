@@ -1545,10 +1545,10 @@ function CategoryView({ data, role }) {
           </div>
 
           {/* Controls — hide in global search / vendor mode */}
-          <Card style={{marginBottom:14, display: (isGlobalSearch||isGlobalVendor) ? "none" : undefined}}>
-            <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+          <Card style={{marginBottom:14, display: (isGlobalSearch||isGlobalVendor) ? "none" : undefined, width:"100%", boxSizing:"border-box"}}>
+            <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap",width:"100%",minWidth:0}}>
               {/* Search */}
-              <div style={{display:"flex",gap:8,flex:"1 1 220px",minWidth:200,alignItems:"center"}}>
+              <div style={{display:"flex",gap:8,flex:"1 1 220px",minWidth:0,alignItems:"center"}}>
                 <div style={{position:"relative",flex:1}}>
                   <input value={search} onChange={e=>setSearch(e.target.value)}
                          placeholder="ค้นหา SKU หรือชื่อสินค้า..."
@@ -1791,7 +1791,7 @@ function CategoryView({ data, role }) {
             </div>
           ) : (
             /* ── Grid view — existing card layout ── */
-            <div className="product-grid">
+            <div className="product-grid" style={{width:"100%",boxSizing:"border-box",minWidth:0}}>
               {visible.map((p, idx) => (
                 <div key={p.sku} style={{position:"relative"}}>
                   {(isGlobalSearch || isGlobalVendor) && p.cat && (
