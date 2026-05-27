@@ -117,31 +117,40 @@ function updateLockData(ss, lockKey, entries, datetime) {
   const sheet = ss.getSheetByName(SHEET_LOCKS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_LOCKS);
 
-  const data = sheet.getDataRange().getValues();
-  const dt   = datetime || new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" });
+  // ── ป้องกัน race condition: ให้ทำทีละคนเท่านั้น ──────────
+  const lock = LockService.getScriptLock();
+  const gotLock = lock.tryLock(8000); // รอสูงสุด 8 วินาที
+  if (!gotLock) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่ กรุณาลองใหม่");
 
-  for (const entry of entries) {
-    const sku = String(entry.sku || "").trim().toUpperCase();
-    if (!sku) continue;
+  try {
+    // อ่านข้อมูลล่าสุดหลังได้ lock (ไม่ใช่ก่อน — เพื่อให้เห็นการเปลี่ยนแปลงจากคนอื่น)
+    const data = sheet.getDataRange().getValues();
+    const dt   = datetime || new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" });
 
-    // หาแถวที่มี lockKey + SKU นี้อยู่แล้ว
-    let found = false;
-    for (let i = 1; i < data.length; i++) {
-      const rKey = String(data[i][COL_LOCK_KEY - 1]).trim();
-      const rSku = String(data[i][COL_LOCK_SKU - 1]).trim().toUpperCase();
-      if (rKey === lockKey && rSku === sku) {
-        sheet.getRange(i + 1, COL_LOCK_QTY).setValue(entry.qty);
-        sheet.getRange(i + 1, COL_LOCK_DATE).setValue(dt);
-        found = true;
-        break;
+    for (const entry of entries) {
+      const sku = String(entry.sku || "").trim().toUpperCase();
+      if (!sku) continue;
+
+      let found = false;
+      for (let i = 1; i < data.length; i++) {
+        const rKey = String(data[i][COL_LOCK_KEY - 1]).trim();
+        const rSku = String(data[i][COL_LOCK_SKU - 1]).trim().toUpperCase();
+        if (rKey === lockKey && rSku === sku) {
+          sheet.getRange(i + 1, COL_LOCK_QTY).setValue(entry.qty);
+          sheet.getRange(i + 1, COL_LOCK_DATE).setValue(dt);
+          found = true;
+          break;
+        }
+      }
+      if (!found && entry.isNew) {
+        sheet.appendRow([lockKey, sku, entry.qty, dt]);
       }
     }
-    // ถ้าไม่เจอและเป็น isNew → append แถวใหม่
-    if (!found && entry.isNew) {
-      sheet.appendRow([lockKey, sku, entry.qty, dt]);
-    }
+    return ok({ lockKey, updated: entries.length });
+
+  } finally {
+    lock.releaseLock(); // คืน lock เสมอ แม้จะ error
   }
-  return ok({ lockKey, updated: entries.length });
 }
 
 // ── 4) ลบ SKU ออกจากล็อค ────────────────────────────────────
