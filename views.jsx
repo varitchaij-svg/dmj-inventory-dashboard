@@ -5743,7 +5743,7 @@ function StockCountView({ data }) {
           }}
           onClose={function(){ setCalcPad(null); }}
         />
-        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+        <div style={{display:'flex',flexDirection:'column',gap:14,width:"100%",minWidth:0,boxSizing:"border-box"}}>
 
           {/* Header */}
           <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
@@ -6008,7 +6008,7 @@ function StockCountView({ data }) {
   if (step === 1) return (
     <>
       <Toast toast={toast} onClose={hideToast}/>
-      <div style={{display:'flex',flexDirection:'column',gap:16}}>
+      <div style={{display:'flex',flexDirection:'column',gap:16,width:"100%",minWidth:0,boxSizing:"border-box"}}>
         <div>
           <div style={{fontSize:16,fontWeight:800}}>📊 นับ stock คลัง</div>
           <div style={{fontSize:12,color:'var(--muted)',marginTop:2}}>ขั้น 1 — เลือกชั้น หรือค้นหาสินค้า</div>
@@ -6183,7 +6183,7 @@ function StockCountView({ data }) {
   if (step === 2) return (
     <>
       <Toast toast={toast} onClose={hideToast}/>
-      <div style={{display:'flex',flexDirection:'column',gap:14}}>
+      <div style={{display:'flex',flexDirection:'column',gap:14,width:"100%",minWidth:0,boxSizing:"border-box"}}>
         <div style={{display:'flex',alignItems:'center',gap:10}}>
           <button onClick={() => setStep(1)}
             style={{width:40,height:40,borderRadius:10,border:'1.5px solid var(--bdr)',
@@ -6257,7 +6257,7 @@ function StockCountView({ data }) {
         onClose={function(){ setCalcPad(null); }}
       />
 
-      <div style={{display:'flex',flexDirection:'column',gap:12}}>
+      <div style={{display:'flex',flexDirection:'column',gap:12,width:"100%",minWidth:0,boxSizing:"border-box"}}>
 
         <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
           <button onClick={() => setStep(2)}
