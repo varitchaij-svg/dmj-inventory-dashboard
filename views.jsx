@@ -2347,7 +2347,7 @@ function StockView({ data, role }) {
       </div>
 
       <Card padding={false}>
-        <div style={{overflowX:"auto"}}>
+        <div style={{overflowX:"auto", WebkitOverflowScrolling:"touch", maxWidth:"100%"}}>
           <table className="t t-stock">
             <thead><tr>
               <th style={{paddingLeft:20, width:56}}>รูป</th>
@@ -5031,8 +5031,7 @@ function FrontStoreView({ data, role }) {
       </Card>
 
       {!mounted ? (
-        <div style={{display:"grid",gap:10,
-                     gridTemplateColumns:"repeat(auto-fill, minmax(260px, 1fr))"}}>
+        <div className="front-grid">
           {Array.from({length:6}).map((_,i) => <SkeletonCard key={i}/>)}
         </div>
       ) : filtered.length === 0 ? (
@@ -5040,8 +5039,7 @@ function FrontStoreView({ data, role }) {
           <Empty title="ไม่พบสินค้า" sub="ลองเปลี่ยน filter หรือค้นหาใหม่"/>
         </Card>
       ) : (
-        <div style={{display:"grid",gap:10,
-                     gridTemplateColumns:"repeat(auto-fill, minmax(260px, 1fr))"}}>
+        <div className="front-grid">
           {paginated.map(p => (
             <FSCard key={p.sku} p={p}
               val={checkedQtys[p.sku]}
@@ -6573,7 +6571,7 @@ function TransferView({ data }) {
             <Empty title="ไม่พบข้อมูล" sub={search ? `ไม่พบ "${search}" · ลองค้นหาใหม่` : "ลองเลือก filter อื่น"}/>
           </div>
         ) : (
-          <div className="t-transfer-wrap" style={{maxHeight:600,overflowY:'auto',overflowX:'auto',WebkitOverflowScrolling:'touch'}}>
+          <div className="t-transfer-wrap" style={{maxHeight:600,overflowY:'auto',overflowX:'auto',WebkitOverflowScrolling:'touch',maxWidth:'100%'}}>
             <table className="t" style={{minWidth:560}}>
               <thead><tr>
                 <th>ประเภท</th>

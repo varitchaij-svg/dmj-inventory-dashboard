@@ -851,6 +851,24 @@
     border-radius: 6px;
   }
 
+/* ── FrontStore responsive grid ── */
+.front-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  width: 100%;
+}
+@media (min-width: 640px) {
+  .front-grid { grid-template-columns: repeat(3, 1fr); gap: 14px; }
+}
+@media (min-width: 900px) {
+  .front-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+}
+
+/* ── Table scroll wrappers — all screens ── */
+.t-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
+.t-wrap table { min-width: max-content; }
+
 </style>
 <script src="config.js"></script>
 </head>
