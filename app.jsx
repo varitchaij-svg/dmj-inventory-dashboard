@@ -329,7 +329,7 @@ function App() {
   })();
 
   return (
-    <div>
+    <div style={{maxWidth:"100vw", overflowX:"hidden", position:"relative"}}>
       {/* ─── Confirm modals ─── */}
       <ConfirmModal
         open={confirmAction?.type === "clearLocal"}
