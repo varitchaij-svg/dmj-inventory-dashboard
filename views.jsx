@@ -1475,7 +1475,7 @@ function CategoryView({ data, role }) {
           </div>
         </Card>
 
-        <div>
+        <div style={{minWidth:0, width:"100%", boxSizing:"border-box", overflow:"hidden"}}>
           {/* KPIs — hide in global search / vendor mode */}
           <div className="row row-4" style={{marginBottom:18, display: (isGlobalSearch||isGlobalVendor) ? "none" : undefined}}>
             <KPI label="สินค้าในหมวด" accent={color} icon={I.layers} value={fmtN(catStats.n)} sub="SKU"/>
