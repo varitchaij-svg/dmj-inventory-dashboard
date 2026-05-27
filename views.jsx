@@ -1180,15 +1180,6 @@ function CategoryView({ data, role }) {
   const [orderProduct, setOrderProduct] = uS(null);
   const [globalVendor, setGlobalVendor] = uS(null); // global supplier filter (all categories)
   const [viewMode, setViewMode] = uS('grid');
-  const pillNavRef = React.useRef(null);
-
-  // Scroll active pill into view when category changes
-  uE(() => {
-    if (!pillNavRef.current) return;
-    const activeBtn = pillNavRef.current.querySelector('[data-active="true"]');
-    if (activeBtn) activeBtn.scrollIntoView({ behavior:"smooth", block:"nearest", inline:"center" });
-  }, [active]);
-
   // ── helper: parse DD/MM/YYYY → Date ──
   const parseStockDate = (str) => {
     if (!str) return null;
@@ -1426,72 +1417,26 @@ function CategoryView({ data, role }) {
         )}
       </div>
 
-      {/* ── Category Pill Nav — hidden in vendor mode ── */}
-      <div className="cat-pill-nav" ref={pillNavRef}
-           style={{display: isGlobalVendor ? "none" : undefined}}>
-        {(() => {
-          const renderPill = (c, isNoStock) => {
-            const em = CAT_EMOJI[c] || "📁";
-            const isMto = c === "Made to Order จัดแบบพิเศษ";
-            const n = products.filter(p => p.cat === c).length;
-            const isActive = active === c;
-            const cc = catColor(c, allCats);
-            const shortName = isMto ? "MTO 🎁" : c.length > 7 ? c.slice(0,6)+"…" : c;
-            return (
-              <button key={c}
-                data-active={isActive ? "true" : "false"}
-                onClick={() => { setActive(c); setColorFilter(null); setSupplierFilter(null); setNewStockFilter(false); setShowAll(false); }}
-                style={{
-                  display:"inline-flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
-                  gap:2, padding:"8px 10px", minWidth:60, minHeight:60,
-                  borderRadius:14,
-                  border: isActive ? `2px solid ${cc}` : "1.5px solid var(--bdr)",
-                  background: isActive ? cc+"20" : "var(--paper)",
-                  cursor:"pointer", flexShrink:0,
-                  fontFamily:"inherit", transition:"all .15s",
-                  boxShadow: isActive ? `0 2px 8px ${cc}40` : "none",
-                  opacity: isNoStock && !isActive ? 0.4 : 1,
-                }}>
-                <span style={{fontSize:24, lineHeight:1}}>{em}</span>
-                <span style={{
-                  fontSize:10, fontWeight: isActive?700:500,
-                  color: isActive ? cc : "var(--muted)",
-                  lineHeight:1.3, textAlign:"center",
-                  maxWidth:64, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
-                }}>{shortName}</span>
-                <span style={{
-                  fontSize:9, fontWeight:700,
-                  color: isActive ? "#fff" : "var(--light)",
-                  background: isActive ? cc : "transparent",
-                  padding: isActive ? "1px 5px" : "0",
-                  borderRadius:99, lineHeight:1.4,
-                  minWidth: isActive ? 16 : 0,
-                  textAlign:"center",
-                }}>{n}</span>
-              </button>
-            );
-          };
-          const withStock = allCats.filter(c => products.some(p => p.cat === c && stockQty(p) > 0));
-          const noStock   = allCats.filter(c => !products.some(p => p.cat === c && stockQty(p) > 0));
-          return [
-            ...withStock.map(c => renderPill(c, false)),
-            noStock.length > 0 && (
-              <div key="__nostock_divider" style={{
-                display:"inline-flex", flexDirection:"column", alignItems:"center",
-                justifyContent:"center", alignSelf:"center",
-                flexShrink:0, margin:"0 2px", gap:3,
-              }}>
-                <div style={{width:1, height:36, background:"var(--bdr)"}}/>
-                <span style={{
-                  fontSize:8, color:"var(--muted)", fontWeight:700,
-                  whiteSpace:"nowrap", letterSpacing:.3,
-                }}>ไม่มีของ</span>
-              </div>
-            ),
-            ...noStock.map(c => renderPill(c, true)),
-          ];
-        })()}
-      </div>
+      {/* ── Category Dropdown (mobile) / removed pill nav ── */}
+      {!isGlobalVendor && (
+        <div style={{marginBottom:14}}>
+          <select
+            value={active}
+            onChange={e => { setActive(e.target.value); setColorFilter(null); setSupplierFilter(null); setNewStockFilter(false); setShowAll(false); }}
+            style={{
+              width:"100%", padding:"10px 14px", borderRadius:12,
+              border:"1.5px solid var(--bdr)", background:"#fafcf7",
+              fontSize:14, fontWeight:600, fontFamily:"inherit",
+              cursor:"pointer", boxSizing:"border-box",
+              color:"var(--text)", outline:"none",
+            }}>
+            {allCats.map(c => {
+              const n = products.filter(p => p.cat === c).length;
+              return <option key={c} value={c}>{CAT_EMOJI[c] || "📁"} {c} ({n})</option>;
+            })}
+          </select>
+        </div>
+      )}
 
       <div className="cat-layout"
            style={isGlobalVendor || isGlobalSearch ? {gridTemplateColumns:"1fr"} : undefined}>
