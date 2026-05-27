@@ -192,7 +192,11 @@
     display: grid;
     grid-template-columns: 220px 1fr;
     gap: 20px;
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
   }
+  .cat-layout > * { min-width: 0; }
   .cat-sidebar { align-self: start; position: sticky; top: 80px; }
 
   /* Product grid — mobile-first: 2 cols default, expand on larger screens */
@@ -251,6 +255,7 @@
       flex-direction: row;
       gap: 8px;
       overflow-x: auto;
+      overflow-y: visible;
       padding: 4px 2px 12px;
       margin-bottom: 10px;
       scrollbar-width: none;
@@ -259,6 +264,9 @@
       top: 100px;   /* below the 2-row sticky nav (~95px) */
       z-index: 45;  /* below nav z-index:50 */
       background: var(--bg);
+      max-width: 100%;
+      width: 100%;
+      box-sizing: border-box;
     }
     .cat-pill-nav::-webkit-scrollbar { display: none; }
     .cat-layout { gap: 12px; }

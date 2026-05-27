@@ -1338,7 +1338,7 @@ function CategoryView({ data, role }) {
   const color = catColor(active, allCats);
 
   return (
-    <div>
+    <div style={{width:"100%",minWidth:0,boxSizing:"border-box",overflowX:"hidden"}}>
       <div className="page-head">
         <div>
           <div className="page-title">หมวดหมู่สินค้า</div>
