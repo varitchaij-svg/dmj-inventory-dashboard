@@ -1179,6 +1179,7 @@ function CategoryView({ data, role }) {
   const [newStockFilter, setNewStockFilter] = uS(false);
   const [orderProduct, setOrderProduct] = uS(null);
   const [globalVendor, setGlobalVendor] = uS(null); // global supplier filter (all categories)
+  const [viewMode, setViewMode] = uS('grid'); // 'grid' | 'list'
   const pillNavRef = React.useRef(null);
 
   // Scroll active pill into view when category changes
@@ -1694,13 +1695,105 @@ function CategoryView({ data, role }) {
             </div>
           )}
 
+          {/* View toggle */}
+          <div style={{display:'flex',justifyContent:'flex-end',marginBottom:10,gap:4}}>
+            <button onClick={() => setViewMode('grid')}
+              style={{width:36,height:36,borderRadius:8,border:'1.5px solid var(--bdr)',
+                      background: viewMode==='grid' ? '#1b5e20' : '#fff',
+                      color: viewMode==='grid' ? '#fff' : 'var(--muted)',
+                      cursor:'pointer',fontSize:16,display:'flex',alignItems:'center',
+                      justifyContent:'center',transition:'background .15s'}}>⊞</button>
+            <button onClick={() => setViewMode('list')}
+              style={{width:36,height:36,borderRadius:8,border:'1.5px solid var(--bdr)',
+                      background: viewMode==='list' ? '#1b5e20' : '#fff',
+                      color: viewMode==='list' ? '#fff' : 'var(--muted)',
+                      cursor:'pointer',fontSize:16,display:'flex',alignItems:'center',
+                      justifyContent:'center',transition:'background .15s'}}>☰</button>
+          </div>
+
           {filtered.length === 0 ? (
             <Empty title="ไม่พบสินค้า" sub={isGlobalSearch || search ? "ลองค้นหาด้วยคำอื่น" : "หมวดนี้ยังไม่มีสินค้า"}/>
+          ) : viewMode === 'list' ? (
+            /* ── List view — compact horizontal rows ── */
+            <div style={{display:'flex',flexDirection:'column',gap:6}}>
+              {visible.map((p, idx) => {
+                const totalQty = stockQty(p);
+                const outOfStock = !p.isMTO && totalQty === 0;
+                const lowStock = !p.isMTO && totalQty > 0 && totalQty <= 36;
+                const accent2 = isGlobalSearch ? catColor(p.cat, allCats) : color;
+                return (
+                  <div key={p.sku} style={{
+                    display:'flex', alignItems:'center', gap:10,
+                    background:'#fff', borderRadius:12,
+                    border:'1.5px solid ' + (outOfStock ? '#fecaca' : lowStock ? '#fde68a' : 'var(--bdr)'),
+                    padding:'8px 10px',
+                    boxShadow:'0 1px 3px rgba(0,0,0,.05)',
+                    opacity: outOfStock ? 0.7 : 1,
+                  }}>
+                    {/* Image */}
+                    <div style={{width:60,height:60,borderRadius:8,flexShrink:0,overflow:'hidden',
+                                 background:'var(--g-50)',border:'1px solid var(--bdr)',
+                                 display:'flex',alignItems:'center',justifyContent:'center'}}>
+                      {p.imageUrl
+                        ? <img src={p.imageUrl} alt={p.name}
+                            style={{width:'100%',height:'100%',objectFit:'contain'}}/>
+                        : <span style={{fontSize:22}}>{CAT_EMOJI[p.cat] || '📦'}</span>}
+                    </div>
+                    {/* Info */}
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:2,flexWrap:'wrap'}}>
+                        <span style={{fontSize:10,fontWeight:700,color:'var(--g-500)',
+                                      fontFamily:'monospace',background:'var(--g-50)',
+                                      padding:'1px 5px',borderRadius:4}}>{p.sku}</span>
+                        {(isGlobalSearch||isGlobalVendor) && p.cat && (
+                          <span style={{fontSize:9,fontWeight:700,color:'#fff',
+                                        background:catColor(p.cat,allCats),
+                                        padding:'1px 6px',borderRadius:10}}>{p.cat}</span>
+                        )}
+                        {outOfStock && <span style={{fontSize:9,fontWeight:700,color:'#b91c1c',
+                          background:'#fee2e2',padding:'1px 6px',borderRadius:10}}>หมด</span>}
+                        {lowStock && !outOfStock && <span style={{fontSize:9,fontWeight:700,
+                          color:'#92400e',background:'#fef3c7',padding:'1px 6px',borderRadius:10}}>
+                          เหลือ {totalQty}</span>}
+                      </div>
+                      <div style={{fontSize:12,fontWeight:600,color:'var(--g-800)',lineHeight:1.3,
+                                   overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                        {p.name}
+                      </div>
+                      <div style={{display:'flex',gap:8,marginTop:3,alignItems:'center'}}>
+                        {!p.isMTO && (
+                          <span style={{fontSize:11,color:'var(--muted)'}}>
+                            🏪 {p.qtyStore||0} · 🏭 {p.qtyWH||0}
+                          </span>
+                        )}
+                        {role==='owner' && (
+                          <span style={{fontSize:11,fontWeight:700,color:accent2}}>
+                            {fmtB(p.price)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    {/* Order button */}
+                    {setOrderProduct && (
+                      <button onClick={() => !outOfStock && setOrderProduct(p)}
+                        disabled={outOfStock}
+                        style={{flexShrink:0,padding:'8px 12px',borderRadius:8,border:'none',
+                                background: outOfStock ? 'var(--g-100)' : '#1b5e20',
+                                color: outOfStock ? 'var(--muted)' : '#fff',
+                                fontSize:12,fontWeight:700,cursor: outOfStock?'not-allowed':'pointer',
+                                fontFamily:'inherit',whiteSpace:'nowrap',minHeight:44}}>
+                        {outOfStock ? '—' : '🛒 สั่ง'}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           ) : (
+            /* ── Grid view — existing card layout ── */
             <div className="product-grid">
               {visible.map((p, idx) => (
                 <div key={p.sku} style={{position:"relative"}}>
-                  {/* Category badge overlay in global search / vendor mode */}
                   {(isGlobalSearch || isGlobalVendor) && p.cat && (
                     <div style={{
                       position:"absolute",top:8,left:8,zIndex:2,
