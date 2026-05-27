@@ -3676,7 +3676,7 @@ function StorageView({ data }) {
 
   // ── NORMAL VIEW ───────────────────────────────────────────────────
   return (
-    <div className="storage-view">
+    <div className="storage-view" style={{width:"100%",minWidth:0,boxSizing:"border-box"}}>
 
       {/* ── Prominent search + quick-assign button ── */}
       <div style={{display:'flex',gap:8,marginBottom:16,alignItems:'center'}}>
@@ -3938,12 +3938,15 @@ function StorageView({ data }) {
         @media (max-width: 768px) {
           .shelf-row { grid-template-columns:repeat(4, 1fr); }
           .shelf-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+          .aisle-bays { gap: 12px; }
         }
         @media (max-width: 600px) {
           .shelf-row { grid-template-columns:repeat(2, 1fr); }
-          .lock { font-size:9px; }
-          .shelf-block { padding:4px; }
-          .lock-grid { gap:1px; }
+          .lock-grid { grid-template-columns:repeat(5, minmax(0,1fr)); grid-auto-rows:16px; gap:1px; }
+          .lock { font-size:8px; }
+          .shelf-block { padding:3px; border-radius:6px; }
+          .shelf-label { font-size:10px; padding:2px 3px; margin-bottom:3px; }
+          .aisle-bays { gap:8px; }
         }
       `}</style>
     </div>
@@ -4163,7 +4166,7 @@ function UnassignedProductCards({ products, lockData, shelves, onAssigned }) {
       </div>
 
       {/* Product cards */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(230px,1fr))",gap:12}}>
+      <div className="storage-product-grid" style={{display:"grid",gridTemplateColumns:"repeat(2, 1fr)",gap:12}}>
         {paginated.map(p => {
           const pWhQty = whQty(p);
           const isDone = !!done[p.sku];
@@ -5869,7 +5872,7 @@ function StockCountView({ data }) {
               {supplierProducts.length === 0 ? (
                 <Empty title="ไม่มีสินค้าในคลัง" sub="ซัพพลายเออร์นี้ไม่มีสินค้าในคลังขณะนี้"/>
               ) : (
-                <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:14}}>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))',gap:14}}>
                   {supplierProducts.filter(p => {
                     if (!stockSearch) return true;
                     const sq = stockSearch.trim().toUpperCase();
@@ -6138,7 +6141,7 @@ function StockCountView({ data }) {
                   ซอย {side}
                 </div>
                 <div style={{display:'grid',
-                             gridTemplateColumns:'repeat(auto-fill,minmax(120px,1fr))',gap:10}}>
+                             gridTemplateColumns:'repeat(auto-fill,minmax(90px,1fr))',gap:10}}>
                   {shelfList.filter(s => s[0] === side).map(sh => {
                     const shN = parseInt(sh.replace(/[A-Za-z]/g,''));
                     const isR = shN % 2 !== 0;
@@ -6333,7 +6336,7 @@ function StockCountView({ data }) {
             <Empty title="ล็อคนี้ยังไม่มีสินค้า" sub="เพิ่มสินค้าในหน้าตำแหน่งคลัง"/>
           </Card>
         ) : (
-          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:14}}>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))',gap:14}}>
             {lockSkus.filter(function(sku){
               if (!stockSearch) return true;
               const sq = stockSearch.trim().toUpperCase();
