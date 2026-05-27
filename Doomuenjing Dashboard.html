@@ -193,7 +193,11 @@
     display: grid;
     grid-template-columns: repeat(2, 1fr);
     gap: 10px;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
   }
+  .product-grid > * { min-width: 0; }
   @media (min-width: 900px) {
     .product-grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
   }
