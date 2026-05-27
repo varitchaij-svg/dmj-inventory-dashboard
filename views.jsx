@@ -1179,10 +1179,7 @@ function CategoryView({ data, role }) {
   const [newStockFilter, setNewStockFilter] = uS(false);
   const [orderProduct, setOrderProduct] = uS(null);
   const [globalVendor, setGlobalVendor] = uS(null); // global supplier filter (all categories)
-  // default list on narrow portrait screens, grid on wider/landscape
-  const [viewMode, setViewMode] = uS(() =>
-    window.innerWidth < 500 ? 'list' : 'grid'
-  );
+  const [viewMode, setViewMode] = uS('grid');
   const pillNavRef = React.useRef(null);
 
   // Scroll active pill into view when category changes
