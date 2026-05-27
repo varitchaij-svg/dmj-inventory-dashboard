@@ -525,10 +525,9 @@
   .fchip.active-color { font-weight: 700; }
 
   @media (max-width: 640px) {
-    .filter-bar { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
-    .filter-bar::-webkit-scrollbar { display: none; }
-    .filter-chips { flex-wrap: nowrap; }
-    .fchip { font-size: 11px; padding: 4px 10px; }
+    .filter-bar { flex-wrap: wrap; gap: 4px; }
+    .filter-chips { flex-wrap: wrap; gap: 4px; }
+    .fchip { font-size: 11px; padding: 4px 8px; }
   }
 
   /* KPI Card */
