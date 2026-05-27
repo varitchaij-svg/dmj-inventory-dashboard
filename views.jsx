@@ -6653,7 +6653,7 @@ async function syncOrderUpdate(order, updates) {
 // ─────────────────────────────────────────────────────────────────────
 // ORDER LIST VIEW
 // ─────────────────────────────────────────────────────────────────────
-function OrderItemRow({ order, onPatch, productMap }) {
+function OrderItemRow({ order, onPatch, productMap, role }) {
   const isPending = !order.status || order.status === "รอ" || order.status === "pending";
   const [prepQty, setPrepQty] = uS(() => order.preparedQty > 0 ? order.preparedQty : (order.orderQty || 0));
   const [imgOpen, setImgOpen] = uS(false);
@@ -6829,7 +6829,7 @@ function OrderItemRow({ order, onPatch, productMap }) {
           </button>
 
           {/* Done */}
-          {isPending && (
+          {isPending && role !== "frontstore" && role !== "saler" && (
             <button onClick={markComplete} style={{
               padding:"10px 16px",borderRadius:10,border:"none",
               background:pf?"#1b5e20":"#d1d5db",color:"#fff",
@@ -6898,7 +6898,7 @@ function stableOrderId(o, i) {
   return parts.join('_') || String(i);
 }
 
-function OrderListView({ data }) {
+function OrderListView({ data, role }) {
   const orders = data.orders || [];
   const [filter, setFilter] = uS("all");
   const [st, setSt] = uS(getOrdersState);
@@ -6974,7 +6974,7 @@ function OrderListView({ data }) {
           <Empty title="ไม่มีรายการใน filter นี้" sub="ลองเลือก filter อื่น"/>
         </div>
       ) : (
-        filtered.map(order => <OrderItemRow key={order.id} order={order} onPatch={patch} productMap={productMap}/>)
+        filtered.map(order => <OrderItemRow key={order.id} order={order} onPatch={patch} productMap={productMap} role={role}/>)
       )}
     </div>
   );

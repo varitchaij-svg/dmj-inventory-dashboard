@@ -28,7 +28,7 @@ const ROLE_PASSWORDS = {
 const ROLE_TABS = {
   owner:      ["overview","categories","trends","stock","storage","stockcount","frontstore","transfers","orders","ordersummary","upload","connect","labels"],
   employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","labels"],
-  warehouse:  ["categories","stock","storage","stockcount","transfers","orders","ordersummary","labels"],
+  warehouse:  ["categories","stock","storage","stockcount","orders","ordersummary","labels"],
   frontstore: ["categories","stock","frontstore","orders","labels"],
   saler:      ["categories","stock","orders","labels"],
 };
@@ -41,62 +41,155 @@ const ROLE_LABELS = {
 };
 
 function LoginScreen({ onLogin }) {
-  const [pwd, setPwd] = usS("");
+  const [pinTarget, setPinTarget] = usS(null);
+  const [pin, setPin] = usS("");
   const [err, setErr] = usS(false);
-  const [logoOk, setLogoOk] = usS(true);
 
-  const tryLogin = () => {
-    const role = ROLE_PASSWORDS[pwd] || ROLE_PASSWORDS[pwd.toUpperCase()];
-    if (role) { setErr(false); onLogin(role); }
-    else { setErr(true); }
+  const profiles = [
+    { role: "owner",      label: "เจ้าของ",   emoji: "👑", color: "#1f7f44", needPin: true  },
+    { role: "frontstore", label: "หน้าร้าน",  emoji: "🌸", color: "#1f6f8b", needPin: false },
+    { role: "warehouse",  label: "คลังสินค้า", emoji: "🏭", color: "#8a6a2f", needPin: false },
+    { role: "saler",      label: "Sale",       emoji: "💼", color: "#705d96", needPin: false },
+  ];
+
+  const handleSelect = (p) => {
+    if (p.needPin) {
+      setPinTarget(p);
+      setPin("");
+      setErr(false);
+    } else {
+      onLogin(p.role);
+    }
+  };
+
+  const handlePin = () => {
+    if (pin.toUpperCase() === "DMJ") {
+      onLogin(pinTarget.role);
+    } else {
+      setErr(true);
+      setPin("");
+    }
   };
 
   return (
     <div style={{
-      minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center",
-      background:"linear-gradient(135deg, #f0f7f0 0%, #e8f5e9 100%)"
+      minHeight:"100vh", display:"flex", flexDirection:"column",
+      alignItems:"center", justifyContent:"center",
+      background:"var(--bg)", padding:"24px 16px",
     }}>
-      <div style={{
-        background:"#fff", borderRadius:20, padding:40, maxWidth:360, width:"100%",
-        boxShadow:"0 8px 40px rgba(0,0,0,.12)", textAlign:"center"
-      }}>
-        {logoOk ? (
-          <div style={{
-            width:120, height:120, margin:"0 auto 16px",
-            display:"flex", alignItems:"center", justifyContent:"center"
-          }}>
-            <img src="logo.png" alt="Doomuenjing"
-                 style={{maxWidth:"100%", maxHeight:"100%", objectFit:"contain"}}
-                 onError={() => setLogoOk(false)}/>
-          </div>
-        ) : (
-          <div style={{
-            width:64, height:64, borderRadius:16, background:"var(--g-700)",
-            color:"#fff", fontSize:28, fontWeight:800,
-            display:"flex", alignItems:"center", justifyContent:"center",
-            margin:"0 auto 20px"
-          }}>ด</div>
-        )}
-        <div style={{fontSize:12, color:"var(--muted)", marginBottom:28}}>Inventory & Sales Dashboard</div>
-
-        <input
-          type="password" placeholder="รหัสผ่าน" value={pwd}
-          onChange={e => { setPwd(e.target.value); setErr(false); }}
-          onKeyDown={e => e.key === "Enter" && tryLogin()}
-          style={{
-            width:"100%", padding:"12px 16px", borderRadius:10, fontSize:15,
-            border: err ? "1.5px solid var(--dang)" : "1.5px solid var(--bdr)",
-            fontFamily:"inherit", textAlign:"center", letterSpacing:4,
-            boxSizing:"border-box", marginBottom:8
-          }}
-          autoFocus/>
-        {err && <div style={{fontSize:12, color:"var(--dang)", marginBottom:8}}>รหัสผ่านไม่ถูกต้อง</div>}
-
-        <button onClick={tryLogin} className="btn primary"
-                style={{width:"100%", padding:"12px", fontSize:14, fontWeight:700, marginTop:4}}>
-          เข้าสู่ระบบ
-        </button>
+      <div style={{marginBottom:8}}>
+        <img src="logo.png" alt="Doomuenjing"
+             style={{height:56, objectFit:"contain"}}
+             onError={e => e.target.style.display='none'}/>
       </div>
+      <div style={{fontSize:22, fontWeight:700, color:"var(--g-700)",
+                   marginBottom:4, letterSpacing:"-.01em"}}>Doomuenjing</div>
+      <div style={{fontSize:13, color:"var(--muted)", marginBottom:36}}>
+        เลือกบัญชีเพื่อเข้าใช้งาน
+      </div>
+
+      {/* Profile cards */}
+      <div style={{
+        display:"grid",
+        gridTemplateColumns:"repeat(2, 1fr)",
+        gap:16, width:"100%", maxWidth:480,
+      }}>
+        {profiles.map(p => (
+          <button key={p.role} onClick={() => handleSelect(p)}
+            style={{
+              display:"flex", flexDirection:"column",
+              alignItems:"center", justifyContent:"center",
+              gap:12, padding:"28px 16px",
+              background:"var(--paper)",
+              border:`2px solid var(--bdr)`,
+              borderRadius:20,
+              cursor:"pointer", fontFamily:"inherit",
+              transition:"all .15s",
+              boxShadow:"0 2px 8px rgba(0,0,0,.06)",
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.borderColor = p.color;
+              e.currentTarget.style.transform = "translateY(-3px)";
+              e.currentTarget.style.boxShadow = `0 8px 24px ${p.color}30`;
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.borderColor = "var(--bdr)";
+              e.currentTarget.style.transform = "translateY(0)";
+              e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,.06)";
+            }}>
+            <div style={{
+              width:72, height:72, borderRadius:18,
+              background: p.color + "18",
+              border: `2px solid ${p.color}40`,
+              display:"flex", alignItems:"center", justifyContent:"center",
+              fontSize:36,
+            }}>{p.emoji}</div>
+            <div style={{fontSize:14, fontWeight:700, color:"var(--text)"}}>
+              {p.label}
+            </div>
+            {p.needPin && (
+              <div style={{fontSize:11, color:"var(--muted)", display:"flex", alignItems:"center", gap:4}}>
+                <span>🔒</span> ต้องใส่รหัส
+              </div>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* PIN modal overlay */}
+      {pinTarget && (
+        <div onClick={() => setPinTarget(null)} style={{
+          position:"fixed", inset:0, background:"rgba(0,0,0,.5)",
+          display:"flex", alignItems:"center", justifyContent:"center",
+          zIndex:1000, padding:16, backdropFilter:"blur(4px)",
+        }}>
+          <div onClick={e => e.stopPropagation()} style={{
+            background:"var(--paper)", borderRadius:20, padding:"32px 28px",
+            width:"100%", maxWidth:320, boxShadow:"0 20px 60px rgba(0,0,0,.25)",
+          }}>
+            <div style={{textAlign:"center", marginBottom:20}}>
+              <div style={{fontSize:44, marginBottom:8}}>{pinTarget.emoji}</div>
+              <div style={{fontSize:17, fontWeight:700, color:"var(--text)"}}>
+                {pinTarget.label}
+              </div>
+              <div style={{fontSize:12, color:"var(--muted)", marginTop:4}}>
+                ใส่รหัสเพื่อเข้าใช้งาน
+              </div>
+            </div>
+            <input
+              autoFocus
+              type="password"
+              value={pin}
+              onChange={e => { setPin(e.target.value); setErr(false); }}
+              onKeyDown={e => e.key === "Enter" && handlePin()}
+              placeholder="รหัสผ่าน"
+              style={{
+                width:"100%", padding:"12px 16px", borderRadius:12,
+                border: err ? "2px solid var(--dang)" : "1.5px solid var(--bdr)",
+                fontSize:16, fontFamily:"inherit", boxSizing:"border-box",
+                textAlign:"center", letterSpacing:"0.2em",
+                background: err ? "var(--dang-t)" : "var(--g-50)",
+                outline:"none", marginBottom: err ? 6 : 16,
+              }}/>
+            {err && (
+              <div style={{color:"var(--dang)", fontSize:12, textAlign:"center", marginBottom:12}}>
+                รหัสไม่ถูกต้อง
+              </div>
+            )}
+            <button onClick={handlePin} style={{
+              width:"100%", padding:"12px", borderRadius:12,
+              background:"var(--g-600)", color:"#fff", border:"none",
+              fontSize:14, fontWeight:700, cursor:"pointer", fontFamily:"inherit",
+            }}>เข้าสู่ระบบ</button>
+            <button onClick={() => setPinTarget(null)} style={{
+              width:"100%", padding:"10px", borderRadius:12, marginTop:8,
+              background:"transparent", color:"var(--muted)",
+              border:"1px solid var(--bdr)", fontSize:13,
+              cursor:"pointer", fontFamily:"inherit",
+            }}>ยกเลิก</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -435,7 +528,7 @@ function App() {
         {activeTab === "stockcount"   && <StockCountView data={data}/>}
         {activeTab === "frontstore"   && <FrontStoreView data={data} role={role}/>}
         {activeTab === "transfers"    && <TransferView data={data}/>}
-        {activeTab === "orders"       && <OrderListView data={data}/>}
+        {activeTab === "orders"       && <OrderListView data={data} role={role}/>}
         {activeTab === "ordersummary" && <OrderSummaryView data={data} onPrintRequest={handleOrderPrint}/>}
         {activeTab === "upload"       && <UploadView currentData={data} onDataLoaded={handleDataLoaded}/>}
         {activeTab === "labels"       && <LabelPrintView data={data}
