@@ -171,6 +171,14 @@ function OverviewView({ data, range, setRange, role }) {
   const days   = (dayLabels && dayLabels.length > 0) ? dayLabels : [];
   const hasDailyData = days.length > 0;
 
+  // ── new states for month picker + comparison ──────────────────────
+  const [selMonth, setSelMonth] = uS(null);   // null = latest
+  const [cmpSel,   setCmpSel]   = uS([]);     // explicit month selection for comparison
+  const [showCmp,  setShowCmp]  = uS(false);
+
+  // activeMonth: currently selected month (for "รายเดือน" mode)
+  const activeMonth = selMonth || months[months.length - 1] || null;
+
   const monthlySeries = uM(() => months.map(m => {
     const cats = monthlyByCat[m] || {};
     let qty = 0, rev = 0;
@@ -192,12 +200,23 @@ function OverviewView({ data, range, setRange, role }) {
     });
   }, [days, dailyByCat, hasDailyData]);
 
+  // daily series filtered to selected month (for drill-down)
+  const selMonthDailySeries = uM(() => {
+    if (!hasDailyData || !activeMonth) return dailySeries;
+    const [mo, yr] = activeMonth.split("/");
+    if (!yr) return dailySeries;
+    return dailySeries.filter(s => {
+      const dp = s.day.split("/"); // DD/MM/YYYY
+      return dp.length >= 3 && dp[1] === mo && dp[2] === yr;
+    });
+  }, [activeMonth, dailySeries, hasDailyData]);
+
   const filtered = uM(() => {
     if (range === 'day') return dailySeries;
     if (range === 'year') return monthlySeries;
-    if (range === 'month') return monthlySeries.slice(-1);
+    if (range === 'month') return monthlySeries.filter(m => m.month === activeMonth);
     return monthlySeries;
-  }, [monthlySeries, dailySeries, range]);
+  }, [monthlySeries, dailySeries, range, activeMonth]);
 
   const sumRev = filtered.reduce((s,m) => s + m.rev, 0);
   const sumQty = filtered.reduce((s,m) => s + m.qty, 0);
@@ -232,7 +251,7 @@ function OverviewView({ data, range, setRange, role }) {
         }
       }
     } else {
-      const targetMonths = range === 'year' ? months : months.slice(-1);
+      const targetMonths = range === 'year' ? months : (activeMonth ? [activeMonth] : months.slice(-1));
       for (const m of targetMonths) {
         const cats = monthlyByCat[m] || {};
         for (const c of Object.keys(cats)) {
@@ -250,6 +269,7 @@ function OverviewView({ data, range, setRange, role }) {
 
   // Stacked chart: use daily or monthly series depending on mode
   const stackedSeries = uM(() => {
+    // รายวัน mode — use full daily data
     if (range === 'day' && hasDailyData) {
       return days.map(d => {
         const parts = d.split("/");
@@ -265,7 +285,25 @@ function OverviewView({ data, range, setRange, role }) {
         return row;
       });
     }
-    return months.map(m => {
+    // รายเดือน drill-down — show daily within selected month if available
+    if (range === 'month' && hasDailyData && selMonthDailySeries.length > 0) {
+      return selMonthDailySeries.map(s => {
+        const dp = s.day.split("/");
+        const label = dp.length >= 2 ? `${dp[0]}/${dp[1]}` : s.day;
+        const row = { label };
+        const cats = (dailyByCat || {})[s.day] || {};
+        let other = 0;
+        for (const c of Object.keys(cats)) {
+          if (topCats.includes(c)) row[c] = Math.round(cats[c].sales);
+          else other += cats[c].sales;
+        }
+        row["อื่นๆ"] = Math.round(other);
+        return row;
+      });
+    }
+    // ทั้งปี / รายเดือน (no daily) — use monthly data
+    const targetMonths = range === 'month' && activeMonth ? [activeMonth] : months;
+    return targetMonths.map(m => {
       const row = { label: monthLabel(m) };
       const cats = monthlyByCat[m] || {};
       let other = 0;
@@ -276,7 +314,7 @@ function OverviewView({ data, range, setRange, role }) {
       row["อื่นๆ"] = Math.round(other);
       return row;
     });
-  }, [months, days, monthlyByCat, dailyByCat, topCats, range, hasDailyData]);
+  }, [months, days, monthlyByCat, dailyByCat, topCats, range, hasDailyData, activeMonth, selMonthDailySeries]);
 
   const topSellers = uM(() =>
     [...products].filter(p => p.soldRev > 0 && !p.isMTO)
@@ -302,6 +340,26 @@ function OverviewView({ data, range, setRange, role }) {
   }, [products]);
 
   const [overviewModalP, setOverviewModalP] = uS(null);
+
+  // ── Comparison chart data (multi-select months) ──────────────────
+  const cmpData = uM(() => {
+    const activeTargets = cmpSel.length > 0 ? cmpSel : months.slice(-Math.min(3, months.length));
+    const topCatsForCmp = catShare.slice(0, 5).map(c => c.cat);
+    const bars = activeTargets.map(m => {
+      const cats = monthlyByCat[m] || {};
+      const row = { label: monthLabel(m) };
+      let total = 0, other = 0;
+      for (const c of Object.keys(cats)) {
+        total += cats[c].sales;
+        if (topCatsForCmp.includes(c)) row[c] = Math.round(cats[c].sales);
+        else other += cats[c].sales;
+      }
+      if (other > 0) row["อื่นๆ"] = Math.round(other);
+      row.total = Math.round(total);
+      return row;
+    });
+    return { bars, topCats: topCatsForCmp, activeTargets };
+  }, [cmpSel, months, monthlyByCat, catShare]);
 
   // ── Forecast calculations (owner only) ──
   const forecast = uM(() => {
@@ -399,7 +457,7 @@ function OverviewView({ data, range, setRange, role }) {
   const deltaDir  = deltaVal && parseFloat(deltaVal) < 0 ? 'down' : 'up';
   const subLabel  = range === 'day'
     ? (hasDailyData ? `${days.length} วัน (${dailySeries[0]?.label}–${dailySeries[dailySeries.length-1]?.label})` : "ยังไม่มีข้อมูลรายวัน")
-    : range === 'month' ? "เดือนล่าสุด"
+    : range === 'month' ? (activeMonth ? monthLabel(activeMonth) : "เดือนล่าสุด")
     : `${months.length} เดือนรวม`;
 
   return (
@@ -424,12 +482,35 @@ function OverviewView({ data, range, setRange, role }) {
         </div>
         <div className="page-actions">
           <Seg value={range} onChange={setRange} options={[
-            {value:"day",   label: hasDailyData ? `รายวัน (${days.length})` : "รายวัน"},
-            {value:"month", label:"เดือนนี้"},
+            {value:"day",   label:"รายวัน"},
+            {value:"month", label:"รายเดือน"},
             {value:"year",  label:"ทั้งปี"},
           ]}/>
         </div>
       </div>
+
+      {/* ── Month picker strip — เลือกเดือนเมื่ออยู่ใน "รายเดือน" ── */}
+      {range === 'month' && months.length > 1 && (
+        <div style={{
+          overflowX:'auto', display:'flex', gap:8, paddingBottom:6, marginBottom:16,
+          scrollbarWidth:'none', WebkitOverflowScrolling:'touch',
+        }}>
+          {months.map(m => (
+            <button key={m} onClick={() => setSelMonth(m)}
+              style={{
+                flexShrink:0, padding:'7px 16px', borderRadius:20,
+                border:'1.5px solid ' + (activeMonth === m ? '#1b5e20' : 'var(--bdr)'),
+                background: activeMonth === m ? '#1b5e20' : '#fff',
+                color: activeMonth === m ? '#fff' : 'var(--g-700)',
+                fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'inherit',
+                transition:'background .15s, color .15s, border-color .15s',
+                whiteSpace:'nowrap',
+              }}>
+              {monthLabel(m)}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className={`row ${role==='employee'?'row-2':'row-4'}`} style={{marginBottom: 20}}>
         {role === 'owner' && (
@@ -581,8 +662,15 @@ function OverviewView({ data, range, setRange, role }) {
       )}
 
       <div className="row row-12-5" style={{marginBottom: 20}}>
-        <Card title={range === 'day' ? "ยอดขายรายวัน · แยกหมวด" : "แนวโน้มยอดขายรายเดือน · แยกหมวด"}
-              sub={`แท่งซ้อน — Top 6 หมวด + อื่นๆ`}>
+        <Card title={
+          range === 'day' ? "ยอดขายรายวัน · แยกหมวด" :
+          range === 'month' ? (hasDailyData && selMonthDailySeries.length > 0
+            ? `ยอดขายรายวัน · ${activeMonth ? monthLabel(activeMonth) : ''}`
+            : `ยอดขายรายเดือน · ${activeMonth ? monthLabel(activeMonth) : ''}`)
+          : "แนวโน้มยอดขายรายเดือน · แยกหมวด"}
+              sub={range === 'month' && hasDailyData && selMonthDailySeries.length > 0
+                ? `${selMonthDailySeries.length} วัน · แท่งซ้อน Top 6 หมวด`
+                : 'แท่งซ้อน — Top 6 หมวด + อื่นๆ'}>
           {range === 'day' && !hasDailyData ? (
             <Empty icon={I.upload} title="ยังไม่มีข้อมูลรายวัน"
                    sub="อัปโหลด dailySales*.xlsx ในหน้าอัปโหลด แล้วกลับมาดูที่นี่"/>
@@ -605,7 +693,7 @@ function OverviewView({ data, range, setRange, role }) {
         </Card>
 
         <Card title="สัดส่วนยอดขายตามหมวด"
-              sub={range==='year' ? "ทั้งปี" : range==='day' ? `${days.length} วันล่าสุด` : "เดือนล่าสุด"}>
+              sub={range==='year' ? "ทั้งปี" : range==='day' ? `${days.length} วันล่าสุด` : (activeMonth ? monthLabel(activeMonth) : "เดือนล่าสุด")}>
           <div style={{display:"flex",alignItems:"center",gap:16}}>
             <ResponsiveContainer width={160} height={200}>
               <PieChart>
@@ -631,6 +719,98 @@ function OverviewView({ data, range, setRange, role }) {
           </div>
         </Card>
       </div>
+
+      {/* ─── Monthly Comparison Chart ─── */}
+      {months.length >= 2 && role === 'owner' && (
+        <div style={{marginBottom:20}}>
+          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10,flexWrap:'wrap'}}>
+            <span style={{fontSize:15,fontWeight:800,color:'var(--g-700)'}}>📊 เทียบยอดขายรายเดือน</span>
+            <span style={{fontSize:11,color:'var(--muted)'}}>เลือกเดือนที่ต้องการเปรียบเทียบ (สูงสุด 6)</span>
+            <button onClick={() => setShowCmp(v => !v)}
+              style={{marginLeft:'auto',fontSize:11,padding:'4px 12px',borderRadius:12,
+                      border:'1.5px solid var(--bdr)',fontFamily:'inherit',cursor:'pointer',
+                      background: showCmp ? '#1b5e20' : '#fff',
+                      color: showCmp ? '#fff' : 'var(--g-700)',fontWeight:600}}>
+              {showCmp ? '▲ ซ่อน' : '▼ แสดงกราฟ'}
+            </button>
+          </div>
+
+          {showCmp && (
+            <>
+              {/* Month multi-select chips */}
+              <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:14}}>
+                {months.map(m => {
+                  const activeTargets = cmpSel.length > 0 ? cmpSel : months.slice(-Math.min(3,months.length));
+                  const sel = activeTargets.includes(m);
+                  return (
+                    <button key={m} onClick={() => {
+                      const base = cmpSel.length > 0 ? cmpSel : months.slice(-Math.min(3,months.length));
+                      const next = base.includes(m)
+                        ? base.filter(x => x !== m)
+                        : [...base, m].slice(-6);
+                      setCmpSel(next);
+                    }}
+                    style={{
+                      padding:'5px 13px', borderRadius:16, cursor:'pointer',
+                      fontFamily:'inherit', fontSize:11, fontWeight:700,
+                      border:'1.5px solid ' + (sel ? '#1b5e20' : 'var(--bdr)'),
+                      background: sel ? '#e8f5e9' : '#fff',
+                      color: sel ? '#1b5e20' : 'var(--muted)',
+                      transition:'background .1s,color .1s,border-color .1s',
+                    }}>
+                      {sel ? '✓ ' : ''}{monthLabel(m)}
+                    </button>
+                  );
+                })}
+                {cmpSel.length > 0 && (
+                  <button onClick={() => setCmpSel([])}
+                    style={{padding:'5px 13px',borderRadius:16,fontSize:11,fontWeight:600,
+                            border:'1.5px solid var(--bdr)',background:'#fff',color:'var(--muted)',
+                            cursor:'pointer',fontFamily:'inherit'}}>
+                    ↩ รีเซ็ต
+                  </button>
+                )}
+              </div>
+
+              {/* Stacked bar — selected months comparison */}
+              <Card title="ยอดขายตามหมวด · เทียบรายเดือน"
+                    sub={`${cmpData.activeTargets.length} เดือน · แท่งซ้อน Top 5 หมวด`}>
+                <ResponsiveContainer width="100%" height={280}>
+                  <BarChart data={cmpData.bars} margin={{top:6,right:8,bottom:6,left:0}}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2eadd" vertical={false}/>
+                    <XAxis dataKey="label" tick={{fontSize:12,fill:"#5b6b5e"}} tickLine={false} axisLine={false}/>
+                    <YAxis tick={{fontSize:10,fill:"#94a194"}} tickLine={false} axisLine={false}
+                           tickFormatter={v => v>=1e6?`${(v/1e6).toFixed(1)}M`:v>=1e3?`${(v/1e3).toFixed(1)}K`:v}/>
+                    <Tooltip formatter={(v,n) => [fmtB(v), n]}/>
+                    <Legend wrapperStyle={{fontSize:11}} iconType="circle" iconSize={8}/>
+                    {cmpData.topCats.map(c => (
+                      <Bar key={c} dataKey={c} stackId="a" fill={catColor(c, allCats)}/>
+                    ))}
+                    <Bar dataKey="อื่นๆ" stackId="a" fill="#c9d6bf"/>
+                  </BarChart>
+                </ResponsiveContainer>
+              </Card>
+
+              {/* Line chart — total revenue trend across selected months */}
+              <Card title="ยอดขายรวม · เส้นแนวโน้ม" sub="เปรียบเทียบ total revenue รายเดือน" style={{marginTop:12}}>
+                <ResponsiveContainer width="100%" height={200}>
+                  <LineChart data={cmpData.bars} margin={{top:6,right:16,bottom:6,left:0}}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2eadd" vertical={false}/>
+                    <XAxis dataKey="label" tick={{fontSize:11,fill:"#5b6b5e"}} tickLine={false} axisLine={false}/>
+                    <YAxis tick={{fontSize:10,fill:"#94a194"}} tickLine={false} axisLine={false}
+                           tickFormatter={v => v>=1e6?`${(v/1e6).toFixed(1)}M`:v>=1e3?`${(v/1e3).toFixed(1)}K`:v}/>
+                    <Tooltip formatter={v => [fmtB(v), 'ยอดขายรวม']}/>
+                    <Line type="monotone" dataKey="total"
+                      stroke="var(--g-500)" strokeWidth={2.5}
+                      dot={{r:5,fill:"var(--g-500)",stroke:"#fff",strokeWidth:2}}
+                      name="ยอดรวม"/>
+                  </LineChart>
+                </ResponsiveContainer>
+              </Card>
+            </>
+          )}
+        </div>
+      )}
 
       {/* MTO Section */}
       {mtoGroups && mtoGroups.length > 0 && (
