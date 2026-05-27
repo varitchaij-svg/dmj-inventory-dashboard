@@ -5872,7 +5872,7 @@ function StockCountView({ data }) {
               {supplierProducts.length === 0 ? (
                 <Empty title="ไม่มีสินค้าในคลัง" sub="ซัพพลายเออร์นี้ไม่มีสินค้าในคลังขณะนี้"/>
               ) : (
-                <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))',gap:14}}>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10,width:"100%",minWidth:0,boxSizing:"border-box"}}>
                   {supplierProducts.filter(p => {
                     if (!stockSearch) return true;
                     const sq = stockSearch.trim().toUpperCase();
@@ -6336,7 +6336,7 @@ function StockCountView({ data }) {
             <Empty title="ล็อคนี้ยังไม่มีสินค้า" sub="เพิ่มสินค้าในหน้าตำแหน่งคลัง"/>
           </Card>
         ) : (
-          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))',gap:14}}>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10,width:"100%",minWidth:0,boxSizing:"border-box"}}>
             {lockSkus.filter(function(sku){
               if (!stockSearch) return true;
               const sq = stockSearch.trim().toUpperCase();
@@ -6411,20 +6411,20 @@ function StockCountView({ data }) {
                     </div>
 
                     {/* ±5 ±1 [input] ±1 ±5 */}
-                    <div style={{display:'flex',alignItems:'stretch',gap:3}}>
+                    <div style={{display:'flex',alignItems:'stretch',gap:2}}>
                       <button onClick={function(){ adjustQty(sku,-5); }}
-                        style={{flex:'0 0 36px',height:44,borderRadius:8,
+                        style={{flex:'0 0 28px',height:40,borderRadius:7,
                                 border:'1.5px solid var(--bdr)',background:'#fff',
-                                cursor:'pointer',fontSize:10,fontWeight:800,
-                                fontFamily:'inherit',color:'var(--dang)',
+                                cursor:'pointer',fontSize:9,fontWeight:800,
+                                fontFamily:'inherit',color:'var(--dang)',padding:0,
                                 opacity:num>=5?1:0.3}}>
                         −5
                       </button>
                       <button onClick={function(){ adjustQty(sku,-1); }}
-                        style={{flex:'0 0 36px',height:44,borderRadius:8,
+                        style={{flex:'0 0 28px',height:40,borderRadius:7,
                                 border:'1.5px solid var(--bdr)',background:'#fff',
-                                cursor:'pointer',fontSize:18,fontWeight:800,
-                                fontFamily:'inherit',color:'var(--dang)',
+                                cursor:'pointer',fontSize:16,fontWeight:800,
+                                fontFamily:'inherit',color:'var(--dang)',padding:0,
                                 opacity:num>=1?1:0.3}}>
                         −
                       </button>
@@ -6439,25 +6439,25 @@ function StockCountView({ data }) {
                         }}
                         placeholder={sys != null ? String(sys) : '0'}
                         style={{
-                          flex:1,textAlign:'center',padding:'6px 0',
-                          borderRadius:8,fontSize:18,fontWeight:800,
+                          flex:1,textAlign:'center',padding:'4px 0',
+                          borderRadius:7,fontSize:16,fontWeight:800,
                           fontFamily:'inherit',outline:'none',minWidth:0,
                           border:has?(matched?'2px solid var(--g-500)':'2px solid var(--dang)'):'1.5px solid var(--g-300)',
                           background:has?(matched?'#f0fdf4':'#fff5f5'):'#fff',
                           color:has?(matched?'var(--g-700)':'var(--dang)'):'var(--text)',
                         }}/>
                       <button onClick={function(){ adjustQty(sku,1); }}
-                        style={{flex:'0 0 36px',height:44,borderRadius:8,
+                        style={{flex:'0 0 28px',height:40,borderRadius:7,
                                 border:'1.5px solid var(--g-200)',background:'#f0fdf4',
-                                cursor:'pointer',fontSize:18,fontWeight:800,
-                                fontFamily:'inherit',color:'var(--g-700)'}}>
+                                cursor:'pointer',fontSize:16,fontWeight:800,
+                                fontFamily:'inherit',color:'var(--g-700)',padding:0}}>
                         +
                       </button>
                       <button onClick={function(){ adjustQty(sku,5); }}
-                        style={{flex:'0 0 36px',height:44,borderRadius:8,
+                        style={{flex:'0 0 28px',height:40,borderRadius:7,
                                 border:'1.5px solid var(--g-200)',background:'#f0fdf4',
-                                cursor:'pointer',fontSize:10,fontWeight:800,
-                                fontFamily:'inherit',color:'var(--g-700)'}}>
+                                cursor:'pointer',fontSize:9,fontWeight:800,
+                                fontFamily:'inherit',color:'var(--g-700)',padding:0}}>
                         +5
                       </button>
                     </div>
