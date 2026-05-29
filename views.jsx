@@ -6940,6 +6940,19 @@ function OrderItemRow({ order, onPatch, productMap, role }) {
   );
 }
 
+// Parse Thai short date "dd/MM/yy" or "dd/MM/yyyy" → ms timestamp
+function parseDateMs(s) {
+  if (!s) return NaN;
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return d.getTime();
+  // Try dd/MM/yy or dd/MM/yyyy
+  const m = String(s).match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if (!m) return NaN;
+  let [, day, mon, yr] = m;
+  yr = Number(yr); if (yr < 100) yr += 2000;
+  return new Date(yr, Number(mon) - 1, Number(day)).getTime();
+}
+
 // สร้าง stable ID จาก sku + date + qty ถ้าไม่มี id จาก sheet
 function stableOrderId(o, i) {
   if (o.id) return String(o.id);
@@ -6963,8 +6976,17 @@ function OrderListView({ data, role }) {
       // (order date ≤ markedAt). Otherwise trust the sheet — new order / ID collision.
       const sheetPending = !o.status || o.status === "รอ" || o.status === "pending";
       if (sheetPending && DONE_ST.has(local.status)) {
-        // Always trust localStorage Done — date parse failures should not erase Done status
-        return { ...o, id, ...local };
+        let keepLocal = true; // default: trust localStorage
+        if (local.markedAt && o.date) {
+          const orderMs  = parseDateMs(o.date);
+          const markedMs = parseDateMs(local.markedAt);
+          // If both dates parse OK, only keep if markedAt >= order date (same-day or later)
+          if (!isNaN(orderMs) && !isNaN(markedMs)) keepLocal = markedMs >= orderMs;
+        }
+        if (!keepLocal) {
+          const { status:_s, markedAt:_m, shipped:_sh, ...rest } = local;
+          return { ...o, id, ...rest };
+        }
       }
       return { ...o, id, ...local };
     });
@@ -7246,8 +7268,17 @@ function OrderSummaryView({ data, onPrintRequest }) {
       const local = st[id] || {};
       const sheetPending = !o.status || o.status === "รอ" || o.status === "pending";
       if (sheetPending && DONE_ST.has(local.status)) {
-        // Always trust localStorage Done — date parse failures should not erase Done status
+        let keepLocal = true;
+        if (local.markedAt && o.date) {
+          const orderMs  = parseDateMs(o.date);
+          const markedMs = parseDateMs(local.markedAt);
+          if (!isNaN(orderMs) && !isNaN(markedMs)) keepLocal = markedMs >= orderMs;
+        }
         const skuKey = (o.sku || '').trim().toUpperCase();
+        if (!keepLocal) {
+          const { status:_s, markedAt:_m, shipped:_sh, ...rest } = local;
+          return { ...o, id, ...rest, product: productMap[o.sku] || productMap[skuKey] };
+        }
         return { ...o, id, ...local, product: productMap[o.sku] || productMap[skuKey] };
       }
       const skuKey = (o.sku || '').trim().toUpperCase();
