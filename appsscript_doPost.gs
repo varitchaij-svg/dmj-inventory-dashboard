@@ -7,6 +7,9 @@
 const SHEET_PRODUCTS  = "อัพเดทจำนวนสินค้า";   // ชีตสินค้า (มี qty)
 const SHEET_ORDERS    = "รายการซื้อสินค้า";     // ชีต orders (สั่งซื้อ)
 const SHEET_LOCKS     = "ตำแหน่งจัดเก็บ";      // ชีต lock/ตำแหน่งคลัง
+const SHEET_TRANSFERS = "รายการโอนสินค้า";      // ชีต log การโอนสต๊อก
+const WH_NAME_SAI5    = "คลังสินค้าสาย5";
+const WH_NAME_FS      = "ดูเหมือนจริง";
 
 // ── คอลัมน์ในชีตสินค้า (นับจาก 1) ──────────────────────────
 const COL_PROD_SKU    = 1;   // A = รหัสสินค้า
@@ -88,18 +91,36 @@ function transferStock(ss, sku, qty) {
   const data = sheet.getDataRange().getValues();
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase() === sku.trim().toUpperCase()) {
-      const row   = i + 1;
-      const whQty = Number(data[i][COL_PROD_QTYWH - 1]) || 0;
-      const fsQty = Number(data[i][COL_PROD_QTYFS - 1]) || 0;
-      const actual = Math.min(qty, whQty); // ไม่โอนเกินที่มีในคลัง
+      const row    = i + 1;
+      const whQty  = Number(data[i][COL_PROD_QTYWH - 1]) || 0;
+      const fsQty  = Number(data[i][COL_PROD_QTYFS - 1]) || 0;
+      const actual = Math.min(qty, whQty);
+      const name   = String(data[i][1] || "").trim(); // col B = ชื่อสินค้า
 
       sheet.getRange(row, COL_PROD_QTYWH).setValue(whQty - actual);
       sheet.getRange(row, COL_PROD_QTYFS).setValue(fsQty + actual);
       SpreadsheetApp.flush();
+
+      // บันทึก log ลง SHEET_TRANSFERS
+      logTransfer_(ss, sku, name, actual);
+
       return ok({ sku, transferred: actual, newWH: whQty - actual, newFS: fsQty + actual });
     }
   }
   return error("ไม่พบ SKU: " + sku);
+}
+
+function logTransfer_(ss, sku, productName, qty) {
+  let logSheet = ss.getSheetByName(SHEET_TRANSFERS);
+  if (!logSheet) {
+    logSheet = ss.insertSheet(SHEET_TRANSFERS);
+    logSheet.appendRow(["หมายเลขรายการ","วันที่ทำรายการ","สถานะ(รอ,สำเร็จ)","จากคลัง/สาขา","ไปคลัง/สาขา","รหัสสินค้า","ชื่อสินค้า","จำนวน"]);
+  }
+  const now     = new Date();
+  const dateStr = Utilities.formatDate(now, Session.getScriptTimeZone(), "dd/MM/yyyy");
+  const rows    = logSheet.getLastRow();
+  const refNum  = "TF-" + Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyyMMdd") + "-" + String(rows).padStart(3,"0");
+  logSheet.appendRow([refNum, dateStr, "สำเร็จ", WH_NAME_SAI5, WH_NAME_FS, sku, productName, qty]);
 }
 
 // ── 2) หักสต็อกตรงๆ (legacy) ─────────────────────────────────
