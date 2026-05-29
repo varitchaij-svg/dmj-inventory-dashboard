@@ -306,15 +306,16 @@ function fetchAllZortProducts_(warehousecode) {
 }
 
 // Core sync: ดึงสต็อกจาก ZORT คลังที่ระบุ แล้วเขียนลงคอลัมน์เป้าหมาย
-function syncZortToColumn_(warehousecode, colIndex, label) {
-  Logger.log(`=== Sync ${label} (${warehousecode}) → col ${colIndex} ===`);
-  const ss    = SpreadsheetApp.getActiveSpreadsheet();
+function syncZortToColumn_(warehousecode, colIndex) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sheet) { Logger.log("ไม่พบชีต: " + SHEET_PRODUCTS); return; }
 
+  // โหลดสินค้าจาก ZORT
   const products = fetchAllZortProducts_(warehousecode);
   Logger.log(`ZORT: ${products.length} items`);
 
+  // สร้าง map SKU → จำนวน และ SKU → ราคา
   const zortMap = {};
   const zortPriceMap = {};
   for (const p of products) {
@@ -325,24 +326,29 @@ function syncZortToColumn_(warehousecode, colIndex, label) {
     }
   }
 
+  // อ่านชีต แล้วอัพเดทคอลัมน์เป้าหมาย
   const data = sheet.getDataRange().getValues();
-  let updated = 0, notFound = 0;
+  let updated = 0;
+  let notFound = 0;
+
   for (let i = 1; i < data.length; i++) {
     const sku = String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase();
     if (!sku) continue;
+
     if (zortMap[sku] !== undefined) {
       sheet.getRange(i + 1, colIndex).setValue(zortMap[sku]);
-      // Update price in col I if this is WH or FS sync
-      if (zortPriceMap[sku] > 0) {
-        sheet.getRange(i + 1, 9).setValue(zortPriceMap[sku]); // col I = price
+      // อัพเดทราคาขายด้วย (col I = index 9)
+      if (zortPriceMap[sku]) {
+        sheet.getRange(i + 1, 9).setValue(zortPriceMap[sku]);
       }
       updated++;
     } else {
       notFound++;
     }
   }
+
   SpreadsheetApp.flush();
-  Logger.log(`อัพเดทแล้ว: ${updated} | ไม่พบใน ZORT: ${notFound}`);
+  Logger.log(`อัพเดทแล้ว: ${updated} rows | ไม่พบใน ZORT: ${notFound} rows`);
 }
 
 // เพิ่มสินค้าใหม่จาก ZORT ที่ยังไม่มีในชีต
@@ -416,9 +422,27 @@ function syncZortBoth() {
 
 // ตั้ง trigger auto-sync 06:00 ทุกวัน (รันแค่ครั้งเดียว)
 function createDailyTrigger() {
+  // ลบ trigger เก่าก่อน
   ScriptApp.getProjectTriggers().forEach(t => {
     if (t.getHandlerFunction() === "syncZortBoth") ScriptApp.deleteTrigger(t);
   });
-  ScriptApp.newTrigger("syncZortBoth").timeBased().everyDays(1).atHour(6).create();
-  Logger.log("✅ ตั้ง trigger: syncZortBoth ทุกวัน 06:00 น.");
+  ScriptApp.newTrigger("syncZortBoth")
+    .timeBased()
+    .everyDays(1)
+    .atHour(6)  // 06:00 น. ทุกวัน
+    .create();
+  Logger.log("✅ ตั้ง trigger: syncZortBoth ทุกวัน 06:00");
+}
+
+// ดีบัก: ดูฟิลด์ที่ส่งมาจาก ZORT API
+function debugZortProduct() {
+  const res = UrlFetchApp.fetch(
+    `${ZORT_BASE}/Product/GetProducts?page=1&limit=3&warehousecode=W0002`,
+    { method: "get", headers: zortHeaders_(), muteHttpExceptions: true }
+  );
+  const json = JSON.parse(res.getContentText());
+  if (json.list && json.list[0]) {
+    Logger.log("Fields: " + Object.keys(json.list[0]).join(", "));
+    Logger.log("Sample: " + JSON.stringify(json.list[0], null, 2));
+  }
 }
