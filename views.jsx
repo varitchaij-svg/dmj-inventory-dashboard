@@ -7297,9 +7297,9 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const isDone = o => o.status === "สำเร็จ" || o.status === "completed" || o.status === "done";
   const doneOrders = uM(() => enriched.filter(isDone), [enriched]);
 
-  // แยกกลุ่ม: หิ้วก่อน, รถหลัง
-  const carryOrders = uM(() => doneOrders.filter(o => o.carryMode === "carry"), [doneOrders]);
-  const truckOrders = uM(() => doneOrders.filter(o => o.carryMode !== "carry"), [doneOrders]);
+  // แยกกลุ่ม: หิ้วก่อน, รถหลัง — ซ่อน shipped ที่ไม่ใช่ missed
+  const carryOrders = uM(() => doneOrders.filter(o => !shipped[o.id] || missed[o.id]), [doneOrders, shipped, missed]);
+  const truckOrders = uM(() => doneOrders.filter(o => o.carryMode !== "carry").filter(o => !shipped[o.id] || missed[o.id]), [doneOrders, shipped, missed]);
 
   const handlePrint = (order) => {
     const qty = order.preparedQty || order.orderQty || 1;
