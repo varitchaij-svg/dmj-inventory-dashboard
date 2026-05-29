@@ -210,6 +210,10 @@ const LS_SRC_KEY  = "dmj_dashboard_source_v1"; // "upload" | "sheet"
 
 function enrichData(d) {
   if (!d || !Array.isArray(d.products)) return d;
+  // Normalize field names from Google Sheets (category → cat, etc.)
+  d.products.forEach(p => {
+    if (!p.cat && p.category) p.cat = p.category;
+  });
   if (typeof detectColor === 'function') {
     d.products.forEach(p => { if (!p.color) p.color = detectColor(p.name); });
   }
