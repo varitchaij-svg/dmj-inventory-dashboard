@@ -6976,14 +6976,10 @@ function OrderListView({ data, role }) {
       // (order date ≤ markedAt). Otherwise trust the sheet — new order / ID collision.
       const sheetPending = !o.status || o.status === "รอ" || o.status === "pending";
       if (sheetPending && DONE_ST.has(local.status)) {
-        let keepLocal = true; // default: trust localStorage
-        if (local.markedAt && o.date) {
-          const orderMs  = parseDateMs(o.date);
-          const markedMs = parseDateMs(local.markedAt);
-          // If both dates parse OK, only keep if markedAt >= order date (same-day or later)
-          if (!isNaN(orderMs) && !isNaN(markedMs)) keepLocal = markedMs >= orderMs;
-        }
-        if (!keepLocal) {
+        // Keep localStorage Done only if marked within 6 hours (fresh session)
+        const markedMs = local.markedAt ? new Date(local.markedAt).getTime() : NaN;
+        const isRecent = !isNaN(markedMs) && (Date.now() - markedMs) < 6 * 60 * 60 * 1000;
+        if (!isRecent) {
           const { status:_s, markedAt:_m, shipped:_sh, ...rest } = local;
           return { ...o, id, ...rest };
         }
@@ -7277,14 +7273,10 @@ function OrderSummaryView({ data, onPrintRequest }) {
       const local = st[id] || {};
       const sheetPending = !o.status || o.status === "รอ" || o.status === "pending";
       if (sheetPending && DONE_ST.has(local.status)) {
-        let keepLocal = true;
-        if (local.markedAt && o.date) {
-          const orderMs  = parseDateMs(o.date);
-          const markedMs = parseDateMs(local.markedAt);
-          if (!isNaN(orderMs) && !isNaN(markedMs)) keepLocal = markedMs >= orderMs;
-        }
+        const markedMs = local.markedAt ? new Date(local.markedAt).getTime() : NaN;
+        const isRecent = !isNaN(markedMs) && (Date.now() - markedMs) < 6 * 60 * 60 * 1000;
         const skuKey = (o.sku || '').trim().toUpperCase();
-        if (!keepLocal) {
+        if (!isRecent) {
           const { status:_s, markedAt:_m, shipped:_sh, ...rest } = local;
           return { ...o, id, ...rest, product: productMap[o.sku] || productMap[skuKey] };
         }
