@@ -7586,6 +7586,18 @@ function OrderSummaryView({ data, onPrintRequest }) {
             {Object.keys(shipped).length > 0 && ` · ส่งแล้ว ${Object.keys(shipped).filter(id=>doneOrders.find(o=>o.id===id)).length} รายการ`}
           </div>
         </div>
+        <button onClick={() => {
+          localStorage.removeItem(LS_SHIPPED_ORDERS);
+          localStorage.removeItem(LS_MISSED_TRUCK);
+          const cleared = {};
+          setShipped(cleared);
+          setMissed(cleared);
+          showToast("success", "รีเซ็ตสถานะการส่งแล้ว", "🔄");
+        }} style={{
+          padding:"6px 12px",borderRadius:8,border:"1.5px solid var(--bdr)",
+          background:"#fff",color:"var(--muted)",fontSize:11,fontWeight:600,
+          cursor:"pointer",fontFamily:"inherit",
+        }}>🔄 รีเซ็ตสถานะ</button>
       </div>
 
       {renderSection("หิ้วเอง", "🚶", carryOrders, false)}
