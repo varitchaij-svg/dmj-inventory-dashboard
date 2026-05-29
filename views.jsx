@@ -7234,7 +7234,16 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const [shipAllConfirm, setShipAllConfirm] = uS(null); // ready[] array
   const [materialDraw, setMaterialDraw]  = uS(null); // { order, afterConfirm: fn }
 
-  const productMap = uM(() => { const m={}; products.forEach(p => m[p.sku]=p); return m; }, [products]);
+  const productMap = uM(() => {
+    const m = {};
+    products.forEach(p => {
+      if (p.sku) {
+        m[p.sku] = p;
+        m[p.sku.trim().toUpperCase()] = p;
+      }
+    });
+    return m;
+  }, [products]);
 
   const enriched = uM(() => {
     const DONE_ST = new Set(["สำเร็จ","completed","ส่งแล้ว","shipped"]);
@@ -7251,10 +7260,12 @@ function OrderSummaryView({ data, onPrintRequest }) {
         }
         if (!keepLocal) {
           const { status:_s, markedAt:_m, shipped:_sh, ...rest } = local;
-          return { ...o, id, ...rest, product: productMap[o.sku] };
+          const skuKey = (o.sku || '').trim().toUpperCase();
+          return { ...o, id, ...rest, product: productMap[o.sku] || productMap[skuKey] };
         }
       }
-      return { ...o, id, ...local, product: productMap[o.sku] };
+      const skuKey = (o.sku || '').trim().toUpperCase();
+      return { ...o, id, ...local, product: productMap[o.sku] || productMap[skuKey] };
     });
   }, [orders, st, productMap]);
 
