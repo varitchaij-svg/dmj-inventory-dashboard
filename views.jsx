@@ -6686,7 +6686,10 @@ async function syncOrderUpdate(order, updates) {
       method: "POST", mode: "no-cors",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        updateOrderState: true,
         orderId: order.id,
+        sku:         order.sku,
+        date:        order.date,
         status:      updates.status,
         preparedQty: updates.preparedQty,
         printFlag:   updates.printFlag,
