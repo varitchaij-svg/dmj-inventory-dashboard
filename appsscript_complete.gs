@@ -125,6 +125,11 @@ function doPost(e) {
       return deleteOrderRow(ss, data.orderId);
     }
 
+    // ─── MTO Jobs ───
+    if (data.createMtoJob)  return createMtoJob(ss, data);
+    if (data.closeMtoJob)   return closeMtoJob(ss, data);
+    if (data.deleteMtoJob)  return deleteMtoJob(ss, data);
+
     return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Unknown action" }))
       .setMimeType(ContentService.MimeType.JSON);
 
@@ -150,6 +155,7 @@ function doGet(e) {
     const purchases = readPurchases_();
     const storage   = readStorage_();
     const orders    = readOrders_();
+    const mtoJobs   = readMtoJobs_();
     const frontStoreQtys = readFrontStoreCheckedQty_();
     const qtyLoc    = readQtyByLocation_();
 
@@ -236,6 +242,7 @@ function doGet(e) {
       },
       products,
       orders,
+      mtoJobs,
       monthLabels:  monthly.monthLabels,
       monthlyByCat: monthly.monthlyByCat,
       dayLabels:    daily.dayLabels,
@@ -1637,6 +1644,132 @@ function ok(data) {
 function error(msg) {
   return ContentService.createTextOutput(JSON.stringify({ success: false, error: msg }))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ───────────────────────────────────────────────────────────
+// SECTION 8: MTO Jobs
+// ───────────────────────────────────────────────────────────
+
+function createMtoJob(ss, data) {
+  const sh = ss.getSheetByName("งาน MTO");
+  if (!sh) return error("ไม่พบชีต งาน MTO");
+  const jobId = "MTO_" + Date.now();
+  sh.appendRow([jobId, data.dateStr || "", data.jobName || "", data.customer || "", data.price || "", data.imageUrl || "", "กำลังจัด", ""]);
+  return ContentService.createTextOutput(JSON.stringify({ success: true, jobId }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function closeMtoJob(ss, data) {
+  const jobId = String(data.jobId || "").trim();
+  const items = data.items || [];
+  const closedAt = data.closedAt || "";
+
+  // Deduct stock
+  const prodSh = ss.getSheetByName(SHEET_PRODUCTS);
+  if (prodSh) {
+    const prodData = prodSh.getDataRange().getValues();
+    items.forEach(item => {
+      const sku = String(item.sku || "").trim().toUpperCase();
+      for (let i = 1; i < prodData.length; i++) {
+        if (String(prodData[i][COL_PROD_SKU - 1]).trim().toUpperCase() === sku) {
+          const row = i + 1;
+          if (item.warehouse === "frontstore") {
+            const cur = Number(prodSh.getRange(row, COL_PROD_QTYFS).getValue()) || 0;
+            prodSh.getRange(row, COL_PROD_QTYFS).setValue(Math.max(0, cur - (Number(item.qty) || 0)));
+          } else {
+            const cur = Number(prodSh.getRange(row, COL_PROD_QTYWH).getValue()) || 0;
+            prodSh.getRange(row, COL_PROD_QTYWH).setValue(Math.max(0, cur - (Number(item.qty) || 0)));
+          }
+          break;
+        }
+      }
+    });
+  }
+
+  // Append items to วัตถุดิบ MTO
+  const itemSh = ss.getSheetByName("วัตถุดิบ MTO");
+  if (itemSh) {
+    items.forEach(item => {
+      itemSh.appendRow([jobId, item.sku || "", item.name || "", Number(item.qty) || 0, item.warehouse || "warehouse", item.returned ? "คืนแล้ว" : "ไม่คืน", closedAt]);
+    });
+  }
+
+  // Update งาน MTO row
+  const jobSh = ss.getSheetByName("งาน MTO");
+  if (jobSh) {
+    const jobData = jobSh.getDataRange().getValues();
+    for (let i = 1; i < jobData.length; i++) {
+      if (String(jobData[i][0]).trim() === jobId) {
+        jobSh.getRange(i + 1, 7).setValue("เสร็จแล้ว");
+        jobSh.getRange(i + 1, 8).setValue(closedAt);
+        break;
+      }
+    }
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({ success: true, jobId, deducted: items.length }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function deleteMtoJob(ss, data) {
+  const jobId = String(data.jobId || "").trim();
+  const sh = ss.getSheetByName("งาน MTO");
+  if (!sh) return error("ไม่พบชีต งาน MTO");
+  const rows = sh.getDataRange().getValues();
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]).trim() === jobId) {
+      sh.deleteRow(i + 1);
+      break;
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({ success: true, deleted: jobId }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function readMtoJobs_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const jobSh = ss.getSheetByName("งาน MTO");
+  const itemSh = ss.getSheetByName("วัตถุดิบ MTO");
+  if (!jobSh) return [];
+
+  const jobRows = jobSh.getDataRange().getValues();
+  const itemRows = itemSh ? itemSh.getDataRange().getValues() : [];
+
+  // Build items map by jobId
+  const itemsMap = {};
+  for (let i = 1; i < itemRows.length; i++) {
+    const r = itemRows[i];
+    const jid = String(r[0]||"").trim();
+    if (!jid) continue;
+    if (!itemsMap[jid]) itemsMap[jid] = [];
+    itemsMap[jid].push({
+      sku: String(r[1]||"").trim(),
+      name: String(r[2]||"").trim(),
+      qty: Number(r[3])||0,
+      warehouse: String(r[4]||"warehouse").trim(),
+      returned: String(r[5]||"").includes("คืน"),
+      closedAt: String(r[6]||"").trim(),
+    });
+  }
+
+  const jobs = [];
+  for (let i = 1; i < jobRows.length; i++) {
+    const r = jobRows[i];
+    const jobId = String(r[0]||"").trim();
+    if (!jobId) continue;
+    jobs.push({
+      jobId,
+      date: String(r[1]||"").trim(),
+      jobName: String(r[2]||"").trim(),
+      customer: String(r[3]||"").trim(),
+      price: Number(r[4])||0,
+      imageUrl: String(r[5]||"").trim(),
+      status: String(r[6]||"กำลังจัด").trim(),
+      closedAt: String(r[7]||"").trim(),
+      items: itemsMap[jobId] || [],
+    });
+  }
+  return jobs.reverse(); // newest first
 }
 
 function onOpen() {

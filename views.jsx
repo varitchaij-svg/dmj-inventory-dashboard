@@ -8134,6 +8134,422 @@ function CalcPadModal({ open, name, initialVal, onConfirm, onClose }) {
   );
 }
 
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal });
+// ─────────────────────────────────────────────────────────────────────
+// MTO JOB VIEW — งานจัดพิเศษ (MTO)
+// ─────────────────────────────────────────────────────────────────────
+function MtoJobView({ data }) {
+  const [jobs, setJobs] = uS(() => data.mtoJobs || []);
+  const [view, setView] = uS("list"); // "list" | "create" | "detail"
+  const [activeJob, setActiveJob] = uS(null);
+  const [newJob, setNewJob] = uS({ jobName: "", customer: "", price: "", imageUrl: "" });
+  const [materials, setMaterials] = uS([]);
+  const [search, setSearch] = uS("");
+  const [searchQty, setSearchQty] = uS(1);
+  const [searchWarehouse, setSearchWarehouse] = uS("warehouse");
+  const [saving, setSaving] = uS(false);
+  const [toast, showToast, hideToast] = useToast();
 
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal });
+  const products = data.products || [];
+
+  const searchResults = uM(() => {
+    if (!search.trim()) return [];
+    const q = search.trim().toLowerCase();
+    return products.filter(p =>
+      (p.sku && p.sku.toLowerCase().includes(q)) ||
+      (p.name && p.name.toLowerCase().includes(q))
+    ).slice(0, 5);
+  }, [search, products]);
+
+  const todayStr = () => {
+    const d = new Date();
+    const pad = n => String(n).padStart(2, "0");
+    return `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()}`;
+  };
+
+  const nowStr = () => {
+    const d = new Date();
+    const pad = n => String(n).padStart(2, "0");
+    return `${pad(d.getDate())}/${pad(d.getMonth()+1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
+  const handleCreateJob = async () => {
+    if (!newJob.jobName.trim()) { showToast("error", "กรุณาระบุชื่องาน"); return; }
+    setSaving(true);
+    try {
+      const res = await fetch(SHEET_DEPLOY_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          createMtoJob: true,
+          jobName: newJob.jobName.trim(),
+          customer: newJob.customer.trim(),
+          price: newJob.price ? Number(newJob.price) : "",
+          imageUrl: newJob.imageUrl.trim(),
+          dateStr: todayStr(),
+        }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        const created = {
+          jobId: json.jobId,
+          date: todayStr(),
+          jobName: newJob.jobName.trim(),
+          customer: newJob.customer.trim(),
+          price: newJob.price ? Number(newJob.price) : 0,
+          imageUrl: newJob.imageUrl.trim(),
+          status: "กำลังจัด",
+          closedAt: "",
+          items: [],
+        };
+        setJobs(prev => [created, ...prev]);
+        setNewJob({ jobName: "", customer: "", price: "", imageUrl: "" });
+        setView("list");
+        showToast("success", "สร้างงานเรียบร้อย");
+      } else {
+        showToast("error", json.error || "เกิดข้อผิดพลาด");
+      }
+    } catch (e) {
+      showToast("error", e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const addMaterial = (product) => {
+    if (!product) return;
+    setMaterials(prev => {
+      const existing = prev.findIndex(m => m.sku === product.sku && m.warehouse === searchWarehouse);
+      if (existing >= 0) {
+        const updated = [...prev];
+        updated[existing] = { ...updated[existing], qty: updated[existing].qty + searchQty };
+        return updated;
+      }
+      return [...prev, { sku: product.sku, name: product.name, qty: searchQty, warehouse: searchWarehouse, returned: false }];
+    });
+    setSearch("");
+    setSearchQty(1);
+  };
+
+  const removeMaterial = (idx) => {
+    setMaterials(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const toggleReturned = (idx) => {
+    setMaterials(prev => prev.map((m, i) => i === idx ? { ...m, returned: !m.returned } : m));
+  };
+
+  const handleCloseJob = async () => {
+    if (!activeJob) return;
+    if (materials.length === 0) { showToast("warn", "ยังไม่มีวัตถุดิบ"); return; }
+    setSaving(true);
+    try {
+      const closed = nowStr();
+      const res = await fetch(SHEET_DEPLOY_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          closeMtoJob: true,
+          jobId: activeJob.jobId,
+          items: materials,
+          closedAt: closed,
+        }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        const updatedJob = { ...activeJob, status: "เสร็จแล้ว", closedAt: closed, items: materials };
+        setJobs(prev => prev.map(j => j.jobId === activeJob.jobId ? updatedJob : j));
+        setActiveJob(updatedJob);
+        setMaterials([]);
+        setView("detail");
+        showToast("success", "ปิดงานและตัดสต็อกเรียบร้อย");
+      } else {
+        showToast("error", json.error || "เกิดข้อผิดพลาด");
+      }
+    } catch (e) {
+      showToast("error", e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteJob = async (job) => {
+    if (!window.confirm(`ลบงาน "${job.jobName}"?`)) return;
+    setSaving(true);
+    try {
+      const res = await fetch(SHEET_DEPLOY_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deleteMtoJob: true, jobId: job.jobId }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setJobs(prev => prev.filter(j => j.jobId !== job.jobId));
+        if (activeJob && activeJob.jobId === job.jobId) { setActiveJob(null); setView("list"); }
+        showToast("success", "ลบงานเรียบร้อย");
+      } else {
+        showToast("error", json.error || "เกิดข้อผิดพลาด");
+      }
+    } catch (e) {
+      showToast("error", e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openDetail = (job) => {
+    setActiveJob(job);
+    setMaterials(job.status === "กำลังจัด" ? [] : (job.items || []));
+    setView("detail");
+  };
+
+  // ── List View ──
+  if (view === "list") return (
+    <div style={{ padding: "16px", maxWidth: 700, margin: "0 auto" }}>
+      <Toast toast={toast} onClose={hideToast} />
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-800)" }}>🎁 งานจัดพิเศษ (MTO)</div>
+        <button className="btn primary" onClick={() => setView("create")} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          ➕ สร้างงานใหม่
+        </button>
+      </div>
+
+      {jobs.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "60px 20px", color: "var(--muted)" }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>🎁</div>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>ยังไม่มีงานจัดพิเศษ</div>
+          <div style={{ fontSize: 13, marginTop: 4 }}>กดปุ่ม "สร้างงานใหม่" เพื่อเริ่มต้น</div>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {jobs.map(job => (
+            <div key={job.jobId}
+              onClick={() => openDetail(job)}
+              style={{
+                background: "#fff", border: "1.5px solid var(--bdr)", borderRadius: 12,
+                padding: "14px 16px", cursor: "pointer", transition: "box-shadow .15s",
+              }}
+              onMouseEnter={e => e.currentTarget.style.boxShadow = "0 4px 16px rgba(0,0,0,.10)"}
+              onMouseLeave={e => e.currentTarget.style.boxShadow = "none"}
+            >
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 15, color: "var(--g-800)" }}>{job.jobName}</div>
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+                    {job.date}{job.customer ? ` · ${job.customer}` : ""}
+                  </div>
+                  {job.price > 0 && (
+                    <div style={{ fontSize: 12, color: "var(--g-700)", marginTop: 2, fontWeight: 600 }}>
+                      ฿{Number(job.price).toLocaleString()}
+                    </div>
+                  )}
+                </div>
+                <div style={{
+                  fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 20,
+                  background: job.status === "เสร็จแล้ว" ? "#e8f5e9" : "#fff8e1",
+                  color: job.status === "เสร็จแล้ว" ? "#1b5e20" : "#a07417",
+                  border: `1px solid ${job.status === "เสร็จแล้ว" ? "#81c784" : "#f59e0b"}`,
+                  whiteSpace: "nowrap",
+                }}>
+                  {job.status === "เสร็จแล้ว" ? "✅ เสร็จแล้ว" : "🟡 กำลังจัด"}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  // ── Create View ──
+  if (view === "create") return (
+    <div style={{ padding: "16px", maxWidth: 500, margin: "0 auto" }}>
+      <Toast toast={toast} onClose={hideToast} />
+      <div style={{ fontSize: 18, fontWeight: 800, color: "var(--g-800)", marginBottom: 20 }}>➕ สร้างงานใหม่</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <label>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", marginBottom: 4 }}>ชื่องาน *</div>
+          <input
+            value={newJob.jobName}
+            onChange={e => setNewJob(p => ({ ...p, jobName: e.target.value }))}
+            placeholder="เช่น ชุดของขวัญวันเกิดลูกค้า A"
+            style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 14, boxSizing: "border-box" }}
+          />
+        </label>
+        <label>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", marginBottom: 4 }}>ลูกค้า (ไม่จำเป็น)</div>
+          <input
+            value={newJob.customer}
+            onChange={e => setNewJob(p => ({ ...p, customer: e.target.value }))}
+            placeholder="ชื่อลูกค้า"
+            style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 14, boxSizing: "border-box" }}
+          />
+        </label>
+        <label>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", marginBottom: 4 }}>ราคา (ไม่จำเป็น)</div>
+          <input
+            type="number" value={newJob.price}
+            onChange={e => setNewJob(p => ({ ...p, price: e.target.value }))}
+            placeholder="0"
+            style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 14, boxSizing: "border-box" }}
+          />
+        </label>
+        <label>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", marginBottom: 4 }}>URL รูป (ไม่จำเป็น)</div>
+          <input
+            value={newJob.imageUrl}
+            onChange={e => setNewJob(p => ({ ...p, imageUrl: e.target.value }))}
+            placeholder="https://..."
+            style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 14, boxSizing: "border-box" }}
+          />
+        </label>
+        <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+          <button className="btn ghost" onClick={() => setView("list")} style={{ flex: 1, padding: "12px" }}>ยกเลิก</button>
+          <button className="btn primary" onClick={handleCreateJob} disabled={saving} style={{ flex: 2, padding: "12px" }}>
+            {saving ? "กำลังสร้าง..." : "สร้างงาน"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ── Detail View ──
+  if (view === "detail" && activeJob) {
+    const isOpen = activeJob.status === "กำลังจัด";
+    return (
+      <div style={{ padding: "16px", maxWidth: 700, margin: "0 auto" }}>
+        <Toast toast={toast} onClose={hideToast} />
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+          <button className="btn ghost" onClick={() => { setView("list"); setActiveJob(null); setMaterials([]); }}>← กลับ</button>
+          <button className="btn ghost" style={{ marginLeft: "auto", color: "var(--dang)", borderColor: "var(--dang)" }}
+            onClick={() => handleDeleteJob(activeJob)} disabled={saving}>
+            🗑️ ลบงาน
+          </button>
+        </div>
+
+        {/* Job header */}
+        <div style={{ background: "#fff", border: "1.5px solid var(--bdr)", borderRadius: 12, padding: "16px", marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: "var(--g-800)" }}>{activeJob.jobName}</div>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+                {activeJob.date}{activeJob.customer ? ` · ลูกค้า: ${activeJob.customer}` : ""}
+              </div>
+              {activeJob.price > 0 && (
+                <div style={{ fontSize: 14, fontWeight: 700, color: "var(--g-700)", marginTop: 4 }}>
+                  ฿{Number(activeJob.price).toLocaleString()}
+                </div>
+              )}
+              {activeJob.closedAt && (
+                <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>ปิดงาน: {activeJob.closedAt}</div>
+              )}
+            </div>
+            <div style={{
+              fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 20,
+              background: isOpen ? "#fff8e1" : "#e8f5e9",
+              color: isOpen ? "#a07417" : "#1b5e20",
+              border: `1px solid ${isOpen ? "#f59e0b" : "#81c784"}`,
+            }}>
+              {isOpen ? "🟡 กำลังจัด" : "✅ เสร็จแล้ว"}
+            </div>
+          </div>
+          {activeJob.imageUrl && (
+            <img src={activeJob.imageUrl} alt="job" style={{ width: "100%", borderRadius: 8, marginTop: 12, maxHeight: 200, objectFit: "cover" }} />
+          )}
+        </div>
+
+        {/* Add materials (open jobs only) */}
+        {isOpen && (
+          <div style={{ background: "#fff", border: "1.5px solid var(--bdr)", borderRadius: 12, padding: "16px", marginBottom: 16 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "var(--g-800)", marginBottom: 12 }}>เพิ่มวัตถุดิบที่ใช้</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ position: "relative" }}>
+                <input
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  placeholder="ค้นหาสินค้า (SKU หรือชื่อ)"
+                  style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 14, boxSizing: "border-box" }}
+                />
+                {searchResults.length > 0 && (
+                  <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1.5px solid var(--bdr)", borderRadius: 8, zIndex: 100, boxShadow: "0 4px 16px rgba(0,0,0,.12)" }}>
+                    {searchResults.map(p => (
+                      <div key={p.sku} onClick={() => addMaterial(p)}
+                        style={{ padding: "10px 12px", cursor: "pointer", borderBottom: "1px solid var(--bdr)", fontSize: 13 }}
+                        onMouseEnter={e => e.currentTarget.style.background = "var(--g-50)"}
+                        onMouseLeave={e => e.currentTarget.style.background = "#fff"}
+                      >
+                        <span style={{ fontWeight: 600 }}>{p.sku}</span>
+                        <span style={{ color: "var(--muted)", marginLeft: 8 }}>{p.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  type="number" value={searchQty} min={1}
+                  onChange={e => setSearchQty(Math.max(1, Number(e.target.value)))}
+                  style={{ width: 80, padding: "10px 12px", borderRadius: 8, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 14, boxSizing: "border-box" }}
+                />
+                <select value={searchWarehouse} onChange={e => setSearchWarehouse(e.target.value)}
+                  style={{ flex: 1, padding: "10px 12px", borderRadius: 8, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 14 }}>
+                  <option value="warehouse">คลังสาย5</option>
+                  <option value="frontstore">หน้าร้าน</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Materials list */}
+        <div style={{ background: "#fff", border: "1.5px solid var(--bdr)", borderRadius: 12, padding: "16px", marginBottom: 16 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "var(--g-800)", marginBottom: 12 }}>
+            วัตถุดิบ {materials.length > 0 ? `(${materials.length} รายการ)` : ""}
+          </div>
+          {materials.length === 0 ? (
+            <div style={{ color: "var(--muted)", fontSize: 13, textAlign: "center", padding: "20px 0" }}>ยังไม่มีวัตถุดิบ</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {materials.map((m, idx) => (
+                <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", background: "var(--g-50)", borderRadius: 8 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.sku}</div>
+                    <div style={{ fontSize: 11, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</div>
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--g-700)", fontWeight: 700, whiteSpace: "nowrap" }}>×{m.qty}</div>
+                  <div style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>{m.warehouse === "frontstore" ? "หน้าร้าน" : "คลัง"}</div>
+                  {isOpen ? (
+                    <>
+                      <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, cursor: "pointer", whiteSpace: "nowrap" }}>
+                        <input type="checkbox" checked={m.returned} onChange={() => toggleReturned(idx)} />
+                        คืนแล้ว
+                      </label>
+                      <button onClick={() => removeMaterial(idx)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--dang)", fontSize: 16, padding: "0 4px" }}>✕</button>
+                    </>
+                  ) : (
+                    <div style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: m.returned ? "#e8f5e9" : "#ffebee", color: m.returned ? "#1b5e20" : "#c62828", fontWeight: 600, whiteSpace: "nowrap" }}>
+                      {m.returned ? "คืนแล้ว" : "ไม่คืน"}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Close job button */}
+        {isOpen && (
+          <button className="btn primary" onClick={handleCloseJob} disabled={saving || materials.length === 0}
+            style={{ width: "100%", padding: "14px", fontSize: 15, fontWeight: 800, background: "#1b5e20", borderRadius: 12 }}>
+            {saving ? "กำลังปิดงาน..." : "✅ ปิดงาน & ตัดสต็อก"}
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return null;
+}
+
+Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView });
+
+Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView });
