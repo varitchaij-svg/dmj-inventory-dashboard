@@ -311,6 +311,12 @@ function transferStock(ss, sku, qty) {
       sheet.getRange(row, COL_PROD_QTYWH).setValue(whQty - actual);
       sheet.getRange(row, COL_PROD_QTYFS).setValue(fsQty + actual);
       SpreadsheetApp.flush();
+      try {
+        pushStockToZort_([
+          { sku, qty: whQty - actual, warehousecode: WH_SAI5 },
+          { sku, qty: fsQty + actual, warehousecode: WH_FRONTSTORE }
+        ]);
+      } catch (e) { Logger.log("transferStock ZORT push error: " + e); }
       return ok({ sku, transferred: actual, newWH: whQty - actual, newFS: fsQty + actual });
     }
   }
@@ -336,6 +342,12 @@ function deductStock(ss, sku, qty) {
       sheet.getRange(row, COL_PROD_QTYWH).setValue(whQty - deductWH);
       if (deductFS > 0) sheet.getRange(row, COL_PROD_QTYFS).setValue(fsQty - deductFS);
       SpreadsheetApp.flush();
+      try {
+        const zortItems = [];
+        if (deductWH > 0) zortItems.push({ sku, qty: whQty - deductWH, warehousecode: WH_SAI5 });
+        if (deductFS > 0) zortItems.push({ sku, qty: fsQty - deductFS, warehousecode: WH_FRONTSTORE });
+        if (zortItems.length) pushStockToZort_(zortItems);
+      } catch (e) { Logger.log("deductStock ZORT push error: " + e); }
       return ok({ sku, deductWH, deductFS, newWH: whQty - deductWH, newFS: fsQty - deductFS });
     }
   }
@@ -487,6 +499,12 @@ function updateFrontStore(ss, entries, datetime) {
     }
   }
   SpreadsheetApp.flush();
+  try {
+    const zortItems = entries
+      .filter(e => e.sku && Number(e.qty) >= 0)
+      .map(e => ({ sku: String(e.sku).trim().toUpperCase(), qty: Number(e.qty), warehousecode: WH_FRONTSTORE }));
+    if (zortItems.length) pushStockToZort_(zortItems);
+  } catch (e) { Logger.log("updateFrontStore ZORT push error: " + e); }
   return ok({ updated: entries.length });
 }
 
@@ -505,6 +523,31 @@ function deleteOrderRow(ss, orderId) {
 
 function zortHeaders_() {
   return { storename: ZORT_STORE, apikey: ZORT_APIKEY, apisecret: ZORT_SECRET };
+}
+
+// Push exact stock qty to ZORT for one or more SKUs per warehouse
+// items = [{ sku, qty, warehousecode }]
+function pushStockToZort_(items) {
+  if (!items || !items.length) return;
+  const groups = {};
+  for (const item of items) {
+    const wh = item.warehousecode || WH_SAI5;
+    if (!groups[wh]) groups[wh] = [];
+    if (item.sku && item.qty >= 0) groups[wh].push({ sku: String(item.sku).trim(), number: Number(item.qty) });
+  }
+  const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
+  for (const [wh, list] of Object.entries(groups)) {
+    try {
+      const res = UrlFetchApp.fetch(`${ZORT_BASE}/Product/UpdateProductAvailableStockList`, {
+        method: "post", headers,
+        payload: JSON.stringify({ warehousecode: wh, list }),
+        muteHttpExceptions: true
+      });
+      Logger.log(`pushStockToZort [${wh}]: ` + res.getContentText());
+    } catch (e) {
+      Logger.log(`pushStockToZort [${wh}] error: ` + e);
+    }
+  }
 }
 
 function getZortWarehouses() {
