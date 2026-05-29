@@ -1666,9 +1666,9 @@ function readQtyByLocation_() {
     const sku = (r[0] || '').toString().trim();
     if (!sku) return;
     map[sku] = {
-      qtyStore: parseInt(r[5])   || 0,
-      qtyWH:    parseInt(r[6])   || 0,
-      price:    parseFloat(r[7]) || 0
+      qtyStore: parseInt(r[6])   || 0,  // G = col 6
+      qtyWH:    parseInt(r[7])   || 0,  // H = col 7
+      price:    parseFloat(r[8]) || 0   // I = col 8
     };
   });
   return map;
