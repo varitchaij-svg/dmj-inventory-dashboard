@@ -449,6 +449,19 @@ function updateOrderState(ss, body) {
   const sheet = ss.getSheetByName(SHEET_ORDERS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_ORDERS);
 
+  // Try direct row match via orderId ("R5" → row 5+1=6 in sheet, index i=4)
+  if (body.orderId) {
+    const rowNum = parseInt(String(body.orderId).replace(/[^0-9]/g, ""));
+    if (rowNum >= 1) {
+      const sheetRow = rowNum + 1; // header is row 1, data starts row 2
+      if (body.status)           sheet.getRange(sheetRow, COL_ORD_STATUS).setValue(body.status);
+      if (body.preparedQty != null) sheet.getRange(sheetRow, COL_ORD_PREPQTY).setValue(body.preparedQty);
+      if (body.printFlag)        sheet.getRange(sheetRow, COL_ORD_PRINTFLAG).setValue(body.printFlag);
+      return ok({ updated: body.orderId, row: sheetRow });
+    }
+  }
+
+  // Fallback: match by sku + date
   const data = sheet.getDataRange().getValues();
   for (let i = 1; i < data.length; i++) {
     const rowSku  = String(data[i][COL_ORD_SKU - 1]).trim().toUpperCase();
@@ -457,13 +470,13 @@ function updateOrderState(ss, body) {
     const matchDate = !body.date || rowDate.includes(String(body.date).trim());
     if (matchSku && matchDate) {
       const row = i + 1;
-      if (body.status)      sheet.getRange(row, COL_ORD_STATUS).setValue(body.status);
+      if (body.status)           sheet.getRange(row, COL_ORD_STATUS).setValue(body.status);
       if (body.preparedQty != null) sheet.getRange(row, COL_ORD_PREPQTY).setValue(body.preparedQty);
-      if (body.printFlag)   sheet.getRange(row, COL_ORD_PRINTFLAG).setValue(body.printFlag);
+      if (body.printFlag)        sheet.getRange(row, COL_ORD_PRINTFLAG).setValue(body.printFlag);
       return ok({ updated: body.sku, row });
     }
   }
-  return ok({ notFound: body.sku });
+  return ok({ notFound: body.orderId || body.sku });
 }
 
 function updateLockData(ss, lockKey, entries, datetime) {
