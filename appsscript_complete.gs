@@ -537,13 +537,19 @@ function syncZortToColumn_(warehousecode, colIndex) {
   const products = fetchAllZortProducts_(warehousecode);
   Logger.log(`ZORT: ${products.length} items`);
 
-  const zortMap = {};
+  const zortMap      = {};
+  const zortNameMap  = {};
+  const zortCatMap   = {};
+  const zortTagMap   = {};
   const zortPriceMap = {};
   for (const p of products) {
     const sku = String(p.sku || p.barcode || "").trim().toUpperCase();
     if (sku) {
-      zortMap[sku] = Number(p.availablestock || 0);
-      zortPriceMap[sku] = Number(p.sellprice || 0);
+      zortMap[sku]      = Number(p.availablestock || 0);
+      zortNameMap[sku]  = String(p.name         || "").trim();
+      zortCatMap[sku]   = String(p.category      || "").trim();
+      zortTagMap[sku]   = String(p.tag            || "").trim();
+      zortPriceMap[sku] = Number(p.sellprice      || 0);
     }
   }
 
@@ -554,10 +560,12 @@ function syncZortToColumn_(warehousecode, colIndex) {
     if (!sku) continue;
 
     if (zortMap[sku] !== undefined) {
-      sheet.getRange(i + 1, colIndex).setValue(zortMap[sku]);
-      if (zortPriceMap[sku]) {
-        sheet.getRange(i + 1, 9).setValue(zortPriceMap[sku]);
-      }
+      const row = i + 1;
+      sheet.getRange(row, colIndex).setValue(zortMap[sku]);          // qty (G หรือ H)
+      if (zortNameMap[sku])  sheet.getRange(row, 3).setValue(zortNameMap[sku]);   // col C = ชื่อ
+      if (zortCatMap[sku])   sheet.getRange(row, 4).setValue(zortCatMap[sku]);    // col D = หมวด
+      if (zortTagMap[sku])   sheet.getRange(row, 6).setValue(zortTagMap[sku]);    // col F = TAG
+      if (zortPriceMap[sku]) sheet.getRange(row, 9).setValue(zortPriceMap[sku]);  // col I = ราคา
       updated++;
     } else {
       notFound++;
