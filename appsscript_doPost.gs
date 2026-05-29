@@ -405,12 +405,12 @@ function syncNewProductsFromZort() {
 
 // Sync คลังสาย5 → col H
 function syncZortWarehouse() {
-  syncZortToColumn_(WH_SAI5, COL_PROD_QTYWH, "คลังสาย5");
+  syncZortToColumn_(WH_SAI5, COL_PROD_QTYWH);
 }
 
 // Sync ดูเหมือนจริง → col G
 function syncZortFrontStore() {
-  syncZortToColumn_(WH_FRONTSTORE, COL_PROD_QTYFS, "ดูเหมือนจริง");
+  syncZortToColumn_(WH_FRONTSTORE, COL_PROD_QTYFS);
 }
 
 // Sync ทั้ง 2 คลัง (ใช้สำหรับ trigger อัตโนมัติ)
