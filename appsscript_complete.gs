@@ -15,6 +15,9 @@ const SHEET_ID = '11yL4u-XLUTCBObMppAj12nnmG0YlDZWsDn2XPCneoHQ';
 const SHEET_PRODUCTS  = "อัพเดทจำนวนสินค้า";
 const SHEET_ORDERS    = "ลำดับที่สั่งสินค้า";
 const SHEET_LOCKS     = "ตำแหน่งจัดเก็บ";
+const SHEET_TRANSFERS = "รายการโอนสินค้า";
+const WH_NAME_SAI5    = "คลังสินค้าสาย5";
+const WH_NAME_FS      = "ดูเหมือนจริง";
 
 // ── Column Mapping (1-based) ──
 const COL_PROD_SKU    = 2;   // B
@@ -27,10 +30,10 @@ const COL_ORD_STATUS   = 3;   // C
 const COL_ORD_PREPQTY  = 9;   // I
 const COL_ORD_PRINTFLAG= 14;  // N
 
-const COL_LOCK_KEY     = 1;   // A
-const COL_LOCK_SKU     = 2;   // B
-const COL_LOCK_QTY     = 3;   // C
-const COL_LOCK_DATE    = 4;   // D
+const COL_LOCK_SKU     = 2;   // B = รหัสสินค้า (SKU)
+const COL_LOCK_KEY     = 3;   // C = รหัสล็อค (Location)
+const COL_LOCK_QTY     = 4;   // D = จำนวน (Qty)
+const COL_LOCK_DATE    = 8;   // H = อัปเดตล่าสุด (Last Updated)
 
 // ── ZORT API ──
 const ZORT_STORE  = "dunity8888@gmail.com";
@@ -311,9 +314,11 @@ function transferStock(ss, sku, qty) {
       const fsQty = Number(data[i][COL_PROD_QTYFS - 1]) || 0;
       const actual = Math.min(qty, whQty);
 
+      const name   = String(data[i][2] || "").trim(); // col C = ชื่อสินค้า
       sheet.getRange(row, COL_PROD_QTYWH).setValue(whQty - actual);
       sheet.getRange(row, COL_PROD_QTYFS).setValue(fsQty + actual);
       SpreadsheetApp.flush();
+      try { logTransfer_(ss, sku, name, actual); } catch (e) { Logger.log("logTransfer_ error: " + e); }
       try {
         pushStockToZort_([
           { sku, qty: whQty - actual, warehousecode: WH_SAI5 },
@@ -324,6 +329,19 @@ function transferStock(ss, sku, qty) {
     }
   }
   return error("ไม่พบ SKU: " + sku);
+}
+
+function logTransfer_(ss, sku, productName, qty) {
+  let logSheet = ss.getSheetByName(SHEET_TRANSFERS);
+  if (!logSheet) {
+    logSheet = ss.insertSheet(SHEET_TRANSFERS);
+    logSheet.appendRow(["หมายเลขรายการ","วันที่ทำรายการ","สถานะ(รอ,สำเร็จ)","จากคลัง/สาขา","ไปคลัง/สาขา","รหัสสินค้า","ชื่อสินค้า","จำนวน"]);
+  }
+  const now    = new Date();
+  const dateStr = Utilities.formatDate(now, Session.getScriptTimeZone(), "dd/MM/yyyy");
+  const rows   = logSheet.getLastRow();
+  const refNum = "TF-" + Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyyMMdd") + "-" + String(rows).padStart(3,"0");
+  logSheet.appendRow([refNum, dateStr, "สำเร็จ", WH_NAME_SAI5, WH_NAME_FS, sku, productName, qty]);
 }
 
 function deductStock(ss, sku, qty) {
@@ -446,7 +464,8 @@ function updateLockData(ss, lockKey, entries, datetime) {
         }
       }
       if (!found && entry.isNew) {
-        sheet.appendRow([lockKey, sku, entry.qty, dt]);
+        // A=ว่าง, B=SKU, C=lockKey, D=qty, E-G=ว่าง, H=date
+        sheet.appendRow(["", sku, lockKey, entry.qty, "", "", "", dt]);
       }
     }
     return ok({ lockKey, updated: entries.length });
