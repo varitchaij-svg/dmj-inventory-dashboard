@@ -4545,8 +4545,8 @@ async function syncFrontStoreData(entries) {
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
   try {
     await fetch(SHEET_DEPLOY_URL, {
-      method: "POST", mode: "no-cors",
-      headers: { "Content-Type": "application/json" },
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
         updateFrontStore: true,
         datetime: new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }),
@@ -5117,8 +5117,8 @@ async function confirmStockCount(entries) {
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
   try {
     await fetch(SHEET_DEPLOY_URL, {
-      method: "POST", mode: "no-cors",
-      headers: { "Content-Type": "application/json" },
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
         confirmStockCount: true,
         datetime: new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }),
@@ -5135,8 +5135,8 @@ async function syncLockData(lockKey, entries) {
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
   try {
     await fetch(SHEET_DEPLOY_URL, {
-      method: "POST", mode: "no-cors",
-      headers: { "Content-Type": "application/json" },
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
         updateLockData: true,
         lockKey,
@@ -5152,8 +5152,8 @@ async function syncDeleteLockEntry(lockKey, sku) {
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
   try {
     await fetch(SHEET_DEPLOY_URL, {
-      method: "POST", mode: "no-cors",
-      headers: { "Content-Type": "application/json" },
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ deleteLockEntry: true, lockKey, sku }),
     });
     return { success: true };
@@ -6683,8 +6683,8 @@ async function syncOrderUpdate(order, updates) {
   if (!SHEET_DEPLOY_URL) return;
   try {
     await fetch(SHEET_DEPLOY_URL, {
-      method: "POST", mode: "no-cors",
-      headers: { "Content-Type": "application/json" },
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
         updateOrderState: true,
         orderId: order.id,
@@ -7042,13 +7042,15 @@ function OrderListView({ data, role }) {
 async function syncStockDeduct(sku, qty) {
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
   try {
-    await fetch(SHEET_DEPLOY_URL, {
-      method: "POST", mode: "no-cors",
-      headers: { "Content-Type": "application/json" },
+    const res = await fetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ transferStock: true, sku, qty }),
     });
-    return { success: true };
-  } catch(e) { return { success: false, error: e.message }; }
+    const json = await res.json().catch(() => ({}));
+    console.log("syncStockDeduct result:", json);
+    return json;
+  } catch(e) { console.warn("syncStockDeduct error:", e.message); return { success: false, error: e.message }; }
 }
 
 // ─── เบิกวัตถุดิบ MTO — หักคลังหลายรายการ ───
@@ -7056,8 +7058,8 @@ async function syncDeductMaterials(items) {
   if (!SHEET_DEPLOY_URL || !items.length) return { success: false };
   try {
     await fetch(SHEET_DEPLOY_URL, {
-      method: "POST", mode: "no-cors",
-      headers: { "Content-Type": "application/json" },
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ deductMaterials: true, items }),
     });
     return { success: true };
