@@ -6963,17 +6963,8 @@ function OrderListView({ data, role }) {
       // (order date ≤ markedAt). Otherwise trust the sheet — new order / ID collision.
       const sheetPending = !o.status || o.status === "รอ" || o.status === "pending";
       if (sheetPending && DONE_ST.has(local.status)) {
-        let keepLocal = false;
-        if (local.markedAt && o.date) {
-          const orderMs  = new Date(o.date).getTime();
-          const markedMs = new Date(local.markedAt).getTime();
-          keepLocal = !isNaN(orderMs) && !isNaN(markedMs) && orderMs <= markedMs;
-        }
-        if (!keepLocal) {
-          // strip all terminal-state fields → show as pending
-          const { status:_s, markedAt:_m, shipped:_sh, ...rest } = local;
-          return { ...o, id, ...rest };
-        }
+        // Always trust localStorage Done — date parse failures should not erase Done status
+        return { ...o, id, ...local };
       }
       return { ...o, id, ...local };
     });
@@ -7255,17 +7246,9 @@ function OrderSummaryView({ data, onPrintRequest }) {
       const local = st[id] || {};
       const sheetPending = !o.status || o.status === "รอ" || o.status === "pending";
       if (sheetPending && DONE_ST.has(local.status)) {
-        let keepLocal = false;
-        if (local.markedAt && o.date) {
-          const orderMs  = new Date(o.date).getTime();
-          const markedMs = new Date(local.markedAt).getTime();
-          keepLocal = !isNaN(orderMs) && !isNaN(markedMs) && orderMs <= markedMs;
-        }
-        if (!keepLocal) {
-          const { status:_s, markedAt:_m, shipped:_sh, ...rest } = local;
-          const skuKey = (o.sku || '').trim().toUpperCase();
-          return { ...o, id, ...rest, product: productMap[o.sku] || productMap[skuKey] };
-        }
+        // Always trust localStorage Done — date parse failures should not erase Done status
+        const skuKey = (o.sku || '').trim().toUpperCase();
+        return { ...o, id, ...local, product: productMap[o.sku] || productMap[skuKey] };
       }
       const skuKey = (o.sku || '').trim().toUpperCase();
       return { ...o, id, ...local, product: productMap[o.sku] || productMap[skuKey] };
