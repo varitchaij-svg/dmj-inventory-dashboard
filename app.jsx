@@ -12,6 +12,7 @@ const TABS = [
   { id: "transfers",     label: "🔄 โอน/ปรับ/ยกมา",        icon: I.arrowR },
   { id: "orders",        label: "📋 รายการสั่งของ",         icon: I.cart },
   { id: "ordersummary",  label: "📦 สรุปสินค้าออกจากคลัง",  icon: I.store },
+  { id: "mtojobs",       label: "🎁 งานจัดพิเศษ",            icon: I.package },
   { id: "upload",        label: "⬆️ อัปโหลด Zort",          icon: I.upload },
   { id: "connect",       label: "🔗 Google Sheet",          icon: I.sheets },
   { id: "labels",        label: "🖨️ พิมพ์ Label",            icon: I.print },
@@ -26,9 +27,9 @@ const ROLE_PASSWORDS = {
   "SALE":  "saler",        // พนักงานขาย
 };
 const ROLE_TABS = {
-  owner:      ["overview","categories","trends","stock","storage","stockcount","frontstore","transfers","orders","ordersummary","upload","connect","labels"],
-  employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","labels"],
-  warehouse:  ["categories","stock","storage","stockcount","orders","ordersummary","labels"],
+  owner:      ["overview","categories","trends","stock","storage","stockcount","frontstore","transfers","orders","ordersummary","mtojobs","upload","connect","labels"],
+  employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","mtojobs","labels"],
+  warehouse:  ["categories","stock","storage","stockcount","orders","ordersummary","mtojobs","labels"],
   frontstore: ["categories","stock","frontstore","orders","labels"],
   saler:      ["categories","stock","orders","labels"],
 };
@@ -509,6 +510,7 @@ function App() {
         {activeTab === "transfers"    && <TransferView data={data}/>}
         {activeTab === "orders"       && <OrderListView data={data} role={role}/>}
         {activeTab === "ordersummary" && <OrderSummaryView data={data} onPrintRequest={handleOrderPrint}/>}
+        {activeTab === "mtojobs"      && <MtoJobView data={data} />}
         {activeTab === "upload"       && <UploadView currentData={data} onDataLoaded={handleDataLoaded}/>}
         {activeTab === "labels"       && <LabelPrintView data={data}
                                             initItems={labelInitItems}
