@@ -24,10 +24,10 @@ const COL_ORD_PREPQTY  = 9;   // I = จำนวนที่จัด
 const COL_ORD_PRINTFLAG= 14;  // N = QR code / print flag
 
 // ── คอลัมน์ในชีต locks ───────────────────────────────────────
-const COL_LOCK_KEY     = 1;   // A = lockKey (เช่น A1/01)
-const COL_LOCK_SKU     = 2;   // B = SKU
-const COL_LOCK_QTY     = 3;   // C = จำนวนที่นับจริง
-const COL_LOCK_DATE    = 4;   // D = วันที่เช็ค
+const COL_LOCK_SKU     = 2;   // B = รหัสสินค้า (SKU)
+const COL_LOCK_KEY     = 3;   // C = รหัสล็อค (Location)
+const COL_LOCK_QTY     = 4;   // D = จำนวน (Qty)
+const COL_LOCK_DATE    = 8;   // H = อัปเดตล่าสุด (Last Updated)
 
 // ── ZORT API ──────────────────────────────────────────────────
 // ⚠️ ใส่ข้อมูลจริงใน Google Apps Script Editor เท่านั้น ห้าม commit ลง git
@@ -244,7 +244,8 @@ function updateLockData(ss, lockKey, entries, datetime) {
         }
       }
       if (!found && entry.isNew) {
-        sheet.appendRow([lockKey, sku, entry.qty, dt]);
+        // A=ว่าง, B=SKU, C=lockKey, D=qty, E-G=ว่าง, H=date
+        sheet.appendRow(["", sku, lockKey, entry.qty, "", "", "", dt]);
       }
     }
     return ok({ lockKey, updated: entries.length });
