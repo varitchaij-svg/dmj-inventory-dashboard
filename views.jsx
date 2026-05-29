@@ -7241,7 +7241,16 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const products = data.products || [];
   const [st, setSt]           = uS(getOrdersState);
   const [printed, setPrinted] = uS(getPrintedOrders);
-  const [shipped, setShipped] = uS(getShippedOrders);
+  const [shipped, setShipped] = uS(() => {
+    // Clean up shipped entries that no longer exist in current orders
+    const raw  = getShippedOrders();
+    const ids  = new Set(orders.map((o, i) => stableOrderId(o, i)));
+    const clean = Object.fromEntries(Object.entries(raw).filter(([id]) => ids.has(id)));
+    if (Object.keys(clean).length !== Object.keys(raw).length) {
+      localStorage.setItem(LS_SHIPPED_ORDERS, JSON.stringify(clean));
+    }
+    return clean;
+  });
   const [missed,  setMissed]  = uS(getMissedOrders);
   const [sending, setSending] = uS(null);
   const [bigImg, setBigImg]   = uS(null);
