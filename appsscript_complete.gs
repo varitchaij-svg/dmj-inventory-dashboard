@@ -119,6 +119,9 @@ function doPost(e) {
     if (data.updateFrontStore) {
       return updateFrontStore(ss, data.entries, data.datetime);
     }
+    if (data.confirmStockCount) {
+      return confirmStockCount(ss, data.entries);
+    }
 
     // ─── Order Management ───
     if (data.deleteOrder) {
@@ -506,6 +509,37 @@ function updateFrontStore(ss, entries, datetime) {
     if (zortItems.length) pushStockToZort_(zortItems);
   } catch (e) { Logger.log("updateFrontStore ZORT push error: " + e); }
   return ok({ updated: entries.length });
+}
+
+function confirmStockCount(ss, entries) {
+  if (!Array.isArray(entries) || !entries.length) return error("entries ว่างเปล่า");
+  const sheet = ss.getSheetByName(SHEET_PRODUCTS);
+  if (!sheet) return error("ไม่พบชีต: " + SHEET_PRODUCTS);
+
+  const data = sheet.getDataRange().getValues();
+  let updated = 0;
+  for (const entry of entries) {
+    const sku = String(entry.sku || "").trim().toUpperCase();
+    const qty = Number(entry.qty) || 0;
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase() === sku) {
+        sheet.getRange(i + 1, COL_PROD_QTYWH).setValue(qty);
+        data[i][COL_PROD_QTYWH - 1] = qty;
+        updated++;
+        break;
+      }
+    }
+  }
+  SpreadsheetApp.flush();
+
+  try {
+    const zortItems = entries
+      .filter(e => e.sku && Number(e.qty) >= 0)
+      .map(e => ({ sku: String(e.sku).trim().toUpperCase(), qty: Number(e.qty), warehousecode: WH_SAI5 }));
+    if (zortItems.length) pushStockToZort_(zortItems);
+  } catch (e) { Logger.log("confirmStockCount ZORT push error: " + e); }
+
+  return ok({ confirmed: updated });
 }
 
 function deleteOrderRow(ss, orderId) {

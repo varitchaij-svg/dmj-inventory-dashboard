@@ -5111,6 +5111,24 @@ function FrontStoreView({ data, role }) {
   );
 }
 
+// ─── confirm stock count → write to SHEET_PRODUCTS col H + push ZORT ───
+async function confirmStockCount(entries) {
+  // entries = [{ sku, qty }]
+  if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
+  try {
+    await fetch(SHEET_DEPLOY_URL, {
+      method: "POST", mode: "no-cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        confirmStockCount: true,
+        datetime: new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }),
+        entries,
+      }),
+    });
+    return { success: true };
+  } catch (err) { return { success: false, error: err.message }; }
+}
+
 // ─── sync lock data to "ตำแหน่งจัดเก็บ" sheet ───
 async function syncLockData(lockKey, entries) {
   // entries = [{ sku, qty, isNew }]
@@ -5431,6 +5449,7 @@ function StockCountView({ data }) {
   const [checkedQtys, setCheckedQtys]       = uS({});
   const [savedSkus, setSavedSkus]           = uS(new Set());
   const [saving, setSaving]                 = uS(false);
+  const [confirming, setConfirming]         = uS(false);
   const [lastSavedTime, setLastSavedTime]   = uS(null);
   const [toast, showToast, hideToast]       = useToast();
   const [calcPad, setCalcPad]               = uS(null); // {sku, val, name}
@@ -5586,6 +5605,24 @@ function StockCountView({ data }) {
       showToast('success', 'บันทึกแล้ว ' + entries.length + ' รายการ', '💾');
     } else {
       showToast('error', 'บันทึกไม่สำเร็จ', '❌');
+    }
+  };
+
+  const handleConfirm = async () => {
+    const entries = Object.entries(checkedQtys)
+      .filter(([, v]) => v !== '' && v != null)
+      .map(([sku, qty]) => ({ sku, qty: parseInt(qty)||0 }));
+    if (!entries.length) { showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return; }
+    setConfirming(true);
+    await syncLockData(selLockKey, entries);
+    const result = await confirmStockCount(entries);
+    setConfirming(false);
+    if (result.success !== false) {
+      setSavedSkus(new Set(entries.map(e => e.sku)));
+      setLastSavedTime(new Date());
+      showToast('success', 'ยืนยันผลนับแล้ว ' + entries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
+    } else {
+      showToast('error', 'ยืนยันไม่สำเร็จ', '❌');
     }
   };
 
@@ -6269,16 +6306,25 @@ function StockCountView({ data }) {
             <div style={{fontSize:15,fontWeight:800}}>ล็อค {selLockKey}</div>
             <div style={{fontSize:11,color:'var(--muted)'}}>ขั้น 3 — กรอกจำนวนที่นับได้จริง</div>
           </div>
-          <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:2}}>
-            <button onClick={handleSave} disabled={saving||filledCount===0}
-              className="btn primary"
-              style={{padding:'10px 20px',fontWeight:700,fontSize:14,
-                      opacity:(saving||filledCount===0)?0.4:1}}>
-              {saving ? '⏳ บันทึก...' : filledCount>0 ? '💾 บันทึก ('+filledCount+')' : '💾 บันทึก'}
-            </button>
+          <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}}>
+            <div style={{display:'flex',gap:6}}>
+              <button onClick={handleSave} disabled={saving||confirming||filledCount===0}
+                className="btn"
+                style={{padding:'10px 14px',fontWeight:700,fontSize:13,
+                        border:'1.5px solid var(--bdr)',background:'#fff',
+                        opacity:(saving||confirming||filledCount===0)?0.4:1}}>
+                {saving ? '⏳...' : '💾 draft'}
+              </button>
+              <button onClick={handleConfirm} disabled={saving||confirming||filledCount===0}
+                className="btn primary"
+                style={{padding:'10px 16px',fontWeight:700,fontSize:13,
+                        opacity:(saving||confirming||filledCount===0)?0.4:1}}>
+                {confirming ? '⏳ ยืนยัน...' : '✅ ยืนยันผลนับ' + (filledCount>0?' ('+filledCount+')':'')}
+              </button>
+            </div>
             {lastSavedTime && (
               <div style={{fontSize:10,color:'var(--g-600)',fontWeight:600}}>
-                {'✓ บันทึก '+lastSavedTime.getHours().toString().padStart(2,'0')+':'+lastSavedTime.getMinutes().toString().padStart(2,'0')}
+                {'✓ '+lastSavedTime.getHours().toString().padStart(2,'0')+':'+lastSavedTime.getMinutes().toString().padStart(2,'0')}
               </div>
             )}
           </div>
