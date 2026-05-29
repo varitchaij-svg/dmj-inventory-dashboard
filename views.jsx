@@ -7034,7 +7034,7 @@ function OrderListView({ data }) {
   );
 }
 
-// ─── deduct stock from sheet ───
+// ─── โอนสต็อก คลัง(H) → หน้าร้าน(G) ───
 async function syncStockDeduct(sku, qty) {
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
   try {
@@ -7045,6 +7045,179 @@ async function syncStockDeduct(sku, qty) {
     });
     return { success: true };
   } catch(e) { return { success: false, error: e.message }; }
+}
+
+// ─── เบิกวัตถุดิบ MTO — หักคลังหลายรายการ ───
+async function syncDeductMaterials(items) {
+  if (!SHEET_DEPLOY_URL || !items.length) return { success: false };
+  try {
+    await fetch(SHEET_DEPLOY_URL, {
+      method: "POST", mode: "no-cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deductMaterials: true, items }),
+    });
+    return { success: true };
+  } catch(e) { return { success: false, error: e.message }; }
+}
+
+// ─── Modal เบิกวัตถุดิบ MTO ───────────────────────────────────
+function MaterialDrawModal({ open, orderName, products, onConfirm, onSkip, onCancel }) {
+  const [search, setSearch] = uS("");
+  const [items,  setItems]  = uS([]);
+  const [qty,    setQty]    = uS(1);
+  const [picked, setPicked] = uS(null); // product object ที่กำลังจะเพิ่ม
+
+  useBackHandler(open ? onCancel : null);
+
+  // reset ทุกครั้งที่เปิด
+  uE(() => { if (open) { setSearch(""); setItems([]); setQty(1); setPicked(null); } }, [open]);
+
+  if (!open) return null;
+
+  const filtered = search.trim().length >= 1
+    ? (products || []).filter(p =>
+        !p.isMTO &&
+        (p.sku.toLowerCase().includes(search.toLowerCase()) ||
+         p.name.toLowerCase().includes(search.toLowerCase()))
+      ).slice(0, 8)
+    : [];
+
+  const addItem = (p) => {
+    const q = Number(qty) || 1;
+    setItems(prev => {
+      const existing = prev.find(x => x.sku === p.sku);
+      if (existing) return prev.map(x => x.sku === p.sku ? { ...x, qty: x.qty + q } : x);
+      return [...prev, { sku: p.sku, name: p.name, qty: q }];
+    });
+    setSearch(""); setQty(1); setPicked(null);
+  };
+
+  const removeItem = (sku) => setItems(prev => prev.filter(x => x.sku !== sku));
+
+  const handleConfirm = () => onConfirm(items);
+
+  return (
+    <div onClick={onCancel} style={{
+      position:"fixed", inset:0, background:"rgba(0,0,0,.65)", zIndex:2100,
+      display:"flex", alignItems:"center", justifyContent:"center", padding:16,
+      backdropFilter:"blur(4px)",
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background:"#fff", borderRadius:18, width:"100%", maxWidth:400,
+        overflow:"hidden", boxShadow:"0 20px 60px rgba(0,0,0,.3)",
+        maxHeight:"90vh", display:"flex", flexDirection:"column",
+      }}>
+        {/* Header */}
+        <div style={{ background:"#f3eef9", padding:"18px 20px 14px", borderBottom:"2px solid #d8c8e8" }}>
+          <div style={{ fontSize:28, textAlign:"center", marginBottom:4 }}>🌸</div>
+          <div style={{ fontWeight:700, fontSize:15, color:"#5b3d82", textAlign:"center" }}>เบิกวัตถุดิบ / ดอกไม้</div>
+          <div style={{ fontSize:12, color:"#705d96", textAlign:"center", marginTop:2 }}>{orderName}</div>
+        </div>
+
+        <div style={{ padding:"14px 16px", overflowY:"auto", flex:1 }}>
+          {/* Search + qty row */}
+          <div style={{ display:"flex", gap:8, marginBottom:8 }}>
+            <div style={{ flex:1, position:"relative" }}>
+              <input
+                autoFocus
+                placeholder="ค้นหา SKU หรือชื่อสินค้า"
+                value={search}
+                onChange={e => { setSearch(e.target.value); setPicked(null); }}
+                style={{
+                  width:"100%", padding:"9px 12px", borderRadius:8, fontSize:13,
+                  border:"1.5px solid var(--bdr)", fontFamily:"inherit", boxSizing:"border-box",
+                }}
+              />
+              {/* Dropdown results */}
+              {filtered.length > 0 && (
+                <div style={{
+                  position:"absolute", top:"100%", left:0, right:0, background:"#fff",
+                  border:"1.5px solid var(--bdr)", borderRadius:8, zIndex:10,
+                  boxShadow:"0 4px 16px rgba(0,0,0,.12)", maxHeight:200, overflowY:"auto",
+                }}>
+                  {filtered.map(p => (
+                    <div key={p.sku} onClick={() => { setPicked(p); setSearch(p.name); }}
+                      style={{
+                        padding:"8px 12px", cursor:"pointer", fontSize:12,
+                        borderBottom:"1px solid var(--bdr)",
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background="#f5f5f5"}
+                      onMouseLeave={e => e.currentTarget.style.background=""}
+                    >
+                      <span style={{ fontWeight:600, color:"var(--g-700)" }}>{p.sku}</span>
+                      <span style={{ color:"var(--muted)", marginLeft:6 }}>{p.name}</span>
+                      <span style={{ float:"right", color:"var(--muted)" }}>คลัง: {p.qtyWH ?? p.qty ?? 0}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <input
+              type="number" min="1" value={qty}
+              onChange={e => setQty(e.target.value)}
+              style={{ width:60, padding:"9px 8px", borderRadius:8, fontSize:13,
+                       border:"1.5px solid var(--bdr)", fontFamily:"inherit", textAlign:"center" }}
+            />
+            <button
+              onClick={() => picked && addItem(picked)}
+              disabled={!picked}
+              style={{
+                padding:"9px 14px", borderRadius:8, border:"none", cursor: picked ? "pointer" : "not-allowed",
+                background: picked ? "var(--g-700)" : "#ccc", color:"#fff", fontSize:13, fontWeight:700,
+                fontFamily:"inherit",
+              }}
+            >เพิ่ม</button>
+          </div>
+
+          {/* รายการที่เพิ่มแล้ว */}
+          {items.length > 0 ? (
+            <div style={{ background:"#fafafa", borderRadius:10, padding:"8px 4px", marginTop:4 }}>
+              <div style={{ fontSize:11, color:"var(--muted)", padding:"0 8px 6px", fontWeight:600 }}>
+                รายการที่จะเบิก ({items.length} รายการ)
+              </div>
+              {items.map(it => (
+                <div key={it.sku} style={{
+                  display:"flex", alignItems:"center", gap:8,
+                  padding:"6px 10px", borderBottom:"1px solid var(--bdr)",
+                }}>
+                  <div style={{ flex:1, fontSize:12 }}>
+                    <span style={{ fontWeight:600 }}>{it.sku}</span>
+                    <span style={{ color:"var(--muted)", marginLeft:6 }}>{it.name}</span>
+                  </div>
+                  <span style={{ fontWeight:700, color:"var(--g-700)", minWidth:28, textAlign:"right" }}>×{it.qty}</span>
+                  <button onClick={() => removeItem(it.sku)} style={{
+                    background:"none", border:"none", cursor:"pointer", color:"var(--dang)", fontSize:16, padding:"0 2px"
+                  }}>×</button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ textAlign:"center", color:"var(--muted)", fontSize:12, padding:"16px 0" }}>
+              ค้นหาและเพิ่มวัตถุดิบที่ใช้ในงานนี้
+            </div>
+          )}
+        </div>
+
+        {/* Buttons */}
+        <div style={{ padding:"12px 16px 16px", display:"flex", gap:8, borderTop:"1px solid var(--bdr)" }}>
+          <button onClick={onSkip} style={{
+            flex:1, padding:"13px", borderRadius:10, border:"1.5px solid var(--bdr)",
+            background:"#fff", fontSize:13, fontFamily:"inherit", cursor:"pointer", color:"var(--muted)",
+          }}>
+            ข้ามการเบิก
+          </button>
+          <button onClick={handleConfirm} disabled={items.length === 0} style={{
+            flex:2, padding:"13px", borderRadius:10, border:"none",
+            background: items.length > 0 ? "#705d96" : "#ccc",
+            color:"#fff", fontSize:13, fontWeight:700, fontFamily:"inherit",
+            cursor: items.length > 0 ? "pointer" : "not-allowed",
+          }}>
+            ✅ เบิก {items.length > 0 ? `${items.length} รายการ` : ""}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 const LS_SHIPPED_ORDERS = "dmj_shipped_orders_v1";
@@ -7067,6 +7240,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const [toast, showToast, hideToast] = useToast();
   const [shipConfirm, setShipConfirm]    = uS(null); // single order
   const [shipAllConfirm, setShipAllConfirm] = uS(null); // ready[] array
+  const [materialDraw, setMaterialDraw]  = uS(null); // { order, afterConfirm: fn }
 
   const productMap = uM(() => { const m={}; products.forEach(p => m[p.sku]=p); return m; }, [products]);
 
@@ -7109,13 +7283,19 @@ function OrderSummaryView({ data, onPrintRequest }) {
   };
 
   const handleShip = (order) => setShipConfirm(order);
-  const doShip = async () => {
-    const order = shipConfirm;
-    setShipConfirm(null);
-    if (!order) return;
+
+  // ทำการส่งสินค้าจริง (หลังผ่าน confirm และ material draw แล้ว)
+  const finalizeShip = async (order, matItems) => {
     const qty = order.preparedQty || order.orderQty || 0;
     setSending(order.id);
-    await syncStockDeduct(order.sku, qty);
+
+    // ถ้าไม่ใช่ MTO → โอนสต็อกคลัง→หน้าร้าน / ถ้าเป็น MTO → เบิกวัตถุดิบ (ถ้ามี)
+    if (!order.product?.isMTO) {
+      await syncStockDeduct(order.sku, qty);
+    } else if (matItems && matItems.length > 0) {
+      await syncDeductMaterials(matItems);
+    }
+
     try {
       await fetch(SHEET_DEPLOY_URL, {
         method: "POST", mode: "no-cors",
@@ -7123,12 +7303,30 @@ function OrderSummaryView({ data, onPrintRequest }) {
         body: JSON.stringify({ deleteOrder: true, orderId: order.id }),
       });
     } catch(e) { console.warn("deleteOrder failed:", e.message); }
+
     setSending(null);
     const next = { ...shipped, [order.id]: true };
     setShipped(next);
     localStorage.setItem(LS_SHIPPED_ORDERS, JSON.stringify(next));
     setSt(patchOrderState(order.id, { status: "ส่งแล้ว" }));
     showToast("success", `ส่ง ${qty} ชิ้นแล้ว`, "📦");
+  };
+
+  const doShip = async () => {
+    const order = shipConfirm;
+    setShipConfirm(null);
+    if (!order) return;
+
+    if (order.product?.isMTO) {
+      // MTO → เปิด modal เบิกวัตถุดิบ
+      setMaterialDraw({
+        order,
+        afterConfirm: (matItems) => { setMaterialDraw(null); finalizeShip(order, matItems); },
+        afterSkip:    ()          => { setMaterialDraw(null); finalizeShip(order, []); },
+      });
+    } else {
+      await finalizeShip(order, []);
+    }
   };
 
   const toggleMissed = (order) => {
@@ -7154,9 +7352,11 @@ function OrderSummaryView({ data, onPrintRequest }) {
     for (const order of ready) {
       setSending(order.id);
       const qty = order.preparedQty || order.orderQty || 0;
-      await syncStockDeduct(order.sku, qty);
+      // MTO ไม่โอนสต็อก (ไม่มีสต็อกคงเหลือให้โอน) — เบิกวัตถุดิบต้องทำแบบทีละรายการ
+      if (!order.product?.isMTO) {
+        await syncStockDeduct(order.sku, qty);
+      }
       nextShipped[order.id] = true;
-      // อัพเดท shared state ให้ OrderListView เห็นด้วย
       nextSt[order.id] = { ...(nextSt[order.id]||{}), status: "ส่งแล้ว" };
       syncOrderUpdate(order, { shipped: true, status: "ส่งแล้ว" });
     }
@@ -7420,6 +7620,14 @@ function OrderSummaryView({ data, onPrintRequest }) {
         confirmLabel={`ส่งทั้งหมด`}
         onConfirm={doShipAll}
         onCancel={() => setShipAllConfirm(null)}
+      />
+      <MaterialDrawModal
+        open={!!materialDraw}
+        orderName={materialDraw?.order ? `${materialDraw.order.name} (${materialDraw.order.sku})` : ""}
+        products={products}
+        onConfirm={materialDraw?.afterConfirm || (() => {})}
+        onSkip={materialDraw?.afterSkip || (() => {})}
+        onCancel={() => setMaterialDraw(null)}
       />
       <Toast toast={toast} onClose={hideToast}/>
     </div>
@@ -7980,6 +8188,6 @@ function CalcPadModal({ open, name, initialVal, onConfirm, onClose }) {
   );
 }
 
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal });
+Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal });
 
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal });
+Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal });
