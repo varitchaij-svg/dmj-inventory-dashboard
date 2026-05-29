@@ -7238,10 +7238,16 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const [st, setSt]           = uS(getOrdersState);
   const [printed, setPrinted] = uS(getPrintedOrders);
   const [shipped, setShipped] = uS(() => {
-    // Clean up shipped entries that no longer exist in current orders
-    const raw  = getShippedOrders();
-    const ids  = new Set(orders.map((o, i) => stableOrderId(o, i)));
-    const clean = Object.fromEntries(Object.entries(raw).filter(([id]) => ids.has(id)));
+    const raw = getShippedOrders();
+    const SIX_H = 6 * 60 * 60 * 1000;
+    const now   = Date.now();
+    // Keep only entries marked within 6 hours
+    const clean = Object.fromEntries(
+      Object.entries(raw).filter(([, v]) => {
+        const t = typeof v === "number" ? v : (v && v.t);
+        return t && (now - t) < SIX_H;
+      })
+    );
     if (Object.keys(clean).length !== Object.keys(raw).length) {
       localStorage.setItem(LS_SHIPPED_ORDERS, JSON.stringify(clean));
     }
@@ -7326,7 +7332,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
     } catch(e) { console.warn("deleteOrder failed:", e.message); }
 
     setSending(null);
-    const next = { ...shipped, [order.id]: true };
+    const next = { ...shipped, [order.id]: Date.now() };
     setShipped(next);
     localStorage.setItem(LS_SHIPPED_ORDERS, JSON.stringify(next));
     setSt(patchOrderState(order.id, { status: "ส่งแล้ว" }));
@@ -7377,7 +7383,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
       if (!order.product?.isMTO) {
         await syncStockDeduct(order.sku, qty);
       }
-      nextShipped[order.id] = true;
+      nextShipped[order.id] = Date.now();
       nextSt[order.id] = { ...(nextSt[order.id]||{}), status: "ส่งแล้ว" };
       syncOrderUpdate(order, { shipped: true, status: "ส่งแล้ว" });
     }
