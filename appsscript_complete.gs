@@ -319,7 +319,7 @@ function transferStock(ss, sku, qty) {
       sheet.getRange(row, COL_PROD_QTYFS).setValue(fsQty + actual);
       SpreadsheetApp.flush();
       try { logTransfer_(ss, sku, name, actual); } catch (e) { Logger.log("logTransfer_ error: " + e); }
-      try { createZortTransfer_(sku, actual); } catch (e) { Logger.log("createZortTransfer_ error: " + e); }
+      try { createZortTransfer_(sku, name, actual); } catch (e) { Logger.log("createZortTransfer_ error: " + e); }
       try {
         pushStockToZort_([
           { sku, qty: whQty - actual, warehousecode: WH_SAI5 },
@@ -345,7 +345,7 @@ function logTransfer_(ss, sku, productName, qty) {
   logSheet.appendRow([refNum, dateStr, "สำเร็จ", WH_NAME_SAI5, WH_NAME_FS, sku, productName, qty]);
 }
 
-function createZortTransfer_(sku, qty) {
+function createZortTransfer_(sku, productname, qty) {
   const now = new Date();
   const dateStr = Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyy-MM-dd");
   const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
@@ -353,7 +353,7 @@ function createZortTransfer_(sku, qty) {
     date: dateStr,
     fromwarehousecode: WH_SAI5,
     towarehousecode: WH_FRONTSTORE,
-    list: [{ sku: sku, number: qty }]
+    list: [{ sku: sku, productname: productname, number: qty }]
   };
   const res = UrlFetchApp.fetch(ZORT_BASE + "/Transfer/AddTransfer", {
     method: "post",
