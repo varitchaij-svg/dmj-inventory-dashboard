@@ -316,9 +316,13 @@ function syncZortToColumn_(warehousecode, colIndex, label) {
   Logger.log(`ZORT: ${products.length} items`);
 
   const zortMap = {};
+  const zortPriceMap = {};
   for (const p of products) {
-    const sku = String(p.productcode || p.barcode || "").trim().toUpperCase();
-    if (sku) zortMap[sku] = Number(p.remainqty ?? p.qty ?? 0);
+    const sku = String(p.sku || p.barcode || "").trim().toUpperCase();
+    if (sku) {
+      zortMap[sku] = Number(p.availablestock || 0);
+      zortPriceMap[sku] = Number(p.sellprice || 0);
+    }
   }
 
   const data = sheet.getDataRange().getValues();
@@ -328,6 +332,10 @@ function syncZortToColumn_(warehousecode, colIndex, label) {
     if (!sku) continue;
     if (zortMap[sku] !== undefined) {
       sheet.getRange(i + 1, colIndex).setValue(zortMap[sku]);
+      // Update price in col I if this is WH or FS sync
+      if (zortPriceMap[sku] > 0) {
+        sheet.getRange(i + 1, 9).setValue(zortPriceMap[sku]); // col I = price
+      }
       updated++;
     } else {
       notFound++;
@@ -335,6 +343,58 @@ function syncZortToColumn_(warehousecode, colIndex, label) {
   }
   SpreadsheetApp.flush();
   Logger.log(`อัพเดทแล้ว: ${updated} | ไม่พบใน ZORT: ${notFound}`);
+}
+
+// เพิ่มสินค้าใหม่จาก ZORT ที่ยังไม่มีในชีต
+function syncNewProductsFromZort() {
+  Logger.log("=== ค้นหาสินค้าใหม่จาก ZORT ===");
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_PRODUCTS);
+  if (!sheet) { Logger.log("ไม่พบชีต: " + SHEET_PRODUCTS); return; }
+
+  const productsWH = fetchAllZortProducts_(WH_SAI5);
+  const productsFS = fetchAllZortProducts_(WH_FRONTSTORE);
+  const allProducts = [...productsWH, ...productsFS];
+
+  // deduplicate by sku
+  const seen = {};
+  const unique = [];
+  for (const p of allProducts) {
+    const sku = String(p.sku || p.barcode || "").trim().toUpperCase();
+    if (sku && !seen[sku]) {
+      seen[sku] = true;
+      unique.push(p);
+    }
+  }
+
+  const data = sheet.getDataRange().getValues();
+  const existingSKUs = {};
+  for (let i = 1; i < data.length; i++) {
+    const sku = String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase();
+    if (sku) existingSKUs[sku] = true;
+  }
+
+  let added = 0;
+  for (const p of unique) {
+    const sku = String(p.sku || p.barcode || "").trim().toUpperCase();
+    if (sku && !existingSKUs[sku]) {
+      const newRow = [
+        sku,                           // col A (col index 1)
+        "",                            // col B (name placeholder)
+        p.name || "",                  // col C (name)
+        p.category || "",              // col D (category)
+        p.subCategory || "",           // col E (subCategory)
+        p.tag || "",                   // col F (tag)
+        0,                             // col G (FS qty) - start with 0
+        Number(p.availablestock || 0), // col H (WH qty)
+        Number(p.sellprice || 0)       // col I (price)
+      ];
+      sheet.appendRow(newRow);
+      added++;
+    }
+  }
+  SpreadsheetApp.flush();
+  Logger.log(`เพิ่มสินค้าใหม่: ${added} รายการ`);
 }
 
 // Sync คลังสาย5 → col H
@@ -349,7 +409,8 @@ function syncZortFrontStore() {
 
 // Sync ทั้ง 2 คลัง (ใช้สำหรับ trigger อัตโนมัติ)
 function syncZortBoth() {
-  syncZortWarehouse();
+  syncNewProductsFromZort();  // เพิ่มสินค้าใหม่ก่อน
+  syncZortWarehouse();         // แล้วอัพเดทสต็อก
   syncZortFrontStore();
 }
 
