@@ -514,17 +514,36 @@ function getZortWarehouses() {
 function fetchAllZortProducts_(warehousecode) {
   let page = 1;
   const all = [];
+  const MAX_RETRIES = 3;
+
   while (true) {
     let url = `${ZORT_BASE}/Product/GetProducts?page=${page}&limit=500`;
     if (warehousecode) url += `&warehousecode=${encodeURIComponent(warehousecode)}`;
-    const res  = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
-    const json = JSON.parse(res.getContentText());
-    if (!json.list || json.list.length === 0) break;
+
+    let json = null;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+        const text = res.getContentText();
+        json = JSON.parse(text);
+        break;
+      } catch (err) {
+        Logger.log(`Page ${page} attempt ${attempt} failed: ${err.message}`);
+        if (attempt < MAX_RETRIES) {
+          Utilities.sleep(1000 * attempt);
+        } else {
+          Logger.log(`Page ${page} ข้ามไปเพราะ parse ไม่ได้หลัง ${MAX_RETRIES} ครั้ง`);
+          json = null;
+        }
+      }
+    }
+
+    if (!json || !json.list || json.list.length === 0) break;
     all.push(...json.list);
     Logger.log(`Page ${page}: ${json.list.length} items (total: ${all.length})`);
     if (json.list.length < 500) break;
     page++;
-    Utilities.sleep(300);
+    Utilities.sleep(400);
   }
   return all;
 }
