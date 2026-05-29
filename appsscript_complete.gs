@@ -1707,8 +1707,55 @@ function closeMtoJob(ss, data) {
     }
   }
 
-  return ContentService.createTextOutput(JSON.stringify({ success: true, jobId, deducted: items.length }))
+  // Push to ZORT as Sales Order (deducts stock in ZORT)
+  let zortResult = null;
+  try {
+    const dateStr = closedAt ? closedAt.substring(0, 10) : Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyy-MM-dd");
+    zortResult = pushMtoJobToZort_(jobId, data.customer, items, dateStr);
+  } catch (e) {
+    Logger.log("ZORT SO push failed: " + e);
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({ success: true, jobId, deducted: items.length, zortSO: zortResult }))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+function pushMtoJobToZort_(jobName, customer, items, dateStr) {
+  const list = items.map(item => ({
+    sku: String(item.sku || "").trim(),
+    name: String(item.name || "").trim(),
+    number: Number(item.qty) || 0,
+    pricepernumber: 0,
+    discount: null,
+    totalprice: 0
+  })).filter(i => i.sku && i.number > 0);
+
+  if (!list.length) return null;
+
+  const whCode = items[0] && items[0].warehouse === "frontstore" ? WH_FRONTSTORE : WH_SAI5;
+
+  const payload = {
+    orderdateString: dateStr,
+    customername: customer || jobName,
+    description: "MTO: " + jobName,
+    vattype: 0,
+    warehousecode: whCode,
+    list: list,
+    amount: 0,
+    paymentamount: 0,
+    paymentstatus: "Paid",
+    status: "Success"
+  };
+
+  const res = UrlFetchApp.fetch(`${ZORT_BASE}/SaleOrder/CreateSaleOrder`, {
+    method: "post",
+    headers: Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" }),
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  });
+  const json = JSON.parse(res.getContentText());
+  Logger.log("ZORT SO created: " + JSON.stringify(json));
+  return json;
 }
 
 function deleteMtoJob(ss, data) {
