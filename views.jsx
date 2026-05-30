@@ -7039,13 +7039,13 @@ function OrderListView({ data, role }) {
 }
 
 // ─── โอนสต็อก คลัง(H) → หน้าร้าน(G) ───
-async function syncStockDeduct(sku, qty) {
+async function syncStockDeduct(sku, qty, name) {
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
   try {
     const res = await fetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ transferStock: true, sku, qty }),
+      body: JSON.stringify({ transferStock: true, sku, qty, name }),
     });
     const json = await res.json().catch(() => ({}));
     console.log("syncStockDeduct result:", json);
@@ -7320,7 +7320,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
     // ถ้าไม่ใช่ MTO → โอนสต็อกคลัง→หน้าร้าน / ถ้าเป็น MTO → เบิกวัตถุดิบ (ถ้ามี)
     if (!order.product?.isMTO) {
-      await syncStockDeduct(order.sku, qty);
+      await syncStockDeduct(order.sku, qty, order.name);
     } else if (matItems && matItems.length > 0) {
       await syncDeductMaterials(matItems);
     }
@@ -7383,7 +7383,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
       const qty = order.preparedQty || order.orderQty || 0;
       // MTO ไม่โอนสต็อก (ไม่มีสต็อกคงเหลือให้โอน) — เบิกวัตถุดิบต้องทำแบบทีละรายการ
       if (!order.product?.isMTO) {
-        await syncStockDeduct(order.sku, qty);
+        await syncStockDeduct(order.sku, qty, order.name);
       }
       nextShipped[order.id] = Date.now();
       nextSt[order.id] = { ...(nextSt[order.id]||{}), status: "ส่งแล้ว" };
