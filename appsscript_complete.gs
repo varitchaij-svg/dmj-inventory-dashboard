@@ -37,9 +37,9 @@ const COL_LOCK_DATE    = 8;   // H = อัปเดตล่าสุด (Last 
 
 // ── ZORT API ──
 // ⚠️ ใส่ค่าจริงใน Apps Script Editor เท่านั้น ห้าม commit ค่าจริงลง git
-const ZORT_STORE  = "PLACEHOLDER_STORENAME";
-const ZORT_APIKEY = "PLACEHOLDER_APIKEY";
-const ZORT_SECRET = "PLACEHOLDER_APISECRET";
+const ZORT_STORE  = "dunity8888@gmail.com";
+const ZORT_APIKEY = "9R/rzgb3ycJNTmw3sT9OUyoeBvDMjKDXGntA/QfCVHY=";
+const ZORT_SECRET = "6IeKRzV9muSlBK7AG4kuFpxWqC3WGYCBnazQFoK6TQ=";
 const ZORT_BASE   = "https://open-api.zortout.com/v4";
 const WH_SAI5       = "W0002";   // คลังสินค้าสาย5 → col H
 const WH_FRONTSTORE = "W0001";   // ดูเหมือนจริง → col G
