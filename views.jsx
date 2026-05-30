@@ -8339,7 +8339,7 @@ function MtoJobView({ data }) {
     try {
       const res = await fetch(SHEET_DEPLOY_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({
           createMtoJob: true,
           jobName: newJob.jobName.trim(),
@@ -8407,7 +8407,7 @@ function MtoJobView({ data }) {
       const closed = nowStr();
       const res = await fetch(SHEET_DEPLOY_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({
           closeMtoJob: true,
           jobId: activeJob.jobId,
@@ -8439,7 +8439,7 @@ function MtoJobView({ data }) {
     try {
       const res = await fetch(SHEET_DEPLOY_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({ deleteMtoJob: true, jobId: job.jobId }),
       });
       const json = await res.json();
