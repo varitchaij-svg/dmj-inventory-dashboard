@@ -4503,7 +4503,7 @@ function QRScanModal({ onDetected, onClose }) {
           </div>
         )}
         <div style={{marginTop:10,fontSize:11,color:"var(--muted)",textAlign:"center"}}>
-          กดปิดเมื่อเสร็จ · สแกนได้ต่อเนื่อง · รองรับ iPhone/Android/PC
+          สแกนสำเร็จแล้วกล้องจะปิดอัตโนมัติ · รองรับ iPhone/Android/PC
         </div>
       </div>
     </div>
@@ -4962,7 +4962,7 @@ function FrontStoreView({ data, role }) {
             {mismatchCount > 0 && <span style={{marginLeft:8, color:"var(--dang)"}}>· ไม่ตรง {mismatchCount} รายการ</span>}
           </div>
         </div>
-        <ScanButton size={40} continuous onScan={handleScanDetected}
+        <ScanButton size={40} onScan={handleScanDetected}
           style={{border:"1.5px solid var(--g-300)", borderRadius:10, flexShrink:0}}/>
         <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2,flexShrink:0}}>
           <button onClick={handleSave}
@@ -5310,7 +5310,7 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
               background:"var(--g-700)", color:"#fff",
               cursor:"pointer", fontSize:13, fontWeight:700, fontFamily:"inherit",
             }}>เพิ่ม</button>
-            <ScanButton size={38} continuous onScan={handleScanDetected}
+            <ScanButton size={38} onScan={handleScanDetected}
               style={{border:"1.5px solid var(--g-300)"}}/>
           </div>
         )}
@@ -8016,7 +8016,7 @@ ${labelsHTML}
           </div>
           <button className="btn primary" onClick={addItem}
                   style={{padding:"9px 18px",fontWeight:700}}>+ เพิ่ม</button>
-          <ScanButton size={40} continuous
+          <ScanButton size={40}
             style={{alignSelf:"flex-end",borderRadius:8}}
             onScan={sku => {
               if (!productMap[sku]) return;
@@ -8623,27 +8623,35 @@ function MtoJobView({ data }) {
           <div style={{ background: "#fff", border: "1.5px solid var(--bdr)", borderRadius: 12, padding: "16px", marginBottom: 16 }}>
             <div style={{ fontSize: 14, fontWeight: 700, color: "var(--g-800)", marginBottom: 12 }}>เพิ่มวัตถุดิบที่ใช้</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <div style={{ position: "relative" }}>
-                <input
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                  placeholder="ค้นหาสินค้า (SKU หรือชื่อ)"
-                  style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 14, boxSizing: "border-box" }}
-                />
-                {searchResults.length > 0 && (
-                  <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1.5px solid var(--bdr)", borderRadius: 8, zIndex: 100, boxShadow: "0 4px 16px rgba(0,0,0,.12)" }}>
-                    {searchResults.map(p => (
-                      <div key={p.sku} onClick={() => addMaterial(p)}
-                        style={{ padding: "10px 12px", cursor: "pointer", borderBottom: "1px solid var(--bdr)", fontSize: 13 }}
-                        onMouseEnter={e => e.currentTarget.style.background = "var(--g-50)"}
-                        onMouseLeave={e => e.currentTarget.style.background = "#fff"}
-                      >
-                        <span style={{ fontWeight: 600 }}>{p.sku}</span>
-                        <span style={{ color: "var(--muted)", marginLeft: 8 }}>{p.name}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
+              <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                <div style={{ position: "relative", flex: 1 }}>
+                  <input
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                    placeholder="ค้นหาสินค้า (SKU หรือชื่อ)"
+                    style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 14, boxSizing: "border-box" }}
+                  />
+                  {searchResults.length > 0 && (
+                    <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1.5px solid var(--bdr)", borderRadius: 8, zIndex: 100, boxShadow: "0 4px 16px rgba(0,0,0,.12)" }}>
+                      {searchResults.map(p => (
+                        <div key={p.sku} onClick={() => addMaterial(p)}
+                          style={{ padding: "10px 12px", cursor: "pointer", borderBottom: "1px solid var(--bdr)", fontSize: 13 }}
+                          onMouseEnter={e => e.currentTarget.style.background = "var(--g-50)"}
+                          onMouseLeave={e => e.currentTarget.style.background = "#fff"}
+                        >
+                          <span style={{ fontWeight: 600 }}>{p.sku}</span>
+                          <span style={{ color: "var(--muted)", marginLeft: 8 }}>{p.name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <ScanButton size={42} onScan={sku => {
+                  const code = String(sku || "").trim().toUpperCase();
+                  const found = products.find(p => (p.sku || "").trim().toUpperCase() === code);
+                  if (found) { addMaterial(found); showToast("success", `เพิ่ม ${found.sku}`); }
+                  else { setSearch(code); showToast("warn", `ไม่พบ SKU: ${code}`); }
+                }}/>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
                 <input
