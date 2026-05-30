@@ -36,9 +36,10 @@ const COL_LOCK_QTY     = 4;   // D = จำนวน (Qty)
 const COL_LOCK_DATE    = 8;   // H = อัปเดตล่าสุด (Last Updated)
 
 // ── ZORT API ──
-const ZORT_STORE  = "dunity8888@gmail.com";
-const ZORT_APIKEY = "F1TMH7i3MqANM20olpUxicNwRSHMHK7GotyuzDhiEn4=";
-const ZORT_SECRET = "FdJ7nn8UrQLIR4Fr1r5A7UGC4uU/tZ3EcITkZlTjOG4=";
+// ⚠️ ใส่ค่าจริงใน Apps Script Editor เท่านั้น ห้าม commit ค่าจริงลง git
+const ZORT_STORE  = "PLACEHOLDER_STORENAME";
+const ZORT_APIKEY = "PLACEHOLDER_APIKEY";
+const ZORT_SECRET = "PLACEHOLDER_APISECRET";
 const ZORT_BASE   = "https://open-api.zortout.com/v4";
 const WH_SAI5       = "W0002";   // คลังสินค้าสาย5 → col H
 const WH_FRONTSTORE = "W0001";   // ดูเหมือนจริง → col G
@@ -87,6 +88,11 @@ function doPost(e) {
         replyToLine(replyToken, replyPayload);
       }
       return ContentService.createTextOutput("OK");
+    }
+
+    // ─── Stock Transfer (Batch): คลัง → หน้าร้าน หลาย SKU ในครั้งเดียว ───
+    if (data.transferStockBatch) {
+      return transferStockBatch(ss, data.list || []);
     }
 
     // ─── Stock Transfer: คลัง → หน้าร้าน ───
@@ -364,6 +370,125 @@ function createZortTransfer_(sku, productname, qty) {
   const json = JSON.parse(res.getContentText());
   Logger.log("createZortTransfer_ result: " + JSON.stringify(json));
   return json;
+}
+
+// Batch: หักสต็อกหลาย SKU ในครั้งเดียว → สร้าง ZORT Transfer เอกสารเดียว (เลขที่ auto)
+// list = [{ sku, qty, name }, ...]
+function transferStockBatch(ss, list) {
+  if (!Array.isArray(list) || !list.length) return error("list ว่างเปล่า");
+  const sheet = ss.getSheetByName(SHEET_PRODUCTS);
+  if (!sheet) return error("ไม่พบชีต: " + SHEET_PRODUCTS);
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
+
+  try {
+    const data = sheet.getDataRange().getValues();
+    const transferred = [];   // { sku, name, qty } ที่หักได้จริง
+    const zortStock = [];      // absolute qty ต่อ warehouse
+    const results = [];
+
+    for (const item of list) {
+      const sku = String(item.sku || "").trim().toUpperCase();
+      const qty = Number(item.qty) || 0;
+      if (!sku || qty <= 0) { results.push({ sku, skipped: true }); continue; }
+
+      let found = false;
+      for (let i = 1; i < data.length; i++) {
+        if (String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase() === sku) {
+          const row    = i + 1;
+          const whQty  = Number(data[i][COL_PROD_QTYWH - 1]) || 0;
+          const fsQty  = Number(data[i][COL_PROD_QTYFS - 1]) || 0;
+          const actual = Math.min(qty, whQty);
+          const name   = item.name || String(data[i][2] || "").trim();
+          const newWH  = whQty - actual;
+          const newFS  = fsQty + actual;
+
+          sheet.getRange(row, COL_PROD_QTYWH).setValue(newWH);
+          sheet.getRange(row, COL_PROD_QTYFS).setValue(newFS);
+          data[i][COL_PROD_QTYWH - 1] = newWH;
+          data[i][COL_PROD_QTYFS - 1] = newFS;
+
+          if (actual > 0) {
+            transferred.push({ sku, name, qty: actual });
+            zortStock.push({ sku, qty: newWH, warehousecode: WH_SAI5 });
+            zortStock.push({ sku, qty: newFS, warehousecode: WH_FRONTSTORE });
+          }
+          results.push({ sku, transferred: actual, newWH, newFS });
+          found = true;
+          break;
+        }
+      }
+      if (!found) results.push({ sku, notFound: true });
+    }
+
+    SpreadsheetApp.flush();
+
+    let zortNumber = null, zortError = null;
+    if (transferred.length) {
+      try {
+        const zr = createZortTransferBatch_(transferred);
+        if (zr && zr.detail && zr.detail.id) zortNumber = zr.detail.number || zr.detail.id;
+        else zortError = (zr && (zr.description || zr.error)) || "ZORT transfer ไม่สำเร็จ";
+      } catch (e) { zortError = String(e); }
+
+      try { logTransferBatch_(ss, transferred, zortNumber); } catch (e) { Logger.log("logTransferBatch_ error: " + e); }
+      try { pushStockToZort_(zortStock); } catch (e) { Logger.log("batch ZORT push error: " + e); }
+    }
+
+    return ok({ count: transferred.length, zortNumber, zortError, results });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// สร้าง ZORT Transfer เอกสารเดียวที่มีหลายรายการ (เลขที่ auto)
+function createZortTransferBatch_(items) {
+  const now = new Date();
+  const dateStr = Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
+  const payload = {
+    date: dateStr,
+    fromwarehousecode: WH_SAI5,
+    towarehousecode: WH_FRONTSTORE,
+    list: items.map(it => ({ sku: it.sku, name: it.name, number: it.qty }))
+  };
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = UrlFetchApp.fetch(ZORT_BASE + "/Transfer/AddTransfer", {
+        method: "post", headers,
+        payload: JSON.stringify(payload),
+        muteHttpExceptions: true
+      });
+      const json = JSON.parse(res.getContentText());
+      Logger.log("createZortTransferBatch_ attempt " + attempt + ": " + JSON.stringify(json));
+      if (json && json.detail && json.detail.id) return json;
+      lastErr = json;
+    } catch (e) {
+      lastErr = e;
+      Logger.log("createZortTransferBatch_ attempt " + attempt + " error: " + e);
+    }
+    Utilities.sleep(800 * attempt);
+  }
+  return lastErr;
+}
+
+// log หลายรายการที่อ้าง ZORT number เดียวกัน
+function logTransferBatch_(ss, items, zortNumber) {
+  let logSheet = ss.getSheetByName(SHEET_TRANSFERS);
+  if (!logSheet) {
+    logSheet = ss.insertSheet(SHEET_TRANSFERS);
+    logSheet.appendRow(["หมายเลขรายการ","วันที่ทำรายการ","สถานะ(รอ,สำเร็จ)","จากคลัง/สาขา","ไปคลัง/สาขา","รหัสสินค้า","ชื่อสินค้า","จำนวน"]);
+  }
+  const now     = new Date();
+  const dateStr = Utilities.formatDate(now, Session.getScriptTimeZone(), "dd/MM/yyyy");
+  const baseRow = logSheet.getLastRow();
+  const refNum  = zortNumber
+    ? String(zortNumber)
+    : "TF-" + Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyyMMdd") + "-" + String(baseRow).padStart(3, "0");
+  const rows = items.map(it => [refNum, dateStr, "สำเร็จ", WH_NAME_SAI5, WH_NAME_FS, it.sku, it.name, it.qty]);
+  logSheet.getRange(baseRow + 1, 1, rows.length, 8).setValues(rows);
 }
 
 function deductStock(ss, sku, qty) {

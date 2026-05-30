@@ -7053,6 +7053,22 @@ async function syncStockDeduct(sku, qty, name) {
   } catch(e) { console.warn("syncStockDeduct error:", e.message); return { success: false, error: e.message }; }
 }
 
+// ส่งหลายรายการในครั้งเดียว → Apps Script สร้าง ZORT Transfer เอกสารเดียว (เลขที่ auto)
+// items = [{ sku, qty, name }, ...]
+async function syncStockTransferBatch(items) {
+  if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
+  try {
+    const res = await fetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ transferStockBatch: true, list: items }),
+    });
+    const json = await res.json().catch(() => ({}));
+    console.log("syncStockTransferBatch result:", json);
+    return json;
+  } catch(e) { console.warn("syncStockTransferBatch error:", e.message); return { success: false, error: e.message }; }
+}
+
 // ─── เบิกวัตถุดิบ MTO — หักคลังหลายรายการ ───
 async function syncDeductMaterials(items) {
   if (!SHEET_DEPLOY_URL || !items.length) return { success: false };
@@ -7327,8 +7343,8 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
     try {
       await fetch(SHEET_DEPLOY_URL, {
-        method: "POST", mode: "no-cors",
-        headers: { "Content-Type": "application/json" },
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({ deleteOrder: true, orderId: order.id }),
       });
     } catch(e) { console.warn("deleteOrder failed:", e.message); }
@@ -7378,13 +7394,21 @@ function OrderSummaryView({ data, onPrintRequest }) {
     if (!ready || !ready.length) return;
     const nextShipped = { ...shipped };
     let nextSt = getOrdersState();
+
+    // โอนสต็อกที่ไม่ใช่ MTO เป็น "ก้อนเดียว" → ZORT สร้าง transfer เอกสารเดียว เลขที่ auto
+    const transferItems = ready
+      .filter(o => !o.product?.isMTO)
+      .map(o => ({ sku: o.sku, qty: o.preparedQty || o.orderQty || 0, name: o.name }))
+      .filter(it => it.sku && it.qty > 0);
+
+    let batchRes = { success: true };
+    if (transferItems.length) {
+      batchRes = await syncStockTransferBatch(transferItems);
+    }
+    const batchOk = batchRes && batchRes.success !== false;
+
+    // อัปเดตสถานะ order ราย item (เบา ไม่ยิง ZORT ซ้ำ)
     for (const order of ready) {
-      setSending(order.id);
-      const qty = order.preparedQty || order.orderQty || 0;
-      // MTO ไม่โอนสต็อก (ไม่มีสต็อกคงเหลือให้โอน) — เบิกวัตถุดิบต้องทำแบบทีละรายการ
-      if (!order.product?.isMTO) {
-        await syncStockDeduct(order.sku, qty, order.name);
-      }
       nextShipped[order.id] = Date.now();
       nextSt[order.id] = { ...(nextSt[order.id]||{}), status: "ส่งแล้ว" };
       syncOrderUpdate(order, { shipped: true, status: "ส่งแล้ว" });
@@ -7394,7 +7418,14 @@ function OrderSummaryView({ data, onPrintRequest }) {
     localStorage.setItem(LS_SHIPPED_ORDERS, JSON.stringify(nextShipped));
     localStorage.setItem(LS_ORDERS_STATE, JSON.stringify(nextSt));
     setSt(nextSt);
-    showToast("success", `ส่ง ${ready.length} รายการแล้ว`, "📦");
+
+    const zErr = batchRes && batchRes.data && batchRes.data.zortError;
+    if (!batchOk || zErr) {
+      showToast("warn", `ส่ง ${ready.length} รายการ — แต่ ZORT มีปัญหา ${zErr || batchRes.error || ""}`, "⚠️");
+    } else {
+      const zNum = batchRes && batchRes.data && batchRes.data.zortNumber;
+      showToast("success", `ส่ง ${ready.length} รายการแล้ว${zNum ? ` (ZORT ${zNum})` : ""}`, "📦");
+    }
   };
 
   if (!orders.length) return (
