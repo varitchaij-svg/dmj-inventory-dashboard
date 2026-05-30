@@ -136,6 +136,15 @@ function doPost(e) {
     if (data.deleteOrder) {
       return deleteOrderRow(ss, data.orderId);
     }
+    if (data.deleteOrders) {
+      return deleteOrderRows(ss, data.orderIds || []);
+    }
+
+    // ─── Manual ZORT Sync ───
+    if (data.syncZortNow) {
+      syncZortBoth();
+      return ok({ synced: true });
+    }
 
     // ─── MTO Jobs ───
     if (data.createMtoJob)  return createMtoJob(ss, data);
@@ -325,13 +334,8 @@ function transferStock(ss, sku, qty, productName) {
       sheet.getRange(row, COL_PROD_QTYFS).setValue(fsQty + actual);
       SpreadsheetApp.flush();
       try { logTransfer_(ss, sku, name, actual); } catch (e) { Logger.log("logTransfer_ error: " + e); }
+      // AddTransfer ย้ายสต็อกใน ZORT ให้อยู่แล้ว ไม่ push absolute ทับ (กันเขียนทับยอดขายที่เกิดระหว่างนั้น)
       try { createZortTransfer_(sku, name, actual); } catch (e) { Logger.log("createZortTransfer_ error: " + e); }
-      try {
-        pushStockToZort_([
-          { sku, qty: whQty - actual, warehousecode: WH_SAI5 },
-          { sku, qty: fsQty + actual, warehousecode: WH_FRONTSTORE }
-        ]);
-      } catch (e) { Logger.log("transferStock ZORT push error: " + e); }
       return ok({ sku, transferred: actual, newWH: whQty - actual, newFS: fsQty + actual });
     }
   }
@@ -373,7 +377,8 @@ function createZortTransfer_(sku, productname, qty) {
 }
 
 // Batch: หักสต็อกหลาย SKU ในครั้งเดียว → สร้าง ZORT Transfer เอกสารเดียว (เลขที่ auto)
-// list = [{ sku, qty, name }, ...]
+// list = [{ sku, qty, name, orderId }, ...]
+// หมายเหตุ: AddTransfer ย้ายสต็อกใน ZORT ให้อยู่แล้ว จึงไม่ต้อง push absolute ทับ
 function transferStockBatch(ss, list) {
   if (!Array.isArray(list) || !list.length) return error("list ว่างเปล่า");
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
@@ -382,16 +387,24 @@ function transferStockBatch(ss, list) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(15000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
 
+  const cache = CacheService.getScriptCache();
   try {
     const data = sheet.getDataRange().getValues();
     const transferred = [];   // { sku, name, qty } ที่หักได้จริง
-    const zortStock = [];      // absolute qty ต่อ warehouse
     const results = [];
+    const shortfalls = [];     // รายการที่ส่งไม่ครบ (คลังไม่พอ)
 
     for (const item of list) {
       const sku = String(item.sku || "").trim().toUpperCase();
       const qty = Number(item.qty) || 0;
-      if (!sku || qty <= 0) { results.push({ sku, skipped: true }); continue; }
+      const orderId = String(item.orderId || "");
+      if (!sku || qty <= 0) { results.push({ sku, orderId, skipped: true }); continue; }
+
+      // Idempotency: กันกดส่งซ้ำ (เครื่องอื่น/รีเฟรช) ภายใน 6 ชม.
+      if (orderId && cache.get("shipped_" + orderId)) {
+        results.push({ sku, orderId, duplicate: true });
+        continue;
+      }
 
       let found = false;
       for (let i = 1; i < data.length; i++) {
@@ -411,15 +424,15 @@ function transferStockBatch(ss, list) {
 
           if (actual > 0) {
             transferred.push({ sku, name, qty: actual });
-            zortStock.push({ sku, qty: newWH, warehousecode: WH_SAI5 });
-            zortStock.push({ sku, qty: newFS, warehousecode: WH_FRONTSTORE });
+            if (orderId) cache.put("shipped_" + orderId, "1", 21600); // 6 ชม.
           }
-          results.push({ sku, transferred: actual, newWH, newFS });
+          if (actual < qty) shortfalls.push({ sku, name, requested: qty, transferred: actual });
+          results.push({ sku, orderId, requested: qty, transferred: actual, newWH, newFS });
           found = true;
           break;
         }
       }
-      if (!found) results.push({ sku, notFound: true });
+      if (!found) results.push({ sku, orderId, notFound: true });
     }
 
     SpreadsheetApp.flush();
@@ -433,10 +446,9 @@ function transferStockBatch(ss, list) {
       } catch (e) { zortError = String(e); }
 
       try { logTransferBatch_(ss, transferred, zortNumber); } catch (e) { Logger.log("logTransferBatch_ error: " + e); }
-      try { pushStockToZort_(zortStock); } catch (e) { Logger.log("batch ZORT push error: " + e); }
     }
 
-    return ok({ count: transferred.length, zortNumber, zortError, results });
+    return ok({ count: transferred.length, zortNumber, zortError, shortfalls, results });
   } finally {
     lock.releaseLock();
   }
@@ -728,6 +740,27 @@ function deleteOrderRow(ss, orderId) {
   if (!rowNum || rowNum < 3) return error("orderId ไม่ถูกต้อง");
   sheet.deleteRow(rowNum);
   return ok({ deleted: orderId });
+}
+
+// ลบหลาย order rows ในครั้งเดียว — เรียงจากแถวล่างขึ้นบนกัน index เลื่อน
+function deleteOrderRows(ss, orderIds) {
+  if (!Array.isArray(orderIds) || !orderIds.length) return error("orderIds ว่างเปล่า");
+  const sheet = ss.getSheetByName(SHEET_ORDERS);
+  if (!sheet) return error("ไม่พบชีต ลำดับที่สั่งสินค้า");
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
+  try {
+    const rows = orderIds
+      .map(id => parseInt(String(id).replace(/[^0-9]/g, "")))
+      .filter(n => n >= 3)
+      .sort((a, b) => b - a);   // มาก→น้อย
+    let deleted = 0;
+    for (const r of rows) { sheet.deleteRow(r); deleted++; }
+    return ok({ deleted });
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // ───────────────────────────────────────────────────────────

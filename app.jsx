@@ -258,6 +258,7 @@ function App() {
   const [range, setRange] = usS("year");
   const [source, setSource] = usS(localStorage.getItem(LS_SRC_KEY) || "sheet");
   const [syncing, setSyncing] = usS(false);
+  const [zortSyncing, setZortSyncing] = usS(false);
   const [lastSync, setLastSync] = usS(localStorage.getItem("dmj_last_sync") || null);
   const [labelInitItems, setLabelInitItems] = usS(null); // for auto-populate from order summary
   const [isOnline, setIsOnline] = usS(() => navigator.onLine);
@@ -466,6 +467,20 @@ function App() {
                     onClick={fetchFromSheet}>
               {syncing ? <span className="spin" style={{width:14,height:14,borderWidth:2}}/> : I.refresh}
             </button>
+            {role === "owner" && (
+              <button className="btn ghost"
+                      title={zortSyncing ? "กำลังดึงสต็อกจาก ZORT..." : "ดึงสต็อกจาก ZORT เดี๋ยวนี้"}
+                      disabled={zortSyncing}
+                      onClick={async () => {
+                        setZortSyncing(true);
+                        const r = await syncZortNow();
+                        setZortSyncing(false);
+                        if (r && r.success !== false) fetchFromSheet();
+                        else alert("Sync ZORT ไม่สำเร็จ: " + ((r && r.error) || "unknown"));
+                      }}>
+                {zortSyncing ? <span className="spin" style={{width:14,height:14,borderWidth:2}}/> : "⬇️"}
+              </button>
+            )}
             <div title={`${ROLE_LABELS[role]} · คลิกเพื่อออกจากระบบ`}
                  onClick={() => setConfirmAction({ type: "logout" })}
                  style={{width:32,height:32,borderRadius:"50%",
