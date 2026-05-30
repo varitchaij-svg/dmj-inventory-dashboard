@@ -353,7 +353,7 @@ function createZortTransfer_(sku, productname, qty) {
     date: dateStr,
     fromwarehousecode: WH_SAI5,
     towarehousecode: WH_FRONTSTORE,
-    list: [{ sku: sku, productname: productname, number: qty }]
+    list: [{ sku: sku, name: productname, number: qty }]
   };
   const res = UrlFetchApp.fetch(ZORT_BASE + "/Transfer/AddTransfer", {
     method: "post",
