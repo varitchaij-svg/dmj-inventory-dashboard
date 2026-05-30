@@ -8300,6 +8300,7 @@ function CalcPadModal({ open, name, initialVal, onConfirm, onClose }) {
 // ─────────────────────────────────────────────────────────────────────
 function MtoJobView({ data }) {
   const [jobs, setJobs] = uS(() => data.mtoJobs || []);
+  uE(() => { setJobs(data.mtoJobs || []); }, [data.mtoJobs]);
   const [view, setView] = uS("list"); // "list" | "create" | "detail"
   const [activeJob, setActiveJob] = uS(null);
   const [newJob, setNewJob] = uS({ jobName: "", customer: "", price: "", imageUrl: "" });

@@ -2082,10 +2082,10 @@ function readMtoJobs_() {
 
   // Build items map by jobId
   const itemsMap = {};
-  for (let i = 1; i < itemRows.length; i++) {
+  for (let i = 0; i < itemRows.length; i++) {
     const r = itemRows[i];
     const jid = String(r[0]||"").trim();
-    if (!jid) continue;
+    if (!jid || jid.indexOf("MTO_") !== 0) continue; // ข้าม header/แถวว่าง
     if (!itemsMap[jid]) itemsMap[jid] = [];
     itemsMap[jid].push({
       sku: String(r[1]||"").trim(),
@@ -2098,10 +2098,10 @@ function readMtoJobs_() {
   }
 
   const jobs = [];
-  for (let i = 1; i < jobRows.length; i++) {
+  for (let i = 0; i < jobRows.length; i++) {
     const r = jobRows[i];
     const jobId = String(r[0]||"").trim();
-    if (!jobId) continue;
+    if (!jobId || jobId.indexOf("MTO_") !== 0) continue; // ข้าม header/แถวว่าง
     jobs.push({
       jobId,
       date: String(r[1]||"").trim(),
