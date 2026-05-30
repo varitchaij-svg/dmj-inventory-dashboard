@@ -363,12 +363,12 @@ function createZortTransfer_(sku, productname, qty) {
   });
   const json = JSON.parse(res.getContentText());
   Logger.log("createZortTransfer_ result: " + JSON.stringify(json));
-  const transferId = json && json.detail && json.detail.id;
-  if (transferId) {
+  const transferNumber = json && json.detail && json.detail.number;
+  if (transferNumber) {
     const res2 = UrlFetchApp.fetch(ZORT_BASE + "/Transfer/UpdateTransferStatus", {
       method: "post",
       headers: headers,
-      payload: JSON.stringify({ id: transferId }),
+      payload: JSON.stringify({ number: transferNumber }),
       muteHttpExceptions: true
     });
     Logger.log("UpdateTransferStatus: " + res2.getContentText());
