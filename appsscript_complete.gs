@@ -183,7 +183,7 @@ function doGet(e) {
         }));
         p.soldQty = m.totalQty;
         p.soldRev = m.totalRev;
-        if (m.totalQty > 0) p.price = m.totalRev / m.totalQty;
+        if (m.totalQty > 0 && p.price <= 0) p.price = m.totalRev / m.totalQty;
       }
       p.cost       = p.price * COST_RATIO;
       p.profit     = p.soldRev * (1 - COST_RATIO);
