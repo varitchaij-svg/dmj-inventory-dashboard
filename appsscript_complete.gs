@@ -91,7 +91,7 @@ function doPost(e) {
 
     // ─── Stock Transfer: คลัง → หน้าร้าน ───
     if (data.transferStock) {
-      return transferStock(ss, data.sku, Number(data.qty) || 0);
+      return transferStock(ss, data.sku, Number(data.qty) || 0, data.name);
     }
 
     // ─── Stock Deduct: หักตรงๆ (legacy) ───
@@ -301,7 +301,7 @@ function doGet(e) {
 // SECTION 3: Stock Operations
 // ───────────────────────────────────────────────────────────
 
-function transferStock(ss, sku, qty) {
+function transferStock(ss, sku, qty, productName) {
   if (!sku || qty <= 0) return error("sku หรือ qty ไม่ถูกต้อง");
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_PRODUCTS);
@@ -314,7 +314,7 @@ function transferStock(ss, sku, qty) {
       const fsQty = Number(data[i][COL_PROD_QTYFS - 1]) || 0;
       const actual = Math.min(qty, whQty);
 
-      const name   = String(data[i][2] || "").trim(); // col C = ชื่อสินค้า
+      const name   = productName || String(data[i][2] || "").trim(); // ใช้ชื่อที่รับมาก่อน fallback col C
       sheet.getRange(row, COL_PROD_QTYWH).setValue(whQty - actual);
       sheet.getRange(row, COL_PROD_QTYFS).setValue(fsQty + actual);
       SpreadsheetApp.flush();
