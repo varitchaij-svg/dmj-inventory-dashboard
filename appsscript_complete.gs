@@ -1939,9 +1939,26 @@ function error(msg) {
 // SECTION 8: MTO Jobs
 // ───────────────────────────────────────────────────────────
 
+function getOrCreateMtoJobSheet_(ss) {
+  let sh = ss.getSheetByName("งาน MTO");
+  if (!sh) {
+    sh = ss.insertSheet("งาน MTO");
+    sh.appendRow(["JobID","วันที่","ชื่องาน","ลูกค้า","ราคา","รูป","สถานะ","ปิดงานเมื่อ"]);
+  }
+  return sh;
+}
+
+function getOrCreateMtoItemSheet_(ss) {
+  let sh = ss.getSheetByName("วัตถุดิบ MTO");
+  if (!sh) {
+    sh = ss.insertSheet("วัตถุดิบ MTO");
+    sh.appendRow(["JobID","รหัสสินค้า","ชื่อสินค้า","จำนวน","คลัง","สถานะคืน","เวลา"]);
+  }
+  return sh;
+}
+
 function createMtoJob(ss, data) {
-  const sh = ss.getSheetByName("งาน MTO");
-  if (!sh) return error("ไม่พบชีต งาน MTO");
+  const sh = getOrCreateMtoJobSheet_(ss);
   const jobId = "MTO_" + Date.now();
   sh.appendRow([jobId, data.dateStr || "", data.jobName || "", data.customer || "", data.price || "", data.imageUrl || "", "กำลังจัด", ""]);
   return ContentService.createTextOutput(JSON.stringify({ success: true, jobId }))
@@ -1976,7 +1993,7 @@ function closeMtoJob(ss, data) {
   }
 
   // Append items to วัตถุดิบ MTO
-  const itemSh = ss.getSheetByName("วัตถุดิบ MTO");
+  const itemSh = getOrCreateMtoItemSheet_(ss);
   if (itemSh) {
     items.forEach(item => {
       itemSh.appendRow([jobId, item.sku || "", item.name || "", Number(item.qty) || 0, item.warehouse || "warehouse", item.returned ? "คืนแล้ว" : "ไม่คืน", closedAt]);
@@ -1984,7 +2001,7 @@ function closeMtoJob(ss, data) {
   }
 
   // Update งาน MTO row
-  const jobSh = ss.getSheetByName("งาน MTO");
+  const jobSh = getOrCreateMtoJobSheet_(ss);
   if (jobSh) {
     const jobData = jobSh.getDataRange().getValues();
     for (let i = 1; i < jobData.length; i++) {
