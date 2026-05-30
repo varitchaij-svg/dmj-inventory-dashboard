@@ -7300,7 +7300,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const doneOrders = uM(() => enriched.filter(isDone), [enriched]);
 
   // แยกกลุ่ม: หิ้วก่อน, รถหลัง — ซ่อน shipped ที่ไม่ใช่ missed
-  const carryOrders = uM(() => doneOrders.filter(o => !shipped[o.id] || missed[o.id]), [doneOrders, shipped, missed]);
+  const carryOrders = uM(() => doneOrders.filter(o => o.carryMode === "carry").filter(o => !shipped[o.id] || missed[o.id]), [doneOrders, shipped, missed]);
   const truckOrders = uM(() => doneOrders.filter(o => o.carryMode !== "carry").filter(o => !shipped[o.id] || missed[o.id]), [doneOrders, shipped, missed]);
 
   const handlePrint = (order) => {
