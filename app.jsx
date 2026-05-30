@@ -271,7 +271,9 @@ function App() {
   const fetchFromSheet = usC(() => {
     setSyncing(true);
     setError(null);
-    fetch(sheetUrl)
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout
+    fetch(sheetUrl, { signal: controller.signal })
       .then(r => r.json())
       .then(d => {
         const enriched = enrichData(d);
@@ -282,8 +284,8 @@ function App() {
         localStorage.setItem("dmj_last_sync", now);
         setLastSync(now);
       })
-      .catch(e => setError(e.message))
-      .finally(() => setSyncing(false));
+      .catch(e => { if (e.name !== "AbortError") setError(e.message); })
+      .finally(() => { clearTimeout(timeout); setSyncing(false); });
   }, [sheetUrl]);
 
   usE(() => {
