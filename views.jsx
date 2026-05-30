@@ -7069,6 +7069,35 @@ async function syncStockTransferBatch(items) {
   } catch(e) { console.warn("syncStockTransferBatch error:", e.message); return { success: false, error: e.message }; }
 }
 
+// ลบหลาย order rows ในครั้งเดียว
+async function syncDeleteOrders(orderIds) {
+  if (!SHEET_DEPLOY_URL || !orderIds || !orderIds.length) return;
+  try {
+    await fetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ deleteOrders: true, orderIds }),
+    });
+  } catch(e) { console.warn("syncDeleteOrders error:", e.message); }
+}
+
+// สั่ง sync สต็อกจาก ZORT เดี๋ยวนี้ (ใช้เวลาสักครู่)
+async function syncZortNow() {
+  if (!SHEET_DEPLOY_URL) return { success: false };
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120000);
+    const res = await fetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ syncZortNow: true }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    return await res.json().catch(() => ({}));
+  } catch(e) { console.warn("syncZortNow error:", e.message); return { success: false, error: e.message }; }
+}
+
 // ─── เบิกวัตถุดิบ MTO — หักคลังหลายรายการ ───
 async function syncDeductMaterials(items) {
   if (!SHEET_DEPLOY_URL || !items.length) return { success: false };
@@ -7398,7 +7427,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
     // โอนสต็อกที่ไม่ใช่ MTO เป็น "ก้อนเดียว" → ZORT สร้าง transfer เอกสารเดียว เลขที่ auto
     const transferItems = ready
       .filter(o => !o.product?.isMTO)
-      .map(o => ({ sku: o.sku, qty: o.preparedQty || o.orderQty || 0, name: o.name }))
+      .map(o => ({ orderId: o.id, sku: o.sku, qty: o.preparedQty || o.orderQty || 0, name: o.name }))
       .filter(it => it.sku && it.qty > 0);
 
     let batchRes = { success: true };
@@ -7411,7 +7440,6 @@ function OrderSummaryView({ data, onPrintRequest }) {
     for (const order of ready) {
       nextShipped[order.id] = Date.now();
       nextSt[order.id] = { ...(nextSt[order.id]||{}), status: "ส่งแล้ว" };
-      syncOrderUpdate(order, { shipped: true, status: "ส่งแล้ว" });
     }
     setSending(null);
     setShipped(nextShipped);
@@ -7419,9 +7447,16 @@ function OrderSummaryView({ data, onPrintRequest }) {
     localStorage.setItem(LS_ORDERS_STATE, JSON.stringify(nextSt));
     setSt(nextSt);
 
+    // ลบ order rows ที่ส่งแล้วออกจาก Sheet ครั้งเดียว (สอดคล้องกับการส่งทีละชิ้น)
+    syncDeleteOrders(ready.map(o => o.id));
+
     const zErr = batchRes && batchRes.data && batchRes.data.zortError;
+    const shortfalls = (batchRes && batchRes.data && batchRes.data.shortfalls) || [];
     if (!batchOk || zErr) {
       showToast("warn", `ส่ง ${ready.length} รายการ — แต่ ZORT มีปัญหา ${zErr || batchRes.error || ""}`, "⚠️");
+    } else if (shortfalls.length) {
+      const names = shortfalls.map(s => `${s.name||s.sku} (${s.transferred}/${s.requested})`).join(", ");
+      showToast("warn", `ส่งแล้ว แต่คลังไม่พอ ${shortfalls.length} รายการ: ${names}`, "⚠️", 7000);
     } else {
       const zNum = batchRes && batchRes.data && batchRes.data.zortNumber;
       showToast("success", `ส่ง ${ready.length} รายการแล้ว${zNum ? ` (ZORT ${zNum})` : ""}`, "📦");
