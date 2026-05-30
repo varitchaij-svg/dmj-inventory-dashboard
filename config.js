@@ -1,2 +1,2 @@
-const GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbxSaY3_rs98ugrp_2PnWe4tq-vFYnEFFuA6i3QUmeZJdINAYSFF4SimcSQHBtdJS9dN-Q/exec";
-const SHEET_DEPLOY_URL = "https://script.google.com/macros/s/AKfycbxSaY3_rs98ugrp_2PnWe4tq-vFYnEFFuA6i3QUmeZJdINAYSFF4SimcSQHBtdJS9dN-Q/exec";
+const GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycby6Gzo3zTWu-R_xCJfB--ml1jU1SdQSMbbOK--veJhvkJkbuFrklez2REKTNnHyh3O3Jw/exec";
+const SHEET_DEPLOY_URL = "https://script.google.com/macros/s/AKfycby6Gzo3zTWu-R_xCJfB--ml1jU1SdQSMbbOK--veJhvkJkbuFrklez2REKTNnHyh3O3Jw/exec";
