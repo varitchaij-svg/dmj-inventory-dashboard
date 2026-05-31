@@ -63,7 +63,12 @@ function LoginScreen({ onLogin }) {
         const res = await fetch(`${base}${sep}action=verifyPin&pin=${encodeURIComponent(pin)}`, { cache: 'no-store' });
         const d = await res.json();
         setChecking(false);
-        if (d && d.ok) { onLogin(pinTarget.role); return; }
+        // ถ้า GAS ยังไม่ได้ redeploy (ไม่มี field ok) → fallback ตรวจรหัสเดิมฝั่ง client
+        if (!d || typeof d.ok !== 'boolean') {
+          if (pin.toUpperCase() === "DMJ") { onLogin(pinTarget.role); return; }
+          setErr(true); setPin(""); return;
+        }
+        if (d.ok) { onLogin(pinTarget.role); return; }
         setErr(true); setPin(""); return;
       } catch (e) {
         setChecking(false);
