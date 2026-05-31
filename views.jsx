@@ -8386,7 +8386,7 @@ function MtoJobView({ data }) {
         updated[existing] = { ...updated[existing], qty: updated[existing].qty + searchQty };
         return updated;
       }
-      return [...prev, { sku: product.sku, name: product.name, qty: searchQty, warehouse: searchWarehouse, returned: false }];
+      return [...prev, { sku: product.sku, name: product.name, qty: searchQty, warehouse: searchWarehouse, returnedQty: 0 }];
     });
     setSearch("");
     setSearchQty(1);
@@ -8396,8 +8396,20 @@ function MtoJobView({ data }) {
     setMaterials(prev => prev.filter((_, i) => i !== idx));
   };
 
-  const toggleReturned = (idx) => {
-    setMaterials(prev => prev.map((m, i) => i === idx ? { ...m, returned: !m.returned } : m));
+  const setMaterialQty = (idx, val) => {
+    setMaterials(prev => prev.map((m, i) => {
+      if (i !== idx) return m;
+      const qty = Math.max(1, Number(val) || 1);
+      return { ...m, qty, returnedQty: Math.min(Number(m.returnedQty) || 0, qty) };
+    }));
+  };
+
+  const setReturnedQty = (idx, val) => {
+    setMaterials(prev => prev.map((m, i) => {
+      if (i !== idx) return m;
+      const r = Math.max(0, Math.min(Number(val) || 0, Number(m.qty) || 0));
+      return { ...m, returnedQty: r };
+    }));
   };
 
   const handleCloseJob = async () => {
@@ -8679,29 +8691,46 @@ function MtoJobView({ data }) {
             <div style={{ color: "var(--muted)", fontSize: 13, textAlign: "center", padding: "20px 0" }}>ยังไม่มีวัตถุดิบ</div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {materials.map((m, idx) => (
-                <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", background: "var(--g-50)", borderRadius: 8 }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
+              {materials.map((m, idx) => {
+                const ret = Number(m.returnedQty) || 0;
+                const net = Math.max(0, (Number(m.qty) || 0) - ret);
+                return (
+                <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", background: "var(--g-50)", borderRadius: 8, flexWrap: "wrap" }}>
+                  <div style={{ flex: 1, minWidth: 100 }}>
                     <div style={{ fontWeight: 600, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.sku}</div>
                     <div style={{ fontSize: 11, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</div>
                   </div>
-                  <div style={{ fontSize: 12, color: "var(--g-700)", fontWeight: 700, whiteSpace: "nowrap" }}>×{m.qty}</div>
                   <div style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>{m.warehouse === "frontstore" ? "หน้าร้าน" : "คลัง"}</div>
                   {isOpen ? (
                     <>
-                      <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, cursor: "pointer", whiteSpace: "nowrap" }}>
-                        <input type="checkbox" checked={m.returned} onChange={() => toggleReturned(idx)} />
-                        คืนแล้ว
+                      <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, fontSize: 10, color: "var(--muted)" }}>
+                        เบิก
+                        <input type="number" min={1} value={m.qty} onChange={e => setMaterialQty(idx, e.target.value)}
+                          style={{ width: 52, padding: "5px 6px", borderRadius: 6, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 13, textAlign: "center" }} />
                       </label>
+                      <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, fontSize: 10, color: "#c0392b" }}>
+                        คืน
+                        <input type="number" min={0} max={m.qty} value={ret} onChange={e => setReturnedQty(idx, e.target.value)}
+                          style={{ width: 52, padding: "5px 6px", borderRadius: 6, border: "1.5px solid #f0b8b0", fontFamily: "inherit", fontSize: 13, textAlign: "center", color: "#c0392b" }} />
+                      </label>
+                      <div style={{ fontSize: 11, color: "var(--g-700)", fontWeight: 700, whiteSpace: "nowrap", minWidth: 42, textAlign: "center" }}>
+                        ตัด {net}
+                      </div>
                       <button onClick={() => removeMaterial(idx)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--dang)", fontSize: 16, padding: "0 4px" }}>✕</button>
                     </>
                   ) : (
-                    <div style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: m.returned ? "#e8f5e9" : "#ffebee", color: m.returned ? "#1b5e20" : "#c62828", fontWeight: 600, whiteSpace: "nowrap" }}>
-                      {m.returned ? "คืนแล้ว" : "ไม่คืน"}
-                    </div>
+                    <>
+                      <div style={{ fontSize: 12, color: "var(--g-700)", fontWeight: 700, whiteSpace: "nowrap" }}>
+                        เบิก {m.qty}{ret > 0 ? ` · คืน ${ret}` : ""}
+                      </div>
+                      <div style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: "#e8f5e9", color: "#1b5e20", fontWeight: 700, whiteSpace: "nowrap" }}>
+                        ตัด {net}
+                      </div>
+                    </>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

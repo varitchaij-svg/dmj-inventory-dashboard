@@ -1952,7 +1952,7 @@ function getOrCreateMtoItemSheet_(ss) {
   let sh = ss.getSheetByName("วัตถุดิบ MTO");
   if (!sh) {
     sh = ss.insertSheet("วัตถุดิบ MTO");
-    sh.appendRow(["JobID","รหัสสินค้า","ชื่อสินค้า","จำนวน","คลัง","สถานะคืน","เวลา"]);
+    sh.appendRow(["JobID","รหัสสินค้า","ชื่อสินค้า","จำนวนเบิก","คลัง","จำนวนคืน","ตัดจริง","เวลา"]);
   }
   return sh;
 }
@@ -1970,21 +1970,30 @@ function closeMtoJob(ss, data) {
   const items = data.items || [];
   const closedAt = data.closedAt || "";
 
+  // net = เบิก − คืน (รองรับคืนบางส่วน เช่น เบิก 24 คืน 4 → ตัดจริง 20)
+  const netOf = (item) => {
+    const qty = Number(item.qty) || 0;
+    const ret = Math.max(0, Math.min(Number(item.returnedQty) || 0, qty));
+    return qty - ret;
+  };
+
   // Deduct stock
   const prodSh = ss.getSheetByName(SHEET_PRODUCTS);
   if (prodSh) {
     const prodData = prodSh.getDataRange().getValues();
     items.forEach(item => {
+      const net = netOf(item);
+      if (net <= 0) return;
       const sku = String(item.sku || "").trim().toUpperCase();
       for (let i = 1; i < prodData.length; i++) {
         if (String(prodData[i][COL_PROD_SKU - 1]).trim().toUpperCase() === sku) {
           const row = i + 1;
           if (item.warehouse === "frontstore") {
             const cur = Number(prodSh.getRange(row, COL_PROD_QTYFS).getValue()) || 0;
-            prodSh.getRange(row, COL_PROD_QTYFS).setValue(Math.max(0, cur - (Number(item.qty) || 0)));
+            prodSh.getRange(row, COL_PROD_QTYFS).setValue(Math.max(0, cur - net));
           } else {
             const cur = Number(prodSh.getRange(row, COL_PROD_QTYWH).getValue()) || 0;
-            prodSh.getRange(row, COL_PROD_QTYWH).setValue(Math.max(0, cur - (Number(item.qty) || 0)));
+            prodSh.getRange(row, COL_PROD_QTYWH).setValue(Math.max(0, cur - net));
           }
           break;
         }
@@ -1992,11 +2001,12 @@ function closeMtoJob(ss, data) {
     });
   }
 
-  // Append items to วัตถุดิบ MTO
+  // Append items to วัตถุดิบ MTO (F=คืน, G=ตัดจริง, H=ปิดงานเมื่อ)
   const itemSh = getOrCreateMtoItemSheet_(ss);
   if (itemSh) {
     items.forEach(item => {
-      itemSh.appendRow([jobId, item.sku || "", item.name || "", Number(item.qty) || 0, item.warehouse || "warehouse", item.returned ? "คืนแล้ว" : "ไม่คืน", closedAt]);
+      const ret = Math.max(0, Math.min(Number(item.returnedQty) || 0, Number(item.qty) || 0));
+      itemSh.appendRow([jobId, item.sku || "", item.name || "", Number(item.qty) || 0, item.warehouse || "warehouse", ret, netOf(item), closedAt]);
     });
   }
 
@@ -2033,7 +2043,9 @@ function decreaseMtoStockInZort_(items) {
     if (!groups[whCode]) groups[whCode] = [];
     const sku = String(item.sku || "").trim();
     const qty = Number(item.qty) || 0;
-    if (sku && qty > 0) groups[whCode].push({ sku, number: qty });
+    const ret = Math.max(0, Math.min(Number(item.returnedQty) || 0, qty));
+    const net = qty - ret;
+    if (sku && net > 0) groups[whCode].push({ sku, number: net });
   }
 
   const results = {};
@@ -2087,13 +2099,23 @@ function readMtoJobs_() {
     const jid = String(r[0]||"").trim();
     if (!jid || jid.indexOf("MTO_") !== 0) continue; // ข้าม header/แถวว่าง
     if (!itemsMap[jid]) itemsMap[jid] = [];
+    // F (r[5]) = จำนวนคืน (เลข) — รองรับข้อมูลเก่าที่เป็นข้อความ "คืนแล้ว"/"ไม่คืน"
+    const qty = Number(r[3])||0;
+    const fRaw = r[5];
+    let returnedQty = 0;
+    if (typeof fRaw === "number") returnedQty = fRaw;
+    else if (String(fRaw||"").trim() === "คืนแล้ว") returnedQty = qty; // ข้อมูลเก่า: คืนทั้งหมด
+    returnedQty = Math.max(0, Math.min(returnedQty, qty));
+    // closedAt อยู่ col H (r[7]) ในสคีมาใหม่, ข้อมูลเก่าอยู่ col G (r[6])
+    const closedAt = String(r[7]||r[6]||"").trim();
     itemsMap[jid].push({
       sku: String(r[1]||"").trim(),
       name: String(r[2]||"").trim(),
-      qty: Number(r[3])||0,
+      qty,
       warehouse: String(r[4]||"warehouse").trim(),
-      returned: String(r[5]||"").includes("คืน"),
-      closedAt: String(r[6]||"").trim(),
+      returnedQty,
+      net: qty - returnedQty,
+      closedAt,
     });
   }
 
