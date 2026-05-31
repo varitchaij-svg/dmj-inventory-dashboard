@@ -18,6 +18,23 @@ function getSecret_(key, fallback) {
 }
 
 /**
+ * ตรวจ shared token (กันคนสุ่มเจอ URL ขั้นต่ำ)
+ * ถ้า Script Property APP_TOKEN ว่าง = ปิดการตรวจ (backward compatible)
+ * คืน true = ผ่าน, false = ไม่ผ่าน
+ */
+function checkToken_(token) {
+  const expected = PropertiesService.getScriptProperties().getProperty('APP_TOKEN');
+  if (!expected || !expected.trim()) return true; // ยังไม่ตั้ง = ไม่บังคับ
+  return String(token || '') === expected;
+}
+
+function unauthorized_() {
+  return ContentService
+    .createTextOutput(JSON.stringify({ success: false, error: "unauthorized" }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
  * ตั้งค่า secrets ลง Script Properties — รันครั้งเดียวใน Apps Script Editor
  * แล้ว "ลบค่าจริงออก" ก่อน save/commit เพื่อไม่ให้รั่วลง git
  */
@@ -117,6 +134,9 @@ function doPost(e) {
       }
       return ContentService.createTextOutput("OK");
     }
+
+    // ─── App actions: ต้องมี token (LINE webhook ด้านบนยกเว้น) ───
+    if (!checkToken_(data.token)) return unauthorized_();
 
     // ─── Stock Transfer (Batch): คลัง → หน้าร้าน หลาย SKU ในครั้งเดียว ───
     if (data.transferStockBatch) {
