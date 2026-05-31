@@ -266,8 +266,9 @@ function App() {
     setSyncing(true);
     setError(null);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout
-    fetch(sheetUrl, { signal: controller.signal })
+    const timeout = setTimeout(() => controller.abort(), 30000); // 30s timeout
+    const bustUrl = sheetUrl + (sheetUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
+    fetch(bustUrl, { signal: controller.signal, cache: 'no-store' })
       .then(r => r.json())
       .then(d => {
         const enriched = enrichData(d);
@@ -376,7 +377,7 @@ function App() {
   const visibleTabs = TABS.filter(t => allowedTabIds.includes(t.id));
   const activeTab = allowedTabIds.includes(tab) ? tab : (allowedTabIds[0] || "categories");
 
-  if (error) {
+  if (error && !data) {
     return (
       <div className="loading-screen">
         <div style={{color:"var(--dang)",fontWeight:600}}>โหลดข้อมูลไม่สำเร็จ</div>
@@ -509,6 +510,19 @@ function App() {
           <span style={{fontSize:18}}>📵</span>
           <span>ไม่มีอินเทอร์เน็ต — ข้อมูลอาจไม่ใช่ล่าสุด</span>
           <span style={{fontSize:11,fontWeight:400,opacity:.7}}>No connection · cached data</span>
+        </div>
+      )}
+
+      {/* ─── Sync error banner (non-blocking, only when data already loaded) ─── */}
+      {error && data && (
+        <div style={{
+          background:"#fff3cd", color:"#856404", padding:"6px 16px",
+          fontSize:12, display:"flex", alignItems:"center", justifyContent:"space-between",
+          gap:8, borderBottom:"1px solid #ffc107",
+        }}>
+          <span>⚠️ Sync ล้มเหลว: {error}</span>
+          <button className="btn ghost" style={{fontSize:12,padding:"2px 8px"}}
+                  onClick={fetchFromSheet}>ลองใหม่</button>
         </div>
       )}
 
