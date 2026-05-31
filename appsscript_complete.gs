@@ -6,12 +6,39 @@
 // SECTION 1: Configuration
 // ───────────────────────────────────────────────────────────
 
+// ───────────────────────────────────────────────────────────
+// 🔐 Secrets — อ่านจาก Script Properties เท่านั้น
+// ⚠️ ห้าม hardcode ค่าจริงในไฟล์นี้ (ดู setupSecrets() ด้านล่าง)
+//    ตั้งค่าครั้งเดียวผ่าน Apps Script Editor → Project Settings → Script Properties
+//    หรือเรียกฟังก์ชัน setupSecrets() แล้วกรอกค่าจริงชั่วคราว (อย่า commit)
+// ───────────────────────────────────────────────────────────
+function getSecret_(key, fallback) {
+  const v = PropertiesService.getScriptProperties().getProperty(key);
+  return (v && v.trim()) ? v : (fallback || '');
+}
+
+/**
+ * ตั้งค่า secrets ลง Script Properties — รันครั้งเดียวใน Apps Script Editor
+ * แล้ว "ลบค่าจริงออก" ก่อน save/commit เพื่อไม่ให้รั่วลง git
+ */
+function setupSecrets() {
+  PropertiesService.getScriptProperties().setProperties({
+    LINE_ACCESS_TOKEN: 'PLACEHOLDER_LINE_ACCESS_TOKEN',
+    LINE_USER_ID:      'PLACEHOLDER_LINE_USER_ID',
+    SHEET_ID:          'PLACEHOLDER_SHEET_ID',
+    ZORT_STORE:        'PLACEHOLDER_ZORT_STORE',
+    ZORT_APIKEY:       'PLACEHOLDER_ZORT_APIKEY',
+    ZORT_SECRET:       'PLACEHOLDER_ZORT_SECRET',
+  }, false);
+  Logger.log('✅ setupSecrets: เขียนค่าลง Script Properties แล้ว (แก้ค่าจริงในหน้า Project Settings)');
+}
+
 // ── LINE Bot ──
-const LINE_ACCESS_TOKEN = 'PFhNQ6+hbKbG12UBP5DlLlq6KHxZtIY1btgls0c54M1FrLCoadD5o6DJZfy4Zb1rCSTqqGnA22puHqsB0uastB5yreWYo0AxqPDyk1QsSa3EOEEWJ++9++XsMBzKQWkFVg9V9Wl0gnkbAcsBO06EogdB04t89/1O/w1cDnyilFU=';
-const LINE_USER_ID = "Ud17a7b7f815b96141fae4cb65f570e0a";
+const LINE_ACCESS_TOKEN = getSecret_('LINE_ACCESS_TOKEN', 'PLACEHOLDER_LINE_ACCESS_TOKEN');
+const LINE_USER_ID = getSecret_('LINE_USER_ID', 'PLACEHOLDER_LINE_USER_ID');
 
 // ── Sheet Config ──
-const SHEET_ID = '11yL4u-XLUTCBObMppAj12nnmG0YlDZWsDn2XPCneoHQ';
+const SHEET_ID = getSecret_('SHEET_ID', 'PLACEHOLDER_SHEET_ID');
 const SHEET_PRODUCTS  = "อัพเดทจำนวนสินค้า";
 const SHEET_ORDERS    = "ลำดับที่สั่งสินค้า";
 const SHEET_LOCKS     = "ตำแหน่งจัดเก็บ";
@@ -37,9 +64,9 @@ const COL_LOCK_DATE    = 8;   // H = อัปเดตล่าสุด (Last 
 
 // ── ZORT API ──
 // ⚠️ ใส่ค่าจริงใน Apps Script Editor เท่านั้น ห้าม commit ค่าจริงลง git
-const ZORT_STORE  = "dunity8888@gmail.com";
-const ZORT_APIKEY = "9R/rzgb3ycJNTmw3sT9OUyoeBvDMjKDXGntA/QfCVHY=";
-const ZORT_SECRET = "6IeKRzV9muSlBK7AG4kuFpxWqC3WGYCBnazQFoK6TQ=";
+const ZORT_STORE  = getSecret_('ZORT_STORE', 'PLACEHOLDER_ZORT_STORE');
+const ZORT_APIKEY = getSecret_('ZORT_APIKEY', 'PLACEHOLDER_ZORT_APIKEY');
+const ZORT_SECRET = getSecret_('ZORT_SECRET', 'PLACEHOLDER_ZORT_SECRET');
 const ZORT_BASE   = "https://open-api.zortout.com/v4";
 const WH_SAI5       = "W0002";   // คลังสินค้าสาย5 → col H
 const WH_FRONTSTORE = "W0001";   // ดูเหมือนจริง → col G

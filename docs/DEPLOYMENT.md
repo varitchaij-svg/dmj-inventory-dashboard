@@ -14,7 +14,7 @@
 
 1. เปิด **Apps Script Editor** ของไฟล์ Google Sheet
 2. เลือกทั้งหมดในไฟล์โค้ด → paste โค้ดใหม่จาก `appsscript_complete.gs` ทับ
-3. **กรอก ZORT credentials จริง** ที่ส่วนหัวของไฟล์ (ดูหัวข้อด้านล่าง)
+3. **ตั้งค่า secrets ใน Script Properties** (ครั้งแรกครั้งเดียว — ดูหัวข้อด้านล่าง)
 4. กด **Deploy → Manage deployments → แก้ deployment เดิม (ดินสอ) → Version: New version → Deploy**
    - หรือ **New deployment** ถ้าต้องการ URL ใหม่
    - ตั้งค่า: **Execute as = Me**, **Who has access = Anyone**
@@ -30,20 +30,35 @@
 
 ---
 
-## 3. ZORT Credentials 🔒
+## 3. Secrets / Credentials 🔒
 
 ### กฎเหล็ก
 - **ห้าม commit ค่าจริงลง git โดยเด็ดขาด**
-- ในไฟล์ `appsscript_complete.gs` ที่ commit ต้องเป็น `PLACEHOLDER_*` เสมอ:
-  ```js
-  const ZORT_STORE  = "PLACEHOLDER_STORENAME";
-  const ZORT_APIKEY = "PLACEHOLDER_APIKEY";
-  const ZORT_SECRET = "PLACEHOLDER_APISECRET";
-  ```
-- กรอกค่าจริง **เฉพาะใน Apps Script Editor** หลัง paste โค้ดทุกครั้ง
+- โค้ดอ่าน secret ทั้งหมดจาก **Script Properties** ผ่าน `getSecret_()` — ในไฟล์ `.gs` จึงไม่มีค่าจริงเลย (เป็น `PLACEHOLDER_*` ทั้งหมด) จึงไม่ต้องแก้ค่าในไฟล์ทุกครั้งที่ paste อีกต่อไป
+
+### วิธีตั้งค่า (ทำครั้งเดียวต่อ project)
+มี 2 วิธี เลือกอย่างใดอย่างหนึ่ง:
+
+**วิธี A — UI (แนะนำ):**
+Apps Script Editor → ⚙️ **Project Settings** → เลื่อนลงหา **Script Properties** → **Add script property** แล้วใส่ key/value ต่อไปนี้:
+
+| Property | ค่า |
+|---|---|
+| `LINE_ACCESS_TOKEN` | LINE Channel access token |
+| `LINE_USER_ID` | LINE user/group id สำหรับ push แจ้งเตือน |
+| `SHEET_ID` | id ของ Google Sheet (จาก URL) |
+| `ZORT_STORE` | อีเมล storename ของ ZORT |
+| `ZORT_APIKEY` | ZORT apikey |
+| `ZORT_SECRET` | ZORT apisecret |
+
+**วิธี B — ฟังก์ชัน:**
+รัน `setupSecrets()` หนึ่งครั้ง (จะสร้าง property เป็น `PLACEHOLDER_*`) → จากนั้นไปแก้ค่าจริงในหน้า Project Settings ตามตารางด้านบน
 
 ### ที่มาของ credentials
-ZORT → ตั้งค่า → API → storename / apikey / apisecret
+- ZORT → ตั้งค่า → API → storename / apikey / apisecret
+- LINE → LINE Developers Console → Messaging API → Channel access token
+
+> 🔁 **ถ้าค่าจริงเคยถูก commit ขึ้น git มาก่อน ให้ถือว่ารั่วและหมุน (rotate) key ใหม่ทันที** ทั้งฝั่ง ZORT และ LINE
 
 ---
 
