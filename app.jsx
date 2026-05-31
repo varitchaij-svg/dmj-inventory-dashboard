@@ -19,13 +19,6 @@ const TABS = [
 ];
 
 // Role config
-const ROLE_PASSWORDS = {
-  "DMJ":   "owner",
-  "1234":  "employee",     // backward-compat (legacy พนักงาน)
-  "WH":    "warehouse",    // คลังสินค้า
-  "FS":    "frontstore",   // หน้าร้าน
-  "SALE":  "saler",        // พนักงานขาย
-};
 const ROLE_TABS = {
   owner:      ["overview","categories","trends","stock","storage","stockcount","frontstore","transfers","orders","ordersummary","mtojobs","upload","connect","labels"],
   employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","mtojobs","labels"],
