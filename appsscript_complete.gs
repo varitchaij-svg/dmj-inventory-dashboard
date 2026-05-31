@@ -372,25 +372,32 @@ function transferStock(ss, sku, qty, productName) {
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_PRODUCTS);
 
-  const data = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase() === sku.trim().toUpperCase()) {
-      const row   = i + 1;
-      const whQty = Number(data[i][COL_PROD_QTYWH - 1]) || 0;
-      const fsQty = Number(data[i][COL_PROD_QTYFS - 1]) || 0;
-      const actual = Math.min(qty, whQty);
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(8000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
 
-      const name   = productName || String(data[i][2] || "").trim(); // ใช้ชื่อที่รับมาก่อน fallback col C
-      sheet.getRange(row, COL_PROD_QTYWH).setValue(whQty - actual);
-      sheet.getRange(row, COL_PROD_QTYFS).setValue(fsQty + actual);
-      SpreadsheetApp.flush();
-      try { logTransfer_(ss, sku, name, actual); } catch (e) { Logger.log("logTransfer_ error: " + e); }
-      // AddTransfer ย้ายสต็อกใน ZORT ให้อยู่แล้ว ไม่ push absolute ทับ (กันเขียนทับยอดขายที่เกิดระหว่างนั้น)
-      try { createZortTransfer_(sku, name, actual); } catch (e) { Logger.log("createZortTransfer_ error: " + e); }
-      return ok({ sku, transferred: actual, newWH: whQty - actual, newFS: fsQty + actual });
+  try {
+    const data = sheet.getDataRange().getValues();
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase() === sku.trim().toUpperCase()) {
+        const row   = i + 1;
+        const whQty = Number(data[i][COL_PROD_QTYWH - 1]) || 0;
+        const fsQty = Number(data[i][COL_PROD_QTYFS - 1]) || 0;
+        const actual = Math.min(qty, whQty);
+
+        const name = productName || String(data[i][2] || "").trim();
+        sheet.getRange(row, COL_PROD_QTYWH).setValue(whQty - actual);
+        sheet.getRange(row, COL_PROD_QTYFS).setValue(fsQty + actual);
+        SpreadsheetApp.flush();
+        try { logTransfer_(ss, sku, name, actual); } catch (e) { Logger.log("logTransfer_ error: " + e); }
+        // AddTransfer ย้ายสต็อกใน ZORT ให้อยู่แล้ว ไม่ push absolute ทับ (กันเขียนทับยอดขายที่เกิดระหว่างนั้น)
+        try { createZortTransfer_(sku, name, actual); } catch (e) { Logger.log("createZortTransfer_ error: " + e); }
+        return ok({ sku, transferred: actual, newWH: whQty - actual, newFS: fsQty + actual });
+      }
     }
+    return error("ไม่พบ SKU: " + sku);
+  } finally {
+    lock.releaseLock();
   }
-  return error("ไม่พบ SKU: " + sku);
 }
 
 function logTransfer_(ss, sku, productName, qty) {
@@ -559,30 +566,37 @@ function deductStock(ss, sku, qty) {
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_PRODUCTS);
 
-  const data = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase() === sku.trim().toUpperCase()) {
-      const row = i + 1;
-      const whQty = Number(data[i][COL_PROD_QTYWH - 1]) || 0;
-      const fsQty = Number(data[i][COL_PROD_QTYFS - 1]) || 0;
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(8000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
 
-      let deductWH = Math.min(qty, whQty);
-      let deductFS = qty - deductWH;
-      if (deductFS > fsQty) deductFS = fsQty;
+  try {
+    const data = sheet.getDataRange().getValues();
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase() === sku.trim().toUpperCase()) {
+        const row = i + 1;
+        const whQty = Number(data[i][COL_PROD_QTYWH - 1]) || 0;
+        const fsQty = Number(data[i][COL_PROD_QTYFS - 1]) || 0;
 
-      sheet.getRange(row, COL_PROD_QTYWH).setValue(whQty - deductWH);
-      if (deductFS > 0) sheet.getRange(row, COL_PROD_QTYFS).setValue(fsQty - deductFS);
-      SpreadsheetApp.flush();
-      try {
-        const zortItems = [];
-        if (deductWH > 0) zortItems.push({ sku, qty: whQty - deductWH, warehousecode: WH_SAI5 });
-        if (deductFS > 0) zortItems.push({ sku, qty: fsQty - deductFS, warehousecode: WH_FRONTSTORE });
-        if (zortItems.length) pushStockToZort_(zortItems);
-      } catch (e) { Logger.log("deductStock ZORT push error: " + e); }
-      return ok({ sku, deductWH, deductFS, newWH: whQty - deductWH, newFS: fsQty - deductFS });
+        let deductWH = Math.min(qty, whQty);
+        let deductFS = qty - deductWH;
+        if (deductFS > fsQty) deductFS = fsQty;
+
+        sheet.getRange(row, COL_PROD_QTYWH).setValue(whQty - deductWH);
+        if (deductFS > 0) sheet.getRange(row, COL_PROD_QTYFS).setValue(fsQty - deductFS);
+        SpreadsheetApp.flush();
+        try {
+          const zortItems = [];
+          if (deductWH > 0) zortItems.push({ sku, qty: whQty - deductWH, warehousecode: WH_SAI5 });
+          if (deductFS > 0) zortItems.push({ sku, qty: fsQty - deductFS, warehousecode: WH_FRONTSTORE });
+          if (zortItems.length) pushStockToZort_(zortItems);
+        } catch (e) { Logger.log("deductStock ZORT push error: " + e); }
+        return ok({ sku, deductWH, deductFS, newWH: whQty - deductWH, newFS: fsQty - deductFS });
+      }
     }
+    return error("ไม่พบ SKU: " + sku);
+  } finally {
+    lock.releaseLock();
   }
-  return error("ไม่พบ SKU: " + sku);
 }
 
 function deductMaterials(ss, items) {
@@ -628,34 +642,41 @@ function updateOrderState(ss, body) {
   const sheet = ss.getSheetByName(SHEET_ORDERS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_ORDERS);
 
-  // Try direct row match via orderId ("R5" → row 5+1=6 in sheet, index i=4)
-  if (body.orderId) {
-    const rowNum = parseInt(String(body.orderId).replace(/[^0-9]/g, ""));
-    if (rowNum >= 1) {
-      const sheetRow = rowNum + 1; // header is row 1, data starts row 2
-      if (body.status)           sheet.getRange(sheetRow, COL_ORD_STATUS).setValue(body.status);
-      if (body.preparedQty != null) sheet.getRange(sheetRow, COL_ORD_PREPQTY).setValue(body.preparedQty);
-      if (body.printFlag)        sheet.getRange(sheetRow, COL_ORD_PRINTFLAG).setValue(body.printFlag);
-      return ok({ updated: body.orderId, row: sheetRow });
-    }
-  }
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(8000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
 
-  // Fallback: match by sku + date
-  const data = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    const rowSku  = String(data[i][COL_ORD_SKU - 1]).trim().toUpperCase();
-    const rowDate = String(data[i][COL_ORD_DATE - 1]).trim();
-    const matchSku  = body.sku && rowSku === body.sku.trim().toUpperCase();
-    const matchDate = !body.date || rowDate.includes(String(body.date).trim());
-    if (matchSku && matchDate) {
-      const row = i + 1;
-      if (body.status)           sheet.getRange(row, COL_ORD_STATUS).setValue(body.status);
-      if (body.preparedQty != null) sheet.getRange(row, COL_ORD_PREPQTY).setValue(body.preparedQty);
-      if (body.printFlag)        sheet.getRange(row, COL_ORD_PRINTFLAG).setValue(body.printFlag);
-      return ok({ updated: body.sku, row });
+  try {
+    // Try direct row match via orderId ("R5" → row 5+1=6 in sheet, index i=4)
+    if (body.orderId) {
+      const rowNum = parseInt(String(body.orderId).replace(/[^0-9]/g, ""));
+      if (rowNum >= 1) {
+        const sheetRow = rowNum + 1; // header is row 1, data starts row 2
+        if (body.status)              sheet.getRange(sheetRow, COL_ORD_STATUS).setValue(body.status);
+        if (body.preparedQty != null) sheet.getRange(sheetRow, COL_ORD_PREPQTY).setValue(body.preparedQty);
+        if (body.printFlag)           sheet.getRange(sheetRow, COL_ORD_PRINTFLAG).setValue(body.printFlag);
+        return ok({ updated: body.orderId, row: sheetRow });
+      }
     }
+
+    // Fallback: match by sku + date
+    const data = sheet.getDataRange().getValues();
+    for (let i = 1; i < data.length; i++) {
+      const rowSku  = String(data[i][COL_ORD_SKU - 1]).trim().toUpperCase();
+      const rowDate = String(data[i][COL_ORD_DATE - 1]).trim();
+      const matchSku  = body.sku && rowSku === body.sku.trim().toUpperCase();
+      const matchDate = !body.date || rowDate.includes(String(body.date).trim());
+      if (matchSku && matchDate) {
+        const row = i + 1;
+        if (body.status)              sheet.getRange(row, COL_ORD_STATUS).setValue(body.status);
+        if (body.preparedQty != null) sheet.getRange(row, COL_ORD_PREPQTY).setValue(body.preparedQty);
+        if (body.printFlag)           sheet.getRange(row, COL_ORD_PRINTFLAG).setValue(body.printFlag);
+        return ok({ updated: body.sku, row });
+      }
+    }
+    return ok({ notFound: body.orderId || body.sku });
+  } finally {
+    lock.releaseLock();
   }
-  return ok({ notFound: body.orderId || body.sku });
 }
 
 function updateLockData(ss, lockKey, entries, datetime) {
@@ -718,39 +739,46 @@ function updateFrontStore(ss, entries, datetime) {
   const sheet = ss.getSheetByName("จำนวนหน้าร้าน");
   if (!sheet) return error("ไม่พบชีต จำนวนหน้าร้าน");
 
-  const dt = datetime || new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" });
-  const rows = sheet.getDataRange().getValues();
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(8000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
 
-  for (const entry of entries) {
-    const sku = String(entry.sku).trim().toUpperCase();
-    const qty = Number(entry.qty) || 0;
-    let found = false;
+  try {
+    const dt = datetime || new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" });
+    const rows = sheet.getDataRange().getValues();
 
-    for (let i = 1; i < rows.length; i++) {
-      const rowSku = String(rows[i][1] || "").trim().toUpperCase();
-      if (rowSku === sku) {
-        sheet.getRange(i + 1, 4).setValue(qty);
-        sheet.getRange(i + 1, 9).setValue(dt);
-        found = true;
-        break;
+    for (const entry of entries) {
+      const sku = String(entry.sku).trim().toUpperCase();
+      const qty = Number(entry.qty) || 0;
+      let found = false;
+
+      for (let i = 1; i < rows.length; i++) {
+        const rowSku = String(rows[i][1] || "").trim().toUpperCase();
+        if (rowSku === sku) {
+          sheet.getRange(i + 1, 4).setValue(qty);
+          sheet.getRange(i + 1, 9).setValue(dt);
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        const newRow = Array(Math.max(rows[0] ? rows[0].length : 11, 11)).fill("");
+        newRow[1] = sku;
+        newRow[3] = qty;
+        newRow[8] = dt;
+        sheet.appendRow(newRow);
       }
     }
-    if (!found) {
-      const newRow = Array(Math.max(rows[0] ? rows[0].length : 11, 11)).fill("");
-      newRow[1] = sku;
-      newRow[3] = qty;
-      newRow[8] = dt;
-      sheet.appendRow(newRow);
-    }
+    SpreadsheetApp.flush();
+    try {
+      const zortItems = entries
+        .filter(e => e.sku && Number(e.qty) >= 0)
+        .map(e => ({ sku: String(e.sku).trim().toUpperCase(), qty: Number(e.qty), warehousecode: WH_FRONTSTORE }));
+      if (zortItems.length) pushStockToZort_(zortItems);
+    } catch (e) { Logger.log("updateFrontStore ZORT push error: " + e); }
+    return ok({ updated: entries.length });
+  } finally {
+    lock.releaseLock();
   }
-  SpreadsheetApp.flush();
-  try {
-    const zortItems = entries
-      .filter(e => e.sku && Number(e.qty) >= 0)
-      .map(e => ({ sku: String(e.sku).trim().toUpperCase(), qty: Number(e.qty), warehousecode: WH_FRONTSTORE }));
-    if (zortItems.length) pushStockToZort_(zortItems);
-  } catch (e) { Logger.log("updateFrontStore ZORT push error: " + e); }
-  return ok({ updated: entries.length });
 }
 
 function confirmStockCount(ss, entries) {
@@ -758,30 +786,37 @@ function confirmStockCount(ss, entries) {
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_PRODUCTS);
 
-  const data = sheet.getDataRange().getValues();
-  let updated = 0;
-  for (const entry of entries) {
-    const sku = String(entry.sku || "").trim().toUpperCase();
-    const qty = Number(entry.qty) || 0;
-    for (let i = 1; i < data.length; i++) {
-      if (String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase() === sku) {
-        sheet.getRange(i + 1, COL_PROD_QTYWH).setValue(qty);
-        data[i][COL_PROD_QTYWH - 1] = qty;
-        updated++;
-        break;
-      }
-    }
-  }
-  SpreadsheetApp.flush();
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(8000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
 
   try {
-    const zortItems = entries
-      .filter(e => e.sku && Number(e.qty) >= 0)
-      .map(e => ({ sku: String(e.sku).trim().toUpperCase(), qty: Number(e.qty), warehousecode: WH_SAI5 }));
-    if (zortItems.length) pushStockToZort_(zortItems);
-  } catch (e) { Logger.log("confirmStockCount ZORT push error: " + e); }
+    const data = sheet.getDataRange().getValues();
+    let updated = 0;
+    for (const entry of entries) {
+      const sku = String(entry.sku || "").trim().toUpperCase();
+      const qty = Number(entry.qty) || 0;
+      for (let i = 1; i < data.length; i++) {
+        if (String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase() === sku) {
+          sheet.getRange(i + 1, COL_PROD_QTYWH).setValue(qty);
+          data[i][COL_PROD_QTYWH - 1] = qty;
+          updated++;
+          break;
+        }
+      }
+    }
+    SpreadsheetApp.flush();
 
-  return ok({ confirmed: updated });
+    try {
+      const zortItems = entries
+        .filter(e => e.sku && Number(e.qty) >= 0)
+        .map(e => ({ sku: String(e.sku).trim().toUpperCase(), qty: Number(e.qty), warehousecode: WH_SAI5 }));
+      if (zortItems.length) pushStockToZort_(zortItems);
+    } catch (e) { Logger.log("confirmStockCount ZORT push error: " + e); }
+
+    return ok({ confirmed: updated });
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function deleteOrderRow(ss, orderId) {
