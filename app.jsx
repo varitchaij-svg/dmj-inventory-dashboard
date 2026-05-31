@@ -38,6 +38,7 @@ function LoginScreen({ onLogin }) {
   const [pinTarget, setPinTarget] = usS(null);
   const [pin, setPin] = usS("");
   const [err, setErr] = usS(false);
+  const [checking, setChecking] = usS(false);
 
   const profiles = [
     { role: "owner",      label: "เจ้าของ",    emoji: "👑", color: "#1f7f44", needPin: true  },
@@ -51,7 +52,26 @@ function LoginScreen({ onLogin }) {
     else { onLogin(p.role); }
   };
 
-  const handlePin = () => {
+  const handlePin = async () => {
+    if (checking) return;
+    const base = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null;
+    // ตรวจ PIN ฝั่ง server (รหัสไม่อยู่ใน source); ถ้าต่อเน็ตไม่ได้ fallback เป็นรหัส default เดิม
+    if (base) {
+      setChecking(true); setErr(false);
+      try {
+        const sep = base.includes('?') ? '&' : '?';
+        const res = await fetch(`${base}${sep}action=verifyPin&pin=${encodeURIComponent(pin)}`, { cache: 'no-store' });
+        const d = await res.json();
+        setChecking(false);
+        if (d && d.ok) { onLogin(pinTarget.role); return; }
+        setErr(true); setPin(""); return;
+      } catch (e) {
+        setChecking(false);
+        // ออฟไลน์/เซิร์ฟเวอร์ล่ม → fallback ใช้รหัสเดิมเพื่อไม่ให้เจ้าของเข้าไม่ได้
+        if (pin.toUpperCase() === "DMJ") { onLogin(pinTarget.role); return; }
+        setErr(true); setPin(""); return;
+      }
+    }
     if (pin.toUpperCase() === "DMJ") { onLogin(pinTarget.role); }
     else { setErr(true); setPin(""); }
   };

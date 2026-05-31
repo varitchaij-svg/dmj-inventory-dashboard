@@ -1788,7 +1788,8 @@ function OrderModal({ product, onClose }) {
     if (!sheetUrl) { setErr('ไม่พบ GOOGLE_SHEET_URL'); return; }
     if (qty < 1) { setErr('กรุณาระบุจำนวน'); return; }
     setLoading(true); setErr(null);
-    const url = `${sheetUrl}?action=order&sku=${encodeURIComponent(product.sku)}&qty=${qty}&orderType=${encodeURIComponent(orderType)}`;
+    const _sep = sheetUrl.includes('?') ? '&' : '?';
+    const url = `${sheetUrl}${_sep}action=order&sku=${encodeURIComponent(product.sku)}&qty=${qty}&orderType=${encodeURIComponent(orderType)}`;
     fetch(url)
       .then(r => r.json())
       .then(d => {
