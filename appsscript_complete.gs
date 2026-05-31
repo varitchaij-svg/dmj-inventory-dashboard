@@ -218,6 +218,12 @@ function doGet(e) {
     if (e && e.parameter && e.parameter.action === 'order') {
       return handleOrder_(e.parameter);
     }
+    // Lightweight endpoint: ดึงเฉพาะรายการสั่งของ (เบา/เร็ว) สำหรับ polling หน้า orders
+    if (e && e.parameter && e.parameter.action === 'orders') {
+      return ContentService
+        .createTextOutput(JSON.stringify({ orders: readOrders_(), generatedAt: new Date().toISOString() }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
 
     const products  = readProducts_();
     const sysQtyMap = readSysQty_();

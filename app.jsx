@@ -262,11 +262,12 @@ function App() {
   const sheetUrl = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : "data.json";
   const sheetViewUrl = "https://docs.google.com/spreadsheets/d/11yL4u-XLUTCBObMppAj12nnmG0YlDZWsDn2XPCneoHQ/edit";
 
-  const fetchFromSheet = usC(() => {
+  // Full payload fetch (หนัก — ใช้ตอนโหลดครั้งแรก/กด Sync). retry=true → ลองซ้ำ 1 ครั้งเมื่อ timeout (กัน GAS cold start)
+  const fetchFromSheet = usC((retry = true) => {
     setSyncing(true);
     setError(null);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000); // 30s timeout
+    const timeout = setTimeout(() => controller.abort(), 45000); // 45s timeout
     const bustUrl = sheetUrl + (sheetUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
     fetch(bustUrl, { signal: controller.signal, cache: 'no-store' })
       .then(r => r.json())
@@ -278,12 +279,39 @@ function App() {
         const now = new Date().toISOString();
         localStorage.setItem("dmj_last_sync", now);
         setLastSync(now);
+        setError(null);
       })
       .catch(e => {
-        if (e.name === "AbortError") setError("หมดเวลาเชื่อมต่อ — กรุณาลองใหม่อีกครั้ง");
+        // Cold-start: ลองใหม่อัตโนมัติอีก 1 ครั้ง (GAS อุ่นเครื่องแล้วครั้งที่ 2 จะเร็ว)
+        if (e.name === "AbortError" && retry) {
+          clearTimeout(timeout);
+          setTimeout(() => fetchFromSheet(false), 800);
+          return;
+        }
+        if (e.name === "AbortError") setError("หมดเวลาเชื่อมต่อ — เซิร์ฟเวอร์ตอบช้า กรุณาลองใหม่อีกครั้ง");
         else setError(e.message);
+        setSyncing(false);
       })
-      .finally(() => { clearTimeout(timeout); setSyncing(false); });
+      .finally(() => { clearTimeout(timeout); if (!controller.signal.aborted) setSyncing(false); });
+  }, [sheetUrl]);
+
+  // Lightweight fetch: ดึงเฉพาะรายการสั่งของ (เบา/เร็ว) — ใช้ polling หน้า orders จะได้ไม่โหลดทั้งก้อน
+  const fetchOrdersOnly = usC(() => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20000);
+    const sep = sheetUrl.includes('?') ? '&' : '?';
+    const url = `${sheetUrl}${sep}action=orders&_t=${Date.now()}`;
+    fetch(url, { signal: controller.signal, cache: 'no-store' })
+      .then(r => r.json())
+      .then(d => {
+        if (!d || !Array.isArray(d.orders)) return;
+        setData(prev => prev ? { ...prev, orders: d.orders } : prev);
+        const now = new Date().toISOString();
+        localStorage.setItem("dmj_last_sync", now);
+        setLastSync(now);
+      })
+      .catch(() => {}) // เงียบ — เป็น background polling ไม่ต้องรบกวนผู้ใช้
+      .finally(() => clearTimeout(timeout));
   }, [sheetUrl]);
 
   usE(() => {
@@ -308,13 +336,13 @@ function App() {
   }, []);
 
   // ── Auto-sync when on orders tab ──
-  // Fetch immediately when entering orders/ordersummary, then poll every 15 s
+  // Poll เฉพาะรายการสั่งของ (เบา) ทุก 15 วิ — ไม่ดึง payload ทั้งก้อนซ้ำๆ จะได้ไม่ทำให้ GAS ช้า/timeout
   usE(() => {
     if (!role) return;
     const ORDER_TABS = ["orders", "ordersummary"];
     if (!ORDER_TABS.includes(tab)) return;
-    if (navigator.onLine) fetchFromSheet();
-    const id = setInterval(() => { if (navigator.onLine) fetchFromSheet(); }, 15000);
+    if (navigator.onLine) fetchOrdersOnly();
+    const id = setInterval(() => { if (navigator.onLine) fetchOrdersOnly(); }, 15000);
     return () => clearInterval(id);
   }, [tab, role]); // eslint-disable-line react-hooks/exhaustive-deps
 
