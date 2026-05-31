@@ -136,7 +136,9 @@ function doPost(e) {
     }
 
     // ─── App actions: ต้องมี token (LINE webhook ด้านบนยกเว้น) ───
-    if (!checkToken_(data.token)) return unauthorized_();
+    // token มาจาก query string (?token=) เป็นหลัก, รองรับใน body ด้วย
+    const _tok = (e && e.parameter && e.parameter.token) || data.token;
+    if (!checkToken_(_tok)) return unauthorized_();
 
     // ─── Stock Transfer (Batch): คลัง → หน้าร้าน หลาย SKU ในครั้งเดียว ───
     if (data.transferStockBatch) {
@@ -212,6 +214,7 @@ function doPost(e) {
 
 function doGet(e) {
   try {
+    if (!checkToken_(e && e.parameter && e.parameter.token)) return unauthorized_();
     if (e && e.parameter && e.parameter.action === 'order') {
       return handleOrder_(e.parameter);
     }

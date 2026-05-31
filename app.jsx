@@ -266,12 +266,7 @@ function App() {
   const [confirmAction, setConfirmAction] = usS(null); // { type:"clearLocal"|"logout" }
   const tabHistoryRef = React.useRef([]); // track tab navigation for Android back
 
-  const sheetUrl = (() => {
-    const base = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : "data.json";
-    const tok = (typeof APP_TOKEN !== 'undefined') ? APP_TOKEN : "";
-    if (!tok || base === "data.json") return base;
-    return base + (base.indexOf("?") >= 0 ? "&" : "?") + "token=" + encodeURIComponent(tok);
-  })();
+  const sheetUrl = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : "data.json";
   const sheetViewUrl = "https://docs.google.com/spreadsheets/d/11yL4u-XLUTCBObMppAj12nnmG0YlDZWsDn2XPCneoHQ/edit";
 
   const fetchFromSheet = usC(() => {
