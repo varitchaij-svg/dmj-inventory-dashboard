@@ -822,7 +822,7 @@ function confirmStockCount(ss, entries) {
 function deleteOrderRow(ss, orderId) {
   const sheet = ss.getSheetByName(SHEET_ORDERS);
   if (!sheet) return error("ไม่พบชีต ลำดับที่สั่งสินค้า");
-  const rowNum = parseInt(String(orderId).replace("R", ""));
+  const rowNum = parseInt(String(orderId).replace(/[^0-9]/g, ""));
   if (!rowNum || rowNum < 3) return error("orderId ไม่ถูกต้อง");
   sheet.deleteRow(rowNum);
   return ok({ deleted: orderId });
