@@ -140,6 +140,9 @@ function doPost(e) {
     const _tok = (e && e.parameter && e.parameter.token) || data.token;
     if (!checkToken_(_tok)) return unauthorized_();
 
+    // มีการแก้ข้อมูล → ล้าง cache ให้ doGet ครั้งถัดไปคำนวณใหม่ (ข้อมูลไม่ค้าง)
+    invalidateCache_();
+
     // ─── Stock Transfer (Batch): คลัง → หน้าร้าน หลาย SKU ในครั้งเดียว ───
     if (data.transferStockBatch) {
       return transferStockBatch(ss, data.list || []);
@@ -218,11 +221,30 @@ function doGet(e) {
     if (e && e.parameter && e.parameter.action === 'order') {
       return handleOrder_(e.parameter);
     }
+    // ตรวจ PIN เจ้าของฝั่ง server (PIN ไม่อยู่ใน source โค้ด frontend)
+    // ตั้งค่าใน Script Property ชื่อ OWNER_PIN; ถ้าไม่ตั้ง ใช้ค่า default 'DMJ' (backward compatible)
+    if (e && e.parameter && e.parameter.action === 'verifyPin') {
+      const expected = PropertiesService.getScriptProperties().getProperty('OWNER_PIN') || 'DMJ';
+      const okPin = String(e.parameter.pin || '') === String(expected);
+      return ContentService
+        .createTextOutput(JSON.stringify({ ok: okPin }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
     // Lightweight endpoint: ดึงเฉพาะรายการสั่งของ (เบา/เร็ว) สำหรับ polling หน้า orders
     if (e && e.parameter && e.parameter.action === 'orders') {
       return ContentService
         .createTextOutput(JSON.stringify({ orders: readOrders_(), generatedAt: new Date().toISOString() }))
         .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // Server-side cache: payload หนัก (อ่าน 11 ชีต) → cache ไว้ ~3 นาที ลดโหลด/timeout
+    // ?fresh=1 หรือหลังมีการแก้ข้อมูล (doPost ล้าง cache) จะคำนวณใหม่
+    const wantFresh = e && e.parameter && e.parameter.fresh === '1';
+    if (!wantFresh) {
+      const cached = getCachedPayload_();
+      if (cached) {
+        return ContentService.createTextOutput(cached).setMimeType(ContentService.MimeType.JSON);
+      }
     }
 
     const products  = readProducts_();
@@ -359,7 +381,9 @@ function doGet(e) {
       }
     };
 
-    return ContentService.createTextOutput(JSON.stringify(data))
+    const out = JSON.stringify(data);
+    putCachedPayload_(out); // เก็บ cache สำหรับ request ถัดไป
+    return ContentService.createTextOutput(out)
       .setMimeType(ContentService.MimeType.JSON);
   } catch (error) {
     console.error("doGet Error:", error);
@@ -2020,6 +2044,57 @@ function scheduledLineReminder() {
 function ok(data) {
   return ContentService.createTextOutput(JSON.stringify({ success: true, data }))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ── Payload cache (แบ่งเป็น chunk เพราะ CacheService จำกัด 100KB/key) ──
+const _CACHE_TTL_SEC   = 180;     // 3 นาที
+const _CACHE_CHUNK_LEN = 30000;   // อักขระต่อ chunk (Thai 3 ไบต์ → ~90KB ปลอดภัย)
+const _CACHE_KEY_COUNT = 'dmj_payload_n';
+const _CACHE_KEY_PART  = 'dmj_payload_';
+
+function getCachedPayload_() {
+  try {
+    const c = CacheService.getScriptCache();
+    const nStr = c.get(_CACHE_KEY_COUNT);
+    if (!nStr) return null;
+    const n = parseInt(nStr, 10);
+    if (!n) return null;
+    const keys = [];
+    for (let i = 0; i < n; i++) keys.push(_CACHE_KEY_PART + i);
+    const map = c.getAll(keys);
+    let out = '';
+    for (let i = 0; i < n; i++) {
+      const part = map[_CACHE_KEY_PART + i];
+      if (part == null) return null; // chunk หาย → ถือว่า cache ใช้ไม่ได้
+      out += part;
+    }
+    return out;
+  } catch (err) { return null; }
+}
+
+function putCachedPayload_(str) {
+  try {
+    const c = CacheService.getScriptCache();
+    const entries = {};
+    let n = 0;
+    for (let i = 0; i < str.length; i += _CACHE_CHUNK_LEN) {
+      entries[_CACHE_KEY_PART + n] = str.substring(i, i + _CACHE_CHUNK_LEN);
+      n++;
+    }
+    entries[_CACHE_KEY_COUNT] = String(n);
+    c.putAll(entries, _CACHE_TTL_SEC);
+  } catch (err) { /* cache ล้มเหลวไม่เป็นไร — แค่ช้าลง */ }
+}
+
+function invalidateCache_() {
+  try {
+    const c = CacheService.getScriptCache();
+    const nStr = c.get(_CACHE_KEY_COUNT);
+    const n = nStr ? parseInt(nStr, 10) : 0;
+    const keys = [_CACHE_KEY_COUNT];
+    for (let i = 0; i < n; i++) keys.push(_CACHE_KEY_PART + i);
+    c.removeAll(keys);
+  } catch (err) { /* ignore */ }
 }
 
 function error(msg) {
