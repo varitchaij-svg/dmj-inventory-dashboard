@@ -19,13 +19,6 @@ const TABS = [
 ];
 
 // Role config
-const ROLE_PASSWORDS = {
-  "DMJ":   "owner",
-  "1234":  "employee",     // backward-compat (legacy พนักงาน)
-  "WH":    "warehouse",    // คลังสินค้า
-  "FS":    "frontstore",   // หน้าร้าน
-  "SALE":  "saler",        // พนักงานขาย
-};
 const ROLE_TABS = {
   owner:      ["overview","categories","trends","stock","storage","stockcount","frontstore","transfers","orders","ordersummary","mtojobs","upload","connect","labels"],
   employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","mtojobs","labels"],
@@ -285,7 +278,10 @@ function App() {
         localStorage.setItem("dmj_last_sync", now);
         setLastSync(now);
       })
-      .catch(e => { if (e.name !== "AbortError") setError(e.message); })
+      .catch(e => {
+        if (e.name === "AbortError") setError("หมดเวลาเชื่อมต่อ — กรุณาลองใหม่อีกครั้ง");
+        else setError(e.message);
+      })
       .finally(() => { clearTimeout(timeout); setSyncing(false); });
   }, [sheetUrl]);
 
