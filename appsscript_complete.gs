@@ -102,6 +102,7 @@ function doPost(e) {
     // ─── LINE Webhook ───
     if (data.events) {
       const event = data.events[0];
+      if (!event) return ContentService.createTextOutput("OK"); // delivery/join events have empty array
       if (event.type === 'message' && event.message.type === 'text') {
         const userMessage = event.message.text.trim();
         const replyToken = event.replyToken;

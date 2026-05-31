@@ -285,7 +285,10 @@ function App() {
         localStorage.setItem("dmj_last_sync", now);
         setLastSync(now);
       })
-      .catch(e => { if (e.name !== "AbortError") setError(e.message); })
+      .catch(e => {
+        if (e.name === "AbortError") setError("หมดเวลาเชื่อมต่อ — กรุณาลองใหม่อีกครั้ง");
+        else setError(e.message);
+      })
       .finally(() => { clearTimeout(timeout); setSyncing(false); });
   }, [sheetUrl]);
 
