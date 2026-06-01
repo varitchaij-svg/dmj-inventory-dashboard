@@ -1189,6 +1189,8 @@ function writeZortSalesSheet_(ss, shName, data, sortedKeys, periodField) {
 
   sh.clearContents();
   const allRows = [headerRow, subHeaderRow, ...dataRows];
+  // กันไม่ให้ Sheets แปลง "05/2026" / "01/06/2026" เป็น date → ตั้ง row 1-2 เป็น text ก่อนเขียน
+  sh.getRange(1, 1, 2, headerRow.length).setNumberFormat("@");
   sh.getRange(1, 1, allRows.length, headerRow.length).setValues(allRows);
   Logger.log(shName + ": เขียน " + dataRows.length + " rows, " + sortedKeys.length + " คอลัมน์");
 }
