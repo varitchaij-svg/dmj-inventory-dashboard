@@ -899,14 +899,15 @@ function pushStockToZort_(items) {
   for (const item of items) {
     const wh = item.warehousecode || WH_SAI5;
     if (!groups[wh]) groups[wh] = [];
-    if (item.sku && item.qty >= 0) groups[wh].push({ sku: String(item.sku).trim(), number: Number(item.qty) });
+    // ZORT V4: stocks[].sku, stocks[].stock (ไม่ใช่ list/number)
+    if (item.sku && item.qty >= 0) groups[wh].push({ sku: String(item.sku).trim(), stock: Number(item.qty) });
   }
   const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
-  for (const [wh, list] of Object.entries(groups)) {
+  for (const [wh, stocks] of Object.entries(groups)) {
     try {
       const res = UrlFetchApp.fetch(`${ZORT_BASE}/Product/UpdateProductAvailableStockList`, {
         method: "post", headers,
-        payload: JSON.stringify({ warehousecode: wh, list }),
+        payload: JSON.stringify({ warehousecode: wh, stocks }),
         muteHttpExceptions: true
       });
       Logger.log(`pushStockToZort [${wh}]: ` + res.getContentText());
@@ -2526,15 +2527,16 @@ function decreaseMtoStockInZort_(items) {
     const qty = Number(item.qty) || 0;
     const ret = Math.max(0, Math.min(Number(item.returnedQty) || 0, qty));
     const net = qty - ret;
-    if (sku && net > 0) groups[whCode].push({ sku, number: net });
+    // ZORT V4: stocks[].sku, stocks[].stock (ไม่ใช่ list/number)
+    if (sku && net > 0) groups[whCode].push({ sku, stock: net });
   }
 
   const results = {};
   const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
 
-  for (const [whCode, list] of Object.entries(groups)) {
-    if (!list.length) continue;
-    const payload = { warehousecode: whCode, list };
+  for (const [whCode, stocks] of Object.entries(groups)) {
+    if (!stocks.length) continue;
+    const payload = { warehousecode: whCode, stocks };
     const res = UrlFetchApp.fetch(`${ZORT_BASE}/Product/DecreaseProductStockList`, {
       method: "post",
       headers,
