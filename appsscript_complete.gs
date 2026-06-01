@@ -929,7 +929,7 @@ function getZortWarehouses() {
 // เพื่อใช้เขียน auto-sync ยอดขายให้ตรงกับชื่อ field จริง (ไม่ต้องเดา)
 // อ่านอย่างเดียว ไม่แก้ไขข้อมูลใดๆ
 // ─────────────────────────────────────────────────────────────
-function exploreZortSales_() {
+function exploreZortSales() {
   const tz = "Asia/Bangkok";
   const today = new Date();
   const from  = new Date(today.getTime() - 14 * 24 * 60 * 60 * 1000); // 14 วันล่าสุด
