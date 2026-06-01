@@ -923,6 +923,55 @@ function getZortWarehouses() {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// DIAGNOSTIC: สำรวจโครงสร้าง response ของ ZORT Order API
+// รันฟังก์ชันนี้ครั้งเดียวใน Apps Script Editor → ดู Execution log → ส่ง output กลับมา
+// เพื่อใช้เขียน auto-sync ยอดขายให้ตรงกับชื่อ field จริง (ไม่ต้องเดา)
+// อ่านอย่างเดียว ไม่แก้ไขข้อมูลใดๆ
+// ─────────────────────────────────────────────────────────────
+function exploreZortSales_() {
+  const tz = "Asia/Bangkok";
+  const today = new Date();
+  const from  = new Date(today.getTime() - 14 * 24 * 60 * 60 * 1000); // 14 วันล่าสุด
+  const fromStr = Utilities.formatDate(from,  tz, "yyyy-MM-dd");
+  const toStr   = Utilities.formatDate(today, tz, "yyyy-MM-dd");
+
+  // ลองหลายชื่อ param วันที่ที่ ZORT อาจใช้ — เก็บอันที่คืนข้อมูล
+  const tryEndpoints = [
+    `${ZORT_BASE}/Order/GetOrders?page=1&limit=5&fromdate=${fromStr}&todate=${toStr}`,
+    `${ZORT_BASE}/Order/GetMovementOrders?page=1&limit=5&fromdate=${fromStr}&todate=${toStr}`,
+  ];
+
+  tryEndpoints.forEach(url => {
+    Logger.log("──────────────────────────────────────");
+    Logger.log("GET " + url);
+    try {
+      const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+      Logger.log("HTTP " + res.getResponseCode());
+      const text = res.getContentText();
+      const json = JSON.parse(text);
+      Logger.log("top-level keys: " + JSON.stringify(Object.keys(json)));
+      const list = json.list || json.orders || json.data || [];
+      Logger.log("list length: " + (Array.isArray(list) ? list.length : "(ไม่ใช่ array)"));
+      if (Array.isArray(list) && list.length) {
+        const first = list[0];
+        Logger.log("order[0] keys: " + JSON.stringify(Object.keys(first)));
+        Logger.log("order[0] sample: " + JSON.stringify(first).substring(0, 1500));
+        // หา array รายการสินค้าใน order (line items)
+        Object.keys(first).forEach(k => {
+          if (Array.isArray(first[k]) && first[k].length && typeof first[k][0] === 'object') {
+            Logger.log(`order[0].${k}[0] keys: ` + JSON.stringify(Object.keys(first[k][0])));
+            Logger.log(`order[0].${k}[0] sample: ` + JSON.stringify(first[k][0]).substring(0, 800));
+          }
+        });
+      }
+    } catch (e) {
+      Logger.log("ERROR: " + e);
+    }
+  });
+  Logger.log("──────── เสร็จ — copy log ทั้งหมดส่งกลับมา ────────");
+}
+
 function fetchAllZortProducts_(warehousecode) {
   let page = 1;
   const all = [];
