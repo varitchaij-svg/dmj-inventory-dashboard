@@ -916,6 +916,75 @@ function pushStockToZort_(items) {
   }
 }
 
+// หา URL รูปจาก product object ของ ZORT (auto-detect ชื่อ field)
+function pickZortImage_(p) {
+  const keys = Object.keys(p).filter(k => /image|photo|picture|img|thumb/i.test(k));
+  for (const k of keys) {
+    const v = String(p[k] || '').trim();
+    if (/^https?:\/\//i.test(v)) return v;
+  }
+  for (const k of Object.keys(p)) {
+    if (/url/i.test(k)) {
+      const v = String(p[k] || '').trim();
+      if (/^https?:\/\/.*\.(jpe?g|png|webp|gif)/i.test(v)) return v;
+    }
+  }
+  return '';
+}
+
+// ดึงรูปจาก ZORT → เขียนคอลัมน์ E ของชีต imageUrl (ไม่แตะคอลัมน์ D ที่ใส่เอง)
+function syncZortImages() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const sh = ss.getSheetByName('imageUrl');
+  if (!sh) { Logger.log('ไม่พบชีต imageUrl'); return; }
+
+  const products = fetchAllZortProducts_(); // ทุกคลัง
+  const zortImg = {};
+  let withImg = 0;
+  products.forEach(p => {
+    const sku = String(p.sku || p.barcode || '').trim().toUpperCase();
+    if (!sku) return;
+    const img = pickZortImage_(p);
+    if (img) { zortImg[sku] = img; withImg++; }
+  });
+  Logger.log(`ZORT: ${products.length} สินค้า, มีรูป ${withImg}`);
+
+  const rows = sh.getDataRange().getValues();
+  if (!String(rows[0][4] || '').trim()) sh.getRange(1, 5).setValue('รูปจาก ZORT (auto)');
+
+  let updated = 0, added = 0;
+  const existing = {};
+  for (let i = 1; i < rows.length; i++) {
+    const sku = String(rows[i][1] || '').trim().toUpperCase();
+    if (!sku) continue;
+    existing[sku] = i + 1; // row number
+    if (zortImg[sku] && zortImg[sku] !== String(rows[i][4] || '').trim()) {
+      sh.getRange(i + 1, 5).setValue(zortImg[sku]);
+      updated++;
+    }
+  }
+  // เพิ่ม SKU ใหม่ที่ยังไม่มีในชีต imageUrl
+  Object.keys(zortImg).forEach(sku => {
+    if (!existing[sku]) {
+      sh.appendRow(['', sku, '', '', zortImg[sku]]);
+      added++;
+    }
+  });
+
+  SpreadsheetApp.flush();
+  invalidateCache_();
+  Logger.log(`✅ syncZortImages: อัปเดต ${updated} แถว, เพิ่มใหม่ ${added} แถว`);
+}
+
+// ตั้ง trigger sync รูปจาก ZORT ทุกวัน 05:00
+function setupZortImageTrigger() {
+  ScriptApp.getProjectTriggers().forEach(t => {
+    if (t.getHandlerFunction() === 'syncZortImages') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('syncZortImages').timeBased().everyDays(1).atHour(5).create();
+  Logger.log('✅ ตั้ง trigger: syncZortImages ทุกวัน 05:00');
+}
+
 function getZortWarehouses() {
   const res  = UrlFetchApp.fetch(`${ZORT_BASE}/Warehouse/GetWarehouses`,
     { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
@@ -1888,9 +1957,28 @@ function dayKey_(val) {
   return null;
 }
 
+// อ่านชีต imageUrl: A=ID, B=SKU, C=ชื่อ, D=รูป(ใส่เอง), E=รูปจาก ZORT(auto)
+// รูปที่ใส่เอง (D) ชนะรูปจาก ZORT (E) เสมอ
+function readImageMap_() {
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('imageUrl');
+  if (!sh) return {};
+  const rows = sh.getDataRange().getDisplayValues();
+  const map = {};
+  for (let i = 1; i < rows.length; i++) {
+    const sku = (rows[i][1] || '').toString().trim().toUpperCase();
+    if (!sku) continue;
+    const manual = (rows[i][3] || '').toString().trim(); // D
+    const zort   = (rows[i][4] || '').toString().trim(); // E
+    const url = manual || zort;
+    if (url) map[sku] = url;
+  }
+  return map;
+}
+
 function readProducts_() {
   const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('ข้อมูลสินค้า');
   const rows = sh.getDataRange().getDisplayValues();
+  const imageMap = readImageMap_();
   const out = [];
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
@@ -1903,7 +1991,7 @@ function readProducts_() {
     const locParsed = parseLocation_(r[4]);
     out.push({
       sku, name,
-      imageUrl:    (r[3] || '').toString().trim(),
+      imageUrl:    imageMap[sku.toUpperCase()] || (r[3] || '').toString().trim(),
       locationRaw: (r[4] || '').toString().trim(),
       locations:   locParsed ? [locParsed] : [],
       category:    (r[5] || '').toString().trim(),
