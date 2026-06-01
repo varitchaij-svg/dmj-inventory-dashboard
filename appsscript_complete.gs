@@ -199,7 +199,7 @@ function doPost(e) {
       return ok({ synced: true });
     }
     if (data.syncZortSalesNow) {
-      syncZortSales_();
+      syncZortSales();
       return ok({ synced: true });
     }
 
@@ -978,7 +978,7 @@ function exploreZortSales() {
 
 // ─── ZORT Sales Auto-Sync ───────────────────────────────────────────────────
 
-function syncZortSales_() {
+function syncZortSales() {
   const ss = SpreadsheetApp.openById(SHEET_ID);
   const tz = "Asia/Bangkok";
   const today = new Date();
@@ -1046,7 +1046,7 @@ function syncZortSales_() {
   writeZortSalesSheet_(ss, "ยอดขายรายเดือน", monthly, sortedMonths, "months");
   writeZortSalesSheet_(ss, "ยอดขายรายวัน",   daily,   sortedDays,   "days");
   invalidateCache_();
-  Logger.log("✅ syncZortSales_ เสร็จ");
+  Logger.log("✅ syncZortSales เสร็จ");
 }
 
 // ดึงคำสั่งซื้อจาก ZORT แบบ paginated
@@ -1117,10 +1117,10 @@ function writeZortSalesSheet_(ss, shName, data, sortedKeys, periodField) {
 // ตั้ง trigger ให้ sync ยอดขายจาก ZORT ทุก 2 ชั่วโมง
 function setupZortSalesTrigger() {
   ScriptApp.getProjectTriggers().forEach(t => {
-    if (t.getHandlerFunction() === "syncZortSales_") ScriptApp.deleteTrigger(t);
+    if (t.getHandlerFunction() === "syncZortSales") ScriptApp.deleteTrigger(t);
   });
-  ScriptApp.newTrigger("syncZortSales_").timeBased().everyHours(2).create();
-  Logger.log("✅ ตั้ง trigger: syncZortSales_ ทุก 2 ชั่วโมง");
+  ScriptApp.newTrigger("syncZortSales").timeBased().everyHours(2).create();
+  Logger.log("✅ ตั้ง trigger: syncZortSales ทุก 2 ชั่วโมง");
 }
 
 function fetchAllZortProducts_(warehousecode) {
