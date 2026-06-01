@@ -1281,14 +1281,31 @@ function createDailyTrigger() {
 
 function debugZortProduct() {
   const res = UrlFetchApp.fetch(
-    `${ZORT_BASE}/Product/GetProducts?page=1&limit=3&warehousecode=W0002`,
+    `${ZORT_BASE}/Product/GetProducts?page=1&limit=3`,
     { method: "get", headers: zortHeaders_(), muteHttpExceptions: true }
   );
   const json = JSON.parse(res.getContentText());
   if (json.list && json.list[0]) {
-    Logger.log("Fields: " + Object.keys(json.list[0]).join(", "));
-    Logger.log("Sample: " + JSON.stringify(json.list[0], null, 2));
+    const first = json.list[0];
+    Logger.log("Fields: " + Object.keys(first).join(", "));
+    // หา field รูปภาพ (image/photo/picture/url)
+    Object.keys(first).forEach(k => {
+      if (/image|photo|picture|img|url|thumb/i.test(k)) {
+        Logger.log(`  รูป? ${k} = ` + JSON.stringify(first[k]));
+      }
+    });
+    Logger.log("Sample: " + JSON.stringify(first, null, 2).substring(0, 2000));
   }
+}
+
+// รันครั้งเดียวเพื่อดู (1) รหัสคลังจริงใน ZORT  (2) field รูปภาพของสินค้า
+// ส่ง log กลับมา → จะแก้รหัสคลัง + เปิด sync รูปให้
+function exploreZortSetup() {
+  Logger.log("════════ 1) คลังสินค้าใน ZORT ════════");
+  getZortWarehouses();
+  Logger.log("════════ 2) field สินค้า (หารูปภาพ) ════════");
+  debugZortProduct();
+  Logger.log("════════ เสร็จ — copy log ทั้งหมดส่งกลับมา ════════");
 }
 
 // ───────────────────────────────────────────────────────────
