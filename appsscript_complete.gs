@@ -1957,8 +1957,8 @@ function dayKey_(val) {
   return null;
 }
 
-// อ่านชีต imageUrl: A=ID, B=SKU, C=ชื่อ, D=รูป(ใส่เอง), E=รูปจาก ZORT(auto)
-// รูปที่ใส่เอง (D) ชนะรูปจาก ZORT (E) เสมอ
+// อ่านชีต imageUrl: A=ID, B=SKU, C=ชื่อ, D=รูป(ใส่เอง/สำรอง), E=รูปจาก ZORT(auto)
+// ZORT คือแหล่งหลัก → รูปจาก ZORT (E) ชนะ, ใช้รูปใส่เอง (D) เฉพาะตอน ZORT ไม่มีรูป
 function readImageMap_() {
   const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('imageUrl');
   if (!sh) return {};
@@ -1967,9 +1967,9 @@ function readImageMap_() {
   for (let i = 1; i < rows.length; i++) {
     const sku = (rows[i][1] || '').toString().trim().toUpperCase();
     if (!sku) continue;
-    const manual = (rows[i][3] || '').toString().trim(); // D
-    const zort   = (rows[i][4] || '').toString().trim(); // E
-    const url = manual || zort;
+    const manual = (rows[i][3] || '').toString().trim(); // D = สำรอง
+    const zort   = (rows[i][4] || '').toString().trim(); // E = ZORT (หลัก)
+    const url = zort || manual;
     if (url) map[sku] = url;
   }
   return map;
