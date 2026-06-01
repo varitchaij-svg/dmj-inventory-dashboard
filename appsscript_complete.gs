@@ -976,13 +976,13 @@ function syncZortImages() {
   Logger.log(`✅ syncZortImages: อัปเดต ${updated} แถว, เพิ่มใหม่ ${added} แถว`);
 }
 
-// ตั้ง trigger sync รูปจาก ZORT ทุกวัน 05:00
+// ตั้ง trigger sync รูปจาก ZORT ทุกสัปดาห์ (วันจันทร์ 05:00)
 function setupZortImageTrigger() {
   ScriptApp.getProjectTriggers().forEach(t => {
     if (t.getHandlerFunction() === 'syncZortImages') ScriptApp.deleteTrigger(t);
   });
-  ScriptApp.newTrigger('syncZortImages').timeBased().everyDays(1).atHour(5).create();
-  Logger.log('✅ ตั้ง trigger: syncZortImages ทุกวัน 05:00');
+  ScriptApp.newTrigger('syncZortImages').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(5).create();
+  Logger.log('✅ ตั้ง trigger: syncZortImages ทุกวันจันทร์ 05:00');
 }
 
 function getZortWarehouses() {
