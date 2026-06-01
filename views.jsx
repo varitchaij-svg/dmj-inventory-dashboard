@@ -161,6 +161,57 @@ function SkeletonCard() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Analytics helpers (shared by Overview deep-dive cards)
+// ─────────────────────────────────────────────────────────────────────
+
+// % change badge with arrow — green up / red down / grey new
+function DeltaBadge({ pct, isNew }) {
+  if (isNew) {
+    return <span style={{display:"inline-flex",alignItems:"center",gap:3,fontSize:11,fontWeight:700,
+                          padding:"2px 7px",borderRadius:20,background:"#eef4ff",color:"#2563eb"}}>ใหม่</span>;
+  }
+  if (pct == null) return <span style={{fontSize:11,color:"var(--light)"}}>—</span>;
+  const up = pct >= 0;
+  const c  = up ? "#1f7f44" : "#c0392b";
+  const bg = up ? "#eaf6ee" : "#fcecec";
+  const arrow = up ? "▲" : "▼";
+  const shown = Math.abs(pct) >= 10 ? Math.round(Math.abs(pct)*100) : (Math.abs(pct)*100).toFixed(0);
+  return (
+    <span style={{display:"inline-flex",alignItems:"center",gap:3,fontSize:11,fontWeight:700,
+                  padding:"2px 7px",borderRadius:20,background:bg,color:c}}>
+      {arrow} {shown}%
+    </span>
+  );
+}
+
+// Compact product row used by mover / velocity / dead-stock lists
+function MiniRow({ p, onClick, allCats, primary, secondary, right }) {
+  return (
+    <button onClick={onClick}
+      style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"8px 12px",
+              background:"transparent",border:"none",borderBottom:"1px solid var(--bdr)",
+              cursor:"pointer",textAlign:"left",fontFamily:"inherit"}}
+      onMouseEnter={e=>e.currentTarget.style.background="#fafcf7"}
+      onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+      {p.imageUrl
+        ? <div style={{width:34,height:34,borderRadius:6,flexShrink:0,backgroundImage:`url("${p.imageUrl}")`,
+                       backgroundSize:"contain",backgroundPosition:"center",backgroundRepeat:"no-repeat",
+                       backgroundColor:"#fff",border:"1px solid var(--bdr)"}}/>
+        : <div style={{width:34,height:34,borderRadius:6,flexShrink:0,
+                       background:catColor(p.cat,allCats)+"22",border:`1px solid ${catColor(p.cat,allCats)}55`}}/>}
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:11.5,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}</div>
+        <div style={{fontSize:10,color:"var(--muted)",marginTop:1}}>{secondary}</div>
+      </div>
+      <div style={{flexShrink:0,textAlign:"right",display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2}}>
+        {right}
+        {primary != null && <div style={{fontSize:10,color:"var(--light)"}}>{primary}</div>}
+      </div>
+    </button>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // OVERVIEW
 // ─────────────────────────────────────────────────────────────────────
 function OverviewView({ data, range, setRange, role }) {
@@ -316,11 +367,100 @@ function OverviewView({ data, range, setRange, role }) {
     });
   }, [months, days, monthlyByCat, dailyByCat, topCats, range, hasDailyData, activeMonth, selMonthDailySeries]);
 
+  // ── Period selector: map range → per-product {qty, rev} for selected window ──
+  const periodInfo = uM(() => {
+    if (range === 'year') {
+      return {
+        label: months.length ? `${monthLabel(months[0]).split(" ")[0]}–${monthLabel(months[months.length-1])}` : "ทั้งปี",
+        tag: "ทั้งปี",
+        perProduct: p => ({ qty: p.soldQty || 0, rev: p.soldRev || 0 }),
+      };
+    }
+    const mk = activeMonth; // month + day mode drill to the active month
+    return {
+      label: mk ? monthLabel(mk) : "เดือนล่าสุด",
+      tag: mk ? monthLabel(mk) : "เดือนล่าสุด",
+      perProduct: p => {
+        const mm = (p.monthly || []).find(x => x.month === mk);
+        return { qty: mm ? mm.qty : 0, rev: mm ? mm.sales : 0 };
+      },
+    };
+  }, [range, activeMonth, months]);
+
   const topSellers = uM(() =>
-    [...products].filter(p => p.soldRev > 0 && !p.isMTO)
-      .sort((a,b) => b.soldRev - a.soldRev).slice(0, 10),
-    [products]
+    products.filter(p => !p.isMTO)
+      .map(p => { const v = periodInfo.perProduct(p); return { ...p, _pQty: v.qty, _pRev: v.rev }; })
+      .filter(p => p._pRev > 0 || p._pQty > 0)
+      .sort((a,b) => b._pRev - a._pRev)
+      .slice(0, 10),
+    [products, periodInfo]
   );
+
+  // ── Movers: current vs previous month (MoM) ──────────────────────────
+  const momMovers = uM(() => {
+    if (months.length < 2) return { risers: [], fallers: [], cur: null, prev: null };
+    const cur = months[months.length-1], prev = months[months.length-2];
+    const MIN = 300; // ตัด noise: ต้องมียอดอย่างน้อยเดือนใดเดือนหนึ่ง
+    const rows = products.filter(p => !p.isMTO).map(p => {
+      const c  = (p.monthly||[]).find(x=>x.month===cur);
+      const pr = (p.monthly||[]).find(x=>x.month===prev);
+      const curRev = c?c.sales:0, prevRev = pr?pr.sales:0;
+      const isNew = prevRev === 0 && curRev > 0;
+      const pct = prevRev > 0 ? (curRev - prevRev)/prevRev : null;
+      return { p, curRev, prevRev, curQty: c?c.qty:0, prevQty: pr?pr.qty:0,
+               delta: curRev - prevRev, pct, isNew };
+    }).filter(r => r.curRev >= MIN || r.prevRev >= MIN);
+    const risers  = rows.filter(r => r.delta > 0).sort((a,b)=>b.delta-a.delta).slice(0,6);
+    const fallers = rows.filter(r => r.delta < 0).sort((a,b)=>a.delta-b.delta).slice(0,6);
+    return { risers, fallers, cur, prev };
+  }, [products, months]);
+
+  // ── Velocity: avg sales rate → days of stock left ────────────────────
+  const velocity = uM(() => {
+    const n = Math.max(1, Math.min(months.length, 3));
+    const recent = months.slice(-n);
+    const rows = products.filter(p => !p.isMTO).map(p => {
+      const qty = (p.monthly||[]).filter(x=>recent.includes(x.month)).reduce((s,x)=>s+x.qty,0);
+      const perDay = qty / (n*30);
+      const stock = stockQty(p);
+      const daysLeft = perDay > 0 ? stock/perDay : Infinity;
+      return { p, perDay, stock, daysLeft, qty };
+    });
+    const reorder   = rows.filter(r => r.perDay>0 && r.stock>0 && r.daysLeft < 21)
+                          .sort((a,b)=>a.daysLeft-b.daysLeft).slice(0,10);
+    const overstock = rows.filter(r => r.perDay>0 && r.daysLeft>120 && r.stock>10)
+                          .sort((a,b)=>b.daysLeft-a.daysLeft).slice(0,10);
+    return { reorder, overstock, n };
+  }, [products, months]);
+
+  // ── Dead stock: holding inventory but no recent sales ────────────────
+  const deadStock = uM(() => {
+    const recent = months.slice(-2);
+    const rows = products.filter(p => !p.isMTO && stockQty(p) > 0).map(p => {
+      const recentQty = (p.monthly||[]).filter(x=>recent.includes(x.month)).reduce((s,x)=>s+x.qty,0);
+      const stock = stockQty(p);
+      return { p, recentQty, stock, value: stock * (p.price||0) };
+    }).filter(r => r.recentQty === 0);
+    rows.sort((a,b)=>b.value-a.value);
+    return { list: rows.slice(0,12), count: rows.length,
+             totalValue: rows.reduce((s,r)=>s+r.value,0) };
+  }, [products, months]);
+
+  // ── ABC / Pareto classification by revenue ───────────────────────────
+  const abc = uM(() => {
+    const sorted = products.filter(p => !p.isMTO && (p.soldRev||0) > 0)
+                           .sort((a,b)=>(b.soldRev||0)-(a.soldRev||0));
+    const total = sorted.reduce((s,p)=>s+(p.soldRev||0),0);
+    let cum = 0;
+    const counts = { A:0, B:0, C:0 }, rev = { A:0, B:0, C:0 };
+    sorted.forEach(p => {
+      cum += p.soldRev||0;
+      const cumPct = total>0 ? cum/total : 0;
+      const cls = cumPct <= 0.8 ? 'A' : cumPct <= 0.95 ? 'B' : 'C';
+      counts[cls]++; rev[cls] += p.soldRev||0;
+    });
+    return { total, counts, rev, n: sorted.length };
+  }, [products]);
 
   // Top sellers per category — for the gallery section
   const topByCategory = uM(() => {
@@ -836,8 +976,8 @@ function OverviewView({ data, range, setRange, role }) {
         </Card>
       )}
 
-      <Card title="Top 10 สินค้าขายดี (ทั้งปี · ไม่รวม MTO)"
-            sub={months.length > 0 ? `เรียงตามรายได้ · ${monthLabel(months[0]).split(" ")[0]}–${monthLabel(months[months.length-1])}` : "เรียงตามรายได้"}
+      <Card title={`Top 10 สินค้าขายดี · ${periodInfo.tag} (ไม่รวม MTO)`}
+            sub={`เรียงตามรายได้ · ${periodInfo.label}`}
             action={null}>
         <div style={{overflowX:"auto"}}>
           <table className="t">
@@ -886,8 +1026,8 @@ function OverviewView({ data, range, setRange, role }) {
                       {p.cat || "—"}
                     </span>
                   </td>
-                  <td className="num" style={{fontWeight:600}}>{fmtN(p.soldQty)}</td>
-                  {role === "owner" && <td className="num" style={{fontWeight:700,color:"var(--g-700)"}}>{fmtB(p.soldRev)}</td>}
+                  <td className="num" style={{fontWeight:600}}>{fmtN(p._pQty)}</td>
+                  {role === "owner" && <td className="num" style={{fontWeight:700,color:"var(--g-700)"}}>{fmtB(p._pRev)}</td>}
                   <td className="num" style={{color:stockQty(p)<=36?"var(--dang)":"var(--muted)"}}>{fmtN(stockQty(p))}</td>
                   <td style={{padding:"4px 10px"}}>
                     <div style={{width:100}}>
@@ -981,6 +1121,120 @@ function OverviewView({ data, range, setRange, role }) {
           })}
         </div>
       </Card>
+
+      {/* ── Movers: มาแรง / ตก (เดือนล่าสุด vs เดือนก่อน) ── */}
+      {(momMovers.risers.length > 0 || momMovers.fallers.length > 0) && (
+        <Card title="📊 สินค้ามาแรง · ตก"
+              sub={momMovers.cur ? `เทียบ ${monthLabel(momMovers.cur)} กับ ${monthLabel(momMovers.prev)}` : ""}
+              style={{marginTop:20}}>
+          <div className="row" style={{gridTemplateColumns:"repeat(auto-fit, minmax(300px, 1fr))"}}>
+            {[{ title:"📈 มาแรง", list:momMovers.risers, cc:"#1f7f44" },
+              { title:"📉 ตกลง",  list:momMovers.fallers, cc:"#c0392b" }].map(col => (
+              <div key={col.title} style={{border:"1px solid var(--bdr)",borderRadius:12,overflow:"hidden",background:"#fff"}}>
+                <div style={{padding:"10px 14px",fontWeight:700,fontSize:13,
+                             background:col.cc+"12",borderBottom:`2px solid ${col.cc}`}}>{col.title}</div>
+                <div>
+                  {col.list.length === 0
+                    ? <div style={{padding:"16px",fontSize:12,color:"var(--muted)"}}>—</div>
+                    : col.list.map(r => (
+                        <MiniRow key={r.p.sku} p={r.p} allCats={allCats}
+                          onClick={()=>setOverviewModalP(r.p)}
+                          secondary={`${fmtN(r.prevQty)} → ${fmtN(r.curQty)} ชิ้น`}
+                          right={<DeltaBadge pct={r.pct} isNew={r.isNew}/>}
+                          primary={role==="owner" ? `${r.delta>0?"+":""}${fmtB(r.delta)}` : null}/>
+                      ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* ── Velocity: สต๊อกพอขายกี่วัน ── */}
+      {(velocity.reorder.length > 0 || velocity.overstock.length > 0) && (
+        <Card title="⏱️ ความเร็วการขาย · สต๊อกพอกี่วัน"
+              sub={`อิงยอดขายเฉลี่ย ${velocity.n} เดือนล่าสุด`}
+              style={{marginTop:20}}>
+          <div className="row" style={{gridTemplateColumns:"repeat(auto-fit, minmax(300px, 1fr))"}}>
+            {[{ title:"🔴 ควรสั่งเพิ่ม (< 21 วัน)", list:velocity.reorder, cc:"#c0392b", warn:true },
+              { title:"🟡 สต๊อกค้างนาน (> 120 วัน)", list:velocity.overstock, cc:"#a07417", warn:false }].map(col => (
+              <div key={col.title} style={{border:"1px solid var(--bdr)",borderRadius:12,overflow:"hidden",background:"#fff"}}>
+                <div style={{padding:"10px 14px",fontWeight:700,fontSize:13,
+                             background:col.cc+"12",borderBottom:`2px solid ${col.cc}`}}>{col.title}</div>
+                <div style={{maxHeight:360,overflowY:"auto"}}>
+                  {col.list.length === 0
+                    ? <div style={{padding:"16px",fontSize:12,color:"var(--muted)"}}>—</div>
+                    : col.list.map(r => (
+                        <MiniRow key={r.p.sku} p={r.p} allCats={allCats}
+                          onClick={()=>setOverviewModalP(r.p)}
+                          secondary={`คงเหลือ ${fmtN(r.stock)} · ขาย ~${r.perDay>=1?Math.round(r.perDay):r.perDay.toFixed(1)}/วัน`}
+                          right={<span style={{fontSize:12,fontWeight:800,color:col.cc}}>
+                                   {isFinite(r.daysLeft) ? `${Math.round(r.daysLeft)} วัน` : "—"}
+                                 </span>}
+                          primary={null}/>
+                      ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* ── ABC / Pareto ── */}
+      {abc.n > 0 && (
+        <Card title="🎯 ABC · สินค้ากลุ่มไหนทำรายได้หลัก"
+              sub="A = 80% แรกของรายได้ · B = 80–95% · C = ที่เหลือ"
+              style={{marginTop:20}}>
+          <div className="row" style={{gridTemplateColumns:"repeat(auto-fit, minmax(180px, 1fr))"}}>
+            {[{ cls:"A", label:"กลุ่ม A · ดาวเด่น", cc:"#1f7f44", desc:"โฟกัส อย่าให้ขาด" },
+              { cls:"B", label:"กลุ่ม B · รอง",     cc:"#a07417", desc:"เฝ้าดูแนวโน้ม" },
+              { cls:"C", label:"กลุ่ม C · หาง",     cc:"#9aa0a6", desc:"ทบทวน/ลดสต๊อก" }].map(g => {
+              const share = abc.total>0 ? abc.rev[g.cls]/abc.total : 0;
+              return (
+                <div key={g.cls} style={{border:`1px solid ${g.cc}44`,borderRadius:12,padding:14,
+                                         background:`linear-gradient(180deg, ${g.cc}10, #fff)`}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{width:30,height:30,borderRadius:8,background:g.cc,color:"#fff",
+                                  display:"flex",alignItems:"center",justifyContent:"center",
+                                  fontWeight:800,fontSize:15}}>{g.cls}</span>
+                    <div style={{fontSize:12,fontWeight:700}}>{g.label}</div>
+                  </div>
+                  <div style={{display:"flex",alignItems:"baseline",gap:6,marginTop:10}}>
+                    <span style={{fontSize:24,fontWeight:800,color:g.cc}}>{abc.counts[g.cls]}</span>
+                    <span style={{fontSize:11,color:"var(--muted)"}}>รายการ</span>
+                  </div>
+                  <div style={{height:6,borderRadius:4,background:g.cc+"22",marginTop:8,overflow:"hidden"}}>
+                    <div style={{height:"100%",width:`${Math.round(share*100)}%`,background:g.cc}}/>
+                  </div>
+                  <div style={{fontSize:10.5,color:"var(--muted)",marginTop:6}}>
+                    {role==="owner" ? `${fmtB(abc.rev[g.cls])} · ` : ""}{Math.round(share*100)}% ของรายได้
+                  </div>
+                  <div style={{fontSize:10.5,color:g.cc,fontWeight:600,marginTop:4}}>{g.desc}</div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {/* ── Dead stock ── */}
+      {deadStock.count > 0 && (
+        <Card title="🧊 สต๊อกตาย · มีของแต่ไม่ขายเลย 2 เดือน"
+              sub={`${deadStock.count} รายการ${role==="owner" ? ` · เงินจม ~${fmtB(deadStock.totalValue)}` : ""}`}
+              style={{marginTop:20}}>
+          <div style={{border:"1px solid var(--bdr)",borderRadius:12,overflow:"hidden",background:"#fff",maxHeight:420,overflowY:"auto"}}>
+            {deadStock.list.map(r => (
+              <MiniRow key={r.p.sku} p={r.p} allCats={allCats}
+                onClick={()=>setOverviewModalP(r.p)}
+                secondary={`${r.p.cat || "—"} · คงเหลือ ${fmtN(r.stock)} ชิ้น`}
+                right={role==="owner"
+                  ? <span style={{fontSize:12,fontWeight:700,color:"#1f6f8b"}}>{fmtB(r.value)}</span>
+                  : <span style={{fontSize:11,color:"var(--muted)"}}>{fmtN(r.stock)} ชิ้น</span>}
+                primary={null}/>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {overviewModalP && <ProductModal p={overviewModalP} onClose={() => setOverviewModalP(null)} allCats={allCats}/>}
     </div>

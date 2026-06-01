@@ -198,6 +198,10 @@ function doPost(e) {
       syncZortBoth();
       return ok({ synced: true });
     }
+    if (data.syncZortSalesNow) {
+      syncZortSales();
+      return ok({ synced: true });
+    }
 
     // ─── MTO Jobs ───
     if (data.createMtoJob)  return createMtoJob(ss, data);
@@ -912,6 +916,75 @@ function pushStockToZort_(items) {
   }
 }
 
+// หา URL รูปจาก product object ของ ZORT (auto-detect ชื่อ field)
+function pickZortImage_(p) {
+  const keys = Object.keys(p).filter(k => /image|photo|picture|img|thumb/i.test(k));
+  for (const k of keys) {
+    const v = String(p[k] || '').trim();
+    if (/^https?:\/\//i.test(v)) return v;
+  }
+  for (const k of Object.keys(p)) {
+    if (/url/i.test(k)) {
+      const v = String(p[k] || '').trim();
+      if (/^https?:\/\/.*\.(jpe?g|png|webp|gif)/i.test(v)) return v;
+    }
+  }
+  return '';
+}
+
+// ดึงรูปจาก ZORT → เขียนคอลัมน์ E ของชีต imageUrl (ไม่แตะคอลัมน์ D ที่ใส่เอง)
+function syncZortImages() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const sh = ss.getSheetByName('imageUrl');
+  if (!sh) { Logger.log('ไม่พบชีต imageUrl'); return; }
+
+  const products = fetchAllZortProducts_(); // ทุกคลัง
+  const zortImg = {};
+  let withImg = 0;
+  products.forEach(p => {
+    const sku = String(p.sku || p.barcode || '').trim().toUpperCase();
+    if (!sku) return;
+    const img = pickZortImage_(p);
+    if (img) { zortImg[sku] = img; withImg++; }
+  });
+  Logger.log(`ZORT: ${products.length} สินค้า, มีรูป ${withImg}`);
+
+  const rows = sh.getDataRange().getValues();
+  if (!String(rows[0][4] || '').trim()) sh.getRange(1, 5).setValue('รูปจาก ZORT (auto)');
+
+  let updated = 0, added = 0;
+  const existing = {};
+  for (let i = 1; i < rows.length; i++) {
+    const sku = String(rows[i][1] || '').trim().toUpperCase();
+    if (!sku) continue;
+    existing[sku] = i + 1; // row number
+    if (zortImg[sku] && zortImg[sku] !== String(rows[i][4] || '').trim()) {
+      sh.getRange(i + 1, 5).setValue(zortImg[sku]);
+      updated++;
+    }
+  }
+  // เพิ่ม SKU ใหม่ที่ยังไม่มีในชีต imageUrl
+  Object.keys(zortImg).forEach(sku => {
+    if (!existing[sku]) {
+      sh.appendRow(['', sku, '', '', zortImg[sku]]);
+      added++;
+    }
+  });
+
+  SpreadsheetApp.flush();
+  invalidateCache_();
+  Logger.log(`✅ syncZortImages: อัปเดต ${updated} แถว, เพิ่มใหม่ ${added} แถว`);
+}
+
+// ตั้ง trigger sync รูปจาก ZORT ทุกสัปดาห์ (วันจันทร์ 05:00)
+function setupZortImageTrigger() {
+  ScriptApp.getProjectTriggers().forEach(t => {
+    if (t.getHandlerFunction() === 'syncZortImages') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('syncZortImages').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(5).create();
+  Logger.log('✅ ตั้ง trigger: syncZortImages ทุกวันจันทร์ 05:00');
+}
+
 function getZortWarehouses() {
   const res  = UrlFetchApp.fetch(`${ZORT_BASE}/Warehouse/GetWarehouses`,
     { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
@@ -921,6 +994,202 @@ function getZortWarehouses() {
   } else {
     Logger.log(res.getContentText());
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+// DIAGNOSTIC: สำรวจโครงสร้าง response ของ ZORT Order API
+// รันฟังก์ชันนี้ครั้งเดียวใน Apps Script Editor → ดู Execution log → ส่ง output กลับมา
+// เพื่อใช้เขียน auto-sync ยอดขายให้ตรงกับชื่อ field จริง (ไม่ต้องเดา)
+// อ่านอย่างเดียว ไม่แก้ไขข้อมูลใดๆ
+// ─────────────────────────────────────────────────────────────
+function exploreZortSales() {
+  const tz = "Asia/Bangkok";
+  const today = new Date();
+  const from  = new Date(today.getTime() - 14 * 24 * 60 * 60 * 1000); // 14 วันล่าสุด
+  const fromStr = Utilities.formatDate(from,  tz, "yyyy-MM-dd");
+  const toStr   = Utilities.formatDate(today, tz, "yyyy-MM-dd");
+
+  // ลองหลายชื่อ param วันที่ที่ ZORT อาจใช้ — เก็บอันที่คืนข้อมูล
+  const tryEndpoints = [
+    `${ZORT_BASE}/Order/GetOrders?page=1&limit=5&fromdate=${fromStr}&todate=${toStr}`,
+    `${ZORT_BASE}/Order/GetMovementOrders?page=1&limit=5&fromdate=${fromStr}&todate=${toStr}`,
+  ];
+
+  tryEndpoints.forEach(url => {
+    Logger.log("──────────────────────────────────────");
+    Logger.log("GET " + url);
+    try {
+      const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+      Logger.log("HTTP " + res.getResponseCode());
+      const text = res.getContentText();
+      const json = JSON.parse(text);
+      Logger.log("top-level keys: " + JSON.stringify(Object.keys(json)));
+      const list = json.list || json.orders || json.data || [];
+      Logger.log("list length: " + (Array.isArray(list) ? list.length : "(ไม่ใช่ array)"));
+      if (Array.isArray(list) && list.length) {
+        const first = list[0];
+        Logger.log("order[0] keys: " + JSON.stringify(Object.keys(first)));
+        Logger.log("order[0] sample: " + JSON.stringify(first).substring(0, 1500));
+        // หา array รายการสินค้าใน order (line items)
+        Object.keys(first).forEach(k => {
+          if (Array.isArray(first[k]) && first[k].length && typeof first[k][0] === 'object') {
+            Logger.log(`order[0].${k}[0] keys: ` + JSON.stringify(Object.keys(first[k][0])));
+            Logger.log(`order[0].${k}[0] sample: ` + JSON.stringify(first[k][0]).substring(0, 800));
+          }
+        });
+      }
+    } catch (e) {
+      Logger.log("ERROR: " + e);
+    }
+  });
+  Logger.log("──────── เสร็จ — copy log ทั้งหมดส่งกลับมา ────────");
+}
+
+// ─── ZORT Sales Auto-Sync ───────────────────────────────────────────────────
+
+function syncZortSales() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const tz = "Asia/Bangkok";
+  const today = new Date();
+  const MONTHLY_DAYS = 90; // ดึง 3 เดือนย้อนหลัง
+  const DAILY_DAYS   = 30; // ดึง 30 วันสำหรับรายวัน
+
+  const fromDate = new Date(today.getTime() - MONTHLY_DAYS * 24 * 60 * 60 * 1000);
+  const fromStr  = Utilities.formatDate(fromDate, tz, "yyyy-MM-dd");
+  const toStr    = Utilities.formatDate(today, tz, "yyyy-MM-dd");
+
+  // ดึง SKU → category/name จาก product sheet
+  const catMap = {}, nameMap = {};
+  readProducts_().forEach(p => {
+    if (!p.sku) return;
+    const k = p.sku.toUpperCase();
+    catMap[k]  = p.category || "ไม่ระบุ";
+    nameMap[k] = p.name || p.sku;
+  });
+
+  const allOrders = fetchZortOrdersPaged_(fromStr, toStr);
+  Logger.log("ZORT orders fetched: " + allOrders.length);
+
+  const monthly = {}, daily = {};
+  const monthSet = new Set(), daySet = new Set();
+
+  for (const order of allOrders) {
+    if (order.status !== "Success") continue;
+    const dateStr = order.orderdateString || (order.orderdate ? String(order.orderdate).substring(0, 10) : null);
+    if (!dateStr) continue;
+    const [yr, mo, dy] = dateStr.split("-").map(Number);
+    const oDate = new Date(yr, mo - 1, dy);
+    const mk = monthKey_(oDate);
+    const dk = dayKey_(oDate);
+    const diffDays = (today - oDate) / (24 * 60 * 60 * 1000);
+    monthSet.add(mk);
+    if (diffDays <= DAILY_DAYS) daySet.add(dk);
+
+    for (const item of (Array.isArray(order.list) ? order.list : [])) {
+      const sku = String(item.sku || "").trim().toUpperCase();
+      if (!sku) continue;
+      const qty = Number(item.number)    || 0;
+      const rev = Number(item.totalprice)|| 0;
+      const name = nameMap[sku] || String(item.name || sku).trim();
+      const cat  = catMap[sku]  || "ไม่ระบุ";
+
+      if (!monthly[sku]) monthly[sku] = { name, cat, months: {} };
+      if (!monthly[sku].months[mk]) monthly[sku].months[mk] = { qty: 0, rev: 0 };
+      monthly[sku].months[mk].qty += qty;
+      monthly[sku].months[mk].rev += rev;
+
+      if (diffDays <= DAILY_DAYS) {
+        if (!daily[sku]) daily[sku] = { name, cat, days: {} };
+        if (!daily[sku].days[dk]) daily[sku].days[dk] = { qty: 0, rev: 0 };
+        daily[sku].days[dk].qty += qty;
+        daily[sku].days[dk].rev += rev;
+      }
+    }
+  }
+
+  const sortedMonths = sortMonthKeys_(Array.from(monthSet));
+  const sortedDays   = sortDayKeys_(Array.from(daySet));
+  Logger.log("months: " + sortedMonths.join(", "));
+  Logger.log("days: " + sortedDays.length + " วัน, SKUs monthly: " + Object.keys(monthly).length);
+
+  writeZortSalesSheet_(ss, "ยอดขายรายเดือน", monthly, sortedMonths, "months");
+  writeZortSalesSheet_(ss, "ยอดขายรายวัน",   daily,   sortedDays,   "days");
+  invalidateCache_();
+  Logger.log("✅ syncZortSales เสร็จ");
+}
+
+// ดึงคำสั่งซื้อจาก ZORT แบบ paginated
+function fetchZortOrdersPaged_(fromStr, toStr) {
+  const all = [], limit = 100, MAX_PAGES = 30;
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const url = `${ZORT_BASE}/Order/GetOrders?page=${page}&limit=${limit}&fromdate=${fromStr}&todate=${toStr}`;
+    const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) break;
+    const list = (JSON.parse(res.getContentText())).list || [];
+    all.push(...list);
+    if (list.length < limit) break;
+    Utilities.sleep(300);
+  }
+  return all;
+}
+
+function sortMonthKeys_(keys) {
+  return keys.sort((a, b) => {
+    const [ma, ya] = a.split("/").map(Number);
+    const [mb, yb] = b.split("/").map(Number);
+    return ya !== yb ? ya - yb : ma - mb;
+  });
+}
+
+function sortDayKeys_(keys) {
+  return keys.sort((a, b) => {
+    const [da, ma, ya] = a.split("/").map(Number);
+    const [db, mb, yb] = b.split("/").map(Number);
+    if (ya !== yb) return ya - yb;
+    if (ma !== mb) return ma - mb;
+    return da - db;
+  });
+}
+
+// เขียนข้อมูลลง sheet ยอดขาย (รูปแบบที่ readMonthlySales_/readDailySales_ อ่านได้)
+function writeZortSalesSheet_(ss, shName, data, sortedKeys, periodField) {
+  const sh = ss.getSheetByName(shName);
+  if (!sh) { Logger.log("ไม่พบชีต " + shName); return; }
+
+  const skus = Object.keys(data);
+  if (skus.length === 0 || sortedKeys.length === 0) {
+    Logger.log(shName + ": ไม่มีข้อมูล");
+    return;
+  }
+
+  const headerRow    = ["ลำดับ", "SKU", "ชื่อสินค้า", "หมวด"];
+  const subHeaderRow = ["", "", "", ""];
+  sortedKeys.forEach(k => { headerRow.push(k, ""); subHeaderRow.push("จำนวน", "ยอดขาย"); });
+
+  const dataRows = skus.map((sku, i) => {
+    const { name, cat } = data[sku];
+    const periods = data[sku][periodField];
+    const row = [i + 1, sku, name, cat];
+    sortedKeys.forEach(k => {
+      const { qty = 0, rev = 0 } = periods[k] || {};
+      row.push(qty, rev);
+    });
+    return row;
+  });
+
+  sh.clearContents();
+  const allRows = [headerRow, subHeaderRow, ...dataRows];
+  sh.getRange(1, 1, allRows.length, headerRow.length).setValues(allRows);
+  Logger.log(shName + ": เขียน " + dataRows.length + " rows, " + sortedKeys.length + " คอลัมน์");
+}
+
+// ตั้ง trigger ให้ sync ยอดขายจาก ZORT ทุก 2 ชั่วโมง
+function setupZortSalesTrigger() {
+  ScriptApp.getProjectTriggers().forEach(t => {
+    if (t.getHandlerFunction() === "syncZortSales") ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger("syncZortSales").timeBased().everyHours(2).create();
+  Logger.log("✅ ตั้ง trigger: syncZortSales ทุก 2 ชั่วโมง");
 }
 
 function fetchAllZortProducts_(warehousecode) {
@@ -1081,14 +1350,31 @@ function createDailyTrigger() {
 
 function debugZortProduct() {
   const res = UrlFetchApp.fetch(
-    `${ZORT_BASE}/Product/GetProducts?page=1&limit=3&warehousecode=W0002`,
+    `${ZORT_BASE}/Product/GetProducts?page=1&limit=3`,
     { method: "get", headers: zortHeaders_(), muteHttpExceptions: true }
   );
   const json = JSON.parse(res.getContentText());
   if (json.list && json.list[0]) {
-    Logger.log("Fields: " + Object.keys(json.list[0]).join(", "));
-    Logger.log("Sample: " + JSON.stringify(json.list[0], null, 2));
+    const first = json.list[0];
+    Logger.log("Fields: " + Object.keys(first).join(", "));
+    // หา field รูปภาพ (image/photo/picture/url)
+    Object.keys(first).forEach(k => {
+      if (/image|photo|picture|img|url|thumb/i.test(k)) {
+        Logger.log(`  รูป? ${k} = ` + JSON.stringify(first[k]));
+      }
+    });
+    Logger.log("Sample: " + JSON.stringify(first, null, 2).substring(0, 2000));
   }
+}
+
+// รันครั้งเดียวเพื่อดู (1) รหัสคลังจริงใน ZORT  (2) field รูปภาพของสินค้า
+// ส่ง log กลับมา → จะแก้รหัสคลัง + เปิด sync รูปให้
+function exploreZortSetup() {
+  Logger.log("════════ 1) คลังสินค้าใน ZORT ════════");
+  getZortWarehouses();
+  Logger.log("════════ 2) field สินค้า (หารูปภาพ) ════════");
+  debugZortProduct();
+  Logger.log("════════ เสร็จ — copy log ทั้งหมดส่งกลับมา ════════");
 }
 
 // ───────────────────────────────────────────────────────────
@@ -1671,9 +1957,28 @@ function dayKey_(val) {
   return null;
 }
 
+// อ่านชีต imageUrl: A=ID, B=SKU, C=ชื่อ, D=รูป(ใส่เอง/สำรอง), E=รูปจาก ZORT(auto)
+// ZORT คือแหล่งหลัก → รูปจาก ZORT (E) ชนะ, ใช้รูปใส่เอง (D) เฉพาะตอน ZORT ไม่มีรูป
+function readImageMap_() {
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('imageUrl');
+  if (!sh) return {};
+  const rows = sh.getDataRange().getDisplayValues();
+  const map = {};
+  for (let i = 1; i < rows.length; i++) {
+    const sku = (rows[i][1] || '').toString().trim().toUpperCase();
+    if (!sku) continue;
+    const manual = (rows[i][3] || '').toString().trim(); // D = สำรอง
+    const zort   = (rows[i][4] || '').toString().trim(); // E = ZORT (หลัก)
+    const url = zort || manual;
+    if (url) map[sku] = url;
+  }
+  return map;
+}
+
 function readProducts_() {
   const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('ข้อมูลสินค้า');
   const rows = sh.getDataRange().getDisplayValues();
+  const imageMap = readImageMap_();
   const out = [];
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
@@ -1686,7 +1991,7 @@ function readProducts_() {
     const locParsed = parseLocation_(r[4]);
     out.push({
       sku, name,
-      imageUrl:    (r[3] || '').toString().trim(),
+      imageUrl:    imageMap[sku.toUpperCase()] || (r[3] || '').toString().trim(),
       locationRaw: (r[4] || '').toString().trim(),
       locations:   locParsed ? [locParsed] : [],
       category:    (r[5] || '').toString().trim(),
