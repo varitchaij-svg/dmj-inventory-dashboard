@@ -1061,8 +1061,8 @@ function syncZortSales() {
   const ss = SpreadsheetApp.openById(SHEET_ID);
   const tz = "Asia/Bangkok";
   const today = new Date();
-  const MONTHLY_DAYS = 90; // ดึง 3 เดือนย้อนหลัง
-  const DAILY_DAYS   = 30; // ดึง 30 วันสำหรับรายวัน
+  const MONTHLY_DAYS = 365; // ดึงย้อนหลัง 1 ปี (รายเดือนทั้งปี)
+  const DAILY_DAYS   = 60;  // รายวัน 60 วันล่าสุด
 
   const fromDate = new Date(today.getTime() - MONTHLY_DAYS * 24 * 60 * 60 * 1000);
   const fromStr  = Utilities.formatDate(fromDate, tz, "yyyy-MM-dd");
@@ -1089,6 +1089,8 @@ function syncZortSales() {
     if (!dateStr) continue;
     const [yr, mo, dy] = dateStr.split("-").map(Number);
     const oDate = new Date(yr, mo - 1, dy);
+    // กัน order ที่วันที่เพี้ยน/นอกช่วง (เช่น 2013) ออก
+    if (oDate < fromDate || oDate > today) continue;
     const mk = monthKey_(oDate);
     const dk = dayKey_(oDate);
     const diffDays = (today - oDate) / (24 * 60 * 60 * 1000);
@@ -1128,9 +1130,9 @@ function syncZortSales() {
   Logger.log("✅ syncZortSales เสร็จ");
 }
 
-// ดึงคำสั่งซื้อจาก ZORT แบบ paginated
+// ดึงคำสั่งซื้อจาก ZORT แบบ paginated (รองรับทั้งปี)
 function fetchZortOrdersPaged_(fromStr, toStr) {
-  const all = [], limit = 100, MAX_PAGES = 30;
+  const all = [], limit = 200, MAX_PAGES = 120; // สูงสุด 24,000 orders
   for (let page = 1; page <= MAX_PAGES; page++) {
     const url = `${ZORT_BASE}/Order/GetOrders?page=${page}&limit=${limit}&fromdate=${fromStr}&todate=${toStr}`;
     const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
@@ -1138,7 +1140,8 @@ function fetchZortOrdersPaged_(fromStr, toStr) {
     const list = (JSON.parse(res.getContentText())).list || [];
     all.push(...list);
     if (list.length < limit) break;
-    Utilities.sleep(300);
+    Utilities.sleep(250);
+    if (page === MAX_PAGES) Logger.log("⚠️ ชนเพดาน " + MAX_PAGES + " หน้า — อาจมี orders เกิน " + all.length);
   }
   return all;
 }
