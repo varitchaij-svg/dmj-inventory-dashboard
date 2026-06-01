@@ -916,17 +916,24 @@ function pushStockToZort_(items) {
   }
 }
 
-// หา URL รูปจาก product object ของ ZORT (auto-detect ชื่อ field)
+// หา URL รูปจาก product object ของ ZORT
+// ZORT ใช้ imagepath (string URL หลัก) และ imageList (array)
 function pickZortImage_(p) {
-  const keys = Object.keys(p).filter(k => /image|photo|picture|img|thumb/i.test(k));
-  for (const k of keys) {
-    const v = String(p[k] || '').trim();
-    if (/^https?:\/\//i.test(v)) return v;
+  const ip = String(p.imagepath || '').trim();
+  if (/^https?:\/\//i.test(ip)) return ip;
+  if (Array.isArray(p.imageList) && p.imageList.length) {
+    for (const it of p.imageList) {
+      const v = (typeof it === 'string') ? it
+              : (it && (it.url || it.imagepath || it.path || it.image)) || '';
+      const s = String(v).trim();
+      if (/^https?:\/\//i.test(s)) return s;
+    }
   }
+  // fallback: scan field อื่นที่อาจเป็น URL รูป
   for (const k of Object.keys(p)) {
-    if (/url/i.test(k)) {
+    if (/image|photo|picture|img|thumb/i.test(k)) {
       const v = String(p[k] || '').trim();
-      if (/^https?:\/\/.*\.(jpe?g|png|webp|gif)/i.test(v)) return v;
+      if (/^https?:\/\//i.test(v)) return v;
     }
   }
   return '';
@@ -989,10 +996,12 @@ function getZortWarehouses() {
   const res  = UrlFetchApp.fetch(`${ZORT_BASE}/Warehouse/GetWarehouses`,
     { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
   const json = JSON.parse(res.getContentText());
-  if (json.list) {
-    json.list.forEach(w => Logger.log(`[${w.warehousecode}] ${w.warehousename}`));
+  const list = json.list || json.warehouses || json.data || [];
+  if (Array.isArray(list) && list.length) {
+    Logger.log("warehouse[0] keys: " + JSON.stringify(Object.keys(list[0])));
+    list.forEach((w, i) => Logger.log(`#${i+1} ` + JSON.stringify(w)));
   } else {
-    Logger.log(res.getContentText());
+    Logger.log("RAW: " + res.getContentText().substring(0, 1500));
   }
 }
 
