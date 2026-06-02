@@ -923,32 +923,6 @@ function pushStockToZort_(items) {
   }
 }
 
-// ทดสอบ UpdateProductStockList ด้วย 1 SKU ก่อน deploy จริง
-// ให้รันแล้วดู log: HTTP 200 + resCode 200 = สำเร็จ
-function exploreUpdateStock() {
-  const TEST_SKU = "3D00003"; // เปลี่ยน SKU นี้เป็น SKU ที่มีอยู่จริง
-  const TEST_QTY = 999;       // ใส่จำนวนที่รู้ว่าผิดปกติ เพื่อเช็คว่า ZORT เปลี่ยนจริง
-  const TEST_WH  = WH_FRONTSTORE; // W0001
-
-  const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
-
-  Logger.log("════ ทดสอบ UpdateProductStockList ════");
-  Logger.log(`SKU: ${TEST_SKU}, qty: ${TEST_QTY}, WH: ${TEST_WH}`);
-
-  // แบบที่ 1: warehousecode เป็น query param (ตาม docs)
-  const url1 = `${ZORT_BASE}/Product/UpdateProductStockList?warehousecode=${TEST_WH}`;
-  const res1 = UrlFetchApp.fetch(url1, {
-    method: "post", headers,
-    payload: JSON.stringify({ stocks: [{ sku: TEST_SKU, stock: TEST_QTY }] }),
-    muteHttpExceptions: true
-  });
-  Logger.log("แบบ 1 (warehousecode ใน query): HTTP " + res1.getResponseCode());
-  Logger.log(res1.getContentText().substring(0, 500));
-
-  Logger.log("════ เสร็จ ════");
-  Logger.log("⚠️ ถ้าสำเร็จ ให้กลับไปตั้งค่า TEST_QTY เป็นจำนวนจริงใน ZORT เพื่อ reset");
-}
-
 // หา URL รูปจาก product object ของ ZORT
 // ZORT ใช้ imagepath (string URL หลัก) และ imageList (array)
 function pickZortImage_(p) {

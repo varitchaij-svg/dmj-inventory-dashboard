@@ -5198,12 +5198,12 @@ function FrontStoreView({ data, role }) {
     return () => clearTimeout(t);
   }, [scrollToSku]);
 
-  const handleSave = async () => {
+  const handleSave = async (isAuto = false) => {
     const entries = [...touched]
       .filter(sku => checkedQtys[sku] !== "" && checkedQtys[sku] != null)
       .map(sku => ({ sku, qty: parseInt(checkedQtys[sku]) || 0 }));
     if (entries.length === 0) {
-      showToast("warn", "ยังไม่ได้กรอกจำนวน", "✏️");
+      if (!isAuto) showToast("warn", "ยังไม่ได้กรอกจำนวน", "✏️");
       return;
     }
     setSaving(true);
@@ -5214,7 +5214,8 @@ function FrontStoreView({ data, role }) {
       setTouched(new Set());
       setLastSavedTime(new Date());
       showToast("success", `บันทึก ${entries.length} รายการ`, "💾");
-    } else {
+    } else if (!isAuto) {
+      // auto-save ที่ fail จะเงียบ + retry เอง (FAB ยังแสดง "รอบันทึก") กัน toast เด้งซ้ำทุก 3 วิ
       showToast("error", "บันทึกไม่สำเร็จ", "❌");
     }
   };
@@ -5223,7 +5224,7 @@ function FrontStoreView({ data, role }) {
   uE(() => {
     if (touchedWithValue === 0 || saving) return;
     const timer = setTimeout(() => {
-      handleSave();
+      handleSave(true);
     }, 3000);
     return () => clearTimeout(timer);
   }, [checkedQtys, touched, saving, touchedWithValue]);
@@ -5269,7 +5270,7 @@ function FrontStoreView({ data, role }) {
         <ScanButton size={40} onScan={handleScanDetected}
           style={{border:"1.5px solid var(--g-300)", borderRadius:10, flexShrink:0}}/>
         <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2,flexShrink:0}}>
-          <button onClick={handleSave}
+          <button onClick={() => handleSave()}
             disabled={saving || touchedWithValue === 0}
             className="btn primary"
             style={{padding:"9px 18px", fontWeight:700,
@@ -5500,6 +5501,7 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
   const [saving, setSaving] = uS(false);
   const [savedSkus, setSavedSkus] = uS(new Set());
   const [lastSavedTime, setLastSavedTime] = uS(null);
+  const [lastSavedSnap, setLastSavedSnap] = uS(""); // snapshot กัน auto-save วนซ้ำ
   const [toast, showToast, hideToast] = useToast();
   // confirm modal state for delete
   const [delConfirm, setDelConfirm] = uS(null); // { sku, isLocal }
@@ -5562,15 +5564,16 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
     }
   };
 
-  const handleSave = async () => {
+  const handleSave = async (isAuto = false) => {
     const entries = Object.entries(checkedQtys)
       .filter(([, v]) => v !== "" && v !== null && v !== undefined)
       .map(([sku, qty]) => ({ sku, qty: parseInt(qty) || 0, isNew: newSkus.has(sku) }));
     if (entries.length === 0) {
-      showToast("warn", "ยังไม่ได้กรอกจำนวน", "✏️");
+      if (!isAuto) showToast("warn", "ยังไม่ได้กรอกจำนวน", "✏️");
       return;
     }
     setSaving(true);
+    const snap = JSON.stringify(checkedQtys);
     const result = await syncLockData(lockKey, entries);
     setSaving(false);
     if (result.success !== false) {
@@ -5578,21 +5581,23 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
       setSavedSkus(done);
       setNewSkus(new Set());
       setLastSavedTime(new Date());
+      setLastSavedSnap(snap); // กัน auto-save วนซ้ำ: ค่าที่ save ไปแล้วจะไม่ถูก save อีก
       showToast("success", `บันทึก ${entries.length} รายการ`, "💾");
-    } else {
+    } else if (!isAuto) {
       showToast("error", "บันทึกไม่สำเร็จ", "❌");
     }
   };
 
-  // Auto-save with 3-second debounce
+  // Auto-save with 3-second debounce — save เฉพาะเมื่อค่าต่างจากที่ save ล่าสุด (กัน loop)
   const touchedCount = Object.values(checkedQtys).filter(v => v !== "" && v != null).length;
   uE(() => {
     if (touchedCount === 0 || saving) return;
+    if (JSON.stringify(checkedQtys) === lastSavedSnap) return; // ไม่มีอะไรเปลี่ยน → ไม่ต้อง save
     const timer = setTimeout(() => {
-      handleSave();
+      handleSave(true);
     }, 3000);
     return () => clearTimeout(timer);
-  }, [checkedQtys, saving, touchedCount]);
+  }, [checkedQtys, saving, touchedCount, lastSavedSnap]);
 
   const allSkus = [...new Set([...data.skus, ...lockOv])].filter(s => !deletedSkus.has(s));
   const prods = allSkus.map(s => ({ sku: s, p: productMap[s], isLocal: ovSet.has(s) && !data.skus.includes(s) }));
@@ -5824,6 +5829,7 @@ function StockCountView({ data }) {
   const [saving, setSaving]                 = uS(false);
   const [confirming, setConfirming]         = uS(false);
   const [lastSavedTime, setLastSavedTime]   = uS(null);
+  const [lastSavedSnap, setLastSavedSnap]   = uS(""); // snapshot กัน auto-save วนซ้ำ
   const [toast, showToast, hideToast]       = useToast();
   const [calcPad, setCalcPad]               = uS(null); // {sku, val, name}
   const [stockSearch, setStockSearch]       = uS('');
@@ -5832,8 +5838,8 @@ function StockCountView({ data }) {
   const [selSupplier, setSelSupplier]       = uS(null);
   const [suppSearch, setSuppSearch]         = uS('');
 
-  uE(() => { setCheckedQtys({}); setSavedSkus(new Set()); setLastSavedTime(null); setStockSearch(''); }, [selLockKey]);
-  uE(() => { setCheckedQtys({}); setSavedSkus(new Set()); setLastSavedTime(null); setStockSearch(''); }, [selSupplier]);
+  uE(() => { setCheckedQtys({}); setSavedSkus(new Set()); setLastSavedTime(null); setLastSavedSnap(''); setStockSearch(''); }, [selLockKey]);
+  uE(() => { setCheckedQtys({}); setSavedSkus(new Set()); setLastSavedTime(null); setLastSavedSnap(''); setStockSearch(''); }, [selSupplier]);
 
   // Android back button: step 3 → 2 → 1
   uE(function(){
@@ -5966,31 +5972,34 @@ function StockCountView({ data }) {
 
   const scTouchedCount = Object.values(checkedQtys).filter(v => v !== '' && v != null).length;
 
-  const handleSave = async () => {
+  const handleSave = async (isAuto = false) => {
     const entries = Object.entries(checkedQtys)
       .filter(([, v]) => v !== '' && v != null)
       .map(([sku, qty]) => ({ sku, qty: parseInt(qty)||0 }));
-    if (!entries.length) { showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return; }
+    if (!entries.length) { if (!isAuto) showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return; }
     setSaving(true);
+    const snap = JSON.stringify(checkedQtys);
     const result = await syncLockData(selLockKey, entries);
     setSaving(false);
     if (result.success !== false) {
       setSavedSkus(new Set(entries.map(e => e.sku)));
       setLastSavedTime(new Date());
+      setLastSavedSnap(snap); // กัน auto-save วนซ้ำ
       showToast('success', 'บันทึกแล้ว ' + entries.length + ' รายการ', '💾');
-    } else {
+    } else if (!isAuto) {
       showToast('error', 'บันทึกไม่สำเร็จ', '❌');
     }
   };
 
-  // Auto-save with 3-second debounce
+  // Auto-save with 3-second debounce — save เฉพาะเมื่อค่าต่างจากที่ save ล่าสุด (กัน loop)
   uE(() => {
     if (scTouchedCount === 0 || saving || !selLockKey) return;
+    if (JSON.stringify(checkedQtys) === lastSavedSnap) return;
     const timer = setTimeout(() => {
-      handleSave();
+      handleSave(true);
     }, 3000);
     return () => clearTimeout(timer);
-  }, [checkedQtys, saving, scTouchedCount, selLockKey]);
+  }, [checkedQtys, saving, scTouchedCount, selLockKey, lastSavedSnap]);
 
   const handleConfirm = async () => {
     const entries = Object.entries(checkedQtys)
@@ -6692,7 +6701,7 @@ function StockCountView({ data }) {
           </div>
           <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}}>
             <div style={{display:'flex',gap:6}}>
-              <button onClick={handleSave} disabled={saving||confirming||filledCount===0}
+              <button onClick={() => handleSave()} disabled={saving||confirming||filledCount===0}
                 className="btn"
                 style={{padding:'10px 14px',fontWeight:700,fontSize:13,
                         border:'1.5px solid var(--bdr)',background:'#fff',
