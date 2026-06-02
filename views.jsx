@@ -1480,6 +1480,7 @@ function CategoryView({ data, role }) {
   const [showAll, setShowAll] = uS(false);
   const [colorFilter, setColorFilter] = uS(null);
   const [supplierFilter, setSupplierFilter] = uS(null);
+  const [deadFilter, setDeadFilter] = uS(null); // เกณฑ์ "สินค้าจมเกิน N เดือน" (null = ไม่กรอง)
   const [newStockFilter, setNewStockFilter] = uS(false);
   const [orderProduct, setOrderProduct] = uS(null);
   const [globalVendor, setGlobalVendor] = uS(null); // global supplier filter (all categories)
@@ -1558,10 +1559,11 @@ function CategoryView({ data, role }) {
       f = f.filter(p => (p.sku||"").toLowerCase().includes(q) || (p.name||"").toLowerCase().includes(q));
     }
     if (colorFilter) f = f.filter(p => p.color && p.color.name === colorFilter);
-    if (supplierFilter) f = f.filter(p => (p.lastSupplier || p.vendor) === supplierFilter);
+    if (supplierFilter) f = f.filter(p => (p.vendor || p.lastSupplier) === supplierFilter);
+    if (deadFilter)     f = f.filter(p => (p.deadMonths || 0) >= deadFilter);
     if (newStockFilter) f = f.filter(p => isNew45(p.lastStockInDate));
     return [...f].sort(sortFn);
-  }, [products, active, search, globalSearch, globalVendor, colorFilter, supplierFilter, newStockFilter, sortFn]);
+  }, [products, active, search, globalSearch, globalVendor, colorFilter, supplierFilter, deadFilter, newStockFilter, sortFn]);
 
   const visible = showAll ? filtered : filtered.slice(0, 24);
 
@@ -1612,7 +1614,7 @@ function CategoryView({ data, role }) {
   const supplierChips = uM(() => {
     const m = {};
     products.filter(p => p.cat === active).forEach(p => {
-      const s = p.lastSupplier || p.vendor;
+      const s = p.vendor || p.lastSupplier;
       if (s) m[s] = (m[s] || 0) + 1;
     });
     return Object.entries(m).map(([name, count]) => ({ name, count }))
@@ -1726,7 +1728,7 @@ function CategoryView({ data, role }) {
         <div style={{marginBottom:14}}>
           <select
             value={active}
-            onChange={e => { setActive(e.target.value); setColorFilter(null); setSupplierFilter(null); setNewStockFilter(false); setShowAll(false); }}
+            onChange={e => { setActive(e.target.value); setColorFilter(null); setSupplierFilter(null); setDeadFilter(null); setNewStockFilter(false); setShowAll(false); }}
             style={{
               width:"100%", padding:"10px 14px", borderRadius:12,
               border:"1.5px solid var(--bdr)", background:"#fafcf7",
@@ -1758,7 +1760,7 @@ function CategoryView({ data, role }) {
               const cc = catColor(c, allCats);
               const isMto = c === "Made to Order จัดแบบพิเศษ";
               return (
-                <button key={c} onClick={() => { setActive(c); setColorFilter(null); setSupplierFilter(null); setNewStockFilter(false); setShowAll(false); }}
+                <button key={c} onClick={() => { setActive(c); setColorFilter(null); setSupplierFilter(null); setDeadFilter(null); setNewStockFilter(false); setShowAll(false); }}
                         style={{
                           display:"flex",alignItems:"center",gap:8,width:"100%",
                           padding:"8px 12px",border:"none",cursor:"pointer",
@@ -1889,6 +1891,41 @@ function CategoryView({ data, role }) {
                         padding:"1px 6px", borderRadius:99,
                       }}>{newCount}</span>
                     </button>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* สินค้าจม (dead stock) filter — จาก tag "สินค้าจมเกิน N เดือน" */}
+            {(() => {
+              const inCat = products.filter(p => p.cat === active);
+              const buckets = [...new Set(inCat.map(p => p.deadMonths || 0).filter(m => m > 0))].sort((a,b)=>a-b);
+              if (buckets.length === 0) return null;
+              return (
+                <div className="filter-bar" style={{marginTop:10,paddingTop:10,borderTop:"1px dashed var(--bdr)"}}>
+                  <span className="filter-bar-label">⏳ สินค้าจม</span>
+                  <div className="filter-chips">
+                    <button className={`fchip${deadFilter===null?' active':''}`}
+                            onClick={() => setDeadFilter(null)}>ทั้งหมด</button>
+                    {buckets.map(mo => {
+                      const cnt = inCat.filter(p => (p.deadMonths || 0) >= mo).length;
+                      return (
+                        <button key={mo} className={`fchip${deadFilter===mo?' active':''}`}
+                                onClick={() => setDeadFilter(mo===deadFilter ? null : mo)}
+                                style={deadFilter===mo ? {
+                                  background:"#fff1f0", borderColor:"#ef4444",
+                                  color:"#b91c1c", fontWeight:700,
+                                } : {}}>
+                          จมเกิน {mo} เดือน+
+                          <span style={{
+                            marginLeft:6, fontSize:11, fontWeight:700,
+                            background: deadFilter===mo ? "#ef4444" : "var(--g-200)",
+                            color: deadFilter===mo ? "#fff" : "var(--g-800)",
+                            padding:"1px 6px", borderRadius:99,
+                          }}>{cnt}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               );

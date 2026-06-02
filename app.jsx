@@ -231,6 +231,22 @@ function enrichData(d) {
   // Normalize field names from Google Sheets (category → cat, etc.)
   d.products.forEach(p => {
     if (!p.cat && p.category) p.cat = p.category;
+    // ── Parse ZORT tags (col G) → supplier codes vs สถานะ (Thai) ──
+    // กติกา: รหัส supplier เป็นภาษาอังกฤษ/ตัวเลข (ไม่มีอักษรไทย),
+    //        ส่วน tag สถานะ (เช่น "สินค้าจมเกิน2เดือน", "ขายหน้าร้าน") มีอักษรไทย
+    const THAI_RE = /[฀-๿]/;
+    const rawTags = String(p.tag || "").split(",").map(t => t.trim()).filter(Boolean);
+    p.supplierTags = rawTags.filter(t => !THAI_RE.test(t));
+    p.statusTags   = rawTags.filter(t =>  THAI_RE.test(t));
+    // จำนวนเดือนที่สินค้าจม (เอาค่ามากสุดจาก tag "สินค้าจมเกินNเดือน")
+    let dm = 0;
+    p.statusTags.forEach(t => {
+      const m = t.match(/จมเกิน\s*(\d+)\s*เดือน/);
+      if (m) dm = Math.max(dm, parseInt(m[1], 10));
+    });
+    p.deadMonths = dm;
+    // supplier จาก tag เป็นแหล่งหลัก (เลิกพึ่งสูตร col H) — fallback col H ถ้าไม่มี tag
+    if (p.supplierTags.length) p.vendor = p.supplierTags[0];
   });
   if (typeof detectColor === 'function') {
     d.products.forEach(p => { if (!p.color) p.color = detectColor(p.name); });
