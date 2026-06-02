@@ -1426,15 +1426,15 @@ function exploreZortPurchases() {
   Logger.log("════ เสร็จ ════");
 }
 
-// ดึง PurchaseReceive จาก ZORT แบบ paginated
+// ดึง PurchaseOrder จาก ZORT แบบ paginated
 function fetchZortPurchasesPaged_(fromStr, toStr) {
   const all = [], limit = 200, MAX_PAGES = 60;
   for (let page = 1; page <= MAX_PAGES; page++) {
-    const url = `${ZORT_BASE}/PurchaseReceive/GetPurchaseReceives?page=${page}&limit=${limit}&fromdate=${fromStr}&todate=${toStr}`;
+    const url = `${ZORT_BASE}/PurchaseOrder/GetPurchaseOrders?page=${page}&limit=${limit}&fromdate=${fromStr}&todate=${toStr}`;
     const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
     if (res.getResponseCode() !== 200) break;
     const data = JSON.parse(res.getContentText());
-    const list = data.list || data.purchasereceives || data.data || [];
+    const list = data.list || [];
     if (!Array.isArray(list) || list.length === 0) break;
     all.push(...list);
     if (list.length < limit) break;
@@ -1442,7 +1442,7 @@ function fetchZortPurchasesPaged_(fromStr, toStr) {
   return all;
 }
 
-// เขียน PurchaseReceive ลง sheet รายการซื้อสินค้า
+// เขียน PurchaseOrder ลง sheet รายการซื้อสินค้า
 // คอลัมน์ที่ readPurchases_() อ่าน (0-indexed):
 //   col 1=type, 2=poNum, 4=supplier, 11=date, 19=status, 20=warehouse, 24=sku, 25=name, 26=qty, 27=unitPrice
 function syncZortPurchases() {
@@ -1458,20 +1458,19 @@ function syncZortPurchases() {
   const toStr   = Utilities.formatDate(today, tz, "yyyy-MM-dd");
 
   const raw = fetchZortPurchasesPaged_(fromStr, toStr);
-  Logger.log("ZORT PurchaseReceive fetched: " + raw.length);
+  Logger.log("ZORT PurchaseOrder fetched: " + raw.length);
   if (raw.length === 0) { Logger.log("⚠️ ไม่มีข้อมูล — ไม่เขียนทับ"); return; }
 
   // ขยาย line items ออกมา
   const dataRows = [];
   for (const po of raw) {
-    const poNum    = String(po.documentnumber || po.code || po.purchasereceivecode || "").trim();
-    const supplier = String(po.suppliername   || po.supplier || "").trim();
-    const dateStr  = String(po.receiveddateString || po.documentdateString ||
-                            (po.receiveddate ? String(po.receiveddate).substring(0, 10) : "") ||
-                            (po.documentdate ? String(po.documentdate).substring(0, 10) : "") || "").trim();
-    const status   = String(po.status         || "").trim();
-    const wh       = String(po.warehousename  || po.warehouse || "").trim();
-    const type     = "รับสินค้า";
+    const poNum    = String(po.number || "").trim();
+    const supplier = String(po.customername || "").trim();
+    const dateStr  = String(po.purchaseorderdateString ||
+                            (po.purchaseorderdate ? String(po.purchaseorderdate).substring(0,10) : "") || "").trim();
+    const status   = String(po.status || "").trim();
+    const wh       = String(po.warehousecode || "").trim();
+    const type     = "สั่งซื้อ";
 
     const items = Array.isArray(po.list) ? po.list :
                   Array.isArray(po.items) ? po.items :
@@ -1490,9 +1489,9 @@ function syncZortPurchases() {
     } else {
       for (const item of items) {
         const sku  = String(item.sku || item.productcode || "").trim().toUpperCase();
-        const name = String(item.name || item.productname || "").trim();
-        const qty  = Number(item.number || item.quantity || item.qty || 0);
-        const price= Number(item.unitprice || item.price || item.cost || 0);
+        const name = String(item.name || "").trim();
+        const qty  = Number(item.number || 0);
+        const price= Number(item.pricepernumber || 0);
 
         const row = new Array(28).fill("");
         row[1]  = type;
