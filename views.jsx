@@ -5421,7 +5421,7 @@ function FrontStoreView({ data, role }) {
           background: saving ? "var(--warn)" : "var(--g-600)",
           color: "#fff", fontSize: 13, fontWeight: 700,
           boxShadow: "0 4px 12px rgba(0,0,0,.15)",
-          animation: saving ? "spin 1s linear infinite" : "none"
+          transition: "background .2s"
         }}>
           {saving ? <>⏳ กำลังบันทึก {touchedWithValue}...</> : <>✏️ รอบันทึก {touchedWithValue}</> }
         </div>
@@ -5499,6 +5499,7 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
   const [addSku, setAddSku] = uS("");
   const [saving, setSaving] = uS(false);
   const [savedSkus, setSavedSkus] = uS(new Set());
+  const [lastSavedTime, setLastSavedTime] = uS(null);
   const [toast, showToast, hideToast] = useToast();
   // confirm modal state for delete
   const [delConfirm, setDelConfirm] = uS(null); // { sku, isLocal }
@@ -5764,7 +5765,7 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
           background: saving ? "var(--warn)" : "var(--g-600)",
           color: "#fff", fontSize: 13, fontWeight: 700,
           boxShadow: "0 4px 12px rgba(0,0,0,.15)",
-          animation: saving ? "spin 1s linear infinite" : "none"
+          transition: "background .2s"
         }}>
           {saving ? <>⏳ กำลังบันทึก...</> : <>✏️ รอบันทึก {touchedCount}</> }
         </div>
@@ -6919,7 +6920,7 @@ function StockCountView({ data }) {
             background: saving ? "var(--warn)" : "var(--g-600)",
             color: "#fff", fontSize: 13, fontWeight: 700,
             boxShadow: "0 4px 12px rgba(0,0,0,.15)",
-            animation: saving ? "spin 1s linear infinite" : "none"
+            transition: "background .2s"
           }}>
             {saving ? <>⏳ กำลังบันทึก...</> : <>✏️ รอบันทึก {scTouchedCount}</> }
           </div>
