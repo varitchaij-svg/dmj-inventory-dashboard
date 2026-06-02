@@ -546,6 +546,11 @@ function transferStockBatch(ss, list) {
         else zortError = (zr && (zr.description || zr.error)) || "ZORT transfer ไม่สำเร็จ";
       } catch (e) { zortError = String(e); }
 
+      if (zortError) {
+        logZortFailure_("โอนสต็อกสาย5→หน้าร้าน",
+          zortError + " | SKU: " + transferred.map(t => t.sku + "x" + t.qty).join(","));
+      }
+
       try { logTransferBatch_(ss, transferred, zortNumber); } catch (e) { Logger.log("logTransferBatch_ error: " + e); }
     }
 
@@ -1036,8 +1041,11 @@ function pushStockToZort_(items) {
         muteHttpExceptions: true
       });
       Logger.log(`pushStockToZort [${wh}]: HTTP ${res.getResponseCode()} — ` + res.getContentText().substring(0, 300));
+      const err = zortRespError_(res);
+      if (err) logZortFailure_("อัปเดตสต็อก (" + wh + ")", err + " | SKU: " + stocks.map(s => s.sku).join(","));
     } catch (e) {
       Logger.log(`pushStockToZort [${wh}] error: ` + e);
+      logZortFailure_("อัปเดตสต็อก (" + wh + ")", String(e) + " | SKU: " + stocks.map(s => s.sku).join(","));
     }
   }
 }
@@ -2595,6 +2603,51 @@ function sendLineMessage_(msg) {
   });
 }
 
+const SHEET_ZORT_FAILED = "ZORT_sync_failed";
+
+// ตรวจว่า ZORT response ล้มเหลวหรือไม่ → คืนข้อความ error ถ้า fail, คืน null ถ้าสำเร็จ
+// ZORT: HTTP 200 = สำเร็จ; body อาจมี resCode (200 = success) หรือ description/error
+function zortRespError_(res) {
+  try {
+    const code = res.getResponseCode();
+    const body = res.getContentText();
+    if (code !== 200) return "HTTP " + code + ": " + body.substring(0, 200);
+    let json = null;
+    try { json = JSON.parse(body); } catch (e) { return null; } // parse ไม่ได้แต่ HTTP 200 → ถือว่าผ่าน
+    // resCode ที่ไม่ใช่ "200"/200 = ZORT ปฏิเสธ (เช่น "100" = error)
+    if (json && json.resCode != null && String(json.resCode) !== "200") {
+      return "resCode " + json.resCode + ": " + (json.resDesc || json.description || body.substring(0, 150));
+    }
+    return null;
+  } catch (e) {
+    return String(e);
+  }
+}
+
+// บันทึกความล้มเหลวของ ZORT push ลงชีต + แจ้ง LINE เจ้าของ (กันความผิดพลาดหายเงียบ)
+// action = ชนิดงาน (transfer/stockcount/mto/frontstore), detail = รายละเอียด
+function logZortFailure_(action, detail) {
+  try {
+    const ss = SpreadsheetApp.openById(SHEET_ID);
+    let sh = ss.getSheetByName(SHEET_ZORT_FAILED);
+    if (!sh) {
+      sh = ss.insertSheet(SHEET_ZORT_FAILED);
+      sh.appendRow(["เวลา", "งาน", "รายละเอียด", "สถานะแก้ไข"]);
+    }
+    const ts = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm:ss");
+    sh.appendRow([ts, action, String(detail).substring(0, 500), "รอตรวจ"]);
+  } catch (e) {
+    Logger.log("logZortFailure_ เขียนชีตไม่ได้: " + e);
+  }
+  // แจ้ง LINE (best-effort — ถ้าส่งไม่ได้ก็ไม่ให้ล้มทั้ง flow)
+  try {
+    sendLineMessage_("⚠️ ZORT ไม่อัปเดต\nงาน: " + action + "\n" + String(detail).substring(0, 300) +
+                     "\n\nสต็อกในระบบกับ ZORT อาจไม่ตรง — โปรดตรวจชีต " + SHEET_ZORT_FAILED);
+  } catch (e) {
+    Logger.log("logZortFailure_ ส่ง LINE ไม่ได้: " + e);
+  }
+}
+
 function scheduledLineReminder() {
   var today = new Date();
   var dayOfWeek = today.getDay();
@@ -2736,6 +2789,18 @@ function closeMtoJob(ss, data) {
   const jobId = String(data.jobId || "").trim();
   const items = data.items || [];
   const closedAt = data.closedAt || "";
+  if (!jobId) return error("ไม่มี jobId");
+
+  // Lock กันเขียนชนกัน (เหมือน transferStockBatch)
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่ ลองใหม่อีกครั้ง");
+
+  const cache = CacheService.getScriptCache();
+  try {
+    // Idempotency: กันกดปิดงานซ้ำ (รีเฟรช/เน็ตช้า/เครื่องอื่น) → หักสต็อกซ้ำ
+    if (cache.get("mto_closed_" + jobId)) {
+      return ok({ jobId, duplicate: true, deducted: 0 });
+    }
 
   // net = เบิก − คืน (รองรับคืนบางส่วน เช่น เบิก 24 คืน 4 → ตัดจริง 20)
   const netOf = (item) => {
@@ -2743,6 +2808,18 @@ function closeMtoJob(ss, data) {
     const ret = Math.max(0, Math.min(Number(item.returnedQty) || 0, qty));
     return qty - ret;
   };
+
+  // Idempotency เพิ่มเติม: ถ้างานนี้ปิดไปแล้วในชีต ("เสร็จแล้ว") → ไม่หักซ้ำ
+  const jobShChk = getOrCreateMtoJobSheet_(ss);
+  if (jobShChk) {
+    const jd = jobShChk.getDataRange().getValues();
+    for (let i = 1; i < jd.length; i++) {
+      if (String(jd[i][0]).trim() === jobId && String(jd[i][6]).trim() === "เสร็จแล้ว") {
+        cache.put("mto_closed_" + jobId, "1", 21600);
+        return ok({ jobId, duplicate: true, deducted: 0 });
+      }
+    }
+  }
 
   // Deduct stock
   const prodSh = ss.getSheetByName(SHEET_PRODUCTS);
@@ -2796,10 +2873,18 @@ function closeMtoJob(ss, data) {
     zortResult = decreaseMtoStockInZort_(items);
   } catch (e) {
     Logger.log("ZORT DecreaseStock failed: " + e);
+    logZortFailure_("ปิดงาน MTO " + jobId, String(e) + " | SKU: " + items.map(it => it.sku).join(","));
   }
 
+  // ปิดงานสำเร็จ → mark idempotency กันกดซ้ำใน 6 ชม.
+  cache.put("mto_closed_" + jobId, "1", 21600);
+
+  invalidateCache_();
   return ContentService.createTextOutput(JSON.stringify({ success: true, jobId, deducted: items.length, zort: zortResult }))
     .setMimeType(ContentService.MimeType.JSON);
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function decreaseMtoStockInZort_(items) {
@@ -2831,6 +2916,8 @@ function decreaseMtoStockInZort_(items) {
     const json = JSON.parse(res.getContentText());
     Logger.log(`ZORT DecreaseStock [${whCode}]: ` + JSON.stringify(json));
     results[whCode] = json;
+    const err = zortRespError_(res);
+    if (err) logZortFailure_("ตัดสต็อก MTO (" + whCode + ")", err + " | SKU: " + stocks.map(s => s.sku).join(","));
   }
 
   return results;
