@@ -1528,8 +1528,8 @@ function setupZortPurchasesTrigger() {
   ScriptApp.getProjectTriggers().forEach(t => {
     if (t.getHandlerFunction() === "syncZortPurchases") ScriptApp.deleteTrigger(t);
   });
-  ScriptApp.newTrigger("syncZortPurchases").timeBased().everyHours(6).create();
-  Logger.log("✅ ตั้ง trigger: syncZortPurchases ทุก 6 ชั่วโมง");
+  ScriptApp.newTrigger("syncZortPurchases").timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(6).create();
+  Logger.log("✅ ตั้ง trigger: syncZortPurchases ทุกวันจันทร์ 06:00");
 }
 
 // ───────────────────────────────────────────────────────────
