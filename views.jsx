@@ -5219,6 +5219,15 @@ function FrontStoreView({ data, role }) {
     }
   };
 
+  // Auto-save with 3-second debounce
+  uE(() => {
+    if (touchedWithValue === 0 || saving) return;
+    const timer = setTimeout(() => {
+      handleSave();
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [checkedQtys, touched, saving, touchedWithValue]);
+
   const PAGE_SIZE = 20;
   const [page, setPage] = uS(0);
   uE(() => { setPage(0); }, [activeCat, supplierFilter, search, showMode]);
@@ -5400,6 +5409,35 @@ function FrontStoreView({ data, role }) {
         )}
       </div>
     </div>
+
+    {/* Sticky FAB button (bottom-right) */}
+    {touchedWithValue > 0 && (
+      <div style={{
+        position: "fixed", bottom: 24, right: 24, zIndex: 999,
+        display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 12
+      }}>
+        <div style={{
+          padding: "12px 16px", borderRadius: 12,
+          background: saving ? "var(--warn)" : "var(--g-600)",
+          color: "#fff", fontSize: 13, fontWeight: 700,
+          boxShadow: "0 4px 12px rgba(0,0,0,.15)",
+          animation: saving ? "spin 1s linear infinite" : "none"
+        }}>
+          {saving ? <>⏳ กำลังบันทึก {touchedWithValue}...</> : <>✏️ รอบันทึก {touchedWithValue}</> }
+        </div>
+        {lastSavedTime && (
+          <div style={{
+            padding: "8px 12px", borderRadius: 8,
+            background: "#f0fdf4", color: "var(--g-700)",
+            fontSize: 11, fontWeight: 600,
+            boxShadow: "0 2px 8px rgba(0,0,0,.1)"
+          }}>
+            ✓ บันทึกแล้ว {lastSavedTime.getHours().toString().padStart(2,"0")}:{lastSavedTime.getMinutes().toString().padStart(2,"0")}
+          </div>
+        )}
+      </div>
+    )}
+
     {lightbox && <ImageLightbox url={lightbox.url} name={lightbox.name} onClose={() => setLightbox(null)}/>}
     <Toast toast={toast} onClose={hideToast}/>
     </>
@@ -5538,11 +5576,22 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
       const done = new Set([...savedSkus, ...entries.map(e => e.sku)]);
       setSavedSkus(done);
       setNewSkus(new Set());
+      setLastSavedTime(new Date());
       showToast("success", `บันทึก ${entries.length} รายการ`, "💾");
     } else {
       showToast("error", "บันทึกไม่สำเร็จ", "❌");
     }
   };
+
+  // Auto-save with 3-second debounce
+  const touchedCount = Object.values(checkedQtys).filter(v => v !== "" && v != null).length;
+  uE(() => {
+    if (touchedCount === 0 || saving) return;
+    const timer = setTimeout(() => {
+      handleSave();
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [checkedQtys, saving, touchedCount]);
 
   const allSkus = [...new Set([...data.skus, ...lockOv])].filter(s => !deletedSkus.has(s));
   const prods = allSkus.map(s => ({ sku: s, p: productMap[s], isLocal: ovSet.has(s) && !data.skus.includes(s) }));
@@ -5704,6 +5753,34 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
       onConfirm={doDelete}
       onCancel={() => setDelConfirm(null)}
     />
+    {/* Sticky FAB button (bottom-right) */}
+    {touchedCount > 0 && (
+      <div style={{
+        position: "fixed", bottom: 24, right: 24, zIndex: 1099,
+        display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 12
+      }}>
+        <div style={{
+          padding: "12px 16px", borderRadius: 12,
+          background: saving ? "var(--warn)" : "var(--g-600)",
+          color: "#fff", fontSize: 13, fontWeight: 700,
+          boxShadow: "0 4px 12px rgba(0,0,0,.15)",
+          animation: saving ? "spin 1s linear infinite" : "none"
+        }}>
+          {saving ? <>⏳ กำลังบันทึก...</> : <>✏️ รอบันทึก {touchedCount}</> }
+        </div>
+        {lastSavedTime && (
+          <div style={{
+            padding: "8px 12px", borderRadius: 8,
+            background: "#f0fdf4", color: "var(--g-700)",
+            fontSize: 11, fontWeight: 600,
+            boxShadow: "0 2px 8px rgba(0,0,0,.1)"
+          }}>
+            ✓ บันทึกแล้ว {lastSavedTime.getHours().toString().padStart(2,"0")}:{lastSavedTime.getMinutes().toString().padStart(2,"0")}
+          </div>
+        )}
+      </div>
+    )}
+
     <Toast toast={toast} onClose={hideToast}/>
     </>
   );
@@ -5886,6 +5963,8 @@ function StockCountView({ data }) {
     setCheckedQtys(prev => ({ ...prev, [sku]: String(Math.max(0, n + delta)) }));
   };
 
+  const scTouchedCount = Object.values(checkedQtys).filter(v => v !== '' && v != null).length;
+
   const handleSave = async () => {
     const entries = Object.entries(checkedQtys)
       .filter(([, v]) => v !== '' && v != null)
@@ -5902,6 +5981,15 @@ function StockCountView({ data }) {
       showToast('error', 'บันทึกไม่สำเร็จ', '❌');
     }
   };
+
+  // Auto-save with 3-second debounce
+  uE(() => {
+    if (scTouchedCount === 0 || saving || !selLockKey) return;
+    const timer = setTimeout(() => {
+      handleSave();
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [checkedQtys, saving, scTouchedCount, selLockKey]);
 
   const handleConfirm = async () => {
     const entries = Object.entries(checkedQtys)
@@ -6819,6 +6907,34 @@ function StockCountView({ data }) {
           </div>
         )}
       </div>
+
+      {/* Sticky FAB button (bottom-right) */}
+      {scTouchedCount > 0 && selLockKey && (
+        <div style={{
+          position: "fixed", bottom: 24, right: 24, zIndex: 999,
+          display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 12
+        }}>
+          <div style={{
+            padding: "12px 16px", borderRadius: 12,
+            background: saving ? "var(--warn)" : "var(--g-600)",
+            color: "#fff", fontSize: 13, fontWeight: 700,
+            boxShadow: "0 4px 12px rgba(0,0,0,.15)",
+            animation: saving ? "spin 1s linear infinite" : "none"
+          }}>
+            {saving ? <>⏳ กำลังบันทึก...</> : <>✏️ รอบันทึก {scTouchedCount}</> }
+          </div>
+          {lastSavedTime && (
+            <div style={{
+              padding: "8px 12px", borderRadius: 8,
+              background: "#f0fdf4", color: "var(--g-700)",
+              fontSize: 11, fontWeight: 600,
+              boxShadow: "0 2px 8px rgba(0,0,0,.1)"
+            }}>
+              ✓ บันทึกแล้ว {lastSavedTime.getHours().toString().padStart(2,"0")}:{lastSavedTime.getMinutes().toString().padStart(2,"0")}
+            </div>
+          )}
+        </div>
+      )}
     </>
   );
 }
