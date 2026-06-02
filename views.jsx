@@ -1896,10 +1896,11 @@ function CategoryView({ data, role }) {
               );
             })()}
 
-            {/* สินค้าจม (dead stock) filter — จาก tag "สินค้าจมเกิน N เดือน" */}
+            {/* สินค้าจม (dead stock) filter — นับจากวันเข้าคลังล่าสุด เฉพาะที่ยังมีสต็อกเหลือ */}
             {(() => {
               const inCat = products.filter(p => p.cat === active);
-              const buckets = [...new Set(inCat.map(p => p.deadMonths || 0).filter(m => m > 0))].sort((a,b)=>a-b);
+              // เกณฑ์ตายตัว แสดงเฉพาะระดับที่มีสินค้าเข้าข่ายจริง
+              const buckets = [2, 3, 6, 12].filter(mo => inCat.some(p => (p.deadMonths || 0) >= mo));
               if (buckets.length === 0) return null;
               return (
                 <div className="filter-bar" style={{marginTop:10,paddingTop:10,borderTop:"1px dashed var(--bdr)"}}>

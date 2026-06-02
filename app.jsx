@@ -238,12 +238,24 @@ function enrichData(d) {
     const rawTags = String(p.tag || "").split(",").map(t => t.trim()).filter(Boolean);
     p.supplierTags = rawTags.filter(t => !THAI_RE.test(t));
     p.statusTags   = rawTags.filter(t =>  THAI_RE.test(t));
-    // จำนวนเดือนที่สินค้าจม (เอาค่ามากสุดจาก tag "สินค้าจมเกินNเดือน")
+    // ── จำนวนเดือนที่สินค้าจม = นับจากวันเข้าคลังล่าสุด (lastStockInDate) ถึงวันนี้ ──
+    // นับเฉพาะสินค้าที่ยังมีสต็อกเหลือ (ขายหมดแล้ว = ไม่ถือว่าจม)
     let dm = 0;
-    p.statusTags.forEach(t => {
-      const m = t.match(/จมเกิน\s*(\d+)\s*เดือน/);
-      if (m) dm = Math.max(dm, parseInt(m[1], 10));
-    });
+    const onHand = (p.qtyStore > 0 || p.qtyWH > 0)
+      ? (p.qtyStore || 0) + (p.qtyWH || 0)
+      : (p.qty || 0);
+    if (onHand > 0 && p.lastStockInDate) {
+      const parts = String(p.lastStockInDate).split("/"); // DD/MM/YYYY
+      if (parts.length === 3) {
+        const inDate = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
+        if (!isNaN(inDate)) {
+          const now = new Date();
+          dm = (now.getFullYear() - inDate.getFullYear()) * 12 + (now.getMonth() - inDate.getMonth());
+          if (now.getDate() < inDate.getDate()) dm -= 1; // ยังไม่ครบเดือนเต็ม
+          if (dm < 0) dm = 0;
+        }
+      }
+    }
     p.deadMonths = dm;
     // supplier จาก tag เป็นแหล่งหลัก (เลิกพึ่งสูตร col H) — fallback col H ถ้าไม่มี tag
     if (p.supplierTags.length) p.vendor = p.supplierTags[0];
