@@ -599,6 +599,44 @@ function logTransferBatch_(ss, items, zortNumber) {
   logSheet.getRange(baseRow + 1, 1, rows.length, 8).setValues(rows);
 }
 
+// ── EXPLORE: ดูโครงสร้าง response ของ ZORT Transfer endpoints ──
+// รันเองใน GAS editor แล้วดู Logs (View → Logs / Ctrl+Enter) เพื่อส่ง field name กลับมา
+// เป้าหมาย: หา field วันที่โอน + SKU + from/to warehouse เพื่อคำนวณ "สินค้าจม" จากการโอนสาย5→หน้าร้าน
+function exploreZortTransfers() {
+  const headers = zortHeaders_();
+  // ย้อนหลัง 1 ปี เพื่อให้เจอตัวอย่างข้อมูลแน่ ๆ
+  const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
+  const lastYear = Utilities.formatDate(new Date(Date.now() - 365*24*60*60*1000), Session.getScriptTimeZone(), "yyyy-MM-dd");
+
+  function dump(label, url) {
+    try {
+      const res = UrlFetchApp.fetch(url, { method: "get", headers: headers, muteHttpExceptions: true });
+      const code = res.getResponseCode();
+      const json = JSON.parse(res.getContentText());
+      Logger.log("=== " + label + " === HTTP " + code);
+      Logger.log("top-level keys: " + JSON.stringify(Object.keys(json)));
+      // หา array หลักใน response
+      const arrKey = Object.keys(json).find(k => Array.isArray(json[k]));
+      const arr = arrKey ? json[arrKey] : (Array.isArray(json) ? json : null);
+      if (arr && arr.length) {
+        Logger.log("array key: '" + (arrKey||"(root)") + "' length: " + arr.length);
+        Logger.log("FIRST ITEM: " + JSON.stringify(arr[0]));
+        if (arr[0] && Array.isArray(arr[0].list) && arr[0].list.length) {
+          Logger.log("FIRST ITEM.list[0]: " + JSON.stringify(arr[0].list[0]));
+        }
+      } else {
+        Logger.log("RAW (no array found): " + res.getContentText().slice(0, 1500));
+      }
+    } catch (e) {
+      Logger.log("=== " + label + " === ERROR: " + e);
+    }
+  }
+
+  const q = "?fromdate=" + lastYear + "&todate=" + today + "&limit=5";
+  dump("GetTransfers",         ZORT_BASE + "/Transfer/GetTransfers" + q);
+  dump("GetMovementTransfers", ZORT_BASE + "/Transfer/GetMovementTransfers" + q);
+}
+
 function deductStock(ss, sku, qty) {
   if (!sku || qty <= 0) return error("sku หรือ qty ไม่ถูกต้อง");
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
