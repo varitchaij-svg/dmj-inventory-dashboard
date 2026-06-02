@@ -909,16 +909,44 @@ function pushStockToZort_(items) {
   const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
   for (const [wh, stocks] of Object.entries(groups)) {
     try {
-      const res = UrlFetchApp.fetch(`${ZORT_BASE}/Product/UpdateProductStockList`, {
+      // warehousecode เป็น query param ตาม ZORT docs ("Stock API ต้องระบุ warehousecode เป็น query parameter")
+      const url = `${ZORT_BASE}/Product/UpdateProductStockList?warehousecode=${encodeURIComponent(wh)}`;
+      const res = UrlFetchApp.fetch(url, {
         method: "post", headers,
-        payload: JSON.stringify({ warehousecode: wh, stocks }),
+        payload: JSON.stringify({ stocks }),
         muteHttpExceptions: true
       });
-      Logger.log(`pushStockToZort [${wh}]: ` + res.getContentText());
+      Logger.log(`pushStockToZort [${wh}]: HTTP ${res.getResponseCode()} — ` + res.getContentText().substring(0, 300));
     } catch (e) {
       Logger.log(`pushStockToZort [${wh}] error: ` + e);
     }
   }
+}
+
+// ทดสอบ UpdateProductStockList ด้วย 1 SKU ก่อน deploy จริง
+// ให้รันแล้วดู log: HTTP 200 + resCode 200 = สำเร็จ
+function exploreUpdateStock() {
+  const TEST_SKU = "3D00003"; // เปลี่ยน SKU นี้เป็น SKU ที่มีอยู่จริง
+  const TEST_QTY = 999;       // ใส่จำนวนที่รู้ว่าผิดปกติ เพื่อเช็คว่า ZORT เปลี่ยนจริง
+  const TEST_WH  = WH_FRONTSTORE; // W0001
+
+  const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
+
+  Logger.log("════ ทดสอบ UpdateProductStockList ════");
+  Logger.log(`SKU: ${TEST_SKU}, qty: ${TEST_QTY}, WH: ${TEST_WH}`);
+
+  // แบบที่ 1: warehousecode เป็น query param (ตาม docs)
+  const url1 = `${ZORT_BASE}/Product/UpdateProductStockList?warehousecode=${TEST_WH}`;
+  const res1 = UrlFetchApp.fetch(url1, {
+    method: "post", headers,
+    payload: JSON.stringify({ stocks: [{ sku: TEST_SKU, stock: TEST_QTY }] }),
+    muteHttpExceptions: true
+  });
+  Logger.log("แบบ 1 (warehousecode ใน query): HTTP " + res1.getResponseCode());
+  Logger.log(res1.getContentText().substring(0, 500));
+
+  Logger.log("════ เสร็จ ════");
+  Logger.log("⚠️ ถ้าสำเร็จ ให้กลับไปตั้งค่า TEST_QTY เป็นจำนวนจริงใน ZORT เพื่อ reset");
 }
 
 // หา URL รูปจาก product object ของ ZORT
