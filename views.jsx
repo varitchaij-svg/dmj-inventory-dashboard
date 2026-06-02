@@ -5016,18 +5016,12 @@ const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty
         <div style={{fontSize:10,color:"var(--muted)",fontWeight:600,marginBottom:4}}>
           ✏️ เช็คจริงที่นับได้
         </div>
-        {/* ±qty buttons + input row */}
+        {/* ±qty buttons + input row (±5 removed — use CalcPad for large numbers) */}
         <div style={{display:"flex",alignItems:"center",gap:5}}>
-          <button onClick={() => adjustQty(-5)}
-            style={{minWidth:44,height:48,borderRadius:8,
-                    border:"1.5px solid var(--bdr)",background:"#fff",
-                    cursor:"pointer",fontSize:13,fontWeight:700,
-                    fontFamily:"inherit",color:"var(--dang)",
-                    opacity: numVal >= 5 ? 1 : 0.3}}>−5</button>
           <button onClick={() => adjustQty(-1)}
             style={{minWidth:44,height:48,borderRadius:8,
                     border:"1.5px solid var(--bdr)",background:"#fff",
-                    cursor:"pointer",fontSize:15,fontWeight:800,
+                    cursor:"pointer",fontSize:20,fontWeight:800,
                     fontFamily:"inherit",color:"var(--dang)",
                     opacity: numVal >= 1 ? 1 : 0.3}}>−</button>
           <div style={{flex:1,position:"relative"}}>
@@ -5058,13 +5052,8 @@ const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty
           <button onClick={() => adjustQty(1)}
             style={{minWidth:44,height:48,borderRadius:8,
                     border:"1.5px solid var(--bdr)",background:"#f0fdf4",
-                    cursor:"pointer",fontSize:15,fontWeight:800,
+                    cursor:"pointer",fontSize:20,fontWeight:800,
                     fontFamily:"inherit",color:"var(--g-700)"}}>+</button>
-          <button onClick={() => adjustQty(5)}
-            style={{minWidth:44,height:48,borderRadius:8,
-                    border:"1.5px solid var(--bdr)",background:"#f0fdf4",
-                    cursor:"pointer",fontSize:13,fontWeight:700,
-                    fontFamily:"inherit",color:"var(--g-700)"}}>+5</button>
         </div>
         {onOpenCalc && (
           <button onClick={() => onOpenCalc(p.sku, p.name || p.sku)}
