@@ -1561,7 +1561,7 @@ function CategoryView({ data, role }) {
     }
     if (colorFilter) f = f.filter(p => p.color && p.color.name === colorFilter);
     if (supplierFilter) f = f.filter(p => (p.vendor || p.lastSupplier) === supplierFilter);
-    if (deadFilter)     f = f.filter(p => (p.deadMonths || 0) >= deadFilter);
+    if (deadFilter)     f = f.filter(p => p.deadMonths === null || p.deadMonths >= deadFilter);
     if (newStockFilter) f = f.filter(p => isNew45(p.lastStockInDate));
     return [...f].sort(sortFn);
   }, [products, active, search, globalSearch, globalVendor, colorFilter, supplierFilter, deadFilter, newStockFilter, sortFn]);

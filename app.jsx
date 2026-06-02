@@ -242,7 +242,8 @@ function enrichData(d) {
     // ใช้ lastTransferDate (วันโอนออกหน้าร้านล่าสุด) เป็นหลัก
     //   ถ้าไม่เคยโอนเลย → fallback วันเข้าคลังล่าสุด (lastStockInDate)
     // นับเฉพาะสินค้าที่ยังมีสต็อกในคลังสาย5 (qtyWH > 0) — ของหมดคลัง = ไม่จม
-    let dm = 0;
+    // null = ไม่ทราบ (ไม่มีข้อมูลวันที่เลย), 0 = โอน/เข้าคลังวันนี้/เร็วๆ นี้
+    let dm = null;
     const whOnHand = (p.warehouseQty != null) ? p.warehouseQty
                    : (p.qtyWH != null) ? p.qtyWH
                    : (p.qty || 0);
@@ -250,10 +251,10 @@ function enrichData(d) {
       if (!d) return null;
       const now = new Date();
       let ref = null;
-      if (/^\d{4}-\d{2}-\d{2}/.test(d)) {              // yyyy-MM-dd (lastTransferDate)
+      if (/^\d{4}-\d{2}-\d{2}/.test(d)) {              // yyyy-MM-dd (lastTransferDate / ISO lastStockInDate)
         const [y, m, day] = d.substring(0,10).split("-").map(Number);
         ref = new Date(y, m - 1, day);
-      } else {                                          // DD/MM/YYYY (lastStockInDate)
+      } else {                                          // DD/MM/YYYY (legacy lastStockInDate)
         const parts = String(d).split("/");
         if (parts.length === 3) ref = new Date(+parts[2], +parts[1] - 1, +parts[0]);
       }
@@ -263,8 +264,7 @@ function enrichData(d) {
       return mo < 0 ? 0 : mo;
     };
     if (whOnHand > 0) {
-      const mo = monthsSince(p.lastTransferDate) ?? monthsSince(p.lastStockInDate);
-      if (mo != null) dm = mo;
+      dm = monthsSince(p.lastTransferDate) ?? monthsSince(p.lastStockInDate) ?? null;
     }
     p.deadMonths = dm;
     // supplier จาก tag เป็นแหล่งหลัก (เลิกพึ่งสูตร col H) — fallback col H ถ้าไม่มี tag

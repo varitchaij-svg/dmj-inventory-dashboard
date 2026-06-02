@@ -624,7 +624,10 @@ function syncTransferHistory() {
   for (let page = 1; page <= MAX_PAGES; page++) {
     const url = `${ZORT_BASE}/Transfer/GetTransfers?page=${page}&limit=${limit}&fromdate=${fromStr}&todate=${toStr}`;
     const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
-    if (res.getResponseCode() !== 200) break;
+    if (res.getResponseCode() !== 200) {
+      Logger.log("⚠️ syncTransferHistory page " + page + " HTTP " + res.getResponseCode() + ": " + res.getContentText().substring(0, 200));
+      break;
+    }
     const list = (JSON.parse(res.getContentText())).list || [];
     all.push(...list);
     if (list.length < limit) break;
@@ -2397,18 +2400,38 @@ function readTransfers_() {
 function readPurchases_() {
   const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('รายการซื้อสินค้า');
   if (!sh) return [];
-  const rows = sh.getDataRange().getDisplayValues();
-  if (rows.length < 3) return [];
+  // getValues() ให้ Date object ถ้า cell เป็น Date type → format เป็น ISO ได้ถูกต้อง
+  // getDisplayValues() ให้ text ที่ format ตาม locale ของ sheet → อาจ sort ผิด
+  const rawRows = sh.getDataRange().getValues();
+  const tz = Session.getScriptTimeZone();
+  if (rawRows.length < 3) return [];
   const list = [];
-  for (let i = 2; i < rows.length; i++) {
-    const r = rows[i];
+  for (let i = 2; i < rawRows.length; i++) {
+    const r = rawRows[i];
     const sku = (r[24] || '').toString().trim();
     if (!sku) continue;
+    // แปลง date เป็น yyyy-MM-dd (ISO) เพื่อให้ string comparison sort ถูกลำดับ
+    let dateStr = '';
+    const rawDate = r[11];
+    if (rawDate instanceof Date && !isNaN(rawDate)) {
+      dateStr = Utilities.formatDate(rawDate, tz, 'yyyy-MM-dd');
+    } else {
+      // fallback: text DD/MM/YYYY → แปลงเป็น ISO
+      const s = String(rawDate || '').trim();
+      const p = s.split('/');
+      if (p.length === 3) {
+        const d = new Date(parseInt(p[2]), parseInt(p[1]) - 1, parseInt(p[0]));
+        if (!isNaN(d)) dateStr = Utilities.formatDate(d, tz, 'yyyy-MM-dd');
+        else dateStr = s;
+      } else {
+        dateStr = s;
+      }
+    }
     list.push({
-      type:      (r[1]  || '').toString().trim(),
-      poNum:     (r[2]  || '').toString().trim(),
-      supplier:  (r[4]  || '').toString().trim(),
-      date:      (r[11] || '').toString().trim(),
+      type:      String(r[1]  || '').trim(),
+      poNum:     String(r[2]  || '').trim(),
+      supplier:  String(r[4]  || '').trim(),
+      date:      dateStr,
       status:    (r[19] || '').toString().trim(),
       warehouse: (r[20] || '').toString().trim(),
       sku,
