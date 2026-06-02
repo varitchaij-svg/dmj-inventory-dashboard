@@ -5,8 +5,9 @@ data-bundle.js
 # Backup folder
 backup/
 
-# Claude Code internal
-.claude/
+# Claude Code internal — ignore state แต่เก็บ agents ที่แชร์ได้
+.claude/*
+!.claude/agents/
 
 # OS files
 .DS_Store
