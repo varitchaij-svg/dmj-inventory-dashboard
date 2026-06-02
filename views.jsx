@@ -4960,6 +4960,7 @@ const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty
            display:"flex", flexDirection:"column", gap:10,
            transition:"border-color .2s, background .2s",
            boxShadow: hasVal ? "0 1px 3px rgba(0,0,0,.05)" : "none",
+           minWidth:0, overflow:"hidden",
          }}>
       <div style={{position:"relative"}}>
         {p.imageUrl ? (
@@ -5024,13 +5025,13 @@ const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty
                     cursor:"pointer",fontSize:20,fontWeight:800,
                     fontFamily:"inherit",color:"var(--dang)",
                     opacity: numVal >= 1 ? 1 : 0.3}}>−</button>
-          <div style={{flex:1,position:"relative"}}>
+          <div style={{flex:1, minWidth:0, position:"relative"}}>
             <input type="number" min="0" inputMode="numeric"
               value={val ?? ""}
               onChange={e => onSetQty(p.sku, e.target.value)}
               placeholder="0"
               style={{
-                width:"100%", padding:"10px 6px", borderRadius:9,
+                width:"100%", minWidth:0, padding:"10px 6px", borderRadius:9,
                 fontSize:20, fontWeight:800, fontFamily:"inherit",
                 textAlign:"center", outline:"none",
                 border: hasVal
