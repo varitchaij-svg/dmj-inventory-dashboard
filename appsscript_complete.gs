@@ -909,7 +909,7 @@ function pushStockToZort_(items) {
   const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
   for (const [wh, stocks] of Object.entries(groups)) {
     try {
-      const res = UrlFetchApp.fetch(`${ZORT_BASE}/Product/UpdateProductAvailableStockList`, {
+      const res = UrlFetchApp.fetch(`${ZORT_BASE}/Product/UpdateProductStockList`, {
         method: "post", headers,
         payload: JSON.stringify({ warehousecode: wh, stocks }),
         muteHttpExceptions: true
