@@ -452,32 +452,37 @@ function OverviewView({ data, range, setRange, role }) {
                            .sort((a,b)=>(b.soldRev||0)-(a.soldRev||0));
     const total = sorted.reduce((s,p)=>s+(p.soldRev||0),0);
     let cum = 0;
-    const counts = { A:0, B:0, C:0 }, rev = { A:0, B:0, C:0 };
+    const counts = { A:0, B:0, C:0 }, rev = { A:0, B:0, C:0 }, groups = { A:[], B:[], C:[] };
     sorted.forEach(p => {
       cum += p.soldRev||0;
       const cumPct = total>0 ? cum/total : 0;
       const cls = cumPct <= 0.8 ? 'A' : cumPct <= 0.95 ? 'B' : 'C';
       counts[cls]++; rev[cls] += p.soldRev||0;
+      groups[cls].push(p);
     });
-    return { total, counts, rev, n: sorted.length };
+    return { total, counts, rev, groups, n: sorted.length };
   }, [products]);
 
-  // Top sellers per category — for the gallery section
+  // Top sellers per category — period-aware (ตามช่วงเวลาที่เลือก)
   const topByCategory = uM(() => {
     const byCat = {};
-    products.filter(p => p.soldRev > 0 && !p.isMTO && p.cat && p.cat !== "ไม่มีรหัสสินค้า")
+    products.filter(p => !p.isMTO && p.cat && p.cat !== "ไม่มีรหัสสินค้า")
       .forEach(p => {
+        const v = periodInfo.perProduct(p);
+        if (v.rev <= 0 && v.qty <= 0) return;
         if (!byCat[p.cat]) byCat[p.cat] = [];
-        byCat[p.cat].push(p);
+        byCat[p.cat].push({ ...p, _pQty: v.qty, _pRev: v.rev });
       });
     return Object.entries(byCat)
       .map(([cat, ps]) => ({
         cat,
-        products: ps.sort((a,b) => b.soldRev - a.soldRev).slice(0, 10),
-        totalRev: ps.reduce((s,p) => s+p.soldRev, 0),
+        products: ps.sort((a,b) => b._pRev - a._pRev).slice(0, 10),
+        totalRev: ps.reduce((s,p) => s+p._pRev, 0),
       }))
       .sort((a,b) => b.totalRev - a.totalRev);
-  }, [products]);
+  }, [products, periodInfo]);
+
+  const [abcModalCls, setAbcModalCls] = uS(null);
 
   const [overviewModalP, setOverviewModalP] = uS(null);
 
@@ -1043,8 +1048,8 @@ function OverviewView({ data, range, setRange, role }) {
       </Card>
 
       {/* Top sellers per category */}
-      <Card title="🏆 Top 10 ขายดี · แยกตามหมวด"
-            sub="กดที่สินค้าเพื่อดูรูปและรายละเอียด"
+      <Card title={`🏆 Top 10 ขายดี · แยกตามหมวด · ${periodInfo.tag}`}
+            sub={`ขายดีในช่วง ${periodInfo.label} · กดที่สินค้าเพื่อดูรายละเอียด`}
             style={{marginTop:20}}>
         <div className="row" style={{gridTemplateColumns:"repeat(auto-fill, minmax(320px, 1fr))"}}>
           {topByCategory.map(g => {
@@ -1107,11 +1112,11 @@ function OverviewView({ data, range, setRange, role }) {
                           {p.name}
                         </div>
                         <div style={{fontSize:10, color:"var(--muted)", marginTop:1}}>
-                          {fmtN(p.soldQty)} ชิ้น · คงเหลือ {fmtN(stockQty(p))}
+                          {fmtN(p._pQty)} ชิ้น · คงเหลือ {fmtN(stockQty(p))}
                         </div>
                       </div>
                       {role === "owner" && <div style={{fontSize:11.5, fontWeight:700, color:"var(--g-700)", flexShrink:0}}>
-                        {fmtB(p.soldRev)}
+                        {fmtB(p._pRev)}
                       </div>}
                     </button>
                   ))}
@@ -1183,7 +1188,7 @@ function OverviewView({ data, range, setRange, role }) {
       {/* ── ABC / Pareto ── */}
       {abc.n > 0 && (
         <Card title="🎯 ABC · สินค้ากลุ่มไหนทำรายได้หลัก"
-              sub="A = 80% แรกของรายได้ · B = 80–95% · C = ที่เหลือ"
+              sub="A = 80% แรกของรายได้ · B = 80–95% · C = ที่เหลือ · กดที่กลุ่มเพื่อดูรายการสินค้า"
               style={{marginTop:20}}>
           <div className="row" style={{gridTemplateColumns:"repeat(auto-fit, minmax(180px, 1fr))"}}>
             {[{ cls:"A", label:"กลุ่ม A · ดาวเด่น", cc:"#1f7f44", desc:"โฟกัส อย่าให้ขาด" },
@@ -1191,13 +1196,16 @@ function OverviewView({ data, range, setRange, role }) {
               { cls:"C", label:"กลุ่ม C · หาง",     cc:"#9aa0a6", desc:"ทบทวน/ลดสต๊อก" }].map(g => {
               const share = abc.total>0 ? abc.rev[g.cls]/abc.total : 0;
               return (
-                <div key={g.cls} style={{border:`1px solid ${g.cc}44`,borderRadius:12,padding:14,
-                                         background:`linear-gradient(180deg, ${g.cc}10, #fff)`}}>
+                <button key={g.cls} onClick={()=>setAbcModalCls(g.cls)}
+                        style={{border:`1px solid ${g.cc}44`,borderRadius:12,padding:14,textAlign:"left",
+                                cursor:"pointer",fontFamily:"inherit",
+                                background:`linear-gradient(180deg, ${g.cc}10, #fff)`}}>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
                     <span style={{width:30,height:30,borderRadius:8,background:g.cc,color:"#fff",
                                   display:"flex",alignItems:"center",justifyContent:"center",
                                   fontWeight:800,fontSize:15}}>{g.cls}</span>
-                    <div style={{fontSize:12,fontWeight:700}}>{g.label}</div>
+                    <div style={{fontSize:12,fontWeight:700,flex:1}}>{g.label}</div>
+                    <span style={{fontSize:11,color:g.cc,fontWeight:700}}>ดู ›</span>
                   </div>
                   <div style={{display:"flex",alignItems:"baseline",gap:6,marginTop:10}}>
                     <span style={{fontSize:24,fontWeight:800,color:g.cc}}>{abc.counts[g.cls]}</span>
@@ -1210,12 +1218,54 @@ function OverviewView({ data, range, setRange, role }) {
                     {role==="owner" ? `${fmtB(abc.rev[g.cls])} · ` : ""}{Math.round(share*100)}% ของรายได้
                   </div>
                   <div style={{fontSize:10.5,color:g.cc,fontWeight:600,marginTop:4}}>{g.desc}</div>
-                </div>
+                </button>
               );
             })}
           </div>
         </Card>
       )}
+
+      {/* ── ABC drilldown modal: รายการสินค้าในกลุ่ม ── */}
+      {abcModalCls && (() => {
+        const meta = { A:{label:"กลุ่ม A · ดาวเด่น",cc:"#1f7f44"},
+                       B:{label:"กลุ่ม B · รอง",cc:"#a07417"},
+                       C:{label:"กลุ่ม C · หาง",cc:"#9aa0a6"} }[abcModalCls];
+        const list = abc.groups[abcModalCls] || [];
+        return (
+          <div onClick={()=>setAbcModalCls(null)}
+               style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:1000,
+                       display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+            <div onClick={e=>e.stopPropagation()}
+                 style={{background:"#fff",borderRadius:"16px 16px 0 0",width:"100%",maxWidth:640,
+                         maxHeight:"82vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+              <div style={{padding:"14px 18px",borderBottom:`2px solid ${meta.cc}`,
+                           display:"flex",alignItems:"center",gap:10}}>
+                <span style={{width:30,height:30,borderRadius:8,background:meta.cc,color:"#fff",
+                              display:"flex",alignItems:"center",justifyContent:"center",
+                              fontWeight:800}}>{abcModalCls}</span>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:800,fontSize:14}}>{meta.label}</div>
+                  <div style={{fontSize:11,color:"var(--muted)"}}>{list.length} รายการ · เรียงตามรายได้ทั้งปี</div>
+                </div>
+                <button onClick={()=>setAbcModalCls(null)}
+                        style={{border:"none",background:"var(--g-50)",borderRadius:8,
+                                width:32,height:32,cursor:"pointer",fontSize:16}}>✕</button>
+              </div>
+              <div style={{overflowY:"auto"}}>
+                {list.map((p,i) => (
+                  <MiniRow key={p.sku} p={p} allCats={allCats}
+                    onClick={()=>{ setAbcModalCls(null); setOverviewModalP(p); }}
+                    secondary={`${p.cat || "—"} · ขายรวม ${fmtN(p.soldQty)} ชิ้น`}
+                    right={role==="owner"
+                      ? <span style={{fontSize:12,fontWeight:700,color:meta.cc}}>{fmtB(p.soldRev)}</span>
+                      : <span style={{fontSize:11,color:"var(--muted)"}}>#{i+1}</span>}
+                    primary={`#${i+1}`}/>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Dead stock ── */}
       {deadStock.count > 0 && (
