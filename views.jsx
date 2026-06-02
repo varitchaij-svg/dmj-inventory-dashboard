@@ -5979,27 +5979,31 @@ function StockCountView({ data }) {
     if (!entries.length) { if (!isAuto) showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return; }
     setSaving(true);
     const snap = JSON.stringify(checkedQtys);
-    const result = await syncLockData(selLockKey, entries);
+    // ถ้านับตามล็อค → บันทึกตำแหน่งจัดเก็บด้วย; แล้ว commit ผลนับ → อัปเดตคลังจริง + push ZORT
+    if (selLockKey) await syncLockData(selLockKey, entries);
+    const result = await confirmStockCount(entries);
     setSaving(false);
     if (result.success !== false) {
       setSavedSkus(new Set(entries.map(e => e.sku)));
       setLastSavedTime(new Date());
       setLastSavedSnap(snap); // กัน auto-save วนซ้ำ
-      showToast('success', 'บันทึกแล้ว ' + entries.length + ' รายการ', '💾');
+      showToast('success', 'บันทึก ' + entries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
     } else if (!isAuto) {
       showToast('error', 'บันทึกไม่สำเร็จ', '❌');
     }
   };
 
   // Auto-save with 3-second debounce — save เฉพาะเมื่อค่าต่างจากที่ save ล่าสุด (กัน loop)
+  // ทำงานทั้งโหมดเลือกตามล็อค (selLockKey) และตามซัพพลายเออร์ (selSupplier)
   uE(() => {
-    if (scTouchedCount === 0 || saving || !selLockKey) return;
+    if (scTouchedCount === 0 || saving) return;
+    if (!selLockKey && !selSupplier) return;
     if (JSON.stringify(checkedQtys) === lastSavedSnap) return;
     const timer = setTimeout(() => {
       handleSave(true);
     }, 3000);
     return () => clearTimeout(timer);
-  }, [checkedQtys, saving, scTouchedCount, selLockKey, lastSavedSnap]);
+  }, [checkedQtys, saving, scTouchedCount, selLockKey, selSupplier, lastSavedSnap]);
 
   const handleConfirm = async () => {
     const entries = Object.entries(checkedQtys)
@@ -6007,12 +6011,14 @@ function StockCountView({ data }) {
       .map(([sku, qty]) => ({ sku, qty: parseInt(qty)||0 }));
     if (!entries.length) { showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return; }
     setConfirming(true);
-    await syncLockData(selLockKey, entries);
+    const snap = JSON.stringify(checkedQtys);
+    if (selLockKey) await syncLockData(selLockKey, entries);
     const result = await confirmStockCount(entries);
     setConfirming(false);
     if (result.success !== false) {
       setSavedSkus(new Set(entries.map(e => e.sku)));
       setLastSavedTime(new Date());
+      setLastSavedSnap(snap); // กัน auto-save commit ซ้ำหลังกดยืนยันเอง
       showToast('success', 'ยืนยันผลนับแล้ว ' + entries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
     } else {
       showToast('error', 'ยืนยันไม่สำเร็จ', '❌');
