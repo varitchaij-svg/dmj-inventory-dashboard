@@ -19,13 +19,6 @@ const TABS = [
 ];
 
 // Role config
-const ROLE_PASSWORDS = {
-  "DMJ":   "owner",
-  "1234":  "employee",     // backward-compat (legacy พนักงาน)
-  "WH":    "warehouse",    // คลังสินค้า
-  "FS":    "frontstore",   // หน้าร้าน
-  "SALE":  "saler",        // พนักงานขาย
-};
 const ROLE_TABS = {
   owner:      ["overview","categories","trends","stock","storage","stockcount","frontstore","transfers","orders","ordersummary","mtojobs","upload","connect","labels"],
   employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","mtojobs","labels"],
@@ -45,6 +38,7 @@ function LoginScreen({ onLogin }) {
   const [pinTarget, setPinTarget] = usS(null);
   const [pin, setPin] = usS("");
   const [err, setErr] = usS(false);
+  const [checking, setChecking] = usS(false);
 
   const profiles = [
     { role: "owner",      label: "เจ้าของ",    emoji: "👑", color: "#1f7f44", needPin: true  },
@@ -58,7 +52,31 @@ function LoginScreen({ onLogin }) {
     else { onLogin(p.role); }
   };
 
-  const handlePin = () => {
+  const handlePin = async () => {
+    if (checking) return;
+    const base = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null;
+    // ตรวจ PIN ฝั่ง server (รหัสไม่อยู่ใน source); ถ้าต่อเน็ตไม่ได้ fallback เป็นรหัส default เดิม
+    if (base) {
+      setChecking(true); setErr(false);
+      try {
+        const sep = base.includes('?') ? '&' : '?';
+        const res = await fetch(`${base}${sep}action=verifyPin&pin=${encodeURIComponent(pin)}`, { cache: 'no-store' });
+        const d = await res.json();
+        setChecking(false);
+        // ถ้า GAS ยังไม่ได้ redeploy (ไม่มี field ok) → fallback ตรวจรหัสเดิมฝั่ง client
+        if (!d || typeof d.ok !== 'boolean') {
+          if (pin.toUpperCase() === "DMJ") { onLogin(pinTarget.role); return; }
+          setErr(true); setPin(""); return;
+        }
+        if (d.ok) { onLogin(pinTarget.role); return; }
+        setErr(true); setPin(""); return;
+      } catch (e) {
+        setChecking(false);
+        // ออฟไลน์/เซิร์ฟเวอร์ล่ม → fallback ใช้รหัสเดิมเพื่อไม่ให้เจ้าของเข้าไม่ได้
+        if (pin.toUpperCase() === "DMJ") { onLogin(pinTarget.role); return; }
+        setErr(true); setPin(""); return;
+      }
+    }
     if (pin.toUpperCase() === "DMJ") { onLogin(pinTarget.role); }
     else { setErr(true); setPin(""); }
   };
@@ -258,6 +276,7 @@ function App() {
   const [range, setRange] = usS("year");
   const [source, setSource] = usS(localStorage.getItem(LS_SRC_KEY) || "sheet");
   const [syncing, setSyncing] = usS(false);
+  const [zortSyncing, setZortSyncing] = usS(false);
   const [lastSync, setLastSync] = usS(localStorage.getItem("dmj_last_sync") || null);
   const [labelInitItems, setLabelInitItems] = usS(null); // for auto-populate from order summary
   const [isOnline, setIsOnline] = usS(() => navigator.onLine);
@@ -268,10 +287,14 @@ function App() {
   const sheetUrl = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : "data.json";
   const sheetViewUrl = "https://docs.google.com/spreadsheets/d/11yL4u-XLUTCBObMppAj12nnmG0YlDZWsDn2XPCneoHQ/edit";
 
-  const fetchFromSheet = usC(() => {
+  // Full payload fetch (หนัก — ใช้ตอนโหลดครั้งแรก/กด Sync). retry=true → ลองซ้ำ 1 ครั้งเมื่อ timeout (กัน GAS cold start)
+  const fetchFromSheet = usC((retry = true) => {
     setSyncing(true);
     setError(null);
-    fetch(sheetUrl)
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45000); // 45s timeout
+    const bustUrl = sheetUrl + (sheetUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
+    fetch(bustUrl, { signal: controller.signal, cache: 'no-store' })
       .then(r => r.json())
       .then(d => {
         const enriched = enrichData(d);
@@ -281,9 +304,39 @@ function App() {
         const now = new Date().toISOString();
         localStorage.setItem("dmj_last_sync", now);
         setLastSync(now);
+        setError(null);
       })
-      .catch(e => setError(e.message))
-      .finally(() => setSyncing(false));
+      .catch(e => {
+        // Cold-start: ลองใหม่อัตโนมัติอีก 1 ครั้ง (GAS อุ่นเครื่องแล้วครั้งที่ 2 จะเร็ว)
+        if (e.name === "AbortError" && retry) {
+          clearTimeout(timeout);
+          setTimeout(() => fetchFromSheet(false), 800);
+          return;
+        }
+        if (e.name === "AbortError") setError("หมดเวลาเชื่อมต่อ — เซิร์ฟเวอร์ตอบช้า กรุณาลองใหม่อีกครั้ง");
+        else setError(e.message);
+        setSyncing(false);
+      })
+      .finally(() => { clearTimeout(timeout); if (!controller.signal.aborted) setSyncing(false); });
+  }, [sheetUrl]);
+
+  // Lightweight fetch: ดึงเฉพาะรายการสั่งของ (เบา/เร็ว) — ใช้ polling หน้า orders จะได้ไม่โหลดทั้งก้อน
+  const fetchOrdersOnly = usC(() => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20000);
+    const sep = sheetUrl.includes('?') ? '&' : '?';
+    const url = `${sheetUrl}${sep}action=orders&_t=${Date.now()}`;
+    fetch(url, { signal: controller.signal, cache: 'no-store' })
+      .then(r => r.json())
+      .then(d => {
+        if (!d || !Array.isArray(d.orders)) return;
+        setData(prev => prev ? { ...prev, orders: d.orders } : prev);
+        const now = new Date().toISOString();
+        localStorage.setItem("dmj_last_sync", now);
+        setLastSync(now);
+      })
+      .catch(() => {}) // เงียบ — เป็น background polling ไม่ต้องรบกวนผู้ใช้
+      .finally(() => clearTimeout(timeout));
   }, [sheetUrl]);
 
   usE(() => {
@@ -308,13 +361,13 @@ function App() {
   }, []);
 
   // ── Auto-sync when on orders tab ──
-  // Fetch immediately when entering orders/ordersummary, then poll every 60 s
+  // Poll เฉพาะรายการสั่งของ (เบา) ทุก 15 วิ — ไม่ดึง payload ทั้งก้อนซ้ำๆ จะได้ไม่ทำให้ GAS ช้า/timeout
   usE(() => {
     if (!role) return;
     const ORDER_TABS = ["orders", "ordersummary"];
     if (!ORDER_TABS.includes(tab)) return;
-    if (navigator.onLine) fetchFromSheet();
-    const id = setInterval(() => { if (navigator.onLine) fetchFromSheet(); }, 60000);
+    if (navigator.onLine) fetchOrdersOnly();
+    const id = setInterval(() => { if (navigator.onLine) fetchOrdersOnly(); }, 15000);
     return () => clearInterval(id);
   }, [tab, role]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -377,7 +430,7 @@ function App() {
   const visibleTabs = TABS.filter(t => allowedTabIds.includes(t.id));
   const activeTab = allowedTabIds.includes(tab) ? tab : (allowedTabIds[0] || "categories");
 
-  if (error) {
+  if (error && !data) {
     return (
       <div className="loading-screen">
         <div style={{color:"var(--dang)",fontWeight:600}}>โหลดข้อมูลไม่สำเร็จ</div>
@@ -464,6 +517,20 @@ function App() {
                     onClick={fetchFromSheet}>
               {syncing ? <span className="spin" style={{width:14,height:14,borderWidth:2}}/> : I.refresh}
             </button>
+            {role === "owner" && (
+              <button className="btn ghost"
+                      title={zortSyncing ? "กำลังดึงสต็อกจาก ZORT..." : "ดึงสต็อกจาก ZORT เดี๋ยวนี้"}
+                      disabled={zortSyncing}
+                      onClick={async () => {
+                        setZortSyncing(true);
+                        const r = await syncZortNow();
+                        setZortSyncing(false);
+                        if (r && r.success !== false) fetchFromSheet();
+                        else alert("Sync ZORT ไม่สำเร็จ: " + ((r && r.error) || "unknown"));
+                      }}>
+                {zortSyncing ? <span className="spin" style={{width:14,height:14,borderWidth:2}}/> : "⬇️"}
+              </button>
+            )}
             <div title={`${ROLE_LABELS[role]} · คลิกเพื่อออกจากระบบ`}
                  onClick={() => setConfirmAction({ type: "logout" })}
                  style={{width:32,height:32,borderRadius:"50%",
@@ -496,6 +563,19 @@ function App() {
           <span style={{fontSize:18}}>📵</span>
           <span>ไม่มีอินเทอร์เน็ต — ข้อมูลอาจไม่ใช่ล่าสุด</span>
           <span style={{fontSize:11,fontWeight:400,opacity:.7}}>No connection · cached data</span>
+        </div>
+      )}
+
+      {/* ─── Sync error banner (non-blocking, only when data already loaded) ─── */}
+      {error && data && (
+        <div style={{
+          background:"#fff3cd", color:"#856404", padding:"6px 16px",
+          fontSize:12, display:"flex", alignItems:"center", justifyContent:"space-between",
+          gap:8, borderBottom:"1px solid #ffc107",
+        }}>
+          <span>⚠️ Sync ล้มเหลว: {error}</span>
+          <button className="btn ghost" style={{fontSize:12,padding:"2px 8px"}}
+                  onClick={fetchFromSheet}>ลองใหม่</button>
         </div>
       )}
 
