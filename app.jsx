@@ -238,23 +238,33 @@ function enrichData(d) {
     const rawTags = String(p.tag || "").split(",").map(t => t.trim()).filter(Boolean);
     p.supplierTags = rawTags.filter(t => !THAI_RE.test(t));
     p.statusTags   = rawTags.filter(t =>  THAI_RE.test(t));
-    // ── จำนวนเดือนที่สินค้าจม = นับจากวันเข้าคลังล่าสุด (lastStockInDate) ถึงวันนี้ ──
-    // นับเฉพาะสินค้าที่ยังมีสต็อกเหลือ (ขายหมดแล้ว = ไม่ถือว่าจม)
+    // ── จำนวนเดือนที่สินค้าจม = นานแค่ไหนแล้วที่ไม่ถูกโอนสาย5→หน้าร้าน ──
+    // ใช้ lastTransferDate (วันโอนออกหน้าร้านล่าสุด) เป็นหลัก
+    //   ถ้าไม่เคยโอนเลย → fallback วันเข้าคลังล่าสุด (lastStockInDate)
+    // นับเฉพาะสินค้าที่ยังมีสต็อกในคลังสาย5 (qtyWH > 0) — ของหมดคลัง = ไม่จม
     let dm = 0;
-    const onHand = (p.qtyStore > 0 || p.qtyWH > 0)
-      ? (p.qtyStore || 0) + (p.qtyWH || 0)
-      : (p.qty || 0);
-    if (onHand > 0 && p.lastStockInDate) {
-      const parts = String(p.lastStockInDate).split("/"); // DD/MM/YYYY
-      if (parts.length === 3) {
-        const inDate = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10));
-        if (!isNaN(inDate)) {
-          const now = new Date();
-          dm = (now.getFullYear() - inDate.getFullYear()) * 12 + (now.getMonth() - inDate.getMonth());
-          if (now.getDate() < inDate.getDate()) dm -= 1; // ยังไม่ครบเดือนเต็ม
-          if (dm < 0) dm = 0;
-        }
+    const whOnHand = (p.warehouseQty != null) ? p.warehouseQty
+                   : (p.qtyWH != null) ? p.qtyWH
+                   : (p.qty || 0);
+    const monthsSince = (d) => {
+      if (!d) return null;
+      const now = new Date();
+      let ref = null;
+      if (/^\d{4}-\d{2}-\d{2}/.test(d)) {              // yyyy-MM-dd (lastTransferDate)
+        const [y, m, day] = d.substring(0,10).split("-").map(Number);
+        ref = new Date(y, m - 1, day);
+      } else {                                          // DD/MM/YYYY (lastStockInDate)
+        const parts = String(d).split("/");
+        if (parts.length === 3) ref = new Date(+parts[2], +parts[1] - 1, +parts[0]);
       }
+      if (!ref || isNaN(ref)) return null;
+      let mo = (now.getFullYear() - ref.getFullYear()) * 12 + (now.getMonth() - ref.getMonth());
+      if (now.getDate() < ref.getDate()) mo -= 1;       // ยังไม่ครบเดือนเต็ม
+      return mo < 0 ? 0 : mo;
+    };
+    if (whOnHand > 0) {
+      const mo = monthsSince(p.lastTransferDate) ?? monthsSince(p.lastStockInDate);
+      if (mo != null) dm = mo;
     }
     p.deadMonths = dm;
     // supplier จาก tag เป็นแหล่งหลัก (เลิกพึ่งสูตร col H) — fallback col H ถ้าไม่มี tag

@@ -266,6 +266,7 @@ function doGet(e) {
     const mtoJobs   = readMtoJobs_();
     const frontStoreQtys = readFrontStoreCheckedQty_();
     const qtyLoc    = readQtyByLocation_();
+    const transferHist = readTransferHistory_(); // วันโอนสาย5→หน้าร้านล่าสุด ต่อ SKU
 
     products.forEach(p => {
       const loc = qtyLoc[p.sku];
@@ -307,6 +308,10 @@ function doGet(e) {
         p.lastStockInDate = my[0].date;
         p.purchaseCount   = my.length;
       }
+
+      // วันโอนสาย5→หน้าร้านล่าสุด (yyyy-MM-dd) → ใช้คำนวณสินค้าจมฝั่ง frontend
+      const th = transferHist[(p.sku || "").toUpperCase()];
+      if (th) p.lastTransferDate = th;
 
       const adjs = transfers.filter(t => t.sku === p.sku && t.type === 'ปรับ');
       if (adjs.length > 0) {
@@ -597,6 +602,79 @@ function logTransferBatch_(ss, items, zortNumber) {
     : "TF-" + Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyyMMdd") + "-" + String(baseRow).padStart(3, "0");
   const rows = items.map(it => [refNum, dateStr, "สำเร็จ", WH_NAME_SAI5, WH_NAME_FS, it.sku, it.name, it.qty]);
   logSheet.getRange(baseRow + 1, 1, rows.length, 8).setValues(rows);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// สินค้าจม: ดึงประวัติการโอนสาย5 → ดูเหมือนจริง (หน้าร้าน) จาก ZORT
+// เก็บวันโอนล่าสุดต่อ SKU ลงชีต "ประวัติโอนหน้าร้าน" เพื่อให้ frontend
+// คำนวณว่าสินค้าตัวไหนไม่ถูกโอนออกหน้าร้านมานานแล้ว = จม
+// รันเองครั้งแรก + ตั้ง trigger รายวัน (เหมือน syncZortSales)
+// ════════════════════════════════════════════════════════════════════
+const SHEET_TRANSFER_HIST = "ประวัติโอนหน้าร้าน";
+
+function syncTransferHistory() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const tz = "Asia/Bangkok";
+  const today = new Date();
+  const DAYS = 730; // ย้อนหลัง 2 ปี (ครอบคลุมสินค้าจมนาน)
+  const fromStr = Utilities.formatDate(new Date(today.getTime() - DAYS*24*60*60*1000), tz, "yyyy-MM-dd");
+  const toStr   = Utilities.formatDate(today, tz, "yyyy-MM-dd");
+
+  const all = [], limit = 200, MAX_PAGES = 120;
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const url = `${ZORT_BASE}/Transfer/GetTransfers?page=${page}&limit=${limit}&fromdate=${fromStr}&todate=${toStr}`;
+    const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) break;
+    const list = (JSON.parse(res.getContentText())).list || [];
+    all.push(...list);
+    if (list.length < limit) break;
+    Utilities.sleep(250);
+    if (page === MAX_PAGES) Logger.log("⚠️ ชนเพดาน " + MAX_PAGES + " หน้า");
+  }
+  Logger.log("ZORT transfers fetched: " + all.length);
+
+  // เก็บวันโอนล่าสุดต่อ SKU (เฉพาะ สาย5 → หน้าร้าน, status Success)
+  const lastDate = {}; // sku → "yyyy-MM-dd"
+  let matched = 0;
+  for (const t of all) {
+    if (t.status !== "Success") continue;
+    if (t.fromwarehousecode !== WH_SAI5 || t.towarehousecode !== WH_FRONTSTORE) continue;
+    const d = t.transferdateString || (t.transferdate ? String(t.transferdate).substring(0,10) : null);
+    if (!d) continue;
+    for (const it of (Array.isArray(t.list) ? t.list : [])) {
+      const sku = String(it.sku || "").trim().toUpperCase();
+      if (!sku) continue;
+      matched++;
+      if (!lastDate[sku] || d > lastDate[sku]) lastDate[sku] = d;
+    }
+  }
+  Logger.log("รายการโอนสาย5→หน้าร้านที่นับ: " + matched + " · SKU: " + Object.keys(lastDate).length);
+
+  // เขียนชีต: A=SKU, B=วันโอนล่าสุด (text format กัน Sheets แปลงวันที่)
+  let sh = ss.getSheetByName(SHEET_TRANSFER_HIST);
+  if (!sh) sh = ss.insertSheet(SHEET_TRANSFER_HIST);
+  sh.clear();
+  sh.getRange(1, 1, 1, 2).setValues([["SKU", "วันโอนหน้าร้านล่าสุด"]]);
+  const skus = Object.keys(lastDate);
+  if (skus.length) {
+    const rows = skus.map(s => [s, lastDate[s]]);
+    sh.getRange(2, 1, rows.length, 2).setNumberFormat("@").setValues(rows);
+  }
+  invalidateCache_();
+  Logger.log("✅ syncTransferHistory เสร็จ");
+}
+
+function readTransferHistory_() {
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_TRANSFER_HIST);
+  if (!sh) return {};
+  const rows = sh.getDataRange().getDisplayValues();
+  const map = {};
+  for (let i = 1; i < rows.length; i++) {
+    const sku = (rows[i][0] || "").toString().trim().toUpperCase();
+    const d   = (rows[i][1] || "").toString().trim();
+    if (sku && d) map[sku] = d;
+  }
+  return map;
 }
 
 // ── EXPLORE: ดูโครงสร้าง response ของ ZORT Transfer endpoints ──
