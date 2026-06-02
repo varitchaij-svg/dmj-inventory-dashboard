@@ -188,7 +188,8 @@ function DeltaBadge({ pct, isNew }) {
 function MiniRow({ p, onClick, allCats, primary, secondary, right }) {
   return (
     <button onClick={onClick}
-      style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"8px 12px",
+      style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"12px 12px",
+              minHeight:52,
               background:"transparent",border:"none",borderBottom:"1px solid var(--bdr)",
               cursor:"pointer",textAlign:"left",fontFamily:"inherit"}}
       onMouseEnter={e=>e.currentTarget.style.background="#fafcf7"}
@@ -2623,9 +2624,9 @@ function StockView({ data, role }) {
             {id:"over", label:`🗂️ สต๊อกเกิน`,count:overstocked.length, color:"#1f6f8b"},
           ].map(t => (
             <button key={t.id} className={`fchip${filter===t.id?' active':''}`}
-                    style={filter===t.id?{background:t.color+"18",borderColor:t.color,color:t.color}:{}}
+                    style={filter===t.id?{background:t.color,borderColor:t.color,color:"#fff",boxShadow:`0 2px 6px ${t.color}55`}:{}}
                     onClick={() => { setFilter(t.id); setPage(0); setStockSearch(""); setSupplierFilter(null); }}>
-              {t.label} <span style={{opacity:.7}}>({t.count})</span>
+              {t.label} <span style={{opacity:.8}}>({t.count})</span>
             </button>
           ))}
         </div>
