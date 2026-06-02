@@ -161,6 +161,57 @@ function SkeletonCard() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Analytics helpers (shared by Overview deep-dive cards)
+// ─────────────────────────────────────────────────────────────────────
+
+// % change badge with arrow — green up / red down / grey new
+function DeltaBadge({ pct, isNew }) {
+  if (isNew) {
+    return <span style={{display:"inline-flex",alignItems:"center",gap:3,fontSize:11,fontWeight:700,
+                          padding:"2px 7px",borderRadius:20,background:"#eef4ff",color:"#2563eb"}}>ใหม่</span>;
+  }
+  if (pct == null) return <span style={{fontSize:11,color:"var(--light)"}}>—</span>;
+  const up = pct >= 0;
+  const c  = up ? "#1f7f44" : "#c0392b";
+  const bg = up ? "#eaf6ee" : "#fcecec";
+  const arrow = up ? "▲" : "▼";
+  const shown = Math.abs(pct) >= 10 ? Math.round(Math.abs(pct)*100) : (Math.abs(pct)*100).toFixed(0);
+  return (
+    <span style={{display:"inline-flex",alignItems:"center",gap:3,fontSize:11,fontWeight:700,
+                  padding:"2px 7px",borderRadius:20,background:bg,color:c}}>
+      {arrow} {shown}%
+    </span>
+  );
+}
+
+// Compact product row used by mover / velocity / dead-stock lists
+function MiniRow({ p, onClick, allCats, primary, secondary, right }) {
+  return (
+    <button onClick={onClick}
+      style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"8px 12px",
+              background:"transparent",border:"none",borderBottom:"1px solid var(--bdr)",
+              cursor:"pointer",textAlign:"left",fontFamily:"inherit"}}
+      onMouseEnter={e=>e.currentTarget.style.background="#fafcf7"}
+      onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+      {p.imageUrl
+        ? <div style={{width:34,height:34,borderRadius:6,flexShrink:0,backgroundImage:`url("${p.imageUrl}")`,
+                       backgroundSize:"contain",backgroundPosition:"center",backgroundRepeat:"no-repeat",
+                       backgroundColor:"#fff",border:"1px solid var(--bdr)"}}/>
+        : <div style={{width:34,height:34,borderRadius:6,flexShrink:0,
+                       background:catColor(p.cat,allCats)+"22",border:`1px solid ${catColor(p.cat,allCats)}55`}}/>}
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:11.5,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}</div>
+        <div style={{fontSize:10,color:"var(--muted)",marginTop:1}}>{secondary}</div>
+      </div>
+      <div style={{flexShrink:0,textAlign:"right",display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2}}>
+        {right}
+        {primary != null && <div style={{fontSize:10,color:"var(--light)"}}>{primary}</div>}
+      </div>
+    </button>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // OVERVIEW
 // ─────────────────────────────────────────────────────────────────────
 function OverviewView({ data, range, setRange, role }) {
@@ -316,28 +367,122 @@ function OverviewView({ data, range, setRange, role }) {
     });
   }, [months, days, monthlyByCat, dailyByCat, topCats, range, hasDailyData, activeMonth, selMonthDailySeries]);
 
+  // ── Period selector: map range → per-product {qty, rev} for selected window ──
+  const periodInfo = uM(() => {
+    if (range === 'year') {
+      return {
+        label: months.length ? `${monthLabel(months[0]).split(" ")[0]}–${monthLabel(months[months.length-1])}` : "ทั้งปี",
+        tag: "ทั้งปี",
+        perProduct: p => ({ qty: p.soldQty || 0, rev: p.soldRev || 0 }),
+      };
+    }
+    const mk = activeMonth; // month + day mode drill to the active month
+    return {
+      label: mk ? monthLabel(mk) : "เดือนล่าสุด",
+      tag: mk ? monthLabel(mk) : "เดือนล่าสุด",
+      perProduct: p => {
+        const mm = (p.monthly || []).find(x => x.month === mk);
+        return { qty: mm ? mm.qty : 0, rev: mm ? mm.sales : 0 };
+      },
+    };
+  }, [range, activeMonth, months]);
+
   const topSellers = uM(() =>
-    [...products].filter(p => p.soldRev > 0 && !p.isMTO)
-      .sort((a,b) => b.soldRev - a.soldRev).slice(0, 10),
-    [products]
+    products.filter(p => !p.isMTO)
+      .map(p => { const v = periodInfo.perProduct(p); return { ...p, _pQty: v.qty, _pRev: v.rev }; })
+      .filter(p => p._pRev > 0 || p._pQty > 0)
+      .sort((a,b) => b._pRev - a._pRev)
+      .slice(0, 10),
+    [products, periodInfo]
   );
 
-  // Top sellers per category — for the gallery section
+  // ── Movers: current vs previous month (MoM) ──────────────────────────
+  const momMovers = uM(() => {
+    if (months.length < 2) return { risers: [], fallers: [], cur: null, prev: null };
+    const cur = months[months.length-1], prev = months[months.length-2];
+    const MIN = 300; // ตัด noise: ต้องมียอดอย่างน้อยเดือนใดเดือนหนึ่ง
+    const rows = products.filter(p => !p.isMTO).map(p => {
+      const c  = (p.monthly||[]).find(x=>x.month===cur);
+      const pr = (p.monthly||[]).find(x=>x.month===prev);
+      const curRev = c?c.sales:0, prevRev = pr?pr.sales:0;
+      const isNew = prevRev === 0 && curRev > 0;
+      const pct = prevRev > 0 ? (curRev - prevRev)/prevRev : null;
+      return { p, curRev, prevRev, curQty: c?c.qty:0, prevQty: pr?pr.qty:0,
+               delta: curRev - prevRev, pct, isNew };
+    }).filter(r => r.curRev >= MIN || r.prevRev >= MIN);
+    const risers  = rows.filter(r => r.delta > 0).sort((a,b)=>b.delta-a.delta).slice(0,6);
+    const fallers = rows.filter(r => r.delta < 0).sort((a,b)=>a.delta-b.delta).slice(0,6);
+    return { risers, fallers, cur, prev };
+  }, [products, months]);
+
+  // ── Velocity: avg sales rate → days of stock left ────────────────────
+  const velocity = uM(() => {
+    const n = Math.max(1, Math.min(months.length, 3));
+    const recent = months.slice(-n);
+    const rows = products.filter(p => !p.isMTO).map(p => {
+      const qty = (p.monthly||[]).filter(x=>recent.includes(x.month)).reduce((s,x)=>s+x.qty,0);
+      const perDay = qty / (n*30);
+      const stock = stockQty(p);
+      const daysLeft = perDay > 0 ? stock/perDay : Infinity;
+      return { p, perDay, stock, daysLeft, qty };
+    });
+    const reorder   = rows.filter(r => r.perDay>0 && r.stock>0 && r.daysLeft < 21)
+                          .sort((a,b)=>a.daysLeft-b.daysLeft).slice(0,10);
+    const overstock = rows.filter(r => r.perDay>0 && r.daysLeft>120 && r.stock>10)
+                          .sort((a,b)=>b.daysLeft-a.daysLeft).slice(0,10);
+    return { reorder, overstock, n };
+  }, [products, months]);
+
+  // ── Dead stock: holding inventory but no recent sales ────────────────
+  const deadStock = uM(() => {
+    const recent = months.slice(-2);
+    const rows = products.filter(p => !p.isMTO && stockQty(p) > 0).map(p => {
+      const recentQty = (p.monthly||[]).filter(x=>recent.includes(x.month)).reduce((s,x)=>s+x.qty,0);
+      const stock = stockQty(p);
+      return { p, recentQty, stock, value: stock * (p.price||0) };
+    }).filter(r => r.recentQty === 0);
+    rows.sort((a,b)=>b.value-a.value);
+    return { list: rows.slice(0,12), count: rows.length,
+             totalValue: rows.reduce((s,r)=>s+r.value,0) };
+  }, [products, months]);
+
+  // ── ABC / Pareto classification by revenue ───────────────────────────
+  const abc = uM(() => {
+    const sorted = products.filter(p => !p.isMTO && (p.soldRev||0) > 0)
+                           .sort((a,b)=>(b.soldRev||0)-(a.soldRev||0));
+    const total = sorted.reduce((s,p)=>s+(p.soldRev||0),0);
+    let cum = 0;
+    const counts = { A:0, B:0, C:0 }, rev = { A:0, B:0, C:0 }, groups = { A:[], B:[], C:[] };
+    sorted.forEach(p => {
+      cum += p.soldRev||0;
+      const cumPct = total>0 ? cum/total : 0;
+      const cls = cumPct <= 0.8 ? 'A' : cumPct <= 0.95 ? 'B' : 'C';
+      counts[cls]++; rev[cls] += p.soldRev||0;
+      groups[cls].push(p);
+    });
+    return { total, counts, rev, groups, n: sorted.length };
+  }, [products]);
+
+  // Top sellers per category — period-aware (ตามช่วงเวลาที่เลือก)
   const topByCategory = uM(() => {
     const byCat = {};
-    products.filter(p => p.soldRev > 0 && !p.isMTO && p.cat && p.cat !== "ไม่มีรหัสสินค้า")
+    products.filter(p => !p.isMTO && p.cat && p.cat !== "ไม่มีรหัสสินค้า")
       .forEach(p => {
+        const v = periodInfo.perProduct(p);
+        if (v.rev <= 0 && v.qty <= 0) return;
         if (!byCat[p.cat]) byCat[p.cat] = [];
-        byCat[p.cat].push(p);
+        byCat[p.cat].push({ ...p, _pQty: v.qty, _pRev: v.rev });
       });
     return Object.entries(byCat)
       .map(([cat, ps]) => ({
         cat,
-        products: ps.sort((a,b) => b.soldRev - a.soldRev).slice(0, 10),
-        totalRev: ps.reduce((s,p) => s+p.soldRev, 0),
+        products: ps.sort((a,b) => b._pRev - a._pRev).slice(0, 10),
+        totalRev: ps.reduce((s,p) => s+p._pRev, 0),
       }))
       .sort((a,b) => b.totalRev - a.totalRev);
-  }, [products]);
+  }, [products, periodInfo]);
+
+  const [abcModalCls, setAbcModalCls] = uS(null);
 
   const [overviewModalP, setOverviewModalP] = uS(null);
 
@@ -836,8 +981,8 @@ function OverviewView({ data, range, setRange, role }) {
         </Card>
       )}
 
-      <Card title="Top 10 สินค้าขายดี (ทั้งปี · ไม่รวม MTO)"
-            sub={months.length > 0 ? `เรียงตามรายได้ · ${monthLabel(months[0]).split(" ")[0]}–${monthLabel(months[months.length-1])}` : "เรียงตามรายได้"}
+      <Card title={`Top 10 สินค้าขายดี · ${periodInfo.tag} (ไม่รวม MTO)`}
+            sub={`เรียงตามรายได้ · ${periodInfo.label}`}
             action={null}>
         <div style={{overflowX:"auto"}}>
           <table className="t">
@@ -886,8 +1031,8 @@ function OverviewView({ data, range, setRange, role }) {
                       {p.cat || "—"}
                     </span>
                   </td>
-                  <td className="num" style={{fontWeight:600}}>{fmtN(p.soldQty)}</td>
-                  {role === "owner" && <td className="num" style={{fontWeight:700,color:"var(--g-700)"}}>{fmtB(p.soldRev)}</td>}
+                  <td className="num" style={{fontWeight:600}}>{fmtN(p._pQty)}</td>
+                  {role === "owner" && <td className="num" style={{fontWeight:700,color:"var(--g-700)"}}>{fmtB(p._pRev)}</td>}
                   <td className="num" style={{color:stockQty(p)<=36?"var(--dang)":"var(--muted)"}}>{fmtN(stockQty(p))}</td>
                   <td style={{padding:"4px 10px"}}>
                     <div style={{width:100}}>
@@ -903,8 +1048,8 @@ function OverviewView({ data, range, setRange, role }) {
       </Card>
 
       {/* Top sellers per category */}
-      <Card title="🏆 Top 10 ขายดี · แยกตามหมวด"
-            sub="กดที่สินค้าเพื่อดูรูปและรายละเอียด"
+      <Card title={`🏆 Top 10 ขายดี · แยกตามหมวด · ${periodInfo.tag}`}
+            sub={`ขายดีในช่วง ${periodInfo.label} · กดที่สินค้าเพื่อดูรายละเอียด`}
             style={{marginTop:20}}>
         <div className="row" style={{gridTemplateColumns:"repeat(auto-fill, minmax(320px, 1fr))"}}>
           {topByCategory.map(g => {
@@ -967,11 +1112,11 @@ function OverviewView({ data, range, setRange, role }) {
                           {p.name}
                         </div>
                         <div style={{fontSize:10, color:"var(--muted)", marginTop:1}}>
-                          {fmtN(p.soldQty)} ชิ้น · คงเหลือ {fmtN(stockQty(p))}
+                          {fmtN(p._pQty)} ชิ้น · คงเหลือ {fmtN(stockQty(p))}
                         </div>
                       </div>
                       {role === "owner" && <div style={{fontSize:11.5, fontWeight:700, color:"var(--g-700)", flexShrink:0}}>
-                        {fmtB(p.soldRev)}
+                        {fmtB(p._pRev)}
                       </div>}
                     </button>
                   ))}
@@ -981,6 +1126,165 @@ function OverviewView({ data, range, setRange, role }) {
           })}
         </div>
       </Card>
+
+      {/* ── Movers: มาแรง / ตก (เดือนล่าสุด vs เดือนก่อน) ── */}
+      {(momMovers.risers.length > 0 || momMovers.fallers.length > 0) && (
+        <Card title="📊 สินค้ามาแรง · ตก"
+              sub={momMovers.cur ? `เทียบ ${monthLabel(momMovers.cur)} กับ ${monthLabel(momMovers.prev)}` : ""}
+              style={{marginTop:20}}>
+          <div className="row" style={{gridTemplateColumns:"repeat(auto-fit, minmax(300px, 1fr))"}}>
+            {[{ title:"📈 มาแรง", list:momMovers.risers, cc:"#1f7f44" },
+              { title:"📉 ตกลง",  list:momMovers.fallers, cc:"#c0392b" }].map(col => (
+              <div key={col.title} style={{border:"1px solid var(--bdr)",borderRadius:12,overflow:"hidden",background:"#fff"}}>
+                <div style={{padding:"10px 14px",fontWeight:700,fontSize:13,
+                             background:col.cc+"12",borderBottom:`2px solid ${col.cc}`}}>{col.title}</div>
+                <div>
+                  {col.list.length === 0
+                    ? <div style={{padding:"16px",fontSize:12,color:"var(--muted)"}}>—</div>
+                    : col.list.map(r => (
+                        <MiniRow key={r.p.sku} p={r.p} allCats={allCats}
+                          onClick={()=>setOverviewModalP(r.p)}
+                          secondary={`${fmtN(r.prevQty)} → ${fmtN(r.curQty)} ชิ้น`}
+                          right={<DeltaBadge pct={r.pct} isNew={r.isNew}/>}
+                          primary={role==="owner" ? `${r.delta>0?"+":""}${fmtB(r.delta)}` : null}/>
+                      ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* ── Velocity: สต๊อกพอขายกี่วัน ── */}
+      {(velocity.reorder.length > 0 || velocity.overstock.length > 0) && (
+        <Card title="⏱️ ความเร็วการขาย · สต๊อกพอกี่วัน"
+              sub={`อิงยอดขายเฉลี่ย ${velocity.n} เดือนล่าสุด`}
+              style={{marginTop:20}}>
+          <div className="row" style={{gridTemplateColumns:"repeat(auto-fit, minmax(300px, 1fr))"}}>
+            {[{ title:"🔴 ควรสั่งเพิ่ม (< 21 วัน)", list:velocity.reorder, cc:"#c0392b", warn:true },
+              { title:"🟡 สต๊อกค้างนาน (> 120 วัน)", list:velocity.overstock, cc:"#a07417", warn:false }].map(col => (
+              <div key={col.title} style={{border:"1px solid var(--bdr)",borderRadius:12,overflow:"hidden",background:"#fff"}}>
+                <div style={{padding:"10px 14px",fontWeight:700,fontSize:13,
+                             background:col.cc+"12",borderBottom:`2px solid ${col.cc}`}}>{col.title}</div>
+                <div style={{maxHeight:360,overflowY:"auto"}}>
+                  {col.list.length === 0
+                    ? <div style={{padding:"16px",fontSize:12,color:"var(--muted)"}}>—</div>
+                    : col.list.map(r => (
+                        <MiniRow key={r.p.sku} p={r.p} allCats={allCats}
+                          onClick={()=>setOverviewModalP(r.p)}
+                          secondary={`คงเหลือ ${fmtN(r.stock)} · ขาย ~${r.perDay>=1?Math.round(r.perDay):r.perDay.toFixed(1)}/วัน`}
+                          right={<span style={{fontSize:12,fontWeight:800,color:col.cc}}>
+                                   {isFinite(r.daysLeft) ? `${Math.round(r.daysLeft)} วัน` : "—"}
+                                 </span>}
+                          primary={null}/>
+                      ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* ── ABC / Pareto ── */}
+      {abc.n > 0 && (
+        <Card title="🎯 ABC · สินค้ากลุ่มไหนทำรายได้หลัก"
+              sub="A = 80% แรกของรายได้ · B = 80–95% · C = ที่เหลือ · กดที่กลุ่มเพื่อดูรายการสินค้า"
+              style={{marginTop:20}}>
+          <div className="row" style={{gridTemplateColumns:"repeat(auto-fit, minmax(180px, 1fr))"}}>
+            {[{ cls:"A", label:"กลุ่ม A · ดาวเด่น", cc:"#1f7f44", desc:"โฟกัส อย่าให้ขาด" },
+              { cls:"B", label:"กลุ่ม B · รอง",     cc:"#a07417", desc:"เฝ้าดูแนวโน้ม" },
+              { cls:"C", label:"กลุ่ม C · หาง",     cc:"#9aa0a6", desc:"ทบทวน/ลดสต๊อก" }].map(g => {
+              const share = abc.total>0 ? abc.rev[g.cls]/abc.total : 0;
+              return (
+                <button key={g.cls} onClick={()=>setAbcModalCls(g.cls)}
+                        style={{border:`1px solid ${g.cc}44`,borderRadius:12,padding:14,textAlign:"left",
+                                cursor:"pointer",fontFamily:"inherit",
+                                background:`linear-gradient(180deg, ${g.cc}10, #fff)`}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{width:30,height:30,borderRadius:8,background:g.cc,color:"#fff",
+                                  display:"flex",alignItems:"center",justifyContent:"center",
+                                  fontWeight:800,fontSize:15}}>{g.cls}</span>
+                    <div style={{fontSize:12,fontWeight:700,flex:1}}>{g.label}</div>
+                    <span style={{fontSize:11,color:g.cc,fontWeight:700}}>ดู ›</span>
+                  </div>
+                  <div style={{display:"flex",alignItems:"baseline",gap:6,marginTop:10}}>
+                    <span style={{fontSize:24,fontWeight:800,color:g.cc}}>{abc.counts[g.cls]}</span>
+                    <span style={{fontSize:11,color:"var(--muted)"}}>รายการ</span>
+                  </div>
+                  <div style={{height:6,borderRadius:4,background:g.cc+"22",marginTop:8,overflow:"hidden"}}>
+                    <div style={{height:"100%",width:`${Math.round(share*100)}%`,background:g.cc}}/>
+                  </div>
+                  <div style={{fontSize:10.5,color:"var(--muted)",marginTop:6}}>
+                    {role==="owner" ? `${fmtB(abc.rev[g.cls])} · ` : ""}{Math.round(share*100)}% ของรายได้
+                  </div>
+                  <div style={{fontSize:10.5,color:g.cc,fontWeight:600,marginTop:4}}>{g.desc}</div>
+                </button>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {/* ── ABC drilldown modal: รายการสินค้าในกลุ่ม ── */}
+      {abcModalCls && (() => {
+        const meta = { A:{label:"กลุ่ม A · ดาวเด่น",cc:"#1f7f44"},
+                       B:{label:"กลุ่ม B · รอง",cc:"#a07417"},
+                       C:{label:"กลุ่ม C · หาง",cc:"#9aa0a6"} }[abcModalCls];
+        const list = abc.groups[abcModalCls] || [];
+        return (
+          <div onClick={()=>setAbcModalCls(null)}
+               style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:1000,
+                       display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+            <div onClick={e=>e.stopPropagation()}
+                 style={{background:"#fff",borderRadius:"16px 16px 0 0",width:"100%",maxWidth:640,
+                         maxHeight:"82vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+              <div style={{padding:"14px 18px",borderBottom:`2px solid ${meta.cc}`,
+                           display:"flex",alignItems:"center",gap:10}}>
+                <span style={{width:30,height:30,borderRadius:8,background:meta.cc,color:"#fff",
+                              display:"flex",alignItems:"center",justifyContent:"center",
+                              fontWeight:800}}>{abcModalCls}</span>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:800,fontSize:14}}>{meta.label}</div>
+                  <div style={{fontSize:11,color:"var(--muted)"}}>{list.length} รายการ · เรียงตามรายได้ทั้งปี</div>
+                </div>
+                <button onClick={()=>setAbcModalCls(null)}
+                        style={{border:"none",background:"var(--g-50)",borderRadius:8,
+                                width:32,height:32,cursor:"pointer",fontSize:16}}>✕</button>
+              </div>
+              <div style={{overflowY:"auto"}}>
+                {list.map((p,i) => (
+                  <MiniRow key={p.sku} p={p} allCats={allCats}
+                    onClick={()=>{ setAbcModalCls(null); setOverviewModalP(p); }}
+                    secondary={`${p.cat || "—"} · ขายรวม ${fmtN(p.soldQty)} ชิ้น`}
+                    right={role==="owner"
+                      ? <span style={{fontSize:12,fontWeight:700,color:meta.cc}}>{fmtB(p.soldRev)}</span>
+                      : <span style={{fontSize:11,color:"var(--muted)"}}>#{i+1}</span>}
+                    primary={`#${i+1}`}/>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── Dead stock ── */}
+      {deadStock.count > 0 && (
+        <Card title="🧊 สต๊อกตาย · มีของแต่ไม่ขายเลย 2 เดือน"
+              sub={`${deadStock.count} รายการ${role==="owner" ? ` · เงินจม ~${fmtB(deadStock.totalValue)}` : ""}`}
+              style={{marginTop:20}}>
+          <div style={{border:"1px solid var(--bdr)",borderRadius:12,overflow:"hidden",background:"#fff",maxHeight:420,overflowY:"auto"}}>
+            {deadStock.list.map(r => (
+              <MiniRow key={r.p.sku} p={r.p} allCats={allCats}
+                onClick={()=>setOverviewModalP(r.p)}
+                secondary={`${r.p.cat || "—"} · คงเหลือ ${fmtN(r.stock)} ชิ้น`}
+                right={role==="owner"
+                  ? <span style={{fontSize:12,fontWeight:700,color:"#1f6f8b"}}>{fmtB(r.value)}</span>
+                  : <span style={{fontSize:11,color:"var(--muted)"}}>{fmtN(r.stock)} ชิ้น</span>}
+                primary={null}/>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {overviewModalP && <ProductModal p={overviewModalP} onClose={() => setOverviewModalP(null)} allCats={allCats}/>}
     </div>
@@ -1176,6 +1480,7 @@ function CategoryView({ data, role }) {
   const [showAll, setShowAll] = uS(false);
   const [colorFilter, setColorFilter] = uS(null);
   const [supplierFilter, setSupplierFilter] = uS(null);
+  const [deadFilter, setDeadFilter] = uS(null); // เกณฑ์ "สินค้าจมเกิน N เดือน" (null = ไม่กรอง)
   const [newStockFilter, setNewStockFilter] = uS(false);
   const [orderProduct, setOrderProduct] = uS(null);
   const [globalVendor, setGlobalVendor] = uS(null); // global supplier filter (all categories)
@@ -1254,10 +1559,11 @@ function CategoryView({ data, role }) {
       f = f.filter(p => (p.sku||"").toLowerCase().includes(q) || (p.name||"").toLowerCase().includes(q));
     }
     if (colorFilter) f = f.filter(p => p.color && p.color.name === colorFilter);
-    if (supplierFilter) f = f.filter(p => (p.lastSupplier || p.vendor) === supplierFilter);
+    if (supplierFilter) f = f.filter(p => (p.vendor || p.lastSupplier) === supplierFilter);
+    if (deadFilter)     f = f.filter(p => (p.deadMonths || 0) >= deadFilter);
     if (newStockFilter) f = f.filter(p => isNew45(p.lastStockInDate));
     return [...f].sort(sortFn);
-  }, [products, active, search, globalSearch, globalVendor, colorFilter, supplierFilter, newStockFilter, sortFn]);
+  }, [products, active, search, globalSearch, globalVendor, colorFilter, supplierFilter, deadFilter, newStockFilter, sortFn]);
 
   const visible = showAll ? filtered : filtered.slice(0, 24);
 
@@ -1308,7 +1614,7 @@ function CategoryView({ data, role }) {
   const supplierChips = uM(() => {
     const m = {};
     products.filter(p => p.cat === active).forEach(p => {
-      const s = p.lastSupplier || p.vendor;
+      const s = p.vendor || p.lastSupplier;
       if (s) m[s] = (m[s] || 0) + 1;
     });
     return Object.entries(m).map(([name, count]) => ({ name, count }))
@@ -1422,7 +1728,7 @@ function CategoryView({ data, role }) {
         <div style={{marginBottom:14}}>
           <select
             value={active}
-            onChange={e => { setActive(e.target.value); setColorFilter(null); setSupplierFilter(null); setNewStockFilter(false); setShowAll(false); }}
+            onChange={e => { setActive(e.target.value); setColorFilter(null); setSupplierFilter(null); setDeadFilter(null); setNewStockFilter(false); setShowAll(false); }}
             style={{
               width:"100%", padding:"10px 14px", borderRadius:12,
               border:"1.5px solid var(--bdr)", background:"#fafcf7",
@@ -1454,7 +1760,7 @@ function CategoryView({ data, role }) {
               const cc = catColor(c, allCats);
               const isMto = c === "Made to Order จัดแบบพิเศษ";
               return (
-                <button key={c} onClick={() => { setActive(c); setColorFilter(null); setSupplierFilter(null); setNewStockFilter(false); setShowAll(false); }}
+                <button key={c} onClick={() => { setActive(c); setColorFilter(null); setSupplierFilter(null); setDeadFilter(null); setNewStockFilter(false); setShowAll(false); }}
                         style={{
                           display:"flex",alignItems:"center",gap:8,width:"100%",
                           padding:"8px 12px",border:"none",cursor:"pointer",
@@ -1585,6 +1891,41 @@ function CategoryView({ data, role }) {
                         padding:"1px 6px", borderRadius:99,
                       }}>{newCount}</span>
                     </button>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* สินค้าจม (dead stock) filter — จาก tag "สินค้าจมเกิน N เดือน" */}
+            {(() => {
+              const inCat = products.filter(p => p.cat === active);
+              const buckets = [...new Set(inCat.map(p => p.deadMonths || 0).filter(m => m > 0))].sort((a,b)=>a-b);
+              if (buckets.length === 0) return null;
+              return (
+                <div className="filter-bar" style={{marginTop:10,paddingTop:10,borderTop:"1px dashed var(--bdr)"}}>
+                  <span className="filter-bar-label">⏳ สินค้าจม</span>
+                  <div className="filter-chips">
+                    <button className={`fchip${deadFilter===null?' active':''}`}
+                            onClick={() => setDeadFilter(null)}>ทั้งหมด</button>
+                    {buckets.map(mo => {
+                      const cnt = inCat.filter(p => (p.deadMonths || 0) >= mo).length;
+                      return (
+                        <button key={mo} className={`fchip${deadFilter===mo?' active':''}`}
+                                onClick={() => setDeadFilter(mo===deadFilter ? null : mo)}
+                                style={deadFilter===mo ? {
+                                  background:"#fff1f0", borderColor:"#ef4444",
+                                  color:"#b91c1c", fontWeight:700,
+                                } : {}}>
+                          จมเกิน {mo} เดือน+
+                          <span style={{
+                            marginLeft:6, fontSize:11, fontWeight:700,
+                            background: deadFilter===mo ? "#ef4444" : "var(--g-200)",
+                            color: deadFilter===mo ? "#fff" : "var(--g-800)",
+                            padding:"1px 6px", borderRadius:99,
+                          }}>{cnt}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               );
@@ -1788,7 +2129,8 @@ function OrderModal({ product, onClose }) {
     if (!sheetUrl) { setErr('ไม่พบ GOOGLE_SHEET_URL'); return; }
     if (qty < 1) { setErr('กรุณาระบุจำนวน'); return; }
     setLoading(true); setErr(null);
-    const url = `${sheetUrl}?action=order&sku=${encodeURIComponent(product.sku)}&qty=${qty}&orderType=${encodeURIComponent(orderType)}`;
+    const _sep = sheetUrl.includes('?') ? '&' : '?';
+    const url = `${sheetUrl}${_sep}action=order&sku=${encodeURIComponent(product.sku)}&qty=${qty}&orderType=${encodeURIComponent(orderType)}`;
     fetch(url)
       .then(r => r.json())
       .then(d => {
@@ -4503,7 +4845,7 @@ function QRScanModal({ onDetected, onClose }) {
           </div>
         )}
         <div style={{marginTop:10,fontSize:11,color:"var(--muted)",textAlign:"center"}}>
-          กดปิดเมื่อเสร็จ · สแกนได้ต่อเนื่อง · รองรับ iPhone/Android/PC
+          สแกนสำเร็จแล้วกล้องจะปิดอัตโนมัติ · รองรับ iPhone/Android/PC
         </div>
       </div>
     </div>
@@ -4655,6 +4997,7 @@ const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty
            display:"flex", flexDirection:"column", gap:10,
            transition:"border-color .2s, background .2s",
            boxShadow: hasVal ? "0 1px 3px rgba(0,0,0,.05)" : "none",
+           minWidth:0, overflow:"hidden",
          }}>
       <div style={{position:"relative"}}>
         {p.imageUrl ? (
@@ -4711,27 +5054,21 @@ const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty
         <div style={{fontSize:10,color:"var(--muted)",fontWeight:600,marginBottom:4}}>
           ✏️ เช็คจริงที่นับได้
         </div>
-        {/* ±qty buttons + input row */}
+        {/* ±qty buttons + input row (±5 removed — use CalcPad for large numbers) */}
         <div style={{display:"flex",alignItems:"center",gap:5}}>
-          <button onClick={() => adjustQty(-5)}
-            style={{minWidth:44,height:48,borderRadius:8,
-                    border:"1.5px solid var(--bdr)",background:"#fff",
-                    cursor:"pointer",fontSize:13,fontWeight:700,
-                    fontFamily:"inherit",color:"var(--dang)",
-                    opacity: numVal >= 5 ? 1 : 0.3}}>−5</button>
           <button onClick={() => adjustQty(-1)}
             style={{minWidth:44,height:48,borderRadius:8,
                     border:"1.5px solid var(--bdr)",background:"#fff",
-                    cursor:"pointer",fontSize:15,fontWeight:800,
+                    cursor:"pointer",fontSize:20,fontWeight:800,
                     fontFamily:"inherit",color:"var(--dang)",
                     opacity: numVal >= 1 ? 1 : 0.3}}>−</button>
-          <div style={{flex:1,position:"relative"}}>
+          <div style={{flex:1, minWidth:0, position:"relative"}}>
             <input type="number" min="0" inputMode="numeric"
               value={val ?? ""}
               onChange={e => onSetQty(p.sku, e.target.value)}
               placeholder="0"
               style={{
-                width:"100%", padding:"10px 6px", borderRadius:9,
+                width:"100%", minWidth:0, padding:"10px 6px", borderRadius:9,
                 fontSize:20, fontWeight:800, fontFamily:"inherit",
                 textAlign:"center", outline:"none",
                 border: hasVal
@@ -4753,13 +5090,8 @@ const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty
           <button onClick={() => adjustQty(1)}
             style={{minWidth:44,height:48,borderRadius:8,
                     border:"1.5px solid var(--bdr)",background:"#f0fdf4",
-                    cursor:"pointer",fontSize:15,fontWeight:800,
+                    cursor:"pointer",fontSize:20,fontWeight:800,
                     fontFamily:"inherit",color:"var(--g-700)"}}>+</button>
-          <button onClick={() => adjustQty(5)}
-            style={{minWidth:44,height:48,borderRadius:8,
-                    border:"1.5px solid var(--bdr)",background:"#f0fdf4",
-                    cursor:"pointer",fontSize:13,fontWeight:700,
-                    fontFamily:"inherit",color:"var(--g-700)"}}>+5</button>
         </div>
         {onOpenCalc && (
           <button onClick={() => onOpenCalc(p.sku, p.name || p.sku)}
@@ -4903,12 +5235,12 @@ function FrontStoreView({ data, role }) {
     return () => clearTimeout(t);
   }, [scrollToSku]);
 
-  const handleSave = async () => {
+  const handleSave = async (isAuto = false) => {
     const entries = [...touched]
       .filter(sku => checkedQtys[sku] !== "" && checkedQtys[sku] != null)
       .map(sku => ({ sku, qty: parseInt(checkedQtys[sku]) || 0 }));
     if (entries.length === 0) {
-      showToast("warn", "ยังไม่ได้กรอกจำนวน", "✏️");
+      if (!isAuto) showToast("warn", "ยังไม่ได้กรอกจำนวน", "✏️");
       return;
     }
     setSaving(true);
@@ -4919,10 +5251,20 @@ function FrontStoreView({ data, role }) {
       setTouched(new Set());
       setLastSavedTime(new Date());
       showToast("success", `บันทึก ${entries.length} รายการ`, "💾");
-    } else {
+    } else if (!isAuto) {
+      // auto-save ที่ fail จะเงียบ + retry เอง (FAB ยังแสดง "รอบันทึก") กัน toast เด้งซ้ำทุก 3 วิ
       showToast("error", "บันทึกไม่สำเร็จ", "❌");
     }
   };
+
+  // Auto-save with 3-second debounce
+  uE(() => {
+    if (touchedWithValue === 0 || saving) return;
+    const timer = setTimeout(() => {
+      handleSave(true);
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [checkedQtys, touched, saving, touchedWithValue]);
 
   const PAGE_SIZE = 20;
   const [page, setPage] = uS(0);
@@ -4962,10 +5304,10 @@ function FrontStoreView({ data, role }) {
             {mismatchCount > 0 && <span style={{marginLeft:8, color:"var(--dang)"}}>· ไม่ตรง {mismatchCount} รายการ</span>}
           </div>
         </div>
-        <ScanButton size={40} continuous onScan={handleScanDetected}
+        <ScanButton size={40} onScan={handleScanDetected}
           style={{border:"1.5px solid var(--g-300)", borderRadius:10, flexShrink:0}}/>
         <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2,flexShrink:0}}>
-          <button onClick={handleSave}
+          <button onClick={() => handleSave()}
             disabled={saving || touchedWithValue === 0}
             className="btn primary"
             style={{padding:"9px 18px", fontWeight:700,
@@ -5105,6 +5447,35 @@ function FrontStoreView({ data, role }) {
         )}
       </div>
     </div>
+
+    {/* Sticky FAB button (bottom-right) */}
+    {touchedWithValue > 0 && (
+      <div style={{
+        position: "fixed", bottom: 24, right: 24, zIndex: 999,
+        display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 12
+      }}>
+        <div style={{
+          padding: "12px 16px", borderRadius: 12,
+          background: saving ? "var(--warn)" : "var(--g-600)",
+          color: "#fff", fontSize: 13, fontWeight: 700,
+          boxShadow: "0 4px 12px rgba(0,0,0,.15)",
+          transition: "background .2s"
+        }}>
+          {saving ? <>⏳ กำลังบันทึก {touchedWithValue}...</> : <>✏️ รอบันทึก {touchedWithValue}</> }
+        </div>
+        {lastSavedTime && (
+          <div style={{
+            padding: "8px 12px", borderRadius: 8,
+            background: "#f0fdf4", color: "var(--g-700)",
+            fontSize: 11, fontWeight: 600,
+            boxShadow: "0 2px 8px rgba(0,0,0,.1)"
+          }}>
+            ✓ บันทึกแล้ว {lastSavedTime.getHours().toString().padStart(2,"0")}:{lastSavedTime.getMinutes().toString().padStart(2,"0")}
+          </div>
+        )}
+      </div>
+    )}
+
     {lightbox && <ImageLightbox url={lightbox.url} name={lightbox.name} onClose={() => setLightbox(null)}/>}
     <Toast toast={toast} onClose={hideToast}/>
     </>
@@ -5166,6 +5537,8 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
   const [addSku, setAddSku] = uS("");
   const [saving, setSaving] = uS(false);
   const [savedSkus, setSavedSkus] = uS(new Set());
+  const [lastSavedTime, setLastSavedTime] = uS(null);
+  const [lastSavedSnap, setLastSavedSnap] = uS(""); // snapshot กัน auto-save วนซ้ำ
   const [toast, showToast, hideToast] = useToast();
   // confirm modal state for delete
   const [delConfirm, setDelConfirm] = uS(null); // { sku, isLocal }
@@ -5228,26 +5601,40 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
     }
   };
 
-  const handleSave = async () => {
+  const handleSave = async (isAuto = false) => {
     const entries = Object.entries(checkedQtys)
       .filter(([, v]) => v !== "" && v !== null && v !== undefined)
       .map(([sku, qty]) => ({ sku, qty: parseInt(qty) || 0, isNew: newSkus.has(sku) }));
     if (entries.length === 0) {
-      showToast("warn", "ยังไม่ได้กรอกจำนวน", "✏️");
+      if (!isAuto) showToast("warn", "ยังไม่ได้กรอกจำนวน", "✏️");
       return;
     }
     setSaving(true);
+    const snap = JSON.stringify(checkedQtys);
     const result = await syncLockData(lockKey, entries);
     setSaving(false);
     if (result.success !== false) {
       const done = new Set([...savedSkus, ...entries.map(e => e.sku)]);
       setSavedSkus(done);
       setNewSkus(new Set());
+      setLastSavedTime(new Date());
+      setLastSavedSnap(snap); // กัน auto-save วนซ้ำ: ค่าที่ save ไปแล้วจะไม่ถูก save อีก
       showToast("success", `บันทึก ${entries.length} รายการ`, "💾");
-    } else {
+    } else if (!isAuto) {
       showToast("error", "บันทึกไม่สำเร็จ", "❌");
     }
   };
+
+  // Auto-save with 3-second debounce — save เฉพาะเมื่อค่าต่างจากที่ save ล่าสุด (กัน loop)
+  const touchedCount = Object.values(checkedQtys).filter(v => v !== "" && v != null).length;
+  uE(() => {
+    if (touchedCount === 0 || saving) return;
+    if (JSON.stringify(checkedQtys) === lastSavedSnap) return; // ไม่มีอะไรเปลี่ยน → ไม่ต้อง save
+    const timer = setTimeout(() => {
+      handleSave(true);
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [checkedQtys, saving, touchedCount, lastSavedSnap]);
 
   const allSkus = [...new Set([...data.skus, ...lockOv])].filter(s => !deletedSkus.has(s));
   const prods = allSkus.map(s => ({ sku: s, p: productMap[s], isLocal: ovSet.has(s) && !data.skus.includes(s) }));
@@ -5310,7 +5697,7 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
               background:"var(--g-700)", color:"#fff",
               cursor:"pointer", fontSize:13, fontWeight:700, fontFamily:"inherit",
             }}>เพิ่ม</button>
-            <ScanButton size={38} continuous onScan={handleScanDetected}
+            <ScanButton size={38} onScan={handleScanDetected}
               style={{border:"1.5px solid var(--g-300)"}}/>
           </div>
         )}
@@ -5409,6 +5796,34 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
       onConfirm={doDelete}
       onCancel={() => setDelConfirm(null)}
     />
+    {/* Sticky FAB button (bottom-right) */}
+    {touchedCount > 0 && (
+      <div style={{
+        position: "fixed", bottom: 24, right: 24, zIndex: 1099,
+        display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 12
+      }}>
+        <div style={{
+          padding: "12px 16px", borderRadius: 12,
+          background: saving ? "var(--warn)" : "var(--g-600)",
+          color: "#fff", fontSize: 13, fontWeight: 700,
+          boxShadow: "0 4px 12px rgba(0,0,0,.15)",
+          transition: "background .2s"
+        }}>
+          {saving ? <>⏳ กำลังบันทึก...</> : <>✏️ รอบันทึก {touchedCount}</> }
+        </div>
+        {lastSavedTime && (
+          <div style={{
+            padding: "8px 12px", borderRadius: 8,
+            background: "#f0fdf4", color: "var(--g-700)",
+            fontSize: 11, fontWeight: 600,
+            boxShadow: "0 2px 8px rgba(0,0,0,.1)"
+          }}>
+            ✓ บันทึกแล้ว {lastSavedTime.getHours().toString().padStart(2,"0")}:{lastSavedTime.getMinutes().toString().padStart(2,"0")}
+          </div>
+        )}
+      </div>
+    )}
+
     <Toast toast={toast} onClose={hideToast}/>
     </>
   );
@@ -5451,6 +5866,7 @@ function StockCountView({ data }) {
   const [saving, setSaving]                 = uS(false);
   const [confirming, setConfirming]         = uS(false);
   const [lastSavedTime, setLastSavedTime]   = uS(null);
+  const [lastSavedSnap, setLastSavedSnap]   = uS(""); // snapshot กัน auto-save วนซ้ำ
   const [toast, showToast, hideToast]       = useToast();
   const [calcPad, setCalcPad]               = uS(null); // {sku, val, name}
   const [stockSearch, setStockSearch]       = uS('');
@@ -5459,8 +5875,8 @@ function StockCountView({ data }) {
   const [selSupplier, setSelSupplier]       = uS(null);
   const [suppSearch, setSuppSearch]         = uS('');
 
-  uE(() => { setCheckedQtys({}); setSavedSkus(new Set()); setLastSavedTime(null); setStockSearch(''); }, [selLockKey]);
-  uE(() => { setCheckedQtys({}); setSavedSkus(new Set()); setLastSavedTime(null); setStockSearch(''); }, [selSupplier]);
+  uE(() => { setCheckedQtys({}); setSavedSkus(new Set()); setLastSavedTime(null); setLastSavedSnap(''); setStockSearch(''); }, [selLockKey]);
+  uE(() => { setCheckedQtys({}); setSavedSkus(new Set()); setLastSavedTime(null); setLastSavedSnap(''); setStockSearch(''); }, [selSupplier]);
 
   // Android back button: step 3 → 2 → 1
   uE(function(){
@@ -5591,22 +6007,40 @@ function StockCountView({ data }) {
     setCheckedQtys(prev => ({ ...prev, [sku]: String(Math.max(0, n + delta)) }));
   };
 
-  const handleSave = async () => {
+  const scTouchedCount = Object.values(checkedQtys).filter(v => v !== '' && v != null).length;
+
+  const handleSave = async (isAuto = false) => {
     const entries = Object.entries(checkedQtys)
       .filter(([, v]) => v !== '' && v != null)
       .map(([sku, qty]) => ({ sku, qty: parseInt(qty)||0 }));
-    if (!entries.length) { showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return; }
+    if (!entries.length) { if (!isAuto) showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return; }
     setSaving(true);
-    const result = await syncLockData(selLockKey, entries);
+    const snap = JSON.stringify(checkedQtys);
+    // ถ้านับตามล็อค → บันทึกตำแหน่งจัดเก็บด้วย; แล้ว commit ผลนับ → อัปเดตคลังจริง + push ZORT
+    if (selLockKey) await syncLockData(selLockKey, entries);
+    const result = await confirmStockCount(entries);
     setSaving(false);
     if (result.success !== false) {
       setSavedSkus(new Set(entries.map(e => e.sku)));
       setLastSavedTime(new Date());
-      showToast('success', 'บันทึกแล้ว ' + entries.length + ' รายการ', '💾');
-    } else {
+      setLastSavedSnap(snap); // กัน auto-save วนซ้ำ
+      showToast('success', 'บันทึก ' + entries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
+    } else if (!isAuto) {
       showToast('error', 'บันทึกไม่สำเร็จ', '❌');
     }
   };
+
+  // Auto-save with 3-second debounce — save เฉพาะเมื่อค่าต่างจากที่ save ล่าสุด (กัน loop)
+  // ทำงานทั้งโหมดเลือกตามล็อค (selLockKey) และตามซัพพลายเออร์ (selSupplier)
+  uE(() => {
+    if (scTouchedCount === 0 || saving) return;
+    if (!selLockKey && !selSupplier) return;
+    if (JSON.stringify(checkedQtys) === lastSavedSnap) return;
+    const timer = setTimeout(() => {
+      handleSave(true);
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [checkedQtys, saving, scTouchedCount, selLockKey, selSupplier, lastSavedSnap]);
 
   const handleConfirm = async () => {
     const entries = Object.entries(checkedQtys)
@@ -5614,12 +6048,14 @@ function StockCountView({ data }) {
       .map(([sku, qty]) => ({ sku, qty: parseInt(qty)||0 }));
     if (!entries.length) { showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return; }
     setConfirming(true);
-    await syncLockData(selLockKey, entries);
+    const snap = JSON.stringify(checkedQtys);
+    if (selLockKey) await syncLockData(selLockKey, entries);
     const result = await confirmStockCount(entries);
     setConfirming(false);
     if (result.success !== false) {
       setSavedSkus(new Set(entries.map(e => e.sku)));
       setLastSavedTime(new Date());
+      setLastSavedSnap(snap); // กัน auto-save commit ซ้ำหลังกดยืนยันเอง
       showToast('success', 'ยืนยันผลนับแล้ว ' + entries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
     } else {
       showToast('error', 'ยืนยันไม่สำเร็จ', '❌');
@@ -6308,7 +6744,7 @@ function StockCountView({ data }) {
           </div>
           <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}}>
             <div style={{display:'flex',gap:6}}>
-              <button onClick={handleSave} disabled={saving||confirming||filledCount===0}
+              <button onClick={() => handleSave()} disabled={saving||confirming||filledCount===0}
                 className="btn"
                 style={{padding:'10px 14px',fontWeight:700,fontSize:13,
                         border:'1.5px solid var(--bdr)',background:'#fff',
@@ -6524,6 +6960,34 @@ function StockCountView({ data }) {
           </div>
         )}
       </div>
+
+      {/* Sticky FAB button (bottom-right) */}
+      {scTouchedCount > 0 && selLockKey && (
+        <div style={{
+          position: "fixed", bottom: 24, right: 24, zIndex: 999,
+          display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 12
+        }}>
+          <div style={{
+            padding: "12px 16px", borderRadius: 12,
+            background: saving ? "var(--warn)" : "var(--g-600)",
+            color: "#fff", fontSize: 13, fontWeight: 700,
+            boxShadow: "0 4px 12px rgba(0,0,0,.15)",
+            transition: "background .2s"
+          }}>
+            {saving ? <>⏳ กำลังบันทึก...</> : <>✏️ รอบันทึก {scTouchedCount}</> }
+          </div>
+          {lastSavedTime && (
+            <div style={{
+              padding: "8px 12px", borderRadius: 8,
+              background: "#f0fdf4", color: "var(--g-700)",
+              fontSize: 11, fontWeight: 600,
+              boxShadow: "0 2px 8px rgba(0,0,0,.1)"
+            }}>
+              ✓ บันทึกแล้ว {lastSavedTime.getHours().toString().padStart(2,"0")}:{lastSavedTime.getMinutes().toString().padStart(2,"0")}
+            </div>
+          )}
+        </div>
+      )}
     </>
   );
 }
@@ -7039,18 +7503,63 @@ function OrderListView({ data, role }) {
 }
 
 // ─── โอนสต็อก คลัง(H) → หน้าร้าน(G) ───
-async function syncStockDeduct(sku, qty) {
+async function syncStockDeduct(sku, qty, name) {
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
   try {
     const res = await fetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ transferStock: true, sku, qty }),
+      body: JSON.stringify({ transferStock: true, sku, qty, name }),
     });
     const json = await res.json().catch(() => ({}));
     console.log("syncStockDeduct result:", json);
     return json;
   } catch(e) { console.warn("syncStockDeduct error:", e.message); return { success: false, error: e.message }; }
+}
+
+// ส่งหลายรายการในครั้งเดียว → Apps Script สร้าง ZORT Transfer เอกสารเดียว (เลขที่ auto)
+// items = [{ sku, qty, name }, ...]
+async function syncStockTransferBatch(items) {
+  if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
+  try {
+    const res = await fetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ transferStockBatch: true, list: items }),
+    });
+    const json = await res.json().catch(() => ({}));
+    console.log("syncStockTransferBatch result:", json);
+    return json;
+  } catch(e) { console.warn("syncStockTransferBatch error:", e.message); return { success: false, error: e.message }; }
+}
+
+// ลบหลาย order rows ในครั้งเดียว
+async function syncDeleteOrders(orderIds) {
+  if (!SHEET_DEPLOY_URL || !orderIds || !orderIds.length) return;
+  try {
+    await fetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ deleteOrders: true, orderIds }),
+    });
+  } catch(e) { console.warn("syncDeleteOrders error:", e.message); }
+}
+
+// สั่ง sync สต็อกจาก ZORT เดี๋ยวนี้ (ใช้เวลาสักครู่)
+async function syncZortNow() {
+  if (!SHEET_DEPLOY_URL) return { success: false };
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120000);
+    const res = await fetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ syncZortNow: true }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    return await res.json().catch(() => ({}));
+  } catch(e) { console.warn("syncZortNow error:", e.message); return { success: false, error: e.message }; }
 }
 
 // ─── เบิกวัตถุดิบ MTO — หักคลังหลายรายการ ───
@@ -7300,7 +7809,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const doneOrders = uM(() => enriched.filter(isDone), [enriched]);
 
   // แยกกลุ่ม: หิ้วก่อน, รถหลัง — ซ่อน shipped ที่ไม่ใช่ missed
-  const carryOrders = uM(() => doneOrders.filter(o => !shipped[o.id] || missed[o.id]), [doneOrders, shipped, missed]);
+  const carryOrders = uM(() => doneOrders.filter(o => o.carryMode === "carry").filter(o => !shipped[o.id] || missed[o.id]), [doneOrders, shipped, missed]);
   const truckOrders = uM(() => doneOrders.filter(o => o.carryMode !== "carry").filter(o => !shipped[o.id] || missed[o.id]), [doneOrders, shipped, missed]);
 
   const handlePrint = (order) => {
@@ -7320,15 +7829,15 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
     // ถ้าไม่ใช่ MTO → โอนสต็อกคลัง→หน้าร้าน / ถ้าเป็น MTO → เบิกวัตถุดิบ (ถ้ามี)
     if (!order.product?.isMTO) {
-      await syncStockDeduct(order.sku, qty);
+      await syncStockDeduct(order.sku, qty, order.name);
     } else if (matItems && matItems.length > 0) {
       await syncDeductMaterials(matItems);
     }
 
     try {
       await fetch(SHEET_DEPLOY_URL, {
-        method: "POST", mode: "no-cors",
-        headers: { "Content-Type": "application/json" },
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({ deleteOrder: true, orderId: order.id }),
       });
     } catch(e) { console.warn("deleteOrder failed:", e.message); }
@@ -7378,23 +7887,44 @@ function OrderSummaryView({ data, onPrintRequest }) {
     if (!ready || !ready.length) return;
     const nextShipped = { ...shipped };
     let nextSt = getOrdersState();
+
+    // โอนสต็อกที่ไม่ใช่ MTO เป็น "ก้อนเดียว" → ZORT สร้าง transfer เอกสารเดียว เลขที่ auto
+    const transferItems = ready
+      .filter(o => !o.product?.isMTO)
+      .map(o => ({ orderId: o.id, sku: o.sku, qty: o.preparedQty || o.orderQty || 0, name: o.name }))
+      .filter(it => it.sku && it.qty > 0);
+
+    let batchRes = { success: true };
+    if (transferItems.length) {
+      batchRes = await syncStockTransferBatch(transferItems);
+    }
+    const batchOk = batchRes && batchRes.success !== false;
+
+    // อัปเดตสถานะ order ราย item (เบา ไม่ยิง ZORT ซ้ำ)
     for (const order of ready) {
-      setSending(order.id);
-      const qty = order.preparedQty || order.orderQty || 0;
-      // MTO ไม่โอนสต็อก (ไม่มีสต็อกคงเหลือให้โอน) — เบิกวัตถุดิบต้องทำแบบทีละรายการ
-      if (!order.product?.isMTO) {
-        await syncStockDeduct(order.sku, qty);
-      }
       nextShipped[order.id] = Date.now();
       nextSt[order.id] = { ...(nextSt[order.id]||{}), status: "ส่งแล้ว" };
-      syncOrderUpdate(order, { shipped: true, status: "ส่งแล้ว" });
     }
     setSending(null);
     setShipped(nextShipped);
     localStorage.setItem(LS_SHIPPED_ORDERS, JSON.stringify(nextShipped));
     localStorage.setItem(LS_ORDERS_STATE, JSON.stringify(nextSt));
     setSt(nextSt);
-    showToast("success", `ส่ง ${ready.length} รายการแล้ว`, "📦");
+
+    // ลบ order rows ที่ส่งแล้วออกจาก Sheet ครั้งเดียว (สอดคล้องกับการส่งทีละชิ้น)
+    syncDeleteOrders(ready.map(o => o.id));
+
+    const zErr = batchRes && batchRes.data && batchRes.data.zortError;
+    const shortfalls = (batchRes && batchRes.data && batchRes.data.shortfalls) || [];
+    if (!batchOk || zErr) {
+      showToast("warn", `ส่ง ${ready.length} รายการ — แต่ ZORT มีปัญหา ${zErr || batchRes.error || ""}`, "⚠️");
+    } else if (shortfalls.length) {
+      const names = shortfalls.map(s => `${s.name||s.sku} (${s.transferred}/${s.requested})`).join(", ");
+      showToast("warn", `ส่งแล้ว แต่คลังไม่พอ ${shortfalls.length} รายการ: ${names}`, "⚠️", 7000);
+    } else {
+      const zNum = batchRes && batchRes.data && batchRes.data.zortNumber;
+      showToast("success", `ส่ง ${ready.length} รายการแล้ว${zNum ? ` (ZORT ${zNum})` : ""}`, "📦");
+    }
   };
 
   if (!orders.length) return (
@@ -7950,7 +8480,7 @@ ${labelsHTML}
           </div>
           <button className="btn primary" onClick={addItem}
                   style={{padding:"9px 18px",fontWeight:700}}>+ เพิ่ม</button>
-          <ScanButton size={40} continuous
+          <ScanButton size={40}
             style={{alignSelf:"flex-end",borderRadius:8}}
             onScan={sku => {
               if (!productMap[sku]) return;
@@ -8234,6 +8764,7 @@ function CalcPadModal({ open, name, initialVal, onConfirm, onClose }) {
 // ─────────────────────────────────────────────────────────────────────
 function MtoJobView({ data }) {
   const [jobs, setJobs] = uS(() => data.mtoJobs || []);
+  uE(() => { setJobs(data.mtoJobs || []); }, [data.mtoJobs]);
   const [view, setView] = uS("list"); // "list" | "create" | "detail"
   const [activeJob, setActiveJob] = uS(null);
   const [newJob, setNewJob] = uS({ jobName: "", customer: "", price: "", imageUrl: "" });
@@ -8273,7 +8804,7 @@ function MtoJobView({ data }) {
     try {
       const res = await fetch(SHEET_DEPLOY_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({
           createMtoJob: true,
           jobName: newJob.jobName.trim(),
@@ -8319,7 +8850,7 @@ function MtoJobView({ data }) {
         updated[existing] = { ...updated[existing], qty: updated[existing].qty + searchQty };
         return updated;
       }
-      return [...prev, { sku: product.sku, name: product.name, qty: searchQty, warehouse: searchWarehouse, returned: false }];
+      return [...prev, { sku: product.sku, name: product.name, qty: searchQty, warehouse: searchWarehouse, returnedQty: 0 }];
     });
     setSearch("");
     setSearchQty(1);
@@ -8329,8 +8860,20 @@ function MtoJobView({ data }) {
     setMaterials(prev => prev.filter((_, i) => i !== idx));
   };
 
-  const toggleReturned = (idx) => {
-    setMaterials(prev => prev.map((m, i) => i === idx ? { ...m, returned: !m.returned } : m));
+  const setMaterialQty = (idx, val) => {
+    setMaterials(prev => prev.map((m, i) => {
+      if (i !== idx) return m;
+      const qty = Math.max(1, Number(val) || 1);
+      return { ...m, qty, returnedQty: Math.min(Number(m.returnedQty) || 0, qty) };
+    }));
+  };
+
+  const setReturnedQty = (idx, val) => {
+    setMaterials(prev => prev.map((m, i) => {
+      if (i !== idx) return m;
+      const r = Math.max(0, Math.min(Number(val) || 0, Number(m.qty) || 0));
+      return { ...m, returnedQty: r };
+    }));
   };
 
   const handleCloseJob = async () => {
@@ -8341,7 +8884,7 @@ function MtoJobView({ data }) {
       const closed = nowStr();
       const res = await fetch(SHEET_DEPLOY_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({
           closeMtoJob: true,
           jobId: activeJob.jobId,
@@ -8373,7 +8916,7 @@ function MtoJobView({ data }) {
     try {
       const res = await fetch(SHEET_DEPLOY_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({ deleteMtoJob: true, jobId: job.jobId }),
       });
       const json = await res.json();
@@ -8557,27 +9100,35 @@ function MtoJobView({ data }) {
           <div style={{ background: "#fff", border: "1.5px solid var(--bdr)", borderRadius: 12, padding: "16px", marginBottom: 16 }}>
             <div style={{ fontSize: 14, fontWeight: 700, color: "var(--g-800)", marginBottom: 12 }}>เพิ่มวัตถุดิบที่ใช้</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <div style={{ position: "relative" }}>
-                <input
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                  placeholder="ค้นหาสินค้า (SKU หรือชื่อ)"
-                  style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 14, boxSizing: "border-box" }}
-                />
-                {searchResults.length > 0 && (
-                  <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1.5px solid var(--bdr)", borderRadius: 8, zIndex: 100, boxShadow: "0 4px 16px rgba(0,0,0,.12)" }}>
-                    {searchResults.map(p => (
-                      <div key={p.sku} onClick={() => addMaterial(p)}
-                        style={{ padding: "10px 12px", cursor: "pointer", borderBottom: "1px solid var(--bdr)", fontSize: 13 }}
-                        onMouseEnter={e => e.currentTarget.style.background = "var(--g-50)"}
-                        onMouseLeave={e => e.currentTarget.style.background = "#fff"}
-                      >
-                        <span style={{ fontWeight: 600 }}>{p.sku}</span>
-                        <span style={{ color: "var(--muted)", marginLeft: 8 }}>{p.name}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
+              <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                <div style={{ position: "relative", flex: 1 }}>
+                  <input
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                    placeholder="ค้นหาสินค้า (SKU หรือชื่อ)"
+                    style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 14, boxSizing: "border-box" }}
+                  />
+                  {searchResults.length > 0 && (
+                    <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1.5px solid var(--bdr)", borderRadius: 8, zIndex: 100, boxShadow: "0 4px 16px rgba(0,0,0,.12)" }}>
+                      {searchResults.map(p => (
+                        <div key={p.sku} onClick={() => addMaterial(p)}
+                          style={{ padding: "10px 12px", cursor: "pointer", borderBottom: "1px solid var(--bdr)", fontSize: 13 }}
+                          onMouseEnter={e => e.currentTarget.style.background = "var(--g-50)"}
+                          onMouseLeave={e => e.currentTarget.style.background = "#fff"}
+                        >
+                          <span style={{ fontWeight: 600 }}>{p.sku}</span>
+                          <span style={{ color: "var(--muted)", marginLeft: 8 }}>{p.name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <ScanButton size={42} onScan={sku => {
+                  const code = String(sku || "").trim().toUpperCase();
+                  const found = products.find(p => (p.sku || "").trim().toUpperCase() === code);
+                  if (found) { addMaterial(found); showToast("success", `เพิ่ม ${found.sku}`); }
+                  else { setSearch(code); showToast("warn", `ไม่พบ SKU: ${code}`); }
+                }}/>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
                 <input
@@ -8604,29 +9155,46 @@ function MtoJobView({ data }) {
             <div style={{ color: "var(--muted)", fontSize: 13, textAlign: "center", padding: "20px 0" }}>ยังไม่มีวัตถุดิบ</div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {materials.map((m, idx) => (
-                <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", background: "var(--g-50)", borderRadius: 8 }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
+              {materials.map((m, idx) => {
+                const ret = Number(m.returnedQty) || 0;
+                const net = Math.max(0, (Number(m.qty) || 0) - ret);
+                return (
+                <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", background: "var(--g-50)", borderRadius: 8, flexWrap: "wrap" }}>
+                  <div style={{ flex: 1, minWidth: 100 }}>
                     <div style={{ fontWeight: 600, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.sku}</div>
                     <div style={{ fontSize: 11, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</div>
                   </div>
-                  <div style={{ fontSize: 12, color: "var(--g-700)", fontWeight: 700, whiteSpace: "nowrap" }}>×{m.qty}</div>
                   <div style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>{m.warehouse === "frontstore" ? "หน้าร้าน" : "คลัง"}</div>
                   {isOpen ? (
                     <>
-                      <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, cursor: "pointer", whiteSpace: "nowrap" }}>
-                        <input type="checkbox" checked={m.returned} onChange={() => toggleReturned(idx)} />
-                        คืนแล้ว
+                      <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, fontSize: 10, color: "var(--muted)" }}>
+                        เบิก
+                        <input type="number" min={1} value={m.qty} onChange={e => setMaterialQty(idx, e.target.value)}
+                          style={{ width: 52, padding: "5px 6px", borderRadius: 6, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 13, textAlign: "center" }} />
                       </label>
+                      <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, fontSize: 10, color: "#c0392b" }}>
+                        คืน
+                        <input type="number" min={0} max={m.qty} value={ret} onChange={e => setReturnedQty(idx, e.target.value)}
+                          style={{ width: 52, padding: "5px 6px", borderRadius: 6, border: "1.5px solid #f0b8b0", fontFamily: "inherit", fontSize: 13, textAlign: "center", color: "#c0392b" }} />
+                      </label>
+                      <div style={{ fontSize: 11, color: "var(--g-700)", fontWeight: 700, whiteSpace: "nowrap", minWidth: 42, textAlign: "center" }}>
+                        ตัด {net}
+                      </div>
                       <button onClick={() => removeMaterial(idx)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--dang)", fontSize: 16, padding: "0 4px" }}>✕</button>
                     </>
                   ) : (
-                    <div style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: m.returned ? "#e8f5e9" : "#ffebee", color: m.returned ? "#1b5e20" : "#c62828", fontWeight: 600, whiteSpace: "nowrap" }}>
-                      {m.returned ? "คืนแล้ว" : "ไม่คืน"}
-                    </div>
+                    <>
+                      <div style={{ fontSize: 12, color: "var(--g-700)", fontWeight: 700, whiteSpace: "nowrap" }}>
+                        เบิก {m.qty}{ret > 0 ? ` · คืน ${ret}` : ""}
+                      </div>
+                      <div style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: "#e8f5e9", color: "#1b5e20", fontWeight: 700, whiteSpace: "nowrap" }}>
+                        ตัด {net}
+                      </div>
+                    </>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
