@@ -202,6 +202,10 @@ function doPost(e) {
       syncZortSales();
       return ok({ synced: true });
     }
+    if (data.syncZortPurchasesNow) {
+      syncZortPurchases();
+      return ok({ synced: true });
+    }
 
     // ─── MTO Jobs ───
     if (data.createMtoJob)  return createMtoJob(ss, data);
@@ -1390,6 +1394,142 @@ function exploreZortSetup() {
   Logger.log("════════ 2) field สินค้า (หารูปภาพ) ════════");
   debugZortProduct();
   Logger.log("════════ เสร็จ — copy log ทั้งหมดส่งกลับมา ════════");
+}
+
+// ───────────────────────────────────────────────────────────
+// SECTION 4b: ZORT Purchase Order Sync
+// ───────────────────────────────────────────────────────────
+
+// วิ่งครั้งแรกเพื่อดู fields จริงๆ ของ ZORT PurchaseReceive API
+function exploreZortPurchases() {
+  const tz = "Asia/Bangkok";
+  const today = new Date();
+  const from  = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const fromStr = Utilities.formatDate(from, tz, "yyyy-MM-dd");
+  const toStr   = Utilities.formatDate(today, tz, "yyyy-MM-dd");
+
+  const endpoints = [
+    `${ZORT_BASE}/PurchaseReceive/GetPurchaseReceives?page=1&limit=3&fromdate=${fromStr}&todate=${toStr}`,
+    `${ZORT_BASE}/PurchaseOrder/GetPurchaseOrders?page=1&limit=3&fromdate=${fromStr}&todate=${toStr}`,
+  ];
+  for (const url of endpoints) {
+    Logger.log("── GET " + url);
+    try {
+      const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+      Logger.log("HTTP " + res.getResponseCode());
+      const txt = res.getContentText();
+      Logger.log(txt.substring(0, 2000));
+    } catch (e) {
+      Logger.log("ERROR: " + e);
+    }
+  }
+  Logger.log("════ เสร็จ ════");
+}
+
+// ดึง PurchaseReceive จาก ZORT แบบ paginated
+function fetchZortPurchasesPaged_(fromStr, toStr) {
+  const all = [], limit = 200, MAX_PAGES = 60;
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const url = `${ZORT_BASE}/PurchaseReceive/GetPurchaseReceives?page=${page}&limit=${limit}&fromdate=${fromStr}&todate=${toStr}`;
+    const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) break;
+    const data = JSON.parse(res.getContentText());
+    const list = data.list || data.purchasereceives || data.data || [];
+    if (!Array.isArray(list) || list.length === 0) break;
+    all.push(...list);
+    if (list.length < limit) break;
+  }
+  return all;
+}
+
+// เขียน PurchaseReceive ลง sheet รายการซื้อสินค้า
+// คอลัมน์ที่ readPurchases_() อ่าน (0-indexed):
+//   col 1=type, 2=poNum, 4=supplier, 11=date, 19=status, 20=warehouse, 24=sku, 25=name, 26=qty, 27=unitPrice
+function syncZortPurchases() {
+  const ss  = SpreadsheetApp.openById(SHEET_ID);
+  const sh  = ss.getSheetByName("รายการซื้อสินค้า");
+  if (!sh) { Logger.log("❌ ไม่พบ sheet รายการซื้อสินค้า"); return; }
+
+  const tz    = "Asia/Bangkok";
+  const today = new Date();
+  const DAYS  = 365;
+  const from  = new Date(today.getTime() - DAYS * 24 * 60 * 60 * 1000);
+  const fromStr = Utilities.formatDate(from, tz, "yyyy-MM-dd");
+  const toStr   = Utilities.formatDate(today, tz, "yyyy-MM-dd");
+
+  const raw = fetchZortPurchasesPaged_(fromStr, toStr);
+  Logger.log("ZORT PurchaseReceive fetched: " + raw.length);
+  if (raw.length === 0) { Logger.log("⚠️ ไม่มีข้อมูล — ไม่เขียนทับ"); return; }
+
+  // ขยาย line items ออกมา
+  const dataRows = [];
+  for (const po of raw) {
+    const poNum    = String(po.documentnumber || po.code || po.purchasereceivecode || "").trim();
+    const supplier = String(po.suppliername   || po.supplier || "").trim();
+    const dateStr  = String(po.receiveddateString || po.documentdateString ||
+                            (po.receiveddate ? String(po.receiveddate).substring(0, 10) : "") ||
+                            (po.documentdate ? String(po.documentdate).substring(0, 10) : "") || "").trim();
+    const status   = String(po.status         || "").trim();
+    const wh       = String(po.warehousename  || po.warehouse || "").trim();
+    const type     = "รับสินค้า";
+
+    const items = Array.isArray(po.list) ? po.list :
+                  Array.isArray(po.items) ? po.items :
+                  Array.isArray(po.productlist) ? po.productlist : [];
+
+    if (items.length === 0) {
+      // PO ไม่มี line item — เขียน 1 แถวว่าง
+      const row = new Array(28).fill("");
+      row[1]  = type;
+      row[2]  = poNum;
+      row[4]  = supplier;
+      row[11] = dateStr;
+      row[19] = status;
+      row[20] = wh;
+      dataRows.push(row);
+    } else {
+      for (const item of items) {
+        const sku  = String(item.sku || item.productcode || "").trim().toUpperCase();
+        const name = String(item.name || item.productname || "").trim();
+        const qty  = Number(item.number || item.quantity || item.qty || 0);
+        const price= Number(item.unitprice || item.price || item.cost || 0);
+
+        const row = new Array(28).fill("");
+        row[1]  = type;
+        row[2]  = poNum;
+        row[4]  = supplier;
+        row[11] = dateStr;
+        row[19] = status;
+        row[20] = wh;
+        row[24] = sku;
+        row[25] = name;
+        row[26] = qty;
+        row[27] = price;
+        dataRows.push(row);
+      }
+    }
+  }
+
+  Logger.log("แถวทั้งหมด: " + dataRows.length);
+
+  // รักษา header 2 แถวแรก แล้วเขียนทับข้อมูลแถวที่ 3 เป็นต้นไป
+  const lastRow = sh.getLastRow();
+  if (lastRow > 2) sh.getRange(3, 1, lastRow - 2, sh.getLastColumn()).clearContent();
+
+  if (dataRows.length > 0) {
+    sh.getRange(3, 1, dataRows.length, 28).setValues(dataRows);
+  }
+
+  invalidateCache_();
+  Logger.log("✅ syncZortPurchases เสร็จ: " + dataRows.length + " แถว");
+}
+
+function setupZortPurchasesTrigger() {
+  ScriptApp.getProjectTriggers().forEach(t => {
+    if (t.getHandlerFunction() === "syncZortPurchases") ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger("syncZortPurchases").timeBased().everyHours(6).create();
+  Logger.log("✅ ตั้ง trigger: syncZortPurchases ทุก 6 ชั่วโมง");
 }
 
 // ───────────────────────────────────────────────────────────
