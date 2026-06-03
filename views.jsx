@@ -7893,7 +7893,7 @@ function ShipmentRow({ s, role, productMap, onConfirm }) {
   const [recvQty, setRecvQty] = uS(() => s.receivedQty != null ? s.receivedQty : (s.qty || 0));
   const product = productMap ? productMap[s.sku] : null;
   const imgSrc = s.image || product?.imageUrl || null;
-  const canConfirm = role === "sale" || role === "frontstore";
+  const canConfirm = role === "saler" || role === "frontstore";
 
   const handleConfirm = () => {
     const n = Math.max(0, parseInt(recvQty) || 0);
