@@ -72,6 +72,7 @@ const SHEET_PRODUCTS  = "อัพเดทจำนวนสินค้า";
 const SHEET_ORDERS    = "ลำดับที่สั่งสินค้า";
 const SHEET_LOCKS     = "ตำแหน่งจัดเก็บ";
 const SHEET_TRANSFERS = "รายการโอนสินค้า";
+const SHEET_SHIP_ARCHIVE = "ประวัติรับสินค้า";  // เก็บรายการรับครบที่ archive ออกจากชีตหลัก
 const SHEET_AUDIT     = "Audit Log";
 const WH_NAME_SAI5    = "คลังสินค้าสาย5";
 const WH_NAME_FS      = "ดูเหมือนจริง";
@@ -2591,6 +2592,48 @@ function readShipments_() {
     });
   }
   return list;
+}
+
+// ย้ายรายการที่ "รับครบ" แล้ว ออกจากชีต "รายการโอนสินค้า" → เก็บในชีตประวัติ
+// เพื่อไม่ให้ชีตหลัก/แท็บส่งแล้วบวม ส่วนที่ "รับไม่ครบ" หรือยังไม่ยืนยัน จะคาไว้เสมอ
+// ⚠️ ตั้ง trigger รายวัน (เช่น ตี 3) + รันเองครั้งแรกได้ (ชื่อไม่มี _ ต่อท้าย → โผล่ใน dropdown)
+function archiveReceivedShipments() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_TRANSFERS);
+  if (!sheet) { Logger.log("archiveReceivedShipments: ไม่พบชีต " + SHEET_TRANSFERS); return; }
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) { Logger.log("archiveReceivedShipments: lock ไม่ได้"); return; }
+
+  try {
+    const data = sheet.getDataRange().getValues();
+    if (data.length < 3) return;  // มีแค่หัวตาราง 2 แถว
+
+    // หาแถวที่รับครบแล้ว (ข้อมูลเริ่ม index 2 = sheet row 3)
+    const toArchive = [];  // { rowNum, values }
+    for (let i = 2; i < data.length; i++) {
+      const sku    = String(data[i][COL_SHIP_SKU - 1] || "").trim();
+      const status = String(data[i][COL_SHIP_RECVSTATUS - 1] || "").trim();
+      if (sku && status === "รับครบ") toArchive.push({ rowNum: i + 1, values: data[i] });
+    }
+    if (!toArchive.length) { Logger.log("archiveReceivedShipments: ไม่มีรายการรับครบ"); return; }
+
+    // เขียนลงชีตประวัติ (สร้างถ้ายังไม่มี)
+    let arch = ss.getSheetByName(SHEET_SHIP_ARCHIVE);
+    if (!arch) { arch = ss.insertSheet(SHEET_SHIP_ARCHIVE); arch.appendRow(SHIP_HEADERS); }
+    const rows = toArchive.map(t => t.values);
+    arch.getRange(arch.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+
+    // ลบออกจากชีตหลัก — ลบจากแถวล่างขึ้นบน กัน index เลื่อน
+    toArchive.sort((a, b) => b.rowNum - a.rowNum);
+    toArchive.forEach(t => sheet.deleteRow(t.rowNum));
+
+    SpreadsheetApp.flush();
+    invalidateCache_();
+    Logger.log("archiveReceivedShipments: ย้าย " + toArchive.length + " รายการเข้า " + SHEET_SHIP_ARCHIVE);
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function readPurchases_() {
