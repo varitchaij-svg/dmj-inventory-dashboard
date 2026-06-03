@@ -7638,6 +7638,17 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
                 📍 {locStr}
               </div>
             )}
+            {/* ตำแหน่งคลัง (lock) chip — กดเปิดแผนที่คลัง */}
+            {primaryLock && (
+              <button onClick={() => setMapOpen(true)} style={{
+                marginTop:4,display:"inline-flex",alignItems:"center",gap:4,
+                background:"#f0fdf4",borderRadius:6,padding:"3px 9px",fontSize:11,
+                color:"#166534",fontWeight:700,border:"1.5px solid #86efac",cursor:"pointer",
+                fontFamily:"inherit",
+              }}>
+                📍 {lockKeys.join(", ")}
+              </button>
+            )}
           </div>
         </div>
 
@@ -7781,6 +7792,32 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
           </div>
         </div>
       )}
+      {/* Warehouse map modal — เปิดเมื่อกด chip ตำแหน่ง */}
+      {mapOpen && primaryLock && (
+        <WarehouseMapModal
+          open={mapOpen}
+          onClose={() => setMapOpen(false)}
+          highlightKey={primaryLock}
+          lockData={(() => {
+            const storage = storageData || {};
+            const plm = storage.productLockMap  || {};
+            const vlm = storage.verifiedLockMap || {};
+            const merged = {};
+            Object.keys(plm).forEach(k => {
+              merged[k] = { skus: plm[k], verified: false, entries: [], mismatch: false };
+            });
+            Object.keys(vlm).forEach(k => {
+              const vSkus = vlm[k].map(v => v.sku);
+              const allSkus = merged[k] ? [...new Set([...merged[k].skus, ...vSkus])] : vSkus;
+              merged[k] = { skus: allSkus, verified: true, mismatch: false, entries: vlm[k] };
+            });
+            return merged;
+          })()}
+          shelves={(storageData || {}).shelves || { A: 10, B: 10, locksPerShelf: 15 }}
+          productName={order.name}
+          sku={order.sku}
+        />
+      )}
       <Toast toast={toast} onClose={hideToast}/>
     </>
   );
@@ -7811,6 +7848,23 @@ function OrderListView({ data, role }) {
   const [filter, setFilter] = uS("all");
   const [st, setSt] = uS(getOrdersState);
   const productMap = uM(() => { const m={}; (data.products||[]).forEach(p=>m[p.sku]=p); return m; }, [data.products]);
+
+  // สร้าง skuToLocks จาก storage data (productLockMap + verifiedLockMap)
+  const skuLocks = uM(() => {
+    const storage = data.storage || {};
+    const plm = storage.productLockMap  || {};
+    const vlm = storage.verifiedLockMap || {};
+    const m = {};
+    const addEntry = (lk, sku) => {
+      const k = (sku||'').trim().toUpperCase();
+      if (!k) return;
+      if (!m[k]) m[k] = [];
+      if (!m[k].includes(lk)) m[k].push(lk);
+    };
+    Object.entries(plm).forEach(([lk, skus]) => (skus||[]).forEach(s => addEntry(lk, s)));
+    Object.entries(vlm).forEach(([lk, entries]) => (entries||[]).forEach(e => addEntry(lk, e.sku)));
+    return m;
+  }, [data.storage]);
 
   const enriched = uM(() => {
     const DONE_ST = new Set(["สำเร็จ","completed","ส่งแล้ว","shipped"]);
@@ -7878,7 +7932,7 @@ function OrderListView({ data, role }) {
           <Empty title="ไม่มีรายการใน filter นี้" sub="ลองเลือก filter อื่น"/>
         </div>
       ) : (
-        filtered.map(order => <OrderItemRow key={order.id} order={order} onPatch={patch} productMap={productMap} role={role}/>)
+        filtered.map(order => <OrderItemRow key={order.id} order={order} onPatch={patch} productMap={productMap} role={role} skuLocks={skuLocks} storageData={data.storage}/>)
       )}
     </div>
   );
@@ -8155,6 +8209,8 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const [materialDraw, setMaterialDraw]  = uS(null); // { order, afterConfirm: fn }
   const [resetConfirm, setResetConfirm]  = uS(false); // ยืนยันรีเซ็ตสถานะการส่ง
   const isOnline = useOnlineStatus(); // ตรวจสอบการเชื่อมต่อก่อนส่งสถานะ
+  // warehouse map modal state — shared สำหรับ card ทุกใบในหน้านี้
+  const [mapModal, setMapModal] = uS(null); // { lockKey, productName, sku } | null
 
   const productMap = uM(() => {
     const m = {};
@@ -8166,6 +8222,39 @@ function OrderSummaryView({ data, onPrintRequest }) {
     });
     return m;
   }, [products]);
+
+  // skuLocks และ lockDataForModal สำหรับ WarehouseMapModal
+  const skuLocks = uM(() => {
+    const storage = data.storage || {};
+    const plm = storage.productLockMap  || {};
+    const vlm = storage.verifiedLockMap || {};
+    const m = {};
+    const add = (lk, sku) => {
+      const k = (sku||'').trim().toUpperCase();
+      if (!k) return;
+      if (!m[k]) m[k] = [];
+      if (!m[k].includes(lk)) m[k].push(lk);
+    };
+    Object.entries(plm).forEach(([lk, skus]) => (skus||[]).forEach(s => add(lk, s)));
+    Object.entries(vlm).forEach(([lk, entries]) => (entries||[]).forEach(e => add(lk, e.sku)));
+    return m;
+  }, [data.storage]);
+
+  const lockDataForModal = uM(() => {
+    const storage = data.storage || {};
+    const plm = storage.productLockMap  || {};
+    const vlm = storage.verifiedLockMap || {};
+    const merged = {};
+    Object.keys(plm).forEach(k => {
+      merged[k] = { skus: plm[k], verified: false, entries: [], mismatch: false };
+    });
+    Object.keys(vlm).forEach(k => {
+      const vSkus = vlm[k].map(v => v.sku);
+      const allSkus = merged[k] ? [...new Set([...merged[k].skus, ...vSkus])] : vSkus;
+      merged[k] = { skus: allSkus, verified: true, mismatch: false, entries: vlm[k] };
+    });
+    return merged;
+  }, [data.storage]);
 
   const enriched = uM(() => {
     const DONE_ST = new Set(["สำเร็จ","completed","ส่งแล้ว","shipped"]);
@@ -8416,6 +8505,23 @@ function OrderSummaryView({ data, onPrintRequest }) {
                 <div>
                   <div style={{fontSize:10,color:"var(--muted)"}}>{order.sku} · {order.date}</div>
                   <div style={{fontSize:13,fontWeight:600,lineHeight:1.3}}>{order.name}</div>
+                  {/* chip ตำแหน่งคลัง — กดเปิดแผนที่คลัง */}
+                  {(() => {
+                    const sk = (order.sku||'').trim().toUpperCase();
+                    const lks = skuLocks[sk] || skuLocks[order.sku] || [];
+                    if (!lks.length) return null;
+                    return (
+                      <button onClick={() => setMapModal({ lockKey: lks[0], productName: order.name, sku: order.sku })}
+                        style={{
+                          marginTop:4,display:"inline-flex",alignItems:"center",gap:3,
+                          background:"#f0fdf4",borderRadius:6,padding:"2px 8px",fontSize:10,
+                          color:"#166534",fontWeight:700,border:"1.5px solid #86efac",
+                          cursor:"pointer",fontFamily:"inherit",
+                        }}>
+                        📍 {lks.join(", ")}
+                      </button>
+                    );
+                  })()}
                 </div>
 
                 {/* Qty pills */}
@@ -8600,6 +8706,18 @@ function OrderSummaryView({ data, onPrintRequest }) {
         onSkip={materialDraw?.afterSkip || (() => {})}
         onCancel={() => setMaterialDraw(null)}
       />
+      {/* Warehouse map modal — เปิดเมื่อกด chip ตำแหน่งคลัง */}
+      {mapModal && (
+        <WarehouseMapModal
+          open={!!mapModal}
+          onClose={() => setMapModal(null)}
+          highlightKey={mapModal.lockKey}
+          lockData={lockDataForModal}
+          shelves={(data.storage || {}).shelves || { A: 10, B: 10, locksPerShelf: 15 }}
+          productName={mapModal.productName}
+          sku={mapModal.sku}
+        />
+      )}
       <Toast toast={toast} onClose={hideToast}/>
     </div>
   );
@@ -9869,4 +9987,4 @@ function DeadStockView() {
 
 // ────────────── 🛒 สั่งซื้อ (Purchase/Reorder) ──────────────
 
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView, DeadStockView, Pagination });
+Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView, DeadStockView, Pagination, WarehouseMapModal });
