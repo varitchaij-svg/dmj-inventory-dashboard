@@ -7571,10 +7571,25 @@ async function syncOrderUpdate(order, updates) {
   } catch(e) { console.warn("syncOrderUpdate failed:", e.message); }
 }
 
+// ยืนยันรับของจากชีต "รายการโอนสินค้า" (sync ข้ามเครื่อง)
+async function syncShipmentReceive(rowId, sku, receivedQty) {
+  if (!SHEET_DEPLOY_URL) return { success:false };
+  try {
+    const res = await fetch(SHEET_DEPLOY_URL, {
+      method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"},
+      body: JSON.stringify({
+        confirmShipmentReceive:true, rowId, sku, receivedQty,
+        actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
+      }),
+    });
+    return await res.json().catch(()=>({success:false}));
+  } catch(e){ return { success:false, error:e.message }; }
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // ORDER LIST VIEW
 // ─────────────────────────────────────────────────────────────────────
-function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData, showReceiveMode }) {
+function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData }) {
   const isPending = !order.status || order.status === "รอ" || order.status === "pending";
   const [prepQty, setPrepQty] = uS(() => order.preparedQty > 0 ? order.preparedQty : (order.orderQty || 0));
   const [imgOpen, setImgOpen] = uS(false);
@@ -7583,15 +7598,6 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData,
   uE(() => {
     setPrepQty(prev => prev === 0 ? (order.orderQty || 0) : prev);
   }, [order.orderQty]);
-
-  const [recvQty, setRecvQty] = uS(() => order.receivedQty != null ? order.receivedQty : (order.preparedQty || order.orderQty || 0));
-
-  const confirmReceive = () => {
-    const n = Math.max(0, parseInt(recvQty) || 0);
-    onPatch(order.id, { receivedQty: n, receivedAt: new Date().toISOString() });
-    syncOrderUpdate(order, { receivedQty: n });
-    showToast("success", n >= (order.preparedQty || order.orderQty) ? "รับครบ ✅" : `รับ ${n}/${order.preparedQty || order.orderQty} pcs ⚠️`, "📦", 3000);
-  };
 
   const savePrepQty = v => {
     const n = Math.max(0, parseInt(v)||0);
@@ -7685,91 +7691,8 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData,
           </div>
         </div>
 
-        {/* ── Row 2: quantities + actions (หรือ receive confirmation ถ้าอยู่แท็บส่งแล้ว) ── */}
-        {showReceiveMode ? (
-          // ── Receive confirmation row ──
-          <div style={{
-            display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",
-            padding:"10px 14px 12px",borderTop:"1px solid var(--g-50)",
-            background:"var(--g-50)",
-          }}>
-            {/* Sent qty */}
-            <div style={{textAlign:"center",minWidth:44}}>
-              <div style={{fontSize:10,color:"var(--muted)",marginBottom:1}}>🚚 ส่ง</div>
-              <div style={{fontSize:15,fontWeight:800,color:"var(--dang)"}}>{order.preparedQty || order.orderQty}</div>
-            </div>
-
-            {/* Received qty input */}
-            {order.receivedAt ? (
-              // Already confirmed — show result
-              <div style={{
-                flex:1,display:"flex",alignItems:"center",gap:8,
-                background: recvQty >= (order.preparedQty||order.orderQty) ? "#f0fdf4" : "#fff8e1",
-                borderRadius:10,padding:"8px 12px",
-                border:`1.5px solid ${recvQty >= (order.preparedQty||order.orderQty) ? "#86efac" : "#fcd34d"}`,
-              }}>
-                <span style={{fontSize:20}}>{recvQty >= (order.preparedQty||order.orderQty) ? "✅" : "⚠️"}</span>
-                <div>
-                  <div style={{fontSize:13,fontWeight:700}}>
-                    {recvQty >= (order.preparedQty||order.orderQty) ? "รับครบ" : "รับไม่ครบ"}
-                  </div>
-                  <div style={{fontSize:11,color:"var(--muted)"}}>
-                    รับ {recvQty} / ส่ง {order.preparedQty||order.orderQty} pcs
-                  </div>
-                </div>
-              </div>
-            ) : (role === "sale" || role === "frontstore") ? (
-              // Can confirm — show input + button
-              <>
-                <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
-                  <div style={{fontSize:10,color:"var(--muted)"}}>📥 รับจริง</div>
-                  <input type="number" value={recvQty} min={0} max={9999}
-                    onChange={e => setRecvQty(Math.max(0,parseInt(e.target.value)||0))}
-                    style={{
-                      width:64,height:44,textAlign:"center",borderRadius:8,
-                      border:"2px solid var(--g-500)",fontSize:18,fontWeight:800,
-                      background:"#f0fdf4",fontFamily:"inherit",
-                    }}/>
-                </div>
-                <div style={{flex:1}}/>
-                <button onClick={confirmReceive} style={{
-                  padding:"10px 16px",borderRadius:10,border:"none",
-                  background:"#1b5e20",color:"#fff",
-                  cursor:"pointer",fontSize:14,fontWeight:800,
-                  display:"flex",flexDirection:"column",alignItems:"center",gap:1,
-                  minWidth:64,minHeight:44,
-                }}>
-                  <span style={{fontSize:18}}>📦</span>
-                  <span style={{fontSize:10,letterSpacing:.3}}>ยืนยันรับ</span>
-                </button>
-              </>
-            ) : (
-              // Other roles — pending confirmation + undo button for owner/warehouse
-              <>
-                <div style={{
-                  flex:1,display:"flex",alignItems:"center",gap:8,
-                  background:"#fafafa",borderRadius:10,padding:"8px 12px",
-                  border:"1.5px solid var(--bdr)",
-                }}>
-                  <span style={{fontSize:18}}>⏳</span>
-                  <div style={{fontSize:13,color:"var(--muted)"}}>รอ sale/frontstore ยืนยันรับของ</div>
-                </div>
-                {(role === "owner" || role === "warehouse") && (
-                  <button onClick={() => {
-                    onPatch(order.id, { status: "รอ", receivedQty: null, receivedAt: null });
-                    syncOrderUpdate(order, { status: "รอ" });
-                    showToast("success", "คืนสถานะเป็น 'รอ' แล้ว", "↩️", 2500);
-                  }} style={{
-                    padding:"8px 12px",borderRadius:10,border:"1.5px solid #d1d5db",
-                    background:"#fff",color:"#374151",cursor:"pointer",
-                    fontSize:12,fontWeight:700,minHeight:44,fontFamily:"inherit",
-                  }}>↩ คืนสถานะ</button>
-                )}
-              </>
-            )}
-          </div>
-        ) : (
-          // ── Original Row 2 ──
+        {/* ── Row 2: quantities + actions ── */}
+        {(
           <div style={{
             display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",
             padding:"8px 14px 12px",borderTop:"1px solid var(--g-50)",
@@ -7961,6 +7884,232 @@ function stableOrderId(o, i) {
   return parts.join('_') || String(i);
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// SHIPMENT RECEIVE LIST — แท็บ "ส่งแล้ว" ดึงจากชีต "รายการโอนสินค้า"
+// ─────────────────────────────────────────────────────────────────────
+// แต่ละ row ถือ state ของช่อง "รับจริง" ของตัวเอง
+function ShipmentRow({ s, role, productMap, onConfirm }) {
+  const [imgOpen, setImgOpen] = uS(false);
+  const [recvQty, setRecvQty] = uS(() => s.receivedQty != null ? s.receivedQty : (s.qty || 0));
+  const product = productMap ? productMap[s.sku] : null;
+  const imgSrc = s.image || product?.imageUrl || null;
+  const canConfirm = role === "sale" || role === "frontstore";
+
+  const handleConfirm = () => {
+    const n = Math.max(0, parseInt(recvQty) || 0);
+    onConfirm(s, n);
+  };
+
+  return (
+    <div style={{
+      background:"#fff", borderRadius:12, marginBottom:8,
+      border:`1.5px solid ${s.receivedAt ? "#4fb472" : "var(--bdr)"}`,
+      overflow:"hidden",
+    }}>
+      {/* ── Row 1: image + info ── */}
+      <div style={{display:"flex",gap:10,alignItems:"flex-start",padding:"12px 14px 8px"}}>
+        <div onClick={() => imgSrc && setImgOpen(true)}
+          style={{
+            width:54,height:54,borderRadius:8,flexShrink:0,overflow:"hidden",
+            background:"var(--g-50)",cursor:imgSrc?"pointer":"default",
+            border:"1px solid var(--bdr)",position:"relative",
+          }}>
+          {imgSrc
+            ? <img src={imgSrc} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+            : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--muted)"}}>{I.package}</div>
+          }
+          {imgSrc && (
+            <div style={{position:"absolute",bottom:2,right:2,background:"rgba(0,0,0,.45)",
+              borderRadius:4,padding:"1px 4px",fontSize:8,color:"#fff",lineHeight:1.4}}>
+              🔍
+            </div>
+          )}
+        </div>
+
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:10,color:"var(--muted)",marginBottom:2}}>{s.sku}</div>
+          <div style={{fontSize:14,fontWeight:600,lineHeight:1.3,marginBottom:2,
+            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.name}</div>
+          <div style={{fontSize:11,color:"var(--muted)"}}>
+            {s.refNum}{s.date ? ` · ${s.date}` : ""}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Row 2: ส่ง + ยืนยันรับ ── */}
+      <div style={{
+        display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",
+        padding:"10px 14px 12px",borderTop:"1px solid var(--g-50)",
+        background:"var(--g-50)",
+      }}>
+        {/* Sent qty */}
+        <div style={{textAlign:"center",minWidth:44}}>
+          <div style={{fontSize:10,color:"var(--muted)",marginBottom:1}}>🚚 ส่ง</div>
+          <div style={{fontSize:15,fontWeight:800,color:"var(--dang)"}}>{s.qty}</div>
+        </div>
+
+        {s.receivedAt ? (
+          // ── ยืนยันแล้ว — แสดงผล ──
+          <div style={{
+            flex:1,display:"flex",alignItems:"center",gap:8,
+            background: s.receivedQty >= s.qty ? "#f0fdf4" : "#fff8e1",
+            borderRadius:10,padding:"8px 12px",
+            border:`1.5px solid ${s.receivedQty >= s.qty ? "#86efac" : "#fcd34d"}`,
+          }}>
+            <span style={{fontSize:20}}>{s.receivedQty >= s.qty ? "✅" : "⚠️"}</span>
+            <div>
+              <div style={{fontSize:13,fontWeight:700}}>
+                {s.receivedQty >= s.qty ? "รับครบ" : "รับไม่ครบ"}
+              </div>
+              <div style={{fontSize:11,color:"var(--muted)"}}>
+                รับ {s.receivedQty} / ส่ง {s.qty} pcs
+              </div>
+              {s.receivedBy && (
+                <div style={{fontSize:10,color:"var(--muted)"}}>โดย {s.receivedBy}</div>
+              )}
+            </div>
+          </div>
+        ) : canConfirm ? (
+          // ── sale/FS ยืนยันรับ ──
+          <>
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+              <div style={{fontSize:10,color:"var(--muted)"}}>📥 รับจริง</div>
+              <input type="number" value={recvQty} min={0} max={9999}
+                onChange={e => setRecvQty(Math.max(0,parseInt(e.target.value)||0))}
+                style={{
+                  width:64,height:44,textAlign:"center",borderRadius:8,
+                  border:"2px solid var(--g-500)",fontSize:18,fontWeight:800,
+                  background:"#f0fdf4",fontFamily:"inherit",
+                }}/>
+            </div>
+            <div style={{flex:1}}/>
+            <button onClick={handleConfirm} style={{
+              padding:"10px 16px",borderRadius:10,border:"none",
+              background:"#1b5e20",color:"#fff",
+              cursor:"pointer",fontSize:14,fontWeight:800,
+              display:"flex",flexDirection:"column",alignItems:"center",gap:1,
+              minWidth:64,minHeight:44,
+            }}>
+              <span style={{fontSize:18}}>📦</span>
+              <span style={{fontSize:10,letterSpacing:.3}}>ยืนยันรับ</span>
+            </button>
+          </>
+        ) : (
+          // ── role อื่น — รอ sale/FS ──
+          <div style={{
+            flex:1,display:"flex",alignItems:"center",gap:8,
+            background:"#fafafa",borderRadius:10,padding:"8px 12px",
+            border:"1.5px solid var(--bdr)",
+          }}>
+            <span style={{fontSize:18}}>⏳</span>
+            <div style={{fontSize:13,color:"var(--muted)"}}>รอ sale/FS ยืนยันรับ</div>
+          </div>
+        )}
+      </div>
+
+      {/* Image modal */}
+      {imgOpen && imgSrc && (
+        <div onClick={() => setImgOpen(false)} style={{
+          position:"fixed",inset:0,background:"rgba(0,0,0,.78)",
+          display:"flex",alignItems:"center",justifyContent:"center",
+          zIndex:1000,cursor:"pointer",padding:16,
+        }}>
+          <div onClick={e=>e.stopPropagation()} style={{
+            background:"#fff",borderRadius:16,padding:20,
+            maxWidth:380,width:"100%",maxHeight:"90vh",overflow:"auto",
+          }}>
+            <img src={imgSrc} alt="" style={{width:"100%",borderRadius:10,marginBottom:14,display:"block"}}/>
+            <div style={{fontWeight:700,fontSize:16,marginBottom:2}}>{s.name}</div>
+            <div style={{fontSize:12,color:"var(--muted)",marginBottom:10}}>{s.sku}</div>
+            <button onClick={() => setImgOpen(false)} style={{
+              width:"100%",padding:"14px",background:"var(--g-700)",color:"#fff",
+              border:"none",borderRadius:10,cursor:"pointer",fontSize:15,fontWeight:700,
+              minHeight:48,
+            }}>❌ ปิด</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ShipmentReceiveList({ data, role, productMap }) {
+  const shipments = data.shipments || [];
+  const [confirmed, setConfirmed] = uS({}); // { [id]: {receivedQty, receivedStatus, receivedAt} }
+  const [toast, showToast, hideToast] = useToast();
+
+  // merge overlay (optimistic) กับข้อมูลจริง
+  const rows = uM(() =>
+    shipments.map(s => confirmed[s.id] ? { ...s, ...confirmed[s.id] } : s),
+    [shipments, confirmed]
+  );
+
+  // group ตาม refNum (batch) แล้ว sort batch ใหม่สุดอยู่บน
+  const batches = uM(() => {
+    const map = {};
+    rows.forEach(s => {
+      const key = s.refNum || "—";
+      if (!map[key]) map[key] = { refNum: s.refNum, date: s.date, items: [] };
+      map[key].items.push(s);
+    });
+    const arr = Object.values(map);
+    arr.sort((a, b) => {
+      const da = parseDateMs(a.date), db = parseDateMs(b.date);
+      if (da !== db) return (isNaN(db)?0:db) - (isNaN(da)?0:da);
+      // tiebreak: id เลขมากอยู่บน
+      const idNum = x => Math.max(...x.items.map(i => parseInt(String(i.id).replace(/\D/g,''))||0));
+      return idNum(b) - idNum(a);
+    });
+    return arr;
+  }, [rows]);
+
+  const handleConfirm = (s, n) => {
+    const status = n >= s.qty ? "รับครบ" : "รับไม่ครบ";
+    setConfirmed(prev => ({ ...prev, [s.id]: { receivedQty:n, receivedStatus:status, receivedAt:new Date().toISOString() } }));
+    syncShipmentReceive(s.id, s.sku, n);
+    showToast("success", status==="รับครบ" ? "รับครบ ✅" : `รับ ${n}/${s.qty} pcs ⚠️`, "📦", 3000);
+  };
+
+  if (!shipments.length) return (
+    <div style={{padding:"40px 20px"}}>
+      <Empty title="ยังไม่มีของที่ส่งออกจากคลัง" sub="เมื่อ warehouse กดส่งของ รายการจะมาแสดงที่นี่"/>
+    </div>
+  );
+
+  return (
+    <div>
+      {batches.map(b => {
+        const total = b.items.length;
+        const received = b.items.filter(i => i.receivedAt).length;
+        return (
+          <div key={b.refNum} style={{marginBottom:16}}>
+            {/* Batch header chip */}
+            <div style={{
+              display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",
+              marginBottom:8,padding:"6px 12px",borderRadius:20,
+              background:"#eff6ff",border:"1.5px solid #bfdbfe",
+              fontSize:12,fontWeight:700,color:"#1e40af",
+            }}>
+              <span>🚚 {b.refNum}</span>
+              {b.date && <span style={{color:"var(--muted)",fontWeight:600}}>· {b.date}</span>}
+              <span style={{
+                marginLeft:"auto",fontSize:11,fontWeight:800,
+                color: received >= total ? "#1f7f44" : "#a07417",
+              }}>
+                รับแล้ว {received}/{total} รายการ
+              </span>
+            </div>
+            {b.items.map(s => (
+              <ShipmentRow key={s.id} s={s} role={role} productMap={productMap} onConfirm={handleConfirm}/>
+            ))}
+          </div>
+        );
+      })}
+      <Toast toast={toast} onClose={hideToast}/>
+    </div>
+  );
+}
+
 function OrderListView({ data, role }) {
   const orders = data.orders || [];
   const [filter, setFilter] = uS("all");
@@ -8037,7 +8186,11 @@ function OrderListView({ data, role }) {
       <div className="page-head no-print">
         <div>
           <div className="page-title">📋 รายการสั่งของ</div>
-          <div className="page-sub">📦 {filtered.length} รายการ · 🟡 {pendingCount} รอดำเนินการ</div>
+          <div className="page-sub">
+            {filter==="shipped"
+              ? `📦 ${(data.shipments||[]).length} รายการส่งออก · ✅ ${(data.shipments||[]).filter(s=>s.receivedAt).length} รับแล้ว`
+              : `📦 ${filtered.length} รายการ · 🟡 ${pendingCount} รอดำเนินการ`}
+          </div>
         </div>
         <Seg value={filter} onChange={setFilter} options={[
           {value:"all",      label:"🗂️ ทั้งหมด"},
@@ -8047,12 +8200,14 @@ function OrderListView({ data, role }) {
         ]}/>
       </div>
 
-      {filtered.length === 0 ? (
+      {filter === "shipped" ? (
+        <ShipmentReceiveList data={data} role={role} productMap={productMap}/>
+      ) : filtered.length === 0 ? (
         <div style={{padding:"40px 20px"}}>
           <Empty title="ไม่มีรายการใน filter นี้" sub="ลองเลือก filter อื่น"/>
         </div>
       ) : (
-        filtered.map(order => <OrderItemRow key={order.id} order={order} onPatch={patch} productMap={productMap} role={role} skuLocks={skuLocks} storageData={data.storage} showReceiveMode={filter === "shipped"}/>)
+        filtered.map(order => <OrderItemRow key={order.id} order={order} onPatch={patch} productMap={productMap} role={role} skuLocks={skuLocks} storageData={data.storage}/>)
       )}
     </div>
   );
