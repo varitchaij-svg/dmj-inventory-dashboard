@@ -1494,8 +1494,8 @@ function CategoryView({ data, role }) {
     });
   }, [products]);
   const [active, setActive] = uS(allCats[0] || "");
-  const [search, setSearch] = uS("");
   const [globalSearch, setGlobalSearch] = uS("");
+  const [reorderFilter, setReorderFilter] = uS(false); // 🛒 ต้องสั่งเพิ่ม (หมด/ใกล้หมด)
   const [sortBy, setSortBy] = uS("sku");
   const [showAll, setShowAll] = uS(false);
   const [colorFilter, setColorFilter] = uS(null);
@@ -1556,36 +1556,70 @@ function CategoryView({ data, role }) {
     return Object.values(m).sort((a, b) => b.count - a.count);
   }, [products]);
 
+  // ต้องสั่งเพิ่ม = หมด (≤0) หรือ ใกล้หมด (1..36) — ใช้เกณฑ์เดียวกับ badge ในการ์ด
+  const needsReorder = uC((p) => {
+    if (p.isMTO) return false;
+    const q = stockQty(p);
+    return q <= 36;
+  }, []);
+
   const filtered = uM(() => {
+    const gq = globalSearch.trim().toLowerCase();
+    const applyCommon = (arr) => {
+      let f = arr;
+      if (gq) f = f.filter(p => (p.sku||"").toLowerCase().includes(gq) || (p.name||"").toLowerCase().includes(gq));
+      if (reorderFilter) f = f.filter(needsReorder);
+      return f;
+    };
     // ── Global vendor mode ──────────────────────────────────────────
     if (globalVendor) {
       let f = products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า" && p.vendor === globalVendor);
-      const gq = globalSearch.trim().toLowerCase();
-      if (gq) f = f.filter(p => (p.sku||"").toLowerCase().includes(gq) || (p.name||"").toLowerCase().includes(gq));
+      f = applyCommon(f);
       return [...f].sort(sortFn);
     }
-    const gq = globalSearch.trim().toLowerCase();
     if (gq) {
       // Global: search all categories
       let f = products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า");
-      f = f.filter(p => (p.sku||"").toLowerCase().includes(gq) || (p.name||"").toLowerCase().includes(gq));
+      f = applyCommon(f);
       if (newStockFilter) f = f.filter(p => isNew45(p.lastStockInDate));
       return [...f].sort(sortFn);
     }
     // Normal: filter by active category
     let f = products.filter(p => p.cat === active);
-    if (search) {
-      const q = search.toLowerCase();
-      f = f.filter(p => (p.sku||"").toLowerCase().includes(q) || (p.name||"").toLowerCase().includes(q));
-    }
+    f = applyCommon(f);
     if (colorFilter) f = f.filter(p => p.color && p.color.name === colorFilter);
     if (supplierFilter) f = f.filter(p => (p.vendor || p.lastSupplier) === supplierFilter);
     if (deadFilter)     f = f.filter(p => p.deadMonths === null || p.deadMonths >= deadFilter);
     if (newStockFilter) f = f.filter(p => isNew45(p.lastStockInDate));
     return [...f].sort(sortFn);
-  }, [products, active, search, globalSearch, globalVendor, colorFilter, supplierFilter, deadFilter, newStockFilter, sortFn]);
+  }, [products, active, globalSearch, globalVendor, colorFilter, supplierFilter, deadFilter, newStockFilter, reorderFilter, needsReorder, sortFn]);
 
   const visible = showAll ? filtered : filtered.slice(0, 24);
+
+  // ── จัดกลุ่มตามร้าน (group filtered set by supplier) ──
+  // ใช้ชื่อร้านที่อ่านง่าย: lastSupplier (ชื่อ) ก่อน แล้วค่อย vendor (รหัส)
+  const supplierGroups = uM(() => {
+    if (viewMode !== 'supplier') return [];
+    const m = {};
+    const NONE = "ไม่ระบุร้าน";
+    filtered.forEach(p => {
+      const key = p.lastSupplier || p.vendor || NONE;
+      if (!m[key]) m[key] = { name: key, items: [], out: 0, low: 0 };
+      m[key].items.push(p);
+      if (!p.isMTO) {
+        const q = stockQty(p);
+        if (q <= 0) m[key].out++;
+        else if (q <= 36) m[key].low++;
+      }
+    });
+    return Object.values(m).sort((a, b) => {
+      if (a.name === NONE) return 1;
+      if (b.name === NONE) return -1;
+      // ร้านที่มีของหมดก่อน แล้วเรียงตามชื่อ
+      if ((a.out > 0) !== (b.out > 0)) return a.out > 0 ? -1 : 1;
+      return a.name.localeCompare(b.name, "th");
+    });
+  }, [filtered, viewMode]);
 
   // Compute reason tags per product (within this category sort)
   const totalCatRev = filtered.reduce((s,p) => s + p.soldRev, 0);
@@ -1818,22 +1852,31 @@ function CategoryView({ data, role }) {
           {/* Controls — hide in global search / vendor mode */}
           <Card style={{marginBottom:14, display: (isGlobalSearch||isGlobalVendor) ? "none" : undefined, width:"100%", boxSizing:"border-box"}}>
             <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap",width:"100%",minWidth:0}}>
-              {/* Search */}
-              <div style={{display:"flex",gap:8,flex:"1 1 220px",minWidth:0,alignItems:"center"}}>
-                <div style={{position:"relative",flex:1}}>
-                  <input value={search} onChange={e=>setSearch(e.target.value)}
-                         placeholder="ค้นหา SKU หรือชื่อสินค้า..."
-                         style={{
-                           width:"100%", padding:"8px 12px 8px 34px", borderRadius:9,
-                           border:"1px solid var(--bdr)", fontSize:13,
-                           fontFamily:"inherit", background:"#fafcf7", boxSizing:"border-box",
-                         }}/>
-                  <span style={{position:"absolute",left:10,top:9,color:"var(--light)"}}>
-                    <Icon d={["M11 19 A8 8 0 1 0 11 3 a8 8 0 0 0 0 16 Z","M21 21 L16.65 16.65"]} size={15}/>
-                  </span>
-                </div>
-                <ScanButton onScan={sku => setSearch(sku)}/>
-              </div>
+              {/* 🛒 ต้องสั่งเพิ่ม — quick reorder filter (key action) */}
+              {(() => {
+                const reorderCount = products.filter(p => p.cat === active && needsReorder(p)).length;
+                return (
+                  <button
+                    onClick={() => setReorderFilter(v => !v)}
+                    style={{
+                      flex:"1 1 200px", minWidth:0, minHeight:44,
+                      display:"flex", alignItems:"center", justifyContent:"center", gap:8,
+                      padding:"10px 14px", borderRadius:10, cursor:"pointer",
+                      fontFamily:"inherit", fontSize:14, fontWeight:800,
+                      border: reorderFilter ? "2px solid #d97706" : "1.5px solid #fbbf24",
+                      background: reorderFilter ? "#d97706" : "#fffbeb",
+                      color: reorderFilter ? "#fff" : "#b45309",
+                      transition:"all .15s",
+                    }}>
+                    🛒 ต้องสั่งเพิ่ม
+                    <span style={{
+                      fontSize:12, fontWeight:800, padding:"1px 8px", borderRadius:99,
+                      background: reorderFilter ? "rgba(255,255,255,.25)" : "#fbbf24",
+                      color: reorderFilter ? "#fff" : "#7c2d12",
+                    }}>{reorderCount}</span>
+                  </button>
+                );
+              })()}
 
               {/* Sort */}
               <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -2016,10 +2059,17 @@ function CategoryView({ data, role }) {
                       color: viewMode==='list' ? '#fff' : 'var(--muted)',
                       cursor:'pointer',fontSize:16,display:'flex',alignItems:'center',
                       justifyContent:'center',transition:'background .15s'}}>☰</button>
+            <button onClick={() => setViewMode('supplier')} title="จัดกลุ่มตามร้าน"
+              style={{height:36,padding:'0 10px',borderRadius:8,border:'1.5px solid var(--bdr)',
+                      background: viewMode==='supplier' ? '#1b5e20' : '#fff',
+                      color: viewMode==='supplier' ? '#fff' : 'var(--muted)',
+                      cursor:'pointer',fontSize:13,fontWeight:700,fontFamily:'inherit',
+                      display:'flex',alignItems:'center',gap:4,
+                      justifyContent:'center',transition:'background .15s'}}>🏭 ตามร้าน</button>
           </div>
 
           {filtered.length === 0 ? (
-            <Empty title="ไม่พบสินค้า" sub={isGlobalSearch || search ? "ลองค้นหาด้วยคำอื่น" : "หมวดนี้ยังไม่มีสินค้า"}/>
+            <Empty title="ไม่พบสินค้า" sub={isGlobalSearch ? "ลองค้นหาด้วยคำอื่น" : reorderFilter ? "ไม่มีสินค้าที่ต้องสั่งเพิ่ม 🎉" : "หมวดนี้ยังไม่มีสินค้า"}/>
           ) : viewMode === 'list' ? (
             /* ── List view — compact horizontal rows ── */
             <div style={{display:'flex',flexDirection:'column',gap:6}}>
@@ -2095,6 +2145,68 @@ function CategoryView({ data, role }) {
                   </div>
                 );
               })}
+            </div>
+          ) : viewMode === 'supplier' ? (
+            /* ── Group-by-supplier view — sections per ร้าน ── */
+            <div style={{display:'flex',flexDirection:'column',gap:18}}>
+              {supplierGroups.map(g => (
+                <div key={g.name}>
+                  {/* Section header — sticky, supplier name + counts + low/out badges */}
+                  <div style={{
+                    position:'sticky', top:64, zIndex:3,
+                    display:'flex', alignItems:'center', gap:8, flexWrap:'wrap',
+                    background:'#fff', borderRadius:10,
+                    border:'1.5px solid var(--bdr)', borderLeft:'4px solid ' + (g.out>0 ? '#dc2626' : g.low>0 ? '#d97706' : '#1b5e20'),
+                    padding:'9px 12px', marginBottom:10,
+                    boxShadow:'0 1px 4px rgba(0,0,0,.06)',
+                  }}>
+                    <span style={{fontSize:15,flexShrink:0}}>🏭</span>
+                    <span style={{fontSize:14,fontWeight:800,color:'var(--g-800)',
+                                  overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',minWidth:0}}>
+                      {g.name}
+                    </span>
+                    <span style={{fontSize:11,fontWeight:600,color:'var(--muted)',flexShrink:0}}>
+                      {g.items.length} รายการ
+                    </span>
+                    <span style={{flex:1}}/>
+                    {g.out > 0 && (
+                      <span style={{fontSize:11,fontWeight:800,color:'#b91c1c',
+                                    background:'#fee2e2',padding:'2px 8px',borderRadius:99,flexShrink:0}}>
+                        🔴 {g.out} หมด
+                      </span>
+                    )}
+                    {g.low > 0 && (
+                      <span style={{fontSize:11,fontWeight:800,color:'#92400e',
+                                    background:'#fef3c7',padding:'2px 8px',borderRadius:99,flexShrink:0}}>
+                        🟡 {g.low} ใกล้หมด
+                      </span>
+                    )}
+                  </div>
+                  <div className="product-grid" style={{width:"100%",boxSizing:"border-box",minWidth:0}}>
+                    {g.items.map((p, idx) => (
+                      <div key={p.sku} style={{position:"relative"}}>
+                        {(isGlobalSearch || isGlobalVendor) && p.cat && (
+                          <div style={{
+                            position:"absolute",top:8,left:8,zIndex:2,
+                            background: catColor(p.cat, allCats),
+                            color:"#fff", fontSize:9, fontWeight:700,
+                            padding:"2px 7px", borderRadius:20,
+                            maxWidth:"calc(100% - 16px)",
+                            overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
+                            pointerEvents:"none",
+                          }}>{p.cat}</div>
+                        )}
+                        <ProductCard p={p}
+                                     accent={isGlobalSearch ? catColor(p.cat, allCats) : color}
+                                     allCats={allCats}
+                                     reasonTags={[]}
+                                     onOrder={setOrderProduct}
+                                     role={role}/>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
           ) : (
             /* ── Grid view — existing card layout ── */
