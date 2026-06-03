@@ -1525,6 +1525,8 @@ function CategoryView({ data, role }) {
   const [newStockFilter, setNewStockFilter] = uS(false);
   const [orderProduct, setOrderProduct] = uS(null);
   const [globalVendor, setGlobalVendor] = uS(null); // global supplier filter (all categories)
+  // Android back: ถ้ากำลังดู supplier view → กด back = ล้าง supplier filter
+  useBackHandler(globalVendor ? () => { setGlobalVendor(null); setPage(1); } : null);
   const [viewMode, setViewMode] = uS('grid');
   // ── helper: parse DD/MM/YYYY → Date ──
   const parseStockDate = (str) => {
@@ -2283,6 +2285,7 @@ function CategoryView({ data, role }) {
 const QUICK_QTYS = [24, 36, 48, 60];
 
 function OrderModal({ product, onClose }) {
+  useBackHandler(onClose); // Android back = ปิด modal สั่งของ
   const [qty, setQty] = uS(24);
   const [customMode, setCustomMode] = uS(false);
   const [orderType, setOrderType] = uS('รอขึ้นรถ');
@@ -3205,6 +3208,7 @@ function TrendsView({ data }) {
 
 // ────────────── Product detail modal ──────────────
 function ProductModal({ p, onClose, allCats }) {
+  useBackHandler(onClose); // Android back = ปิด product detail modal
   const hasImg = !!p.imageUrl;
   return (
     <div onClick={onClose} style={{
@@ -5704,6 +5708,7 @@ async function syncDeleteLockEntry(lockKey, sku) {
 }
 
 function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, onClose }) {
+  useBackHandler(onClose); // Android back = ปิด lock modal
   const [lightbox, setLightbox] = uS(null);
   const [editMode, setEditMode] = uS(false);
   const [addSku, setAddSku] = uS("");
@@ -8991,6 +8996,8 @@ function MtoJobView({ data }) {
   const [deleteConfirm, setDeleteConfirm] = uS(null); // job ที่รอยืนยันลบ
   const [toast, showToast, hideToast] = useToast();
   const isOnline = useOnlineStatus(); // ตรวจสอบการเชื่อมต่อก่อนบันทึก
+  // Android back: detail/create → list
+  useBackHandler(view !== "list" ? () => setView("list") : null);
 
   const products = data.products || [];
 
