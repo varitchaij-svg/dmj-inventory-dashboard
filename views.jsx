@@ -153,14 +153,15 @@ function Toast({ toast, onClose }) {
 function Pagination({ page, total, pageSize, onChange }) {
   const totalPages = Math.ceil(total / pageSize);
   if (totalPages <= 1) return null;
+  const go = p => { onChange(p); window.scrollTo({ top: 0, behavior: 'smooth' }); };
   return (
     <div style={{display:'flex',gap:8,justifyContent:'center',alignItems:'center',padding:'16px 0'}}>
-      <button onClick={()=>onChange(page-1)} disabled={page<=1}
+      <button onClick={()=>go(page-1)} disabled={page<=1}
               style={{minHeight:44,padding:'0 16px',borderRadius:8,border:'1px solid #ddd',
                       background:page<=1?'#f5f5f5':'#fff',cursor:page<=1?'default':'pointer',
                       fontFamily:'inherit',fontSize:14}}>←</button>
       <span style={{padding:'0 8px',fontSize:14,color:'#666'}}>หน้า {page} / {totalPages}</span>
-      <button onClick={()=>onChange(page+1)} disabled={page>=totalPages}
+      <button onClick={()=>go(page+1)} disabled={page>=totalPages}
               style={{minHeight:44,padding:'0 16px',borderRadius:8,border:'1px solid #ddd',
                       background:page>=totalPages?'#f5f5f5':'#fff',cursor:page>=totalPages?'default':'pointer',
                       fontFamily:'inherit',fontSize:14}}>→</button>
