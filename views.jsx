@@ -37,6 +37,25 @@ const { ResponsiveContainer, AreaChart, Area, BarChart, Bar, LineChart, Line,
         XAxis, YAxis, CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell } = window.Recharts;
 
 // ─────────────────────────────────────────────────────────────────────
+// ONLINE STATUS HOOK — ติดตาม navigator.onLine แบบ reactive
+// คืน true ถ้ามีเน็ต, false ถ้าออฟไลน์
+// ─────────────────────────────────────────────────────────────────────
+function useOnlineStatus() {
+  const [online, setOnline] = uS(() => navigator.onLine);
+  uE(() => {
+    const on  = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener("online",  on);
+    window.addEventListener("offline", off);
+    return () => {
+      window.removeEventListener("online",  on);
+      window.removeEventListener("offline", off);
+    };
+  }, []);
+  return online;
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // VISUAL CONFIRM MODAL (replaces native confirm() — readable without Thai)
 // ─────────────────────────────────────────────────────────────────────
 function ConfirmModal({ open, type="warn", emoji, title, detail, confirmLabel="ยืนยัน", cancelLabel="ยกเลิก", onConfirm, onCancel }) {
@@ -5489,16 +5508,18 @@ async function confirmStockCount(entries) {
   // entries = [{ sku, qty }]
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
   try {
-    await fetch(SHEET_DEPLOY_URL, {
+    const res = await fetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
         confirmStockCount: true,
         datetime: new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }),
+        clientLoadedAt: window._dataLoadedAt || 0, // สำหรับ conflict detection
         entries,
       }),
     });
-    return { success: true };
+    const json = await res.json();
+    return json; // คืน object ดิบ (success, conflict, error)
   } catch (err) { return { success: false, error: err.message }; }
 }
 
@@ -6022,7 +6043,9 @@ function StockCountView({ data }) {
     if (selLockKey) await syncLockData(selLockKey, entries);
     const result = await confirmStockCount(entries);
     setSaving(false);
-    if (result.success !== false) {
+    if (result.conflict) {
+      showToast('error', 'ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด', '⚠️');
+    } else if (result.success !== false) {
       setSavedSkus(new Set(entries.map(e => e.sku)));
       setLastSavedTime(new Date());
       setLastSavedSnap(snap); // กัน auto-save วนซ้ำ
@@ -6054,7 +6077,9 @@ function StockCountView({ data }) {
     if (selLockKey) await syncLockData(selLockKey, entries);
     const result = await confirmStockCount(entries);
     setConfirming(false);
-    if (result.success !== false) {
+    if (result.conflict) {
+      showToast('error', 'ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด', '⚠️');
+    } else if (result.success !== false) {
       setSavedSkus(new Set(entries.map(e => e.sku)));
       setLastSavedTime(new Date());
       setLastSavedSnap(snap); // กัน auto-save commit ซ้ำหลังกดยืนยันเอง
@@ -7774,6 +7799,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const [shipAllConfirm, setShipAllConfirm] = uS(null); // ready[] array
   const [materialDraw, setMaterialDraw]  = uS(null); // { order, afterConfirm: fn }
   const [resetConfirm, setResetConfirm]  = uS(false); // ยืนยันรีเซ็ตสถานะการส่ง
+  const isOnline = useOnlineStatus(); // ตรวจสอบการเชื่อมต่อก่อนส่งสถานะ
 
   const productMap = uM(() => {
     const m = {};
@@ -8065,13 +8091,18 @@ function OrderSummaryView({ data, onPrintRequest }) {
                     )}
 
                     {/* Ship + Missed row */}
+                    {!isOnline && (
+                      <div style={{fontSize:10,color:"#b45309",textAlign:"center",
+                                   fontWeight:600,marginBottom:2}}>⚠️ ไม่มีอินเทอร์เน็ต</div>
+                    )}
                     <div style={{display:"flex",gap:5}}>
-                      <button onClick={() => handleShip(order)} disabled={isSending || isMissed}
+                      <button onClick={() => handleShip(order)} disabled={isSending || isMissed || !isOnline}
                         style={{
-                          flex:1,padding:"7px 4px",borderRadius:7,border:"none",
-                          background: isMissed?"var(--g-100)":"var(--g-700)",
-                          color: isMissed?"var(--muted)":"#fff",
-                          fontSize:11,fontWeight:700,cursor:isMissed?"not-allowed":"pointer",
+                          flex:1,padding:"10px 4px",minHeight:44,borderRadius:7,border:"none",
+                          background: (isMissed||!isOnline)?"var(--g-100)":"var(--g-700)",
+                          color: (isMissed||!isOnline)?"var(--muted)":"#fff",
+                          fontSize:11,fontWeight:700,
+                          cursor:(isMissed||!isOnline)?"not-allowed":"pointer",
                           fontFamily:"inherit",opacity:isSending?0.6:1,
                         }}>
                         {isSending ? "⏳..." : "✅ ส่งแล้ว"}
@@ -8080,7 +8111,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
                         <button onClick={() => toggleMissed(order)}
                           title={isMissed?"ยกเลิก - ใส่คืนในรถ":"รถเต็ม - ไม่ได้ขึ้น"}
                           style={{
-                            width:34,borderRadius:7,
+                            width:44,minHeight:44,borderRadius:7,
                             border:`1.5px solid ${isMissed?"#ef4444":"var(--bdr)"}`,
                             background:isMissed?"#fee2e2":"#fff",
                             color:isMissed?"#ef4444":"var(--muted)",
@@ -8789,6 +8820,7 @@ function MtoJobView({ data }) {
   const [saving, setSaving] = uS(false);
   const [deleteConfirm, setDeleteConfirm] = uS(null); // job ที่รอยืนยันลบ
   const [toast, showToast, hideToast] = useToast();
+  const isOnline = useOnlineStatus(); // ตรวจสอบการเชื่อมต่อก่อนบันทึก
 
   const products = data.products || [];
 
@@ -8905,10 +8937,14 @@ function MtoJobView({ data }) {
           jobId: activeJob.jobId,
           items: materials,
           closedAt: closed,
+          clientLoadedAt: window._dataLoadedAt || 0, // สำหรับ conflict detection
         }),
       });
       const json = await res.json();
-      if (json.success) {
+      if (json.conflict) {
+        showToast("error", "ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด");
+        // ไม่ reset input — ผู้ใช้ยังคงเห็นรายการวัตถุดิบที่กรอกไว้
+      } else if (json.success) {
         const updatedJob = { ...activeJob, status: "เสร็จแล้ว", closedAt: closed, items: materials };
         setJobs(prev => prev.map(j => j.jobId === activeJob.jobId ? updatedJob : j));
         setActiveJob(updatedJob);
@@ -9224,10 +9260,21 @@ function MtoJobView({ data }) {
 
         {/* Close job button */}
         {isOpen && (
-          <button className="btn primary" onClick={handleCloseJob} disabled={saving || materials.length === 0}
-            style={{ width: "100%", padding: "14px", fontSize: 15, fontWeight: 800, background: "#1b5e20", borderRadius: 12 }}>
-            {saving ? "กำลังปิดงาน..." : "✅ ปิดงาน & ตัดสต็อก"}
-          </button>
+          <>
+            {!isOnline && (
+              <div style={{
+                textAlign:"center",fontSize:12,color:"#b45309",
+                background:"#fffbeb",border:"1px solid #fde68a",
+                borderRadius:8,padding:"6px 12px",marginBottom:6,fontWeight:600,
+              }}>⚠️ ไม่มีอินเทอร์เน็ต — ไม่สามารถปิดงานได้</div>
+            )}
+            <button className="btn primary" onClick={handleCloseJob}
+              disabled={saving || materials.length === 0 || !isOnline}
+              style={{ width: "100%", padding: "14px", fontSize: 15, fontWeight: 800, background: "#1b5e20", borderRadius: 12,
+                       opacity: !isOnline ? 0.5 : 1 }}>
+              {saving ? "กำลังปิดงาน..." : "✅ ปิดงาน & ตัดสต็อก"}
+            </button>
+          </>
         )}
       </div>
     );
@@ -9236,6 +9283,4 @@ function MtoJobView({ data }) {
   return null;
 }
 
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView });
-
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView });
+Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus });
