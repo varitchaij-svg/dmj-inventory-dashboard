@@ -3166,7 +3166,7 @@ function decreaseMtoStockInZort_(items) {
   for (const [whCode, stocks] of Object.entries(groups)) {
     if (!stocks.length) continue;
     const payload = { warehousecode: whCode, stocks };
-    const res = UrlFetchApp.fetch(`${ZORT_BASE}/Product/DecreaseProductStockList`, {
+    const res = UrlFetchApp.fetch(`${ZORT_BASE}/Product/DecreaseProductStockList?warehousecode=${encodeURIComponent(whCode)}`, {
       method: "post",
       headers,
       payload: JSON.stringify(payload),
