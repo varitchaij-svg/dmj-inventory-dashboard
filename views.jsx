@@ -10070,8 +10070,9 @@ function AuditLogView() {
   const [rows, setRows] = uS([]);
   const [loading, setLoading] = uS(true);
   const [err, setErr] = uS(null);
-  const [toast, showToast, hideToast] = useToast();
   const [auditPage, setAuditPage] = uS(1);
+  const [search, setSearch] = uS("");
+  const [actionFilter, setActionFilter] = uS("all");
   const auditListRef = React.useRef(null);
   const AUDIT_PAGE_SIZE = 20;
 
@@ -10092,9 +10093,35 @@ function AuditLogView() {
 
   uE(() => { load(); }, []);
 
+  const actionTypes = uM(() => {
+    const seen = new Set();
+    rows.forEach(r => { if (r.action) seen.add(r.action); });
+    return [...seen].sort();
+  }, [rows]);
+
+  const filteredRows = uM(() => {
+    let list = rows;
+    if (actionFilter !== "all") list = list.filter(r => r.action === actionFilter);
+    const sq = search.trim().toLowerCase();
+    if (sq) list = list.filter(r =>
+      (r.actor || "").toLowerCase().includes(sq) ||
+      (r.sku || "").toLowerCase().includes(sq) ||
+      (r.detail || "").toLowerCase().includes(sq)
+    );
+    return list;
+  }, [rows, search, actionFilter]);
+
+  uE(() => { setAuditPage(1); }, [search, actionFilter]);
+
+  const actionBadgeStyle = (action) => {
+    if (action === "นับสต็อก")  return { background: "#e8f5e9", color: "#1b5e20" };
+    if (action === "โอนสต็อก")  return { background: "#e3f2fd", color: "#0d47a1" };
+    if (action === "ปิดงาน MTO") return { background: "#fff3e0", color: "#e65100" };
+    return { background: "#f3e5f5", color: "#4a148c" };
+  };
+
   return (
     <div style={{ padding: "16px", maxWidth: 960, margin: "0 auto" }}>
-      <Toast toast={toast} onHide={hideToast}/>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
         <div>
           <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>📋 Audit Log</div>
@@ -10105,6 +10132,35 @@ function AuditLogView() {
           <span>รีโหลด</span>
         </button>
       </div>
+
+      {rows.length > 0 && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <input
+            type="text" value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="🔍 ค้นหา ผู้ใช้ / SKU / รายละเอียด..."
+            style={{
+              flex: "1 1 200px", padding: "8px 12px", borderRadius: 8,
+              border: "1.5px solid var(--bdr)", fontSize: 13,
+              fontFamily: "inherit", outline: "none", background: "var(--paper)",
+            }}
+          />
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+            {["all", ...actionTypes].map(a => (
+              <button key={a}
+                onClick={() => setActionFilter(a)}
+                style={{
+                  padding: "6px 12px", borderRadius: 20, fontSize: 12, fontWeight: 700,
+                  cursor: "pointer", border: "1.5px solid", fontFamily: "inherit",
+                  borderColor: actionFilter === a ? "var(--g-600)" : "var(--bdr)",
+                  background:  actionFilter === a ? "var(--g-600)" : "var(--paper)",
+                  color:       actionFilter === a ? "#fff" : "var(--muted)",
+                }}
+              >{a === "all" ? "ทั้งหมด" : a}</button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {err && (
         <div style={{ background: "#fff0f0", border: "1px solid var(--dang)", borderRadius: 8, padding: "10px 14px", color: "var(--dang)", marginBottom: 12, fontSize: 13 }}>
@@ -10123,37 +10179,42 @@ function AuditLogView() {
           ยังไม่มีรายการ Audit Log
         </div>
       ) : (<>
-        <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid var(--bdr)" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead>
-              <tr style={{ background: "var(--g-50)", borderBottom: "2px solid var(--bdr)" }}>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>วันที่เวลา</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>ผู้ใช้</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>Action</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>SKU</th>
-                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>รายละเอียด</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.slice((auditPage-1)*AUDIT_PAGE_SIZE, auditPage*AUDIT_PAGE_SIZE).map((r, idx) => (
-                <tr key={idx} style={{ borderBottom: "1px solid var(--bdr)", background: idx % 2 === 0 ? "var(--paper)" : "var(--g-50)" }}>
-                  <td style={{ padding: "8px 12px", color: "var(--muted)", whiteSpace: "nowrap", fontSize: 12 }}>{r.ts}</td>
-                  <td style={{ padding: "8px 12px", fontWeight: 600 }}>{r.actor}</td>
-                  <td style={{ padding: "8px 12px" }}>
-                    <span style={{
-                      display: "inline-block", padding: "2px 8px", borderRadius: 6, fontSize: 11.5, fontWeight: 700,
-                      background: r.action === "นับสต็อก" ? "#e8f5e9" : r.action === "โอนสต็อก" ? "#e3f2fd" : r.action === "ปิดงาน MTO" ? "#fff3e0" : "#f3e5f5",
-                      color:      r.action === "นับสต็อก" ? "#1b5e20" : r.action === "โอนสต็อก" ? "#0d47a1" : r.action === "ปิดงาน MTO" ? "#e65100" : "#4a148c",
-                    }}>{r.action}</span>
-                  </td>
-                  <td style={{ padding: "8px 12px", fontFamily: "monospace", fontSize: 12 }}>{r.sku}</td>
-                  <td style={{ padding: "8px 12px", color: "var(--text)" }}>{r.detail}</td>
+        {filteredRows.length === 0 ? (
+          <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>
+            ไม่พบรายการที่ตรงกับการค้นหา
+          </div>
+        ) : (
+          <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid var(--bdr)" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: "var(--g-50)", borderBottom: "2px solid var(--bdr)" }}>
+                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>วันที่เวลา</th>
+                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>ผู้ใช้</th>
+                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>Action</th>
+                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>SKU</th>
+                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>รายละเอียด</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <Pagination page={auditPage} total={rows.length} pageSize={AUDIT_PAGE_SIZE} onChange={setAuditPage} listRef={auditListRef}/>
+              </thead>
+              <tbody>
+                {filteredRows.slice((auditPage-1)*AUDIT_PAGE_SIZE, auditPage*AUDIT_PAGE_SIZE).map((r, idx) => (
+                  <tr key={idx} style={{ borderBottom: "1px solid var(--bdr)", background: idx % 2 === 0 ? "var(--paper)" : "var(--g-50)" }}>
+                    <td style={{ padding: "8px 12px", color: "var(--muted)", whiteSpace: "nowrap", fontSize: 12 }}>{r.ts}</td>
+                    <td style={{ padding: "8px 12px", fontWeight: 600 }}>{r.actor}</td>
+                    <td style={{ padding: "8px 12px" }}>
+                      <span style={{
+                        display: "inline-block", padding: "2px 8px", borderRadius: 6, fontSize: 11.5, fontWeight: 700,
+                        ...actionBadgeStyle(r.action),
+                      }}>{r.action}</span>
+                    </td>
+                    <td style={{ padding: "8px 12px", fontFamily: "monospace", fontSize: 12 }}>{r.sku}</td>
+                    <td style={{ padding: "8px 12px", color: "var(--text)" }}>{r.detail}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <Pagination page={auditPage} total={filteredRows.length} pageSize={AUDIT_PAGE_SIZE} onChange={setAuditPage} listRef={auditListRef}/>
       </>)}
     </div>
   );
