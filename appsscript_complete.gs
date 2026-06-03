@@ -875,11 +875,11 @@ function updateOrderState(ss, body) {
   if (!lock.tryLock(8000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
 
   try {
-    // Try direct row match via orderId ("R5" → row 5+1=6 in sheet, index i=4)
+    // Try direct row match via orderId ("R3" = sheet row 3, readOrders_ uses id:`R${i+1}` where i is 0-indexed)
     if (body.orderId) {
       const rowNum = parseInt(String(body.orderId).replace(/[^0-9]/g, ""));
       if (rowNum >= 1) {
-        const sheetRow = rowNum + 1; // header is row 1, data starts row 2
+        const sheetRow = rowNum; // id already encodes 1-indexed sheet row
         if (body.status)              sheet.getRange(sheetRow, COL_ORD_STATUS).setValue(body.status);
         if (body.preparedQty != null) sheet.getRange(sheetRow, COL_ORD_PREPQTY).setValue(body.preparedQty);
         if (body.printFlag)           sheet.getRange(sheetRow, COL_ORD_PRINTFLAG).setValue(body.printFlag);
