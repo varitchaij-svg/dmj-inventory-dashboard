@@ -232,6 +232,44 @@ function enrichData(d) {
   // Normalize field names from Google Sheets (category → cat, etc.)
   d.products.forEach(p => {
     if (!p.cat && p.category) p.cat = p.category;
+    // ── Parse ZORT tags (col G) → supplier codes vs สถานะ (Thai) ──
+    // กติกา: รหัส supplier เป็นภาษาอังกฤษ/ตัวเลข (ไม่มีอักษรไทย),
+    //        ส่วน tag สถานะ (เช่น "สินค้าจมเกิน2เดือน", "ขายหน้าร้าน") มีอักษรไทย
+    const THAI_RE = /[฀-๿]/;
+    const rawTags = String(p.tag || "").split(",").map(t => t.trim()).filter(Boolean);
+    p.supplierTags = rawTags.filter(t => !THAI_RE.test(t));
+    p.statusTags   = rawTags.filter(t =>  THAI_RE.test(t));
+    // ── จำนวนเดือนที่สินค้าจม = นานแค่ไหนแล้วที่ไม่ถูกโอนสาย5→หน้าร้าน ──
+    // ใช้ lastTransferDate (วันโอนออกหน้าร้านล่าสุด) เป็นหลัก
+    //   ถ้าไม่เคยโอนเลย → fallback วันเข้าคลังล่าสุด (lastStockInDate)
+    // นับเฉพาะสินค้าที่ยังมีสต็อกในคลังสาย5 (qtyWH > 0) — ของหมดคลัง = ไม่จม
+    // null = ไม่ทราบ (ไม่มีข้อมูลวันที่เลย), 0 = โอน/เข้าคลังวันนี้/เร็วๆ นี้
+    let dm = null;
+    const whOnHand = (p.warehouseQty != null) ? p.warehouseQty
+                   : (p.qtyWH != null) ? p.qtyWH
+                   : (p.qty || 0);
+    const monthsSince = (d) => {
+      if (!d) return null;
+      const now = new Date();
+      let ref = null;
+      if (/^\d{4}-\d{2}-\d{2}/.test(d)) {              // yyyy-MM-dd (lastTransferDate / ISO lastStockInDate)
+        const [y, m, day] = d.substring(0,10).split("-").map(Number);
+        ref = new Date(y, m - 1, day);
+      } else {                                          // DD/MM/YYYY (legacy lastStockInDate)
+        const parts = String(d).split("/");
+        if (parts.length === 3) ref = new Date(+parts[2], +parts[1] - 1, +parts[0]);
+      }
+      if (!ref || isNaN(ref)) return null;
+      let mo = (now.getFullYear() - ref.getFullYear()) * 12 + (now.getMonth() - ref.getMonth());
+      if (now.getDate() < ref.getDate()) mo -= 1;       // ยังไม่ครบเดือนเต็ม
+      return mo < 0 ? 0 : mo;
+    };
+    if (whOnHand > 0) {
+      dm = monthsSince(p.lastTransferDate) ?? monthsSince(p.lastStockInDate) ?? null;
+    }
+    p.deadMonths = dm;
+    // supplier จาก tag เป็นแหล่งหลัก (เลิกพึ่งสูตร col H) — fallback col H ถ้าไม่มี tag
+    if (p.supplierTags.length) p.vendor = p.supplierTags[0];
   });
   if (typeof detectColor === 'function') {
     d.products.forEach(p => { if (!p.color) p.color = detectColor(p.name); });
@@ -283,6 +321,7 @@ function App() {
   const [isOnline, setIsOnline] = usS(() => navigator.onLine);
   const [lastSaved, setLastSaved] = usS(null); // auto-save timestamp
   const [confirmAction, setConfirmAction] = usS(null); // { type:"clearLocal"|"logout" }
+  const [navToast, showNavToast, hideNavToast] = useToast(); // toast สำหรับ nav-level errors
   const tabHistoryRef = React.useRef([]); // track tab navigation for Android back
 
   const sheetUrl = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : "data.json";
@@ -529,7 +568,7 @@ function App() {
                         const r = await syncZortNow();
                         setZortSyncing(false);
                         if (r && r.success !== false) fetchFromSheet();
-                        else alert("Sync ZORT ไม่สำเร็จ: " + ((r && r.error) || "unknown"));
+                        else showNavToast("error", "Sync ZORT ไม่สำเร็จ: " + ((r && r.error) || "unknown"));
                       }}>
                 {zortSyncing ? <span className="spin" style={{width:14,height:14,borderWidth:2}}/> : "⬇️"}
               </button>

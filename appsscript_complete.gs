@@ -323,6 +323,7 @@ function doGet(e) {
     const mtoJobs   = readMtoJobs_();
     const frontStoreQtys = readFrontStoreCheckedQty_();
     const qtyLoc    = readQtyByLocation_();
+    const transferHist = readTransferHistory_(); // วันโอนสาย5→หน้าร้านล่าสุด ต่อ SKU
 
     products.forEach(p => {
       const loc = qtyLoc[p.sku];
@@ -364,6 +365,10 @@ function doGet(e) {
         p.lastStockInDate = my[0].date;
         p.purchaseCount   = my.length;
       }
+
+      // วันโอนสาย5→หน้าร้านล่าสุด (yyyy-MM-dd) → ใช้คำนวณสินค้าจมฝั่ง frontend
+      const th = transferHist[(p.sku || "").toUpperCase()];
+      if (th) p.lastTransferDate = th;
 
       const adjs = transfers.filter(t => t.sku === p.sku && t.type === 'ปรับ');
       if (adjs.length > 0) {
@@ -599,6 +604,11 @@ function transferStockBatch(ss, list, actor) {
         else zortError = (zr && (zr.description || zr.error)) || "ZORT transfer ไม่สำเร็จ";
       } catch (e) { zortError = String(e); }
 
+      if (zortError) {
+        logZortFailure_("โอนสต็อกสาย5→หน้าร้าน",
+          zortError + " | SKU: " + transferred.map(t => t.sku + "x" + t.qty).join(","));
+      }
+
       try { logTransferBatch_(ss, transferred, zortNumber); } catch (e) { Logger.log("logTransferBatch_ error: " + e); }
       // Audit log: บันทึกทุก SKU ที่โอนจริง
       transferred.forEach(function(t) {
@@ -659,6 +669,120 @@ function logTransferBatch_(ss, items, zortNumber) {
     : "TF-" + Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyyMMdd") + "-" + String(baseRow).padStart(3, "0");
   const rows = items.map(it => [refNum, dateStr, "สำเร็จ", WH_NAME_SAI5, WH_NAME_FS, it.sku, it.name, it.qty]);
   logSheet.getRange(baseRow + 1, 1, rows.length, 8).setValues(rows);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// สินค้าจม: ดึงประวัติการโอนสาย5 → ดูเหมือนจริง (หน้าร้าน) จาก ZORT
+// เก็บวันโอนล่าสุดต่อ SKU ลงชีต "ประวัติโอนหน้าร้าน" เพื่อให้ frontend
+// คำนวณว่าสินค้าตัวไหนไม่ถูกโอนออกหน้าร้านมานานแล้ว = จม
+// รันเองครั้งแรก + ตั้ง trigger รายวัน (เหมือน syncZortSales)
+// ════════════════════════════════════════════════════════════════════
+const SHEET_TRANSFER_HIST = "ประวัติโอนหน้าร้าน";
+
+function syncTransferHistory() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const tz = "Asia/Bangkok";
+  const today = new Date();
+  const DAYS = 730; // ย้อนหลัง 2 ปี (ครอบคลุมสินค้าจมนาน)
+  const fromStr = Utilities.formatDate(new Date(today.getTime() - DAYS*24*60*60*1000), tz, "yyyy-MM-dd");
+  const toStr   = Utilities.formatDate(today, tz, "yyyy-MM-dd");
+
+  const all = [], limit = 200, MAX_PAGES = 120;
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const url = `${ZORT_BASE}/Transfer/GetTransfers?page=${page}&limit=${limit}&fromdate=${fromStr}&todate=${toStr}`;
+    const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) {
+      Logger.log("⚠️ syncTransferHistory page " + page + " HTTP " + res.getResponseCode() + ": " + res.getContentText().substring(0, 200));
+      break;
+    }
+    const list = (JSON.parse(res.getContentText())).list || [];
+    all.push(...list);
+    if (list.length < limit) break;
+    Utilities.sleep(250);
+    if (page === MAX_PAGES) Logger.log("⚠️ ชนเพดาน " + MAX_PAGES + " หน้า");
+  }
+  Logger.log("ZORT transfers fetched: " + all.length);
+
+  // เก็บวันโอนล่าสุดต่อ SKU (เฉพาะ สาย5 → หน้าร้าน, status Success)
+  const lastDate = {}; // sku → "yyyy-MM-dd"
+  let matched = 0;
+  for (const t of all) {
+    if (t.status !== "Success") continue;
+    if (t.fromwarehousecode !== WH_SAI5 || t.towarehousecode !== WH_FRONTSTORE) continue;
+    const d = t.transferdateString || (t.transferdate ? String(t.transferdate).substring(0,10) : null);
+    if (!d) continue;
+    for (const it of (Array.isArray(t.list) ? t.list : [])) {
+      const sku = String(it.sku || "").trim().toUpperCase();
+      if (!sku) continue;
+      matched++;
+      if (!lastDate[sku] || d > lastDate[sku]) lastDate[sku] = d;
+    }
+  }
+  Logger.log("รายการโอนสาย5→หน้าร้านที่นับ: " + matched + " · SKU: " + Object.keys(lastDate).length);
+
+  // เขียนชีต: A=SKU, B=วันโอนล่าสุด (text format กัน Sheets แปลงวันที่)
+  let sh = ss.getSheetByName(SHEET_TRANSFER_HIST);
+  if (!sh) sh = ss.insertSheet(SHEET_TRANSFER_HIST);
+  sh.clear();
+  sh.getRange(1, 1, 1, 2).setValues([["SKU", "วันโอนหน้าร้านล่าสุด"]]);
+  const skus = Object.keys(lastDate);
+  if (skus.length) {
+    const rows = skus.map(s => [s, lastDate[s]]);
+    sh.getRange(2, 1, rows.length, 2).setNumberFormat("@").setValues(rows);
+  }
+  invalidateCache_();
+  Logger.log("✅ syncTransferHistory เสร็จ");
+}
+
+function readTransferHistory_() {
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_TRANSFER_HIST);
+  if (!sh) return {};
+  const rows = sh.getDataRange().getDisplayValues();
+  const map = {};
+  for (let i = 1; i < rows.length; i++) {
+    const sku = (rows[i][0] || "").toString().trim().toUpperCase();
+    const d   = (rows[i][1] || "").toString().trim();
+    if (sku && d) map[sku] = d;
+  }
+  return map;
+}
+
+// ── EXPLORE: ดูโครงสร้าง response ของ ZORT Transfer endpoints ──
+// รันเองใน GAS editor แล้วดู Logs (View → Logs / Ctrl+Enter) เพื่อส่ง field name กลับมา
+// เป้าหมาย: หา field วันที่โอน + SKU + from/to warehouse เพื่อคำนวณ "สินค้าจม" จากการโอนสาย5→หน้าร้าน
+function exploreZortTransfers() {
+  const headers = zortHeaders_();
+  // ย้อนหลัง 1 ปี เพื่อให้เจอตัวอย่างข้อมูลแน่ ๆ
+  const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
+  const lastYear = Utilities.formatDate(new Date(Date.now() - 365*24*60*60*1000), Session.getScriptTimeZone(), "yyyy-MM-dd");
+
+  function dump(label, url) {
+    try {
+      const res = UrlFetchApp.fetch(url, { method: "get", headers: headers, muteHttpExceptions: true });
+      const code = res.getResponseCode();
+      const json = JSON.parse(res.getContentText());
+      Logger.log("=== " + label + " === HTTP " + code);
+      Logger.log("top-level keys: " + JSON.stringify(Object.keys(json)));
+      // หา array หลักใน response
+      const arrKey = Object.keys(json).find(k => Array.isArray(json[k]));
+      const arr = arrKey ? json[arrKey] : (Array.isArray(json) ? json : null);
+      if (arr && arr.length) {
+        Logger.log("array key: '" + (arrKey||"(root)") + "' length: " + arr.length);
+        Logger.log("FIRST ITEM: " + JSON.stringify(arr[0]));
+        if (arr[0] && Array.isArray(arr[0].list) && arr[0].list.length) {
+          Logger.log("FIRST ITEM.list[0]: " + JSON.stringify(arr[0].list[0]));
+        }
+      } else {
+        Logger.log("RAW (no array found): " + res.getContentText().slice(0, 1500));
+      }
+    } catch (e) {
+      Logger.log("=== " + label + " === ERROR: " + e);
+    }
+  }
+
+  const q = "?fromdate=" + lastYear + "&todate=" + today + "&limit=5";
+  dump("GetTransfers",         ZORT_BASE + "/Transfer/GetTransfers" + q);
+  dump("GetMovementTransfers", ZORT_BASE + "/Transfer/GetMovementTransfers" + q);
 }
 
 function deductStock(ss, sku, qty) {
@@ -1001,8 +1125,11 @@ function pushStockToZort_(items) {
         muteHttpExceptions: true
       });
       Logger.log(`pushStockToZort [${wh}]: HTTP ${res.getResponseCode()} — ` + res.getContentText().substring(0, 300));
+      const err = zortRespError_(res);
+      if (err) logZortFailure_("อัปเดตสต็อก (" + wh + ")", err + " | SKU: " + stocks.map(s => s.sku).join(","));
     } catch (e) {
       Logger.log(`pushStockToZort [${wh}] error: ` + e);
+      logZortFailure_("อัปเดตสต็อก (" + wh + ")", String(e) + " | SKU: " + stocks.map(s => s.sku).join(","));
     }
   }
 }
@@ -2365,18 +2492,38 @@ function readTransfers_() {
 function readPurchases_() {
   const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('รายการซื้อสินค้า');
   if (!sh) return [];
-  const rows = sh.getDataRange().getDisplayValues();
-  if (rows.length < 3) return [];
+  // getValues() ให้ Date object ถ้า cell เป็น Date type → format เป็น ISO ได้ถูกต้อง
+  // getDisplayValues() ให้ text ที่ format ตาม locale ของ sheet → อาจ sort ผิด
+  const rawRows = sh.getDataRange().getValues();
+  const tz = Session.getScriptTimeZone();
+  if (rawRows.length < 3) return [];
   const list = [];
-  for (let i = 2; i < rows.length; i++) {
-    const r = rows[i];
+  for (let i = 2; i < rawRows.length; i++) {
+    const r = rawRows[i];
     const sku = (r[24] || '').toString().trim();
     if (!sku) continue;
+    // แปลง date เป็น yyyy-MM-dd (ISO) เพื่อให้ string comparison sort ถูกลำดับ
+    let dateStr = '';
+    const rawDate = r[11];
+    if (rawDate instanceof Date && !isNaN(rawDate)) {
+      dateStr = Utilities.formatDate(rawDate, tz, 'yyyy-MM-dd');
+    } else {
+      // fallback: text DD/MM/YYYY → แปลงเป็น ISO
+      const s = String(rawDate || '').trim();
+      const p = s.split('/');
+      if (p.length === 3) {
+        const d = new Date(parseInt(p[2]), parseInt(p[1]) - 1, parseInt(p[0]));
+        if (!isNaN(d)) dateStr = Utilities.formatDate(d, tz, 'yyyy-MM-dd');
+        else dateStr = s;
+      } else {
+        dateStr = s;
+      }
+    }
     list.push({
-      type:      (r[1]  || '').toString().trim(),
-      poNum:     (r[2]  || '').toString().trim(),
-      supplier:  (r[4]  || '').toString().trim(),
-      date:      (r[11] || '').toString().trim(),
+      type:      String(r[1]  || '').trim(),
+      poNum:     String(r[2]  || '').trim(),
+      supplier:  String(r[4]  || '').trim(),
+      date:      dateStr,
       status:    (r[19] || '').toString().trim(),
       warehouse: (r[20] || '').toString().trim(),
       sku,
@@ -2540,6 +2687,51 @@ function sendLineMessage_(msg) {
   });
 }
 
+const SHEET_ZORT_FAILED = "ZORT_sync_failed";
+
+// ตรวจว่า ZORT response ล้มเหลวหรือไม่ → คืนข้อความ error ถ้า fail, คืน null ถ้าสำเร็จ
+// ZORT: HTTP 200 = สำเร็จ; body อาจมี resCode (200 = success) หรือ description/error
+function zortRespError_(res) {
+  try {
+    const code = res.getResponseCode();
+    const body = res.getContentText();
+    if (code !== 200) return "HTTP " + code + ": " + body.substring(0, 200);
+    let json = null;
+    try { json = JSON.parse(body); } catch (e) { return null; } // parse ไม่ได้แต่ HTTP 200 → ถือว่าผ่าน
+    // resCode ที่ไม่ใช่ "200"/200 = ZORT ปฏิเสธ (เช่น "100" = error)
+    if (json && json.resCode != null && String(json.resCode) !== "200") {
+      return "resCode " + json.resCode + ": " + (json.resDesc || json.description || body.substring(0, 150));
+    }
+    return null;
+  } catch (e) {
+    return String(e);
+  }
+}
+
+// บันทึกความล้มเหลวของ ZORT push ลงชีต + แจ้ง LINE เจ้าของ (กันความผิดพลาดหายเงียบ)
+// action = ชนิดงาน (transfer/stockcount/mto/frontstore), detail = รายละเอียด
+function logZortFailure_(action, detail) {
+  try {
+    const ss = SpreadsheetApp.openById(SHEET_ID);
+    let sh = ss.getSheetByName(SHEET_ZORT_FAILED);
+    if (!sh) {
+      sh = ss.insertSheet(SHEET_ZORT_FAILED);
+      sh.appendRow(["เวลา", "งาน", "รายละเอียด", "สถานะแก้ไข"]);
+    }
+    const ts = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm:ss");
+    sh.appendRow([ts, action, String(detail).substring(0, 500), "รอตรวจ"]);
+  } catch (e) {
+    Logger.log("logZortFailure_ เขียนชีตไม่ได้: " + e);
+  }
+  // แจ้ง LINE (best-effort — ถ้าส่งไม่ได้ก็ไม่ให้ล้มทั้ง flow)
+  try {
+    sendLineMessage_("⚠️ ZORT ไม่อัปเดต\nงาน: " + action + "\n" + String(detail).substring(0, 300) +
+                     "\n\nสต็อกในระบบกับ ZORT อาจไม่ตรง — โปรดตรวจชีต " + SHEET_ZORT_FAILED);
+  } catch (e) {
+    Logger.log("logZortFailure_ ส่ง LINE ไม่ได้: " + e);
+  }
+}
+
 function scheduledLineReminder() {
   var today = new Date();
   var dayOfWeek = today.getDay();
@@ -2681,6 +2873,18 @@ function closeMtoJob(ss, data, actor) {
   const jobId = String(data.jobId || "").trim();
   const items = data.items || [];
   const closedAt = data.closedAt || "";
+  if (!jobId) return error("ไม่มี jobId");
+
+  // Lock กันเขียนชนกัน (เหมือน transferStockBatch)
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่ ลองใหม่อีกครั้ง");
+
+  const cache = CacheService.getScriptCache();
+  try {
+    // Idempotency: กันกดปิดงานซ้ำ (รีเฟรช/เน็ตช้า/เครื่องอื่น) → หักสต็อกซ้ำ
+    if (cache.get("mto_closed_" + jobId)) {
+      return ok({ jobId, duplicate: true, deducted: 0 });
+    }
 
   // ─── Conflict detection: ถ้า sheet ถูกแก้หลังจาก client โหลด → reject ───
   if (data.clientLoadedAt) {
@@ -2699,6 +2903,18 @@ function closeMtoJob(ss, data, actor) {
     const ret = Math.max(0, Math.min(Number(item.returnedQty) || 0, qty));
     return qty - ret;
   };
+
+  // Idempotency เพิ่มเติม: ถ้างานนี้ปิดไปแล้วในชีต ("เสร็จแล้ว") → ไม่หักซ้ำ
+  const jobShChk = getOrCreateMtoJobSheet_(ss);
+  if (jobShChk) {
+    const jd = jobShChk.getDataRange().getValues();
+    for (let i = 1; i < jd.length; i++) {
+      if (String(jd[i][0]).trim() === jobId && String(jd[i][6]).trim() === "เสร็จแล้ว") {
+        cache.put("mto_closed_" + jobId, "1", 21600);
+        return ok({ jobId, duplicate: true, deducted: 0 });
+      }
+    }
+  }
 
   // Deduct stock
   const prodSh = ss.getSheetByName(SHEET_PRODUCTS);
@@ -2752,6 +2968,7 @@ function closeMtoJob(ss, data, actor) {
     zortResult = decreaseMtoStockInZort_(items);
   } catch (e) {
     Logger.log("ZORT DecreaseStock failed: " + e);
+    logZortFailure_("ปิดงาน MTO " + jobId, String(e) + " | SKU: " + items.map(it => it.sku).join(","));
   }
 
   // ปิดงานสำเร็จ → mark idempotency กันกดซ้ำใน 6 ชม.
@@ -2763,6 +2980,9 @@ function closeMtoJob(ss, data, actor) {
   invalidateCache_();
   return ContentService.createTextOutput(JSON.stringify({ success: true, jobId, deducted: items.length, zort: zortResult }))
     .setMimeType(ContentService.MimeType.JSON);
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function decreaseMtoStockInZort_(items) {
@@ -2794,6 +3014,8 @@ function decreaseMtoStockInZort_(items) {
     const json = JSON.parse(res.getContentText());
     Logger.log(`ZORT DecreaseStock [${whCode}]: ` + JSON.stringify(json));
     results[whCode] = json;
+    const err = zortRespError_(res);
+    if (err) logZortFailure_("ตัดสต็อก MTO (" + whCode + ")", err + " | SKU: " + stocks.map(s => s.sku).join(","));
   }
 
   return results;

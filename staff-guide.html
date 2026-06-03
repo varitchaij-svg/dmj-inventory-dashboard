@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DMJ — คู่มือการใช้งานสำหรับพนักงาน</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans Thai", sans-serif;
+    background: #f5f7f4; color: #1a2e1a; font-size: 15px; line-height: 1.7;
+    padding: 20px 16px 60px;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; }
+
+  /* ── Header ── */
+  .header { text-align: center; padding: 32px 16px 28px; }
+  .header h1 { font-size: 26px; font-weight: 800; color: #1a2e1a; }
+  .header .sub { font-size: 14px; color: #6b7c6b; margin-top: 6px; }
+  .logo { font-size: 48px; display: block; margin-bottom: 8px; }
+
+  /* ── Role cards (top) ── */
+  .role-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 32px; }
+  .role-badge {
+    flex: 1 1 160px; padding: 14px 16px; border-radius: 12px;
+    border: 2px solid transparent; text-align: center;
+    cursor: default;
+  }
+  .role-badge .emoji { font-size: 28px; display: block; margin-bottom: 4px; }
+  .role-badge .name { font-size: 14px; font-weight: 700; }
+  .role-badge .desc { font-size: 11.5px; margin-top: 3px; opacity: .8; }
+  .r-fs   { background: #e0f2fe; border-color: #7dd3fc; color: #0c4a6e; }
+  .r-wh   { background: #fef3c7; border-color: #fcd34d; color: #78350f; }
+  .r-sale { background: #ede9fe; border-color: #c4b5fd; color: #4c1d95; }
+
+  /* ── Section ── */
+  .role-section { margin-bottom: 40px; }
+  .role-title {
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 18px; border-radius: 14px 14px 0 0;
+    font-size: 17px; font-weight: 800;
+  }
+  .role-title .tag {
+    font-size: 11px; font-weight: 700; padding: 3px 10px;
+    border-radius: 99px; background: rgba(255,255,255,.4);
+  }
+  .fs-head  { background: #0ea5e9; color: #fff; }
+  .wh-head  { background: #d97706; color: #fff; }
+  .sale-head{ background: #7c3aed; color: #fff; }
+
+  .tabs-row {
+    background: #fff; border: 1px solid #e0ece0; border-top: none;
+    padding: 14px 18px 6px; display: flex; flex-wrap: wrap; gap: 8px;
+    border-radius: 0;
+  }
+  .tab-chip {
+    padding: 5px 14px; border-radius: 99px; font-size: 12.5px; font-weight: 600;
+    border: 1.5px solid; white-space: nowrap;
+  }
+  .tab-chip.fs   { background: #e0f2fe; border-color: #38bdf8; color: #075985; }
+  .tab-chip.wh   { background: #fef3c7; border-color: #f59e0b; color: #78350f; }
+  .tab-chip.sale { background: #ede9fe; border-color: #a78bfa; color: #4c1d95; }
+
+  /* ── Task cards ── */
+  .tasks { background: #fff; border: 1px solid #e0ece0; border-top: none; padding: 4px 0 12px; }
+  .task {
+    display: flex; gap: 14px; padding: 14px 18px;
+    border-bottom: 1px solid #f0f4f0; align-items: flex-start;
+  }
+  .task:last-child { border-bottom: none; }
+  .task-icon {
+    width: 40px; height: 40px; border-radius: 10px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; font-size: 20px;
+  }
+  .task-icon.fs   { background: #e0f2fe; }
+  .task-icon.wh   { background: #fef3c7; }
+  .task-icon.sale { background: #ede9fe; }
+  .task-body {}
+  .task-title { font-size: 14.5px; font-weight: 700; margin-bottom: 3px; }
+  .task-desc  { font-size: 13px; color: #4a5e4a; }
+  .task-steps { margin-top: 8px; padding-left: 18px; }
+  .task-steps li { font-size: 13px; color: #374937; margin-bottom: 3px; }
+  .task-steps li b { color: #1a2e1a; }
+
+  .section-divider {
+    background: #fff; border: 1px solid #e0ece0; border-top: none;
+    padding: 10px 18px; border-radius: 0 0 14px 14px;
+  }
+
+  /* ── Tips ── */
+  .tip-box {
+    background: #f0fdf4; border: 1.5px solid #86efac; border-radius: 12px;
+    padding: 14px 16px; margin-bottom: 32px;
+  }
+  .tip-box .tip-title { font-size: 13px; font-weight: 700; color: #166534; margin-bottom: 8px; }
+  .tip-box ul { padding-left: 18px; }
+  .tip-box li { font-size: 13px; color: #166534; margin-bottom: 4px; }
+
+  /* ── Note / warn ── */
+  .warn {
+    background: #fff7ed; border-left: 4px solid #fb923c;
+    border-radius: 6px; padding: 8px 12px; margin-top: 8px;
+    font-size: 12.5px; color: #7c2d12;
+  }
+  .note {
+    background: #f0f9ff; border-left: 4px solid #38bdf8;
+    border-radius: 6px; padding: 8px 12px; margin-top: 8px;
+    font-size: 12.5px; color: #0c4a6e;
+  }
+
+  /* ── Comparison table ── */
+  .compare-wrap { overflow-x: auto; margin-bottom: 32px; }
+  table.compare {
+    width: 100%; border-collapse: collapse;
+    background: #fff; border-radius: 12px; overflow: hidden;
+    border: 1px solid #e0ece0; font-size: 13px;
+  }
+  table.compare th {
+    padding: 12px 14px; font-weight: 700; font-size: 12px;
+    text-transform: uppercase; letter-spacing: .06em; border-bottom: 2px solid #e0ece0;
+  }
+  table.compare td { padding: 11px 14px; border-bottom: 1px solid #f0f4f0; vertical-align: top; }
+  table.compare tr:last-child td { border-bottom: none; }
+  table.compare tr:hover td { background: #fafcf7; }
+  .th-fn { background: #f5f7f4; }
+  .th-fs { background: #e0f2fe; color: #075985; }
+  .th-wh { background: #fef3c7; color: #78350f; }
+  .th-sale { background: #ede9fe; color: #4c1d95; }
+  .c-yes { color: #16a34a; font-weight: 700; text-align: center; }
+  .c-no  { color: #d1d5db; text-align: center; }
+
+  @media (max-width: 500px) {
+    .header h1 { font-size: 20px; }
+    .role-badge { flex: 1 1 120px; }
+    .task { gap: 10px; }
+    .task-icon { width: 34px; height: 34px; font-size: 17px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Header -->
+  <div class="header">
+    <span class="logo">🌿</span>
+    <h1>คู่มือการใช้งานระบบ DMJ Inventory</h1>
+    <div class="sub">สำหรับพนักงานทุกตำแหน่ง · ร้านดูเหมือนจริง (Doomuenjing)</div>
+  </div>
+
+  <!-- Role overview -->
+  <div class="role-row">
+    <div class="role-badge r-fs">
+      <span class="emoji">🌸</span>
+      <div class="name">หน้าร้าน</div>
+      <div class="desc">เช็คสต็อกหน้าร้าน<br>ดูสินค้า · พิมพ์ label</div>
+    </div>
+    <div class="role-badge r-wh">
+      <span class="emoji">🏭</span>
+      <div class="name">คลังสินค้า</div>
+      <div class="desc">นับสต็อกคลัง<br>จัดการโอนสินค้า</div>
+    </div>
+    <div class="role-badge r-sale">
+      <span class="emoji">💼</span>
+      <div class="name">Sale</div>
+      <div class="desc">ดูสินค้า · รับออเดอร์<br>พิมพ์ label</div>
+    </div>
+  </div>
+
+  <div class="tip-box">
+    <div class="tip-title">💡 เริ่มต้นใช้งาน</div>
+    <ul>
+      <li>เปิด browser บนมือถือ → ไปที่ URL ของระบบ → เลือก profile ของตัวเอง</li>
+      <li>ไม่ต้องใส่ PIN (เฉพาะ เจ้าของ เท่านั้นที่ต้องใส่)</li>
+      <li>แถบเมนูอยู่ด้านบน — กดแท็บเพื่อสลับหน้า</li>
+      <li>ถ้าข้อมูลไม่อัปเดต กด <b>"Sync"</b> หรือรีเฟรชหน้า</li>
+    </ul>
+  </div>
+
+  <!-- ══════════════════════════════════════════════ -->
+  <!-- หน้าร้าน -->
+  <!-- ══════════════════════════════════════════════ -->
+  <div class="role-section">
+    <div class="role-title fs-head">
+      🌸 หน้าร้าน (Frontstore)
+      <span class="tag">ไม่ต้องใส่ PIN</span>
+    </div>
+
+    <div class="tabs-row">
+      <span class="tab-chip fs">🛍️ สินค้า & สั่ง</span>
+      <span class="tab-chip fs">⚠️ สต๊อก & แจ้งเตือน</span>
+      <span class="tab-chip fs">🏪 เช็คหน้าร้าน</span>
+      <span class="tab-chip fs">📋 รายการสั่งของ</span>
+      <span class="tab-chip fs">🖨️ พิมพ์ Label</span>
+    </div>
+
+    <div class="tasks">
+
+      <div class="task">
+        <div class="task-icon fs">🏪</div>
+        <div class="task-body">
+          <div class="task-title">เช็คจำนวนสินค้าหน้าร้าน (สำคัญที่สุด)</div>
+          <div class="task-desc">นับสินค้าที่วางหน้าร้านแล้วบันทึกเข้าระบบทุกวัน เพื่อให้ยอดคงเหลือถูกต้อง</div>
+          <ul class="task-steps">
+            <li>กดแท็บ <b>🏪 เช็คหน้าร้าน</b></li>
+            <li>เลือกหมวดสินค้าที่ต้องการเช็ค (บน/ล่าง)</li>
+            <li>นับสินค้าจริงหน้าร้าน แล้ว<b>กดตัวเลข</b>ที่การ์ดแต่ละตัว หรือกดปุ่ม <b>+/−</b></li>
+            <li>เมื่อเช็คครบแล้ว กด <b>💾 บันทึก</b> (ปุ่มลอยมุมขวาล่าง)</li>
+            <li>รอจนขึ้น "บันทึกสำเร็จ" แล้วจึงปิด</li>
+          </ul>
+          <div class="warn">⚠️ ต้องกดบันทึกทุกครั้ง — ถ้าไม่บันทึกตัวเลขจะหายเมื่อปิดหน้า</div>
+        </div>
+      </div>
+
+      <div class="task">
+        <div class="task-icon fs">🛍️</div>
+        <div class="task-body">
+          <div class="task-title">ดูสินค้าตามหมวดหมู่</div>
+          <div class="task-desc">ดูรายการสินค้าทั้งหมด ค้นหา กรองตาม supplier หรือสีสินค้า</div>
+          <ul class="task-steps">
+            <li>กดแท็บ <b>🛍️ สินค้า & สั่ง</b></li>
+            <li>เลือกหมวดหมู่จาก dropdown ด้านบน</li>
+            <li>ค้นหาด้วย SKU หรือชื่อสินค้า หรือสแกนบาร์โค้ด 📷</li>
+            <li>กรองตาม <b>ร้าน (Supplier)</b> หรือ <b>สี</b> ได้จากแถบกรองด้านล่าง</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="task">
+        <div class="task-icon fs">⚠️</div>
+        <div class="task-body">
+          <div class="task-title">ดูสินค้าใกล้หมด / หมด</div>
+          <div class="task-desc">ดูรายการสินค้าที่สต็อกใกล้หมด เพื่อแจ้งหัวหน้าให้สั่งเพิ่ม</div>
+          <ul class="task-steps">
+            <li>กดแท็บ <b>⚠️ สต๊อก & แจ้งเตือน</b></li>
+            <li>ดูแท็บ <b>"ใกล้หมด"</b> และ <b>"หมดแล้ว"</b></li>
+            <li>จดรายการ SKU ที่หมดแจ้งหัวหน้า</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="task">
+        <div class="task-icon fs">📋</div>
+        <div class="task-body">
+          <div class="task-title">ดูรายการสั่งของที่รอส่ง</div>
+          <div class="task-desc">ดูออเดอร์ที่ยังรอดำเนินการ และอัปเดตสถานะเมื่อส่งของแล้ว</div>
+          <ul class="task-steps">
+            <li>กดแท็บ <b>📋 รายการสั่งของ</b></li>
+            <li>ออเดอร์ที่ <b>สีเหลือง = รอ</b>, สีเขียว = ส่งแล้ว</li>
+            <li>กดการ์ดออเดอร์เพื่อดูรายละเอียดสินค้าในออเดอร์</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="task">
+        <div class="task-icon fs">🖨️</div>
+        <div class="task-body">
+          <div class="task-title">พิมพ์ Label ราคา</div>
+          <div class="task-desc">สร้าง label ป้ายราคาสินค้าสำหรับติดของหน้าร้าน</div>
+          <ul class="task-steps">
+            <li>กดแท็บ <b>🖨️ พิมพ์ Label</b></li>
+            <li>ค้นหาสินค้าด้วย SKU หรือสแกนบาร์โค้ด</li>
+            <li>กด <b>เพิ่มรายการ</b> แล้วระบุจำนวน</li>
+            <li>กด <b>พิมพ์</b> — หน้าต่างพิมพ์จะเปิดขึ้นมา</li>
+          </ul>
+        </div>
+      </div>
+
+    </div>
+    <div class="section-divider"></div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════ -->
+  <!-- คลังสินค้า -->
+  <!-- ══════════════════════════════════════════════ -->
+  <div class="role-section">
+    <div class="role-title wh-head">
+      🏭 คลังสินค้า (Warehouse)
+      <span class="tag">ไม่ต้องใส่ PIN</span>
+    </div>
+
+    <div class="tabs-row">
+      <span class="tab-chip wh">🛍️ สินค้า & สั่ง</span>
+      <span class="tab-chip wh">⚠️ สต๊อก & แจ้งเตือน</span>
+      <span class="tab-chip wh">🗺️ ตำแหน่งคลัง</span>
+      <span class="tab-chip wh">📊 นับ stock คลัง</span>
+      <span class="tab-chip wh">📋 รายการสั่งของ</span>
+      <span class="tab-chip wh">📦 สรุปสินค้าออกจากคลัง</span>
+      <span class="tab-chip wh">🎁 งานจัดพิเศษ</span>
+      <span class="tab-chip wh">🖨️ พิมพ์ Label</span>
+    </div>
+
+    <div class="tasks">
+
+      <div class="task">
+        <div class="task-icon wh">📊</div>
+        <div class="task-body">
+          <div class="task-title">นับสต็อกคลังสาย5 (สำคัญที่สุด)</div>
+          <div class="task-desc">นับสินค้าที่อยู่ในคลังจริง แล้วบันทึกยืนยันเข้าระบบ — ตัวเลขจะอัปเดตไปใน ZORT ด้วยอัตโนมัติ</div>
+          <ul class="task-steps">
+            <li>กดแท็บ <b>📊 นับ stock คลัง</b></li>
+            <li>เลือกหมวดหมู่ → นับสินค้าในคลังสาย5 แล้วพิมพ์ตัวเลขที่แต่ละการ์ด</li>
+            <li>กดปุ่ม <b>+/−</b> ปรับทีละ 1 หรือพิมพ์ตัวเลขโดยตรง</li>
+            <li>กด <b>💾 บันทึก</b> (ปุ่มลอยมุมขวาล่าง) เพื่อยืนยัน</li>
+            <li>รอขึ้น "บันทึกสำเร็จ" ก่อนปิด</li>
+          </ul>
+          <div class="warn">⚠️ ตัวเลขจะซิงค์ขึ้น ZORT อัตโนมัติเมื่อบันทึก — อย่ากดบันทึกถ้ายังนับไม่เสร็จ</div>
+        </div>
+      </div>
+
+      <div class="task">
+        <div class="task-icon wh">🗺️</div>
+        <div class="task-body">
+          <div class="task-title">ดูตำแหน่งจัดเก็บสินค้าในคลัง</div>
+          <div class="task-desc">ดูว่าสินค้าแต่ละ SKU วางอยู่ที่ชั้นไหน ตำแหน่งใดในคลัง</div>
+          <ul class="task-steps">
+            <li>กดแท็บ <b>🗺️ ตำแหน่งคลัง</b></li>
+            <li>ค้นหา SKU หรือสแกนบาร์โค้ดเพื่อดูตำแหน่ง</li>
+            <li>ดูได้ว่า "ชั้น A3 · แถวซ้าย" เป็นต้น</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="task">
+        <div class="task-icon wh">📋</div>
+        <div class="task-body">
+          <div class="task-title">จัดเตรียมสินค้าตามออเดอร์</div>
+          <div class="task-desc">ดูออเดอร์ที่รอ → หยิบสินค้าจากคลัง → กดยืนยันส่งแล้ว</div>
+          <ul class="task-steps">
+            <li>กดแท็บ <b>📋 รายการสั่งของ</b></li>
+            <li>กดการ์ดออเดอร์ที่ <b>สีเหลือง (รอ)</b> เพื่อดูรายละเอียด</li>
+            <li>หยิบสินค้าตามรายการ → กด <b>✅ ส่งแล้ว</b></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="task">
+        <div class="task-icon wh">📦</div>
+        <div class="task-body">
+          <div class="task-title">ดูสรุปสินค้าที่ต้องออกจากคลัง</div>
+          <div class="task-desc">ดูภาพรวมสินค้าที่ต้องเตรียมส่งในแต่ละรอบ จัดกลุ่มตาม SKU</div>
+          <ul class="task-steps">
+            <li>กดแท็บ <b>📦 สรุปสินค้าออกจากคลัง</b></li>
+            <li>ดูรายการสรุปว่า SKU ไหนต้องส่งกี่ชิ้นรวม</li>
+            <li>ใช้เป็นใบเบิกสินค้าออกจากคลัง</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="task">
+        <div class="task-icon wh">🎁</div>
+        <div class="task-body">
+          <div class="task-title">งานจัดพิเศษ (Made to Order)</div>
+          <div class="task-desc">จัดการงานดอกไม้พิเศษตามสั่ง — ดูวัตถุดิบที่ต้องใช้ และตัดสต็อกเมื่อส่งงาน</div>
+          <ul class="task-steps">
+            <li>กดแท็บ <b>🎁 งานจัดพิเศษ</b></li>
+            <li>กด <b>+ สร้างงาน</b> → ใส่ชื่องาน / ชื่อลูกค้า / ราคา</li>
+            <li>เพิ่มรายการวัตถุดิบโดยค้นหา SKU หรือสแกนบาร์โค้ด</li>
+            <li>เมื่อจัดเสร็จ กด <b>✅ ปิดงาน</b> — ระบบตัดสต็อกอัตโนมัติ</li>
+          </ul>
+          <div class="note">ℹ️ สามารถคืนวัตถุดิบที่ไม่ได้ใช้กลับคลังได้ก่อนปิดงาน</div>
+        </div>
+      </div>
+
+    </div>
+    <div class="section-divider"></div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════ -->
+  <!-- Sale -->
+  <!-- ══════════════════════════════════════════════ -->
+  <div class="role-section">
+    <div class="role-title sale-head">
+      💼 Sale
+      <span class="tag">ไม่ต้องใส่ PIN</span>
+    </div>
+
+    <div class="tabs-row">
+      <span class="tab-chip sale">🛍️ สินค้า & สั่ง</span>
+      <span class="tab-chip sale">⚠️ สต๊อก & แจ้งเตือน</span>
+      <span class="tab-chip sale">📋 รายการสั่งของ</span>
+      <span class="tab-chip sale">🖨️ พิมพ์ Label</span>
+    </div>
+
+    <div class="tasks">
+
+      <div class="task">
+        <div class="task-icon sale">🛍️</div>
+        <div class="task-body">
+          <div class="task-title">ค้นหาสินค้าและตรวจสต็อก</div>
+          <div class="task-desc">ดูว่าสินค้าที่ลูกค้าถามมีในสต็อกไหม เหลือกี่ชิ้น</div>
+          <ul class="task-steps">
+            <li>กดแท็บ <b>🛍️ สินค้า & สั่ง</b></li>
+            <li>ค้นหาด้วย SKU / ชื่อสินค้า หรือสแกนบาร์โค้ด 📷</li>
+            <li>ดูตัวเลขสต็อกที่การ์ดสินค้า</li>
+            <li>กรองตามหมวดหมู่หรือ supplier ได้</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="task">
+        <div class="task-icon sale">📋</div>
+        <div class="task-body">
+          <div class="task-title">ดูรายการออเดอร์</div>
+          <div class="task-desc">ดูออเดอร์ที่รอ เพื่อติดตามสถานะการส่งของ</div>
+          <ul class="task-steps">
+            <li>กดแท็บ <b>📋 รายการสั่งของ</b></li>
+            <li>ออเดอร์ที่ยังรอจะอยู่ด้านบน (สีเหลือง)</li>
+            <li>กดการ์ดเพื่อดูรายการสินค้าในออเดอร์</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="task">
+        <div class="task-icon sale">⚠️</div>
+        <div class="task-body">
+          <div class="task-title">ตรวจสินค้าใกล้หมด</div>
+          <div class="task-desc">ดูว่าสินค้าไหนกำลังจะหมด เพื่อแจ้งลูกค้าล่วงหน้า</div>
+          <ul class="task-steps">
+            <li>กดแท็บ <b>⚠️ สต๊อก & แจ้งเตือน</b></li>
+            <li>ดูแท็บ <b>"ใกล้หมด"</b> และ <b>"หมดแล้ว"</b></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="task">
+        <div class="task-icon sale">🖨️</div>
+        <div class="task-body">
+          <div class="task-title">พิมพ์ Label ราคา</div>
+          <div class="task-desc">พิมพ์ป้ายราคาสินค้าให้ลูกค้าหรือสำหรับติดของ</div>
+          <ul class="task-steps">
+            <li>กดแท็บ <b>🖨️ พิมพ์ Label</b></li>
+            <li>ค้นหาหรือสแกนบาร์โค้ด → เพิ่มรายการ → กด <b>พิมพ์</b></li>
+          </ul>
+        </div>
+      </div>
+
+    </div>
+    <div class="section-divider"></div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════ -->
+  <!-- Comparison Table -->
+  <!-- ══════════════════════════════════════════════ -->
+  <div style="font-size:15px;font-weight:700;margin-bottom:12px;">📋 ตารางเปรียบเทียบสิทธิ์การใช้งาน</div>
+  <div class="compare-wrap">
+    <table class="compare">
+      <thead>
+        <tr>
+          <th class="th-fn" style="width:38%">ฟังก์ชัน</th>
+          <th class="th-fs" style="width:20%">🌸 หน้าร้าน</th>
+          <th class="th-wh" style="width:21%">🏭 คลัง</th>
+          <th class="th-sale" style="width:21%">💼 Sale</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>🛍️ ดูสินค้าตามหมวด / ค้นหา</td><td class="c-yes">✓</td><td class="c-yes">✓</td><td class="c-yes">✓</td></tr>
+        <tr><td>🔍 ค้นหาด้วยบาร์โค้ด</td><td class="c-yes">✓</td><td class="c-yes">✓</td><td class="c-yes">✓</td></tr>
+        <tr><td>⚠️ ดูสินค้าใกล้หมด / หมด</td><td class="c-yes">✓</td><td class="c-yes">✓</td><td class="c-yes">✓</td></tr>
+        <tr><td>🏪 เช็คและบันทึกสต็อกหน้าร้าน</td><td class="c-yes">✓</td><td class="c-no">—</td><td class="c-no">—</td></tr>
+        <tr><td>📊 นับสต็อกคลังสาย5</td><td class="c-no">—</td><td class="c-yes">✓</td><td class="c-no">—</td></tr>
+        <tr><td>🗺️ ดูตำแหน่งจัดเก็บในคลัง</td><td class="c-no">—</td><td class="c-yes">✓</td><td class="c-no">—</td></tr>
+        <tr><td>📋 ดูรายการออเดอร์</td><td class="c-yes">✓</td><td class="c-yes">✓</td><td class="c-yes">✓</td></tr>
+        <tr><td>✅ กดยืนยันส่งออเดอร์</td><td class="c-yes">✓</td><td class="c-yes">✓</td><td class="c-no">—</td></tr>
+        <tr><td>📦 ดูสรุปสินค้าออกจากคลัง</td><td class="c-no">—</td><td class="c-yes">✓</td><td class="c-no">—</td></tr>
+        <tr><td>🎁 งานจัดพิเศษ (MTO)</td><td class="c-no">—</td><td class="c-yes">✓</td><td class="c-no">—</td></tr>
+        <tr><td>🖨️ พิมพ์ Label ราคา</td><td class="c-yes">✓</td><td class="c-yes">✓</td><td class="c-yes">✓</td></tr>
+        <tr><td>📈 ดูเทรนด์ยอดขาย</td><td class="c-no">—</td><td class="c-no">—</td><td class="c-no">—</td></tr>
+        <tr><td>💰 ดูราคาสินค้า / รายได้</td><td class="c-no">เฉพาะเจ้าของ</td><td class="c-no">เฉพาะเจ้าของ</td><td class="c-no">เฉพาะเจ้าของ</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Tips สำหรับทุกคน -->
+  <div class="tip-box">
+    <div class="tip-title">🌟 เคล็ดลับใช้งานให้คล่อง</div>
+    <ul>
+      <li><b>สแกนบาร์โค้ด</b> — กดไอคอน 📷 แล้วส่องบาร์โค้ดสินค้า ไม่ต้องพิมพ์</li>
+      <li><b>กรอง Supplier</b> — ในหน้าสินค้า กดชื่อร้านค้าใต้แถบค้นหาเพื่อดูเฉพาะของร้านนั้น</li>
+      <li><b>กรองสินค้าจม</b> — แถบ "⏳ สินค้าจม" บอกว่าสินค้าไหนไม่ถูกโอนออกมานานกี่เดือน</li>
+      <li><b>ข้อมูลไม่อัปเดต</b> — ดึงหน้าลงเพื่อ refresh หรือรอ 3 นาทีแล้วลองใหม่</li>
+      <li><b>บันทึกค้าง</b> — ถ้าเน็ตหลุดระหว่างบันทึก รอสักครู่แล้วกดบันทึกอีกครั้ง</li>
+    </ul>
+  </div>
+
+  <p style="text-align:center;font-size:12px;color:#9aab9a;margin-top:8px;">
+    DMJ Inventory · dmj-inventory-dashboard.pages.dev
+  </p>
+
+</div>
+</body>
+</html>

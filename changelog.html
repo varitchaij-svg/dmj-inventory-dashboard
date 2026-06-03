@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DMJ Inventory — สรุปการพัฒนา</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #f5f7f4; color: #1a2e1a; font-size: 15px; line-height: 1.6;
+    padding: 24px 16px 60px;
+  }
+  .wrap { max-width: 780px; margin: 0 auto; }
+
+  h1 { font-size: 22px; font-weight: 800; color: #1a2e1a; margin-bottom: 4px; }
+  .subtitle { font-size: 13px; color: #6b7c6b; margin-bottom: 32px; }
+
+  .week { margin-bottom: 40px; }
+  .week-header {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 16px; padding-bottom: 10px;
+    border-bottom: 2px solid #d4e6d4;
+  }
+  .week-label {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .08em; color: #fff;
+    background: #2d7a3a; padding: 3px 10px; border-radius: 99px;
+  }
+  .week-title { font-size: 16px; font-weight: 700; color: #1a2e1a; }
+
+  .section { margin-bottom: 20px; }
+  .section-title {
+    font-size: 12px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .07em; color: #2d7a3a; margin-bottom: 8px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .section-title::before {
+    content: ""; display: block; width: 3px; height: 14px;
+    background: #2d7a3a; border-radius: 2px;
+  }
+
+  .card {
+    background: #fff; border-radius: 12px; padding: 16px;
+    border: 1px solid #e0ece0; margin-bottom: 10px;
+  }
+  .card-title {
+    font-size: 14px; font-weight: 700; margin-bottom: 6px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .badge {
+    font-size: 10px; font-weight: 700; padding: 2px 8px;
+    border-radius: 99px; white-space: nowrap;
+  }
+  .badge-new  { background: #dcfce7; color: #166534; }
+  .badge-fix  { background: #fef3c7; color: #92400e; }
+  .badge-ux   { background: #ede9fe; color: #5b21b6; }
+  .badge-perf { background: #dbeafe; color: #1e40af; }
+  .badge-sec  { background: #fee2e2; color: #991b1b; }
+
+  ul { padding-left: 18px; }
+  li { font-size: 13.5px; color: #374937; margin-bottom: 3px; }
+  li strong { color: #1a2e1a; }
+
+  .note {
+    font-size: 12px; color: #6b7c6b; margin-top: 6px;
+    padding: 6px 10px; background: #f5f7f4; border-radius: 6px;
+    border-left: 3px solid #c3d9c3;
+  }
+
+  .divider { border: none; border-top: 1px dashed #d4e6d4; margin: 24px 0; }
+
+  .stat-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
+  .stat {
+    background: #fff; border: 1px solid #e0ece0; border-radius: 10px;
+    padding: 12px 16px; flex: 1 1 140px; text-align: center;
+  }
+  .stat-num { font-size: 28px; font-weight: 800; color: #2d7a3a; line-height: 1; }
+  .stat-label { font-size: 11px; color: #6b7c6b; margin-top: 4px; }
+
+  @media (max-width: 480px) {
+    body { padding: 16px 12px 40px; }
+    h1 { font-size: 18px; }
+    .stat-num { font-size: 22px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>🌿 DMJ Inventory — สรุปการพัฒนา</h1>
+  <div class="subtitle">ระบบจัดการสต็อก Doomuenjing · อัปเดตถึง 2 มิ.ย. 2569</div>
+
+  <div class="stat-row">
+    <div class="stat"><div class="stat-num">100+</div><div class="stat-label">commits ใน 7 วัน</div></div>
+    <div class="stat"><div class="stat-num">9</div><div class="stat-label">ฟีเจอร์ใหม่หลัก</div></div>
+    <div class="stat"><div class="stat-num">3</div><div class="stat-label">ZORT API sync ใหม่</div></div>
+    <div class="stat"><div class="stat-num">0</div><div class="stat-label">ต้อง deploy GAS วันนี้*</div></div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <div class="week">
+    <div class="week-header">
+      <span class="week-label">2 มิ.ย. 2569</span>
+      <span class="week-title">วันนี้ — สินค้าจม · UX · Emoji</span>
+    </div>
+
+    <div class="section">
+      <div class="section-title">ตัวกรองสินค้าจม (Dead Stock Filter)</div>
+
+      <div class="card">
+        <div class="card-title">
+          ⏳ กรองสินค้าจมจากการโอนจริง
+          <span class="badge badge-new">ใหม่</span>
+        </div>
+        <ul>
+          <li>ดึงประวัติการโอนจาก <strong>ZORT API</strong> (<code>/Transfer/GetTransfers</code>) ย้อนหลัง 2 ปี</li>
+          <li>กรองเฉพาะ <strong>คลังสาย5 (W0002) → หน้าร้าน (W0001)</strong> ที่ status Success</li>
+          <li>เก็บ "วันโอนล่าสุดต่อ SKU" ลงชีต <strong>"ประวัติโอนหน้าร้าน"</strong></li>
+          <li>พบ <strong>6,474 รายการ · 2,368 SKU</strong> จาก transfer ทั้งหมด 15,242 รายการ</li>
+          <li>Frontend คำนวณ <code>deadMonths</code> จากวันโอนล่าสุด (fallback: วันเข้าคลัง)</li>
+          <li>นับ<strong>เฉพาะสินค้าที่ยังมีสต็อกในคลัง</strong> (qtyWH > 0) — ขายหมดแล้วไม่ถือว่าจม</li>
+          <li>แถบกรอง: <strong>เกณฑ์ 2 / 3 / 6 / 12 เดือน</strong> — แสดงเฉพาะระดับที่มีสินค้าเข้าข่ายจริง</li>
+        </ul>
+        <div class="note">⚠️ GAS ต้องทำ: copy โค้ดใหม่ → รัน syncTransferHistory → Deploy new version → ตั้ง trigger รายวัน</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">UX / UI</div>
+
+      <div class="card">
+        <div class="card-title">
+          👆 Touch Targets & Filter Chips
+          <span class="badge badge-ux">UX</span>
+        </div>
+        <ul>
+          <li><strong>ทุก interactive element</strong> min-height 44px — navtab, fchip, btn, select, MiniRow</li>
+          <li><strong>Filter chip active</strong>: เปลี่ยนจาก tint เบาๆ → solid green + white text + shadow เห็นชัดทันที</li>
+          <li><strong>Segmented control</strong>: hover feedback + active box-shadow รู้สึกว่า "กดแล้ว"</li>
+          <li><strong>navtab active</strong>: font-weight 700 + เส้นขีดใต้สีเขียว</li>
+          <li>Table row padding เพิ่ม, font-weight 700 บน header</li>
+          <li>Empty state icon ใหญ่ขึ้น 64px + box-shadow ดู friendly กว่าเดิม</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          📐 Grid Overflow Fix
+          <span class="badge badge-fix">แก้บัค</span>
+        </div>
+        <ul>
+          <li><code>repeat(N, 1fr)</code> → <code>minmax(0, 1fr)</code> ทุกจุด ครอบคลุม row-2/3/4/5 + responsive overrides</li>
+          <li>กันการ์ดล้นจอบน <strong>มือถือ 360px</strong> เมื่อ child มี min-width</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          🌷 Emoji หมวดหมู่
+          <span class="badge badge-ux">UX</span>
+        </div>
+        <ul>
+          <li>Realtouch 🌷 · บูช 💐 · ดอกหญ้า 🌼 · ใบบูช 🌿 · ใบไม้แขวน 🍂 · กิ่งไม้ 🪵 · แจกันแก้ว 🏺 · เรซิ่น 🎨</li>
+          <li>เปลี่ยน 8 จาก 14 หมวด ให้ตรงกับสินค้าจริงตามคำอธิบายเจ้าของร้าน</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Supplier Filter (ก่อนหน้าวันนี้เล็กน้อย)</div>
+      <div class="card">
+        <div class="card-title">
+          🏭 อ่าน Supplier จาก ZORT Tag
+          <span class="badge badge-new">ใหม่</span>
+        </div>
+        <ul>
+          <li>แยก tag ZORT: tag ภาษาอังกฤษ = supplier code, tag ไทย = สถานะ</li>
+          <li>Supplier chips บนหน้าหมวดหมู่ใช้ tag เป็นหลัก (fallback col H เดิม)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- ═══════════════════════════════════════════ -->
+  <div class="week">
+    <div class="week-header">
+      <span class="week-label">1–2 มิ.ย. 2569</span>
+      <span class="week-title">ZORT Sync · Auto-Save · Purchase Order</span>
+    </div>
+
+    <div class="section">
+      <div class="section-title">ZORT API Integration</div>
+
+      <div class="card">
+        <div class="card-title">
+          📦 Purchase Order Sync
+          <span class="badge badge-new">ใหม่</span>
+        </div>
+        <ul>
+          <li>ดึง PO จาก ZORT (<code>/PurchaseOrder/GetPurchaseOrders</code>) อัตโนมัติ</li>
+          <li>trigger รายสัปดาห์ (จันทร์ 06:00) — ไม่กิน quota เกิน</li>
+          <li>แก้ endpoint + field names จากการ explore API จริง</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          📊 ZORT Sales Sync ปรับปรุง
+          <span class="badge badge-fix">แก้บัค</span>
+        </div>
+        <ul>
+          <li>ดึงยอดขายย้อนหลัง <strong>1 ปีเต็ม</strong> (เดิม 90 วัน) + รายวัน 60 วัน</li>
+          <li>กรอง order นอกช่วง (เช่น order ปี 2013) ออก ไม่ให้บิดสถิติ</li>
+          <li>หัว sheet เป็น text format กัน Google Sheets แปลง MM/YYYY เป็นวันที่</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          🖼️ ZORT Product Images
+          <span class="badge badge-new">ใหม่</span>
+        </div>
+        <ul>
+          <li>sync รูปสินค้าจาก ZORT → col E ใน imageUrl sheet</li>
+          <li>ZORT เป็น primary source, manual (col D) เป็น fallback</li>
+          <li>trigger รายสัปดาห์ (จันทร์ 05:00)</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          🏭 Stock Push to ZORT แก้ไข
+          <span class="badge badge-fix">แก้บัค</span>
+        </div>
+        <ul>
+          <li>เปลี่ยนเป็น <code>UpdateProductStockList</code> (actual stock แทน available)</li>
+          <li>แก้ payload schema: <code>stocks[].stock</code> ตาม ZORT V4 จริง</li>
+          <li>warehousecode ส่งเป็น query param (ไม่ใช่ body)</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Auto-Save & UX</div>
+
+      <div class="card">
+        <div class="card-title">
+          💾 Auto-Save + Sticky FAB
+          <span class="badge badge-new">ใหม่</span>
+        </div>
+        <ul>
+          <li>ทุก view ที่มีการบันทึก (StockCount, FrontStore, LockModal) มี auto-save</li>
+          <li>StockCountView บันทึกลงทั้ง sheet warehouse และ ZORT พร้อมกัน</li>
+          <li>Sticky FAB ปุ่มบันทึกลอยอยู่ตลอด ไม่ต้อง scroll ขึ้นไปหา</li>
+          <li>แก้ auto-save loop + ลบ test function ที่เสี่ยง</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          📈 Overview Analytics
+          <span class="badge badge-new">ใหม่</span>
+        </div>
+        <ul>
+          <li>ABC drilldown modal — กดหมวด A/B/C แล้วเห็น SKU ใน group นั้น</li>
+          <li>Per-category Top 10 aware ตาม period ที่เลือก (7วัน/30วัน/ปี)</li>
+          <li>MoM movers, velocity, dead stock analysis</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Performance & Security</div>
+      <div class="card">
+        <div class="card-title">
+          🔒 Security & Performance
+          <span class="badge badge-sec">Security</span>
+          <span class="badge badge-perf">Perf</span>
+        </div>
+        <ul>
+          <li>React production build (เลิกใช้ dev mode) — โหลดเร็วขึ้น</li>
+          <li>GAS server-side cache (CacheService, chunk 30k, TTL 180s)</li>
+          <li>PIN ตรวจสอบ server-side แทน client-side</li>
+          <li>APP_TOKEN guard กัน URL สุ่มเจอ</li>
+          <li>LockService กัน race condition เมื่อหลายคนบันทึกพร้อมกัน</li>
+          <li>Orders endpoint แบบ lightweight + auto-retry แก้ timeout</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- ═══════════════════════════════════════════ -->
+  <div class="week">
+    <div class="week-header">
+      <span class="week-label">29–31 พ.ค. 2569</span>
+      <span class="week-title">รากฐาน — Orders · MTO · Responsive · Login</span>
+    </div>
+
+    <div class="section">
+      <div class="section-title">ฟีเจอร์หลัก</div>
+
+      <div class="card">
+        <div class="card-title">
+          🎁 งานจัดพิเศษ MTO (Made to Order)
+          <span class="badge badge-new">ใหม่</span>
+        </div>
+        <ul>
+          <li>หน้าจัดการงานพิเศษตามสั่ง — สร้าง/แก้/ส่งงาน</li>
+          <li>สแกนบาร์โค้ดบนหน้า MTO + ปิดกล้องอัตโนมัติหลังสแกน</li>
+          <li>ตัดสต็อกตามจำนวนสุทธิ + รองรับคืนวัตถุดิบบางส่วน</li>
+          <li>push ZORT Sales Order เมื่อปิดงาน</li>
+          <li>auto-create sheets ที่ยังไม่มี + แก้ CORS</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          🏠 Netflix-Style Login
+          <span class="badge badge-new">ใหม่</span>
+        </div>
+        <ul>
+          <li>4 profiles: เจ้าของ / พนักงาน / คลังสินค้า / แคชเชียร์</li>
+          <li>แต่ละ role เห็น tab และสิทธิ์ต่างกัน</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          📱 Responsive มือถือ
+          <span class="badge badge-ux">UX</span>
+        </div>
+        <ul>
+          <li>FrontStore, Stock, Transfer, Storage, StockCount ทุกหน้า responsive ครบ</li>
+          <li>Pill nav → dropdown บนมือถือ</li>
+          <li>กัน horizontal overflow ทุกจุด (html/body/navtab/main)</li>
+          <li>Product grid 2 คอลัมน์บนมือถือไม่ล้นจอ</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          📦 Batch ZORT Transfer
+          <span class="badge badge-new">ใหม่</span>
+        </div>
+        <ul>
+          <li>โอนหลาย SKU ในครั้งเดียว → สร้าง ZORT Transfer เอกสารเดียว</li>
+          <li>log รายการโอนลงชีต "รายการโอนสินค้า" ทุกครั้ง</li>
+          <li>แก้ field names จาก ZORT API จริง (name, number, id)</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Bug Fixes สำคัญ</div>
+      <div class="card">
+        <div class="card-title">
+          🐛 Column Index & Data Fixes
+          <span class="badge badge-fix">แก้บัค</span>
+        </div>
+        <ul>
+          <li>Lock sheet column: B=SKU, C=lockKey, D=qty, H=date (เคยเพี้ยน)</li>
+          <li>readQtyByLocation_: G=col6, H=col7, I=col8 (ราคา price=0 ทุกตัว)</li>
+          <li>ราคาบน Label ดึงจาก col I sheet ถูกต้อง</li>
+          <li>category→cat field mapping จาก Google Sheets</li>
+          <li>Order shipped status หมดอายุใน 6h กัน state ค้าง</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <div class="section">
+    <div class="section-title">Infrastructure</div>
+    <div class="card">
+      <div class="card-title">🛠️ CLAUDE.md + 6 Specialized Agents</div>
+      <ul>
+        <li>เพิ่ม CLAUDE.md คู่มือโค้ดเบส + บทเรียนกับดักที่เจอบ่อย</li>
+        <li>6 subagents: dev, designer, debugger, reviewer, deploy, zort</li>
+        <li>Cloudflare Pages hosting — auto-deploy จาก master</li>
+        <li>docs/ ครบ: ARCHITECTURE, DEPLOYMENT, GOOGLE_SHEETS, APPS_SCRIPT_API</li>
+      </ul>
+    </div>
+  </div>
+
+  <p style="text-align:center; font-size:12px; color:#9aab9a; margin-top:32px;">
+    DMJ Inventory Dashboard · สร้างด้วย React + Google Apps Script + ZORT API
+  </p>
+
+</div>
+</body>
+</html>
