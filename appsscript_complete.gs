@@ -842,6 +842,9 @@ function deductStock(ss, sku, qty) {
         let deductFS = qty - deductWH;
         if (deductFS > fsQty) deductFS = fsQty;
 
+        // shortfall = จำนวนที่หักไม่ได้ (สต็อกไม่พอทั้งสองคลัง)
+        const shortfall = qty - (deductWH + deductFS);
+
         sheet.getRange(row, COL_PROD_QTYWH).setValue(whQty - deductWH);
         if (deductFS > 0) sheet.getRange(row, COL_PROD_QTYFS).setValue(fsQty - deductFS);
         SpreadsheetApp.flush();
@@ -851,7 +854,7 @@ function deductStock(ss, sku, qty) {
           if (deductFS > 0) zortItems.push({ sku, qty: fsQty - deductFS, warehousecode: WH_FRONTSTORE });
           if (zortItems.length) pushStockToZort_(zortItems);
         } catch (e) { Logger.log("deductStock ZORT push error: " + e); }
-        return ok({ sku, deductWH, deductFS, newWH: whQty - deductWH, newFS: fsQty - deductFS });
+        return ok({ sku, deductWH, deductFS, newWH: whQty - deductWH, newFS: fsQty - deductFS, shortfall });
       }
     }
     return error("ไม่พบ SKU: " + sku);

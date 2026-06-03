@@ -272,19 +272,24 @@ function enrichData(d) {
     // supplier จาก tag เป็นแหล่งหลัก (เลิกพึ่งสูตร col H) — fallback col H ถ้าไม่มี tag
     if (p.supplierTags.length) p.vendor = p.supplierTags[0];
   });
-  if (typeof detectColor === 'function') {
-    d.products.forEach(p => { if (!p.color) p.color = detectColor(p.name); });
-  }
-  if (typeof mtoBase === 'function') {
-    const map = {};
-    d.products.filter(p => p.isMTO).forEach(p => {
-      const k = mtoBase(p.name);
-      if (!map[k]) map[k] = { base: k, variants: [], totalRev: 0, totalQty: 0 };
-      map[k].variants.push(p);
-      map[k].totalRev += (p.soldRev || 0);
-      map[k].totalQty += (p.soldQty || 0);
-    });
-    d.mtoGroups = Object.values(map).sort((a,b) => b.totalRev - a.totalRev);
+  try {
+    if (typeof detectColor === 'function') {
+      d.products.forEach(p => { if (!p.color) p.color = detectColor(p.name); });
+    }
+    if (typeof mtoBase === 'function') {
+      const map = {};
+      d.products.filter(p => p.isMTO).forEach(p => {
+        const k = mtoBase(p.name);
+        if (!map[k]) map[k] = { base: k, variants: [], totalRev: 0, totalQty: 0 };
+        map[k].variants.push(p);
+        map[k].totalRev += (p.soldRev || 0);
+        map[k].totalQty += (p.soldQty || 0);
+      });
+      d.mtoGroups = Object.values(map).sort((a,b) => b.totalRev - a.totalRev);
+    }
+  } catch (e) {
+    // ป้องกัน white screen เมื่อสินค้าไม่มี name หรือ detectColor/mtoBase throw
+    console.warn("enrichData: error during color/mto enrichment", e);
   }
   return d;
 }
