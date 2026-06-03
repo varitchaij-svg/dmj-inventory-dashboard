@@ -22,6 +22,18 @@ function getSecret_(key, fallback) {
  * ถ้า Script Property APP_TOKEN ว่าง = ปิดการตรวจ (backward compatible)
  * คืน true = ผ่าน, false = ไม่ผ่าน
  */
+// ─── ตรวจ conflict: คืน epoch ms ที่ไฟล์ spreadsheet ถูกแก้ล่าสุด (metadata only — เร็ว) ───
+function getSheetLastModified_() {
+  const sheetId = PropertiesService.getScriptProperties().getProperty('SHEET_ID');
+  if (!sheetId) return 0;
+  try {
+    return DriveApp.getFileById(sheetId).getLastUpdated().getTime();
+  } catch (e) {
+    Logger.log("getSheetLastModified_ error: " + e);
+    return 0;
+  }
+}
+
 function checkToken_(token) {
   const expected = PropertiesService.getScriptProperties().getProperty('APP_TOKEN');
   if (!expected || !expected.trim()) return true; // ยังไม่ตั้ง = ไม่บังคับ
@@ -182,7 +194,7 @@ function doPost(e) {
       return updateFrontStore(ss, data.entries, data.datetime);
     }
     if (data.confirmStockCount) {
-      return confirmStockCount(ss, data.entries);
+      return confirmStockCount(ss, data.entries, data.clientLoadedAt);
     }
 
     // ─── Order Management ───
@@ -341,6 +353,7 @@ function doGet(e) {
 
     const data = {
       generatedAt: new Date().toISOString(),
+      lastModified: getSheetLastModified_(), // epoch ms — ใช้ตรวจ conflict ฝั่ง client
       updatedAt: {
         product:          PropertiesService.getScriptProperties().getProperty('upd_product') || null,
         monthlysales:      PropertiesService.getScriptProperties().getProperty('upd_monthlysales') || null,
@@ -819,8 +832,20 @@ function updateFrontStore(ss, entries, datetime) {
   }
 }
 
-function confirmStockCount(ss, entries) {
+function confirmStockCount(ss, entries, clientLoadedAt) {
   if (!Array.isArray(entries) || !entries.length) return error("entries ว่างเปล่า");
+
+  // ─── Conflict detection: ถ้า sheet ถูกแก้หลังจาก client โหลด → reject ───
+  if (clientLoadedAt) {
+    const lastMod = getSheetLastModified_();
+    if (lastMod > Number(clientLoadedAt) + 5000) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false, conflict: true,
+        message: "ข้อมูลถูกแก้ไขหลังจากที่คุณโหลด กรุณา Reload ก่อนบันทึก"
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+  }
+
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_PRODUCTS);
 
@@ -2597,6 +2622,17 @@ function closeMtoJob(ss, data) {
   const jobId = String(data.jobId || "").trim();
   const items = data.items || [];
   const closedAt = data.closedAt || "";
+
+  // ─── Conflict detection: ถ้า sheet ถูกแก้หลังจาก client โหลด → reject ───
+  if (data.clientLoadedAt) {
+    const lastMod = getSheetLastModified_();
+    if (lastMod > Number(data.clientLoadedAt) + 5000) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false, conflict: true,
+        message: "ข้อมูลถูกแก้ไขหลังจากที่คุณโหลด กรุณา Reload ก่อนบันทึก"
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+  }
 
   // net = เบิก − คืน (รองรับคืนบางส่วน เช่น เบิก 24 คืน 4 → ตัดจริง 20)
   const netOf = (item) => {

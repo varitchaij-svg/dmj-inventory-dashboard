@@ -5508,16 +5508,18 @@ async function confirmStockCount(entries) {
   // entries = [{ sku, qty }]
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
   try {
-    await fetch(SHEET_DEPLOY_URL, {
+    const res = await fetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
         confirmStockCount: true,
         datetime: new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }),
+        clientLoadedAt: window._dataLoadedAt || 0, // สำหรับ conflict detection
         entries,
       }),
     });
-    return { success: true };
+    const json = await res.json();
+    return json; // คืน object ดิบ (success, conflict, error)
   } catch (err) { return { success: false, error: err.message }; }
 }
 
@@ -6041,7 +6043,9 @@ function StockCountView({ data }) {
     if (selLockKey) await syncLockData(selLockKey, entries);
     const result = await confirmStockCount(entries);
     setSaving(false);
-    if (result.success !== false) {
+    if (result.conflict) {
+      showToast('error', 'ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด', '⚠️');
+    } else if (result.success !== false) {
       setSavedSkus(new Set(entries.map(e => e.sku)));
       setLastSavedTime(new Date());
       setLastSavedSnap(snap); // กัน auto-save วนซ้ำ
@@ -6073,7 +6077,9 @@ function StockCountView({ data }) {
     if (selLockKey) await syncLockData(selLockKey, entries);
     const result = await confirmStockCount(entries);
     setConfirming(false);
-    if (result.success !== false) {
+    if (result.conflict) {
+      showToast('error', 'ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด', '⚠️');
+    } else if (result.success !== false) {
       setSavedSkus(new Set(entries.map(e => e.sku)));
       setLastSavedTime(new Date());
       setLastSavedSnap(snap); // กัน auto-save commit ซ้ำหลังกดยืนยันเอง
@@ -8931,10 +8937,14 @@ function MtoJobView({ data }) {
           jobId: activeJob.jobId,
           items: materials,
           closedAt: closed,
+          clientLoadedAt: window._dataLoadedAt || 0, // สำหรับ conflict detection
         }),
       });
       const json = await res.json();
-      if (json.success) {
+      if (json.conflict) {
+        showToast("error", "ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด");
+        // ไม่ reset input — ผู้ใช้ยังคงเห็นรายการวัตถุดิบที่กรอกไว้
+      } else if (json.success) {
         const updatedJob = { ...activeJob, status: "เสร็จแล้ว", closedAt: closed, items: materials };
         setJobs(prev => prev.map(j => j.jobId === activeJob.jobId ? updatedJob : j));
         setActiveJob(updatedJob);

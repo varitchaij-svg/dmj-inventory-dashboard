@@ -297,6 +297,8 @@ function App() {
     fetch(bustUrl, { signal: controller.signal, cache: 'no-store' })
       .then(r => r.json())
       .then(d => {
+        // เก็บ epoch ms ที่ sheet ถูกแก้ล่าสุด — ใช้ตรวจ conflict ก่อน write
+        if (d && d.lastModified) window._dataLoadedAt = d.lastModified;
         const enriched = enrichData(d);
         setData(enriched);
         saveToStorage(enriched, "sheet");
