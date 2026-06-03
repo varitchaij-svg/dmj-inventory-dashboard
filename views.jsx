@@ -5515,6 +5515,7 @@ async function confirmStockCount(entries) {
         confirmStockCount: true,
         datetime: new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }),
         clientLoadedAt: window._dataLoadedAt || 0, // สำหรับ conflict detection
+        actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
         entries,
       }),
     });
@@ -7552,7 +7553,7 @@ async function syncStockTransferBatch(items) {
     const res = await fetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ transferStockBatch: true, list: items }),
+      body: JSON.stringify({ transferStockBatch: true, list: items, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน" }),
     });
     const json = await res.json().catch(() => ({}));
     console.log("syncStockTransferBatch result:", json);
@@ -8935,9 +8936,11 @@ function MtoJobView({ data }) {
         body: JSON.stringify({
           closeMtoJob: true,
           jobId: activeJob.jobId,
+          jobName: activeJob.name || activeJob.jobId,
           items: materials,
           closedAt: closed,
           clientLoadedAt: window._dataLoadedAt || 0, // สำหรับ conflict detection
+          actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
         }),
       });
       const json = await res.json();
@@ -9283,4 +9286,95 @@ function MtoJobView({ data }) {
   return null;
 }
 
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus });
+// ─────────────────────────────────────────────────────────────────────
+// AUDIT LOG VIEW — แสดงประวัติการแก้ข้อมูล (เจ้าของเท่านั้น)
+// ─────────────────────────────────────────────────────────────────────
+function AuditLogView() {
+  const [rows, setRows] = uS([]);
+  const [loading, setLoading] = uS(true);
+  const [err, setErr] = uS(null);
+  const [toast, showToast, hideToast] = useToast();
+
+  const load = async () => {
+    if (!SHEET_DEPLOY_URL) { setErr("ยังไม่ได้เชื่อมต่อ Sheet"); setLoading(false); return; }
+    setLoading(true); setErr(null);
+    try {
+      const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
+      const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getAuditLog&_t=${Date.now()}`, { cache: "no-store" });
+      const d = await res.json();
+      setRows(Array.isArray(d.rows) ? d.rows : []);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  uE(() => { load(); }, []);
+
+  return (
+    <div style={{ padding: "16px", maxWidth: 960, margin: "0 auto" }}>
+      <Toast toast={toast} onHide={hideToast}/>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>📋 Audit Log</div>
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>ประวัติการแก้ข้อมูล 200 รายการล่าสุด</div>
+        </div>
+        <button className="btn ghost" onClick={load} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {loading ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }}/> : "🔄"}
+          <span>รีโหลด</span>
+        </button>
+      </div>
+
+      {err && (
+        <div style={{ background: "#fff0f0", border: "1px solid var(--dang)", borderRadius: 8, padding: "10px 14px", color: "var(--dang)", marginBottom: 12, fontSize: 13 }}>
+          ⚠️ {err}
+        </div>
+      )}
+
+      {loading && rows.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 40, color: "var(--muted)" }}>
+          <span className="spin" style={{ width: 24, height: 24, borderWidth: 3, display: "inline-block" }}/>
+          <div style={{ marginTop: 8, fontSize: 13 }}>กำลังโหลด…</div>
+        </div>
+      ) : rows.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>
+          ยังไม่มีรายการ Audit Log
+        </div>
+      ) : (
+        <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid var(--bdr)" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: "var(--g-50)", borderBottom: "2px solid var(--bdr)" }}>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>วันที่เวลา</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>ผู้ใช้</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>Action</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>SKU</th>
+                <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>รายละเอียด</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, idx) => (
+                <tr key={idx} style={{ borderBottom: "1px solid var(--bdr)", background: idx % 2 === 0 ? "var(--paper)" : "var(--g-50)" }}>
+                  <td style={{ padding: "8px 12px", color: "var(--muted)", whiteSpace: "nowrap", fontSize: 12 }}>{r.ts}</td>
+                  <td style={{ padding: "8px 12px", fontWeight: 600 }}>{r.actor}</td>
+                  <td style={{ padding: "8px 12px" }}>
+                    <span style={{
+                      display: "inline-block", padding: "2px 8px", borderRadius: 6, fontSize: 11.5, fontWeight: 700,
+                      background: r.action === "นับสต็อก" ? "#e8f5e9" : r.action === "โอนสต็อก" ? "#e3f2fd" : r.action === "ปิดงาน MTO" ? "#fff3e0" : "#f3e5f5",
+                      color:      r.action === "นับสต็อก" ? "#1b5e20" : r.action === "โอนสต็อก" ? "#0d47a1" : r.action === "ปิดงาน MTO" ? "#e65100" : "#4a148c",
+                    }}>{r.action}</span>
+                  </td>
+                  <td style={{ padding: "8px 12px", fontFamily: "monospace", fontSize: 12 }}>{r.sku}</td>
+                  <td style={{ padding: "8px 12px", color: "var(--text)" }}>{r.detail}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView });

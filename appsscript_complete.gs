@@ -72,6 +72,7 @@ const SHEET_PRODUCTS  = "อัพเดทจำนวนสินค้า";
 const SHEET_ORDERS    = "ลำดับที่สั่งสินค้า";
 const SHEET_LOCKS     = "ตำแหน่งจัดเก็บ";
 const SHEET_TRANSFERS = "รายการโอนสินค้า";
+const SHEET_AUDIT     = "Audit Log";
 const WH_NAME_SAI5    = "คลังสินค้าสาย5";
 const WH_NAME_FS      = "ดูเหมือนจริง";
 
@@ -120,6 +121,24 @@ const DASH_TABS = {
 const COST_RATIO = 0.8;
 
 // ───────────────────────────────────────────────────────────
+// Audit Log helper — fire-and-forget, ห้าม throw กระทบ main flow
+// ───────────────────────────────────────────────────────────
+function writeAuditLog_(actor, action, sku, detail) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sh = ss.getSheetByName(SHEET_AUDIT);
+    if (!sh) {
+      sh = ss.insertSheet(SHEET_AUDIT);
+      sh.appendRow(["วันที่เวลา", "ผู้ใช้", "Action", "SKU", "รายละเอียด"]);
+      sh.getRange(1, 1, 1, 5).setFontWeight("bold");
+    }
+    sh.appendRow([new Date(), actor || "ไม่ระบุ", action || "", sku || "", detail || ""]);
+  } catch (e) {
+    Logger.log("writeAuditLog_ error: " + e);
+  }
+}
+
+// ───────────────────────────────────────────────────────────
 // SECTION 2: Main Handlers (doPost / doGet)
 // ───────────────────────────────────────────────────────────
 
@@ -152,12 +171,15 @@ function doPost(e) {
     const _tok = (e && e.parameter && e.parameter.token) || data.token;
     if (!checkToken_(_tok)) return unauthorized_();
 
+    // ── ผู้ใช้ที่ส่ง action มา (frontend ส่งใน body.actor) ──
+    var actor = data.actor || "ไม่ระบุ";
+
     // มีการแก้ข้อมูล → ล้าง cache ให้ doGet ครั้งถัดไปคำนวณใหม่ (ข้อมูลไม่ค้าง)
     invalidateCache_();
 
     // ─── Stock Transfer (Batch): คลัง → หน้าร้าน หลาย SKU ในครั้งเดียว ───
     if (data.transferStockBatch) {
-      return transferStockBatch(ss, data.list || []);
+      return transferStockBatch(ss, data.list || [], actor);
     }
 
     // ─── Stock Transfer: คลัง → หน้าร้าน ───
@@ -194,7 +216,7 @@ function doPost(e) {
       return updateFrontStore(ss, data.entries, data.datetime);
     }
     if (data.confirmStockCount) {
-      return confirmStockCount(ss, data.entries, data.clientLoadedAt);
+      return confirmStockCount(ss, data.entries, data.clientLoadedAt, actor);
     }
 
     // ─── Order Management ───
@@ -221,7 +243,7 @@ function doPost(e) {
 
     // ─── MTO Jobs ───
     if (data.createMtoJob)  return createMtoJob(ss, data);
-    if (data.closeMtoJob)   return closeMtoJob(ss, data);
+    if (data.closeMtoJob)   return closeMtoJob(ss, data, actor);
     if (data.deleteMtoJob)  return deleteMtoJob(ss, data);
 
     return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Unknown action" }))
@@ -250,6 +272,29 @@ function doGet(e) {
         .createTextOutput(JSON.stringify({ ok: okPin }))
         .setMimeType(ContentService.MimeType.JSON);
     }
+    // Audit Log endpoint: ดึง 200 แถวล่าสุดจาก Audit Log sheet
+    if (e && e.parameter && e.parameter.action === 'getAuditLog') {
+      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      const sh = ss.getSheetByName(SHEET_AUDIT);
+      if (!sh) {
+        return ContentService.createTextOutput(JSON.stringify({ rows: [] }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      const vals = sh.getDataRange().getValues();
+      // skip header row (row 0), เอา 200 แถวล่าสุด แล้ว reverse ให้ใหม่สุดขึ้นก่อน
+      const rows = vals.slice(1).slice(-200).reverse().map(function(r) {
+        return {
+          ts:     r[0] ? new Date(r[0]).toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }) : "",
+          actor:  r[1] || "",
+          action: r[2] || "",
+          sku:    r[3] || "",
+          detail: r[4] || "",
+        };
+      });
+      return ContentService.createTextOutput(JSON.stringify({ rows: rows }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
     // Lightweight endpoint: ดึงเฉพาะรายการสั่งของ (เบา/เร็ว) สำหรับ polling หน้า orders
     if (e && e.parameter && e.parameter.action === 'orders') {
       return ContentService
@@ -488,7 +533,7 @@ function createZortTransfer_(sku, productname, qty) {
 // Batch: หักสต็อกหลาย SKU ในครั้งเดียว → สร้าง ZORT Transfer เอกสารเดียว (เลขที่ auto)
 // list = [{ sku, qty, name, orderId }, ...]
 // หมายเหตุ: AddTransfer ย้ายสต็อกใน ZORT ให้อยู่แล้ว จึงไม่ต้อง push absolute ทับ
-function transferStockBatch(ss, list) {
+function transferStockBatch(ss, list, actor) {
   if (!Array.isArray(list) || !list.length) return error("list ว่างเปล่า");
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_PRODUCTS);
@@ -555,6 +600,10 @@ function transferStockBatch(ss, list) {
       } catch (e) { zortError = String(e); }
 
       try { logTransferBatch_(ss, transferred, zortNumber); } catch (e) { Logger.log("logTransferBatch_ error: " + e); }
+      // Audit log: บันทึกทุก SKU ที่โอนจริง
+      transferred.forEach(function(t) {
+        writeAuditLog_(actor, "โอนสต็อก", t.sku, "qty " + t.qty + ": W0002→W0001");
+      });
     }
 
     return ok({ count: transferred.length, zortNumber, zortError, shortfalls, results });
@@ -832,7 +881,7 @@ function updateFrontStore(ss, entries, datetime) {
   }
 }
 
-function confirmStockCount(ss, entries, clientLoadedAt) {
+function confirmStockCount(ss, entries, clientLoadedAt, actor) {
   if (!Array.isArray(entries) || !entries.length) return error("entries ว่างเปล่า");
 
   // ─── Conflict detection: ถ้า sheet ถูกแก้หลังจาก client โหลด → reject ───
@@ -855,13 +904,16 @@ function confirmStockCount(ss, entries, clientLoadedAt) {
   try {
     const data = sheet.getDataRange().getValues();
     let updated = 0;
+    const auditRows = []; // เก็บ { sku, oldQty, newQty } สำหรับ audit log
     for (const entry of entries) {
       const sku = String(entry.sku || "").trim().toUpperCase();
       const qty = Number(entry.qty) || 0;
       for (let i = 1; i < data.length; i++) {
         if (String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase() === sku) {
+          const oldQty = Number(data[i][COL_PROD_QTYWH - 1]) || 0;
           sheet.getRange(i + 1, COL_PROD_QTYWH).setValue(qty);
           data[i][COL_PROD_QTYWH - 1] = qty;
+          auditRows.push({ sku, oldQty, newQty: qty });
           updated++;
           break;
         }
@@ -875,6 +927,13 @@ function confirmStockCount(ss, entries, clientLoadedAt) {
         .map(e => ({ sku: String(e.sku).trim().toUpperCase(), qty: Number(e.qty), warehousecode: WH_SAI5 }));
       if (zortItems.length) pushStockToZort_(zortItems);
     } catch (e) { Logger.log("confirmStockCount ZORT push error: " + e); }
+
+    // Audit log: บันทึกเฉพาะ SKU ที่ค่าเปลี่ยน
+    auditRows.forEach(function(r) {
+      if (r.oldQty !== r.newQty) {
+        writeAuditLog_(actor, "นับสต็อก", r.sku, "qty: " + r.oldQty + "→" + r.newQty);
+      }
+    });
 
     return ok({ confirmed: updated });
   } finally {
@@ -2618,7 +2677,7 @@ function createMtoJob(ss, data) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-function closeMtoJob(ss, data) {
+function closeMtoJob(ss, data, actor) {
   const jobId = String(data.jobId || "").trim();
   const items = data.items || [];
   const closedAt = data.closedAt || "";
@@ -2695,6 +2754,13 @@ function closeMtoJob(ss, data) {
     Logger.log("ZORT DecreaseStock failed: " + e);
   }
 
+  // ปิดงานสำเร็จ → mark idempotency กันกดซ้ำใน 6 ชม.
+  cache.put("mto_closed_" + jobId, "1", 21600);
+
+  // Audit log
+  writeAuditLog_(actor, "ปิดงาน MTO", jobId, data.jobName || jobId);
+
+  invalidateCache_();
   return ContentService.createTextOutput(JSON.stringify({ success: true, jobId, deducted: items.length, zort: zortResult }))
     .setMimeType(ContentService.MimeType.JSON);
 }
