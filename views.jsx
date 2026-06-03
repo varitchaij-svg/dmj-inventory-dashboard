@@ -147,6 +147,27 @@ function Toast({ toast, onClose }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Pagination — ปุ่ม ← หน้า X/Y → สำหรับ list ยาว
+// ─────────────────────────────────────────────────────────────────────
+function Pagination({ page, total, pageSize, onChange }) {
+  const totalPages = Math.ceil(total / pageSize);
+  if (totalPages <= 1) return null;
+  return (
+    <div style={{display:'flex',gap:8,justifyContent:'center',alignItems:'center',padding:'16px 0'}}>
+      <button onClick={()=>onChange(page-1)} disabled={page<=1}
+              style={{minHeight:44,padding:'0 16px',borderRadius:8,border:'1px solid #ddd',
+                      background:page<=1?'#f5f5f5':'#fff',cursor:page<=1?'default':'pointer',
+                      fontFamily:'inherit',fontSize:14}}>←</button>
+      <span style={{padding:'0 8px',fontSize:14,color:'#666'}}>หน้า {page} / {totalPages}</span>
+      <button onClick={()=>onChange(page+1)} disabled={page>=totalPages}
+              style={{minHeight:44,padding:'0 16px',borderRadius:8,border:'1px solid #ddd',
+                      background:page>=totalPages?'#f5f5f5':'#fff',cursor:page>=totalPages?'default':'pointer',
+                      fontFamily:'inherit',fontSize:14}}>→</button>
+    </div>
+  );
+}
+
 // Hook for using toast — returns [toast, showToast, hideToast]
 function useToast() {
   const [toast, setToast] = uS(null);
@@ -1493,11 +1514,11 @@ function CategoryView({ data, role }) {
       return a.localeCompare(b, "th");
     });
   }, [products]);
-  const [active, setActive] = uS(allCats[0] || "");
+  const [active, setActive] = uS(""); // "" = ทั้งหมด (default)
   const [globalSearch, setGlobalSearch] = uS("");
   const [reorderFilter, setReorderFilter] = uS(false); // 🛒 ต้องสั่งเพิ่ม (หมด/ใกล้หมด)
   const [sortBy, setSortBy] = uS("sku");
-  const [showAll, setShowAll] = uS(false);
+  const [page, setPage] = uS(1); // pagination (20/หน้า)
   const [colorFilter, setColorFilter] = uS(null);
   const [supplierFilter, setSupplierFilter] = uS(null);
   const [deadFilter, setDeadFilter] = uS(null); // เกณฑ์ "สินค้าจมเกิน N เดือน" (null = ไม่กรอง)
@@ -1584,8 +1605,10 @@ function CategoryView({ data, role }) {
       if (newStockFilter) f = f.filter(p => isNew45(p.lastStockInDate));
       return [...f].sort(sortFn);
     }
-    // Normal: filter by active category
-    let f = products.filter(p => p.cat === active);
+    // Normal: filter by active category ("" = ทั้งหมด)
+    let f = active === ""
+      ? products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า")
+      : products.filter(p => p.cat === active);
     f = applyCommon(f);
     if (colorFilter) f = f.filter(p => p.color && p.color.name === colorFilter);
     if (supplierFilter) f = f.filter(p => (p.vendor || p.lastSupplier) === supplierFilter);
@@ -1594,7 +1617,12 @@ function CategoryView({ data, role }) {
     return [...f].sort(sortFn);
   }, [products, active, globalSearch, globalVendor, colorFilter, supplierFilter, deadFilter, newStockFilter, reorderFilter, needsReorder, sortFn]);
 
-  const visible = showAll ? filtered : filtered.slice(0, 24);
+  // reset page เมื่อ filter/category/search เปลี่ยน
+  uE(() => { setPage(1); }, [active, globalSearch, globalVendor, colorFilter, supplierFilter, deadFilter, newStockFilter, reorderFilter, sortBy]);
+
+  // pagination — 20 รายการต่อหน้า
+  const PAGE_SIZE = 20;
+  const visible = filtered.slice((page-1)*PAGE_SIZE, page*PAGE_SIZE);
 
   // ── จัดกลุ่มตามร้าน (group filtered set by supplier) ──
   // ใช้ชื่อร้านที่อ่านง่าย: lastSupplier (ชื่อ) ก่อน แล้วค่อย vendor (รหัส)
@@ -1654,7 +1682,10 @@ function CategoryView({ data, role }) {
   }, [filtered, totalCatRev]);
 
   const catStats = uM(() => {
-    const f = products.filter(p => p.cat === active);
+    // "" = ทั้งหมด
+    const f = active === ""
+      ? products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า")
+      : products.filter(p => p.cat === active);
     return {
       n: f.length,
       stock: f.reduce((s,p)=>s+stockQty(p),0),
@@ -1664,10 +1695,13 @@ function CategoryView({ data, role }) {
     };
   }, [products, active]);
 
-  // Supplier list for this category
-  const supplierChips = uM(() => {
+  // Supplier list for this category (ใช้สำหรับ dropdown filter)
+  const supplierList = uM(() => {
     const m = {};
-    products.filter(p => p.cat === active).forEach(p => {
+    const base = active === ""
+      ? products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า")
+      : products.filter(p => p.cat === active);
+    base.forEach(p => {
       const s = p.vendor || p.lastSupplier;
       if (s) m[s] = (m[s] || 0) + 1;
     });
@@ -1678,7 +1712,10 @@ function CategoryView({ data, role }) {
   // Colors in this category for filter chips
   const colorChips = uM(() => {
     const m = {};
-    products.filter(p => p.cat === active).forEach(p => {
+    const colorBase = active === ""
+      ? products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า")
+      : products.filter(p => p.cat === active);
+    colorBase.forEach(p => {
       if (p.color) m[p.color.name] = (m[p.color.name]||{count:0, hex:p.color.hex}, {count:(m[p.color.name]?.count||0)+1, hex:p.color.hex});
     });
     return Object.entries(m).map(([name, v]) => ({ name, ...v }))
@@ -1754,7 +1791,7 @@ function CategoryView({ data, role }) {
                 const val = e.target.value.trim();
                 const match = allVendors.find(v => v.code.toUpperCase() === val.toUpperCase());
                 setGlobalVendor(match ? match.code : (val === "" ? null : val || null));
-                setShowAll(false);
+                setPage(1);
               }}
               style={{
                 width:"100%", padding:"11px 40px 11px 14px",
@@ -1766,7 +1803,7 @@ function CategoryView({ data, role }) {
               }}
             />
             {globalVendor && (
-              <button onClick={() => { setGlobalVendor(null); setShowAll(false); }}
+              <button onClick={() => { setGlobalVendor(null); setPage(1); }}
                 style={{position:"absolute", right:10, top:"50%", transform:"translateY(-50%)",
                         background:"none", border:"none", cursor:"pointer",
                         fontSize:18, color:"var(--muted)", lineHeight:1, padding:"4px"}}>
@@ -1782,7 +1819,7 @@ function CategoryView({ data, role }) {
         <div style={{marginBottom:14}}>
           <select
             value={active}
-            onChange={e => { setActive(e.target.value); setColorFilter(null); setSupplierFilter(null); setDeadFilter(null); setNewStockFilter(false); setShowAll(false); }}
+            onChange={e => { setActive(e.target.value); setColorFilter(null); setSupplierFilter(null); setDeadFilter(null); setNewStockFilter(false); setPage(1); }}
             style={{
               width:"100%", padding:"10px 14px", borderRadius:12,
               border:"1.5px solid var(--bdr)", background:"#fafcf7",
@@ -1790,6 +1827,7 @@ function CategoryView({ data, role }) {
               cursor:"pointer", boxSizing:"border-box",
               color:"var(--text)", outline:"none",
             }}>
+            <option value="">📋 ทั้งหมด ({products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า").length})</option>
             {allCats.map(c => {
               const n = products.filter(p => p.cat === c).length;
               return <option key={c} value={c}>{CAT_EMOJI[c] || "📁"} {c} ({n})</option>;
@@ -1814,7 +1852,7 @@ function CategoryView({ data, role }) {
               const cc = catColor(c, allCats);
               const isMto = c === "Made to Order จัดแบบพิเศษ";
               return (
-                <button key={c} onClick={() => { setActive(c); setColorFilter(null); setSupplierFilter(null); setDeadFilter(null); setNewStockFilter(false); setShowAll(false); }}
+                <button key={c} onClick={() => { setActive(c); setColorFilter(null); setSupplierFilter(null); setDeadFilter(null); setNewStockFilter(false); setPage(1); }}
                         style={{
                           display:"flex",alignItems:"center",gap:8,width:"100%",
                           padding:"8px 12px",border:"none",cursor:"pointer",
@@ -1913,20 +1951,25 @@ function CategoryView({ data, role }) {
               </div>
             )}
 
-            {/* Supplier filter chips */}
-            {supplierChips.length > 0 && (
+            {/* Supplier filter — dropdown แทน chips เพราะอาจมีร้านเยอะ */}
+            {supplierList.length > 0 && (
               <div className="filter-bar" style={{marginTop:10,paddingTop:10,borderTop:"1px dashed var(--bdr)"}}>
                 <span className="filter-bar-label">🏪 ร้าน</span>
-                <div className="filter-chips">
-                  <button className={`fchip${supplierFilter===null?' active':''}`}
-                          onClick={()=>setSupplierFilter(null)}>ทั้งหมด</button>
-                  {supplierChips.map(s => (
-                    <button key={s.name} className={`fchip${supplierFilter===s.name?' active':''}`}
-                            onClick={()=>setSupplierFilter(s.name===supplierFilter?null:s.name)}>
-                      {s.name} <span style={{opacity:.6}}>{s.count}</span>
-                    </button>
+                <select
+                  value={supplierFilter || ""}
+                  onChange={e => { setSupplierFilter(e.target.value || null); setPage(1); }}
+                  style={{
+                    flex:1, minWidth:0, minHeight:44, padding:"8px 12px",
+                    borderRadius:9, border: supplierFilter ? "2px solid var(--g-500)" : "1px solid var(--bdr)",
+                    background: supplierFilter ? "var(--g-50)" : "#fafcf7",
+                    fontSize:13, fontWeight:600, fontFamily:"inherit", cursor:"pointer",
+                    color:"var(--text)", outline:"none", boxSizing:"border-box",
+                  }}>
+                  <option value="">🏪 ทุกร้าน</option>
+                  {supplierList.map(s => (
+                    <option key={s.name} value={s.name}>{s.name} ({s.count})</option>
                   ))}
-                </div>
+                </select>
               </div>
             )}
 
@@ -2001,24 +2044,17 @@ function CategoryView({ data, role }) {
             <div className="sec-head" style={{margin:"4px 0 14px"}}>
               <div>
                 <div className="sec-title" style={{display:"flex",alignItems:"center",gap:8}}>
-                  <span style={{fontSize:20,lineHeight:1}}>{CAT_EMOJI[active] || "📁"}</span>
+                  <span style={{fontSize:20,lineHeight:1}}>{active === "" ? "📋" : (CAT_EMOJI[active] || "📁")}</span>
                   <span style={{width:10,height:10,borderRadius:"50%",background:color,flexShrink:0}}/>
-                  {isMtoCat ? "งานจัดพิเศษ (MTO)" : active}
+                  {active === "" ? "ทั้งหมด" : (isMtoCat ? "งานจัดพิเศษ (MTO)" : active)}
                   <span style={{fontSize:12, fontWeight:500, color:"var(--muted)"}}>
                     · {filtered.length} รายการ
                   </span>
                 </div>
                 <div className="sec-sub">
-                  {showAll ? "แสดงทั้งหมด" : `แสดง ${Math.min(24, filtered.length)} จาก ${filtered.length}`} ·
-                  เรียงตาม {SORT_OPTIONS.find(o=>o.value===sortBy)?.label}
+                  แสดงหน้า {page} · เรียงตาม {SORT_OPTIONS.find(o=>o.value===sortBy)?.label}
                 </div>
               </div>
-              {filtered.length > 24 && (
-                <button className="btn" onClick={()=>setShowAll(!showAll)}>
-                  {showAll ? "ย่อกลับ" : `ดูทั้งหมด (${filtered.length})`}
-                  {showAll ? I.arrowL : I.arrowR}
-                </button>
-              )}
             </div>
           )}
           {/* Vendor mode header */}
@@ -2036,12 +2072,6 @@ function CategoryView({ data, role }) {
                   เรียงตาม {SORT_OPTIONS.find(o=>o.value===sortBy)?.label}
                 </div>
               </div>
-              {filtered.length > 24 && (
-                <button className="btn" onClick={()=>setShowAll(!showAll)}>
-                  {showAll ? "ย่อกลับ" : `ดูทั้งหมด (${filtered.length})`}
-                  {showAll ? I.arrowL : I.arrowR}
-                </button>
-              )}
             </div>
           )}
 
@@ -2234,6 +2264,10 @@ function CategoryView({ data, role }) {
                 </div>
               ))}
             </div>
+          )}
+          {/* Pagination — แสดงเฉพาะ grid/list view (supplier view ไม่มี pagination) */}
+          {viewMode !== 'supplier' && (
+            <Pagination page={page} total={filtered.length} pageSize={PAGE_SIZE} onChange={setPage}/>
           )}
         </div>
       </div>
@@ -9427,6 +9461,8 @@ function AuditLogView() {
   const [loading, setLoading] = uS(true);
   const [err, setErr] = uS(null);
   const [toast, showToast, hideToast] = useToast();
+  const [auditPage, setAuditPage] = uS(1);
+  const AUDIT_PAGE_SIZE = 20;
 
   const load = async () => {
     if (!SHEET_DEPLOY_URL) { setErr("ยังไม่ได้เชื่อมต่อ Sheet"); setLoading(false); return; }
@@ -9487,7 +9523,7 @@ function AuditLogView() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, idx) => (
+              {rows.slice((auditPage-1)*AUDIT_PAGE_SIZE, auditPage*AUDIT_PAGE_SIZE).map((r, idx) => (
                 <tr key={idx} style={{ borderBottom: "1px solid var(--bdr)", background: idx % 2 === 0 ? "var(--paper)" : "var(--g-50)" }}>
                   <td style={{ padding: "8px 12px", color: "var(--muted)", whiteSpace: "nowrap", fontSize: 12 }}>{r.ts}</td>
                   <td style={{ padding: "8px 12px", fontWeight: 600 }}>{r.actor}</td>
@@ -9505,6 +9541,7 @@ function AuditLogView() {
             </tbody>
           </table>
         </div>
+        <Pagination page={auditPage} total={rows.length} pageSize={AUDIT_PAGE_SIZE} onChange={setAuditPage}/>
       )}
     </div>
   );
@@ -9519,6 +9556,8 @@ function DeadStockView() {
   const [items, setItems] = uS([]);
   const [loading, setLoading] = uS(true);
   const [err, setErr] = uS(null);
+  const [deadPage, setDeadPage] = uS(1);
+  const DEAD_PAGE_SIZE = 20;
 
   const load = async () => {
     if (!SHEET_DEPLOY_URL) { setErr("ยังไม่ได้เชื่อมต่อ Sheet"); setLoading(false); return; }
@@ -9612,7 +9651,7 @@ function DeadStockView() {
                 </tr>
               </thead>
               <tbody>
-                {[...known, ...unknown].map((item, idx) => {
+                {[...known, ...unknown].slice((deadPage-1)*DEAD_PAGE_SIZE, deadPage*DEAD_PAGE_SIZE).map((item, idx) => {
                   const c = deadColor(item.deadMonths);
                   return (
                     <tr key={item.sku || idx} style={{ borderBottom: "1px solid var(--bdr)", background: idx % 2 === 0 ? "var(--paper)" : "var(--g-50)" }}>
@@ -9632,6 +9671,7 @@ function DeadStockView() {
               </tbody>
             </table>
           </div>
+          <Pagination page={deadPage} total={[...known, ...unknown].length} pageSize={DEAD_PAGE_SIZE} onChange={setDeadPage}/>
         </>
       )}
     </div>
@@ -9640,4 +9680,4 @@ function DeadStockView() {
 
 // ────────────── 🛒 สั่งซื้อ (Purchase/Reorder) ──────────────
 
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView, DeadStockView });
+Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView, DeadStockView, Pagination });
