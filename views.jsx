@@ -150,10 +150,13 @@ function Toast({ toast, onClose }) {
 // ─────────────────────────────────────────────────────────────────────
 // Pagination — ปุ่ม ← หน้า X/Y → สำหรับ list ยาว
 // ─────────────────────────────────────────────────────────────────────
-function Pagination({ page, total, pageSize, onChange }) {
+function Pagination({ page, total, pageSize, onChange, listRef }) {
   const totalPages = Math.ceil(total / pageSize);
   if (totalPages <= 1) return null;
-  const go = p => { onChange(p); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+  const go = p => {
+    onChange(p);
+    if (listRef && listRef.current) listRef.current.scrollIntoView({ block: 'start', behavior: 'instant' });
+  };
   return (
     <div style={{display:'flex',gap:8,justifyContent:'center',alignItems:'center',padding:'16px 0'}}>
       <button onClick={()=>go(page-1)} disabled={page<=1}
@@ -1520,6 +1523,7 @@ function CategoryView({ data, role }) {
   const [reorderFilter, setReorderFilter] = uS(false); // 🛒 ต้องสั่งเพิ่ม (หมด/ใกล้หมด)
   const [sortBy, setSortBy] = uS("sku");
   const [page, setPage] = uS(1); // pagination (20/หน้า)
+  const listTopRef = React.useRef(null);
   const [colorFilter, setColorFilter] = uS(null);
   const [supplierFilter, setSupplierFilter] = uS(null);
   const [deadFilter, setDeadFilter] = uS(null); // เกณฑ์ "สินค้าจมเกิน N เดือน" (null = ไม่กรอง)
@@ -2103,6 +2107,7 @@ function CategoryView({ data, role }) {
                       justifyContent:'center',transition:'background .15s'}}>🏭 ตามร้าน</button>
           </div>
 
+          <div ref={listTopRef}/>
           {filtered.length === 0 ? (
             <Empty title="ไม่พบสินค้า" sub={isGlobalSearch ? "ลองค้นหาด้วยคำอื่น" : reorderFilter ? "ไม่มีสินค้าที่ต้องสั่งเพิ่ม 🎉" : "หมวดนี้ยังไม่มีสินค้า"}/>
           ) : viewMode === 'list' ? (
@@ -2272,7 +2277,7 @@ function CategoryView({ data, role }) {
           )}
           {/* Pagination — แสดงเฉพาะ grid/list view (supplier view ไม่มี pagination) */}
           {viewMode !== 'supplier' && (
-            <Pagination page={page} total={filtered.length} pageSize={PAGE_SIZE} onChange={setPage}/>
+            <Pagination page={page} total={filtered.length} pageSize={PAGE_SIZE} onChange={setPage} listRef={listTopRef}/>
           )}
         </div>
       </div>
