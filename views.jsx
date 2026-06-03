@@ -1716,7 +1716,7 @@ function CategoryView({ data, role }) {
       ? products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า")
       : products.filter(p => p.cat === active);
     colorBase.forEach(p => {
-      if (p.color) m[p.color.name] = (m[p.color.name]||{count:0, hex:p.color.hex}, {count:(m[p.color.name]?.count||0)+1, hex:p.color.hex});
+      if (p.color) { if (!m[p.color.name]) m[p.color.name] = { count: 0, hex: p.color.hex }; m[p.color.name].count++; }
     });
     return Object.entries(m).map(([name, v]) => ({ name, ...v }))
       .sort((a,b) => (COLOR_ORDER.indexOf(a.name)===-1?99:COLOR_ORDER.indexOf(a.name)) -
@@ -1744,7 +1744,7 @@ function CategoryView({ data, role }) {
           </span>
           <input
             value={globalSearch}
-            onChange={e => setGlobalSearch(e.target.value)}
+            onChange={e => { setGlobalSearch(e.target.value); if (e.target.value) setReorderFilter(false); }}
             placeholder="ค้นหาสินค้าทั้งหมด (SKU / ชื่อ)..."
             style={{
               width:"100%", padding:"11px 40px 11px 38px",
@@ -1892,7 +1892,7 @@ function CategoryView({ data, role }) {
             <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap",width:"100%",minWidth:0}}>
               {/* 🛒 ต้องสั่งเพิ่ม — quick reorder filter (key action) */}
               {(() => {
-                const reorderCount = products.filter(p => p.cat === active && needsReorder(p)).length;
+                const reorderCount = (active === "" ? products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า" && needsReorder(p)) : products.filter(p => p.cat === active && needsReorder(p))).length;
                 return (
                   <button
                     onClick={() => setReorderFilter(v => !v)}
