@@ -17,11 +17,12 @@ const TABS = [
   { id: "connect",       label: "🔗 Google Sheet",          icon: I.sheets },
   { id: "labels",        label: "🖨️ พิมพ์ Label",            icon: I.print },
   { id: "auditlog",      label: "📋 Audit Log",             icon: I.layers },
+  { id: "deadstock",     label: "📦 สินค้าจม",              icon: I.alert },
 ];
 
 // Role config
 const ROLE_TABS = {
-  owner:      ["overview","categories","trends","stock","storage","stockcount","frontstore","transfers","orders","ordersummary","mtojobs","upload","connect","labels","auditlog"],
+  owner:      ["overview","categories","trends","stock","storage","stockcount","frontstore","transfers","orders","ordersummary","mtojobs","upload","connect","labels","auditlog","deadstock"],
   employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","mtojobs","labels"],
   warehouse:  ["categories","stock","storage","stockcount","orders","ordersummary","mtojobs","labels"],
   frontstore: ["categories","stock","frontstore","orders","labels"],
@@ -642,6 +643,7 @@ function App() {
                                             initItems={labelInitItems}
                                             onInitConsumed={() => setLabelInitItems(null)}/>}
         {activeTab === "auditlog"   && <AuditLogView/>}
+        {activeTab === "deadstock"  && <DeadStockView/>}
         {activeTab === "connect"    && <ConnectView
                                     sheetUrl={sheetUrl}
                                     sheetViewUrl={sheetViewUrl}

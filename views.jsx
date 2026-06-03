@@ -9398,4 +9398,132 @@ function AuditLogView() {
   );
 }
 
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView });
+// ───────────────────────────────────────────────────────────
+// DeadStockView — สินค้าจม (read-only, เจ้าของดูคนเดียว)
+// ดึง action=getDeadStock จาก GAS แสดงสินค้าที่มีหน้าร้าน > 0
+// และไม่ได้รับโอนมานานกว่า 3 เดือน
+// ───────────────────────────────────────────────────────────
+function DeadStockView() {
+  const [items, setItems] = uS([]);
+  const [loading, setLoading] = uS(true);
+  const [err, setErr] = uS(null);
+
+  const load = async () => {
+    if (!SHEET_DEPLOY_URL) { setErr("ยังไม่ได้เชื่อมต่อ Sheet"); setLoading(false); return; }
+    setLoading(true); setErr(null);
+    try {
+      const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
+      const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getDeadStock&_t=${Date.now()}`, { cache: "no-store" });
+      const d = await res.json();
+      if (d.error) throw new Error(d.error);
+      setItems(Array.isArray(d.items) ? d.items : []);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  uE(() => { load(); }, []);
+
+  // สีตาม deadMonths: 3-5=ส้ม, 6-11=แดง, 12+=แดงเข้ม, null=เทา
+  const deadColor = (dm) => {
+    if (dm === null) return { bg: "#f5f5f5", fg: "#888" };
+    if (dm >= 12)   return { bg: "#ffebee", fg: "#b71c1c" };
+    if (dm >= 6)    return { bg: "#fff3e0", fg: "#b71c1c" };
+    return              { bg: "#fff8e1", fg: "#e65100" };
+  };
+
+  // แยก items ที่มี deadMonths กับ null
+  const known = items.filter(x => x.deadMonths !== null);
+  const unknown = items.filter(x => x.deadMonths === null);
+
+  return (
+    <div style={{ padding: "16px", maxWidth: 960, margin: "0 auto" }}>
+      {/* header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>📦 สินค้าจม</div>
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>ไม่ได้โอนจากคลังสาย5 &gt; 3 เดือน — มีของอยู่หน้าร้าน</div>
+        </div>
+        <button className="btn ghost" onClick={load} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {loading ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }}/> : "🔄"}
+          <span>รีโหลด</span>
+        </button>
+      </div>
+
+      {err && (
+        <div style={{ background: "#fff0f0", border: "1px solid var(--dang)", borderRadius: 8, padding: "10px 14px", color: "var(--dang)", marginBottom: 12, fontSize: 13 }}>
+          ⚠️ {err}
+        </div>
+      )}
+
+      {loading && items.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 40, color: "var(--muted)" }}>
+          <span className="spin" style={{ width: 24, height: 24, borderWidth: 3, display: "inline-block" }}/>
+          <div style={{ marginTop: 8, fontSize: 13 }}>กำลังโหลด…</div>
+        </div>
+      ) : items.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>
+          ไม่มีสินค้าจม 🎉
+        </div>
+      ) : (
+        <>
+          {/* summary chips */}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+            <span style={{ background: "#ffebee", color: "#b71c1c", borderRadius: 20, padding: "3px 12px", fontSize: 12, fontWeight: 700 }}>
+              12+ เดือน: {items.filter(x => x.deadMonths !== null && x.deadMonths >= 12).length} รายการ
+            </span>
+            <span style={{ background: "#fff3e0", color: "#b71c1c", borderRadius: 20, padding: "3px 12px", fontSize: 12, fontWeight: 700 }}>
+              6-11 เดือน: {items.filter(x => x.deadMonths !== null && x.deadMonths >= 6 && x.deadMonths < 12).length} รายการ
+            </span>
+            <span style={{ background: "#fff8e1", color: "#e65100", borderRadius: 20, padding: "3px 12px", fontSize: 12, fontWeight: 700 }}>
+              3-5 เดือน: {items.filter(x => x.deadMonths !== null && x.deadMonths < 6).length} รายการ
+            </span>
+            {unknown.length > 0 && (
+              <span style={{ background: "#f5f5f5", color: "#888", borderRadius: 20, padding: "3px 12px", fontSize: 12, fontWeight: 700 }}>
+                ไม่มีข้อมูล: {unknown.length} รายการ
+              </span>
+            )}
+          </div>
+
+          <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid var(--bdr)" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: "var(--g-50)", borderBottom: "2px solid var(--bdr)" }}>
+                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>ชื่อสินค้า</th>
+                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>SKU</th>
+                  <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>หน้าร้าน</th>
+                  <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>คลัง</th>
+                  <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>จมมา</th>
+                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>โอนล่าสุด</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...known, ...unknown].map((item, idx) => {
+                  const c = deadColor(item.deadMonths);
+                  return (
+                    <tr key={item.sku || idx} style={{ borderBottom: "1px solid var(--bdr)", background: idx % 2 === 0 ? "var(--paper)" : "var(--g-50)" }}>
+                      <td style={{ padding: "8px 12px", fontWeight: 600, color: "var(--text)" }}>{item.name || "—"}</td>
+                      <td style={{ padding: "8px 12px", fontFamily: "monospace", fontSize: 12, color: "var(--muted)" }}>{item.sku}</td>
+                      <td style={{ padding: "8px 12px", textAlign: "center", fontWeight: 700 }}>{item.qtyFront}</td>
+                      <td style={{ padding: "8px 12px", textAlign: "center", color: "var(--muted)" }}>{item.qtyWH}</td>
+                      <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                        <span style={{ display: "inline-block", padding: "2px 10px", borderRadius: 20, fontWeight: 700, fontSize: 12, background: c.bg, color: c.fg }}>
+                          {item.deadMonths === null ? "ไม่มีข้อมูล" : (item.deadMonths >= 12 ? "⚠️ " : "") + item.deadMonths + " เดือน"}
+                        </span>
+                      </td>
+                      <td style={{ padding: "8px 12px", color: "var(--muted)", fontSize: 12 }}>{item.lastTransferDate || "ไม่มีข้อมูล"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView, DeadStockView });
