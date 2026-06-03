@@ -10072,6 +10072,7 @@ function AuditLogView() {
   const [err, setErr] = uS(null);
   const [toast, showToast, hideToast] = useToast();
   const [auditPage, setAuditPage] = uS(1);
+  const auditListRef = React.useRef(null);
   const AUDIT_PAGE_SIZE = 20;
 
   const load = async () => {
@@ -10111,6 +10112,7 @@ function AuditLogView() {
         </div>
       )}
 
+      <div ref={auditListRef}/>
       {loading && rows.length === 0 ? (
         <div style={{ textAlign: "center", padding: 40, color: "var(--muted)" }}>
           <span className="spin" style={{ width: 24, height: 24, borderWidth: 3, display: "inline-block" }}/>
@@ -10151,7 +10153,7 @@ function AuditLogView() {
             </tbody>
           </table>
         </div>
-        <Pagination page={auditPage} total={rows.length} pageSize={AUDIT_PAGE_SIZE} onChange={setAuditPage}/>
+        <Pagination page={auditPage} total={rows.length} pageSize={AUDIT_PAGE_SIZE} onChange={setAuditPage} listRef={auditListRef}/>
       </>)}
     </div>
   );
@@ -10167,6 +10169,7 @@ function DeadStockView() {
   const [loading, setLoading] = uS(true);
   const [err, setErr] = uS(null);
   const [deadPage, setDeadPage] = uS(1);
+  const deadListRef = React.useRef(null);
   const DEAD_PAGE_SIZE = 20;
 
   const load = async () => {
@@ -10248,6 +10251,7 @@ function DeadStockView() {
             )}
           </div>
 
+          <div ref={deadListRef}/>
           <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid var(--bdr)" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
@@ -10281,7 +10285,7 @@ function DeadStockView() {
               </tbody>
             </table>
           </div>
-          <Pagination page={deadPage} total={[...known, ...unknown].length} pageSize={DEAD_PAGE_SIZE} onChange={setDeadPage}/>
+          <Pagination page={deadPage} total={[...known, ...unknown].length} pageSize={DEAD_PAGE_SIZE} onChange={setDeadPage} listRef={deadListRef}/>
         </>
       )}
     </div>
