@@ -7574,7 +7574,7 @@ async function syncOrderUpdate(order, updates) {
 // ─────────────────────────────────────────────────────────────────────
 // ORDER LIST VIEW
 // ─────────────────────────────────────────────────────────────────────
-function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData }) {
+function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData, showReceiveMode }) {
   const isPending = !order.status || order.status === "รอ" || order.status === "pending";
   const [prepQty, setPrepQty] = uS(() => order.preparedQty > 0 ? order.preparedQty : (order.orderQty || 0));
   const [imgOpen, setImgOpen] = uS(false);
@@ -7583,6 +7583,15 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
   uE(() => {
     setPrepQty(prev => prev === 0 ? (order.orderQty || 0) : prev);
   }, [order.orderQty]);
+
+  const [recvQty, setRecvQty] = uS(() => order.receivedQty != null ? order.receivedQty : (order.preparedQty || order.orderQty || 0));
+
+  const confirmReceive = () => {
+    const n = Math.max(0, parseInt(recvQty) || 0);
+    onPatch(order.id, { receivedQty: n, receivedAt: new Date().toISOString() });
+    syncOrderUpdate(order, { receivedQty: n });
+    showToast("success", n >= (order.preparedQty || order.orderQty) ? "รับครบ ✅" : `รับ ${n}/${order.preparedQty || order.orderQty} pcs ⚠️`, "📦", 3000);
+  };
 
   const savePrepQty = v => {
     const n = Math.max(0, parseInt(v)||0);
@@ -7676,102 +7685,174 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
           </div>
         </div>
 
-        {/* ── Row 2: quantities + actions ── */}
-        <div style={{
-          display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",
-          padding:"8px 14px 12px",borderTop:"1px solid var(--g-50)",
-          background:"var(--g-50)",
-        }}>
-          {/* Quantities */}
-          <div style={{textAlign:"center",minWidth:44}}>
-            <div style={{fontSize:10,color:"var(--muted)",marginBottom:1}}>📋 สั่ง</div>
-            <div style={{fontSize:15,fontWeight:800,color:"var(--dang)"}}>{order.orderQty}</div>
-          </div>
+        {/* ── Row 2: quantities + actions (หรือ receive confirmation ถ้าอยู่แท็บส่งแล้ว) ── */}
+        {showReceiveMode ? (
+          // ── Receive confirmation row ──
+          <div style={{
+            display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",
+            padding:"10px 14px 12px",borderTop:"1px solid var(--g-50)",
+            background:"var(--g-50)",
+          }}>
+            {/* Sent qty */}
+            <div style={{textAlign:"center",minWidth:44}}>
+              <div style={{fontSize:10,color:"var(--muted)",marginBottom:1}}>🚚 ส่ง</div>
+              <div style={{fontSize:15,fontWeight:800,color:"var(--dang)"}}>{order.preparedQty || order.orderQty}</div>
+            </div>
 
-          {/* จัด — with +/- buttons (≥44px for mobile) */}
-          <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5}}>
-            <div style={{fontSize:10,color:"var(--muted)"}}>📦 จัด</div>
-            <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap",justifyContent:"center"}}>
-              {[-10,-5,-1].map(d => (
-                <button key={d} className="order-adj-btn" onClick={() => savePrepQty(prepQty+d)} disabled={!isPending}
+            {/* Received qty input */}
+            {order.receivedAt ? (
+              // Already confirmed — show result
+              <div style={{
+                flex:1,display:"flex",alignItems:"center",gap:8,
+                background: recvQty >= (order.preparedQty||order.orderQty) ? "#f0fdf4" : "#fff8e1",
+                borderRadius:10,padding:"8px 12px",
+                border:`1.5px solid ${recvQty >= (order.preparedQty||order.orderQty) ? "#86efac" : "#fcd34d"}`,
+              }}>
+                <span style={{fontSize:20}}>{recvQty >= (order.preparedQty||order.orderQty) ? "✅" : "⚠️"}</span>
+                <div>
+                  <div style={{fontSize:13,fontWeight:700}}>
+                    {recvQty >= (order.preparedQty||order.orderQty) ? "รับครบ" : "รับไม่ครบ"}
+                  </div>
+                  <div style={{fontSize:11,color:"var(--muted)"}}>
+                    รับ {recvQty} / ส่ง {order.preparedQty||order.orderQty} pcs
+                  </div>
+                </div>
+              </div>
+            ) : (role === "sale" || role === "frontstore") ? (
+              // Can confirm — show input + button
+              <>
+                <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+                  <div style={{fontSize:10,color:"var(--muted)"}}>📥 รับจริง</div>
+                  <input type="number" value={recvQty} min={0} max={9999}
+                    onChange={e => setRecvQty(Math.max(0,parseInt(e.target.value)||0))}
+                    style={{
+                      width:64,height:44,textAlign:"center",borderRadius:8,
+                      border:"2px solid var(--g-500)",fontSize:18,fontWeight:800,
+                      background:"#f0fdf4",fontFamily:"inherit",
+                    }}/>
+                </div>
+                <div style={{flex:1}}/>
+                <button onClick={confirmReceive} style={{
+                  padding:"10px 16px",borderRadius:10,border:"none",
+                  background:"#1b5e20",color:"#fff",
+                  cursor:"pointer",fontSize:14,fontWeight:800,
+                  display:"flex",flexDirection:"column",alignItems:"center",gap:1,
+                  minWidth:64,minHeight:44,
+                }}>
+                  <span style={{fontSize:18}}>📦</span>
+                  <span style={{fontSize:10,letterSpacing:.3}}>ยืนยันรับ</span>
+                </button>
+              </>
+            ) : (
+              // Other roles — pending confirmation
+              <div style={{
+                flex:1,display:"flex",alignItems:"center",gap:8,
+                background:"#fafafa",borderRadius:10,padding:"8px 12px",
+                border:"1.5px solid var(--bdr)",
+              }}>
+                <span style={{fontSize:18}}>⏳</span>
+                <div style={{fontSize:13,color:"var(--muted)"}}>รอ sale/frontstore ยืนยันรับของ</div>
+              </div>
+            )}
+          </div>
+        ) : (
+          // ── Original Row 2 ──
+          <div style={{
+            display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",
+            padding:"8px 14px 12px",borderTop:"1px solid var(--g-50)",
+            background:"var(--g-50)",
+          }}>
+            {/* Quantities */}
+            <div style={{textAlign:"center",minWidth:44}}>
+              <div style={{fontSize:10,color:"var(--muted)",marginBottom:1}}>📋 สั่ง</div>
+              <div style={{fontSize:15,fontWeight:800,color:"var(--dang)"}}>{order.orderQty}</div>
+            </div>
+
+            {/* จัด — with +/- buttons (≥44px for mobile) */}
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5}}>
+              <div style={{fontSize:10,color:"var(--muted)"}}>📦 จัด</div>
+              <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap",justifyContent:"center"}}>
+                {[-10,-5,-1].map(d => (
+                  <button key={d} className="order-adj-btn" onClick={() => savePrepQty(prepQty+d)} disabled={!isPending}
+                    style={{
+                      minWidth:44,height:44,padding:"0 6px",borderRadius:8,border:"1.5px solid #ef9a9a",
+                      background:"#fee2e2",color:"#c62828",fontWeight:800,fontSize:13,
+                      cursor:isPending?"pointer":"default",fontFamily:"inherit",
+                    }}>{d}</button>
+                ))}
+                <input type="number" value={prepQty} min={0} max={9999}
+                  onChange={e => savePrepQty(e.target.value)}
+                  disabled={!isPending}
+                  className="order-adj-input"
                   style={{
-                    minWidth:44,height:44,padding:"0 6px",borderRadius:8,border:"1.5px solid #ef9a9a",
-                    background:"#fee2e2",color:"#c62828",fontWeight:800,fontSize:13,
-                    cursor:isPending?"pointer":"default",fontFamily:"inherit",
-                  }}>{d}</button>
-              ))}
-              <input type="number" value={prepQty} min={0} max={9999}
-                onChange={e => savePrepQty(e.target.value)}
-                disabled={!isPending}
-                className="order-adj-input"
-                style={{
-                  width:64,height:44,textAlign:"center",borderRadius:8,
-                  border:"2px solid var(--g-500)",fontSize:18,fontWeight:800,
-                  background:isPending?"#f0fdf4":"var(--g-50)",fontFamily:"inherit",
-                }}/>
-              {[+1,+5,+10].map(d => (
-                <button key={d} className="order-adj-btn" onClick={() => savePrepQty(prepQty+d)} disabled={!isPending}
-                  style={{
-                    minWidth:44,height:44,padding:"0 6px",borderRadius:8,border:"1.5px solid #81c784",
-                    background:"#e8f5e9",color:"#1b5e20",fontWeight:800,fontSize:13,
-                    cursor:isPending?"pointer":"default",fontFamily:"inherit",
-                  }}>+{d}</button>
-              ))}
+                    width:64,height:44,textAlign:"center",borderRadius:8,
+                    border:"2px solid var(--g-500)",fontSize:18,fontWeight:800,
+                    background:isPending?"#f0fdf4":"var(--g-50)",fontFamily:"inherit",
+                  }}/>
+                {[+1,+5,+10].map(d => (
+                  <button key={d} className="order-adj-btn" onClick={() => savePrepQty(prepQty+d)} disabled={!isPending}
+                    style={{
+                      minWidth:44,height:44,padding:"0 6px",borderRadius:8,border:"1.5px solid #81c784",
+                      background:"#e8f5e9",color:"#1b5e20",fontWeight:800,fontSize:13,
+                      cursor:isPending?"pointer":"default",fontFamily:"inherit",
+                    }}>+{d}</button>
+                ))}
+              </div>
             </div>
-          </div>
 
-          <div style={{textAlign:"center",minWidth:44}}>
-            <div style={{fontSize:10,color:"var(--muted)",marginBottom:1}}>🔢 เหลือ</div>
-            <div style={{fontSize:15,fontWeight:800}}>{order.remaining ?? "—"}</div>
-          </div>
-
-          <div style={{flex:1}}/>
-
-          {/* QR toggle */}
-          <button className="order-action-btn" title={pf==="print"?"Print ✓":pf==="no-print"?"Skip ✕":"Tap to set print"}
-            onClick={() => { if(!pf) setPrintFlag("print"); else if(pf==="print") setPrintFlag("no-print"); else setPrintFlag("print"); }}
-            style={{
-              width:44,height:44,borderRadius:10,cursor:"pointer",padding:0,
-              border:`2px solid ${pf==="print"?"#c62828":pf==="no-print"?"#111":"#d1d5db"}`,
-              background:pf==="print"?"#ffebee":pf==="no-print"?"#222":"#fff",
-              display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,
-            }}>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(3,4px)",gap:"1.5px"}}>
-              {[1,1,0,1,0,1,0,1,1].map((b,i)=>(
-                <div key={i} style={{width:4,height:4,borderRadius:1,
-                  background:pf==="print"?"#c62828":pf==="no-print"?"#fff":b?"#9ca3af":"transparent"}}/>
-              ))}
+            <div style={{textAlign:"center",minWidth:44}}>
+              <div style={{fontSize:10,color:"var(--muted)",marginBottom:1}}>🔢 เหลือ</div>
+              <div style={{fontSize:15,fontWeight:800}}>{order.remaining ?? "—"}</div>
             </div>
-            <div style={{fontSize:7,fontWeight:700,color:pf==="print"?"#c62828":pf==="no-print"?"#fff":"#9ca3af"}}>
-              {pf==="print"?"PRINT":pf==="no-print"?"SKIP":"QR"}
-            </div>
-          </button>
 
-          {/* Carry/Truck */}
-          <button className="order-action-btn" onClick={() => setCarryMode(cm==="truck"?"carry":"truck")}
-            style={{
-              width:44,height:44,borderRadius:10,cursor:"pointer",
-              border:"1.5px solid var(--bdr)",fontSize:22,
-              background:cm==="truck"?"#eff6ff":cm==="carry"?"#f0fdf4":"#fff",
-              display:"flex",alignItems:"center",justifyContent:"center",
-            }}>
-            {cm==="truck"?"🚛":"🚶"}
-          </button>
+            <div style={{flex:1}}/>
 
-          {/* Done */}
-          {isPending && role !== "frontstore" && role !== "saler" && (
-            <button onClick={markComplete} style={{
-              padding:"10px 16px",borderRadius:10,border:"none",
-              background:pf?"#1b5e20":"#d1d5db",color:"#fff",
-              cursor:pf?"pointer":"not-allowed",fontSize:14,fontWeight:800,
-              display:"flex",flexDirection:"column",alignItems:"center",gap:1,
-              minWidth:52,
-            }}>
-              <span style={{fontSize:18}}>✅</span>
-              <span style={{fontSize:10,letterSpacing:.3}}>Done</span>
+            {/* QR toggle */}
+            <button className="order-action-btn" title={pf==="print"?"Print ✓":pf==="no-print"?"Skip ✕":"Tap to set print"}
+              onClick={() => { if(!pf) setPrintFlag("print"); else if(pf==="print") setPrintFlag("no-print"); else setPrintFlag("print"); }}
+              style={{
+                width:44,height:44,borderRadius:10,cursor:"pointer",padding:0,
+                border:`2px solid ${pf==="print"?"#c62828":pf==="no-print"?"#111":"#d1d5db"}`,
+                background:pf==="print"?"#ffebee":pf==="no-print"?"#222":"#fff",
+                display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,
+              }}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,4px)",gap:"1.5px"}}>
+                {[1,1,0,1,0,1,0,1,1].map((b,i)=>(
+                  <div key={i} style={{width:4,height:4,borderRadius:1,
+                    background:pf==="print"?"#c62828":pf==="no-print"?"#fff":b?"#9ca3af":"transparent"}}/>
+                ))}
+              </div>
+              <div style={{fontSize:7,fontWeight:700,color:pf==="print"?"#c62828":pf==="no-print"?"#fff":"#9ca3af"}}>
+                {pf==="print"?"PRINT":pf==="no-print"?"SKIP":"QR"}
+              </div>
             </button>
-          )}
-        </div>
+
+            {/* Carry/Truck */}
+            <button className="order-action-btn" onClick={() => setCarryMode(cm==="truck"?"carry":"truck")}
+              style={{
+                width:44,height:44,borderRadius:10,cursor:"pointer",
+                border:"1.5px solid var(--bdr)",fontSize:22,
+                background:cm==="truck"?"#eff6ff":cm==="carry"?"#f0fdf4":"#fff",
+                display:"flex",alignItems:"center",justifyContent:"center",
+              }}>
+              {cm==="truck"?"🚛":"🚶"}
+            </button>
+
+            {/* Done */}
+            {isPending && role !== "frontstore" && role !== "saler" && (
+              <button onClick={markComplete} style={{
+                padding:"10px 16px",borderRadius:10,border:"none",
+                background:pf?"#1b5e20":"#d1d5db",color:"#fff",
+                cursor:pf?"pointer":"not-allowed",fontSize:14,fontWeight:800,
+                display:"flex",flexDirection:"column",alignItems:"center",gap:1,
+                minWidth:52,
+              }}>
+                <span style={{fontSize:18}}>✅</span>
+                <span style={{fontSize:10,letterSpacing:.3}}>Done</span>
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Image + location modal */}
@@ -7958,7 +8039,7 @@ function OrderListView({ data, role }) {
           <Empty title="ไม่มีรายการใน filter นี้" sub="ลองเลือก filter อื่น"/>
         </div>
       ) : (
-        filtered.map(order => <OrderItemRow key={order.id} order={order} onPatch={patch} productMap={productMap} role={role} skuLocks={skuLocks} storageData={data.storage}/>)
+        filtered.map(order => <OrderItemRow key={order.id} order={order} onPatch={patch} productMap={productMap} role={role} skuLocks={skuLocks} storageData={data.storage} showReceiveMode={filter === "shipped"}/>)
       )}
     </div>
   );
