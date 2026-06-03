@@ -9526,4 +9526,310 @@ function DeadStockView() {
   );
 }
 
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView, DeadStockView });
+// ────────────── 🛒 สั่งซื้อ (Purchase/Reorder) ──────────────
+// หน้าจอเดียวจบ: ดูว่าซัพไหนต้องสั่ง → เปิดดูสินค้าทั้งหมดของซัพนั้น
+// → ใส่จำนวนที่จะสั่ง → คัดลอกรายการไปส่งโรงงานทาง WeChat/LINE
+function PurchaseView({ data, role }) {
+  const products = (data && data.products) || [];
+  const NO_VENDOR = "ไม่ระบุซัพพลายเออร์";
+
+  const [openVendor, setOpenVendor] = uS(null);   // ชื่อซัพที่กำลังเปิดดู (screen 2)
+  const [search, setSearch]   = uS("");
+  const [orderQty, setOrderQty] = uS({});          // { sku: number } — เก็บข้ามการ scroll
+  const [highlightSku, setHighlightSku] = uS(null);// sku ที่เพิ่ง scan/search ไปเจอ
+  const [modalProduct, setModalProduct] = uS(null);
+  const [copyText, setCopyText] = uS(null);        // fallback: ข้อความให้ copy เองถ้า clipboard ใช้ไม่ได้
+  const [toast, showToast, hideToast] = useToast();
+
+  // ── ยอดขายเฉลี่ยต่อเดือน (เฉพาะเดือนที่มีข้อมูล) ──
+  const avgMonthly = (p) => {
+    const m = (p.monthly || []).filter(x => x && x.qty != null);
+    if (!m.length) return null;
+    const sum = m.reduce((s, x) => s + (x.qty || 0), 0);
+    return sum / m.length;
+  };
+
+  // ── จัดกลุ่มสินค้าตามซัพพลายเออร์ + นับสถานะ ──
+  const vendors = uM(() => {
+    const map = {};
+    products.forEach(p => {
+      const v = p.vendor || NO_VENDOR;
+      if (!map[v]) map[v] = { name: v, items: [], out: 0, low: 0 };
+      const stock = stockQty(p);
+      if (stock <= 0) map[v].out++;
+      else if (stock <= 3) map[v].low++;
+      map[v].items.push(p);
+    });
+    const list = Object.values(map);
+    // ซัพที่มีของหมดขึ้นก่อน → ใกล้หมด → ปกติ
+    const rank = (g) => g.out > 0 ? 0 : g.low > 0 ? 1 : 2;
+    list.sort((a, b) => {
+      const r = rank(a) - rank(b);
+      if (r) return r;
+      if (b.out !== a.out) return b.out - a.out;
+      if (b.low !== a.low) return b.low - a.low;
+      return a.name.localeCompare(b.name, "th");
+    });
+    return list;
+  }, [products]);
+
+  const vendorByName = uM(() => {
+    const m = {}; vendors.forEach(v => m[v.name] = v); return m;
+  }, [vendors]);
+
+  // ── ค้นหาซัพ (กรองในหน้า list) ──
+  const filteredVendors = uM(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return vendors;
+    return vendors.filter(v => v.name.toLowerCase().includes(q));
+  }, [vendors, search]);
+
+  // ── เมื่อ scan/search เจอ SKU → กระโดดเข้าซัพของสินค้านั้น แล้ว highlight ──
+  const jumpToSku = (sku) => {
+    const s = String(sku || "").trim().toUpperCase();
+    if (!s) return;
+    const p = products.find(x => String(x.sku || "").toUpperCase() === s);
+    if (!p) { showToast("warn", "ไม่พบสินค้า SKU นี้", "🔍"); return; }
+    setOpenVendor(p.vendor || NO_VENDOR);
+    setHighlightSku(p.sku);
+    setSearch("");
+  };
+
+  // ── ค้นหาในช่อง: ถ้าตรงกับ SKU เป๊ะ → กระโดดเข้าสินค้านั้น ──
+  const onSearchEnter = () => {
+    const q = search.trim();
+    if (!q) return;
+    const hit = products.find(x => String(x.sku || "").toUpperCase() === q.toUpperCase());
+    if (hit) jumpToSku(hit.sku);
+  };
+
+  const setQty = (sku, val) => {
+    const n = val === "" ? "" : Math.max(0, parseInt(val) || 0);
+    setOrderQty(prev => ({ ...prev, [sku]: n }));
+  };
+
+  const stockEmoji = (stock) => stock <= 0 ? "❌" : stock <= 3 ? "⚠️" : "✅";
+  const stockColor = (stock) => stock <= 0 ? "var(--dang)" : stock <= 3 ? "var(--warn)" : "var(--g-600)";
+
+  // ════════ Screen 2: รายละเอียดซัพ ════════
+  if (openVendor) {
+    const grp = vendorByName[openVendor] || { name: openVendor, items: [] };
+    // เรียงตามความเร่งด่วน: หมด → ใกล้หมด → ของเหลือ(มาก→น้อย)
+    const sorted = grp.items.slice().sort((a, b) => {
+      const sa = stockQty(a), sb = stockQty(b);
+      const ra = sa <= 0 ? 0 : sa <= 3 ? 1 : 2;
+      const rb = sb <= 0 ? 0 : sb <= 3 ? 1 : 2;
+      if (ra !== rb) return ra - rb;
+      if (ra === 2) return sb - sa;            // ของเหลือเยอะก่อน
+      return (a.name || "").localeCompare(b.name || "", "th");
+    });
+    const firstInStockIdx = sorted.findIndex(p => stockQty(p) > 3);
+
+    const needCount = sorted.filter(p => stockQty(p) <= 3).length;
+    const totalOrder = Object.keys(orderQty).reduce((s, sku) => {
+      const p = grp.items.find(x => x.sku === sku);
+      return p ? s + (parseInt(orderQty[sku]) || 0) : s;
+    }, 0);
+
+    // เติมจำนวนแนะนำให้ของที่หมดทั้งหมด
+    const fillOutOfStock = () => {
+      setOrderQty(prev => {
+        const next = { ...prev };
+        grp.items.forEach(p => {
+          if (stockQty(p) <= 0) {
+            const avg = avgMonthly(p);
+            const suggest = Math.max(avg != null ? Math.ceil(avg) : 0, 6);
+            next[p.sku] = suggest;
+          }
+        });
+        return next;
+      });
+      showToast("success", "เติมจำนวนแนะนำให้ของที่หมดแล้ว · แก้ได้", "✨");
+    };
+
+    const doCopy = () => {
+      const lines = grp.items
+        .filter(p => (parseInt(orderQty[p.sku]) || 0) > 0)
+        .map(p => `- ${p.name} (${p.sku}) x${parseInt(orderQty[p.sku])}`);
+      if (!lines.length) { showToast("warn", "ยังไม่ได้ใส่จำนวน", "✍️"); return; }
+      const text = `สั่งของ ${grp.name}\n${lines.join("\n")}`;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text)
+          .then(() => showToast("success", "คัดลอกแล้ว · เอาไปวางส่งโรงงานได้เลย", "📋"))
+          .catch(() => setCopyText(text));
+      } else {
+        setCopyText(text);
+      }
+    };
+
+    return (
+      <div style={{paddingBottom:80}}>
+        {/* หัว: ปุ่มย้อนกลับ */}
+        <button onClick={() => { setOpenVendor(null); setHighlightSku(null); }} style={{
+          display:"flex", alignItems:"center", gap:6, background:"none", border:"none",
+          color:"var(--g-700)", fontWeight:700, fontSize:16, cursor:"pointer", padding:"4px 0", marginBottom:8
+        }}>← {grp.name}</button>
+
+        {/* สรุป + ปุ่มเติมของที่หมด */}
+        <div style={{display:"flex", flexWrap:"wrap", gap:8, alignItems:"center", marginBottom:12}}>
+          <span style={{
+            background:"var(--g-50)", color:"var(--g-700)", borderRadius:20, padding:"6px 12px",
+            fontSize:13, fontWeight:600
+          }}>{needCount} ตัวต้องสั่ง · รวมจะสั่ง {fmtN(totalOrder)} ชิ้น</span>
+          {grp.items.some(p => stockQty(p) <= 0) && (
+            <button onClick={fillOutOfStock} style={{
+              background:"#fff", border:"1.5px solid var(--dang)", color:"var(--dang)",
+              borderRadius:20, padding:"6px 12px", fontSize:13, fontWeight:700, cursor:"pointer"
+            }}>เลือกทั้งหมดที่หมด</button>
+          )}
+        </div>
+
+        {/* รายการสินค้า */}
+        <div style={{display:"flex", flexDirection:"column", gap:8}}>
+          {sorted.map((p, idx) => {
+            const stock = stockQty(p);
+            const avg = avgMonthly(p);
+            const hl = highlightSku && p.sku === highlightSku;
+            return (
+              <React.Fragment key={p.sku}>
+                {idx === firstInStockIdx && firstInStockIdx > 0 && (
+                  <div style={{display:"flex", alignItems:"center", gap:10, margin:"6px 2px 2px",
+                               color:"var(--muted)", fontSize:12, fontWeight:600}}>
+                    <span style={{flex:1, height:1, background:"var(--bdr)"}}/>
+                    ของยังเหลือ
+                    <span style={{flex:1, height:1, background:"var(--bdr)"}}/>
+                  </div>
+                )}
+                <div style={{
+                  display:"flex", alignItems:"center", gap:10, background:"#fff",
+                  border: hl ? "2px solid var(--g-600)" : "1.5px solid var(--bdr)",
+                  borderRadius:12, padding:10,
+                  boxShadow: hl ? "0 0 0 3px var(--g-50)" : "none"
+                }}>
+                  {/* รูป → แตะดูรายละเอียด */}
+                  <div onClick={() => setModalProduct(p)} style={{
+                    width:52, height:52, borderRadius:8, flexShrink:0, cursor:"pointer",
+                    background: p.imageUrl ? `center/cover url("${p.imageUrl}")` : "var(--g-50)",
+                    display:"flex", alignItems:"center", justifyContent:"center",
+                    fontSize:20, color:"var(--muted)"
+                  }}>{!p.imageUrl && "📦"}</div>
+
+                  {/* ชื่อ + sku + สถานะ */}
+                  <div onClick={() => setModalProduct(p)} style={{flex:1, minWidth:0, cursor:"pointer"}}>
+                    <div style={{fontWeight:600, fontSize:14, lineHeight:1.25,
+                                 overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{p.name}</div>
+                    <div style={{fontSize:11, color:"var(--muted)", marginTop:2}}>{p.sku}</div>
+                    <div style={{display:"flex", gap:8, flexWrap:"wrap", marginTop:3}}>
+                      <span style={{fontSize:12, fontWeight:700, color:stockColor(stock)}}>
+                        เหลือ {fmtN(stock)} {stockEmoji(stock)}
+                      </span>
+                      {avg != null && avg > 0 && (
+                        <span style={{fontSize:12, color:"var(--muted)"}}>ขาย ~{fmtN(Math.round(avg))}/เดือน</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* ช่องใส่จำนวนจะสั่ง */}
+                  <div style={{display:"flex", flexDirection:"column", alignItems:"center",
+                               gap:2, minWidth:0, flexShrink:0}}>
+                    <span style={{fontSize:10, color:"var(--muted)", fontWeight:600}}>จะสั่ง</span>
+                    <input type="text" inputMode="numeric" value={orderQty[p.sku] ?? ""}
+                      onChange={e => setQty(p.sku, e.target.value.replace(/[^0-9]/g, ""))}
+                      placeholder="0" style={{
+                        width:56, minWidth:0, textAlign:"center", fontSize:16, fontWeight:700,
+                        padding:"8px 4px", borderRadius:8, border:"1.5px solid var(--bdr)"
+                      }}/>
+                  </div>
+                </div>
+              </React.Fragment>
+            );
+          })}
+          {!sorted.length && <Empty icon="📦" title="ซัพนี้ยังไม่มีสินค้า"/>}
+        </div>
+
+        {/* แถบล่างติดหน้าจอ: คัดลอกรายการ */}
+        <div style={{
+          position:"fixed", left:0, right:0, bottom:0, padding:12,
+          background:"rgba(255,255,255,.96)", borderTop:"1px solid var(--bdr)",
+          backdropFilter:"blur(6px)", zIndex:50
+        }}>
+          <button onClick={doCopy} style={{
+            width:"100%", minHeight:44, borderRadius:12, border:"none", cursor:"pointer",
+            background:"var(--g-600)", color:"#fff", fontSize:16, fontWeight:700
+          }}>📋 คัดลอกรายการสั่งซื้อ</button>
+        </div>
+
+        {modalProduct && <ProductModal p={modalProduct} onClose={() => setModalProduct(null)}
+                                       allCats={data.cats || []}/>}
+        {copyText != null && (
+          <div onClick={() => setCopyText(null)} style={{
+            position:"fixed", inset:0, zIndex:1000, background:"rgba(20,30,20,.55)",
+            display:"flex", alignItems:"center", justifyContent:"center", padding:20
+          }}>
+            <div onClick={e => e.stopPropagation()} style={{
+              background:"#fff", borderRadius:16, maxWidth:480, width:"100%", padding:18
+            }}>
+              <div style={{fontWeight:700, marginBottom:8}}>คัดลอกข้อความนี้</div>
+              <textarea readOnly value={copyText} onFocus={e => e.target.select()} style={{
+                width:"100%", minHeight:200, fontSize:14, padding:10, borderRadius:8,
+                border:"1.5px solid var(--bdr)", boxSizing:"border-box"
+              }}/>
+              <button onClick={() => setCopyText(null)} style={{
+                marginTop:10, width:"100%", minHeight:44, borderRadius:10, border:"none",
+                background:"var(--g-600)", color:"#fff", fontWeight:700, cursor:"pointer"
+              }}>ปิด</button>
+            </div>
+          </div>
+        )}
+        <Toast toast={toast} onClose={hideToast}/>
+      </div>
+    );
+  }
+
+  // ════════ Screen 1: รายชื่อซัพพลายเออร์ ════════
+  return (
+    <div>
+      {/* ค้นหา + สแกน */}
+      <div style={{display:"flex", gap:8, marginBottom:14}}>
+        <input value={search} onChange={e => setSearch(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") onSearchEnter(); }}
+          placeholder="ค้นหาซัพ หรือ พิมพ์ SKU แล้วกด Enter"
+          style={{flex:1, minWidth:0, fontSize:15, padding:"10px 12px", borderRadius:10,
+                  border:"1.5px solid var(--bdr)"}}/>
+        <ScanButton onScan={jumpToSku} size={44}/>
+      </div>
+
+      <div style={{display:"flex", flexDirection:"column", gap:10}}>
+        {filteredVendors.map(v => {
+          const badge = v.out > 0
+            ? { txt:`${v.out} ตัวหมด`, color:"var(--dang)", bg:"#fde8e8", dot:"🔴" }
+            : v.low > 0
+              ? { txt:`${v.low} ใกล้หมด`, color:"var(--warn)", bg:"#fef3e2", dot:"🟡" }
+              : { txt:"ปกติ", color:"var(--g-700)", bg:"var(--g-50)", dot:"✅" };
+          return (
+            <div key={v.name} onClick={() => setOpenVendor(v.name)} style={{
+              display:"flex", alignItems:"center", gap:12, background:"#fff",
+              border:"1.5px solid var(--bdr)", borderRadius:12, padding:"14px 14px",
+              cursor:"pointer"
+            }}>
+              <div style={{flex:1, minWidth:0}}>
+                <div style={{fontWeight:700, fontSize:15, lineHeight:1.3,
+                             overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{v.name}</div>
+                <div style={{fontSize:12, color:"var(--muted)", marginTop:3}}>{v.items.length} รายการ</div>
+              </div>
+              <span style={{background:badge.bg, color:badge.color, borderRadius:20,
+                            padding:"6px 12px", fontSize:13, fontWeight:700, whiteSpace:"nowrap"}}>
+                {badge.dot} {badge.txt}
+              </span>
+              <span style={{color:"var(--muted)", fontSize:18}}>›</span>
+            </div>
+          );
+        })}
+        {!filteredVendors.length && <Empty icon="🔍" title="ไม่พบซัพพลายเออร์"/>}
+      </div>
+      <Toast toast={toast} onClose={hideToast}/>
+    </div>
+  );
+}
+
+Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView, DeadStockView, PurchaseView });
