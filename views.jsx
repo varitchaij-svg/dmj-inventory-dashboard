@@ -9510,7 +9510,7 @@ function AuditLogView() {
         <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>
           ยังไม่มีรายการ Audit Log
         </div>
-      ) : (
+      ) : (<>
         <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid var(--bdr)" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
