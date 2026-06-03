@@ -4851,6 +4851,179 @@ function ShelfBlock({ side, shelf, locks, lockData, searchMatches, onClick, allo
   );
 }
 
+// ─── WarehouseMapModal ────────────────────────────────────────────────────────
+// แสดงแผนผังคลังสินค้าเหมือน StorageView แต่ไฮไลต์ล็อคที่ระบุ
+// props: open, onClose, highlightKey (เช่น "A3/7"), lockData, shelves, productName, sku
+function WarehouseMapModal({ open, onClose, highlightKey, lockData, shelves, productName, sku }) {
+  useBackHandler(open ? onClose : null); // Android back = ปิด modal
+  const [side, setSide] = uS('all');
+
+  // auto-select ฝั่งที่มี highlight
+  uE(() => {
+    if (!open || !highlightKey) return;
+    const m = highlightKey.match(/^([AB])/);
+    if (m) setSide(m[1]);
+  }, [open, highlightKey]);
+
+  if (!open) return null;
+
+  const safeShelf = shelves || { A: 10, B: 10, locksPerShelf: 15 };
+  const sides = side === 'all' ? ['A', 'B'] : [side];
+
+  // highlight set — key เดียวแต่ใส่ใน Set เพื่อใช้กับ ShelfBlock
+  const highlightSet = uM(() => {
+    const s = new Set();
+    if (highlightKey) s.add(highlightKey);
+    return s;
+  }, [highlightKey]);
+
+  return (
+    <div onClick={onClose} style={{
+      position:"fixed", inset:0, zIndex:2000,
+      background:"rgba(0,0,0,.72)", backdropFilter:"blur(4px)",
+      display:"flex", alignItems:"flex-end", justifyContent:"center",
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background:"#f8fafc", borderRadius:"18px 18px 0 0",
+        width:"100%", maxWidth:600, maxHeight:"90vh",
+        display:"flex", flexDirection:"column",
+        boxShadow:"0 -4px 32px rgba(0,0,0,.25)",
+      }}>
+        {/* Header */}
+        <div style={{
+          display:"flex", alignItems:"center", gap:12,
+          padding:"16px 16px 10px", borderBottom:"1px solid var(--bdr)",
+          flexShrink:0,
+        }}>
+          <div style={{flex:1, minWidth:0}}>
+            <div style={{fontSize:11, color:"var(--muted)", fontFamily:"monospace"}}>{sku}</div>
+            <div style={{fontSize:15, fontWeight:800, lineHeight:1.2,
+                         overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
+              📍 {highlightKey || "—"}
+              {productName ? <span style={{fontSize:12, fontWeight:500, color:"var(--muted)",
+                                          marginLeft:8}}>{productName}</span> : null}
+            </div>
+          </div>
+          <Seg value={side} onChange={setSide} options={[
+            {value:'A', label:'ซอย A'},
+            {value:'B', label:'ซอย B'},
+            {value:'all', label:'ทั้งหมด'},
+          ]}/>
+          <button onClick={onClose} style={{
+            width:44, height:44, borderRadius:10, border:"1.5px solid var(--bdr)",
+            background:"#fff", cursor:"pointer", fontSize:20, fontFamily:"inherit",
+            flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center",
+          }}>✕</button>
+        </div>
+
+        {/* Map body */}
+        <div style={{overflow:"auto", padding:"12px 16px 24px", flex:1}}>
+          {/* Legend */}
+          <div style={{display:'flex', gap:10, fontSize:10, color:'var(--muted)', marginBottom:10, flexWrap:'wrap'}}>
+            <span><i className="lock-legend lock-verified"/> เช็คแล้ว</span>
+            <span><i className="lock-legend lock-master"/> มีในระบบ</span>
+            <span><i className="lock-legend lock-mismatch"/> ไม่ตรง</span>
+            <span><i className="lock-legend lock-empty"/> ว่าง</span>
+            <span style={{display:"inline-flex", alignItems:"center", gap:3}}>
+              <span style={{display:"inline-block", width:14, height:14, borderRadius:3,
+                            background:"#4ade80", border:"2px solid #16a34a",
+                            verticalAlign:"middle", marginRight:3}}/>
+              ตำแหน่งสินค้า
+            </span>
+          </div>
+
+          <div className="shelf-wrap">
+            {sides.map(s => {
+              const total = safeShelf[s] || 10;
+              const locksN = safeShelf.locksPerShelf || 15;
+              const bays = [];
+              for (let n = 1; n <= total; n += 2) {
+                bays.push({ right: n, left: n + 1 <= total ? n + 1 : null });
+              }
+              return (
+                <div key={s} className="shelf-side">
+                  <div className="shelf-side-label">ซอย {s}</div>
+                  <div className="aisle-bays">
+                    {bays.map(({right, left}) => (
+                      <div key={right} className="aisle-bay">
+                        <div className="bay-wall-label right-label">ฝั่งขวา · {s}{right}</div>
+                        <ShelfBlockHighlight
+                          side={s} shelf={right} locks={locksN}
+                          lockData={lockData || {}} highlightKey={highlightKey}
+                          isRight={true}/>
+                        <div className="bay-aisle-div">── ทางเดิน ──</div>
+                        {left && <>
+                          <ShelfBlockHighlight
+                            side={s} shelf={left} locks={locksN}
+                            lockData={lockData || {}} highlightKey={highlightKey}/>
+                          <div className="bay-wall-label left-label">ฝั่งซ้าย · {s}{left}</div>
+                        </>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Close button (large, มือถือ) */}
+        <div style={{padding:"12px 16px 20px", flexShrink:0}}>
+          <button onClick={onClose} style={{
+            width:"100%", padding:"14px", borderRadius:12, border:"none",
+            background:"var(--g-700)", color:"#fff", fontWeight:700, fontSize:15,
+            fontFamily:"inherit", cursor:"pointer", minHeight:48,
+          }}>ปิด</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ShelfBlock สำหรับ WarehouseMapModal — เหมือน ShelfBlock แต่ไฮไลต์ highlightKey ด้วยสีเขียวสด
+function ShelfBlockHighlight({ side, shelf, locks, lockData, highlightKey, isRight }) {
+  const cols = 5, rows = 3;
+  const cells = [];
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const num = isRight
+        ? (cols - 1 - col) * rows + (row + 1)
+        : (cols - 1 - col) * rows + (rows - row);
+      if (num > locks) { cells.push(<div key={`e${row}-${col}`} style={{visibility:'hidden'}}/>); continue; }
+      const key = `${side}${shelf}/${num}`;
+      const d = lockData[key];
+      const isHL = key === highlightKey;
+      let cls = 'lock empty';
+      if (isHL) cls = 'lock'; // override ด้วย inline style ด้านล่าง
+      else if (d) {
+        if (d.mismatch)      cls = 'lock mismatch';
+        else if (d.verified) cls = 'lock verified';
+        else                 cls = 'lock master';
+      }
+      const hlStyle = isHL ? {
+        background:"#4ade80", borderColor:"#16a34a", color:"#14532d",
+        fontWeight:900, boxShadow:"0 0 0 3px #86efac",
+        animation:"wh-pulse 1s ease-in-out infinite",
+        zIndex:3, transform:"scale(1.25)",
+      } : undefined;
+      cells.push(
+        <div key={num} className={cls} style={hlStyle}
+             title={isHL ? `${key} · ตำแหน่งสินค้า` : (d ? `${key} · ${d.skus.length} SKU` : `${key} · ว่าง`)}>
+          {num}
+          {d && !isHL && d.skus.length > 1 && <span className="lock-count">{d.skus.length}</span>}
+        </div>
+      );
+    }
+  }
+  return (
+    <div className="shelf-block">
+      <div className="shelf-label">{side}{shelf}</div>
+      <div className="lock-grid">{cells}</div>
+      <style>{`@keyframes wh-pulse{0%,100%{box-shadow:0 0 0 3px #86efac}50%{box-shadow:0 0 0 6px #4ade80}}`}</style>
+    </div>
+  );
+}
+
 function ImageLightbox({ url, name, onClose }) {
   useBackHandler(onClose); // Android back = ปิดรูป
   return (
@@ -7368,10 +7541,11 @@ async function syncOrderUpdate(order, updates) {
 // ─────────────────────────────────────────────────────────────────────
 // ORDER LIST VIEW
 // ─────────────────────────────────────────────────────────────────────
-function OrderItemRow({ order, onPatch, productMap, role }) {
+function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData }) {
   const isPending = !order.status || order.status === "รอ" || order.status === "pending";
   const [prepQty, setPrepQty] = uS(() => order.preparedQty > 0 ? order.preparedQty : (order.orderQty || 0));
   const [imgOpen, setImgOpen] = uS(false);
+  const [mapOpen, setMapOpen] = uS(false); // warehouse map modal
   const [toast, showToast, hideToast] = useToast();
   uE(() => {
     setPrepQty(prev => prev === 0 ? (order.orderQty || 0) : prev);
@@ -7406,6 +7580,12 @@ function OrderItemRow({ order, onPatch, productMap, role }) {
   const locStr = locs.length
     ? locs.map(l => `${l.side}${l.shelf}/${l.lock}`).join(", ")
     : null;
+
+  // ตำแหน่งล็อคจาก storage data (data.storage.productLockMap / verifiedLockMap)
+  const skuUpper = (order.sku || '').trim().toUpperCase();
+  const lockKeys = skuLocks ? (skuLocks[skuUpper] || skuLocks[order.sku] || []) : [];
+  // ใช้ล็อคแรกเป็น highlight target
+  const primaryLock = lockKeys[0] || null;
 
   return (
     <>
