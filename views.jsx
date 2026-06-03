@@ -7674,7 +7674,9 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
               }}>{isPending?"🟡 รอ":"✅ Done"}</span>
             </div>
             <div style={{fontSize:14,fontWeight:600,lineHeight:1.3,marginBottom:2,
-              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{order.name}</div>
+              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+              {order.name}{cm === "carry" ? <span style={{fontSize:11,fontWeight:700,color:"#1565c0",marginLeft:5,background:"#e3f2fd",borderRadius:4,padding:"1px 6px"}}>order</span> : null}
+            </div>
             <div style={{fontSize:11,color:"var(--muted)"}}>
               {order.date}{order.from ? ` · ${order.from}` : ""}{order.to ? ` → ${order.to}` : ""}
             </div>
@@ -8797,7 +8799,9 @@ function OrderSummaryView({ data, onPrintRequest }) {
                 {/* Info */}
                 <div>
                   <div style={{fontSize:10,color:"var(--muted)"}}>{order.sku} · {order.date}</div>
-                  <div style={{fontSize:13,fontWeight:600,lineHeight:1.3}}>{order.name}</div>
+                  <div style={{fontSize:13,fontWeight:600,lineHeight:1.3}}>
+                    {order.name}{order.carryMode === "carry" ? <span style={{fontSize:10,fontWeight:700,color:"#1565c0",marginLeft:5,background:"#e3f2fd",borderRadius:4,padding:"1px 5px"}}>order</span> : null}
+                  </div>
                   {/* chip ตำแหน่งคลัง — กดเปิดแผนที่คลัง */}
                   {(() => {
                     const sk = (order.sku||'').trim().toUpperCase();
