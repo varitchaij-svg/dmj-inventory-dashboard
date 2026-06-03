@@ -8,10 +8,11 @@
 - **Frontend**: React 18 แบบ **ไม่มี build step** — เรนเดอร์ผ่าน Babel standalone ใน browser
   โดยตรง ห้ามใช้ไวยากรณ์ที่ต้อง transpile พิเศษ, ห้าม `import`/`export` ES modules,
   ห้ามเพิ่ม npm dependency ทุกอย่างต้องรันได้จากไฟล์ `.jsx` ที่โหลดผ่าน `<script>`
-  - ไฟล์หลัก: `views.jsx` (~9000 บรรทัด, ทุก View component), `app.jsx`, `ui.jsx`
+  - ไฟล์หลัก: `views.jsx` (~10,300 บรรทัด, ทุก View component), `app.jsx` (~670), `ui.jsx` (~190)
   - `Doomuenjing Dashboard.html` = หน้าหลัก + CSS ทั้งหมด (inline `<style>`)
+  - `views_fixed.jsx` = ไฟล์เก่า/encoding เพี้ยน (อักษรไทยเป็น `@�@`) — **ไม่ใช่ของจริง** อย่าแก้
   - alias: `uS`=useState, `uE`=useEffect, `uM`=useMemo
-- **Backend**: Google Apps Script (`appsscript_complete.gs`, ~2600 บรรทัด) = REST API + LINE bot
+- **Backend**: Google Apps Script (`appsscript_complete.gs`, ~3,400 บรรทัด) = REST API + LINE bot
   - Database = Google Sheets
   - มี server-side cache (CacheService, chunk 30k chars, TTL 180s) — แก้ข้อมูลแล้วต้อง
     เรียก `invalidateCache_()`
