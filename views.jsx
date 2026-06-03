@@ -1763,7 +1763,7 @@ function CategoryView({ data, role }) {
               }}>✕</button>
           )}
         </div>
-        <ScanButton size={44} onScan={sku => setGlobalSearch(sku)}
+        <ScanButton size={44} onScan={sku => { setGlobalSearch(sku); setReorderFilter(false); }}
           style={{borderRadius:12,border:"1.5px solid var(--bdr)",background:"#fafcf7"}}/>
         </div>
         {isGlobalSearch && (
@@ -1790,7 +1790,9 @@ function CategoryView({ data, role }) {
               onChange={e => {
                 const val = e.target.value.trim();
                 const match = allVendors.find(v => v.code.toUpperCase() === val.toUpperCase());
-                setGlobalVendor(match ? match.code : (val === "" ? null : val || null));
+                const newVendor = match ? match.code : (val === "" ? null : val || null);
+                setGlobalVendor(newVendor);
+                if (newVendor) setReorderFilter(false);
                 setPage(1);
               }}
               style={{
