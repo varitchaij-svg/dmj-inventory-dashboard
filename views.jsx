@@ -7773,6 +7773,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const [shipConfirm, setShipConfirm]    = uS(null); // single order
   const [shipAllConfirm, setShipAllConfirm] = uS(null); // ready[] array
   const [materialDraw, setMaterialDraw]  = uS(null); // { order, afterConfirm: fn }
+  const [resetConfirm, setResetConfirm]  = uS(false); // ยืนยันรีเซ็ตสถานะการส่ง
 
   const productMap = uM(() => {
     const m = {};
@@ -8120,14 +8121,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
             {Object.keys(shipped).length > 0 && ` · ส่งแล้ว ${Object.keys(shipped).filter(id=>doneOrders.find(o=>o.id===id)).length} รายการ`}
           </div>
         </div>
-        <button onClick={() => {
-          localStorage.removeItem(LS_SHIPPED_ORDERS);
-          localStorage.removeItem(LS_MISSED_TRUCK);
-          const cleared = {};
-          setShipped(cleared);
-          setMissed(cleared);
-          showToast("success", "รีเซ็ตสถานะการส่งแล้ว", "🔄");
-        }} style={{
+        <button onClick={() => setResetConfirm(true)} style={{
           padding:"6px 12px",borderRadius:8,border:"1.5px solid var(--bdr)",
           background:"#fff",color:"var(--muted)",fontSize:11,fontWeight:600,
           cursor:"pointer",fontFamily:"inherit",
@@ -8174,6 +8168,24 @@ function OrderSummaryView({ data, onPrintRequest }) {
           </div>
         </div>
       )}
+      <ConfirmModal
+        open={resetConfirm}
+        type="warn"
+        emoji="🔄"
+        title="รีเซ็ตสถานะการส่ง?"
+        detail="สถานะ 'ส่งแล้ว' และ 'ไม่ขึ้นรถ' ทั้งหมดจะถูกล้าง"
+        confirmLabel="รีเซ็ต"
+        onConfirm={() => {
+          localStorage.removeItem(LS_SHIPPED_ORDERS);
+          localStorage.removeItem(LS_MISSED_TRUCK);
+          const cleared = {};
+          setShipped(cleared);
+          setMissed(cleared);
+          setResetConfirm(false);
+          showToast("success", "รีเซ็ตสถานะการส่งแล้ว", "🔄");
+        }}
+        onCancel={() => setResetConfirm(false)}
+      />
       <ConfirmModal
         open={!!shipConfirm}
         type="ship"
@@ -8775,6 +8787,7 @@ function MtoJobView({ data }) {
   const [searchQty, setSearchQty] = uS(1);
   const [searchWarehouse, setSearchWarehouse] = uS("warehouse");
   const [saving, setSaving] = uS(false);
+  const [deleteConfirm, setDeleteConfirm] = uS(null); // job ที่รอยืนยันลบ
   const [toast, showToast, hideToast] = useToast();
 
   const products = data.products || [];
@@ -8913,7 +8926,6 @@ function MtoJobView({ data }) {
   };
 
   const handleDeleteJob = async (job) => {
-    if (!window.confirm(`ลบงาน "${job.jobName}"?`)) return;
     setSaving(true);
     try {
       const res = await fetch(SHEET_DEPLOY_URL, {
@@ -9058,10 +9070,19 @@ function MtoJobView({ data }) {
     return (
       <div style={{ padding: "16px", maxWidth: 700, margin: "0 auto" }}>
         <Toast toast={toast} onClose={hideToast} />
+        <ConfirmModal
+          open={!!deleteConfirm}
+          type="danger"
+          title={`ลบงาน "${deleteConfirm?.jobName}"?`}
+          detail="การลบไม่สามารถย้อนกลับได้"
+          confirmLabel="ลบ"
+          onConfirm={() => { const j = deleteConfirm; setDeleteConfirm(null); handleDeleteJob(j); }}
+          onCancel={() => setDeleteConfirm(null)}
+        />
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
           <button className="btn ghost" onClick={() => { setView("list"); setActiveJob(null); setMaterials([]); }}>← กลับ</button>
           <button className="btn ghost" style={{ marginLeft: "auto", color: "var(--dang)", borderColor: "var(--dang)" }}
-            onClick={() => handleDeleteJob(activeJob)} disabled={saving}>
+            onClick={() => setDeleteConfirm(activeJob)} disabled={saving}>
             🗑️ ลบงาน
           </button>
         </div>

@@ -320,6 +320,7 @@ function App() {
   const [isOnline, setIsOnline] = usS(() => navigator.onLine);
   const [lastSaved, setLastSaved] = usS(null); // auto-save timestamp
   const [confirmAction, setConfirmAction] = usS(null); // { type:"clearLocal"|"logout" }
+  const [navToast, showNavToast, hideNavToast] = useToast(); // toast สำหรับ nav-level errors
   const tabHistoryRef = React.useRef([]); // track tab navigation for Android back
 
   const sheetUrl = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : "data.json";
@@ -564,7 +565,7 @@ function App() {
                         const r = await syncZortNow();
                         setZortSyncing(false);
                         if (r && r.success !== false) fetchFromSheet();
-                        else alert("Sync ZORT ไม่สำเร็จ: " + ((r && r.error) || "unknown"));
+                        else showNavToast("error", "Sync ZORT ไม่สำเร็จ: " + ((r && r.error) || "unknown"));
                       }}>
                 {zortSyncing ? <span className="spin" style={{width:14,height:14,borderWidth:2}}/> : "⬇️"}
               </button>
