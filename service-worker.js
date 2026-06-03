@@ -1,4 +1,4 @@
-const CACHE_NAME = "dmj-v3";
+const CACHE_NAME = "dmj-v4";
 
 // ไฟล์ที่ cache เพื่อ offline (รูปและ manifest เท่านั้น)
 const PRECACHE_ASSETS = [
@@ -34,15 +34,14 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
 
-  // ① API / Sheet — ไม่ cache เลย
+  // ① API / Sheet — ไม่ cache เลย, ไม่ intercept (ให้ browser จัดการเอง กัน iOS Safari bug)
   if (
     url.hostname.includes("script.google.com") ||
     url.hostname.includes("sheets.googleapis.com") ||
     url.pathname.includes("data.json") ||
     url.pathname.includes("data-bundle.js")
   ) {
-    e.respondWith(fetch(e.request));
-    return;
+    return; // browser handles natively
   }
 
   // ② ไฟล์ app เราเอง (.jsx .js .html .css) — network first
