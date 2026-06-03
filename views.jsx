@@ -5887,7 +5887,8 @@ function StockCountView({ data }) {
   const [selLockKey, setSelLockKey]         = uS(null);
   const [checkedQtys, setCheckedQtys]       = uS({});
   const [savedSkus, setSavedSkus]           = uS(new Set());
-  const [saving, setSaving]                 = uS(false);
+  // saveStatus: "idle" | "pending" | "saving" | "saved" | "error"
+  const [saveStatus, setSaveStatus]         = uS("idle");
   const [confirming, setConfirming]         = uS(false);
   const [lastSavedTime, setLastSavedTime]   = uS(null);
   const [lastSavedSnap, setLastSavedSnap]   = uS(""); // snapshot กัน auto-save วนซ้ำ
@@ -5899,8 +5900,8 @@ function StockCountView({ data }) {
   const [selSupplier, setSelSupplier]       = uS(null);
   const [suppSearch, setSuppSearch]         = uS('');
 
-  uE(() => { setCheckedQtys({}); setSavedSkus(new Set()); setLastSavedTime(null); setLastSavedSnap(''); setStockSearch(''); }, [selLockKey]);
-  uE(() => { setCheckedQtys({}); setSavedSkus(new Set()); setLastSavedTime(null); setLastSavedSnap(''); setStockSearch(''); }, [selSupplier]);
+  uE(() => { setCheckedQtys({}); setSavedSkus(new Set()); setLastSavedTime(null); setLastSavedSnap(''); setStockSearch(''); setSaveStatus("idle"); }, [selLockKey]);
+  uE(() => { setCheckedQtys({}); setSavedSkus(new Set()); setLastSavedTime(null); setLastSavedSnap(''); setStockSearch(''); setSaveStatus("idle"); }, [selSupplier]);
 
   // Android back button: step 3 → 2 → 1
   uE(function(){
@@ -6033,26 +6034,32 @@ function StockCountView({ data }) {
 
   const scTouchedCount = Object.values(checkedQtys).filter(v => v !== '' && v != null).length;
 
+  // derived: true ขณะ POST อยู่ (ใช้ disable ปุ่ม)
+  const saving = saveStatus === "saving";
+
   const handleSave = async (isAuto = false) => {
     const entries = Object.entries(checkedQtys)
       .filter(([, v]) => v !== '' && v != null)
       .map(([sku, qty]) => ({ sku, qty: parseInt(qty)||0 }));
     if (!entries.length) { if (!isAuto) showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return; }
-    setSaving(true);
+    setSaveStatus("saving");
     const snap = JSON.stringify(checkedQtys);
     // ถ้านับตามล็อค → บันทึกตำแหน่งจัดเก็บด้วย; แล้ว commit ผลนับ → อัปเดตคลังจริง + push ZORT
     if (selLockKey) await syncLockData(selLockKey, entries);
     const result = await confirmStockCount(entries);
-    setSaving(false);
     if (result.conflict) {
+      setSaveStatus("error");
       showToast('error', 'ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด', '⚠️');
     } else if (result.success !== false) {
       setSavedSkus(new Set(entries.map(e => e.sku)));
       setLastSavedTime(new Date());
       setLastSavedSnap(snap); // กัน auto-save วนซ้ำ
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus("idle"), 3000);
       showToast('success', 'บันทึก ' + entries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
-    } else if (!isAuto) {
-      showToast('error', 'บันทึกไม่สำเร็จ', '❌');
+    } else {
+      setSaveStatus("error");
+      if (!isAuto) showToast('error', 'บันทึกไม่สำเร็จ', '❌');
     }
   };
 
@@ -6061,7 +6068,10 @@ function StockCountView({ data }) {
   uE(() => {
     if (scTouchedCount === 0 || saving) return;
     if (!selLockKey && !selSupplier) return;
-    if (JSON.stringify(checkedQtys) === lastSavedSnap) return;
+    const snap = JSON.stringify(checkedQtys);
+    if (snap === lastSavedSnap) return;
+    // บอก user ว่ามีข้อมูลรอ save
+    setSaveStatus("pending");
     const timer = setTimeout(() => {
       handleSave(true);
     }, 3000);
@@ -6079,13 +6089,17 @@ function StockCountView({ data }) {
     const result = await confirmStockCount(entries);
     setConfirming(false);
     if (result.conflict) {
+      setSaveStatus("error");
       showToast('error', 'ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด', '⚠️');
     } else if (result.success !== false) {
       setSavedSkus(new Set(entries.map(e => e.sku)));
       setLastSavedTime(new Date());
       setLastSavedSnap(snap); // กัน auto-save commit ซ้ำหลังกดยืนยันเอง
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus("idle"), 3000);
       showToast('success', 'ยืนยันผลนับแล้ว ' + entries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
     } else {
+      setSaveStatus("error");
       showToast('error', 'ยืนยันไม่สำเร็จ', '❌');
     }
   };
@@ -6179,19 +6193,21 @@ function StockCountView({ data }) {
       showToast('warn', noLockCount > 0 ? 'สินค้าที่กรอกยังไม่มีตำแหน่งล็อค' : 'ยังไม่ได้กรอกจำนวน', '✏️');
       return;
     }
-    setSaving(true);
+    setSaveStatus("saving");
     let anyError = false;
     for (const [lk, entries] of lockEntries) {
       const result = await syncLockData(lk, entries);
       if (result.success === false) anyError = true;
     }
-    setSaving(false);
     const totalSaved = lockEntries.reduce((s, [, e]) => s + e.length, 0);
     if (!anyError) {
       setSavedSkus(new Set(lockEntries.flatMap(([, e]) => e.map(x => x.sku))));
       setLastSavedTime(new Date());
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus("idle"), 3000);
       showToast('success', `บันทึก ${totalSaved} รายการ ใน ${lockEntries.length} ล็อค`, '💾');
     } else {
+      setSaveStatus("error");
       showToast('error', 'บันทึกบางรายการไม่สำเร็จ', '❌');
     }
   };
@@ -6272,17 +6288,22 @@ function StockCountView({ data }) {
               </div>
             </div>
             {selSupplier && (
-              <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:2}}>
+              <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}}>
                 <button onClick={handleSaveSupplier} disabled={saving||suppFilledCount===0}
                   className="btn primary"
                   style={{padding:'10px 20px',fontWeight:700,fontSize:14,
                           opacity:(saving||suppFilledCount===0)?0.4:1}}>
-                  {saving ? '⏳ บันทึก...' : suppFilledCount>0 ? `💾 บันทึก (${suppFilledCount})` : '💾 บันทึก'}
+                  {saveStatus === "saving" ? '↻ กำลังบันทึก...' : suppFilledCount>0 ? `💾 บันทึก (${suppFilledCount})` : '💾 บันทึก'}
                 </button>
-                {lastSavedTime && (
-                  <div style={{fontSize:10,color:'var(--g-600)',fontWeight:600}}>
-                    {'✓ '+lastSavedTime.getHours().toString().padStart(2,'0')+':'+lastSavedTime.getMinutes().toString().padStart(2,'0')}
-                  </div>
+                {/* สถานะ auto-save 3 state */}
+                {saveStatus === "pending" && (
+                  <span style={{fontSize:11,color:'#888',fontWeight:600}}>● รอบันทึก...</span>
+                )}
+                {saveStatus === "saved" && (
+                  <span style={{fontSize:11,color:'#22c55e',fontWeight:600}}>✓ บันทึกแล้ว</span>
+                )}
+                {saveStatus === "error" && (
+                  <span style={{fontSize:11,color:'#ef4444',fontWeight:700}}>⚠️ บันทึกไม่สำเร็จ กด 🔄 Reload</span>
                 )}
               </div>
             )}
@@ -6990,30 +7011,30 @@ function StockCountView({ data }) {
       </div>
 
       {/* Sticky FAB button (bottom-right) */}
-      {scTouchedCount > 0 && selLockKey && (
+      {(scTouchedCount > 0 || saveStatus === "saved" || saveStatus === "error") && selLockKey && (
         <div style={{
           position: "fixed", bottom: 24, right: 24, zIndex: 999,
           display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 12
         }}>
           <div style={{
             padding: "12px 16px", borderRadius: 12,
-            background: saving ? "var(--warn)" : "var(--g-600)",
-            color: "#fff", fontSize: 13, fontWeight: 700,
+            background: saveStatus === "saving" ? "var(--warn)"
+              : saveStatus === "error" ? "#fee2e2"
+              : saveStatus === "saved" ? "#f0fdf4"
+              : "var(--g-600)",
+            color: saveStatus === "error" ? "#ef4444"
+              : saveStatus === "saved" ? "#16a34a"
+              : "#fff",
+            fontSize: 13, fontWeight: 700,
             boxShadow: "0 4px 12px rgba(0,0,0,.15)",
-            transition: "background .2s"
+            transition: "background .2s, color .2s"
           }}>
-            {saving ? <>⏳ กำลังบันทึก...</> : <>✏️ รอบันทึก {scTouchedCount}</> }
+            {saveStatus === "pending" && <><span style={{color:"#ccc"}}>●</span> รอบันทึก... ({scTouchedCount})</>}
+            {saveStatus === "saving"  && <>↻ กำลังบันทึก...</>}
+            {saveStatus === "saved"   && <>✓ บันทึกแล้ว</>}
+            {saveStatus === "error"   && <span style={{fontWeight:700}}>⚠️ บันทึกไม่สำเร็จ กด 🔄 Reload</span>}
+            {saveStatus === "idle"    && <>✏️ รอบันทึก {scTouchedCount}</>}
           </div>
-          {lastSavedTime && (
-            <div style={{
-              padding: "8px 12px", borderRadius: 8,
-              background: "#f0fdf4", color: "var(--g-700)",
-              fontSize: 11, fontWeight: 600,
-              boxShadow: "0 2px 8px rgba(0,0,0,.1)"
-            }}>
-              ✓ บันทึกแล้ว {lastSavedTime.getHours().toString().padStart(2,"0")}:{lastSavedTime.getMinutes().toString().padStart(2,"0")}
-            </div>
-          )}
         </div>
       )}
     </>
