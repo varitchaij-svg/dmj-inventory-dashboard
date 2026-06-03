@@ -37,6 +37,25 @@ const { ResponsiveContainer, AreaChart, Area, BarChart, Bar, LineChart, Line,
         XAxis, YAxis, CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell } = window.Recharts;
 
 // ─────────────────────────────────────────────────────────────────────
+// ONLINE STATUS HOOK — ติดตาม navigator.onLine แบบ reactive
+// คืน true ถ้ามีเน็ต, false ถ้าออฟไลน์
+// ─────────────────────────────────────────────────────────────────────
+function useOnlineStatus() {
+  const [online, setOnline] = uS(() => navigator.onLine);
+  uE(() => {
+    const on  = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener("online",  on);
+    window.addEventListener("offline", off);
+    return () => {
+      window.removeEventListener("online",  on);
+      window.removeEventListener("offline", off);
+    };
+  }, []);
+  return online;
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // VISUAL CONFIRM MODAL (replaces native confirm() — readable without Thai)
 // ─────────────────────────────────────────────────────────────────────
 function ConfirmModal({ open, type="warn", emoji, title, detail, confirmLabel="ยืนยัน", cancelLabel="ยกเลิก", onConfirm, onCancel }) {
@@ -188,7 +207,8 @@ function DeltaBadge({ pct, isNew }) {
 function MiniRow({ p, onClick, allCats, primary, secondary, right }) {
   return (
     <button onClick={onClick}
-      style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"8px 12px",
+      style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"12px 12px",
+              minHeight:52,
               background:"transparent",border:"none",borderBottom:"1px solid var(--bdr)",
               cursor:"pointer",textAlign:"left",fontFamily:"inherit"}}
       onMouseEnter={e=>e.currentTarget.style.background="#fafcf7"}
@@ -1324,19 +1344,19 @@ function compareSku(a, b) {
 const COLOR_ORDER = ["แดง","ส้ม","เหลือง","เขียว","ฟ้า","น้ำเงิน","ม่วง","ชมพู","ขาว","ครีม","น้ำตาล","ทอง","เงิน","ดำ","บานเย็น","มิ้นต์","พีช","เบจ"];
 
 const CAT_EMOJI = {
-  "Realtouch":                 "✨",
+  "Realtouch":                 "🌷",
   "ดอกไม้":                   "🌸",
-  "บูช":                      "🌿",
+  "บูช":                      "💐",
   "ไม้แซม":                   "🌾",
-  "ดอกหญ้า":                  "🌱",
+  "ดอกหญ้า":                  "🌼",
   "ใบ":                       "🍃",
-  "ใบบูช":                    "🍂",
-  "ใบไม้แขวน":                "🎋",
-  "กิ่งไม้":                  "🌵",
-  "กุหลาบหิน":                "🪨",
+  "ใบบูช":                    "🌿",
+  "ใบไม้แขวน":                "🍂",
+  "กิ่งไม้":                  "🪵",
+  "กุหลาบหิน":                "🌵",
   "ต้นไม้":                   "🌳",
   "แจกันแก้ว":                "🏺",
-  "เรซิ่น":                   "💎",
+  "เรซิ่น":                   "🎨",
   "Made to Order จัดแบบพิเศษ":"🎁",
 };
 
@@ -1480,6 +1500,7 @@ function CategoryView({ data, role }) {
   const [showAll, setShowAll] = uS(false);
   const [colorFilter, setColorFilter] = uS(null);
   const [supplierFilter, setSupplierFilter] = uS(null);
+  const [deadFilter, setDeadFilter] = uS(null); // เกณฑ์ "สินค้าจมเกิน N เดือน" (null = ไม่กรอง)
   const [newStockFilter, setNewStockFilter] = uS(false);
   const [orderProduct, setOrderProduct] = uS(null);
   const [globalVendor, setGlobalVendor] = uS(null); // global supplier filter (all categories)
@@ -1558,10 +1579,11 @@ function CategoryView({ data, role }) {
       f = f.filter(p => (p.sku||"").toLowerCase().includes(q) || (p.name||"").toLowerCase().includes(q));
     }
     if (colorFilter) f = f.filter(p => p.color && p.color.name === colorFilter);
-    if (supplierFilter) f = f.filter(p => (p.lastSupplier || p.vendor) === supplierFilter);
+    if (supplierFilter) f = f.filter(p => (p.vendor || p.lastSupplier) === supplierFilter);
+    if (deadFilter)     f = f.filter(p => p.deadMonths === null || p.deadMonths >= deadFilter);
     if (newStockFilter) f = f.filter(p => isNew45(p.lastStockInDate));
     return [...f].sort(sortFn);
-  }, [products, active, search, globalSearch, globalVendor, colorFilter, supplierFilter, newStockFilter, sortFn]);
+  }, [products, active, search, globalSearch, globalVendor, colorFilter, supplierFilter, deadFilter, newStockFilter, sortFn]);
 
   const visible = showAll ? filtered : filtered.slice(0, 24);
 
@@ -1612,7 +1634,7 @@ function CategoryView({ data, role }) {
   const supplierChips = uM(() => {
     const m = {};
     products.filter(p => p.cat === active).forEach(p => {
-      const s = p.lastSupplier || p.vendor;
+      const s = p.vendor || p.lastSupplier;
       if (s) m[s] = (m[s] || 0) + 1;
     });
     return Object.entries(m).map(([name, count]) => ({ name, count }))
@@ -1726,7 +1748,7 @@ function CategoryView({ data, role }) {
         <div style={{marginBottom:14}}>
           <select
             value={active}
-            onChange={e => { setActive(e.target.value); setColorFilter(null); setSupplierFilter(null); setNewStockFilter(false); setShowAll(false); }}
+            onChange={e => { setActive(e.target.value); setColorFilter(null); setSupplierFilter(null); setDeadFilter(null); setNewStockFilter(false); setShowAll(false); }}
             style={{
               width:"100%", padding:"10px 14px", borderRadius:12,
               border:"1.5px solid var(--bdr)", background:"#fafcf7",
@@ -1758,7 +1780,7 @@ function CategoryView({ data, role }) {
               const cc = catColor(c, allCats);
               const isMto = c === "Made to Order จัดแบบพิเศษ";
               return (
-                <button key={c} onClick={() => { setActive(c); setColorFilter(null); setSupplierFilter(null); setNewStockFilter(false); setShowAll(false); }}
+                <button key={c} onClick={() => { setActive(c); setColorFilter(null); setSupplierFilter(null); setDeadFilter(null); setNewStockFilter(false); setShowAll(false); }}
                         style={{
                           display:"flex",alignItems:"center",gap:8,width:"100%",
                           padding:"8px 12px",border:"none",cursor:"pointer",
@@ -1889,6 +1911,42 @@ function CategoryView({ data, role }) {
                         padding:"1px 6px", borderRadius:99,
                       }}>{newCount}</span>
                     </button>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* สินค้าจม (dead stock) filter — นับจากวันโอนสาย5→หน้าร้านล่าสุด เฉพาะที่ยังมีสต็อกในคลัง */}
+            {(() => {
+              const inCat = products.filter(p => p.cat === active);
+              // เกณฑ์ตายตัว แสดงเฉพาะระดับที่มีสินค้าเข้าข่ายจริง
+              const buckets = [2, 3, 6, 12].filter(mo => inCat.some(p => (p.deadMonths || 0) >= mo));
+              if (buckets.length === 0) return null;
+              return (
+                <div className="filter-bar" style={{marginTop:10,paddingTop:10,borderTop:"1px dashed var(--bdr)"}}>
+                  <span className="filter-bar-label">⏳ สินค้าจม</span>
+                  <div className="filter-chips">
+                    <button className={`fchip${deadFilter===null?' active':''}`}
+                            onClick={() => setDeadFilter(null)}>ทั้งหมด</button>
+                    {buckets.map(mo => {
+                      const cnt = inCat.filter(p => (p.deadMonths || 0) >= mo).length;
+                      return (
+                        <button key={mo} className={`fchip${deadFilter===mo?' active':''}`}
+                                onClick={() => setDeadFilter(mo===deadFilter ? null : mo)}
+                                style={deadFilter===mo ? {
+                                  background:"#fff1f0", borderColor:"#ef4444",
+                                  color:"#b91c1c", fontWeight:700,
+                                } : {}}>
+                          จมเกิน {mo} เดือน+
+                          <span style={{
+                            marginLeft:6, fontSize:11, fontWeight:700,
+                            background: deadFilter===mo ? "#ef4444" : "var(--g-200)",
+                            color: deadFilter===mo ? "#fff" : "var(--g-800)",
+                            padding:"1px 6px", borderRadius:99,
+                          }}>{cnt}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               );
@@ -2585,9 +2643,9 @@ function StockView({ data, role }) {
             {id:"over", label:`🗂️ สต๊อกเกิน`,count:overstocked.length, color:"#1f6f8b"},
           ].map(t => (
             <button key={t.id} className={`fchip${filter===t.id?' active':''}`}
-                    style={filter===t.id?{background:t.color+"18",borderColor:t.color,color:t.color}:{}}
+                    style={filter===t.id?{background:t.color,borderColor:t.color,color:"#fff",boxShadow:`0 2px 6px ${t.color}55`}:{}}
                     onClick={() => { setFilter(t.id); setPage(0); setStockSearch(""); setSupplierFilter(null); }}>
-              {t.label} <span style={{opacity:.7}}>({t.count})</span>
+              {t.label} <span style={{opacity:.8}}>({t.count})</span>
             </button>
           ))}
         </div>
@@ -7734,6 +7792,8 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const [shipConfirm, setShipConfirm]    = uS(null); // single order
   const [shipAllConfirm, setShipAllConfirm] = uS(null); // ready[] array
   const [materialDraw, setMaterialDraw]  = uS(null); // { order, afterConfirm: fn }
+  const [resetConfirm, setResetConfirm]  = uS(false); // ยืนยันรีเซ็ตสถานะการส่ง
+  const isOnline = useOnlineStatus(); // ตรวจสอบการเชื่อมต่อก่อนส่งสถานะ
 
   const productMap = uM(() => {
     const m = {};
@@ -8025,13 +8085,18 @@ function OrderSummaryView({ data, onPrintRequest }) {
                     )}
 
                     {/* Ship + Missed row */}
+                    {!isOnline && (
+                      <div style={{fontSize:10,color:"#b45309",textAlign:"center",
+                                   fontWeight:600,marginBottom:2}}>⚠️ ไม่มีอินเทอร์เน็ต</div>
+                    )}
                     <div style={{display:"flex",gap:5}}>
-                      <button onClick={() => handleShip(order)} disabled={isSending || isMissed}
+                      <button onClick={() => handleShip(order)} disabled={isSending || isMissed || !isOnline}
                         style={{
-                          flex:1,padding:"7px 4px",borderRadius:7,border:"none",
-                          background: isMissed?"var(--g-100)":"var(--g-700)",
-                          color: isMissed?"var(--muted)":"#fff",
-                          fontSize:11,fontWeight:700,cursor:isMissed?"not-allowed":"pointer",
+                          flex:1,padding:"10px 4px",minHeight:44,borderRadius:7,border:"none",
+                          background: (isMissed||!isOnline)?"var(--g-100)":"var(--g-700)",
+                          color: (isMissed||!isOnline)?"var(--muted)":"#fff",
+                          fontSize:11,fontWeight:700,
+                          cursor:(isMissed||!isOnline)?"not-allowed":"pointer",
                           fontFamily:"inherit",opacity:isSending?0.6:1,
                         }}>
                         {isSending ? "⏳..." : "✅ ส่งแล้ว"}
@@ -8040,7 +8105,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
                         <button onClick={() => toggleMissed(order)}
                           title={isMissed?"ยกเลิก - ใส่คืนในรถ":"รถเต็ม - ไม่ได้ขึ้น"}
                           style={{
-                            width:34,borderRadius:7,
+                            width:44,minHeight:44,borderRadius:7,
                             border:`1.5px solid ${isMissed?"#ef4444":"var(--bdr)"}`,
                             background:isMissed?"#fee2e2":"#fff",
                             color:isMissed?"#ef4444":"var(--muted)",
@@ -8081,14 +8146,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
             {Object.keys(shipped).length > 0 && ` · ส่งแล้ว ${Object.keys(shipped).filter(id=>doneOrders.find(o=>o.id===id)).length} รายการ`}
           </div>
         </div>
-        <button onClick={() => {
-          localStorage.removeItem(LS_SHIPPED_ORDERS);
-          localStorage.removeItem(LS_MISSED_TRUCK);
-          const cleared = {};
-          setShipped(cleared);
-          setMissed(cleared);
-          showToast("success", "รีเซ็ตสถานะการส่งแล้ว", "🔄");
-        }} style={{
+        <button onClick={() => setResetConfirm(true)} style={{
           padding:"6px 12px",borderRadius:8,border:"1.5px solid var(--bdr)",
           background:"#fff",color:"var(--muted)",fontSize:11,fontWeight:600,
           cursor:"pointer",fontFamily:"inherit",
@@ -8135,6 +8193,24 @@ function OrderSummaryView({ data, onPrintRequest }) {
           </div>
         </div>
       )}
+      <ConfirmModal
+        open={resetConfirm}
+        type="warn"
+        emoji="🔄"
+        title="รีเซ็ตสถานะการส่ง?"
+        detail="สถานะ 'ส่งแล้ว' และ 'ไม่ขึ้นรถ' ทั้งหมดจะถูกล้าง"
+        confirmLabel="รีเซ็ต"
+        onConfirm={() => {
+          localStorage.removeItem(LS_SHIPPED_ORDERS);
+          localStorage.removeItem(LS_MISSED_TRUCK);
+          const cleared = {};
+          setShipped(cleared);
+          setMissed(cleared);
+          setResetConfirm(false);
+          showToast("success", "รีเซ็ตสถานะการส่งแล้ว", "🔄");
+        }}
+        onCancel={() => setResetConfirm(false)}
+      />
       <ConfirmModal
         open={!!shipConfirm}
         type="ship"
@@ -8736,7 +8812,9 @@ function MtoJobView({ data }) {
   const [searchQty, setSearchQty] = uS(1);
   const [searchWarehouse, setSearchWarehouse] = uS("warehouse");
   const [saving, setSaving] = uS(false);
+  const [deleteConfirm, setDeleteConfirm] = uS(null); // job ที่รอยืนยันลบ
   const [toast, showToast, hideToast] = useToast();
+  const isOnline = useOnlineStatus(); // ตรวจสอบการเชื่อมต่อก่อนบันทึก
 
   const products = data.products || [];
 
@@ -8874,7 +8952,6 @@ function MtoJobView({ data }) {
   };
 
   const handleDeleteJob = async (job) => {
-    if (!window.confirm(`ลบงาน "${job.jobName}"?`)) return;
     setSaving(true);
     try {
       const res = await fetch(SHEET_DEPLOY_URL, {
@@ -9019,10 +9096,19 @@ function MtoJobView({ data }) {
     return (
       <div style={{ padding: "16px", maxWidth: 700, margin: "0 auto" }}>
         <Toast toast={toast} onClose={hideToast} />
+        <ConfirmModal
+          open={!!deleteConfirm}
+          type="danger"
+          title={`ลบงาน "${deleteConfirm?.jobName}"?`}
+          detail="การลบไม่สามารถย้อนกลับได้"
+          confirmLabel="ลบ"
+          onConfirm={() => { const j = deleteConfirm; setDeleteConfirm(null); handleDeleteJob(j); }}
+          onCancel={() => setDeleteConfirm(null)}
+        />
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
           <button className="btn ghost" onClick={() => { setView("list"); setActiveJob(null); setMaterials([]); }}>← กลับ</button>
           <button className="btn ghost" style={{ marginLeft: "auto", color: "var(--dang)", borderColor: "var(--dang)" }}
-            onClick={() => handleDeleteJob(activeJob)} disabled={saving}>
+            onClick={() => setDeleteConfirm(activeJob)} disabled={saving}>
             🗑️ ลบงาน
           </button>
         </div>
@@ -9164,10 +9250,21 @@ function MtoJobView({ data }) {
 
         {/* Close job button */}
         {isOpen && (
-          <button className="btn primary" onClick={handleCloseJob} disabled={saving || materials.length === 0}
-            style={{ width: "100%", padding: "14px", fontSize: 15, fontWeight: 800, background: "#1b5e20", borderRadius: 12 }}>
-            {saving ? "กำลังปิดงาน..." : "✅ ปิดงาน & ตัดสต็อก"}
-          </button>
+          <>
+            {!isOnline && (
+              <div style={{
+                textAlign:"center",fontSize:12,color:"#b45309",
+                background:"#fffbeb",border:"1px solid #fde68a",
+                borderRadius:8,padding:"6px 12px",marginBottom:6,fontWeight:600,
+              }}>⚠️ ไม่มีอินเทอร์เน็ต — ไม่สามารถปิดงานได้</div>
+            )}
+            <button className="btn primary" onClick={handleCloseJob}
+              disabled={saving || materials.length === 0 || !isOnline}
+              style={{ width: "100%", padding: "14px", fontSize: 15, fontWeight: 800, background: "#1b5e20", borderRadius: 12,
+                       opacity: !isOnline ? 0.5 : 1 }}>
+              {saving ? "กำลังปิดงาน..." : "✅ ปิดงาน & ตัดสต็อก"}
+            </button>
+          </>
         )}
       </div>
     );
@@ -9176,6 +9273,4 @@ function MtoJobView({ data }) {
   return null;
 }
 
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView });
-
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView });
+Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus });
