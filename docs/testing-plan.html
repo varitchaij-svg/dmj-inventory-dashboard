@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DMJ Inventory — แผนการทดสอบ (Testing Plan)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #f5f7f4; color: #1a2e1a; font-size: 15px; line-height: 1.6;
+    padding: 24px 16px 60px;
+  }
+  .wrap { max-width: 840px; margin: 0 auto; }
+
+  h1 { font-size: 22px; font-weight: 800; color: #1a2e1a; margin-bottom: 4px; }
+  .subtitle { font-size: 13px; color: #6b7c6b; margin-bottom: 28px; }
+
+  .week { margin-bottom: 36px; }
+  .week-header {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 16px; padding-bottom: 10px;
+    border-bottom: 2px solid #d4e6d4;
+  }
+  .week-label {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .08em; color: #fff;
+    background: #2d7a3a; padding: 3px 10px; border-radius: 99px; white-space: nowrap;
+  }
+  .week-label.red { background: #b8341c; }
+  .week-label.amber { background: #a07417; }
+  .week-title { font-size: 16px; font-weight: 700; color: #1a2e1a; }
+
+  .card {
+    background: #fff; border-radius: 12px; padding: 16px;
+    border: 1px solid #e0ece0; margin-bottom: 10px;
+  }
+  .card.crit { border-color: #f3b3a8; border-left: 4px solid #b8341c; }
+  .card-title {
+    font-size: 14px; font-weight: 700; margin-bottom: 8px;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .badge {
+    font-size: 10px; font-weight: 700; padding: 2px 8px;
+    border-radius: 99px; white-space: nowrap;
+  }
+  .badge-hi   { background: #fee2e2; color: #991b1b; }
+  .badge-mid  { background: #fef3c7; color: #92400e; }
+  .badge-lo   { background: #dcfce7; color: #166534; }
+  .badge-info { background: #dbeafe; color: #1e40af; }
+  .badge-bug  { background: #b8341c; color: #fff; }
+
+  code, .mono {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    background: #eef3ee; padding: 1px 6px; border-radius: 5px;
+    font-size: 12.5px; color: #1a4220;
+  }
+
+  ul { padding-left: 18px; margin-top: 4px; }
+  li { font-size: 13.5px; color: #374937; margin-bottom: 4px; }
+  li strong { color: #1a2e1a; }
+  p { font-size: 13.5px; color: #374937; margin-bottom: 6px; }
+  .lead { font-size: 13.5px; color: #374937; }
+  .scenario { font-size: 13px; color: #5a4a1a; background: #fffaf0; border-left: 3px solid #f59e0b; padding: 8px 12px; border-radius: 8px; margin-top: 8px; }
+  .assert { font-size: 13px; color: #14532d; background: #f0fdf4; border-left: 3px solid #22c55e; padding: 8px 12px; border-radius: 8px; margin-top: 6px; }
+
+  .note {
+    font-size: 12.5px; color: #6b7c6b; margin-top: 8px;
+    padding: 8px 12px; background: #f5f7f4; border-radius: 8px;
+    border-left: 3px solid #c3d9c3;
+  }
+  .warn-note { border-left-color: #f59e0b; background: #fffaf0; color: #92400e; }
+
+  .stat-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 24px; }
+  .stat {
+    background: #fff; border: 1px solid #e0ece0; border-radius: 10px;
+    padding: 12px 16px; flex: 1 1 130px; text-align: center;
+  }
+  .stat-num { font-size: 26px; font-weight: 800; color: #2d7a3a; line-height: 1; }
+  .stat-num.red { color: #b8341c; }
+  .stat-label { font-size: 11px; color: #6b7c6b; margin-top: 4px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e8efe8; vertical-align: top; }
+  th { background: #f0f6f0; color: #2d7a3a; font-weight: 700; font-size: 12px; }
+
+  pre {
+    background: #1a2e1a; color: #d8e8d8; border-radius: 10px; padding: 14px 16px;
+    overflow-x: auto; font-size: 12.5px; line-height: 1.55; margin-top: 8px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  pre .c { color: #7fa07f; }
+  pre .k { color: #9fd6a0; }
+  pre .s { color: #e0c98a; }
+
+  .divider { border: none; border-top: 1px dashed #d4e6d4; margin: 24px 0; }
+
+  @media (max-width: 480px) {
+    body { padding: 16px 12px 40px; }
+    h1 { font-size: 18px; }
+    .stat-num { font-size: 20px; }
+    .week-title { font-size: 14px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>🧪 DMJ Inventory — แผนการทดสอบ</h1>
+  <div class="subtitle">วิเคราะห์จุดเสี่ยง + ข้อเสนอแนะ automated tests · ระบบจัดการสต็อก Doomuenjing</div>
+
+  <div class="stat-row">
+    <div class="stat"><div class="stat-num">0</div><div class="stat-label">เทสต์ที่มีตอนนี้</div></div>
+    <div class="stat"><div class="stat-num">29</div><div class="stat-label">ฟังก์ชันเทสต์ได้ทันที</div></div>
+    <div class="stat"><div class="stat-num red">5</div><div class="stat-label">บั๊ก/ความเสี่ยงจริงที่เจอ</div></div>
+    <div class="stat"><div class="stat-num red">4</div><div class="stat-label">จุดสต็อก/เงินพังเงียบ</div></div>
+  </div>
+
+  <p class="lead" style="margin-bottom:24px;background:#fff;border:1px solid #e0ece0;border-radius:12px;padding:14px 16px;">
+    <strong>สรุปบรรทัดเดียว:</strong> ฟังก์ชันแก้สต็อกฝั่ง GAS กับตัว parse วันที่/คอลัมน์ คือจุดที่บั๊กทำให้
+    <strong>ข้อมูลเสียหายแบบเงียบ ๆ</strong> (สต็อกที่ดันขึ้น ZORT ผิด = ของจริงผิด) ส่วนใหญ่เป็น logic ที่ดึงออกมาเทสต์ได้เลย
+    ส่วนที่แตะ Sheet/ZORT ต้องใส่ "ตัวคั่น" (adapter) นิดหน่อยก่อนถึงเทสต์ได้
+  </p>
+
+  <!-- ─────────── สถานการณ์ ─────────── -->
+  <div class="week">
+    <div class="week-header">
+      <span class="week-label">สถานการณ์</span>
+      <span class="week-title">ตอนนี้เป็นยังไง</span>
+    </div>
+    <div class="card">
+      <div class="card-title">📭 ยังไม่มีเทสต์เลยสักตัว</div>
+      <ul>
+        <li>ไม่มี <code>package.json</code>, ไม่มี test runner, ไม่มี CI</li>
+        <li>เป็น React แบบ <strong>ไม่มี build step</strong> (Babel standalone ใน browser) → ตั้งเทสต์ยากกว่าปกติ แต่ทำได้</li>
+        <li>ทุกการแก้ต้องเปิดเบราว์เซอร์เช็คเอง = ช้า + พลาดง่าย โดยเฉพาะบั๊ก <strong>column index เพี้ยน</strong> และ <strong>date parsing</strong></li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ─────────── TIER 1 ─────────── -->
+  <div class="week">
+    <div class="week-header">
+      <span class="week-label red">Tier 1</span>
+      <span class="week-title">สต็อก/เงินเสียหาย — ตรวจจับยากสุด</span>
+    </div>
+
+    <div class="card crit">
+      <div class="card-title">1. <code>deductStock</code> หักสต็อกขาดแบบเงียบ ๆ <span class="badge badge-bug">บั๊กจริง</span></div>
+      <p class="mono">appsscript_complete.gs:825–861</p>
+      <p>เมื่อ <code>qty &gt; whQty + fsQty</code> ฟังก์ชันหักเท่าที่มี แล้ว <strong>คืน success โดยไม่มี flag บอกว่าหักไม่ครบ</strong> — ต่างจาก <code>transferStockBatch</code> ที่คืน <code>shortfalls</code> ผู้เรียกเลยไม่รู้ว่าจ่ายของไม่พอ</p>
+      <div class="scenario">📍 qty=10, คลัง=3, หน้าร้าน=4 → หักได้ 7 เหลือค้าง 3 แต่ระบบบอกว่าสำเร็จ</div>
+      <div class="assert">✅ เทสต์ควร assert: เคสนี้ต้องส่งสัญญาณว่ามี 3 ชิ้นที่จ่ายไม่ได้ + payload ZORT ส่งเลขที่ถูก</div>
+    </div>
+
+    <div class="card crit">
+      <div class="card-title">2. conflict detection พังเพราะ cache <span class="badge badge-bug">บั๊กจริง</span></div>
+      <p class="mono">appsscript_complete.gs:1080–1092 · doGet:435 · cache:3115</p>
+      <p><code>lastModified</code> ถูกคำนวณตอนสร้าง payload แล้ว <strong>cache ไว้ 180 วิ</strong> client เลยถือ epoch ที่เก่าได้ถึง 180 วิ ทำให้กรอบ <code>+5000ms</code> ไม่มีความหมาย</p>
+      <div class="scenario">📍 2 คนเปิดจาก cache เดียวกัน → ทั้งคู่ถือ epoch เท่ากัน → เขียนทับกันได้ (false-pass) หรือ cache เก่ามาก → เขียนอะไรก็โดน reject (false-reject)</div>
+      <div class="assert">✅ แก้: คำนวณ <code>lastModified</code> สด ๆ (ห้าม cache) แล้วแยก <code>shouldRejectForConflict(lastMod, clientLoadedAt, slop)</code> เป็น pure function เทสต์ขอบที่ <code>+5000</code> พอดี</div>
+    </div>
+
+    <div class="card crit">
+      <div class="card-title">3. <code>transferStockBatch</code> ไม่มี conflict check เลย <span class="badge badge-hi">เสี่ยงสูง</span></div>
+      <p class="mono">appsscript_complete.gs:574–656 · views.jsx:8265 ไม่ส่ง clientLoadedAt</p>
+      <p>2 คนจัดของออเดอร์ที่ทับกัน ต่างคนต่างอ่าน <code>whQty</code> แล้วโอน → <strong>โอนออกจากคลังเกินจริง</strong> (LockService แค่กันชนกัน ไม่กัน intent เก่า) · บรรทัดที่ไม่มี <code>orderId</code> ก็ไม่มี idempotency กดซ้ำ = โอนซ้ำ</p>
+      <div class="assert">✅ เทสต์: คลัง=3, 2 บรรทัดขอ 2 → บรรทัดสองได้แค่ 1 + รายงาน shortfall; orderId ซ้ำใน batch เดียวต้องข้าม; SKU ซ้ำต้องหักสะสม</div>
+    </div>
+
+    <div class="card crit">
+      <div class="card-title">4. <code>closeMtoJob</code> — <code>netOf</code> + หักวนลูป <span class="badge badge-mid">เสี่ยงกลาง</span></div>
+      <p class="mono">appsscript_complete.gs:3222–3244 (math: 3204–3208)</p>
+      <p>คณิต <code>netOf = qty − clamp(returnedQty, 0, qty)</code> สะอาดและเทสต์ง่ายมาก แต่ลูปหักอ่าน cell สดทีละแถว ไม่มี <code>flush()</code> → snapshot กับ sheet เพี้ยนกลางลูปได้</p>
+      <div class="assert">✅ เทสต์ <code>netOf</code> ทุกขอบ (ติดลบ, 0, เท่า, เกิน); SKU ซ้ำหักสะสม; งานที่ "เสร็จแล้ว" คืน duplicate ไม่หักซ้ำ</div>
+    </div>
+  </div>
+
+  <!-- ─────────── TIER 2 ─────────── -->
+  <div class="week">
+    <div class="week-header">
+      <span class="week-label amber">Tier 2</span>
+      <span class="week-title">ตัวเลข dashboard ผิด / กับดัก column-index</span>
+    </div>
+
+    <div class="card">
+      <div class="card-title">5. parse วันที่ <code>monthKey_</code>/<code>dayKey_</code> ทำยอดขายหายเงียบ <span class="badge badge-hi">เสี่ยงสูง</span></div>
+      <p class="mono">appsscript_complete.gs:2379–2397 · มิเรอร์ฝั่ง app.jsx:252–267</p>
+      <p>ถ้า header เดือนหลุดฟอร์แมต text (Sheets แปลง "05/2026" เป็นวันที่) → regex คืน <code>null</code> เงียบ ๆ → <strong>คอลัมน์เดือนนั้นหายจากยอดขายทั้งคอลัมน์</strong> รายได้หดโดยไม่มี error · อีกทั้ง string branch สมมติลำดับ <code>DD/MM/YYYY</code> ถ้า locale เป็น US จะสลับวัน-เดือน</p>
+      <div class="assert">✅ ROI สูงสุดสำหรับเทสต์ทันที — ก๊อป 4 ฟังก์ชันนี้ไปเทสต์ได้เลย; assert ทุกฟอร์แมต + input พังต้อง log ไม่ใช่เงียบ; server deadMonths === client deadMonths</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">6. column drift ข้าม 2 ชีตที่เป็น source-of-truth <span class="badge badge-hi">เสี่ยงสูง</span></div>
+      <p class="mono">อ่าน: "ข้อมูลสินค้า" (r[8]/r[9]/r[10]) · เขียน: "อัพเดทจำนวนสินค้า" (G=7, H=8)</p>
+      <p>สินค้าเดียวกันอยู่ 2 ชีต layout คนละแบบ + จำนวน header row ต่างกัน (1 vs 2) — <strong>แทรกคอลัมน์ชีตใดชีตหนึ่ง = อ่านกับเขียนหลุดจากกันเงียบ ๆ</strong> นี่คือบั๊ก "column index" ที่เอกสารบอกว่าเจอบ่อยสุด แต่ขยายเป็น 2 เท่า</p>
+      <div class="assert">✅ ทำ "schema-lock test": อ่าน header row จริงแล้ว assert ว่า <code>COL_PROD_*</code> ตรงชื่อคอลัมน์ — ถ้าใครย้ายคอลัมน์ เทสต์ fail ดังทันที</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">7. <code>updateOrderState</code> เดา row-id จากตัวเลขตรง ๆ <span class="badge badge-mid">เสี่ยงกลาง</span></div>
+      <p class="mono">appsscript_complete.gs:911–919</p>
+      <p><code>orderId</code> ถูกตัดเหลือแต่ตัวเลขแล้วใช้เป็นเลขแถว 1-indexed ตรง ๆ ถ้า <code>readOrders_</code> เปลี่ยน convention <code>i+1</code> (เช่นเพิ่ม header row) สถานะจะเขียนผิดแถวเงียบ ๆ · fast-path ไม่ verify SKU ซ้ำ (ต่างจาก <code>confirmShipmentReceive</code> ที่ verify)</p>
+      <div class="assert">✅ เทสต์ round-trip: row 3 → id <code>R3</code> → เขียนกลับ row 3; เพิ่ม verify SKU บน fast-path</div>
+    </div>
+  </div>
+
+  <!-- ─────────── TIER 3 ─────────── -->
+  <div class="week">
+    <div class="week-header">
+      <span class="week-label">Tier 3</span>
+      <span class="week-title">white screen / ความทนทานฝั่งหน้าจอ</span>
+    </div>
+    <div class="card">
+      <div class="card-title">8. <code>enrichData</code> ไม่มี try/catch <span class="badge badge-mid">เสี่ยงกลาง</span></div>
+      <p class="mono">app.jsx:231–290 · forecast views.jsx:555–591</p>
+      <p>มี guard <code>!Array.isArray(d.products)</code> ดีแล้ว แต่หลังจากนั้นเรียก <code>detectColor</code>/<code>mtoBase</code> ทันที — สินค้าที่ <code>name</code> เป็น undefined จะ throw → <strong>white screen ทั้งแอป</strong> (failure mode อันดับ 1 ในเอกสาร)</p>
+      <div class="assert">✅ เทสต์: <code>enrichData</code> ต้องไม่ throw เมื่อสินค้าไม่มี name/tag/date; forecast คืน null ไม่ใช่ NaN; turnover/MoM คืน "—" ไม่ใช่ "Infinity"</div>
+    </div>
+  </div>
+
+  <!-- ─────────── แนวทาง 3 ระดับ ─────────── -->
+  <div class="week">
+    <div class="week-header">
+      <span class="week-label">แนวทาง</span>
+      <span class="week-title">แบ่งตามว่าเทสต์ได้ง่ายแค่ไหน</span>
+    </div>
+    <div class="card">
+      <div class="card-title">🟢 เทสต์ได้ทันที (pure function ไม่ต้องแตะอะไร)</div>
+      <p><code>monthKey_</code>, <code>dayKey_</code>, <code>parseQty_</code>, <code>parseNum_</code>, <code>parseLocation_</code>, <code>netOf</code> (ดึงจาก closeMtoJob), <code>linReg</code> + helper เปอร์เซ็นต์ใน views.jsx, <code>enrichData</code>/<code>monthsSince</code> ใน app.jsx · ครอบคลุมเสี่ยง #4, #5, #8 — ROI ดีสุด setup เกือบเป็นศูนย์</p>
+    </div>
+    <div class="card">
+      <div class="card-title">🟡 ต้องใส่ adapter seam ก่อน (inject sheet ปลอม = 2D array)</div>
+      <p><code>transferStockBatch</code>, <code>deductStock</code>, <code>confirmStockCount</code>, <code>closeMtoJob</code>, <code>updateOrderState</code> · ดึง "แกนคำนวณ/ตัดสินใจ" ออกจาก <code>SpreadsheetApp</code> — นี่คือที่ข้อมูลเสียหายอยู่ (#1–#4, #6–#7) คุ้มที่จะ refactor</p>
+    </div>
+    <div class="card">
+      <div class="card-title">🔴 ต้อง integration/E2E (Sheet จริง หรือ clasp + sheet ทดสอบ)</div>
+      <p>conflict detection end-to-end (#1), schema-lock column position (#6), round-trip order id (#7) · เทสต์ "เขียนชนกัน 2 คน" ตัวเดียวจับบั๊กอันตรายสุดได้</p>
+    </div>
+  </div>
+
+  <!-- ─────────── setup ─────────── -->
+  <div class="week">
+    <div class="week-header">
+      <span class="week-label">setup</span>
+      <span class="week-title">ติดตั้งครั้งเดียว — ไม่กระทบ production</span>
+    </div>
+    <div class="card">
+      <pre><span class="c"># Vitest เป็น devDependency อย่างเดียว — production ยังโหลด .jsx ผ่าน &lt;script&gt; เหมือนเดิม</span>
+npm init -y
+npm i -D vitest
+npx vitest
+
+tests/
+  ├─ dates.test.js     <span class="c"># monthKey_, dayKey_, monthsSince, parseDateMs</span>
+  ├─ stock.test.js     <span class="c"># stockQty, whQty, deductStock core, netOf</span>
+  ├─ parsing.test.js   <span class="c"># compareSku, parseQty_, parseNum_, parseLocation_</span>
+  ├─ schema.test.js    <span class="c"># schema-lock: COL_PROD_* ตรง header จริง</span>
+  └─ format.test.js    <span class="c"># fmtN, fmtB, fmtPct</span></pre>
+      <div class="note warn-note">
+        ⚠️ ทำ pure function ให้ export ใน Node แต่ยังรันใน browser ได้ — ปิดท้ายไฟล์ด้วย<br>
+        <code>if (typeof module !== 'undefined') module.exports = { ... }</code> (browser ไม่มี <code>module</code> เลยข้ามบรรทัดนี้)
+      </div>
+    </div>
+    <div class="card">
+      <pre><span class="c">// ตัวอย่าง tests/stock.test.js</span>
+<span class="k">import</span> { describe, it, expect } <span class="k">from</span> <span class="s">'vitest'</span>;
+<span class="k">import</span> { stockQty, whQty } <span class="k">from</span> <span class="s">'../views.js'</span>;
+
+describe(<span class="s">'stockQty'</span>, () => {
+  it(<span class="s">'รวม store + warehouse'</span>, () => {
+    expect(stockQty({ qtyStore: 3, qtyWH: 5 })).toBe(8);
+  });
+  it(<span class="s">'fallback ไป qty เมื่อ 0 ทั้งคู่'</span>, () => {
+    expect(stockQty({ qtyStore: 0, qtyWH: 0, qty: 12 })).toBe(12);
+  });
+  it(<span class="s">'ไม่พังเมื่อ field หาย'</span>, () => {
+    expect(whQty({})).toBe(0);
+    expect(whQty(null)).toBe(0);
+  });
+});</pre>
+    </div>
+  </div>
+
+  <!-- ─────────── ลำดับลงมือ ─────────── -->
+  <div class="week">
+    <div class="week-header">
+      <span class="week-label">ลงมือ</span>
+      <span class="week-title">ทำตามลำดับนี้</span>
+    </div>
+    <div class="card">
+      <table>
+        <thead><tr><th>ขั้น</th><th>ทำอะไร</th><th>ได้อะไร</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>เพิ่ม Vitest + เทสต์ <strong>#5 วันที่ + #8 enrichData</strong> (pure)</td><td>จับยอดขายหายเงียบ + กัน white screen</td></tr>
+          <tr><td>2</td><td>ดึงแกน <strong>#2/#3/#4</strong> (transfer/deduct/netOf) ออกมาเทสต์</td><td>กันสต็อก/เงินเสียหาย</td></tr>
+          <tr><td>3</td><td>ทำ <strong>schema-lock #6</strong> + refactor conflict #1</td><td>กัน column drift + เขียนชนกัน</td></tr>
+          <tr><td>4</td><td>เพิ่ม GitHub Action รัน <code>vitest</code> ทุก push</td><td>เช็คอัตโนมัติตลอด</td></tr>
+        </tbody>
+      </table>
+      <div class="note">📌 production ยัง deploy เหมือนเดิมทุกอย่าง — Vitest เป็นแค่เครื่องมือ dev</div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+  <p style="font-size:12px;color:#6b7c6b;text-align:center;">
+    วิเคราะห์โดย Explore + Reviewer agent · pure function เทสต์ได้ทันที 29 ตัว · เจอบั๊กจริง 2 + ความเสี่ยงสูง 3 · จัดลำดับตามความเสียหาย
+  </p>
+
+</div>
+</body>
+</html>
