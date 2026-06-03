@@ -4858,11 +4858,17 @@ function WarehouseMapModal({ open, onClose, highlightKey, lockData, shelves, pro
   useBackHandler(open ? onClose : null); // Android back = ปิด modal
   const [side, setSide] = uS('all');
 
-  // auto-select ฝั่งที่มี highlight
+  // auto-select ฝั่งที่มี highlight แล้ว scroll ไปหาแถวนั้น
   uE(() => {
     if (!open || !highlightKey) return;
     const m = highlightKey.match(/^([AB])/);
     if (m) setSide(m[1]);
+    // scroll ไปหา highlighted cell หลัง render
+    const t = setTimeout(() => {
+      const el = document.querySelector('[data-hlkey="' + highlightKey + '"]');
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 120);
+    return () => clearTimeout(t);
   }, [open, highlightKey]);
 
   if (!open) return null;
@@ -5034,6 +5040,7 @@ function ShelfBlockHighlight({ side, shelf, locks, lockData, highlightKey, isRig
       } : undefined;
       cells.push(
         <div key={num} className={cls} style={hlStyle}
+             data-hlkey={isHL ? key : undefined}
              title={isHL ? `${key} · ตำแหน่งสินค้า` : (d ? `${key} · ${d.skus.length} SKU` : `${key} · ว่าง`)}>
           {num}
           {d && !isHL && d.skus.length > 1 && <span className="lock-count">{d.skus.length}</span>}
@@ -7656,15 +7663,6 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
             <div style={{fontSize:11,color:"var(--muted)"}}>
               {order.date}{order.from ? ` · ${order.from}` : ""}{order.to ? ` → ${order.to}` : ""}
             </div>
-            {locStr && (
-              <div style={{
-                marginTop:4,display:"inline-flex",alignItems:"center",gap:4,
-                background:"#eff6ff",borderRadius:6,padding:"2px 8px",fontSize:11,color:"#1e40af",fontWeight:600,
-              }}>
-                📍 {locStr}
-              </div>
-            )}
-            {/* ตำแหน่งคลัง (lock) chip — กดเปิดแผนที่คลัง */}
             {primaryLock && (
               <button onClick={() => setMapOpen(true)} style={{
                 marginTop:4,display:"inline-flex",alignItems:"center",gap:4,
