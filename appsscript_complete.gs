@@ -2837,56 +2837,13 @@ function sendLowStockAlert() {
   const yy  = String(now.getFullYear() + 543).slice(-2);
   const dateStr = dd + "/" + mm + "/" + yy;
 
-  const lines = ["📦 แจ้งเตือนสต็อก " + dateStr];
+  const parts = [];
+  if (outOfStock.length > 0) parts.push("❌ หมด " + outOfStock.length + " รายการ");
+  if (lowStock.length > 0)   parts.push("⚠️ ใกล้หมด " + lowStock.length + " รายการ");
 
-  // ── ส่วน "หมดแล้ว" — จัดกลุ่มตาม supplier แล้วตาม category ──
-  if (outOfStock.length > 0) {
-    lines.push("\n❌ หมดแล้ว " + outOfStock.length + " รายการ");
-
-    // กลุ่มตาม vendor (supplier); ถ้าไม่มี vendor ใส่ใน "อื่นๆ"
-    const byVendor = {};
-    outOfStock.forEach(function(p) {
-      const v = p.vendor || "อื่นๆ";
-      if (!byVendor[v]) byVendor[v] = {};
-      const c = p.category;
-      byVendor[v][c] = (byVendor[v][c] || 0) + 1;
-    });
-
-    Object.keys(byVendor).sort().forEach(function(v) {
-      const catCounts = byVendor[v];
-      const parts = Object.keys(catCounts).sort().map(function(c) {
-        return c + " (" + catCounts[c] + ")";
-      });
-      // ถ้า > 5 หมวด ย่อเหลือ 5 + "และอีก X"
-      const MAX_CAT = 5;
-      const shown   = parts.slice(0, MAX_CAT);
-      const extra   = parts.length - MAX_CAT;
-      const catStr  = shown.join(", ") + (extra > 0 ? " และอีก " + extra + " รายการ" : "");
-      lines.push("  " + v + " › " + catStr);
-    });
-  }
-
-  // ── ส่วน "ใกล้หมด" — จัดกลุ่มตาม category เท่านั้น ──
-  if (lowStock.length > 0) {
-    lines.push("\n⚠️ ใกล้หมด " + lowStock.length + " รายการ");
-
-    const byCat = {};
-    lowStock.forEach(function(p) {
-      byCat[p.category] = (byCat[p.category] || 0) + 1;
-    });
-
-    const MAX_CAT = 5;
-    const catParts = Object.keys(byCat).sort().map(function(c) {
-      return c + " (" + byCat[c] + ")";
-    });
-    const shown = catParts.slice(0, MAX_CAT);
-    const extra = catParts.length - MAX_CAT;
-    lines.push("  " + shown.join(", ") + (extra > 0 ? " และอีก " + extra + " รายการ" : ""));
-  }
-
-  lines.push("\n👉 https://dmj-inventory-dashboard.pages.dev");
-
-  const msg = lines.join("\n");
+  const msg = "📦 สต็อกต่ำ " + dateStr + "\n"
+    + parts.join("  ") + "\n"
+    + "👉 https://dmj-inventory-dashboard.pages.dev";
   Logger.log("sendLowStockAlert:\n" + msg);
   sendLineMessage_(msg);
 }
