@@ -9542,7 +9542,7 @@ function AuditLogView() {
           </table>
         </div>
         <Pagination page={auditPage} total={rows.length} pageSize={AUDIT_PAGE_SIZE} onChange={setAuditPage}/>
-      )}
+      </>)}
     </div>
   );
 }
