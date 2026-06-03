@@ -7920,7 +7920,8 @@ function OrderListView({ data, role }) {
 
   const isShippedOut = o => o.status === "ส่งแล้ว" || o.status === "shipped";
   const filtered = uM(() => {
-    const base = sorted.filter(o => !isShippedOut(o)); // ส่งแล้ว → ออกจากรายการนี้ทันที
+    if (filter === "shipped") return sorted.filter(isShippedOut);
+    const base = sorted.filter(o => !isShippedOut(o));
     if (filter==="pending")   return base.filter(o => !o.status||o.status==="รอ"||o.status==="pending");
     if (filter==="completed") return base.filter(o => o.status==="สำเร็จ"||o.status==="completed");
     return base;
@@ -7942,12 +7943,13 @@ function OrderListView({ data, role }) {
       <div className="page-head no-print">
         <div>
           <div className="page-title">📋 รายการสั่งของ</div>
-          <div className="page-sub">📦 {orders.length} รายการ · 🟡 {pendingCount} รอดำเนินการ</div>
+          <div className="page-sub">📦 {filtered.length} รายการ · 🟡 {pendingCount} รอดำเนินการ</div>
         </div>
         <Seg value={filter} onChange={setFilter} options={[
-          {value:"all",     label:"🗂️ ทั้งหมด"},
-          {value:"pending", label:"🟡 รอ"},
+          {value:"all",      label:"🗂️ ทั้งหมด"},
+          {value:"pending",  label:"🟡 รอ"},
           {value:"completed",label:"✅ สำเร็จ"},
+          {value:"shipped",  label:"🚚 ส่งแล้ว"},
         ]}/>
       </div>
 
