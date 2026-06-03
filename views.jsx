@@ -7744,15 +7744,28 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData,
                 </button>
               </>
             ) : (
-              // Other roles — pending confirmation
-              <div style={{
-                flex:1,display:"flex",alignItems:"center",gap:8,
-                background:"#fafafa",borderRadius:10,padding:"8px 12px",
-                border:"1.5px solid var(--bdr)",
-              }}>
-                <span style={{fontSize:18}}>⏳</span>
-                <div style={{fontSize:13,color:"var(--muted)"}}>รอ sale/frontstore ยืนยันรับของ</div>
-              </div>
+              // Other roles — pending confirmation + undo button for owner/warehouse
+              <>
+                <div style={{
+                  flex:1,display:"flex",alignItems:"center",gap:8,
+                  background:"#fafafa",borderRadius:10,padding:"8px 12px",
+                  border:"1.5px solid var(--bdr)",
+                }}>
+                  <span style={{fontSize:18}}>⏳</span>
+                  <div style={{fontSize:13,color:"var(--muted)"}}>รอ sale/frontstore ยืนยันรับของ</div>
+                </div>
+                {(role === "owner" || role === "warehouse") && (
+                  <button onClick={() => {
+                    onPatch(order.id, { status: "รอ", receivedQty: null, receivedAt: null });
+                    syncOrderUpdate(order, { status: "รอ" });
+                    showToast("success", "คืนสถานะเป็น 'รอ' แล้ว", "↩️", 2500);
+                  }} style={{
+                    padding:"8px 12px",borderRadius:10,border:"1.5px solid #d1d5db",
+                    background:"#fff",color:"#374151",cursor:"pointer",
+                    fontSize:12,fontWeight:700,minHeight:44,fontFamily:"inherit",
+                  }}>↩ คืนสถานะ</button>
+                )}
+              </>
             )}
           </div>
         ) : (
