@@ -295,6 +295,11 @@ function doGet(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
 
+    // สินค้าจม: ดึงสินค้าที่มีในหน้าร้านแต่ไม่ได้รับโอนมานานกว่า 3 เดือน
+    if (e && e.parameter && e.parameter.action === 'getDeadStock') {
+      return handleGetDeadStock_();
+    }
+
     // Lightweight endpoint: ดึงเฉพาะรายการสั่งของ (เบา/เร็ว) สำหรับ polling หน้า orders
     if (e && e.parameter && e.parameter.action === 'orders') {
       return ContentService
@@ -2685,6 +2690,142 @@ function sendLineMessage_(msg) {
     }),
     muteHttpExceptions: true
   });
+}
+
+// ───────────────────────────────────────────────────────────
+// SECTION: Dead Stock endpoint + LINE Low Stock Alert
+// ───────────────────────────────────────────────────────────
+
+// handler สำหรับ action=getDeadStock
+// คืนสินค้าที่มียอดหน้าร้าน (col G) > 0 และไม่ได้รับโอนมานานกว่า 3 เดือน (หรือไม่เคยโอน)
+// เรียงจาก deadMonths มากสุดขึ้นก่อน (null = ไม่เคยโอน อยู่ท้ายสุด), จำกัด 100 แถว
+function handleGetDeadStock_() {
+  try {
+    const ss = SpreadsheetApp.openById(SHEET_ID);
+
+    // อ่านชีตสินค้า (อัพเดทจำนวนสินค้า) — B=SKU(1), C=ชื่อ(2), G=หน้าร้าน(6,0-idx), H=คลัง(7,0-idx)
+    const prodSh = ss.getSheetByName(SHEET_PRODUCTS);
+    if (!prodSh) return ContentService.createTextOutput(JSON.stringify({ items: [], error: "ไม่พบชีต " + SHEET_PRODUCTS })).setMimeType(ContentService.MimeType.JSON);
+    const prodRows = prodSh.getDataRange().getDisplayValues();
+
+    // อ่านวันโอนล่าสุดต่อ SKU จากชีต ประวัติโอนหน้าร้าน (col A=SKU, col B=lastTransferDate)
+    const histMap = readTransferHistory_(); // sku.toUpperCase() → "yyyy-MM-dd"
+
+    const now = new Date();
+    const THREE_MONTHS_MS = 90 * 24 * 60 * 60 * 1000; // ~3 เดือน (90 วัน)
+
+    const items = [];
+    // header อยู่แถวที่ 0 และ 1 (2 แถว) — เริ่มจาก index 2
+    for (let i = 2; i < prodRows.length; i++) {
+      const r = prodRows[i];
+      const sku     = (r[1] || "").toString().trim();
+      const name    = (r[2] || "").toString().trim();
+      if (!sku && !name) continue;
+
+      // col G(index 6) = หน้าร้าน, col H(index 7) = คลัง
+      const qtyFront = parseInt(r[6]) || 0;
+      const qtyWH    = parseInt(r[7]) || 0;
+
+      // เฉพาะสินค้าที่มีของอยู่หน้าร้าน
+      if (qtyFront <= 0) continue;
+
+      const lastTransferDate = histMap[sku.toUpperCase()] || null;
+
+      // คำนวณ deadMonths
+      let deadMonths = null;
+      if (lastTransferDate) {
+        // format yyyy-MM-dd
+        const parts = lastTransferDate.split("-");
+        if (parts.length === 3) {
+          const ref = new Date(+parts[0], +parts[1] - 1, +parts[2]);
+          const diffMs = now - ref;
+          if (!isNaN(ref)) {
+            let mo = (now.getFullYear() - ref.getFullYear()) * 12 + (now.getMonth() - ref.getMonth());
+            if (now.getDate() < ref.getDate()) mo -= 1;
+            deadMonths = mo < 0 ? 0 : mo;
+          }
+        }
+      }
+      // กรอง: โอนมาแล้ว < 3 เดือน = ไม่นับเป็นจม
+      if (deadMonths !== null && deadMonths < 3) continue;
+
+      items.push({ sku, name, qtyFront, qtyWH, lastTransferDate, deadMonths });
+    }
+
+    // เรียง: deadMonths มากสุดขึ้นก่อน, null อยู่ท้าย (นับเป็นจมที่สุด)
+    items.sort(function(a, b) {
+      if (a.deadMonths === null && b.deadMonths === null) return 0;
+      if (a.deadMonths === null) return 1;  // null → ท้าย
+      if (b.deadMonths === null) return -1;
+      return b.deadMonths - a.deadMonths;
+    });
+
+    return ContentService
+      .createTextOutput(JSON.stringify({ items: items.slice(0, 100), generatedAt: new Date().toISOString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ items: [], error: err.message }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// แจ้งเตือน LINE เมื่อสต็อกต่ำหรือหมด — ตั้ง Daily Trigger ได้ (ไม่มี _ ต่อท้าย)
+// ไม่ส่งถ้าไม่มีสินค้าที่ต้องแจ้ง
+function sendLowStockAlert() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const sh = ss.getSheetByName(SHEET_PRODUCTS);
+  if (!sh) { Logger.log("ไม่พบชีต " + SHEET_PRODUCTS); return; }
+
+  const rows = sh.getDataRange().getDisplayValues();
+  const outOfStock = [];   // total = 0
+  const lowStock   = [];   // total 1–3
+
+  // header 2 แถว → เริ่มจาก index 2
+  for (let i = 2; i < rows.length; i++) {
+    const r = rows[i];
+    const sku  = (r[1] || "").toString().trim();
+    const name = (r[2] || "").toString().trim();
+    if (!sku && !name) continue;
+
+    // col G(index 6) = หน้าร้าน, col H(index 7) = คลัง
+    const qFront = parseInt(r[6]) || 0;
+    const qWH    = parseInt(r[7]) || 0;
+    const total  = qFront + qWH;
+
+    const label = name || sku;
+    if (total <= 0) {
+      outOfStock.push({ sku, name: label });
+    } else if (total <= 3) {
+      lowStock.push({ sku, name: label, qFront, qWH });
+    }
+  }
+
+  // ไม่มีสินค้าที่ต้องแจ้ง → ข้าม
+  if (outOfStock.length === 0 && lowStock.length === 0) {
+    Logger.log("sendLowStockAlert: ไม่มีสินค้าสต็อกต่ำ — ไม่ส่ง LINE");
+    return;
+  }
+
+  const lines = ["📦 แจ้งเตือนสต็อกต่ำ"];
+  if (outOfStock.length > 0) {
+    lines.push("หมดแล้ว (" + outOfStock.length + " รายการ):");
+    outOfStock.slice(0, 20).forEach(function(p) {
+      lines.push("• " + p.sku + " " + p.name);
+    });
+    if (outOfStock.length > 20) lines.push("  … และอีก " + (outOfStock.length - 20) + " รายการ");
+  }
+  if (lowStock.length > 0) {
+    lines.push("ใกล้หมด (" + lowStock.length + " รายการ):");
+    lowStock.slice(0, 20).forEach(function(p) {
+      lines.push("• " + p.sku + " " + p.name + " (หน้าร้าน: " + p.qFront + ", คลัง: " + p.qWH + ")");
+    });
+    if (lowStock.length > 20) lines.push("  … และอีก " + (lowStock.length - 20) + " รายการ");
+  }
+
+  const msg = lines.join("\n");
+  Logger.log("sendLowStockAlert:\n" + msg);
+  sendLineMessage_(msg);
 }
 
 const SHEET_ZORT_FAILED = "ZORT_sync_failed";
