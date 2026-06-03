@@ -2861,7 +2861,7 @@ function sendLowStockAlert() {
       const MAX_CAT = 5;
       const shown   = parts.slice(0, MAX_CAT);
       const extra   = parts.length - MAX_CAT;
-      const catStr  = shown.join(", ") + (extra > 0 ? " และอีก " + extra + " หมวด" : "");
+      const catStr  = shown.join(", ") + (extra > 0 ? " และอีก " + extra + " รายการ" : "");
       lines.push("  " + v + " › " + catStr);
     });
   }
@@ -2881,7 +2881,7 @@ function sendLowStockAlert() {
     });
     const shown = catParts.slice(0, MAX_CAT);
     const extra = catParts.length - MAX_CAT;
-    lines.push("  " + shown.join(", ") + (extra > 0 ? " และอีก " + extra + " หมวด" : ""));
+    lines.push("  " + shown.join(", ") + (extra > 0 ? " และอีก " + extra + " รายการ" : ""));
   }
 
   lines.push("\n👉 https://dmj-inventory-dashboard.pages.dev");
