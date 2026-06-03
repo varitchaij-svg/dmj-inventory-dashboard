@@ -8597,7 +8597,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
     // ถ้าไม่ใช่ MTO → โอนสต็อกคลัง→หน้าร้าน / ถ้าเป็น MTO → เบิกวัตถุดิบ (ถ้ามี)
     if (!order.product?.isMTO) {
-      await syncStockDeduct(order.sku, qty, order.name);
+      await syncStockDeduct(order.sku, qty, order.carryMode === "carry" ? order.name + " order" : order.name);
     } else if (matItems && matItems.length > 0) {
       await syncDeductMaterials(matItems);
     }
