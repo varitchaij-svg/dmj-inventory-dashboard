@@ -2777,6 +2777,28 @@ function sendLowStockAlert() {
   const sh = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sh) { Logger.log("ไม่พบชีต " + SHEET_PRODUCTS); return; }
 
+  // สร้าง map SKU → { category, vendor } จากชีต ข้อมูลสินค้า
+  // (SHEET_PRODUCTS เก็บแค่ตัวเลข stock — category/vendor อยู่ใน ข้อมูลสินค้า)
+  const metaMap = {};
+  try {
+    const metaSh = ss.getSheetByName("ข้อมูลสินค้า");
+    if (metaSh) {
+      const metaRows = metaSh.getDataRange().getDisplayValues();
+      // header 1 แถว → เริ่ม index 1; col B(1)=SKU, col F(5)=category, col H(7)=vendor
+      for (let i = 1; i < metaRows.length; i++) {
+        const mr = metaRows[i];
+        const sk = (mr[1] || "").toString().trim().toUpperCase();
+        if (!sk) continue;
+        metaMap[sk] = {
+          category: (mr[5] || "").toString().trim() || "ไม่ระบุ",
+          vendor:   (mr[7] || "").toString().trim() || "",
+        };
+      }
+    }
+  } catch (e) {
+    Logger.log("sendLowStockAlert: อ่าน metaMap ไม่ได้ — " + e.message);
+  }
+
   const rows = sh.getDataRange().getDisplayValues();
   const outOfStock = [];   // total = 0
   const lowStock   = [];   // total 1–3
@@ -2793,11 +2815,12 @@ function sendLowStockAlert() {
     const qWH    = parseInt(r[7]) || 0;
     const total  = qFront + qWH;
 
-    const label = name || sku;
+    const meta     = metaMap[sku.toUpperCase()] || { category: "ไม่ระบุ", vendor: "" };
+    const label    = name || sku;
     if (total <= 0) {
-      outOfStock.push({ sku, name: label });
+      outOfStock.push({ sku, name: label, category: meta.category, vendor: meta.vendor });
     } else if (total <= 3) {
-      lowStock.push({ sku, name: label, qFront, qWH });
+      lowStock.push({ sku, name: label, category: meta.category });
     }
   }
 
@@ -2807,21 +2830,61 @@ function sendLowStockAlert() {
     return;
   }
 
-  const lines = ["📦 แจ้งเตือนสต็อกต่ำ"];
+  // ฟอร์แมตวันที่แบบ dd/mm/yy (พ.ศ. ย่อ)
+  const now = new Date();
+  const dd  = String(now.getDate()).padStart(2, "0");
+  const mm  = String(now.getMonth() + 1).padStart(2, "0");
+  const yy  = String(now.getFullYear() + 543).slice(-2);
+  const dateStr = dd + "/" + mm + "/" + yy;
+
+  const lines = ["📦 แจ้งเตือนสต็อก " + dateStr];
+
+  // ── ส่วน "หมดแล้ว" — จัดกลุ่มตาม supplier แล้วตาม category ──
   if (outOfStock.length > 0) {
-    lines.push("หมดแล้ว (" + outOfStock.length + " รายการ):");
-    outOfStock.slice(0, 20).forEach(function(p) {
-      lines.push("• " + p.sku + " " + p.name);
+    lines.push("\n❌ หมดแล้ว " + outOfStock.length + " รายการ");
+
+    // กลุ่มตาม vendor (supplier); ถ้าไม่มี vendor ใส่ใน "อื่นๆ"
+    const byVendor = {};
+    outOfStock.forEach(function(p) {
+      const v = p.vendor || "อื่นๆ";
+      if (!byVendor[v]) byVendor[v] = {};
+      const c = p.category;
+      byVendor[v][c] = (byVendor[v][c] || 0) + 1;
     });
-    if (outOfStock.length > 20) lines.push("  … และอีก " + (outOfStock.length - 20) + " รายการ");
+
+    Object.keys(byVendor).sort().forEach(function(v) {
+      const catCounts = byVendor[v];
+      const parts = Object.keys(catCounts).sort().map(function(c) {
+        return c + " (" + catCounts[c] + ")";
+      });
+      // ถ้า > 5 หมวด ย่อเหลือ 5 + "และอีก X"
+      const MAX_CAT = 5;
+      const shown   = parts.slice(0, MAX_CAT);
+      const extra   = parts.length - MAX_CAT;
+      const catStr  = shown.join(", ") + (extra > 0 ? " และอีก " + extra + " หมวด" : "");
+      lines.push("  " + v + " › " + catStr);
+    });
   }
+
+  // ── ส่วน "ใกล้หมด" — จัดกลุ่มตาม category เท่านั้น ──
   if (lowStock.length > 0) {
-    lines.push("ใกล้หมด (" + lowStock.length + " รายการ):");
-    lowStock.slice(0, 20).forEach(function(p) {
-      lines.push("• " + p.sku + " " + p.name + " (หน้าร้าน: " + p.qFront + ", คลัง: " + p.qWH + ")");
+    lines.push("\n⚠️ ใกล้หมด " + lowStock.length + " รายการ");
+
+    const byCat = {};
+    lowStock.forEach(function(p) {
+      byCat[p.category] = (byCat[p.category] || 0) + 1;
     });
-    if (lowStock.length > 20) lines.push("  … และอีก " + (lowStock.length - 20) + " รายการ");
+
+    const MAX_CAT = 5;
+    const catParts = Object.keys(byCat).sort().map(function(c) {
+      return c + " (" + byCat[c] + ")";
+    });
+    const shown = catParts.slice(0, MAX_CAT);
+    const extra = catParts.length - MAX_CAT;
+    lines.push("  " + shown.join(", ") + (extra > 0 ? " และอีก " + extra + " หมวด" : ""));
   }
+
+  lines.push("\n👉 https://dmj-inventory-dashboard.pages.dev");
 
   const msg = lines.join("\n");
   Logger.log("sendLowStockAlert:\n" + msg);
