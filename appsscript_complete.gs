@@ -87,6 +87,23 @@ const COL_ORD_STATUS   = 3;   // C
 const COL_ORD_PREPQTY  = 9;   // I
 const COL_ORD_PRINTFLAG= 14;  // N
 
+// ชีต "รายการโอนสินค้า" (SHEET_TRANSFERS) — warehouse ส่งของ → log ผ่าน logTransferBatch_/logTransfer_
+// 2 แถวหัวตาราง (row1=กลุ่ม, row2=ชื่อคอลัมน์) ข้อมูลเริ่ม row3
+const COL_SHIP_REF        = 1;  // A หมายเลขรายการ (batch ref)
+const COL_SHIP_DATE       = 2;  // B วันที่ทำรายการ
+const COL_SHIP_STATUS     = 3;  // C สถานะ
+const COL_SHIP_FROM       = 4;  // D จากคลัง/สาขา
+const COL_SHIP_TO         = 5;  // E ไปคลัง/สาขา
+const COL_SHIP_SKU        = 6;  // F รหัสสินค้า
+const COL_SHIP_NAME       = 7;  // G ชื่อสินค้า
+const COL_SHIP_QTY        = 8;  // H จำนวน(ส่ง)
+const COL_SHIP_PREPARED   = 9;  // I จำนวนที่จัด
+const COL_SHIP_IMAGE      = 10; // J รูปภาพ
+const COL_SHIP_RECVQTY    = 11; // K จำนวนที่รับ
+const COL_SHIP_RECVSTATUS = 12; // L สถานะรับ
+const COL_SHIP_RECVAT     = 13; // M รับเมื่อ
+const COL_SHIP_RECVBY     = 14; // N ผู้รับ
+
 const COL_LOCK_SKU     = 2;   // B = รหัสสินค้า (SKU)
 const COL_LOCK_KEY     = 3;   // C = รหัสล็อค (Location)
 const COL_LOCK_QTY     = 4;   // D = จำนวน (Qty)
@@ -200,6 +217,11 @@ function doPost(e) {
     // ─── Update Order State ───
     if (data.updateOrderState) {
       return updateOrderState(ss, data);
+    }
+
+    // ─── Confirm Shipment Receive (sale/FS ยืนยันรับของจากชีตรายการโอนสินค้า) ───
+    if (data.confirmShipmentReceive) {
+      return confirmShipmentReceive(ss, data.rowId, data.sku, Number(data.receivedQty) || 0, actor);
     }
 
     // ─── Lock Data ───
@@ -322,6 +344,7 @@ function doGet(e) {
     const monthly   = readMonthlySales_();
     const daily     = readDailySales_();
     const transfers = readTransfers_();
+    const shipments = readShipments_();
     const purchases = readPurchases_();
     const storage   = readStorage_();
     const orders    = readOrders_();
@@ -424,6 +447,7 @@ function doGet(e) {
       dayLabels:    daily.dayLabels,
       dailyByCat:   daily.dailyByCat,
       transfers, transferStats,
+      shipments,
       purchases,
       storage: {
         verifiedLockMap: storage.lockMap,
@@ -506,17 +530,20 @@ function transferStock(ss, sku, qty, productName) {
   }
 }
 
+const SHIP_HEADERS = ["หมายเลขรายการ","วันที่ทำรายการ","สถานะ(รอ,สำเร็จ)","จากคลัง/สาขา","ไปคลัง/สาขา","รหัสสินค้า","ชื่อสินค้า","จำนวน","จำนวนที่จัด","รูปภาพ","จำนวนที่รับ","สถานะรับ","รับเมื่อ","ผู้รับ"];
+
 function logTransfer_(ss, sku, productName, qty) {
   let logSheet = ss.getSheetByName(SHEET_TRANSFERS);
   if (!logSheet) {
     logSheet = ss.insertSheet(SHEET_TRANSFERS);
-    logSheet.appendRow(["หมายเลขรายการ","วันที่ทำรายการ","สถานะ(รอ,สำเร็จ)","จากคลัง/สาขา","ไปคลัง/สาขา","รหัสสินค้า","ชื่อสินค้า","จำนวน"]);
+    logSheet.appendRow(SHIP_HEADERS);
   }
   const now    = new Date();
   const dateStr = Utilities.formatDate(now, Session.getScriptTimeZone(), "dd/MM/yyyy");
   const rows   = logSheet.getLastRow();
   const refNum = "TF-" + Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyyMMdd") + "-" + String(rows).padStart(3,"0");
-  logSheet.appendRow([refNum, dateStr, "สำเร็จ", WH_NAME_SAI5, WH_NAME_FS, sku, productName, qty]);
+  const img    = (readImageMap_()[(sku||"").toUpperCase()] || "");
+  logSheet.appendRow([refNum, dateStr, "สำเร็จ", WH_NAME_SAI5, WH_NAME_FS, sku, productName, qty, qty, img, "", "รอรับ", "", ""]);
 }
 
 function createZortTransfer_(sku, productname, qty) {
@@ -664,16 +691,20 @@ function logTransferBatch_(ss, items, zortNumber) {
   let logSheet = ss.getSheetByName(SHEET_TRANSFERS);
   if (!logSheet) {
     logSheet = ss.insertSheet(SHEET_TRANSFERS);
-    logSheet.appendRow(["หมายเลขรายการ","วันที่ทำรายการ","สถานะ(รอ,สำเร็จ)","จากคลัง/สาขา","ไปคลัง/สาขา","รหัสสินค้า","ชื่อสินค้า","จำนวน"]);
+    logSheet.appendRow(SHIP_HEADERS);
   }
+  const imgMap  = readImageMap_();
   const now     = new Date();
   const dateStr = Utilities.formatDate(now, Session.getScriptTimeZone(), "dd/MM/yyyy");
   const baseRow = logSheet.getLastRow();
   const refNum  = zortNumber
     ? String(zortNumber)
     : "TF-" + Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyyMMdd") + "-" + String(baseRow).padStart(3, "0");
-  const rows = items.map(it => [refNum, dateStr, "สำเร็จ", WH_NAME_SAI5, WH_NAME_FS, it.sku, it.name, it.qty]);
-  logSheet.getRange(baseRow + 1, 1, rows.length, 8).setValues(rows);
+  const rows = items.map(it => {
+    const img = imgMap[(it.sku || "").toUpperCase()] || "";
+    return [refNum, dateStr, "สำเร็จ", WH_NAME_SAI5, WH_NAME_FS, it.sku, it.name, it.qty, it.qty, img, "", "รอรับ", "", ""];
+  });
+  logSheet.getRange(baseRow + 1, 1, rows.length, 14).setValues(rows);
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -903,6 +934,41 @@ function updateOrderState(ss, body) {
       }
     }
     return ok({ notFound: body.orderId || body.sku });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// sale/FS ยืนยันรับสินค้าจากชีต "รายการโอนสินค้า"
+// rowId = 'S<sheetRow>' (อ้าง 1-indexed). เช็ค sku กัน row เลื่อนก่อนเขียน
+function confirmShipmentReceive(ss, rowId, sku, receivedQty, actor) {
+  const sheet = ss.getSheetByName(SHEET_TRANSFERS);
+  if (!sheet) return error("ไม่พบชีต: " + SHEET_TRANSFERS);
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(8000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
+
+  try {
+    const rowNum = parseInt(String(rowId).replace(/[^0-9]/g, ""));
+    if (!(rowNum >= 3)) return error("rowId ไม่ถูกต้อง");
+
+    // กัน row เลื่อน: เทียบ SKU ของแถวกับที่ client ส่งมา
+    const rowSku = String(sheet.getRange(rowNum, COL_SHIP_SKU).getDisplayValue()).trim().toUpperCase();
+    if (sku && rowSku !== String(sku).trim().toUpperCase())
+      return error("ข้อมูลไม่ตรง (แถวอาจเลื่อน) — โปรดรีเฟรชแล้วลองใหม่");
+
+    const sentQty = parseInt(sheet.getRange(rowNum, COL_SHIP_QTY).getDisplayValue()) || 0;
+    const recv    = Math.max(0, receivedQty || 0);
+    const status  = recv >= sentQty ? "รับครบ" : "รับไม่ครบ";
+    const nowStr  = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm");
+
+    sheet.getRange(rowNum, COL_SHIP_RECVQTY).setValue(recv);
+    sheet.getRange(rowNum, COL_SHIP_RECVSTATUS).setValue(status);
+    sheet.getRange(rowNum, COL_SHIP_RECVAT).setValue(nowStr);
+    sheet.getRange(rowNum, COL_SHIP_RECVBY).setValue(actor || "");
+
+    try { writeAuditLog_(actor, "รับสินค้า", rowSku, status + " " + recv + "/" + sentQty); } catch (e) {}
+    return ok({ row: rowNum, receivedQty: recv, status });
   } finally {
     lock.releaseLock();
   }
@@ -2489,6 +2555,39 @@ function readTransfers_() {
       sku,
       name:   (r[8] || '').toString().trim(),
       qty:    parseInt(r[9]) || 0,
+    });
+  }
+  return list;
+}
+
+// อ่านชีต "รายการโอนสินค้า" (SHEET_TRANSFERS) — ของที่ warehouse ส่งออกจากคลัง
+// ใช้เป็น data source ของแท็บ "ส่งแล้ว" ให้ sale/FS ยืนยันรับของ
+function readShipments_() {
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_TRANSFERS);
+  if (!sh) return [];
+  const rows = sh.getDataRange().getDisplayValues();
+  if (rows.length < 3) return [];
+  const list = [];
+  for (let i = 2; i < rows.length; i++) {
+    const r = rows[i];
+    const sku = (r[COL_SHIP_SKU - 1] || '').toString().trim();
+    if (!sku) continue;
+    const recvAt = (r[COL_SHIP_RECVAT - 1] || '').toString().trim();
+    list.push({
+      id:             'S' + (i + 1),  // 1-indexed sheet row
+      refNum:         (r[COL_SHIP_REF - 1]    || '').toString().trim(),
+      date:           (r[COL_SHIP_DATE - 1]   || '').toString().trim(),
+      status:         (r[COL_SHIP_STATUS - 1] || '').toString().trim(),
+      from:           (r[COL_SHIP_FROM - 1]   || '').toString().trim(),
+      to:             (r[COL_SHIP_TO - 1]     || '').toString().trim(),
+      sku,
+      name:           (r[COL_SHIP_NAME - 1]   || '').toString().trim(),
+      qty:            parseInt(r[COL_SHIP_QTY - 1]) || 0,
+      image:          (r[COL_SHIP_IMAGE - 1]  || '').toString().trim(),
+      receivedQty:    recvAt ? (parseInt(r[COL_SHIP_RECVQTY - 1]) || 0) : null,
+      receivedStatus: (r[COL_SHIP_RECVSTATUS - 1] || '').toString().trim(),
+      receivedAt:     recvAt,
+      receivedBy:     (r[COL_SHIP_RECVBY - 1] || '').toString().trim(),
     });
   }
   return list;
