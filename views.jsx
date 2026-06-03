@@ -7950,25 +7950,27 @@ function ShipmentRow({ s, role, productMap, onConfirm }) {
 
         {s.receivedAt ? (
           // ── ยืนยันแล้ว — แสดงผล ──
+          (() => { const rq = s.receivedQty ?? 0; const full = rq >= s.qty; return (
           <div style={{
             flex:1,display:"flex",alignItems:"center",gap:8,
-            background: s.receivedQty >= s.qty ? "#f0fdf4" : "#fff8e1",
+            background: full ? "#f0fdf4" : "#fff8e1",
             borderRadius:10,padding:"8px 12px",
-            border:`1.5px solid ${s.receivedQty >= s.qty ? "#86efac" : "#fcd34d"}`,
+            border:`1.5px solid ${full ? "#86efac" : "#fcd34d"}`,
           }}>
-            <span style={{fontSize:20}}>{s.receivedQty >= s.qty ? "✅" : "⚠️"}</span>
+            <span style={{fontSize:20}}>{full ? "✅" : "⚠️"}</span>
             <div>
               <div style={{fontSize:13,fontWeight:700}}>
-                {s.receivedQty >= s.qty ? "รับครบ" : "รับไม่ครบ"}
+                {full ? "รับครบ" : "รับไม่ครบ"}
               </div>
               <div style={{fontSize:11,color:"var(--muted)"}}>
-                รับ {s.receivedQty} / ส่ง {s.qty} pcs
+                รับ {rq} / ส่ง {s.qty} pcs
               </div>
               {s.receivedBy && (
                 <div style={{fontSize:10,color:"var(--muted)"}}>โดย {s.receivedBy}</div>
               )}
             </div>
           </div>
+          ); })()
         ) : canConfirm ? (
           // ── sale/FS ยืนยันรับ ──
           <>
@@ -8038,6 +8040,22 @@ function ShipmentReceiveList({ data, role, productMap }) {
   const [confirmed, setConfirmed] = uS({}); // { [id]: {receivedQty, receivedStatus, receivedAt} }
   const [toast, showToast, hideToast] = useToast();
 
+  // เมื่อ backend ยืนยัน receivedAt มาแล้ว → ล้าง overlay ตัวนั้นทิ้ง ใช้ค่าจริง (receivedBy ฯลฯ)
+  uE(() => {
+    setConfirmed(prev => {
+      if (!Object.keys(prev).length) return prev;
+      const next = {};
+      let changed = false;
+      const real = {};
+      shipments.forEach(s => { real[s.id] = s; });
+      Object.keys(prev).forEach(id => {
+        if (real[id] && real[id].receivedAt) { changed = true; return; } // มีค่าจริงแล้ว ทิ้ง overlay
+        next[id] = prev[id];
+      });
+      return changed ? next : prev;
+    });
+  }, [shipments]);
+
   // merge overlay (optimistic) กับข้อมูลจริง
   const rows = uM(() =>
     shipments.map(s => confirmed[s.id] ? { ...s, ...confirmed[s.id] } : s),
@@ -8082,7 +8100,7 @@ function ShipmentReceiveList({ data, role, productMap }) {
         const total = b.items.length;
         const received = b.items.filter(i => i.receivedAt).length;
         return (
-          <div key={b.refNum} style={{marginBottom:16}}>
+          <div key={b.refNum || "—"} style={{marginBottom:16}}>
             {/* Batch header chip */}
             <div style={{
               display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",
