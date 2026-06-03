@@ -3,7 +3,6 @@ const { useState: usS, useEffect: usE, useCallback: usC } = React;
 
 const TABS = [
   { id: "overview",      label: "📊 ภาพรวม",               icon: I.dashboard },
-  { id: "purchase",      label: "🛒 สั่งซื้อ",              icon: I.cart },
   { id: "categories",    label: "🛍️ สินค้า & สั่ง",         icon: I.layers },
   { id: "trends",        label: "📈 เทรนด์",               icon: I.flame },
   { id: "stock",         label: "⚠️ สต๊อก & แจ้งเตือน",    icon: I.alert },
@@ -23,7 +22,7 @@ const TABS = [
 
 // Role config
 const ROLE_TABS = {
-  owner:      ["overview","purchase","categories","trends","stock","storage","stockcount","frontstore","transfers","orders","ordersummary","mtojobs","upload","connect","labels","auditlog","deadstock"],
+  owner:      ["overview","categories","trends","stock","storage","stockcount","frontstore","transfers","orders","ordersummary","mtojobs","upload","connect","labels","auditlog","deadstock"],
   employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","mtojobs","labels"],
   warehouse:  ["categories","stock","storage","stockcount","orders","ordersummary","mtojobs","labels"],
   frontstore: ["categories","stock","frontstore","orders","labels"],
@@ -629,7 +628,6 @@ function App() {
       {/* ─── Main ─── */}
       <main className="main" data-screen-label={activeTab}>
         {activeTab === "overview"     && <OverviewView data={data} range={range} setRange={setRange} role={role}/>}
-        {activeTab === "purchase"     && <PurchaseView data={data} role={role}/>}
         {activeTab === "categories"   && <CategoryView data={data} role={role}/>}
         {activeTab === "trends"       && <TrendsView data={data} role={role}/>}
         {activeTab === "stock"        && <StockView data={data} role={role}/>}
