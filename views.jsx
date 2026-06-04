@@ -8757,10 +8757,11 @@ function OrderSummaryView({ data, onPrintRequest }) {
     const orderSucceeded = (o) => {
       if (o.product?.isMTO) return true;             // MTO ไม่โอนสต็อกคลัง
       const r = resultById[o.id];
-      if (!r) return true;                           // ไม่มีผลรายตัว → fail open (ถือว่าไปแล้ว)
-      if (r.notFound || r.skipped) return false;     // ไม่พบ SKU / qty<=0 → ชัดเจนว่าไม่ไป → เก็บ
-      if (r.duplicate) return true;                  // เคยส่งไปแล้ว
-      return Number(r.transferred) > 0;              // โอนได้จริง (ครบ/บางส่วน) → ส่ง; 0 → เก็บ
+      // FAIL CLOSED: ลบ/มาร์ค "ส่งแล้ว" เฉพาะตัวที่ GAS ยืนยันโอนจริง (transferred>0) เท่านั้น
+      // ที่เหลือทั้งหมด — ไม่มีผลรายตัว / duplicate (cache ค้าง) / notFound / โอนได้ 0 ชิ้น —
+      //   ถือว่า "ยังไม่ได้ส่ง" → คงไว้ในรายการ ไม่ลบ กันบั๊กข้อมูลหายแบบไม่ได้โอนเข้า ZORT จริง
+      if (!r) return false;
+      return Number(r.transferred) > 0;
     };
     const succeeded = ready.filter(orderSucceeded);
     const kept      = ready.filter(o => !orderSucceeded(o)); // คลังไม่พอ/ไม่พบสินค้า → คงไว้ในรายการ
@@ -8782,8 +8783,9 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
     const zErr = batchRes && batchRes.data && batchRes.data.zortError;
     if (kept.length) {
-      const names = kept.map(o => o.name || o.sku).join(", ");
-      showToast("warn", `ส่งแล้ว ${succeeded.length} รายการ · เหลือ ${kept.length} รายการคลังไม่พอ/ไม่พบสินค้า: ${names}`, "⚠️", 8000);
+      const names = kept.slice(0, 8).map(o => o.name || o.sku).join(", ");
+      const more = kept.length > 8 ? ` …(+${kept.length - 8})` : "";
+      showToast("warn", `ส่งสำเร็จ ${succeeded.length} · ยังไม่ได้ส่ง ${kept.length} รายการ (กดส่งอีกครั้ง): ${names}${more}`, "⚠️", 8000);
     } else if (zErr) {
       showToast("warn", `ส่ง ${succeeded.length} รายการ — แต่ ZORT มีปัญหา ${zErr}`, "⚠️", 7000);
     } else {

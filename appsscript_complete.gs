@@ -625,7 +625,10 @@ function transferStockBatch(ss, list, actor) {
       const orderId = String(item.orderId || "");
       if (!sku || qty <= 0) { results.push({ sku, orderId, skipped: true }); continue; }
 
-      // Idempotency: กันกดส่งซ้ำ (เครื่องอื่น/รีเฟรช) ภายใน 6 ชม.
+      // Idempotency: กันกดส่งซ้ำเร็ว ๆ (สองเครื่อง/ดับเบิลคลิก) ภายใน 90 วินาทีเท่านั้น
+      // หมายเหตุ: orderId = เลขแถว (R5) ถูก reuse เมื่อ order เก่าถูกลบ → TTL ยาวทำให้
+      //   order ใหม่ที่มาแทนแถวเดิมถูกมองว่า "duplicate" ผิด ๆ → ไม่โอน แต่ frontend ลบทิ้ง
+      //   จึงต้องสั้น (90s) ให้ cache เคลียร์ทันรอบส่งถัดไป
       if (orderId && cache.get("shipped_" + orderId)) {
         results.push({ sku, orderId, duplicate: true });
         continue;
@@ -649,7 +652,7 @@ function transferStockBatch(ss, list, actor) {
 
           if (actual > 0) {
             transferred.push({ sku, name, qty: actual });
-            if (orderId) cache.put("shipped_" + orderId, "1", 21600); // 6 ชม.
+            if (orderId) cache.put("shipped_" + orderId, "1", 90); // 90 วิ (กันดับเบิลคลิกเท่านั้น)
           }
           if (actual < qty) shortfalls.push({ sku, name, requested: qty, transferred: actual });
           results.push({ sku, orderId, requested: qty, transferred: actual, newWH, newFS });
