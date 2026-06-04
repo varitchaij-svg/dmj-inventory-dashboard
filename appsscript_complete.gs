@@ -569,6 +569,36 @@ function transferStock(ss, sku, qty, productName) {
   }
 }
 
+// ─── ตั้ง WH qty=0 ใน Sheets + ZORT (สินค้าหมด ไม่ได้จัด) ───
+// เรียกจาก doPost เมื่อ data.zeroStock = true
+function zeroStockItem_(ss, sku, actor) {
+  if (!sku) return error("sku ว่างเปล่า");
+  const sheet = ss.getSheetByName(SHEET_PRODUCTS);
+  if (!sheet) return error("ไม่พบชีต: " + SHEET_PRODUCTS);
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(8000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
+  try {
+    const data = sheet.getDataRange().getValues();
+    const skuUpper = String(sku).trim().toUpperCase();
+    let found = false;
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase() === skuUpper) {
+        sheet.getRange(i + 1, COL_PROD_QTYWH).setValue(0);
+        found = true;
+        break;
+      }
+    }
+    if (!found) return error("ไม่พบ SKU: " + sku);
+    SpreadsheetApp.flush();
+    try { pushStockToZort_([{ sku: skuUpper, qty: 0, warehousecode: WH_SAI5 }]); } catch(e) { Logger.log("zeroStockItem_ ZORT error: " + e); }
+    invalidateCache_();
+    writeAuditLog_(actor, "ปรับสต็อก0", skuUpper, "ไม่ได้จัด: ตั้ง WH qty=0 ใน Sheets+ZORT");
+    return ok({ sku: skuUpper, zeroed: true });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 const SHIP_HEADERS = ["หมายเลขรายการ","วันที่ทำรายการ","สถานะ(รอ,สำเร็จ)","จากคลัง/สาขา","ไปคลัง/สาขา","รหัสสินค้า","ชื่อสินค้า","จำนวน","จำนวนที่จัด","รูปภาพ","จำนวนที่รับ","สถานะรับ","รับเมื่อ","ผู้รับ"];
 
 function logTransfer_(ss, sku, productName, qty) {
