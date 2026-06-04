@@ -17,3 +17,4 @@ desktop.ini
 # Editor
 .vscode/
 *.swp
+node_modules/
