@@ -644,31 +644,31 @@ function App() {
 
       {/* ─── Main ─── */}
       <main className="main" data-screen-label={activeTab}>
-        {activeTab === "overview"     && <OverviewView data={data} range={range} setRange={setRange} role={role}/>}
-        {activeTab === "categories"   && <CategoryView data={data} role={role}/>}
-        {activeTab === "trends"       && <TrendsView data={data} role={role}/>}
-        {activeTab === "stock"        && <StockView data={data} role={role}/>}
-        {activeTab === "storage"      && <StorageView data={data}/>}
-        {activeTab === "stockcount"   && <StockCountView data={data}/>}
-        {activeTab === "frontstore"   && <FrontStoreView data={data} role={role}/>}
-        {activeTab === "transfers"    && <TransferView data={data}/>}
-        {activeTab === "orders"       && <OrderListView data={data} role={role}/>}
-        {activeTab === "ordersummary" && <OrderSummaryView data={data} onPrintRequest={handleOrderPrint}/>}
-        {activeTab === "mtojobs"      && <MtoJobView data={data} />}
-        {activeTab === "upload"       && <UploadView currentData={data} onDataLoaded={handleDataLoaded}/>}
-        {activeTab === "labels"       && <LabelPrintView data={data}
+        {activeTab === "overview"     && <ErrorBoundary key="overview"><OverviewView data={data} range={range} setRange={setRange} role={role}/></ErrorBoundary>}
+        {activeTab === "categories"   && <ErrorBoundary key="categories"><CategoryView data={data} role={role}/></ErrorBoundary>}
+        {activeTab === "trends"       && <ErrorBoundary key="trends"><TrendsView data={data} role={role}/></ErrorBoundary>}
+        {activeTab === "stock"        && <ErrorBoundary key="stock"><StockView data={data} role={role}/></ErrorBoundary>}
+        {activeTab === "storage"      && <ErrorBoundary key="storage"><StorageView data={data}/></ErrorBoundary>}
+        {activeTab === "stockcount"   && <ErrorBoundary key="stockcount"><StockCountView data={data}/></ErrorBoundary>}
+        {activeTab === "frontstore"   && <ErrorBoundary key="frontstore"><FrontStoreView data={data} role={role}/></ErrorBoundary>}
+        {activeTab === "transfers"    && <ErrorBoundary key="transfers"><TransferView data={data}/></ErrorBoundary>}
+        {activeTab === "orders"       && <ErrorBoundary key="orders"><OrderListView data={data} role={role}/></ErrorBoundary>}
+        {activeTab === "ordersummary" && <ErrorBoundary key="ordersummary"><OrderSummaryView data={data} onPrintRequest={handleOrderPrint}/></ErrorBoundary>}
+        {activeTab === "mtojobs"      && <ErrorBoundary key="mtojobs"><MtoJobView data={data} /></ErrorBoundary>}
+        {activeTab === "upload"       && <ErrorBoundary key="upload"><UploadView currentData={data} onDataLoaded={handleDataLoaded}/></ErrorBoundary>}
+        {activeTab === "labels"       && <ErrorBoundary key="labels"><LabelPrintView data={data}
                                             initItems={labelInitItems}
-                                            onInitConsumed={() => setLabelInitItems(null)}/>}
-        {activeTab === "auditlog"   && <AuditLogView/>}
-        {activeTab === "deadstock"  && <DeadStockView/>}
-        {activeTab === "connect"    && <ConnectView
+                                            onInitConsumed={() => setLabelInitItems(null)}/></ErrorBoundary>}
+        {activeTab === "auditlog"     && <ErrorBoundary key="auditlog"><AuditLogView/></ErrorBoundary>}
+        {activeTab === "deadstock"    && <ErrorBoundary key="deadstock"><DeadStockView/></ErrorBoundary>}
+        {activeTab === "connect"      && <ErrorBoundary key="connect"><ConnectView
                                     sheetUrl={sheetUrl}
                                     sheetViewUrl={sheetViewUrl}
                                     syncing={syncing}
                                     lastSync={lastSync}
                                     source={source}
                                     onSync={fetchFromSheet}
-                                    onClearLocal={handleClearLocal}/>}
+                                    onClearLocal={handleClearLocal}/></ErrorBoundary>}
       </main>
     </div>
   );

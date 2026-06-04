@@ -2,6 +2,42 @@
 // Tab views — Overview, Categories, Stock, Upload, Connect
 const { useState: uS, useEffect: uE, useMemo: uM, useCallback: uC } = React;
 
+// ─────────────────────────────────────────────────────────────────────
+// ERROR BOUNDARY — ป้องกัน white screen เมื่อ View component throw
+// ต้องเป็น class component (React error boundary API ไม่รองรับ hooks)
+// ─────────────────────────────────────────────────────────────────────
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(err) {
+    return { error: err };
+  }
+  componentDidCatch(err, info) {
+    console.error('[ErrorBoundary]', err, info && info.componentStack);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{padding:"24px 16px",textAlign:"center",fontFamily:"inherit"}}>
+          <div style={{fontSize:48,marginBottom:12}}>😵</div>
+          <div style={{fontSize:18,fontWeight:700,color:"#dc2626",marginBottom:8}}>เกิดข้อผิดพลาด</div>
+          <div style={{fontSize:14,color:"#6b7280",marginBottom:20,whiteSpace:"pre-wrap",wordBreak:"break-word",maxWidth:320,margin:"0 auto 20px"}}>
+            {this.state.error.message || String(this.state.error)}
+          </div>
+          <button
+            onClick={() => { this.setState({ error: null }); window.location.reload(); }}
+            style={{padding:"10px 24px",background:"#2563eb",color:"#fff",border:"none",borderRadius:8,fontSize:16,cursor:"pointer",fontFamily:"inherit"}}>
+            โหลดใหม่
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 async function ensureXlsx() {
   if (window.XLSX) return;
   await new Promise(function (res, rej) {
