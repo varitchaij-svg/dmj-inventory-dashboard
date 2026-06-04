@@ -7752,11 +7752,6 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
                 🔍
               </div>
             )}
-            {zeroed && (
-              <div style={{position:"absolute",top:4,right:4,background:"#dc2626",
-                color:"#fff",borderRadius:20,fontSize:8,fontWeight:700,padding:"2px 5px",
-                lineHeight:1.4}}>❌ ไม่ได้จัด</div>
-            )}
           </div>
 
           {/* Info */}
@@ -7787,7 +7782,31 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
               </button>
             )}
           </div>
-        </div>
+
+          {/* ❌ ไม่ได้จัด — มุมขวาบน */}
+          {isPending && !zeroed && role !== "frontstore" && role !== "saler" && (
+            <button onClick={() => setZeroConfirm(true)}
+              title="ไม่ได้จัด — สินค้าหมด ปรับ ZORT เป็น 0"
+              disabled={zeroing}
+              style={{
+                alignSelf:"flex-start",flexShrink:0,
+                width:32,height:32,borderRadius:8,
+                border:"1.5px solid #fca5a5",background:"#fff5f5",color:"#dc2626",
+                cursor:zeroing?"not-allowed":"pointer",fontSize:16,
+                display:"flex",alignItems:"center",justifyContent:"center",
+                fontFamily:"inherit",padding:0,
+              }}>
+              {zeroing ? "⏳" : "❌"}
+            </button>
+          )}
+          {zeroed && (
+            <div style={{
+              alignSelf:"flex-start",flexShrink:0,
+              fontSize:10,fontWeight:700,color:"#dc2626",padding:"4px 7px",
+              background:"#fff5f5",borderRadius:8,border:"1.5px solid #fca5a5",
+              whiteSpace:"nowrap",
+            }}>❌ ไม่ได้จัด</div>
+          )}
 
         {/* ── Row 2: quantities + actions ── */}
         {(
@@ -7883,21 +7902,6 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
               }}>
                 <span style={{fontSize:18}}>✅</span>
                 <span style={{fontSize:10,letterSpacing:.3}}>Done</span>
-              </button>
-            )}
-            {/* ❌ ไม่ได้จัด — สต็อกหมด ปรับ ZORT เป็น 0 */}
-            {isPending && !zeroed && role !== "frontstore" && role !== "saler" && (
-              <button onClick={() => setZeroConfirm(true)}
-                title="ไม่ได้จัด — สินค้าหมด ปรับ ZORT เป็น 0"
-                disabled={zeroing}
-                style={{
-                  width:44,height:44,borderRadius:10,
-                  border:"1.5px solid #fca5a5",background:"#fff5f5",color:"#dc2626",
-                  cursor:zeroing?"not-allowed":"pointer",fontSize:18,
-                  display:"flex",alignItems:"center",justifyContent:"center",
-                  fontFamily:"inherit",
-                }}>
-                {zeroing ? "⏳" : "❌"}
               </button>
             )}
           </div>
