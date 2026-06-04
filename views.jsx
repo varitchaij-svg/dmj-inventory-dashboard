@@ -9908,7 +9908,7 @@ function MtoJobView({ data }) {
         setActiveJob(updatedJob);
         setMaterials([]);
         setView("detail");
-        showToast("success", "ปิดงานและตัดสต็อกเรียบร้อย");
+        showToast("success", "ปิดงานและสร้างรายการขาย ZORT เรียบร้อย");
       } else {
         showToast("error", json.error || "เกิดข้อผิดพลาด");
       }
@@ -10230,7 +10230,7 @@ function MtoJobView({ data }) {
               disabled={saving || materials.length === 0 || !isOnline}
               style={{ width: "100%", padding: "14px", fontSize: 15, fontWeight: 800, background: "#1b5e20", borderRadius: 12,
                        opacity: !isOnline ? 0.5 : 1 }}>
-              {saving ? "กำลังปิดงาน..." : "✅ ปิดงาน & ตัดสต็อก"}
+              {saving ? "กำลังปิดงาน..." : "✅ ปิดงาน & สร้างรายการขาย ZORT"}
             </button>
           </>
         )}

@@ -3347,10 +3347,10 @@ function closeMtoJob(ss, data, actor) {
   // Decrease stock in ZORT per warehouse group
   let zortResult = null;
   try {
-    zortResult = decreaseMtoStockInZort_(items);
+    zortResult = createZortSaleOrder_(items, data.jobName || jobId);
   } catch (e) {
-    Logger.log("ZORT DecreaseStock failed: " + e);
-    logZortFailure_("ปิดงาน MTO " + jobId, String(e) + " | SKU: " + items.map(it => it.sku).join(","));
+    Logger.log("ZORT Sale Order failed: " + e);
+    logZortFailure_("สร้าง Sale Order งานจัดพิเศษ: " + jobId, String(e) + " | SKU: " + items.map(it => it.sku).join(","));
   }
 
   // ปิดงานสำเร็จ → mark idempotency กันกดซ้ำใน 6 ชม.
@@ -3401,6 +3401,43 @@ function decreaseMtoStockInZort_(items) {
   }
 
   return results;
+}
+
+// สร้าง ZORT Sale Order ราคา 0 (หักสต็อกผ่านรายการขาย ไม่ใช่ DecreaseStock โดยตรง)
+function createZortSaleOrder_(items, jobName) {
+  const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
+  const dateStr = Utilities.formatDate(new Date(), "Asia/Bangkok", "dd/MM/yyyy");
+
+  const list = items
+    .map(function(it) {
+      const net = Number(it.qty) - Math.max(0, Math.min(Number(it.returnedQty) || 0, Number(it.qty)));
+      return { sku: String(it.sku || "").trim(), name: String(it.name || "").trim(), number: net, price: 0, totalprice: 0 };
+    })
+    .filter(function(it) { return it.number > 0; });
+
+  if (!list.length) return { skipped: true };
+
+  const payload = {
+    date: dateStr,
+    remark: "งานจัดพิเศษ: " + (jobName || ""),
+    list: list,
+  };
+
+  const res = UrlFetchApp.fetch(ZORT_BASE + "/Order/AddOrder", {
+    method: "post",
+    headers: headers,
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true,
+  });
+
+  const err = zortRespError_(res);
+  if (err) {
+    logZortFailure_("สร้าง Sale Order งานจัดพิเศษ: " + jobName, err);
+    return { success: false, error: err };
+  }
+  const json = JSON.parse(res.getContentText() || "{}");
+  Logger.log("ZORT Sale Order created: " + JSON.stringify(json));
+  return { success: true, orderNumber: json.number || json.ordernumber || null };
 }
 
 function deleteMtoJob(ss, data) {
