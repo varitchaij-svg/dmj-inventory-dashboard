@@ -82,4 +82,36 @@ function compareSku(a, b) {
   return pa.localeCompare(pb) || ca - cb || sa - sb;
 }
 
-module.exports = { monthsSince, fmtN, fmtB, fmtPct, monthLabel, stockQty, whQty, mtoBase, compareSku };
+// ── Constants จาก appsscript_complete.gs (1-based, ตรงกับ SHEET_PRODUCTS "อัพเดทจำนวนสินค้า") ──
+// COL_PROD_SKU=2 (B), COL_PROD_QTYFS=7 (G=หน้าร้าน), COL_PROD_QTYWH=8 (H=คลัง)
+const COL_PROD_SKU   = 2;
+const COL_PROD_QTYFS = 7;
+const COL_PROD_QTYWH = 8;
+
+// ── mapProductRow: map row array จากชีต SHEET_PRODUCTS → { sku, qtyStore, qtyWH } ──
+// รับ array 0-indexed (เหมือนที่ได้จาก sheet.getDataRange().getValues()[i])
+// COL_PROD_* เป็น 1-based → แปลงเป็น 0-based ด้วย -1
+// หมายเหตุ: ชีต "อัพเดทจำนวนสินค้า" (SHEET_PRODUCTS) ใช้สำหรับ เขียน/อัปเดต stock
+//           ชีต "ข้อมูลสินค้า" ใช้สำหรับ อ่าน (readProducts_) มี layout ต่างกัน
+function mapProductRow(row) {
+  return {
+    sku:      String(row[COL_PROD_SKU   - 1] || '').trim().toUpperCase(),
+    qtyStore: Number(row[COL_PROD_QTYFS - 1]) || 0,
+    qtyWH:    Number(row[COL_PROD_QTYWH - 1]) || 0,
+  };
+}
+
+// ── shouldRejectConflict: ตรรกะ conflict detection (copy จาก GAS shouldRejectConflict_) ──
+// คืน true = ควร reject (sheet ถูกแก้หลัง client โหลดเกิน slop window)
+// clientLoadedAt, sheetLastModified = epoch ms; slopMs = ms (default 5000)
+function shouldRejectConflict(clientLoadedAt, sheetLastModified, slopMs) {
+  if (!clientLoadedAt || !sheetLastModified) return false;
+  return sheetLastModified > Number(clientLoadedAt) + (slopMs || 5000);
+}
+
+module.exports = {
+  monthsSince, fmtN, fmtB, fmtPct, monthLabel,
+  stockQty, whQty, mtoBase, compareSku,
+  COL_PROD_SKU, COL_PROD_QTYFS, COL_PROD_QTYWH,
+  mapProductRow, shouldRejectConflict,
+};

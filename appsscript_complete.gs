@@ -34,6 +34,18 @@ function getSheetLastModified_() {
   }
 }
 
+/**
+ * Pure helper: ตัดสินว่าควร reject conflict หรือไม่
+ * @param {number|string|null} clientLoadedAt  - epoch ms ที่ client โหลดข้อมูล
+ * @param {number} sheetLastModified           - epoch ms ที่ sheet ถูกแก้ล่าสุด
+ * @param {number} [slopMs=5000]               - หน้าต่างผ่อนผัน (ms) กันนาฬิกาต่าง/delay เล็กน้อย
+ * @return {boolean} true = reject (มี conflict), false = ผ่าน
+ */
+function shouldRejectConflict_(clientLoadedAt, sheetLastModified, slopMs) {
+  if (!clientLoadedAt || !sheetLastModified) return false;
+  return sheetLastModified > Number(clientLoadedAt) + (slopMs || 5000);
+}
+
 function checkToken_(token) {
   const expected = PropertiesService.getScriptProperties().getProperty('APP_TOKEN');
   if (!expected || !expected.trim()) return true; // ยังไม่ตั้ง = ไม่บังคับ
@@ -332,11 +344,20 @@ function doGet(e) {
 
     // Server-side cache: payload หนัก (อ่าน 11 ชีต) → cache ไว้ ~3 นาที ลดโหลด/timeout
     // ?fresh=1 หรือหลังมีการแก้ข้อมูล (doPost ล้าง cache) จะคำนวณใหม่
+    // หมายเหตุ: lastModified อ่านสด ๆ เสมอแม้ serve จาก cache
+    //           เพื่อให้ conflict detection ฝั่ง client ทำงานได้จริง
     const wantFresh = e && e.parameter && e.parameter.fresh === '1';
     if (!wantFresh) {
       const cached = getCachedPayload_();
       if (cached) {
-        return ContentService.createTextOutput(cached).setMimeType(ContentService.MimeType.JSON);
+        // แทรก lastModified สด ๆ ลงใน cached payload ก่อน return
+        // แทนที่ค่าใน JSON string ตรง ๆ เพื่อความเร็ว (ไม่ parse ทั้งก้อน)
+        const freshMod = getSheetLastModified_();
+        const patched = cached.replace(
+          /"lastModified"\s*:\s*\d+/,
+          '"lastModified":' + freshMod
+        );
+        return ContentService.createTextOutput(patched).setMimeType(ContentService.MimeType.JSON);
       }
     }
 
@@ -1084,14 +1105,11 @@ function confirmStockCount(ss, entries, clientLoadedAt, actor) {
   if (!Array.isArray(entries) || !entries.length) return error("entries ว่างเปล่า");
 
   // ─── Conflict detection: ถ้า sheet ถูกแก้หลังจาก client โหลด → reject ───
-  if (clientLoadedAt) {
-    const lastMod = getSheetLastModified_();
-    if (lastMod > Number(clientLoadedAt) + 5000) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false, conflict: true,
-        message: "ข้อมูลถูกแก้ไขหลังจากที่คุณโหลด กรุณา Reload ก่อนบันทึก"
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
+  if (shouldRejectConflict_(clientLoadedAt, getSheetLastModified_())) {
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false, conflict: true,
+      message: "ข้อมูลถูกแก้ไขหลังจากที่คุณโหลด กรุณา Reload ก่อนบันทึก"
+    })).setMimeType(ContentService.MimeType.JSON);
   }
 
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);

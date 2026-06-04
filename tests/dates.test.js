@@ -33,20 +33,20 @@ describe('monthsSince', () => {
   });
 
   it('ขอบเดือน: วันที่ยังไม่ครบเดือน → นับหักหนึ่ง', () => {
-    // วันที่ปัจจุบัน 2026-06-03 (today = 2026-06-03 per system context)
-    // อ้างอิง 2026-05-04: 3 < 4 → mo = 1 - 1 = 0
-    const result = monthsSince('2026-05-04');
+    // วันที่ปัจจุบัน 2026-06-04 (today = 2026-06-04 per system context)
+    // อ้างอิง 2026-05-05: 4 < 5 → mo = 1 - 1 = 0
+    const result = monthsSince('2026-05-05');
     expect(result).toBe(0);
-    // อ้างอิง 2026-05-03: 3 === 3 → ครบเดือนพอดี → mo = 1 (ไม่หัก)
-    const result2 = monthsSince('2026-05-03');
+    // อ้างอิง 2026-05-04: 4 === 4 → ครบเดือนพอดี → mo = 1 (ไม่หัก)
+    const result2 = monthsSince('2026-05-04');
     expect(result2).toBe(1);
-    // อ้างอิง 2026-05-01: 3 > 1 → mo = 1 (ครบเดือน)
+    // อ้างอิง 2026-05-01: 4 > 1 → mo = 1 (ครบเดือน)
     const result3 = monthsSince('2026-05-01');
     expect(result3).toBe(1);
   });
 
   it('วันที่เดือนก่อน (ครบ 2 เดือน) → 2', () => {
-    // 2026-04-01 → 2 เดือน (3 >= 1)
+    // 2026-04-01 → 2 เดือน (4 >= 1)
     const result = monthsSince('2026-04-01');
     expect(result).toBe(2);
   });
