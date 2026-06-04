@@ -2,6 +2,16 @@
 // Tab views — Overview, Categories, Stock, Upload, Connect
 const { useState: uS, useEffect: uE, useMemo: uM, useCallback: uC } = React;
 
+async function ensureXlsx() {
+  if (window.XLSX) return;
+  await new Promise(function (res, rej) {
+    var s = document.createElement('script');
+    s.src = 'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js';
+    s.onload = res; s.onerror = rej;
+    document.head.appendChild(s);
+  });
+}
+
 // ── Android back-button handler ──────────────────────────────────────────────
 // Global LIFO stack — each modal/step pushes a handler on open, pops on close.
 // Single popstate listener fires the top handler (most recently opened thing).
@@ -3348,6 +3358,7 @@ function UploadView({ onDataLoaded, currentData }) {
     for (const f of arr) {
       try {
         const buf = await f.arrayBuffer();
+        await ensureXlsx();
         const wb = XLSX.read(buf, {type:"array"});
         const ws = wb.Sheets[wb.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:""});

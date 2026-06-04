@@ -55,16 +55,21 @@ self.addEventListener("fetch", (e) => {
      url.pathname === "/");
 
   if (isAppFile) {
+    /* stale-while-revalidate: คืน cache ทันที, อัปเดต background */
     e.respondWith(
-      fetch(e.request)
-        .then((res) => {
-          if (res.ok) {
-            const clone = res.clone();
-            caches.open(CACHE_NAME).then((c) => c.put(e.request, clone));
-          }
-          return res;
-        })
-        .catch(() => caches.match(e.request))
+      caches.open(CACHE_NAME).then((cache) => {
+        return cache.match(e.request).then((cached) => {
+          const networkFetch = fetch(e.request)
+            .then((res) => {
+              if (res.ok) cache.put(e.request, res.clone());
+              return res;
+            })
+            .catch(() => cached);
+          /* ถ้ามี cache → คืนทันที + อัปเดต background */
+          /* ถ้าไม่มี cache → รอ network */
+          return cached || networkFetch;
+        });
+      })
     );
     return;
   }

@@ -892,6 +892,8 @@
 }
 
 </style>
+<link rel="preconnect" href="https://unpkg.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
 <script src="config.js"></script>
 </head>
 <body>
@@ -907,15 +909,68 @@
   <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
   <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
-  <script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <!-- html5-qrcode: ใช้ scan ได้บนทุก browser/มือถือ (iOS Safari, Android, Desktop) -->
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 
-  <script type="text/babel" src="ui.jsx"></script>
-  <script type="text/babel" src="views.jsx"></script>
-  <script type="text/babel" src="app.jsx"></script>
+  <script>
+(function () {
+  'use strict';
+
+  /* เอา compiled code ฉีดเข้า global scope ผ่าน <script> tag */
+  function injectCode(code) {
+    var s = document.createElement('script');
+    s.textContent = code;
+    document.head.appendChild(s);
+  }
+
+  /* signature เร็ว: ใช้ length + 4 ตำแหน่งแทนการ hash ทั้งไฟล์ */
+  function quickSig(t) {
+    var n = t.length;
+    return n + '|' + (t.charCodeAt(0)|0) + '|' +
+           (t.charCodeAt(n >> 2)|0) + '|' +
+           (t.charCodeAt(n >> 1)|0) + '|' +
+           (t.charCodeAt((n * 3) >> 2)|0);
+  }
+
+  async function loadJsx(src) {
+    var k = 'dmjbc_' + src.replace(/\W/g, '_');
+    /* fetch ก่อน (service worker คืนจาก cache ได้เร็ว) */
+    var resp = await fetch(src);
+    var text = await resp.text();
+    var s = quickSig(text);
+
+    /* ลอง localStorage cache */
+    try {
+      if (localStorage.getItem(k + '_s') === s) {
+        var hit = localStorage.getItem(k);
+        if (hit) { injectCode(hit); return; }
+      }
+    } catch (_) {}
+
+    /* compile ด้วย Babel */
+    var compiled = Babel.transform(text, {
+      presets: ['react'],
+      sourceType: 'script',
+    }).code;
+
+    /* เก็บ cache (ถ้า storage เต็มให้ข้ามแบบเงียบ) */
+    try {
+      localStorage.setItem(k, compiled);
+      localStorage.setItem(k + '_s', s);
+    } catch (_) {}
+
+    injectCode(compiled);
+  }
+
+  /* โหลดตามลำดับ: ui → views → app */
+  window._appBoot = loadJsx('ui.jsx')
+    .then(function () { return loadJsx('views.jsx'); })
+    .then(function () { return loadJsx('app.jsx'); })
+    .catch(function (err) { console.error('[boot]', err); });
+}());
+  </script>
 
   <!-- PWA Service Worker -->
   <script>
