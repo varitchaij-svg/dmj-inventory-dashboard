@@ -7668,6 +7668,9 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
   const [prepQty, setPrepQty] = uS(() => order.preparedQty > 0 ? order.preparedQty : (order.orderQty || 0));
   const [imgOpen, setImgOpen] = uS(false);
   const [mapOpen, setMapOpen] = uS(false); // warehouse map modal
+  const [zeroConfirm, setZeroConfirm] = uS(false);
+  const [zeroed, setZeroed] = uS(false);
+  const [zeroing, setZeroing] = uS(false);
   const [toast, showToast, hideToast] = useToast();
   uE(() => {
     setPrepQty(prev => prev === 0 ? (order.orderQty || 0) : prev);
@@ -7692,6 +7695,20 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
     onPatch(order.id, { status: "สำเร็จ" });
     syncOrderUpdate(order, { status: "สำเร็จ" });
     showToast("success", "บันทึกแล้ว", "✅", 2500);
+  };
+
+  const doZeroStock = async () => {
+    setZeroConfirm(false);
+    setZeroing(true);
+    const res = await syncZeroStock(order.sku);
+    setZeroing(false);
+    if (res && res.success === true) {
+      setZeroed(true);
+      syncDeleteOrders([order.id]);
+      showToast("success", `ปรับ ${order.name} เป็น 0 แล้ว`, "✅", 4000);
+    } else {
+      showToast("warn", `ไม่สำเร็จ: ${(res && res.error) || "ลองใหม่"}`, "⚠️", 5000);
+    }
   };
 
   const pf = order.printFlag;
@@ -7734,6 +7751,11 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
                 borderRadius:4,padding:"1px 4px",fontSize:8,color:"#fff",lineHeight:1.4}}>
                 🔍
               </div>
+            )}
+            {zeroed && (
+              <div style={{position:"absolute",top:4,right:4,background:"#dc2626",
+                color:"#fff",borderRadius:20,fontSize:8,fontWeight:700,padding:"2px 5px",
+                lineHeight:1.4}}>❌ ไม่ได้จัด</div>
             )}
           </div>
 
@@ -7863,6 +7885,21 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
                 <span style={{fontSize:10,letterSpacing:.3}}>Done</span>
               </button>
             )}
+            {/* ❌ ไม่ได้จัด — สต็อกหมด ปรับ ZORT เป็น 0 */}
+            {isPending && !zeroed && role !== "frontstore" && role !== "saler" && (
+              <button onClick={() => setZeroConfirm(true)}
+                title="ไม่ได้จัด — สินค้าหมด ปรับ ZORT เป็น 0"
+                disabled={zeroing}
+                style={{
+                  width:44,height:44,borderRadius:10,
+                  border:"1.5px solid #fca5a5",background:"#fff5f5",color:"#dc2626",
+                  cursor:zeroing?"not-allowed":"pointer",fontSize:18,
+                  display:"flex",alignItems:"center",justifyContent:"center",
+                  fontFamily:"inherit",
+                }}>
+                {zeroing ? "⏳" : "❌"}
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -7935,6 +7972,16 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
           sku={order.sku}
         />
       )}
+      <ConfirmModal
+        open={zeroConfirm}
+        type="warn"
+        emoji="❌"
+        title="ไม่ได้จัดสินค้า?"
+        detail={`${order.name} (${order.sku})\n\nจะปรับสต็อก WH ใน ZORT เป็น 0\nและลบรายการนี้ออกจากรายการสั่ง\n\n⚠️ ทำแล้วย้อนกลับไม่ได้`}
+        confirmLabel="ยืนยัน ไม่ได้จัด"
+        onConfirm={doZeroStock}
+        onCancel={() => setZeroConfirm(false)}
+      />
       <Toast toast={toast} onClose={hideToast}/>
     </>
   );
@@ -8193,9 +8240,11 @@ function ShipmentReceiveList({ data, role, productMap }) {
                 รับแล้ว {received}/{total} รายการ
               </span>
             </div>
-            {b.items.map(s => (
-              <ShipmentRow key={s.id} s={s} role={role} productMap={productMap} onConfirm={handleConfirm}/>
-            ))}
+            {[...b.items]
+              .sort((a, b) => (a.receivedAt ? 1 : 0) - (b.receivedAt ? 1 : 0))
+              .map(s => (
+                <ShipmentRow key={s.id} s={s} role={role} productMap={productMap} onConfirm={handleConfirm}/>
+              ))}
           </div>
         );
       })}
@@ -8263,12 +8312,18 @@ function OrderListView({ data, role }) {
 
   const pendingCount = sorted.filter(o => !o.status||o.status==="รอ"||o.status==="pending").length;
 
-  if (!orders.length) return (
+  const hasShipments = (data.shipments||[]).length > 0;
+
+  // orders ว่าง แต่มี shipments → ดึง tab "ส่งแล้ว" มาไว้หน้าแรก ให้ saler/FS ยืนยันรับได้
+  if (!orders.length && !hasShipments) return (
     <div style={{padding:"60px 20px",textAlign:"center"}}>
       <Empty icon={I.cart} title="ยังไม่มีรายการสั่งของ"
         sub="เพิ่มข้อมูลใน Google Sheet 'ลำดับที่สั่งซื้อ' แล้วกด Sync"/>
     </div>
   );
+
+  // ถ้า orders ว่างแต่ shipments มีข้อมูล → force ไปที่ tab "ส่งแล้ว" อัตโนมัติ
+  const effectiveFilter = (!orders.length && hasShipments && filter !== "shipped") ? "shipped" : filter;
 
   return (
     <div>
@@ -8276,12 +8331,12 @@ function OrderListView({ data, role }) {
         <div>
           <div className="page-title">📋 รายการสั่งของ</div>
           <div className="page-sub">
-            {filter==="shipped"
+            {effectiveFilter==="shipped"
               ? `📦 ${(data.shipments||[]).length} รายการส่งออก · ✅ ${(data.shipments||[]).filter(s=>s.receivedAt).length} รับแล้ว`
               : `📦 ${filtered.length} รายการ · 🟡 ${pendingCount} รอดำเนินการ`}
           </div>
         </div>
-        <Seg value={filter} onChange={setFilter} options={[
+        <Seg value={effectiveFilter} onChange={setFilter} options={[
           {value:"all",      label:"🗂️ ทั้งหมด"},
           {value:"pending",  label:"🟡 รอ"},
           {value:"completed",label:"✅ สำเร็จ"},
@@ -8289,7 +8344,7 @@ function OrderListView({ data, role }) {
         ]}/>
       </div>
 
-      {filter === "shipped" ? (
+      {effectiveFilter === "shipped" ? (
         <ShipmentReceiveList data={data} role={role} productMap={productMap}/>
       ) : filtered.length === 0 ? (
         <div style={{padding:"40px 20px"}}>
@@ -8331,6 +8386,20 @@ async function syncStockTransferBatch(items) {
     console.log("syncStockTransferBatch result:", json);
     return json;
   } catch(e) { console.warn("syncStockTransferBatch error:", e.message); return { success: false, error: e.message }; }
+}
+
+// ปรับ WH qty=0 ใน Sheets + ZORT (สินค้าหมด ไม่ได้จัด)
+async function syncZeroStock(sku) {
+  if (!SHEET_DEPLOY_URL) return { success: false };
+  try {
+    const res = await fetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ zeroStock: true, sku, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "warehouse" }),
+    });
+    const json = await res.json().catch(() => ({}));
+    return json;
+  } catch(e) { return { success: false, error: e.message }; }
 }
 
 // ลบหลาย order rows ในครั้งเดียว
@@ -8659,7 +8728,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
     let transferOk = true, transferred = qty, errMsg = "";
     if (!order.product?.isMTO) {
       const res = await syncStockDeduct(order.sku, qty, order.carryMode === "carry" ? order.name + " order" : order.name);
-      const ok = res && res.success !== false;
+      const ok = res && res.success === true;
       transferred = (res && res.data && res.data.transferred != null) ? Number(res.data.transferred) : (ok ? qty : 0);
       transferOk = ok && transferred > 0;       // โอนได้จริง > 0 ชิ้น = สำเร็จ
       errMsg = (res && res.error) || "";
@@ -8739,7 +8808,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
     if (transferItems.length) {
       batchRes = await syncStockTransferBatch(transferItems);
     }
-    const batchOk = batchRes && batchRes.success !== false;
+    const batchOk = batchRes && batchRes.success === true;
 
     // ถ้า batch ทั้งก้อนล้ม (network/timeout/GAS error) → ไม่ลบ ไม่มาร์คอะไรเลย คงรายการไว้ทั้งหมด ให้ลองใหม่
     if (!batchOk) {
@@ -8757,10 +8826,11 @@ function OrderSummaryView({ data, onPrintRequest }) {
     const orderSucceeded = (o) => {
       if (o.product?.isMTO) return true;             // MTO ไม่โอนสต็อกคลัง
       const r = resultById[o.id];
-      if (!r) return true;                           // ไม่มีผลรายตัว → fail open (ถือว่าไปแล้ว)
-      if (r.notFound || r.skipped) return false;     // ไม่พบ SKU / qty<=0 → ชัดเจนว่าไม่ไป → เก็บ
-      if (r.duplicate) return true;                  // เคยส่งไปแล้ว
-      return Number(r.transferred) > 0;              // โอนได้จริง (ครบ/บางส่วน) → ส่ง; 0 → เก็บ
+      // FAIL CLOSED: ลบ/มาร์ค "ส่งแล้ว" เฉพาะตัวที่ GAS ยืนยันโอนจริง (transferred>0) เท่านั้น
+      // ที่เหลือทั้งหมด — ไม่มีผลรายตัว / duplicate (cache ค้าง) / notFound / โอนได้ 0 ชิ้น —
+      //   ถือว่า "ยังไม่ได้ส่ง" → คงไว้ในรายการ ไม่ลบ กันบั๊กข้อมูลหายแบบไม่ได้โอนเข้า ZORT จริง
+      if (!r) return false;
+      return Number(r.transferred) > 0;
     };
     const succeeded = ready.filter(orderSucceeded);
     const kept      = ready.filter(o => !orderSucceeded(o)); // คลังไม่พอ/ไม่พบสินค้า → คงไว้ในรายการ
@@ -8782,8 +8852,9 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
     const zErr = batchRes && batchRes.data && batchRes.data.zortError;
     if (kept.length) {
-      const names = kept.map(o => o.name || o.sku).join(", ");
-      showToast("warn", `ส่งแล้ว ${succeeded.length} รายการ · เหลือ ${kept.length} รายการคลังไม่พอ/ไม่พบสินค้า: ${names}`, "⚠️", 8000);
+      const names = kept.slice(0, 8).map(o => o.name || o.sku).join(", ");
+      const more = kept.length > 8 ? ` …(+${kept.length - 8})` : "";
+      showToast("warn", `ส่งสำเร็จ ${succeeded.length} · ยังไม่ได้ส่ง ${kept.length} รายการ (กดส่งอีกครั้ง): ${names}${more}`, "⚠️", 8000);
     } else if (zErr) {
       showToast("warn", `ส่ง ${succeeded.length} รายการ — แต่ ZORT มีปัญหา ${zErr}`, "⚠️", 7000);
     } else {

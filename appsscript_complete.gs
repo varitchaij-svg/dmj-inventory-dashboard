@@ -212,6 +212,11 @@ function doPost(e) {
       return transferStockBatch(ss, data.list || [], actor);
     }
 
+    // ─── Zero Stock: ตั้ง WH qty=0 ใน Sheets + ZORT (สินค้าหมด ไม่ได้จัด) ───
+    if (data.zeroStock) {
+      return zeroStockItem_(ss, data.sku, actor);
+    }
+
     // ─── Stock Transfer: คลัง → หน้าร้าน ───
     if (data.transferStock) {
       return transferStock(ss, data.sku, Number(data.qty) || 0, data.name);
@@ -564,6 +569,36 @@ function transferStock(ss, sku, qty, productName) {
   }
 }
 
+// ─── ตั้ง WH qty=0 ใน Sheets + ZORT (สินค้าหมด ไม่ได้จัด) ───
+// เรียกจาก doPost เมื่อ data.zeroStock = true
+function zeroStockItem_(ss, sku, actor) {
+  if (!sku) return error("sku ว่างเปล่า");
+  const sheet = ss.getSheetByName(SHEET_PRODUCTS);
+  if (!sheet) return error("ไม่พบชีต: " + SHEET_PRODUCTS);
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(8000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
+  try {
+    const data = sheet.getDataRange().getValues();
+    const skuUpper = String(sku).trim().toUpperCase();
+    let found = false;
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase() === skuUpper) {
+        sheet.getRange(i + 1, COL_PROD_QTYWH).setValue(0);
+        found = true;
+        break;
+      }
+    }
+    if (!found) return error("ไม่พบ SKU: " + sku);
+    SpreadsheetApp.flush();
+    try { pushStockToZort_([{ sku: skuUpper, qty: 0, warehousecode: WH_SAI5 }]); } catch(e) { Logger.log("zeroStockItem_ ZORT error: " + e); }
+    invalidateCache_();
+    writeAuditLog_(actor, "ปรับสต็อก0", skuUpper, "ไม่ได้จัด: ตั้ง WH qty=0 ใน Sheets+ZORT");
+    return ok({ sku: skuUpper, zeroed: true });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 const SHIP_HEADERS = ["หมายเลขรายการ","วันที่ทำรายการ","สถานะ(รอ,สำเร็จ)","จากคลัง/สาขา","ไปคลัง/สาขา","รหัสสินค้า","ชื่อสินค้า","จำนวน","จำนวนที่จัด","รูปภาพ","จำนวนที่รับ","สถานะรับ","รับเมื่อ","ผู้รับ"];
 
 function logTransfer_(ss, sku, productName, qty) {
@@ -625,8 +660,11 @@ function transferStockBatch(ss, list, actor) {
       const orderId = String(item.orderId || "");
       if (!sku || qty <= 0) { results.push({ sku, orderId, skipped: true }); continue; }
 
-      // Idempotency: กันกดส่งซ้ำ (เครื่องอื่น/รีเฟรช) ภายใน 6 ชม.
-      if (orderId && cache.get("shipped_" + orderId)) {
+      // Idempotency: กันกดส่งซ้ำเร็ว ๆ (สองเครื่อง/ดับเบิลคลิก) ภายใน 90 วินาทีเท่านั้น
+      // หมายเหตุ: orderId = เลขแถว (R5) ถูก reuse เมื่อ order เก่าถูกลบ → TTL ยาวทำให้
+      //   order ใหม่ที่มาแทนแถวเดิมถูกมองว่า "duplicate" ผิด ๆ → ไม่โอน แต่ frontend ลบทิ้ง
+      //   จึงต้องสั้น (90s) ให้ cache เคลียร์ทันรอบส่งถัดไป
+      if (orderId && cache.get("shp2_" + orderId)) {
         results.push({ sku, orderId, duplicate: true });
         continue;
       }
@@ -649,7 +687,7 @@ function transferStockBatch(ss, list, actor) {
 
           if (actual > 0) {
             transferred.push({ sku, name, qty: actual });
-            if (orderId) cache.put("shipped_" + orderId, "1", 21600); // 6 ชม.
+            if (orderId) cache.put("shp2_" + orderId, "1", 90); // 90 วิ (กันดับเบิลคลิกเท่านั้น)
           }
           if (actual < qty) shortfalls.push({ sku, name, requested: qty, transferred: actual });
           results.push({ sku, orderId, requested: qty, transferred: actual, newWH, newFS });
@@ -3128,7 +3166,7 @@ function ok(data) {
 }
 
 // ── Payload cache (แบ่งเป็น chunk เพราะ CacheService จำกัด 100KB/key) ──
-const _CACHE_TTL_SEC   = 180;     // 3 นาที
+const _CACHE_TTL_SEC   = 600;     // 10 นาที (เดิม 3 นาที — ยืดให้ GAS cold start น้อยลง)
 const _CACHE_CHUNK_LEN = 30000;   // อักขระต่อ chunk (Thai 3 ไบต์ → ~90KB ปลอดภัย)
 const _CACHE_KEY_COUNT = 'dmj_payload_n';
 const _CACHE_KEY_PART  = 'dmj_payload_';

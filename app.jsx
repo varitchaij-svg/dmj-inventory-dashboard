@@ -333,8 +333,10 @@ function App() {
   const sheetUrl = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : "data.json";
   const sheetViewUrl = "https://docs.google.com/spreadsheets/d/11yL4u-XLUTCBObMppAj12nnmG0YlDZWsDn2XPCneoHQ/edit";
 
-  // Full payload fetch (หนัก — ใช้ตอนโหลดครั้งแรก/กด Sync). retry=true → ลองซ้ำ 1 ครั้งเมื่อ timeout (กัน GAS cold start)
-  const fetchFromSheet = usC((retry = true) => {
+  // Full payload fetch (หนัก — ใช้ตอนโหลดครั้งแรก/กด Sync)
+  // retryLeft: จำนวนครั้งที่เหลือ (3→2→1→0) กัน GAS cold start หลายชั้น
+  const fetchFromSheet = usC((retryLeft) => {
+    retryLeft = (typeof retryLeft === 'number' && retryLeft >= 0) ? retryLeft : 3;
     setSyncing(true);
     setError(null);
     const controller = new AbortController();
@@ -343,7 +345,6 @@ function App() {
     fetch(bustUrl, { signal: controller.signal, cache: 'no-store' })
       .then(r => r.json())
       .then(d => {
-        // เก็บ epoch ms ที่ sheet ถูกแก้ล่าสุด — ใช้ตรวจ conflict ก่อน write
         if (d && d.lastModified) window._dataLoadedAt = d.lastModified;
         const enriched = enrichData(d);
         setData(enriched);
@@ -355,13 +356,14 @@ function App() {
         setError(null);
       })
       .catch(e => {
-        // Cold-start: ลองใหม่อัตโนมัติอีก 1 ครั้ง (GAS อุ่นเครื่องแล้วครั้งที่ 2 จะเร็ว)
-        if (e.name === "AbortError" && retry) {
-          clearTimeout(timeout);
-          setTimeout(() => fetchFromSheet(false), 800);
+        clearTimeout(timeout);
+        if (retryLeft > 0) {
+          // Cold-start: รอสั้น ๆ แล้วลองใหม่ (GAS อุ่นเครื่องแล้วจะเร็วกว่า)
+          const delay = retryLeft === 3 ? 800 : retryLeft === 2 ? 2000 : 4000;
+          setTimeout(() => fetchFromSheet(retryLeft - 1), delay);
           return;
         }
-        if (e.name === "AbortError") setError("หมดเวลาเชื่อมต่อ — เซิร์ฟเวอร์ตอบช้า กรุณาลองใหม่อีกครั้ง");
+        if (e.name === "AbortError") setError("เซิร์ฟเวอร์ตอบช้า — กรุณาลองใหม่อีกครั้ง");
         else setError(e.message);
         setSyncing(false);
       })
