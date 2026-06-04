@@ -8655,10 +8655,24 @@ function OrderSummaryView({ data, onPrintRequest }) {
     setSending(order.id);
 
     // ถ้าไม่ใช่ MTO → โอนสต็อกคลัง→หน้าร้าน / ถ้าเป็น MTO → เบิกวัตถุดิบ (ถ้ามี)
+    // เก็บผลโอนไว้ตัดสินว่า "ส่งสำเร็จจริง" ไหม — กันบั๊กข้อมูลหาย (เดิมลบ order ทิ้งแม้คลังไม่พอ)
+    let transferOk = true, transferred = qty, errMsg = "";
     if (!order.product?.isMTO) {
-      await syncStockDeduct(order.sku, qty, order.carryMode === "carry" ? order.name + " order" : order.name);
+      const res = await syncStockDeduct(order.sku, qty, order.carryMode === "carry" ? order.name + " order" : order.name);
+      const ok = res && res.success !== false;
+      transferred = (res && res.data && res.data.transferred != null) ? Number(res.data.transferred) : (ok ? qty : 0);
+      transferOk = ok && transferred > 0;       // โอนได้จริง > 0 ชิ้น = สำเร็จ
+      errMsg = (res && res.error) || "";
     } else if (matItems && matItems.length > 0) {
       await syncDeductMaterials(matItems);
+    }
+
+    setSending(null);
+
+    // คลังไม่พอ/ไม่พบสินค้า → ไม่ลบ order, ไม่มาร์คส่งแล้ว, คงไว้ให้ส่งใหม่ภายหลัง
+    if (!transferOk) {
+      showToast("warn", `ส่งไม่สำเร็จ — คลังไม่พอ/ไม่พบสินค้า${errMsg ? ` (${errMsg})` : ""} · คงรายการไว้`, "⚠️", 7000);
+      return;
     }
 
     try {
@@ -8669,12 +8683,12 @@ function OrderSummaryView({ data, onPrintRequest }) {
       });
     } catch(e) { console.warn("deleteOrder failed:", e.message); }
 
-    setSending(null);
     const next = { ...shipped, [order.id]: Date.now() };
     setShipped(next);
     localStorage.setItem(LS_SHIPPED_ORDERS, JSON.stringify(next));
     setSt(patchOrderState(order.id, { status: "ส่งแล้ว" }, orderSig(order)));
-    showToast("success", `ส่ง ${qty} ชิ้นแล้ว`, "📦");
+    const shortMsg = transferred < qty ? ` (คลังพอแค่ ${transferred}/${qty})` : "";
+    showToast(transferred < qty ? "warn" : "success", `ส่ง ${transferred} ชิ้นแล้ว${shortMsg}`, "📦");
   };
 
   const doShip = async () => {
@@ -8727,8 +8741,26 @@ function OrderSummaryView({ data, onPrintRequest }) {
     }
     const batchOk = batchRes && batchRes.success !== false;
 
-    // อัปเดตสถานะ order ราย item (เบา ไม่ยิง ZORT ซ้ำ)
-    for (const order of ready) {
+    // map ผลลัพธ์รายตัวจาก GAS (results[]) → ตัดสินว่า order ไหน "โอนสำเร็จจริง"
+    // กันบั๊กข้อมูลหาย: เดิมมาร์ค "ส่งแล้ว" + ลบทุก order แม้คลังไม่พอ/ไม่พบสินค้า → order หายแต่ของไม่ออก
+    const results = (batchRes && batchRes.data && batchRes.data.results) || [];
+    const resultById = {};
+    results.forEach(r => { if (r && r.orderId) resultById[String(r.orderId)] = r; });
+    // order ถือว่าส่งสำเร็จเมื่อ: เป็น MTO (ไม่โอนสต็อกคลัง), เคยส่งไปแล้ว (duplicate),
+    //   หรือโอนได้จริง > 0 ชิ้น. ถ้า batch ทั้งก้อนล้ม → ไม่ถือว่าสำเร็จ (เก็บไว้ทั้งหมด)
+    const orderSucceeded = (o) => {
+      if (o.product?.isMTO) return true;
+      if (!batchOk) return false;
+      const r = resultById[o.id];
+      if (!r) return false;                  // ไม่มีผล (เช่น qty<=0 ถูกกรองออกก่อน) → เก็บไว้
+      if (r.duplicate) return true;          // ส่งไปแล้วก่อนหน้า
+      return Number(r.transferred) > 0;      // โอนได้จริง (ครบ/บางส่วน) → ถือว่าส่ง
+    };
+    const succeeded = ready.filter(orderSucceeded);
+    const kept      = ready.filter(o => !orderSucceeded(o)); // คลังไม่พอ/ไม่พบสินค้า → คงไว้ในรายการ
+
+    // อัปเดตสถานะ "ส่งแล้ว" เฉพาะ order ที่โอนสำเร็จ (เบา ไม่ยิง ZORT ซ้ำ)
+    for (const order of succeeded) {
       nextShipped[order.id] = Date.now();
       // แนบ sig + markedAt เหมือน patchOrderState เพื่อกัน row-reuse เลอะข้าม order
       nextSt[order.id] = { ...(nextSt[order.id]||{}), status: "ส่งแล้ว", sig: orderSig(order), markedAt: new Date().toISOString() };
@@ -8739,19 +8771,20 @@ function OrderSummaryView({ data, onPrintRequest }) {
     localStorage.setItem(LS_ORDERS_STATE, JSON.stringify(nextSt));
     setSt(nextSt);
 
-    // ลบ order rows ที่ส่งแล้วออกจาก Sheet ครั้งเดียว (สอดคล้องกับการส่งทีละชิ้น)
-    syncDeleteOrders(ready.map(o => o.id));
+    // ลบเฉพาะ order ที่ส่งสำเร็จออกจาก Sheet — order ที่คลังไม่พอจะคงไว้ให้ส่งใหม่ภายหลัง
+    if (succeeded.length) syncDeleteOrders(succeeded.map(o => o.id));
 
     const zErr = batchRes && batchRes.data && batchRes.data.zortError;
-    const shortfalls = (batchRes && batchRes.data && batchRes.data.shortfalls) || [];
-    if (!batchOk || zErr) {
-      showToast("warn", `ส่ง ${ready.length} รายการ — แต่ ZORT มีปัญหา ${zErr || batchRes.error || ""}`, "⚠️");
-    } else if (shortfalls.length) {
-      const names = shortfalls.map(s => `${s.name||s.sku} (${s.transferred}/${s.requested})`).join(", ");
-      showToast("warn", `ส่งแล้ว แต่คลังไม่พอ ${shortfalls.length} รายการ: ${names}`, "⚠️", 7000);
+    if (!batchOk) {
+      showToast("warn", `ส่งไม่สำเร็จ — ระบบมีปัญหา ${batchRes.error || ""} (คงรายการไว้ทั้งหมด)`, "⚠️", 7000);
+    } else if (kept.length) {
+      const names = kept.map(o => o.name || o.sku).join(", ");
+      showToast("warn", `ส่งแล้ว ${succeeded.length} รายการ · เหลือ ${kept.length} รายการคลังไม่พอ/ไม่พบสินค้า: ${names}`, "⚠️", 8000);
+    } else if (zErr) {
+      showToast("warn", `ส่ง ${succeeded.length} รายการ — แต่ ZORT มีปัญหา ${zErr}`, "⚠️", 7000);
     } else {
       const zNum = batchRes && batchRes.data && batchRes.data.zortNumber;
-      showToast("success", `ส่ง ${ready.length} รายการแล้ว${zNum ? ` (ZORT ${zNum})` : ""}`, "📦");
+      showToast("success", `ส่ง ${succeeded.length} รายการแล้ว${zNum ? ` (ZORT ${zNum})` : ""}`, "📦");
     }
   };
 
