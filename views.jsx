@@ -7807,6 +7807,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
               whiteSpace:"nowrap",
             }}>❌ ไม่ได้จัด</div>
           )}
+        </div>
 
         {/* ── Row 2: quantities + actions ── */}
         {(
