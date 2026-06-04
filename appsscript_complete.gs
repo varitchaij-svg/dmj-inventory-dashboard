@@ -309,7 +309,7 @@ function doGet(e) {
     }
     // Audit Log endpoint: ดึง 200 แถวล่าสุดจาก Audit Log sheet
     if (e && e.parameter && e.parameter.action === 'getAuditLog') {
-      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      const ss = SpreadsheetApp.openById(SHEET_ID);
       const sh = ss.getSheetByName(SHEET_AUDIT);
       if (!sh) {
         return ContentService.createTextOutput(JSON.stringify({ rows: [] }))
@@ -339,6 +339,18 @@ function doGet(e) {
     if (e && e.parameter && e.parameter.action === 'orders') {
       return ContentService
         .createTextOutput(JSON.stringify({ orders: readOrders_(), generatedAt: new Date().toISOString() }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // Debug endpoint: คืน raw row data ของชีตคำสั่งซื้อ (ใช้วินิจฉัย missing rows)
+    if (e && e.parameter && e.parameter.action === 'debugOrders') {
+      const ss2 = SpreadsheetApp.openById(SHEET_ID);
+      const sh2 = ss2.getSheetByName(SHEET_ORDERS);
+      if (!sh2) return ContentService.createTextOutput(JSON.stringify({ error: "ไม่พบชีต" })).setMimeType(ContentService.MimeType.JSON);
+      const rawRows = sh2.getDataRange().getValues().slice(0, 15).map(function(r, i) {
+        return { rowIndex: i, rowNum: i + 1, cols: r.map(function(v) { return v instanceof Date ? v.toISOString() : v; }) };
+      });
+      return ContentService.createTextOutput(JSON.stringify({ sheet: SHEET_ORDERS, rows: rawRows }))
         .setMimeType(ContentService.MimeType.JSON);
     }
 
@@ -2738,16 +2750,24 @@ function readStorage_() {
 }
 
 function readOrders_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName("ลำดับที่สั่งสินค้า");
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_ORDERS);
   if (!sheet) return [];
 
   const rows = sheet.getDataRange().getValues();
   const result = [];
 
-  for (let i = 2; i < rows.length; i++) {
+  // i=1: skip only the first header row; also handles sheets with a single header row
+  // where CH19015/OL00005 might be at index 1 (row 2)
+  for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
-    if (!r[5] && !r[6]) continue;
+    // Skip rows that are entirely blank
+    if (!r.some(Boolean)) continue;
+    // Skip what looks like a second header row (r[5] is a Thai-language label, not a SKU)
+    const skuCandidate = String(r[5] || "").trim();
+    if (skuCandidate && /[฀-๿]/.test(skuCandidate)) continue;
+    // Skip rows with no SKU at all
+    if (!skuCandidate) continue;
     result.push({
       id:          `R${i+1}`,
       carryMode:   String(r[0]||"").includes("หิ้ว") ? "carry" : "truck",
@@ -2755,7 +2775,7 @@ function readOrders_() {
       status:      r[2] || "รอ",
       from:        r[3] || "",
       to:          r[4] || "",
-      sku:         String(r[5] || "").trim(),
+      sku:         skuCandidate,
       name:        r[6] || "",
       orderQty:    Number(r[7]) || 0,
       preparedQty: Number(r[8]) || 0,
