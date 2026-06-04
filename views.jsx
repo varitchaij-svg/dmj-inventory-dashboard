@@ -8659,7 +8659,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
     let transferOk = true, transferred = qty, errMsg = "";
     if (!order.product?.isMTO) {
       const res = await syncStockDeduct(order.sku, qty, order.carryMode === "carry" ? order.name + " order" : order.name);
-      const ok = res && res.success !== false;
+      const ok = res && res.success === true;
       transferred = (res && res.data && res.data.transferred != null) ? Number(res.data.transferred) : (ok ? qty : 0);
       transferOk = ok && transferred > 0;       // โอนได้จริง > 0 ชิ้น = สำเร็จ
       errMsg = (res && res.error) || "";
@@ -8739,7 +8739,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
     if (transferItems.length) {
       batchRes = await syncStockTransferBatch(transferItems);
     }
-    const batchOk = batchRes && batchRes.success !== false;
+    const batchOk = batchRes && batchRes.success === true;
 
     // ถ้า batch ทั้งก้อนล้ม (network/timeout/GAS error) → ไม่ลบ ไม่มาร์คอะไรเลย คงรายการไว้ทั้งหมด ให้ลองใหม่
     if (!batchOk) {
