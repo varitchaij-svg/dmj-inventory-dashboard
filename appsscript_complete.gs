@@ -3245,10 +3245,31 @@ function getOrCreateMtoItemSheet_(ss) {
 
 function createMtoJob(ss, data) {
   const sh = getOrCreateMtoJobSheet_(ss);
-  const jobId = "MTO_" + Date.now();
-  sh.appendRow([jobId, data.dateStr || "", data.jobName || "", data.customer || "", data.price || "", data.imageUrl || "", "กำลังจัด", ""]);
-  return ContentService.createTextOutput(JSON.stringify({ success: true, jobId }))
-    .setMimeType(ContentService.MimeType.JSON);
+
+  // Lock กัน race condition (2 คนสร้างพร้อมกัน → เลขซ้ำ)
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่ ลองใหม่อีกครั้ง");
+  try {
+    // ID รูปแบบ MTO-YYYYMM### เรียงตามเดือน (reset ทุกเดือน)
+    const now = new Date();
+    const prefix = "MTO-" + Utilities.formatDate(now, "Asia/Bangkok", "yyyyMM");
+    const rows = sh.getDataRange().getValues();
+    let maxSeq = 0;
+    for (let i = 1; i < rows.length; i++) {
+      const id = String(rows[i][0] || "");
+      if (id.startsWith(prefix)) {
+        const seq = parseInt(id.slice(prefix.length)) || 0;
+        if (seq > maxSeq) maxSeq = seq;
+      }
+    }
+    const jobId = prefix + String(maxSeq + 1).padStart(3, "0");
+
+    sh.appendRow([jobId, data.dateStr || "", data.jobName || "", data.customer || "", data.price || "", data.imageUrl || "", "กำลังจัด", ""]);
+    return ContentService.createTextOutput(JSON.stringify({ success: true, jobId }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function closeMtoJob(ss, data, actor) {
@@ -3347,7 +3368,7 @@ function closeMtoJob(ss, data, actor) {
   // Decrease stock in ZORT per warehouse group
   let zortResult = null;
   try {
-    zortResult = createZortSaleOrder_(items, data.jobName || jobId);
+    zortResult = createZortSaleOrder_(items, jobId + (data.jobName ? " " + data.jobName : ""));
   } catch (e) {
     Logger.log("ZORT Sale Order failed: " + e);
     logZortFailure_("สร้าง Sale Order งานจัดพิเศษ: " + jobId, String(e) + " | SKU: " + items.map(it => it.sku).join(","));
@@ -3419,7 +3440,7 @@ function createZortSaleOrder_(items, jobName) {
 
   const payload = {
     date: dateStr,
-    remark: "งานจัดพิเศษ: " + (jobName || ""),
+    remark: jobName || "",
     list: list,
   };
 
