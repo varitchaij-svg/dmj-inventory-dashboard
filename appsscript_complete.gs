@@ -1747,6 +1747,104 @@ function syncZortBoth() {
   syncNewProductsFromZort();
   syncZortWarehouse();
   syncZortFrontStore();
+
+  // ── 2A: Low-stock alert ──────────────────────────────────────────────────
+  // สแกนสต็อกคลัง (col H) เทียบ threshold → ส่ง LINE ถ้าพบสินค้าใกล้หมด
+  var lowStockItems = [];
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var threshold = parseInt(props.getProperty('LOW_STOCK_THRESHOLD') || '5');
+    var ss = SpreadsheetApp.openById(SHEET_ID);
+    var prodSh = ss.getSheetByName(SHEET_PRODUCTS);
+    if (prodSh) {
+      var prodRows = prodSh.getDataRange().getDisplayValues();
+      // header row อยู่ที่ index 0 (แถว 1) — เริ่มอ่านข้อมูลจาก index 1
+      // layout: B(1)=SKU, C(2)=ชื่อ, G(6)=หน้าร้าน, H(7)=คลัง  (0-indexed)
+      var scanned = 0;
+      for (var i = 1; i < prodRows.length; i++) {
+        var r = prodRows[i];
+        var sku  = (r[1] || '').toString().trim();
+        var name = (r[2] || '').toString().trim();
+        if (!sku) continue;
+        scanned++;
+        var qtyWH = parseInt(r[7]) || 0;
+        if (qtyWH < threshold) {
+          lowStockItems.push({ sku: sku, name: name, qty: qtyWH });
+        }
+      }
+
+      if (lowStockItems.length > 0) {
+        var dateStr = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy');
+        var lines = ['🚨 สต็อกใกล้หมด — ' + dateStr];
+        for (var j = 0; j < lowStockItems.length; j++) {
+          var it = lowStockItems[j];
+          lines.push('• ' + (it.name || it.sku) + ' (' + it.sku + '): เหลือ ' + it.qty + ' ใน WH');
+        }
+        lines.push('📊 สแกน ' + scanned + ' รายการ พบ ' + lowStockItems.length + ' รายการต่ำกว่าเกณฑ์ (threshold=' + threshold + ')');
+        sendLineMessage_(lines.join('\n'));
+        Logger.log('Low-stock LINE sent: ' + lowStockItems.length + ' รายการ');
+      } else {
+        Logger.log('Low-stock check: ไม่พบสินค้าต่ำกว่าเกณฑ์ (threshold=' + threshold + ', สแกน ' + scanned + ')');
+      }
+    }
+  } catch (e) {
+    Logger.log('Low-stock alert error: ' + e);
+  }
+
+  // ── 2B: Daily morning summary ────────────────────────────────────────────
+  // สรุปเช้า: orders ค้าง + งาน MTO กำลังจัด + top3 สินค้าใกล้หมด
+  try {
+    var ss2 = SpreadsheetApp.openById(SHEET_ID);
+    var dateStr2 = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy');
+
+    // นับ orders ค้าง — status (col C, index 2) ยังไม่ใช่ "ส่งแล้ว" หรือ "จัดแล้ว"
+    var pendingOrders = 0;
+    var ordSh = ss2.getSheetByName(SHEET_ORDERS);
+    if (ordSh) {
+      var ordRows = ordSh.getDataRange().getValues();
+      for (var oi = 1; oi < ordRows.length; oi++) {
+        var st = (ordRows[oi][COL_ORD_STATUS - 1] || '').toString().trim();
+        if (st !== 'ส่งแล้ว' && st !== 'จัดแล้ว' && st !== '') {
+          pendingOrders++;
+        }
+      }
+    }
+
+    // นับงาน MTO ที่ status = "กำลังจัด" (col 6 = index 6, 0-indexed จาก header: JobID,วันที่,ชื่องาน,ลูกค้า,ราคา,รูป,สถานะ)
+    var mtoActive = 0;
+    var mtoSh = ss2.getSheetByName('งาน MTO');
+    if (mtoSh) {
+      var mtoRows = mtoSh.getDataRange().getValues();
+      for (var mi = 1; mi < mtoRows.length; mi++) {
+        if ((mtoRows[mi][6] || '').toString().trim() === 'กำลังจัด') {
+          mtoActive++;
+        }
+      }
+    }
+
+    // Top 3 สินค้าใกล้หมด จาก lowStockItems (เรียง qty น้อยสุดขึ้นก่อน)
+    var sorted = lowStockItems.slice().sort(function(a, b) { return a.qty - b.qty; });
+    var top3 = sorted.slice(0, 3);
+
+    var sumLines = [
+      '📋 สรุปเช้าวันนี้ — ' + dateStr2,
+      '📦 Orders ค้าง: ' + pendingOrders + ' รายการ',
+      '🎁 งานจัดพิเศษ: ' + mtoActive + ' งาน (กำลังจัด)'
+    ];
+    if (top3.length > 0) {
+      sumLines.push('⚠️ สต็อกใกล้หมด top 3:');
+      for (var ti = 0; ti < top3.length; ti++) {
+        var tp = top3[ti];
+        sumLines.push('  • ' + (tp.name || tp.sku) + ' (' + tp.sku + '): ' + tp.qty + ' ใน WH');
+      }
+    } else {
+      sumLines.push('✅ สต็อกปกติ ไม่มีสินค้าต่ำกว่าเกณฑ์');
+    }
+    sendLineMessage_(sumLines.join('\n'));
+    Logger.log('Daily summary LINE sent');
+  } catch (e) {
+    Logger.log('Daily summary error: ' + e);
+  }
 }
 
 function createDailyTrigger() {
@@ -3420,6 +3518,28 @@ function closeMtoJob(ss, data, actor) {
   writeAuditLog_(actor, "ปิดงาน MTO", jobId, data.jobName || jobId);
 
   invalidateCache_();
+
+  // ── 2C: LINE notification เมื่อปิดงาน MTO ──────────────────────────────
+  // wrap ใน try/catch เพื่อไม่ให้ LINE error ทำให้ closeMtoJob fail
+  try {
+    var totalQty = items.reduce(function(s, i) { return s + (Number(i.qty) || 0); }, 0);
+    var zortStatus;
+    if (zortResult && zortResult.success === true) {
+      zortStatus = 'สร้างแล้ว';
+    } else if (zortResult && zortResult.skipped === true) {
+      zortStatus = 'ข้ามแล้ว';
+    } else {
+      zortStatus = 'ไม่สำเร็จ (แต่สต็อกตัดแล้ว)';
+    }
+    var closeMsg = '✅ ปิดงาน ' + jobId + ' แล้ว\n'
+      + 'งาน: ' + (data.jobName || '-') + '\n'
+      + 'ตัดสต็อก: ' + items.length + ' รายการ, ' + totalQty + ' ชิ้น\n'
+      + 'ZORT Order: ' + zortStatus;
+    sendLineMessage_(closeMsg);
+  } catch (lineErr) {
+    Logger.log('LINE notify closeMtoJob error: ' + lineErr);
+  }
+
   return ContentService.createTextOutput(JSON.stringify({ success: true, jobId, deducted: items.length, zort: zortResult }))
     .setMimeType(ContentService.MimeType.JSON);
   } finally {
