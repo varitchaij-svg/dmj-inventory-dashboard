@@ -8263,12 +8263,18 @@ function OrderListView({ data, role }) {
 
   const pendingCount = sorted.filter(o => !o.status||o.status==="รอ"||o.status==="pending").length;
 
-  if (!orders.length) return (
+  const hasShipments = (data.shipments||[]).length > 0;
+
+  // orders ว่าง แต่มี shipments → ดึง tab "ส่งแล้ว" มาไว้หน้าแรก ให้ saler/FS ยืนยันรับได้
+  if (!orders.length && !hasShipments) return (
     <div style={{padding:"60px 20px",textAlign:"center"}}>
       <Empty icon={I.cart} title="ยังไม่มีรายการสั่งของ"
         sub="เพิ่มข้อมูลใน Google Sheet 'ลำดับที่สั่งซื้อ' แล้วกด Sync"/>
     </div>
   );
+
+  // ถ้า orders ว่างแต่ shipments มีข้อมูล → force ไปที่ tab "ส่งแล้ว" อัตโนมัติ
+  const effectiveFilter = (!orders.length && hasShipments && filter !== "shipped") ? "shipped" : filter;
 
   return (
     <div>
@@ -8276,12 +8282,12 @@ function OrderListView({ data, role }) {
         <div>
           <div className="page-title">📋 รายการสั่งของ</div>
           <div className="page-sub">
-            {filter==="shipped"
+            {effectiveFilter==="shipped"
               ? `📦 ${(data.shipments||[]).length} รายการส่งออก · ✅ ${(data.shipments||[]).filter(s=>s.receivedAt).length} รับแล้ว`
               : `📦 ${filtered.length} รายการ · 🟡 ${pendingCount} รอดำเนินการ`}
           </div>
         </div>
-        <Seg value={filter} onChange={setFilter} options={[
+        <Seg value={effectiveFilter} onChange={setFilter} options={[
           {value:"all",      label:"🗂️ ทั้งหมด"},
           {value:"pending",  label:"🟡 รอ"},
           {value:"completed",label:"✅ สำเร็จ"},
@@ -8289,7 +8295,7 @@ function OrderListView({ data, role }) {
         ]}/>
       </div>
 
-      {filter === "shipped" ? (
+      {effectiveFilter === "shipped" ? (
         <ShipmentReceiveList data={data} role={role} productMap={productMap}/>
       ) : filtered.length === 0 ? (
         <div style={{padding:"40px 20px"}}>
