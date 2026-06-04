@@ -8741,20 +8741,26 @@ function OrderSummaryView({ data, onPrintRequest }) {
     }
     const batchOk = batchRes && batchRes.success !== false;
 
-    // map ผลลัพธ์รายตัวจาก GAS (results[]) → ตัดสินว่า order ไหน "โอนสำเร็จจริง"
-    // กันบั๊กข้อมูลหาย: เดิมมาร์ค "ส่งแล้ว" + ลบทุก order แม้คลังไม่พอ/ไม่พบสินค้า → order หายแต่ของไม่ออก
+    // ถ้า batch ทั้งก้อนล้ม (network/timeout/GAS error) → ไม่ลบ ไม่มาร์คอะไรเลย คงรายการไว้ทั้งหมด ให้ลองใหม่
+    if (!batchOk) {
+      setSending(null);
+      showToast("warn", `ส่งไม่สำเร็จ — ระบบมีปัญหา ${batchRes.error || ""} · คงรายการไว้ ลองใหม่อีกครั้ง`, "⚠️", 7000);
+      return;
+    }
+
+    // map ผลลัพธ์รายตัวจาก GAS (results[]) → ตัดสินรายตัวว่า "ส่งสำเร็จ" ไหม
+    // FAIL OPEN: ถ้าไม่มีผลรายตัว (response ใหญ่/parse ไม่ครบ) → ถือว่าส่งแล้ว (เหมือนพฤติกรรมเดิม)
+    //   เก็บไว้เฉพาะตัวที่ GAS บอกชัดว่า "ไม่พบ SKU" หรือ "โอนได้ 0 ชิ้น" เท่านั้น (กันข้อมูลหายเฉพาะเคสนั้น)
     const results = (batchRes && batchRes.data && batchRes.data.results) || [];
     const resultById = {};
     results.forEach(r => { if (r && r.orderId) resultById[String(r.orderId)] = r; });
-    // order ถือว่าส่งสำเร็จเมื่อ: เป็น MTO (ไม่โอนสต็อกคลัง), เคยส่งไปแล้ว (duplicate),
-    //   หรือโอนได้จริง > 0 ชิ้น. ถ้า batch ทั้งก้อนล้ม → ไม่ถือว่าสำเร็จ (เก็บไว้ทั้งหมด)
     const orderSucceeded = (o) => {
-      if (o.product?.isMTO) return true;
-      if (!batchOk) return false;
+      if (o.product?.isMTO) return true;             // MTO ไม่โอนสต็อกคลัง
       const r = resultById[o.id];
-      if (!r) return false;                  // ไม่มีผล (เช่น qty<=0 ถูกกรองออกก่อน) → เก็บไว้
-      if (r.duplicate) return true;          // ส่งไปแล้วก่อนหน้า
-      return Number(r.transferred) > 0;      // โอนได้จริง (ครบ/บางส่วน) → ถือว่าส่ง
+      if (!r) return true;                           // ไม่มีผลรายตัว → fail open (ถือว่าไปแล้ว)
+      if (r.notFound || r.skipped) return false;     // ไม่พบ SKU / qty<=0 → ชัดเจนว่าไม่ไป → เก็บ
+      if (r.duplicate) return true;                  // เคยส่งไปแล้ว
+      return Number(r.transferred) > 0;              // โอนได้จริง (ครบ/บางส่วน) → ส่ง; 0 → เก็บ
     };
     const succeeded = ready.filter(orderSucceeded);
     const kept      = ready.filter(o => !orderSucceeded(o)); // คลังไม่พอ/ไม่พบสินค้า → คงไว้ในรายการ
@@ -8775,9 +8781,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
     if (succeeded.length) syncDeleteOrders(succeeded.map(o => o.id));
 
     const zErr = batchRes && batchRes.data && batchRes.data.zortError;
-    if (!batchOk) {
-      showToast("warn", `ส่งไม่สำเร็จ — ระบบมีปัญหา ${batchRes.error || ""} (คงรายการไว้ทั้งหมด)`, "⚠️", 7000);
-    } else if (kept.length) {
+    if (kept.length) {
       const names = kept.map(o => o.name || o.sku).join(", ");
       showToast("warn", `ส่งแล้ว ${succeeded.length} รายการ · เหลือ ${kept.length} รายการคลังไม่พอ/ไม่พบสินค้า: ${names}`, "⚠️", 8000);
     } else if (zErr) {
