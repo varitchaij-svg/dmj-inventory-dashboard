@@ -918,48 +918,49 @@
 (function () {
   'use strict';
 
-  /* เอา compiled code ฉีดเข้า global scope ผ่าน <script> tag */
+  /* ฉีด compiled JS เข้า global scope */
   function injectCode(code) {
     var s = document.createElement('script');
     s.textContent = code;
     document.head.appendChild(s);
   }
 
-  /* signature เร็ว: ใช้ length + 4 ตำแหน่งแทนการ hash ทั้งไฟล์ */
-  function quickSig(t) {
-    var n = t.length;
-    return n + '|' + (t.charCodeAt(0)|0) + '|' +
-           (t.charCodeAt(n >> 2)|0) + '|' +
-           (t.charCodeAt(n >> 1)|0) + '|' +
-           (t.charCodeAt((n * 3) >> 2)|0);
-  }
+  var BC = 'dmj-babel-v2'; // bump เมื่อ format เปลี่ยน
 
   async function loadJsx(src) {
-    var k = 'dmjbc_' + src.replace(/\W/g, '_');
-    /* fetch ก่อน (service worker คืนจาก cache ได้เร็ว) */
     var resp = await fetch(src);
+    /* ETag หรือ Last-Modified จาก Cloudflare — อ่านได้โดยไม่ต้องอ่าน body */
+    var etag = resp.headers.get('etag') || resp.headers.get('last-modified') || '';
+
+    /* ── Cache API: ไม่มี size limit, ออกแบบสำหรับไฟล์ใหญ่ ── */
+    if (etag && typeof caches !== 'undefined') {
+      try {
+        var bc = await caches.open(BC);
+        var hit = await bc.match(src + '.compiled');
+        if (hit && hit.headers.get('x-etag') === etag) {
+          injectCode(await hit.text());
+          return; /* cache hit — ไม่ต้องอ่าน body หรือ compile เลย */
+        }
+      } catch (_) {}
+    }
+
+    /* ── Cache miss: อ่าน body แล้ว compile ── */
     var text = await resp.text();
-    var s = quickSig(text);
-
-    /* ลอง localStorage cache */
-    try {
-      if (localStorage.getItem(k + '_s') === s) {
-        var hit = localStorage.getItem(k);
-        if (hit) { injectCode(hit); return; }
-      }
-    } catch (_) {}
-
-    /* compile ด้วย Babel */
     var compiled = Babel.transform(text, {
       presets: ['react'],
       sourceType: 'script',
+      filename: src,
     }).code;
 
-    /* เก็บ cache (ถ้า storage เต็มให้ข้ามแบบเงียบ) */
-    try {
-      localStorage.setItem(k, compiled);
-      localStorage.setItem(k + '_s', s);
-    } catch (_) {}
+    /* บันทึก compiled code ไว้ใช้ครั้งหน้า */
+    if (typeof caches !== 'undefined') {
+      try {
+        var bc = await caches.open(BC);
+        await bc.put(src + '.compiled', new Response(compiled, {
+          headers: { 'Content-Type': 'application/javascript', 'x-etag': etag }
+        }));
+      } catch (_) {}
+    }
 
     injectCode(compiled);
   }
