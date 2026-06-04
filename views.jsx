@@ -7584,13 +7584,9 @@ function reconcileOrderState(order, localEntry, nowMs) {
   // local terminal status (สำเร็จ/ส่งแล้ว ฯลฯ) ทับ sheet ที่บอกว่ายังรอ
   const localTerminal = DONE_ST.has(local.status);
   if (sheetPending && localTerminal) {
-    // ข้อมูลเก่าก่อน migration (ไม่มี sig) → auto-heal: ทิ้ง terminal status ทันที
-    // ไม่ให้ state ค้างเดิมซ่อน order ที่ sheet บอกว่ายังรออยู่ (แก้อาการปัจจุบันโดยไม่ต้องล้าง localStorage มือ)
-    if (!local.sig) {
-      const { status:_s, markedAt:_m, shipped:_sh, ...rest } = local;
-      return rest;
-    }
-    // sig ตรง (order เดียวกันจริง) → เก็บไว้เฉพาะถ้าเพิ่งกดภายใน 6 ชม. (optimistic UI ตอน GAS cache ยังไม่ sync)
+    // ใช้ 6-hour check ทั้งกรณีมี sig และไม่มี sig
+    // (no sig = ข้อมูลก่อน migration — ยังให้ผ่านได้ถ้าเพิ่งกด เพื่อไม่ทิ้ง "สำเร็จ" ที่ user เพิ่งกดไว้)
+    // sig ตรง (order เดียวกันจริง) หรือไม่มี sig → เก็บไว้เฉพาะถ้าเพิ่งกดภายใน 6 ชม. (optimistic UI ตอน GAS cache ยังไม่ sync)
     const markedMs = local.markedAt ? new Date(local.markedAt).getTime() : NaN;
     const isRecent = !isNaN(markedMs) && (now - markedMs) < SIX_H;
     if (!isRecent) {

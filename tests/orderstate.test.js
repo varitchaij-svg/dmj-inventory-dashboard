@@ -50,18 +50,25 @@ describe('reconcileOrderState', () => {
   });
 
   // ── auto-heal: ข้อมูลเก่าก่อน migration (ไม่มี sig) ──────────────────────
-  it('ไม่มี sig + sheet บอก "รอ" + local terminal → ทิ้ง status/markedAt/shipped (auto-heal)', () => {
+  it('ไม่มี sig + sheet "รอ" + local terminal + เพิ่งกด < 6 ชม. → เก็บไว้ (ป้องกัน "สำเร็จ" ที่เพิ่งกดหาย)', () => {
     const o = { sku: 'OL00005', date: '01/06/26', orderQty: 2, status: 'รอ' };
-    const legacyLocal = { status: 'ส่งแล้ว', markedAt: new Date(NOW - HOUR).toISOString(), preparedQty: 2 };
+    const legacyLocal = { status: 'สำเร็จ', markedAt: new Date(NOW - HOUR).toISOString(), preparedQty: 2 };
     const r = reconcileOrderState(o, legacyLocal, NOW);
-    expect(r.status).toBeUndefined();
-    expect(r.markedAt).toBeUndefined();
-    expect(r.preparedQty).toBe(2); // field อื่นเก็บไว้
+    expect(r.status).toBe('สำเร็จ'); // เพิ่งกด 1 ชม. ที่แล้ว → ยังอยู่
+    expect(r.preparedQty).toBe(2);
   });
 
-  it('ไม่มี sig + sheet "" (pending) + local "สำเร็จ" → ทิ้ง terminal status', () => {
+  it('ไม่มี sig + sheet "รอ" + local terminal + กดไปแล้ว > 6 ชม. → ทิ้ง (auto-heal state ค้าง)', () => {
+    const o = { sku: 'OL00005', date: '01/06/26', orderQty: 2, status: 'รอ' };
+    const legacyLocal = { status: 'ส่งแล้ว', markedAt: new Date(NOW - 7 * HOUR).toISOString(), preparedQty: 2 };
+    const r = reconcileOrderState(o, legacyLocal, NOW);
+    expect(r.status).toBeUndefined(); // เก่าแล้ว → ทิ้ง
+    expect(r.preparedQty).toBe(2);    // field อื่นเก็บไว้
+  });
+
+  it('ไม่มี sig + sheet "" (pending) + local "สำเร็จ" + ไม่มี markedAt → ทิ้ง (ไม่ทราบเวลา = ถือว่าเก่า)', () => {
     const o = { sku: 'OL00005', date: '01/06/26', orderQty: 2, status: '' };
-    const legacyLocal = { status: 'สำเร็จ', markedAt: new Date(NOW - HOUR).toISOString() };
+    const legacyLocal = { status: 'สำเร็จ' }; // ไม่มี markedAt → NaN → !isRecent → ทิ้ง
     expect(reconcileOrderState(o, legacyLocal, NOW).status).toBeUndefined();
   });
 

@@ -134,12 +134,8 @@ function reconcileOrderState(order, localEntry, nowMs) {
 
   const localTerminal = DONE_ST.has(local.status);
   if (sheetPending && localTerminal) {
-    // ไม่มี sig (ก่อน migration) → auto-heal: ทิ้ง terminal status ทันที
-    if (!local.sig) {
-      const { status:_s, markedAt:_m, shipped:_sh, ...rest } = local;
-      return rest;
-    }
-    // sig ตรง → เก็บไว้เฉพาะถ้าเพิ่งกดภายใน 6 ชม. (optimistic UI)
+    // ใช้ 6-hour check ทั้งกรณีมี sig และไม่มี sig
+    // (no sig = ก่อน migration — ยังให้ผ่านได้ถ้าเพิ่งกด เพื่อไม่ทิ้ง "สำเร็จ" ที่ user เพิ่งกดไว้)
     const markedMs = local.markedAt ? new Date(local.markedAt).getTime() : NaN;
     const isRecent = !isNaN(markedMs) && (now - markedMs) < SIX_H;
     if (!isRecent) {
