@@ -8193,9 +8193,11 @@ function ShipmentReceiveList({ data, role, productMap }) {
                 รับแล้ว {received}/{total} รายการ
               </span>
             </div>
-            {b.items.map(s => (
-              <ShipmentRow key={s.id} s={s} role={role} productMap={productMap} onConfirm={handleConfirm}/>
-            ))}
+            {[...b.items]
+              .sort((a, b) => (a.receivedAt ? 1 : 0) - (b.receivedAt ? 1 : 0))
+              .map(s => (
+                <ShipmentRow key={s.id} s={s} role={role} productMap={productMap} onConfirm={handleConfirm}/>
+              ))}
           </div>
         );
       })}
@@ -8337,6 +8339,20 @@ async function syncStockTransferBatch(items) {
     console.log("syncStockTransferBatch result:", json);
     return json;
   } catch(e) { console.warn("syncStockTransferBatch error:", e.message); return { success: false, error: e.message }; }
+}
+
+// ปรับ WH qty=0 ใน Sheets + ZORT (สินค้าหมด ไม่ได้จัด)
+async function syncZeroStock(sku) {
+  if (!SHEET_DEPLOY_URL) return { success: false };
+  try {
+    const res = await fetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ zeroStock: true, sku, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "warehouse" }),
+    });
+    const json = await res.json().catch(() => ({}));
+    return json;
+  } catch(e) { return { success: false, error: e.message }; }
 }
 
 // ลบหลาย order rows ในครั้งเดียว
@@ -8578,6 +8594,8 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const [shipAllConfirm, setShipAllConfirm] = uS(null); // ready[] array
   const [materialDraw, setMaterialDraw]  = uS(null); // { order, afterConfirm: fn }
   const [resetConfirm, setResetConfirm]  = uS(false); // ยืนยันรีเซ็ตสถานะการส่ง
+  const [zeroConfirm, setZeroConfirm]   = uS(null);  // { order } ยืนยันไม่ได้จัดสินค้า
+  const [zeroed, setZeroed]             = uS({});    // optimistic: order ที่ถูก mark ไม่ได้จัดแล้ว
   const isOnline = useOnlineStatus(); // ตรวจสอบการเชื่อมต่อก่อนส่งสถานะ
   // warehouse map modal state — shared สำหรับ card ทุกใบในหน้านี้
   const [mapModal, setMapModal] = uS(null); // { lockKey, productName, sku } | null
@@ -8654,6 +8672,24 @@ function OrderSummaryView({ data, onPrintRequest }) {
   };
 
   const handleShip = (order) => setShipConfirm(order);
+
+  const handleZeroStock = (order) => setZeroConfirm(order);
+
+  const doZeroStock = async () => {
+    const order = zeroConfirm;
+    setZeroConfirm(null);
+    if (!order) return;
+    setSending(order.id);
+    const res = await syncZeroStock(order.sku);
+    setSending(null);
+    if (res && res.success === true) {
+      setZeroed(prev => ({ ...prev, [order.id]: true }));
+      syncDeleteOrders([order.id]);
+      showToast("success", `ปรับ ${order.name} เป็น 0 แล้ว`, "✅", 4000);
+    } else {
+      showToast("warn", `ไม่สำเร็จ: ${res && res.error || "ลองใหม่"}`, "⚠️", 5000);
+    }
+  };
 
   // ทำการส่งสินค้าจริง (หลังผ่าน confirm และ material draw แล้ว)
   const finalizeShip = async (order, matItems) => {
@@ -8899,6 +8935,11 @@ function OrderSummaryView({ data, onPrintRequest }) {
                       background:"#ef4444",color:"#fff",borderRadius:20,
                       fontSize:9,fontWeight:700,padding:"2px 6px"}}>🚫 ไม่ขึ้น</div>
                   )}
+                  {zeroed[order.id] && (
+                    <div style={{position:"absolute",top:4,right:4,
+                      background:"#dc2626",color:"#fff",borderRadius:20,
+                      fontSize:9,fontWeight:700,padding:"2px 6px"}}>❌ ไม่ได้จัด</div>
+                  )}
                 </div>
 
                 {/* Info */}
@@ -8959,13 +9000,13 @@ function OrderSummaryView({ data, onPrintRequest }) {
                                    fontWeight:600,marginBottom:2}}>⚠️ ไม่มีอินเทอร์เน็ต</div>
                     )}
                     <div style={{display:"flex",gap:5}}>
-                      <button onClick={() => handleShip(order)} disabled={isSending || isMissed || !isOnline}
+                      <button onClick={() => handleShip(order)} disabled={isSending || isMissed || zeroed[order.id] || !isOnline}
                         style={{
                           flex:1,padding:"10px 4px",minHeight:44,borderRadius:7,border:"none",
-                          background: (isMissed||!isOnline)?"var(--g-100)":"var(--g-700)",
-                          color: (isMissed||!isOnline)?"var(--muted)":"#fff",
+                          background: (isMissed||zeroed[order.id]||!isOnline)?"var(--g-100)":"var(--g-700)",
+                          color: (isMissed||zeroed[order.id]||!isOnline)?"var(--muted)":"#fff",
                           fontSize:11,fontWeight:700,
-                          cursor:(isMissed||!isOnline)?"not-allowed":"pointer",
+                          cursor:(isMissed||zeroed[order.id]||!isOnline)?"not-allowed":"pointer",
                           fontFamily:"inherit",opacity:isSending?0.6:1,
                         }}>
                         {isSending ? "⏳..." : "✅ ส่งแล้ว"}
@@ -8981,6 +9022,20 @@ function OrderSummaryView({ data, onPrintRequest }) {
                             cursor:"pointer",fontSize:14,fontFamily:"inherit",
                           }}>
                           🚫
+                        </button>
+                      )}
+                      {!zeroed[order.id] && (
+                        <button onClick={() => handleZeroStock(order)}
+                          title="ไม่ได้จัด — สินค้าหมด ปรับ ZORT เป็น 0"
+                          disabled={isSending}
+                          style={{
+                            width:44,minHeight:44,borderRadius:7,
+                            border:"1.5px solid #fca5a5",
+                            background:"#fff5f5",color:"#dc2626",
+                            cursor:isSending?"not-allowed":"pointer",
+                            fontSize:14,fontFamily:"inherit",
+                          }}>
+                          ❌
                         </button>
                       )}
                     </div>
@@ -9099,6 +9154,16 @@ function OrderSummaryView({ data, onPrintRequest }) {
         confirmLabel={`ส่งทั้งหมด`}
         onConfirm={doShipAll}
         onCancel={() => setShipAllConfirm(null)}
+      />
+      <ConfirmModal
+        open={!!zeroConfirm}
+        type="warn"
+        emoji="❌"
+        title="ไม่ได้จัดสินค้า?"
+        detail={zeroConfirm ? `${zeroConfirm.name} (${zeroConfirm.sku})\n\nจะปรับสต็อก WH ใน ZORT เป็น 0\nและลบรายการนี้ออกจากรายการสั่ง\n\n⚠️ ทำแล้วย้อนกลับไม่ได้` : ""}
+        confirmLabel="ยืนยัน ไม่ได้จัด"
+        onConfirm={doZeroStock}
+        onCancel={() => setZeroConfirm(null)}
       />
       <MaterialDrawModal
         open={!!materialDraw}

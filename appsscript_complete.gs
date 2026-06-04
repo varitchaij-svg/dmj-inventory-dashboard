@@ -212,6 +212,11 @@ function doPost(e) {
       return transferStockBatch(ss, data.list || [], actor);
     }
 
+    // ─── Zero Stock: ตั้ง WH qty=0 ใน Sheets + ZORT (สินค้าหมด ไม่ได้จัด) ───
+    if (data.zeroStock) {
+      return zeroStockItem_(ss, data.sku, actor);
+    }
+
     // ─── Stock Transfer: คลัง → หน้าร้าน ───
     if (data.transferStock) {
       return transferStock(ss, data.sku, Number(data.qty) || 0, data.name);
