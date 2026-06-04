@@ -629,7 +629,7 @@ function transferStockBatch(ss, list, actor) {
       // หมายเหตุ: orderId = เลขแถว (R5) ถูก reuse เมื่อ order เก่าถูกลบ → TTL ยาวทำให้
       //   order ใหม่ที่มาแทนแถวเดิมถูกมองว่า "duplicate" ผิด ๆ → ไม่โอน แต่ frontend ลบทิ้ง
       //   จึงต้องสั้น (90s) ให้ cache เคลียร์ทันรอบส่งถัดไป
-      if (orderId && cache.get("shipped_" + orderId)) {
+      if (orderId && cache.get("shp2_" + orderId)) {
         results.push({ sku, orderId, duplicate: true });
         continue;
       }
@@ -652,7 +652,7 @@ function transferStockBatch(ss, list, actor) {
 
           if (actual > 0) {
             transferred.push({ sku, name, qty: actual });
-            if (orderId) cache.put("shipped_" + orderId, "1", 90); // 90 วิ (กันดับเบิลคลิกเท่านั้น)
+            if (orderId) cache.put("shp2_" + orderId, "1", 90); // 90 วิ (กันดับเบิลคลิกเท่านั้น)
           }
           if (actual < qty) shortfalls.push({ sku, name, requested: qty, transferred: actual });
           results.push({ sku, orderId, requested: qty, transferred: actual, newWH, newFS });
