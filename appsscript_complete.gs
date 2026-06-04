@@ -22,14 +22,26 @@ function getSecret_(key, fallback) {
  * ถ้า Script Property APP_TOKEN ว่าง = ปิดการตรวจ (backward compatible)
  * คืน true = ผ่าน, false = ไม่ผ่าน
  */
-// ─── ตรวจ conflict: คืน epoch ms ที่ไฟล์ spreadsheet ถูกแก้ล่าสุด (metadata only — เร็ว) ───
+// ─── ตรวจ conflict: คืน epoch ms ที่ข้อมูลถูกแก้ล่าสุด ───
+// อ่านจาก Script Properties (dmj_last_write_ts) ก่อนเสมอ — ถูกเขียนทุกครั้งที่ doPost แก้ข้อมูล
+// Script Properties ไม่ผ่าน CacheService จึงสด ๆ เสมอ
+// Fallback: DriveApp.getLastUpdated() (อาจล่าช้าหลายนาทีเพราะ Google Drive cache ภายใน)
 function getSheetLastModified_() {
+  try {
+    const tsProp = PropertiesService.getScriptProperties().getProperty('dmj_last_write_ts');
+    if (tsProp) {
+      const tsNum = parseInt(tsProp, 10);
+      if (tsNum > 0) return tsNum;
+    }
+  } catch (e) {
+    Logger.log("getSheetLastModified_ (prop) error: " + e);
+  }
   const sheetId = PropertiesService.getScriptProperties().getProperty('SHEET_ID');
   if (!sheetId) return 0;
   try {
     return DriveApp.getFileById(sheetId).getLastUpdated().getTime();
   } catch (e) {
-    Logger.log("getSheetLastModified_ error: " + e);
+    Logger.log("getSheetLastModified_ (drive) error: " + e);
     return 0;
   }
 }
@@ -209,7 +221,7 @@ function doPost(e) {
 
     // ─── Stock Transfer (Batch): คลัง → หน้าร้าน หลาย SKU ในครั้งเดียว ───
     if (data.transferStockBatch) {
-      return transferStockBatch(ss, data.list || [], actor);
+      return transferStockBatch(ss, data.list || [], actor, data.clientLoadedAt);
     }
 
     // ─── Zero Stock: ตั้ง WH qty=0 ใน Sheets + ZORT (สินค้าหมด ไม่ได้จัด) ───
@@ -638,11 +650,24 @@ function createZortTransfer_(sku, productname, qty) {
 
 // Batch: หักสต็อกหลาย SKU ในครั้งเดียว → สร้าง ZORT Transfer เอกสารเดียว (เลขที่ auto)
 // list = [{ sku, qty, name, orderId }, ...]
+// clientLoadedAt = epoch ms ที่ client โหลดข้อมูล (ใช้ตรวจ conflict ก่อนทำ batch)
 // หมายเหตุ: AddTransfer ย้ายสต็อกใน ZORT ให้อยู่แล้ว จึงไม่ต้อง push absolute ทับ
-function transferStockBatch(ss, list, actor) {
+function transferStockBatch(ss, list, actor, clientLoadedAt) {
   if (!Array.isArray(list) || !list.length) return error("list ว่างเปล่า");
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_PRODUCTS);
+
+  // ─── Conflict detection: ตรวจทั้ง batch ก่อนเริ่ม ───
+  // กัน 2 user โอน SKU เดียวพร้อมกัน → สต็อกติดลบ
+  if (clientLoadedAt) {
+    const lastMod = getSheetLastModified_();
+    if (shouldRejectConflict_(clientLoadedAt, lastMod)) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false, conflict: true,
+        message: "ข้อมูลเปลี่ยนไปแล้ว โหลดใหม่แล้วลองอีกครั้ง"
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+  }
 
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(15000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
@@ -925,7 +950,16 @@ function deductStock(ss, sku, qty) {
           if (deductFS > 0) zortItems.push({ sku, qty: fsQty - deductFS, warehousecode: WH_FRONTSTORE });
           if (zortItems.length) pushStockToZort_(zortItems);
         } catch (e) { Logger.log("deductStock ZORT push error: " + e); }
-        return ok({ sku, deductWH, deductFS, newWH: whQty - deductWH, newFS: fsQty - deductFS, shortfall });
+        // shortfall > 0 = สต็อกไม่พอ (หักได้แค่บางส่วน หรือหักไม่ได้เลย)
+        // ยังคืน success:true เพราะหักลงไปเท่าที่ทำได้แล้ว แต่ client ต้องรู้ว่ามีส่วนขาด
+        // shortfall_qty = จำนวนที่ขาด, shortfall = true เป็น flag ที่ client ตรวจได้ง่าย
+        const result = {
+          sku, deductWH, deductFS,
+          newWH: whQty - deductWH, newFS: fsQty - deductFS,
+          shortfall: shortfall > 0,
+          shortfall_qty: shortfall
+        };
+        return ok(result);
       }
     }
     return error("ไม่พบ SKU: " + sku);
@@ -3213,6 +3247,11 @@ function invalidateCache_() {
     const keys = [_CACHE_KEY_COUNT];
     for (let i = 0; i < n; i++) keys.push(_CACHE_KEY_PART + i);
     c.removeAll(keys);
+  } catch (err) { /* ignore */ }
+  // บันทึก timestamp การเขียนล่าสุดลง Script Properties (ไม่ผ่าน CacheService)
+  // เพื่อให้ conflict detection อ่านได้สด ๆ เสมอ แม้ DriveApp.getLastUpdated() จะล่าช้า
+  try {
+    PropertiesService.getScriptProperties().setProperty('dmj_last_write_ts', String(Date.now()));
   } catch (err) { /* ignore */ }
 }
 
