@@ -7551,11 +7551,83 @@ const LS_ORDERS_STATE   = "dmj_orders_state_v1";
 const LS_PRINTED_ORDERS = "dmj_printed_orders_v1";
 function getOrdersState()   { try { return JSON.parse(localStorage.getItem(LS_ORDERS_STATE)   || "{}"); } catch { return {}; } }
 function getPrintedOrders() { try { return JSON.parse(localStorage.getItem(LS_PRINTED_ORDERS) || "{}"); } catch { return {}; } }
-function patchOrderState(id, updates) {
+
+// ── content signature ของ order — ใช้ผูก localStorage state เข้ากับ "ตัวตน" ของ order
+// แทนเลขแถว (id เช่น "R5") ที่ถูก reuse เมื่อ order เก่าถูกลบแล้ว order ใหม่มาแทนแถวเดิม
+// → กัน state เก่า (เช่น "ส่งแล้ว") เลอะมาทับ order ใหม่ที่บังเอิญอยู่แถวเดียวกัน
+// ใช้ field จาก readOrders_: sku, date ("dd/MM/yy"), orderQty
+function orderSig(o) {
+  if (!o) return "";
+  return `${(o.sku||'').trim().toUpperCase()}|${String(o.date||'').replace(/\D/g,'')}|${o.orderQty||0}`;
+}
+
+// ── reconcileOrderState: ตัดสินใจว่าจะ apply localStorage entry กับ order นี้หรือไม่
+// หลักการ: sheet เป็น authoritative สำหรับ visibility — localStorage ห้ามซ่อน order
+// ที่ sheet บอกว่ายัง "รอ" เว้นแต่ยืนยันได้ว่าเป็น order เดียวกันจริง (sig ตรง) และเพิ่งกดไปเร็ว ๆ นี้
+// คืน object ที่จะ spread ทับ order: { ...o, id, ...<ผลลัพธ์> }
+// nowMs ส่งเข้ามาเพื่อให้เทสต์ได้ (default = Date.now())
+function reconcileOrderState(order, localEntry, nowMs) {
+  const now = nowMs == null ? Date.now() : nowMs;
+  const SIX_H = 6 * 60 * 60 * 1000;
+  const DONE_ST = new Set(["สำเร็จ","completed","ส่งแล้ว","shipped"]);
+  const local = localEntry || {};
+  // ไม่มี local state → ไม่มีอะไรต้อง apply
+  if (!Object.keys(local).length) return {};
+
+  const sheetPending = !order.status || order.status === "รอ" || order.status === "pending";
+  const sig = orderSig(order);
+
+  // กรณี row reuse: local มี sig แต่ไม่ตรงกับ order ปัจจุบัน → state นี้เป็นของ order อื่น
+  // (แถวถูก reuse) → ทิ้งทั้งหมด ไม่ให้เลอะข้าม order
+  if (local.sig && local.sig !== sig) return {};
+
+  // local terminal status (สำเร็จ/ส่งแล้ว ฯลฯ) ทับ sheet ที่บอกว่ายังรอ
+  const localTerminal = DONE_ST.has(local.status);
+  if (sheetPending && localTerminal) {
+    // ข้อมูลเก่าก่อน migration (ไม่มี sig) → auto-heal: ทิ้ง terminal status ทันที
+    // ไม่ให้ state ค้างเดิมซ่อน order ที่ sheet บอกว่ายังรออยู่ (แก้อาการปัจจุบันโดยไม่ต้องล้าง localStorage มือ)
+    if (!local.sig) {
+      const { status:_s, markedAt:_m, shipped:_sh, ...rest } = local;
+      return rest;
+    }
+    // sig ตรง (order เดียวกันจริง) → เก็บไว้เฉพาะถ้าเพิ่งกดภายใน 6 ชม. (optimistic UI ตอน GAS cache ยังไม่ sync)
+    const markedMs = local.markedAt ? new Date(local.markedAt).getTime() : NaN;
+    const isRecent = !isNaN(markedMs) && (now - markedMs) < SIX_H;
+    if (!isRecent) {
+      const { status:_s, markedAt:_m, shipped:_sh, ...rest } = local;
+      return rest;
+    }
+  }
+  // กรณีปกติ (sig ตรง และ status สอดคล้อง) → apply local ตามเดิม
+  return local;
+}
+
+function patchOrderState(id, updates, sig) {
   const s = getOrdersState(); s[id] = { ...(s[id]||{}), ...updates };
+  // แนบ sig (content signature) ลงไปเสมอ เพื่อกัน row-reuse เลอะข้าม order
+  if (sig != null) s[id].sig = sig;
   // record when status was changed so we can detect ID collisions with new orders
   if ('status' in updates) s[id].markedAt = new Date().toISOString();
   localStorage.setItem(LS_ORDERS_STATE, JSON.stringify(s)); return s;
+}
+
+// ── ลบ entry ใน dmj_orders_state_v1 ที่ sig ไม่ตรงกับ order ปัจจุบันไหนเลย
+// (กัน localStorage โตเรื่อย ๆ จากเลขแถวที่ถูก reuse) — ไม่ throw ถ้าพังให้เงียบ
+function cleanupOrdersState(orders) {
+  try {
+    const s = getOrdersState();
+    const ids = new Set();
+    const sigs = new Set();
+    (orders||[]).forEach((o, i) => { ids.add(stableOrderId(o, i)); sigs.add(orderSig(o)); });
+    let changed = false;
+    Object.keys(s).forEach(id => {
+      const e = s[id] || {};
+      // ทิ้งเฉพาะ entry ที่มี sig แต่ sig นั้นไม่ตรง order ไหนเลย และ id ก็ไม่ตรง order ปัจจุบัน
+      if (e.sig && !sigs.has(e.sig) && !ids.has(id)) { delete s[id]; changed = true; }
+    });
+    if (changed) localStorage.setItem(LS_ORDERS_STATE, JSON.stringify(s));
+    return s;
+  } catch { return getOrdersState(); }
 }
 async function syncOrderUpdate(order, updates) {
   if (!SHEET_DEPLOY_URL) return;
@@ -8140,6 +8212,9 @@ function OrderListView({ data, role }) {
   const orders = data.orders || [];
   const [filter, setFilter] = uS("all");
   const [st, setSt] = uS(getOrdersState);
+
+  // cleanup state ค้างที่ sig ไม่ตรง order ไหนเลย (กัน localStorage โตเรื่อย ๆ) — ครั้งเดียวเมื่อ orders เปลี่ยน
+  uE(() => { setSt(cleanupOrdersState(orders)); }, [orders]);
   const productMap = uM(() => { const m={}; (data.products||[]).forEach(p=>m[p.sku]=p); return m; }, [data.products]);
 
   // สร้าง skuToLocks จาก storage data (productLockMap + verifiedLockMap)
@@ -8160,24 +8235,12 @@ function OrderListView({ data, role }) {
   }, [data.storage]);
 
   const enriched = uM(() => {
-    const DONE_ST = new Set(["สำเร็จ","completed","ส่งแล้ว","shipped"]);
     return orders.map((o, i) => {
       const id = stableOrderId(o, i);
-      const local = st[id] || {};
-      // Guard: sheet says "รอ" but localStorage says a terminal status.
-      // Only keep localStorage if we can positively confirm it's the SAME order
-      // (order date ≤ markedAt). Otherwise trust the sheet — new order / ID collision.
-      const sheetPending = !o.status || o.status === "รอ" || o.status === "pending";
-      if (sheetPending && DONE_ST.has(local.status)) {
-        // Keep localStorage Done only if marked within 6 hours (fresh session)
-        const markedMs = local.markedAt ? new Date(local.markedAt).getTime() : NaN;
-        const isRecent = !isNaN(markedMs) && (Date.now() - markedMs) < 6 * 60 * 60 * 1000;
-        if (!isRecent) {
-          const { status:_s, markedAt:_m, shipped:_sh, ...rest } = local;
-          return { ...o, id, ...rest };
-        }
-      }
-      return { ...o, id, ...local };
+      // reconcileOrderState ตัดสินใจว่าจะ apply localStorage state นี้หรือไม่
+      // (กัน row-reuse เลอะข้าม order + auto-heal state ค้างเดิมที่ไม่มี sig)
+      const applied = reconcileOrderState(o, st[id]);
+      return { ...o, id, ...applied };
     });
   }, [orders, st]);
 
@@ -8196,7 +8259,11 @@ function OrderListView({ data, role }) {
     return base;
   }, [sorted, filter]);
 
-  const patch = (id, updates) => setSt(patchOrderState(id, updates));
+  // แนบ sig ของ order ที่กำลัง patch เสมอ (lookup จาก enriched ด้วย id) เพื่อกัน row-reuse เลอะข้าม
+  const patch = (id, updates) => {
+    const o = enriched.find(x => x.id === id);
+    setSt(patchOrderState(id, updates, o ? orderSig(o) : undefined));
+  };
 
   const pendingCount = sorted.filter(o => !o.status||o.status==="รอ"||o.status==="pending").length;
 
@@ -8558,23 +8625,13 @@ function OrderSummaryView({ data, onPrintRequest }) {
   }, [data.storage]);
 
   const enriched = uM(() => {
-    const DONE_ST = new Set(["สำเร็จ","completed","ส่งแล้ว","shipped"]);
     return orders.map((o, i) => {
       const id = stableOrderId(o, i);
-      const local = st[id] || {};
-      const sheetPending = !o.status || o.status === "รอ" || o.status === "pending";
-      if (sheetPending && DONE_ST.has(local.status)) {
-        const markedMs = local.markedAt ? new Date(local.markedAt).getTime() : NaN;
-        const isRecent = !isNaN(markedMs) && (Date.now() - markedMs) < 6 * 60 * 60 * 1000;
-        const skuKey = (o.sku || '').trim().toUpperCase();
-        if (!isRecent) {
-          const { status:_s, markedAt:_m, shipped:_sh, ...rest } = local;
-          return { ...o, id, ...rest, product: productMap[o.sku] || productMap[skuKey] };
-        }
-        return { ...o, id, ...local, product: productMap[o.sku] || productMap[skuKey] };
-      }
       const skuKey = (o.sku || '').trim().toUpperCase();
-      return { ...o, id, ...local, product: productMap[o.sku] || productMap[skuKey] };
+      // ใช้ reconcileOrderState เดียวกับ OrderListView → กัน row-reuse เลอะข้าม order
+      // (sig ไม่ตรง = state ของ order อื่น → ทิ้ง) + auto-heal state ค้างเดิมที่ไม่มี sig
+      const applied = reconcileOrderState(o, st[id]);
+      return { ...o, id, ...applied, product: productMap[o.sku] || productMap[skuKey] };
     });
   }, [orders, st, productMap]);
 
@@ -8620,7 +8677,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
     const next = { ...shipped, [order.id]: Date.now() };
     setShipped(next);
     localStorage.setItem(LS_SHIPPED_ORDERS, JSON.stringify(next));
-    setSt(patchOrderState(order.id, { status: "ส่งแล้ว" }));
+    setSt(patchOrderState(order.id, { status: "ส่งแล้ว" }, orderSig(order)));
     showToast("success", `ส่ง ${qty} ชิ้นแล้ว`, "📦");
   };
 
@@ -8677,7 +8734,8 @@ function OrderSummaryView({ data, onPrintRequest }) {
     // อัปเดตสถานะ order ราย item (เบา ไม่ยิง ZORT ซ้ำ)
     for (const order of ready) {
       nextShipped[order.id] = Date.now();
-      nextSt[order.id] = { ...(nextSt[order.id]||{}), status: "ส่งแล้ว" };
+      // แนบ sig + markedAt เหมือน patchOrderState เพื่อกัน row-reuse เลอะข้าม order
+      nextSt[order.id] = { ...(nextSt[order.id]||{}), status: "ส่งแล้ว", sig: orderSig(order), markedAt: new Date().toISOString() };
     }
     setSending(null);
     setShipped(nextShipped);

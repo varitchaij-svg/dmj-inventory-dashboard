@@ -109,9 +109,51 @@ function shouldRejectConflict(clientLoadedAt, sheetLastModified, slopMs) {
   return sheetLastModified > Number(clientLoadedAt) + (slopMs || 5000);
 }
 
+// ── จาก views.jsx บรรทัด 7559–7603 ──────────────────────────────────────────
+// orderSig: content signature ของ order — ผูก localStorage state เข้ากับ "ตัวตน"
+// ของ order แทนเลขแถว (id เช่น "R5") ที่ถูก reuse เมื่อ order เก่าถูกลบ
+function orderSig(o) {
+  if (!o) return "";
+  return `${(o.sku||'').trim().toUpperCase()}|${String(o.date||'').replace(/\D/g,'')}|${o.orderQty||0}`;
+}
+
+// reconcileOrderState: ตัดสินใจว่าจะ apply localStorage entry กับ order นี้หรือไม่
+// คืน object ที่จะ spread ทับ order (ดู comment ใน views.jsx)
+function reconcileOrderState(order, localEntry, nowMs) {
+  const now = nowMs == null ? Date.now() : nowMs;
+  const SIX_H = 6 * 60 * 60 * 1000;
+  const DONE_ST = new Set(["สำเร็จ","completed","ส่งแล้ว","shipped"]);
+  const local = localEntry || {};
+  if (!Object.keys(local).length) return {};
+
+  const sheetPending = !order.status || order.status === "รอ" || order.status === "pending";
+  const sig = orderSig(order);
+
+  // row reuse: local มี sig แต่ไม่ตรง → state ของ order อื่น → ทิ้งทั้งหมด
+  if (local.sig && local.sig !== sig) return {};
+
+  const localTerminal = DONE_ST.has(local.status);
+  if (sheetPending && localTerminal) {
+    // ไม่มี sig (ก่อน migration) → auto-heal: ทิ้ง terminal status ทันที
+    if (!local.sig) {
+      const { status:_s, markedAt:_m, shipped:_sh, ...rest } = local;
+      return rest;
+    }
+    // sig ตรง → เก็บไว้เฉพาะถ้าเพิ่งกดภายใน 6 ชม. (optimistic UI)
+    const markedMs = local.markedAt ? new Date(local.markedAt).getTime() : NaN;
+    const isRecent = !isNaN(markedMs) && (now - markedMs) < SIX_H;
+    if (!isRecent) {
+      const { status:_s, markedAt:_m, shipped:_sh, ...rest } = local;
+      return rest;
+    }
+  }
+  return local;
+}
+
 module.exports = {
   monthsSince, fmtN, fmtB, fmtPct, monthLabel,
   stockQty, whQty, mtoBase, compareSku,
   COL_PROD_SKU, COL_PROD_QTYFS, COL_PROD_QTYWH,
   mapProductRow, shouldRejectConflict,
+  orderSig, reconcileOrderState,
 };
