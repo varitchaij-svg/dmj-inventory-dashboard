@@ -290,12 +290,14 @@ function FrontStoreView({ data, role }) {
           <SupplierSearch value={supplierFilter} onChange={setSupplierFilter} allSuppliers={allSuppliers}/>
         </div>
         <div style={{display:"flex",gap:8,marginTop:8,alignItems:"center",flexWrap:"wrap"}}>
-          <Seg value={showMode} onChange={setShowMode} options={[
-            {value:"all",       label:"🗂️ ทั้งหมด"},
-            {value:"unchecked", label:`⬜ รอเช็ค${uncheckedCount>0?` (${uncheckedCount})`:""}`},
-            {value:"mismatch",  label:`❌ ไม่ตรง${mismatchCount>0?` (${mismatchCount})`:""}`},
-            {value:"reorder",   label:"🔄 ควรสั่ง"},
-          ]}/>
+          <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch",maxWidth:"100%"}}>
+            <Seg value={showMode} onChange={setShowMode} options={[
+              {value:"all",       label:"🗂️ ทั้งหมด"},
+              {value:"unchecked", label:`⬜ รอเช็ค${uncheckedCount>0?` (${uncheckedCount})`:""}`},
+              {value:"mismatch",  label:`❌ ไม่ตรง${mismatchCount>0?` (${mismatchCount})`:""}`},
+              {value:"reorder",   label:"🔄 ควรสั่ง"},
+            ]}/>
+          </div>
           {supplierFilter && (
             <button onClick={() => setSupplierFilter("")}
               style={{fontSize:11,padding:"4px 10px",borderRadius:8,border:"1px solid var(--bdr)",
