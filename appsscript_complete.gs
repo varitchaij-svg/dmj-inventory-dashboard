@@ -1038,7 +1038,7 @@ function updateOrderState(ss, body) {
         if (body.carryMode === "carry") {
           try {
             const productName = body.name || body.sku || "(ไม่ทราบชื่อ)";
-            sendLineMessage_("🚶 หิ้วเอง!\n📦 " + productName + "\nรหัส: " + (body.sku||"") + "\nวันที่: " + (body.date||""));
+            sendLineGroup_("🚶 หิ้วเอง!\n📦 " + productName + "\nรหัส: " + (body.sku||"") + "\nวันที่: " + (body.date||""));
           } catch(e) {}
         }
         return ok({ updated: body.orderId, row: sheetRow });
@@ -1060,7 +1060,7 @@ function updateOrderState(ss, body) {
         if (body.carryMode === "carry") {
           try {
             const productName = body.name || body.sku || "(ไม่ทราบชื่อ)";
-            sendLineMessage_("🚶 หิ้วเอง!\n📦 " + productName + "\nรหัส: " + (body.sku||"") + "\nวันที่: " + (body.date||""));
+            sendLineGroup_("🚶 หิ้วเอง!\n📦 " + productName + "\nรหัส: " + (body.sku||"") + "\nวันที่: " + (body.date||""));
           } catch(e) {}
         }
         return ok({ updated: body.sku, row });
