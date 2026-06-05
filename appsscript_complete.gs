@@ -3101,29 +3101,21 @@ function sendLineGroupMentionAll_(msg) {
 function sendLineGroupOrderCard_(name, sku, date, imageUrl) {
   var groupId = PropertiesService.getScriptProperties().getProperty('LINE_GROUP_ID');
   if (!groupId) return;
-  var mentionMsg = { type: "text", text: "@All order 🚶", mention: { mentionees: [{ index: 0, length: 4, type: "all" }] } };
-  var bubble = {
-    type: "bubble",
-    body: {
-      type: "box", layout: "vertical", spacing: "sm",
-      contents: [
-        { type: "text", text: "order 🚶", weight: "bold", size: "lg", color: "#1565c0" },
-        { type: "text", text: name || sku || "-", weight: "bold", size: "md", wrap: true },
-        { type: "text", text: "รหัส: " + (sku||""), size: "sm", color: "#888888" },
-        { type: "text", text: "วันที่: " + (date||""), size: "sm", color: "#888888" }
-      ]
-    }
-  };
+  var messages = [];
+  // @All mention
+  messages.push({ type: "text", text: "@All order 🚶\n📦 " + (name||sku||"-") + "\nรหัส: " + (sku||"") + "\nวันที่: " + (date||""),
+    mention: { mentionees: [{ index: 0, length: 4, type: "all" }] } });
+  // รูปสินค้า (ถ้ามี)
   if (imageUrl) {
-    bubble.hero = { type: "image", url: imageUrl, size: "full", aspectRatio: "20:13", aspectMode: "cover" };
+    messages.push({ type: "image", originalContentUrl: imageUrl, previewImageUrl: imageUrl });
   }
-  var card = { type: "flex", altText: "order 🚶 " + (name||sku||"-"), contents: bubble };
-  UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
+  var res = UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
     method: "post",
     headers: { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN },
-    payload: JSON.stringify({ to: groupId, messages: [mentionMsg, card] }),
+    payload: JSON.stringify({ to: groupId, messages: messages }),
     muteHttpExceptions: true
   });
+  Logger.log("LINE order card: " + res.getResponseCode() + " " + res.getContentText().slice(0,200));
 }
 
 // สรุปออเดอร์รอขึ้นรถ — ส่ง LINE กลุ่ม อังคาร-อาทิตย์ 08:00 และ 13:00
