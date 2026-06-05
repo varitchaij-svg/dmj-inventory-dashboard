@@ -1574,6 +1574,7 @@ function CategoryView({ data, role }) {
   const [supplierFilter, setSupplierFilter] = uS(null);
   const [deadFilter, setDeadFilter] = uS(null); // เกณฑ์ "สินค้าจมเกิน N เดือน" (null = ไม่กรอง)
   const [newStockFilter, setNewStockFilter] = uS(false);
+  const [purchasePlanMode, setPurchasePlanMode] = uS(false);
   const [orderProduct, setOrderProduct] = uS(null);
   const [globalVendor, setGlobalVendor] = uS(null); // global supplier filter (all categories)
   // Android back: ถ้ากำลังดู supplier view → กด back = ล้าง supplier filter
@@ -1782,8 +1783,24 @@ function CategoryView({ data, role }) {
       <div className="page-head">
         <div>
           <div className="page-title">หมวดหมู่สินค้า</div>
-          <div className="page-sub">ดูสินค้าทุกตัวในแต่ละหมวด · เรียงตามขายดี / ราคา / Supplier / สี</div>
+          <div className="page-sub">{purchasePlanMode ? "สินค้าที่ควรสั่งเพิ่ม — จัดกลุ่มตาม Supplier" : "ดูสินค้าทุกตัวในแต่ละหมวด · เรียงตามขายดี / ราคา / Supplier / สี"}</div>
         </div>
+        {role === "owner" && (
+          <div style={{display:"flex",gap:4,border:"1px solid #e5e7eb",borderRadius:8,overflow:"hidden",flexShrink:0}}>
+            <button onClick={() => setPurchasePlanMode(false)}
+              style={{padding:"6px 14px",fontSize:13,border:"none",fontFamily:"inherit",cursor:"pointer",
+                      background:!purchasePlanMode?"#2563eb":"#f9fafb",
+                      color:!purchasePlanMode?"#fff":"#374151"}}>
+              🛍️ ดูสินค้า
+            </button>
+            <button onClick={() => setPurchasePlanMode(true)}
+              style={{padding:"6px 14px",fontSize:13,border:"none",fontFamily:"inherit",cursor:"pointer",
+                      background:purchasePlanMode?"#2563eb":"#f9fafb",
+                      color:purchasePlanMode?"#fff":"#374151"}}>
+              📋 จัดซื้อ
+            </button>
+          </div>
+        )}
       </div>
 
       {/* ── Global Search Bar ── */}
@@ -2029,7 +2046,7 @@ function CategoryView({ data, role }) {
 
             {/* New stock filter — แสดงตลอด: มีของ=เหลือง clickable, ไม่มี=เทา disabled */}
             {(() => {
-              const newCount = products.filter(p => p.cat === active && isNew45(p.lastStockInDate)).length;
+              const newCount = products.filter(p => (active === "" || p.cat === active) && isNew45(p.lastStockInDate)).length;
               const hasNew = newCount > 0;
               return (
                 <div className="filter-bar" style={{marginTop:10,paddingTop:10,borderTop:"1px dashed var(--bdr)"}}>
@@ -2157,7 +2174,11 @@ function CategoryView({ data, role }) {
           </div>
 
           <div ref={listTopRef}/>
-          {filtered.length === 0 ? (
+          {purchasePlanMode ? (
+            <PurchaseGroupView products={products.filter(function(p) {
+              return p.cat && p.cat !== "ไม่มีรหัสสินค้า" && (p.qtyStore||0) <= 12 && (p.qtyWH||0) > 0;
+            })} />
+          ) : filtered.length === 0 ? (
             <Empty title="ไม่พบสินค้า" sub={isGlobalSearch ? "ลองค้นหาด้วยคำอื่น" : reorderFilter ? "ไม่มีสินค้าที่ควรสั่ง 🎉" : "หมวดนี้ยังไม่มีสินค้า"}/>
           ) : viewMode === 'list' ? (
             /* ── List view — compact horizontal rows ── */
@@ -2324,8 +2345,8 @@ function CategoryView({ data, role }) {
               ))}
             </div>
           )}
-          {/* Pagination — แสดงเฉพาะ grid/list view (supplier view ไม่มี pagination) */}
-          {viewMode !== 'supplier' && (
+          {/* Pagination — แสดงเฉพาะ grid/list view (ไม่แสดงใน supplier/purchase mode) */}
+          {!purchasePlanMode && viewMode !== 'supplier' && (
             <Pagination page={page} total={filtered.length} pageSize={PAGE_SIZE} onChange={setPage} listRef={listTopRef}/>
           )}
         </div>
