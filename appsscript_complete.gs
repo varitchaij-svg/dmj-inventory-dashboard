@@ -3468,6 +3468,9 @@ function invalidateCache_() {
   } catch (err) { /* ignore */ }
 }
 
+// wrapper รันได้จาก GAS dropdown (ไม่มี _ ต่อท้าย)
+function clearCache() { invalidateCache_(); Logger.log("Cache cleared"); }
+
 function error(msg) {
   return ContentService.createTextOutput(JSON.stringify({ success: false, error: msg }))
     .setMimeType(ContentService.MimeType.JSON);
