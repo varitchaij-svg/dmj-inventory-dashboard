@@ -7683,6 +7683,7 @@ async function syncOrderUpdate(order, updates) {
         orderId: order.id,
         sku:         order.sku,
         date:        order.date,
+        name:        updates.name,
         status:      updates.status,
         preparedQty: updates.preparedQty,
         printFlag:   updates.printFlag,
@@ -7733,7 +7734,10 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
     onPatch(order.id, {printFlag: f});
     syncOrderUpdate(order, {printFlag: f});
   };
-  const setCarryMode = m => onPatch(order.id, {carryMode: m});
+  const setCarryMode = m => {
+    onPatch(order.id, {carryMode: m});
+    if (m === "carry") syncOrderUpdate(order, {carryMode: "carry", name: order.name});
+  };
   const markComplete = () => {
     if (!order.printFlag) {
       showToast("warn", "เลือก PRINT หรือ SKIP ก่อน", "🖨️");

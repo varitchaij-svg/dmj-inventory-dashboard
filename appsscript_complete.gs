@@ -1035,6 +1035,12 @@ function updateOrderState(ss, body) {
         if (body.status)              sheet.getRange(sheetRow, COL_ORD_STATUS).setValue(body.status);
         if (body.preparedQty != null) sheet.getRange(sheetRow, COL_ORD_PREPQTY).setValue(body.preparedQty);
         if (body.printFlag)           sheet.getRange(sheetRow, COL_ORD_PRINTFLAG).setValue(body.printFlag);
+        if (body.carryMode === "carry") {
+          try {
+            const productName = body.name || body.sku || "(ไม่ทราบชื่อ)";
+            sendLineMessage_("🚶 หิ้วเอง!\n📦 " + productName + "\nรหัส: " + (body.sku||"") + "\nวันที่: " + (body.date||""));
+          } catch(e) {}
+        }
         return ok({ updated: body.orderId, row: sheetRow });
       }
     }
@@ -1051,6 +1057,12 @@ function updateOrderState(ss, body) {
         if (body.status)              sheet.getRange(row, COL_ORD_STATUS).setValue(body.status);
         if (body.preparedQty != null) sheet.getRange(row, COL_ORD_PREPQTY).setValue(body.preparedQty);
         if (body.printFlag)           sheet.getRange(row, COL_ORD_PRINTFLAG).setValue(body.printFlag);
+        if (body.carryMode === "carry") {
+          try {
+            const productName = body.name || body.sku || "(ไม่ทราบชื่อ)";
+            sendLineMessage_("🚶 หิ้วเอง!\n📦 " + productName + "\nรหัส: " + (body.sku||"") + "\nวันที่: " + (body.date||""));
+          } catch(e) {}
+        }
         return ok({ updated: body.sku, row });
       }
     }
