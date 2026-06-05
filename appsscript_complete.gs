@@ -3100,22 +3100,41 @@ function sendLineGroupMentionAll_(msg) {
 
 function sendLineGroupOrderCard_(name, sku, date, imageUrl) {
   var groupId = PropertiesService.getScriptProperties().getProperty('LINE_GROUP_ID');
-  if (!groupId) return;
-  var messages = [];
-  // @All mention
-  messages.push({ type: "text", text: "@All order 🚶\n📦 " + (name||sku||"-") + "\nรหัส: " + (sku||"") + "\nวันที่: " + (date||""),
-    mention: { mentionees: [{ index: 0, length: 4, type: "all" }] } });
-  // รูปสินค้า (ถ้ามี)
-  if (imageUrl) {
-    messages.push({ type: "image", originalContentUrl: imageUrl, previewImageUrl: imageUrl });
+  if (!groupId) { Logger.log("LINE: no LINE_GROUP_ID"); return; }
+
+  // lookup รูปจาก imageUrl sheet ถ้า frontend ไม่ส่งมา
+  var imgUrl = imageUrl || "";
+  if (!imgUrl && sku) {
+    try {
+      var imgMap = readImageMap_();
+      imgUrl = imgMap[(sku||"").trim().toUpperCase()] || "";
+    } catch(e) { Logger.log("imgMap error: " + e); }
   }
-  var res = UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
-    method: "post",
-    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN },
-    payload: JSON.stringify({ to: groupId, messages: messages }),
-    muteHttpExceptions: true
+
+  var pushUrl = "https://api.line.me/v2/bot/message/push";
+  var headers = { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN };
+
+  // ส่ง @All + ข้อความ
+  var textMsg = "@All order 🚶\n📦 " + (name||sku||"-") + "\nรหัส: " + (sku||"") + "\nวันที่: " + (date||"");
+  var r1 = UrlFetchApp.fetch(pushUrl, {
+    method: "post", headers: headers, muteHttpExceptions: true,
+    payload: JSON.stringify({ to: groupId, messages: [{
+      type: "text", text: textMsg,
+      mention: { mentionees: [{ index: 0, length: 4, type: "all" }] }
+    }]})
   });
-  Logger.log("LINE order card: " + res.getResponseCode() + " " + res.getContentText().slice(0,200));
+  Logger.log("LINE text: " + r1.getResponseCode() + " " + r1.getContentText().slice(0,300));
+
+  // ส่งรูปแยก (ถ้ามี URL)
+  if (imgUrl) {
+    var r2 = UrlFetchApp.fetch(pushUrl, {
+      method: "post", headers: headers, muteHttpExceptions: true,
+      payload: JSON.stringify({ to: groupId, messages: [{
+        type: "image", originalContentUrl: imgUrl, previewImageUrl: imgUrl
+      }]})
+    });
+    Logger.log("LINE image: " + r2.getResponseCode() + " " + r2.getContentText().slice(0,300));
+  }
 }
 
 // สรุปออเดอร์รอขึ้นรถ — ส่ง LINE กลุ่ม อังคาร-อาทิตย์ 08:00 และ 13:00
