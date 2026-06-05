@@ -317,7 +317,7 @@ function App() {
   const [data, setData] = usS(null);
   const [error, setError] = usS(null);
   const [navLogoOk, setNavLogoOk] = usS(true);
-  const [tab, setTab] = usS("overview");
+  const [tab, setTab] = usS(() => sessionStorage.getItem("dmj_role") === "owner" ? "categories" : "overview");
   const [range, setRange] = usS("year");
   const [source, setSource] = usS(localStorage.getItem(LS_SRC_KEY) || "sheet");
   const [syncing, setSyncing] = usS(false);
@@ -327,6 +327,7 @@ function App() {
   const [isOnline, setIsOnline] = usS(() => navigator.onLine);
   const [lastSaved, setLastSaved] = usS(null); // auto-save timestamp
   const [confirmAction, setConfirmAction] = usS(null); // { type:"clearLocal"|"logout" }
+  const [moreOpen, setMoreOpen] = usS(false); // dropdown "เพิ่มเติม" บน navtabs (owner)
   const [navToast, showNavToast, hideNavToast] = useToast(); // toast สำหรับ nav-level errors
   const tabHistoryRef = React.useRef([]); // track tab navigation for Android back
 
@@ -558,7 +559,60 @@ function App() {
           </div>
 
           <div className="navtabs" role="tablist">
-            {visibleTabs.map(t => (
+            {role === "owner" ? (() => {
+              const OWNER_PRIMARY = ["overview", "categories"];
+              const primaryTabs = visibleTabs.filter(t => OWNER_PRIMARY.includes(t.id));
+              const secondaryTabs = visibleTabs.filter(t => !OWNER_PRIMARY.includes(t.id));
+              return (
+                <>
+                  {primaryTabs.map(t => (
+                    <button key={t.id} role="tab"
+                            className={`navtab${activeTab===t.id?' active':''}`}
+                            onClick={() => { handleSetTab(t.id); setMoreOpen(false); }}>
+                      {t.icon}<span>{t.label}</span>
+                    </button>
+                  ))}
+                  <div style={{position:"relative"}}>
+                    <button role="tab"
+                            className={`navtab${secondaryTabs.some(t=>t.id===activeTab)||moreOpen?' active':''}`}
+                            onClick={() => setMoreOpen(v => !v)}>
+                      <span style={{fontSize:18,lineHeight:1}}>⋯</span>
+                      <span>เพิ่มเติม</span>
+                    </button>
+                    {moreOpen && (
+                      <div onClick={() => setMoreOpen(false)}
+                           style={{position:"fixed",inset:0,zIndex:199}}/>
+                    )}
+                    {moreOpen && (
+                      <div style={{
+                        position:"absolute", top:"calc(100% + 4px)", right:0,
+                        background:"var(--paper)", border:"1px solid var(--bdr)",
+                        borderRadius:12, padding:"6px 4px", zIndex:200,
+                        minWidth:200, boxShadow:"0 8px 24px rgba(0,0,0,.15)",
+                        maxHeight:"80vh", overflowY:"auto",
+                      }}>
+                        {secondaryTabs.map(t => (
+                          <button key={t.id}
+                                  onClick={() => { handleSetTab(t.id); setMoreOpen(false); }}
+                                  style={{
+                                    display:"flex", alignItems:"center", gap:10,
+                                    width:"100%", padding:"10px 14px",
+                                    border:"none", borderRadius:8, cursor:"pointer",
+                                    fontFamily:"inherit", fontSize:13, textAlign:"left",
+                                    background: activeTab===t.id ? "var(--g-50)" : "transparent",
+                                    color: activeTab===t.id ? "var(--g-800)" : "var(--text)",
+                                    fontWeight: activeTab===t.id ? 700 : 400,
+                                  }}>
+                            {t.icon}
+                            <span>{t.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              );
+            })() : visibleTabs.map(t => (
               <button key={t.id} role="tab"
                       className={`navtab${activeTab===t.id?' active':''}`}
                       onClick={() => handleSetTab(t.id)}>

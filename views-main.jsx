@@ -1574,7 +1574,8 @@ function CategoryView({ data, role }) {
   const [supplierFilter, setSupplierFilter] = uS(null);
   const [deadFilter, setDeadFilter] = uS(null); // เกณฑ์ "สินค้าจมเกิน N เดือน" (null = ไม่กรอง)
   const [newStockFilter, setNewStockFilter] = uS(false);
-  const [purchasePlanMode, setPurchasePlanMode] = uS(false);
+  const [purchasePlanMode, setPurchasePlanMode] = uS(role === "owner");
+  const [supplierPage, setSupplierPage] = uS(0);
   const [orderProduct, setOrderProduct] = uS(null);
   const [globalVendor, setGlobalVendor] = uS(null); // global supplier filter (all categories)
   // Android back: ถ้ากำลังดู supplier view → กด back = ล้าง supplier filter
@@ -1704,6 +1705,22 @@ function CategoryView({ data, role }) {
       return a.name.localeCompare(b.name, "th");
     });
   }, [filtered, viewMode]);
+
+  // ── จัดกลุ่มตาม supplier สำหรับ purchase plan mode ──
+  const purchaseGroups = uM(function() {
+    if (!purchasePlanMode) return [];
+    var m = {};
+    filtered.forEach(function(p) {
+      var sup = (p.lastSupplier || p.vendor || "ไม่ระบุร้าน").trim();
+      if (!m[sup]) m[sup] = [];
+      m[sup].push(p);
+    });
+    return Object.keys(m).sort(function(a,b) { return a.localeCompare(b,"th"); })
+      .map(function(name) { return { name: name, items: m[name] }; });
+  }, [purchasePlanMode, filtered]);
+
+  // reset supplierPage เมื่อ filter/mode/category เปลี่ยน
+  uE(function() { setSupplierPage(0); }, [purchasePlanMode, active, globalSearch, colorFilter, supplierFilter, deadFilter, newStockFilter, reorderFilter]);
 
   // Compute reason tags per product (within this category sort)
   const totalCatRev = filtered.reduce((s,p) => s + p.soldRev, 0);
@@ -2179,7 +2196,78 @@ function CategoryView({ data, role }) {
           </div>
 
           <div ref={listTopRef}/>
-          {filtered.length === 0 ? (
+          {purchasePlanMode ? (() => {
+            const grp = purchaseGroups[supplierPage];
+            const total = purchaseGroups.length;
+            if (total === 0) return React.createElement(Empty, {title:"ไม่พบสินค้า", sub:"ลองเปลี่ยน filter"});
+            return (
+              <div>
+                {/* Supplier header + navigation */}
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,
+                             background:"var(--g-50)",borderRadius:10,padding:"10px 14px",
+                             border:"1px solid var(--bdr)"}}>
+                  <span style={{fontSize:18}}>🏭</span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:800,fontSize:15,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {grp.name}
+                    </div>
+                    <div style={{fontSize:11,color:"var(--muted)"}}>
+                      ร้านที่ {supplierPage+1} จาก {total} · {grp.items.length} รายการ
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:6,flexShrink:0}}>
+                    <button onClick={() => { setSupplierPage(function(p){return Math.max(0,p-1);}); if(listTopRef.current) listTopRef.current.scrollIntoView({behavior:"smooth"}); }}
+                      disabled={supplierPage===0}
+                      style={{padding:"6px 14px",borderRadius:8,border:"1px solid var(--bdr)",
+                              background:supplierPage===0?"var(--g-100)":"var(--paper)",
+                              cursor:supplierPage===0?"not-allowed":"pointer",
+                              fontSize:13,fontFamily:"inherit"}}>
+                      ← ก่อนหน้า
+                    </button>
+                    <button onClick={() => { setSupplierPage(function(p){return Math.min(total-1,p+1);}); if(listTopRef.current) listTopRef.current.scrollIntoView({behavior:"smooth"}); }}
+                      disabled={supplierPage===total-1}
+                      style={{padding:"6px 14px",borderRadius:8,border:"1px solid var(--bdr)",
+                              background:supplierPage===total-1?"var(--g-100)":"#2563eb",
+                              color:supplierPage===total-1?"var(--muted)":"#fff",
+                              cursor:supplierPage===total-1?"not-allowed":"pointer",
+                              fontSize:13,fontFamily:"inherit",fontWeight:600}}>
+                      ถัดไป →
+                    </button>
+                  </div>
+                </div>
+                {/* Products */}
+                <div className="product-grid" style={{width:"100%",boxSizing:"border-box",minWidth:0}}>
+                  {grp.items.map(function(p) {
+                    return (
+                      <div key={p.sku}>
+                        <ProductCard p={p} accent={catColor(p.cat,allCats)} allCats={allCats} reasonTags={[]} onOrder={null} role={role}/>
+                      </div>
+                    );
+                  })}
+                </div>
+                {/* Dot navigation */}
+                {total > 1 && (
+                  <div style={{display:"flex",justifyContent:"center",gap:6,marginTop:16,flexWrap:"wrap"}}>
+                    {purchaseGroups.map(function(g,i) {
+                      return (
+                        <button key={g.name} onClick={() => { setSupplierPage(i); if(listTopRef.current) listTopRef.current.scrollIntoView({behavior:"smooth"}); }}
+                          style={{
+                            padding:"4px 10px",borderRadius:20,border:"1px solid var(--bdr)",
+                            background:i===supplierPage?"#2563eb":"var(--paper)",
+                            color:i===supplierPage?"#fff":"var(--muted)",
+                            fontSize:11,cursor:"pointer",fontFamily:"inherit",
+                            fontWeight:i===supplierPage?700:400,
+                          }}>
+                          {g.name.length > 12 ? g.name.slice(0,10)+"…" : g.name}
+                          <span style={{marginLeft:4,opacity:.7}}>({g.items.length})</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })() : filtered.length === 0 ? (
             <Empty title="ไม่พบสินค้า" sub={isGlobalSearch ? "ลองค้นหาด้วยคำอื่น" : reorderFilter ? "ไม่มีสินค้าที่ควรสั่ง 🎉" : "หมวดนี้ยังไม่มีสินค้า"}/>
           ) : viewMode === 'list' ? (
             /* ── List view — compact horizontal rows ── */
@@ -2346,8 +2434,8 @@ function CategoryView({ data, role }) {
               ))}
             </div>
           )}
-          {/* Pagination */}
-          {viewMode !== 'supplier' && (
+          {/* Pagination — ซ่อนใน purchase mode (มี supplier navigation แทน) และ supplier view */}
+          {!purchasePlanMode && viewMode !== 'supplier' && (
             <Pagination page={page} total={filtered.length} pageSize={PAGE_SIZE} onChange={setPage} listRef={listTopRef}/>
           )}
         </div>
