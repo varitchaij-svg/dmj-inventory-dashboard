@@ -1,4 +1,53 @@
 // views-analytics.jsx — depends on views-main.jsx (loaded first)
+// ─── PurchaseGroupView — จัดกลุ่มสินค้าตาม supplier สำหรับ owner planning ───
+function PurchaseGroupView({ products }) {
+  // group by lastSupplier || vendor || "ไม่ระบุ"
+  const groups = {};
+  products.forEach(function(p) {
+    const sup = ((p.lastSupplier || p.vendor || "ไม่ระบุ") + "").trim();
+    if (!groups[sup]) groups[sup] = [];
+    groups[sup].push(p);
+  });
+  const sorted = Object.keys(groups).sort();
+  if (sorted.length === 0) return (
+    <Card padding={true}><Empty title="ไม่พบสินค้า" sub="ลองเปลี่ยน filter"/></Card>
+  );
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:0}}>
+      {sorted.map(function(sup) {
+        const items = groups[sup].slice().sort(function(a,b) { return (a.qtyStore||0) - (b.qtyStore||0); });
+        return (
+          <div key={sup} style={{marginBottom:16}}>
+            <div style={{padding:"8px 12px",background:"#f3f4f6",borderRadius:8,fontWeight:700,fontSize:14,marginBottom:8}}>
+              🏪 {sup} <span style={{fontWeight:400,color:"#6b7280",fontSize:12}}>({items.length} รายการ)</span>
+            </div>
+            {items.map(function(p) {
+              const isOut = (p.qtyStore||0) === 0;
+              const isLow = !isOut && (p.qtyStore||0) <= 5;
+              const badge = isOut ? {bg:"#fef2f2",color:"#dc2626",label:"หมด!"} :
+                            isLow ? {bg:"#fff7ed",color:"#ea580c",label:"ต่ำ"} :
+                            {bg:"#f0fdf4",color:"#16a34a",label:"ปกติ"};
+              return (
+                <div key={p.sku} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",borderBottom:"1px solid #f3f4f6"}}>
+                  {p.imageUrl && <img src={p.imageUrl} style={{width:40,height:40,objectFit:"cover",borderRadius:6,flexShrink:0}} onError={function(e){e.target.style.display="none";}}/>}
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name}</div>
+                    <div style={{fontSize:12,color:"#6b7280"}}>{p.sku}</div>
+                  </div>
+                  <div style={{textAlign:"right",flexShrink:0}}>
+                    <div style={{fontSize:13}}>🏪 {p.qtyStore||0} <span style={{color:"#9ca3af"}}>/ 🏭 {p.qtyWH||0}</span></div>
+                    <span style={{fontSize:11,padding:"2px 6px",borderRadius:999,background:badge.bg,color:badge.color}}>{badge.label}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── FrontStoreView ───
 function FrontStoreView({ data, role }) {
   const products = data.products || [];
@@ -30,6 +79,7 @@ function FrontStoreView({ data, role }) {
   const [savedSkus, setSavedSkus] = uS(new Set());
   const [scrollToSku, setScrollToSku] = uS(null);
   const [showMode, setShowMode] = uS("all");
+  const [purchaseMode, setPurchaseMode] = uS(false);
   const [mounted, setMounted] = uS(false);
   uE(() => { const t = setTimeout(() => setMounted(true), 350); return () => clearTimeout(t); }, []);
 
@@ -53,7 +103,7 @@ function FrontStoreView({ data, role }) {
   const baseFiltered = uM(() => {
     let f = products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า");
     if (activeCat !== "ALL") f = f.filter(p => p.cat === activeCat);
-    if (supplierFilter) f = f.filter(p => (p.lastSupplier || p.vendor) === supplierFilter);
+    if (supplierFilter) f = f.filter(p => { const sup = (p.lastSupplier || p.vendor || ""); return sup === supplierFilter || sup.toLowerCase().includes(supplierFilter.toLowerCase()); });
     if (search) {
       const q = search.trim().toLowerCase();
       f = f.filter(p => (p.sku||"").toLowerCase().includes(q) || (p.name||"").toLowerCase().includes(q));
@@ -71,6 +121,7 @@ function FrontStoreView({ data, role }) {
         if (v == null || v === "") return false;
         return parseInt(v) !== (p.qtyStore ?? 0);
       });
+    if (showMode === "reorder") return baseFiltered.filter(function(p) { return (p.qtyStore||0) <= 12 && (p.qtyWH||0) > 0; });
     return baseFiltered;
   }, [baseFiltered, showMode, checkedQtys]);
 
@@ -159,6 +210,8 @@ function FrontStoreView({ data, role }) {
   const PAGE_SIZE = 20;
   const [page, setPage] = uS(0);
   uE(() => { setPage(0); }, [activeCat, supplierFilter, search, showMode]);
+  // ปิด purchase mode เมื่อ role ไม่ใช่ owner
+  uE(() => { if (role !== "owner") setPurchaseMode(false); }, [role]);
 
   const totalInCat = activeCat === "ALL"
     ? products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า").length
@@ -196,6 +249,20 @@ function FrontStoreView({ data, role }) {
         </div>
         <ScanButton size={40} onScan={handleScanDetected}
           style={{border:"1.5px solid var(--g-300)", borderRadius:10, flexShrink:0}}/>
+        {role === "owner" && (
+          <div style={{display:"flex",gap:4,border:"1px solid #e5e7eb",borderRadius:8,overflow:"hidden"}}>
+            <button onClick={() => setPurchaseMode(false)}
+              style={{padding:"6px 12px",fontSize:13,border:"none",background:!purchaseMode?"#2563eb":"#f9fafb",
+                      color:!purchaseMode?"#fff":"#374151",cursor:"pointer",fontFamily:"inherit"}}>
+              ตรวจสต็อก
+            </button>
+            <button onClick={() => setPurchaseMode(true)}
+              style={{padding:"6px 12px",fontSize:13,border:"none",background:purchaseMode?"#2563eb":"#f9fafb",
+                      color:purchaseMode?"#fff":"#374151",cursor:"pointer",fontFamily:"inherit"}}>
+              📋 จัดซื้อ
+            </button>
+          </div>
+        )}
         <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2,flexShrink:0}}>
           <button onClick={() => handleSave()}
             disabled={saving || touchedWithValue === 0}
@@ -227,6 +294,7 @@ function FrontStoreView({ data, role }) {
             {value:"all",       label:"🗂️ ทั้งหมด"},
             {value:"unchecked", label:`⬜ รอเช็ค${uncheckedCount>0?` (${uncheckedCount})`:""}`},
             {value:"mismatch",  label:`❌ ไม่ตรง${mismatchCount>0?` (${mismatchCount})`:""}`},
+            {value:"reorder",   label:"🔄 ควรสั่ง"},
           ]}/>
           {supplierFilter && (
             <button onClick={() => setSupplierFilter("")}
@@ -265,7 +333,9 @@ function FrontStoreView({ data, role }) {
         </div>
       </Card>
 
-      {!mounted ? (
+      {purchaseMode ? (
+        <PurchaseGroupView products={baseFiltered}/>
+      ) : !mounted ? (
         <div className="front-grid">
           {Array.from({length:6}).map((_,i) => <SkeletonCard key={i}/>)}
         </div>

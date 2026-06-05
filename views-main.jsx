@@ -5359,6 +5359,8 @@ function SupplierSearch({ value, onChange, allSuppliers }) {
   const [text, setText] = uS(value || "");
   const [open, setOpen] = uS(false);
   const wrapRef = React.useRef(null);
+  // ref เก็บ blurTimeout เพื่อยกเลิกได้เมื่อ click suggestion ก่อน blur fire
+  const blurTimerRef = React.useRef(null);
 
   uE(() => { if (!value) setText(""); }, [value]);
   uE(() => {
@@ -5373,18 +5375,48 @@ function SupplierSearch({ value, onChange, allSuppliers }) {
     return allSuppliers.filter(s => s.toLowerCase().includes(q));
   }, [text, allSuppliers]);
 
-  const select = (s) => { setText(s); onChange(s); setOpen(false); };
-  const clear = () => { setText(""); onChange(""); setOpen(false); };
+  const select = (s) => {
+    // ยกเลิก blur timer (ถ้ามี) ก่อน click suggestion ทำงาน
+    if (blurTimerRef.current) { clearTimeout(blurTimerRef.current); blurTimerRef.current = null; }
+    setText(s); onChange(s); setOpen(false);
+  };
+  const clear = () => {
+    if (blurTimerRef.current) { clearTimeout(blurTimerRef.current); blurTimerRef.current = null; }
+    setText(""); onChange(""); setOpen(false);
+  };
+
+  // ตรวจว่า value ปัจจุบันเป็น free-text (ไม่อยู่ใน list) หรือไม่
+  const isFreeText = value && !allSuppliers.includes(value);
 
   return (
     <div ref={wrapRef} style={{position:"relative", minWidth:150, flex:"0 0 auto"}}>
       <div style={{display:"flex",alignItems:"center",
                    border:`1.5px solid ${value ? "var(--g-500)" : "var(--bdr)"}`,
                    borderRadius:10, background:"#fff", overflow:"hidden"}}>
+        {/* แสดงไอคอน ✏️ เล็กๆ เมื่อกรองด้วย free-text ที่ไม่อยู่ใน suggestions */}
+        {isFreeText && (
+          <span style={{paddingLeft:8,fontSize:11,color:"var(--warn)",flexShrink:0,userSelect:"none"}}>✏️</span>
+        )}
         <input type="text" placeholder="🏪 ซัพพลายเออร์..."
           value={text}
           onChange={e => { setText(e.target.value); setOpen(true); onChange(""); }}
           onFocus={() => setOpen(true)}
+          onKeyDown={e => {
+            // Enter → ใช้ค่าที่พิมพ์เป็น filter ทันที แม้ไม่อยู่ใน suggestions
+            if (e.key === "Enter" && text.trim()) {
+              if (blurTimerRef.current) { clearTimeout(blurTimerRef.current); blurTimerRef.current = null; }
+              onChange(text.trim()); setOpen(false);
+            }
+          }}
+          onBlur={() => {
+            // delay 150ms กันแข่งกับ onMouseDown ของ suggestion button
+            blurTimerRef.current = setTimeout(function() {
+              blurTimerRef.current = null;
+              if (text.trim() && text.trim() !== value) {
+                onChange(text.trim()); setOpen(false);
+              }
+            }, 150);
+          }}
           style={{flex:1, padding:"8px 10px", border:"none", outline:"none",
                   fontSize:13, fontFamily:"inherit",
                   color: value ? "var(--g-700)" : "var(--text)",
@@ -5422,7 +5454,6 @@ function SupplierSearch({ value, onChange, allSuppliers }) {
     </div>
   );
 }
-
 // ─── Memoized FrontStore Card ───
 const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty, onImageClick, onOpenCalc }) {
   const sysStore  = p.qtyStore ?? 0;
