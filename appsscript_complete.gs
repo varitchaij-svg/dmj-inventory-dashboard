@@ -3162,7 +3162,10 @@ function sendPendingTruckOrders() {
     if (!isPending) continue;
     pending.push({ sku: sku, name: name || sku, qty: qty });
   }
-  if (!pending.length) return;
+  if (!pending.length) {
+    sendLineGroup_("✅ ไม่มีของรอขึ้นรถแล้ว\nจัดครบหมดแล้ว 👍");
+    return;
+  }
 
   var hour = new Date().getHours();
   var label = hour < 12 ? '🌅 เช้า' : '🌞 บ่าย';
@@ -3240,7 +3243,11 @@ function testTruckNotification() {
     pending.push({ sku: sku, name: name || sku, qty: qty });
   }
   Logger.log("pending truck orders: " + pending.length);
-  if (!pending.length) { Logger.log("ไม่มีรายการรอขึ้นรถ"); return; }
+  if (!pending.length) {
+    Logger.log("ไม่มีรายการรอขึ้นรถ");
+    sendLineGroup_("✅ ไม่มีของรอขึ้นรถแล้ว\nจัดครบหมดแล้ว 👍");
+    return;
+  }
 
   var groupId = PropertiesService.getScriptProperties().getProperty('LINE_GROUP_ID');
   if (!groupId) { Logger.log("ไม่มี LINE_GROUP_ID"); return; }
