@@ -2663,7 +2663,20 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role }) {
 // ─────────────────────────────────────────────────────────────────────
 // STOCK / ALERTS — absolute thresholds, exclude MTO
 // ─────────────────────────────────────────────────────────────────────
-const STOCK_PAGE = 50;
+const STOCK_PAGE = 20;
+
+function StatusBadge({ p, filter }) {
+  if (filter === "out")  return React.createElement("span", {className:"chip dang"}, "หมด!");
+  if (filter === "low") {
+    if (p.qty < 12)  return React.createElement("span", {className:"chip dang"}, "🚨 ด่วน (" + p.qty + ")");
+    if (p.qty < 24)  return React.createElement("span", {className:"chip warn"}, "⚠️ ใกล้หมด (" + p.qty + ")");
+    return React.createElement("span", {className:"chip warn"}, "เหลือ " + p.qty + "/" + p.threshold);
+  }
+  if (filter === "drop") return React.createElement("span", {className:"chip", style:{background:"#f5e7f5",color:"#8a3a8a",borderColor:"#e6cde6"}}, "ลด " + p.dropPct.toFixed(0) + "%");
+  if (filter === "slow") return React.createElement("span", {className:"chip info"}, p.soldQty === 0 ? "ไม่เคยขาย" : (p.soldQty/p.qty*100).toFixed(1) + "%");
+  if (filter === "over") return React.createElement("span", {className:"chip info"}, (p.monthsLeft > 99 ? ">99" : p.monthsLeft.toFixed(1)) + " เดือน");
+  return null;
+}
 
 function StockView({ data, role }) {
   const { products, thresholds: dataThresholds } = data;
@@ -2675,6 +2688,7 @@ function StockView({ data, role }) {
   const [defaultThr, setDefaultThr] = uS(dataThresholds?.default || 36);
   const [overrides, setOverrides] = uS(dataThresholds?.overrides || { "แจกันแก้ว": 3, "เรซิ่นและอื่นๆ": 3 });
   const [supplierFilter, setSupplierFilter] = uS(null);
+  const [activeCat, setActiveCat] = uS("ALL");
 
   const getThr = uC((cat) => overrides[cat] != null ? overrides[cat] : defaultThr, [overrides, defaultThr]);
 
@@ -2752,6 +2766,7 @@ function StockView({ data, role }) {
 
   const list = uM(() => {
     let result = rawList;
+    if (activeCat !== "ALL") result = result.filter(p => p.cat === activeCat);
     if (supplierFilter) result = result.filter(p => (p.lastSupplier || p.vendor) === supplierFilter);
     if (!stockSearch) return result;
     const q = stockSearch.toLowerCase();
@@ -2760,7 +2775,7 @@ function StockView({ data, role }) {
       (p.name || "").toLowerCase().includes(q) ||
       (p.cat || "").toLowerCase().includes(q)
     );
-  }, [rawList, stockSearch, supplierFilter]);
+  }, [rawList, stockSearch, supplierFilter, activeCat]);
 
   const totalPages = Math.ceil(list.length / STOCK_PAGE);
   const paginated  = list.slice(page * STOCK_PAGE, (page + 1) * STOCK_PAGE);
@@ -2777,16 +2792,26 @@ function StockView({ data, role }) {
       </div>
 
       <div className="row row-5" style={{marginBottom: 20}}>
-        <KPI label="⚠️ ใกล้หมด — สั่งด่วน" accent="#c2570a" icon={I.warning}
-             value={fmtN(nearOut.length)} sub={`≤ ${defaultThr} ชิ้น (ปรับได้)`}/>
-        <KPI label="🚫 หมดสต๊อกแล้ว" accent="#b8341c" icon={I.alert}
-             value={fmtN(outOfStock.length)} sub="แต่ยังมียอดขาย"/>
-        <KPI label="📉 ยอดขายตก" accent="#8a3a8a" icon={I.alert}
-             value={fmtN(declining.length)} sub="ขายลดลง > 60%"/>
-        <KPI label="🐌 สินค้าจมนาน" accent="#a07417" icon={I.package}
-             value={fmtN(slowMovers.length)} sub="ขาย < 10% ของสต๊อก"/>
-        <KPI label="📈 สต๊อกเกินจำเป็น" accent="#1f6f8b" icon={I.layers}
-             value={fmtN(overstocked.length)} sub="พอขาย > 12 เดือน"/>
+        <div style={{cursor:"pointer"}} onClick={() => { setFilter("low"); setPage(0); setStockSearch(""); setSupplierFilter(null); setActiveCat("ALL"); }}>
+          <KPI label="⚠️ ใกล้หมด — สั่งด่วน" accent="#c2570a" icon={I.warning}
+               value={fmtN(nearOut.length)} sub={`≤ ${defaultThr} ชิ้น (ปรับได้)`}/>
+        </div>
+        <div style={{cursor:"pointer"}} onClick={() => { setFilter("out"); setPage(0); setStockSearch(""); setSupplierFilter(null); setActiveCat("ALL"); }}>
+          <KPI label="🚫 หมดสต๊อกแล้ว" accent="#b8341c" icon={I.alert}
+               value={fmtN(outOfStock.length)} sub="แต่ยังมียอดขาย"/>
+        </div>
+        <div style={{cursor:"pointer"}} onClick={() => { setFilter("drop"); setPage(0); setStockSearch(""); setSupplierFilter(null); setActiveCat("ALL"); }}>
+          <KPI label="📉 ยอดขายตก" accent="#8a3a8a" icon={I.alert}
+               value={fmtN(declining.length)} sub="ขายลดลง > 60%"/>
+        </div>
+        <div style={{cursor:"pointer"}} onClick={() => { setFilter("slow"); setPage(0); setStockSearch(""); setSupplierFilter(null); setActiveCat("ALL"); }}>
+          <KPI label="🐌 สินค้าจมนาน" accent="#a07417" icon={I.package}
+               value={fmtN(slowMovers.length)} sub="ขาย < 10% ของสต๊อก"/>
+        </div>
+        <div style={{cursor:"pointer"}} onClick={() => { setFilter("over"); setPage(0); setStockSearch(""); setSupplierFilter(null); setActiveCat("ALL"); }}>
+          <KPI label="📈 สต๊อกเกินจำเป็น" accent="#1f6f8b" icon={I.layers}
+               value={fmtN(overstocked.length)} sub="พอขาย > 12 เดือน"/>
+        </div>
       </div>
 
       {/* Threshold editor */}
@@ -2847,12 +2872,30 @@ function StockView({ data, role }) {
           ].map(t => (
             <button key={t.id} className={`fchip${filter===t.id?' active':''}`}
                     style={filter===t.id?{background:t.color,borderColor:t.color,color:"#fff",boxShadow:`0 2px 6px ${t.color}55`}:{}}
-                    onClick={() => { setFilter(t.id); setPage(0); setStockSearch(""); setSupplierFilter(null); }}>
+                    onClick={() => { setFilter(t.id); setPage(0); setStockSearch(""); setSupplierFilter(null); setActiveCat("ALL"); }}>
               {t.label} <span style={{opacity:.8}}>({t.count})</span>
             </button>
           ))}
         </div>
       </div>
+
+      {/* Category chips */}
+      {allCats.length > 1 && (
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",padding:"8px 0 4px"}}>
+          {["ALL", ...allCats].map(function(c) {
+            return (
+              <button key={c} onClick={function(){ setActiveCat(c); setPage(0); }}
+                style={{padding:"4px 10px",borderRadius:999,fontSize:12,border:"1.5px solid",
+                        borderColor: activeCat===c?"#2563eb":"#e5e7eb",
+                        background: activeCat===c?"#eff6ff":"#fff",
+                        color: activeCat===c?"#2563eb":"#374151",
+                        cursor:"pointer",fontFamily:"inherit"}}>
+                {c === "ALL" ? "ทั้งหมด" : c}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Supplier filter */}
       {allSuppliers.length > 0 && (
@@ -2912,92 +2955,72 @@ function StockView({ data, role }) {
         </span>
       </div>
 
-      <Card padding={false}>
-        <div style={{overflowX:"auto", WebkitOverflowScrolling:"touch", maxWidth:"100%"}}>
-          <table className="t t-stock">
-            <thead><tr>
-              <th style={{paddingLeft:20, width:56}}>รูป</th>
-              <th>สินค้า</th>
-              <th style={{width:140}}>หมวด</th>
-              <th style={{width:120}}>ร้านที่ซื้อ</th>
-              <th className="num" style={{width:120}}>คงเหลือ</th>
-              <th className="num" style={{width:90}}>เกณฑ์</th>
-              <th className="num" style={{width:90}}>ขาย/เดือน</th>
-              {role === 'owner' && <th className="num" style={{width:110}}>รายได้รวม</th>}
-              <th className="num" style={{width:140}}>สถานะ</th>
-            </tr></thead>
-            <tbody>
-              {paginated.map((p, i) => {
-                const ratio = p.qty / (p.threshold || 1);
-                const lvlColor = p.qty === 0 ? "var(--dang)" :
-                                 ratio <= 0.33 ? "var(--dang)" :
-                                 ratio <= 0.66 ? "var(--warn)" : "var(--gold)";
-                return (
-                  <tr key={p.sku} style={{cursor:"pointer"}} onClick={() => setModalP(p)}>
-                    <td style={{paddingLeft:20}}>
-                      {p.imageUrl ? (
-                        <div style={{width:40,height:40,borderRadius:6,
-                                     backgroundImage:`url("${p.imageUrl}")`,
-                                     backgroundSize:"contain",backgroundPosition:"center",
-                                     backgroundRepeat:"no-repeat",backgroundColor:"#fff",
-                                     border:"1px solid var(--bdr)"}}/>
-                      ) : (
-                        <div style={{width:40,height:40,borderRadius:6,
-                                     background: p.color ? p.color.hex+"33" : "var(--g-50)",
-                                     border: p.color ? `2px solid ${p.color.hex}` : "1px solid var(--bdr)",
-                                     display:"flex",alignItems:"center",justifyContent:"center"}}>
-                          {!p.color && React.cloneElement(I.leaf, {size:16, stroke:1.5})}
-                        </div>
-                      )}
-                    </td>
-                    <td>
-                      <div style={{display:"flex",alignItems:"center",gap:10}}>
-                        <span className="skucode">{p.sku}</span>
-                        <span style={{fontWeight:500}}>{p.name}</span>
-                      </div>
-                    </td>
-                    <td>
-                      <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11.5,color:"var(--muted)"}}>
-                        <span style={{width:7,height:7,borderRadius:"50%",background:catColor(p.cat, allCats)}}/>
-                        {p.cat}
-                      </span>
-                    </td>
-                    <td style={{fontSize:12, color:"var(--muted)"}}>
-                      {(p.lastSupplier || p.vendor) || <span style={{color:"var(--light)"}}>—</span>}
-                      {p.lastStockInDate && <div style={{fontSize:10,color:"var(--g-700)",marginTop:1}}>เข้า {p.lastStockInDate}</div>}
-                    </td>
-                    <td className="num">
-                      <div style={{fontWeight:700, color:lvlColor, fontSize:14, lineHeight:1.2}}>{fmtN(p.qty)}</div>
-                      {(p.qtyStore > 0 || p.qtyWH > 0) && (
-                        <div style={{fontSize:10, color:"var(--muted)", marginTop:2}}>
-                          ร้าน {fmtN(p.qtyStore||0)} · คลัง {fmtN(p.qtyWH||0)}
-                        </div>
-                      )}
-                    </td>
-                    <td className="num" style={{fontSize:12,color:"var(--muted)"}}>≤ {p.threshold}</td>
-                    <td className="num">{p.avgMonthly>0?fmtN(p.avgMonthly):"—"}</td>
-                    {role === 'owner' && <td className="num" style={{fontWeight:600, color:"var(--g-700)"}}>{fmtB(p.soldRev)}</td>}
-                    <td className="num">
-                      {filter==='out'  && <span className="chip dang">หมด!</span>}
-                      {filter==='low'  && (
-                        p.qty < 12
-                          ? <span className="chip dang">🚨 ต้องส่งด่วน ({p.qty})</span>
-                          : p.qty < 24
-                            ? <span className="chip warn">⚠️ ใกล้ต้องส่ง ({p.qty})</span>
-                            : <span className="chip warn">เหลือ {p.qty}/{p.threshold}</span>
-                      )}
-                      {filter==='drop' && <span className="chip" style={{background:"#f5e7f5",color:"#8a3a8a",borderColor:"#e6cde6"}}>ลด {p.dropPct.toFixed(0)}%</span>}
-                      {filter==='slow' && <span className="chip info">{p.soldQty===0?"ไม่เคยขาย":`${(p.soldQty/p.qty*100).toFixed(1)}%`}</span>}
-                      {filter==='over' && <span className="chip info">{p.monthsLeft > 99 ? ">99" : p.monthsLeft.toFixed(1)} เดือน</span>}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-        {list.length === 0 && <Empty icon={I.check} title="ยอดเยี่ยม!" sub="ไม่มีรายการในกลุ่มนี้"/>}
-      </Card>
+      <div style={{display:"grid",gridTemplateColumns:"1fr",gap:8}}>
+        {paginated.map(function(p) {
+          const ratio = p.qty / (p.threshold || 1);
+          const lvlColor = p.qty === 0 ? "var(--dang)" :
+                           ratio <= 0.33 ? "var(--dang)" :
+                           ratio <= 0.66 ? "var(--warn)" : "var(--gold)";
+          return (
+            <div key={p.sku} onClick={function(){setModalP(p);}}
+              style={{background:"#fff",borderRadius:12,padding:"12px",
+                      border:"1px solid #f3f4f6",display:"flex",gap:10,
+                      alignItems:"flex-start",cursor:"pointer",overflow:"hidden"}}>
+              {/* รูป */}
+              {p.imageUrl ? (
+                <img src={p.imageUrl}
+                  style={{width:48,height:48,objectFit:"cover",borderRadius:8,flexShrink:0}}
+                  onError={function(e){e.target.style.display="none";}}/>
+              ) : (
+                <div style={{width:48,height:48,borderRadius:8,flexShrink:0,
+                             background: p.color ? p.color.hex+"33" : "var(--g-50)",
+                             border: p.color ? "2px solid "+p.color.hex : "1px solid var(--bdr)",
+                             display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  {!p.color && React.cloneElement(I.leaf, {size:18, stroke:1.5})}
+                </div>
+              )}
+              {/* Content */}
+              <div style={{flex:1,minWidth:0}}>
+                {/* Row 1: SKU + ชื่อ + status badge */}
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:4,marginBottom:2}}>
+                  <div style={{minWidth:0,flex:1}}>
+                    <span style={{fontSize:11,color:"#9ca3af"}}>{p.sku}</span>
+                    <div style={{fontSize:14,fontWeight:600,lineHeight:1.3,overflow:"hidden",
+                                 textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}</div>
+                  </div>
+                  <StatusBadge p={p} filter={filter} />
+                </div>
+                {/* Row 2: หมวด · ร้านที่ซื้อ */}
+                <div style={{fontSize:12,color:"#6b7280",marginBottom:6,display:"flex",alignItems:"center",gap:4}}>
+                  <span style={{width:7,height:7,borderRadius:"50%",background:catColor(p.cat, allCats),flexShrink:0,display:"inline-block"}}/>
+                  <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                    {p.cat}{(p.lastSupplier || p.vendor) ? " · " + (p.lastSupplier || p.vendor) : ""}
+                  </span>
+                </div>
+                {/* Row 3: จำนวนสต๊อก + avg */}
+                <div style={{display:"flex",gap:10,fontSize:13,alignItems:"center",flexWrap:"wrap"}}>
+                  <span style={{fontWeight:700,color:lvlColor}}>
+                    {fmtN(p.qty)} ชิ้น
+                  </span>
+                  {(p.qtyStore > 0 || p.qtyWH > 0) && (
+                    <span style={{fontSize:11,color:"var(--muted)"}}>
+                      🏪{fmtN(p.qtyStore||0)} 🏭{fmtN(p.qtyWH||0)}
+                    </span>
+                  )}
+                  <span style={{color:"#6b7280",marginLeft:"auto",fontSize:12,whiteSpace:"nowrap"}}>
+                    {p.avgMonthly > 0 ? fmtN(p.avgMonthly) + " /เดือน" : "—"}
+                  </span>
+                </div>
+                {/* Row 4: revenue (owner only) */}
+                {role === "owner" && p.soldRev > 0 && (
+                  <div style={{fontSize:12,color:"#059669",marginTop:4}}>{fmtB(p.soldRev)}</div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {list.length === 0 && <Empty icon={I.check} title="ยอดเยี่ยม!" sub="ไม่มีรายการในกลุ่มนี้"/>}
 
       {/* Pagination */}
       {totalPages > 1 && (
