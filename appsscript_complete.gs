@@ -1038,7 +1038,7 @@ function updateOrderState(ss, body) {
         if (body.carryMode === "carry") {
           try {
             const productName = body.name || body.sku || "(ไม่ทราบชื่อ)";
-            sendLineGroupMentionAll_("order 🚶\n📦 " + productName + "\nรหัส: " + (body.sku||"") + "\nวันที่: " + (body.date||""));
+            sendLineGroupOrderCard_(productName, body.sku||"", body.date||"", body.image||"");
           } catch(e) {}
         }
         return ok({ updated: body.orderId, row: sheetRow });
@@ -1060,7 +1060,7 @@ function updateOrderState(ss, body) {
         if (body.carryMode === "carry") {
           try {
             const productName = body.name || body.sku || "(ไม่ทราบชื่อ)";
-            sendLineGroupMentionAll_("order 🚶\n📦 " + productName + "\nรหัส: " + (body.sku||"") + "\nวันที่: " + (body.date||""));
+            sendLineGroupOrderCard_(productName, body.sku||"", body.date||"", body.image||"");
           } catch(e) {}
         }
         return ok({ updated: body.sku, row });
@@ -3094,6 +3094,35 @@ function sendLineGroupMentionAll_(msg) {
         mention: { mentionees: [{ index: 0, length: 4, type: "all" }] }
       }]
     }),
+    muteHttpExceptions: true
+  });
+}
+
+function sendLineGroupOrderCard_(name, sku, date, imageUrl) {
+  var groupId = PropertiesService.getScriptProperties().getProperty('LINE_GROUP_ID');
+  if (!groupId) return;
+  var mentionMsg = { type: "text", text: "@All order 🚶", mention: { mentionees: [{ index: 0, length: 4, type: "all" }] } };
+  var hero = imageUrl ? [{ type: "image", url: imageUrl, size: "full", aspectRatio: "20:13", aspectMode: "cover" }] : [];
+  var card = {
+    type: "flex", altText: "order 🚶 " + name,
+    contents: {
+      type: "bubble",
+      hero: imageUrl ? { type: "image", url: imageUrl, size: "full", aspectRatio: "20:13", aspectMode: "cover" } : undefined,
+      body: {
+        type: "box", layout: "vertical", spacing: "sm",
+        contents: [
+          { type: "text", text: "order 🚶", weight: "bold", size: "lg", color: "#1565c0" },
+          { type: "text", text: name || sku, weight: "bold", size: "md", wrap: true },
+          { type: "text", text: "รหัส: " + (sku||""), size: "sm", color: "#888888" },
+          { type: "text", text: "วันที่: " + (date||""), size: "sm", color: "#888888" },
+        ]
+      }
+    }
+  };
+  UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
+    method: "post",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN },
+    payload: JSON.stringify({ to: groupId, messages: [mentionMsg, card] }),
     muteHttpExceptions: true
   });
 }

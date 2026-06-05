@@ -7684,6 +7684,7 @@ async function syncOrderUpdate(order, updates) {
         sku:         order.sku,
         date:        order.date,
         name:        updates.name,
+        image:       updates.image,
         status:      updates.status,
         preparedQty: updates.preparedQty,
         printFlag:   updates.printFlag,
@@ -7736,7 +7737,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
   };
   const setCarryMode = m => {
     onPatch(order.id, {carryMode: m});
-    if (m === "carry") syncOrderUpdate(order, {carryMode: "carry", name: order.name});
+    if (m === "carry") syncOrderUpdate(order, {carryMode: "carry", name: order.name, image: order.image});
   };
   const markComplete = () => {
     if (!order.printFlag) {
