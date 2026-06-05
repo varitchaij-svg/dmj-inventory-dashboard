@@ -8402,9 +8402,31 @@ function OrderListView({ data, role }) {
         <div style={{padding:"40px 20px"}}>
           <Empty title="ไม่มีรายการใน filter นี้" sub="ลองเลือก filter อื่น"/>
         </div>
-      ) : (
-        filtered.map(order => <OrderItemRow key={order.id} order={order} onPatch={patch} productMap={productMap} role={role} skuLocks={skuLocks} storageData={data.storage}/>)
-      )}
+      ) : (() => {
+        const carryItems = filtered.filter(o => o.carryMode === "carry");
+        const truckItems = filtered.filter(o => o.carryMode !== "carry");
+        const showHeaders = carryItems.length > 0 && truckItems.length > 0;
+        const sectionHeader = (emoji, label, count, isCarry) => (
+          <div style={{
+            display:"flex",alignItems:"center",gap:8,
+            padding:"7px 14px",borderRadius:10,marginBottom:8,marginTop:4,
+            background: isCarry ? "#f0fdf4" : "#eff6ff",
+            border:`1.5px solid ${isCarry?"#bbf7d0":"#bfdbfe"}`,
+          }}>
+            <span style={{fontSize:16}}>{emoji}</span>
+            <span style={{fontWeight:700,fontSize:13,color:isCarry?"var(--g-700)":"#1d4ed8"}}>{label}</span>
+            <span style={{fontSize:11,color:"var(--muted)"}}>{count} รายการ</span>
+          </div>
+        );
+        return (
+          <div>
+            {showHeaders && sectionHeader("🚶","หิ้วเอง", carryItems.length, true)}
+            {carryItems.map(order => <OrderItemRow key={order.id} order={order} onPatch={patch} productMap={productMap} role={role} skuLocks={skuLocks} storageData={data.storage}/>)}
+            {showHeaders && sectionHeader("🚛","ขึ้นรถ", truckItems.length, false)}
+            {truckItems.map(order => <OrderItemRow key={order.id} order={order} onPatch={patch} productMap={productMap} role={role} skuLocks={skuLocks} storageData={data.storage}/>)}
+          </div>
+        );
+      })()}
     </div>
   );
 }
