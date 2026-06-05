@@ -330,7 +330,7 @@ function App() {
   const [moreOpen, setMoreOpen] = usS(false); // dropdown "เพิ่มเติม" บน navtabs (owner)
   const [installPrompt, setInstallPrompt] = usS(null);
   const [installDismissed, setInstallDismissed] = usS(() => !!sessionStorage.getItem("dmj_install_dismissed"));
-  const [checkModal, setCheckModal] = usS(null); // pending check request to show
+  const [activeCheckRequest, setActiveCheckRequest] = usS(null); // check request ที่ fs/wh กำลังทำ
   const [navToast, showNavToast, hideNavToast] = useToast(); // toast สำหรับ nav-level errors
   const tabHistoryRef = React.useRef([]); // track tab navigation for Android back
 
@@ -449,19 +449,6 @@ function App() {
   }, []);
 
   const pendingChecks = (data && data.stockCheckRequests) ? data.stockCheckRequests : [];
-
-  const handleCompleteStockCheck = usC(async function(reqId) {
-    if (!SHEET_DEPLOY_URL) return;
-    try {
-      await fetch(SHEET_DEPLOY_URL, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({ completeStockCheck: true, reqId: reqId, actor: role }),
-      });
-      setCheckModal(null);
-      fetchFromSheet();
-    } catch(e) { console.error("completeStockCheck:", e); }
-  }, [fetchFromSheet]);
 
   // Tab navigation with Android back-button support
   const handleSetTab = usC((newId) => {
@@ -741,49 +728,14 @@ function App() {
               {pendingChecks[0].names.slice(0,3).join(", ")}{pendingChecks[0].names.length > 3 ? "..." : ""}
             </div>
           </div>
-          <button onClick={function() { setCheckModal(pendingChecks[0]); }}
+          <button onClick={function() {
+            setActiveCheckRequest(pendingChecks[0]);
+            handleSetTab("stockcount");
+          }}
             style={{background:"#f59e0b",color:"#fff",border:"none",borderRadius:8,
                     padding:"8px 12px",fontWeight:600,fontSize:13,cursor:"pointer"}}>
             ดูรายการ
           </button>
-        </div>
-      )}
-
-      {/* ─── Stock check modal ─── */}
-      {checkModal && (
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:1000,
-                     display:"flex",alignItems:"flex-end",justifyContent:"center"}}
-             onClick={function(e){ if(e.target===e.currentTarget) setCheckModal(null); }}>
-          <div style={{background:"#fff",borderRadius:"16px 16px 0 0",width:"100%",maxWidth:480,
-                       maxHeight:"80vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
-            <div style={{padding:"16px",borderBottom:"1px solid #e5e7eb",display:"flex",alignItems:"center",gap:8}}>
-              <span style={{fontSize:20}}>📋</span>
-              <div style={{flex:1,fontWeight:600,fontSize:16}}>รายการเช็คสต็อก ({checkModal.skus.length} รายการ)</div>
-              <button onClick={function(){ setCheckModal(null); }}
-                style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:"#6b7280"}}>✕</button>
-            </div>
-            <div style={{overflowY:"auto",flex:1,padding:"8px 0"}}>
-              {checkModal.names.map(function(name, i) {
-                return (
-                  <div key={i} style={{padding:"10px 16px",borderBottom:"1px solid #f3f4f6",
-                                       display:"flex",gap:10,alignItems:"center"}}>
-                    <span style={{fontSize:12,color:"#9ca3af",minWidth:24}}>{i+1}</span>
-                    <div>
-                      <div style={{fontSize:14,fontWeight:500}}>{name}</div>
-                      <div style={{fontSize:11,color:"#6b7280"}}>{checkModal.skus[i]}</div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            <div style={{padding:"16px",borderTop:"1px solid #e5e7eb"}}>
-              <button onClick={function(){ handleCompleteStockCheck(checkModal.reqId); }}
-                style={{width:"100%",background:"#1f7f44",color:"#fff",border:"none",borderRadius:10,
-                        padding:"14px",fontWeight:700,fontSize:16,cursor:"pointer"}}>
-                ✅ เช็คเสร็จแล้ว
-              </button>
-            </div>
-          </div>
         </div>
       )}
 
@@ -810,7 +762,17 @@ function App() {
         {activeTab === "trends"       && <ErrorBoundary key="trends"><TrendsView data={data} role={role}/></ErrorBoundary>}
         {activeTab === "stock"        && <ErrorBoundary key="stock"><StockView data={data} role={role}/></ErrorBoundary>}
         {activeTab === "storage"      && <ErrorBoundary key="storage"><StorageView data={data}/></ErrorBoundary>}
-        {activeTab === "stockcount"   && <ErrorBoundary key="stockcount"><StockCountView data={data}/></ErrorBoundary>}
+        {activeTab === "stockcount"   && <ErrorBoundary key="stockcount"><StockCountView data={data}
+                                            checkRequest={activeCheckRequest}
+                                            onCheckComplete={async function(reqId){
+                                              try {
+                                                await fetch(SHEET_DEPLOY_URL, {method:"POST",
+                                                  headers:{"Content-Type":"text/plain;charset=utf-8"},
+                                                  body: JSON.stringify({completeStockCheck:true, reqId:reqId, actor:role})});
+                                                setActiveCheckRequest(null);
+                                                fetchFromSheet();
+                                              } catch(e){ console.error("completeStockCheck:", e); }
+                                            }}/></ErrorBoundary>}
         {activeTab === "frontstore"   && <ErrorBoundary key="frontstore"><FrontStoreView data={data} role={role}/></ErrorBoundary>}
         {activeTab === "transfers"    && <ErrorBoundary key="transfers"><TransferView data={data}/></ErrorBoundary>}
         {activeTab === "orders"       && <ErrorBoundary key="orders"><OrderListView data={data} role={role}/></ErrorBoundary>}

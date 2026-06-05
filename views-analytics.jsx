@@ -853,12 +853,23 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
 // ─────────────────────────────────────────────────────────────────────
 // STOCK COUNT VIEW — นับ stock คลัง ทีละล็อค (Owner + WH เท่านั้น)
 // ─────────────────────────────────────────────────────────────────────
-function StockCountView({ data }) {
+function StockCountView({ data, checkRequest, onCheckComplete }) {
   const storage    = data.storage  || {};
   const shelves    = storage.shelves || { A: 10, B: 10, locksPerShelf: 15 };
   const verifiedLockMap = storage.verifiedLockMap || {};
   const productLockMap  = storage.productLockMap  || {};
-  const products   = data.products || [];
+
+  // ถ้ามี checkRequest → กรองสินค้าเฉพาะ SKU ที่ owner ส่งมา
+  const checkSkuSet = uM(function() {
+    if (!checkRequest) return null;
+    return new Set(checkRequest.skus);
+  }, [checkRequest]);
+
+  const products = uM(function() {
+    var all = data.products || [];
+    if (!checkSkuSet) return all;
+    return all.filter(function(p){ return checkSkuSet.has(p.sku); });
+  }, [data.products, checkSkuSet]);
 
   const lockData = uM(() => {
     const merged = {};
@@ -1527,6 +1538,21 @@ function StockCountView({ data }) {
   if (step === 1) return (
     <>
       <Toast toast={toast} onClose={hideToast}/>
+      {/* ── Check Request banner ── */}
+      {checkRequest && (
+        <div style={{background:"#fffbeb",borderBottom:"1px solid #fcd34d",
+                     padding:"12px 16px",display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:18}}>📋</span>
+          <div style={{flex:1,fontSize:14}}>
+            <b>กำลังเช็คตามคำขอ</b> · {checkRequest.skus.length} รายการ
+          </div>
+          <button onClick={function(){ onCheckComplete && onCheckComplete(checkRequest.reqId); }}
+            style={{background:"#1f7f44",color:"#fff",border:"none",borderRadius:8,
+                    padding:"8px 14px",fontWeight:600,fontSize:13,cursor:"pointer"}}>
+            ✅ เสร็จแล้ว
+          </button>
+        </div>
+      )}
       <div style={{display:'flex',flexDirection:'column',gap:16,width:"100%",minWidth:0,boxSizing:"border-box"}}>
         <div>
           <div style={{fontSize:16,fontWeight:800}}>📊 นับ stock คลัง</div>
@@ -1702,6 +1728,21 @@ function StockCountView({ data }) {
   if (step === 2) return (
     <>
       <Toast toast={toast} onClose={hideToast}/>
+      {/* ── Check Request banner ── */}
+      {checkRequest && (
+        <div style={{background:"#fffbeb",borderBottom:"1px solid #fcd34d",
+                     padding:"12px 16px",display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:18}}>📋</span>
+          <div style={{flex:1,fontSize:14}}>
+            <b>กำลังเช็คตามคำขอ</b> · {checkRequest.skus.length} รายการ
+          </div>
+          <button onClick={function(){ onCheckComplete && onCheckComplete(checkRequest.reqId); }}
+            style={{background:"#1f7f44",color:"#fff",border:"none",borderRadius:8,
+                    padding:"8px 14px",fontWeight:600,fontSize:13,cursor:"pointer"}}>
+            ✅ เสร็จแล้ว
+          </button>
+        </div>
+      )}
       <div style={{display:'flex',flexDirection:'column',gap:14,width:"100%",minWidth:0,boxSizing:"border-box"}}>
         <div style={{display:'flex',alignItems:'center',gap:10}}>
           <button onClick={() => setStep(1)}
@@ -1761,6 +1802,21 @@ function StockCountView({ data }) {
   return (
     <>
       <Toast toast={toast} onClose={hideToast}/>
+      {/* ── Check Request banner ── */}
+      {checkRequest && (
+        <div style={{background:"#fffbeb",borderBottom:"1px solid #fcd34d",
+                     padding:"12px 16px",display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:18}}>📋</span>
+          <div style={{flex:1,fontSize:14}}>
+            <b>กำลังเช็คตามคำขอ</b> · {checkRequest.skus.length} รายการ
+          </div>
+          <button onClick={function(){ onCheckComplete && onCheckComplete(checkRequest.reqId); }}
+            style={{background:"#1f7f44",color:"#fff",border:"none",borderRadius:8,
+                    padding:"8px 14px",fontWeight:600,fontSize:13,cursor:"pointer"}}>
+            ✅ เสร็จแล้ว
+          </button>
+        </div>
+      )}
 
       {/* ── CalcPadModal ── */}
       <CalcPadModal

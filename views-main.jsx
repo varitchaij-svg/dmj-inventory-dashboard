@@ -2470,6 +2470,114 @@ function CategoryView({ data, role }) {
       </div>
       {orderProduct && <OrderModal product={orderProduct} onClose={() => setOrderProduct(null)}/>}
       <Toast toast={checkToast} onClose={hideCheckToast}/>
+
+      {/* ── Check Send Modal (bottom sheet) — owner เลือก supplier ก่อนส่ง ── */}
+      {checkSendOpen && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",zIndex:900,display:"flex",alignItems:"flex-end"}}
+          onClick={function(e){ if(e.target===e.currentTarget) setCheckSendOpen(false); }}>
+          <div style={{background:"#fff",borderRadius:"16px 16px 0 0",width:"100%",maxWidth:480,
+                       margin:"0 auto",maxHeight:"70vh",display:"flex",flexDirection:"column"}}>
+            <div style={{padding:"16px",borderBottom:"1px solid #e5e7eb",display:"flex",alignItems:"center",gap:8}}>
+              <div style={{flex:1,fontWeight:700,fontSize:16}}>📤 ส่งคำขอเช็คสต็อก</div>
+              <button onClick={function(){ setCheckSendOpen(false); }}
+                style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:"#6b7280"}}>✕</button>
+            </div>
+            {/* Quick-select all / ล้าง */}
+            <div style={{padding:"12px 16px 4px",display:"flex",gap:8,flexWrap:"wrap"}}>
+              <button onClick={function(){ setCheckSuppliers(new Set(supplierList.map(function(s){ return s.name; }))); }}
+                style={{padding:"6px 12px",borderRadius:20,border:"1px solid #d1fae5",
+                        background:"#ecfdf5",color:"#065f46",fontSize:13,cursor:"pointer",fontWeight:600}}>
+                เลือกทั้งหมด
+              </button>
+              <button onClick={function(){ setCheckSuppliers(new Set()); }}
+                style={{padding:"6px 12px",borderRadius:20,border:"1px solid #e5e7eb",
+                        background:"#f9fafb",color:"#6b7280",fontSize:13,cursor:"pointer"}}>
+                ล้าง
+              </button>
+            </div>
+            {/* Supplier chips */}
+            <div style={{overflowY:"auto",flex:1,padding:"8px 16px 4px"}}>
+              <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                {supplierList.map(function(s) {
+                  var sel = checkSuppliers.has(s.name);
+                  return (
+                    <button key={s.name} onClick={function(){
+                      setCheckSuppliers(function(prev){
+                        var n = new Set(prev);
+                        if(sel) n.delete(s.name); else n.add(s.name);
+                        return n;
+                      });
+                    }} style={{padding:"8px 14px",borderRadius:20,cursor:"pointer",fontSize:13,fontWeight:sel?600:400,
+                               border: sel?"2px solid #1f7f44":"1px solid #e5e7eb",
+                               background:sel?"#dcf2e2":"#fff", color:sel?"#1f7f44":"#374151"}}>
+                      {s.name} <span style={{fontSize:11,opacity:.7}}>({s.count})</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div style={{padding:"16px",borderTop:"1px solid #e5e7eb"}}>
+              {(function() {
+                var cnt = products.filter(function(p){
+                  var sup = p.vendor || p.lastSupplier;
+                  return checkSuppliers.has(sup) && p.cat && p.cat !== "ไม่มีรหัสสินค้า";
+                }).length;
+                return (
+                  <button disabled={!checkSuppliers.size || sendingCheck}
+                    onClick={async function(){
+                      var ps = products.filter(function(p){
+                        var sup = p.vendor || p.lastSupplier;
+                        return checkSuppliers.has(sup) && p.cat && p.cat !== "ไม่มีรหัสสินค้า";
+                      });
+                      if(!ps.length) return;
+                      setSendingCheck(true);
+                      try {
+                        var res = await fetch(SHEET_DEPLOY_URL, {
+                          method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"},
+                          body: JSON.stringify({createStockCheck:true, actor: role,
+                            skus: ps.map(function(p){ return p.sku; }),
+                            names: ps.map(function(p){ return p.name||p.sku; })}),
+                        });
+                        var json = await res.json();
+                        if(json.success){
+                          showCheckToast({type:"success",message:"ส่งคำขอเช็คสต็อก " + ps.length + " รายการแล้ว ✅"});
+                          setCheckSendOpen(false);
+                          setCheckSuppliers(new Set());
+                        } else showCheckToast({type:"error",message:"เกิดข้อผิดพลาด"});
+                      } catch(e){ showCheckToast({type:"error",message:"ส่งไม่สำเร็จ"}); }
+                      setSendingCheck(false);
+                    }}
+                    style={{width:"100%",background:checkSuppliers.size?"#1f7f44":"#e5e7eb",
+                            color:checkSuppliers.size?"#fff":"#9ca3af",border:"none",borderRadius:10,
+                            padding:"14px",fontWeight:700,fontSize:16,cursor:checkSuppliers.size?"pointer":"not-allowed"}}>
+                    {sendingCheck ? "กำลังส่ง..." : checkSuppliers.size ? "📤 ส่งขอเช็ค " + cnt + " รายการ" : "เลือกร้านค้าก่อน"}
+                  </button>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Floating button (owner) — ลากได้ ── */}
+      {role === "owner" && (
+        <div ref={floatRef}
+          onMouseDown={function(e){ startDrag(e.clientX, e.clientY); }}
+          onMouseMove={function(e){ moveDrag(e.clientX, e.clientY); }}
+          onMouseUp={endDrag}
+          onTouchStart={function(e){ startDrag(e.touches[0].clientX, e.touches[0].clientY); e.stopPropagation(); }}
+          onTouchMove={function(e){ moveDrag(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault(); }}
+          onTouchEnd={endDrag}
+          onClick={function(e){ if(!dragRef.current.moved) setCheckSendOpen(true); }}
+          style={{position:"fixed", right:20, bottom:90, zIndex:800,
+                  width:56, height:56, borderRadius:28,
+                  background:"#1f7f44", color:"#fff",
+                  display:"flex", alignItems:"center", justifyContent:"center",
+                  fontSize:22, boxShadow:"0 4px 12px rgba(0,0,0,.25)",
+                  cursor:"grab", userSelect:"none", touchAction:"none"}}>
+          📤
+        </div>
+      )}
     </div>
   );
 }
