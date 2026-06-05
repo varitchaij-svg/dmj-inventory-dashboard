@@ -3218,6 +3218,69 @@ function sendPendingTruckOrders() {
 }
 
 // รันครั้งแรกเพื่อสร้าง trigger 08:00 และ 13:00 (รันเองใน GAS editor)
+// ทดสอบส่งแจ้งเตือนรอขึ้นรถโดยไม่เช็ควัน — รันจาก GAS dropdown ได้เลย
+function testTruckNotification() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var sh = ss.getSheetByName('ลำดับที่สั่งสินค้า');
+  if (!sh) { Logger.log("ไม่พบชีต"); return; }
+  var rows = sh.getDataRange().getValues();
+  var pending = [];
+  for (var i = 2; i < rows.length; i++) {
+    var r = rows[i];
+    var type   = String(r[0] || '').trim();
+    var status = String(r[2] || '').trim();
+    var sku    = String(r[5] || '').trim();
+    var name   = String(r[6] || '').trim();
+    var qty    = Number(r[7]) || 0;
+    if (!sku || !qty) continue;
+    if (type === 'หิ้ว') continue;
+    if (status === 'เสร็จ' || status === 'ยกเลิก') continue;
+    pending.push({ sku: sku, name: name || sku, qty: qty });
+  }
+  Logger.log("pending truck orders: " + pending.length);
+  if (!pending.length) { Logger.log("ไม่มีรายการรอขึ้นรถ"); return; }
+
+  var groupId = PropertiesService.getScriptProperties().getProperty('LINE_GROUP_ID');
+  if (!groupId) { Logger.log("ไม่มี LINE_GROUP_ID"); return; }
+
+  var imgMap = {};
+  try { imgMap = readImageMap_(); } catch(e) {}
+
+  var mentionText = "@All 🚚 🌅 ทดสอบ — รอขึ้นรถ " + pending.length + " รายการ";
+  UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
+    method: "post", muteHttpExceptions: true,
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN },
+    payload: JSON.stringify({ to: groupId, messages: [{
+      type: "text", text: mentionText,
+      mention: { mentionees: [{ index: 0, length: 4, type: "all" }] }
+    }]})
+  });
+
+  var bubbles = pending.slice(0, 12).map(function(o) {
+    var imgUrl = imgMap[(o.sku||"").toUpperCase()] || "";
+    var bubble = {
+      type: "bubble", size: "micro",
+      body: {
+        type: "box", layout: "vertical", spacing: "xs", paddingAll: "12px",
+        contents: [
+          { type: "text", text: o.name, weight: "bold", size: "sm", wrap: true, maxLines: 2 },
+          { type: "text", text: o.sku, size: "xxs", color: "#888888" },
+          { type: "text", text: "× " + o.qty + " ชิ้น", size: "sm", color: "#1d4ed8", weight: "bold" }
+        ]
+      }
+    };
+    if (imgUrl) bubble.hero = { type: "image", url: imgUrl, size: "full", aspectRatio: "4:3", aspectMode: "fit" };
+    return bubble;
+  });
+
+  var r = UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
+    method: "post", muteHttpExceptions: true,
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN },
+    payload: JSON.stringify({ to: groupId, messages: [{ type: "flex", altText: "รอขึ้นรถ " + pending.length + " รายการ", contents: { type: "carousel", contents: bubbles } }] })
+  });
+  Logger.log("carousel: " + r.getResponseCode() + " " + r.getContentText().slice(0,300));
+}
+
 function setupOrderReminders() {
   ScriptApp.getProjectTriggers().forEach(function(t) {
     if (t.getHandlerFunction() === 'sendPendingTruckOrders') ScriptApp.deleteTrigger(t);
