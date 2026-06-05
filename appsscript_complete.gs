@@ -3027,12 +3027,14 @@ function handleOrder_(params) {
     orderSh.getRange(nextRow, 1, 1, 11).setValues([[orderType, now, 'รอ', 'คลังสินค้าสาย5', 'ดูเหมือนจริง', sku, '', qty, '', '', '']]);
     // แจ้งเตือน LINE เมื่อมี order ใหม่
     var productName = (params.name || '').toString().trim();
-    var msgNew = "🛒 " + orderType + " ใหม่!\n"
-        + (productName ? "📦 " + productName + "\n" : "")
-        + "รหัส: " + sku + "\n"
-        + "จำนวน: " + qty + " ชิ้น";
-    sendLineMessage_(msgNew);
-    sendLineGroup_(msgNew);
+    // แจ้งกลุ่มเฉพาะออเดอร์หิ้ว (ไม่ส่ง DM เพื่อประหยัดเครดิต)
+    if (orderType === 'หิ้ว') {
+      var msgNew = "🛍️ หิ้วใหม่!\n"
+          + (productName ? "📦 " + productName + "\n" : "")
+          + "รหัส: " + sku + "\n"
+          + "จำนวน: " + qty + " ชิ้น";
+      sendLineGroup_(msgNew);
+    }
 
     return ContentService
       .createTextOutput(JSON.stringify({ok: true, orderId: nextRow - 2, sku: sku, qty: qty}))
@@ -3067,8 +3069,8 @@ function sendLineGroup_(msg) {
 
 // สรุปออเดอร์รอขึ้นรถ — ส่ง LINE กลุ่ม อังคาร-อาทิตย์ 08:00 และ 13:00
 function sendPendingTruckOrders() {
-  var day = new Date().getDay(); // 0=อา, 1=จ, 2=อ, 3=พ, 4=พฤ, 5=ศ, 6=ส
-  if (day === 1) return; // วันจันทร์ไม่ส่ง
+  var day = new Date().getDay(); // 0=อา, 5=ศ, 6=ส
+  if (day !== 0 && day !== 5 && day !== 6) return; // ส่งเฉพาะ ศ-เสาร์-อาทิตย์
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var sh = ss.getSheetByName('ลำดับที่สั่งสินค้า');
   if (!sh) return;
