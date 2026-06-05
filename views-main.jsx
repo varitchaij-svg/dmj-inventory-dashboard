@@ -1566,7 +1566,7 @@ function CategoryView({ data, role }) {
   }, [products]);
   const [active, setActive] = uS(""); // "" = ทั้งหมด (default)
   const [globalSearch, setGlobalSearch] = uS("");
-  const [reorderFilter, setReorderFilter] = uS(false); // 🛒 ต้องสั่งเพิ่ม (หมด/ใกล้หมด)
+  const [reorderFilter, setReorderFilter] = uS(false); // 🛒 ควรสั่ง (หน้าร้าน ≤12 && คลังมีของ)
   const [sortBy, setSortBy] = uS("sku");
   const [page, setPage] = uS(1); // pagination (20/หน้า)
   const listTopRef = React.useRef(null);
@@ -1630,11 +1630,10 @@ function CategoryView({ data, role }) {
     return Object.values(m).sort((a, b) => b.count - a.count);
   }, [products]);
 
-  // ต้องสั่งเพิ่ม = หมด (≤0) หรือ ใกล้หมด (1..36) — ใช้เกณฑ์เดียวกับ badge ในการ์ด
+  // ควรสั่ง = หน้าร้านเหลือ ≤12 && คลังยังมีของ (ไม่นับ MTO)
   const needsReorder = uC((p) => {
     if (p.isMTO) return false;
-    const q = stockQty(p);
-    return q <= 36;
+    return (p.qtyStore||0) <= 12 && (p.qtyWH||0) > 0;
   }, []);
 
   const filtered = uM(() => {
@@ -1945,7 +1944,7 @@ function CategoryView({ data, role }) {
           {/* Controls — hide in global search / vendor mode */}
           <Card style={{marginBottom:14, display: (isGlobalSearch||isGlobalVendor) ? "none" : undefined, width:"100%", boxSizing:"border-box"}}>
             <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap",width:"100%",minWidth:0}}>
-              {/* 🛒 ต้องสั่งเพิ่ม — quick reorder filter (key action) */}
+              {/* 🛒 ควรสั่ง — quick reorder filter (key action) */}
               {(() => {
                 const reorderCount = (active === "" ? products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า" && needsReorder(p)) : products.filter(p => p.cat === active && needsReorder(p))).length;
                 return (
@@ -1961,7 +1960,7 @@ function CategoryView({ data, role }) {
                       color: reorderFilter ? "#fff" : "#b45309",
                       transition:"all .15s",
                     }}>
-                    🛒 ต้องสั่งเพิ่ม
+                    🛒 ควรสั่ง
                     <span style={{
                       fontSize:12, fontWeight:800, padding:"1px 8px", borderRadius:99,
                       background: reorderFilter ? "rgba(255,255,255,.25)" : "#fbbf24",
@@ -2028,10 +2027,10 @@ function CategoryView({ data, role }) {
               </div>
             )}
 
-            {/* New stock filter */}
+            {/* New stock filter — แสดงตลอด: มีของ=เหลือง clickable, ไม่มี=เทา disabled */}
             {(() => {
               const newCount = products.filter(p => p.cat === active && isNew45(p.lastStockInDate)).length;
-              if (newCount === 0) return null;
+              const hasNew = newCount > 0;
               return (
                 <div className="filter-bar" style={{marginTop:10,paddingTop:10,borderTop:"1px dashed var(--bdr)"}}>
                   <span className="filter-bar-label">✨ ใหม่</span>
@@ -2039,8 +2038,12 @@ function CategoryView({ data, role }) {
                     <button className={`fchip${!newStockFilter?' active':''}`}
                             onClick={() => setNewStockFilter(false)}>ทั้งหมด</button>
                     <button className={`fchip${newStockFilter?' active':''}`}
-                            onClick={() => setNewStockFilter(v => !v)}
-                            style={newStockFilter ? {
+                            onClick={hasNew ? () => setNewStockFilter(v => !v) : undefined}
+                            style={!hasNew ? {
+                              opacity:0.45, cursor:"default",
+                              background:"var(--g-100)", borderColor:"var(--bdr)",
+                              color:"var(--g-500)",
+                            } : newStockFilter ? {
                               background:"#fff8e1", borderColor:"#f59e0b",
                               color:"#a07417", fontWeight:700,
                             } : {}}>
@@ -2155,7 +2158,7 @@ function CategoryView({ data, role }) {
 
           <div ref={listTopRef}/>
           {filtered.length === 0 ? (
-            <Empty title="ไม่พบสินค้า" sub={isGlobalSearch ? "ลองค้นหาด้วยคำอื่น" : reorderFilter ? "ไม่มีสินค้าที่ต้องสั่งเพิ่ม 🎉" : "หมวดนี้ยังไม่มีสินค้า"}/>
+            <Empty title="ไม่พบสินค้า" sub={isGlobalSearch ? "ลองค้นหาด้วยคำอื่น" : reorderFilter ? "ไม่มีสินค้าที่ควรสั่ง 🎉" : "หมวดนี้ยังไม่มีสินค้า"}/>
           ) : viewMode === 'list' ? (
             /* ── List view — compact horizontal rows ── */
             <div style={{display:'flex',flexDirection:'column',gap:6}}>
@@ -5455,7 +5458,7 @@ function SupplierSearch({ value, onChange, allSuppliers }) {
   );
 }
 // ─── Memoized FrontStore Card ───
-const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty, onImageClick, onOpenCalc }) {
+const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty, onImageClick, onOpenCalc, onOrder }) {
   const sysStore  = p.qtyStore ?? 0;
   const wh        = p.qtyWH ?? 0;
   const hasVal    = val !== "" && val != null;
@@ -5588,6 +5591,14 @@ const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty
                     display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
             <span style={{fontSize:16}}>🧮</span>
             <span>เครื่องคิดเลข</span>
+          </button>
+        )}
+        {onOrder && (
+          <button onClick={onOrder}
+            style={{fontSize:12,padding:"4px 8px",borderRadius:6,background:"#eff6ff",
+                    color:"#2563eb",border:"1px solid #bfdbfe",cursor:"pointer",marginTop:4,
+                    width:"100%",fontFamily:"inherit",fontWeight:600}}>
+            📦 สั่ง
           </button>
         )}
       </div>

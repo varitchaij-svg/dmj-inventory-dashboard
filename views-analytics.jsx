@@ -94,6 +94,9 @@ function FrontStoreView({ data, role }) {
   const [touched, setTouched] = uS(new Set());
   const [lastSavedTime, setLastSavedTime] = uS(null); // timestamp of last successful save
   const [fsCalcPad, setFsCalcPad] = uS(null); // {sku, name, val} for CalcPadModal
+  const [transferTarget, setTransferTarget] = uS(null); // {sku, name, maxQty} สำหรับ mini modal โอน
+  const [transferQty, setTransferQty] = uS(1);
+  const [transferring, setTransferring] = uS(false);
 
   const setQty = uC((sku, val) => {
     setCheckedQtys(prev => ({ ...prev, [sku]: val === "" ? "" : parseInt(val) || 0 }));
@@ -206,6 +209,20 @@ function FrontStoreView({ data, role }) {
     }, 3000);
     return () => clearTimeout(timer);
   }, [checkedQtys, touched, saving, touchedWithValue]);
+
+  // โอนสินค้าจากคลัง → หน้าร้าน (ใช้ reorder mode)
+  async function handleTransfer() {
+    if (!transferTarget || transferQty < 1) return;
+    setTransferring(true);
+    try {
+      await syncStockTransferBatch([{ sku: transferTarget.sku, qty: transferQty, name: transferTarget.name }]);
+      setTransferTarget(null);
+      setTransferQty(1);
+    } catch(e) {
+      alert("โอนไม่สำเร็จ: " + (e.message || e));
+    }
+    setTransferring(false);
+  }
 
   const PAGE_SIZE = 20;
   const [page, setPage] = uS(0);
@@ -357,7 +374,11 @@ function FrontStoreView({ data, role }) {
               onOpenCalc={(sku, name) => {
                 const cur = checkedQtys[sku];
                 setFsCalcPad({ sku, name, val: (cur != null && cur !== '') ? String(cur) : '' });
-              }}/>
+              }}
+              onOrder={showMode === "reorder" ? () => {
+                setTransferTarget({ sku: p.sku, name: p.name, maxQty: p.qtyWH || 0 });
+                setTransferQty(Math.min(p.qtyWH || 0, Math.max(1, 12 - (p.qtyStore || 0))));
+              } : undefined}/>
           ))}
         </div>
       )}
@@ -440,6 +461,40 @@ function FrontStoreView({ data, role }) {
 
     {lightbox && <ImageLightbox url={lightbox.url} name={lightbox.name} onClose={() => setLightbox(null)}/>}
     <Toast toast={toast} onClose={hideToast}/>
+
+    {/* ── Mini Transfer Modal (reorder mode) ── */}
+    {transferTarget && (
+      <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:9999,
+                   display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+        <div style={{background:"#fff",borderRadius:12,padding:20,width:"100%",maxWidth:360,
+                     boxShadow:"0 8px 32px rgba(0,0,0,0.2)"}}>
+          <div style={{fontWeight:700,fontSize:16,marginBottom:12}}>📦 สั่งเพิ่ม: {transferTarget.name}</div>
+          <div style={{fontSize:13,color:"#6b7280",marginBottom:8}}>คลังมี: {transferTarget.maxQty} ชิ้น</div>
+          <div style={{marginBottom:16}}>
+            <label style={{fontSize:13,display:"block",marginBottom:4}}>จำนวนที่จะโอน</label>
+            <input type="number" min={1} max={transferTarget.maxQty || 999}
+              value={transferQty}
+              onChange={e => setTransferQty(Math.max(1, parseInt(e.target.value) || 1))}
+              style={{width:"100%",padding:"8px 12px",border:"1px solid #d1d5db",borderRadius:8,
+                      fontSize:16,boxSizing:"border-box"}}/>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={() => setTransferTarget(null)}
+              style={{flex:1,padding:"10px 0",borderRadius:8,border:"1px solid #d1d5db",
+                      background:"#f9fafb",cursor:"pointer",fontSize:14,fontFamily:"inherit"}}>
+              ยกเลิก
+            </button>
+            <button onClick={handleTransfer} disabled={transferring}
+              style={{flex:2,padding:"10px 0",borderRadius:8,border:"none",
+                      background:transferring?"#93c5fd":"#2563eb",color:"#fff",
+                      cursor:transferring?"not-allowed":"pointer",fontSize:14,fontWeight:600,
+                      fontFamily:"inherit"}}>
+              {transferring ? "กำลังโอน..." : "✅ ยืนยันโอน"}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
     </>
   );
 }
