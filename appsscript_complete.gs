@@ -3130,7 +3130,7 @@ function sendLineGroupOrderCard_(name, sku, date, imageUrl) {
     }
   };
   if (imgUrl) {
-    bubble.hero = { type: "image", url: imgUrl, size: "full", aspectRatio: "4:3", aspectMode: "cover" };
+    bubble.hero = { type: "image", url: imgUrl, size: "full", aspectRatio: "4:3", aspectMode: "fit"};
   }
 
   var r2 = UrlFetchApp.fetch(pushUrl, {
@@ -3199,7 +3199,7 @@ function sendPendingTruckOrders() {
       }
     };
     if (imgUrl) {
-      bubble.hero = { type: "image", url: imgUrl, size: "full", aspectRatio: "4:3", aspectMode: "cover" };
+      bubble.hero = { type: "image", url: imgUrl, size: "full", aspectRatio: "4:3", aspectMode: "fit"};
     }
     return bubble;
   });
