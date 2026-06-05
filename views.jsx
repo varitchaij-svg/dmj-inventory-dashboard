@@ -8032,10 +8032,10 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
       <ConfirmModal
         open={zeroConfirm}
         type="warn"
-        emoji="❌"
-        title="ไม่ได้จัดสินค้า?"
-        detail={`${order.name} (${order.sku})\n\nจะปรับสต็อก WH ใน ZORT เป็น 0\nและลบรายการนี้ออกจากรายการสั่ง\n\n⚠️ ทำแล้วย้อนกลับไม่ได้`}
-        confirmLabel="ยืนยัน ไม่ได้จัด"
+        emoji="📦"
+        title="ของหมดจริงๆ ใช่ไหม?"
+        detail={`${order.name}\n(${order.sku})\n\nกดยืนยันจะปรับสต็อกคลังใน ZORT เป็น 0\nและลบรายการนี้ออกจากรายการสั่ง\n\n⚠️ ทำแล้วย้อนกลับไม่ได้`}
+        confirmLabel="✅ ใช่ ของหมดจริง"
         onConfirm={doZeroStock}
         onCancel={() => setZeroConfirm(false)}
       />
