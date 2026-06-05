@@ -192,7 +192,13 @@ function doPost(e) {
     // ─── LINE Webhook ───
     if (data.events) {
       const event = data.events[0];
-      if (!event) return ContentService.createTextOutput("OK"); // delivery/join events have empty array
+      if (!event) return ContentService.createTextOutput("OK");
+      // บันทึก Group ID เมื่อ Bot ถูกเพิ่มเข้า Group
+      if (event.type === 'join' && event.source && event.source.groupId) {
+        PropertiesService.getScriptProperties().setProperty('LINE_GROUP_ID', event.source.groupId);
+        sendLineGroup_('✅ บอทพร้อมแจ้งเตือนในกลุ่มนี้แล้วครับ 🎉');
+        return ContentService.createTextOutput("OK");
+      }
       if (event.type === 'message' && event.message.type === 'text') {
         const userMessage = event.message.text.trim();
         const replyToken = event.replyToken;
@@ -3019,11 +3025,14 @@ function handleOrder_(params) {
       if (colA[i][0] === '') { nextRow = startRow + i; break; }
     }
     orderSh.getRange(nextRow, 1, 1, 11).setValues([[orderType, now, 'รอ', 'คลังสินค้าสาย5', 'ดูเหมือนจริง', sku, '', qty, '', '', '']]);
-    var msg = "🛒 มีคำสั่งซื้อใหม่\n"
+    // แจ้งเตือน LINE เมื่อมี order ใหม่
+    var productName = (params.name || '').toString().trim();
+    var msgNew = "🛒 " + orderType + " ใหม่!\n"
+        + (productName ? "📦 " + productName + "\n" : "")
         + "รหัส: " + sku + "\n"
-        + "จำนวน: " + qty + " ชิ้น\n"
-        + "ประเภท: " + orderType;
-    sendLineMessage_(msg);
+        + "จำนวน: " + qty + " ชิ้น";
+    sendLineMessage_(msgNew);
+    sendLineGroup_(msgNew);
 
     return ContentService
       .createTextOutput(JSON.stringify({ok: true, orderId: nextRow - 2, sku: sku, qty: qty}))
@@ -3039,16 +3048,63 @@ function handleOrder_(params) {
 function sendLineMessage_(msg) {
   UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
     method: "post",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer " + LINE_ACCESS_TOKEN
-    },
-    payload: JSON.stringify({
-      to: LINE_USER_ID,
-      messages: [{ type: "text", text: msg }]
-    }),
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN },
+    payload: JSON.stringify({ to: LINE_USER_ID, messages: [{ type: "text", text: msg }] }),
     muteHttpExceptions: true
   });
+}
+
+function sendLineGroup_(msg) {
+  var groupId = PropertiesService.getScriptProperties().getProperty('LINE_GROUP_ID');
+  if (!groupId) return;
+  UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
+    method: "post",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN },
+    payload: JSON.stringify({ to: groupId, messages: [{ type: "text", text: msg }] }),
+    muteHttpExceptions: true
+  });
+}
+
+// สรุปออเดอร์รอขึ้นรถ — ส่ง LINE กลุ่ม อังคาร-อาทิตย์ 08:00 และ 13:00
+function sendPendingTruckOrders() {
+  var day = new Date().getDay(); // 0=อา, 1=จ, 2=อ, 3=พ, 4=พฤ, 5=ศ, 6=ส
+  if (day === 1) return; // วันจันทร์ไม่ส่ง
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var sh = ss.getSheetByName('ลำดับที่สั่งสินค้า');
+  if (!sh) return;
+  var rows = sh.getDataRange().getValues();
+  var pending = [];
+  for (var i = 2; i < rows.length; i++) {
+    var r = rows[i];
+    var type   = String(r[0] || '').trim();
+    var status = String(r[2] || '').trim();
+    var sku    = String(r[5] || '').trim();
+    var name   = String(r[6] || '').trim();
+    var qty    = Number(r[7]) || 0;
+    if (!sku || !qty) continue;
+    if (type === 'หิ้ว') continue;              // หิ้วแจ้งทันทีไปแล้ว
+    if (status === 'เสร็จ' || status === 'ยกเลิก') continue;
+    pending.push({ type: type, name: name || sku, qty: qty });
+  }
+  if (!pending.length) return;
+  var hour = new Date().getHours();
+  var label = hour < 12 ? '🌅 เช้า' : '🌞 บ่าย';
+  var lines = ['🚚 ' + label + ' — รอขึ้นรถ ' + pending.length + ' รายการ'];
+  pending.slice(0, 20).forEach(function(o) {
+    lines.push('• ' + o.name + ' × ' + o.qty + (o.type && o.type !== 'ขึ้นรถ' ? ' (' + o.type + ')' : ''));
+  });
+  if (pending.length > 20) lines.push('... และอีก ' + (pending.length - 20) + ' รายการ');
+  sendLineGroup_(lines.join('\n'));
+}
+
+// รันครั้งแรกเพื่อสร้าง trigger 08:00 และ 13:00 (รันเองใน GAS editor)
+function setupOrderReminders() {
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (t.getHandlerFunction() === 'sendPendingTruckOrders') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('sendPendingTruckOrders').timeBased().everyDays(1).atHour(8).create();
+  ScriptApp.newTrigger('sendPendingTruckOrders').timeBased().everyDays(1).atHour(13).create();
+  Logger.log('✅ ตั้ง trigger 08:00 + 13:00 เรียบร้อย');
 }
 
 // ───────────────────────────────────────────────────────────
