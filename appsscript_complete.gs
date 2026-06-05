@@ -441,7 +441,7 @@ function doGet(e) {
                           .sort((a, b) => (a.date < b.date ? 1 : -1));
       if (my.length > 0) {
         p.lastSupplier    = my[0].supplier;
-        p.lastStockInDate = my[0].date;
+        p.lastStockInDate = my[0].date ? my[0].date.split('-').reverse().join('/') : '';
         p.lastStockInQty  = my[0].qty;
         p.purchaseCount   = my.length;
       }
