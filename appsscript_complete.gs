@@ -1038,7 +1038,7 @@ function updateOrderState(ss, body) {
         if (body.carryMode === "carry") {
           try {
             const productName = body.name || body.sku || "(ไม่ทราบชื่อ)";
-            sendLineGroup_("🚶 หิ้วเอง!\n📦 " + productName + "\nรหัส: " + (body.sku||"") + "\nวันที่: " + (body.date||""));
+            sendLineGroupMentionAll_("order 🚶\n📦 " + productName + "\nรหัส: " + (body.sku||"") + "\nวันที่: " + (body.date||""));
           } catch(e) {}
         }
         return ok({ updated: body.orderId, row: sheetRow });
@@ -1060,7 +1060,7 @@ function updateOrderState(ss, body) {
         if (body.carryMode === "carry") {
           try {
             const productName = body.name || body.sku || "(ไม่ทราบชื่อ)";
-            sendLineGroup_("🚶 หิ้วเอง!\n📦 " + productName + "\nรหัส: " + (body.sku||"") + "\nวันที่: " + (body.date||""));
+            sendLineGroupMentionAll_("order 🚶\n📦 " + productName + "\nรหัส: " + (body.sku||"") + "\nวันที่: " + (body.date||""));
           } catch(e) {}
         }
         return ok({ updated: body.sku, row });
@@ -3075,6 +3075,25 @@ function sendLineGroup_(msg) {
     method: "post",
     headers: { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN },
     payload: JSON.stringify({ to: groupId, messages: [{ type: "text", text: msg }] }),
+    muteHttpExceptions: true
+  });
+}
+
+function sendLineGroupMentionAll_(msg) {
+  var groupId = PropertiesService.getScriptProperties().getProperty('LINE_GROUP_ID');
+  if (!groupId) return;
+  var fullText = "@All " + msg;
+  UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
+    method: "post",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN },
+    payload: JSON.stringify({
+      to: groupId,
+      messages: [{
+        type: "text",
+        text: fullText,
+        mention: { mentionees: [{ index: 0, length: 4, type: "all" }] }
+      }]
+    }),
     muteHttpExceptions: true
   });
 }
