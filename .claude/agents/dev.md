@@ -16,7 +16,9 @@ implement feature และแก้ logic ข้าม frontend + Google Apps S
 
 ## กฎเหล็กของโปรเจกต์นี้
 - **ไม่มี build step** — React เรนเดอร์ผ่าน Babel standalone ใน browser ห้าม `import`/`export`,
-  ห้าม npm package, ห้ามไวยากรณ์ที่ต้อง compile พิเศษ ใช้ `uS/uE/uM` (useState/Effect/Memo)
+  ห้าม npm package, ห้ามไวยากรณ์ที่ต้อง compile พิเศษ
+- alias: `uS`=useState, `uE`=useEffect, `uM`=useMemo, `uC`=useCallback
+- **views.jsx ~10,500 บรรทัด** — ถ้าเพิ่ม code ขนาดใหญ่ระวัง Babel 500KB warning จะช้าลง
 - เขียนโค้ดให้กลมกลืนกับของเดิม — match การตั้งชื่อ, ความหนาแน่นของ comment (ไทย), inline style
   pattern, helper components ที่มีอยู่ (เช่น `Card`, `Seg`, `Empty`, `Toast`, `MiniRow`)
 - หลังแก้ข้อมูลใน sheet ผ่าน GAS ต้องเรียก `invalidateCache_()`

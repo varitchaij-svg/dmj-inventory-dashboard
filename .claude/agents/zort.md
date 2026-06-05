@@ -19,6 +19,9 @@ GET  /Warehouse/GetWarehouses   code, name   ← ไม่ใช่ warehousecod
 GET  /PurchaseOrder/GetPurchaseOrders   number, customername, purchaseorderdateString,
                                           status, warehousecode, list[].sku/name/number/pricepernumber
 POST /Transfer/AddTransfer
+POST /Order/AddOrder            payload: {date:"dd/MM/yyyy", remark, list:[{sku,name,number,price,totalprice}]}
+                                response: {number, ordernumber, ...}
+                                ใช้สำหรับ: งานจัดพิเศษ MTO (ราคา 0) — ดู createZortSaleOrder_()
 /PurchaseReceive/GetPurchaseReceives → 404 ไม่มี endpoint นี้
 WH: W0002=คลังสาย5→col H, W0001=หน้าร้าน→col G
 ```

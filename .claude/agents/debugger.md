@@ -29,6 +29,20 @@ tools: Read, Edit, Bash, Grep, Glob
 | **timeout/โหลดนาน** | GAS cold start → ต้อง retry + `cache:'no-store'` |
 | **status ค้าง/ปุ่มกดไม่ติด** | stale state ใน localStorage (เคยต้อง expire 6h) |
 
+## DMJ-specific internals ที่ต้องรู้
+- `dmj_orders_state_v1` ใน localStorage — keyed by orderId, ใช้ `reconcileOrderState` merge กับข้อมูลจาก sheet
+- GAS CacheService TTL = 600s (10 นาที), chunk 30k chars — `invalidateCache_()` ล้าง cache นี้
+- idempotency key prefix: `shp2_` (shopify orders), `mto_closed_` (MTO jobs)
+- Script Property `dmj_last_write_ts` = epoch ms ของการเขียนล่าสุด (ใช้ conflict detection)
+- conflict detection window = `clientLoadedAt + 5000ms` เทียบกับ `getSheetLastModified_()`
+
+## 5 known bugs ที่แก้แล้ว (อย่า re-introduce)
+1. `deductStock` — shortfall ส่งเป็น boolean+qty แล้ว (shortfall, shortfall_qty)
+2. conflict detection — อ่านจาก Script Properties แล้วไม่ผ่าน CacheService
+3. `transferStockBatch` — มี conflict check แล้ว (clientLoadedAt parameter)
+4. `monthKey_`/`dayKey_` — ต้อง `setNumberFormat("@")` ก่อนเขียน header
+5. `enrichData` (app.jsx) — ถ้า name=null → white screen (ErrorBoundary คุ้มกันแล้ว)
+
 ## เครื่องมือ
 - `git log`/`git diff` ดูว่าการเปลี่ยนล่าสุดทำให้พังไหม (regression)
 - Grep หาการประกาศ state/ตัวแปร, การใช้ column index
