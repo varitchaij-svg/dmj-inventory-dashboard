@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>รายงานอัปเดต DMJ — 27 พ.ค. – 5 มิ.ย. 2569</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700;800&display=swap');
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Sarabun', sans-serif; background: #f4f6f9; color: #1a1a2e; font-size: 15px; }
+
+  .page { max-width: 900px; margin: 0 auto; padding: 40px 24px 80px; }
+
+  /* Header */
+  .header { background: linear-gradient(135deg, #1f7f44 0%, #145c30 100%);
+    border-radius: 16px; padding: 36px 36px 32px; color: #fff; margin-bottom: 32px; }
+  .header-logo { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+  .header-logo-icon { width: 52px; height: 52px; background: rgba(255,255,255,.18);
+    border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 28px; }
+  .header h1 { font-size: 26px; font-weight: 800; }
+  .header-sub { font-size: 14px; opacity: .8; margin-top: 4px; }
+  .header-meta { display: flex; gap: 16px; margin-top: 20px; flex-wrap: wrap; }
+  .header-meta-item { background: rgba(255,255,255,.15); border-radius: 10px;
+    padding: 10px 18px; font-size: 13px; }
+  .header-meta-item b { display: block; font-size: 22px; font-weight: 800; }
+
+  /* Week divider */
+  .week-label { display: flex; align-items: center; gap: 12px; margin: 32px 0 16px; }
+  .week-label-line { flex: 1; height: 2px; background: #e2e8f0; }
+  .week-label-text { font-size: 13px; font-weight: 700; color: #64748b;
+    background: #f4f6f9; padding: 4px 14px; border-radius: 20px;
+    border: 1.5px solid #e2e8f0; white-space: nowrap; }
+
+  /* Section */
+  .section { background: #fff; border-radius: 14px; padding: 28px 28px 24px;
+    margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
+  .section-header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px;
+    padding-bottom: 14px; border-bottom: 2px solid #f0f2f5; }
+  .section-icon { width: 40px; height: 40px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
+  .section-title { font-size: 17px; font-weight: 700; }
+  .section-desc { font-size: 12px; color: #888; margin-top: 2px; }
+
+  /* Feature items */
+  .feature-list { display: flex; flex-direction: column; gap: 12px; }
+  .feature { display: flex; gap: 14px; align-items: flex-start;
+    padding: 14px 16px; border-radius: 10px; background: #fafafa;
+    border: 1.5px solid #eef0f3; }
+  .feature-badge { flex-shrink: 0; min-width: 52px; text-align: center;
+    padding: 4px 8px; border-radius: 8px; font-size: 11px; font-weight: 700; margin-top: 1px; }
+  .badge-new    { background: #dcfce7; color: #166534; }
+  .badge-fix    { background: #fef9c3; color: #854d0e; }
+  .badge-improve{ background: #dbeafe; color: #1e40af; }
+  .badge-perf   { background: #fae8ff; color: #7e22ce; }
+  .badge-zort   { background: #fff7ed; color: #9a3412; }
+  .feature-body { flex: 1; }
+  .feature-title { font-weight: 700; font-size: 14px; color: #111; margin-bottom: 3px; }
+  .feature-detail { font-size: 13px; color: #555; line-height: 1.6; }
+
+  /* Color themes */
+  .icon-zort    { background: #fff7ed; }
+  .icon-order   { background: #dcfce7; }
+  .icon-ship    { background: #dcfdf7; }
+  .icon-line    { background: #dcfdf7; }
+  .icon-stock   { background: #fef9c3; }
+  .icon-ux      { background: #dbeafe; }
+  .icon-perf    { background: #fae8ff; }
+  .icon-pwa     { background: #fee2e2; }
+  .icon-test    { background: #f0fdf4; }
+  .icon-bug     { background: #fff7ed; }
+  .icon-purchase{ background: #eff6ff; }
+
+  /* Summary chips */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+  .chip { padding: 5px 14px; border-radius: 20px; font-size: 12px; font-weight: 600;
+    background: #f0fdf4; color: #166534; border: 1.5px solid #bbf7d0; }
+
+  /* Timeline dots for date column */
+  .timeline { display: flex; flex-direction: column; gap: 0; }
+  .tl-item { display: flex; gap: 16px; }
+  .tl-left { display: flex; flex-direction: column; align-items: center; width: 60px; flex-shrink: 0; }
+  .tl-dot { width: 14px; height: 14px; border-radius: 50%; background: #1f7f44; margin-top: 4px; flex-shrink: 0; }
+  .tl-line { width: 2px; flex: 1; background: #e2e8f0; min-height: 20px; }
+  .tl-date { font-size: 11px; font-weight: 700; color: #64748b; text-align: center; line-height: 1.3; }
+  .tl-body { flex: 1; padding-bottom: 20px; }
+
+  /* Footer */
+  .footer { text-align: center; margin-top: 40px; font-size: 12px; color: #aaa; }
+  .footer b { color: #1f7f44; }
+
+  @media print {
+    body { background: #fff; }
+    .page { padding: 20px; }
+    .section { box-shadow: none; border: 1.5px solid #e5e7eb; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-logo">
+      <div class="header-logo-icon">🌿</div>
+      <div>
+        <h1>รายงานอัปเดตระบบ DMJ Inventory</h1>
+        <div class="header-sub">Doomuenjing Dashboard — สรุปการพัฒนา 10 วัน</div>
+      </div>
+    </div>
+    <div class="header-meta">
+      <div class="header-meta-item">
+        <b>27 พ.ค. – 5 มิ.ย. 2569</b>
+        ช่วงเวลา
+      </div>
+      <div class="header-meta-item">
+        <b>6 หมวด</b>
+        ด้านที่พัฒนา
+      </div>
+      <div class="header-meta-item">
+        <b>40+ รายการ</b>
+        การเปลี่ยนแปลง
+      </div>
+      <div class="header-meta-item">
+        <b>3 บั๊กใหญ่</b>
+        ที่แก้ได้
+      </div>
+    </div>
+  </div>
+
+  <!-- ───────────────────────── สัปดาห์ที่ 1 ───────────────────────── -->
+  <div class="week-label">
+    <div class="week-label-line"></div>
+    <div class="week-label-text">📅 สัปดาห์ที่ 1 — 27 พ.ค. – 2 มิ.ย. 2569</div>
+    <div class="week-label-line"></div>
+  </div>
+
+  <!-- ZORT API -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-icon icon-zort">🔌</div>
+      <div>
+        <div class="section-title">เชื่อมต่อ ZORT Open API v4 สำเร็จ</div>
+        <div class="section-desc">ระบบ inventory เชื่อมกับ ZORT โดยตรง — สต็อก, ขาย, สั่งซื้อ, รูปสินค้า sync อัตโนมัติ</div>
+      </div>
+    </div>
+    <div class="feature-list">
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">🔐 Authentication — HMAC Signature</div>
+          <div class="feature-detail">สร้าง <code>zortHeaders_()</code> ที่ sign request ด้วย HMAC-SHA256 ทุกครั้ง ใช้ Script Properties เก็บ API key ไม่โชว์ใน code</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">📦 Sync สต็อก ZORT → Sheets อัตโนมัติ</div>
+          <div class="feature-detail"><code>syncZortBoth()</code> ดึงสต็อกจาก ZORT มาอัปเดตทั้งคอลัมน์หน้าร้าน (G) และคลังสาย 5 (H) ใน Sheets — ตั้ง trigger รันทุกชั่วโมง</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">📊 Sync ยอดขาย ZORT → Sheets</div>
+          <div class="feature-detail"><code>syncZortSales()</code> ดึงคำสั่งขายรายวัน/รายเดือน จาก ZORT Order API มาเก็บในชีต "ยอดขายรายวัน" และ "ยอดขายรายเดือน" — trigger รันทุก 2 ชั่วโมง</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">🛒 Sync ใบสั่งซื้อ PO จาก ZORT</div>
+          <div class="feature-detail"><code>syncZortPurchases()</code> ดึง Purchase Order จาก ZORT มาแสดงใน Dashboard หน้าจัดซื้อ — เห็น PO ทั้งหมดในที่เดียว</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">🖼️ Sync รูปสินค้าจาก ZORT</div>
+          <div class="feature-detail"><code>syncZortImages()</code> ดึงรูปสินค้าจาก ZORT มาเก็บในชีต imageUrl — trigger ทุกวันจันทร์ 05:00 รูปแสดงใน Dashboard โดยอัตโนมัติ</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">🆕 เพิ่มสินค้าใหม่จาก ZORT อัตโนมัติ</div>
+          <div class="feature-detail"><code>syncNewProductsFromZort()</code> ตรวจสอบสินค้าที่มีใน ZORT แต่ยังไม่มีใน Sheets แล้วเพิ่มให้อัตโนมัติ — ไม่ต้องเพิ่มสินค้าใหม่ด้วยมือ</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">📤 โอนสต็อก Sheets → ZORT (AddTransfer)</div>
+          <div class="feature-detail">เมื่อโอนสินค้าจากคลังไปหน้าร้าน ระบบสร้าง Transfer เอกสารใน ZORT ด้วย <code>/Transfer/AddTransfer</code> — สต็อก ZORT ตรงกับ Sheets เสมอ</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">🔄 Push สต็อกแบบ absolute ไป ZORT</div>
+          <div class="feature-detail"><code>pushStockToZort_()</code> ใช้ <code>UpdateProductAvailableStockList</code> อัปเดตจำนวนสต็อกโดยตรง รองรับทั้ง WH_SAI5 (คลัง) และ WH_FRONTSTORE (หน้าร้าน)</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">📜 ดึงประวัติโอนสินค้าจาก ZORT</div>
+          <div class="feature-detail"><code>syncTransferHistory()</code> ดึงรายการโอนจาก ZORT มาแสดงในแท็บ "ส่งแล้ว" ของหน้ารายการสั่งของ — ตามรอยได้ว่าส่งอะไรไปเมื่อไหร่</div>
+        </div>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="chip">ZORT API v4</span>
+      <span class="chip">HMAC Auth</span>
+      <span class="chip">Auto Trigger</span>
+      <span class="chip">Stock Sync</span>
+      <span class="chip">Sales Sync</span>
+      <span class="chip">PO Sync</span>
+      <span class="chip">Image Sync</span>
+    </div>
+  </div>
+
+  <!-- ───────────────────────── สัปดาห์ที่ 2 ───────────────────────── -->
+  <div class="week-label">
+    <div class="week-label-line"></div>
+    <div class="week-label-text">📅 สัปดาห์ที่ 2 — 3–4 มิ.ย. 2569</div>
+    <div class="week-label-line"></div>
+  </div>
+
+  <!-- รายการสั่งของ + ส่งของ -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-icon icon-ship">🚚</div>
+      <div>
+        <div class="section-title">ระบบรายการสั่งของ — ส่งของข้ามเครื่องได้</div>
+        <div class="section-desc">แก้บั๊กหนักใน ship-all + พนักงานยืนยันรับของจากมือถือตัวเองได้</div>
+      </div>
+    </div>
+    <div class="feature-list">
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">✅ แท็บ "ส่งแล้ว" ข้ามเครื่องได้</div>
+          <div class="feature-detail">ดึงจากชีต "รายการโอนสินค้า" แทน localStorage ทำให้ sale/FS ทุกคนเห็น status เดียวกัน และยืนยันรับของจากมือถือตัวเองได้</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-fix">แก้</div>
+        <div class="feature-body">
+          <div class="feature-title">🐛 บั๊กใหญ่: ของหายเมื่อกด "ส่งทั้งหมด"</div>
+          <div class="feature-detail">idempotency cache ค้าง 6 ชั่วโมง ทำให้ของไม่โอนไปคลัง แต่ถูกลบออกจาก order list — แก้ด้วยการเปลี่ยน cache key + เปลี่ยนเป็น fail-open mode</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-fix">แก้</div>
+        <div class="feature-body">
+          <div class="feature-title">🐛 รายการสั่งของหายจากหน้าจอ</div>
+          <div class="feature-detail">ผูก state กับ content signature (sku+qty+date) แทนเลขแถว — เพราะแถวใน Sheets อาจขยับเมื่อ refresh ทำให้ผิด row</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-fix">แก้</div>
+        <div class="feature-body">
+          <div class="feature-title">🐛 Order หายเมื่อ GAS ตอบ non-JSON</div>
+          <div class="feature-detail">เพิ่ม guard กัน parse error — เมื่อ GAS timeout หรือตอบ 404/HTML ระบบจะไม่ลบ order ออก แต่รายงาน error แทน</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-fix">แก้</div>
+        <div class="feature-body">
+          <div class="feature-title">🐛 auto-heal ทิ้ง "สำเร็จ" ที่เพิ่งกด</div>
+          <div class="feature-detail">แก้ logic ที่ทำให้ order ที่กด "สำเร็จ" เพิ่งกดถูก heal กลับมาเป็น "รอ" ใน tick ถัดไป</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">❌ ปุ่ม "ไม่ได้จัด" พร้อม confirm dialog</div>
+          <div class="feature-detail">ปุ่มอยู่มุมขวาบน card — กดแล้วถามยืนยัน "ของหมดจริงๆ ใช่ไหม?" ถ้ายืนยันจะตั้ง ZORT stock = 0 และลบออกจากรายการ (ทำแล้วย้อนกลับไม่ได้)</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">📥 ยืนยันรับของ — เลื่อนลงล่างอัตโนมัติ</div>
+          <div class="feature-detail">หลังกดยืนยันรับของ รายการจะเลื่อนลงไปอยู่ท้าย list ให้เห็นชัดว่าจัดการแล้ว ไม่ต้องเลื่อนหาเอง</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">🗃️ Archive รายการรับครบ</div>
+          <div class="feature-detail"><code>archiveReceivedShipments()</code> ย้ายรายการที่รับครบแล้วไปชีตประวัติรายวัน ลดความยุ่งของชีตหลัก</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Automated Tests -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-icon icon-test">🧪</div>
+      <div>
+        <div class="section-title">ระบบ Automated Tests — 55 test cases</div>
+        <div class="section-desc">ป้องกัน data corruption แบบ silent ที่ยากตรวจพบด้วยตา</div>
+      </div>
+    </div>
+    <div class="feature-list">
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">⚗️ Vitest 55 test cases</div>
+          <div class="feature-detail">ติดตั้ง Vitest เป็น devDependency ไม่กระทบ production ครอบคลุม: deductStock, conflict detection, transfer, enrichData, column index</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-fix">แก้</div>
+        <div class="feature-body">
+          <div class="feature-title">🐛 บั๊กจริง: deductStock ไม่มี shortfall flag</div>
+          <div class="feature-detail">เมื่อหักสต็อกแล้วติดลบ ระบบเดิมคืน success เงียบๆ โดยไม่แจ้ง — แก้ให้คืน shortfall flag พร้อม qty ที่ขาด</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-fix">แก้</div>
+        <div class="feature-body">
+          <div class="feature-title">🐛 บั๊กจริง: conflict detection ใช้ cache stale</div>
+          <div class="feature-detail">lastModified ถูก cache 180 วินาที ทำให้กรอบ +5000ms ป้องกัน race condition ไม่ได้เลย — แก้ให้อ่าน timestamp จาก sheet โดยตรง</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-fix">แก้</div>
+        <div class="feature-body">
+          <div class="feature-title">🐛 บั๊กจริง: transferStockBatch ไม่มี conflict check</div>
+          <div class="feature-detail">2 คนโอนสินค้าพร้อมกันได้ → ของเกินคลัง เพิ่ม optimistic lock ก่อน write</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">🔒 Schema-lock test</div>
+          <div class="feature-detail">assert ว่า column index ใน code ตรงกับ header จริงใน Sheets ทุก build — ป้องกัน column drift แบบ silent</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-fix">แก้</div>
+        <div class="feature-body">
+          <div class="feature-title">🐛 enrichData crash เมื่อสินค้าไม่มีชื่อ</div>
+          <div class="feature-detail">เพิ่ม try/catch ใน enrichData (app.jsx) กัน white screen เมื่อ product ไม่มี name field</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Performance -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-icon icon-perf">⚡</div>
+      <div>
+        <div class="section-title">ความเร็วการโหลด — เร็วขึ้นมีนัยสำคัญ</div>
+        <div class="section-desc">แก้ปัญหา iOS Safari + ลด compile time + retry เมื่อเน็ตช้า</div>
+      </div>
+    </div>
+    <div class="feature-list">
+      <div class="feature">
+        <div class="feature-badge badge-perf">เร็วขึ้น</div>
+        <div class="feature-body">
+          <div class="feature-title">🍎 แก้ iOS Safari Babel cache เกิน quota</div>
+          <div class="feature-detail">เปลี่ยน Babel cache จาก localStorage (ขนาดจำกัด) ไปใช้ Cache API — แก้ปัญหา iOS Safari ไม่สามารถ cache JS ขนาดใหญ่ได้</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-perf">เร็วขึ้น</div>
+        <div class="feature-body">
+          <div class="feature-title">🔀 Stale-while-revalidate + Lazy load xlsx</div>
+          <div class="feature-detail">หน้าจอขึ้นทันทีจาก cache ขณะโหลดไฟล์ใหม่ background + โหลด xlsx library เฉพาะเมื่อใช้ export</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-fix">แก้</div>
+        <div class="feature-body">
+          <div class="feature-title">🔄 Retry 3 ครั้ง + GAS cache 10 นาที</div>
+          <div class="feature-detail">เมื่อเน็ตช้าหรือ GAS ตอบช้า ระบบ retry อัตโนมัติ 3 ครั้งก่อนแสดง error + เพิ่ม GAS server-side cache เป็น 10 นาที</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-perf">เร็วขึ้น</div>
+        <div class="feature-body">
+          <div class="feature-title">✂️ แบ่งไฟล์ views.jsx</div>
+          <div class="feature-detail">แยก views.jsx (10,300 บรรทัด) เป็น views-main.jsx + views-analytics.jsx — ลดเวลา Babel compile บนมือถือ</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Feature additions -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-icon icon-ux">✨</div>
+      <div>
+        <div class="section-title">ฟีเจอร์ใหม่ต่างๆ</div>
+        <div class="section-desc">React Error Boundary, งานจัดพิเศษ, MTO sequential ID</div>
+      </div>
+    </div>
+    <div class="feature-list">
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">🛡️ React Error Boundary</div>
+          <div class="feature-detail">ป้องกัน white screen เมื่อ View ใด View หนึ่ง crash — แสดงหน้าจอ error พร้อมปุ่ม reload แทน</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">🎪 งานจัดพิเศษ</div>
+          <div class="feature-detail">เปิดให้ทุก role ใช้ได้ + สร้าง ZORT Sale Order ราคา 0 สำหรับงาน event พิเศษ</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-improve">ปรับ</div>
+        <div class="feature-body">
+          <div class="feature-title">🔢 MTO Job ID แบบ sequential</div>
+          <div class="feature-detail">เปลี่ยนจาก random ID เป็น MTO-YYYYMM### (เช่น MTO-202606001) + เพิ่ม remark ใน ZORT ให้อ่านง่าย</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">🔔 LINE Notification 3 รูปแบบ</div>
+          <div class="feature-detail">① Low-stock alert — แจ้งเมื่อสต็อกต่ำกว่า threshold ② Daily summary — สรุปยอดขาย ③ MTO close alert — แจ้งเมื่อปิดงาน MTO</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">🔍 Search + Filter ใน Audit Log</div>
+          <div class="feature-detail">เพิ่มช่องค้นหาและ filter ใน AuditLogView ตามรอยได้ว่าใครแก้อะไรเมื่อไหร่</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-improve">ปรับ</div>
+        <div class="feature-body">
+          <div class="feature-title">📄 Pagination — scroll ขึ้นบนอัตโนมัติ</div>
+          <div class="feature-detail">เมื่อเปลี่ยนหน้า list จะ scroll ไปต้น list ทันที ไม่ต้องเลื่อนขึ้นเอง</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ───────────────────────── สัปดาห์ที่ 3 ───────────────────────── -->
+  <div class="week-label">
+    <div class="week-label-line"></div>
+    <div class="week-label-text">📅 สัปดาห์ที่ 3 — 5 มิ.ย. 2569</div>
+    <div class="week-label-line"></div>
+  </div>
+
+  <!-- Purchase Mode -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-icon icon-purchase">🛒</div>
+      <div>
+        <div class="section-title">หน้าจัดซื้อสำหรับเจ้าของร้าน</div>
+        <div class="section-desc">Owner เข้า Dashboard แล้วเห็นหน้าจัดซื้อทันที + ปุ่มสั่งของจาก FSCard</div>
+      </div>
+    </div>
+    <div class="feature-list">
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">🏪 FrontStoreView — หน้าจัดการหน้าร้าน</div>
+          <div class="feature-detail">View ใหม่สำหรับเจ้าของ — filter ซัพพลายเออร์, เห็นว่าควรสั่งอะไร, โหมดจัดซื้อเรียงสต็อกน้อยสุดก่อน</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">📦 ปุ่ม "สั่ง" บน FSCard</div>
+          <div class="feature-detail">กดปุ่ม 📦 บน card สินค้า → mini modal ยืนยันสั่ง → โอนสินค้าจากคลังมาหน้าร้านทันที</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">📊 Stock Check Request — ระบบขอเช็คสต็อก</div>
+          <div class="feature-detail">เจ้าของกด floating button → เลือกซัพพลายเออร์ → ส่งคำขอเช็คสต็อกไปให้พนักงาน → navigate ไป StockCountView อัตโนมัติ</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-improve">ปรับ</div>
+        <div class="feature-body">
+          <div class="feature-title">📅 วันเข้าสต็อกล่าสุด + จำนวนที่เข้า</div>
+          <div class="feature-detail">แสดง lastStockInDate (DD/MM/YYYY) และ lastStockInQty บน card — เจ้าของรู้ว่าเติมสินค้าล่าสุดเมื่อไหร่และเท่าไหร่</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-improve">ปรับ</div>
+        <div class="feature-body">
+          <div class="feature-title">🔤 Supplier filter — case-insensitive exact match</div>
+          <div class="feature-detail">แก้ filter ซัพพลายเออร์ใน FrontStoreView ให้ match แบบ exact (ไม่ใช้ includes) และ case-insensitive — ไม่เกิดผลลัพธ์ผิดพลาด</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-fix">แก้</div>
+        <div class="feature-body">
+          <div class="feature-title">🐛 Scroll ค้างบนมือถือ</div>
+          <div class="feature-detail">แก้ปัญหา Segment scroll ไม่ทำงานบน iOS/Android เมื่อ list ยาว</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- LINE Notifications -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-icon icon-line">💬</div>
+      <div>
+        <div class="section-title">LINE Notification — แจ้งเตือนกลุ่มแบบ real-time</div>
+        <div class="section-desc">แยกหิ้ว/ขึ้นรถ + @all + การ์ดรูปสินค้า + สรุปตอนเช้า</div>
+      </div>
+    </div>
+    <div class="feature-list">
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">🚶 แยกหิ้ว/ขึ้นรถในหน้ารายการสั่งของ</div>
+          <div class="feature-detail">ของหิ้วอยู่บนสุดพร้อม section header สีเขียว "🚶 หิ้วเอง" — ของขึ้นรถอยู่ล่าง "🚛 ขึ้นรถ" มองเห็นชัดทันที</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">📲 แจ้งกลุ่ม LINE ทันทีเมื่อกดหิ้ว</div>
+          <div class="feature-detail">กดเปลี่ยนเป็นหิ้ว → ส่ง @All ไปกลุ่มทันที + การ์ดสินค้า Flex Message พร้อมรูป ชื่อ รหัส วันที่</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">🚛 แจ้งสรุปรอขึ้นรถ — Flex Carousel</div>
+          <div class="feature-detail">ส่งทุก 08:00 และ 13:00 (ศุกร์-อาทิตย์) เป็น Flex Carousel ทีละหลายสินค้า พร้อมรูปทุกชิ้น — กรองเฉพาะสถานะ "รอ" เท่านั้น</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">✅ แจ้งเมื่อจัดของครบหมดแล้ว</div>
+          <div class="feature-detail">ถ้าไม่มีของรอขึ้นรถ จะส่ง "✅ ไม่มีของรอขึ้นรถแล้ว จัดครบหมดแล้ว 👍" แทน — พนักงานรู้ว่าทำงานเสร็จแล้ว</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">🧪 testTruckNotification() สำหรับทดสอบ</div>
+          <div class="feature-detail">รันเองได้จาก GAS dropdown ทดสอบแจ้งเตือนขึ้นรถโดยไม่ต้องรอเวลา trigger</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PWA -->
+  <div class="section">
+    <div class="section-header">
+      <div class="section-icon icon-pwa">📱</div>
+      <div>
+        <div class="section-title">PWA — ติดตั้งเป็นแอปบนมือถือได้</div>
+        <div class="section-desc">Add to Home Screen ได้ทันที ใช้งานเหมือน native app</div>
+      </div>
+    </div>
+    <div class="feature-list">
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">📲 Install Prompt</div>
+          <div class="feature-detail">แสดงปุ่ม "เพิ่มไปหน้าจอหลัก" อัตโนมัติเมื่อเปิดบน Android Chrome — iOS แสดงคำแนะนำ share → Add to Home Screen</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-new">ใหม่</div>
+        <div class="feature-body">
+          <div class="feature-title">🖼️ ไอคอนแอป 192×192 และ 512×512</div>
+          <div class="feature-detail">เพิ่มไอคอนขนาดมาตรฐาน PWA ทั้ง 2 ขนาด — แสดงถูกต้องบนทุก device</div>
+        </div>
+      </div>
+      <div class="feature">
+        <div class="feature-badge badge-improve">ปรับ</div>
+        <div class="feature-body">
+          <div class="feature-title">⚙️ Service Worker — stale-while-revalidate</div>
+          <div class="feature-detail">หน้าขึ้นทันทีจาก cache — API/Sheet ไม่ cache เลย (ข้อมูล live เสมอ) — CDN libs cache-first — app files stale-while-revalidate</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Summary -->
+  <div class="section" style="background: linear-gradient(135deg, #f0fdf4 0%, #eff6ff 100%); border: 1.5px solid #bbf7d0;">
+    <div class="section-header" style="border-bottom-color: #dcfce7;">
+      <div class="section-icon" style="background: #dcfce7;">📋</div>
+      <div>
+        <div class="section-title">สรุปภาพรวม</div>
+        <div class="section-desc">10 วัน 27 พ.ค. – 5 มิ.ย. 2569</div>
+      </div>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px;">
+      <div style="background: #fff; border-radius: 10px; padding: 16px; text-align: center; border: 1.5px solid #dcfce7;">
+        <div style="font-size: 28px; font-weight: 800; color: #1f7f44;">9</div>
+        <div style="font-size: 12px; color: #555; margin-top: 4px;">ZORT API functions<br>ที่ sync อัตโนมัติ</div>
+      </div>
+      <div style="background: #fff; border-radius: 10px; padding: 16px; text-align: center; border: 1.5px solid #bfdbfe;">
+        <div style="font-size: 28px; font-weight: 800; color: #1e40af;">55</div>
+        <div style="font-size: 12px; color: #555; margin-top: 4px;">Automated test cases<br>ที่เพิ่มเข้ามา</div>
+      </div>
+      <div style="background: #fff; border-radius: 10px; padding: 16px; text-align: center; border: 1.5px solid #fde68a;">
+        <div style="font-size: 28px; font-weight: 800; color: #b45309;">3</div>
+        <div style="font-size: 12px; color: #555; margin-top: 4px;">บั๊กข้อมูลหาย<br>ที่แก้ได้</div>
+      </div>
+      <div style="background: #fff; border-radius: 10px; padding: 16px; text-align: center; border: 1.5px solid #fbcfe8;">
+        <div style="font-size: 28px; font-weight: 800; color: #9d174d;">3</div>
+        <div style="font-size: 12px; color: #555; margin-top: 4px;">รูปแบบ LINE<br>notification ใหม่</div>
+      </div>
+    </div>
+    <div class="chips" style="margin-top: 20px;">
+      <span class="chip">ZORT API เชื่อมได้</span>
+      <span class="chip">ข้อมูลไม่หาย</span>
+      <span class="chip">โหลดเร็วขึ้น</span>
+      <span class="chip">PWA ติดตั้งได้</span>
+      <span class="chip">LINE กลุ่มรองรับ</span>
+      <span class="chip">หิ้ว/ขึ้นรถแยกชัด</span>
+      <span class="chip">แจ้งเตือนอัตโนมัติ</span>
+      <span class="chip">55 tests ป้องกัน regression</span>
+    </div>
+  </div>
+
+  <div class="footer">
+    สร้างโดย <b>DMJ Dev Team</b> · Doomuenjing Dashboard ·
+    <a href="https://dmj-inventory-dashboard.pages.dev" style="color:#1f7f44;">dmj-inventory-dashboard.pages.dev</a>
+  </div>
+</div>
+</body>
+</html>
