@@ -1677,6 +1677,20 @@ function CategoryView({ data, role }) {
   const PAGE_SIZE = 20;
   const visible = filtered.slice((page-1)*PAGE_SIZE, page*PAGE_SIZE);
 
+  // purchase mode — products sorted by qtyStore asc (ของน้อยสุดขึ้นก่อน)
+  const purchaseSorted = uM(function() {
+    if (!purchasePlanMode) return [];
+    var f = products.filter(function(p) { return p.cat && p.cat !== "ไม่มีรหัสสินค้า" && !p.isMTO; });
+    if (active) f = f.filter(function(p) { return p.cat === active; });
+    var gq = globalSearch.toLowerCase().trim();
+    if (gq) f = f.filter(function(p) { return (p.sku||"").toLowerCase().includes(gq) || (p.name||"").toLowerCase().includes(gq); });
+    return f.sort(function(a,b) { return (a.qtyStore||0) - (b.qtyStore||0); });
+  }, [purchasePlanMode, products, active, globalSearch]);
+  const purchaseVisible = purchaseSorted.slice((page-1)*PAGE_SIZE, page*PAGE_SIZE);
+
+  // reset page เมื่อสลับโหมด
+  uE(function() { setPage(1); }, [purchasePlanMode]);
+
   // ── จัดกลุ่มตามร้าน (group filtered set by supplier) ──
   // ใช้ชื่อร้านที่อ่านง่าย: lastSupplier (ชื่อ) ก่อน แล้วค่อย vendor (รหัส)
   const supplierGroups = uM(() => {
@@ -1783,7 +1797,7 @@ function CategoryView({ data, role }) {
       <div className="page-head">
         <div>
           <div className="page-title">หมวดหมู่สินค้า</div>
-          <div className="page-sub">{purchasePlanMode ? "สินค้าที่ควรสั่งเพิ่ม — จัดกลุ่มตาม Supplier" : "ดูสินค้าทุกตัวในแต่ละหมวด · เรียงตามขายดี / ราคา / Supplier / สี"}</div>
+          <div className="page-sub">{purchasePlanMode ? `เรียงจากสต็อกหน้าร้านน้อยสุด · ${purchaseSorted.length} รายการ` : "ดูสินค้าทุกตัวในแต่ละหมวด · เรียงตามขายดี / ราคา / Supplier / สี"}</div>
         </div>
         {role === "owner" && (
           <div style={{display:"flex",gap:4,border:"1px solid #e5e7eb",borderRadius:8,overflow:"hidden",flexShrink:0}}>
@@ -2175,9 +2189,19 @@ function CategoryView({ data, role }) {
 
           <div ref={listTopRef}/>
           {purchasePlanMode ? (
-            <PurchaseGroupView products={products.filter(function(p) {
-              return p.cat && p.cat !== "ไม่มีรหัสสินค้า" && (p.qtyStore||0) <= 12 && (p.qtyWH||0) > 0;
-            })} />
+            purchaseVisible.length === 0 ? (
+              <Empty title="ไม่พบสินค้า" sub="ลองเปลี่ยนหมวดหมู่หรือค้นหา"/>
+            ) : (
+              <div className="product-grid" style={{width:"100%",boxSizing:"border-box",minWidth:0}}>
+                {purchaseVisible.map(function(p) {
+                  return (
+                    <div key={p.sku}>
+                      <ProductCard p={p} accent={catColor(p.cat, allCats)} allCats={allCats} reasonTags={[]} onOrder={null} role={role}/>
+                    </div>
+                  );
+                })}
+              </div>
+            )
           ) : filtered.length === 0 ? (
             <Empty title="ไม่พบสินค้า" sub={isGlobalSearch ? "ลองค้นหาด้วยคำอื่น" : reorderFilter ? "ไม่มีสินค้าที่ควรสั่ง 🎉" : "หมวดนี้ยังไม่มีสินค้า"}/>
           ) : viewMode === 'list' ? (
@@ -2345,10 +2369,12 @@ function CategoryView({ data, role }) {
               ))}
             </div>
           )}
-          {/* Pagination — แสดงเฉพาะ grid/list view (ไม่แสดงใน supplier/purchase mode) */}
-          {!purchasePlanMode && viewMode !== 'supplier' && (
+          {/* Pagination */}
+          {purchasePlanMode ? (
+            <Pagination page={page} total={purchaseSorted.length} pageSize={PAGE_SIZE} onChange={setPage} listRef={listTopRef}/>
+          ) : viewMode !== 'supplier' ? (
             <Pagination page={page} total={filtered.length} pageSize={PAGE_SIZE} onChange={setPage} listRef={listTopRef}/>
-          )}
+          ) : null}
         </div>
       </div>
       {orderProduct && <OrderModal product={orderProduct} onClose={() => setOrderProduct(null)}/>}
