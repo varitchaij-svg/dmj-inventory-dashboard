@@ -1645,18 +1645,20 @@ function CategoryView({ data, role }) {
       if (reorderFilter) f = f.filter(needsReorder);
       return f;
     };
+    const purchaseSort = (a, b) => (a.qtyStore||0) - (b.qtyStore||0);
+    const finalSort = purchasePlanMode ? purchaseSort : sortFn;
     // ── Global vendor mode ──────────────────────────────────────────
     if (globalVendor) {
       let f = products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า" && p.vendor === globalVendor);
       f = applyCommon(f);
-      return [...f].sort(sortFn);
+      return [...f].sort(finalSort);
     }
     if (gq) {
       // Global: search all categories
       let f = products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า");
       f = applyCommon(f);
       if (newStockFilter) f = f.filter(p => isNew45(p.lastStockInDate));
-      return [...f].sort(sortFn);
+      return [...f].sort(finalSort);
     }
     // Normal: filter by active category ("" = ทั้งหมด)
     let f = active === ""
@@ -1667,29 +1669,16 @@ function CategoryView({ data, role }) {
     if (supplierFilter) f = f.filter(p => (p.vendor || p.lastSupplier) === supplierFilter);
     if (deadFilter)     f = f.filter(p => p.deadMonths === null || p.deadMonths >= deadFilter);
     if (newStockFilter) f = f.filter(p => isNew45(p.lastStockInDate));
-    return [...f].sort(sortFn);
-  }, [products, active, globalSearch, globalVendor, colorFilter, supplierFilter, deadFilter, newStockFilter, reorderFilter, needsReorder, sortFn]);
+    return [...f].sort(finalSort);
+  }, [products, active, globalSearch, globalVendor, colorFilter, supplierFilter, deadFilter, newStockFilter, reorderFilter, needsReorder, sortFn, purchasePlanMode]);
 
   // reset page เมื่อ filter/category/search เปลี่ยน
-  uE(() => { setPage(1); }, [active, globalSearch, globalVendor, colorFilter, supplierFilter, deadFilter, newStockFilter, reorderFilter, sortBy]);
+  uE(() => { setPage(1); }, [active, globalSearch, globalVendor, colorFilter, supplierFilter, deadFilter, newStockFilter, reorderFilter, sortBy, purchasePlanMode]);
 
   // pagination — 20 รายการต่อหน้า
   const PAGE_SIZE = 20;
   const visible = filtered.slice((page-1)*PAGE_SIZE, page*PAGE_SIZE);
 
-  // purchase mode — products sorted by qtyStore asc (ของน้อยสุดขึ้นก่อน)
-  const purchaseSorted = uM(function() {
-    if (!purchasePlanMode) return [];
-    var f = products.filter(function(p) { return p.cat && p.cat !== "ไม่มีรหัสสินค้า" && !p.isMTO; });
-    if (active) f = f.filter(function(p) { return p.cat === active; });
-    var gq = globalSearch.toLowerCase().trim();
-    if (gq) f = f.filter(function(p) { return (p.sku||"").toLowerCase().includes(gq) || (p.name||"").toLowerCase().includes(gq); });
-    return f.sort(function(a,b) { return (a.qtyStore||0) - (b.qtyStore||0); });
-  }, [purchasePlanMode, products, active, globalSearch]);
-  const purchaseVisible = purchaseSorted.slice((page-1)*PAGE_SIZE, page*PAGE_SIZE);
-
-  // reset page เมื่อสลับโหมด
-  uE(function() { setPage(1); }, [purchasePlanMode]);
 
   // ── จัดกลุ่มตามร้าน (group filtered set by supplier) ──
   // ใช้ชื่อร้านที่อ่านง่าย: lastSupplier (ชื่อ) ก่อน แล้วค่อย vendor (รหัส)
@@ -1797,7 +1786,7 @@ function CategoryView({ data, role }) {
       <div className="page-head">
         <div>
           <div className="page-title">หมวดหมู่สินค้า</div>
-          <div className="page-sub">{purchasePlanMode ? `เรียงจากสต็อกหน้าร้านน้อยสุด · ${purchaseSorted.length} รายการ` : "ดูสินค้าทุกตัวในแต่ละหมวด · เรียงตามขายดี / ราคา / Supplier / สี"}</div>
+          <div className="page-sub">{purchasePlanMode ? `เรียงจากสต็อกหน้าร้านน้อยสุด · ${filtered.length} รายการ` : "ดูสินค้าทุกตัวในแต่ละหมวด · เรียงตามขายดี / ราคา / Supplier / สี"}</div>
         </div>
         {role === "owner" && (
           <div style={{display:"flex",gap:4,border:"1px solid #e5e7eb",borderRadius:8,overflow:"hidden",flexShrink:0}}>
@@ -2001,19 +1990,21 @@ function CategoryView({ data, role }) {
                 );
               })()}
 
-              {/* Sort */}
-              <div style={{display:"flex",alignItems:"center",gap:8}}>
-                <span style={{fontSize:11.5,fontWeight:600,color:"var(--muted)"}}>เรียงตาม</span>
-                <select value={sortBy} onChange={e=>setSortBy(e.target.value)}
-                        style={{
-                          padding:"8px 12px", borderRadius:9,
-                          border:"1px solid var(--bdr)", background:"#fafcf7",
-                          fontSize:12.5, fontWeight:600, fontFamily:"inherit",
-                          cursor:"pointer",
-                        }}>
-                  {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
-              </div>
+              {/* Sort — ซ่อนใน purchase mode (sort คือ qtyStore asc ตายตัว) */}
+              {!purchasePlanMode && (
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontSize:11.5,fontWeight:600,color:"var(--muted)"}}>เรียงตาม</span>
+                  <select value={sortBy} onChange={e=>setSortBy(e.target.value)}
+                          style={{
+                            padding:"8px 12px", borderRadius:9,
+                            border:"1px solid var(--bdr)", background:"#fafcf7",
+                            fontSize:12.5, fontWeight:600, fontFamily:"inherit",
+                            cursor:"pointer",
+                          }}>
+                    {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </div>
+              )}
             </div>
 
             {/* Color filter chips */}
@@ -2188,21 +2179,7 @@ function CategoryView({ data, role }) {
           </div>
 
           <div ref={listTopRef}/>
-          {purchasePlanMode ? (
-            purchaseVisible.length === 0 ? (
-              <Empty title="ไม่พบสินค้า" sub="ลองเปลี่ยนหมวดหมู่หรือค้นหา"/>
-            ) : (
-              <div className="product-grid" style={{width:"100%",boxSizing:"border-box",minWidth:0}}>
-                {purchaseVisible.map(function(p) {
-                  return (
-                    <div key={p.sku}>
-                      <ProductCard p={p} accent={catColor(p.cat, allCats)} allCats={allCats} reasonTags={[]} onOrder={null} role={role}/>
-                    </div>
-                  );
-                })}
-              </div>
-            )
-          ) : filtered.length === 0 ? (
+          {filtered.length === 0 ? (
             <Empty title="ไม่พบสินค้า" sub={isGlobalSearch ? "ลองค้นหาด้วยคำอื่น" : reorderFilter ? "ไม่มีสินค้าที่ควรสั่ง 🎉" : "หมวดนี้ยังไม่มีสินค้า"}/>
           ) : viewMode === 'list' ? (
             /* ── List view — compact horizontal rows ── */
@@ -2265,7 +2242,7 @@ function CategoryView({ data, role }) {
                       </div>
                     </div>
                     {/* Order button */}
-                    {setOrderProduct && (
+                    {setOrderProduct && !purchasePlanMode && (
                       <button onClick={() => !outOfStock && setOrderProduct(p)}
                         disabled={outOfStock}
                         style={{flexShrink:0,padding:'8px 12px',borderRadius:8,border:'none',
@@ -2334,7 +2311,7 @@ function CategoryView({ data, role }) {
                                      accent={isGlobalSearch ? catColor(p.cat, allCats) : color}
                                      allCats={allCats}
                                      reasonTags={[]}
-                                     onOrder={setOrderProduct}
+                                     onOrder={purchasePlanMode ? null : setOrderProduct}
                                      role={role}/>
                       </div>
                     ))}
@@ -2370,11 +2347,9 @@ function CategoryView({ data, role }) {
             </div>
           )}
           {/* Pagination */}
-          {purchasePlanMode ? (
-            <Pagination page={page} total={purchaseSorted.length} pageSize={PAGE_SIZE} onChange={setPage} listRef={listTopRef}/>
-          ) : viewMode !== 'supplier' ? (
+          {viewMode !== 'supplier' && (
             <Pagination page={page} total={filtered.length} pageSize={PAGE_SIZE} onChange={setPage} listRef={listTopRef}/>
-          ) : null}
+          )}
         </div>
       </div>
       {orderProduct && <OrderModal product={orderProduct} onClose={() => setOrderProduct(null)}/>}
