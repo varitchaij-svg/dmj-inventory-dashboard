@@ -106,7 +106,7 @@ function FrontStoreView({ data, role }) {
   const baseFiltered = uM(() => {
     let f = products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า");
     if (activeCat !== "ALL") f = f.filter(p => p.cat === activeCat);
-    if (supplierFilter) f = f.filter(p => { const sup = (p.lastSupplier || p.vendor || ""); return sup === supplierFilter || sup.toLowerCase().includes(supplierFilter.toLowerCase()); });
+    if (supplierFilter) f = f.filter(p => (p.lastSupplier || p.vendor || "") === supplierFilter);
     if (search) {
       const q = search.trim().toLowerCase();
       f = f.filter(p => (p.sku||"").toLowerCase().includes(q) || (p.name||"").toLowerCase().includes(q));
