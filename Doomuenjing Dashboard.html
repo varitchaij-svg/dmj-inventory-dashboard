@@ -965,9 +965,10 @@
     injectCode(compiled);
   }
 
-  /* โหลดตามลำดับ: ui → views → app */
+  /* โหลดตามลำดับ: ui → views-main → views-analytics → app */
   window._appBoot = loadJsx('ui.jsx')
-    .then(function () { return loadJsx('views.jsx'); })
+    .then(function () { return loadJsx('views-main.jsx'); })
+    .then(function () { return loadJsx('views-analytics.jsx'); })
     .then(function () { return loadJsx('app.jsx'); })
     .catch(function (err) { console.error('[boot]', err); });
 }());
