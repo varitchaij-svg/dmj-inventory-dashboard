@@ -3158,7 +3158,8 @@ function sendPendingTruckOrders() {
     var qty    = Number(r[7]) || 0;
     if (!sku || !qty) continue;
     if (type === 'หิ้ว') continue;
-    if (status === 'เสร็จ' || status === 'ยกเลิก') continue;
+    var isPending = !status || status === 'รอ' || status === 'pending';
+    if (!isPending) continue;
     pending.push({ sku: sku, name: name || sku, qty: qty });
   }
   if (!pending.length) return;
@@ -3234,7 +3235,8 @@ function testTruckNotification() {
     var qty    = Number(r[7]) || 0;
     if (!sku || !qty) continue;
     if (type === 'หิ้ว') continue;
-    if (status === 'เสร็จ' || status === 'ยกเลิก') continue;
+    var isPending = !status || status === 'รอ' || status === 'pending';
+    if (!isPending) continue;
     pending.push({ sku: sku, name: name || sku, qty: qty });
   }
   Logger.log("pending truck orders: " + pending.length);
