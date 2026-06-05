@@ -298,6 +298,10 @@ function doPost(e) {
     if (data.closeMtoJob)   return closeMtoJob(ss, data, actor);
     if (data.deleteMtoJob)  return deleteMtoJob(ss, data);
 
+    // ─── Stock Check Requests ───
+    if (data.createStockCheck) return createStockCheckRequest_(data.skus, data.names, actor);
+    if (data.completeStockCheck) return completeStockCheckRequest_(data.reqId, actor);
+
     return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Unknown action" }))
       .setMimeType(ContentService.MimeType.JSON);
 
@@ -519,6 +523,7 @@ function doGet(e) {
         totalProfit:     products.reduce((s, p) => s + (p.profit || 0), 0),
       },
       mtoGroups: Object.values(mtoMap),
+      stockCheckRequests: readStockCheckRequests_().filter(function(r){ return r.status === "pending"; }),
       thresholds: { default: 36, overrides: { "แจกันแก้ว": 3, "เรซิ่นและอื่นๆ": 3 } },
       _debug: {
         productsCount:   products.length,
@@ -3707,4 +3712,71 @@ function manualClearCache() {
     cache.remove(`${CACHE_KEY}_total`);
   }
   SpreadsheetApp.getActiveSpreadsheet().toast("บอทพร้อมตอบข้อมูลล่าสุดแล้ว", "✅ อัปเดต Cache สำเร็จ", 5);
+}
+
+// ─── Stock Check Requests ───────────────────────────────────────────────────
+
+const SHEET_STOCK_CHECK = "คำขอเช็คสินค้า";
+
+function getOrCreateStockCheckSheet_(ss) {
+  var sh = ss.getSheetByName(SHEET_STOCK_CHECK);
+  if (!sh) {
+    sh = ss.insertSheet(SHEET_STOCK_CHECK);
+    sh.appendRow(["reqId","timestamp","requester","skuList","nameList","status","completedBy","completedAt"]);
+  }
+  return sh;
+}
+
+function readStockCheckRequests_() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var sh = ss.getSheetByName(SHEET_STOCK_CHECK);
+  if (!sh) return [];
+  var rows = sh.getDataRange().getValues();
+  if (rows.length < 2) return [];
+  return rows.slice(1).map(function(r) {
+    return {
+      reqId:       String(r[0] || ""),
+      timestamp:   String(r[1] || ""),
+      requester:   String(r[2] || ""),
+      skus:        JSON.parse(r[3] || "[]"),
+      names:       JSON.parse(r[4] || "[]"),
+      status:      String(r[5] || "pending"),
+      completedBy: String(r[6] || ""),
+      completedAt: String(r[7] || ""),
+    };
+  }).filter(function(r){ return r.reqId; });
+}
+
+function createStockCheckRequest_(skus, names, actor) {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var sh = getOrCreateStockCheckSheet_(ss);
+  var rows = sh.getDataRange().getValues();
+  var seq = rows.length; // row 1 = header, seq = # of data rows after append
+  var reqId = "CHK-" + String(seq).padStart(3, "0");
+  var ts = Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyy-MM-dd HH:mm");
+  sh.appendRow([reqId, ts, actor || "owner", JSON.stringify(skus || []), JSON.stringify(names || []), "pending", "", ""]);
+  invalidateCache_();
+  return ContentService.createTextOutput(JSON.stringify({ success: true, reqId: reqId }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function completeStockCheckRequest_(reqId, actor) {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var sh = ss.getSheetByName(SHEET_STOCK_CHECK);
+  if (!sh) return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Sheet not found" }))
+    .setMimeType(ContentService.MimeType.JSON);
+  var rows = sh.getDataRange().getValues();
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]) === String(reqId)) {
+      var ts = Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyy-MM-dd HH:mm");
+      sh.getRange(i + 1, 6).setValue("done");
+      sh.getRange(i + 1, 7).setValue(actor || "");
+      sh.getRange(i + 1, 8).setValue(ts);
+      invalidateCache_();
+      return ContentService.createTextOutput(JSON.stringify({ success: true }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+  }
+  return ContentService.createTextOutput(JSON.stringify({ success: false, error: "reqId not found" }))
+    .setMimeType(ContentService.MimeType.JSON);
 }

@@ -1576,6 +1576,8 @@ function CategoryView({ data, role }) {
   const [newStockFilter, setNewStockFilter] = uS(false);
   const [purchasePlanMode, setPurchasePlanMode] = uS(role === "owner");
   const [supplierPage, setSupplierPage] = uS(0);
+  const [checkToast, showCheckToast, hideCheckToast] = useToast();
+  const [sendingCheck, setSendingCheck] = uS(false);
   const [orderProduct, setOrderProduct] = uS(null);
   const [globalVendor, setGlobalVendor] = uS(null); // global supplier filter (all categories)
   // Android back: ถ้ากำลังดู supplier view → กด back = ล้าง supplier filter
@@ -1723,6 +1725,24 @@ function CategoryView({ data, role }) {
   // reset supplierPage เมื่อ filter/mode/category เปลี่ยน
   uE(function() { setSupplierPage(0); }, [purchasePlanMode, active, globalSearch, colorFilter, supplierFilter, deadFilter, newStockFilter, reorderFilter]);
 
+  const handleSendStockCheck = uC(async function() {
+    if (!filtered.length || sendingCheck) return;
+    setSendingCheck(true);
+    var skus  = filtered.map(function(p){ return p.sku; });
+    var names = filtered.map(function(p){ return p.name || p.sku; });
+    try {
+      var res = await fetch(SHEET_DEPLOY_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ createStockCheck: true, skus: skus, names: names, actor: role }),
+      });
+      var json = await res.json();
+      if (json.success) showCheckToast({ type:"success", message:"ส่งคำขอเช็คสต็อก " + skus.length + " รายการแล้ว ✅" });
+      else showCheckToast({ type:"error", message:"เกิดข้อผิดพลาด" });
+    } catch(e) { showCheckToast({ type:"error", message:"ส่งไม่สำเร็จ" }); }
+    setSendingCheck(false);
+  }, [filtered, sendingCheck, showCheckToast]);
+
   // Compute reason tags per product (within this category sort)
   const totalCatRev = filtered.reduce((s,p) => s + p.soldRev, 0);
   const reasonMap = uM(() => {
@@ -1807,18 +1827,27 @@ function CategoryView({ data, role }) {
           <div className="page-sub">{purchasePlanMode ? `เรียงจากสต็อกหน้าร้านน้อยสุด · ${filtered.length} รายการ` : "ดูสินค้าทุกตัวในแต่ละหมวด · เรียงตามขายดี / ราคา / Supplier / สี"}</div>
         </div>
         {role === "owner" && (
-          <div style={{display:"flex",gap:4,border:"1px solid #e5e7eb",borderRadius:8,overflow:"hidden",flexShrink:0}}>
-            <button onClick={() => setPurchasePlanMode(false)}
-              style={{padding:"6px 14px",fontSize:13,border:"none",fontFamily:"inherit",cursor:"pointer",
-                      background:!purchasePlanMode?"#2563eb":"#f9fafb",
-                      color:!purchasePlanMode?"#fff":"#374151"}}>
-              🛍️ ดูสินค้า
-            </button>
-            <button onClick={() => setPurchasePlanMode(true)}
-              style={{padding:"6px 14px",fontSize:13,border:"none",fontFamily:"inherit",cursor:"pointer",
-                      background:purchasePlanMode?"#2563eb":"#f9fafb",
-                      color:purchasePlanMode?"#fff":"#374151"}}>
-              📋 จัดซื้อ
+          <div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}}>
+            <div style={{display:"flex",gap:4,border:"1px solid #e5e7eb",borderRadius:8,overflow:"hidden"}}>
+              <button onClick={() => setPurchasePlanMode(false)}
+                style={{padding:"6px 14px",fontSize:13,border:"none",fontFamily:"inherit",cursor:"pointer",
+                        background:!purchasePlanMode?"#2563eb":"#f9fafb",
+                        color:!purchasePlanMode?"#fff":"#374151"}}>
+                🛍️ ดูสินค้า
+              </button>
+              <button onClick={() => setPurchasePlanMode(true)}
+                style={{padding:"6px 14px",fontSize:13,border:"none",fontFamily:"inherit",cursor:"pointer",
+                        background:purchasePlanMode?"#2563eb":"#f9fafb",
+                        color:purchasePlanMode?"#fff":"#374151"}}>
+                📋 จัดซื้อ
+              </button>
+            </div>
+            <button onClick={handleSendStockCheck} disabled={!filtered.length || sendingCheck}
+              style={{padding:"6px 12px",fontSize:13,border:"1px solid #d1fae5",borderRadius:8,
+                      fontFamily:"inherit",cursor:filtered.length?"pointer":"not-allowed",
+                      background:"#ecfdf5",color:"#065f46",fontWeight:600,
+                      opacity:filtered.length?1:0.5,whiteSpace:"nowrap"}}>
+              {sendingCheck ? "กำลังส่ง..." : "📤 ส่งเช็ค"}
             </button>
           </div>
         )}
@@ -2442,6 +2471,7 @@ function CategoryView({ data, role }) {
         </div>
       </div>
       {orderProduct && <OrderModal product={orderProduct} onClose={() => setOrderProduct(null)}/>}
+      <Toast toast={checkToast} onClose={hideCheckToast}/>
     </div>
   );
 }
