@@ -8337,13 +8337,15 @@ function OrderListView({ data, role }) {
   }, [data.storage]);
 
   const enriched = uM(() => {
-    return orders.map((o, i) => {
+    const result = orders.map((o, i) => {
       const id = stableOrderId(o, i);
-      // reconcileOrderState ตัดสินใจว่าจะ apply localStorage state นี้หรือไม่
-      // (กัน row-reuse เลอะข้าม order + auto-heal state ค้างเดิมที่ไม่มี sig)
       const applied = reconcileOrderState(o, st[id]);
       return { ...o, id, ...applied };
     });
+    const carryCount = result.filter(r => r.carryMode === "carry").length;
+    console.log("[DMJ] orders:", result.length, "carry:", carryCount, "truck:", result.length - carryCount,
+      "| carryModes:", result.slice(0,5).map(r => r.sku + "=" + r.carryMode).join(", "));
+    return result;
   }, [orders, st]);
 
   const sorted = uM(() => [...enriched].sort((a,b) => {
