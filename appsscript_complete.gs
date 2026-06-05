@@ -442,6 +442,7 @@ function doGet(e) {
       if (my.length > 0) {
         p.lastSupplier    = my[0].supplier;
         p.lastStockInDate = my[0].date;
+        p.lastStockInQty  = my[0].qty;
         p.purchaseCount   = my.length;
       }
 

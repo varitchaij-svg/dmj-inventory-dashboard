@@ -1711,6 +1711,7 @@ function CategoryView({ data, role }) {
     if (!purchasePlanMode) return [];
     var m = {};
     filtered.forEach(function(p) {
+      if (p.isMTO) return;
       var sup = (p.lastSupplier || p.vendor || "ไม่ระบุร้าน").trim();
       if (!m[sup]) m[sup] = [];
       m[sup].push(p);
@@ -2720,7 +2721,7 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role }) {
         )}
         {p.lastStockInDate && (
           <div style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"var(--g-700)",marginBottom:6,fontWeight:600}}>
-            <span>📅 เข้าล่าสุด {p.lastStockInDate}</span>
+            <span>📅 เข้าล่าสุด {p.lastStockInDate}{p.lastStockInQty ? ` · ${p.lastStockInQty} ชิ้น` : ""}</span>
           </div>
         )}
         <div style={{display:"flex", justifyContent:"space-between", alignItems:"flex-end",
