@@ -3140,7 +3140,7 @@ function sendLineGroupOrderCard_(name, sku, date, imageUrl) {
 // สรุปออเดอร์รอขึ้นรถ — ส่ง LINE กลุ่ม อังคาร-อาทิตย์ 08:00 และ 13:00
 function sendPendingTruckOrders() {
   var day = new Date().getDay(); // 0=อา, 5=ศ, 6=ส
-  if (day !== 0 && day !== 5 && day !== 6) return; // ส่งเฉพาะ ศ-เสาร์-อาทิตย์
+  if (day !== 0 && day !== 5 && day !== 6) return;
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var sh = ss.getSheetByName('ลำดับที่สั่งสินค้า');
   if (!sh) return;
@@ -3154,19 +3154,64 @@ function sendPendingTruckOrders() {
     var name   = String(r[6] || '').trim();
     var qty    = Number(r[7]) || 0;
     if (!sku || !qty) continue;
-    if (type === 'หิ้ว') continue;              // หิ้วแจ้งทันทีไปแล้ว
+    if (type === 'หิ้ว') continue;
     if (status === 'เสร็จ' || status === 'ยกเลิก') continue;
-    pending.push({ type: type, name: name || sku, qty: qty });
+    pending.push({ sku: sku, name: name || sku, qty: qty });
   }
   if (!pending.length) return;
+
   var hour = new Date().getHours();
   var label = hour < 12 ? '🌅 เช้า' : '🌞 บ่าย';
-  var lines = ['🚚 ' + label + ' — รอขึ้นรถ ' + pending.length + ' รายการ'];
-  pending.slice(0, 20).forEach(function(o) {
-    lines.push('• ' + o.name + ' × ' + o.qty + (o.type && o.type !== 'ขึ้นรถ' ? ' (' + o.type + ')' : ''));
+  var groupId = PropertiesService.getScriptProperties().getProperty('LINE_GROUP_ID');
+  if (!groupId) return;
+
+  // lookup รูปทุก SKU
+  var imgMap = {};
+  try { imgMap = readImageMap_(); } catch(e) {}
+
+  // @All mention text
+  var mentionText = "@All 🚚 " + label + " รอขึ้นรถ " + pending.length + " รายการ";
+  UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
+    method: "post", muteHttpExceptions: true,
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN },
+    payload: JSON.stringify({ to: groupId, messages: [{
+      type: "text", text: mentionText,
+      mention: { mentionees: [{ index: 0, length: 4, type: "all" }] }
+    }]})
   });
-  if (pending.length > 20) lines.push('... และอีก ' + (pending.length - 20) + ' รายการ');
-  sendLineGroup_(lines.join('\n'));
+
+  // Flex Carousel — max 12 bubbles ต่อ carousel, max 5 messages ต่อ push
+  var show = pending.slice(0, 12);
+  var bubbles = show.map(function(o) {
+    var imgUrl = imgMap[(o.sku||"").toUpperCase()] || "";
+    var bubble = {
+      type: "bubble", size: "micro",
+      body: {
+        type: "box", layout: "vertical", spacing: "xs", paddingAll: "12px",
+        contents: [
+          { type: "text", text: o.name, weight: "bold", size: "sm", wrap: true, maxLines: 2 },
+          { type: "text", text: o.sku, size: "xxs", color: "#888888" },
+          { type: "text", text: "× " + o.qty + " ชิ้น", size: "sm", color: "#1d4ed8", weight: "bold" }
+        ]
+      }
+    };
+    if (imgUrl) {
+      bubble.hero = { type: "image", url: imgUrl, size: "full", aspectRatio: "4:3", aspectMode: "cover" };
+    }
+    return bubble;
+  });
+
+  var carousel = { type: "flex", altText: "🚚 รอขึ้นรถ " + pending.length + " รายการ",
+    contents: { type: "carousel", contents: bubbles } };
+  var r2 = UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
+    method: "post", muteHttpExceptions: true,
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN },
+    payload: JSON.stringify({ to: groupId, messages: [carousel] })
+  });
+  Logger.log("truck carousel: " + r2.getResponseCode() + " " + r2.getContentText().slice(0,300));
+  if (pending.length > 12) {
+    sendLineGroup_("... และอีก " + (pending.length - 12) + " รายการ");
+  }
 }
 
 // รันครั้งแรกเพื่อสร้าง trigger 08:00 และ 13:00 (รันเองใน GAS editor)
