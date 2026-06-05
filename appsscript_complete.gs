@@ -3105,36 +3105,44 @@ function sendLineGroupOrderCard_(name, sku, date, imageUrl) {
   // lookup รูปจาก imageUrl sheet ถ้า frontend ไม่ส่งมา
   var imgUrl = imageUrl || "";
   if (!imgUrl && sku) {
-    try {
-      var imgMap = readImageMap_();
-      imgUrl = imgMap[(sku||"").trim().toUpperCase()] || "";
-    } catch(e) { Logger.log("imgMap error: " + e); }
+    try { imgUrl = (readImageMap_()[(sku||"").trim().toUpperCase()] || ""); } catch(e) {}
   }
 
   var pushUrl = "https://api.line.me/v2/bot/message/push";
   var headers = { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN };
 
-  // ส่ง @All + ข้อความ
-  var textMsg = "@All order 🚶\n📦 " + (name||sku||"-") + "\nรหัส: " + (sku||"") + "\nวันที่: " + (date||"");
-  var r1 = UrlFetchApp.fetch(pushUrl, {
+  // @All mention
+  var mentionText = "@All order 🚶 " + (name||sku||"-");
+  UrlFetchApp.fetch(pushUrl, {
     method: "post", headers: headers, muteHttpExceptions: true,
     payload: JSON.stringify({ to: groupId, messages: [{
-      type: "text", text: textMsg,
+      type: "text", text: mentionText,
       mention: { mentionees: [{ index: 0, length: 4, type: "all" }] }
     }]})
   });
-  Logger.log("LINE text: " + r1.getResponseCode() + " " + r1.getContentText().slice(0,300));
 
-  // ส่งรูปแยก (ถ้ามี URL)
+  // Flex bubble เดียว (หน้าตาเหมือน carousel ของรอขึ้นรถ)
+  var bubble = {
+    type: "bubble", size: "kilo",
+    body: {
+      type: "box", layout: "vertical", spacing: "sm", paddingAll: "14px",
+      contents: [
+        { type: "text", text: "order 🚶", size: "xs", color: "#1565c0", weight: "bold" },
+        { type: "text", text: name || sku || "-", weight: "bold", size: "lg", wrap: true },
+        { type: "text", text: "รหัส: " + (sku||""), size: "sm", color: "#888888" },
+        { type: "text", text: "วันที่: " + (date||""), size: "sm", color: "#888888" }
+      ]
+    }
+  };
   if (imgUrl) {
-    var r2 = UrlFetchApp.fetch(pushUrl, {
-      method: "post", headers: headers, muteHttpExceptions: true,
-      payload: JSON.stringify({ to: groupId, messages: [{
-        type: "image", originalContentUrl: imgUrl, previewImageUrl: imgUrl
-      }]})
-    });
-    Logger.log("LINE image: " + r2.getResponseCode() + " " + r2.getContentText().slice(0,300));
+    bubble.hero = { type: "image", url: imgUrl, size: "full", aspectRatio: "4:3", aspectMode: "cover" };
   }
+
+  var r2 = UrlFetchApp.fetch(pushUrl, {
+    method: "post", headers: headers, muteHttpExceptions: true,
+    payload: JSON.stringify({ to: groupId, messages: [{ type: "flex", altText: "order 🚶 " + (name||sku||"-"), contents: bubble }] })
+  });
+  Logger.log("LINE carry card: " + r2.getResponseCode() + " " + r2.getContentText().slice(0,300));
 }
 
 // สรุปออเดอร์รอขึ้นรถ — ส่ง LINE กลุ่ม อังคาร-อาทิตย์ 08:00 และ 13:00
