@@ -3039,13 +3039,8 @@ function handleOrder_(params) {
     orderSh.getRange(nextRow, 1, 1, 11).setValues([[orderType, now, 'รอ', 'คลังสินค้าสาย5', 'ดูเหมือนจริง', sku, '', qty, '', '', '']]);
     // แจ้งเตือน LINE เมื่อมี order ใหม่
     var productName = (params.name || '').toString().trim();
-    // แจ้งกลุ่มเฉพาะออเดอร์หิ้ว (ไม่ส่ง DM เพื่อประหยัดเครดิต)
     if (orderType === 'หิ้ว') {
-      var msgNew = "🛍️ หิ้วใหม่!\n"
-          + (productName ? "📦 " + productName + "\n" : "")
-          + "รหัส: " + sku + "\n"
-          + "จำนวน: " + qty + " ชิ้น";
-      sendLineGroup_(msgNew);
+      sendLineGroupOrderCard_(productName || sku, sku, now, "");
     }
 
     return ContentService
