@@ -1578,11 +1578,32 @@ function CategoryView({ data, role }) {
   const [supplierPage, setSupplierPage] = uS(0);
   const [checkToast, showCheckToast, hideCheckToast] = useToast();
   const [sendingCheck, setSendingCheck] = uS(false);
+  const [checkSendOpen, setCheckSendOpen] = uS(false);       // floating button → modal
+  const [checkSuppliers, setCheckSuppliers] = uS(new Set()); // ชื่อ supplier ที่ owner เลือก
   const [orderProduct, setOrderProduct] = uS(null);
   const [globalVendor, setGlobalVendor] = uS(null); // global supplier filter (all categories)
   // Android back: ถ้ากำลังดู supplier view → กด back = ล้าง supplier filter
   useBackHandler(globalVendor ? () => { setGlobalVendor(null); setPage(1); } : null);
   const [viewMode, setViewMode] = uS('grid');
+  // ── floating button drag refs ──
+  const floatRef = React.useRef(null);
+  const dragRef  = React.useRef({ active: false, sx: 0, sy: 0, ox: 0, oy: 0, moved: false });
+  function startDrag(cx, cy) {
+    var el = floatRef.current; if (!el) return;
+    var r = el.getBoundingClientRect();
+    dragRef.current = { active: true, sx: cx, sy: cy, ox: r.left, oy: r.top, moved: false };
+  }
+  function moveDrag(cx, cy) {
+    if (!dragRef.current.active) return;
+    var el = floatRef.current; if (!el) return;
+    var dx = cx - dragRef.current.sx, dy = cy - dragRef.current.sy;
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) dragRef.current.moved = true;
+    el.style.left   = (dragRef.current.ox + dx) + 'px';
+    el.style.top    = (dragRef.current.oy + dy) + 'px';
+    el.style.right  = 'auto';
+    el.style.bottom = 'auto';
+  }
+  function endDrag() { dragRef.current.active = false; }
   // ── helper: parse DD/MM/YYYY → Date ──
   const parseStockDate = (str) => {
     if (!str) return null;
@@ -1725,23 +1746,7 @@ function CategoryView({ data, role }) {
   // reset supplierPage เมื่อ filter/mode/category เปลี่ยน
   uE(function() { setSupplierPage(0); }, [purchasePlanMode, active, globalSearch, colorFilter, supplierFilter, deadFilter, newStockFilter, reorderFilter]);
 
-  const handleSendStockCheck = uC(async function() {
-    if (!filtered.length || sendingCheck) return;
-    setSendingCheck(true);
-    var skus  = filtered.map(function(p){ return p.sku; });
-    var names = filtered.map(function(p){ return p.name || p.sku; });
-    try {
-      var res = await fetch(SHEET_DEPLOY_URL, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({ createStockCheck: true, skus: skus, names: names, actor: role }),
-      });
-      var json = await res.json();
-      if (json.success) showCheckToast({ type:"success", message:"ส่งคำขอเช็คสต็อก " + skus.length + " รายการแล้ว ✅" });
-      else showCheckToast({ type:"error", message:"เกิดข้อผิดพลาด" });
-    } catch(e) { showCheckToast({ type:"error", message:"ส่งไม่สำเร็จ" }); }
-    setSendingCheck(false);
-  }, [filtered, sendingCheck, showCheckToast]);
+  // handleSendStockCheck ย้ายไปอยู่ใน floating button modal แล้ว
 
   // Compute reason tags per product (within this category sort)
   const totalCatRev = filtered.reduce((s,p) => s + p.soldRev, 0);
@@ -1842,13 +1847,6 @@ function CategoryView({ data, role }) {
                 📋 จัดซื้อ
               </button>
             </div>
-            <button onClick={handleSendStockCheck} disabled={!filtered.length || sendingCheck}
-              style={{padding:"6px 12px",fontSize:13,border:"1px solid #d1fae5",borderRadius:8,
-                      fontFamily:"inherit",cursor:filtered.length?"pointer":"not-allowed",
-                      background:"#ecfdf5",color:"#065f46",fontWeight:600,
-                      opacity:filtered.length?1:0.5,whiteSpace:"nowrap"}}>
-              {sendingCheck ? "กำลังส่ง..." : "📤 ส่งเช็ค"}
-            </button>
           </div>
         )}
       </div>
