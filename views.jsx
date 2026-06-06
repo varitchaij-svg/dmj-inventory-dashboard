@@ -7707,7 +7707,7 @@ function cleanupOrdersState(orders) {
 async function syncOrderUpdate(order, updates) {
   if (!SHEET_DEPLOY_URL) return;
   try {
-    await fetch(SHEET_DEPLOY_URL, {
+    const res = await fetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
@@ -7723,6 +7723,9 @@ async function syncOrderUpdate(order, updates) {
         carryMode:   updates.carryMode,
       }),
     });
+    const d = await res.json().catch(() => ({})); // M4: อ่าน response จริง
+    if (d && d.ok === false) console.warn("[DMJ] syncOrderUpdate GAS error:", d.error, d);
+    return d;
   } catch(e) { console.warn("syncOrderUpdate failed:", e.message); }
 }
 
@@ -7752,6 +7755,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
   const [zeroConfirm, setZeroConfirm] = uS(false);
   const [zeroed, setZeroed] = uS(false);
   const [zeroing, setZeroing] = uS(false);
+  const [completing, setCompleting] = uS(false); // C2: กัน double-tap Done
   const [toast, showToast, hideToast] = useToast();
   uE(() => {
     setPrepQty(prev => prev === 0 ? (order.orderQty || 0) : prev);
@@ -7771,14 +7775,20 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
     onPatch(order.id, {carryMode: m});
     if (m === "carry") syncOrderUpdate(order, {carryMode: "carry", name: order.name, image: order.image});
   };
-  const markComplete = () => {
+  const markComplete = async () => {
+    if (completing) return; // C2: กัน double-tap
     if (!order.printFlag) {
       showToast("warn", "เลือก PRINT หรือ SKIP ก่อน", "🖨️");
       return;
     }
-    onPatch(order.id, { status: "สำเร็จ" });
-    syncOrderUpdate(order, { status: "สำเร็จ" });
-    showToast("success", "บันทึกแล้ว", "✅", 2500);
+    setCompleting(true);
+    try {
+      onPatch(order.id, { status: "สำเร็จ" });
+      await syncOrderUpdate(order, { status: "สำเร็จ" });
+      showToast("success", "บันทึกแล้ว", "✅", 2500);
+    } finally {
+      setCompleting(false);
+    }
   };
 
   const doZeroStock = async () => {
@@ -7978,12 +7988,12 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
 
             {/* Done */}
             {isPending && role !== "frontstore" && role !== "saler" && (
-              <button onClick={markComplete} style={{
+              <button onClick={markComplete} disabled={completing || !pf} style={{
                 padding:"10px 16px",borderRadius:10,border:"none",
-                background:pf?"#1b5e20":"#d1d5db",color:"#fff",
-                cursor:pf?"pointer":"not-allowed",fontSize:14,fontWeight:800,
+                background:(pf&&!completing)?"#1b5e20":"#d1d5db",color:"#fff",
+                cursor:(pf&&!completing)?"pointer":"not-allowed",fontSize:14,fontWeight:800,
                 display:"flex",flexDirection:"column",alignItems:"center",gap:1,
-                minWidth:52,
+                minWidth:52, opacity: completing ? 0.6 : 1,
               }}>
                 <span style={{fontSize:18}}>✅</span>
                 <span style={{fontSize:10,letterSpacing:.3}}>Done</span>
@@ -8493,7 +8503,7 @@ async function syncStockTransferBatch(items) {
     const res = await fetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ transferStockBatch: true, list: items, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน" }),
+      body: JSON.stringify({ transferStockBatch: true, list: items, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน", clientLoadedAt: window._dataLoadedAt || Date.now() }), // M1
     });
     const json = await res.json().catch(() => ({}));
     console.log("syncStockTransferBatch result:", json);
@@ -8900,14 +8910,16 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
   // ship all ready (not missed, not already shipped) in a group
   const handleShipAll = (orders) => {
+    if (!isOnline) { showToast("warn", "ไม่มีอินเทอร์เน็ต กรุณาลองใหม่", "⚠️"); return; } // M5
     const ready = orders.filter(o => !shipped[o.id] && !missed[o.id]);
     if (!ready.length) return;
     setShipAllConfirm(ready);
   };
   const doShipAll = async () => {
+    setSending("__shipAll__"); // C1: lock ปุ่มทันทีก่อนเริ่ม
     const ready = shipAllConfirm;
     setShipAllConfirm(null);
-    if (!ready || !ready.length) return;
+    if (!ready || !ready.length) { setSending(null); return; }
     const nextShipped = { ...shipped };
     let nextSt = getOrdersState();
 
@@ -9019,10 +9031,12 @@ function OrderSummaryView({ data, onPrintRequest }) {
             </span>
           </div>
           {readyCount > 0 && (
-            <button onClick={() => handleShipAll(orders)} style={{
-              padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",
-              background: isTruck?"#1d4ed8":"var(--g-700)",color:"#fff",
+            <button onClick={() => handleShipAll(orders)} disabled={!isOnline || !!sending} style={{
+              padding:"6px 14px",borderRadius:8,border:"none",
+              cursor:(!isOnline||!!sending)?"not-allowed":"pointer",
+              background: (!isOnline||!!sending)?"var(--g-300)":(isTruck?"#1d4ed8":"var(--g-700)"),color:"#fff",
               fontSize:12,fontWeight:700,fontFamily:"inherit",
+              opacity:(!isOnline||!!sending)?0.6:1,
             }}>
               ✅ ส่งทั้งหมด ({readyCount})
             </button>

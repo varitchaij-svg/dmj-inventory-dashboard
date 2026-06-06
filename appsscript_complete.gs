@@ -759,6 +759,7 @@ function transferStockBatch(ss, list, actor, clientLoadedAt) {
 
     return ok({ count: transferred.length, zortNumber, zortError, shortfalls, results });
   } finally {
+    try { invalidateCache_(); } catch(e) {} // C5: ล้าง cache หลัง write เสมอ
     lock.releaseLock();
   }
 }
@@ -1034,7 +1035,7 @@ function updateOrderState(ss, body) {
         const sheetRow = rowNum; // id already encodes 1-indexed sheet row
         if (body.status)              sheet.getRange(sheetRow, COL_ORD_STATUS).setValue(body.status);
         if (body.preparedQty != null) sheet.getRange(sheetRow, COL_ORD_PREPQTY).setValue(body.preparedQty);
-        if (body.printFlag)           sheet.getRange(sheetRow, COL_ORD_PRINTFLAG).setValue(body.printFlag);
+        if (body.printFlag != null)    sheet.getRange(sheetRow, COL_ORD_PRINTFLAG).setValue(body.printFlag); // M2: != null กัน false ถูกข้าม
         if (body.carryMode === "carry") {
           try {
             const productName = body.name || body.sku || "(ไม่ทราบชื่อ)";
@@ -1056,7 +1057,7 @@ function updateOrderState(ss, body) {
         const row = i + 1;
         if (body.status)              sheet.getRange(row, COL_ORD_STATUS).setValue(body.status);
         if (body.preparedQty != null) sheet.getRange(row, COL_ORD_PREPQTY).setValue(body.preparedQty);
-        if (body.printFlag)           sheet.getRange(row, COL_ORD_PRINTFLAG).setValue(body.printFlag);
+        if (body.printFlag != null)    sheet.getRange(row, COL_ORD_PRINTFLAG).setValue(body.printFlag); // M2: != null กัน false ถูกข้าม
         if (body.carryMode === "carry") {
           try {
             const productName = body.name || body.sku || "(ไม่ทราบชื่อ)";
@@ -3056,19 +3057,21 @@ function handleOrder_(params) {
       .setMimeType(ContentService.MimeType.JSON);
 
     const orderNum = orderSh.getLastRow();
-    const now = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy HH:mm');
+    const now = new Date(); // เก็บเป็น Date object ให้ Sheets จัดการ format เอง
     var startRow = 3;
     var colA = orderSh.getRange('A' + startRow + ':A').getValues();
-    var nextRow = startRow;
+    var nextRow = -1;
     for (var i = 0; i < colA.length; i++) {
       if (colA[i][0] === '') { nextRow = startRow + i; break; }
     }
-    orderSh.getRange(nextRow, 1, 1, 11).setValues([[orderType, now, 'รอ', 'คลังสินค้าสาย5', 'ดูเหมือนจริง', sku, '', qty, '', '', '']]);
-    // แจ้งเตือน LINE เมื่อมี order ใหม่
+    if (nextRow === -1) nextRow = orderSh.getLastRow() + 1; // C4: fallback ถ้าชีตเต็ม ไม่เขียนทับ row 3
     var productName = (params.name || '').toString().trim();
+    orderSh.getRange(nextRow, 1, 1, 11).setValues([[orderType, now, 'รอ', 'คลังสินค้าสาย5', 'ดูเหมือนจริง', sku, productName, qty, '', '', '']]);
+    // แจ้งเตือน LINE เมื่อมี order ใหม่
     if (orderType === 'หิ้ว') {
-      sendLineGroupOrderCard_(productName || sku, sku, now, "");
+      sendLineGroupOrderCard_(productName || sku, sku, Utilities.formatDate(now, 'Asia/Bangkok', 'dd/MM/yyyy HH:mm'), "");
     }
+    invalidateCache_(); // m1: ล้าง cache หลังเขียน order ใหม่
 
     return ContentService
       .createTextOutput(JSON.stringify({ok: true, orderId: nextRow - 2, sku: sku, qty: qty}))
