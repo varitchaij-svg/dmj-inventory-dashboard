@@ -2671,10 +2671,22 @@ function StockView({ data, role }) {
   const [modalP, setModalP] = uS(null);
   const [page, setPage] = uS(0);
   const [stockSearch, setStockSearch] = uS("");
+  const [syncing, setSyncing] = uS(false);
+  const [syncMsg, setSyncMsg] = uS("");
   // Editable thresholds (persisted in memory)
   const [defaultThr, setDefaultThr] = uS(dataThresholds?.default || 36);
   const [overrides, setOverrides] = uS(dataThresholds?.overrides || { "แจกันแก้ว": 3, "เรซิ่นและอื่นๆ": 3 });
   const [supplierFilter, setSupplierFilter] = uS(null);
+
+  const handleSyncZort = async () => {
+    if (syncing) return;
+    setSyncing(true);
+    setSyncMsg("");
+    const res = await syncZortNow();
+    setSyncing(false);
+    setSyncMsg(res && res.synced ? "✅ ซิงค์สำเร็จ — รีโหลดข้อมูล" : "⚠️ ซิงค์อาจยังไม่เสร็จ ลองรีเฟรชดู");
+    setTimeout(() => setSyncMsg(""), 5000);
+  };
 
   const getThr = uC((cat) => overrides[cat] != null ? overrides[cat] : defaultThr, [overrides, defaultThr]);
 
@@ -2774,6 +2786,24 @@ function StockView({ data, role }) {
             สั่งซื้อสินค้าก่อนหมด · ไม่นับ MTO (งานจัดพิเศษ)
           </div>
         </div>
+        {role === "owner" && (
+          <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
+            <button
+              onClick={handleSyncZort}
+              disabled={syncing}
+              style={{
+                display:"flex",alignItems:"center",gap:6,
+                padding:"8px 14px",borderRadius:10,border:"1.5px solid var(--g-300)",
+                background: syncing ? "#f0fdf4" : "#fff",
+                color:"var(--g-700)",fontSize:13,fontWeight:600,cursor:syncing?"wait":"pointer",
+                fontFamily:"inherit",
+              }}>
+              <span style={{display:"inline-block",animation:syncing?"spin 1s linear infinite":"none"}}>🔄</span>
+              {syncing ? "กำลังซิงค์..." : "ซิงค์จาก ZORT"}
+            </button>
+            {syncMsg && <span style={{fontSize:11,color:"var(--g-600)"}}>{syncMsg}</span>}
+          </div>
+        )}
       </div>
 
       <div className="row row-5" style={{marginBottom: 20}}>

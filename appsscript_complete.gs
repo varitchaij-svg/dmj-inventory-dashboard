@@ -1706,6 +1706,7 @@ function syncZortToColumn_(warehousecode, colIndex) {
   }
 
   SpreadsheetApp.flush();
+  invalidateCache_();
   Logger.log(`อัพเดทแล้ว: ${updated} rows | ไม่พบใน ZORT: ${notFound} rows`);
 }
 
@@ -1871,12 +1872,12 @@ function syncZortBoth() {
   }
 }
 
-function createDailyTrigger() {
+function setupZortStockTrigger() {
   ScriptApp.getProjectTriggers().forEach(t => {
     if (t.getHandlerFunction() === "syncZortBoth") ScriptApp.deleteTrigger(t);
   });
-  ScriptApp.newTrigger("syncZortBoth").timeBased().everyDays(1).atHour(6).create();
-  Logger.log("✅ ตั้ง trigger: syncZortBoth ทุกวัน 06:00");
+  ScriptApp.newTrigger("syncZortBoth").timeBased().everyHours(2).create();
+  Logger.log("✅ ตั้ง trigger: syncZortBoth ทุก 2 ชั่วโมง");
 }
 
 function debugZortProduct() {
