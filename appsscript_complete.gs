@@ -3933,7 +3933,7 @@ function readMtoJobs_() {
   for (let i = 0; i < itemRows.length; i++) {
     const r = itemRows[i];
     const jid = String(r[0]||"").trim();
-    if (!jid || jid.indexOf("MTO_") !== 0) continue; // ข้าม header/แถวว่าง
+    if (!jid || (!jid.startsWith("MTO_") && !jid.startsWith("MTO-"))) continue; // ข้าม header/แถวว่าง
     if (!itemsMap[jid]) itemsMap[jid] = [];
     // F (r[5]) = จำนวนคืน (เลข) — รองรับข้อมูลเก่าที่เป็นข้อความ "คืนแล้ว"/"ไม่คืน"
     const qty = Number(r[3])||0;
@@ -3959,7 +3959,7 @@ function readMtoJobs_() {
   for (let i = 0; i < jobRows.length; i++) {
     const r = jobRows[i];
     const jobId = String(r[0]||"").trim();
-    if (!jobId || jobId.indexOf("MTO_") !== 0) continue; // ข้าม header/แถวว่าง
+    if (!jobId || (!jobId.startsWith("MTO_") && !jobId.startsWith("MTO-"))) continue; // ข้าม header/แถวว่าง
     jobs.push({
       jobId,
       date: String(r[1]||"").trim(),

@@ -2635,22 +2635,18 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role }) {
         </div>
       </div>
 
-      {/* Order button */}
-      {onOrder && (
+      {/* Order button — แสดงเฉพาะเมื่อมีของในคลัง (qtyWH > 0) */}
+      {onOrder && (p.qtyWH > 0 || (!p.qtyWH && !p.qtyStore && totalQty > 0)) && (
         <div className="pcard-order" style={{padding:"0 12px 12px", marginTop:"auto"}}>
-          <button onClick={() => !outOfStock && onOrder(p)}
-                  disabled={outOfStock}
+          <button onClick={() => onOrder(p)}
                   style={{width:"100%", padding:"9px 12px", borderRadius:8,
-                          background: outOfStock ? "var(--g-100)" : "var(--g-700)",
-                          color: outOfStock ? "var(--muted)" : "#fff",
-                          border: outOfStock ? "1px solid var(--bdr)" : "none",
-                          fontWeight:700, fontSize:12.5,
-                          cursor: outOfStock ? "not-allowed" : "pointer",
+                          background: "var(--g-700)", color: "#fff", border: "none",
+                          fontWeight:700, fontSize:12.5, cursor:"pointer",
                           fontFamily:"inherit", display:"flex", alignItems:"center",
                           justifyContent:"center", gap:6, transition:"background .15s"}}
-                  onMouseEnter={e => { if (!outOfStock) e.currentTarget.style.background="var(--g-800)"; }}
-                  onMouseLeave={e => { if (!outOfStock) e.currentTarget.style.background="var(--g-700)"; }}>
-            {outOfStock ? "⚫ หมดสต๊อก" : "🛒 สั่งไปขาย"}
+                  onMouseEnter={e => { e.currentTarget.style.background="var(--g-800)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.background="var(--g-700)"; }}>
+            🛒 สั่งไปขาย
           </button>
         </div>
       )}
