@@ -7684,7 +7684,11 @@ function reconcileOrderState(order, localEntry, nowMs) {
 }
 
 function patchOrderState(id, updates, sig) {
-  const s = getOrdersState(); s[id] = { ...(s[id]||{}), ...updates };
+  const s = getOrdersState();
+  const existing = s[id] || {};
+  // ถ้า sig ต่างจาก existing → row ถูก reuse (order อื่น) → ไม่เอา stale state มาเมิร์จ
+  const stale = sig != null && existing.sig && existing.sig !== sig;
+  s[id] = stale ? { ...updates } : { ...existing, ...updates };
   // แนบ sig (content signature) ลงไปเสมอ เพื่อกัน row-reuse เลอะข้าม order
   if (sig != null) s[id].sig = sig;
   // record when status was changed so we can detect ID collisions with new orders
