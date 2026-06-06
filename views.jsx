@@ -8789,6 +8789,9 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const isOnline = useOnlineStatus(); // ตรวจสอบการเชื่อมต่อก่อนส่งสถานะ
   // warehouse map modal state — shared สำหรับ card ทุกใบในหน้านี้
   const [mapModal, setMapModal] = uS(null); // { lockKey, productName, sku } | null
+  // multi-select print
+  const [printSelectMode, setPrintSelectMode] = uS(false);
+  const [selectedForPrint, setSelectedForPrint] = uS(new Set());
 
   const productMap = uM(() => {
     const m = {};
@@ -8859,6 +8862,29 @@ function OrderSummaryView({ data, onPrintRequest }) {
     const p2 = { ...printed, [order.id]: true };
     setPrinted(p2);
     localStorage.setItem(LS_PRINTED_ORDERS, JSON.stringify(p2));
+  };
+
+  const togglePrintSelect = (orderId) => {
+    setSelectedForPrint(prev => {
+      const next = new Set(prev);
+      if (next.has(orderId)) next.delete(orderId); else next.add(orderId);
+      return next;
+    });
+  };
+
+  const handlePrintSelected = () => {
+    const allOrders = [...carryOrders, ...truckOrders];
+    const items = allOrders
+      .filter(o => selectedForPrint.has(o.id))
+      .map(o => ({ sku: o.sku, qty: o.preparedQty || o.orderQty || 1 }));
+    if (!items.length) return;
+    onPrintRequest(items);
+    const p2 = { ...printed };
+    selectedForPrint.forEach(id => { p2[id] = true; });
+    setPrinted(p2);
+    localStorage.setItem(LS_PRINTED_ORDERS, JSON.stringify(p2));
+    setSelectedForPrint(new Set());
+    setPrintSelectMode(false);
   };
 
   const handleShip = (order) => setShipConfirm(order);
@@ -9028,6 +9054,8 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const renderSection = (label, emoji, orders, isTruck) => {
     if (!orders.length) return null;
     const readyCount = orders.filter(o => !shipped[o.id] && !missed[o.id]).length;
+    // printable = มี printFlag=print และยังไม่ได้ print
+    const printableOrders = orders.filter(o => o.printFlag === "print" && !printed[o.id] && !shipped[o.id]);
     // sort: not-shipped-not-missed first, missed to end, shipped to very end
     const sorted = [...orders].sort((a,b) => {
       const aS = shipped[a.id] ? 2 : missed[a.id] ? 1 : 0;
@@ -9052,17 +9080,32 @@ function OrderSummaryView({ data, onPrintRequest }) {
               {readyCount > 0 ? `${readyCount} รายการรอส่ง` : "ส่งหมดแล้ว"}
             </span>
           </div>
-          {readyCount > 0 && (
-            <button onClick={() => handleShipAll(orders)} disabled={!isOnline || !!sending} style={{
-              padding:"6px 14px",borderRadius:8,border:"none",
-              cursor:(!isOnline||!!sending)?"not-allowed":"pointer",
-              background: (!isOnline||!!sending)?"var(--g-300)":(isTruck?"#1d4ed8":"var(--g-700)"),color:"#fff",
-              fontSize:12,fontWeight:700,fontFamily:"inherit",
-              opacity:(!isOnline||!!sending)?0.6:1,
-            }}>
-              ✅ ส่งทั้งหมด ({readyCount})
-            </button>
-          )}
+          <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+            {printableOrders.length > 1 && (
+              <button onClick={() => {
+                setPrintSelectMode(v => !v);
+                setSelectedForPrint(new Set());
+              }} style={{
+                padding:"5px 11px",borderRadius:8,border:"1.5px solid #9ca3af",
+                cursor:"pointer",background: printSelectMode?"#374151":"#fff",
+                color: printSelectMode?"#fff":"#374151",
+                fontSize:11,fontWeight:700,fontFamily:"inherit",
+              }}>
+                {printSelectMode ? "✕ ยกเลิก" : "☑ เลือกปริ้น"}
+              </button>
+            )}
+            {readyCount > 0 && (
+              <button onClick={() => handleShipAll(orders)} disabled={!isOnline || !!sending} style={{
+                padding:"6px 14px",borderRadius:8,border:"none",
+                cursor:(!isOnline||!!sending)?"not-allowed":"pointer",
+                background: (!isOnline||!!sending)?"var(--g-300)":(isTruck?"#1d4ed8":"var(--g-700)"),color:"#fff",
+                fontSize:12,fontWeight:700,fontFamily:"inherit",
+                opacity:(!isOnline||!!sending)?0.6:1,
+              }}>
+                ✅ ส่งทั้งหมด ({readyCount})
+              </button>
+            )}
+          </div>
         </div>
 
         <div style={{
@@ -9076,26 +9119,36 @@ function OrderSummaryView({ data, onPrintRequest }) {
             const isSending = sending === order.id;
             const alreadyPrinted = printed[order.id];
             const prepQty = order.preparedQty || order.orderQty || 0;
+            const isPrintable = order.printFlag === "print" && !alreadyPrinted && !isShipped;
+            const isSelected = selectedForPrint.has(order.id);
 
             return (
-              <div key={order.id} style={{
+              <div key={order.id}
+                onClick={printSelectMode && isPrintable ? () => togglePrintSelect(order.id) : undefined}
+                style={{
                 background: isShipped ? "#f0fdf4" : isMissed ? "#fef2f2" : "#fff",
                 borderRadius:12, padding:12,
-                border:`1.5px solid ${isShipped?"#4fb472":isMissed?"#fca5a5":"var(--bdr)"}`,
+                border:`1.5px solid ${
+                  printSelectMode && isPrintable && isSelected ? "#c62828" :
+                  printSelectMode && isPrintable ? "#9ca3af" :
+                  isShipped?"#4fb472":isMissed?"#fca5a5":"var(--bdr)"
+                }`,
                 display:"flex",flexDirection:"column",gap:8,
                 opacity: isShipped ? 0.7 : 1,
                 transition:"all .2s",
+                cursor: printSelectMode && isPrintable ? "pointer" : "default",
+                outline: printSelectMode && isPrintable && isSelected ? "2px solid #c62828" : "none",
               }}>
                 {/* Image */}
                 <div style={{position:"relative"}}>
                   {order.image ? (
                     <img src={order.image} alt=""
-                      onClick={() => setBigImg(order)}
+                      onClick={e => { if (!printSelectMode) { e.stopPropagation(); setBigImg(order); } }}
                       style={{width:"100%",height:88,objectFit:"contain",
                               borderRadius:8,cursor:"pointer",display:"block",
                               background:"var(--g-50)"}}/>
                   ) : (
-                    <div onClick={() => setBigImg(order)}
+                    <div onClick={e => { if (!printSelectMode) { e.stopPropagation(); setBigImg(order); } }}
                       style={{width:"100%",height:88,background:"var(--g-50)",borderRadius:8,
                               display:"flex",alignItems:"center",justifyContent:"center",
                               color:"var(--muted)",cursor:"pointer"}}>{I.package}</div>
@@ -9110,6 +9163,18 @@ function OrderSummaryView({ data, onPrintRequest }) {
                     <div style={{position:"absolute",top:4,right:4,
                       background:"#ef4444",color:"#fff",borderRadius:20,
                       fontSize:9,fontWeight:700,padding:"2px 6px"}}>🚫 ไม่ขึ้น</div>
+                  )}
+                  {/* Print select checkbox overlay */}
+                  {printSelectMode && isPrintable && (
+                    <div style={{
+                      position:"absolute",top:4,left:4,
+                      width:22,height:22,borderRadius:6,
+                      background: isSelected ? "#c62828" : "rgba(255,255,255,0.9)",
+                      border:`2px solid ${isSelected?"#c62828":"#9ca3af"}`,
+                      display:"flex",alignItems:"center",justifyContent:"center",
+                      fontSize:13,color:"#fff",fontWeight:700,
+                      boxShadow:"0 1px 3px rgba(0,0,0,.2)",
+                    }}>{isSelected ? "✓" : ""}</div>
                   )}
                 </div>
 
@@ -9153,13 +9218,20 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
                 {/* Action buttons */}
                 {!isShipped && (
-                  <div style={{display:"flex",flexDirection:"column",gap:6,marginTop:2}}>
+                  <div onClick={e => e.stopPropagation()} style={{display:"flex",flexDirection:"column",gap:6,marginTop:2}}>
                     {/* Print Label */}
-                    {order.printFlag==="print" && !alreadyPrinted && (
+                    {order.printFlag==="print" && !alreadyPrinted && !printSelectMode && (
                       <button onClick={() => handlePrint(order)} style={{
                         padding:"6px",borderRadius:7,border:"none",cursor:"pointer",
                         background:"var(--g-700)",color:"#fff",fontSize:11,fontWeight:700,fontFamily:"inherit",
                       }}>🖨️ Print Label</button>
+                    )}
+                    {printSelectMode && isPrintable && (
+                      <div style={{
+                        textAlign:"center",fontSize:10,fontWeight:700,
+                        color: isSelected ? "#c62828" : "#9ca3af",
+                        padding:"4px 0",
+                      }}>{isSelected ? "✓ เลือกแล้ว" : "แตะเพื่อเลือก"}</div>
                     )}
                     {alreadyPrinted && (
                       <div style={{textAlign:"center",fontSize:10,color:"var(--g-700)",fontWeight:700}}>✓ Printed</div>
@@ -9218,7 +9290,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
   };
 
   return (
-    <div>
+    <div style={printSelectMode ? {paddingBottom:76} : {}}>
       <div className="page-head no-print">
         <div>
           <div className="page-title">สรุปสินค้าออกจากคลัง</div>
@@ -9236,6 +9308,38 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
       {renderSection("หิ้วเอง", "🚶", carryOrders, false)}
       {renderSection("ขึ้นรถ",  "🚛", truckOrders, true)}
+
+      {/* Sticky print bar */}
+      {printSelectMode && (
+        <div style={{
+          position:"fixed",bottom:0,left:0,right:0,zIndex:200,
+          padding:"12px 16px",
+          background:"#fff",
+          borderTop:"2px solid #c62828",
+          display:"flex",gap:10,alignItems:"center",
+          boxShadow:"0 -4px 16px rgba(0,0,0,.12)",
+        }}>
+          <div style={{flex:1,fontSize:13,fontWeight:600,color:"#374151"}}>
+            {selectedForPrint.size > 0
+              ? `เลือก ${selectedForPrint.size} รายการ`
+              : "แตะ card เพื่อเลือก"}
+          </div>
+          <button onClick={() => { setPrintSelectMode(false); setSelectedForPrint(new Set()); }}
+            style={{
+              padding:"9px 14px",borderRadius:8,border:"1.5px solid #d1d5db",
+              background:"#fff",color:"#374151",fontSize:12,fontWeight:700,
+              cursor:"pointer",fontFamily:"inherit",
+            }}>ยกเลิก</button>
+          <button onClick={handlePrintSelected} disabled={selectedForPrint.size === 0}
+            style={{
+              padding:"9px 18px",borderRadius:8,border:"none",
+              background: selectedForPrint.size === 0 ? "#d1d5db" : "#c62828",
+              color:"#fff",fontSize:12,fontWeight:700,
+              cursor: selectedForPrint.size === 0 ? "not-allowed" : "pointer",
+              fontFamily:"inherit",
+            }}>🖨️ Print {selectedForPrint.size > 0 ? `${selectedForPrint.size} รายการ` : ""}</button>
+        </div>
+      )}
 
       {/* Expanded image modal */}
       {bigImg && (
