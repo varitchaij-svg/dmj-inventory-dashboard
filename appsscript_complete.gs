@@ -3002,7 +3002,7 @@ function readOrders_() {
       preparedQty: Number(r[8]) || 0,
       image:       r[9] || "",
       remaining:   r[10] !== "" ? Number(r[10]) : null,
-      printFlag:   r[11] || null,
+      printFlag:   r[13] || null,
     });
   }
   return result;
