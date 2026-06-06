@@ -2216,16 +2216,14 @@ function CategoryView({ data, role }) {
                         )}
                       </div>
                     </div>
-                    {/* Order button */}
-                    {setOrderProduct && (
-                      <button onClick={() => !outOfStock && setOrderProduct(p)}
-                        disabled={outOfStock}
+                    {/* Order button — แสดงเฉพาะเมื่อมีของในคลัง (qtyWH > 0) */}
+                    {setOrderProduct && p.qtyWH > 0 && (
+                      <button onClick={() => setOrderProduct(p)}
                         style={{flexShrink:0,padding:'8px 12px',borderRadius:8,border:'none',
-                                background: outOfStock ? 'var(--g-100)' : '#1b5e20',
-                                color: outOfStock ? 'var(--muted)' : '#fff',
-                                fontSize:12,fontWeight:700,cursor: outOfStock?'not-allowed':'pointer',
+                                background:'#1b5e20',color:'#fff',
+                                fontSize:12,fontWeight:700,cursor:'pointer',
                                 fontFamily:'inherit',whiteSpace:'nowrap',minHeight:44}}>
-                        {outOfStock ? '—' : '🛒 สั่ง'}
+                        🛒 สั่ง
                       </button>
                     )}
                   </div>
