@@ -106,6 +106,7 @@ const COL_PROD_SKU    = 2;   // B
 const COL_PROD_QTYFS  = 7;   // G = หน้าร้าน
 const COL_PROD_QTYWH  = 8;   // H = คลัง
 
+const COL_ORD_TYPE     = 1;   // A  ("หิ้ว" / "รอขึ้นรถ")
 const COL_ORD_SKU      = 6;   // F
 const COL_ORD_DATE     = 2;   // B
 const COL_ORD_STATUS   = 3;   // C
@@ -1036,11 +1037,14 @@ function updateOrderState(ss, body) {
         if (body.status)              sheet.getRange(sheetRow, COL_ORD_STATUS).setValue(body.status);
         if (body.preparedQty != null) sheet.getRange(sheetRow, COL_ORD_PREPQTY).setValue(body.preparedQty);
         if (body.printFlag != null)    sheet.getRange(sheetRow, COL_ORD_PRINTFLAG).setValue(body.printFlag); // M2: != null กัน false ถูกข้าม
-        if (body.carryMode === "carry") {
-          try {
-            const productName = body.name || body.sku || "(ไม่ทราบชื่อ)";
-            sendLineGroupOrderCard_(productName, body.sku||"", body.date||"", body.image||"");
-          } catch(e) {}
+        if (body.carryMode != null) {
+          sheet.getRange(sheetRow, COL_ORD_TYPE).setValue(body.carryMode === "carry" ? "หิ้ว" : "รอขึ้นรถ");
+          if (body.carryMode === "carry") {
+            try {
+              const productName = body.name || body.sku || "(ไม่ทราบชื่อ)";
+              sendLineGroupOrderCard_(productName, body.sku||"", body.date||"", body.image||"");
+            } catch(e) {}
+          }
         }
         SpreadsheetApp.flush();
         return ok({ updated: body.orderId, row: sheetRow });
@@ -1059,11 +1063,14 @@ function updateOrderState(ss, body) {
         if (body.status)              sheet.getRange(row, COL_ORD_STATUS).setValue(body.status);
         if (body.preparedQty != null) sheet.getRange(row, COL_ORD_PREPQTY).setValue(body.preparedQty);
         if (body.printFlag != null)    sheet.getRange(row, COL_ORD_PRINTFLAG).setValue(body.printFlag); // M2: != null กัน false ถูกข้าม
-        if (body.carryMode === "carry") {
-          try {
-            const productName = body.name || body.sku || "(ไม่ทราบชื่อ)";
-            sendLineGroupOrderCard_(productName, body.sku||"", body.date||"", body.image||"");
-          } catch(e) {}
+        if (body.carryMode != null) {
+          sheet.getRange(row, COL_ORD_TYPE).setValue(body.carryMode === "carry" ? "หิ้ว" : "รอขึ้นรถ");
+          if (body.carryMode === "carry") {
+            try {
+              const productName = body.name || body.sku || "(ไม่ทราบชื่อ)";
+              sendLineGroupOrderCard_(productName, body.sku||"", body.date||"", body.image||"");
+            } catch(e) {}
+          }
         }
         SpreadsheetApp.flush();
         return ok({ updated: body.sku, row });

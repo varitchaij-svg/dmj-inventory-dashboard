@@ -7791,7 +7791,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
   };
   const setCarryMode = m => {
     onPatch(order.id, {carryMode: m});
-    if (m === "carry") syncOrderUpdate(order, {carryMode: "carry", name: order.name, image: order.image});
+    syncOrderUpdate(order, {carryMode: m, name: order.name, image: order.image});
   };
   const markComplete = async () => {
     if (completing) return; // C2: กัน double-tap
@@ -8409,6 +8409,10 @@ function OrderListView({ data, role }) {
   }, [orders, st]);
 
   const sorted = uM(() => [...enriched].sort((a,b) => {
+    // carry ก่อน truck เสมอ (ลำดับแรก)
+    const aC = a.carryMode === "carry", bC = b.carryMode === "carry";
+    if (aC !== bC) return aC ? -1 : 1;
+    // ภายใน carryMode เดียวกัน: pending ก่อน done
     const aP = !a.status||a.status==="รอ"||a.status==="pending";
     const bP = !b.status||b.status==="รอ"||b.status==="pending";
     return (aP&&!bP)?-1:(!aP&&bP)?1:0;
