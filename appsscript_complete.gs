@@ -1802,6 +1802,7 @@ function syncZortBoth() {
   syncZortWarehouse();
   syncZortFrontStore();
   try { syncZortPurchases(); } catch(e) { Logger.log("syncZortPurchases error: " + e); }
+  try { syncZortImages(); } catch(e) { Logger.log("syncZortImages error: " + e); }
 
   // ── 2A: Low-stock alert ──────────────────────────────────────────────────
   // สแกนสต็อกคลัง (col H) เทียบ threshold → ส่ง LINE ถ้าพบสินค้าใกล้หมด
