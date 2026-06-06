@@ -3071,7 +3071,8 @@ function handleOrder_(params) {
     }
     if (nextRow === -1) nextRow = orderSh.getLastRow() + 1; // C4: fallback ถ้าชีตเต็ม ไม่เขียนทับ row 3
     var productName = (params.name || '').toString().trim();
-    orderSh.getRange(nextRow, 1, 1, 11).setValues([[orderType, now, 'รอ', 'คลังสินค้าสาย5', 'ดูเหมือนจริง', sku, productName, qty, '', '', '']]);
+    var imageUrl = (params.image || '').toString().trim();
+    orderSh.getRange(nextRow, 1, 1, 11).setValues([[orderType, now, 'รอ', 'คลังสินค้าสาย5', 'ดูเหมือนจริง', sku, productName, qty, '', imageUrl, '']]);
     // แจ้งเตือน LINE เมื่อมี order ใหม่
     if (orderType === 'หิ้ว') {
       sendLineGroupOrderCard_(productName || sku, sku, Utilities.formatDate(now, 'Asia/Bangkok', 'dd/MM/yyyy HH:mm'), "");

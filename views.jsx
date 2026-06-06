@@ -2352,7 +2352,8 @@ function OrderModal({ product, onClose }) {
     if (qty < 1) { setErr('กรุณาระบุจำนวน'); return; }
     setLoading(true); setErr(null);
     const _sep = sheetUrl.includes('?') ? '&' : '?';
-    const url = `${sheetUrl}${_sep}action=order&sku=${encodeURIComponent(product.sku)}&qty=${qty}&orderType=${encodeURIComponent(orderType)}`;
+    const imgUrl = product.imageUrl || product.image || '';
+    const url = `${sheetUrl}${_sep}action=order&sku=${encodeURIComponent(product.sku)}&qty=${qty}&orderType=${encodeURIComponent(orderType)}&name=${encodeURIComponent(product.name||'')}&image=${encodeURIComponent(imgUrl)}`;
     fetch(url)
       .then(r => r.json())
       .then(d => {
