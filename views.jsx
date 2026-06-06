@@ -7658,7 +7658,13 @@ function reconcileOrderState(order, localEntry, nowMs) {
 
   // กรณี row reuse: local มี sig แต่ไม่ตรงกับ order ปัจจุบัน → state นี้เป็นของ order อื่น
   // (แถวถูก reuse) → ทิ้งทั้งหมด ไม่ให้เลอะข้าม order
-  if (local.sig && local.sig !== sig) return {};
+  // ยกเว้น: เพิ่งกด Done ภายใน 6 ชม. + order นี้ตรง SKU เดิม → น่าจะ GAS คืน date ผิด format ไม่ใช่ row reuse
+  if (local.sig && local.sig !== sig) {
+    const markedMs2 = local.markedAt ? new Date(local.markedAt).getTime() : NaN;
+    const isRecentDone = !isNaN(markedMs2) && (now - markedMs2) < SIX_H && DONE_ST.has(local.status);
+    const sameSku = local.sig.split('|')[0] === sig.split('|')[0];
+    if (!(isRecentDone && sameSku)) return {};
+  }
 
   // local terminal status (สำเร็จ/ส่งแล้ว ฯลฯ) ทับ sheet ที่บอกว่ายังรอ
   const localTerminal = DONE_ST.has(local.status);

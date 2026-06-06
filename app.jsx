@@ -384,6 +384,23 @@ function App() {
       .then(r => r.json())
       .then(d => {
         if (!d || !Array.isArray(d.orders)) return;
+        // ถ้า GAS คืน date เป็น Date object string ("Thu Jun 06 2026...") แทน "dd/mm/yyyy"
+        // (เกิดเมื่อ GAS ยังไม่ได้ redeploy) → normalize ให้เป็น dd/mm/yyyy ก่อนอัปเดต state
+        d.orders = d.orders.map(function(o) {
+          if (o.date && typeof o.date === 'string') {
+            var ds = o.date.trim();
+            // Date object string มักขึ้นต้นด้วย weekday หรือมี GMT/UTC/T ตามด้วย timezone
+            if (/GMT|^\w{3}\s\w{3}\s\d|T\d{2}:\d{2}:\d{2}/.test(ds)) {
+              var p = new Date(ds);
+              if (!isNaN(p.getTime())) {
+                var dd = String(p.getDate()).padStart(2,'0');
+                var mm = String(p.getMonth()+1).padStart(2,'0');
+                o = Object.assign({}, o, { date: dd + '/' + mm + '/' + p.getFullYear() });
+              }
+            }
+          }
+          return o;
+        });
         setData(prev => prev ? { ...prev, orders: d.orders } : prev);
         const now = new Date().toISOString();
         localStorage.setItem("dmj_last_sync", now);
