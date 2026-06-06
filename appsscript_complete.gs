@@ -1042,6 +1042,7 @@ function updateOrderState(ss, body) {
             sendLineGroupOrderCard_(productName, body.sku||"", body.date||"", body.image||"");
           } catch(e) {}
         }
+        SpreadsheetApp.flush();
         return ok({ updated: body.orderId, row: sheetRow });
       }
     }
@@ -1064,6 +1065,7 @@ function updateOrderState(ss, body) {
             sendLineGroupOrderCard_(productName, body.sku||"", body.date||"", body.image||"");
           } catch(e) {}
         }
+        SpreadsheetApp.flush();
         return ok({ updated: body.sku, row });
       }
     }
@@ -1769,8 +1771,8 @@ function syncNewProductsFromZort() {
     const sku = String(p.sku || p.barcode || "").trim().toUpperCase();
     if (sku && !existingSKUs[sku]) {
       const newRow = [
-        sku,
         "",
+        sku,
         p.name || "",
         p.category || "",
         p.subCategory || "",
@@ -1897,6 +1899,7 @@ function syncZortBoth() {
   } catch (e) {
     Logger.log('Daily summary error: ' + e);
   }
+  invalidateCache_();
 }
 
 function setupZortStockTrigger() {
@@ -2976,7 +2979,7 @@ function readOrders_() {
   const sheet = ss.getSheetByName(SHEET_ORDERS);
   if (!sheet) return [];
 
-  const rows = sheet.getDataRange().getValues();
+  const rows = sheet.getDataRange().getDisplayValues();
   const result = [];
 
   // i=1: skip only the first header row; also handles sheets with a single header row
@@ -2993,7 +2996,7 @@ function readOrders_() {
     result.push({
       id:          `R${i+1}`,
       carryMode:   String(r[0]||"").includes("หิ้ว") ? "carry" : "truck",
-      date:        r[1] ? Utilities.formatDate(new Date(r[1]), "Asia/Bangkok", "dd/MM/yy") : "",
+      date:        String(r[1] || "").trim(),
       status:      r[2] || "รอ",
       from:        r[3] || "",
       to:          r[4] || "",
