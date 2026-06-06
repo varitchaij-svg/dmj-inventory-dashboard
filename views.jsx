@@ -7680,7 +7680,14 @@ function reconcileOrderState(order, localEntry, nowMs) {
       return rest;
     }
   }
-  // กรณีปกติ (sig ตรง และ status สอดคล้อง) → apply local ตามเดิม
+  // sheet มี status จริงแล้ว (non-pending) → sheet เป็น authoritative สำหรับ status
+  // local "ส่งแล้ว" หรือ status อื่นใดที่ไม่ใช่ sheet → ไม่ override
+  // ให้ apply เฉพาะ UI fields (carryMode, printFlag, preparedQty, sig ฯลฯ)
+  if (!sheetPending) {
+    const { status: _s, ...rest } = local;
+    return rest;
+  }
+  // กรณีปกติ: sheet pending, local มี status pending/ไม่มี status → apply ตามเดิม
   return local;
 }
 
@@ -9273,6 +9280,22 @@ function OrderSummaryView({ data, onPrintRequest }) {
         onConfirm={() => {
           localStorage.removeItem(LS_SHIPPED_ORDERS);
           localStorage.removeItem(LS_MISSED_TRUCK);
+          // ล้าง "ส่งแล้ว" status ออกจาก dmj_orders_state_v1 ด้วย (กันรายการค้าง)
+          try {
+            const s = getOrdersState();
+            let changed = false;
+            Object.keys(s).forEach(id => {
+              if (s[id] && s[id].status === "ส่งแล้ว") {
+                const { status: _s, markedAt: _m, ...rest } = s[id];
+                s[id] = rest;
+                changed = true;
+              }
+            });
+            if (changed) {
+              localStorage.setItem(LS_ORDERS_STATE, JSON.stringify(s));
+              setSt(s);
+            }
+          } catch(e) {}
           const cleared = {};
           setShipped(cleared);
           setMissed(cleared);
