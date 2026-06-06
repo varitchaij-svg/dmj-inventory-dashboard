@@ -6498,7 +6498,11 @@ function StockCountView({ data }) {
       setLastSavedSnap(snap); // กัน auto-save วนซ้ำ
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 3000);
-      showToast('success', 'บันทึก ' + entries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
+      if (result.warning) {
+        showToast('warn', result.warning, '⚠️');
+      } else {
+        showToast('success', 'บันทึก ' + entries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
+      }
     } else {
       setSaveStatus("error");
       if (!isAuto) showToast('error', 'บันทึกไม่สำเร็จ', '❌');
@@ -6539,7 +6543,11 @@ function StockCountView({ data }) {
       setLastSavedSnap(snap); // กัน auto-save commit ซ้ำหลังกดยืนยันเอง
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 3000);
-      showToast('success', 'ยืนยันผลนับแล้ว ' + entries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
+      if (result.warning) {
+        showToast('warn', result.warning, '⚠️');
+      } else {
+        showToast('success', 'ยืนยันผลนับแล้ว ' + entries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
+      }
     } else {
       setSaveStatus("error");
       showToast('error', 'ยืนยันไม่สำเร็จ', '❌');

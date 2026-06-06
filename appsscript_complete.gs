@@ -1246,12 +1246,23 @@ function confirmStockCount(ss, entries, clientLoadedAt, actor) {
     }
     SpreadsheetApp.flush();
 
+    // เก็บ counted SKUs ไว้ใน cache 30 นาที — กัน syncZortBoth ทับค่าที่เพิ่งนับ
+    const countedSkuMap = {};
+    entries.filter(e => e.sku && Number(e.qty) >= 0).forEach(function(e) {
+      countedSkuMap[String(e.sku).trim().toUpperCase()] = Number(e.qty);
+    });
+    CacheService.getScriptCache().put('recentCountedSkus', JSON.stringify(countedSkuMap), 1800);
+
+    let zortSynced = true;
     try {
-      const zortItems = entries
-        .filter(e => e.sku && Number(e.qty) >= 0)
-        .map(e => ({ sku: String(e.sku).trim().toUpperCase(), qty: Number(e.qty), warehousecode: WH_SAI5 }));
+      const zortItems = Object.entries(countedSkuMap).map(function([sku, qty]) {
+        return { sku: sku, qty: qty, warehousecode: WH_SAI5 };
+      });
       if (zortItems.length) pushStockToZort_(zortItems);
-    } catch (e) { Logger.log("confirmStockCount ZORT push error: " + e); }
+    } catch (e) {
+      zortSynced = false;
+      Logger.log("confirmStockCount ZORT push error: " + e);
+    }
 
     // Audit log: บันทึกเฉพาะ SKU ที่ค่าเปลี่ยน
     auditRows.forEach(function(r) {
@@ -1260,7 +1271,8 @@ function confirmStockCount(ss, entries, clientLoadedAt, actor) {
       }
     });
 
-    return ok({ confirmed: updated });
+    return ok({ confirmed: updated, zortSynced: zortSynced,
+      warning: zortSynced ? null : "บันทึกใน Sheets แล้ว แต่ sync ไป ZORT ไม่สำเร็จ ระบบจะซิงค์ใหม่อัตโนมัติ" });
   } finally {
     lock.releaseLock();
   }
@@ -1667,6 +1679,12 @@ function syncZortToColumn_(warehousecode, colIndex) {
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sheet) { Logger.log("ไม่พบชีต: " + SHEET_PRODUCTS); return; }
 
+  // โหลด SKUs ที่เพิ่งนับสต็อก (ป้องกันทับค่า)
+  const recentJson = (warehousecode === WH_SAI5)
+    ? CacheService.getScriptCache().get('recentCountedSkus') : null;
+  const recentCounted = recentJson ? JSON.parse(recentJson) : {};
+  const healItems = [];
+
   const products = fetchAllZortProducts_(warehousecode);
   Logger.log(`ZORT: ${products.length} items`);
 
@@ -1694,7 +1712,11 @@ function syncZortToColumn_(warehousecode, colIndex) {
 
     if (zortMap[sku] !== undefined) {
       const row = i + 1;
-      sheet.getRange(row, colIndex).setValue(zortMap[sku]);          // qty (G หรือ H)
+      const useQty = (recentCounted[sku] !== undefined) ? recentCounted[sku] : zortMap[sku];
+      sheet.getRange(row, colIndex).setValue(useQty);                // qty (G หรือ H)
+      if (recentCounted[sku] !== undefined && recentCounted[sku] !== zortMap[sku]) {
+        healItems.push({ sku: sku, qty: recentCounted[sku], warehousecode: warehousecode });
+      }
       if (zortNameMap[sku])  sheet.getRange(row, 3).setValue(zortNameMap[sku]);   // col C = ชื่อ
       if (zortCatMap[sku])   sheet.getRange(row, 4).setValue(zortCatMap[sku]);    // col D = หมวด
       if (zortTagMap[sku])   sheet.getRange(row, 6).setValue(zortTagMap[sku]);    // col F = TAG
@@ -1707,7 +1729,11 @@ function syncZortToColumn_(warehousecode, colIndex) {
 
   SpreadsheetApp.flush();
   invalidateCache_();
-  Logger.log(`อัพเดทแล้ว: ${updated} rows | ไม่พบใน ZORT: ${notFound} rows`);
+  if (healItems.length) {
+    try { pushStockToZort_(healItems); Logger.log("heal ZORT: " + healItems.length + " SKUs"); }
+    catch(e) { Logger.log("heal ZORT error: " + e); }
+  }
+  Logger.log(`อัพเดทแล้ว: ${updated} rows | ไม่พบใน ZORT: ${notFound} rows | heal: ${healItems.length}`);
 }
 
 function syncNewProductsFromZort() {
