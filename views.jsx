@@ -10147,7 +10147,6 @@ function MtoJobView({ data }) {
           jobName: activeJob.name || activeJob.jobId,
           items: materials,
           closedAt: closed,
-          clientLoadedAt: window._dataLoadedAt || 0, // สำหรับ conflict detection
           actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
         }),
       });
