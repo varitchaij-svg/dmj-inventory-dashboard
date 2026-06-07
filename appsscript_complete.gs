@@ -365,8 +365,16 @@ function doGet(e) {
 
     // Lightweight endpoint: ดึงเฉพาะรายการสั่งของ (เบา/เร็ว) สำหรับ polling หน้า orders
     if (e && e.parameter && e.parameter.action === 'orders') {
+      const ordersResult = readOrders_();
+      // ถ้า Sheet หาไม่เจอ readOrders_ คืน [] — คืน error แทนเพื่อให้ client skip update (ไม่ wipe)
+      const ss2 = SpreadsheetApp.openById(SHEET_ID);
+      if (!ss2.getSheetByName(SHEET_ORDERS)) {
+        return ContentService
+          .createTextOutput(JSON.stringify({ error: "sheet_not_found", orders: null }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
       return ContentService
-        .createTextOutput(JSON.stringify({ orders: readOrders_(), generatedAt: new Date().toISOString() }))
+        .createTextOutput(JSON.stringify({ orders: ordersResult, generatedAt: new Date().toISOString() }))
         .setMimeType(ContentService.MimeType.JSON);
     }
 
@@ -2986,22 +2994,35 @@ function readStorage_() {
 function readOrders_() {
   const ss = SpreadsheetApp.openById(SHEET_ID);
   const sheet = ss.getSheetByName(SHEET_ORDERS);
-  if (!sheet) return [];
+  if (!sheet) {
+    Logger.log("[readOrders_] ERROR: ไม่พบ sheet '" + SHEET_ORDERS + "'");
+    return [];
+  }
 
   const rows = sheet.getDataRange().getDisplayValues();
   const result = [];
+  let skippedBlank = 0, skippedHeader = 0, skippedNoSku = 0;
 
   // i=1: skip only the first header row; also handles sheets with a single header row
   // where CH19015/OL00005 might be at index 1 (row 2)
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
     // Skip rows that are entirely blank
-    if (!r.some(Boolean)) continue;
+    if (!r.some(Boolean)) { skippedBlank++; continue; }
     // Skip what looks like a second header row (r[5] is a Thai-language label, not a SKU)
     const skuCandidate = String(r[5] || "").trim();
-    if (skuCandidate && /[฀-๿]/.test(skuCandidate)) continue;
-    // Skip rows with no SKU at all
-    if (!skuCandidate) continue;
+    if (skuCandidate && /[฀-๿]/.test(skuCandidate)) {
+      skippedHeader++;
+      Logger.log("[readOrders_] skip header row " + (i+1) + " col F='" + skuCandidate + "'");
+      continue;
+    }
+    // Skip rows with no SKU at all — log เพื่อ debug ถ้ามีข้อมูลในคอลัมน์อื่น
+    if (!skuCandidate) {
+      skippedNoSku++;
+      const hasOtherData = r.some((v, idx) => idx !== 5 && String(v||"").trim());
+      if (hasOtherData) Logger.log("[readOrders_] skip row " + (i+1) + " col F empty (name='" + (r[6]||"") + "' qty=" + r[7] + ")");
+      continue;
+    }
     result.push({
       id:          `R${i+1}`,
       carryMode:   String(r[0]||"").includes("หิ้ว") ? "carry" : "truck",
@@ -3018,6 +3039,7 @@ function readOrders_() {
       printFlag:   r[13] || null,
     });
   }
+  Logger.log("[readOrders_] result=" + result.length + " skippedBlank=" + skippedBlank + " skippedHeader=" + skippedHeader + " skippedNoSku=" + skippedNoSku);
   return result;
 }
 

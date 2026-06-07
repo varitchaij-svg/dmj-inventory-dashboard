@@ -7799,11 +7799,16 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
       showToast("warn", "เลือก PRINT หรือ SKIP ก่อน", "🖨️");
       return;
     }
+    const prevStatus = order.status || null;
     setCompleting(true);
+    onPatch(order.id, { status: "สำเร็จ" }); // optimistic
     try {
-      onPatch(order.id, { status: "สำเร็จ" });
-      await syncOrderUpdate(order, { status: "สำเร็จ" });
+      const d = await syncOrderUpdate(order, { status: "สำเร็จ" });
+      if (d && d.ok === false) throw new Error(d.error || "GAS ตอบกลับ error");
       showToast("success", "บันทึกแล้ว", "✅", 2500);
+    } catch(e) {
+      onPatch(order.id, { status: prevStatus }); // revert
+      showToast("warn", "บันทึกไม่สำเร็จ กรุณาลองใหม่", "⚠️", 4000);
     } finally {
       setCompleting(false);
     }

@@ -383,7 +383,7 @@ function App() {
     fetch(url, { signal: controller.signal, cache: 'no-store' })
       .then(r => r.json())
       .then(d => {
-        if (!d || !Array.isArray(d.orders)) return;
+        if (!d || d.error || !Array.isArray(d.orders)) return; // d.error = sheet_not_found → skip
         // ถ้า GAS คืน date เป็น Date object string ("Thu Jun 06 2026...") แทน "dd/mm/yyyy"
         // (เกิดเมื่อ GAS ยังไม่ได้ redeploy) → normalize ให้เป็น dd/mm/yyyy ก่อนอัปเดต state
         d.orders = d.orders.map(function(o) {
@@ -401,7 +401,16 @@ function App() {
           }
           return o;
         });
-        setData(prev => prev ? { ...prev, orders: d.orders } : prev);
+        setData(prev => {
+          if (!prev) return prev;
+          // ป้องกัน GAS cold-start / lock คืน orders ว่าง ทำให้รายการหายทั้งหมด
+          // ถ้าเพิ่งมี orders แล้วกลับได้ 0 → skip update รอ poll รอบถัดไป
+          if (d.orders.length === 0 && prev.orders && prev.orders.length > 0) {
+            console.warn("[DMJ] fetchOrdersOnly got 0 orders but had", prev.orders.length, "— skipping");
+            return prev;
+          }
+          return { ...prev, orders: d.orders };
+        });
         const now = new Date().toISOString();
         localStorage.setItem("dmj_last_sync", now);
         setLastSync(now);
