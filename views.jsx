@@ -1594,6 +1594,22 @@ function CategoryView({ data, role }) {
 
   const isMtoCat = active === "Made to Order จัดแบบพิเศษ";
 
+  // map SKU → order ที่ WH จัดแล้ว (preparedQty > 0 และยังไม่ Done)
+  const whReadyMap = uM(() => {
+    const orders = data.orders || [];
+    const m = {};
+    orders.forEach(o => {
+      if (!o.sku) return;
+      const isPending = !o.status || o.status === "รอ" || o.status === "pending";
+      if (isPending && (o.preparedQty > 0)) {
+        const key = (o.sku || "").trim().toUpperCase();
+        if (!m[key]) m[key] = [];
+        m[key].push(o);
+      }
+    });
+    return m;
+  }, [data.orders]);
+
   const sortFn = uC((a, b) => {
     switch (sortBy) {
       case "sku":        return compareSku(a, b);
@@ -2285,7 +2301,8 @@ function CategoryView({ data, role }) {
                                      allCats={allCats}
                                      reasonTags={[]}
                                      onOrder={setOrderProduct}
-                                     role={role}/>
+                                     role={role}
+                                     whReady={whReadyMap[(p.sku||"").trim().toUpperCase()]}/>
                       </div>
                     ))}
                   </div>
@@ -2314,7 +2331,8 @@ function CategoryView({ data, role }) {
                                allCats={allCats}
                                reasonTags={isGlobalSearch ? [] : (reasonMap[p.sku] || [])}
                                onOrder={setOrderProduct}
-                               role={role}/>
+                               role={role}
+                               whReady={whReadyMap[(p.sku||"").trim().toUpperCase()]}/>
                 </div>
               ))}
             </div>
@@ -2493,7 +2511,7 @@ function OrderModal({ product, onClose }) {
   );
 }
 
-function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role }) {
+function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, whReady }) {
   const totalQty = (p.qtyStore > 0 || p.qtyWH > 0) ? (p.qtyStore || 0) + (p.qtyWH || 0) : (p.qty || 0);
   const lowStock = !p.isMTO && totalQty > 0 && totalQty <= 36;
   const outOfStock = !p.isMTO && totalQty === 0;
@@ -2633,6 +2651,24 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role }) {
           )}
         </div>
       </div>
+
+      {/* WH จัดของแล้ว badge */}
+      {whReady && whReady.length > 0 && (
+        <div style={{
+          margin:"0 12px 8px",padding:"5px 10px",borderRadius:8,
+          background:"#eff6ff",border:"1.5px solid #bfdbfe",
+          display:"flex",alignItems:"center",gap:6,
+        }}>
+          <span style={{fontSize:14}}>📦</span>
+          <div>
+            <div style={{fontSize:11,fontWeight:700,color:"#1d4ed8"}}>WH จัดของแล้ว</div>
+            <div style={{fontSize:10,color:"#3b82f6"}}>
+              {whReady.map(o => `${o.preparedQty} ชิ้น`).join(" · ")}
+              {whReady.some(o => o.carryMode === "carry") ? " · หิ้ว" : ""}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Order button — แสดงเฉพาะเมื่อมีของในคลัง (qtyWH > 0) */}
       {onOrder && (p.qtyWH > 0 || (!p.qtyWH && !p.qtyStore && totalQty > 0)) && (
