@@ -7765,7 +7765,7 @@ async function syncShipmentReceive(rowId, sku, receivedQty) {
 // ─────────────────────────────────────────────────────────────────────
 // ORDER LIST VIEW
 // ─────────────────────────────────────────────────────────────────────
-function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData }) {
+function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData, onSync }) {
   const isPending = !order.status || order.status === "รอ" || order.status === "pending";
   const [prepQty, setPrepQty] = uS(() => order.preparedQty > 0 ? order.preparedQty : (order.orderQty || 0));
   const [imgOpen, setImgOpen] = uS(false);
@@ -7818,6 +7818,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
       setZeroed(true);
       syncDeleteOrders([order.id]);
       showToast("success", `ปรับ ${order.name} เป็น 0 แล้ว`, "✅", 4000);
+      if (typeof onSync === "function") onSync();
     } else {
       showToast("warn", `ไม่สำเร็จ: ${(res && res.error) || "ลองใหม่"}`, "⚠️", 5000);
     }
@@ -8370,7 +8371,7 @@ function ShipmentReceiveList({ data, role, productMap }) {
   );
 }
 
-function OrderListView({ data, role }) {
+function OrderListView({ data, role, onSync }) {
   const orders = data.orders || [];
   const [filter, setFilter] = uS("all");
   const [st, setSt] = uS(getOrdersState);
@@ -8492,9 +8493,9 @@ function OrderListView({ data, role }) {
         return (
           <div>
             {showHeaders && sectionHeader("🚶","หิ้วเอง", carryItems.length, true)}
-            {carryItems.map(order => <OrderItemRow key={order.id} order={order} onPatch={patch} productMap={productMap} role={role} skuLocks={skuLocks} storageData={data.storage}/>)}
+            {carryItems.map(order => <OrderItemRow key={order.id} order={order} onPatch={patch} productMap={productMap} role={role} skuLocks={skuLocks} storageData={data.storage} onSync={onSync}/>)}
             {showHeaders && sectionHeader("🚛","ขึ้นรถ", truckItems.length, false)}
-            {truckItems.map(order => <OrderItemRow key={order.id} order={order} onPatch={patch} productMap={productMap} role={role} skuLocks={skuLocks} storageData={data.storage}/>)}
+            {truckItems.map(order => <OrderItemRow key={order.id} order={order} onPatch={patch} productMap={productMap} role={role} skuLocks={skuLocks} storageData={data.storage} onSync={onSync}/>)}
           </div>
         );
       })()}

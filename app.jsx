@@ -792,7 +792,7 @@ function App() {
                                             }}/></ErrorBoundary>}
         {activeTab === "frontstore"   && <ErrorBoundary key="frontstore"><FrontStoreView data={data} role={role}/></ErrorBoundary>}
         {activeTab === "transfers"    && <ErrorBoundary key="transfers"><TransferView data={data}/></ErrorBoundary>}
-        {activeTab === "orders"       && <ErrorBoundary key="orders"><OrderListView data={data} role={role}/></ErrorBoundary>}
+        {activeTab === "orders"       && <ErrorBoundary key="orders"><OrderListView data={data} role={role} onSync={fetchFromSheet}/></ErrorBoundary>}
         {activeTab === "ordersummary" && <ErrorBoundary key="ordersummary"><OrderSummaryView data={data} onPrintRequest={handleOrderPrint}/></ErrorBoundary>}
         {activeTab === "mtojobs"      && <ErrorBoundary key="mtojobs"><MtoJobView data={data} /></ErrorBoundary>}
         {activeTab === "upload"       && <ErrorBoundary key="upload"><UploadView currentData={data} onDataLoaded={handleDataLoaded}/></ErrorBoundary>}
