@@ -1,4 +1,4 @@
-const CACHE_NAME = "dmj-v4";
+const CACHE_NAME = "dmj-v5";
 
 // ไฟล์ที่ cache เพื่อ offline (รูปและ manifest เท่านั้น)
 const PRECACHE_ASSETS = [
@@ -27,7 +27,7 @@ self.addEventListener("activate", (e) => {
 // Fetch strategy:
 //
 //  ① Google Sheet / API          → network only (live data เสมอ)
-//  ② .jsx / .js / .html / .css   → network first, fallback cache (อัปเดตทันที)
+//  ② .jsx / .js / .html          → network first, fallback cache (ได้ code ใหม่ทันที reload เดียว)
 //  ③ CDN libs (React, Recharts)  → cache first, fallback network (ไฟล์ใหญ่ไม่เปลี่ยน)
 //  ④ รูป / font / manifest       → cache first, fallback network
 
@@ -44,9 +44,9 @@ self.addEventListener("fetch", (e) => {
     return; // browser handles natively
   }
 
-  // ② ไฟล์ app เราเอง (.jsx .js .html .css) — network first
-  //    โหลดจากเน็ตก่อนเสมอ จึงได้ version ล่าสุดทุกครั้ง
-  //    ถ้า offline ค่อยใช้ cache ที่มี
+  // ② ไฟล์ app เราเอง (.jsx .js .html) — network first
+  //    โหลดจากเน็ตก่อนเสมอ → ได้ version ล่าสุดทุกครั้ง, reload เดียวพอ
+  //    ถ้า offline → fallback cache
   const isAppFile =
     url.hostname === self.location.hostname &&
     (url.pathname.endsWith(".jsx") ||
@@ -55,21 +55,16 @@ self.addEventListener("fetch", (e) => {
      url.pathname === "/");
 
   if (isAppFile) {
-    /* stale-while-revalidate: คืน cache ทันที, อัปเดต background */
     e.respondWith(
-      caches.open(CACHE_NAME).then((cache) => {
-        return cache.match(e.request).then((cached) => {
-          const networkFetch = fetch(e.request)
-            .then((res) => {
-              if (res.ok) cache.put(e.request, res.clone());
-              return res;
-            })
-            .catch(() => cached);
-          /* ถ้ามี cache → คืนทันที + อัปเดต background */
-          /* ถ้าไม่มี cache → รอ network */
-          return cached || networkFetch;
-        });
-      })
+      fetch(e.request)
+        .then((res) => {
+          if (res.ok) {
+            const clone = res.clone();
+            caches.open(CACHE_NAME).then((c) => c.put(e.request, clone));
+          }
+          return res;
+        })
+        .catch(() => caches.match(e.request))
     );
     return;
   }
