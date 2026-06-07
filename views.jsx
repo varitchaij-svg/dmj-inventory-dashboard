@@ -5986,7 +5986,6 @@ async function confirmStockCount(entries) {
       body: JSON.stringify({
         confirmStockCount: true,
         datetime: new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }),
-        clientLoadedAt: window._dataLoadedAt || 0, // สำหรับ conflict detection
         actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
         entries,
       }),
@@ -8572,7 +8571,7 @@ async function syncStockTransferBatch(items) {
     const res = await fetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ transferStockBatch: true, list: items, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน", clientLoadedAt: window._dataLoadedAt || Date.now() }), // M1
+      body: JSON.stringify({ transferStockBatch: true, list: items, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน" }),
     });
     const json = await res.json().catch(() => ({}));
     console.log("syncStockTransferBatch result:", json);
