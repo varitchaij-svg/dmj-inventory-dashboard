@@ -7880,6 +7880,12 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
                 background:isPending?"#fff8e1":"#e8f5e9",color:isPending?"#a07417":"#1f7f44",
                 letterSpacing:.3,
               }}>{isPending?"🟡 รอ":"✅ Done"}</span>
+              {isPending && order.preparedQty > 0 && (
+                <span style={{
+                  fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:20,
+                  background:"#eff6ff",color:"#1d4ed8",
+                }}>📦 WH จัดแล้ว {order.preparedQty} ชิ้น</span>
+              )}
             </div>
             <div style={{fontSize:14,fontWeight:600,lineHeight:1.3,marginBottom:2,
               overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
