@@ -1536,6 +1536,7 @@ function mtoBase(name) {
 
 function CategoryView({ data, role }) {
   const { products } = data;
+  const pendingShipments = uM(() => (data.shipments || []).filter(s => !s.receivedAt), [data.shipments]);
   const allCats = uM(() => {
     const s = new Set();
     products.forEach(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า" && s.add(p.cat));
@@ -1802,6 +1803,22 @@ function CategoryView({ data, role }) {
           <div className="page-sub">ดูสินค้าทุกตัวในแต่ละหมวด · เรียงตามขายดี / ราคา / Supplier / สี</div>
         </div>
       </div>
+
+      {pendingShipments.length > 0 && (
+        <div style={{background:"#fff8e1",border:"1.5px solid #f59e0b",borderRadius:10,padding:"10px 14px",marginBottom:12}}>
+          <div style={{fontWeight:700,fontSize:13,color:"#a07417",marginBottom:4}}>
+            📦 สินค้าที่โอนแล้ว รอรับ ({pendingShipments.length} รายการ)
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:2}}>
+            {pendingShipments.slice(0,5).map((s,i) => (
+              <div key={i} style={{fontSize:12,color:"#555"}}>{s.sku} · {s.name || "(ไม่ระบุ)"} · {s.qty} ชิ้น</div>
+            ))}
+            {pendingShipments.length > 5 && (
+              <div style={{fontSize:11,color:"#a07417"}}>+{pendingShipments.length - 5} รายการ</div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── Global Search Bar ── */}
       <div style={{marginBottom:14}}>
