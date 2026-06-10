@@ -98,6 +98,15 @@ const SHEET_LOCKS     = "ตำแหน่งจัดเก็บ";
 const SHEET_TRANSFERS = "รายการโอนสินค้า";
 const SHEET_SHIP_ARCHIVE = "ประวัติรับสินค้า";  // เก็บรายการรับครบที่ archive ออกจากชีตหลัก
 const SHEET_AUDIT     = "Audit Log";
+const SHEET_FRONTSTORE_QTY = "จำนวนหน้าร้าน";  // บันทึกจำนวนหน้าร้านที่เช็คแล้ว
+const SHEET_IMAGE_URL      = "imageUrl";          // mapping รูปภาพสินค้า
+const SHEET_PRODUCT_META   = "ข้อมูลสินค้า";    // metadata สินค้า (ชื่อ/หมวด/ราคา)
+const SHEET_PURCHASES      = "รายการซื้อสินค้า"; // ประวัติการซื้อ/PO
+const SHEET_MONTHLY_SALES  = "ยอดขายรายเดือน";  // ยอดขายแยกตามเดือน
+const SHEET_DAILY_SALES    = "ยอดขายรายวัน";    // ยอดขายแยกตามวัน
+const SHEET_TRANSFERS_HIST = "รายการโอน";        // ประวัติโอนสินค้า (ต่างจาก SHEET_TRANSFERS)
+const SHEET_MTO_JOBS       = "งาน MTO";          // งานจัดพิเศษ (make-to-order)
+const SHEET_MTO_ITEMS      = "วัตถุดิบ MTO";    // วัตถุดิบสำหรับงาน MTO
 const WH_NAME_SAI5    = "คลังสินค้าสาย5";
 const WH_NAME_FS      = "ดูเหมือนจริง";
 
@@ -393,7 +402,12 @@ function doGet(e) {
     }
 
     // Debug endpoint: คืน raw row data ของชีตคำสั่งซื้อ (ใช้วินิจฉัย missing rows)
+    // เฉพาะ owner เท่านั้น — ป้องกัน raw sheet data รั่วให้ role อื่น
     if (e && e.parameter && e.parameter.action === 'debugOrders') {
+      if (e.parameter.role !== 'owner') {
+        return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Unauthorized" }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
       const ss2 = SpreadsheetApp.openById(SHEET_ID);
       const sh2 = ss2.getSheetByName(SHEET_ORDERS);
       if (!sh2) return ContentService.createTextOutput(JSON.stringify({ error: "ไม่พบชีต" })).setMimeType(ContentService.MimeType.JSON);
@@ -1208,7 +1222,7 @@ function deleteLockEntry(ss, lockKey, sku) {
 }
 
 function updateFrontStore(ss, entries, datetime) {
-  const sheet = ss.getSheetByName("จำนวนหน้าร้าน");
+  const sheet = ss.getSheetByName(SHEET_FRONTSTORE_QTY);
   if (!sheet) return error("ไม่พบชีต จำนวนหน้าร้าน");
 
   const lock = LockService.getScriptLock();
@@ -1424,7 +1438,7 @@ function pickZortImage_(p) {
 // ดึงรูปจาก ZORT → เขียนคอลัมน์ E ของชีต imageUrl (ไม่แตะคอลัมน์ D ที่ใส่เอง)
 function syncZortImages() {
   const ss = SpreadsheetApp.openById(SHEET_ID);
-  const sh = ss.getSheetByName('imageUrl');
+  const sh = ss.getSheetByName(SHEET_IMAGE_URL);
   if (!sh) { Logger.log('ไม่พบชีต imageUrl'); return; }
 
   const products = fetchAllZortProducts_(); // ทุกคลัง
@@ -1925,7 +1939,7 @@ function syncZortBoth() {
 
     // นับงาน MTO ที่ status = "กำลังจัด" (col 6 = index 6, 0-indexed จาก header: JobID,วันที่,ชื่องาน,ลูกค้า,ราคา,รูป,สถานะ)
     var mtoActive = 0;
-    var mtoSh = ss2.getSheetByName('งาน MTO');
+    var mtoSh = ss2.getSheetByName(SHEET_MTO_JOBS);
     if (mtoSh) {
       var mtoRows = mtoSh.getDataRange().getValues();
       for (var mi = 1; mi < mtoRows.length; mi++) {
@@ -2049,7 +2063,7 @@ function fetchZortPurchasesPaged_(fromStr, toStr) {
 //   col 1=type, 2=poNum, 4=supplier, 11=date, 19=status, 20=warehouse, 24=sku, 25=name, 26=qty, 27=unitPrice
 function syncZortPurchases() {
   const ss  = SpreadsheetApp.openById(SHEET_ID);
-  const sh  = ss.getSheetByName("รายการซื้อสินค้า");
+  const sh  = ss.getSheetByName(SHEET_PURCHASES);
   if (!sh) { Logger.log("❌ ไม่พบ sheet รายการซื้อสินค้า"); return; }
 
   const tz    = "Asia/Bangkok";
@@ -2259,7 +2273,7 @@ function getOrBuildDatabase() {
     if (valid) return JSON.parse(fullJson);
   }
 
-  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName('ข้อมูลสินค้า');
+  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PRODUCT_META);
   const data  = sheet.getDataRange().getDisplayValues();
   let db = { index: {}, items: {} };
   for (let i = 1; i < data.length; i++) {
@@ -2716,7 +2730,7 @@ function dayKey_(val) {
 // อ่านชีต imageUrl: A=ID, B=SKU, C=ชื่อ, D=รูป(ใส่เอง/สำรอง), E=รูปจาก ZORT(auto)
 // ZORT คือแหล่งหลัก → รูปจาก ZORT (E) ชนะ, ใช้รูปใส่เอง (D) เฉพาะตอน ZORT ไม่มีรูป
 function readImageMap_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('imageUrl');
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_IMAGE_URL);
   if (!sh) return {};
   const rows = sh.getDataRange().getDisplayValues();
   const map = {};
@@ -2732,7 +2746,7 @@ function readImageMap_() {
 }
 
 function readProducts_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('ข้อมูลสินค้า');
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PRODUCT_META);
   const rows = sh.getDataRange().getDisplayValues();
   const imageMap = readImageMap_();
   const out = [];
@@ -2765,7 +2779,7 @@ function readProducts_() {
 }
 
 function readSysQty_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('อัพเดทจำนวนสินค้า');
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PRODUCTS);
   if (!sh) return {};
   const rows = sh.getDataRange().getDisplayValues();
   const map = {};
@@ -2779,7 +2793,7 @@ function readSysQty_() {
 }
 
 function readMonthlySales_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('ยอดขายรายเดือน');
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_MONTHLY_SALES);
   if (!sh) return { monthLabels: [], monthlyByCat: {}, perSku: {} };
   const rows = sh.getDataRange().getDisplayValues();
   if (rows.length < 3) return { monthLabels: [], monthlyByCat: {}, perSku: {} };
@@ -2819,7 +2833,7 @@ function readMonthlySales_() {
 }
 
 function readDailySales_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('ยอดขายรายวัน');
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_DAILY_SALES);
   if (!sh) return { dayLabels: [], dailyByCat: {} };
   const rows = sh.getDataRange().getDisplayValues();
   if (rows.length < 3) return { dayLabels: [], dailyByCat: {} };
@@ -2854,7 +2868,7 @@ function readDailySales_() {
 }
 
 function readTransfers_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('รายการโอน');
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_TRANSFERS_HIST);
   if (!sh) return [];
   const rows = sh.getDataRange().getDisplayValues();
   if (rows.length < 3) return [];
@@ -2954,7 +2968,7 @@ function archiveReceivedShipments() {
 }
 
 function readPurchases_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('รายการซื้อสินค้า');
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PURCHASES);
   if (!sh) return [];
   // getValues() ให้ Date object ถ้า cell เป็น Date type → format เป็น ISO ได้ถูกต้อง
   // getDisplayValues() ให้ text ที่ format ตาม locale ของ sheet → อาจ sort ผิด
@@ -3000,7 +3014,7 @@ function readPurchases_() {
 }
 
 function readStorage_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('ตำแหน่งจัดเก็บ');
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_LOCKS);
   if (!sh) return { entries: [], lockMap: {} };
   const rows = sh.getDataRange().getDisplayValues();
   if (rows.length < 2) return { entries: [], lockMap: {} };
@@ -3086,7 +3100,7 @@ function readOrders_() {
 }
 
 function readFrontStoreCheckedQty_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName("จำนวนหน้าร้าน");
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_FRONTSTORE_QTY);
   if (!sh) return {};
   const rows = sh.getDataRange().getDisplayValues();
   const map = {};
@@ -3101,7 +3115,7 @@ function readFrontStoreCheckedQty_() {
 
 function readQtyByLocation_() {
   const ss = SpreadsheetApp.openById(SHEET_ID);
-  const sh = ss.getSheetByName('อัพเดทจำนวนสินค้า');
+  const sh = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sh) return {};
   const rows = sh.getRange('B2:I' + sh.getLastRow()).getValues();
   const map = {};
@@ -3127,7 +3141,7 @@ function handleOrder_(params) {
       .setMimeType(ContentService.MimeType.JSON);
 
     const ss = SpreadsheetApp.openById(SHEET_ID);
-    const orderSh = ss.getSheetByName('ลำดับที่สั่งสินค้า');
+    const orderSh = ss.getSheetByName(SHEET_ORDERS);
     if (!orderSh) return ContentService
       .createTextOutput(JSON.stringify({ok:false, error:'ไม่พบ Sheet'}))
       .setMimeType(ContentService.MimeType.JSON);
@@ -3252,7 +3266,7 @@ function sendPendingTruckOrders() {
   var day = new Date().getDay(); // 0=อา, 5=ศ, 6=ส
   if (day !== 0 && day !== 5 && day !== 6) return;
   var ss = SpreadsheetApp.openById(SHEET_ID);
-  var sh = ss.getSheetByName('ลำดับที่สั่งสินค้า');
+  var sh = ss.getSheetByName(SHEET_ORDERS);
   if (!sh) return;
   var rows = sh.getDataRange().getValues();
   var pending = [];
@@ -3332,7 +3346,7 @@ function sendPendingTruckOrders() {
 // ทดสอบส่งแจ้งเตือนรอขึ้นรถโดยไม่เช็ควัน — รันจาก GAS dropdown ได้เลย
 function testTruckNotification() {
   var ss = SpreadsheetApp.openById(SHEET_ID);
-  var sh = ss.getSheetByName('ลำดับที่สั่งสินค้า');
+  var sh = ss.getSheetByName(SHEET_ORDERS);
   if (!sh) { Logger.log("ไม่พบชีต"); return; }
   var rows = sh.getDataRange().getValues();
   var pending = [];
@@ -3495,7 +3509,7 @@ function sendLowStockAlert() {
   // (SHEET_PRODUCTS เก็บแค่ตัวเลข stock — category/vendor อยู่ใน ข้อมูลสินค้า)
   const metaMap = {};
   try {
-    const metaSh = ss.getSheetByName("ข้อมูลสินค้า");
+    const metaSh = ss.getSheetByName(SHEET_PRODUCT_META);
     if (metaSh) {
       const metaRows = metaSh.getDataRange().getDisplayValues();
       // header 1 แถว → เริ่ม index 1; col B(1)=SKU, col F(5)=category, col H(7)=vendor
@@ -3613,7 +3627,7 @@ function scheduledLineReminder() {
   if (dayOfWeek !== 2 && dayOfWeek !== 4) return;
 
   var ss = SpreadsheetApp.openById(SHEET_ID);
-  var orderSh = ss.getSheetByName('ลำดับที่สั่งสินค้า');
+  var orderSh = ss.getSheetByName(SHEET_ORDERS);
   var lastRow = orderSh.getLastRow();
   if (lastRow < 3) return;
 
@@ -3729,7 +3743,7 @@ function error(msg) {
 // ───────────────────────────────────────────────────────────
 
 function getOrCreateMtoJobSheet_(ss) {
-  let sh = ss.getSheetByName("งาน MTO");
+  let sh = ss.getSheetByName(SHEET_MTO_JOBS);
   if (!sh) {
     sh = ss.insertSheet("งาน MTO");
     sh.appendRow(["JobID","วันที่","ชื่องาน","ลูกค้า","ราคา","รูป","สถานะ","ปิดงานเมื่อ"]);
@@ -3738,7 +3752,7 @@ function getOrCreateMtoJobSheet_(ss) {
 }
 
 function getOrCreateMtoItemSheet_(ss) {
-  let sh = ss.getSheetByName("วัตถุดิบ MTO");
+  let sh = ss.getSheetByName(SHEET_MTO_ITEMS);
   if (!sh) {
     sh = ss.insertSheet("วัตถุดิบ MTO");
     sh.appendRow(["JobID","รหัสสินค้า","ชื่อสินค้า","จำนวนเบิก","คลัง","จำนวนคืน","ตัดจริง","เวลา"]);
@@ -3988,7 +4002,7 @@ function createZortSaleOrder_(items, jobName) {
 
 function deleteMtoJob(ss, data) {
   const jobId = String(data.jobId || "").trim();
-  const sh = ss.getSheetByName("งาน MTO");
+  const sh = ss.getSheetByName(SHEET_MTO_JOBS);
   if (!sh) return error("ไม่พบชีต งาน MTO");
   const rows = sh.getDataRange().getValues();
   for (let i = 1; i < rows.length; i++) {
@@ -4003,8 +4017,8 @@ function deleteMtoJob(ss, data) {
 
 function readMtoJobs_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const jobSh = ss.getSheetByName("งาน MTO");
-  const itemSh = ss.getSheetByName("วัตถุดิบ MTO");
+  const jobSh = ss.getSheetByName(SHEET_MTO_JOBS);
+  const itemSh = ss.getSheetByName(SHEET_MTO_ITEMS);
   if (!jobSh) return [];
 
   const jobRows = jobSh.getDataRange().getValues();
