@@ -1534,8 +1534,15 @@ function mtoBase(name) {
     .trim() || 'งานพิเศษ';
 }
 
+// คืน threshold ของ SKU นั้น โดย fallback ลำดับ: override → default → 36
+function getLowStockThreshold(thresholds, sku) {
+  if (!thresholds) return 36;
+  return (thresholds.overrides && thresholds.overrides[sku]) || thresholds.default || 36;
+}
+
 function CategoryView({ data, role }) {
   const { products } = data;
+  const thresholds = data.thresholds || null; // { default: N, overrides: { sku: N } }
   const pendingOrders = uM(() => (data.orders || []).filter(o => !o.status || o.status === "รอ" || o.status === "pending"), [data.orders]);
   const allCats = uM(() => {
     const s = new Set();
@@ -1580,6 +1587,8 @@ function CategoryView({ data, role }) {
   // Android back: ถ้ากำลังดู supplier view → กด back = ล้าง supplier filter
   useBackHandler(globalVendor ? () => { setGlobalVendor(null); setPage(1); } : null);
   const [viewMode, setViewMode] = uS('grid');
+  const [expandedGroups, setExpandedGroups] = uS(new Set()); // supplier view: group ที่ expand เพื่อดูทั้งหมด
+  const SUPPLIER_PAGE = 50; // แสดงสูงสุด 50 รายการต่อ group ก่อน expand
   // ── helper: parse DD/MM/YYYY → Date ──
   const parseStockDate = (str) => {
     if (!str) return null;
@@ -1647,12 +1656,12 @@ function CategoryView({ data, role }) {
     return Object.values(m).sort((a, b) => b.count - a.count);
   }, [products]);
 
-  // ต้องสั่งเพิ่ม = หมด (≤0) หรือ ใกล้หมด (1..36) — ใช้เกณฑ์เดียวกับ badge ในการ์ด
+  // ต้องสั่งเพิ่ม = หมด (≤0) หรือ ใกล้หมด — ใช้เกณฑ์เดียวกับ badge ในการ์ด
   const needsReorder = uC((p) => {
     if (p.isMTO) return false;
     const q = stockQty(p);
-    return q <= 36;
-  }, []);
+    return q <= getLowStockThreshold(thresholds, p.sku);
+  }, [thresholds]);
 
   const filtered = uM(() => {
     const gq = globalSearch.trim().toLowerCase();
@@ -1707,7 +1716,7 @@ function CategoryView({ data, role }) {
       if (!p.isMTO) {
         const q = stockQty(p);
         if (q <= 0) m[key].out++;
-        else if (q <= 36) m[key].low++;
+        else if (q <= getLowStockThreshold(thresholds, p.sku)) m[key].low++;
       }
     });
     return Object.values(m).sort((a, b) => {
@@ -2195,7 +2204,7 @@ function CategoryView({ data, role }) {
               {visible.map((p, idx) => {
                 const totalQty = stockQty(p);
                 const outOfStock = !p.isMTO && totalQty === 0;
-                const lowStock = !p.isMTO && totalQty > 0 && totalQty <= 36;
+                const lowStock = !p.isMTO && totalQty > 0 && totalQty <= getLowStockThreshold(thresholds, p.sku);
                 const accent2 = isGlobalSearch ? catColor(p.cat, allCats) : color;
                 return (
                   <div key={p.sku} style={{
@@ -2266,7 +2275,11 @@ function CategoryView({ data, role }) {
           ) : viewMode === 'supplier' ? (
             /* ── Group-by-supplier view — sections per ร้าน ── */
             <div style={{display:'flex',flexDirection:'column',gap:18}}>
-              {supplierGroups.map(g => (
+              {supplierGroups.map(g => {
+                const isExpanded = expandedGroups.has(g.name);
+                const visibleItems = isExpanded ? g.items : g.items.slice(0, SUPPLIER_PAGE);
+                const hiddenCount = g.items.length - SUPPLIER_PAGE;
+                return (
                 <div key={g.name}>
                   {/* Section header — sticky, supplier name + counts + low/out badges */}
                   <div style={{
@@ -2300,7 +2313,7 @@ function CategoryView({ data, role }) {
                     )}
                   </div>
                   <div className="product-grid" style={{width:"100%",boxSizing:"border-box",minWidth:0}}>
-                    {g.items.map((p, idx) => (
+                    {visibleItems.map((p, idx) => (
                       <div key={p.sku} style={{position:"relative"}}>
                         {(isGlobalSearch || isGlobalVendor) && p.cat && (
                           <div style={{
@@ -2319,12 +2332,29 @@ function CategoryView({ data, role }) {
                                      reasonTags={[]}
                                      onOrder={setOrderProduct}
                                      role={role}
-                                     whReady={whReadyMap[(p.sku||"").trim().toUpperCase()]}/>
+                                     whReady={whReadyMap[(p.sku||"").trim().toUpperCase()]}
+                                     thresholds={thresholds}/>
                       </div>
                     ))}
                   </div>
+                  {/* ปุ่มแสดงเพิ่มเติม — เฉพาะ group ที่มีมากกว่า SUPPLIER_PAGE */}
+                  {!isExpanded && hiddenCount > 0 && (
+                    <button onClick={() => setExpandedGroups(prev => {
+                        const next = new Set(prev);
+                        next.add(g.name);
+                        return next;
+                      })}
+                      style={{width:'100%',marginTop:8,padding:'10px 16px',
+                              border:'1.5px dashed var(--bdr)',borderRadius:10,
+                              background:'var(--g-50)',color:'var(--g-600)',
+                              fontSize:13,fontWeight:600,cursor:'pointer',
+                              fontFamily:'inherit'}}>
+                      แสดงเพิ่มเติม ({hiddenCount} รายการ)
+                    </button>
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             /* ── Grid view — existing card layout ── */
@@ -2349,7 +2379,8 @@ function CategoryView({ data, role }) {
                                reasonTags={isGlobalSearch ? [] : (reasonMap[p.sku] || [])}
                                onOrder={setOrderProduct}
                                role={role}
-                               whReady={whReadyMap[(p.sku||"").trim().toUpperCase()]}/>
+                               whReady={whReadyMap[(p.sku||"").trim().toUpperCase()]}
+                               thresholds={thresholds}/>
                 </div>
               ))}
             </div>
@@ -2371,7 +2402,7 @@ const QUICK_QTYS = [24, 36, 48, 60];
 
 function OrderModal({ product, onClose }) {
   useBackHandler(onClose); // Android back = ปิด modal สั่งของ
-  const [qty, setQty] = uS(24);
+  const [qty, setQty] = uS(Math.min(24, product.qtyWH || 24));
   const [customMode, setCustomMode] = uS(false);
   const [orderType, setOrderType] = uS('รอขึ้นรถ');
   const [loading, setLoading] = uS(false);
@@ -2528,9 +2559,9 @@ function OrderModal({ product, onClose }) {
   );
 }
 
-function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, whReady }) {
+function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, whReady, thresholds }) {
   const totalQty = (p.qtyStore > 0 || p.qtyWH > 0) ? (p.qtyStore || 0) + (p.qtyWH || 0) : (p.qty || 0);
-  const lowStock = !p.isMTO && totalQty > 0 && totalQty <= 36;
+  const lowStock = !p.isMTO && totalQty > 0 && totalQty <= getLowStockThreshold(thresholds, p.sku);
   const outOfStock = !p.isMTO && totalQty === 0;
   const hashHue = (p.sku || "").split("").reduce((a,c) => a + c.charCodeAt(0), 0) % 360;
   const [lightbox, setLightbox] = uS(false);
@@ -5221,6 +5252,15 @@ function WarehouseMapModal({ open, onClose, highlightKey, lockData, shelves, pro
   );
 }
 
+// inject @keyframes wh-pulse ครั้งเดียวตอนโหลด module (ไม่ inject ซ้ำทุก instance)
+(function() {
+  if (document.getElementById('wh-pulse-style')) return;
+  const s = document.createElement('style');
+  s.id = 'wh-pulse-style';
+  s.textContent = '@keyframes wh-pulse{0%,100%{box-shadow:0 0 0 3px #86efac}50%{box-shadow:0 0 0 6px #4ade80}}';
+  document.head.appendChild(s);
+})();
+
 // ShelfBlock สำหรับ WarehouseMapModal — เหมือน ShelfBlock แต่ไฮไลต์ highlightKey ด้วยสีเขียวสด
 function ShelfBlockHighlight({ side, shelf, locks, lockData, highlightKey, isRight }) {
   const cols = 5, rows = 3;
@@ -5261,7 +5301,6 @@ function ShelfBlockHighlight({ side, shelf, locks, lockData, highlightKey, isRig
     <div className="shelf-block">
       <div className="shelf-label">{side}{shelf}</div>
       <div className="lock-grid">{cells}</div>
-      <style>{`@keyframes wh-pulse{0%,100%{box-shadow:0 0 0 3px #86efac}50%{box-shadow:0 0 0 6px #4ade80}}`}</style>
     </div>
   );
 }
@@ -6488,14 +6527,36 @@ function StockCountView({ data }) {
     setCalcPad({ sku, name, expr: init, result: null, justOp: false });
   };
 
-  // Safe expression evaluator — supports + - * /
+  // Safe expression evaluator — recursive descent parser (ไม่ใช้ eval/Function)
   const evalExpr = (expr) => {
+    const tokens = expr.replace(/\s+/g,'').match(/(\d+\.?\d*|[+\-*/()])/g) || [];
+    let pos = 0;
+    function parseExpr2() {
+      let val = parseTerm2();
+      while (pos < tokens.length && (tokens[pos] === '+' || tokens[pos] === '-')) {
+        const op = tokens[pos++];
+        val = op === '+' ? val + parseTerm2() : val - parseTerm2();
+      }
+      return val;
+    }
+    function parseTerm2() {
+      let val = parseFactor2();
+      while (pos < tokens.length && (tokens[pos] === '*' || tokens[pos] === '/')) {
+        const op = tokens[pos++];
+        const next = parseFactor2();
+        val = op === '*' ? val * next : val / next;
+      }
+      return val;
+    }
+    function parseFactor2() {
+      if (tokens[pos] === '(') { pos++; const val = parseExpr2(); pos++; return val; }
+      if (tokens[pos] === '-') { pos++; return -parseFactor2(); }
+      return parseFloat(tokens[pos++]);
+    }
     try {
-      const clean = expr.replace(/[^0-9+\-*/.()]/g,'');
-      if (!clean) return null;
-      // eslint-disable-next-line no-new-func
-      const v = Function('return (' + clean + ')')();
-      if (!isFinite(v)) return null;
+      if (!tokens.length) return null;
+      const v = parseExpr2();
+      if (!isFinite(v) || isNaN(v)) return null;
       return Math.max(0, Math.round(v * 100) / 100);
     } catch(e) { return null; }
   };
@@ -10032,13 +10093,36 @@ function CalcPadModal({ open, name, initialVal, onConfirm, onClose }) {
 
   if (!open) return null;
 
+  // Safe expression evaluator — recursive descent parser (ไม่ใช้ eval/Function)
   const evalExpr = (e) => {
+    const tokens = e.replace(/\s+/g,'').match(/(\d+\.?\d*|[+\-*/()])/g) || [];
+    let pos = 0;
+    function parseExprC() {
+      let val = parseTermC();
+      while (pos < tokens.length && (tokens[pos] === '+' || tokens[pos] === '-')) {
+        const op = tokens[pos++];
+        val = op === '+' ? val + parseTermC() : val - parseTermC();
+      }
+      return val;
+    }
+    function parseTermC() {
+      let val = parseFactorC();
+      while (pos < tokens.length && (tokens[pos] === '*' || tokens[pos] === '/')) {
+        const op = tokens[pos++];
+        const next = parseFactorC();
+        val = op === '*' ? val * next : val / next;
+      }
+      return val;
+    }
+    function parseFactorC() {
+      if (tokens[pos] === '(') { pos++; const val = parseExprC(); pos++; return val; }
+      if (tokens[pos] === '-') { pos++; return -parseFactorC(); }
+      return parseFloat(tokens[pos++]);
+    }
     try {
-      const clean = e.replace(/[^0-9+\-*/.()]/g,'');
-      if (!clean) return null;
-      // eslint-disable-next-line no-new-func
-      const v = Function('return (' + clean + ')')();
-      if (!isFinite(v)) return null;
+      if (!tokens.length) return null;
+      const v = parseExprC();
+      if (!isFinite(v) || isNaN(v)) return null;
       return Math.max(0, Math.round(v * 100) / 100);
     } catch(_) { return null; }
   };

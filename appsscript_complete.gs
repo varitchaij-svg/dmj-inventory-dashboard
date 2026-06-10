@@ -248,7 +248,7 @@ function doPost(e) {
 
     // ─── Material Deduction: MTO ───
     if (data.deductMaterials) {
-      return deductMaterials(ss, data.items || []);
+      return deductMaterials(ss, data.items || [], actor);
     }
 
     // ─── Update Order State ───
@@ -336,7 +336,12 @@ function doGet(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
     // Audit Log endpoint: ดึง 200 แถวล่าสุดจาก Audit Log sheet
+    // เฉพาะ owner เท่านั้น — ตรวจจาก role parameter ที่ frontend ส่งมา
     if (e && e.parameter && e.parameter.action === 'getAuditLog') {
+      if (e.parameter.role !== 'owner') {
+        return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Unauthorized" }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
       const ss = SpreadsheetApp.openById(SHEET_ID);
       const sh = ss.getSheetByName(SHEET_AUDIT);
       if (!sh) {
@@ -990,7 +995,7 @@ function deductStock(ss, sku, qty) {
   }
 }
 
-function deductMaterials(ss, items) {
+function deductMaterials(ss, items, actor) {
   if (!Array.isArray(items) || items.length === 0) return error("items ว่างเปล่า");
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_PRODUCTS);
@@ -1023,9 +1028,16 @@ function deductMaterials(ss, items) {
     }
 
     SpreadsheetApp.flush();
+    // บันทึก Audit Log รวมทุก SKU ที่ deduct
+    try {
+      for (const r of results) {
+        writeAuditLog_(actor || "ระบบ", "deductMaterials", r.sku, "หักวัสดุ " + r.deducted + " ชิ้น → คงเหลือ " + r.newWH);
+      }
+    } catch (e) {}
     return ok({ deducted: results.length, results });
   } finally {
     lock.releaseLock();
+    invalidateCache_();
   }
 }
 
@@ -1123,6 +1135,7 @@ function confirmShipmentReceive(ss, rowId, sku, receivedQty, actor) {
     return ok({ row: rowNum, receivedQty: recv, status });
   } finally {
     lock.releaseLock();
+    try { invalidateCache_(); } catch(e) {}
   }
 }
 
@@ -1158,10 +1171,13 @@ function updateLockData(ss, lockKey, entries, datetime) {
         // A=ว่าง, B=SKU, C=lockKey, D=qty, E-G=ว่าง, H=date
         sheet.appendRow(["", sku, lockKey, entry.qty, "", "", "", dt]);
       }
+      // Audit log: บันทึกทุก entry ที่เปลี่ยน
+      try { writeAuditLog_("ระบบ", "updateLockData", sku, "lockKey: " + lockKey + ", qty: " + entry.qty); } catch(e) {}
     }
     return ok({ lockKey, updated: entries.length });
   } finally {
     lock.releaseLock();
+    try { invalidateCache_(); } catch(e) {}
   }
 }
 
@@ -1302,8 +1318,15 @@ function deleteOrderRow(ss, orderId) {
   if (!sheet) return error("ไม่พบชีต ลำดับที่สั่งสินค้า");
   const rowNum = parseInt(String(orderId).replace(/[^0-9]/g, ""));
   if (!rowNum || rowNum < 3) return error("orderId ไม่ถูกต้อง");
-  sheet.deleteRow(rowNum);
-  return ok({ deleted: orderId });
+
+  const lock = LockService.getScriptLock();
+  if (!lock.waitLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
+  try {
+    sheet.deleteRow(rowNum);
+    return ok({ deleted: orderId });
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // ลบหลาย order rows ในครั้งเดียว — เรียงจากแถวล่างขึ้นบนกัน index เลื่อน
@@ -1693,7 +1716,8 @@ function fetchAllZortProducts_(warehousecode) {
   return all;
 }
 
-function syncZortToColumn_(warehousecode, colIndex) {
+// cachedProducts: optional — ถ้ามีให้ใช้เลย ถ้าไม่มีจะ fetch เอง (backward compatible)
+function syncZortToColumn_(warehousecode, colIndex, cachedProducts) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sheet) { Logger.log("ไม่พบชีต: " + SHEET_PRODUCTS); return; }
@@ -1704,7 +1728,7 @@ function syncZortToColumn_(warehousecode, colIndex) {
   const recentCounted = recentJson ? JSON.parse(recentJson) : {};
   const healItems = [];
 
-  const products = fetchAllZortProducts_(warehousecode);
+  const products = cachedProducts || fetchAllZortProducts_(warehousecode);
   Logger.log(`ZORT: ${products.length} items`);
 
   const zortMap      = {};
@@ -1755,14 +1779,15 @@ function syncZortToColumn_(warehousecode, colIndex) {
   Logger.log(`อัพเดทแล้ว: ${updated} rows | ไม่พบใน ZORT: ${notFound} rows | heal: ${healItems.length}`);
 }
 
-function syncNewProductsFromZort() {
+// cachedWH / cachedFS: optional — ถ้ามีให้ใช้เลย ถ้าไม่มีจะ fetch เอง (backward compatible)
+function syncNewProductsFromZort(cachedWH, cachedFS) {
   Logger.log("=== ค้นหาสินค้าใหม่จาก ZORT ===");
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sheet) { Logger.log("ไม่พบชีต: " + SHEET_PRODUCTS); return; }
 
-  const productsWH = fetchAllZortProducts_(WH_SAI5);
-  const productsFS = fetchAllZortProducts_(WH_FRONTSTORE);
+  const productsWH = cachedWH || fetchAllZortProducts_(WH_SAI5);
+  const productsFS = cachedFS || fetchAllZortProducts_(WH_FRONTSTORE);
   const allProducts = [...productsWH, ...productsFS];
 
   const seen = {};
@@ -1814,9 +1839,16 @@ function syncZortFrontStore() {
 }
 
 function syncZortBoth() {
-  syncNewProductsFromZort();
-  syncZortWarehouse();
-  syncZortFrontStore();
+  // PERF: fetch แต่ละ warehouse ครั้งเดียว แล้วส่ง cached products ให้ sub-functions
+  // เพื่อลดจำนวน ZORT API calls จาก 4+ ครั้ง → 2 ครั้ง (WH_SAI5 + WH_FRONTSTORE)
+  Logger.log("syncZortBoth: fetching products from ZORT (WH_SAI5)...");
+  const productsWH = fetchAllZortProducts_(WH_SAI5);
+  Logger.log("syncZortBoth: fetching products from ZORT (WH_FRONTSTORE)...");
+  const productsFS = fetchAllZortProducts_(WH_FRONTSTORE);
+
+  syncNewProductsFromZort(productsWH, productsFS);
+  syncZortToColumn_(WH_SAI5, COL_PROD_QTYWH, productsWH);
+  syncZortToColumn_(WH_FRONTSTORE, COL_PROD_QTYFS, productsFS);
   try { syncZortPurchases(); } catch(e) { Logger.log("syncZortPurchases error: " + e); }
   try { syncZortImages(); } catch(e) { Logger.log("syncZortImages error: " + e); }
 
