@@ -223,6 +223,15 @@ function doPost(e) {
     // ── ผู้ใช้ที่ส่ง action มา (frontend ส่งใน body.actor) ──
     var actor = data.actor || "ไม่ระบุ";
 
+    // ─── Verify PIN (POST path) ───
+    if (data.action === 'verifyPin') {
+      const expected = PropertiesService.getScriptProperties().getProperty('OWNER_PIN') || 'DMJ';
+      const okPin = String(data.pin || '') === String(expected);
+      return ContentService
+        .createTextOutput(JSON.stringify({ ok: okPin }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
     // มีการแก้ข้อมูล → ล้าง cache ให้ doGet ครั้งถัดไปคำนวณใหม่ (ข้อมูลไม่ค้าง)
     invalidateCache_(true); // clear payload cache เท่านั้น — ห้าม bump dmj_last_write_ts ก่อน conflict check
 
