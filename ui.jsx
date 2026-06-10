@@ -54,6 +54,8 @@ const catColor = (cat, allCats = []) => {
   }
   return catColorMap.get(cat);
 };
+// รีเซ็ต map เมื่อ data โหลดใหม่ เพื่อให้ assign สีถูก category (กันสีเพี้ยนเมื่อ list เปลี่ยน)
+const resetCatColorMap = () => { catColorMap.clear(); };
 
 // ────────────── Icons (lucide-style inline) ──────────────
 const Icon = ({ d, size, stroke = 2 }) => (
@@ -183,6 +185,8 @@ function Empty({ icon, title, sub }) {
 // Make available everywhere
 Object.assign(window, {
   fmtN, fmtB, fmtBfull, fmtPct, monthLabel,
-  CAT_COLORS, catColor,
+  CAT_COLORS, catColor, resetCatColorMap,
   I, Icon, KPI, Card, Seg, Sparkline, Empty,
 });
+
+if (typeof module !== 'undefined') module.exports = { resetCatColorMap, catColor, CAT_COLORS };

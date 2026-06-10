@@ -348,7 +348,13 @@ function App() {
       .then(r => r.json())
       .then(d => {
         if (d && d.lastModified) window._dataLoadedAt = d.lastModified;
-        const enriched = enrichData(d);
+        // รีเซ็ต catColorMap ก่อน enrich เพื่อให้ assign สีถูก category เสมอ
+        if (typeof resetCatColorMap === 'function') resetCatColorMap();
+        let enriched;
+        try { enriched = enrichData(d); } catch (e) {
+          console.warn("enrichData failed during fetchFromSheet:", e);
+          enriched = d;
+        }
         setData(enriched);
         saveToStorage(enriched, "sheet");
         setSource("sheet");
@@ -401,12 +407,8 @@ function App() {
         });
         setData(prev => {
           if (!prev) return prev;
-          // ป้องกัน GAS cold-start / lock คืน orders ว่าง ทำให้รายการหายทั้งหมด
-          // ถ้าเพิ่งมี orders แล้วกลับได้ 0 → skip update รอ poll รอบถัดไป
-          if (d.orders.length === 0 && prev.orders && prev.orders.length > 0) {
-            console.warn("[DMJ] fetchOrdersOnly got 0 orders but had", prev.orders.length, "— skipping");
-            return prev;
-          }
+          // ไม่มี guard 0-orders แล้ว: ถ้า orders ถูกลบจริงๆ ควร clear ได้
+          // GAS มี retry อยู่แล้ว ถ้า response ว่างเพราะ error จะถูก retry รอบถัดไป
           return { ...prev, orders: d.orders };
         });
         const now = new Date().toISOString();
@@ -421,7 +423,12 @@ function App() {
     if (!role) return;
     const cached = loadFromStorage();
     if (cached && Array.isArray(cached.products)) {
-      setData(enrichData(cached)); // แสดง cache ทันที
+      // รีเซ็ต catColorMap ก่อน enrich จาก cache เพื่อกัน assign สีผิด
+      if (typeof resetCatColorMap === 'function') resetCatColorMap();
+      try { setData(enrichData(cached)); } catch (e) { // แสดง cache ทันที
+        console.warn("enrichData failed on cached data:", e);
+        setData(cached);
+      }
     }
     fetchFromSheet(); // refresh ใน background เสมอ
   }, [role, fetchFromSheet]);
@@ -457,7 +464,12 @@ function App() {
   }, [tab, role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleDataLoaded = usC((newData) => {
-    const enriched = enrichData(newData);
+    if (typeof resetCatColorMap === 'function') resetCatColorMap();
+    let enriched;
+    try { enriched = enrichData(newData); } catch (e) {
+      console.warn("enrichData failed on uploaded data:", e);
+      enriched = newData;
+    }
     setData(enriched);
     saveToStorage(enriched, "upload");
     setSource("upload");
