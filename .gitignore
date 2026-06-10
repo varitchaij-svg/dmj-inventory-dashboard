@@ -18,3 +18,4 @@ desktop.ini
 .vscode/
 *.swp
 node_modules/
+coverage/
