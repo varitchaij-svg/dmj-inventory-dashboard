@@ -178,7 +178,7 @@ function Toast({ toast, onClose }) {
   const s = styles[toast.type] || styles.info;
   return (
     <div onClick={onClose} style={{
-      position:"fixed", top:20, left:"50%", transform:"translateX(-50%)",
+      position:"fixed", top:60, left:"50%", transform:"translateX(-50%)",
       zIndex:3000, background:s.bg, border:`2px solid ${s.border}`,
       borderRadius:14, padding:"14px 20px", display:"flex", alignItems:"center",
       gap:12, minWidth:200, maxWidth:"calc(100vw - 32px)", cursor:"pointer",
@@ -265,7 +265,7 @@ function DeltaBadge({ pct, isNew }) {
   const c  = up ? "#1f7f44" : "#c0392b";
   const bg = up ? "#eaf6ee" : "#fcecec";
   const arrow = up ? "▲" : "▼";
-  const shown = Math.abs(pct) >= 10 ? Math.round(Math.abs(pct)*100) : (Math.abs(pct)*100).toFixed(0);
+  const shown = Math.abs(pct) >= 0.1 ? Math.round(Math.abs(pct)*100) : (Math.abs(pct)*100).toFixed(1);
   return (
     <span style={{display:"inline-flex",alignItems:"center",gap:3,fontSize:11,fontWeight:700,
                   padding:"2px 7px",borderRadius:20,background:bg,color:c}}>
@@ -5352,11 +5352,11 @@ function QRScanModal({ onDetected, onClose }) {
       setErr("ไม่สามารถโหลด library scanner ได้\nกรุณาตรวจสอบ internet แล้วโหลดหน้านี้ใหม่");
       return;
     }
-    let h5q;
+    let scannerInstance = null; // track instance ระหว่าง async gap ก่อน ref พร้อม
     let cancelled = false;
     const start = async () => {
       try {
-        h5q = new window.Html5Qrcode(containerId, {
+        const h5q = new window.Html5Qrcode(containerId, {
           formatsToSupport: [
             window.Html5QrcodeSupportedFormats.QR_CODE,
             window.Html5QrcodeSupportedFormats.CODE_128,
@@ -5370,6 +5370,12 @@ function QRScanModal({ onDetected, onClose }) {
             window.Html5QrcodeSupportedFormats.ITF,
           ],
         });
+        scannerInstance = h5q; // เก็บก่อน await เพื่อให้ cleanup ใช้ได้ถ้า unmount ระหว่าง start()
+        if (cancelled) {
+          // unmount เกิดขึ้นก่อน start() เสร็จ — cleanup ทันที
+          try { await h5q.stop(); } catch(e) {}
+          return;
+        }
         scannerRef.current = h5q;
         await h5q.start(
           { facingMode: "environment" },
@@ -5406,7 +5412,9 @@ function QRScanModal({ onDetected, onClose }) {
     start();
     return () => {
       cancelled = true;
-      const s = scannerRef.current;
+      // ใช้ ref หรือ local instance (กรณี unmount ระหว่าง async gap)
+      const s = scannerRef.current || scannerInstance;
+      scannerRef.current = null;
       if (s) s.stop().then(() => s.clear()).catch(() => {});
     };
   }, []);
