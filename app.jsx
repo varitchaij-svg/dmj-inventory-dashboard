@@ -61,26 +61,24 @@ function LoginScreen({ onLogin }) {
     if (base) {
       setChecking(true); setErr(false);
       try {
-        const sep = base.includes('?') ? '&' : '?';
-        const res = await fetch(`${base}${sep}action=verifyPin&pin=${encodeURIComponent(pin)}`, { cache: 'no-store' });
+        // ส่ง PIN ผ่าน POST body เพื่อไม่ให้ PIN ปรากฏใน URL / server access log
+        // หมายเหตุ: GAS ต้องจัดการ action=verifyPin ใน doPost ด้วย (ปัจจุบันอาจอยู่ใน doGet)
+        const res = await fetch(base, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'verifyPin', pin }),
+        });
         const d = await res.json();
         setChecking(false);
-        // ถ้า GAS ยังไม่ได้ redeploy (ไม่มี field ok) → fallback ตรวจรหัสเดิมฝั่ง client
-        if (!d || typeof d.ok !== 'boolean') {
-          if (pin.toUpperCase() === "DMJ") { onLogin(pinTarget.role); return; }
-          setErr(true); setPin(""); return;
-        }
+        if (!d || typeof d.ok !== 'boolean') { setErr(true); setPin(""); return; }
         if (d.ok) { onLogin(pinTarget.role); return; }
         setErr(true); setPin(""); return;
       } catch (e) {
         setChecking(false);
-        // ออฟไลน์/เซิร์ฟเวอร์ล่ม → fallback ใช้รหัสเดิมเพื่อไม่ให้เจ้าของเข้าไม่ได้
-        if (pin.toUpperCase() === "DMJ") { onLogin(pinTarget.role); return; }
         setErr(true); setPin(""); return;
       }
     }
-    if (pin.toUpperCase() === "DMJ") { onLogin(pinTarget.role); }
-    else { setErr(true); setPin(""); }
+    setErr(true); setPin("");
   };
 
   return (
@@ -597,66 +595,71 @@ function App() {
           </div>
 
           <div className="navtabs" role="tablist">
-            {role === "owner" ? (() => {
-              const OWNER_PRIMARY = ["overview", "categories"];
-              const primaryTabs = visibleTabs.filter(t => OWNER_PRIMARY.includes(t.id));
-              const secondaryTabs = visibleTabs.filter(t => !OWNER_PRIMARY.includes(t.id));
-              return (
-                <>
-                  {primaryTabs.map(t => (
-                    <button key={t.id} role="tab"
-                            className={`navtab${activeTab===t.id?' active':''}`}
-                            onClick={() => { handleSetTab(t.id); setMoreOpen(false); }}>
-                      {t.icon}<span>{t.label}</span>
-                    </button>
-                  ))}
-                  <div style={{position:"relative"}}>
-                    <button role="tab"
-                            className={`navtab${secondaryTabs.some(t=>t.id===activeTab)||moreOpen?' active':''}`}
-                            onClick={() => setMoreOpen(v => !v)}>
-                      <span style={{fontSize:18,lineHeight:1}}>⋯</span>
-                      <span>เพิ่มเติม</span>
-                    </button>
-                    {moreOpen && (
-                      <div onClick={() => setMoreOpen(false)}
-                           style={{position:"fixed",inset:0,zIndex:199}}/>
-                    )}
-                    {moreOpen && (
-                      <div style={{
-                        position:"absolute", top:"calc(100% + 4px)", right:0,
-                        background:"var(--paper)", border:"1px solid var(--bdr)",
-                        borderRadius:12, padding:"6px 4px", zIndex:200,
-                        minWidth:200, boxShadow:"0 8px 24px rgba(0,0,0,.15)",
-                        maxHeight:"80vh", overflowY:"auto",
-                      }}>
-                        {secondaryTabs.map(t => (
-                          <button key={t.id}
-                                  onClick={() => { handleSetTab(t.id); setMoreOpen(false); }}
-                                  style={{
-                                    display:"flex", alignItems:"center", gap:10,
-                                    width:"100%", padding:"10px 14px",
-                                    border:"none", borderRadius:8, cursor:"pointer",
-                                    fontFamily:"inherit", fontSize:13, textAlign:"left",
-                                    background: activeTab===t.id ? "var(--g-50)" : "transparent",
-                                    color: activeTab===t.id ? "var(--g-800)" : "var(--text)",
-                                    fontWeight: activeTab===t.id ? 700 : 400,
-                                  }}>
-                            {t.icon}
-                            <span>{t.label}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </>
-              );
-            })() : visibleTabs.map(t => (
-              <button key={t.id} role="tab"
-                      className={`navtab${activeTab===t.id?' active':''}`}
-                      onClick={() => handleSetTab(t.id)}>
-                {t.icon}<span>{t.label}</span>
-              </button>
-            ))}
+            {(() => {
+              // ถ้า tabs มากกว่า 6 ตัว → แสดง 5 ตัวแรก + ปุ่ม "เพิ่มเติม" dropdown
+              // (ใช้กับทุก role เช่น owner, employee ที่มี 10+ tabs)
+              if (visibleTabs.length > 6) {
+                const primaryTabs   = visibleTabs.slice(0, 5);
+                const secondaryTabs = visibleTabs.slice(5);
+                return (
+                  <>
+                    {primaryTabs.map(t => (
+                      <button key={t.id} role="tab"
+                              className={`navtab${activeTab===t.id?' active':''}`}
+                              onClick={() => { handleSetTab(t.id); setMoreOpen(false); }}>
+                        {t.icon}<span>{t.label}</span>
+                      </button>
+                    ))}
+                    <div style={{position:"relative"}}>
+                      <button role="tab"
+                              className={`navtab${secondaryTabs.some(t=>t.id===activeTab)||moreOpen?' active':''}`}
+                              onClick={() => setMoreOpen(v => !v)}>
+                        <span style={{fontSize:18,lineHeight:1}}>⋯</span>
+                        <span>เพิ่มเติม</span>
+                      </button>
+                      {moreOpen && (
+                        <div onClick={() => setMoreOpen(false)}
+                             style={{position:"fixed",inset:0,zIndex:199}}/>
+                      )}
+                      {moreOpen && (
+                        <div style={{
+                          position:"absolute", top:"calc(100% + 4px)", right:0,
+                          background:"var(--paper)", border:"1px solid var(--bdr)",
+                          borderRadius:12, padding:"6px 4px", zIndex:200,
+                          minWidth:200, boxShadow:"0 8px 24px rgba(0,0,0,.15)",
+                          maxHeight:"80vh", overflowY:"auto",
+                        }}>
+                          {secondaryTabs.map(t => (
+                            <button key={t.id}
+                                    onClick={() => { handleSetTab(t.id); setMoreOpen(false); }}
+                                    style={{
+                                      display:"flex", alignItems:"center", gap:10,
+                                      width:"100%", padding:"10px 14px",
+                                      border:"none", borderRadius:8, cursor:"pointer",
+                                      fontFamily:"inherit", fontSize:13, textAlign:"left",
+                                      background: activeTab===t.id ? "var(--g-50)" : "transparent",
+                                      color: activeTab===t.id ? "var(--g-800)" : "var(--text)",
+                                      fontWeight: activeTab===t.id ? 700 : 400,
+                                    }}>
+                              {t.icon}
+                              <span>{t.label}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                );
+              }
+              // tabs น้อย (≤ 6) → แสดงทั้งหมดในแถบปกติ
+              return visibleTabs.map(t => (
+                <button key={t.id} role="tab"
+                        className={`navtab${activeTab===t.id?' active':''}`}
+                        onClick={() => handleSetTab(t.id)}>
+                  {t.icon}<span>{t.label}</span>
+                </button>
+              ));
+            })()}
           </div>
 
           <div className="nav-right">
