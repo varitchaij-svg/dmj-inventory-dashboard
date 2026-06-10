@@ -1,6 +1,6 @@
-// tests/parsing.test.js — ทดสอบ compareSku และ mtoBase
+// tests/parsing.test.js — ทดสอบ compareSku, mtoBase, parseQty_, parseNum_, parseLocation_
 import { describe, it, expect } from 'vitest';
-import { compareSku, mtoBase } from './helpers.js';
+import { compareSku, mtoBase, parseQty_, parseNum_, parseLocation_ } from './helpers.js';
 
 describe('compareSku', () => {
   it('เรียง SKU แบบธรรมชาติ (prefix → num1 → num2)', () => {
@@ -69,5 +69,108 @@ describe('mtoBase', () => {
 
   it('"จัดแบบพิเศษ #10 สีแดง" → "จัดแบบพิเศษ"', () => {
     expect(mtoBase('จัดแบบพิเศษ #10 สีแดง')).toBe('จัดแบบพิเศษ');
+  });
+});
+
+describe('parseQty_', () => {
+  it('null → { num:0, status:"empty" }', () => {
+    expect(parseQty_(null)).toEqual({ num: 0, status: 'empty' });
+  });
+
+  it('string ว่าง → empty', () => {
+    expect(parseQty_('')).toEqual({ num: 0, status: 'empty' });
+  });
+
+  it('"out of stock full" → oosfull', () => {
+    expect(parseQty_('out of stock full')).toEqual({ num: 0, status: 'oosfull' });
+  });
+
+  it('"OUT OF STOCK FULL" (uppercase) → oosfull (case-insensitive)', () => {
+    expect(parseQty_('OUT OF STOCK FULL')).toEqual({ num: 0, status: 'oosfull' });
+  });
+
+  it('"out of stock" → oos', () => {
+    expect(parseQty_('out of stock')).toEqual({ num: 0, status: 'oos' });
+  });
+
+  it('ตัวเลขปกติ → { num, status:"ok" }', () => {
+    expect(parseQty_(5)).toEqual({ num: 5, status: 'ok' });
+    expect(parseQty_('42')).toEqual({ num: 42, status: 'ok' });
+    expect(parseQty_(0)).toEqual({ num: 0, status: 'ok' });
+  });
+
+  it('"1,234" → { num:1234, status:"ok" } (strip commas)', () => {
+    expect(parseQty_('1,234')).toEqual({ num: 1234, status: 'ok' });
+  });
+
+  it('ติดลบ → status:"negative"', () => {
+    expect(parseQty_(-5)).toEqual({ num: -5, status: 'negative' });
+  });
+
+  it('string ที่ parse ไม่ได้ → { num:0, status:"unknown" }', () => {
+    expect(parseQty_('abc')).toEqual({ num: 0, status: 'unknown' });
+    expect(parseQty_('N/A')).toEqual({ num: 0, status: 'unknown' });
+  });
+});
+
+describe('parseNum_', () => {
+  it('null → 0', () => {
+    expect(parseNum_(null)).toBe(0);
+  });
+
+  it('string ว่าง → 0', () => {
+    expect(parseNum_('')).toBe(0);
+  });
+
+  it('ตัวเลขปกติ → คืนค่าเดิม', () => {
+    expect(parseNum_(5)).toBe(5);
+    expect(parseNum_('5.5')).toBe(5.5);
+  });
+
+  it('"1,234.56" → 1234.56 (strip commas)', () => {
+    expect(parseNum_('1,234.56')).toBe(1234.56);
+  });
+
+  it('"฿1,500" → 1500 (strip ฿ และ comma)', () => {
+    expect(parseNum_('฿1,500')).toBe(1500);
+  });
+
+  it('string ที่ parse ไม่ได้ → 0', () => {
+    expect(parseNum_('abc')).toBe(0);
+  });
+});
+
+describe('parseLocation_', () => {
+  it('null/undefined → null', () => {
+    expect(parseLocation_(null)).toBeNull();
+    expect(parseLocation_(undefined)).toBeNull();
+    expect(parseLocation_('')).toBeNull();
+  });
+
+  it('"A12/3" → { raw:"A12/3", valid:true, side:"A", shelf:12, lock:3 }', () => {
+    expect(parseLocation_('A12/3')).toEqual({ raw: 'A12/3', valid: true, side: 'A', shelf: 12, lock: 3 });
+  });
+
+  it('"B5/10" → side:"B", shelf:5, lock:10', () => {
+    expect(parseLocation_('B5/10')).toEqual({ raw: 'B5/10', valid: true, side: 'B', shelf: 5, lock: 10 });
+  });
+
+  it('"a1/1" (lowercase) → side:"A" (uppercase)', () => {
+    const r = parseLocation_('a1/1');
+    expect(r).not.toBeNull();
+    expect(r.side).toBe('A');
+  });
+
+  it('"C5/10" → null (ไม่ใช่ A หรือ B)', () => {
+    expect(parseLocation_('C5/10')).toBeNull();
+  });
+
+  it('"A12" → null (ขาด /lock)', () => {
+    expect(parseLocation_('A12')).toBeNull();
+  });
+
+  it('รูปแบบไม่รู้จัก → null', () => {
+    expect(parseLocation_('blah')).toBeNull();
+    expect(parseLocation_('A/3')).toBeNull();  // ขาดเลขชั้น
   });
 });
