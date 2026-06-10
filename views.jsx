@@ -2709,6 +2709,32 @@ function StockView({ data, role }) {
   const [overrides, setOverrides] = uS(dataThresholds?.overrides || { "แจกันแก้ว": 3, "เรซิ่นและอื่นๆ": 3 });
   const [supplierFilter, setSupplierFilter] = uS(null);
 
+  // ── Transfer modal state ──────────────────────────────────────────────────
+  const [xferTarget, setXferTarget] = uS(null); // { sku, name, maxQty }
+  const [xferQty, setXferQty] = uS(1);
+  const [xfering, setXfering] = uS(false);
+  const [toast, showToast, hideToast] = useToast();
+
+  const pendingShipments = uM(() =>
+    (data.shipments || []).filter(s => !s.receivedAt),
+    [data.shipments]
+  );
+
+  const handleStockTransfer = async () => {
+    if (!xferTarget || xferQty < 1) return;
+    setXfering(true);
+    try {
+      const res = await syncStockTransferBatch([{ sku: xferTarget.sku, qty: xferQty, name: xferTarget.name }]);
+      if (res && res.success === false) throw new Error(res.error || "ไม่สำเร็จ");
+      showToast("success", `โอน ${xferQty} ชิ้น "${xferTarget.name}" แล้ว`, "📦");
+      setXferTarget(null);
+      setXferQty(1);
+    } catch(e) {
+      showToast("error", "โอนไม่สำเร็จ: " + (e.message || e), "❌");
+    }
+    setXfering(false);
+  };
+
   const handleSyncZort = async () => {
     if (syncing) return;
     setSyncing(true);
@@ -2797,12 +2823,11 @@ function StockView({ data, role }) {
     let result = rawList;
     if (supplierFilter) result = result.filter(p => (p.lastSupplier || p.vendor) === supplierFilter);
     if (!stockSearch) return result;
-    const q = stockSearch.toLowerCase();
-    return result.filter(p =>
-      (p.sku || "").toLowerCase().includes(q) ||
-      (p.name || "").toLowerCase().includes(q) ||
-      (p.cat || "").toLowerCase().includes(q)
-    );
+    const tokens = stockSearch.toLowerCase().split(/\s+/).filter(Boolean);
+    return result.filter(p => {
+      const hay = ((p.sku||"") + " " + (p.name||"") + " " + (p.cat||"")).toLowerCase();
+      return tokens.every(t => hay.includes(t));
+    });
   }, [rawList, stockSearch, supplierFilter]);
 
   const totalPages = Math.ceil(list.length / STOCK_PAGE);
@@ -2810,6 +2835,48 @@ function StockView({ data, role }) {
 
   return (
     <div>
+      <Toast toast={toast} onClose={hideToast} />
+      {xferTarget && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <div style={{background:"#fff",borderRadius:16,padding:24,width:300,maxWidth:"90vw",boxShadow:"0 8px 32px rgba(0,0,0,0.18)"}}>
+            <div style={{fontWeight:700,fontSize:16,marginBottom:4}}>📦 สั่งโอนสินค้า</div>
+            <div style={{fontSize:13,color:"var(--muted)",marginBottom:12}}>{xferTarget.name}</div>
+            <div style={{fontSize:12,color:"var(--muted)",marginBottom:12}}>คลังมี: {xferTarget.maxQty} ชิ้น</div>
+            <input
+              type="number" min={1} max={xferTarget.maxQty} value={xferQty}
+              onChange={e => setXferQty(Math.max(1, Math.min(xferTarget.maxQty, parseInt(e.target.value)||1)))}
+              style={{width:"100%",padding:"8px 12px",borderRadius:8,border:"1.5px solid var(--g-300)",fontSize:16,fontWeight:700,textAlign:"center",fontFamily:"inherit",boxSizing:"border-box"}}
+            />
+            <div style={{display:"flex",gap:8,marginTop:12}}>
+              <button onClick={() => { setXferTarget(null); setXferQty(1); }}
+                style={{flex:1,padding:"10px 0",borderRadius:10,border:"1.5px solid var(--g-300)",background:"#fff",fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>
+                ยกเลิก
+              </button>
+              <button onClick={handleStockTransfer} disabled={xfering}
+                style={{flex:1,padding:"10px 0",borderRadius:10,border:"none",background: xfering?"#ccc":"#1b5e20",color:"#fff",fontSize:14,fontWeight:700,cursor:xfering?"wait":"pointer",fontFamily:"inherit"}}>
+                {xfering ? "กำลังโอน..." : "✅ ยืนยันโอน"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {pendingShipments.length > 0 && (
+        <div style={{background:"#fff8e1",border:"1.5px solid #f59e0b",borderRadius:10,padding:"10px 14px",marginBottom:12}}>
+          <div style={{fontWeight:700,fontSize:13,color:"#a07417",marginBottom:4}}>
+            📦 สินค้าที่โอนแล้ว รอรับ ({pendingShipments.length} รายการ)
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:2}}>
+            {pendingShipments.slice(0,5).map((s,i) => (
+              <div key={i} style={{fontSize:12,color:"#555"}}>
+                {s.sku} · {s.name || "(ไม่ระบุ)"} · {s.qty} ชิ้น
+              </div>
+            ))}
+            {pendingShipments.length > 5 && (
+              <div style={{fontSize:11,color:"#a07417"}}>+{pendingShipments.length - 5} รายการ</div>
+            )}
+          </div>
+        </div>
+      )}
       <div className="page-head">
         <div>
           <div className="page-title">สต๊อก & แจ้งเตือน</div>
@@ -2986,6 +3053,7 @@ function StockView({ data, role }) {
               <th className="num" style={{width:90}}>ขาย/เดือน</th>
               {role === 'owner' && <th className="num" style={{width:110}}>รายได้รวม</th>}
               <th className="num" style={{width:140}}>สถานะ</th>
+              <th style={{width:52}}></th>
             </tr></thead>
             <tbody>
               {paginated.map((p, i) => {
@@ -3050,6 +3118,16 @@ function StockView({ data, role }) {
                       {filter==='drop' && <span className="chip" style={{background:"#f5e7f5",color:"#8a3a8a",borderColor:"#e6cde6"}}>ลด {p.dropPct.toFixed(0)}%</span>}
                       {filter==='slow' && <span className="chip info">{p.soldQty===0?"ไม่เคยขาย":`${(p.soldQty/p.qty*100).toFixed(1)}%`}</span>}
                       {filter==='over' && <span className="chip info">{p.monthsLeft > 99 ? ">99" : p.monthsLeft.toFixed(1)} เดือน</span>}
+                    </td>
+                    <td style={{textAlign:"center"}}>
+                      {(p.qtyWH || 0) > 0 && (
+                        <button
+                          onClick={e => { e.stopPropagation(); setXferTarget({ sku: p.sku, name: p.name, maxQty: p.qtyWH || 0 }); setXferQty(Math.min(p.qtyWH, Math.max(1, 12 - (p.qtyStore || 0)))); }}
+                          style={{padding:"4px 8px",borderRadius:6,border:"none",background:"#1b5e20",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}
+                          title="สั่งโอนจากคลัง">
+                          📦 สั่ง
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );
