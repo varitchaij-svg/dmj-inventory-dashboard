@@ -224,7 +224,7 @@ function doPost(e) {
     var actor = data.actor || "ไม่ระบุ";
 
     // มีการแก้ข้อมูล → ล้าง cache ให้ doGet ครั้งถัดไปคำนวณใหม่ (ข้อมูลไม่ค้าง)
-    invalidateCache_();
+    invalidateCache_(true); // clear payload cache เท่านั้น — ห้าม bump dmj_last_write_ts ก่อน conflict check
 
     // ─── Stock Transfer (Batch): คลัง → หน้าร้าน หลาย SKU ในครั้งเดียว ───
     if (data.transferStockBatch) {
@@ -3656,7 +3656,7 @@ function putCachedPayload_(str) {
   } catch (err) { /* cache ล้มเหลวไม่เป็นไร — แค่ช้าลง */ }
 }
 
-function invalidateCache_() {
+function invalidateCache_(skipTsUpdate) {
   try {
     const c = CacheService.getScriptCache();
     const nStr = c.get(_CACHE_KEY_COUNT);
@@ -3665,11 +3665,13 @@ function invalidateCache_() {
     for (let i = 0; i < n; i++) keys.push(_CACHE_KEY_PART + i);
     c.removeAll(keys);
   } catch (err) { /* ignore */ }
-  // บันทึก timestamp การเขียนล่าสุดลง Script Properties (ไม่ผ่าน CacheService)
-  // เพื่อให้ conflict detection อ่านได้สด ๆ เสมอ แม้ DriveApp.getLastUpdated() จะล่าช้า
-  try {
-    PropertiesService.getScriptProperties().setProperty('dmj_last_write_ts', String(Date.now()));
-  } catch (err) { /* ignore */ }
+  if (!skipTsUpdate) {
+    // บันทึก timestamp การเขียนล่าสุดลง Script Properties (ไม่ผ่าน CacheService)
+    // เพื่อให้ conflict detection อ่านได้สด ๆ เสมอ แม้ DriveApp.getLastUpdated() จะล่าช้า
+    try {
+      PropertiesService.getScriptProperties().setProperty('dmj_last_write_ts', String(Date.now()));
+    } catch (err) { /* ignore */ }
+  }
 }
 
 // wrapper รันได้จาก GAS dropdown (ไม่มี _ ต่อท้าย)

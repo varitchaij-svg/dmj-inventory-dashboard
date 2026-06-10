@@ -8571,7 +8571,7 @@ async function syncStockTransferBatch(items) {
     const res = await fetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ transferStockBatch: true, list: items, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน" }),
+      body: JSON.stringify({ transferStockBatch: true, list: items, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน", clientLoadedAt: window._dataLoadedAt || 0 }),
     });
     const json = await res.json().catch(() => ({}));
     console.log("syncStockTransferBatch result:", json);
@@ -10193,6 +10193,7 @@ function MtoJobView({ data }) {
           jobName: activeJob.name || activeJob.jobId,
           items: materials,
           closedAt: closed,
+          clientLoadedAt: window._dataLoadedAt || 0,
           actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
         }),
       });
