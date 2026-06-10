@@ -9003,6 +9003,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
     const p2 = { ...printed, [order.id]: true };
     setPrinted(p2);
     localStorage.setItem(LS_PRINTED_ORDERS, JSON.stringify(p2));
+    syncOrderUpdate(order, { printFlag: "printed" });
   };
 
   const togglePrintSelect = (orderId) => {
@@ -9024,6 +9025,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
     selectedForPrint.forEach(id => { p2[id] = true; });
     setPrinted(p2);
     localStorage.setItem(LS_PRINTED_ORDERS, JSON.stringify(p2));
+    allOrders.filter(o => selectedForPrint.has(o.id)).forEach(o => syncOrderUpdate(o, { printFlag: "printed" }));
     setSelectedForPrint(new Set());
     setPrintSelectMode(false);
   };
@@ -9258,7 +9260,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
             const isShipped = !!shipped[order.id];
             const isMissed  = !!missed[order.id];
             const isSending = sending === order.id;
-            const alreadyPrinted = printed[order.id];
+            const alreadyPrinted = printed[order.id] || order.printFlag === "printed";
             const prepQty = order.preparedQty || order.orderQty || 0;
             const isPrintable = order.printFlag === "print" && !alreadyPrinted && !isShipped;
             const isSelected = selectedForPrint.has(order.id);

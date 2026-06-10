@@ -1087,6 +1087,7 @@ function updateOrderState(ss, body) {
     return ok({ notFound: body.orderId || body.sku });
   } finally {
     lock.releaseLock();
+    invalidateCache_();
   }
 }
 
