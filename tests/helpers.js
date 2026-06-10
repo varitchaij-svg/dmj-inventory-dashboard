@@ -146,10 +146,84 @@ function reconcileOrderState(order, localEntry, nowMs) {
   return local;
 }
 
+// ── monthKey_ / dayKey_ จาก appsscript_complete.gs:2654–2672 ─────────────────
+function monthKey_(val) {
+  if (val instanceof Date) return `${String(val.getMonth()+1).padStart(2,'0')}/${val.getFullYear()}`;
+  const s = String(val).trim();
+  let m = s.match(/^(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[1].padStart(2,'0')}/${m[2]}`;
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[2].padStart(2,'0')}/${m[3]}`;
+  return null;
+}
+
+function dayKey_(val) {
+  if (val instanceof Date) {
+    return `${String(val.getDate()).padStart(2,'0')}/${String(val.getMonth()+1).padStart(2,'0')}/${val.getFullYear()}`;
+  }
+  const s = String(val).trim();
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[1].padStart(2,'0')}/${m[2].padStart(2,'0')}/${m[3]}`;
+  return null;
+}
+
+// ── deductStockCore: pure math จาก deductStock (appsscript_complete.gs:959–983) ─
+// แยก Sheet I/O ออก — ทดสอบแค่ตรรกะ drain WH ก่อน แล้วล้นมา FS
+function deductStockCore({ whQty, fsQty }, qty) {
+  let deductWH = Math.min(qty, whQty);
+  let deductFS = qty - deductWH;
+  if (deductFS > fsQty) deductFS = fsQty;
+  const shortfall = qty - (deductWH + deductFS);
+  return {
+    deductWH, deductFS,
+    newWH: whQty - deductWH,
+    newFS: fsQty - deductFS,
+    shortfall: shortfall > 0,
+    shortfall_qty: shortfall,
+  };
+}
+
+// ── netOf: pure logic จาก closeMtoJob (appsscript_complete.gs:3763) ──────────
+// คำนวณ qty สุทธิ หลังหักของที่ return คืน — clamp return ไว้ที่ [0, qty]
+function netOf(item) {
+  const qty = Number(item.qty) || 0;
+  const ret = Math.max(0, Math.min(Number(item.returnedQty) || 0, qty));
+  return qty - ret;
+}
+
+// ── enrichDataCore: pure logic จาก enrichData (app.jsx:231) ──────────────────
+// ไม่รวม browser globals (detectColor, mtoBase) เพื่อให้รันใน Node ได้
+// ใช้ monthsSince ที่นิยามไว้ด้านบนในไฟล์นี้
+function enrichDataCore(d) {
+  if (!d || !Array.isArray(d.products)) return d;
+  const THAI_RE = /[฀-๿]/;
+  d.products.forEach(p => {
+    if (!p.cat && p.category) p.cat = p.category;
+    const rawTags = String(p.tag || '').split(',').map(t => t.trim()).filter(Boolean);
+    p.supplierTags = rawTags.filter(t => !THAI_RE.test(t));
+    p.statusTags   = rawTags.filter(t =>  THAI_RE.test(t));
+    let dm = null;
+    const whOnHand = (p.warehouseQty != null) ? p.warehouseQty
+                   : (p.qtyWH != null) ? p.qtyWH
+                   : (p.qty || 0);
+    if (whOnHand > 0) {
+      const a = monthsSince(p.lastTransferDate);
+      dm = (a != null) ? a : ((monthsSince(p.lastStockInDate) != null) ? monthsSince(p.lastStockInDate) : null);
+    }
+    p.deadMonths = dm;
+    if (p.supplierTags.length) p.vendor = p.supplierTags[0];
+  });
+  return d;
+}
+
 module.exports = {
   monthsSince, fmtN, fmtB, fmtPct, monthLabel,
   stockQty, whQty, mtoBase, compareSku,
   COL_PROD_SKU, COL_PROD_QTYFS, COL_PROD_QTYWH,
   mapProductRow, shouldRejectConflict,
   orderSig, reconcileOrderState,
+  monthKey_, dayKey_,
+  deductStockCore,
+  netOf,
+  enrichDataCore,
 };
