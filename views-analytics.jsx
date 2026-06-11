@@ -3452,6 +3452,16 @@ function OrderSummaryView({ data, onPrintRequest }) {
     syncOrderUpdate(order, { printFlag: "printed" });
   };
 
+  const handlePrintAll = (ordersArr) => {
+    const items = ordersArr.map(o => ({ sku: o.sku, qty: o.preparedQty || o.orderQty || 1 }));
+    onPrintRequest(items);
+    const p2 = { ...printed };
+    ordersArr.forEach(o => { p2[o.id] = true; });
+    setPrinted(p2);
+    localStorage.setItem(LS_PRINTED_ORDERS, JSON.stringify(p2));
+    ordersArr.forEach(o => syncOrderUpdate(o, { printFlag: "printed" }));
+  };
+
   const handleShip = (order) => setShipConfirm(order);
 
   // ทำการส่งสินค้าจริง (หลังผ่าน confirm และ material draw แล้ว)
@@ -3617,6 +3627,10 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const renderSection = (label, emoji, orders, isTruck) => {
     if (!orders.length) return null;
     const readyCount = orders.filter(o => !shipped[o.id] && !missed[o.id]).length;
+    const printableOrders = orders.filter(o => {
+      const ap = printed[o.id] || o.printFlag === "printed";
+      return o.printFlag === "print" && !ap && !shipped[o.id];
+    });
     // sort: not-shipped-not-missed first, missed to end, shipped to very end
     const sorted = [...orders].sort((a,b) => {
       const aS = shipped[a.id] ? 2 : missed[a.id] ? 1 : 0;
@@ -3641,15 +3655,26 @@ function OrderSummaryView({ data, onPrintRequest }) {
               {readyCount > 0 ? `${readyCount} รายการรอส่ง` : "ส่งหมดแล้ว"}
             </span>
           </div>
-          {readyCount > 0 && (
-            <button onClick={() => handleShipAll(orders)} style={{
-              padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",
-              background: isTruck?"#1d4ed8":"var(--g-700)",color:"#fff",
-              fontSize:12,fontWeight:700,fontFamily:"inherit",
-            }}>
-              ✅ ส่งทั้งหมด ({readyCount})
-            </button>
-          )}
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {printableOrders.length > 0 && (
+              <button onClick={() => handlePrintAll(printableOrders)} style={{
+                padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",
+                background:"#374151",color:"#fff",
+                fontSize:12,fontWeight:700,fontFamily:"inherit",
+              }}>
+                🖨️ ปริ้น Label ({printableOrders.length})
+              </button>
+            )}
+            {readyCount > 0 && (
+              <button onClick={() => handleShipAll(orders)} style={{
+                padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",
+                background: isTruck?"#1d4ed8":"var(--g-700)",color:"#fff",
+                fontSize:12,fontWeight:700,fontFamily:"inherit",
+              }}>
+                ✅ ส่งทั้งหมด ({readyCount})
+              </button>
+            )}
+          </div>
         </div>
 
         <div style={{
