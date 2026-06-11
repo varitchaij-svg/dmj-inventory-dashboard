@@ -77,6 +77,33 @@ async function loadImgSafe(url) {
   });
 }
 
+// ── loadImgForCard: โหลดรูปผ่าน GAS proxy เพื่อหลีกเลี่ยง CORS tainted canvas ──
+// ใช้กับ downloadSupplierCardsZip เพื่อให้ canvas.toBlob() ทำงานได้จริง
+// fallback คืน null (canvas จะใช้ gradient placeholder แทน)
+async function loadImgForCard(imageUrl) {
+  if (!imageUrl) return null;
+  var base = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null;
+  if (base) {
+    try {
+      var proxyUrl = new URL(base);
+      proxyUrl.searchParams.set('action', 'imgProxy');
+      proxyUrl.searchParams.set('u', imageUrl);
+      var resp = await fetch(proxyUrl.toString());
+      var data = await resp.json();
+      if (data && data.d) {
+        return await new Promise(function(resolve) {
+          var img = new window.Image();
+          var t = setTimeout(function() { resolve(null); }, 8000);
+          img.onload = function() { clearTimeout(t); resolve(img); };
+          img.onerror = function() { clearTimeout(t); resolve(null); };
+          img.src = data.d;
+        });
+      }
+    } catch(e) { /* proxy failed → ใช้ gradient placeholder */ }
+  }
+  return null;
+}
+
 function hexToRgb(hex) {
   var r = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
   return r ? { r: parseInt(r[1],16), g: parseInt(r[2],16), b: parseInt(r[3],16) } : null;
@@ -272,10 +299,10 @@ async function downloadSupplierCardsZip(groupName, items, accentColor, onProgres
   var safeName = (groupName || 'supplier').replace(/[\/\\:*?"<>|]/g, '_');
   var folder = zip.folder(safeName);
 
-  // load images in parallel
+  // load images in parallel ผ่าน GAS proxy (หลีก CORS tainted canvas)
   var imgMap = {};
   await Promise.all(items.map(async function(p) {
-    if (p.imageUrl) imgMap[p.sku] = await loadImgSafe(p.imageUrl);
+    if (p.imageUrl) imgMap[p.sku] = await loadImgForCard(p.imageUrl);
     if (onProgress) onProgress('load', p.sku);
   }));
 

@@ -419,6 +419,31 @@ function doGet(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
 
+    // ── Image Proxy: fetch รูปจาก ZORT CDN แล้วคืนเป็น base64 dataURI ──
+    // ไม่ require token เพราะเป็น pass-through ของ URL สาธารณะจาก ZORT CDN
+    if (e && e.parameter && e.parameter.action === 'imgProxy' && e.parameter.u) {
+      try {
+        var imgResp = UrlFetchApp.fetch(String(e.parameter.u), {
+          muteHttpExceptions: true,
+          followRedirects: true,
+          validateHttpsCertificates: false
+        });
+        if (imgResp.getResponseCode() !== 200) {
+          return ContentService.createTextOutput(JSON.stringify({ err: 'not_found' }))
+            .setMimeType(ContentService.MimeType.JSON);
+        }
+        var imgBlob = imgResp.getBlob();
+        var b64 = Utilities.base64Encode(imgBlob.getBytes());
+        var mime = imgBlob.getContentType() || 'image/jpeg';
+        return ContentService.createTextOutput(
+          JSON.stringify({ d: 'data:' + mime + ';base64,' + b64 })
+        ).setMimeType(ContentService.MimeType.JSON);
+      } catch(ex) {
+        return ContentService.createTextOutput(JSON.stringify({ err: String(ex) }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+    }
+
     // Server-side cache: payload หนัก (อ่าน 11 ชีต) → cache ไว้ ~3 นาที ลดโหลด/timeout
     // ?fresh=1 หรือหลังมีการแก้ข้อมูล (doPost ล้าง cache) จะคำนวณใหม่
     // หมายเหตุ: lastModified อ่านสด ๆ เสมอแม้ serve จาก cache
