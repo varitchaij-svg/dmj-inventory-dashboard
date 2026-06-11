@@ -2712,12 +2712,15 @@ function stableOrderId(o, i) {
 function ShipmentRow({ s, role, productMap, onConfirm }) {
   const [imgOpen, setImgOpen] = uS(false);
   const [recvQty, setRecvQty] = uS(() => s.receivedQty != null ? s.receivedQty : (s.qty || 0));
+  const [editing, setEditing] = uS(false);
   const product = productMap ? productMap[s.sku] : null;
   const imgSrc = s.image || product?.imageUrl || null;
   const canConfirm = role === "saler" || role === "frontstore";
+  const canEdit = ["owner","employee","saler","frontstore"].includes(role);
 
   const handleConfirm = () => {
     const n = Math.max(0, parseInt(recvQty) || 0);
+    setEditing(false);
     onConfirm(s, n);
   };
 
@@ -2769,9 +2772,10 @@ function ShipmentRow({ s, role, productMap, onConfirm }) {
           <div style={{fontSize:15,fontWeight:800,color:"var(--dang)"}}>{s.qty}</div>
         </div>
 
-        {s.receivedAt ? (
+        {s.receivedAt && !editing ? (
           // ── ยืนยันแล้ว — แสดงผล ──
           (() => { const rq = s.receivedQty ?? 0; const full = rq >= s.qty; return (
+          <>
           <div style={{
             flex:1,display:"flex",alignItems:"center",gap:8,
             background: full ? "#f0fdf4" : "#fff8e1",
@@ -2779,7 +2783,7 @@ function ShipmentRow({ s, role, productMap, onConfirm }) {
             border:`1.5px solid ${full ? "#86efac" : "#fcd34d"}`,
           }}>
             <span style={{fontSize:20}}>{full ? "✅" : "⚠️"}</span>
-            <div>
+            <div style={{flex:1}}>
               <div style={{fontSize:13,fontWeight:700}}>
                 {full ? "รับครบ" : "รับไม่ครบ"}
               </div>
@@ -2791,12 +2795,20 @@ function ShipmentRow({ s, role, productMap, onConfirm }) {
               )}
             </div>
           </div>
+          {canEdit && !full && (
+            <button onClick={() => { setRecvQty(rq); setEditing(true); }} style={{
+              padding:"8px 12px",borderRadius:10,border:"1.5px solid var(--bdr)",
+              background:"#fff",cursor:"pointer",fontSize:12,fontWeight:600,
+              color:"var(--muted)",whiteSpace:"nowrap",flexShrink:0,
+            }}>✏️ แก้ไข</button>
+          )}
+          </>
           ); })()
-        ) : canConfirm ? (
-          // ── sale/FS ยืนยันรับ ──
+        ) : (editing || (!s.receivedAt && canConfirm)) ? (
+          // ── sale/FS ยืนยันรับ / แก้ไขภายหลัง ──
           <>
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
-              <div style={{fontSize:10,color:"var(--muted)"}}>📥 รับจริง</div>
+              <div style={{fontSize:10,color:"var(--muted)"}}>📥 {editing ? "แก้ไข" : "รับจริง"}</div>
               <input type="number" value={recvQty} min={0} max={9999}
                 onChange={e => setRecvQty(Math.max(0,parseInt(e.target.value)||0))}
                 style={{
@@ -2806,6 +2818,13 @@ function ShipmentRow({ s, role, productMap, onConfirm }) {
                 }}/>
             </div>
             <div style={{flex:1}}/>
+            {editing && (
+              <button onClick={() => setEditing(false)} style={{
+                padding:"10px 12px",borderRadius:10,border:"1.5px solid var(--bdr)",
+                background:"#fff",cursor:"pointer",fontSize:12,fontWeight:600,
+                color:"var(--muted)",minHeight:44,
+              }}>ยกเลิก</button>
+            )}
             <button onClick={handleConfirm} style={{
               padding:"10px 16px",borderRadius:10,border:"none",
               background:"#1b5e20",color:"#fff",
@@ -2814,7 +2833,7 @@ function ShipmentRow({ s, role, productMap, onConfirm }) {
               minWidth:64,minHeight:44,
             }}>
               <span style={{fontSize:18}}>📦</span>
-              <span style={{fontSize:10,letterSpacing:.3}}>ยืนยันรับ</span>
+              <span style={{fontSize:10,letterSpacing:.3}}>{editing ? "บันทึก" : "ยืนยันรับ"}</span>
             </button>
           </>
         ) : (
