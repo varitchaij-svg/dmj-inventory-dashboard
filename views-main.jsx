@@ -137,194 +137,232 @@ function wrapTextLines(ctx, text, maxW, maxLines) {
 }
 
 function drawProductCardCanvas(p, img, accentColor) {
-  var W = 400, H = 570;
+  var W = 400;
   var FONT = '\'Sarabun\',\'Noto Sans Thai\',\'Segoe UI\',Arial,sans-serif';
+  var BPAD = 12; // body left/right padding
+  var IPAD = 8;  // image zone padding around inner container
+  var acc = accentColor || '#16a34a';
+  var total = (p.qtyWH || 0) + (p.qtyStore || 0);
+  var outOfStock = !p.isMTO && total === 0;
+  var lowStock   = !p.isMTO && total > 0 && total <= 36;
+  var hasImg = img && img.naturalWidth > 0;
+  var vendorStr = p.lastSupplier || p.vendor || '';
+  var price = p.price || p.stdPrice || '';
+  var hasBreakdown = !p.isMTO && ((p.qtyStore || 0) > 0 || (p.qtyWH || 0) > 0);
+
+  // Image zone: square (W × W), inner container = (W - IPAD*2)²
+  var imgZoneH = W; // 400 — true 1:1 ratio matching the app
+  var iw = W - IPAD * 2, ih = iw; // 384 × 384
+  var ir = 10; // border-radius
+
+  // Pre-estimate body height so we can size the canvas once
+  var bodyH = 8           // top pad
+    + 16                  // SKU row
+    + 19 * 2 + 2          // name (worst-case 2 lines) + gap
+    + (vendorStr ? 16 : 0)
+    + (p.lastStockInDate ? 16 : 0)
+    + 6 + 1 + 10          // dashed divider gap + line + gap
+    + 14 + 20             // label + value rows
+    + (hasBreakdown ? 14 : 0)
+    + 12;                 // bottom pad
+  var H = imgZoneH + bodyH;
+
   var c = document.createElement('canvas');
   c.width = W; c.height = H;
   var ctx = c.getContext('2d');
-  var imgH = 210;
-  var PAD = 14;
 
-  // white bg + soft shadow border effect
+  // ── white base ────────────────────────────────────────────────────
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, W, H);
 
-  var hasImg = img && img.naturalWidth > 0;
-  var total = (p.qtyWH || 0) + (p.qtyStore || 0);
+  // ── image zone background (gradient f9fafb → #fff) ────────────────
+  var gBg = ctx.createLinearGradient(0, 0, 0, imgZoneH);
+  gBg.addColorStop(0, '#f9fafb');
+  gBg.addColorStop(1, '#ffffff');
+  ctx.fillStyle = gBg;
+  ctx.fillRect(0, 0, W, imgZoneH);
 
-  // ── image / placeholder zone ──────────────────────────────────────
-  // light grey bg for image area
-  ctx.fillStyle = '#f9fafb';
-  ctx.fillRect(0, 0, W, imgH);
+  // inner image container (white bg)
+  rrectFill(ctx, IPAD, IPAD, iw, ih, ir, '#ffffff');
+
+  // clip to inner container for image/placeholder rendering
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(IPAD + ir, IPAD);
+  ctx.lineTo(IPAD + iw - ir, IPAD);
+  ctx.arcTo(IPAD + iw, IPAD, IPAD + iw, IPAD + ir, ir);
+  ctx.lineTo(IPAD + iw, IPAD + ih - ir);
+  ctx.arcTo(IPAD + iw, IPAD + ih, IPAD + iw - ir, IPAD + ih, ir);
+  ctx.lineTo(IPAD + ir, IPAD + ih);
+  ctx.arcTo(IPAD, IPAD + ih, IPAD, IPAD + ih - ir, ir);
+  ctx.lineTo(IPAD, IPAD + ir);
+  ctx.arcTo(IPAD, IPAD, IPAD + ir, IPAD, ir);
+  ctx.closePath();
+  ctx.clip();
 
   if (hasImg) {
-    // object-fit: contain — scale down to fit, centered, no crop
-    var scale = Math.min(W / img.naturalWidth, imgH / img.naturalHeight);
+    // object-fit: contain — center, no crop
+    var scale = Math.min(iw / img.naturalWidth, ih / img.naturalHeight);
     var dw = img.naturalWidth * scale, dh = img.naturalHeight * scale;
-    var dx = (W - dw) / 2, dy = (imgH - dh) / 2;
-    ctx.drawImage(img, dx, dy, dw, dh);
+    ctx.drawImage(img, IPAD + (iw - dw) / 2, IPAD + (ih - dh) / 2, dw, dh);
   } else {
-    // gradient placeholder using product/category color
-    var baseColor = (p.color && p.color.hex) ? p.color.hex : (accentColor || '#16a34a');
+    // placeholder: subtle gradient + color circle (matches app's no-image placeholder)
+    var baseColor = (p.color && p.color.hex) ? p.color.hex : acc;
     var rgb = hexToRgb(baseColor) || { r:22, g:101, b:52 };
-    var g1 = ctx.createLinearGradient(0, 0, W, imgH);
-    g1.addColorStop(0, 'rgba(' + Math.min(rgb.r+40,255) + ',' + Math.min(rgb.g+50,255) + ',' + Math.min(rgb.b+40,255) + ',1)');
-    g1.addColorStop(1, 'rgba(' + Math.max(rgb.r-10,0) + ',' + Math.max(rgb.g-10,0) + ',' + Math.max(rgb.b-10,0) + ',1)');
-    ctx.fillStyle = g1;
-    ctx.fillRect(0, 0, W, imgH);
-    var catEmoji = (typeof CAT_EMOJI !== 'undefined' && CAT_EMOJI[p.cat]) || '📦';
-    ctx.save();
-    ctx.globalAlpha = 0.18;
-    ctx.font = '96px serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#fff';
-    ctx.fillText(catEmoji, W / 2, imgH / 2);
-    ctx.restore();
+    var gPh = ctx.createLinearGradient(IPAD, IPAD, IPAD + iw, IPAD + ih);
+    gPh.addColorStop(0, 'rgba(' + Math.min(rgb.r+80,255) + ',' + Math.min(rgb.g+80,255) + ',' + Math.min(rgb.b+80,255) + ',0.25)');
+    gPh.addColorStop(1, 'rgba(' + Math.min(rgb.r+40,255) + ',' + Math.min(rgb.g+40,255) + ',' + Math.min(rgb.b+40,255) + ',0.12)');
+    ctx.fillStyle = gPh;
+    ctx.fillRect(IPAD, IPAD, iw, ih);
+    if (p.color && p.color.hex) {
+      ctx.fillStyle = p.color.hex;
+      ctx.beginPath();
+      ctx.arc(IPAD + iw / 2, IPAD + ih / 2, 52, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 4;
+      ctx.stroke();
+    }
   }
+  ctx.restore();
 
-  // gradient overlay for price/category at bottom of image
-  var gradOverlay = ctx.createLinearGradient(0, imgH - 70, 0, imgH);
-  gradOverlay.addColorStop(0, 'rgba(0,0,0,0)');
-  gradOverlay.addColorStop(1, 'rgba(0,0,0,0.62)');
-  ctx.fillStyle = gradOverlay;
-  ctx.fillRect(0, imgH - 70, W, 70);
+  // inner container border (1px solid var(--bdr) ≈ #e5e7eb)
+  ctx.strokeStyle = '#e5e7eb';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(IPAD + ir, IPAD);
+  ctx.lineTo(IPAD + iw - ir, IPAD);
+  ctx.arcTo(IPAD + iw, IPAD, IPAD + iw, IPAD + ir, ir);
+  ctx.lineTo(IPAD + iw, IPAD + ih - ir);
+  ctx.arcTo(IPAD + iw, IPAD + ih, IPAD + iw - ir, IPAD + ih, ir);
+  ctx.lineTo(IPAD + ir, IPAD + ih);
+  ctx.arcTo(IPAD, IPAD + ih, IPAD, IPAD + ih - ir, ir);
+  ctx.lineTo(IPAD, IPAD + ir);
+  ctx.arcTo(IPAD, IPAD, IPAD + ir, IPAD, ir);
+  ctx.closePath();
+  ctx.stroke();
 
-  // category badge — top left
-  if (p.cat) {
-    var acc = accentColor || '#16a34a';
-    ctx.font = 'bold 10px ' + FONT;
-    ctx.textBaseline = 'alphabetic';
-    var catText = (p.cat || '').substring(0, 16);
-    var bw = Math.min(ctx.measureText(catText).width + 18, 150);
-    rrectFill(ctx, PAD - 6, 8, bw, 22, 11, acc);
-    ctx.fillStyle = '#fff';
-    ctx.textAlign = 'left';
-    ctx.fillText(catText, PAD + 2, 23);
-  }
-
-  // stock status badge — top right
-  var stockBadgeText = null, stockBadgeColor = null;
-  if (total <= 0) { stockBadgeText = 'หมด!'; stockBadgeColor = '#ef4444'; }
-  else if (total <= 5) { stockBadgeText = 'ต่ำ'; stockBadgeColor = '#f97316'; }
-  if (stockBadgeText) {
+  // stock badge (chip dang/warn) — top-right of image zone
+  if (outOfStock || lowStock) {
+    var badgeLabel = outOfStock ? 'หมด' : ('เหลือ ' + total);
+    var badgeColor = outOfStock ? '#ef4444' : '#f97316';
     ctx.font = 'bold 11px ' + FONT;
-    var sbw = ctx.measureText(stockBadgeText).width + 16;
-    rrectFill(ctx, W - sbw - 8, 8, sbw, 23, 11, stockBadgeColor);
+    ctx.textBaseline = 'middle';
+    var bw = ctx.measureText(badgeLabel).width + 16, bh = 22;
+    var bx = IPAD + iw - bw - 4, by = IPAD + 4;
+    rrectFill(ctx, bx, by, bw, bh, 6, badgeColor);
     ctx.fillStyle = '#fff';
-    ctx.textAlign = 'right';
-    ctx.fillText(stockBadgeText, W - 16, 23);
-  }
-
-  // price overlay — bottom of image
-  var price = p.price || p.stdPrice || '';
-  if (price) {
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 13px ' + FONT;
-    ctx.textAlign = 'left';
+    ctx.textAlign = 'center';
+    ctx.fillText(badgeLabel, bx + bw / 2, by + bh / 2);
     ctx.textBaseline = 'alphabetic';
-    ctx.fillText('ราคาส่ง ฿' + price, PAD, imgH - 8);
   }
 
-  // image border bottom separator
-  ctx.fillStyle = '#e5e7eb';
-  ctx.fillRect(0, imgH, W, 1);
-
-  var y = imgH + 16;
+  // ── body ──────────────────────────────────────────────────────────
+  var y = imgZoneH + 8;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
 
-  // SKU + color dot + color name
-  ctx.fillStyle = '#6b7280';
+  // SKU (left) + color dot + color name (right)
+  ctx.fillStyle = '#374151';
   ctx.font = 'bold 11px monospace';
-  ctx.fillText(p.sku || '', PAD, y);
+  ctx.fillText(p.sku || '', BPAD, y);
 
   if (p.color && p.color.hex) {
-    var dotX = W - PAD - 50;
-    if (p.color.name) {
-      ctx.font = '10px ' + FONT;
-      ctx.textAlign = 'right';
-      ctx.fillStyle = '#6b7280';
-      ctx.fillText(p.color.name, W - PAD, y);
-      dotX = W - PAD - ctx.measureText(p.color.name).width - 10;
-    }
+    var cname = p.color.name || '';
+    ctx.font = '10px ' + FONT;
+    var cnameW = cname ? ctx.measureText(cname).width : 0;
+    var dotCx = W - BPAD - (cname ? cnameW + 8 : 5) - 5;
     ctx.fillStyle = p.color.hex;
-    ctx.beginPath(); ctx.arc(dotX, y - 4, 5, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = '#d1d5db'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(dotCx, y - 4, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    if (cname) {
+      ctx.fillStyle = '#6b7280';
+      ctx.textAlign = 'right';
+      ctx.fillText(cname, W - BPAD, y);
+    }
   }
 
-  y += 20;
+  y += 16;
   ctx.textAlign = 'left';
 
-  // product name (bold, up to 2 lines)
+  // product name bold (12.5px → 13px for canvas, 2 lines)
   ctx.fillStyle = '#111827';
-  ctx.font = 'bold 15px ' + FONT;
-  var nameLines = wrapTextLines(ctx, p.name || '', W - PAD * 2, 2);
-  nameLines.forEach(function(line) { ctx.fillText(line, PAD, y); y += 20; });
+  ctx.font = 'bold 13px ' + FONT;
+  var nameLines = wrapTextLines(ctx, p.name || '', W - BPAD * 2, 2);
+  nameLines.forEach(function(line) { ctx.fillText(line, BPAD, y); y += 19; });
 
-  y += 4;
+  y += 2;
 
-  // vendor code line
-  if (p.vendor) {
-    ctx.fillStyle = '#6b7280';
-    ctx.font = '11px ' + FONT;
-    ctx.fillText('📦 ' + String(p.vendor), PAD, y);
-    y += 18;
-  }
-
-  // last stock date + qty on same line
-  if (p.lastStockInDate) {
-    var stockLine = '📅 เข้าล่าสุด ' + p.lastStockInDate;
-    if (p.lastStockInQty) stockLine += ' · ' + p.lastStockInQty + ' ชิ้น';
+  // vendor line: 🏪 vendor
+  if (vendorStr) {
     ctx.fillStyle = '#9ca3af';
-    ctx.font = '11px ' + FONT;
-    ctx.fillText(stockLine, PAD, y);
-    y += 18;
+    ctx.font = '10.5px ' + FONT;
+    ctx.fillText('🏪 ' + vendorStr, BPAD, y);
+    y += 16;
   }
 
-  y += 4;
+  // last stock date line: 📅 เข้าล่าสุด date · qty ชิ้น
+  if (p.lastStockInDate) {
+    var dateStr = '📅 เข้าล่าสุด ' + p.lastStockInDate;
+    if (p.lastStockInQty) dateStr += ' · ' + p.lastStockInQty + ' ชิ้น';
+    ctx.fillStyle = '#374151';
+    ctx.font = '10px ' + FONT;
+    ctx.fillText(dateStr, BPAD, y);
+    y += 16;
+  }
 
-  // divider
-  ctx.strokeStyle = '#f3f4f6'; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.moveTo(PAD, y); ctx.lineTo(W - PAD, y); ctx.stroke();
+  y += 6;
+
+  // dashed divider (border-top: 1px dashed var(--bdr))
+  ctx.strokeStyle = '#e5e7eb';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath();
+  ctx.moveTo(BPAD, y);
+  ctx.lineTo(W - BPAD, y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  y += 10;
+
+  // bottom: คงเหลือ (left) | ราคา (right) — labels
+  ctx.font = '9.5px ' + FONT;
+  ctx.fillStyle = '#9ca3af';
+  ctx.textAlign = 'left';
+  ctx.fillText('คงเหลือ', BPAD, y);
+  ctx.textAlign = 'right';
+  ctx.fillText('ราคา', W - BPAD, y);
   y += 14;
 
-  // bottom row: คงเหลือ (left) | ราคา (right)
-  var midX = W / 2;
-
-  // คงเหลือ label
-  ctx.fillStyle = '#9ca3af';
-  ctx.font = '11px ' + FONT;
-  ctx.textAlign = 'left';
-  ctx.fillText('คงเหลือ', PAD, y);
-
-  // ราคา label
-  ctx.textAlign = 'right';
-  ctx.fillText('ราคา', W - PAD, y);
-
-  y += 20;
-
-  // qty value
+  // qty value (color: red if out/low, else text)
   var qtyStr = String(total);
-  var qtyColor = total <= 0 ? '#ef4444' : (total <= 5 ? '#f97316' : (accentColor || '#16a34a'));
-  ctx.fillStyle = qtyColor;
-  ctx.font = 'bold 22px ' + FONT;
+  ctx.fillStyle = (outOfStock || lowStock) ? '#ef4444' : '#111827';
+  ctx.font = 'bold 14px ' + FONT;
   ctx.textAlign = 'left';
-  ctx.fillText(qtyStr, PAD, y);
+  ctx.fillText(qtyStr, BPAD, y);
+  var qw = ctx.measureText(qtyStr).width;
   ctx.fillStyle = '#9ca3af';
-  ctx.font = '12px ' + FONT;
-  ctx.fillText(' ชิ้น', PAD + ctx.measureText(qtyStr).width + 2, y);
+  ctx.font = '9.5px ' + FONT;
+  ctx.fillText(' ชิ้น', BPAD + qw + 2, y);
 
-  // vertical divider between columns
-  ctx.strokeStyle = '#e5e7eb'; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(midX, y - 20); ctx.lineTo(midX, y + 6); ctx.stroke();
-
-  // price value
+  // price value (accent color)
   if (price) {
-    ctx.fillStyle = '#111827';
-    ctx.font = 'bold 22px ' + FONT;
+    ctx.fillStyle = acc;
+    ctx.font = 'bold 14px ' + FONT;
     ctx.textAlign = 'right';
-    ctx.fillText('฿' + price, W - PAD, y);
+    ctx.fillText('฿' + price, W - BPAD, y);
+  }
+  y += 18;
+
+  // WH/store breakdown: 🏪 N · 🏭 N
+  if (hasBreakdown) {
+    ctx.fillStyle = '#9ca3af';
+    ctx.font = '9.5px ' + FONT;
+    ctx.textAlign = 'left';
+    ctx.fillText('🏪 ' + (p.qtyStore || 0) + ' · 🏭 ' + (p.qtyWH || 0), BPAD, y);
   }
 
   return c;
