@@ -1663,9 +1663,13 @@ function CategoryView({ data, role }) {
 
   const filtered = uM(() => {
     const gq = globalSearch.trim().toLowerCase();
+    const tokens = gq ? gq.split(/\s+/) : [];
     const applyCommon = (arr) => {
       let f = arr;
-      if (gq) f = f.filter(p => (p.sku||"").toLowerCase().includes(gq) || (p.name||"").toLowerCase().includes(gq));
+      if (tokens.length) f = f.filter(p => {
+        const hay = ((p.sku||"") + " " + (p.name||"")).toLowerCase();
+        return tokens.every(t => hay.includes(t));
+      });
       if (reorderFilter) f = f.filter(needsReorder);
       return f;
     };
@@ -3019,12 +3023,11 @@ function StockView({ data, role }) {
     if (activeCat !== "ALL") result = result.filter(p => p.cat === activeCat);
     if (supplierFilter) result = result.filter(p => (p.lastSupplier || p.vendor) === supplierFilter);
     if (!stockSearch) return result;
-    const q = stockSearch.toLowerCase();
-    return result.filter(p =>
-      (p.sku || "").toLowerCase().includes(q) ||
-      (p.name || "").toLowerCase().includes(q) ||
-      (p.cat || "").toLowerCase().includes(q)
-    );
+    const tokens = stockSearch.toLowerCase().split(/\s+/);
+    return result.filter(p => {
+      const hay = ((p.sku||"") + " " + (p.name||"") + " " + (p.cat||"")).toLowerCase();
+      return tokens.every(t => hay.includes(t));
+    });
   }, [rawList, stockSearch, supplierFilter, activeCat]);
 
   const totalPages = Math.ceil(list.length / STOCK_PAGE);
@@ -4931,8 +4934,11 @@ function UnassignedProductCards({ products, lockData, shelves, onAssigned }) {
   const filtered = uM(() => {
     let f = catFilter === "ALL" ? noLock : noLock.filter(p => p.cat === catFilter);
     if (search.trim()) {
-      const q = search.trim().toUpperCase();
-      f = f.filter(p => (p.sku||"").toUpperCase().includes(q) || (p.name||"").toUpperCase().includes(q));
+      const tokens = search.trim().toLowerCase().split(/\s+/);
+      f = f.filter(p => {
+        const hay = ((p.sku||"") + " " + (p.name||"")).toLowerCase();
+        return tokens.every(t => hay.includes(t));
+      });
     }
     return f;
   }, [noLock, catFilter, search]);
