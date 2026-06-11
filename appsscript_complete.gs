@@ -98,6 +98,15 @@ const SHEET_LOCKS     = "ตำแหน่งจัดเก็บ";
 const SHEET_TRANSFERS = "รายการโอนสินค้า";
 const SHEET_SHIP_ARCHIVE = "ประวัติรับสินค้า";  // เก็บรายการรับครบที่ archive ออกจากชีตหลัก
 const SHEET_AUDIT     = "Audit Log";
+const SHEET_FRONTSTORE_QTY = "จำนวนหน้าร้าน";  // บันทึกจำนวนหน้าร้านที่เช็คแล้ว
+const SHEET_IMAGE_URL      = "imageUrl";          // mapping รูปภาพสินค้า
+const SHEET_PRODUCT_META   = "ข้อมูลสินค้า";    // metadata สินค้า (ชื่อ/หมวด/ราคา)
+const SHEET_PURCHASES      = "รายการซื้อสินค้า"; // ประวัติการซื้อ/PO
+const SHEET_MONTHLY_SALES  = "ยอดขายรายเดือน";  // ยอดขายแยกตามเดือน
+const SHEET_DAILY_SALES    = "ยอดขายรายวัน";    // ยอดขายแยกตามวัน
+const SHEET_TRANSFERS_HIST = "รายการโอน";        // ประวัติโอนสินค้า (ต่างจาก SHEET_TRANSFERS)
+const SHEET_MTO_JOBS       = "งาน MTO";          // งานจัดพิเศษ (make-to-order)
+const SHEET_MTO_ITEMS      = "วัตถุดิบ MTO";    // วัตถุดิบสำหรับงาน MTO
 const WH_NAME_SAI5    = "คลังสินค้าสาย5";
 const WH_NAME_FS      = "ดูเหมือนจริง";
 
@@ -106,6 +115,7 @@ const COL_PROD_SKU    = 2;   // B
 const COL_PROD_QTYFS  = 7;   // G = หน้าร้าน
 const COL_PROD_QTYWH  = 8;   // H = คลัง
 
+const COL_ORD_TYPE     = 1;   // A  ("หิ้ว" / "รอขึ้นรถ")
 const COL_ORD_SKU      = 6;   // F
 const COL_ORD_DATE     = 2;   // B
 const COL_ORD_STATUS   = 3;   // C
@@ -222,8 +232,17 @@ function doPost(e) {
     // ── ผู้ใช้ที่ส่ง action มา (frontend ส่งใน body.actor) ──
     var actor = data.actor || "ไม่ระบุ";
 
+    // ─── Verify PIN (POST path) ───
+    if (data.action === 'verifyPin') {
+      const expected = PropertiesService.getScriptProperties().getProperty('OWNER_PIN') || 'DMJ';
+      const okPin = String(data.pin || '') === String(expected);
+      return ContentService
+        .createTextOutput(JSON.stringify({ ok: okPin }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
     // มีการแก้ข้อมูล → ล้าง cache ให้ doGet ครั้งถัดไปคำนวณใหม่ (ข้อมูลไม่ค้าง)
-    invalidateCache_();
+    invalidateCache_(true); // clear payload cache เท่านั้น — ห้าม bump dmj_last_write_ts ก่อน conflict check
 
     // ─── Stock Transfer (Batch): คลัง → หน้าร้าน หลาย SKU ในครั้งเดียว ───
     if (data.transferStockBatch) {
@@ -247,7 +266,7 @@ function doPost(e) {
 
     // ─── Material Deduction: MTO ───
     if (data.deductMaterials) {
-      return deductMaterials(ss, data.items || []);
+      return deductMaterials(ss, data.items || [], actor);
     }
 
     // ─── Update Order State ───
@@ -335,7 +354,12 @@ function doGet(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
     // Audit Log endpoint: ดึง 200 แถวล่าสุดจาก Audit Log sheet
+    // เฉพาะ owner เท่านั้น — ตรวจจาก role parameter ที่ frontend ส่งมา
     if (e && e.parameter && e.parameter.action === 'getAuditLog') {
+      if (e.parameter.role !== 'owner') {
+        return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Unauthorized" }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
       const ss = SpreadsheetApp.openById(SHEET_ID);
       const sh = ss.getSheetByName(SHEET_AUDIT);
       if (!sh) {
@@ -364,13 +388,26 @@ function doGet(e) {
 
     // Lightweight endpoint: ดึงเฉพาะรายการสั่งของ (เบา/เร็ว) สำหรับ polling หน้า orders
     if (e && e.parameter && e.parameter.action === 'orders') {
+      const ordersResult = readOrders_();
+      // ถ้า Sheet หาไม่เจอ readOrders_ คืน [] — คืน error แทนเพื่อให้ client skip update (ไม่ wipe)
+      const ss2 = SpreadsheetApp.openById(SHEET_ID);
+      if (!ss2.getSheetByName(SHEET_ORDERS)) {
+        return ContentService
+          .createTextOutput(JSON.stringify({ error: "sheet_not_found", orders: null }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
       return ContentService
-        .createTextOutput(JSON.stringify({ orders: readOrders_(), generatedAt: new Date().toISOString() }))
+        .createTextOutput(JSON.stringify({ orders: ordersResult, generatedAt: new Date().toISOString() }))
         .setMimeType(ContentService.MimeType.JSON);
     }
 
     // Debug endpoint: คืน raw row data ของชีตคำสั่งซื้อ (ใช้วินิจฉัย missing rows)
+    // เฉพาะ owner เท่านั้น — ป้องกัน raw sheet data รั่วให้ role อื่น
     if (e && e.parameter && e.parameter.action === 'debugOrders') {
+      if (e.parameter.role !== 'owner') {
+        return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Unauthorized" }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
       const ss2 = SpreadsheetApp.openById(SHEET_ID);
       const sh2 = ss2.getSheetByName(SHEET_ORDERS);
       if (!sh2) return ContentService.createTextOutput(JSON.stringify({ error: "ไม่พบชีต" })).setMimeType(ContentService.MimeType.JSON);
@@ -759,6 +796,7 @@ function transferStockBatch(ss, list, actor, clientLoadedAt) {
 
     return ok({ count: transferred.length, zortNumber, zortError, shortfalls, results });
   } finally {
+    try { invalidateCache_(); } catch(e) {} // C5: ล้าง cache หลัง write เสมอ
     lock.releaseLock();
   }
 }
@@ -980,7 +1018,7 @@ function deductStock(ss, sku, qty) {
   }
 }
 
-function deductMaterials(ss, items) {
+function deductMaterials(ss, items, actor) {
   if (!Array.isArray(items) || items.length === 0) return error("items ว่างเปล่า");
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_PRODUCTS);
@@ -1013,9 +1051,16 @@ function deductMaterials(ss, items) {
     }
 
     SpreadsheetApp.flush();
+    // บันทึก Audit Log รวมทุก SKU ที่ deduct
+    try {
+      for (const r of results) {
+        writeAuditLog_(actor || "ระบบ", "deductMaterials", r.sku, "หักวัสดุ " + r.deducted + " ชิ้น → คงเหลือ " + r.newWH);
+      }
+    } catch (e) {}
     return ok({ deducted: results.length, results });
   } finally {
     lock.releaseLock();
+    invalidateCache_();
   }
 }
 
@@ -1034,7 +1079,17 @@ function updateOrderState(ss, body) {
         const sheetRow = rowNum; // id already encodes 1-indexed sheet row
         if (body.status)              sheet.getRange(sheetRow, COL_ORD_STATUS).setValue(body.status);
         if (body.preparedQty != null) sheet.getRange(sheetRow, COL_ORD_PREPQTY).setValue(body.preparedQty);
-        if (body.printFlag)           sheet.getRange(sheetRow, COL_ORD_PRINTFLAG).setValue(body.printFlag);
+        if (body.printFlag != null)    sheet.getRange(sheetRow, COL_ORD_PRINTFLAG).setValue(body.printFlag); // M2: != null กัน false ถูกข้าม
+        if (body.carryMode != null) {
+          sheet.getRange(sheetRow, COL_ORD_TYPE).setValue(body.carryMode === "carry" ? "หิ้ว" : "รอขึ้นรถ");
+          if (body.carryMode === "carry") {
+            try {
+              const productName = body.name || body.sku || "(ไม่ทราบชื่อ)";
+              sendLineGroupOrderCard_(productName, body.sku||"", body.date||"", body.image||"");
+            } catch(e) {}
+          }
+        }
+        SpreadsheetApp.flush();
         return ok({ updated: body.orderId, row: sheetRow });
       }
     }
@@ -1050,13 +1105,24 @@ function updateOrderState(ss, body) {
         const row = i + 1;
         if (body.status)              sheet.getRange(row, COL_ORD_STATUS).setValue(body.status);
         if (body.preparedQty != null) sheet.getRange(row, COL_ORD_PREPQTY).setValue(body.preparedQty);
-        if (body.printFlag)           sheet.getRange(row, COL_ORD_PRINTFLAG).setValue(body.printFlag);
+        if (body.printFlag != null)    sheet.getRange(row, COL_ORD_PRINTFLAG).setValue(body.printFlag); // M2: != null กัน false ถูกข้าม
+        if (body.carryMode != null) {
+          sheet.getRange(row, COL_ORD_TYPE).setValue(body.carryMode === "carry" ? "หิ้ว" : "รอขึ้นรถ");
+          if (body.carryMode === "carry") {
+            try {
+              const productName = body.name || body.sku || "(ไม่ทราบชื่อ)";
+              sendLineGroupOrderCard_(productName, body.sku||"", body.date||"", body.image||"");
+            } catch(e) {}
+          }
+        }
+        SpreadsheetApp.flush();
         return ok({ updated: body.sku, row });
       }
     }
     return ok({ notFound: body.orderId || body.sku });
   } finally {
     lock.releaseLock();
+    invalidateCache_();
   }
 }
 
@@ -1092,6 +1158,7 @@ function confirmShipmentReceive(ss, rowId, sku, receivedQty, actor) {
     return ok({ row: rowNum, receivedQty: recv, status });
   } finally {
     lock.releaseLock();
+    try { invalidateCache_(); } catch(e) {}
   }
 }
 
@@ -1127,10 +1194,13 @@ function updateLockData(ss, lockKey, entries, datetime) {
         // A=ว่าง, B=SKU, C=lockKey, D=qty, E-G=ว่าง, H=date
         sheet.appendRow(["", sku, lockKey, entry.qty, "", "", "", dt]);
       }
+      // Audit log: บันทึกทุก entry ที่เปลี่ยน
+      try { writeAuditLog_("ระบบ", "updateLockData", sku, "lockKey: " + lockKey + ", qty: " + entry.qty); } catch(e) {}
     }
     return ok({ lockKey, updated: entries.length });
   } finally {
     lock.releaseLock();
+    try { invalidateCache_(); } catch(e) {}
   }
 }
 
@@ -1152,7 +1222,7 @@ function deleteLockEntry(ss, lockKey, sku) {
 }
 
 function updateFrontStore(ss, entries, datetime) {
-  const sheet = ss.getSheetByName("จำนวนหน้าร้าน");
+  const sheet = ss.getSheetByName(SHEET_FRONTSTORE_QTY);
   if (!sheet) return error("ไม่พบชีต จำนวนหน้าร้าน");
 
   const lock = LockService.getScriptLock();
@@ -1234,12 +1304,23 @@ function confirmStockCount(ss, entries, clientLoadedAt, actor) {
     }
     SpreadsheetApp.flush();
 
+    // เก็บ counted SKUs ไว้ใน cache 30 นาที — กัน syncZortBoth ทับค่าที่เพิ่งนับ
+    const countedSkuMap = {};
+    entries.filter(e => e.sku && Number(e.qty) >= 0).forEach(function(e) {
+      countedSkuMap[String(e.sku).trim().toUpperCase()] = Number(e.qty);
+    });
+    CacheService.getScriptCache().put('recentCountedSkus', JSON.stringify(countedSkuMap), 1800);
+
+    let zortSynced = true;
     try {
-      const zortItems = entries
-        .filter(e => e.sku && Number(e.qty) >= 0)
-        .map(e => ({ sku: String(e.sku).trim().toUpperCase(), qty: Number(e.qty), warehousecode: WH_SAI5 }));
+      const zortItems = Object.entries(countedSkuMap).map(function([sku, qty]) {
+        return { sku: sku, qty: qty, warehousecode: WH_SAI5 };
+      });
       if (zortItems.length) pushStockToZort_(zortItems);
-    } catch (e) { Logger.log("confirmStockCount ZORT push error: " + e); }
+    } catch (e) {
+      zortSynced = false;
+      Logger.log("confirmStockCount ZORT push error: " + e);
+    }
 
     // Audit log: บันทึกเฉพาะ SKU ที่ค่าเปลี่ยน
     auditRows.forEach(function(r) {
@@ -1248,7 +1329,8 @@ function confirmStockCount(ss, entries, clientLoadedAt, actor) {
       }
     });
 
-    return ok({ confirmed: updated });
+    return ok({ confirmed: updated, zortSynced: zortSynced,
+      warning: zortSynced ? null : "บันทึกใน Sheets แล้ว แต่ sync ไป ZORT ไม่สำเร็จ ระบบจะซิงค์ใหม่อัตโนมัติ" });
   } finally {
     lock.releaseLock();
   }
@@ -1259,8 +1341,21 @@ function deleteOrderRow(ss, orderId) {
   if (!sheet) return error("ไม่พบชีต ลำดับที่สั่งสินค้า");
   const rowNum = parseInt(String(orderId).replace(/[^0-9]/g, ""));
   if (!rowNum || rowNum < 3) return error("orderId ไม่ถูกต้อง");
-  sheet.deleteRow(rowNum);
-  return ok({ deleted: orderId });
+
+  // orderId encode row number ณ เวลาที่โหลดข้อมูล — LockService ป้องกัน concurrent delete
+  // แต่ถ้าเวลาผ่านไปนานและมี delete อื่นเกิดขึ้น row อาจเลื่อน
+  // ตรวจ sanity: row ต้องมีข้อมูล SKU (col F, index 5) ก่อนลบ
+  const lock = LockService.getScriptLock();
+  if (!lock.waitLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
+  try {
+    const rowData = sheet.getRange(rowNum, 1, 1, 7).getValues()[0];
+    const sku = String(rowData[5] || '').trim();
+    if (!sku) return error("แถวที่ " + rowNum + " ไม่มีข้อมูล SKU — อาจเลื่อนแถวแล้ว");
+    sheet.deleteRow(rowNum);
+    return ok({ deleted: orderId });
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // ลบหลาย order rows ในครั้งเดียว — เรียงจากแถวล่างขึ้นบนกัน index เลื่อน
@@ -1349,7 +1444,7 @@ function pickZortImage_(p) {
 // ดึงรูปจาก ZORT → เขียนคอลัมน์ E ของชีต imageUrl (ไม่แตะคอลัมน์ D ที่ใส่เอง)
 function syncZortImages() {
   const ss = SpreadsheetApp.openById(SHEET_ID);
-  const sh = ss.getSheetByName('imageUrl');
+  const sh = ss.getSheetByName(SHEET_IMAGE_URL);
   if (!sh) { Logger.log('ไม่พบชีต imageUrl'); return; }
 
   const products = fetchAllZortProducts_(); // ทุกคลัง
@@ -1650,12 +1745,19 @@ function fetchAllZortProducts_(warehousecode) {
   return all;
 }
 
-function syncZortToColumn_(warehousecode, colIndex) {
+// cachedProducts: optional — ถ้ามีให้ใช้เลย ถ้าไม่มีจะ fetch เอง (backward compatible)
+function syncZortToColumn_(warehousecode, colIndex, cachedProducts) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sheet) { Logger.log("ไม่พบชีต: " + SHEET_PRODUCTS); return; }
 
-  const products = fetchAllZortProducts_(warehousecode);
+  // โหลด SKUs ที่เพิ่งนับสต็อก (ป้องกันทับค่า)
+  const recentJson = (warehousecode === WH_SAI5)
+    ? CacheService.getScriptCache().get('recentCountedSkus') : null;
+  const recentCounted = recentJson ? JSON.parse(recentJson) : {};
+  const healItems = [];
+
+  const products = cachedProducts || fetchAllZortProducts_(warehousecode);
   Logger.log(`ZORT: ${products.length} items`);
 
   const zortMap      = {};
@@ -1682,7 +1784,11 @@ function syncZortToColumn_(warehousecode, colIndex) {
 
     if (zortMap[sku] !== undefined) {
       const row = i + 1;
-      sheet.getRange(row, colIndex).setValue(zortMap[sku]);          // qty (G หรือ H)
+      const useQty = (recentCounted[sku] !== undefined) ? recentCounted[sku] : zortMap[sku];
+      sheet.getRange(row, colIndex).setValue(useQty);                // qty (G หรือ H)
+      if (recentCounted[sku] !== undefined && recentCounted[sku] !== zortMap[sku]) {
+        healItems.push({ sku: sku, qty: recentCounted[sku], warehousecode: warehousecode });
+      }
       if (zortNameMap[sku])  sheet.getRange(row, 3).setValue(zortNameMap[sku]);   // col C = ชื่อ
       if (zortCatMap[sku])   sheet.getRange(row, 4).setValue(zortCatMap[sku]);    // col D = หมวด
       if (zortTagMap[sku])   sheet.getRange(row, 6).setValue(zortTagMap[sku]);    // col F = TAG
@@ -1694,17 +1800,23 @@ function syncZortToColumn_(warehousecode, colIndex) {
   }
 
   SpreadsheetApp.flush();
-  Logger.log(`อัพเดทแล้ว: ${updated} rows | ไม่พบใน ZORT: ${notFound} rows`);
+  invalidateCache_();
+  if (healItems.length) {
+    try { pushStockToZort_(healItems); Logger.log("heal ZORT: " + healItems.length + " SKUs"); }
+    catch(e) { Logger.log("heal ZORT error: " + e); }
+  }
+  Logger.log(`อัพเดทแล้ว: ${updated} rows | ไม่พบใน ZORT: ${notFound} rows | heal: ${healItems.length}`);
 }
 
-function syncNewProductsFromZort() {
+// cachedWH / cachedFS: optional — ถ้ามีให้ใช้เลย ถ้าไม่มีจะ fetch เอง (backward compatible)
+function syncNewProductsFromZort(cachedWH, cachedFS) {
   Logger.log("=== ค้นหาสินค้าใหม่จาก ZORT ===");
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sheet) { Logger.log("ไม่พบชีต: " + SHEET_PRODUCTS); return; }
 
-  const productsWH = fetchAllZortProducts_(WH_SAI5);
-  const productsFS = fetchAllZortProducts_(WH_FRONTSTORE);
+  const productsWH = cachedWH || fetchAllZortProducts_(WH_SAI5);
+  const productsFS = cachedFS || fetchAllZortProducts_(WH_FRONTSTORE);
   const allProducts = [...productsWH, ...productsFS];
 
   const seen = {};
@@ -1729,8 +1841,8 @@ function syncNewProductsFromZort() {
     const sku = String(p.sku || p.barcode || "").trim().toUpperCase();
     if (sku && !existingSKUs[sku]) {
       const newRow = [
-        sku,
         "",
+        sku,
         p.name || "",
         p.category || "",
         p.subCategory || "",
@@ -1756,9 +1868,18 @@ function syncZortFrontStore() {
 }
 
 function syncZortBoth() {
-  syncNewProductsFromZort();
-  syncZortWarehouse();
-  syncZortFrontStore();
+  // PERF: fetch แต่ละ warehouse ครั้งเดียว แล้วส่ง cached products ให้ sub-functions
+  // เพื่อลดจำนวน ZORT API calls จาก 4+ ครั้ง → 2 ครั้ง (WH_SAI5 + WH_FRONTSTORE)
+  Logger.log("syncZortBoth: fetching products from ZORT (WH_SAI5)...");
+  const productsWH = fetchAllZortProducts_(WH_SAI5);
+  Logger.log("syncZortBoth: fetching products from ZORT (WH_FRONTSTORE)...");
+  const productsFS = fetchAllZortProducts_(WH_FRONTSTORE);
+
+  syncNewProductsFromZort(productsWH, productsFS);
+  syncZortToColumn_(WH_SAI5, COL_PROD_QTYWH, productsWH);
+  syncZortToColumn_(WH_FRONTSTORE, COL_PROD_QTYFS, productsFS);
+  try { syncZortPurchases(); } catch(e) { Logger.log("syncZortPurchases error: " + e); }
+  try { syncZortImages(); } catch(e) { Logger.log("syncZortImages error: " + e); }
 
   // ── 2A: Low-stock alert ──────────────────────────────────────────────────
   // สแกนสต็อกคลัง (col H) เทียบ threshold → ส่ง LINE ถ้าพบสินค้าใกล้หมด
@@ -1824,7 +1945,7 @@ function syncZortBoth() {
 
     // นับงาน MTO ที่ status = "กำลังจัด" (col 6 = index 6, 0-indexed จาก header: JobID,วันที่,ชื่องาน,ลูกค้า,ราคา,รูป,สถานะ)
     var mtoActive = 0;
-    var mtoSh = ss2.getSheetByName('งาน MTO');
+    var mtoSh = ss2.getSheetByName(SHEET_MTO_JOBS);
     if (mtoSh) {
       var mtoRows = mtoSh.getDataRange().getValues();
       for (var mi = 1; mi < mtoRows.length; mi++) {
@@ -1857,14 +1978,15 @@ function syncZortBoth() {
   } catch (e) {
     Logger.log('Daily summary error: ' + e);
   }
+  invalidateCache_();
 }
 
-function createDailyTrigger() {
+function setupZortStockTrigger() {
   ScriptApp.getProjectTriggers().forEach(t => {
     if (t.getHandlerFunction() === "syncZortBoth") ScriptApp.deleteTrigger(t);
   });
-  ScriptApp.newTrigger("syncZortBoth").timeBased().everyDays(1).atHour(6).create();
-  Logger.log("✅ ตั้ง trigger: syncZortBoth ทุกวัน 06:00");
+  ScriptApp.newTrigger("syncZortBoth").timeBased().everyHours(2).create();
+  Logger.log("✅ ตั้ง trigger: syncZortBoth ทุก 2 ชั่วโมง");
 }
 
 function debugZortProduct() {
@@ -1947,7 +2069,7 @@ function fetchZortPurchasesPaged_(fromStr, toStr) {
 //   col 1=type, 2=poNum, 4=supplier, 11=date, 19=status, 20=warehouse, 24=sku, 25=name, 26=qty, 27=unitPrice
 function syncZortPurchases() {
   const ss  = SpreadsheetApp.openById(SHEET_ID);
-  const sh  = ss.getSheetByName("รายการซื้อสินค้า");
+  const sh  = ss.getSheetByName(SHEET_PURCHASES);
   if (!sh) { Logger.log("❌ ไม่พบ sheet รายการซื้อสินค้า"); return; }
 
   const tz    = "Asia/Bangkok";
@@ -2157,7 +2279,7 @@ function getOrBuildDatabase() {
     if (valid) return JSON.parse(fullJson);
   }
 
-  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName('ข้อมูลสินค้า');
+  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PRODUCT_META);
   const data  = sheet.getDataRange().getDisplayValues();
   let db = { index: {}, items: {} };
   for (let i = 1; i < data.length; i++) {
@@ -2614,7 +2736,7 @@ function dayKey_(val) {
 // อ่านชีต imageUrl: A=ID, B=SKU, C=ชื่อ, D=รูป(ใส่เอง/สำรอง), E=รูปจาก ZORT(auto)
 // ZORT คือแหล่งหลัก → รูปจาก ZORT (E) ชนะ, ใช้รูปใส่เอง (D) เฉพาะตอน ZORT ไม่มีรูป
 function readImageMap_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('imageUrl');
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_IMAGE_URL);
   if (!sh) return {};
   const rows = sh.getDataRange().getDisplayValues();
   const map = {};
@@ -2630,7 +2752,7 @@ function readImageMap_() {
 }
 
 function readProducts_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('ข้อมูลสินค้า');
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PRODUCT_META);
   const rows = sh.getDataRange().getDisplayValues();
   const imageMap = readImageMap_();
   const out = [];
@@ -2663,7 +2785,7 @@ function readProducts_() {
 }
 
 function readSysQty_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('อัพเดทจำนวนสินค้า');
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PRODUCTS);
   if (!sh) return {};
   const rows = sh.getDataRange().getDisplayValues();
   const map = {};
@@ -2677,7 +2799,7 @@ function readSysQty_() {
 }
 
 function readMonthlySales_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('ยอดขายรายเดือน');
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_MONTHLY_SALES);
   if (!sh) return { monthLabels: [], monthlyByCat: {}, perSku: {} };
   const rows = sh.getDataRange().getDisplayValues();
   if (rows.length < 3) return { monthLabels: [], monthlyByCat: {}, perSku: {} };
@@ -2717,7 +2839,7 @@ function readMonthlySales_() {
 }
 
 function readDailySales_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('ยอดขายรายวัน');
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_DAILY_SALES);
   if (!sh) return { dayLabels: [], dailyByCat: {} };
   const rows = sh.getDataRange().getDisplayValues();
   if (rows.length < 3) return { dayLabels: [], dailyByCat: {} };
@@ -2752,7 +2874,7 @@ function readDailySales_() {
 }
 
 function readTransfers_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('รายการโอน');
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_TRANSFERS_HIST);
   if (!sh) return [];
   const rows = sh.getDataRange().getDisplayValues();
   if (rows.length < 3) return [];
@@ -2852,7 +2974,7 @@ function archiveReceivedShipments() {
 }
 
 function readPurchases_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('รายการซื้อสินค้า');
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PURCHASES);
   if (!sh) return [];
   // getValues() ให้ Date object ถ้า cell เป็น Date type → format เป็น ISO ได้ถูกต้อง
   // getDisplayValues() ให้ text ที่ format ตาม locale ของ sheet → อาจ sort ผิด
@@ -2898,7 +3020,7 @@ function readPurchases_() {
 }
 
 function readStorage_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName('ตำแหน่งจัดเก็บ');
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_LOCKS);
   if (!sh) return { entries: [], lockMap: {} };
   const rows = sh.getDataRange().getDisplayValues();
   if (rows.length < 2) return { entries: [], lockMap: {} };
@@ -2934,26 +3056,39 @@ function readStorage_() {
 function readOrders_() {
   const ss = SpreadsheetApp.openById(SHEET_ID);
   const sheet = ss.getSheetByName(SHEET_ORDERS);
-  if (!sheet) return [];
+  if (!sheet) {
+    Logger.log("[readOrders_] ERROR: ไม่พบ sheet '" + SHEET_ORDERS + "'");
+    return [];
+  }
 
-  const rows = sheet.getDataRange().getValues();
+  const rows = sheet.getDataRange().getDisplayValues();
   const result = [];
+  let skippedBlank = 0, skippedHeader = 0, skippedNoSku = 0;
 
   // i=1: skip only the first header row; also handles sheets with a single header row
   // where CH19015/OL00005 might be at index 1 (row 2)
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
     // Skip rows that are entirely blank
-    if (!r.some(Boolean)) continue;
+    if (!r.some(Boolean)) { skippedBlank++; continue; }
     // Skip what looks like a second header row (r[5] is a Thai-language label, not a SKU)
     const skuCandidate = String(r[5] || "").trim();
-    if (skuCandidate && /[฀-๿]/.test(skuCandidate)) continue;
-    // Skip rows with no SKU at all
-    if (!skuCandidate) continue;
+    if (skuCandidate && /[฀-๿]/.test(skuCandidate)) {
+      skippedHeader++;
+      Logger.log("[readOrders_] skip header row " + (i+1) + " col F='" + skuCandidate + "'");
+      continue;
+    }
+    // Skip rows with no SKU at all — log เพื่อ debug ถ้ามีข้อมูลในคอลัมน์อื่น
+    if (!skuCandidate) {
+      skippedNoSku++;
+      const hasOtherData = r.some((v, idx) => idx !== 5 && String(v||"").trim());
+      if (hasOtherData) Logger.log("[readOrders_] skip row " + (i+1) + " col F empty (name='" + (r[6]||"") + "' qty=" + r[7] + ")");
+      continue;
+    }
     result.push({
       id:          `R${i+1}`,
       carryMode:   String(r[0]||"").includes("หิ้ว") ? "carry" : "truck",
-      date:        r[1] ? Utilities.formatDate(new Date(r[1]), "Asia/Bangkok", "dd/MM/yy") : "",
+      date:        String(r[1] || "").trim(),
       status:      r[2] || "รอ",
       from:        r[3] || "",
       to:          r[4] || "",
@@ -2963,14 +3098,15 @@ function readOrders_() {
       preparedQty: Number(r[8]) || 0,
       image:       r[9] || "",
       remaining:   r[10] !== "" ? Number(r[10]) : null,
-      printFlag:   r[11] || null,
+      printFlag:   r[13] || null,
     });
   }
+  Logger.log("[readOrders_] result=" + result.length + " skippedBlank=" + skippedBlank + " skippedHeader=" + skippedHeader + " skippedNoSku=" + skippedNoSku);
   return result;
 }
 
 function readFrontStoreCheckedQty_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName("จำนวนหน้าร้าน");
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_FRONTSTORE_QTY);
   if (!sh) return {};
   const rows = sh.getDataRange().getDisplayValues();
   const map = {};
@@ -2985,7 +3121,7 @@ function readFrontStoreCheckedQty_() {
 
 function readQtyByLocation_() {
   const ss = SpreadsheetApp.openById(SHEET_ID);
-  const sh = ss.getSheetByName('อัพเดทจำนวนสินค้า');
+  const sh = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sh) return {};
   const rows = sh.getRange('B2:I' + sh.getLastRow()).getValues();
   const map = {};
@@ -3011,30 +3147,28 @@ function handleOrder_(params) {
       .setMimeType(ContentService.MimeType.JSON);
 
     const ss = SpreadsheetApp.openById(SHEET_ID);
-    const orderSh = ss.getSheetByName('ลำดับที่สั่งสินค้า');
+    const orderSh = ss.getSheetByName(SHEET_ORDERS);
     if (!orderSh) return ContentService
       .createTextOutput(JSON.stringify({ok:false, error:'ไม่พบ Sheet'}))
       .setMimeType(ContentService.MimeType.JSON);
 
     const orderNum = orderSh.getLastRow();
-    const now = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy HH:mm');
+    const now = new Date(); // เก็บเป็น Date object ให้ Sheets จัดการ format เอง
     var startRow = 3;
     var colA = orderSh.getRange('A' + startRow + ':A').getValues();
-    var nextRow = startRow;
+    var nextRow = -1;
     for (var i = 0; i < colA.length; i++) {
       if (colA[i][0] === '') { nextRow = startRow + i; break; }
     }
-    orderSh.getRange(nextRow, 1, 1, 11).setValues([[orderType, now, 'รอ', 'คลังสินค้าสาย5', 'ดูเหมือนจริง', sku, '', qty, '', '', '']]);
-    // แจ้งเตือน LINE เมื่อมี order ใหม่
+    if (nextRow === -1) nextRow = orderSh.getLastRow() + 1; // C4: fallback ถ้าชีตเต็ม ไม่เขียนทับ row 3
     var productName = (params.name || '').toString().trim();
-    // แจ้งกลุ่มเฉพาะออเดอร์หิ้ว (ไม่ส่ง DM เพื่อประหยัดเครดิต)
+    var imageUrl = (params.image || '').toString().trim();
+    orderSh.getRange(nextRow, 1, 1, 11).setValues([[orderType, now, 'รอ', 'คลังสินค้าสาย5', 'ดูเหมือนจริง', sku, productName, qty, '', imageUrl, '']]);
+    // แจ้งเตือน LINE เมื่อมี order ใหม่
     if (orderType === 'หิ้ว') {
-      var msgNew = "🛍️ หิ้วใหม่!\n"
-          + (productName ? "📦 " + productName + "\n" : "")
-          + "รหัส: " + sku + "\n"
-          + "จำนวน: " + qty + " ชิ้น";
-      sendLineGroup_(msgNew);
+      sendLineGroupOrderCard_(productName || sku, sku, Utilities.formatDate(now, 'Asia/Bangkok', 'dd/MM/yyyy HH:mm'), "");
     }
+    invalidateCache_(); // m1: ล้าง cache หลังเขียน order ใหม่
 
     return ContentService
       .createTextOutput(JSON.stringify({ok: true, orderId: nextRow - 2, sku: sku, qty: qty}))
@@ -3067,12 +3201,83 @@ function sendLineGroup_(msg) {
   });
 }
 
+function sendLineGroupMentionAll_(msg) {
+  var groupId = PropertiesService.getScriptProperties().getProperty('LINE_GROUP_ID');
+  if (!groupId) return;
+  var fullText = "@All " + msg;
+  UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
+    method: "post",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN },
+    payload: JSON.stringify({
+      to: groupId,
+      messages: [{
+        type: "text",
+        text: fullText,
+        mention: { mentionees: [{ index: 0, length: 4, type: "all" }] }
+      }]
+    }),
+    muteHttpExceptions: true
+  });
+}
+
+function sendLineGroupOrderCard_(name, sku, date, imageUrl) {
+  var groupId = PropertiesService.getScriptProperties().getProperty('LINE_GROUP_ID');
+  if (!groupId) { Logger.log("LINE: no LINE_GROUP_ID"); return; }
+
+  // lookup รูปจาก imageUrl sheet ถ้า frontend ไม่ส่งมา
+  var imgUrl = imageUrl || "";
+  if (!imgUrl && sku) {
+    try { imgUrl = (readImageMap_()[(sku||"").trim().toUpperCase()] || ""); } catch(e) {}
+  }
+
+  var pushUrl = "https://api.line.me/v2/bot/message/push";
+  var headers = { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN };
+
+  // @All mention
+  var mentionText = "@All order 🚶 " + (name||sku||"-");
+  UrlFetchApp.fetch(pushUrl, {
+    method: "post", headers: headers, muteHttpExceptions: true,
+    payload: JSON.stringify({ to: groupId, messages: [{
+      type: "text", text: mentionText,
+      mention: { mentionees: [{ index: 0, length: 4, type: "all" }] }
+    }]})
+  });
+
+  // Flex bubble เดียว (หน้าตาเหมือน carousel ของรอขึ้นรถ)
+  var bubble = {
+    type: "bubble", size: "kilo",
+    body: {
+      type: "box", layout: "vertical", spacing: "sm", paddingAll: "14px",
+      contents: [
+        { type: "text", text: "order 🚶", size: "xs", color: "#1565c0", weight: "bold" },
+        { type: "text", text: name || sku || "-", weight: "bold", size: "lg", wrap: true },
+        { type: "text", text: "รหัส: " + (sku||""), size: "sm", color: "#888888" },
+        { type: "text", text: "วันที่: " + (date||""), size: "sm", color: "#888888" }
+      ]
+    }
+  };
+  if (imgUrl) {
+    bubble.hero = { type: "image", url: imgUrl, size: "full", aspectRatio: "4:3", aspectMode: "fit"};
+  }
+
+  var r2 = UrlFetchApp.fetch(pushUrl, {
+    method: "post", headers: headers, muteHttpExceptions: true,
+    payload: JSON.stringify({ to: groupId, messages: [{ type: "flex", altText: "order 🚶 " + (name||sku||"-"), contents: bubble }] })
+  });
+  Logger.log("LINE carry card: " + r2.getResponseCode() + " " + r2.getContentText().slice(0,300));
+}
+
 // สรุปออเดอร์รอขึ้นรถ — ส่ง LINE กลุ่ม อังคาร-อาทิตย์ 08:00 และ 13:00
 function sendPendingTruckOrders() {
-  var day = new Date().getDay(); // 0=อา, 5=ศ, 6=ส
-  if (day !== 0 && day !== 5 && day !== 6) return; // ส่งเฉพาะ ศ-เสาร์-อาทิตย์
+  var day = new Date().getDay();
+  // ตั้งค่าวันที่แจ้งเตือนได้ผ่าน Script Property TRUCK_NOTIFY_DAYS
+  // รูปแบบ: comma-separated day numbers (0=อา,1=จ,2=อ,3=พ,4=พฤ,5=ศ,6=ส)
+  // ค่า default: "0,5,6" = ศุกร์+เสาร์+อาทิตย์ (backward compatible)
+  var prop = PropertiesService.getScriptProperties().getProperty('TRUCK_NOTIFY_DAYS') || '0,5,6';
+  var notifyDays = prop.split(',').map(Number);
+  if (!notifyDays.includes(day)) return;
   var ss = SpreadsheetApp.openById(SHEET_ID);
-  var sh = ss.getSheetByName('ลำดับที่สั่งสินค้า');
+  var sh = ss.getSheetByName(SHEET_ORDERS);
   if (!sh) return;
   var rows = sh.getDataRange().getValues();
   var pending = [];
@@ -3084,22 +3289,139 @@ function sendPendingTruckOrders() {
     var name   = String(r[6] || '').trim();
     var qty    = Number(r[7]) || 0;
     if (!sku || !qty) continue;
-    if (type === 'หิ้ว') continue;              // หิ้วแจ้งทันทีไปแล้ว
-    if (status === 'เสร็จ' || status === 'ยกเลิก') continue;
-    pending.push({ type: type, name: name || sku, qty: qty });
+    if (type === 'หิ้ว') continue;
+    var isPending = !status || status === 'รอ' || status === 'pending';
+    if (!isPending) continue;
+    pending.push({ sku: sku, name: name || sku, qty: qty });
   }
-  if (!pending.length) return;
+  if (!pending.length) {
+    sendLineGroup_("✅ ไม่มีของรอขึ้นรถแล้ว\nจัดครบหมดแล้ว 👍");
+    return;
+  }
+
   var hour = new Date().getHours();
   var label = hour < 12 ? '🌅 เช้า' : '🌞 บ่าย';
-  var lines = ['🚚 ' + label + ' — รอขึ้นรถ ' + pending.length + ' รายการ'];
-  pending.slice(0, 20).forEach(function(o) {
-    lines.push('• ' + o.name + ' × ' + o.qty + (o.type && o.type !== 'ขึ้นรถ' ? ' (' + o.type + ')' : ''));
+  var groupId = PropertiesService.getScriptProperties().getProperty('LINE_GROUP_ID');
+  if (!groupId) return;
+
+  // lookup รูปทุก SKU
+  var imgMap = {};
+  try { imgMap = readImageMap_(); } catch(e) {}
+
+  // @All mention text
+  var mentionText = "@All 🚚 " + label + " รอขึ้นรถ " + pending.length + " รายการ";
+  UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
+    method: "post", muteHttpExceptions: true,
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN },
+    payload: JSON.stringify({ to: groupId, messages: [{
+      type: "text", text: mentionText,
+      mention: { mentionees: [{ index: 0, length: 4, type: "all" }] }
+    }]})
   });
-  if (pending.length > 20) lines.push('... และอีก ' + (pending.length - 20) + ' รายการ');
-  sendLineGroup_(lines.join('\n'));
+
+  // Flex Carousel — max 12 bubbles ต่อ carousel, max 5 messages ต่อ push
+  var show = pending.slice(0, 12);
+  var bubbles = show.map(function(o) {
+    var imgUrl = imgMap[(o.sku||"").toUpperCase()] || "";
+    var bubble = {
+      type: "bubble", size: "micro",
+      body: {
+        type: "box", layout: "vertical", spacing: "xs", paddingAll: "12px",
+        contents: [
+          { type: "text", text: o.name, weight: "bold", size: "sm", wrap: true, maxLines: 2 },
+          { type: "text", text: o.sku, size: "xxs", color: "#888888" },
+          { type: "text", text: "× " + o.qty + " ชิ้น", size: "sm", color: "#1d4ed8", weight: "bold" }
+        ]
+      }
+    };
+    if (imgUrl) {
+      bubble.hero = { type: "image", url: imgUrl, size: "full", aspectRatio: "4:3", aspectMode: "fit"};
+    }
+    return bubble;
+  });
+
+  var carousel = { type: "flex", altText: "🚚 รอขึ้นรถ " + pending.length + " รายการ",
+    contents: { type: "carousel", contents: bubbles } };
+  var r2 = UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
+    method: "post", muteHttpExceptions: true,
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN },
+    payload: JSON.stringify({ to: groupId, messages: [carousel] })
+  });
+  Logger.log("truck carousel: " + r2.getResponseCode() + " " + r2.getContentText().slice(0,300));
+  if (pending.length > 12) {
+    sendLineGroup_("... และอีก " + (pending.length - 12) + " รายการ");
+  }
 }
 
 // รันครั้งแรกเพื่อสร้าง trigger 08:00 และ 13:00 (รันเองใน GAS editor)
+// ทดสอบส่งแจ้งเตือนรอขึ้นรถโดยไม่เช็ควัน — รันจาก GAS dropdown ได้เลย
+function testTruckNotification() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var sh = ss.getSheetByName(SHEET_ORDERS);
+  if (!sh) { Logger.log("ไม่พบชีต"); return; }
+  var rows = sh.getDataRange().getValues();
+  var pending = [];
+  for (var i = 2; i < rows.length; i++) {
+    var r = rows[i];
+    var type   = String(r[0] || '').trim();
+    var status = String(r[2] || '').trim();
+    var sku    = String(r[5] || '').trim();
+    var name   = String(r[6] || '').trim();
+    var qty    = Number(r[7]) || 0;
+    if (!sku || !qty) continue;
+    if (type === 'หิ้ว') continue;
+    var isPending = !status || status === 'รอ' || status === 'pending';
+    if (!isPending) continue;
+    pending.push({ sku: sku, name: name || sku, qty: qty });
+  }
+  Logger.log("pending truck orders: " + pending.length);
+  if (!pending.length) {
+    Logger.log("ไม่มีรายการรอขึ้นรถ");
+    sendLineGroup_("✅ ไม่มีของรอขึ้นรถแล้ว\nจัดครบหมดแล้ว 👍");
+    return;
+  }
+
+  var groupId = PropertiesService.getScriptProperties().getProperty('LINE_GROUP_ID');
+  if (!groupId) { Logger.log("ไม่มี LINE_GROUP_ID"); return; }
+
+  var imgMap = {};
+  try { imgMap = readImageMap_(); } catch(e) {}
+
+  var mentionText = "@All 🚚 🌅 ทดสอบ — รอขึ้นรถ " + pending.length + " รายการ";
+  UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
+    method: "post", muteHttpExceptions: true,
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN },
+    payload: JSON.stringify({ to: groupId, messages: [{
+      type: "text", text: mentionText,
+      mention: { mentionees: [{ index: 0, length: 4, type: "all" }] }
+    }]})
+  });
+
+  var bubbles = pending.slice(0, 12).map(function(o) {
+    var imgUrl = imgMap[(o.sku||"").toUpperCase()] || "";
+    var bubble = {
+      type: "bubble", size: "micro",
+      body: {
+        type: "box", layout: "vertical", spacing: "xs", paddingAll: "12px",
+        contents: [
+          { type: "text", text: o.name, weight: "bold", size: "sm", wrap: true, maxLines: 2 },
+          { type: "text", text: o.sku, size: "xxs", color: "#888888" },
+          { type: "text", text: "× " + o.qty + " ชิ้น", size: "sm", color: "#1d4ed8", weight: "bold" }
+        ]
+      }
+    };
+    if (imgUrl) bubble.hero = { type: "image", url: imgUrl, size: "full", aspectRatio: "4:3", aspectMode: "fit" };
+    return bubble;
+  });
+
+  var r = UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
+    method: "post", muteHttpExceptions: true,
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN },
+    payload: JSON.stringify({ to: groupId, messages: [{ type: "flex", altText: "รอขึ้นรถ " + pending.length + " รายการ", contents: { type: "carousel", contents: bubbles } }] })
+  });
+  Logger.log("carousel: " + r.getResponseCode() + " " + r.getContentText().slice(0,300));
+}
+
 function setupOrderReminders() {
   ScriptApp.getProjectTriggers().forEach(function(t) {
     if (t.getHandlerFunction() === 'sendPendingTruckOrders') ScriptApp.deleteTrigger(t);
@@ -3198,7 +3520,7 @@ function sendLowStockAlert() {
   // (SHEET_PRODUCTS เก็บแค่ตัวเลข stock — category/vendor อยู่ใน ข้อมูลสินค้า)
   const metaMap = {};
   try {
-    const metaSh = ss.getSheetByName("ข้อมูลสินค้า");
+    const metaSh = ss.getSheetByName(SHEET_PRODUCT_META);
     if (metaSh) {
       const metaRows = metaSh.getDataRange().getDisplayValues();
       // header 1 แถว → เริ่ม index 1; col B(1)=SKU, col F(5)=category, col H(7)=vendor
@@ -3316,7 +3638,7 @@ function scheduledLineReminder() {
   if (dayOfWeek !== 2 && dayOfWeek !== 4) return;
 
   var ss = SpreadsheetApp.openById(SHEET_ID);
-  var orderSh = ss.getSheetByName('ลำดับที่สั่งสินค้า');
+  var orderSh = ss.getSheetByName(SHEET_ORDERS);
   var lastRow = orderSh.getLastRow();
   if (lastRow < 3) return;
 
@@ -3401,7 +3723,7 @@ function putCachedPayload_(str) {
   } catch (err) { /* cache ล้มเหลวไม่เป็นไร — แค่ช้าลง */ }
 }
 
-function invalidateCache_() {
+function invalidateCache_(skipTsUpdate) {
   try {
     const c = CacheService.getScriptCache();
     const nStr = c.get(_CACHE_KEY_COUNT);
@@ -3410,12 +3732,17 @@ function invalidateCache_() {
     for (let i = 0; i < n; i++) keys.push(_CACHE_KEY_PART + i);
     c.removeAll(keys);
   } catch (err) { /* ignore */ }
-  // บันทึก timestamp การเขียนล่าสุดลง Script Properties (ไม่ผ่าน CacheService)
-  // เพื่อให้ conflict detection อ่านได้สด ๆ เสมอ แม้ DriveApp.getLastUpdated() จะล่าช้า
-  try {
-    PropertiesService.getScriptProperties().setProperty('dmj_last_write_ts', String(Date.now()));
-  } catch (err) { /* ignore */ }
+  if (!skipTsUpdate) {
+    // บันทึก timestamp การเขียนล่าสุดลง Script Properties (ไม่ผ่าน CacheService)
+    // เพื่อให้ conflict detection อ่านได้สด ๆ เสมอ แม้ DriveApp.getLastUpdated() จะล่าช้า
+    try {
+      PropertiesService.getScriptProperties().setProperty('dmj_last_write_ts', String(Date.now()));
+    } catch (err) { /* ignore */ }
+  }
 }
+
+// wrapper รันได้จาก GAS dropdown (ไม่มี _ ต่อท้าย)
+function clearCache() { invalidateCache_(); Logger.log("Cache cleared"); }
 
 function error(msg) {
   return ContentService.createTextOutput(JSON.stringify({ success: false, error: msg }))
@@ -3427,7 +3754,7 @@ function error(msg) {
 // ───────────────────────────────────────────────────────────
 
 function getOrCreateMtoJobSheet_(ss) {
-  let sh = ss.getSheetByName("งาน MTO");
+  let sh = ss.getSheetByName(SHEET_MTO_JOBS);
   if (!sh) {
     sh = ss.insertSheet("งาน MTO");
     sh.appendRow(["JobID","วันที่","ชื่องาน","ลูกค้า","ราคา","รูป","สถานะ","ปิดงานเมื่อ"]);
@@ -3436,7 +3763,7 @@ function getOrCreateMtoJobSheet_(ss) {
 }
 
 function getOrCreateMtoItemSheet_(ss) {
-  let sh = ss.getSheetByName("วัตถุดิบ MTO");
+  let sh = ss.getSheetByName(SHEET_MTO_ITEMS);
   if (!sh) {
     sh = ss.insertSheet("วัตถุดิบ MTO");
     sh.appendRow(["JobID","รหัสสินค้า","ชื่อสินค้า","จำนวนเบิก","คลัง","จำนวนคืน","ตัดจริง","เวลา"]);
@@ -3686,7 +4013,7 @@ function createZortSaleOrder_(items, jobName) {
 
 function deleteMtoJob(ss, data) {
   const jobId = String(data.jobId || "").trim();
-  const sh = ss.getSheetByName("งาน MTO");
+  const sh = ss.getSheetByName(SHEET_MTO_JOBS);
   if (!sh) return error("ไม่พบชีต งาน MTO");
   const rows = sh.getDataRange().getValues();
   for (let i = 1; i < rows.length; i++) {
@@ -3701,8 +4028,8 @@ function deleteMtoJob(ss, data) {
 
 function readMtoJobs_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const jobSh = ss.getSheetByName("งาน MTO");
-  const itemSh = ss.getSheetByName("วัตถุดิบ MTO");
+  const jobSh = ss.getSheetByName(SHEET_MTO_JOBS);
+  const itemSh = ss.getSheetByName(SHEET_MTO_ITEMS);
   if (!jobSh) return [];
 
   const jobRows = jobSh.getDataRange().getValues();
@@ -3713,7 +4040,7 @@ function readMtoJobs_() {
   for (let i = 0; i < itemRows.length; i++) {
     const r = itemRows[i];
     const jid = String(r[0]||"").trim();
-    if (!jid || jid.indexOf("MTO_") !== 0) continue; // ข้าม header/แถวว่าง
+    if (!jid || (!jid.startsWith("MTO_") && !jid.startsWith("MTO-"))) continue; // ข้าม header/แถวว่าง
     if (!itemsMap[jid]) itemsMap[jid] = [];
     // F (r[5]) = จำนวนคืน (เลข) — รองรับข้อมูลเก่าที่เป็นข้อความ "คืนแล้ว"/"ไม่คืน"
     const qty = Number(r[3])||0;
@@ -3739,7 +4066,7 @@ function readMtoJobs_() {
   for (let i = 0; i < jobRows.length; i++) {
     const r = jobRows[i];
     const jobId = String(r[0]||"").trim();
-    if (!jobId || jobId.indexOf("MTO_") !== 0) continue; // ข้าม header/แถวว่าง
+    if (!jobId || (!jobId.startsWith("MTO_") && !jobId.startsWith("MTO-"))) continue; // ข้าม header/แถวว่าง
     jobs.push({
       jobId,
       date: String(r[1]||"").trim(),

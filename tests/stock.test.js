@@ -1,6 +1,6 @@
-// tests/stock.test.js — ทดสอบ stockQty และ whQty
+// tests/stock.test.js — ทดสอบ stockQty, whQty, deductStockCore
 import { describe, it, expect } from 'vitest';
-import { stockQty, whQty } from './helpers.js';
+import { stockQty, whQty, deductStockCore } from './helpers.js';
 
 describe('stockQty', () => {
   it('มีทั้ง qtyStore และ qtyWH → รวมกัน', () => {
@@ -55,5 +55,59 @@ describe('whQty', () => {
 
   it('undefined → 0', () => {
     expect(whQty(undefined)).toBe(0);
+  });
+});
+
+describe('deductStockCore', () => {
+  it('qty <= whQty → หักจาก WH ทั้งหมด ไม่แตะ FS', () => {
+    const r = deductStockCore({ whQty: 10, fsQty: 5 }, 7);
+    expect(r.deductWH).toBe(7);
+    expect(r.deductFS).toBe(0);
+    expect(r.newWH).toBe(3);
+    expect(r.newFS).toBe(5);
+    expect(r.shortfall).toBe(false);
+    expect(r.shortfall_qty).toBe(0);
+  });
+
+  it('qty > whQty → หัก WH หมด แล้วล้นมา FS', () => {
+    const r = deductStockCore({ whQty: 3, fsQty: 10 }, 8);
+    expect(r.deductWH).toBe(3);
+    expect(r.deductFS).toBe(5);
+    expect(r.newWH).toBe(0);
+    expect(r.newFS).toBe(5);
+    expect(r.shortfall).toBe(false);
+    expect(r.shortfall_qty).toBe(0);
+  });
+
+  it('qty > whQty + fsQty → shortfall', () => {
+    const r = deductStockCore({ whQty: 3, fsQty: 4 }, 10);
+    expect(r.deductWH).toBe(3);
+    expect(r.deductFS).toBe(4);
+    expect(r.shortfall).toBe(true);
+    expect(r.shortfall_qty).toBe(3);  // 10 - (3+4) = 3
+  });
+
+  it('whQty=0, fsQty=0 → shortfall เต็มจำนวน', () => {
+    const r = deductStockCore({ whQty: 0, fsQty: 0 }, 5);
+    expect(r.deductWH).toBe(0);
+    expect(r.deductFS).toBe(0);
+    expect(r.shortfall).toBe(true);
+    expect(r.shortfall_qty).toBe(5);
+  });
+
+  it('qty พอดีกับ whQty+fsQty → shortfall=false', () => {
+    const r = deductStockCore({ whQty: 4, fsQty: 6 }, 10);
+    expect(r.shortfall).toBe(false);
+    expect(r.shortfall_qty).toBe(0);
+    expect(r.newWH).toBe(0);
+    expect(r.newFS).toBe(0);
+  });
+
+  it('whQty=0 → หักจาก FS โดยตรง', () => {
+    const r = deductStockCore({ whQty: 0, fsQty: 8 }, 5);
+    expect(r.deductWH).toBe(0);
+    expect(r.deductFS).toBe(5);
+    expect(r.newFS).toBe(3);
+    expect(r.shortfall).toBe(false);
   });
 });

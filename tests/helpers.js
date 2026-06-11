@@ -146,10 +146,175 @@ function reconcileOrderState(order, localEntry, nowMs) {
   return local;
 }
 
+// ── detectColor: pure logic จาก views.jsx:1434–1507 ─────────────────────────
+const COLOR_MAP = {
+  "บานเย็น":     { name:"บานเย็น",    hex:"#a82a6a", en:"Magenta" },
+  "มิ้นต์":      { name:"มิ้นต์",     hex:"#9adcc1", en:"Mint" },
+  "พีช":         { name:"พีช",        hex:"#e8b4a0", en:"Peach" },
+  "ครีม":        { name:"ครีม",       hex:"#f0e2c0", en:"Cream" },
+  "เบจ":         { name:"เบจ",        hex:"#d4bc94", en:"Beige" },
+  "ทอง":         { name:"ทอง",        hex:"#c89030", en:"Gold" },
+  "เงิน":        { name:"เงิน",       hex:"#bcbcbc", en:"Silver" },
+  "ขาว":         { name:"ขาว",        hex:"#f4f4f4", en:"White" },
+  "ดำ":          { name:"ดำ",         hex:"#2a2a2a", en:"Black" },
+  "น้ำเงินเข้ม": { name:"น้ำเงินเข้ม", hex:"#1c3060", en:"NavyDark" },
+  "น้ำเงินอ่อน": { name:"น้ำเงินอ่อน", hex:"#7096d0", en:"NavyLight" },
+  "น้ำเงิน":     { name:"น้ำเงิน",    hex:"#2e4d8f", en:"Navy" },
+  "น้ำตาลเข้ม": { name:"น้ำตาลเข้ม", hex:"#4a2810", en:"BrownDark" },
+  "น้ำตาลอ่อน": { name:"น้ำตาลอ่อน", hex:"#c9a070", en:"BrownLight" },
+  "น้ำตาล":     { name:"น้ำตาล",    hex:"#7a4e2a", en:"Brown" },
+  "เหลืองเข้ม": { name:"เหลืองเข้ม", hex:"#c89010", en:"YellowDark" },
+  "เหลืองอ่อน": { name:"เหลืองอ่อน", hex:"#fde98c", en:"YellowLight" },
+  "เหลือง":     { name:"เหลือง",    hex:"#f4c220", en:"Yellow" },
+  "เขียวเข้ม":  { name:"เขียวเข้ม",  hex:"#1e5c1e", en:"GreenDark" },
+  "เขียวอ่อน":  { name:"เขียวอ่อน",  hex:"#80c880", en:"GreenLight" },
+  "เขียว":      { name:"เขียว",     hex:"#3a8f3a", en:"Green" },
+  "ชมพูเข้ม":   { name:"ชมพูเข้ม",   hex:"#d43878", en:"PinkDark" },
+  "ชมพูอ่อน":   { name:"ชมพูอ่อน",   hex:"#f5c6d8", en:"PinkLight" },
+  "ชมพู":       { name:"ชมพู",      hex:"#e88aa6", en:"Pink" },
+  "ฟ้าเข้ม":    { name:"ฟ้าเข้ม",    hex:"#2878b8", en:"SkyDark" },
+  "ฟ้าอ่อน":    { name:"ฟ้าอ่อน",    hex:"#b0d8f5", en:"SkyLight" },
+  "ฟ้า":        { name:"ฟ้า",       hex:"#5aa3d6", en:"Sky" },
+  "แดงเข้ม":    { name:"แดงเข้ม",    hex:"#880000", en:"RedDark" },
+  "แดงอ่อน":    { name:"แดงอ่อน",    hex:"#e87070", en:"RedLight" },
+  "แดง":        { name:"แดง",       hex:"#c5352a", en:"Red" },
+  "ส้มเข้ม":    { name:"ส้มเข้ม",    hex:"#c85010", en:"OrangeDark" },
+  "ส้มอ่อน":    { name:"ส้มอ่อน",    hex:"#f5c080", en:"OrangeLight" },
+  "ส้ม":        { name:"ส้ม",       hex:"#e6862a", en:"Orange" },
+  "ม่วงเข้ม":   { name:"ม่วงเข้ม",   hex:"#501878", en:"PurpleDark" },
+  "ม่วงอ่อน":   { name:"ม่วงอ่อน",   hex:"#c0a0e0", en:"PurpleLight" },
+  "ม่วง":       { name:"ม่วง",      hex:"#7c4ea8", en:"Purple" },
+  "เทาเข้ม":    { name:"เทาเข้ม",    hex:"#505050", en:"GrayDark" },
+  "เทาอ่อน":    { name:"เทาอ่อน",    hex:"#cccccc", en:"GrayLight" },
+  "เทา":        { name:"เทา",       hex:"#909090", en:"Gray" },
+};
+// compound keys ก่อน เพื่อให้ "เขียวเข้ม" match ก่อน "เขียว", "น้ำเงิน" ก่อน "เงิน"
+const COLOR_KEYS = [
+  "บานเย็น",
+  "น้ำเงินเข้ม","น้ำเงินอ่อน","น้ำเงิน",
+  "น้ำตาลเข้ม","น้ำตาลอ่อน","น้ำตาล",
+  "มิ้นต์","พีช","ครีม","เบจ","ทอง","เงิน",
+  "เหลืองเข้ม","เหลืองอ่อน","เหลือง",
+  "เขียวเข้ม","เขียวอ่อน","เขียว",
+  "ชมพูเข้ม","ชมพูอ่อน","ชมพู",
+  "ฟ้าเข้ม","ฟ้าอ่อน","ฟ้า",
+  "แดงเข้ม","แดงอ่อน","แดง",
+  "ส้มเข้ม","ส้มอ่อน","ส้ม",
+  "ม่วงเข้ม","ม่วงอ่อน","ม่วง",
+  "เทาเข้ม","เทาอ่อน","เทา",
+  "ขาว","ดำ",
+];
+function detectColor(text) {
+  if (!text) return null;
+  const s = String(text);
+  for (const k of COLOR_KEYS) if (s.indexOf(k) >= 0) return COLOR_MAP[k];
+  return null;
+}
+
+// ── parseQty_ / parseNum_ / parseLocation_ จาก appsscript_complete.gs:2631–2652 ─
+function parseQty_(val) {
+  if (val == null || val === '') return { num: 0, status: 'empty' };
+  const s = String(val).toLowerCase().trim();
+  if (s.includes('out of stock full')) return { num: 0, status: 'oosfull' };
+  if (s.includes('out of stock'))      return { num: 0, status: 'oos' };
+  const n = parseInt(String(val).replace(/[,\s]/g, ''));
+  if (isNaN(n)) return { num: 0, status: 'unknown' };
+  return { num: n, status: n < 0 ? 'negative' : 'ok' };
+}
+
+function parseNum_(val) {
+  if (val == null || val === '') return 0;
+  const n = parseFloat(String(val).replace(/[,\s฿]/g, ''));
+  return isNaN(n) ? 0 : n;
+}
+
+function parseLocation_(loc) {
+  if (!loc) return null;
+  const m = String(loc).trim().match(/^([AB])(\d+)\/(\d+)$/i);
+  if (!m) return null;
+  return { raw: String(loc).trim(), valid: true, side: m[1].toUpperCase(), shelf: +m[2], lock: +m[3] };
+}
+
+// ── monthKey_ / dayKey_ จาก appsscript_complete.gs:2654–2672 ─────────────────
+function monthKey_(val) {
+  if (val instanceof Date) return `${String(val.getMonth()+1).padStart(2,'0')}/${val.getFullYear()}`;
+  const s = String(val).trim();
+  let m = s.match(/^(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[1].padStart(2,'0')}/${m[2]}`;
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[2].padStart(2,'0')}/${m[3]}`;
+  return null;
+}
+
+function dayKey_(val) {
+  if (val instanceof Date) {
+    return `${String(val.getDate()).padStart(2,'0')}/${String(val.getMonth()+1).padStart(2,'0')}/${val.getFullYear()}`;
+  }
+  const s = String(val).trim();
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[1].padStart(2,'0')}/${m[2].padStart(2,'0')}/${m[3]}`;
+  return null;
+}
+
+// ── deductStockCore: pure math จาก deductStock (appsscript_complete.gs:959–983) ─
+// แยก Sheet I/O ออก — ทดสอบแค่ตรรกะ drain WH ก่อน แล้วล้นมา FS
+function deductStockCore({ whQty, fsQty }, qty) {
+  let deductWH = Math.min(qty, whQty);
+  let deductFS = qty - deductWH;
+  if (deductFS > fsQty) deductFS = fsQty;
+  const shortfall = qty - (deductWH + deductFS);
+  return {
+    deductWH, deductFS,
+    newWH: whQty - deductWH,
+    newFS: fsQty - deductFS,
+    shortfall: shortfall > 0,
+    shortfall_qty: shortfall,
+  };
+}
+
+// ── netOf: pure logic จาก closeMtoJob (appsscript_complete.gs:3763) ──────────
+// คำนวณ qty สุทธิ หลังหักของที่ return คืน — clamp return ไว้ที่ [0, qty]
+function netOf(item) {
+  const qty = Number(item.qty) || 0;
+  const ret = Math.max(0, Math.min(Number(item.returnedQty) || 0, qty));
+  return qty - ret;
+}
+
+// ── enrichDataCore: pure logic จาก enrichData (app.jsx:231) ──────────────────
+// ไม่รวม browser globals (detectColor, mtoBase) เพื่อให้รันใน Node ได้
+// ใช้ monthsSince ที่นิยามไว้ด้านบนในไฟล์นี้
+function enrichDataCore(d) {
+  if (!d || !Array.isArray(d.products)) return d;
+  const THAI_RE = /[฀-๿]/;
+  d.products.forEach(p => {
+    if (!p.cat && p.category) p.cat = p.category;
+    const rawTags = String(p.tag || '').split(',').map(t => t.trim()).filter(Boolean);
+    p.supplierTags = rawTags.filter(t => !THAI_RE.test(t));
+    p.statusTags   = rawTags.filter(t =>  THAI_RE.test(t));
+    let dm = null;
+    const whOnHand = (p.warehouseQty != null) ? p.warehouseQty
+                   : (p.qtyWH != null) ? p.qtyWH
+                   : (p.qty || 0);
+    if (whOnHand > 0) {
+      const a = monthsSince(p.lastTransferDate);
+      dm = (a != null) ? a : ((monthsSince(p.lastStockInDate) != null) ? monthsSince(p.lastStockInDate) : null);
+    }
+    p.deadMonths = dm;
+    if (p.supplierTags.length) p.vendor = p.supplierTags[0];
+  });
+  return d;
+}
+
 module.exports = {
   monthsSince, fmtN, fmtB, fmtPct, monthLabel,
   stockQty, whQty, mtoBase, compareSku,
   COL_PROD_SKU, COL_PROD_QTYFS, COL_PROD_QTYWH,
   mapProductRow, shouldRejectConflict,
   orderSig, reconcileOrderState,
+  monthKey_, dayKey_,
+  deductStockCore,
+  netOf,
+  enrichDataCore,
+  COLOR_MAP, COLOR_KEYS, detectColor,
+  parseQty_, parseNum_, parseLocation_,
 };

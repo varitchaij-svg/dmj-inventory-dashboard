@@ -178,7 +178,7 @@ function Toast({ toast, onClose }) {
   const s = styles[toast.type] || styles.info;
   return (
     <div onClick={onClose} style={{
-      position:"fixed", top:20, left:"50%", transform:"translateX(-50%)",
+      position:"fixed", top:60, left:"50%", transform:"translateX(-50%)",
       zIndex:3000, background:s.bg, border:`2px solid ${s.border}`,
       borderRadius:14, padding:"14px 20px", display:"flex", alignItems:"center",
       gap:12, minWidth:200, maxWidth:"calc(100vw - 32px)", cursor:"pointer",
@@ -265,7 +265,7 @@ function DeltaBadge({ pct, isNew }) {
   const c  = up ? "#1f7f44" : "#c0392b";
   const bg = up ? "#eaf6ee" : "#fcecec";
   const arrow = up ? "▲" : "▼";
-  const shown = Math.abs(pct) >= 10 ? Math.round(Math.abs(pct)*100) : (Math.abs(pct)*100).toFixed(0);
+  const shown = Math.abs(pct) >= 0.1 ? Math.round(Math.abs(pct)*100) : (Math.abs(pct)*100).toFixed(1);
   return (
     <span style={{display:"inline-flex",alignItems:"center",gap:3,fontSize:11,fontWeight:700,
                   padding:"2px 7px",borderRadius:20,background:bg,color:c}}>
@@ -380,6 +380,25 @@ function OverviewView({ data, range, setRange, role }) {
     products.forEach(p => p.cat && s.add(p.cat));
     return [...s].sort();
   }, [products]);
+
+  // F7: orders รอ > N วัน
+  const OVERDUE_DAYS = 3;
+  const overdueOrders = uM(() => {
+    const orders = data.orders || [];
+    const now = Date.now();
+    return orders
+      .filter(o => !o.status || o.status === "รอ" || o.status === "pending")
+      .map(o => {
+        const parts = String(o.date || "").split("/"); // DD/MM/YYYY
+        if (parts.length < 3) return { ...o, waitDays: null };
+        const d = new Date(+parts[2], +parts[1] - 1, +parts[0]);
+        const waitDays = isNaN(d) ? null : Math.floor((now - d.getTime()) / 86400000);
+        return { ...o, waitDays };
+      })
+      .filter(o => o.waitDays !== null && o.waitDays > OVERDUE_DAYS)
+      .sort((a, b) => b.waitDays - a.waitDays);
+  }, [data.orders]);
+  const maxWaitDays = overdueOrders.length > 0 ? overdueOrders[0].waitDays : 0;
 
   // catShare: use daily data when in day mode
   const catShare = uM(() => {
@@ -774,6 +793,48 @@ function OverviewView({ data, range, setRange, role }) {
                icon={I.trend} />
         )}
       </div>
+
+      {/* ─── F7: ค้างส่งเกิน 3 วัน ─── */}
+      {overdueOrders.length > 0 && (
+        <div style={{
+          marginBottom: 16,
+          borderRadius: 14,
+          background: overdueOrders.length >= 5 ? "#fdecea" : "#fff8e1",
+          border: `1.5px solid ${overdueOrders.length >= 5 ? "#f5c6c2" : "#f5e0a0"}`,
+          padding: "12px 16px",
+        }}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom: overdueOrders.length > 0 ? 8 : 0}}>
+            <span style={{fontSize:18}}>{overdueOrders.length >= 5 ? "🚨" : "⏳"}</span>
+            <span style={{fontSize:14,fontWeight:800,color: overdueOrders.length >= 5 ? "var(--dang)" : "#a07417"}}>
+              ค้างส่ง {overdueOrders.length} รายการ · นานสุด {maxWaitDays} วัน
+            </span>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+            {overdueOrders.slice(0, 5).map((o, i) => (
+              <div key={i} style={{
+                display:"flex",alignItems:"center",gap:8,
+                fontSize:12,color:"var(--g-700)",
+              }}>
+                <span style={{
+                  minWidth:32,textAlign:"center",fontWeight:700,
+                  background: o.waitDays >= 7 ? "#f5c6c2" : "#f5e0a0",
+                  color: o.waitDays >= 7 ? "var(--dang)" : "#a07417",
+                  borderRadius:6,padding:"1px 5px",fontSize:11,
+                }}>{o.waitDays}ว.</span>
+                <span style={{flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                  {o.name || o.sku}
+                </span>
+                <span style={{color:"var(--muted)",flexShrink:0}}>{o.orderQty} ชิ้น</span>
+              </div>
+            ))}
+            {overdueOrders.length > 5 && (
+              <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>
+                +{overdueOrders.length - 5} รายการอื่น
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ─── Forecast Tool (owner only) ─── */}
       {role === 'owner' && forecast && (
@@ -1534,8 +1595,16 @@ function mtoBase(name) {
     .trim() || 'งานพิเศษ';
 }
 
+// คืน threshold ของ SKU นั้น โดย fallback ลำดับ: override → default → 36
+function getLowStockThreshold(thresholds, sku) {
+  if (!thresholds) return 36;
+  return (thresholds.overrides && thresholds.overrides[sku]) || thresholds.default || 36;
+}
+
 function CategoryView({ data, role }) {
   const { products } = data;
+  const thresholds = data.thresholds || null; // { default: N, overrides: { sku: N } }
+  const pendingOrders = uM(() => (data.orders || []).filter(o => !o.status || o.status === "รอ" || o.status === "pending"), [data.orders]);
   const allCats = uM(() => {
     const s = new Set();
     products.forEach(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า" && s.add(p.cat));
@@ -1579,6 +1648,8 @@ function CategoryView({ data, role }) {
   // Android back: ถ้ากำลังดู supplier view → กด back = ล้าง supplier filter
   useBackHandler(globalVendor ? () => { setGlobalVendor(null); setPage(1); } : null);
   const [viewMode, setViewMode] = uS('grid');
+  const [expandedGroups, setExpandedGroups] = uS(new Set()); // supplier view: group ที่ expand เพื่อดูทั้งหมด
+  const SUPPLIER_PAGE = 50; // แสดงสูงสุด 50 รายการต่อ group ก่อน expand
   // ── helper: parse DD/MM/YYYY → Date ──
   const parseStockDate = (str) => {
     if (!str) return null;
@@ -1593,6 +1664,22 @@ function CategoryView({ data, role }) {
   };
 
   const isMtoCat = active === "Made to Order จัดแบบพิเศษ";
+
+  // map SKU → order ที่ WH จัดแล้ว (preparedQty > 0 และยังไม่ Done)
+  const whReadyMap = uM(() => {
+    const orders = data.orders || [];
+    const m = {};
+    orders.forEach(o => {
+      if (!o.sku) return;
+      const isPending = !o.status || o.status === "รอ" || o.status === "pending";
+      if (isPending && (o.preparedQty > 0)) {
+        const key = (o.sku || "").trim().toUpperCase();
+        if (!m[key]) m[key] = [];
+        m[key].push(o);
+      }
+    });
+    return m;
+  }, [data.orders]);
 
   const sortFn = uC((a, b) => {
     switch (sortBy) {
@@ -1630,12 +1717,12 @@ function CategoryView({ data, role }) {
     return Object.values(m).sort((a, b) => b.count - a.count);
   }, [products]);
 
-  // ต้องสั่งเพิ่ม = หมด (≤0) หรือ ใกล้หมด (1..36) — ใช้เกณฑ์เดียวกับ badge ในการ์ด
+  // ต้องสั่งเพิ่ม = หมด (≤0) หรือ ใกล้หมด — ใช้เกณฑ์เดียวกับ badge ในการ์ด
   const needsReorder = uC((p) => {
     if (p.isMTO) return false;
     const q = stockQty(p);
-    return q <= 36;
-  }, []);
+    return q <= getLowStockThreshold(thresholds, p.sku);
+  }, [thresholds]);
 
   const filtered = uM(() => {
     const gq = globalSearch.trim().toLowerCase();
@@ -1690,7 +1777,7 @@ function CategoryView({ data, role }) {
       if (!p.isMTO) {
         const q = stockQty(p);
         if (q <= 0) m[key].out++;
-        else if (q <= 36) m[key].low++;
+        else if (q <= getLowStockThreshold(thresholds, p.sku)) m[key].low++;
       }
     });
     return Object.values(m).sort((a, b) => {
@@ -1786,6 +1873,22 @@ function CategoryView({ data, role }) {
           <div className="page-sub">ดูสินค้าทุกตัวในแต่ละหมวด · เรียงตามขายดี / ราคา / Supplier / สี</div>
         </div>
       </div>
+
+      {pendingOrders.length > 0 && (
+        <div style={{background:"#fff8e1",border:"1.5px solid #f59e0b",borderRadius:10,padding:"10px 14px",marginBottom:12}}>
+          <div style={{fontWeight:700,fontSize:13,color:"#a07417",marginBottom:4}}>
+            🛒 รายการสั่งที่ยังค้างอยู่ ({pendingOrders.length} รายการ)
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:2}}>
+            {pendingOrders.slice(0,5).map((o,i) => (
+              <div key={i} style={{fontSize:12,color:"#555"}}>{o.sku} · {o.name || "(ไม่ระบุ)"} · {o.orderQty} ชิ้น</div>
+            ))}
+            {pendingOrders.length > 5 && (
+              <div style={{fontSize:11,color:"#a07417"}}>+{pendingOrders.length - 5} รายการ</div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── Global Search Bar ── */}
       <div style={{marginBottom:14}}>
@@ -2162,7 +2265,7 @@ function CategoryView({ data, role }) {
               {visible.map((p, idx) => {
                 const totalQty = stockQty(p);
                 const outOfStock = !p.isMTO && totalQty === 0;
-                const lowStock = !p.isMTO && totalQty > 0 && totalQty <= 36;
+                const lowStock = !p.isMTO && totalQty > 0 && totalQty <= getLowStockThreshold(thresholds, p.sku);
                 const accent2 = isGlobalSearch ? catColor(p.cat, allCats) : color;
                 return (
                   <div key={p.sku} style={{
@@ -2216,16 +2319,14 @@ function CategoryView({ data, role }) {
                         )}
                       </div>
                     </div>
-                    {/* Order button */}
-                    {setOrderProduct && (
-                      <button onClick={() => !outOfStock && setOrderProduct(p)}
-                        disabled={outOfStock}
+                    {/* Order button — แสดงเฉพาะเมื่อมีของในคลัง (qtyWH > 0) */}
+                    {setOrderProduct && p.qtyWH > 0 && (
+                      <button onClick={() => setOrderProduct(p)}
                         style={{flexShrink:0,padding:'8px 12px',borderRadius:8,border:'none',
-                                background: outOfStock ? 'var(--g-100)' : '#1b5e20',
-                                color: outOfStock ? 'var(--muted)' : '#fff',
-                                fontSize:12,fontWeight:700,cursor: outOfStock?'not-allowed':'pointer',
+                                background:'#1b5e20',color:'#fff',
+                                fontSize:12,fontWeight:700,cursor:'pointer',
                                 fontFamily:'inherit',whiteSpace:'nowrap',minHeight:44}}>
-                        {outOfStock ? '—' : '🛒 สั่ง'}
+                        🛒 สั่ง
                       </button>
                     )}
                   </div>
@@ -2235,7 +2336,11 @@ function CategoryView({ data, role }) {
           ) : viewMode === 'supplier' ? (
             /* ── Group-by-supplier view — sections per ร้าน ── */
             <div style={{display:'flex',flexDirection:'column',gap:18}}>
-              {supplierGroups.map(g => (
+              {supplierGroups.map(g => {
+                const isExpanded = expandedGroups.has(g.name);
+                const visibleItems = isExpanded ? g.items : g.items.slice(0, SUPPLIER_PAGE);
+                const hiddenCount = g.items.length - SUPPLIER_PAGE;
+                return (
                 <div key={g.name}>
                   {/* Section header — sticky, supplier name + counts + low/out badges */}
                   <div style={{
@@ -2269,7 +2374,7 @@ function CategoryView({ data, role }) {
                     )}
                   </div>
                   <div className="product-grid" style={{width:"100%",boxSizing:"border-box",minWidth:0}}>
-                    {g.items.map((p, idx) => (
+                    {visibleItems.map((p, idx) => (
                       <div key={p.sku} style={{position:"relative"}}>
                         {(isGlobalSearch || isGlobalVendor) && p.cat && (
                           <div style={{
@@ -2287,12 +2392,30 @@ function CategoryView({ data, role }) {
                                      allCats={allCats}
                                      reasonTags={[]}
                                      onOrder={setOrderProduct}
-                                     role={role}/>
+                                     role={role}
+                                     whReady={whReadyMap[(p.sku||"").trim().toUpperCase()]}
+                                     thresholds={thresholds}/>
                       </div>
                     ))}
                   </div>
+                  {/* ปุ่มแสดงเพิ่มเติม — เฉพาะ group ที่มีมากกว่า SUPPLIER_PAGE */}
+                  {!isExpanded && hiddenCount > 0 && (
+                    <button onClick={() => setExpandedGroups(prev => {
+                        const next = new Set(prev);
+                        next.add(g.name);
+                        return next;
+                      })}
+                      style={{width:'100%',marginTop:8,padding:'10px 16px',
+                              border:'1.5px dashed var(--bdr)',borderRadius:10,
+                              background:'var(--g-50)',color:'var(--g-600)',
+                              fontSize:13,fontWeight:600,cursor:'pointer',
+                              fontFamily:'inherit'}}>
+                      แสดงเพิ่มเติม ({hiddenCount} รายการ)
+                    </button>
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             /* ── Grid view — existing card layout ── */
@@ -2316,7 +2439,9 @@ function CategoryView({ data, role }) {
                                allCats={allCats}
                                reasonTags={isGlobalSearch ? [] : (reasonMap[p.sku] || [])}
                                onOrder={setOrderProduct}
-                               role={role}/>
+                               role={role}
+                               whReady={whReadyMap[(p.sku||"").trim().toUpperCase()]}
+                               thresholds={thresholds}/>
                 </div>
               ))}
             </div>
@@ -2338,7 +2463,7 @@ const QUICK_QTYS = [24, 36, 48, 60];
 
 function OrderModal({ product, onClose }) {
   useBackHandler(onClose); // Android back = ปิด modal สั่งของ
-  const [qty, setQty] = uS(24);
+  const [qty, setQty] = uS(Math.min(24, product.qtyWH || 24));
   const [customMode, setCustomMode] = uS(false);
   const [orderType, setOrderType] = uS('รอขึ้นรถ');
   const [loading, setLoading] = uS(false);
@@ -2354,7 +2479,8 @@ function OrderModal({ product, onClose }) {
     if (qty < 1) { setErr('กรุณาระบุจำนวน'); return; }
     setLoading(true); setErr(null);
     const _sep = sheetUrl.includes('?') ? '&' : '?';
-    const url = `${sheetUrl}${_sep}action=order&sku=${encodeURIComponent(product.sku)}&qty=${qty}&orderType=${encodeURIComponent(orderType)}`;
+    const imgUrl = product.imageUrl || product.image || '';
+    const url = `${sheetUrl}${_sep}action=order&sku=${encodeURIComponent(product.sku)}&qty=${qty}&orderType=${encodeURIComponent(orderType)}&name=${encodeURIComponent(product.name||'')}&image=${encodeURIComponent(imgUrl)}`;
     fetch(url)
       .then(r => r.json())
       .then(d => {
@@ -2494,9 +2620,9 @@ function OrderModal({ product, onClose }) {
   );
 }
 
-function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role }) {
+function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, whReady, thresholds }) {
   const totalQty = (p.qtyStore > 0 || p.qtyWH > 0) ? (p.qtyStore || 0) + (p.qtyWH || 0) : (p.qty || 0);
-  const lowStock = !p.isMTO && totalQty > 0 && totalQty <= 36;
+  const lowStock = !p.isMTO && totalQty > 0 && totalQty <= getLowStockThreshold(thresholds, p.sku);
   const outOfStock = !p.isMTO && totalQty === 0;
   const hashHue = (p.sku || "").split("").reduce((a,c) => a + c.charCodeAt(0), 0) % 360;
   const [lightbox, setLightbox] = uS(false);
@@ -2635,22 +2761,36 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role }) {
         </div>
       </div>
 
-      {/* Order button */}
-      {onOrder && (
+      {/* WH จัดของแล้ว badge */}
+      {whReady && whReady.length > 0 && (
+        <div style={{
+          margin:"0 12px 8px",padding:"5px 10px",borderRadius:8,
+          background:"#eff6ff",border:"1.5px solid #bfdbfe",
+          display:"flex",alignItems:"center",gap:6,
+        }}>
+          <span style={{fontSize:14}}>📦</span>
+          <div>
+            <div style={{fontSize:11,fontWeight:700,color:"#1d4ed8"}}>WH จัดของแล้ว</div>
+            <div style={{fontSize:10,color:"#3b82f6"}}>
+              {whReady.map(o => `${o.preparedQty} ชิ้น`).join(" · ")}
+              {whReady.some(o => o.carryMode === "carry") ? " · หิ้ว" : ""}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Order button — แสดงเฉพาะเมื่อมีของในคลัง (qtyWH > 0) */}
+      {onOrder && (p.qtyWH > 0 || (!p.qtyWH && !p.qtyStore && totalQty > 0)) && (
         <div className="pcard-order" style={{padding:"0 12px 12px", marginTop:"auto"}}>
-          <button onClick={() => !outOfStock && onOrder(p)}
-                  disabled={outOfStock}
+          <button onClick={() => onOrder(p)}
                   style={{width:"100%", padding:"9px 12px", borderRadius:8,
-                          background: outOfStock ? "var(--g-100)" : "var(--g-700)",
-                          color: outOfStock ? "var(--muted)" : "#fff",
-                          border: outOfStock ? "1px solid var(--bdr)" : "none",
-                          fontWeight:700, fontSize:12.5,
-                          cursor: outOfStock ? "not-allowed" : "pointer",
+                          background: "var(--g-700)", color: "#fff", border: "none",
+                          fontWeight:700, fontSize:12.5, cursor:"pointer",
                           fontFamily:"inherit", display:"flex", alignItems:"center",
                           justifyContent:"center", gap:6, transition:"background .15s"}}
-                  onMouseEnter={e => { if (!outOfStock) e.currentTarget.style.background="var(--g-800)"; }}
-                  onMouseLeave={e => { if (!outOfStock) e.currentTarget.style.background="var(--g-700)"; }}>
-            {outOfStock ? "⚫ หมดสต๊อก" : "🛒 สั่งไปขาย"}
+                  onMouseEnter={e => { e.currentTarget.style.background="var(--g-800)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.background="var(--g-700)"; }}>
+            🛒 สั่งไปขาย
           </button>
         </div>
       )}
@@ -2671,10 +2811,48 @@ function StockView({ data, role }) {
   const [modalP, setModalP] = uS(null);
   const [page, setPage] = uS(0);
   const [stockSearch, setStockSearch] = uS("");
+  const [syncing, setSyncing] = uS(false);
+  const [syncMsg, setSyncMsg] = uS("");
   // Editable thresholds (persisted in memory)
   const [defaultThr, setDefaultThr] = uS(dataThresholds?.default || 36);
   const [overrides, setOverrides] = uS(dataThresholds?.overrides || { "แจกันแก้ว": 3, "เรซิ่นและอื่นๆ": 3 });
   const [supplierFilter, setSupplierFilter] = uS(null);
+
+  // ── Transfer modal state ──────────────────────────────────────────────────
+  const [xferTarget, setXferTarget] = uS(null); // { sku, name, maxQty }
+  const [xferQty, setXferQty] = uS(1);
+  const [xfering, setXfering] = uS(false);
+  const [toast, showToast, hideToast] = useToast();
+
+  const pendingShipments = uM(() =>
+    (data.shipments || []).filter(s => !s.receivedAt),
+    [data.shipments]
+  );
+
+  const handleStockTransfer = async () => {
+    if (!xferTarget || xferQty < 1) return;
+    setXfering(true);
+    try {
+      const res = await syncStockTransferBatch([{ sku: xferTarget.sku, qty: xferQty, name: xferTarget.name }]);
+      if (res && res.success === false) throw new Error(res.error || "ไม่สำเร็จ");
+      showToast("success", `โอน ${xferQty} ชิ้น "${xferTarget.name}" แล้ว`, "📦");
+      setXferTarget(null);
+      setXferQty(1);
+    } catch(e) {
+      showToast("error", "โอนไม่สำเร็จ: " + (e.message || e), "❌");
+    }
+    setXfering(false);
+  };
+
+  const handleSyncZort = async () => {
+    if (syncing) return;
+    setSyncing(true);
+    setSyncMsg("");
+    const res = await syncZortNow();
+    setSyncing(false);
+    setSyncMsg(res && res.synced ? "✅ ซิงค์สำเร็จ — รีโหลดข้อมูล" : "⚠️ ซิงค์อาจยังไม่เสร็จ ลองรีเฟรชดู");
+    setTimeout(() => setSyncMsg(""), 5000);
+  };
 
   const getThr = uC((cat) => overrides[cat] != null ? overrides[cat] : defaultThr, [overrides, defaultThr]);
 
@@ -2754,12 +2932,11 @@ function StockView({ data, role }) {
     let result = rawList;
     if (supplierFilter) result = result.filter(p => (p.lastSupplier || p.vendor) === supplierFilter);
     if (!stockSearch) return result;
-    const q = stockSearch.toLowerCase();
-    return result.filter(p =>
-      (p.sku || "").toLowerCase().includes(q) ||
-      (p.name || "").toLowerCase().includes(q) ||
-      (p.cat || "").toLowerCase().includes(q)
-    );
+    const tokens = stockSearch.toLowerCase().split(/\s+/).filter(Boolean);
+    return result.filter(p => {
+      const hay = ((p.sku||"") + " " + (p.name||"") + " " + (p.cat||"")).toLowerCase();
+      return tokens.every(t => hay.includes(t));
+    });
   }, [rawList, stockSearch, supplierFilter]);
 
   const totalPages = Math.ceil(list.length / STOCK_PAGE);
@@ -2767,6 +2944,48 @@ function StockView({ data, role }) {
 
   return (
     <div>
+      <Toast toast={toast} onClose={hideToast} />
+      {xferTarget && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <div style={{background:"#fff",borderRadius:16,padding:24,width:300,maxWidth:"90vw",boxShadow:"0 8px 32px rgba(0,0,0,0.18)"}}>
+            <div style={{fontWeight:700,fontSize:16,marginBottom:4}}>📦 สั่งโอนสินค้า</div>
+            <div style={{fontSize:13,color:"var(--muted)",marginBottom:12}}>{xferTarget.name}</div>
+            <div style={{fontSize:12,color:"var(--muted)",marginBottom:12}}>คลังมี: {xferTarget.maxQty} ชิ้น</div>
+            <input
+              type="number" min={1} max={xferTarget.maxQty} value={xferQty}
+              onChange={e => setXferQty(Math.max(1, Math.min(xferTarget.maxQty, parseInt(e.target.value)||1)))}
+              style={{width:"100%",padding:"8px 12px",borderRadius:8,border:"1.5px solid var(--g-300)",fontSize:16,fontWeight:700,textAlign:"center",fontFamily:"inherit",boxSizing:"border-box"}}
+            />
+            <div style={{display:"flex",gap:8,marginTop:12}}>
+              <button onClick={() => { setXferTarget(null); setXferQty(1); }}
+                style={{flex:1,padding:"10px 0",borderRadius:10,border:"1.5px solid var(--g-300)",background:"#fff",fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>
+                ยกเลิก
+              </button>
+              <button onClick={handleStockTransfer} disabled={xfering}
+                style={{flex:1,padding:"10px 0",borderRadius:10,border:"none",background: xfering?"#ccc":"#1b5e20",color:"#fff",fontSize:14,fontWeight:700,cursor:xfering?"wait":"pointer",fontFamily:"inherit"}}>
+                {xfering ? "กำลังโอน..." : "✅ ยืนยันโอน"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {pendingShipments.length > 0 && (
+        <div style={{background:"#fff8e1",border:"1.5px solid #f59e0b",borderRadius:10,padding:"10px 14px",marginBottom:12}}>
+          <div style={{fontWeight:700,fontSize:13,color:"#a07417",marginBottom:4}}>
+            📦 สินค้าที่โอนแล้ว รอรับ ({pendingShipments.length} รายการ)
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:2}}>
+            {pendingShipments.slice(0,5).map((s,i) => (
+              <div key={i} style={{fontSize:12,color:"#555"}}>
+                {s.sku} · {s.name || "(ไม่ระบุ)"} · {s.qty} ชิ้น
+              </div>
+            ))}
+            {pendingShipments.length > 5 && (
+              <div style={{fontSize:11,color:"#a07417"}}>+{pendingShipments.length - 5} รายการ</div>
+            )}
+          </div>
+        </div>
+      )}
       <div className="page-head">
         <div>
           <div className="page-title">สต๊อก & แจ้งเตือน</div>
@@ -2774,6 +2993,24 @@ function StockView({ data, role }) {
             สั่งซื้อสินค้าก่อนหมด · ไม่นับ MTO (งานจัดพิเศษ)
           </div>
         </div>
+        {role === "owner" && (
+          <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
+            <button
+              onClick={handleSyncZort}
+              disabled={syncing}
+              style={{
+                display:"flex",alignItems:"center",gap:6,
+                padding:"8px 14px",borderRadius:10,border:"1.5px solid var(--g-300)",
+                background: syncing ? "#f0fdf4" : "#fff",
+                color:"var(--g-700)",fontSize:13,fontWeight:600,cursor:syncing?"wait":"pointer",
+                fontFamily:"inherit",
+              }}>
+              <span style={{display:"inline-block",animation:syncing?"spin 1s linear infinite":"none"}}>🔄</span>
+              {syncing ? "กำลังซิงค์..." : "ซิงค์จาก ZORT"}
+            </button>
+            {syncMsg && <span style={{fontSize:11,color:"var(--g-600)"}}>{syncMsg}</span>}
+          </div>
+        )}
       </div>
 
       <div className="row row-5" style={{marginBottom: 20}}>
@@ -2925,6 +3162,7 @@ function StockView({ data, role }) {
               <th className="num" style={{width:90}}>ขาย/เดือน</th>
               {role === 'owner' && <th className="num" style={{width:110}}>รายได้รวม</th>}
               <th className="num" style={{width:140}}>สถานะ</th>
+              <th style={{width:52}}></th>
             </tr></thead>
             <tbody>
               {paginated.map((p, i) => {
@@ -2989,6 +3227,16 @@ function StockView({ data, role }) {
                       {filter==='drop' && <span className="chip" style={{background:"#f5e7f5",color:"#8a3a8a",borderColor:"#e6cde6"}}>ลด {p.dropPct.toFixed(0)}%</span>}
                       {filter==='slow' && <span className="chip info">{p.soldQty===0?"ไม่เคยขาย":`${(p.soldQty/p.qty*100).toFixed(1)}%`}</span>}
                       {filter==='over' && <span className="chip info">{p.monthsLeft > 99 ? ">99" : p.monthsLeft.toFixed(1)} เดือน</span>}
+                    </td>
+                    <td style={{textAlign:"center"}}>
+                      {(p.qtyWH || 0) > 0 && (
+                        <button
+                          onClick={e => { e.stopPropagation(); setXferTarget({ sku: p.sku, name: p.name, maxQty: p.qtyWH || 0 }); setXferQty(Math.min(p.qtyWH, Math.max(1, 12 - (p.qtyStore || 0)))); }}
+                          style={{padding:"4px 8px",borderRadius:6,border:"none",background:"#1b5e20",color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}
+                          title="สั่งโอนจากคลัง">
+                          📦 สั่ง
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );
@@ -5065,6 +5313,15 @@ function WarehouseMapModal({ open, onClose, highlightKey, lockData, shelves, pro
   );
 }
 
+// inject @keyframes wh-pulse ครั้งเดียวตอนโหลด module (ไม่ inject ซ้ำทุก instance)
+(function() {
+  if (document.getElementById('wh-pulse-style')) return;
+  const s = document.createElement('style');
+  s.id = 'wh-pulse-style';
+  s.textContent = '@keyframes wh-pulse{0%,100%{box-shadow:0 0 0 3px #86efac}50%{box-shadow:0 0 0 6px #4ade80}}';
+  document.head.appendChild(s);
+})();
+
 // ShelfBlock สำหรับ WarehouseMapModal — เหมือน ShelfBlock แต่ไฮไลต์ highlightKey ด้วยสีเขียวสด
 function ShelfBlockHighlight({ side, shelf, locks, lockData, highlightKey, isRight }) {
   const cols = 5, rows = 3;
@@ -5105,7 +5362,6 @@ function ShelfBlockHighlight({ side, shelf, locks, lockData, highlightKey, isRig
     <div className="shelf-block">
       <div className="shelf-label">{side}{shelf}</div>
       <div className="lock-grid">{cells}</div>
-      <style>{`@keyframes wh-pulse{0%,100%{box-shadow:0 0 0 3px #86efac}50%{box-shadow:0 0 0 6px #4ade80}}`}</style>
     </div>
   );
 }
@@ -5157,11 +5413,11 @@ function QRScanModal({ onDetected, onClose }) {
       setErr("ไม่สามารถโหลด library scanner ได้\nกรุณาตรวจสอบ internet แล้วโหลดหน้านี้ใหม่");
       return;
     }
-    let h5q;
+    let scannerInstance = null; // track instance ระหว่าง async gap ก่อน ref พร้อม
     let cancelled = false;
     const start = async () => {
       try {
-        h5q = new window.Html5Qrcode(containerId, {
+        const h5q = new window.Html5Qrcode(containerId, {
           formatsToSupport: [
             window.Html5QrcodeSupportedFormats.QR_CODE,
             window.Html5QrcodeSupportedFormats.CODE_128,
@@ -5175,6 +5431,12 @@ function QRScanModal({ onDetected, onClose }) {
             window.Html5QrcodeSupportedFormats.ITF,
           ],
         });
+        scannerInstance = h5q; // เก็บก่อน await เพื่อให้ cleanup ใช้ได้ถ้า unmount ระหว่าง start()
+        if (cancelled) {
+          // unmount เกิดขึ้นก่อน start() เสร็จ — cleanup ทันที
+          try { await h5q.stop(); } catch(e) {}
+          return;
+        }
         scannerRef.current = h5q;
         await h5q.start(
           { facingMode: "environment" },
@@ -5211,7 +5473,9 @@ function QRScanModal({ onDetected, onClose }) {
     start();
     return () => {
       cancelled = true;
-      const s = scannerRef.current;
+      // ใช้ ref หรือ local instance (กรณี unmount ระหว่าง async gap)
+      const s = scannerRef.current || scannerInstance;
+      scannerRef.current = null;
       if (s) s.stop().then(() => s.clear()).catch(() => {});
     };
   }, []);
@@ -5925,7 +6189,6 @@ async function confirmStockCount(entries) {
       body: JSON.stringify({
         confirmStockCount: true,
         datetime: new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }),
-        clientLoadedAt: window._dataLoadedAt || 0, // สำหรับ conflict detection
         actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
         entries,
       }),
@@ -6333,14 +6596,36 @@ function StockCountView({ data }) {
     setCalcPad({ sku, name, expr: init, result: null, justOp: false });
   };
 
-  // Safe expression evaluator — supports + - * /
+  // Safe expression evaluator — recursive descent parser (ไม่ใช้ eval/Function)
   const evalExpr = (expr) => {
+    const tokens = expr.replace(/\s+/g,'').match(/(\d+\.?\d*|[+\-*/()])/g) || [];
+    let pos = 0;
+    function parseExpr2() {
+      let val = parseTerm2();
+      while (pos < tokens.length && (tokens[pos] === '+' || tokens[pos] === '-')) {
+        const op = tokens[pos++];
+        val = op === '+' ? val + parseTerm2() : val - parseTerm2();
+      }
+      return val;
+    }
+    function parseTerm2() {
+      let val = parseFactor2();
+      while (pos < tokens.length && (tokens[pos] === '*' || tokens[pos] === '/')) {
+        const op = tokens[pos++];
+        const next = parseFactor2();
+        val = op === '*' ? val * next : val / next;
+      }
+      return val;
+    }
+    function parseFactor2() {
+      if (tokens[pos] === '(') { pos++; const val = parseExpr2(); pos++; return val; }
+      if (tokens[pos] === '-') { pos++; return -parseFactor2(); }
+      return parseFloat(tokens[pos++]);
+    }
     try {
-      const clean = expr.replace(/[^0-9+\-*/.()]/g,'');
-      if (!clean) return null;
-      // eslint-disable-next-line no-new-func
-      const v = Function('return (' + clean + ')')();
-      if (!isFinite(v)) return null;
+      if (!tokens.length) return null;
+      const v = parseExpr2();
+      if (!isFinite(v) || isNaN(v)) return null;
       return Math.max(0, Math.round(v * 100) / 100);
     } catch(e) { return null; }
   };
@@ -6468,7 +6753,11 @@ function StockCountView({ data }) {
       setLastSavedSnap(snap); // กัน auto-save วนซ้ำ
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 3000);
-      showToast('success', 'บันทึก ' + entries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
+      if (result.warning) {
+        showToast('warn', result.warning, '⚠️');
+      } else {
+        showToast('success', 'บันทึก ' + entries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
+      }
     } else {
       setSaveStatus("error");
       if (!isAuto) showToast('error', 'บันทึกไม่สำเร็จ', '❌');
@@ -6509,7 +6798,11 @@ function StockCountView({ data }) {
       setLastSavedSnap(snap); // กัน auto-save commit ซ้ำหลังกดยืนยันเอง
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 3000);
-      showToast('success', 'ยืนยันผลนับแล้ว ' + entries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
+      if (result.warning) {
+        showToast('warn', result.warning, '⚠️');
+      } else {
+        showToast('success', 'ยืนยันผลนับแล้ว ' + entries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
+      }
     } else {
       setSaveStatus("error");
       showToast('error', 'ยืนยันไม่สำเร็จ', '❌');
@@ -7626,7 +7919,13 @@ function reconcileOrderState(order, localEntry, nowMs) {
 
   // กรณี row reuse: local มี sig แต่ไม่ตรงกับ order ปัจจุบัน → state นี้เป็นของ order อื่น
   // (แถวถูก reuse) → ทิ้งทั้งหมด ไม่ให้เลอะข้าม order
-  if (local.sig && local.sig !== sig) return {};
+  // ยกเว้น: เพิ่งกด Done ภายใน 6 ชม. + order นี้ตรง SKU เดิม → น่าจะ GAS คืน date ผิด format ไม่ใช่ row reuse
+  if (local.sig && local.sig !== sig) {
+    const markedMs2 = local.markedAt ? new Date(local.markedAt).getTime() : NaN;
+    const isRecentDone = !isNaN(markedMs2) && (now - markedMs2) < SIX_H && DONE_ST.has(local.status);
+    const sameSku = local.sig.split('|')[0] === sig.split('|')[0];
+    if (!(isRecentDone && sameSku)) return {};
+  }
 
   // local terminal status (สำเร็จ/ส่งแล้ว ฯลฯ) ทับ sheet ที่บอกว่ายังรอ
   const localTerminal = DONE_ST.has(local.status);
@@ -7641,12 +7940,23 @@ function reconcileOrderState(order, localEntry, nowMs) {
       return rest;
     }
   }
-  // กรณีปกติ (sig ตรง และ status สอดคล้อง) → apply local ตามเดิม
+  // sheet มี status จริงแล้ว (non-pending) → sheet เป็น authoritative สำหรับ status
+  // local "ส่งแล้ว" หรือ status อื่นใดที่ไม่ใช่ sheet → ไม่ override
+  // ให้ apply เฉพาะ UI fields (carryMode, printFlag, preparedQty, sig ฯลฯ)
+  if (!sheetPending) {
+    const { status: _s, ...rest } = local;
+    return rest;
+  }
+  // กรณีปกติ: sheet pending, local มี status pending/ไม่มี status → apply ตามเดิม
   return local;
 }
 
 function patchOrderState(id, updates, sig) {
-  const s = getOrdersState(); s[id] = { ...(s[id]||{}), ...updates };
+  const s = getOrdersState();
+  const existing = s[id] || {};
+  // ถ้า sig ต่างจาก existing → row ถูก reuse (order อื่น) → ไม่เอา stale state มาเมิร์จ
+  const stale = sig != null && existing.sig && existing.sig !== sig;
+  s[id] = stale ? { ...updates } : { ...existing, ...updates };
   // แนบ sig (content signature) ลงไปเสมอ เพื่อกัน row-reuse เลอะข้าม order
   if (sig != null) s[id].sig = sig;
   // record when status was changed so we can detect ID collisions with new orders
@@ -7675,7 +7985,7 @@ function cleanupOrdersState(orders) {
 async function syncOrderUpdate(order, updates) {
   if (!SHEET_DEPLOY_URL) return;
   try {
-    await fetch(SHEET_DEPLOY_URL, {
+    const res = await fetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
@@ -7683,12 +7993,17 @@ async function syncOrderUpdate(order, updates) {
         orderId: order.id,
         sku:         order.sku,
         date:        order.date,
+        name:        updates.name,
+        image:       updates.image,
         status:      updates.status,
         preparedQty: updates.preparedQty,
         printFlag:   updates.printFlag,
         carryMode:   updates.carryMode,
       }),
     });
+    const d = await res.json().catch(() => ({})); // M4: อ่าน response จริง
+    if (d && d.ok === false) console.warn("[DMJ] syncOrderUpdate GAS error:", d.error, d);
+    return d;
   } catch(e) { console.warn("syncOrderUpdate failed:", e.message); }
 }
 
@@ -7718,6 +8033,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
   const [zeroConfirm, setZeroConfirm] = uS(false);
   const [zeroed, setZeroed] = uS(false);
   const [zeroing, setZeroing] = uS(false);
+  const [completing, setCompleting] = uS(false); // C2: กัน double-tap Done
   const [toast, showToast, hideToast] = useToast();
   uE(() => {
     setPrepQty(prev => prev === 0 ? (order.orderQty || 0) : prev);
@@ -7733,15 +8049,29 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
     onPatch(order.id, {printFlag: f});
     syncOrderUpdate(order, {printFlag: f});
   };
-  const setCarryMode = m => onPatch(order.id, {carryMode: m});
-  const markComplete = () => {
+  const setCarryMode = m => {
+    onPatch(order.id, {carryMode: m});
+    syncOrderUpdate(order, {carryMode: m, name: order.name, image: order.image});
+  };
+  const markComplete = async () => {
+    if (completing) return; // C2: กัน double-tap
     if (!order.printFlag) {
       showToast("warn", "เลือก PRINT หรือ SKIP ก่อน", "🖨️");
       return;
     }
-    onPatch(order.id, { status: "สำเร็จ" });
-    syncOrderUpdate(order, { status: "สำเร็จ" });
-    showToast("success", "บันทึกแล้ว", "✅", 2500);
+    const prevStatus = order.status || null;
+    setCompleting(true);
+    onPatch(order.id, { status: "สำเร็จ" }); // optimistic
+    try {
+      const d = await syncOrderUpdate(order, { status: "สำเร็จ" });
+      if (d && d.ok === false) throw new Error(d.error || "GAS ตอบกลับ error");
+      showToast("success", "บันทึกแล้ว", "✅", 2500);
+    } catch(e) {
+      onPatch(order.id, { status: prevStatus }); // revert
+      showToast("warn", "บันทึกไม่สำเร็จ กรุณาลองใหม่", "⚠️", 4000);
+    } finally {
+      setCompleting(false);
+    }
   };
 
   const doZeroStock = async () => {
@@ -7810,6 +8140,12 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
                 background:isPending?"#fff8e1":"#e8f5e9",color:isPending?"#a07417":"#1f7f44",
                 letterSpacing:.3,
               }}>{isPending?"🟡 รอ":"✅ Done"}</span>
+              {isPending && order.preparedQty > 0 && (
+                <span style={{
+                  fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:20,
+                  background:"#eff6ff",color:"#1d4ed8",
+                }}>📦 WH จัดแล้ว {order.preparedQty} ชิ้น</span>
+              )}
             </div>
             <div style={{fontSize:14,fontWeight:600,lineHeight:1.3,marginBottom:2,
               overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
@@ -7941,12 +8277,12 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
 
             {/* Done */}
             {isPending && role !== "frontstore" && role !== "saler" && (
-              <button onClick={markComplete} style={{
+              <button onClick={markComplete} disabled={completing || !pf} style={{
                 padding:"10px 16px",borderRadius:10,border:"none",
-                background:pf?"#1b5e20":"#d1d5db",color:"#fff",
-                cursor:pf?"pointer":"not-allowed",fontSize:14,fontWeight:800,
+                background:(pf&&!completing)?"#1b5e20":"#d1d5db",color:"#fff",
+                cursor:(pf&&!completing)?"pointer":"not-allowed",fontSize:14,fontWeight:800,
                 display:"flex",flexDirection:"column",alignItems:"center",gap:1,
-                minWidth:52,
+                minWidth:52, opacity: completing ? 0.6 : 1,
               }}>
                 <span style={{fontSize:18}}>✅</span>
                 <span style={{fontSize:10,letterSpacing:.3}}>Done</span>
@@ -8027,10 +8363,10 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
       <ConfirmModal
         open={zeroConfirm}
         type="warn"
-        emoji="❌"
-        title="ไม่ได้จัดสินค้า?"
-        detail={`${order.name} (${order.sku})\n\nจะปรับสต็อก WH ใน ZORT เป็น 0\nและลบรายการนี้ออกจากรายการสั่ง\n\n⚠️ ทำแล้วย้อนกลับไม่ได้`}
-        confirmLabel="ยืนยัน ไม่ได้จัด"
+        emoji="📦"
+        title="ของหมดจริงๆ ใช่ไหม?"
+        detail={`${order.name}\n(${order.sku})\n\nกดยืนยันจะปรับสต็อกคลังใน ZORT เป็น 0\nและลบรายการนี้ออกจากรายการสั่ง\n\n⚠️ ทำแล้วย้อนกลับไม่ได้`}
+        confirmLabel="✅ ใช่ ของหมดจริง"
         onConfirm={doZeroStock}
         onCancel={() => setZeroConfirm(false)}
       />
@@ -8332,16 +8668,22 @@ function OrderListView({ data, role }) {
   }, [data.storage]);
 
   const enriched = uM(() => {
-    return orders.map((o, i) => {
+    const result = orders.map((o, i) => {
       const id = stableOrderId(o, i);
-      // reconcileOrderState ตัดสินใจว่าจะ apply localStorage state นี้หรือไม่
-      // (กัน row-reuse เลอะข้าม order + auto-heal state ค้างเดิมที่ไม่มี sig)
       const applied = reconcileOrderState(o, st[id]);
       return { ...o, id, ...applied };
     });
+    const carryCount = result.filter(r => r.carryMode === "carry").length;
+    console.log("[DMJ] orders:", result.length, "carry:", carryCount, "truck:", result.length - carryCount,
+      "| carryModes:", result.slice(0,5).map(r => r.sku + "=" + r.carryMode).join(", "));
+    return result;
   }, [orders, st]);
 
   const sorted = uM(() => [...enriched].sort((a,b) => {
+    // carry ก่อน truck เสมอ (ลำดับแรก)
+    const aC = a.carryMode === "carry", bC = b.carryMode === "carry";
+    if (aC !== bC) return aC ? -1 : 1;
+    // ภายใน carryMode เดียวกัน: pending ก่อน done
     const aP = !a.status||a.status==="รอ"||a.status==="pending";
     const bP = !b.status||b.status==="รอ"||b.status==="pending";
     return (aP&&!bP)?-1:(!aP&&bP)?1:0;
@@ -8402,9 +8744,31 @@ function OrderListView({ data, role }) {
         <div style={{padding:"40px 20px"}}>
           <Empty title="ไม่มีรายการใน filter นี้" sub="ลองเลือก filter อื่น"/>
         </div>
-      ) : (
-        filtered.map(order => <OrderItemRow key={order.id} order={order} onPatch={patch} productMap={productMap} role={role} skuLocks={skuLocks} storageData={data.storage}/>)
-      )}
+      ) : (() => {
+        const carryItems = filtered.filter(o => o.carryMode === "carry");
+        const truckItems = filtered.filter(o => o.carryMode !== "carry");
+        const showHeaders = carryItems.length > 0 && truckItems.length > 0;
+        const sectionHeader = (emoji, label, count, isCarry) => (
+          <div style={{
+            display:"flex",alignItems:"center",gap:8,
+            padding:"7px 14px",borderRadius:10,marginBottom:8,marginTop:4,
+            background: isCarry ? "#f0fdf4" : "#eff6ff",
+            border:`1.5px solid ${isCarry?"#bbf7d0":"#bfdbfe"}`,
+          }}>
+            <span style={{fontSize:16}}>{emoji}</span>
+            <span style={{fontWeight:700,fontSize:13,color:isCarry?"var(--g-700)":"#1d4ed8"}}>{label}</span>
+            <span style={{fontSize:11,color:"var(--muted)"}}>{count} รายการ</span>
+          </div>
+        );
+        return (
+          <div>
+            {showHeaders && sectionHeader("🚶","หิ้วเอง", carryItems.length, true)}
+            {carryItems.map(order => <OrderItemRow key={order.id} order={order} onPatch={patch} productMap={productMap} role={role} skuLocks={skuLocks} storageData={data.storage}/>)}
+            {showHeaders && sectionHeader("🚛","ขึ้นรถ", truckItems.length, false)}
+            {truckItems.map(order => <OrderItemRow key={order.id} order={order} onPatch={patch} productMap={productMap} role={role} skuLocks={skuLocks} storageData={data.storage}/>)}
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -8432,7 +8796,7 @@ async function syncStockTransferBatch(items) {
     const res = await fetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ transferStockBatch: true, list: items, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน" }),
+      body: JSON.stringify({ transferStockBatch: true, list: items, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน", clientLoadedAt: window._dataLoadedAt || 0 }),
     });
     const json = await res.json().catch(() => ({}));
     console.log("syncStockTransferBatch result:", json);
@@ -8696,6 +9060,9 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const isOnline = useOnlineStatus(); // ตรวจสอบการเชื่อมต่อก่อนส่งสถานะ
   // warehouse map modal state — shared สำหรับ card ทุกใบในหน้านี้
   const [mapModal, setMapModal] = uS(null); // { lockKey, productName, sku } | null
+  // multi-select print
+  const [printSelectMode, setPrintSelectMode] = uS(false);
+  const [selectedForPrint, setSelectedForPrint] = uS(new Set());
 
   const productMap = uM(() => {
     const m = {};
@@ -8766,6 +9133,31 @@ function OrderSummaryView({ data, onPrintRequest }) {
     const p2 = { ...printed, [order.id]: true };
     setPrinted(p2);
     localStorage.setItem(LS_PRINTED_ORDERS, JSON.stringify(p2));
+    syncOrderUpdate(order, { printFlag: "printed" });
+  };
+
+  const togglePrintSelect = (orderId) => {
+    setSelectedForPrint(prev => {
+      const next = new Set(prev);
+      if (next.has(orderId)) next.delete(orderId); else next.add(orderId);
+      return next;
+    });
+  };
+
+  const handlePrintSelected = () => {
+    const allOrders = [...carryOrders, ...truckOrders];
+    const items = allOrders
+      .filter(o => selectedForPrint.has(o.id))
+      .map(o => ({ sku: o.sku, qty: o.preparedQty || o.orderQty || 1 }));
+    if (!items.length) return;
+    onPrintRequest(items);
+    const p2 = { ...printed };
+    selectedForPrint.forEach(id => { p2[id] = true; });
+    setPrinted(p2);
+    localStorage.setItem(LS_PRINTED_ORDERS, JSON.stringify(p2));
+    allOrders.filter(o => selectedForPrint.has(o.id)).forEach(o => syncOrderUpdate(o, { printFlag: "printed" }));
+    setSelectedForPrint(new Set());
+    setPrintSelectMode(false);
   };
 
   const handleShip = (order) => setShipConfirm(order);
@@ -8839,14 +9231,16 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
   // ship all ready (not missed, not already shipped) in a group
   const handleShipAll = (orders) => {
+    if (!isOnline) { showToast("warn", "ไม่มีอินเทอร์เน็ต กรุณาลองใหม่", "⚠️"); return; } // M5
     const ready = orders.filter(o => !shipped[o.id] && !missed[o.id]);
     if (!ready.length) return;
     setShipAllConfirm(ready);
   };
   const doShipAll = async () => {
+    setSending("__shipAll__"); // C1: lock ปุ่มทันทีก่อนเริ่ม
     const ready = shipAllConfirm;
     setShipAllConfirm(null);
-    if (!ready || !ready.length) return;
+    if (!ready || !ready.length) { setSending(null); return; }
     const nextShipped = { ...shipped };
     let nextSt = getOrdersState();
 
@@ -8933,6 +9327,8 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const renderSection = (label, emoji, orders, isTruck) => {
     if (!orders.length) return null;
     const readyCount = orders.filter(o => !shipped[o.id] && !missed[o.id]).length;
+    // printable = มี printFlag=print และยังไม่ได้ print
+    const printableOrders = orders.filter(o => o.printFlag === "print" && !printed[o.id] && !shipped[o.id]);
     // sort: not-shipped-not-missed first, missed to end, shipped to very end
     const sorted = [...orders].sort((a,b) => {
       const aS = shipped[a.id] ? 2 : missed[a.id] ? 1 : 0;
@@ -8957,15 +9353,32 @@ function OrderSummaryView({ data, onPrintRequest }) {
               {readyCount > 0 ? `${readyCount} รายการรอส่ง` : "ส่งหมดแล้ว"}
             </span>
           </div>
-          {readyCount > 0 && (
-            <button onClick={() => handleShipAll(orders)} style={{
-              padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",
-              background: isTruck?"#1d4ed8":"var(--g-700)",color:"#fff",
-              fontSize:12,fontWeight:700,fontFamily:"inherit",
-            }}>
-              ✅ ส่งทั้งหมด ({readyCount})
-            </button>
-          )}
+          <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+            {printableOrders.length > 1 && (
+              <button onClick={() => {
+                setPrintSelectMode(v => !v);
+                setSelectedForPrint(new Set());
+              }} style={{
+                padding:"5px 11px",borderRadius:8,border:"1.5px solid #9ca3af",
+                cursor:"pointer",background: printSelectMode?"#374151":"#fff",
+                color: printSelectMode?"#fff":"#374151",
+                fontSize:11,fontWeight:700,fontFamily:"inherit",
+              }}>
+                {printSelectMode ? "✕ ยกเลิก" : "☑ เลือกปริ้น"}
+              </button>
+            )}
+            {readyCount > 0 && (
+              <button onClick={() => handleShipAll(orders)} disabled={!isOnline || !!sending} style={{
+                padding:"6px 14px",borderRadius:8,border:"none",
+                cursor:(!isOnline||!!sending)?"not-allowed":"pointer",
+                background: (!isOnline||!!sending)?"var(--g-300)":(isTruck?"#1d4ed8":"var(--g-700)"),color:"#fff",
+                fontSize:12,fontWeight:700,fontFamily:"inherit",
+                opacity:(!isOnline||!!sending)?0.6:1,
+              }}>
+                ✅ ส่งทั้งหมด ({readyCount})
+              </button>
+            )}
+          </div>
         </div>
 
         <div style={{
@@ -8977,28 +9390,38 @@ function OrderSummaryView({ data, onPrintRequest }) {
             const isShipped = !!shipped[order.id];
             const isMissed  = !!missed[order.id];
             const isSending = sending === order.id;
-            const alreadyPrinted = printed[order.id];
+            const alreadyPrinted = printed[order.id] || order.printFlag === "printed";
             const prepQty = order.preparedQty || order.orderQty || 0;
+            const isPrintable = order.printFlag === "print" && !alreadyPrinted && !isShipped;
+            const isSelected = selectedForPrint.has(order.id);
 
             return (
-              <div key={order.id} style={{
+              <div key={order.id}
+                onClick={printSelectMode && isPrintable ? () => togglePrintSelect(order.id) : undefined}
+                style={{
                 background: isShipped ? "#f0fdf4" : isMissed ? "#fef2f2" : "#fff",
                 borderRadius:12, padding:12,
-                border:`1.5px solid ${isShipped?"#4fb472":isMissed?"#fca5a5":"var(--bdr)"}`,
+                border:`1.5px solid ${
+                  printSelectMode && isPrintable && isSelected ? "#c62828" :
+                  printSelectMode && isPrintable ? "#9ca3af" :
+                  isShipped?"#4fb472":isMissed?"#fca5a5":"var(--bdr)"
+                }`,
                 display:"flex",flexDirection:"column",gap:8,
                 opacity: isShipped ? 0.7 : 1,
                 transition:"all .2s",
+                cursor: printSelectMode && isPrintable ? "pointer" : "default",
+                outline: printSelectMode && isPrintable && isSelected ? "2px solid #c62828" : "none",
               }}>
                 {/* Image */}
                 <div style={{position:"relative"}}>
                   {order.image ? (
                     <img src={order.image} alt=""
-                      onClick={() => setBigImg(order)}
+                      onClick={e => { if (!printSelectMode) { e.stopPropagation(); setBigImg(order); } }}
                       style={{width:"100%",height:88,objectFit:"contain",
                               borderRadius:8,cursor:"pointer",display:"block",
                               background:"var(--g-50)"}}/>
                   ) : (
-                    <div onClick={() => setBigImg(order)}
+                    <div onClick={e => { if (!printSelectMode) { e.stopPropagation(); setBigImg(order); } }}
                       style={{width:"100%",height:88,background:"var(--g-50)",borderRadius:8,
                               display:"flex",alignItems:"center",justifyContent:"center",
                               color:"var(--muted)",cursor:"pointer"}}>{I.package}</div>
@@ -9013,6 +9436,18 @@ function OrderSummaryView({ data, onPrintRequest }) {
                     <div style={{position:"absolute",top:4,right:4,
                       background:"#ef4444",color:"#fff",borderRadius:20,
                       fontSize:9,fontWeight:700,padding:"2px 6px"}}>🚫 ไม่ขึ้น</div>
+                  )}
+                  {/* Print select checkbox overlay */}
+                  {printSelectMode && isPrintable && (
+                    <div style={{
+                      position:"absolute",top:4,left:4,
+                      width:22,height:22,borderRadius:6,
+                      background: isSelected ? "#c62828" : "rgba(255,255,255,0.9)",
+                      border:`2px solid ${isSelected?"#c62828":"#9ca3af"}`,
+                      display:"flex",alignItems:"center",justifyContent:"center",
+                      fontSize:13,color:"#fff",fontWeight:700,
+                      boxShadow:"0 1px 3px rgba(0,0,0,.2)",
+                    }}>{isSelected ? "✓" : ""}</div>
                   )}
                 </div>
 
@@ -9056,13 +9491,20 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
                 {/* Action buttons */}
                 {!isShipped && (
-                  <div style={{display:"flex",flexDirection:"column",gap:6,marginTop:2}}>
+                  <div onClick={e => e.stopPropagation()} style={{display:"flex",flexDirection:"column",gap:6,marginTop:2}}>
                     {/* Print Label */}
-                    {order.printFlag==="print" && !alreadyPrinted && (
+                    {order.printFlag==="print" && !alreadyPrinted && !printSelectMode && (
                       <button onClick={() => handlePrint(order)} style={{
                         padding:"6px",borderRadius:7,border:"none",cursor:"pointer",
                         background:"var(--g-700)",color:"#fff",fontSize:11,fontWeight:700,fontFamily:"inherit",
                       }}>🖨️ Print Label</button>
+                    )}
+                    {printSelectMode && isPrintable && (
+                      <div style={{
+                        textAlign:"center",fontSize:10,fontWeight:700,
+                        color: isSelected ? "#c62828" : "#9ca3af",
+                        padding:"4px 0",
+                      }}>{isSelected ? "✓ เลือกแล้ว" : "แตะเพื่อเลือก"}</div>
                     )}
                     {alreadyPrinted && (
                       <div style={{textAlign:"center",fontSize:10,color:"var(--g-700)",fontWeight:700}}>✓ Printed</div>
@@ -9121,7 +9563,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
   };
 
   return (
-    <div>
+    <div style={printSelectMode ? {paddingBottom:76} : {}}>
       <div className="page-head no-print">
         <div>
           <div className="page-title">สรุปสินค้าออกจากคลัง</div>
@@ -9139,6 +9581,38 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
       {renderSection("หิ้วเอง", "🚶", carryOrders, false)}
       {renderSection("ขึ้นรถ",  "🚛", truckOrders, true)}
+
+      {/* Sticky print bar */}
+      {printSelectMode && (
+        <div style={{
+          position:"fixed",bottom:0,left:0,right:0,zIndex:200,
+          padding:"12px 16px",
+          background:"#fff",
+          borderTop:"2px solid #c62828",
+          display:"flex",gap:10,alignItems:"center",
+          boxShadow:"0 -4px 16px rgba(0,0,0,.12)",
+        }}>
+          <div style={{flex:1,fontSize:13,fontWeight:600,color:"#374151"}}>
+            {selectedForPrint.size > 0
+              ? `เลือก ${selectedForPrint.size} รายการ`
+              : "แตะ card เพื่อเลือก"}
+          </div>
+          <button onClick={() => { setPrintSelectMode(false); setSelectedForPrint(new Set()); }}
+            style={{
+              padding:"9px 14px",borderRadius:8,border:"1.5px solid #d1d5db",
+              background:"#fff",color:"#374151",fontSize:12,fontWeight:700,
+              cursor:"pointer",fontFamily:"inherit",
+            }}>ยกเลิก</button>
+          <button onClick={handlePrintSelected} disabled={selectedForPrint.size === 0}
+            style={{
+              padding:"9px 18px",borderRadius:8,border:"none",
+              background: selectedForPrint.size === 0 ? "#d1d5db" : "#c62828",
+              color:"#fff",fontSize:12,fontWeight:700,
+              cursor: selectedForPrint.size === 0 ? "not-allowed" : "pointer",
+              fontFamily:"inherit",
+            }}>🖨️ Print {selectedForPrint.size > 0 ? `${selectedForPrint.size} รายการ` : ""}</button>
+        </div>
+      )}
 
       {/* Expanded image modal */}
       {bigImg && (
@@ -9187,6 +9661,22 @@ function OrderSummaryView({ data, onPrintRequest }) {
         onConfirm={() => {
           localStorage.removeItem(LS_SHIPPED_ORDERS);
           localStorage.removeItem(LS_MISSED_TRUCK);
+          // ล้าง "ส่งแล้ว" status ออกจาก dmj_orders_state_v1 ด้วย (กันรายการค้าง)
+          try {
+            const s = getOrdersState();
+            let changed = false;
+            Object.keys(s).forEach(id => {
+              if (s[id] && s[id].status === "ส่งแล้ว") {
+                const { status: _s, markedAt: _m, ...rest } = s[id];
+                s[id] = rest;
+                changed = true;
+              }
+            });
+            if (changed) {
+              localStorage.setItem(LS_ORDERS_STATE, JSON.stringify(s));
+              setSt(s);
+            }
+          } catch(e) {}
           const cleared = {};
           setShipped(cleared);
           setMissed(cleared);
@@ -9672,13 +10162,36 @@ function CalcPadModal({ open, name, initialVal, onConfirm, onClose }) {
 
   if (!open) return null;
 
+  // Safe expression evaluator — recursive descent parser (ไม่ใช้ eval/Function)
   const evalExpr = (e) => {
+    const tokens = e.replace(/\s+/g,'').match(/(\d+\.?\d*|[+\-*/()])/g) || [];
+    let pos = 0;
+    function parseExprC() {
+      let val = parseTermC();
+      while (pos < tokens.length && (tokens[pos] === '+' || tokens[pos] === '-')) {
+        const op = tokens[pos++];
+        val = op === '+' ? val + parseTermC() : val - parseTermC();
+      }
+      return val;
+    }
+    function parseTermC() {
+      let val = parseFactorC();
+      while (pos < tokens.length && (tokens[pos] === '*' || tokens[pos] === '/')) {
+        const op = tokens[pos++];
+        const next = parseFactorC();
+        val = op === '*' ? val * next : val / next;
+      }
+      return val;
+    }
+    function parseFactorC() {
+      if (tokens[pos] === '(') { pos++; const val = parseExprC(); pos++; return val; }
+      if (tokens[pos] === '-') { pos++; return -parseFactorC(); }
+      return parseFloat(tokens[pos++]);
+    }
     try {
-      const clean = e.replace(/[^0-9+\-*/.()]/g,'');
-      if (!clean) return null;
-      // eslint-disable-next-line no-new-func
-      const v = Function('return (' + clean + ')')();
-      if (!isFinite(v)) return null;
+      if (!tokens.length) return null;
+      const v = parseExprC();
+      if (!isFinite(v) || isNaN(v)) return null;
       return Math.max(0, Math.round(v * 100) / 100);
     } catch(_) { return null; }
   };
@@ -9930,7 +10443,7 @@ function MtoJobView({ data }) {
           jobName: activeJob.name || activeJob.jobId,
           items: materials,
           closedAt: closed,
-          clientLoadedAt: window._dataLoadedAt || 0, // สำหรับ conflict detection
+          clientLoadedAt: window._dataLoadedAt || 0,
           actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
         }),
       });

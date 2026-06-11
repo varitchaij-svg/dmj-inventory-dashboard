@@ -108,8 +108,11 @@ function FrontStoreView({ data, role }) {
     if (activeCat !== "ALL") f = f.filter(p => p.cat === activeCat);
     if (supplierFilter) f = f.filter(p => (p.lastSupplier || p.vendor || "").toLowerCase() === supplierFilter.toLowerCase());
     if (search) {
-      const q = search.trim().toLowerCase();
-      f = f.filter(p => (p.sku||"").toLowerCase().includes(q) || (p.name||"").toLowerCase().includes(q));
+      const tokens = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      f = f.filter(p => {
+        const hay = ((p.sku||"") + " " + (p.name||"")).toLowerCase();
+        return tokens.every(t => hay.includes(t));
+      });
     }
     return [...f].sort(compareSku);
   }, [products, activeCat, supplierFilter, search]);
@@ -215,11 +218,13 @@ function FrontStoreView({ data, role }) {
     if (!transferTarget || transferQty < 1) return;
     setTransferring(true);
     try {
-      await syncStockTransferBatch([{ sku: transferTarget.sku, qty: transferQty, name: transferTarget.name }]);
+      const res = await syncStockTransferBatch([{ sku: transferTarget.sku, qty: transferQty, name: transferTarget.name }]);
+      if (res && res.success === false) throw new Error(res.error || "ไม่สำเร็จ");
+      showToast("success", `โอน ${transferQty} ชิ้น "${transferTarget.name}" แล้ว`, "📦");
       setTransferTarget(null);
       setTransferQty(1);
     } catch(e) {
-      alert("โอนไม่สำเร็จ: " + (e.message || e));
+      showToast("error", "โอนไม่สำเร็จ: " + (e.message || e), "❌");
     }
     setTransferring(false);
   }
@@ -375,7 +380,7 @@ function FrontStoreView({ data, role }) {
                 const cur = checkedQtys[sku];
                 setFsCalcPad({ sku, name, val: (cur != null && cur !== '') ? String(cur) : '' });
               }}
-              onOrder={showMode === "reorder" ? () => {
+              onOrder={(p.qtyWH || 0) > 0 ? () => {
                 setTransferTarget({ sku: p.sku, name: p.name, maxQty: p.qtyWH || 0 });
                 setTransferQty(Math.min(p.qtyWH || 0, Math.max(1, 12 - (p.qtyStore || 0))));
               } : undefined}/>
@@ -3073,7 +3078,7 @@ async function syncStockTransferBatch(items) {
     const res = await fetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ transferStockBatch: true, list: items, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน" }),
+      body: JSON.stringify({ transferStockBatch: true, list: items, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน", clientLoadedAt: window._dataLoadedAt || 0 }),
     });
     const json = await res.json().catch(() => ({}));
     console.log("syncStockTransferBatch result:", json);

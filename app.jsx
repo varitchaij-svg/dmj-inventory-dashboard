@@ -61,26 +61,24 @@ function LoginScreen({ onLogin }) {
     if (base) {
       setChecking(true); setErr(false);
       try {
-        const sep = base.includes('?') ? '&' : '?';
-        const res = await fetch(`${base}${sep}action=verifyPin&pin=${encodeURIComponent(pin)}`, { cache: 'no-store' });
+        // ส่ง PIN ผ่าน POST body เพื่อไม่ให้ PIN ปรากฏใน URL / server access log
+        // หมายเหตุ: GAS ต้องจัดการ action=verifyPin ใน doPost ด้วย (ปัจจุบันอาจอยู่ใน doGet)
+        const res = await fetch(base, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'verifyPin', pin }),
+        });
         const d = await res.json();
         setChecking(false);
-        // ถ้า GAS ยังไม่ได้ redeploy (ไม่มี field ok) → fallback ตรวจรหัสเดิมฝั่ง client
-        if (!d || typeof d.ok !== 'boolean') {
-          if (pin.toUpperCase() === "DMJ") { onLogin(pinTarget.role); return; }
-          setErr(true); setPin(""); return;
-        }
+        if (!d || typeof d.ok !== 'boolean') { setErr(true); setPin(""); return; }
         if (d.ok) { onLogin(pinTarget.role); return; }
         setErr(true); setPin(""); return;
       } catch (e) {
         setChecking(false);
-        // ออฟไลน์/เซิร์ฟเวอร์ล่ม → fallback ใช้รหัสเดิมเพื่อไม่ให้เจ้าของเข้าไม่ได้
-        if (pin.toUpperCase() === "DMJ") { onLogin(pinTarget.role); return; }
         setErr(true); setPin(""); return;
       }
     }
-    if (pin.toUpperCase() === "DMJ") { onLogin(pinTarget.role); }
-    else { setErr(true); setPin(""); }
+    setErr(true); setPin("");
   };
 
   return (
@@ -350,9 +348,19 @@ function App() {
       .then(r => r.json())
       .then(d => {
         if (d && d.lastModified) window._dataLoadedAt = d.lastModified;
-        const enriched = enrichData(d);
-        setData(enriched);
-        saveToStorage(enriched, "sheet");
+        // แสดง raw data ทันทีเพื่อไม่ให้ UI รอ enrichData (ซึ่งอาจใช้เวลาบน mobile)
+        // แล้วค่อย enrich ใน next tick — ลด jank สำหรับสินค้า 1000+ รายการ
+        setData(d);
+        setTimeout(() => {
+          if (typeof resetCatColorMap === 'function') resetCatColorMap();
+          let enriched;
+          try { enriched = enrichData(d); } catch (e) {
+            console.warn("enrichData failed during fetchFromSheet:", e);
+            enriched = d;
+          }
+          setData(enriched);
+          saveToStorage(enriched, "sheet");
+        }, 0);
         setSource("sheet");
         const now = new Date().toISOString();
         localStorage.setItem("dmj_last_sync", now);
@@ -383,8 +391,30 @@ function App() {
     fetch(url, { signal: controller.signal, cache: 'no-store' })
       .then(r => r.json())
       .then(d => {
-        if (!d || !Array.isArray(d.orders)) return;
-        setData(prev => prev ? { ...prev, orders: d.orders } : prev);
+        if (!d || d.error || !Array.isArray(d.orders)) return; // d.error = sheet_not_found → skip
+        // ถ้า GAS คืน date เป็น Date object string ("Thu Jun 06 2026...") แทน "dd/mm/yyyy"
+        // (เกิดเมื่อ GAS ยังไม่ได้ redeploy) → normalize ให้เป็น dd/mm/yyyy ก่อนอัปเดต state
+        d.orders = d.orders.map(function(o) {
+          if (o.date && typeof o.date === 'string') {
+            var ds = o.date.trim();
+            // Date object string มักขึ้นต้นด้วย weekday หรือมี GMT/UTC/T ตามด้วย timezone
+            if (/GMT|^\w{3}\s\w{3}\s\d|T\d{2}:\d{2}:\d{2}/.test(ds)) {
+              var p = new Date(ds);
+              if (!isNaN(p.getTime())) {
+                var dd = String(p.getDate()).padStart(2,'0');
+                var mm = String(p.getMonth()+1).padStart(2,'0');
+                o = Object.assign({}, o, { date: dd + '/' + mm + '/' + p.getFullYear() });
+              }
+            }
+          }
+          return o;
+        });
+        setData(prev => {
+          if (!prev) return prev;
+          // ไม่มี guard 0-orders แล้ว: ถ้า orders ถูกลบจริงๆ ควร clear ได้
+          // GAS มี retry อยู่แล้ว ถ้า response ว่างเพราะ error จะถูก retry รอบถัดไป
+          return { ...prev, orders: d.orders };
+        });
         const now = new Date().toISOString();
         localStorage.setItem("dmj_last_sync", now);
         setLastSync(now);
@@ -397,7 +427,12 @@ function App() {
     if (!role) return;
     const cached = loadFromStorage();
     if (cached && Array.isArray(cached.products)) {
-      setData(enrichData(cached)); // แสดง cache ทันที
+      // รีเซ็ต catColorMap ก่อน enrich จาก cache เพื่อกัน assign สีผิด
+      if (typeof resetCatColorMap === 'function') resetCatColorMap();
+      try { setData(enrichData(cached)); } catch (e) { // แสดง cache ทันที
+        console.warn("enrichData failed on cached data:", e);
+        setData(cached);
+      }
     }
     fetchFromSheet(); // refresh ใน background เสมอ
   }, [role, fetchFromSheet]);
@@ -433,7 +468,12 @@ function App() {
   }, [tab, role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleDataLoaded = usC((newData) => {
-    const enriched = enrichData(newData);
+    if (typeof resetCatColorMap === 'function') resetCatColorMap();
+    let enriched;
+    try { enriched = enrichData(newData); } catch (e) {
+      console.warn("enrichData failed on uploaded data:", e);
+      enriched = newData;
+    }
     setData(enriched);
     saveToStorage(enriched, "upload");
     setSource("upload");
@@ -571,66 +611,71 @@ function App() {
           </div>
 
           <div className="navtabs" role="tablist">
-            {role === "owner" ? (() => {
-              const OWNER_PRIMARY = ["overview", "categories"];
-              const primaryTabs = visibleTabs.filter(t => OWNER_PRIMARY.includes(t.id));
-              const secondaryTabs = visibleTabs.filter(t => !OWNER_PRIMARY.includes(t.id));
-              return (
-                <>
-                  {primaryTabs.map(t => (
-                    <button key={t.id} role="tab"
-                            className={`navtab${activeTab===t.id?' active':''}`}
-                            onClick={() => { handleSetTab(t.id); setMoreOpen(false); }}>
-                      {t.icon}<span>{t.label}</span>
-                    </button>
-                  ))}
-                  <div style={{position:"relative"}}>
-                    <button role="tab"
-                            className={`navtab${secondaryTabs.some(t=>t.id===activeTab)||moreOpen?' active':''}`}
-                            onClick={() => setMoreOpen(v => !v)}>
-                      <span style={{fontSize:18,lineHeight:1}}>⋯</span>
-                      <span>เพิ่มเติม</span>
-                    </button>
-                    {moreOpen && (
-                      <div onClick={() => setMoreOpen(false)}
-                           style={{position:"fixed",inset:0,zIndex:199}}/>
-                    )}
-                    {moreOpen && (
-                      <div style={{
-                        position:"absolute", top:"calc(100% + 4px)", right:0,
-                        background:"var(--paper)", border:"1px solid var(--bdr)",
-                        borderRadius:12, padding:"6px 4px", zIndex:200,
-                        minWidth:200, boxShadow:"0 8px 24px rgba(0,0,0,.15)",
-                        maxHeight:"80vh", overflowY:"auto",
-                      }}>
-                        {secondaryTabs.map(t => (
-                          <button key={t.id}
-                                  onClick={() => { handleSetTab(t.id); setMoreOpen(false); }}
-                                  style={{
-                                    display:"flex", alignItems:"center", gap:10,
-                                    width:"100%", padding:"10px 14px",
-                                    border:"none", borderRadius:8, cursor:"pointer",
-                                    fontFamily:"inherit", fontSize:13, textAlign:"left",
-                                    background: activeTab===t.id ? "var(--g-50)" : "transparent",
-                                    color: activeTab===t.id ? "var(--g-800)" : "var(--text)",
-                                    fontWeight: activeTab===t.id ? 700 : 400,
-                                  }}>
-                            {t.icon}
-                            <span>{t.label}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </>
-              );
-            })() : visibleTabs.map(t => (
-              <button key={t.id} role="tab"
-                      className={`navtab${activeTab===t.id?' active':''}`}
-                      onClick={() => handleSetTab(t.id)}>
-                {t.icon}<span>{t.label}</span>
-              </button>
-            ))}
+            {(() => {
+              // ถ้า tabs มากกว่า 6 ตัว → แสดง 5 ตัวแรก + ปุ่ม "เพิ่มเติม" dropdown
+              // (ใช้กับทุก role เช่น owner, employee ที่มี 10+ tabs)
+              if (visibleTabs.length > 6) {
+                const primaryTabs   = visibleTabs.slice(0, 5);
+                const secondaryTabs = visibleTabs.slice(5);
+                return (
+                  <>
+                    {primaryTabs.map(t => (
+                      <button key={t.id} role="tab"
+                              className={`navtab${activeTab===t.id?' active':''}`}
+                              onClick={() => { handleSetTab(t.id); setMoreOpen(false); }}>
+                        {t.icon}<span>{t.label}</span>
+                      </button>
+                    ))}
+                    <div style={{position:"relative"}}>
+                      <button role="tab"
+                              className={`navtab${secondaryTabs.some(t=>t.id===activeTab)||moreOpen?' active':''}`}
+                              onClick={() => setMoreOpen(v => !v)}>
+                        <span style={{fontSize:18,lineHeight:1}}>⋯</span>
+                        <span>เพิ่มเติม</span>
+                      </button>
+                      {moreOpen && (
+                        <div onClick={() => setMoreOpen(false)}
+                             style={{position:"fixed",inset:0,zIndex:199}}/>
+                      )}
+                      {moreOpen && (
+                        <div style={{
+                          position:"absolute", top:"calc(100% + 4px)", right:0,
+                          background:"var(--paper)", border:"1px solid var(--bdr)",
+                          borderRadius:12, padding:"6px 4px", zIndex:200,
+                          minWidth:200, boxShadow:"0 8px 24px rgba(0,0,0,.15)",
+                          maxHeight:"80vh", overflowY:"auto",
+                        }}>
+                          {secondaryTabs.map(t => (
+                            <button key={t.id}
+                                    onClick={() => { handleSetTab(t.id); setMoreOpen(false); }}
+                                    style={{
+                                      display:"flex", alignItems:"center", gap:10,
+                                      width:"100%", padding:"10px 14px",
+                                      border:"none", borderRadius:8, cursor:"pointer",
+                                      fontFamily:"inherit", fontSize:13, textAlign:"left",
+                                      background: activeTab===t.id ? "var(--g-50)" : "transparent",
+                                      color: activeTab===t.id ? "var(--g-800)" : "var(--text)",
+                                      fontWeight: activeTab===t.id ? 700 : 400,
+                                    }}>
+                              {t.icon}
+                              <span>{t.label}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                );
+              }
+              // tabs น้อย (≤ 6) → แสดงทั้งหมดในแถบปกติ
+              return visibleTabs.map(t => (
+                <button key={t.id} role="tab"
+                        className={`navtab${activeTab===t.id?' active':''}`}
+                        onClick={() => handleSetTab(t.id)}>
+                  {t.icon}<span>{t.label}</span>
+                </button>
+              ));
+            })()}
           </div>
 
           <div className="nav-right">

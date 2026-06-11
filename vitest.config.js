@@ -1,2 +1,12 @@
 import { defineConfig } from 'vitest/config';
-export default defineConfig({ test: { environment: 'node' } });
+export default defineConfig({
+  test: {
+    environment: 'node',
+    coverage: {
+      provider: 'v8',
+      include: ['tests/helpers.js'],
+      exclude: [],
+      reporter: ['text', 'html'],
+    },
+  },
+});
