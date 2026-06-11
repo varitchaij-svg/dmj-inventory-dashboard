@@ -48,6 +48,237 @@ async function ensureXlsx() {
   });
 }
 
+// ── JSZip loader + Canvas card helpers ──────────────────────────────────────
+async function ensureJsZip() {
+  if (window.JSZip) return;
+  await new Promise(function(res, rej) {
+    var s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+    s.onload = res;
+    s.onerror = function() {
+      var s2 = document.createElement('script');
+      s2.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
+      s2.onload = res; s2.onerror = rej;
+      document.head.appendChild(s2);
+    };
+    document.head.appendChild(s);
+  });
+}
+
+async function loadImgSafe(url) {
+  if (!url) return null;
+  return new Promise(function(resolve) {
+    var img = new window.Image();
+    img.crossOrigin = 'anonymous';
+    var t = setTimeout(function() { resolve(null); }, 5000);
+    img.onload = function() { clearTimeout(t); resolve(img); };
+    img.onerror = function() { clearTimeout(t); resolve(null); };
+    img.src = url;
+  });
+}
+
+function rrectFill(ctx, x, y, w, h, r, color) {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.lineTo(x+w-r, y); ctx.quadraticCurveTo(x+w, y, x+w, y+r);
+  ctx.lineTo(x+w, y+h-r); ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+  ctx.lineTo(x+r, y+h); ctx.quadraticCurveTo(x, y+h, x, y+h-r);
+  ctx.lineTo(x, y+r); ctx.quadraticCurveTo(x, y, x+r, y);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function wrapTextLines(ctx, text, maxW, maxLines) {
+  var words = (text || '').split(/\s+/);
+  var lines = [], cur = '';
+  for (var i = 0; i < words.length; i++) {
+    var test = cur ? cur + ' ' + words[i] : words[i];
+    if (ctx.measureText(test).width > maxW && cur) {
+      lines.push(cur);
+      if (lines.length >= maxLines) { lines[lines.length-1] += '…'; return lines; }
+      cur = words[i];
+    } else { cur = test; }
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
+function drawProductCardCanvas(p, img, accentColor) {
+  var W = 400, H = 540;
+  var FONT = '\'Sarabun\',\'Noto Sans Thai\',\'Segoe UI\',Arial,sans-serif';
+  var c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  var ctx = c.getContext('2d');
+  var imgH = 220;
+
+  // white bg
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, W, H);
+
+  // image
+  if (img && img.naturalWidth > 0) {
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0, 0, W, imgH); ctx.clip();
+    var scale = Math.max(W / img.naturalWidth, imgH / img.naturalHeight);
+    var dw = img.naturalWidth * scale, dh = img.naturalHeight * scale;
+    ctx.drawImage(img, (W - dw) / 2, (imgH - dh) / 2, dw, dh);
+    ctx.restore();
+  } else {
+    rrectFill(ctx, 0, 0, W, imgH, 0, '#f0fdf4');
+    ctx.fillStyle = '#d1fae5';
+    ctx.font = '48px serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('🌿', W / 2, imgH / 2 + 18);
+  }
+
+  // gradient overlay for price
+  var grad = ctx.createLinearGradient(0, imgH - 70, 0, imgH);
+  grad.addColorStop(0, 'rgba(0,0,0,0)');
+  grad.addColorStop(1, 'rgba(0,0,0,0.65)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, imgH - 70, W, 70);
+
+  // category badge
+  if (p.cat) {
+    var acc = accentColor || '#16a34a';
+    ctx.font = 'bold 10px ' + FONT;
+    var catText = (p.cat || '').substring(0, 16);
+    var bw = Math.min(ctx.measureText(catText).width + 18, 140);
+    rrectFill(ctx, 8, 8, bw, 22, 11, acc);
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'left';
+    ctx.fillText(catText, 16, 23);
+  }
+
+  // vendor code top-right
+  if (p.vendor) {
+    ctx.font = 'bold 10px monospace';
+    var vText = String(p.vendor);
+    var vw = ctx.measureText(vText).width + 14;
+    rrectFill(ctx, W - vw - 6, 8, vw, 20, 6, 'rgba(255,255,255,0.85)');
+    ctx.fillStyle = '#374151';
+    ctx.textAlign = 'right';
+    ctx.fillText(vText, W - 13, 22);
+  }
+
+  // price overlay
+  var price = p.price || p.stdPrice || '';
+  if (price) {
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 13px ' + FONT;
+    ctx.textAlign = 'left';
+    ctx.fillText('ราคาส่ง ' + price + '.-', 12, imgH - 8);
+  }
+
+  // separator
+  ctx.fillStyle = '#f3f4f6';
+  ctx.fillRect(0, imgH, W, 1.5);
+
+  var y = imgH + 18;
+  ctx.textAlign = 'left';
+
+  // SKU row
+  ctx.fillStyle = '#6b7280';
+  ctx.font = 'bold 11px monospace';
+  ctx.fillText(p.sku || '', 14, y);
+
+  // color dot + name
+  if (p.color && p.color.hex) {
+    ctx.fillStyle = p.color.hex;
+    ctx.beginPath(); ctx.arc(W - 46, y - 4, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#e5e7eb'; ctx.lineWidth = 1; ctx.stroke();
+    if (p.color.name) {
+      ctx.fillStyle = '#6b7280';
+      ctx.font = '10px ' + FONT;
+      ctx.textAlign = 'right';
+      ctx.fillText(p.color.name, W - 14, y);
+    }
+  }
+
+  y += 22;
+  ctx.textAlign = 'left';
+
+  // product name
+  ctx.fillStyle = '#111827';
+  ctx.font = 'bold 15px ' + FONT;
+  var nameLines = wrapTextLines(ctx, p.name || '', W - 28, 2);
+  nameLines.forEach(function(line) { ctx.fillText(line, 14, y); y += 21; });
+
+  y += 6;
+
+  // last stock date
+  if (p.lastStockInDate) {
+    ctx.fillStyle = '#9ca3af';
+    ctx.font = '11px ' + FONT;
+    ctx.fillText('📦 เข้าล่าสุด ' + p.lastStockInDate, 14, y);
+    y += 18;
+  }
+
+  // divider
+  ctx.strokeStyle = '#f3f4f6'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(14, y + 4); ctx.lineTo(W - 14, y + 4); ctx.stroke();
+  y += 16;
+
+  // คงเหลือ label
+  ctx.fillStyle = '#9ca3af';
+  ctx.font = '11px ' + FONT;
+  ctx.fillText('คงเหลือ', 14, y);
+  y += 24;
+
+  // qty number
+  var total = (p.qtyWH || 0) + (p.qtyStore || 0);
+  var qtyStr = String(total);
+  ctx.fillStyle = accentColor || '#16a34a';
+  ctx.font = 'bold 28px ' + FONT;
+  ctx.fillText(qtyStr, 14, y);
+  ctx.fillStyle = '#9ca3af';
+  ctx.font = '12px ' + FONT;
+  ctx.fillText('ชิ้น', 14 + ctx.measureText(qtyStr).width + 4, y);
+
+  // WH / FS breakdown
+  if (p.qtyWH !== undefined || p.qtyStore !== undefined) {
+    ctx.fillStyle = '#9ca3af';
+    ctx.font = '10px ' + FONT;
+    ctx.textAlign = 'right';
+    ctx.fillText('🏭 ' + (p.qtyWH || 0) + '  🏪 ' + (p.qtyStore || 0), W - 14, y);
+  }
+
+  return c;
+}
+
+async function downloadSupplierCardsZip(groupName, items, accentColor, onProgress) {
+  await ensureJsZip();
+  var zip = new window.JSZip();
+  var safeName = (groupName || 'supplier').replace(/[\/\\:*?"<>|]/g, '_');
+  var folder = zip.folder(safeName);
+
+  // load images in parallel
+  var imgMap = {};
+  await Promise.all(items.map(async function(p) {
+    if (p.imageUrl) imgMap[p.sku] = await loadImgSafe(p.imageUrl);
+    if (onProgress) onProgress('load', p.sku);
+  }));
+
+  // draw & add to zip
+  for (var i = 0; i < items.length; i++) {
+    var p = items[i];
+    var canvas = drawProductCardCanvas(p, imgMap[p.sku] || null, accentColor);
+    var blob = await new Promise(function(res) { canvas.toBlob(res, 'image/jpeg', 0.92); });
+    folder.file((p.sku || ('item' + i)) + '.jpg', blob);
+    if (onProgress) onProgress('draw', p.sku);
+  }
+
+  var content = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(content);
+  a.download = safeName + '_การ์ดสินค้า.zip';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function() { URL.revokeObjectURL(a.href); }, 1000);
+}
+
 // ── Android back-button handler ──────────────────────────────────────────────
 // Global LIFO stack — each modal/step pushes a handler on open, pops on close.
 // Single popstate listener fires the top handler (most recently opened thing).
@@ -1585,6 +1816,7 @@ function CategoryView({ data, role }) {
   // Android back: ถ้ากำลังดู supplier view → กด back = ล้าง supplier filter
   useBackHandler(globalVendor ? () => { setGlobalVendor(null); setPage(1); } : null);
   const [viewMode, setViewMode] = uS('grid');
+  const [dlGroup, setDlGroup] = uS(null); // ชื่อ group ที่กำลัง download ZIP (null = ไม่มี)
   // ── floating button drag refs ──
   const floatRef = React.useRef(null);
   const dragRef  = React.useRef({ active: false, sx: 0, sy: 0, ox: 0, oy: 0, moved: false });
@@ -2412,6 +2644,29 @@ function CategoryView({ data, role }) {
                         🟡 {g.low} ใกล้หมด
                       </span>
                     )}
+                    {/* ปุ่มดาวน์โหลดการ์ดสินค้าทุกตัวใน group เป็น ZIP */}
+                    <button
+                      disabled={dlGroup === g.name}
+                      onClick={async () => {
+                        setDlGroup(g.name);
+                        try {
+                          await downloadSupplierCardsZip(g.name, g.items, '#16a34a');
+                        } catch(e) {
+                          alert('ดาวน์โหลดไม่สำเร็จ: ' + (e.message || e));
+                        } finally {
+                          setDlGroup(null);
+                        }
+                      }}
+                      style={{
+                        padding:'4px 10px', borderRadius:20, border:'1.5px solid var(--g-500)',
+                        background: dlGroup === g.name ? '#f0fdf4' : '#fff',
+                        color: dlGroup === g.name ? '#16a34a' : '#374151',
+                        cursor: dlGroup === g.name ? 'wait' : 'pointer',
+                        fontSize:11, fontWeight:600, flexShrink:0,
+                        display:'flex', alignItems:'center', gap:4,
+                      }}>
+                      {dlGroup === g.name ? '⏳ กำลังสร้าง…' : '⬇️ ZIP'}
+                    </button>
                   </div>
                   <div className="product-grid" style={{width:"100%",boxSizing:"border-box",minWidth:0}}>
                     {g.items.map((p, idx) => (
