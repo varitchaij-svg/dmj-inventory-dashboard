@@ -381,6 +381,25 @@ function OverviewView({ data, range, setRange, role }) {
     return [...s].sort();
   }, [products]);
 
+  // F7: orders รอ > N วัน
+  const OVERDUE_DAYS = 3;
+  const overdueOrders = uM(() => {
+    const orders = data.orders || [];
+    const now = Date.now();
+    return orders
+      .filter(o => !o.status || o.status === "รอ" || o.status === "pending")
+      .map(o => {
+        const parts = String(o.date || "").split("/"); // DD/MM/YYYY
+        if (parts.length < 3) return { ...o, waitDays: null };
+        const d = new Date(+parts[2], +parts[1] - 1, +parts[0]);
+        const waitDays = isNaN(d) ? null : Math.floor((now - d.getTime()) / 86400000);
+        return { ...o, waitDays };
+      })
+      .filter(o => o.waitDays !== null && o.waitDays > OVERDUE_DAYS)
+      .sort((a, b) => b.waitDays - a.waitDays);
+  }, [data.orders]);
+  const maxWaitDays = overdueOrders.length > 0 ? overdueOrders[0].waitDays : 0;
+
   // catShare: use daily data when in day mode
   const catShare = uM(() => {
     let accum = {};
@@ -774,6 +793,48 @@ function OverviewView({ data, range, setRange, role }) {
                icon={I.trend} />
         )}
       </div>
+
+      {/* ─── F7: ค้างส่งเกิน 3 วัน ─── */}
+      {overdueOrders.length > 0 && (
+        <div style={{
+          marginBottom: 16,
+          borderRadius: 14,
+          background: overdueOrders.length >= 5 ? "#fdecea" : "#fff8e1",
+          border: `1.5px solid ${overdueOrders.length >= 5 ? "#f5c6c2" : "#f5e0a0"}`,
+          padding: "12px 16px",
+        }}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom: overdueOrders.length > 0 ? 8 : 0}}>
+            <span style={{fontSize:18}}>{overdueOrders.length >= 5 ? "🚨" : "⏳"}</span>
+            <span style={{fontSize:14,fontWeight:800,color: overdueOrders.length >= 5 ? "var(--dang)" : "#a07417"}}>
+              ค้างส่ง {overdueOrders.length} รายการ · นานสุด {maxWaitDays} วัน
+            </span>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+            {overdueOrders.slice(0, 5).map((o, i) => (
+              <div key={i} style={{
+                display:"flex",alignItems:"center",gap:8,
+                fontSize:12,color:"var(--g-700)",
+              }}>
+                <span style={{
+                  minWidth:32,textAlign:"center",fontWeight:700,
+                  background: o.waitDays >= 7 ? "#f5c6c2" : "#f5e0a0",
+                  color: o.waitDays >= 7 ? "var(--dang)" : "#a07417",
+                  borderRadius:6,padding:"1px 5px",fontSize:11,
+                }}>{o.waitDays}ว.</span>
+                <span style={{flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                  {o.name || o.sku}
+                </span>
+                <span style={{color:"var(--muted)",flexShrink:0}}>{o.orderQty} ชิ้น</span>
+              </div>
+            ))}
+            {overdueOrders.length > 5 && (
+              <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>
+                +{overdueOrders.length - 5} รายการอื่น
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ─── Forecast Tool (owner only) ─── */}
       {role === 'owner' && forecast && (
