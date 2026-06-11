@@ -2421,7 +2421,7 @@ function CategoryView({ data, role }) {
           {/* Vendor mode header */}
           {isGlobalVendor && (
             <div className="sec-head" style={{margin:"4px 0 14px"}}>
-              <div>
+              <div style={{flex:1}}>
                 <div className="sec-title">
                   🏭 {globalVendor}
                   <span style={{fontSize:12,fontWeight:500,color:"var(--muted)"}}>
@@ -2433,6 +2433,27 @@ function CategoryView({ data, role }) {
                   เรียงตาม {SORT_OPTIONS.find(o=>o.value===sortBy)?.label}
                 </div>
               </div>
+              {filtered.length > 0 && (
+                <button
+                  disabled={dlGroup === globalVendor}
+                  onClick={async () => {
+                    setDlGroup(globalVendor);
+                    try { await downloadSupplierCardsZip(globalVendor, filtered, '#16a34a'); }
+                    catch(e) { alert('ดาวน์โหลดไม่สำเร็จ: ' + (e.message || e)); }
+                    finally { setDlGroup(null); }
+                  }}
+                  style={{
+                    padding:'8px 14px', borderRadius:20, border:'1.5px solid var(--g-500)',
+                    background: dlGroup === globalVendor ? '#f0fdf4' : '#fff',
+                    color: dlGroup === globalVendor ? '#16a34a' : '#374151',
+                    cursor: dlGroup === globalVendor ? 'wait' : 'pointer',
+                    fontSize:13, fontWeight:700, flexShrink:0,
+                    display:'flex', alignItems:'center', gap:6,
+                    fontFamily:'inherit',
+                  }}>
+                  {dlGroup === globalVendor ? '⏳ กำลังสร้าง…' : '⬇️ ดาวน์โหลดการ์ด'}
+                </button>
+              )}
             </div>
           )}
 
