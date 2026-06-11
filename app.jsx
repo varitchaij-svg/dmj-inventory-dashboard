@@ -24,7 +24,7 @@ const TABS = [
 const ROLE_TABS = {
   owner:      ["overview","categories","trends","stock","storage","stockcount","frontstore","transfers","orders","ordersummary","mtojobs","upload","connect","labels","auditlog","deadstock"],
   employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","mtojobs","labels"],
-  warehouse:  ["categories","stock","storage","stockcount","orders","ordersummary","mtojobs","labels"],
+  warehouse:  ["categories","storage","stockcount","orders","ordersummary","mtojobs","labels"],
   frontstore: ["categories","stock","frontstore","orders","mtojobs","labels"],
   saler:      ["categories","stock","orders","mtojobs","labels"],
 };
@@ -609,9 +609,9 @@ function App() {
 
           <div className="navtabs" role="tablist">
             {(() => {
-              // ถ้า tabs มากกว่า 6 ตัว → แสดง 5 ตัวแรก + ปุ่ม "เพิ่มเติม" dropdown
-              // (ใช้กับทุก role เช่น owner, employee ที่มี 10+ tabs)
-              if (visibleTabs.length > 6) {
+              // ถ้า tabs มากกว่า 7 ตัว → แสดง 5 ตัวแรก + ปุ่ม "เพิ่มเติม" dropdown
+              // warehouse มี 7 tabs พอดี → แสดงตรงๆ ไม่มี dropdown
+              if (visibleTabs.length > 7) {
                 const primaryTabs   = visibleTabs.slice(0, 5);
                 const secondaryTabs = visibleTabs.slice(5);
                 return (
