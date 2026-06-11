@@ -137,157 +137,194 @@ function wrapTextLines(ctx, text, maxW, maxLines) {
 }
 
 function drawProductCardCanvas(p, img, accentColor) {
-  var W = 400, H = 540;
+  var W = 400, H = 570;
   var FONT = '\'Sarabun\',\'Noto Sans Thai\',\'Segoe UI\',Arial,sans-serif';
   var c = document.createElement('canvas');
   c.width = W; c.height = H;
   var ctx = c.getContext('2d');
-  var imgH = 220;
+  var imgH = 210;
+  var PAD = 14;
 
-  // white bg
+  // white bg + soft shadow border effect
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, W, H);
 
   var hasImg = img && img.naturalWidth > 0;
+  var total = (p.qtyWH || 0) + (p.qtyStore || 0);
 
-  // ── image / placeholder header ────────────────────────────────────
+  // ── image / placeholder zone ──────────────────────────────────────
+  // light grey bg for image area
+  ctx.fillStyle = '#f9fafb';
+  ctx.fillRect(0, 0, W, imgH);
+
   if (hasImg) {
-    ctx.save();
-    ctx.beginPath(); ctx.rect(0, 0, W, imgH); ctx.clip();
-    var scale = Math.max(W / img.naturalWidth, imgH / img.naturalHeight);
+    // object-fit: contain — scale down to fit, centered, no crop
+    var scale = Math.min(W / img.naturalWidth, imgH / img.naturalHeight);
     var dw = img.naturalWidth * scale, dh = img.naturalHeight * scale;
-    ctx.drawImage(img, (W - dw) / 2, (imgH - dh) / 2, dw, dh);
-    ctx.restore();
+    var dx = (W - dw) / 2, dy = (imgH - dh) / 2;
+    ctx.drawImage(img, dx, dy, dw, dh);
   } else {
-    // Gradient background using product color or accent color
+    // gradient placeholder using product/category color
     var baseColor = (p.color && p.color.hex) ? p.color.hex : (accentColor || '#16a34a');
     var rgb = hexToRgb(baseColor) || { r:22, g:101, b:52 };
     var g1 = ctx.createLinearGradient(0, 0, W, imgH);
-    g1.addColorStop(0, 'rgba(' + Math.min(rgb.r+30,255) + ',' + Math.min(rgb.g+40,255) + ',' + Math.min(rgb.b+30,255) + ',1)');
-    g1.addColorStop(1, 'rgba(' + Math.max(rgb.r-20,0) + ',' + Math.max(rgb.g-20,0) + ',' + Math.max(rgb.b-20,0) + ',1)');
+    g1.addColorStop(0, 'rgba(' + Math.min(rgb.r+40,255) + ',' + Math.min(rgb.g+50,255) + ',' + Math.min(rgb.b+40,255) + ',1)');
+    g1.addColorStop(1, 'rgba(' + Math.max(rgb.r-10,0) + ',' + Math.max(rgb.g-10,0) + ',' + Math.max(rgb.b-10,0) + ',1)');
     ctx.fillStyle = g1;
     ctx.fillRect(0, 0, W, imgH);
-    // Category emoji watermark (large, subtle)
     var catEmoji = (typeof CAT_EMOJI !== 'undefined' && CAT_EMOJI[p.cat]) || '📦';
     ctx.save();
-    ctx.globalAlpha = 0.2;
-    ctx.font = '100px serif';
+    ctx.globalAlpha = 0.18;
+    ctx.font = '96px serif';
     ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
     ctx.fillStyle = '#fff';
-    ctx.fillText(catEmoji, W / 2, imgH / 2 + 36);
+    ctx.fillText(catEmoji, W / 2, imgH / 2);
     ctx.restore();
   }
 
-  // gradient overlay for price text (both image and placeholder)
-  var gradOverlay = ctx.createLinearGradient(0, imgH - 80, 0, imgH);
+  // gradient overlay for price/category at bottom of image
+  var gradOverlay = ctx.createLinearGradient(0, imgH - 70, 0, imgH);
   gradOverlay.addColorStop(0, 'rgba(0,0,0,0)');
-  gradOverlay.addColorStop(1, 'rgba(0,0,0,0.68)');
+  gradOverlay.addColorStop(1, 'rgba(0,0,0,0.62)');
   ctx.fillStyle = gradOverlay;
-  ctx.fillRect(0, imgH - 80, W, 80);
+  ctx.fillRect(0, imgH - 70, W, 70);
 
-  // category badge
+  // category badge — top left
   if (p.cat) {
     var acc = accentColor || '#16a34a';
     ctx.font = 'bold 10px ' + FONT;
+    ctx.textBaseline = 'alphabetic';
     var catText = (p.cat || '').substring(0, 16);
-    var bw = Math.min(ctx.measureText(catText).width + 18, 140);
-    rrectFill(ctx, 8, 8, bw, 22, 11, acc);
+    var bw = Math.min(ctx.measureText(catText).width + 18, 150);
+    rrectFill(ctx, PAD - 6, 8, bw, 22, 11, acc);
     ctx.fillStyle = '#fff';
     ctx.textAlign = 'left';
-    ctx.fillText(catText, 16, 23);
+    ctx.fillText(catText, PAD + 2, 23);
   }
 
-  // vendor code top-right
-  if (p.vendor) {
-    ctx.font = 'bold 10px monospace';
-    var vText = String(p.vendor);
-    var vw = ctx.measureText(vText).width + 14;
-    rrectFill(ctx, W - vw - 6, 8, vw, 20, 6, 'rgba(255,255,255,0.85)');
-    ctx.fillStyle = '#374151';
+  // stock status badge — top right
+  var stockBadgeText = null, stockBadgeColor = null;
+  if (total <= 0) { stockBadgeText = 'หมด!'; stockBadgeColor = '#ef4444'; }
+  else if (total <= 5) { stockBadgeText = 'ต่ำ'; stockBadgeColor = '#f97316'; }
+  if (stockBadgeText) {
+    ctx.font = 'bold 11px ' + FONT;
+    var sbw = ctx.measureText(stockBadgeText).width + 16;
+    rrectFill(ctx, W - sbw - 8, 8, sbw, 23, 11, stockBadgeColor);
+    ctx.fillStyle = '#fff';
     ctx.textAlign = 'right';
-    ctx.fillText(vText, W - 13, 22);
+    ctx.fillText(stockBadgeText, W - 16, 23);
   }
 
-  // price overlay
+  // price overlay — bottom of image
   var price = p.price || p.stdPrice || '';
   if (price) {
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 13px ' + FONT;
     ctx.textAlign = 'left';
-    ctx.fillText('ราคาส่ง ' + price + '.-', 12, imgH - 8);
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText('ราคาส่ง ฿' + price, PAD, imgH - 8);
   }
 
-  // separator
-  ctx.fillStyle = '#f3f4f6';
-  ctx.fillRect(0, imgH, W, 1.5);
+  // image border bottom separator
+  ctx.fillStyle = '#e5e7eb';
+  ctx.fillRect(0, imgH, W, 1);
 
-  var y = imgH + 18;
+  var y = imgH + 16;
   ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
 
-  // SKU row
+  // SKU + color dot + color name
   ctx.fillStyle = '#6b7280';
   ctx.font = 'bold 11px monospace';
-  ctx.fillText(p.sku || '', 14, y);
+  ctx.fillText(p.sku || '', PAD, y);
 
-  // color dot + name
   if (p.color && p.color.hex) {
-    ctx.fillStyle = p.color.hex;
-    ctx.beginPath(); ctx.arc(W - 46, y - 4, 5, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = '#e5e7eb'; ctx.lineWidth = 1; ctx.stroke();
+    var dotX = W - PAD - 50;
     if (p.color.name) {
-      ctx.fillStyle = '#6b7280';
       ctx.font = '10px ' + FONT;
       ctx.textAlign = 'right';
-      ctx.fillText(p.color.name, W - 14, y);
+      ctx.fillStyle = '#6b7280';
+      ctx.fillText(p.color.name, W - PAD, y);
+      dotX = W - PAD - ctx.measureText(p.color.name).width - 10;
     }
+    ctx.fillStyle = p.color.hex;
+    ctx.beginPath(); ctx.arc(dotX, y - 4, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#d1d5db'; ctx.lineWidth = 1; ctx.stroke();
   }
 
-  y += 22;
+  y += 20;
   ctx.textAlign = 'left';
 
-  // product name
+  // product name (bold, up to 2 lines)
   ctx.fillStyle = '#111827';
   ctx.font = 'bold 15px ' + FONT;
-  var nameLines = wrapTextLines(ctx, p.name || '', W - 28, 2);
-  nameLines.forEach(function(line) { ctx.fillText(line, 14, y); y += 21; });
+  var nameLines = wrapTextLines(ctx, p.name || '', W - PAD * 2, 2);
+  nameLines.forEach(function(line) { ctx.fillText(line, PAD, y); y += 20; });
 
-  y += 6;
+  y += 4;
 
-  // last stock date
-  if (p.lastStockInDate) {
-    ctx.fillStyle = '#9ca3af';
+  // vendor code line
+  if (p.vendor) {
+    ctx.fillStyle = '#6b7280';
     ctx.font = '11px ' + FONT;
-    ctx.fillText('📦 เข้าล่าสุด ' + p.lastStockInDate, 14, y);
+    ctx.fillText('📦 ' + String(p.vendor), PAD, y);
     y += 18;
   }
 
+  // last stock date + qty on same line
+  if (p.lastStockInDate) {
+    var stockLine = '📅 เข้าล่าสุด ' + p.lastStockInDate;
+    if (p.lastStockInQty) stockLine += ' · ' + p.lastStockInQty + ' ชิ้น';
+    ctx.fillStyle = '#9ca3af';
+    ctx.font = '11px ' + FONT;
+    ctx.fillText(stockLine, PAD, y);
+    y += 18;
+  }
+
+  y += 4;
+
   // divider
   ctx.strokeStyle = '#f3f4f6'; ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.moveTo(14, y + 4); ctx.lineTo(W - 14, y + 4); ctx.stroke();
-  y += 16;
+  ctx.beginPath(); ctx.moveTo(PAD, y); ctx.lineTo(W - PAD, y); ctx.stroke();
+  y += 14;
+
+  // bottom row: คงเหลือ (left) | ราคา (right)
+  var midX = W / 2;
 
   // คงเหลือ label
   ctx.fillStyle = '#9ca3af';
   ctx.font = '11px ' + FONT;
-  ctx.fillText('คงเหลือ', 14, y);
-  y += 24;
+  ctx.textAlign = 'left';
+  ctx.fillText('คงเหลือ', PAD, y);
 
-  // qty number
-  var total = (p.qtyWH || 0) + (p.qtyStore || 0);
+  // ราคา label
+  ctx.textAlign = 'right';
+  ctx.fillText('ราคา', W - PAD, y);
+
+  y += 20;
+
+  // qty value
   var qtyStr = String(total);
-  ctx.fillStyle = accentColor || '#16a34a';
-  ctx.font = 'bold 28px ' + FONT;
-  ctx.fillText(qtyStr, 14, y);
+  var qtyColor = total <= 0 ? '#ef4444' : (total <= 5 ? '#f97316' : (accentColor || '#16a34a'));
+  ctx.fillStyle = qtyColor;
+  ctx.font = 'bold 22px ' + FONT;
+  ctx.textAlign = 'left';
+  ctx.fillText(qtyStr, PAD, y);
   ctx.fillStyle = '#9ca3af';
   ctx.font = '12px ' + FONT;
-  ctx.fillText('ชิ้น', 14 + ctx.measureText(qtyStr).width + 4, y);
+  ctx.fillText(' ชิ้น', PAD + ctx.measureText(qtyStr).width + 2, y);
 
-  // WH / FS breakdown
-  if (p.qtyWH !== undefined || p.qtyStore !== undefined) {
-    ctx.fillStyle = '#9ca3af';
-    ctx.font = '10px ' + FONT;
+  // vertical divider between columns
+  ctx.strokeStyle = '#e5e7eb'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(midX, y - 20); ctx.lineTo(midX, y + 6); ctx.stroke();
+
+  // price value
+  if (price) {
+    ctx.fillStyle = '#111827';
+    ctx.font = 'bold 22px ' + FONT;
     ctx.textAlign = 'right';
-    ctx.fillText('🏭 ' + (p.qtyWH || 0) + '  🏪 ' + (p.qtyStore || 0), W - 14, y);
+    ctx.fillText('฿' + price, W - PAD, y);
   }
 
   return c;
