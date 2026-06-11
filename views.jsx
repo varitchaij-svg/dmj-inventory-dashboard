@@ -1726,9 +1726,13 @@ function CategoryView({ data, role }) {
 
   const filtered = uM(() => {
     const gq = globalSearch.trim().toLowerCase();
+    const tokens = gq ? gq.split(/\s+/) : [];
     const applyCommon = (arr) => {
       let f = arr;
-      if (gq) f = f.filter(p => (p.sku||"").toLowerCase().includes(gq) || (p.name||"").toLowerCase().includes(gq));
+      if (tokens.length) f = f.filter(p => {
+        const hay = ((p.sku||"") + " " + (p.name||"")).toLowerCase();
+        return tokens.every(t => hay.includes(t));
+      });
       if (reorderFilter) f = f.filter(needsReorder);
       return f;
     };
