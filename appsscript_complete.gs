@@ -455,7 +455,8 @@ function doGet(e) {
     products.forEach(p => {
       const loc = qtyLoc[p.sku];
       if (loc) {
-        p.qtyStore = loc.qtyStore;
+        // qtyStore: ใช้ค่าจาก "จำนวนหน้าร้าน" col D ถ้ามี ไม่งั้น fallback col G (ZORT)
+        p.qtyStore = frontStoreQtys[p.sku] !== undefined ? frontStoreQtys[p.sku] : loc.qtyStore;
         p.qtyWH = loc.qtyWH;
         p.warehouseQty = loc.qtyWH;
         if (loc.price > 0) p.price = loc.price;
