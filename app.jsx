@@ -348,19 +348,14 @@ function App() {
       .then(r => r.json())
       .then(d => {
         if (d && d.lastModified) window._dataLoadedAt = d.lastModified;
-        // แสดง raw data ทันทีเพื่อไม่ให้ UI รอ enrichData (ซึ่งอาจใช้เวลาบน mobile)
-        // แล้วค่อย enrich ใน next tick — ลด jank สำหรับสินค้า 1000+ รายการ
-        setData(d);
-        setTimeout(() => {
-          if (typeof resetCatColorMap === 'function') resetCatColorMap();
-          let enriched;
-          try { enriched = enrichData(d); } catch (e) {
-            console.warn("enrichData failed during fetchFromSheet:", e);
-            enriched = d;
-          }
-          setData(enriched);
-          saveToStorage(enriched, "sheet");
-        }, 0);
+        if (typeof resetCatColorMap === 'function') resetCatColorMap();
+        let enriched;
+        try { enriched = enrichData(d); } catch (e) {
+          console.warn("enrichData failed during fetchFromSheet:", e);
+          enriched = d;
+        }
+        setData(enriched);
+        saveToStorage(enriched, "sheet");
         setSource("sheet");
         const now = new Date().toISOString();
         localStorage.setItem("dmj_last_sync", now);
