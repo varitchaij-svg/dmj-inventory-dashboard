@@ -69,12 +69,17 @@ async function loadImgSafe(url) {
   if (!url) return null;
   return new Promise(function(resolve) {
     var img = new window.Image();
-    img.crossOrigin = 'anonymous';
-    var t = setTimeout(function() { resolve(null); }, 5000);
+    // ไม่ตั้ง crossOrigin — โหลดได้จากทุก server แต่ canvas อาจ tainted
+    var t = setTimeout(function() { resolve(null); }, 6000);
     img.onload = function() { clearTimeout(t); resolve(img); };
     img.onerror = function() { clearTimeout(t); resolve(null); };
     img.src = url;
   });
+}
+
+function hexToRgb(hex) {
+  var r = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return r ? { r: parseInt(r[1],16), g: parseInt(r[2],16), b: parseInt(r[3],16) } : null;
 }
 
 function rrectFill(ctx, x, y, w, h, r, color) {
@@ -116,8 +121,10 @@ function drawProductCardCanvas(p, img, accentColor) {
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, W, H);
 
-  // image
-  if (img && img.naturalWidth > 0) {
+  var hasImg = img && img.naturalWidth > 0;
+
+  // ── image / placeholder header ────────────────────────────────────
+  if (hasImg) {
     ctx.save();
     ctx.beginPath(); ctx.rect(0, 0, W, imgH); ctx.clip();
     var scale = Math.max(W / img.naturalWidth, imgH / img.naturalHeight);
@@ -125,19 +132,31 @@ function drawProductCardCanvas(p, img, accentColor) {
     ctx.drawImage(img, (W - dw) / 2, (imgH - dh) / 2, dw, dh);
     ctx.restore();
   } else {
-    rrectFill(ctx, 0, 0, W, imgH, 0, '#f0fdf4');
-    ctx.fillStyle = '#d1fae5';
-    ctx.font = '48px serif';
+    // Gradient background using product color or accent color
+    var baseColor = (p.color && p.color.hex) ? p.color.hex : (accentColor || '#16a34a');
+    var rgb = hexToRgb(baseColor) || { r:22, g:101, b:52 };
+    var g1 = ctx.createLinearGradient(0, 0, W, imgH);
+    g1.addColorStop(0, 'rgba(' + Math.min(rgb.r+30,255) + ',' + Math.min(rgb.g+40,255) + ',' + Math.min(rgb.b+30,255) + ',1)');
+    g1.addColorStop(1, 'rgba(' + Math.max(rgb.r-20,0) + ',' + Math.max(rgb.g-20,0) + ',' + Math.max(rgb.b-20,0) + ',1)');
+    ctx.fillStyle = g1;
+    ctx.fillRect(0, 0, W, imgH);
+    // Category emoji watermark (large, subtle)
+    var catEmoji = (typeof CAT_EMOJI !== 'undefined' && CAT_EMOJI[p.cat]) || '📦';
+    ctx.save();
+    ctx.globalAlpha = 0.2;
+    ctx.font = '100px serif';
     ctx.textAlign = 'center';
-    ctx.fillText('🌿', W / 2, imgH / 2 + 18);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(catEmoji, W / 2, imgH / 2 + 36);
+    ctx.restore();
   }
 
-  // gradient overlay for price
-  var grad = ctx.createLinearGradient(0, imgH - 70, 0, imgH);
-  grad.addColorStop(0, 'rgba(0,0,0,0)');
-  grad.addColorStop(1, 'rgba(0,0,0,0.65)');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, imgH - 70, W, 70);
+  // gradient overlay for price text (both image and placeholder)
+  var gradOverlay = ctx.createLinearGradient(0, imgH - 80, 0, imgH);
+  gradOverlay.addColorStop(0, 'rgba(0,0,0,0)');
+  gradOverlay.addColorStop(1, 'rgba(0,0,0,0.68)');
+  ctx.fillStyle = gradOverlay;
+  ctx.fillRect(0, imgH - 80, W, 80);
 
   // category badge
   if (p.cat) {
@@ -263,9 +282,21 @@ async function downloadSupplierCardsZip(groupName, items, accentColor, onProgres
   // draw & add to zip
   for (var i = 0; i < items.length; i++) {
     var p = items[i];
-    var canvas = drawProductCardCanvas(p, imgMap[p.sku] || null, accentColor);
-    var blob = await new Promise(function(res) { canvas.toBlob(res, 'image/jpeg', 0.92); });
-    folder.file((p.sku || ('item' + i)) + '.jpg', blob);
+    var imgForCard = imgMap[p.sku] || null;
+    var canvas = drawProductCardCanvas(p, imgForCard, accentColor);
+    var blob = null;
+    try {
+      blob = await new Promise(function(res, rej) {
+        try {
+          canvas.toBlob(function(b) { b ? res(b) : rej(new Error('tainted')); }, 'image/jpeg', 0.92);
+        } catch(e) { rej(e); }
+      });
+    } catch(e) {
+      // canvas tainted (CORS) → วาดใหม่โดยไม่ใส่รูป
+      var c2 = drawProductCardCanvas(p, null, accentColor);
+      blob = await new Promise(function(res) { c2.toBlob(res, 'image/jpeg', 0.92); });
+    }
+    if (blob) folder.file((p.sku || ('item' + i)) + '.jpg', blob);
     if (onProgress) onProgress('draw', p.sku);
   }
 
