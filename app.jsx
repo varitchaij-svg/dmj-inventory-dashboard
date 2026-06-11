@@ -326,6 +326,8 @@ function App() {
   const [lastSaved, setLastSaved] = usS(null); // auto-save timestamp
   const [confirmAction, setConfirmAction] = usS(null); // { type:"clearLocal"|"logout" }
   const [moreOpen, setMoreOpen] = usS(false); // dropdown "เพิ่มเติม" บน navtabs (owner)
+  const [moreRect, setMoreRect] = usS(null);  // position ของปุ่มเพิ่มเติม (fixed dropdown)
+  const moreButtonRef = React.useRef(null);
   const [installPrompt, setInstallPrompt] = usS(null);
   const [installDismissed, setInstallDismissed] = usS(() => !!sessionStorage.getItem("dmj_install_dismissed"));
   const [activeCheckRequest, setActiveCheckRequest] = usS(null); // check request ที่ fs/wh กำลังทำ
@@ -622,43 +624,50 @@ function App() {
                       </button>
                     ))}
                     <div style={{position:"relative"}}>
-                      <button role="tab"
+                      <button ref={moreButtonRef} role="tab"
                               className={`navtab${secondaryTabs.some(t=>t.id===activeTab)||moreOpen?' active':''}`}
-                              onClick={() => setMoreOpen(v => !v)}>
+                              onClick={() => {
+                                if (!moreOpen && moreButtonRef.current) {
+                                  setMoreRect(moreButtonRef.current.getBoundingClientRect());
+                                }
+                                setMoreOpen(v => !v);
+                              }}>
                         <span style={{fontSize:18,lineHeight:1}}>⋯</span>
                         <span>เพิ่มเติม</span>
                       </button>
-                      {moreOpen && (
-                        <div onClick={() => setMoreOpen(false)}
-                             style={{position:"fixed",inset:0,zIndex:199}}/>
-                      )}
-                      {moreOpen && (
-                        <div style={{
-                          position:"absolute", top:"calc(100% + 4px)", right:0,
-                          background:"var(--paper)", border:"1px solid var(--bdr)",
-                          borderRadius:12, padding:"6px 4px", zIndex:200,
-                          minWidth:200, boxShadow:"0 8px 24px rgba(0,0,0,.15)",
-                          maxHeight:"80vh", overflowY:"auto",
-                        }}>
-                          {secondaryTabs.map(t => (
-                            <button key={t.id}
-                                    onClick={() => { handleSetTab(t.id); setMoreOpen(false); }}
-                                    style={{
-                                      display:"flex", alignItems:"center", gap:10,
-                                      width:"100%", padding:"10px 14px",
-                                      border:"none", borderRadius:8, cursor:"pointer",
-                                      fontFamily:"inherit", fontSize:13, textAlign:"left",
-                                      background: activeTab===t.id ? "var(--g-50)" : "transparent",
-                                      color: activeTab===t.id ? "var(--g-800)" : "var(--text)",
-                                      fontWeight: activeTab===t.id ? 700 : 400,
-                                    }}>
-                              {t.icon}
-                              <span>{t.label}</span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
                     </div>
+                    {moreOpen && (
+                      <div onClick={() => setMoreOpen(false)}
+                           style={{position:"fixed",inset:0,zIndex:299}}/>
+                    )}
+                    {moreOpen && moreRect && (
+                      <div style={{
+                        position:"fixed",
+                        top: moreRect.bottom + 4,
+                        right: window.innerWidth - moreRect.right,
+                        background:"var(--paper)", border:"1px solid var(--bdr)",
+                        borderRadius:12, padding:"6px 4px", zIndex:300,
+                        minWidth:200, boxShadow:"0 8px 24px rgba(0,0,0,.15)",
+                        maxHeight:"80vh", overflowY:"auto",
+                      }}>
+                        {secondaryTabs.map(t => (
+                          <button key={t.id}
+                                  onClick={() => { handleSetTab(t.id); setMoreOpen(false); }}
+                                  style={{
+                                    display:"flex", alignItems:"center", gap:10,
+                                    width:"100%", padding:"10px 14px",
+                                    border:"none", borderRadius:8, cursor:"pointer",
+                                    fontFamily:"inherit", fontSize:13, textAlign:"left",
+                                    background: activeTab===t.id ? "var(--g-50)" : "transparent",
+                                    color: activeTab===t.id ? "var(--g-800)" : "var(--text)",
+                                    fontWeight: activeTab===t.id ? 700 : 400,
+                                  }}>
+                            {t.icon}
+                            <span>{t.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </>
                 );
               }
