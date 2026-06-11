@@ -1342,9 +1342,15 @@ function deleteOrderRow(ss, orderId) {
   const rowNum = parseInt(String(orderId).replace(/[^0-9]/g, ""));
   if (!rowNum || rowNum < 3) return error("orderId ไม่ถูกต้อง");
 
+  // orderId encode row number ณ เวลาที่โหลดข้อมูล — LockService ป้องกัน concurrent delete
+  // แต่ถ้าเวลาผ่านไปนานและมี delete อื่นเกิดขึ้น row อาจเลื่อน
+  // ตรวจ sanity: row ต้องมีข้อมูล SKU (col F, index 5) ก่อนลบ
   const lock = LockService.getScriptLock();
   if (!lock.waitLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
   try {
+    const rowData = sheet.getRange(rowNum, 1, 1, 7).getValues()[0];
+    const sku = String(rowData[5] || '').trim();
+    if (!sku) return error("แถวที่ " + rowNum + " ไม่มีข้อมูล SKU — อาจเลื่อนแถวแล้ว");
     sheet.deleteRow(rowNum);
     return ok({ deleted: orderId });
   } finally {
@@ -3263,8 +3269,13 @@ function sendLineGroupOrderCard_(name, sku, date, imageUrl) {
 
 // สรุปออเดอร์รอขึ้นรถ — ส่ง LINE กลุ่ม อังคาร-อาทิตย์ 08:00 และ 13:00
 function sendPendingTruckOrders() {
-  var day = new Date().getDay(); // 0=อา, 5=ศ, 6=ส
-  if (day !== 0 && day !== 5 && day !== 6) return;
+  var day = new Date().getDay();
+  // ตั้งค่าวันที่แจ้งเตือนได้ผ่าน Script Property TRUCK_NOTIFY_DAYS
+  // รูปแบบ: comma-separated day numbers (0=อา,1=จ,2=อ,3=พ,4=พฤ,5=ศ,6=ส)
+  // ค่า default: "0,5,6" = ศุกร์+เสาร์+อาทิตย์ (backward compatible)
+  var prop = PropertiesService.getScriptProperties().getProperty('TRUCK_NOTIFY_DAYS') || '0,5,6';
+  var notifyDays = prop.split(',').map(Number);
+  if (!notifyDays.includes(day)) return;
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var sh = ss.getSheetByName(SHEET_ORDERS);
   if (!sh) return;
