@@ -3425,11 +3425,18 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const carryOrders = uM(() => doneOrders.filter(o => o.carryMode === "carry").filter(o => !shipped[o.id] || missed[o.id]), [doneOrders, shipped, missed]);
   const truckOrders = uM(() => doneOrders.filter(o => o.carryMode !== "carry").filter(o => !shipped[o.id] || missed[o.id]), [doneOrders, shipped, missed]);
 
-  // ล้าง printed entries ที่ไม่ใช่ของ batch นี้ (กัน stale ID ทำให้โชว์ "✓ Printed" ผิด)
+  // ล้าง printed entries ที่ sheet ยังไม่ยืนยัน (กัน stale cache แสดง "✓ Printed" ผิด)
+  // เชื่อ sheet เป็น source of truth: ถ้า sheet บอก "print" = ยังไม่ได้ปริ้น ล้างออก
   uE(() => {
     if (!doneOrders.length) return;
     const currentIds = new Set(doneOrders.map(o => o.id));
-    const cleaned = Object.fromEntries(Object.entries(printed).filter(([id]) => currentIds.has(id)));
+    const cleaned = Object.fromEntries(
+      Object.entries(printed).filter(([id]) => {
+        if (!currentIds.has(id)) return false; // ไม่ใช่ batch นี้
+        const ord = doneOrders.find(o => o.id === id);
+        return ord && ord.printFlag === "printed"; // เก็บแค่ที่ sheet ยืนยันแล้ว
+      })
+    );
     if (Object.keys(cleaned).length !== Object.keys(printed).length) {
       setPrinted(cleaned);
       localStorage.setItem(LS_PRINTED_ORDERS, JSON.stringify(cleaned));
