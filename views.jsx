@@ -1739,9 +1739,10 @@ function CategoryView({ data, role }) {
       return [...f].sort(sortFn);
     }
     if (gq) {
-      // Global: search all categories
+      // Global search — กรองทุก category แล้วค่อย restrict ด้วย active (ถ้าเลือกไว้)
       let f = products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า");
       f = applyCommon(f);
+      if (active) f = f.filter(p => p.cat === active);
       if (newStockFilter) f = f.filter(p => isNew45(p.lastStockInDate));
       return [...f].sort(sortFn);
     }
@@ -1756,6 +1757,28 @@ function CategoryView({ data, role }) {
     if (newStockFilter) f = f.filter(p => isNew45(p.lastStockInDate));
     return [...f].sort(sortFn);
   }, [products, active, globalSearch, globalVendor, colorFilter, supplierFilter, deadFilter, newStockFilter, reorderFilter, needsReorder, sortFn]);
+
+  // counts per category when searching — ใช้อัปเดต select dropdown
+  const searchCatCounts = uM(() => {
+    const gq = globalSearch.trim().toLowerCase();
+    if (!gq) return null;
+    const base = products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า");
+    const tokens = gq.split(/\s+/);
+    const matched = base.filter(p => {
+      const hay = ((p.sku||"") + " " + (p.name||"")).toLowerCase();
+      return tokens.every(t => hay.includes(t));
+    });
+    const counts = {};
+    matched.forEach(p => { counts[p.cat] = (counts[p.cat] || 0) + 1; });
+    return { counts, total: matched.length };
+  }, [products, globalSearch]);
+
+  // ถ้า search เปลี่ยนแล้ว active category ไม่มีผลลัพธ์ → reset
+  uE(() => {
+    if (searchCatCounts && active && !(searchCatCounts.counts[active] > 0)) {
+      setActive("");
+    }
+  }, [searchCatCounts, active]);
 
   // reset page เมื่อ filter/category/search เปลี่ยน
   uE(() => { setPage(1); }, [active, globalSearch, globalVendor, colorFilter, supplierFilter, deadFilter, newStockFilter, reorderFilter, sortBy]);
@@ -1928,7 +1951,7 @@ function CategoryView({ data, role }) {
             display:"flex", alignItems:"center", gap:6,
           }}>
             <span style={{width:8,height:8,borderRadius:"50%",background:"var(--g-500)",display:"inline-block"}}/>
-            พบ {filtered.length} รายการ จากทุกหมวดหมู่
+            พบ {searchCatCounts ? searchCatCounts.total : filtered.length} รายการ{active ? ` ในหมวด "${active}"` : " จากทุกหมวดหมู่"}
             {filtered.length === 0 && <span style={{color:"var(--muted)",fontWeight:400}}>— ลองค้นหาด้วยคำอื่น</span>}
           </div>
         )}
@@ -1985,9 +2008,12 @@ function CategoryView({ data, role }) {
               cursor:"pointer", boxSizing:"border-box",
               color:"var(--text)", outline:"none",
             }}>
-            <option value="">📋 ทั้งหมด ({products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า").length})</option>
-            {allCats.map(c => {
-              const n = products.filter(p => p.cat === c).length;
+            <option value="">📋 ทั้งหมด ({searchCatCounts ? searchCatCounts.total : products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า").length})</option>
+            {(searchCatCounts
+              ? allCats.filter(c => (searchCatCounts.counts[c] || 0) > 0)
+              : allCats
+            ).map(c => {
+              const n = searchCatCounts ? (searchCatCounts.counts[c] || 0) : products.filter(p => p.cat === c).length;
               return <option key={c} value={c}>{CAT_EMOJI[c] || "📁"} {c} ({n})</option>;
             })}
           </select>
