@@ -61,13 +61,10 @@ function LoginScreen({ onLogin }) {
     if (base) {
       setChecking(true); setErr(false);
       try {
-        // ส่ง PIN ผ่าน POST body เพื่อไม่ให้ PIN ปรากฏใน URL / server access log
-        // หมายเหตุ: GAS ต้องจัดการ action=verifyPin ใน doPost ด้วย (ปัจจุบันอาจอยู่ใน doGet)
-        const res = await fetch(base, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'verifyPin', pin }),
-        });
+        const url = new URL(base);
+        url.searchParams.set('action', 'verifyPin');
+        url.searchParams.set('pin', pin);
+        const res = await fetch(url.toString());
         const d = await res.json();
         setChecking(false);
         if (!d || typeof d.ok !== 'boolean') { setErr(true); setPin(""); return; }
