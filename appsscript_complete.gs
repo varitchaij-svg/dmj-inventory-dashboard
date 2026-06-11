@@ -1771,7 +1771,7 @@ function syncZortToColumn_(warehousecode, colIndex, cachedProducts) {
       zortMap[sku]      = Number(p.availablestock || 0);
       zortNameMap[sku]  = String(p.name         || "").trim();
       zortCatMap[sku]   = String(p.category      || "").trim();
-      zortTagMap[sku]   = String(p.tag            || "").trim();
+      zortTagMap[sku]   = Array.isArray(p.tag) ? p.tag.join(",") : String(p.tag || "").trim();
       zortPriceMap[sku] = Number(p.sellprice      || 0);
     }
   }
@@ -1846,7 +1846,7 @@ function syncNewProductsFromZort(cachedWH, cachedFS) {
         p.name || "",
         p.category || "",
         p.subCategory || "",
-        p.tag || "",
+        Array.isArray(p.tag) ? p.tag.join(",") : String(p.tag || "").trim(),
         0,
         Number(p.availablestock || 0),
         Number(p.sellprice || 0)
