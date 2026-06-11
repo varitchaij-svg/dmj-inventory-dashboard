@@ -49,7 +49,7 @@ function PurchaseGroupView({ products }) {
 }
 
 // ─── FrontStoreView ───
-function FrontStoreView({ data, role }) {
+function FrontStoreView({ data, role, onRefresh }) {
   const products = data.products || [];
   const [toast, showToast, hideToast] = useToast();
   const CAT_ORDER = ["Realtouch","ดอกไม้","บูช","ไม้แซม","ดอกหญ้า","ใบ","ใบบูช","ใบไม้แขวน","กิ่งไม้","กุหลาบหิน","ต้นไม้","แจกันแก้ว","เรซิ่น"];
@@ -198,6 +198,7 @@ function FrontStoreView({ data, role }) {
       setTouched(new Set());
       setLastSavedTime(new Date());
       showToast("success", `บันทึก ${entries.length} รายการ`, "💾");
+      onRefresh?.();
     } else if (!isAuto) {
       // auto-save ที่ fail จะเงียบ + retry เอง (FAB ยังแสดง "รอบันทึก") กัน toast เด้งซ้ำทุก 3 วิ
       showToast("error", "บันทึกไม่สำเร็จ", "❌");
@@ -858,7 +859,7 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
 // ─────────────────────────────────────────────────────────────────────
 // STOCK COUNT VIEW — นับ stock คลัง ทีละล็อค (Owner + WH เท่านั้น)
 // ─────────────────────────────────────────────────────────────────────
-function StockCountView({ data, checkRequest, onCheckComplete }) {
+function StockCountView({ data, checkRequest, onCheckComplete, onRefresh }) {
   const storage    = data.storage  || {};
   const shelves    = storage.shelves || { A: 10, B: 10, locksPerShelf: 15 };
   const verifiedLockMap = storage.verifiedLockMap || {};
@@ -1070,6 +1071,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 3000);
       showToast('success', 'บันทึก ' + entries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
+      onRefresh?.();
     } else {
       setSaveStatus("error");
       if (!isAuto) showToast('error', 'บันทึกไม่สำเร็จ', '❌');
@@ -1111,6 +1113,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 3000);
       showToast('success', 'ยืนยันผลนับแล้ว ' + entries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
+      onRefresh?.();
     } else {
       setSaveStatus("error");
       showToast('error', 'ยืนยันไม่สำเร็จ', '❌');

@@ -810,6 +810,7 @@ function App() {
         {activeTab === "storage"      && <ErrorBoundary key="storage"><StorageView data={data}/></ErrorBoundary>}
         {activeTab === "stockcount"   && <ErrorBoundary key="stockcount"><StockCountView data={data}
                                             checkRequest={activeCheckRequest}
+                                            onRefresh={fetchFromSheet}
                                             onCheckComplete={async function(reqId){
                                               try {
                                                 await fetch(SHEET_DEPLOY_URL, {method:"POST",
@@ -819,7 +820,7 @@ function App() {
                                                 fetchFromSheet();
                                               } catch(e){ console.error("completeStockCheck:", e); }
                                             }}/></ErrorBoundary>}
-        {activeTab === "frontstore"   && <ErrorBoundary key="frontstore"><FrontStoreView data={data} role={role}/></ErrorBoundary>}
+        {activeTab === "frontstore"   && <ErrorBoundary key="frontstore"><FrontStoreView data={data} role={role} onRefresh={fetchFromSheet}/></ErrorBoundary>}
         {activeTab === "transfers"    && <ErrorBoundary key="transfers"><TransferView data={data}/></ErrorBoundary>}
         {activeTab === "orders"       && <ErrorBoundary key="orders"><OrderListView data={data} role={role}/></ErrorBoundary>}
         {activeTab === "ordersummary" && <ErrorBoundary key="ordersummary"><OrderSummaryView data={data} onPrintRequest={handleOrderPrint}/></ErrorBoundary>}
