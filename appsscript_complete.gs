@@ -319,9 +319,10 @@ function doPost(e) {
     }
 
     // ─── MTO Jobs ───
-    if (data.createMtoJob)  return createMtoJob(ss, data);
-    if (data.closeMtoJob)   return closeMtoJob(ss, data, actor);
-    if (data.deleteMtoJob)  return deleteMtoJob(ss, data);
+    if (data.createMtoJob)    return createMtoJob(ss, data);
+    if (data.closeMtoJob)     return closeMtoJob(ss, data, actor);
+    if (data.deleteMtoJob)    return deleteMtoJob(ss, data);
+    if (data.saveMtoJobItems) return saveMtoJobItems(ss, data);
 
     // ─── Stock Check Requests ───
     if (data.createStockCheck) return createStockCheckRequest_(data.skus, data.names, actor);
@@ -4009,6 +4010,37 @@ function createZortSaleOrder_(items, jobName) {
   const json = JSON.parse(res.getContentText() || "{}");
   Logger.log("ZORT Sale Order created: " + JSON.stringify(json));
   return { success: true, orderNumber: json.number || json.ordernumber || null };
+}
+
+// บันทึกวัตถุดิบ MTO โดยไม่ปิดงาน — ลบแถว draft เก่าแล้วเขียนใหม่ (closedAt ว่าง = draft)
+function saveMtoJobItems(ss, data) {
+  const jobId = String(data.jobId || "").trim();
+  const items = Array.isArray(data.items) ? data.items : [];
+  if (!jobId) return error("ไม่มี jobId");
+
+  const itemSh = getOrCreateMtoItemSheet_(ss);
+  if (!itemSh) return error("ไม่พบชีต วัตถุดิบ MTO");
+
+  // ลบแถว draft (closedAt ว่าง) ของ job นี้ออกก่อน
+  const rows = itemSh.getDataRange().getValues();
+  const toDelete = [];
+  for (let i = rows.length - 1; i >= 1; i--) {
+    if (String(rows[i][0]).trim() === jobId && !String(rows[i][7] || "").trim()) {
+      toDelete.push(i + 1); // 1-indexed, เรียงจากล่างขึ้นบน
+    }
+  }
+  toDelete.forEach(r => itemSh.deleteRow(r));
+
+  // เขียน items ใหม่ (ไม่มี closedAt = ยังไม่ปิด)
+  items.forEach(item => {
+    const qty = Number(item.qty) || 0;
+    const ret = Math.max(0, Math.min(Number(item.returnedQty) || 0, qty));
+    itemSh.appendRow([jobId, item.sku || "", item.name || "", qty, item.warehouse || "warehouse", ret, qty - ret, ""]);
+  });
+
+  SpreadsheetApp.flush();
+  invalidateCache_();
+  return ok({ saved: items.length });
 }
 
 function deleteMtoJob(ss, data) {

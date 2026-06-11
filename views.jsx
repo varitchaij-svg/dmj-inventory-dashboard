@@ -10428,6 +10428,32 @@ function MtoJobView({ data }) {
     }));
   };
 
+  const handleSaveJob = async () => {
+    if (!activeJob) return;
+    setSaving(true);
+    try {
+      const res = await fetch(SHEET_DEPLOY_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({
+          saveMtoJobItems: true,
+          jobId: activeJob.jobId,
+          items: materials,
+        }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        showToast("success", "บันทึกวัตถุดิบเรียบร้อย");
+      } else {
+        showToast("error", json.error || "เกิดข้อผิดพลาด");
+      }
+    } catch (e) {
+      showToast("error", e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleCloseJob = async () => {
     if (!activeJob) return;
     if (materials.length === 0) { showToast("warn", "ยังไม่มีวัตถุดิบ"); return; }
@@ -10765,7 +10791,7 @@ function MtoJobView({ data }) {
           )}
         </div>
 
-        {/* Close job button */}
+        {/* Save + Close job buttons */}
         {isOpen && (
           <>
             {!isOnline && (
@@ -10773,8 +10799,19 @@ function MtoJobView({ data }) {
                 textAlign:"center",fontSize:12,color:"#b45309",
                 background:"#fffbeb",border:"1px solid #fde68a",
                 borderRadius:8,padding:"6px 12px",marginBottom:6,fontWeight:600,
-              }}>⚠️ ไม่มีอินเทอร์เน็ต — ไม่สามารถปิดงานได้</div>
+              }}>⚠️ ไม่มีอินเทอร์เน็ต — ไม่สามารถบันทึกได้</div>
             )}
+            <button onClick={handleSaveJob}
+              disabled={saving || !isOnline}
+              style={{
+                width:"100%", padding:"11px", fontSize:14, fontWeight:700,
+                borderRadius:10, marginBottom:8, cursor:"pointer",
+                border:"2px solid var(--g-600)", background:"var(--paper)",
+                color:"var(--g-700)", fontFamily:"inherit",
+                opacity: !isOnline ? 0.5 : 1,
+              }}>
+              {saving ? "กำลังบันทึก..." : "💾 บันทึกวัตถุดิบ"}
+            </button>
             <button className="btn primary" onClick={handleCloseJob}
               disabled={saving || materials.length === 0 || !isOnline}
               style={{ width: "100%", padding: "14px", fontSize: 15, fontWeight: 800, background: "#1b5e20", borderRadius: 12,
