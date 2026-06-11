@@ -3425,12 +3425,24 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const carryOrders = uM(() => doneOrders.filter(o => o.carryMode === "carry").filter(o => !shipped[o.id] || missed[o.id]), [doneOrders, shipped, missed]);
   const truckOrders = uM(() => doneOrders.filter(o => o.carryMode !== "carry").filter(o => !shipped[o.id] || missed[o.id]), [doneOrders, shipped, missed]);
 
+  // ล้าง printed entries ที่ไม่ใช่ของ batch นี้ (กัน stale ID ทำให้โชว์ "✓ Printed" ผิด)
+  uE(() => {
+    if (!doneOrders.length) return;
+    const currentIds = new Set(doneOrders.map(o => o.id));
+    const cleaned = Object.fromEntries(Object.entries(printed).filter(([id]) => currentIds.has(id)));
+    if (Object.keys(cleaned).length !== Object.keys(printed).length) {
+      setPrinted(cleaned);
+      localStorage.setItem(LS_PRINTED_ORDERS, JSON.stringify(cleaned));
+    }
+  }, [doneOrders]);
+
   const handlePrint = (order) => {
     const qty = order.preparedQty || order.orderQty || 1;
     onPrintRequest([{ sku: order.sku, qty }]);
     const p2 = { ...printed, [order.id]: true };
     setPrinted(p2);
     localStorage.setItem(LS_PRINTED_ORDERS, JSON.stringify(p2));
+    syncOrderUpdate(order, { printFlag: "printed" });
   };
 
   const handleShip = (order) => setShipConfirm(order);
@@ -3642,7 +3654,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
             const isShipped = !!shipped[order.id];
             const isMissed  = !!missed[order.id];
             const isSending = sending === order.id;
-            const alreadyPrinted = printed[order.id];
+            const alreadyPrinted = printed[order.id] || order.printFlag === "printed";
             const prepQty = order.preparedQty || order.orderQty || 0;
 
             return (
