@@ -9289,7 +9289,11 @@ function OrderSummaryView({ data, onPrintRequest }) {
     // ถ้า batch ทั้งก้อนล้ม (network/timeout/GAS error) → ไม่ลบ ไม่มาร์คอะไรเลย คงรายการไว้ทั้งหมด ให้ลองใหม่
     if (!batchOk) {
       setSending(null);
-      showToast("warn", `ส่งไม่สำเร็จ — ระบบมีปัญหา ${batchRes.error || ""} · คงรายการไว้ ลองใหม่อีกครั้ง`, "⚠️", 7000);
+      if (batchRes && batchRes.conflict) {
+        showToast("warn", "ข้อมูลสต็อกเปลี่ยนไปแล้ว — กรุณารีเฟรชข้อมูลก่อนส่งอีกครั้ง 🔄", "⚠️", 8000);
+      } else {
+        showToast("warn", `ส่งไม่สำเร็จ — ระบบมีปัญหา ${batchRes.error || ""} · คงรายการไว้ ลองใหม่อีกครั้ง`, "⚠️", 7000);
+      }
       return;
     }
 

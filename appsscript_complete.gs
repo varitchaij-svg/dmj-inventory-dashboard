@@ -839,12 +839,14 @@ function createZortTransferBatch_(items) {
     list: items.map(it => ({ sku: it.sku, name: it.name, number: it.qty }))
   };
   let lastErr = null;
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  // deadlineSeconds: 8 กัน ZORT ช้า/timeout → สูงสุด 2×8 + 1s sleep = ~17s ภายใน 30s GAS limit
+  for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       const res = UrlFetchApp.fetch(ZORT_BASE + "/Transfer/AddTransfer", {
         method: "post", headers,
         payload: JSON.stringify(payload),
-        muteHttpExceptions: true
+        muteHttpExceptions: true,
+        deadlineSeconds: 8,
       });
       const json = JSON.parse(res.getContentText());
       Logger.log("createZortTransferBatch_ attempt " + attempt + ": " + JSON.stringify(json));
@@ -854,7 +856,7 @@ function createZortTransferBatch_(items) {
       lastErr = e;
       Logger.log("createZortTransferBatch_ attempt " + attempt + " error: " + e);
     }
-    Utilities.sleep(800 * attempt);
+    if (attempt < 2) Utilities.sleep(1000);
   }
   return lastErr;
 }
