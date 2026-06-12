@@ -114,3 +114,66 @@ describe('enrichDataCore — deadMonths', () => {
     expect(d.products[0].deadMonths).toBeGreaterThan(0);
   });
 });
+
+describe('enrichDataCore — tag edge cases', () => {
+  it('tag มี spaces รอบ comma → trim ออก', () => {
+    const d = { products: [{ tag: ' S001 , ขายหน้าร้าน , B002 ', qtyWH: 0 }] };
+    enrichDataCore(d);
+    expect(d.products[0].supplierTags).toEqual(['S001', 'B002']);
+    expect(d.products[0].statusTags).toEqual(['ขายหน้าร้าน']);
+  });
+
+  it('tag ว่าง ("") → supplierTags และ statusTags เป็น []', () => {
+    const d = { products: [{ tag: '', qtyWH: 0 }] };
+    enrichDataCore(d);
+    expect(d.products[0].supplierTags).toEqual([]);
+    expect(d.products[0].statusTags).toEqual([]);
+  });
+
+  it('tag มี comma ซ้อน → filter out string ว่าง', () => {
+    const d = { products: [{ tag: 'S001,,S002', qtyWH: 0 }] };
+    enrichDataCore(d);
+    expect(d.products[0].supplierTags).toEqual(['S001', 'S002']);
+  });
+
+  it('tag เป็น number → แปลงเป็น string ไม่ throw', () => {
+    const d = { products: [{ tag: 12345, qtyWH: 0 }] };
+    expect(() => enrichDataCore(d)).not.toThrow();
+  });
+});
+
+describe('enrichDataCore — หลายสินค้าในครั้งเดียว', () => {
+  it('products หลายอัน: แต่ละอันได้รับ enrichment ถูกต้อง', () => {
+    const d = {
+      products: [
+        { sku: 'A001', tag: 'VENDOR1', category: 'แจกัน', qtyWH: 0 },
+        { sku: 'B002', tag: 'สินค้าจม', category: 'ดอกไม้', qtyWH: 5, lastTransferDate: '2024-01-01' },
+      ],
+    };
+    enrichDataCore(d);
+    expect(d.products[0].vendor).toBe('VENDOR1');
+    expect(d.products[0].cat).toBe('แจกัน');
+    expect(d.products[1].statusTags).toEqual(['สินค้าจม']);
+    expect(d.products[1].deadMonths).toBeGreaterThan(0);
+  });
+});
+
+describe('enrichDataCore — deadMonths edge cases', () => {
+  it('qtyWH=0, warehouseQty=0 → deadMonths=null (ทั้งสองฟิลด์ = 0)', () => {
+    const d = { products: [{ qtyWH: 0, warehouseQty: 0, lastTransferDate: '2024-01-01' }] };
+    enrichDataCore(d);
+    expect(d.products[0].deadMonths).toBeNull();
+  });
+
+  it('warehouseQty>0, lastTransferDate อนาคต → deadMonths = 0 (ไม่ติดลบ)', () => {
+    const d = { products: [{ warehouseQty: 5, lastTransferDate: '2099-01-01' }] };
+    enrichDataCore(d);
+    expect(d.products[0].deadMonths).toBe(0);
+  });
+
+  it('warehouseQty>0, lastStockInDate อนาคต, ไม่มี lastTransferDate → deadMonths = 0', () => {
+    const d = { products: [{ warehouseQty: 5, lastStockInDate: '2099-01-01' }] };
+    enrichDataCore(d);
+    expect(d.products[0].deadMonths).toBe(0);
+  });
+});

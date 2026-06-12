@@ -272,6 +272,70 @@ function deductStockCore({ whQty, fsQty }, qty) {
   };
 }
 
+// ── parseOrderId: parse orderId "R5" → 5 (จาก updateOrderState, GAS:1103) ────
+// คืน NaN ถ้า invalid (< 1 หรือ parse ไม่ได้)
+function parseOrderId(orderId) {
+  if (!orderId) return NaN;
+  const n = parseInt(String(orderId).replace(/[^0-9]/g, ''), 10);
+  return n >= 1 ? n : NaN;
+}
+
+// ── shipmentReceiveStatus: status รับสินค้า (จาก confirmShipmentReceive, GAS:1175) ─
+function shipmentReceiveStatus(recv, sentQty) {
+  return recv >= sentQty ? 'รับครบ' : 'รับไม่ครบ';
+}
+
+// ── carryModeToType: แปลง carryMode → ค่าที่เขียนลงชีต (จาก updateOrderState, GAS:1110) ─
+function carryModeToType(carryMode) {
+  return carryMode === 'carry' ? 'หิ้ว' : 'รอขึ้นรถ';
+}
+
+// ── transferBatchItemCore: pure math สำหรับ item เดียวใน transferStockBatch ────
+// (GAS:774-793) — ย้าย WH→FS เท่าที่ทำได้ ไม่ติดลบ
+function transferBatchItemCore(whQty, fsQty, requestedQty) {
+  const actual = Math.min(requestedQty, whQty);
+  return {
+    actual,
+    newWH:        whQty - actual,
+    newFS:        fsQty + actual,
+    shortfall:    actual < requestedQty,
+    shortfall_qty: requestedQty - actual,
+  };
+}
+
+// ── deductMaterialsCore: pure math สำหรับ deductMaterials (GAS:1047-1091) ────
+// stockMap: { [SKU_UPPER]: whQty }  →  หักหลาย item ตามลำดับ
+// คืน array { sku, deducted, newWH } (เฉพาะ SKU ที่พบใน stockMap)
+function deductMaterialsCore(stockMap, items) {
+  const state = Object.assign({}, stockMap);
+  const results = [];
+  for (const item of (items || [])) {
+    const sku = String(item.sku || '').trim().toUpperCase();
+    const qty = Number(item.qty) || 0;
+    if (!sku || qty <= 0) continue;
+    if (state[sku] == null) continue;
+    const actual = Math.min(qty, state[sku]);
+    state[sku] -= actual;
+    results.push({ sku, deducted: actual, newWH: state[sku] });
+  }
+  return results;
+}
+
+// ── getLowStockThreshold: copy จาก views.jsx:1599 ────────────────────────────
+function getLowStockThreshold(thresholds, sku) {
+  if (!thresholds) return 36;
+  return (thresholds.overrides && thresholds.overrides[sku]) || thresholds.default || 36;
+}
+
+// ── ROLE_TABS: copy จาก app.jsx:24 (schema lock) ─────────────────────────────
+const ROLE_TABS = {
+  owner:      ["overview","categories","trends","stock","storage","stockcount","frontstore","transfers","orders","ordersummary","mtojobs","upload","connect","labels","auditlog","deadstock"],
+  employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","mtojobs","labels"],
+  warehouse:  ["categories","storage","stockcount","orders","ordersummary","mtojobs","labels"],
+  frontstore: ["categories","stock","frontstore","orders","mtojobs","labels"],
+  saler:      ["categories","stock","orders","mtojobs","labels"],
+};
+
 // ── netOf: pure logic จาก closeMtoJob (appsscript_complete.gs:3763) ──────────
 // คำนวณ qty สุทธิ หลังหักของที่ return คืน — clamp return ไว้ที่ [0, qty]
 function netOf(item) {
@@ -317,4 +381,7 @@ module.exports = {
   enrichDataCore,
   COLOR_MAP, COLOR_KEYS, detectColor,
   parseQty_, parseNum_, parseLocation_,
+  parseOrderId, shipmentReceiveStatus, carryModeToType,
+  transferBatchItemCore, deductMaterialsCore,
+  getLowStockThreshold, ROLE_TABS,
 };

@@ -1,5 +1,5 @@
 // tests/dates.test.js — ทดสอบ monthsSince, monthLabel, monthKey_, dayKey_
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { monthsSince, monthLabel, monthKey_, dayKey_ } from './helpers.js';
 
 describe('monthsSince', () => {
@@ -32,23 +32,40 @@ describe('monthsSince', () => {
     expect(monthsSince('')).toBeNull();
   });
 
-  it('ขอบเดือน: วันที่ยังไม่ครบเดือน → นับหักหนึ่ง', () => {
-    // today = 2026-06-10 (per system context)
-    // อ้างอิง 2026-05-11: 10 < 11 → mo = 1 - 1 = 0 (ยังไม่ครบเดือน)
-    const result = monthsSince('2026-05-11');
-    expect(result).toBe(0);
-    // อ้างอิง 2026-05-10: 10 === 10 → ครบเดือนพอดี → mo = 1 (ไม่หัก)
-    const result2 = monthsSince('2026-05-10');
-    expect(result2).toBe(1);
-    // อ้างอิง 2026-05-01: 10 > 1 → mo = 1 (ครบเดือน)
-    const result3 = monthsSince('2026-05-01');
-    expect(result3).toBe(1);
-  });
+  // ──── Boundary tests ใช้ fake timers เพื่อ pin วันที่ → ไม่เปลี่ยนแปลงตาม calendar ────
+  describe('ขอบเดือน (pinned: today = 2026-06-15)', () => {
+    beforeAll(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-06-15'));
+    });
+    afterAll(() => {
+      vi.useRealTimers();
+    });
 
-  it('วันที่เดือนก่อน (ครบ 2 เดือน) → 2', () => {
-    // 2026-04-01 → 2 เดือน (4 >= 1)
-    const result = monthsSince('2026-04-01');
-    expect(result).toBe(2);
+    it('วันที่ยังไม่ครบเดือน → นับหักหนึ่ง', () => {
+      // today = 2026-06-15
+      // 2026-05-16: 15 < 16 → mo = 1 - 1 = 0
+      expect(monthsSince('2026-05-16')).toBe(0);
+      // 2026-05-15: 15 === 15 → ครบพอดี → mo = 1
+      expect(monthsSince('2026-05-15')).toBe(1);
+      // 2026-05-01: 15 > 1 → mo = 1
+      expect(monthsSince('2026-05-01')).toBe(1);
+    });
+
+    it('ครบ 2 เดือน → 2', () => {
+      // 2026-04-01: months = 2, 15 >= 1 → 2
+      expect(monthsSince('2026-04-01')).toBe(2);
+    });
+
+    it('ครบ 2 เดือนแบบขอบ: วันเดียวกัน → 2', () => {
+      // 2026-04-15: 15 === 15 → mo = 2
+      expect(monthsSince('2026-04-15')).toBe(2);
+    });
+
+    it('วันตรงขอบข้ามปี (ม.ค. → มิ.ย.) → 5 เดือน', () => {
+      // 2026-01-15: months = 5, 15 === 15 → mo = 5
+      expect(monthsSince('2026-01-15')).toBe(5);
+    });
   });
 });
 
