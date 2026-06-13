@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>วิเคราะห์ Supplier — DMJ</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #f5f7fa;
+    --card: #ffffff;
+    --bdr: #e2e8f0;
+    --text: #1a202c;
+    --muted: #718096;
+    --green: #38a169;
+    --red: #e53e3e;
+    --orange: #dd6b20;
+    --blue: #3182ce;
+    --purple: #805ad5;
+    --yellow: #d69e2e;
+    --shadow: 0 1px 4px rgba(0,0,0,.08);
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans Thai", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 20px 16px 40px;
+  }
+
+  h1 { font-size: 22px; font-weight: 700; }
+  h2 { font-size: 16px; font-weight: 700; }
+  h3 { font-size: 14px; font-weight: 600; }
+
+  .header {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 20px;
+  }
+  .header-sub { font-size: 13px; color: var(--muted); margin-top: 3px; }
+
+  /* ── Loading / Error ── */
+  .overlay {
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    min-height: 60vh; gap: 16px;
+  }
+  .spinner {
+    width: 40px; height: 40px;
+    border: 4px solid var(--bdr);
+    border-top-color: var(--blue);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Summary bar ── */
+  .summary-bar {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px; margin-bottom: 24px;
+  }
+  .stat-card {
+    background: var(--card);
+    border: 1px solid var(--bdr);
+    border-radius: 12px;
+    padding: 14px 16px;
+    box-shadow: var(--shadow);
+  }
+  .stat-card .val {
+    font-size: 22px; font-weight: 700; line-height: 1.2;
+  }
+  .stat-card .lbl { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  /* ── Section ── */
+  .section { margin-bottom: 32px; }
+  .section-title {
+    font-size: 15px; font-weight: 700;
+    margin-bottom: 12px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px; border-radius: 99px;
+    font-size: 11px; font-weight: 700;
+  }
+
+  /* ── Supplier cards ── */
+  .supplier-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 14px;
+  }
+  .supplier-card {
+    background: var(--card);
+    border: 1px solid var(--bdr);
+    border-radius: 14px;
+    padding: 16px;
+    box-shadow: var(--shadow);
+  }
+  .supplier-card.urgent { border-left: 4px solid var(--red); }
+  .supplier-card.warn   { border-left: 4px solid var(--orange); }
+  .supplier-card.good   { border-left: 4px solid var(--green); }
+
+  .supplier-header {
+    display: flex; align-items: flex-start;
+    justify-content: space-between; gap: 8px;
+    margin-bottom: 12px;
+  }
+  .supplier-name {
+    font-size: 15px; font-weight: 700;
+    word-break: break-all;
+  }
+  .urgency-badge {
+    flex-shrink: 0;
+    padding: 3px 10px; border-radius: 99px;
+    font-size: 11px; font-weight: 700;
+  }
+  .urgency-urgent { background: #fff5f5; color: var(--red); }
+  .urgency-warn   { background: #fffaf0; color: var(--orange); }
+  .urgency-good   { background: #f0fff4; color: var(--green); }
+
+  .metrics {
+    display: grid; grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px; margin-bottom: 12px;
+  }
+  .metric {
+    background: var(--bg); border-radius: 8px;
+    padding: 8px 10px; text-align: center;
+  }
+  .metric .mv { font-size: 16px; font-weight: 700; }
+  .metric .ml { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  .low-stock-list { display: flex; flex-direction: column; gap: 6px; }
+  .low-stock-item {
+    display: flex; align-items: center; gap: 8px;
+    background: #fffbf0; border: 1px solid #fde68a;
+    border-radius: 8px; padding: 7px 10px; font-size: 12px;
+  }
+  .low-stock-item.oos {
+    background: #fff5f5; border-color: #fca5a5;
+  }
+  .sku-chip {
+    background: var(--bdr); border-radius: 4px;
+    padding: 1px 5px; font-size: 10px; color: var(--muted);
+    font-family: monospace; white-space: nowrap;
+  }
+  .stock-val { margin-left: auto; font-weight: 700; white-space: nowrap; font-size: 12px; }
+  .stock-val.oos { color: var(--red); }
+  .stock-val.low { color: var(--orange); }
+
+  /* ── Order-ready table ── */
+  .order-table {
+    width: 100%; border-collapse: collapse;
+    font-size: 13px;
+  }
+  .order-table th {
+    background: var(--bg);
+    border-bottom: 2px solid var(--bdr);
+    padding: 10px 12px; text-align: left;
+    font-weight: 600; white-space: nowrap;
+    font-size: 12px; color: var(--muted);
+  }
+  .order-table td {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--bdr);
+    vertical-align: top;
+  }
+  .order-table tr:hover td { background: #f7f9fc; }
+  .order-table .sku { font-family: monospace; font-size: 11px; color: var(--muted); }
+  .order-table .name { font-weight: 500; max-width: 180px; }
+  .order-table .num { text-align: right; font-weight: 600; }
+  .table-wrap {
+    background: var(--card);
+    border: 1px solid var(--bdr);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+
+  /* ── Chips ── */
+  .chip { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 11px; }
+  .chip-red    { background: #fff5f5; color: var(--red); }
+  .chip-orange { background: #fffaf0; color: var(--orange); }
+  .chip-green  { background: #f0fff4; color: var(--green); }
+  .chip-blue   { background: #ebf8ff; color: var(--blue); }
+  .chip-purple { background: #faf5ff; color: var(--purple); }
+
+  /* ── Legend ── */
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; font-size: 12px; color: var(--muted); }
+  .legend-item { display: flex; align-items: center; gap: 5px; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+  /* print */
+  @media print {
+    body { background: white; padding: 10px; }
+    .stat-card, .supplier-card, .table-wrap { box-shadow: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>📦 วิเคราะห์ Supplier</h1>
+    <div class="header-sub" id="last-update">กำลังโหลดข้อมูล…</div>
+  </div>
+</div>
+
+<div id="root">
+  <div class="overlay">
+    <div class="spinner"></div>
+    <div style="color:var(--muted);font-size:14px;">กำลังดึงข้อมูลจาก Google Sheets…</div>
+  </div>
+</div>
+
+<script>
+// ── Config ──────────────────────────────────────────────
+const APP_TOKEN   = "dmj_f05e89750b555c849b3633c449548673";
+const SHEET_BASE  = "https://script.google.com/macros/s/AKfycbz4ARb5OaYZiY40X0VMDm6jca1BSC6UpQ-1QQ1nb4VGQ0jPch1MEmEOUvWEDaEPbVcONg/exec";
+const SHEET_URL   = SHEET_BASE + "?token=" + encodeURIComponent(APP_TOKEN);
+
+// ── Threshold ────────────────────────────────────────────
+const THRESH_WH = 10;   // คลังสาย5 ≤ 10 = ใกล้หมด
+const THRESH_OOS = 0;   // หมดแล้ว
+
+// ── Helpers ──────────────────────────────────────────────
+const fmt  = n => Number(n||0).toLocaleString("th-TH");
+const fmtB = n => {
+  const v = Number(n||0);
+  if (v >= 1e6) return (v/1e6).toFixed(1)+"M";
+  if (v >= 1e3) return (v/1e3).toFixed(0)+"K";
+  return fmt(v);
+};
+
+function getSupplier(p) {
+  const THAI_RE = /[฀-๿]/;
+  const rawTags = String(p.tag || "").split(",").map(t => t.trim()).filter(Boolean);
+  const supplierTags = rawTags.filter(t => !THAI_RE.test(t));
+  if (supplierTags.length) return supplierTags[0];
+  if (p.vendor)        return p.vendor;
+  if (p.lastSupplier)  return p.lastSupplier;
+  return null;
+}
+
+// ── Fetch & process ──────────────────────────────────────
+async function fetchData() {
+  const url = SHEET_URL + "&action=getData&role=owner";
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  return await res.json();
+}
+
+function analyze(data) {
+  const products = data.products || [];
+  const purchases = data.purchases || [];
+
+  // ── group products by supplier ──
+  const bySupplier = {};
+  for (const p of products) {
+    const sup = getSupplier(p);
+    if (!sup) continue;
+    if (!bySupplier[sup]) {
+      bySupplier[sup] = { name: sup, items: [], soldQty: 0, soldRev: 0 };
+    }
+    const s = bySupplier[sup];
+    s.items.push(p);
+    s.soldQty += Number(p.soldQty || 0);
+    s.soldRev  += Number(p.soldRev  || 0);
+  }
+
+  // ── last purchase date per supplier (from purchases sheet) ──
+  const lastPO = {};   // supplier → { date, poNum }
+  for (const po of purchases) {
+    const sup = po.supplier;
+    if (!sup) continue;
+    if (!lastPO[sup] || po.date > lastPO[sup].date) {
+      lastPO[sup] = { date: po.date, poNum: po.poNum };
+    }
+  }
+
+  // ── build supplier stats ──
+  const suppliers = Object.values(bySupplier).map(s => {
+    const lowStockItems = s.items
+      .filter(p => {
+        const wh = Number(p.qtyWH ?? p.warehouseQty ?? 0);
+        const store = Number(p.qtyStore ?? 0);
+        return (wh + store) <= THRESH_WH;
+      })
+      .sort((a, b) => {
+        const qa = Number(a.qtyWH ?? a.warehouseQty ?? 0) + Number(a.qtyStore ?? 0);
+        const qb = Number(b.qtyWH ?? b.warehouseQty ?? 0) + Number(b.qtyStore ?? 0);
+        return qa - qb;  // หมดก่อนขึ้นก่อน
+      });
+
+    const oosCount  = lowStockItems.filter(p =>
+      (Number(p.qtyWH ?? p.warehouseQty ?? 0) + Number(p.qtyStore ?? 0)) <= THRESH_OOS
+    ).length;
+
+    const urgency = oosCount > 0 ? "urgent"
+                  : lowStockItems.length > 0 ? "warn"
+                  : "good";
+
+    return {
+      ...s,
+      totalItems:    s.items.length,
+      lowStockItems,
+      lowCount:      lowStockItems.length,
+      oosCount,
+      urgency,
+      lastPO:        lastPO[s.name] || null,
+    };
+  });
+
+  // ── sort: urgent first, then by revenue ──
+  suppliers.sort((a, b) => {
+    const rank = { urgent: 0, warn: 1, good: 2 };
+    if (rank[a.urgency] !== rank[b.urgency]) return rank[a.urgency] - rank[b.urgency];
+    return b.soldRev - a.soldRev;
+  });
+
+  // ── global stats ──
+  const totalProducts  = products.length;
+  const withSupplier   = products.filter(p => getSupplier(p)).length;
+  const totalOOS       = products.filter(p =>
+    (Number(p.qtyWH ?? p.warehouseQty ?? 0) + Number(p.qtyStore ?? 0)) <= 0
+  ).length;
+  const totalLow       = products.filter(p => {
+    const q = Number(p.qtyWH ?? p.warehouseQty ?? 0) + Number(p.qtyStore ?? 0);
+    return q > 0 && q <= THRESH_WH;
+  }).length;
+
+  return { suppliers, totalProducts, withSupplier, totalOOS, totalLow };
+}
+
+// ── Render ───────────────────────────────────────────────
+function renderSupplierCard(s) {
+  const urgencyLabel = s.urgency === "urgent" ? "🔴 ด่วน!"
+                     : s.urgency === "warn"   ? "🟡 ใกล้หมด"
+                     :                          "🟢 สต็อกดี";
+
+  const lowItems = s.lowStockItems.map(p => {
+    const q = Number(p.qtyWH ?? p.warehouseQty ?? 0) + Number(p.qtyStore ?? 0);
+    const cls = q <= 0 ? "oos" : "";
+    const label = q <= 0 ? "หมด" : q + " ชิ้น";
+    const vCls = q <= 0 ? "oos" : "low";
+    return `
+      <div class="low-stock-item ${cls}">
+        <span class="sku-chip">${escHtml(p.sku || "")}</span>
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${escHtml(p.name || "")}
+        </span>
+        <span class="stock-val ${vCls}">${label}</span>
+      </div>`;
+  }).join("");
+
+  const lastPOHtml = s.lastPO
+    ? `<div style="font-size:11px;color:var(--muted);margin-top:8px">
+         🕓 สั่งล่าสุด: ${s.lastPO.date || "-"}
+       </div>`
+    : "";
+
+  return `
+    <div class="supplier-card ${s.urgency}">
+      <div class="supplier-header">
+        <div class="supplier-name">${escHtml(s.name)}</div>
+        <span class="urgency-badge urgency-${s.urgency}">${urgencyLabel}</span>
+      </div>
+      <div class="metrics">
+        <div class="metric">
+          <div class="mv" style="color:var(--blue)">${fmtB(s.soldRev)}</div>
+          <div class="ml">รายได้รวม</div>
+        </div>
+        <div class="metric">
+          <div class="mv" style="color:var(--green)">${fmt(s.soldQty)}</div>
+          <div class="ml">ขายไปแล้ว</div>
+        </div>
+        <div class="metric">
+          <div class="mv" style="color:${s.oosCount>0?'var(--red)':'var(--muted)'}">${s.totalItems}</div>
+          <div class="ml">รายการสินค้า</div>
+        </div>
+      </div>
+      ${s.lowCount > 0
+        ? `<div style="font-size:12px;font-weight:600;color:var(--orange);margin-bottom:6px">
+             ⚠️ ${s.oosCount > 0 ? s.oosCount + " รายการหมด · " : ""}${s.lowCount - s.oosCount} รายการใกล้หมด
+           </div>
+           <div class="low-stock-list">${lowItems}</div>`
+        : `<div style="font-size:12px;color:var(--green)">✅ สต็อกเพียงพอทุกรายการ</div>`
+      }
+      ${lastPOHtml}
+    </div>`;
+}
+
+function renderOrderTable(suppliers) {
+  const rows = [];
+  for (const s of suppliers.filter(s => s.lowCount > 0)) {
+    for (const p of s.lowStockItems) {
+      const qWH    = Number(p.qtyWH ?? p.warehouseQty ?? 0);
+      const qStore = Number(p.qtyStore ?? 0);
+      const qTot   = qWH + qStore;
+      const lastQty = Number(p.lastStockInQty || 0);
+      const suggest = lastQty > 0 ? lastQty : Math.max(20, Math.ceil(Number(p.soldQty || 0) / 6));
+      const cls = qTot <= 0 ? "chip chip-red" : "chip chip-orange";
+      const label = qTot <= 0 ? "หมด" : qTot + " ชิ้น";
+      rows.push(`
+        <tr>
+          <td>
+            <div class="name">${escHtml(p.name || "")}</div>
+            <div class="sku">${escHtml(p.sku || "")}</div>
+          </td>
+          <td>${escHtml(s.name)}</td>
+          <td class="num"><span class="${cls}">${label}</span></td>
+          <td class="num" style="color:var(--blue)">${fmt(Number(p.soldQty||0))}</td>
+          <td class="num" style="color:var(--purple)">${fmtB(Number(p.soldRev||0))}</td>
+          <td class="num" style="color:var(--green)">${fmt(suggest)}</td>
+        </tr>`);
+    }
+  }
+
+  if (rows.length === 0) {
+    return `<div style="padding:24px;text-align:center;color:var(--muted);font-size:14px">
+      ✅ ไม่มีสินค้าที่ต้องสั่งขณะนี้
+    </div>`;
+  }
+
+  return `
+    <div class="table-wrap">
+      <table class="order-table">
+        <thead>
+          <tr>
+            <th>สินค้า</th>
+            <th>Supplier</th>
+            <th style="text-align:right">สต็อกปัจจุบัน</th>
+            <th style="text-align:right">ขายแล้ว (ชิ้น)</th>
+            <th style="text-align:right">รายได้รวม</th>
+            <th style="text-align:right">แนะนำสั่ง</th>
+          </tr>
+        </thead>
+        <tbody>${rows.join("")}</tbody>
+      </table>
+    </div>`;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+function render(result, updatedAt) {
+  const { suppliers, totalProducts, withSupplier, totalOOS, totalLow } = result;
+
+  const urgentSuppliers = suppliers.filter(s => s.urgency === "urgent");
+  const warnSuppliers   = suppliers.filter(s => s.urgency === "warn");
+  const goodSuppliers   = suppliers.filter(s => s.urgency === "good");
+
+  const now = new Date();
+  document.getElementById("last-update").textContent =
+    "ดึงข้อมูลเมื่อ " + now.toLocaleDateString("th-TH", {day:"numeric",month:"short",year:"numeric"})
+    + " " + now.toLocaleTimeString("th-TH", {hour:"2-digit",minute:"2-digit"})
+    + (updatedAt ? " · ข้อมูล Sheets: " + updatedAt : "");
+
+  let html = `
+    <div class="summary-bar">
+      <div class="stat-card">
+        <div class="val" style="color:var(--red)">${totalOOS}</div>
+        <div class="lbl">รายการหมดสต็อก</div>
+      </div>
+      <div class="stat-card">
+        <div class="val" style="color:var(--orange)">${totalLow}</div>
+        <div class="lbl">รายการใกล้หมด (≤${THRESH_WH})</div>
+      </div>
+      <div class="stat-card">
+        <div class="val" style="color:var(--blue)">${suppliers.length}</div>
+        <div class="lbl">Supplier ทั้งหมด</div>
+      </div>
+      <div class="stat-card">
+        <div class="val" style="color:var(--text)">${totalProducts}</div>
+        <div class="lbl">สินค้าทั้งหมด</div>
+      </div>
+    </div>`;
+
+  // Order now table
+  html += `
+    <div class="section">
+      <div class="section-title">
+        🛒 รายการที่ควรสั่งซื้อ
+        <span class="badge chip chip-red">${urgentSuppliers.reduce((s,x)=>s+x.lowCount,0)+warnSuppliers.reduce((s,x)=>s+x.lowCount,0)} รายการ</span>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
+        "แนะนำสั่ง" = ใช้จำนวนที่สั่งครั้งล่าสุด หรือเฉลี่ยขาย 6 เดือน (อย่างน้อย 20 ชิ้น)
+      </div>
+      ${renderOrderTable(suppliers)}
+    </div>`;
+
+  // Urgent suppliers
+  if (urgentSuppliers.length) {
+    html += `
+      <div class="section">
+        <div class="section-title">🔴 Supplier ที่มีของหมด — ด่วน!
+          <span class="badge chip chip-red">${urgentSuppliers.length} ราย</span>
+        </div>
+        <div class="supplier-grid">${urgentSuppliers.map(renderSupplierCard).join("")}</div>
+      </div>`;
+  }
+
+  // Warn suppliers
+  if (warnSuppliers.length) {
+    html += `
+      <div class="section">
+        <div class="section-title">🟡 Supplier ที่ของใกล้หมด
+          <span class="badge chip chip-orange">${warnSuppliers.length} ราย</span>
+        </div>
+        <div class="supplier-grid">${warnSuppliers.map(renderSupplierCard).join("")}</div>
+      </div>`;
+  }
+
+  // Good suppliers
+  if (goodSuppliers.length) {
+    html += `
+      <div class="section">
+        <div class="section-title">🟢 Supplier ที่สต็อกยังดี
+          <span class="badge chip chip-green">${goodSuppliers.length} ราย</span>
+        </div>
+        <div class="supplier-grid">${goodSuppliers.map(renderSupplierCard).join("")}</div>
+      </div>`;
+  }
+
+  // Products without supplier
+  const noSupCount = totalProducts - withSupplier;
+  if (noSupCount > 0) {
+    html += `
+      <div style="font-size:12px;color:var(--muted);text-align:center;margin-top:8px">
+        หมายเหตุ: ${noSupCount} รายการไม่ระบุ Supplier (ไม่ถูกนับในการวิเคราะห์นี้)
+      </div>`;
+  }
+
+  document.getElementById("root").innerHTML = html;
+}
+
+// ── Main ─────────────────────────────────────────────────
+(async () => {
+  try {
+    const data = await fetchData();
+    if (!data || data.error) throw new Error(data?.error || "ข้อมูลไม่ถูกต้อง");
+    const result = analyze(data);
+    const updatedAt = data.lastModified
+      ? new Date(data.lastModified).toLocaleDateString("th-TH",{day:"numeric",month:"short",year:"numeric"})
+      : null;
+    render(result, updatedAt);
+  } catch (err) {
+    document.getElementById("root").innerHTML = `
+      <div class="overlay">
+        <div style="font-size:40px">⚠️</div>
+        <div style="font-weight:700;font-size:16px">โหลดข้อมูลไม่ได้</div>
+        <div style="color:var(--muted);font-size:13px;text-align:center;max-width:320px">
+          ${escHtml(err.message)}<br><br>
+          ตรวจสอบว่าเปิดไฟล์นี้จาก dmj-inventory-dashboard.pages.dev<br>
+          หรือผ่าน web server เดียวกันกับ config.js
+        </div>
+        <button onclick="location.reload()" style="
+          margin-top:8px; padding:10px 24px; border-radius:10px;
+          background:var(--blue); color:#fff; border:none;
+          font-size:14px; cursor:pointer; font-family:inherit;">
+          ลองใหม่
+        </button>
+      </div>`;
+    document.getElementById("last-update").textContent = "โหลดไม่สำเร็จ";
+  }
+})();
+</script>
+</body>
+</html>
