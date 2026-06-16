@@ -641,26 +641,31 @@ function App() {
                     {moreOpen && moreRect && (
                       <div style={{
                         position:"fixed",
-                        top: moreRect.bottom + 4,
-                        right: window.innerWidth - moreRect.right,
-                        background:"var(--paper)", border:"1px solid var(--bdr)",
-                        borderRadius:12, padding:"6px 4px", zIndex:300,
-                        minWidth:200, boxShadow:"0 8px 24px rgba(0,0,0,.15)",
+                        top: moreRect.bottom + 6,
+                        right: Math.max(8, window.innerWidth - moreRect.right),
+                        background:"var(--paper)", border:"1.5px solid var(--bdr)",
+                        borderRadius:16, padding:"8px 6px", zIndex:300,
+                        minWidth:230, boxShadow:"0 12px 36px rgba(0,0,0,.18)",
                         maxHeight:"80vh", overflowY:"auto",
                       }}>
+                        <div style={{
+                          fontSize:11, fontWeight:700, color:"var(--muted)",
+                          padding:"2px 12px 8px", letterSpacing:".05em", textTransform:"uppercase",
+                        }}>เมนูเพิ่มเติม</div>
                         {secondaryTabs.map(t => (
                           <button key={t.id}
                                   onClick={() => { handleSetTab(t.id); setMoreOpen(false); }}
                                   style={{
-                                    display:"flex", alignItems:"center", gap:10,
-                                    width:"100%", padding:"10px 14px",
-                                    border:"none", borderRadius:8, cursor:"pointer",
-                                    fontFamily:"inherit", fontSize:13, textAlign:"left",
+                                    display:"flex", alignItems:"center", gap:12,
+                                    width:"100%", padding:"12px 16px",
+                                    border:"none", borderRadius:10, cursor:"pointer",
+                                    fontFamily:"inherit", fontSize:14, textAlign:"left",
                                     background: activeTab===t.id ? "var(--g-50)" : "transparent",
-                                    color: activeTab===t.id ? "var(--g-800)" : "var(--text)",
-                                    fontWeight: activeTab===t.id ? 700 : 400,
+                                    color: activeTab===t.id ? "var(--g-700)" : "var(--text)",
+                                    fontWeight: activeTab===t.id ? 700 : 500,
+                                    borderLeft: activeTab===t.id ? "3px solid var(--g-500)" : "3px solid transparent",
                                   }}>
-                            {t.icon}
+                            <span style={{fontSize:18,lineHeight:1,flexShrink:0}}>{t.icon}</span>
                             <span>{t.label}</span>
                           </button>
                         ))}
@@ -799,8 +804,6 @@ function App() {
         </div>
       )}
 
-      {/* ─── Zort staleness banner ─── */}
-      <ZortBanner data={data}/>
 
       {/* ─── Main ─── */}
       <main className="main" data-screen-label={activeTab}>
