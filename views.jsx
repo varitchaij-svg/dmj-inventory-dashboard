@@ -11352,7 +11352,11 @@ function SupplierView({ data }) {
 
       {/* Supplier cards grid */}
       {visibleSuppliers.length === 0 ? (
-        <Empty title="ไม่มีข้อมูล Supplier" sub="ลองเปลี่ยน filter หรือตรวจว่าสินค้ามี tag รหัส supplier"/>
+        <div style={{textAlign:"center",padding:"48px 20px",color:"var(--muted)"}}>
+          <div style={{fontSize:36,marginBottom:12}}>🏭</div>
+          <div style={{fontWeight:700,fontSize:15,marginBottom:6}}>ไม่มีข้อมูล Supplier</div>
+          <div style={{fontSize:13}}>ลองเปลี่ยน filter หรือตรวจว่าสินค้ามี tag รหัส supplier</div>
+        </div>
       ) : (
         <div style={{
           display:"grid",
