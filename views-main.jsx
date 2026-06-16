@@ -6268,3 +6268,297 @@ const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty
   );
 });
 
+// ── SupplierView ─────────────────────────────────────────────────────────────
+
+const SUP_LOW_THR = 10;
+
+function getProductSupplier(p) {
+  const THAI_RE = /[฀-๿]/;
+  const rawTags = String(p.tag || "").split(",").map(t => t.trim()).filter(Boolean);
+  const supTags = rawTags.filter(t => !THAI_RE.test(t));
+  if (supTags.length) return supTags[0];
+  if (p.vendor) return p.vendor;
+  if (p.lastSupplier) return p.lastSupplier;
+  return null;
+}
+
+function calcSupUrgency(products) {
+  if (products.some(p => (p.qtyWH || 0) <= 0)) return "urgent";
+  if (products.some(p => (p.qtyWH || 0) <= SUP_LOW_THR)) return "warn";
+  return "good";
+}
+
+const SUP_LABEL  = { urgent:"🔴 ด่วน", warn:"🟡 ใกล้หมด", good:"🟢 ดี" };
+const SUP_COLOR  = { urgent:"#dc2626", warn:"#d97706", good:"#16a34a" };
+const SUP_BG     = { urgent:"#fef2f2", warn:"#fffbeb", good:"#f0fdf4" };
+const SUP_BORDER = { urgent:"#dc2626", warn:"#f59e0b", good:"#22c55e" };
+
+function SupplierView({ data }) {
+  const [search, setSearch]       = uS("");
+  const [urgFilter, setUrgFilter] = uS("all");
+  const [sortBy, setSortBy]       = uS("revenue");
+  const [expanded, setExpanded]   = uS({});
+  const printRef = React.useRef({});
+
+  uE(() => {
+    const id = "sup-print-style";
+    if (document.getElementById(id)) return;
+    const el = document.createElement("style");
+    el.id = id;
+    el.textContent = "@media print{body>*{display:none!important}.sup-print{display:block!important;position:fixed;top:0;left:0;width:100%;z-index:9999}}";
+    document.head.appendChild(el);
+    return () => { const s = document.getElementById(id); if (s) s.remove(); };
+  }, []);
+
+  const products = (data && data.products) ? data.products : [];
+
+  const supplierMap = uM(() => {
+    const map = {};
+    products.forEach(p => {
+      if (p.isMTO) return;
+      const sup = getProductSupplier(p);
+      if (!sup) return;
+      if (!map[sup]) map[sup] = { name: sup, products: [], totalRev: 0, totalQty: 0 };
+      map[sup].products.push(p);
+      map[sup].totalRev += (p.soldRev || 0);
+      map[sup].totalQty += (p.soldQty || 0);
+    });
+    Object.values(map).forEach(s => {
+      s.urgency  = calcSupUrgency(s.products);
+      s.lowStock = s.products
+        .filter(p => (p.qtyWH || 0) <= SUP_LOW_THR)
+        .sort((a, b) => (a.qtyWH || 0) - (b.qtyWH || 0));
+    });
+    return map;
+  }, [products]);
+
+  const urgCounts = uM(() => {
+    const c = { urgent:0, warn:0, good:0 };
+    Object.values(supplierMap).forEach(s => { c[s.urgency] = (c[s.urgency]||0)+1; });
+    return c;
+  }, [supplierMap]);
+
+  const visible = uM(() => {
+    const tokens = search.toLowerCase().trim().split(/\s+/).filter(Boolean);
+    let list = Object.values(supplierMap).filter(s => {
+      if (urgFilter !== "all" && s.urgency !== urgFilter) return false;
+      if (tokens.length > 0) {
+        const hay = [s.name, ...s.products.map(p=>(p.name||"")+" "+(p.sku||""))].join(" ").toLowerCase();
+        if (!tokens.every(t => hay.includes(t))) return false;
+      }
+      return true;
+    });
+    list.sort((a,b) => {
+      if (sortBy==="revenue")  return b.totalRev - a.totalRev;
+      if (sortBy==="qty")      return b.totalQty - a.totalQty;
+      if (sortBy==="lowstock") return b.lowStock.length - a.lowStock.length;
+      return a.name.localeCompare(b.name);
+    });
+    return list;
+  }, [supplierMap, search, urgFilter, sortBy]);
+
+  const handlePrint = (name) => {
+    const el = printRef.current[name];
+    if (!el) return;
+    el.classList.add("sup-print");
+    window.print();
+    setTimeout(() => el.classList.remove("sup-print"), 500);
+  };
+
+  const totalSup = Object.keys(supplierMap).length;
+
+  return (
+    <div style={{paddingBottom:32}}>
+      {/* Header */}
+      <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:8,marginBottom:16}}>
+        <div>
+          <div className="page-title">🏭 Supplier</div>
+          <div className="page-sub">จัดกลุ่มสินค้าตาม Supplier · {totalSup} ราย</div>
+        </div>
+        {(urgCounts.urgent > 0 || urgCounts.warn > 0) && (
+          <button onClick={() => setUrgFilter(urgFilter==="urgent" ? "all" : "urgent")} style={{
+            padding:"9px 16px", borderRadius:10, border:"none", cursor:"pointer",
+            background: urgFilter==="urgent" ? "#dc2626" : "#fef2f2",
+            color: urgFilter==="urgent" ? "#fff" : "#dc2626",
+            fontWeight:700, fontSize:13, fontFamily:"inherit",
+            boxShadow:"0 2px 6px rgba(220,38,38,.2)",
+          }}>
+            🔴 ต้องสั่งทันที ({urgCounts.urgent})
+          </button>
+        )}
+      </div>
+
+      {/* Urgency chips */}
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
+        {["all","urgent","warn","good"].map(u => {
+          const count = u==="all" ? totalSup : (urgCounts[u]||0);
+          const active = urgFilter===u;
+          const lbl = {all:"ทั้งหมด",urgent:"🔴 ด่วน",warn:"🟡 ใกล้หมด",good:"🟢 ดี"};
+          const col = {all:"var(--g-600)",urgent:"#dc2626",warn:"#d97706",good:"#16a34a"};
+          return (
+            <button key={u} onClick={() => setUrgFilter(u)} style={{
+              padding:"6px 14px", borderRadius:20, cursor:"pointer", fontFamily:"inherit",
+              border: active ? `2px solid ${col[u]}` : "1.5px solid var(--bdr)",
+              background: active ? (SUP_BG[u]||"var(--g-50)") : "var(--card)",
+              color: active ? col[u] : "var(--text)",
+              fontWeight: active ? 700 : 500, fontSize:13,
+            }}>
+              {lbl[u]} <span style={{fontWeight:700}}>{count}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Search + sort */}
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16,alignItems:"center"}}>
+        <div style={{flex:"1 1 200px",position:"relative"}}>
+          <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",color:"var(--muted)",pointerEvents:"none"}}>
+            {I.search}
+          </span>
+          <input value={search} onChange={e=>setSearch(e.target.value)}
+            placeholder="ค้นหา supplier / สินค้า…"
+            style={{width:"100%",padding:"9px 12px 9px 36px",borderRadius:10,
+              border:"1.5px solid var(--bdr)",fontSize:13,fontFamily:"inherit",
+              background:"var(--g-50)",boxSizing:"border-box",outline:"none"}}/>
+        </div>
+        <select value={sortBy} onChange={e=>setSortBy(e.target.value)} style={{
+          padding:"9px 12px",borderRadius:10,border:"1.5px solid var(--bdr)",
+          background:"var(--g-50)",fontSize:13,fontFamily:"inherit",cursor:"pointer"}}>
+          <option value="revenue">เรียง: รายได้</option>
+          <option value="qty">เรียง: ยอดขาย</option>
+          <option value="lowstock">เรียง: ของใกล้หมด</option>
+          <option value="name">เรียง: ชื่อ</option>
+        </select>
+      </div>
+
+      {/* Cards */}
+      {visible.length === 0 ? (
+        <div style={{textAlign:"center",padding:"48px 20px",color:"var(--muted)"}}>
+          <div style={{fontSize:36,marginBottom:12}}>🏭</div>
+          <div style={{fontWeight:700,fontSize:15,marginBottom:6}}>ไม่พบ Supplier</div>
+          <div style={{fontSize:13}}>ลองเปลี่ยน filter หรือตรวจสอบว่าสินค้ามี tag รหัส supplier</div>
+        </div>
+      ) : (
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:14}}>
+          {visible.map(s => {
+            const isExp = !!expanded[s.name];
+            const bc = SUP_BORDER[s.urgency];
+            const sortedAll = [...s.products].sort((a,b)=>(b.soldRev||0)-(a.soldRev||0));
+            return (
+              <div key={s.name} ref={el=>{ printRef.current[s.name]=el; }}
+                style={{background:"var(--card)",border:"1px solid var(--bdr)",
+                  borderLeft:`4px solid ${bc}`,borderRadius:14,padding:16,
+                  boxShadow:"var(--shadow)",position:"relative"}}>
+
+                {/* urgency badge */}
+                <div style={{position:"absolute",top:12,right:12,padding:"2px 10px",
+                  borderRadius:20,fontSize:11,fontWeight:700,
+                  background:SUP_BG[s.urgency],color:SUP_COLOR[s.urgency]}}>
+                  {SUP_LABEL[s.urgency]}
+                </div>
+
+                {/* name */}
+                <div style={{fontSize:16,fontWeight:700,marginBottom:10,paddingRight:80,wordBreak:"break-all"}}>
+                  {s.name}
+                </div>
+
+                {/* 3 metrics */}
+                <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:6,marginBottom:12}}>
+                  {[
+                    {lbl:"รายได้รวม", val:fmtB(s.totalRev)},
+                    {lbl:"ขายแล้ว",   val:fmtN(s.totalQty)+" ชิ้น"},
+                    {lbl:"สินค้า",    val:s.products.length+" รายการ"},
+                  ].map(m => (
+                    <div key={m.lbl} style={{background:"var(--bg)",borderRadius:8,padding:"8px 6px",textAlign:"center"}}>
+                      <div style={{fontSize:10,color:"var(--muted)",marginBottom:2}}>{m.lbl}</div>
+                      <div style={{fontWeight:700,fontSize:13,color:"var(--g-700)"}}>{m.val}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* low stock list */}
+                {s.lowStock.length > 0 && (
+                  <div style={{marginBottom:10}}>
+                    <div style={{fontSize:12,fontWeight:700,marginBottom:4,
+                      color:s.lowStock.some(p=>(p.qtyWH||0)<=0)?"#dc2626":"#d97706"}}>
+                      {s.lowStock.some(p=>(p.qtyWH||0)<=0)?"🔴":"🟡"} ต้องสั่งเพิ่ม ({s.lowStock.length})
+                    </div>
+                    <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                      {s.lowStock.map((p,i) => {
+                        const qty = p.qtyWH||0;
+                        const oos = qty<=0;
+                        return (
+                          <div key={p.sku||i} style={{display:"flex",alignItems:"center",
+                            justifyContent:"space-between",padding:"4px 8px",borderRadius:6,
+                            background:oos?"#fef2f2":"#fffbeb"}}>
+                            <div style={{flex:1,minWidth:0,overflow:"hidden"}}>
+                              <span style={{fontSize:11,fontFamily:"monospace",color:"var(--muted)",marginRight:4}}>{p.sku}</span>
+                              <span style={{fontSize:12}} title={p.name}>{p.name||"—"}</span>
+                            </div>
+                            <div style={{fontSize:12,fontWeight:700,marginLeft:8,whiteSpace:"nowrap",
+                              color:oos?"#dc2626":"#d97706"}}>
+                              {oos?"หมด":qty+" ชิ้น"}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* expanded all products */}
+                {isExp && (
+                  <div style={{marginBottom:10,borderTop:"1px dashed var(--bdr)",paddingTop:8}}>
+                    <div style={{fontSize:12,fontWeight:700,color:"var(--muted)",marginBottom:4}}>
+                      สินค้าทั้งหมด ({sortedAll.length})
+                    </div>
+                    <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                      {sortedAll.map((p,i) => {
+                        const qty = p.qtyWH||0;
+                        const low = qty<=SUP_LOW_THR;
+                        return (
+                          <div key={p.sku||i} style={{display:"flex",alignItems:"center",
+                            justifyContent:"space-between",padding:"3px 6px",borderRadius:5,
+                            background:low&&qty<=0?"#fef2f2":low?"#fffbeb":"transparent"}}>
+                            <div style={{flex:1,minWidth:0,overflow:"hidden"}}>
+                              <span style={{fontSize:10,fontFamily:"monospace",color:"var(--muted)",marginRight:4}}>{p.sku}</span>
+                              <span style={{fontSize:12}}>{p.name||"—"}</span>
+                            </div>
+                            <div style={{display:"flex",gap:8,alignItems:"center",marginLeft:6,flexShrink:0}}>
+                              <span style={{fontSize:11,color:"var(--muted)"}}>{fmtB(p.soldRev)}</span>
+                              <span style={{fontSize:11,fontWeight:700,
+                                color:qty<=0?"#dc2626":low?"#d97706":"var(--g-600)"}}>
+                                {qty<=0?"หมด":qty+"ชิ้น"}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* buttons */}
+                <div style={{display:"flex",gap:8,marginTop:4}}>
+                  <button onClick={() => setExpanded(prev=>({...prev,[s.name]:!prev[s.name]}))}
+                    style={{flex:1,padding:"7px 10px",borderRadius:8,cursor:"pointer",
+                      border:"1.5px solid var(--bdr)",background:"var(--g-50)",
+                      fontSize:12,fontWeight:600,fontFamily:"inherit",color:"var(--text)"}}>
+                    {isExp?"🔼 ซ่อน":"📋 ดูทั้งหมด"}
+                  </button>
+                  <button onClick={() => handlePrint(s.name)}
+                    style={{padding:"7px 10px",borderRadius:8,cursor:"pointer",
+                      border:"1.5px solid var(--bdr)",background:"var(--g-50)",
+                      fontSize:12,fontWeight:600,fontFamily:"inherit",color:"var(--text)"}}>
+                    📷 บันทึกรูป
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
