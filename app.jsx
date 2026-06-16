@@ -635,41 +635,48 @@ function App() {
                       </button>
                     </div>
                     {moreOpen && (
-                      <div onClick={() => setMoreOpen(false)}
-                           style={{position:"fixed",inset:0,zIndex:299}}/>
-                    )}
-                    {moreOpen && moreRect && (
-                      <div style={{
-                        position:"fixed",
-                        top: moreRect.bottom + 6,
-                        right: Math.max(8, window.innerWidth - moreRect.right),
-                        background:"var(--paper)", border:"1.5px solid var(--bdr)",
-                        borderRadius:16, padding:"8px 6px", zIndex:300,
-                        minWidth:230, boxShadow:"0 12px 36px rgba(0,0,0,.18)",
-                        maxHeight:"80vh", overflowY:"auto",
-                      }}>
+                      <>
+                        {/* backdrop */}
+                        <div onClick={() => setMoreOpen(false)}
+                             style={{position:"fixed",inset:0,zIndex:399,background:"rgba(0,0,0,.35)",backdropFilter:"blur(2px)"}}/>
+                        {/* bottom sheet */}
                         <div style={{
-                          fontSize:11, fontWeight:700, color:"var(--muted)",
-                          padding:"2px 12px 8px", letterSpacing:".05em", textTransform:"uppercase",
-                        }}>เมนูเพิ่มเติม</div>
-                        {secondaryTabs.map(t => (
-                          <button key={t.id}
-                                  onClick={() => { handleSetTab(t.id); setMoreOpen(false); }}
-                                  style={{
-                                    display:"flex", alignItems:"center", gap:12,
-                                    width:"100%", padding:"12px 16px",
-                                    border:"none", borderRadius:10, cursor:"pointer",
-                                    fontFamily:"inherit", fontSize:14, textAlign:"left",
-                                    background: activeTab===t.id ? "var(--g-50)" : "transparent",
-                                    color: activeTab===t.id ? "var(--g-700)" : "var(--text)",
-                                    fontWeight: activeTab===t.id ? 700 : 500,
-                                    borderLeft: activeTab===t.id ? "3px solid var(--g-500)" : "3px solid transparent",
-                                  }}>
-                            <span style={{fontSize:18,lineHeight:1,flexShrink:0}}>{t.icon}</span>
-                            <span>{t.label}</span>
-                          </button>
-                        ))}
-                      </div>
+                          position:"fixed", left:0, right:0, bottom:0, zIndex:400,
+                          background:"var(--paper)",
+                          borderRadius:"20px 20px 0 0",
+                          boxShadow:"0 -8px 40px rgba(0,0,0,.18)",
+                          padding:"0 0 env(safe-area-inset-bottom,12px)",
+                          maxHeight:"75vh", display:"flex", flexDirection:"column",
+                        }}>
+                          {/* handle + title */}
+                          <div style={{textAlign:"center",padding:"10px 20px 4px",flexShrink:0}}>
+                            <div style={{width:40,height:4,borderRadius:2,background:"var(--bdr)",margin:"0 auto 10px"}}/>
+                            <div style={{fontSize:13,fontWeight:700,color:"var(--muted)"}}>เมนูเพิ่มเติม</div>
+                          </div>
+                          {/* tab list */}
+                          <div style={{overflowY:"auto",padding:"4px 12px 16px"}}>
+                            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                              {secondaryTabs.map(t => (
+                                <button key={t.id}
+                                        onClick={() => { handleSetTab(t.id); setMoreOpen(false); }}
+                                        style={{
+                                          display:"flex", flexDirection:"column", alignItems:"center",
+                                          gap:6, padding:"16px 8px",
+                                          border: activeTab===t.id ? "2px solid var(--g-500)" : "1.5px solid var(--bdr)",
+                                          borderRadius:14, cursor:"pointer",
+                                          fontFamily:"inherit", fontSize:13, textAlign:"center",
+                                          background: activeTab===t.id ? "var(--g-50)" : "var(--paper)",
+                                          color: activeTab===t.id ? "var(--g-700)" : "var(--text)",
+                                          fontWeight: activeTab===t.id ? 700 : 500,
+                                        }}>
+                                  <span style={{fontSize:24,lineHeight:1}}>{t.icon}</span>
+                                  <span style={{lineHeight:1.3}}>{t.label}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </>
                     )}
                   </>
                 );
