@@ -2111,16 +2111,17 @@ function CategoryView({ data, role }) {
     return Object.keys(m)
       .map(function(name) {
         var items = m[name];
-        var hasOOS  = items.some(function(p){ return (p.qtyWH||0) <= 0; });
-        var hasLow  = items.some(function(p){ return (p.qtyWH||0) <= 10; });
-        var urgency = hasOOS ? "urgent" : hasLow ? "warn" : "good";
+        var hasOOS   = items.some(function(p){ return (p.qtyWH||0) <= 0; });
+        var hasLow   = items.some(function(p){ return (p.qtyWH||0) <= 10; });
+        var urgency  = hasOOS ? "urgent" : hasLow ? "warn" : "good";
         var lowCount = items.filter(function(p){ return (p.qtyWH||0) <= 10; }).length;
-        return { name: name, items: items, urgency: urgency, lowCount: lowCount };
+        var totalRev = items.reduce(function(s,p){ return s + (p.soldRev||0); }, 0);
+        return { name: name, items: items, urgency: urgency, lowCount: lowCount, totalRev: totalRev };
       })
       .sort(function(a,b) {
         var rank = { urgent:0, warn:1, good:2 };
         if (rank[a.urgency] !== rank[b.urgency]) return rank[a.urgency] - rank[b.urgency];
-        return a.name.localeCompare(b.name, "th");
+        return b.totalRev - a.totalRev;
       });
   }, [purchasePlanMode, filtered]);
 
