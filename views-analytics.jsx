@@ -3449,6 +3449,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
     const p2 = { ...printed, [order.id]: true };
     setPrinted(p2);
     localStorage.setItem(LS_PRINTED_ORDERS, JSON.stringify(p2));
+    setSt(patchOrderState(order.id, { printFlag: "printed" }, orderSig(order)));
     syncOrderUpdate(order, { printFlag: "printed" });
   };
 
@@ -3459,7 +3460,10 @@ function OrderSummaryView({ data, onPrintRequest }) {
     ordersArr.forEach(o => { p2[o.id] = true; });
     setPrinted(p2);
     localStorage.setItem(LS_PRINTED_ORDERS, JSON.stringify(p2));
-    ordersArr.forEach(o => syncOrderUpdate(o, { printFlag: "printed" }));
+    ordersArr.forEach(o => {
+      setSt(patchOrderState(o.id, { printFlag: "printed" }, orderSig(o)));
+      syncOrderUpdate(o, { printFlag: "printed" });
+    });
   };
 
   const handleShip = (order) => setShipConfirm(order);
