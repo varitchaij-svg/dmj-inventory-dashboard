@@ -2654,7 +2654,7 @@ function CategoryView({ data, role }) {
                       const active = i === supplierPage;
                       const bc = urgBorder[g.urgency];
                       return (
-                        <button key={g.name} onClick={() => { setSupplierPage(i); if(listTopRef.current) listTopRef.current.scrollIntoView({behavior:"smooth"}); }}
+                        <button key={g.name} onClick={() => { setGlobalVendor(g.name); setPurchasePlanMode(false); setPage(1); if(listTopRef.current) listTopRef.current.scrollIntoView({behavior:"smooth"}); }}
                           style={{
                             display:"flex", alignItems:"center", gap:10,
                             padding:"10px 14px", borderRadius:12, cursor:"pointer",
