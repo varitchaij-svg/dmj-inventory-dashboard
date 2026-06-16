@@ -2108,8 +2108,20 @@ function CategoryView({ data, role }) {
       if (!m[sup]) m[sup] = [];
       m[sup].push(p);
     });
-    return Object.keys(m).sort(function(a,b) { return a.localeCompare(b,"th"); })
-      .map(function(name) { return { name: name, items: m[name] }; });
+    return Object.keys(m)
+      .map(function(name) {
+        var items = m[name];
+        var hasOOS  = items.some(function(p){ return (p.qtyWH||0) <= 0; });
+        var hasLow  = items.some(function(p){ return (p.qtyWH||0) <= 10; });
+        var urgency = hasOOS ? "urgent" : hasLow ? "warn" : "good";
+        var lowCount = items.filter(function(p){ return (p.qtyWH||0) <= 10; }).length;
+        return { name: name, items: items, urgency: urgency, lowCount: lowCount };
+      })
+      .sort(function(a,b) {
+        var rank = { urgent:0, warn:1, good:2 };
+        if (rank[a.urgency] !== rank[b.urgency]) return rank[a.urgency] - rank[b.urgency];
+        return a.name.localeCompare(b.name, "th");
+      });
   }, [purchasePlanMode, filtered]);
 
   // reset supplierPage เมื่อ filter/mode/category เปลี่ยน
@@ -2615,72 +2627,87 @@ function CategoryView({ data, role }) {
 
           <div ref={listTopRef}/>
           {purchasePlanMode ? (() => {
-            const grp = purchaseGroups[supplierPage];
             const total = purchaseGroups.length;
-            if (total === 0) return React.createElement(Empty, {title:"ไม่พบสินค้า", sub:"ลองเปลี่ยน filter"});
+            const grp = supplierPage >= 0 && supplierPage < total ? purchaseGroups[supplierPage] : null;
+            if (total === 0) return (
+              <div style={{textAlign:"center",padding:"40px 20px",color:"var(--muted)"}}>
+                <div style={{fontSize:32,marginBottom:8}}>🎉</div>
+                <div style={{fontWeight:700}}>ไม่มีสินค้าที่ต้องสั่ง</div>
+              </div>
+            );
+
+            const urgColor  = { urgent:"#dc2626", warn:"#d97706", good:"#16a34a" };
+            const urgBg     = { urgent:"#fef2f2", warn:"#fffbeb", good:"#f0fdf4" };
+            const urgBorder = { urgent:"#dc2626", warn:"#f59e0b", good:"#22c55e" };
+            const urgLabel  = { urgent:"🔴 ด่วน", warn:"🟡 ใกล้หมด", good:"🟢 พอ" };
+
             return (
               <div>
-                {/* Supplier header + navigation */}
-                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,
-                             background:"var(--g-50)",borderRadius:10,padding:"10px 14px",
-                             border:"1px solid var(--bdr)"}}>
-                  <span style={{fontSize:18}}>🏭</span>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontWeight:800,fontSize:15,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                      {grp.name}
-                    </div>
-                    <div style={{fontSize:11,color:"var(--muted)"}}>
-                      ร้านที่ {supplierPage+1} จาก {total} · {grp.items.length} รายการ
-                    </div>
+                {/* Supplier ranked list */}
+                <div style={{marginBottom:14}}>
+                  <div style={{fontSize:12,fontWeight:700,color:"var(--muted)",marginBottom:8,letterSpacing:".03em"}}>
+                    SUPPLIER — เรียงตามความเร่งด่วน
                   </div>
-                  <div style={{display:"flex",gap:6,flexShrink:0}}>
-                    <button onClick={() => { setSupplierPage(function(p){return Math.max(0,p-1);}); if(listTopRef.current) listTopRef.current.scrollIntoView({behavior:"smooth"}); }}
-                      disabled={supplierPage===0}
-                      style={{padding:"6px 14px",borderRadius:8,border:"1px solid var(--bdr)",
-                              background:supplierPage===0?"var(--g-100)":"var(--paper)",
-                              cursor:supplierPage===0?"not-allowed":"pointer",
-                              fontSize:13,fontFamily:"inherit"}}>
-                      ← ก่อนหน้า
-                    </button>
-                    <button onClick={() => { setSupplierPage(function(p){return Math.min(total-1,p+1);}); if(listTopRef.current) listTopRef.current.scrollIntoView({behavior:"smooth"}); }}
-                      disabled={supplierPage===total-1}
-                      style={{padding:"6px 14px",borderRadius:8,border:"1px solid var(--bdr)",
-                              background:supplierPage===total-1?"var(--g-100)":"#2563eb",
-                              color:supplierPage===total-1?"var(--muted)":"#fff",
-                              cursor:supplierPage===total-1?"not-allowed":"pointer",
-                              fontSize:13,fontFamily:"inherit",fontWeight:600}}>
-                      ถัดไป →
-                    </button>
-                  </div>
-                </div>
-                {/* Products */}
-                <div className="product-grid" style={{width:"100%",boxSizing:"border-box",minWidth:0}}>
-                  {grp.items.map(function(p) {
-                    return (
-                      <div key={p.sku}>
-                        <ProductCard p={p} accent={catColor(p.cat,allCats)} allCats={allCats} reasonTags={[]} onOrder={null} role={role}/>
-                      </div>
-                    );
-                  })}
-                </div>
-                {/* Dot navigation */}
-                {total > 1 && (
-                  <div style={{display:"flex",justifyContent:"center",gap:6,marginTop:16,flexWrap:"wrap"}}>
-                    {purchaseGroups.map(function(g,i) {
+                  <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                    {purchaseGroups.map(function(g, i) {
+                      const active = i === supplierPage;
+                      const bc = urgBorder[g.urgency];
                       return (
                         <button key={g.name} onClick={() => { setSupplierPage(i); if(listTopRef.current) listTopRef.current.scrollIntoView({behavior:"smooth"}); }}
                           style={{
-                            padding:"4px 10px",borderRadius:20,border:"1px solid var(--bdr)",
-                            background:i===supplierPage?"#2563eb":"var(--paper)",
-                            color:i===supplierPage?"#fff":"var(--muted)",
-                            fontSize:11,cursor:"pointer",fontFamily:"inherit",
-                            fontWeight:i===supplierPage?700:400,
+                            display:"flex", alignItems:"center", gap:10,
+                            padding:"10px 14px", borderRadius:12, cursor:"pointer",
+                            border: active ? `2px solid ${bc}` : "1.5px solid var(--bdr)",
+                            borderLeft: `4px solid ${bc}`,
+                            background: active ? urgBg[g.urgency] : "var(--card)",
+                            fontFamily:"inherit", textAlign:"left", width:"100%",
+                            boxShadow: active ? `0 2px 8px ${bc}30` : "none",
+                            transition:"all .12s",
                           }}>
-                          {g.name.length > 12 ? g.name.slice(0,10)+"…" : g.name}
-                          <span style={{marginLeft:4,opacity:.7}}>({g.items.length})</span>
+                          <span style={{fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,
+                            background:urgBg[g.urgency],color:urgColor[g.urgency],flexShrink:0,whiteSpace:"nowrap"}}>
+                            {urgLabel[g.urgency]}
+                          </span>
+                          <span style={{fontWeight:active?700:600,fontSize:14,flex:1,minWidth:0,
+                            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                            {g.name}
+                          </span>
+                          <span style={{fontSize:12,color:"var(--muted)",flexShrink:0}}>
+                            {g.lowCount > 0
+                              ? <span style={{fontWeight:700,color:urgColor[g.urgency]}}>{g.lowCount} รายการ</span>
+                              : <span>{g.items.length} รายการ</span>
+                            }
+                          </span>
+                          <span style={{fontSize:16,color:active?"var(--g-600)":"var(--bdr)",flexShrink:0}}>›</span>
                         </button>
                       );
                     })}
+                  </div>
+                </div>
+
+                {/* Selected supplier products */}
+                {grp && (
+                  <div>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,
+                      padding:"10px 14px",borderRadius:10,
+                      background:urgBg[grp.urgency],border:`1.5px solid ${urgBorder[grp.urgency]}`}}>
+                      <span style={{fontWeight:800,fontSize:15,flex:1}}>{grp.name}</span>
+                      <span style={{fontSize:12,color:urgColor[grp.urgency],fontWeight:700}}>
+                        {grp.lowCount > 0 ? `${grp.lowCount} รายการต้องสั่ง` : `${grp.items.length} รายการ`}
+                      </span>
+                    </div>
+                    <div className="product-grid" style={{width:"100%",boxSizing:"border-box",minWidth:0}}>
+                      {grp.items
+                        .slice()
+                        .sort(function(a,b){ return (a.qtyWH||0) - (b.qtyWH||0); })
+                        .map(function(p) {
+                          return (
+                            <div key={p.sku}>
+                              <ProductCard p={p} accent={catColor(p.cat,allCats)} allCats={allCats} reasonTags={[]} onOrder={null} role={role}/>
+                            </div>
+                          );
+                        })}
+                    </div>
                   </div>
                 )}
               </div>
