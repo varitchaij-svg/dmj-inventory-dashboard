@@ -3137,6 +3137,7 @@ function OrderModal({ product, onClose }) {
                 </button>
                 {customMode && (
                   <input type="number" value={qty} min={1} autoFocus
+                         onFocus={ev => ev.target.select()}
                          onChange={ev => setQty(Math.max(1, parseInt(ev.target.value)||1))}
                          style={{marginTop:8, width:"100%", padding:"10px 12px",
                                  border:"1.5px solid var(--g-400)", borderRadius:8,
