@@ -2,8 +2,10 @@
 node_modules/**
 tests/**
 .github/**
+docs/**
 *.jsx
 *.html
+**/*.html
 *.md
 config.js
 service-worker.js
@@ -11,6 +13,4 @@ package.json
 package-lock.json
 manifest.json
 vitest.config.js
-report-*.html
-supplier-analysis.html
 icon-*.png
