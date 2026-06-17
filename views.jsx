@@ -1681,6 +1681,21 @@ function CategoryView({ data, role }) {
     return m;
   }, [data.orders]);
 
+  // map SKU → จำนวนรวมที่สั่งค้างอยู่ (ใช้แสดง badge "สั่งแล้ว" บนการ์ดสินค้า)
+  const pendingOrderQtyMap = uM(() => {
+    const orders = data.orders || [];
+    const m = {};
+    orders.forEach(o => {
+      if (!o.sku) return;
+      const isPending = !o.status || o.status === "รอ" || o.status === "pending";
+      if (isPending && (o.orderQty || 0) > 0) {
+        const key = (o.sku || "").trim().toUpperCase();
+        m[key] = (m[key] || 0) + (o.orderQty || 0);
+      }
+    });
+    return m;
+  }, [data.orders]);
+
   const sortFn = uC((a, b) => {
     switch (sortBy) {
       case "sku":        return compareSku(a, b);
@@ -2331,6 +2346,12 @@ function CategoryView({ data, role }) {
                         {lowStock && !outOfStock && <span style={{fontSize:9,fontWeight:700,
                           color:'#92400e',background:'#fef3c7',padding:'1px 6px',borderRadius:10}}>
                           เหลือ {totalQty}</span>}
+                        {(pendingOrderQtyMap[(p.sku||"").trim().toUpperCase()] || 0) > 0 && (
+                          <span style={{fontSize:9,fontWeight:700,color:'#fff',
+                            background:'#f59e0b',padding:'1px 6px',borderRadius:10}}>
+                            สั่งแล้ว {pendingOrderQtyMap[(p.sku||"").trim().toUpperCase()]}
+                          </span>
+                        )}
                       </div>
                       <div style={{fontSize:12,fontWeight:600,color:'var(--g-800)',lineHeight:1.3,
                                    overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
@@ -2471,6 +2492,7 @@ function CategoryView({ data, role }) {
                                onOrder={setOrderProduct}
                                role={role}
                                whReady={whReadyMap[(p.sku||"").trim().toUpperCase()]}
+                               pendingOrderQty={pendingOrderQtyMap[(p.sku||"").trim().toUpperCase()] || 0}
                                thresholds={thresholds}/>
                 </div>
               ))}
@@ -2650,7 +2672,7 @@ function OrderModal({ product, onClose }) {
   );
 }
 
-function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, whReady, thresholds }) {
+function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, whReady, pendingOrderQty, thresholds }) {
   const totalQty = (p.qtyStore > 0 || p.qtyWH > 0) ? (p.qtyStore || 0) + (p.qtyWH || 0) : (p.qty || 0);
   const lowStock = !p.isMTO && totalQty > 0 && totalQty <= getLowStockThreshold(thresholds, p.sku);
   const outOfStock = !p.isMTO && totalQty === 0;
@@ -2711,6 +2733,24 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, whRe
           }}>
             {rank===1?"🥇 #1":rank===2?"🥈 #2":rank===3?"🥉 #3":`#${rank}`}
           </div>
+        )}
+
+        {/* Pending order badge — มุมซ้ายบน แสดงเมื่อมีออเดอร์ค้างอยู่ */}
+        {pendingOrderQty > 0 && (
+          <div style={{
+            position:"absolute",
+            top: rank != null ? 34 : 6,
+            left:6,
+            background:"#f59e0b",
+            color:"#fff",
+            fontSize:10,
+            fontWeight:700,
+            padding:"3px 7px",
+            borderRadius:6,
+            zIndex:2,
+            lineHeight:1.2,
+            boxShadow:"0 1px 3px rgba(0,0,0,.15)",
+          }}>สั่งแล้ว {pendingOrderQty}</div>
         )}
 
         {/* Stock badge */}
