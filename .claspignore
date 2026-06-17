@@ -1,0 +1,16 @@
+# Push เฉพาะไฟล์ GAS เท่านั้น
+node_modules/**
+tests/**
+.github/**
+*.jsx
+*.html
+*.md
+config.js
+service-worker.js
+package.json
+package-lock.json
+manifest.json
+vitest.config.js
+report-*.html
+supplier-analysis.html
+icon-*.png
