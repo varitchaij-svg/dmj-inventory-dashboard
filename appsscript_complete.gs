@@ -653,6 +653,7 @@ function transferStock(ss, sku, qty, productName) {
     return error("ไม่พบ SKU: " + sku);
   } finally {
     lock.releaseLock();
+    invalidateCache_();
   }
 }
 
@@ -1041,6 +1042,7 @@ function deductStock(ss, sku, qty) {
     return error("ไม่พบ SKU: " + sku);
   } finally {
     lock.releaseLock();
+    invalidateCache_();
   }
 }
 
@@ -1077,6 +1079,16 @@ function deductMaterials(ss, items, actor) {
     }
 
     SpreadsheetApp.flush();
+
+    // Push ค่าใหม่กลับ ZORT (คลังสาย5) เหมือน deductStock — ไม่งั้น syncZortBoth
+    // รอบถัดไป (ทุก 2 ชม.) จะดึงค่าเก่าจาก ZORT มาทับ → สต็อกเด้งกลับ
+    try {
+      const zortItems = results
+        .filter(r => r.deducted > 0)
+        .map(r => ({ sku: r.sku, qty: r.newWH, warehousecode: WH_SAI5 }));
+      if (zortItems.length) pushStockToZort_(zortItems);
+    } catch (e) { Logger.log("deductMaterials ZORT push error: " + e); }
+
     // บันทึก Audit Log รวมทุก SKU ที่ deduct
     try {
       for (const r of results) {
@@ -1359,6 +1371,7 @@ function confirmStockCount(ss, entries, clientLoadedAt, actor) {
       warning: zortSynced ? null : "บันทึกใน Sheets แล้ว แต่ sync ไป ZORT ไม่สำเร็จ ระบบจะซิงค์ใหม่อัตโนมัติ" });
   } finally {
     lock.releaseLock();
+    invalidateCache_();
   }
 }
 
@@ -1427,6 +1440,10 @@ function pushStockToZort_(items) {
   const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
   for (const [wh, stocks] of Object.entries(groups)) {
     try {
+      // ENDPOINT: /Product/UpdateProductStockList = "ปรับสต็อก (ตั้งค่าใหม่)" ตาม ZORTOUT_API.md
+      //   เราส่ง stock เป็น "ค่าคงเหลือใหม่แบบ absolute" (set ทับ) จึงต้องใช้ endpoint นี้
+      //   ไม่ใช่ /Product/UpdateProductAvailableStockList ("ปรับ Available Stock" — คนละความหมาย)
+      //   ยืนยันแล้วจากตาราง PRODUCT ใน ZORTOUT_API.md — อย่าเปลี่ยนถ้าไม่มีหลักฐานว่า push ล้มเหลว
       // warehousecode เป็น query param ตาม ZORT docs ("Stock API ต้องระบุ warehousecode เป็น query parameter")
       const url = `${ZORT_BASE}/Product/UpdateProductStockList?warehousecode=${encodeURIComponent(wh)}`;
       const res = UrlFetchApp.fetch(url, {
@@ -1950,8 +1967,17 @@ function syncZortBoth() {
     Logger.log('Low-stock alert error: ' + e);
   }
 
-  // ── 2B: Daily morning summary ────────────────────────────────────────────
-  // สรุปเช้า: orders ค้าง + งาน MTO กำลังจัด + top3 สินค้าใกล้หมด
+  // หมายเหตุ: "สรุปเช้าวันนี้" (daily summary) ถูกย้ายออกไปเป็นฟังก์ชัน
+  //   sendDailyMorningSummary แล้ว — เดิมฝังตรงนี้ทำให้ส่ง LINE ทุกรอบ sync (ทุก 2 ชม. = ~12 ครั้ง/วัน)
+  //   ตอนนี้ syncZortBoth เหลือเฉพาะ low-stock alert (2A) เท่านั้น
+  invalidateCache_();
+}
+
+// ── Daily morning summary (สรุปเช้าวันนี้) ───────────────────────────────────
+// แยกออกจาก syncZortBoth เพื่อให้ส่งวันละครั้ง (ไม่ spam ทุก 2 ชม.)
+// ตั้ง trigger ด้วย setupDailySummaryTrigger (รันเช้าครั้งเดียว)
+// ชื่อไม่มี _ ต่อท้าย → โผล่ใน dropdown ของ GAS editor ให้รัน/ทดสอบเองได้
+function sendDailyMorningSummary() {
   try {
     var ss2 = SpreadsheetApp.openById(SHEET_ID);
     var dateStr2 = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy');
@@ -1981,9 +2007,21 @@ function syncZortBoth() {
       }
     }
 
-    // Top 3 สินค้าใกล้หมด จาก lowStockItems (เรียง qty น้อยสุดขึ้นก่อน)
-    var sorted = lowStockItems.slice().sort(function(a, b) { return a.qty - b.qty; });
-    var top3 = sorted.slice(0, 3);
+    // Top 3 สินค้าใกล้หมด — สแกนสต็อกคลัง (col H) เทียบ threshold เอง (self-contained)
+    var threshold = parseInt(PropertiesService.getScriptProperties().getProperty('LOW_STOCK_THRESHOLD') || '5');
+    var lowStockItems = [];
+    var prodSh = ss2.getSheetByName(SHEET_PRODUCTS);
+    if (prodSh) {
+      var prodRows = prodSh.getDataRange().getDisplayValues();
+      for (var pi = 1; pi < prodRows.length; pi++) {
+        var pr = prodRows[pi];
+        var psku = (pr[1] || '').toString().trim();
+        if (!psku) continue;
+        var pqty = parseInt(pr[7]) || 0; // col H = index 7 (0-indexed) = คลัง
+        if (pqty < threshold) lowStockItems.push({ sku: psku, name: (pr[2] || '').toString().trim(), qty: pqty });
+      }
+    }
+    var top3 = lowStockItems.slice().sort(function(a, b) { return a.qty - b.qty; }).slice(0, 3);
 
     var sumLines = [
       '📋 สรุปเช้าวันนี้ — ' + dateStr2,
@@ -2004,7 +2042,6 @@ function syncZortBoth() {
   } catch (e) {
     Logger.log('Daily summary error: ' + e);
   }
-  invalidateCache_();
 }
 
 function setupZortStockTrigger() {
@@ -2013,6 +2050,16 @@ function setupZortStockTrigger() {
   });
   ScriptApp.newTrigger("syncZortBoth").timeBased().everyHours(2).create();
   Logger.log("✅ ตั้ง trigger: syncZortBoth ทุก 2 ชั่วโมง");
+}
+
+// ตั้ง trigger ส่ง "สรุปเช้าวันนี้" วันละครั้ง (ทุกวัน 08:00 เขตเวลา GAS)
+// รันฟังก์ชันนี้เองครั้งเดียวใน GAS editor เพื่อสร้าง trigger
+function setupDailySummaryTrigger() {
+  ScriptApp.getProjectTriggers().forEach(t => {
+    if (t.getHandlerFunction() === "sendDailyMorningSummary") ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger("sendDailyMorningSummary").timeBased().everyDays(1).atHour(8).create();
+  Logger.log("✅ ตั้ง trigger: sendDailyMorningSummary ทุกวัน 08:00");
 }
 
 function debugZortProduct() {
