@@ -2428,24 +2428,27 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
       }}>
         {/* ── Row 1: image + info ── */}
         <div style={{display:"flex",gap:10,alignItems:"flex-start",padding:"12px 14px 8px"}}>
-          {/* Thumbnail — clickable */}
-          <div onClick={() => (order.image || product) && setImgOpen(true)}
+          {/* Thumbnail — clickable; fallback ใช้รูปสินค้าตาม SKU ถ้าแถวไม่มีรูป */}
+          {(() => { const imgSrc = order.image || product?.imageUrl || null;
+          return (
+          <div onClick={() => (imgSrc || product) && setImgOpen(true)}
             style={{
               width:54,height:54,borderRadius:8,flexShrink:0,overflow:"hidden",
-              background:"var(--g-50)",cursor:(order.image||product)?"pointer":"default",
+              background:"var(--g-50)",cursor:(imgSrc||product)?"pointer":"default",
               border:"1px solid var(--bdr)",position:"relative",
             }}>
-            {order.image
-              ? <img src={order.image} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+            {imgSrc
+              ? <img src={imgSrc} alt="" onError={e=>{e.target.style.display="none"}} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
               : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",color:"var(--muted)"}}>{I.package}</div>
             }
-            {(order.image||product) && (
+            {(imgSrc||product) && (
               <div style={{position:"absolute",bottom:2,right:2,background:"rgba(0,0,0,.45)",
                 borderRadius:4,padding:"1px 4px",fontSize:8,color:"#fff",lineHeight:1.4}}>
                 🔍
               </div>
             )}
           </div>
+          ); })()}
 
           {/* Info */}
           <div style={{flex:1,minWidth:0}}>
@@ -2613,8 +2616,8 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
             background:"#fff",borderRadius:16,padding:20,
             maxWidth:380,width:"100%",maxHeight:"90vh",overflow:"auto",
           }}>
-            {order.image && (
-              <img src={order.image} alt="" style={{width:"100%",borderRadius:10,marginBottom:14,display:"block"}}/>
+            {(order.image || product?.imageUrl) && (
+              <img src={order.image || product?.imageUrl} alt="" onError={e=>{e.target.style.display="none"}} style={{width:"100%",borderRadius:10,marginBottom:14,display:"block"}}/>
             )}
             <div style={{fontWeight:700,fontSize:16,marginBottom:2}}>{order.name}</div>
             <div style={{fontSize:12,color:"var(--muted)",marginBottom:10}}>{order.sku}</div>
@@ -3702,9 +3705,10 @@ function OrderSummaryView({ data, onPrintRequest }) {
               }}>
                 {/* Image */}
                 <div style={{position:"relative"}}>
-                  {order.image ? (
-                    <img src={order.image} alt=""
+                  {(order.image || order.product?.imageUrl) ? (
+                    <img src={order.image || order.product?.imageUrl} alt=""
                       onClick={() => setBigImg(order)}
+                      onError={e=>{e.target.style.display="none"}}
                       style={{width:"100%",height:88,objectFit:"contain",
                               borderRadius:8,cursor:"pointer",display:"block",
                               background:"var(--g-50)"}}/>
@@ -3862,8 +3866,9 @@ function OrderSummaryView({ data, onPrintRequest }) {
             background:"#fff",borderRadius:16,padding:20,
             maxWidth:380,width:"90%",maxHeight:"90vh",overflow:"auto",
           }}>
-            {bigImg.image && (
-              <img src={bigImg.image} alt=""
+            {(bigImg.image || bigImg.product?.imageUrl) && (
+              <img src={bigImg.image || bigImg.product?.imageUrl} alt=""
+                onError={e=>{e.target.style.display="none"}}
                 style={{width:"100%",borderRadius:10,marginBottom:12,display:"block"}}/>
             )}
             <div style={{fontWeight:700,fontSize:16,marginBottom:2}}>{bigImg.name}</div>
