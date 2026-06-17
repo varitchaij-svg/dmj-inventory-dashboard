@@ -715,23 +715,29 @@ function App() {
                 {zortSyncing ? <span className="spin" style={{width:14,height:14,borderWidth:2}}/> : "⬇️"}
               </button>
             )}
-            <div title={`${ROLE_LABELS[role]} · คลิกเพื่อออกจากระบบ`}
+            <button title={`${ROLE_LABELS[role]} · ออกจากระบบ`}
                  onClick={() => setConfirmAction({ type: "logout" })}
-                 style={{width:32,height:32,borderRadius:"50%",
+                 style={{minHeight:44,minWidth:44,padding:"3px 8px",border:"none",
+                         background:"transparent",cursor:"pointer",fontFamily:"inherit",
+                         display:"flex",flexDirection:"column",alignItems:"center",
+                         justifyContent:"center",gap:2}}>
+              <span style={{width:30,height:30,borderRadius:"50%",
                          background:
                            role==="owner"      ? "var(--g-700)" :
                            role==="warehouse"  ? "#8a6a2f" :
                            role==="frontstore" ? "#1f6f8b" :
                            role==="saler"      ? "#705d96" :
                            "var(--g-300)",
-                         color:"#fff", cursor:"pointer",
+                         color:"#fff",
                          display:"flex",alignItems:"center",justifyContent:"center",
                          fontWeight:700,fontSize:13}}>
-              {role==="owner"      ? "ด" :
-               role==="warehouse"  ? "ค" :
-               role==="frontstore" ? "ร" :
-               role==="saler"      ? "S" : "พ"}
-            </div>
+                {role==="owner"      ? "ด" :
+                 role==="warehouse"  ? "ค" :
+                 role==="frontstore" ? "ร" :
+                 role==="saler"      ? "S" : "พ"}
+              </span>
+              <span style={{fontSize:10,fontWeight:700,color:"var(--muted)",lineHeight:1}}>🚪 ออก</span>
+            </button>
           </div>
         </div>
       </nav>
