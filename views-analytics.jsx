@@ -274,12 +274,12 @@ function FrontStoreView({ data, role }) {
         {role === "owner" && (
           <div style={{display:"flex",gap:4,border:"1px solid #e5e7eb",borderRadius:8,overflow:"hidden"}}>
             <button onClick={() => setPurchaseMode(false)}
-              style={{padding:"6px 12px",fontSize:13,border:"none",background:!purchaseMode?"#2563eb":"#f9fafb",
+              style={{minHeight:44,padding:"6px 14px",fontSize:13,border:"none",background:!purchaseMode?"#2563eb":"#f9fafb",
                       color:!purchaseMode?"#fff":"#374151",cursor:"pointer",fontFamily:"inherit"}}>
               ตรวจสต็อก
             </button>
             <button onClick={() => setPurchaseMode(true)}
-              style={{padding:"6px 12px",fontSize:13,border:"none",background:purchaseMode?"#2563eb":"#f9fafb",
+              style={{minHeight:44,padding:"6px 14px",fontSize:13,border:"none",background:purchaseMode?"#2563eb":"#f9fafb",
                       color:purchaseMode?"#fff":"#374151",cursor:"pointer",fontFamily:"inherit"}}>
               📋 จัดซื้อ
             </button>
@@ -322,7 +322,7 @@ function FrontStoreView({ data, role }) {
           </div>
           {supplierFilter && (
             <button onClick={() => setSupplierFilter("")}
-              style={{fontSize:11,padding:"4px 10px",borderRadius:8,border:"1px solid var(--bdr)",
+              style={{minHeight:44,fontSize:11,padding:"4px 12px",borderRadius:8,border:"1px solid var(--bdr)",
                       background:"#fff",cursor:"pointer",color:"var(--muted)",fontFamily:"inherit",
                       display:"flex",alignItems:"center",gap:4}}>
               ✕ {supplierFilter}
@@ -392,10 +392,10 @@ function FrontStoreView({ data, role }) {
         <div style={{display:"flex",alignItems:"center",justifyContent:"center",
                      gap:8,padding:"4px 0",flexWrap:"wrap"}}>
           <button onClick={() => setPage(0)} disabled={page===0}
-            className="btn" style={{padding:"6px 10px",fontSize:12,minWidth:36,
+            className="btn" style={{minHeight:44,padding:"6px 12px",fontSize:14,minWidth:44,
                                     opacity:page===0?.35:1}}>«</button>
           <button onClick={() => setPage(p => Math.max(0, p-1))} disabled={page===0}
-            className="btn" style={{padding:"6px 12px",fontSize:12,
+            className="btn" style={{minHeight:44,padding:"6px 14px",fontSize:13,
                                     opacity:page===0?.35:1}}>‹ ก่อนหน้า</button>
           {Array.from({length:totalPages},(_,i)=>i)
             .filter(i => Math.abs(i-page) <= 2 || i===0 || i===totalPages-1)
@@ -408,16 +408,16 @@ function FrontStoreView({ data, role }) {
             ) : (
               <button key={item} onClick={() => setPage(item)}
                 className={`btn${item===page?" primary":""}`}
-                style={{padding:"6px 10px",fontSize:12,minWidth:34,fontWeight:item===page?700:400}}>
+                style={{minHeight:44,padding:"6px 10px",fontSize:14,minWidth:44,fontWeight:item===page?700:400}}>
                 {item+1}
               </button>
             ))
           }
           <button onClick={() => setPage(p => Math.min(totalPages-1, p+1))} disabled={page===totalPages-1}
-            className="btn" style={{padding:"6px 12px",fontSize:12,
+            className="btn" style={{minHeight:44,padding:"6px 14px",fontSize:13,
                                     opacity:page===totalPages-1?.35:1}}>ถัดไป ›</button>
           <button onClick={() => setPage(totalPages-1)} disabled={page===totalPages-1}
-            className="btn" style={{padding:"6px 10px",fontSize:12,minWidth:36,
+            className="btn" style={{minHeight:44,padding:"6px 12px",fontSize:14,minWidth:44,
                                     opacity:page===totalPages-1?.35:1}}>»</button>
         </div>
       )}
@@ -3084,7 +3084,6 @@ async function syncStockDeduct(sku, qty, name) {
       body: JSON.stringify({ transferStock: true, sku, qty, name }),
     });
     const json = await res.json().catch(() => ({}));
-    console.log("syncStockDeduct result:", json);
     return json;
   } catch(e) { console.warn("syncStockDeduct error:", e.message); return { success: false, error: e.message }; }
 }
@@ -3100,7 +3099,6 @@ async function syncStockTransferBatch(items) {
       body: JSON.stringify({ transferStockBatch: true, list: items, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน", clientLoadedAt: window._dataLoadedAt || 0 }),
     });
     const json = await res.json().catch(() => ({}));
-    console.log("syncStockTransferBatch result:", json);
     return json;
   } catch(e) { console.warn("syncStockTransferBatch error:", e.message); return { success: false, error: e.message }; }
 }
