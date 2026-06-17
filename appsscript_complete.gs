@@ -1950,15 +1950,23 @@ function syncZortBoth() {
       }
 
       if (lowStockItems.length > 0) {
-        var dateStr = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy');
-        var lines = ['🚨 สต็อกใกล้หมด — ' + dateStr];
-        for (var j = 0; j < lowStockItems.length; j++) {
-          var it = lowStockItems[j];
-          lines.push('• ' + (it.name || it.sku) + ' (' + it.sku + '): เหลือ ' + it.qty + ' ใน WH');
+        // ส่งได้แค่ 1 ครั้ง/วัน — กัน spam ทุก 2 ชม. (12 ครั้ง/วัน เกิน LINE limit 200/เดือน)
+        var todayKey = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyyMMdd');
+        var lastSentKey = props.getProperty('LOW_STOCK_LAST_SENT_DATE') || '';
+        if (lastSentKey !== todayKey) {
+          var dateStr = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy');
+          var lines = ['🚨 สต็อกใกล้หมด — ' + dateStr];
+          for (var j = 0; j < lowStockItems.length; j++) {
+            var it = lowStockItems[j];
+            lines.push('• ' + (it.name || it.sku) + ' (' + it.sku + '): เหลือ ' + it.qty + ' ใน WH');
+          }
+          lines.push('📊 สแกน ' + scanned + ' รายการ พบ ' + lowStockItems.length + ' รายการต่ำกว่าเกณฑ์ (threshold=' + threshold + ')');
+          sendLineMessage_(lines.join('\n'));
+          props.setProperty('LOW_STOCK_LAST_SENT_DATE', todayKey);
+          Logger.log('Low-stock LINE sent: ' + lowStockItems.length + ' รายการ');
+        } else {
+          Logger.log('Low-stock: already sent today (' + todayKey + ') — skip LINE');
         }
-        lines.push('📊 สแกน ' + scanned + ' รายการ พบ ' + lowStockItems.length + ' รายการต่ำกว่าเกณฑ์ (threshold=' + threshold + ')');
-        sendLineMessage_(lines.join('\n'));
-        Logger.log('Low-stock LINE sent: ' + lowStockItems.length + ' รายการ');
       } else {
         Logger.log('Low-stock check: ไม่พบสินค้าต่ำกว่าเกณฑ์ (threshold=' + threshold + ', สแกน ' + scanned + ')');
       }
@@ -2023,6 +2031,12 @@ function sendDailyMorningSummary() {
     }
     var top3 = lowStockItems.slice().sort(function(a, b) { return a.qty - b.qty; }).slice(0, 3);
 
+    // ส่งเฉพาะวันที่มีเรื่องแจ้ง (ประหยัด LINE quota — ปกติดีไม่ต้องรบกวน)
+    if (pendingOrders === 0 && mtoActive === 0 && top3.length === 0) {
+      Logger.log('Daily summary: ทุกอย่างปกติ ไม่มีเรื่องแจ้ง — skip LINE');
+      return;
+    }
+
     var sumLines = [
       '📋 สรุปเช้าวันนี้ — ' + dateStr2,
       '📦 Orders ค้าง: ' + pendingOrders + ' รายการ',
@@ -2034,8 +2048,6 @@ function sendDailyMorningSummary() {
         var tp = top3[ti];
         sumLines.push('  • ' + (tp.name || tp.sku) + ' (' + tp.sku + '): ' + tp.qty + ' ใน WH');
       }
-    } else {
-      sumLines.push('✅ สต็อกปกติ ไม่มีสินค้าต่ำกว่าเกณฑ์');
     }
     sendLineMessage_(sumLines.join('\n'));
     Logger.log('Daily summary LINE sent');
