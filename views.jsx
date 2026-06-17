@@ -2504,7 +2504,9 @@ function CategoryView({ data, role }) {
           )}
         </div>
       </div>
-      {orderProduct && <OrderModal product={orderProduct} onClose={() => setOrderProduct(null)}/>}
+      {orderProduct && <OrderModal product={orderProduct} onClose={() => setOrderProduct(null)}
+        pendingOrderQty={pendingOrderQtyMap[(orderProduct.sku||"").trim().toUpperCase()] || 0}
+        whReady={whReadyMap[(orderProduct.sku||"").trim().toUpperCase()]}/>}
     </div>
   );
 }
@@ -2513,7 +2515,7 @@ function CategoryView({ data, role }) {
 // ────────────── Order Modal ──────────────
 const QUICK_QTYS = [24, 36, 48, 60];
 
-function OrderModal({ product, onClose }) {
+function OrderModal({ product, onClose, pendingOrderQty, whReady }) {
   useBackHandler(onClose); // Android back = ปิด modal สั่งของ
   const [qty, setQty] = uS(Math.min(24, product.qtyWH || 24));
   const [customMode, setCustomMode] = uS(false);
@@ -2595,6 +2597,38 @@ function OrderModal({ product, onClose }) {
                 </div>
               </div>
             </div>
+
+            {/* แจ้งเตือน: สั่งแล้วค้างอยู่ / WH จัดแล้ว */}
+            {((pendingOrderQty > 0) || (whReady && whReady.length > 0)) && (
+              <div style={{
+                marginBottom:14, borderRadius:10, overflow:"hidden",
+                border:"1.5px solid #fcd34d", background:"#fffbeb",
+              }}>
+                {pendingOrderQty > 0 && (
+                  <div style={{padding:"10px 14px", display:"flex", alignItems:"center", gap:10}}>
+                    <span style={{fontSize:20}}>🟡</span>
+                    <div>
+                      <div style={{fontSize:12, fontWeight:700, color:"#92400e"}}>สั่งแล้ว {pendingOrderQty} ชิ้น (ยังค้างอยู่)</div>
+                      <div style={{fontSize:11, color:"#b45309", marginTop:1}}>ตรวจสอบก่อนสั่งซ้ำ</div>
+                    </div>
+                  </div>
+                )}
+                {whReady && whReady.length > 0 && (
+                  <div style={{
+                    padding:"10px 14px",
+                    borderTop: pendingOrderQty > 0 ? "1px solid #fcd34d" : "none",
+                    display:"flex", alignItems:"center", gap:10,
+                    background:"#eff6ff", borderTop:"1.5px solid #bfdbfe",
+                  }}>
+                    <span style={{fontSize:20}}>📦</span>
+                    <div>
+                      <div style={{fontSize:12, fontWeight:700, color:"#1d4ed8"}}>WH จัดของแล้ว {whReady.reduce((s,o)=>s+(o.preparedQty||0),0)} ชิ้น</div>
+                      <div style={{fontSize:11, color:"#3b82f6", marginTop:1}}>เตรียมรอขึ้นรถแล้ว</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {outOfStock ? (
               <div style={{background:"#fff0f0", border:"1px solid #fcc", borderRadius:10,
