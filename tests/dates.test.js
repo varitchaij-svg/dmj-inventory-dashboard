@@ -1,8 +1,12 @@
 // tests/dates.test.js — ทดสอบ monthsSince, monthLabel, monthKey_, dayKey_
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { monthsSince, monthLabel, monthKey_, dayKey_ } from './helpers.js';
 
 describe('monthsSince', () => {
+  // ตรึงวันที่ "วันนี้" ให้คงที่ ไม่งั้นเทสต์ขอบเดือนจะ flaky ตามวันจริง
+  beforeAll(() => { vi.useFakeTimers(); vi.setSystemTime(new Date(2026, 5, 10)); }); // 2026-06-10
+  afterAll(() => { vi.useRealTimers(); });
+
   it('รับ ISO date เก่า → คืนตัวเลขบวก', () => {
     const result = monthsSince('2024-01-15');
     expect(result).toBeGreaterThan(0);

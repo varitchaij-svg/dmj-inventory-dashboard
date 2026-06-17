@@ -1,4 +1,6 @@
-# Push เฉพาะไฟล์ GAS เท่านั้น
+# Push เฉพาะ appsscript_complete.gs เท่านั้น (ไฟล์ .gs ตัวจริง)
+# กันไฟล์ draft เก่าที่ประกาศ doPost/const ซ้ำ → deploy พัง "Identifier already declared"
+appsscript_doPost.gs
 node_modules/**
 tests/**
 .github/**
