@@ -28,6 +28,9 @@ const ROLE_TABS = {
   frontstore: ["categories","stock","frontstore","orders","mtojobs","labels"],
   saler:      ["categories","stock","orders","mtojobs","labels"],
 };
+// "โหมดง่าย" — เมนูที่ใช้ประจำวัน (เหลือไว้บนแถบหลัก) ที่เหลือดันเข้า "เพิ่มเติม"
+const SIMPLE_PRIMARY = ["categories", "stock", "frontstore", "orders"];
+
 const ROLE_LABELS = {
   owner:      "👑 เจ้าของ",
   employee:   "👤 พนักงาน",
@@ -323,6 +326,7 @@ function App() {
   const [lastSaved, setLastSaved] = usS(null); // auto-save timestamp
   const [confirmAction, setConfirmAction] = usS(null); // { type:"clearLocal"|"logout" }
   const [moreOpen, setMoreOpen] = usS(false); // dropdown "เพิ่มเติม" บน navtabs (owner)
+  const [simpleMode, setSimpleMode] = usS(() => localStorage.getItem("dmj_simple_mode") === "1"); // โหมดง่าย: ลดเมนู
   const [moreRect, setMoreRect] = usS(null);  // position ของปุ่มเพิ่มเติม (fixed dropdown)
   const moreButtonRef = React.useRef(null);
   const [installPrompt, setInstallPrompt] = usS(null);
@@ -527,6 +531,27 @@ function App() {
   const visibleTabs = TABS.filter(t => allowedTabIds.includes(t.id));
   const activeTab = allowedTabIds.includes(tab) ? tab : (allowedTabIds[0] || "categories");
 
+  const toggleSimpleMode = () => setSimpleMode(v => {
+    const next = !v;
+    try { localStorage.setItem("dmj_simple_mode", next ? "1" : "0"); } catch (e) {}
+    return next;
+  });
+
+  // แบ่งเมนูเป็น primary (บนแถบ) / secondary (ใน "เพิ่มเติม")
+  // โหมดง่าย: เหลือเฉพาะ SIMPLE_PRIMARY บนแถบ ที่เหลือเข้า "เพิ่มเติม"
+  // โหมดปกติ: แสดง 5 ตัวแรก + เพิ่มเติม เมื่อมีเกิน 7 ตัว (เหมือนเดิม)
+  let primaryTabs, secondaryTabs;
+  if (simpleMode) {
+    primaryTabs   = visibleTabs.filter(t => SIMPLE_PRIMARY.includes(t.id));
+    secondaryTabs = visibleTabs.filter(t => !SIMPLE_PRIMARY.includes(t.id));
+  } else if (visibleTabs.length > 7) {
+    primaryTabs   = visibleTabs.slice(0, 5);
+    secondaryTabs = visibleTabs.slice(5);
+  } else {
+    primaryTabs   = visibleTabs;
+    secondaryTabs = [];
+  }
+
   if (error && !data) {
     return (
       <div className="loading-screen">
@@ -606,11 +631,9 @@ function App() {
 
           <div className="navtabs" role="tablist">
             {(() => {
-              // ถ้า tabs มากกว่า 7 ตัว → แสดง 5 ตัวแรก + ปุ่ม "เพิ่มเติม" dropdown
-              // warehouse มี 7 tabs พอดี → แสดงตรงๆ ไม่มี dropdown
-              if (visibleTabs.length > 7) {
-                const primaryTabs   = visibleTabs.slice(0, 5);
-                const secondaryTabs = visibleTabs.slice(5);
+              // primaryTabs / secondaryTabs คำนวณไว้ด้านบน (รวมโหมดง่าย)
+              // แสดงปุ่ม "เพิ่มเติม" เมื่อมี secondaryTabs
+              if (secondaryTabs.length > 0) {
                 return (
                   <>
                     {primaryTabs.map(t => (
@@ -654,7 +677,7 @@ function App() {
                           </div>
                           {/* tab list */}
                           <div style={{overflowY:"auto",padding:"4px 12px 16px"}}>
-                            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                            <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) minmax(0,1fr)",gap:8}}>
                               {secondaryTabs.map(t => (
                                 <button key={t.id}
                                         onClick={() => { handleSetTab(t.id); setMoreOpen(false); }}
@@ -673,6 +696,38 @@ function App() {
                                 </button>
                               ))}
                             </div>
+                            {/* โหมดง่าย toggle */}
+                            <button onClick={toggleSimpleMode}
+                                    style={{
+                                      marginTop:14, width:"100%", minHeight:56,
+                                      display:"flex", alignItems:"center", gap:12,
+                                      padding:"10px 14px", borderRadius:14, cursor:"pointer",
+                                      fontFamily:"inherit", textAlign:"left",
+                                      border: simpleMode ? "2px solid var(--g-500)" : "1.5px solid var(--bdr)",
+                                      background: simpleMode ? "var(--g-50)" : "var(--paper)",
+                                    }}>
+                              <span style={{fontSize:26,lineHeight:1}}>{simpleMode ? "😊" : "🧩"}</span>
+                              <span style={{flex:1, minWidth:0}}>
+                                <span style={{display:"block", fontSize:14, fontWeight:700,
+                                              color: simpleMode ? "var(--g-700)" : "var(--text)"}}>
+                                  โหมดง่าย {simpleMode ? "(เปิดอยู่)" : ""}
+                                </span>
+                                <span style={{display:"block", fontSize:11, color:"var(--muted)", lineHeight:1.4}}>
+                                  แสดงเฉพาะเมนูที่ใช้บ่อย กดง่ายขึ้น
+                                </span>
+                              </span>
+                              <span style={{
+                                width:46, height:28, borderRadius:14, flexShrink:0, position:"relative",
+                                background: simpleMode ? "var(--g-500)" : "var(--bdr)",
+                                transition:"background .15s",
+                              }}>
+                                <span style={{
+                                  position:"absolute", top:3, left: simpleMode ? 21 : 3,
+                                  width:22, height:22, borderRadius:"50%", background:"#fff",
+                                  transition:"left .15s", boxShadow:"0 1px 3px rgba(0,0,0,.2)",
+                                }}/>
+                              </span>
+                            </button>
                           </div>
                         </div>
                       </>
@@ -680,8 +735,8 @@ function App() {
                   </>
                 );
               }
-              // tabs น้อย (≤ 6) → แสดงทั้งหมดในแถบปกติ
-              return visibleTabs.map(t => (
+              // ไม่มี secondaryTabs → แสดง primary ทั้งหมดในแถบปกติ
+              return primaryTabs.map(t => (
                 <button key={t.id} role="tab"
                         className={`navtab${activeTab===t.id?' active':''}`}
                         onClick={() => handleSetTab(t.id)}>
