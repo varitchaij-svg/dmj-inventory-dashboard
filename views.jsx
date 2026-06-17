@@ -1644,6 +1644,7 @@ function CategoryView({ data, role }) {
   const [deadFilter, setDeadFilter] = uS(null); // เกณฑ์ "สินค้าจมเกิน N เดือน" (null = ไม่กรอง)
   const [newStockFilter, setNewStockFilter] = uS(false);
   const [orderProduct, setOrderProduct] = uS(null);
+  const [localPendingOrders, setLocalPendingOrders] = uS([]); // optimistic update หลังสั่งสำเร็จ
   const [globalVendor, setGlobalVendor] = uS(null); // global supplier filter (all categories)
   // Android back: ถ้ากำลังดู supplier view → กด back = ล้าง supplier filter
   useBackHandler(globalVendor ? () => { setGlobalVendor(null); setPage(1); } : null);
@@ -1682,8 +1683,9 @@ function CategoryView({ data, role }) {
   }, [data.orders]);
 
   // map SKU → จำนวนรวมที่สั่งค้างอยู่ (ใช้แสดง badge "สั่งแล้ว" บนการ์ดสินค้า)
+  // รวม localPendingOrders เพื่อ optimistic update หลังสั่งสำเร็จทันที
   const pendingOrderQtyMap = uM(() => {
-    const orders = data.orders || [];
+    const orders = [...(data.orders || []), ...localPendingOrders];
     const m = {};
     orders.forEach(o => {
       if (!o.sku) return;
@@ -1694,7 +1696,7 @@ function CategoryView({ data, role }) {
       }
     });
     return m;
-  }, [data.orders]);
+  }, [data.orders, localPendingOrders]);
 
   const sortFn = uC((a, b) => {
     switch (sortBy) {
@@ -2506,7 +2508,8 @@ function CategoryView({ data, role }) {
       </div>
       {orderProduct && <OrderModal product={orderProduct} onClose={() => setOrderProduct(null)}
         pendingOrderQty={pendingOrderQtyMap[(orderProduct.sku||"").trim().toUpperCase()] || 0}
-        whReady={whReadyMap[(orderProduct.sku||"").trim().toUpperCase()]}/>}
+        whReady={whReadyMap[(orderProduct.sku||"").trim().toUpperCase()]}
+        onOrderSuccess={(sku, qty) => setLocalPendingOrders(prev => [...prev, {sku, orderQty: qty, status:"รอ"}])}/>}
     </div>
   );
 }
@@ -2515,7 +2518,7 @@ function CategoryView({ data, role }) {
 // ────────────── Order Modal ──────────────
 const QUICK_QTYS = [24, 36, 48, 60];
 
-function OrderModal({ product, onClose, pendingOrderQty, whReady }) {
+function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess }) {
   useBackHandler(onClose); // Android back = ปิด modal สั่งของ
   const [qty, setQty] = uS(Math.min(24, product.qtyWH || 24));
   const [customMode, setCustomMode] = uS(false);
@@ -2538,7 +2541,7 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady }) {
     fetch(url)
       .then(r => r.json())
       .then(d => {
-        if (d.ok) { setDone(true); setTimeout(onClose, 2000); }
+        if (d.ok) { setDone(true); onOrderSuccess && onOrderSuccess(product.sku, qty); setTimeout(onClose, 2000); }
         else setErr(d.error || 'เกิดข้อผิดพลาด');
       })
       .catch(e => setErr(e.message))
