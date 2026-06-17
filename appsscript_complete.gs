@@ -3255,12 +3255,22 @@ function handleOrder_(params) {
 }
 
 function sendLineMessage_(msg) {
-  UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
+  var res = UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
     method: "post",
     headers: { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN },
     payload: JSON.stringify({ to: LINE_USER_ID, messages: [{ type: "text", text: msg }] }),
     muteHttpExceptions: true
   });
+  if (res.getResponseCode() !== 200) {
+    Logger.log("LINE push error " + res.getResponseCode() + ": " + res.getContentText());
+  }
+}
+
+// ทดสอบ LINE: รันตรงๆ ใน GAS editor → ดู log ว่า error อะไร
+function debugLineMessage() {
+  Logger.log("LINE_USER_ID: " + LINE_USER_ID);
+  Logger.log("TOKEN length: " + (LINE_ACCESS_TOKEN || "").length);
+  sendLineMessage_("🔔 ทดสอบ LINE จาก GAS — " + new Date().toLocaleString("th-TH"));
 }
 
 function sendLineGroup_(msg) {
