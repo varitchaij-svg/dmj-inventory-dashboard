@@ -1945,6 +1945,7 @@ function CategoryView({ data, role }) {
   const [checkSendOpen, setCheckSendOpen] = uS(false);       // floating button → modal
   const [checkSuppliers, setCheckSuppliers] = uS(new Set()); // ชื่อ supplier ที่ owner เลือก
   const [orderProduct, setOrderProduct] = uS(null);
+  const [localPendingOrders, setLocalPendingOrders] = uS([]); // optimistic update หลังสั่งสำเร็จ
   const [globalVendor, setGlobalVendor] = uS(null); // global supplier filter (all categories)
   // Android back: ถ้ากำลังดู supplier view → กด back = ล้าง supplier filter
   useBackHandler(globalVendor ? () => { setGlobalVendor(null); setPage(1); } : null);
@@ -1983,6 +1984,22 @@ function CategoryView({ data, role }) {
   };
 
   const isMtoCat = active === "Made to Order จัดแบบพิเศษ";
+
+  // map SKU → จำนวนรวมที่สั่งค้างอยู่ (ใช้แสดง badge "สั่งแล้ว" บนการ์ดสินค้า)
+  // รวม localPendingOrders เพื่อ optimistic update หลังสั่งสำเร็จทันที
+  const pendingOrderQtyMap = uM(() => {
+    const orders = [...(data.orders || []), ...localPendingOrders];
+    const m = {};
+    orders.forEach(o => {
+      if (!o.sku) return;
+      const isPending = !o.status || o.status === "รอ" || o.status === "pending";
+      if (isPending && (o.orderQty || 0) > 0) {
+        const key = (o.sku || "").trim().toUpperCase();
+        m[key] = (m[key] || 0) + (o.orderQty || 0);
+      }
+    });
+    return m;
+  }, [data.orders, localPendingOrders]);
 
   const sortFn = uC((a, b) => {
     switch (sortBy) {
@@ -2757,6 +2774,12 @@ function CategoryView({ data, role }) {
                         {lowStock && !outOfStock && <span style={{fontSize:9,fontWeight:700,
                           color:'#92400e',background:'#fef3c7',padding:'1px 6px',borderRadius:10}}>
                           เหลือ {totalQty}</span>}
+                        {(pendingOrderQtyMap[(p.sku||"").trim().toUpperCase()] || 0) > 0 && (
+                          <span style={{fontSize:9,fontWeight:700,color:'#fff',
+                            background:'#f59e0b',padding:'1px 6px',borderRadius:10}}>
+                            สั่งแล้ว {pendingOrderQtyMap[(p.sku||"").trim().toUpperCase()]}
+                          </span>
+                        )}
                       </div>
                       <div style={{fontSize:12,fontWeight:600,color:'var(--g-800)',lineHeight:1.3,
                                    overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
@@ -2869,6 +2892,7 @@ function CategoryView({ data, role }) {
                                      allCats={allCats}
                                      reasonTags={[]}
                                      onOrder={purchasePlanMode ? null : setOrderProduct}
+                                     pendingOrderQty={pendingOrderQtyMap[(p.sku||"").trim().toUpperCase()] || 0}
                                      role={role}/>
                       </div>
                     ))}
@@ -2898,6 +2922,7 @@ function CategoryView({ data, role }) {
                                allCats={allCats}
                                reasonTags={isGlobalSearch ? [] : (reasonMap[p.sku] || [])}
                                onOrder={setOrderProduct}
+                               pendingOrderQty={pendingOrderQtyMap[(p.sku||"").trim().toUpperCase()] || 0}
                                role={role}/>
                 </div>
               ))}
@@ -2909,7 +2934,9 @@ function CategoryView({ data, role }) {
           )}
         </div>
       </div>
-      {orderProduct && <OrderModal product={orderProduct} onClose={() => setOrderProduct(null)}/>}
+      {orderProduct && <OrderModal product={orderProduct} onClose={() => setOrderProduct(null)}
+        pendingOrderQty={pendingOrderQtyMap[(orderProduct.sku||"").trim().toUpperCase()] || 0}
+        onOrderSuccess={(sku, qty) => setLocalPendingOrders(prev => [...prev, {sku, orderQty: qty, status:"รอ"}])}/>}
       <Toast toast={checkToast} onClose={hideCheckToast}/>
 
       {/* ── Check Send Modal (bottom sheet) — owner เลือก supplier ก่อนส่ง ── */}
@@ -3027,7 +3054,7 @@ function CategoryView({ data, role }) {
 // ────────────── Order Modal ──────────────
 const QUICK_QTYS = [24, 36, 48, 60];
 
-function OrderModal({ product, onClose }) {
+function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess }) {
   useBackHandler(onClose); // Android back = ปิด modal สั่งของ
   const [qty, setQty] = uS(24);
   const [customMode, setCustomMode] = uS(false);
@@ -3049,7 +3076,7 @@ function OrderModal({ product, onClose }) {
     fetch(url)
       .then(r => r.json())
       .then(d => {
-        if (d.ok) { setDone(true); setTimeout(onClose, 2000); }
+        if (d.ok) { setDone(true); onOrderSuccess && onOrderSuccess(product.sku, qty); setTimeout(onClose, 2000); }
         else setErr(d.error || 'เกิดข้อผิดพลาด');
       })
       .catch(e => setErr(e.message))
@@ -3108,6 +3135,37 @@ function OrderModal({ product, onClose }) {
                 </div>
               </div>
             </div>
+
+            {/* แจ้งเตือน: สั่งแล้วค้างอยู่ / WH จัดแล้ว */}
+            {((pendingOrderQty > 0) || (whReady && whReady.length > 0)) && (
+              <div style={{
+                marginBottom:14, borderRadius:10, overflow:"hidden",
+                border:"1.5px solid #fcd34d", background:"#fffbeb",
+              }}>
+                {pendingOrderQty > 0 && (
+                  <div style={{padding:"10px 14px", display:"flex", alignItems:"center", gap:10}}>
+                    <span style={{fontSize:20}}>🟡</span>
+                    <div>
+                      <div style={{fontSize:12, fontWeight:700, color:"#92400e"}}>สั่งแล้ว {pendingOrderQty} ชิ้น (ยังค้างอยู่)</div>
+                      <div style={{fontSize:11, color:"#b45309", marginTop:1}}>ตรวจสอบก่อนสั่งซ้ำ</div>
+                    </div>
+                  </div>
+                )}
+                {whReady && whReady.length > 0 && (
+                  <div style={{
+                    padding:"10px 14px",
+                    display:"flex", alignItems:"center", gap:10,
+                    background:"#eff6ff", borderTop:"1.5px solid #bfdbfe",
+                  }}>
+                    <span style={{fontSize:20}}>📦</span>
+                    <div>
+                      <div style={{fontSize:12, fontWeight:700, color:"#1d4ed8"}}>WH จัดของแล้ว {whReady.reduce((s,o)=>s+(o.preparedQty||0),0)} ชิ้น</div>
+                      <div style={{fontSize:11, color:"#3b82f6", marginTop:1}}>เตรียมรอขึ้นรถแล้ว</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {outOfStock ? (
               <div style={{background:"#fff0f0", border:"1px solid #fcc", borderRadius:10,
@@ -3186,7 +3244,7 @@ function OrderModal({ product, onClose }) {
   );
 }
 
-function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role }) {
+function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pendingOrderQty }) {
   const totalQty = (p.qtyStore > 0 || p.qtyWH > 0) ? (p.qtyStore || 0) + (p.qtyWH || 0) : (p.qty || 0);
   const lowStock = !p.isMTO && totalQty > 0 && totalQty <= 36;
   const outOfStock = !p.isMTO && totalQty === 0;
@@ -3247,6 +3305,24 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role }) {
           }}>
             {rank===1?"🥇 #1":rank===2?"🥈 #2":rank===3?"🥉 #3":`#${rank}`}
           </div>
+        )}
+
+        {/* Pending order badge — มุมซ้ายบน แสดงเมื่อมีออเดอร์ค้างอยู่ */}
+        {pendingOrderQty > 0 && (
+          <div style={{
+            position:"absolute",
+            top: rank != null ? 34 : 6,
+            left:6,
+            background:"#f59e0b",
+            color:"#fff",
+            fontSize:10,
+            fontWeight:700,
+            padding:"3px 7px",
+            borderRadius:6,
+            zIndex:2,
+            lineHeight:1.2,
+            boxShadow:"0 1px 3px rgba(0,0,0,.15)",
+          }}>สั่งแล้ว {pendingOrderQty}</div>
         )}
 
         {/* Stock badge */}

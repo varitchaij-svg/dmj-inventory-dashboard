@@ -3084,7 +3084,6 @@ async function syncStockDeduct(sku, qty, name) {
       body: JSON.stringify({ transferStock: true, sku, qty, name }),
     });
     const json = await res.json().catch(() => ({}));
-    console.log("syncStockDeduct result:", json);
     return json;
   } catch(e) { console.warn("syncStockDeduct error:", e.message); return { success: false, error: e.message }; }
 }
@@ -3100,7 +3099,6 @@ async function syncStockTransferBatch(items) {
       body: JSON.stringify({ transferStockBatch: true, list: items, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน", clientLoadedAt: window._dataLoadedAt || 0 }),
     });
     const json = await res.json().catch(() => ({}));
-    console.log("syncStockTransferBatch result:", json);
     return json;
   } catch(e) { console.warn("syncStockTransferBatch error:", e.message); return { success: false, error: e.message }; }
 }

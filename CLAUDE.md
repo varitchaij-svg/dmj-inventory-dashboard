@@ -8,12 +8,15 @@
 - **Frontend**: React 18 แบบ **ไม่มี build step** — เรนเดอร์ผ่าน Babel standalone ใน browser
   โดยตรง ห้ามใช้ไวยากรณ์ที่ต้อง transpile พิเศษ, ห้าม `import`/`export` ES modules,
   ห้ามเพิ่ม npm dependency ทุกอย่างต้องรันได้จากไฟล์ `.jsx` ที่โหลดผ่าน `<script>`
-  - `views.jsx` (~10,400 บรรทัด) — View components ทั้งหมดยกเว้น FrontStoreView
-  - `views-analytics.jsx` (~4,300 บรรทัด) — FrontStoreView + analytics (แยกออกมาลด Babel compile time)
+  - `views-main.jsx` (~6,600 บรรทัด) — View components ทั้งหมด **ยกเว้น** FrontStoreView/analytics
+    (CategoryView, StockView, ProductCard, OrderModal, SupplierView ฯลฯ)
+  - `views-analytics.jsx` (~5,300 บรรทัด) — FrontStoreView + analytics
+  - **`Doomuenjing Dashboard.html` โหลดจริงแค่: ui.jsx → views-main.jsx → views-analytics.jsx → app.jsx**
+    (การแยก views-main / views-analytics ตั้งใจทำเพื่อลด Babel compile time — ห้ามกลับไปรวมเป็นไฟล์เดียว
+    มิฉะนั้น FrontStoreView จะถูกประกาศซ้ำ → redeclaration error + compile ช้า)
   - `app.jsx` (~670 บรรทัด) — routing, data loading, ROLE_TABS
   - `ui.jsx` (~190 บรรทัด) — shared UI primitives
   - `Doomuenjing Dashboard.html` = หน้าหลัก + CSS ทั้งหมด (inline `<style>`)
-  - `views_fixed.jsx` = ไฟล์เก่า/encoding เพี้ยน (อักษรไทยเป็น `@�@`) — **ไม่ใช่ของจริง** อย่าแก้
   - alias: `uS`=useState, `uE`=useEffect, `uM`=useMemo, `uC`=useCallback
 - **Backend**: Google Apps Script (`appsscript_complete.gs`, ~3,500 บรรทัด) = REST API + LINE bot
   - Database = Google Sheets
@@ -40,8 +43,8 @@ ROLE_TABS = {
 }
 ```
 
-tab "categories" = View "สินค้า & สั่ง" = `CategoryView` (views.jsx)
-tab "stock" = View "สต๊อก & แจ้งเตือน" = `StockView` (views.jsx)
+tab "categories" = View "สินค้า & สั่ง" = `CategoryView` (views-main.jsx)
+tab "stock" = View "สต๊อก & แจ้งเตือน" = `StockView` (views-main.jsx)
 tab "frontstore" = View "เช็คหน้าร้าน" = `FrontStoreView` (views-analytics.jsx)
 
 ## Constants (ใน appsscript_complete.gs)
@@ -158,7 +161,7 @@ npm run test:coverage # coverage report (tests/helpers.js)
 
 ## Features ที่เพิ่มล่าสุด (Sprint 1)
 
-- **Multi-token search** — StockView (views.jsx) + FrontStoreView (views-analytics.jsx)
+- **Multi-token search** — StockView (views-main.jsx) + FrontStoreView (views-analytics.jsx)
 - **ปุ่ม "📦 สั่ง"** — ใน StockView ทุก row ที่ `qtyWH > 0` (ไม่ต้องเปิด reorder mode)
 - **Transfer modal + Toast** — หลังโอนสำเร็จ/ล้มเหลวใน StockView และ FrontStoreView
 - **Banner "รายการสั่งที่ยังค้างอยู่"** — ใน CategoryView ดึงจาก `data.orders` filter `status==="รอ"`
