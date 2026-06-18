@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>คู่มือเจ้าของร้าน — ดูเหมือนจริง</title>
+<style>
+  :root{
+    --green:#1f7f44; --green-d:#155c30; --blue:#1f6f8b;
+    --ink:#1a1a1a; --muted:#555; --bg:#f4f6f4;
+    --card:#fff; --line:#e3e6e3; --warn:#c2570a; --danger:#c0392b;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;
+    font-family:-apple-system,"Segoe UI",Roboto,"Noto Sans Thai",sans-serif;
+    background:var(--bg); color:var(--ink); line-height:1.7; font-size:16px;
+  }
+  header{
+    background:linear-gradient(135deg,#1a3a2a,#1f7f44);
+    color:#fff; padding:26px 20px 20px; text-align:center;
+  }
+  header h1{margin:0 0 4px; font-size:24px}
+  header p{margin:0; opacity:.9; font-size:14px}
+
+  nav{
+    display:flex; gap:8px; overflow-x:auto; padding:11px 16px;
+    background:#fff; border-bottom:1px solid var(--line);
+    -webkit-overflow-scrolling:touch; position:sticky; top:0; z-index:40;
+  }
+  nav a{
+    flex:0 0 auto; padding:8px 14px; border-radius:20px;
+    background:#eef3ee; color:var(--green-d);
+    text-decoration:none; font-weight:700; font-size:14px; white-space:nowrap;
+  }
+  nav a:active{background:var(--green); color:#fff}
+
+  .wrap{max-width:700px; margin:0 auto; padding:16px}
+  section{margin:22px 0}
+  h2{
+    font-size:20px; color:var(--green-d); margin:0 0 14px;
+    padding-bottom:8px; border-bottom:3px solid var(--green);
+    scroll-margin-top:56px;
+  }
+  h3{font-size:16px; margin:16px 0 8px; color:#333}
+
+  .card{
+    background:var(--card); border:1px solid var(--line); border-radius:14px;
+    padding:16px 18px; margin:12px 0; box-shadow:0 1px 4px rgba(0,0,0,.04);
+  }
+  ol.steps{counter-reset:s;list-style:none;padding:0;margin:0}
+  ol.steps>li{
+    counter-increment:s; position:relative; padding:10px 0 10px 44px;
+    border-bottom:1px dashed var(--line); font-size:15px;
+  }
+  ol.steps>li:last-child{border-bottom:none}
+  ol.steps>li::before{
+    content:counter(s); position:absolute; left:0; top:10px;
+    width:30px; height:30px; border-radius:50%; background:var(--green);
+    color:#fff; font-weight:700; display:flex; align-items:center;
+    justify-content:center; font-size:14px;
+  }
+  .tag{
+    display:inline-block; background:#eef3ee; color:var(--green-d);
+    border-radius:6px; padding:2px 8px; font-weight:700; font-size:14px; margin:0 2px;
+  }
+  .code{
+    font-family:monospace; background:#f0f3f0; border-radius:6px;
+    padding:2px 8px; font-size:14px; color:#333;
+  }
+  .tip{border-left:4px solid var(--green); background:#f0f7f1; border-radius:0 10px 10px 0; padding:12px 14px; margin:12px 0; font-size:14px}
+  .tip b{display:block; margin-bottom:2px}
+  .warn{border-left:4px solid var(--warn); background:#fff6ee; border-radius:0 10px 10px 0; padding:12px 14px; margin:12px 0; font-size:14px}
+  .warn b{display:block; margin-bottom:2px}
+  .danger{border-left:4px solid var(--danger); background:#fdf0ee; border-radius:0 10px 10px 0; padding:12px 14px; margin:12px 0; font-size:14px}
+  .danger b{display:block; margin-bottom:2px}
+
+  table{width:100%; border-collapse:collapse; margin:10px 0; font-size:14px}
+  th,td{padding:10px; text-align:left; border-bottom:1px solid var(--line); vertical-align:top}
+  th{background:#f0f3f0; color:var(--green-d)}
+
+  .check{padding:0; margin:0; list-style:none}
+  .check li{
+    padding:9px 0 9px 36px; position:relative; border-bottom:1px solid var(--line); font-size:15px;
+  }
+  .check li::before{content:"☐"; position:absolute; left:0; top:5px; font-size:22px; color:var(--green)}
+
+  .badge{
+    display:inline-block; border-radius:20px; padding:3px 12px;
+    font-size:13px; font-weight:700; color:#fff;
+  }
+  .b-green{background:var(--green)} .b-warn{background:var(--warn)} .b-danger{background:var(--danger)}
+
+  footer{text-align:center; color:var(--muted); font-size:13px; padding:26px 16px 48px}
+  .pill{display:inline-block; background:var(--green); color:#fff; border-radius:20px; padding:4px 16px; font-size:14px; font-weight:700}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>👑 ดูเหมือนจริง — คู่มือเจ้าของ</h1>
+  <p>การจัดการระบบ · GAS · LINE · ZORT · Deploy</p>
+</header>
+
+<nav>
+  <a href="#overview">ภาพรวม</a>
+  <a href="#line">LINE</a>
+  <a href="#zort">ZORT</a>
+  <a href="#gas">GAS</a>
+  <a href="#test">เทสต์</a>
+  <a href="#deploy">Deploy</a>
+  <a href="#trouble">แก้ปัญหา</a>
+</nav>
+
+<div class="wrap">
+
+<!-- ภาพรวม -->
+<section id="overview">
+  <h2>📊 ภาพรวมระบบ</h2>
+  <div class="card">
+    <table>
+      <tr><th>ส่วน</th><th>เทคโนโลยี</th><th>อยู่ที่ไหน</th></tr>
+      <tr><td><b>หน้าเว็บ</b></td><td>React + Babel (ไม่มี build)</td><td>Cloudflare Pages</td></tr>
+      <tr><td><b>ฐานข้อมูล</b></td><td>Google Sheets</td><td>Google Drive</td></tr>
+      <tr><td><b>Backend API</b></td><td>Google Apps Script</td><td>GAS Editor</td></tr>
+      <tr><td><b>สต็อก sync</b></td><td>ZORT Open API v4</td><td>ทุก 2 ชม. (trigger)</td></tr>
+      <tr><td><b>แจ้งเตือน</b></td><td>LINE Messaging API</td><td>Free tier 200/เดือน</td></tr>
+    </table>
+  </div>
+  <div class="tip">
+    <b>Deploy อัตโนมัติ</b>
+    Push โค้ดเข้า branch master → Cloudflare + GitHub Actions deploy ให้ทันที ไม่ต้องทำมือ
+  </div>
+</section>
+
+<!-- LINE -->
+<section id="line">
+  <h2>🔔 LINE Notifications</h2>
+  <div class="card">
+    <h3>ประมาณการข้อความ/เดือน (Free tier 200)</h3>
+    <table>
+      <tr><th>ประเภท</th><th>เมื่อไหร่</th><th>จำนวน/เดือน</th></tr>
+      <tr><td>🚨 สต็อกใกล้หมด</td><td>วันละ 1 ครั้ง (ถ้ามีของต่ำ)</td><td>~30</td></tr>
+      <tr><td>📋 สรุปเช้า</td><td>วันที่มีออเดอร์ค้าง/งานพิเศษ</td><td>~20</td></tr>
+      <tr><td>🛒 ออเดอร์หิ้วใหม่</td><td>ทุกครั้งที่สั่ง "หิ้ว"</td><td>~60</td></tr>
+      <tr><td>🎁 ปิดงาน MTO</td><td>ทุกครั้งที่ปิดงานพิเศษ</td><td>~10</td></tr>
+      <tr><td colspan="2"><b>รวมประมาณ</b></td><td><b>~120/เดือน ✅</b></td></tr>
+    </table>
+  </div>
+  <div class="tip">
+    <b>🔑 Script Properties ที่ต้องตั้ง</b>
+    <span class="code">LINE_ACCESS_TOKEN</span>, <span class="code">LINE_USER_ID</span>
+  </div>
+  <div class="warn">
+    <b>⚠️ Error 429 = quota เต็มเดือน</b>
+    รอต้นเดือนถัดไป quota รีเซ็ตเอง ระหว่างนี้ LINE ไม่เด้ง
+  </div>
+  <div class="card">
+    <h3>🔧 ทดสอบ LINE</h3>
+    <ol class="steps">
+      <li>เปิด GAS Editor</li>
+      <li>Dropdown เลือก <span class="tag">debugLineMessage</span></li>
+      <li>กด Run → ดู Log ว่ามี error อะไร</li>
+      <li>ถ้า Log ขึ้น <span class="code">LINE push error 429</span> = quota เต็ม รอต้นเดือน</li>
+    </ol>
+  </div>
+  <div class="card">
+    <h3>⚙️ ตั้ง Trigger (ทำครั้งเดียว)</h3>
+    <ol class="steps">
+      <li>GAS Editor → Dropdown → <span class="tag">setupDailySummaryTrigger</span> → Run<br>
+        <small style="color:var(--muted)">ส่งสรุปเช้า วันละ 1 ครั้ง 08:00</small></li>
+      <li>ถ้าไม่มี <span class="code">syncZortBoth</span> trigger → Run <span class="tag">setupZortStockTrigger</span><br>
+        <small style="color:var(--muted)">sync ZORT ทุก 2 ชั่วโมง</small></li>
+    </ol>
+  </div>
+</section>
+
+<!-- ZORT -->
+<section id="zort">
+  <h2>🔗 ZORT Sync</h2>
+  <div class="card">
+    <table>
+      <tr><th>ทำอะไร</th><th>รายละเอียด</th></tr>
+      <tr><td>ดึงสต็อก</td><td>WH + หน้าร้าน ทุก 2 ชม.</td></tr>
+      <tr><td>ดึงยอดขาย</td><td>รายวัน + รายเดือน</td></tr>
+      <tr><td>ดึงรูปสินค้า</td><td>Primary จาก ZORT, fallback จากชีต</td></tr>
+      <tr><td>ส่งสต็อกกลับ</td><td>หลังนับ/ปรับ/ปิดงาน MTO</td></tr>
+    </table>
+  </div>
+  <div class="warn">
+    <b>⚠️ ตัวเลขอาจหน่วง 2 ชม.</b>
+    แก้ใน ZORT โดยตรง → ระบบเห็นหลัง sync รอบถัดไป<br>
+    แก้ในเว็บ → อัปเดตทันที
+  </div>
+  <div class="tip">
+    <b>🔑 Script Properties ที่ต้องตั้ง</b>
+    <span class="code">ZORT_STORE</span>, <span class="code">ZORT_APIKEY</span>, <span class="code">ZORT_SECRET</span>
+  </div>
+</section>
+
+<!-- GAS -->
+<section id="gas">
+  <h2>⚙️ Google Apps Script</h2>
+  <div class="card">
+    <h3>Script Properties ทั้งหมด</h3>
+    <table>
+      <tr><th>Key</th><th>ใช้ทำอะไร</th></tr>
+      <tr><td><span class="code">SHEET_ID</span></td><td>Google Sheet ID</td></tr>
+      <tr><td><span class="code">OWNER_PIN</span></td><td>PIN เจ้าของ</td></tr>
+      <tr><td><span class="code">APP_TOKEN</span></td><td>Token กันคนสุ่มเจอ URL</td></tr>
+      <tr><td><span class="code">ZORT_STORE</span></td><td>ZORT store code</td></tr>
+      <tr><td><span class="code">ZORT_APIKEY</span></td><td>ZORT API key</td></tr>
+      <tr><td><span class="code">ZORT_SECRET</span></td><td>ZORT secret</td></tr>
+      <tr><td><span class="code">LINE_ACCESS_TOKEN</span></td><td>LINE Messaging API token</td></tr>
+      <tr><td><span class="code">LINE_USER_ID</span></td><td>LINE User ID เจ้าของ</td></tr>
+      <tr><td><span class="code">LOW_STOCK_THRESHOLD</span></td><td>เกณฑ์แจ้งเตือนสต็อกต่ำ (default 5)</td></tr>
+    </table>
+  </div>
+  <div class="danger">
+    <b>🛑 ห้าม commit ค่าเหล่านี้ลง GitHub เด็ดขาด</b>
+    เก็บใน Script Properties เท่านั้น
+  </div>
+  <div class="card">
+    <h3>ฟังก์ชันที่รันเองได้ใน GAS</h3>
+    <table>
+      <tr><th>ชื่อ</th><th>ทำอะไร</th></tr>
+      <tr><td><span class="code">setupDailySummaryTrigger</span></td><td>ตั้ง trigger สรุปเช้าวันละครั้ง</td></tr>
+      <tr><td><span class="code">setupZortStockTrigger</span></td><td>ตั้ง trigger sync ZORT ทุก 2 ชม.</td></tr>
+      <tr><td><span class="code">debugLineMessage</span></td><td>ทดสอบ LINE + ดู log</td></tr>
+      <tr><td><span class="code">sendDailyMorningSummary</span></td><td>ส่งสรุปเช้าทันที (ทดสอบ)</td></tr>
+      <tr><td><span class="code">sendLowStockAlert</span></td><td>ส่งแจ้งเตือนสต็อกต่ำทันที</td></tr>
+      <tr><td><span class="code">syncZortBoth</span></td><td>sync ZORT ทันที</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- เทสต์ -->
+<section id="test">
+  <h2>✅ Checklist เทสต์ก่อนใช้จริง</h2>
+
+  <div class="card">
+    <h3>🛒 สั่งของ</h3>
+    <ul class="check">
+      <li>สั่งของ 1 รายการ → ขึ้นใน Sheet "ลำดับที่สั่งสินค้า"</li>
+      <li>สั่งของชิ้นเดิมซ้ำ → เห็นป้าย "สั่งแล้ว N ชิ้น"</li>
+      <li>สั่ง "หิ้ว" → LINE แจ้งเจ้าของ <span class="badge b-warn">รอ ก.ค. quota รีเซ็ต</span></li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>🔄 โอน &amp; รับของ</h3>
+    <ul class="check">
+      <li>โอน 1 ชิ้น → คลังลดทันที + ขึ้น Toast เขียว</li>
+      <li>หน้าร้านเห็นแบนเนอร์ "รอรับ"</li>
+      <li>กดรับ → หน้าร้านเพิ่ม</li>
+      <li>คลัง + หน้าร้าน รวมกันยังเท่าเดิม (ไม่หาย)</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>📊 สต็อก &amp; ZORT</h3>
+    <ul class="check">
+      <li>นับสต็อก แก้ตัวเลข → บันทึก → ตัวเลขเปลี่ยน</li>
+      <li>รอ 2 ชม. → ตัวเลข<b>ไม่กลับค่าเดิม</b> (บั๊กที่แก้แล้ว)</li>
+      <li>เทียบตัวเลขในเว็บกับ ZORT ว่าตรงกัน</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>🖼️ รูป &amp; UI</h3>
+    <ul class="check">
+      <li>เปิดทุกแท็บ → รูปสินค้าขึ้นครบทุกหน้า</li>
+      <li>กดรูปแล้วขยายดูได้ (lightbox)</li>
+      <li>ลองทุกบทบาท → เมนูถูกต้อง</li>
+      <li>โหมดง่าย → เหลือ 4 เมนู ปุ่มใหญ่ขึ้น</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>🔔 LINE <span class="badge b-warn">ทำต้นเดือน ก.ค.</span></h3>
+    <ul class="check">
+      <li>รัน <span class="code">debugLineMessage</span> → LINE เด้ง ไม่มี error 429</li>
+      <li>ปล่อยระบบ → สรุปเช้ามาวันละครั้ง (ไม่ spam)</li>
+      <li>ปลายเดือน เช็ค LINE ว่าไม่เกิน 200 ข้อความ</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>📱 ผู้ใช้จริง</h3>
+    <ul class="check">
+      <li>ให้พนักงาน/แรงงานต่างด้าวลองสั่ง+รับของเองโดยไม่ต้องสอน</li>
+      <li>เน็ตช้า/หลุด → เว็บยังเปิดได้ (PWA offline)</li>
+    </ul>
+  </div>
+</section>
+
+<!-- Deploy -->
+<section id="deploy">
+  <h2>🚀 Deploy</h2>
+  <div class="card">
+    <h3>Frontend (เว็บ) — อัตโนมัติ</h3>
+    <ol class="steps">
+      <li>Push โค้ดเข้า branch <span class="code">master</span></li>
+      <li>Cloudflare Pages auto-deploy ภายใน 1-2 นาที</li>
+    </ol>
+  </div>
+  <div class="card">
+    <h3>GAS (Backend) — อัตโนมัติผ่าน GitHub Actions</h3>
+    <ol class="steps">
+      <li>Push <span class="code">appsscript_complete.gs</span> เข้า master</li>
+      <li>GitHub Actions clasp push ให้อัตโนมัติ</li>
+    </ol>
+  </div>
+  <div class="warn">
+    <b>⚠️ Trigger ต้องตั้งเองครั้งแรก</b>
+    GAS deploy โค้ดให้ แต่ไม่สร้าง trigger ให้ — ต้องรัน <span class="code">setupDailySummaryTrigger</span> และ <span class="code">setupZortStockTrigger</span> เองครั้งเดียว
+  </div>
+  <div class="tip">
+    <b>ถ้า GAS URL เปลี่ยน</b>
+    ต้องอัปเดต <span class="code">_SHEET_BASE</span> ใน <span class="code">config.js</span> แล้ว push ใหม่
+  </div>
+</section>
+
+<!-- แก้ปัญหา -->
+<section id="trouble">
+  <h2>🔧 แก้ปัญหาระบบ</h2>
+  <div class="card">
+    <table>
+      <tr><th>อาการ</th><th>สาเหตุ / วิธีแก้</th></tr>
+      <tr><td>จอขาวทั้งหมด</td><td>JS error ตอน render — เปิด Console ดู log · มักเป็นตัวแปรไม่ถูกประกาศ</td></tr>
+      <tr><td>สต็อกเด้งกลับหลัง sync</td><td>ตรวจว่า <span class="code">pushStockToZort_</span> ถูกเรียกหลังแก้ข้อมูล</td></tr>
+      <tr><td>LINE ไม่เด้ง</td><td>รัน <span class="code">debugLineMessage</span> ดู log · 429 = quota เต็ม รอต้นเดือน</td></tr>
+      <tr><td>GAS deploy พัง</td><td>เช็ค <span class="code">.claspignore</span> ว่ากันไฟล์ draft แล้ว · เช็ค log ใน GitHub Actions</td></tr>
+      <tr><td>ตัวเลขเพี้ยน</td><td>เช็ค column index (0-indexed vs 1-indexed) ใน GAS</td></tr>
+      <tr><td>ขึ้น conflict ทุกครั้ง</td><td>ส่ง <span class="code">clientLoadedAt: window._dataLoadedAt</span> ใน payload</td></tr>
+    </table>
+  </div>
+</section>
+
+</div>
+
+<footer>
+  <span class="pill">ดูเหมือนจริง · DMJ Inventory</span><br><br>
+  คู่มือเจ้าของ · อัปเดต มิ.ย. 2026
+</footer>
+
+</body>
+</html>

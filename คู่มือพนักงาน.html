@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>วิธีใช้งาน — ดูเหมือนจริง</title>
+<style>
+  :root{
+    --green:#1f7f44; --green-d:#155c30; --blue:#1f6f8b;
+    --brown:#8a6a2f; --purple:#705d96;
+    --ink:#1a1a1a; --muted:#555; --bg:#f4f6f4;
+    --card:#fff; --line:#e3e6e3; --warn:#c2570a; --danger:#c0392b;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;
+    font-family:-apple-system,"Segoe UI",Roboto,"Noto Sans Thai",sans-serif;
+    background:var(--bg); color:var(--ink); line-height:1.8; font-size:17px;
+  }
+  header{
+    background:linear-gradient(135deg,var(--green),var(--green-d));
+    color:#fff; padding:26px 20px 20px; text-align:center;
+  }
+  header h1{margin:0 0 4px; font-size:26px; letter-spacing:.5px}
+  header p{margin:0; opacity:.9; font-size:15px}
+
+  /* quick-start banner */
+  .quick{
+    background:#fff; border-bottom:3px solid var(--green);
+    padding:16px 20px;
+  }
+  .quick h2{margin:0 0 12px; font-size:17px; color:var(--green-d)}
+  .q-steps{display:flex; gap:0; flex-direction:column}
+  .q-step{
+    display:flex; align-items:center; gap:14px;
+    padding:10px 0; border-bottom:1px dashed var(--line);
+    font-size:16px; font-weight:600;
+  }
+  .q-step:last-child{border-bottom:none}
+  .q-num{
+    width:36px; height:36px; border-radius:50%; background:var(--green);
+    color:#fff; font-weight:800; font-size:18px;
+    display:flex; align-items:center; justify-content:center; flex-shrink:0;
+  }
+
+  nav{
+    display:flex; gap:8px; overflow-x:auto; padding:12px 16px;
+    background:#fff; border-bottom:1px solid var(--line);
+    -webkit-overflow-scrolling:touch; position:sticky; top:0; z-index:40;
+  }
+  nav a{
+    flex:0 0 auto; padding:9px 16px; border-radius:22px;
+    background:#eef3ee; color:var(--green-d);
+    text-decoration:none; font-weight:700; font-size:15px; white-space:nowrap;
+  }
+  nav a:active{background:var(--green); color:#fff}
+
+  .wrap{max-width:600px; margin:0 auto; padding:16px}
+  section{margin:24px 0}
+  h2{
+    font-size:22px; color:var(--green-d); margin:0 0 14px;
+    padding-bottom:8px; border-bottom:3px solid var(--green);
+    scroll-margin-top:60px;
+  }
+
+  .card{
+    background:var(--card); border:1px solid var(--line); border-radius:16px;
+    padding:18px 20px; margin:12px 0; box-shadow:0 1px 6px rgba(0,0,0,.05);
+  }
+  .big-step{
+    display:flex; align-items:flex-start; gap:14px;
+    padding:14px 0; border-bottom:1px dashed var(--line);
+  }
+  .big-step:last-child{border-bottom:none}
+  .big-num{
+    width:40px; height:40px; border-radius:50%; background:var(--green);
+    color:#fff; font-weight:800; font-size:20px; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .big-text{font-size:16px; padding-top:8px}
+  .big-text b{display:block; font-size:18px; margin-bottom:2px}
+
+  .tag{
+    display:inline-block; background:#eef3ee; color:var(--green-d);
+    border-radius:8px; padding:3px 10px; font-weight:700; font-size:15px;
+  }
+  .tip{
+    border-left:5px solid var(--green); background:#f0f7f1;
+    border-radius:0 12px 12px 0; padding:14px 16px; margin:12px 0;
+    font-size:16px;
+  }
+  .tip b{display:block; margin-bottom:4px; font-size:17px}
+  .warn{
+    border-left:5px solid var(--warn); background:#fff6ee;
+    border-radius:0 12px 12px 0; padding:14px 16px; margin:12px 0;
+    font-size:16px;
+  }
+  .warn b{display:block; margin-bottom:4px; font-size:17px}
+
+  /* role cards */
+  .roles{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:12px 0}
+  .role{border-radius:14px; padding:16px; color:#fff; font-size:16px; font-weight:700}
+  .role small{display:block; font-weight:400; font-size:13px; opacity:.93; margin-top:6px; line-height:1.6}
+  .r-owner{background:var(--green)} .r-front{background:var(--blue)}
+  .r-wh{background:var(--brown)} .r-sale{background:var(--purple)}
+
+  table{width:100%; border-collapse:collapse; margin:8px 0; font-size:15px}
+  th,td{padding:11px 10px; text-align:left; border-bottom:1px solid var(--line); vertical-align:top}
+  th{background:#f0f3f0; color:var(--green-d); font-size:14px}
+
+  footer{text-align:center; color:var(--muted); font-size:14px; padding:28px 16px 48px}
+  .pill{display:inline-block; background:var(--green); color:#fff; border-radius:20px; padding:4px 16px; font-size:14px; font-weight:700}
+
+  @media(max-width:400px){.roles{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🌸 ดูเหมือนจริง</h1>
+  <p>วิธีใช้งานระบบสำหรับพนักงาน</p>
+</header>
+
+<!-- Quick Start -->
+<div class="quick">
+  <h2>⚡ เริ่มต้น 3 ขั้นตอน</h2>
+  <div class="q-steps">
+    <div class="q-step">
+      <div class="q-num">1</div>
+      เปิดเว็บ → เลือกบทบาทของตัวเอง
+    </div>
+    <div class="q-step">
+      <div class="q-num">2</div>
+      กดเมนูที่ต้องการ (ด้านล่างจอ)
+    </div>
+    <div class="q-step">
+      <div class="q-num">3</div>
+      ค้นหาสินค้า → กดปุ่มที่ต้องการ
+    </div>
+  </div>
+</div>
+
+<nav>
+  <a href="#login">เข้าระบบ</a>
+  <a href="#roles">บทบาท</a>
+  <a href="#order">สั่งของ</a>
+  <a href="#transfer">โอน-รับ</a>
+  <a href="#stock">เช็คสต็อก</a>
+  <a href="#label">พิมพ์ป้าย</a>
+  <a href="#mto">งานพิเศษ</a>
+  <a href="#help">ปัญหา</a>
+</nav>
+
+<div class="wrap">
+
+<!-- เข้าระบบ -->
+<section id="login">
+  <h2>🔐 เข้าใช้งาน</h2>
+  <div class="card">
+    <div class="big-step">
+      <div class="big-num">1</div>
+      <div class="big-text"><b>เปิดเว็บบนมือถือ</b>กด "เพิ่มลงหน้าจอหลัก" เพื่อใช้เหมือนแอป</div>
+    </div>
+    <div class="big-step">
+      <div class="big-num">2</div>
+      <div class="big-text"><b>เลือกบทบาทของตัวเอง</b>หน้าร้าน / คลังสินค้า / Sale</div>
+    </div>
+    <div class="big-step">
+      <div class="big-num">3</div>
+      <div class="big-text"><b>กดเข้าได้เลย</b>ไม่ต้องใช้รหัสผ่าน (เฉพาะเจ้าของต้องใส่ PIN)</div>
+    </div>
+  </div>
+  <div class="tip">
+    <b>🚪 เปลี่ยนบทบาท / ออกจากระบบ</b>
+    กดรูปโปรไฟล์มุมขวาบน → กด <span class="tag">🚪 ออก</span>
+  </div>
+  <div class="tip">
+    <b>💡 โหมดง่าย — กดง่ายขึ้น</b>
+    กดรูปโปรไฟล์ → เปิด <span class="tag">โหมดง่าย</span> → เหลือเฉพาะเมนูที่ใช้บ่อย ปุ่มใหญ่ขึ้น
+  </div>
+</section>
+
+<!-- บทบาท -->
+<section id="roles">
+  <h2>👥 ใครเห็นเมนูอะไร</h2>
+  <div class="roles">
+    <div class="role r-owner">👑 เจ้าของ<small>เห็นทุกเมนู ทุกรายงาน</small></div>
+    <div class="role r-front">🌸 หน้าร้าน<small>สั่งของ โอน รับของ เช็คสต็อก Label</small></div>
+    <div class="role r-wh">🏭 คลังสินค้า<small>โอนของ นับสต็อก รายการสั่ง Label</small></div>
+    <div class="role r-sale">💼 Sale<small>ดูสินค้า สั่งของ Label</small></div>
+  </div>
+  <div class="tip">ถ้าเมนูไม่ครบ กด <span class="tag">เพิ่มเติม ⋯</span> ด้านล่างจอ</div>
+</section>
+
+<!-- สั่งของ -->
+<section id="order">
+  <h2>🛒 สั่งของไปขาย</h2>
+  <div class="card">
+    <div class="big-step">
+      <div class="big-num">1</div>
+      <div class="big-text"><b>เปิด "สินค้า & สั่ง" หรือ "สต๊อก"</b></div>
+    </div>
+    <div class="big-step">
+      <div class="big-num">2</div>
+      <div class="big-text"><b>ค้นหาสินค้า</b>พิมพ์ชื่อหรือรหัส (พิมพ์หลายคำได้ เช่น "แจกัน ขาว")</div>
+    </div>
+    <div class="big-step">
+      <div class="big-num">3</div>
+      <div class="big-text"><b>กดปุ่ม 🛒 สั่ง</b></div>
+    </div>
+    <div class="big-step">
+      <div class="big-num">4</div>
+      <div class="big-text"><b>ใส่จำนวน + เลือกประเภท</b>ปกติ หรือ หิ้ว</div>
+    </div>
+    <div class="big-step">
+      <div class="big-num">5</div>
+      <div class="big-text"><b>กด ✅ ยืนยันสั่ง</b></div>
+    </div>
+  </div>
+  <div class="warn">
+    <b>⚠️ เห็นป้าย "สั่งแล้ว N ชิ้น"</b>
+    มีคนสั่งสินค้าชิ้นนี้ค้างอยู่แล้ว — ตรวจสอบก่อนสั่งซ้ำ
+  </div>
+  <div class="warn">
+    <b>⚠️ ปุ่มสั่งกดไม่ได้</b>
+    สินค้าหมดสต็อก ต้องรอคลังเติมของก่อน
+  </div>
+  <div class="tip">
+    <b>📋 ดูรายการที่สั่งไปแล้ว</b>
+    เปิดแท็บ <span class="tag">📋 รายการสั่งของ</span>
+  </div>
+</section>
+
+<!-- โอน-รับ -->
+<section id="transfer">
+  <h2>🔄 โอนของ &amp; รับของ</h2>
+  <div class="card">
+    <h3 style="margin:0 0 12px;font-size:17px;color:var(--brown)">🏭 ฝั่งคลัง — โอนของไปหน้าร้าน</h3>
+    <div class="big-step">
+      <div class="big-num">1</div>
+      <div class="big-text"><b>เปิด "สต๊อก"</b> → หาสินค้าที่จะโอน</div>
+    </div>
+    <div class="big-step">
+      <div class="big-num">2</div>
+      <div class="big-text"><b>กดปุ่มโอน</b> → ใส่จำนวน → ยืนยัน</div>
+    </div>
+    <div class="big-step">
+      <div class="big-num">3</div>
+      <div class="big-text"><b>ขึ้น Toast เขียว</b> = โอนสำเร็จ ตัวเลขคลังลดทันที</div>
+    </div>
+  </div>
+  <div class="card">
+    <h3 style="margin:0 0 12px;font-size:17px;color:var(--blue)">🌸 ฝั่งหน้าร้าน — รับของที่โอนมา</h3>
+    <div class="big-step">
+      <div class="big-num">1</div>
+      <div class="big-text"><b>ดูแบนเนอร์ "📦 รอรับ"</b> ในหน้าสต็อก</div>
+    </div>
+    <div class="big-step">
+      <div class="big-num">2</div>
+      <div class="big-text"><b>นับของจริง</b>ให้ตรงกับจำนวนในระบบ</div>
+    </div>
+    <div class="big-step">
+      <div class="big-num">3</div>
+      <div class="big-text"><b>กด "ยืนยันรับของ"</b> → ตัวเลขหน้าร้านเพิ่มทันที</div>
+    </div>
+  </div>
+  <div class="warn">
+    <b>⚠️ ต้องกด "รับของ" เสมอ</b>
+    ถ้าคลังโอนแล้วแต่หน้าร้านไม่กดรับ ตัวเลขหน้าร้านจะยังไม่เปลี่ยน
+  </div>
+</section>
+
+<!-- เช็คสต็อก -->
+<section id="stock">
+  <h2>⚠️ เช็คสต็อก</h2>
+  <div class="card">
+    <table>
+      <tr><th>สัญลักษณ์</th><th>หมายความว่า</th></tr>
+      <tr><td>🔴 ต้องสั่งทันที</td><td>ใกล้หมดมาก สั่งด่วน</td></tr>
+      <tr><td>🟡 ใกล้หมด</td><td>เหลือน้อย เตรียมสั่ง</td></tr>
+      <tr><td>🛒 ควรสั่ง</td><td>หน้าร้านเหลือน้อย แต่คลังยังมี</td></tr>
+    </table>
+  </div>
+  <div class="tip">
+    <b>สองตัวเลข = คลัง / หน้าร้าน</b>
+    คลัง = ของหลังร้าน · หน้าร้าน = ของที่วางขายจริง
+  </div>
+</section>
+
+<!-- Label -->
+<section id="label">
+  <h2>🖨️ พิมพ์ป้ายสินค้า</h2>
+  <div class="card">
+    <div class="big-step">
+      <div class="big-num">1</div>
+      <div class="big-text"><b>เปิด "พิมพ์ Label"</b></div>
+    </div>
+    <div class="big-step">
+      <div class="big-num">2</div>
+      <div class="big-text"><b>เลือกสินค้า</b>ที่ต้องพิมพ์ป้าย</div>
+    </div>
+    <div class="big-step">
+      <div class="big-num">3</div>
+      <div class="big-text"><b>กดพิมพ์</b> → ต่อเครื่องพิมพ์ฉลาก</div>
+    </div>
+  </div>
+  <div class="tip">ระบบจำว่าพิมพ์แล้ว เครื่องอื่นเห็นด้วย ไม่พิมพ์ซ้ำ</div>
+</section>
+
+<!-- MTO -->
+<section id="mto">
+  <h2>🎁 งานจัดพิเศษ</h2>
+  <div class="card">
+    <div class="big-step">
+      <div class="big-num">1</div>
+      <div class="big-text"><b>เปิด "งานจัดพิเศษ"</b></div>
+    </div>
+    <div class="big-step">
+      <div class="big-num">2</div>
+      <div class="big-text"><b>ดูงานที่ "กำลังจัด"</b></div>
+    </div>
+    <div class="big-step">
+      <div class="big-num">3</div>
+      <div class="big-text"><b>จัดเสร็จแล้ว กด "ปิดงาน"</b>ระบบตัดสต็อกให้อัตโนมัติ</div>
+    </div>
+  </div>
+</section>
+
+<!-- ปัญหา -->
+<section id="help">
+  <h2>🆘 ปัญหาที่เจอบ่อย</h2>
+  <div class="card">
+    <table>
+      <tr><th>อาการ</th><th>วิธีแก้</th></tr>
+      <tr><td>จอขาว เปิดไม่ขึ้น</td><td>รีเฟรชหน้า หรือปิดเปิดแอปใหม่</td></tr>
+      <tr><td>ตัวเลขไม่อัปเดต</td><td>ดึงหน้าจอลงเพื่อรีเฟรช</td></tr>
+      <tr><td>ขึ้น "ข้อมูลไม่ตรง"</td><td>รีเฟรช แล้วทำรายการใหม่</td></tr>
+      <tr><td>โอนแล้วหน้าร้านไม่เพิ่ม</td><td>หน้าร้านต้องกด "รับของ" ก่อน</td></tr>
+      <tr><td>รูปไม่ขึ้น</td><td>รีเฟรช หรือรอสักครู่</td></tr>
+    </table>
+  </div>
+  <div class="tip">ปัญหาอื่นให้แจ้งเจ้าของร้านครับ</div>
+</section>
+
+</div>
+
+<footer>
+  <span class="pill">ดูเหมือนจริง · DMJ Inventory</span><br><br>
+  คู่มือพนักงาน · อัปเดต มิ.ย. 2026
+</footer>
+
+</body>
+</html>
