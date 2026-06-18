@@ -593,6 +593,11 @@ function doGet(e) {
       },
       mtoGroups: Object.values(mtoMap),
       stockCheckRequests: readStockCheckRequests_().filter(function(r){ return r.status === "pending"; }),
+      // SKU ที่เพิ่งถูกนับ (30 นาที) sku→qty — ให้ทุกเครื่องเห็นว่าใครนับอะไรไปแล้ว (นับพร้อมกันหลายเครื่อง)
+      recentCountedSkus: (function(){
+        try { var j = CacheService.getScriptCache().get('recentCountedSkus'); return j ? JSON.parse(j) : {}; }
+        catch (e) { return {}; }
+      })(),
       thresholds: { default: 36, overrides: { "แจกันแก้ว": 3, "เรซิ่นและอื่นๆ": 3 } },
       _debug: {
         productsCount:   products.length,
