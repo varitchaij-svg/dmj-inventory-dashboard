@@ -4274,6 +4274,16 @@ function createStockCheckRequest_(skus, names, actor) {
   var ts = Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyy-MM-dd HH:mm");
   sh.appendRow([reqId, ts, actor || "owner", JSON.stringify(skus || []), JSON.stringify(names || []), "pending", "", ""]);
   invalidateCache_();
+  // แจ้งเตือน LINE group — wrap try-catch เพื่อไม่ให้ LINE error พัง endpoint
+  try {
+    var nameList = names || [];
+    var preview = nameList.slice(0, 3).join(", ");
+    if (nameList.length > 3) preview += " และอีก " + (nameList.length - 3) + " รายการ";
+    var lineMsg = "📋 มีคำขอเช็คสต็อก " + nameList.length + " รายการ\nรายการ: " + preview;
+    sendLineGroup_(lineMsg);
+  } catch(e) {
+    // LINE notification ล้มเหลว — ไม่ block response
+  }
   return ContentService.createTextOutput(JSON.stringify({ success: true, reqId: reqId }))
     .setMimeType(ContentService.MimeType.JSON);
 }

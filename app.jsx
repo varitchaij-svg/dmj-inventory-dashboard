@@ -849,7 +849,7 @@ function App() {
           </div>
           <button onClick={function() {
             setActiveCheckRequest(pendingChecks[0]);
-            handleSetTab("stockcount");
+            handleSetTab(role === "frontstore" ? "frontstore" : "stockcount");
           }}
             style={{background:"#f59e0b",color:"#fff",border:"none",borderRadius:8,
                     padding:"8px 12px",fontWeight:600,fontSize:13,cursor:"pointer"}}>
@@ -890,7 +890,7 @@ function App() {
                                                 fetchFromSheet();
                                               } catch(e){ console.error("completeStockCheck:", e); }
                                             }}/></ErrorBoundary>}
-        {activeTab === "frontstore"   && <ErrorBoundary key="frontstore"><FrontStoreView data={data} role={role}/></ErrorBoundary>}
+        {activeTab === "frontstore"   && <ErrorBoundary key="frontstore"><FrontStoreView data={data} role={role} checkRequest={activeCheckRequest}/></ErrorBoundary>}
         {activeTab === "transfers"    && <ErrorBoundary key="transfers"><TransferView data={data}/></ErrorBoundary>}
         {activeTab === "orders"       && <ErrorBoundary key="orders"><OrderListView data={data} role={role}/></ErrorBoundary>}
         {activeTab === "ordersummary" && <ErrorBoundary key="ordersummary"><OrderSummaryView data={data} onPrintRequest={handleOrderPrint}/></ErrorBoundary>}
