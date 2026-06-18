@@ -3632,6 +3632,15 @@ function OrderSummaryView({ data, onPrintRequest }) {
     const succeeded = ready.filter(orderSucceeded);
     const kept      = ready.filter(o => !orderSucceeded(o)); // คลังไม่พอ/ไม่พบสินค้า → คงไว้ในรายการ
 
+    // ส่งบางส่วน: โอนได้ >0 แต่ไม่ครบจำนวนที่สั่ง (คลังมีไม่พอ) → order ถูกลบ แต่ต้องเตือนว่าของไปไม่ครบ
+    const partials = succeeded.filter(o => {
+      const r = resultById[o.id];
+      return r && Number(r.transferred) > 0 && r.requested != null && Number(r.transferred) < Number(r.requested);
+    }).map(o => {
+      const r = resultById[o.id];
+      return { name: o.name || o.sku, transferred: Number(r.transferred), requested: Number(r.requested) };
+    });
+
     // อัปเดตสถานะ "ส่งแล้ว" เฉพาะ order ที่โอนสำเร็จ (เบา ไม่ยิง ZORT ซ้ำ)
     for (const order of succeeded) {
       nextShipped[order.id] = Date.now();
@@ -3648,12 +3657,17 @@ function OrderSummaryView({ data, onPrintRequest }) {
     if (succeeded.length) syncDeleteOrders(succeeded.map(o => o.id));
 
     const zErr = batchRes && batchRes.data && batchRes.data.zortError;
+    const partialMsg = partials.length
+      ? ` · ⚠️ คลังไม่พอ ${partials.length} รายการ ส่งได้บางส่วน (${partials.slice(0,4).map(p => `${p.name} ${p.transferred}/${p.requested}`).join(", ")}${partials.length > 4 ? ` …(+${partials.length - 4})` : ""})`
+      : "";
     if (kept.length) {
       const names = kept.slice(0, 8).map(o => o.name || o.sku).join(", ");
       const more = kept.length > 8 ? ` …(+${kept.length - 8})` : "";
-      showToast("warn", `ส่งสำเร็จ ${succeeded.length} · ยังไม่ได้ส่ง ${kept.length} รายการ (กดส่งอีกครั้ง): ${names}${more}`, "⚠️", 8000);
+      showToast("warn", `ส่งสำเร็จ ${succeeded.length} · ยังไม่ได้ส่ง ${kept.length} รายการ (กดส่งอีกครั้ง): ${names}${more}${partialMsg}`, "⚠️", 8000);
     } else if (zErr) {
       showToast("warn", `ส่ง ${succeeded.length} รายการ — แต่ ZORT มีปัญหา ${zErr}`, "⚠️", 7000);
+    } else if (partials.length) {
+      showToast("warn", `ส่ง ${succeeded.length} รายการ${partialMsg}`, "⚠️", 8000);
     } else {
       const zNum = batchRes && batchRes.data && batchRes.data.zortNumber;
       showToast("success", `ส่ง ${succeeded.length} รายการแล้ว${zNum ? ` (ZORT ${zNum})` : ""}`, "📦");
