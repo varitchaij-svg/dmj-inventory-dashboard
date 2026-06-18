@@ -167,13 +167,21 @@ npm run test:coverage # coverage report (tests/helpers.js)
 - **Banner "รายการสั่งที่ยังค้างอยู่"** — ใน CategoryView ดึงจาก `data.orders` filter `status==="รอ"`
 - **Banner "สินค้าที่โอนแล้ว รอรับ"** — ใน StockView ดึงจาก `data.shipments` filter `!receivedAt`
 
-## Deploy process (GAS)
+## Deploy process (GAS) — auto-deploy แล้ว ✅
 
-เมื่อแก้ `appsscript_complete.gs` เจ้าของต้องทำเอง:
-1. copy โค้ดไป GAS editor
-2. Deploy → New deployment (หรือ Manage deployments → edit → New version)
-3. ถ้า URL เปลี่ยน → อัปเดต `_SHEET_BASE` ใน `config.js` แล้ว push
-4. function ใหม่ (sync/setup) ต้องรันเองครั้งแรก + ตั้ง trigger
+**ไม่ต้อง copy โค้ดเข้า GAS editor เองอีกต่อไป** — มี GitHub Actions auto-deploy
+(`.github/workflows/deploy-gas.yml`):
+- trigger: push เข้า `master` ที่แตะ `appsscript_complete.gs` หรือ `appsscript.json`
+- รัน `clasp push --force` ด้วย credential ใน secret `CLASPRC_JSON`
+- code ใหม่เข้า GAS อัตโนมัติภายในไม่กี่นาทีหลัง merge เข้า master
+
+**สรุป: แก้ `.gs` → commit → merge เข้า `master` → push → จบ** (Actions ทำที่เหลือ)
+
+ข้อควรระวังที่ยังต้องทำเอง:
+1. **function ใหม่ (sync/setup) ที่ต้องรันครั้งแรก + ตั้ง trigger** — clasp push ไม่รัน
+   ให้ ต้องเปิด GAS editor รันเอง 1 ครั้ง / ตั้ง time-driven trigger เอง
+2. ถ้า web app deployment URL เปลี่ยน → อัปเดต `_SHEET_BASE` ใน `config.js` แล้ว push
+   (ปกติ clasp push ไม่เปลี่ยน URL — deployment เดิมรัน code ใหม่เลย)
 
 ## Git workflow
 
