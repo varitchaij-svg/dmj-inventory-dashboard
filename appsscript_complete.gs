@@ -3969,6 +3969,13 @@ function closeMtoJob(ss, data, actor) {
   // Append items to วัตถุดิบ MTO (F=คืน, G=ตัดจริง, H=ปิดงานเมื่อ)
   const itemSh = getOrCreateMtoItemSheet_(ss);
   if (itemSh) {
+    // ลบแถว draft (closedAt ว่าง) ของ job นี้ก่อน — กันวัตถุดิบซ้ำถ้าเคยกด "บันทึก" ไว้
+    const exRows = itemSh.getDataRange().getValues();
+    for (let i = exRows.length - 1; i >= 1; i--) {
+      if (String(exRows[i][0]).trim() === jobId && !String(exRows[i][7] || "").trim()) {
+        itemSh.deleteRow(i + 1);
+      }
+    }
     items.forEach(item => {
       const ret = Math.max(0, Math.min(Number(item.returnedQty) || 0, Number(item.qty) || 0));
       itemSh.appendRow([jobId, item.sku || "", item.name || "", Number(item.qty) || 0, item.warehouse || "warehouse", ret, netOf(item), closedAt]);

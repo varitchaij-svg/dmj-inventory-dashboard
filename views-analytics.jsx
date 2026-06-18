@@ -4631,6 +4631,37 @@ function MtoJobView({ data }) {
     }));
   };
 
+  // บันทึกวัตถุดิบเป็น draft โดยไม่ปิดงาน — ออกจากงานแล้วกลับมาไม่หาย
+  const handleSaveDraft = async () => {
+    if (!activeJob) return;
+    setSaving(true);
+    try {
+      const res = await fetch(SHEET_DEPLOY_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({
+          saveMtoJobItems: true,
+          jobId: activeJob.jobId,
+          items: materials,
+        }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        // อัปเดต local job ให้เก็บ draft items ไว้ (เปิดงานใหม่ไม่หาย)
+        const updatedJob = { ...activeJob, items: materials };
+        setJobs(prev => prev.map(j => j.jobId === activeJob.jobId ? updatedJob : j));
+        setActiveJob(updatedJob);
+        showToast("success", "บันทึกวัตถุดิบเรียบร้อย");
+      } else {
+        showToast("error", json.error || "เกิดข้อผิดพลาด");
+      }
+    } catch (e) {
+      showToast("error", e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleCloseJob = async () => {
     if (!activeJob) return;
     if (materials.length === 0) { showToast("warn", "ยังไม่มีวัตถุดิบ"); return; }
@@ -4696,7 +4727,8 @@ function MtoJobView({ data }) {
 
   const openDetail = (job) => {
     setActiveJob(job);
-    setMaterials(job.status === "กำลังจัด" ? [] : (job.items || []));
+    // โหลดวัตถุดิบที่บันทึกไว้กลับมาเสมอ — ทั้งงานที่กำลังจัด (draft) และงานที่ปิดแล้ว
+    setMaterials(job.items || []);
     setView("detail");
   };
 
@@ -4927,8 +4959,18 @@ function MtoJobView({ data }) {
               {materials.map((m, idx) => {
                 const ret = Number(m.returnedQty) || 0;
                 const net = Math.max(0, (Number(m.qty) || 0) - ret);
+                // หารูปสินค้าจาก products ตาม SKU เพื่อแสดงเป็นการ์ด
+                const prod = products.find(p => (p.sku||"").trim().toUpperCase() === (m.sku||"").trim().toUpperCase());
+                const imgSrc = prod && prod.imageUrl ? prod.imageUrl : "";
                 return (
                 <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", background: "var(--g-50)", borderRadius: 8, flexWrap: "wrap" }}>
+                  {imgSrc ? (
+                    <img src={imgSrc} alt={m.sku} loading="lazy"
+                      style={{ width: 44, height: 44, borderRadius: 8, objectFit: "cover", flexShrink: 0, border: "1px solid var(--bdr)", background: "#fff" }}
+                      onError={e => { e.currentTarget.style.display = "none"; }} />
+                  ) : (
+                    <div style={{ width: 44, height: 44, borderRadius: 8, flexShrink: 0, border: "1px solid var(--bdr)", background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, color: "var(--muted)" }}>📦</div>
+                  )}
                   <div style={{ flex: 1, minWidth: 100 }}>
                     <div style={{ fontWeight: 600, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.sku}</div>
                     <div style={{ fontSize: 11, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</div>
@@ -4968,7 +5010,7 @@ function MtoJobView({ data }) {
           )}
         </div>
 
-        {/* Close job button */}
+        {/* ปุ่มบันทึก + ปิดงาน (แยก 2 ปุ่ม) */}
         {isOpen && (
           <>
             {!isOnline && (
@@ -4976,12 +5018,21 @@ function MtoJobView({ data }) {
                 textAlign:"center",fontSize:12,color:"#b45309",
                 background:"#fffbeb",border:"1px solid #fde68a",
                 borderRadius:8,padding:"6px 12px",marginBottom:6,fontWeight:600,
-              }}>⚠️ ไม่มีอินเทอร์เน็ต — ไม่สามารถปิดงานได้</div>
+              }}>⚠️ ไม่มีอินเทอร์เน็ต — ไม่สามารถบันทึก/ปิดงานได้</div>
             )}
+            {/* ปุ่มบันทึก — เก็บวัตถุดิบไว้โดยยังไม่ปิดงาน (ยังไม่ตัดสต็อก) */}
+            <button className="btn" onClick={handleSaveDraft}
+              disabled={saving || !isOnline}
+              style={{ width: "100%", padding: "13px", fontSize: 15, fontWeight: 800, background: "#fff",
+                       color: "#1b5e20", border: "2px solid #1b5e20", borderRadius: 12, marginBottom: 10,
+                       opacity: !isOnline ? 0.5 : 1 }}>
+              {saving ? "กำลังบันทึก..." : "💾 บันทึก (ยังไม่ปิดงาน)"}
+            </button>
+            {/* ปุ่มปิดงาน — ตัดสต็อก + สร้างรายการขาย ZORT */}
             <button className="btn primary" onClick={handleCloseJob}
               disabled={saving || materials.length === 0 || !isOnline}
               style={{ width: "100%", padding: "14px", fontSize: 15, fontWeight: 800, background: "#1b5e20", borderRadius: 12,
-                       opacity: !isOnline ? 0.5 : 1 }}>
+                       opacity: (!isOnline || materials.length === 0) ? 0.5 : 1 }}>
               {saving ? "กำลังปิดงาน..." : "✅ ปิดงาน & สร้างรายการขาย ZORT"}
             </button>
           </>
