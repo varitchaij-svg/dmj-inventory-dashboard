@@ -675,6 +675,40 @@ function App() {
                             <div style={{width:40,height:4,borderRadius:2,background:"var(--bdr)",margin:"0 auto 10px"}}/>
                             <div style={{fontSize:13,fontWeight:700,color:"var(--muted)"}}>เมนูเพิ่มเติม</div>
                           </div>
+                          {/* โหมดง่าย toggle — อยู่บนสุดให้เจอง่าย */}
+                          <div style={{padding:"0 12px 8px", flexShrink:0}}>
+                            <button onClick={toggleSimpleMode}
+                                    style={{
+                                      width:"100%", minHeight:52,
+                                      display:"flex", alignItems:"center", gap:12,
+                                      padding:"10px 14px", borderRadius:14, cursor:"pointer",
+                                      fontFamily:"inherit", textAlign:"left",
+                                      border: simpleMode ? "2px solid var(--g-500)" : "1.5px solid var(--bdr)",
+                                      background: simpleMode ? "var(--g-50)" : "var(--paper)",
+                                    }}>
+                              <span style={{fontSize:22,lineHeight:1}}>{simpleMode ? "😊" : "🧩"}</span>
+                              <span style={{flex:1, minWidth:0}}>
+                                <span style={{display:"block", fontSize:14, fontWeight:700,
+                                              color: simpleMode ? "var(--g-700)" : "var(--text)"}}>
+                                  โหมดง่าย {simpleMode ? "(เปิดอยู่ — กดเพื่อปิด)" : "(ปิดอยู่ — กดเพื่อเปิด)"}
+                                </span>
+                                <span style={{display:"block", fontSize:11, color:"var(--muted)", lineHeight:1.4}}>
+                                  แสดงเฉพาะเมนูที่ใช้บ่อย กดง่ายขึ้น
+                                </span>
+                              </span>
+                              <span style={{
+                                width:46, height:28, borderRadius:14, flexShrink:0, position:"relative",
+                                background: simpleMode ? "var(--g-500)" : "var(--bdr)",
+                                transition:"background .15s",
+                              }}>
+                                <span style={{
+                                  position:"absolute", top:3, left: simpleMode ? 21 : 3,
+                                  width:22, height:22, borderRadius:"50%", background:"#fff",
+                                  transition:"left .15s", boxShadow:"0 1px 3px rgba(0,0,0,.2)",
+                                }}/>
+                              </span>
+                            </button>
+                          </div>
                           {/* tab list */}
                           <div style={{overflowY:"auto",padding:"4px 12px 16px"}}>
                             <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) minmax(0,1fr)",gap:8}}>
@@ -696,38 +730,6 @@ function App() {
                                 </button>
                               ))}
                             </div>
-                            {/* โหมดง่าย toggle */}
-                            <button onClick={toggleSimpleMode}
-                                    style={{
-                                      marginTop:14, width:"100%", minHeight:56,
-                                      display:"flex", alignItems:"center", gap:12,
-                                      padding:"10px 14px", borderRadius:14, cursor:"pointer",
-                                      fontFamily:"inherit", textAlign:"left",
-                                      border: simpleMode ? "2px solid var(--g-500)" : "1.5px solid var(--bdr)",
-                                      background: simpleMode ? "var(--g-50)" : "var(--paper)",
-                                    }}>
-                              <span style={{fontSize:26,lineHeight:1}}>{simpleMode ? "😊" : "🧩"}</span>
-                              <span style={{flex:1, minWidth:0}}>
-                                <span style={{display:"block", fontSize:14, fontWeight:700,
-                                              color: simpleMode ? "var(--g-700)" : "var(--text)"}}>
-                                  โหมดง่าย {simpleMode ? "(เปิดอยู่)" : ""}
-                                </span>
-                                <span style={{display:"block", fontSize:11, color:"var(--muted)", lineHeight:1.4}}>
-                                  แสดงเฉพาะเมนูที่ใช้บ่อย กดง่ายขึ้น
-                                </span>
-                              </span>
-                              <span style={{
-                                width:46, height:28, borderRadius:14, flexShrink:0, position:"relative",
-                                background: simpleMode ? "var(--g-500)" : "var(--bdr)",
-                                transition:"background .15s",
-                              }}>
-                                <span style={{
-                                  position:"absolute", top:3, left: simpleMode ? 21 : 3,
-                                  width:22, height:22, borderRadius:"50%", background:"#fff",
-                                  transition:"left .15s", boxShadow:"0 1px 3px rgba(0,0,0,.2)",
-                                }}/>
-                              </span>
-                            </button>
                           </div>
                         </div>
                       </>
@@ -747,6 +749,19 @@ function App() {
           </div>
 
           <div className="nav-right">
+            {/* ปุ่มปิดโหมดง่าย — โชว์เฉพาะตอน simpleMode เปิดอยู่ กดปิดได้ตลอดไม่ต้องเข้า bottom sheet */}
+            {simpleMode && (
+              <button onClick={toggleSimpleMode} title="ปิดโหมดง่าย"
+                style={{
+                  display:"flex", alignItems:"center", gap:4,
+                  padding:"4px 10px", borderRadius:20, border:"1.5px solid var(--g-400)",
+                  background:"var(--g-50)", color:"var(--g-700)",
+                  fontFamily:"inherit", fontSize:12, fontWeight:700, cursor:"pointer",
+                  minHeight:32,
+                }}>
+                😊 <span style={{lineHeight:1}}>ปิดโหมดง่าย</span>
+              </button>
+            )}
             <span className="nav-status" title={source==="upload" ? "ใช้ข้อมูลจากไฟล์ที่อัปโหลด" : "ใช้ข้อมูลจาก Google Sheet"}>
               <span className="nav-dot" style={{background: source==="upload" ? "#a07417" : "var(--g-500)"}}></span>
               {source==="upload" ? "ไฟล์อัปโหลด" : "Sheet"} · {syncLabel}
