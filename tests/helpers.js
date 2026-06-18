@@ -305,6 +305,28 @@ function enrichDataCore(d) {
   return d;
 }
 
+// ─── MTO draft dedup (จำลอง logic saveMtoJobItems + closeMtoJob) ───
+// rows = แถวในชีต "วัตถุดิบ MTO" (array of arrays). คอลัมน์ 0=jobId, 7=closedAt
+// คืน rows ใหม่หลัง "ลบแถว draft (closedAt ว่าง) ของ jobId แล้ว append items"
+// closedAt="" = บันทึก draft, closedAt มีค่า = ปิดงาน
+function writeMtoItemsCore(rows, jobId, items, closedAt) {
+  const jid = String(jobId).trim();
+  // ลบแถว draft (closedAt ว่าง) ของ job นี้
+  const kept = rows.filter((r, i) => {
+    if (i === 0) return true; // header
+    const sameJob = String(r[0]).trim() === jid;
+    const isDraft = !String(r[7] || "").trim();
+    return !(sameJob && isDraft);
+  });
+  // append items ใหม่
+  items.forEach(item => {
+    const qty = Number(item.qty) || 0;
+    const ret = Math.max(0, Math.min(Number(item.returnedQty) || 0, qty));
+    kept.push([jid, item.sku || "", item.name || "", qty, item.warehouse || "warehouse", ret, qty - ret, closedAt || ""]);
+  });
+  return kept;
+}
+
 module.exports = {
   monthsSince, fmtN, fmtB, fmtPct, monthLabel,
   stockQty, whQty, mtoBase, compareSku,
@@ -313,7 +335,7 @@ module.exports = {
   orderSig, reconcileOrderState,
   monthKey_, dayKey_,
   deductStockCore,
-  netOf,
+  netOf, writeMtoItemsCore,
   enrichDataCore,
   COLOR_MAP, COLOR_KEYS, detectColor,
   parseQty_, parseNum_, parseLocation_,

@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>คู่มือใช้งาน — ดูเหมือนจริง (DMJ Inventory)</title>
+<style>
+  :root{
+    --green:#1f7f44; --green-d:#155c30; --blue:#1f6f8b; --brown:#8a6a2f;
+    --purple:#705d96; --ink:#1a1a1a; --muted:#666; --bg:#f4f6f4;
+    --card:#fff; --line:#e3e6e3; --warn:#c2570a; --danger:#c0392b;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; font-family:-apple-system,"Segoe UI",Roboto,"Noto Sans Thai",sans-serif;
+    background:var(--bg); color:var(--ink); line-height:1.7; font-size:16px;
+  }
+  header{
+    background:linear-gradient(135deg,var(--green),var(--green-d));
+    color:#fff; padding:28px 20px 22px; text-align:center;
+    position:sticky; top:0; z-index:50; box-shadow:0 2px 12px rgba(0,0,0,.15);
+  }
+  header h1{margin:0 0 4px; font-size:24px}
+  header p{margin:0; opacity:.9; font-size:14px}
+  .wrap{max-width:760px; margin:0 auto; padding:16px}
+
+  /* Nav chips */
+  nav{
+    display:flex; gap:8px; overflow-x:auto; padding:12px 16px;
+    background:#fff; position:sticky; top:74px; z-index:40;
+    border-bottom:1px solid var(--line); -webkit-overflow-scrolling:touch;
+  }
+  nav a{
+    flex:0 0 auto; padding:8px 14px; border-radius:20px; background:#eef3ee;
+    color:var(--green-d); text-decoration:none; font-weight:700; font-size:14px;
+    white-space:nowrap; border:1.5px solid transparent;
+  }
+  nav a:active{background:var(--green); color:#fff}
+
+  section{margin:22px 0}
+  h2{
+    font-size:20px; color:var(--green-d); margin:0 0 14px;
+    padding-bottom:8px; border-bottom:3px solid var(--green);
+    scroll-margin-top:140px;
+  }
+  h3{font-size:17px; margin:18px 0 8px; color:var(--ink)}
+
+  .card{
+    background:var(--card); border:1px solid var(--line); border-radius:14px;
+    padding:16px 18px; margin:12px 0; box-shadow:0 1px 4px rgba(0,0,0,.04);
+  }
+
+  /* Role cards */
+  .roles{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px}
+  .role{
+    border-radius:12px; padding:14px; color:#fff; font-weight:700;
+  }
+  .role small{display:block; font-weight:400; opacity:.92; font-size:13px; margin-top:4px}
+  .r-owner{background:var(--green)} .r-front{background:var(--blue)}
+  .r-wh{background:var(--brown)} .r-sale{background:var(--purple)}
+
+  /* Steps */
+  ol.steps{counter-reset:s; list-style:none; padding:0; margin:0}
+  ol.steps>li{
+    counter-increment:s; position:relative; padding:10px 0 10px 44px;
+    border-bottom:1px dashed var(--line);
+  }
+  ol.steps>li:last-child{border-bottom:none}
+  ol.steps>li::before{
+    content:counter(s); position:absolute; left:0; top:10px;
+    width:30px; height:30px; border-radius:50%; background:var(--green);
+    color:#fff; font-weight:700; display:flex; align-items:center;
+    justify-content:center; font-size:15px;
+  }
+  .tag{
+    display:inline-block; background:#eef3ee; color:var(--green-d);
+    border-radius:6px; padding:1px 8px; font-weight:700; font-size:14px;
+    margin:0 2px;
+  }
+  .key{color:var(--blue); font-weight:700}
+
+  .tip{border-left:4px solid var(--green); background:#f0f7f1; border-radius:0 10px 10px 0; padding:12px 14px; margin:12px 0}
+  .warn{border-left:4px solid var(--warn); background:#fff6ee; border-radius:0 10px 10px 0; padding:12px 14px; margin:12px 0}
+  .danger{border-left:4px solid var(--danger); background:#fdf0ee; border-radius:0 10px 10px 0; padding:12px 14px; margin:12px 0}
+  .tip b,.warn b,.danger b{display:block; margin-bottom:2px}
+
+  table{width:100%; border-collapse:collapse; margin:10px 0; font-size:14px}
+  th,td{text-align:left; padding:10px; border-bottom:1px solid var(--line); vertical-align:top}
+  th{background:#f0f3f0; color:var(--green-d)}
+
+  /* Checklist */
+  .check li{list-style:none; padding:8px 0 8px 34px; position:relative; border-bottom:1px solid var(--line)}
+  .check li::before{
+    content:"☐"; position:absolute; left:0; top:6px; font-size:22px; color:var(--green)
+  }
+  .check{padding:0; margin:0}
+  .check b{color:var(--green-d)}
+
+  .emoji{font-size:18px}
+  footer{text-align:center; color:var(--muted); font-size:13px; padding:26px 16px 40px}
+  .pill{display:inline-block; background:var(--green); color:#fff; border-radius:20px; padding:3px 12px; font-size:13px; font-weight:700}
+  @media(max-width:420px){ .roles{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🌸 ดูเหมือนจริง — คู่มือใช้งาน</h1>
+  <p>ระบบจัดการสต็อกร้าน · ใช้บนมือถือ</p>
+</header>
+
+<nav>
+  <a href="#start">เริ่มต้น</a>
+  <a href="#roles">ใครเห็นอะไร</a>
+  <a href="#order">สั่งของ</a>
+  <a href="#transfer">โอน/รับของ</a>
+  <a href="#stock">เช็คสต็อก</a>
+  <a href="#count">นับสต็อก</a>
+  <a href="#label">พิมพ์ป้าย</a>
+  <a href="#mto">งานจัดพิเศษ</a>
+  <a href="#sync">การ sync</a>
+  <a href="#test">สิ่งที่ต้องเทสต์</a>
+  <a href="#help">ปัญหาที่เจอบ่อย</a>
+</nav>
+
+<div class="wrap">
+
+<!-- ───────────── เริ่มต้น ───────────── -->
+<section id="start">
+  <h2>1. เริ่มต้นใช้งาน</h2>
+  <div class="card">
+    <ol class="steps">
+      <li>เปิดเว็บ <span class="key">dmj-inventory-dashboard.pages.dev</span> บนมือถือ</li>
+      <li>กด <b>"Add to Home Screen"</b> / <b>"เพิ่มลงหน้าจอหลัก"</b> เพื่อใช้เหมือนแอป (เปิดเร็ว ใช้ได้แม้เน็ตช้า)</li>
+      <li>เลือก <b>บทบาท</b> ของตัวเอง (เจ้าของ / หน้าร้าน / คลัง / Sale)</li>
+      <li>ถ้าเป็น <b>เจ้าของ</b> ต้องใส่ <b>PIN</b> · บทบาทอื่นกดเข้าได้เลย</li>
+    </ol>
+  </div>
+  <div class="tip">
+    <b>💡 โหมดง่าย (สำหรับคนไม่ถนัดมือถือ)</b>
+    กดรูปโปรไฟล์มุมขวาบน → เปิด <span class="tag">โหมดง่าย</span> ระบบจะโชว์เฉพาะเมนูที่ใช้บ่อย 4 อัน ปุ่มใหญ่ กดง่ายขึ้น
+  </div>
+  <div class="tip">
+    <b>🚪 ออกจากระบบ / เปลี่ยนบทบาท</b>
+    กดรูปโปรไฟล์มุมขวาบน แล้วกดปุ่ม <span class="tag">🚪 ออก</span>
+  </div>
+</section>
+
+<!-- ───────────── Roles ───────────── -->
+<section id="roles">
+  <h2>2. ใครเห็นเมนูอะไรบ้าง</h2>
+  <div class="roles">
+    <div class="role r-owner">👑 เจ้าของ <small>เห็นทุกเมนู — ภาพรวม, ยอดขาย, สั่ง, โอน, สต็อก, นับสต็อก, รายงาน, Label ทุกอย่าง</small></div>
+    <div class="role r-front">🌸 หน้าร้าน <small>สินค้า, สต็อก, เช็คหน้าร้าน, โอน, สั่งของ, งานจัดพิเศษ, Label</small></div>
+    <div class="role r-wh">🏭 คลังสินค้า <small>สินค้า, สต็อก, ตำแหน่งคลัง, นับสต็อก, รายการสั่ง, สรุปออกจากคลัง, Label</small></div>
+    <div class="role r-sale">💼 Sale <small>สินค้า, สต็อก, สั่งของ, งานจัดพิเศษ, Label</small></div>
+  </div>
+  <div class="tip"><b>เมนูล่างของจอ</b> = เมนูหลัก · ถ้าเมนูไม่ครบให้กด <span class="tag">เพิ่มเติม ⋯</span></div>
+</section>
+
+<!-- ───────────── สั่งของ ───────────── -->
+<section id="order">
+  <h2>3. 🛒 สั่งของไปขาย</h2>
+  <div class="card">
+    <h3>วิธีสั่ง (จากหน้า "สินค้า & สั่ง" หรือ "สต๊อก")</h3>
+    <ol class="steps">
+      <li>เปิดแท็บ <span class="tag">🛍️ สินค้า & สั่ง</span> หรือ <span class="tag">⚠️ สต๊อก</span></li>
+      <li>หาสินค้าที่ต้องการ — พิมพ์ชื่อ/SKU ในช่องค้นหา (พิมพ์หลายคำได้ เช่น "แจกัน ขาว")</li>
+      <li>กดปุ่ม <span class="tag">🛒 สั่ง</span> ที่สินค้านั้น</li>
+      <li>ใส่ <b>จำนวน</b> + เลือกประเภท (ปกติ / หิ้ว)</li>
+      <li>กด <span class="tag">✅ ยืนยันสั่ง</span></li>
+    </ol>
+  </div>
+  <div class="tip">
+    <b>เห็นป้าย "สั่งแล้ว N"</b> บนสินค้า = มีคนสั่งของชิ้นนี้ค้างอยู่ N ชิ้น <b>ตรวจก่อนสั่งซ้ำ</b> จะได้ไม่สั่งเบิ้ล
+  </div>
+  <div class="warn">
+    <b>⚠️ ของหมดสั่งไม่ได้</b>
+    ถ้าสินค้าขึ้น "หมดสต๊อก" ปุ่มสั่งจะกดไม่ได้ ต้องรอของเข้าคลังก่อน
+  </div>
+  <div class="card">
+    <h3>ดูรายการที่สั่งไปแล้ว</h3>
+    เปิดแท็บ <span class="tag">📋 รายการสั่งของ</span> — เห็นทุกออเดอร์ที่ยังค้าง (สถานะ "รอ") คลังจะมาจัดให้
+  </div>
+</section>
+
+<!-- ───────────── โอน/รับของ ───────────── -->
+<section id="transfer">
+  <h2>4. 🔄 โอนของ &amp; รับของ (คลัง → หน้าร้าน)</h2>
+  <div class="card">
+    <h3>ฝั่งคลัง — โอนของไปหน้าร้าน</h3>
+    <ol class="steps">
+      <li>เปิดแท็บ <span class="tag">⚠️ สต๊อก</span> (หรือ เช็คหน้าร้าน)</li>
+      <li>หาสินค้าที่จะโอน → กดปุ่มโอน</li>
+      <li>ใส่จำนวนที่โอน → ยืนยัน</li>
+      <li>ระบบขึ้น <b>Toast เขียว</b> = โอนสำเร็จ · ตัวเลขคลังลดทันที</li>
+    </ol>
+  </div>
+  <div class="card">
+    <h3>ฝั่งหน้าร้าน — รับของที่โอนมา</h3>
+    <ol class="steps">
+      <li>เห็นแบนเนอร์ <span class="tag">📦 สินค้าที่โอนแล้ว รอรับ</span> ในหน้าสต็อก</li>
+      <li>เช็คของจริงให้ตรงกับจำนวน</li>
+      <li>กด <b>ยืนยันรับของ</b> → ของจะเข้าสต็อกหน้าร้าน</li>
+    </ol>
+  </div>
+  <div class="warn">
+    <b>⚠️ สำคัญ: ต้องกด "รับของ" เสมอ</b>
+    ถ้าโอนแล้วแต่หน้าร้านยังไม่กดรับ ระบบจะยังนับว่า "รอรับ" ตัวเลขหน้าร้านจะยังไม่อัปเดต
+  </div>
+</section>
+
+<!-- ───────────── เช็คสต็อก ───────────── -->
+<section id="stock">
+  <h2>5. ⚠️ เช็คสต็อก &amp; แจ้งเตือน</h2>
+  <div class="card">
+    <table>
+      <tr><th>สี/สัญลักษณ์</th><th>หมายความว่า</th></tr>
+      <tr><td>🔴 ต้องสั่งทันที</td><td>ใกล้หมดมาก ต้องสั่งด่วน</td></tr>
+      <tr><td>🟡 ใกล้หมด</td><td>เหลือน้อย เตรียมสั่ง</td></tr>
+      <tr><td>🛒 ควรสั่ง</td><td>หน้าร้านเหลือ ≤12 และคลังยังมีของ</td></tr>
+      <tr><td><b>คลัง / หน้าร้าน</b></td><td>2 ตัวเลขแยกกัน — คลัง=สต็อกหลัง, หน้าร้าน=ของที่วางขาย</td></tr>
+    </table>
+  </div>
+  <div class="tip">
+    <b>⚙️ ตั้งเกณฑ์แจ้งเตือนได้</b>
+    เจ้าของตั้งได้ว่าเหลือกี่ชิ้นถึงจะเตือน (ในหน้าสต๊อก ด้านล่าง "เกณฑ์แจ้งเตือน")
+  </div>
+  <div class="tip">
+    <b>🔔 LINE แจ้งเตือนอัตโนมัติ</b>
+    ระบบส่ง LINE ให้เจ้าของ: สต็อกใกล้หมด (วันละครั้ง), สรุปเช้า (เฉพาะวันมีออเดอร์ค้าง/งานพิเศษ), ออเดอร์หิ้วใหม่
+  </div>
+</section>
+
+<!-- ───────────── นับสต็อก ───────────── -->
+<section id="count">
+  <h2>6. 📊 นับสต็อกคลัง</h2>
+  <div class="card">
+    <ol class="steps">
+      <li>เปิดแท็บ <span class="tag">📊 นับ stock คลัง</span></li>
+      <li>เดินนับของจริงในคลัง</li>
+      <li>ใส่จำนวนที่นับได้ในแต่ละสินค้า</li>
+      <li>กด <b>ยืนยันการนับ</b> → ระบบอัปเดตตัวเลขคลังให้ตรงของจริง</li>
+    </ol>
+  </div>
+  <div class="tip"><b>💡 ทำตอนปิดร้าน/ต้นเดือน</b> เพื่อให้ตัวเลขในระบบตรงกับของจริง</div>
+</section>
+
+<!-- ───────────── พิมพ์ป้าย ───────────── -->
+<section id="label">
+  <h2>7. 🖨️ พิมพ์ Label / ป้ายสินค้า</h2>
+  <div class="card">
+    <ol class="steps">
+      <li>เปิดแท็บ <span class="tag">🖨️ พิมพ์ Label</span></li>
+      <li>เลือกสินค้าที่จะพิมพ์ป้าย</li>
+      <li>กดพิมพ์ → ต่อเครื่องพิมพ์ฉลาก</li>
+    </ol>
+  </div>
+  <div class="tip">
+    <b>🔄 sync ข้ามเครื่อง</b>
+    กดพิมพ์แล้วระบบจำว่า "พิมพ์แล้ว" — เครื่องอื่นจะเห็นว่าป้ายนี้พิมพ์ไปแล้ว ไม่พิมพ์ซ้ำ
+  </div>
+</section>
+
+<!-- ───────────── MTO ───────────── -->
+<section id="mto">
+  <h2>8. 🎁 งานจัดพิเศษ (MTO)</h2>
+  <div class="card">
+    <p>งานจัดช่อ/จัดกระเช้า/งานสั่งทำพิเศษ ที่ใช้สินค้าหลายชิ้นรวมกัน</p>
+    <ol class="steps">
+      <li>เปิดแท็บ <span class="tag">🎁 งานจัดพิเศษ</span></li>
+      <li>ดูงานที่ "กำลังจัด"</li>
+      <li>จัดเสร็จ → กด <b>ปิดงาน</b> → ระบบตัดสต็อกวัตถุดิบที่ใช้ออกอัตโนมัติ + ส่ง LINE แจ้งเจ้าของ</li>
+    </ol>
+  </div>
+</section>
+
+<!-- ───────────── Sync ───────────── -->
+<section id="sync">
+  <h2>9. 🔗 การเชื่อมต่อ &amp; sync</h2>
+  <div class="card">
+    <table>
+      <tr><th>ระบบ</th><th>ทำอะไร</th><th>ความถี่</th></tr>
+      <tr><td><b>Google Sheet</b></td><td>ฐานข้อมูลหลัก ทุกอย่างเก็บที่นี่</td><td>ทันที</td></tr>
+      <tr><td><b>ZORT</b></td><td>ดึงสต็อก/ยอดขาย/รูปสินค้า + ส่งสต็อกกลับ</td><td>ทุก 2 ชม.</td></tr>
+      <tr><td><b>LINE</b></td><td>แจ้งเตือนเจ้าของ</td><td>ตามเหตุการณ์</td></tr>
+    </table>
+  </div>
+  <div class="warn">
+    <b>⚠️ ตัวเลขอาจหน่วง ~2 ชม.</b>
+    ZORT sync ทุก 2 ชั่วโมง ถ้าแก้ใน ZORT ตรงๆ ตัวเลขในเว็บอาจยังไม่เปลี่ยนทันที — แต่ถ้าสั่ง/โอน/นับ <b>ในเว็บ</b> จะอัปเดตทันที
+  </div>
+  <div class="danger">
+    <b>🛑 มีคนแก้พร้อมกัน 2 เครื่อง</b>
+    ระบบมีกันชนกัน (conflict check) ถ้าขึ้นเตือนว่าข้อมูลไม่ตรง ให้ <b>รีเฟรชหน้า</b> แล้วทำใหม่
+  </div>
+</section>
+
+<!-- ───────────── สิ่งที่ต้องเทสต์ ───────────── -->
+<section id="test">
+  <h2>✅ สิ่งที่ต้อง "ทดสอบจริง" ก่อนใช้เต็มตัว</h2>
+  <p>ลองทำตามลิสต์นี้กับ <b>ของจริง 1-2 ชิ้น</b> แล้วเช็คว่าตัวเลขถูก:</p>
+
+  <div class="card">
+    <h3>🛒 ทดสอบการสั่งของ</h3>
+    <ul class="check">
+      <li><b>สั่งของ 1 รายการ</b> → ไปเช็คแท็บ "รายการสั่งของ" ว่าขึ้นจริง</li>
+      <li>เช็คว่า <b>Google Sheet</b> ชีต "ลำดับที่สั่งสินค้า" มีแถวใหม่</li>
+      <li>สั่งของชิ้นเดิมซ้ำ → ดูว่าขึ้นป้าย <b>"สั่งแล้ว N"</b> เตือนไหม</li>
+      <li>สั่งของ <b>ประเภท "หิ้ว"</b> → เช็คว่า <b>LINE เด้ง</b> แจ้งเจ้าของ (รอเดือน ก.ค. quota รีเซ็ตก่อน)</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>🔄 ทดสอบโอน &amp; รับของ</h3>
+    <ul class="check">
+      <li><b>โอนของจากคลัง</b> 1 ชิ้น → ตัวเลขคลัง <b>ลดทันที</b> + ขึ้น Toast เขียว</li>
+      <li>ฝั่งหน้าร้านเห็นแบนเนอร์ <b>"รอรับ"</b> ไหม</li>
+      <li>กด <b>รับของ</b> → ตัวเลขหน้าร้าน <b>เพิ่มขึ้น</b> ตรงจำนวน</li>
+      <li>เช็คว่า <b>ผลรวม (คลัง+หน้าร้าน) เท่าเดิม</b> ก่อน/หลังโอน</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>📊 ทดสอบสต็อก &amp; ZORT</h3>
+    <ul class="check">
+      <li><b>นับสต็อก</b> แก้ตัวเลข 1 ชิ้น → ยืนยัน → ดูว่าตัวเลขเปลี่ยน</li>
+      <li><b>รอ 2 ชั่วโมง</b> (หรือสั่ง sync เอง) → เช็คว่าตัวเลข <b>ไม่เด้งกลับ</b> ค่าเดิม (นี่คือบั๊กที่เพิ่งแก้)</li>
+      <li>เทียบตัวเลขในเว็บ กับใน <b>ZORT</b> ว่าตรงกัน</li>
+      <li>ของที่ขายใน ZORT → สต็อกในเว็บลดตามไหม (หลัง sync)</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>🖼️ ทดสอบรูป &amp; การแสดงผล</h3>
+    <ul class="check">
+      <li>เปิดทุกแท็บ → <b>รูปสินค้าขึ้นครบ</b> ทุกหน้า (นี่คือสิ่งที่เพิ่งแก้)</li>
+      <li>กดรูปแล้ว <b>ขยายดูได้</b> (lightbox)</li>
+      <li>ลองทุกบทบาท (เจ้าของ/หน้าร้าน/คลัง/Sale) → เมนูถูกต้อง</li>
+      <li>เปิด <b>โหมดง่าย</b> → เหลือ 4 เมนูหลัก ปุ่มใหญ่ขึ้น</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>🔔 ทดสอบ LINE (ต้นเดือน ก.ค.)</h3>
+    <ul class="check">
+      <li>รัน <b>debugLineMessage</b> ใน GAS → LINE เด้งไหม (เช็คว่าหาย error 429)</li>
+      <li>ปล่อยให้ระบบส่ง <b>"สรุปเช้า"</b> → ได้วันละ <b>ครั้งเดียว</b> ไม่ spam</li>
+      <li>ตรวจปลายเดือน: ข้อความรวม <b>ไม่เกิน 200</b></li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>📱 ทดสอบกับคนใช้จริง</h3>
+    <ul class="check">
+      <li>ให้ <b>พนักงาน/แรงงานต่างด้าว</b> ลองสั่ง+รับของเอง โดยไม่ต้องสอน</li>
+      <li>ดูว่า <b>กดปุ่มถูก</b> ไหม ปุ่มใหญ่พอไหม</li>
+      <li>เน็ตช้า/หลุด → เว็บยัง <b>เปิดได้</b> ไหม (PWA offline)</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ───────────── ปัญหา ───────────── -->
+<section id="help">
+  <h2>🆘 ปัญหาที่เจอบ่อย</h2>
+  <div class="card">
+    <table>
+      <tr><th>อาการ</th><th>วิธีแก้</th></tr>
+      <tr><td>จอขาว เปิดไม่ขึ้น</td><td>รีเฟรชหน้า · ปิดเปิดแอปใหม่</td></tr>
+      <tr><td>ตัวเลขไม่อัปเดต</td><td>ดึงหน้าจอลงเพื่อรีเฟรช · รอ ZORT sync (2 ชม.)</td></tr>
+      <tr><td>ขึ้นเตือน "ข้อมูลไม่ตรง"</td><td>รีเฟรช แล้วทำรายการใหม่ (มีคนแก้พร้อมกัน)</td></tr>
+      <tr><td>LINE ไม่เด้ง</td><td>รอต้นเดือน (quota รายเดือนเต็ม) · รัน debugLineMessage เช็ค</td></tr>
+      <tr><td>โอนแล้วหน้าร้านไม่เพิ่ม</td><td>หน้าร้านต้องกด "รับของ" ก่อน</td></tr>
+      <tr><td>รูปไม่ขึ้น</td><td>เช็คว่ามีรูปใน ZORT/ชีต imageUrl · รอ sync</td></tr>
+    </table>
+  </div>
+</section>
+
+</div>
+
+<footer>
+  <span class="pill">ดูเหมือนจริง · DMJ Inventory</span><br><br>
+  คู่มือนี้อัปเดตล่าสุด มิ.ย. 2026<br>
+  เว็บ: dmj-inventory-dashboard.pages.dev
+</footer>
+
+</body>
+</html>
