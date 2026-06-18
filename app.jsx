@@ -468,6 +468,17 @@ function App() {
     return () => clearInterval(id);
   }, [tab, role]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Auto-sync เมื่ออยู่หน้านับสต็อก/เช็คหน้าร้าน — ให้หลายเครื่องเห็นข้อมูลของกันและกัน ──
+  // ดึง payload ทั้งก้อนทุก 30 วิ (อัปเดตเลขคลังอ้างอิง) — จำนวนที่ผู้ใช้พิมพ์เก็บใน local state
+  // (checkedQtys) แยกต่างหาก จึงไม่ถูกทับ ส่วน window._dataLoadedAt จะอัปเดตให้สด กัน false conflict
+  usE(() => {
+    if (!role) return;
+    const LIVE_TABS = ["stockcount", "frontstore"];
+    if (!LIVE_TABS.includes(tab)) return;
+    const id = setInterval(() => { if (navigator.onLine) fetchFromSheet(); }, 30000);
+    return () => clearInterval(id);
+  }, [tab, role, fetchFromSheet]);
+
   const handleDataLoaded = usC((newData) => {
     if (typeof resetCatColorMap === 'function') resetCatColorMap();
     let enriched;

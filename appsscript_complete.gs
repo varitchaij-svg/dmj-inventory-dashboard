@@ -1308,13 +1308,11 @@ function updateFrontStore(ss, entries, datetime) {
 function confirmStockCount(ss, entries, clientLoadedAt, actor) {
   if (!Array.isArray(entries) || !entries.length) return error("entries ว่างเปล่า");
 
-  // ─── Conflict detection: ถ้า sheet ถูกแก้หลังจาก client โหลด → reject ───
-  if (shouldRejectConflict_(clientLoadedAt, getSheetLastModified_())) {
-    return ContentService.createTextOutput(JSON.stringify({
-      success: false, conflict: true,
-      message: "ข้อมูลถูกแก้ไขหลังจากที่คุณโหลด กรุณา Reload ก่อนบันทึก"
-    })).setMimeType(ContentService.MimeType.JSON);
-  }
+  // หมายเหตุ: ไม่ใช้ global conflict detection ที่นี่ — ต่างจาก transferStockBatch
+  // เพราะการนับสต็อกเป็นการ "กำหนดค่าจำนวนตรง ๆ" (absolute set) ไม่ใช่หักลบ
+  // หลายเครื่องนับคนละล็อค/คนละ SKU พร้อมกันได้อย่างปลอดภัย (LockService serialize การเขียน)
+  // ถ้าบล็อกด้วย timestamp จะทำให้เครื่องที่บันทึกทีหลังกดไม่ได้ → ใช้งานพร้อมกันไม่ได้
+  // (clientLoadedAt ยังรับไว้เพื่อ backward-compat แต่ไม่ reject)
 
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_PRODUCTS);
