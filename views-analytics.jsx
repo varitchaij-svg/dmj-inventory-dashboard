@@ -49,7 +49,7 @@ function PurchaseGroupView({ products }) {
 }
 
 // ─── FrontStoreView ───
-function FrontStoreView({ data, role }) {
+function FrontStoreView({ data, role, checkRequest }) {
   const products = data.products || [];
   const [toast, showToast, hideToast] = useToast();
   const CAT_ORDER = ["Realtouch","ดอกไม้","บูช","ไม้แซม","ดอกหญ้า","ใบ","ใบบูช","ใบไม้แขวน","กิ่งไม้","กุหลาบหิน","ต้นไม้","แจกันแก้ว","เรซิ่น"];
@@ -82,6 +82,20 @@ function FrontStoreView({ data, role }) {
   const [purchaseMode, setPurchaseMode] = uS(false);
   const [mounted, setMounted] = uS(false);
   uE(() => { const t = setTimeout(() => setMounted(true), 350); return () => clearTimeout(t); }, []);
+
+  // ถ้า checkRequest ส่งมา → auto-set supplier filter ถ้า SKU ทั้งหมดมาจาก supplier เดียว
+  uE(function() {
+    if (!checkRequest) return;
+    var checkSkus = new Set(checkRequest.skus || []);
+    var sups = new Set();
+    products.forEach(function(p) {
+      if (checkSkus.has(p.sku)) {
+        var s = p.lastSupplier || p.vendor;
+        if (s) sups.add(s);
+      }
+    });
+    if (sups.size === 1) setSupplierFilter([...sups][0]);
+  }, [checkRequest]);
 
   const [checkedQtys, setCheckedQtys] = uS(() => {
     const init = {};
@@ -916,6 +930,25 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
   uE(() => { setCheckedQtys({}); setSavedSkus(new Set()); setLastSavedTime(null); setLastSavedSnap(''); setStockSearch(''); setSaveStatus("idle"); }, [selLockKey]);
   uE(() => { setCheckedQtys({}); setSavedSkus(new Set()); setLastSavedTime(null); setLastSavedSnap(''); setStockSearch(''); setSaveStatus("idle"); }, [selSupplier]);
 
+  // ถ้า checkRequest ส่งมา → auto-เข้า supplier mode ถ้า SKU ทั้งหมดมาจาก supplier เดียว
+  uE(function() {
+    if (!checkRequest || !checkRequest.skus || !checkRequest.skus.length) return;
+    var checkSkus = new Set(checkRequest.skus);
+    var sups = new Set();
+    (data.products || []).forEach(function(p) {
+      if (checkSkus.has(p.sku)) {
+        var s = p.lastSupplier || p.vendor;
+        if (s) sups.add(s);
+      }
+    });
+    if (sups.size === 1) {
+      setSupplierMode(true);
+      setSelSupplier([...sups][0]);
+    } else if (sups.size > 1) {
+      setSupplierMode(true);
+    }
+  }, [checkRequest]);
+
   // Android back button: step 3 → 2 → 1
   uE(function(){
     if (step === 1 || !window.__dmjBackStack) return;
@@ -1147,14 +1180,12 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     return m;
   }, [lockData]);
 
-  // suppliers that have at least one product with warehouse stock
+  // suppliers that have at least one product (รวม 0-stock ด้วย เพื่อรองรับ checkRequest)
   const allSuppliersWH = uM(() => {
     const s = new Set();
     products.forEach(p => {
-      if (whQty(p) > 0) {
-        const v = p.lastSupplier || p.vendor;
-        if (v) s.add(v);
-      }
+      const v = p.lastSupplier || p.vendor;
+      if (v) s.add(v);
     });
     return [...s].sort();
   }, [products]);
@@ -1165,11 +1196,11 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     return allSuppliersWH.filter(s => s.toLowerCase().includes(q));
   }, [allSuppliersWH, suppSearch]);
 
-  // products from selected supplier in warehouse, sorted by lock position
+  // products from selected supplier, sorted by lock position (รวม 0-stock เพื่อรองรับ checkRequest)
   const supplierProducts = uM(() => {
     if (!selSupplier) return [];
     return products
-      .filter(p => (p.lastSupplier || p.vendor) === selSupplier && whQty(p) > 0)
+      .filter(p => (p.lastSupplier || p.vendor) === selSupplier)
       .sort((a, b) => {
         const la = skuToLock[a.sku] || 'zzz';
         const lb = skuToLock[b.sku] || 'zzz';
