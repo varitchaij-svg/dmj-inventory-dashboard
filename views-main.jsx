@@ -1944,6 +1944,7 @@ function CategoryView({ data, role }) {
   const [sendingCheck, setSendingCheck] = uS(false);
   const [checkSendOpen, setCheckSendOpen] = uS(false);       // floating button → modal
   const [checkSuppliers, setCheckSuppliers] = uS(new Set()); // ชื่อ supplier ที่ owner เลือก
+  const [checkSearch, setCheckSearch] = uS("");              // ช่องค้นหา supplier ใน modal
   const [orderProduct, setOrderProduct] = uS(null);
   const [localPendingOrders, setLocalPendingOrders] = uS([]); // optimistic update หลังสั่งสำเร็จ
   const [globalVendor, setGlobalVendor] = uS(null); // global supplier filter (all categories)
@@ -2201,11 +2202,23 @@ function CategoryView({ data, role }) {
       : products.filter(p => p.cat === active);
     base.forEach(p => {
       const s = p.vendor || p.lastSupplier;
-      if (s) m[s] = (m[s] || 0) + 1;
+      // กรองชื่อขยะ: array รั่วจาก GAS ("[Ljava.lang.Object;@...") / ว่าง
+      if (s && typeof s === "string" && !s.startsWith("[L")) m[s] = (m[s] || 0) + 1;
     });
     return Object.entries(m).map(([name, count]) => ({ name, count }))
       .sort((a,b) => b.count - a.count);
   }, [products, active]);
+
+  // กรอง supplier ตามช่องค้นหาใน modal (multi-token AND-match)
+  const checkSupplierFiltered = uM(() => {
+    const q = checkSearch.trim().toLowerCase();
+    if (!q) return supplierList;
+    const tokens = q.split(/\s+/);
+    return supplierList.filter(s => {
+      const hay = s.name.toLowerCase();
+      return tokens.every(t => hay.includes(t));
+    });
+  }, [supplierList, checkSearch]);
 
   // Colors in this category for filter chips
   const colorChips = uM(() => {
@@ -2942,31 +2955,62 @@ function CategoryView({ data, role }) {
       {/* ── Check Send Modal (bottom sheet) — owner เลือก supplier ก่อนส่ง ── */}
       {checkSendOpen && (
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",zIndex:900,display:"flex",alignItems:"flex-end"}}
-          onClick={function(e){ if(e.target===e.currentTarget) setCheckSendOpen(false); }}>
+          onClick={function(e){ if(e.target===e.currentTarget){ setCheckSendOpen(false); setCheckSearch(""); } }}>
           <div style={{background:"#fff",borderRadius:"16px 16px 0 0",width:"100%",maxWidth:480,
                        margin:"0 auto",maxHeight:"70vh",display:"flex",flexDirection:"column"}}>
             <div style={{padding:"16px",borderBottom:"1px solid #e5e7eb",display:"flex",alignItems:"center",gap:8}}>
               <div style={{flex:1,fontWeight:700,fontSize:16}}>📤 ส่งคำขอเช็คสต็อก</div>
-              <button onClick={function(){ setCheckSendOpen(false); }}
+              <button onClick={function(){ setCheckSendOpen(false); setCheckSearch(""); }}
                 style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:"#6b7280"}}>✕</button>
             </div>
+            {/* ช่องค้นหา supplier — พิมพ์กรองชื่อร้าน */}
+            <div style={{padding:"12px 16px 4px"}}>
+              <div style={{position:"relative"}}>
+                <span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",fontSize:15,opacity:.5}}>🔍</span>
+                <input value={checkSearch} onChange={function(e){ setCheckSearch(e.target.value); }}
+                  placeholder="พิมพ์ค้นหาร้านค้า..."
+                  style={{width:"100%",boxSizing:"border-box",padding:"10px 36px 10px 36px",borderRadius:10,
+                          border:"1.5px solid #e5e7eb",fontSize:14,fontFamily:"inherit",outline:"none"}}/>
+                {checkSearch && (
+                  <button onClick={function(){ setCheckSearch(""); }}
+                    style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",
+                            background:"none",border:"none",fontSize:16,cursor:"pointer",color:"#9ca3af",padding:4}}>✕</button>
+                )}
+              </div>
+            </div>
             {/* Quick-select all / ล้าง */}
-            <div style={{padding:"12px 16px 4px",display:"flex",gap:8,flexWrap:"wrap"}}>
-              <button onClick={function(){ setCheckSuppliers(new Set(supplierList.map(function(s){ return s.name; }))); }}
+            <div style={{padding:"6px 16px 4px",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+              <button onClick={function(){
+                  // เลือกทั้งหมด = เฉพาะที่ตรงกับคำค้นปัจจุบัน (รวมกับที่เลือกไว้แล้ว)
+                  setCheckSuppliers(function(prev){
+                    var n = new Set(prev);
+                    checkSupplierFiltered.forEach(function(s){ n.add(s.name); });
+                    return n;
+                  });
+                }}
                 style={{padding:"6px 12px",borderRadius:20,border:"1px solid #d1fae5",
                         background:"#ecfdf5",color:"#065f46",fontSize:13,cursor:"pointer",fontWeight:600}}>
-                เลือกทั้งหมด
+                เลือกทั้งหมด{checkSearch ? "ที่ค้นหา" : ""}
               </button>
               <button onClick={function(){ setCheckSuppliers(new Set()); }}
                 style={{padding:"6px 12px",borderRadius:20,border:"1px solid #e5e7eb",
                         background:"#f9fafb",color:"#6b7280",fontSize:13,cursor:"pointer"}}>
                 ล้าง
               </button>
+              {checkSuppliers.size > 0 && (
+                <span style={{fontSize:12,color:"#1f7f44",fontWeight:600,marginLeft:"auto"}}>
+                  เลือกแล้ว {checkSuppliers.size} ร้าน
+                </span>
+              )}
             </div>
             {/* Supplier chips */}
             <div style={{overflowY:"auto",flex:1,padding:"8px 16px 4px"}}>
               <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-                {supplierList.map(function(s) {
+                {checkSupplierFiltered.length === 0 ? (
+                  <div style={{padding:"20px 0",width:"100%",textAlign:"center",color:"#9ca3af",fontSize:14}}>
+                    ไม่พบร้านค้า "{checkSearch}"
+                  </div>
+                ) : checkSupplierFiltered.map(function(s) {
                   var sel = checkSuppliers.has(s.name);
                   return (
                     <button key={s.name} onClick={function(){
