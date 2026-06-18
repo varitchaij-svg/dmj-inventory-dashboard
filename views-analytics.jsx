@@ -85,7 +85,7 @@ function FrontStoreView({ data, role, checkRequest }) {
 
   // ถ้า checkRequest ส่งมา → auto-set supplier filter ถ้า SKU ทั้งหมดมาจาก supplier เดียว
   uE(function() {
-    if (!checkRequest) return;
+    if (!checkRequest || !products.length) return;
     var checkSkus = new Set(checkRequest.skus || []);
     var sups = new Set();
     products.forEach(function(p) {
@@ -95,7 +95,7 @@ function FrontStoreView({ data, role, checkRequest }) {
       }
     });
     if (sups.size === 1) setSupplierFilter([...sups][0]);
-  }, [checkRequest]);
+  }, [checkRequest, products]);
 
   const [checkedQtys, setCheckedQtys] = uS(() => {
     const init = {};
@@ -1180,15 +1180,19 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     return m;
   }, [lockData]);
 
-  // suppliers that have at least one product (รวม 0-stock ด้วย เพื่อรองรับ checkRequest)
+  // suppliers ที่มีสินค้าในคลัง (qtyWH > 0) สำหรับแสดง list ปกติ
+  // แต่ถ้ามี checkRequest ให้รวม supplier ของ SKU ที่ขอด้วย (qtyWH อาจ = 0 ได้)
   const allSuppliersWH = uM(() => {
     const s = new Set();
+    const checkSkuSet = checkRequest ? new Set(checkRequest.skus || []) : null;
     products.forEach(p => {
       const v = p.lastSupplier || p.vendor;
-      if (v) s.add(v);
+      if (!v) return;
+      if (whQty(p) > 0) { s.add(v); return; }
+      if (checkSkuSet && checkSkuSet.has(p.sku)) s.add(v);
     });
     return [...s].sort();
-  }, [products]);
+  }, [products, checkRequest]);
 
   const filteredSuppliers = uM(() => {
     if (!suppSearch.trim()) return allSuppliersWH;
@@ -1196,17 +1200,22 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     return allSuppliersWH.filter(s => s.toLowerCase().includes(q));
   }, [allSuppliersWH, suppSearch]);
 
-  // products from selected supplier, sorted by lock position (รวม 0-stock เพื่อรองรับ checkRequest)
+  // products จาก supplier ที่เลือก — filter qtyWH > 0 เสมอ เว้นแต่ SKU นั้นอยู่ใน checkRequest
   const supplierProducts = uM(() => {
     if (!selSupplier) return [];
+    const checkSkuSet = checkRequest ? new Set(checkRequest.skus || []) : null;
     return products
-      .filter(p => (p.lastSupplier || p.vendor) === selSupplier)
+      .filter(p => {
+        if ((p.lastSupplier || p.vendor) !== selSupplier) return false;
+        if (whQty(p) > 0) return true;
+        return checkSkuSet && checkSkuSet.has(p.sku);
+      })
       .sort((a, b) => {
         const la = skuToLock[a.sku] || 'zzz';
         const lb = skuToLock[b.sku] || 'zzz';
         return la.localeCompare(lb, undefined, { numeric: true }) || compareSku(a, b);
       });
-  }, [selSupplier, products, skuToLock]);
+  }, [selSupplier, products, skuToLock, checkRequest]);
 
   const supplierSummary = uM(() => {
     let waiting = 0, matched = 0, mismatched = 0;
