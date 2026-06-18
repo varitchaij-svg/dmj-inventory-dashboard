@@ -3604,7 +3604,13 @@ function OrderSummaryView({ data, onPrintRequest }) {
     // ถ้า batch ทั้งก้อนล้ม (network/timeout/GAS error) → ไม่ลบ ไม่มาร์คอะไรเลย คงรายการไว้ทั้งหมด ให้ลองใหม่
     if (!batchOk) {
       setSending(null);
-      showToast("warn", `ส่งไม่สำเร็จ — ระบบมีปัญหา ${batchRes.error || ""} · คงรายการไว้ ลองใหม่อีกครั้ง`, "⚠️", 7000);
+      if (batchRes && batchRes.conflict) {
+        // conflict = ข้อมูลฝั่ง server ใหม่กว่าที่เครื่องนี้โหลด → ดึงข้อมูลล่าสุดให้ แล้วให้ลองอีกครั้ง
+        showToast("warn", "ข้อมูลมีการอัปเดต — กำลังโหลดใหม่ แล้วลองส่งอีกครั้ง", "🔄", 6000);
+        if (typeof window._dmjRefetch === "function") window._dmjRefetch();
+      } else {
+        showToast("warn", `ส่งไม่สำเร็จ — ระบบมีปัญหา ${batchRes.error || batchRes.message || ""} · คงรายการไว้ ลองใหม่อีกครั้ง`, "⚠️", 7000);
+      }
       return;
     }
 

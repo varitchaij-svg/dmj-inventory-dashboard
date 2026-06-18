@@ -435,6 +435,9 @@ function App() {
     fetchFromSheet(); // refresh ใน background เสมอ
   }, [role, fetchFromSheet]);
 
+  // expose refetch ให้ child component เรียกได้เมื่อเจอ conflict (จะอัปเดต window._dataLoadedAt ให้สด)
+  usE(() => { window._dmjRefetch = fetchFromSheet; return () => { delete window._dmjRefetch; }; }, [fetchFromSheet]);
+
   // ── Offline / online detection ──
   usE(() => {
     const goOnline  = () => setIsOnline(true);

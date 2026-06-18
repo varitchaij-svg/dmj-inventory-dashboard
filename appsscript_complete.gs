@@ -4273,7 +4273,9 @@ function createStockCheckRequest_(skus, names, actor) {
   var reqId = "CHK-" + String(seq).padStart(3, "0");
   var ts = Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyy-MM-dd HH:mm");
   sh.appendRow([reqId, ts, actor || "owner", JSON.stringify(skus || []), JSON.stringify(names || []), "pending", "", ""]);
-  invalidateCache_();
+  // skipTsUpdate=true — คำขอเช็คสต็อกไม่เปลี่ยน "จำนวนสินค้า" จึงห้าม bump dmj_last_write_ts
+  // มิฉะนั้น client ที่โหลดข้อมูลไว้ก่อนจะถูกมองว่า conflict → กดส่งของไม่ได้
+  invalidateCache_(true);
   // แจ้งเตือน LINE group — wrap try-catch เพื่อไม่ให้ LINE error พัง endpoint
   try {
     var nameList = names || [];
@@ -4300,7 +4302,8 @@ function completeStockCheckRequest_(reqId, actor) {
       sh.getRange(i + 1, 6).setValue("done");
       sh.getRange(i + 1, 7).setValue(actor || "");
       sh.getRange(i + 1, 8).setValue(ts);
-      invalidateCache_();
+      // skipTsUpdate=true — ปิดคำขอเช็คไม่เปลี่ยนจำนวนสินค้า จึงไม่ poison conflict timestamp
+      invalidateCache_(true);
       return ContentService.createTextOutput(JSON.stringify({ success: true }))
         .setMimeType(ContentService.MimeType.JSON);
     }
