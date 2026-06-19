@@ -738,17 +738,11 @@ function transferStockBatch(ss, list, actor, clientLoadedAt) {
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_PRODUCTS);
 
-  // ─── Conflict detection: ตรวจทั้ง batch ก่อนเริ่ม ───
-  // กัน 2 user โอน SKU เดียวพร้อมกัน → สต็อกติดลบ
-  if (clientLoadedAt) {
-    const lastMod = getSheetLastModified_();
-    if (shouldRejectConflict_(clientLoadedAt, lastMod)) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false, conflict: true,
-        message: "ข้อมูลเปลี่ยนไปแล้ว โหลดใหม่แล้วลองอีกครั้ง"
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-  }
+  // หมายเหตุ: เลิกใช้ global conflict detection (dmj_last_write_ts) ที่นี่แล้ว
+  // เหตุผล: การโอนอ่าน whQty สดจาก sheet "ใน lock" แล้ว clamp ด้วย Math.min(qty, whQty)
+  //   → สต็อกติดลบไม่ได้อยู่แล้วต่อให้ 2 user โอน SKU เดียวพร้อมกัน (คนหลังได้เท่าที่เหลือ
+  //   + รายงาน shortfall) global timestamp ทำให้ทุก write ของคนอื่น (นับสต็อก/MTO/ส่งของ)
+  //   ไป block การส่งของที่ไม่เกี่ยวกันเลย → false conflict ตอนใช้หลายคนพร้อมกัน
 
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(15000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
