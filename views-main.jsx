@@ -168,8 +168,14 @@ function drawProductCardCanvas(p, img, accentColor) {
   var H = imgZoneH + bodyH;
 
   var c = document.createElement('canvas');
-  c.width = W; c.height = H;
+  // render ที่ความละเอียดสูง (SCALE เท่า) ให้ภาพคมขึ้น — ทุกพิกัดด้านล่างยังเป็น logical px
+  // เพราะ ctx.scale() ขยายให้อัตโนมัติ (400px → 1200px) ตัวอักษร/รูปจึงไม่แตก
+  var SCALE = 3;
+  c.width = W * SCALE; c.height = H * SCALE;
   var ctx = c.getContext('2d');
+  ctx.scale(SCALE, SCALE);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
 
   // ── white base ────────────────────────────────────────────────────
   ctx.fillStyle = '#fff';
@@ -390,13 +396,13 @@ async function downloadSupplierCardsZip(groupName, items, accentColor, onProgres
     try {
       blob = await new Promise(function(res, rej) {
         try {
-          canvas.toBlob(function(b) { b ? res(b) : rej(new Error('tainted')); }, 'image/jpeg', 0.92);
+          canvas.toBlob(function(b) { b ? res(b) : rej(new Error('tainted')); }, 'image/jpeg', 0.95);
         } catch(e) { rej(e); }
       });
     } catch(e) {
       // canvas tainted (CORS) → วาดใหม่โดยไม่ใส่รูป
       var c2 = drawProductCardCanvas(p, null, accentColor);
-      blob = await new Promise(function(res) { c2.toBlob(res, 'image/jpeg', 0.92); });
+      blob = await new Promise(function(res) { c2.toBlob(res, 'image/jpeg', 0.95); });
     }
     if (blob) folder.file((p.sku || ('item' + i)) + '.jpg', blob);
     if (onProgress) onProgress('draw', p.sku);
