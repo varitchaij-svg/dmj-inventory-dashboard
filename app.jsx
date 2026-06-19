@@ -867,7 +867,7 @@ function App() {
 
       {/* ─── Stock check request banner (fs/wh) ─── */}
       {(role === "frontstore" || role === "warehouse") && pendingChecks.length > 0 && (
-        <div style={{background:"#fffbeb",borderBottom:"1px solid #fcd34d",
+        <div className="no-print" style={{background:"#fffbeb",borderBottom:"1px solid #fcd34d",
                      padding:"10px 16px",display:"flex",alignItems:"center",gap:10}}>
           <span style={{fontSize:20}}>📋</span>
           <div style={{flex:1}}>
@@ -889,7 +889,7 @@ function App() {
 
       {/* ─── Sync error banner (non-blocking, only when data already loaded) ─── */}
       {error && data && (
-        <div style={{
+        <div className="no-print" style={{
           background:"#fff3cd", color:"#856404", padding:"6px 16px",
           fontSize:12, display:"flex", alignItems:"center", justifyContent:"space-between",
           gap:8, borderBottom:"1px solid #ffc107",
