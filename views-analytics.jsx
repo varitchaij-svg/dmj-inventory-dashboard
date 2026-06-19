@@ -926,14 +926,27 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
   const [supplierMode, setSupplierMode]     = uS(false);
   const [selSupplier, setSelSupplier]       = uS(null);
   const [suppSearch, setSuppSearch]         = uS('');
-  // SKU ที่ผู้ใช้เครื่องนี้แก้เอง — ไม่ให้ค่าจากเครื่องอื่น (recentCountedSkus) มาทับ
+  // SKU ที่ผู้ใช้เครื่องนี้แก้เอง — ไม่ให้ค่าจากเครื่องอื่น (recentCountedSkus) มาทับ + ใช้ตอน save
   const localEditsRef = React.useRef(new Set());
+  // จำจำนวนที่นับไว้ในเครื่องนี้ แยกตาม context (ล็อค/ซัพพลายเออร์) — กดออกแล้วกลับเข้ามายังเห็นเลขเดิม
+  // ผูกกับ window เพื่อให้ค้างอยู่แม้สลับแท็บแล้ว component remount (รีเซ็ตเมื่อ reload หน้าเท่านั้น)
+  const countsCacheRef = React.useRef(window._dmjStockCounts || (window._dmjStockCounts = {})); // { ctxKey: { sku: qtyStr } }
+  const ctxKeyOf = (sup, lock) => sup ? ('s:' + sup) : (lock ? ('l:' + lock) : '');
 
-  uE(() => { setCheckedQtys({}); setSavedSkus(new Set()); setLastSavedTime(null); setLastSavedSnap(''); setStockSearch(''); setSaveStatus("idle"); localEditsRef.current = new Set(); }, [selLockKey]);
-  uE(() => { setCheckedQtys({}); setSavedSkus(new Set()); setLastSavedTime(null); setLastSavedSnap(''); setStockSearch(''); setSaveStatus("idle"); localEditsRef.current = new Set(); }, [selSupplier]);
+  // restore ค่าที่นับไว้เดิมของ context นี้ (ถ้ามี) เมื่อสลับล็อค/ซัพพลายเออร์ → กดออก-เข้าใหม่ไม่หาย
+  const restoreCtx = (key) => {
+    const saved = (key && countsCacheRef.current[key]) ? { ...countsCacheRef.current[key] } : {};
+    setCheckedQtys(saved);
+    localEditsRef.current = new Set(Object.keys(saved));
+    setSavedSkus(new Set()); setLastSavedTime(null);
+    setLastSavedSnap(JSON.stringify(saved)); // กัน auto-save เด้งทันทีหลัง restore
+    setStockSearch(''); setSaveStatus("idle");
+  };
+  uE(() => { restoreCtx(ctxKeyOf(null, selLockKey)); }, [selLockKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  uE(() => { restoreCtx(ctxKeyOf(selSupplier, null)); }, [selSupplier]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // นับพร้อมกันหลายเครื่อง: ดึง "จำนวนที่เครื่องอื่นเพิ่งนับ" (data.recentCountedSkus) มาแสดงด้วย
-  // เฉพาะ SKU ที่เครื่องนี้ "ยังไม่ได้แตะเอง" เพื่อไม่ทับค่าที่กำลังพิมพ์อยู่
+  // เฉพาะ SKU ที่เครื่องนี้ "ยังไม่ได้แตะเอง" — re-run เมื่อเปลี่ยน context ด้วย (กลับเข้ามาเห็นของเครื่องอื่น)
   uE(() => {
     const remote = data.recentCountedSkus;
     if (!remote || typeof remote !== 'object') return;
@@ -952,7 +965,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
       setLastSavedSnap(ls => (ls === prevSnap ? JSON.stringify(next) : ls));
       return next;
     });
-  }, [data.recentCountedSkus]);
+  }, [data.recentCountedSkus, selSupplier, selLockKey]);
 
   // ถ้า checkRequest ส่งมา → auto-เข้า supplier mode ถ้า SKU ทั้งหมดมาจาก supplier เดียว
   uE(function() {
@@ -1012,6 +1025,8 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
       const finalExpr = result !== null ? String(result) : expr;
       const v = evalExpr(finalExpr);
       const qty = v !== null ? String(Math.max(0, Math.floor(v))) : '';
+      const ck = ctxKeyOf(selSupplier, selLockKey);
+      if (ck) { (countsCacheRef.current[ck] = countsCacheRef.current[ck] || {})[calcPad.sku] = qty; }
       localEditsRef.current.add(calcPad.sku);
       setCheckedQtys(prev => { const o = Object.assign({},prev); o[calcPad.sku] = qty; return o; });
       setCalcPad(null);
@@ -1100,8 +1115,11 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
   const adjustQty = (sku, delta) => {
     const cur = checkedQtys[sku];
     const n   = (cur !== '' && cur != null) ? (parseInt(cur)||0) : 0;
+    const nv  = String(Math.max(0, n + delta));
+    const ck  = ctxKeyOf(selSupplier, selLockKey);
+    if (ck) { (countsCacheRef.current[ck] = countsCacheRef.current[ck] || {})[sku] = nv; }
     localEditsRef.current.add(sku);
-    setCheckedQtys(prev => ({ ...prev, [sku]: String(Math.max(0, n + delta)) }));
+    setCheckedQtys(prev => ({ ...prev, [sku]: nv }));
   };
 
   const scTouchedCount = Object.values(checkedQtys).filter(v => v !== '' && v != null).length;
@@ -1110,8 +1128,9 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
   const saving = saveStatus === "saving";
 
   const handleSave = async (isAuto = false) => {
+    // บันทึกเฉพาะ SKU ที่ "เครื่องนี้นับเอง" — ไม่ re-save ค่าที่ merge มาจากเครื่องอื่น (กัน push ZORT ซ้ำ)
     const entries = Object.entries(checkedQtys)
-      .filter(([, v]) => v !== '' && v != null)
+      .filter(([sku, v]) => v !== '' && v != null && localEditsRef.current.has(sku))
       .map(([sku, qty]) => ({ sku, qty: parseInt(qty)||0 }));
     if (!entries.length) { if (!isAuto) showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return; }
     setSaveStatus("saving");
@@ -1152,7 +1171,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
 
   const handleConfirm = async () => {
     const entries = Object.entries(checkedQtys)
-      .filter(([, v]) => v !== '' && v != null)
+      .filter(([sku, v]) => v !== '' && v != null && localEditsRef.current.has(sku))
       .map(([sku, qty]) => ({ sku, qty: parseInt(qty)||0 }));
     if (!entries.length) { showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return; }
     setConfirming(true);
