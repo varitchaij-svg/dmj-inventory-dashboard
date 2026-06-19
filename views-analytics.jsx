@@ -4745,13 +4745,20 @@ function MtoJobView({ data }) {
   const addMaterial = (product) => {
     if (!product) return;
     setMaterials(prev => {
-      const existing = prev.findIndex(m => m.sku === product.sku && m.warehouse === searchWarehouse);
+      const existing = prev.findIndex(m => m.sku === product.sku);
       if (existing >= 0) {
         const updated = [...prev];
-        updated[existing] = { ...updated[existing], qty: updated[existing].qty + searchQty };
+        const m = updated[existing];
+        const addWH = searchWarehouse === "warehouse" ? searchQty : 0;
+        const addFS = searchWarehouse === "frontstore" ? searchQty : 0;
+        updated[existing] = { ...m, qty: m.qty + searchQty, qtyWH: (Number(m.qtyWH) || 0) + addWH, qtyFS: (Number(m.qtyFS) || 0) + addFS };
         return updated;
       }
-      return [...prev, { sku: product.sku, name: product.name, qty: searchQty, warehouse: searchWarehouse, returnedQty: 0 }];
+      return [...prev, {
+        sku: product.sku, name: product.name, qty: searchQty, returnedQty: 0,
+        qtyWH: searchWarehouse === "warehouse" ? searchQty : 0,
+        qtyFS: searchWarehouse === "frontstore" ? searchQty : 0,
+      }];
     });
     setSearch("");
     setSearchQty(1);
@@ -4775,6 +4782,14 @@ function MtoJobView({ data }) {
       const r = Math.max(0, Math.min(Number(val) || 0, Number(m.qty) || 0));
       return { ...m, returnedQty: r };
     }));
+  };
+
+  const setQtyWH = (idx, val) => {
+    setMaterials(prev => prev.map((m, i) => i !== idx ? m : { ...m, qtyWH: Math.max(0, Number(val) || 0) }));
+  };
+
+  const setQtyFS = (idx, val) => {
+    setMaterials(prev => prev.map((m, i) => i !== idx ? m : { ...m, qtyFS: Math.max(0, Number(val) || 0) }));
   };
 
   // บันทึกวัตถุดิบเป็น draft โดยไม่ปิดงาน — ออกจากงานแล้วกลับมาไม่หาย
@@ -4873,8 +4888,17 @@ function MtoJobView({ data }) {
 
   const openDetail = (job) => {
     setActiveJob(job);
-    // โหลดวัตถุดิบที่บันทึกไว้กลับมาเสมอ — ทั้งงานที่กำลังจัด (draft) และงานที่ปิดแล้ว
-    setMaterials(job.items || []);
+    const items = (job.items || []).map(m => {
+      const qty = Number(m.qty) || 0;
+      const ret = Math.max(0, Math.min(Number(m.returnedQty) || 0, qty));
+      const net = Math.max(0, qty - ret);
+      return {
+        ...m,
+        qtyWH: m.qtyWH != null ? Number(m.qtyWH) : (m.warehouse !== "frontstore" ? net : 0),
+        qtyFS: m.qtyFS != null ? Number(m.qtyFS) : (m.warehouse === "frontstore" ? net : 0),
+      };
+    });
+    setMaterials(items);
     setView("detail");
   };
 
@@ -5105,7 +5129,10 @@ function MtoJobView({ data }) {
               {materials.map((m, idx) => {
                 const ret = Number(m.returnedQty) || 0;
                 const net = Math.max(0, (Number(m.qty) || 0) - ret);
-                // หารูปสินค้าจาก products ตาม SKU เพื่อแสดงเป็นการ์ด
+                const qtyWH = Number(m.qtyWH) || 0;
+                const qtyFS = Number(m.qtyFS) || 0;
+                const splitTotal = qtyWH + qtyFS;
+                const mismatch = isOpen && net > 0 && splitTotal !== net;
                 const prod = products.find(p => (p.sku||"").trim().toUpperCase() === (m.sku||"").trim().toUpperCase());
                 const imgSrc = prod && prod.imageUrl ? prod.imageUrl : "";
                 return (
@@ -5121,7 +5148,6 @@ function MtoJobView({ data }) {
                     <div style={{ fontWeight: 600, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.sku}</div>
                     <div style={{ fontSize: 11, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</div>
                   </div>
-                  <div style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>{m.warehouse === "frontstore" ? "หน้าร้าน" : "คลัง"}</div>
                   {isOpen ? (
                     <>
                       <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, fontSize: 10, color: "var(--muted)" }}>
@@ -5134,8 +5160,18 @@ function MtoJobView({ data }) {
                         <input type="number" min={0} max={m.qty} value={ret} onChange={e => setReturnedQty(idx, e.target.value)}
                           style={{ width: 52, padding: "5px 6px", borderRadius: 6, border: "1.5px solid #f0b8b0", fontFamily: "inherit", fontSize: 13, textAlign: "center", color: "#c0392b" }} />
                       </label>
-                      <div style={{ fontSize: 11, color: "var(--g-700)", fontWeight: 700, whiteSpace: "nowrap", minWidth: 42, textAlign: "center" }}>
-                        ตัด {net}
+                      <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, fontSize: 10, color: "var(--g-700)" }}>
+                        คลัง
+                        <input type="number" min={0} value={qtyWH} onChange={e => setQtyWH(idx, e.target.value)}
+                          style={{ width: 52, padding: "5px 6px", borderRadius: 6, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 13, textAlign: "center" }} />
+                      </label>
+                      <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, fontSize: 10, color: "#1565c0" }}>
+                        ร้าน
+                        <input type="number" min={0} value={qtyFS} onChange={e => setQtyFS(idx, e.target.value)}
+                          style={{ width: 52, padding: "5px 6px", borderRadius: 6, border: "1.5px solid #90caf9", fontFamily: "inherit", fontSize: 13, textAlign: "center", color: "#1565c0" }} />
+                      </label>
+                      <div style={{ fontSize: 11, fontWeight: 700, whiteSpace: "nowrap", minWidth: 42, textAlign: "center", color: mismatch ? "var(--dang)" : "var(--g-700)" }}>
+                        {mismatch ? `⚠ ${splitTotal}≠${net}` : `ตัด ${splitTotal}`}
                       </div>
                       <button onClick={() => removeMaterial(idx)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--dang)", fontSize: 16, padding: "0 4px" }}>✕</button>
                     </>
@@ -5144,9 +5180,16 @@ function MtoJobView({ data }) {
                       <div style={{ fontSize: 12, color: "var(--g-700)", fontWeight: 700, whiteSpace: "nowrap" }}>
                         เบิก {m.qty}{ret > 0 ? ` · คืน ${ret}` : ""}
                       </div>
-                      <div style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: "#e8f5e9", color: "#1b5e20", fontWeight: 700, whiteSpace: "nowrap" }}>
-                        ตัด {net}
-                      </div>
+                      {qtyWH > 0 && (
+                        <div style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: "#e8f5e9", color: "#1b5e20", fontWeight: 700, whiteSpace: "nowrap" }}>
+                          คลัง {qtyWH}
+                        </div>
+                      )}
+                      {qtyFS > 0 && (
+                        <div style={{ fontSize: 11, padding: "2px 8px", borderRadius: 10, background: "#e3f2fd", color: "#1565c0", fontWeight: 700, whiteSpace: "nowrap" }}>
+                          ร้าน {qtyFS}
+                        </div>
+                      )}
                     </>
                   )}
                 </div>

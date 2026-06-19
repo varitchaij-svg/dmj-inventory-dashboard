@@ -3945,23 +3945,27 @@ function closeMtoJob(ss, data, actor) {
     }
   }
 
-  // Deduct stock
+  // Deduct stock (รองรับทั้ง split format: qtyWH/qtyFS และ legacy: warehouse)
   const prodSh = ss.getSheetByName(SHEET_PRODUCTS);
   if (prodSh) {
     const prodData = prodSh.getDataRange().getValues();
     items.forEach(item => {
-      const net = netOf(item);
-      if (net <= 0) return;
       const sku = String(item.sku || "").trim().toUpperCase();
+      const hasNewFmt = item.qtyWH != null || item.qtyFS != null;
+      const net = netOf(item);
+      const deductWH = hasNewFmt ? (Number(item.qtyWH) || 0) : (item.warehouse !== "frontstore" ? net : 0);
+      const deductFS = hasNewFmt ? (Number(item.qtyFS) || 0) : (item.warehouse === "frontstore" ? net : 0);
+      if (deductWH <= 0 && deductFS <= 0) return;
       for (let i = 1; i < prodData.length; i++) {
         if (String(prodData[i][COL_PROD_SKU - 1]).trim().toUpperCase() === sku) {
           const row = i + 1;
-          if (item.warehouse === "frontstore") {
-            const cur = Number(prodSh.getRange(row, COL_PROD_QTYFS).getValue()) || 0;
-            prodSh.getRange(row, COL_PROD_QTYFS).setValue(Math.max(0, cur - net));
-          } else {
+          if (deductWH > 0) {
             const cur = Number(prodSh.getRange(row, COL_PROD_QTYWH).getValue()) || 0;
-            prodSh.getRange(row, COL_PROD_QTYWH).setValue(Math.max(0, cur - net));
+            prodSh.getRange(row, COL_PROD_QTYWH).setValue(Math.max(0, cur - deductWH));
+          }
+          if (deductFS > 0) {
+            const cur = Number(prodSh.getRange(row, COL_PROD_QTYFS).getValue()) || 0;
+            prodSh.getRange(row, COL_PROD_QTYFS).setValue(Math.max(0, cur - deductFS));
           }
           break;
         }
@@ -3981,7 +3985,12 @@ function closeMtoJob(ss, data, actor) {
     }
     items.forEach(item => {
       const ret = Math.max(0, Math.min(Number(item.returnedQty) || 0, Number(item.qty) || 0));
-      itemSh.appendRow([jobId, item.sku || "", item.name || "", Number(item.qty) || 0, item.warehouse || "warehouse", ret, netOf(item), closedAt]);
+      const hasNewFmt = item.qtyWH != null || item.qtyFS != null;
+      const net = netOf(item);
+      const deductWH = hasNewFmt ? (Number(item.qtyWH) || 0) : (item.warehouse !== "frontstore" ? net : 0);
+      const deductFS = hasNewFmt ? (Number(item.qtyFS) || 0) : (item.warehouse === "frontstore" ? net : 0);
+      const whLabel = hasNewFmt ? ("คลัง:" + deductWH + "/ร้าน:" + deductFS) : (item.warehouse || "warehouse");
+      itemSh.appendRow([jobId, item.sku || "", item.name || "", Number(item.qty) || 0, whLabel, ret, deductWH + deductFS, closedAt]);
     });
   }
 
@@ -4044,17 +4053,25 @@ function closeMtoJob(ss, data, actor) {
 }
 
 function decreaseMtoStockInZort_(items) {
-  // Group items by warehouse
+  // Group items by warehouse (รองรับ split format: qtyWH/qtyFS)
   const groups = {};
-  for (const item of items) {
-    const whCode = item.warehouse === "frontstore" ? WH_FRONTSTORE : WH_SAI5;
+  const push_ = (whCode, sku, qty) => {
+    if (!sku || qty <= 0) return;
     if (!groups[whCode]) groups[whCode] = [];
+    groups[whCode].push({ sku, stock: qty });
+  };
+  for (const item of items) {
     const sku = String(item.sku || "").trim();
-    const qty = Number(item.qty) || 0;
-    const ret = Math.max(0, Math.min(Number(item.returnedQty) || 0, qty));
-    const net = qty - ret;
-    // ZORT V4: stocks[].sku, stocks[].stock (ไม่ใช่ list/number)
-    if (sku && net > 0) groups[whCode].push({ sku, stock: net });
+    const hasNewFmt = item.qtyWH != null || item.qtyFS != null;
+    if (hasNewFmt) {
+      push_(WH_SAI5, sku, Number(item.qtyWH) || 0);
+      push_(WH_FRONTSTORE, sku, Number(item.qtyFS) || 0);
+    } else {
+      const qty = Number(item.qty) || 0;
+      const ret = Math.max(0, Math.min(Number(item.returnedQty) || 0, qty));
+      const net = qty - ret;
+      push_(item.warehouse === "frontstore" ? WH_FRONTSTORE : WH_SAI5, sku, net);
+    }
   }
 
   const results = {};
@@ -4139,7 +4156,11 @@ function saveMtoJobItems(ss, data) {
   items.forEach(item => {
     const qty = Number(item.qty) || 0;
     const ret = Math.max(0, Math.min(Number(item.returnedQty) || 0, qty));
-    itemSh.appendRow([jobId, item.sku || "", item.name || "", qty, item.warehouse || "warehouse", ret, qty - ret, ""]);
+    const hasNewFmt = item.qtyWH != null || item.qtyFS != null;
+    const deductWH = hasNewFmt ? (Number(item.qtyWH) || 0) : (item.warehouse !== "frontstore" ? qty - ret : 0);
+    const deductFS = hasNewFmt ? (Number(item.qtyFS) || 0) : (item.warehouse === "frontstore" ? qty - ret : 0);
+    const whLabel = hasNewFmt ? ("คลัง:" + deductWH + "/ร้าน:" + deductFS) : (item.warehouse || "warehouse");
+    itemSh.appendRow([jobId, item.sku || "", item.name || "", qty, whLabel, ret, deductWH + deductFS, ""]);
   });
 
   SpreadsheetApp.flush();
