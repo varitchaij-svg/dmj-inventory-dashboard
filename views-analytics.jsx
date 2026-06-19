@@ -926,6 +926,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
   const [supplierMode, setSupplierMode]     = uS(false);
   const [selSupplier, setSelSupplier]       = uS(null);
   const [suppSearch, setSuppSearch]         = uS('');
+  const [countFilter, setCountFilter]       = uS('all'); // all | pending | matched | mismatched — กรองตอนนับของเยอะ
   // SKU ที่ผู้ใช้เครื่องนี้แก้เอง — ไม่ให้ค่าจากเครื่องอื่น (recentCountedSkus) มาทับ + ใช้ตอน save
   const localEditsRef = React.useRef(new Set());
   // จำจำนวนที่นับไว้ในเครื่องนี้ แยกตาม context (ล็อค/ซัพพลายเออร์) — กดออกแล้วกลับเข้ามายังเห็นเลขเดิม
@@ -940,7 +941,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     localEditsRef.current = new Set(Object.keys(saved));
     setSavedSkus(new Set()); setLastSavedTime(null);
     setLastSavedSnap(JSON.stringify(saved)); // กัน auto-save เด้งทันทีหลัง restore
-    setStockSearch(''); setSaveStatus("idle");
+    setStockSearch(''); setSaveStatus("idle"); setCountFilter('all');
   };
   uE(() => { restoreCtx(ctxKeyOf(null, selLockKey)); }, [selLockKey]); // eslint-disable-line react-hooks/exhaustive-deps
   uE(() => { restoreCtx(ctxKeyOf(selSupplier, null)); }, [selSupplier]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1262,6 +1263,21 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
       });
   }, [selSupplier, products, skuToLock, checkRequest]);
 
+  // รายการที่แสดงจริงหลังกรอง (สถานะนับ + ค้นหา) — ใช้ทั้ง render และเช็คว่าว่างไหม
+  const supplierVisible = uM(() => supplierProducts.filter(p => {
+    if (countFilter !== 'all') {
+      const v = checkedQtys[p.sku];
+      const h = v !== '' && v != null;
+      const m = h && (parseInt(v)||0) === whQty(p);
+      if (countFilter === 'pending'    && h) return false;
+      if (countFilter === 'matched'    && !(h && m)) return false;
+      if (countFilter === 'mismatched' && !(h && !m)) return false;
+    }
+    if (!stockSearch) return true;
+    const sq = stockSearch.trim().toUpperCase();
+    return p.sku.toUpperCase().includes(sq) || (p.name||'').toUpperCase().includes(sq);
+  }), [supplierProducts, countFilter, checkedQtys, stockSearch]);
+
   const supplierSummary = uM(() => {
     let waiting = 0, matched = 0, mismatched = 0;
     supplierProducts.forEach(p => {
@@ -1451,25 +1467,37 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
           {/* ── เลือก supplier แล้ว → แสดงสินค้า ── */}
           {selSupplier && (
             <>
-              {/* Summary chips */}
+              {/* Summary chips — กดเพื่อกรอง (เช็คของเยอะจะได้ไม่ซ้ำ: กด "รอนับ" เห็นเฉพาะที่ยังไม่ได้นับ) */}
               {supplierProducts.length > 0 && (
                 <div style={{display:'flex',gap:8}}>
                   {[
-                    {n:supplierSummary.waiting,    label:'⬜ รอนับ',  bg:'#f1f5f9', c:'var(--muted)'},
-                    {n:supplierSummary.matched,    label:'✅ ตรง',    bg:'#f0fdf4', c:'var(--g-700)'},
-                    {n:supplierSummary.mismatched, label:'⚠️ ไม่ตรง',
+                    {key:'pending',    n:supplierSummary.waiting,    label:'⬜ รอนับ',  bg:'#f1f5f9', c:'var(--muted)'},
+                    {key:'matched',    n:supplierSummary.matched,    label:'✅ ตรง',    bg:'#f0fdf4', c:'var(--g-700)'},
+                    {key:'mismatched', n:supplierSummary.mismatched, label:'⚠️ ไม่ตรง',
                      bg:supplierSummary.mismatched>0?'#fff5f5':'#f1f5f9',
                      c:supplierSummary.mismatched>0?'var(--dang)':'var(--muted)'},
                   ].map(function(item){
+                    var active = countFilter === item.key;
                     return (
-                      <div key={item.label} style={{flex:1,textAlign:'center',padding:'10px 4px',
-                                                    borderRadius:12,background:item.bg}}>
+                      <div key={item.label} onClick={() => setCountFilter(active ? 'all' : item.key)}
+                        style={{flex:1,textAlign:'center',padding:'10px 4px',cursor:'pointer',
+                                borderRadius:12,background:item.bg,
+                                border: active ? '2px solid '+item.c : '2px solid transparent',
+                                boxShadow: active ? '0 2px 8px rgba(0,0,0,.12)' : 'none'}}>
                         <div style={{fontSize:22,fontWeight:800,color:item.c}}>{item.n}</div>
                         <div style={{fontSize:11,color:item.c,fontWeight:600}}>{item.label}</div>
                       </div>
                     );
                   })}
                 </div>
+              )}
+              {countFilter !== 'all' && (
+                <button onClick={() => setCountFilter('all')}
+                  style={{alignSelf:'flex-start',background:'#fff',border:'1.5px solid var(--bdr)',
+                          borderRadius:999,padding:'5px 14px',fontSize:12,fontWeight:600,
+                          cursor:'pointer',fontFamily:'inherit',color:'var(--g-700)'}}>
+                  ✕ แสดงทั้งหมด
+                </button>
               )}
 
               {/* Search */}
@@ -1491,13 +1519,12 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
               {/* Product cards */}
               {supplierProducts.length === 0 ? (
                 <Empty title="ไม่มีสินค้าในคลัง" sub="ซัพพลายเออร์นี้ไม่มีสินค้าในคลังขณะนี้"/>
+              ) : supplierVisible.length === 0 ? (
+                <Empty title={countFilter === 'pending' ? '🎉 นับครบทุกรายการแล้ว' : 'ไม่พบรายการ'}
+                  sub={countFilter === 'pending' ? 'ไม่มีรายการที่ค้างนับ' : 'ลองเปลี่ยนตัวกรองหรือคำค้นหา'}/>
               ) : (
                 <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10,width:"100%",minWidth:0,boxSizing:"border-box"}}>
-                  {supplierProducts.filter(p => {
-                    if (!stockSearch) return true;
-                    const sq = stockSearch.trim().toUpperCase();
-                    return p.sku.toUpperCase().includes(sq) || (p.name||'').toUpperCase().includes(sq);
-                  }).map(p => {
+                  {supplierVisible.map(p => {
                     const lockKey = skuToLock[p.sku];
                     const sys  = whQty(p);
                     const val  = checkedQtys[p.sku];
@@ -1558,6 +1585,20 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                               border:'2px solid rgba(255,255,255,.9)',
                               boxShadow:'0 1px 3px rgba(0,0,0,.3)',
                             }}/>
+                          )}
+                          {/* นับแล้ว → ติ๊กถูกมุมขวาบน ให้เห็นชัดว่าเช็คแล้ว ไม่ต้องนับซ้ำ */}
+                          {has && (
+                            <div style={{
+                              position:'absolute',top:6,right:6,
+                              width:26,height:26,borderRadius:'50%',
+                              background: matched ? 'var(--g-500)' : 'var(--dang)',
+                              color:'#fff',fontSize:15,fontWeight:900,
+                              display:'flex',alignItems:'center',justifyContent:'center',
+                              border:'2px solid rgba(255,255,255,.95)',
+                              boxShadow:'0 1px 4px rgba(0,0,0,.35)',
+                            }}>
+                              {matched ? '✓' : '!'}
+                            </div>
                           )}
                         </div>
 
