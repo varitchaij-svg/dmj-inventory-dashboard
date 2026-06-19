@@ -237,6 +237,7 @@ function FrontStoreView({ data, role, checkRequest }) {
       showToast("success", `โอน ${transferQty} ชิ้น "${transferTarget.name}" แล้ว`, "📦");
       setTransferTarget(null);
       setTransferQty(1);
+      if (typeof window._dmjRefetch === "function") window._dmjRefetch();
     } catch(e) {
       showToast("error", "โอนไม่สำเร็จ: " + (e.message || e), "❌");
     }
@@ -3763,6 +3764,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
       const zNum = batchRes && batchRes.data && batchRes.data.zortNumber;
       showToast("success", `ส่ง ${succeeded.length} รายการแล้ว${zNum ? ` (ZORT ${zNum})` : ""}`, "📦");
     }
+    if (succeeded.length > 0 && typeof window._dmjRefetch === "function") window._dmjRefetch();
   };
 
   if (!orders.length) return (
@@ -4858,6 +4860,7 @@ function MtoJobView({ data }) {
         setMaterials([]);
         setView("detail");
         showToast("success", "ปิดงานและสร้างรายการขาย ZORT เรียบร้อย");
+        if (typeof window._dmjRefetch === "function") window._dmjRefetch();
       } else {
         showToast("error", json.error || "เกิดข้อผิดพลาด");
       }
