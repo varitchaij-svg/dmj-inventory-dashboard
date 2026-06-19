@@ -146,6 +146,19 @@ function reconcileOrderState(order, localEntry, nowMs) {
   return local;
 }
 
+// patchOrderStateCore: pure version ของ patchOrderState (views-analytics.jsx)
+// state = object { [id]: {status, sig, printFlag, ...} }, คืน state ใหม่ (mutate copy)
+// บั๊กเดิม: merge ทับ entry ค้างของ order อื่น (row reuse) แล้วเขียน sig ทับ
+//   → status เก่า ("ส่งแล้ว") ถูก adopt มาทับ order ใหม่ → order หายจากรายการ/สรุป
+function patchOrderStateCore(state, id, updates, sig, nowIso) {
+  const s = { ...(state || {}) };
+  const prev = (sig != null && s[id] && s[id].sig && s[id].sig !== sig) ? {} : (s[id] || {});
+  s[id] = { ...prev, ...updates };
+  if (sig != null) s[id].sig = sig;
+  if ('status' in updates) s[id].markedAt = nowIso || new Date().toISOString();
+  return s;
+}
+
 // ── detectColor: pure logic จาก views.jsx:1434–1507 ─────────────────────────
 const COLOR_MAP = {
   "บานเย็น":     { name:"บานเย็น",    hex:"#a82a6a", en:"Magenta" },
@@ -332,7 +345,7 @@ module.exports = {
   stockQty, whQty, mtoBase, compareSku,
   COL_PROD_SKU, COL_PROD_QTYFS, COL_PROD_QTYWH,
   mapProductRow, shouldRejectConflict,
-  orderSig, reconcileOrderState,
+  orderSig, reconcileOrderState, patchOrderStateCore,
   monthKey_, dayKey_,
   deductStockCore,
   netOf, writeMtoItemsCore,

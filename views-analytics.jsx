@@ -2418,7 +2418,12 @@ function reconcileOrderState(order, localEntry, nowMs) {
 }
 
 function patchOrderState(id, updates, sig) {
-  const s = getOrdersState(); s[id] = { ...(s[id]||{}), ...updates };
+  const s = getOrdersState();
+  // ถ้า entry เดิมมี sig แต่ไม่ตรงกับ order ปัจจุบัน = state ค้างของ order อื่น (row reuse)
+  // → ทิ้งทั้ง entry ก่อน merge มิฉะนั้น status เก่า (เช่น "ส่งแล้ว") จะถูก adopt มาทับ
+  //   order ใหม่เมื่อ sig ถูกเขียนทับให้ตรง → order หายจากรายการ/สรุป
+  const prev = (sig != null && s[id] && s[id].sig && s[id].sig !== sig) ? {} : (s[id] || {});
+  s[id] = { ...prev, ...updates };
   // แนบ sig (content signature) ลงไปเสมอ เพื่อกัน row-reuse เลอะข้าม order
   if (sig != null) s[id].sig = sig;
   // record when status was changed so we can detect ID collisions with new orders

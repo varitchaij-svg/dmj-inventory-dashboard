@@ -104,3 +104,53 @@ describe('reconcileOrderState', () => {
     expect(reconcileOrderState(o, local, NOW)).toEqual({ preparedQty: 3, sig: orderSig(o) });
   });
 });
+
+// ── patchOrderStateCore: กันบั๊ก row-reuse adopt status เก่า ──────────────
+// อาการจริง: order "จัดของแล้ว" (done) พอกดสลับ printFlag แล้วหายจากรายการ+สรุป
+// สาเหตุ: localStorage key (เลขแถว R5) มี state ค้าง {status:"ส่งแล้ว", sig:เก่า}
+//   พอ patch printFlag (ไม่ใช่ status) → merge แล้วเขียน sig ใหม่ทับ
+//   → reconcile เห็น sig ตรง → adopt "ส่งแล้ว" → order หาย
+import { patchOrderStateCore } from './helpers.js';
+
+describe('patchOrderStateCore — row reuse sig guard', () => {
+  it('patch printFlag ทับ entry ค้างของ order อื่น (sig ต่าง) → ทิ้ง status เก่า', () => {
+    const newOrder = { sku: 'OL00005', date: '02/06/26', orderQty: 5, status: 'สำเร็จ' };
+    const newSig = orderSig(newOrder);
+    // state ค้างจาก order เก่าที่เคยอยู่แถวเดียวกัน (R5) — sig คนละตัว
+    const stale = { R5: { status: 'ส่งแล้ว', sig: 'CH19015|010626|3', markedAt: new Date(NOW).toISOString() } };
+    const next = patchOrderStateCore(stale, 'R5', { printFlag: 'print' }, newSig, new Date(NOW).toISOString());
+    // status "ส่งแล้ว" เก่าต้องไม่หลงเหลือ
+    expect(next.R5.status).toBeUndefined();
+    expect(next.R5.printFlag).toBe('print');
+    expect(next.R5.sig).toBe(newSig);
+  });
+
+  it('reconcile หลัง patch → order ไม่ถูก adopt เป็น "ส่งแล้ว" (ยังโชว์ตาม sheet)', () => {
+    const newOrder = { sku: 'OL00005', date: '02/06/26', orderQty: 5, status: 'สำเร็จ' };
+    const newSig = orderSig(newOrder);
+    const stale = { R5: { status: 'ส่งแล้ว', sig: 'CH19015|010626|3', markedAt: new Date(NOW).toISOString() } };
+    const next = patchOrderStateCore(stale, 'R5', { printFlag: 'print' }, newSig, new Date(NOW).toISOString());
+    const applied = reconcileOrderState(newOrder, next.R5, NOW);
+    expect(applied.status).toBeUndefined(); // ไม่ดึง "ส่งแล้ว" มา → order ยังอยู่ในรายการ
+    expect(applied.printFlag).toBe('print');
+  });
+
+  it('patch ทับ entry ของ order เดียวกัน (sig ตรง) → merge ตามปกติ ไม่ทิ้ง', () => {
+    const o = { sku: 'OL00005', date: '02/06/26', orderQty: 5, status: 'สำเร็จ' };
+    const sig = orderSig(o);
+    const cur = { R5: { status: 'สำเร็จ', sig, markedAt: new Date(NOW).toISOString() } };
+    const next = patchOrderStateCore(cur, 'R5', { printFlag: 'print' }, sig, new Date(NOW).toISOString());
+    expect(next.R5.status).toBe('สำเร็จ'); // คง status เดิมของ order นี้
+    expect(next.R5.printFlag).toBe('print');
+  });
+
+  it('entry ไม่มี sig (ก่อน migration) → merge ตามปกติ (ไม่ทิ้ง)', () => {
+    const o = { sku: 'OL00005', date: '02/06/26', orderQty: 5, status: 'รอ' };
+    const sig = orderSig(o);
+    const cur = { R5: { preparedQty: 2 } };
+    const next = patchOrderStateCore(cur, 'R5', { printFlag: 'print' }, sig, new Date(NOW).toISOString());
+    expect(next.R5.preparedQty).toBe(2);
+    expect(next.R5.printFlag).toBe('print');
+    expect(next.R5.sig).toBe(sig);
+  });
+});
