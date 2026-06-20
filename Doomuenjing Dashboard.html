@@ -927,7 +927,9 @@
 
   var BC = 'dmj-babel-v2'; // bump เมื่อ format เปลี่ยน
 
-  async function loadJsx(src) {
+  /* fetch + cache check + compile → คืน code string (ไม่ inject)
+     แยกออกมาเพื่อให้ views-main + views-analytics compile พร้อมกันได้ */
+  async function compileJsx(src) {
     var resp = await fetch(src);
     /* ETag หรือ Last-Modified จาก Cloudflare — อ่านได้โดยไม่ต้องอ่าน body */
     var etag = resp.headers.get('etag') || resp.headers.get('last-modified') || '';
@@ -938,8 +940,7 @@
         var bc = await caches.open(BC);
         var hit = await bc.match(src + '.compiled');
         if (hit && hit.headers.get('x-etag') === etag) {
-          injectCode(await hit.text());
-          return; /* cache hit — ไม่ต้องอ่าน body หรือ compile เลย */
+          return await hit.text(); /* cache hit — ไม่ต้องอ่าน body หรือ compile เลย */
         }
       } catch (_) {}
     }
@@ -962,14 +963,24 @@
       } catch (_) {}
     }
 
-    injectCode(compiled);
+    return compiled;
   }
 
-  /* โหลดตามลำดับ: ui → views-main → views-analytics → app */
+  function loadJsx(src) {
+    return compileJsx(src).then(function (code) { injectCode(code); });
+  }
+
+  /* โหลด ui ก่อน จากนั้น compile views-main + views-analytics พร้อมกัน
+     แล้ว inject ตามลำดับ (views-main ก่อนเสมอ เพราะ views-analytics ใช้ component จาก views-main) */
   window._appBoot = loadJsx('ui.jsx')
-    .then(function () { return loadJsx('views-main.jsx'); })
-    .then(function () { return loadJsx('views-analytics.jsx'); })
-    .then(function () { return loadJsx('app.jsx'); })
+    .then(function () {
+      return Promise.all([compileJsx('views-main.jsx'), compileJsx('views-analytics.jsx')]);
+    })
+    .then(function (codes) {
+      injectCode(codes[0]); /* views-main ก่อน */
+      injectCode(codes[1]); /* views-analytics หลัง */
+      return loadJsx('app.jsx');
+    })
     .catch(function (err) { console.error('[boot]', err); });
 }());
   </script>

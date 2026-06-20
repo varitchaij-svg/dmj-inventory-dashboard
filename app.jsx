@@ -440,7 +440,7 @@ function App() {
 
   // ── Offline / online detection ──
   usE(() => {
-    const goOnline  = () => setIsOnline(true);
+    const goOnline  = () => { setIsOnline(true); fetchFromSheet(); }; // refetch ทันทีเมื่อกลับมา online
     const goOffline = () => setIsOnline(false);
     window.addEventListener("online",  goOnline);
     window.addEventListener("offline", goOffline);
@@ -448,7 +448,7 @@ function App() {
       window.removeEventListener("online",  goOnline);
       window.removeEventListener("offline", goOffline);
     };
-  }, []);
+  }, [fetchFromSheet]);
 
   // ── PWA install prompt ──
   usE(() => {
