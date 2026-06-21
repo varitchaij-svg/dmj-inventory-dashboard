@@ -816,12 +816,30 @@
     flex-shrink: 0;
     line-height: 1.2;
   }
+  /* SKU group boundary — first cell of a new SKU group */
+  .label-cell.sku-break {
+    border-top: 0.8pt solid #333;
+    position: relative;
+  }
+  .label-cell.sku-break::before {
+    content: "✂";
+    position: absolute;
+    top: 0.5pt;
+    left: 0.5mm;
+    font-size: 5.5pt;
+    color: #444;
+    line-height: 1;
+    pointer-events: none;
+  }
 
   @page { size: A4 portrait; margin: 10mm; }
   @media print {
     .no-print, .topnav, nav { display: none !important; }
     body { margin: 0 !important; padding: 0 !important; background: #fff !important; }
     .main { padding: 0 !important; margin: 0 !important; }
+    .label-cell.sku-break {
+      border-top: 0.5pt solid #000 !important;
+    }
     .label-page {
       margin: 0 !important;
       padding: 0 !important;

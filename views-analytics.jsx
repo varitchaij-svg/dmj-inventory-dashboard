@@ -4208,12 +4208,17 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
   const printVaseLabels = uC(() => {
     if (!labelList.length) return;
 
+    let prevSkuSep = null;
     const labelsHTML = labelList.map(p => {
+      const cutSep = prevSkuSep !== null && p.sku !== prevSkuSep
+        ? `<div class="cut-sep">✂ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─</div>`
+        : "";
+      prevSkuSep = p.sku;
       const qrImg = qrMap[p.sku]
         ? `<img src="${qrMap[p.sku]}" style="width:100%;height:100%;display:block;"/>`
         : `<div style="width:100%;height:100%;background:#f0f0f0;display:flex;align-items:center;justify-content:center;font-size:5px;color:#aaa;">QR</div>`;
       const priceStr = p.price != null && p.price > 0 ? `${escHtml(String(p.price))} ฿` : "";
-      return `
+      return cutSep + `
       <div class="lbl">
         <div class="ltop">
           <span class="lname">${escHtml(p.name)}</span>
@@ -4255,11 +4260,19 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
   .lqr { width:78px; height:78px; }
   .llogo { position:absolute; bottom:0; right:0; width:36px; height:36px; object-fit:contain; opacity:.65; }
   .lsku { font-size:11px; font-family:"Kanit",sans-serif; font-weight:500; color:#333; text-align:center; letter-spacing:0.5px; flex-shrink:0; }
+  /* SKU-group separator (screen only in popup) */
+  .cut-sep {
+    text-align:center; font-size:12px; color:#aaa;
+    letter-spacing:3px; padding:5px 0;
+    border-top:1px dashed #ddd; border-bottom:1px dashed #ddd;
+    width:300px; margin:2px auto;
+  }
   /* Print: 50×25mm */
   @media print {
     @page { size: 50mm 25mm; margin: 0; }
     body { background:#fff; padding:0; }
     .print-btn { display:none; }
+    .cut-sep { display:none; }
     .lbl {
       width:50mm; height:25mm; border-radius:0;
       padding:1.5mm 2mm; box-shadow:none; margin:0 0 3mm;
@@ -4456,8 +4469,11 @@ ${labelsHTML}
         pages.map((page, pi) => (
           <div key={pi} className="label-page">
             <div className="label-grid">
-              {page.map((p, i) => (
-                <div key={i} className="label-cell">
+              {page.map((p, i) => {
+                const globalIdx = pi * 70 + i;
+                const isSkuBreak = globalIdx > 0 && p.sku !== labelList[globalIdx - 1].sku;
+                return (
+                <div key={i} className={`label-cell${isSkuBreak ? " sku-break" : ""}`}>
                   <div className="label-top-row">
                     <span className="label-name">{p.name}</span>
                     <span className="label-price">{p.price != null && p.price > 0 ? `${p.price} ฿` : ""}</span>
@@ -4475,15 +4491,24 @@ ${labelsHTML}
                   </div>
                   <div className="label-sku-text">{p.sku}</div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         ))
       ) : (
         /* Sticker preview — actual 50×25mm proportions (2:1), scaled up 3× for readability */
         <div className="no-print" style={{display:"flex",flexDirection:"column",gap:9,padding:"4px 0"}}>
-          {labelList.map((p, i) => (
-            <div key={i} style={{
+          {labelList.map((p, i) => {
+            const isStickerBreak = i > 0 && p.sku !== labelList[i - 1].sku;
+            return (
+            <React.Fragment key={i}>
+              {isStickerBreak && (
+                <div style={{textAlign:"center",color:"#bbb",fontSize:11,letterSpacing:4,padding:"5px 0",borderTop:"1px dashed #ddd",borderBottom:"1px dashed #ddd",width:300,alignSelf:"center"}}>
+                  ✂ ─ ─ ─
+                </div>
+              )}
+            <div style={{
               width:300, height:150, boxSizing:"border-box",
               background:"#fff", boxShadow:"0 1px 4px rgba(0,0,0,.12)",
               display:"flex", flexDirection:"column",
@@ -4512,7 +4537,9 @@ ${labelsHTML}
               {/* Row 3: SKU */}
               <div style={{fontSize:11,fontFamily:"Kanit,sans-serif",fontWeight:500,color:"#333",textAlign:"center",letterSpacing:.5,flexShrink:0}}>{p.sku}</div>
             </div>
-          ))}
+            </React.Fragment>
+            );
+          })}
         </div>
       )}
     </div>
