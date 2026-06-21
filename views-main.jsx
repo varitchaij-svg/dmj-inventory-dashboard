@@ -2070,8 +2070,8 @@ function CategoryView({ data, role }) {
       f = applyCommon(f);
       return [...f].sort(finalSort);
     }
-    if (gq) {
-      // Global: search all categories
+    if (gq && !active) {
+      // Global: search across all categories (no category selected)
       let f = products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า");
       f = applyCommon(f);
       if (newStockFilter) f = f.filter(p => isNew45(p.lastStockInDate));
@@ -2307,7 +2307,7 @@ function CategoryView({ data, role }) {
             display:"flex", alignItems:"center", gap:6,
           }}>
             <span style={{width:8,height:8,borderRadius:"50%",background:"var(--g-500)",display:"inline-block"}}/>
-            พบ {filtered.length} รายการ จากทุกหมวดหมู่
+            พบ {filtered.length} รายการ {active ? `ในหมวด: ${active}` : "จากทุกหมวดหมู่"}
             {filtered.length === 0 && <span style={{color:"var(--muted)",fontWeight:400}}>— ลองค้นหาด้วยคำอื่น</span>}
           </div>
         )}

@@ -113,4 +113,87 @@ describe('enrichDataCore — deadMonths', () => {
     enrichDataCore(d);
     expect(d.products[0].deadMonths).toBeGreaterThan(0);
   });
+
+  it('qtyWH>0 + lastTransferDate เสีย (parse เป็น NaN) → deadMonths=null', () => {
+    const d = { products: [{ qtyWH: 5, lastTransferDate: 'NOT-A-DATE' }] };
+    enrichDataCore(d);
+    expect(d.products[0].deadMonths).toBeNull();
+  });
+
+  it('qtyWH>0 + lastTransferDate DD/MM/YYYY (legacy format) → deadMonths > 0', () => {
+    const d = { products: [{ qtyWH: 5, lastTransferDate: '01/01/2024' }] };
+    enrichDataCore(d);
+    expect(d.products[0].deadMonths).toBeGreaterThan(0);
+  });
+
+  it('มีทั้ง lastTransferDate และ lastStockInDate → ใช้ lastTransferDate (ไม่ใช้ fallback)', () => {
+    // lastTransferDate เร็วกว่า → deadMonths น้อยกว่า lastStockInDate เก่า
+    const d = { products: [{ qtyWH: 5, lastTransferDate: '2025-01-01', lastStockInDate: '2020-01-01' }] };
+    enrichDataCore(d);
+    const dOld = { products: [{ qtyWH: 5, lastStockInDate: '2020-01-01' }] };
+    enrichDataCore(dOld);
+    expect(d.products[0].deadMonths).toBeLessThan(dOld.products[0].deadMonths);
+  });
+});
+
+describe('enrichDataCore — หลาย products', () => {
+  it('products หลายตัวในคราวเดียว → ทุกตัวถูก enrich (ไม่มีตัวที่ข้ามไป)', () => {
+    const d = {
+      products: [
+        { tag: 'S001', qtyWH: 0 },
+        { tag: 'ขายหน้าร้าน', qtyWH: 0 },
+        { qtyWH: 0 },
+      ],
+    };
+    enrichDataCore(d);
+    expect(d.products[0].supplierTags).toEqual(['S001']);
+    expect(d.products[1].statusTags).toEqual(['ขายหน้าร้าน']);
+    expect(d.products[2].supplierTags).toEqual([]);
+  });
+
+  it('products ต่างกันไม่ข้ามค่ากัน (isolated)', () => {
+    const d = {
+      products: [
+        { tag: 'VENDOR_A', category: 'แจกัน', qtyWH: 5, lastTransferDate: '2024-01-01' },
+        { tag: 'ขายหน้าร้าน', category: 'ดอกไม้', qtyWH: 0 },
+      ],
+    };
+    enrichDataCore(d);
+    expect(d.products[0].vendor).toBe('VENDOR_A');
+    expect(d.products[0].cat).toBe('แจกัน');
+    expect(d.products[0].deadMonths).toBeGreaterThan(0);
+    expect(d.products[1].vendor).toBeUndefined();
+    expect(d.products[1].cat).toBe('ดอกไม้');
+    expect(d.products[1].deadMonths).toBeNull();
+  });
+});
+
+describe('enrichDataCore — tag edge cases', () => {
+  it('tag มี whitespace รอบ comma → trim แต่ละ tag ได้ถูกต้อง', () => {
+    const d = { products: [{ tag: ' S001 , ขายหน้าร้าน , S002 ', qtyWH: 0 }] };
+    enrichDataCore(d);
+    expect(d.products[0].supplierTags).toEqual(['S001', 'S002']);
+    expect(d.products[0].statusTags).toEqual(['ขายหน้าร้าน']);
+  });
+
+  it('tag มี entry ว่าง (comma ซ้ำ) → ไม่นับ empty string', () => {
+    const d = { products: [{ tag: 'S001,,TH_STATUS', qtyWH: 0 }] };
+    enrichDataCore(d);
+    // "TH_STATUS" ไม่มีภาษาไทย → supplierTags
+    expect(d.products[0].supplierTags).toEqual(['S001', 'TH_STATUS']);
+    expect(d.products[0].statusTags).toEqual([]);
+  });
+
+  it('tag="" → supplierTags=[] และ statusTags=[]', () => {
+    const d = { products: [{ tag: '', qtyWH: 0 }] };
+    enrichDataCore(d);
+    expect(d.products[0].supplierTags).toEqual([]);
+    expect(d.products[0].statusTags).toEqual([]);
+  });
+
+  it('supplier หลายตัว → vendor ใช้ตัวแรก', () => {
+    const d = { products: [{ tag: 'FIRST,SECOND,THIRD', qtyWH: 0 }] };
+    enrichDataCore(d);
+    expect(d.products[0].vendor).toBe('FIRST');
+  });
 });

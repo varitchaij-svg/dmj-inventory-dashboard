@@ -340,6 +340,78 @@ function writeMtoItemsCore(rows, jobId, items, closedAt) {
   return kept;
 }
 
+// ── transferBatchCore: pure batch transfer logic (จาก transferStockBatch, appsscript_complete.gs:736)
+// แยก Sheet I/O, LockService, CacheService, ZORT, Audit log ออก — ทดสอบแค่ตรรกะ
+// data: 2D array (row 0 = header, row 1+ = data) เหมือน sheet.getDataRange().getValues()
+// list: [{sku, qty, orderId, name}]
+// alreadyProcessedIds: Set หรือ array ของ orderId ที่ส่งไปแล้ว (idempotency)
+// คืน: { results, transferred, shortfalls, newIdempotency, data (mutated copy) }
+//       หรือ { error } ถ้า list ว่าง
+function transferBatchCore(data, list, alreadyProcessedIds) {
+  if (!Array.isArray(list) || !list.length) return { error: "list ว่างเปล่า" };
+  const idempotent = new Set(alreadyProcessedIds || []);
+  const transferred = [];
+  const results = [];
+  const shortfalls = [];
+  const newIdempotency = [];
+  const dataCopy = data.map(r => [...r]);
+  for (const item of list) {
+    const sku      = String(item.sku || "").trim().toUpperCase();
+    const qty      = Number(item.qty) || 0;
+    const orderId  = String(item.orderId || "");
+    if (!sku || qty <= 0) { results.push({ sku, orderId, skipped: true }); continue; }
+    if (orderId && idempotent.has(orderId)) {
+      results.push({ sku, orderId, duplicate: true });
+      continue;
+    }
+    let found = false;
+    for (let i = 1; i < dataCopy.length; i++) {
+      if (String(dataCopy[i][COL_PROD_SKU - 1]).trim().toUpperCase() === sku) {
+        const whQty  = Number(dataCopy[i][COL_PROD_QTYWH - 1]) || 0;
+        const fsQty  = Number(dataCopy[i][COL_PROD_QTYFS - 1]) || 0;
+        const actual = Math.min(qty, whQty);
+        const name   = item.name || String(dataCopy[i][2] || "").trim();
+        const newWH  = whQty - actual;
+        const newFS  = fsQty + actual;
+        dataCopy[i][COL_PROD_QTYWH - 1] = newWH;
+        dataCopy[i][COL_PROD_QTYFS - 1] = newFS;
+        if (actual > 0) {
+          transferred.push({ sku, name, qty: actual });
+          if (orderId) newIdempotency.push(orderId);
+        }
+        if (actual < qty) shortfalls.push({ sku, name, requested: qty, transferred: actual });
+        results.push({ sku, orderId, requested: qty, transferred: actual, newWH, newFS });
+        found = true;
+        break;
+      }
+    }
+    if (!found) results.push({ sku, orderId, notFound: true });
+  }
+  return { results, transferred, shortfalls, newIdempotency, data: dataCopy };
+}
+
+// ── cleanupOrdersStateCore: pure logic จาก cleanupOrdersState (views-analytics.jsx:2436)
+// ลบ entry ที่ sig ไม่ตรง validSigs ใด และ id ก็ไม่ตรง validIds ใด
+// state: {[id]: {sig, ...}}, validIds: Set/array, validSigs: Set/array
+// คืน state ใหม่ (ไม่แตะ localStorage)
+function cleanupOrdersStateCore(state, validIds, validSigs) {
+  const s = { ...(state || {}) };
+  const ids  = new Set(validIds  || []);
+  const sigs = new Set(validSigs || []);
+  Object.keys(s).forEach(id => {
+    const e = s[id] || {};
+    if (e.sig && !sigs.has(e.sig) && !ids.has(id)) delete s[id];
+  });
+  return s;
+}
+
+// ── stableOrderId: สร้าง key สำหรับ order (จาก views-analytics.jsx:2836)
+function stableOrderId(o, i) {
+  if (o.id) return String(o.id);
+  const parts = [o.sku || '', String(o.date || '').replace(/\D/g, ''), String(o.orderQty || 0)];
+  return parts.join('_') || String(i);
+}
+
 module.exports = {
   monthsSince, fmtN, fmtB, fmtPct, monthLabel,
   stockQty, whQty, mtoBase, compareSku,
@@ -352,4 +424,6 @@ module.exports = {
   enrichDataCore,
   COLOR_MAP, COLOR_KEYS, detectColor,
   parseQty_, parseNum_, parseLocation_,
+  transferBatchCore,
+  cleanupOrdersStateCore, stableOrderId,
 };
