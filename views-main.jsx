@@ -2298,7 +2298,7 @@ function CategoryView({ data, role }) {
               }}>✕</button>
           )}
         </div>
-        <ScanButton size={44} onScan={sku => { setGlobalSearch(sku); setReorderFilter(false); }}
+        <ScanButton size={44} onScan={sku => { setGlobalSearch(sku); setReorderFilter(false); setColorFilter(null); setSupplierFilter(null); setDeadFilter(null); setNewStockFilter(false); }}
           style={{borderRadius:12,border:"1.5px solid var(--bdr)",background:"#fafcf7"}}/>
         </div>
         {isGlobalSearch && (
