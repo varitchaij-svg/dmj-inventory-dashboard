@@ -52,23 +52,19 @@ self.addEventListener("fetch", (e) => {
      url.pathname === "/");
 
   if (isAppFile) {
-    e.respondWith((async () => {
-      const cache = await caches.open(CACHE_NAME);
-      const cached = await cache.match(e.request);
-
-      // fetch ใน background เสมอ — อัปเดต cache สำหรับการโหลดครั้งถัดไป
-      const networkFetch = fetch(e.request).then((res) => {
-        if (res.ok) cache.put(e.request, res.clone());
-        return res;
-      }).catch(() => null);
-
-      if (cached) {
-        e.waitUntil(networkFetch); // keep SW alive ให้ background fetch เสร็จ
-        return cached;             // ตอบทันที — ไม่รอ network
-      }
-      // ครั้งแรก (ยังไม่มี cache) — รอ network ตามปกติ
-      return networkFetch;
-    })());
+    // stale-while-revalidate — iOS-safe: e.waitUntil + e.respondWith ต้องเรียก synchronously
+    const cacheP = caches.open(CACHE_NAME);
+    const networkFetch = fetch(e.request).then((res) => {
+      if (res.ok) cacheP.then((c) => c.put(e.request, res.clone()));
+      return res;
+    });
+    e.waitUntil(networkFetch.catch(() => {})); // keep SW alive, ไม่ให้ error propagate
+    e.respondWith(
+      cacheP
+        .then((cache) => cache.match(e.request))
+        .then((cached) => cached || networkFetch)
+        .catch(() => caches.match(e.request))  // offline fallback
+    );
     return;
   }
 
