@@ -4190,10 +4190,10 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
     return flat;
   }, [items, productMap]);
 
-  // 70 labels per A4 page (5 cols × 14 rows)
+  const LABELS_PER_PAGE = 70; // 5 cols × 14 rows
   const pages = uM(() => {
     const ps = [];
-    for (let i = 0; i < labelList.length; i += 70) ps.push(labelList.slice(i, i + 70));
+    for (let i = 0; i < labelList.length; i += LABELS_PER_PAGE) ps.push(labelList.slice(i, i + LABELS_PER_PAGE));
     return ps;
   }, [labelList]);
 
@@ -4470,7 +4470,7 @@ ${labelsHTML}
           <div key={pi} className="label-page">
             <div className="label-grid">
               {page.map((p, i) => {
-                const globalIdx = pi * 70 + i;
+                const globalIdx = pi * LABELS_PER_PAGE + i;
                 const isSkuBreak = globalIdx > 0 && p.sku !== labelList[globalIdx - 1].sku;
                 return (
                 <div key={i} className={`label-cell${isSkuBreak ? " sku-break" : ""}`}>

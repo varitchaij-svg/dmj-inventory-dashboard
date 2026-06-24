@@ -2279,7 +2279,7 @@ function CategoryView({ data, role }) {
           </span>
           <input
             value={globalSearch}
-            onChange={e => { setGlobalSearch(e.target.value); if (e.target.value) setReorderFilter(false); }}
+            onChange={e => { setGlobalSearch(e.target.value); if (e.target.value) { setReorderFilter(false); setColorFilter(null); setSupplierFilter(null); setDeadFilter(null); setNewStockFilter(false); } }}
             placeholder="ค้นหาสินค้าทั้งหมด (SKU / ชื่อ)..."
             style={{
               width:"100%", padding:"11px 40px 11px 38px",

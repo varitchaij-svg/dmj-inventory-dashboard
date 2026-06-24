@@ -334,6 +334,7 @@ function App() {
   const [activeCheckRequest, setActiveCheckRequest] = usS(null); // check request ที่ fs/wh กำลังทำ
   const [navToast, showNavToast, hideNavToast] = useToast(); // toast สำหรับ nav-level errors
   const tabHistoryRef = React.useRef([]); // track tab navigation for Android back
+  const fetchingRef = React.useRef(false); // guard against concurrent fetchFromSheet calls
 
   const sheetUrl = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : "data.json";
   const sheetViewUrl = "https://docs.google.com/spreadsheets/d/11yL4u-XLUTCBObMppAj12nnmG0YlDZWsDn2XPCneoHQ/edit";
@@ -341,6 +342,8 @@ function App() {
   // Full payload fetch (หนัก — ใช้ตอนโหลดครั้งแรก/กด Sync)
   // retryLeft: จำนวนครั้งที่เหลือ (3→2→1→0) กัน GAS cold start หลายชั้น
   const fetchFromSheet = usC((retryLeft) => {
+    if (fetchingRef.current) return;
+    fetchingRef.current = true;
     retryLeft = (typeof retryLeft === 'number' && retryLeft >= 0) ? retryLeft : 3;
     setSyncing(true);
     setError(null);
@@ -377,7 +380,7 @@ function App() {
         else setError(e.message);
         setSyncing(false);
       })
-      .finally(() => { clearTimeout(timeout); if (!controller.signal.aborted) setSyncing(false); });
+      .finally(() => { fetchingRef.current = false; clearTimeout(timeout); if (!controller.signal.aborted) setSyncing(false); });
   }, [sheetUrl]);
 
   // Lightweight fetch: ดึงเฉพาะรายการสั่งของ (เบา/เร็ว) — ใช้ polling หน้า orders จะได้ไม่โหลดทั้งก้อน
