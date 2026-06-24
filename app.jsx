@@ -320,6 +320,7 @@ function App() {
   const [source, setSource] = usS(localStorage.getItem(LS_SRC_KEY) || "sheet");
   const [syncing, setSyncing] = usS(false);
   const [zortSyncing, setZortSyncing] = usS(false);
+  const [retryMsg, setRetryMsg] = usS("");
   const [lastSync, setLastSync] = usS(localStorage.getItem("dmj_last_sync") || null);
   const [labelInitItems, setLabelInitItems] = usS(null); // for auto-populate from order summary
   const [isOnline, setIsOnline] = usS(() => navigator.onLine);
@@ -348,7 +349,7 @@ function App() {
     setSyncing(true);
     setError(null);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 45000); // 45s timeout
+    const timeout = setTimeout(() => controller.abort(), 20000); // 20s — GAS cold start < 15s
     const bustUrl = sheetUrl + (sheetUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
     fetch(bustUrl, { signal: controller.signal, cache: 'no-store' })
       .then(r => r.json())
@@ -360,6 +361,7 @@ function App() {
           console.warn("enrichData failed during fetchFromSheet:", e);
           enriched = d;
         }
+        setRetryMsg("");
         setData(enriched);
         saveToStorage(enriched, "sheet");
         setSource("sheet");
@@ -371,11 +373,13 @@ function App() {
       .catch(e => {
         clearTimeout(timeout);
         if (retryLeft > 0) {
-          // Cold-start: รอสั้น ๆ แล้วลองใหม่ (GAS อุ่นเครื่องแล้วจะเร็วกว่า)
           const delay = retryLeft === 3 ? 800 : retryLeft === 2 ? 2000 : 4000;
+          const attempt = 4 - retryLeft; // 1, 2, 3
+          setRetryMsg(`เชื่อมต่อช้า กำลังลองใหม่ครั้งที่ ${attempt}…`);
           setTimeout(() => fetchFromSheet(retryLeft - 1), delay);
           return;
         }
+        setRetryMsg("");
         if (e.name === "AbortError") setError("เซิร์ฟเวอร์ตอบช้า — กรุณาลองใหม่อีกครั้ง");
         else setError(e.message);
         setSyncing(false);
@@ -594,6 +598,7 @@ function App() {
           <>
             <div className="spin"></div>
             <div style={{fontSize:13,color:"var(--muted)"}}>กำลังโหลดข้อมูล Dashboard…</div>
+            {retryMsg && <div style={{fontSize:12,color:"var(--muted)",marginTop:6}}>{retryMsg}</div>}
           </>
         )}
       </div>
