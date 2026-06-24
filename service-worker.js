@@ -1,12 +1,10 @@
-const CACHE_NAME = "dmj-v5";
+const CACHE_NAME = "dmj-v6";
 
-// ไฟล์ที่ cache เพื่อ offline (รูปและ manifest เท่านั้น)
 const PRECACHE_ASSETS = [
   "/manifest.json",
   "/logo.png",
 ];
 
-// Install — pre-cache รูปและ manifest เท่านั้น
 self.addEventListener("install", (e) => {
   e.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_ASSETS))
@@ -14,7 +12,6 @@ self.addEventListener("install", (e) => {
   self.skipWaiting();
 });
 
-// Activate — ลบ cache เก่าทุก version
 self.addEventListener("activate", (e) => {
   e.waitUntil(
     caches.keys().then((keys) =>
@@ -27,7 +24,9 @@ self.addEventListener("activate", (e) => {
 // Fetch strategy:
 //
 //  ① Google Sheet / API          → network only (live data เสมอ)
-//  ② .jsx / .js / .html          → network first, fallback cache (ได้ code ใหม่ทันที reload เดียว)
+//  ② .jsx / .js / .html          → stale-while-revalidate
+//                                   ครั้งแรก: รอ network / ครั้งถัดไป: cache ทันที + fetch ใน background
+//                                   code อัปเดตมีผลในการโหลดครั้งถัดไป (ไม่ต้องรีโหลด 2 ครั้ง)
 //  ③ CDN libs (React, Recharts)  → cache first, fallback network (ไฟล์ใหญ่ไม่เปลี่ยน)
 //  ④ รูป / font / manifest       → cache first, fallback network
 
@@ -41,12 +40,10 @@ self.addEventListener("fetch", (e) => {
     url.pathname.includes("data.json") ||
     url.pathname.includes("data-bundle.js")
   ) {
-    return; // browser handles natively
+    return;
   }
 
-  // ② ไฟล์ app เราเอง (.jsx .js .html) — network first
-  //    โหลดจากเน็ตก่อนเสมอ → ได้ version ล่าสุดทุกครั้ง, reload เดียวพอ
-  //    ถ้า offline → fallback cache
+  // ② ไฟล์ app เราเอง (.jsx .js .html) — stale-while-revalidate
   const isAppFile =
     url.hostname === self.location.hostname &&
     (url.pathname.endsWith(".jsx") ||
@@ -55,17 +52,23 @@ self.addEventListener("fetch", (e) => {
      url.pathname === "/");
 
   if (isAppFile) {
-    e.respondWith(
-      fetch(e.request)
-        .then((res) => {
-          if (res.ok) {
-            const clone = res.clone();
-            caches.open(CACHE_NAME).then((c) => c.put(e.request, clone));
-          }
-          return res;
-        })
-        .catch(() => caches.match(e.request))
-    );
+    e.respondWith((async () => {
+      const cache = await caches.open(CACHE_NAME);
+      const cached = await cache.match(e.request);
+
+      // fetch ใน background เสมอ — อัปเดต cache สำหรับการโหลดครั้งถัดไป
+      const networkFetch = fetch(e.request).then((res) => {
+        if (res.ok) cache.put(e.request, res.clone());
+        return res;
+      }).catch(() => null);
+
+      if (cached) {
+        e.waitUntil(networkFetch); // keep SW alive ให้ background fetch เสร็จ
+        return cached;             // ตอบทันที — ไม่รอ network
+      }
+      // ครั้งแรก (ยังไม่มี cache) — รอ network ตามปกติ
+      return networkFetch;
+    })());
     return;
   }
 
