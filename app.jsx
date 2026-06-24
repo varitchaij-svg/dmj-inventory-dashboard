@@ -594,7 +594,12 @@ function App() {
         {error ? (
           <>
             <div style={{fontSize:32,marginBottom:8}}>⚠️</div>
-            <div style={{fontSize:14,color:"#c62828",marginBottom:16,textAlign:"center",padding:"0 24px"}}>{error}</div>
+            <div style={{fontSize:14,color:"#c62828",marginBottom:12,textAlign:"center",padding:"0 24px"}}>{error}</div>
+            {error.includes("timeout") && (
+              <div style={{fontSize:12,color:"var(--muted)",marginBottom:16,textAlign:"center",padding:"0 28px",lineHeight:1.6}}>
+                ลอง: ปิด VPN · ปิด Content Blocker ใน Safari · ปิด iCloud Private Relay · หรือเปลี่ยนมาใช้ 4G/5G
+              </div>
+            )}
             <button className="btn" onClick={()=>fetchFromSheet()} style={{minHeight:44,padding:"0 24px"}}>🔄 ลองใหม่</button>
           </>
         ) : (
