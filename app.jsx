@@ -349,7 +349,10 @@ function App() {
     setSyncing(true);
     setError(null);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 20000); // 20s — GAS cold start < 15s
+    // attempt แรก (retryLeft=3): 35s รอ GAS cold start (script ใหญ่ cold start ได้ถึง 25-30s)
+    // retry ถัดไป: 20s (GAS warm แล้ว ควรตอบ < 5s)
+    const timeoutMs = retryLeft === 3 ? 35000 : 20000;
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     const bustUrl = sheetUrl + (sheetUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
     fetch(bustUrl, { signal: controller.signal, cache: 'no-store' })
       .then(r => r.json())
