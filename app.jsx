@@ -354,7 +354,7 @@ function App() {
     const timeoutMs = retryLeft === 3 ? 35000 : 20000;
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     const bustUrl = sheetUrl + (sheetUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
-    fetch(bustUrl, { signal: controller.signal, cache: 'no-store' })
+    fetch(bustUrl, { signal: controller.signal })
       .then(r => r.json())
       .then(d => {
         if (d && d.lastModified) window._dataLoadedAt = d.lastModified;
@@ -383,8 +383,8 @@ function App() {
           return;
         }
         setRetryMsg("");
-        if (e.name === "AbortError") setError("เซิร์ฟเวอร์ตอบช้า — กรุณาลองใหม่อีกครั้ง");
-        else setError(e.message);
+        if (e.name === "AbortError") setError("เซิร์ฟเวอร์ตอบช้า — กรุณาลองใหม่อีกครั้ง [timeout]");
+        else setError(`${e.name}: ${e.message}`);
         setSyncing(false);
       })
       .finally(() => { fetchingRef.current = false; clearTimeout(timeout); if (!controller.signal.aborted) setSyncing(false); });
