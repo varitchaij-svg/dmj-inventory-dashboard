@@ -353,7 +353,7 @@ function App() {
     // retry ถัดไป: 20s (GAS warm แล้ว ควรตอบ < 5s)
     const timeoutMs = retryLeft === 3 ? 35000 : 20000;
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
-    const bustUrl = sheetUrl + (sheetUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
+    const bustUrl = sheetUrl + (sheetUrl.includes('?') ? '&' : '?') + '_t=' + Date.now() + '&fresh=1';
     fetch(bustUrl, { signal: controller.signal })
       .then(r => r.json())
       .then(d => {

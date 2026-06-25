@@ -508,7 +508,9 @@ function doGet(e) {
         p.diffStore = p.qtyStore - sys.sysStore;
         p.diffWH    = p.qtyWH    - sys.sysWH;
       }
-      p.frontStoreCheckedQty = frontStoreQtys[p.sku] || 0;
+      // ใช้ ?? แทน || เพื่อให้ค่า 0 ที่บันทึกไว้จริงผ่านได้
+      // ถ้าไม่มีในชีตเลย (undefined) → ส่ง null ให้ frontend รู้ว่า "ยังไม่เคยเช็ค"
+      p.frontStoreCheckedQty = frontStoreQtys[p.sku] != null ? frontStoreQtys[p.sku] : null;
 
       const my = purchases.filter(pu => pu.sku === p.sku)
                           .sort((a, b) => (a.date < b.date ? 1 : -1));
@@ -3776,7 +3778,7 @@ function ok(data) {
 }
 
 // ── Payload cache (แบ่งเป็น chunk เพราะ CacheService จำกัด 100KB/key) ──
-const _CACHE_TTL_SEC   = 600;     // 10 นาที (เดิม 3 นาที — ยืดให้ GAS cold start น้อยลง)
+const _CACHE_TTL_SEC   = 180;     // 3 นาที (เพิ่มเป็น 600 แล้วข้อมูล stale ข้ามเครื่อง)
 const _CACHE_CHUNK_LEN = 30000;   // อักขระต่อ chunk (Thai 3 ไบต์ → ~90KB ปลอดภัย)
 const _CACHE_KEY_COUNT = 'dmj_payload_n';
 const _CACHE_KEY_PART  = 'dmj_payload_';
