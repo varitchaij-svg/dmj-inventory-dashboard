@@ -218,12 +218,16 @@ function FrontStoreView({ data, role, checkRequest }) {
     }
   };
 
-  // Auto-save with 3-second debounce
+  // Auto-save: ค่าตรง qtyStore (border เขียว) → save ทันที; ยังไม่ตรง → debounce 3s
   uE(() => {
     if (touchedWithValue === 0 || saving) return;
-    const timer = setTimeout(() => {
-      handleSave(true);
-    }, 3000);
+    const anyMatch = [...touched].some(sku => {
+      const p = products.find(x => x.sku === sku);
+      const v = checkedQtys[sku];
+      return p && v !== "" && v != null && parseInt(v) === (p.qtyStore ?? 0);
+    });
+    const delay = anyMatch ? 0 : 3000;
+    const timer = setTimeout(() => { handleSave(true); }, delay);
     return () => clearTimeout(timer);
   }, [checkedQtys, touched, saving, touchedWithValue]);
 
