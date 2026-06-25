@@ -508,7 +508,9 @@ function doGet(e) {
         p.diffStore = p.qtyStore - sys.sysStore;
         p.diffWH    = p.qtyWH    - sys.sysWH;
       }
-      p.frontStoreCheckedQty = frontStoreQtys[p.sku] || 0;
+      // ใช้ ?? แทน || เพื่อให้ค่า 0 ที่บันทึกไว้จริงผ่านได้
+      // ถ้าไม่มีในชีตเลย (undefined) → ส่ง null ให้ frontend รู้ว่า "ยังไม่เคยเช็ค"
+      p.frontStoreCheckedQty = frontStoreQtys[p.sku] != null ? frontStoreQtys[p.sku] : null;
 
       const my = purchases.filter(pu => pu.sku === p.sku)
                           .sort((a, b) => (a.date < b.date ? 1 : -1));
