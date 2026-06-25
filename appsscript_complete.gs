@@ -3776,7 +3776,7 @@ function ok(data) {
 }
 
 // ── Payload cache (แบ่งเป็น chunk เพราะ CacheService จำกัด 100KB/key) ──
-const _CACHE_TTL_SEC   = 600;     // 10 นาที (เดิม 3 นาที — ยืดให้ GAS cold start น้อยลง)
+const _CACHE_TTL_SEC   = 180;     // 3 นาที (เพิ่มเป็น 600 แล้วข้อมูล stale ข้ามเครื่อง)
 const _CACHE_CHUNK_LEN = 30000;   // อักขระต่อ chunk (Thai 3 ไบต์ → ~90KB ปลอดภัย)
 const _CACHE_KEY_COUNT = 'dmj_payload_n';
 const _CACHE_KEY_PART  = 'dmj_payload_';
