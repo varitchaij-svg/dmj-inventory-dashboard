@@ -106,11 +106,28 @@ function FrontStoreView({ data, role, checkRequest }) {
     return init;
   });
   const [touched, setTouched] = uS(new Set());
+  const touchedRef = React.useRef(new Set());
+  uE(() => { touchedRef.current = touched; }, [touched]);
   const [lastSavedTime, setLastSavedTime] = uS(null); // timestamp of last successful save
   const [fsCalcPad, setFsCalcPad] = uS(null); // {sku, name, val} for CalcPadModal
   const [transferTarget, setTransferTarget] = uS(null); // {sku, name, maxQty} สำหรับ mini modal โอน
   const [transferQty, setTransferQty] = uS(1);
   const [transferring, setTransferring] = uS(false);
+
+  // Multi-device sync: เมื่อ products อัปเดต (หลัง sync) → merge frontStoreCheckedQty
+  // เฉพาะ SKU ที่เครื่องนี้ยังไม่แตะ (touched) — กัน overwrite ค่าที่กำลังพิมพ์อยู่
+  uE(() => {
+    setCheckedQtys(prev => {
+      let changed = false;
+      const next = { ...prev };
+      products.forEach(p => {
+        if (touchedRef.current.has(p.sku)) return;
+        if (p.frontStoreCheckedQty == null) return;
+        if (prev[p.sku] !== p.frontStoreCheckedQty) { next[p.sku] = p.frontStoreCheckedQty; changed = true; }
+      });
+      return changed ? next : prev;
+    });
+  }, [products]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setQty = uC((sku, val) => {
     setCheckedQtys(prev => ({ ...prev, [sku]: val === "" ? "" : parseInt(val) || 0 }));
