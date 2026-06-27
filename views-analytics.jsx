@@ -1973,6 +1973,9 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
         initialVal={calcPad ? calcPad.val : ''}
         onConfirm={function(qty){
           if (calcPad) {
+            const ck = ctxKeyOf(selSupplier, selLockKey);
+            if (ck) { (countsCacheRef.current[ck] = countsCacheRef.current[ck] || {})[calcPad.sku] = qty; }
+            localEditsRef.current.add(calcPad.sku);
             setCheckedQtys(function(prev){ const o=Object.assign({},prev); o[calcPad.sku]=qty; return o; });
           }
           setCalcPad(null);
@@ -2163,9 +2166,13 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                       <input type="number" min="0" inputMode="numeric"
                         value={val != null ? val : ''}
                         onChange={function(e){
+                          const newVal = e.target.value===''?'':String(Math.max(0,parseInt(e.target.value)||0));
+                          const ck = ctxKeyOf(selSupplier, selLockKey);
+                          if (ck) { (countsCacheRef.current[ck] = countsCacheRef.current[ck] || {})[sku] = newVal; }
+                          localEditsRef.current.add(sku);
                           setCheckedQtys(function(prev){
                             const o = Object.assign({},prev);
-                            o[sku] = e.target.value===''?'':String(Math.max(0,parseInt(e.target.value)||0));
+                            o[sku] = newVal;
                             return o;
                           });
                         }}
