@@ -374,6 +374,135 @@ function drawProductCardCanvas(p, img, accentColor) {
   return c;
 }
 
+// ── drawTop10CatCanvas: วาด card Top 10 ขายดีต่อหมวด เป็น canvas ──
+// ใช้ loadImgForCard (GAS proxy) เพื่อไม่ติด CORS — pattern เดียวกับ drawProductCardCanvas
+function drawTop10CatCanvas(g, imgMap, cc, role) {
+  var W = 400;
+  var FONT = "'Sarabun','Noto Sans Thai','Segoe UI',Arial,sans-serif";
+  var SCALE = 2;
+  var HDR_H = 44;
+  var ROW_H = 52;
+  var products = g.products || [];
+  var H = HDR_H + products.length * ROW_H + 8;
+
+  var c = document.createElement('canvas');
+  c.width = W * SCALE; c.height = H * SCALE;
+  var ctx = c.getContext('2d');
+  ctx.scale(SCALE, SCALE);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
+  // Background
+  ctx.fillStyle = '#fafcf7';
+  ctx.fillRect(0, 0, W, H);
+
+  // ── Header ──
+  var rgb = hexToRgb(cc) || { r: 22, g: 101, b: 52 };
+  ctx.fillStyle = 'rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',0.08)';
+  ctx.fillRect(0, 0, W, HDR_H);
+  ctx.fillStyle = cc;
+  ctx.fillRect(0, HDR_H - 2, W, 2); // bottom border line
+  // color dot
+  ctx.beginPath();
+  ctx.arc(18, HDR_H / 2, 5, 0, Math.PI * 2);
+  ctx.fill();
+  // category name
+  ctx.fillStyle = '#111827';
+  ctx.font = 'bold 13px ' + FONT;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(g.cat, 32, HDR_H / 2);
+  // revenue (owner only)
+  if (role === 'owner') {
+    ctx.fillStyle = cc;
+    ctx.font = 'bold 11px ' + FONT;
+    ctx.textAlign = 'right';
+    ctx.fillText(fmtB(g.totalRev), W - 12, HDR_H / 2);
+  }
+
+  // ── Product rows ──
+  function thumbRoundedPath(ix, iy) {
+    ctx.beginPath();
+    ctx.moveTo(ix + 6, iy);
+    ctx.lineTo(ix + 30, iy); ctx.arcTo(ix + 36, iy, ix + 36, iy + 6, 6);
+    ctx.lineTo(ix + 36, iy + 30); ctx.arcTo(ix + 36, iy + 36, ix + 30, iy + 36, 6);
+    ctx.lineTo(ix + 6, iy + 36); ctx.arcTo(ix, iy + 36, ix, iy + 30, 6);
+    ctx.lineTo(ix, iy + 6); ctx.arcTo(ix, iy, ix + 6, iy, 6);
+    ctx.closePath();
+  }
+
+  products.forEach(function(p, i) {
+    var ry = HDR_H + i * ROW_H;
+    var midY = ry + ROW_H / 2;
+
+    // row separator
+    ctx.fillStyle = '#e5e7eb';
+    ctx.fillRect(0, ry, W, 1);
+
+    // rank
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    if (i < 3) {
+      ctx.font = '15px ' + FONT;
+      ctx.fillText(i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉', 14, midY);
+    } else {
+      ctx.fillStyle = '#9ca3af';
+      ctx.font = 'bold 10px ' + FONT;
+      ctx.fillText('#' + (i + 1), 14, midY);
+    }
+
+    // image thumbnail 36×36
+    var IX = 30, IY = ry + (ROW_H - 36) / 2;
+    rrectFill(ctx, IX, IY, 36, 36, 6, '#fff');
+    ctx.strokeStyle = '#e5e7eb'; ctx.lineWidth = 1;
+    thumbRoundedPath(IX, IY); ctx.stroke();
+
+    var img = imgMap[p.sku];
+    if (img && img.naturalWidth > 0) {
+      ctx.save();
+      thumbRoundedPath(IX, IY); ctx.clip();
+      var sc = Math.min(36 / img.naturalWidth, 36 / img.naturalHeight);
+      var dw = img.naturalWidth * sc, dh = img.naturalHeight * sc;
+      ctx.drawImage(img, IX + (36 - dw) / 2, IY + (36 - dh) / 2, dw, dh);
+      ctx.restore();
+    } else if (p.color && p.color.hex) {
+      rrectFill(ctx, IX, IY, 36, 36, 6, p.color.hex + '33');
+    }
+    // color dot badge on thumbnail
+    if (p.color && p.color.hex) {
+      ctx.fillStyle = p.color.hex;
+      ctx.beginPath(); ctx.arc(IX + 29, IY + 29, 4.5, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+    }
+
+    // name + qty text
+    var TX = 74;
+    var maxW = role === 'owner' ? W - TX - 72 : W - TX - 10;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = '#111827';
+    ctx.font = 'bold 11.5px ' + FONT;
+    var name = p.name || '';
+    while (name.length > 1 && ctx.measureText(name).width > maxW) name = name.slice(0, -1);
+    if (name.length < (p.name || '').length) name = name.slice(0, -1) + '…';
+    ctx.fillText(name, TX, midY - 4);
+
+    ctx.fillStyle = '#9ca3af';
+    ctx.font = '10px ' + FONT;
+    ctx.fillText(fmtN(p._pQty) + ' ชิ้น · คงเหลือ ' + fmtN(stockQty(p)), TX, midY + 11);
+
+    // revenue (owner)
+    if (role === 'owner' && p._pRev) {
+      ctx.fillStyle = '#374151';
+      ctx.font = 'bold 11.5px ' + FONT;
+      ctx.textAlign = 'right';
+      ctx.fillText(fmtB(p._pRev), W - 10, midY + 4);
+    }
+  });
+
+  return c;
+}
+
 async function downloadSupplierCardsZip(groupName, items, accentColor, onProgress) {
   await ensureJsZip();
   var zip = new window.JSZip();
@@ -949,62 +1078,27 @@ function OverviewView({ data, range, setRange, role }) {
   const [exportingTop10, setExportingTop10] = uS(false);
 
   const exportTop10Images = uC(async () => {
-    if (!window.html2canvas) { alert("กำลังโหลด html2canvas กรุณาลองใหม่"); return; }
     setExportingTop10(true);
-
-    // ดึงรูปผ่าน GAS imgProxy แล้วคืนเป็น data URL (หลีกเลี่ยง CORS)
-    const proxyBase = (typeof _SHEET_BASE !== 'undefined' ? _SHEET_BASE : '') +
-                      '?token=' + encodeURIComponent(typeof APP_TOKEN !== 'undefined' ? APP_TOKEN : '') +
-                      '&action=imgProxy&u=';
-    async function fetchDataUrl(imgUrl) {
-      try {
-        const resp = await fetch(proxyBase + encodeURIComponent(imgUrl));
-        const j = await resp.json();
-        return j.d || null;
-      } catch { return null; }
-    }
-
     try {
       for (let i = 0; i < topByCategory.length; i++) {
         const g = topByCategory[i];
-        const el = document.getElementById(`top10-cat-${i}`);
-        if (!el) continue;
-
-        // ขยาย scroll container เพื่อให้ capture ครบทุกรายการ
-        const inner = el.querySelector('[data-top10scroll]');
-        const origMaxH = inner ? inner.style.maxHeight : '';
-        const origOverflow = inner ? inner.style.overflowY : '';
-        if (inner) { inner.style.maxHeight = 'none'; inner.style.overflowY = 'visible'; }
-
-        // แทนที่ backgroundImage ด้วย data URL ชั่วคราว เพื่อให้ html2canvas render ได้
-        const bgEls = el.querySelectorAll('[style*="backgroundImage"]');
-        const origBgs = [];
-        await Promise.all(Array.from(bgEls).map(async (bel, bi) => {
-          const orig = bel.style.backgroundImage;
-          origBgs[bi] = orig;
-          const m = orig.match(/url\("?([^")]+)"?\)/);
-          if (!m) return;
-          const dataUrl = await fetchDataUrl(m[1]);
-          if (dataUrl) bel.style.backgroundImage = `url("${dataUrl}")`;
+        const cc = catColor(g.cat, allCats);
+        // โหลดรูปทุกชิ้นใน category นี้ผ่าน GAS proxy (หลีก CORS)
+        const imgMap = {};
+        await Promise.all(g.products.map(async p => {
+          if (p.imageUrl) imgMap[p.sku] = await loadImgForCard(p.imageUrl);
         }));
-
-        try {
-          const canvas = await window.html2canvas(el, {
-            scale: 2, backgroundColor: '#fafcf7', logging: false,
-          });
-          const link = document.createElement('a');
-          link.download = `top10-${g.cat}.png`;
-          link.href = canvas.toDataURL('image/png');
-          link.click();
-        } catch(e) { console.error('html2canvas', e); }
-        finally {
-          bgEls.forEach((bel, bi) => { bel.style.backgroundImage = origBgs[bi]; });
-          if (inner) { inner.style.maxHeight = origMaxH; inner.style.overflowY = origOverflow; }
-        }
+        // วาด canvas และ download
+        const canvas = drawTop10CatCanvas(g, imgMap, cc, role);
+        const link = document.createElement('a');
+        link.download = `top10-${g.cat}.png`;
+        link.href = canvas.toDataURL('image/png');
+        link.click();
         await new Promise(r => setTimeout(r, 400));
       }
-    } finally { setExportingTop10(false); }
-  }, [topByCategory]);
+    } catch(e) { console.error('export top10', e); }
+    finally { setExportingTop10(false); }
+  }, [topByCategory, allCats, role]);
 
   // ── Comparison chart data (multi-select months) ──────────────────
   const cmpData = uM(() => {
