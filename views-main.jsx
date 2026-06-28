@@ -5010,8 +5010,10 @@ function UploadView({ onDataLoaded, currentData }) {
 // CONNECT — Google Sheets setup
 // ─────────────────────────────────────────────────────────────────────
 function ConnectView({ sheetUrl, sheetViewUrl, syncing, lastSync, source, onSync, onClearLocal,
-                       onSyncZortSales, syncingZortSales, zortSalesLastSync }) {
+                       onSyncZortSales, syncingZortSales, zortSalesLastSync,
+                       onResetNegative, resettingNegative }) {
   const [url, setUrl] = uS(sheetViewUrl || "");
+  const [confirmReset, setConfirmReset] = uS(false);
 
   const fmtTs = (ts) => {
     if (!ts) return null;
@@ -5181,6 +5183,49 @@ function ConnectView({ sheetUrl, sheetViewUrl, syncing, lastSync, source, onSync
           </div>
         </Card>
       </div>
+
+      {/* ── Danger Zone ── */}
+      {onResetNegative && (
+        <Card style={{marginTop:18, border:"1px solid #fca5a5"}}>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14}}>
+            <div style={{width:42,height:42,borderRadius:10,background:"#fff0f0",color:"var(--dang)",
+                         display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>
+              ⚠️
+            </div>
+            <div>
+              <div style={{fontSize:14,fontWeight:700,color:"var(--dang)"}}>รีเซ็ตสต็อกติดลบ</div>
+              <div style={{fontSize:11.5,color:"var(--muted)"}}>
+                ค้นหาสินค้าที่ qtyStore หรือ qtyWH ติดลบ แล้วตั้งเป็น 0 ทั้งใน Sheet และ ZORT
+              </div>
+            </div>
+          </div>
+          {!confirmReset ? (
+            <button className="btn"
+                    style={{background:"#fff0f0",color:"var(--dang)",border:"1px solid #fca5a5"}}
+                    onClick={() => setConfirmReset(true)}>
+              <span>🔧</span><span>รีเซ็ตสต็อกติดลบ → 0</span>
+            </button>
+          ) : (
+            <div style={{padding:"12px 14px",borderRadius:10,background:"#fff0f0",
+                         border:"1px solid #fca5a5",display:"flex",flexDirection:"column",gap:10}}>
+              <div style={{fontSize:12.5,color:"#7f1d1d",fontWeight:600}}>
+                ⚠️ ยืนยันการรีเซ็ต? ระบบจะตั้งสต็อกที่ติดลบทุกรายการเป็น 0 ใน Sheet และ ZORT ทันที
+              </div>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                <button className="btn primary"
+                        style={{background:"var(--dang)",border:"none"}}
+                        disabled={resettingNegative}
+                        onClick={() => { setConfirmReset(false); onResetNegative(); }}>
+                  {resettingNegative
+                    ? <><span className="spin" style={{width:13,height:13,borderWidth:2}}/><span>กำลังรีเซ็ต...</span></>
+                    : <><span>✅</span><span>ยืนยัน รีเซ็ต</span></>}
+                </button>
+                <button className="btn ghost" onClick={() => setConfirmReset(false)}>ยกเลิก</button>
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
     </div>
   );
 }

@@ -318,6 +318,9 @@ function doPost(e) {
       return ok({ synced: true });
     }
 
+    // ─── Reset Negative Stock ───
+    if (data.resetNegativeStock) return resetNegativeStock_(ss, actor);
+
     // ─── MTO Jobs ───
     if (data.createMtoJob)    return createMtoJob(ss, data);
     if (data.closeMtoJob)     return closeMtoJob(ss, data, actor);
@@ -689,6 +692,63 @@ function zeroStockItem_(ss, sku, actor) {
     invalidateCache_();
     writeAuditLog_(actor, "ปรับสต็อก0", skuUpper, "ไม่ได้จัด: ตั้ง WH qty=0 ใน Sheets+ZORT");
     return ok({ sku: skuUpper, zeroed: true });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ─── Reset สินค้าติดลบทั้งหมดเป็น 0 ใน Sheet + ZORT ───
+function resetNegativeStock_(ss, actor) {
+  const sheet = ss.getSheetByName(SHEET_PRODUCTS);
+  if (!sheet) return error("ไม่พบชีต: " + SHEET_PRODUCTS);
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
+  try {
+    const data = sheet.getDataRange().getValues();
+    const whItems = [];   // negative qtyWH → reset ใน WH_SAI5
+    const fsItems = [];   // negative qtyStore → reset ใน WH_FRONTSTORE
+    const fixed = [];
+
+    for (let i = 1; i < data.length; i++) {
+      const sku = String(data[i][COL_PROD_SKU - 1] || "").trim();
+      if (!sku) continue;
+      const qtyStore = Number(data[i][6]) || 0;  // col G (1-indexed=7, 0-indexed=6)
+      const qtyWH    = Number(data[i][COL_PROD_QTYWH - 1]) || 0;  // col H (0-indexed=7)
+      const sheetRow = i + 1;
+      let changed = false;
+
+      if (qtyStore < 0) {
+        sheet.getRange(sheetRow, 7).setValue(0);  // col G
+        fsItems.push({ sku: sku.toUpperCase(), stock: 0 });
+        changed = true;
+      }
+      if (qtyWH < 0) {
+        sheet.getRange(sheetRow, COL_PROD_QTYWH).setValue(0);  // col H
+        whItems.push({ sku: sku.toUpperCase(), stock: 0 });
+        changed = true;
+      }
+      if (changed) fixed.push({ sku, qtyStore, qtyWH });
+    }
+
+    if (fixed.length === 0) {
+      return ok({ fixed: 0, skus: [], message: "ไม่พบสินค้าที่ติดลบ" });
+    }
+
+    SpreadsheetApp.flush();
+
+    // Push to ZORT (batch per warehouse)
+    const zortItems = [];
+    if (whItems.length) zortItems.push(...whItems.map(s => ({ sku: s.sku, qty: 0, warehousecode: WH_SAI5 })));
+    if (fsItems.length) zortItems.push(...fsItems.map(s => ({ sku: s.sku, qty: 0, warehousecode: WH_FRONTSTORE })));
+    if (zortItems.length) {
+      try { pushStockToZort_(zortItems); } catch(e) { Logger.log("resetNegativeStock_ ZORT error: " + e); }
+    }
+
+    invalidateCache_();
+    writeAuditLog_(actor, "resetNegativeStock", fixed.map(f => f.sku).join(","),
+      `รีเซ็ตสต็อกติดลบ ${fixed.length} รายการ → 0 (Sheet+ZORT)`);
+
+    return ok({ fixed: fixed.length, skus: fixed.map(f => f.sku), whCount: whItems.length, fsCount: fsItems.length });
   } finally {
     lock.releaseLock();
   }
