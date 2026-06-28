@@ -3771,6 +3771,7 @@ function StockView({ data, role }) {
   const [overrides, setOverrides] = uS(dataThresholds?.overrides || { "แจกันแก้ว": 3, "เรซิ่นและอื่นๆ": 3 });
   const [supplierFilter, setSupplierFilter] = uS(null);
   const [activeCat, setActiveCat] = uS("ALL");
+  const [coverMonths, setCoverMonths] = uS(2); // เป้าหมาย: สั่งให้พอขายกี่เดือน
 
   const getThr = uC((cat) => overrides[cat] != null ? overrides[cat] : defaultThr, [overrides, defaultThr]);
 
@@ -3790,11 +3791,24 @@ function StockView({ data, role }) {
 
   const enriched = uM(() => checkable.map(p => {
     const currentQty = (p.qtyStore > 0 || p.qtyWH > 0) ? (p.qtyStore || 0) + (p.qtyWH || 0) : (p.qty || 0);
-    const avgMonthly = p.soldQty / 5;
+    // เน้นความเร็วล่าสุด: ถ้ามี monthly ใช้เฉลี่ย 3 เดือนหลัง (ไวต่อเทรนด์) มิฉะนั้น fallback soldQty/5
+    const m = p.monthly || [];
+    let avgMonthly;
+    if (m.length >= 3) {
+      const last3 = m.slice(-3);
+      avgMonthly = last3.reduce((s,x) => s + (x.qty||0), 0) / 3;
+    } else {
+      avgMonthly = (p.soldQty || 0) / 5;
+    }
     const monthsLeft = avgMonthly > 0 ? currentQty / avgMonthly : null;
+    const dailyVel   = avgMonthly / 30;
+    const daysLeft   = dailyVel > 0 ? currentQty / dailyVel : null;
+    const stockoutAt = daysLeft != null ? new Date(Date.now() + daysLeft * 86400000) : null;
+    // ควรสั่งเท่าไร = (เป้าหมายพอขาย coverMonths เดือน) − ของที่มี
+    const suggestedQty = avgMonthly > 0 ? Math.max(0, Math.ceil(avgMonthly * coverMonths - currentQty)) : 0;
     const threshold = getThr(p.cat);
-    return { ...p, qty: currentQty, avgMonthly, monthsLeft, threshold };
-  }), [checkable, getThr]);
+    return { ...p, qty: currentQty, avgMonthly, monthsLeft, dailyVel, daysLeft, stockoutAt, suggestedQty, threshold };
+  }), [checkable, getThr, coverMonths]);
 
   const nearOut = uM(() => enriched
     .filter(p => p.qty > 0 && p.qty <= p.threshold)
@@ -3910,6 +3924,21 @@ function StockView({ data, role }) {
                      fontFamily:"inherit", textAlign:"center"
                    }}/>
             <span style={{fontSize:12,color:"var(--muted)"}}>ชิ้น</span>
+          </div>
+
+          <div style={{height:24, width:1, background:"var(--bdr)"}}/>
+
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:12.5,fontWeight:600}}>สั่งให้พอขาย</span>
+            <input type="number" value={coverMonths} min="1" max="12" step="1"
+                   onChange={e=>setCoverMonths(Math.max(1, parseInt(e.target.value)||2))}
+                   style={{
+                     width:64, padding:"7px 10px", borderRadius:8,
+                     border:"1.5px solid #1f6f8b", background:"#f0f9ff",
+                     fontSize:14, fontWeight:700, color:"#1f6f8b",
+                     fontFamily:"inherit", textAlign:"center"
+                   }}/>
+            <span style={{fontSize:12,color:"var(--muted)"}}>เดือน → คำนวณ "ควรสั่งกี่ชิ้น"</span>
           </div>
 
           <div style={{height:24, width:1, background:"var(--bdr)"}}/>
@@ -4036,6 +4065,26 @@ function StockView({ data, role }) {
         </span>
       </div>
 
+      {/* สรุปคำสั่งซื้อรวม — เฉพาะ ใกล้หมด/หมดสต๊อก */}
+      {(filter === "low" || filter === "out") && (() => {
+        const toOrder = list.filter(p => p.suggestedQty > 0);
+        const totalQty = toOrder.reduce((s,p) => s + p.suggestedQty, 0);
+        if (toOrder.length === 0) return null;
+        return (
+          <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",
+                       background:"#f0f9ff",border:"1px solid #bae6fd",borderRadius:10,
+                       padding:"10px 14px",marginBottom:12}}>
+            <span style={{fontSize:18}}>📦</span>
+            <span style={{fontSize:13,fontWeight:700,color:"#1f6f8b"}}>
+              รวมที่ควรสั่ง: {fmtN(toOrder.length)} รายการ · ~{fmtN(totalQty)} ชิ้น
+            </span>
+            <span style={{fontSize:11.5,color:"#6b7280"}}>
+              (เป้าหมายพอขาย {coverMonths} เดือน · อิงยอดขายเฉลี่ย 3 เดือนหลัง)
+            </span>
+          </div>
+        );
+      })()}
+
       <div style={{display:"grid",gridTemplateColumns:"1fr",gap:8}}>
         {paginated.map(function(p) {
           const ratio = p.qty / (p.threshold || 1);
@@ -4095,6 +4144,25 @@ function StockView({ data, role }) {
                 {/* Row 4: revenue (owner only) */}
                 {role === "owner" && p.soldRev > 0 && (
                   <div style={{fontSize:12,color:"#059669",marginTop:4}}>{fmtB(p.soldRev)}</div>
+                )}
+                {/* Row 5: คำแนะนำสั่งซื้อ (เฉพาะ ใกล้หมด/หมดสต๊อก) */}
+                {(filter === "low" || filter === "out") && p.avgMonthly > 0 && (
+                  <div style={{marginTop:6,display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                    {p.suggestedQty > 0 && (
+                      <span style={{fontSize:12,fontWeight:700,color:"#fff",background:"#1f6f8b",
+                                    padding:"3px 9px",borderRadius:7,whiteSpace:"nowrap"}}>
+                        📦 ควรสั่ง ~{fmtN(p.suggestedQty)} ชิ้น
+                      </span>
+                    )}
+                    {p.stockoutAt && (
+                      <span style={{fontSize:11.5,fontWeight:600,
+                                    color: p.daysLeft <= 14 ? "#b8341c" : p.daysLeft <= 30 ? "#c2570a" : "#6b7280",
+                                    whiteSpace:"nowrap"}}>
+                        {p.qty === 0 ? "หมดแล้ว" :
+                          `จะหมด ~${p.stockoutAt.getDate()}/${p.stockoutAt.getMonth()+1} (อีก ${fmtN(Math.round(p.daysLeft))} วัน)`}
+                      </span>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
@@ -6770,6 +6838,59 @@ function SupplierView({ data }) {
   }, []);
 
   const products = (data && data.products) ? data.products : [];
+  const purchases = (data && data.purchases) ? data.purchases : [];
+  const [showPriceCmp, setShowPriceCmp] = uS(false);
+
+  // สถิติการสั่งซื้อต่อ supplier จาก purchases[] (ต้นทุนจริง/วันที่จริง)
+  const purchaseStats = uM(() => {
+    const bySup = {};
+    purchases.forEach(pu => {
+      const sup = (pu.supplier || "").trim();
+      if (!sup) return;
+      if (!bySup[sup]) bySup[sup] = { orders: {}, totalValue: 0, dates: new Set() };
+      const s = bySup[sup];
+      s.totalValue += (pu.unitPrice || 0) * (pu.qty || 0);
+      if (pu.poNum) s.orders[pu.poNum] = true;
+      if (pu.date)  s.dates.add(pu.date);
+    });
+    Object.keys(bySup).forEach(sup => {
+      const s = bySup[sup];
+      s.orderCount = Object.keys(s.orders).length;
+      const ds = [...s.dates].sort();
+      s.lastOrder = ds.length ? ds[ds.length - 1] : null;
+      if (ds.length >= 2) {
+        let sum = 0, n = 0;
+        for (let i = 1; i < ds.length; i++) {
+          const g = (new Date(ds[i]) - new Date(ds[i-1])) / 86400000;
+          if (g > 0 && g < 400) { sum += g; n++; }
+        }
+        s.avgGap = n > 0 ? Math.round(sum / n) : null;
+      } else s.avgGap = null;
+    });
+    return bySup;
+  }, [purchases]);
+
+  // เทียบราคาต้นทุนข้ามเจ้า — SKU ที่ซื้อจาก ≥2 supplier (ราคาล่าสุดต่อเจ้า)
+  const priceCompare = uM(() => {
+    const bySku = {};
+    purchases.forEach(pu => {
+      const sku = (pu.sku || "").trim().toUpperCase();
+      const sup = (pu.supplier || "").trim();
+      const price = pu.unitPrice || 0;
+      if (!sku || !sup || price <= 0) return;
+      if (!bySku[sku]) bySku[sku] = { sku, name: pu.name, sups: {} };
+      const cur = bySku[sku].sups[sup];
+      if (!cur || (pu.date && pu.date > cur.date)) bySku[sku].sups[sup] = { price, date: pu.date };
+    });
+    return Object.values(bySku).map(r => {
+      const entries = Object.entries(r.sups).map(([sup, v]) => ({ sup, price: v.price, date: v.date }));
+      if (entries.length < 2) return null;
+      entries.sort((a, b) => a.price - b.price);
+      const cheapest = entries[0], priciest = entries[entries.length - 1];
+      const diffPct = priciest.price > 0 ? (priciest.price - cheapest.price) / priciest.price * 100 : 0;
+      return { ...r, entries, cheapest, priciest, diffPct, diffBaht: priciest.price - cheapest.price };
+    }).filter(r => r && r.diffPct >= 1).sort((a, b) => b.diffPct - a.diffPct);
+  }, [purchases]);
 
   const supplierMap = uM(() => {
     const map = {};
@@ -6890,6 +7011,61 @@ function SupplierView({ data }) {
         </select>
       </div>
 
+      {/* 💰 เทียบราคาต้นทุนข้ามเจ้า */}
+      {priceCompare.length > 0 && (
+        <div style={{background:"var(--card)",border:"1px solid var(--bdr)",borderLeft:"4px solid #059669",
+                     borderRadius:14,padding:16,marginBottom:16,boxShadow:"var(--shadow)"}}>
+          <div onClick={()=>setShowPriceCmp(v=>!v)}
+               style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
+            <span style={{fontSize:18}}>💰</span>
+            <div style={{flex:1}}>
+              <div style={{fontSize:15,fontWeight:700}}>เทียบราคาต้นทุนข้ามเจ้า</div>
+              <div style={{fontSize:12,color:"var(--muted)"}}>
+                {priceCompare.length} สินค้าที่เคยซื้อจากหลายเจ้า · ซื้อเจ้าถูกสุดประหยัดได้
+              </div>
+            </div>
+            <span style={{fontSize:13,color:"var(--g-600)",fontWeight:600}}>{showPriceCmp?"🔼 ซ่อน":"🔽 ดู"}</span>
+          </div>
+          {showPriceCmp && (
+            <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:8}}>
+              {priceCompare.slice(0, 50).map((r,i) => (
+                <div key={r.sku||i} style={{border:"1px solid var(--bdr)",borderRadius:10,padding:"10px 12px",background:"var(--bg)"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:6}}>
+                    <div style={{minWidth:0,flex:1}}>
+                      <span style={{fontSize:10,fontFamily:"monospace",color:"var(--muted)",marginRight:4}}>{r.sku}</span>
+                      <span style={{fontSize:13,fontWeight:600}}>{r.name||"—"}</span>
+                    </div>
+                    <span style={{fontSize:11.5,fontWeight:700,color:"#059669",whiteSpace:"nowrap",
+                                  background:"#ecfdf5",padding:"2px 8px",borderRadius:6}}>
+                      ถูกกว่า {Math.round(r.diffPct)}% (฿{fmtN(r.diffBaht)}/ชิ้น)
+                    </span>
+                  </div>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                    {r.entries.map((e,j) => {
+                      const isCheapest = j === 0;
+                      return (
+                        <span key={e.sup+j} style={{fontSize:11.5,padding:"3px 9px",borderRadius:7,
+                          fontWeight: isCheapest?700:500,
+                          background: isCheapest?"#dcfce7":"#f3f4f6",
+                          color: isCheapest?"#15803d":"#6b7280",
+                          border: isCheapest?"1px solid #86efac":"1px solid var(--bdr)"}}>
+                          {isCheapest?"✓ ":""}{e.sup}: ฿{fmtN(e.price)}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+              {priceCompare.length > 50 && (
+                <div style={{fontSize:11.5,color:"var(--muted)",textAlign:"center",paddingTop:4}}>
+                  แสดง 50 จาก {priceCompare.length} รายการ (เรียงตามส่วนต่างมากสุด)
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Cards */}
       {visible.length === 0 ? (
         <div style={{textAlign:"center",padding:"48px 20px",color:"var(--muted)"}}>
@@ -6934,6 +7110,31 @@ function SupplierView({ data }) {
                     </div>
                   ))}
                 </div>
+
+                {/* purchase stats จาก purchases[] */}
+                {(() => {
+                  const ps = purchaseStats[s.name];
+                  if (!ps || ps.orderCount === 0) return null;
+                  const fmtDate = d => { if(!d) return "—"; const x=String(d).split("-"); return x.length===3?`${x[2]}/${x[1]}`:d; };
+                  return (
+                    <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:12,fontSize:11}}>
+                      <span style={{background:"#ecfdf5",color:"#15803d",padding:"3px 9px",borderRadius:7,fontWeight:600}}>
+                        💵 ซื้อรวม {fmtB(ps.totalValue)}
+                      </span>
+                      <span style={{background:"var(--bg)",color:"var(--text)",padding:"3px 9px",borderRadius:7,fontWeight:600}}>
+                        🧾 {ps.orderCount} ครั้ง
+                      </span>
+                      <span style={{background:"var(--bg)",color:"var(--text)",padding:"3px 9px",borderRadius:7,fontWeight:600}}>
+                        📅 สั่งล่าสุด {fmtDate(ps.lastOrder)}
+                      </span>
+                      {ps.avgGap != null && (
+                        <span style={{background:"var(--bg)",color:"var(--muted)",padding:"3px 9px",borderRadius:7,fontWeight:600}}>
+                          🔄 ทุก ~{ps.avgGap} วัน
+                        </span>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* low stock list */}
                 {s.lowStock.length > 0 && (
