@@ -1591,11 +1591,11 @@ function OverviewView({ data, range, setRange, role }) {
                       </span>
                       <div style={{position:"relative",flexShrink:0}}>
                         {p.imageUrl ? (
-                          <div style={{width:36,height:36,borderRadius:6,
-                                       backgroundImage:`url("${p.imageUrl}")`,
-                                       backgroundSize:"contain",backgroundPosition:"center",
-                                       backgroundRepeat:"no-repeat",backgroundColor:"#fff",
-                                       border:"1px solid var(--bdr)"}}/>
+                          <img src={p.imageUrl} crossOrigin="anonymous"
+                               style={{width:36,height:36,borderRadius:6,objectFit:"contain",
+                                       backgroundColor:"#fff",border:"1px solid var(--bdr)",
+                                       display:"block"}}
+                               onError={e=>{e.currentTarget.style.opacity='0';}}/>
                         ) : (
                           <div style={{width:36,height:36,borderRadius:6,
                                        background: p.color ? p.color.hex+"33" : "var(--g-50)",
