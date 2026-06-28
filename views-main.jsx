@@ -946,6 +946,36 @@ function OverviewView({ data, range, setRange, role }) {
   const [abcModalCls, setAbcModalCls] = uS(null);
 
   const [overviewModalP, setOverviewModalP] = uS(null);
+  const [exportingTop10, setExportingTop10] = uS(false);
+
+  const exportTop10Images = uC(async () => {
+    if (!window.html2canvas) { alert("กำลังโหลด html2canvas กรุณาลองใหม่"); return; }
+    setExportingTop10(true);
+    try {
+      for (let i = 0; i < topByCategory.length; i++) {
+        const g = topByCategory[i];
+        const el = document.getElementById(`top10-cat-${i}`);
+        if (!el) continue;
+        const inner = el.querySelector('[data-top10scroll]');
+        const origMaxH = inner ? inner.style.maxHeight : '';
+        const origOverflow = inner ? inner.style.overflowY : '';
+        if (inner) { inner.style.maxHeight = 'none'; inner.style.overflowY = 'visible'; }
+        try {
+          const canvas = await window.html2canvas(el, {
+            useCORS: true, allowTaint: true, scale: 2, backgroundColor: '#fafcf7', logging: false,
+          });
+          const link = document.createElement('a');
+          link.download = `top10-${g.cat}.png`;
+          link.href = canvas.toDataURL('image/png');
+          link.click();
+        } catch(e) { console.error('html2canvas', e); }
+        finally {
+          if (inner) { inner.style.maxHeight = origMaxH; inner.style.overflowY = origOverflow; }
+        }
+        await new Promise(r => setTimeout(r, 400));
+      }
+    } finally { setExportingTop10(false); }
+  }, [topByCategory]);
 
   // ── Comparison chart data (multi-select months) ──────────────────
   const cmpData = uM(() => {
@@ -1511,12 +1541,22 @@ function OverviewView({ data, range, setRange, role }) {
       {/* Top sellers per category */}
       <Card title={`🏆 Top 10 ขายดี · แยกตามหมวด · ${periodInfo.tag}`}
             sub={`ขายดีในช่วง ${periodInfo.label} · กดที่สินค้าเพื่อดูรายละเอียด`}
-            style={{marginTop:20}}>
+            style={{marginTop:20}}
+            action={
+              <button onClick={exportTop10Images} disabled={exportingTop10}
+                      style={{fontSize:12,padding:"6px 12px",borderRadius:8,
+                              background:exportingTop10?"var(--g-100)":"var(--g-700)",
+                              color:exportingTop10?"var(--muted)":"#fff",
+                              border:"none",cursor:exportingTop10?"default":"pointer",
+                              fontFamily:"inherit",fontWeight:600,whiteSpace:"nowrap"}}>
+                {exportingTop10 ? "⏳ กำลัง Export..." : "📥 Export รูป"}
+              </button>
+            }>
         <div className="row" style={{gridTemplateColumns:"repeat(auto-fill, minmax(320px, 1fr))"}}>
-          {topByCategory.map(g => {
+          {topByCategory.map((g, i) => {
             const cc = catColor(g.cat, allCats);
             return (
-              <div key={g.cat} style={{
+              <div key={g.cat} id={`top10-cat-${i}`} style={{
                 border:"1px solid var(--bdr)", borderRadius:12,
                 background:"#fafcf7", overflow:"hidden",
               }}>
@@ -1529,7 +1569,7 @@ function OverviewView({ data, range, setRange, role }) {
                   <span style={{flex:1, fontSize:13, fontWeight:700}}>{g.cat}</span>
                   {role === "owner" && <span style={{fontSize:11, fontWeight:600, color:cc}}>{fmtB(g.totalRev)}</span>}
                 </div>
-                <div style={{maxHeight:340, overflowY:"auto"}}>
+                <div data-top10scroll="" style={{maxHeight:340, overflowY:"auto"}}>
                   {g.products.map((p, i) => (
                     <button key={p.sku} onClick={() => setOverviewModalP(p)}
                             style={{
