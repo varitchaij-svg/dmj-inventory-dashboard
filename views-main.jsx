@@ -802,6 +802,89 @@ function MiniRow({ p, onClick, allCats, primary, secondary, right }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// EXPORT PROGRESS OVERLAY — ใช้กับ exportTop10Images
+// ─────────────────────────────────────────────────────────────────────
+function ExportProgressOverlay({ current, total, done }) {
+  const pct = total > 0 ? current / total : 0;
+  const filledPetals = done ? 8 : Math.min(8, Math.floor(pct * 8));
+  const angles = [0, 45, 90, 135, 180, 225, 270, 315];
+  return (
+    <div style={{
+      position:'fixed', inset:0, zIndex:9999,
+      background:'rgba(0,0,0,0.55)', backdropFilter:'blur(3px)',
+      display:'flex', alignItems:'center', justifyContent:'center',
+    }}>
+      <div style={{
+        background:'#fff', borderRadius:24, padding:'32px 40px',
+        textAlign:'center', minWidth:240, maxWidth:300,
+        boxShadow:'0 20px 60px rgba(0,0,0,0.3)',
+      }}>
+        {/* SVG ดอกไม้เส้นสีเขียว */}
+        <svg width={110} height={130} viewBox="-55 -55 110 130"
+             style={{display:'block', margin:'0 auto'}}>
+          {/* ก้านดอก */}
+          <line x1={0} y1={12} x2={0} y2={65}
+            stroke='#16a34a' strokeWidth={2.5} strokeLinecap='round'/>
+          {/* ใบซ้าย */}
+          <ellipse cx={-9} cy={42} rx={9} ry={4}
+            transform='rotate(-35,-9,42)'
+            fill='#bbf7d0' stroke='#16a34a' strokeWidth={1}/>
+          {/* ใบขวา */}
+          <ellipse cx={9} cy={30} rx={9} ry={4}
+            transform='rotate(35,9,30)'
+            fill='#bbf7d0' stroke='#16a34a' strokeWidth={1}/>
+          {/* กลีบดอก 8 กลีบ */}
+          {angles.map((a, i) => (
+            <g key={i} transform={`rotate(${a})`}>
+              <ellipse cx={0} cy={-24} rx={8} ry={14}
+                fill={i < filledPetals ? '#16a34a' : '#d1fae5'}
+                stroke='#16a34a' strokeWidth={1.2}
+                opacity={i < filledPetals ? 1 : 0.45}/>
+            </g>
+          ))}
+          {/* วงกลมกลาง */}
+          <circle r={11}
+            fill={done ? '#16a34a' : '#fff'}
+            stroke='#16a34a' strokeWidth={2}/>
+          {done && (
+            <text textAnchor='middle' y={5}
+              fill='#fff' fontSize={13} fontWeight='bold'>✓</text>
+          )}
+        </svg>
+
+        {done ? (
+          <div style={{fontSize:20, fontWeight:800, color:'#16a34a', marginTop:10}}>
+            สำเร็จ! ✓
+          </div>
+        ) : (
+          <>
+            <div style={{marginTop:12, fontSize:32, fontWeight:800,
+                         color:'#111827', lineHeight:1.1}}>
+              {current}
+              <span style={{fontSize:16, fontWeight:400, color:'#9ca3af'}}> / {total}</span>
+            </div>
+            <div style={{fontSize:12, color:'#6b7280', marginTop:4}}>
+              กำลัง Export รูปหมวด...
+            </div>
+          </>
+        )}
+
+        {/* Progress bar */}
+        <div style={{marginTop:16, height:6, borderRadius:99,
+                     background:'#d1fae5', overflow:'hidden'}}>
+          <div style={{
+            height:'100%', borderRadius:99,
+            background:'linear-gradient(90deg,#15803d,#22c55e)',
+            width:`${done ? 100 : Math.round(pct * 100)}%`,
+            transition:'width 0.35s ease',
+          }}/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // OVERVIEW
 // ─────────────────────────────────────────────────────────────────────
 function OverviewView({ data, range, setRange, role }) {
@@ -1075,29 +1158,31 @@ function OverviewView({ data, range, setRange, role }) {
   const [abcModalCls, setAbcModalCls] = uS(null);
 
   const [overviewModalP, setOverviewModalP] = uS(null);
-  const [exportingTop10, setExportingTop10] = uS(false);
+  const [exportProgress, setExportProgress] = uS(null); // null=hidden, {current,total,done}
 
   const exportTop10Images = uC(async () => {
-    setExportingTop10(true);
+    const total = topByCategory.length;
+    setExportProgress({ current: 0, total, done: false });
     try {
       for (let i = 0; i < topByCategory.length; i++) {
         const g = topByCategory[i];
         const cc = catColor(g.cat, allCats);
-        // โหลดรูปทุกชิ้นใน category นี้ผ่าน GAS proxy (หลีก CORS)
         const imgMap = {};
         await Promise.all(g.products.map(async p => {
           if (p.imageUrl) imgMap[p.sku] = await loadImgForCard(p.imageUrl);
         }));
-        // วาด canvas และ download
         const canvas = drawTop10CatCanvas(g, imgMap, cc, role);
         const link = document.createElement('a');
         link.download = `top10-${g.cat}.png`;
         link.href = canvas.toDataURL('image/png');
         link.click();
+        setExportProgress({ current: i + 1, total, done: false });
         await new Promise(r => setTimeout(r, 400));
       }
+      setExportProgress({ current: total, total, done: true });
+      await new Promise(r => setTimeout(r, 1800));
     } catch(e) { console.error('export top10', e); }
-    finally { setExportingTop10(false); }
+    finally { setExportProgress(null); }
   }, [topByCategory, allCats, role]);
 
   // ── Comparison chart data (multi-select months) ──────────────────
@@ -1666,13 +1751,13 @@ function OverviewView({ data, range, setRange, role }) {
             sub={`ขายดีในช่วง ${periodInfo.label} · กดที่สินค้าเพื่อดูรายละเอียด`}
             style={{marginTop:20}}
             action={
-              <button onClick={exportTop10Images} disabled={exportingTop10}
+              <button onClick={exportTop10Images} disabled={!!exportProgress}
                       style={{fontSize:12,padding:"6px 12px",borderRadius:8,
-                              background:exportingTop10?"var(--g-100)":"var(--g-700)",
-                              color:exportingTop10?"var(--muted)":"#fff",
-                              border:"none",cursor:exportingTop10?"default":"pointer",
+                              background:exportProgress?"var(--g-100)":"var(--g-700)",
+                              color:exportProgress?"var(--muted)":"#fff",
+                              border:"none",cursor:exportProgress?"default":"pointer",
                               fontFamily:"inherit",fontWeight:600,whiteSpace:"nowrap"}}>
-                {exportingTop10 ? "⏳ กำลัง Export..." : "📥 Export รูป"}
+                {exportProgress ? "⏳ กำลัง Export..." : "📥 Export รูป"}
               </button>
             }>
         <div className="row" style={{gridTemplateColumns:"repeat(auto-fill, minmax(320px, 1fr))"}}>
@@ -1911,6 +1996,7 @@ function OverviewView({ data, range, setRange, role }) {
       )}
 
       {overviewModalP && <ProductModal p={overviewModalP} onClose={() => setOverviewModalP(null)} allCats={allCats}/>}
+      {exportProgress && <ExportProgressOverlay {...exportProgress}/>}
     </div>
   );
 }
