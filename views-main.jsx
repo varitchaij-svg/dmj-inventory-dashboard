@@ -1123,11 +1123,17 @@ function OverviewView({ data, range, setRange, role }) {
 
   // ── Dead stock: holding inventory but no recent sales ────────────────
   const deadStock = uM(() => {
-    const recent = months.slice(-2);
-    // ถ้าไม่มีข้อมูลขาย 2 เดือน → ไม่สามารถบอกได้ว่าเป็น dead stock
-    if (recent.length < 2) return { list: [], count: 0, totalValue: 0 };
+    // คำนวณ 2 เดือนปฏิทินจริงล่าสุด (ไม่ใช่ 2 เดือนสุดท้ายในไฟล์ ซึ่งอาจเก่าถ้าไม่ sync)
+    const now = new Date();
+    const recent = [0, 1].map(offset => {
+      const d = new Date(now.getFullYear(), now.getMonth() - offset, 1);
+      return `${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
+    }); // ["06/2026","05/2026"]
+    // ถ้าไฟล์ข้อมูลไม่มีเดือนล่าสุดเลย → ไม่สามารถตัดสินได้
+    const hasRecentData = recent.some(m => months.includes(m));
+    if (!hasRecentData) return { list: [], count: 0, totalValue: 0 };
     const rows = products.filter(p => !p.isMTO && stockQty(p) > 0
-      // ต้องมีข้อมูลขายใน sales file (monthly.length > 0) มิฉะนั้นเป็น "ไม่มีข้อมูล" ไม่ใช่ "ไม่ขาย"
+      // ต้องมีข้อมูลขายในไฟล์ มิฉะนั้นเป็น "ไม่มีข้อมูล" ไม่ใช่ "ไม่ขาย"
       && (p.monthly||[]).length > 0
     ).map(p => {
       const recentQty = p.monthly.filter(x=>recent.includes(x.month)).reduce((s,x)=>s+x.qty,0);
