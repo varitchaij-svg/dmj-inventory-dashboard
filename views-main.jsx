@@ -1132,12 +1132,14 @@ function OverviewView({ data, range, setRange, role }) {
     // ถ้าไฟล์ข้อมูลไม่มีเดือนล่าสุดเลย → ไม่สามารถตัดสินได้
     const hasRecentData = recent.some(m => months.includes(m));
     if (!hasRecentData) return { list: [], count: 0, totalValue: 0 };
-    const rows = products.filter(p => !p.isMTO && stockQty(p) > 0
+    const rows = products.filter(p => !p.isMTO
+      // ใช้ qtyStore+qtyWH โดยตรง — ไม่ fallback ไป p.qty (ซึ่งอาจเป็นข้อมูลเก่าจาก sheet อื่น)
+      && ((p.qtyStore||0) + (p.qtyWH||0)) > 0
       // ต้องมีข้อมูลขายในไฟล์ มิฉะนั้นเป็น "ไม่มีข้อมูล" ไม่ใช่ "ไม่ขาย"
       && (p.monthly||[]).length > 0
     ).map(p => {
       const recentQty = p.monthly.filter(x=>recent.includes(x.month)).reduce((s,x)=>s+x.qty,0);
-      const stock = stockQty(p);
+      const stock = (p.qtyStore||0) + (p.qtyWH||0);
       return { p, recentQty, stock, value: stock * (p.price||0) };
     }).filter(r => r.recentQty === 0);
     rows.sort((a,b)=>b.value-a.value);
