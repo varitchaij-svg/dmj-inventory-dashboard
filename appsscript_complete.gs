@@ -697,6 +697,13 @@ function zeroStockItem_(ss, sku, actor) {
   }
 }
 
+// wrapper สำหรับรันจาก GAS editor ครั้งเดียว (ไม่มี _ เพื่อให้โผล่ใน dropdown)
+function resetNegativeStockOnce() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const result = resetNegativeStock_(ss, "owner");
+  Logger.log(result.getContent());
+}
+
 // ─── Reset สินค้าติดลบทั้งหมดเป็น 0 ใน Sheet + ZORT ───
 function resetNegativeStock_(ss, actor) {
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
