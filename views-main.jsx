@@ -951,18 +951,46 @@ function OverviewView({ data, range, setRange, role }) {
   const exportTop10Images = uC(async () => {
     if (!window.html2canvas) { alert("กำลังโหลด html2canvas กรุณาลองใหม่"); return; }
     setExportingTop10(true);
+
+    // ดึงรูปผ่าน GAS imgProxy แล้วคืนเป็น data URL (หลีกเลี่ยง CORS)
+    const proxyBase = (typeof _SHEET_BASE !== 'undefined' ? _SHEET_BASE : '') +
+                      '?token=' + encodeURIComponent(typeof APP_TOKEN !== 'undefined' ? APP_TOKEN : '') +
+                      '&action=imgProxy&u=';
+    async function fetchDataUrl(imgUrl) {
+      try {
+        const resp = await fetch(proxyBase + encodeURIComponent(imgUrl));
+        const j = await resp.json();
+        return j.d || null;
+      } catch { return null; }
+    }
+
     try {
       for (let i = 0; i < topByCategory.length; i++) {
         const g = topByCategory[i];
         const el = document.getElementById(`top10-cat-${i}`);
         if (!el) continue;
+
+        // ขยาย scroll container เพื่อให้ capture ครบทุกรายการ
         const inner = el.querySelector('[data-top10scroll]');
         const origMaxH = inner ? inner.style.maxHeight : '';
         const origOverflow = inner ? inner.style.overflowY : '';
         if (inner) { inner.style.maxHeight = 'none'; inner.style.overflowY = 'visible'; }
+
+        // แทนที่ backgroundImage ด้วย data URL ชั่วคราว เพื่อให้ html2canvas render ได้
+        const bgEls = el.querySelectorAll('[style*="backgroundImage"]');
+        const origBgs = [];
+        await Promise.all(Array.from(bgEls).map(async (bel, bi) => {
+          const orig = bel.style.backgroundImage;
+          origBgs[bi] = orig;
+          const m = orig.match(/url\("?([^")]+)"?\)/);
+          if (!m) return;
+          const dataUrl = await fetchDataUrl(m[1]);
+          if (dataUrl) bel.style.backgroundImage = `url("${dataUrl}")`;
+        }));
+
         try {
           const canvas = await window.html2canvas(el, {
-            useCORS: true, allowTaint: true, scale: 2, backgroundColor: '#fafcf7', logging: false,
+            scale: 2, backgroundColor: '#fafcf7', logging: false,
           });
           const link = document.createElement('a');
           link.download = `top10-${g.cat}.png`;
@@ -970,6 +998,7 @@ function OverviewView({ data, range, setRange, role }) {
           link.click();
         } catch(e) { console.error('html2canvas', e); }
         finally {
+          bgEls.forEach((bel, bi) => { bel.style.backgroundImage = origBgs[bi]; });
           if (inner) { inner.style.maxHeight = origMaxH; inner.style.overflowY = origOverflow; }
         }
         await new Promise(r => setTimeout(r, 400));
@@ -1591,11 +1620,11 @@ function OverviewView({ data, range, setRange, role }) {
                       </span>
                       <div style={{position:"relative",flexShrink:0}}>
                         {p.imageUrl ? (
-                          <img src={p.imageUrl} crossOrigin="anonymous"
-                               style={{width:36,height:36,borderRadius:6,objectFit:"contain",
-                                       backgroundColor:"#fff",border:"1px solid var(--bdr)",
-                                       display:"block"}}
-                               onError={e=>{e.currentTarget.style.opacity='0';}}/>
+                          <div style={{width:36,height:36,borderRadius:6,
+                                       backgroundImage:`url("${p.imageUrl}")`,
+                                       backgroundSize:"contain",backgroundPosition:"center",
+                                       backgroundRepeat:"no-repeat",backgroundColor:"#fff",
+                                       border:"1px solid var(--bdr)"}}/>
                         ) : (
                           <div style={{width:36,height:36,borderRadius:6,
                                        background: p.color ? p.color.hex+"33" : "var(--g-50)",
