@@ -320,6 +320,7 @@ function App() {
   const [source, setSource] = usS(localStorage.getItem(LS_SRC_KEY) || "sheet");
   const [syncing, setSyncing] = usS(false);
   const [zortSyncing, setZortSyncing] = usS(false);
+  const [zortSalesSyncing, setZortSalesSyncing] = usS(false);
   const [retryMsg, setRetryMsg] = usS("");
   const [lastSync, setLastSync] = usS(localStorage.getItem("dmj_last_sync") || null);
   const [labelInitItems, setLabelInitItems] = usS(null); // for auto-populate from order summary
@@ -953,7 +954,16 @@ function App() {
                                     lastSync={lastSync}
                                     source={source}
                                     onSync={fetchFromSheet}
-                                    onClearLocal={handleClearLocal}/></ErrorBoundary>}
+                                    onClearLocal={handleClearLocal}
+                                    syncingZortSales={zortSalesSyncing}
+                                    zortSalesLastSync={data && data.updatedAt && data.updatedAt.monthlysales}
+                                    onSyncZortSales={async () => {
+                                      setZortSalesSyncing(true);
+                                      const r = await syncZortSalesNow();
+                                      setZortSalesSyncing(false);
+                                      if (r && r.success !== false) fetchFromSheet();
+                                      else showNavToast("error", "Sync ยอดขาย ZORT ไม่สำเร็จ: " + ((r && r.error) || "timeout"));
+                                    }}/></ErrorBoundary>}
       </main>
     </div>
   );

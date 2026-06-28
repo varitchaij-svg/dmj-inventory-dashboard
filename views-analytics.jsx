@@ -3304,6 +3304,22 @@ async function syncZortNow() {
   } catch(e) { console.warn("syncZortNow error:", e.message); return { success: false, error: e.message }; }
 }
 
+async function syncZortSalesNow() {
+  if (!SHEET_DEPLOY_URL) return { success: false };
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 180000); // 3 นาที — sync ยอดขาย 365 วันใช้เวลานาน
+    const res = await fetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ syncZortSalesNow: true }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    return await res.json().catch(() => ({}));
+  } catch(e) { console.warn("syncZortSalesNow error:", e.message); return { success: false, error: e.message }; }
+}
+
 // ─── เบิกวัตถุดิบ MTO — หักคลังหลายรายการ ───
 async function syncDeductMaterials(items) {
   if (!SHEET_DEPLOY_URL || !items.length) return { success: false };

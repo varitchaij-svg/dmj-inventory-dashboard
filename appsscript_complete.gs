@@ -1623,6 +1623,11 @@ function syncZortSales() {
   const allOrders = fetchZortOrdersPaged_(fromStr, toStr);
   Logger.log("ZORT orders fetched: " + allOrders.length);
 
+  // Log status breakdown เพื่อช่วย diagnose ว่า order ถูก skip เพราะ status อะไรบ้าง
+  const statusCount = {};
+  allOrders.forEach(o => { statusCount[o.status || "null"] = (statusCount[o.status || "null"] || 0) + 1; });
+  Logger.log("status breakdown: " + JSON.stringify(statusCount));
+
   const monthly = {}, daily = {};
   const monthSet = new Set(), daySet = new Set();
 
@@ -1669,8 +1674,11 @@ function syncZortSales() {
 
   writeZortSalesSheet_(ss, "ยอดขายรายเดือน", monthly, sortedMonths, "months");
   writeZortSalesSheet_(ss, "ยอดขายรายวัน",   daily,   sortedDays,   "days");
+  const nowIso = new Date().toISOString();
+  PropertiesService.getScriptProperties().setProperty('upd_monthlysales', nowIso);
+  PropertiesService.getScriptProperties().setProperty('upd_dailysales',   nowIso);
   invalidateCache_();
-  Logger.log("✅ syncZortSales เสร็จ");
+  Logger.log("✅ syncZortSales เสร็จ · orders=" + allOrders.length + " SKUs=" + Object.keys(monthly).length);
 }
 
 // ดึงคำสั่งซื้อจาก ZORT แบบ paginated (รองรับทั้งปี)

@@ -4928,15 +4928,17 @@ function UploadView({ onDataLoaded, currentData }) {
 // ─────────────────────────────────────────────────────────────────────
 // CONNECT — Google Sheets setup
 // ─────────────────────────────────────────────────────────────────────
-function ConnectView({ sheetUrl, sheetViewUrl, syncing, lastSync, source, onSync, onClearLocal }) {
+function ConnectView({ sheetUrl, sheetViewUrl, syncing, lastSync, source, onSync, onClearLocal,
+                       onSyncZortSales, syncingZortSales, zortSalesLastSync }) {
   const [url, setUrl] = uS(sheetViewUrl || "");
 
-  const lastSyncLabel = (() => {
-    if (!lastSync) return "ยังไม่ sync";
-    const dt = new Date(lastSync);
+  const fmtTs = (ts) => {
+    if (!ts) return null;
+    const dt = new Date(ts);
     const pad = n => String(n).padStart(2,'0');
     return `${pad(dt.getDate())}/${pad(dt.getMonth()+1)}/${dt.getFullYear()} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
-  })();
+  };
+  const lastSyncLabel = fmtTs(lastSync) || "ยังไม่ sync";
 
   return (
     <div>
@@ -5002,6 +5004,44 @@ function ConnectView({ sheetUrl, sheetViewUrl, syncing, lastSync, source, onSync
                     style={{fontSize:11.5,padding:"6px 12px"}}>
               {React.cloneElement(I.x,{size:13})}<span>ล้าง · กลับไปใช้ Sheet</span>
             </button>
+          </div>
+        )}
+      </Card>
+
+      {/* ── ZORT Sales Sync ── */}
+      <Card style={{marginBottom:18}}>
+        <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+          <div style={{width:42,height:42,borderRadius:10,
+                       background:zortSalesLastSync?"#dcfce7":"#fef3e7",
+                       color:zortSalesLastSync?"var(--g-700)":"#a07417",
+                       display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>
+            📊
+          </div>
+          <div style={{flex:1, minWidth:200}}>
+            <div style={{fontSize:14, fontWeight:700}}>ยอดขายจาก ZORT</div>
+            <div style={{fontSize:11.5, color:"var(--muted)", marginTop:2}}>
+              {zortSalesLastSync
+                ? `sync ล่าสุด: ${fmtTs(zortSalesLastSync)}`
+                : <span style={{color:"#a07417", fontWeight:600}}>⚠️ ยังไม่เคย sync — กดปุ่มเพื่อดึงข้อมูลยอดขาย</span>}
+            </div>
+            <div style={{fontSize:11, color:"var(--muted)", marginTop:3}}>
+              ดึงออเดอร์ 365 วันย้อนหลังจาก ZORT → Sheet ยอดขายรายเดือน/รายวัน · auto ทุก 2 ชั่วโมง
+            </div>
+          </div>
+          {onSyncZortSales && (
+            <button className="btn" disabled={syncingZortSales} onClick={onSyncZortSales}
+                    style={{minWidth:130}}>
+              {syncingZortSales
+                ? <><span className="spin" style={{width:14,height:14,borderWidth:2}}/><span>กำลัง sync...</span></>
+                : <><span>⬇️</span><span>ซิงค์ยอดขาย</span></>}
+            </button>
+          )}
+        </div>
+        {!zortSalesLastSync && (
+          <div style={{marginTop:12,padding:"10px 14px",borderRadius:10,
+                       background:"#fef3e7",border:"1px solid #f5dec0",fontSize:12,color:"#92400e"}}>
+            <b>หมายเหตุ:</b> trigger อัตโนมัติต้องตั้งค่าครั้งแรกใน GAS editor โดยรัน <span className="mono" style={{background:"#fff",padding:"1px 5px",borderRadius:4}}>setupZortSalesTrigger()</span> ก่อน
+            — หรือกดปุ่ม "ซิงค์ยอดขาย" ด้านบนเพื่อดึงข้อมูลทันที
           </div>
         )}
       </Card>
