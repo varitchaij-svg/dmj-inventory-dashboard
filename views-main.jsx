@@ -376,14 +376,15 @@ function drawProductCardCanvas(p, img, accentColor) {
 
 // ── drawTop10CatCanvas: วาด card Top 10 ขายดีต่อหมวด เป็น canvas ──
 // ใช้ loadImgForCard (GAS proxy) เพื่อไม่ติด CORS — pattern เดียวกับ drawProductCardCanvas
-function drawTop10CatCanvas(g, imgMap, cc, role) {
+function drawTop10CatCanvas(g, imgMap, cc, role, periodLabel) {
   var W = 400;
   var FONT = "'Sarabun','Noto Sans Thai','Segoe UI',Arial,sans-serif";
   var SCALE = 2;
   var HDR_H = 44;
   var ROW_H = 52;
+  var FTR_H = periodLabel ? 28 : 0; // footer แสดงช่วงเวลา
   var products = g.products || [];
-  var H = HDR_H + products.length * ROW_H + 8;
+  var H = HDR_H + products.length * ROW_H + 8 + FTR_H;
 
   var c = document.createElement('canvas');
   c.width = W * SCALE; c.height = H * SCALE;
@@ -499,6 +500,20 @@ function drawTop10CatCanvas(g, imgMap, cc, role) {
       ctx.fillText(fmtB(p._pRev), W - 10, midY + 4);
     }
   });
+
+  // ── Footer: ช่วงเวลาข้อมูล ──
+  if (periodLabel && FTR_H > 0) {
+    var fy = H - FTR_H;
+    ctx.fillStyle = '#f0fdf4';
+    ctx.fillRect(0, fy, W, FTR_H);
+    ctx.fillStyle = '#d1fae5';
+    ctx.fillRect(0, fy, W, 1);
+    ctx.fillStyle = '#6b7280';
+    ctx.font = '10.5px ' + FONT;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('ข้อมูลการขาย: ' + periodLabel, W / 2, fy + FTR_H / 2);
+  }
 
   return c;
 }
@@ -1171,7 +1186,7 @@ function OverviewView({ data, range, setRange, role }) {
         await Promise.all(g.products.map(async p => {
           if (p.imageUrl) imgMap[p.sku] = await loadImgForCard(p.imageUrl);
         }));
-        const canvas = drawTop10CatCanvas(g, imgMap, cc, role);
+        const canvas = drawTop10CatCanvas(g, imgMap, cc, role, periodInfo.label);
         const link = document.createElement('a');
         link.download = `top10-${g.cat}.png`;
         link.href = canvas.toDataURL('image/png');
@@ -1183,7 +1198,7 @@ function OverviewView({ data, range, setRange, role }) {
       await new Promise(r => setTimeout(r, 1800));
     } catch(e) { console.error('export top10', e); }
     finally { setExportProgress(null); }
-  }, [topByCategory, allCats, role]);
+  }, [topByCategory, allCats, role, periodInfo]);
 
   // ── Comparison chart data (multi-select months) ──────────────────
   const cmpData = uM(() => {
