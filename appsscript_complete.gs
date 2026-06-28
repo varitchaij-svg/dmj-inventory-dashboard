@@ -704,6 +704,38 @@ function resetNegativeStockOnce() {
   Logger.log(result.getContent());
 }
 
+// push stock=0 ไป ZORT W0001 (ดูเหมือนจริง) สำหรับสินค้าที่ qtyStore <= 0 ใน Sheet
+// ใช้เมื่อ Sheet ถูกแล้ว แต่ ZORT W0001 ยังติดลบอยู่
+function resetFrontStoreZortOnce() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_PRODUCTS);
+  if (!sheet) { Logger.log("ไม่พบชีต " + SHEET_PRODUCTS); return; }
+  const data = sheet.getDataRange().getValues();
+  const items = [];
+  for (let i = 1; i < data.length; i++) {
+    const sku = String(data[i][COL_PROD_SKU - 1] || "").trim();
+    if (!sku) continue;
+    const qtyStore = Number(data[i][6]) || 0;  // col G (0-indexed=6)
+    if (qtyStore <= 0) {
+      items.push({ sku: sku.toUpperCase(), qty: 0, warehousecode: WH_FRONTSTORE });
+    }
+  }
+  Logger.log("พบสินค้า qtyStore<=0 จำนวน: " + items.length + " รายการ — กำลัง push ไป ZORT W0001...");
+  // push เป็น batch 50 ชิ้นเพื่อกัน timeout
+  const BATCH = 50;
+  let pushed = 0;
+  for (let i = 0; i < items.length; i += BATCH) {
+    try {
+      pushStockToZort_(items.slice(i, i + BATCH));
+      pushed += Math.min(BATCH, items.length - i);
+      Logger.log("pushed " + pushed + "/" + items.length);
+    } catch(e) {
+      Logger.log("error at batch " + i + ": " + e);
+    }
+  }
+  Logger.log("เสร็จแล้ว: push " + pushed + " รายการไป ZORT W0001");
+}
+
 // ─── Reset สินค้าติดลบทั้งหมดเป็น 0 ใน Sheet + ZORT ───
 function resetNegativeStock_(ss, actor) {
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
