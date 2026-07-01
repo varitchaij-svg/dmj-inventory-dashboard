@@ -2950,7 +2950,10 @@ function ShipmentRow({ s, role, productMap, onConfirm }) {
                 รับ {rq} / ส่ง {s.qty} pcs
               </div>
               {s.receivedBy && (
-                <div style={{fontSize:10,color:"var(--muted)"}}>โดย {s.receivedBy}</div>
+                <div style={{fontSize:10,color:"var(--muted)"}}>รับโดย {s.receivedBy}</div>
+              )}
+              {s.preparedBy && (
+                <div style={{fontSize:10,color:"var(--muted)"}}>จัดโดย {s.preparedBy}</div>
               )}
             </div>
           </div>
@@ -3240,7 +3243,7 @@ async function syncStockDeduct(sku, qty, name) {
     const res = await fetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ transferStock: true, sku, qty, name }),
+      body: JSON.stringify({ transferStock: true, sku, qty, name, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน" }),
     });
     const json = await res.json().catch(() => ({}));
     return json;

@@ -138,6 +138,7 @@ const COL_SHIP_RECVQTY    = 11; // K จำนวนที่รับ
 const COL_SHIP_RECVSTATUS = 12; // L สถานะรับ
 const COL_SHIP_RECVAT     = 13; // M รับเมื่อ
 const COL_SHIP_RECVBY     = 14; // N ผู้รับ
+const COL_SHIP_PREPAREDBY = 15; // O ผู้จัด (เพิ่มใหม่ Sprint 2 — แถวเก่าจะว่างเปล่าในคอลัมน์นี้)
 
 const COL_LOCK_SKU     = 2;   // B = รหัสสินค้า (SKU)
 const COL_LOCK_KEY     = 3;   // C = รหัสล็อค (Location)
@@ -274,7 +275,7 @@ function doPost(e) {
 
     // ─── Stock Transfer: คลัง → หน้าร้าน ───
     if (data.transferStock) {
-      return transferStock(ss, data.sku, Number(data.qty) || 0, data.name);
+      return transferStock(ss, data.sku, Number(data.qty) || 0, data.name, actor);
     }
 
     // ─── Stock Deduct: หักตรงๆ (legacy) ───
@@ -657,7 +658,7 @@ function doGet(e) {
 // SECTION 3: Stock Operations
 // ───────────────────────────────────────────────────────────
 
-function transferStock(ss, sku, qty, productName) {
+function transferStock(ss, sku, qty, productName, actor) {
   if (!sku || qty <= 0) return error("sku หรือ qty ไม่ถูกต้อง");
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_PRODUCTS);
@@ -678,7 +679,7 @@ function transferStock(ss, sku, qty, productName) {
         sheet.getRange(row, COL_PROD_QTYWH).setValue(whQty - actual);
         sheet.getRange(row, COL_PROD_QTYFS).setValue(fsQty + actual);
         SpreadsheetApp.flush();
-        try { logTransfer_(ss, sku, name, actual); } catch (e) { Logger.log("logTransfer_ error: " + e); }
+        try { logTransfer_(ss, sku, name, actual, actor); } catch (e) { Logger.log("logTransfer_ error: " + e); }
         // AddTransfer ย้ายสต็อกใน ZORT ให้อยู่แล้ว ไม่ push absolute ทับ (กันเขียนทับยอดขายที่เกิดระหว่างนั้น)
         try { createZortTransfer_(sku, name, actual); } catch (e) { Logger.log("createZortTransfer_ error: " + e); }
         return ok({ sku, transferred: actual, newWH: whQty - actual, newFS: fsQty + actual });
@@ -817,9 +818,9 @@ function resetNegativeStock_(ss, actor) {
   }
 }
 
-const SHIP_HEADERS = ["หมายเลขรายการ","วันที่ทำรายการ","สถานะ(รอ,สำเร็จ)","จากคลัง/สาขา","ไปคลัง/สาขา","รหัสสินค้า","ชื่อสินค้า","จำนวน","จำนวนที่จัด","รูปภาพ","จำนวนที่รับ","สถานะรับ","รับเมื่อ","ผู้รับ"];
+const SHIP_HEADERS = ["หมายเลขรายการ","วันที่ทำรายการ","สถานะ(รอ,สำเร็จ)","จากคลัง/สาขา","ไปคลัง/สาขา","รหัสสินค้า","ชื่อสินค้า","จำนวน","จำนวนที่จัด","รูปภาพ","จำนวนที่รับ","สถานะรับ","รับเมื่อ","ผู้รับ","ผู้จัด"];
 
-function logTransfer_(ss, sku, productName, qty) {
+function logTransfer_(ss, sku, productName, qty, actor) {
   let logSheet = ss.getSheetByName(SHEET_TRANSFERS);
   if (!logSheet) {
     logSheet = ss.insertSheet(SHEET_TRANSFERS);
@@ -830,7 +831,8 @@ function logTransfer_(ss, sku, productName, qty) {
   const rows   = logSheet.getLastRow();
   const refNum = "TF-" + Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyyMMdd") + "-" + String(rows).padStart(3,"0");
   const img    = (readImageMap_()[(sku||"").toUpperCase()] || "");
-  logSheet.appendRow([refNum, dateStr, "สำเร็จ", WH_NAME_SAI5, WH_NAME_FS, sku, productName, qty, qty, img, "", "รอรับ", "", ""]);
+  // คอลัมน์ O (preparedBy) เพิ่มใหม่ Sprint 2 — appendRow ไม่ต้องระบุความกว้างคงที่
+  logSheet.appendRow([refNum, dateStr, "สำเร็จ", WH_NAME_SAI5, WH_NAME_FS, sku, productName, qty, qty, img, "", "รอรับ", "", "", actor || ""]);
 }
 
 function createZortTransfer_(sku, productname, qty) {
@@ -938,7 +940,7 @@ function transferStockBatch(ss, list, actor, clientLoadedAt) {
           zortError + " | SKU: " + transferred.map(t => t.sku + "x" + t.qty).join(","));
       }
 
-      try { logTransferBatch_(ss, transferred, zortNumber); } catch (e) { Logger.log("logTransferBatch_ error: " + e); }
+      try { logTransferBatch_(ss, transferred, zortNumber, actor); } catch (e) { Logger.log("logTransferBatch_ error: " + e); }
       // Audit log: บันทึกทุก SKU ที่โอนจริง
       transferred.forEach(function(t) {
         writeAuditLog_(actor, "โอนสต็อก", t.sku, "qty " + t.qty + ": W0002→W0001");
@@ -985,7 +987,7 @@ function createZortTransferBatch_(items) {
 }
 
 // log หลายรายการที่อ้าง ZORT number เดียวกัน
-function logTransferBatch_(ss, items, zortNumber) {
+function logTransferBatch_(ss, items, zortNumber, actor) {
   let logSheet = ss.getSheetByName(SHEET_TRANSFERS);
   if (!logSheet) {
     logSheet = ss.insertSheet(SHEET_TRANSFERS);
@@ -1000,9 +1002,10 @@ function logTransferBatch_(ss, items, zortNumber) {
     : "TF-" + Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyyMMdd") + "-" + String(baseRow).padStart(3, "0");
   const rows = items.map(it => {
     const img = imgMap[(it.sku || "").toUpperCase()] || "";
-    return [refNum, dateStr, "สำเร็จ", WH_NAME_SAI5, WH_NAME_FS, it.sku, it.name, it.qty, it.qty, img, "", "รอรับ", "", ""];
+    // คอลัมน์ O (preparedBy) เพิ่มใหม่ Sprint 2 — ต่อท้าย ไม่แทรกกลาง กัน column-index เพี้ยน
+    return [refNum, dateStr, "สำเร็จ", WH_NAME_SAI5, WH_NAME_FS, it.sku, it.name, it.qty, it.qty, img, "", "รอรับ", "", "", actor || ""];
   });
-  logSheet.getRange(baseRow + 1, 1, rows.length, 14).setValues(rows);
+  logSheet.getRange(baseRow + 1, 1, rows.length, 15).setValues(rows);
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -3165,6 +3168,7 @@ function readShipments_() {
       receivedStatus: (r[COL_SHIP_RECVSTATUS - 1] || '').toString().trim(),
       receivedAt:     recvAt,
       receivedBy:     (r[COL_SHIP_RECVBY - 1] || '').toString().trim(),
+      preparedBy:     (r[COL_SHIP_PREPAREDBY - 1] || '').toString().trim(),
     });
   }
   return list;
