@@ -4075,6 +4075,12 @@ function createMtoJob(ss, data) {
     const jobId = prefix + String(maxSeq + 1).padStart(3, "0");
 
     sh.appendRow([jobId, data.dateStr || "", data.jobName || "", data.customer || "", data.price || "", data.imageUrl || "", "กำลังจัด", ""]);
+    // ถึงจุดนี้ = สร้างสำเร็จ → เขียน audit log (creation ไม่มี before-state)
+    writeAuditLog_(data.actor || "ไม่ระบุ", "สร้างงาน MTO", jobId, auditDetail_({
+      before: null,
+      after: { jobName: data.jobName || "", customer: data.customer || "", price: data.price || "" },
+      note: "สร้างงาน MTO (" + (data.jobName || jobId) + ")",
+    }));
     invalidateCache_(); // P0-4: bump dmj_last_write_ts ให้ conflict detection มองเห็น write นี้
     return ContentService.createTextOutput(JSON.stringify({ success: true, jobId }))
       .setMimeType(ContentService.MimeType.JSON);

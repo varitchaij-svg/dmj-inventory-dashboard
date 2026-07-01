@@ -4790,6 +4790,7 @@ function MtoJobView({ data }) {
           price: newJob.price ? Number(newJob.price) : "",
           imageUrl: newJob.imageUrl.trim(),
           dateStr: todayStr(),
+          actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
         }),
       });
       const json = await res.json();
