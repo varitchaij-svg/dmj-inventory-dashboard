@@ -1232,6 +1232,7 @@ function deductMaterials(ss, items, actor) {
 function updateOrderState(ss, body) {
   const sheet = ss.getSheetByName(SHEET_ORDERS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_ORDERS);
+  const actor = body.actor || "ไม่ระบุ";
 
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(8000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
@@ -1242,6 +1243,14 @@ function updateOrderState(ss, body) {
       const rowNum = parseInt(String(body.orderId).replace(/[^0-9]/g, ""));
       if (rowNum >= 1) {
         const sheetRow = rowNum; // id already encodes 1-indexed sheet row
+        // 1) อ่าน before-state ก่อนเขียน (เฉพาะ field ที่จะถูกแก้)
+        const before = {
+          status: sheet.getRange(sheetRow, COL_ORD_STATUS).getValue() || "",
+          preparedQty: sheet.getRange(sheetRow, COL_ORD_PREPQTY).getValue() || "",
+          printFlag: sheet.getRange(sheetRow, COL_ORD_PRINTFLAG).getValue() || "",
+          carryMode: sheet.getRange(sheetRow, COL_ORD_TYPE).getValue() || "",
+        };
+        // 2) เขียนจริง
         if (body.status)              sheet.getRange(sheetRow, COL_ORD_STATUS).setValue(body.status);
         if (body.preparedQty != null) sheet.getRange(sheetRow, COL_ORD_PREPQTY).setValue(body.preparedQty);
         if (body.printFlag != null)    sheet.getRange(sheetRow, COL_ORD_PRINTFLAG).setValue(body.printFlag); // M2: != null กัน false ถูกข้าม
@@ -1255,6 +1264,12 @@ function updateOrderState(ss, body) {
           }
         }
         SpreadsheetApp.flush();
+        // 3) ถึงจุดนี้ = เขียนสำเร็จ → 4) เขียน audit log เฉพาะตอนสำเร็จเท่านั้น
+        writeAuditLog_(actor, "อัปเดต order", body.orderId, auditDetail_({
+          before: before,
+          after: { status: body.status, preparedQty: body.preparedQty, printFlag: body.printFlag, carryMode: body.carryMode },
+          note: "อัปเดต order (" + (body.sku || "") + ")",
+        }));
         return ok({ updated: body.orderId, row: sheetRow });
       }
     }
@@ -1268,6 +1283,14 @@ function updateOrderState(ss, body) {
       const matchDate = !body.date || rowDate.includes(String(body.date).trim());
       if (matchSku && matchDate) {
         const row = i + 1;
+        // 1) อ่าน before-state จาก data ที่โหลดไว้แล้ว (ไม่ต้องอ่านซ้ำ)
+        const before = {
+          status: data[i][COL_ORD_STATUS - 1] || "",
+          preparedQty: data[i][COL_ORD_PREPQTY - 1] || "",
+          printFlag: data[i][COL_ORD_PRINTFLAG - 1] || "",
+          carryMode: data[i][COL_ORD_TYPE - 1] || "",
+        };
+        // 2) เขียนจริง
         if (body.status)              sheet.getRange(row, COL_ORD_STATUS).setValue(body.status);
         if (body.preparedQty != null) sheet.getRange(row, COL_ORD_PREPQTY).setValue(body.preparedQty);
         if (body.printFlag != null)    sheet.getRange(row, COL_ORD_PRINTFLAG).setValue(body.printFlag); // M2: != null กัน false ถูกข้าม
@@ -1281,6 +1304,12 @@ function updateOrderState(ss, body) {
           }
         }
         SpreadsheetApp.flush();
+        // 3) ถึงจุดนี้ = เขียนสำเร็จ → 4) เขียน audit log เฉพาะตอนสำเร็จเท่านั้น
+        writeAuditLog_(actor, "อัปเดต order", body.sku, auditDetail_({
+          before: before,
+          after: { status: body.status, preparedQty: body.preparedQty, printFlag: body.printFlag, carryMode: body.carryMode },
+          note: "อัปเดต order (match by sku+date, row " + row + ")",
+        }));
         return ok({ updated: body.sku, row });
       }
     }

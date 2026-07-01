@@ -2489,6 +2489,7 @@ async function syncOrderUpdate(order, updates) {
         preparedQty: updates.preparedQty,
         printFlag:   updates.printFlag,
         carryMode:   updates.carryMode,
+        actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
       }),
     });
   } catch(e) { console.warn("syncOrderUpdate failed:", e.message); }
