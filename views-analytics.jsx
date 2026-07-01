@@ -4941,7 +4941,7 @@ function MtoJobView({ data }) {
       const res = await fetch(SHEET_DEPLOY_URL, {
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({ deleteMtoJob: true, jobId: job.jobId }),
+        body: JSON.stringify({ deleteMtoJob: true, jobId: job.jobId, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน" }),
       });
       const json = await res.json();
       if (json.success) {

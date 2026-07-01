@@ -4312,12 +4312,21 @@ function saveMtoJobItems(ss, data) {
 
 function deleteMtoJob(ss, data) {
   const jobId = String(data.jobId || "").trim();
+  const actor = data.actor || "ไม่ระบุ";
   const sh = ss.getSheetByName(SHEET_MTO_JOBS);
   if (!sh) return error("ไม่พบชีต งาน MTO");
   const rows = sh.getDataRange().getValues();
   for (let i = 1; i < rows.length; i++) {
     if (String(rows[i][0]).trim() === jobId) {
+      // 1) อ่าน before-state ก่อนลบ (A..H: jobId,date,jobName,customer,price,image,status,closedAt)
+      const before = {
+        jobName: rows[i][2] || "", customer: rows[i][3] || "",
+        price: rows[i][4] || "", status: rows[i][6] || "",
+      };
+      // 2) ลบจริง — GAS deleteRow() เป็น synchronous, throw ถ้าล้มเหลว
       sh.deleteRow(i + 1);
+      // 3) ถึงจุดนี้ = ลบสำเร็จ → 4) เขียน audit log เฉพาะตอนสำเร็จเท่านั้น (เจองาน+ลบแล้วเท่านั้น)
+      writeAuditLog_(actor, "ลบงาน MTO", jobId, auditDetail_({ before: before, after: null, note: "ลบงาน MTO (" + (before.jobName || jobId) + ")" }));
       break;
     }
   }
