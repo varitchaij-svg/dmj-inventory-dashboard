@@ -1377,6 +1377,7 @@ function deleteLockEntry(ss, lockKey, sku) {
     const rSku = String(data[i][COL_LOCK_SKU - 1]).trim().toUpperCase();
     if (rKey === lockKey && rSku === sku.toUpperCase()) {
       sheet.deleteRow(i + 1);
+      invalidateCache_(); // P0-4: bump dmj_last_write_ts ให้ conflict detection มองเห็น write นี้
       return ok({ deleted: sku, lockKey });
     }
   }
@@ -1423,6 +1424,7 @@ function updateFrontStore(ss, entries, datetime) {
         .map(e => ({ sku: String(e.sku).trim().toUpperCase(), qty: Number(e.qty), warehousecode: WH_FRONTSTORE }));
       if (zortItems.length) pushStockToZort_(zortItems);
     } catch (e) { Logger.log("updateFrontStore ZORT push error: " + e); }
+    invalidateCache_(); // P0-4: bump dmj_last_write_ts ให้ conflict detection มองเห็น write นี้
     return ok({ updated: entries.length });
   } finally {
     lock.releaseLock();
@@ -1521,6 +1523,7 @@ function deleteOrderRow(ss, orderId, actor) {
     sheet.deleteRow(rowNum);
     // 3) ถึงจุดนี้ = ลบสำเร็จ (ไม่ throw) → 4) เขียน audit log เฉพาะตอนสำเร็จเท่านั้น
     writeAuditLog_(actor, "ลบ order", orderId, auditDetail_({ before: before, after: null, note: "ลบ order (" + sku + ")" }));
+    invalidateCache_(); // P0-4: bump dmj_last_write_ts ให้ conflict detection มองเห็น write นี้
     return ok({ deleted: orderId });
   } finally {
     lock.releaseLock();
@@ -1554,6 +1557,7 @@ function deleteOrderRows(ss, orderIds, actor) {
       // 3) ถึงจุดนี้ = ลบสำเร็จ → 4) เขียน audit log เฉพาะตอนสำเร็จเท่านั้น
       writeAuditLog_(actor, "ลบ order (batch)", item.id, auditDetail_({ before: before, after: null, note: "ลบ order แบบ batch" }));
     }
+    if (deleted > 0) invalidateCache_(); // P0-4: bump dmj_last_write_ts ครั้งเดียวหลัง batch เสร็จ
     return ok({ deleted });
   } finally {
     lock.releaseLock();
@@ -4038,6 +4042,7 @@ function createMtoJob(ss, data) {
     const jobId = prefix + String(maxSeq + 1).padStart(3, "0");
 
     sh.appendRow([jobId, data.dateStr || "", data.jobName || "", data.customer || "", data.price || "", data.imageUrl || "", "กำลังจัด", ""]);
+    invalidateCache_(); // P0-4: bump dmj_last_write_ts ให้ conflict detection มองเห็น write นี้
     return ContentService.createTextOutput(JSON.stringify({ success: true, jobId }))
       .setMimeType(ContentService.MimeType.JSON);
   } finally {
@@ -4332,6 +4337,7 @@ function deleteMtoJob(ss, data) {
       sh.deleteRow(i + 1);
       // 3) ถึงจุดนี้ = ลบสำเร็จ → 4) เขียน audit log เฉพาะตอนสำเร็จเท่านั้น (เจองาน+ลบแล้วเท่านั้น)
       writeAuditLog_(actor, "ลบงาน MTO", jobId, auditDetail_({ before: before, after: null, note: "ลบงาน MTO (" + (before.jobName || jobId) + ")" }));
+      invalidateCache_(); // P0-4: bump dmj_last_write_ts ให้ conflict detection มองเห็น write นี้
       break;
     }
   }
