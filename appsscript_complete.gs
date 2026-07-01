@@ -316,7 +316,7 @@ function doPost(e) {
 
     // ─── Order Management ───
     if (data.deleteOrder) {
-      return deleteOrderRow(ss, data.orderId);
+      return deleteOrderRow(ss, data.orderId, actor);
     }
     if (data.deleteOrders) {
       return deleteOrderRows(ss, data.orderIds || []);
@@ -1492,7 +1492,7 @@ function confirmStockCount(ss, entries, clientLoadedAt, actor) {
   }
 }
 
-function deleteOrderRow(ss, orderId) {
+function deleteOrderRow(ss, orderId, actor) {
   const sheet = ss.getSheetByName(SHEET_ORDERS);
   if (!sheet) return error("ไม่พบชีต ลำดับที่สั่งสินค้า");
   const rowNum = parseInt(String(orderId).replace(/[^0-9]/g, ""));
@@ -1504,10 +1504,18 @@ function deleteOrderRow(ss, orderId) {
   const lock = LockService.getScriptLock();
   if (!lock.waitLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
   try {
-    const rowData = sheet.getRange(rowNum, 1, 1, 7).getValues()[0];
+    // 1) อ่าน before-state ก่อนลบ (A..I: mode,date,status,from,to,sku,name,orderQty,preparedQty)
+    const rowData = sheet.getRange(rowNum, 1, 1, 9).getValues()[0];
     const sku = String(rowData[5] || '').trim();
     if (!sku) return error("แถวที่ " + rowNum + " ไม่มีข้อมูล SKU — อาจเลื่อนแถวแล้ว");
+    const before = {
+      status: rowData[2] || "", sku: sku, name: rowData[6] || "",
+      orderQty: rowData[7] || "", preparedQty: rowData[8] || "",
+    };
+    // 2) ลบจริง — GAS deleteRow() เป็น synchronous, throw ถ้าล้มเหลว
     sheet.deleteRow(rowNum);
+    // 3) ถึงจุดนี้ = ลบสำเร็จ (ไม่ throw) → 4) เขียน audit log เฉพาะตอนสำเร็จเท่านั้น
+    writeAuditLog_(actor, "ลบ order", orderId, auditDetail_({ before: before, after: null, note: "ลบ order (" + sku + ")" }));
     return ok({ deleted: orderId });
   } finally {
     lock.releaseLock();
