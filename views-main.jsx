@@ -3381,9 +3381,9 @@ function CategoryView({ data, role }) {
 // ────────────── Order Modal ──────────────
 const QUICK_QTYS = [24, 36, 48, 60];
 
-function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess }) {
+function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess, defaultQty }) {
   useBackHandler(onClose); // Android back = ปิด modal สั่งของ
-  const [qty, setQty] = uS(24);
+  const [qty, setQty] = uS(defaultQty > 0 ? defaultQty : 24);
   const [customMode, setCustomMode] = uS(false);
   const [orderType, setOrderType] = uS('รอขึ้นรถ');
   const [loading, setLoading] = uS(false);
@@ -3777,6 +3777,7 @@ function StockView({ data, role }) {
   const { products, thresholds: dataThresholds } = data;
   const [filter, setFilter] = uS("low");
   const [modalP, setModalP] = uS(null);
+  const [orderProduct, setOrderProduct] = uS(null);
   const [page, setPage] = uS(0);
   const [stockSearch, setStockSearch] = uS("");
   // Editable thresholds (persisted in memory)
@@ -4162,10 +4163,12 @@ function StockView({ data, role }) {
                 {(filter === "low" || filter === "out") && p.avgMonthly > 0 && (
                   <div style={{marginTop:6,display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
                     {p.suggestedQty > 0 && (
-                      <span style={{fontSize:12,fontWeight:700,color:"#fff",background:"#1f6f8b",
-                                    padding:"3px 9px",borderRadius:7,whiteSpace:"nowrap"}}>
+                      <button onClick={function(e){ e.stopPropagation(); setOrderProduct(p); }}
+                        style={{fontSize:12,fontWeight:700,color:"#fff",background:"#1f6f8b",
+                                padding:"3px 9px",borderRadius:7,whiteSpace:"nowrap",
+                                border:"none",cursor:"pointer",fontFamily:"inherit"}}>
                         📦 ควรสั่ง ~{fmtN(p.suggestedQty)} ชิ้น
-                      </span>
+                      </button>
                     )}
                     {p.stockoutAt && (
                       <span style={{fontSize:11.5,fontWeight:600,
@@ -4210,6 +4213,8 @@ function StockView({ data, role }) {
       )}
 
       {modalP && <ProductModal p={modalP} onClose={() => setModalP(null)} allCats={allCats}/>}
+      {orderProduct && <OrderModal product={orderProduct} onClose={() => setOrderProduct(null)}
+                                    defaultQty={orderProduct.suggestedQty}/>}
     </div>
   );
 }
