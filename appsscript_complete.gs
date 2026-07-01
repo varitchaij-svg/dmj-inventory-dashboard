@@ -3123,8 +3123,19 @@ function readShipments_() {
 }
 
 // ย้ายรายการที่ "รับครบ" แล้ว ออกจากชีต "รายการโอนสินค้า" → เก็บในชีตประวัติ
-// เพื่อไม่ให้ชีตหลัก/แท็บส่งแล้วบวม ส่วนที่ "รับไม่ครบ" หรือยังไม่ยืนยัน จะคาไว้เสมอ
+// เพื่อไม่ให้ชีตหลัก/แท็บส่งแล้วบวม ส่วนที่ "รับไม่ครบ" ค้างเกิน SHIP_PARTIAL_ARCHIVE_DAYS วัน
+// (นับจากเวลายืนยันรับครั้งล่าสุด) ก็จะถูกย้ายออกด้วยเช่นกัน ถือว่าปิดเคสแล้ว
+// ส่วนที่ยังไม่เคยยืนยันรับเลย (receivedAt ว่าง) จะคาไว้เสมอ เพราะยังรอ action จริง
 // ⚠️ ตั้ง trigger รายวัน (เช่น ตี 3) + รันเองครั้งแรกได้ (ชื่อไม่มี _ ต่อท้าย → โผล่ใน dropdown)
+const SHIP_PARTIAL_ARCHIVE_DAYS = 7;
+
+// แปลง "dd/MM/yyyy HH:mm" (ค่าที่ confirmShipmentReceive เขียนลง COL_SHIP_RECVAT) เป็น Date
+function parseShipRecvAt_(s) {
+  const m = String(s || '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  return new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5]);
+}
+
 function archiveReceivedShipments() {
   const ss = SpreadsheetApp.openById(SHEET_ID);
   const sheet = ss.getSheetByName(SHEET_TRANSFERS);
@@ -3137,14 +3148,26 @@ function archiveReceivedShipments() {
     const data = sheet.getDataRange().getValues();
     if (data.length < 3) return;  // มีแค่หัวตาราง 2 แถว
 
-    // หาแถวที่รับครบแล้ว (ข้อมูลเริ่ม index 2 = sheet row 3)
+    // หาแถวที่ปิดเคสแล้ว (ข้อมูลเริ่ม index 2 = sheet row 3):
+    //  - "รับครบ" → archive ทันที
+    //  - "รับไม่ครบ" ที่ค้างเกิน SHIP_PARTIAL_ARCHIVE_DAYS วันนับจากยืนยันรับครั้งล่าสุด → archive เช่นกัน
+    const partialCutoffMs = SHIP_PARTIAL_ARCHIVE_DAYS * 24 * 60 * 60 * 1000;
+    const now = Date.now();
     const toArchive = [];  // { rowNum, values }
     for (let i = 2; i < data.length; i++) {
       const sku    = String(data[i][COL_SHIP_SKU - 1] || "").trim();
+      if (!sku) continue;
       const status = String(data[i][COL_SHIP_RECVSTATUS - 1] || "").trim();
-      if (sku && status === "รับครบ") toArchive.push({ rowNum: i + 1, values: data[i] });
+      if (status === "รับครบ") {
+        toArchive.push({ rowNum: i + 1, values: data[i] });
+      } else if (status === "รับไม่ครบ") {
+        const recvAt = parseShipRecvAt_(data[i][COL_SHIP_RECVAT - 1]);
+        if (recvAt && (now - recvAt.getTime()) >= partialCutoffMs) {
+          toArchive.push({ rowNum: i + 1, values: data[i] });
+        }
+      }
     }
-    if (!toArchive.length) { Logger.log("archiveReceivedShipments: ไม่มีรายการรับครบ"); return; }
+    if (!toArchive.length) { Logger.log("archiveReceivedShipments: ไม่มีรายการที่ต้อง archive"); return; }
 
     // เขียนลงชีตประวัติ (สร้างถ้ายังไม่มี)
     let arch = ss.getSheetByName(SHEET_SHIP_ARCHIVE);
