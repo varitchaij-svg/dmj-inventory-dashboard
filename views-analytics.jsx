@@ -569,6 +569,7 @@ async function syncLockData(lockKey, entries) {
         lockKey,
         datetime: new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }),
         entries,
+        actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
       }),
     });
     return { success: true };

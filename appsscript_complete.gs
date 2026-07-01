@@ -299,7 +299,7 @@ function doPost(e) {
 
     // ─── Lock Data ───
     if (data.updateLockData) {
-      return updateLockData(ss, data.lockKey, data.entries, data.datetime);
+      return updateLockData(ss, data.lockKey, data.entries, data.datetime, actor);
     }
 
     if (data.deleteLockEntry) {
@@ -1324,7 +1324,7 @@ function confirmShipmentReceive(ss, rowId, sku, receivedQty, actor) {
   }
 }
 
-function updateLockData(ss, lockKey, entries, datetime) {
+function updateLockData(ss, lockKey, entries, datetime, actor) {
   if (!lockKey || !Array.isArray(entries)) return error("lockKey หรือ entries ไม่ถูกต้อง");
   const sheet = ss.getSheetByName(SHEET_LOCKS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_LOCKS);
@@ -1356,8 +1356,8 @@ function updateLockData(ss, lockKey, entries, datetime) {
         // A=ว่าง, B=SKU, C=lockKey, D=qty, E-G=ว่าง, H=date
         sheet.appendRow(["", sku, lockKey, entry.qty, "", "", "", dt]);
       }
-      // Audit log: บันทึกทุก entry ที่เปลี่ยน
-      try { writeAuditLog_("ระบบ", "updateLockData", sku, "lockKey: " + lockKey + ", qty: " + entry.qty); } catch(e) {}
+      // Audit log: บันทึกทุก entry ที่เปลี่ยน — ใช้ actor จริงถ้ามี, fallback "ระบบ" เหมือนเดิม
+      try { writeAuditLog_(actor || "ระบบ", "updateLockData", sku, "lockKey: " + lockKey + ", qty: " + entry.qty); } catch(e) {}
     }
     return ok({ lockKey, updated: entries.length });
   } finally {
