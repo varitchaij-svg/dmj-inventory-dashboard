@@ -453,7 +453,7 @@ function doGet(e) {
         var imgResp = UrlFetchApp.fetch(String(e.parameter.u), {
           muteHttpExceptions: true,
           followRedirects: true,
-          validateHttpsCertificates: false
+          validateHttpsCertificates: true
         });
         if (imgResp.getResponseCode() !== 200) {
           return ContentService.createTextOutput(JSON.stringify({ err: 'not_found' }))
