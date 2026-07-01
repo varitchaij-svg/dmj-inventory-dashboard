@@ -2523,6 +2523,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
   const [zeroConfirm, setZeroConfirm] = uS(false);
   const [zeroed, setZeroed] = uS(false);
   const [zeroing, setZeroing] = uS(false);
+  const [undoConfirm, setUndoConfirm] = uS(false);
   const [toast, showToast, hideToast] = useToast();
   uE(() => {
     setPrepQty(prev => prev === 0 ? (order.orderQty || 0) : prev);
@@ -2553,6 +2554,14 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
     onPatch(order.id, { status: "สำเร็จ" });
     syncOrderUpdate(order, { status: "สำเร็จ" });
     showToast("success", "บันทึกแล้ว", "✅", 2500);
+  };
+
+  // ย้อนกลับ order ที่กด Done ผิด → กลับเป็น "รอ" (เขียนกลับลง Sheet จริงด้วย ไม่ใช่แค่ localStorage)
+  const undoComplete = () => {
+    setUndoConfirm(false);
+    onPatch(order.id, { status: "รอ" });
+    syncOrderUpdate(order, { status: "รอ" });
+    showToast("success", "ย้อนกลับเป็นรอดำเนินการแล้ว", "↩️", 2500);
   };
 
   const doZeroStock = async () => {
@@ -2619,11 +2628,19 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
           <div style={{flex:1,minWidth:0}}>
             <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginBottom:2}}>
               <span style={{fontSize:10,color:"var(--muted)"}}>{order.sku}</span>
-              <span style={{
-                fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:20,
-                background:isPending?"#fff8e1":"#e8f5e9",color:isPending?"#a07417":"#1f7f44",
-                letterSpacing:.3,
-              }}>{isPending?"🟡 รอ":"✅ Done"}</span>
+              {!isPending && role !== "frontstore" && role !== "saler" ? (
+                <button onClick={() => setUndoConfirm(true)} title="กดเพื่อย้อนกลับเป็นรอดำเนินการ" style={{
+                  fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:20,
+                  background:"#e8f5e9",color:"#1f7f44",letterSpacing:.3,
+                  border:"none",cursor:"pointer",fontFamily:"inherit",
+                }}>✅ Done ↩️</button>
+              ) : (
+                <span style={{
+                  fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:20,
+                  background:isPending?"#fff8e1":"#e8f5e9",color:isPending?"#a07417":"#1f7f44",
+                  letterSpacing:.3,
+                }}>{isPending?"🟡 รอ":"✅ Done"}</span>
+              )}
             </div>
             <div style={{fontSize:14,fontWeight:600,lineHeight:1.3,marginBottom:2,
               overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
@@ -2831,6 +2848,16 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
         confirmLabel="ยืนยัน ไม่ได้จัด"
         onConfirm={doZeroStock}
         onCancel={() => setZeroConfirm(false)}
+      />
+      <ConfirmModal
+        open={undoConfirm}
+        type="warn"
+        emoji="↩️"
+        title="ย้อนกลับเป็นรอดำเนินการ?"
+        detail={`${order.name} (${order.sku})\n\nจะกลับไปเป็นสถานะ "รอ" ให้แก้ไข/จัดใหม่ได้อีกครั้ง`}
+        confirmLabel="ยืนยัน ย้อนกลับ"
+        onConfirm={undoComplete}
+        onCancel={() => setUndoConfirm(false)}
       />
       <Toast toast={toast} onClose={hideToast}/>
     </>
