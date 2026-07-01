@@ -2514,6 +2514,10 @@ async function syncShipmentReceive(rowId, sku, receivedQty) {
 function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData }) {
   const isPending = !order.status || order.status === "รอ" || order.status === "pending";
   const [prepQty, setPrepQty] = uS(() => order.preparedQty > 0 ? order.preparedQty : (order.orderQty || 0));
+  // ช่องพิมพ์แยก state ต่างหากจาก prepQty เพื่อให้ลบเลขให้ว่างระหว่างพิมพ์ได้
+  // (ถ้าผูกกับ prepQty ตรงๆ พอลบจนว่าง onChange จะ parse เป็น 0 ทันที ทำให้ลบต่อไม่ได้)
+  const [prepQtyDraft, setPrepQtyDraft] = uS(() => String(prepQty));
+  uE(() => { setPrepQtyDraft(String(prepQty)); }, [prepQty]);
   const [imgOpen, setImgOpen] = uS(false);
   const [mapOpen, setMapOpen] = uS(false); // warehouse map modal
   const [zeroConfirm, setZeroConfirm] = uS(false);
@@ -2529,6 +2533,12 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
     setPrepQty(n);
     onPatch(order.id, {preparedQty: n});
     syncOrderUpdate(order, {preparedQty: n});
+  };
+  // commit ค่าจาก draft ตอน blur/Enter เท่านั้น — ระหว่างพิมพ์ไม่ save ค่ากลาง (เช่น ว่างชั่วคราว)
+  const commitPrepQtyDraft = () => {
+    const n = Math.max(0, parseInt(prepQtyDraft)||0);
+    setPrepQtyDraft(String(n));
+    if (n !== prepQty) savePrepQty(n);
   };
   const setPrintFlag = f => {
     onPatch(order.id, {printFlag: f});
@@ -2673,36 +2683,20 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
               <div style={{fontSize:15,fontWeight:800,color:"var(--dang)"}}>{order.orderQty}</div>
             </div>
 
-            {/* จัด — with +/- buttons (≥44px for mobile) */}
+            {/* จัด — พิมพ์เลขตรงๆ (ตัดปุ่ม +/- ออก กันพนักงานกดผิด) */}
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5}}>
               <div style={{fontSize:10,color:"var(--muted)"}}>📦 จัด</div>
-              <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap",justifyContent:"center"}}>
-                {[-10,-5,-1].map(d => (
-                  <button key={d} className="order-adj-btn" onClick={() => savePrepQty(prepQty+d)} disabled={!isPending}
-                    style={{
-                      minWidth:44,height:44,padding:"0 6px",borderRadius:8,border:"1.5px solid #ef9a9a",
-                      background:"#fee2e2",color:"#c62828",fontWeight:800,fontSize:13,
-                      cursor:isPending?"pointer":"default",fontFamily:"inherit",
-                    }}>{d}</button>
-                ))}
-                <input type="number" value={prepQty} min={0} max={9999}
-                  onChange={e => savePrepQty(e.target.value)}
-                  disabled={!isPending}
-                  className="order-adj-input"
-                  style={{
-                    width:64,height:44,textAlign:"center",borderRadius:8,
-                    border:"2px solid var(--g-500)",fontSize:18,fontWeight:800,
-                    background:isPending?"#f0fdf4":"var(--g-50)",fontFamily:"inherit",
-                  }}/>
-                {[+1,+5,+10].map(d => (
-                  <button key={d} className="order-adj-btn" onClick={() => savePrepQty(prepQty+d)} disabled={!isPending}
-                    style={{
-                      minWidth:44,height:44,padding:"0 6px",borderRadius:8,border:"1.5px solid #81c784",
-                      background:"#e8f5e9",color:"#1b5e20",fontWeight:800,fontSize:13,
-                      cursor:isPending?"pointer":"default",fontFamily:"inherit",
-                    }}>+{d}</button>
-                ))}
-              </div>
+              <input type="number" value={prepQtyDraft} min={0} max={9999}
+                onChange={e => setPrepQtyDraft(e.target.value)}
+                onBlur={commitPrepQtyDraft}
+                onKeyDown={e => { if (e.key === "Enter") { commitPrepQtyDraft(); e.target.blur(); } }}
+                disabled={!isPending}
+                className="order-adj-input"
+                style={{
+                  width:76,height:44,textAlign:"center",borderRadius:8,
+                  border:"2px solid var(--g-500)",fontSize:18,fontWeight:800,
+                  background:isPending?"#f0fdf4":"var(--g-50)",fontFamily:"inherit",
+                }}/>
             </div>
 
             <div style={{textAlign:"center",minWidth:44}}>
