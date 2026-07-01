@@ -319,7 +319,7 @@ function doPost(e) {
       return deleteOrderRow(ss, data.orderId, actor);
     }
     if (data.deleteOrders) {
-      return deleteOrderRows(ss, data.orderIds || []);
+      return deleteOrderRows(ss, data.orderIds || [], actor);
     }
 
     // ─── Manual ZORT Sync ───
@@ -1523,7 +1523,7 @@ function deleteOrderRow(ss, orderId, actor) {
 }
 
 // ลบหลาย order rows ในครั้งเดียว — เรียงจากแถวล่างขึ้นบนกัน index เลื่อน
-function deleteOrderRows(ss, orderIds) {
+function deleteOrderRows(ss, orderIds, actor) {
   if (!Array.isArray(orderIds) || !orderIds.length) return error("orderIds ว่างเปล่า");
   const sheet = ss.getSheetByName(SHEET_ORDERS);
   if (!sheet) return error("ไม่พบชีต ลำดับที่สั่งสินค้า");
@@ -1531,12 +1531,24 @@ function deleteOrderRows(ss, orderIds) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
   try {
-    const rows = orderIds
-      .map(id => parseInt(String(id).replace(/[^0-9]/g, "")))
-      .filter(n => n >= 3)
-      .sort((a, b) => b - a);   // มาก→น้อย
+    const items = orderIds
+      .map(id => ({ id: id, rowNum: parseInt(String(id).replace(/[^0-9]/g, "")) }))
+      .filter(x => x.rowNum >= 3)
+      .sort((a, b) => b.rowNum - a.rowNum);   // มาก→น้อย กัน index เลื่อนตอนลบ
     let deleted = 0;
-    for (const r of rows) { sheet.deleteRow(r); deleted++; }
+    for (const item of items) {
+      // 1) อ่าน before-state ก่อนลบ (A..I: mode,date,status,from,to,sku,name,orderQty,preparedQty)
+      const rowData = sheet.getRange(item.rowNum, 1, 1, 9).getValues()[0];
+      const before = {
+        status: rowData[2] || "", sku: rowData[5] || "", name: rowData[6] || "",
+        orderQty: rowData[7] || "", preparedQty: rowData[8] || "",
+      };
+      // 2) ลบจริง — GAS deleteRow() เป็น synchronous, throw ถ้าล้มเหลว
+      sheet.deleteRow(item.rowNum);
+      deleted++;
+      // 3) ถึงจุดนี้ = ลบสำเร็จ → 4) เขียน audit log เฉพาะตอนสำเร็จเท่านั้น
+      writeAuditLog_(actor, "ลบ order (batch)", item.id, auditDetail_({ before: before, after: null, note: "ลบ order แบบ batch" }));
+    }
     return ok({ deleted });
   } finally {
     lock.releaseLock();
