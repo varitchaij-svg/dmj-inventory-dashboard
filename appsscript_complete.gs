@@ -304,7 +304,7 @@ function doPost(e) {
     }
 
     if (data.deleteLockEntry) {
-      return deleteLockEntry(ss, data.lockKey, data.sku);
+      return deleteLockEntry(ss, data.lockKey, data.sku, actor);
     }
 
     // ─── Front Store Count ───
@@ -1398,7 +1398,7 @@ function updateLockData(ss, lockKey, entries, datetime, actor) {
   }
 }
 
-function deleteLockEntry(ss, lockKey, sku) {
+function deleteLockEntry(ss, lockKey, sku, actor) {
   if (!lockKey || !sku) return error("lockKey หรือ sku ไม่ครบ");
   const sheet = ss.getSheetByName(SHEET_LOCKS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_LOCKS);
@@ -1408,7 +1408,13 @@ function deleteLockEntry(ss, lockKey, sku) {
     const rKey = String(data[i][COL_LOCK_KEY - 1]).trim();
     const rSku = String(data[i][COL_LOCK_SKU - 1]).trim().toUpperCase();
     if (rKey === lockKey && rSku === sku.toUpperCase()) {
+      // 1) อ่าน before-state ก่อนลบ
+      const before = { qty: data[i][COL_LOCK_QTY - 1] || "" };
+      // 2) ลบจริง
       sheet.deleteRow(i + 1);
+      // 3) ถึงจุดนี้ = ลบสำเร็จ → 4) เขียน audit log เฉพาะตอนสำเร็จเท่านั้น
+      writeAuditLog_(actor || "ไม่ระบุ", "ลบตำแหน่งจัดเก็บ", sku,
+        auditDetail_({ before: before, after: null, note: "ลบ " + sku + " ออกจากล็อค " + lockKey }));
       invalidateCache_(); // P0-4: bump dmj_last_write_ts ให้ conflict detection มองเห็น write นี้
       return ok({ deleted: sku, lockKey });
     }

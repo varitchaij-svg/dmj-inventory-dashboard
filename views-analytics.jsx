@@ -582,7 +582,7 @@ async function syncDeleteLockEntry(lockKey, sku) {
     await fetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ deleteLockEntry: true, lockKey, sku }),
+      body: JSON.stringify({ deleteLockEntry: true, lockKey, sku, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน" }),
     });
     return { success: true };
   } catch (err) { return { success: false, error: err.message }; }
