@@ -174,19 +174,37 @@ const COST_RATIO = 0.8;
 
 // ───────────────────────────────────────────────────────────
 // Audit Log helper — fire-and-forget, ห้าม throw กระทบ main flow
+// resource: generic resource id — ไม่จำกัดแค่ SKU (order/MTO job/transfer/ฯลฯ)
+//           ชื่อ param เปลี่ยนจาก sku→resource แต่ตำแหน่ง/จำนวนคอลัมน์เดิมไม่เปลี่ยน
+//           จึง caller เดิมทั้งหมดยังทำงานเหมือนเดิม
+// หมายเหตุ: audit log นี้เป็นระดับ Role ไม่ใช่ระดับรายบุคคล เพราะ actor ที่ frontend
+//           ส่งมาปัจจุบัน = role string เสมอ (window._currentUser ไม่เคยถูกกำหนดค่าจริง
+//           ในระบบ) — ถ้าต้องการ traceability ระดับพนักงานรายคน ต้องเพิ่ม step ให้กรอกชื่อ
+//           ตอน login ก่อน ซึ่งเป็นฟีเจอร์แยกนอกขอบเขตนี้
 // ───────────────────────────────────────────────────────────
-function writeAuditLog_(actor, action, sku, detail) {
+function writeAuditLog_(actor, action, resource, detail) {
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     let sh = ss.getSheetByName(SHEET_AUDIT);
     if (!sh) {
       sh = ss.insertSheet(SHEET_AUDIT);
-      sh.appendRow(["วันที่เวลา", "ผู้ใช้", "Action", "SKU", "รายละเอียด"]);
+      sh.appendRow(["วันที่เวลา", "ผู้ใช้", "Action", "Resource", "รายละเอียด"]);
       sh.getRange(1, 1, 1, 5).setFontWeight("bold");
     }
-    sh.appendRow([new Date(), actor || "ไม่ระบุ", action || "", sku || "", detail || ""]);
+    sh.appendRow([new Date(), actor || "ไม่ระบุ", action || "", resource || "", detail || ""]);
   } catch (e) {
     Logger.log("writeAuditLog_ error: " + e);
+  }
+}
+
+// สร้าง detail string แบบ JSON มาตรฐาน สำหรับ audit log ที่ต้องเก็บ before/after
+// รับ object อิสระ (ไม่ fix shape) เพื่อรองรับข้อมูลเพิ่มเติมในอนาคตโดยไม่ต้องแก้ signature
+// ตัวอย่าง: auditDetail_({ before: {status:"รอ"}, after: null, note: "ลบ order หลังส่งสำเร็จ" })
+function auditDetail_(fields) {
+  try {
+    return JSON.stringify(fields || {});
+  } catch (e) {
+    return String((fields && fields.note) || "");
   }
 }
 
@@ -374,11 +392,12 @@ function doGet(e) {
       // skip header row (row 0), เอา 200 แถวล่าสุด แล้ว reverse ให้ใหม่สุดขึ้นก่อน
       const rows = vals.slice(1).slice(-200).reverse().map(function(r) {
         return {
-          ts:     r[0] ? new Date(r[0]).toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }) : "",
-          actor:  r[1] || "",
-          action: r[2] || "",
-          sku:    r[3] || "",
-          detail: r[4] || "",
+          ts:       r[0] ? new Date(r[0]).toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }) : "",
+          actor:    r[1] || "",
+          action:   r[2] || "",
+          resource: r[3] || "",
+          sku:      r[3] || "", // เดิม — คงไว้ชั่วคราวเพื่อ backward compat, ลบใน release ถัดไปหลังยืนยันไม่มี consumer ใช้แล้ว
+          detail:   r[4] || "",
         };
       });
       return ContentService.createTextOutput(JSON.stringify({ rows: rows }))
