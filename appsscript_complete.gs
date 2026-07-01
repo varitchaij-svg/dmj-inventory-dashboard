@@ -337,7 +337,12 @@ function doPost(e) {
     }
 
     // ─── Reset Negative Stock ───
-    if (data.resetNegativeStock) return resetNegativeStock_(ss, actor);
+    // Owner only ตาม ADR-001 — ไม่มี legitimate caller อื่นจาก UI (ตรวจยืนยันแล้ว)
+    // ปกติเรียกผ่าน resetNegativeStockOnce() ใน GAS editor โดยตรง ไม่ผ่าน path นี้เลย
+    if (data.resetNegativeStock) {
+      if (data.role !== 'owner') return unauthorized_();
+      return resetNegativeStock_(ss, actor);
+    }
 
     // ─── MTO Jobs ───
     if (data.createMtoJob)    return createMtoJob(ss, data);
