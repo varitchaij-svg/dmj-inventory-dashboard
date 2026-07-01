@@ -6559,6 +6559,7 @@ async function syncFrontStoreData(entries) {
         updateFrontStore: true,
         datetime: new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" }),
         entries,
+        actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
       }),
     });
     return { success: true };

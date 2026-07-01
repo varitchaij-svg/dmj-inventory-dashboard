@@ -309,7 +309,7 @@ function doPost(e) {
 
     // ─── Front Store Count ───
     if (data.updateFrontStore) {
-      return updateFrontStore(ss, data.entries, data.datetime);
+      return updateFrontStore(ss, data.entries, data.datetime, actor);
     }
     if (data.confirmStockCount) {
       return confirmStockCount(ss, data.entries, data.clientLoadedAt, actor);
@@ -1416,7 +1416,7 @@ function deleteLockEntry(ss, lockKey, sku) {
   return ok({ notFound: sku });
 }
 
-function updateFrontStore(ss, entries, datetime) {
+function updateFrontStore(ss, entries, datetime, actor) {
   const sheet = ss.getSheetByName(SHEET_FRONTSTORE_QTY);
   if (!sheet) return error("ไม่พบชีต จำนวนหน้าร้าน");
 
@@ -1426,6 +1426,7 @@ function updateFrontStore(ss, entries, datetime) {
   try {
     const dt = datetime || new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" });
     const rows = sheet.getDataRange().getValues();
+    const auditRows = []; // เก็บ { sku, oldQty, newQty } เฉพาะรายการที่ค่าเปลี่ยน
 
     for (const entry of entries) {
       const sku = String(entry.sku).trim().toUpperCase();
@@ -1435,8 +1436,10 @@ function updateFrontStore(ss, entries, datetime) {
       for (let i = 1; i < rows.length; i++) {
         const rowSku = String(rows[i][1] || "").trim().toUpperCase();
         if (rowSku === sku) {
+          const oldQty = Number(rows[i][3]) || 0;
           sheet.getRange(i + 1, 4).setValue(qty);
           sheet.getRange(i + 1, 9).setValue(dt);
+          if (oldQty !== qty) auditRows.push({ sku, oldQty, newQty: qty });
           found = true;
           break;
         }
@@ -1447,6 +1450,7 @@ function updateFrontStore(ss, entries, datetime) {
         newRow[3] = qty;
         newRow[8] = dt;
         sheet.appendRow(newRow);
+        auditRows.push({ sku, oldQty: null, newQty: qty });
       }
     }
     SpreadsheetApp.flush();
@@ -1456,6 +1460,11 @@ function updateFrontStore(ss, entries, datetime) {
         .map(e => ({ sku: String(e.sku).trim().toUpperCase(), qty: Number(e.qty), warehousecode: WH_FRONTSTORE }));
       if (zortItems.length) pushStockToZort_(zortItems);
     } catch (e) { Logger.log("updateFrontStore ZORT push error: " + e); }
+    // Audit log: บันทึกเฉพาะ SKU ที่ค่าเปลี่ยน (pattern เดียวกับ confirmStockCount)
+    auditRows.forEach(function(r) {
+      writeAuditLog_(actor || "ไม่ระบุ", "ตรวจหน้าร้าน", r.sku,
+        auditDetail_({ before: { qty: r.oldQty }, after: { qty: r.newQty }, note: "ตรวจจำนวนหน้าร้าน" }));
+    });
     invalidateCache_(); // P0-4: bump dmj_last_write_ts ให้ conflict detection มองเห็น write นี้
     return ok({ updated: entries.length });
   } finally {
