@@ -1435,7 +1435,8 @@ function updateFrontStore(ss, entries, datetime, actor) {
     const auditRows = []; // เก็บ { sku, oldQty, newQty } เฉพาะรายการที่ค่าเปลี่ยน
 
     for (const entry of entries) {
-      const sku = String(entry.sku).trim().toUpperCase();
+      const sku = String(entry.sku || "").trim().toUpperCase();
+      if (!sku) continue; // กัน entry ไม่มี sku สร้างแถวขยะ (pattern เดียวกับ updateLockData)
       const qty = Number(entry.qty) || 0;
       let found = false;
 
