@@ -29,7 +29,7 @@ function PurchaseGroupView({ products }) {
                             {bg:"#f0fdf4",color:"#16a34a",label:"ปกติ"};
               return (
                 <div key={p.sku} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",borderBottom:"1px solid #f3f4f6"}}>
-                  {p.imageUrl && <img src={p.imageUrl} style={{width:40,height:40,objectFit:"cover",borderRadius:6,flexShrink:0}} onError={function(e){e.target.style.display="none";}}/>}
+                  {p.imageUrl && <img src={p.imageUrl} loading="lazy" style={{width:40,height:40,objectFit:"cover",borderRadius:6,flexShrink:0}} onError={function(e){e.target.style.display="none";}}/>}
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontSize:13,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name}</div>
                     <div style={{fontSize:12,color:"#6b7280"}}>{p.sku}</div>
@@ -1563,7 +1563,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                         {/* Image */}
                         <div style={{position:'relative',paddingTop:'75%',background:'var(--g-50)',flexShrink:0}}>
                           {p.imageUrl ? (
-                            <img src={p.imageUrl} alt={p.name}
+                            <img src={p.imageUrl} alt={p.name} loading="lazy"
                                  style={{position:'absolute',inset:0,width:'100%',height:'100%',
                                          objectFit:'contain',background:'var(--g-50)'}}/>
                           ) : (
@@ -1758,7 +1758,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                       }}>
                       {/* Image or emoji */}
                       {p && p.imageUrl ? (
-                        <img src={p.imageUrl} alt={p.name}
+                        <img src={p.imageUrl} alt={p.name} loading="lazy"
                           style={{width:44,height:44,objectFit:'contain',borderRadius:8,
                                   background:'var(--g-50)',flexShrink:0}}/>
                       ) : (
@@ -2101,7 +2101,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                   {/* Image 4:3 ratio */}
                   <div style={{position:'relative',paddingTop:'75%',background:'var(--g-50)',flexShrink:0}}>
                     {p && p.imageUrl ? (
-                      <img src={p.imageUrl} alt={p.name}
+                      <img src={p.imageUrl} alt={p.name} loading="lazy"
                            style={{position:'absolute',inset:0,width:'100%',height:'100%',
                                    objectFit:'contain',padding:6}}/>
                     ) : (

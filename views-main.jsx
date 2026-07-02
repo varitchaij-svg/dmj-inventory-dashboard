@@ -3053,7 +3053,7 @@ function CategoryView({ data, role }) {
                                  background:'var(--g-50)',border:'1px solid var(--bdr)',
                                  display:'flex',alignItems:'center',justifyContent:'center'}}>
                       {p.imageUrl
-                        ? <img src={p.imageUrl} alt={p.name}
+                        ? <img src={p.imageUrl} alt={p.name} loading="lazy"
                             style={{width:'100%',height:'100%',objectFit:'contain'}}/>
                         : <span style={{fontSize:22}}>{CAT_EMOJI[p.cat] || '📦'}</span>}
                     </div>
@@ -4115,7 +4115,7 @@ function StockView({ data, role }) {
                       alignItems:"flex-start",cursor:"pointer",overflow:"hidden"}}>
               {/* รูป */}
               {p.imageUrl ? (
-                <img src={p.imageUrl}
+                <img src={p.imageUrl} loading="lazy"
                   style={{width:48,height:48,objectFit:"cover",borderRadius:8,flexShrink:0}}
                   onError={function(e){e.target.style.display="none";}}/>
               ) : (
@@ -5527,7 +5527,7 @@ function StorageView({ data }) {
                           cursor: locks.length > 0 ? 'pointer' : 'default',
                           boxShadow:'0 1px 4px rgba(0,0,0,.05)'}}>
                   {p.imageUrl
-                    ? <img src={p.imageUrl} alt={p.name}
+                    ? <img src={p.imageUrl} alt={p.name} loading="lazy"
                         style={{width:52,height:52,objectFit:'contain',borderRadius:8,
                                 background:'var(--g-50)',flexShrink:0}}/>
                     : <div style={{width:52,height:52,borderRadius:8,background:'var(--g-50)',
@@ -5989,7 +5989,7 @@ function UnassignedProductCards({ products, lockData, shelves, onAssigned }) {
             }}>
               {/* Product image */}
               {p.imageUrl ? (
-                <img src={p.imageUrl} alt={p.name}
+                <img src={p.imageUrl} alt={p.name} loading="lazy"
                      style={{width:"100%",height:140,objectFit:"contain",display:"block",background:"var(--g-50)"}}/>
               ) : (
                 <div style={{width:"100%",height:100,background:"var(--g-50)",
