@@ -2251,6 +2251,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
 }
 
 function TransferView({ data }) {
+  const rechartsReady = useRechartsReady(); // gate กราฟจนกว่า Recharts (defer) จะพร้อม
   const transfers = data.transfers || [];
   const stats = data.transferStats || { 'โอน': {count:0,qty:0}, 'ปรับ': {count:0,qty:0}, 'ยกมา': {count:0,qty:0} };
   const products = data.products || [];
@@ -2308,7 +2309,7 @@ function TransferView({ data }) {
 
       <Card title="📊 ปริมาณโอน/ปรับ/ยกมารายเดือน"
             sub="Trend ของการเคลื่อนย้ายสินค้า">
-        <ResponsiveContainer width="100%" height={280}>
+        {rechartsReady ? <ResponsiveContainer width="100%" height={280}>
           <BarChart data={transferByMonth}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--bdr)" />
             <XAxis dataKey="month" fontSize={12} />
@@ -2319,7 +2320,7 @@ function TransferView({ data }) {
             <Bar dataKey="ปรับ" fill="#FF9800" name="ปรับ" />
             <Bar dataKey="ยกมา" fill="#4CAF50" name="ยกมา" />
           </BarChart>
-        </ResponsiveContainer>
+        </ResponsiveContainer> : <ChartLoading height={280}/>}
       </Card>
 
       <Card title="📋 รายการโอน/ปรับ/ยกมา"

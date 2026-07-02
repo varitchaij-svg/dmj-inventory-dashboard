@@ -926,7 +926,9 @@
   <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
-  <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+  <!-- recharts: defer — ใช้เฉพาะกราฟหน้า overview/analytics (gate ด้วย useRechartsReady + ChartLoading)
+       ไม่ block Babel/first paint; หน้าแรกของ staff ส่วนใหญ่คือ "สินค้า" ที่ไม่มีกราฟ -->
+  <script defer src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
   <!-- qrcode + html5-qrcode: defer — ใช้เฉพาะตอนพิมพ์ label / สแกน (lazy + มี guard อยู่แล้ว)
        ไม่ให้ block การโหลด Babel ซึ่งอยู่บน critical path ของการ render ครั้งแรก -->
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>

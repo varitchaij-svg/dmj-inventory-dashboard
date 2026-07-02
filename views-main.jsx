@@ -593,8 +593,41 @@ function useBackHandler(onBack) {
     };
   }, [!!onBack]); // re-run only when active/inactive state changes
 }
-const { ResponsiveContainer, AreaChart, Area, BarChart, Bar, LineChart, Line,
-        XAxis, YAxis, CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell } = window.Recharts;
+// Recharts ถูก defer โหลด (ไม่อยู่บน critical path ของ first paint) → bind แบบ resilient
+// ไม่ destructure ตอน eval ตรง ๆ (จะได้ undefined ถ้า Recharts ยังไม่มา → white screen)
+// ใช้ let + _bindRecharts() แล้ว gate การ render กราฟด้วย useRechartsReady() จนกว่าจะพร้อม
+let ResponsiveContainer, AreaChart, Area, BarChart, Bar, LineChart, Line,
+    XAxis, YAxis, CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell;
+function _bindRecharts() {
+  const R = (typeof window !== 'undefined' && window.Recharts) || null;
+  if (!R) return false;
+  ({ ResponsiveContainer, AreaChart, Area, BarChart, Bar, LineChart, Line,
+     XAxis, YAxis, CartesianGrid, Tooltip, Legend, PieChart, Pie, Cell } = R);
+  return true;
+}
+_bindRecharts(); // bind ทันทีถ้า Recharts โหลดแล้ว (กรณี cache/โหลดเร็ว)
+
+// hook: คืน true เมื่อ Recharts พร้อมใช้ — poll สั้น ๆ จนกว่าจะมา แล้ว re-render กราฟ
+function useRechartsReady() {
+  const [ready, setReady] = uS(() => !!(typeof window !== 'undefined' && window.Recharts));
+  uE(() => {
+    if (ready) return;
+    const id = setInterval(() => {
+      if (_bindRecharts()) { setReady(true); clearInterval(id); }
+    }, 120);
+    return () => clearInterval(id);
+  }, [ready]);
+  return ready;
+}
+
+// placeholder ระหว่างรอ Recharts (กัน layout กระโดด — สูงเท่ากราฟจริง)
+function ChartLoading({ height }) {
+  return React.createElement("div", {
+    style: { width:"100%", height: height||220, display:"flex", alignItems:"center",
+             justifyContent:"center", color:"var(--muted)", fontSize:13,
+             background:"var(--g-50)", borderRadius:10 }
+  }, "กำลังโหลดกราฟ…");
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // ONLINE STATUS HOOK — ติดตาม navigator.onLine แบบ reactive
@@ -903,6 +936,7 @@ function ExportProgressOverlay({ current, total, done }) {
 // OVERVIEW
 // ─────────────────────────────────────────────────────────────────────
 function OverviewView({ data, range, setRange, role }) {
+  const rechartsReady = useRechartsReady(); // gate กราฟจนกว่า Recharts (defer) จะพร้อม
   const { products, monthLabels, monthlyByCat, totals, mtoGroups,
           dayLabels, dailyByCat } = data;
 
@@ -1516,7 +1550,7 @@ function OverviewView({ data, range, setRange, role }) {
 
           {/* Trend chart: historical + forecast */}
           <Card title="แนวโน้ม + Forecast เดือนหน้า" sub="เส้นประ = ค่าพยากรณ์ | เส้นทึบ = Trend Line">
-            <ResponsiveContainer width="100%" height={220}>
+            {rechartsReady ? <ResponsiveContainer width="100%" height={220}>
               <LineChart data={forecast.chartData} margin={{top:6,right:16,bottom:6,left:0}}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2eadd" vertical={false}/>
                 <XAxis dataKey="label" tick={{fontSize:11,fill:"#5b6b5e"}} tickLine={false} axisLine={false}/>
@@ -1531,7 +1565,7 @@ function OverviewView({ data, range, setRange, role }) {
                       dot={{r:5,fill:"#7c3aed",strokeWidth:2,stroke:"#fff"}}
                       strokeDasharray="6 3" name="forecast"/>
               </LineChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer> : <ChartLoading height={220}/>}
           </Card>
         </div>
       )}
@@ -1550,7 +1584,7 @@ function OverviewView({ data, range, setRange, role }) {
             <Empty icon={I.upload} title="ยังไม่มีข้อมูลรายวัน"
                    sub="อัปโหลด dailySales*.xlsx ในหน้าอัปโหลด แล้วกลับมาดูที่นี่"/>
           ) : (
-            <ResponsiveContainer width="100%" height={300}>
+            rechartsReady ? <ResponsiveContainer width="100%" height={300}>
               <BarChart data={stackedSeries} margin={{top:6,right:8,bottom:6,left:0}}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2eadd" vertical={false}/>
                 <XAxis dataKey="label" tick={{fontSize:11, fill:"#5b6b5e"}} tickLine={false} axisLine={false}/>
@@ -1563,14 +1597,14 @@ function OverviewView({ data, range, setRange, role }) {
                 ))}
                 <Bar dataKey="อื่นๆ" stackId="a" fill="#c9d6bf" />
               </BarChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer> : <ChartLoading height={300}/>
           )}
         </Card>
 
         <Card title="สัดส่วนยอดขายตามหมวด"
               sub={range==='year' ? "ทั้งปี" : range==='day' ? `${days.length} วันล่าสุด` : (activeMonth ? monthLabel(activeMonth) : "เดือนล่าสุด")}>
           <div style={{display:"flex",alignItems:"center",gap:16}}>
-            <ResponsiveContainer width={160} height={200}>
+            {rechartsReady ? <ResponsiveContainer width={160} height={200}>
               <PieChart>
                 <Pie data={catShare.slice(0,8)} dataKey="rev" nameKey="cat"
                      cx="50%" cy="50%" innerRadius={45} outerRadius={75} paddingAngle={1.5}>
@@ -1578,7 +1612,7 @@ function OverviewView({ data, range, setRange, role }) {
                 </Pie>
                 <Tooltip formatter={v => fmtB(v)}/>
               </PieChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer> : <ChartLoading height={200}/>}
             <div style={{flex:1, overflowY:"auto", maxHeight:200}}>
               {catShare.slice(0,8).map((c) => {
                 const pct = (c.rev / (catShare.reduce((s,x)=>s+x.rev,0)||1) * 100).toFixed(1);
@@ -1650,7 +1684,7 @@ function OverviewView({ data, range, setRange, role }) {
               {/* Stacked bar — selected months comparison */}
               <Card title="ยอดขายตามหมวด · เทียบรายเดือน"
                     sub={`${cmpData.activeTargets.length} เดือน · แท่งซ้อน Top 5 หมวด`}>
-                <ResponsiveContainer width="100%" height={280}>
+                {rechartsReady ? <ResponsiveContainer width="100%" height={280}>
                   <BarChart data={cmpData.bars} margin={{top:6,right:8,bottom:6,left:0}}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2eadd" vertical={false}/>
                     <XAxis dataKey="label" tick={{fontSize:12,fill:"#5b6b5e"}} tickLine={false} axisLine={false}/>
@@ -1663,12 +1697,12 @@ function OverviewView({ data, range, setRange, role }) {
                     ))}
                     <Bar dataKey="อื่นๆ" stackId="a" fill="#c9d6bf"/>
                   </BarChart>
-                </ResponsiveContainer>
+                </ResponsiveContainer> : <ChartLoading height={280}/>}
               </Card>
 
               {/* Line chart — total revenue trend across selected months */}
               <Card title="ยอดขายรวม · เส้นแนวโน้ม" sub="เปรียบเทียบ total revenue รายเดือน" style={{marginTop:12}}>
-                <ResponsiveContainer width="100%" height={200}>
+                {rechartsReady ? <ResponsiveContainer width="100%" height={200}>
                   <LineChart data={cmpData.bars} margin={{top:6,right:16,bottom:6,left:0}}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2eadd" vertical={false}/>
                     <XAxis dataKey="label" tick={{fontSize:11,fill:"#5b6b5e"}} tickLine={false} axisLine={false}/>
@@ -1680,7 +1714,7 @@ function OverviewView({ data, range, setRange, role }) {
                       dot={{r:5,fill:"var(--g-500)",stroke:"#fff",strokeWidth:2}}
                       name="ยอดรวม"/>
                   </LineChart>
-                </ResponsiveContainer>
+                </ResponsiveContainer> : <ChartLoading height={200}/>}
               </Card>
             </>
           )}
