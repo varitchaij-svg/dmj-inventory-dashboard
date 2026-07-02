@@ -6445,11 +6445,22 @@ function QRScanModal({ onDetected, onClose }) {
             window.Html5QrcodeSupportedFormats.DATA_MATRIX,
             window.Html5QrcodeSupportedFormats.ITF,
           ],
+          // ใช้ native BarcodeDetector ของ OS ถ้ารองรับ (Android/Chrome สมัยใหม่)
+          // เร็ว/ทนกว่าตัว decode แบบ JS มาก — ถ้าไม่รองรับ library fallback ไป JS ให้เอง
+          experimentalFeatures: { useBarCodeDetectorIfSupported: true },
         });
         scannerRef.current = h5q;
         await h5q.start(
           { facingMode: "environment" },
-          { fps: 10, qrbox: { width: 220, height: 220 } },
+          {
+            fps: 15, // จาก 10 → 15 ลองถอดรหัสถี่ขึ้น
+            // qrbox ปรับตามขนาดจอ (เดิม fixed 220 เล็ก/ใหญ่ไม่พอดีแต่ละเครื่อง) — สี่เหลี่ยมจตุรัส
+            // 75% ของด้านสั้น เล็งง่ายขึ้นทั้ง QR (label เราเอง) และบาร์โค้ดสินค้า
+            qrbox: function (vw, vh) {
+              const size = Math.floor(Math.min(vw, vh) * 0.75);
+              return { width: size, height: size };
+            },
+          },
           (decoded) => {
             const sku = String(decoded || "").trim().toUpperCase();
             if (!sku) return;
