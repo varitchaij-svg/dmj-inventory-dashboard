@@ -2532,6 +2532,13 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
     onPatch(order.id, {preparedQty: n});
     syncOrderUpdate(order, {preparedQty: n});
   };
+  // อัปเดตเฉพาะ state ในเครื่อง (ไม่ยิง network) — ใช้ระหว่างพิมพ์ในช่อง input
+  // เพื่อไม่ให้ทุก keystroke ยิง POST ไป GAS + เขียน audit log (sync ทีเดียวตอน blur)
+  const setPrepQtyLocal = v => {
+    const n = Math.max(0, parseInt(v)||0);
+    setPrepQty(n);
+    onPatch(order.id, {preparedQty: n});
+  };
   const setPrintFlag = f => {
     onPatch(order.id, {printFlag: f});
     syncOrderUpdate(order, {printFlag: f});
@@ -2688,7 +2695,8 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
                     }}>{d}</button>
                 ))}
                 <input type="number" value={prepQty} min={0} max={9999}
-                  onChange={e => savePrepQty(e.target.value)}
+                  onChange={e => setPrepQtyLocal(e.target.value)}
+                  onBlur={e => savePrepQty(e.target.value)}
                   disabled={!isPending}
                   className="order-adj-input"
                   style={{
