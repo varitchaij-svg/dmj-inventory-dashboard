@@ -101,8 +101,56 @@
   <!-- ═══════════════════════════════════════════ -->
   <div class="week">
     <div class="week-header">
+      <span class="week-label">2 ก.ค. 2569</span>
+      <span class="week-title">Security &amp; Traceability · Performance · Scanner · Test harness</span>
+    </div>
+
+    <div class="section">
+      <div class="section-title">🔒 Security &amp; Audit Trail</div>
+      <div class="card">
+        <div class="card-title">ปิดช่องโหว่ + เพิ่มการบันทึกว่าใครทำอะไร <span class="badge badge-new">ใหม่</span></div>
+        <ul>
+          <li><strong>Audit log ครบ 15/17 write action</strong> — deleteOrder(s)/deleteMtoJob/updateOrderState/createMtoJob/updateFrontStore/deleteLockEntry บันทึก actor + ค่าก่อน/หลัง (before/after) รูปแบบ JSON</li>
+          <li><code>writeAuditLog_</code> เป็น generic (รองรับทุก resource ไม่จำกัดแค่ SKU)</li>
+          <li><code>updateLockData</code> บันทึก actor จริงแทน hardcode "ระบบ" + เพิ่มคอลัมน์ <strong>ผู้จัด (preparedBy)</strong> ในชีตรายการโอน</li>
+          <li>owner-only gate สำหรับ <code>resetNegativeStock</code>; เปิด TLS validation ใน imgProxy; เติม <code>invalidateCache_()</code> 6 จุดที่ขาด (conflict detection ครบ)</li>
+          <li>ตัดสินใจตาม ADR-001: ใช้แนวทาง KISS (เน้น traceability) แทน session-auth ที่ซับซ้อนเกินสเกลระบบ</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">⚡ Performance</div>
+      <div class="card">
+        <div class="card-title">เข้าเว็บครั้งแรกเร็วขึ้น + จอลื่นขึ้น <span class="badge badge-new">ใหม่</span></div>
+        <ul>
+          <li><strong>lazy-load Recharts + defer qrcode/html5-qrcode</strong> — ไม่ block การโหลดครั้งแรก (กราฟโชว์ placeholder ระหว่างรอ ไม่ค้างจอ)</li>
+          <li>รูปสินค้าในลิสต์ใช้ <code>loading=lazy</code> — ลดภาระโหลดบนมือถือ</li>
+          <li>รวม filter ซ้ำใน CategoryView/OverviewView เป็น memo เดียว (ลด re-scan)</li>
+          <li>ลด SKU lookup ฝั่ง backend จาก O(items×rows) → O(items+rows) ในการโอน/นับสต็อกเป็นชุด</li>
+          <li>เชื่อม "จำนวนที่ควรสั่ง" (คำนวณจากยอดขาย) เข้าปุ่มสั่งของใน StockView</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">📷 Scanner &amp; 🧪 Test</div>
+      <div class="card">
+        <div class="card-title">สแกนเร็วขึ้น + ระบบทดสอบอัตโนมัติ <span class="badge badge-new">ใหม่</span></div>
+        <ul>
+          <li>Scanner เปิด native BarcodeDetector (เร็ว/ทนกว่าบน Android/Chrome), fps 10→15, กล่องสแกนปรับตามขนาดจอ <em>(ต้องลองบนมือถือจริง)</em></li>
+          <li><strong>Headless browser test harness</strong> — ทดสอบทุก role × ทุกหน้าอัตโนมัติ (ไม่ crash/ไม่ white-screen) + assert เนื้อหา + interaction; ผูกเข้า CI รันทุก push</li>
+          <li>แก้ bug: <code>updateFrontStore</code> สร้างแถวขยะเมื่อ entry ไม่มี SKU</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <div class="week">
+    <div class="week-header">
       <span class="week-label">2 มิ.ย. 2569</span>
-      <span class="week-title">วันนี้ — สินค้าจม · UX · Emoji</span>
+      <span class="week-title">สินค้าจม · UX · Emoji</span>
     </div>
 
     <div class="section">
