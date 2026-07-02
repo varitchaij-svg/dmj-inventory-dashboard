@@ -881,6 +881,14 @@ function transferStockBatch(ss, list, actor, clientLoadedAt) {
     const results = [];
     const shortfalls = [];     // รายการที่ส่งไม่ครบ (คลังไม่พอ)
 
+    // สร้าง index SKU→แถว ครั้งเดียว (O(rows)) แทนการ scan ซ้ำทุก item (เดิม O(items×rows))
+    // first occurrence wins — ตรงกับพฤติกรรมเดิมที่ inner loop break ที่ match แรก
+    const skuToIndex = {};
+    for (let i = 1; i < data.length; i++) {
+      const s = String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase();
+      if (s && !(s in skuToIndex)) skuToIndex[s] = i;
+    }
+
     for (const item of list) {
       const sku = String(item.sku || "").trim().toUpperCase();
       const qty = Number(item.qty) || 0;
@@ -896,33 +904,28 @@ function transferStockBatch(ss, list, actor, clientLoadedAt) {
         continue;
       }
 
-      let found = false;
-      for (let i = 1; i < data.length; i++) {
-        if (String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase() === sku) {
-          const row    = i + 1;
-          const whQty  = Number(data[i][COL_PROD_QTYWH - 1]) || 0;
-          const fsQty  = Number(data[i][COL_PROD_QTYFS - 1]) || 0;
-          const actual = Math.min(qty, whQty);
-          const name   = item.name || String(data[i][2] || "").trim();
-          const newWH  = whQty - actual;
-          const newFS  = fsQty + actual;
+      const i = skuToIndex[sku];
+      if (i === undefined) { results.push({ sku, orderId, notFound: true }); continue; }
+      // อ่านจาก data ที่ถูก mutate in-place → item ที่ SKU ซ้ำใน batch เดียวหักต่อจากยอดล่าสุดถูกต้อง
+      const row    = i + 1;
+      const whQty  = Number(data[i][COL_PROD_QTYWH - 1]) || 0;
+      const fsQty  = Number(data[i][COL_PROD_QTYFS - 1]) || 0;
+      const actual = Math.min(qty, whQty);
+      const name   = item.name || String(data[i][2] || "").trim();
+      const newWH  = whQty - actual;
+      const newFS  = fsQty + actual;
 
-          sheet.getRange(row, COL_PROD_QTYWH).setValue(newWH);
-          sheet.getRange(row, COL_PROD_QTYFS).setValue(newFS);
-          data[i][COL_PROD_QTYWH - 1] = newWH;
-          data[i][COL_PROD_QTYFS - 1] = newFS;
+      sheet.getRange(row, COL_PROD_QTYWH).setValue(newWH);
+      sheet.getRange(row, COL_PROD_QTYFS).setValue(newFS);
+      data[i][COL_PROD_QTYWH - 1] = newWH;
+      data[i][COL_PROD_QTYFS - 1] = newFS;
 
-          if (actual > 0) {
-            transferred.push({ sku, name, qty: actual });
-            if (orderId) cache.put("shp2_" + orderId, "1", 90); // 90 วิ (กันดับเบิลคลิกเท่านั้น)
-          }
-          if (actual < qty) shortfalls.push({ sku, name, requested: qty, transferred: actual });
-          results.push({ sku, orderId, requested: qty, transferred: actual, newWH, newFS });
-          found = true;
-          break;
-        }
+      if (actual > 0) {
+        transferred.push({ sku, name, qty: actual });
+        if (orderId) cache.put("shp2_" + orderId, "1", 90); // 90 วิ (กันดับเบิลคลิกเท่านั้น)
       }
-      if (!found) results.push({ sku, orderId, notFound: true });
+      if (actual < qty) shortfalls.push({ sku, name, requested: qty, transferred: actual });
+      results.push({ sku, orderId, requested: qty, transferred: actual, newWH, newFS });
     }
 
     SpreadsheetApp.flush();
@@ -1498,19 +1501,25 @@ function confirmStockCount(ss, entries, clientLoadedAt, actor) {
     const data = sheet.getDataRange().getValues();
     let updated = 0;
     const auditRows = []; // เก็บ { sku, oldQty, newQty } สำหรับ audit log
+
+    // สร้าง index SKU→แถว ครั้งเดียว (O(rows)) แทนการ scan ซ้ำทุก entry (เดิม O(entries×rows))
+    // first occurrence wins — ตรงกับพฤติกรรมเดิมที่ inner loop break ที่ match แรก
+    const skuToIndex = {};
+    for (let i = 1; i < data.length; i++) {
+      const s = String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase();
+      if (s && !(s in skuToIndex)) skuToIndex[s] = i;
+    }
+
     for (const entry of entries) {
       const sku = String(entry.sku || "").trim().toUpperCase();
       const qty = Number(entry.qty) || 0;
-      for (let i = 1; i < data.length; i++) {
-        if (String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase() === sku) {
-          const oldQty = Number(data[i][COL_PROD_QTYWH - 1]) || 0;
-          sheet.getRange(i + 1, COL_PROD_QTYWH).setValue(qty);
-          data[i][COL_PROD_QTYWH - 1] = qty;
-          auditRows.push({ sku, oldQty, newQty: qty });
-          updated++;
-          break;
-        }
-      }
+      const i = skuToIndex[sku];
+      if (i === undefined) continue;
+      const oldQty = Number(data[i][COL_PROD_QTYWH - 1]) || 0;
+      sheet.getRange(i + 1, COL_PROD_QTYWH).setValue(qty);
+      data[i][COL_PROD_QTYWH - 1] = qty;
+      auditRows.push({ sku, oldQty, newQty: qty });
+      updated++;
     }
     SpreadsheetApp.flush();
 
