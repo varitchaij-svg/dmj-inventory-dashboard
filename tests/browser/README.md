@@ -19,6 +19,20 @@ npm run test:browser
 ผลลัพธ์: ตาราง ✅/❌ ต่อ (role, tab) + screenshot ทุกจอใน `screenshots/`
 exit code ≠ 0 ถ้ามีจอไหนพัง
 
+## ครอบคลุมอะไร
+
+1. **Smoke** — ทุก role × tab: ไม่ white-screen / ไม่ crash (ErrorBoundary) / ไม่มี JS error
+2. **Content assert** (เฉพาะ tab ที่ข้อมูล deterministic จาก fixture) — เช่น overview ต้องมี
+   Recharts svg+marks, categories/stock/orders/frontstore ต้องมี SKU สินค้า, mtojobs ต้องมีชื่องาน,
+   storage ต้องมีล็อค/สินค้า, transfers ต้องมีกราฟ
+   (ordersummary/labels เป็น smoke-only เพราะเนื้อหาขึ้นกับ workflow state ไม่ deterministic)
+3. **Interaction** — กด "ควรสั่ง" ใน StockView แล้ว OrderModal เปิด (`[data-modal="order"]`) + กด × ปิดได้
+
+## CI
+
+`.github/workflows/test.yml` มี 2 job: `unit` (vitest) + `browser` (harness นี้) รันทุก push/PR
+job `browser` ติดตั้ง Chromium ผ่าน playwright-core CLI แล้ว upload screenshots เป็น artifact
+
 ## ทำงานยังไง
 
 - `fixture.js` — ข้อมูลตัวอย่างรูปแบบเดียวกับที่ GAS `doGet` ส่งกลับ (products/orders/shipments/

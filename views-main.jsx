@@ -3452,7 +3452,7 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
                    transition:"all .12s"};
 
   return (
-    <div onClick={onClose} style={{
+    <div onClick={onClose} data-modal="order" style={{
       position:"fixed", inset:0, zIndex:1500,
       background:"rgba(10,20,10,.6)", backdropFilter:"blur(5px)",
       display:"flex", alignItems:"center", justifyContent:"center", padding:20

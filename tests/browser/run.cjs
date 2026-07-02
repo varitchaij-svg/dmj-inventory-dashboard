@@ -32,11 +32,53 @@ const TAB_LABEL = {
   auditlog:"Audit Log", deadstock:"สินค้าจม",
 };
 
-function findHeadlessShell() {
-  const base = '/opt/pw-browsers';
-  const dir = fs.readdirSync(base).find(d => d.startsWith('chromium_headless_shell'));
-  if (!dir) throw new Error('ไม่พบ chromium_headless_shell ใน ' + base);
-  return path.join(base, dir, 'chrome-linux', 'headless_shell');
+// (ก) assert เฉพาะเจาะจงต่อ tab — อิงข้อมูลจาก fixture (deterministic)
+// คืน {ok, detail}; tab ที่ไม่มีใน map = smoke อย่างเดียว (แค่ไม่ crash)
+// ทุก fn รับ page คืน Promise<{ok,detail}>
+const ASSERT = {
+  overview: async (page) => {
+    const svg = await page.locator('svg.recharts-surface').count();
+    const marks = await page.locator('.recharts-rectangle, .recharts-line-curve, .recharts-sector').count();
+    return { ok: svg >= 1 && marks >= 1, detail: `recharts svg=${svg} marks=${marks}` };
+  },
+  transfers: async (page) => {
+    const svg = await page.locator('svg.recharts-surface').count();
+    return { ok: svg >= 1, detail: `recharts svg=${svg}` };
+  },
+  categories: async (page) => hasText(page, ['VAS001', 'FLW002', 'DEC003'], 'product SKU'),
+  stock:      async (page) => hasText(page, ['FLW002'], 'low-stock SKU (FLW002 qty8<threshold)'),
+  storage:    async (page) => hasText(page, ['A1/05', 'A2/03', 'DEC003'], 'lock/สินค้าในคลัง'),
+  orders:     async (page) => hasText(page, ['VAS001', 'FLW002'], 'order SKU'),
+  mtojobs:    async (page) => hasText(page, ['จัดช่อพิเศษ', 'จัดกระเช้า'], 'MTO job name'),
+  frontstore: async (page) => hasText(page, ['VAS001', 'FLW002', 'DEC003'], 'product SKU'),
+  // หมายเหตุ: ordersummary/labels เป็น smoke-only — เนื้อหาขึ้นกับ workflow state
+  // (ordersummary โชว์เฉพาะ order สถานะ "สำเร็จ" พร้อมส่ง, labels โชว์คิวพิมพ์ที่ seed จาก view อื่น)
+  // fixture แบบ static จึงไม่มีเนื้อหา deterministic ให้ assert — ตรวจแค่ "ไม่ crash"
+};
+async function hasText(page, tokens, label) {
+  const body = await page.evaluate(() => document.body.innerText);
+  const found = tokens.find(t => body.includes(t));
+  return { ok: !!found, detail: found ? `พบ "${found}"` : `ไม่พบ ${label} (${tokens.join('/')})` };
+}
+
+// หา executablePath: agent env ใช้ headless_shell ที่ /opt/pw-browsers,
+// CI ใช้ browser ที่ `npx playwright install chromium` ติดตั้ง → คืน null ให้ playwright resolve เอง
+function findChromium() {
+  try {
+    const base = process.env.PLAYWRIGHT_BROWSERS_PATH || '/opt/pw-browsers';
+    if (fs.existsSync(base)) {
+      const shell = fs.readdirSync(base).find(d => d.startsWith('chromium_headless_shell'));
+      if (shell) {
+        const p = path.join(base, shell, 'chrome-linux', 'headless_shell');
+        if (fs.existsSync(p)) return p;
+      }
+    }
+  } catch (_) {}
+  return null; // ให้ playwright-core หา browser เอง (CI หลัง playwright install)
+}
+async function launchBrowser() {
+  const exe = findChromium();
+  return chromium.launch(exe ? { executablePath: exe, headless: true } : { headless: true });
 }
 
 // static server: serve repo root (jsx/config.js/tests/…)
@@ -58,7 +100,7 @@ function startServer() {
   const srv = await startServer();
   const port = srv.address().port;
   const base = `http://127.0.0.1:${port}/tests/browser/harness.html`;
-  const browser = await chromium.launch({ executablePath: findHeadlessShell(), headless: true });
+  const browser = await launchBrowser();
   const results = [];
 
   for (const role of Object.keys(ROLE_TABS)) {
@@ -110,6 +152,14 @@ function startServer() {
             else if (errors.some(e => e.includes('[ErrorBoundary]'))) { status = 'ERROR_BOUNDARY'; note = 'ErrorBoundary logged'; }
             else if (errors.length) { status = 'CONSOLE_ERR'; note = errors[0]; }
           }
+          // (ก) assert เนื้อหาเฉพาะ tab (นอกเหนือจาก "ไม่ crash")
+          if (status === 'ok' && ASSERT[tab]) {
+            try {
+              const a = await ASSERT[tab](page);
+              if (!a.ok) { status = 'ASSERT_FAIL'; note = a.detail; }
+              else note = a.detail;
+            } catch (e) { status = 'ASSERT_FAIL'; note = 'assert error: ' + String(e.message || e).slice(0, 100); }
+          }
         }
       } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 160); }
       await page.screenshot({ path: path.join(SHOTS, `${role}__${tab}.png`) }).catch(()=>{});
@@ -117,6 +167,54 @@ function startServer() {
       await page.close();
     }
   }
+  // ── (ข) Interaction tests: กดปุ่มแล้ว modal เปิด/ปิดจริงไหม ────────────────
+  // แต่ละ interaction: nav ไป tab → (preStep ถ้ามี เช่นเลือกหมวด) → กด trigger →
+  // ยืนยัน modal เปิด → กดปิด (×) → ยืนยัน modal หาย
+  // หมายเหตุ: OrderModal open/close ครอบคลุมด้วย StockView interaction แล้ว (กลไกเดียวกัน)
+  // CategoryView order button ต้องเลือกหมวดก่อน (view-state) จึงไม่เพิ่ม test ที่เปราะ —
+  // ถ้าจะเพิ่ม flow อื่นในอนาคต (โอนสต็อก/นับ stock) เพิ่มใน array นี้ได้เลย
+  const interactions = [
+    { name: 'StockView "ควรสั่ง" → OrderModal เปิด+ปิด', tab: 'stock', label: 'สต๊อก & แจ้งเตือน',
+      trigger: 'ควรสั่ง' },
+  ];
+  const MODAL = '[data-modal="order"]';
+  for (const it of interactions) {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=owner&tab=${it.tab}`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const onTab = () => page.locator(`main[data-screen-label="${it.tab}"]`).count().then(n => n > 0);
+      if (!(await onTab())) {
+        const nav = page.locator('button', { hasText: it.label }).first();
+        if (await nav.count()) await nav.click({ timeout: 2000 }).catch(() => {});
+      }
+      await page.waitForTimeout(400);
+      if (it.preStep) { // เช่น เลือกหมวดก่อน เพื่อให้การ์ดโชว์ปุ่มสั่ง
+        const pre = page.locator('button', { hasText: it.preStep }).first();
+        if (await pre.count()) { await pre.click({ timeout: 2000 }).catch(() => {}); await page.waitForTimeout(400); }
+      }
+      const trig = page.locator('button', { hasText: it.trigger }).first();
+      if (!(await trig.count())) { status = 'NO_TRIGGER'; note = `ไม่พบปุ่ม "${it.trigger}"`; }
+      else {
+        await trig.click({ timeout: 2000 }).catch(() => {});
+        await page.waitForTimeout(400);
+        if (!(await page.locator(MODAL).count())) { status = 'MODAL_FAIL'; note = 'กดแล้ว modal ไม่เปิด'; }
+        else {
+          // ปิด modal — คลิก × ในหัว modal
+          const closeBtn = page.locator(`${MODAL} button`, { hasText: '×' }).first();
+          if (await closeBtn.count()) await closeBtn.click({ timeout: 2000 }).catch(() => {});
+          await page.waitForTimeout(300);
+          note = (await page.locator(MODAL).count()) ? 'modal เปิดได้ แต่ปิดไม่หาย' : 'modal เปิด+ปิดสำเร็จ';
+          if (note.includes('ปิดไม่หาย')) status = 'MODAL_CLOSE_FAIL';
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, `interaction__${it.tab}.png`) }).catch(()=>{});
+    results.push({ role: 'interact', tab: it.name, status, note });
+    await page.close();
+  }
+
   await browser.close();
   srv.close();
 

@@ -1,7 +1,7 @@
 name: Tests
 on: [push, pull_request]
 jobs:
-  test:
+  unit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -9,3 +9,23 @@ jobs:
         with: { node-version: '20' }
       - run: npm ci
       - run: npm test
+
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      # ดึง lib UMD + playwright-core ลง tests/browser/.cache (self-host, ไม่พึ่ง CDN)
+      - run: bash tests/browser/setup.sh
+      # ติดตั้ง Chromium ให้ playwright-core (CI ไม่มี /opt/pw-browsers → run.cjs resolve เอง)
+      - run: node tests/browser/.cache/node_modules/playwright-core/cli.js install --with-deps chromium
+      # smoke ทุก role×tab + assert เนื้อหา + interaction (OrderModal เปิด/ปิด)
+      - run: node tests/browser/run.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-screenshots
+          path: tests/browser/screenshots/
+          if-no-files-found: ignore
+          retention-days: 7
