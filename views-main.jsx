@@ -1075,13 +1075,16 @@ function OverviewView({ data, range, setRange, role }) {
     };
   }, [range, activeMonth, months]);
 
+  // สินค้าที่ไม่ใช่ MTO — คำนวณครั้งเดียว ใช้ร่วมหลาย memo ด้านล่าง (เดิม filter ซ้ำ 6 รอบ/render)
+  const sellable = uM(() => products.filter(p => !p.isMTO), [products]);
+
   const topSellers = uM(() =>
-    products.filter(p => !p.isMTO)
+    sellable
       .map(p => { const v = periodInfo.perProduct(p); return { ...p, _pQty: v.qty, _pRev: v.rev }; })
       .filter(p => p._pRev > 0 || p._pQty > 0)
       .sort((a,b) => b._pRev - a._pRev)
       .slice(0, 10),
-    [products, periodInfo]
+    [sellable, periodInfo]
   );
 
   // ── Movers: current vs previous month (MoM) ──────────────────────────
@@ -1089,7 +1092,7 @@ function OverviewView({ data, range, setRange, role }) {
     if (months.length < 2) return { risers: [], fallers: [], cur: null, prev: null };
     const cur = months[months.length-1], prev = months[months.length-2];
     const MIN = 300; // ตัด noise: ต้องมียอดอย่างน้อยเดือนใดเดือนหนึ่ง
-    const rows = products.filter(p => !p.isMTO).map(p => {
+    const rows = sellable.map(p => {
       const c  = (p.monthly||[]).find(x=>x.month===cur);
       const pr = (p.monthly||[]).find(x=>x.month===prev);
       const curRev = c?c.sales:0, prevRev = pr?pr.sales:0;
@@ -1101,13 +1104,13 @@ function OverviewView({ data, range, setRange, role }) {
     const risers  = rows.filter(r => r.delta > 0).sort((a,b)=>b.delta-a.delta).slice(0,6);
     const fallers = rows.filter(r => r.delta < 0).sort((a,b)=>a.delta-b.delta).slice(0,6);
     return { risers, fallers, cur, prev };
-  }, [products, months]);
+  }, [sellable, months]);
 
   // ── Velocity: avg sales rate → days of stock left ────────────────────
   const velocity = uM(() => {
     const n = Math.max(1, Math.min(months.length, 3));
     const recent = months.slice(-n);
-    const rows = products.filter(p => !p.isMTO).map(p => {
+    const rows = sellable.map(p => {
       const qty = (p.monthly||[]).filter(x=>recent.includes(x.month)).reduce((s,x)=>s+x.qty,0);
       const perDay = qty / (n*30);
       const stock = stockQty(p);
@@ -1119,7 +1122,7 @@ function OverviewView({ data, range, setRange, role }) {
     const overstock = rows.filter(r => r.perDay>0 && r.daysLeft>120 && r.stock>10)
                           .sort((a,b)=>b.daysLeft-a.daysLeft).slice(0,10);
     return { reorder, overstock, n };
-  }, [products, months]);
+  }, [sellable, months]);
 
   // ── Dead stock: holding inventory but no recent sales ────────────────
   const deadStock = uM(() => {
@@ -1132,9 +1135,9 @@ function OverviewView({ data, range, setRange, role }) {
     // ถ้าไฟล์ข้อมูลไม่มีเดือนล่าสุดเลย → ไม่สามารถตัดสินได้
     const hasRecentData = recent.some(m => months.includes(m));
     if (!hasRecentData) return { list: [], count: 0, totalValue: 0 };
-    const rows = products.filter(p => !p.isMTO
+    const rows = sellable.filter(p =>
       // ใช้ qtyStore+qtyWH โดยตรง — ไม่ fallback ไป p.qty (ซึ่งอาจเป็นข้อมูลเก่าจาก sheet อื่น)
-      && ((p.qtyStore||0) + (p.qtyWH||0)) > 0
+      ((p.qtyStore||0) + (p.qtyWH||0)) > 0
       // ต้องมีข้อมูลขายในไฟล์ มิฉะนั้นเป็น "ไม่มีข้อมูล" ไม่ใช่ "ไม่ขาย"
       && (p.monthly||[]).length > 0
     ).map(p => {
@@ -1145,11 +1148,11 @@ function OverviewView({ data, range, setRange, role }) {
     rows.sort((a,b)=>b.value-a.value);
     return { list: rows.slice(0,12), count: rows.length,
              totalValue: rows.reduce((s,r)=>s+r.value,0) };
-  }, [products, months]);
+  }, [sellable, months]);
 
   // ── ABC / Pareto classification by revenue ───────────────────────────
   const abc = uM(() => {
-    const sorted = products.filter(p => !p.isMTO && (p.soldRev||0) > 0)
+    const sorted = sellable.filter(p => (p.soldRev||0) > 0)
                            .sort((a,b)=>(b.soldRev||0)-(a.soldRev||0));
     const total = sorted.reduce((s,p)=>s+(p.soldRev||0),0);
     let cum = 0;
@@ -1162,12 +1165,12 @@ function OverviewView({ data, range, setRange, role }) {
       groups[cls].push(p);
     });
     return { total, counts, rev, groups, n: sorted.length };
-  }, [products]);
+  }, [sellable]);
 
   // Top sellers per category — period-aware (ตามช่วงเวลาที่เลือก)
   const topByCategory = uM(() => {
     const byCat = {};
-    products.filter(p => !p.isMTO && p.cat && p.cat !== "ไม่มีรหัสสินค้า")
+    sellable.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า")
       .forEach(p => {
         const v = periodInfo.perProduct(p);
         if (v.rev <= 0 && v.qty <= 0) return;
@@ -1181,7 +1184,7 @@ function OverviewView({ data, range, setRange, role }) {
         totalRev: ps.reduce((s,p) => s+p._pRev, 0),
       }))
       .sort((a,b) => b.totalRev - a.totalRev);
-  }, [products, periodInfo]);
+  }, [sellable, periodInfo]);
 
   const [abcModalCls, setAbcModalCls] = uS(null);
 
