@@ -2463,11 +2463,16 @@ function CategoryView({ data, role }) {
     return map;
   }, [filtered, totalCatRev]);
 
-  const catStats = uM(() => {
-    // "" = ทั้งหมด
-    const f = active === ""
+  // base list ของหมวดที่เลือก ("" = ทั้งหมด) — คำนวณครั้งเดียว ใช้ร่วม catStats/supplierList/colorChips
+  // เดิม 3 memo นี้ต่าง filter products ซ้ำกันคนละรอบ (O(n)×3) — รวมเป็นรอบเดียว
+  const categoryBase = uM(() =>
+    active === ""
       ? products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า")
-      : products.filter(p => p.cat === active);
+      : products.filter(p => p.cat === active)
+  , [products, active]);
+
+  const catStats = uM(() => {
+    const f = categoryBase;
     return {
       n: f.length,
       stock: f.reduce((s,p)=>s+stockQty(p),0),
@@ -2475,14 +2480,12 @@ function CategoryView({ data, role }) {
       rev: f.reduce((s,p)=>s+p.soldRev,0),
       stockValue: f.reduce((s,p)=>s+(stockQty(p)*p.price),0),
     };
-  }, [products, active]);
+  }, [categoryBase]);
 
   // Supplier list for this category (ใช้สำหรับ dropdown filter)
   const supplierList = uM(() => {
     const m = {};
-    const base = active === ""
-      ? products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า")
-      : products.filter(p => p.cat === active);
+    const base = categoryBase;
     base.forEach(p => {
       const s = p.vendor || p.lastSupplier;
       // กรองชื่อขยะ: array รั่วจาก GAS ("[Ljava.lang.Object;@...") / ว่าง
@@ -2490,7 +2493,7 @@ function CategoryView({ data, role }) {
     });
     return Object.entries(m).map(([name, count]) => ({ name, count }))
       .sort((a,b) => b.count - a.count);
-  }, [products, active]);
+  }, [categoryBase]);
 
   // กรอง supplier ตามช่องค้นหาใน modal (multi-token AND-match)
   const checkSupplierFiltered = uM(() => {
@@ -2506,16 +2509,13 @@ function CategoryView({ data, role }) {
   // Colors in this category for filter chips
   const colorChips = uM(() => {
     const m = {};
-    const colorBase = active === ""
-      ? products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า")
-      : products.filter(p => p.cat === active);
-    colorBase.forEach(p => {
+    categoryBase.forEach(p => {
       if (p.color) { if (!m[p.color.name]) m[p.color.name] = { count: 0, hex: p.color.hex }; m[p.color.name].count++; }
     });
     return Object.entries(m).map(([name, v]) => ({ name, ...v }))
       .sort((a,b) => (COLOR_ORDER.indexOf(a.name)===-1?99:COLOR_ORDER.indexOf(a.name)) -
                      (COLOR_ORDER.indexOf(b.name)===-1?99:COLOR_ORDER.indexOf(b.name)));
-  }, [products, active]);
+  }, [categoryBase]);
 
   const color = catColor(active, allCats);
 
