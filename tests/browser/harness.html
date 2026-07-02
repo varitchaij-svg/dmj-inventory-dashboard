@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<base href="/"><!-- ให้ relative asset (logo.png ฯลฯ) resolve จาก server root เหมือน deployment จริง -->
+<title>DMJ headless test harness</title>
+<style>:root{--muted:#6b7280;--g-50:#f0f5ee;--g-500:#3f9d5a;--g-700:#1f6f3f;--bdr:#e5e7eb;--dang:#dc2626;--warn:#f59e0b;--gold:#a07417;--light:#9ca3af}body{margin:0;font-family:sans-serif}</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- libs (vendored locally via setup.sh — CDN ถูกบล็อกในสภาพแวดล้อมทดสอบ) -->
+<script src="/tests/browser/vendor/react.js"></script>
+<script src="/tests/browser/vendor/react-dom.js"></script>
+<script src="/tests/browser/vendor/prop-types.js"></script>
+<script defer src="/tests/browser/vendor/recharts.js"></script>
+<script src="/tests/browser/vendor/babel.js"></script>
+
+<!-- fixture + stubs: ต้องรันก่อน config.js/app.jsx -->
+<script src="/tests/browser/fixture.js"></script>
+<script>
+(function () {
+  // ── seed role/tab จาก query param (?role=owner&tab=overview) — bypass login ──
+  const q = new URLSearchParams(location.search);
+  const role = q.get('role') || 'owner';
+  const tab  = q.get('tab');
+  sessionStorage.setItem('dmj_role', role);
+  if (tab) sessionStorage.setItem('dmj_active_tab', tab); // เผื่อ app อ่าน (ไม่บังคับ)
+
+  // ── seed ข้อมูลลง localStorage เพื่อให้ loadFromStorage() render ทันที ──
+  localStorage.setItem('dmj_dashboard_data_v1', JSON.stringify(window.__DMJ_FIXTURE));
+  localStorage.setItem('dmj_dashboard_source_v1', 'sheet');
+
+  // ── stub fetch: ตัด network จริงทั้งหมด → ตอบ fixture/verifyPin ──
+  const realFetch = window.fetch;
+  window.fetch = function (input, init) {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    // GAS GET (payload) — ตอบ fixture
+    const body = (init && init.body) || '';
+    const isVerifyPin = /verifyPin/.test(url) || /verifyPin/.test(String(body));
+    if (isVerifyPin) return Promise.resolve(new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } }));
+    // POST actions (write) — ตอบ success จำลอง
+    if (init && init.method === 'POST') {
+      return Promise.resolve(new Response(JSON.stringify({ success: true, data: {} }), { headers: { 'Content-Type': 'application/json' } }));
+    }
+    // GET payload
+    if (/script\.google|exec|action=orders|action=getAuditLog|action=getDeadStock/.test(url) || url.indexOf('http') === 0) {
+      const payload = Object.assign({}, window.__DMJ_FIXTURE, { lastModified: Date.now() });
+      return Promise.resolve(new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } }));
+    }
+    return realFetch ? realFetch(input, init) : Promise.reject(new Error('fetch blocked in harness: ' + url));
+  };
+  window.__TAB = tab; // ให้ test script รู้ว่าจะ navigate ไป tab ไหน
+})();
+</script>
+<script src="/config.js"></script>
+
+<!-- boot: mirror ของจริง (ui → views-main → views-analytics → app) แต่ libs local -->
+<script>
+(function () {
+  function injectCode(code) { const s = document.createElement('script'); s.textContent = code; document.head.appendChild(s); }
+  async function compileJsx(src) {
+    const resp = await fetch(src);
+    const text = await resp.text();
+    return Babel.transform(text, { presets: ['react'], sourceType: 'script', filename: src }).code;
+  }
+  compileJsx('/ui.jsx').then(injectCode)
+    .then(() => Promise.all([compileJsx('/views-main.jsx'), compileJsx('/views-analytics.jsx')]))
+    .then((codes) => { injectCode(codes[0]); injectCode(codes[1]); return compileJsx('/app.jsx').then(injectCode); })
+    .then(() => { window.__BOOTED = true; })
+    .catch((e) => { window.__BOOT_ERR = String(e && e.stack || e); });
+}());
+</script>
+</body>
+</html>
