@@ -2121,6 +2121,62 @@ function syncZortFrontStore() {
   syncZortToColumn_(WH_FRONTSTORE, COL_PROD_QTYFS);
 }
 
+// ── DIAGNOSTIC (read-only) ────────────────────────────────────────────────
+// ตรวจว่าเลขหน้าร้าน (col G) ไม่ตรงกับ ZORT เพราะ sync ดึง `availablestock`
+// (= stock - reserved) แต่หน้าจอ ZORT โชว์ `stock` (on-hand จริง) หรือไม่
+// รันเองใน GAS editor แล้วดู Log — ไม่เขียนทับข้อมูลใดๆ
+// ดู 20 SKU ที่ stock != availablestock มากสุด เพื่อเทียบกับหน้าจอ ZORT
+function debugZortFrontStoreStock() {
+  const products = fetchAllZortProducts_(WH_FRONTSTORE);
+  Logger.log(`ZORT WH_FRONTSTORE (${WH_FRONTSTORE}): ${products.length} items`);
+
+  // อ่าน col G ปัจจุบันจากชีต เพื่อเทียบ 3 ทาง: sheet(G) vs available vs stock
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_PRODUCTS);
+  const sheetG = {};
+  if (sheet) {
+    const data = sheet.getDataRange().getValues();
+    for (let i = 1; i < data.length; i++) {
+      const sku = String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase();
+      if (sku) sheetG[sku] = Number(data[i][COL_PROD_QTYFS - 1]) || 0;
+    }
+  }
+
+  const rows = [];
+  let bothMissing = 0;
+  for (const p of products) {
+    const sku = String(p.sku || p.barcode || "").trim().toUpperCase();
+    if (!sku) continue;
+    const stock = (p.stock != null) ? Number(p.stock) : null;
+    const avail = (p.availablestock != null) ? Number(p.availablestock) : null;
+    if (stock == null && avail == null) { bothMissing++; continue; }
+    rows.push({
+      sku,
+      name: String(p.name || "").slice(0, 24),
+      stock,
+      avail,
+      diff: (stock != null && avail != null) ? (stock - avail) : null,
+      sheetG: (sheetG[sku] != null) ? sheetG[sku] : "-",
+    });
+  }
+
+  // มี field `stock` หรือไม่ (บาง response อาจไม่มี)
+  const hasStock = rows.some(r => r.stock != null);
+  const hasAvail = rows.some(r => r.avail != null);
+  Logger.log(`มี field stock=${hasStock} | availablestock=${hasAvail} | ทั้งคู่หาย=${bothMissing} rows`);
+
+  const mismatched = rows.filter(r => r.diff != null && r.diff !== 0);
+  Logger.log(`SKU ที่ stock != availablestock: ${mismatched.length} / ${rows.length}`);
+
+  mismatched.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+  Logger.log("── Top 20 (diff = stock - available = จำนวนที่ถูกจอง/reserved) ──");
+  Logger.log("SKU | ชื่อ | stock(onhand) | available | diff | col_G(ตอนนี้)");
+  mismatched.slice(0, 20).forEach(r => {
+    Logger.log(`${r.sku} | ${r.name} | ${r.stock} | ${r.avail} | ${r.diff} | ${r.sheetG}`);
+  });
+  Logger.log("สรุป: ถ้า col_G ≈ available แต่หน้าจอ ZORT ≈ stock → ต้องสลับ sync ไปใช้ p.stock");
+}
+
 function syncZortBoth() {
   // PERF: fetch แต่ละ warehouse ครั้งเดียว แล้วส่ง cached products ให้ sub-functions
   // เพื่อลดจำนวน ZORT API calls จาก 4+ ครั้ง → 2 ครั้ง (WH_SAI5 + WH_FRONTSTORE)
