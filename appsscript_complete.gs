@@ -2021,6 +2021,11 @@ function syncZortToColumn_(warehousecode, colIndex, cachedProducts) {
   const products = cachedProducts || fetchAllZortProducts_(warehousecode);
   Logger.log(`ZORT: ${products.length} items`);
 
+  // หน้าร้าน (W0001) ใช้ stock (on-hand จริง) แทน availablestock (=stock-reserved)
+  // เพราะออเดอร์ที่เปิดค้างจะ "จอง" availablestock ทำให้เลขหน้าร้านต่ำ/เป็น 0 ทั้งที่ของยังอยู่
+  // stock >= availablestock เสมอ → เปลี่ยนแล้วเลขไม่มีทางต่ำลง (ปลอดภัย) ถ้าไม่มี field stock → fallback
+  const useStockField = (warehousecode === WH_FRONTSTORE);
+
   const zortMap      = {};
   const zortNameMap  = {};
   const zortCatMap   = {};
@@ -2029,7 +2034,9 @@ function syncZortToColumn_(warehousecode, colIndex, cachedProducts) {
   for (const p of products) {
     const sku = String(p.sku || p.barcode || "").trim().toUpperCase();
     if (sku) {
-      zortMap[sku]      = Number(p.availablestock || 0);
+      zortMap[sku]      = (useStockField && p.stock != null)
+                            ? Number(p.stock)
+                            : Number(p.availablestock || 0);
       zortNameMap[sku]  = String(p.name         || "").trim();
       zortCatMap[sku]   = String(p.category      || "").trim();
       zortTagMap[sku]   = Array.isArray(p.tag) ? p.tag.join(",") : String(p.tag || "").trim();
