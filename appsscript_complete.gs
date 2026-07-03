@@ -3697,6 +3697,27 @@ function sendLineGroupMentionAll_(msg) {
   });
 }
 
+// ค้นจำนวนที่สั่งของ SKU จากชีตออเดอร์ — เอาแถวล่าสุดที่ SKU ตรง (col H = จำนวน)
+// ใช้เป็น fallback เผื่อ call site ไม่ได้ส่ง qty มา
+function lookupOrderQty_(sku) {
+  try {
+    if (!sku) return 0;
+    var sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_ORDERS);
+    if (!sh) return 0;
+    var rows = sh.getDataRange().getValues();
+    var target = String(sku).trim().toUpperCase();
+    var found = 0;
+    for (var i = 2; i < rows.length; i++) {
+      var rsku = String(rows[i][COL_ORD_SKU - 1] || '').trim().toUpperCase();  // col F
+      if (rsku === target) {
+        var q = Number(rows[i][7]) || 0;  // col H = จำนวนที่สั่ง
+        if (q > 0) found = q;             // เอาแถวล่าสุดที่มีจำนวน
+      }
+    }
+    return found;
+  } catch (e) { Logger.log('lookupOrderQty_ error: ' + e); return 0; }
+}
+
 function sendLineGroupOrderCard_(name, sku, date, imageUrl, qty) {
   var groupId = PropertiesService.getScriptProperties().getProperty('LINE_GROUP_ID');
   if (!groupId) { Logger.log("LINE: no LINE_GROUP_ID"); return; }
@@ -3707,14 +3728,16 @@ function sendLineGroupOrderCard_(name, sku, date, imageUrl, qty) {
     try { imgUrl = (readImageMap_()[(sku||"").trim().toUpperCase()] || ""); } catch(e) {}
   }
 
+  // จำนวนที่สั่ง — ใช้ค่าที่ส่งมา ถ้าไม่มี/เป็น 0 ให้ค้นจากชีตออเดอร์เอง (กันทุก path)
   var qtyNum = Number(qty) || 0;
-  var qtyLabel = qtyNum > 0 ? ("จำนวนที่สั่ง: " + qtyNum + " ชิ้น") : "";
+  if (qtyNum <= 0) qtyNum = lookupOrderQty_(sku);
+  var qtyText = qtyNum > 0 ? (qtyNum + "pcs") : "";
 
   var pushUrl = "https://api.line.me/v2/bot/message/push";
   var headers = { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN };
 
   // @All mention (แนบจำนวนที่สั่งไว้ในข้อความด้วย)
-  var mentionText = "@All order 🚶 " + (name||sku||"-") + (qtyNum > 0 ? (" x" + qtyNum) : "");
+  var mentionText = "@All order 🚶 " + (name||sku||"-") + (qtyNum > 0 ? (" " + qtyText) : "");
   UrlFetchApp.fetch(pushUrl, {
     method: "post", headers: headers, muteHttpExceptions: true,
     payload: JSON.stringify({ to: groupId, messages: [{
@@ -3724,20 +3747,25 @@ function sendLineGroupOrderCard_(name, sku, date, imageUrl, qty) {
   });
 
   // Flex bubble เดียว (หน้าตาเหมือน carousel ของรอขึ้นรถ)
-  var bodyContents = [
-    { type: "text", text: "order 🚶", size: "xs", color: "#1565c0", weight: "bold" },
-    { type: "text", text: name || sku || "-", weight: "bold", size: "lg", wrap: true },
-    { type: "text", text: "รหัส: " + (sku||""), size: "sm", color: "#888888" }
-  ];
-  if (qtyLabel) {
-    bodyContents.push({ type: "text", text: qtyLabel, size: "md", color: "#d84315", weight: "bold" });
-  }
-  bodyContents.push({ type: "text", text: "วันที่: " + (date||""), size: "sm", color: "#888888" });
-
   var bubble = {
     type: "bubble", size: "kilo",
-    body: { type: "box", layout: "vertical", spacing: "sm", paddingAll: "14px", contents: bodyContents }
+    body: {
+      type: "box", layout: "vertical", spacing: "sm", paddingAll: "14px",
+      contents: [
+        { type: "text", text: "order 🚶", size: "xs", color: "#1565c0", weight: "bold" },
+        { type: "text", text: name || sku || "-", weight: "bold", size: "lg", wrap: true },
+        { type: "text", text: "รหัส: " + (sku||""), size: "sm", color: "#888888" },
+        { type: "text", text: "วันที่: " + (date||""), size: "sm", color: "#888888" }
+      ]
+    }
   };
+  // จำนวนที่สั่ง — มุมขวาล่าง ตัวหนังสือสีแดง เช่น "24pcs"
+  if (qtyText) {
+    bubble.footer = {
+      type: "box", layout: "vertical", paddingAll: "12px", paddingTop: "4px",
+      contents: [ { type: "text", text: qtyText, size: "xxl", weight: "bold", color: "#e53935", align: "end" } ]
+    };
+  }
   if (imgUrl) {
     bubble.hero = { type: "image", url: imgUrl, size: "full", aspectRatio: "4:3", aspectMode: "fit"};
   }
