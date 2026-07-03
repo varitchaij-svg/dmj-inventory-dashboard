@@ -2121,6 +2121,103 @@ function syncZortFrontStore() {
   syncZortToColumn_(WH_FRONTSTORE, COL_PROD_QTYFS);
 }
 
+// ── DIAGNOSTIC (read-only) ────────────────────────────────────────────────
+// ตรวจว่าเลขหน้าร้าน (col G) ไม่ตรงกับ ZORT เพราะ sync ดึง `availablestock`
+// (= stock - reserved) แต่หน้าจอ ZORT โชว์ `stock` (on-hand จริง) หรือไม่
+// รันเองใน GAS editor แล้วดู Log — ไม่เขียนทับข้อมูลใดๆ
+// ดู 20 SKU ที่ stock != availablestock มากสุด เพื่อเทียบกับหน้าจอ ZORT
+function debugZortFrontStoreStock() {
+  const products = fetchAllZortProducts_(WH_FRONTSTORE);
+  Logger.log(`ZORT WH_FRONTSTORE (${WH_FRONTSTORE}): ${products.length} items`);
+
+  // อ่าน col G ปัจจุบันจากชีต เพื่อเทียบ 3 ทาง: sheet(G) vs available vs stock
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_PRODUCTS);
+  const sheetG = {};
+  if (sheet) {
+    const data = sheet.getDataRange().getValues();
+    for (let i = 1; i < data.length; i++) {
+      const sku = String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase();
+      if (sku) sheetG[sku] = Number(data[i][COL_PROD_QTYFS - 1]) || 0;
+    }
+  }
+
+  const rows = [];
+  let bothMissing = 0;
+  for (const p of products) {
+    const sku = String(p.sku || p.barcode || "").trim().toUpperCase();
+    if (!sku) continue;
+    const stock = (p.stock != null) ? Number(p.stock) : null;
+    const avail = (p.availablestock != null) ? Number(p.availablestock) : null;
+    if (stock == null && avail == null) { bothMissing++; continue; }
+    rows.push({
+      sku,
+      name: String(p.name || "").slice(0, 24),
+      stock,
+      avail,
+      diff: (stock != null && avail != null) ? (stock - avail) : null,
+      sheetG: (sheetG[sku] != null) ? sheetG[sku] : "-",
+    });
+  }
+
+  // มี field `stock` หรือไม่ (บาง response อาจไม่มี)
+  const hasStock = rows.some(r => r.stock != null);
+  const hasAvail = rows.some(r => r.avail != null);
+  Logger.log(`มี field stock=${hasStock} | availablestock=${hasAvail} | ทั้งคู่หาย=${bothMissing} rows`);
+
+  const mismatched = rows.filter(r => r.diff != null && r.diff !== 0);
+  Logger.log(`SKU ที่ stock != availablestock: ${mismatched.length} / ${rows.length}`);
+
+  mismatched.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+  Logger.log("── Top 20 (diff = stock - available = จำนวนที่ถูกจอง/reserved) ──");
+  Logger.log("SKU | ชื่อ | stock(onhand) | available | diff | col_G(ตอนนี้)");
+  mismatched.slice(0, 20).forEach(r => {
+    Logger.log(`${r.sku} | ${r.name} | ${r.stock} | ${r.avail} | ${r.diff} | ${r.sheetG}`);
+  });
+  Logger.log("สรุป: ถ้า col_G ≈ available แต่หน้าจอ ZORT ≈ stock → ต้องสลับ sync ไปใช้ p.stock");
+}
+
+// ── DIAGNOSTIC (read-only) ────────────────────────────────────────────────
+// สินค้าที่อยู่ใน "อัพเดทจำนวนสินค้า" (มีจำนวน/สต็อก) แต่ไม่มีใน "ข้อมูลสินค้า"
+// (แหล่งของ data.products) → จะ"ไม่ขึ้นบนเว็บ" เพราะไม่มีแถวสินค้าให้แปะจำนวน
+// สาเหตุพบบ่อย: syncNewProductsFromZort() เพิ่มสินค้าใหม่เข้าแค่ "อัพเดทจำนวนสินค้า"
+// รันเองใน GAS editor แล้วดู Log — ไม่เขียนทับข้อมูลใดๆ
+function debugMissingProducts() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const metaSh = ss.getSheetByName(SHEET_PRODUCT_META);  // "ข้อมูลสินค้า" = แหล่ง data.products
+  const stockSh = ss.getSheetByName(SHEET_PRODUCTS);      // "อัพเดทจำนวนสินค้า" = จำนวน
+  if (!metaSh || !stockSh) { Logger.log("ไม่พบชีต meta หรือ stock"); return; }
+
+  const metaRows = metaSh.getDataRange().getDisplayValues();
+  const metaSet = {};
+  for (let i = 1; i < metaRows.length; i++) {
+    const sku = String(metaRows[i][COL_PROD_SKU - 1] || "").trim().toUpperCase();
+    if (sku) metaSet[sku] = true;
+  }
+
+  const stockRows = stockSh.getDataRange().getDisplayValues();
+  const orphans = [];
+  for (let i = 1; i < stockRows.length; i++) {
+    const r = stockRows[i];
+    const sku = String(r[COL_PROD_SKU - 1] || "").trim().toUpperCase();
+    if (!sku) continue;
+    if (!metaSet[sku]) {
+      orphans.push({
+        sku,
+        name:  String(r[2] || "").trim(),                       // col C
+        gStore: Number(r[COL_PROD_QTYFS - 1]) || 0,             // col G
+        hWH:    Number(r[COL_PROD_QTYWH - 1]) || 0,             // col H
+      });
+    }
+  }
+
+  Logger.log(`สินค้าใน "อัพเดทจำนวนสินค้า" ทั้งหมด (มี SKU): เทียบกับ "ข้อมูลสินค้า"`);
+  Logger.log(`── พบ orphan (มีจำนวนแต่ไม่ขึ้นเว็บ): ${orphans.length} SKU ──`);
+  Logger.log("SKU | ชื่อ | หน้าร้าน(G) | คลัง(H)");
+  orphans.forEach(o => Logger.log(`${o.sku} | ${o.name} | ${o.gStore} | ${o.hWH}`));
+  Logger.log(`สรุป: ต้องเพิ่ม ${orphans.length} SKU นี้เข้าชีต "ข้อมูลสินค้า" ถึงจะขึ้นเว็บ`);
+}
+
 function syncZortBoth() {
   // PERF: fetch แต่ละ warehouse ครั้งเดียว แล้วส่ง cached products ให้ sub-functions
   // เพื่อลดจำนวน ZORT API calls จาก 4+ ครั้ง → 2 ครั้ง (WH_SAI5 + WH_FRONTSTORE)
@@ -3077,6 +3174,49 @@ function readProducts_() {
       price: 0, cost: 0, soldQty: 0, soldRev: 0, monthly: [], color: null,
     });
   }
+
+  // SELF-HEAL: สินค้าที่มีใน "อัพเดทจำนวนสินค้า" (มีสต็อก) แต่ยังไม่มีใน "ข้อมูลสินค้า"
+  // จะไม่ขึ้นเว็บ (เช่น สินค้าใหม่ที่ syncNewProductsFromZort เพิ่งเพิ่มเข้าชีตสต็อก)
+  // → ดึงมาแสดงด้วย โดยใช้ ชื่อ/หมวด/tag/ราคา ที่ ZORT sync เขียนไว้ในชีตสต็อก
+  try {
+    const seen = {};
+    out.forEach(p => { if (p.sku) seen[p.sku.toUpperCase()] = true; });
+
+    const stockSh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PRODUCTS);
+    if (stockSh) {
+      const srows = stockSh.getDataRange().getDisplayValues();
+      for (let i = 1; i < srows.length; i++) {
+        const r = srows[i];
+        const sku = (r[COL_PROD_SKU - 1] || '').toString().trim();      // B
+        if (!sku || seen[sku.toUpperCase()]) continue;
+        seen[sku.toUpperCase()] = true;
+        const qStore = parseQty_(r[COL_PROD_QTYFS - 1]);                // G
+        const qWH    = parseQty_(r[COL_PROD_QTYWH - 1]);               // H
+        const total  = qStore.num + qWH.num;
+        const cat    = (r[3] || '').toString().trim();                  // D = หมวด
+        out.push({
+          sku,
+          name:        (r[2] || '').toString().trim(),                  // C = ชื่อ
+          imageUrl:    imageMap[sku.toUpperCase()] || '',
+          locationRaw: '',
+          locations:   [],
+          category:    cat,
+          tag:         (r[5] || '').toString().trim(),                  // F = TAG
+          vendor:      '',
+          qtyStore: qStore.num, qtyWH: qWH.num, qty: total,
+          qtyStatus:  (qStore.status === 'negative' || qWH.status === 'negative') ? 'negative' : 'ok',
+          isOversold: (qStore.num < 0 || qWH.num < 0),
+          isOOS:      total <= 0,
+          isMTO:      cat.includes('Made to Order'),
+          price: 0, cost: 0, soldQty: 0, soldRev: 0, monthly: [], color: null,
+          _fromStockSheet: true,   // มาจากชีตสต็อก (ยังไม่มีใน "ข้อมูลสินค้า")
+        });
+      }
+    }
+  } catch (e) {
+    Logger.log('readProducts_ self-heal error: ' + e);
+  }
+
   return out;
 }
 
