@@ -3174,6 +3174,49 @@ function readProducts_() {
       price: 0, cost: 0, soldQty: 0, soldRev: 0, monthly: [], color: null,
     });
   }
+
+  // SELF-HEAL: สินค้าที่มีใน "อัพเดทจำนวนสินค้า" (มีสต็อก) แต่ยังไม่มีใน "ข้อมูลสินค้า"
+  // จะไม่ขึ้นเว็บ (เช่น สินค้าใหม่ที่ syncNewProductsFromZort เพิ่งเพิ่มเข้าชีตสต็อก)
+  // → ดึงมาแสดงด้วย โดยใช้ ชื่อ/หมวด/tag/ราคา ที่ ZORT sync เขียนไว้ในชีตสต็อก
+  try {
+    const seen = {};
+    out.forEach(p => { if (p.sku) seen[p.sku.toUpperCase()] = true; });
+
+    const stockSh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PRODUCTS);
+    if (stockSh) {
+      const srows = stockSh.getDataRange().getDisplayValues();
+      for (let i = 1; i < srows.length; i++) {
+        const r = srows[i];
+        const sku = (r[COL_PROD_SKU - 1] || '').toString().trim();      // B
+        if (!sku || seen[sku.toUpperCase()]) continue;
+        seen[sku.toUpperCase()] = true;
+        const qStore = parseQty_(r[COL_PROD_QTYFS - 1]);                // G
+        const qWH    = parseQty_(r[COL_PROD_QTYWH - 1]);               // H
+        const total  = qStore.num + qWH.num;
+        const cat    = (r[3] || '').toString().trim();                  // D = หมวด
+        out.push({
+          sku,
+          name:        (r[2] || '').toString().trim(),                  // C = ชื่อ
+          imageUrl:    imageMap[sku.toUpperCase()] || '',
+          locationRaw: '',
+          locations:   [],
+          category:    cat,
+          tag:         (r[5] || '').toString().trim(),                  // F = TAG
+          vendor:      '',
+          qtyStore: qStore.num, qtyWH: qWH.num, qty: total,
+          qtyStatus:  (qStore.status === 'negative' || qWH.status === 'negative') ? 'negative' : 'ok',
+          isOversold: (qStore.num < 0 || qWH.num < 0),
+          isOOS:      total <= 0,
+          isMTO:      cat.includes('Made to Order'),
+          price: 0, cost: 0, soldQty: 0, soldRev: 0, monthly: [], color: null,
+          _fromStockSheet: true,   // มาจากชีตสต็อก (ยังไม่มีใน "ข้อมูลสินค้า")
+        });
+      }
+    }
+  } catch (e) {
+    Logger.log('readProducts_ self-heal error: ' + e);
+  }
+
   return out;
 }
 
