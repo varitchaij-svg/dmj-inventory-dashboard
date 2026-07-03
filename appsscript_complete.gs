@@ -2177,6 +2177,47 @@ function debugZortFrontStoreStock() {
   Logger.log("สรุป: ถ้า col_G ≈ available แต่หน้าจอ ZORT ≈ stock → ต้องสลับ sync ไปใช้ p.stock");
 }
 
+// ── DIAGNOSTIC (read-only) ────────────────────────────────────────────────
+// สินค้าที่อยู่ใน "อัพเดทจำนวนสินค้า" (มีจำนวน/สต็อก) แต่ไม่มีใน "ข้อมูลสินค้า"
+// (แหล่งของ data.products) → จะ"ไม่ขึ้นบนเว็บ" เพราะไม่มีแถวสินค้าให้แปะจำนวน
+// สาเหตุพบบ่อย: syncNewProductsFromZort() เพิ่มสินค้าใหม่เข้าแค่ "อัพเดทจำนวนสินค้า"
+// รันเองใน GAS editor แล้วดู Log — ไม่เขียนทับข้อมูลใดๆ
+function debugMissingProducts() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const metaSh = ss.getSheetByName(SHEET_PRODUCT_META);  // "ข้อมูลสินค้า" = แหล่ง data.products
+  const stockSh = ss.getSheetByName(SHEET_PRODUCTS);      // "อัพเดทจำนวนสินค้า" = จำนวน
+  if (!metaSh || !stockSh) { Logger.log("ไม่พบชีต meta หรือ stock"); return; }
+
+  const metaRows = metaSh.getDataRange().getDisplayValues();
+  const metaSet = {};
+  for (let i = 1; i < metaRows.length; i++) {
+    const sku = String(metaRows[i][COL_PROD_SKU - 1] || "").trim().toUpperCase();
+    if (sku) metaSet[sku] = true;
+  }
+
+  const stockRows = stockSh.getDataRange().getDisplayValues();
+  const orphans = [];
+  for (let i = 1; i < stockRows.length; i++) {
+    const r = stockRows[i];
+    const sku = String(r[COL_PROD_SKU - 1] || "").trim().toUpperCase();
+    if (!sku) continue;
+    if (!metaSet[sku]) {
+      orphans.push({
+        sku,
+        name:  String(r[2] || "").trim(),                       // col C
+        gStore: Number(r[COL_PROD_QTYFS - 1]) || 0,             // col G
+        hWH:    Number(r[COL_PROD_QTYWH - 1]) || 0,             // col H
+      });
+    }
+  }
+
+  Logger.log(`สินค้าใน "อัพเดทจำนวนสินค้า" ทั้งหมด (มี SKU): เทียบกับ "ข้อมูลสินค้า"`);
+  Logger.log(`── พบ orphan (มีจำนวนแต่ไม่ขึ้นเว็บ): ${orphans.length} SKU ──`);
+  Logger.log("SKU | ชื่อ | หน้าร้าน(G) | คลัง(H)");
+  orphans.forEach(o => Logger.log(`${o.sku} | ${o.name} | ${o.gStore} | ${o.hWH}`));
+  Logger.log(`สรุป: ต้องเพิ่ม ${orphans.length} SKU นี้เข้าชีต "ข้อมูลสินค้า" ถึงจะขึ้นเว็บ`);
+}
+
 function syncZortBoth() {
   // PERF: fetch แต่ละ warehouse ครั้งเดียว แล้วส่ง cached products ให้ sub-functions
   // เพื่อลดจำนวน ZORT API calls จาก 4+ ครั้ง → 2 ครั้ง (WH_SAI5 + WH_FRONTSTORE)
