@@ -228,7 +228,10 @@ function doPost(e) {
         sendLineGroup_('✅ บอทพร้อมแจ้งเตือนในกลุ่มนี้แล้วครับ 🎉');
         return ContentService.createTextOutput("OK");
       }
-      if (event.type === 'message' && event.message.type === 'text') {
+      // ตอบกลับเมื่อมีคนพิมพ์ — ปิดโดย default (บอทเป็น "ส่งอย่างเดียว")
+      // เปิดกลับได้โดยตั้ง Script Property LINE_REPLY_ENABLED = 'true'
+      var replyEnabled = PropertiesService.getScriptProperties().getProperty('LINE_REPLY_ENABLED') === 'true';
+      if (replyEnabled && event.type === 'message' && event.message.type === 'text') {
         const userMessage = event.message.text.trim();
         const replyToken = event.replyToken;
         let chatId = null;
@@ -1262,7 +1265,9 @@ function updateOrderState(ss, body) {
           if (body.carryMode === "carry") {
             try {
               const productName = body.name || body.sku || "(ไม่ทราบชื่อ)";
-              sendLineGroupOrderCard_(productName, body.sku||"", body.date||"", body.image||"");
+              // orderQty อยู่ col H (index 7 / column 8) — อ่านจากชีตเป็นค่าจริง
+              const orderQty = Number(sheet.getRange(sheetRow, 8).getValue()) || Number(body.qty) || 0;
+              sendLineGroupOrderCard_(productName, body.sku||"", body.date||"", body.image||"", orderQty);
             } catch(e) {}
           }
         }
@@ -1302,7 +1307,9 @@ function updateOrderState(ss, body) {
           if (body.carryMode === "carry") {
             try {
               const productName = body.name || body.sku || "(ไม่ทราบชื่อ)";
-              sendLineGroupOrderCard_(productName, body.sku||"", body.date||"", body.image||"");
+              // orderQty อยู่ col H (index 7) — อ่านจาก data ที่โหลดไว้แล้ว
+              const orderQty = Number(data[i][7]) || Number(body.qty) || 0;
+              sendLineGroupOrderCard_(productName, body.sku||"", body.date||"", body.image||"", orderQty);
             } catch(e) {}
           }
         }
@@ -3626,7 +3633,7 @@ function handleOrder_(params) {
     orderSh.getRange(nextRow, 1, 1, 11).setValues([[orderType, now, 'รอ', 'คลังสินค้าสาย5', 'ดูเหมือนจริง', sku, productName, qty, '', imageUrl, '']]);
     // แจ้งเตือน LINE เมื่อมี order ใหม่
     if (orderType === 'หิ้ว') {
-      sendLineGroupOrderCard_(productName || sku, sku, Utilities.formatDate(now, 'Asia/Bangkok', 'dd/MM/yyyy HH:mm'), "");
+      sendLineGroupOrderCard_(productName || sku, sku, Utilities.formatDate(now, 'Asia/Bangkok', 'dd/MM/yyyy HH:mm'), "", qty);
     }
     invalidateCache_(); // m1: ล้าง cache หลังเขียน order ใหม่
 
@@ -3690,7 +3697,7 @@ function sendLineGroupMentionAll_(msg) {
   });
 }
 
-function sendLineGroupOrderCard_(name, sku, date, imageUrl) {
+function sendLineGroupOrderCard_(name, sku, date, imageUrl, qty) {
   var groupId = PropertiesService.getScriptProperties().getProperty('LINE_GROUP_ID');
   if (!groupId) { Logger.log("LINE: no LINE_GROUP_ID"); return; }
 
@@ -3700,11 +3707,14 @@ function sendLineGroupOrderCard_(name, sku, date, imageUrl) {
     try { imgUrl = (readImageMap_()[(sku||"").trim().toUpperCase()] || ""); } catch(e) {}
   }
 
+  var qtyNum = Number(qty) || 0;
+  var qtyLabel = qtyNum > 0 ? ("จำนวนที่สั่ง: " + qtyNum + " ชิ้น") : "";
+
   var pushUrl = "https://api.line.me/v2/bot/message/push";
   var headers = { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN };
 
-  // @All mention
-  var mentionText = "@All order 🚶 " + (name||sku||"-");
+  // @All mention (แนบจำนวนที่สั่งไว้ในข้อความด้วย)
+  var mentionText = "@All order 🚶 " + (name||sku||"-") + (qtyNum > 0 ? (" x" + qtyNum) : "");
   UrlFetchApp.fetch(pushUrl, {
     method: "post", headers: headers, muteHttpExceptions: true,
     payload: JSON.stringify({ to: groupId, messages: [{
@@ -3714,17 +3724,19 @@ function sendLineGroupOrderCard_(name, sku, date, imageUrl) {
   });
 
   // Flex bubble เดียว (หน้าตาเหมือน carousel ของรอขึ้นรถ)
+  var bodyContents = [
+    { type: "text", text: "order 🚶", size: "xs", color: "#1565c0", weight: "bold" },
+    { type: "text", text: name || sku || "-", weight: "bold", size: "lg", wrap: true },
+    { type: "text", text: "รหัส: " + (sku||""), size: "sm", color: "#888888" }
+  ];
+  if (qtyLabel) {
+    bodyContents.push({ type: "text", text: qtyLabel, size: "md", color: "#d84315", weight: "bold" });
+  }
+  bodyContents.push({ type: "text", text: "วันที่: " + (date||""), size: "sm", color: "#888888" });
+
   var bubble = {
     type: "bubble", size: "kilo",
-    body: {
-      type: "box", layout: "vertical", spacing: "sm", paddingAll: "14px",
-      contents: [
-        { type: "text", text: "order 🚶", size: "xs", color: "#1565c0", weight: "bold" },
-        { type: "text", text: name || sku || "-", weight: "bold", size: "lg", wrap: true },
-        { type: "text", text: "รหัส: " + (sku||""), size: "sm", color: "#888888" },
-        { type: "text", text: "วันที่: " + (date||""), size: "sm", color: "#888888" }
-      ]
-    }
+    body: { type: "box", layout: "vertical", spacing: "sm", paddingAll: "14px", contents: bodyContents }
   };
   if (imgUrl) {
     bubble.hero = { type: "image", url: imgUrl, size: "full", aspectRatio: "4:3", aspectMode: "fit"};
@@ -3732,7 +3744,7 @@ function sendLineGroupOrderCard_(name, sku, date, imageUrl) {
 
   var r2 = UrlFetchApp.fetch(pushUrl, {
     method: "post", headers: headers, muteHttpExceptions: true,
-    payload: JSON.stringify({ to: groupId, messages: [{ type: "flex", altText: "order 🚶 " + (name||sku||"-"), contents: bubble }] })
+    payload: JSON.stringify({ to: groupId, messages: [{ type: "flex", altText: mentionText, contents: bubble }] })
   });
   Logger.log("LINE carry card: " + r2.getResponseCode() + " " + r2.getContentText().slice(0,300));
 }
