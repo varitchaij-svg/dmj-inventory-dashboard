@@ -129,6 +129,11 @@ const TRACKED = [
     `const m = String(sku).match(/^([A-Za-z]+)(\\d{2})(\\d+)$/);`,
     `return pa.localeCompare(pb) || ca - cb || sa - sb;`,
   ]},
+  { names: ['suggestNextSku'], sourceFile: 'views-main.jsx', landmarks: [
+    `.filter(s => /^[A-Za-z]+\\d+$/.test(s));`,
+    `(groups[m[1]] = groups[m[1]] || []).push({ num: parseInt(m[2], 10), width: m[2].length });`,
+    `return base + String(maxNum + 1).padStart(width, "0");`,
+  ]},
   { names: ['detectColor'], sourceFile: 'views-main.jsx', landmarks: [
     `for (const k of COLOR_KEYS) if (s.indexOf(k) >= 0) return COLOR_MAP[k];`,
   ]},
