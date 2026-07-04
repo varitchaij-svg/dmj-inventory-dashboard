@@ -181,11 +181,12 @@ npm run test:coverage # coverage report (tests/helpers.js)
   รายการนับ → save ผ่าน `syncLockData` พร้อม `isNew:true` (append แถวในชีตตำแหน่ง)
   **ไม่ส่งเข้า `confirmStockCount`** — กันจำนวนที่เจอหลงล็อคไปทับยอดคลังรวม + push ZORT ผิด
 - **เพิ่มสินค้าใหม่เข้า ZORT** — AddProductView (views-main.jsx, owner+warehouse): ฟอร์ม
-  SKU(=barcode, `suggestNextSku` แนะนำเลขถัดไปจากหมวด แก้ได้)/ชื่อ/ราคา/หมวด/จำนวน+คลัง
+  SKU(=barcode, `suggestNextSku` แนะนำเลขถัดไปจากหมวด แก้ได้)/ชื่อ/ราคา/หมวด/**ซัพพลายเออร์(TAG)**/จำนวน+คลัง
   หน่วย fix "ชิ้น" · เช็คซ้ำ 2 ชั้น (client `data.products` + server `checkSkuExists` 2 ชีต)
+  · ช่องซัพพลายเออร์ = TAG (ไม่บังคับ) มีชิปแนะนำจาก `p.lastSupplier||p.vendor` ที่เคยใช้ + พิมพ์เองได้
   GAS `addNewProduct`: POST `/Product/AddProduct` → `pushStockToZort_` ตั้งสต็อกตาม warehouse
-  → append ชีต SHEET_PRODUCTS → audit → `invalidateCache_()` · ZORT payload:
-  `{sku,barcode,name,sellprice,unittext:"ชิ้น",category}` · ถ้า AddProduct fail ไม่เขียนชีต
+  → append ชีต SHEET_PRODUCTS (**col F = tag/ซัพพลายเออร์**) → audit → `invalidateCache_()` · ZORT payload:
+  `{sku,barcode,name,sellprice,unittext:"ชิ้น",category[,tag]}` (ส่ง tag เฉพาะเมื่อกรอก) · ถ้า AddProduct fail ไม่เขียนชีต
 
 ## Features ที่เพิ่มก่อนหน้า (Sprint 1)
 

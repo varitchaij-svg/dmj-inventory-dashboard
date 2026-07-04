@@ -2240,6 +2240,7 @@ function addNewProduct(ss, product, actor) {
   const name  = String(product.name || "").trim();
   const price = Number(product.sellprice) || 0;
   const cat   = String(product.category || "").trim();
+  const tag   = String(product.supplier || product.tag || "").trim(); // TAG ระบุซัพพลายเออร์
   const qty   = Math.max(0, Math.floor(Number(product.qty) || 0));
   const wh    = (product.warehousecode === WH_FRONTSTORE) ? WH_FRONTSTORE : WH_SAI5;
 
@@ -2265,6 +2266,7 @@ function addNewProduct(ss, product, actor) {
       unittext: "ชิ้น",
       category: cat,
     };
+    if (tag) payload.tag = tag; // ส่ง TAG (ซัพพลายเออร์) เข้า ZORT ด้วยถ้ามี
     const res = UrlFetchApp.fetch(ZORT_BASE + "/Product/AddProduct", {
       method: "post", headers,
       payload: JSON.stringify(payload),
@@ -2285,17 +2287,17 @@ function addNewProduct(ss, product, actor) {
     }
 
     // 4) เขียนชีต "อัพเดทจำนวนสินค้า" (pattern เดียวกับ syncNewProductsFromZort)
-    //    A="",B=sku,C=name,D=cat,E=subcat"",F=tag"",G=qtyStore,H=qtyWH,I=price
+    //    A="",B=sku,C=name,D=cat,E=subcat"",F=tag(ซัพพลายเออร์),G=qtyStore,H=qtyWH,I=price
     const qtyStore = (wh === WH_FRONTSTORE) ? qty : 0;
     const qtyWH    = (wh === WH_FRONTSTORE) ? 0   : qty;
     const stockSh = ss.getSheetByName(SHEET_PRODUCTS);
     if (stockSh) {
-      stockSh.appendRow(["", sku, name, cat, "", "", qtyStore, qtyWH, price]);
+      stockSh.appendRow(["", sku, name, cat, "", tag, qtyStore, qtyWH, price]);
       SpreadsheetApp.flush();
     }
 
     writeAuditLog_(actor || "ไม่ระบุ", "เพิ่มสินค้าใหม่", sku,
-      auditDetail_({ after: { name: name, price: price, cat: cat, qty: qty, wh: wh }, note: "เพิ่มสินค้าใหม่เข้า ZORT + ชีต" }));
+      auditDetail_({ after: { name: name, price: price, cat: cat, tag: tag, qty: qty, wh: wh }, note: "เพิ่มสินค้าใหม่เข้า ZORT + ชีต" }));
 
     invalidateCache_(); // bump dmj_last_write_ts ให้เครื่องอื่นเห็นสินค้าใหม่
     return ok({ sku: sku, name: name, qty: qty, warehousecode: wh });

@@ -6848,6 +6848,16 @@ function AddProductView({ data, role, onAdded }) {
     return s;
   }, [products]);
 
+  // ซัพพลายเออร์ที่เคยใช้ (เรียงตามความถี่) — ใช้เป็นชิปแนะนำในฟอร์ม
+  const allSuppliers = uM(() => {
+    const cnt = {};
+    products.forEach(p => {
+      const v = (p.lastSupplier || p.vendor || "").trim();
+      if (v) cnt[v] = (cnt[v] || 0) + 1;
+    });
+    return Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a]);
+  }, [products]);
+
   const [category, setCategory]   = uS("");
   const [catInput, setCatInput]   = uS("");   // พิมพ์หมวดใหม่
   const [sku, setSku]             = uS("");
@@ -6855,6 +6865,7 @@ function AddProductView({ data, role, onAdded }) {
   const [name, setName]           = uS("");
   const [price, setPrice]         = uS("");
   const [qty, setQty]             = uS("");
+  const [supplier, setSupplier]   = uS("");   // TAG ระบุซัพพลายเออร์ (ไม่บังคับ)
   const [wh, setWh]               = uS("W0002"); // default คลังสาย5
   const [saving, setSaving]       = uS(false);
   const [serverCheck, setServerCheck] = uS(null); // { checking, exists }
@@ -6898,12 +6909,13 @@ function AddProductView({ data, role, onAdded }) {
       category: effectiveCat,
       qty: Math.max(0, Math.floor(Number(qty) || 0)),
       warehousecode: wh,
+      supplier: supplier.trim(),
     };
     const r = await syncAddProduct(product);
     setSaving(false);
     if (r && r.success) {
       showToast("success", `เพิ่ม "${product.name}" (${product.sku}) แล้ว`, "✅");
-      // reset ฟอร์ม (คงหมวด+คลังไว้ เผื่อเพิ่มหลายตัวติดกัน)
+      // reset ฟอร์ม (คงหมวด+คลัง+ซัพพลายเออร์ไว้ เผื่อเพิ่มหลายตัวติดกัน)
       setSku(""); setName(""); setPrice(""); setQty(""); setSkuTouched(false); setServerCheck(null);
       if (onAdded) onAdded();
     } else {
@@ -6987,6 +6999,30 @@ function AddProductView({ data, role, onAdded }) {
               <label style={labelStyle}>ราคาขาย (บาท)</label>
               <input type="number" inputMode="decimal" min="0" placeholder="0"
                 value={price} onChange={e => setPrice(e.target.value)} style={inputStyle} />
+            </div>
+
+            {/* ซัพพลายเออร์ (TAG) — ไม่บังคับ */}
+            <div>
+              <label style={labelStyle}>
+                ซัพพลายเออร์ <span style={{ fontWeight: 400, color: "var(--muted)" }}>(ร้านที่ซื้อมา — ไม่บังคับ)</span>
+              </label>
+              {allSuppliers.length > 0 && (
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                  {allSuppliers.slice(0, 10).map(s => (
+                    <button key={s} type="button"
+                      onClick={() => setSupplier(supplier.trim() === s ? "" : s)}
+                      style={{
+                        minHeight: 40, padding: "6px 12px", borderRadius: 999, cursor: "pointer",
+                        fontSize: 12.5, fontWeight: 600, fontFamily: "inherit",
+                        border: "1.5px solid " + (supplier.trim() === s ? "var(--g-500)" : "var(--bdr)"),
+                        background: supplier.trim() === s ? "var(--g-50)" : "#fff",
+                        color: supplier.trim() === s ? "var(--g-700)" : "var(--text)",
+                      }}>{s}</button>
+                  ))}
+                </div>
+              )}
+              <input type="text" placeholder="🏪 พิมพ์ชื่อร้าน/ซัพพลายเออร์ (ถ้ามี)"
+                value={supplier} onChange={e => setSupplier(e.target.value)} style={inputStyle} />
             </div>
 
             {/* จำนวนเริ่มต้น + คลัง */}
