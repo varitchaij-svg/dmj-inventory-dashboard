@@ -454,6 +454,22 @@ function abcClassify(products) {
   return map;
 }
 
+// ── parseCheckDateMs: แปลงวันที่เช็ค/นับจากชีตเป็น ms รองรับปี พ.ศ. (จาก views-analytics.jsx) ──
+function parseCheckDateMs(s) {
+  if (!s) return NaN;
+  const m = String(s).trim().match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})(?:[ ,]+(\d{1,2}):(\d{2}))?/);
+  if (m) {
+    let yr = Number(m[3]);
+    if (yr < 100) yr += 2000;
+    if (yr >= 2400) yr -= 543; // พ.ศ. → ค.ศ.
+    return new Date(yr, Number(m[2]) - 1, Number(m[1]), Number(m[4] || 0), Number(m[5] || 0)).getTime();
+  }
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return NaN;
+  if (d.getFullYear() >= 2400) d.setFullYear(d.getFullYear() - 543); // ISO ปี พ.ศ.
+  return d.getTime();
+}
+
 // ── sanitizeThresholds: validate เกณฑ์แจ้งเตือนที่ client ส่งมา (จาก appsscript_complete.gs) ──
 const THRESHOLDS_DEFAULT = {
   default: 36,
@@ -492,4 +508,5 @@ module.exports = {
   transferBatchCore,
   cleanupOrdersStateCore, stableOrderId,
   buildYoYSeries, abcClassify, sanitizeThresholds, THRESHOLDS_DEFAULT,
+  parseCheckDateMs,
 };

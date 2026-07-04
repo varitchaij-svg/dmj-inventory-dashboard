@@ -181,6 +181,10 @@ const TRACKED = [
     `if (total <= 0 || p.rev <= 0) { map[p.sku] = "C"; return; }`,
     `map[p.sku] = before < 0.8 ? "A" : before < 0.95 ? "B" : "C";`,
   ]},
+  { names: ['parseCheckDateMs'], sourceFile: 'views-analytics.jsx', landmarks: [
+    `if (yr >= 2400) yr -= 543; // พ.ศ. → ค.ศ.`,
+    `if (d.getFullYear() >= 2400) d.setFullYear(d.getFullYear() - 543); // ISO ปี พ.ศ.`,
+  ]},
   // sanitizeThresholds: ชื่อในต้นทางเป็น sanitizeThresholds_ (GAS convention)
   // landmark เลี่ยงชื่อ THRESHOLDS_DEFAULT เพราะต้นทางใช้ THRESHOLDS_DEFAULT_ (underscore)
   { names: ['sanitizeThresholds', 'THRESHOLDS_DEFAULT'], sourceFile: 'appsscript_complete.gs', landmarks: [

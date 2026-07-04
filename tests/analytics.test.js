@@ -1,6 +1,6 @@
 // tests/analytics.test.js — YoY series + ABC classification + threshold sanitize
 import { describe, it, expect } from 'vitest';
-import { buildYoYSeries, abcClassify, sanitizeThresholds, THRESHOLDS_DEFAULT } from './helpers.js';
+import { buildYoYSeries, abcClassify, sanitizeThresholds, THRESHOLDS_DEFAULT, parseCheckDateMs } from './helpers.js';
 
 // ────────────────────────────────────────────────────────────────────
 describe('buildYoYSeries', () => {
@@ -122,5 +122,46 @@ describe('sanitizeThresholds', () => {
     ov['ย'.repeat(150)] = 2;
     const out = sanitizeThresholds({ default: 10, coverMonths: 2, overrides: ov });
     expect(Object.keys(out.overrides).length).toBeLessThanOrEqual(200);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// parseCheckDateMs — วันที่เช็ค/นับจากชีต ต้องรองรับปี พ.ศ. ที่มาจาก
+// new Date().toLocaleString("th-TH") เช่น "4/7/2569 11:30:45"
+// (new Date ตรง ๆ จะตีเป็น ค.ศ. 2569 → ของที่เคยนับจะ "เพิ่งนับ" ตลอดกาล)
+describe('parseCheckDateMs', () => {
+  it('ปี พ.ศ. พร้อมเวลา (format จริงจาก toLocaleString th-TH) → ลบ 543 ปี', () => {
+    const ms = parseCheckDateMs('4/7/2569 11:30:45');
+    const d = new Date(ms);
+    expect(d.getFullYear()).toBe(2026);
+    expect(d.getMonth()).toBe(6);  // ก.ค. (0-indexed)
+    expect(d.getDate()).toBe(4);
+    expect(d.getHours()).toBe(11);
+    expect(d.getMinutes()).toBe(30);
+  });
+
+  it('ปี ค.ศ. dd/MM/yyyy ตีความแบบวันก่อนเดือน (ไม่ใช่ US M/d)', () => {
+    const d = new Date(parseCheckDateMs('20/06/2026 10:30'));
+    expect(d.getFullYear()).toBe(2026);
+    expect(d.getMonth()).toBe(5);
+    expect(d.getDate()).toBe(20);
+  });
+
+  it('ปี 2 หลัก → +2000, ไม่มีเวลาก็ได้', () => {
+    const d = new Date(parseCheckDateMs('1/3/26'));
+    expect(d.getFullYear()).toBe(2026);
+    expect(d.getMonth()).toBe(2);
+    expect(d.getDate()).toBe(1);
+  });
+
+  it('ISO yyyy-MM-dd ผ่าน fallback ปกติ + ISO ปี พ.ศ. ถูกลบ 543', () => {
+    expect(new Date(parseCheckDateMs('2026-05-01')).getFullYear()).toBe(2026);
+    expect(new Date(parseCheckDateMs('2569-05-01')).getFullYear()).toBe(2026);
+  });
+
+  it('ค่าว่าง/ขยะ → NaN', () => {
+    expect(parseCheckDateMs('')).toBeNaN();
+    expect(parseCheckDateMs(null)).toBeNaN();
+    expect(parseCheckDateMs('ยังไม่เคยเช็ค')).toBeNaN();
   });
 });

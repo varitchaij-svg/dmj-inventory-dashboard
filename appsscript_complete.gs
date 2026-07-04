@@ -608,7 +608,9 @@ function doGet(e) {
       }
       // ใช้ ?? แทน || เพื่อให้ค่า 0 ที่บันทึกไว้จริงผ่านได้
       // ถ้าไม่มีในชีตเลย (undefined) → ส่ง null ให้ frontend รู้ว่า "ยังไม่เคยเช็ค"
-      p.frontStoreCheckedQty = frontStoreQtys[p.sku] != null ? frontStoreQtys[p.sku] : null;
+      const fsChecked = frontStoreQtys[p.sku];
+      p.frontStoreCheckedQty = fsChecked != null ? fsChecked.qty : null;
+      p.frontStoreCheckedAt  = fsChecked != null && fsChecked.at ? fsChecked.at : null;
 
       const my = purchases.filter(pu => pu.sku === p.sku)
                           .sort((a, b) => (a.date < b.date ? 1 : -1));
@@ -3655,7 +3657,10 @@ function readFrontStoreCheckedQty_() {
     const sku = String(rows[i][1] || "").trim().toUpperCase();
     const qty = rows[i][3];
     if (sku && qty !== "" && qty != null)
-      map[sku] = parseInt(String(qty).replace(/,/g, "")) || 0;
+      map[sku] = {
+        qty: parseInt(String(qty).replace(/,/g, "")) || 0,
+        at:  String(rows[i][8] || "").trim(), // I = วันเช็คล่าสุด (เขียนโดย updateFrontStore)
+      };
   }
   return map;
 }
