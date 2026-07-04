@@ -7004,7 +7004,7 @@ function AddProductView({ data, role, onAdded }) {
             {/* ซัพพลายเออร์ (TAG) — ไม่บังคับ */}
             <div>
               <label style={labelStyle}>
-                ซัพพลายเออร์ <span style={{ fontWeight: 400, color: "var(--muted)" }}>(ร้านที่ซื้อมา — ไม่บังคับ)</span>
+                ซัพพลายเออร์ (TAG) <span style={{ fontWeight: 400, color: "var(--muted)" }}>· ร้านที่ซื้อมา · ไม่บังคับ</span>
               </label>
               {allSuppliers.length > 0 && (
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
