@@ -564,12 +564,14 @@ function App() {
 
   // แบ่งเมนูเป็น primary (บนแถบ) / secondary (ใน "เพิ่มเติม")
   // โหมดง่าย: เหลือเฉพาะ SIMPLE_PRIMARY บนแถบ ที่เหลือเข้า "เพิ่มเติม"
-  // โหมดปกติ: แสดง 5 ตัวแรก + เพิ่มเติม เมื่อมีเกิน 7 ตัว (เหมือนเดิม)
+  // โหมดปกติ: แสดง 5 ตัวแรก + เพิ่มเติม เมื่อมีเกิน 8 ตัว
+  //   (แถบเลื่อนแนวนอนได้ — role คลัง 8 แท็บ/หน้าร้าน 6/Sale 5 แสดงครบไม่ต้องมีเพิ่มเติม
+  //    เหลือดันเข้าเพิ่มเติมเฉพาะ owner 16 / employee 10 ที่แท็บเยอะจริง)
   let primaryTabs, secondaryTabs;
   if (simpleMode) {
     primaryTabs   = visibleTabs.filter(t => SIMPLE_PRIMARY.includes(t.id));
     secondaryTabs = visibleTabs.filter(t => !SIMPLE_PRIMARY.includes(t.id));
-  } else if (visibleTabs.length > 7) {
+  } else if (visibleTabs.length > 8) {
     primaryTabs   = visibleTabs.slice(0, 5);
     secondaryTabs = visibleTabs.slice(5);
   } else {
