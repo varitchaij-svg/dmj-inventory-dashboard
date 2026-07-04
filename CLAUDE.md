@@ -187,6 +187,13 @@ npm run test:coverage # coverage report (tests/helpers.js)
   GAS `addNewProduct`: POST `/Product/AddProduct` → `pushStockToZort_` ตั้งสต็อกตาม warehouse
   → append ชีต SHEET_PRODUCTS (**col F = tag/ซัพพลายเออร์**) → audit → `invalidateCache_()` · ZORT payload:
   `{sku,barcode,name,sellprice,unittext:"ชิ้น",category[,tag]}` (ส่ง tag เฉพาะเมื่อกรอก) · ถ้า AddProduct fail ไม่เขียนชีต
+  · สินค้าใหม่ขึ้นเว็บทันที (ไม่ต้อง sync ZORT ใหม่ทั้งก้อน) ผ่าน SELF-HEAL block ใน `readProducts_`
+  (ดึงสินค้าที่อยู่ในชีตสต็อกแต่ยังไม่มีใน SHEET_PRODUCT_META มาแสดง พร้อม tag จาก col F)
+- **ดึงรูปสินค้าจาก ZORT แบบ on-demand** — ProductCard (views-main.jsx): การ์ดที่ไม่มีรูป
+  มีปุ่ม "🔄 ดึงรูปจาก ZORT" → `syncFetchProductImage(sku)` → GAS `fetchProductImage`
+  (targeted GetProducts ด้วย `keyword=sku` ไม่ fetch ทั้งคลัง) → `pickZortImage_` → เขียน col E
+  ชีต imageUrl (ZORT auto ชนะ manual) → `invalidateCache_()` · ใช้หลังอัปรูปในแอป ZORT เสร็จ
+  (ตอน AddProduct ยังไม่มีรูป) · ProductCard เก็บ `imgOverride` state โชว์รูปทันทีไม่ต้อง refresh
 
 ## Features ที่เพิ่มก่อนหน้า (Sprint 1)
 

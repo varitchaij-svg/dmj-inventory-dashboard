@@ -389,6 +389,9 @@ function doPost(e) {
     if (data.checkSkuExists) {
       return checkSkuExists(ss, data.sku);
     }
+    if (data.fetchProductImage) {
+      return fetchProductImage(ss, data.sku);
+    }
 
     // ─── Order Management ───
     if (data.deleteOrder) {
@@ -2303,6 +2306,47 @@ function addNewProduct(ss, product, actor) {
     return ok({ sku: sku, name: name, qty: qty, warehousecode: wh });
   } finally {
     lock.releaseLock();
+  }
+}
+
+// ── ดึงรูปเฉพาะ SKU เดียวจาก ZORT (on-demand หลังอัปรูปในแอป ZORT) ──
+// targeted fetch ด้วย keyword — ไม่ต้อง fetch ทั้งคลังเหมือน syncZortImages
+// เขียนลง col E (ZORT auto) ของชีต imageUrl → readImageMap_ ให้ col E ชนะ manual(D)
+function fetchProductImage(ss, sku) {
+  const clean = String(sku || "").trim().toUpperCase();
+  if (!clean) return error("ไม่มี SKU");
+  try {
+    // ZORT GetProducts รองรับ keyword filter (ค้นด้วย sku/barcode/ชื่อ) → ดึงหน้าเดียวพอ
+    const url = ZORT_BASE + "/Product/GetProducts?page=1&limit=200&keyword=" + encodeURIComponent(clean);
+    const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+    let json = null;
+    try { json = JSON.parse(res.getContentText()); } catch (e) { json = null; }
+    const list = (json && json.list) ? json.list : [];
+    let found = null;
+    for (const p of list) {
+      const s = String(p.sku || p.barcode || "").trim().toUpperCase();
+      if (s === clean) { found = p; break; }
+    }
+    if (!found) return error("ยังไม่พบสินค้านี้ใน ZORT (เพิ่งสร้างอาจต้องรอสักครู่)");
+    const img = pickZortImage_(found);
+    if (!img) return error("สินค้านี้ยังไม่มีรูปใน ZORT — อัปรูปในแอป ZORT ก่อนแล้วกดใหม่");
+
+    // เขียนลงชีต imageUrl col E (อัปเดตถ้ามี SKU / append ถ้ายังไม่มี)
+    const sh = ss.getSheetByName(SHEET_IMAGE_URL);
+    if (sh) {
+      const rows = sh.getDataRange().getValues();
+      let rowNum = 0;
+      for (let i = 1; i < rows.length; i++) {
+        if (String(rows[i][1] || "").trim().toUpperCase() === clean) { rowNum = i + 1; break; }
+      }
+      if (rowNum) sh.getRange(rowNum, 5).setValue(img);
+      else sh.appendRow(["", clean, String(found.name || ""), "", img]);
+      SpreadsheetApp.flush();
+    }
+    invalidateCache_();
+    return ok({ sku: clean, imageUrl: img });
+  } catch (e) {
+    return error("ดึงรูปไม่สำเร็จ: " + e.toString());
   }
 }
 

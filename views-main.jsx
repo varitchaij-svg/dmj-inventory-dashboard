@@ -3755,8 +3755,22 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
   const hashHue = (p.sku || "").split("").reduce((a,c) => a + c.charCodeAt(0), 0) % 360;
   const [lightbox, setLightbox] = uS(false);
 
-  // Image (real or placeholder)
-  const hasImg = !!p.imageUrl;
+  // Image (real or placeholder) — imgOverride = รูปที่เพิ่งดึงจาก ZORT แบบ on-demand
+  const [imgOverride, setImgOverride] = uS(null);
+  const [fetchingImg, setFetchingImg] = uS(false);
+  const [imgErr, setImgErr]           = uS("");
+  const effImg = imgOverride || p.imageUrl;
+  const hasImg = !!effImg;
+
+  const doFetchImg = async (e) => {
+    if (e) e.stopPropagation();
+    if (fetchingImg) return;
+    setFetchingImg(true); setImgErr("");
+    const r = await syncFetchProductImage(p.sku);
+    setFetchingImg(false);
+    if (r && r.success && r.data && r.data.imageUrl) setImgOverride(r.data.imageUrl);
+    else setImgErr((r && r.error) || "ดึงรูปไม่สำเร็จ");
+  };
 
   return (
     <>
@@ -3768,7 +3782,7 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
         {hasImg ? (
           <div style={{
             width:"100%", aspectRatio:"1/1", borderRadius:10,
-            backgroundImage:`url("${p.imageUrl}")`,
+            backgroundImage:`url("${effImg}")`,
             backgroundSize:"contain", backgroundPosition:"center",
             backgroundRepeat:"no-repeat", backgroundColor:"#fff",
             border:"1px solid var(--bdr)",
@@ -3793,6 +3807,21 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
               <div style={{marginTop:6, fontSize:8.5, color:"var(--light)", fontFamily:"JetBrains Mono, monospace"}}>
                 {hasImg ? "" : "NO IMAGE"}
               </div>
+              {/* ปุ่มดึงรูปจาก ZORT (หลังอัปรูปในแอป ZORT) */}
+              <button type="button" onClick={doFetchImg} disabled={fetchingImg}
+                style={{
+                  marginTop:8, padding:"5px 10px", borderRadius:999, cursor: fetchingImg ? "default" : "pointer",
+                  fontSize:11, fontWeight:700, fontFamily:"inherit",
+                  border:"1.5px solid var(--g-500)", background:"#fff", color:"var(--g-700)",
+                  display:"inline-flex", alignItems:"center", gap:5, opacity: fetchingImg ? 0.6 : 1,
+                }}>
+                {fetchingImg
+                  ? <><span className="spin" style={{width:11,height:11,borderWidth:2}}/> กำลังดึง…</>
+                  : "🔄 ดึงรูปจาก ZORT"}
+              </button>
+              {imgErr && (
+                <div style={{marginTop:5, fontSize:9.5, color:"var(--dang)", maxWidth:150, lineHeight:1.3}}>{imgErr}</div>
+              )}
             </div>
           </div>
         )}
@@ -3927,7 +3956,7 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
         </div>
       )}
     </div>
-    {lightbox && p.imageUrl && <ImageLightbox url={p.imageUrl} name={p.name} onClose={() => setLightbox(false)}/>}
+    {lightbox && effImg && <ImageLightbox url={effImg} name={p.name} onClose={() => setLightbox(false)}/>}
     </>
   );
 }
@@ -6811,6 +6840,19 @@ async function syncAddProduct(product) {
       }),
     });
     return await res.json(); // { success, data } | { success:false, error }
+  } catch (err) { return { success: false, error: err.message }; }
+}
+
+// ดึงรูปเฉพาะ SKU เดียวจาก ZORT (หลังอัปรูปในแอป ZORT) → คืน { success, data:{imageUrl} }
+async function syncFetchProductImage(sku) {
+  if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
+  try {
+    const res = await fetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ fetchProductImage: true, sku }),
+    });
+    return await res.json();
   } catch (err) { return { success: false, error: err.message }; }
 }
 
