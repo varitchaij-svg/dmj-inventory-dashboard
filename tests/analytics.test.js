@@ -1,6 +1,6 @@
 // tests/analytics.test.js — YoY series + ABC classification + threshold sanitize
 import { describe, it, expect } from 'vitest';
-import { buildYoYSeries, abcClassify, sanitizeThresholds, THRESHOLDS_DEFAULT, parseCheckDateMs } from './helpers.js';
+import { buildYoYSeries, abcClassify, sanitizeThresholds, THRESHOLDS_DEFAULT, parseCheckDateMs, suggestNextSku } from './helpers.js';
 
 // ────────────────────────────────────────────────────────────────────
 describe('buildYoYSeries', () => {
@@ -163,5 +163,40 @@ describe('parseCheckDateMs', () => {
     expect(parseCheckDateMs('')).toBeNaN();
     expect(parseCheckDateMs(null)).toBeNaN();
     expect(parseCheckDateMs('ยังไม่เคยเช็ค')).toBeNaN();
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// suggestNextSku — แนะนำ SKU ถัดไปในหมวดเดียวกัน (ฟอร์มเพิ่มสินค้าใหม่)
+describe('suggestNextSku', () => {
+  const P = (sku, category) => ({ sku, category });
+
+  it('หลาย SKU ในหมวด → common prefix + max running +1 (pad width เดิม)', () => {
+    const products = [P('HL003001','ของตกแต่ง'), P('HL003005','ของตกแต่ง'), P('HL003002','ของตกแต่ง')];
+    expect(suggestNextSku('ของตกแต่ง', products)).toBe('HL003006');
+  });
+
+  it('running กว้างคงเดิม (001..003 → 004)', () => {
+    const products = [P('HL001001','แจกัน'), P('HL001002','แจกัน'), P('HL001003','แจกัน')];
+    expect(suggestNextSku('แจกัน', products)).toBe('HL001004');
+  });
+
+  it('SKU เดียวในหมวด → บวกเลขท้าย', () => {
+    expect(suggestNextSku('ดอกไม้', [P('HL002001','ดอกไม้')])).toBe('HL002002');
+  });
+
+  it('ข้ามหมวดอื่น — นับเฉพาะหมวดที่เลือก', () => {
+    const products = [P('HL001009','แจกัน'), P('HL003001','ของตกแต่ง'), P('HL003002','ของตกแต่ง')];
+    expect(suggestNextSku('ของตกแต่ง', products)).toBe('HL003003');
+  });
+
+  it('หมวดว่าง/ไม่มี SKU เข้ารูป → คืน "" (ให้พิมพ์เอง)', () => {
+    expect(suggestNextSku('ใหม่เอี่ยม', [])).toBe('');
+    expect(suggestNextSku('x', [P('','x'), P('ไม่มีเลข','x')])).toBe('');
+  });
+
+  it('เลขล้นหลัก → carry เพิ่ม digit (HL003099 → HL003100)', () => {
+    const products = [P('HL003098','ของตกแต่ง'), P('HL003099','ของตกแต่ง')];
+    expect(suggestNextSku('ของตกแต่ง', products)).toBe('HL003100');
   });
 });

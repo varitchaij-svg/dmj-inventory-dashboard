@@ -68,6 +68,32 @@ function mtoBase(name) {
     .trim() || 'งานพิเศษ';
 }
 
+// ── suggestNextSku: แนะนำ SKU ถัดไปจากสินค้าในหมวดเดียวกัน (จาก views-main.jsx) ──
+function suggestNextSku(category, products) {
+  const valid = (products || [])
+    .filter(p => p && p.category === category)
+    .map(p => String(p.sku || "").trim().toUpperCase())
+    .filter(s => /^[A-Za-z]+\d+$/.test(s));
+  if (!valid.length) return "";
+
+  const groups = {};
+  for (const s of valid) {
+    const m = s.match(/^(.*?)(\d+)$/);
+    if (!m) continue;
+    (groups[m[1]] = groups[m[1]] || []).push({ num: parseInt(m[2], 10), width: m[2].length });
+  }
+  let base = "", bestCount = -1;
+  for (const b of Object.keys(groups)) {
+    const c = groups[b].length;
+    if (c > bestCount || (c === bestCount && b.length > base.length)) { bestCount = c; base = b; }
+  }
+  let maxNum = -1, width = 1;
+  for (const it of groups[base]) {
+    if (it.num > maxNum) { maxNum = it.num; width = it.width; }
+  }
+  return base + String(maxNum + 1).padStart(width, "0");
+}
+
 // ── จาก views.jsx บรรทัด 1355–1367 ──────────────────────────────────────────
 // รับ object ที่มี property .sku (เหมือน Array.sort comparator)
 function compareSku(a, b) {
@@ -508,5 +534,5 @@ module.exports = {
   transferBatchCore,
   cleanupOrdersStateCore, stableOrderId,
   buildYoYSeries, abcClassify, sanitizeThresholds, THRESHOLDS_DEFAULT,
-  parseCheckDateMs,
+  parseCheckDateMs, suggestNextSku,
 };
