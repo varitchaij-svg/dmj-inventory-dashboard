@@ -210,6 +210,70 @@ function auditDetail_(fields) {
 }
 
 // ───────────────────────────────────────────────────────────
+// เกณฑ์แจ้งเตือนสต็อก (thresholds) — เก็บถาวรใน Script Property 'STOCK_THRESHOLDS'
+// เดิม hardcode ใน payload ทำให้ค่าที่ผู้ใช้ปรับหายเมื่อ reload
+// ───────────────────────────────────────────────────────────
+var THRESHOLDS_DEFAULT_ = {
+  default: 36,
+  overrides: { "แจกันแก้ว": 3, "เรซิ่นและอื่นๆ": 3 },
+  coverMonths: 2,
+};
+
+function readThresholds_() {
+  try {
+    var raw = PropertiesService.getScriptProperties().getProperty('STOCK_THRESHOLDS');
+    if (!raw) return THRESHOLDS_DEFAULT_;
+    var t = JSON.parse(raw);
+    return {
+      default:     (typeof t.default === 'number' && t.default >= 0) ? t.default : THRESHOLDS_DEFAULT_.default,
+      overrides:   (t.overrides && typeof t.overrides === 'object') ? t.overrides : THRESHOLDS_DEFAULT_.overrides,
+      coverMonths: (typeof t.coverMonths === 'number' && t.coverMonths >= 1) ? t.coverMonths : THRESHOLDS_DEFAULT_.coverMonths,
+    };
+  } catch (e) {
+    return THRESHOLDS_DEFAULT_;
+  }
+}
+
+// sanitize ค่าที่ client ส่งมา (คืน null ถ้า shape ใช้ไม่ได้เลย)
+// แยกเป็น pure function เพื่อให้เขียน unit test ฝั่ง Node ได้
+function sanitizeThresholds_(t) {
+  if (!t || typeof t !== 'object') return null;
+  var def = parseInt(t.default, 10);
+  var cover = parseInt(t.coverMonths, 10);
+  var out = {
+    default:     (isNaN(def) || def < 0 || def > 100000) ? THRESHOLDS_DEFAULT_.default : def,
+    overrides:   {},
+    coverMonths: (isNaN(cover) || cover < 1 || cover > 24) ? THRESHOLDS_DEFAULT_.coverMonths : cover,
+  };
+  var ov = (t.overrides && typeof t.overrides === 'object') ? t.overrides : {};
+  Object.keys(ov).slice(0, 200).forEach(function (cat) {
+    var v = parseInt(ov[cat], 10);
+    if (!isNaN(v) && v >= 0 && v <= 100000) out.overrides[String(cat).slice(0, 100)] = v;
+  });
+  return out;
+}
+
+function saveThresholds_(data, actor) {
+  try {
+    var out = sanitizeThresholds_(data.thresholds);
+    if (!out) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: "invalid thresholds" }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    PropertiesService.getScriptProperties().setProperty('STOCK_THRESHOLDS', JSON.stringify(out));
+    writeAuditLog_(actor, 'saveThresholds', 'thresholds',
+      auditDetail_({ after: out, note: 'ปรับเกณฑ์แจ้งเตือนสต็อก' }));
+    return ContentService.createTextOutput(JSON.stringify({ success: true, thresholds: out }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (e) {
+    return ContentService.createTextOutput(JSON.stringify({ success: false, error: e.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } finally {
+    invalidateCache_();
+  }
+}
+
+// ───────────────────────────────────────────────────────────
 // SECTION 2: Main Handlers (doPost / doGet)
 // ───────────────────────────────────────────────────────────
 
@@ -357,6 +421,9 @@ function doPost(e) {
     // ─── Stock Check Requests ───
     if (data.createStockCheck) return createStockCheckRequest_(data.skus, data.names, actor);
     if (data.completeStockCheck) return completeStockCheckRequest_(data.reqId, actor);
+
+    // ─── เกณฑ์แจ้งเตือนสต็อก (บันทึกถาวร ใช้ร่วมกันทุกเครื่อง) ───
+    if (data.saveThresholds) return saveThresholds_(data, actor);
 
     return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Unknown action" }))
       .setMimeType(ContentService.MimeType.JSON);
@@ -631,7 +698,7 @@ function doGet(e) {
         try { var j = CacheService.getScriptCache().get('recentCountedSkus'); return j ? JSON.parse(j) : {}; }
         catch (e) { return {}; }
       })(),
-      thresholds: { default: 36, overrides: { "แจกันแก้ว": 3, "เรซิ่นและอื่นๆ": 3 } },
+      thresholds: readThresholds_(),
       _debug: {
         productsCount:   products.length,
         monthsLoaded:    monthly.monthLabels.length,
@@ -3521,7 +3588,7 @@ function readStorage_() {
     if (parsed) {
       const key = `${parsed.side}${parsed.shelf}/${parsed.lock}`;
       lockMap[key] = lockMap[key] || [];
-      lockMap[key].push({ sku: e.sku, qty: e.qty, sysQty: e.sysQty, status: e.status });
+      lockMap[key].push({ sku: e.sku, qty: e.qty, sysQty: e.sysQty, status: e.status, lastCheck: e.lastCheck });
     }
   }
   return { entries, lockMap };

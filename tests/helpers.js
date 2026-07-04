@@ -412,6 +412,71 @@ function stableOrderId(o, i) {
   return parts.join('_') || String(i);
 }
 
+// ── buildYoYSeries: จัด monthlyByCat เป็นแถว 12 เดือน คอลัมน์ละปี (จาก views-main.jsx) ──
+const THAI_MONTHS_ABBR = ["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
+function buildYoYSeries(monthLabels, monthlyByCat) {
+  const years = [...new Set((monthLabels || [])
+    .map(m => String(m).split("/")[1])
+    .filter(y => y && /^\d{4}$/.test(y)))].sort();
+  const rows = [];
+  for (let m = 1; m <= 12; m++) {
+    const mm = String(m).padStart(2, "0");
+    const row = { label: THAI_MONTHS_ABBR[m - 1], month: mm };
+    years.forEach(y => {
+      const cats = (monthlyByCat || {})[mm + "/" + y];
+      if (cats) {
+        let rev = 0, qty = 0;
+        Object.keys(cats).forEach(c => { rev += cats[c].sales || 0; qty += cats[c].qty || 0; });
+        row["y" + y] = rev;
+        row["q" + y] = qty;
+      }
+    });
+    rows.push(row);
+  }
+  return { years, rows };
+}
+
+// ── abcClassify: ABC classification จาก cumulative revenue (จาก views-analytics.jsx) ──
+function abcClassify(products) {
+  const sorted = (products || [])
+    .filter(p => p && p.sku)
+    .map(p => ({ sku: p.sku, rev: p.soldRev || 0 }))
+    .sort((a, b) => b.rev - a.rev);
+  const total = sorted.reduce((s, p) => s + p.rev, 0);
+  const map = {};
+  let cum = 0;
+  sorted.forEach(p => {
+    if (total <= 0 || p.rev <= 0) { map[p.sku] = "C"; return; }
+    const before = cum / total;
+    cum += p.rev;
+    map[p.sku] = before < 0.8 ? "A" : before < 0.95 ? "B" : "C";
+  });
+  return map;
+}
+
+// ── sanitizeThresholds: validate เกณฑ์แจ้งเตือนที่ client ส่งมา (จาก appsscript_complete.gs) ──
+const THRESHOLDS_DEFAULT = {
+  default: 36,
+  overrides: { "แจกันแก้ว": 3, "เรซิ่นและอื่นๆ": 3 },
+  coverMonths: 2,
+};
+function sanitizeThresholds(t) {
+  if (!t || typeof t !== 'object') return null;
+  var def = parseInt(t.default, 10);
+  var cover = parseInt(t.coverMonths, 10);
+  var out = {
+    default:     (isNaN(def) || def < 0 || def > 100000) ? THRESHOLDS_DEFAULT.default : def,
+    overrides:   {},
+    coverMonths: (isNaN(cover) || cover < 1 || cover > 24) ? THRESHOLDS_DEFAULT.coverMonths : cover,
+  };
+  var ov = (t.overrides && typeof t.overrides === 'object') ? t.overrides : {};
+  Object.keys(ov).slice(0, 200).forEach(function (cat) {
+    var v = parseInt(ov[cat], 10);
+    if (!isNaN(v) && v >= 0 && v <= 100000) out.overrides[String(cat).slice(0, 100)] = v;
+  });
+  return out;
+}
+
 module.exports = {
   monthsSince, fmtN, fmtB, fmtPct, monthLabel,
   stockQty, whQty, mtoBase, compareSku,
@@ -426,4 +491,5 @@ module.exports = {
   parseQty_, parseNum_, parseLocation_,
   transferBatchCore,
   cleanupOrdersStateCore, stableOrderId,
+  buildYoYSeries, abcClassify, sanitizeThresholds, THRESHOLDS_DEFAULT,
 };

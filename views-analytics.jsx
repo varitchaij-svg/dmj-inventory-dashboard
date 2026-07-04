@@ -890,6 +890,27 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
 // ─────────────────────────────────────────────────────────────────────
 // STOCK COUNT VIEW — นับ stock คลัง ทีละล็อค (Owner + WH เท่านั้น)
 // ─────────────────────────────────────────────────────────────────────
+// ── ABC classification จากยอดขาย (สัดส่วนสะสมของ revenue) ──
+// A = กลุ่มแรกที่รวมกันได้ 80% ของยอดขาย, B = ถัดมาถึง 95%, C = ที่เหลือ/ไม่มียอด
+// ใช้ cumulative "ก่อนบวกตัวเอง" เพื่อให้ตัวท็อปเป็น A เสมอแม้ตัวเดียวเกิน 80%
+// pure function — มี copy ใน tests/helpers.js สำหรับ unit test
+function abcClassify(products) {
+  const sorted = (products || [])
+    .filter(p => p && p.sku)
+    .map(p => ({ sku: p.sku, rev: p.soldRev || 0 }))
+    .sort((a, b) => b.rev - a.rev);
+  const total = sorted.reduce((s, p) => s + p.rev, 0);
+  const map = {};
+  let cum = 0;
+  sorted.forEach(p => {
+    if (total <= 0 || p.rev <= 0) { map[p.sku] = "C"; return; }
+    const before = cum / total;
+    cum += p.rev;
+    map[p.sku] = before < 0.8 ? "A" : before < 0.95 ? "B" : "C";
+  });
+  return map;
+}
+
 function StockCountView({ data, checkRequest, onCheckComplete }) {
   const storage    = data.storage  || {};
   const shelves    = storage.shelves || { A: 10, B: 10, locksPerShelf: 15 };
@@ -926,6 +947,45 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     products.forEach(p => { m[p.sku] = p; });
     return m;
   }, [products]);
+
+  // ── คิว "ควรนับก่อน" — ABC + นับล่าสุดนานสุด (cycle count recommendation) ──
+  // ครบกำหนดนับ: A ทุก 30 วัน, B ทุก 60 วัน, C ทุก 90 วัน (ไม่เคยนับ = ครบกำหนดเสมอ)
+  const countQueue = uM(() => {
+    const abc = abcClassify(data.products || []);
+    const lastCheckBySku = {}, lockOfSku = {};
+    Object.keys(verifiedLockMap).forEach(k => {
+      (verifiedLockMap[k] || []).forEach(v => {
+        if (!v || !v.sku) return;
+        let t = v.lastCheck ? parseDateMs(v.lastCheck) : NaN;
+        if (isNaN(t) && v.lastCheck) t = parseDateMs(String(v.lastCheck).split(' ')[0]); // ตัดเวลาออกแล้วลองใหม่
+        if (!isNaN(t) && (lastCheckBySku[v.sku] == null || t > lastCheckBySku[v.sku])) lastCheckBySku[v.sku] = t;
+        if (!lockOfSku[v.sku]) lockOfSku[v.sku] = k;
+      });
+    });
+    Object.keys(productLockMap).forEach(k => {
+      (productLockMap[k] || []).forEach(sku => { if (!lockOfSku[sku]) lockOfSku[sku] = k; });
+    });
+    const now = Date.now();
+    const dueDays = { A: 30, B: 60, C: 90 };
+    const clsRank = { A: 0, B: 1, C: 2 };
+    return (data.products || [])
+      .filter(p => p && p.sku && !p.isMTO && (p.qtyWH || 0) > 0)
+      .map(p => {
+        const last = lastCheckBySku[p.sku];
+        const days = last != null ? Math.floor((now - last) / 86400000) : null;
+        return { sku: p.sku, name: p.name, imageUrl: p.imageUrl, cls: abc[p.sku] || "C",
+                 days, lock: lockOfSku[p.sku] || null, qtyWH: p.qtyWH || 0 };
+      })
+      .filter(x => x.days == null || x.days >= dueDays[x.cls])
+      .sort((a, b) => {
+        if (clsRank[a.cls] !== clsRank[b.cls]) return clsRank[a.cls] - clsRank[b.cls];
+        const da = a.days == null ? Infinity : a.days;
+        const db = b.days == null ? Infinity : b.days;
+        return db - da; // นานสุด/ไม่เคยนับ มาก่อน
+      })
+      .slice(0, 10);
+  }, [data.products, verifiedLockMap, productLockMap]);
+  const [showAllQueue, setShowAllQueue] = uS(false);
 
   const [step, setStep]                     = uS(1);
   const [selShelf, setSelShelf]             = uS(null);
@@ -1823,6 +1883,66 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
             🏭 ตามซัพพลายเออร์
           </button>
         </div>
+        )}
+
+        {/* ── คิว "ควรนับก่อน" — แนะนำอัตโนมัติจาก ABC + นับล่าสุดนานสุด ── */}
+        {!stockSearch.trim() && !checkRequest && countQueue.length > 0 && (
+          <div style={{background:'#fff',border:'1.5px solid var(--bdr)',borderRadius:14,
+                       padding:'14px 14px 10px',boxShadow:'0 1px 4px rgba(0,0,0,.04)'}}>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+              <span style={{fontSize:20}}>🎯</span>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:14,fontWeight:800}}>ควรนับก่อน · {countQueue.length} รายการ</div>
+                <div style={{fontSize:11,color:'var(--muted)'}}>
+                  สินค้าขายดี (A) หรือไม่ได้นับนาน — แตะเพื่อไปนับล็อคนั้นเลย
+                </div>
+              </div>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:8}}>
+              {(showAllQueue ? countQueue : countQueue.slice(0,5)).map((item, idx) => (
+                <div key={item.sku}
+                  onClick={() => {
+                    if (!item.lock) return;
+                    setSelShelf(item.lock.split('/')[0]);
+                    setSelLockKey(item.lock);
+                    setStep(3);
+                  }}
+                  style={{
+                    display:'flex',alignItems:'center',gap:10,
+                    background: item.lock ? 'var(--g-50)' : '#fffbf0',
+                    border:'1.5px solid ' + (item.lock ? 'var(--g-200)' : '#fbbf24'),
+                    borderRadius:12,padding:'9px 12px',
+                    cursor: item.lock ? 'pointer' : 'default',
+                  }}>
+                  <span style={{
+                    width:26,height:26,borderRadius:8,flexShrink:0,
+                    display:'flex',alignItems:'center',justifyContent:'center',
+                    fontSize:12,fontWeight:800,color:'#fff',
+                    background: item.cls==='A' ? '#c2570a' : item.cls==='B' ? '#a07417' : '#94a194',
+                  }}>{item.cls}</span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:700,whiteSpace:'nowrap',
+                                 overflow:'hidden',textOverflow:'ellipsis'}}>{item.name}</div>
+                    <div style={{fontSize:11,color:'var(--muted)'}}>
+                      {item.days == null ? 'ยังไม่เคยบันทึกนับ' : `นับล่าสุด ${item.days} วันก่อน`}
+                      {' · คลัง '}{item.qtyWH}{' ชิ้น'}
+                      {item.lock ? ` · 📍 ${item.lock}` : ' · ยังไม่มีตำแหน่ง'}
+                    </div>
+                  </div>
+                  {item.lock && <span style={{color:'var(--g-600)',fontSize:16,flexShrink:0}}>›</span>}
+                </div>
+              ))}
+            </div>
+            {countQueue.length > 5 && (
+              <button onClick={() => setShowAllQueue(v => !v)}
+                style={{width:'100%',marginTop:8,padding:'9px 0',borderRadius:10,
+                        border:'1.5px solid var(--bdr)',background:'#fff',
+                        color:'var(--g-700)',fontWeight:700,fontSize:12.5,
+                        cursor:'pointer',fontFamily:'inherit'}}>
+                {showAllQueue ? '▲ ย่อรายการ' : `▼ ดูทั้งหมด (${countQueue.length})`}
+              </button>
+            )}
+          </div>
         )}
 
         {/* Shelf grid — ซ่อนเมื่อกำลังค้นหา */}

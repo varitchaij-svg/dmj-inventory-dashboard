@@ -935,6 +935,32 @@ function ExportProgressOverlay({ current, total, done }) {
 // ─────────────────────────────────────────────────────────────────────
 // OVERVIEW
 // ─────────────────────────────────────────────────────────────────────
+// ── เทียบปีต่อปี (YoY): จัด monthlyByCat เป็นแถว 12 เดือน คอลัมน์ละปี ──
+// คืน { years: ["2025","2026"], rows: [{label:"ม.ค.", month:"01", y2025: rev, q2025: qty, ...}] }
+// pure function — มี copy ใน tests/helpers.js สำหรับ unit test
+const THAI_MONTHS_ABBR = ["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
+function buildYoYSeries(monthLabels, monthlyByCat) {
+  const years = [...new Set((monthLabels || [])
+    .map(m => String(m).split("/")[1])
+    .filter(y => y && /^\d{4}$/.test(y)))].sort();
+  const rows = [];
+  for (let m = 1; m <= 12; m++) {
+    const mm = String(m).padStart(2, "0");
+    const row = { label: THAI_MONTHS_ABBR[m - 1], month: mm };
+    years.forEach(y => {
+      const cats = (monthlyByCat || {})[mm + "/" + y];
+      if (cats) {
+        let rev = 0, qty = 0;
+        Object.keys(cats).forEach(c => { rev += cats[c].sales || 0; qty += cats[c].qty || 0; });
+        row["y" + y] = rev;
+        row["q" + y] = qty;
+      }
+    });
+    rows.push(row);
+  }
+  return { years, rows };
+}
+
 function OverviewView({ data, range, setRange, role }) {
   const rechartsReady = useRechartsReady(); // gate กราฟจนกว่า Recharts (defer) จะพร้อม
   const { products, monthLabels, monthlyByCat, totals, mtoGroups,
@@ -958,6 +984,31 @@ function OverviewView({ data, range, setRange, role }) {
     for (const c of Object.keys(cats)) { qty += cats[c].qty; rev += cats[c].sales; }
     return { month: m, label: monthLabel(m), qty, rev };
   }), [months, monthlyByCat]);
+
+  // ── เทียบปีต่อปี (YoY) — ธุรกิจนี้ยอดขายขึ้นกับเทศกาล การเทียบเดือนเดียวกันปีก่อน
+  //    ตอบโจทย์วางแผนสั่งของล่วงหน้ามากกว่า MoM ──
+  const yoy = uM(() => buildYoYSeries(months, monthlyByCat), [months, monthlyByCat]);
+  const yoySummary = uM(() => {
+    const ys = yoy.years;
+    if (ys.length < 2) return null;
+    const cur = ys[ys.length - 1], prev = ys[ys.length - 2];
+    let lastIdx = -1;
+    yoy.rows.forEach((r, i) => { if (r["y" + cur] != null) lastIdx = i; });
+    if (lastIdx < 0) return null;
+    const curRev  = yoy.rows[lastIdx]["y" + cur];
+    const prevRev = yoy.rows[lastIdx]["y" + prev];
+    const pct = (prevRev > 0 && curRev != null) ? ((curRev - prevRev) / prevRev * 100) : null;
+    // เดือนหน้า ปีที่แล้วขายเท่าไร (ธ.ค. → ม.ค. ของปีปัจจุบัน)
+    const nextIdx = (lastIdx + 1) % 12;
+    const nextRefYear = lastIdx === 11 ? cur : prev;
+    const nextPrevRev = yoy.rows[nextIdx] ? yoy.rows[nextIdx]["y" + nextRefYear] : null;
+    return {
+      cur, prev, monthTh: yoy.rows[lastIdx].label,
+      curRev, prevRev, pct,
+      nextMonthTh: yoy.rows[nextIdx] ? yoy.rows[nextIdx].label : null,
+      nextPrevRev,
+    };
+  }, [yoy]);
 
   // Real daily series from uploaded dailySales
   const dailySeries = uM(() => {
@@ -1570,6 +1621,61 @@ function OverviewView({ data, range, setRange, role }) {
         </div>
       )}
 
+      {/* ── เทียบปีต่อปี (YoY) — seasonality/เทศกาล ── */}
+      {yoy.years.length >= 2 && (
+        <Card title="📅 เทียบยอดขายปีต่อปี"
+              sub="เดือนเดียวกัน แต่ละปีขายเท่าไร — ใช้วางแผนสั่งของก่อนเทศกาล (ตรุษจีน เช็งเม้ง วันแม่ ปีใหม่)"
+              style={{marginBottom: 20}}>
+          {yoySummary && (
+            <div style={{display:"flex", gap:8, flexWrap:"wrap", marginBottom:12}}>
+              <div style={{
+                display:"flex", alignItems:"center", gap:6, padding:"7px 12px", borderRadius:10,
+                background: yoySummary.pct == null ? "var(--g-50)"
+                          : yoySummary.pct >= 0 ? "var(--g-50)" : "var(--dang-t)",
+                border: "1px solid " + (yoySummary.pct == null ? "var(--bdr)"
+                          : yoySummary.pct >= 0 ? "var(--g-200)" : "#f3c1b8"),
+                fontSize:12.5,
+              }}>
+                <b>{yoySummary.monthTh} {yoySummary.cur}</b>
+                <span>{fmtB(yoySummary.curRev)}</span>
+                <span style={{color:"var(--muted)"}}>· ปีก่อน {yoySummary.prevRev != null ? fmtB(yoySummary.prevRev) : "—"}</span>
+                {yoySummary.pct != null && (
+                  <b style={{color: yoySummary.pct >= 0 ? "var(--g-600)" : "var(--dang)"}}>
+                    {yoySummary.pct >= 0 ? "▲" : "▼"}{Math.abs(yoySummary.pct).toFixed(0)}%
+                  </b>
+                )}
+              </div>
+              {yoySummary.nextPrevRev != null && yoySummary.nextPrevRev > 0 && (
+                <div style={{
+                  display:"flex", alignItems:"center", gap:6, padding:"7px 12px", borderRadius:10,
+                  background:"var(--info-t)", border:"1px solid #bcdce8", fontSize:12.5,
+                }}>
+                  <span>📦</span>
+                  <span>เดือน<b>{yoySummary.nextMonthTh}</b> ปีที่แล้วขายได้ <b>{fmtB(yoySummary.nextPrevRev)}</b> — เตรียมสั่งของล่วงหน้า</span>
+                </div>
+              )}
+            </div>
+          )}
+          {rechartsReady ? <ResponsiveContainer width="100%" height={260}>
+            <LineChart data={yoy.rows} margin={{top:6,right:16,bottom:6,left:0}}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2eadd" vertical={false}/>
+              <XAxis dataKey="label" tick={{fontSize:11,fill:"#5b6b5e"}} tickLine={false} axisLine={false}/>
+              <YAxis tick={{fontSize:10,fill:"#94a194"}} tickLine={false} axisLine={false}
+                     tickFormatter={v => v>=1e6?`${(v/1e6).toFixed(1)}M`:v>=1e3?`${(v/1e3).toFixed(1)}K`:String(v)}/>
+              <Tooltip formatter={(v,n) => [fmtB(v), n]}/>
+              <Legend wrapperStyle={{fontSize:11}} iconType="circle" iconSize={8}/>
+              {yoy.years.slice(-3).map((y, i, arr) => (
+                <Line key={y} type="monotone" dataKey={"y"+y} name={"ปี "+y}
+                      stroke={i === arr.length-1 ? "var(--g-600)" : i === arr.length-2 ? "#a07417" : "#94a3b8"}
+                      strokeWidth={i === arr.length-1 ? 2.5 : 1.8}
+                      strokeDasharray={i === arr.length-1 ? undefined : "5 3"}
+                      dot={{r:3}} connectNulls={false}/>
+              ))}
+            </LineChart>
+          </ResponsiveContainer> : <ChartLoading height={260}/>}
+        </Card>
+      )}
+
       <div className="row row-12-5" style={{marginBottom: 20}}>
         <Card title={
           range === 'day' ? "ยอดขายรายวัน · แยกหมวด" :
@@ -1800,7 +1906,7 @@ function OverviewView({ data, range, setRange, role }) {
                   <td className="num" style={{color:stockQty(p)<=36?"var(--dang)":"var(--muted)"}}>{fmtN(stockQty(p))}</td>
                   <td style={{padding:"4px 10px"}}>
                     <div style={{width:100}}>
-                      <Sparkline values={p.monthly.map(m=>m.sales)}
+                      <Sparkline values={(p.monthly||[]).map(m=>m.sales)}
                                  color={catColor(p.cat, allCats)} height={22}/>
                     </div>
                   </td>
@@ -3822,7 +3928,40 @@ function StockView({ data, role }) {
   const [overrides, setOverrides] = uS(dataThresholds?.overrides || { "แจกันแก้ว": 3, "เรซิ่นและอื่นๆ": 3 });
   const [supplierFilter, setSupplierFilter] = uS(null);
   const [activeCat, setActiveCat] = uS("ALL");
-  const [coverMonths, setCoverMonths] = uS(2); // เป้าหมาย: สั่งให้พอขายกี่เดือน
+  const [coverMonths, setCoverMonths] = uS(dataThresholds?.coverMonths || 2); // เป้าหมาย: สั่งให้พอขายกี่เดือน
+
+  // ── บันทึกเกณฑ์ถาวรลง server (Script Property) — เดิมแก้แล้วหายเมื่อ reload ──
+  // auto-save 1.5 วิหลังหยุดแก้ เทียบกับ snapshot ล่าสุดที่บันทึกแล้ว กันยิงซ้ำตอน mount
+  const [thrStatus, setThrStatus] = uS("idle"); // idle | saving | saved | error
+  const thrSavedSnapRef = React.useRef(JSON.stringify({
+    d: dataThresholds?.default || 36,
+    o: dataThresholds?.overrides || { "แจกันแก้ว": 3, "เรซิ่นและอื่นๆ": 3 },
+    c: dataThresholds?.coverMonths || 2,
+  }));
+  uE(() => {
+    if (typeof SHEET_DEPLOY_URL === 'undefined') return;
+    const snap = JSON.stringify({ d: defaultThr, o: overrides, c: coverMonths });
+    if (snap === thrSavedSnapRef.current) return;
+    const id = setTimeout(() => {
+      setThrStatus("saving");
+      fetch(SHEET_DEPLOY_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({
+          saveThresholds: true,
+          thresholds: { default: defaultThr, overrides: overrides, coverMonths: coverMonths },
+          actor: role,
+        }),
+      })
+        .then(r => r.json())
+        .then(res => {
+          if (res && res.success) { thrSavedSnapRef.current = snap; setThrStatus("saved"); }
+          else setThrStatus("error");
+        })
+        .catch(() => setThrStatus("error"));
+    }, 1500);
+    return () => clearTimeout(id);
+  }, [defaultThr, overrides, coverMonths, role]);
 
   const getThr = uC((cat) => overrides[cat] != null ? overrides[cat] : defaultThr, [overrides, defaultThr]);
 
@@ -3961,8 +4100,18 @@ function StockView({ data, role }) {
       </div>
 
       {/* Threshold editor */}
-      <Card title="⚙️ เกณฑ์แจ้งเตือน" sub="เมื่อสต๊อกเหลือถึงจำนวนนี้ ระบบจะแจ้งให้สั่งเพิ่ม"
+      <Card title="⚙️ เกณฑ์แจ้งเตือน" sub="เมื่อสต๊อกเหลือถึงจำนวนนี้ ระบบจะแจ้งให้สั่งเพิ่ม — แก้แล้วบันทึกให้อัตโนมัติ"
             style={{marginBottom:16}}>
+        {thrStatus !== "idle" && (
+          <div style={{
+            fontSize:12, fontWeight:700, marginBottom:10, display:"flex", alignItems:"center", gap:6,
+            color: thrStatus==="saved" ? "var(--g-600)" : thrStatus==="error" ? "var(--dang)" : "var(--muted)",
+          }}>
+            {thrStatus==="saving" && <><span className="spin" style={{width:12,height:12,borderWidth:2}}/> กำลังบันทึกเกณฑ์…</>}
+            {thrStatus==="saved"  && "✅ บันทึกเกณฑ์แล้ว — ทุกเครื่องเห็นค่าใหม่หลัง Sync"}
+            {thrStatus==="error"  && "⚠️ บันทึกเกณฑ์ไม่สำเร็จ — เช็คอินเทอร์เน็ตแล้วลองแก้ตัวเลขอีกครั้ง"}
+          </div>
+        )}
         <div style={{display:"flex",gap:18,alignItems:"center",flexWrap:"wrap"}}>
           <div style={{display:"flex",alignItems:"center",gap:10}}>
             <span style={{fontSize:12.5,fontWeight:600}}>เกณฑ์ทั่วไป</span>

@@ -24,7 +24,7 @@ const TABS = [
 const ROLE_TABS = {
   owner:      ["overview","categories","trends","stock","storage","stockcount","frontstore","transfers","orders","ordersummary","mtojobs","upload","connect","labels","auditlog","deadstock"],
   employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","mtojobs","labels"],
-  warehouse:  ["categories","storage","stockcount","orders","ordersummary","mtojobs","labels"],
+  warehouse:  ["categories","stock","storage","stockcount","orders","ordersummary","mtojobs","labels"],
   frontstore: ["categories","stock","frontstore","orders","mtojobs","labels"],
   saler:      ["categories","stock","orders","mtojobs","labels"],
 };

@@ -170,6 +170,25 @@ const TRACKED = [
     `p.supplierTags = rawTags.filter(t => !THAI_RE.test(t));`,
     `if (p.supplierTags.length) p.vendor = p.supplierTags[0];`,
   ]},
+
+  // ── analytics (Sprint: YoY + ABC + thresholds ถาวร) ─────────────────────
+  { names: ['buildYoYSeries'], sourceFile: 'views-main.jsx', landmarks: [
+    `.map(m => String(m).split("/")[1])`,
+    `const cats = (monthlyByCat || {})[mm + "/" + y];`,
+    `row["y" + y] = rev;`,
+  ]},
+  { names: ['abcClassify'], sourceFile: 'views-analytics.jsx', landmarks: [
+    `if (total <= 0 || p.rev <= 0) { map[p.sku] = "C"; return; }`,
+    `map[p.sku] = before < 0.8 ? "A" : before < 0.95 ? "B" : "C";`,
+  ]},
+  // sanitizeThresholds: ชื่อในต้นทางเป็น sanitizeThresholds_ (GAS convention)
+  // landmark เลี่ยงชื่อ THRESHOLDS_DEFAULT เพราะต้นทางใช้ THRESHOLDS_DEFAULT_ (underscore)
+  { names: ['sanitizeThresholds', 'THRESHOLDS_DEFAULT'], sourceFile: 'appsscript_complete.gs', landmarks: [
+    `overrides: { "แจกันแก้ว": 3, "เรซิ่นและอื่นๆ": 3 },`,
+    `var def = parseInt(t.default, 10);`,
+    `coverMonths: (isNaN(cover) || cover < 1 || cover > 24) ?`,
+    `if (!isNaN(v) && v >= 0 && v <= 100000) out.overrides[String(cat).slice(0, 100)] = v;`,
+  ]},
 ];
 
 // ฟังก์ชันใน helpers.js ที่เป็น "behavioral model" (จำลองพฤติกรรม ไม่ใช่ copy บรรทัดตรง ๆ)
