@@ -94,6 +94,29 @@ function suggestNextSku(category, products) {
   return base + String(maxNum + 1).padStart(width, "0");
 }
 
+// ── parseSkuParts: แยก SKU เป็น { prefix, variant, model } (จาก views-main.jsx) ──
+// [Prefix 1–3 ตัวอักษร][Variant Code 2 หลัก][Model Number 3 หลัก] เช่น "OL19001" → OL/19/001
+function parseSkuParts(sku) {
+  const m = String(sku || "").trim().toUpperCase().match(/^([A-Z]{1,3})(\d{2})(\d{3})$/);
+  if (!m) return null;
+  return { prefix: m[1], variant: m[2], model: m[3] };
+}
+
+// ── nextModelForPrefix: หาเลข Model Number (3 หลัก) ถัดไปของ prefix (จาก views-main.jsx) ──
+function nextModelForPrefix(prefix, products) {
+  const pfx = String(prefix || "").trim().toUpperCase();
+  if (!pfx) return "";
+  let max = 0;
+  (products || []).forEach(p => {
+    const parts = parseSkuParts(p && p.sku);
+    if (parts && parts.prefix === pfx) {
+      const n = parseInt(parts.model, 10);
+      if (n > max) max = n;
+    }
+  });
+  return String(max + 1).padStart(3, "0");
+}
+
 // ── จาก views.jsx บรรทัด 1355–1367 ──────────────────────────────────────────
 // รับ object ที่มี property .sku (เหมือน Array.sort comparator)
 function compareSku(a, b) {
@@ -535,4 +558,5 @@ module.exports = {
   cleanupOrdersStateCore, stableOrderId,
   buildYoYSeries, abcClassify, sanitizeThresholds, THRESHOLDS_DEFAULT,
   parseCheckDateMs, suggestNextSku,
+  parseSkuParts, nextModelForPrefix,
 };

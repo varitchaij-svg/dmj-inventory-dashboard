@@ -2348,6 +2348,65 @@ function suggestNextSku(category, products) {
   return base + String(maxNum + 1).padStart(width, "0");
 }
 
+// ── ตารางรหัสสีมาตรฐานของบริษัท (source of truth) — Variant Code 2 หลักสำหรับหมวดที่ใช้สี ──
+// ดู business rule เต็มใน CLAUDE.md · รหัส (code) ไม่ซ้ำ แต่ชื่อสี (name) ซ้ำได้ (เช่น "ชมพูเข้ม" = 03 และ 24)
+// ห้ามสร้างรหัสสีใหม่เอง — สีที่ไม่อยู่ในตารางต้องถามผู้ใช้ก่อน · pure data — มี copy ใน tests/helpers.js
+const VARIANT_COLOR_CODES = [
+  {code:"01",name:"แดง"},{code:"02",name:"แดงอมม่วง"},{code:"03",name:"ชมพูเข้ม"},{code:"04",name:"ชมพู"},
+  {code:"05",name:"ชมพูอ่อน"},{code:"06",name:"ชมพูขาว"},{code:"07",name:"กะปิ"},{code:"08",name:"โอลด์โรส"},
+  {code:"09",name:"ส้ม"},{code:"10",name:"เหลือง"},{code:"11",name:"เหลืองอ่อน"},{code:"12",name:"ฟ้า"},
+  {code:"13",name:"ม่วง"},{code:"14",name:"ม่วงอ่อน"},{code:"15",name:"ม่วงบานเย็น"},{code:"16",name:"ม่วงแซงเกรีย"},
+  {code:"17",name:"น้ำตาล"},{code:"18",name:"ดำ"},{code:"19",name:"ขาว"},{code:"20",name:"น้ำเงิน"},
+  {code:"21",name:"ครีม"},{code:"22",name:"ครีมชมพู"},{code:"23",name:"พีช"},{code:"24",name:"ชมพูเข้ม"},
+  {code:"25",name:"ชมพู"},{code:"26",name:"พีชชมพู"},{code:"27",name:"ชมพูเขียว"},{code:"28",name:"ม่วงแดง"},
+  {code:"29",name:"ชมพูพาสเทล"},{code:"30",name:"ชมพูแสด"},{code:"31",name:"เขียว"},{code:"32",name:"โอวัลติน"},
+  {code:"33",name:"ชมพูบานเย็น"},{code:"34",name:"ชมพูโรสวูด"},{code:"35",name:"ครีมส้ม"},{code:"36",name:"ขาวครีม"},
+  {code:"37",name:"แดงอ่อน"},{code:"38",name:"ขาวชมพู"},{code:"39",name:"เขียวชมพู"},{code:"40",name:"เขียวแก่"},
+  {code:"41",name:"แดงขาว"},{code:"42",name:"พีชแดง"},{code:"43",name:"ชมพูอมม่วง"},{code:"44",name:"ขาวหม่น"},
+  {code:"45",name:"แดงไวน์"},{code:"46",name:"แดงเข้ม"},{code:"47",name:"ขาวลินิน"},{code:"48",name:"เฮเซลนัท"},
+  {code:"49",name:"ชมพูเลโมเนด"},{code:"50",name:"หมอก"},{code:"51",name:"ฟ้าโทนเทาอมน้ำเงิน"},{code:"52",name:"เหลืองทอง"},
+  {code:"53",name:"ชมพูสตรอเบอร์รี่"},{code:"54",name:"ไม้เฮเซลนัท"},{code:"55",name:"ม่วงพลัม"},{code:"56",name:"ขาวไส้ชมพู"},
+  {code:"57",name:"ส้มแดง"},{code:"58",name:"ชมพูอ่อนแซมขาว"},{code:"59",name:"ชมพูอ่อนแซมชมพู"},{code:"60",name:"เขียวอ่อน"},
+  {code:"61",name:"ขาวไส้ม่วง"},{code:"62",name:"ขาวไส้เหลือง"},{code:"63",name:"ขาวไส้ส้ม"},{code:"64",name:"เหลืองไส้เหลือง"},
+  {code:"65",name:"เหลืองอ่อนไส้เหลือง"},{code:"66",name:"น้ำตาลเข้ม"},{code:"67",name:"เทา"},{code:"68",name:"เขียวฟ้า"},
+  {code:"69",name:"เบจ"},{code:"70",name:"ม่วงเขียวอ่อน"},{code:"71",name:"เหลืองไส้เข้ม"},{code:"72",name:"เขียวขุ่น"},
+  {code:"73",name:"เขียวขอบขาว"},{code:"74",name:"ขาวแซมเขียว"},{code:"75",name:"ขาวแซมเขียวแดง"},{code:"76",name:"เขียวแซมม่วง"},
+  {code:"77",name:"เขียวไล่สี"},{code:"78",name:"เขียวเข้มผสมอ่อน"},{code:"79",name:"เขียวเข้ม"},{code:"80",name:"ม่วงครีม"},
+  {code:"81",name:"ม่วงลายจุด"},{code:"82",name:"ขาวลายจุด"},{code:"83",name:"เขียวเหลือง"},{code:"84",name:"น้ำเงินม่วง"},
+  {code:"85",name:"เหลือง,ม่วง"},{code:"86",name:"น้ำตาลเหลือง"},{code:"87",name:"เขียวครีม"},{code:"88",name:"น้ำเงินเข้ม"},
+  {code:"89",name:"น้ำเงินอ่อน"},{code:"90",name:"ม่วงอมชมพู"},{code:"91",name:"ขาวอมเหลือง"},{code:"92",name:"เหลืองไส้ส้ม"},
+  {code:"93",name:"ขาวไส้ม่วงอ่อน"},{code:"94",name:"ชมพูม่วงอ่อน"},{code:"95",name:"ม่วงฟ้า"},{code:"96",name:"ไวโอเล็ต"},
+  {code:"97",name:"ม่วงขาว"},{code:"98",name:"ขาวอมเขียว"},{code:"99",name:"แดงชมพู"},
+];
+// code → ชื่อสี (unique) สำหรับแสดงกำกับ Variant Code
+const VARIANT_CODE_TO_NAME = VARIANT_COLOR_CODES.reduce((m, c) => { m[c.code] = c.name; return m; }, {});
+
+// ── parseSkuParts: แยก SKU เป็น { prefix, variant, model } ตามโครงสร้างมาตรฐาน ──
+// [Prefix 1–3 ตัวอักษร][Variant Code 2 หลัก][Model Number 3 หลัก] เช่น "OL19001" → OL/19/001
+// คืน null ถ้าไม่เข้ารูปแบบมาตรฐาน · pure function — มี copy ใน tests/helpers.js
+function parseSkuParts(sku) {
+  const m = String(sku || "").trim().toUpperCase().match(/^([A-Z]{1,3})(\d{2})(\d{3})$/);
+  if (!m) return null;
+  return { prefix: m[1], variant: m[2], model: m[3] };
+}
+
+// ── nextModelForPrefix: หาเลข Model Number (3 หลัก) ถัดไปของ prefix นั้น ──
+// Model = running ของ "แบบสินค้า" — รวบ model ทุกตัวที่ prefix นี้ใช้แล้ว → max+1 (pad 3 หลัก)
+// prefix ที่ยังไม่มีสินค้ามาตรฐาน → เริ่ม "001" · pure function — มี copy ใน tests/helpers.js
+function nextModelForPrefix(prefix, products) {
+  const pfx = String(prefix || "").trim().toUpperCase();
+  if (!pfx) return "";
+  let max = 0;
+  (products || []).forEach(p => {
+    const parts = parseSkuParts(p && p.sku);
+    if (parts && parts.prefix === pfx) {
+      const n = parseInt(parts.model, 10);
+      if (n > max) max = n;
+    }
+  });
+  return String(max + 1).padStart(3, "0");
+}
+
 // Strip "#1", "#10", trailing numbers, etc. from MTO product names
 // "แจกันชุด#1" → "แจกันชุด", "แจกันชุด 5 อะไร" → "แจกันชุด"
 function mtoBase(name) {
@@ -6902,8 +6961,14 @@ function AddProductView({ data, role, onAdded }) {
 
   const [category, setCategory]   = uS("");
   const [catInput, setCatInput]   = uS("");   // พิมพ์หมวดใหม่
-  const [sku, setSku]             = uS("");
-  const [skuTouched, setSkuTouched] = uS(false); // ผู้ใช้แก้ SKU เองแล้วหรือยัง (กัน auto-suggest ทับ)
+  // ── SKU builder ตาม business rule [Prefix][Variant 2 หลัก][Model 3 หลัก] ──
+  const [skuMode, setSkuMode]       = uS("new");   // "new"=แบบใหม่ · "color"=สีใหม่ของแบบเดิม
+  const [prefix, setPrefix]         = uS("");       // ตัวอักษรนำ (โหมดแบบใหม่)
+  const [baseDesignSku, setBaseDesignSku] = uS(""); // SKU แบบเดิมที่เลือก (โหมดสีใหม่) — ล็อค prefix+model
+  const [designSearch, setDesignSearch]   = uS(""); // ค้นหาแบบเดิม
+  const [variantSrc, setVariantSrc] = uS("color");  // "color"=เลือกจากตารางสี · "manual"=พิมพ์เอง (ขนาด/ลำดับ)
+  const [variantCode, setVariantCode] = uS("");     // Variant Code 2 หลัก (ผลลัพธ์)
+  const [colorSearch, setColorSearch] = uS("");     // ค้นหาสีในตาราง
   const [name, setName]           = uS("");
   const [price, setPrice]         = uS("");
   const [qty, setQty]             = uS("");
@@ -6914,15 +6979,71 @@ function AddProductView({ data, role, onAdded }) {
 
   const effectiveCat = catInput.trim() || category;
 
-  // auto-suggest SKU เมื่อเลือกหมวด (ถ้าผู้ใช้ยังไม่แก้ SKU เอง)
-  uE(() => {
-    if (skuTouched) return;
-    if (!effectiveCat) { setSku(""); return; }
-    const next = suggestNextSku(effectiveCat, products);
-    setSku(next);
-  }, [effectiveCat, products, skuTouched]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Prefix ที่เคยใช้ (แยกในหมวดที่เลือกก่อน) — ชิปเลือก Prefix โหมดแบบใหม่
+  const prefixInfo = uM(() => {
+    const cnt = {}, catCnt = {};
+    products.forEach(p => {
+      const m = String(p.sku || "").trim().toUpperCase().match(/^([A-Z]{1,3})\d/);
+      if (!m) return;
+      cnt[m[1]] = (cnt[m[1]] || 0) + 1;
+      const c = (p.category || p.cat || "").trim();
+      if (c && c === effectiveCat) catCnt[m[1]] = (catCnt[m[1]] || 0) + 1;
+    });
+    const inCat  = Object.keys(catCnt).sort((a, b) => catCnt[b] - catCnt[a]);
+    const others = Object.keys(cnt).filter(p => !catCnt[p]).sort((a, b) => cnt[b] - cnt[a]);
+    return { inCat, others };
+  }, [products, effectiveCat]);
 
-  const skuUp = sku.trim().toUpperCase();
+  // ข้อมูลแบบเดิมที่เลือก (โหมดสีใหม่) — prefix, model + variant/สีที่มีอยู่แล้ว (กันสร้างซ้ำ)
+  const designInfo = uM(() => {
+    const parts = parseSkuParts(baseDesignSku);
+    if (!parts) return null;
+    const taken = [];
+    products.forEach(p => {
+      const q = parseSkuParts(p.sku);
+      if (q && q.prefix === parts.prefix && q.model === parts.model) {
+        taken.push({ variant: q.variant, name: p.name || "", sku: String(p.sku).toUpperCase() });
+      }
+    });
+    taken.sort((a, b) => a.variant.localeCompare(b.variant));
+    return { prefix: parts.prefix, model: parts.model, taken };
+  }, [baseDesignSku, products]);
+
+  // ค้นหาแบบเดิม (โหมดสีใหม่) — เฉพาะ SKU รูปแบบมาตรฐาน, ยุบเป็น 1 รายการต่อแบบ (prefix+model)
+  const designMatches = uM(() => {
+    const q = designSearch.trim().toLowerCase();
+    const toks = q ? q.split(/\s+/).filter(Boolean) : [];
+    const seen = new Set(), out = [];
+    for (const p of products) {
+      const parts = parseSkuParts(p.sku);
+      if (!parts) continue;
+      const key = parts.prefix + parts.model;
+      if (seen.has(key)) continue;
+      const hay = String(p.sku).toLowerCase() + " " + String(p.name || "").toLowerCase();
+      if (toks.length && !toks.every(t => hay.includes(t))) continue;
+      seen.add(key);
+      out.push({ key, sku: String(p.sku).toUpperCase(), name: p.name || "", prefix: parts.prefix, model: parts.model });
+      if (out.length >= 12) break;
+    }
+    return out;
+  }, [designSearch, products]);
+
+  // ค้นหาสีในตารางมาตรฐาน
+  const colorMatches = uM(() => {
+    const q = colorSearch.trim().toLowerCase();
+    if (!q) return VARIANT_COLOR_CODES;
+    return VARIANT_COLOR_CODES.filter(c => c.name.toLowerCase().includes(q) || c.code.includes(q));
+  }, [colorSearch]);
+
+  // Model Number: แบบใหม่ = เลขถัดไปของ prefix · สีใหม่ = คงเลขของแบบเดิม
+  const newModel = uM(() => (skuMode === "new" ? nextModelForPrefix(prefix, products) : ""), [skuMode, prefix, products]);
+  const effPrefix = skuMode === "color" ? (designInfo ? designInfo.prefix : "") : prefix.trim().toUpperCase();
+  const effModel  = skuMode === "color" ? (designInfo ? designInfo.model  : "") : newModel;
+  const variantCode2 = /^\d$/.test(variantCode) ? "0" + variantCode : variantCode;
+  const assembledSku = (/^[A-Z]{1,3}$/.test(effPrefix) && /^\d{2}$/.test(variantCode2) && /^\d{3}$/.test(effModel))
+    ? effPrefix + variantCode2 + effModel : "";
+
+  const skuUp = assembledSku;
   const dupLocal = skuUp !== "" && skuSet.has(skuUp);
 
   // เช็คซ้ำฝั่ง server แบบ debounce (กันเคสมีใน ZORT แต่ยังไม่ sync เข้าเครื่องนี้)
@@ -6957,8 +7078,9 @@ function AddProductView({ data, role, onAdded }) {
     setSaving(false);
     if (r && r.success) {
       showToast("success", `เพิ่ม "${product.name}" (${product.sku}) แล้ว`, "✅");
-      // reset ฟอร์ม (คงหมวด+คลัง+ซัพพลายเออร์ไว้ เผื่อเพิ่มหลายตัวติดกัน)
-      setSku(""); setName(""); setPrice(""); setQty(""); setSkuTouched(false); setServerCheck(null);
+      // reset ฟอร์ม (คงหมวด/โหมด/Prefix/แบบเดิม/คลัง/ซัพพลายเออร์ไว้ เผื่อเพิ่มสีถัดไป/แบบถัดไป)
+      setName(""); setPrice(""); setQty(""); setServerCheck(null);
+      setVariantCode(""); setColorSearch("");
       if (onAdded) onAdded();
     } else {
       showToast("error", (r && r.error) || "เพิ่มสินค้าไม่สำเร็จ", "❌");
@@ -6992,7 +7114,7 @@ function AddProductView({ data, role, onAdded }) {
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
                 {allCats.slice(0, 12).map(c => (
                   <button key={c} type="button"
-                    onClick={() => { setCategory(c); setCatInput(""); setSkuTouched(false); }}
+                    onClick={() => { setCategory(c); setCatInput(""); }}
                     style={{
                       minHeight: 40, padding: "6px 12px", borderRadius: 999, cursor: "pointer",
                       fontSize: 12.5, fontWeight: 600, fontFamily: "inherit",
@@ -7004,28 +7126,205 @@ function AddProductView({ data, role, onAdded }) {
               </div>
               <input type="text" placeholder="…หรือพิมพ์หมวดใหม่"
                 value={catInput}
-                onChange={e => { setCatInput(e.target.value); setCategory(""); setSkuTouched(false); }}
+                onChange={e => { setCatInput(e.target.value); setCategory(""); }}
                 style={inputStyle} />
             </div>
 
-            {/* SKU */}
+            {/* SKU builder — ตาม business rule [Prefix][Variant 2 หลัก][Model 3 หลัก] */}
             <div>
               <label style={labelStyle}>
-                รหัส SKU * <span style={{ fontWeight: 400, color: "var(--muted)" }}>(= บาร์โค้ด)</span>
+                รหัส SKU * <span style={{ fontWeight: 400, color: "var(--muted)" }}>(= บาร์โค้ด · สร้างตามมาตรฐานบริษัท)</span>
               </label>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <input type="text" placeholder="เช่น HL003006"
-                  value={sku}
-                  onChange={e => { setSku(e.target.value.toUpperCase()); setSkuTouched(true); }}
-                  style={{ ...inputStyle, borderColor: isDup ? "var(--dang)" : (skuUp && !isDup && serverCheck && !serverCheck.checking ? "var(--g-500)" : "var(--bdr)"), fontFamily: "monospace", fontWeight: 700, letterSpacing: ".02em" }} />
-                <ScanButton size={46} onScan={s => { setSku(String(s).toUpperCase()); setSkuTouched(true); }} />
+
+              {/* โหมด: แบบใหม่ / สีใหม่ของแบบเดิม */}
+              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                {[{ v: "new", l: "🆕 แบบใหม่" }, { v: "color", l: "🎨 สีใหม่ของแบบเดิม" }].map(o => (
+                  <button key={o.v} type="button" onClick={() => { setSkuMode(o.v); setVariantCode(""); }}
+                    style={{
+                      flex: 1, minHeight: 46, borderRadius: 10, cursor: "pointer",
+                      fontSize: 13.5, fontWeight: 700, fontFamily: "inherit",
+                      border: "1.5px solid " + (skuMode === o.v ? "var(--g-500)" : "var(--bdr)"),
+                      background: skuMode === o.v ? "var(--g-50)" : "#fff",
+                      color: skuMode === o.v ? "var(--g-700)" : "var(--text)",
+                    }}>{o.l}</button>
+                ))}
               </div>
-              <div style={{ fontSize: 12, marginTop: 6, minHeight: 18, fontWeight: 600 }}>
-                {dupLocal ? <span style={{ color: "var(--dang)" }}>⚠️ SKU นี้มีอยู่แล้วในระบบ</span>
-                  : serverCheck && serverCheck.checking ? <span style={{ color: "var(--muted)" }}>⏳ กำลังตรวจรหัสซ้ำ…</span>
-                  : dupRemote ? <span style={{ color: "var(--dang)" }}>⚠️ SKU นี้มีใน ZORT แล้ว (ยังไม่ sync)</span>
-                  : skuUp ? <span style={{ color: "var(--g-600)" }}>✓ รหัสนี้ใช้ได้</span>
-                  : <span style={{ color: "var(--muted)" }}>{effectiveCat ? "แนะนำรหัสจากหมวดที่เลือก แก้ได้" : "เลือกหมวดก่อน ระบบจะแนะนำรหัสถัดไปให้"}</span>}
+
+              {/* ขั้น 1: Prefix (แบบใหม่) หรือ เลือกแบบเดิม (สีใหม่) */}
+              {skuMode === "new" ? (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 6 }}>
+                    1) ตัวอักษรนำ (Prefix) — ประเภทสินค้า เช่น OL=มะกอก, R=กุหลาบ
+                  </div>
+                  {(prefixInfo.inCat.length > 0 || prefixInfo.others.length > 0) && (
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                      {prefixInfo.inCat.map(px => (
+                        <button key={px} type="button" onClick={() => setPrefix(px)}
+                          style={{
+                            minHeight: 40, padding: "6px 12px", borderRadius: 999, cursor: "pointer",
+                            fontSize: 13, fontWeight: 700, fontFamily: "monospace",
+                            border: "1.5px solid " + (prefix === px ? "var(--g-500)" : "var(--g-300)"),
+                            background: prefix === px ? "var(--g-50)" : "var(--g-50)",
+                            color: prefix === px ? "var(--g-700)" : "var(--g-600)",
+                          }}>{px}</button>
+                      ))}
+                      {prefixInfo.others.slice(0, 8).map(px => (
+                        <button key={px} type="button" onClick={() => setPrefix(px)}
+                          style={{
+                            minHeight: 40, padding: "6px 12px", borderRadius: 999, cursor: "pointer",
+                            fontSize: 13, fontWeight: 700, fontFamily: "monospace",
+                            border: "1.5px solid " + (prefix === px ? "var(--g-500)" : "var(--bdr)"),
+                            background: prefix === px ? "var(--g-50)" : "#fff",
+                            color: prefix === px ? "var(--g-700)" : "var(--text)",
+                          }}>{px}</button>
+                      ))}
+                    </div>
+                  )}
+                  <input type="text" placeholder="พิมพ์ Prefix เช่น OL"
+                    value={prefix}
+                    onChange={e => setPrefix(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 3))}
+                    style={{ ...inputStyle, fontFamily: "monospace", fontWeight: 700, maxWidth: 200 }} />
+                  {/^[A-Z]{1,3}$/.test(prefix) && (
+                    <div style={{ fontSize: 12, marginTop: 6, color: "var(--muted)" }}>
+                      เลขแบบ (Model) ถัดไปของ <b style={{ fontFamily: "monospace" }}>{prefix}</b>: <b style={{ color: "var(--g-700)", fontFamily: "monospace" }}>{newModel}</b>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 6 }}>
+                    1) เลือก "แบบเดิม" ที่จะเพิ่มสี — คงเลขแบบเดิม เปลี่ยนแค่รหัสสี
+                  </div>
+                  {designInfo ? (
+                    <div style={{ padding: "10px 12px", borderRadius: 10, background: "var(--g-50)", border: "1.5px solid var(--g-500)" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 16, color: "var(--g-700)" }}>
+                          {designInfo.prefix}·{designInfo.model} <span style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)" }}>(Model {designInfo.model})</span>
+                        </span>
+                        <button type="button" onClick={() => { setBaseDesignSku(""); setDesignSearch(""); setVariantCode(""); }}
+                          style={{ border: "none", background: "none", cursor: "pointer", color: "var(--muted)", fontSize: 13, fontFamily: "inherit", fontWeight: 600 }}>เปลี่ยน ✕</button>
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>
+                        สีที่มีแล้ว: {designInfo.taken.length
+                          ? designInfo.taken.map(t => t.variant + (VARIANT_CODE_TO_NAME[t.variant] ? "·" + VARIANT_CODE_TO_NAME[t.variant] : "")).join(", ")
+                          : "—"}
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <input type="text" placeholder="🔍 ค้นหาแบบเดิม (รหัส/ชื่อ)"
+                        value={designSearch} onChange={e => setDesignSearch(e.target.value)} style={inputStyle} />
+                      {designMatches.length > 0 && (
+                        <div style={{ marginTop: 6, border: "1.5px solid var(--bdr)", borderRadius: 10, overflow: "hidden", maxHeight: 240, overflowY: "auto" }}>
+                          {designMatches.map(d => (
+                            <button key={d.key} type="button" onClick={() => setBaseDesignSku(d.sku)}
+                              style={{
+                                display: "block", width: "100%", textAlign: "left", padding: "10px 12px",
+                                border: "none", borderBottom: "1px solid var(--g-50)", background: "#fff",
+                                cursor: "pointer", fontFamily: "inherit", fontSize: 13,
+                              }}>
+                              <b style={{ fontFamily: "monospace", color: "var(--g-700)" }}>{d.prefix}·{d.model}</b>
+                              <span style={{ color: "var(--muted)", marginLeft: 8 }}>{d.name}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {designSearch.trim() && designMatches.length === 0 && (
+                        <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>
+                          ไม่พบแบบที่ตรง — ถ้าเป็นสินค้าแบบใหม่จริง กดโหมด "🆕 แบบใหม่"
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* ขั้น 2: Variant Code — แสดงเมื่อเลือก Prefix/แบบ แล้ว */}
+              {(skuMode === "new" ? /^[A-Z]{1,3}$/.test(prefix) : !!designInfo) && (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 6 }}>
+                    2) รหัส Variant (2 หลัก) — ดอกไม้สีเยอะใช้รหัสสี · ใบไม้/ขนาดพิมพ์เลขเอง
+                  </div>
+                  <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                    {[{ v: "color", l: "🎨 เลือกจากรหัสสี" }, { v: "manual", l: "✏️ พิมพ์เอง (ขนาด/ลำดับ)" }].map(o => (
+                      <button key={o.v} type="button" onClick={() => { setVariantSrc(o.v); setVariantCode(""); }}
+                        style={{
+                          flex: 1, minHeight: 42, borderRadius: 9, cursor: "pointer",
+                          fontSize: 12.5, fontWeight: 700, fontFamily: "inherit",
+                          border: "1.5px solid " + (variantSrc === o.v ? "var(--g-500)" : "var(--bdr)"),
+                          background: variantSrc === o.v ? "var(--g-50)" : "#fff",
+                          color: variantSrc === o.v ? "var(--g-700)" : "var(--text)",
+                        }}>{o.l}</button>
+                    ))}
+                  </div>
+                  {variantSrc === "manual" ? (
+                    <div>
+                      <input type="text" inputMode="numeric" placeholder="เช่น 01"
+                        value={variantCode}
+                        onChange={e => setVariantCode(e.target.value.replace(/\D/g, "").slice(0, 2))}
+                        onBlur={() => { if (variantCode.length === 1) setVariantCode(variantCode.padStart(2, "0")); }}
+                        style={{ ...inputStyle, fontFamily: "monospace", fontWeight: 700, maxWidth: 120, textAlign: "center", fontSize: 18 }} />
+                      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>
+                        เช่น หมวดขนาด: เล็ก=01 กลาง=02 ใหญ่=03 · หรือรหัสลำดับ 01, 02, 03…
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {variantCode && VARIANT_CODE_TO_NAME[variantCode] && (
+                        <div style={{ marginBottom: 6, fontSize: 13.5, fontWeight: 700, color: "var(--g-700)" }}>
+                          เลือกสี: <span style={{ fontFamily: "monospace" }}>{variantCode}</span> · {VARIANT_CODE_TO_NAME[variantCode]}
+                        </div>
+                      )}
+                      <input type="text" placeholder="🔍 ค้นหาสี (เช่น แดง, ชมพู) หรือพิมพ์รหัส"
+                        value={colorSearch} onChange={e => setColorSearch(e.target.value)} style={inputStyle} />
+                      <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 190, overflowY: "auto" }}>
+                        {colorMatches.slice(0, 80).map(c => {
+                          const taken = skuMode === "color" && designInfo && designInfo.taken.some(t => t.variant === c.code);
+                          const sel = variantCode === c.code;
+                          return (
+                            <button key={c.code} type="button" disabled={taken}
+                              onClick={() => setVariantCode(c.code)}
+                              style={{
+                                minHeight: 38, padding: "5px 10px", borderRadius: 999,
+                                cursor: taken ? "not-allowed" : "pointer",
+                                fontSize: 12, fontWeight: 600, fontFamily: "inherit",
+                                border: "1.5px solid " + (sel ? "var(--g-500)" : "var(--bdr)"),
+                                background: sel ? "var(--g-50)" : "#fff",
+                                color: taken ? "var(--muted)" : (sel ? "var(--g-700)" : "var(--text)"),
+                                opacity: taken ? 0.5 : 1, textDecoration: taken ? "line-through" : "none",
+                              }}>
+                              <b style={{ fontFamily: "monospace" }}>{c.code}</b> {c.name}{taken ? " (มีแล้ว)" : ""}
+                            </button>
+                          );
+                        })}
+                        {colorMatches.length === 0 && (
+                          <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                            ไม่พบสีนี้ในตารางมาตรฐาน — ถ้าเป็นสีใหม่จริง แจ้งเจ้าของเพิ่มลงตารางก่อน (ห้ามสร้างรหัสสีเอง)
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* ผลลัพธ์ SKU + สถานะซ้ำ */}
+              <div style={{
+                padding: "10px 12px", borderRadius: 10,
+                border: "1.5px solid " + (isDup ? "var(--dang)" : (skuUp ? "var(--g-500)" : "var(--bdr)")),
+                background: skuUp ? (isDup ? "#fff5f5" : "var(--g-50)") : "#fafafa",
+              }}>
+                <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>รหัส SKU ที่จะสร้าง</div>
+                <div style={{ fontFamily: "monospace", fontSize: 22, fontWeight: 800, letterSpacing: ".04em", color: skuUp ? (isDup ? "var(--dang)" : "var(--g-700)") : "var(--muted)" }}>
+                  {skuUp || "———"}
+                </div>
+                <div style={{ fontSize: 12, marginTop: 4, minHeight: 18, fontWeight: 600 }}>
+                  {dupLocal ? <span style={{ color: "var(--dang)" }}>⚠️ SKU นี้มีอยู่แล้วในระบบ</span>
+                    : serverCheck && serverCheck.checking ? <span style={{ color: "var(--muted)" }}>⏳ กำลังตรวจรหัสซ้ำ…</span>
+                    : dupRemote ? <span style={{ color: "var(--dang)" }}>⚠️ SKU นี้มีใน ZORT แล้ว (ยังไม่ sync)</span>
+                    : skuUp ? <span style={{ color: "var(--g-600)" }}>✓ รหัสนี้ใช้ได้</span>
+                    : <span style={{ color: "var(--muted)" }}>เลือก Prefix/แบบ + Variant ให้ครบ</span>}
+                </div>
               </div>
             </div>
 

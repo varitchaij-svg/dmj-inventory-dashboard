@@ -134,6 +134,14 @@ const TRACKED = [
     `(groups[m[1]] = groups[m[1]] || []).push({ num: parseInt(m[2], 10), width: m[2].length });`,
     `return base + String(maxNum + 1).padStart(width, "0");`,
   ]},
+  { names: ['parseSkuParts'], sourceFile: 'views-main.jsx', landmarks: [
+    `.match(/^([A-Z]{1,3})(\\d{2})(\\d{3})$/);`,
+    `return { prefix: m[1], variant: m[2], model: m[3] };`,
+  ]},
+  { names: ['nextModelForPrefix'], sourceFile: 'views-main.jsx', landmarks: [
+    `const parts = parseSkuParts(p && p.sku);`,
+    `return String(max + 1).padStart(3, "0");`,
+  ]},
   { names: ['detectColor'], sourceFile: 'views-main.jsx', landmarks: [
     `for (const k of COLOR_KEYS) if (s.indexOf(k) >= 0) return COLOR_MAP[k];`,
   ]},
