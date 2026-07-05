@@ -71,13 +71,14 @@ describe('nextModelForPrefix', () => {
 
 // ── จำลองการประกอบ SKU ใน AddProductView (effPrefix/effModel/variantCode2/assembledSku) ──
 // mirror ตรรกะจริงในคอมโพเนนต์ เพื่อ guard ปลายทางว่า "ประกอบ SKU ถูกตาม business rule"
-function composeSku({ skuMode, prefix, baseDesignSku, variantCode, products }) {
+function composeSku({ skuMode, prefix, baseDesignSku, variantCode, products, heldDesign }) {
   const designInfo = (() => {
     const parts = parseSkuParts(baseDesignSku);
     return parts ? { prefix: parts.prefix, model: parts.model } : null;
   })();
   const effPrefix = skuMode === 'color' ? (designInfo ? designInfo.prefix : '') : String(prefix || '').trim().toUpperCase();
-  const effModel  = skuMode === 'color' ? (designInfo ? designInfo.model : '') : nextModelForPrefix(prefix, products);
+  const held = (skuMode === 'new' && heldDesign && heldDesign.prefix === effPrefix) ? heldDesign.model : null;
+  const effModel  = skuMode === 'color' ? (designInfo ? designInfo.model : '') : (held || nextModelForPrefix(prefix, products));
   const variantCode2 = /^\d$/.test(variantCode) ? '0' + variantCode : variantCode;
   return (/^[A-Z]{1,3}$/.test(effPrefix) && /^\d{2}$/.test(variantCode2) && /^\d{3}$/.test(effModel))
     ? effPrefix + variantCode2 + effModel : '';
@@ -109,5 +110,22 @@ describe('composeSku (AddProductView)', () => {
     expect(composeSku({ skuMode: 'new', prefix: '', variantCode: '01', products: base })).toBe('');
     expect(composeSku({ skuMode: 'new', prefix: 'R', variantCode: '', products: base })).toBe('');
     expect(composeSku({ skuMode: 'color', baseDesignSku: '', variantCode: '01', products: base })).toBe('');
+  });
+
+  it('แบบใหม่หลายสี: ล็อกเลข Model ไว้ → สีถัดไปไม่รันหนี (บั๊กที่ผู้ใช้เจอ)', () => {
+    // สร้างแบบใหม่ R··026 สีแรก 01 → บันทึก → products มี R01026 แล้ว
+    const afterFirst = [...base, P('R01026')];
+    // ถ้าไม่ล็อก: nextModel = 027 → สีที่ 2 จะเป็น R19027 (ผิด — คนละแบบ)
+    expect(composeSku({ skuMode: 'new', prefix: 'R', variantCode: '19', products: afterFirst })).toBe('R19027');
+    // เมื่อล็อกแบบไว้ (heldDesign): สีที่ 2 คงเลข 026 → R19026 (ถูก)
+    expect(composeSku({ skuMode: 'new', prefix: 'R', variantCode: '19', products: afterFirst, heldDesign: { prefix: 'R', model: '026' } })).toBe('R19026');
+    // สีที่ 3 ก็ยังคง 026
+    const afterSecond = [...afterFirst, P('R19026')];
+    expect(composeSku({ skuMode: 'new', prefix: 'R', variantCode: '10', products: afterSecond, heldDesign: { prefix: 'R', model: '026' } })).toBe('R10026');
+  });
+
+  it('ล็อกใช้เฉพาะ prefix ที่ตรงกัน — เปลี่ยน prefix แล้วล็อกไม่มีผล', () => {
+    // heldDesign เป็นของ R แต่ตอนนี้ prefix = OL → ต้องใช้ nextModel ของ OL
+    expect(composeSku({ skuMode: 'new', prefix: 'OL', variantCode: '19', products: base, heldDesign: { prefix: 'R', model: '026' } })).toBe('OL19002');
   });
 });

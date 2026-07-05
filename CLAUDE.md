@@ -249,6 +249,11 @@ npm run test:coverage # coverage report (tests/helpers.js)
   → ล็อค prefix+model → เลือกแค่รหัสสีใหม่, disable สีที่มีแล้ว) · Variant เลือกจาก **ตารางรหัสสี**
   (`VARIANT_COLOR_CODES`, ค้นหาได้) หรือ **พิมพ์เอง** (ขนาด/ลำดับ สำหรับใบไม้) · โชว์ SKU ที่ประกอบ
   แบบ live + เช็คซ้ำทันที · ยึด business rule ข้างบน ไม่ใช้ `suggestNextSku` แล้ว
+  - **ล็อกเลข Model ตอนเพิ่มแบบใหม่หลายสี** (`heldDesign` state): พอเซฟสีแรกของแบบใหม่เสร็จ
+    `onAdded` refetch → `nextModelForPrefix` จะรันเลขต่อ ทำให้สีถัดไปของแบบเดียวกันได้เลขใหม่ (บั๊ก)
+    → ล็อก `{prefix,model}` ไว้หลังเซฟ ให้สีถัดไปคงเลข Model เดิม + โชว์แบนเนอร์ "🔒 กำลังเพิ่มสีของแบบใหม่"
+    + ปุ่ม "ขึ้นแบบใหม่ ▸" (`setHeldDesign(null)`) · ล้าง lock เมื่อเปลี่ยน prefix/โหมด · `effTaken`
+    disable สีที่แบบนี้ (prefix+model) มีแล้วทั้ง 2 โหมด
 - **เพิ่มสินค้าใหม่เข้า ZORT** — AddProductView (views-main.jsx, owner+warehouse): ฟอร์ม
   SKU(=barcode, จาก SKU builder ข้างบน)/ชื่อ/ราคา/หมวด/**ซัพพลายเออร์(TAG)**/จำนวน+คลัง
   หน่วย fix "ชิ้น" · เช็คซ้ำ 2 ชั้น (client `data.products` + server `checkSkuExists` 2 ชีต)

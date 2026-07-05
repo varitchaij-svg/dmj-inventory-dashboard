@@ -6969,6 +6969,8 @@ function AddProductView({ data, role, onAdded }) {
   const [variantSrc, setVariantSrc] = uS("color");  // "color"=เลือกจากตารางสี · "manual"=พิมพ์เอง (ขนาด/ลำดับ)
   const [variantCode, setVariantCode] = uS("");     // Variant Code 2 หลัก (ผลลัพธ์)
   const [colorSearch, setColorSearch] = uS("");     // ค้นหาสีในตาราง
+  // โหมดแบบใหม่: ล็อกเลข Model ไว้หลังเพิ่มสีแรก → เพิ่มสีอื่นของแบบเดียวกันต่อได้ (เลขไม่รันหนี)
+  const [heldDesign, setHeldDesign] = uS(null);     // { prefix, model } | null
   const [name, setName]           = uS("");
   const [price, setPrice]         = uS("");
   const [qty, setQty]             = uS("");
@@ -7035,13 +7037,28 @@ function AddProductView({ data, role, onAdded }) {
     return VARIANT_COLOR_CODES.filter(c => c.name.toLowerCase().includes(q) || c.code.includes(q));
   }, [colorSearch]);
 
-  // Model Number: แบบใหม่ = เลขถัดไปของ prefix · สีใหม่ = คงเลขของแบบเดิม
-  const newModel = uM(() => (skuMode === "new" ? nextModelForPrefix(prefix, products) : ""), [skuMode, prefix, products]);
+  // Model Number: แบบใหม่ = เลขถัดไปของ prefix (หรือเลขที่ล็อกไว้ถ้ากำลังเพิ่มสีของแบบใหม่)
+  //              · สีใหม่ = คงเลขของแบบเดิม
+  const newModelNext = uM(() => (skuMode === "new" ? nextModelForPrefix(prefix, products) : ""), [skuMode, prefix, products]);
   const effPrefix = skuMode === "color" ? (designInfo ? designInfo.prefix : "") : prefix.trim().toUpperCase();
-  const effModel  = skuMode === "color" ? (designInfo ? designInfo.model  : "") : newModel;
+  // ถ้าล็อกแบบไว้และ prefix ตรงกัน → ใช้เลข Model ที่ล็อก (เพิ่มสีอื่นของแบบเดียวกัน เลขไม่รันหนี)
+  const held = (skuMode === "new" && heldDesign && heldDesign.prefix === effPrefix) ? heldDesign.model : null;
+  const effModel  = skuMode === "color" ? (designInfo ? designInfo.model  : "") : (held || newModelNext);
   const variantCode2 = /^\d$/.test(variantCode) ? "0" + variantCode : variantCode;
   const assembledSku = (/^[A-Z]{1,3}$/.test(effPrefix) && /^\d{2}$/.test(variantCode2) && /^\d{3}$/.test(effModel))
     ? effPrefix + variantCode2 + effModel : "";
+
+  // สี/variant ที่แบบนี้ (effPrefix+effModel) มีแล้ว — ใช้ disable ตัวเลือก + เตือนกันซ้ำ ทั้ง 2 โหมด
+  const effTaken = uM(() => {
+    if (!/^[A-Z]{1,3}$/.test(effPrefix) || !/^\d{3}$/.test(effModel)) return [];
+    const out = [];
+    products.forEach(p => {
+      const q = parseSkuParts(p.sku);
+      if (q && q.prefix === effPrefix && q.model === effModel) out.push(q.variant);
+    });
+    return out;
+  }, [products, effPrefix, effModel]);
+  const effTakenSet = uM(() => new Set(effTaken), [effTaken]);
 
   const skuUp = assembledSku;
   const dupLocal = skuUp !== "" && skuSet.has(skuUp);
@@ -7074,10 +7091,13 @@ function AddProductView({ data, role, onAdded }) {
       warehousecode: wh,
       supplier: supplier.trim(),
     };
+    const savedPrefix = effPrefix, savedModel = effModel; // จับไว้ก่อน state reset (โหมดแบบใหม่)
     const r = await syncAddProduct(product);
     setSaving(false);
     if (r && r.success) {
       showToast("success", `เพิ่ม "${product.name}" (${product.sku}) แล้ว`, "✅");
+      // โหมดแบบใหม่: ล็อกเลข Model ของแบบที่เพิ่งสร้าง → เพิ่มสีอื่นของแบบเดียวกันต่อได้ (เลขไม่รันหนี)
+      if (skuMode === "new") setHeldDesign({ prefix: savedPrefix, model: savedModel });
       // reset ฟอร์ม (คงหมวด/โหมด/Prefix/แบบเดิม/คลัง/ซัพพลายเออร์ไว้ เผื่อเพิ่มสีถัดไป/แบบถัดไป)
       setName(""); setPrice(""); setQty(""); setServerCheck(null);
       setVariantCode(""); setColorSearch("");
@@ -7139,7 +7159,7 @@ function AddProductView({ data, role, onAdded }) {
               {/* โหมด: แบบใหม่ / สีใหม่ของแบบเดิม */}
               <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
                 {[{ v: "new", l: "🆕 แบบใหม่" }, { v: "color", l: "🎨 สีใหม่ของแบบเดิม" }].map(o => (
-                  <button key={o.v} type="button" onClick={() => { setSkuMode(o.v); setVariantCode(""); }}
+                  <button key={o.v} type="button" onClick={() => { setSkuMode(o.v); setVariantCode(""); setHeldDesign(null); }}
                     style={{
                       flex: 1, minHeight: 46, borderRadius: 10, cursor: "pointer",
                       fontSize: 13.5, fontWeight: 700, fontFamily: "inherit",
@@ -7159,7 +7179,7 @@ function AddProductView({ data, role, onAdded }) {
                   {(prefixInfo.inCat.length > 0 || prefixInfo.others.length > 0) && (
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
                       {prefixInfo.inCat.map(px => (
-                        <button key={px} type="button" onClick={() => setPrefix(px)}
+                        <button key={px} type="button" onClick={() => { setPrefix(px); setHeldDesign(null); }}
                           style={{
                             minHeight: 40, padding: "6px 12px", borderRadius: 999, cursor: "pointer",
                             fontSize: 13, fontWeight: 700, fontFamily: "monospace",
@@ -7169,7 +7189,7 @@ function AddProductView({ data, role, onAdded }) {
                           }}>{px}</button>
                       ))}
                       {prefixInfo.others.slice(0, 8).map(px => (
-                        <button key={px} type="button" onClick={() => setPrefix(px)}
+                        <button key={px} type="button" onClick={() => { setPrefix(px); setHeldDesign(null); }}
                           style={{
                             minHeight: 40, padding: "6px 12px", borderRadius: 999, cursor: "pointer",
                             fontSize: 13, fontWeight: 700, fontFamily: "monospace",
@@ -7182,12 +7202,24 @@ function AddProductView({ data, role, onAdded }) {
                   )}
                   <input type="text" placeholder="พิมพ์ Prefix เช่น OL"
                     value={prefix}
-                    onChange={e => setPrefix(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 3))}
+                    onChange={e => { setPrefix(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 3)); setHeldDesign(null); }}
                     style={{ ...inputStyle, fontFamily: "monospace", fontWeight: 700, maxWidth: 200 }} />
                   {/^[A-Z]{1,3}$/.test(prefix) && (
-                    <div style={{ fontSize: 12, marginTop: 6, color: "var(--muted)" }}>
-                      เลขแบบ (Model) ถัดไปของ <b style={{ fontFamily: "monospace" }}>{prefix}</b>: <b style={{ color: "var(--g-700)", fontFamily: "monospace" }}>{newModel}</b>
-                    </div>
+                    held ? (
+                      <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 10, background: "#eff6ff", border: "1.5px solid #93c5fd",
+                                    display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: 12, color: "#1d4ed8", fontWeight: 600 }}>
+                          🔒 กำลังเพิ่มสีของแบบใหม่ <b style={{ fontFamily: "monospace" }}>{effPrefix}·{effModel}</b> — เลือกสีถัดไปได้เลย (เลขแบบเดิม)
+                        </span>
+                        <button type="button" onClick={() => { setHeldDesign(null); setVariantCode(""); }}
+                          style={{ flexShrink: 0, border: "1.5px solid #93c5fd", background: "#fff", borderRadius: 8, padding: "6px 10px",
+                                   cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "inherit", color: "#1d4ed8" }}>ขึ้นแบบใหม่ ▸</button>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 12, marginTop: 6, color: "var(--muted)" }}>
+                        เลขแบบ (Model) ถัดไปของ <b style={{ fontFamily: "monospace" }}>{prefix}</b>: <b style={{ color: "var(--g-700)", fontFamily: "monospace" }}>{newModelNext}</b>
+                      </div>
+                    )
                   )}
                 </div>
               ) : (
@@ -7279,7 +7311,7 @@ function AddProductView({ data, role, onAdded }) {
                         value={colorSearch} onChange={e => setColorSearch(e.target.value)} style={inputStyle} />
                       <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 190, overflowY: "auto" }}>
                         {colorMatches.slice(0, 80).map(c => {
-                          const taken = skuMode === "color" && designInfo && designInfo.taken.some(t => t.variant === c.code);
+                          const taken = effTakenSet.has(c.code); // สีที่แบบนี้ (prefix+model) มีแล้ว — ทั้งโหมดใหม่/สีใหม่
                           const sel = variantCode === c.code;
                           return (
                             <button key={c.code} type="button" disabled={taken}
