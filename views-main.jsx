@@ -7229,12 +7229,22 @@ function AddProductView({ data, role, onAdded }) {
                   </div>
                   {designInfo ? (
                     <div style={{ padding: "10px 12px", borderRadius: 10, background: "var(--g-50)", border: "1.5px solid var(--g-500)" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                        <span style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 16, color: "var(--g-700)" }}>
-                          {designInfo.prefix}·{designInfo.model} <span style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)" }}>(Model {designInfo.model})</span>
-                        </span>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                        <div>
+                          <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>แบบเดิมที่เลือก (Model {designInfo.model})</div>
+                          <div style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 16, color: "var(--g-700)" }}>{baseDesignSku}</div>
+                        </div>
                         <button type="button" onClick={() => { setBaseDesignSku(""); setDesignSearch(""); setVariantCode(""); }}
-                          style={{ border: "none", background: "none", cursor: "pointer", color: "var(--muted)", fontSize: 13, fontFamily: "inherit", fontWeight: 600 }}>เปลี่ยน ✕</button>
+                          style={{ flexShrink: 0, border: "none", background: "none", cursor: "pointer", color: "var(--muted)", fontSize: 13, fontFamily: "inherit", fontWeight: 600 }}>เปลี่ยน ✕</button>
+                      </div>
+                      {/* โครงรหัสใหม่: prefix + [ช่องรหัสสี] + model — ให้เห็นชัดว่าเปลี่ยนแค่ 2 หลักกลาง */}
+                      <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 4, fontFamily: "monospace", fontWeight: 800, fontSize: 18 }}>
+                        <span style={{ color: "var(--g-700)" }}>{designInfo.prefix}</span>
+                        <span style={{ padding: "1px 8px", borderRadius: 6, border: "1.5px dashed var(--g-500)", background: "#fff",
+                                       color: variantCode2.length === 2 ? "var(--g-700)" : "var(--muted)", fontSize: 15 }}>
+                          {variantCode2.length === 2 ? variantCode2 : "รหัสสี"}
+                        </span>
+                        <span style={{ color: "var(--g-700)" }}>{designInfo.model}</span>
                       </div>
                       <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>
                         สีที่มีแล้ว: {designInfo.taken.length
@@ -7255,7 +7265,7 @@ function AddProductView({ data, role, onAdded }) {
                                 border: "none", borderBottom: "1px solid var(--g-50)", background: "#fff",
                                 cursor: "pointer", fontFamily: "inherit", fontSize: 13,
                               }}>
-                              <b style={{ fontFamily: "monospace", color: "var(--g-700)" }}>{d.prefix}·{d.model}</b>
+                              <b style={{ fontFamily: "monospace", color: "var(--g-700)" }}>{d.sku}</b>
                               <span style={{ color: "var(--muted)", marginLeft: 8 }}>{d.name}</span>
                             </button>
                           ))}
