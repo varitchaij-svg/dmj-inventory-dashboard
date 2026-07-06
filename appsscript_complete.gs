@@ -496,6 +496,13 @@ function doGet(e) {
       return handleGetDeadStock_();
     }
 
+    // Health check: สัญญาณสุขภาพระบบ (จำนวนสินค้า, หน้าร้าน/คลังเป็น 0, ติดลบ, orphan, ค้างรับ)
+    // ใช้ตรวจระบบจากภายนอกได้โดยไม่ต้องดึง payload เต็ม (token-gated แล้วด้านบน)
+    if (e && e.parameter && e.parameter.action === 'selfcheck') {
+      return ContentService.createTextOutput(JSON.stringify(computeHealth_()))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
     // Lightweight endpoint: ดึงเฉพาะรายการสั่งของ (เบา/เร็ว) สำหรับ polling หน้า orders
     if (e && e.parameter && e.parameter.action === 'orders') {
       const ordersResult = readOrders_();
@@ -2444,6 +2451,83 @@ function debugZortFrontStoreStock() {
     Logger.log(`${r.sku} | ${r.name} | ${r.stock} | ${r.avail} | ${r.diff} | ${r.sheetG}`);
   });
   Logger.log("สรุป: ถ้า col_G ≈ available แต่หน้าจอ ZORT ≈ stock → ต้องสลับ sync ไปใช้ p.stock");
+}
+
+// ── HEALTH (read-only) ────────────────────────────────────────────────────
+// สัญญาณสุขภาพระบบ — ใช้ทั้ง endpoint ?action=selfcheck และ checkSystemHealth() (alert)
+function computeHealth_() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var stockSh = ss.getSheetByName(SHEET_PRODUCTS);
+  var metaSh  = ss.getSheetByName(SHEET_PRODUCT_META);
+  var h = {
+    ts: new Date().toISOString(),
+    productsTotal: 0,
+    frontStoreZero: 0, frontStorePositive: 0,
+    warehouseZero: 0, warehousePositive: 0,
+    negativeStore: 0, negativeWH: 0,
+    orphanCount: 0,           // มีในชีตสต็อกแต่ไม่มีใน "ข้อมูลสินค้า"
+    ordersPending: 0, shipmentsPending: 0,
+  };
+
+  var metaSet = {};
+  if (metaSh) {
+    var mrows = metaSh.getDataRange().getDisplayValues();
+    for (var mi = 1; mi < mrows.length; mi++) {
+      var ms = String(mrows[mi][COL_PROD_SKU - 1] || '').trim().toUpperCase();
+      if (ms) metaSet[ms] = true;
+    }
+  }
+  if (stockSh) {
+    var rows = stockSh.getDataRange().getValues();
+    for (var i = 1; i < rows.length; i++) {
+      var sku = String(rows[i][COL_PROD_SKU - 1] || '').trim().toUpperCase();
+      if (!sku) continue;
+      h.productsTotal++;
+      var g  = Number(rows[i][COL_PROD_QTYFS - 1]) || 0;  // col G หน้าร้าน
+      var wh = Number(rows[i][COL_PROD_QTYWH - 1]) || 0;  // col H คลัง
+      if (g  > 0) h.frontStorePositive++; else h.frontStoreZero++;
+      if (wh > 0) h.warehousePositive++;  else h.warehouseZero++;
+      if (g  < 0) h.negativeStore++;
+      if (wh < 0) h.negativeWH++;
+      if (!metaSet[sku]) h.orphanCount++;
+    }
+  }
+  try { h.ordersPending = readOrders_().filter(function(o){ return o.status === 'รอ'; }).length; } catch (e) {}
+  try { h.shipmentsPending = readShipments_().filter(function(s){ return !s.receivedAt; }).length; } catch (e) {}
+  return h;
+}
+
+// ── ANOMALY ALERT — ตั้ง time-driven trigger เองใน GAS editor (เช่น ทุก 1 ชม.) ─────
+// เตือน LINE เมื่อ: หน้าร้าน/คลังเป็น 0 พุ่งขึ้นผิดปกติ (เทียบครั้งก่อน) หรือมีสต็อกติดลบ
+// ปรับ/ปิดได้ผ่าน Script Property: HEALTH_ALERT_DISABLED, HEALTH_ZERO_JUMP
+function checkSystemHealth() {
+  var props = PropertiesService.getScriptProperties();
+  if (props.getProperty('HEALTH_ALERT_DISABLED') === 'true') return;
+  var h = computeHealth_();
+  var jump = parseInt(props.getProperty('HEALTH_ZERO_JUMP') || '30', 10);
+  var prev = {};
+  try { prev = JSON.parse(props.getProperty('HEALTH_LAST') || '{}'); } catch (e) {}
+
+  var alerts = [];
+  if (prev.frontStoreZero != null && (h.frontStoreZero - prev.frontStoreZero) >= jump) {
+    alerts.push('หน้าร้านเป็น 0 เพิ่มขึ้น ' + (h.frontStoreZero - prev.frontStoreZero) +
+                ' รายการ (รวม ' + h.frontStoreZero + '/' + h.productsTotal + ')');
+  }
+  if (prev.warehouseZero != null && (h.warehouseZero - prev.warehouseZero) >= jump) {
+    alerts.push('คลังเป็น 0 เพิ่มขึ้น ' + (h.warehouseZero - prev.warehouseZero) +
+                ' รายการ (รวม ' + h.warehouseZero + '/' + h.productsTotal + ')');
+  }
+  if ((h.negativeStore + h.negativeWH) > 0) {
+    alerts.push('สต็อกติดลบ: หน้าร้าน ' + h.negativeStore + ' / คลัง ' + h.negativeWH + ' รายการ');
+  }
+
+  if (alerts.length) {
+    try { sendLineGroup_('🩺 ตรวจสุขภาพระบบ พบผิดปกติ:\n- ' + alerts.join('\n- ')); } catch (e) {}
+  }
+  props.setProperty('HEALTH_LAST', JSON.stringify({
+    frontStoreZero: h.frontStoreZero, warehouseZero: h.warehouseZero, ts: h.ts
+  }));
+  Logger.log('checkSystemHealth: ' + JSON.stringify(h) + ' | alerts=' + alerts.length);
 }
 
 // ── DIAGNOSTIC (read-only) ────────────────────────────────────────────────
