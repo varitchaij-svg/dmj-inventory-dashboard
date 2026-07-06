@@ -2045,6 +2045,38 @@ function syncZortToColumn_(warehousecode, colIndex, cachedProducts) {
   }
 
   const data = sheet.getDataRange().getValues();
+
+  // ── GUARD: กัน sync เขียน 0 ยกแผง ──────────────────────────────────────────
+  // dry-run ก่อนเขียนจริง: นับว่าถ้า sync จะทำให้ SKU ที่ตอนนี้ >0 กลายเป็น <=0 กี่ตัว
+  // ถ้าเยอะผิดปกติ (ทั้งจำนวนและสัดส่วน) = ZORT คืนข้อมูลผิด/ล่ม → หยุดคอลัมน์นี้ ไม่เขียน + เตือน LINE
+  // ปรับ threshold ได้ผ่าน Script Property, ปิด guard ได้ด้วย SYNC_GUARD_DISABLED='true'
+  var _guardProps = PropertiesService.getScriptProperties();
+  if (_guardProps.getProperty('SYNC_GUARD_DISABLED') !== 'true') {
+    var minZero = parseInt(_guardProps.getProperty('SYNC_GUARD_MIN_ZERO') || '20', 10);
+    var ratio   = parseFloat(_guardProps.getProperty('SYNC_GUARD_RATIO') || '0.5');
+    var currentPositive = 0, wouldZero = 0;
+    for (var gi = 1; gi < data.length; gi++) {
+      var gsku = String(data[gi][COL_PROD_SKU - 1]).trim().toUpperCase();
+      if (!gsku || zortMap[gsku] === undefined) continue;
+      var gcur = Number(data[gi][colIndex - 1]) || 0;
+      if (gcur <= 0) continue;
+      currentPositive++;
+      var gnext = (recentCounted[gsku] !== undefined) ? recentCounted[gsku] : zortMap[gsku];
+      if (Number(gnext) <= 0) wouldZero++;
+    }
+    if (currentPositive >= minZero && wouldZero >= currentPositive * ratio) {
+      var gpct = Math.round(wouldZero / currentPositive * 100);
+      var whLabel = (warehousecode === WH_FRONTSTORE) ? 'หน้าร้าน (ดูเหมือนจริง)'
+                  : (warehousecode === WH_SAI5) ? 'คลังสาย5' : warehousecode;
+      var gmsg = '⚠️ หยุด sync อัตโนมัติ: ' + whLabel + ' จะถูกเซ็ตเป็น 0 ถึง ' + wouldZero +
+                 '/' + currentPositive + ' รายการ (' + gpct + '%) — น่าจะ ZORT คืนข้อมูลผิด/ล่ม ' +
+                 'ระบบไม่เขียนทับเพื่อกันข้อมูลหาย ตรวจ ZORT แล้วรัน sync ใหม่';
+      Logger.log(gmsg);
+      try { sendLineGroup_(gmsg); } catch (e) {}
+      return;  // ยกเลิกการเขียนคอลัมน์นี้ (ปล่อยให้ sync คอลัมน์/ขั้นอื่นทำต่อได้)
+    }
+  }
+
   let updated = 0, notFound = 0;
   for (let i = 1; i < data.length; i++) {
     const sku = String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase();
