@@ -182,6 +182,33 @@ function FrontStoreView({ data, role, checkRequest }) {
   const uncheckedCount = counts.unchecked;
   const mismatchCount  = counts.mismatch;
 
+  // ── คิว "ควรเช็คก่อน" — ABC + เช็คหน้าร้านล่าสุดนานสุด ──
+  // หน้าร้านของเคลื่อน/หายง่ายกว่าคลัง → รอบเช็คถี่กว่า: A ทุก 7 วัน, B ทุก 14 วัน, C ทุก 30 วัน
+  // (ยังไม่เคยเช็ค = ครบกำหนดเสมอ) ใช้ p.frontStoreCheckedAt จากชีต "จำนวนหน้าร้าน" col I
+  const checkQueue = uM(() => {
+    const abc = abcClassify(products);
+    const now = Date.now();
+    const dueDays = { A: 7, B: 14, C: 30 };
+    const clsRank = { A: 0, B: 1, C: 2 };
+    return products
+      .filter(p => p && p.sku && !p.isMTO && p.cat && p.cat !== 'ไม่มีรหัสสินค้า' && (p.qtyStore || 0) > 0)
+      .map(p => {
+        const t = p.frontStoreCheckedAt ? parseCheckDateMs(p.frontStoreCheckedAt) : NaN;
+        const days = !isNaN(t) ? Math.floor((now - t) / 86400000) : null;
+        return { sku: p.sku, name: p.name, imageUrl: p.imageUrl,
+                 cls: abc[p.sku] || 'C', days, qtyStore: p.qtyStore || 0 };
+      })
+      .filter(x => x.days == null || x.days >= dueDays[x.cls])
+      .sort((a, b) => {
+        if (clsRank[a.cls] !== clsRank[b.cls]) return clsRank[a.cls] - clsRank[b.cls];
+        const da = a.days == null ? Infinity : a.days;
+        const db = b.days == null ? Infinity : b.days;
+        return db - da; // นานสุด/ไม่เคยเช็ค มาก่อน
+      })
+      .slice(0, 10);
+  }, [products]);
+  const [showAllCheckQueue, setShowAllCheckQueue] = uS(false);
+
   const touchedWithValue = uM(() =>
     [...touched].filter(sku => checkedQtys[sku] !== "" && checkedQtys[sku] != null).length
   , [touched, checkedQtys]);
@@ -387,6 +414,59 @@ function FrontStoreView({ data, role, checkRequest }) {
           })}
         </div>
       </Card>
+
+      {/* ── คิว "ควรเช็คก่อน" — แนะนำอัตโนมัติจาก ABC + เช็คล่าสุดนานสุด ── */}
+      {!search.trim() && !purchaseMode && !checkRequest && checkQueue.length > 0 && (
+        <div style={{background:'#fff',border:'1.5px solid var(--bdr)',borderRadius:14,
+                     padding:'14px 14px 10px',boxShadow:'0 1px 4px rgba(0,0,0,.04)'}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+            <span style={{fontSize:20}}>🎯</span>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:14,fontWeight:800}}>ควรเช็คก่อน · {checkQueue.length} รายการ</div>
+              <div style={{fontSize:11,color:'var(--muted)'}}>
+                สินค้าขายดี (A) หรือไม่ได้เช็คนาน — แตะเพื่อไปเช็คตัวนั้นเลย
+              </div>
+            </div>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            {(showAllCheckQueue ? checkQueue : checkQueue.slice(0,5)).map(item => (
+              <div key={item.sku}
+                onClick={() => {
+                  setActiveCat('ALL'); setShowMode('all'); setSupplierFilter('');
+                  setSearch(item.sku); setScrollToSku(item.sku);
+                }}
+                style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer',
+                        background:'var(--g-50)',border:'1.5px solid var(--g-200)',
+                        borderRadius:12,padding:'9px 12px'}}>
+                <span style={{
+                  width:26,height:26,borderRadius:8,flexShrink:0,
+                  display:'flex',alignItems:'center',justifyContent:'center',
+                  fontSize:12,fontWeight:800,color:'#fff',
+                  background: item.cls==='A' ? '#c2570a' : item.cls==='B' ? '#a07417' : '#94a194',
+                }}>{item.cls}</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:700,whiteSpace:'nowrap',
+                               overflow:'hidden',textOverflow:'ellipsis'}}>{item.name}</div>
+                  <div style={{fontSize:11,color:'var(--muted)'}}>
+                    {item.days == null ? 'ยังไม่เคยเช็ค' : `เช็คล่าสุด ${item.days} วันก่อน`}
+                    {' · หน้าร้าน '}{item.qtyStore}{' ชิ้น'}
+                  </div>
+                </div>
+                <span style={{color:'var(--g-600)',fontSize:16,flexShrink:0}}>›</span>
+              </div>
+            ))}
+          </div>
+          {checkQueue.length > 5 && (
+            <button onClick={() => setShowAllCheckQueue(v => !v)}
+              style={{width:'100%',marginTop:8,padding:'9px 0',borderRadius:10,
+                      border:'1.5px solid var(--bdr)',background:'#fff',
+                      color:'var(--g-700)',fontWeight:700,fontSize:12.5,
+                      cursor:'pointer',fontFamily:'inherit'}}>
+              {showAllCheckQueue ? '▲ ย่อรายการ' : `▼ ดูทั้งหมด (${checkQueue.length})`}
+            </button>
+          )}
+        </div>
+      )}
 
       {purchaseMode ? (
         <PurchaseGroupView products={baseFiltered}/>
@@ -890,6 +970,46 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
 // ─────────────────────────────────────────────────────────────────────
 // STOCK COUNT VIEW — นับ stock คลัง ทีละล็อค (Owner + WH เท่านั้น)
 // ─────────────────────────────────────────────────────────────────────
+// ── ABC classification จากยอดขาย (สัดส่วนสะสมของ revenue) ──
+// A = กลุ่มแรกที่รวมกันได้ 80% ของยอดขาย, B = ถัดมาถึง 95%, C = ที่เหลือ/ไม่มียอด
+// ใช้ cumulative "ก่อนบวกตัวเอง" เพื่อให้ตัวท็อปเป็น A เสมอแม้ตัวเดียวเกิน 80%
+// pure function — มี copy ใน tests/helpers.js สำหรับ unit test
+function abcClassify(products) {
+  const sorted = (products || [])
+    .filter(p => p && p.sku)
+    .map(p => ({ sku: p.sku, rev: p.soldRev || 0 }))
+    .sort((a, b) => b.rev - a.rev);
+  const total = sorted.reduce((s, p) => s + p.rev, 0);
+  const map = {};
+  let cum = 0;
+  sorted.forEach(p => {
+    if (total <= 0 || p.rev <= 0) { map[p.sku] = "C"; return; }
+    const before = cum / total;
+    cum += p.rev;
+    map[p.sku] = before < 0.8 ? "A" : before < 0.95 ? "B" : "C";
+  });
+  return map;
+}
+
+// ── แปลงวันที่เช็ค/นับจากชีตเป็น ms ──
+// รองรับปี พ.ศ. — ค่าที่เขียนลงชีตมาจาก toLocaleString("th-TH") เช่น "4/7/2569 11:30:45"
+// (new Date ตรงๆ จะตีเป็น ค.ศ. 2569 = อนาคต 543 ปี ทำให้ "เพิ่งนับ" ตลอดกาล)
+// pure function — มี copy ใน tests/helpers.js สำหรับ unit test
+function parseCheckDateMs(s) {
+  if (!s) return NaN;
+  const m = String(s).trim().match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})(?:[ ,]+(\d{1,2}):(\d{2}))?/);
+  if (m) {
+    let yr = Number(m[3]);
+    if (yr < 100) yr += 2000;
+    if (yr >= 2400) yr -= 543; // พ.ศ. → ค.ศ.
+    return new Date(yr, Number(m[2]) - 1, Number(m[1]), Number(m[4] || 0), Number(m[5] || 0)).getTime();
+  }
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return NaN;
+  if (d.getFullYear() >= 2400) d.setFullYear(d.getFullYear() - 543); // ISO ปี พ.ศ.
+  return d.getTime();
+}
+
 function StockCountView({ data, checkRequest, onCheckComplete }) {
   const storage    = data.storage  || {};
   const shelves    = storage.shelves || { A: 10, B: 10, locksPerShelf: 15 };
@@ -927,6 +1047,52 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     return m;
   }, [products]);
 
+  // ── คิว "ควรนับก่อน" — ABC + นับล่าสุดนานสุด (cycle count recommendation) ──
+  // ครบกำหนดนับ: A ทุก 30 วัน, B ทุก 60 วัน, C ทุก 90 วัน (ไม่เคยนับ = ครบกำหนดเสมอ)
+  const countQueue = uM(() => {
+    const abc = abcClassify(data.products || []);
+    const lastCheckBySku = {}, lockOfSku = {};
+    Object.keys(verifiedLockMap).forEach(k => {
+      (verifiedLockMap[k] || []).forEach(v => {
+        if (!v || !v.sku) return;
+        const t = v.lastCheck ? parseCheckDateMs(v.lastCheck) : NaN; // รองรับปี พ.ศ. + เวลาต่อท้าย
+        if (!isNaN(t) && (lastCheckBySku[v.sku] == null || t > lastCheckBySku[v.sku])) lastCheckBySku[v.sku] = t;
+        if (!lockOfSku[v.sku]) lockOfSku[v.sku] = k;
+      });
+    });
+    Object.keys(productLockMap).forEach(k => {
+      (productLockMap[k] || []).forEach(sku => { if (!lockOfSku[sku]) lockOfSku[sku] = k; });
+    });
+    const now = Date.now();
+    const dueDays = { A: 30, B: 60, C: 90 };
+    const clsRank = { A: 0, B: 1, C: 2 };
+    return (data.products || [])
+      .filter(p => p && p.sku && !p.isMTO && (p.qtyWH || 0) > 0)
+      .map(p => {
+        const last = lastCheckBySku[p.sku];
+        const days = last != null ? Math.floor((now - last) / 86400000) : null;
+        return { sku: p.sku, name: p.name, imageUrl: p.imageUrl, cls: abc[p.sku] || "C",
+                 days, lock: lockOfSku[p.sku] || null, qtyWH: p.qtyWH || 0 };
+      })
+      .filter(x => x.days == null || x.days >= dueDays[x.cls])
+      .sort((a, b) => {
+        if (clsRank[a.cls] !== clsRank[b.cls]) return clsRank[a.cls] - clsRank[b.cls];
+        const da = a.days == null ? Infinity : a.days;
+        const db = b.days == null ? Infinity : b.days;
+        return db - da; // นานสุด/ไม่เคยนับ มาก่อน
+      })
+      .slice(0, 10);
+  }, [data.products, verifiedLockMap, productLockMap]);
+  const [showAllQueue, setShowAllQueue] = uS(false);
+
+  // ── "เจอสินค้าอื่นในล็อคนี้" — SKU ที่เจอจริงแต่ระบบไม่ได้บันทึกว่าอยู่ล็อคนี้ ──
+  // บันทึกผ่าน syncLockData(isNew) = เพิ่มตำแหน่ง+จำนวนในล็อคเท่านั้น
+  // ไม่ส่งเข้า confirmStockCount (กันจำนวนที่เจอหลงล็อคไปทับยอดคลังรวม + push ZORT ผิด)
+  const [foundSkus, setFoundSkus]       = uS([]);
+  const [foundAddOpen, setFoundAddOpen] = uS(false);
+  const [foundSearch, setFoundSearch]   = uS('');
+  const foundSet = uM(() => new Set(foundSkus), [foundSkus]);
+
   const [step, setStep]                     = uS(1);
   const [selShelf, setSelShelf]             = uS(null);
   const [selLockKey, setSelLockKey]         = uS(null);
@@ -960,6 +1126,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     setSavedSkus(new Set()); setLastSavedTime(null);
     setLastSavedSnap(JSON.stringify(saved)); // กัน auto-save เด้งทันทีหลัง restore
     setStockSearch(''); setSaveStatus("idle"); setCountFilter('all');
+    setFoundSkus([]); setFoundAddOpen(false); setFoundSearch('');
   };
   uE(() => { restoreCtx(ctxKeyOf(null, selLockKey)); }, [selLockKey]); // eslint-disable-line react-hooks/exhaustive-deps
   uE(() => { restoreCtx(ctxKeyOf(selSupplier, null)); }, [selSupplier]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1115,12 +1282,14 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
 
   const lockSkus = uM(() => {
     if (!selLockKey) return [];
-    return lockData[selLockKey] ? lockData[selLockKey].skus : [];
-  }, [selLockKey, lockData]);
+    const base = lockData[selLockKey] ? lockData[selLockKey].skus : [];
+    return foundSkus.length ? [...new Set([...base, ...foundSkus])] : base;
+  }, [selLockKey, lockData, foundSkus]);
 
   const summary = uM(() => {
     let waiting = 0, matched = 0, mismatched = 0;
     lockSkus.forEach(sku => {
+      if (foundSet.has(sku)) return; // 🆕 เจอในล็อค — จำนวนที่เจอ ≠ ยอดคลังรวม ไม่นับเทียบ
       const p   = productMap[sku];
       const sys = p ? whQty(p) : null;
       const val = checkedQtys[sku];
@@ -1129,7 +1298,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
       (sys !== null && (parseInt(val)||0) === sys) ? matched++ : mismatched++;
     });
     return { waiting, matched, mismatched };
-  }, [lockSkus, checkedQtys, productMap]);
+  }, [lockSkus, checkedQtys, productMap, foundSet]);
 
   const adjustQty = (sku, delta) => {
     const cur = checkedQtys[sku];
@@ -1139,6 +1308,42 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     if (ck) { (countsCacheRef.current[ck] = countsCacheRef.current[ck] || {})[sku] = nv; }
     localEditsRef.current.add(sku);
     setCheckedQtys(prev => ({ ...prev, [sku]: nv }));
+  };
+
+  // ค้นหาสินค้าทั้งระบบ (multi-token AND) สำหรับ "เจอสินค้าอื่นในล็อคนี้"
+  const foundMatches = uM(() => {
+    const q = foundSearch.trim().toLowerCase();
+    if (!q) return [];
+    const tokens = q.split(/\s+/).filter(Boolean);
+    const base = new Set(selLockKey && lockData[selLockKey] ? lockData[selLockKey].skus : []);
+    return (data.products || [])
+      .filter(p => p && p.sku && !p.isMTO && !base.has(p.sku))
+      .filter(p => {
+        const hay = ((p.sku || '') + ' ' + (p.name || '')).toLowerCase();
+        return tokens.every(t => hay.includes(t));
+      })
+      .slice(0, 8);
+  }, [foundSearch, data.products, selLockKey, lockData]);
+
+  const addFound = (sku) => {
+    setFoundSkus(prev => prev.includes(sku) ? prev : [...prev, sku]);
+  };
+  const removeFound = (sku) => {
+    setFoundSkus(prev => prev.filter(s => s !== sku));
+    localEditsRef.current.delete(sku);
+    const ck = ctxKeyOf(selSupplier, selLockKey);
+    if (ck && countsCacheRef.current[ck]) delete countsCacheRef.current[ck][sku];
+    setCheckedQtys(prev => { const o = { ...prev }; delete o[sku]; return o; });
+  };
+
+  // แยก entries ตอน save: ของที่ "เจอในล็อค" → บันทึกเฉพาะตำแหน่ง+จำนวนในล็อค (isNew = append แถวใหม่)
+  // ไม่ส่งเข้า confirmStockCount — กันจำนวนที่เจอหลงล็อคไปทับยอดคลังรวม + push ZORT ผิด
+  const splitFoundEntries = (entries) => {
+    const base = new Set(selLockKey && lockData[selLockKey] ? lockData[selLockKey].skus : []);
+    return {
+      lockEntries: entries.map(e => (foundSet.has(e.sku) && !base.has(e.sku)) ? { ...e, isNew: true } : e),
+      confirmEntries: entries.filter(e => !foundSet.has(e.sku)),
+    };
   };
 
   const scTouchedCount = Object.values(checkedQtys).filter(v => v !== '' && v != null).length;
@@ -1155,8 +1360,9 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     setSaveStatus("saving");
     const snap = JSON.stringify(checkedQtys);
     // ถ้านับตามล็อค → บันทึกตำแหน่งจัดเก็บด้วย; แล้ว commit ผลนับ → อัปเดตคลังจริง + push ZORT
-    if (selLockKey) await syncLockData(selLockKey, entries);
-    const result = await confirmStockCount(entries);
+    const { lockEntries, confirmEntries } = splitFoundEntries(entries);
+    if (selLockKey) await syncLockData(selLockKey, lockEntries);
+    const result = confirmEntries.length ? await confirmStockCount(confirmEntries) : { success: true };
     if (result.conflict) {
       setSaveStatus("error");
       showToast('error', 'ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด', '⚠️');
@@ -1166,7 +1372,9 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
       setLastSavedSnap(snap); // กัน auto-save วนซ้ำ
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 3000);
-      showToast('success', 'บันทึก ' + entries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
+      const nFound = entries.length - confirmEntries.length;
+      showToast('success', 'บันทึก ' + entries.length + ' รายการ' +
+        (nFound > 0 ? ' (🆕 ' + nFound + ' บันทึกตำแหน่งอย่างเดียว)' : ' — อัปเดตคลัง + ZORT'), '✅');
     } else {
       setSaveStatus("error");
       if (!isAuto) showToast('error', 'บันทึกไม่สำเร็จ', '❌');
@@ -1195,8 +1403,9 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     if (!entries.length) { showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return; }
     setConfirming(true);
     const snap = JSON.stringify(checkedQtys);
-    if (selLockKey) await syncLockData(selLockKey, entries);
-    const result = await confirmStockCount(entries);
+    const { lockEntries, confirmEntries } = splitFoundEntries(entries);
+    if (selLockKey) await syncLockData(selLockKey, lockEntries);
+    const result = confirmEntries.length ? await confirmStockCount(confirmEntries) : { success: true };
     setConfirming(false);
     if (result.conflict) {
       setSaveStatus("error");
@@ -1207,7 +1416,9 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
       setLastSavedSnap(snap); // กัน auto-save commit ซ้ำหลังกดยืนยันเอง
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 3000);
-      showToast('success', 'ยืนยันผลนับแล้ว ' + entries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
+      const nFound = entries.length - confirmEntries.length;
+      showToast('success', 'ยืนยันผลนับแล้ว ' + entries.length + ' รายการ' +
+        (nFound > 0 ? ' (🆕 ' + nFound + ' บันทึกตำแหน่งอย่างเดียว)' : ' — อัปเดตคลัง + ZORT'), '✅');
     } else {
       setSaveStatus("error");
       showToast('error', 'ยืนยันไม่สำเร็จ', '❌');
@@ -1825,6 +2036,66 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
         </div>
         )}
 
+        {/* ── คิว "ควรนับก่อน" — แนะนำอัตโนมัติจาก ABC + นับล่าสุดนานสุด ── */}
+        {!stockSearch.trim() && !checkRequest && countQueue.length > 0 && (
+          <div style={{background:'#fff',border:'1.5px solid var(--bdr)',borderRadius:14,
+                       padding:'14px 14px 10px',boxShadow:'0 1px 4px rgba(0,0,0,.04)'}}>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+              <span style={{fontSize:20}}>🎯</span>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:14,fontWeight:800}}>ควรนับก่อน · {countQueue.length} รายการ</div>
+                <div style={{fontSize:11,color:'var(--muted)'}}>
+                  สินค้าขายดี (A) หรือไม่ได้นับนาน — แตะเพื่อไปนับล็อคนั้นเลย
+                </div>
+              </div>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:8}}>
+              {(showAllQueue ? countQueue : countQueue.slice(0,5)).map((item, idx) => (
+                <div key={item.sku}
+                  onClick={() => {
+                    if (!item.lock) return;
+                    setSelShelf(item.lock.split('/')[0]);
+                    setSelLockKey(item.lock);
+                    setStep(3);
+                  }}
+                  style={{
+                    display:'flex',alignItems:'center',gap:10,
+                    background: item.lock ? 'var(--g-50)' : '#fffbf0',
+                    border:'1.5px solid ' + (item.lock ? 'var(--g-200)' : '#fbbf24'),
+                    borderRadius:12,padding:'9px 12px',
+                    cursor: item.lock ? 'pointer' : 'default',
+                  }}>
+                  <span style={{
+                    width:26,height:26,borderRadius:8,flexShrink:0,
+                    display:'flex',alignItems:'center',justifyContent:'center',
+                    fontSize:12,fontWeight:800,color:'#fff',
+                    background: item.cls==='A' ? '#c2570a' : item.cls==='B' ? '#a07417' : '#94a194',
+                  }}>{item.cls}</span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:700,whiteSpace:'nowrap',
+                                 overflow:'hidden',textOverflow:'ellipsis'}}>{item.name}</div>
+                    <div style={{fontSize:11,color:'var(--muted)'}}>
+                      {item.days == null ? 'ยังไม่เคยบันทึกนับ' : `นับล่าสุด ${item.days} วันก่อน`}
+                      {' · คลัง '}{item.qtyWH}{' ชิ้น'}
+                      {item.lock ? ` · 📍 ${item.lock}` : ' · ยังไม่มีตำแหน่ง'}
+                    </div>
+                  </div>
+                  {item.lock && <span style={{color:'var(--g-600)',fontSize:16,flexShrink:0}}>›</span>}
+                </div>
+              ))}
+            </div>
+            {countQueue.length > 5 && (
+              <button onClick={() => setShowAllQueue(v => !v)}
+                style={{width:'100%',marginTop:8,padding:'9px 0',borderRadius:10,
+                        border:'1.5px solid var(--bdr)',background:'#fff',
+                        color:'var(--g-700)',fontWeight:700,fontSize:12.5,
+                        cursor:'pointer',fontFamily:'inherit'}}>
+                {showAllQueue ? '▲ ย่อรายการ' : `▼ ดูทั้งหมด (${countQueue.length})`}
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Shelf grid — ซ่อนเมื่อกำลังค้นหา */}
         {!stockSearch.trim() && (
           <div style={{display:'flex',flexDirection:'column',gap:16}}>
@@ -2067,9 +2338,73 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
           </div>
         )}
 
+        {/* ── เจอสินค้าที่ระบบไม่ได้บันทึกว่าอยู่ล็อคนี้ → เพิ่มเข้ารายการนับ + บันทึกตำแหน่งใหม่ ── */}
+        <div style={{background: foundAddOpen ? '#eff6ff' : '#fff',
+                     border:'1.5px dashed ' + (foundAddOpen ? '#60a5fa' : 'var(--bdr)'),
+                     borderRadius:12, padding: foundAddOpen ? '12px' : 0, transition:'background .15s'}}>
+          <button onClick={() => setFoundAddOpen(o => !o)}
+            style={{width:'100%',minHeight:44,padding:'10px 12px',borderRadius:10,border:'none',
+                    background:'transparent',cursor:'pointer',fontFamily:'inherit',
+                    fontSize:13,fontWeight:700,color: foundAddOpen ? '#1d4ed8' : 'var(--g-700)',
+                    display:'flex',alignItems:'center',justifyContent:'center',gap:6}}>
+            {foundAddOpen ? '▲ ปิดค้นหา' : '🆕 เจอสินค้าอื่นในล็อคนี้? แตะเพื่อเพิ่ม'}
+          </button>
+          {foundAddOpen && (
+            <div style={{display:'flex',flexDirection:'column',gap:8,marginTop:4}}>
+              <div style={{fontSize:11,color:'var(--muted)',lineHeight:1.5}}>
+                ของที่วางอยู่ในล็อคนี้จริงแต่ระบบไม่รู้ — เพิ่มแล้วกรอกจำนวนที่เจอ
+                ระบบจะบันทึก<b>ตำแหน่ง+จำนวนในล็อคนี้</b> (ไม่แก้ยอดคลังรวม)
+              </div>
+              <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                <input type="text" autoFocus
+                  placeholder="🔍 พิมพ์ชื่อหรือ SKU สินค้าที่เจอ..."
+                  value={foundSearch}
+                  onChange={function(e){ setFoundSearch(e.target.value); }}
+                  style={{flex:1,minWidth:0,padding:'9px 12px',borderRadius:10,
+                          border:'1.5px solid #93c5fd',fontSize:13,
+                          fontFamily:'inherit',background:'#fff'}}/>
+                <ScanButton size={44} onScan={function(sku){ setFoundSearch(sku); }}/>
+              </div>
+              {foundSearch.trim() !== '' && foundMatches.length === 0 && (
+                <div style={{fontSize:12,color:'var(--muted)',textAlign:'center',padding:'8px 0'}}>
+                  ไม่พบสินค้าที่ตรงกับคำค้น
+                </div>
+              )}
+              {foundMatches.map(function(p){
+                const added = foundSet.has(p.sku);
+                return (
+                  <div key={p.sku}
+                    onClick={function(){ added ? removeFound(p.sku) : addFound(p.sku); }}
+                    style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer',
+                            background: added ? '#dcfce7' : '#fff',
+                            border:'1.5px solid ' + (added ? 'var(--g-500)' : 'var(--bdr)'),
+                            borderRadius:10,padding:'8px 10px'}}>
+                    <div style={{width:40,height:40,borderRadius:8,flexShrink:0,overflow:'hidden',
+                                 background:'var(--g-50)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                      {p.imageUrl
+                        ? <img src={p.imageUrl} alt="" loading="lazy"
+                               style={{width:'100%',height:'100%',objectFit:'contain'}}/>
+                        : <span style={{fontSize:18}}>📦</span>}
+                    </div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:12.5,fontWeight:700,whiteSpace:'nowrap',
+                                   overflow:'hidden',textOverflow:'ellipsis'}}>{p.name}</div>
+                      <div style={{fontSize:10.5,color:'var(--muted)',fontFamily:'monospace'}}>{p.sku}</div>
+                    </div>
+                    <span style={{flexShrink:0,fontSize:11.5,fontWeight:800,
+                                  color: added ? '#166534' : '#1d4ed8'}}>
+                      {added ? '✓ เพิ่มแล้ว' : '+ เพิ่ม'}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         {lockSkus.length === 0 ? (
           <Card padding={true}>
-            <Empty title="ล็อคนี้ยังไม่มีสินค้า" sub="เพิ่มสินค้าในหน้าตำแหน่งคลัง"/>
+            <Empty title="ล็อคนี้ยังไม่มีสินค้าในระบบ" sub="ถ้ามีของวางอยู่จริง แตะ '🆕 เจอสินค้าอื่นในล็อคนี้' ด้านบนเพื่อเพิ่มและนับ"/>
           </Card>
         ) : (
           <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10,width:"100%",minWidth:0,boxSizing:"border-box"}}>
@@ -2079,16 +2414,17 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
               const p = productMap[sku];
               return sku.toUpperCase().includes(sq) || (p && p.name && p.name.toUpperCase().includes(sq));
             }).map(function(sku){
-              const p      = productMap[sku];
+              const p      = productMap[sku] || (data.products || []).find(function(x){ return x.sku === sku; });
+              const isFound = foundSet.has(sku); // 🆕 เจอในล็อคนี้ — บันทึกเฉพาะตำแหน่ง ไม่เทียบยอดคลังรวม
               const sys    = p ? whQty(p) : null;
               const val    = checkedQtys[sku];
               const has    = val !== '' && val != null;
               const num    = has ? (parseInt(val)||0) : 0;
-              const matched = has && sys !== null && num === sys;
+              const matched = !isFound && has && sys !== null && num === sys;
               const diff   = has && sys !== null ? num - sys : null;
               const saved  = savedSkus.has(sku);
-              const bdr    = !has ? 'var(--bdr)' : matched ? 'var(--g-500)' : 'var(--dang)';
-              const bgCard = saved ? '#f0fdf4' : !has ? '#fff' : matched ? '#f0fdf4' : '#fff5f5';
+              const bdr    = isFound ? '#93c5fd' : !has ? 'var(--bdr)' : matched ? 'var(--g-500)' : 'var(--dang)';
+              const bgCard = saved ? '#f0fdf4' : isFound ? '#eff6ff' : !has ? '#fff' : matched ? '#f0fdf4' : '#fff5f5';
 
               return (
                 <div key={sku} style={{
@@ -2118,9 +2454,9 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                     )}
                     <div style={{position:'absolute',top:6,right:6,
                                  fontSize:10,fontWeight:800,borderRadius:10,padding:'3px 8px',
-                                 background:!has?'rgba(241,245,249,.9)':matched?'rgba(220,252,231,.95)':'rgba(254,226,226,.95)',
-                                 color:!has?'var(--muted)':matched?'#166534':'var(--dang)'}}>
-                      {!has ? '⬜ รอนับ' : matched ? '✅ ตรง' : (diff>0?'⚠️ +'+diff:'⚠️ '+diff)}
+                                 background:isFound?'rgba(219,234,254,.95)':!has?'rgba(241,245,249,.9)':matched?'rgba(220,252,231,.95)':'rgba(254,226,226,.95)',
+                                 color:isFound?'#1d4ed8':!has?'var(--muted)':matched?'#166534':'var(--dang)'}}>
+                      {isFound ? '🆕 เจอในล็อค' : !has ? '⬜ รอนับ' : matched ? '✅ ตรง' : (diff>0?'⚠️ +'+diff:'⚠️ '+diff)}
                     </div>
                   </div>
 
@@ -2135,10 +2471,10 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                     {/* Sys qty row */}
                     <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',
                                  padding:'6px 10px',borderRadius:10,
-                                 background:!has?'#f8fafc':matched?'#f0fdf4':'#fff5f5'}}>
-                      <span style={{fontSize:11,color:'var(--muted)',fontWeight:600}}>ระบบ</span>
+                                 background:isFound?'#eff6ff':!has?'#f8fafc':matched?'#f0fdf4':'#fff5f5'}}>
+                      <span style={{fontSize:11,color:'var(--muted)',fontWeight:600}}>{isFound?'คลังรวม':'ระบบ'}</span>
                       <span style={{fontSize:18,fontWeight:800,
-                                    color:!has?'var(--text)':matched?'var(--g-700)':'var(--dang)'}}>
+                                    color:isFound?'var(--text)':!has?'var(--text)':matched?'var(--g-700)':'var(--dang)'}}>
                         {sys != null ? sys : '—'}
                         {saved ? React.createElement('span',{style:{
                           marginLeft:6,fontSize:10,background:'#dcfce7',color:'#166534',
@@ -2177,14 +2513,14 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                             return o;
                           });
                         }}
-                        placeholder={sys != null ? String(sys) : '0'}
+                        placeholder={isFound ? '?' : (sys != null ? String(sys) : '0')}
                         style={{
                           flex:1,textAlign:'center',padding:'4px 0',
                           borderRadius:7,fontSize:16,fontWeight:800,
                           fontFamily:'inherit',outline:'none',minWidth:0,
-                          border:has?(matched?'2px solid var(--g-500)':'2px solid var(--dang)'):'1.5px solid var(--g-300)',
-                          background:has?(matched?'#f0fdf4':'#fff5f5'):'#fff',
-                          color:has?(matched?'var(--g-700)':'var(--dang)'):'var(--text)',
+                          border:isFound?'2px solid #93c5fd':has?(matched?'2px solid var(--g-500)':'2px solid var(--dang)'):'1.5px solid var(--g-300)',
+                          background:isFound?'#fff':has?(matched?'#f0fdf4':'#fff5f5'):'#fff',
+                          color:isFound?'#1d4ed8':has?(matched?'var(--g-700)':'var(--dang)'):'var(--text)',
                         }}/>
                       <button onClick={function(){ adjustQty(sku,1); }}
                         style={{flex:'0 0 28px',height:40,borderRadius:7,
@@ -2211,6 +2547,19 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                       <span style={{fontSize:16}}>🧮</span>
                       <span>เครื่องคิดเลข</span>
                     </button>
+                    {isFound && (
+                      <div style={{display:'flex',alignItems:'center',gap:6,marginTop:2}}>
+                        <span style={{flex:1,fontSize:10,color:'#1d4ed8',lineHeight:1.4}}>
+                          บันทึกตำแหน่ง+จำนวนในล็อคนี้ ไม่แก้ยอดคลังรวม
+                        </span>
+                        <button onClick={function(){ removeFound(sku); }}
+                          style={{flexShrink:0,minHeight:28,padding:'2px 10px',borderRadius:8,
+                                  border:'1px solid var(--bdr)',background:'#fff',cursor:'pointer',
+                                  fontSize:10.5,fontWeight:700,color:'var(--muted)',fontFamily:'inherit'}}>
+                          ✕ เอาออก
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               );

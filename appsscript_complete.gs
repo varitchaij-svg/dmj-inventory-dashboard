@@ -210,6 +210,70 @@ function auditDetail_(fields) {
 }
 
 // ───────────────────────────────────────────────────────────
+// เกณฑ์แจ้งเตือนสต็อก (thresholds) — เก็บถาวรใน Script Property 'STOCK_THRESHOLDS'
+// เดิม hardcode ใน payload ทำให้ค่าที่ผู้ใช้ปรับหายเมื่อ reload
+// ───────────────────────────────────────────────────────────
+var THRESHOLDS_DEFAULT_ = {
+  default: 36,
+  overrides: { "แจกันแก้ว": 3, "เรซิ่นและอื่นๆ": 3 },
+  coverMonths: 2,
+};
+
+function readThresholds_() {
+  try {
+    var raw = PropertiesService.getScriptProperties().getProperty('STOCK_THRESHOLDS');
+    if (!raw) return THRESHOLDS_DEFAULT_;
+    var t = JSON.parse(raw);
+    return {
+      default:     (typeof t.default === 'number' && t.default >= 0) ? t.default : THRESHOLDS_DEFAULT_.default,
+      overrides:   (t.overrides && typeof t.overrides === 'object') ? t.overrides : THRESHOLDS_DEFAULT_.overrides,
+      coverMonths: (typeof t.coverMonths === 'number' && t.coverMonths >= 1) ? t.coverMonths : THRESHOLDS_DEFAULT_.coverMonths,
+    };
+  } catch (e) {
+    return THRESHOLDS_DEFAULT_;
+  }
+}
+
+// sanitize ค่าที่ client ส่งมา (คืน null ถ้า shape ใช้ไม่ได้เลย)
+// แยกเป็น pure function เพื่อให้เขียน unit test ฝั่ง Node ได้
+function sanitizeThresholds_(t) {
+  if (!t || typeof t !== 'object') return null;
+  var def = parseInt(t.default, 10);
+  var cover = parseInt(t.coverMonths, 10);
+  var out = {
+    default:     (isNaN(def) || def < 0 || def > 100000) ? THRESHOLDS_DEFAULT_.default : def,
+    overrides:   {},
+    coverMonths: (isNaN(cover) || cover < 1 || cover > 24) ? THRESHOLDS_DEFAULT_.coverMonths : cover,
+  };
+  var ov = (t.overrides && typeof t.overrides === 'object') ? t.overrides : {};
+  Object.keys(ov).slice(0, 200).forEach(function (cat) {
+    var v = parseInt(ov[cat], 10);
+    if (!isNaN(v) && v >= 0 && v <= 100000) out.overrides[String(cat).slice(0, 100)] = v;
+  });
+  return out;
+}
+
+function saveThresholds_(data, actor) {
+  try {
+    var out = sanitizeThresholds_(data.thresholds);
+    if (!out) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: "invalid thresholds" }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    PropertiesService.getScriptProperties().setProperty('STOCK_THRESHOLDS', JSON.stringify(out));
+    writeAuditLog_(actor, 'saveThresholds', 'thresholds',
+      auditDetail_({ after: out, note: 'ปรับเกณฑ์แจ้งเตือนสต็อก' }));
+    return ContentService.createTextOutput(JSON.stringify({ success: true, thresholds: out }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (e) {
+    return ContentService.createTextOutput(JSON.stringify({ success: false, error: e.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } finally {
+    invalidateCache_();
+  }
+}
+
+// ───────────────────────────────────────────────────────────
 // SECTION 2: Main Handlers (doPost / doGet)
 // ───────────────────────────────────────────────────────────
 
@@ -318,6 +382,17 @@ function doPost(e) {
       return confirmStockCount(ss, data.entries, data.clientLoadedAt, actor);
     }
 
+    // ─── เพิ่มสินค้าใหม่เข้า ZORT (owner/warehouse) ───
+    if (data.addNewProduct) {
+      return addNewProduct(ss, data.product || {}, actor);
+    }
+    if (data.checkSkuExists) {
+      return checkSkuExists(ss, data.sku);
+    }
+    if (data.fetchProductImage) {
+      return fetchProductImage(ss, data.sku);
+    }
+
     // ─── Order Management ───
     if (data.deleteOrder) {
       return deleteOrderRow(ss, data.orderId, actor);
@@ -357,6 +432,9 @@ function doPost(e) {
     // ─── Stock Check Requests ───
     if (data.createStockCheck) return createStockCheckRequest_(data.skus, data.names, actor);
     if (data.completeStockCheck) return completeStockCheckRequest_(data.reqId, actor);
+
+    // ─── เกณฑ์แจ้งเตือนสต็อก (บันทึกถาวร ใช้ร่วมกันทุกเครื่อง) ───
+    if (data.saveThresholds) return saveThresholds_(data, actor);
 
     return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Unknown action" }))
       .setMimeType(ContentService.MimeType.JSON);
@@ -541,7 +619,9 @@ function doGet(e) {
       }
       // ใช้ ?? แทน || เพื่อให้ค่า 0 ที่บันทึกไว้จริงผ่านได้
       // ถ้าไม่มีในชีตเลย (undefined) → ส่ง null ให้ frontend รู้ว่า "ยังไม่เคยเช็ค"
-      p.frontStoreCheckedQty = frontStoreQtys[p.sku] != null ? frontStoreQtys[p.sku] : null;
+      const fsChecked = frontStoreQtys[p.sku];
+      p.frontStoreCheckedQty = fsChecked != null ? fsChecked.qty : null;
+      p.frontStoreCheckedAt  = fsChecked != null && fsChecked.at ? fsChecked.at : null;
 
       const my = purchases.filter(pu => pu.sku === p.sku)
                           .sort((a, b) => (a.date < b.date ? 1 : -1));
@@ -631,7 +711,7 @@ function doGet(e) {
         try { var j = CacheService.getScriptCache().get('recentCountedSkus'); return j ? JSON.parse(j) : {}; }
         catch (e) { return {}; }
       })(),
-      thresholds: { default: 36, overrides: { "แจกันแก้ว": 3, "เรซิ่นและอื่นๆ": 3 } },
+      thresholds: readThresholds_(),
       _debug: {
         productsCount:   products.length,
         monthsLoaded:    monthly.monthLabels.length,
@@ -2159,6 +2239,149 @@ function syncNewProductsFromZort(cachedWH, cachedFS) {
   Logger.log(`เพิ่มสินค้าใหม่: ${added} รายการ`);
 }
 
+// ── หา SKU ที่ใช้แล้วทั้งหมด (จากทั้ง 2 ชีต) → ใช้เช็คซ้ำ ──
+// รวม "อัพเดทจำนวนสินค้า" (B=SKU) + "ข้อมูลสินค้า" (B=SKU) เป็น Set uppercase
+function collectExistingSkus_(ss) {
+  const set = {};
+  const collect = (sheetName, skuCol0) => {
+    const sh = ss.getSheetByName(sheetName);
+    if (!sh) return;
+    const rows = sh.getDataRange().getDisplayValues();
+    for (let i = 1; i < rows.length; i++) {
+      const s = String(rows[i][skuCol0] || "").trim().toUpperCase();
+      if (s) set[s] = true;
+    }
+  };
+  collect(SHEET_PRODUCTS,     COL_PROD_SKU - 1); // B (0-indexed 1)
+  collect(SHEET_PRODUCT_META, 1);                // B
+  return set;
+}
+
+// ── เช็คว่า SKU ถูกใช้แล้วหรือยัง (server authoritative — client เรียกก่อนกดบันทึก) ──
+// เช็คทั้ง 2 ชีต (sync จาก ZORT สม่ำเสมอ) — เร็วและครอบคลุมพอสำหรับ pre-check
+function checkSkuExists(ss, sku) {
+  const clean = String(sku || "").trim().toUpperCase();
+  if (!clean) return error("ไม่มี SKU");
+  const set = collectExistingSkus_(ss);
+  return ok({ sku: clean, exists: !!set[clean] });
+}
+
+// ── เพิ่มสินค้าใหม่: ZORT AddProduct → ตั้งสต็อกเริ่มต้น → เขียนชีต → audit ──
+// product = { sku, name, sellprice, category, qty, warehousecode }
+// หน่วย fix เป็น "ชิ้น", barcode = sku (รหัสเดียวกันตามที่ตกลง)
+// error handling: ถ้า AddProduct ล้มเหลว → ไม่เขียนชีต/ไม่ตั้งสต็อก (กัน state ค้างครึ่งทาง)
+function addNewProduct(ss, product, actor) {
+  const sku   = String(product.sku || "").trim().toUpperCase();
+  const name  = String(product.name || "").trim();
+  const price = Number(product.sellprice) || 0;
+  const cat   = String(product.category || "").trim();
+  const tag   = String(product.supplier || product.tag || "").trim(); // TAG ระบุซัพพลายเออร์
+  const qty   = Math.max(0, Math.floor(Number(product.qty) || 0));
+  const wh    = (product.warehousecode === WH_FRONTSTORE) ? WH_FRONTSTORE : WH_SAI5;
+
+  if (!sku)  return error("กรุณาระบุ SKU");
+  if (!name) return error("กรุณาระบุชื่อสินค้า");
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่ ลองใหม่อีกครั้ง");
+
+  try {
+    // 1) เช็คซ้ำในชีต (authoritative-enough — sync จาก ZORT สม่ำเสมอ)
+    const existing = collectExistingSkus_(ss);
+    if (existing[sku]) return error("SKU \"" + sku + "\" มีอยู่แล้วในระบบ — ใช้รหัสอื่น");
+
+    // 2) ยิง ZORT AddProduct (sku=barcode, unittext=ชิ้น)
+    //    payload อ้างตาม ZORT API v4: sku,name,sellprice,barcode,category,unittext
+    const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
+    const payload = {
+      sku:      sku,
+      barcode:  sku,
+      name:     name,
+      sellprice: String(price),
+      unittext: "ชิ้น",
+      category: cat,
+    };
+    if (tag) payload.tag = tag; // ส่ง TAG (ซัพพลายเออร์) เข้า ZORT ด้วยถ้ามี
+    const res = UrlFetchApp.fetch(ZORT_BASE + "/Product/AddProduct", {
+      method: "post", headers,
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true,
+    });
+    Logger.log("AddProduct [" + sku + "]: HTTP " + res.getResponseCode() + " — " + res.getContentText().substring(0, 300));
+    const zErr = zortRespError_(res);
+    if (zErr) {
+      // ZORT ปฏิเสธ (เช่น SKU ซ้ำใน ZORT ที่ยังไม่ sync เข้าชีต) → ไม่เขียนชีต
+      logZortFailure_("เพิ่มสินค้าใหม่", "SKU: " + sku + " | " + zErr);
+      return error("เพิ่มสินค้าเข้า ZORT ไม่สำเร็จ: " + zErr);
+    }
+
+    // 3) ตั้งสต็อกเริ่มต้นตามคลังที่เลือก (ถ้า qty > 0)
+    if (qty > 0) {
+      try { pushStockToZort_([{ sku: sku, qty: qty, warehousecode: wh }]); }
+      catch (e) { Logger.log("addNewProduct setStock error: " + e); }
+    }
+
+    // 4) เขียนชีต "อัพเดทจำนวนสินค้า" (pattern เดียวกับ syncNewProductsFromZort)
+    //    A="",B=sku,C=name,D=cat,E=subcat"",F=tag(ซัพพลายเออร์),G=qtyStore,H=qtyWH,I=price
+    const qtyStore = (wh === WH_FRONTSTORE) ? qty : 0;
+    const qtyWH    = (wh === WH_FRONTSTORE) ? 0   : qty;
+    const stockSh = ss.getSheetByName(SHEET_PRODUCTS);
+    if (stockSh) {
+      stockSh.appendRow(["", sku, name, cat, "", tag, qtyStore, qtyWH, price]);
+      SpreadsheetApp.flush();
+    }
+
+    writeAuditLog_(actor || "ไม่ระบุ", "เพิ่มสินค้าใหม่", sku,
+      auditDetail_({ after: { name: name, price: price, cat: cat, tag: tag, qty: qty, wh: wh }, note: "เพิ่มสินค้าใหม่เข้า ZORT + ชีต" }));
+
+    invalidateCache_(); // bump dmj_last_write_ts ให้เครื่องอื่นเห็นสินค้าใหม่
+    return ok({ sku: sku, name: name, qty: qty, warehousecode: wh });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ── ดึงรูปเฉพาะ SKU เดียวจาก ZORT (on-demand หลังอัปรูปในแอป ZORT) ──
+// targeted fetch ด้วย keyword — ไม่ต้อง fetch ทั้งคลังเหมือน syncZortImages
+// เขียนลง col E (ZORT auto) ของชีต imageUrl → readImageMap_ ให้ col E ชนะ manual(D)
+function fetchProductImage(ss, sku) {
+  const clean = String(sku || "").trim().toUpperCase();
+  if (!clean) return error("ไม่มี SKU");
+  try {
+    // ZORT GetProducts รองรับ keyword filter (ค้นด้วย sku/barcode/ชื่อ) → ดึงหน้าเดียวพอ
+    const url = ZORT_BASE + "/Product/GetProducts?page=1&limit=200&keyword=" + encodeURIComponent(clean);
+    const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+    let json = null;
+    try { json = JSON.parse(res.getContentText()); } catch (e) { json = null; }
+    const list = (json && json.list) ? json.list : [];
+    let found = null;
+    for (const p of list) {
+      const s = String(p.sku || p.barcode || "").trim().toUpperCase();
+      if (s === clean) { found = p; break; }
+    }
+    if (!found) return error("ยังไม่พบสินค้านี้ใน ZORT (เพิ่งสร้างอาจต้องรอสักครู่)");
+    const img = pickZortImage_(found);
+    if (!img) return error("สินค้านี้ยังไม่มีรูปใน ZORT — อัปรูปในแอป ZORT ก่อนแล้วกดใหม่");
+
+    // เขียนลงชีต imageUrl col E (อัปเดตถ้ามี SKU / append ถ้ายังไม่มี)
+    const sh = ss.getSheetByName(SHEET_IMAGE_URL);
+    if (sh) {
+      const rows = sh.getDataRange().getValues();
+      let rowNum = 0;
+      for (let i = 1; i < rows.length; i++) {
+        if (String(rows[i][1] || "").trim().toUpperCase() === clean) { rowNum = i + 1; break; }
+      }
+      if (rowNum) sh.getRange(rowNum, 5).setValue(img);
+      else sh.appendRow(["", clean, String(found.name || ""), "", img]);
+      SpreadsheetApp.flush();
+    }
+    invalidateCache_();
+    return ok({ sku: clean, imageUrl: img });
+  } catch (e) {
+    return error("ดึงรูปไม่สำเร็จ: " + e.toString());
+  }
+}
+
 function syncZortWarehouse() {
   syncZortToColumn_(WH_SAI5, COL_PROD_QTYWH);
 }
@@ -3553,7 +3776,7 @@ function readStorage_() {
     if (parsed) {
       const key = `${parsed.side}${parsed.shelf}/${parsed.lock}`;
       lockMap[key] = lockMap[key] || [];
-      lockMap[key].push({ sku: e.sku, qty: e.qty, sysQty: e.sysQty, status: e.status });
+      lockMap[key].push({ sku: e.sku, qty: e.qty, sysQty: e.sysQty, status: e.status, lastCheck: e.lastCheck });
     }
   }
   return { entries, lockMap };
@@ -3620,7 +3843,10 @@ function readFrontStoreCheckedQty_() {
     const sku = String(rows[i][1] || "").trim().toUpperCase();
     const qty = rows[i][3];
     if (sku && qty !== "" && qty != null)
-      map[sku] = parseInt(String(qty).replace(/,/g, "")) || 0;
+      map[sku] = {
+        qty: parseInt(String(qty).replace(/,/g, "")) || 0,
+        at:  String(rows[i][8] || "").trim(), // I = วันเช็คล่าสุด (เขียนโดย updateFrontStore)
+      };
   }
   return map;
 }

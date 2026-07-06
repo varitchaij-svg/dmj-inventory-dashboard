@@ -129,6 +129,19 @@ const TRACKED = [
     `const m = String(sku).match(/^([A-Za-z]+)(\\d{2})(\\d+)$/);`,
     `return pa.localeCompare(pb) || ca - cb || sa - sb;`,
   ]},
+  { names: ['suggestNextSku'], sourceFile: 'views-main.jsx', landmarks: [
+    `.filter(s => /^[A-Za-z]+\\d+$/.test(s));`,
+    `(groups[m[1]] = groups[m[1]] || []).push({ num: parseInt(m[2], 10), width: m[2].length });`,
+    `return base + String(maxNum + 1).padStart(width, "0");`,
+  ]},
+  { names: ['parseSkuParts'], sourceFile: 'views-main.jsx', landmarks: [
+    `.match(/^([A-Z]{1,3})(\\d{2})(\\d{3})$/);`,
+    `return { prefix: m[1], variant: m[2], model: m[3] };`,
+  ]},
+  { names: ['nextModelForPrefix'], sourceFile: 'views-main.jsx', landmarks: [
+    `const parts = parseSkuParts(p && p.sku);`,
+    `return String(max + 1).padStart(3, "0");`,
+  ]},
   { names: ['detectColor'], sourceFile: 'views-main.jsx', landmarks: [
     `for (const k of COLOR_KEYS) if (s.indexOf(k) >= 0) return COLOR_MAP[k];`,
   ]},
@@ -169,6 +182,29 @@ const TRACKED = [
     `const THAI_RE = /[฀-๿]/;`,
     `p.supplierTags = rawTags.filter(t => !THAI_RE.test(t));`,
     `if (p.supplierTags.length) p.vendor = p.supplierTags[0];`,
+  ]},
+
+  // ── analytics (Sprint: YoY + ABC + thresholds ถาวร) ─────────────────────
+  { names: ['buildYoYSeries'], sourceFile: 'views-main.jsx', landmarks: [
+    `.map(m => String(m).split("/")[1])`,
+    `const cats = (monthlyByCat || {})[mm + "/" + y];`,
+    `row["y" + y] = rev;`,
+  ]},
+  { names: ['abcClassify'], sourceFile: 'views-analytics.jsx', landmarks: [
+    `if (total <= 0 || p.rev <= 0) { map[p.sku] = "C"; return; }`,
+    `map[p.sku] = before < 0.8 ? "A" : before < 0.95 ? "B" : "C";`,
+  ]},
+  { names: ['parseCheckDateMs'], sourceFile: 'views-analytics.jsx', landmarks: [
+    `if (yr >= 2400) yr -= 543; // พ.ศ. → ค.ศ.`,
+    `if (d.getFullYear() >= 2400) d.setFullYear(d.getFullYear() - 543); // ISO ปี พ.ศ.`,
+  ]},
+  // sanitizeThresholds: ชื่อในต้นทางเป็น sanitizeThresholds_ (GAS convention)
+  // landmark เลี่ยงชื่อ THRESHOLDS_DEFAULT เพราะต้นทางใช้ THRESHOLDS_DEFAULT_ (underscore)
+  { names: ['sanitizeThresholds', 'THRESHOLDS_DEFAULT'], sourceFile: 'appsscript_complete.gs', landmarks: [
+    `overrides: { "แจกันแก้ว": 3, "เรซิ่นและอื่นๆ": 3 },`,
+    `var def = parseInt(t.default, 10);`,
+    `coverMonths: (isNaN(cover) || cover < 1 || cover > 24) ?`,
+    `if (!isNaN(v) && v >= 0 && v <= 100000) out.overrides[String(cat).slice(0, 100)] = v;`,
   ]},
 ];
 

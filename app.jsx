@@ -8,6 +8,7 @@ const TABS = [
   { id: "stock",         label: "⚠️ สต๊อก & แจ้งเตือน",    icon: I.alert },
   { id: "storage",       label: "🗺️ ตำแหน่งคลัง",           icon: I.warehouse },
   { id: "stockcount",    label: "📊 นับ stock คลัง",         icon: I.alert },
+  { id: "newproduct",    label: "➕ เพิ่มสินค้าใหม่",         icon: I.plus },
   { id: "frontstore",    label: "🏪 เช็คหน้าร้าน",           icon: I.store },
   { id: "transfers",     label: "🔄 โอน/ปรับ/ยกมา",        icon: I.arrowR },
   { id: "orders",        label: "📋 รายการสั่งของ",         icon: I.cart },
@@ -22,9 +23,9 @@ const TABS = [
 
 // Role config
 const ROLE_TABS = {
-  owner:      ["overview","categories","trends","stock","storage","stockcount","frontstore","transfers","orders","ordersummary","mtojobs","upload","connect","labels","auditlog","deadstock"],
+  owner:      ["overview","categories","trends","stock","storage","stockcount","newproduct","frontstore","transfers","orders","ordersummary","mtojobs","upload","connect","labels","auditlog","deadstock"],
   employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","mtojobs","labels"],
-  warehouse:  ["categories","storage","stockcount","orders","ordersummary","mtojobs","labels"],
+  warehouse:  ["categories","stock","storage","stockcount","newproduct","orders","ordersummary","mtojobs","labels"],
   frontstore: ["categories","stock","frontstore","orders","mtojobs","labels"],
   saler:      ["categories","stock","orders","mtojobs","labels"],
 };
@@ -564,12 +565,14 @@ function App() {
 
   // แบ่งเมนูเป็น primary (บนแถบ) / secondary (ใน "เพิ่มเติม")
   // โหมดง่าย: เหลือเฉพาะ SIMPLE_PRIMARY บนแถบ ที่เหลือเข้า "เพิ่มเติม"
-  // โหมดปกติ: แสดง 5 ตัวแรก + เพิ่มเติม เมื่อมีเกิน 7 ตัว (เหมือนเดิม)
+  // โหมดปกติ: แสดง 5 ตัวแรก + เพิ่มเติม เมื่อมีเกิน 9 ตัว
+  //   (แถบเลื่อนแนวนอนได้ — role คลัง 9 แท็บ/หน้าร้าน 6/Sale 5 แสดงครบไม่ต้องมีเพิ่มเติม
+  //    เหลือดันเข้าเพิ่มเติมเฉพาะ owner 17 / employee 10 ที่แท็บเยอะจริง)
   let primaryTabs, secondaryTabs;
   if (simpleMode) {
     primaryTabs   = visibleTabs.filter(t => SIMPLE_PRIMARY.includes(t.id));
     secondaryTabs = visibleTabs.filter(t => !SIMPLE_PRIMARY.includes(t.id));
-  } else if (visibleTabs.length > 7) {
+  } else if (visibleTabs.length > 9) {
     primaryTabs   = visibleTabs.slice(0, 5);
     secondaryTabs = visibleTabs.slice(5);
   } else {
@@ -924,6 +927,7 @@ function App() {
         {activeTab === "categories"   && <ErrorBoundary key="categories"><CategoryView data={data} role={role}/></ErrorBoundary>}
         {activeTab === "trends"       && <ErrorBoundary key="trends"><TrendsView data={data} role={role}/></ErrorBoundary>}
         {activeTab === "stock"        && <ErrorBoundary key="stock"><StockView data={data} role={role}/></ErrorBoundary>}
+        {activeTab === "newproduct"   && <ErrorBoundary key="newproduct"><AddProductView data={data} role={role} onAdded={fetchFromSheet}/></ErrorBoundary>}
         {activeTab === "storage"      && <ErrorBoundary key="storage"><StorageView data={data}/></ErrorBoundary>}
         {activeTab === "stockcount"   && <ErrorBoundary key="stockcount"><StockCountView data={data}
                                             checkRequest={activeCheckRequest}

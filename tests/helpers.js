@@ -68,6 +68,55 @@ function mtoBase(name) {
     .trim() || 'งานพิเศษ';
 }
 
+// ── suggestNextSku: แนะนำ SKU ถัดไปจากสินค้าในหมวดเดียวกัน (จาก views-main.jsx) ──
+function suggestNextSku(category, products) {
+  const valid = (products || [])
+    .filter(p => p && p.category === category)
+    .map(p => String(p.sku || "").trim().toUpperCase())
+    .filter(s => /^[A-Za-z]+\d+$/.test(s));
+  if (!valid.length) return "";
+
+  const groups = {};
+  for (const s of valid) {
+    const m = s.match(/^(.*?)(\d+)$/);
+    if (!m) continue;
+    (groups[m[1]] = groups[m[1]] || []).push({ num: parseInt(m[2], 10), width: m[2].length });
+  }
+  let base = "", bestCount = -1;
+  for (const b of Object.keys(groups)) {
+    const c = groups[b].length;
+    if (c > bestCount || (c === bestCount && b.length > base.length)) { bestCount = c; base = b; }
+  }
+  let maxNum = -1, width = 1;
+  for (const it of groups[base]) {
+    if (it.num > maxNum) { maxNum = it.num; width = it.width; }
+  }
+  return base + String(maxNum + 1).padStart(width, "0");
+}
+
+// ── parseSkuParts: แยก SKU เป็น { prefix, variant, model } (จาก views-main.jsx) ──
+// [Prefix 1–3 ตัวอักษร][Variant Code 2 หลัก][Model Number 3 หลัก] เช่น "OL19001" → OL/19/001
+function parseSkuParts(sku) {
+  const m = String(sku || "").trim().toUpperCase().match(/^([A-Z]{1,3})(\d{2})(\d{3})$/);
+  if (!m) return null;
+  return { prefix: m[1], variant: m[2], model: m[3] };
+}
+
+// ── nextModelForPrefix: หาเลข Model Number (3 หลัก) ถัดไปของ prefix (จาก views-main.jsx) ──
+function nextModelForPrefix(prefix, products) {
+  const pfx = String(prefix || "").trim().toUpperCase();
+  if (!pfx) return "";
+  let max = 0;
+  (products || []).forEach(p => {
+    const parts = parseSkuParts(p && p.sku);
+    if (parts && parts.prefix === pfx) {
+      const n = parseInt(parts.model, 10);
+      if (n > max) max = n;
+    }
+  });
+  return String(max + 1).padStart(3, "0");
+}
+
 // ── จาก views.jsx บรรทัด 1355–1367 ──────────────────────────────────────────
 // รับ object ที่มี property .sku (เหมือน Array.sort comparator)
 function compareSku(a, b) {
@@ -412,6 +461,87 @@ function stableOrderId(o, i) {
   return parts.join('_') || String(i);
 }
 
+// ── buildYoYSeries: จัด monthlyByCat เป็นแถว 12 เดือน คอลัมน์ละปี (จาก views-main.jsx) ──
+const THAI_MONTHS_ABBR = ["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
+function buildYoYSeries(monthLabels, monthlyByCat) {
+  const years = [...new Set((monthLabels || [])
+    .map(m => String(m).split("/")[1])
+    .filter(y => y && /^\d{4}$/.test(y)))].sort();
+  const rows = [];
+  for (let m = 1; m <= 12; m++) {
+    const mm = String(m).padStart(2, "0");
+    const row = { label: THAI_MONTHS_ABBR[m - 1], month: mm };
+    years.forEach(y => {
+      const cats = (monthlyByCat || {})[mm + "/" + y];
+      if (cats) {
+        let rev = 0, qty = 0;
+        Object.keys(cats).forEach(c => { rev += cats[c].sales || 0; qty += cats[c].qty || 0; });
+        row["y" + y] = rev;
+        row["q" + y] = qty;
+      }
+    });
+    rows.push(row);
+  }
+  return { years, rows };
+}
+
+// ── abcClassify: ABC classification จาก cumulative revenue (จาก views-analytics.jsx) ──
+function abcClassify(products) {
+  const sorted = (products || [])
+    .filter(p => p && p.sku)
+    .map(p => ({ sku: p.sku, rev: p.soldRev || 0 }))
+    .sort((a, b) => b.rev - a.rev);
+  const total = sorted.reduce((s, p) => s + p.rev, 0);
+  const map = {};
+  let cum = 0;
+  sorted.forEach(p => {
+    if (total <= 0 || p.rev <= 0) { map[p.sku] = "C"; return; }
+    const before = cum / total;
+    cum += p.rev;
+    map[p.sku] = before < 0.8 ? "A" : before < 0.95 ? "B" : "C";
+  });
+  return map;
+}
+
+// ── parseCheckDateMs: แปลงวันที่เช็ค/นับจากชีตเป็น ms รองรับปี พ.ศ. (จาก views-analytics.jsx) ──
+function parseCheckDateMs(s) {
+  if (!s) return NaN;
+  const m = String(s).trim().match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})(?:[ ,]+(\d{1,2}):(\d{2}))?/);
+  if (m) {
+    let yr = Number(m[3]);
+    if (yr < 100) yr += 2000;
+    if (yr >= 2400) yr -= 543; // พ.ศ. → ค.ศ.
+    return new Date(yr, Number(m[2]) - 1, Number(m[1]), Number(m[4] || 0), Number(m[5] || 0)).getTime();
+  }
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return NaN;
+  if (d.getFullYear() >= 2400) d.setFullYear(d.getFullYear() - 543); // ISO ปี พ.ศ.
+  return d.getTime();
+}
+
+// ── sanitizeThresholds: validate เกณฑ์แจ้งเตือนที่ client ส่งมา (จาก appsscript_complete.gs) ──
+const THRESHOLDS_DEFAULT = {
+  default: 36,
+  overrides: { "แจกันแก้ว": 3, "เรซิ่นและอื่นๆ": 3 },
+  coverMonths: 2,
+};
+function sanitizeThresholds(t) {
+  if (!t || typeof t !== 'object') return null;
+  var def = parseInt(t.default, 10);
+  var cover = parseInt(t.coverMonths, 10);
+  var out = {
+    default:     (isNaN(def) || def < 0 || def > 100000) ? THRESHOLDS_DEFAULT.default : def,
+    overrides:   {},
+    coverMonths: (isNaN(cover) || cover < 1 || cover > 24) ? THRESHOLDS_DEFAULT.coverMonths : cover,
+  };
+  var ov = (t.overrides && typeof t.overrides === 'object') ? t.overrides : {};
+  Object.keys(ov).slice(0, 200).forEach(function (cat) {
+    var v = parseInt(ov[cat], 10);
+    if (!isNaN(v) && v >= 0 && v <= 100000) out.overrides[String(cat).slice(0, 100)] = v;
+  });
+  return out;
+}
+
 module.exports = {
   monthsSince, fmtN, fmtB, fmtPct, monthLabel,
   stockQty, whQty, mtoBase, compareSku,
@@ -426,4 +556,7 @@ module.exports = {
   parseQty_, parseNum_, parseLocation_,
   transferBatchCore,
   cleanupOrdersStateCore, stableOrderId,
+  buildYoYSeries, abcClassify, sanitizeThresholds, THRESHOLDS_DEFAULT,
+  parseCheckDateMs, suggestNextSku,
+  parseSkuParts, nextModelForPrefix,
 };
