@@ -2315,7 +2315,12 @@ function addNewProduct(ss, product, actor) {
       unittext: "ชิ้น",
       category: cat,
     };
-    if (tag) payload.tag = tag; // ส่ง TAG (ซัพพลายเออร์) เข้า ZORT ด้วยถ้ามี
+    // ZORT: field "tag" เป็น String(Array) = ลิสต์ tag — ต้องส่งเป็น array ไม่ใช่ string เดี่ยว
+    // (ส่ง string เดี่ยว ZORT จะไม่รับ/ไม่สร้าง tag ให้) · รองรับหลาย tag คั่นด้วย comma
+    if (tag) {
+      const tagArr = tag.split(",").map(function (t) { return t.trim(); }).filter(Boolean);
+      if (tagArr.length) payload.tag = tagArr;
+    }
     const res = UrlFetchApp.fetch(ZORT_BASE + "/Product/AddProduct", {
       method: "post", headers,
       payload: JSON.stringify(payload),
@@ -2353,6 +2358,53 @@ function addNewProduct(ss, product, actor) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// ── verify: ตรวจว่า ZORT รับ tag แบบ array จริง (เจ้าของกด Run ครั้งเดียว) ──
+// สร้างสินค้าทดสอบ (SKU ขึ้นต้น ZZTAGTEST) + tag → อ่านกลับ → ลบทิ้งอัตโนมัติ (ไม่เหลือขยะ)
+function exploreProductTag() {
+  const testSku = "ZZTAGTEST" + Date.now();
+  const testTag = "ทดสอบซัพพลายเออร์";
+  const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
+
+  // 1) เพิ่มสินค้าทดสอบ พร้อม tag เป็น array
+  const addRes = UrlFetchApp.fetch(ZORT_BASE + "/Product/AddProduct", {
+    method: "post", headers: headers, muteHttpExceptions: true,
+    payload: JSON.stringify({
+      sku: testSku, barcode: testSku, name: "ทดสอบ tag (ลบอัตโนมัติ)",
+      sellprice: "1", unittext: "ชิ้น", category: "ทดสอบ", tag: [testTag],
+    }),
+  });
+  Logger.log("AddProduct(test) HTTP " + addRes.getResponseCode() + " — " + addRes.getContentText().substring(0, 300));
+
+  // 2) อ่านกลับ ดู field tag
+  Utilities.sleep(1500);
+  let tagBack = "(อ่านไม่ได้)";
+  try {
+    const getRes = UrlFetchApp.fetch(ZORT_BASE + "/Product/GetProducts?page=1&limit=10&keyword=" + encodeURIComponent(testSku),
+      { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+    const json = JSON.parse(getRes.getContentText());
+    const list = (json && json.list) ? json.list : [];
+    for (const p of list) {
+      if (String(p.sku || p.barcode || "").trim().toUpperCase() === testSku.toUpperCase()) {
+        tagBack = JSON.stringify(p.tag || p.tags || p.taglist || "(ไม่มี field tag)");
+        break;
+      }
+    }
+  } catch (e) { tagBack = "error: " + e; }
+  Logger.log("tag ที่อ่านกลับมา: " + tagBack);
+  Logger.log(String(tagBack).indexOf(testTag) >= 0
+    ? "✅ ZORT รับ tag แบบ array จริง — โค้ด addNewProduct ถูกต้อง"
+    : "⚠️ ยังไม่เจอ tag — อาจต้องปรับ field/format (แจ้ง dev พร้อม log ด้านบน)");
+
+  // 3) ลบสินค้าทดสอบทิ้ง
+  try {
+    const delRes = UrlFetchApp.fetch(ZORT_BASE + "/Product/DeleteProduct", {
+      method: "post", headers: headers, muteHttpExceptions: true,
+      payload: JSON.stringify({ sku: testSku }),
+    });
+    Logger.log("DeleteProduct(test) HTTP " + delRes.getResponseCode() + " — " + delRes.getContentText().substring(0, 200));
+  } catch (e) { Logger.log("ลบสินค้าทดสอบไม่สำเร็จ (ลบเองใน ZORT: " + testSku + ")"); }
 }
 
 // ── ซื้อสินค้าเข้า/เติมสต็อก: สร้าง Purchase Order จริงใน ZORT → รับของเข้าคลัง ──
