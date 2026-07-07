@@ -2476,12 +2476,19 @@ function bumpStockSheet_(ss, items, wh) {
 
 // ── explore: ยิง AddPurchaseOrder ทดสอบ 1 ใบ (เจ้าของรันเองใน editor ครั้งเดียว) ──
 // ตรวจ 2 อย่าง: (1) payload ผ่านไหม (2) สต็อกใน ZORT เพิ่มจริงไหมหลัง status="Success"
-// แก้ TEST_SKU เป็น SKU จริงที่มีอยู่ก่อนรัน แล้วดู Logger เทียบ stock ก่อน/หลัง
+// กด Run ได้เลย — เลือก SKU ที่มีของอยู่จาก ZORT อัตโนมัติ (ไม่ต้องแก้อะไร)
+//   ถ้าอยากทดสอบ SKU เฉพาะ ใส่ตัวแปร TEST_SKU เป็นรหัสจริงแทน "" ได้
 function exploreAddPurchaseOrder() {
-  const TEST_SKU = "REPLACE_WITH_REAL_SKU"; // ← แก้เป็น SKU จริงก่อนรัน
+  let TEST_SKU = ""; // เว้นว่าง = เลือกอัตโนมัติ · ใส่ SKU จริงถ้าอยากเจาะจง
   const TEST_QTY = 1;
   const wh = WH_SAI5;
   const tz = "Asia/Bangkok";
+
+  if (!TEST_SKU) {
+    TEST_SKU = pickAnyStockedSku_(wh);
+    if (!TEST_SKU) { Logger.log("❌ หา SKU ที่มีของใน ZORT ไม่เจอ — ลองใส่ TEST_SKU เอง"); return; }
+    Logger.log("เลือก SKU อัตโนมัติ: " + TEST_SKU);
+  }
 
   const before = fetchZortStockForSku_(TEST_SKU, wh);
   Logger.log("stock ก่อน (" + TEST_SKU + " @ " + wh + "): " + before);
@@ -2507,6 +2514,28 @@ function exploreAddPurchaseOrder() {
   Logger.log(after > before
     ? "✅ status=Success เพิ่มสต็อกจริง (+"+(after-before)+") — โค้ด addPurchaseIn ถูกต้อง ไม่ต้องแก้"
     : "⚠️ สต็อกไม่เพิ่ม — ต้องเพิ่มการเรียก IncreaseProductStockList ใน addPurchaseIn (แจ้ง dev)");
+}
+
+// เลือก SKU ที่มีของอยู่ในคลังนี้จาก ZORT อัตโนมัติ (ตัวแรกที่ stock > 0) — ใช้ตอน explore
+function pickAnyStockedSku_(wh) {
+  try {
+    const url = ZORT_BASE + "/Product/GetProducts?page=1&limit=200" +
+                (wh ? "&warehousecode=" + encodeURIComponent(wh) : "");
+    const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+    const json = JSON.parse(res.getContentText());
+    const list = (json && json.list) ? json.list : [];
+    for (const p of list) {
+      const sku = String(p.sku || p.barcode || "").trim().toUpperCase();
+      const stock = Number(p.stock || p.availablestock || 0) || 0;
+      if (sku && stock > 0) return sku;
+    }
+    // ไม่มีตัวไหน stock > 0 → เอาตัวแรกที่มี sku ก็ยังทดสอบ payload ได้
+    for (const p of list) {
+      const sku = String(p.sku || p.barcode || "").trim().toUpperCase();
+      if (sku) return sku;
+    }
+  } catch (e) { Logger.log("pickAnyStockedSku_ error: " + e); }
+  return "";
 }
 
 // อ่าน stock ปัจจุบันของ SKU เดียวจาก ZORT (targeted keyword) — ใช้ตอน explore
