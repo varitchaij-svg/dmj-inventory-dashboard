@@ -594,7 +594,10 @@ function doGet(e) {
     const transferHist = readTransferHistory_(); // วันโอนสาย5→หน้าร้านล่าสุด ต่อ SKU
 
     products.forEach(p => {
-      const loc = qtyLoc[p.sku];
+      // normalize SKU ก่อน lookup — กัน qty จากชีต "ข้อมูลสินค้า" (เก่า) รั่วมาโชว์
+      // เมื่อรหัสในชีต "อัพเดทจำนวนสินค้า" พิมพ์ต่าง case/ช่องว่าง (ที่อื่นในระบบใช้ trim().toUpperCase() หมด)
+      const skuU = (p.sku || '').toString().trim().toUpperCase();
+      const loc = qtyLoc[skuU];
       if (loc) {
         p.qtyStore = loc.qtyStore;
         p.qtyWH = loc.qtyWH;
@@ -602,7 +605,7 @@ function doGet(e) {
         if (loc.price > 0) p.price = loc.price;
       }
 
-      const m = monthly.perSku[p.sku];
+      const m = monthly.perSku[p.sku] || monthly.perSku[skuU];
       if (m) {
         p.monthly = monthly.monthLabels.map(ml => ({
           month: ml,
@@ -617,7 +620,7 @@ function doGet(e) {
       p.profit     = p.soldRev * (1 - COST_RATIO);
       p.stockValue = p.qty * p.price;
 
-      const sys = sysQtyMap[p.sku];
+      const sys = sysQtyMap[skuU];
       if (sys) {
         p.sysStore  = sys.sysStore;
         p.sysWH     = sys.sysWH;
@@ -3580,7 +3583,7 @@ function readSysQty_() {
   const map = {};
   for (let i = 2; i < rows.length; i++) {
     const r = rows[i];
-    const sku = (r[1] || '').toString().trim();
+    const sku = (r[1] || '').toString().trim().toUpperCase();
     if (!sku) continue;
     map[sku] = { sysStore: parseInt(r[6]) || 0, sysWH: parseInt(r[7]) || 0 };
   }
@@ -3942,7 +3945,7 @@ function readQtyByLocation_() {
   const rows = sh.getRange('B2:I' + sh.getLastRow()).getValues();
   const map = {};
   rows.forEach(function(r) {
-    const sku = (r[0] || '').toString().trim();
+    const sku = (r[0] || '').toString().trim().toUpperCase();
     if (!sku) return;
     map[sku] = {
       qtyStore: parseInt(r[5])   || 0,  // G = index 5 (range starts at B)
