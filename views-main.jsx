@@ -6933,6 +6933,15 @@ function AddProductView({ data, role, onAdded }) {
   const products = data.products || [];
   const [toast, showToast, hideToast] = useToast();
 
+  // ── คิวเพิ่มสินค้าหลายตัวพร้อมกัน (batch สูงสุด 10) ──
+  const MAX_BATCH = 10;
+  const [queue, setQueue] = uS([]);   // [{ sku, name, sellprice, category, qty, warehousecode, supplier }]
+  // รวม products จริง + ตัวที่พักในคิว → ใช้เช็ค SKU ซ้ำ/รันเลข Model ให้ไม่ชนกันเองในคิว
+  const skuKnown = uM(
+    () => products.concat(queue.map(q => ({ sku: q.sku, name: q.name, category: q.category }))),
+    [products, queue]
+  );
+
   // หมวดหมู่ที่มีอยู่ (ไม่รวม MTO/ไม่มีรหัส) เรียงตามความถี่
   const allCats = uM(() => {
     const cnt = {};
@@ -6945,9 +6954,9 @@ function AddProductView({ data, role, onAdded }) {
 
   const skuSet = uM(() => {
     const s = new Set();
-    products.forEach(p => { if (p.sku) s.add(String(p.sku).trim().toUpperCase()); });
+    skuKnown.forEach(p => { if (p.sku) s.add(String(p.sku).trim().toUpperCase()); });
     return s;
-  }, [products]);
+  }, [skuKnown]);
 
   // ซัพพลายเออร์ที่เคยใช้ (เรียงตามความถี่) — ใช้เป็นชิปแนะนำในฟอร์ม
   const allSuppliers = uM(() => {
@@ -6984,7 +6993,7 @@ function AddProductView({ data, role, onAdded }) {
   // Prefix ที่เคยใช้ (แยกในหมวดที่เลือกก่อน) — ชิปเลือก Prefix โหมดแบบใหม่
   const prefixInfo = uM(() => {
     const cnt = {}, catCnt = {};
-    products.forEach(p => {
+    skuKnown.forEach(p => {
       const m = String(p.sku || "").trim().toUpperCase().match(/^([A-Z]{1,3})\d/);
       if (!m) return;
       cnt[m[1]] = (cnt[m[1]] || 0) + 1;
@@ -6994,14 +7003,14 @@ function AddProductView({ data, role, onAdded }) {
     const inCat  = Object.keys(catCnt).sort((a, b) => catCnt[b] - catCnt[a]);
     const others = Object.keys(cnt).filter(p => !catCnt[p]).sort((a, b) => cnt[b] - cnt[a]);
     return { inCat, others };
-  }, [products, effectiveCat]);
+  }, [skuKnown, effectiveCat]);
 
   // ข้อมูลแบบเดิมที่เลือก (โหมดสีใหม่) — prefix, model + variant/สีที่มีอยู่แล้ว (กันสร้างซ้ำ)
   const designInfo = uM(() => {
     const parts = parseSkuParts(baseDesignSku);
     if (!parts) return null;
     const taken = [];
-    products.forEach(p => {
+    skuKnown.forEach(p => {
       const q = parseSkuParts(p.sku);
       if (q && q.prefix === parts.prefix && q.model === parts.model) {
         taken.push({ variant: q.variant, name: p.name || "", sku: String(p.sku).toUpperCase() });
@@ -7009,14 +7018,14 @@ function AddProductView({ data, role, onAdded }) {
     });
     taken.sort((a, b) => a.variant.localeCompare(b.variant));
     return { prefix: parts.prefix, model: parts.model, taken };
-  }, [baseDesignSku, products]);
+  }, [baseDesignSku, skuKnown]);
 
   // ค้นหาแบบเดิม (โหมดสีใหม่) — เฉพาะ SKU รูปแบบมาตรฐาน, ยุบเป็น 1 รายการต่อแบบ (prefix+model)
   const designMatches = uM(() => {
     const q = designSearch.trim().toLowerCase();
     const toks = q ? q.split(/\s+/).filter(Boolean) : [];
     const seen = new Set(), out = [];
-    for (const p of products) {
+    for (const p of skuKnown) {
       const parts = parseSkuParts(p.sku);
       if (!parts) continue;
       const key = parts.prefix + parts.model;
@@ -7028,7 +7037,7 @@ function AddProductView({ data, role, onAdded }) {
       if (out.length >= 12) break;
     }
     return out;
-  }, [designSearch, products]);
+  }, [designSearch, skuKnown]);
 
   // ค้นหาสีในตารางมาตรฐาน
   const colorMatches = uM(() => {
@@ -7039,7 +7048,7 @@ function AddProductView({ data, role, onAdded }) {
 
   // Model Number: แบบใหม่ = เลขถัดไปของ prefix (หรือเลขที่ล็อกไว้ถ้ากำลังเพิ่มสีของแบบใหม่)
   //              · สีใหม่ = คงเลขของแบบเดิม
-  const newModelNext = uM(() => (skuMode === "new" ? nextModelForPrefix(prefix, products) : ""), [skuMode, prefix, products]);
+  const newModelNext = uM(() => (skuMode === "new" ? nextModelForPrefix(prefix, skuKnown) : ""), [skuMode, prefix, skuKnown]);
   const effPrefix = skuMode === "color" ? (designInfo ? designInfo.prefix : "") : prefix.trim().toUpperCase();
   // ถ้าล็อกแบบไว้และ prefix ตรงกัน → ใช้เลข Model ที่ล็อก (เพิ่มสีอื่นของแบบเดียวกัน เลขไม่รันหนี)
   const held = (skuMode === "new" && heldDesign && heldDesign.prefix === effPrefix) ? heldDesign.model : null;
@@ -7052,12 +7061,12 @@ function AddProductView({ data, role, onAdded }) {
   const effTaken = uM(() => {
     if (!/^[A-Z]{1,3}$/.test(effPrefix) || !/^\d{3}$/.test(effModel)) return [];
     const out = [];
-    products.forEach(p => {
+    skuKnown.forEach(p => {
       const q = parseSkuParts(p.sku);
       if (q && q.prefix === effPrefix && q.model === effModel) out.push(q.variant);
     });
     return out;
-  }, [products, effPrefix, effModel]);
+  }, [skuKnown, effPrefix, effModel]);
   const effTakenSet = uM(() => new Set(effTaken), [effTaken]);
 
   const skuUp = assembledSku;
@@ -7079,33 +7088,65 @@ function AddProductView({ data, role, onAdded }) {
   const isDup = dupLocal || dupRemote;
   const canSave = !saving && skuUp !== "" && name.trim() !== "" && effectiveCat !== "" && !isDup && !(serverCheck && serverCheck.checking);
 
-  const handleSave = async () => {
-    if (!canSave) return;
-    setSaving(true);
-    const product = {
-      sku: skuUp,
-      name: name.trim(),
-      sellprice: Number(price) || 0,
-      category: effectiveCat,
-      qty: Math.max(0, Math.floor(Number(qty) || 0)),
-      warehousecode: wh,
-      supplier: supplier.trim(),
-    };
-    const savedPrefix = effPrefix, savedModel = effModel; // จับไว้ก่อน state reset (โหมดแบบใหม่)
-    const r = await syncAddProduct(product);
-    setSaving(false);
-    if (r && r.success) {
-      showToast("success", `เพิ่ม "${product.name}" (${product.sku}) แล้ว`, "✅");
-      // โหมดแบบใหม่: ล็อกเลข Model ของแบบที่เพิ่งสร้าง → เพิ่มสีอื่นของแบบเดียวกันต่อได้ (เลขไม่รันหนี)
-      if (skuMode === "new") setHeldDesign({ prefix: savedPrefix, model: savedModel });
-      // reset ฟอร์ม (คงหมวด/โหมด/Prefix/แบบเดิม/คลัง/ซัพพลายเออร์ไว้ เผื่อเพิ่มสีถัดไป/แบบถัดไป)
-      setName(""); setPrice(""); setQty(""); setServerCheck(null);
-      setVariantCode(""); setColorSearch("");
-      if (onAdded) onAdded();
-    } else {
-      showToast("error", (r && r.error) || "เพิ่มสินค้าไม่สำเร็จ", "❌");
-    }
+  // สร้าง object สินค้าจากค่าในฟอร์มปัจจุบัน
+  const buildCurrentProduct = () => ({
+    sku: skuUp,
+    name: name.trim(),
+    sellprice: Number(price) || 0,
+    category: effectiveCat,
+    qty: Math.max(0, Math.floor(Number(qty) || 0)),
+    warehousecode: wh,
+    supplier: supplier.trim(),
+  });
+
+  // เคลียร์เฉพาะช่องที่เปลี่ยนต่อรายการ (คงหมวด/โหมด/Prefix/แบบเดิม/คลัง/ซัพพลายเออร์ไว้)
+  const resetItemFields = () => {
+    setName(""); setPrice(""); setQty(""); setServerCheck(null);
+    setVariantCode(""); setColorSearch("");
   };
+
+  const canQueue = canSave && queue.length < MAX_BATCH;
+
+  // ➕ พักรายการปัจจุบันเข้าคิว (ยังไม่บันทึกจริง) — กรอกตัวถัดไปต่อได้
+  const handleAddToQueue = () => {
+    if (!canQueue) return;
+    const product = buildCurrentProduct();
+    const savedPrefix = effPrefix, savedModel = effModel;
+    setQueue(qs => [...qs, product]);
+    // โหมดแบบใหม่: ล็อกเลข Model → เพิ่มสีอื่นของแบบเดียวกันต่อได้ (เลขไม่รันหนี)
+    if (skuMode === "new") setHeldDesign({ prefix: savedPrefix, model: savedModel });
+    resetItemFields();
+  };
+
+  const removeFromQueue = (idx) => setQueue(qs => qs.filter((_, i) => i !== idx));
+
+  // 💾 บันทึกทั้งหมด — รวมตัวที่กรอกค้างในฟอร์ม (ถ้า valid) เข้ากับคิว แล้วส่งทีละตัว
+  //    ตัวไหนพลาด (SKU ซ้ำ/ZORT error) → ข้าม ทำตัวที่เหลือต่อ, เก็บตัวพลาดไว้ในคิวให้แก้
+  const handleSaveAll = async () => {
+    const items = [...queue];
+    if (canSave) items.push(buildCurrentProduct());
+    if (items.length === 0 || saving) return;
+    setSaving(true);
+    const ok = [], failed = [];
+    for (const it of items) {
+      const r = await syncAddProduct(it);
+      if (r && r.success) ok.push(it);
+      else failed.push({ item: it, error: (r && r.error) || "ไม่สำเร็จ" });
+    }
+    setSaving(false);
+    setQueue(failed.map(f => f.item));   // เหลือเฉพาะตัวที่พลาด
+    if (ok.length) { setHeldDesign(null); resetItemFields(); }
+    if (failed.length === 0) {
+      showToast("success", `เพิ่มสำเร็จ ${ok.length} รายการ 🎉`, "✅", 5000);
+    } else if (ok.length === 0) {
+      showToast("error", `เพิ่มไม่สำเร็จ — ${failed[0].item.sku}: ${failed[0].error}`, "❌", 6000);
+    } else {
+      showToast("warn", `สำเร็จ ${ok.length} · พลาด ${failed.length} (${failed.map(f => f.item.sku).join(", ")}) — ตัวที่พลาดยังอยู่ในรายการ`, "⚠️", 7000);
+    }
+    if (onAdded) onAdded();
+  };
+
+  const totalToSave = queue.length + (canSave ? 1 : 0);
 
   const inputStyle = {
     width: "100%", padding: "11px 13px", borderRadius: 10,
@@ -7432,10 +7473,57 @@ function AddProductView({ data, role, onAdded }) {
               </div>
             </div>
 
-            <button onClick={handleSave} disabled={!canSave} className="btn primary"
-              style={{ width: "100%", padding: "14px 0", fontSize: 16, fontWeight: 800, opacity: canSave ? 1 : 0.45 }}>
-              {saving ? <><span className="spin" style={{ width: 15, height: 15, borderWidth: 2, marginRight: 8 }} /> กำลังเพิ่ม…</> : "➕ เพิ่มสินค้าเข้า ZORT"}
-            </button>
+            {/* รายการที่พักไว้ (คิว batch) */}
+            {queue.length > 0 && (
+              <div style={{ border: "1.5px solid var(--g-500)", borderRadius: 12, background: "var(--g-50)", padding: 12 }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: "var(--g-700)", marginBottom: 8 }}>
+                  📋 รายการที่จะบันทึก ({queue.length}/{MAX_BATCH})
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {queue.map((q, i) => (
+                    <div key={q.sku + i} style={{
+                      display: "flex", alignItems: "center", gap: 8, background: "#fff",
+                      border: "1px solid var(--bdr)", borderRadius: 9, padding: "8px 10px",
+                    }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                          <span style={{ fontFamily: "monospace", color: "var(--g-700)" }}>{q.sku}</span> · {q.name}
+                        </div>
+                        <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                          {q.category} · {q.qty} ชิ้น · {q.warehousecode === "W0001" ? "🏪 หน้าร้าน" : "🏭 คลังสาย5"}
+                          {q.sellprice ? ` · ฿${q.sellprice}` : ""}{q.supplier ? ` · ${q.supplier}` : ""}
+                        </div>
+                      </div>
+                      <button type="button" onClick={() => removeFromQueue(i)} disabled={saving}
+                        style={{ flexShrink: 0, width: 32, height: 32, borderRadius: 8, border: "1px solid var(--bdr)",
+                                 background: "#fff", cursor: "pointer", fontSize: 16, color: "var(--muted)", lineHeight: 1 }}>×</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ปุ่ม: พักไว้เพิ่มอีกตัว + บันทึก */}
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={handleAddToQueue} disabled={!canQueue} type="button"
+                style={{ flex: "0 0 auto", padding: "14px 16px", fontSize: 15, fontWeight: 800, borderRadius: 12,
+                         border: "1.5px solid var(--g-500)", background: "#fff", color: "var(--g-700)",
+                         cursor: canQueue ? "pointer" : "default", opacity: canQueue ? 1 : 0.4, fontFamily: "inherit" }}
+                title={queue.length >= MAX_BATCH ? `เพิ่มได้สูงสุด ${MAX_BATCH} รายการ` : "พักไว้ แล้วกรอกตัวถัดไป"}>
+                ➕ เพิ่มอีก
+              </button>
+              <button onClick={handleSaveAll} disabled={saving || totalToSave === 0} className="btn primary"
+                style={{ flex: 1, padding: "14px 0", fontSize: 16, fontWeight: 800, opacity: (saving || totalToSave === 0) ? 0.45 : 1 }}>
+                {saving
+                  ? <><span className="spin" style={{ width: 15, height: 15, borderWidth: 2, marginRight: 8 }} /> กำลังบันทึก…</>
+                  : (queue.length > 0 ? `💾 บันทึกทั้งหมด (${totalToSave})` : "➕ เพิ่มสินค้าเข้า ZORT")}
+              </button>
+            </div>
+            {queue.length === 0 && (
+              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: -6, textAlign: "center" }}>
+                จะเพิ่มหลายตัว? กด <b>➕ เพิ่มอีก</b> เพื่อพักไว้ก่อน แล้วค่อยกดบันทึกทีเดียว (สูงสุด {MAX_BATCH})
+              </div>
+            )}
           </div>
         </Card>
       </div>
