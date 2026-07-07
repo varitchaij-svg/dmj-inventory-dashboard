@@ -101,6 +101,7 @@ const SHEET_AUDIT     = "Audit Log";
 const SHEET_FRONTSTORE_QTY = "จำนวนหน้าร้าน";  // บันทึกจำนวนหน้าร้านที่เช็คแล้ว
 const SHEET_IMAGE_URL      = "imageUrl";          // mapping รูปภาพสินค้า
 const SHEET_PRODUCT_META   = "ข้อมูลสินค้า";    // metadata สินค้า (ชื่อ/หมวด/ราคา)
+const SHEET_SHELF_SWEEP_LOG = "ชั้นนำออกอัตโนมัติ"; // log สำรองชั้นที่ระบบนำออกเอง (กู้คืนได้)
 const SHEET_PURCHASES      = "รายการซื้อสินค้า"; // ประวัติการซื้อ/PO
 const SHEET_MONTHLY_SALES  = "ยอดขายรายเดือน";  // ยอดขายแยกตามเดือน
 const SHEET_DAILY_SALES    = "ยอดขายรายวัน";    // ยอดขายแยกตามวัน
@@ -2736,6 +2737,121 @@ function setupDailySummaryTrigger() {
   });
   ScriptApp.newTrigger("sendDailyMorningSummary").timeBased().everyDays(1).atHour(8).create();
   Logger.log("✅ ตั้ง trigger: sendDailyMorningSummary ทุกวัน 08:00");
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// นำสินค้าออกจากชั้นวางอัตโนมัติ เมื่อคลัง (qtyWH) = 0
+// ──────────────────────────────────────────────────────────────────────────
+// สินค้าที่ส่งหมด/ขายหมด (คลังเหลือ 0 ในระบบ) ไม่ควรกินช่องชั้นวางในคลังต่อ
+// ระบบสแกนชีต "ตำแหน่งจัดเก็บ" เทียบกับคลังจริง (SHEET_PRODUCTS col H) แล้วลบแถวที่คลัง=0
+// เก็บ log สำรองไว้ในชีต SHEET_SHELF_SWEEP_LOG (กู้คืนได้: มี SKU/ล็อค/จำนวนครบ) + audit
+// ตั้ง trigger รายสัปดาห์ด้วย setupShelfSweepTrigger()
+//
+// ชื่อไม่มี _ ต่อท้าย → โผล่ใน dropdown ของ GAS editor ให้เจ้าของรัน/ทดสอบเองได้
+// GUARD: ถ้าจะลบเยอะผิดปกติ (>= ratio ของแถวทั้งหมด) = ข้อมูลคลังน่าจะเพี้ยน → หยุด + เตือน LINE
+//   ปรับได้ผ่าน Script Property: SHELF_SWEEP_RATIO (default 0.5), SHELF_SWEEP_MIN_GUARD (default 30)
+//   ปิด guard: SHELF_SWEEP_GUARD_DISABLED='true'
+function sweepEmptyShelfLocations() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const lockSh = ss.getSheetByName(SHEET_LOCKS);
+  const prodSh = ss.getSheetByName(SHEET_PRODUCTS);
+  if (!lockSh || !prodSh) { Logger.log("sweepEmptyShelfLocations: ไม่พบชีต locks หรือ products"); return; }
+
+  // 1) map SKU(upper) → qtyWH (คลัง, col H) จากชีตสต็อกที่ ZORT sync
+  const pRows = prodSh.getDataRange().getValues();
+  const whMap = {};   // sku → qtyWH (number)
+  for (let i = 1; i < pRows.length; i++) {
+    const sku = String(pRows[i][COL_PROD_SKU - 1] || "").trim().toUpperCase();
+    if (!sku) continue;
+    const raw = pRows[i][COL_PROD_QTYWH - 1];
+    // คลังว่าง (ยังไม่ sync) หรือไม่ใช่ตัวเลข → ถือว่า "ไม่รู้จำนวน" ไม่ใส่ใน map = ไม่ลบชั้น
+    if (raw === "" || raw === null || raw === undefined) continue;
+    const n = Number(raw);
+    if (!isFinite(n)) continue;
+    whMap[sku] = n;
+  }
+
+  // 2) หาแถวชั้นวางที่ควรนำออก: SKU มีในระบบและคลัง <= 0
+  //    (SKU ที่ไม่มีในชีตสต็อกเลย → ไม่รู้จำนวน → ข้าม ไม่ลบ เพื่อความปลอดภัย)
+  const lockRows = lockSh.getDataRange().getValues();
+  const toRemove = [];  // { rowNum, sku, loc, qty, sysQty }
+  let totalDataRows = 0;
+  for (let i = 1; i < lockRows.length; i++) {
+    const r = lockRows[i];
+    const sku = String(r[COL_LOCK_SKU - 1] || "").trim().toUpperCase();
+    const loc = String(r[COL_LOCK_KEY - 1] || "").trim();
+    if (!sku || !loc) continue;
+    totalDataRows++;
+    if (whMap[sku] === undefined) continue;   // ไม่รู้จำนวน → ข้าม
+    if (whMap[sku] <= 0) {
+      toRemove.push({
+        rowNum: i + 1, sku: sku, loc: loc,
+        qty:    Number(r[COL_LOCK_QTY - 1]) || 0,   // D = จำนวนในชั้น
+      });
+    }
+  }
+
+  if (toRemove.length === 0) {
+    Logger.log("sweepEmptyShelfLocations: ไม่มีชั้นที่ต้องนำออก (สแกน " + totalDataRows + " แถว)");
+    return;
+  }
+
+  // 3) GUARD: กันลบยกแผงเมื่อข้อมูลคลังเพี้ยน (เช่น ZORT ล่มแล้ว col H กลายเป็น 0 ยกแผง)
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty('SHELF_SWEEP_GUARD_DISABLED') !== 'true') {
+    const ratio    = parseFloat(props.getProperty('SHELF_SWEEP_RATIO') || '0.5');
+    const minGuard = parseInt(props.getProperty('SHELF_SWEEP_MIN_GUARD') || '30', 10);
+    if (toRemove.length >= minGuard && toRemove.length >= totalDataRows * ratio) {
+      const pct = Math.round(toRemove.length / totalDataRows * 100);
+      const gmsg = '⚠️ หยุดนำสินค้าออกจากชั้นอัตโนมัติ: จะลบ ' + toRemove.length + '/' + totalDataRows +
+                   ' แถว (' + pct + '%) — คลังน่าจะเพี้ยน/ZORT ล่ม ระบบไม่ลบเพื่อกันข้อมูลหาย ตรวจแล้วรันใหม่';
+      Logger.log(gmsg);
+      try { sendLineGroup_(gmsg); } catch (e) {}
+      return;
+    }
+  }
+
+  // 4) เก็บ log สำรอง (append ก่อนลบ — ถ้า log fail จะไม่ลบ กัน state หาย)
+  let logSh = ss.getSheetByName(SHEET_SHELF_SWEEP_LOG);
+  if (!logSh) {
+    logSh = ss.insertSheet(SHEET_SHELF_SWEEP_LOG);
+    logSh.appendRow(["วันที่เวลา", "SKU", "ล็อค (ตำแหน่ง)", "จำนวนในชั้น", "คลัง(ระบบ)", "หมายเหตุ"]);
+    logSh.getRange(1, 1, 1, 6).setFontWeight("bold");
+  }
+  const now = new Date();
+  const logRows = toRemove.map(function(t) {
+    return [now, t.sku, t.loc, t.qty, whMap[t.sku], "คลัง=0 → นำออกอัตโนมัติ"];
+  });
+  logSh.getRange(logSh.getLastRow() + 1, 1, logRows.length, 6).setValues(logRows);
+  SpreadsheetApp.flush();
+
+  // 5) ลบแถวจริง — ไล่จากล่างขึ้นบน เพื่อไม่ให้ index เพี้ยนหลังลบ
+  toRemove.sort(function(a, b) { return b.rowNum - a.rowNum; });
+  let removed = 0;
+  toRemove.forEach(function(t) {
+    try { lockSh.deleteRow(t.rowNum); removed++; }
+    catch (e) { Logger.log("sweep deleteRow " + t.rowNum + " error: " + e); }
+  });
+
+  // 6) audit + ล้าง cache
+  try {
+    writeAuditLog_("ระบบ (อัตโนมัติ)", "sweepEmptyShelf", removed + " แถว",
+      auditDetail_({ removed: removed, scanned: totalDataRows,
+                     skus: toRemove.map(function(t){ return t.sku + "@" + t.loc; }).slice(0, 50) }));
+  } catch (e) {}
+  invalidateCache_();
+  Logger.log("sweepEmptyShelfLocations: นำออก " + removed + " แถว (สแกน " + totalDataRows + ") — log ที่ชีต '" + SHEET_SHELF_SWEEP_LOG + "'");
+}
+
+// ตั้ง trigger นำสินค้าออกจากชั้นอัตโนมัติ สัปดาห์ละครั้ง (จันทร์ 05:00 เขตเวลา GAS)
+// รันฟังก์ชันนี้เองครั้งเดียวใน GAS editor เพื่อสร้าง trigger
+function setupShelfSweepTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (t.getHandlerFunction() === "sweepEmptyShelfLocations") ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger("sweepEmptyShelfLocations")
+    .timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(5).create();
+  Logger.log("✅ ตั้ง trigger: sweepEmptyShelfLocations ทุกวันจันทร์ 05:00");
 }
 
 function debugZortProduct() {
