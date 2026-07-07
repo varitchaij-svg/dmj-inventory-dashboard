@@ -2595,16 +2595,20 @@ function syncZortBoth() {
     var prodSh = ss.getSheetByName(SHEET_PRODUCTS);
     if (prodSh) {
       var prodRows = prodSh.getDataRange().getDisplayValues();
-      // header row อยู่ที่ index 0 (แถว 1) — เริ่มอ่านข้อมูลจาก index 1
+      // ชีตนี้มี header 2 แถว (แถว 1 + แถว 2 = "รหัสสินค้า/ชื่อสินค้า") — เทียบ readSysQty_ ที่เริ่ม i=2
       // layout: B(1)=SKU, C(2)=ชื่อ, G(6)=หน้าร้าน, H(7)=คลัง  (0-indexed)
       var scanned = 0;
-      for (var i = 1; i < prodRows.length; i++) {
+      for (var i = 2; i < prodRows.length; i++) {
         var r = prodRows[i];
         var sku  = (r[1] || '').toString().trim();
         var name = (r[2] || '').toString().trim();
-        if (!sku) continue;
+        // SKU จริงต้องมีทั้งตัวอักษรอังกฤษ + ตัวเลข — กันแถว header/placeholder ภาษาไทยหลุดเข้ามา
+        if (!sku || !/[A-Za-z]/.test(sku) || !/\d/.test(sku)) continue;
+        var qtyCell = (r[7] || '').toString().trim();
+        if (qtyCell === '') continue;   // ช่องว่าง = ไม่มีข้อมูล ไม่ใช่ 0 จริง
+        var qtyWH = parseInt(qtyCell.replace(/,/g, ''));
+        if (isNaN(qtyWH)) continue;
         scanned++;
-        var qtyWH = parseInt(r[7]) || 0;
         if (qtyWH < threshold) {
           lowStockItems.push({ sku: sku, name: name, qty: qtyWH });
         }
@@ -2702,7 +2706,8 @@ function sendDailyMorningSummary() {
     var prodSh = ss2.getSheetByName(SHEET_PRODUCTS);
     if (prodSh) {
       var prodRows = prodSh.getDataRange().getDisplayValues();
-      for (var pi = 1; pi < prodRows.length; pi++) {
+      // ชีตนี้มี header 2 แถว (แถว 1 + แถว 2 = "รหัสสินค้า/ชื่อสินค้า") — เทียบ readSysQty_ ที่เริ่ม i=2
+      for (var pi = 2; pi < prodRows.length; pi++) {
         var pr = prodRows[pi];
         var psku = (pr[COL_PROD_SKU - 1] || '').toString().trim();
         var pname = (pr[2] || '').toString().trim();
