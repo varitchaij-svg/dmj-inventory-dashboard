@@ -2771,10 +2771,24 @@ function sweepEmptyShelfLocations() {
     whMap[sku] = n;
   }
 
-  // 2) หาแถวชั้นวางที่ควรนำออก: SKU มีในระบบและคลัง <= 0
+  // 1b) เซ็ต SKU ที่เป็นสินค้า MTO (งานจัดพิเศษ) — คลังเป็น 0 ตลอดโดยธรรมชาติ
+  //     ไม่ใช่เพราะขายหมด → ยกเว้น ไม่ลบชั้น (อ่านหมวดจากชีต "ข้อมูลสินค้า" col F = แหล่งเดียวกับที่แอปใช้)
+  const mtoSet = {};
+  try {
+    const metaSh = ss.getSheetByName(SHEET_PRODUCT_META);
+    if (metaSh) {
+      const mRows = metaSh.getDataRange().getDisplayValues();
+      for (let i = 1; i < mRows.length; i++) {
+        const s = String(mRows[i][COL_PROD_SKU - 1] || "").trim().toUpperCase();  // B
+        if (s && String(mRows[i][5] || "").includes("Made to Order")) mtoSet[s] = true;  // F = หมวด
+      }
+    }
+  } catch (e) { Logger.log("sweep mtoSet error: " + e); }
+
+  // 2) หาแถวชั้นวางที่ควรนำออก: SKU มีในระบบและคลัง <= 0 (ยกเว้น MTO)
   //    (SKU ที่ไม่มีในชีตสต็อกเลย → ไม่รู้จำนวน → ข้าม ไม่ลบ เพื่อความปลอดภัย)
   const lockRows = lockSh.getDataRange().getValues();
-  const toRemove = [];  // { rowNum, sku, loc, qty, sysQty }
+  const toRemove = [];  // { rowNum, sku, loc, qty }
   let totalDataRows = 0;
   for (let i = 1; i < lockRows.length; i++) {
     const r = lockRows[i];
@@ -2782,6 +2796,7 @@ function sweepEmptyShelfLocations() {
     const loc = String(r[COL_LOCK_KEY - 1] || "").trim();
     if (!sku || !loc) continue;
     totalDataRows++;
+    if (mtoSet[sku]) continue;                // MTO → เว้นไว้ ไม่ลบ
     if (whMap[sku] === undefined) continue;   // ไม่รู้จำนวน → ข้าม
     if (whMap[sku] <= 0) {
       toRemove.push({
