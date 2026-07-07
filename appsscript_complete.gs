@@ -387,6 +387,9 @@ function doPost(e) {
     if (data.addNewProduct) {
       return addNewProduct(ss, data.product || {}, actor);
     }
+    if (data.addPurchaseIn) {
+      return addPurchaseIn(ss, data.purchase || {}, actor);
+    }
     if (data.checkSkuExists) {
       return checkSkuExists(ss, data.sku);
     }
@@ -2350,6 +2353,178 @@ function addNewProduct(ss, product, actor) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// ── ซื้อสินค้าเข้า/เติมสต็อก: สร้าง Purchase Order จริงใน ZORT → รับของเข้าคลัง ──
+// purchase = { supplier, warehousecode, date:"yyyy-MM-dd", items:[{ sku, name, qty, unitPrice }] }
+// ZORT AddPurchaseOrder (status="Success") = ใบสั่งซื้อที่รับของแล้ว → ZORT เพิ่มสต็อกให้เอง
+//   จึง "ไม่" เรียก IncreaseStock ซ้ำ (กัน double-count) · bump ชีตสต็อก local ให้เห็นทันที
+//   (ZORT stock sync รอบหน้าจะ set ทับด้วยค่าจริง = ตรงกัน ถ้า Success เพิ่มสต็อกตามคาด)
+// field name ยืนยันจาก GetPurchaseOrders ที่อ่านอยู่แล้ว (symmetric): number/customername/
+//   warehousecode/purchaseorderdate(String)/status/list[].sku,name,number,pricepernumber
+// error: ถ้า ZORT ปฏิเสธ → ไม่เขียนชีต/ไม่ bump สต็อก (กัน state ค้างครึ่งทาง) เหมือน addNewProduct
+function addPurchaseIn(ss, purchase, actor) {
+  const supplier = String((purchase && purchase.supplier) || "").trim();
+  const wh = (purchase && purchase.warehousecode === WH_FRONTSTORE) ? WH_FRONTSTORE : WH_SAI5;
+  const rawItems = (purchase && Array.isArray(purchase.items)) ? purchase.items : [];
+
+  // 1) sanitize + validate: SKU ต้องมีอยู่จริง (ซื้อเข้า = เติมของเดิม ไม่ใช่สร้างใหม่)
+  const existing = collectExistingSkus_(ss);
+  const items = [];
+  for (const it of rawItems) {
+    const sku = String((it && it.sku) || "").trim().toUpperCase();
+    const qty = Math.floor(Number(it && it.qty) || 0);
+    const unitPrice = Math.max(0, Number(it && it.unitPrice) || 0);
+    if (!sku || qty <= 0) continue;
+    if (!existing[sku]) return error("ไม่พบสินค้า \"" + sku + "\" ในระบบ — ต้องเพิ่มสินค้าใหม่ก่อนจึงซื้อเข้าได้");
+    items.push({ sku: sku, name: String((it && it.name) || "").trim(), qty: qty, unitPrice: unitPrice });
+  }
+  if (items.length === 0) return error("ไม่มีรายการซื้อ — เลือกสินค้าและใส่จำนวนก่อน");
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่ ลองใหม่อีกครั้ง");
+  try {
+    const tz = "Asia/Bangkok";
+    let dateStr = String((purchase && purchase.date) || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) dateStr = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd");
+
+    // 2) ยิง ZORT AddPurchaseOrder
+    const list = items.map(function (it) {
+      return {
+        sku: it.sku, name: it.name, number: it.qty,
+        pricepernumber: it.unitPrice, discount: "0",
+        totalprice: it.qty * it.unitPrice,
+      };
+    });
+    const amount = list.reduce(function (s, x) { return s + x.totalprice; }, 0);
+    const payload = {
+      status: "Success",            // รับของแล้ว → ZORT รับสต็อกเข้าคลังให้
+      warehousecode: wh,
+      purchaseorderdate: dateStr,
+      amount: amount,
+      list: list,
+    };
+    if (supplier) payload.customername = supplier; // ช่องซัพพลายเออร์ (= po.customername ตอนอ่าน)
+
+    const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
+    const res = UrlFetchApp.fetch(ZORT_BASE + "/PurchaseOrder/AddPurchaseOrder", {
+      method: "post", headers: headers,
+      payload: JSON.stringify(payload), muteHttpExceptions: true,
+    });
+    Logger.log("AddPurchaseOrder: HTTP " + res.getResponseCode() + " — " + res.getContentText().substring(0, 400));
+    const zErr = zortRespError_(res);
+    if (zErr) {
+      logZortFailure_("ซื้อสินค้าเข้า", "SKU: " + items.map(function (i) { return i.sku; }).join(",") + " | " + zErr);
+      return error("สร้างใบซื้อใน ZORT ไม่สำเร็จ: " + zErr);
+    }
+    // เลข PO ที่ ZORT คืน (ถ้ามี) — เผื่อ field name หลายแบบ
+    let poNum = "";
+    try {
+      const j = JSON.parse(res.getContentText());
+      poNum = String(j.number || j.purchaseordernumber || j.id || "").trim();
+    } catch (e) { /* ignore */ }
+
+    // 3) เขียนชีต "รายการซื้อสินค้า" (คอลัมน์ตาม readPurchases_) → เห็นทันทีไม่ต้องรอ syncZortPurchases
+    const purSh = ss.getSheetByName(SHEET_PURCHASES);
+    if (purSh) {
+      const rows = items.map(function (it) {
+        const row = new Array(28).fill("");
+        row[1] = "ซื้อเข้า"; row[2] = poNum; row[4] = supplier;
+        row[11] = dateStr; row[19] = "สำเร็จ"; row[20] = wh;
+        row[24] = it.sku; row[25] = it.name; row[26] = it.qty; row[27] = it.unitPrice;
+        return row;
+      });
+      const startRow = Math.max(purSh.getLastRow() + 1, 3);
+      purSh.getRange(startRow, 1, rows.length, 28).setValues(rows);
+    }
+
+    // 4) bump สต็อก local ให้เห็นทันที (ZORT sync รอบหน้า set ทับด้วยค่าจริง)
+    bumpStockSheet_(ss, items, wh);
+
+    writeAuditLog_(actor || "ไม่ระบุ", "ซื้อสินค้าเข้า",
+      items.map(function (i) { return i.sku; }).join(","),
+      auditDetail_({ after: { supplier: supplier, wh: wh, poNum: poNum, amount: amount,
+        items: items.map(function (i) { return i.sku + "×" + i.qty; }) }, note: "สร้าง PO ZORT + รับเข้าคลัง" }));
+
+    invalidateCache_(); // bump dmj_last_write_ts ให้เครื่องอื่นเห็น
+    return ok({ poNum: poNum, count: items.length, amount: amount, warehousecode: wh });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ── bump จำนวนในชีตสต็อก (SHEET_PRODUCTS) แบบบวกเพิ่ม ตามคลัง ──
+// ให้เห็นทันทีก่อน ZORT stock sync (ซึ่งจะ set ทับด้วยค่า absolute รอบถัดไป)
+function bumpStockSheet_(ss, items, wh) {
+  const sh = ss.getSheetByName(SHEET_PRODUCTS);
+  if (!sh || !items || !items.length) return;
+  const col = (wh === WH_FRONTSTORE) ? COL_PROD_QTYFS : COL_PROD_QTYWH; // G=หน้าร้าน · H=คลัง
+  const bySku = {};
+  items.forEach(function (it) { bySku[it.sku] = (bySku[it.sku] || 0) + it.qty; });
+  const values = sh.getDataRange().getValues();
+  let changed = false;
+  for (let i = 1; i < values.length; i++) {
+    const s = String(values[i][COL_PROD_SKU - 1] || "").trim().toUpperCase();
+    if (bySku[s] != null) {
+      const cur = Number(values[i][col - 1]) || 0;
+      sh.getRange(i + 1, col).setValue(cur + bySku[s]);
+      changed = true;
+    }
+  }
+  if (changed) SpreadsheetApp.flush();
+}
+
+// ── explore: ยิง AddPurchaseOrder ทดสอบ 1 ใบ (เจ้าของรันเองใน editor ครั้งเดียว) ──
+// ตรวจ 2 อย่าง: (1) payload ผ่านไหม (2) สต็อกใน ZORT เพิ่มจริงไหมหลัง status="Success"
+// แก้ TEST_SKU เป็น SKU จริงที่มีอยู่ก่อนรัน แล้วดู Logger เทียบ stock ก่อน/หลัง
+function exploreAddPurchaseOrder() {
+  const TEST_SKU = "REPLACE_WITH_REAL_SKU"; // ← แก้เป็น SKU จริงก่อนรัน
+  const TEST_QTY = 1;
+  const wh = WH_SAI5;
+  const tz = "Asia/Bangkok";
+
+  const before = fetchZortStockForSku_(TEST_SKU, wh);
+  Logger.log("stock ก่อน (" + TEST_SKU + " @ " + wh + "): " + before);
+
+  const payload = {
+    status: "Success",
+    warehousecode: wh,
+    purchaseorderdate: Utilities.formatDate(new Date(), tz, "yyyy-MM-dd"),
+    amount: TEST_QTY,
+    customername: "ทดสอบระบบ (ลบทิ้งได้)",
+    list: [{ sku: TEST_SKU, name: "ทดสอบ", number: TEST_QTY, pricepernumber: 1, discount: "0", totalprice: TEST_QTY }],
+  };
+  const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
+  const res = UrlFetchApp.fetch(ZORT_BASE + "/PurchaseOrder/AddPurchaseOrder", {
+    method: "post", headers: headers, payload: JSON.stringify(payload), muteHttpExceptions: true,
+  });
+  Logger.log("AddPurchaseOrder HTTP " + res.getResponseCode());
+  Logger.log("response: " + res.getContentText().substring(0, 1000));
+
+  Utilities.sleep(2000);
+  const after = fetchZortStockForSku_(TEST_SKU, wh);
+  Logger.log("stock หลัง (" + TEST_SKU + " @ " + wh + "): " + after);
+  Logger.log(after > before
+    ? "✅ status=Success เพิ่มสต็อกจริง (+"+(after-before)+") — โค้ด addPurchaseIn ถูกต้อง ไม่ต้องแก้"
+    : "⚠️ สต็อกไม่เพิ่ม — ต้องเพิ่มการเรียก IncreaseProductStockList ใน addPurchaseIn (แจ้ง dev)");
+}
+
+// อ่าน stock ปัจจุบันของ SKU เดียวจาก ZORT (targeted keyword) — ใช้ตอน explore
+function fetchZortStockForSku_(sku, wh) {
+  const clean = String(sku || "").trim().toUpperCase();
+  if (!clean) return 0;
+  try {
+    const url = ZORT_BASE + "/Product/GetProducts?page=1&limit=50&keyword=" + encodeURIComponent(clean) +
+                (wh ? "&warehousecode=" + encodeURIComponent(wh) : "");
+    const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+    const json = JSON.parse(res.getContentText());
+    const list = (json && json.list) ? json.list : [];
+    for (const p of list) {
+      const s = String(p.sku || p.barcode || "").trim().toUpperCase();
+      if (s === clean) return Number(p.stock || p.availablestock || 0) || 0;
+    }
+  } catch (e) { Logger.log("fetchZortStockForSku_ error: " + e); }
+  return 0;
 }
 
 // ── ดึงรูปเฉพาะ SKU เดียวจาก ZORT (on-demand หลังอัปรูปในแอป ZORT) ──

@@ -6902,6 +6902,24 @@ async function syncAddProduct(product) {
   } catch (err) { return { success: false, error: err.message }; }
 }
 
+// ─── ซื้อสินค้าเข้า/เติมสต็อก → สร้าง PO จริงใน ZORT ───
+// purchase = { supplier, warehousecode, date, items:[{sku,name,qty,unitPrice}] }
+async function syncPurchaseIn(purchase) {
+  if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
+  try {
+    const res = await fetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        addPurchaseIn: true,
+        purchase,
+        actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
+      }),
+    });
+    return await res.json();
+  } catch (err) { return { success: false, error: err.message }; }
+}
+
 // ดึงรูปเฉพาะ SKU เดียวจาก ZORT (หลังอัปรูปในแอป ZORT) → คืน { success, data:{imageUrl} }
 async function syncFetchProductImage(sku) {
   if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
@@ -6932,6 +6950,7 @@ async function checkSkuExistsRemote(sku) {
 function AddProductView({ data, role, onAdded }) {
   const products = data.products || [];
   const [toast, showToast, hideToast] = useToast();
+  const [topMode, setTopMode] = uS("add");   // "add"=เพิ่มสินค้าใหม่ · "buy"=ซื้อเข้า/เติมสต็อก
 
   // ── คิวเพิ่มสินค้าหลายตัวพร้อมกัน (batch สูงสุด 10) ──
   const MAX_BATCH = 10;
@@ -7160,12 +7179,34 @@ function AddProductView({ data, role, onAdded }) {
       <Toast toast={toast} onClose={hideToast} />
       <div style={{ display: "flex", flexDirection: "column", gap: 14, maxWidth: 560, margin: "0 auto", width: "100%" }}>
         <div>
-          <div style={{ fontSize: 17, fontWeight: 800 }}>➕ เพิ่มสินค้าใหม่</div>
+          <div style={{ fontSize: 17, fontWeight: 800 }}>
+            {topMode === "add" ? "➕ เพิ่มสินค้าใหม่" : "📥 ซื้อสินค้าเข้า (เติมสต็อก)"}
+          </div>
           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
-            สร้างสินค้าใหม่เข้า ZORT — รหัส SKU ห้ามซ้ำ · หน่วย = ชิ้น
+            {topMode === "add"
+              ? "สร้างสินค้าใหม่เข้า ZORT — รหัส SKU ห้ามซ้ำ · หน่วย = ชิ้น"
+              : "เติมของสินค้าเดิม — สร้างใบสั่งซื้อจริงใน ZORT + รับเข้าคลังทันที"}
           </div>
         </div>
 
+        {/* สลับโหมด: เพิ่มสินค้าใหม่ / ซื้อเข้า */}
+        <div style={{ display: "flex", border: "1.5px solid var(--bdr)", borderRadius: 12, overflow: "hidden" }}>
+          {[{ v: "add", l: "➕ เพิ่มสินค้าใหม่" }, { v: "buy", l: "📥 ซื้อเข้า/เติมสต็อก" }].map(o => (
+            <button key={o.v} type="button" onClick={() => setTopMode(o.v)}
+              style={{
+                flex: 1, minHeight: 48, border: "none", cursor: "pointer",
+                fontSize: 14, fontWeight: 800, fontFamily: "inherit",
+                background: topMode === o.v ? "var(--g-600)" : "#fff",
+                color: topMode === o.v ? "#fff" : "var(--muted)",
+              }}>{o.l}</button>
+          ))}
+        </div>
+
+        {topMode === "buy" && (
+          <PurchaseInPanel data={data} showToast={showToast} onDone={onAdded} />
+        )}
+
+        {topMode === "add" && (
         <Card padding={true}>
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
@@ -7526,8 +7567,223 @@ function AddProductView({ data, role, onAdded }) {
             )}
           </div>
         </Card>
+        )}
       </div>
     </>
+  );
+}
+
+// ─── PurchaseInPanel — ซื้อสินค้าเข้า/เติมสต็อก (สร้าง PO จริงใน ZORT) ───
+// ค้นหาสินค้าที่มีอยู่ → ใส่ลงตะกร้า (จำนวน+ราคาต่อหน่วย) → เลือกซัพพลายเออร์+คลัง+วันที่ → บันทึก
+function PurchaseInPanel({ data, showToast, onDone }) {
+  const products = data.products || [];
+  const [search, setSearch]     = uS("");
+  const [cart, setCart]         = uS([]);   // [{ sku, name, qty, unitPrice }]
+  const [supplier, setSupplier] = uS("");
+  const [wh, setWh]             = uS("W0002");
+  const [dateStr, setDateStr]   = uS(() => new Date().toISOString().slice(0, 10));
+  const [saving, setSaving]     = uS(false);
+
+  // ซัพพลายเออร์ที่เคยใช้ (ชิปแนะนำ)
+  const allSuppliers = uM(() => {
+    const cnt = {};
+    products.forEach(p => {
+      const v = (p.lastSupplier || p.vendor || "").trim();
+      if (v) cnt[v] = (cnt[v] || 0) + 1;
+    });
+    return Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a]).slice(0, 8);
+  }, [products]);
+
+  const cartSkus = uM(() => new Set(cart.map(c => c.sku)), [cart]);
+
+  // ค้นหาสินค้า (multi-token AND) — ตัดตัวที่อยู่ในตะกร้าแล้ว + ตัด MTO
+  const matches = uM(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return [];
+    const toks = q.split(/\s+/).filter(Boolean);
+    const out = [];
+    for (const p of products) {
+      const sku = String(p.sku || "").trim().toUpperCase();
+      if (!sku || cartSkus.has(sku)) continue;
+      const cat = String(p.category || p.cat || "");
+      if (cat.includes("Made to Order")) continue;
+      const hay = sku.toLowerCase() + " " + String(p.name || "").toLowerCase();
+      if (!toks.every(t => hay.includes(t))) continue;
+      out.push({ sku, name: p.name || "", qtyWH: p.qtyWH || 0, qtyStore: p.qtyStore || 0 });
+      if (out.length >= 15) break;
+    }
+    return out;
+  }, [search, products, cartSkus]);
+
+  const addToCart = (p) => {
+    setCart(cs => [...cs, { sku: p.sku, name: p.name, qty: 1, unitPrice: 0 }]);
+    setSearch("");
+  };
+  const updateItem = (idx, field, val) => {
+    setCart(cs => cs.map((c, i) => i === idx ? { ...c, [field]: val } : c));
+  };
+  const removeItem = (idx) => setCart(cs => cs.filter((_, i) => i !== idx));
+
+  const totalQty    = cart.reduce((s, c) => s + (Math.floor(Number(c.qty) || 0)), 0);
+  const totalAmount = cart.reduce((s, c) => s + (Math.floor(Number(c.qty) || 0)) * (Number(c.unitPrice) || 0), 0);
+  const canSave = !saving && cart.length > 0 && cart.every(c => Math.floor(Number(c.qty) || 0) > 0);
+
+  const handleSave = async () => {
+    if (!canSave) return;
+    setSaving(true);
+    const items = cart.map(c => ({
+      sku: c.sku, name: c.name,
+      qty: Math.floor(Number(c.qty) || 0),
+      unitPrice: Math.max(0, Number(c.unitPrice) || 0),
+    }));
+    const r = await syncPurchaseIn({ supplier: supplier.trim(), warehousecode: wh, date: dateStr, items });
+    setSaving(false);
+    if (r && r.success) {
+      const po = (r.data && r.data.poNum) ? ` (PO ${r.data.poNum})` : "";
+      showToast("success", `รับเข้าคลังสำเร็จ ${items.length} รายการ${po} 🎉`, "✅", 5000);
+      setCart([]); setSupplier("");
+      if (onDone) onDone();
+    } else {
+      showToast("error", `บันทึกไม่สำเร็จ — ${(r && r.error) || "ลองใหม่"}`, "❌", 6000);
+    }
+  };
+
+  const inputStyle = {
+    width: "100%", padding: "11px 13px", borderRadius: 10,
+    border: "1.5px solid var(--bdr)", fontSize: 15, fontFamily: "inherit",
+    background: "#fff", boxSizing: "border-box", minWidth: 0,
+  };
+  const labelStyle = { fontSize: 13, fontWeight: 700, color: "var(--text)", marginBottom: 6, display: "block" };
+
+  return (
+    <Card padding={true}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+
+        {/* ค้นหาสินค้าเพิ่มเข้าตะกร้า */}
+        <div>
+          <label style={labelStyle}>ค้นหาสินค้าที่จะซื้อเข้า *</label>
+          <input type="text" placeholder="🔍 พิมพ์ชื่อ/รหัส SKU"
+            value={search} onChange={e => setSearch(e.target.value)} style={inputStyle} />
+          {matches.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 8,
+                          maxHeight: 260, overflowY: "auto", border: "1px solid var(--bdr)", borderRadius: 10, padding: 6 }}>
+              {matches.map(p => (
+                <button key={p.sku} type="button" onClick={() => addToCart(p)}
+                  style={{ display: "flex", alignItems: "center", gap: 8, textAlign: "left",
+                           background: "#fff", border: "1px solid var(--bdr)", borderRadius: 9,
+                           padding: "9px 11px", cursor: "pointer", fontFamily: "inherit", minHeight: 44 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      <span style={{ fontFamily: "monospace", color: "var(--g-700)" }}>{p.sku}</span> · {p.name}
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--muted)" }}>คลัง {p.qtyWH} · หน้าร้าน {p.qtyStore}</div>
+                  </div>
+                  <span style={{ flexShrink: 0, fontSize: 20, color: "var(--g-600)", fontWeight: 800 }}>＋</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {search.trim() && matches.length === 0 && (
+            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
+              ไม่พบสินค้า — ถ้าเป็นของใหม่ ให้สลับไปแท็บ “➕ เพิ่มสินค้าใหม่” ก่อน
+            </div>
+          )}
+        </div>
+
+        {/* ตะกร้าซื้อเข้า */}
+        {cart.length > 0 && (
+          <div style={{ border: "1.5px solid var(--g-500)", borderRadius: 12, background: "var(--g-50)", padding: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "var(--g-700)", marginBottom: 8 }}>
+              🧺 รายการซื้อเข้า ({cart.length})
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {cart.map((c, i) => (
+                <div key={c.sku + i} style={{ background: "#fff", border: "1px solid var(--bdr)", borderRadius: 9, padding: "9px 10px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        <span style={{ fontFamily: "monospace", color: "var(--g-700)" }}>{c.sku}</span> · {c.name}
+                      </div>
+                    </div>
+                    <button type="button" onClick={() => removeItem(i)} disabled={saving}
+                      style={{ flexShrink: 0, width: 32, height: 32, borderRadius: 8, border: "1px solid var(--bdr)",
+                               background: "#fff", cursor: "pointer", fontSize: 16, color: "var(--muted)", lineHeight: 1 }}>×</button>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>จำนวนรับเข้า *</div>
+                      <input type="number" inputMode="numeric" min="1" placeholder="0"
+                        value={c.qty} onChange={e => updateItem(i, "qty", e.target.value)}
+                        style={{ ...inputStyle, padding: "9px 11px" }} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>ราคาทุน/หน่วย (บาท)</div>
+                      <input type="number" inputMode="decimal" min="0" placeholder="0"
+                        value={c.unitPrice} onChange={e => updateItem(i, "unitPrice", e.target.value)}
+                        style={{ ...inputStyle, padding: "9px 11px" }} />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, fontSize: 13, fontWeight: 800, color: "var(--g-700)" }}>
+              <span>รวม {totalQty} ชิ้น</span>
+              <span>฿{totalAmount.toLocaleString()}</span>
+            </div>
+          </div>
+        )}
+
+        {/* ซัพพลายเออร์ */}
+        <div>
+          <label style={labelStyle}>ซัพพลายเออร์/ร้านที่ซื้อ <span style={{ fontWeight: 400, color: "var(--muted)" }}>(ถ้ามี)</span></label>
+          {allSuppliers.length > 0 && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+              {allSuppliers.map(s => (
+                <button key={s} type="button" onClick={() => setSupplier(s)}
+                  style={{ minHeight: 40, padding: "6px 12px", borderRadius: 999, cursor: "pointer",
+                           fontSize: 12.5, fontWeight: 600, fontFamily: "inherit",
+                           border: "1.5px solid " + (supplier.trim() === s ? "var(--g-500)" : "var(--bdr)"),
+                           background: supplier.trim() === s ? "var(--g-50)" : "#fff",
+                           color: supplier.trim() === s ? "var(--g-700)" : "var(--text)" }}>{s}</button>
+              ))}
+            </div>
+          )}
+          <input type="text" placeholder="🏪 พิมพ์ชื่อร้าน/ซัพพลายเออร์"
+            value={supplier} onChange={e => setSupplier(e.target.value)} style={inputStyle} />
+        </div>
+
+        {/* คลัง + วันที่ */}
+        <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <label style={labelStyle}>รับเข้าคลัง</label>
+            <div style={{ display: "flex", border: "1.5px solid var(--bdr)", borderRadius: 10, overflow: "hidden" }}>
+              {[{ v: "W0002", l: "🏭 คลังสาย5" }, { v: "W0001", l: "🏪 หน้าร้าน" }].map(o => (
+                <button key={o.v} type="button" onClick={() => setWh(o.v)}
+                  style={{ flex: 1, minHeight: 46, border: "none", cursor: "pointer",
+                           fontSize: 12.5, fontWeight: 700, fontFamily: "inherit",
+                           background: wh === o.v ? "var(--g-600)" : "#fff",
+                           color: wh === o.v ? "#fff" : "var(--muted)" }}>{o.l}</button>
+              ))}
+            </div>
+          </div>
+          <div style={{ flex: "0 0 42%", minWidth: 0 }}>
+            <label style={labelStyle}>วันที่ซื้อ</label>
+            <input type="date" value={dateStr} onChange={e => setDateStr(e.target.value)} style={inputStyle} />
+          </div>
+        </div>
+
+        {/* บันทึก */}
+        <button onClick={handleSave} disabled={!canSave} className="btn primary"
+          style={{ padding: "14px 0", fontSize: 16, fontWeight: 800, opacity: canSave ? 1 : 0.45 }}>
+          {saving
+            ? <><span className="spin" style={{ width: 15, height: 15, borderWidth: 2, marginRight: 8 }} /> กำลังบันทึก…</>
+            : (cart.length > 0 ? `📥 รับเข้าคลัง (${cart.length})` : "📥 เลือกสินค้าก่อน")}
+        </button>
+        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: -6, textAlign: "center" }}>
+          บันทึกแล้วจะสร้างใบสั่งซื้อใน ZORT + เพิ่มสต็อกเข้าคลังทันที
+        </div>
+      </div>
+    </Card>
   );
 }
 
