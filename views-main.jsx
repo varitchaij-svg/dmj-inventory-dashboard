@@ -7107,11 +7107,21 @@ function AddProductView({ data, role, onAdded }) {
   const isDup = dupLocal || dupRemote;
   const canSave = !saving && skuUp !== "" && name.trim() !== "" && effectiveCat !== "" && !isDup && !(serverCheck && serverCheck.checking);
 
-  // สร้าง object สินค้าจากค่าในฟอร์มปัจจุบัน
+  // ── ราคา: กรอก "ราคาส่ง" → ตั้ง "ราคาปลีก" = ส่ง × 1.25 (ปัดเป็นจำนวนเต็ม) ──
+  const RETAIL_MULT = 1.25;
+  const wholesale = Number(price) || 0;
+  const retailPrice = wholesale > 0 ? Math.round(wholesale * RETAIL_MULT) : 0;
+  // ชื่อสีจากรหัส variant (เฉพาะโหมดเลือกจากตารางสี) — โหมดพิมพ์เอง (ขนาด/ลำดับ) ไม่มีชื่อสี
+  const colorName = (variantSrc === "color") ? (VARIANT_CODE_TO_NAME[variantCode2] || "") : "";
+  // ชื่อเต็มที่จะบันทึก = ชื่อ + สี + ราคาปลีก (เว้นวรรคคั่น, ข้ามส่วนที่ว่าง) เช่น "ป๊อปปี้B. น้ำเงิน 148"
+  const composedName = [name.trim(), colorName, retailPrice > 0 ? String(retailPrice) : ""]
+    .filter(Boolean).join(" ");
+
+  // สร้าง object สินค้าจากค่าในฟอร์มปัจจุบัน (name = ชื่อเต็มประกอบ, sellprice = ราคาปลีก)
   const buildCurrentProduct = () => ({
     sku: skuUp,
-    name: name.trim(),
-    sellprice: Number(price) || 0,
+    name: composedName,
+    sellprice: retailPrice,
     category: effectiveCat,
     qty: Math.max(0, Math.floor(Number(qty) || 0)),
     warehousecode: wh,
@@ -7452,19 +7462,34 @@ function AddProductView({ data, role, onAdded }) {
               </div>
             </div>
 
-            {/* ชื่อ */}
+            {/* ชื่อ — ใส่แค่ชื่อ (สี+ราคาต่อให้อัตโนมัติ) */}
             <div>
-              <label style={labelStyle}>ชื่อสินค้า *</label>
-              <input type="text" placeholder="เช่น แจกันเซรามิกขาว ทรงสูง 30cm"
+              <label style={labelStyle}>
+                ชื่อสินค้า * <span style={{ fontWeight: 400, color: "var(--muted)" }}>(ใส่แค่ชื่อ — สี/ราคาต่อท้ายให้อัตโนมัติ)</span>
+              </label>
+              <input type="text" placeholder="เช่น ป๊อปปี้B."
                 value={name} onChange={e => setName(e.target.value)} style={inputStyle} />
             </div>
 
-            {/* ราคาขาย */}
+            {/* ราคาส่ง → ตั้งราคาปลีก ×1.25 อัตโนมัติ */}
             <div>
-              <label style={labelStyle}>ราคาขาย (บาท)</label>
+              <label style={labelStyle}>ราคาส่ง (บาท)</label>
               <input type="number" inputMode="decimal" min="0" placeholder="0"
                 value={price} onChange={e => setPrice(e.target.value)} style={inputStyle} />
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>
+                {wholesale > 0
+                  ? <>ราคาปลีกที่จะตั้ง (×1.25): <b style={{ color: "var(--g-700)" }}>฿{retailPrice.toLocaleString()}</b></>
+                  : "ใส่ราคาส่ง → ระบบคูณ 1.25 เป็นราคาปลีกให้อัตโนมัติ"}
+              </div>
             </div>
+
+            {/* ชื่อเต็มที่จะบันทึกจริง = ชื่อ + สี + ราคาปลีก */}
+            {composedName && (
+              <div style={{ padding: "10px 12px", borderRadius: 10, background: "var(--g-50)", border: "1.5px solid var(--g-500)" }}>
+                <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>ชื่อที่จะบันทึกจริง (ชื่อ + สี + ราคา)</div>
+                <div style={{ fontSize: 15, fontWeight: 800, color: "var(--g-700)" }}>{composedName}</div>
+              </div>
+            )}
 
             {/* ซัพพลายเออร์ (TAG) — ไม่บังคับ */}
             <div>
