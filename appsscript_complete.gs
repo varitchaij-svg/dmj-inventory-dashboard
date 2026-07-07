@@ -2648,6 +2648,7 @@ function syncZortBoth() {
 // ชื่อไม่มี _ ต่อท้าย → โผล่ใน dropdown ของ GAS editor ให้รัน/ทดสอบเองได้
 function sendDailyMorningSummary() {
   try {
+    var props = PropertiesService.getScriptProperties();
     var ss2 = SpreadsheetApp.openById(SHEET_ID);
     var dateStr2 = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy');
 
@@ -2676,39 +2677,109 @@ function sendDailyMorningSummary() {
       }
     }
 
-    // Top 3 สินค้าใกล้หมด — สแกนสต็อกคลัง (col H) เทียบ threshold เอง (self-contained)
-    var threshold = parseInt(PropertiesService.getScriptProperties().getProperty('LOW_STOCK_THRESHOLD') || '5');
-    var lowStockItems = [];
+    // ── velocity ต่อ SKU = ยอดขายเฉลี่ย 3 เดือนล่าสุด (ชิ้น/เดือน) ──
+    // ใช้หา "ขายดีแต่ใกล้หมด" แทนการเรียงจาก "จำนวนน้อยสุด" (ซึ่งดันของตาย/0/แถว error ขึ้นมาตลอด)
+    var vel = {};
+    try {
+      var ms = readMonthlySales_();
+      var sortedMonths = (ms.monthLabels || []).slice().sort(function(a, b) {
+        var pa = a.split('/'), pb = b.split('/');
+        return (pa[1] - pb[1]) || (pa[0] - pb[0]);   // MM/YYYY → เรียงตามปีแล้วเดือน
+      });
+      var recentMonths = sortedMonths.slice(-3);
+      Object.keys(ms.perSku || {}).forEach(function(sku) {
+        var mo = ms.perSku[sku].months || {};
+        var sum = 0, n = 0;
+        recentMonths.forEach(function(mk) { if (mo[mk]) { sum += (mo[mk].qty || 0); n++; } });
+        vel[sku.toUpperCase()] = n > 0 ? (sum / n) : 0;
+      });
+    } catch (e) { Logger.log('Daily summary velocity error: ' + e); }
+    var velAvailable = Object.keys(vel).length > 0;
+
+    // ── สแกนสต็อกคลัง หา "ควรสั่งด่วน" = ขายดี + ใกล้หมด (coverage เหลือน้อย) ──
+    var threshold = parseInt(props.getProperty('LOW_STOCK_THRESHOLD') || '5');
+    var reorder = [];
     var prodSh = ss2.getSheetByName(SHEET_PRODUCTS);
     if (prodSh) {
       var prodRows = prodSh.getDataRange().getDisplayValues();
       for (var pi = 1; pi < prodRows.length; pi++) {
         var pr = prodRows[pi];
-        var psku = (pr[1] || '').toString().trim();
-        if (!psku) continue;
-        var pqty = parseInt(pr[7]) || 0; // col H = index 7 (0-indexed) = คลัง
-        if (pqty < threshold) lowStockItems.push({ sku: psku, name: (pr[2] || '').toString().trim(), qty: pqty });
+        var psku = (pr[COL_PROD_SKU - 1] || '').toString().trim();
+        var pname = (pr[2] || '').toString().trim();
+        // ข้ามแถว placeholder/หัวตาราง — SKU จริงต้องมีทั้งตัวอักษรอังกฤษ + ตัวเลข
+        // (แถวขยะเช่น "รหัสสินค้า" เป็นภาษาไทยล้วน → ตกกรองนี้ ไม่หลุดเข้าลิสต์อีก)
+        if (!psku || !/[A-Za-z]/.test(psku) || !/\d/.test(psku)) continue;
+        var qtyCell = (pr[COL_PROD_QTYWH - 1] || '').toString().trim();
+        if (qtyCell === '') continue;   // ช่องว่าง = ไม่มีข้อมูล ไม่ใช่ 0 จริง
+        var qtyWH = parseInt(qtyCell.replace(/,/g, ''));
+        if (isNaN(qtyWH)) continue;
+        var v = vel[psku.toUpperCase()] || 0;
+        if (velAvailable) {
+          // มีข้อมูลยอดขาย → แจ้งเฉพาะของที่ "ขายอยู่จริง" และ cover เหลือน้อย
+          if (v <= 0) continue;                     // ไม่มียอดขาย = ไม่เร่งด่วน (ตัด dead/0 junk)
+          var weeksLeft = qtyWH <= 0 ? 0 : (qtyWH / v) * 4.3;  // velocity/เดือน → สัปดาห์
+          if (weeksLeft <= 3 || qtyWH < threshold) {
+            reorder.push({ sku: psku, name: pname, qty: qtyWH, vel: v, weeks: weeksLeft });
+          }
+        } else {
+          // ไม่มีข้อมูลยอดขายเลย → fallback แบบเดิม (จำนวน < threshold) แต่กรอง junk แล้ว
+          if (qtyWH < threshold) {
+            reorder.push({ sku: psku, name: pname, qty: qtyWH, vel: 0, weeks: null });
+          }
+        }
       }
     }
-    var top3 = lowStockItems.slice().sort(function(a, b) { return a.qty - b.qty; }).slice(0, 3);
+    reorder.sort(function(a, b) {
+      if (velAvailable) return a.weeks - b.weeks;   // ใกล้หมดสุดขึ้นก่อน
+      return a.qty - b.qty;
+    });
+    var top = reorder.slice(0, 5);
 
-    // ส่งเฉพาะวันที่มีเรื่องแจ้ง (ประหยัด LINE quota — ปกติดีไม่ต้องรบกวน)
-    if (pendingOrders === 0 && mtoActive === 0 && top3.length === 0) {
-      Logger.log('Daily summary: ทุกอย่างปกติ ไม่มีเรื่องแจ้ง — skip LINE');
+    // ── delta เทียบเมื่อวาน (เก็บ snapshot ใน Script Property) ──
+    var prevSnap = {};
+    try { prevSnap = JSON.parse(props.getProperty('DAILY_SUMMARY_SNAP') || '{}'); } catch (e) {}
+    var dOrders = (prevSnap.pendingOrders != null) ? (pendingOrders - prevSnap.pendingOrders) : null;
+    var dMto    = (prevSnap.mtoActive != null)     ? (mtoActive - prevSnap.mtoActive)         : null;
+    // อัปเดต snapshot วันนี้เสมอ (ไม่ว่าจะส่ง LINE หรือไม่) เพื่อให้ delta พรุ่งนี้ถูกต้อง
+    props.setProperty('DAILY_SUMMARY_SNAP', JSON.stringify({
+      pendingOrders: pendingOrders, mtoActive: mtoActive,
+      date: Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyyMMdd')
+    }));
+
+    // ── ส่งเฉพาะเมื่อ "มีเรื่องต้องทำ" หรือ "มีการเปลี่ยนแปลงจากเมื่อวาน" ──
+    // (ถ้าทุกอย่างเหมือนเดิมเป๊ะ = ไม่มีข้อมูลใหม่ → เงียบ ประหยัด LINE quota + ไม่ฝึกให้เจ้าของเลิกอ่าน)
+    var hasChange = (dOrders != null && dOrders !== 0) || (dMto != null && dMto !== 0);
+    var hasActionable = top.length > 0 || pendingOrders > 0 || mtoActive > 0;
+    if (!hasActionable && !hasChange) {
+      Logger.log('Daily summary: ไม่มีเรื่องแจ้ง + ไม่เปลี่ยนจากเมื่อวาน — skip LINE');
       return;
+    }
+
+    function fmtDelta_(d) {
+      if (d == null || d === 0) return '';
+      return d > 0 ? ' (+' + d + ' จากเมื่อวาน)' : ' (' + d + ' จากเมื่อวาน)';
     }
 
     var sumLines = [
       '📋 สรุปเช้าวันนี้ — ' + dateStr2,
-      '📦 Orders ค้าง: ' + pendingOrders + ' รายการ',
-      '🎁 งานจัดพิเศษ: ' + mtoActive + ' งาน (กำลังจัด)'
+      '📦 Orders ค้าง: ' + pendingOrders + ' รายการ' + fmtDelta_(dOrders),
+      '🎁 งานจัดพิเศษ: ' + mtoActive + ' งาน' + fmtDelta_(dMto)
     ];
-    if (top3.length > 0) {
-      sumLines.push('⚠️ สต็อกใกล้หมด top 3:');
-      for (var ti = 0; ti < top3.length; ti++) {
-        var tp = top3[ti];
-        sumLines.push('  • ' + (tp.name || tp.sku) + ' (' + tp.sku + '): ' + tp.qty + ' ใน WH');
+    if (top.length > 0) {
+      sumLines.push(velAvailable ? '🔴 ควรสั่งด่วน (ขายดี+ใกล้หมด):' : '⚠️ สต็อกใกล้หมด:');
+      for (var ti = 0; ti < top.length; ti++) {
+        var t = top[ti];
+        if (velAvailable) {
+          var wk = (t.weeks <= 0) ? 'หมดแล้ว'
+                 : ('เหลือ ~' + (t.weeks < 1 ? t.weeks.toFixed(1) : Math.round(t.weeks)) + ' สัปดาห์');
+          sumLines.push('  • ' + (t.name || t.sku) + ' (' + t.sku + '): เหลือ ' + t.qty +
+                        ' · ขาย ~' + Math.round(t.vel) + '/ด. · ' + wk);
+        } else {
+          sumLines.push('  • ' + (t.name || t.sku) + ' (' + t.sku + '): เหลือ ' + t.qty + ' ใน WH');
+        }
       }
+    } else if (velAvailable) {
+      sumLines.push('✅ สินค้าขายดียังไม่มีตัวไหนใกล้หมด');
     }
     sendLineMessage_(sumLines.join('\n'));
     Logger.log('Daily summary LINE sent');

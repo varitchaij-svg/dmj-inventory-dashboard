@@ -961,7 +961,7 @@ function buildYoYSeries(monthLabels, monthlyByCat) {
   return { years, rows };
 }
 
-function OverviewView({ data, range, setRange, role }) {
+function OverviewView({ data, range, setRange, role, onNav }) {
   const rechartsReady = useRechartsReady(); // gate กราฟจนกว่า Recharts (defer) จะพร้อม
   const { products, monthLabels, monthlyByCat, totals, mtoGroups,
           dayLabels, dailyByCat } = data;
@@ -1209,6 +1209,22 @@ function OverviewView({ data, range, setRange, role }) {
     return { reorder, overstock, n };
   }, [sellable, months]);
 
+  // ── "เช้านี้ทำอะไร" — สรุป action ประจำวัน (คู่กับ LINE morning summary) ──
+  //   เน้นสิ่งที่ต้อง "ตัดสินใจ/ลงมือ" วันนี้ + แตะทะลุไปหน้าที่เกี่ยวข้อง (onNav)
+  const todayFocus = uM(() => {
+    const pendingOrders = (data.orders || []).filter(o => {
+      const s = (o.status || "").toString().trim();
+      return s && s !== "ส่งแล้ว" && s !== "จัดแล้ว";
+    }).length;
+    const mtoActive = (data.mtoJobs || []).filter(j =>
+      (j.status || "").toString().trim() === "กำลังจัด"
+    ).length;
+    // reuse velocity.reorder (ขายดี+ใกล้หมด) — เอา top 5 ที่ใกล้หมดสุด
+    const reorder = velocity.reorder.slice(0, 5);
+    const todayStr = new Date().toLocaleDateString("th-TH", { day:"2-digit", month:"2-digit", year:"numeric" });
+    return { pendingOrders, mtoActive, reorder, todayStr };
+  }, [data.orders, data.mtoJobs, velocity]);
+
   // ── Dead stock: holding inventory but no recent sales ────────────────
   const deadStock = uM(() => {
     // คำนวณ 2 เดือนปฏิทินจริงล่าสุด (ไม่ใช่ 2 เดือนสุดท้ายในไฟล์ ซึ่งอาจเก่าถ้าไม่ sync)
@@ -1447,6 +1463,80 @@ function OverviewView({ data, range, setRange, role }) {
             {value:"year",  label:"ทั้งปี"},
           ]}/>
         </div>
+      </div>
+
+      {/* ── การ์ด "เช้านี้ทำอะไร" — action ประจำวัน (คู่กับ LINE morning summary) ── */}
+      <div style={{
+        background:"#fff", border:"1.5px solid var(--bdr)", borderRadius:16,
+        padding:14, marginBottom:16,
+        boxShadow:"0 1px 3px rgba(0,0,0,.05)",
+      }}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+          <div style={{fontSize:15,fontWeight:800,color:"var(--g-800)"}}>📋 เช้านี้ทำอะไร</div>
+          <div style={{fontSize:12,color:"var(--g-500)"}}>{todayFocus.todayStr}</div>
+        </div>
+
+        {/* stat tiles — แตะทะลุไปหน้าที่เกี่ยว */}
+        <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) minmax(0,1fr)",gap:10,marginBottom:todayFocus.reorder.length>0?12:0}}>
+          <button onClick={() => onNav && onNav("ordersummary")}
+            style={{
+              textAlign:"left", cursor:"pointer", fontFamily:"inherit",
+              border:"1.5px solid #fde68a", background:"#fffbeb", borderRadius:12, padding:"10px 12px",
+            }}>
+            <div style={{fontSize:12,color:"#92400e",fontWeight:700,marginBottom:2}}>📦 Orders ค้าง</div>
+            <div style={{fontSize:22,fontWeight:800,color:"#b45309",lineHeight:1.1}}>
+              {todayFocus.pendingOrders}<span style={{fontSize:12,fontWeight:600,marginLeft:4}}>รายการ ›</span>
+            </div>
+          </button>
+          <button onClick={() => onNav && onNav("mtojobs")}
+            style={{
+              textAlign:"left", cursor:"pointer", fontFamily:"inherit",
+              border:"1.5px solid #ddd6fe", background:"#f5f3ff", borderRadius:12, padding:"10px 12px",
+            }}>
+            <div style={{fontSize:12,color:"#5b21b6",fontWeight:700,marginBottom:2}}>🎁 งานจัดพิเศษ</div>
+            <div style={{fontSize:22,fontWeight:800,color:"#6d28d9",lineHeight:1.1}}>
+              {todayFocus.mtoActive}<span style={{fontSize:12,fontWeight:600,marginLeft:4}}>งาน ›</span>
+            </div>
+          </button>
+        </div>
+
+        {/* ควรสั่งด่วน — ขายดี+ใกล้หมด (velocity/coverage ไม่ใช่จำนวนน้อยสุด) */}
+        {todayFocus.reorder.length > 0 ? (
+          <div>
+            <div style={{fontSize:13,fontWeight:800,color:"#b91c1c",marginBottom:6}}>
+              🔴 ควรสั่งด่วน (ขายดี + ใกล้หมด)
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              {todayFocus.reorder.map(r => (
+                <button key={r.p.sku} onClick={() => onNav && onNav("stock")}
+                  style={{
+                    textAlign:"left", cursor:"pointer", fontFamily:"inherit",
+                    border:"1px solid #fecaca", background:"#fef2f2", borderRadius:10,
+                    padding:"8px 10px", display:"flex", alignItems:"center", gap:10,
+                  }}>
+                  <div style={{flex:1, minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:700,color:"var(--g-800)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                      {r.p.name || r.p.sku}
+                    </div>
+                    <div style={{fontSize:11,color:"var(--g-500)"}}>
+                      {r.p.sku} · ขาย ~{Math.round(r.perDay*30)}/ด.
+                    </div>
+                  </div>
+                  <div style={{textAlign:"right",flexShrink:0}}>
+                    <div style={{fontSize:13,fontWeight:800,color:"#b91c1c"}}>เหลือ {r.stock}</div>
+                    <div style={{fontSize:11,color:"#dc2626"}}>
+                      {r.daysLeft < 1 ? "หมดแล้ว" : `~${Math.round(r.daysLeft)} วัน`}
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div style={{fontSize:13,color:"var(--g-500)",textAlign:"center",padding:"6px 0"}}>
+            ✅ วันนี้ยังไม่มีสินค้าขายดีที่ใกล้หมด
+          </div>
+        )}
       </div>
 
       {/* ── Month picker strip — เลือกเดือนเมื่ออยู่ใน "รายเดือน" ── */}
