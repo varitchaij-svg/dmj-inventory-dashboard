@@ -321,8 +321,8 @@ function doPost(e) {
 
     // ─── Verify PIN (POST path) ───
     if (data.action === 'verifyPin') {
-      const expected = PropertiesService.getScriptProperties().getProperty('OWNER_PIN') || 'DMJ';
-      const okPin = String(data.pin || '') === String(expected);
+      const expected = (PropertiesService.getScriptProperties().getProperty('OWNER_PIN') || 'DMJ').trim();
+      const okPin = String(data.pin || '').trim() === expected;
       return ContentService
         .createTextOutput(JSON.stringify({ ok: okPin }))
         .setMimeType(ContentService.MimeType.JSON);
@@ -460,8 +460,8 @@ function doGet(e) {
     // ตรวจ PIN เจ้าของฝั่ง server (PIN ไม่อยู่ใน source โค้ด frontend)
     // ตั้งค่าใน Script Property ชื่อ OWNER_PIN; ถ้าไม่ตั้ง ใช้ค่า default 'DMJ' (backward compatible)
     if (e && e.parameter && e.parameter.action === 'verifyPin') {
-      const expected = PropertiesService.getScriptProperties().getProperty('OWNER_PIN') || 'DMJ';
-      const okPin = String(e.parameter.pin || '') === String(expected);
+      const expected = (PropertiesService.getScriptProperties().getProperty('OWNER_PIN') || 'DMJ').trim();
+      const okPin = String(e.parameter.pin || '').trim() === expected;
       return ContentService
         .createTextOutput(JSON.stringify({ ok: okPin }))
         .setMimeType(ContentService.MimeType.JSON);
@@ -2405,6 +2405,31 @@ function exploreProductTag() {
     });
     Logger.log("DeleteProduct(test) HTTP " + delRes.getResponseCode() + " — " + delRes.getContentText().substring(0, 200));
   } catch (e) { Logger.log("ลบสินค้าทดสอบไม่สำเร็จ (ลบเองใน ZORT: " + testSku + ")"); }
+}
+
+// ── ดู/ตรวจ OWNER_PIN ปัจจุบัน (เจ้าของรันเองเพื่อเช็คตอนเข้ารหัสไม่ได้) ──
+// เห็นเฉพาะใน Execution log ของคุณเอง — เผยช่องว่างที่มองไม่เห็นที่ทำให้รหัสไม่ตรง
+function checkOwnerPin() {
+  const raw = PropertiesService.getScriptProperties().getProperty('OWNER_PIN');
+  if (raw === null) {
+    Logger.log("ยังไม่ได้ตั้ง OWNER_PIN → รหัสเจ้าของคือค่า default: DMJ (ตัวพิมพ์ใหญ่)");
+    return;
+  }
+  Logger.log("OWNER_PIN ปัจจุบัน: [" + raw + "]  (ความยาว " + raw.length + " ตัว)");
+  const trimmed = raw.trim();
+  if (trimmed !== raw) {
+    Logger.log("⚠️ มีช่องว่าง/ขึ้นบรรทัดติดหน้า-หลัง! หลังแก้โค้ด trim แล้วจะพิมพ์ [" + trimmed + "] ได้เลย");
+  } else {
+    Logger.log("ไม่มีช่องว่างแปลกปลอม — พิมพ์รหัสนี้ให้ตรง (ตัวพิมพ์เล็ก/ใหญ่มีผล)");
+  }
+}
+
+// ── ตั้ง OWNER_PIN ใหม่ (แก้ NEW_PIN แล้วรันครั้งเดียว) ──
+function setOwnerPin() {
+  const NEW_PIN = "";  // ← ใส่รหัสใหม่ที่ต้องการ แล้วกด Run
+  if (!NEW_PIN) { Logger.log("ยังไม่ได้ใส่ NEW_PIN — แก้บรรทัด NEW_PIN ก่อนรัน"); return; }
+  PropertiesService.getScriptProperties().setProperty('OWNER_PIN', NEW_PIN.trim());
+  Logger.log("✅ ตั้ง OWNER_PIN ใหม่เป็น [" + NEW_PIN.trim() + "] แล้ว — ลองเข้ารหัสเจ้าของด้วยรหัสนี้");
 }
 
 // ── ซื้อสินค้าเข้า/เติมสต็อก: สร้าง Purchase Order จริงใน ZORT → รับของเข้าคลัง ──
