@@ -1,0 +1,1023 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0" />
+<title>Doomuenjing · Dashboard (DEMO — ข้อมูลสมมติ)</title>
+<!-- manifest ตัดออกในโหมด demo กัน PWA install ทับของจริงบนเครื่องเดียวกัน -->
+<meta name="theme-color" content="#1f7f44">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Doomuenjing">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&family=Kanit:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0; }
+  img, svg, canvas, video, iframe { max-width: 100%; }
+  :root {
+    /* Greens */
+    --g-50:  #f1faf3;
+    --g-100: #dcf2e2;
+    --g-200: #b9e5c5;
+    --g-300: #88d09e;
+    --g-400: #4fb472;
+    --g-500: #2a9b56;
+    --g-600: #1f7f44;  /* PRIMARY */
+    --g-700: #196736;
+    --g-800: #15522d;
+    --g-900: #103e23;
+    /* Earth tones */
+    --bg:    #f7faf6;
+    --paper: #ffffff;
+    --bdr:   #e2eadd;
+    --bdr-2: #c9d6bf;
+    --text:  #18221a;
+    --muted: #5b6b5e;
+    --light: #94a194;
+    /* States */
+    --warn:  #c2570a;
+    --warn-t:#fef3e7;
+    --dang:  #b8341c;
+    --dang-t:#fcecea;
+    --info:  #1f6f8b;
+    --info-t:#e9f4f8;
+    --gold:  #a07417;
+    /* Radii / shadow */
+    --r-sm: 8px;
+    --r:    12px;
+    --r-lg: 16px;
+    --sh-1: 0 1px 2px rgba(15,40,20,.04), 0 1px 1px rgba(15,40,20,.03);
+    --sh-2: 0 4px 12px rgba(15,40,20,.06), 0 2px 4px rgba(15,40,20,.04);
+    --sh-3: 0 12px 28px rgba(15,40,20,.10), 0 4px 10px rgba(15,40,20,.06);
+  }
+
+  html, body { font-family: "IBM Plex Sans Thai","Inter",system-ui,sans-serif; }
+  html { overflow-x: hidden; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+    max-width: 100vw;
+  }
+  .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+
+  /* ---------- App shell ---------- */
+  #root {
+    min-height: 100vh;
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
+  /* Header */
+  .topnav {
+    background: var(--paper);
+    border-bottom: 1px solid var(--bdr);
+    position: sticky; top: 0; z-index: 50;
+    backdrop-filter: blur(8px);
+    overflow-x: hidden;
+    max-width: 100vw;
+  }
+  .topnav-inner {
+    max-width: 1480px; margin: 0 auto;
+    padding: 14px 28px;
+    display: flex; align-items: center; gap: 24px;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand-mark {
+    width: 38px; height: 38px; border-radius: 10px;
+    background: linear-gradient(135deg, var(--g-500), var(--g-700));
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: 800; font-size: 18px;
+    box-shadow: 0 4px 12px rgba(31,127,68,.32);
+    font-family: "Inter",sans-serif;
+  }
+  .brand-text { line-height: 1.1; }
+  .brand-name { font-weight: 700; font-size: 16px; letter-spacing: -.01em; }
+  .brand-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  .navtabs {
+    display: flex; gap: 4px; flex: 1;
+    margin-left: 12px;
+    min-width: 0;
+    overflow-x: auto;
+  }
+  .navtab {
+    background: none; border: none; cursor: pointer;
+    font-family: inherit; font-size: 13.5px; font-weight: 500;
+    color: var(--muted);
+    padding: 10px 14px; border-radius: 8px;
+    display: inline-flex; align-items: center; gap: 7px;
+    transition: all .15s;
+    min-height: 44px;
+  }
+  .navtab:hover { color: var(--text); background: var(--g-50); }
+  .navtab.active {
+    color: var(--g-700); background: var(--g-100); font-weight: 700;
+    box-shadow: inset 0 -2px 0 var(--g-600);
+  }
+  .navtab svg { width: 15px; height: 15px; stroke-width: 2; }
+
+  .nav-right { display: flex; align-items: center; gap: 10px; }
+  .nav-status {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 12px; color: var(--muted);
+    background: var(--g-50); border: 1px solid var(--bdr);
+    padding: 5px 11px; border-radius: 999px;
+  }
+  .nav-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--g-500);
+    box-shadow: 0 0 0 3px rgba(42,155,86,.18); }
+
+  /* Main area */
+  .main {
+    max-width: 1480px; margin: 0 auto;
+    padding: 28px;
+    overflow-x: hidden; /* prevent horizontal overflow from cards/grid */
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  /* Page header */
+  .page-head {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    margin-bottom: 22px; gap: 16px; flex-wrap: wrap;
+  }
+  .page-title { font-size: 24px; font-weight: 700; letter-spacing: -.02em; line-height: 1.2; }
+  .page-sub { font-size: 13px; color: var(--muted); margin-top: 4px; }
+  .page-actions { display: flex; gap: 10px; align-items: center; }
+  .btn {
+    font-family: inherit; cursor: pointer;
+    font-size: 13px; font-weight: 600;
+    padding: 8px 16px; border-radius: 10px;
+    display: inline-flex; align-items: center; gap: 6px;
+    transition: all .12s;
+    border: 1px solid var(--bdr);
+    background: var(--paper);
+    color: var(--text);
+  }
+  .btn:hover { background: var(--g-50); border-color: var(--bdr-2); }
+  .btn.primary {
+    background: var(--g-600); color: #fff; border-color: var(--g-600);
+    box-shadow: 0 2px 6px rgba(31,127,68,.25);
+  }
+  .btn.primary:hover { background: var(--g-700); border-color: var(--g-700); }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+  .btn.ghost:hover { color: var(--text); background: var(--g-50); }
+  .btn svg { width: 14px; height: 14px; stroke-width: 2.2; }
+
+  /* Time range */
+  .seg {
+    display: inline-flex; background: var(--paper);
+    border: 1px solid var(--bdr); border-radius: 10px; padding: 3px;
+  }
+  .seg-btn {
+    background: none; border: none; cursor: pointer; font-family: inherit;
+    font-size: 12.5px; font-weight: 500;
+    padding: 8px 14px; border-radius: 7px; color: var(--muted);
+    transition: all .12s; min-height: 40px;
+  }
+  .seg-btn:hover { color: var(--text); background: var(--g-50); }
+  .seg-btn.active { background: var(--g-600); color: #fff; font-weight: 700; box-shadow: 0 1px 4px rgba(31,127,68,.3); }
+
+  /* Cards */
+  .card {
+    background: var(--paper);
+    border: 1px solid var(--bdr);
+    border-radius: var(--r-lg);
+    box-shadow: var(--sh-1);
+    padding: 20px;
+  }
+  .card.hover:hover { box-shadow: var(--sh-2); border-color: var(--bdr-2); }
+  .card-title { font-size: 14px; font-weight: 700; letter-spacing: -.01em; }
+  .card-sub { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+  .card-head { margin-bottom: 16px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+
+  /* Category page layout */
+  .cat-layout {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    gap: 20px;
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .cat-layout > * { min-width: 0; }
+  .cat-sidebar { align-self: start; position: sticky; top: 80px; }
+
+  /* Product grid — mobile-first: 2 cols default, expand on larger screens */
+  .product-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+  .product-grid > * { min-width: 0; }
+  @media (min-width: 900px) {
+    .product-grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
+  }
+
+  /* Grid utilities */
+  .row { display: grid; gap: 16px; }
+  .row-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .row-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .row-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .row-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .row-12-5 { grid-template-columns: minmax(0, 1.25fr) minmax(0, .75fr); }
+  @media (max-width: 1280px) {
+    .row-5 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
+  /* ── Tablet landscape + small laptop (iPad Pro 12.9" landscape = 1366px, iPad Pro 11" = 1194px) ── */
+  @media (max-width: 1200px) {
+    .topnav-inner { padding: 12px 20px; gap: 16px; }
+    .main { padding: 20px; }
+  }
+  @media (max-width: 1100px) {
+    .row-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .row-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .row-3 { grid-template-columns: minmax(0, 1fr); }
+    .row-12-5 { grid-template-columns: minmax(0, 1fr); }
+  }
+  /* ── iPad landscape (1024px) — nav starts getting cramped ── */
+  @media (max-width: 1024px) {
+    .topnav-inner { flex-wrap: wrap; padding: 10px 16px; gap: 10px; }
+    .navtabs { order: 3; flex-basis: 100%; overflow-x: auto;
+      gap: 2px; padding-bottom: 4px; scrollbar-width: thin; }
+    .navtabs::-webkit-scrollbar { height: 4px; }
+    .navtab { padding: 7px 11px; font-size: 13px; flex-shrink: 0; }
+    .navtab span { white-space: nowrap; }
+    .main { padding: 16px; }
+    .cat-layout { grid-template-columns: 200px 1fr; }
+  }
+  @media (max-width: 900px) {
+    .cat-layout { grid-template-columns: 1fr; }
+    .cat-sidebar { display: none !important; }
+    .cat-layout { gap: 12px; }
+  }
+  @media (max-width: 640px) {
+    .cat-layout { grid-template-columns: 1fr !important; }
+  }
+  /* ── iPad portrait (768px) ── */
+  @media (max-width: 768px) {
+    .row-2 { grid-template-columns: 1fr; }
+    .main { padding: 14px; }
+    .cat-layout { grid-template-columns: 1fr; }
+    .cat-sidebar { position: static !important; }
+    .page-title { font-size: 22px; }
+    .card { padding: 16px; border-radius: var(--r); }
+    .kpi { padding: 14px 16px; }
+    .kpi-value { font-size: 26px; }
+    .sec-head { margin: 20px 0 12px; }
+  }
+  /* ── Large phones / small tablets (720px) ── */
+  @media (max-width: 720px) {
+    .row-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .row-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .topnav-inner { padding: 8px 12px; }
+    .navtab { padding: 7px 10px; font-size: 12.5px; }
+    .nav-status { display: none; }
+    .brand-sub { display: none; }
+    .page-title { font-size: 20px; }
+    .page-head { margin-bottom: 14px; }
+    .kpi-value { font-size: 24px; }
+    .kpi-deco { width: 60px; height: 60px; }
+    .kpi-icon { top: 12px; right: 12px; width: 26px; height: 26px; }
+    table.t { font-size: 12px; }
+    table.t th, table.t td { padding: 8px 6px; }
+    table.t th { font-size: 10px; }
+    .sec-head { margin: 20px 0 10px; }
+  }
+  @media (max-width: 480px) {
+    .row-4 { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; } /* Keep 2x2 KPIs on phones */
+    .row-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .main { padding: 10px; }
+    .topnav-inner { padding: 8px 10px; }
+    .brand-mark { width: 32px; height: 32px; font-size: 15px; }
+    .brand-name { font-size: 14px; }
+    .page-title { font-size: 18px; }
+
+    /* Controls card — more compact (exclude product cards with .hover class) */
+    .cat-layout .card:not(.hover) { padding: 12px !important; }
+
+    /* Filter bar labels — hide, just show emoji/chips */
+    .filter-bar-label { display: none !important; }
+
+    /* Filter bar — reduce spacing */
+    .filter-bar { margin-top: 8px !important; padding-top: 8px !important; gap: 6px !important; }
+    .filter-chips { gap: 4px !important; }
+    .fchip { font-size: 11px !important; padding: 4px 8px !important; }
+
+    /* Search + sort controls — stack vertically */
+    .cat-layout .card > div:first-child { flex-direction: column !important; gap: 8px !important; }
+    .cat-layout .card > div:first-child > div { flex: 1 !important; min-width: 0 !important; width: 100% !important; }
+    .cat-layout .card > div:first-child > div select { width: 100% !important; }
+
+    /* OrderItemRow — tighter +/- buttons on small phones */
+    .order-adj-btn { width: 38px !important; height: 38px !important; font-size: 15px !important; }
+    .order-adj-input { width: 44px !important; font-size: 14px !important; }
+
+    /* Action buttons in order row — smaller */
+    .order-action-btn { width: 38px !important; height: 38px !important; }
+
+    /* QR scan modal — bottom sheet */
+    .qr-scan-modal-inner {
+      max-width: 100% !important; width: 100% !important;
+      border-radius: 16px 16px 0 0 !important;
+      position: fixed !important; bottom: 0 !important;
+      left: 0 !important; right: 0 !important; margin: 0 !important;
+    }
+
+    /* LabelPrint — controls stack vertically */
+    .label-controls { flex-direction: column; gap: 8px !important; }
+    .label-controls > * { width: 100% !important; }
+
+    /* Input fields — full width on small screens */
+    input[type="text"], input[type="number"], select {
+      font-size: 16px !important; /* Prevent zoom on iOS */
+    }
+
+    /* Stock/Transfer view — compact search + filters */
+    [data-screen-label="stock"] .card,
+    [data-screen-label="transfers"] .card {
+      padding: 12px !important;
+    }
+
+    /* Table wrappers — reduce padding */
+    .t-transfer-wrap, .t-stock-wrap {
+      border-radius: var(--r-sm) !important;
+      margin-top: 8px !important;
+    }
+
+    /* Compact label print controls */
+    [data-screen-label="labels"] .card > div { flex-direction: column !important; gap: 8px !important; }
+    [data-screen-label="labels"] .card input,
+    [data-screen-label="labels"] .card button {
+      width: 100% !important;
+    }
+
+    /* Universal mobile optimization for all views — exclude product cards */
+    .card:not(.hover) { padding: 12px !important; border-radius: var(--r) !important; }
+    .card.hover { border-radius: var(--r) !important; }
+    .card-head { padding: 0 0 8px 0 !important; gap: 8px !important; }
+    .card-title { font-size: 15px !important; }
+    .page-actions { width: 100% !important; }
+    .page-actions button { width: 100% !important; }
+
+    /* Stack horizontal flexbox sections */
+    [role="tablist"] { gap: 2px !important; padding: 0 !important; }
+
+    /* Compact KPI layout */
+    .kpi { padding: 12px 14px !important; }
+    .kpi-value { font-size: 20px !important; }
+    .kpi-label { font-size: 10px !important; }
+
+    /* Stock view — better table view */
+    [data-screen-label="stock"] .page-head { flex-direction: column !important; align-items: flex-start !important; }
+    [data-screen-label="stock"] .page-actions { width: 100% !important; }
+
+    /* Order views — better layout */
+    [data-screen-label="orders"] .page-head { flex-direction: column !important; }
+    [data-screen-label="ordersummary"] .page-head { flex-direction: column !important; }
+
+    /* Trends view — responsive cards */
+    [data-screen-label="trends"] .trends-grid { gap: 8px !important; }
+    [data-screen-label="trends"] .card { padding: 10px !important; }
+
+    /* All buttons — touch-friendly minimum height */
+    .btn { min-height: 44px !important; padding: 10px 14px !important; font-size: 13px !important; }
+    select { min-height: 44px !important; padding: 8px 10px !important; }
+
+    /* Reduce overall spacing */
+    .page-head { margin-bottom: 12px !important; }
+    .sec-head { margin: 14px 0 10px !important; }
+  }
+
+  /* ── Mobile 640px — product cards + pill buttons ── */
+  @media (max-width: 640px) {
+    .cat-layout { gap: 12px; }
+    /* Compact KPI on mobile — fit 4 KPIs nicely */
+    .kpi { padding: 10px 12px !important; }
+    .kpi-value { font-size: 18px !important; }
+    .kpi-label { font-size: 9.5px !important; letter-spacing: .04em !important; }
+    .kpi-foot { font-size: 10px !important; margin-top: 2px !important; }
+    .kpi-deco { width: 48px !important; height: 48px !important; top: -16px !important; right: -16px !important; }
+    .kpi-icon { width: 22px !important; height: 22px !important; top: 8px !important; right: 8px !important; }
+    .kpi-icon svg { width: 12px !important; height: 12px !important; }
+
+    /* Tighter page head spacing */
+    .page-head { margin-bottom: 10px !important; flex-wrap: wrap; }
+    .page-sub { font-size: 11px !important; }
+
+    /* Compact product cards — fit more on screen */
+    .product-grid .card { padding: 0 !important; overflow: hidden !important; }
+    .product-grid .pcard-img { padding: 6px !important; } /* image wrapper */
+    .product-grid .pcard-img .pimg { padding: 0 !important; } /* placeholder inside wrapper */
+    .product-grid .skucode { font-size: 9px !important; padding: 1px 5px !important; }
+    .product-grid .pcard-body { padding: 6px 10px 8px !important; }
+    .product-grid .pcard-order { padding: 0 10px 10px !important; }
+    /* Vendor line — keep visible on mobile (owner orders by supplier), compact */
+    .product-grid .vendor-line { font-size: 9.5px !important; margin-bottom: 2px !important; }
+
+    /* Tighter section header */
+    .sec-head { margin: 4px 0 10px !important; flex-wrap: wrap; gap: 8px; }
+    .sec-title { font-size: 13.5px !important; }
+    .sec-sub { font-size: 10.5px !important; }
+
+    /* Tighten control card (search + sort) — exclude product cards */
+    .cat-layout > div > .card:not(.hover) { padding: 10px 12px !important; }
+  }
+
+  /* ── Orders tabs — mobile ── */
+  @media (max-width: 640px) {
+    .order-item-row { border-radius: 10px !important; }
+    .order-summary-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+      gap: 10px !important;
+    }
+    [data-screen-label="orders"] .page-head,
+    [data-screen-label="ordersummary"] .page-head {
+      flex-direction: column; align-items: flex-start; gap: 10px;
+    }
+    [data-screen-label="orders"] .page-head .seg,
+    [data-screen-label="ordersummary"] .page-head .seg { width: 100%; }
+    [data-screen-label="orders"] .seg-btn,
+    [data-screen-label="ordersummary"] .seg-btn { flex: 1; text-align: center; }
+  }
+  /* ── Orders tabs — tablet (768px–1024px) ── */
+  @media (max-width: 1024px) and (min-width: 641px) {
+    .order-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+  }
+
+  /* ── QR Scan modal — full width on phone ── */
+  @media (max-width: 480px) {
+    .qr-scan-modal-inner {
+      max-width: 100% !important;
+      border-radius: 12px 12px 0 0 !important;
+      position: fixed !important;
+      bottom: 0 !important; left: 0 !important; right: 0 !important;
+      margin: 0 !important;
+    }
+  }
+
+  /* ── Scrollable table wrapper (TransferView, StockView, etc.) ── */
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  /* Stock table — hide non-essential columns on mobile */
+  @media (max-width: 640px) {
+    .t-stock th:nth-child(3),
+    .t-stock td:nth-child(3),
+    .t-stock th:nth-child(4),
+    .t-stock td:nth-child(4),
+    .t-stock th:nth-child(6),
+    .t-stock td:nth-child(6),
+    .t-stock th:nth-child(7),
+    .t-stock td:nth-child(7),
+    .t-stock th:nth-child(8),
+    .t-stock td:nth-child(8) { display: none; }
+
+    /* Trends cards: 2 per row on iPhone */
+    .trends-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 10px !important; }
+    .trends-grid .card { font-size: 11px; }
+
+    /* Transfer/order tables: scroll horizontally */
+    .t-transfer-wrap, .t-order-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .t-transfer-wrap table, .t-order-wrap table { min-width: 560px; }
+
+    /* Touch-friendly tap targets */
+    .btn { min-height: 44px; }
+    .seg-btn { min-height: 38px; padding: 6px 14px; }
+    .fchip { min-height: 36px; }
+  }
+
+  /* ── Filter bar (shared across views) ── */
+  .filter-bar {
+    display: flex; align-items: center; gap: 6px;
+    flex-wrap: wrap; margin-bottom: 12px;
+  }
+  .filter-bar-label {
+    font-size: 11px; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .06em;
+    white-space: nowrap; flex-shrink: 0;
+  }
+  .filter-chips {
+    display: flex; gap: 6px; flex-wrap: wrap;
+  }
+  .fchip {
+    padding: 8px 14px; border-radius: 99px; font-size: 12.5px; font-weight: 600;
+    border: 1.5px solid var(--bdr); background: var(--paper); color: var(--muted);
+    cursor: pointer; font-family: inherit; transition: all .15s; white-space: nowrap;
+    min-height: 44px; display: inline-flex; align-items: center; gap: 4px;
+  }
+  .fchip:hover { border-color: var(--g-400); color: var(--text); background: var(--g-50); }
+  .fchip.active {
+    background: var(--g-600); border-color: var(--g-600); color: #fff;
+    box-shadow: 0 2px 6px rgba(31,127,68,.25);
+  }
+  .fchip.active-color { font-weight: 700; }
+
+  @media (max-width: 640px) {
+    .filter-bar { flex-wrap: wrap; gap: 6px; }
+    .filter-chips { flex-wrap: wrap; gap: 6px; }
+    .fchip { font-size: 12px; padding: 8px 12px; min-height: 44px; }
+  }
+
+  /* KPI Card */
+  .kpi {
+    background: var(--paper);
+    border: 1px solid var(--bdr);
+    border-radius: var(--r-lg);
+    box-shadow: var(--sh-1);
+    padding: 18px 20px;
+    position: relative;
+    overflow: hidden;
+    transition: all .15s;
+  }
+  .kpi:hover { transform: translateY(-2px); box-shadow: var(--sh-2); }
+  .kpi-label { font-size: 11.5px; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .07em; }
+  .kpi-value {
+    font-family: "Inter", sans-serif;
+    font-size: 30px; font-weight: 800;
+    letter-spacing: -.025em;
+    margin: 8px 0 2px;
+    line-height: 1.1;
+  }
+  .kpi-value.green { color: var(--g-700); }
+  .kpi-foot {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11.5px; color: var(--muted); margin-top: 4px;
+  }
+  .kpi-delta {
+    font-size: 11px; font-weight: 700;
+    padding: 2px 7px; border-radius: 6px;
+  }
+  .kpi-delta.up { background: var(--g-100); color: var(--g-700); }
+  .kpi-delta.down { background: var(--dang-t); color: var(--dang); }
+  .kpi-deco {
+    position: absolute; top: -20px; right: -20px;
+    width: 90px; height: 90px; border-radius: 50%;
+    background: var(--g-50); opacity: .8;
+  }
+  .kpi-icon {
+    position: absolute; top: 16px; right: 18px;
+    width: 30px; height: 30px;
+    color: var(--g-500);
+    background: var(--g-50);
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .kpi-icon svg { width: 16px; height: 16px; stroke-width: 2; }
+
+  /* Chips / badges */
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 600;
+    padding: 3px 9px; border-radius: 999px;
+    background: var(--g-50); color: var(--g-700);
+    border: 1px solid var(--g-100);
+  }
+  .chip.warn { background: var(--warn-t); color: var(--warn); border-color: #f5dec0; }
+  .chip.dang { background: var(--dang-t); color: var(--dang); border-color: #f3c8c2; }
+  .chip.info { background: var(--info-t); color: var(--info); border-color: #c8e0e9; }
+  .chip.neutral { background: #f3f5f0; color: var(--muted); border-color: var(--bdr); }
+
+  /* Category color dot */
+  .cat-dot { display: inline-block; width: 8px; height: 8px;
+    border-radius: 50%; vertical-align: middle; margin-right: 6px; }
+
+  /* Tables */
+  table.t { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.t th { text-align: left; font-weight: 700; font-size: 11px;
+    color: var(--muted); text-transform: uppercase; letter-spacing: .06em;
+    padding: 10px 10px; border-bottom: 2px solid var(--bdr); background: #fafcf7;
+  }
+  table.t td { padding: 12px 10px; border-bottom: 1px solid var(--bdr); vertical-align: middle; }
+  table.t tr:last-child td { border-bottom: none; }
+  table.t tr:hover td { background: var(--g-50); }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .skucode {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; font-weight: 600;
+    color: var(--g-700); background: var(--g-50);
+    padding: 2px 7px; border-radius: 5px;
+    border: 1px solid var(--g-100);
+    white-space: nowrap;
+  }
+
+  /* Product image placeholder */
+  .pimg {
+    width: 100%; aspect-ratio: 1/1;
+    background:
+      repeating-linear-gradient(135deg, #ffffff 0 6px, #f1f5ec 6px 12px);
+    border-radius: 10px;
+    border: 1px solid var(--bdr);
+    color: var(--light);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 10px;
+    overflow: hidden;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+    position: relative;
+  }
+  .pimg::after {
+    content: ""; position: absolute; top:0; left:0; right:0; bottom:0;
+    background: radial-gradient(circle at 30% 30%, transparent 40%, rgba(31,127,68,.06));
+    pointer-events: none;
+  }
+
+  /* Skeleton + loading */
+  .loading-screen {
+    min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px;
+  }
+  .spin {
+    width: 36px; height: 36px;
+    border: 3px solid var(--g-100); border-top-color: var(--g-600);
+    border-radius: 50%; animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Tweaks panel anchor */
+  .tweaks-anchor { position: fixed; bottom: 20px; right: 20px; z-index: 100; }
+
+  /* Section header */
+  .sec-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin: 28px 0 14px; gap: 16px; flex-wrap: wrap;
+  }
+  .sec-title { font-size: 16px; font-weight: 700; letter-spacing: -.015em; }
+  .sec-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  /* Empty state */
+  .empty {
+    text-align: center; padding: 52px 24px;
+    color: var(--muted); font-size: 13px; line-height: 1.6;
+  }
+  .empty-ico {
+    width: 64px; height: 64px; margin: 0 auto 16px;
+    background: var(--g-50); border-radius: 18px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--g-500);
+    box-shadow: 0 2px 8px rgba(31,127,68,.10);
+  }
+
+  /* Upload */
+  .upload-zone {
+    border: 2px dashed var(--bdr-2);
+    border-radius: var(--r-lg);
+    padding: 36px 24px;
+    text-align: center;
+    background: var(--paper);
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .upload-zone:hover, .upload-zone.over {
+    border-color: var(--g-500); background: var(--g-50);
+  }
+  .upload-zone.done { border-style: solid; border-color: var(--g-500); background: var(--g-50); }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--bdr-2); border-radius: 999px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+  /* Recharts tweaks */
+  .recharts-default-tooltip {
+    background: #fff !important;
+    border: 1px solid var(--bdr) !important;
+    border-radius: 10px !important;
+    box-shadow: var(--sh-2) !important;
+    padding: 10px 13px !important;
+    font-family: inherit !important;
+    font-size: 12px !important;
+  }
+  .recharts-tooltip-label { font-weight: 700 !important; margin-bottom: 4px !important; }
+
+  /* ── Label Print ── */
+  .label-page {
+    width: 210mm;
+    height: 297mm;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+  .label-page:not(:last-child) {
+    page-break-after: always;
+    break-after: page;
+  }
+  .label-page:last-child {
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+  .label-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 42mm);
+    grid-template-rows: repeat(14, 21.214mm);
+    gap: 0;
+  }
+  .label-cell {
+    width: 42mm;
+    height: 21.214mm;
+    border: 0.4pt dashed #aaa;
+    box-sizing: border-box;
+    padding: 0.8mm 1.5mm 0.6mm;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .label-top-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    width: 100%;
+    flex-shrink: 0;
+    margin-bottom: 0.3mm;
+    gap: 1mm;
+  }
+  .label-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 6pt;
+    font-weight: 600;
+    font-family: 'Kanit', 'IBM Plex Sans Thai', sans-serif;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    line-clamp: 2;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    color: #111;
+    line-height: 1.2;
+    letter-spacing: 0;
+  }
+  .label-price {
+    font-size: 7pt;
+    font-weight: 700;
+    font-family: 'Kanit', 'Inter', sans-serif;
+    white-space: nowrap;
+    color: #111;
+    line-height: 1.2;
+    letter-spacing: 0;
+    flex-shrink: 0;
+  }
+  .label-mid-row {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1mm;
+    min-height: 0;
+    position: relative;
+  }
+  .label-qr-center {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .label-qr-center > div,
+  .label-qr-center canvas,
+  .label-qr-center img { display: block !important; }
+  .label-logo-corner {
+    position: absolute;
+    right: 0.5mm;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 8mm;
+    height: 8mm;
+  }
+  .label-logo-corner img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    display: block;
+    transform: rotate(-90deg);
+  }
+  .label-sku-text {
+    font-size: 6pt;
+    text-align: center;
+    color: #333;
+    letter-spacing: 0.5px;
+    font-family: 'Kanit', sans-serif;
+    font-weight: 500;
+    flex-shrink: 0;
+    line-height: 1.2;
+  }
+  /* SKU group boundary — first cell of a new SKU group */
+  .label-cell.sku-break {
+    border-top: 0.8pt solid #333;
+    position: relative;
+  }
+  .label-cell.sku-break::before {
+    content: "✂";
+    position: absolute;
+    top: 0.5pt;
+    left: 0.5mm;
+    font-size: 5.5pt;
+    color: #444;
+    line-height: 1;
+    pointer-events: none;
+  }
+
+  @page { size: A4 portrait; margin: 10mm; }
+  @media print {
+    .no-print, .topnav, nav { display: none !important; }
+    body { margin: 0 !important; padding: 0 !important; background: #fff !important; }
+    .main { padding: 0 !important; margin: 0 !important; }
+    .label-cell.sku-break {
+      border-top: 0.5pt solid #000 !important;
+    }
+    .label-page {
+      margin: 0 !important;
+      padding: 0 !important;
+      width: 190mm !important;
+      height: 277mm !important;
+      box-sizing: border-box !important;
+      overflow: hidden !important;
+    }
+    .label-page:last-child {
+      page-break-after: avoid !important;
+      break-after: avoid !important;
+    }
+    .label-grid {
+      grid-template-columns: repeat(5, 38mm) !important;
+      grid-template-rows: repeat(14, 19.786mm) !important;
+      width: 190mm !important;
+      height: 277mm !important;
+      gap: 0 !important;
+    }
+    .label-cell {
+      width: 38mm !important;
+      height: 19.786mm !important;
+      overflow: hidden !important;
+    }
+  }
+
+  /* ── Skeleton shimmer ── */
+  @keyframes shimmer {
+    0%   { background-position: -400px 0; }
+    100% { background-position:  400px 0; }
+  }
+  .skel {
+    background: linear-gradient(90deg, #e8ede8 25%, #f4f7f4 50%, #e8ede8 75%);
+    background-size: 800px 100%;
+    animation: shimmer 1.4s infinite;
+    border-radius: 6px;
+  }
+
+/* ── FrontStore responsive grid ── */
+.front-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  width: 100%;
+}
+@media (min-width: 640px) {
+  .front-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+}
+@media (min-width: 900px) {
+  .front-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+}
+
+/* ── Table scroll wrappers — all screens ── */
+.t-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
+.t-wrap table { min-width: max-content; }
+
+/* ── Storage unassigned products grid ── */
+.storage-product-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+@media (min-width: 640px) {
+  .storage-product-grid { grid-template-columns: repeat(3, 1fr); }
+}
+@media (min-width: 900px) {
+  .storage-product-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+}
+
+</style>
+<link rel="preconnect" href="https://unpkg.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<style>
+  #demo-banner {
+    position: sticky; top: 0; z-index: 999; background: #7a1f1f; color: #fff;
+    font-size: 12.5px; font-weight: 700; text-align: center; padding: 6px 10px;
+    letter-spacing: .2px;
+  }
+</style>
+<!-- config demo (token/URL จำลอง) แทน config.js จริง — ไม่มี credential จริงในไฟล์นี้ -->
+<script src="config.demo.js"></script>
+<!-- mock data + fetch interceptor: ต้องโหลดก่อน React/Babel boot เพื่อดักทุก network call -->
+<script src="demo-interview-data.js"></script>
+</head>
+<body>
+  <div id="demo-banner">🔒 DEMO MODE — ข้อมูลสมมติทั้งหมด ไม่เชื่อมต่อ ZORT/Google Sheets จริง</div>
+  <div id="root">
+    <div class="loading-screen">
+      <div class="spin"></div>
+      <div style="font-size: 13px; color: var(--muted);">กำลังโหลดข้อมูล Dashboard…</div>
+    </div>
+  </div>
+
+  <!-- React + Recharts + Babel -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+  <!-- recharts: defer — ใช้เฉพาะกราฟหน้า overview/analytics (gate ด้วย useRechartsReady + ChartLoading)
+       ไม่ block Babel/first paint; หน้าแรกของ staff ส่วนใหญ่คือ "สินค้า" ที่ไม่มีกราฟ -->
+  <script defer src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+  <!-- qrcode + html5-qrcode: defer — ใช้เฉพาะตอนพิมพ์ label / สแกน (lazy + มี guard อยู่แล้ว)
+       ไม่ให้ block การโหลด Babel ซึ่งอยู่บน critical path ของการ render ครั้งแรก -->
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <!-- html5-qrcode: ใช้ scan ได้บนทุก browser/มือถือ (iOS Safari, Android, Desktop) -->
+  <script defer src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <script>
+(function () {
+  'use strict';
+
+  /* ฉีด compiled JS เข้า global scope */
+  function injectCode(code) {
+    var s = document.createElement('script');
+    s.textContent = code;
+    document.head.appendChild(s);
+  }
+
+  var BC = 'dmj-babel-v2'; // bump เมื่อ format เปลี่ยน
+
+  /* fetch + cache check + compile → คืน code string (ไม่ inject)
+     แยกออกมาเพื่อให้ views-main + views-analytics compile พร้อมกันได้ */
+  async function compileJsx(src) {
+    var resp = await fetch(src);
+    /* ETag หรือ Last-Modified จาก Cloudflare — อ่านได้โดยไม่ต้องอ่าน body */
+    var etag = resp.headers.get('etag') || resp.headers.get('last-modified') || '';
+
+    /* ── Cache API: ไม่มี size limit, ออกแบบสำหรับไฟล์ใหญ่ ── */
+    if (etag && typeof caches !== 'undefined') {
+      try {
+        var bc = await caches.open(BC);
+        var hit = await bc.match(src + '.compiled');
+        if (hit && hit.headers.get('x-etag') === etag) {
+          return await hit.text(); /* cache hit — ไม่ต้องอ่าน body หรือ compile เลย */
+        }
+      } catch (_) {}
+    }
+
+    /* ── Cache miss: อ่าน body แล้ว compile ── */
+    var text = await resp.text();
+    var compiled = Babel.transform(text, {
+      presets: ['react'],
+      sourceType: 'script',
+      filename: src,
+    }).code;
+
+    /* บันทึก compiled code ไว้ใช้ครั้งหน้า */
+    if (typeof caches !== 'undefined') {
+      try {
+        var bc = await caches.open(BC);
+        await bc.put(src + '.compiled', new Response(compiled, {
+          headers: { 'Content-Type': 'application/javascript', 'x-etag': etag }
+        }));
+      } catch (_) {}
+    }
+
+    return compiled;
+  }
+
+  function loadJsx(src) {
+    return compileJsx(src).then(function (code) { injectCode(code); });
+  }
+
+  /* โหลด ui ก่อน จากนั้น compile views-main + views-analytics พร้อมกัน
+     แล้ว inject ตามลำดับ (views-main ก่อนเสมอ เพราะ views-analytics ใช้ component จาก views-main) */
+  window._appBoot = loadJsx('ui.jsx')
+    .then(function () {
+      return Promise.all([compileJsx('views-main.jsx'), compileJsx('views-analytics.jsx')]);
+    })
+    .then(function (codes) {
+      injectCode(codes[0]); /* views-main ก่อน */
+      injectCode(codes[1]); /* views-analytics หลัง */
+      return loadJsx('app.jsx');
+    })
+    .catch(function (err) { console.error('[boot]', err); });
+}());
+  </script>
+
+  <!-- Service Worker ไม่ลงทะเบียนในโหมด demo (ไม่ต้องการ PWA install/offline cache สำหรับหน้าสาธิต) -->
+</body>
+</html>
