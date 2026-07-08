@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Procurement Analytics Demo — Stock & Sourcing</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root{
+    --plane:#0b1c2c;        /* page plane */
+    --surface:#0f2438;      /* dark navy card surface */
+    --surface-2:#14304a;    /* raised */
+    --ink:#f4f8fc;          /* primary ink */
+    --ink-2:#a9bed3;        /* secondary ink */
+    --muted:#6d859c;        /* muted / axis */
+    --grid:rgba(255,255,255,0.07);
+    --border:rgba(255,255,255,0.10);
+    /* categorical slots (dark-stepped) */
+    --c1:#3987e5;  /* blue   — ดอกไม้ประดิษฐ์ */
+    --c2:#199e70;  /* aqua   — แจกัน */
+    --c3:#c98500;  /* yellow — ของตกแต่ง */
+    --c4:#9085e9;  /* violet — ต้นไม้ประดิษฐ์ */
+    --c5:#d95926;  /* orange — อุปกรณ์จัดดอกไม้ */
+    /* status */
+    --good:#0ca30c;
+    --warn:#fab219;
+    --serious:#ec835a;
+    --critical:#d03b3b;
+    --radius:14px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:
+      radial-gradient(1200px 600px at 80% -10%, #163a5c 0%, transparent 60%),
+      var(--plane);
+    background-color:var(--plane);
+    color:var(--ink);
+    font-family:system-ui,-apple-system,"Segoe UI","Sarabun",sans-serif;
+    -webkit-font-smoothing:antialiased;
+    line-height:1.45;
+  }
+  .wrap{max-width:1200px;margin:0 auto;padding:28px 20px 64px}
+  header.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:8px}
+  .brand{display:flex;align-items:center;gap:12px}
+  .brand .dot{width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,var(--c1),var(--c4));display:flex;align-items:center;justify-content:center;font-size:20px}
+  h1{font-size:1.35rem;margin:0;letter-spacing:.2px}
+  .sub{color:var(--ink-2);font-size:.82rem;margin-top:2px}
+  .demo-badge{font-size:.7rem;color:var(--warn);border:1px solid rgba(250,178,25,.4);background:rgba(250,178,25,.08);padding:3px 9px;border-radius:999px;font-weight:600}
+
+  section{margin-top:30px}
+  .sec-head{display:flex;align-items:baseline;gap:10px;margin-bottom:14px}
+  .sec-head h2{font-size:1.02rem;margin:0}
+  .sec-head .hint{color:var(--muted);font-size:.76rem}
+
+  /* KPI tiles */
+  .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+  .tile{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 16px 14px}
+  .tile .label{color:var(--ink-2);font-size:.76rem;display:flex;align-items:center;gap:6px}
+  .tile .val{font-size:1.7rem;font-weight:700;margin-top:6px;letter-spacing:.3px}
+  .tile .val small{font-size:.9rem;font-weight:600;color:var(--ink-2)}
+  .tile .delta{font-size:.74rem;margin-top:4px}
+  .up{color:var(--good)} .down{color:var(--critical)}
+
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px}
+  .grid-2{display:grid;grid-template-columns:1.6fr 1fr;gap:16px}
+  .chart-box{position:relative;height:340px}
+  .chart-box.sm{height:280px}
+
+  /* legend */
+  .legend{display:flex;flex-wrap:wrap;gap:12px;margin-top:10px}
+  .legend span{display:inline-flex;align-items:center;gap:6px;font-size:.76rem;color:var(--ink-2)}
+  .legend i{width:11px;height:11px;border-radius:3px;display:inline-block}
+
+  /* tables */
+  .tbl-scroll{overflow-x:auto;border-radius:12px;border:1px solid var(--border)}
+  table{width:100%;border-collapse:collapse;font-size:.82rem;min-width:640px}
+  thead th{position:sticky;top:0;background:var(--surface-2);color:var(--ink-2);text-align:left;font-weight:600;padding:10px 12px;white-space:nowrap;border-bottom:1px solid var(--border)}
+  tbody td{padding:9px 12px;border-bottom:1px solid var(--grid);white-space:nowrap}
+  tbody tr:hover{background:rgba(255,255,255,.03)}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.72rem;font-weight:600}
+  .pill.cat{background:rgba(255,255,255,.06);color:var(--ink-2)}
+  .cat-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px;vertical-align:middle}
+  .status{display:inline-flex;align-items:center;gap:5px;font-weight:600;font-size:.74rem}
+  .status .ic{width:8px;height:8px;border-radius:50%}
+  .s-ok .ic{background:var(--good)} .s-ok{color:#7fd47f}
+  .s-low .ic{background:var(--warn)} .s-low{color:var(--warn)}
+  .s-crit .ic{background:var(--critical)} .s-crit{color:#f08a8a}
+
+  /* reorder cards */
+  .reorder-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+  .ro{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--warn);border-radius:12px;padding:14px}
+  .ro.crit{border-left-color:var(--critical)}
+  .ro .sku{font-size:.72rem;color:var(--muted);font-variant-numeric:tabular-nums}
+  .ro .nm{font-weight:700;margin:2px 0 8px}
+  .ro .bar{height:8px;border-radius:6px;background:rgba(255,255,255,.08);overflow:hidden;margin:6px 0}
+  .ro .bar > i{display:block;height:100%;border-radius:6px}
+  .ro .rows{font-size:.78rem;color:var(--ink-2);margin-top:8px;display:grid;gap:3px}
+  .ro .rows b{color:var(--ink)}
+  .ro .rec{margin-top:10px;background:rgba(57,135,229,.12);border:1px solid rgba(57,135,229,.3);color:#bcd9ff;font-size:.78rem;font-weight:600;padding:8px 10px;border-radius:8px}
+
+  .best{color:var(--good);font-weight:700}
+  .best-tag{font-size:.66rem;background:rgba(12,163,12,.15);color:#7fd47f;padding:1px 6px;border-radius:999px;margin-left:6px;font-weight:600}
+  .stars{color:var(--warn);letter-spacing:1px}
+
+  .dead-note{font-size:.78rem;color:var(--ink-2);margin-bottom:12px}
+  footer{margin-top:40px;color:var(--muted);font-size:.74rem;text-align:center;border-top:1px solid var(--border);padding-top:18px}
+  @media (max-width:820px){
+    .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .grid-2{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="brand">
+      <div class="dot">📦</div>
+      <div>
+        <h1>Procurement &amp; Inventory Analytics</h1>
+        <div class="sub">แดชบอร์ดวิเคราะห์สต็อกและการจัดซื้อ · สินค้าตกแต่งบ้าน &amp; ดอกไม้ประดิษฐ์</div>
+      </div>
+    </div>
+    <div style="text-align:right">
+      <div class="demo-badge">● DEMO · ข้อมูลสมมติทั้งหมด</div>
+      <div class="sub" style="margin-top:6px">ข้อมูล ณ 30 มิ.ย. 2025</div>
+    </div>
+  </header>
+
+  <!-- KPI ROW -->
+  <section style="margin-top:20px">
+    <div class="kpis" id="kpis"></div>
+  </section>
+
+  <!-- SALES CHART -->
+  <section>
+    <div class="sec-head">
+      <h2>2 · ยอดขายรายเดือน แยกตามหมวดหมู่</h2>
+      <span class="hint">มูลค่า (บาท) · ม.ค.–ธ.ค. 2024</span>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <div class="chart-box"><canvas id="salesChart"></canvas></div>
+        <div class="legend" id="salesLegend"></div>
+      </div>
+      <div class="card">
+        <div style="font-size:.85rem;color:var(--ink-2);margin-bottom:8px">สัดส่วนยอดขายทั้งปีตามหมวด</div>
+        <div class="chart-box sm"><canvas id="mixChart"></canvas></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- REORDER -->
+  <section>
+    <div class="sec-head">
+      <h2>3 · สินค้าต่ำกว่าจุดสั่งซื้อ (Reorder Point)</h2>
+      <span class="hint" id="roCount"></span>
+    </div>
+    <div class="reorder-grid" id="reorderGrid"></div>
+  </section>
+
+  <!-- SUPPLIER COMPARE -->
+  <section>
+    <div class="sec-head">
+      <h2>4 · เปรียบเทียบซัพพลายเออร์ต่อสินค้า</h2>
+      <span class="hint">คัดเลือกจาก ราคา · Lead time · คะแนนรีวิว (แถวไฮไลต์ = ตัวเลือกแนะนำ)</span>
+    </div>
+    <div class="card" id="supplierWrap"></div>
+  </section>
+
+  <!-- DEAD STOCK -->
+  <section>
+    <div class="sec-head">
+      <h2>5 · Dead Stock &amp; Slow-moving (ไม่เคลื่อนไหว 60+ วัน)</h2>
+      <span class="hint" id="deadHint"></span>
+    </div>
+    <div class="card">
+      <div class="dead-note" id="deadSummary"></div>
+      <div class="tbl-scroll">
+        <table id="deadTable">
+          <thead><tr>
+            <th>SKU</th><th>สินค้า</th><th>หมวด</th>
+            <th class="num">คงเหลือ</th><th class="num">เงินจม (บาท)</th>
+            <th class="num">ไม่ขยับ (วัน)</th><th>คำแนะนำ</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- FULL INVENTORY -->
+  <section>
+    <div class="sec-head">
+      <h2>1 · ตารางสินค้าทั้งหมด</h2>
+      <span class="hint" id="invCount"></span>
+    </div>
+    <div class="card">
+      <div class="tbl-scroll">
+        <table id="invTable">
+          <thead><tr>
+            <th>SKU</th><th>สินค้า</th><th>หมวด</th>
+            <th class="num">ราคาขาย</th><th class="num">ต้นทุน</th><th class="num">มาร์จิ้น</th>
+            <th class="num">คงเหลือ</th><th class="num">ROP</th>
+            <th>ซัพพลายเออร์</th><th>สถานะ</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    ⚠️ ข้อมูลทั้งหมดในหน้านี้เป็น <b>ข้อมูลสมมติ</b> สร้างขึ้นเพื่อสาธิตความสามารถด้าน Procurement Analytics เท่านั้น
+    ไม่มีข้อมูลลูกค้าหรือยอดขายจริงจากองค์กรใด · สร้างด้วย HTML + Chart.js (ไฟล์เดียว ไม่มี backend)
+  </footer>
+</div>
+
+<script>
+/* ============================================================
+   ข้อมูลสมมติทั้งหมด (synthetic) — home-decor / artificial flower distributor
+   ============================================================ */
+const CATS = {
+  "ดอกไม้ประดิษฐ์": "var(--c1)",
+  "แจกัน":          "var(--c2)",
+  "ของตกแต่ง":      "var(--c3)",
+  "ต้นไม้ประดิษฐ์":  "var(--c4)",
+  "อุปกรณ์จัดดอกไม้": "var(--c5)"
+};
+const CAT_HEX = {
+  "ดอกไม้ประดิษฐ์":"#3987e5","แจกัน":"#199e70","ของตกแต่ง":"#c98500",
+  "ต้นไม้ประดิษฐ์":"#9085e9","อุปกรณ์จัดดอกไม้":"#d95926"
+};
+
+// [sku, name, cat, price, cost, stock, rop, supplier, daysSinceMove]
+const RAW = [
+  ["FL-ROSE-01","กุหลาบผ้าไหม ก้านยาว (ช่อ12)","ดอกไม้ประดิษฐ์",180,92,240,120," BloomCraft Co.",4],
+  ["FL-PEON-02","ดอกโบตั๋นพรีเมียม","ดอกไม้ประดิษฐ์",260,150,58,90,"Silk & Stem Ltd.",6],
+  ["FL-TULP-03","ทิวลิปยางพารา (แพ็ค6)","ดอกไม้ประดิษฐ์",140,70,310,140,"BloomCraft Co.",9],
+  ["FL-HYDR-04","ไฮเดรนเยียหัวใหญ่","ดอกไม้ประดิษฐ์",210,118,32,80,"Petal Source",12],
+  ["FL-ORCH-05","กล้วยไม้ฟาแลนseries","ดอกไม้ประดิษฐ์",320,190,145,70,"Silk & Stem Ltd.",3],
+  ["FL-LAVN-06","ลาเวนเดอร์แห้งเทียม","ดอกไม้ประดิษฐ์",95,44,410,150,"Petal Source",21],
+  ["FL-SUNF-07","ทานตะวันจัมโบ้","ดอกไม้ประดิษฐ์",165,88,18,60,"BloomCraft Co.",7],
+  ["VS-CERM-11","แจกันเซรามิกทรงสูง","แจกัน",420,235,96,50,"CeramWorks",5],
+  ["VS-GLAS-12","แจกันแก้วใสปากบาน","แจกัน",290,160,42,60,"ClearGlass Intl.",15],
+  ["VS-MATT-13","แจกันแมตต์มินิมอล (เซ็ต3)","แจกัน",560,300,24,40,"CeramWorks",8],
+  ["VS-BRAS-14","แจกันทองเหลืองวินเทจ","แจกัน",780,470,11,25,"HeritageMetal",68],
+  ["VS-STON-15","แจกันหินขัดทรงเหลี่ยม","แจกัน",640,360,7,30,"CeramWorks",41],
+  ["DC-CNDL-21","เชิงเทียนแก้วคริสตัล","ของตกแต่ง",350,180,130,60,"LumenDeco",6],
+  ["DC-FRAM-22","กรอบรูปไม้สักธรรมชาติ","ของตกแต่ง",240,130,205,90,"WoodenNest",11],
+  ["DC-MIRR-23","กระจกกลมขอบทอง","ของตกแต่ง",890,520,38,30,"LumenDeco",9],
+  ["DC-LNTN-24","โคมไฟโมร็อกโก","ของตกแต่ง",520,300,14,35,"CasaGlow",73],
+  ["DC-CLOK-25","นาฬิกาแขวนสแกนดิ","ของตกแต่ง",430,245,88,40,"NordicTime",18],
+  ["DC-BOWL-26","ชามตกแต่งเซรามิก","ของตกแต่ง",280,150,9,45,"CeramWorks",5],
+  ["PL-MONS-31","มอนสเตอราปลอมกระถางสูง","ต้นไม้ประดิษฐ์",690,400,72,40,"GreenFaux",7],
+  ["PL-OLIV-32","ต้นมะกอกประดิษฐ์ 120ซม.","ต้นไม้ประดิษฐ์",950,560,26,30,"GreenFaux",14],
+  ["PL-SUCC-33","ไม้อวบน้ำจิ๋ว (เซ็ต9)","ต้นไม้ประดิษฐ์",320,175,158,80,"GreenFaux",10],
+  ["PL-FERN-34","เฟิร์นบอสตันแขวน","ต้นไม้ประดิษฐ์",280,150,6,50,"Verdant Supply",22],
+  ["PL-BAMB-35","ไผ่กวนอิมมงคล","ต้นไม้ประดิษฐ์",190,98,44,60,"Verdant Supply",84],
+  ["EQ-FOAM-41","โฟมจัดดอกไม้ (ลัง24)","อุปกรณ์จัดดอกไม้",130,62,340,150,"FloraTools",8],
+  ["EQ-WIRE-42","ลวดจัดช่อ #24 (ม้วน)","อุปกรณ์จัดดอกไม้",45,20,520,200,"FloraTools",13],
+  ["EQ-TAPE-43","เทปกาวก้านดอกไม้","อุปกรณ์จัดดอกไม้",35,15,88,180,"FloraTools",6],
+  ["EQ-SCIS-44","กรรไกรตัดก้านมืออาชีพ","อุปกรณ์จัดดอกไม้",220,120,17,40,"SharpEdge",96],
+  ["EQ-RIBN-45","ริบบิ้นซาตินคละสี","อุปกรณ์จัดดอกไม้",60,28,410,160,"FloraTools",19]
+];
+
+const products = RAW.map(r=>{
+  const [sku,name,cat,price,cost,stock,rop,supplier,days]=r;
+  return {sku,name,cat,price,cost,stock,rop,supplier,days,
+    margin:(price-cost)/price, tied:stock*cost};
+});
+const baht = n => n.toLocaleString('th-TH');
+const pct  = n => (n*100).toFixed(0)+'%';
+
+/* ---------- KPI tiles ---------- */
+const totalSkus  = products.length;
+const invValue   = products.reduce((s,p)=>s+p.tied,0);
+const belowRop   = products.filter(p=>p.stock<p.rop).length;
+const deadItems  = products.filter(p=>p.days>=60);
+const deadValue  = deadItems.reduce((s,p)=>s+p.tied,0);
+const avgMargin  = products.reduce((s,p)=>s+p.margin,0)/products.length;
+
+const kpiData=[
+  {label:"SKU ทั้งหมด", val:totalSkus, unit:"รายการ", delta:"5 หมวดหมู่", cls:""},
+  {label:"มูลค่าสต็อกคงคลัง", val:"฿"+baht(Math.round(invValue/1000))+"K", unit:"", delta:"↑ 6.2% จากเดือนก่อน", cls:"up"},
+  {label:"ต่ำกว่าจุดสั่งซื้อ", val:belowRop, unit:"รายการ", delta:"ต้องสั่งเพิ่มด่วน", cls:"down"},
+  {label:"เงินจมใน Dead Stock", val:"฿"+baht(Math.round(deadValue/1000))+"K", unit:"", delta:deadItems.length+" รายการ · 60+ วัน", cls:"down"},
+];
+document.getElementById('kpis').innerHTML = kpiData.map(k=>`
+  <div class="tile">
+    <div class="label">${k.label}</div>
+    <div class="val">${k.val} <small>${k.unit}</small></div>
+    <div class="delta ${k.cls}">${k.delta}</div>
+  </div>`).join('');
+
+/* ---------- Monthly sales by category (synthetic seasonality) ---------- */
+const MONTHS=["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
+// base level per category + seasonal shape (peaks: Feb Valentine, Apr Songkran, Nov-Dec festive)
+const seasonal={
+  "ดอกไม้ประดิษฐ์": [78,132,96,118,84,72,70,74,88,102,140,168],
+  "แจกัน":          [52, 60,58, 70,55,50,54,58,62, 78, 96,120],
+  "ของตกแต่ง":      [40, 48,45, 52,44,42,46,50,55, 70, 92,128],
+  "ต้นไม้ประดิษฐ์":  [30, 34,38, 46,40,36,38,42,44, 52, 64, 80],
+  "อุปกรณ์จัดดอกไม้": [24, 40,30, 36,26,22,24,26,30, 34, 46, 58]
+};
+const catNames=Object.keys(CAT_HEX);
+const salesDatasets=catNames.map(c=>({
+  label:c, data:seasonal[c].map(v=>v*1000),
+  borderColor:CAT_HEX[c], backgroundColor:CAT_HEX[c],
+  borderWidth:2, tension:.35, pointRadius:0, pointHoverRadius:5,
+  pointHoverBackgroundColor:CAT_HEX[c], pointHoverBorderColor:'#0f2438', pointHoverBorderWidth:2
+}));
+
+const axisColor='#6d859c', gridColor='rgba(255,255,255,0.07)';
+Chart.defaults.font.family='system-ui,-apple-system,"Segoe UI","Sarabun",sans-serif';
+Chart.defaults.color='#a9bed3';
+
+new Chart(document.getElementById('salesChart'),{
+  type:'line',
+  data:{labels:MONTHS,datasets:salesDatasets},
+  options:{
+    responsive:true,maintainAspectRatio:false,
+    interaction:{mode:'index',intersect:false},
+    plugins:{
+      legend:{display:false},
+      tooltip:{
+        backgroundColor:'#0b1c2c',borderColor:'rgba(255,255,255,.12)',borderWidth:1,
+        padding:12,titleColor:'#f4f8fc',bodyColor:'#a9bed3',
+        callbacks:{label:c=>` ${c.dataset.label}: ฿${baht(c.parsed.y)}`}
+      }
+    },
+    scales:{
+      x:{grid:{color:gridColor},ticks:{color:axisColor}},
+      y:{grid:{color:gridColor},ticks:{color:axisColor,callback:v=>'฿'+(v/1000)+'K'},beginAtZero:true}
+    }
+  }
+});
+document.getElementById('salesLegend').innerHTML=catNames.map(c=>
+  `<span><i style="background:${CAT_HEX[c]}"></i>${c}</span>`).join('');
+
+/* ---------- Yearly mix doughnut ---------- */
+const yearTotals=catNames.map(c=>seasonal[c].reduce((a,b)=>a+b,0)*1000);
+new Chart(document.getElementById('mixChart'),{
+  type:'doughnut',
+  data:{labels:catNames,datasets:[{data:yearTotals,
+    backgroundColor:catNames.map(c=>CAT_HEX[c]),borderColor:'#0f2438',borderWidth:3}]},
+  options:{responsive:true,maintainAspectRatio:false,cutout:'62%',
+    plugins:{legend:{position:'bottom',labels:{color:'#a9bed3',boxWidth:11,boxHeight:11,padding:10,font:{size:11}}},
+      tooltip:{backgroundColor:'#0b1c2c',borderColor:'rgba(255,255,255,.12)',borderWidth:1,padding:10,
+        callbacks:{label:c=>` ฿${baht(c.parsed)} (${pct(c.parsed/yearTotals.reduce((a,b)=>a+b,0))})`}}}}
+});
+
+/* ---------- Reorder cards ---------- */
+const LEAD_BY_SUP={ // synthetic default lead times (days) used for suggested qty
+  "BloomCraft Co.":7,"Silk & Stem Ltd.":10,"Petal Source":14,"CeramWorks":12,
+  "ClearGlass Intl.":18,"HeritageMetal":25,"LumenDeco":9,"WoodenNest":11,
+  "CasaGlow":20,"NordicTime":16,"GreenFaux":15,"Verdant Supply":13,
+  "FloraTools":6,"SharpEdge":21,"default":14
+};
+const reorder=products.filter(p=>p.stock<p.rop).sort((a,b)=>(a.stock/a.rop)-(b.stock/b.rop));
+document.getElementById('roCount').textContent=`${reorder.length} รายการต้องสั่งซื้อ`;
+document.getElementById('reorderGrid').innerHTML=reorder.map(p=>{
+  const ratio=Math.max(0,Math.min(1,p.stock/p.rop));
+  const crit=p.stock < p.rop*0.4;
+  const barColor=crit?'var(--critical)':'var(--warn)';
+  const suggest=Math.ceil((p.rop*2 - p.stock)/10)*10; // target ~2×ROP, round to 10
+  const cost=suggest*p.cost;
+  return `<div class="ro ${crit?'crit':''}">
+    <div class="sku">${p.sku}</div>
+    <div class="nm">${p.name}</div>
+    <div class="bar"><i style="width:${ratio*100}%;background:${barColor}"></i></div>
+    <div class="rows">
+      <div>คงเหลือ <b>${p.stock}</b> / จุดสั่งซื้อ <b>${p.rop}</b></div>
+      <div>ซัพพลายเออร์ <b>${p.supplier}</b> · Lead ${LEAD_BY_SUP[p.supplier]||LEAD_BY_SUP.default} วัน</div>
+    </div>
+    <div class="rec">🛒 แนะนำสั่งเพิ่ม <b>${suggest} ชิ้น</b> (≈ ฿${baht(cost)})</div>
+  </div>`;
+}).join('');
+
+/* ---------- Supplier comparison ---------- */
+// each item: same product, 2-3 suppliers with price/lead/rating; pick best by simple score
+const SUPCOMP=[
+  {item:"กุหลาบผ้าไหม ก้านยาว (ช่อ12)", rows:[
+    {sup:"BloomCraft Co.", price:92, lead:7,  rating:4.6, moq:50},
+    {sup:"Silk & Stem Ltd.",price:88, lead:12, rating:4.2, moq:100},
+    {sup:"Petal Source",   price:95, lead:6,  rating:4.8, moq:30},
+  ]},
+  {item:"แจกันเซรามิกทรงสูง", rows:[
+    {sup:"CeramWorks",     price:235, lead:12, rating:4.7, moq:20},
+    {sup:"ClearGlass Intl.",price:228,lead:18, rating:4.0, moq:40},
+    {sup:"HeritageMetal",  price:249, lead:9,  rating:4.4, moq:15},
+  ]},
+  {item:"มอนสเตอราปลอมกระถางสูง", rows:[
+    {sup:"GreenFaux",      price:400, lead:15, rating:4.5, moq:24},
+    {sup:"Verdant Supply", price:415, lead:10, rating:4.3, moq:12},
+  ]},
+  {item:"โฟมจัดดอกไม้ (ลัง24)", rows:[
+    {sup:"FloraTools",     price:62, lead:6,  rating:4.6, moq:10},
+    {sup:"SharpEdge",      price:58, lead:14, rating:4.1, moq:20},
+  ]},
+];
+// score: lower price better, lower lead better, higher rating better (normalized within item)
+function pickBest(rows){
+  const p=rows.map(r=>r.price), l=rows.map(r=>r.lead), rt=rows.map(r=>r.rating);
+  const min=a=>Math.min(...a),max=a=>Math.max(...a);
+  const norm=(v,a,inv)=>{const mn=min(a),mx=max(a);if(mx===mn)return 1;return inv?(mx-v)/(mx-mn):(v-mn)/(mx-mn);};
+  let best=-1,bi=0;
+  rows.forEach((r,i)=>{
+    const s=0.45*norm(r.price,p,true)+0.30*norm(r.lead,l,true)+0.25*norm(r.rating,rt,false);
+    r._score=s; if(s>best){best=s;bi=i;}
+  });
+  return bi;
+}
+const stars=r=>{const full=Math.round(r);return '★'.repeat(full)+'☆'.repeat(5-full);};
+document.getElementById('supplierWrap').innerHTML=SUPCOMP.map(block=>{
+  const bi=pickBest(block.rows);
+  const body=block.rows.map((r,i)=>`
+    <tr style="${i===bi?'background:rgba(12,163,12,.08)':''}">
+      <td>${r.sup}${i===bi?'<span class="best-tag">แนะนำ</span>':''}</td>
+      <td class="num ${i===bi?'best':''}">฿${baht(r.price)}</td>
+      <td class="num">${r.lead} วัน</td>
+      <td class="num">MOQ ${r.moq}</td>
+      <td><span class="stars">${stars(r.rating)}</span> ${r.rating.toFixed(1)}</td>
+      <td class="num">${(r._score*100).toFixed(0)}</td>
+    </tr>`).join('');
+  return `<div style="margin-bottom:18px">
+    <div style="font-weight:700;margin-bottom:8px">📦 ${block.item}</div>
+    <div class="tbl-scroll"><table style="min-width:560px">
+      <thead><tr><th>ซัพพลายเออร์</th><th class="num">ต้นทุน/ชิ้น</th><th class="num">Lead time</th>
+      <th class="num">ขั้นต่ำ</th><th>คะแนนรีวิว</th><th class="num">คะแนนรวม</th></tr></thead>
+      <tbody>${body}</tbody>
+    </table></div>
+  </div>`;
+}).join('');
+
+/* ---------- Dead stock ---------- */
+const dead=deadItems.slice().sort((a,b)=>b.days-a.days);
+document.getElementById('deadHint').textContent=`${dead.length} รายการ · เงินจมรวม ฿${baht(Math.round(deadValue))}`;
+document.getElementById('deadSummary').innerHTML=
+  `รายการเหล่านี้ไม่มีการขาย/เคลื่อนไหวเกิน 60 วัน รวมมูลค่าเงินจม <b style="color:var(--serious)">฿${baht(Math.round(deadValue))}</b> `+
+  `คิดเป็น <b>${pct(deadValue/invValue)}</b> ของมูลค่าสต็อกทั้งหมด — ควรพิจารณาโปรโมชัน/ล้างสต็อกเพื่อคืนสภาพคล่อง`;
+const deadAdvice=d=> d.days>90?"🔴 จัดโปรลดล้างสต็อก":"🟠 โปรโมชันกระตุ้นยอด";
+document.querySelector('#deadTable tbody').innerHTML=dead.map(p=>`
+  <tr>
+    <td style="color:var(--muted);font-variant-numeric:tabular-nums">${p.sku}</td>
+    <td>${p.name}</td>
+    <td><span class="cat-dot" style="background:${CAT_HEX[p.cat]}"></span>${p.cat}</td>
+    <td class="num">${p.stock}</td>
+    <td class="num">฿${baht(Math.round(p.tied))}</td>
+    <td class="num" style="color:${p.days>90?'#f08a8a':'var(--serious)'};font-weight:700">${p.days}</td>
+    <td>${deadAdvice(p)}</td>
+  </tr>`).join('');
+
+/* ---------- Full inventory ---------- */
+document.getElementById('invCount').textContent=`${products.length} SKU`;
+function statusOf(p){
+  if(p.stock < p.rop*0.4) return ['s-crit','วิกฤต'];
+  if(p.stock < p.rop)     return ['s-low','ต่ำกว่า ROP'];
+  return ['s-ok','ปกติ'];
+}
+document.querySelector('#invTable tbody').innerHTML=products.map(p=>{
+  const [cls,label]=statusOf(p);
+  return `<tr>
+    <td style="color:var(--muted);font-variant-numeric:tabular-nums">${p.sku}</td>
+    <td>${p.name}</td>
+    <td><span class="cat-dot" style="background:${CAT_HEX[p.cat]}"></span>${p.cat}</td>
+    <td class="num">฿${baht(p.price)}</td>
+    <td class="num">฿${baht(p.cost)}</td>
+    <td class="num">${pct(p.margin)}</td>
+    <td class="num">${p.stock}</td>
+    <td class="num">${p.rop}</td>
+    <td>${p.supplier}</td>
+    <td><span class="status ${cls}"><span class="ic"></span>${label}</span></td>
+  </tr>`;
+}).join('');
+</script>
+</body>
+</html>
