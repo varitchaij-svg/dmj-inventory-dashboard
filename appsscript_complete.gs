@@ -321,7 +321,8 @@ function doPost(e) {
     // ─── Verify PIN (POST path) ───
     if (data.action === 'verifyPin') {
       const expected = PropertiesService.getScriptProperties().getProperty('OWNER_PIN') || 'DMJ';
-      const okPin = String(data.pin || '') === String(expected);
+      // trim ทั้งสองฝั่ง — กันช่องว่าง/ขึ้นบรรทัดใหม่ที่มักติดมาตอน paste เข้า Script Property
+      const okPin = String(data.pin || '').trim() === String(expected).trim();
       return ContentService
         .createTextOutput(JSON.stringify({ ok: okPin }))
         .setMimeType(ContentService.MimeType.JSON);
@@ -457,7 +458,8 @@ function doGet(e) {
     // ตั้งค่าใน Script Property ชื่อ OWNER_PIN; ถ้าไม่ตั้ง ใช้ค่า default 'DMJ' (backward compatible)
     if (e && e.parameter && e.parameter.action === 'verifyPin') {
       const expected = PropertiesService.getScriptProperties().getProperty('OWNER_PIN') || 'DMJ';
-      const okPin = String(e.parameter.pin || '') === String(expected);
+      // trim ทั้งสองฝั่ง — กันช่องว่าง/ขึ้นบรรทัดใหม่ที่มักติดมาตอน paste เข้า Script Property
+      const okPin = String(e.parameter.pin || '').trim() === String(expected).trim();
       return ContentService
         .createTextOutput(JSON.stringify({ ok: okPin }))
         .setMimeType(ContentService.MimeType.JSON);
@@ -2799,6 +2801,32 @@ function setupZortStockTrigger() {
   });
   ScriptApp.newTrigger("syncZortBoth").timeBased().everyHours(2).create();
   Logger.log("✅ ตั้ง trigger: syncZortBoth ทุก 2 ชั่วโมง");
+}
+
+// ── ตรวจสอบ OWNER_PIN / APP_TOKEN เมื่อ login owner ไม่ได้ทั้งที่รหัสถูก ──
+// รันเองใน GAS editor แล้วดู Log (View > Logs) — ไม่โชว์ค่าจริง เผยแค่ความยาว/สถานะ
+// ชื่อไม่มี _ ต่อท้าย → โผล่ใน dropdown ให้เลือกรันได้
+function debugOwnerLogin() {
+  var props = PropertiesService.getScriptProperties();
+  var pin = props.getProperty('OWNER_PIN');
+  var tok = props.getProperty('APP_TOKEN');
+  Logger.log('── OWNER_PIN ──');
+  if (pin == null) {
+    Logger.log('❗ ไม่ได้ตั้ง OWNER_PIN → ระบบใช้รหัส default = "DMJ" (พิมพ์ DMJ เพื่อเข้า)');
+  } else {
+    Logger.log('ตั้งไว้แล้ว · ความยาว=' + pin.length +
+               ' · มีช่องว่าง/ขึ้นบรรทัดหัวท้าย=' + (pin !== pin.trim() ? 'ใช่ ⚠️ (คือสาเหตุ)' : 'ไม่มี') +
+               ' · เท่ากับ "DMJ"=' + (pin.trim() === 'DMJ'));
+  }
+  Logger.log('── APP_TOKEN (ต้องตรงกับ config.js) ──');
+  if (tok == null || !tok.trim()) {
+    Logger.log('ไม่ได้ตั้ง APP_TOKEN → ไม่บังคับตรวจ token (login ไม่ควรติดที่ token)');
+  } else {
+    Logger.log('ตั้งไว้แล้ว · ความยาว=' + tok.length +
+               ' · มีช่องว่างหัวท้าย=' + (tok !== tok.trim() ? 'ใช่ ⚠️' : 'ไม่มี') +
+               ' · ขึ้นต้น="' + tok.substring(0, 6) + '…" ลงท้าย="…' + tok.slice(-4) + '"');
+    Logger.log('เทียบกับ config.js: APP_TOKEN ควรเป็น dmj_f05e…8673 (ความยาว 36)');
+  }
 }
 
 // ตั้ง trigger ส่ง "สรุปเช้าวันนี้" วันละครั้ง (ทุกวัน 08:00 เขตเวลา GAS)

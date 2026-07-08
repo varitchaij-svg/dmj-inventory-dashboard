@@ -44,6 +44,7 @@ function LoginScreen({ onLogin }) {
   const [pinTarget, setPinTarget] = usS(null);
   const [pin, setPin] = usS("");
   const [err, setErr] = usS(false);
+  const [errMsg, setErrMsg] = usS("");   // ข้อความจริงตามสาเหตุ (แยก PIN ผิด vs เชื่อมต่อไม่ได้)
   const [checking, setChecking] = usS(false);
 
   const profiles = [
@@ -53,33 +54,41 @@ function LoginScreen({ onLogin }) {
     { role: "saler",      label: "Sale",        emoji: "💼", color: "#705d96", needPin: false },
   ];
 
+  const fail = (msg) => { setErr(true); setErrMsg(msg); setPin(""); };
+
   const handleSelect = (p) => {
-    if (p.needPin) { setPinTarget(p); setPin(""); setErr(false); }
+    if (p.needPin) { setPinTarget(p); setPin(""); setErr(false); setErrMsg(""); }
     else { onLogin(p.role); }
   };
 
   const handlePin = async () => {
     if (checking) return;
     const base = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null;
-    // ตรวจ PIN ฝั่ง server (รหัสไม่อยู่ใน source); ถ้าต่อเน็ตไม่ได้ fallback เป็นรหัส default เดิม
-    if (base) {
-      setChecking(true); setErr(false);
-      try {
-        const url = new URL(base);
-        url.searchParams.set('action', 'verifyPin');
-        url.searchParams.set('pin', pin);
-        const res = await fetch(url.toString());
-        const d = await res.json();
-        setChecking(false);
-        if (!d || typeof d.ok !== 'boolean') { setErr(true); setPin(""); return; }
+    // ตรวจ PIN ฝั่ง server (รหัสไม่อยู่ใน source)
+    if (!base) { fail("ตั้งค่าเซิร์ฟเวอร์ไม่ครบ (ไม่พบ URL)"); return; }
+    setChecking(true); setErr(false); setErrMsg("");
+    try {
+      const url = new URL(base);
+      url.searchParams.set('action', 'verifyPin');
+      url.searchParams.set('pin', pin);
+      const res = await fetch(url.toString());
+      const d = await res.json().catch(() => null);
+      setChecking(false);
+      // แยกสาเหตุให้ชัด: PIN ผิดจริง vs token/deploy ไม่ผ่าน vs เชื่อมต่อไม่ได้
+      if (d && typeof d.ok === 'boolean') {
         if (d.ok) { onLogin(pinTarget.role); return; }
-        setErr(true); setPin(""); return;
-      } catch (e) {
-        setChecking(false);
-        setErr(true); setPin(""); return;
+        fail("รหัสไม่ถูกต้อง");                       // server ตอบชัดว่า PIN ผิด
+        return;
       }
+      if (d && d.error === 'unauthorized') {
+        fail("เข้าเซิร์ฟเวอร์ไม่ได้ (token ไม่ตรง/deploy ใหม่) — ไม่ใช่ที่รหัส");
+        return;
+      }
+      fail("เซิร์ฟเวอร์ตอบผิดรูปแบบ ลองใหม่อีกครั้ง");
+    } catch (e) {
+      setChecking(false);
+      fail("เชื่อมต่อไม่ได้ ตรวจอินเทอร์เน็ตแล้วลองใหม่");
     }
-    setErr(true); setPin("");
   };
 
   return (
@@ -159,7 +168,7 @@ function LoginScreen({ onLogin }) {
             </div>
             <input
               autoFocus type="password" value={pin}
-              onChange={e => { setPin(e.target.value); setErr(false); }}
+              onChange={e => { setPin(e.target.value); setErr(false); setErrMsg(""); }}
               onKeyDown={e => e.key === "Enter" && handlePin()}
               placeholder="รหัสผ่าน"
               style={{
@@ -171,8 +180,8 @@ function LoginScreen({ onLogin }) {
                 outline:"none", marginBottom: err ? 6 : 16,
               }}/>
             {err && (
-              <div style={{color:"var(--dang)", fontSize:12, textAlign:"center", marginBottom:12}}>
-                รหัสไม่ถูกต้อง
+              <div style={{color:"var(--dang)", fontSize:12, textAlign:"center", marginBottom:12, lineHeight:1.4}}>
+                {errMsg || "รหัสไม่ถูกต้อง"}
               </div>
             )}
             <button onClick={handlePin} style={{
