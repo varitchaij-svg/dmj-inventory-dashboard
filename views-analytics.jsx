@@ -5116,6 +5116,7 @@ function MtoJobView({ data }) {
   const [activeJob, setActiveJob] = uS(null);
   const [newJob, setNewJob] = uS({ jobName: "", customer: "", price: "", imageUrl: "" });
   const [materials, setMaterials] = uS([]);
+  const [matLightbox, setMatLightbox] = uS(null); // {url,name} — แตะรูปวัตถุดิบดูใหญ่
   const [search, setSearch] = uS("");
   const [searchQty, setSearchQty] = uS(1);
   const [searchWarehouse, setSearchWarehouse] = uS("warehouse");
@@ -5590,7 +5591,9 @@ function MtoJobView({ data }) {
                 <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", background: "var(--g-50)", borderRadius: 8, flexWrap: "wrap" }}>
                   {imgSrc ? (
                     <img src={imgSrc} alt={m.sku} loading="lazy"
-                      style={{ width: 44, height: 44, borderRadius: 8, objectFit: "cover", flexShrink: 0, border: "1px solid var(--bdr)", background: "#fff" }}
+                      onClick={() => setMatLightbox({ url: imgSrc, name: m.name || m.sku })}
+                      title="แตะดูรูปใหญ่"
+                      style={{ width: 44, height: 44, borderRadius: 8, objectFit: "cover", flexShrink: 0, border: "1px solid var(--bdr)", background: "#fff", cursor: "zoom-in" }}
                       onError={e => { e.currentTarget.style.display = "none"; }} />
                   ) : (
                     <div style={{ width: 44, height: 44, borderRadius: 8, flexShrink: 0, border: "1px solid var(--bdr)", background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, color: "var(--muted)" }}>📦</div>
@@ -5677,6 +5680,7 @@ function MtoJobView({ data }) {
             </button>
           </>
         )}
+        {matLightbox && <ImageLightbox url={matLightbox.url} name={matLightbox.name} onClose={() => setMatLightbox(null)} />}
       </div>
     );
   }
