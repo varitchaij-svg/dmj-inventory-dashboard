@@ -6,6 +6,8 @@ on:
     paths:
       - 'appsscript_complete.gs'
       - 'appsscript.json'
+      - '.github/workflows/deploy-gas.yml'
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -25,3 +27,10 @@ jobs:
 
       - name: Push to GAS
         run: clasp push --force
+
+      # clasp push อัปแค่โค้ดใน project (HEAD) — เว็บแอป /exec ที่ pin เวอร์ชันไว้จะยัง
+      # เสิร์ฟโค้ดเก่า ทำให้ route ใหม่ได้ "Unknown action" · ต้อง redeploy เวอร์ชันใหม่
+      # เข้า deployment เดิม (ใช้ deploymentId = ส่วน AKfycb… ใน /exec URL ของ config.js)
+      # → คง URL เดิม แต่โค้ดใหม่ออกทันที
+      - name: Deploy new version to web app (same /exec URL)
+        run: clasp deploy --deploymentId AKfycbz4ARb5OaYZiY40X0VMDm6jca1BSC6UpQ-1QQ1nb4VGQ0jPch1MEmEOUvWEDaEPbVcONg --description "auto ${{ github.sha }}"
