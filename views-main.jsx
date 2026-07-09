@@ -6960,6 +6960,16 @@ function AddProductView({ data, role, onAdded }) {
     () => products.concat(queue.map(q => ({ sku: q.sku, name: q.name, category: q.category }))),
     [products, queue]
   );
+  // เซ็ตสำหรับวิเคราะห์รหัส (Model/Prefix/สี/แบบ) — ตัดหมวด "ไม่มีรหัสสินค้า"/MTO ออก
+  //   (พวกนั้นไม่ใช่ SKU มาตรฐานของบริษัท ไม่ควรดันเลข Model เช่น L ควรอยู่ 263 ไม่ใช่ 999)
+  //   หมายเหตุ: การเช็ค SKU ซ้ำ (skuSet) ยังใช้ skuKnown เต็ม กันชนรหัสจริงทุกกรณี
+  const skuForCode = uM(
+    () => skuKnown.filter(p => {
+      const c = (p.category || p.cat || "").trim();
+      return c !== "ไม่มีรหัสสินค้า" && !c.includes("Made to Order");
+    }),
+    [skuKnown]
+  );
 
   // หมวดหมู่ที่มีอยู่ (ไม่รวม MTO/ไม่มีรหัส) เรียงตามความถี่
   const allCats = uM(() => {
@@ -6992,6 +7002,7 @@ function AddProductView({ data, role, onAdded }) {
   // ── SKU builder ตาม business rule [Prefix][Variant 2 หลัก][Model 3 หลัก] ──
   const [skuMode, setSkuMode]       = uS("new");   // "new"=แบบใหม่ · "color"=สีใหม่ของแบบเดิม
   const [prefix, setPrefix]         = uS("");       // ตัวอักษรนำ (โหมดแบบใหม่)
+  const [prefixNameSearch, setPrefixNameSearch] = uS(""); // พิมพ์ชื่อสินค้า → หา Prefix (เช่น มะกอก → OL)
   const [baseDesignSku, setBaseDesignSku] = uS(""); // SKU แบบเดิมที่เลือก (โหมดสีใหม่) — ล็อค prefix+model
   const [designSearch, setDesignSearch]   = uS(""); // ค้นหาแบบเดิม
   const [variantSrc, setVariantSrc] = uS("color");  // "color"=เลือกจากตารางสี · "manual"=พิมพ์เอง (ขนาด/ลำดับ)
@@ -7012,7 +7023,7 @@ function AddProductView({ data, role, onAdded }) {
   // Prefix ที่เคยใช้ (แยกในหมวดที่เลือกก่อน) — ชิปเลือก Prefix โหมดแบบใหม่
   const prefixInfo = uM(() => {
     const cnt = {}, catCnt = {};
-    skuKnown.forEach(p => {
+    skuForCode.forEach(p => {
       const m = String(p.sku || "").trim().toUpperCase().match(/^([A-Z]{1,3})\d/);
       if (!m) return;
       cnt[m[1]] = (cnt[m[1]] || 0) + 1;
@@ -7022,14 +7033,33 @@ function AddProductView({ data, role, onAdded }) {
     const inCat  = Object.keys(catCnt).sort((a, b) => catCnt[b] - catCnt[a]);
     const others = Object.keys(cnt).filter(p => !catCnt[p]).sort((a, b) => cnt[b] - cnt[a]);
     return { inCat, others };
-  }, [skuKnown, effectiveCat]);
+  }, [skuForCode, effectiveCat]);
+
+  // พิมพ์ชื่อสินค้า (เช่น "มะกอก") → หา Prefix จากสินค้าเดิมที่ชื่อคล้ายกัน (เช่น OL)
+  //   จับคู่ทุก token ในชื่อ · จัดกลุ่มตาม prefix · โชว์ตัวอย่างชื่อ + จำนวน เรียงจากที่ใช้บ่อยสุด
+  const prefixByName = uM(() => {
+    const q = prefixNameSearch.trim().toLowerCase();
+    if (q.length < 2) return [];
+    const toks = q.split(/\s+/).filter(Boolean);
+    const byPfx = {}; // prefix → { count, sample }
+    skuForCode.forEach(p => {
+      const m = String(p.sku || "").trim().toUpperCase().match(/^([A-Z]{1,3})\d/);
+      if (!m) return;
+      const nm = String(p.name || "").toLowerCase();
+      if (!toks.every(t => nm.includes(t))) return;
+      const pfx = m[1];
+      if (!byPfx[pfx]) byPfx[pfx] = { prefix: pfx, count: 0, sample: p.name || "" };
+      byPfx[pfx].count++;
+    });
+    return Object.values(byPfx).sort((a, b) => b.count - a.count).slice(0, 6);
+  }, [prefixNameSearch, skuForCode]);
 
   // ข้อมูลแบบเดิมที่เลือก (โหมดสีใหม่) — prefix, model + variant/สีที่มีอยู่แล้ว (กันสร้างซ้ำ)
   const designInfo = uM(() => {
     const parts = parseSkuParts(baseDesignSku);
     if (!parts) return null;
     const taken = [];
-    skuKnown.forEach(p => {
+    skuForCode.forEach(p => {
       const q = parseSkuParts(p.sku);
       if (q && q.prefix === parts.prefix && q.model === parts.model) {
         taken.push({ variant: q.variant, name: p.name || "", sku: String(p.sku).toUpperCase() });
@@ -7037,14 +7067,14 @@ function AddProductView({ data, role, onAdded }) {
     });
     taken.sort((a, b) => a.variant.localeCompare(b.variant));
     return { prefix: parts.prefix, model: parts.model, taken };
-  }, [baseDesignSku, skuKnown]);
+  }, [baseDesignSku, skuForCode]);
 
   // ค้นหาแบบเดิม (โหมดสีใหม่) — เฉพาะ SKU รูปแบบมาตรฐาน, ยุบเป็น 1 รายการต่อแบบ (prefix+model)
   const designMatches = uM(() => {
     const q = designSearch.trim().toLowerCase();
     const toks = q ? q.split(/\s+/).filter(Boolean) : [];
     const seen = new Set(), out = [];
-    for (const p of skuKnown) {
+    for (const p of skuForCode) {
       const parts = parseSkuParts(p.sku);
       if (!parts) continue;
       const key = parts.prefix + parts.model;
@@ -7056,7 +7086,7 @@ function AddProductView({ data, role, onAdded }) {
       if (out.length >= 12) break;
     }
     return out;
-  }, [designSearch, skuKnown]);
+  }, [designSearch, skuForCode]);
 
   // ค้นหาสีในตารางมาตรฐาน
   const colorMatches = uM(() => {
@@ -7067,7 +7097,7 @@ function AddProductView({ data, role, onAdded }) {
 
   // Model Number: แบบใหม่ = เลขถัดไปของ prefix (หรือเลขที่ล็อกไว้ถ้ากำลังเพิ่มสีของแบบใหม่)
   //              · สีใหม่ = คงเลขของแบบเดิม
-  const newModelNext = uM(() => (skuMode === "new" ? nextModelForPrefix(prefix, skuKnown) : ""), [skuMode, prefix, skuKnown]);
+  const newModelNext = uM(() => (skuMode === "new" ? nextModelForPrefix(prefix, skuForCode) : ""), [skuMode, prefix, skuForCode]);
   const effPrefix = skuMode === "color" ? (designInfo ? designInfo.prefix : "") : prefix.trim().toUpperCase();
   // ถ้าล็อกแบบไว้และ prefix ตรงกัน → ใช้เลข Model ที่ล็อก (เพิ่มสีอื่นของแบบเดียวกัน เลขไม่รันหนี)
   const held = (skuMode === "new" && heldDesign && heldDesign.prefix === effPrefix) ? heldDesign.model : null;
@@ -7080,12 +7110,12 @@ function AddProductView({ data, role, onAdded }) {
   const effTaken = uM(() => {
     if (!/^[A-Z]{1,3}$/.test(effPrefix) || !/^\d{3}$/.test(effModel)) return [];
     const out = [];
-    skuKnown.forEach(p => {
+    skuForCode.forEach(p => {
       const q = parseSkuParts(p.sku);
       if (q && q.prefix === effPrefix && q.model === effModel) out.push(q.variant);
     });
     return out;
-  }, [skuKnown, effPrefix, effModel]);
+  }, [skuForCode, effPrefix, effModel]);
   const effTakenSet = uM(() => new Set(effTaken), [effTaken]);
 
   const skuUp = assembledSku;
@@ -7110,7 +7140,8 @@ function AddProductView({ data, role, onAdded }) {
   // ── ราคา: กรอก "ราคาส่ง" → ช่องราคาขาย (sellprice) = ปลีก = ส่ง × 1.25 (ปัดจำนวนเต็ม) ──
   const RETAIL_MULT = 1.25;
   const wholesale = Number(price) || 0;
-  const retailPrice = wholesale > 0 ? Math.round(wholesale * RETAIL_MULT) : 0;
+  // ราคาปลีก = ส่ง × 1.25 — ไม่ปัดเป็นจำนวนเต็ม (เก็บทศนิยม) · ปัดแค่ 2 ตำแหน่งกัน float เพี้ยน
+  const retailPrice = wholesale > 0 ? Math.round(wholesale * RETAIL_MULT * 100) / 100 : 0;
   // ชื่อสีจากรหัส variant (เฉพาะโหมดเลือกจากตารางสี) — โหมดพิมพ์เอง (ขนาด/ลำดับ) ไม่มีชื่อสี
   const colorName = (variantSrc === "color") ? (VARIANT_CODE_TO_NAME[variantCode2] || "") : "";
   // ชื่อเต็มที่จะบันทึก = ชื่อ + สี + "ราคาส่ง" (เลขที่กรอก) เช่น "ยิปโซแห้ง เขียว 68"
@@ -7269,6 +7300,34 @@ function AddProductView({ data, role, onAdded }) {
                   <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 6 }}>
                     1) ตัวอักษรนำ (Prefix) — ประเภทสินค้า เช่น OL=มะกอก, R=กุหลาบ
                   </div>
+
+                  {/* พิมพ์ชื่อสินค้า → หา Prefix จากของเดิมที่ชื่อคล้ายกัน */}
+                  <input type="text" placeholder="🔍 พิมพ์ชื่อสินค้าเพื่อหารหัส (เช่น มะกอก → OL)"
+                    value={prefixNameSearch} onChange={e => setPrefixNameSearch(e.target.value)}
+                    style={{ ...inputStyle, marginBottom: 8 }} />
+                  {prefixByName.length > 0 && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 10,
+                                  border: "1.5px solid var(--g-500)", borderRadius: 10, background: "var(--g-50)", padding: 6 }}>
+                      {prefixByName.map(pb => (
+                        <button key={pb.prefix} type="button"
+                          onClick={() => { setPrefix(pb.prefix); setHeldDesign(null); setPrefixNameSearch(""); }}
+                          style={{ display: "flex", alignItems: "center", gap: 8, textAlign: "left",
+                                   background: "#fff", border: "1px solid var(--bdr)", borderRadius: 8,
+                                   padding: "8px 10px", cursor: "pointer", fontFamily: "inherit", minHeight: 42 }}>
+                          <span style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 15, color: "var(--g-700)", flexShrink: 0 }}>{pb.prefix}</span>
+                          <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            {pb.sample} · {pb.count} รายการ
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {prefixNameSearch.trim().length >= 2 && prefixByName.length === 0 && (
+                    <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>
+                      ไม่พบสินค้าเดิมที่ชื่อคล้าย “{prefixNameSearch.trim()}” — ถ้าเป็นประเภทใหม่ เลือก/พิมพ์ Prefix เองด้านล่าง
+                    </div>
+                  )}
+
                   {(prefixInfo.inCat.length > 0 || prefixInfo.others.length > 0) && (
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
                       {prefixInfo.inCat.map(px => (
