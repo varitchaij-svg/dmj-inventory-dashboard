@@ -7107,14 +7107,15 @@ function AddProductView({ data, role, onAdded }) {
   const isDup = dupLocal || dupRemote;
   const canSave = !saving && skuUp !== "" && name.trim() !== "" && effectiveCat !== "" && !isDup && !(serverCheck && serverCheck.checking);
 
-  // ── ราคา: กรอก "ราคาส่ง" → ตั้ง "ราคาปลีก" = ส่ง × 1.25 (ปัดเป็นจำนวนเต็ม) ──
+  // ── ราคา: กรอก "ราคาส่ง" → ช่องราคาขาย (sellprice) = ปลีก = ส่ง × 1.25 (ปัดจำนวนเต็ม) ──
   const RETAIL_MULT = 1.25;
   const wholesale = Number(price) || 0;
   const retailPrice = wholesale > 0 ? Math.round(wholesale * RETAIL_MULT) : 0;
   // ชื่อสีจากรหัส variant (เฉพาะโหมดเลือกจากตารางสี) — โหมดพิมพ์เอง (ขนาด/ลำดับ) ไม่มีชื่อสี
   const colorName = (variantSrc === "color") ? (VARIANT_CODE_TO_NAME[variantCode2] || "") : "";
-  // ชื่อเต็มที่จะบันทึก = ชื่อ + สี + ราคาปลีก (เว้นวรรคคั่น, ข้ามส่วนที่ว่าง) เช่น "ป๊อปปี้B. น้ำเงิน 148"
-  const composedName = [name.trim(), colorName, retailPrice > 0 ? String(retailPrice) : ""]
+  // ชื่อเต็มที่จะบันทึก = ชื่อ + สี + "ราคาส่ง" (เลขที่กรอก) เช่น "ยิปโซแห้ง เขียว 68"
+  //   ⚠️ ตัวเลขในชื่อ = ราคาส่ง (ไม่ใช่ปลีก) · sellprice ที่บันทึกจริง = ปลีก (×1.25)
+  const composedName = [name.trim(), colorName, wholesale > 0 ? String(wholesale) : ""]
     .filter(Boolean).join(" ");
 
   // สร้าง object สินค้าจากค่าในฟอร์มปัจจุบัน (name = ชื่อเต็มประกอบ, sellprice = ราคาปลีก)
@@ -7486,7 +7487,7 @@ function AddProductView({ data, role, onAdded }) {
             {/* ชื่อเต็มที่จะบันทึกจริง = ชื่อ + สี + ราคาปลีก */}
             {composedName && (
               <div style={{ padding: "10px 12px", borderRadius: 10, background: "var(--g-50)", border: "1.5px solid var(--g-500)" }}>
-                <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>ชื่อที่จะบันทึกจริง (ชื่อ + สี + ราคา)</div>
+                <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>ชื่อที่จะบันทึกจริง (ชื่อ + สี + ราคาส่ง)</div>
                 <div style={{ fontSize: 15, fontWeight: 800, color: "var(--g-700)" }}>{composedName}</div>
               </div>
             )}
