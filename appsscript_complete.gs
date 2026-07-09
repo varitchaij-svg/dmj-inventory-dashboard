@@ -1903,6 +1903,144 @@ function exploreZortSales() {
   Logger.log("──────── เสร็จ — copy log ทั้งหมดส่งกลับมา ────────");
 }
 
+// ─── Marketing diagnostic (READ-ONLY) ───────────────────────────────────────
+// นับสถิติออเดอร์ย้อนหลัง 1 ปี เพื่อตอบว่า: ช่องทางไหนขายเท่าไร, ลูกค้าระบุตัวตนกี่ %,
+// ใช้ส่วนลด/voucher แค่ไหน, มีลูกค้าซ้ำไหม — ใช้ตัดสินใจว่าควรทำ marketing แบบไหน
+// ไม่แตะชีต ไม่แตะ ZORT (GET อย่างเดียวผ่าน fetchZortOrdersPaged_) · รันเองใน editor แล้วส่ง log กลับมา
+function analyzeZortMarketing() {
+  const tz = "Asia/Bangkok";
+  const today = new Date();
+  const DAYS = 365;
+  const fromDate = new Date(today.getTime() - DAYS * 24 * 60 * 60 * 1000);
+  const fromStr = Utilities.formatDate(fromDate, tz, "yyyy-MM-dd");
+  const toStr   = Utilities.formatDate(today, tz, "yyyy-MM-dd");
+
+  const orders = fetchZortOrdersPaged_(fromStr, toStr);
+  Logger.log("──────────────────────────────────────");
+  Logger.log("ดึงออเดอร์ทั้งหมด (ทุก status): " + orders.length + " · ช่วง " + fromStr + " → " + toStr);
+
+  // helper: เพิ่มยอดลง bucket { count, rev }
+  const bump = (obj, key, rev) => {
+    const k = (key === null || key === undefined || key === "") ? "(ว่าง)" : String(key);
+    if (!obj[k]) obj[k] = { count: 0, rev: 0 };
+    obj[k].count++;
+    obj[k].rev += rev;
+  };
+  // helper: log bucket เรียงตามยอดขาย (มาก→น้อย) เอาแค่ top N
+  const dump = (label, obj, total, topN) => {
+    Logger.log("── " + label + " ──");
+    const rows = Object.entries(obj).sort((a, b) => b[1].rev - a[1].rev);
+    const show = topN ? rows.slice(0, topN) : rows;
+    show.forEach(([k, v]) => {
+      const pctOrd = total ? Math.round(v.count / total * 100) : 0;
+      Logger.log(`   ${k} : ${v.count} ออเดอร์ (${pctOrd}%) · ${Math.round(v.rev).toLocaleString()} บาท`);
+    });
+    if (topN && rows.length > topN) Logger.log(`   …และอีก ${rows.length - topN} ค่า`);
+  };
+
+  const statusCount = {};
+  const byChannel = {}, byWarehouse = {}, byMarketplace = {}, byTag = {}, byAgent = {};
+  const custCount = {};                 // customerid → { count, rev, name }
+  let success = 0, totalRev = 0;
+  let hasPhone = 0, hasLine = 0, hasEmail = 0, hasFacebook = 0, hasCustId = 0, hasAnyId = 0;
+  let hasDiscount = 0, hasVoucher = 0, discountSum = 0, voucherSum = 0;
+
+  for (const o of orders) {
+    statusCount[o.status || "null"] = (statusCount[o.status || "null"] || 0) + 1;
+    if (o.status !== "Success") continue;
+
+    // กันวันที่เพี้ยน (นอกช่วง) แบบเดียวกับ syncZortSales
+    const dateStr = o.orderdateString || (o.orderdate ? String(o.orderdate).substring(0, 10) : null);
+    if (dateStr) {
+      const [yr, mo, dy] = dateStr.split("-").map(Number);
+      const oDate = new Date(yr, mo - 1, dy);
+      if (oDate < fromDate || oDate > today) continue;
+    }
+
+    success++;
+    const rev = Number(o.amount) || Number(o.totalproductamount) || 0;
+    totalRev += rev;
+
+    bump(byChannel,     o.saleschannel,   rev);
+    bump(byWarehouse,   o.warehousecode,  rev);
+    if (o.marketplacename) bump(byMarketplace, o.marketplacename, rev);
+    if (o.tag)   bump(byTag,   o.tag,   rev);
+    bump(byAgent, o.createusername || o.agent, rev);
+
+    // ตัวตนลูกค้า
+    const phone = String(o.customerphone || "").trim();
+    const line  = String(o.lineid || o.line || "").trim();
+    const email = String(o.customeremail || "").trim();
+    const fb    = String(o.facebookid || o.facebookname || "").trim();
+    const cid   = o.customerid;
+    if (phone) hasPhone++;
+    if (line)  hasLine++;
+    if (email) hasEmail++;
+    if (fb)    hasFacebook++;
+    if (cid)   hasCustId++;
+    if (phone || line || email || fb || cid) hasAnyId++;
+
+    // ลูกค้าซ้ำ — group ด้วย customerid (fallback phone)
+    const custKey = cid ? ("id:" + cid) : (phone ? ("ph:" + phone) : null);
+    if (custKey) {
+      if (!custCount[custKey]) custCount[custKey] = { count: 0, rev: 0, name: o.customername || custKey };
+      custCount[custKey].count++;
+      custCount[custKey].rev += rev;
+    }
+
+    // ส่วนลด / voucher
+    const disc = Number(o.discountamount) || Number(o.discount) || 0;
+    const vouch = Number(o.voucheramount) || 0;
+    if (disc > 0)  { hasDiscount++; discountSum += disc; }
+    if (vouch > 0) { hasVoucher++;  voucherSum += vouch; }
+  }
+
+  Logger.log("status breakdown: " + JSON.stringify(statusCount));
+  Logger.log("ออเดอร์ Success (นับจริง): " + success + " · ยอดรวม " + Math.round(totalRev).toLocaleString() + " บาท");
+  const pct = n => success ? Math.round(n / success * 100) : 0;
+
+  Logger.log("");
+  Logger.log("════ 1) ช่องทางขาย ════");
+  dump("saleschannel", byChannel, success, 15);
+  dump("warehousecode", byWarehouse, success, 15);
+  if (Object.keys(byMarketplace).length) dump("marketplacename (เฉพาะที่มีค่า)", byMarketplace, success, 15);
+
+  Logger.log("");
+  Logger.log("════ 2) ตัวตนลูกค้า (% ของออเดอร์ Success) ════");
+  Logger.log(`   มีเบอร์โทร  : ${hasPhone} (${pct(hasPhone)}%)`);
+  Logger.log(`   มี LINE     : ${hasLine} (${pct(hasLine)}%)`);
+  Logger.log(`   มีอีเมล     : ${hasEmail} (${pct(hasEmail)}%)`);
+  Logger.log(`   มี Facebook : ${hasFacebook} (${pct(hasFacebook)}%)`);
+  Logger.log(`   มี customerid: ${hasCustId} (${pct(hasCustId)}%)`);
+  Logger.log(`   มีอย่างน้อย 1 อย่าง: ${hasAnyId} (${pct(hasAnyId)}%)  ← ยิงโปรหาได้กี่ %`);
+
+  Logger.log("");
+  Logger.log("════ 3) ลูกค้าซ้ำ (จาก customerid/phone ที่ระบุตัวตน) ════");
+  const custs = Object.values(custCount);
+  const repeat = custs.filter(c => c.count >= 2);
+  Logger.log(`   ลูกค้าระบุตัวตนทั้งหมด: ${custs.length} ราย`);
+  Logger.log(`   ซื้อซ้ำ ≥2 ครั้ง: ${repeat.length} ราย (${custs.length ? Math.round(repeat.length / custs.length * 100) : 0}%)`);
+  const topCust = custs.sort((a, b) => b.rev - a.rev).slice(0, 10);
+  Logger.log("   Top 10 ลูกค้า (ตามยอดซื้อ):");
+  topCust.forEach(c => Logger.log(`     ${c.name} : ${c.count} ครั้ง · ${Math.round(c.rev).toLocaleString()} บาท`));
+
+  Logger.log("");
+  Logger.log("════ 4) ส่วนลด / Voucher ════");
+  Logger.log(`   ออเดอร์มีส่วนลด : ${hasDiscount} (${pct(hasDiscount)}%) · รวม ${Math.round(discountSum).toLocaleString()} บาท`);
+  Logger.log(`   ออเดอร์มี voucher: ${hasVoucher} (${pct(hasVoucher)}%) · รวม ${Math.round(voucherSum).toLocaleString()} บาท`);
+
+  if (Object.keys(byTag).length) {
+    Logger.log("");
+    Logger.log("════ 5) Tag ออเดอร์ (top 10) ════");
+    dump("tag", byTag, success, 10);
+  }
+  Logger.log("");
+  Logger.log("════ 6) ผู้สร้างออเดอร์ / agent (top 10 — ดูยอดต่อคน) ════");
+  dump("createusername/agent", byAgent, success, 10);
+
+  Logger.log("──────── เสร็จ — copy log ทั้งหมดส่งกลับมา ────────");
+}
+
 // ─── ZORT Sales Auto-Sync ───────────────────────────────────────────────────
 
 function syncZortSales() {
