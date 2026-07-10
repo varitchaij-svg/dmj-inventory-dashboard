@@ -20,11 +20,12 @@ const TABS = [
   { id: "auditlog",      label: "📋 Audit Log",             icon: I.layers },
   { id: "deadstock",     label: "📦 สินค้าจม",              icon: I.alert },
   { id: "quotefollowup", label: "📄 ใบเสนอราคาค้าง",         icon: I.cart },
+  { id: "customers",     label: "👥 ลูกค้า & ยอดซื้อ",        icon: I.store },
 ];
 
 // Role config
 const ROLE_TABS = {
-  owner:      ["overview","categories","trends","stock","storage","stockcount","newproduct","frontstore","transfers","orders","ordersummary","mtojobs","upload","connect","labels","auditlog","deadstock","quotefollowup"],
+  owner:      ["overview","categories","trends","stock","storage","stockcount","newproduct","frontstore","transfers","orders","ordersummary","mtojobs","upload","connect","labels","auditlog","deadstock","quotefollowup","customers"],
   employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","mtojobs","labels"],
   warehouse:  ["categories","stock","storage","stockcount","newproduct","orders","ordersummary","mtojobs","labels"],
   frontstore: ["categories","stock","frontstore","orders","mtojobs","labels"],
@@ -957,6 +958,7 @@ function App() {
         {activeTab === "auditlog"     && <ErrorBoundary key="auditlog"><AuditLogView/></ErrorBoundary>}
         {activeTab === "deadstock"    && <ErrorBoundary key="deadstock"><DeadStockView/></ErrorBoundary>}
         {activeTab === "quotefollowup" && <ErrorBoundary key="quotefollowup"><QuoteFollowupView/></ErrorBoundary>}
+        {activeTab === "customers"    && <ErrorBoundary key="customers"><CustomerView/></ErrorBoundary>}
         {activeTab === "connect"      && <ErrorBoundary key="connect"><ConnectView
                                     sheetUrl={sheetUrl}
                                     sheetViewUrl={sheetViewUrl}

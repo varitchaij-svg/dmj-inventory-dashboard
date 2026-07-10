@@ -6172,6 +6172,229 @@ function QuoteFollowupView() {
   );
 }
 
+// ────────────── 👥 ลูกค้า & ยอดซื้อ (CustomerView) ──────────────
+// อ่าน action=getCustomerAnalytics (syncZortSales เขียนชีตไว้): ยอดซื้อลูกค้าต่อเดือน
+// + Top ลูกค้าสะสม (%เสี่ยงกระจุก) + กดดูสินค้าที่ลูกค้าซื้อบ่อย + badge "เงียบ" (หาย ≥2 เดือน)
+// (owner ดูคนเดียว)
+// ───────────────────────────────────────────────────────────
+function CustomerView() {
+  const [months, setMonths] = uS([]);
+  const [customers, setCustomers] = uS([]);
+  const [grandTotal, setGrandTotal] = uS(0);
+  const [loading, setLoading] = uS(true);
+  const [err, setErr] = uS(null);
+  const [genAt, setGenAt] = uS(null);
+  const [threshold, setThreshold] = uS(15000);
+  const [selMonth, setSelMonth] = uS("");
+  const [expandedKey, setExpandedKey] = uS(null);
+  const SILENT_GAP = 2; // หาย ≥2 เดือน = เงียบ
+
+  const load = async () => {
+    if (!SHEET_DEPLOY_URL) { setErr("ยังไม่ได้เชื่อมต่อ Sheet"); setLoading(false); return; }
+    setLoading(true); setErr(null);
+    try {
+      const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
+      const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getCustomerAnalytics&_t=${Date.now()}`, { cache: "no-store" });
+      const d = await res.json();
+      if (d.error && (!d.customers || !d.customers.length)) throw new Error(d.error);
+      const ms = Array.isArray(d.months) ? d.months : [];
+      setMonths(ms);
+      setCustomers(Array.isArray(d.customers) ? d.customers : []);
+      setGrandTotal(Number(d.grandTotal) || 0);
+      setGenAt(d.generatedAt || null);
+      if (ms.length) setSelMonth(prev => prev || ms[ms.length - 1]);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  uE(() => { load(); }, []);
+
+  const baht = (n) => (Number(n) || 0).toLocaleString("th-TH", { maximumFractionDigits: 0 });
+  const latestMonth = months.length ? months[months.length - 1] : null;
+  const isSilent = (c) => {
+    if (!c.lastMonth || !latestMonth) return false;
+    const gap = months.indexOf(latestMonth) - months.indexOf(c.lastMonth);
+    return gap >= SILENT_GAP;
+  };
+
+  // Section A: ลูกค้ายอด ≥ threshold ในเดือนที่เลือก
+  const monthRows = customers
+    .filter(c => c.byMonth && c.byMonth[selMonth] && c.byMonth[selMonth].total >= threshold)
+    .map(c => ({ ...c, mTotal: c.byMonth[selMonth].total, mCount: c.byMonth[selMonth].count }))
+    .sort((a, b) => b.mTotal - a.mTotal);
+  const monthSum = monthRows.reduce((s, c) => s + c.mTotal, 0);
+
+  // Section B: Top ลูกค้าสะสม (ทั้งช่วง) + cumulative %
+  const topN = customers.slice(0, 20);
+  let cum = 0;
+  const topRows = topN.map(c => {
+    const pct = grandTotal ? (c.total / grandTotal * 100) : 0;
+    cum += pct;
+    return { ...c, pct, cumPct: cum };
+  });
+
+  const toggle = (key) => setExpandedKey(prev => prev === key ? null : key);
+
+  const productPanel = (c) => (
+    <div style={{ padding: "8px 12px 12px", background: "var(--g-50)" }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "var(--muted)", marginBottom: 6 }}>🛒 สินค้าที่ซื้อบ่อย (ทั้งช่วง)</div>
+      {(!c.products || !c.products.length) ? (
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>ไม่มีข้อมูลสินค้า</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {c.products.slice(0, 10).map((p, i) => (
+            <div key={p.sku || i} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12 }}>
+              <span style={{ color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span style={{ fontFamily: "monospace", color: "var(--muted)" }}>{p.sku}</span> {p.name}
+              </span>
+              <span style={{ whiteSpace: "nowrap", color: "var(--muted)" }}>×{p.qty} · {baht(p.rev)}฿</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div style={{ padding: "16px", maxWidth: 1000, margin: "0 auto" }}>
+      {/* header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>👥 ลูกค้า & ยอดซื้อ</div>
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>ยอดที่ลูกค้าซื้อจริง — แตะแถวเพื่อดูสินค้าที่ซื้อบ่อย</div>
+        </div>
+        <button className="btn ghost" onClick={load} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {loading ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }}/> : "🔄"}
+          <span>รีโหลด</span>
+        </button>
+      </div>
+
+      {err && (
+        <div style={{ background: "#fff0f0", border: "1px solid var(--dang)", borderRadius: 8, padding: "10px 14px", color: "var(--dang)", marginBottom: 12, fontSize: 13 }}>
+          ⚠️ {err}
+        </div>
+      )}
+
+      {loading && !customers.length ? (
+        <div style={{ textAlign: "center", padding: 40, color: "var(--muted)" }}>
+          <span className="spin" style={{ width: 24, height: 24, borderWidth: 3, display: "inline-block" }}/>
+          <div style={{ marginTop: 8, fontSize: 13 }}>กำลังโหลด…</div>
+        </div>
+      ) : !customers.length ? (
+        <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>
+          ยังไม่มีข้อมูลลูกค้า (รอ syncZortSales รอบถัดไป)
+        </div>
+      ) : (
+        <>
+          {/* controls */}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 14 }}>
+            <label style={{ fontSize: 12, color: "var(--muted)" }}>
+              <div style={{ marginBottom: 3 }}>เดือน</div>
+              <select value={selMonth} onChange={e => setSelMonth(e.target.value)}
+                      style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid var(--bdr)", fontSize: 14, background: "var(--paper)", color: "var(--text)" }}>
+                {months.slice().reverse().map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </label>
+            <label style={{ fontSize: 12, color: "var(--muted)", minWidth: 0 }}>
+              <div style={{ marginBottom: 3 }}>ยอดขั้นต่ำ (บาท)</div>
+              <input type="number" value={threshold} min={0} step={1000}
+                     onChange={e => setThreshold(Math.max(0, Number(e.target.value) || 0))}
+                     style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid var(--bdr)", fontSize: 14, width: 130, minWidth: 0, background: "var(--paper)", color: "var(--text)" }}/>
+            </label>
+          </div>
+
+          {/* Section A: ลูกค้า ≥ threshold เดือนที่เลือก */}
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: "var(--g-700)" }}>ลูกค้ายอด ≥ {baht(threshold)} · เดือน {selMonth || "—"}</div>
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>{monthRows.length} ราย · รวม {baht(monthSum)} ฿</div>
+          </div>
+          {monthRows.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 24, color: "var(--muted)", fontSize: 13, border: "1px solid var(--bdr)", borderRadius: 12, marginBottom: 22 }}>
+              ไม่มีลูกค้าถึงเกณฑ์ในเดือนนี้
+            </div>
+          ) : (
+            <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid var(--bdr)", marginBottom: 22 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: "var(--g-50)", borderBottom: "2px solid var(--bdr)" }}>
+                    <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>ลูกค้า</th>
+                    <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>ยอดเดือนนี้</th>
+                    <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>บิล</th>
+                    <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>สะสมทั้งช่วง</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {monthRows.map((c, idx) => (
+                    <React.Fragment key={c.key || idx}>
+                      <tr onClick={() => toggle(c.key)} style={{ borderBottom: "1px solid var(--bdr)", background: idx % 2 === 0 ? "var(--paper)" : "var(--g-50)", cursor: "pointer" }}>
+                        <td style={{ padding: "8px 12px", fontWeight: 600, color: "var(--text)", minWidth: 160 }}>
+                          <span style={{ color: "var(--muted)", marginRight: 4 }}>{expandedKey === c.key ? "▾" : "▸"}</span>
+                          {c.name}
+                          {isSilent(c) && <span style={{ marginLeft: 6, fontSize: 10, background: "#fff3e0", color: "#e65100", borderRadius: 10, padding: "1px 7px", fontWeight: 700 }}>เงียบ</span>}
+                        </td>
+                        <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 800, color: "var(--g-700)", whiteSpace: "nowrap" }}>{baht(c.mTotal)}</td>
+                        <td style={{ padding: "8px 12px", textAlign: "center", color: "var(--muted)" }}>{c.mCount}</td>
+                        <td style={{ padding: "8px 12px", textAlign: "right", color: "var(--muted)", whiteSpace: "nowrap" }}>{baht(c.total)}</td>
+                      </tr>
+                      {expandedKey === c.key && (
+                        <tr><td colSpan={4} style={{ padding: 0 }}>{productPanel(c)}</td></tr>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Section B: Top ลูกค้าสะสม + %เสี่ยง */}
+          <div style={{ fontSize: 15, fontWeight: 800, color: "var(--g-700)", marginBottom: 8 }}>🏆 Top ลูกค้าสะสม (ทั้งช่วง)</div>
+          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>
+            Top {topRows.length} ราย = {baht(topRows.reduce((s, c) => s + c.total, 0))} ฿ ({(topRows.length && grandTotal ? topRows[topRows.length - 1].cumPct : 0).toFixed(0)}% ของยอดลูกค้าที่ระบุตัวตน) — ยิ่งกระจุก ยิ่งเสี่ยงถ้าเสียรายใหญ่
+          </div>
+          <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid var(--bdr)" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: "var(--g-50)", borderBottom: "2px solid var(--bdr)" }}>
+                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>#</th>
+                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>ลูกค้า</th>
+                  <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>ยอดสะสม</th>
+                  <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>%</th>
+                  <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>สะสม%</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topRows.map((c, idx) => (
+                  <React.Fragment key={c.key || idx}>
+                    <tr onClick={() => toggle(c.key)} style={{ borderBottom: "1px solid var(--bdr)", background: idx % 2 === 0 ? "var(--paper)" : "var(--g-50)", cursor: "pointer" }}>
+                      <td style={{ padding: "8px 12px", color: "var(--muted)", fontWeight: 700 }}>{idx + 1}</td>
+                      <td style={{ padding: "8px 12px", fontWeight: 600, color: "var(--text)", minWidth: 150 }}>
+                        <span style={{ color: "var(--muted)", marginRight: 4 }}>{expandedKey === c.key ? "▾" : "▸"}</span>
+                        {c.name}
+                        {isSilent(c) && <span style={{ marginLeft: 6, fontSize: 10, background: "#fff3e0", color: "#e65100", borderRadius: 10, padding: "1px 7px", fontWeight: 700 }}>เงียบ</span>}
+                      </td>
+                      <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 800, color: "var(--g-700)", whiteSpace: "nowrap" }}>{baht(c.total)}</td>
+                      <td style={{ padding: "8px 12px", textAlign: "right", color: "var(--muted)", whiteSpace: "nowrap" }}>{c.pct.toFixed(1)}%</td>
+                      <td style={{ padding: "8px 12px", textAlign: "right", color: "var(--muted)", whiteSpace: "nowrap" }}>{c.cumPct.toFixed(0)}%</td>
+                    </tr>
+                    {expandedKey === c.key && (
+                      <tr><td colSpan={5} style={{ padding: 0 }}>{productPanel(c)}</td></tr>
+                    )}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {genAt && <div style={{ textAlign: "center", fontSize: 11, color: "var(--muted)", marginTop: 10 }}>อัปเดตจาก syncZortSales · {new Date(genAt).toLocaleString("th-TH")}</div>}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ────────────── 🛒 สั่งซื้อ (Purchase/Reorder) ──────────────
 
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView, DeadStockView, QuoteFollowupView, Pagination, WarehouseMapModal });
+Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView, DeadStockView, QuoteFollowupView, CustomerView, Pagination, WarehouseMapModal });
