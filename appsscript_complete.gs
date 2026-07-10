@@ -2354,18 +2354,34 @@ function writeCustomerSummarySheets_(ss, custData) {
       .forEach(p => prodRows.push([key, cd.name, p.sku, p.name, p.qty, Math.round(p.rev)]));
   });
 
-  const writeSheet = (shName, rows) => {
-    let sh = ss.getSheetByName(shName);
-    if (!sh) sh = ss.insertSheet(shName);
-    sh.clearContents();
-    if (rows.length) {
-      const rng = sh.getRange(1, 1, rows.length, rows[0].length);
-      rng.setNumberFormat("@"); // เก็บเป็น text — กัน "07/2026" กลายเป็นวันที่ + อ่านกลับด้วย Number()
-      rng.setValues(rows);
+  // เคลียร์ operation ค้างจากการเขียนชีตใหญ่ก่อนหน้า (รายเดือน/รายวัน) กัน Spreadsheets service timeout สะสม
+  try { SpreadsheetApp.flush(); } catch (e) {}
+
+  // เขียนชีตแบบ retry — Spreadsheets timeout เป็น transient (โหลดสูงช่วงท้าย sync) ลองซ้ำได้
+  // textCols = index (1-based) ของคอลัมน์ที่ต้องเก็บเป็น text (เดือน MM/YYYY, SKU) กัน Sheets แปลงเป็นวันที่/เลข
+  const writeSheet = (shName, rows, textCols) => {
+    const attempt = () => {
+      let sh = ss.getSheetByName(shName);
+      if (!sh) sh = ss.insertSheet(shName);
+      sh.clearContents();
+      if (rows.length) {
+        // format เฉพาะคอลัมน์ที่จำเป็นเป็น text (ไม่ set ทั้ง range — ลดภาระ service)
+        (textCols || []).forEach(c => {
+          if (c <= rows[0].length) sh.getRange(1, c, rows.length, 1).setNumberFormat("@");
+        });
+        sh.getRange(1, 1, rows.length, rows[0].length).setValues(rows);
+      }
+      SpreadsheetApp.flush();
+    };
+    let lastErr;
+    for (let i = 0; i < 3; i++) {
+      try { attempt(); return; }
+      catch (e) { lastErr = e; Logger.log("  retry เขียน " + shName + " (ครั้ง " + (i + 1) + "): " + e); Utilities.sleep(3000 * (i + 1)); }
     }
+    throw lastErr;
   };
-  writeSheet(SHEET_CUST_MONTHLY,  monthRows);
-  writeSheet(SHEET_CUST_PRODUCTS, prodRows);
+  writeSheet(SHEET_CUST_MONTHLY,  monthRows, [3]);    // คอลัมน์ 3 = เดือน MM/YYYY
+  writeSheet(SHEET_CUST_PRODUCTS, prodRows,  [3]);    // คอลัมน์ 3 = SKU
   Logger.log("สรุปลูกค้า: " + (monthRows.length - 1) + " แถวเดือน, " + (prodRows.length - 1) + " แถวสินค้า");
 }
 
