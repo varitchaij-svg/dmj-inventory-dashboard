@@ -1904,20 +1904,22 @@ function exploreZortSales() {
 }
 
 // ─── Marketing diagnostic (READ-ONLY) ───────────────────────────────────────
-// นับสถิติออเดอร์ย้อนหลัง 1 ปี เพื่อตอบว่า: ช่องทางไหนขายเท่าไร, ลูกค้าระบุตัวตนกี่ %,
+// นับสถิติออเดอร์เพื่อตอบว่า: ช่องทางไหนขายเท่าไร, ลูกค้าระบุตัวตนกี่ %,
 // ใช้ส่วนลด/voucher แค่ไหน, มีลูกค้าซ้ำไหม — ใช้ตัดสินใจว่าควรทำ marketing แบบไหน
-// ไม่แตะชีต ไม่แตะ ZORT (GET อย่างเดียวผ่าน fetchZortOrdersPaged_) · รันเองใน editor แล้วส่ง log กลับมา
+// ไม่แตะชีต ไม่แตะ ZORT (GET อย่างเดียว) · รันเองใน editor แล้วส่ง log กลับมา
+// ดึง+ประมวลผลทีละหน้า + มี time budget หยุดเองก่อนชนลิมิต 6 นาที (สรุปเท่าที่ดึงได้)
+// ปรับช่วงเวลาได้ที่ DAYS (90=เร็ว, 30=เร็วมาก, 365=ทั้งปีอาจ timeout ถ้าออเดอร์เยอะ)
 function analyzeZortMarketing() {
+  const startMs = Date.now();
+  const BUDGET_MS = 4.5 * 60 * 1000; // หยุดดึงเมื่อใช้เวลาเกิน 4.5 นาที (กันชนลิมิต 6 นาที)
   const tz = "Asia/Bangkok";
   const today = new Date();
-  const DAYS = 365;
+  const DAYS = 90;
   const fromDate = new Date(today.getTime() - DAYS * 24 * 60 * 60 * 1000);
   const fromStr = Utilities.formatDate(fromDate, tz, "yyyy-MM-dd");
   const toStr   = Utilities.formatDate(today, tz, "yyyy-MM-dd");
-
-  const orders = fetchZortOrdersPaged_(fromStr, toStr);
   Logger.log("──────────────────────────────────────");
-  Logger.log("ดึงออเดอร์ทั้งหมด (ทุก status): " + orders.length + " · ช่วง " + fromStr + " → " + toStr);
+  Logger.log("ช่วง " + fromStr + " → " + toStr + " (" + DAYS + " วัน)");
 
   // helper: เพิ่มยอดลง bucket { count, rev }
   const bump = (obj, key, rev) => {
@@ -1945,16 +1947,17 @@ function analyzeZortMarketing() {
   let hasPhone = 0, hasLine = 0, hasEmail = 0, hasFacebook = 0, hasCustId = 0, hasAnyId = 0;
   let hasDiscount = 0, hasVoucher = 0, discountSum = 0, voucherSum = 0;
 
-  for (const o of orders) {
+  // ประมวลผล 1 ออเดอร์
+  const processOrder = (o) => {
     statusCount[o.status || "null"] = (statusCount[o.status || "null"] || 0) + 1;
-    if (o.status !== "Success") continue;
+    if (o.status !== "Success") return;
 
     // กันวันที่เพี้ยน (นอกช่วง) แบบเดียวกับ syncZortSales
     const dateStr = o.orderdateString || (o.orderdate ? String(o.orderdate).substring(0, 10) : null);
     if (dateStr) {
       const [yr, mo, dy] = dateStr.split("-").map(Number);
       const oDate = new Date(yr, mo - 1, dy);
-      if (oDate < fromDate || oDate > today) continue;
+      if (oDate < fromDate || oDate > today) return;
     }
 
     success++;
@@ -1993,7 +1996,27 @@ function analyzeZortMarketing() {
     const vouch = Number(o.voucheramount) || 0;
     if (disc > 0)  { hasDiscount++; discountSum += disc; }
     if (vouch > 0) { hasVoucher++;  voucherSum += vouch; }
+  };
+
+  // ดึงทีละหน้าแล้วประมวลผลทันที (ไม่เก็บออเดอร์ทั้งหมดใน memory) + หยุดเมื่อชน time budget
+  const limit = 200, MAX_PAGES = 200;
+  let fetched = 0, stopped = false;
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    if (Date.now() - startMs > BUDGET_MS) {
+      stopped = true;
+      Logger.log("⏱️ หยุดดึงก่อนชนลิมิต — ประมวลผลเท่าที่ได้ (" + fetched + " ออเดอร์, ถึงหน้า " + (page - 1) + ")");
+      break;
+    }
+    const url = `${ZORT_BASE}/Order/GetOrders?page=${page}&limit=${limit}&fromdate=${fromStr}&todate=${toStr}`;
+    const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) { Logger.log("หยุด: HTTP " + res.getResponseCode() + " หน้า " + page); break; }
+    const list = (JSON.parse(res.getContentText())).list || [];
+    for (const o of list) processOrder(o);
+    fetched += list.length;
+    if (list.length < limit) break;
+    Utilities.sleep(120);
   }
+  Logger.log("ดึงออเดอร์รวม (ทุก status): " + fetched + (stopped ? " (บางส่วน — เพิ่ม DAYS ให้น้อยลงถ้าอยากได้ครบ)" : ""));
 
   Logger.log("status breakdown: " + JSON.stringify(statusCount));
   Logger.log("ออเดอร์ Success (นับจริง): " + success + " · ยอดรวม " + Math.round(totalRev).toLocaleString() + " บาท");
