@@ -5991,6 +5991,19 @@ async function syncVoidQuotation(id, number) {
   } catch (e) { return { ok: false, error: e.message }; }
 }
 
+// บันทึกชื่อเซลที่ทำใบเสนอราคา (เก็บในชีตเรา ไม่แตะ ZORT)
+async function syncSetQuoteSale(number, sale) {
+  if (!SHEET_DEPLOY_URL) return { ok: false, error: "ยังไม่ได้เชื่อมต่อ Sheet" };
+  try {
+    const res = await fetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ setQuoteSale: true, quoteNumber: number, sale, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "owner" }),
+    });
+    return await res.json().catch(() => ({ ok: false, error: "อ่านผลลัพธ์ไม่ได้" }));
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
 // ────────────── 📄 ใบเสนอราคาค้าง (QuoteFollowupView) ──────────────
 // ดึง action=getPendingQuotations: ใบเสนอราคาสถานะ Pending (ลูกค้ายังไม่ตัดสินใจ)
 // ใบที่ค้างเกิน 90 วัน = ถือว่าไม่อนุมัติ → กดปุ่ม "ปิดใบ" ปรับเป็น Void ใน ZORT ได้เลย
@@ -6004,10 +6017,24 @@ function QuoteFollowupView() {
   const [genAt, setGenAt] = uS(null);
   const [qPage, setQPage] = uS(1);
   const [voidingId, setVoidingId] = uS(null);
+  const [salesList, setSalesList] = uS([]);
   const [toast, showToast, hideToast] = useToast();
   const listRef = React.useRef(null);
   const PAGE_SIZE = 20;
   const OVERDUE_DAYS = 90; // เกินเท่านี้ = ถือว่าไม่อนุมัติ ควรปิด
+
+  const saveSale = async (q, value) => {
+    const v = String(value || "").trim();
+    if (v === (q.sale || "")) return;
+    const r = await syncSetQuoteSale(q.number, v);
+    if (r && r.ok) {
+      setItems(prev => prev.map(x => x.number === q.number ? { ...x, sale: v } : x));
+      if (v && !salesList.includes(v)) setSalesList(prev => [...prev, v].sort());
+      showToast("success", v ? `บันทึกเซล: ${v}` : "ล้างชื่อเซลแล้ว", "👤");
+    } else {
+      showToast("error", "บันทึกเซลไม่สำเร็จ: " + ((r && r.error) || ""), "❌");
+    }
+  };
 
   const handleVoid = async (q) => {
     if (voidingId) return;
@@ -6034,6 +6061,7 @@ function QuoteFollowupView() {
       if (d.error) throw new Error(d.error);
       setItems(Array.isArray(d.items) ? d.items : []);
       setTotalValue(Number(d.totalValue) || 0);
+      setSalesList(Array.isArray(d.salesList) ? d.salesList : []);
       setGenAt(d.generatedAt || null);
     } catch (e) {
       setErr(e.message);
@@ -6140,7 +6168,14 @@ function QuoteFollowupView() {
                       </td>
                       <td style={{ padding: "8px 12px", fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>
                         <div style={{ fontFamily: "monospace" }}>{q.number || "—"}</div>
-                        {q.sale && <div style={{ marginTop: 2 }}>👤 {q.sale}</div>}
+                        <input
+                          list="dmjQuoteSales"
+                          defaultValue={q.sale || ""}
+                          placeholder="+ ชื่อเซล"
+                          onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
+                          onBlur={(e) => saveSale(q, e.target.value)}
+                          style={{ marginTop: 3, width: 110, minWidth: 0, padding: "3px 6px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}
+                        />
                       </td>
                       <td style={{ padding: "8px 12px", textAlign: "center", whiteSpace: "nowrap" }}>
                         <button
@@ -6167,6 +6202,9 @@ function QuoteFollowupView() {
           {genAt && <div style={{ textAlign: "center", fontSize: 11, color: "var(--muted)", marginTop: 8 }}>อัปเดตล่าสุด {new Date(genAt).toLocaleString("th-TH")} (แคช 5 นาที)</div>}
         </>
       )}
+      <datalist id="dmjQuoteSales">
+        {salesList.map(s => <option key={s} value={s}/>)}
+      </datalist>
       <Toast toast={toast} onClose={hideToast}/>
     </div>
   );
