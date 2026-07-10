@@ -520,6 +520,11 @@ function doGet(e) {
       return handleGetPendingQuotations_();
     }
 
+    // สรุปสถานะใบเสนอราคา (ทุกสถานะ อนุมัติ/รอ/ยกเลิก) — คืน raw ทั้งหมดให้ frontend รวมเอง
+    if (e && e.parameter && e.parameter.action === 'getQuotationSummary') {
+      return handleGetQuotationSummary_();
+    }
+
     // สรุปลูกค้า: ยอดซื้อต่อเดือน + Top ลูกค้า + สินค้าที่ซื้อบ่อย (อ่านจากชีตที่ syncZortSales เขียนไว้)
     if (e && e.parameter && e.parameter.action === 'getCustomerAnalytics') {
       return handleGetCustomerAnalytics_();
@@ -5483,6 +5488,7 @@ function setQuoteSale_(quoteNumber, sale, actor) {
       sh.appendRow([num, saleName, actor || "owner", stamp]);
     }
     CacheService.getScriptCache().remove('pending_quotes_v1'); // ให้ View ดึงใหม่เห็นชื่อเซล
+    CacheService.getScriptCache().remove('quote_summary_v1');
     return jsonOut({ ok: true });
   } catch (e) {
     return jsonOut({ ok: false, error: String(e) });
@@ -5572,6 +5578,76 @@ function handleGetPendingQuotations_() {
     return ContentService
       .createTextOutput(JSON.stringify({ items: [], error: err.message }))
       .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// handler สำหรับ action=getQuotationSummary — คืนใบเสนอราคา "ทุกสถานะ" (Approved/Pending/Voided)
+// quotation ทั้งระบบมีไม่มาก (~ร้อยกว่าใบ) → ดึงทุกหน้าแล้วส่ง raw ให้ frontend รวมเอง (ยืดหยุ่นกับตัวเลือกปี/เดือน)
+// cache 5 นาที · overlay ชื่อเซลจากชีต mapping
+function handleGetQuotationSummary_() {
+  try {
+    const cache = CacheService.getScriptCache();
+    const cached = cache.get('quote_summary_v1');
+    if (cached) return ContentService.createTextOutput(cached).setMimeType(ContentService.MimeType.JSON);
+
+    const SALE_FIELD = PropertiesService.getScriptProperties().getProperty('QUOTE_SALE_FIELD') || 'tag';
+    const tz = "Asia/Bangkok";
+    const today = new Date();
+    const fromStr = "2023-01-01"; // เผื่อ date filter ทำงาน — ครอบคลุมตั้งแต่ก่อนเริ่มใช้จริง
+    const toStr   = Utilities.formatDate(today, tz, "yyyy-MM-dd");
+
+    const items = [];
+    const limit = 200, MAX_PAGES = 30;
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const url = `${ZORT_BASE}/Quotation/GetQuotations?page=${page}&limit=${limit}&fromdate=${fromStr}&todate=${toStr}`;
+      const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+      if (res.getResponseCode() !== 200) break;
+      const list = (JSON.parse(res.getContentText())).list || [];
+      for (const q of list) {
+        const status = String(q.status || "").trim();
+        const ds = q.quotationdateString || (q.quotationdate ? String(q.quotationdate).substring(0, 10) : null);
+        let qDate = null, ageDays = null;
+        if (ds && ds.length >= 10) {
+          const [yr, mo, dy] = ds.split("-").map(Number);
+          const d = new Date(yr, mo - 1, dy);
+          if (!isNaN(d)) { qDate = ds; ageDays = Math.floor((today - d) / (24 * 60 * 60 * 1000)); }
+        }
+        let expireInDays = null;
+        const es = q.expiredateString || (q.expiredate ? String(q.expiredate).substring(0, 10) : null);
+        if (es && es.length >= 10) {
+          const [ey, em, ed] = es.split("-").map(Number);
+          const edt = new Date(ey, em - 1, ed);
+          if (!isNaN(edt)) expireInDays = Math.ceil((edt - today) / (24 * 60 * 60 * 1000));
+        }
+        items.push({
+          id: q.id,
+          number: String(q.number || ""),
+          status: status,
+          customer: String(q.customername || "").trim() || "(ไม่ระบุชื่อ)",
+          phone: String(q.customerphone || "").trim(),
+          email: String(q.customeremail || "").trim(),
+          amount: Number(q.amount) || 0,
+          quotationDate: qDate,
+          ageDays: ageDays,
+          expireInDays: expireInDays,
+          sale: String(q[SALE_FIELD] || "").trim(),
+        });
+      }
+      if (list.length < limit) break;
+      Utilities.sleep(120);
+    }
+
+    // overlay ชื่อเซลจากชีต mapping (assign ใน dashboard ชนะค่า tag)
+    const saleMap = readQuoteSaleMap_();
+    const salesSet = {};
+    items.forEach(it => { if (saleMap[it.number]) it.sale = saleMap[it.number]; if (it.sale) salesSet[it.sale] = true; });
+    Object.values(saleMap).forEach(s => { if (s) salesSet[s] = true; });
+
+    const payload = JSON.stringify({ items, count: items.length, salesList: Object.keys(salesSet).sort(), generatedAt: new Date().toISOString() });
+    cache.put('quote_summary_v1', payload, 300);
+    return ContentService.createTextOutput(payload).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ items: [], error: err.message })).setMimeType(ContentService.MimeType.JSON);
   }
 }
 
@@ -5678,6 +5754,7 @@ function voidZortQuotation_(quotationId, quotationNumber, actor) {
       Logger.log("VoidQuotation [" + t.label + "] HTTP " + code + " — " + text.substring(0, 200));
       if (code === 200 && !err) {
         CacheService.getScriptCache().remove('pending_quotes_v1'); // ให้รายการค้างดึงใหม่
+        CacheService.getScriptCache().remove('quote_summary_v1');
         try { writeAuditLog_(actor || "owner", "ปิดใบเสนอราคา (ไม่อนุมัติ)", quotationNumber || quotationId, t.label); } catch (e) {}
         return jsonOut({ ok: true, shape: t.label });
       }

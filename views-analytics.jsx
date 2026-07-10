@@ -6004,24 +6004,47 @@ async function syncSetQuoteSale(number, sale) {
   } catch (e) { return { ok: false, error: e.message }; }
 }
 
-// ────────────── 📄 ใบเสนอราคาค้าง (QuoteFollowupView) ──────────────
-// ดึง action=getPendingQuotations: ใบเสนอราคาสถานะ Pending (ลูกค้ายังไม่ตัดสินใจ)
-// ใบที่ค้างเกิน 90 วัน = ถือว่าไม่อนุมัติ → กดปุ่ม "ปิดใบ" ปรับเป็น Void ใน ZORT ได้เลย
-// (owner ดูคนเดียว) เรียงตามมูลค่ามากสุด
+// ────────────── 📄 ใบเสนอราคา — สรุปสถานะ + ตามปิด (QuoteFollowupView) ──────────────
+// ดึง action=getQuotationSummary: ใบเสนอราคา "ทุกสถานะ" (Approved/Pending/Voided)
+// 3 โหมด: 📊 สรุปสถานะ (KPI + ตารางต่อเดือน) · ⏳ รออนุมัติ (ปิดใบ→Void) · ✅ อนุมัติแล้ว
+// (owner ดูคนเดียว)
 // ───────────────────────────────────────────────────────────
+const QUOTE_MONTHS_TH = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+
 function QuoteFollowupView() {
   const [items, setItems] = uS([]);
-  const [totalValue, setTotalValue] = uS(0);
   const [loading, setLoading] = uS(true);
   const [err, setErr] = uS(null);
   const [genAt, setGenAt] = uS(null);
+  const [salesList, setSalesList] = uS([]);
+  const [mode, setMode] = uS("summary");      // summary | pending | approved
+  const [selYear, setSelYear] = uS("");
+  const [selMonth, setSelMonth] = uS("");       // "" = ทุกเดือน, "1".."12"
   const [qPage, setQPage] = uS(1);
   const [voidingId, setVoidingId] = uS(null);
-  const [salesList, setSalesList] = uS([]);
   const [toast, showToast, hideToast] = useToast();
   const listRef = React.useRef(null);
   const PAGE_SIZE = 20;
-  const OVERDUE_DAYS = 90; // เกินเท่านี้ = ถือว่าไม่อนุมัติ ควรปิด
+  const OVERDUE_DAYS = 90;
+
+  const load = async () => {
+    if (!SHEET_DEPLOY_URL) { setErr("ยังไม่ได้เชื่อมต่อ Sheet"); setLoading(false); return; }
+    setLoading(true); setErr(null);
+    try {
+      const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
+      const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getQuotationSummary&_t=${Date.now()}`, { cache: "no-store" });
+      const d = await res.json();
+      if (d.error && (!d.items || !d.items.length)) throw new Error(d.error);
+      setItems(Array.isArray(d.items) ? d.items : []);
+      setSalesList(Array.isArray(d.salesList) ? d.salesList : []);
+      setGenAt(d.generatedAt || null);
+    } catch (e) { setErr(e.message); } finally { setLoading(false); }
+  };
+  uE(() => { load(); }, []);
+
+  const baht = (n) => (Number(n) || 0).toLocaleString("th-TH", { maximumFractionDigits: 0 });
+  const yearOf = (it) => (it.quotationDate && it.quotationDate.length >= 4) ? it.quotationDate.substring(0, 4) : null;
+  const monthOf = (it) => (it.quotationDate && it.quotationDate.length >= 7) ? String(Number(it.quotationDate.substring(5, 7))) : null;
 
   const saveSale = async (q, value) => {
     const v = String(value || "").trim();
@@ -6031,79 +6054,96 @@ function QuoteFollowupView() {
       setItems(prev => prev.map(x => x.number === q.number ? { ...x, sale: v } : x));
       if (v && !salesList.includes(v)) setSalesList(prev => [...prev, v].sort());
       showToast("success", v ? `บันทึกเซล: ${v}` : "ล้างชื่อเซลแล้ว", "👤");
-    } else {
-      showToast("error", "บันทึกเซลไม่สำเร็จ: " + ((r && r.error) || ""), "❌");
-    }
+    } else { showToast("error", "บันทึกเซลไม่สำเร็จ: " + ((r && r.error) || ""), "❌"); }
   };
 
   const handleVoid = async (q) => {
     if (voidingId) return;
-    if (!window.confirm(`ปิดใบเสนอราคา ${q.number || ""}\n"${q.customer}" (${(Number(q.amount)||0).toLocaleString()} ฿)\nเป็น "ไม่อนุมัติ" ใน ZORT?\n\nการปิดใบนี้จะยกเลิกใบเสนอราคาใน ZORT`)) return;
+    if (!window.confirm(`ปิดใบเสนอราคา ${q.number || ""}\n"${q.customer}" (${(Number(q.amount) || 0).toLocaleString()} ฿)\nเป็น "ไม่อนุมัติ" ใน ZORT?`)) return;
     setVoidingId(q.id || q.number);
     const r = await syncVoidQuotation(q.id, q.number);
     setVoidingId(null);
     if (r && r.ok) {
       showToast("success", `ปิดใบ ${q.number || ""} แล้ว`, "✓");
-      setItems(prev => prev.filter(x => (x.id || x.number) !== (q.id || q.number)));
-      setTotalValue(prev => Math.max(0, prev - (Number(q.amount) || 0)));
-    } else {
-      showToast("error", "ปิดใบไม่สำเร็จ: " + ((r && r.error) || "ไม่ทราบสาเหตุ"), "❌");
-    }
+      setItems(prev => prev.map(x => (x.id || x.number) === (q.id || q.number) ? { ...x, status: "Voided" } : x));
+    } else { showToast("error", "ปิดใบไม่สำเร็จ: " + ((r && r.error) || "ไม่ทราบสาเหตุ"), "❌"); }
   };
 
-  const load = async () => {
-    if (!SHEET_DEPLOY_URL) { setErr("ยังไม่ได้เชื่อมต่อ Sheet"); setLoading(false); return; }
-    setLoading(true); setErr(null);
-    try {
-      const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
-      const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getPendingQuotations&_t=${Date.now()}`, { cache: "no-store" });
-      const d = await res.json();
-      if (d.error) throw new Error(d.error);
-      setItems(Array.isArray(d.items) ? d.items : []);
-      setTotalValue(Number(d.totalValue) || 0);
-      setSalesList(Array.isArray(d.salesList) ? d.salesList : []);
-      setGenAt(d.generatedAt || null);
-    } catch (e) {
-      setErr(e.message);
-    } finally {
-      setLoading(false);
+  // ── ปี/สถานะ ──
+  const years = uM(() => {
+    const s = {};
+    items.forEach(it => { const y = yearOf(it); if (y) s[y] = true; });
+    return Object.keys(s).sort();
+  }, [items]);
+  uE(() => { if (years.length && !selYear) setSelYear(years[years.length - 1]); }, [years]);
+
+  const isPending = (s) => s === "Pending";
+  const isApproved = (s) => s === "Approved";
+  const isVoided = (s) => s === "Voided";
+
+  // ── รวมข้อมูลตามปี/เดือนที่เลือก ──
+  const A = uM(() => {
+    const inYear = items.filter(it => yearOf(it) === selYear);
+    const scoped = selMonth ? inYear.filter(it => monthOf(it) === selMonth) : inYear;
+    const bucket = (arr) => {
+      const b = { app: { c: 0, v: 0 }, pen: { c: 0, v: 0 }, voi: { c: 0, v: 0 } };
+      arr.forEach(it => {
+        const amt = Number(it.amount) || 0;
+        if (isApproved(it.status)) { b.app.c++; b.app.v += amt; }
+        else if (isPending(it.status)) { b.pen.c++; b.pen.v += amt; }
+        else if (isVoided(it.status)) { b.voi.c++; b.voi.v += amt; }
+      });
+      return b;
+    };
+    const tot = bucket(scoped);
+    // ตารางต่อเดือน (ทั้ง 12 เดือนของปีที่เลือก — เฉพาะเดือนที่มีข้อมูล)
+    const rows = [];
+    for (let m = 1; m <= 12; m++) {
+      const mArr = inYear.filter(it => monthOf(it) === String(m));
+      if (!mArr.length) continue;
+      const b = bucket(mArr);
+      const denom = b.app.v + b.pen.v;
+      rows.push({ m, ...b, rate: denom > 0 ? b.app.v / denom : 0 });
     }
-  };
+    const denomTot = tot.app.v + tot.pen.v;
+    return { scoped, tot, rows, rateTot: denomTot > 0 ? tot.app.v / denomTot : 0, denomTot };
+  }, [items, selYear, selMonth]);
 
-  uE(() => { load(); }, []);
+  // รายการ pending/approved (ตามปีที่เลือก) สำหรับโหมดอื่น
+  const pendingList = uM(() => items.filter(it => isPending(it.status) && yearOf(it) === selYear && (!selMonth || monthOf(it) === selMonth)).sort((a, b) => b.amount - a.amount), [items, selYear, selMonth]);
+  const approvedList = uM(() => items.filter(it => isApproved(it.status) && yearOf(it) === selYear && (!selMonth || monthOf(it) === selMonth)).sort((a, b) => b.amount - a.amount), [items, selYear, selMonth]);
 
-  const baht = (n) => (Number(n) || 0).toLocaleString("th-TH", { maximumFractionDigits: 0 });
-
-  // สีตามอายุใบเสนอราคา: >90 วัน=แดง (ควรปิด), 45-90=ส้ม, <45=เขียว
   const ageColor = (d) => {
     if (d === null || d === undefined) return { bg: "#f5f5f5", fg: "#888" };
     if (d > OVERDUE_DAYS) return { bg: "#ffebee", fg: "#b71c1c" };
     if (d > 45) return { bg: "#fff3e0", fg: "#e65100" };
     return { bg: "#e8f5e9", fg: "#2e7d32" };
   };
+  uE(() => { setQPage(1); }, [mode, selYear, selMonth]);
 
-  const overdueCount = items.filter(x => x.ageDays !== null && x.ageDays > OVERDUE_DAYS).length;
-  const shown = items.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE);
+  const kpi = (label, value, sub, color, bg) => (
+    <div style={{ flex: "1 1 150px", minWidth: 0, background: bg || "var(--paper)", border: "1px solid var(--bdr)", borderRadius: 12, padding: "12px 14px", borderLeft: "4px solid " + (color || "var(--bdr)") }}>
+      <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 700 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 800, color: color || "var(--text)" }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+
+  const rateColor = (r) => r >= 0.7 ? "#16a34a" : r >= 0.4 ? "#d97706" : "#dc2626";
 
   return (
-    <div style={{ padding: "16px", maxWidth: 1000, margin: "0 auto" }}>
-      {/* header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+    <div style={{ padding: "16px", maxWidth: 1040, margin: "0 auto" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
         <div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>📄 ใบเสนอราคาค้าง</div>
-          <div style={{ fontSize: 12, color: "var(--muted)" }}>ใบที่ค้าง (Pending) — เกิน {OVERDUE_DAYS} วันถือว่าไม่อนุมัติ กด "ปิดใบ" เพื่อ Void ใน ZORT</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>📊 สรุปสถานะใบเสนอราคา</div>
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>ข้อมูลจากระบบ Zortout · ใบเสนอราคาทั้งหมด {items.length} ใบ</div>
         </div>
         <button className="btn ghost" onClick={load} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          {loading ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }}/> : "🔄"}
-          <span>รีโหลด</span>
+          {loading ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }}/> : "🔄"}<span>รีโหลด</span>
         </button>
       </div>
 
-      {err && (
-        <div style={{ background: "#fff0f0", border: "1px solid var(--dang)", borderRadius: 8, padding: "10px 14px", color: "var(--dang)", marginBottom: 12, fontSize: 13 }}>
-          ⚠️ {err}
-        </div>
-      )}
+      {err && <div style={{ background: "#fff0f0", border: "1px solid var(--dang)", borderRadius: 8, padding: "10px 14px", color: "var(--dang)", marginBottom: 12, fontSize: 13 }}>⚠️ {err}</div>}
 
       {loading && items.length === 0 ? (
         <div style={{ textAlign: "center", padding: 40, color: "var(--muted)" }}>
@@ -6111,100 +6151,197 @@ function QuoteFollowupView() {
           <div style={{ marginTop: 8, fontSize: 13 }}>กำลังโหลด…</div>
         </div>
       ) : items.length === 0 ? (
-        <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>
-          ไม่มีใบเสนอราคาค้าง 🎉
-        </div>
+        <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>ไม่มีใบเสนอราคา</div>
       ) : (
         <>
-          {/* summary */}
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-            <div style={{ flex: "1 1 200px", minWidth: 0, background: "linear-gradient(135deg,#1565c0,#42a5f5)", color: "#fff", borderRadius: 12, padding: "12px 16px" }}>
-              <div style={{ fontSize: 12, opacity: .9 }}>มูลค่ารวมที่ยังค้าง (โอกาสปิด)</div>
-              <div style={{ fontSize: 24, fontWeight: 800 }}>{baht(totalValue)} ฿</div>
-            </div>
-            <div style={{ flex: "1 1 120px", minWidth: 0, background: "var(--paper)", border: "1px solid var(--bdr)", borderRadius: 12, padding: "12px 16px" }}>
-              <div style={{ fontSize: 12, color: "var(--muted)" }}>จำนวนใบค้าง</div>
-              <div style={{ fontSize: 24, fontWeight: 800, color: "var(--g-700)" }}>{items.length}</div>
-            </div>
-            <div style={{ flex: "1 1 120px", minWidth: 0, background: overdueCount ? "#ffebee" : "var(--paper)", border: "1px solid " + (overdueCount ? "var(--dang)" : "var(--bdr)"), borderRadius: 12, padding: "12px 16px" }}>
-              <div style={{ fontSize: 12, color: overdueCount ? "#b71c1c" : "var(--muted)" }}>เกิน {OVERDUE_DAYS} วัน (ควรปิด)</div>
-              <div style={{ fontSize: 24, fontWeight: 800, color: overdueCount ? "#b71c1c" : "var(--g-700)" }}>{overdueCount}</div>
-            </div>
+          {/* ตัวเลือก ปี/เดือน */}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+            <label style={{ fontSize: 12, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}>ปี:
+              <select value={selYear} onChange={e => setSelYear(e.target.value)} style={{ padding: "7px 10px", borderRadius: 8, border: "1px solid var(--bdr)", fontSize: 14, background: "var(--paper)", color: "var(--text)" }}>
+                {years.map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </label>
+            <label style={{ fontSize: 12, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}>เดือน:
+              <select value={selMonth} onChange={e => setSelMonth(e.target.value)} style={{ padding: "7px 10px", borderRadius: 8, border: "1px solid var(--bdr)", fontSize: 14, background: "var(--paper)", color: "var(--text)" }}>
+                <option value="">ทุกเดือน</option>
+                {QUOTE_MONTHS_TH.map((mn, i) => <option key={i} value={String(i + 1)}>{mn}</option>)}
+              </select>
+            </label>
           </div>
 
-          <div ref={listRef}/>
-          <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid var(--bdr)" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ background: "var(--g-50)", borderBottom: "2px solid var(--bdr)" }}>
-                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>ลูกค้า</th>
-                  <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>มูลค่า</th>
-                  <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>ค้างมา</th>
-                  <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>หมดอายุใน</th>
-                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>เลขที่ / เซล</th>
-                  <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>จัดการ</th>
-                </tr>
-              </thead>
-              <tbody>
-                {shown.map((q, idx) => {
-                  const c = ageColor(q.ageDays);
-                  const expSoon = q.expireInDays !== null && q.expireInDays !== undefined && q.expireInDays <= 14;
-                  const overdue = q.ageDays !== null && q.ageDays > OVERDUE_DAYS;
-                  const busy = voidingId === (q.id || q.number);
-                  return (
-                    <tr key={q.number || idx} style={{ borderBottom: "1px solid var(--bdr)", background: overdue ? "#fff5f5" : (idx % 2 === 0 ? "var(--paper)" : "var(--g-50)") }}>
-                      <td style={{ padding: "8px 12px", minWidth: 160 }}>
-                        <div style={{ fontWeight: 600, color: "var(--text)" }}>{q.customer}</div>
-                        {q.phone && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{q.phone}</div>}
-                      </td>
-                      <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 800, color: "var(--g-700)", whiteSpace: "nowrap" }}>{baht(q.amount)}</td>
-                      <td style={{ padding: "8px 12px", textAlign: "center" }}>
-                        <span style={{ display: "inline-block", padding: "2px 10px", borderRadius: 20, fontWeight: 700, fontSize: 12, background: c.bg, color: c.fg, whiteSpace: "nowrap" }}>
-                          {q.ageDays === null ? "—" : q.ageDays + " วัน"}
-                        </span>
-                      </td>
-                      <td style={{ padding: "8px 12px", textAlign: "center", fontSize: 12, color: expSoon ? "#b71c1c" : "var(--muted)", fontWeight: expSoon ? 700 : 400, whiteSpace: "nowrap" }}>
-                        {q.expireInDays === null || q.expireInDays === undefined ? "—" : (q.expireInDays < 0 ? "หมดแล้ว" : q.expireInDays + " วัน")}
-                      </td>
-                      <td style={{ padding: "8px 12px", fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>
-                        <div style={{ fontFamily: "monospace" }}>{q.number || "—"}</div>
-                        <input
-                          list="dmjQuoteSales"
-                          defaultValue={q.sale || ""}
-                          placeholder="+ ชื่อเซล"
-                          onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
-                          onBlur={(e) => saveSale(q, e.target.value)}
-                          style={{ marginTop: 3, width: 110, minWidth: 0, padding: "3px 6px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}
-                        />
-                      </td>
-                      <td style={{ padding: "8px 12px", textAlign: "center", whiteSpace: "nowrap" }}>
-                        <button
-                          onClick={() => handleVoid(q)}
-                          disabled={busy || !!voidingId}
-                          style={{
-                            border: "1px solid " + (overdue ? "var(--dang)" : "var(--bdr)"),
-                            background: overdue ? "var(--dang)" : "var(--paper)",
-                            color: overdue ? "#fff" : "var(--muted)",
-                            borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700,
-                            cursor: voidingId ? "default" : "pointer", opacity: (busy || voidingId) && !busy ? .5 : 1,
-                          }}
-                        >
-                          {busy ? "กำลังปิด…" : "ปิดใบ"}
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          {/* KPI */}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
+            {kpi("ใบเสนอราคา (ช่วงที่เลือก)", A.scoped.length + " ใบ", "รวมทุกสถานะ", "var(--g-600)")}
+            {kpi("อนุมัติแล้ว", A.tot.app.c + " ใบ", baht(A.tot.app.v) + " บาท", "#16a34a")}
+            {kpi("รออนุมัติ", A.tot.pen.c + " ใบ", baht(A.tot.pen.v) + " บาท", "#d97706")}
+            {kpi("ยกเลิก", A.tot.voi.c + " ใบ", baht(A.tot.voi.v) + " บาท", "#dc2626")}
+            {kpi("อัตราอนุมัติ (ตามมูลค่า)", (A.rateTot * 100).toFixed(1) + "%", "จากมูลค่า " + baht(A.denomTot) + " บาท", rateColor(A.rateTot))}
           </div>
-          <Pagination page={qPage} total={items.length} pageSize={PAGE_SIZE} onChange={setQPage} listRef={listRef}/>
-          {genAt && <div style={{ textAlign: "center", fontSize: 11, color: "var(--muted)", marginTop: 8 }}>อัปเดตล่าสุด {new Date(genAt).toLocaleString("th-TH")} (แคช 5 นาที)</div>}
+
+          {/* mode switcher */}
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+            {[["summary", "📊 สรุปสถานะ"], ["pending", "⏳ รออนุมัติ (" + pendingList.length + ")"], ["approved", "✅ อนุมัติแล้ว (" + approvedList.length + ")"]].map(([k, lbl]) => (
+              <button key={k} onClick={() => setMode(k)} style={{
+                padding: "7px 14px", borderRadius: 20, cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 700,
+                border: mode === k ? "1.5px solid var(--g-500)" : "1.5px solid var(--bdr)",
+                background: mode === k ? "var(--g-50)" : "var(--paper)", color: mode === k ? "var(--g-700)" : "var(--text)",
+              }}>{lbl}</button>
+            ))}
+          </div>
+
+          {/* ── โหมด สรุปสถานะ: ตารางต่อเดือน ── */}
+          {mode === "summary" && (
+            A.rows.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 24, color: "var(--muted)", fontSize: 13, border: "1px solid var(--bdr)", borderRadius: 12 }}>ไม่มีข้อมูลในปี {selYear}</div>
+            ) : (
+              <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid var(--bdr)" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 640 }}>
+                  <thead><tr style={{ background: "var(--g-50)", borderBottom: "2px solid var(--bdr)", color: "var(--g-700)" }}>
+                    <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700 }}>เดือน</th>
+                    <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>อนุมัติ (ใบ)</th>
+                    <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>มูลค่าอนุมัติ</th>
+                    <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>รออนุมัติ (ใบ)</th>
+                    <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>มูลค่ารอ</th>
+                    <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>ยกเลิก</th>
+                    <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, minWidth: 150 }}>% อนุมัติ (มูลค่า)</th>
+                  </tr></thead>
+                  <tbody>
+                    {A.rows.map((r, idx) => (
+                      <tr key={r.m} style={{ borderBottom: "1px solid var(--bdr)", background: idx % 2 === 0 ? "var(--paper)" : "var(--g-50)" }}>
+                        <td style={{ padding: "8px 12px", fontWeight: 700 }}>{QUOTE_MONTHS_TH[r.m - 1]} {selYear}</td>
+                        <td style={{ padding: "8px 12px", textAlign: "right", color: r.app.c ? "#16a34a" : "var(--muted)", fontWeight: 700 }}>{r.app.c}</td>
+                        <td style={{ padding: "8px 12px", textAlign: "right" }}>{baht(r.app.v)}</td>
+                        <td style={{ padding: "8px 12px", textAlign: "right", color: r.pen.c ? "#d97706" : "var(--muted)", fontWeight: 700 }}>{r.pen.c}</td>
+                        <td style={{ padding: "8px 12px", textAlign: "right", color: r.pen.v ? "#d97706" : "var(--muted)" }}>{baht(r.pen.v)}</td>
+                        <td style={{ padding: "8px 12px", textAlign: "right", color: r.voi.c ? "#dc2626" : "var(--muted)" }}>{r.voi.c ? (r.voi.c + " / " + baht(r.voi.v)) : "—"}</td>
+                        <td style={{ padding: "8px 12px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <div style={{ flex: 1, height: 8, background: "var(--bdr)", borderRadius: 99, overflow: "hidden", minWidth: 50 }}>
+                              <div style={{ width: (r.rate * 100).toFixed(0) + "%", height: "100%", background: rateColor(r.rate) }}/>
+                            </div>
+                            <span style={{ fontWeight: 800, color: rateColor(r.rate), fontSize: 12, whiteSpace: "nowrap" }}>{(r.rate * 100).toFixed(1)}%</span>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    <tr style={{ borderTop: "2px solid var(--bdr)", background: "var(--g-50)", fontWeight: 800 }}>
+                      <td style={{ padding: "10px 12px" }}>รวม {selYear}</td>
+                      <td style={{ padding: "10px 12px", textAlign: "right", color: "#16a34a" }}>{A.tot.app.c}</td>
+                      <td style={{ padding: "10px 12px", textAlign: "right" }}>{baht(A.tot.app.v)}</td>
+                      <td style={{ padding: "10px 12px", textAlign: "right", color: "#d97706" }}>{A.tot.pen.c}</td>
+                      <td style={{ padding: "10px 12px", textAlign: "right", color: "#d97706" }}>{baht(A.tot.pen.v)}</td>
+                      <td style={{ padding: "10px 12px", textAlign: "right", color: "#dc2626" }}>{A.tot.voi.c ? (A.tot.voi.c + " / " + baht(A.tot.voi.v)) : "—"}</td>
+                      <td style={{ padding: "10px 12px", fontWeight: 800, color: rateColor(A.rateTot) }}>{(A.rateTot * 100).toFixed(1)}%</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            )
+          )}
+
+          {/* ── โหมด รออนุมัติ (ปิดใบ) ── */}
+          {mode === "pending" && (
+            pendingList.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>ไม่มีใบรออนุมัติในช่วงนี้ 🎉</div>
+            ) : (
+              <>
+                <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>เกิน {OVERDUE_DAYS} วัน = ควรปิด (Void) · แถวแดง = ควรปิด</div>
+                <div ref={listRef}/>
+                <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid var(--bdr)" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                    <thead><tr style={{ background: "var(--g-50)", borderBottom: "2px solid var(--bdr)", color: "var(--g-700)" }}>
+                      <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700 }}>ลูกค้า</th>
+                      <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>มูลค่า</th>
+                      <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, whiteSpace: "nowrap" }}>ค้างมา</th>
+                      <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, whiteSpace: "nowrap" }}>หมดอายุใน</th>
+                      <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, whiteSpace: "nowrap" }}>เลขที่ / เซล</th>
+                      <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, whiteSpace: "nowrap" }}>จัดการ</th>
+                    </tr></thead>
+                    <tbody>
+                      {pendingList.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => {
+                        const c = ageColor(q.ageDays);
+                        const expSoon = q.expireInDays !== null && q.expireInDays !== undefined && q.expireInDays <= 14;
+                        const overdue = q.ageDays !== null && q.ageDays > OVERDUE_DAYS;
+                        const busy = voidingId === (q.id || q.number);
+                        return (
+                          <tr key={q.number || idx} style={{ borderBottom: "1px solid var(--bdr)", background: overdue ? "#fff5f5" : (idx % 2 === 0 ? "var(--paper)" : "var(--g-50)") }}>
+                            <td style={{ padding: "8px 12px", minWidth: 160 }}>
+                              <div style={{ fontWeight: 600, color: "var(--text)" }}>{q.customer}</div>
+                              {q.phone && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{q.phone}</div>}
+                            </td>
+                            <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 800, color: "var(--g-700)", whiteSpace: "nowrap" }}>{baht(q.amount)}</td>
+                            <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                              <span style={{ display: "inline-block", padding: "2px 10px", borderRadius: 20, fontWeight: 700, fontSize: 12, background: c.bg, color: c.fg, whiteSpace: "nowrap" }}>{q.ageDays === null ? "—" : q.ageDays + " วัน"}</span>
+                            </td>
+                            <td style={{ padding: "8px 12px", textAlign: "center", fontSize: 12, color: expSoon ? "#b71c1c" : "var(--muted)", fontWeight: expSoon ? 700 : 400, whiteSpace: "nowrap" }}>
+                              {q.expireInDays === null || q.expireInDays === undefined ? "—" : (q.expireInDays < 0 ? "หมดแล้ว" : q.expireInDays + " วัน")}
+                            </td>
+                            <td style={{ padding: "8px 12px", fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>
+                              <div style={{ fontFamily: "monospace" }}>{q.number || "—"}</div>
+                              <input list="dmjQuoteSales" defaultValue={q.sale || ""} placeholder="+ ชื่อเซล"
+                                onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} onBlur={(e) => saveSale(q, e.target.value)}
+                                style={{ marginTop: 3, width: 110, minWidth: 0, padding: "3px 6px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/>
+                            </td>
+                            <td style={{ padding: "8px 12px", textAlign: "center", whiteSpace: "nowrap" }}>
+                              <button onClick={() => handleVoid(q)} disabled={busy || !!voidingId} style={{
+                                border: "1px solid " + (overdue ? "var(--dang)" : "var(--bdr)"), background: overdue ? "var(--dang)" : "var(--paper)",
+                                color: overdue ? "#fff" : "var(--muted)", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700,
+                                cursor: voidingId ? "default" : "pointer", opacity: (busy || voidingId) && !busy ? .5 : 1,
+                              }}>{busy ? "กำลังปิด…" : "ปิดใบ"}</button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <Pagination page={qPage} total={pendingList.length} pageSize={PAGE_SIZE} onChange={setQPage} listRef={listRef}/>
+              </>
+            )
+          )}
+
+          {/* ── โหมด อนุมัติแล้ว ── */}
+          {mode === "approved" && (
+            approvedList.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>ไม่มีใบอนุมัติในช่วงนี้</div>
+            ) : (
+              <>
+                <div ref={listRef}/>
+                <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid var(--bdr)" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                    <thead><tr style={{ background: "var(--g-50)", borderBottom: "2px solid var(--bdr)", color: "var(--g-700)" }}>
+                      <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700 }}>ลูกค้า</th>
+                      <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>มูลค่า</th>
+                      <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, whiteSpace: "nowrap" }}>วันที่</th>
+                      <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, whiteSpace: "nowrap" }}>เลขที่ / เซล</th>
+                    </tr></thead>
+                    <tbody>
+                      {approvedList.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => (
+                        <tr key={q.number || idx} style={{ borderBottom: "1px solid var(--bdr)", background: idx % 2 === 0 ? "var(--paper)" : "var(--g-50)" }}>
+                          <td style={{ padding: "8px 12px", minWidth: 160 }}>
+                            <div style={{ fontWeight: 600, color: "var(--text)" }}>{q.customer}</div>
+                            {q.phone && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{q.phone}</div>}
+                          </td>
+                          <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 800, color: "#16a34a", whiteSpace: "nowrap" }}>{baht(q.amount)}</td>
+                          <td style={{ padding: "8px 12px", textAlign: "center", fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>{q.quotationDate || "—"}</td>
+                          <td style={{ padding: "8px 12px", fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>
+                            <div style={{ fontFamily: "monospace" }}>{q.number || "—"}</div>
+                            {q.sale && <div style={{ marginTop: 2 }}>👤 {q.sale}</div>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <Pagination page={qPage} total={approvedList.length} pageSize={PAGE_SIZE} onChange={setQPage} listRef={listRef}/>
+              </>
+            )
+          )}
+
+          {genAt && <div style={{ textAlign: "center", fontSize: 11, color: "var(--muted)", marginTop: 10 }}>อัปเดตล่าสุด {new Date(genAt).toLocaleString("th-TH")} (แคช 5 นาที)</div>}
         </>
       )}
-      <datalist id="dmjQuoteSales">
-        {salesList.map(s => <option key={s} value={s}/>)}
-      </datalist>
+      <datalist id="dmjQuoteSales">{salesList.map(s => <option key={s} value={s}/>)}</datalist>
       <Toast toast={toast} onClose={hideToast}/>
     </div>
   );
