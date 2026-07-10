@@ -2561,15 +2561,25 @@ function resumeBackfill() {
   backfillZortOrders();
 }
 
-// เช็คสถานะ backfill
+// เช็คสถานะ backfill + โควตา cell ของ spreadsheet (ลิมิต Google Sheets = 10 ล้าน cell ทั้งไฟล์)
 function backfillStatus() {
   const props = PropertiesService.getScriptProperties();
   Logger.log("cursor (เดือนถัดไปที่จะทำ): " + (props.getProperty('backfill_ym') || "(ยังไม่เริ่ม)"));
   Logger.log("done: " + (props.getProperty('backfill_done') === '1' ? "✅ ครบแล้ว" : "⏳ ยังไม่ครบ"));
   const trig = ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'backfillZortOrders' || t.getHandlerFunction() === 'rebuildSalesFromRaw');
   Logger.log("trigger ทำงานอยู่: " + (trig.length ? trig.map(t => t.getHandlerFunction()).join(", ") : "(ไม่มี)"));
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_ORDERS_RAW);
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const sh = ss.getSheetByName(SHEET_ORDERS_RAW);
   Logger.log("แถวในชีตดิบ: " + (sh ? sh.getLastRow() - 1 : 0));
+
+  // โควตา cell ทั้ง spreadsheet (grid ทุกชีต × 10 คอลัมน์) เทียบลิมิต 10 ล้าน
+  const LIMIT = 10000000;
+  let totalCells = 0;
+  ss.getSheets().forEach(s => { totalCells += s.getMaxRows() * s.getMaxColumns(); });
+  const pct = (totalCells / LIMIT * 100).toFixed(1);
+  Logger.log("── โควตา Google Sheets ──");
+  Logger.log("ใช้ไป ~" + totalCells.toLocaleString() + " / 10,000,000 cell (" + pct + "%) · เหลือ ~" + (LIMIT - totalCells).toLocaleString());
+  Logger.log(totalCells < LIMIT * 0.7 ? "✅ เหลือเยอะ ปลอดภัย" : totalCells < LIMIT * 0.9 ? "⚠️ เริ่มเยอะ ควรจับตา" : "🔴 ใกล้เต็ม — ต้องลดข้อมูล");
 }
 
 // helpers
