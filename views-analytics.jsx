@@ -6258,12 +6258,36 @@ function CustomerView() {
     return gap >= SILENT_GAP;
   };
 
-  // Section A: ลูกค้ายอด ≥ threshold ในเดือนที่เลือก
+  // เดือนก่อนหน้าเดือนที่เลือก (ไว้เทียบแนวโน้ม) — months เรียงเก่า→ใหม่
+  const prevMonth = (() => {
+    const i = months.indexOf(selMonth);
+    return i > 0 ? months[i - 1] : null;
+  })();
+
+  // Section A: ลูกค้ายอด ≥ threshold ในเดือนที่เลือก + แนวโน้มเทียบเดือนก่อน (โต/หด)
   const monthRows = customers
     .filter(c => c.byMonth && c.byMonth[selMonth] && c.byMonth[selMonth].total >= threshold)
-    .map(c => ({ ...c, mTotal: c.byMonth[selMonth].total, mCount: c.byMonth[selMonth].count }))
+    .map(c => {
+      const mTotal = c.byMonth[selMonth].total;
+      const pTotal = prevMonth && c.byMonth[prevMonth] ? c.byMonth[prevMonth].total : null;
+      let deltaPct = null, trend = "flat";
+      if (pTotal == null || pTotal === 0) { trend = "new"; }          // ไม่เคยซื้อเดือนก่อน = ลูกค้าใหม่/กลับมา
+      else { deltaPct = (mTotal - pTotal) / pTotal * 100; trend = deltaPct > 5 ? "up" : deltaPct < -5 ? "down" : "flat"; }
+      return { ...c, mTotal, mCount: c.byMonth[selMonth].count, pTotal, deltaPct, trend };
+    })
     .sort((a, b) => b.mTotal - a.mTotal);
   const monthSum = monthRows.reduce((s, c) => s + c.mTotal, 0);
+  const growCount = monthRows.filter(c => c.trend === "up").length;
+  const shrinkCount = monthRows.filter(c => c.trend === "down").length;
+
+  const trendCell = (c) => {
+    if (c.trend === "new") return <span style={{ fontSize: 11, background: "#e3f2fd", color: "#1565c0", borderRadius: 10, padding: "1px 7px", fontWeight: 700 }}>ใหม่/กลับมา</span>;
+    if (c.deltaPct == null) return <span style={{ color: "var(--muted)" }}>—</span>;
+    const up = c.deltaPct > 5, down = c.deltaPct < -5;
+    const col = up ? "#16a34a" : down ? "#dc2626" : "var(--muted)";
+    const arw = up ? "▲" : down ? "▼" : "▬";
+    return <span style={{ color: col, fontWeight: 700, whiteSpace: "nowrap" }}>{arw} {c.deltaPct > 0 ? "+" : ""}{c.deltaPct.toFixed(0)}%</span>;
+  };
 
   // Section B: Top ลูกค้าสะสม (ทั้งช่วง) + cumulative %
   const topN = customers.slice(0, 20);
@@ -6347,7 +6371,10 @@ function CustomerView() {
           {/* Section A: ลูกค้า ≥ threshold เดือนที่เลือก */}
           <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
             <div style={{ fontSize: 15, fontWeight: 800, color: "var(--g-700)" }}>ลูกค้ายอด ≥ {baht(threshold)} · เดือน {selMonth || "—"}</div>
-            <div style={{ fontSize: 12, color: "var(--muted)" }}>{monthRows.length} ราย · รวม {baht(monthSum)} ฿</div>
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>
+              {monthRows.length} ราย · รวม {baht(monthSum)} ฿
+              {prevMonth && (growCount + shrinkCount > 0) && <> · <span style={{ color: "#16a34a", fontWeight: 700 }}>▲{growCount} โต</span> <span style={{ color: "#dc2626", fontWeight: 700 }}>▼{shrinkCount} หด</span></>}
+            </div>
           </div>
           {monthRows.length === 0 ? (
             <div style={{ textAlign: "center", padding: 24, color: "var(--muted)", fontSize: 13, border: "1px solid var(--bdr)", borderRadius: 12, marginBottom: 22 }}>
@@ -6360,6 +6387,7 @@ function CustomerView() {
                   <tr style={{ background: "var(--g-50)", borderBottom: "2px solid var(--bdr)" }}>
                     <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>ลูกค้า</th>
                     <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>ยอดเดือนนี้</th>
+                    <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>vs เดือนก่อน</th>
                     <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>บิล</th>
                     <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>สะสมทั้งช่วง</th>
                   </tr>
@@ -6374,11 +6402,12 @@ function CustomerView() {
                           {isSilent(c) && <span style={{ marginLeft: 6, fontSize: 10, background: "#fff3e0", color: "#e65100", borderRadius: 10, padding: "1px 7px", fontWeight: 700 }}>เงียบ</span>}
                         </td>
                         <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 800, color: "var(--g-700)", whiteSpace: "nowrap" }}>{baht(c.mTotal)}</td>
+                        <td style={{ padding: "8px 12px", textAlign: "right" }}>{trendCell(c)}</td>
                         <td style={{ padding: "8px 12px", textAlign: "center", color: "var(--muted)" }}>{c.mCount}</td>
                         <td style={{ padding: "8px 12px", textAlign: "right", color: "var(--muted)", whiteSpace: "nowrap" }}>{baht(c.total)}</td>
                       </tr>
                       {expandedKey === c.key && (
-                        <tr><td colSpan={4} style={{ padding: 0 }}>{productPanel(c)}</td></tr>
+                        <tr><td colSpan={5} style={{ padding: 0 }}>{productPanel(c)}</td></tr>
                       )}
                     </React.Fragment>
                   ))}

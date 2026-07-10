@@ -26,8 +26,9 @@ const TABS = [
 
 // Role config
 const ROLE_TABS = {
-  // เรียงตามที่ owner ใช้บ่อย: ภาพรวม/เงิน/ลูกค้า → งานประจำวัน (สั่ง/สต๊อก/ออเดอร์/หน้าร้าน) → คลัง → วิเคราะห์ → เครื่องมือ/ตั้งค่าท้ายสุด
-  owner:      ["overview","customers","margin","quotefollowup","categories","stock","orders","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","mtojobs","labels","upload","connect","auditlog"],
+  // เรียงตามที่ owner ใช้บ่อย: ภาพรวม/ลูกค้า → งานประจำวัน (สั่ง/สต๊อก/ออเดอร์/หน้าร้าน) → คลัง → วิเคราะห์ → เครื่องมือ/ตั้งค่าท้ายสุด
+  // ("margin" ซ่อนไว้ก่อน — ยังไม่มีต้นทุนซื้อจริง · โค้ด MarginView คงไว้ ค่อยเพิ่ม id กลับเมื่อพร้อม)
+  owner:      ["overview","customers","quotefollowup","categories","stock","orders","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","mtojobs","labels","upload","connect","auditlog"],
   employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","mtojobs","labels"],
   warehouse:  ["categories","stock","storage","stockcount","newproduct","orders","ordersummary","mtojobs","labels"],
   frontstore: ["categories","stock","frontstore","orders","mtojobs","labels"],
