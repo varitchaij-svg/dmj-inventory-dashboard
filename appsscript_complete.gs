@@ -341,6 +341,11 @@ function doPost(e) {
       return zeroStockItem_(ss, data.sku, actor);
     }
 
+    // ─── Void Quotation: ปิดใบเสนอราคาค้าง (ไม่อนุมัติ) ใน ZORT ───
+    if (data.voidQuotation) {
+      return voidZortQuotation_(data.quotationId, data.quotationNumber, actor);
+    }
+
     // ─── Stock Transfer: คลัง → หน้าร้าน ───
     if (data.transferStock) {
       return transferStock(ss, data.sku, Number(data.qty) || 0, data.name, actor);
@@ -5138,6 +5143,7 @@ function handleGetPendingQuotations_() {
         const amount = Number(q.amount) || 0;
         totalValue += amount;
         items.push({
+          id: q.id,
           number: String(q.number || ""),
           customer: String(q.customername || "").trim() || "(ไม่ระบุชื่อ)",
           phone: String(q.customerphone || "").trim(),
@@ -5161,6 +5167,33 @@ function handleGetPendingQuotations_() {
     return ContentService
       .createTextOutput(JSON.stringify({ items: [], error: err.message }))
       .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// ยกเลิก (Void) ใบเสนอราคาใน ZORT — ใช้เมื่อใบค้างเกิน 90 วัน = ถือว่าลูกค้าไม่อนุมัติ
+// payload: ส่งทั้ง id และ number (ZORT รับ id หรือ number แทนกันได้ตาม doc) เพื่อให้สำเร็จแน่
+// คืน { ok, error? } · ล้าง cache ใบค้างให้ดึงใหม่ · เขียน audit
+function voidZortQuotation_(quotationId, quotationNumber, actor) {
+  const jsonOut = (o) => ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);
+  try {
+    if (!quotationId && !quotationNumber) return jsonOut({ ok: false, error: "ไม่มี id/number ของใบเสนอราคา" });
+    const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
+    const body = {};
+    if (quotationId)     body.id = quotationId;
+    if (quotationNumber) body.number = quotationNumber;
+    const res = UrlFetchApp.fetch(`${ZORT_BASE}/Quotation/VoidQuotation`, {
+      method: "post", headers, payload: JSON.stringify(body), muteHttpExceptions: true
+    });
+    const code = res.getResponseCode();
+    const text = res.getContentText();
+    Logger.log("VoidQuotation HTTP " + code + " — " + text.substring(0, 300));
+    const err = zortRespError_(res);
+    if (code !== 200 || err) return jsonOut({ ok: false, error: err || ("HTTP " + code), raw: text.substring(0, 200) });
+    CacheService.getScriptCache().remove('pending_quotes_v1'); // ให้รายการค้างดึงใหม่
+    try { writeAuditLog_(actor || "owner", "ปิดใบเสนอราคา (ไม่อนุมัติ)", quotationNumber || quotationId, ""); } catch (e) {}
+    return jsonOut({ ok: true });
+  } catch (e) {
+    return jsonOut({ ok: false, error: String(e) });
   }
 }
 

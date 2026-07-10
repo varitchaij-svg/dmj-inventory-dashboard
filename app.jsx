@@ -570,7 +570,11 @@ function App() {
   //   (แถบเลื่อนแนวนอนได้ — role คลัง 9 แท็บ/หน้าร้าน 6/Sale 5 แสดงครบไม่ต้องมีเพิ่มเติม
   //    เหลือดันเข้าเพิ่มเติมเฉพาะ owner 17 / employee 10 ที่แท็บเยอะจริง)
   let primaryTabs, secondaryTabs;
-  if (simpleMode) {
+  if (role === "owner") {
+    // owner: โชว์ทุกเมนูบนแถบ ไม่มี "เพิ่มเติม" (แถบเลื่อนแนวนอนได้)
+    primaryTabs   = visibleTabs;
+    secondaryTabs = [];
+  } else if (simpleMode) {
     primaryTabs   = visibleTabs.filter(t => SIMPLE_PRIMARY.includes(t.id));
     secondaryTabs = visibleTabs.filter(t => !SIMPLE_PRIMARY.includes(t.id));
   } else if (visibleTabs.length > 9) {

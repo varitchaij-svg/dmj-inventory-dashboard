@@ -5978,10 +5978,23 @@ function DeadStockView() {
   );
 }
 
-// ────────────── 📄 ใบเสนอราคาค้าง — ต้องตาม (QuoteFollowupView) ──────────────
+// ปิด (Void) ใบเสนอราคาใน ZORT — ใช้เมื่อใบค้างเกิน 90 วัน (ถือว่าลูกค้าไม่อนุมัติ)
+async function syncVoidQuotation(id, number) {
+  if (!SHEET_DEPLOY_URL) return { ok: false, error: "ยังไม่ได้เชื่อมต่อ Sheet" };
+  try {
+    const res = await fetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ voidQuotation: true, quotationId: id, quotationNumber: number, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "owner" }),
+    });
+    return await res.json().catch(() => ({ ok: false, error: "อ่านผลลัพธ์ไม่ได้" }));
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
+// ────────────── 📄 ใบเสนอราคาค้าง (QuoteFollowupView) ──────────────
 // ดึง action=getPendingQuotations: ใบเสนอราคาสถานะ Pending (ลูกค้ายังไม่ตัดสินใจ)
-// เรียงตามมูลค่ามากสุด พร้อมเบอร์โทร (กดโทรได้) + อายุ เพื่อให้ไล่ตามปิดการขาย
-// (owner ดูคนเดียว) — pipeline B2B ที่ค้างอยู่ = โอกาสเพิ่มยอดขายที่ชัดสุด
+// ใบที่ค้างเกิน 90 วัน = ถือว่าไม่อนุมัติ → กดปุ่ม "ปิดใบ" ปรับเป็น Void ใน ZORT ได้เลย
+// (owner ดูคนเดียว) เรียงตามมูลค่ามากสุด
 // ───────────────────────────────────────────────────────────
 function QuoteFollowupView() {
   const [items, setItems] = uS([]);
@@ -5990,8 +6003,26 @@ function QuoteFollowupView() {
   const [err, setErr] = uS(null);
   const [genAt, setGenAt] = uS(null);
   const [qPage, setQPage] = uS(1);
+  const [voidingId, setVoidingId] = uS(null);
+  const [toast, showToast, hideToast] = useToast();
   const listRef = React.useRef(null);
   const PAGE_SIZE = 20;
+  const OVERDUE_DAYS = 90; // เกินเท่านี้ = ถือว่าไม่อนุมัติ ควรปิด
+
+  const handleVoid = async (q) => {
+    if (voidingId) return;
+    if (!window.confirm(`ปิดใบเสนอราคา ${q.number || ""}\n"${q.customer}" (${(Number(q.amount)||0).toLocaleString()} ฿)\nเป็น "ไม่อนุมัติ" ใน ZORT?\n\nการปิดใบนี้จะยกเลิกใบเสนอราคาใน ZORT`)) return;
+    setVoidingId(q.id || q.number);
+    const r = await syncVoidQuotation(q.id, q.number);
+    setVoidingId(null);
+    if (r && r.ok) {
+      showToast("success", `ปิดใบ ${q.number || ""} แล้ว`, "✓");
+      setItems(prev => prev.filter(x => (x.id || x.number) !== (q.id || q.number)));
+      setTotalValue(prev => Math.max(0, prev - (Number(q.amount) || 0)));
+    } else {
+      showToast("error", "ปิดใบไม่สำเร็จ: " + ((r && r.error) || "ไม่ทราบสาเหตุ"), "❌");
+    }
+  };
 
   const load = async () => {
     if (!SHEET_DEPLOY_URL) { setErr("ยังไม่ได้เชื่อมต่อ Sheet"); setLoading(false); return; }
@@ -6015,15 +6046,15 @@ function QuoteFollowupView() {
 
   const baht = (n) => (Number(n) || 0).toLocaleString("th-TH", { maximumFractionDigits: 0 });
 
-  // สีตามอายุใบเสนอราคา: >45 วัน=แดง (ค้างนาน), 21-45=ส้ม, <21=เขียว
+  // สีตามอายุใบเสนอราคา: >90 วัน=แดง (ควรปิด), 45-90=ส้ม, <45=เขียว
   const ageColor = (d) => {
     if (d === null || d === undefined) return { bg: "#f5f5f5", fg: "#888" };
-    if (d > 45) return { bg: "#ffebee", fg: "#b71c1c" };
-    if (d > 21) return { bg: "#fff3e0", fg: "#e65100" };
+    if (d > OVERDUE_DAYS) return { bg: "#ffebee", fg: "#b71c1c" };
+    if (d > 45) return { bg: "#fff3e0", fg: "#e65100" };
     return { bg: "#e8f5e9", fg: "#2e7d32" };
   };
 
-  const staleCount = items.filter(x => x.ageDays !== null && x.ageDays > 45).length;
+  const overdueCount = items.filter(x => x.ageDays !== null && x.ageDays > OVERDUE_DAYS).length;
   const shown = items.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE);
 
   return (
@@ -6031,8 +6062,8 @@ function QuoteFollowupView() {
       {/* header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
         <div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>📄 ใบเสนอราคาค้าง — ต้องตาม</div>
-          <div style={{ fontSize: 12, color: "var(--muted)" }}>ดีลที่ลูกค้ายังไม่ตัดสินใจ (Pending) — ไล่โทรตามปิดการขาย</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>📄 ใบเสนอราคาค้าง</div>
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>ใบที่ค้าง (Pending) — เกิน {OVERDUE_DAYS} วันถือว่าไม่อนุมัติ กด "ปิดใบ" เพื่อ Void ใน ZORT</div>
         </div>
         <button className="btn ghost" onClick={load} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 6 }}>
           {loading ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }}/> : "🔄"}
@@ -6067,9 +6098,9 @@ function QuoteFollowupView() {
               <div style={{ fontSize: 12, color: "var(--muted)" }}>จำนวนใบค้าง</div>
               <div style={{ fontSize: 24, fontWeight: 800, color: "var(--g-700)" }}>{items.length}</div>
             </div>
-            <div style={{ flex: "1 1 120px", minWidth: 0, background: staleCount ? "#ffebee" : "var(--paper)", border: "1px solid " + (staleCount ? "var(--dang)" : "var(--bdr)"), borderRadius: 12, padding: "12px 16px" }}>
-              <div style={{ fontSize: 12, color: staleCount ? "#b71c1c" : "var(--muted)" }}>ค้างนาน &gt; 45 วัน</div>
-              <div style={{ fontSize: 24, fontWeight: 800, color: staleCount ? "#b71c1c" : "var(--g-700)" }}>{staleCount}</div>
+            <div style={{ flex: "1 1 120px", minWidth: 0, background: overdueCount ? "#ffebee" : "var(--paper)", border: "1px solid " + (overdueCount ? "var(--dang)" : "var(--bdr)"), borderRadius: 12, padding: "12px 16px" }}>
+              <div style={{ fontSize: 12, color: overdueCount ? "#b71c1c" : "var(--muted)" }}>เกิน {OVERDUE_DAYS} วัน (ควรปิด)</div>
+              <div style={{ fontSize: 24, fontWeight: 800, color: overdueCount ? "#b71c1c" : "var(--g-700)" }}>{overdueCount}</div>
             </div>
           </div>
 
@@ -6082,17 +6113,22 @@ function QuoteFollowupView() {
                   <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>มูลค่า</th>
                   <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>ค้างมา</th>
                   <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>หมดอายุใน</th>
-                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>ติดต่อ</th>
                   <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>เลขที่ / เซล</th>
+                  <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>จัดการ</th>
                 </tr>
               </thead>
               <tbody>
                 {shown.map((q, idx) => {
                   const c = ageColor(q.ageDays);
                   const expSoon = q.expireInDays !== null && q.expireInDays !== undefined && q.expireInDays <= 14;
+                  const overdue = q.ageDays !== null && q.ageDays > OVERDUE_DAYS;
+                  const busy = voidingId === (q.id || q.number);
                   return (
-                    <tr key={q.number || idx} style={{ borderBottom: "1px solid var(--bdr)", background: idx % 2 === 0 ? "var(--paper)" : "var(--g-50)" }}>
-                      <td style={{ padding: "8px 12px", fontWeight: 600, color: "var(--text)", minWidth: 160 }}>{q.customer}</td>
+                    <tr key={q.number || idx} style={{ borderBottom: "1px solid var(--bdr)", background: overdue ? "#fff5f5" : (idx % 2 === 0 ? "var(--paper)" : "var(--g-50)") }}>
+                      <td style={{ padding: "8px 12px", minWidth: 160 }}>
+                        <div style={{ fontWeight: 600, color: "var(--text)" }}>{q.customer}</div>
+                        {q.phone && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{q.phone}</div>}
+                      </td>
                       <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 800, color: "var(--g-700)", whiteSpace: "nowrap" }}>{baht(q.amount)}</td>
                       <td style={{ padding: "8px 12px", textAlign: "center" }}>
                         <span style={{ display: "inline-block", padding: "2px 10px", borderRadius: 20, fontWeight: 700, fontSize: 12, background: c.bg, color: c.fg, whiteSpace: "nowrap" }}>
@@ -6102,16 +6138,24 @@ function QuoteFollowupView() {
                       <td style={{ padding: "8px 12px", textAlign: "center", fontSize: 12, color: expSoon ? "#b71c1c" : "var(--muted)", fontWeight: expSoon ? 700 : 400, whiteSpace: "nowrap" }}>
                         {q.expireInDays === null || q.expireInDays === undefined ? "—" : (q.expireInDays < 0 ? "หมดแล้ว" : q.expireInDays + " วัน")}
                       </td>
-                      <td style={{ padding: "8px 12px", whiteSpace: "nowrap" }}>
-                        {q.phone ? (
-                          <a href={"tel:" + q.phone.replace(/\s/g, "")} style={{ color: "var(--info)", fontWeight: 600, textDecoration: "none" }}>📞 {q.phone}</a>
-                        ) : q.email ? (
-                          <a href={"mailto:" + q.email} style={{ color: "var(--info)", fontSize: 12, textDecoration: "none" }}>✉️ {q.email}</a>
-                        ) : <span style={{ color: "var(--muted)", fontSize: 12 }}>—</span>}
-                      </td>
                       <td style={{ padding: "8px 12px", fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>
                         <div style={{ fontFamily: "monospace" }}>{q.number || "—"}</div>
                         {q.sale && <div style={{ marginTop: 2 }}>👤 {q.sale}</div>}
+                      </td>
+                      <td style={{ padding: "8px 12px", textAlign: "center", whiteSpace: "nowrap" }}>
+                        <button
+                          onClick={() => handleVoid(q)}
+                          disabled={busy || !!voidingId}
+                          style={{
+                            border: "1px solid " + (overdue ? "var(--dang)" : "var(--bdr)"),
+                            background: overdue ? "var(--dang)" : "var(--paper)",
+                            color: overdue ? "#fff" : "var(--muted)",
+                            borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700,
+                            cursor: voidingId ? "default" : "pointer", opacity: (busy || voidingId) && !busy ? .5 : 1,
+                          }}
+                        >
+                          {busy ? "กำลังปิด…" : "ปิดใบ"}
+                        </button>
                       </td>
                     </tr>
                   );
@@ -6123,6 +6167,7 @@ function QuoteFollowupView() {
           {genAt && <div style={{ textAlign: "center", fontSize: 11, color: "var(--muted)", marginTop: 8 }}>อัปเดตล่าสุด {new Date(genAt).toLocaleString("th-TH")} (แคช 5 นาที)</div>}
         </>
       )}
+      <Toast toast={toast} onClose={hideToast}/>
     </div>
   );
 }
