@@ -2112,6 +2112,93 @@ function exploreZortQuotations() {
   Logger.log("──────── เสร็จ — copy log ทั้งหมดส่งกลับมา ────────");
 }
 
+// ─── Quotation conversion report per salesperson (READ-ONLY) ────────────────
+// นับใบเสนอราคา 90 วัน แยกตามเซล: เสนอกี่ใบ, ปิดได้ (Success) กี่ใบ, กี่ %, มูลค่าเสนอ vs ปิดได้
+// + แจกแจง status ทุกค่า (ไม่เดาว่า Success/Pending/Voided หมายถึงอะไร) · รันเองแล้วส่ง log กลับมา
+function analyzeZortQuotations() {
+  const startMs = Date.now();
+  const BUDGET_MS = 4.5 * 60 * 1000;
+  const tz = "Asia/Bangkok";
+  const today = new Date();
+  const DAYS = 90;
+  const fromDate = new Date(today.getTime() - DAYS * 24 * 60 * 60 * 1000);
+  const fromStr = Utilities.formatDate(fromDate, tz, "yyyy-MM-dd");
+  const toStr   = Utilities.formatDate(today, tz, "yyyy-MM-dd");
+  Logger.log("──────────────────────────────────────");
+  Logger.log("ใบเสนอราคา ช่วง " + fromStr + " → " + toStr + " (" + DAYS + " วัน)");
+
+  const statusAll = {};                 // status → { count, amount }
+  const bySale = {};                    // createusername → { name, total, success, pending, other, quoted, won }
+  let inWindow = 0, quotedSum = 0, wonSum = 0, wonCount = 0;
+
+  const process = (q) => {
+    const st = String(q.status || "(ว่าง)");
+    const amt = Number(q.amount) || 0;
+
+    // กันวันที่นอกช่วง (อิง quotationdate)
+    const ds = q.quotationdateString || (q.quotationdate ? String(q.quotationdate).substring(0, 10) : null);
+    if (ds) {
+      const [yr, mo, dy] = ds.split("-").map(Number);
+      const qDate = new Date(yr, mo - 1, dy);
+      if (qDate < fromDate || qDate > today) return;
+    }
+    inWindow++;
+
+    if (!statusAll[st]) statusAll[st] = { count: 0, amount: 0 };
+    statusAll[st].count++;
+    statusAll[st].amount += amt;
+
+    const saleKey = String(q.createusername || q.createdby || q.createuserid || "(ไม่ระบุ)");
+    if (!bySale[saleKey]) bySale[saleKey] = { name: q.createdby || saleKey, total: 0, success: 0, pending: 0, other: 0, quoted: 0, won: 0 };
+    const s = bySale[saleKey];
+    s.total++;
+    s.quoted += amt;
+    if (st === "Success") { s.success++; s.won += amt; wonCount++; wonSum += amt; }
+    else if (st === "Pending") s.pending++;
+    else s.other++;
+    quotedSum += amt;
+  };
+
+  const limit = 200, MAX_PAGES = 200;
+  let fetched = 0, stopped = false;
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    if (Date.now() - startMs > BUDGET_MS) { stopped = true; Logger.log("⏱️ หยุดก่อนชนลิมิต (ถึงหน้า " + (page - 1) + ")"); break; }
+    const url = `${ZORT_BASE}/Quotation/GetQuotations?page=${page}&limit=${limit}&fromdate=${fromStr}&todate=${toStr}`;
+    const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) { Logger.log("หยุด: HTTP " + res.getResponseCode() + " หน้า " + page); break; }
+    const list = (JSON.parse(res.getContentText())).list || [];
+    for (const q of list) process(q);
+    fetched += list.length;
+    if (list.length < limit) break;
+    Utilities.sleep(120);
+  }
+
+  Logger.log("ดึงทั้งหมด " + fetched + " ใบ · อยู่ในกรอบ 90 วัน (นับจริง) " + inWindow + " ใบ" + (stopped ? " (บางส่วน)" : ""));
+  Logger.log("");
+  Logger.log("════ แจกแจงสถานะ (status) — ทุกค่าที่เจอ ════");
+  Object.entries(statusAll).sort((a, b) => b[1].count - a[1].count).forEach(([st, v]) => {
+    const p = inWindow ? Math.round(v.count / inWindow * 100) : 0;
+    Logger.log(`   ${st} : ${v.count} ใบ (${p}%) · ${Math.round(v.amount).toLocaleString()} บาท`);
+  });
+  Logger.log("   → สมมติ Success = ปิดการขายได้ · โปรดยืนยันว่าตรงกับความจริงในระบบ");
+
+  Logger.log("");
+  Logger.log("════ Conversion รวมทั้งร้าน ════");
+  const winPct = inWindow ? Math.round(wonCount / inWindow * 100) : 0;
+  Logger.log(`   เสนอ ${inWindow} ใบ (${Math.round(quotedSum).toLocaleString()} บาท) · ปิดได้ ${wonCount} ใบ (${Math.round(wonSum).toLocaleString()} บาท) · win rate ${winPct}%`);
+
+  Logger.log("");
+  Logger.log("════ Conversion แยกตามเซล (เรียงตามมูลค่าปิดได้) ════");
+  Object.entries(bySale).sort((a, b) => b[1].won - a[1].won).forEach(([key, s]) => {
+    const wp = s.total ? Math.round(s.success / s.total * 100) : 0;
+    Logger.log(`   ${s.name} <${key}>`);
+    Logger.log(`      เสนอ ${s.total} ใบ · ปิดได้ ${s.success} ใบ · ค้าง ${s.pending} · อื่นๆ ${s.other} · win rate ${wp}%`);
+    Logger.log(`      มูลค่าเสนอ ${Math.round(s.quoted).toLocaleString()} · ปิดได้ ${Math.round(s.won).toLocaleString()} บาท`);
+  });
+
+  Logger.log("──────── เสร็จ — copy log ทั้งหมดส่งกลับมา ────────");
+}
+
 // ─── ZORT Sales Auto-Sync ───────────────────────────────────────────────────
 
 function syncZortSales() {
