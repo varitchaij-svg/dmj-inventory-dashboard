@@ -19,11 +19,12 @@ const TABS = [
   { id: "labels",        label: "🖨️ พิมพ์ Label",            icon: I.print },
   { id: "auditlog",      label: "📋 Audit Log",             icon: I.layers },
   { id: "deadstock",     label: "📦 สินค้าจม",              icon: I.alert },
+  { id: "quotefollowup", label: "📄 ใบเสนอราคาค้าง",         icon: I.cart },
 ];
 
 // Role config
 const ROLE_TABS = {
-  owner:      ["overview","categories","trends","stock","storage","stockcount","newproduct","frontstore","transfers","orders","ordersummary","mtojobs","upload","connect","labels","auditlog","deadstock"],
+  owner:      ["overview","categories","trends","stock","storage","stockcount","newproduct","frontstore","transfers","orders","ordersummary","mtojobs","upload","connect","labels","auditlog","deadstock","quotefollowup"],
   employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","mtojobs","labels"],
   warehouse:  ["categories","stock","storage","stockcount","newproduct","orders","ordersummary","mtojobs","labels"],
   frontstore: ["categories","stock","frontstore","orders","mtojobs","labels"],
@@ -951,6 +952,7 @@ function App() {
                                             onInitConsumed={() => setLabelInitItems(null)}/></ErrorBoundary>}
         {activeTab === "auditlog"     && <ErrorBoundary key="auditlog"><AuditLogView/></ErrorBoundary>}
         {activeTab === "deadstock"    && <ErrorBoundary key="deadstock"><DeadStockView/></ErrorBoundary>}
+        {activeTab === "quotefollowup" && <ErrorBoundary key="quotefollowup"><QuoteFollowupView/></ErrorBoundary>}
         {activeTab === "connect"      && <ErrorBoundary key="connect"><ConnectView
                                     sheetUrl={sheetUrl}
                                     sheetViewUrl={sheetViewUrl}

@@ -5978,6 +5978,155 @@ function DeadStockView() {
   );
 }
 
+// ────────────── 📄 ใบเสนอราคาค้าง — ต้องตาม (QuoteFollowupView) ──────────────
+// ดึง action=getPendingQuotations: ใบเสนอราคาสถานะ Pending (ลูกค้ายังไม่ตัดสินใจ)
+// เรียงตามมูลค่ามากสุด พร้อมเบอร์โทร (กดโทรได้) + อายุ เพื่อให้ไล่ตามปิดการขาย
+// (owner ดูคนเดียว) — pipeline B2B ที่ค้างอยู่ = โอกาสเพิ่มยอดขายที่ชัดสุด
+// ───────────────────────────────────────────────────────────
+function QuoteFollowupView() {
+  const [items, setItems] = uS([]);
+  const [totalValue, setTotalValue] = uS(0);
+  const [loading, setLoading] = uS(true);
+  const [err, setErr] = uS(null);
+  const [genAt, setGenAt] = uS(null);
+  const [qPage, setQPage] = uS(1);
+  const listRef = React.useRef(null);
+  const PAGE_SIZE = 20;
+
+  const load = async () => {
+    if (!SHEET_DEPLOY_URL) { setErr("ยังไม่ได้เชื่อมต่อ Sheet"); setLoading(false); return; }
+    setLoading(true); setErr(null);
+    try {
+      const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
+      const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getPendingQuotations&_t=${Date.now()}`, { cache: "no-store" });
+      const d = await res.json();
+      if (d.error) throw new Error(d.error);
+      setItems(Array.isArray(d.items) ? d.items : []);
+      setTotalValue(Number(d.totalValue) || 0);
+      setGenAt(d.generatedAt || null);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  uE(() => { load(); }, []);
+
+  const baht = (n) => (Number(n) || 0).toLocaleString("th-TH", { maximumFractionDigits: 0 });
+
+  // สีตามอายุใบเสนอราคา: >45 วัน=แดง (ค้างนาน), 21-45=ส้ม, <21=เขียว
+  const ageColor = (d) => {
+    if (d === null || d === undefined) return { bg: "#f5f5f5", fg: "#888" };
+    if (d > 45) return { bg: "#ffebee", fg: "#b71c1c" };
+    if (d > 21) return { bg: "#fff3e0", fg: "#e65100" };
+    return { bg: "#e8f5e9", fg: "#2e7d32" };
+  };
+
+  const staleCount = items.filter(x => x.ageDays !== null && x.ageDays > 45).length;
+  const shown = items.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE);
+
+  return (
+    <div style={{ padding: "16px", maxWidth: 1000, margin: "0 auto" }}>
+      {/* header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>📄 ใบเสนอราคาค้าง — ต้องตาม</div>
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>ดีลที่ลูกค้ายังไม่ตัดสินใจ (Pending) — ไล่โทรตามปิดการขาย</div>
+        </div>
+        <button className="btn ghost" onClick={load} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {loading ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }}/> : "🔄"}
+          <span>รีโหลด</span>
+        </button>
+      </div>
+
+      {err && (
+        <div style={{ background: "#fff0f0", border: "1px solid var(--dang)", borderRadius: 8, padding: "10px 14px", color: "var(--dang)", marginBottom: 12, fontSize: 13 }}>
+          ⚠️ {err}
+        </div>
+      )}
+
+      {loading && items.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 40, color: "var(--muted)" }}>
+          <span className="spin" style={{ width: 24, height: 24, borderWidth: 3, display: "inline-block" }}/>
+          <div style={{ marginTop: 8, fontSize: 13 }}>กำลังโหลด…</div>
+        </div>
+      ) : items.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>
+          ไม่มีใบเสนอราคาค้าง 🎉
+        </div>
+      ) : (
+        <>
+          {/* summary */}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+            <div style={{ flex: "1 1 200px", minWidth: 0, background: "linear-gradient(135deg,#1565c0,#42a5f5)", color: "#fff", borderRadius: 12, padding: "12px 16px" }}>
+              <div style={{ fontSize: 12, opacity: .9 }}>มูลค่ารวมที่ยังค้าง (โอกาสปิด)</div>
+              <div style={{ fontSize: 24, fontWeight: 800 }}>{baht(totalValue)} ฿</div>
+            </div>
+            <div style={{ flex: "1 1 120px", minWidth: 0, background: "var(--paper)", border: "1px solid var(--bdr)", borderRadius: 12, padding: "12px 16px" }}>
+              <div style={{ fontSize: 12, color: "var(--muted)" }}>จำนวนใบค้าง</div>
+              <div style={{ fontSize: 24, fontWeight: 800, color: "var(--g-700)" }}>{items.length}</div>
+            </div>
+            <div style={{ flex: "1 1 120px", minWidth: 0, background: staleCount ? "#ffebee" : "var(--paper)", border: "1px solid " + (staleCount ? "var(--dang)" : "var(--bdr)"), borderRadius: 12, padding: "12px 16px" }}>
+              <div style={{ fontSize: 12, color: staleCount ? "#b71c1c" : "var(--muted)" }}>ค้างนาน &gt; 45 วัน</div>
+              <div style={{ fontSize: 24, fontWeight: 800, color: staleCount ? "#b71c1c" : "var(--g-700)" }}>{staleCount}</div>
+            </div>
+          </div>
+
+          <div ref={listRef}/>
+          <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid var(--bdr)" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: "var(--g-50)", borderBottom: "2px solid var(--bdr)" }}>
+                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>ลูกค้า</th>
+                  <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>มูลค่า</th>
+                  <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>ค้างมา</th>
+                  <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>หมดอายุใน</th>
+                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>ติดต่อ</th>
+                  <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>เลขที่ / เซล</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((q, idx) => {
+                  const c = ageColor(q.ageDays);
+                  const expSoon = q.expireInDays !== null && q.expireInDays !== undefined && q.expireInDays <= 14;
+                  return (
+                    <tr key={q.number || idx} style={{ borderBottom: "1px solid var(--bdr)", background: idx % 2 === 0 ? "var(--paper)" : "var(--g-50)" }}>
+                      <td style={{ padding: "8px 12px", fontWeight: 600, color: "var(--text)", minWidth: 160 }}>{q.customer}</td>
+                      <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 800, color: "var(--g-700)", whiteSpace: "nowrap" }}>{baht(q.amount)}</td>
+                      <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                        <span style={{ display: "inline-block", padding: "2px 10px", borderRadius: 20, fontWeight: 700, fontSize: 12, background: c.bg, color: c.fg, whiteSpace: "nowrap" }}>
+                          {q.ageDays === null ? "—" : q.ageDays + " วัน"}
+                        </span>
+                      </td>
+                      <td style={{ padding: "8px 12px", textAlign: "center", fontSize: 12, color: expSoon ? "#b71c1c" : "var(--muted)", fontWeight: expSoon ? 700 : 400, whiteSpace: "nowrap" }}>
+                        {q.expireInDays === null || q.expireInDays === undefined ? "—" : (q.expireInDays < 0 ? "หมดแล้ว" : q.expireInDays + " วัน")}
+                      </td>
+                      <td style={{ padding: "8px 12px", whiteSpace: "nowrap" }}>
+                        {q.phone ? (
+                          <a href={"tel:" + q.phone.replace(/\s/g, "")} style={{ color: "var(--info)", fontWeight: 600, textDecoration: "none" }}>📞 {q.phone}</a>
+                        ) : q.email ? (
+                          <a href={"mailto:" + q.email} style={{ color: "var(--info)", fontSize: 12, textDecoration: "none" }}>✉️ {q.email}</a>
+                        ) : <span style={{ color: "var(--muted)", fontSize: 12 }}>—</span>}
+                      </td>
+                      <td style={{ padding: "8px 12px", fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>
+                        <div style={{ fontFamily: "monospace" }}>{q.number || "—"}</div>
+                        {q.sale && <div style={{ marginTop: 2 }}>👤 {q.sale}</div>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <Pagination page={qPage} total={items.length} pageSize={PAGE_SIZE} onChange={setQPage} listRef={listRef}/>
+          {genAt && <div style={{ textAlign: "center", fontSize: 11, color: "var(--muted)", marginTop: 8 }}>อัปเดตล่าสุด {new Date(genAt).toLocaleString("th-TH")} (แคช 5 นาที)</div>}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ────────────── 🛒 สั่งซื้อ (Purchase/Reorder) ──────────────
 
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView, DeadStockView, Pagination, WarehouseMapModal });
+Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView, DeadStockView, QuoteFollowupView, Pagination, WarehouseMapModal });

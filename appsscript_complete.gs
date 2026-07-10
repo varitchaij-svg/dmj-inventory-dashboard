@@ -500,6 +500,11 @@ function doGet(e) {
       return handleGetDeadStock_();
     }
 
+    // ใบเสนอราคาค้าง (Pending): ดีลที่รอลูกค้าตัดสินใจ พร้อมข้อมูลติดต่อ — ไว้ตามปิดการขาย
+    if (e && e.parameter && e.parameter.action === 'getPendingQuotations') {
+      return handleGetPendingQuotations_();
+    }
+
     // Health check: สัญญาณสุขภาพระบบ (จำนวนสินค้า, หน้าร้าน/คลังเป็น 0, ติดลบ, orphan, ค้างรับ)
     // ใช้ตรวจระบบจากภายนอกได้โดยไม่ต้องดึง payload เต็ม (token-gated แล้วด้านบน)
     if (e && e.parameter && e.parameter.action === 'selfcheck') {
@@ -5076,6 +5081,82 @@ function handleGetDeadStock_() {
     return ContentService
       .createTextOutput(JSON.stringify({ items: items.slice(0, 100), generatedAt: new Date().toISOString() }))
       .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ items: [], error: err.message }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// handler สำหรับ action=getPendingQuotations
+// คืนใบเสนอราคาสถานะ Pending (ค้าง/รอลูกค้าตัดสินใจ) พร้อมข้อมูลติดต่อลูกค้า + อายุ + มูลค่า
+// เรียงตามมูลค่ามากสุดก่อน (ตามดีลใหญ่ก่อน) · cache 5 นาทีกัน hammer ZORT
+// ชื่อเซลอ่านจากช่องที่พิมพ์เอง (default tag) เพราะทุกใบคีย์ด้วยบัญชี ZORT เดียว
+function handleGetPendingQuotations_() {
+  try {
+    const cache = CacheService.getScriptCache();
+    const cached = cache.get('pending_quotes_v1');
+    if (cached) return ContentService.createTextOutput(cached).setMimeType(ContentService.MimeType.JSON);
+
+    const SALE_FIELD = PropertiesService.getScriptProperties().getProperty('QUOTE_SALE_FIELD') || 'tag';
+    const tz = "Asia/Bangkok";
+    const today = new Date();
+    const DAYS = 180; // ใบเสนอราค่ามีอายุ 3 เดือน — ดึง 180 วันเผื่อครอบคลุมใบที่ยังไม่หมดอายุ
+    const fromDate = new Date(today.getTime() - DAYS * 24 * 60 * 60 * 1000);
+    const fromStr = Utilities.formatDate(fromDate, tz, "yyyy-MM-dd");
+    const toStr   = Utilities.formatDate(today, tz, "yyyy-MM-dd");
+
+    const items = [];
+    let totalValue = 0;
+    const limit = 200, MAX_PAGES = 20;
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const url = `${ZORT_BASE}/Quotation/GetQuotations?page=${page}&limit=${limit}&fromdate=${fromStr}&todate=${toStr}`;
+      const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+      if (res.getResponseCode() !== 200) break;
+      const list = (JSON.parse(res.getContentText())).list || [];
+      for (const q of list) {
+        if (String(q.status || "") !== "Pending") continue;
+        const ds = q.quotationdateString || (q.quotationdate ? String(q.quotationdate).substring(0, 10) : null);
+        let ageDays = null, qDate = null;
+        if (ds) {
+          const [yr, mo, dy] = ds.split("-").map(Number);
+          const d = new Date(yr, mo - 1, dy);
+          if (!isNaN(d)) {
+            if (d < fromDate || d > today) continue; // กันวันที่นอกช่วง
+            qDate = ds;
+            ageDays = Math.floor((today - d) / (24 * 60 * 60 * 1000));
+          }
+        }
+        // วันหมดอายุ (ถ้ามี) → เหลือกี่วัน
+        let expireInDays = null;
+        const es = q.expiredateString || (q.expiredate ? String(q.expiredate).substring(0, 10) : null);
+        if (es) {
+          const [ey, em, ed] = es.split("-").map(Number);
+          const edt = new Date(ey, em - 1, ed);
+          if (!isNaN(edt)) expireInDays = Math.ceil((edt - today) / (24 * 60 * 60 * 1000));
+        }
+        const amount = Number(q.amount) || 0;
+        totalValue += amount;
+        items.push({
+          number: String(q.number || ""),
+          customer: String(q.customername || "").trim() || "(ไม่ระบุชื่อ)",
+          phone: String(q.customerphone || "").trim(),
+          email: String(q.customeremail || "").trim(),
+          amount,
+          quotationDate: qDate,
+          ageDays,
+          expireInDays,
+          sale: String(q[SALE_FIELD] || "").trim(),
+        });
+      }
+      if (list.length < limit) break;
+      Utilities.sleep(120);
+    }
+
+    items.sort((a, b) => b.amount - a.amount);
+    const payload = JSON.stringify({ items, totalValue, count: items.length, generatedAt: new Date().toISOString() });
+    cache.put('pending_quotes_v1', payload, 300);
+    return ContentService.createTextOutput(payload).setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
     return ContentService
       .createTextOutput(JSON.stringify({ items: [], error: err.message }))
