@@ -2287,6 +2287,43 @@ function probeZortHistory() {
   Logger.log("──────── เสร็จ — copy log ส่งกลับมา ────────");
 }
 
+// ── PROBE 2: นับจากวันที่จริงของออเดอร์ (field count ของ ZORT มั่ว = รวมทั้งระบบไม่สน date) ──
+// ดึงจริงช่วงกว้าง (2023→วันนี้) ครั้งเดียว แล้ว bucket ตาม orderdateString จริง + หา earliest/latest
+// รันเองแล้ว copy log ส่งมา
+function probeZortHistory2() {
+  const tz = "Asia/Bangkok";
+  const today = new Date();
+  const fromStr = "2023-01-01";
+  const toStr = Utilities.formatDate(today, tz, "yyyy-MM-dd");
+  Logger.log("──────── probe 2: นับจากวันที่จริง ────────");
+  Logger.log("ดึงช่วง " + fromStr + " → " + toStr + " (อาจใช้เวลา ~2-3 นาที)");
+
+  const all = fetchZortOrdersPaged_(fromStr, toStr);
+  Logger.log("ดึงมาทั้งหมด: " + all.length + " บิล");
+
+  const byYear = {}, byYM = {}, byStatus = {};
+  let minDate = null, maxDate = null;
+  all.forEach(o => {
+    const ds = o.orderdateString || (o.orderdate ? String(o.orderdate).substring(0, 10) : null);
+    byStatus[o.status || "null"] = (byStatus[o.status || "null"] || 0) + 1;
+    if (!ds || ds.length < 7) return;
+    const y = ds.substring(0, 4), ym = ds.substring(0, 7);
+    byYear[y] = (byYear[y] || 0) + 1;
+    byYM[ym] = (byYM[ym] || 0) + 1;
+    if (!minDate || ds < minDate) minDate = ds;
+    if (!maxDate || ds > maxDate) maxDate = ds;
+  });
+
+  Logger.log("ช่วงวันที่จริง: " + minDate + " → " + maxDate);
+  Logger.log("status: " + JSON.stringify(byStatus));
+  Logger.log("── บิลต่อปี ──");
+  Object.keys(byYear).sort().forEach(y => Logger.log(`  ${y}: ${byYear[y]} บิล`));
+  Logger.log("── บิลต่อเดือน ──");
+  Object.keys(byYM).sort().forEach(ym => Logger.log(`  ${ym}: ${byYM[ym]}`));
+  Logger.log("═══ สรุป: " + all.length + " บิล · " + minDate + " → " + maxDate + " ═══");
+  Logger.log("──────── เสร็จ — copy log ส่งมา ────────");
+}
+
 // ─── ZORT Sales Auto-Sync ───────────────────────────────────────────────────
 
 function syncZortSales() {
