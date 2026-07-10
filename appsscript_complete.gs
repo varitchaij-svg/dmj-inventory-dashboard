@@ -2064,6 +2064,54 @@ function analyzeZortMarketing() {
   Logger.log("──────── เสร็จ — copy log ทั้งหมดส่งกลับมา ────────");
 }
 
+// ─── Quotation schema explorer (READ-ONLY) ──────────────────────────────────
+// ดู field ของใบเสนอราคาจาก ZORT: ใครเป็นคนเสนอ (เซล), สถานะอนุมัติ, ยอด, ลูกค้า, วันที่,
+// และมี field ที่บอกว่าใบเสนอราคานี้กลายเป็น order/อนุมัติแล้วหรือยัง — ใช้ก่อนสร้างรายงาน conversion
+// รันเองใน editor แล้วส่ง log กลับมา
+function exploreZortQuotations() {
+  const tz = "Asia/Bangkok";
+  const today = new Date();
+  const from  = new Date(today.getTime() - 90 * 24 * 60 * 60 * 1000);
+  const fromStr = Utilities.formatDate(from,  tz, "yyyy-MM-dd");
+  const toStr   = Utilities.formatDate(today, tz, "yyyy-MM-dd");
+
+  const url = `${ZORT_BASE}/Quotation/GetQuotations?page=1&limit=5&fromdate=${fromStr}&todate=${toStr}`;
+  Logger.log("──────────────────────────────────────");
+  Logger.log("GET " + url);
+  try {
+    const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+    Logger.log("HTTP " + res.getResponseCode());
+    const json = JSON.parse(res.getContentText());
+    Logger.log("top-level keys: " + JSON.stringify(Object.keys(json)));
+    const list = json.list || json.quotations || json.data || [];
+    Logger.log("list length: " + (Array.isArray(list) ? list.length : "(ไม่ใช่ array)"));
+    if (Array.isArray(list) && list.length) {
+      const q = list[0];
+      Logger.log("quotation[0] keys: " + JSON.stringify(Object.keys(q)));
+      Logger.log("quotation[0] sample: " + JSON.stringify(q).substring(0, 1800));
+      // เดา field ที่เกี่ยวกับ "เซลคนเสนอ" + "สถานะอนุมัติ/แปลงเป็น order" เพื่อชี้จุดให้ดูง่าย
+      const hint = {};
+      Object.keys(q).forEach(k => {
+        if (/creat|user|saler|sale|agent|staff|owner|by/i.test(k)) hint["👤 " + k] = q[k];
+        if (/status|approv|convert|order|reference|success|state/i.test(k)) hint["📋 " + k] = q[k];
+        if (/amount|total|price|customer|date/i.test(k)) hint["💰 " + k] = q[k];
+      });
+      Logger.log("fields ที่น่าสนใจ: " + JSON.stringify(hint).substring(0, 1500));
+      // line items
+      Object.keys(q).forEach(k => {
+        if (Array.isArray(q[k]) && q[k].length && typeof q[k][0] === 'object') {
+          Logger.log(`quotation[0].${k}[0] keys: ` + JSON.stringify(Object.keys(q[k][0])));
+        }
+      });
+      // แจกแจงสถานะของทั้ง 5 ใบ เพื่อเห็นค่า status จริง
+      Logger.log("status ของ 5 ใบแรก: " + JSON.stringify(list.map(x => x.status)));
+    }
+  } catch (e) {
+    Logger.log("ERROR: " + e);
+  }
+  Logger.log("──────── เสร็จ — copy log ทั้งหมดส่งกลับมา ────────");
+}
+
 // ─── ZORT Sales Auto-Sync ───────────────────────────────────────────────────
 
 function syncZortSales() {
