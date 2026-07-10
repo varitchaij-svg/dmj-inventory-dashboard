@@ -2455,16 +2455,18 @@ function startBackfill() {
   sh.clear();
   sh.getRange(1, 1, 1, BACKFILL_HEADER.length).setValues([BACKFILL_HEADER]);
   const props = PropertiesService.getScriptProperties();
-  props.setProperty('backfill_ym', BACKFILL_START_YM);
+  props.setProperty('backfill_page', '1');
   props.deleteProperty('backfill_done');
   removeTriggersByName_('backfillZortOrders');
   removeTriggersByName_('rebuildSalesFromRaw');
   ScriptApp.newTrigger('backfillZortOrders').timeBased().everyMinutes(5).create();
-  Logger.log("▶️ เริ่ม backfill ตั้งแต่ " + BACKFILL_START_YM + " · ตั้ง trigger ทุก 5 นาทีแล้ว · รันรอบแรกเลย…");
+  Logger.log("▶️ เริ่ม backfill (แบ่งตามหน้า) · ตั้ง trigger ทุก 5 นาทีแล้ว · รันรอบแรกเลย…");
   backfillZortOrders();
 }
 
-// ตัวรันจริง (trigger เรียกทุก 5 นาที) — ทำทีละเดือนภายใน budget 4.5 นาที แล้วเซฟ cursor
+// ตัวรันจริง (trigger เรียกทุก 5 นาที) — ดึงทีละหน้า (200 บิล/หน้า) ภายใน budget 4.5 นาที แล้วเซฟหน้า
+// ZORT ไม่กรอง date จริง (query คืนทั้งระบบ) → ดึงทุกหน้าตามลำดับ เก็บดิบพร้อมวันที่จริง (rebuild ค่อยกรอง)
+// bounded ต่อหน้า → หน้าเดียวใช้ไม่กี่วิ ไม่มีทางชน 6 นาที (เช็ค budget ระหว่างหน้า)
 function backfillZortOrders() {
   const props = PropertiesService.getScriptProperties();
   if (props.getProperty('backfill_done') === '1') { removeTriggersByName_('backfillZortOrders'); Logger.log("backfill เสร็จแล้ว — ลบ trigger"); return; }
@@ -2473,47 +2475,50 @@ function backfillZortOrders() {
   if (!sh) { Logger.log("❌ ไม่มีชีตดิบ — รัน startBackfill ก่อน"); return; }
 
   const tz = "Asia/Bangkok";
-  const today = new Date();
-  const endYM = Utilities.formatDate(today, tz, "yyyy-MM");
-  let cursor = props.getProperty('backfill_ym') || BACKFILL_START_YM;
+  const toStr = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd");
+  const fromStr = "2023-01-01"; // เผื่อ date filter ทำงาน ให้ครอบคลุมก่อนเริ่มใช้จริง (2024)
+  const limit = 200;
+  let page = parseInt(props.getProperty('backfill_page') || '1', 10);
   const startMs = Date.now(), BUDGET = 4.5 * 60 * 1000;
 
-  let processed = 0, appended = 0;
-  while (cursor <= endYM) {
-    if (Date.now() - startMs > BUDGET) { Logger.log("⏱️ budget หมด หยุดที่ " + cursor + " (รอบหน้าทำต่อ)"); break; }
-    const range = monthRange_(cursor);
-    const orders = fetchZortOrdersPaged_(range[0], range[1]);
+  let appended = 0, pagesDone = 0, finished = false;
+  while (true) {
+    if (Date.now() - startMs > BUDGET) { Logger.log("⏱️ budget หมด · ค้างที่หน้า " + page + " (รอบหน้าทำต่อ)"); break; }
+    const url = `${ZORT_BASE}/Order/GetOrders?page=${page}&limit=${limit}&fromdate=${fromStr}&todate=${toStr}`;
+    const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) { Logger.log("⚠️ HTTP " + res.getResponseCode() + " ที่หน้า " + page + " — หยุดรอบนี้ (trigger จะลองใหม่)"); break; }
+    const list = (JSON.parse(res.getContentText())).list || [];
+    if (list.length === 0) { finished = true; break; }
+
     const rows = [];
-    orders.forEach(o => {
+    list.forEach(o => {
       const ds = o.orderdateString || (o.orderdate ? String(o.orderdate).substring(0, 10) : "");
-      const list = Array.isArray(o.list) ? o.list : [];
+      const items = Array.isArray(o.list) ? o.list : [];
       const amount = Number(o.amount) || 0;
-      if (list.length === 0) {
+      if (items.length === 0) {
         rows.push([ds, String(o.number || ""), String(o.status || ""), "", "", 0, 0, o.customerid || "", String(o.customername || ""), amount]);
       } else {
-        list.forEach(it => rows.push([ds, String(o.number || ""), String(o.status || ""),
+        items.forEach(it => rows.push([ds, String(o.number || ""), String(o.status || ""),
           String(it.sku || "").toUpperCase(), String(it.name || ""), Number(it.number) || 0, Number(it.totalprice) || 0,
           o.customerid || "", String(o.customername || ""), amount]));
       }
     });
-    if (rows.length) {
-      sh.getRange(sh.getLastRow() + 1, 1, rows.length, BACKFILL_HEADER.length).setValues(rows);
-      appended += rows.length;
-    }
-    Logger.log("  " + cursor + ": " + orders.length + " บิล → " + rows.length + " แถว");
-    processed++;
-    cursor = nextYM_(cursor);
-    props.setProperty('backfill_ym', cursor);
+    if (rows.length) { sh.getRange(sh.getLastRow() + 1, 1, rows.length, BACKFILL_HEADER.length).setValues(rows); appended += rows.length; }
+    pagesDone++;
+    page++;
+    props.setProperty('backfill_page', String(page));
+    if (list.length < limit) { finished = true; break; } // หน้าสุดท้าย
+    Utilities.sleep(150);
   }
 
-  if (cursor > endYM) {
+  if (finished) {
     props.setProperty('backfill_done', '1');
     removeTriggersByName_('backfillZortOrders');
-    Logger.log("✅ backfill ครบทุกเดือน (ถึง " + endYM + ") · รอบนี้ +" + appended + " แถว · ตั้ง trigger rebuild อีก 1 นาที…");
+    Logger.log("✅ ดึงครบทุกหน้า · รอบนี้ +" + appended + " แถว (" + pagesDone + " หน้า) · ตั้ง trigger rebuild อีก 1 นาที…");
     removeTriggersByName_('rebuildSalesFromRaw');
     ScriptApp.newTrigger('rebuildSalesFromRaw').timeBased().after(60 * 1000).create();
   } else {
-    Logger.log("รอบนี้ทำ " + processed + " เดือน (+" + appended + " แถว) · ค้างที่ " + cursor + " · trigger จะรันต่อ");
+    Logger.log("รอบนี้ " + pagesDone + " หน้า (+" + appended + " แถว) · ค้างที่หน้า " + page + " · trigger จะรันต่อ");
   }
 }
 
@@ -2564,7 +2569,7 @@ function resumeBackfill() {
 // เช็คสถานะ backfill + โควตา cell ของ spreadsheet (ลิมิต Google Sheets = 10 ล้าน cell ทั้งไฟล์)
 function backfillStatus() {
   const props = PropertiesService.getScriptProperties();
-  Logger.log("cursor (เดือนถัดไปที่จะทำ): " + (props.getProperty('backfill_ym') || "(ยังไม่เริ่ม)"));
+  Logger.log("หน้าถัดไปที่จะดึง: " + (props.getProperty('backfill_page') || "(ยังไม่เริ่ม)"));
   Logger.log("done: " + (props.getProperty('backfill_done') === '1' ? "✅ ครบแล้ว" : "⏳ ยังไม่ครบ"));
   const trig = ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'backfillZortOrders' || t.getHandlerFunction() === 'rebuildSalesFromRaw');
   Logger.log("trigger ทำงานอยู่: " + (trig.length ? trig.map(t => t.getHandlerFunction()).join(", ") : "(ไม่มี)"));
