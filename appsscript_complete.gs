@@ -5393,32 +5393,37 @@ function voidZortQuotation_(quotationId, quotationNumber, actor) {
   const jsonOut = (o) => ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);
   try {
     if (!quotationId && !quotationNumber) return jsonOut({ ok: false, error: "ไม่มี id/number ของใบเสนอราคา" });
-    const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
-
-    // payload ของ VoidQuotation ไม่มีในเอกสาร ZORT — ลองหลายรูปแบบตามลำดับ (ZORT convention: VoidOrder ใช้ {id})
-    // หยุดที่รูปแบบแรกที่สำเร็จ · ถ้าล้มหมด รวม error ทุกครั้งไว้วินิจฉัยว่า ZORT ต้องการ field อะไร
+    const base = `${ZORT_BASE}/Quotation/VoidQuotation`;
     const idNum = quotationId != null && quotationId !== "" && !isNaN(Number(quotationId)) ? Number(quotationId) : null;
-    const shapes = [];
-    if (idNum != null)          shapes.push({ label: "id(number)",  body: { id: idNum } });
-    if (quotationId)            shapes.push({ label: "id(raw)",     body: { id: quotationId } });
-    if (quotationNumber)        shapes.push({ label: "number",      body: { number: String(quotationNumber) } });
-    if (quotationNumber)        shapes.push({ label: "id=number",   body: { id: String(quotationNumber) } });
+    const idVal = idNum != null ? idNum : quotationId;
+
+    // VoidQuotation reject JSON body {id} ทุกแบบ ทั้งที่ id นั้น valid (GetQuotationDetail?id=xxx รับได้)
+    // → ZORT อ่าน id ผ่าน URL query / form-encoded ไม่ใช่ JSON body · ลองหลาย transport ตามลำดับ หยุดที่สำเร็จ
+    const jsonHdr = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
+    const formHdr = Object.assign({}, zortHeaders_(), { "Content-Type": "application/x-www-form-urlencoded" });
+    const tries = [];
+    if (idVal != null && idVal !== "") {
+      tries.push({ label: "query-id",  url: base + "?id=" + encodeURIComponent(idVal), opt: { method: "post", headers: jsonHdr, payload: "{}", muteHttpExceptions: true } });
+      tries.push({ label: "form-id",   url: base, opt: { method: "post", headers: formHdr, payload: "id=" + encodeURIComponent(idVal), muteHttpExceptions: true } });
+    }
+    if (quotationNumber) {
+      tries.push({ label: "query-num", url: base + "?number=" + encodeURIComponent(quotationNumber), opt: { method: "post", headers: jsonHdr, payload: "{}", muteHttpExceptions: true } });
+      tries.push({ label: "form-num",  url: base, opt: { method: "post", headers: formHdr, payload: "number=" + encodeURIComponent(quotationNumber), muteHttpExceptions: true } });
+    }
 
     const attempts = [];
-    for (const s of shapes) {
-      const res = UrlFetchApp.fetch(`${ZORT_BASE}/Quotation/VoidQuotation`, {
-        method: "post", headers, payload: JSON.stringify(s.body), muteHttpExceptions: true
-      });
+    for (const t of tries) {
+      const res = UrlFetchApp.fetch(t.url, t.opt);
       const code = res.getResponseCode();
       const text = res.getContentText();
       const err = zortRespError_(res);
-      Logger.log("VoidQuotation [" + s.label + "] HTTP " + code + " — " + text.substring(0, 200));
+      Logger.log("VoidQuotation [" + t.label + "] HTTP " + code + " — " + text.substring(0, 200));
       if (code === 200 && !err) {
         CacheService.getScriptCache().remove('pending_quotes_v1'); // ให้รายการค้างดึงใหม่
-        try { writeAuditLog_(actor || "owner", "ปิดใบเสนอราคา (ไม่อนุมัติ)", quotationNumber || quotationId, s.label); } catch (e) {}
-        return jsonOut({ ok: true, shape: s.label });
+        try { writeAuditLog_(actor || "owner", "ปิดใบเสนอราคา (ไม่อนุมัติ)", quotationNumber || quotationId, t.label); } catch (e) {}
+        return jsonOut({ ok: true, shape: t.label });
       }
-      attempts.push(s.label + ": " + (err || ("HTTP " + code)));
+      attempts.push(t.label + ": " + (err || ("HTTP " + code)));
       Utilities.sleep(150);
     }
     return jsonOut({ ok: false, error: attempts.join(" | ") });
