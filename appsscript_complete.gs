@@ -2227,6 +2227,66 @@ function analyzeZortQuotations() {
   Logger.log("──────── เสร็จ — copy log ทั้งหมดส่งกลับมา ────────");
 }
 
+// ── PROBE: ประวัติ ZORT มีกี่ปี/กี่บิล (ก่อนตัดสินใจดึงทั้งระบบ) ──
+// รันเองใน GAS editor แล้ว copy log ส่งกลับมา — โหลดเบา (limit=1 ต่อปี อ่าน field count รวม ถ้ามี)
+// ถ้า response ไม่มี count → fallback ดึงจริงทีละปีแบบ cap time budget แล้วรายงานเท่าที่ได้
+function probeZortHistory() {
+  const tz = "Asia/Bangkok";
+  const nowY = new Date().getFullYear();
+  const START_Y = 2018;
+  Logger.log("──────── probe ประวัติ ZORT ────────");
+
+  // 1) ตรวจว่า response มี field count/total รวมไหม (ดูจากคำสั่งปีล่าสุด)
+  const testUrl = `${ZORT_BASE}/Order/GetOrders?page=1&limit=1&fromdate=${nowY}-01-01&todate=${nowY}-12-31`;
+  let hasCount = false, countKey = null;
+  try {
+    const r = UrlFetchApp.fetch(testUrl, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+    Logger.log("test HTTP " + r.getResponseCode());
+    const j = JSON.parse(r.getContentText());
+    Logger.log("top-level keys: " + JSON.stringify(Object.keys(j)));
+    ["count", "total", "totalcount", "totalCount", "recordcount", "totalrecord"].forEach(k => {
+      if (j[k] != null && !isNaN(Number(j[k]))) { hasCount = true; countKey = countKey || k; }
+    });
+    Logger.log("count field: " + (countKey || "(ไม่มี — จะนับจากจำนวนที่ดึงจริง)"));
+  } catch (e) { Logger.log("test error: " + e); }
+
+  let grand = 0;
+  const startMs = Date.now(), BUDGET = 4.5 * 60 * 1000; // เผื่อไม่ให้ชน 6 นาที
+  for (let y = START_Y; y <= nowY; y++) {
+    if (Date.now() - startMs > BUDGET) { Logger.log("⏱️ หมดเวลา budget หยุดที่ปี " + y); break; }
+    const from = `${y}-01-01`, to = `${y}-12-31`;
+    if (hasCount) {
+      const url = `${ZORT_BASE}/Order/GetOrders?page=1&limit=1&fromdate=${from}&todate=${to}`;
+      try {
+        const r = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+        const j = JSON.parse(r.getContentText());
+        const n = Number(j[countKey]) || 0;
+        grand += n;
+        Logger.log(`ปี ${y}: ${n} บิล`);
+      } catch (e) { Logger.log(`ปี ${y}: error ${e}`); }
+      Utilities.sleep(150);
+    } else {
+      // ไม่มี count → ดึงจริงแบบนับ (cap 30 หน้า/ปี = 6000 บิล/ปี พอสำหรับ probe)
+      let n = 0;
+      for (let page = 1; page <= 30; page++) {
+        const url = `${ZORT_BASE}/Order/GetOrders?page=${page}&limit=200&fromdate=${from}&todate=${to}`;
+        const r = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+        if (r.getResponseCode() !== 200) break;
+        const list = (JSON.parse(r.getContentText())).list || [];
+        n += list.length;
+        if (list.length < 200) break;
+        Utilities.sleep(120);
+        if (Date.now() - startMs > BUDGET) { Logger.log("⏱️ budget หมดกลางปี " + y); break; }
+      }
+      grand += n;
+      Logger.log(`ปี ${y}: ${n} บิล${n >= 6000 ? "+ (ชน cap 30 หน้า อาจมากกว่านี้)" : ""}`);
+    }
+  }
+  Logger.log("═══ รวมทั้งหมด ~" + grand + " บิล ═══");
+  Logger.log("แนะนำ: ถ้ารวม ≤ ~20,000 บิล → ขยาย sync ปีเดียวจบได้ · ถ้ามากกว่า → ต้อง backfill แบ่งรอบ");
+  Logger.log("──────── เสร็จ — copy log ส่งกลับมา ────────");
+}
+
 // ─── ZORT Sales Auto-Sync ───────────────────────────────────────────────────
 
 function syncZortSales() {

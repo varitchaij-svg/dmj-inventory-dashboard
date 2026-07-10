@@ -6327,6 +6327,11 @@ function CustomerView() {
         <div>
           <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>👥 ลูกค้า & ยอดซื้อ</div>
           <div style={{ fontSize: 12, color: "var(--muted)" }}>ยอดที่ลูกค้าซื้อจริง — แตะแถวเพื่อดูสินค้าที่ซื้อบ่อย</div>
+          {months.length > 0 && (
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>
+              📅 ข้อมูลครอบคลุม <b>{months[0]}</b> – <b>{months[months.length - 1]}</b> ({months.length} เดือน)
+            </div>
+          )}
         </div>
         <button className="btn ghost" onClick={load} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 6 }}>
           {loading ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }}/> : "🔄"}
