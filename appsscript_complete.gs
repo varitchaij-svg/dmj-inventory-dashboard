@@ -2085,64 +2085,6 @@ function analyzeZortMarketing() {
 // ดู field ของใบเสนอราคาจาก ZORT: ใครเป็นคนเสนอ (เซล), สถานะอนุมัติ, ยอด, ลูกค้า, วันที่,
 // และมี field ที่บอกว่าใบเสนอราคานี้กลายเป็น order/อนุมัติแล้วหรือยัง — ใช้ก่อนสร้างรายงาน conversion
 // รันเองใน editor แล้วส่ง log กลับมา
-// ── DIAGNOSTIC: หา field id ที่แท้จริงของใบเสนอราคา (VoidQuotation reject ทุก payload) ──
-// รันเองใน GAS editor แล้ว copy log ส่งกลับมา — ไม่ void จริง แค่ดึง object + detail มาดู
-// ดึงย้อน 200 วัน (ใบค้างเก่าถึง 159 วัน) เอาใบ Pending ใบแรกมา dump ทุก field + เรียก GetQuotationDetail เทียบ
-function debugQuotationVoidSchema() {
-  const tz = "Asia/Bangkok";
-  const today = new Date();
-  const from = new Date(today.getTime() - 200 * 24 * 60 * 60 * 1000);
-  const fromStr = Utilities.formatDate(from, tz, "yyyy-MM-dd");
-  const toStr = Utilities.formatDate(today, tz, "yyyy-MM-dd");
-  Logger.log("──────── debug VoidQuotation schema ────────");
-
-  // 1) หา Pending ใบแรก
-  let q = null;
-  for (let page = 1; page <= 30 && !q; page++) {
-    const url = `${ZORT_BASE}/Quotation/GetQuotations?page=${page}&limit=50&fromdate=${fromStr}&todate=${toStr}`;
-    const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
-    if (res.getResponseCode() !== 200) { Logger.log("GetQuotations HTTP " + res.getResponseCode()); break; }
-    const list = (JSON.parse(res.getContentText())).list || [];
-    if (!list.length) break;
-    q = list.find(x => String(x.status || "") === "Pending") || null;
-    if (list.length < 50) break;
-  }
-  if (!q) { Logger.log("ไม่พบใบ Pending ใน 200 วัน"); return; }
-
-  Logger.log("─ GetQuotations object (list item) ─");
-  Logger.log("keys: " + JSON.stringify(Object.keys(q)));
-  Logger.log("full: " + JSON.stringify(q).substring(0, 2500));
-  // ชี้ field ที่หน้าจะเป็น id
-  const idLike = {};
-  Object.keys(q).forEach(k => { if (/id|number|guid|ref|doc|key/i.test(k)) idLike[k] = q[k]; });
-  Logger.log("🔑 field ที่คล้าย id: " + JSON.stringify(idLike));
-
-  // 2) เรียก GetQuotationDetail หลายแบบ param เผื่อ detail มี id คนละตัว
-  const detailTries = [];
-  if (q.id != null)     detailTries.push(["id", q.id]);
-  if (q.number != null) detailTries.push(["number", q.number]);
-  detailTries.forEach(([pk, pv]) => {
-    const url = `${ZORT_BASE}/Quotation/GetQuotationDetail?${pk}=${encodeURIComponent(pv)}`;
-    const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
-    const code = res.getResponseCode();
-    const txt = res.getContentText();
-    Logger.log("─ GetQuotationDetail?" + pk + "=" + pv + " → HTTP " + code + " ─");
-    if (code === 200) {
-      try {
-        const j = JSON.parse(txt);
-        const d = j.detail || j.data || j;
-        Logger.log("detail keys: " + JSON.stringify(Object.keys(d)));
-        const dIdLike = {};
-        Object.keys(d).forEach(k => { if (/id|number|guid|ref|doc|key/i.test(k)) dIdLike[k] = d[k]; });
-        Logger.log("🔑 detail field ที่คล้าย id: " + JSON.stringify(dIdLike));
-      } catch (e) { Logger.log("parse detail error: " + e + " · raw: " + txt.substring(0, 200)); }
-    } else {
-      Logger.log("raw: " + txt.substring(0, 200));
-    }
-  });
-  Logger.log("──────── เสร็จ — copy log ทั้งหมดส่งกลับมา ────────");
-}
-
 function exploreZortQuotations() {
   const tz = "Asia/Bangkok";
   const today = new Date();
