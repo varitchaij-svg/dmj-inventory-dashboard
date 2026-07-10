@@ -21,11 +21,13 @@ const TABS = [
   { id: "deadstock",     label: "📦 สินค้าจม",              icon: I.alert },
   { id: "quotefollowup", label: "📄 ใบเสนอราคาค้าง",         icon: I.cart },
   { id: "customers",     label: "👥 ลูกค้า & ยอดซื้อ",        icon: I.store },
+  { id: "margin",        label: "💰 กำไรขั้นต้น",             icon: I.flame },
 ];
 
 // Role config
 const ROLE_TABS = {
-  owner:      ["overview","categories","trends","stock","storage","stockcount","newproduct","frontstore","transfers","orders","ordersummary","mtojobs","upload","connect","labels","auditlog","deadstock","quotefollowup","customers"],
+  // เรียงตามที่ owner ใช้บ่อย: ภาพรวม/เงิน/ลูกค้า → งานประจำวัน (สั่ง/สต๊อก/ออเดอร์/หน้าร้าน) → คลัง → วิเคราะห์ → เครื่องมือ/ตั้งค่าท้ายสุด
+  owner:      ["overview","customers","margin","quotefollowup","categories","stock","orders","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","mtojobs","labels","upload","connect","auditlog"],
   employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","mtojobs","labels"],
   warehouse:  ["categories","stock","storage","stockcount","newproduct","orders","ordersummary","mtojobs","labels"],
   frontstore: ["categories","stock","frontstore","orders","mtojobs","labels"],
@@ -556,7 +558,8 @@ function App() {
   }
 
   const allowedTabIds = ROLE_TABS[role] || ROLE_TABS.employee;
-  const visibleTabs = TABS.filter(t => allowedTabIds.includes(t.id));
+  // เรียงตามลำดับใน ROLE_TABS (ไม่ใช่ลำดับใน TABS) → จัดลำดับความสำคัญต่อ role ได้ (owner เรียงตามที่ใช้บ่อย)
+  const visibleTabs = allowedTabIds.map(id => TABS.find(t => t.id === id)).filter(Boolean);
   const activeTab = allowedTabIds.includes(tab) ? tab : (allowedTabIds[0] || "categories");
 
   const toggleSimpleMode = () => setSimpleMode(v => {
@@ -669,7 +672,7 @@ function App() {
             </div>
           </div>
 
-          <div className="navtabs" role="tablist">
+          <div className={`navtabs${role === "owner" ? " navtabs-wrap" : ""}`} role="tablist">
             {(() => {
               // primaryTabs / secondaryTabs คำนวณไว้ด้านบน (รวมโหมดง่าย)
               // แสดงปุ่ม "เพิ่มเติม" เมื่อมี secondaryTabs
@@ -959,6 +962,7 @@ function App() {
         {activeTab === "deadstock"    && <ErrorBoundary key="deadstock"><DeadStockView/></ErrorBoundary>}
         {activeTab === "quotefollowup" && <ErrorBoundary key="quotefollowup"><QuoteFollowupView/></ErrorBoundary>}
         {activeTab === "customers"    && <ErrorBoundary key="customers"><CustomerView/></ErrorBoundary>}
+        {activeTab === "margin"       && <ErrorBoundary key="margin"><MarginView data={data}/></ErrorBoundary>}
         {activeTab === "connect"      && <ErrorBoundary key="connect"><ConnectView
                                     sheetUrl={sheetUrl}
                                     sheetViewUrl={sheetViewUrl}

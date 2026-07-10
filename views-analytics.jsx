@@ -6433,6 +6433,265 @@ function CustomerView() {
   );
 }
 
+// ────────────── 💰 กำไรขั้นต้น (MarginView) ──────────────
+// วิเคราะห์กำไรจริงต่อสินค้า/หมวด: ต้นทุน = ราคาซื้อจริงเฉลี่ยถ่วงน้ำหนักจาก PO (data.purchases)
+// ไม่ใช้ค่าสมมติ COST_RATIO 0.8 · กำไร/ชิ้น = ราคาขาย − ต้นทุน · กำไรรวม = กำไร/ชิ้น × ที่ขายได้
+// สินค้าที่ไม่มีประวัติซื้อ = คำนวณต้นทุนไม่ได้ → แยกไว้ + โชว์ % ครอบคลุม (coverage)
+function MarginView({ data }) {
+  const products = (data && data.products) || [];
+  const purchases = (data && data.purchases) || [];
+  const [sortBy, setSortBy] = uS("profit");   // profit | marginPct | rev
+  const [catFilter, setCatFilter] = uS("");
+  const [search, setSearch] = uS("");
+  const [showNoCost, setShowNoCost] = uS(false);
+
+  const baht = (n) => (Number(n) || 0).toLocaleString("th-TH", { maximumFractionDigits: 0 });
+  const pct  = (n) => (n == null ? "—" : (n * 100).toFixed(1) + "%");
+
+  const A = uM(() => {
+    // ต้นทุนเฉลี่ยถ่วงน้ำหนักต่อ SKU จากประวัติซื้อจริง
+    const costBySku = {};
+    purchases.forEach(pu => {
+      const sku = String(pu.sku || "").trim().toUpperCase();
+      const up = Number(pu.unitPrice) || 0;
+      const q  = Number(pu.qty) || 0;
+      if (!sku || up <= 0 || q <= 0) return;
+      if (!costBySku[sku]) costBySku[sku] = { sumCost: 0, sumQty: 0 };
+      costBySku[sku].sumCost += up * q;
+      costBySku[sku].sumQty  += q;
+    });
+    const costOf = (sku) => {
+      const c = costBySku[String(sku || "").trim().toUpperCase()];
+      return c && c.sumQty > 0 ? c.sumCost / c.sumQty : null;
+    };
+
+    const rows = [];
+    const catAgg = {};   // cat -> {rev, cost, profit, revKnown}
+    let totRev = 0, totCost = 0, totProfit = 0, revWithCost = 0, noCostCount = 0;
+
+    products.forEach(p => {
+      if (p.isMTO) return;
+      const soldQty = Number(p.soldQty) || 0;
+      const soldRev = Number(p.soldRev) || 0;
+      if (soldQty <= 0 && soldRev <= 0) return;   // เอาเฉพาะที่ขายได้ในช่วง
+      const price = Number(p.price) || 0;
+      const cost  = costOf(p.sku);
+      const cat   = p.cat || "ไม่ระบุ";
+      totRev += soldRev;
+
+      let unitMargin = null, marginPct = null, profit = null;
+      if (cost != null && price > 0) {
+        unitMargin = price - cost;
+        marginPct  = unitMargin / price;
+        profit     = unitMargin * soldQty;
+        totCost    += cost * soldQty;
+        totProfit  += profit;
+        revWithCost += soldRev;
+        if (!catAgg[cat]) catAgg[cat] = { rev: 0, cost: 0, profit: 0 };
+        catAgg[cat].rev    += soldRev;
+        catAgg[cat].cost   += cost * soldQty;
+        catAgg[cat].profit += profit;
+      } else {
+        noCostCount++;
+      }
+      rows.push({ sku: p.sku, name: p.name || p.sku, cat, soldQty, soldRev, price, cost, unitMargin, marginPct, profit });
+    });
+
+    const cats = Object.keys(catAgg).map(cat => ({
+      cat, ...catAgg[cat],
+      marginPct: catAgg[cat].rev > 0 ? catAgg[cat].profit / catAgg[cat].rev : null,
+    })).sort((a, b) => b.profit - a.profit);
+
+    // สินค้าขายดีแต่กำไรบาง: อยู่ครึ่งบนของยอดขาย แต่ margin < 15%
+    const withCost = rows.filter(r => r.marginPct != null);
+    const revSorted = [...withCost].sort((a, b) => b.soldRev - a.soldRev);
+    const topRevSet = new Set(revSorted.slice(0, Math.ceil(revSorted.length * 0.4)).map(r => r.sku));
+    const thinButBig = withCost.filter(r => topRevSet.has(r.sku) && r.marginPct < 0.15)
+                               .sort((a, b) => b.soldRev - a.soldRev).slice(0, 8);
+    const lossMakers = withCost.filter(r => r.unitMargin < 0)
+                               .sort((a, b) => a.profit - b.profit).slice(0, 8);
+
+    return {
+      rows, cats, totRev, totCost, totProfit, revWithCost, noCostCount,
+      coverage: totRev > 0 ? revWithCost / totRev : 0,
+      avgMargin: revWithCost > 0 ? totProfit / revWithCost : null,
+      thinButBig, lossMakers,
+      allCats: [...new Set(rows.map(r => r.cat))].sort(),
+    };
+  }, [products, purchases]);
+
+  const view = uM(() => {
+    let r = A.rows;
+    if (!showNoCost) r = r.filter(x => x.marginPct != null);
+    if (catFilter) r = r.filter(x => x.cat === catFilter);
+    if (search.trim()) {
+      const toks = search.trim().toLowerCase().split(/\s+/);
+      r = r.filter(x => { const hay = (x.sku + " " + x.name + " " + x.cat).toLowerCase(); return toks.every(t => hay.includes(t)); });
+    }
+    const key = sortBy;
+    return [...r].sort((a, b) => {
+      const av = a[key], bv = b[key];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      return bv - av;
+    });
+  }, [A, sortBy, catFilter, search, showNoCost]);
+
+  const marginColor = (m) => m == null ? "var(--muted)" : m < 0 ? "#dc2626" : m < 0.1 ? "#d97706" : m < 0.25 ? "var(--text)" : "#16a34a";
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 4 }}>
+        <h2 style={{ margin: 0, fontSize: 20 }}>💰 กำไรขั้นต้น</h2>
+      </div>
+      <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>
+        ต้นทุน = ราคาซื้อจริงเฉลี่ยจากใบสั่งซื้อ (PO) · กำไร = ราคาขาย − ต้นทุน × จำนวนที่ขายได้ · <b>ไม่ใช่ค่าสมมติ</b>
+      </div>
+
+      {/* KPIs */}
+      <div className="row row-4" style={{ marginBottom: 14 }}>
+        <div className="card" style={{ padding: 14 }}>
+          <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 700 }}>ยอดขาย (ที่รู้ต้นทุน)</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: "#1f6f8b" }}>{baht(A.revWithCost)} ฿</div>
+        </div>
+        <div className="card" style={{ padding: 14 }}>
+          <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 700 }}>ต้นทุนรวม</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: "#b45309" }}>{baht(A.totCost)} ฿</div>
+        </div>
+        <div className="card" style={{ padding: 14 }}>
+          <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 700 }}>กำไรขั้นต้นรวม</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: "#16a34a" }}>{baht(A.totProfit)} ฿</div>
+        </div>
+        <div className="card" style={{ padding: 14 }}>
+          <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 700 }}>% กำไรเฉลี่ย</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: marginColor(A.avgMargin) }}>{pct(A.avgMargin)}</div>
+        </div>
+      </div>
+
+      <div style={{ fontSize: 12, color: "var(--muted)", background: "var(--g-50)", borderRadius: 10, padding: "8px 12px", marginBottom: 16 }}>
+        📊 คำนวณจากยอดขาย <b>{Math.round(A.coverage * 100)}%</b> ที่มีประวัติต้นทุนจาก PO
+        {A.noCostCount > 0 && <> · อีก <b>{A.noCostCount}</b> สินค้ายังไม่มีประวัติซื้อ (คำนวณกำไรไม่ได้)</>}
+      </div>
+
+      {/* Flags: ขายดีแต่กำไรบาง / ขาดทุน */}
+      {(A.thinButBig.length > 0 || A.lossMakers.length > 0) && (
+        <div className="row" style={{ gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+          <div className="card" style={{ padding: 14 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#d97706", marginBottom: 8 }}>⚠️ ขายดีแต่กำไรบาง</div>
+            {A.thinButBig.length === 0 ? <div style={{ fontSize: 12, color: "var(--muted)" }}>ไม่มี — เยี่ยม!</div> :
+              A.thinButBig.map(r => (
+                <div key={r.sku} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12, padding: "4px 0", borderBottom: "1px solid var(--bdr)" }}>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</span>
+                  <span style={{ flexShrink: 0, color: "#d97706", fontWeight: 700 }}>{pct(r.marginPct)}</span>
+                </div>
+              ))}
+          </div>
+          <div className="card" style={{ padding: 14 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#dc2626", marginBottom: 8 }}>🔴 ขาดทุน (ขายต่ำกว่าทุน)</div>
+            {A.lossMakers.length === 0 ? <div style={{ fontSize: 12, color: "var(--muted)" }}>ไม่มี — ดีมาก!</div> :
+              A.lossMakers.map(r => (
+                <div key={r.sku} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12, padding: "4px 0", borderBottom: "1px solid var(--bdr)" }}>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</span>
+                  <span style={{ flexShrink: 0, color: "#dc2626", fontWeight: 700 }}>{pct(r.marginPct)}</span>
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
+
+      {/* กำไรตามหมวด */}
+      {A.cats.length > 0 && (
+        <div className="card" style={{ padding: 14, marginBottom: 16 }}>
+          <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 10 }}>🏷️ กำไรตามหมวด</div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 420 }}>
+              <thead><tr style={{ color: "var(--muted)", textAlign: "right" }}>
+                <th style={{ textAlign: "left", padding: "4px 6px" }}>หมวด</th>
+                <th style={{ padding: "4px 6px" }}>ยอดขาย</th>
+                <th style={{ padding: "4px 6px" }}>กำไรรวม</th>
+                <th style={{ padding: "4px 6px" }}>% กำไร</th>
+              </tr></thead>
+              <tbody>
+                {A.cats.map(c => (
+                  <tr key={c.cat} style={{ borderTop: "1px solid var(--bdr)" }}>
+                    <td style={{ textAlign: "left", padding: "6px", fontWeight: 600 }}>{c.cat}</td>
+                    <td style={{ textAlign: "right", padding: "6px" }}>{baht(c.rev)}</td>
+                    <td style={{ textAlign: "right", padding: "6px", fontWeight: 700 }}>{baht(c.profit)}</td>
+                    <td style={{ textAlign: "right", padding: "6px", fontWeight: 800, color: marginColor(c.marginPct) }}>{pct(c.marginPct)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ตัวกรอง + sort */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 ค้นหาสินค้า/SKU"
+               style={{ flex: "1 1 160px", minWidth: 0, padding: "8px 12px", borderRadius: 8, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 13 }} />
+        <select value={catFilter} onChange={e => setCatFilter(e.target.value)}
+                style={{ padding: "8px 10px", borderRadius: 8, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 13 }}>
+          <option value="">ทุกหมวด</option>
+          {A.allCats.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+        <span style={{ fontSize: 12, color: "var(--muted)" }}>เรียงตาม:</span>
+        {[["profit", "กำไรรวม"], ["marginPct", "% กำไร"], ["rev", "ยอดขาย"]].map(([k, lbl]) => (
+          <button key={k} onClick={() => setSortBy(k === "rev" ? "soldRev" : k)}
+                  style={{ padding: "5px 12px", borderRadius: 20, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 700,
+                           border: (sortBy === k || (k === "rev" && sortBy === "soldRev")) ? "1.5px solid var(--g-500)" : "1.5px solid var(--bdr)",
+                           background: (sortBy === k || (k === "rev" && sortBy === "soldRev")) ? "var(--g-50)" : "var(--paper)",
+                           color: (sortBy === k || (k === "rev" && sortBy === "soldRev")) ? "var(--g-700)" : "var(--text)" }}>
+            {lbl}
+          </button>
+        ))}
+        <label style={{ marginLeft: "auto", fontSize: 12, color: "var(--muted)", display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
+          <input type="checkbox" checked={showNoCost} onChange={e => setShowNoCost(e.target.checked)} />
+          รวมสินค้าที่ยังไม่รู้ต้นทุน
+        </label>
+      </div>
+
+      {/* ตารางสินค้า */}
+      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 620 }}>
+            <thead><tr style={{ color: "var(--muted)", background: "var(--g-50)" }}>
+              <th style={{ textAlign: "left", padding: "8px 8px" }}>สินค้า</th>
+              <th style={{ textAlign: "right", padding: "8px 8px" }}>ขายได้</th>
+              <th style={{ textAlign: "right", padding: "8px 8px" }}>ยอดขาย</th>
+              <th style={{ textAlign: "right", padding: "8px 8px" }}>ต้นทุน/ชิ้น</th>
+              <th style={{ textAlign: "right", padding: "8px 8px" }}>ขาย/ชิ้น</th>
+              <th style={{ textAlign: "right", padding: "8px 8px" }}>% กำไร</th>
+              <th style={{ textAlign: "right", padding: "8px 8px" }}>กำไรรวม</th>
+            </tr></thead>
+            <tbody>
+              {view.slice(0, 300).map(r => (
+                <tr key={r.sku} style={{ borderTop: "1px solid var(--bdr)" }}>
+                  <td style={{ textAlign: "left", padding: "8px 8px", maxWidth: 200 }}>
+                    <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</div>
+                    <div style={{ fontSize: 10, color: "var(--muted)" }}>{r.sku} · {r.cat}</div>
+                  </td>
+                  <td style={{ textAlign: "right", padding: "8px 8px" }}>{r.soldQty}</td>
+                  <td style={{ textAlign: "right", padding: "8px 8px" }}>{baht(r.soldRev)}</td>
+                  <td style={{ textAlign: "right", padding: "8px 8px", color: r.cost == null ? "var(--muted)" : "var(--text)" }}>{r.cost == null ? "—" : baht(r.cost)}</td>
+                  <td style={{ textAlign: "right", padding: "8px 8px" }}>{baht(r.price)}</td>
+                  <td style={{ textAlign: "right", padding: "8px 8px", fontWeight: 800, color: marginColor(r.marginPct) }}>{pct(r.marginPct)}</td>
+                  <td style={{ textAlign: "right", padding: "8px 8px", fontWeight: 700, color: marginColor(r.marginPct) }}>{r.profit == null ? "—" : baht(r.profit)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {view.length === 0 && <div style={{ padding: 24, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>ไม่มีข้อมูลตามตัวกรอง</div>}
+      </div>
+      {view.length > 300 && <div style={{ textAlign: "center", fontSize: 11, color: "var(--muted)", marginTop: 8 }}>แสดง 300 รายการแรก · ใช้ค้นหา/กรองหมวดเพื่อดูตัวอื่น</div>}
+    </div>
+  );
+}
+
 // ────────────── 🛒 สั่งซื้อ (Purchase/Reorder) ──────────────
 
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView, DeadStockView, QuoteFollowupView, CustomerView, Pagination, WarehouseMapModal });
+Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView, DeadStockView, QuoteFollowupView, CustomerView, MarginView, Pagination, WarehouseMapModal });
