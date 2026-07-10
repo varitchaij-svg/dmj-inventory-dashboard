@@ -19,7 +19,7 @@ const TABS = [
   { id: "labels",        label: "🖨️ พิมพ์ Label",            icon: I.print },
   { id: "auditlog",      label: "📋 Audit Log",             icon: I.layers },
   { id: "deadstock",     label: "📦 สินค้าจม",              icon: I.alert },
-  { id: "quotefollowup", label: "📄 ใบเสนอราคาค้าง",         icon: I.cart },
+  { id: "quotefollowup", label: "📄 ใบเสนอราคา",             icon: I.cart },
   { id: "customers",     label: "👥 ลูกค้า & ยอดซื้อ",        icon: I.store },
   { id: "margin",        label: "💰 กำไรขั้นต้น",             icon: I.flame },
 ];
