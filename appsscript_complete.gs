@@ -5336,20 +5336,34 @@ function voidZortQuotation_(quotationId, quotationNumber, actor) {
   try {
     if (!quotationId && !quotationNumber) return jsonOut({ ok: false, error: "ไม่มี id/number ของใบเสนอราคา" });
     const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
-    const body = {};
-    if (quotationId)     body.id = quotationId;
-    if (quotationNumber) body.number = quotationNumber;
-    const res = UrlFetchApp.fetch(`${ZORT_BASE}/Quotation/VoidQuotation`, {
-      method: "post", headers, payload: JSON.stringify(body), muteHttpExceptions: true
-    });
-    const code = res.getResponseCode();
-    const text = res.getContentText();
-    Logger.log("VoidQuotation HTTP " + code + " — " + text.substring(0, 300));
-    const err = zortRespError_(res);
-    if (code !== 200 || err) return jsonOut({ ok: false, error: err || ("HTTP " + code), raw: text.substring(0, 200) });
-    CacheService.getScriptCache().remove('pending_quotes_v1'); // ให้รายการค้างดึงใหม่
-    try { writeAuditLog_(actor || "owner", "ปิดใบเสนอราคา (ไม่อนุมัติ)", quotationNumber || quotationId, ""); } catch (e) {}
-    return jsonOut({ ok: true });
+
+    // payload ของ VoidQuotation ไม่มีในเอกสาร ZORT — ลองหลายรูปแบบตามลำดับ (ZORT convention: VoidOrder ใช้ {id})
+    // หยุดที่รูปแบบแรกที่สำเร็จ · ถ้าล้มหมด รวม error ทุกครั้งไว้วินิจฉัยว่า ZORT ต้องการ field อะไร
+    const idNum = quotationId != null && quotationId !== "" && !isNaN(Number(quotationId)) ? Number(quotationId) : null;
+    const shapes = [];
+    if (idNum != null)          shapes.push({ label: "id(number)",  body: { id: idNum } });
+    if (quotationId)            shapes.push({ label: "id(raw)",     body: { id: quotationId } });
+    if (quotationNumber)        shapes.push({ label: "number",      body: { number: String(quotationNumber) } });
+    if (quotationNumber)        shapes.push({ label: "id=number",   body: { id: String(quotationNumber) } });
+
+    const attempts = [];
+    for (const s of shapes) {
+      const res = UrlFetchApp.fetch(`${ZORT_BASE}/Quotation/VoidQuotation`, {
+        method: "post", headers, payload: JSON.stringify(s.body), muteHttpExceptions: true
+      });
+      const code = res.getResponseCode();
+      const text = res.getContentText();
+      const err = zortRespError_(res);
+      Logger.log("VoidQuotation [" + s.label + "] HTTP " + code + " — " + text.substring(0, 200));
+      if (code === 200 && !err) {
+        CacheService.getScriptCache().remove('pending_quotes_v1'); // ให้รายการค้างดึงใหม่
+        try { writeAuditLog_(actor || "owner", "ปิดใบเสนอราคา (ไม่อนุมัติ)", quotationNumber || quotationId, s.label); } catch (e) {}
+        return jsonOut({ ok: true, shape: s.label });
+      }
+      attempts.push(s.label + ": " + (err || ("HTTP " + code)));
+      Utilities.sleep(150);
+    }
+    return jsonOut({ ok: false, error: attempts.join(" | ") });
   } catch (e) {
     return jsonOut({ ok: false, error: String(e) });
   }
