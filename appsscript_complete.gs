@@ -2115,6 +2115,8 @@ function exploreZortQuotations() {
 // ─── Quotation conversion report per salesperson (READ-ONLY) ────────────────
 // นับใบเสนอราคา 90 วัน แยกตามเซล: เสนอกี่ใบ, ปิดได้ (Success) กี่ใบ, กี่ %, มูลค่าเสนอ vs ปิดได้
 // + แจกแจง status ทุกค่า (ไม่เดาว่า Success/Pending/Voided หมายถึงอะไร) · รันเองแล้วส่ง log กลับมา
+// แยกเซลจาก field ที่ผู้ใช้พิมพ์เอง (default = tag) เพราะทุกใบคีย์ด้วยบัญชีเดียว createusername แยกไม่ได้
+// สลับ field ได้โดยตั้ง Script Property QUOTE_SALE_FIELD = "tag" | "reference" (ไม่ต้องแก้โค้ด)
 function analyzeZortQuotations() {
   const startMs = Date.now();
   const BUDGET_MS = 4.5 * 60 * 1000;
@@ -2124,11 +2126,12 @@ function analyzeZortQuotations() {
   const fromDate = new Date(today.getTime() - DAYS * 24 * 60 * 60 * 1000);
   const fromStr = Utilities.formatDate(fromDate, tz, "yyyy-MM-dd");
   const toStr   = Utilities.formatDate(today, tz, "yyyy-MM-dd");
+  const SALE_FIELD = PropertiesService.getScriptProperties().getProperty('QUOTE_SALE_FIELD') || 'tag';
   Logger.log("──────────────────────────────────────");
-  Logger.log("ใบเสนอราคา ช่วง " + fromStr + " → " + toStr + " (" + DAYS + " วัน)");
+  Logger.log("ใบเสนอราคา ช่วง " + fromStr + " → " + toStr + " (" + DAYS + " วัน) · แยกเซลจากช่อง: " + SALE_FIELD);
 
   const statusAll = {};                 // status → { count, amount }
-  const bySale = {};                    // createusername → { name, total, success, pending, other, quoted, won }
+  const bySale = {};                    // ชื่อเซล (จากช่อง SALE_FIELD) → { name, total, success, pending, other, quoted, won }
   let inWindow = 0, quotedSum = 0, wonSum = 0, wonCount = 0;
 
   const process = (q) => {
@@ -2148,8 +2151,8 @@ function analyzeZortQuotations() {
     statusAll[st].count++;
     statusAll[st].amount += amt;
 
-    const saleKey = String(q.createusername || q.createdby || q.createuserid || "(ไม่ระบุ)");
-    if (!bySale[saleKey]) bySale[saleKey] = { name: q.createdby || saleKey, total: 0, success: 0, pending: 0, other: 0, quoted: 0, won: 0 };
+    const saleKey = String(q[SALE_FIELD] || "").trim() || "(ยังไม่ระบุเซล)";
+    if (!bySale[saleKey]) bySale[saleKey] = { name: saleKey, total: 0, success: 0, pending: 0, other: 0, quoted: 0, won: 0 };
     const s = bySale[saleKey];
     s.total++;
     s.quoted += amt;
@@ -2188,13 +2191,14 @@ function analyzeZortQuotations() {
   Logger.log(`   เสนอ ${inWindow} ใบ (${Math.round(quotedSum).toLocaleString()} บาท) · ปิดได้ ${wonCount} ใบ (${Math.round(wonSum).toLocaleString()} บาท) · win rate ${winPct}%`);
 
   Logger.log("");
-  Logger.log("════ Conversion แยกตามเซล (เรียงตามมูลค่าปิดได้) ════");
+  Logger.log("════ Conversion แยกตามเซล (จากช่อง " + SALE_FIELD + ", เรียงตามมูลค่าปิดได้) ════");
   Object.entries(bySale).sort((a, b) => b[1].won - a[1].won).forEach(([key, s]) => {
     const wp = s.total ? Math.round(s.success / s.total * 100) : 0;
-    Logger.log(`   ${s.name} <${key}>`);
+    Logger.log(`   ▸ ${key}`);
     Logger.log(`      เสนอ ${s.total} ใบ · ปิดได้ ${s.success} ใบ · ค้าง ${s.pending} · อื่นๆ ${s.other} · win rate ${wp}%`);
     Logger.log(`      มูลค่าเสนอ ${Math.round(s.quoted).toLocaleString()} · ปิดได้ ${Math.round(s.won).toLocaleString()} บาท`);
   });
+  Logger.log("(ของเก่าที่ยังไม่ได้พิมพ์ชื่อเซลจะกองที่ \"(ยังไม่ระบุเซล)\" — เริ่มพิมพ์ tag ใบใหม่แล้วจะแยกเซลได้)");
 
   Logger.log("──────── เสร็จ — copy log ทั้งหมดส่งกลับมา ────────");
 }
