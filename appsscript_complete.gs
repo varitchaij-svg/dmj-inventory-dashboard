@@ -2459,6 +2459,7 @@ function startBackfill() {
   if (!sh) sh = ss.insertSheet(SHEET_ORDERS_RAW);
   sh.clear();
   sh.getRange(1, 1, 1, BACKFILL_HEADER.length).setValues([BACKFILL_HEADER]);
+  sh.getRange(1, 1, sh.getMaxRows(), 1).setNumberFormat("@"); // คอลัมน์ A (วันที่) = text กัน Sheets แปลงเป็น Date (บทเรียน #2)
   const props = PropertiesService.getScriptProperties();
   props.setProperty('backfill_page', '1');
   props.deleteProperty('backfill_done');
@@ -2536,13 +2537,21 @@ function rebuildSalesFromRaw() {
   const vals = sh.getDataRange().getValues();
   Logger.log("rebuild: อ่าน " + (vals.length - 1) + " แถวดิบ");
 
+  // Sheets แปลง "2024-01-15" เป็น Date object อัตโนมัติ → อ่านกลับต้องรองรับทั้ง Date และ string (บทเรียน #2)
+  const tzBK = "Asia/Bangkok";
+  const rawDateStr = (v) => {
+    if (v instanceof Date && !isNaN(v)) return Utilities.formatDate(v, tzBK, "yyyy-MM-dd");
+    const s = String(v || "");
+    return s.length >= 10 ? s.substring(0, 10) : s;
+  };
+
   // reconstruct orders โดย group ตาม orderNumber (amount ระดับออเดอร์ = ค่าเดียวกันทุกบรรทัด เอาค่าแรก)
   const byOrder = {};
   for (let i = 1; i < vals.length; i++) {
     const r = vals[i];
     const num = String(r[1] || "");
     if (!num) continue;
-    if (!byOrder[num]) byOrder[num] = { orderdateString: String(r[0] || ""), status: String(r[2] || ""), amount: Number(r[9]) || 0, customerid: r[7] || "", customername: String(r[8] || ""), list: [] };
+    if (!byOrder[num]) byOrder[num] = { orderdateString: rawDateStr(r[0]), status: String(r[2] || ""), amount: Number(r[9]) || 0, customerid: r[7] || "", customername: String(r[8] || ""), list: [] };
     const sku = String(r[3] || "");
     if (sku) byOrder[num].list.push({ sku: sku, name: String(r[4] || ""), number: Number(r[5]) || 0, totalprice: Number(r[6]) || 0 });
   }
