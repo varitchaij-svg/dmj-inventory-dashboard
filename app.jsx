@@ -32,7 +32,7 @@ const ROLE_TABS = {
   employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","mtojobs","labels"],
   warehouse:  ["categories","stock","storage","stockcount","newproduct","orders","ordersummary","mtojobs","labels"],
   frontstore: ["categories","stock","frontstore","orders","mtojobs","labels"],
-  saler:      ["categories","stock","orders","mtojobs","labels"],
+  saler:      ["categories","stock","orders","quotefollowup","mtojobs","labels"],
 };
 // "โหมดง่าย" — เมนูที่ใช้ประจำวัน (เหลือไว้บนแถบหลัก) ที่เหลือดันเข้า "เพิ่มเติม"
 const SIMPLE_PRIMARY = ["categories", "stock", "frontstore", "orders"];
