@@ -5643,7 +5643,11 @@ function handleGetQuotationSummary_() {
     items.forEach(it => { if (saleMap[it.number]) it.sale = saleMap[it.number]; if (it.sale) salesSet[it.sale] = true; });
     Object.values(saleMap).forEach(s => { if (s) salesSet[s] = true; });
 
-    const payload = JSON.stringify({ items, count: items.length, salesList: Object.keys(salesSet).sort(), generatedAt: new Date().toISOString() });
+    // นับสถานะดิบทั้งหมด (ไว้ debug ว่า ZORT ใช้คำว่าอะไรจริง — Approved/Approve/Success ฯลฯ)
+    const statusBreakdown = {};
+    items.forEach(it => { const s = it.status || "(ว่าง)"; statusBreakdown[s] = (statusBreakdown[s] || 0) + 1; });
+
+    const payload = JSON.stringify({ items, count: items.length, salesList: Object.keys(salesSet).sort(), statusBreakdown: statusBreakdown, generatedAt: new Date().toISOString() });
     cache.put('quote_summary_v1', payload, 300);
     return ContentService.createTextOutput(payload).setMimeType(ContentService.MimeType.JSON);
   } catch (err) {

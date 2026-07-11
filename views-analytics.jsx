@@ -6017,6 +6017,7 @@ function QuoteFollowupView() {
   const [err, setErr] = uS(null);
   const [genAt, setGenAt] = uS(null);
   const [salesList, setSalesList] = uS([]);
+  const [statusBk, setStatusBk] = uS({});       // สถานะดิบทั้งหมดที่เจอ (debug/เตือน)
   const [mode, setMode] = uS("summary");      // summary | pending | approved
   const [selYear, setSelYear] = uS("");
   const [selMonth, setSelMonth] = uS("");       // "" = ทุกเดือน, "1".."12"
@@ -6037,6 +6038,7 @@ function QuoteFollowupView() {
       if (d.error && (!d.items || !d.items.length)) throw new Error(d.error);
       setItems(Array.isArray(d.items) ? d.items : []);
       setSalesList(Array.isArray(d.salesList) ? d.salesList : []);
+      setStatusBk(d.statusBreakdown || {});
       setGenAt(d.generatedAt || null);
     } catch (e) { setErr(e.message); } finally { setLoading(false); }
   };
@@ -6077,9 +6079,12 @@ function QuoteFollowupView() {
   }, [items]);
   uE(() => { if (years.length && !selYear) setSelYear(years[years.length - 1]); }, [years]);
 
-  const isPending = (s) => s === "Pending";
-  const isApproved = (s) => s === "Approved";
-  const isVoided = (s) => s === "Voided";
+  // จับสถานะแบบยืดหยุ่น (ZORT อาจใช้ Approved/Approve/Success ฯลฯ) — กันพลาดถ้าคำไม่ตรงเป๊ะ
+  const isApproved = (s) => /approv|success|complet|อนุมัติ/i.test(s || "");
+  const isVoided   = (s) => /void|cancel|reject|ยกเลิก/i.test(s || "");
+  const isPending  = (s) => /pending|wait|รอ/i.test(s || "") || (!isApproved(s) && !isVoided(s));
+  // สถานะที่ยังจับไม่เข้า 3 กลุ่ม (ไว้เตือน)
+  const unknownStatuses = uM(() => Object.keys(statusBk).filter(s => !isApproved(s) && !isVoided(s) && !/pending|wait|รอ/i.test(s || "")), [statusBk]);
 
   // ── รวมข้อมูลตามปี/เดือนที่เลือก ──
   const A = uM(() => {
@@ -6177,6 +6182,12 @@ function QuoteFollowupView() {
             {kpi("ยกเลิก", A.tot.voi.c + " ใบ", baht(A.tot.voi.v) + " บาท", "#dc2626")}
             {kpi("อัตราอนุมัติ (ตามมูลค่า)", (A.rateTot * 100).toFixed(1) + "%", "จากมูลค่า " + baht(A.denomTot) + " บาท", rateColor(A.rateTot))}
           </div>
+
+          {unknownStatuses.length > 0 && (
+            <div style={{ background: "#fff8e1", border: "1px solid #ffca28", borderRadius: 8, padding: "8px 12px", marginBottom: 14, fontSize: 12, color: "#8d6e00" }}>
+              ⚠️ พบสถานะที่ยังไม่รู้จัก (นับรวมเป็น "รออนุมัติ" ชั่วคราว): {unknownStatuses.map(s => `${s} (${statusBk[s]})`).join(", ")} — แจ้งผมได้ว่าควรจัดเป็นกลุ่มไหน
+            </div>
+          )}
 
           {/* mode switcher */}
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
@@ -6326,7 +6337,9 @@ function QuoteFollowupView() {
                           <td style={{ padding: "8px 12px", textAlign: "center", fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>{q.quotationDate || "—"}</td>
                           <td style={{ padding: "8px 12px", fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>
                             <div style={{ fontFamily: "monospace" }}>{q.number || "—"}</div>
-                            {q.sale && <div style={{ marginTop: 2 }}>👤 {q.sale}</div>}
+                            <input list="dmjQuoteSales" defaultValue={q.sale || ""} placeholder="+ ชื่อเซล"
+                              onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} onBlur={(e) => saveSale(q, e.target.value)}
+                              style={{ marginTop: 3, width: 110, minWidth: 0, padding: "3px 6px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/>
                           </td>
                         </tr>
                       ))}
