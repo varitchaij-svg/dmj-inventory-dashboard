@@ -6118,6 +6118,29 @@ function QuoteFollowupView() {
   const pendingList = uM(() => items.filter(it => isPending(it.status) && yearOf(it) === selYear && (!selMonth || monthOf(it) === selMonth)).sort((a, b) => b.amount - a.amount), [items, selYear, selMonth]);
   const approvedList = uM(() => items.filter(it => isApproved(it.status) && yearOf(it) === selYear && (!selMonth || monthOf(it) === selMonth)).sort((a, b) => b.amount - a.amount), [items, selYear, selMonth]);
 
+  // สรุปตามเซล: เสนอกี่ใบ/มูลค่า · ปิดได้ (อนุมัติ) กี่ใบ/มูลค่า · %ปิดตามใบ + ตามมูลค่า · ค้าง/ยกเลิก
+  const salesAgg = uM(() => {
+    const scoped = items.filter(it => yearOf(it) === selYear && (!selMonth || monthOf(it) === selMonth));
+    const map = {};
+    scoped.forEach(it => {
+      const key = it.sale && it.sale.trim() ? it.sale.trim() : "(ยังไม่ระบุเซล)";
+      if (!map[key]) map[key] = { sale: key, total: 0, totalV: 0, app: 0, appV: 0, pen: 0, penV: 0, voi: 0, voiV: 0 };
+      const g = map[key], amt = Number(it.amount) || 0;
+      g.total++; g.totalV += amt;
+      if (isApproved(it.status)) { g.app++; g.appV += amt; }
+      else if (isPending(it.status)) { g.pen++; g.penV += amt; }
+      else if (isVoided(it.status)) { g.voi++; g.voiV += amt; }
+    });
+    return Object.keys(map).map(k => {
+      const g = map[k];
+      const decided = g.app + g.voi;                 // ตัดสินแล้ว (ไม่นับค้าง)
+      return { ...g,
+        winByCount: decided > 0 ? g.app / decided : null,      // %ปิด จากที่ตัดสินแล้ว (ตามใบ)
+        winByValue: (g.appV + g.voiV) > 0 ? g.appV / (g.appV + g.voiV) : null, // ตามมูลค่า
+      };
+    }).sort((a, b) => b.appV - a.appV);
+  }, [items, selYear, selMonth]);
+
   const ageColor = (d) => {
     if (d === null || d === undefined) return { bg: "#f5f5f5", fg: "#888" };
     if (d > OVERDUE_DAYS) return { bg: "#ffebee", fg: "#b71c1c" };
@@ -6191,7 +6214,7 @@ function QuoteFollowupView() {
 
           {/* mode switcher */}
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
-            {[["summary", "📊 สรุปสถานะ"], ["pending", "⏳ รออนุมัติ (" + pendingList.length + ")"], ["approved", "✅ อนุมัติแล้ว (" + approvedList.length + ")"]].map(([k, lbl]) => (
+            {[["summary", "📊 สรุปสถานะ"], ["sales", "👤 ตามเซล"], ["pending", "⏳ รออนุมัติ (" + pendingList.length + ")"], ["approved", "✅ อนุมัติแล้ว (" + approvedList.length + ")"]].map(([k, lbl]) => (
               <button key={k} onClick={() => setMode(k)} style={{
                 padding: "7px 14px", borderRadius: 20, cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 700,
                 border: mode === k ? "1.5px solid var(--g-500)" : "1.5px solid var(--bdr)",
@@ -6247,6 +6270,57 @@ function QuoteFollowupView() {
                   </tbody>
                 </table>
               </div>
+            )
+          )}
+
+          {/* ── โหมด ตามเซล: conversion ต่อคน ── */}
+          {mode === "sales" && (
+            salesAgg.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 24, color: "var(--muted)", fontSize: 13, border: "1px solid var(--bdr)", borderRadius: 12 }}>ไม่มีข้อมูลเซลในช่วงนี้</div>
+            ) : (
+              <>
+                <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>
+                  เสนอราคาไปเท่าไหร่ · ปิดได้กี่ % ต่อเซล · <b>%ปิด</b> = อนุมัติ ÷ (อนุมัติ+ยกเลิก) ไม่นับที่ยังค้าง · ชื่อเซลใส่ในโหมดรออนุมัติ/อนุมัติ
+                </div>
+                <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid var(--bdr)" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 680 }}>
+                    <thead><tr style={{ background: "var(--g-50)", borderBottom: "2px solid var(--bdr)", color: "var(--g-700)" }}>
+                      <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700 }}>เซล</th>
+                      <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>เสนอ (ใบ)</th>
+                      <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>มูลค่าเสนอ</th>
+                      <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>ปิดได้ (ใบ)</th>
+                      <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>มูลค่าปิดได้</th>
+                      <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700 }}>ค้าง/ยกเลิก</th>
+                      <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, minWidth: 130 }}>% ปิด (ตามใบ)</th>
+                    </tr></thead>
+                    <tbody>
+                      {salesAgg.map((s, idx) => (
+                        <tr key={s.sale} style={{ borderBottom: "1px solid var(--bdr)", background: idx % 2 === 0 ? "var(--paper)" : "var(--g-50)" }}>
+                          <td style={{ padding: "8px 12px", fontWeight: 700, color: s.sale.indexOf("ยังไม่ระบุ") >= 0 ? "var(--muted)" : "var(--text)" }}>{s.sale}</td>
+                          <td style={{ padding: "8px 12px", textAlign: "right" }}>{s.total}</td>
+                          <td style={{ padding: "8px 12px", textAlign: "right", color: "var(--muted)" }}>{baht(s.totalV)}</td>
+                          <td style={{ padding: "8px 12px", textAlign: "right", color: "#16a34a", fontWeight: 700 }}>{s.app}</td>
+                          <td style={{ padding: "8px 12px", textAlign: "right", color: "#16a34a", fontWeight: 800 }}>{baht(s.appV)}</td>
+                          <td style={{ padding: "8px 12px", textAlign: "center", fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>
+                            <span style={{ color: "#d97706" }}>{s.pen}</span> / <span style={{ color: "#dc2626" }}>{s.voi}</span>
+                          </td>
+                          <td style={{ padding: "8px 12px" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <div style={{ flex: 1, height: 8, background: "var(--bdr)", borderRadius: 99, overflow: "hidden", minWidth: 40 }}>
+                                <div style={{ width: ((s.winByCount || 0) * 100).toFixed(0) + "%", height: "100%", background: rateColor(s.winByCount || 0) }}/>
+                              </div>
+                              <span style={{ fontWeight: 800, color: rateColor(s.winByCount || 0), fontSize: 12, whiteSpace: "nowrap" }}>{s.winByCount == null ? "—" : (s.winByCount * 100).toFixed(0) + "%"}</span>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
+                  💡 เซลที่ "เสนอเยอะแต่ %ปิดต่ำ" = ตามงานไม่ทัน/เสนอราคาไม่ตรงใจ · "เสนอน้อยแต่ %ปิดสูง" = เก่งปิดแต่หาลูกค้าน้อย
+                </div>
+              </>
             )
           )}
 
