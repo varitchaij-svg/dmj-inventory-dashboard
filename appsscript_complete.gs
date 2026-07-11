@@ -2333,25 +2333,64 @@ function probeZortHistory2() {
 
 // ─── ZORT Sales Auto-Sync ───────────────────────────────────────────────────
 
+// Auto-sync ทุก 2 ชม. — มีชีตดิบแล้ว (backfill) → incremental: เพิ่มเฉพาะออเดอร์ใหม่ลงดิบ แล้ว rebuild
+// (ไม่ดึง 365 วันทับทั้งก้อนอีก เพราะจะลบประวัติ 2024 ทิ้ง) · ยังไม่มีดิบ → fallback ดึง 365 วันแบบเดิม
 function syncZortSales() {
   const ss = SpreadsheetApp.openById(SHEET_ID);
   const tz = "Asia/Bangkok";
   const today = new Date();
-  const MONTHLY_DAYS = 365; // ดึงย้อนหลัง 1 ปี (รายเดือนทั้งปี)
-  const DAILY_DAYS   = 60;  // รายวัน 60 วันล่าสุด
+  const DAILY_DAYS = 60;
+  const sh = ss.getSheetByName(SHEET_ORDERS_RAW);
 
+  if (sh && sh.getLastRow() > 1) {
+    // ── incremental ──
+    const existing = {};
+    sh.getRange(2, 2, sh.getLastRow() - 1, 1).getValues().forEach(r => { const n = String(r[0] || ""); if (n) existing[n] = true; });
+
+    const toStr = Utilities.formatDate(today, tz, "yyyy-MM-dd");
+    const fromStr = "2023-01-01";
+    const RECENT_PAGES = 4; // GetOrders คืนใหม่สุดก่อน — 4 หน้า (~800 บิลล่าสุด) พอครอบคลุมช่วงหลายวัน
+    const newRows = [];
+    let newOrders = 0;
+    for (let page = 1; page <= RECENT_PAGES; page++) {
+      const url = `${ZORT_BASE}/Order/GetOrders?page=${page}&limit=200&fromdate=${fromStr}&todate=${toStr}`;
+      const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+      if (res.getResponseCode() !== 200) break;
+      const list = (JSON.parse(res.getContentText())).list || [];
+      if (!list.length) break;
+      let pageNew = 0;
+      list.forEach(o => {
+        const num = String(o.number || "");
+        if (!num || existing[num]) return;
+        existing[num] = true; newOrders++; pageNew++;
+        const ds = o.orderdateString || (o.orderdate ? String(o.orderdate).substring(0, 10) : "");
+        const items = Array.isArray(o.list) ? o.list : [];
+        const amount = Number(o.amount) || 0;
+        if (items.length === 0) {
+          newRows.push([ds, num, String(o.status || ""), "", "", 0, 0, o.customerid || "", String(o.customername || ""), amount]);
+        } else {
+          items.forEach(it => newRows.push([ds, num, String(o.status || ""),
+            String(it.sku || "").toUpperCase(), String(it.name || ""), Number(it.number) || 0, Number(it.totalprice) || 0,
+            o.customerid || "", String(o.customername || ""), amount]));
+        }
+      });
+      if (list.length < 200) break;
+      if (pageNew === 0) break; // ไล่ถึงออเดอร์เก่าที่มีในดิบแล้ว → หยุด
+      Utilities.sleep(120);
+    }
+    if (newRows.length) sh.getRange(sh.getLastRow() + 1, 1, newRows.length, BACKFILL_HEADER.length).setValues(newRows);
+    Logger.log("syncZortSales (incremental): +" + newOrders + " ออเดอร์ใหม่ (" + newRows.length + " แถว) → rebuild");
+    rebuildSalesFromRaw();
+    return;
+  }
+
+  // ── fallback: ยังไม่มีชีตดิบ → ดึง 365 วันแล้วสรุป (แบบเดิม) ──
+  const MONTHLY_DAYS = 365;
   const fromDate = new Date(today.getTime() - MONTHLY_DAYS * 24 * 60 * 60 * 1000);
-  const fromStr  = Utilities.formatDate(fromDate, tz, "yyyy-MM-dd");
-  const toStr    = Utilities.formatDate(today, tz, "yyyy-MM-dd");
-
+  const fromStr = Utilities.formatDate(fromDate, tz, "yyyy-MM-dd");
+  const toStr = Utilities.formatDate(today, tz, "yyyy-MM-dd");
   const allOrders = fetchZortOrdersPaged_(fromStr, toStr);
-  Logger.log("ZORT orders fetched: " + allOrders.length);
-
-  // Log status breakdown เพื่อช่วย diagnose ว่า order ถูก skip เพราะ status อะไรบ้าง
-  const statusCount = {};
-  allOrders.forEach(o => { statusCount[o.status || "null"] = (statusCount[o.status || "null"] || 0) + 1; });
-  Logger.log("status breakdown: " + JSON.stringify(statusCount));
-
+  Logger.log("ZORT orders fetched: " + allOrders.length + " (fallback — ยังไม่มีชีตดิบ)");
   const r = aggregateAndWriteSales_(ss, allOrders, fromDate, today, DAILY_DAYS);
   Logger.log("✅ syncZortSales เสร็จ · orders=" + allOrders.length + " SKUs=" + r.skus + " · ลูกค้า=" + r.customers);
 }
