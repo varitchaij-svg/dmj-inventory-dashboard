@@ -973,11 +973,19 @@ function OverviewView({ data, range, setRange, role }) {
   // ── new states for month picker + comparison ──────────────────────
   const [selMonth, setSelMonth] = uS(null);   // null = latest
   const [selCat, setSelCat] = uS("");          // "" = ทุกหมวด · เลือกหมวด → กรอง KPI/กราฟ/forecast/top สินค้า
+  const monthStripRef = React.useRef(null);
   const [cmpSel,   setCmpSel]   = uS([]);     // explicit month selection for comparison
   const [showCmp,  setShowCmp]  = uS(false);
 
   // activeMonth: currently selected month (for "รายเดือน" mode)
   const activeMonth = selMonth || months[months.length - 1] || null;
+
+  // เลื่อนแถบเดือนไปที่เดือนที่เลือกอัตโนมัติ (เดือนล่าสุดอยู่ขวาสุด นอกจอ — ไม่งั้นหาไม่เจอ)
+  uE(() => {
+    if (range !== 'month' || !monthStripRef.current) return;
+    const el = monthStripRef.current.querySelector('[data-active="1"]');
+    if (el && el.scrollIntoView) el.scrollIntoView({ inline: 'center', block: 'nearest' });
+  }, [range, activeMonth]);
 
   const monthlySeries = uM(() => months.map(m => {
     const cats = monthlyByCat[m] || {};
@@ -1465,6 +1473,17 @@ function OverviewView({ data, range, setRange, role }) {
             <option value="">🏷️ ทุกหมวด</option>
             {allCats.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
+          {months.length > 1 && (
+            <select value={range === 'month' ? (selMonth || months[months.length - 1] || "") : ""}
+              onChange={e => { const v = e.target.value; if (v) { setSelMonth(v); setRange('month'); } }}
+              title="เลือกดูเดือน"
+              style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid "+(range==='month'?"var(--g-500)":"var(--bdr)"),
+                      background:range==='month'?"var(--g-50)":"#fff",color:range==='month'?"var(--g-700)":"var(--text)",
+                      fontFamily:"inherit",fontSize:13,fontWeight:range==='month'?700:500,maxWidth:150}}>
+              <option value="">📅 เลือกเดือน…</option>
+              {months.slice().reverse().map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
+            </select>
+          )}
           <Seg value={range} onChange={setRange} options={[
             {value:"day",   label:"รายวัน"},
             {value:"month", label:"รายเดือน"},
@@ -1479,14 +1498,14 @@ function OverviewView({ data, range, setRange, role }) {
         </div>
       )}
 
-      {/* ── Month picker strip — เลือกเดือนเมื่ออยู่ใน "รายเดือน" ── */}
+      {/* ── Month picker strip — เลือกเดือนเมื่ออยู่ใน "รายเดือน" (auto-scroll ไปเดือนที่เลือก) ── */}
       {range === 'month' && months.length > 1 && (
-        <div style={{
+        <div ref={monthStripRef} style={{
           overflowX:'auto', display:'flex', gap:8, paddingBottom:6, marginBottom:16,
-          scrollbarWidth:'none', WebkitOverflowScrolling:'touch',
+          scrollbarWidth:'thin', WebkitOverflowScrolling:'touch',
         }}>
           {months.map(m => (
-            <button key={m} onClick={() => setSelMonth(m)}
+            <button key={m} data-active={activeMonth === m ? "1" : "0"} onClick={() => setSelMonth(m)}
               style={{
                 flexShrink:0, padding:'7px 16px', borderRadius:20,
                 border:'1.5px solid ' + (activeMonth === m ? '#1b5e20' : 'var(--bdr)'),
