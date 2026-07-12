@@ -6950,6 +6950,156 @@ function MarginView({ data }) {
   );
 }
 
+// ────────────── 🌸 ช่วงขายดี (SeasonView) — ให้ข้อมูลบอกเองว่าเดือนไหนขายอะไรดี ──────────────
+// ใช้ยอด "รายเดือน" (monthlyByCat + products[].monthly) เฉลี่ยข้ามปี → ปลอดภัยจากบั๊ก soldQty สะสม
+// 1) heatmap หมวด×เดือนปฏิทิน (พีคเดือนไหน) · 2) เดือนไหนคึกสุด · 3) เดือนหน้าปีก่อนขาย SKU ไหนดี + สต๊อกวันนี้
+function SeasonView({ data }) {
+  const products = (data && data.products) || [];
+  const monthLabels = (data && data.monthLabels) || [];
+  const monthlyByCat = (data && data.monthlyByCat) || {};
+  const baht = (n) => (Number(n) || 0).toLocaleString("th-TH", { maximumFractionDigits: 0 });
+
+  const S = uM(() => {
+    const catTotals = {}, cm = {}, monthTotal = {}, monthYears = {};
+    monthLabels.forEach(mk => {
+      const parts = String(mk).split("/"); const m = Number(parts[0]), yy = parts[1];
+      if (!m) return;
+      (monthYears[m] = monthYears[m] || {})[yy] = true;
+      const cats = monthlyByCat[mk] || {};
+      Object.keys(cats).forEach(cat => {
+        const sales = cats[cat].sales || 0;
+        cm[m] = cm[m] || {}; cm[m][cat] = (cm[m][cat] || 0) + sales;
+        monthTotal[m] = (monthTotal[m] || 0) + sales;
+        catTotals[cat] = (catTotals[cat] || 0) + sales;
+      });
+    });
+    const yrsOf = (m) => Object.keys(monthYears[m] || {}).length || 1;
+    const topCats = Object.keys(catTotals).sort((a, b) => catTotals[b] - catTotals[a]).slice(0, 12);
+    const rows = topCats.map(cat => {
+      const vals = [];
+      for (let m = 1; m <= 12; m++) vals.push((cm[m] && cm[m][cat]) ? cm[m][cat] / yrsOf(m) : 0);
+      const max = Math.max.apply(null, vals.concat([1]));
+      const peakM = vals.indexOf(Math.max.apply(null, vals)) + 1;
+      return { cat, vals, max, peakM, total: catTotals[cat] };
+    });
+    const monthAvg = [];
+    for (let m = 1; m <= 12; m++) monthAvg.push((monthTotal[m] || 0) / yrsOf(m));
+    const maxMonth = Math.max.apply(null, monthAvg.concat([1]));
+    const overallAvg = monthAvg.reduce((s, x) => s + x, 0) / 12 || 1;
+    return { rows, monthAvg, maxMonth, overallAvg, monthYears };
+  }, [monthLabels, monthlyByCat]);
+
+  // เดือนปฏิทินถัดไป (1-12) + รายการ SKU ที่เดือนนั้นปีก่อนขายดี + สต๊อกวันนี้
+  const nextM = (new Date().getMonth() + 1) % 12 + 1;
+  const prep = uM(() => {
+    const res = [];
+    products.forEach(p => {
+      if (p.isMTO) return;
+      const m = p.monthly || [];
+      let s = 0, q = 0, yrs = 0;
+      m.forEach(x => { const mm = Number(String(x.month).split("/")[0]); if (mm === nextM) { s += x.sales || 0; q += x.qty || 0; if ((x.sales || 0) > 0) yrs++; } });
+      if (s > 0) { const stock = (p.qtyWH || 0) + (p.qtyStore || 0); res.push({ sku: p.sku, name: p.name || p.sku, cat: p.cat, avgSales: s / Math.max(1, yrs), avgQty: Math.round(q / Math.max(1, yrs)), stock, yrs }); }
+    });
+    return res.sort((a, b) => b.avgSales - a.avgSales).slice(0, 30);
+  }, [products, nextM]);
+
+  const cell = (v, max) => {
+    const t = max > 0 ? v / max : 0;
+    return { background: t <= 0 ? "transparent" : `rgba(22,163,74,${(0.12 + t * 0.78).toFixed(2)})`, color: t > 0.55 ? "#fff" : "var(--text)" };
+  };
+
+  return (
+    <div style={{ padding: "16px", maxWidth: 1080, margin: "0 auto" }}>
+      <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>🌸 ช่วงขายดี (ตามข้อมูลจริง)</div>
+      <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>เฉลี่ยยอดขายข้ามปี (2024–2026) แยกตามเดือนปฏิทิน — สีเข้ม = เดือนที่หมวดนั้นขายดีสุด</div>
+      {monthLabels.length > 0 && <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 14 }}>📅 อิงข้อมูล {monthLabels[0]} – {monthLabels[monthLabels.length - 1]}</div>}
+
+      {S.rows.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>ยังไม่มีข้อมูลยอดขายรายเดือน</div>
+      ) : (
+        <>
+          {/* เดือนไหนคึกสุด */}
+          <div className="card" style={{ padding: 14, marginBottom: 16 }}>
+            <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 10 }}>📊 เดือนไหนคึกสุด (เฉลี่ยข้ามปี)</div>
+            <div style={{ display: "flex", gap: 4, alignItems: "flex-end", height: 90 }}>
+              {S.monthAvg.map((v, i) => {
+                const h = S.maxMonth > 0 ? Math.max(4, v / S.maxMonth * 80) : 4;
+                const hot = v > S.overallAvg * 1.15;
+                return (
+                  <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+                    <div style={{ width: "100%", height: h, borderRadius: "4px 4px 0 0", background: hot ? "#16a34a" : "var(--g-300)" }} title={baht(v)}/>
+                    <div style={{ fontSize: 9, color: hot ? "#16a34a" : "var(--muted)", fontWeight: hot ? 800 : 400 }}>{QUOTE_MONTHS_TH[i]}</div>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>เขียว = เดือนที่ยอดสูงกว่าค่าเฉลี่ยทั้งปี 15%+ (ช่วงพีค)</div>
+          </div>
+
+          {/* heatmap หมวด × เดือน */}
+          <div className="card" style={{ padding: 14, marginBottom: 16 }}>
+            <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 10 }}>🗓️ หมวดไหนพีคเดือนไหน</div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ borderCollapse: "collapse", fontSize: 11, minWidth: 640 }}>
+                <thead><tr>
+                  <th style={{ padding: "4px 8px", textAlign: "left", position: "sticky", left: 0, background: "var(--paper)" }}>หมวด</th>
+                  {QUOTE_MONTHS_TH.map((mn, i) => <th key={i} style={{ padding: "4px 3px", textAlign: "center", color: "var(--muted)", minWidth: 34 }}>{mn}</th>)}
+                  <th style={{ padding: "4px 8px", textAlign: "center", color: "var(--muted)" }}>พีค</th>
+                </tr></thead>
+                <tbody>
+                  {S.rows.map(r => (
+                    <tr key={r.cat}>
+                      <td style={{ padding: "4px 8px", fontWeight: 600, whiteSpace: "nowrap", maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", position: "sticky", left: 0, background: "var(--paper)" }} title={r.cat}>{r.cat}</td>
+                      {r.vals.map((v, i) => (
+                        <td key={i} style={{ padding: "6px 3px", textAlign: "center", ...cell(v, r.max), borderRadius: 3, fontSize: 9 }} title={QUOTE_MONTHS_TH[i] + ": " + baht(v)}>
+                          {v >= r.max * 0.5 && v > 0 ? (v >= 1000 ? Math.round(v / 1000) + "k" : Math.round(v)) : ""}
+                        </td>
+                      ))}
+                      <td style={{ padding: "4px 8px", textAlign: "center", fontWeight: 800, color: "#16a34a", whiteSpace: "nowrap" }}>{QUOTE_MONTHS_TH[r.peakM - 1]}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* เดือนหน้า ปีก่อนขายดี */}
+          <div className="card" style={{ padding: 14 }}>
+            <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 4 }}>🎯 เดือนหน้า ({QUOTE_MONTHS_TH[nextM - 1]}) ปีก่อนๆ ขายดี — เตรียมสต๊อก</div>
+            <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 10 }}>เฉลี่ยยอดเดือน {QUOTE_MONTHS_TH[nextM - 1]} จากปีก่อน · เทียบสต๊อกวันนี้ · <b style={{ color: "#dc2626" }}>แดง</b> = สต๊อกน้อยกว่าที่เคยขาย</div>
+            {prep.length === 0 ? <div style={{ color: "var(--muted)", fontSize: 13 }}>ยังไม่มีประวัติเดือนนี้</div> : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 480 }}>
+                  <thead><tr style={{ color: "var(--muted)", borderBottom: "1px solid var(--bdr)" }}>
+                    <th style={{ textAlign: "left", padding: "6px 8px" }}>สินค้า</th>
+                    <th style={{ textAlign: "right", padding: "6px 8px" }}>เคยขาย/ปี (ชิ้น)</th>
+                    <th style={{ textAlign: "right", padding: "6px 8px" }}>สต๊อกวันนี้</th>
+                  </tr></thead>
+                  <tbody>
+                    {prep.map(p => {
+                      const low = p.stock < p.avgQty;
+                      return (
+                        <tr key={p.sku} style={{ borderBottom: "1px solid var(--bdr)" }}>
+                          <td style={{ padding: "6px 8px", maxWidth: 240 }}>
+                            <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</div>
+                            <div style={{ fontSize: 10, color: "var(--muted)" }}>{p.sku} · {p.cat}</div>
+                          </td>
+                          <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700 }}>{p.avgQty}</td>
+                          <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 800, color: low ? "#dc2626" : "#16a34a" }}>{p.stock}{low ? " ⚠️" : ""}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ────────────── 🛒 สั่งซื้อ (Purchase/Reorder) ──────────────
 
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView, DeadStockView, QuoteFollowupView, CustomerView, MarginView, Pagination, WarehouseMapModal });
+Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView, DeadStockView, QuoteFollowupView, CustomerView, MarginView, SeasonView, Pagination, WarehouseMapModal });
