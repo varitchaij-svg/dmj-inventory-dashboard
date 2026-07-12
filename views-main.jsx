@@ -6685,6 +6685,90 @@ function ImageLightbox({ url, name, onClose }) {
   );
 }
 
+// ─── ProductInfoModal: ขยายรูป + ข้อมูลสินค้าเต็ม (ใช้ซ้ำทุก view) ───
+// รับ product (จาก data.products — มี imageUrl/qty/price/soldQty ฯลฯ) · ไม่มีรูป → ปุ่มดึงจาก ZORT
+function ProductInfoModal({ product, onClose }) {
+  useBackHandler(onClose);
+  const p = product || {};
+  const [imgOverride, setImgOverride] = uS(null);
+  const [fetching, setFetching] = uS(false);
+  const [imgErr, setImgErr] = uS("");
+  const eff = imgOverride || p.imageUrl;
+  const fmt = (n) => (Number(n) || 0).toLocaleString("th-TH", { maximumFractionDigits: 0 });
+  const doFetch = async () => {
+    if (fetching || !p.sku) return;
+    setFetching(true); setImgErr("");
+    const r = await syncFetchProductImage(p.sku);
+    setFetching(false);
+    if (r && r.success && r.data && r.data.imageUrl) setImgOverride(r.data.imageUrl);
+    else setImgErr((r && r.error) || "ดึงรูปไม่สำเร็จ");
+  };
+  const stock = (p.qtyWH || 0) + (p.qtyStore || 0);
+  const info = [
+    ["ราคา", p.price > 0 ? fmt(p.price) + " ฿" : "—"],
+    ["สต๊อกคลัง", fmt(p.qtyWH || 0)],
+    ["สต๊อกหน้าร้าน", fmt(p.qtyStore || 0)],
+    ["ขายได้ (สะสม)", (p.soldQty != null ? fmt(p.soldQty) + " ชิ้น" : "—")],
+  ];
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,.7)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 400, maxHeight: "88vh", overflow: "auto", background: "var(--paper)", borderRadius: 16, boxShadow: "0 12px 48px rgba(0,0,0,.4)" }}>
+        <div style={{ padding: 12, background: "linear-gradient(180deg,var(--g-50),var(--paper))", position: "relative" }}>
+          {eff ? (
+            <div onClick={() => setImgOverride(imgOverride)} style={{ width: "100%", aspectRatio: "1/1", borderRadius: 12, backgroundImage: `url("${eff}")`, backgroundSize: "contain", backgroundPosition: "center", backgroundRepeat: "no-repeat", backgroundColor: "#fff", border: "1px solid var(--bdr)" }}/>
+          ) : (
+            <div style={{ width: "100%", aspectRatio: "1/1", borderRadius: 12, border: "1px dashed var(--bdr)", background: "#fff", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10 }}>
+              <div style={{ fontSize: 40, opacity: .3 }}>🖼️</div>
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>ยังไม่มีรูป</div>
+              <button onClick={doFetch} disabled={fetching} style={{ padding: "6px 14px", borderRadius: 999, cursor: fetching ? "default" : "pointer", fontSize: 12, fontWeight: 700, fontFamily: "inherit", border: "1.5px solid var(--g-500)", background: "#fff", color: "var(--g-700)", opacity: fetching ? .6 : 1 }}>
+                {fetching ? "กำลังดึง…" : "🔄 ดึงรูปจาก ZORT"}
+              </button>
+              {imgErr && <div style={{ fontSize: 10, color: "var(--dang)", maxWidth: 200, textAlign: "center" }}>{imgErr}</div>}
+            </div>
+          )}
+        </div>
+        <div style={{ padding: "12px 16px 18px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+            <span className="skucode">{p.sku || "—"}</span>
+            {p.color && <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--muted)" }}><span style={{ width: 10, height: 10, borderRadius: "50%", background: p.color.hex, border: "1px solid rgba(0,0,0,.1)" }}/>{p.color.name}</span>}
+          </div>
+          <div style={{ fontSize: 15, fontWeight: 700, lineHeight: 1.35, marginBottom: 2 }}>{p.name || p.sku || "—"}</div>
+          {p.cat && <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12 }}>{p.cat}</div>}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            {info.map(([k, v]) => (
+              <div key={k} style={{ background: "var(--g-50)", borderRadius: 10, padding: "8px 12px" }}>
+                <div style={{ fontSize: 10, color: "var(--muted)", fontWeight: 700 }}>{k}</div>
+                <div style={{ fontSize: 15, fontWeight: 800, color: "var(--text)" }}>{v}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <button onClick={onClose} style={{ position: "absolute", top: 18, right: 22, background: "rgba(0,0,0,.45)", border: "none", color: "#fff", borderRadius: 10, width: 40, height: 40, cursor: "pointer", fontSize: 22, fontFamily: "inherit" }}>×</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── ProductThumb: รูปเล็ก กดแล้วเปิด ProductInfoModal (รูปใหญ่+ข้อมูล) — ใช้ทุกที่ที่โชว์สินค้า ───
+function ProductThumb({ product, size }) {
+  const [open, setOpen] = uS(false);
+  const p = product || {};
+  const sz = size || 42;
+  const img = p.imageUrl;
+  return (
+    <>
+      <div onClick={(e) => { e.stopPropagation(); setOpen(true); }} title="กดดูรูป + ข้อมูลสินค้า"
+        style={{ width: sz, height: sz, borderRadius: 8, flexShrink: 0, cursor: "pointer", border: "1px solid var(--bdr)", position: "relative",
+                 backgroundImage: img ? `url("${img}")` : "none", backgroundSize: "contain", backgroundPosition: "center", backgroundRepeat: "no-repeat", backgroundColor: "#fff",
+                 display: "flex", alignItems: "center", justifyContent: "center" }}>
+        {!img && <span style={{ fontSize: sz * 0.42, opacity: .3 }}>🖼️</span>}
+        <span style={{ position: "absolute", bottom: -2, right: -2, background: "var(--g-600)", color: "#fff", borderRadius: 5, fontSize: 9, lineHeight: 1, padding: "2px 3px", boxShadow: "0 1px 2px rgba(0,0,0,.2)" }}>🔍</span>
+      </div>
+      {open && <ProductInfoModal product={p} onClose={() => setOpen(false)}/>}
+    </>
+  );
+}
+
 // ─── QR Scanner (html5-qrcode — รองรับทุก browser: iOS Safari, Android, Desktop) ───
 function QRScanModal({ onDetected, onClose }) {
   const scannerRef = React.useRef(null);

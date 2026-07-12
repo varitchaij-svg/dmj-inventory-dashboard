@@ -6439,7 +6439,8 @@ function QuoteFollowupView() {
 // + Top ลูกค้าสะสม (%เสี่ยงกระจุก) + กดดูสินค้าที่ลูกค้าซื้อบ่อย + badge "เงียบ" (หาย ≥2 เดือน)
 // (owner ดูคนเดียว)
 // ───────────────────────────────────────────────────────────
-function CustomerView() {
+function CustomerView({ data }) {
+  const prodBySku = uM(() => { const m = {}; ((data && data.products) || []).forEach(p => { if (p.sku) m[String(p.sku).toUpperCase()] = p; }); return m; }, [data]);
   const [months, setMonths] = uS([]);
   const [customers, setCustomers] = uS([]);
   const [grandTotal, setGrandTotal] = uS(0);
@@ -6530,11 +6531,14 @@ function CustomerView() {
       {(!c.products || !c.products.length) ? (
         <div style={{ fontSize: 12, color: "var(--muted)" }}>ไม่มีข้อมูลสินค้า</div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {c.products.slice(0, 10).map((p, i) => (
-            <div key={p.sku || i} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12 }}>
-              <span style={{ color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                <span style={{ fontFamily: "monospace", color: "var(--muted)" }}>{p.sku}</span> {p.name}
+            <div key={p.sku || i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, fontSize: 12 }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                <ProductThumb product={prodBySku[String(p.sku).toUpperCase()] || { sku: p.sku, name: p.name }} size={34}/>
+                <span style={{ color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <span style={{ fontFamily: "monospace", color: "var(--muted)" }}>{p.sku}</span> {p.name}
+                </span>
               </span>
               <span style={{ whiteSpace: "nowrap", color: "var(--muted)" }}>×{p.qty} · {baht(p.rev)}฿</span>
             </div>
@@ -6698,6 +6702,7 @@ function CustomerView() {
 function MarginView({ data }) {
   const products = (data && data.products) || [];
   const purchases = (data && data.purchases) || [];
+  const bySku = uM(() => { const m = {}; products.forEach(p => { if (p.sku) m[String(p.sku).toUpperCase()] = p; }); return m; }, [products]);
   const [sortBy, setSortBy] = uS("profit");   // profit | marginPct | rev
   const [catFilter, setCatFilter] = uS("");
   const [search, setSearch] = uS("");
@@ -6928,9 +6933,14 @@ function MarginView({ data }) {
             <tbody>
               {view.slice(0, 300).map(r => (
                 <tr key={r.sku} style={{ borderTop: "1px solid var(--bdr)" }}>
-                  <td style={{ textAlign: "left", padding: "8px 8px", maxWidth: 200 }}>
-                    <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</div>
-                    <div style={{ fontSize: 10, color: "var(--muted)" }}>{r.sku} · {r.cat}</div>
+                  <td style={{ textAlign: "left", padding: "8px 8px", maxWidth: 230 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <ProductThumb product={bySku[String(r.sku).toUpperCase()] || { sku: r.sku, name: r.name, cat: r.cat }} size={36}/>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</div>
+                        <div style={{ fontSize: 10, color: "var(--muted)" }}>{r.sku} · {r.cat}</div>
+                      </div>
+                    </div>
                   </td>
                   <td style={{ textAlign: "right", padding: "8px 8px" }}>{r.soldQty}</td>
                   <td style={{ textAlign: "right", padding: "8px 8px" }}>{baht(r.soldRev)}</td>
@@ -6998,7 +7008,7 @@ function SeasonView({ data }) {
       const m = p.monthly || [];
       let s = 0, q = 0, yrs = 0;
       m.forEach(x => { const mm = Number(String(x.month).split("/")[0]); if (mm === nextM) { s += x.sales || 0; q += x.qty || 0; if ((x.sales || 0) > 0) yrs++; } });
-      if (s > 0) { const stock = (p.qtyWH || 0) + (p.qtyStore || 0); res.push({ sku: p.sku, name: p.name || p.sku, cat: p.cat, avgSales: s / Math.max(1, yrs), avgQty: Math.round(q / Math.max(1, yrs)), stock, yrs }); }
+      if (s > 0) { const stock = (p.qtyWH || 0) + (p.qtyStore || 0); res.push({ sku: p.sku, name: p.name || p.sku, cat: p.cat, avgSales: s / Math.max(1, yrs), avgQty: Math.round(q / Math.max(1, yrs)), stock, yrs, prod: p }); }
     });
     return res.sort((a, b) => b.avgSales - a.avgSales).slice(0, 30);
   }, [products, nextM]);
@@ -7080,9 +7090,14 @@ function SeasonView({ data }) {
                       const low = p.stock < p.avgQty;
                       return (
                         <tr key={p.sku} style={{ borderBottom: "1px solid var(--bdr)" }}>
-                          <td style={{ padding: "6px 8px", maxWidth: 240 }}>
-                            <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</div>
-                            <div style={{ fontSize: 10, color: "var(--muted)" }}>{p.sku} · {p.cat}</div>
+                          <td style={{ padding: "6px 8px", maxWidth: 260 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <ProductThumb product={p.prod} size={38}/>
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</div>
+                                <div style={{ fontSize: 10, color: "var(--muted)" }}>{p.sku} · {p.cat}</div>
+                              </div>
+                            </div>
                           </td>
                           <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700 }}>{p.avgQty}</td>
                           <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 800, color: low ? "#dc2626" : "#16a34a" }}>{p.stock}{low ? " ⚠️" : ""}</td>
@@ -7102,4 +7117,4 @@ function SeasonView({ data }) {
 
 // ────────────── 🛒 สั่งซื้อ (Purchase/Reorder) ──────────────
 
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView, DeadStockView, QuoteFollowupView, CustomerView, MarginView, SeasonView, Pagination, WarehouseMapModal });
+Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView, DeadStockView, QuoteFollowupView, CustomerView, MarginView, SeasonView, ProductThumb, ProductInfoModal, Pagination, WarehouseMapModal });
