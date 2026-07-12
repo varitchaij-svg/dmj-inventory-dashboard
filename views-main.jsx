@@ -972,6 +972,7 @@ function OverviewView({ data, range, setRange, role }) {
 
   // ── new states for month picker + comparison ──────────────────────
   const [selMonth, setSelMonth] = uS(null);   // null = latest
+  const [selCat, setSelCat] = uS("");          // "" = ทุกหมวด · เลือกหมวด → กรอง KPI/กราฟ/forecast/top สินค้า
   const [cmpSel,   setCmpSel]   = uS([]);     // explicit month selection for comparison
   const [showCmp,  setShowCmp]  = uS(false);
 
@@ -981,9 +982,9 @@ function OverviewView({ data, range, setRange, role }) {
   const monthlySeries = uM(() => months.map(m => {
     const cats = monthlyByCat[m] || {};
     let qty = 0, rev = 0;
-    for (const c of Object.keys(cats)) { qty += cats[c].qty; rev += cats[c].sales; }
+    for (const c of Object.keys(cats)) { if (selCat && c !== selCat) continue; qty += cats[c].qty; rev += cats[c].sales; }
     return { month: m, label: monthLabel(m), qty, rev };
-  }), [months, monthlyByCat]);
+  }), [months, monthlyByCat, selCat]);
 
   // ── เทียบปีต่อปี (YoY) — ธุรกิจนี้ยอดขายขึ้นกับเทศกาล การเทียบเดือนเดียวกันปีก่อน
   //    ตอบโจทย์วางแผนสั่งของล่วงหน้ามากกว่า MoM ──
@@ -1016,13 +1017,13 @@ function OverviewView({ data, range, setRange, role }) {
     return days.map(d => {
       const cats = (dailyByCat || {})[d] || {};
       let qty = 0, rev = 0;
-      for (const c of Object.keys(cats)) { qty += cats[c].qty; rev += cats[c].sales; }
+      for (const c of Object.keys(cats)) { if (selCat && c !== selCat) continue; qty += cats[c].qty; rev += cats[c].sales; }
       // Format DD/MM/YYYY → DD/MM
       const parts = d.split("/");
       const label = parts.length >= 2 ? `${parts[0]}/${parts[1]}` : d;
       return { day: d, label, qty, rev };
     });
-  }, [days, dailyByCat, hasDailyData]);
+  }, [days, dailyByCat, hasDailyData, selCat]);
 
   // daily series filtered to selected month (for drill-down)
   const selMonthDailySeries = uM(() => {
@@ -1161,7 +1162,20 @@ function OverviewView({ data, range, setRange, role }) {
   }, [range, activeMonth, months]);
 
   // สินค้าที่ไม่ใช่ MTO — คำนวณครั้งเดียว ใช้ร่วมหลาย memo ด้านล่าง (เดิม filter ซ้ำ 6 รอบ/render)
-  const sellable = uM(() => products.filter(p => !p.isMTO), [products]);
+  const sellable = uM(() => products.filter(p => !p.isMTO && (!selCat || p.cat === selCat)), [products, selCat]);
+  // KPI สต๊อก/หมุนเวียน — ถ้ากรองหมวด คำนวณเฉพาะหมวดนั้น มิฉะนั้นใช้ totals ทั้งร้าน
+  const stockAgg = uM(() => {
+    if (!selCat) return { val: totals.totalStockValue, n: totals.nWithStock, soldRev: totals.totalSoldRev, nSold: totals.nSold };
+    let val = 0, n = 0, soldRev = 0, nSold = 0;
+    products.forEach(p => {
+      if (p.isMTO || p.cat !== selCat) return;
+      val += p.stockValue || 0;
+      if ((p.qty || 0) > 0) n++;
+      soldRev += p.soldRev || 0;
+      if ((p.soldQty || 0) > 0) nSold++;
+    });
+    return { val, n, soldRev, nSold };
+  }, [selCat, products, totals]);
 
   const topSellers = uM(() =>
     sellable
@@ -1396,7 +1410,9 @@ function OverviewView({ data, range, setRange, role }) {
     const nextMonthLabel = (() => {
       const last = mSlice[mSlice.length - 1].month;
       if (!last) return "ถัดไป";
-      const [yr, mo] = last.split("-").map(Number);
+      // month = "MM/YYYY" (เช่น "07/2026") — เดิม split("-") ทำให้ได้ NaN/aN
+      const [mo, yr] = String(last).split("/").map(Number);
+      if (!mo || !yr) return "ถัดไป";
       const nm = mo === 12 ? 1 : mo + 1;
       const ny = mo === 12 ? yr + 1 : yr;
       return `${nm}/${String(ny).slice(-2)}`;
@@ -1440,7 +1456,15 @@ function OverviewView({ data, range, setRange, role }) {
             )}
           </div>
         </div>
-        <div className="page-actions">
+        <div className="page-actions" style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+          <select value={selCat} onChange={e=>setSelCat(e.target.value)}
+            title="กรองตามหมวด"
+            style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid "+(selCat?"var(--g-500)":"var(--bdr)"),
+                    background:selCat?"var(--g-50)":"#fff",color:selCat?"var(--g-700)":"var(--text)",
+                    fontFamily:"inherit",fontSize:13,fontWeight:selCat?700:500,maxWidth:180}}>
+            <option value="">🏷️ ทุกหมวด</option>
+            {allCats.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
           <Seg value={range} onChange={setRange} options={[
             {value:"day",   label:"รายวัน"},
             {value:"month", label:"รายเดือน"},
@@ -1448,6 +1472,12 @@ function OverviewView({ data, range, setRange, role }) {
           ]}/>
         </div>
       </div>
+      {selCat && (
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,fontSize:12,color:"var(--g-700)",background:"var(--g-50)",border:"1px solid var(--g-200)",borderRadius:20,padding:"5px 12px",width:"fit-content"}}>
+          <span>🏷️ กรองเฉพาะหมวด: <b>{selCat}</b> — ทุกตัวเลข/กราฟ/Top สินค้าด้านล่างเป็นของหมวดนี้</span>
+          <button onClick={()=>setSelCat("")} style={{border:"none",background:"none",cursor:"pointer",color:"var(--g-700)",fontWeight:800,fontSize:14,fontFamily:"inherit"}}>×</button>
+        </div>
+      )}
 
       {/* ── Month picker strip — เลือกเดือนเมื่ออยู่ใน "รายเดือน" ── */}
       {range === 'month' && months.length > 1 && (
@@ -1483,17 +1513,17 @@ function OverviewView({ data, range, setRange, role }) {
         )}
         <KPI label="จำนวนชิ้นที่ขาย" accent="#4fb472"
              value={fmtN(sumQty)}
-             sub={range === 'day' ? `${days.length} วันล่าสุด` : `${fmtN(totals.nSold)} SKU มียอดขาย`}
+             sub={range === 'day' ? `${days.length} วันล่าสุด` : `${fmtN(stockAgg.nSold)} SKU มียอดขาย`}
              icon={I.cart} />
         {role === 'owner' && (
           <KPI label="มูลค่าสต๊อกคงเหลือ" accent="#a07417"
-               value={fmtB(totals.totalStockValue)}
-               sub={`${fmtN(totals.nWithStock)} SKU มีของในคลัง`}
+               value={fmtB(stockAgg.val)}
+               sub={`${fmtN(stockAgg.n)} SKU มีของในคลัง`}
                icon={I.package} />
         )}
         {role === 'owner' && (
           <KPI label="ยอดขาย / ต้นทุนสต๊อก" accent="#1f6f8b"
-               value={totals.totalStockValue > 0 ? `${(totals.totalSoldRev / totals.totalStockValue).toFixed(2)}×` : "—"}
+               value={stockAgg.val > 0 ? `${(stockAgg.soldRev / stockAgg.val).toFixed(2)}×` : "—"}
                sub="หมุนเวียนสินค้า"
                icon={I.trend} />
         )}
