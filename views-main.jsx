@@ -2,6 +2,18 @@
 // Tab views — Overview, Categories, Stock, Upload, Connect
 const { useState: uS, useEffect: uE, useMemo: uM, useCallback: uC } = React;
 
+// ตรวจว่าอยู่บนจอมือถือ (≤ bp) — ไว้ลด/รวมคอลัมน์ให้ตารางพอดีจอ ไม่ต้องเลื่อนแนวนอน
+function useIsMobile(bp) {
+  const q = bp || 600;
+  const [m, setM] = uS(typeof window !== "undefined" ? window.innerWidth <= q : false);
+  uE(() => {
+    const h = () => setM(window.innerWidth <= q);
+    window.addEventListener("resize", h);
+    return () => window.removeEventListener("resize", h);
+  }, [q]);
+  return m;
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // ERROR BOUNDARY — ป้องกัน white screen เมื่อ View component throw
 // ต้องเป็น class component (React error boundary API ไม่รองรับ hooks)
@@ -974,6 +986,7 @@ function OverviewView({ data, range, setRange, role }) {
   const [selMonth, setSelMonth] = uS(null);   // null = latest
   const [selCat, setSelCat] = uS("");          // "" = ทุกหมวด · เลือกหมวด → กรอง KPI/กราฟ/forecast/top สินค้า
   const monthStripRef = React.useRef(null);
+  const mobile = useIsMobile();                // ซ่อนคอลัมน์รองบนมือถือให้พอดีจอ
   const [cmpSel,   setCmpSel]   = uS([]);     // explicit month selection for comparison
   const [showCmp,  setShowCmp]  = uS(false);
 
@@ -1908,11 +1921,11 @@ function OverviewView({ data, range, setRange, role }) {
             <thead><tr>
               <th style={{width:42}}>#</th>
               <th>สินค้า</th>
-              <th style={{width:100}}>หมวด</th>
-              <th className="num" style={{width:90}}>ขาย (ชิ้น)</th>
-              {role === "owner" && <th className="num" style={{width:110}}>รายได้</th>}
-              <th className="num" style={{width:80}}>คงเหลือ</th>
-              <th style={{width:120}}>แนวโน้ม 5 เดือน</th>
+              {!mobile && <th style={{width:100}}>หมวด</th>}
+              <th className="num" style={{width:mobile?58:90}}>ขาย</th>
+              {role === "owner" && <th className="num" style={{width:mobile?72:110}}>รายได้</th>}
+              <th className="num" style={{width:mobile?56:80}}>คงเหลือ</th>
+              {!mobile && <th style={{width:120}}>แนวโน้ม 5 เดือน</th>}
             </tr></thead>
             <tbody>
               {topSellers.map((p, i) => (
@@ -1944,21 +1957,25 @@ function OverviewView({ data, range, setRange, role }) {
                       </div>
                     </div>
                   </td>
-                  <td>
-                    <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11.5,color:"var(--muted)"}}>
-                      <span style={{width:7,height:7,borderRadius:"50%",background:catColor(p.cat, allCats)}}/>
-                      {p.cat || "—"}
-                    </span>
-                  </td>
+                  {!mobile && (
+                    <td>
+                      <span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11.5,color:"var(--muted)"}}>
+                        <span style={{width:7,height:7,borderRadius:"50%",background:catColor(p.cat, allCats)}}/>
+                        {p.cat || "—"}
+                      </span>
+                    </td>
+                  )}
                   <td className="num" style={{fontWeight:600}}>{fmtN(p._pQty)}</td>
                   {role === "owner" && <td className="num" style={{fontWeight:700,color:"var(--g-700)"}}>{fmtB(p._pRev)}</td>}
                   <td className="num" style={{color:stockQty(p)<=36?"var(--dang)":"var(--muted)"}}>{fmtN(stockQty(p))}</td>
-                  <td style={{padding:"4px 10px"}}>
-                    <div style={{width:100}}>
-                      <Sparkline values={(p.monthly||[]).map(m=>m.sales)}
-                                 color={catColor(p.cat, allCats)} height={22}/>
-                    </div>
-                  </td>
+                  {!mobile && (
+                    <td style={{padding:"4px 10px"}}>
+                      <div style={{width:100}}>
+                        <Sparkline values={(p.monthly||[]).map(m=>m.sales)}
+                                   color={catColor(p.cat, allCats)} height={22}/>
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

@@ -6012,6 +6012,7 @@ async function syncSetQuoteSale(number, sale) {
 const QUOTE_MONTHS_TH = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
 
 function QuoteFollowupView() {
+  const mobile = useIsMobile();
   const [items, setItems] = uS([]);
   const [loading, setLoading] = uS(true);
   const [err, setErr] = uS(null);
@@ -6228,44 +6229,53 @@ function QuoteFollowupView() {
             A.rows.length === 0 ? (
               <div style={{ textAlign: "center", padding: 24, color: "var(--muted)", fontSize: 13, border: "1px solid var(--bdr)", borderRadius: 12 }}>ไม่มีข้อมูลในปี {selYear}</div>
             ) : (
-              <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid var(--bdr)" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 640 }}>
+              <div style={{ overflowX: mobile ? "visible" : "auto", borderRadius: 12, border: "1px solid var(--bdr)" }}>
+                {/* มือถือ: รวม ใบ+฿ ในเซลเดียว (ซ้อน) + ตัด "ยกเลิก" ออก → พอดีจอ · จอใหญ่: ครบทุกคอลัมน์ */}
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: mobile ? 12 : 13, minWidth: mobile ? 0 : 640 }}>
                   <thead><tr style={{ background: "var(--g-50)", borderBottom: "2px solid var(--bdr)", color: "var(--g-700)" }}>
-                    <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700 }}>เดือน</th>
-                    <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>อนุมัติ (ใบ)</th>
-                    <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>มูลค่าอนุมัติ</th>
-                    <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>รออนุมัติ (ใบ)</th>
-                    <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>มูลค่ารอ</th>
-                    <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>ยกเลิก</th>
-                    <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, minWidth: 150 }}>% อนุมัติ (มูลค่า)</th>
+                    <th style={{ padding: mobile ? "8px 6px" : "10px 12px", textAlign: "left", fontWeight: 700 }}>เดือน</th>
+                    <th style={{ padding: mobile ? "8px 6px" : "10px 12px", textAlign: "right", fontWeight: 700 }}>อนุมัติ{mobile ? "" : " (ใบ)"}</th>
+                    {!mobile && <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>มูลค่าอนุมัติ</th>}
+                    <th style={{ padding: mobile ? "8px 6px" : "10px 12px", textAlign: "right", fontWeight: 700 }}>รอ{mobile ? "" : "อนุมัติ (ใบ)"}</th>
+                    {!mobile && <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>มูลค่ารอ</th>}
+                    {!mobile && <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>ยกเลิก</th>}
+                    <th style={{ padding: mobile ? "8px 6px" : "10px 12px", textAlign: "left", fontWeight: 700, minWidth: mobile ? 0 : 150 }}>% อนุมัติ</th>
                   </tr></thead>
                   <tbody>
                     {A.rows.map((r, idx) => (
                       <tr key={r.m} style={{ borderBottom: "1px solid var(--bdr)", background: idx % 2 === 0 ? "var(--paper)" : "var(--g-50)" }}>
-                        <td style={{ padding: "8px 12px", fontWeight: 700 }}>{QUOTE_MONTHS_TH[r.m - 1]} {selYear}</td>
-                        <td style={{ padding: "8px 12px", textAlign: "right", color: r.app.c ? "#16a34a" : "var(--muted)", fontWeight: 700 }}>{r.app.c}</td>
-                        <td style={{ padding: "8px 12px", textAlign: "right" }}>{baht(r.app.v)}</td>
-                        <td style={{ padding: "8px 12px", textAlign: "right", color: r.pen.c ? "#d97706" : "var(--muted)", fontWeight: 700 }}>{r.pen.c}</td>
-                        <td style={{ padding: "8px 12px", textAlign: "right", color: r.pen.v ? "#d97706" : "var(--muted)" }}>{baht(r.pen.v)}</td>
-                        <td style={{ padding: "8px 12px", textAlign: "right", color: r.voi.c ? "#dc2626" : "var(--muted)" }}>{r.voi.c ? (r.voi.c + " / " + baht(r.voi.v)) : "—"}</td>
-                        <td style={{ padding: "8px 12px" }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <div style={{ flex: 1, height: 8, background: "var(--bdr)", borderRadius: 99, overflow: "hidden", minWidth: 50 }}>
+                        <td style={{ padding: mobile ? "6px" : "8px 12px", fontWeight: 700, whiteSpace: "nowrap" }}>{QUOTE_MONTHS_TH[r.m - 1]} {String(selYear).slice(-2)}</td>
+                        <td style={{ padding: mobile ? "6px" : "8px 12px", textAlign: "right", color: r.app.c ? "#16a34a" : "var(--muted)", fontWeight: 700 }}>
+                          {r.app.c}{mobile && r.app.v > 0 && <div style={{ fontSize: 10, fontWeight: 500, color: "var(--muted)" }}>{baht(r.app.v)}</div>}
+                        </td>
+                        {!mobile && <td style={{ padding: "8px 12px", textAlign: "right" }}>{baht(r.app.v)}</td>}
+                        <td style={{ padding: mobile ? "6px" : "8px 12px", textAlign: "right", color: r.pen.c ? "#d97706" : "var(--muted)", fontWeight: 700 }}>
+                          {r.pen.c}{mobile && r.pen.v > 0 && <div style={{ fontSize: 10, fontWeight: 500, color: "var(--muted)" }}>{baht(r.pen.v)}</div>}
+                        </td>
+                        {!mobile && <td style={{ padding: "8px 12px", textAlign: "right", color: r.pen.v ? "#d97706" : "var(--muted)" }}>{baht(r.pen.v)}</td>}
+                        {!mobile && <td style={{ padding: "8px 12px", textAlign: "right", color: r.voi.c ? "#dc2626" : "var(--muted)" }}>{r.voi.c ? (r.voi.c + " / " + baht(r.voi.v)) : "—"}</td>}
+                        <td style={{ padding: mobile ? "6px" : "8px 12px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: mobile ? 4 : 8 }}>
+                            {!mobile && <div style={{ flex: 1, height: 8, background: "var(--bdr)", borderRadius: 99, overflow: "hidden", minWidth: 50 }}>
                               <div style={{ width: (r.rate * 100).toFixed(0) + "%", height: "100%", background: rateColor(r.rate) }}/>
-                            </div>
-                            <span style={{ fontWeight: 800, color: rateColor(r.rate), fontSize: 12, whiteSpace: "nowrap" }}>{(r.rate * 100).toFixed(1)}%</span>
+                            </div>}
+                            <span style={{ fontWeight: 800, color: rateColor(r.rate), fontSize: 12, whiteSpace: "nowrap" }}>{(r.rate * 100).toFixed(0)}%</span>
                           </div>
                         </td>
                       </tr>
                     ))}
                     <tr style={{ borderTop: "2px solid var(--bdr)", background: "var(--g-50)", fontWeight: 800 }}>
-                      <td style={{ padding: "10px 12px" }}>รวม {selYear}</td>
-                      <td style={{ padding: "10px 12px", textAlign: "right", color: "#16a34a" }}>{A.tot.app.c}</td>
-                      <td style={{ padding: "10px 12px", textAlign: "right" }}>{baht(A.tot.app.v)}</td>
-                      <td style={{ padding: "10px 12px", textAlign: "right", color: "#d97706" }}>{A.tot.pen.c}</td>
-                      <td style={{ padding: "10px 12px", textAlign: "right", color: "#d97706" }}>{baht(A.tot.pen.v)}</td>
-                      <td style={{ padding: "10px 12px", textAlign: "right", color: "#dc2626" }}>{A.tot.voi.c ? (A.tot.voi.c + " / " + baht(A.tot.voi.v)) : "—"}</td>
-                      <td style={{ padding: "10px 12px", fontWeight: 800, color: rateColor(A.rateTot) }}>{(A.rateTot * 100).toFixed(1)}%</td>
+                      <td style={{ padding: mobile ? "8px 6px" : "10px 12px" }}>รวม</td>
+                      <td style={{ padding: mobile ? "8px 6px" : "10px 12px", textAlign: "right", color: "#16a34a" }}>
+                        {A.tot.app.c}{mobile && <div style={{ fontSize: 10, fontWeight: 500, color: "var(--muted)" }}>{baht(A.tot.app.v)}</div>}
+                      </td>
+                      {!mobile && <td style={{ padding: "10px 12px", textAlign: "right" }}>{baht(A.tot.app.v)}</td>}
+                      <td style={{ padding: mobile ? "8px 6px" : "10px 12px", textAlign: "right", color: "#d97706" }}>
+                        {A.tot.pen.c}{mobile && <div style={{ fontSize: 10, fontWeight: 500, color: "var(--muted)" }}>{baht(A.tot.pen.v)}</div>}
+                      </td>
+                      {!mobile && <td style={{ padding: "10px 12px", textAlign: "right", color: "#d97706" }}>{baht(A.tot.pen.v)}</td>}
+                      {!mobile && <td style={{ padding: "10px 12px", textAlign: "right", color: "#dc2626" }}>{A.tot.voi.c ? (A.tot.voi.c + " / " + baht(A.tot.voi.v)) : "—"}</td>}
+                      <td style={{ padding: mobile ? "8px 6px" : "10px 12px", fontWeight: 800, color: rateColor(A.rateTot) }}>{(A.rateTot * 100).toFixed(0)}%</td>
                     </tr>
                   </tbody>
                 </table>
@@ -6282,33 +6292,34 @@ function QuoteFollowupView() {
                 <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>
                   เสนอราคาไปเท่าไหร่ · ปิดได้กี่ % ต่อเซล · <b>%ปิด</b> = อนุมัติ ÷ (อนุมัติ+ยกเลิก) ไม่นับที่ยังค้าง · ชื่อเซลใส่ในโหมดรออนุมัติ/อนุมัติ
                 </div>
-                <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid var(--bdr)" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 680 }}>
+                <div style={{ overflowX: mobile ? "visible" : "auto", borderRadius: 12, border: "1px solid var(--bdr)" }}>
+                  {/* มือถือ: เซล | เสนอ(ใบ) | ปิดได้(฿) | %ปิด — ตัดมูลค่าเสนอ/ปิดใบ/ค้าง-ยกเลิก */}
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: mobile ? 12 : 13, minWidth: mobile ? 0 : 680 }}>
                     <thead><tr style={{ background: "var(--g-50)", borderBottom: "2px solid var(--bdr)", color: "var(--g-700)" }}>
-                      <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700 }}>เซล</th>
-                      <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>เสนอ (ใบ)</th>
-                      <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>มูลค่าเสนอ</th>
-                      <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>ปิดได้ (ใบ)</th>
-                      <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>มูลค่าปิดได้</th>
-                      <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700 }}>ค้าง/ยกเลิก</th>
-                      <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, minWidth: 130 }}>% ปิด (ตามใบ)</th>
+                      <th style={{ padding: mobile ? "8px 6px" : "10px 12px", textAlign: "left", fontWeight: 700 }}>เซล</th>
+                      <th style={{ padding: mobile ? "8px 6px" : "10px 12px", textAlign: "right", fontWeight: 700 }}>เสนอ{mobile ? "" : " (ใบ)"}</th>
+                      {!mobile && <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>มูลค่าเสนอ</th>}
+                      {!mobile && <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>ปิดได้ (ใบ)</th>}
+                      <th style={{ padding: mobile ? "8px 6px" : "10px 12px", textAlign: "right", fontWeight: 700 }}>ปิดได้{mobile ? " ฿" : ""}</th>
+                      {!mobile && <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700 }}>ค้าง/ยกเลิก</th>}
+                      <th style={{ padding: mobile ? "8px 6px" : "10px 12px", textAlign: "left", fontWeight: 700, minWidth: mobile ? 0 : 130 }}>% ปิด</th>
                     </tr></thead>
                     <tbody>
                       {salesAgg.map((s, idx) => (
                         <tr key={s.sale} style={{ borderBottom: "1px solid var(--bdr)", background: idx % 2 === 0 ? "var(--paper)" : "var(--g-50)" }}>
-                          <td style={{ padding: "8px 12px", fontWeight: 700, color: s.sale.indexOf("ยังไม่ระบุ") >= 0 ? "var(--muted)" : "var(--text)" }}>{s.sale}</td>
-                          <td style={{ padding: "8px 12px", textAlign: "right" }}>{s.total}</td>
-                          <td style={{ padding: "8px 12px", textAlign: "right", color: "var(--muted)" }}>{baht(s.totalV)}</td>
-                          <td style={{ padding: "8px 12px", textAlign: "right", color: "#16a34a", fontWeight: 700 }}>{s.app}</td>
-                          <td style={{ padding: "8px 12px", textAlign: "right", color: "#16a34a", fontWeight: 800 }}>{baht(s.appV)}</td>
-                          <td style={{ padding: "8px 12px", textAlign: "center", fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>
+                          <td style={{ padding: mobile ? "6px" : "8px 12px", fontWeight: 700, color: s.sale.indexOf("ยังไม่ระบุ") >= 0 ? "var(--muted)" : "var(--text)" }}>{s.sale}</td>
+                          <td style={{ padding: mobile ? "6px" : "8px 12px", textAlign: "right" }}>{s.total}{mobile && <div style={{ fontSize: 10, color: "#dc2626" }}>ยก {s.voi}</div>}</td>
+                          {!mobile && <td style={{ padding: "8px 12px", textAlign: "right", color: "var(--muted)" }}>{baht(s.totalV)}</td>}
+                          {!mobile && <td style={{ padding: "8px 12px", textAlign: "right", color: "#16a34a", fontWeight: 700 }}>{s.app}</td>}
+                          <td style={{ padding: mobile ? "6px" : "8px 12px", textAlign: "right", color: "#16a34a", fontWeight: 800 }}>{baht(s.appV)}{mobile && <div style={{ fontSize: 10, fontWeight: 500, color: "#16a34a" }}>{s.app} ใบ</div>}</td>
+                          {!mobile && <td style={{ padding: "8px 12px", textAlign: "center", fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>
                             <span style={{ color: "#d97706" }}>{s.pen}</span> / <span style={{ color: "#dc2626" }}>{s.voi}</span>
-                          </td>
-                          <td style={{ padding: "8px 12px" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                              <div style={{ flex: 1, height: 8, background: "var(--bdr)", borderRadius: 99, overflow: "hidden", minWidth: 40 }}>
+                          </td>}
+                          <td style={{ padding: mobile ? "6px" : "8px 12px" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: mobile ? 4 : 8 }}>
+                              {!mobile && <div style={{ flex: 1, height: 8, background: "var(--bdr)", borderRadius: 99, overflow: "hidden", minWidth: 40 }}>
                                 <div style={{ width: ((s.winByCount || 0) * 100).toFixed(0) + "%", height: "100%", background: rateColor(s.winByCount || 0) }}/>
-                              </div>
+                              </div>}
                               <span style={{ fontWeight: 800, color: rateColor(s.winByCount || 0), fontSize: 12, whiteSpace: "nowrap" }}>{s.winByCount == null ? "—" : (s.winByCount * 100).toFixed(0) + "%"}</span>
                             </div>
                           </td>
@@ -6440,6 +6451,7 @@ function QuoteFollowupView() {
 // (owner ดูคนเดียว)
 // ───────────────────────────────────────────────────────────
 function CustomerView({ data }) {
+  const mobile = useIsMobile();
   const prodBySku = uM(() => { const m = {}; ((data && data.products) || []).forEach(p => { if (p.sku) m[String(p.sku).toUpperCase()] = p; }); return m; }, [data]);
   const [months, setMonths] = uS([]);
   const [customers, setCustomers] = uS([]);
@@ -6619,28 +6631,28 @@ function CustomerView({ data }) {
                 <thead>
                   <tr style={{ background: "var(--g-50)", borderBottom: "2px solid var(--bdr)" }}>
                     <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>ลูกค้า</th>
-                    <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>ยอดเดือนนี้</th>
-                    <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>vs เดือนก่อน</th>
-                    <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>บิล</th>
-                    <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>สะสมทั้งช่วง</th>
+                    <th style={{ padding: mobile ? "8px 6px" : "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>ยอดเดือนนี้</th>
+                    <th style={{ padding: mobile ? "8px 6px" : "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>vs ก่อน</th>
+                    {!mobile && <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>บิล</th>}
+                    {!mobile && <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>สะสมทั้งช่วง</th>}
                   </tr>
                 </thead>
                 <tbody>
                   {monthRows.map((c, idx) => (
                     <React.Fragment key={c.key || idx}>
                       <tr onClick={() => toggle(c.key)} style={{ borderBottom: "1px solid var(--bdr)", background: idx % 2 === 0 ? "var(--paper)" : "var(--g-50)", cursor: "pointer" }}>
-                        <td style={{ padding: "8px 12px", fontWeight: 600, color: "var(--text)", minWidth: 160 }}>
+                        <td style={{ padding: mobile ? "8px 6px" : "8px 12px", fontWeight: 600, color: "var(--text)", minWidth: mobile ? 0 : 160 }}>
                           <span style={{ color: "var(--muted)", marginRight: 4 }}>{expandedKey === c.key ? "▾" : "▸"}</span>
                           {c.name}
                           {isSilent(c) && <span style={{ marginLeft: 6, fontSize: 10, background: "#fff3e0", color: "#e65100", borderRadius: 10, padding: "1px 7px", fontWeight: 700 }}>เงียบ</span>}
                         </td>
-                        <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 800, color: "var(--g-700)", whiteSpace: "nowrap" }}>{baht(c.mTotal)}</td>
-                        <td style={{ padding: "8px 12px", textAlign: "right" }}>{trendCell(c)}</td>
-                        <td style={{ padding: "8px 12px", textAlign: "center", color: "var(--muted)" }}>{c.mCount}</td>
-                        <td style={{ padding: "8px 12px", textAlign: "right", color: "var(--muted)", whiteSpace: "nowrap" }}>{baht(c.total)}</td>
+                        <td style={{ padding: mobile ? "8px 6px" : "8px 12px", textAlign: "right", fontWeight: 800, color: "var(--g-700)", whiteSpace: "nowrap" }}>{baht(c.mTotal)}{mobile && <div style={{ fontSize: 10, fontWeight: 500, color: "var(--muted)" }}>{c.mCount} บิล</div>}</td>
+                        <td style={{ padding: mobile ? "8px 6px" : "8px 12px", textAlign: "right" }}>{trendCell(c)}</td>
+                        {!mobile && <td style={{ padding: "8px 12px", textAlign: "center", color: "var(--muted)" }}>{c.mCount}</td>}
+                        {!mobile && <td style={{ padding: "8px 12px", textAlign: "right", color: "var(--muted)", whiteSpace: "nowrap" }}>{baht(c.total)}</td>}
                       </tr>
                       {expandedKey === c.key && (
-                        <tr><td colSpan={5} style={{ padding: 0 }}>{productPanel(c)}</td></tr>
+                        <tr><td colSpan={mobile ? 3 : 5} style={{ padding: 0 }}>{productPanel(c)}</td></tr>
                       )}
                     </React.Fragment>
                   ))}
@@ -6660,27 +6672,27 @@ function CustomerView({ data }) {
                 <tr style={{ background: "var(--g-50)", borderBottom: "2px solid var(--bdr)" }}>
                   <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>#</th>
                   <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>ลูกค้า</th>
-                  <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>ยอดสะสม</th>
-                  <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>%</th>
-                  <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>สะสม%</th>
+                  <th style={{ padding: mobile ? "8px 6px" : "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>ยอดสะสม</th>
+                  <th style={{ padding: mobile ? "8px 6px" : "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>%</th>
+                  {!mobile && <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>สะสม%</th>}
                 </tr>
               </thead>
               <tbody>
                 {topRows.map((c, idx) => (
                   <React.Fragment key={c.key || idx}>
                     <tr onClick={() => toggle(c.key)} style={{ borderBottom: "1px solid var(--bdr)", background: idx % 2 === 0 ? "var(--paper)" : "var(--g-50)", cursor: "pointer" }}>
-                      <td style={{ padding: "8px 12px", color: "var(--muted)", fontWeight: 700 }}>{idx + 1}</td>
-                      <td style={{ padding: "8px 12px", fontWeight: 600, color: "var(--text)", minWidth: 150 }}>
+                      <td style={{ padding: mobile ? "8px 4px" : "8px 12px", color: "var(--muted)", fontWeight: 700 }}>{idx + 1}</td>
+                      <td style={{ padding: mobile ? "8px 6px" : "8px 12px", fontWeight: 600, color: "var(--text)", minWidth: mobile ? 0 : 150 }}>
                         <span style={{ color: "var(--muted)", marginRight: 4 }}>{expandedKey === c.key ? "▾" : "▸"}</span>
                         {c.name}
                         {isSilent(c) && <span style={{ marginLeft: 6, fontSize: 10, background: "#fff3e0", color: "#e65100", borderRadius: 10, padding: "1px 7px", fontWeight: 700 }}>เงียบ</span>}
                       </td>
-                      <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 800, color: "var(--g-700)", whiteSpace: "nowrap" }}>{baht(c.total)}</td>
-                      <td style={{ padding: "8px 12px", textAlign: "right", color: "var(--muted)", whiteSpace: "nowrap" }}>{c.pct.toFixed(1)}%</td>
-                      <td style={{ padding: "8px 12px", textAlign: "right", color: "var(--muted)", whiteSpace: "nowrap" }}>{c.cumPct.toFixed(0)}%</td>
+                      <td style={{ padding: mobile ? "8px 6px" : "8px 12px", textAlign: "right", fontWeight: 800, color: "var(--g-700)", whiteSpace: "nowrap" }}>{baht(c.total)}</td>
+                      <td style={{ padding: mobile ? "8px 6px" : "8px 12px", textAlign: "right", color: "var(--muted)", whiteSpace: "nowrap" }}>{c.pct.toFixed(1)}%</td>
+                      {!mobile && <td style={{ padding: "8px 12px", textAlign: "right", color: "var(--muted)", whiteSpace: "nowrap" }}>{c.cumPct.toFixed(0)}%</td>}
                     </tr>
                     {expandedKey === c.key && (
-                      <tr><td colSpan={5} style={{ padding: 0 }}>{productPanel(c)}</td></tr>
+                      <tr><td colSpan={mobile ? 4 : 5} style={{ padding: 0 }}>{productPanel(c)}</td></tr>
                     )}
                   </React.Fragment>
                 ))}
@@ -6700,6 +6712,7 @@ function CustomerView({ data }) {
 // ไม่ใช้ค่าสมมติ COST_RATIO 0.8 · กำไร/ชิ้น = ราคาขาย − ต้นทุน · กำไรรวม = กำไร/ชิ้น × ที่ขายได้
 // สินค้าที่ไม่มีประวัติซื้อ = คำนวณต้นทุนไม่ได้ → แยกไว้ + โชว์ % ครอบคลุม (coverage)
 function MarginView({ data }) {
+  const mobile = useIsMobile();
   const products = (data && data.products) || [];
   const purchases = (data && data.purchases) || [];
   const bySku = uM(() => { const m = {}; products.forEach(p => { if (p.sku) m[String(p.sku).toUpperCase()] = p; }); return m; }, [products]);
@@ -6868,7 +6881,7 @@ function MarginView({ data }) {
         <div className="card" style={{ padding: 14, marginBottom: 16 }}>
           <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 10 }}>🏷️ กำไรตามหมวด</div>
           <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 420 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: mobile ? 0 : 420 }}>
               <thead><tr style={{ color: "var(--muted)", textAlign: "right" }}>
                 <th style={{ textAlign: "left", padding: "4px 6px" }}>หมวด</th>
                 <th style={{ padding: "4px 6px" }}>ยอดขาย</th>
@@ -6920,32 +6933,32 @@ function MarginView({ data }) {
       {/* ตารางสินค้า */}
       <div className="card" style={{ padding: 0, overflow: "hidden" }}>
         <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 620 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: mobile ? 0 : 620 }}>
             <thead><tr style={{ color: "var(--muted)", background: "var(--g-50)" }}>
               <th style={{ textAlign: "left", padding: "8px 8px" }}>สินค้า</th>
-              <th style={{ textAlign: "right", padding: "8px 8px" }}>ขายได้</th>
+              {!mobile && <th style={{ textAlign: "right", padding: "8px 8px" }}>ขายได้</th>}
               <th style={{ textAlign: "right", padding: "8px 8px" }}>ยอดขาย</th>
-              <th style={{ textAlign: "right", padding: "8px 8px" }}>ต้นทุน/ชิ้น</th>
-              <th style={{ textAlign: "right", padding: "8px 8px" }}>ขาย/ชิ้น</th>
+              {!mobile && <th style={{ textAlign: "right", padding: "8px 8px" }}>ต้นทุน/ชิ้น</th>}
+              {!mobile && <th style={{ textAlign: "right", padding: "8px 8px" }}>ขาย/ชิ้น</th>}
               <th style={{ textAlign: "right", padding: "8px 8px" }}>% กำไร</th>
               <th style={{ textAlign: "right", padding: "8px 8px" }}>กำไรรวม</th>
             </tr></thead>
             <tbody>
               {view.slice(0, 300).map(r => (
                 <tr key={r.sku} style={{ borderTop: "1px solid var(--bdr)" }}>
-                  <td style={{ textAlign: "left", padding: "8px 8px", maxWidth: 230 }}>
+                  <td style={{ textAlign: "left", padding: "8px 8px", maxWidth: mobile ? 150 : 230 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <ProductThumb product={bySku[String(r.sku).toUpperCase()] || { sku: r.sku, name: r.name, cat: r.cat }} size={36}/>
                       <div style={{ minWidth: 0 }}>
                         <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</div>
-                        <div style={{ fontSize: 10, color: "var(--muted)" }}>{r.sku} · {r.cat}</div>
+                        <div style={{ fontSize: 10, color: "var(--muted)" }}>{r.sku}{mobile ? "" : " · " + r.cat}</div>
                       </div>
                     </div>
                   </td>
-                  <td style={{ textAlign: "right", padding: "8px 8px" }}>{r.soldQty}</td>
+                  {!mobile && <td style={{ textAlign: "right", padding: "8px 8px" }}>{r.soldQty}</td>}
                   <td style={{ textAlign: "right", padding: "8px 8px" }}>{baht(r.soldRev)}</td>
-                  <td style={{ textAlign: "right", padding: "8px 8px", color: r.cost == null ? "var(--muted)" : "var(--text)" }}>{r.cost == null ? "—" : baht(r.cost)}</td>
-                  <td style={{ textAlign: "right", padding: "8px 8px" }}>{baht(r.price)}</td>
+                  {!mobile && <td style={{ textAlign: "right", padding: "8px 8px", color: r.cost == null ? "var(--muted)" : "var(--text)" }}>{r.cost == null ? "—" : baht(r.cost)}</td>}
+                  {!mobile && <td style={{ textAlign: "right", padding: "8px 8px" }}>{baht(r.price)}</td>}
                   <td style={{ textAlign: "right", padding: "8px 8px", fontWeight: 800, color: marginColor(r.marginPct) }}>{pct(r.marginPct)}</td>
                   <td style={{ textAlign: "right", padding: "8px 8px", fontWeight: 700, color: marginColor(r.marginPct) }}>{r.profit == null ? "—" : baht(r.profit)}</td>
                 </tr>
@@ -6964,6 +6977,7 @@ function MarginView({ data }) {
 // ใช้ยอด "รายเดือน" (monthlyByCat + products[].monthly) เฉลี่ยข้ามปี → ปลอดภัยจากบั๊ก soldQty สะสม
 // 1) heatmap หมวด×เดือนปฏิทิน (พีคเดือนไหน) · 2) เดือนไหนคึกสุด · 3) เดือนหน้าปีก่อนขาย SKU ไหนดี + สต๊อกวันนี้
 function SeasonView({ data }) {
+  const mobile = useIsMobile();
   const products = (data && data.products) || [];
   const monthLabels = (data && data.monthLabels) || [];
   const monthlyByCat = (data && data.monthlyByCat) || {};
@@ -7079,7 +7093,7 @@ function SeasonView({ data }) {
             <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 10 }}>เฉลี่ยยอดเดือน {QUOTE_MONTHS_TH[nextM - 1]} จากปีก่อน · เทียบสต๊อกวันนี้ · <b style={{ color: "#dc2626" }}>แดง</b> = สต๊อกน้อยกว่าที่เคยขาย</div>
             {prep.length === 0 ? <div style={{ color: "var(--muted)", fontSize: 13 }}>ยังไม่มีประวัติเดือนนี้</div> : (
               <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 480 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                   <thead><tr style={{ color: "var(--muted)", borderBottom: "1px solid var(--bdr)" }}>
                     <th style={{ textAlign: "left", padding: "6px 8px" }}>สินค้า</th>
                     <th style={{ textAlign: "right", padding: "6px 8px" }}>เคยขาย/ปี (ชิ้น)</th>
