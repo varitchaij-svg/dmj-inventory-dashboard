@@ -1,5 +1,6 @@
 ---
 name: dev
+model: sonnet
 description: >-
   Workhorse สำหรับเพิ่ม/แก้ feature ทั้ง frontend (React ใน views.jsx/app.jsx) และ
   backend (Google Apps Script ใน appsscript_complete.gs). ใช้เมื่อ implement ฟีเจอร์ใหม่,

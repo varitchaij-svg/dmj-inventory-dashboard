@@ -1,5 +1,6 @@
 ---
 name: perf
+model: sonnet
 description: >-
   เพิ่มความเร็วการโหลดและ runtime performance. ใช้เมื่อ: แก้ Babel cache,
   service worker, lazy load, split ไฟล์, ลด bundle.

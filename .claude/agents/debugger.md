@@ -1,5 +1,6 @@
 ---
 name: debugger
+model: opus
 description: >-
   ไล่หาสาเหตุ bug จากอาการ/log แล้วแก้. ใช้เมื่อมีอาการแปลกที่ยังไม่รู้สาเหตุ — white screen,
   ข้อมูลไม่ขึ้น, sync ไม่ทำงาน, ตัวเลขเพี้ยน, GAS error log, cache ค้าง, ปุ่มกดไม่ติด.

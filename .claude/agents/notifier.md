@@ -1,5 +1,6 @@
 ---
 name: notifier
+model: haiku
 description: >-
   ผู้เชี่ยวชาญ LINE Messaging API + GAS notification system สำหรับ DMJ.
   ใช้เมื่อ: เพิ่ม/แก้ LINE alert, low-stock notification, daily summary, MTO closed alert.

@@ -1,5 +1,6 @@
 ---
 name: warehouse
+model: sonnet
 description: >-
   ตรวจสอบความครบถ้วนของระบบคลังสินค้า DMJ เทียบกับ Warehouse Management Best Practices —
   ครอบคลุมทั้งสินค้า (SKU/Location/Slotting), พนักงาน (Traceability/Productivity),

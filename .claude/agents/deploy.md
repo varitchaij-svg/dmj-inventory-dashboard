@@ -1,5 +1,6 @@
 ---
 name: deploy
+model: haiku
 description: >-
   จัดการ release/deploy checklist ให้ครบและไม่พลาด. ใช้เมื่อจะ deploy การเปลี่ยนแปลง —
   merge เข้า master, อัปเดต GAS deploy URL ใน config.js, push, และสรุปขั้นตอนที่เจ้าของ

@@ -1,5 +1,6 @@
 ---
 name: reviewer
+model: opus
 description: >-
   ตรวจ security + ความถูกต้องของโค้ดก่อน merge/deploy. ใช้ก่อน push ของสำคัญ, เมื่ออยาก
   review diff, หรือเช็คว่ามีความลับรั่ว/bug/regression ไหม. เป็น read-only — รายงานปัญหา

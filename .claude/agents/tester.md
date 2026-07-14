@@ -1,5 +1,6 @@
 ---
 name: tester
+model: sonnet
 description: >-
   เขียน automated tests ด้วย Vitest สำหรับ DMJ. ใช้เมื่อ: เขียน unit test,
   schema-lock test, เพิ่ม test ให้ function ใหม่.

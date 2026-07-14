@@ -1,5 +1,6 @@
 ---
 name: zort
+model: sonnet
 description: >-
   ผู้เชี่ยวชาญ ZORT Open API v4 integration. ใช้เมื่อเพิ่ม/แก้การเชื่อมต่อ ZORT — ดึงคำสั่งซื้อ,
   สต็อก, ยอดขาย, รูปสินค้า, purchase order, transfer, หรือ debug response/field ที่ไม่ตรง.
