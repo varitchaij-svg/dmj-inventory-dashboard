@@ -1000,6 +1000,17 @@ function OverviewView({ data, range, setRange, role }) {
     if (el && el.scrollIntoView) el.scrollIntoView({ inline: 'center', block: 'nearest' });
   }, [range, activeMonth]);
 
+  // ── ตัวกรองปี (สำหรับโหมด "ทั้งปี") — เลือกดูปีใดปีหนึ่ง เช่น 2025 / 2026 ──
+  const [selYear, setSelYear] = uS(null); // null = ทุกปีรวมกัน
+  const availYears = uM(() => {
+    const s = new Set();
+    months.forEach(m => { const y = m.split("/")[1]; if (y) s.add(y); });
+    return [...s].sort();
+  }, [months]);
+  const yearMonths = uM(() =>
+    selYear ? months.filter(m => m.split("/")[1] === selYear) : months
+  , [months, selYear]);
+
   const monthlySeries = uM(() => months.map(m => {
     const cats = monthlyByCat[m] || {};
     let qty = 0, rev = 0;
@@ -1059,10 +1070,10 @@ function OverviewView({ data, range, setRange, role }) {
 
   const filtered = uM(() => {
     if (range === 'day') return dailySeries;
-    if (range === 'year') return monthlySeries;
+    if (range === 'year') return selYear ? monthlySeries.filter(m => m.month.split("/")[1] === selYear) : monthlySeries;
     if (range === 'month') return monthlySeries.filter(m => m.month === activeMonth);
     return monthlySeries;
-  }, [monthlySeries, dailySeries, range, activeMonth]);
+  }, [monthlySeries, dailySeries, range, activeMonth, selYear]);
 
   const sumRev = filtered.reduce((s,m) => s + m.rev, 0);
   const sumQty = filtered.reduce((s,m) => s + m.qty, 0);
@@ -1097,7 +1108,7 @@ function OverviewView({ data, range, setRange, role }) {
         }
       }
     } else {
-      const targetMonths = range === 'year' ? months : (activeMonth ? [activeMonth] : months.slice(-1));
+      const targetMonths = range === 'year' ? yearMonths : (activeMonth ? [activeMonth] : months.slice(-1));
       for (const m of targetMonths) {
         const cats = monthlyByCat[m] || {};
         for (const c of Object.keys(cats)) {
@@ -1109,7 +1120,7 @@ function OverviewView({ data, range, setRange, role }) {
     return Object.entries(accum)
       .map(([cat, rev]) => ({ cat, rev, color: catColor(cat, allCats) }))
       .sort((a,b) => b.rev - a.rev);
-  }, [monthlyByCat, dailyByCat, range, months, days, allCats, hasDailyData]);
+  }, [monthlyByCat, dailyByCat, range, months, yearMonths, days, allCats, hasDailyData]);
 
   const topCats = catShare.slice(0, 6).map(c => c.cat);
 
@@ -1148,7 +1159,7 @@ function OverviewView({ data, range, setRange, role }) {
       });
     }
     // ทั้งปี / รายเดือน (no daily) — use monthly data
-    const targetMonths = range === 'month' && activeMonth ? [activeMonth] : months;
+    const targetMonths = range === 'month' && activeMonth ? [activeMonth] : (range === 'year' ? yearMonths : months);
     return targetMonths.map(m => {
       const row = { label: monthLabel(m) };
       const cats = monthlyByCat[m] || {};
@@ -1160,11 +1171,24 @@ function OverviewView({ data, range, setRange, role }) {
       row["อื่นๆ"] = Math.round(other);
       return row;
     });
-  }, [months, days, monthlyByCat, dailyByCat, topCats, range, hasDailyData, activeMonth, selMonthDailySeries]);
+  }, [months, yearMonths, days, monthlyByCat, dailyByCat, topCats, range, hasDailyData, activeMonth, selMonthDailySeries]);
 
   // ── Period selector: map range → per-product {qty, rev} for selected window ──
   const periodInfo = uM(() => {
     if (range === 'year') {
+      if (selYear) {
+        return {
+          label: "ปี " + selYear,
+          tag: "ปี " + selYear,
+          perProduct: p => {
+            let qty = 0, rev = 0;
+            (p.monthly || []).forEach(x => {
+              if (x.month && x.month.split("/")[1] === selYear) { qty += x.qty || 0; rev += x.sales || 0; }
+            });
+            return { qty, rev };
+          },
+        };
+      }
       return {
         label: months.length ? `${monthLabel(months[0]).split(" ")[0]}–${monthLabel(months[months.length-1])}` : "ทั้งปี",
         tag: "ทั้งปี",
@@ -1180,7 +1204,7 @@ function OverviewView({ data, range, setRange, role }) {
         return { qty: mm ? mm.qty : 0, rev: mm ? mm.sales : 0 };
       },
     };
-  }, [range, activeMonth, months]);
+  }, [range, activeMonth, months, selYear]);
 
   // สินค้าที่ไม่ใช่ MTO — คำนวณครั้งเดียว ใช้ร่วมหลาย memo ด้านล่าง (เดิม filter ซ้ำ 6 รอบ/render)
   const sellable = uM(() => products.filter(p => !p.isMTO && (!selCat || p.cat === selCat)), [products, selCat]);
@@ -1455,7 +1479,7 @@ function OverviewView({ data, range, setRange, role }) {
   const subLabel  = range === 'day'
     ? (hasDailyData ? `${days.length} วัน (${dailySeries[0]?.label}–${dailySeries[dailySeries.length-1]?.label})` : "ยังไม่มีข้อมูลรายวัน")
     : range === 'month' ? (activeMonth ? monthLabel(activeMonth) : "เดือนล่าสุด")
-    : `${months.length} เดือนรวม`;
+    : selYear ? `ปี ${selYear} · ${yearMonths.length} เดือน` : `${months.length} เดือนรวม`;
 
   return (
     <div>
@@ -1508,6 +1532,32 @@ function OverviewView({ data, range, setRange, role }) {
         <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,fontSize:12,color:"var(--g-700)",background:"var(--g-50)",border:"1px solid var(--g-200)",borderRadius:20,padding:"5px 12px",width:"fit-content"}}>
           <span>🏷️ กรองเฉพาะหมวด: <b>{selCat}</b> — ทุกตัวเลข/กราฟ/Top สินค้าด้านล่างเป็นของหมวดนี้</span>
           <button onClick={()=>setSelCat("")} style={{border:"none",background:"none",cursor:"pointer",color:"var(--g-700)",fontWeight:800,fontSize:14,fontFamily:"inherit"}}>×</button>
+        </div>
+      )}
+
+      {/* ── Year picker strip — เลือกปีเมื่ออยู่ใน "ทั้งปี" ── */}
+      {range === 'year' && availYears.length > 1 && (
+        <div style={{
+          overflowX:'auto', display:'flex', gap:8, paddingBottom:6, marginBottom:16,
+          scrollbarWidth:'none', WebkitOverflowScrolling:'touch',
+        }}>
+          {[null, ...availYears.slice().reverse()].map(y => {
+            const on = selYear === y;
+            return (
+              <button key={y || 'all'} onClick={() => setSelYear(y)}
+                style={{
+                  flexShrink:0, padding:'7px 16px', borderRadius:20,
+                  border:'1.5px solid ' + (on ? '#1b5e20' : 'var(--bdr)'),
+                  background: on ? '#1b5e20' : '#fff',
+                  color: on ? '#fff' : 'var(--g-700)',
+                  fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'inherit',
+                  transition:'background .15s, color .15s, border-color .15s',
+                  whiteSpace:'nowrap',
+                }}>
+                {y ? `ปี ${y}` : 'ทุกปีรวม'}
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -1770,7 +1820,7 @@ function OverviewView({ data, range, setRange, role }) {
         </Card>
 
         <Card title="สัดส่วนยอดขายตามหมวด"
-              sub={range==='year' ? "ทั้งปี" : range==='day' ? `${days.length} วันล่าสุด` : (activeMonth ? monthLabel(activeMonth) : "เดือนล่าสุด")}>
+              sub={range==='year' ? (selYear ? `ปี ${selYear}` : "ทั้งปี") : range==='day' ? `${days.length} วันล่าสุด` : (activeMonth ? monthLabel(activeMonth) : "เดือนล่าสุด")}>
           <div style={{display:"flex",alignItems:"center",gap:16}}>
             {rechartsReady ? <ResponsiveContainer width={160} height={200}>
               <PieChart>
