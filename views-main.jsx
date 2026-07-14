@@ -1344,6 +1344,7 @@ function OverviewView({ data, range, setRange, role }) {
 
   const [overviewModalP, setOverviewModalP] = uS(null);
   const [exportProgress, setExportProgress] = uS(null); // null=hidden, {current,total,done}
+  const [exportReady, setExportReady] = uS(null);       // {url,file} รูปพร้อมเซฟ → เปิด modal
 
   const exportTop10Images = uC(async () => {
     const cats = topByCategory;
@@ -1364,38 +1365,50 @@ function OverviewView({ data, range, setRange, role }) {
         setExportProgress({ current: i + 1, total, done: false });
       }
       // 2) ต่อทุกหมวดเป็นรูปเดียว (คอลัมน์เดียว + หัวเรื่องด้านบน) → อ่านง่าย ตัวหนังสือขนาดเดิม
-      const W = canvases.length ? canvases[0].width : 440 * SCALE;
+      const rawW = canvases.length ? canvases[0].width : 440 * SCALE;
       const TITLE_H = 46 * SCALE, GAP = 10 * SCALE, PAD = 10 * SCALE;
-      const totalH = TITLE_H + canvases.reduce((s, cv) => s + cv.height + GAP, 0) + PAD;
+      const rawH = TITLE_H + canvases.reduce((s, cv) => s + cv.height + GAP, 0) + PAD;
+      // กันรูปสูงเกินลิมิต canvas ของ iOS (~16.7M px / มิติสูงสุด) — ย่อสัดส่วนถ้าจำเป็น
+      const f = rawH > 12000 ? 12000 / rawH : 1;
       const big = document.createElement('canvas');
-      big.width = W; big.height = totalH;
+      big.width = Math.round(rawW * f); big.height = Math.round(rawH * f);
       const ctx = big.getContext('2d');
-      ctx.fillStyle = '#f7faf6'; ctx.fillRect(0, 0, W, totalH);
+      ctx.scale(f, f); // วาดด้วยพิกัดจริง แต่ output ถูกย่อ
+      ctx.fillStyle = '#f7faf6'; ctx.fillRect(0, 0, rawW, rawH);
       ctx.fillStyle = '#196736'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
       ctx.font = 'bold ' + (17 * SCALE) + "px 'Sarabun','Noto Sans Thai','Segoe UI',Arial,sans-serif";
       ctx.fillText('🏆 Top 10 ขายดี · ' + (periodInfo.tag || ''), 14 * SCALE, TITLE_H / 2);
       let y = TITLE_H;
       for (const cv of canvases) { ctx.drawImage(cv, 0, y); y += cv.height + GAP; }
 
-      // 3) เซฟทีเดียว — iOS: share sheet แตะ "บันทึกรูปภาพ" ครั้งเดียวเข้า Photos
+      // 3) แปลงเป็นไฟล์แล้วเปิด modal ให้กด "บันทึกรูป" เอง (fresh gesture — กัน iOS ตัดสิทธิ์ share หลัง await)
       const blob = await new Promise(res => big.toBlob(res, 'image/png'));
-      const file = blob ? new File([blob], 'top10-ขายดี.png', { type: 'image/png' }) : null;
-      if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
-        try { await navigator.share({ files: [file], title: 'Top 10 ขายดี' }); }
-        catch (e) { if (e && e.name !== 'AbortError') console.warn('share top10', e); }
-      } else if (file) {
-        const link = document.createElement('a');
-        link.download = file.name;
-        link.href = URL.createObjectURL(file);
-        link.click();
-        await new Promise(r => setTimeout(r, 300));
-        URL.revokeObjectURL(link.href);
-      }
-      setExportProgress({ current: total, total, done: true });
-      await new Promise(r => setTimeout(r, 1500));
-    } catch(e) { console.error('export top10', e); }
-    finally { setExportProgress(null); }
+      if (!blob) throw new Error('สร้างรูปไม่สำเร็จ (รูปอาจใหญ่เกินไป)');
+      const file = new File([blob], 'top10-ขายดี.png', { type: 'image/png' });
+      setExportProgress(null);
+      setExportReady({ url: URL.createObjectURL(blob), file });
+    } catch(e) {
+      console.error('export top10', e);
+      setExportProgress(null);
+      alert('Export ไม่สำเร็จ: ' + (e.message || e));
+    }
   }, [topByCategory, allCats, role, periodInfo]);
+
+  // เซฟจากการกดปุ่มในmodal (gesture ใหม่ — share ทำงานชัวร์บน iOS)
+  const saveTop10 = () => {
+    if (!exportReady) return;
+    const { file, url } = exportReady;
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file], title: 'Top 10 ขายดี' }).catch(() => {});
+    } else {
+      const a = document.createElement('a');
+      a.download = file.name; a.href = url; a.click();
+    }
+  };
+  const closeExport = () => {
+    if (exportReady) URL.revokeObjectURL(exportReady.url);
+    setExportReady(null);
+  };
 
   // ── Comparison chart data (multi-select months) ──────────────────
   const cmpData = uM(() => {
@@ -2323,6 +2336,21 @@ function OverviewView({ data, range, setRange, role }) {
 
       {overviewModalP && <ProductModal p={overviewModalP} onClose={() => setOverviewModalP(null)} allCats={allCats}/>}
       {exportProgress && <ExportProgressOverlay {...exportProgress}/>}
+      {exportReady && (
+        <div onClick={closeExport} style={{position:'fixed',inset:0,zIndex:9999,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:16,padding:16,maxWidth:440,width:'100%',maxHeight:'92vh',display:'flex',flexDirection:'column',gap:10}}>
+            <div style={{fontSize:15,fontWeight:800,color:'var(--g-700)'}}>รูปพร้อมแล้ว 🎉</div>
+            <div style={{fontSize:12,color:'var(--muted)',marginTop:-4}}>กด <b>บันทึกรูป</b> → แตะ "บันทึกรูปภาพ" · หรือ<b>กดค้างที่รูป</b>เพื่อเซฟเข้าเครื่อง</div>
+            <div style={{overflowY:'auto',border:'1px solid var(--bdr)',borderRadius:10,background:'#f7faf6'}}>
+              <img src={exportReady.url} alt="Top 10 ขายดี" style={{width:'100%',display:'block'}}/>
+            </div>
+            <div style={{display:'flex',gap:10}}>
+              <button onClick={closeExport} style={{flex:'0 0 auto',padding:'12px 18px',borderRadius:10,border:'1px solid var(--bdr)',background:'#fff',color:'var(--muted)',fontWeight:700,fontFamily:'inherit',cursor:'pointer'}}>ปิด</button>
+              <button onClick={saveTop10} style={{flex:1,padding:'12px 18px',borderRadius:10,border:'none',background:'var(--g-700)',color:'#fff',fontWeight:800,fontFamily:'inherit',cursor:'pointer',fontSize:15}}>💾 บันทึกรูป</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
