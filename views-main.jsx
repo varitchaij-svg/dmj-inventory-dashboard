@@ -1124,6 +1124,15 @@ function OverviewView({ data, range, setRange, role }) {
 
   const topCats = catShare.slice(0, 6).map(c => c.cat);
 
+  // สัดส่วนยอดขายทุกหมวด: วงกลมโชว์ Top 8 + รวมที่เหลือเป็น "อื่นๆ" (กันวงกลมรก) — รายการข้างโชว์ครบทุกหมวด
+  const catTotalRev = uM(() => catShare.reduce((s, x) => s + x.rev, 0), [catShare]);
+  const catPieData = uM(() => {
+    const top = catShare.slice(0, 8);
+    const rest = catShare.slice(8);
+    const restRev = rest.reduce((s, x) => s + x.rev, 0);
+    return restRev > 0 ? [...top, { cat: "อื่นๆ", rev: restRev, color: "#c9d6bf" }] : top;
+  }, [catShare]);
+
   // Stacked chart: use daily or monthly series depending on mode
   const stackedSeries = uM(() => {
     // รายวัน mode — use full daily data
@@ -1820,28 +1829,30 @@ function OverviewView({ data, range, setRange, role }) {
         </Card>
 
         <Card title="สัดส่วนยอดขายตามหมวด"
-              sub={range==='year' ? (selYear ? `ปี ${selYear}` : "ทั้งปี") : range==='day' ? `${days.length} วันล่าสุด` : (activeMonth ? monthLabel(activeMonth) : "เดือนล่าสุด")}>
+              sub={`${catShare.length} หมวด · ` + (range==='year' ? (selYear ? `ปี ${selYear}` : "ทั้งปี") : range==='day' ? `${days.length} วันล่าสุด` : (activeMonth ? monthLabel(activeMonth) : "เดือนล่าสุด"))}>
           <div style={{display:"flex",alignItems:"center",gap:16}}>
             {rechartsReady ? <ResponsiveContainer width={160} height={200}>
               <PieChart>
-                <Pie data={catShare.slice(0,8)} dataKey="rev" nameKey="cat"
+                <Pie data={catPieData} dataKey="rev" nameKey="cat"
                      cx="50%" cy="50%" innerRadius={45} outerRadius={75} paddingAngle={1.5}>
-                  {catShare.slice(0,8).map((c) => <Cell key={c.cat} fill={c.color}/>)}
+                  {catPieData.map((c) => <Cell key={c.cat} fill={c.color}/>)}
                 </Pie>
-                <Tooltip formatter={v => fmtB(v)}/>
+                <Tooltip formatter={(v,n) => [fmtB(v) + ` (${(v/(catTotalRev||1)*100).toFixed(1)}%)`, n]}/>
               </PieChart>
             </ResponsiveContainer> : <ChartLoading height={200}/>}
-            <div style={{flex:1, overflowY:"auto", maxHeight:200}}>
-              {catShare.slice(0,8).map((c) => {
-                const pct = (c.rev / (catShare.reduce((s,x)=>s+x.rev,0)||1) * 100).toFixed(1);
+            <div style={{flex:1, overflowY:"auto", maxHeight:230}}>
+              {catShare.map((c) => {
+                const pct = (c.rev / (catTotalRev||1) * 100).toFixed(1);
                 return (
                   <div key={c.cat} style={{display:"flex",alignItems:"center",gap:8,padding:"5px 0",fontSize:12}}>
                     <span style={{width:10,height:10,borderRadius:3,background:c.color,flexShrink:0}}/>
                     <span style={{flex:1, overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.cat}</span>
-                    <span style={{fontWeight:600, color:"var(--muted)"}}>{pct}%</span>
+                    <span style={{color:"var(--light)",fontSize:11,whiteSpace:"nowrap"}}>{fmtB(c.rev)}</span>
+                    <span style={{fontWeight:600, color:"var(--muted)",minWidth:42,textAlign:"right"}}>{pct}%</span>
                   </div>
                 );
               })}
+              {catShare.length === 0 && <div style={{fontSize:12,color:"var(--muted)",padding:"8px 0"}}>ไม่มีข้อมูล</div>}
             </div>
           </div>
         </Card>
