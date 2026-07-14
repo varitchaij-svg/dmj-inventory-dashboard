@@ -1346,37 +1346,50 @@ function OverviewView({ data, range, setRange, role }) {
   const [exportProgress, setExportProgress] = uS(null); // null=hidden, {current,total,done}
 
   const exportTop10Images = uC(async () => {
-    const total = topByCategory.length;
+    const cats = topByCategory;
+    const total = cats.length;
     setExportProgress({ current: 0, total, done: false });
     try {
-      // 1) เรนเดอร์ทุกหมวดเป็นไฟล์รูปก่อน
-      const files = [];
-      for (let i = 0; i < topByCategory.length; i++) {
-        const g = topByCategory[i];
+      const SCALE = 2;
+      // 1) เรนเดอร์การ์ดแต่ละหมวด (หน้าตาเดิม กว้างเท่าเดิม)
+      const canvases = [];
+      for (let i = 0; i < cats.length; i++) {
+        const g = cats[i];
         const cc = catColor(g.cat, allCats);
         const imgMap = {};
         await Promise.all(g.products.map(async p => {
           if (p.imageUrl) imgMap[p.sku] = await loadImgForCard(p.imageUrl);
         }));
-        const canvas = drawTop10CatCanvas(g, imgMap, cc, role, periodInfo.label);
-        const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
-        if (blob) files.push(new File([blob], `top10-${g.cat}.png`, { type: 'image/png' }));
+        canvases.push(drawTop10CatCanvas(g, imgMap, cc, role, periodInfo.label));
         setExportProgress({ current: i + 1, total, done: false });
       }
-      // 2) เซฟทีเดียวทุกรูป — iOS: share sheet แตะ "บันทึกรูปภาพ" ครั้งเดียวเข้า Photos (ไม่ถามซ้ำทุกหมวด)
-      if (files.length && navigator.canShare && navigator.canShare({ files })) {
-        try { await navigator.share({ files, title: 'Top 10 ขายดี' }); }
+      // 2) ต่อทุกหมวดเป็นรูปเดียว (คอลัมน์เดียว + หัวเรื่องด้านบน) → อ่านง่าย ตัวหนังสือขนาดเดิม
+      const W = canvases.length ? canvases[0].width : 440 * SCALE;
+      const TITLE_H = 46 * SCALE, GAP = 10 * SCALE, PAD = 10 * SCALE;
+      const totalH = TITLE_H + canvases.reduce((s, cv) => s + cv.height + GAP, 0) + PAD;
+      const big = document.createElement('canvas');
+      big.width = W; big.height = totalH;
+      const ctx = big.getContext('2d');
+      ctx.fillStyle = '#f7faf6'; ctx.fillRect(0, 0, W, totalH);
+      ctx.fillStyle = '#196736'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+      ctx.font = 'bold ' + (17 * SCALE) + "px 'Sarabun','Noto Sans Thai','Segoe UI',Arial,sans-serif";
+      ctx.fillText('🏆 Top 10 ขายดี · ' + (periodInfo.tag || ''), 14 * SCALE, TITLE_H / 2);
+      let y = TITLE_H;
+      for (const cv of canvases) { ctx.drawImage(cv, 0, y); y += cv.height + GAP; }
+
+      // 3) เซฟทีเดียว — iOS: share sheet แตะ "บันทึกรูปภาพ" ครั้งเดียวเข้า Photos
+      const blob = await new Promise(res => big.toBlob(res, 'image/png'));
+      const file = blob ? new File([blob], 'top10-ขายดี.png', { type: 'image/png' }) : null;
+      if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+        try { await navigator.share({ files: [file], title: 'Top 10 ขายดี' }); }
         catch (e) { if (e && e.name !== 'AbortError') console.warn('share top10', e); }
-      } else {
-        // fallback (เดสก์ท็อป/เบราว์เซอร์ที่ไม่รองรับ share ไฟล์): ดาวน์โหลดทีละไฟล์
-        for (const f of files) {
-          const link = document.createElement('a');
-          link.download = f.name;
-          link.href = URL.createObjectURL(f);
-          link.click();
-          await new Promise(r => setTimeout(r, 400));
-          URL.revokeObjectURL(link.href);
-        }
+      } else if (file) {
+        const link = document.createElement('a');
+        link.download = file.name;
+        link.href = URL.createObjectURL(file);
+        link.click();
+        await new Promise(r => setTimeout(r, 300));
+        URL.revokeObjectURL(link.href);
       }
       setExportProgress({ current: total, total, done: true });
       await new Promise(r => setTimeout(r, 1500));
