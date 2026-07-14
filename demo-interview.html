@@ -933,19 +933,16 @@
     </div>
   </div>
 
-  <!-- React + Recharts + Babel -->
-  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
-  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
-  <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
-  <!-- recharts: defer — ใช้เฉพาะกราฟหน้า overview/analytics (gate ด้วย useRechartsReady + ChartLoading)
-       ไม่ block Babel/first paint; หน้าแรกของ staff ส่วนใหญ่คือ "สินค้า" ที่ไม่มีกราฟ -->
-  <script defer src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
-  <!-- qrcode + html5-qrcode: defer — ใช้เฉพาะตอนพิมพ์ label / สแกน (lazy + มี guard อยู่แล้ว)
-       ไม่ให้ block การโหลด Babel ซึ่งอยู่บน critical path ของการ render ครั้งแรก -->
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-  <!-- html5-qrcode: ใช้ scan ได้บนทุก browser/มือถือ (iOS Safari, Android, Desktop) -->
-  <script defer src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <!-- React + Recharts + Babel — เวอร์ชัน DEMO ใช้ไฟล์ local (demo-vendor/) ไม่ต้องต่อเน็ตเลย
+       (production ตัวจริงใช้ CDN unpkg/cdnjs — เวอร์ชันนี้สลับเป็น local ให้ใช้งานได้แบบ offline
+       เฉพาะตอนสาธิต ไม่กระทบไฟล์ production) -->
+  <script src="demo-vendor/react.production.min.js"></script>
+  <script src="demo-vendor/react-dom.production.min.js"></script>
+  <script src="demo-vendor/prop-types.min.js"></script>
+  <script defer src="demo-vendor/Recharts.js"></script>
+  <script defer src="demo-vendor/qrcode.min.js"></script>
+  <script defer src="demo-vendor/html5-qrcode.min.js"></script>
+  <script src="demo-vendor/babel.min.js"></script>
 
   <script>
 (function () {
