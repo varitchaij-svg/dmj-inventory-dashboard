@@ -976,7 +976,7 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
 // pure function — มี copy ใน tests/helpers.js สำหรับ unit test
 function abcClassify(products) {
   const sorted = (products || [])
-    .filter(p => p && p.sku)
+    .filter(p => p && p.sku && p.cat !== "ไม่มีรหัสสินค้า") // ตัดสินค้าไม่มีรหัส/หมวด — วัดไม่ได้ ทำให้สัดส่วนเพี้ยน
     .map(p => ({ sku: p.sku, rev: p.soldRev || 0 }))
     .sort((a, b) => b.rev - a.rev);
   const total = sorted.reduce((s, p) => s + p.rev, 0);

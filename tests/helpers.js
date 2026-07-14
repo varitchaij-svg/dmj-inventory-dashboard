@@ -475,7 +475,7 @@ function buildYoYSeries(monthLabels, monthlyByCat) {
       const cats = (monthlyByCat || {})[mm + "/" + y];
       if (cats) {
         let rev = 0, qty = 0;
-        Object.keys(cats).forEach(c => { rev += cats[c].sales || 0; qty += cats[c].qty || 0; });
+        Object.keys(cats).forEach(c => { if (c === "ไม่มีรหัสสินค้า") return; rev += cats[c].sales || 0; qty += cats[c].qty || 0; });
         row["y" + y] = rev;
         row["q" + y] = qty;
       }
@@ -488,7 +488,7 @@ function buildYoYSeries(monthLabels, monthlyByCat) {
 // ── abcClassify: ABC classification จาก cumulative revenue (จาก views-analytics.jsx) ──
 function abcClassify(products) {
   const sorted = (products || [])
-    .filter(p => p && p.sku)
+    .filter(p => p && p.sku && p.cat !== "ไม่มีรหัสสินค้า")
     .map(p => ({ sku: p.sku, rev: p.soldRev || 0 }))
     .sort((a, b) => b.rev - a.rev);
   const total = sorted.reduce((s, p) => s + p.rev, 0);

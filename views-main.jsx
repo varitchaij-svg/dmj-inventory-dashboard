@@ -963,7 +963,7 @@ function buildYoYSeries(monthLabels, monthlyByCat) {
       const cats = (monthlyByCat || {})[mm + "/" + y];
       if (cats) {
         let rev = 0, qty = 0;
-        Object.keys(cats).forEach(c => { rev += cats[c].sales || 0; qty += cats[c].qty || 0; });
+        Object.keys(cats).forEach(c => { if (c === "ไม่มีรหัสสินค้า") return; rev += cats[c].sales || 0; qty += cats[c].qty || 0; });
         row["y" + y] = rev;
         row["q" + y] = qty;
       }
@@ -1014,7 +1014,7 @@ function OverviewView({ data, range, setRange, role }) {
   const monthlySeries = uM(() => months.map(m => {
     const cats = monthlyByCat[m] || {};
     let qty = 0, rev = 0;
-    for (const c of Object.keys(cats)) { if (selCat && c !== selCat) continue; qty += cats[c].qty; rev += cats[c].sales; }
+    for (const c of Object.keys(cats)) { if (c === "ไม่มีรหัสสินค้า") continue; if (selCat && c !== selCat) continue; qty += cats[c].qty; rev += cats[c].sales; }
     return { month: m, label: monthLabel(m), qty, rev };
   }), [months, monthlyByCat, selCat]);
 
@@ -1233,6 +1233,7 @@ function OverviewView({ data, range, setRange, role }) {
 
   const topSellers = uM(() =>
     sellable
+      .filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า")
       .map(p => { const v = periodInfo.perProduct(p); return { ...p, _pQty: v.qty, _pRev: v.rev }; })
       .filter(p => p._pRev > 0 || p._pQty > 0)
       .sort((a,b) => b._pRev - a._pRev)
@@ -2075,12 +2076,12 @@ function OverviewView({ data, range, setRange, role }) {
                   <span style={{flex:1, fontSize:13, fontWeight:700}}>{g.cat}</span>
                   {role === "owner" && <span style={{fontSize:11, fontWeight:600, color:cc}}>{fmtB(g.totalRev)}</span>}
                 </div>
-                <div data-top10scroll="" style={{maxHeight:340, overflowY:"auto"}}>
+                <div data-top10scroll="">
                   {g.products.map((p, i) => (
                     <button key={p.sku} onClick={() => setOverviewModalP(p)}
                             style={{
-                              display:"flex",alignItems:"center",gap:10,
-                              width:"100%", padding:"8px 12px",
+                              display:"flex",alignItems:"center",gap:8,
+                              width:"100%", padding:"5px 10px",
                               background:"transparent", border:"none",
                               borderBottom:"1px solid var(--bdr)",
                               cursor:"pointer", textAlign:"left",
@@ -2090,25 +2091,25 @@ function OverviewView({ data, range, setRange, role }) {
                             onMouseEnter={e=>e.currentTarget.style.background="#fff"}
                             onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                       <span style={{
-                        width:20, fontSize:11, fontWeight:800,
+                        width:18, fontSize:11, fontWeight:800, flexShrink:0, textAlign:"center",
                         color: i<3 ? cc : "var(--light)",
                       }}>
                         {i===0?"🥇":i===1?"🥈":i===2?"🥉":`#${i+1}`}
                       </span>
                       <div style={{position:"relative",flexShrink:0}}>
                         {p.imageUrl ? (
-                          <div style={{width:36,height:36,borderRadius:6,
+                          <div style={{width:30,height:30,borderRadius:6,
                                        backgroundImage:`url("${p.imageUrl}")`,
                                        backgroundSize:"contain",backgroundPosition:"center",
                                        backgroundRepeat:"no-repeat",backgroundColor:"#fff",
                                        border:"1px solid var(--bdr)"}}/>
                         ) : (
-                          <div style={{width:36,height:36,borderRadius:6,
+                          <div style={{width:30,height:30,borderRadius:6,
                                        background: p.color ? p.color.hex+"33" : "var(--g-50)",
                                        border: p.color ? `2px solid ${p.color.hex}` : "1px solid var(--bdr)"}}/>
                         )}
                         {p.imageUrl && p.color && (
-                          <span style={{position:"absolute",bottom:2,right:2,width:9,height:9,
+                          <span style={{position:"absolute",bottom:1,right:1,width:8,height:8,
                                         borderRadius:"50%",background:p.color.hex,
                                         border:"1.5px solid #fff",boxShadow:"0 1px 3px rgba(0,0,0,.3)"}}/>
                         )}
@@ -2118,7 +2119,7 @@ function OverviewView({ data, range, setRange, role }) {
                                      overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
                           {p.name}
                         </div>
-                        <div style={{fontSize:10, color:"var(--muted)", marginTop:1}}>
+                        <div style={{fontSize:9.5, color:"var(--muted)"}}>
                           {fmtN(p._pQty)} ชิ้น · คงเหลือ {fmtN(stockQty(p))}
                         </div>
                       </div>
