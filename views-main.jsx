@@ -389,7 +389,7 @@ function drawProductCardCanvas(p, img, accentColor) {
 // ── drawTop10CatCanvas: วาด card Top 10 ขายดีต่อหมวด เป็น canvas ──
 // ใช้ loadImgForCard (GAS proxy) เพื่อไม่ติด CORS — pattern เดียวกับ drawProductCardCanvas
 function drawTop10CatCanvas(g, imgMap, cc, role, periodLabel) {
-  var W = 400;
+  var W = 440; // กว้างขึ้น + เผื่อ margin ขวา กันคอลัมน์ยอดเงินตกขอบ
   var FONT = "'Sarabun','Noto Sans Thai','Segoe UI',Arial,sans-serif";
   var SCALE = 2;
   var HDR_H = 44;
@@ -430,7 +430,7 @@ function drawTop10CatCanvas(g, imgMap, cc, role, periodLabel) {
     ctx.fillStyle = cc;
     ctx.font = 'bold 11px ' + FONT;
     ctx.textAlign = 'right';
-    ctx.fillText(fmtB(g.totalRev), W - 12, HDR_H / 2);
+    ctx.fillText(fmtB(g.totalRev), W - 16, HDR_H / 2);
   }
 
   // ── Product rows ──
@@ -490,7 +490,7 @@ function drawTop10CatCanvas(g, imgMap, cc, role, periodLabel) {
 
     // name + qty text
     var TX = 74;
-    var maxW = role === 'owner' ? W - TX - 72 : W - TX - 10;
+    var maxW = role === 'owner' ? W - TX - 92 : W - TX - 12;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
     ctx.fillStyle = '#111827';
@@ -509,7 +509,7 @@ function drawTop10CatCanvas(g, imgMap, cc, role, periodLabel) {
       ctx.fillStyle = '#374151';
       ctx.font = 'bold 11.5px ' + FONT;
       ctx.textAlign = 'right';
-      ctx.fillText(fmtB(p._pRev), W - 10, midY + 4);
+      ctx.fillText(fmtB(p._pRev), W - 16, midY + 4);
     }
   });
 
@@ -1349,6 +1349,8 @@ function OverviewView({ data, range, setRange, role }) {
     const total = topByCategory.length;
     setExportProgress({ current: 0, total, done: false });
     try {
+      // 1) เรนเดอร์ทุกหมวดเป็นไฟล์รูปก่อน
+      const files = [];
       for (let i = 0; i < topByCategory.length; i++) {
         const g = topByCategory[i];
         const cc = catColor(g.cat, allCats);
@@ -1357,15 +1359,27 @@ function OverviewView({ data, range, setRange, role }) {
           if (p.imageUrl) imgMap[p.sku] = await loadImgForCard(p.imageUrl);
         }));
         const canvas = drawTop10CatCanvas(g, imgMap, cc, role, periodInfo.label);
-        const link = document.createElement('a');
-        link.download = `top10-${g.cat}.png`;
-        link.href = canvas.toDataURL('image/png');
-        link.click();
+        const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
+        if (blob) files.push(new File([blob], `top10-${g.cat}.png`, { type: 'image/png' }));
         setExportProgress({ current: i + 1, total, done: false });
-        await new Promise(r => setTimeout(r, 400));
+      }
+      // 2) เซฟทีเดียวทุกรูป — iOS: share sheet แตะ "บันทึกรูปภาพ" ครั้งเดียวเข้า Photos (ไม่ถามซ้ำทุกหมวด)
+      if (files.length && navigator.canShare && navigator.canShare({ files })) {
+        try { await navigator.share({ files, title: 'Top 10 ขายดี' }); }
+        catch (e) { if (e && e.name !== 'AbortError') console.warn('share top10', e); }
+      } else {
+        // fallback (เดสก์ท็อป/เบราว์เซอร์ที่ไม่รองรับ share ไฟล์): ดาวน์โหลดทีละไฟล์
+        for (const f of files) {
+          const link = document.createElement('a');
+          link.download = f.name;
+          link.href = URL.createObjectURL(f);
+          link.click();
+          await new Promise(r => setTimeout(r, 400));
+          URL.revokeObjectURL(link.href);
+        }
       }
       setExportProgress({ current: total, total, done: true });
-      await new Promise(r => setTimeout(r, 1800));
+      await new Promise(r => setTimeout(r, 1500));
     } catch(e) { console.error('export top10', e); }
     finally { setExportProgress(null); }
   }, [topByCategory, allCats, role, periodInfo]);
