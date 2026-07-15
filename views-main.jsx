@@ -7968,7 +7968,7 @@ function PurchaseInPanel({ data, showToast, onDone }) {
   }, [search, products, cartSkus]);
 
   const addToCart = (p) => {
-    setCart(cs => [...cs, { sku: p.sku, name: p.name, qty: 1, unitPrice: 0 }]);
+    setCart(cs => [...cs, { sku: p.sku, name: p.name, qty: 1, unitPrice: 0, imageUrl: p.imageUrl || "" }]);
     setSearch("");
   };
   const updateItem = (idx, field, val) => {
@@ -8021,9 +8021,18 @@ function PurchaseInPanel({ data, showToast, onDone }) {
                           maxHeight: 260, overflowY: "auto", border: "1px solid var(--bdr)", borderRadius: 10, padding: 6 }}>
               {matches.map(p => (
                 <button key={p.sku} type="button" onClick={() => addToCart(p)}
-                  style={{ display: "flex", alignItems: "center", gap: 8, textAlign: "left",
+                  style={{ display: "flex", alignItems: "center", gap: 10, textAlign: "left",
                            background: "#fff", border: "1px solid var(--bdr)", borderRadius: 9,
                            padding: "9px 11px", cursor: "pointer", fontFamily: "inherit", minHeight: 44 }}>
+                  {p.imageUrl ? (
+                    <div style={{ width: 44, height: 44, flexShrink: 0, borderRadius: 8, border: "1px solid var(--bdr)",
+                                  backgroundImage: `url("${p.imageUrl}")`, backgroundSize: "contain",
+                                  backgroundPosition: "center", backgroundRepeat: "no-repeat", backgroundColor: "#fff" }}/>
+                  ) : (
+                    <div style={{ width: 44, height: 44, flexShrink: 0, borderRadius: 8, border: "1px dashed var(--bdr)",
+                                  background: "var(--g-50)", display: "flex", alignItems: "center",
+                                  justifyContent: "center", fontSize: 16, color: "var(--light)" }}>🖼️</div>
+                  )}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                       <span style={{ fontFamily: "monospace", color: "var(--g-700)" }}>{p.sku}</span> · {p.name}
@@ -8052,6 +8061,11 @@ function PurchaseInPanel({ data, showToast, onDone }) {
               {cart.map((c, i) => (
                 <div key={c.sku + i} style={{ background: "#fff", border: "1px solid var(--bdr)", borderRadius: 9, padding: "9px 10px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                    {c.imageUrl && (
+                      <div style={{ width: 38, height: 38, flexShrink: 0, borderRadius: 7, border: "1px solid var(--bdr)",
+                                    backgroundImage: `url("${c.imageUrl}")`, backgroundSize: "contain",
+                                    backgroundPosition: "center", backgroundRepeat: "no-repeat", backgroundColor: "#fff" }}/>
+                    )}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                         <span style={{ fontFamily: "monospace", color: "var(--g-700)" }}>{c.sku}</span> · {c.name}
