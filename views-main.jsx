@@ -7968,8 +7968,8 @@ function PurchaseInPanel({ data, showToast, onDone }) {
   }, [search, products, cartSkus]);
 
   const addToCart = (p) => {
-    setCart(cs => [...cs, { sku: p.sku, name: p.name, qty: 1, unitPrice: 0, imageUrl: p.imageUrl || "" }]);
-    setSearch("");
+    // ไม่เคลียร์ช่องค้นหา — ให้เพิ่มหลายตัวจากผลเดิมได้ต่อเนื่อง · กันเพิ่มซ้ำ SKU เดิม
+    setCart(cs => cs.some(c => c.sku === p.sku) ? cs : [...cs, { sku: p.sku, name: p.name, qty: 1, unitPrice: 0, imageUrl: p.imageUrl || "" }]);
   };
   const updateItem = (idx, field, val) => {
     setCart(cs => cs.map((c, i) => i === idx ? { ...c, [field]: val } : c));
@@ -8019,11 +8019,14 @@ function PurchaseInPanel({ data, showToast, onDone }) {
           {matches.length > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 8,
                           maxHeight: 260, overflowY: "auto", border: "1px solid var(--bdr)", borderRadius: 10, padding: 6 }}>
-              {matches.map(p => (
-                <button key={p.sku} type="button" onClick={() => addToCart(p)}
+              {matches.map(p => {
+                const inCart = cart.some(c => c.sku === p.sku);
+                return (
+                <button key={p.sku} type="button" onClick={() => addToCart(p)} disabled={inCart}
                   style={{ display: "flex", alignItems: "center", gap: 10, textAlign: "left",
-                           background: "#fff", border: "1px solid var(--bdr)", borderRadius: 9,
-                           padding: "9px 11px", cursor: "pointer", fontFamily: "inherit", minHeight: 44 }}>
+                           background: inCart ? "var(--g-50)" : "#fff",
+                           border: "1px solid " + (inCart ? "var(--g-500)" : "var(--bdr)"), borderRadius: 9,
+                           padding: "9px 11px", cursor: inCart ? "default" : "pointer", fontFamily: "inherit", minHeight: 44 }}>
                   {p.imageUrl ? (
                     <div style={{ width: 44, height: 44, flexShrink: 0, borderRadius: 8, border: "1px solid var(--bdr)",
                                   backgroundImage: `url("${p.imageUrl}")`, backgroundSize: "contain",
@@ -8039,9 +8042,12 @@ function PurchaseInPanel({ data, showToast, onDone }) {
                     </div>
                     <div style={{ fontSize: 11, color: "var(--muted)" }}>คลัง {p.qtyWH} · หน้าร้าน {p.qtyStore}</div>
                   </div>
-                  <span style={{ flexShrink: 0, fontSize: 20, color: "var(--g-600)", fontWeight: 800 }}>＋</span>
+                  {inCart
+                    ? <span style={{ flexShrink: 0, fontSize: 12, color: "var(--g-700)", fontWeight: 700, whiteSpace: "nowrap" }}>✓ ในตะกร้า</span>
+                    : <span style={{ flexShrink: 0, fontSize: 20, color: "var(--g-600)", fontWeight: 800 }}>＋</span>}
                 </button>
-              ))}
+                );
+              })}
             </div>
           )}
           {search.trim() && matches.length === 0 && (
@@ -8114,8 +8120,12 @@ function PurchaseInPanel({ data, showToast, onDone }) {
               ))}
             </div>
           )}
-          <input type="text" placeholder="🏪 พิมพ์ชื่อร้าน/ซัพพลายเออร์"
+          <input type="text" placeholder="🏪 พิมพ์ชื่อร้าน/ซัพพลายเออร์ (มีชื่อเดิมให้เลือก)"
+            list="dmjSupplierList"
             value={supplier} onChange={e => setSupplier(e.target.value)} style={inputStyle} />
+          <datalist id="dmjSupplierList">
+            {allSuppliers.map(s => <option key={s} value={s}/>)}
+          </datalist>
         </div>
 
         {/* คลัง + วันที่ */}
