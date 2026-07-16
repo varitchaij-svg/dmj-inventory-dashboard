@@ -636,6 +636,20 @@ async function confirmStockCount(entries) {
   } catch (err) { return { success: false, error: err.message }; }
 }
 
+// บันทึก "ขายไม่สแกน" — นับสต็อกแล้วของหาย = ขายออก (บวก soldQty ไม่แตะยอดเงิน) · qty=0 = ยกเลิก
+async function syncRecordUnscanned(sku, qty) {
+  if (!SHEET_DEPLOY_URL) return { ok: false };
+  try {
+    const res = await fetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ recordUnscannedSale: true, sku, qty,
+        actor: window._currentUser || sessionStorage.getItem("dmj_role") || "owner" }),
+    });
+    return await res.json().catch(() => ({ ok: false }));
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
 // ─── sync lock data to "ตำแหน่งจัดเก็บ" sheet ───
 async function syncLockData(lockKey, entries) {
   // entries = [{ sku, qty, isNew }]
@@ -1098,6 +1112,8 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
   const [selLockKey, setSelLockKey]         = uS(null);
   const [checkedQtys, setCheckedQtys]       = uS({});
   const [savedSkus, setSavedSkus]           = uS(new Set());
+  const [unscanRec, setUnscanRec]           = uS({}); // { sku: จำนวนที่บันทึกว่า "ขายไม่สแกน" }
+  const [unscanBusy, setUnscanBusy]         = uS(null); // sku ที่กำลังบันทึก
   // saveStatus: "idle" | "pending" | "saving" | "saved" | "error"
   const [saveStatus, setSaveStatus]         = uS("idle");
   const [confirming, setConfirming]         = uS(false);
@@ -1308,6 +1324,20 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     if (ck) { (countsCacheRef.current[ck] = countsCacheRef.current[ck] || {})[sku] = nv; }
     localEditsRef.current.add(sku);
     setCheckedQtys(prev => ({ ...prev, [sku]: nv }));
+  };
+
+  // บันทึก/ยกเลิก "ขายไม่สแกน" ของ SKU (qty=0 = ยกเลิก) — idempotent ต่อ sku+วัน ที่ backend
+  const markUnscanned = async (sku, qty) => {
+    if (unscanBusy) return;
+    setUnscanBusy(sku);
+    const r = await syncRecordUnscanned(sku, qty);
+    setUnscanBusy(null);
+    if (r && r.ok) {
+      setUnscanRec(prev => { const o = { ...prev }; if (qty > 0) o[sku] = qty; else delete o[sku]; return o; });
+      showToast('success', qty > 0 ? `บันทึกขายออก ${qty} ชิ้น (ไม่คิดเงินซ้ำ)` : 'ยกเลิกแล้ว', qty > 0 ? '🛒' : '↩️');
+    } else {
+      showToast('error', 'บันทึกไม่สำเร็จ', '❌');
+    }
   };
 
   // ค้นหาสินค้าทั้งระบบ (multi-token AND) สำหรับ "เจอสินค้าอื่นในล็อคนี้"
@@ -2422,6 +2452,9 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
               const num    = has ? (parseInt(val)||0) : 0;
               const matched = !isFound && has && sys !== null && num === sys;
               const diff   = has && sys !== null ? num - sys : null;
+              const short  = (diff != null && diff < 0) ? -diff : 0; // นับได้น้อยกว่าระบบ = หายไปกี่ชิ้น
+              const unscRec = unscanRec[sku];        // จำนวนที่บันทึกว่า "ขายไม่สแกน" แล้ว
+              const unscBusy = unscanBusy === sku;
               const saved  = savedSkus.has(sku);
               const bdr    = isFound ? '#93c5fd' : !has ? 'var(--bdr)' : matched ? 'var(--g-500)' : 'var(--dang)';
               const bgCard = saved ? '#f0fdf4' : isFound ? '#eff6ff' : !has ? '#fff' : matched ? '#f0fdf4' : '#fff5f5';
@@ -2558,6 +2591,43 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                                   fontSize:10.5,fontWeight:700,color:'var(--muted)',fontFamily:'inherit'}}>
                           ✕ เอาออก
                         </button>
+                      </div>
+                    )}
+
+                    {/* นับได้น้อยกว่าระบบ = ของหาย → ถามว่าเป็น "ขายออก (ไม่สแกน)" ไหม (บวก soldQty ไม่คิดเงินซ้ำ) */}
+                    {short > 0 && !isFound && (
+                      <div style={{marginTop:4,padding:'7px 9px',borderRadius:9,background:'#fff7ed',border:'1px solid #fed7aa'}}>
+                        {unscRec ? (
+                          <div style={{display:'flex',alignItems:'center',gap:6}}>
+                            <span style={{flex:1,fontSize:10.5,color:'#9a3412',fontWeight:700,lineHeight:1.4}}>
+                              🛒 ขายออก {unscRec} ชิ้น (ไม่คิดเงินซ้ำ){unscRec !== short ? ` · เปลี่ยน?` : ''}
+                            </span>
+                            {unscRec !== short && (
+                              <button onClick={function(){ markUnscanned(sku, short); }} disabled={unscBusy}
+                                style={{flexShrink:0,minHeight:26,padding:'2px 9px',borderRadius:7,border:'none',
+                                        background:'#ea580c',color:'#fff',fontSize:10,fontWeight:800,fontFamily:'inherit',cursor:'pointer'}}>
+                                อัปเดต {short}
+                              </button>
+                            )}
+                            <button onClick={function(){ markUnscanned(sku, 0); }} disabled={unscBusy}
+                              style={{flexShrink:0,minHeight:26,padding:'2px 9px',borderRadius:7,border:'1px solid #fed7aa',
+                                      background:'#fff',color:'#9a3412',fontSize:10,fontWeight:700,fontFamily:'inherit',cursor:'pointer'}}>
+                              ยกเลิก
+                            </button>
+                          </div>
+                        ) : (
+                          <div style={{display:'flex',alignItems:'center',gap:6}}>
+                            <span style={{flex:1,fontSize:10.5,color:'#9a3412',fontWeight:600,lineHeight:1.4}}>
+                              หายไป {short} ชิ้น — ขายออก (ไม่สแกน)?
+                            </span>
+                            <button onClick={function(){ markUnscanned(sku, short); }} disabled={unscBusy}
+                              style={{flexShrink:0,minHeight:28,padding:'3px 11px',borderRadius:8,border:'none',
+                                      background:'#ea580c',color:'#fff',fontSize:10.5,fontWeight:800,fontFamily:'inherit',
+                                      cursor:unscBusy?'default':'pointer'}}>
+                              {unscBusy ? '...' : '🛒 ขายออก'}
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
