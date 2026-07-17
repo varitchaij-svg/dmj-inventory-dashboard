@@ -7941,7 +7941,7 @@ function PosReceipt80({ cart, totals, orderNumber, documentNumber, payMethod, ch
       <div className="receipt80" style={{ fontFamily: "'Courier New', monospace", color: "#000", fontSize: 12.5, lineHeight: 1.45 }}>
         <div style={{ textAlign: "center" }}>
           {logoOk && <img src="logo.png" alt="" style={{ width: 56, height: 56, objectFit: "contain", marginBottom: 2 }} onError={() => setLogoOk(false)}/>}
-          <div style={{ fontSize: 15, fontWeight: 800 }}>ดอกเหมือนจริง</div>
+          <div style={{ fontSize: 15, fontWeight: 800 }}>ดูเหมือนจริง</div>
           <div style={{ fontSize: 10.5 }}>{POS_SELLER.name}</div>
           <div style={{ fontSize: 10 }}>{POS_SELLER.address}</div>
           <div style={{ fontSize: 10 }}>โทร. {POS_SELLER.phone}</div>
