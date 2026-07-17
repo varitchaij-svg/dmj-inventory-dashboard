@@ -7317,6 +7317,18 @@ const POS_TRANSFER_INFO = { bank: "กรุงศรีอยุธยา", acc
 // ช่องทางขาย (ส่งเข้า ZORT order) — แก้/เพิ่มได้ที่นี่
 const POS_SALES_CHANNELS = ["หน้าร้าน", "Line OA", "Facebook", "Shopee", "Lazada", "โทรศัพท์"];
 
+// ตั้งขนาดหน้ากระดาษพิมพ์แบบ dynamic ก่อนเรียก window.print()
+// จำเป็นเพราะ named @page (page: rc80) ไม่ทำงานเชื่อถือได้บน Chrome/Android print
+// pipeline — เนื้อหาเลยไปฝังอยู่ในหน้า A4 (@page เริ่มต้นของไฟล์) แล้วถูกย่อเล็กจิ๋ว
+// เมื่อเครื่องพิมพ์ scale ลงมาใส่กระดาษ 80mm จริง · inject <style> override เดียว
+// ที่ท้าย <head> เสมอ (cascade: last @page rule ชนะ) แก้ตรงจุดที่ผิดจริง
+function setPosPrintPageSize(kind) {
+  const css = kind === "80" ? "@page { size: 80mm auto; margin: 0; }" : "@page { size: A4; margin: 0; }";
+  let el = document.getElementById("pos-page-size-override");
+  if (!el) { el = document.createElement("style"); el.id = "pos-page-size-override"; document.head.appendChild(el); }
+  el.textContent = css;
+}
+
 function PosView({ data, role }) {
   const products = (data && data.products) || [];
   const [toast, showToast, hideToast] = useToast();
@@ -7335,7 +7347,14 @@ function PosView({ data, role }) {
   const [result, setResult] = uS(null);           // ผลลัพธ์หลังออกบิล
   const [printKind, setPrintKind] = uS("80");      // "a4" (ใบกำกับ) | "80" (ใบเสร็จ 80mm)
   const [printReq, setPrintReq] = uS(0);
-  uE(() => { if (printReq > 0) window.print(); }, [printReq]);
+  uE(() => {
+    if (printReq <= 0) return;
+    setPosPrintPageSize(printKind);   // ตั้งขนาดกระดาษให้ตรงชนิดที่จะพิมพ์ ก่อนเปิดหน้าต่างพิมพ์
+    window.print();
+    // คืนขนาด A4 หลังพิมพ์เสร็จ กันชนกับการพิมพ์อื่น (label/ใบกำกับ) ในหน้าเดียวกัน
+    const onAfter = () => { setPosPrintPageSize("a4"); window.removeEventListener("afterprint", onAfter); };
+    window.addEventListener("afterprint", onAfter);
+  }, [printReq, printKind]);
   function doPrint(kind) { setPrintKind(kind); setPrintReq(n => n + 1); }
 
   const [catFilter, setCatFilter] = uS("ทั้งหมด");   // เลือกหมวดในกริดเลือกสินค้า
