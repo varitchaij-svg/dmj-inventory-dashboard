@@ -7491,6 +7491,12 @@ function PosView({ data, role }) {
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
               <button onClick={() => doPrint("80")} style={{ flex: "1 1 45%", padding: "12px", borderRadius: 10, border: "none", background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 700, fontSize: 15 }}>🧾 ใบเสร็จ 80mm</button>
               {taxInvoice && <button onClick={() => doPrint("a4")} style={{ flex: "1 1 45%", padding: "12px", borderRadius: 10, border: "1px solid var(--g-600,#1f7f44)", background: "#fff", color: "var(--g-700,#166534)", fontWeight: 700, fontSize: 15 }}>🖨️ ใบกำกับ A4</button>}
+              {typeof navigator !== "undefined" && navigator.bluetooth && (
+                <button onClick={() => printReceipt80ViaBluetooth({ cart, totals: result.totals || totals, orderNumber: result.orderNumber, documentNumber: result.documentNumber, payMethod, channel, taxInvoice, cashReceived: payMethod === "เงินสด" ? cashReceivedNum : null, cashChange: payMethod === "เงินสด" ? cashChange : null }, showToast)}
+                  style={{ flex: "1 1 100%", padding: "12px", borderRadius: 10, border: "1px dashed #9333ea", background: "#faf5ff", color: "#7e22ce", fontWeight: 700, fontSize: 14 }}>
+                  📶 พิมพ์ตรง Bluetooth (ไม่ต้องใช้แอปอื่น — ทดลอง)
+                </button>
+              )}
               <button onClick={resetAll} style={{ flex: "1 1 100%", padding: "12px", borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700, fontSize: 15 }}>+ บิลใหม่</button>
             </div>
           </Card>
@@ -7927,8 +7933,148 @@ function PosReceipt({ cart, totals, cust, taxInvoice, orderNumber, documentNumbe
   );
 }
 
+// ═══ พิมพ์ตรงผ่าน Bluetooth (ESC/POS raster) — ไม่ต้องผ่านแอปไดรเวอร์อื่น (ไม่มีลายน้ำ) ═══
+// เหตุผล: Android print framework ปกติต้องมี "print service" ของเครื่องพิมพ์มาลงทะเบียนก่อน
+// (RawBT/GPrinter driver ฯลฯ) แอปฟรีหลายตัวแปะลายน้ำ — เราจึงคุยตรงกับเครื่องพิมพ์เองผ่าน
+// Web Bluetooth API: capture ใบเสร็จเป็นรูป (html2canvas) → แปลงเป็นภาพ 1-bit → เข้ารหัส
+// ESC/POS raster (GS v 0) → ส่งผ่าน BLE เป็น chunk
+// ข้อจำกัด: ใช้ได้เฉพาะ Chrome บน Android/Windows/Mac (Web Bluetooth) — iOS Safari ไม่รองรับเลย
+// และเครื่องพิมพ์ต้องประกาศตัวเป็น BLE (ไม่ใช่ Bluetooth Classic/SPP ล้วน) เว็บถึงจะเห็น
+// ── UUID ของ service/characteristic ที่พบบ่อยในเครื่องพิมพ์ความร้อนโคลนจีนราคาประหยัด ──
+// (เดาจาก chipset ที่ใช้กันแพร่หลาย — ไม่รู้ค่าที่แน่นอนของรุ่นนี้ ลองไล่ทีละตัว)
+const POS_BT_CANDIDATES = [
+  { s: "000018f0-0000-1000-8000-00805f9b34fb", c: "00002af1-0000-1000-8000-00805f9b34fb" }, // พบบ่อยสุดในเครื่องพิมพ์โคลนจีน
+  { s: "0000ffe0-0000-1000-8000-00805f9b34fb", c: "0000ffe1-0000-1000-8000-00805f9b34fb" }, // HM-10 BLE serial (แพร่หลายมาก)
+  { s: "0000fff0-0000-1000-8000-00805f9b34fb", c: "0000fff2-0000-1000-8000-00805f9b34fb" },
+  { s: "49535343-fe7d-4ae5-8fa9-9fafd205e455", c: "49535343-8841-43f4-a8d4-ecbe34729bb3" }, // Microchip BLE UART
+  { s: "6e400001-b5a3-f393-e0a9-e50e24dcca9e", c: "6e400002-b5a3-f393-e0a9-e50e24dcca9e" }, // Nordic UART Service
+];
+const POS_BT_PRINT_WIDTH_DOTS = 576; // 80mm/72mm พิมพ์ได้ที่ 203dpi (มาตรฐานเครื่องพิมพ์ 80mm ทั่วไป)
+
+// render PosReceipt80 ลง DOM ที่มองไม่เห็น (นอกจอ) แล้ว capture เป็น canvas ด้วย html2canvas
+async function captureReceipt80Canvas(props) {
+  if (!window.html2canvas) throw new Error("html2canvas ยังโหลดไม่เสร็จ — รอสักครู่แล้วลองใหม่");
+  const holder = document.createElement("div");
+  holder.style.cssText = "position:fixed;left:-99999px;top:0;background:#fff;width:302px";
+  document.body.appendChild(holder);
+  const root = ReactDOM.createRoot(holder);
+  await new Promise((resolve) => {
+    root.render(React.createElement(PosReceipt80, props));
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  });
+  // .pos-print80-area ปกติ display:none นอกโหมด print — บังคับโชว์เฉพาะสำเนาที่ capture นี้
+  const area = holder.querySelector(".pos-print80-area");
+  if (area) area.style.display = "block";
+  // รอรูป (โลโก้/QR) โหลดให้ครบก่อน capture
+  const imgs = Array.from(holder.querySelectorAll("img"));
+  await Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise(res => { img.onload = img.onerror = res; })));
+  await new Promise(r => setTimeout(r, 50));
+  let canvas;
+  try {
+    canvas = await window.html2canvas(holder, { backgroundColor: "#ffffff", scale: 2, useCORS: true });
+  } finally {
+    root.unmount();
+    document.body.removeChild(holder);
+  }
+  return canvas;
+}
+
+// แปลง canvas → ESC/POS raster bit image (GS v 0) กว้างตรง POS_BT_PRINT_WIDTH_DOTS พอดี
+function canvasToEscposRaster(canvas, targetWidthDots) {
+  const scale = targetWidthDots / canvas.width;
+  const outW = targetWidthDots, outH = Math.max(1, Math.round(canvas.height * scale));
+  const out = document.createElement("canvas");
+  out.width = outW; out.height = outH;
+  const ctx = out.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, outW, outH);
+  ctx.drawImage(canvas, 0, 0, outW, outH);
+  const img = ctx.getImageData(0, 0, outW, outH).data;
+  const bytesPerRow = Math.ceil(outW / 8);
+  const raster = new Uint8Array(bytesPerRow * outH);
+  for (let y = 0; y < outH; y++) {
+    for (let x = 0; x < outW; x++) {
+      const idx = (y * outW + x) * 4;
+      const a = img[idx + 3];
+      const lum = a === 0 ? 255 : (0.299 * img[idx] + 0.587 * img[idx + 1] + 0.114 * img[idx + 2]);
+      if (lum < 180) raster[y * bytesPerRow + (x >> 3)] |= (0x80 >> (x & 7));
+    }
+  }
+  const header = new Uint8Array([0x1d, 0x76, 0x30, 0x00, bytesPerRow & 0xff, (bytesPerRow >> 8) & 0xff, outH & 0xff, (outH >> 8) & 0xff]);
+  const init = new Uint8Array([0x1b, 0x40]);       // ESC @ — reset เครื่องพิมพ์
+  const feed = new Uint8Array([0x0a, 0x0a, 0x0a, 0x0a, 0x0a]); // ป้อนกระดาษให้พอฉีก (ไม่มีมีดตัดอัตโนมัติ)
+  const out2 = new Uint8Array(init.length + header.length + raster.length + feed.length);
+  out2.set(init, 0);
+  out2.set(header, init.length);
+  out2.set(raster, init.length + header.length);
+  out2.set(feed, init.length + header.length + raster.length);
+  return out2;
+}
+
+async function sendBytesInChunks(characteristic, bytes, chunkSize, delayMs) {
+  chunkSize = chunkSize || 180; delayMs = delayMs || 15;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+    if (characteristic.properties.writeWithoutResponse) await characteristic.writeValueWithoutResponse(chunk);
+    else await characteristic.writeValue(chunk);
+    await new Promise(r => setTimeout(r, delayMs));
+  }
+}
+
+// ไล่หา service+characteristic ที่เขียนได้ — ลอง UUID ที่รู้จักก่อน ถ้าไม่เจอ scan ทุก service ที่ขอสิทธิ์ไว้
+async function findPrinterWriteCharacteristic(server) {
+  for (const cand of POS_BT_CANDIDATES) {
+    try {
+      const svc = await server.getPrimaryService(cand.s);
+      const ch = await svc.getCharacteristic(cand.c);
+      return ch;
+    } catch (e) { /* ลอง candidate ถัดไป */ }
+  }
+  try {
+    const services = await server.getPrimaryServices();
+    for (const svc of services) {
+      const chars = await svc.getCharacteristics();
+      for (const ch of chars) {
+        if (ch.properties.write || ch.properties.writeWithoutResponse) return ch;
+      }
+    }
+  } catch (e) { /* ignore */ }
+  return null;
+}
+
+// entry point: กดปุ่ม → เลือกเครื่องพิมพ์ (Chrome device picker) → capture → encode → ส่ง
+async function printReceipt80ViaBluetooth(receiptProps, showToast) {
+  if (!navigator.bluetooth) {
+    showToast("error", "เบราว์เซอร์นี้ไม่รองรับพิมพ์ตรง Bluetooth (ใช้ Chrome บน Android/Windows/Mac)", "📶");
+    return;
+  }
+  let device;
+  try {
+    device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: POS_BT_CANDIDATES.map(c => c.s),
+    });
+  } catch (e) {
+    showToast("warn", "ยกเลิกเลือกเครื่องพิมพ์", "📶");
+    return;
+  }
+  try {
+    showToast("warn", "กำลังเชื่อมต่อเครื่องพิมพ์...", "🔗");
+    const server = await device.gatt.connect();
+    const ch = await findPrinterWriteCharacteristic(server);
+    if (!ch) { showToast("error", "ไม่พบช่องส่งข้อมูลของเครื่องพิมพ์นี้ — อาจไม่รองรับพิมพ์ตรงผ่าน Bluetooth", "❌"); return; }
+    showToast("warn", "กำลังแปลงใบเสร็จเป็นรูปภาพ...", "🖼️");
+    const canvas = await captureReceipt80Canvas(receiptProps);
+    const bytes = canvasToEscposRaster(canvas, POS_BT_PRINT_WIDTH_DOTS);
+    showToast("warn", "กำลังส่งข้อมูลไปเครื่องพิมพ์...", "📤");
+    await sendBytesInChunks(ch, bytes);
+    showToast("success", "ส่งข้อมูลไปเครื่องพิมพ์แล้ว", "✅");
+  } catch (e) {
+    showToast("error", "พิมพ์ไม่สำเร็จ: " + (e.message || e), "❌");
+  }
+}
+
 // ใบเสร็จรับเงิน 80mm (เครื่องพิมพ์ความร้อน POS80) — ต่างจากใบกำกับภาษี A4
-// สไตล์ใบเสร็จร้านทั่วไป · แสดงเฉพาะตอน print ผ่าน .pos-print80-area · @page rc80 (80mm auto)
+// สไตล์ใบเสร็จร้านทั่วไป · แสดงเฉพาะตอน print ผ่าน .pos-print80-area (หรือ capture ตรงผ่าน Bluetooth)
 function PosReceipt80({ cart, totals, orderNumber, documentNumber, payMethod, channel, taxInvoice, cashReceived, cashChange }) {
   const gross = (totals.retailEligible || 0) + (totals.retailExcluded || 0);
   const discount = Math.max(0, gross - totals.grandTotal);
