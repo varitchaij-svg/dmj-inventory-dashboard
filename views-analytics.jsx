@@ -7285,6 +7285,18 @@ async function syncSearchContact(query) {
     return await res.json(); // { success, data:{contacts:[]} }
   } catch (err) { return { success: false, error: err.message }; }
 }
+// ── sync helper: ดึงรายละเอียดลูกค้าเต็ม (taxid/สาขา/ที่อยู่) ──
+async function syncGetContactDetail(contactId) {
+  if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
+  try {
+    const res = await fetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ getContactDetail: true, contactId }),
+    });
+    return await res.json(); // { success, data:{contact} }
+  } catch (err) { return { success: false, error: err.message }; }
+}
 // ── sync helper: ออกบิลขาย + (option) ใบกำกับ + รับชำระ ──
 async function syncCreateSaleBill(bill) {
   if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
@@ -7320,6 +7332,10 @@ function PosView({ data, role }) {
   const [searching, setSearching] = uS(false);
   const [saving, setSaving] = uS(false);
   const [result, setResult] = uS(null);           // ผลลัพธ์หลังออกบิล
+  const [printKind, setPrintKind] = uS("80");      // "a4" (ใบกำกับ) | "80" (ใบเสร็จ 80mm)
+  const [printReq, setPrintReq] = uS(0);
+  uE(() => { if (printReq > 0) window.print(); }, [printReq]);
+  function doPrint(kind) { setPrintKind(kind); setPrintReq(n => n + 1); }
 
   const [catFilter, setCatFilter] = uS("ทั้งหมด");   // เลือกหมวดในกริดเลือกสินค้า
   const [catPage, setCatPage] = uS(0);                // หน้าของกริด (9 ชิ้น/หน้า)
@@ -7391,13 +7407,23 @@ function PosView({ data, role }) {
     setCustResults(list);
     if (!list.length) showToast("warn", "ไม่พบลูกค้า — กรอกเองได้", "📝");
   }
-  function pickCustomer(c) {
+  async function pickCustomer(c) {
     setCust({
       name: c.name || "", taxId: c.taxId || "", branch: c.branch || "", branchNo: c.branchNo || "",
       address: c.address || "", phone: c.phone || "", email: c.email || "",
     });
     setCustResults(null); setCustQuery("");
     showToast("success", "กรอกข้อมูลลูกค้าแล้ว", "✅");
+    // ดึงรายละเอียดเต็ม (list ค้นหาบางทีไม่มี taxid/ที่อยู่/สาขา ครบ)
+    if (c.id) {
+      const r = await syncGetContactDetail(c.id);
+      const d = r && r.success && r.data && r.data.contact;
+      if (d) setCust(prev => ({
+        name: d.name || prev.name, taxId: d.taxId || prev.taxId, branch: d.branch || prev.branch,
+        branchNo: d.branchNo || prev.branchNo, address: d.address || prev.address,
+        phone: d.phone || prev.phone, email: d.email || prev.email,
+      }));
+    }
   }
 
   async function submitBill() {
@@ -7438,14 +7464,22 @@ function PosView({ data, role }) {
               </div>
               <div style={{ fontSize: 26, fontWeight: 800, marginTop: 8 }}>{fmtBfull(result.totals ? result.totals.grandTotal : totals.grandTotal)}</div>
             </div>
-            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-              <button onClick={() => window.print()} style={{ flex: 1, padding: "12px", borderRadius: 10, border: "none", background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 700, fontSize: 15 }}>🖨️ พิมพ์ใบเสร็จ</button>
-              <button onClick={resetAll} style={{ flex: 1, padding: "12px", borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700, fontSize: 15 }}>+ บิลใหม่</button>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+              <button onClick={() => doPrint("80")} style={{ flex: "1 1 45%", padding: "12px", borderRadius: 10, border: "none", background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 700, fontSize: 15 }}>🧾 ใบเสร็จ 80mm</button>
+              {taxInvoice && <button onClick={() => doPrint("a4")} style={{ flex: "1 1 45%", padding: "12px", borderRadius: 10, border: "1px solid var(--g-600,#1f7f44)", background: "#fff", color: "var(--g-700,#166534)", fontWeight: 700, fontSize: 15 }}>🖨️ ใบกำกับ A4</button>}
+              <button onClick={resetAll} style={{ flex: "1 1 100%", padding: "12px", borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700, fontSize: 15 }}>+ บิลใหม่</button>
             </div>
           </Card>
         </div>
-        <PosReceipt cart={cart} totals={result.totals || totals} cust={cust} taxInvoice={taxInvoice}
-          orderNumber={result.orderNumber} documentNumber={result.documentNumber} payMethod={payMethod}/>
+        {/* พิมพ์เฉพาะชนิดที่เลือก (อีกชนิดถูกซ่อนด้วย pos-print-none) */}
+        <div className={printKind === "a4" ? "" : "pos-print-none"}>
+          <PosReceipt cart={cart} totals={result.totals || totals} cust={cust} taxInvoice={taxInvoice}
+            orderNumber={result.orderNumber} documentNumber={result.documentNumber} payMethod={payMethod}/>
+        </div>
+        <div className={printKind === "80" ? "" : "pos-print-none"}>
+          <PosReceipt80 cart={cart} totals={result.totals || totals} cust={cust} taxInvoice={taxInvoice}
+            orderNumber={result.orderNumber} documentNumber={result.documentNumber} payMethod={payMethod} channel={channel}/>
+        </div>
         <Toast toast={toast} onClose={hideToast}/>
       </div>
     );
@@ -7845,6 +7879,60 @@ function PosReceipt({ cart, totals, cust, taxInvoice, orderNumber, documentNumbe
           </div>
         );
       }))}
+    </div>
+  );
+}
+
+// ใบเสร็จรับเงิน 80mm (เครื่องพิมพ์ความร้อน POS80) — ต่างจากใบกำกับภาษี A4
+// สไตล์ใบเสร็จร้านทั่วไป · แสดงเฉพาะตอน print ผ่าน .pos-print80-area · @page rc80 (80mm auto)
+function PosReceipt80({ cart, totals, orderNumber, documentNumber, payMethod, channel, taxInvoice }) {
+  const gross = (totals.retailEligible || 0) + (totals.retailExcluded || 0);
+  const discount = Math.max(0, gross - totals.grandTotal);
+  const money = (n) => (Math.round(n * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const totalUnits = cart.reduce((s, it) => s + (Number(it.qty) || 0), 0);
+  const now = new Date();
+  const line = { borderTop: "1px dashed #000", margin: "5px 0" };
+  const row = { display: "flex", justifyContent: "space-between", gap: 6 };
+
+  return (
+    <div className="pos-print80-area">
+      <div className="receipt80" style={{ fontFamily: "'Courier New', monospace", color: "#000", fontSize: 12.5, lineHeight: 1.45 }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: 15, fontWeight: 800 }}>ดอกเหมือนจริง</div>
+          <div style={{ fontSize: 10.5 }}>{POS_SELLER.name}</div>
+          <div style={{ fontSize: 10 }}>{POS_SELLER.address}</div>
+          <div style={{ fontSize: 10 }}>โทร. {POS_SELLER.phone}</div>
+          <div style={{ fontSize: 10 }}>เลขภาษี {POS_SELLER.taxId}</div>
+        </div>
+        <div style={line}></div>
+        <div style={{ textAlign: "center", fontWeight: 700 }}>ใบเสร็จรับเงิน</div>
+        <div style={{ fontSize: 10.5 }}>เลขที่: {orderNumber || "—"}</div>
+        <div style={{ fontSize: 10.5 }}>วันที่: {now.toLocaleString("th-TH", { timeZone: "Asia/Bangkok" })}</div>
+        {channel ? <div style={{ fontSize: 10.5 }}>ช่องทาง: {channel}</div> : null}
+        <div style={line}></div>
+        {/* รายการสินค้า */}
+        {cart.map((it, i) => {
+          const qty = Number(it.qty) || 0, price = Number(it.price) || 0;
+          return (
+            <div key={i} style={{ marginBottom: 3 }}>
+              <div style={{ wordBreak: "break-word" }}>{it.name}</div>
+              <div style={row}>
+                <span style={{ color: "#000" }}>{qty} x {money(price)}</span>
+                <span>{money(qty * price)}</span>
+              </div>
+            </div>
+          );
+        })}
+        <div style={line}></div>
+        <div style={row}><span>รวม ({totalUnits} ชิ้น)</span><span>{money(gross)}</span></div>
+        {discount > 0 && <div style={row}><span>ส่วนลด</span><span>-{money(discount)}</span></div>}
+        <div style={{ ...row, fontSize: 15, fontWeight: 800, marginTop: 3 }}><span>สุทธิ</span><span>{money(totals.grandTotal)} ฿</span></div>
+        <div style={{ ...row, fontSize: 10, color: "#000" }}><span>(รวม VAT 7% = {money(totals.vat)})</span></div>
+        <div style={line}></div>
+        <div style={row}><span>ชำระโดย</span><span>{payMethod || "—"}</span></div>
+        {taxInvoice && documentNumber ? <div style={{ fontSize: 10.5 }}>ใบกำกับภาษีเลขที่: {documentNumber}</div> : null}
+        <div style={{ textAlign: "center", marginTop: 8, fontSize: 11.5 }}>* ขอบคุณที่ใช้บริการ *</div>
+      </div>
     </div>
   );
 }

@@ -841,13 +841,15 @@
   }
 
   @page { size: A4 portrait; margin: 10mm; }
-  /* ใบกำกับภาษี POS — ซ่อนบนจอ แสดงเฉพาะตอนพิมพ์ */
-  .pos-print-area { display: none; }
+  /* ใบกำกับภาษี A4 + ใบเสร็จ 80mm — ซ่อนบนจอ แสดงเฉพาะตอนพิมพ์ */
+  .pos-print-area, .pos-print80-area { display: none; }
   .pos-print-page { padding: 12mm 10mm; box-sizing: border-box; }
+  .pos-print-none { display: none !important; }   /* ซ่อนชนิดที่ไม่ได้เลือกพิมพ์ (ทั้งจอ+พิมพ์) */
+  @page rc80 { size: 80mm auto; margin: 0; }        /* ใบเสร็จความร้อน 80mm */
 
   @media print {
     .no-print, .topnav, nav { display: none !important; }
-    .pos-print-area { display: block !important; }
+    .pos-print-area, .pos-print80-area { display: block !important; }
     .pos-print-page {
       width: 210mm !important;
       min-height: 297mm !important;
@@ -857,6 +859,8 @@
       break-after: page;
     }
     .pos-print-page:last-child { page-break-after: avoid; break-after: avoid; }
+    /* ใบเสร็จ 80mm ใช้หน้ากระดาษ rc80 (80mm ต่อเนื่อง) */
+    .receipt80 { page: rc80; width: 72mm; margin: 0 auto; padding: 2mm 3mm; box-sizing: border-box; }
     @page { size: A4; margin: 0; }
     body { margin: 0 !important; padding: 0 !important; background: #fff !important; }
     .main { padding: 0 !important; margin: 0 !important; }

@@ -422,6 +422,9 @@ function doPost(e) {
     if (data.searchContact) {
       return searchContact(data.query);
     }
+    if (data.getContactDetail) {
+      return getContactDetail(data.contactId);
+    }
     if (data.createSaleBill) {
       return createSaleBill(ss, data, actor);
     }
@@ -6435,7 +6438,7 @@ var POS_ZORT_FIELDS = {
   // field ที่อ่านกลับจาก contact (normalize → ฝั่ง frontend ใช้ชื่อกลาง)
   contactId:      ["id", "contactid", "customerid"],
   contactName:    ["name", "contactname", "customername"],
-  contactTaxId:   ["taxid", "taxnumber", "customertaxid"],
+  contactTaxId:   ["taxid", "taxnumber", "customertaxid", "taxno", "idcard", "taxidnumber", "vatid"],
   contactBranch:  ["branch", "branchname"],
   contactBranchNo:["branchcode", "branchno", "branchnumber"],
   contactAddress: ["address", "customeraddress", "fulladdress"],
@@ -6462,19 +6465,51 @@ function pickField_(obj, keys) {
   return "";
 }
 
+// สแกนหาเลขผู้เสียภาษี 13 หลักจากทุก field ของ object (กันชื่อ field ZORT ไม่ตรงที่เดา)
+function findTaxId13_(obj) {
+  if (!obj || typeof obj !== "object") return "";
+  for (var k in obj) {
+    var v = obj[k];
+    if (v == null) continue;
+    if (typeof v === "object") { var nested = findTaxId13_(v); if (nested) return nested; continue; }
+    var digits = String(v).replace(/[\s\-]/g, "");
+    if (/^\d{13}$/.test(digits)) return digits;
+  }
+  return "";
+}
+
 // normalize contact ของ ZORT → รูปกลางที่ frontend ใช้
+// taxId: ลองชื่อ field ที่รู้จักก่อน ถ้าไม่เจอ สแกนหาเลข 13 หลักจากทั้ง object
 function normalizeContact_(c) {
   var F = POS_ZORT_FIELDS;
   return {
     id:       pickField_(c, F.contactId),
     name:     pickField_(c, F.contactName),
-    taxId:    pickField_(c, F.contactTaxId),
+    taxId:    pickField_(c, F.contactTaxId) || findTaxId13_(c),
     branch:   pickField_(c, F.contactBranch),
     branchNo: pickField_(c, F.contactBranchNo),
     address:  pickField_(c, F.contactAddress),
     phone:    pickField_(c, F.contactPhone),
     email:    pickField_(c, F.contactEmail),
   };
+}
+
+// ดึงรายละเอียดลูกค้าเต็ม (taxid/สาขา/ที่อยู่) ตอนเลือกจากผลค้นหา — list บางทีไม่คืน field ครบ
+function getContactDetail(id) {
+  var cid = String(id || "").trim();
+  if (!cid) return error("ไม่มีรหัสลูกค้า");
+  try {
+    var url = ZORT_BASE + "/Contact/GetContactDetail?id=" + encodeURIComponent(cid);
+    var res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+    var zErr = zortRespError_(res);
+    if (zErr) { logZortFailure_("ดึงรายละเอียดลูกค้า", cid + " | " + zErr); return error("ดึงข้อมูลลูกค้าไม่สำเร็จ: " + zErr); }
+    var json = JSON.parse(res.getContentText() || "{}");
+    // detail อาจอยู่ใน json ตรง ๆ หรือใน json.contact / json.data
+    var c = json.contact || json.data || json;
+    return ok({ contact: normalizeContact_(c) });
+  } catch (e) {
+    return error("ดึงข้อมูลลูกค้าไม่สำเร็จ: " + e);
+  }
 }
 
 // ค้นลูกค้าด้วย keyword เดียว (ชื่อบริษัท หรือ เลขผู้เสียภาษี) → คืน list ที่ normalize แล้ว
