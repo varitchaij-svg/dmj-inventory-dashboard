@@ -7951,9 +7951,22 @@ const POS_BT_CANDIDATES = [
 ];
 const POS_BT_PRINT_WIDTH_DOTS = 576; // 80mm/72mm พิมพ์ได้ที่ 203dpi (มาตรฐานเครื่องพิมพ์ 80mm ทั่วไป)
 
+// รอ global script ที่โหลดแบบ defer จาก CDN (เช่น html2canvas) ให้พร้อมก่อนใช้งาน
+// จำเป็นเพราะกดพิมพ์เร็วกว่าที่ CDN โหลดเสร็จได้ (โดยเฉพาะเน็ตมือถือช้า/สลับหน้าเร็ว)
+function waitForGlobal(name, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    if (window[name]) return resolve(window[name]);
+    const start = Date.now();
+    const timer = setInterval(() => {
+      if (window[name]) { clearInterval(timer); resolve(window[name]); }
+      else if (Date.now() - start > timeoutMs) { clearInterval(timer); reject(new Error("html2canvas โหลดไม่สำเร็จ — เช็คอินเทอร์เน็ตแล้วลองใหม่")); }
+    }, 150);
+  });
+}
+
 // render PosReceipt80 ลง DOM ที่มองไม่เห็น (นอกจอ) แล้ว capture เป็น canvas ด้วย html2canvas
 async function captureReceipt80Canvas(props) {
-  if (!window.html2canvas) throw new Error("html2canvas ยังโหลดไม่เสร็จ — รอสักครู่แล้วลองใหม่");
+  await waitForGlobal("html2canvas", 12000);
   const holder = document.createElement("div");
   holder.style.cssText = "position:fixed;left:-99999px;top:0;background:#fff;width:302px";
   document.body.appendChild(holder);
