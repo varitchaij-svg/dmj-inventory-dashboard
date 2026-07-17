@@ -20,6 +20,7 @@ const TABS = [
   { id: "auditlog",      label: "📋 Audit Log",             icon: I.layers },
   { id: "deadstock",     label: "📦 สินค้าจม",              icon: I.alert },
   { id: "quotefollowup", label: "📄 ใบเสนอราคา",             icon: I.cart },
+  { id: "pos",           label: "🧾 ขาย/ออกบิล",             icon: I.cart },
   { id: "customers",     label: "👥 ลูกค้า & ยอดซื้อ",        icon: I.store },
   { id: "margin",        label: "💰 กำไรขั้นต้น",             icon: I.flame },
   { id: "season",        label: "🌸 ช่วงขายดี",              icon: I.flame },
@@ -29,11 +30,11 @@ const TABS = [
 const ROLE_TABS = {
   // เรียงตามที่ owner ใช้บ่อย: ภาพรวม/ลูกค้า → งานประจำวัน (สั่ง/สต๊อก/ออเดอร์/หน้าร้าน) → คลัง → วิเคราะห์ → เครื่องมือ/ตั้งค่าท้ายสุด
   // ("margin" ซ่อนไว้ก่อน — ยังไม่มีต้นทุนซื้อจริง · โค้ด MarginView คงไว้ ค่อยเพิ่ม id กลับเมื่อพร้อม)
-  owner:      ["overview","customers","quotefollowup","categories","stock","orders","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog"],
+  owner:      ["overview","customers","pos","quotefollowup","categories","stock","orders","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog"],
   employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","mtojobs","labels"],
   warehouse:  ["categories","stock","storage","stockcount","newproduct","orders","ordersummary","mtojobs","labels"],
   frontstore: ["categories","stock","frontstore","orders","mtojobs","labels"],
-  saler:      ["categories","stock","orders","quotefollowup","mtojobs","labels"],
+  saler:      ["pos","categories","stock","orders","quotefollowup","mtojobs","labels"],
 };
 // "โหมดง่าย" — เมนูที่ใช้ประจำวัน (เหลือไว้บนแถบหลัก) ที่เหลือดันเข้า "เพิ่มเติม"
 const SIMPLE_PRIMARY = ["categories", "stock", "frontstore", "orders"];
@@ -963,6 +964,7 @@ function App() {
         {activeTab === "auditlog"     && <ErrorBoundary key="auditlog"><AuditLogView/></ErrorBoundary>}
         {activeTab === "deadstock"    && <ErrorBoundary key="deadstock"><DeadStockView/></ErrorBoundary>}
         {activeTab === "quotefollowup" && <ErrorBoundary key="quotefollowup"><QuoteFollowupView/></ErrorBoundary>}
+        {activeTab === "pos"          && <ErrorBoundary key="pos"><PosView data={data} role={role}/></ErrorBoundary>}
         {activeTab === "customers"    && <ErrorBoundary key="customers"><CustomerView data={data}/></ErrorBoundary>}
         {activeTab === "margin"       && <ErrorBoundary key="margin"><MarginView data={data}/></ErrorBoundary>}
         {activeTab === "season"       && <ErrorBoundary key="season"><SeasonView data={data}/></ErrorBoundary>}

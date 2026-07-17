@@ -418,6 +418,14 @@ function doPost(e) {
       return fetchProductImage(ss, data.sku);
     }
 
+    // ─── POS: ออกบิล/ใบกำกับภาษี + ค้นลูกค้า (saler) ───
+    if (data.searchContact) {
+      return searchContact(data.query);
+    }
+    if (data.createSaleBill) {
+      return createSaleBill(ss, data, actor);
+    }
+
     // ─── Order Management ───
     if (data.deleteOrder) {
       return deleteOrderRow(ss, data.orderId, actor);
@@ -6412,6 +6420,267 @@ function createZortSaleOrder_(items, jobName) {
   const json = JSON.parse(res.getContentText() || "{}");
   Logger.log("ZORT Sale Order created: " + JSON.stringify(json));
   return { success: true, orderNumber: json.number || json.ordernumber || null };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🧾 ระบบออกบิล/ใบกำกับภาษี + รับชำระ (POS สำหรับ saler)
+// ─────────────────────────────────────────────────────────────────────────────
+// ⚠️ ชื่อ field ลูกค้าของ ZORT (taxid/สาขา/ที่อยู่ ฯลฯ) ยัง "อนุมาน" ตาม ZORT API v4
+//    รวมไว้ที่ POS_ZORT_FIELDS ก้อนเดียว — ถ้ายิงจริงแล้ว field ไม่ตรง แก้ที่นี่จุดเดียว
+//    รัน exploreZortForBilling() (read-only) ใน GAS editor เพื่อยืนยันชื่อ field จริงก่อนใช้งานจริง
+// ─────────────────────────────────────────────────────────────────────────────
+var POS_ZORT_FIELDS = {
+  // GET /Contact/GetContacts — param ค้นหา (keyword ครอบทั้งชื่อ+เลขภาษี ตาม pattern GetProducts)
+  contactSearchParam: "keyword",
+  // field ที่อ่านกลับจาก contact (normalize → ฝั่ง frontend ใช้ชื่อกลาง)
+  contactId:      ["id", "contactid", "customerid"],
+  contactName:    ["name", "contactname", "customername"],
+  contactTaxId:   ["taxid", "taxnumber", "customertaxid"],
+  contactBranch:  ["branch", "branchname"],
+  contactBranchNo:["branchcode", "branchno", "branchnumber"],
+  contactAddress: ["address", "customeraddress", "fulladdress"],
+  contactPhone:   ["phone", "telephone", "tel", "mobile"],
+  contactEmail:   ["email"],
+  // POST /Order/AddOrder — field ลูกค้าที่ต้องส่ง (mirror ของ contact ด้านบน)
+  orderCustomerName:    "customername",
+  orderCustomerTaxId:   "customertaxid",
+  orderCustomerBranch:  "customerbranch",
+  orderCustomerBranchNo:"customerbranchcode",
+  orderCustomerAddress: "customeraddress",
+  orderCustomerPhone:   "customerphone",
+  orderCustomerEmail:   "customeremail",
+};
+
+// อ่านค่าจาก object ตาม list ชื่อ field ที่เป็นไปได้ (ตัวแรกที่มีค่า)
+function pickField_(obj, keys) {
+  if (!obj) return "";
+  for (var i = 0; i < keys.length; i++) {
+    var v = obj[keys[i]];
+    if (v != null && String(v).trim() !== "") return String(v).trim();
+  }
+  return "";
+}
+
+// normalize contact ของ ZORT → รูปกลางที่ frontend ใช้
+function normalizeContact_(c) {
+  var F = POS_ZORT_FIELDS;
+  return {
+    id:       pickField_(c, F.contactId),
+    name:     pickField_(c, F.contactName),
+    taxId:    pickField_(c, F.contactTaxId),
+    branch:   pickField_(c, F.contactBranch),
+    branchNo: pickField_(c, F.contactBranchNo),
+    address:  pickField_(c, F.contactAddress),
+    phone:    pickField_(c, F.contactPhone),
+    email:    pickField_(c, F.contactEmail),
+  };
+}
+
+// ค้นลูกค้าด้วย keyword เดียว (ชื่อบริษัท หรือ เลขผู้เสียภาษี) → คืน list ที่ normalize แล้ว
+function searchContact(query) {
+  var q = String(query || "").trim();
+  if (q.length < 2) return ok({ contacts: [] });
+  try {
+    var url = ZORT_BASE + "/Contact/GetContacts?page=1&limit=10&" +
+      POS_ZORT_FIELDS.contactSearchParam + "=" + encodeURIComponent(q);
+    var res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+    var zErr = zortRespError_(res);
+    if (zErr) { logZortFailure_("ค้นลูกค้า", q + " | " + zErr); return error("ค้นลูกค้าไม่สำเร็จ: " + zErr); }
+    var json = JSON.parse(res.getContentText() || "{}");
+    var list = json.list || json.contacts || json.data || [];
+    var out = list.map(normalizeContact_).filter(function (c) { return c.name || c.taxId; });
+    return ok({ contacts: out });
+  } catch (e) {
+    return error("ค้นลูกค้าไม่สำเร็จ: " + e);
+  }
+}
+
+// สร้างบิลขาย + (option) ใบกำกับภาษี + บันทึกรับชำระ
+// data = {
+//   items:[{sku,name,qty,price,category}],  // price=ราคาปลีก/ชิ้น (รวม VAT)
+//   customer:{name,taxId,branch,branchNo,address,phone,email},
+//   manualDiscount, paymentMethod, taxInvoice(bool), dryRun(bool), remark
+// }
+// หมายเหตุ: คิดยอดฝั่ง server ซ้ำด้วย computeBillTotalsGs_ (ไม่เชื่อยอดจาก client) กันตัวเลขถูกแก้
+function createSaleBill(ss, data, actor) {
+  var items = Array.isArray(data.items) ? data.items : [];
+  if (!items.length) return error("ไม่มีรายการสินค้าในบิล");
+
+  var totals = computeBillTotalsGs_(items, {
+    excludeKeywords: readBillExcludeCats_(),
+    manualDiscount: data.manualDiscount,
+  });
+
+  // line items สำหรับ ZORT — เฉลี่ยส่วนลดลงราคาต่อชิ้นตามสัดส่วน (ให้ยอดรวม = grandTotal)
+  var gross = totals.retailEligible + totals.retailExcluded;
+  var factor = gross > 0 ? (totals.grandTotal / gross) : 1;   // อัตราส่วนหลังส่วนลดทั้งบิล
+  var list = items.map(function (it) {
+    var qty = Number(it.qty) || 0;
+    var unit = (Number(it.price) || 0) * factor;              // ราคาต่อชิ้นหลังเฉลี่ยส่วนลด (รวม VAT)
+    return {
+      sku: String(it.sku || "").trim(),
+      name: String(it.name || "").trim(),
+      number: qty,
+      price: Math.round(unit * 100) / 100,
+      totalprice: Math.round(unit * qty * 100) / 100,
+    };
+  }).filter(function (it) { return it.number > 0; });
+
+  // ประกอบ payload AddOrder (mirror createZortSaleOrder_ + field ลูกค้า)
+  var F = POS_ZORT_FIELDS;
+  var cust = data.customer || {};
+  var payload = {
+    date: Utilities.formatDate(new Date(), "Asia/Bangkok", "dd/MM/yyyy"),
+    warehousecode: WH_FRONTSTORE,        // ตัดสต็อกจากคลังหน้าร้าน (saler ขายหน้าร้าน)
+    remark: String(data.remark || ""),
+    list: list,
+  };
+  if (cust.name)     payload[F.orderCustomerName]     = String(cust.name);
+  if (cust.taxId)    payload[F.orderCustomerTaxId]    = String(cust.taxId);
+  if (cust.branch)   payload[F.orderCustomerBranch]   = String(cust.branch);
+  if (cust.branchNo) payload[F.orderCustomerBranchNo] = String(cust.branchNo);
+  if (cust.address)  payload[F.orderCustomerAddress]  = String(cust.address);
+  if (cust.phone)    payload[F.orderCustomerPhone]    = String(cust.phone);
+  if (cust.email)    payload[F.orderCustomerEmail]    = String(cust.email);
+
+  // dryRun = คืน payload + ยอดที่คิดได้ ไม่ยิง ZORT (ให้ตรวจก่อนใช้จริง)
+  if (data.dryRun) return ok({ dryRun: true, totals: totals, payload: payload });
+
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่ ลองใหม่อีกครั้ง");
+  try {
+    var headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
+    var res = UrlFetchApp.fetch(ZORT_BASE + "/Order/AddOrder", {
+      method: "post", headers: headers, payload: JSON.stringify(payload), muteHttpExceptions: true,
+    });
+    var zErr = zortRespError_(res);
+    if (zErr) { logZortFailure_("ออกบิลขาย (saler)", zErr); return error("สร้างบิลใน ZORT ไม่สำเร็จ: " + zErr); }
+    var json = JSON.parse(res.getContentText() || "{}");
+    var orderId     = json.id || json.orderid || json.orderId || null;
+    var orderNumber = json.number || json.ordernumber || json.orderNumber || null;
+
+    // ออกใบกำกับภาษี (documenttype=2) ถ้าเลือก — เลขเอกสารให้ ZORT รันเอง
+    var docNumber = null;
+    if (data.taxInvoice && orderId != null) {
+      try {
+        var dres = UrlFetchApp.fetch(ZORT_BASE + "/Document/AddDocumentOrder", {
+          method: "post", headers: headers, muteHttpExceptions: true,
+          payload: JSON.stringify({ id: orderId, orderid: orderId, documenttype: 2 }),
+        });
+        var dErr = zortRespError_(dres);
+        if (dErr) { logZortFailure_("ออกใบกำกับภาษี order " + orderNumber, dErr); }
+        else {
+          var dj = JSON.parse(dres.getContentText() || "{}");
+          docNumber = dj.number || dj.documentnumber || dj.documentNumber || null;
+        }
+      } catch (e) { logZortFailure_("ออกใบกำกับภาษี", String(e)); }
+    }
+
+    // บันทึกรับชำระ (เงินสด/โอน) ถ้าส่ง paymentMethod มา
+    if (data.paymentMethod && orderId != null) {
+      try {
+        UrlFetchApp.fetch(ZORT_BASE + "/Order/UpdateOrderPayment", {
+          method: "post", headers: headers, muteHttpExceptions: true,
+          payload: JSON.stringify({
+            id: orderId, orderid: orderId,
+            paymentmethod: String(data.paymentMethod),
+            paymentamount: totals.grandTotal,
+            paymentdate: Utilities.formatDate(new Date(), "Asia/Bangkok", "dd/MM/yyyy"),
+          }),
+        });
+      } catch (e) { logZortFailure_("บันทึกรับชำระ order " + orderNumber, String(e)); }
+    }
+
+    writeAuditLog_(actor || "ไม่ระบุ", "ออกบิลขาย", orderNumber || "(ไม่ทราบเลข)",
+      auditDetail_({ after: { total: totals.grandTotal, items: list.length,
+        customer: (data.customer && data.customer.name) || "", taxInvoice: !!data.taxInvoice,
+        payment: data.paymentMethod || "" }, note: "saler ออกบิล/ใบกำกับผ่าน POS" }));
+
+    invalidateCache_();
+    return ok({ orderId: orderId, orderNumber: orderNumber, documentNumber: docNumber, totals: totals });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// หมวดที่ยกเว้นกฎส่วนลด — เก็บใน Script Property BILL_EXCLUDE_CATS (comma) แก้ได้ไม่ต้อง deploy
+// default = Made to Order/จัดแบบพิเศษ, อุปกรณ์สำนักงาน (ตรงกับ frontend BILL_EXCLUDE_CAT_KEYWORDS)
+function readBillExcludeCats_() {
+  var raw = PropertiesService.getScriptProperties().getProperty("BILL_EXCLUDE_CATS");
+  if (!raw) return ["made to order", "จัดแบบพิเศษ", "อุปกรณ์สำนักงาน"];
+  return raw.split(",").map(function (s) { return s.trim().toLowerCase(); }).filter(Boolean);
+}
+
+// สำเนา server-side ของ computeBillTotals (frontend: views-analytics.jsx / tests: helpers.js)
+// คิดยอดซ้ำฝั่ง server กันตัวเลขถูกแก้จาก client — ตรรกะต้องตรงกับ 3 ที่นั้น
+function computeBillTotalsGs_(items, opts) {
+  opts = opts || {};
+  var kws = opts.excludeKeywords || ["made to order", "จัดแบบพิเศษ", "อุปกรณ์สำนักงาน"];
+  var vatRate = opts.vatRate != null ? opts.vatRate : 0.07;
+  function excluded(cat) {
+    var c = String(cat || "").toLowerCase();
+    return kws.some(function (k) { return c.indexOf(String(k).toLowerCase()) >= 0; });
+  }
+  function tier(a) {
+    if (a >= 1000000) return 0.12;
+    if (a >= 500000)  return 0.10;
+    if (a >= 100000)  return 0.07;
+    if (a >= 50000)   return 0.06;
+    if (a >= 10000)   return 0.05;
+    return 0;
+  }
+  var pcs = 0, retEl = 0, retEx = 0;
+  (items || []).forEach(function (it) {
+    var line = (Number(it.qty) || 0) * (Number(it.price) || 0);
+    if (excluded(it.category)) retEx += line;
+    else { pcs += (Number(it.qty) || 0); retEl += line; }
+  });
+  var isWs = pcs >= 6;
+  var wsSub = isWs ? retEl * 0.80 : retEl;
+  var tRate = isWs ? tier(wsSub) : 0;
+  var elFinal = wsSub * (1 - tRate);
+  var afterRule = elFinal + retEx;
+  var manual = Math.max(0, Number(opts.manualDiscount) || 0);
+  var grand = Math.max(0, afterRule - manual);
+  return {
+    eligiblePieces: pcs, isWholesale: isWs,
+    retailEligible: retEl, retailExcluded: retEx,
+    wholesaleSubtotal: wsSub, tierRate: tRate, eligibleFinal: elFinal,
+    manualDiscount: manual, grandTotal: grand,
+    vat: grand * vatRate / (1 + vatRate), preVat: grand - grand * vatRate / (1 + vatRate),
+  };
+}
+
+// ── สำรวจ field ZORT สำหรับระบบออกบิล (READ-ONLY) — เจ้าของกด Run ยืนยัน field จริง ──
+// ไม่สร้าง/แก้ข้อมูลใน ZORT · ดู Logs แล้วปรับ POS_ZORT_FIELDS ให้ตรงถ้าจำเป็น
+function exploreZortForBilling() {
+  var H = zortHeaders_();
+  function get(path) {
+    try { return JSON.parse(UrlFetchApp.fetch(ZORT_BASE + path, { method: "get", headers: H, muteHttpExceptions: true }).getContentText() || "{}"); }
+    catch (err) { return { _error: String(err) }; }
+  }
+  function keysOf(o) { return o && typeof o === "object" ? Object.keys(o).join(", ") : "(" + typeof o + ")"; }
+  function dump(label, o) { Logger.log("──── " + label + " ────\nkeys: " + keysOf(o) + "\n" + JSON.stringify(o).slice(0, 1500)); }
+
+  var byName = get("/Contact/GetContacts?keyword=" + encodeURIComponent("บริษัท") + "&page=1&limit=3");
+  dump("GetContacts (keyword=ชื่อ)", byName);
+  var list = byName.list || byName.contacts || byName.data || [];
+  if (list[0]) {
+    Logger.log(">> contact[0] keys: " + keysOf(list[0]) + "\n>> full: " + JSON.stringify(list[0]));
+    var cid = list[0].id || list[0].contactid || list[0].customerid;
+    if (cid != null) dump("GetContactDetail id=" + cid, get("/Contact/GetContactDetail?id=" + cid));
+  }
+  dump("GetContacts (keyword=เลขภาษี)", get("/Contact/GetContacts?keyword=0105&page=1&limit=3"));
+  var orders = get("/Order/GetOrders?page=1&limit=3");
+  var olist = orders.list || orders.orders || orders.data || [];
+  if (olist[0]) {
+    var oid = olist[0].id || olist[0].orderid;
+    Logger.log(">> order[0] keys: " + keysOf(olist[0]));
+    if (oid != null) dump("GetOrderDetail id=" + oid + " (ดู field customer/taxid/branch)", get("/Order/GetOrderDetail?id=" + oid));
+  }
+  dump("GetMerchantProfile", get("/Merchant/GetMerchantProfile"));
+  dump("GetPaymentMethods", get("/Merchant/GetPaymentMethods"));
+  Logger.log("═══ เสร็จ — ปรับ POS_ZORT_FIELDS ให้ตรง field จริงถ้าจำเป็น ═══");
 }
 
 // บันทึกวัตถุดิบ MTO โดยไม่ปิดงาน — ลบแถว draft เก่าแล้วเขียนใหม่ (closedAt ว่าง = draft)

@@ -7271,6 +7271,364 @@ function SeasonView({ data }) {
   );
 }
 
+// ────────────── 🧾 ขาย/ออกบิล (PosView) — saler ────────────────────────────────
+// ค้นสินค้า→ตะกร้า→คิดส่วนลด(กฎปลีก/ส่ง)→ค้นลูกค้า(ชื่อ/เลขภาษี auto-fill)→ออกบิล+ใบกำกับ→รับชำระ→พิมพ์
+// ── sync helper: ค้นลูกค้า (ชื่อบริษัท / เลขผู้เสียภาษี) ──
+async function syncSearchContact(query) {
+  if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
+  try {
+    const res = await fetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ searchContact: true, query }),
+    });
+    return await res.json(); // { success, data:{contacts:[]} }
+  } catch (err) { return { success: false, error: err.message }; }
+}
+// ── sync helper: ออกบิลขาย + (option) ใบกำกับ + รับชำระ ──
+async function syncCreateSaleBill(bill) {
+  if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
+  try {
+    const res = await fetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(Object.assign({ createSaleBill: true,
+        actor: window._currentUser || sessionStorage.getItem("dmj_role") || "saler" }, bill)),
+    });
+    return await res.json(); // { success, data:{orderNumber, documentNumber, totals} }
+  } catch (err) { return { success: false, error: err.message }; }
+}
+
+// ข้อมูลบัญชีรับโอน (แสดงตอนเลือก "โอน") — แก้ที่นี่ถ้าเปลี่ยนบัญชี
+const POS_TRANSFER_INFO = { bank: "กรุงศรีอยุธยา", acctNo: "802-4-64123-4", acctName: "ปรานต์ชนันทร์ พันธุ์พานิช" };
+
+function PosView({ data, role }) {
+  const products = (data && data.products) || [];
+  const [toast, showToast, hideToast] = useToast();
+  const [cart, setCart] = uS([]);                 // [{sku,name,category,qty,price,qtyStore}]
+  const [search, setSearch] = uS("");
+  const [manualDiscount, setManualDiscount] = uS("");
+  const [taxInvoice, setTaxInvoice] = uS(false);
+  const [payMethod, setPayMethod] = uS("");       // "เงินสด" | "โอน"
+  const [cust, setCust] = uS({ name: "", taxId: "", branch: "", branchNo: "", address: "", phone: "", email: "" });
+  const [custQuery, setCustQuery] = uS("");
+  const [custResults, setCustResults] = uS(null); // null=ยังไม่ค้น · []=ไม่เจอ
+  const [searching, setSearching] = uS(false);
+  const [saving, setSaving] = uS(false);
+  const [result, setResult] = uS(null);           // ผลลัพธ์หลังออกบิล
+
+  const md = Math.max(0, parseFloat(manualDiscount) || 0);
+  const totals = uM(() => computeBillTotals(cart, { manualDiscount: md }), [cart, md]);
+
+  // ค้นสินค้า (multi-token AND) — โชว์เฉพาะที่ยังไม่อยู่ในตะกร้า, จำกัด 20
+  const matches = uM(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return [];
+    const toks = q.split(/\s+/).filter(Boolean);
+    const inCart = new Set(cart.map(c => c.sku));
+    return products.filter(p => {
+      if (inCart.has(p.sku)) return false;
+      const hay = ((p.sku || "") + " " + (p.name || "") + " " + (p.category || "")).toLowerCase();
+      return toks.every(t => hay.includes(t));
+    }).slice(0, 20);
+  }, [search, products, cart]);
+
+  function addToCart(p) {
+    setCart(c => [...c, {
+      sku: p.sku, name: p.name, category: p.category || "",
+      qty: 1, price: Number(p.price) || 0, qtyStore: Number(p.qtyStore) || 0,
+    }]);
+    setSearch("");
+  }
+  function patchItem(i, patch) { setCart(c => c.map((it, idx) => idx === i ? Object.assign({}, it, patch) : it)); }
+  function removeItem(i) { setCart(c => c.filter((_, idx) => idx !== i)); }
+
+  async function doSearchCustomer() {
+    const q = custQuery.trim();
+    if (q.length < 2) { showToast("warn", "พิมพ์อย่างน้อย 2 ตัวอักษร", "🔍"); return; }
+    setSearching(true); setCustResults(null);
+    const r = await syncSearchContact(q);
+    setSearching(false);
+    if (!r.success) { showToast("error", "ค้นไม่สำเร็จ: " + (r.error || ""), "❌"); return; }
+    const list = (r.data && r.data.contacts) || [];
+    setCustResults(list);
+    if (!list.length) showToast("warn", "ไม่พบลูกค้า — กรอกเองได้", "📝");
+  }
+  function pickCustomer(c) {
+    setCust({
+      name: c.name || "", taxId: c.taxId || "", branch: c.branch || "", branchNo: c.branchNo || "",
+      address: c.address || "", phone: c.phone || "", email: c.email || "",
+    });
+    setCustResults(null); setCustQuery("");
+    showToast("success", "กรอกข้อมูลลูกค้าแล้ว", "✅");
+  }
+
+  async function submitBill() {
+    if (!cart.length) { showToast("warn", "ยังไม่มีสินค้าในบิล", "🛒"); return; }
+    if (cart.some(it => (Number(it.qty) || 0) <= 0)) { showToast("warn", "จำนวนต้องมากกว่า 0", "✏️"); return; }
+    if (taxInvoice && !cust.taxId && !cust.name) { showToast("warn", "ใบกำกับภาษีต้องมีชื่อ/เลขผู้เสียภาษี", "🧾"); return; }
+    setSaving(true);
+    const r = await syncCreateSaleBill({
+      items: cart.map(it => ({ sku: it.sku, name: it.name, category: it.category, qty: Number(it.qty) || 0, price: Number(it.price) || 0 })),
+      customer: cust, manualDiscount: md, taxInvoice, paymentMethod: payMethod || "",
+    });
+    setSaving(false);
+    if (!r.success) { showToast("error", "ออกบิลไม่สำเร็จ: " + (r.error || ""), "❌"); return; }
+    setResult(r.data || {});
+    showToast("success", "ออกบิลสำเร็จ", "🎉");
+  }
+
+  function resetAll() {
+    setCart([]); setManualDiscount(""); setTaxInvoice(false); setPayMethod("");
+    setCust({ name: "", taxId: "", branch: "", branchNo: "", address: "", phone: "", email: "" });
+    setCustQuery(""); setCustResults(null); setResult(null);
+  }
+
+  const overStock = cart.filter(it => (Number(it.qty) || 0) > (it.qtyStore || 0));
+
+  // ── หน้าผลลัพธ์ + ใบเสร็จสำหรับพิมพ์ ──
+  if (result) {
+    return (
+      <div>
+        <div className="no-print" style={{ padding: 12 }}>
+          <Card padding={true}>
+            <div style={{ textAlign: "center", padding: "8px 0" }}>
+              <div style={{ fontSize: 40 }}>🎉</div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>ออกบิลสำเร็จ</div>
+              <div style={{ fontSize: 14, color: "var(--muted)", marginTop: 4 }}>
+                เลขที่บิล: <b>{result.orderNumber || "—"}</b>
+                {result.documentNumber ? <> · ใบกำกับภาษี: <b>{result.documentNumber}</b></> : null}
+              </div>
+              <div style={{ fontSize: 26, fontWeight: 800, marginTop: 8 }}>{fmtBfull(result.totals ? result.totals.grandTotal : totals.grandTotal)}</div>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <button onClick={() => window.print()} style={{ flex: 1, padding: "12px", borderRadius: 10, border: "none", background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 700, fontSize: 15 }}>🖨️ พิมพ์ใบเสร็จ</button>
+              <button onClick={resetAll} style={{ flex: 1, padding: "12px", borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700, fontSize: 15 }}>+ บิลใหม่</button>
+            </div>
+          </Card>
+        </div>
+        <PosReceipt cart={cart} totals={result.totals || totals} cust={cust} taxInvoice={taxInvoice}
+          orderNumber={result.orderNumber} documentNumber={result.documentNumber} payMethod={payMethod}/>
+        <Toast toast={toast} onClose={hideToast}/>
+      </div>
+    );
+  }
+
+  const th = { padding: "8px 6px", textAlign: "left", fontWeight: 700, fontSize: 12, color: "var(--muted)" };
+  const inp = { width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 14, minWidth: 0, boxSizing: "border-box" };
+
+  return (
+    <div className="no-print" style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12 }}>
+      <div>
+        <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>🧾 ขาย / ออกบิล</div>
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>ค้นสินค้า → ตะกร้า → คิดส่วนลดอัตโนมัติ → ลูกค้า → ออกบิล/ใบกำกับ</div>
+      </div>
+
+      {/* ── ค้นสินค้า ── */}
+      <Card padding={true} title="🔎 เพิ่มสินค้า">
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="พิมพ์ชื่อ/รหัส/หมวด สินค้า" style={inp}/>
+        {matches.length > 0 && (
+          <div style={{ marginTop: 8, border: "1px solid #eee", borderRadius: 8, maxHeight: 260, overflowY: "auto" }}>
+            {matches.map(p => (
+              <div key={p.sku} onClick={() => addToCart(p)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderBottom: "1px solid #f3f4f6", cursor: "pointer" }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</div>
+                  <div style={{ fontSize: 12, color: "var(--muted)" }}>{p.sku} · {p.category || "—"} · หน้าร้าน {fmtN(p.qtyStore)}</div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                  <span style={{ fontWeight: 700 }}>{fmtBfull(p.price)}</span>
+                  <span style={{ fontSize: 20, color: "var(--g-600,#1f7f44)" }}>＋</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* ── ตะกร้า ── */}
+      <Card padding={true} title={`🛒 รายการในบิล (${cart.length})`}>
+        {cart.length === 0 ? <Empty icon="🛒" title="ยังไม่มีสินค้า" sub="ค้นหาด้านบนแล้วแตะเพื่อเพิ่ม"/> : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+              <thead><tr>
+                <th style={th}>สินค้า</th><th style={{ ...th, textAlign: "center", width: 70 }}>จำนวน</th>
+                <th style={{ ...th, textAlign: "right", width: 90 }}>ราคา/ชิ้น</th><th style={{ ...th, textAlign: "right", width: 90 }}>รวม</th><th style={{ width: 32 }}></th>
+              </tr></thead>
+              <tbody>
+                {cart.map((it, i) => {
+                  const over = (Number(it.qty) || 0) > (it.qtyStore || 0);
+                  const excl = isBillExcludedCat(it.category);
+                  return (
+                    <tr key={it.sku} style={{ borderTop: "1px solid #f3f4f6" }}>
+                      <td style={{ padding: "8px 6px" }}>
+                        <div style={{ fontWeight: 600 }}>{it.name}</div>
+                        <div style={{ fontSize: 11, color: over ? "#dc2626" : "var(--muted)" }}>
+                          {it.sku}{excl ? " · ยกเว้นส่วนลด" : ""}{over ? ` · เกินสต๊อกหน้าร้าน (${fmtN(it.qtyStore)})` : ""}
+                        </div>
+                      </td>
+                      <td style={{ padding: "8px 6px", textAlign: "center" }}>
+                        <input type="number" min="0" value={it.qty} onChange={e => patchItem(i, { qty: e.target.value === "" ? "" : Math.max(0, parseInt(e.target.value, 10) || 0) })}
+                          style={{ width: 60, padding: "6px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "center", minWidth: 0 }}/>
+                      </td>
+                      <td style={{ padding: "8px 6px", textAlign: "right" }}>
+                        <input type="number" min="0" value={it.price} onChange={e => patchItem(i, { price: e.target.value === "" ? "" : Math.max(0, parseFloat(e.target.value) || 0) })}
+                          style={{ width: 80, padding: "6px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right", minWidth: 0 }}/>
+                      </td>
+                      <td style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600 }}>{fmtBfull((Number(it.qty) || 0) * (Number(it.price) || 0))}</td>
+                      <td style={{ padding: "8px 6px", textAlign: "center" }}>
+                        <button onClick={() => removeItem(i)} style={{ border: "none", background: "none", color: "#dc2626", fontSize: 18, cursor: "pointer" }}>✕</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      {/* ── ลูกค้า / ใบกำกับ ── */}
+      <Card padding={true} title="👤 ลูกค้า (ใบกำกับภาษี)">
+        <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, fontWeight: 600 }}>
+          <input type="checkbox" checked={taxInvoice} onChange={e => setTaxInvoice(e.target.checked)} style={{ width: 18, height: 18 }}/>
+          ออกใบกำกับภาษี
+        </label>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input value={custQuery} onChange={e => setCustQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && doSearchCustomer()}
+            placeholder="ค้นชื่อบริษัท หรือ เลขผู้เสียภาษี" style={inp}/>
+          <button onClick={doSearchCustomer} disabled={searching} style={{ padding: "8px 14px", borderRadius: 8, border: "none", background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 700, whiteSpace: "nowrap" }}>
+            {searching ? "..." : "ค้นหา"}
+          </button>
+        </div>
+        {custResults && custResults.length > 0 && (
+          <div style={{ marginTop: 8, border: "1px solid #eee", borderRadius: 8, maxHeight: 200, overflowY: "auto" }}>
+            {custResults.map((c, i) => (
+              <div key={i} onClick={() => pickCustomer(c)} style={{ padding: "10px 12px", borderBottom: "1px solid #f3f4f6", cursor: "pointer" }}>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>{c.name || "(ไม่มีชื่อ)"}</div>
+                <div style={{ fontSize: 12, color: "var(--muted)" }}>{c.taxId ? "เลขภาษี " + c.taxId : ""}{c.branch ? " · " + c.branch : ""}</div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
+          <div style={{ gridColumn: "1 / -1" }}><FieldLabel_>ชื่อ / บริษัท</FieldLabel_><input value={cust.name} onChange={e => setCust({ ...cust, name: e.target.value })} style={inp}/></div>
+          <div><FieldLabel_>เลขผู้เสียภาษี</FieldLabel_><input value={cust.taxId} onChange={e => setCust({ ...cust, taxId: e.target.value })} style={inp}/></div>
+          <div><FieldLabel_>สาขา (ชื่อ)</FieldLabel_><input value={cust.branch} onChange={e => setCust({ ...cust, branch: e.target.value })} style={inp}/></div>
+          <div><FieldLabel_>เลขที่สาขา</FieldLabel_><input value={cust.branchNo} onChange={e => setCust({ ...cust, branchNo: e.target.value })} placeholder="เช่น 00000" style={inp}/></div>
+          <div><FieldLabel_>เบอร์โทร</FieldLabel_><input value={cust.phone} onChange={e => setCust({ ...cust, phone: e.target.value })} style={inp}/></div>
+          <div style={{ gridColumn: "1 / -1" }}><FieldLabel_>ที่อยู่</FieldLabel_><input value={cust.address} onChange={e => setCust({ ...cust, address: e.target.value })} style={inp}/></div>
+          <div style={{ gridColumn: "1 / -1" }}><FieldLabel_>อีเมล</FieldLabel_><input value={cust.email} onChange={e => setCust({ ...cust, email: e.target.value })} style={inp}/></div>
+        </div>
+      </Card>
+
+      {/* ── ชำระเงิน ── */}
+      <Card padding={true} title="💳 รับชำระ">
+        <div style={{ display: "flex", gap: 8 }}>
+          {["เงินสด", "โอน"].map(m => (
+            <button key={m} onClick={() => setPayMethod(payMethod === m ? "" : m)}
+              style={{ flex: 1, padding: "12px", borderRadius: 10, fontWeight: 700, fontSize: 15, cursor: "pointer",
+                border: payMethod === m ? "2px solid var(--g-600,#1f7f44)" : "1px solid #d1d5db",
+                background: payMethod === m ? "#f0fdf4" : "#fff", color: payMethod === m ? "var(--g-700,#166534)" : "#374151" }}>
+              {m === "เงินสด" ? "💵 เงินสด" : "🏦 โอน"}
+            </button>
+          ))}
+        </div>
+        {payMethod === "โอน" && (
+          <div style={{ marginTop: 10, padding: 12, background: "#f9fafb", borderRadius: 8, fontSize: 14 }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>โอนเข้าบัญชี</div>
+            <div>{POS_TRANSFER_INFO.bank}</div>
+            <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: 1 }}>{POS_TRANSFER_INFO.acctNo}</div>
+            <div style={{ color: "var(--muted)" }}>{POS_TRANSFER_INFO.acctName}</div>
+          </div>
+        )}
+      </Card>
+
+      {/* ── สรุปยอด ── */}
+      <Card padding={true} title="🧮 สรุปยอด">
+        <div style={{ marginBottom: 10 }}>
+          <FieldLabel_>ส่วนลดเพิ่มมือ (บาท)</FieldLabel_>
+          <input type="number" min="0" value={manualDiscount} onChange={e => setManualDiscount(e.target.value)} placeholder="0" style={inp}/>
+        </div>
+        <SummaryRow_ label={`ยอดปลีก (${totals.eligiblePieces} ชิ้นเข้ากฎ)`} value={fmtBfull(totals.retailEligible + totals.retailExcluded)}/>
+        {totals.isWholesale && <SummaryRow_ label="ลดขายส่ง 20%" value={"−" + fmtBfull(totals.wholesaleDiscount)} color="#16a34a"/>}
+        {totals.isWholesale && !totals.tierRate && totals.eligiblePieces >= 6 && <div style={{ fontSize: 11, color: "var(--muted)", margin: "-4px 0 6px" }}>ราคาส่งแล้ว (ยอดหลังลดยังไม่ถึงขั้นบาทถัดไป)</div>}
+        {totals.tierRate > 0 && <SummaryRow_ label={`ลดตามยอด ${(totals.tierRate * 100).toFixed(0)}%`} value={"−" + fmtBfull(totals.tierDiscount)} color="#16a34a"/>}
+        {md > 0 && <SummaryRow_ label="ส่วนลดมือ" value={"−" + fmtBfull(md)} color="#16a34a"/>}
+        <div style={{ borderTop: "1px dashed #d1d5db", margin: "8px 0" }}/>
+        <SummaryRow_ label="มูลค่าก่อน VAT" value={fmtBfull(totals.preVat)} muted/>
+        <SummaryRow_ label="VAT 7%" value={fmtBfull(totals.vat)} muted/>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
+          <span style={{ fontSize: 16, fontWeight: 800 }}>ยอดสุทธิ</span>
+          <span style={{ fontSize: 24, fontWeight: 800, color: "var(--g-700,#166534)" }}>{fmtBfull(totals.grandTotal)}</span>
+        </div>
+        {totals.savings > 0 && <div style={{ textAlign: "right", fontSize: 12, color: "#16a34a", marginTop: 2 }}>ประหยัด {fmtBfull(totals.savings)}</div>}
+        {overStock.length > 0 && <div style={{ marginTop: 8, fontSize: 12, color: "#dc2626" }}>⚠️ มี {overStock.length} รายการจำนวนเกินสต๊อกหน้าร้าน — ตรวจก่อนออกบิล</div>}
+      </Card>
+
+      <button onClick={submitBill} disabled={saving || !cart.length}
+        style={{ padding: "16px", borderRadius: 12, border: "none", fontWeight: 800, fontSize: 17,
+          background: (saving || !cart.length) ? "#9ca3af" : "var(--g-600,#1f7f44)", color: "#fff",
+          position: "sticky", bottom: 12, boxShadow: "0 4px 14px rgba(0,0,0,.15)" }}>
+        {saving ? "กำลังออกบิล..." : `ออกบิล ${taxInvoice ? "+ ใบกำกับภาษี " : ""}· ${fmtBfull(totals.grandTotal)}`}
+      </button>
+
+      <Toast toast={toast} onClose={hideToast}/>
+    </div>
+  );
+}
+
+function FieldLabel_({ children }) {
+  return <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", marginBottom: 4 }}>{children}</div>;
+}
+function SummaryRow_({ label, value, color, muted }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, marginBottom: 6, color: muted ? "var(--muted)" : "inherit" }}>
+      <span>{label}</span><span style={{ fontWeight: 600, color: color || "inherit" }}>{value}</span>
+    </div>
+  );
+}
+// ใบเสร็จ/สำเนาบิลสำหรับพิมพ์ (โชว์เฉพาะตอน print ผ่าน CSS .pos-print-area)
+function PosReceipt({ cart, totals, cust, taxInvoice, orderNumber, documentNumber, payMethod }) {
+  return (
+    <div className="pos-print-area" style={{ padding: 20, fontSize: 13, color: "#111" }}>
+      <div style={{ textAlign: "center", marginBottom: 10 }}>
+        <div style={{ fontSize: 18, fontWeight: 800 }}>DMJ (ดอกเหมือนจริง)</div>
+        <div style={{ fontWeight: 700 }}>{taxInvoice ? "ใบกำกับภาษี / ใบเสร็จรับเงิน" : "ใบเสร็จรับเงิน"}</div>
+        <div>เลขที่บิล: {orderNumber || "—"}{documentNumber ? " · ใบกำกับ: " + documentNumber : ""}</div>
+        <div>{new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" })}</div>
+      </div>
+      {(cust && (cust.name || cust.taxId)) && (
+        <div style={{ marginBottom: 8, borderTop: "1px solid #000", borderBottom: "1px solid #000", padding: "6px 0" }}>
+          <div>ลูกค้า: {cust.name}</div>
+          {cust.taxId ? <div>เลขผู้เสียภาษี: {cust.taxId}{cust.branchNo ? " · สาขา " + cust.branchNo : ""}{cust.branch ? " (" + cust.branch + ")" : ""}</div> : null}
+          {cust.address ? <div>ที่อยู่: {cust.address}</div> : null}
+          {cust.phone ? <div>โทร: {cust.phone}</div> : null}
+        </div>
+      )}
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead><tr style={{ borderBottom: "1px solid #000" }}>
+          <th style={{ textAlign: "left", padding: 3 }}>รายการ</th><th style={{ textAlign: "center", padding: 3 }}>จำนวน</th>
+          <th style={{ textAlign: "right", padding: 3 }}>ราคา</th><th style={{ textAlign: "right", padding: 3 }}>รวม</th>
+        </tr></thead>
+        <tbody>
+          {cart.map((it, i) => (
+            <tr key={i}><td style={{ padding: 3 }}>{it.name}<div style={{ fontSize: 10, color: "#555" }}>{it.sku}</div></td>
+              <td style={{ textAlign: "center", padding: 3 }}>{it.qty}</td>
+              <td style={{ textAlign: "right", padding: 3 }}>{fmtBfull(it.price)}</td>
+              <td style={{ textAlign: "right", padding: 3 }}>{fmtBfull((Number(it.qty) || 0) * (Number(it.price) || 0))}</td></tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ borderTop: "1px solid #000", marginTop: 6, paddingTop: 6 }}>
+        <div style={{ display: "flex", justifyContent: "space-between" }}><span>มูลค่าก่อน VAT</span><span>{fmtBfull(totals.preVat)}</span></div>
+        <div style={{ display: "flex", justifyContent: "space-between" }}><span>VAT 7%</span><span>{fmtBfull(totals.vat)}</span></div>
+        <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 800, fontSize: 15 }}><span>ยอดสุทธิ</span><span>{fmtBfull(totals.grandTotal)}</span></div>
+        <div style={{ marginTop: 4 }}>ชำระโดย: {payMethod || "—"}</div>
+      </div>
+    </div>
+  );
+}
+
 // ────────────── 🛒 สั่งซื้อ (Purchase/Reorder) ──────────────
 
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView, DeadStockView, QuoteFollowupView, CustomerView, MarginView, SeasonView, ProductThumb, ProductInfoModal, Pagination, WarehouseMapModal });
+Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView, DeadStockView, QuoteFollowupView, CustomerView, MarginView, SeasonView, ProductThumb, ProductInfoModal, Pagination, WarehouseMapModal, PosView });

@@ -841,8 +841,12 @@
   }
 
   @page { size: A4 portrait; margin: 10mm; }
+  /* ใบเสร็จ POS — ซ่อนบนจอ แสดงเฉพาะตอนพิมพ์ */
+  .pos-print-area { display: none; }
+
   @media print {
     .no-print, .topnav, nav { display: none !important; }
+    .pos-print-area { display: block !important; }
     body { margin: 0 !important; padding: 0 !important; background: #fff !important; }
     .main { padding: 0 !important; margin: 0 !important; }
     .label-cell.sku-break {

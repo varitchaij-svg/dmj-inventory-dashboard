@@ -21,7 +21,7 @@ const ROLE_TABS = {
   employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","mtojobs","labels"],
   warehouse:  ["categories","storage","stockcount","orders","ordersummary","mtojobs","labels"],
   frontstore: ["categories","stock","frontstore","orders","mtojobs","labels"],
-  saler:      ["categories","stock","orders","mtojobs","labels"],
+  saler:      ["pos","categories","stock","orders","mtojobs","labels"],
 };
 // tab id → ป้ายข้อความ (จาก TABS ใน app.jsx) สำหรับคลิก nav
 const TAB_LABEL = {
@@ -29,7 +29,7 @@ const TAB_LABEL = {
   storage:"ตำแหน่งคลัง", stockcount:"นับ stock คลัง", frontstore:"เช็คหน้าร้าน",
   transfers:"โอน/ปรับ/ยกมา", orders:"รายการสั่งของ", ordersummary:"สรุปสินค้าออกจากคลัง",
   mtojobs:"งานจัดพิเศษ", upload:"อัปโหลด Zort", connect:"Google Sheet", labels:"พิมพ์ Label",
-  auditlog:"Audit Log", deadstock:"สินค้าจม",
+  auditlog:"Audit Log", deadstock:"สินค้าจม", pos:"ขาย/ออกบิล",
 };
 
 // (ก) assert เฉพาะเจาะจงต่อ tab — อิงข้อมูลจาก fixture (deterministic)
@@ -51,6 +51,7 @@ const ASSERT = {
   orders:     async (page) => hasText(page, ['VAS001', 'FLW002'], 'order SKU'),
   mtojobs:    async (page) => hasText(page, ['จัดช่อพิเศษ', 'จัดกระเช้า'], 'MTO job name'),
   frontstore: async (page) => hasText(page, ['VAS001', 'FLW002', 'DEC003'], 'product SKU'),
+  pos:        async (page) => hasText(page, ['ขาย / ออกบิล', 'รายการในบิล', 'รับชำระ'], 'PosView UI'),
   // หมายเหตุ: ordersummary/labels เป็น smoke-only — เนื้อหาขึ้นกับ workflow state
   // (ordersummary โชว์เฉพาะ order สถานะ "สำเร็จ" พร้อมส่ง, labels โชว์คิวพิมพ์ที่ seed จาก view อื่น)
   // fixture แบบ static จึงไม่มีเนื้อหา deterministic ให้ assert — ตรวจแค่ "ไม่ crash"
