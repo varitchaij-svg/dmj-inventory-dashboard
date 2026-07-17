@@ -206,6 +206,16 @@ const TRACKED = [
     `coverMonths: (isNaN(cover) || cover < 1 || cover > 24) ?`,
     `if (!isNaN(v) && v >= 0 && v <= 100000) out.overrides[String(cat).slice(0, 100)] = v;`,
   ]},
+  // เครื่องคิดบิล/ส่วนลด (PosView) — สำเนาตรงจาก views-analytics.jsx
+  { names: ['computeBillTotals', 'wholesaleTierRate', 'isBillExcludedCat', 'BILL_EXCLUDE_CAT_KEYWORDS'],
+    sourceFile: 'views-analytics.jsx', landmarks: [
+    `var BILL_EXCLUDE_CAT_KEYWORDS = ["made to order", "จัดแบบพิเศษ", "อุปกรณ์สำนักงาน"];`,
+    `return kws.some(function (k) { return c.indexOf(String(k).toLowerCase()) >= 0; });`,
+    `if (amount >= 1000000) return 0.12;`,
+    `if (amount >=   50000) return 0.06;`,
+    `var wholesaleSubtotal = isWholesale ? retailEligible * 0.80 : retailEligible;`,
+    `var vat = grandTotal * vatRate / (1 + vatRate);`,
+  ]},
 ];
 
 // ฟังก์ชันใน helpers.js ที่เป็น "behavioral model" (จำลองพฤติกรรม ไม่ใช่ copy บรรทัดตรง ๆ)

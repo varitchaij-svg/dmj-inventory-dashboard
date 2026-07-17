@@ -1,4 +1,76 @@
 // views-analytics.jsx — depends on views-main.jsx (loaded first)
+
+// ─── เครื่องคิดบิล/ส่วนลด (ราคาปลีก→ส่ง) สำหรับ PosView ─────────────────────────
+// business rule (ยืนยันกับเจ้าของแล้ว):
+//  1. แยก eligible (เข้ากฎ) / excluded (Made to Order/จัดแบบพิเศษ, อุปกรณ์สำนักงาน)
+//     → excluded ไม่นับชิ้น ไม่นับยอด ไม่ลดราคา (ปลีกเสมอ)
+//  2. eligible: ถ้าจำนวนชิ้น ≥ 6 → ลด 20% แล้วดูขั้นบาท "จากยอดหลังลด 20%" (ช่วงเดียว):
+//     ≥1M→12% ≥500k→10% ≥100k→7% ≥50k→6% ≥10k→5% น้อยกว่านั้น→0%
+//  3. ยอดบิล = eligibleFinal + retailExcluded − ส่วนลดมือ (saler override)
+//  4. ราคารวม VAT แล้ว → VAT ถอดกลับ = ยอด × 7/107
+// สำเนา pure logic อยู่ที่ tests/helpers.js (computeBillTotals) — ดู drift-guard
+var BILL_EXCLUDE_CAT_KEYWORDS = ["made to order", "จัดแบบพิเศษ", "อุปกรณ์สำนักงาน"];
+
+function isBillExcludedCat(cat, keywords) {
+  var c = String(cat || "").toLowerCase();
+  var kws = keywords || BILL_EXCLUDE_CAT_KEYWORDS;
+  return kws.some(function (k) { return c.indexOf(String(k).toLowerCase()) >= 0; });
+}
+
+function wholesaleTierRate(amount) {
+  if (amount >= 1000000) return 0.12;
+  if (amount >=  500000) return 0.10;
+  if (amount >=  100000) return 0.07;
+  if (amount >=   50000) return 0.06;
+  if (amount >=   10000) return 0.05;
+  return 0;
+}
+
+// items = [{ sku, name, category, qty, price }]  · price = ราคาปลีก/ชิ้น (รวม VAT)
+// opts  = { excludeKeywords, manualDiscount (บาท), vatRate=0.07 }
+function computeBillTotals(items, opts) {
+  opts = opts || {};
+  var kw = opts.excludeKeywords || BILL_EXCLUDE_CAT_KEYWORDS;
+  var vatRate = opts.vatRate != null ? opts.vatRate : 0.07;
+
+  var eligiblePieces = 0, retailEligible = 0, retailExcluded = 0;
+  (items || []).forEach(function (it) {
+    var qty = Number(it.qty) || 0;
+    var line = qty * (Number(it.price) || 0);
+    if (isBillExcludedCat(it.category, kw)) { retailExcluded += line; }
+    else { eligiblePieces += qty; retailEligible += line; }
+  });
+
+  var isWholesale = eligiblePieces >= 6;
+  var wholesaleSubtotal = isWholesale ? retailEligible * 0.80 : retailEligible;
+  var tierRate = isWholesale ? wholesaleTierRate(wholesaleSubtotal) : 0;
+  var eligibleFinal = wholesaleSubtotal * (1 - tierRate);
+
+  var subtotalAfterRule = eligibleFinal + retailExcluded;
+  var manual = Math.max(0, Number(opts.manualDiscount) || 0);
+  var grandTotal = Math.max(0, subtotalAfterRule - manual);
+
+  var vat = grandTotal * vatRate / (1 + vatRate);
+
+  return {
+    eligiblePieces: eligiblePieces,
+    isWholesale: isWholesale,
+    retailEligible: retailEligible,
+    retailExcluded: retailExcluded,
+    wholesaleDiscount: isWholesale ? (retailEligible - wholesaleSubtotal) : 0,
+    wholesaleSubtotal: wholesaleSubtotal,
+    tierRate: tierRate,
+    tierDiscount: wholesaleSubtotal - eligibleFinal,
+    eligibleFinal: eligibleFinal,
+    manualDiscount: manual,
+    subtotalAfterRule: subtotalAfterRule,
+    grandTotal: grandTotal,
+    vat: vat,
+    preVat: grandTotal - vat,
+    savings: (retailEligible + retailExcluded) - grandTotal,
+  };
+}
+
 // ─── PurchaseGroupView — จัดกลุ่มสินค้าตาม supplier สำหรับ owner planning ───
 function PurchaseGroupView({ products }) {
   // group by lastSupplier || vendor || "ไม่ระบุ"
