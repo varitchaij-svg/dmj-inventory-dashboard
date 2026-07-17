@@ -5374,7 +5374,15 @@ function MtoJobView({ data }) {
         setActiveJob(updatedJob);
         setMaterials([]);
         setView("detail");
-        showToast("success", "ปิดงานและสร้างรายการขาย ZORT เรียบร้อย");
+        // สื่อสถานะ ZORT ตามจริง: ปิดงาน+ตัดสต็อกสำเร็จเสมอ แต่ order ZORT อาจไม่ผ่าน
+        const z = json.zort;
+        if (z && z.success && !z.partial) {
+          showToast("success", "ปิดงานและสร้างรายการขาย ZORT เรียบร้อย");
+        } else if (z && z.skipped) {
+          showToast("success", "ปิดงานเรียบร้อย (ไม่มีของต้องตัด — ข้าม ZORT)");
+        } else {
+          showToast("warn", "ปิดงาน+ตัดสต็อกแล้ว แต่สร้างรายการขาย ZORT ไม่สำเร็จ — เจ้าของตรวจชีต ZORT ที่ไม่อัปเดต");
+        }
       } else {
         showToast("error", json.error || "เกิดข้อผิดพลาด");
       }
