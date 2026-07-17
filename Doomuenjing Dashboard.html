@@ -841,12 +841,23 @@
   }
 
   @page { size: A4 portrait; margin: 10mm; }
-  /* ใบเสร็จ POS — ซ่อนบนจอ แสดงเฉพาะตอนพิมพ์ */
+  /* ใบกำกับภาษี POS — ซ่อนบนจอ แสดงเฉพาะตอนพิมพ์ */
   .pos-print-area { display: none; }
+  .pos-print-page { padding: 12mm 10mm; box-sizing: border-box; }
 
   @media print {
     .no-print, .topnav, nav { display: none !important; }
     .pos-print-area { display: block !important; }
+    .pos-print-page {
+      width: 210mm !important;
+      min-height: 297mm !important;
+      padding: 12mm 10mm !important;
+      box-sizing: border-box !important;
+      page-break-after: always;
+      break-after: page;
+    }
+    .pos-print-page:last-child { page-break-after: avoid; break-after: avoid; }
+    @page { size: A4; margin: 0; }
     body { margin: 0 !important; padding: 0 !important; background: #fff !important; }
     .main { padding: 0 !important; margin: 0 !important; }
     .label-cell.sku-break {

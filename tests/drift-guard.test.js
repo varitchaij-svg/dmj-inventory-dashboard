@@ -216,6 +216,12 @@ const TRACKED = [
     `var wholesaleSubtotal = isWholesale ? retailEligible * 0.80 : retailEligible;`,
     `var vat = grandTotal * vatRate / (1 + vatRate);`,
   ]},
+  // จำนวนเงินบาทเป็นตัวอักษร (PosReceipt) — สำเนาตรงจาก views-analytics.jsx
+  { names: ['bahtText', 'readThaiInt_'], sourceFile: 'views-analytics.jsx', landmarks: [
+    `if (p === 1 && d === 2) s += "ยี่สิบ";`,
+    `else if (p === 0 && d === 1 && len > 1) s += "เอ็ด";`,
+    `if (baht === 0 && satang === 0) return "ศูนย์บาทถ้วน";`,
+  ]},
 ];
 
 // ฟังก์ชันใน helpers.js ที่เป็น "behavioral model" (จำลองพฤติกรรม ไม่ใช่ copy บรรทัดตรง ๆ)

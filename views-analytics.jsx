@@ -7546,14 +7546,13 @@ function PosView({ data, role }) {
       {/* ── สรุปยอด ── */}
       <Card padding={true} title="🧮 สรุปยอด">
         <div style={{ marginBottom: 10 }}>
-          <FieldLabel_>ส่วนลดเพิ่มมือ (บาท)</FieldLabel_>
+          <FieldLabel_>ส่วนลดเพิ่มเติม (บาท)</FieldLabel_>
           <input type="number" min="0" value={manualDiscount} onChange={e => setManualDiscount(e.target.value)} placeholder="0" style={inp}/>
         </div>
-        <SummaryRow_ label={`ยอดปลีก (${totals.eligiblePieces} ชิ้นเข้ากฎ)`} value={fmtBfull(totals.retailEligible + totals.retailExcluded)}/>
-        {totals.isWholesale && <SummaryRow_ label="ลดขายส่ง 20%" value={"−" + fmtBfull(totals.wholesaleDiscount)} color="#16a34a"/>}
-        {totals.isWholesale && !totals.tierRate && totals.eligiblePieces >= 6 && <div style={{ fontSize: 11, color: "var(--muted)", margin: "-4px 0 6px" }}>ราคาส่งแล้ว (ยอดหลังลดยังไม่ถึงขั้นบาทถัดไป)</div>}
-        {totals.tierRate > 0 && <SummaryRow_ label={`ลดตามยอด ${(totals.tierRate * 100).toFixed(0)}%`} value={"−" + fmtBfull(totals.tierDiscount)} color="#16a34a"/>}
-        {md > 0 && <SummaryRow_ label="ส่วนลดมือ" value={"−" + fmtBfull(md)} color="#16a34a"/>}
+        <SummaryRow_ label="มูลค่าสินค้า" value={fmtBfull(totals.retailEligible + totals.retailExcluded)}/>
+        {totals.isWholesale && <SummaryRow_ label="ส่วนลดขายส่ง 20%" value={"−" + fmtBfull(totals.wholesaleDiscount)} color="#16a34a"/>}
+        {totals.tierRate > 0 && <SummaryRow_ label={`ส่วนลดตามยอด ${(totals.tierRate * 100).toFixed(0)}%`} value={"−" + fmtBfull(totals.tierDiscount)} color="#16a34a"/>}
+        {md > 0 && <SummaryRow_ label="ส่วนลดเพิ่มเติม" value={"−" + fmtBfull(md)} color="#16a34a"/>}
         <div style={{ borderTop: "1px dashed #d1d5db", margin: "8px 0" }}/>
         <SummaryRow_ label="มูลค่าก่อน VAT" value={fmtBfull(totals.preVat)} muted/>
         <SummaryRow_ label="VAT 7%" value={fmtBfull(totals.vat)} muted/>
@@ -7587,44 +7586,152 @@ function SummaryRow_({ label, value, color, muted }) {
     </div>
   );
 }
-// ใบเสร็จ/สำเนาบิลสำหรับพิมพ์ (โชว์เฉพาะตอน print ผ่าน CSS .pos-print-area)
+// ข้อมูลผู้ขาย (หัวใบกำกับภาษี) — แก้ที่นี่ถ้าข้อมูลบริษัทเปลี่ยน
+const POS_SELLER = {
+  name: "บริษัท ดี. ยูนิตี้ จำกัด (สำนักงานใหญ่)",
+  address: "650 ซ.พัฒนาการ38 ถนนพัฒนาการ แขวงสวนหลวง เขตสวนหลวง กรุงเทพมหานคร 10250",
+  phone: "062-4959146", fax: "02-3193295", email: "dunity8888@gmail.com",
+  taxId: "0105546009704",
+};
+
+// อ่านจำนวนเต็มเป็นภาษาไทย (รองรับหลักล้าน) — ใช้ในจำนวนเงินตัวอักษร
+function readThaiInt_(n) {
+  const digits = ["", "หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า"];
+  const pos = ["", "สิบ", "ร้อย", "พัน", "หมื่น", "แสน"];
+  n = Math.floor(n);
+  if (n === 0) return "";
+  let s = "";
+  if (n >= 1000000) { s += readThaiInt_(Math.floor(n / 1000000)) + "ล้าน"; n = n % 1000000; if (n === 0) return s; }
+  const str = String(n), len = str.length;
+  for (let i = 0; i < len; i++) {
+    const d = parseInt(str[i], 10), p = len - i - 1;
+    if (d === 0) continue;
+    if (p === 1 && d === 1) s += "สิบ";
+    else if (p === 1 && d === 2) s += "ยี่สิบ";
+    else if (p === 0 && d === 1 && len > 1) s += "เอ็ด";
+    else s += digits[d] + pos[p];
+  }
+  return s;
+}
+// จำนวนเงินบาทเป็นตัวอักษร เช่น 2268 → "สองพันสองร้อยหกสิบแปดบาทถ้วน"
+function bahtText(amount) {
+  amount = Number(amount) || 0;
+  const neg = amount < 0; amount = Math.round(Math.abs(amount) * 100) / 100;
+  const baht = Math.floor(amount), satang = Math.round((amount - baht) * 100);
+  if (baht === 0 && satang === 0) return "ศูนย์บาทถ้วน";
+  let t = "";
+  if (baht > 0) t += readThaiInt_(baht) + "บาท";
+  t += satang > 0 ? readThaiInt_(satang) + "สตางค์" : (baht > 0 ? "ถ้วน" : "");
+  return (neg ? "ลบ" : "") + t;
+}
+
+// ใบกำกับภาษี A4 (โชว์เฉพาะตอน print ผ่าน CSS .pos-print-area) — 20 รายการ/หน้า เกินขึ้นหน้าใหม่
+const POS_ROWS_PER_PAGE = 20;
 function PosReceipt({ cart, totals, cust, taxInvoice, orderNumber, documentNumber, payMethod }) {
+  const gross = (totals.retailEligible || 0) + (totals.retailExcluded || 0);
+  const factor = gross > 0 ? totals.grandTotal / gross : 1;   // สัดส่วนหลังส่วนลดทั้งบิล (ตรงกับ GAS)
+  const rows = cart.map((it) => {
+    const price = Number(it.price) || 0, qty = Number(it.qty) || 0;
+    const finalUnit = price * factor;
+    return { sku: it.sku, name: it.name, qty, price, discUnit: Math.max(0, price - finalUnit), amount: finalUnit * qty };
+  });
+  const totalUnits = rows.reduce((s, r) => s + r.qty, 0);
+  const pages = [];
+  for (let i = 0; i < rows.length; i += POS_ROWS_PER_PAGE) pages.push(rows.slice(i, i + POS_ROWS_PER_PAGE));
+  if (pages.length === 0) pages.push([]);
+  const cell = { padding: "4px 6px", borderRight: "0.5px solid #999", fontSize: 12 };
+  const num = (n) => (Math.round(n * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
   return (
-    <div className="pos-print-area" style={{ padding: 20, fontSize: 13, color: "#111" }}>
-      <div style={{ textAlign: "center", marginBottom: 10 }}>
-        <div style={{ fontSize: 18, fontWeight: 800 }}>DMJ (ดอกเหมือนจริง)</div>
-        <div style={{ fontWeight: 700 }}>{taxInvoice ? "ใบกำกับภาษี / ใบเสร็จรับเงิน" : "ใบเสร็จรับเงิน"}</div>
-        <div>เลขที่บิล: {orderNumber || "—"}{documentNumber ? " · ใบกำกับ: " + documentNumber : ""}</div>
-        <div>{new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" })}</div>
-      </div>
-      {(cust && (cust.name || cust.taxId)) && (
-        <div style={{ marginBottom: 8, borderTop: "1px solid #000", borderBottom: "1px solid #000", padding: "6px 0" }}>
-          <div>ลูกค้า: {cust.name}</div>
-          {cust.taxId ? <div>เลขผู้เสียภาษี: {cust.taxId}{cust.branchNo ? " · สาขา " + cust.branchNo : ""}{cust.branch ? " (" + cust.branch + ")" : ""}</div> : null}
-          {cust.address ? <div>ที่อยู่: {cust.address}</div> : null}
-          {cust.phone ? <div>โทร: {cust.phone}</div> : null}
-        </div>
-      )}
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead><tr style={{ borderBottom: "1px solid #000" }}>
-          <th style={{ textAlign: "left", padding: 3 }}>รายการ</th><th style={{ textAlign: "center", padding: 3 }}>จำนวน</th>
-          <th style={{ textAlign: "right", padding: 3 }}>ราคา</th><th style={{ textAlign: "right", padding: 3 }}>รวม</th>
-        </tr></thead>
-        <tbody>
-          {cart.map((it, i) => (
-            <tr key={i}><td style={{ padding: 3 }}>{it.name}<div style={{ fontSize: 10, color: "#555" }}>{it.sku}</div></td>
-              <td style={{ textAlign: "center", padding: 3 }}>{it.qty}</td>
-              <td style={{ textAlign: "right", padding: 3 }}>{fmtBfull(it.price)}</td>
-              <td style={{ textAlign: "right", padding: 3 }}>{fmtBfull((Number(it.qty) || 0) * (Number(it.price) || 0))}</td></tr>
-          ))}
-        </tbody>
-      </table>
-      <div style={{ borderTop: "1px solid #000", marginTop: 6, paddingTop: 6 }}>
-        <div style={{ display: "flex", justifyContent: "space-between" }}><span>มูลค่าก่อน VAT</span><span>{fmtBfull(totals.preVat)}</span></div>
-        <div style={{ display: "flex", justifyContent: "space-between" }}><span>VAT 7%</span><span>{fmtBfull(totals.vat)}</span></div>
-        <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 800, fontSize: 15 }}><span>ยอดสุทธิ</span><span>{fmtBfull(totals.grandTotal)}</span></div>
-        <div style={{ marginTop: 4 }}>ชำระโดย: {payMethod || "—"}</div>
-      </div>
+    <div className="pos-print-area">
+      {pages.map((pageRows, pi) => {
+        const isLast = pi === pages.length - 1;
+        let startIdx = pi * POS_ROWS_PER_PAGE;
+        return (
+          <div key={pi} className="pos-print-page" style={{ color: "#111", fontFamily: "inherit" }}>
+            {/* ── หัวเอกสาร ── */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+              <div style={{ maxWidth: "62%" }}>
+                <div style={{ fontSize: 15, fontWeight: 800 }}>{POS_SELLER.name}</div>
+                <div style={{ fontSize: 11 }}>ที่อยู่: {POS_SELLER.address}</div>
+                <div style={{ fontSize: 11 }}>โทรศัพท์: {POS_SELLER.phone} โทรสาร: {POS_SELLER.fax} อีเมล: {POS_SELLER.email}</div>
+                <div style={{ fontSize: 11 }}>เลขประจำตัวผู้เสียภาษี: {POS_SELLER.taxId}</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 14, fontWeight: 800, border: "1px solid #000", padding: "3px 8px", borderRadius: 4 }}>
+                  {taxInvoice ? "ใบเสร็จรับเงิน/ใบกำกับภาษี" : "ใบเสร็จรับเงิน"} (ต้นฉบับ)
+                </div>
+                <div style={{ fontSize: 11, marginTop: 4 }}>วันที่ : {new Date().toLocaleDateString("th-TH", { year: "numeric", month: "long", day: "numeric" })}</div>
+                <div style={{ fontSize: 11 }}>เลขที่เอกสาร : {documentNumber || orderNumber || "—"}</div>
+                {orderNumber ? <div style={{ fontSize: 11 }}>เอกสารอ้างอิง : {orderNumber}</div> : null}
+                {pages.length > 1 ? <div style={{ fontSize: 11 }}>หน้า {pi + 1}/{pages.length}</div> : null}
+              </div>
+            </div>
+            {/* ── กล่องลูกค้า (หน้าแรกเท่านั้น) ── */}
+            {pi === 0 && (
+              <div style={{ border: "1px solid #999", borderRadius: 4, padding: "6px 8px", marginBottom: 8, fontSize: 11.5, lineHeight: 1.6 }}>
+                <div><b>นามลูกค้า:</b> {cust.name || "—"} &nbsp;&nbsp; <b>เลขประจำตัวผู้เสียภาษี:</b> {cust.taxId || "—"}</div>
+                <div><b>ชื่อสาขา:</b> {cust.branch || "สำนักงานใหญ่"} &nbsp;&nbsp; <b>สาขาที่:</b> {cust.branchNo || "00000"}</div>
+                <div><b>ที่อยู่:</b> {cust.address || "—"}</div>
+                <div><b>โทรศัพท์:</b> {cust.phone || "—"} &nbsp;&nbsp; <b>อีเมล:</b> {cust.email || "—"}</div>
+              </div>
+            )}
+            {/* ── ตารางสินค้า ── */}
+            <table style={{ width: "100%", borderCollapse: "collapse", border: "0.5px solid #999" }}>
+              <thead>
+                <tr style={{ background: "#f3f4f6", borderBottom: "0.5px solid #999" }}>
+                  <th style={{ ...cell, width: 28, textAlign: "center" }}>#</th>
+                  <th style={{ ...cell, width: 80, textAlign: "left" }}>รหัสสินค้า</th>
+                  <th style={{ ...cell, textAlign: "left" }}>ชื่อสินค้า</th>
+                  <th style={{ ...cell, width: 60, textAlign: "center" }}>จำนวน</th>
+                  <th style={{ ...cell, width: 70, textAlign: "right" }}>ราคา/หน่วย</th>
+                  <th style={{ ...cell, width: 60, textAlign: "right" }}>ส่วนลด</th>
+                  <th style={{ ...cell, width: 80, textAlign: "right", borderRight: "none" }}>จำนวนเงิน</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pageRows.map((r, i) => (
+                  <tr key={i} style={{ borderBottom: "0.5px solid #e5e7eb" }}>
+                    <td style={{ ...cell, textAlign: "center" }}>{startIdx + i + 1}</td>
+                    <td style={cell}>{r.sku}</td>
+                    <td style={cell}>{r.name}</td>
+                    <td style={{ ...cell, textAlign: "center" }}>{r.qty} ชิ้น</td>
+                    <td style={{ ...cell, textAlign: "right" }}>{num(r.price)}</td>
+                    <td style={{ ...cell, textAlign: "right" }}>{r.discUnit > 0 ? num(r.discUnit) : "-"}</td>
+                    <td style={{ ...cell, textAlign: "right", borderRight: "none" }}>{num(r.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {/* ── สรุปยอด (หน้าสุดท้ายเท่านั้น) ── */}
+            {isLast && (
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, gap: 12 }}>
+                <div style={{ fontSize: 12, alignSelf: "flex-end" }}>
+                  <div>สินค้าทั้งหมด {totalUnits} หน่วย</div>
+                  <div>({bahtText(totals.grandTotal)})</div>
+                </div>
+                <div style={{ minWidth: 240, fontSize: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span>มูลค่าก่อนภาษี</span><span>{num(totals.preVat)} บาท</span></div>
+                  <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span>ภาษีมูลค่าเพิ่ม (7%)</span><span>{num(totals.vat)} บาท</span></div>
+                  <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontWeight: 800, fontSize: 14, borderTop: "1px solid #000", marginTop: 2 }}><span>มูลค่ารวมสุทธิ</span><span>{num(totals.grandTotal)} บาท</span></div>
+                  <div style={{ marginTop: 4, fontSize: 11 }}>ชำระโดย: {payMethod || "—"}</div>
+                </div>
+              </div>
+            )}
+            {/* ── ช่องเซ็น (หน้าสุดท้ายเท่านั้น) ── */}
+            {isLast && (
+              <div style={{ display: "flex", justifyContent: "space-around", marginTop: 36, fontSize: 11, textAlign: "center" }}>
+                {["ผู้รับสินค้า", "ผู้รับเงิน", "ผู้อนุมัติ"].map(l => (
+                  <div key={l} style={{ width: "28%" }}>
+                    <div style={{ borderBottom: "0.5px dotted #000", marginBottom: 4, height: 28 }}></div>
+                    {l}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -614,8 +614,39 @@ function computeBillTotals(items, opts) {
   };
 }
 
+// ── จำนวนเงินบาทเป็นตัวอักษร (PosReceipt) — จาก views-analytics.jsx ─────────────
+function readThaiInt_(n) {
+  const digits = ["", "หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า"];
+  const pos = ["", "สิบ", "ร้อย", "พัน", "หมื่น", "แสน"];
+  n = Math.floor(n);
+  if (n === 0) return "";
+  let s = "";
+  if (n >= 1000000) { s += readThaiInt_(Math.floor(n / 1000000)) + "ล้าน"; n = n % 1000000; if (n === 0) return s; }
+  const str = String(n), len = str.length;
+  for (let i = 0; i < len; i++) {
+    const d = parseInt(str[i], 10), p = len - i - 1;
+    if (d === 0) continue;
+    if (p === 1 && d === 1) s += "สิบ";
+    else if (p === 1 && d === 2) s += "ยี่สิบ";
+    else if (p === 0 && d === 1 && len > 1) s += "เอ็ด";
+    else s += digits[d] + pos[p];
+  }
+  return s;
+}
+function bahtText(amount) {
+  amount = Number(amount) || 0;
+  const neg = amount < 0; amount = Math.round(Math.abs(amount) * 100) / 100;
+  const baht = Math.floor(amount), satang = Math.round((amount - baht) * 100);
+  if (baht === 0 && satang === 0) return "ศูนย์บาทถ้วน";
+  let t = "";
+  if (baht > 0) t += readThaiInt_(baht) + "บาท";
+  t += satang > 0 ? readThaiInt_(satang) + "สตางค์" : (baht > 0 ? "ถ้วน" : "");
+  return (neg ? "ลบ" : "") + t;
+}
+
 module.exports = {
   monthsSince, fmtN, fmtB, fmtPct, monthLabel,
+  bahtText, readThaiInt_,
   stockQty, whQty, mtoBase, compareSku,
   COL_PROD_SKU, COL_PROD_QTYFS, COL_PROD_QTYWH,
   mapProductRow, shouldRejectConflict,

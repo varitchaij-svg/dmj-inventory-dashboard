@@ -6550,45 +6550,48 @@ function createSaleBill(ss, data, actor) {
   if (!lock.tryLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่ ลองใหม่อีกครั้ง");
   try {
     var headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
+    // ── (1) AddOrder — สร้างบิล + ตัดสต็อก (ตัวหลักที่ต้องรอ) ──
+    var _t0 = Date.now();
     var res = UrlFetchApp.fetch(ZORT_BASE + "/Order/AddOrder", {
       method: "post", headers: headers, payload: JSON.stringify(payload), muteHttpExceptions: true,
     });
+    Logger.log("POS createSaleBill: AddOrder took " + (Date.now() - _t0) + "ms");
     var zErr = zortRespError_(res);
     if (zErr) { logZortFailure_("ออกบิลขาย (saler)", zErr); return error("สร้างบิลใน ZORT ไม่สำเร็จ: " + zErr); }
     var json = JSON.parse(res.getContentText() || "{}");
     var orderId     = json.id || json.orderid || json.orderId || null;
     var orderNumber = json.number || json.ordernumber || json.orderNumber || null;
 
-    // ออกใบกำกับภาษี (documenttype=2) ถ้าเลือก — เลขเอกสารให้ ZORT รันเอง
+    // ── (2) ใบกำกับภาษี + รับชำระ — ยิงขนานกันด้วย fetchAll (ลดเวลา sequential) ──
     var docNumber = null;
+    var reqs = [], kinds = [];
     if (data.taxInvoice && orderId != null) {
-      try {
-        var dres = UrlFetchApp.fetch(ZORT_BASE + "/Document/AddDocumentOrder", {
-          method: "post", headers: headers, muteHttpExceptions: true,
-          payload: JSON.stringify({ id: orderId, orderid: orderId, documenttype: 2 }),
-        });
-        var dErr = zortRespError_(dres);
-        if (dErr) { logZortFailure_("ออกใบกำกับภาษี order " + orderNumber, dErr); }
-        else {
-          var dj = JSON.parse(dres.getContentText() || "{}");
-          docNumber = dj.number || dj.documentnumber || dj.documentNumber || null;
-        }
-      } catch (e) { logZortFailure_("ออกใบกำกับภาษี", String(e)); }
+      reqs.push({ url: ZORT_BASE + "/Document/AddDocumentOrder", method: "post", headers: headers,
+        muteHttpExceptions: true, payload: JSON.stringify({ id: orderId, orderid: orderId, documenttype: 2 }) });
+      kinds.push("doc");
     }
-
-    // บันทึกรับชำระ (เงินสด/โอน) ถ้าส่ง paymentMethod มา
     if (data.paymentMethod && orderId != null) {
+      reqs.push({ url: ZORT_BASE + "/Order/UpdateOrderPayment", method: "post", headers: headers,
+        muteHttpExceptions: true, payload: JSON.stringify({ id: orderId, orderid: orderId,
+          paymentmethod: String(data.paymentMethod), paymentamount: totals.grandTotal,
+          paymentdate: Utilities.formatDate(new Date(), "Asia/Bangkok", "dd/MM/yyyy") }) });
+      kinds.push("pay");
+    }
+    if (reqs.length) {
+      var _t1 = Date.now();
       try {
-        UrlFetchApp.fetch(ZORT_BASE + "/Order/UpdateOrderPayment", {
-          method: "post", headers: headers, muteHttpExceptions: true,
-          payload: JSON.stringify({
-            id: orderId, orderid: orderId,
-            paymentmethod: String(data.paymentMethod),
-            paymentamount: totals.grandTotal,
-            paymentdate: Utilities.formatDate(new Date(), "Asia/Bangkok", "dd/MM/yyyy"),
-          }),
-        });
-      } catch (e) { logZortFailure_("บันทึกรับชำระ order " + orderNumber, String(e)); }
+        var resps = UrlFetchApp.fetchAll(reqs);   // parallel
+        Logger.log("POS createSaleBill: doc+pay (" + kinds.join(",") + ") took " + (Date.now() - _t1) + "ms");
+        for (var i = 0; i < resps.length; i++) {
+          var rErr = zortRespError_(resps[i]);
+          if (kinds[i] === "doc") {
+            if (rErr) { logZortFailure_("ออกใบกำกับภาษี order " + orderNumber, rErr); }
+            else { var dj = JSON.parse(resps[i].getContentText() || "{}"); docNumber = dj.number || dj.documentnumber || dj.documentNumber || null; }
+          } else if (kinds[i] === "pay" && rErr) {
+            logZortFailure_("บันทึกรับชำระ order " + orderNumber, rErr);
+          }
+        }
+      } catch (e) { logZortFailure_("ใบกำกับ/รับชำระ order " + orderNumber, String(e)); }
     }
 
     writeAuditLog_(actor || "ไม่ระบุ", "ออกบิลขาย", orderNumber || "(ไม่ทราบเลข)",
