@@ -7335,13 +7335,28 @@ function PosView({ data, role }) {
 
   function addToCart(p) {
     setCart(c => [...c, {
-      sku: p.sku, name: p.name, category: p.category || "",
+      sku: p.sku, name: p.name, category: p.category || "", imageUrl: p.imageUrl || "",
       qty: 1, price: Number(p.price) || 0, qtyStore: Number(p.qtyStore) || 0,
     }]);
     setSearch("");
   }
   function patchItem(i, patch) { setCart(c => c.map((it, idx) => idx === i ? Object.assign({}, it, patch) : it)); }
   function removeItem(i) { setCart(c => c.filter((_, idx) => idx !== i)); }
+
+  // เครื่องสแกนบาร์โค้ด (USB/มือถือ) ทำงานเหมือนคีย์บอร์ด: พิมพ์รหัส+Enter
+  // Enter → ถ้าตรง SKU/บาร์โค้ดพอดี (หรือเหลือผลเดียว) เพิ่มลงตะกร้าเลย · ซ้ำ = บวกจำนวน
+  function handleScanEnter(e) {
+    if (e.key !== "Enter") return;
+    const q = search.trim().toLowerCase();
+    if (!q) return;
+    let hit = products.find(p => String(p.sku || "").toLowerCase() === q);
+    if (!hit && matches.length === 1) hit = matches[0];
+    if (!hit) { showToast("warn", "ไม่พบสินค้า: " + search.trim(), "🔍"); return; }
+    const idx = cart.findIndex(c => c.sku === hit.sku);
+    if (idx >= 0) { patchItem(idx, { qty: (Number(cart[idx].qty) || 0) + 1 }); setSearch(""); }
+    else addToCart(hit);
+    showToast("success", "+ " + hit.name, "📦");
+  }
 
   async function doSearchCustomer() {
     const q = custQuery.trim();
@@ -7426,14 +7441,21 @@ function PosView({ data, role }) {
 
       {/* ── ค้นสินค้า ── */}
       <Card padding={true} title="🔎 เพิ่มสินค้า">
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="พิมพ์ชื่อ/รหัส/หมวด สินค้า" style={inp}/>
+        <input value={search} onChange={e => setSearch(e.target.value)} onKeyDown={handleScanEnter}
+          placeholder="พิมพ์ชื่อ/รหัส หรือ ยิงบาร์โค้ด" style={inp} autoFocus/>
+        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>💡 เครื่องสแกนบาร์โค้ด: ยิงแล้วเพิ่มลงบิลอัตโนมัติ (ยิงซ้ำ = บวกจำนวน)</div>
         {matches.length > 0 && (
-          <div style={{ marginTop: 8, border: "1px solid #eee", borderRadius: 8, maxHeight: 260, overflowY: "auto" }}>
+          <div style={{ marginTop: 8, border: "1px solid #eee", borderRadius: 8, maxHeight: 300, overflowY: "auto" }}>
             {matches.map(p => (
-              <div key={p.sku} onClick={() => addToCart(p)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderBottom: "1px solid #f3f4f6", cursor: "pointer" }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</div>
-                  <div style={{ fontSize: 12, color: "var(--muted)" }}>{p.sku} · {p.category || "—"} · หน้าร้าน {fmtN(p.qtyStore)}</div>
+              <div key={p.sku} onClick={() => addToCart(p)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", borderBottom: "1px solid #f3f4f6", cursor: "pointer", gap: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                  {p.imageUrl
+                    ? <img src={p.imageUrl} loading="lazy" style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 6, flexShrink: 0, background: "#f3f4f6" }} onError={e => { e.target.style.display = "none"; }}/>
+                    : <div style={{ width: 44, height: 44, borderRadius: 6, background: "#f3f4f6", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>🌸</div>}
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</div>
+                    <div style={{ fontSize: 12, color: "var(--muted)" }}>{p.sku} · {p.category || "—"} · หน้าร้าน {fmtN(p.qtyStore)}</div>
+                  </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                   <span style={{ fontWeight: 700 }}>{fmtBfull(p.price)}</span>
@@ -7461,9 +7483,16 @@ function PosView({ data, role }) {
                   return (
                     <tr key={it.sku} style={{ borderTop: "1px solid #f3f4f6" }}>
                       <td style={{ padding: "8px 6px" }}>
-                        <div style={{ fontWeight: 600 }}>{it.name}</div>
-                        <div style={{ fontSize: 11, color: over ? "#dc2626" : "var(--muted)" }}>
-                          {it.sku}{excl ? " · ยกเว้นส่วนลด" : ""}{over ? ` · เกินสต๊อกหน้าร้าน (${fmtN(it.qtyStore)})` : ""}
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          {it.imageUrl
+                            ? <img src={it.imageUrl} loading="lazy" style={{ width: 36, height: 36, objectFit: "cover", borderRadius: 5, flexShrink: 0, background: "#f3f4f6" }} onError={e => { e.target.style.display = "none"; }}/>
+                            : <div style={{ width: 36, height: 36, borderRadius: 5, background: "#f3f4f6", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>🌸</div>}
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 600 }}>{it.name}</div>
+                            <div style={{ fontSize: 11, color: over ? "#dc2626" : "var(--muted)" }}>
+                              {it.sku}{excl ? " · ยกเว้นส่วนลด" : ""}{over ? ` · เกินสต๊อกหน้าร้าน (${fmtN(it.qtyStore)})` : ""}
+                            </div>
+                          </div>
                         </div>
                       </td>
                       <td style={{ padding: "8px 6px", textAlign: "center" }}>
