@@ -6634,7 +6634,9 @@ function createSaleBill(ss, data, actor) {
     writeAuditLog_(actor || "ไม่ระบุ", "ออกบิลขาย", orderNumber || "(ไม่ทราบเลข)",
       auditDetail_({ after: { total: totals.grandTotal, items: list.length,
         customer: (data.customer && data.customer.name) || "", taxInvoice: !!data.taxInvoice,
-        payment: data.paymentMethod || "" }, note: "saler ออกบิล/ใบกำกับผ่าน POS" }));
+        payment: data.paymentMethod || "",
+        cashReceived: data.cashReceived != null ? Number(data.cashReceived) : undefined,
+        channel: data.channel || "" }, note: "saler ออกบิล/ใบกำกับผ่าน POS" }));
 
     invalidateCache_();
     return ok({ orderId: orderId, orderNumber: orderNumber, documentNumber: docNumber, totals: totals });

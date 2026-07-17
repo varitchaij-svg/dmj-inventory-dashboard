@@ -7325,6 +7325,7 @@ function PosView({ data, role }) {
   const [manualDiscount, setManualDiscount] = uS("");
   const [taxInvoice, setTaxInvoice] = uS(false);
   const [payMethod, setPayMethod] = uS("");       // "เงินสด" | "โอน"
+  const [cashReceived, setCashReceived] = uS(""); // จำนวนเงินสดที่รับมา (คิดเงินทอน)
   const [channel, setChannel] = uS("หน้าร้าน");    // ช่องทางขาย
   const [cust, setCust] = uS({ name: "", taxId: "", branch: "", branchNo: "", address: "", phone: "", email: "" });
   const [custQuery, setCustQuery] = uS("");
@@ -7342,6 +7343,8 @@ function PosView({ data, role }) {
 
   const md = Math.max(0, parseFloat(manualDiscount) || 0);
   const totals = uM(() => computeBillTotals(cart, { manualDiscount: md }), [cart, md]);
+  const cashReceivedNum = Math.max(0, parseFloat(cashReceived) || 0);
+  const cashChange = cashReceivedNum - totals.grandTotal;   // เงินทอน (ลบ = รับมาไม่พอ)
 
   // รายชื่อหมวด (เรียงตามจำนวนสินค้ามาก→น้อย) สำหรับชิปเลือกหมวด
   const cats = uM(() => {
@@ -7430,10 +7433,12 @@ function PosView({ data, role }) {
     if (!cart.length) { showToast("warn", "ยังไม่มีสินค้าในบิล", "🛒"); return; }
     if (cart.some(it => (Number(it.qty) || 0) <= 0)) { showToast("warn", "จำนวนต้องมากกว่า 0", "✏️"); return; }
     if (taxInvoice && !cust.taxId && !cust.name) { showToast("warn", "ใบกำกับภาษีต้องมีชื่อ/เลขผู้เสียภาษี", "🧾"); return; }
+    if (payMethod === "เงินสด" && cashReceivedNum < totals.grandTotal) { showToast("warn", "รับเงินสดไม่พอยอด — กรอกจำนวนที่รับมาให้ครบก่อน", "💵"); return; }
     setSaving(true);
     const r = await syncCreateSaleBill({
       items: cart.map(it => ({ sku: it.sku, name: it.name, category: it.category, qty: Number(it.qty) || 0, price: Number(it.price) || 0 })),
       customer: cust, manualDiscount: md, taxInvoice, paymentMethod: payMethod || "", channel,
+      cashReceived: payMethod === "เงินสด" ? cashReceivedNum : undefined,
     });
     setSaving(false);
     if (!r.success) { showToast("error", "ออกบิลไม่สำเร็จ: " + (r.error || ""), "❌"); return; }
@@ -7442,7 +7447,7 @@ function PosView({ data, role }) {
   }
 
   function resetAll() {
-    setCart([]); setManualDiscount(""); setTaxInvoice(false); setPayMethod(""); setChannel("หน้าร้าน");
+    setCart([]); setManualDiscount(""); setTaxInvoice(false); setPayMethod(""); setCashReceived(""); setChannel("หน้าร้าน");
     setCust({ name: "", taxId: "", branch: "", branchNo: "", address: "", phone: "", email: "" });
     setCustQuery(""); setCustResults(null); setResult(null);
   }
@@ -7478,7 +7483,8 @@ function PosView({ data, role }) {
         </div>
         <div className={printKind === "80" ? "" : "pos-print-none"}>
           <PosReceipt80 cart={cart} totals={result.totals || totals} cust={cust} taxInvoice={taxInvoice}
-            orderNumber={result.orderNumber} documentNumber={result.documentNumber} payMethod={payMethod} channel={channel}/>
+            orderNumber={result.orderNumber} documentNumber={result.documentNumber} payMethod={payMethod} channel={channel}
+            cashReceived={payMethod === "เงินสด" ? cashReceivedNum : null} cashChange={payMethod === "เงินสด" ? cashChange : null}/>
         </div>
         <Toast toast={toast} onClose={hideToast}/>
       </div>
@@ -7666,7 +7672,7 @@ function PosView({ data, role }) {
       <Card padding={true} title="💳 รับชำระ">
         <div style={{ display: "flex", gap: 8 }}>
           {["เงินสด", "โอน"].map(m => (
-            <button key={m} onClick={() => setPayMethod(payMethod === m ? "" : m)}
+            <button key={m} onClick={() => { setPayMethod(payMethod === m ? "" : m); setCashReceived(""); }}
               style={{ flex: 1, padding: "12px", borderRadius: 10, fontWeight: 700, fontSize: 15, cursor: "pointer",
                 border: payMethod === m ? "2px solid var(--g-600,#1f7f44)" : "1px solid #d1d5db",
                 background: payMethod === m ? "#f0fdf4" : "#fff", color: payMethod === m ? "var(--g-700,#166534)" : "#374151" }}>
@@ -7680,6 +7686,21 @@ function PosView({ data, role }) {
             <div>{POS_TRANSFER_INFO.bank}</div>
             <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: 1 }}>{POS_TRANSFER_INFO.acctNo}</div>
             <div style={{ color: "var(--muted)" }}>{POS_TRANSFER_INFO.acctName}</div>
+          </div>
+        )}
+        {payMethod === "เงินสด" && (
+          <div style={{ marginTop: 10, padding: 12, background: "#f9fafb", borderRadius: 8 }}>
+            <FieldLabel_>รับเงินมา (บาท)</FieldLabel_>
+            <input type="number" min="0" inputMode="decimal" value={cashReceived}
+              onChange={e => setCashReceived(e.target.value)} placeholder={String(Math.ceil(totals.grandTotal))}
+              style={{ width: "100%", padding: "10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 18, fontWeight: 700, minWidth: 0, boxSizing: "border-box" }}/>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, fontSize: 15 }}>
+              <span style={{ fontWeight: 600 }}>เงินทอน</span>
+              <span style={{ fontWeight: 800, fontSize: 20, color: cashReceived === "" ? "var(--muted)" : (cashChange < 0 ? "#dc2626" : "var(--g-700,#166534)") }}>
+                {cashReceived === "" ? "—" : fmtBfull(Math.abs(cashChange))}
+              </span>
+            </div>
+            {cashReceived !== "" && cashChange < 0 && <div style={{ fontSize: 12, color: "#dc2626", marginTop: 2 }}>⚠️ รับเงินมาไม่พอยอด (ขาดอีก {fmtBfull(Math.abs(cashChange))})</div>}
           </div>
         )}
       </Card>
@@ -7734,6 +7755,10 @@ const POS_SELLER = {
   phone: "062-4959146", fax: "02-3193295", email: "dunity8888@gmail.com",
   taxId: "0105546009704",
 };
+
+// ข้อมูลติดต่อร้าน (แสดงท้ายใบเสร็จ 80mm) + ลิงก์ขอใบกำกับภาษีเต็มรูปแบบ (ZORT self-service)
+const POS_CONTACT = { line: "@doomuenjing", phone: "099-553-5464" };
+const POS_TAX_REQUEST_URL = "https://share.zortout.com/Order/RequestTaxInvoice?mc=MTU3ODYy";
 
 // อ่านจำนวนเต็มเป็นภาษาไทย (รองรับหลักล้าน) — ใช้ในจำนวนเงินตัวอักษร
 function readThaiInt_(n) {
@@ -7885,7 +7910,7 @@ function PosReceipt({ cart, totals, cust, taxInvoice, orderNumber, documentNumbe
 
 // ใบเสร็จรับเงิน 80mm (เครื่องพิมพ์ความร้อน POS80) — ต่างจากใบกำกับภาษี A4
 // สไตล์ใบเสร็จร้านทั่วไป · แสดงเฉพาะตอน print ผ่าน .pos-print80-area · @page rc80 (80mm auto)
-function PosReceipt80({ cart, totals, orderNumber, documentNumber, payMethod, channel, taxInvoice }) {
+function PosReceipt80({ cart, totals, orderNumber, documentNumber, payMethod, channel, taxInvoice, cashReceived, cashChange }) {
   const gross = (totals.retailEligible || 0) + (totals.retailExcluded || 0);
   const discount = Math.max(0, gross - totals.grandTotal);
   const money = (n) => (Math.round(n * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -7893,11 +7918,29 @@ function PosReceipt80({ cart, totals, orderNumber, documentNumber, payMethod, ch
   const now = new Date();
   const line = { borderTop: "1px dashed #000", margin: "5px 0" };
   const row = { display: "flex", justifyContent: "space-between", gap: 6 };
+  const [logoOk, setLogoOk] = uS(true);
+
+  // สร้าง QR (ลิงก์ขอใบกำกับภาษีเต็มรูปแบบ) ด้วย qrcodejs — เหมือน pattern ใน LabelPrintView
+  const [taxQrUrl, setTaxQrUrl] = uS("");
+  uE(() => {
+    const QR = window.QRCode;
+    if (!QR || taxQrUrl) return;
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "position:fixed;left:-9999px;top:-9999px;visibility:hidden;pointer-events:none";
+    document.body.appendChild(wrap);
+    try {
+      new QR(wrap, { text: POS_TAX_REQUEST_URL, width: 100, height: 100, colorDark: "#000000", colorLight: "#ffffff", correctLevel: QR.CorrectLevel.M });
+      const canvas = wrap.querySelector("canvas");
+      if (canvas) setTaxQrUrl(canvas.toDataURL("image/png"));
+    } catch (e) { console.warn("QR error (tax invoice link):", e); }
+    document.body.removeChild(wrap);
+  }, [taxQrUrl]);
 
   return (
     <div className="pos-print80-area">
       <div className="receipt80" style={{ fontFamily: "'Courier New', monospace", color: "#000", fontSize: 12.5, lineHeight: 1.45 }}>
         <div style={{ textAlign: "center" }}>
+          {logoOk && <img src="logo.png" alt="" style={{ width: 56, height: 56, objectFit: "contain", marginBottom: 2 }} onError={() => setLogoOk(false)}/>}
           <div style={{ fontSize: 15, fontWeight: 800 }}>ดอกเหมือนจริง</div>
           <div style={{ fontSize: 10.5 }}>{POS_SELLER.name}</div>
           <div style={{ fontSize: 10 }}>{POS_SELLER.address}</div>
@@ -7930,8 +7973,28 @@ function PosReceipt80({ cart, totals, orderNumber, documentNumber, payMethod, ch
         <div style={{ ...row, fontSize: 10, color: "#000" }}><span>(รวม VAT 7% = {money(totals.vat)})</span></div>
         <div style={line}></div>
         <div style={row}><span>ชำระโดย</span><span>{payMethod || "—"}</span></div>
+        {cashReceived != null && (
+          <>
+            <div style={row}><span>รับเงินมา</span><span>{money(cashReceived)}</span></div>
+            <div style={{ ...row, fontWeight: 700 }}><span>เงินทอน</span><span>{money(Math.max(0, cashChange))}</span></div>
+          </>
+        )}
         {taxInvoice && documentNumber ? <div style={{ fontSize: 10.5 }}>ใบกำกับภาษีเลขที่: {documentNumber}</div> : null}
-        <div style={{ textAlign: "center", marginTop: 8, fontSize: 11.5 }}>* ขอบคุณที่ใช้บริการ *</div>
+        <div style={line}></div>
+        {/* ── ท้ายบิล: ขอบคุณ + ช่องทางติดต่อ + QR ขอใบกำกับภาษีเต็มรูปแบบ ── */}
+        <div style={{ textAlign: "center", marginTop: 6, fontSize: 11.5 }}>
+          <div>ขอบคุณที่เลือกใช้บริการของเรา</div>
+          <div>Thank you for choosing our service!</div>
+          <div style={{ marginTop: 4, fontSize: 10.5 }}>Line : {POS_CONTACT.line}</div>
+          <div style={{ fontSize: 10.5 }}>โทร. {POS_CONTACT.phone}</div>
+          <div style={{ marginTop: 4, fontSize: 9.5, padding: "0 4px" }}>กรณีต้องการใบกำกับภาษีเต็มรูปแบบ กรุณาแจ้งภายใน 3 วันหลังชำระเงิน</div>
+          {taxQrUrl && (
+            <div style={{ marginTop: 6 }}>
+              <img src={taxQrUrl} alt="ขอใบกำกับภาษี" style={{ width: 80, height: 80 }}/>
+              <div style={{ fontSize: 9.5 }}>สแกนเพื่อขอใบกำกับภาษีเต็มรูปแบบ</div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
