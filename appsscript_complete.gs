@@ -6453,6 +6453,9 @@ var POS_ZORT_FIELDS = {
   orderCustomerPhone:   "customerphone",
   orderCustomerEmail:   "customeremail",
   orderChannel:         "channel",   // ช่องทางขาย (หน้าร้าน/Line OA/...)
+  // line item: ZORT v4 ใช้ pricepernumber เป็นราคาต่อหน่วย (ไม่ใช่ price) — ส่งครบทั้ง 3 กันพลาด
+  orderStatusField:     "status",    // field สถานะใน AddOrder / UpdateOrderStatus
+  orderStatusDone:      "Success",   // ค่าสถานะ "สำเร็จ" (แก้ที่นี่ถ้า ZORT ใช้ค่าอื่น)
 };
 
 // เดินหา value แรกที่ "ชื่อคีย์" ตรง regex ทั่วทั้ง object (nested) — ใช้กันชื่อ field ZORT ไม่ตรงที่เดา
@@ -6563,13 +6566,14 @@ function createSaleBill(ss, data, actor) {
   var factor = gross > 0 ? (totals.grandTotal / gross) : 1;   // อัตราส่วนหลังส่วนลดทั้งบิล
   var list = items.map(function (it) {
     var qty = Number(it.qty) || 0;
-    var unit = (Number(it.price) || 0) * factor;              // ราคาต่อชิ้นหลังเฉลี่ยส่วนลด (รวม VAT)
+    var netUnit = Math.round((Number(it.price) || 0) * factor * 100) / 100;  // ราคาต่อชิ้นสุทธิ (หลังเฉลี่ยส่วนลด, รวม VAT)
     return {
       sku: String(it.sku || "").trim(),
       name: String(it.name || "").trim(),
       number: qty,
-      price: Math.round(unit * 100) / 100,
-      totalprice: Math.round(unit * qty * 100) / 100,
+      pricepernumber: netUnit,                     // ← ZORT v4 ใช้ field นี้เป็นราคา/หน่วย (ตัวที่ทำให้ยอดเป็น 0 เพราะเดิมส่ง price)
+      price: netUnit,                              // เผื่อ ZORT รุ่นนี้อ่าน price
+      totalprice: Math.round(netUnit * qty * 100) / 100,
     };
   }).filter(function (it) { return it.number > 0; });
 
@@ -6582,6 +6586,7 @@ function createSaleBill(ss, data, actor) {
     remark: String(data.remark || ""),
     list: list,
   };
+  payload[F.orderStatusField] = F.orderStatusDone;   // ตั้งสถานะ "สำเร็จ" ตั้งแต่ตอนสร้าง (ขายหน้าร้านจ่ายจบทันที)
   if (data.channel)  payload[F.orderChannel]          = String(data.channel);
   if (cust.name)     payload[F.orderCustomerName]     = String(cust.name);
   if (cust.taxId)    payload[F.orderCustomerTaxId]    = String(cust.taxId);
@@ -6637,6 +6642,14 @@ function createSaleBill(ss, data, actor) {
           paymentdate: Utilities.formatDate(new Date(), "Asia/Bangkok", "dd/MM/yyyy") }) });
       kinds.push("pay");
     }
+    // ตั้งสถานะ order เป็น "สำเร็จ" (เผื่อ status ใน AddOrder ไม่มีผล) — best effort ล้มเหลวไม่กระทบบิล
+    if (orderId != null) {
+      var stPayload = { id: orderId, orderid: orderId };
+      stPayload[F.orderStatusField] = F.orderStatusDone;
+      reqs.push({ url: ZORT_BASE + "/Order/UpdateOrderStatus", method: "post", headers: headers,
+        muteHttpExceptions: true, payload: JSON.stringify(stPayload) });
+      kinds.push("status");
+    }
     if (reqs.length) {
       var _t1 = Date.now();
       try {
@@ -6649,6 +6662,8 @@ function createSaleBill(ss, data, actor) {
             else { var dj = JSON.parse(resps[i].getContentText() || "{}"); docNumber = dj.number || dj.documentnumber || dj.documentNumber || null; }
           } else if (kinds[i] === "pay" && rErr) {
             logZortFailure_("บันทึกรับชำระ order " + orderNumber, rErr);
+          } else if (kinds[i] === "status" && rErr) {
+            logZortFailure_("ตั้งสถานะสำเร็จ order " + orderNumber, rErr);
           }
         }
       } catch (e) { logZortFailure_("ใบกำกับ/รับชำระ order " + orderNumber, String(e)); }

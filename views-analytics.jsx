@@ -7394,10 +7394,14 @@ function PosView({ data, role }) {
   }, [search, products, cart]);
 
   function addToCart(p) {
-    setCart(c => [...c, {
-      sku: p.sku, name: p.name, category: p.category || "", imageUrl: p.imageUrl || "",
-      qty: 1, price: Number(p.price) || 0, qtyStore: Number(p.qtyStore) || 0,
-    }]);
+    setCart(c => {
+      const idx = c.findIndex(it => it.sku === p.sku);
+      if (idx >= 0) return c.map((it, i) => i === idx ? { ...it, qty: (Number(it.qty) || 0) + 1 } : it); // มีแล้ว → +1 ชิ้น
+      return [...c, {
+        sku: p.sku, name: p.name, category: p.category || "", imageUrl: p.imageUrl || "",
+        qty: 1, price: Number(p.price) || 0, qtyStore: Number(p.qtyStore) || 0,
+      }];
+    });
     setSearch("");
   }
   function patchItem(i, patch) { setCart(c => c.map((it, idx) => idx === i ? Object.assign({}, it, patch) : it)); }
