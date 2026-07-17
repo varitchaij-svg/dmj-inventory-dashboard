@@ -7317,8 +7317,26 @@ function PosView({ data, role }) {
   const [saving, setSaving] = uS(false);
   const [result, setResult] = uS(null);           // ผลลัพธ์หลังออกบิล
 
+  const [catFilter, setCatFilter] = uS("ทั้งหมด");   // เลือกหมวดในกริดเลือกสินค้า
+  const [catPage, setCatPage] = uS(0);                // หน้าของกริด (9 ชิ้น/หน้า)
+
   const md = Math.max(0, parseFloat(manualDiscount) || 0);
   const totals = uM(() => computeBillTotals(cart, { manualDiscount: md }), [cart, md]);
+
+  // รายชื่อหมวด (เรียงตามจำนวนสินค้ามาก→น้อย) สำหรับชิปเลือกหมวด
+  const cats = uM(() => {
+    const m = {};
+    products.forEach(p => { const c = (p.category || "อื่นๆ").trim(); m[c] = (m[c] || 0) + 1; });
+    return Object.keys(m).sort((a, b) => m[b] - m[a]);
+  }, [products]);
+
+  // สินค้าในกริด (ตามหมวดที่เลือก) + แบ่งหน้า 9 ชิ้น/หน้า
+  const POS_GRID_PER = 9;
+  const gridAll = uM(() => (catFilter === "ทั้งหมด" ? products : products.filter(p => (p.category || "อื่นๆ").trim() === catFilter)), [products, catFilter]);
+  const gridPages = Math.max(1, Math.ceil(gridAll.length / POS_GRID_PER));
+  const gridPageSafe = Math.min(catPage, gridPages - 1);
+  const gridItems = gridAll.slice(gridPageSafe * POS_GRID_PER, gridPageSafe * POS_GRID_PER + POS_GRID_PER);
+  function pickCat(c) { setCatFilter(c); setCatPage(0); }
 
   // ค้นสินค้า (multi-token AND) — โชว์เฉพาะที่ยังไม่อยู่ในตะกร้า, จำกัด 20
   const matches = uM(() => {
@@ -7467,6 +7485,45 @@ function PosView({ data, role }) {
         )}
       </Card>
 
+      {/* ── เลือกจากหมวดหมู่ (กริดรูป) ── */}
+      <Card padding={true} title="🗂️ เลือกจากหมวดหมู่">
+        <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 6, marginBottom: 10 }}>
+          {["ทั้งหมด", ...cats].map(c => (
+            <button key={c} onClick={() => pickCat(c)} style={{ whiteSpace: "nowrap", padding: "6px 12px", borderRadius: 999, fontSize: 13, fontWeight: 600, cursor: "pointer", flexShrink: 0,
+              border: catFilter === c ? "2px solid var(--g-600,#1f7f44)" : "1px solid #d1d5db",
+              background: catFilter === c ? "#f0fdf4" : "#fff", color: catFilter === c ? "var(--g-700,#166534)" : "#374151" }}>{c}</button>
+          ))}
+        </div>
+        {gridItems.length === 0 ? <Empty icon="🗂️" title="ไม่มีสินค้าในหมวดนี้"/> : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 }}>
+            {gridItems.map(p => (
+              <div key={p.sku} onClick={() => { addToCart(p); showToast("success", "+ " + p.name, "📦"); }}
+                style={{ border: "1px solid #eee", borderRadius: 10, overflow: "hidden", cursor: "pointer", display: "flex", flexDirection: "column" }}>
+                {p.imageUrl
+                  ? <img src={p.imageUrl} loading="lazy" style={{ width: "100%", aspectRatio: "1", objectFit: "cover", background: "#f3f4f6" }} onError={e => { e.target.style.visibility = "hidden"; }}/>
+                  : <div style={{ width: "100%", aspectRatio: "1", background: "#f3f4f6", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 30 }}>🌸</div>}
+                <div style={{ padding: "6px 8px" }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.3, height: 32, overflow: "hidden" }}>{p.name}</div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 2 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: "var(--g-700,#166534)" }}>{fmtBfull(p.price)}</span>
+                    <span style={{ fontSize: 10, color: "var(--muted)" }}>คงเหลือ {fmtN(p.qtyStore)}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {gridPages > 1 && (
+          <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 12, marginTop: 12 }}>
+            <button onClick={() => setCatPage(Math.max(0, gridPageSafe - 1))} disabled={gridPageSafe === 0}
+              style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700, cursor: gridPageSafe === 0 ? "default" : "pointer", opacity: gridPageSafe === 0 ? 0.4 : 1 }}>‹ ก่อน</button>
+            <span style={{ fontSize: 13, color: "var(--muted)" }}>{gridPageSafe + 1} / {gridPages}</span>
+            <button onClick={() => setCatPage(Math.min(gridPages - 1, gridPageSafe + 1))} disabled={gridPageSafe >= gridPages - 1}
+              style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700, cursor: gridPageSafe >= gridPages - 1 ? "default" : "pointer", opacity: gridPageSafe >= gridPages - 1 ? 0.4 : 1 }}>ถัดไป ›</button>
+          </div>
+        )}
+      </Card>
+
       {/* ── ตะกร้า ── */}
       <Card padding={true} title={`🛒 รายการในบิล (${cart.length})`}>
         {cart.length === 0 ? <Empty icon="🛒" title="ยังไม่มีสินค้า" sub="ค้นหาด้านบนแล้วแตะเพื่อเพิ่ม"/> : (
@@ -7517,37 +7574,41 @@ function PosView({ data, role }) {
       </Card>
 
       {/* ── ลูกค้า / ใบกำกับ ── */}
-      <Card padding={true} title="👤 ลูกค้า (ใบกำกับภาษี)">
-        <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, fontWeight: 600 }}>
+      <Card padding={true} title="👤 ลูกค้า / ใบกำกับภาษี">
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600, cursor: "pointer" }}>
           <input type="checkbox" checked={taxInvoice} onChange={e => setTaxInvoice(e.target.checked)} style={{ width: 18, height: 18 }}/>
-          ออกใบกำกับภาษี
+          ลูกค้าขอใบกำกับภาษี
         </label>
-        <div style={{ display: "flex", gap: 8 }}>
-          <input value={custQuery} onChange={e => setCustQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && doSearchCustomer()}
-            placeholder="ค้นชื่อบริษัท หรือ เลขผู้เสียภาษี" style={inp}/>
-          <button onClick={doSearchCustomer} disabled={searching} style={{ padding: "8px 14px", borderRadius: 8, border: "none", background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 700, whiteSpace: "nowrap" }}>
-            {searching ? "..." : "ค้นหา"}
-          </button>
-        </div>
-        {custResults && custResults.length > 0 && (
-          <div style={{ marginTop: 8, border: "1px solid #eee", borderRadius: 8, maxHeight: 200, overflowY: "auto" }}>
-            {custResults.map((c, i) => (
-              <div key={i} onClick={() => pickCustomer(c)} style={{ padding: "10px 12px", borderBottom: "1px solid #f3f4f6", cursor: "pointer" }}>
-                <div style={{ fontWeight: 600, fontSize: 14 }}>{c.name || "(ไม่มีชื่อ)"}</div>
-                <div style={{ fontSize: 12, color: "var(--muted)" }}>{c.taxId ? "เลขภาษี " + c.taxId : ""}{c.branch ? " · " + c.branch : ""}</div>
+        {taxInvoice && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input value={custQuery} onChange={e => setCustQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && doSearchCustomer()}
+                placeholder="ค้นชื่อบริษัท หรือ เลขผู้เสียภาษี" style={inp}/>
+              <button onClick={doSearchCustomer} disabled={searching} style={{ padding: "8px 14px", borderRadius: 8, border: "none", background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 700, whiteSpace: "nowrap" }}>
+                {searching ? "..." : "ค้นหา"}
+              </button>
+            </div>
+            {custResults && custResults.length > 0 && (
+              <div style={{ marginTop: 8, border: "1px solid #eee", borderRadius: 8, maxHeight: 200, overflowY: "auto" }}>
+                {custResults.map((c, i) => (
+                  <div key={i} onClick={() => pickCustomer(c)} style={{ padding: "10px 12px", borderBottom: "1px solid #f3f4f6", cursor: "pointer" }}>
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>{c.name || "(ไม่มีชื่อ)"}</div>
+                    <div style={{ fontSize: 12, color: "var(--muted)" }}>{c.taxId ? "เลขภาษี " + c.taxId : ""}{c.branch ? " · " + c.branch : ""}</div>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
+              <div style={{ gridColumn: "1 / -1" }}><FieldLabel_>ชื่อ / บริษัท</FieldLabel_><input value={cust.name} onChange={e => setCust({ ...cust, name: e.target.value })} style={inp}/></div>
+              <div><FieldLabel_>เลขผู้เสียภาษี</FieldLabel_><input value={cust.taxId} onChange={e => setCust({ ...cust, taxId: e.target.value })} style={inp}/></div>
+              <div><FieldLabel_>สาขา (ชื่อ)</FieldLabel_><input value={cust.branch} onChange={e => setCust({ ...cust, branch: e.target.value })} style={inp}/></div>
+              <div><FieldLabel_>เลขที่สาขา</FieldLabel_><input value={cust.branchNo} onChange={e => setCust({ ...cust, branchNo: e.target.value })} placeholder="เช่น 00000" style={inp}/></div>
+              <div><FieldLabel_>เบอร์โทร</FieldLabel_><input value={cust.phone} onChange={e => setCust({ ...cust, phone: e.target.value })} style={inp}/></div>
+              <div style={{ gridColumn: "1 / -1" }}><FieldLabel_>ที่อยู่</FieldLabel_><input value={cust.address} onChange={e => setCust({ ...cust, address: e.target.value })} style={inp}/></div>
+              <div style={{ gridColumn: "1 / -1" }}><FieldLabel_>อีเมล</FieldLabel_><input value={cust.email} onChange={e => setCust({ ...cust, email: e.target.value })} style={inp}/></div>
+            </div>
           </div>
         )}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
-          <div style={{ gridColumn: "1 / -1" }}><FieldLabel_>ชื่อ / บริษัท</FieldLabel_><input value={cust.name} onChange={e => setCust({ ...cust, name: e.target.value })} style={inp}/></div>
-          <div><FieldLabel_>เลขผู้เสียภาษี</FieldLabel_><input value={cust.taxId} onChange={e => setCust({ ...cust, taxId: e.target.value })} style={inp}/></div>
-          <div><FieldLabel_>สาขา (ชื่อ)</FieldLabel_><input value={cust.branch} onChange={e => setCust({ ...cust, branch: e.target.value })} style={inp}/></div>
-          <div><FieldLabel_>เลขที่สาขา</FieldLabel_><input value={cust.branchNo} onChange={e => setCust({ ...cust, branchNo: e.target.value })} placeholder="เช่น 00000" style={inp}/></div>
-          <div><FieldLabel_>เบอร์โทร</FieldLabel_><input value={cust.phone} onChange={e => setCust({ ...cust, phone: e.target.value })} style={inp}/></div>
-          <div style={{ gridColumn: "1 / -1" }}><FieldLabel_>ที่อยู่</FieldLabel_><input value={cust.address} onChange={e => setCust({ ...cust, address: e.target.value })} style={inp}/></div>
-          <div style={{ gridColumn: "1 / -1" }}><FieldLabel_>อีเมล</FieldLabel_><input value={cust.email} onChange={e => setCust({ ...cust, email: e.target.value })} style={inp}/></div>
-        </div>
       </Card>
 
       {/* ── ชำระเงิน ── */}
@@ -7670,14 +7731,17 @@ function PosReceipt({ cart, totals, cust, taxInvoice, orderNumber, documentNumbe
   if (pages.length === 0) pages.push([]);
   const cell = { padding: "4px 6px", borderRight: "0.5px solid #999", fontSize: 12 };
   const num = (n) => (Math.round(n * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const docDate = new Date().toLocaleDateString("th-TH", { year: "numeric", month: "long", day: "numeric" });
+  // พิมพ์ 2 ชุด: ต้นฉบับ (ให้ลูกค้า) + สำเนา (เก็บ)
+  const copies = taxInvoice ? ["ต้นฉบับ", "สำเนา"] : ["ต้นฉบับ"];
 
   return (
     <div className="pos-print-area">
-      {pages.map((pageRows, pi) => {
+      {copies.map((copyLabel) => pages.map((pageRows, pi) => {
         const isLast = pi === pages.length - 1;
-        let startIdx = pi * POS_ROWS_PER_PAGE;
+        const startIdx = pi * POS_ROWS_PER_PAGE;
         return (
-          <div key={pi} className="pos-print-page" style={{ color: "#111", fontFamily: "inherit" }}>
+          <div key={copyLabel + pi} className="pos-print-page" style={{ color: "#111", fontFamily: "inherit", display: "flex", flexDirection: "column" }}>
             {/* ── หัวเอกสาร ── */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
               <div style={{ maxWidth: "62%" }}>
@@ -7688,9 +7752,9 @@ function PosReceipt({ cart, totals, cust, taxInvoice, orderNumber, documentNumbe
               </div>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontSize: 14, fontWeight: 800, border: "1px solid #000", padding: "3px 8px", borderRadius: 4 }}>
-                  {taxInvoice ? "ใบเสร็จรับเงิน/ใบกำกับภาษี" : "ใบเสร็จรับเงิน"} (ต้นฉบับ)
+                  {taxInvoice ? "ใบเสร็จรับเงิน/ใบกำกับภาษี" : "ใบเสร็จรับเงิน"} ({copyLabel})
                 </div>
-                <div style={{ fontSize: 11, marginTop: 4 }}>วันที่ : {new Date().toLocaleDateString("th-TH", { year: "numeric", month: "long", day: "numeric" })}</div>
+                <div style={{ fontSize: 11, marginTop: 4 }}>วันที่ : {docDate}</div>
                 <div style={{ fontSize: 11 }}>เลขที่เอกสาร : {documentNumber || orderNumber || "—"}</div>
                 {orderNumber ? <div style={{ fontSize: 11 }}>เอกสารอ้างอิง : {orderNumber}</div> : null}
                 {pages.length > 1 ? <div style={{ fontSize: 11 }}>หน้า {pi + 1}/{pages.length}</div> : null}
@@ -7747,20 +7811,23 @@ function PosReceipt({ cart, totals, cust, taxInvoice, orderNumber, documentNumbe
                 </div>
               </div>
             )}
-            {/* ── ช่องเซ็น (หน้าสุดท้ายเท่านั้น) ── */}
-            {isLast && (
-              <div style={{ display: "flex", justifyContent: "space-around", marginTop: 36, fontSize: 11, textAlign: "center" }}>
-                {["ผู้รับสินค้า", "ผู้รับเงิน", "ผู้อนุมัติ"].map(l => (
-                  <div key={l} style={{ width: "28%" }}>
-                    <div style={{ borderBottom: "0.5px dotted #000", marginBottom: 4, height: 28 }}></div>
-                    {l}
-                  </div>
-                ))}
-              </div>
-            )}
+            {/* ── ช่องเซ็น — ดันไปล่างสุดของกระดาษ (หน้าสุดท้ายเท่านั้น) ── */}
+            <div style={{ marginTop: "auto" }}>
+              {isLast && (
+                <div style={{ display: "flex", justifyContent: "space-around", paddingTop: 24, fontSize: 11, textAlign: "center" }}>
+                  {["ผู้รับสินค้า", "ผู้รับเงิน", "ผู้อนุมัติ"].map(l => (
+                    <div key={l} style={{ width: "28%" }}>
+                      <div style={{ borderBottom: "0.5px dotted #000", marginBottom: 4, height: 28 }}></div>
+                      {l}
+                      <div style={{ color: "#555", marginTop: 2 }}>วันที่ {docDate}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         );
-      })}
+      }))}
     </div>
   );
 }
