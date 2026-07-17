@@ -962,8 +962,10 @@
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <!-- html5-qrcode: ใช้ scan ได้บนทุก browser/มือถือ (iOS Safari, Android, Desktop) -->
   <script defer src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-  <!-- html2canvas: defer — ใช้เฉพาะพิมพ์ใบเสร็จตรงผ่าน Bluetooth (rasterize DOM → ESC/POS) -->
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <!-- html2canvas: self-host (same-origin) — ใช้พิมพ์ใบเสร็จตรงผ่าน Bluetooth (rasterize DOM → ESC/POS)
+       เดิมโหลดจาก CDN แต่ไม่เสถียรบน iPad/เน็ตร้าน (โหลดไม่ทัน → พิมพ์ Bluetooth พัง) → เก็บไฟล์เองใน repo
+       fallback CDN ถ้าไฟล์ local หาย -->
+  <script defer src="/html2canvas.min.js" onerror="var s=document.createElement('script');s.defer=true;s.src='https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';document.head.appendChild(s);"></script>
   <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 
   <script>
