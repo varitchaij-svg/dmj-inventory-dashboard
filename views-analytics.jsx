@@ -7302,6 +7302,9 @@ async function syncCreateSaleBill(bill) {
 // ข้อมูลบัญชีรับโอน (แสดงตอนเลือก "โอน") — แก้ที่นี่ถ้าเปลี่ยนบัญชี
 const POS_TRANSFER_INFO = { bank: "กรุงศรีอยุธยา", acctNo: "802-4-64123-4", acctName: "ปรานต์ชนันทร์ พันธุ์พานิช" };
 
+// ช่องทางขาย (ส่งเข้า ZORT order) — แก้/เพิ่มได้ที่นี่
+const POS_SALES_CHANNELS = ["หน้าร้าน", "Line OA", "Facebook", "Shopee", "Lazada", "โทรศัพท์"];
+
 function PosView({ data, role }) {
   const products = (data && data.products) || [];
   const [toast, showToast, hideToast] = useToast();
@@ -7310,6 +7313,7 @@ function PosView({ data, role }) {
   const [manualDiscount, setManualDiscount] = uS("");
   const [taxInvoice, setTaxInvoice] = uS(false);
   const [payMethod, setPayMethod] = uS("");       // "เงินสด" | "โอน"
+  const [channel, setChannel] = uS("หน้าร้าน");    // ช่องทางขาย
   const [cust, setCust] = uS({ name: "", taxId: "", branch: "", branchNo: "", address: "", phone: "", email: "" });
   const [custQuery, setCustQuery] = uS("");
   const [custResults, setCustResults] = uS(null); // null=ยังไม่ค้น · []=ไม่เจอ
@@ -7403,7 +7407,7 @@ function PosView({ data, role }) {
     setSaving(true);
     const r = await syncCreateSaleBill({
       items: cart.map(it => ({ sku: it.sku, name: it.name, category: it.category, qty: Number(it.qty) || 0, price: Number(it.price) || 0 })),
-      customer: cust, manualDiscount: md, taxInvoice, paymentMethod: payMethod || "",
+      customer: cust, manualDiscount: md, taxInvoice, paymentMethod: payMethod || "", channel,
     });
     setSaving(false);
     if (!r.success) { showToast("error", "ออกบิลไม่สำเร็จ: " + (r.error || ""), "❌"); return; }
@@ -7412,7 +7416,7 @@ function PosView({ data, role }) {
   }
 
   function resetAll() {
-    setCart([]); setManualDiscount(""); setTaxInvoice(false); setPayMethod("");
+    setCart([]); setManualDiscount(""); setTaxInvoice(false); setPayMethod(""); setChannel("หน้าร้าน");
     setCust({ name: "", taxId: "", branch: "", branchNo: "", address: "", phone: "", email: "" });
     setCustQuery(""); setCustResults(null); setResult(null);
   }
@@ -7609,6 +7613,19 @@ function PosView({ data, role }) {
             </div>
           </div>
         )}
+      </Card>
+
+      {/* ── ช่องทางขาย ── */}
+      <Card padding={true} title="🛍️ ช่องทางขาย">
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {POS_SALES_CHANNELS.map(ch => (
+            <button key={ch} onClick={() => setChannel(ch)} style={{ padding: "8px 14px", borderRadius: 999, fontSize: 13, fontWeight: 600, cursor: "pointer",
+              border: channel === ch ? "2px solid var(--g-600,#1f7f44)" : "1px solid #d1d5db",
+              background: channel === ch ? "#f0fdf4" : "#fff", color: channel === ch ? "var(--g-700,#166534)" : "#374151" }}>
+              {ch === "Line OA" ? "💚 Line OA" : ch}
+            </button>
+          ))}
+        </div>
       </Card>
 
       {/* ── ชำระเงิน ── */}

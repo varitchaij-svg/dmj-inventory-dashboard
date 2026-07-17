@@ -6449,6 +6449,7 @@ var POS_ZORT_FIELDS = {
   orderCustomerAddress: "customeraddress",
   orderCustomerPhone:   "customerphone",
   orderCustomerEmail:   "customeremail",
+  orderChannel:         "channel",   // ช่องทางขาย (หน้าร้าน/Line OA/...)
 };
 
 // อ่านค่าจาก object ตาม list ชื่อ field ที่เป็นไปได้ (ตัวแรกที่มีค่า)
@@ -6535,6 +6536,7 @@ function createSaleBill(ss, data, actor) {
     remark: String(data.remark || ""),
     list: list,
   };
+  if (data.channel)  payload[F.orderChannel]          = String(data.channel);
   if (cust.name)     payload[F.orderCustomerName]     = String(cust.name);
   if (cust.taxId)    payload[F.orderCustomerTaxId]    = String(cust.taxId);
   if (cust.branch)   payload[F.orderCustomerBranch]   = String(cust.branch);
