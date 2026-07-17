@@ -6455,6 +6455,17 @@ var POS_ZORT_FIELDS = {
   orderChannel:         "channel",   // ช่องทางขาย (หน้าร้าน/Line OA/...)
 };
 
+// เดินหา value แรกที่ "ชื่อคีย์" ตรง regex ทั่วทั้ง object (nested) — ใช้กันชื่อ field ZORT ไม่ตรงที่เดา
+function deepFindByKey_(obj, keyRegex) {
+  if (!obj || typeof obj !== "object") return "";
+  for (var k in obj) {
+    var v = obj[k];
+    if (v && typeof v === "object") { var nested = deepFindByKey_(v, keyRegex); if (nested) return nested; continue; }
+    if (keyRegex.test(k) && v != null && String(v).trim() !== "") return String(v).trim();
+  }
+  return "";
+}
+
 // อ่านค่าจาก object ตาม list ชื่อ field ที่เป็นไปได้ (ตัวแรกที่มีค่า)
 function pickField_(obj, keys) {
   if (!obj) return "";
@@ -6595,9 +6606,21 @@ function createSaleBill(ss, data, actor) {
     Logger.log("POS createSaleBill: AddOrder took " + (Date.now() - _t0) + "ms");
     var zErr = zortRespError_(res);
     if (zErr) { logZortFailure_("ออกบิลขาย (saler)", zErr); return error("สร้างบิลใน ZORT ไม่สำเร็จ: " + zErr); }
-    var json = JSON.parse(res.getContentText() || "{}");
-    var orderId     = json.id || json.orderid || json.orderId || null;
-    var orderNumber = json.number || json.ordernumber || json.orderNumber || null;
+    var rawResp = res.getContentText() || "{}";
+    Logger.log("POS AddOrder resp: " + rawResp.substring(0, 600));   // ดู field เลขบิลจริงจาก Executions
+    var json = JSON.parse(rawResp);
+    var orderId     = json.id || json.orderid || json.orderId || deepFindByKey_(json, /^(order)?id$/i) || null;
+    // เลขบิลจาก ZORT (เช่น RC-3-2026xxxxx) — ลอง field ตรง ๆ ก่อน แล้ว deep-scan (คีย์ = number/ordernumber เป๊ะ)
+    var orderNumber = json.number || json.ordernumber || json.orderNumber || deepFindByKey_(json, /^(order)?number$/i) || null;
+    // fallback: ถ้า AddOrder ไม่คืนเลขบิล → ดึงจาก GetOrderDetail (ยิงเฉพาะกรณีจำเป็น ไม่เพิ่ม latency ปกติ)
+    if (!orderNumber && orderId != null) {
+      try {
+        var odRes = UrlFetchApp.fetch(ZORT_BASE + "/Order/GetOrderDetail?id=" + encodeURIComponent(orderId),
+          { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+        var odJson = JSON.parse(odRes.getContentText() || "{}");
+        orderNumber = deepFindByKey_(odJson, /^(order)?number$/i) || orderNumber;
+      } catch (e) { Logger.log("POS GetOrderDetail fallback error: " + e); }
+    }
 
     // ── (2) ใบกำกับภาษี + รับชำระ — ยิงขนานกันด้วย fetchAll (ลดเวลา sequential) ──
     var docNumber = null;

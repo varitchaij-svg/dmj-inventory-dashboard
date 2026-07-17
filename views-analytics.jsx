@@ -8090,10 +8090,11 @@ async function printReceipt80ViaBluetooth(receiptProps, showToast) {
 // สไตล์ใบเสร็จร้านทั่วไป · แสดงเฉพาะตอน print ผ่าน .pos-print80-area (หรือ capture ตรงผ่าน Bluetooth)
 function PosReceipt80({ cart, totals, orderNumber, documentNumber, payMethod, channel, taxInvoice, cashReceived, cashChange }) {
   const gross = (totals.retailEligible || 0) + (totals.retailExcluded || 0);
-  const discount = Math.max(0, gross - totals.grandTotal);
+  const factor = gross > 0 ? totals.grandTotal / gross : 1;   // สัดส่วนหลังส่วนลดทั้งบิล (ตรงกับ GAS)
   const money = (n) => (Math.round(n * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const totalUnits = cart.reduce((s, it) => s + (Number(it.qty) || 0), 0);
   const now = new Date();
+  const seller = (typeof window !== "undefined" && window._currentUser) ? window._currentUser : "";
   const line = { borderTop: "1px dashed #000", margin: "5px 0" };
   const row = { display: "flex", justifyContent: "space-between", gap: 6 };
   const [logoOk, setLogoOk] = uS(true);
@@ -8117,47 +8118,48 @@ function PosReceipt80({ cart, totals, orderNumber, documentNumber, payMethod, ch
   return (
     <div className="pos-print80-area">
       <div className="receipt80" style={{ fontFamily: "'Courier New', monospace", color: "#000", fontSize: 12.5, lineHeight: 1.45 }}>
+        {/* ── หัวเอกสาร (ตามฟอร์แมต ZORT: title อย่างย่อ อยู่บนสุด) ── */}
         <div style={{ textAlign: "center" }}>
           {logoOk && <img src="logo.png" alt="" style={{ width: 56, height: 56, objectFit: "contain", marginBottom: 2 }} onError={() => setLogoOk(false)}/>}
-          <div style={{ fontSize: 15, fontWeight: 800 }}>ดูเหมือนจริง</div>
-          <div style={{ fontSize: 10.5 }}>{POS_SELLER.name}</div>
+          <div style={{ fontSize: 13, fontWeight: 800, margin: "2px 0" }}>ใบเสร็จรับเงิน/ใบกำกับภาษีอย่างย่อ</div>
+          <div style={{ fontSize: 11, fontWeight: 700 }}>{POS_SELLER.name}</div>
+          {seller ? <div style={{ fontSize: 10 }}>พนักงานขาย: {seller}</div> : null}
           <div style={{ fontSize: 10 }}>{POS_SELLER.address}</div>
-          <div style={{ fontSize: 10 }}>โทร. {POS_SELLER.phone}</div>
-          <div style={{ fontSize: 10 }}>เลขภาษี {POS_SELLER.taxId}</div>
+          <div style={{ fontSize: 10 }}>โทร. {POS_SELLER.phone} · อีเมล {POS_SELLER.email}</div>
+          <div style={{ fontSize: 10 }}>เลขผู้เสียภาษี {POS_SELLER.taxId}</div>
+          <div style={{ fontSize: 11, fontWeight: 700, marginTop: 2 }}>{orderNumber || "—"}</div>
+          <div style={{ fontSize: 10 }}>{now.toLocaleDateString("th-TH", { year: "numeric", month: "long", day: "numeric" })}</div>
+          {channel ? <div style={{ fontSize: 10 }}>ช่องทาง: {channel}</div> : null}
         </div>
         <div style={line}></div>
-        <div style={{ textAlign: "center", fontWeight: 700 }}>ใบเสร็จรับเงิน</div>
-        <div style={{ fontSize: 10.5 }}>เลขที่: {orderNumber || "—"}</div>
-        <div style={{ fontSize: 10.5 }}>วันที่: {now.toLocaleString("th-TH", { timeZone: "Asia/Bangkok" })}</div>
-        {channel ? <div style={{ fontSize: 10.5 }}>ช่องทาง: {channel}</div> : null}
-        <div style={line}></div>
-        {/* รายการสินค้า */}
+        {/* รายการสินค้า — จำนวน x ชื่อ ... ยอด · บรรทัดล่าง ราคา/ส่วนลดต่อหน่วย */}
         {cart.map((it, i) => {
           const qty = Number(it.qty) || 0, price = Number(it.price) || 0;
+          const unitFinal = price * factor, unitDisc = Math.max(0, price - unitFinal);
           return (
             <div key={i} style={{ marginBottom: 3 }}>
-              <div style={{ wordBreak: "break-word" }}>{it.name}</div>
               <div style={row}>
-                <span style={{ color: "#000" }}>{qty} x {money(price)}</span>
-                <span>{money(qty * price)}</span>
+                <span style={{ wordBreak: "break-word", paddingRight: 6 }}>{qty} x {it.name}</span>
+                <span>{money(unitFinal * qty)}</span>
               </div>
+              <div style={{ fontSize: 10, color: "#000" }}>ราคา: {money(price)}{unitDisc > 0.005 ? `, ส่วนลดต่อหน่วย: ${money(unitDisc)}` : ""}</div>
             </div>
           );
         })}
         <div style={line}></div>
-        <div style={row}><span>รวม ({totalUnits} ชิ้น)</span><span>{money(gross)}</span></div>
-        {discount > 0 && <div style={row}><span>ส่วนลด</span><span>-{money(discount)}</span></div>}
-        <div style={{ ...row, fontSize: 15, fontWeight: 800, marginTop: 3 }}><span>สุทธิ</span><span>{money(totals.grandTotal)} ฿</span></div>
-        <div style={{ ...row, fontSize: 10, color: "#000" }}><span>(รวม VAT 7% = {money(totals.vat)})</span></div>
+        <div style={row}><span>จำนวนสินค้ารวม: {totalUnits}</span><span>{money(gross)}</span></div>
         <div style={line}></div>
-        <div style={row}><span>ชำระโดย</span><span>{payMethod || "—"}</span></div>
-        {cashReceived != null && (
-          <>
-            <div style={row}><span>รับเงินมา</span><span>{money(cashReceived)}</span></div>
-            <div style={{ ...row, fontWeight: 700 }}><span>เงินทอน</span><span>{money(Math.max(0, cashChange))}</span></div>
-          </>
-        )}
-        {taxInvoice && documentNumber ? <div style={{ fontSize: 10.5 }}>ใบกำกับภาษีเลขที่: {documentNumber}</div> : null}
+        {/* ── แจง VAT ชัดเจน: ราคารวมภาษีแล้ว → ถอดกลับ ── */}
+        <div style={row}><span>รวมก่อนภาษี</span><span>{money(totals.preVat)}</span></div>
+        <div style={row}><span>ภาษีมูลค่าเพิ่ม 7%</span><span>{money(totals.vat)}</span></div>
+        <div style={{ ...row, fontSize: 15, fontWeight: 800, marginTop: 2 }}><span>รวมสุทธิ</span><span>{money(totals.grandTotal)}</span></div>
+        <div style={row}><span>ชำระเงิน</span><span>{money(cashReceived != null ? cashReceived : totals.grandTotal)}</span></div>
+        {cashReceived != null && <div style={row}><span>เงินทอน</span><span>{money(Math.max(0, cashChange))}</span></div>}
+        <div style={row}><span>วิธีชำระเงิน: {payMethod || "—"}</span><span>{money(totals.grandTotal)}</span></div>
+        <div style={{ fontSize: 9.5, color: "#000", marginTop: 2 }}>* ราคาสินค้ารวมภาษีมูลค่าเพิ่ม 7% แล้ว</div>
+        {taxInvoice && documentNumber ? <div style={{ fontSize: 10 }}>ใบกำกับภาษีเต็มรูปแบบเลขที่: {documentNumber}</div> : null}
+        <div style={line}></div>
+        <div style={{ textAlign: "center", fontSize: 10 }}>** {now.toLocaleString("th-TH", { timeZone: "Asia/Bangkok" })} **</div>
         <div style={line}></div>
         {/* ── ท้ายบิล: ขอบคุณ + ช่องทางติดต่อ + QR ขอใบกำกับภาษีเต็มรูปแบบ ── */}
         <div style={{ textAlign: "center", marginTop: 6, fontSize: 11.5 }}>
