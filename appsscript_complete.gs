@@ -6860,6 +6860,34 @@ function debugFixPendingOrderStatus() {
   Logger.log("\n❌ ลองครบทุกวิธีแล้วยังไม่ Success — copy log ทั้งหมดส่งกลับมาเพื่อวิเคราะห์ resp");
 }
 
+// ── dump 10 บิลล่าสุด แยกแยะ POS vs MTO vs manual + สถานะ/ยอด/เวลา (READ-ONLY) ──
+// เจ้าของกด Run → copy Logs ส่งกลับ · ใช้ระบุว่าบิลไหนคือ POS ที่ยอด/สถานะเพี้ยน
+function debugListRecentOrders() {
+  var H = zortHeaders_();
+  function get(path) {
+    try { return JSON.parse(UrlFetchApp.fetch(ZORT_BASE + path, { method: "get", headers: H, muteHttpExceptions: true }).getContentText() || "{}"); }
+    catch (err) { return { _error: String(err) }; }
+  }
+  var y = new Date().getFullYear();
+  var orders = get("/Order/GetOrders?page=1&limit=10&fromdate=" + y + "-01-01&todate=" + y + "-12-31");
+  var olist = orders.list || orders.orders || orders.data || [];
+  Logger.log("═══ " + olist.length + " บิลล่าสุด (ใหม่→เก่า) ═══\n");
+  for (var i = 0; i < olist.length; i++) {
+    var o = olist[i];
+    var firstItem = (o.list && o.list[0]) || {};
+    Logger.log(
+      "#" + (i + 1) + "  " + o.number +
+      "\n   status=" + o.status + "  amount=" + o.amount + "  ordertype=" + o.ordertype +
+      "\n   saleschannel=" + JSON.stringify(o.saleschannel) + "  customername=" + JSON.stringify(o.customername) +
+      "\n   warehousecode=" + JSON.stringify(o.warehousecode) + "  createusername=" + JSON.stringify(o.createusername) +
+      "\n   description(remark)=" + JSON.stringify(o.description) +
+      "\n   created=" + o.createdatetimeString +
+      "\n   line[0]: sku=" + (firstItem.sku || "-") + " pricepernumber=" + firstItem.pricepernumber + " totalprice=" + firstItem.totalprice + " (" + ((o.list || []).length) + " รายการ)\n"
+    );
+  }
+  Logger.log("═══ เสร็จ — ดู saleschannel/customername/created เพื่อระบุบิล POS ที่ยอดเพี้ยน ═══");
+}
+
 // บันทึกวัตถุดิบ MTO โดยไม่ปิดงาน — ลบแถว draft เก่าแล้วเขียนใหม่ (closedAt ว่าง = draft)
 function saveMtoJobItems(ss, data) {
   const jobId = String(data.jobId || "").trim();
