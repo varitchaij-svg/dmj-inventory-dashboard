@@ -6564,6 +6564,10 @@ function createSaleBill(ss, data, actor) {
   // line items สำหรับ ZORT — เฉลี่ยส่วนลดลงราคาต่อชิ้นตามสัดส่วน (ให้ยอดรวม = grandTotal)
   var gross = totals.retailEligible + totals.retailExcluded;
   var factor = gross > 0 ? (totals.grandTotal / gross) : 1;   // อัตราส่วนหลังส่วนลดทั้งบิล
+  // line items — ใช้โครงสร้างเดียวกับ createZortSaleOrder_ (งานจัดพิเศษ) ที่พิสูจน์แล้วว่า ZORT รับจริง
+  // ต่างกันแค่: MTO ส่ง price:0 (ไม่คิดเงิน) · POS ส่งราคาจริง → "แยกกรณี" ชัดเจน
+  // warehousecode ย้ายมาอยู่ราย line item (ไม่ใช่ระดับ order) — order-level warehousecode ทำให้
+  // ZORT ตีความ order ผิดจนราคาเป็น 0 (นี่คือจุดที่ POS ไปทับกับ flow อื่น)
   var list = items.map(function (it) {
     var qty = Number(it.qty) || 0;
     var netUnit = Math.round((Number(it.price) || 0) * factor * 100) / 100;  // ราคาต่อชิ้นสุทธิ (หลังเฉลี่ยส่วนลด, รวม VAT)
@@ -6571,22 +6575,21 @@ function createSaleBill(ss, data, actor) {
       sku: String(it.sku || "").trim(),
       name: String(it.name || "").trim(),
       number: qty,
-      pricepernumber: netUnit,                     // ← ZORT v4 ใช้ field นี้เป็นราคา/หน่วย (ตัวที่ทำให้ยอดเป็น 0 เพราะเดิมส่ง price)
-      price: netUnit,                              // เผื่อ ZORT รุ่นนี้อ่าน price
+      price: netUnit,                                  // ราคา/หน่วยจริง (createZortSaleOrder_ ใช้ field เดียวกันนี้)
       totalprice: Math.round(netUnit * qty * 100) / 100,
+      warehousecode: WH_FRONTSTORE,                    // ตัดสต็อกจากคลังหน้าร้าน (ราย item ไม่ใช่ระดับ order)
     };
   }).filter(function (it) { return it.number > 0; });
 
-  // ประกอบ payload AddOrder (mirror createZortSaleOrder_ + field ลูกค้า)
+  // ประกอบ payload AddOrder — mirror createZortSaleOrder_ (minimal ที่เวิร์ก) + field ลูกค้า
+  // ไม่ใส่ warehousecode/status ระดับ order (เดิมใส่แล้วราคากลายเป็น 0) — status ตั้งทีหลังผ่าน UpdateOrderStatus
   var F = POS_ZORT_FIELDS;
   var cust = data.customer || {};
   var payload = {
     date: Utilities.formatDate(new Date(), "Asia/Bangkok", "dd/MM/yyyy"),
-    warehousecode: WH_FRONTSTORE,        // ตัดสต็อกจากคลังหน้าร้าน (saler ขายหน้าร้าน)
     remark: String(data.remark || ""),
     list: list,
   };
-  payload[F.orderStatusField] = F.orderStatusDone;   // ตั้งสถานะ "สำเร็จ" ตั้งแต่ตอนสร้าง (ขายหน้าร้านจ่ายจบทันที)
   if (data.channel)  payload[F.orderChannel]          = String(data.channel);
   if (cust.name)     payload[F.orderCustomerName]     = String(cust.name);
   if (cust.taxId)    payload[F.orderCustomerTaxId]    = String(cust.taxId);
