@@ -432,7 +432,7 @@ function doPost(e) {
       return lookupSaleBill(data.orderNumber);
     }
     if (data.issueFullTaxInvoice) {
-      return issueFullTaxInvoice(data.orderNumber, data.customer || {}, actor);
+      return issueFullTaxInvoice(data.orderNumber, data.customer || {}, actor, data.orderId);
     }
 
     // ─── Order Management ───
@@ -6785,39 +6785,43 @@ function lookupSaleBill(orderNumber) {
 
 // ออกใบกำกับภาษีเต็มรูปแบบจริงใน ZORT: อัปเดตข้อมูลลูกค้าเข้า order แล้วสร้างเอกสาร documenttype:2
 // customer = {name, taxId, branch, branchNo, address, phone, email} · ส่งชื่อ field หลัก + alias กันชื่อไม่ตรง
-function issueFullTaxInvoice(orderNumber, customer, actor) {
+function issueFullTaxInvoice(orderNumber, customer, actor, orderId) {
   var num = String(orderNumber || "").trim();
   if (!num) return error("กรุณาระบุเลขบิล");
   var c = customer || {};
   if (!String(c.name || "").trim() && !String(c.taxId || "").trim())
     return error("ใบกำกับภาษีต้องมีชื่อลูกค้าหรือเลขผู้เสียภาษี");
+  // ใช้ numeric id เป็นหลัก (EditOrderInfo/AddDocumentOrder ต้องการ numeric id ไม่ใช่เลขบิล string)
+  // ถ้า client ไม่ส่ง orderId มา → resolve จากเลขบิล
+  var oid = orderId;
+  if (oid == null || String(oid).trim() === "") { var f = findZortOrderByNumber_(num); oid = f ? f.id : num; }
 
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return error("ระบบกำลังทำงานอื่นอยู่ ลองใหม่อีกครั้ง");
   try {
     var headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
 
-    // (1) EditOrderInfo — ใส่ข้อมูลลูกค้าเข้า order (number ใช้แทน id ได้ตาม ZORT note)
-    // ส่งชื่อ field ที่ยืนยันจาก GetOrderDetail (customeridnumber=เลขภาษี ฯลฯ) + alias สำรอง (ZORT ข้าม field ที่ไม่รู้จัก)
-    var editPayload = { number: num, id: num };
-    var setBoth = function (val, keys) { if (String(val || "").trim() !== "") keys.forEach(function (k) { editPayload[k] = String(val); }); };
-    setBoth(c.name,     ["customername"]);
-    setBoth(c.taxId,    ["customeridnumber", "customertaxid", "taxid"]);
-    setBoth(c.branch,   ["customerbranchname", "customerbranch"]);
-    setBoth(c.branchNo, ["customerbranchno", "customerbranchcode"]);
-    setBoth(c.address,  ["customeraddress"]);
-    setBoth(c.phone,    ["customerphone"]);
-    setBoth(c.email,    ["customeremail"]);
+    // (1) EditOrderInfo — ใส่ข้อมูลลูกค้าเข้า order ด้วย numeric id
+    // ส่งชื่อ field ที่ยืนยันจาก GetOrderDetail (customeridnumber=เลขภาษี ฯลฯ)
+    var editPayload = { id: oid };
+    var setF = function (val, key) { if (String(val || "").trim() !== "") editPayload[key] = String(val); };
+    setF(c.name,     "customername");
+    setF(c.taxId,    "customeridnumber");
+    setF(c.branch,   "customerbranchname");
+    setF(c.branchNo, "customerbranchno");
+    setF(c.address,  "customeraddress");
+    setF(c.phone,    "customerphone");
+    setF(c.email,    "customeremail");
     var editRes = UrlFetchApp.fetch(ZORT_BASE + "/Order/EditOrderInfo",
       { method: "post", headers: headers, payload: JSON.stringify(editPayload), muteHttpExceptions: true });
     var editErr = zortRespError_(editRes);
-    Logger.log("issueFullTaxInvoice EditOrderInfo resp: " + (editRes.getContentText() || "").substring(0, 300));
+    Logger.log("issueFullTaxInvoice EditOrderInfo (id=" + oid + ") resp: " + (editRes.getContentText() || "").substring(0, 300));
     if (editErr) { logZortFailure_("ใบกำกับย้อนหลัง-แก้ข้อมูลลูกค้า " + num, editErr); return error("บันทึกข้อมูลลูกค้าเข้าบิลไม่สำเร็จ: " + editErr); }
 
     // (2) AddDocumentOrder documenttype:2 = สร้างใบกำกับภาษีเต็มรูปแบบจริง
     var docRes = UrlFetchApp.fetch(ZORT_BASE + "/Document/AddDocumentOrder",
       { method: "post", headers: headers, muteHttpExceptions: true,
-        payload: JSON.stringify({ id: num, orderid: num, number: num, documenttype: 2 }) });
+        payload: JSON.stringify({ id: oid, orderid: oid, documenttype: 2 }) });
     var docErr = zortRespError_(docRes);
     var docBody = docRes.getContentText() || "{}";
     Logger.log("issueFullTaxInvoice AddDocumentOrder resp: " + docBody.substring(0, 300));
@@ -6833,6 +6837,50 @@ function issueFullTaxInvoice(orderNumber, customer, actor) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// ── หา payload EditOrderInfo ที่ ZORT รับจริง (แก้ 500) — ลองหลายรูปแบบบน order POS ล่าสุด ──
+// เจ้าของกด Run → copy Logs ส่งกลับ · แก้แค่ชื่อลูกค้าเป็นค่าทดสอบ (ไม่สร้างเอกสาร) — ปลอดภัย
+function debugEditOrderInfo() {
+  var H = zortHeaders_();
+  var HJ = Object.assign({}, H, { "Content-Type": "application/json" });
+  function get(path) {
+    try { return JSON.parse(UrlFetchApp.fetch(ZORT_BASE + path, { method: "get", headers: H, muteHttpExceptions: true }).getContentText() || "{}"); }
+    catch (err) { return {}; }
+  }
+  function post(path, body) {
+    var res = UrlFetchApp.fetch(ZORT_BASE + path, { method: "post", headers: HJ, payload: JSON.stringify(body), muteHttpExceptions: true });
+    return { code: res.getResponseCode(), text: (res.getContentText() || "").slice(0, 400) };
+  }
+  // หา order POS ล่าสุด (Success) → เอา numeric id
+  var y = new Date().getFullYear();
+  var orders = get("/Order/GetOrders?page=1&limit=10&fromdate=" + y + "-01-01&todate=" + y + "-12-31");
+  var olist = orders.list || orders.orders || orders.data || [];
+  var target = null;
+  for (var i = 0; i < olist.length; i++) {
+    if (String(olist[i].saleschannel) === "POS" && String(olist[i].status) === "Success") { target = olist[i]; break; }
+  }
+  if (!target) target = olist[0];
+  if (!target) { Logger.log("⚠️ ไม่พบ order"); return; }
+  var oid = target.id || target.orderid;   // numeric id
+  Logger.log("🎯 order: number=" + target.number + " numericId=" + oid + " (ปัจจุบัน customername=" + JSON.stringify(target.customername) + ")");
+
+  var stamp = "TEST-" + Utilities.formatDate(new Date(), "Asia/Bangkok", "HHmmss");
+  var variants = [
+    { label: "V1 id(numeric) + customer* ครบ", body: { id: oid, customername: stamp + "-V1", customeridnumber: "0105535087440", customeraddress: "ที่อยู่ทดสอบ", customerphone: "0000000000", customerbranchname: "สำนักงานใหญ่", customerbranchno: "00000" } },
+    { label: "V2 id(numeric) + customername อย่างเดียว", body: { id: oid, customername: stamp + "-V2" } },
+    { label: "V3 number(string) + customername", body: { number: target.number, customername: stamp + "-V3" } },
+    { label: "V4 id + name/taxid (ชื่อ field แบบสั้น)", body: { id: oid, name: stamp + "-V4", taxid: "0105535087440", address: "ที่อยู่" } },
+    { label: "V5 id + contactname/customertaxid", body: { id: oid, contactname: stamp + "-V5", customertaxid: "0105535087440" } },
+  ];
+  for (var v = 0; v < variants.length; v++) {
+    var r = post("/Order/EditOrderInfo", variants[v].body);
+    Logger.log("\n▶ [" + variants[v].label + "]\n   payload=" + JSON.stringify(variants[v].body) + "\n   HTTP " + r.code + " resp=" + r.text);
+    var back = get("/Order/GetOrderDetail?id=" + encodeURIComponent(oid));
+    var bo = back.order || back.data || back;
+    Logger.log("   → อ่านกลับ: customername=" + JSON.stringify(bo.customername) + " customeridnumber=" + JSON.stringify(bo.customeridnumber));
+  }
+  Logger.log("\n═══ เสร็จ — ดูว่า variant ไหน HTTP 200 + 'อ่านกลับ' customername เปลี่ยนตาม TEST-...-Vx ═══");
 }
 
 // หมวดที่ยกเว้นกฎส่วนลด — เก็บใน Script Property BILL_EXCLUDE_CATS (comma) แก้ได้ไม่ต้อง deploy

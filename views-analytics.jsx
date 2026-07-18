@@ -7323,13 +7323,13 @@ async function syncLookupSaleBill(orderNumber) {
   } catch (err) { return { success: false, error: err.message }; }
 }
 // ── sync helper: ออกใบกำกับภาษีเต็มรูปแบบจริงใน ZORT (ย้อนหลัง) ──
-async function syncIssueFullTaxInvoice(orderNumber, customer) {
+async function syncIssueFullTaxInvoice(orderNumber, customer, orderId) {
   if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
   try {
     const res = await fetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ issueFullTaxInvoice: true, orderNumber, customer,
+      body: JSON.stringify({ issueFullTaxInvoice: true, orderNumber, orderId, customer,
         actor: window._currentUser || sessionStorage.getItem("dmj_role") || "saler" }),
     });
     return await res.json(); // { success, data:{orderNumber, documentNumber} }
@@ -7365,6 +7365,9 @@ function RetroTaxInvoiceView({ onBack }) {
   const [issuing, setIssuing] = uS(false);
   const [issued, setIssued] = uS(null);             // { documentNumber } หลังออกเอกสารสำเร็จ
   const [printReq, setPrintReq] = uS(0);
+  const [custQuery, setCustQuery] = uS("");         // ค้นลูกค้าเก่า (ชื่อ/เลขภาษี)
+  const [custResults, setCustResults] = uS(null);   // null=ยังไม่ค้น · []=ไม่เจอ
+  const [searchingCust, setSearchingCust] = uS(false);
 
   uE(() => {
     if (printReq <= 0) return;
@@ -7392,11 +7395,41 @@ function RetroTaxInvoiceView({ onBack }) {
     if (d.existingTaxInvoice) showToast("warn", "บิลนี้เคยออกใบกำกับแล้ว: " + d.existingTaxInvoice, "⚠️", 6000);
   }
 
+  // ค้นลูกค้าเก่าจาก ZORT (ชื่อบริษัท/เลขภาษี) → autofill ฟอร์ม (ไม่ต้องพิมพ์ใหม่ทุกครั้ง)
+  async function doSearchCustomer() {
+    const q = custQuery.trim();
+    if (q.length < 2) { showToast("warn", "พิมพ์อย่างน้อย 2 ตัวอักษร", "🔍"); return; }
+    setSearchingCust(true); setCustResults(null);
+    const r = await syncSearchContact(q);
+    setSearchingCust(false);
+    if (!r.success) { showToast("error", "ค้นไม่สำเร็จ: " + (r.error || ""), "❌"); return; }
+    const list = (r.data && r.data.contacts) || [];
+    setCustResults(list);
+    if (!list.length) showToast("warn", "ไม่พบลูกค้า — กรอกเองได้", "📝");
+  }
+  async function pickCustomer(c) {
+    setCust({
+      name: c.name || "", taxId: c.taxId || "", branch: c.branch || "", branchNo: c.branchNo || "",
+      address: c.address || "", phone: c.phone || "", email: c.email || "",
+    });
+    setCustResults(null); setCustQuery("");
+    showToast("success", "กรอกข้อมูลลูกค้าแล้ว", "✅");
+    if (c.id) {   // list ค้นหาบางทีไม่มี taxid/ที่อยู่/สาขา ครบ → ดึงรายละเอียดเต็ม
+      const r = await syncGetContactDetail(c.id);
+      const d = r && r.success && r.data && r.data.contact;
+      if (d) setCust(prev => ({
+        name: d.name || prev.name, taxId: d.taxId || prev.taxId, branch: d.branch || prev.branch,
+        branchNo: d.branchNo || prev.branchNo, address: d.address || prev.address,
+        phone: d.phone || prev.phone, email: d.email || prev.email,
+      }));
+    }
+  }
+
   async function doIssue() {
     if (!bill) return;
     if (!cust.name.trim() && !cust.taxId.trim()) { showToast("warn", "ต้องมีชื่อลูกค้าหรือเลขผู้เสียภาษี", "🧾"); return; }
     setIssuing(true);
-    const r = await syncIssueFullTaxInvoice(bill.orderNumber, cust);
+    const r = await syncIssueFullTaxInvoice(bill.orderNumber, cust, bill.orderId);
     setIssuing(false);
     if (!r.success) { showToast("error", r.error || "ออกใบกำกับไม่สำเร็จ", "❌"); return; }
     setIssued(r.data || {});
@@ -7466,6 +7499,29 @@ function RetroTaxInvoiceView({ onBack }) {
 
             {/* ── ข้อมูลภาษีลูกค้า ── */}
             <Card padding={true} title="👤 ข้อมูลลูกค้า (สำหรับใบกำกับภาษี)">
+              {/* ค้นลูกค้าเก่า — พิมพ์ชื่อ/เลขภาษี แล้วดึงข้อมูลเดิมมาใส่ ไม่ต้องกรอกใหม่ */}
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input style={inp} placeholder="🔍 ค้นลูกค้าเก่า (ชื่อบริษัท / เลขภาษี)" value={custQuery}
+                    onChange={e => setCustQuery(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") doSearchCustomer(); }}/>
+                  <button onClick={doSearchCustomer} disabled={searchingCust}
+                    style={{ padding: "8px 16px", borderRadius: 8, border: "1px solid var(--g-600,#1f7f44)", background: "#fff", color: "var(--g-700,#166534)", fontWeight: 700, fontSize: 13, whiteSpace: "nowrap", opacity: searchingCust ? 0.6 : 1 }}>
+                    {searchingCust ? "..." : "ค้น"}
+                  </button>
+                </div>
+                {custResults && custResults.length > 0 && (
+                  <div style={{ marginTop: 6, border: "1px solid #eee", borderRadius: 8, maxHeight: 160, overflowY: "auto" }}>
+                    {custResults.map((c, i) => (
+                      <div key={i} onClick={() => pickCustomer(c)}
+                        style={{ padding: "8px 10px", borderBottom: "1px solid #f3f4f6", cursor: "pointer", fontSize: 13 }}>
+                        <div style={{ fontWeight: 700 }}>{c.name || "—"}</div>
+                        <div style={{ color: "var(--muted)", fontSize: 12 }}>{c.taxId ? "เลขภาษี " + c.taxId : ""}{c.branch ? " · " + c.branch : ""}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 <input style={inp} placeholder="ชื่อ/บริษัท *" value={cust.name} onChange={e => setCust({ ...cust, name: e.target.value })}/>
                 <input style={inp} placeholder="เลขประจำตัวผู้เสียภาษี (13 หลัก) *" value={cust.taxId} onChange={e => setCust({ ...cust, taxId: e.target.value })}/>
