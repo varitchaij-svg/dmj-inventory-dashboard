@@ -6807,6 +6807,59 @@ function debugPosOrderLineFields() {
   Logger.log("\n═══ เสร็จ — ดู 'item[0] FULL' หา field ที่เก็บราคาต่อหน่วย + 'order.status' หาค่าสถานะจริง ═══");
 }
 
+// ── ทดลองเปลี่ยนสถานะ order ที่ค้าง Pending → Success แล้วดูว่า amount ตามมาไหม ──
+// เจ้าของกด Run 1 ครั้ง → copy Logs ส่งกลับ · มันจะ:
+//   1) หา order ล่าสุดที่ยัง "ไม่ Success" (บิล POS ทดสอบที่ค้าง)
+//   2) ลองยิงหลายวิธีเรียงกัน (UpdateOrderStatus หลายรูปแบบ / ReadyToShip→Success) log response ดิบทุกครั้ง
+//   3) หลังแต่ละวิธี re-fetch ดู status + amount — หยุดเมื่อได้ Success
+// ⚠️ แก้ข้อมูลจริง แต่เป็นบิลทดสอบที่ควรเป็น Success อยู่แล้ว จึงไม่เสียหาย
+function debugFixPendingOrderStatus() {
+  var H = zortHeaders_();
+  var HJ = Object.assign({}, H, { "Content-Type": "application/json" });
+  function get(path) {
+    try { return JSON.parse(UrlFetchApp.fetch(ZORT_BASE + path, { method: "get", headers: H, muteHttpExceptions: true }).getContentText() || "{}"); }
+    catch (err) { return { _error: String(err) }; }
+  }
+  function post(path, body) {
+    var res = UrlFetchApp.fetch(ZORT_BASE + path, { method: "post", headers: HJ, payload: JSON.stringify(body), muteHttpExceptions: true });
+    return { code: res.getResponseCode(), text: (res.getContentText() || "").slice(0, 300) };
+  }
+  function statusOf(oid) {
+    var d = get("/Order/GetOrderDetail?id=" + encodeURIComponent(oid));
+    var o = d.order || d.data || d;
+    return { status: o.status, amount: o.amount, number: o.number };
+  }
+
+  // หา order ล่าสุดที่ยังไม่ Success
+  var y = new Date().getFullYear();
+  var orders = get("/Order/GetOrders?page=1&limit=10&fromdate=" + y + "-01-01&todate=" + y + "-12-31");
+  var olist = orders.list || orders.orders || orders.data || [];
+  var target = null;
+  for (var i = 0; i < olist.length; i++) {
+    if (String(olist[i].status) !== "Success") { target = olist[i]; break; }
+  }
+  if (!target) { Logger.log("⚠️ ไม่พบ order ที่ค้าง (ทุกใบ Success แล้ว) — ลองสร้างบิล POS ทดสอบใหม่ก่อน"); return; }
+  var oid = target.id || target.orderid;
+  Logger.log("🎯 target order: number=" + target.number + " id=" + oid + " status=" + target.status + " amount=" + target.amount);
+
+  var attempts = [
+    { label: "UpdateOrderStatus {id, status:'Success'}", path: "/Order/UpdateOrderStatus", body: { id: oid, status: "Success" } },
+    { label: "UpdateOrderStatus {id, orderid, orderstatus:'Success'}", path: "/Order/UpdateOrderStatus", body: { id: oid, orderid: oid, orderstatus: "Success" } },
+    { label: "UpdateOrderStatus {id, status:3}", path: "/Order/UpdateOrderStatus", body: { id: oid, status: 3 } },
+    { label: "ReadyToShip {id}", path: "/Order/ReadyToShip", body: { id: oid } },
+    { label: "UpdateOrderStatus {id, status:'Success'} (หลัง ReadyToShip)", path: "/Order/UpdateOrderStatus", body: { id: oid, status: "Success" } },
+  ];
+  for (var a = 0; a < attempts.length; a++) {
+    var at = attempts[a];
+    var r = post(at.path, at.body);
+    Logger.log("\n▶ [" + (a + 1) + "] " + at.label + "\n   payload=" + JSON.stringify(at.body) + "\n   HTTP " + r.code + " resp=" + r.text);
+    var st = statusOf(oid);
+    Logger.log("   → หลังยิง: status=" + st.status + " amount=" + st.amount);
+    if (String(st.status) === "Success") { Logger.log("\n✅ สำเร็จด้วยวิธี [" + (a + 1) + "] — amount=" + st.amount + " · ใช้วิธีนี้ในโค้ดจริง"); return; }
+  }
+  Logger.log("\n❌ ลองครบทุกวิธีแล้วยังไม่ Success — copy log ทั้งหมดส่งกลับมาเพื่อวิเคราะห์ resp");
+}
+
 // บันทึกวัตถุดิบ MTO โดยไม่ปิดงาน — ลบแถว draft เก่าแล้วเขียนใหม่ (closedAt ว่าง = draft)
 function saveMtoJobItems(ss, data) {
   const jobId = String(data.jobId || "").trim();
