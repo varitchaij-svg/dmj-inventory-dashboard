@@ -6766,6 +6766,47 @@ function exploreZortForBilling() {
   Logger.log("═══ เสร็จ — ปรับ POS_ZORT_FIELDS ให้ตรง field จริงถ้าจำเป็น ═══");
 }
 
+// ── วินิจฉัยเจาะจง: order ล่าสุดที่เราสร้าง ราคาต่อหน่วยเก็บใน field ชื่ออะไร + status ค่าอะไร ──
+// (READ-ONLY) เจ้าของกด Run 1 ครั้ง → เปิด Executions → copy Logs ทั้งหมดส่งกลับมา
+// ใช้ไล่ปัญหา "ยอด 0 / สถานะรอส่งสินค้า" — ดู field จริงจาก ZORT ไม่ต้องเดา
+function debugPosOrderLineFields() {
+  var H = zortHeaders_();
+  function get(path) {
+    try { return JSON.parse(UrlFetchApp.fetch(ZORT_BASE + path, { method: "get", headers: H, muteHttpExceptions: true }).getContentText() || "{}"); }
+    catch (err) { return { _error: String(err) }; }
+  }
+  // ดึงบิลล่าสุดในช่วงปีนี้ (GetOrders คืนใหม่สุดก่อน)
+  var y = new Date().getFullYear();
+  var orders = get("/Order/GetOrders?page=1&limit=3&fromdate=" + y + "-01-01&todate=" + y + "-12-31");
+  var olist = orders.list || orders.orders || orders.data || [];
+  Logger.log("จำนวน order ที่ดึงได้: " + olist.length);
+  if (!olist.length) { Logger.log("⚠️ ไม่พบ order เลย — ตรวจ credential/ช่วงวันที่"); return; }
+
+  for (var n = 0; n < Math.min(2, olist.length); n++) {
+    var o = olist[n];
+    Logger.log("\n═══════════ ORDER #" + (n + 1) + " ═══════════");
+    Logger.log(">> order keys: " + Object.keys(o).join(", "));
+    // field ระดับ order ที่เกี่ยวกับสถานะ/ยอด
+    ["number", "ordernumber", "status", "orderstatus", "statustext", "amount", "totalamount", "grandtotal", "netamount"].forEach(function (k) {
+      if (o[k] !== undefined) Logger.log("   order." + k + " = " + JSON.stringify(o[k]));
+    });
+    var oid = o.id || o.orderid;
+    var detail = get("/Order/GetOrderDetail?id=" + encodeURIComponent(oid));
+    var d = detail.order || detail.data || detail;
+    Logger.log(">> detail keys: " + Object.keys(d).join(", "));
+    ["number", "status", "orderstatus", "statustext", "amount", "totalamount", "grandtotal"].forEach(function (k) {
+      if (d[k] !== undefined) Logger.log("   detail." + k + " = " + JSON.stringify(d[k]));
+    });
+    var items = d.list || d.items || d.orderlist || d.products || [];
+    Logger.log(">> line items: " + items.length + " รายการ");
+    if (items[0]) {
+      Logger.log(">> item[0] keys: " + Object.keys(items[0]).join(", "));
+      Logger.log(">> item[0] FULL: " + JSON.stringify(items[0]));
+    }
+  }
+  Logger.log("\n═══ เสร็จ — ดู 'item[0] FULL' หา field ที่เก็บราคาต่อหน่วย + 'order.status' หาค่าสถานะจริง ═══");
+}
+
 // บันทึกวัตถุดิบ MTO โดยไม่ปิดงาน — ลบแถว draft เก่าแล้วเขียนใหม่ (closedAt ว่าง = draft)
 function saveMtoJobItems(ss, data) {
   const jobId = String(data.jobId || "").trim();
