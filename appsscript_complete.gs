@@ -6801,10 +6801,11 @@ function issueFullTaxInvoice(orderNumber, customer, actor, orderId) {
   try {
     var headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
 
-    // (1) EditOrderInfo — ใส่ข้อมูลลูกค้าเข้า order ด้วย numeric id
-    // ส่งชื่อ field ที่ยืนยันจาก GetOrderDetail (customeridnumber=เลขภาษี ฯลฯ)
-    var editPayload = { id: oid };
-    var setF = function (val, key) { if (String(val || "").trim() !== "") editPayload[key] = String(val); };
+    // (1) EditOrderInfo — พยายามใส่/อัปเดตข้อมูลลูกค้าเข้า order (best-effort)
+    // หมายเหตุ: ZORT ปฏิเสธ EditOrderInfo บน order ที่ปิดแล้ว (Success) → "Invalid ID"
+    // ไม่ให้ล้มทั้ง operation · order ส่วนใหญ่มีลูกค้าจากตอนขายอยู่แล้ว + ส่ง customer inline ที่ AddDocumentOrder ด้วย
+    var custFields = {};
+    var setF = function (val, key) { if (String(val || "").trim() !== "") custFields[key] = String(val); };
     setF(c.name,     "customername");
     setF(c.taxId,    "customeridnumber");
     setF(c.branch,   "customerbranchname");
@@ -6812,16 +6813,16 @@ function issueFullTaxInvoice(orderNumber, customer, actor, orderId) {
     setF(c.address,  "customeraddress");
     setF(c.phone,    "customerphone");
     setF(c.email,    "customeremail");
-    var editRes = UrlFetchApp.fetch(ZORT_BASE + "/Order/EditOrderInfo",
-      { method: "post", headers: headers, payload: JSON.stringify(editPayload), muteHttpExceptions: true });
-    var editErr = zortRespError_(editRes);
-    Logger.log("issueFullTaxInvoice EditOrderInfo (id=" + oid + ") resp: " + (editRes.getContentText() || "").substring(0, 300));
-    if (editErr) { logZortFailure_("ใบกำกับย้อนหลัง-แก้ข้อมูลลูกค้า " + num, editErr); return error("บันทึกข้อมูลลูกค้าเข้าบิลไม่สำเร็จ: " + editErr); }
+    try {
+      var editRes = UrlFetchApp.fetch(ZORT_BASE + "/Order/EditOrderInfo",
+        { method: "post", headers: headers, payload: JSON.stringify(Object.assign({ id: oid }, custFields)), muteHttpExceptions: true });
+      Logger.log("issueFullTaxInvoice EditOrderInfo (id=" + oid + ") resp: " + (editRes.getContentText() || "").substring(0, 200));
+    } catch (e) { Logger.log("EditOrderInfo error (ข้ามได้): " + e); }
 
-    // (2) AddDocumentOrder documenttype:2 = สร้างใบกำกับภาษีเต็มรูปแบบจริง
+    // (2) AddDocumentOrder documenttype:2 = สร้างใบกำกับภาษีเต็มรูปแบบจริง (แนบ customer inline เผื่อ order ยังไม่มี)
     var docRes = UrlFetchApp.fetch(ZORT_BASE + "/Document/AddDocumentOrder",
       { method: "post", headers: headers, muteHttpExceptions: true,
-        payload: JSON.stringify({ id: oid, orderid: oid, documenttype: 2 }) });
+        payload: JSON.stringify(Object.assign({ id: oid, orderid: oid, documenttype: 2 }, custFields)) });
     var docErr = zortRespError_(docRes);
     var docBody = docRes.getContentText() || "{}";
     Logger.log("issueFullTaxInvoice AddDocumentOrder resp: " + docBody.substring(0, 300));
