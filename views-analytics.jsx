@@ -7310,6 +7310,31 @@ async function syncCreateSaleBill(bill) {
     return await res.json(); // { success, data:{orderNumber, documentNumber, totals} }
   } catch (err) { return { success: false, error: err.message }; }
 }
+// ── sync helper: ค้นบิลขายเดิมจาก ZORT ด้วยเลขบิล (ใบกำกับภาษีย้อนหลัง) ──
+async function syncLookupSaleBill(orderNumber) {
+  if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
+  try {
+    const res = await fetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ lookupSaleBill: true, orderNumber }),
+    });
+    return await res.json(); // { success, data:{orderId,orderNumber,items,totals,customer,existingTaxInvoice} }
+  } catch (err) { return { success: false, error: err.message }; }
+}
+// ── sync helper: ออกใบกำกับภาษีเต็มรูปแบบจริงใน ZORT (ย้อนหลัง) ──
+async function syncIssueFullTaxInvoice(orderNumber, customer) {
+  if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
+  try {
+    const res = await fetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ issueFullTaxInvoice: true, orderNumber, customer,
+        actor: window._currentUser || sessionStorage.getItem("dmj_role") || "saler" }),
+    });
+    return await res.json(); // { success, data:{orderNumber, documentNumber} }
+  } catch (err) { return { success: false, error: err.message }; }
+}
 
 // ข้อมูลบัญชีรับโอน (แสดงตอนเลือก "โอน") — แก้ที่นี่ถ้าเปลี่ยนบัญชี
 const POS_TRANSFER_INFO = { bank: "กรุงศรีอยุธยา", acctNo: "802-4-64123-4", acctName: "ปรานต์ชนันทร์ พันธุ์พานิช" };
@@ -7329,6 +7354,163 @@ function setPosPrintPageSize(kind) {
   el.textContent = css;
 }
 
+// ── ใบกำกับภาษีเต็มรูปแบบย้อนหลัง — ลูกค้ามาขอภายหลังด้วยเลขบิล (RC-3-...) ──
+// ค้นบิลเดิมจาก ZORT → กรอกข้อมูลภาษีลูกค้า → ออกเอกสารจริงใน ZORT (documenttype:2) → พิมพ์ A4
+function RetroTaxInvoiceView({ onBack }) {
+  const [toast, showToast, hideToast] = useToast();
+  const [orderNumber, setOrderNumber] = uS("");
+  const [looking, setLooking] = uS(false);
+  const [bill, setBill] = uS(null);                 // ผล lookup
+  const [cust, setCust] = uS({ name: "", taxId: "", branch: "", branchNo: "", address: "", phone: "", email: "" });
+  const [issuing, setIssuing] = uS(false);
+  const [issued, setIssued] = uS(null);             // { documentNumber } หลังออกเอกสารสำเร็จ
+  const [printReq, setPrintReq] = uS(0);
+
+  uE(() => {
+    if (printReq <= 0) return;
+    setPosPrintPageSize("a4");
+    window.print();
+    const onAfter = () => { setPosPrintPageSize("a4"); window.removeEventListener("afterprint", onAfter); };
+    window.addEventListener("afterprint", onAfter);
+  }, [printReq]);
+
+  async function doLookup() {
+    const num = orderNumber.trim();
+    if (!num) { showToast("warn", "กรุณากรอกเลขบิล", "🔎"); return; }
+    setLooking(true); setBill(null); setIssued(null);
+    const r = await syncLookupSaleBill(num);
+    setLooking(false);
+    if (!r.success) { showToast("error", r.error || "ไม่พบบิล", "❌"); return; }
+    const d = r.data || {};
+    if (!d.totals || !Array.isArray(d.items) || !d.items.length) { showToast("error", "ข้อมูลบิลไม่ครบ ลองใหม่อีกครั้ง", "❌"); return; }
+    setBill(d);
+    setCust({
+      name: d.customer?.name || "", taxId: d.customer?.taxId || "",
+      branch: d.customer?.branch || "", branchNo: d.customer?.branchNo || "",
+      address: d.customer?.address || "", phone: d.customer?.phone || "", email: d.customer?.email || "",
+    });
+    if (d.existingTaxInvoice) showToast("warn", "บิลนี้เคยออกใบกำกับแล้ว: " + d.existingTaxInvoice, "⚠️", 6000);
+  }
+
+  async function doIssue() {
+    if (!bill) return;
+    if (!cust.name.trim() && !cust.taxId.trim()) { showToast("warn", "ต้องมีชื่อลูกค้าหรือเลขผู้เสียภาษี", "🧾"); return; }
+    setIssuing(true);
+    const r = await syncIssueFullTaxInvoice(bill.orderNumber, cust);
+    setIssuing(false);
+    if (!r.success) { showToast("error", r.error || "ออกใบกำกับไม่สำเร็จ", "❌"); return; }
+    setIssued(r.data || {});
+    showToast("success", "ออกใบกำกับภาษีสำเร็จ", "🎉");
+  }
+
+  // rows/totals สำหรับพิมพ์ A4 (ส่วนลดต่อชิ้นมาจาก ZORT ตรง ๆ — ส่งผ่าน rowsProp)
+  const printRows = (bill?.items || []).map(it => ({
+    sku: it.sku, name: it.name, qty: it.qty, price: it.unitPrice, discUnit: it.discPerUnit, amount: it.amount,
+  }));
+  const printTotals = bill ? {
+    retailEligible: 0, retailExcluded: 0,
+    preVat: bill.totals.preVat, vat: bill.totals.vat, grandTotal: bill.totals.grandTotal,
+  } : null;
+
+  const inp = { width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 14, minWidth: 0, boxSizing: "border-box" };
+  const money = (n) => (Math.round((Number(n) || 0) * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  return (
+    <div>
+      <div className="no-print" style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button onClick={onBack} style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700, fontSize: 14 }}>‹ กลับ</button>
+          <div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>🧾 ใบกำกับภาษีย้อนหลัง</div>
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>ลูกค้าขอใบกำกับภายหลัง — ค้นด้วยเลขบิล แล้วออกเอกสารจริงใน ZORT</div>
+          </div>
+        </div>
+
+        {/* ── ค้นบิล ── */}
+        <Card padding={true} title="🔎 ค้นบิลด้วยเลขที่บิล">
+          <div style={{ display: "flex", gap: 8 }}>
+            <input style={inp} value={orderNumber} placeholder="เช่น RC-3-202607266"
+              onChange={e => setOrderNumber(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") doLookup(); }}/>
+            <button onClick={doLookup} disabled={looking}
+              style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 700, fontSize: 14, whiteSpace: "nowrap", opacity: looking ? 0.6 : 1 }}>
+              {looking ? "กำลังค้น..." : "ค้นหา"}
+            </button>
+          </div>
+        </Card>
+
+        {bill && (
+          <>
+            {/* ── สรุปบิลที่พบ ── */}
+            <Card padding={true} title={"📋 บิล " + bill.orderNumber}>
+              <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 6 }}>
+                วันที่: {bill.dateString || "—"} · สถานะ: {bill.status || "—"} · ชำระ: {bill.paymentMethod || "—"}
+              </div>
+              {bill.existingTaxInvoice && (
+                <div style={{ background: "#fef3c7", border: "1px solid #f59e0b", borderRadius: 8, padding: "8px 10px", fontSize: 13, marginBottom: 8 }}>
+                  ⚠️ บิลนี้เคยออกใบกำกับภาษีแล้ว (เลขที่ {bill.existingTaxInvoice}) — ออกใหม่จะเป็นเอกสารซ้ำ ตรวจสอบก่อน
+                </div>
+              )}
+              <div style={{ maxHeight: 180, overflowY: "auto", border: "1px solid #eee", borderRadius: 8 }}>
+                {bill.items.map((it, i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderBottom: "1px solid #f3f4f6", fontSize: 13, gap: 8 }}>
+                    <span style={{ flex: 1, minWidth: 0 }}>{it.qty} × {it.name} <span style={{ color: "var(--muted)" }}>({it.sku})</span></span>
+                    <span style={{ whiteSpace: "nowrap" }}>{money(it.amount)}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 14 }}><span>มูลค่าก่อนภาษี</span><span>{money(bill.totals.preVat)}</span></div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}><span>ภาษี 7%</span><span>{money(bill.totals.vat)}</span></div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 800, fontSize: 16, marginTop: 2 }}><span>รวมสุทธิ</span><span>{money(bill.totals.grandTotal)}</span></div>
+            </Card>
+
+            {/* ── ข้อมูลภาษีลูกค้า ── */}
+            <Card padding={true} title="👤 ข้อมูลลูกค้า (สำหรับใบกำกับภาษี)">
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <input style={inp} placeholder="ชื่อ/บริษัท *" value={cust.name} onChange={e => setCust({ ...cust, name: e.target.value })}/>
+                <input style={inp} placeholder="เลขประจำตัวผู้เสียภาษี (13 หลัก) *" value={cust.taxId} onChange={e => setCust({ ...cust, taxId: e.target.value })}/>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input style={inp} placeholder="ชื่อสาขา (เช่น สำนักงานใหญ่)" value={cust.branch} onChange={e => setCust({ ...cust, branch: e.target.value })}/>
+                  <input style={inp} placeholder="สาขาที่ (เช่น 00000)" value={cust.branchNo} onChange={e => setCust({ ...cust, branchNo: e.target.value })}/>
+                </div>
+                <input style={inp} placeholder="ที่อยู่" value={cust.address} onChange={e => setCust({ ...cust, address: e.target.value })}/>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input style={inp} placeholder="โทรศัพท์" value={cust.phone} onChange={e => setCust({ ...cust, phone: e.target.value })}/>
+                  <input style={inp} placeholder="อีเมล" value={cust.email} onChange={e => setCust({ ...cust, email: e.target.value })}/>
+                </div>
+              </div>
+              {!issued ? (
+                <button onClick={doIssue} disabled={issuing}
+                  style={{ width: "100%", marginTop: 12, padding: "12px", borderRadius: 10, border: "none", background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 800, fontSize: 15, opacity: issuing ? 0.6 : 1 }}>
+                  {issuing ? "กำลังออกเอกสารใน ZORT..." : "🧾 ออกใบกำกับภาษีเต็มรูปแบบ"}
+                </button>
+              ) : (
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ textAlign: "center", background: "#f0fdf4", border: "1px solid var(--g-500,#3f9d5a)", borderRadius: 10, padding: 10, marginBottom: 10 }}>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: "var(--g-700)" }}>✅ ออกใบกำกับภาษีสำเร็จ</div>
+                    <div style={{ fontSize: 13, marginTop: 2 }}>เลขที่เอกสาร: <b>{issued.documentNumber || "(ดูใน ZORT)"}</b></div>
+                  </div>
+                  <button onClick={() => setPrintReq(n => n + 1)}
+                    style={{ width: "100%", padding: "12px", borderRadius: 10, border: "1px solid var(--g-600,#1f7f44)", background: "#fff", color: "var(--g-700,#166534)", fontWeight: 800, fontSize: 15 }}>
+                    🖨️ พิมพ์ใบกำกับภาษี A4
+                  </button>
+                </div>
+              )}
+            </Card>
+          </>
+        )}
+      </div>
+
+      {/* ใบกำกับ A4 สำหรับพิมพ์ (โชว์เฉพาะตอน print ผ่าน .pos-print-area) */}
+      {bill && issued && (
+        <PosReceipt rows={printRows} totals={printTotals} cust={cust} taxInvoice={true}
+          orderNumber={bill.orderNumber} documentNumber={issued.documentNumber} payMethod={bill.paymentMethod}/>
+      )}
+      <Toast toast={toast} onClose={hideToast}/>
+    </div>
+  );
+}
+
 function PosView({ data, role }) {
   const products = (data && data.products) || [];
   const [toast, showToast, hideToast] = useToast();
@@ -7345,6 +7527,7 @@ function PosView({ data, role }) {
   const [searching, setSearching] = uS(false);
   const [saving, setSaving] = uS(false);
   const [result, setResult] = uS(null);           // ผลลัพธ์หลังออกบิล
+  const [retroMode, setRetroMode] = uS(false);     // โหมดใบกำกับภาษีย้อนหลัง
   const [printKind, setPrintKind] = uS("80");      // "a4" (ใบกำกับ) | "80" (ใบเสร็จ 80mm)
   const [printReq, setPrintReq] = uS(0);
   uE(() => {
@@ -7477,6 +7660,9 @@ function PosView({ data, role }) {
 
   const overStock = cart.filter(it => (Number(it.qty) || 0) > (it.qtyStore || 0));
 
+  // ── โหมดใบกำกับภาษีย้อนหลัง (component แยก state ของตัวเอง) ──
+  if (retroMode) return <RetroTaxInvoiceView onBack={() => setRetroMode(false)}/>;
+
   // ── หน้าผลลัพธ์ + ใบเสร็จสำหรับพิมพ์ ──
   if (result) {
     return (
@@ -7525,9 +7711,15 @@ function PosView({ data, role }) {
 
   return (
     <div className="no-print" style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12 }}>
-      <div>
-        <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>🧾 ขาย / ออกบิล</div>
-        <div style={{ fontSize: 12, color: "var(--muted)" }}>ค้นสินค้า → ตะกร้า → คิดส่วนลดอัตโนมัติ → ลูกค้า → ออกบิล/ใบกำกับ</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>🧾 ขาย / ออกบิล</div>
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>ค้นสินค้า → ตะกร้า → คิดส่วนลดอัตโนมัติ → ลูกค้า → ออกบิล/ใบกำกับ</div>
+        </div>
+        <button onClick={() => setRetroMode(true)}
+          style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid var(--g-600,#1f7f44)", background: "#fff", color: "var(--g-700,#166534)", fontWeight: 700, fontSize: 13, whiteSpace: "nowrap", flexShrink: 0 }}>
+          🧾 ใบกำกับย้อนหลัง
+        </button>
       </div>
 
       {/* ── ค้นสินค้า ── */}
@@ -7822,10 +8014,11 @@ function bahtText(amount) {
 
 // ใบกำกับภาษี A4 (โชว์เฉพาะตอน print ผ่าน CSS .pos-print-area) — 20 รายการ/หน้า เกินขึ้นหน้าใหม่
 const POS_ROWS_PER_PAGE = 20;
-function PosReceipt({ cart, totals, cust, taxInvoice, orderNumber, documentNumber, payMethod }) {
+function PosReceipt({ cart, rows: rowsProp, totals, cust, taxInvoice, orderNumber, documentNumber, payMethod }) {
   const gross = (totals.retailEligible || 0) + (totals.retailExcluded || 0);
   const factor = gross > 0 ? totals.grandTotal / gross : 1;   // สัดส่วนหลังส่วนลดทั้งบิล (ตรงกับ GAS)
-  const rows = cart.map((it) => {
+  // rowsProp = แถวที่คิดสำเร็จมาแล้ว (ใบกำกับย้อนหลังจาก ZORT: ส่วนลดต่อชิ้นมาตรง ไม่ใช้ factor)
+  const rows = rowsProp || (cart || []).map((it) => {
     const price = Number(it.price) || 0, qty = Number(it.qty) || 0;
     const finalUnit = price * factor;
     return { sku: it.sku, name: it.name, qty, price, discUnit: Math.max(0, price - finalUnit), amount: finalUnit * qty };

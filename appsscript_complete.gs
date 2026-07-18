@@ -428,6 +428,12 @@ function doPost(e) {
     if (data.createSaleBill) {
       return createSaleBill(ss, data, actor);
     }
+    if (data.lookupSaleBill) {
+      return lookupSaleBill(data.orderNumber);
+    }
+    if (data.issueFullTaxInvoice) {
+      return issueFullTaxInvoice(data.orderNumber, data.customer || {}, actor);
+    }
 
     // ─── Order Management ───
     if (data.deleteOrder) {
@@ -6681,6 +6687,149 @@ function createSaleBill(ss, data, actor) {
 
     invalidateCache_();
     return ok({ orderId: orderId, orderNumber: orderNumber, documentNumber: docNumber, totals: totals });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🧾 ใบกำกับภาษีเต็มรูปแบบย้อนหลัง — ลูกค้ามาขอภายหลังด้วยเลขบิล (RC-3-...)
+// ─────────────────────────────────────────────────────────────────────────────
+// flow: lookupSaleBill (ดึงบิลเดิมจาก ZORT) → กรอกข้อมูลภาษีลูกค้า → issueFullTaxInvoice
+//       (EditOrderInfo ใส่ข้อมูลลูกค้า + AddDocumentOrder documenttype:2 = เอกสารจริงใน ZORT)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// หา order ใน ZORT จากเลขบิล → คืน id ที่แท้จริง + object detail (list/customer/amount)
+// ZORT GET GetOrderDetail?id= รับเฉพาะ numeric id → ถ้าเลขบิลไม่ใช่ตัวเลข scan GetOrders หา id ก่อน
+function findZortOrderByNumber_(orderNumber) {
+  var H = zortHeaders_();
+  var num = String(orderNumber || "").trim();
+  if (!num) return null;
+  function get(path) {
+    try { return JSON.parse(UrlFetchApp.fetch(ZORT_BASE + path, { method: "get", headers: H, muteHttpExceptions: true }).getContentText() || "{}"); }
+    catch (err) { return {}; }
+  }
+  // (1) ลอง GetOrderDetail?id={number} ตรง ๆ ก่อน (ZORT บาง GET รับ number ได้)
+  var direct = get("/Order/GetOrderDetail?id=" + encodeURIComponent(num));
+  var d0 = direct.order || direct.data || direct;
+  if (d0 && (d0.list || d0.number)) return { id: d0.id || d0.orderid || num, detail: d0 };
+  // (2) scan GetOrders ย้อนหลัง ~180 วัน หา number ที่ตรง แล้วดึง detail ด้วย id จริง
+  var to = new Date(), from = new Date(to.getTime() - 180 * 86400000);
+  var fmt = function (dt) { return Utilities.formatDate(dt, "Asia/Bangkok", "yyyy-MM-dd"); };
+  for (var page = 1; page <= 4; page++) {
+    var res = get("/Order/GetOrders?page=" + page + "&limit=200&fromdate=" + fmt(from) + "&todate=" + fmt(to));
+    var list = res.list || res.orders || res.data || [];
+    if (!list.length) break;
+    for (var i = 0; i < list.length; i++) {
+      if (String(list[i].number).trim() === num) {
+        var oid = list[i].id || list[i].orderid;
+        var dd = get("/Order/GetOrderDetail?id=" + encodeURIComponent(oid));
+        return { id: oid, detail: dd.order || dd.data || dd || list[i] };
+      }
+    }
+  }
+  return null;
+}
+
+// ดึงบิลขายเดิมจาก ZORT (read-only) → normalize เป็นรูปที่ frontend เอาไปโชว์ + พิมพ์ A4
+function lookupSaleBill(orderNumber) {
+  var num = String(orderNumber || "").trim();
+  if (!num) return error("กรุณาระบุเลขบิล");
+  var found = findZortOrderByNumber_(num);
+  if (!found) return error("ไม่พบบิลเลขที่ " + num + " ในระบบ (ลองตรวจเลขบิลอีกครั้ง)");
+  var o = found.detail || {};
+  var rawItems = o.list || o.items || o.orderlist || o.products || [];
+  var items = rawItems.map(function (it) {
+    var qty = Number(it.number) || 0;
+    var unit = Number(it.pricepernumber) || 0;                       // ราคาต่อหน่วย (รวม VAT) ตามที่ ZORT เก็บ
+    var disc = Number(it.discountPerNumber != null ? it.discountPerNumber : (it.discountPerNumber_pretax || 0)) || 0;
+    var amt = Number(it.totalprice != null ? it.totalprice : (unit - disc) * qty) || 0;
+    return { sku: it.sku || "", name: it.name || it.sku || "", qty: qty, unitPrice: unit, discPerUnit: disc, amount: amt };
+  }).filter(function (it) { return it.qty > 0; });
+
+  var grand = Number(o.amount) || 0;
+  var preVat = Number(o.amount_pretax);
+  var vat = Number(o.vatamount);
+  if (!(preVat > 0) || isNaN(preVat)) { preVat = Math.round(grand / 1.07 * 100) / 100; vat = Math.round((grand - preVat) * 100) / 100; }
+  var grossUnits = items.reduce(function (s, it) { return s + it.qty; }, 0);
+
+  // เช็คว่ามีใบกำกับภาษี (documenttype 2) ออกไปแล้วหรือยัง — กันออกซ้ำ
+  var existingDoc = null;
+  try {
+    var H = zortHeaders_();
+    var docRes = JSON.parse(UrlFetchApp.fetch(ZORT_BASE + "/Document/GetDocumentOrders?id=" + encodeURIComponent(found.id),
+      { method: "get", headers: H, muteHttpExceptions: true }).getContentText() || "{}");
+    var docs = docRes.list || docRes.documents || docRes.data || [];
+    for (var k = 0; k < docs.length; k++) {
+      var dt = String(docs[k].documenttype != null ? docs[k].documenttype : docs[k].type);
+      if (dt === "2" || /tax/i.test(String(docs[k].documenttypename || ""))) { existingDoc = docs[k].number || docs[k].documentnumber || "(มีแล้ว)"; break; }
+    }
+  } catch (e) { /* ไม่ critical — ปล่อยผ่าน */ }
+
+  return ok({
+    orderId: found.id,
+    orderNumber: o.number || num,
+    dateString: o.orderdateString || o.createdatetimeString || "",
+    status: o.status || "",
+    paymentMethod: o.paymentmethod || "",
+    items: items,
+    totals: { preVat: preVat, vat: vat, grandTotal: grand, grossUnits: grossUnits },
+    customer: {
+      name: o.customername || "", taxId: o.customeridnumber || "",
+      branch: o.customerbranchname || "", branchNo: o.customerbranchno || "",
+      address: o.customeraddress || "", phone: o.customerphone || "", email: o.customeremail || "",
+    },
+    existingTaxInvoice: existingDoc,   // เลขใบกำกับเดิม ถ้าเคยออกแล้ว (frontend เตือนก่อนออกซ้ำ)
+  });
+}
+
+// ออกใบกำกับภาษีเต็มรูปแบบจริงใน ZORT: อัปเดตข้อมูลลูกค้าเข้า order แล้วสร้างเอกสาร documenttype:2
+// customer = {name, taxId, branch, branchNo, address, phone, email} · ส่งชื่อ field หลัก + alias กันชื่อไม่ตรง
+function issueFullTaxInvoice(orderNumber, customer, actor) {
+  var num = String(orderNumber || "").trim();
+  if (!num) return error("กรุณาระบุเลขบิล");
+  var c = customer || {};
+  if (!String(c.name || "").trim() && !String(c.taxId || "").trim())
+    return error("ใบกำกับภาษีต้องมีชื่อลูกค้าหรือเลขผู้เสียภาษี");
+
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return error("ระบบกำลังทำงานอื่นอยู่ ลองใหม่อีกครั้ง");
+  try {
+    var headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
+
+    // (1) EditOrderInfo — ใส่ข้อมูลลูกค้าเข้า order (number ใช้แทน id ได้ตาม ZORT note)
+    // ส่งชื่อ field ที่ยืนยันจาก GetOrderDetail (customeridnumber=เลขภาษี ฯลฯ) + alias สำรอง (ZORT ข้าม field ที่ไม่รู้จัก)
+    var editPayload = { number: num, id: num };
+    var setBoth = function (val, keys) { if (String(val || "").trim() !== "") keys.forEach(function (k) { editPayload[k] = String(val); }); };
+    setBoth(c.name,     ["customername"]);
+    setBoth(c.taxId,    ["customeridnumber", "customertaxid", "taxid"]);
+    setBoth(c.branch,   ["customerbranchname", "customerbranch"]);
+    setBoth(c.branchNo, ["customerbranchno", "customerbranchcode"]);
+    setBoth(c.address,  ["customeraddress"]);
+    setBoth(c.phone,    ["customerphone"]);
+    setBoth(c.email,    ["customeremail"]);
+    var editRes = UrlFetchApp.fetch(ZORT_BASE + "/Order/EditOrderInfo",
+      { method: "post", headers: headers, payload: JSON.stringify(editPayload), muteHttpExceptions: true });
+    var editErr = zortRespError_(editRes);
+    Logger.log("issueFullTaxInvoice EditOrderInfo resp: " + (editRes.getContentText() || "").substring(0, 300));
+    if (editErr) { logZortFailure_("ใบกำกับย้อนหลัง-แก้ข้อมูลลูกค้า " + num, editErr); return error("บันทึกข้อมูลลูกค้าเข้าบิลไม่สำเร็จ: " + editErr); }
+
+    // (2) AddDocumentOrder documenttype:2 = สร้างใบกำกับภาษีเต็มรูปแบบจริง
+    var docRes = UrlFetchApp.fetch(ZORT_BASE + "/Document/AddDocumentOrder",
+      { method: "post", headers: headers, muteHttpExceptions: true,
+        payload: JSON.stringify({ id: num, orderid: num, number: num, documenttype: 2 }) });
+    var docErr = zortRespError_(docRes);
+    var docBody = docRes.getContentText() || "{}";
+    Logger.log("issueFullTaxInvoice AddDocumentOrder resp: " + docBody.substring(0, 300));
+    if (docErr) { logZortFailure_("ใบกำกับย้อนหลัง-สร้างเอกสาร " + num, docErr); return error("สร้างใบกำกับภาษีใน ZORT ไม่สำเร็จ: " + docErr); }
+    var dj = JSON.parse(docBody);
+    var documentNumber = dj.number || dj.documentnumber || dj.documentNumber || deepFindByKey_(dj, /^(document)?number$/i) || null;
+
+    writeAuditLog_(actor || "ไม่ระบุ", "ออกใบกำกับภาษีย้อนหลัง", num,
+      auditDetail_({ after: { documentNumber: documentNumber || "(ไม่ทราบเลข)", customer: c.name || "", taxId: c.taxId || "" },
+        note: "ออกใบกำกับภาษีเต็มรูปแบบย้อนหลังผ่าน POS" }));
+    invalidateCache_();
+    return ok({ orderNumber: num, documentNumber: documentNumber });
   } finally {
     lock.releaseLock();
   }
