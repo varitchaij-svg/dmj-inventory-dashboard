@@ -868,11 +868,14 @@
     .label-cell.sku-break {
       border-top: 0.5pt solid #000 !important;
     }
+    /* ── label sheet: กินเต็มหน้า A4 (210×297) แล้วเว้นขอบ 10mm ด้วย padding
+       ให้ตาราง label อยู่ "ตรงกลาง" — แยกจาก @page margin ของใบเสร็จ/ใบกำกับ
+       (ใบกำกับ A4 ต้องใช้ @page margin:0 จึงคุมระยะขอบ label ที่นี่แทน) ── */
     .label-page {
       margin: 0 !important;
-      padding: 0 !important;
-      width: 190mm !important;
-      height: 277mm !important;
+      padding: 10mm !important;
+      width: 210mm !important;
+      height: 297mm !important;
       box-sizing: border-box !important;
       overflow: hidden !important;
     }
