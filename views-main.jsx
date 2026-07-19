@@ -1219,16 +1219,20 @@ function OverviewView({ data, range, setRange, role }) {
   const sellable = uM(() => products.filter(p => !p.isMTO && (!selCat || p.cat === selCat)), [products, selCat]);
   // KPI สต๊อก/หมุนเวียน — ถ้ากรองหมวด คำนวณเฉพาะหมวดนั้น มิฉะนั้นใช้ totals ทั้งร้าน
   const stockAgg = uM(() => {
-    if (!selCat) return { val: totals.totalStockValue, n: totals.nWithStock, soldRev: totals.totalSoldRev, nSold: totals.nSold };
-    let val = 0, n = 0, soldRev = 0, nSold = 0;
+    if (!selCat) return { val: totals.totalStockValue, valWH: totals.totalStockValueWH || 0,
+      valStore: totals.totalStockValueStore || 0, n: totals.nWithStock,
+      soldRev: totals.totalSoldRev, nSold: totals.nSold };
+    let val = 0, valWH = 0, valStore = 0, n = 0, soldRev = 0, nSold = 0;
     products.forEach(p => {
       if (p.isMTO || p.cat !== selCat) return;
       val += p.stockValue || 0;
+      valWH += p.stockValueWH || 0;
+      valStore += p.stockValueStore || 0;
       if ((p.qty || 0) > 0) n++;
       soldRev += p.soldRev || 0;
       if ((p.soldQty || 0) > 0) nSold++;
     });
-    return { val, n, soldRev, nSold };
+    return { val, valWH, valStore, n, soldRev, nSold };
   }, [selCat, products, totals]);
 
   const topSellers = uM(() =>
@@ -1650,7 +1654,12 @@ function OverviewView({ data, range, setRange, role }) {
         {role === 'owner' && (
           <KPI label="มูลค่าสต๊อกคงเหลือ" accent="#a07417"
                value={fmtB(stockAgg.val)}
-               sub={`${fmtN(stockAgg.n)} SKU มีของในคลัง`}
+               sub={
+                 <span style={{display:'flex',flexDirection:'column',gap:1,lineHeight:1.35}}>
+                   <span>🏭 คลัง {fmtB(stockAgg.valWH)}</span>
+                   <span>🏬 หน้าร้าน {fmtB(stockAgg.valStore)}</span>
+                 </span>
+               }
                icon={I.package} />
         )}
         {role === 'owner' && (

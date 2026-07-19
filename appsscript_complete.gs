@@ -682,7 +682,9 @@ function doGet(e) {
       }
       p.cost       = p.price * COST_RATIO;
       p.profit     = p.soldRev * (1 - COST_RATIO);
-      p.stockValue = p.qty * p.price;
+      p.stockValue      = p.qty     * p.price;
+      p.stockValueWH    = (p.qtyWH    || 0) * p.price; // มูลค่าฝั่งคลัง
+      p.stockValueStore = (p.qtyStore || 0) * p.price; // มูลค่าฝั่งหน้าร้าน
 
       const sys = sysQtyMap[skuU];
       if (sys) {
@@ -773,7 +775,9 @@ function doGet(e) {
         nOOS:            products.filter(p => p.isOOS).length,
         nOversold:       products.filter(p => p.isOversold).length,
         nMismatch:       products.filter(p => p.diffStore || p.diffWH).length,
-        totalStockValue: products.reduce((s, p) => s + (p.stockValue || 0), 0),
+        totalStockValue:      products.reduce((s, p) => s + (p.stockValue || 0), 0),
+        totalStockValueWH:    products.reduce((s, p) => s + (p.stockValueWH || 0), 0),
+        totalStockValueStore: products.reduce((s, p) => s + (p.stockValueStore || 0), 0),
         totalSoldRev:    products.reduce((s, p) => s + (p.soldRev || 0), 0),
         totalSoldQty:    products.reduce((s, p) => s + (p.soldQty || 0), 0),
         totalProfit:     products.reduce((s, p) => s + (p.profit || 0), 0),
