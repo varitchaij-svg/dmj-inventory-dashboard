@@ -1198,6 +1198,10 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
   const [supplierMode, setSupplierMode]     = uS(false);
   const [selSupplier, setSelSupplier]       = uS(null);
   const [suppSearch, setSuppSearch]         = uS('');
+  // Pre-shelf mode — "นับก่อนขึ้นชั้น": นับสินค้าก่อนเอาขึ้นชั้น (ยังไม่มีตำแหน่งล็อค)
+  // บันทึกยอดคลังตรง ๆ ผ่าน confirmStockCount (ไม่ต้องมีล็อค/ชั้น)
+  const [preShelfMode, setPreShelfMode]     = uS(false);
+  const [preShelfList, setPreShelfList]     = uS([]); // ลำดับ SKU ที่หยิบเข้ามานับ (ล่าสุดอยู่บน)
   const [countFilter, setCountFilter]       = uS('all'); // all | pending | matched | mismatched — กรองตอนนับของเยอะ
   // SKU ที่ผู้ใช้เครื่องนี้แก้เอง — ไม่ให้ค่าจากเครื่องอื่น (recentCountedSkus) มาทับ + ใช้ตอน save
   const localEditsRef = React.useRef(new Set());
@@ -1689,6 +1693,246 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     return hits;
   }, [stockSearch, lockData, productMap, products, skuToLock]);
 
+  // ── PRE-SHELF MODE memos — นับก่อนขึ้นชั้น ──────────────────────
+  // ค้นหาสินค้าทั้งระบบ (multi-token AND) เพื่อหยิบเข้ามานับ — ไม่กรอง qtyWH (ของเข้าใหม่ยอดอาจเป็น 0)
+  const preShelfMatches = uM(() => {
+    const q = stockSearch.trim().toLowerCase();
+    if (!q) return [];
+    const tokens = q.split(/\s+/).filter(Boolean);
+    const added = new Set(preShelfList);
+    return (data.products || [])
+      .filter(p => p && p.sku && !p.isMTO && !added.has(p.sku))
+      .filter(p => {
+        const hay = ((p.sku || '') + ' ' + (p.name || '')).toLowerCase();
+        return tokens.every(t => hay.includes(t));
+      })
+      .slice(0, 12);
+  }, [stockSearch, data.products, preShelfList]);
+
+  const addPreShelf = (sku) => {
+    setPreShelfList(prev => prev.includes(sku) ? prev : [sku, ...prev]);
+    setStockSearch('');
+  };
+  const removePreShelf = (sku) => {
+    setPreShelfList(prev => prev.filter(s => s !== sku));
+    localEditsRef.current.delete(sku);
+    setCheckedQtys(prev => { const o = { ...prev }; delete o[sku]; return o; });
+  };
+
+  const preShelfFilled = preShelfList.filter(sku => {
+    const v = checkedQtys[sku]; return v !== '' && v != null;
+  }).length;
+
+  const handleSavePreShelf = async () => {
+    const entries = preShelfList
+      .filter(sku => { const v = checkedQtys[sku]; return v !== '' && v != null; })
+      .map(sku => ({ sku, qty: parseInt(checkedQtys[sku]) || 0 }));
+    if (!entries.length) { showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return; }
+    setSaveStatus("saving");
+    // บันทึกยอดคลังตรง ๆ (absolute set) + push ZORT — ไม่แตะตำแหน่งล็อค
+    const result = await confirmStockCount(entries);
+    if (result.conflict) {
+      setSaveStatus("error");
+      showToast('error', 'ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด', '⚠️');
+    } else if (result.success !== false) {
+      setSavedSkus(new Set(entries.map(e => e.sku)));
+      setLastSavedTime(new Date());
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus("idle"), 3000);
+      showToast('success', 'บันทึกยอดคลัง ' + entries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
+    } else {
+      setSaveStatus("error");
+      showToast('error', 'บันทึกไม่สำเร็จ', '❌');
+    }
+  };
+
+  // ── PRE-SHELF MODE — นับก่อนขึ้นชั้น (ยังไม่มีตำแหน่ง) ────────────
+  if (preShelfMode) {
+    return (
+      <>
+        <Toast toast={toast} onClose={hideToast}/>
+        <CalcPadModal
+          open={!!calcPad}
+          name={calcPad ? (calcPad.name || calcPad.sku) : ''}
+          initialVal={calcPad ? calcPad.expr : ''}
+          onConfirm={function(qty){
+            if (calcPad) {
+              localEditsRef.current.add(calcPad.sku);
+              setCheckedQtys(function(prev){ const o=Object.assign({},prev); o[calcPad.sku]=qty; return o; });
+            }
+            setCalcPad(null);
+          }}
+          onClose={function(){ setCalcPad(null); }}
+        />
+        <div style={{display:'flex',flexDirection:'column',gap:14,width:"100%",minWidth:0,boxSizing:"border-box"}}>
+
+          {/* Header */}
+          <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+            <button onClick={() => { setPreShelfMode(false); setStockSearch(''); }}
+              style={{width:44,height:44,borderRadius:10,border:'1.5px solid var(--bdr)',
+                      background:'#fff',cursor:'pointer',fontSize:20,fontFamily:'inherit',flexShrink:0}}>
+              ←
+            </button>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:15,fontWeight:800}}>📥 นับก่อนขึ้นชั้น</div>
+              <div style={{fontSize:11,color:'var(--muted)'}}>
+                นับสินค้าที่ยังไม่ได้เอาขึ้นชั้น — บันทึกยอดคลังได้เลย
+              </div>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}}>
+              <button onClick={handleSavePreShelf} disabled={saving||preShelfFilled===0}
+                className="btn primary"
+                style={{padding:'10px 20px',fontWeight:700,fontSize:14,
+                        opacity:(saving||preShelfFilled===0)?0.4:1}}>
+                {saveStatus === "saving" ? '↻ กำลังบันทึก...' : preShelfFilled>0 ? `💾 บันทึก (${preShelfFilled})` : '💾 บันทึก'}
+              </button>
+              {saveStatus === "saved" && (
+                <span style={{fontSize:11,color:'#22c55e',fontWeight:600}}>✓ บันทึกแล้ว</span>
+              )}
+              {saveStatus === "error" && (
+                <span style={{fontSize:11,color:'#ef4444',fontWeight:700}}>⚠️ ไม่สำเร็จ กด 🔄 Reload</span>
+              )}
+            </div>
+          </div>
+
+          {/* Info banner */}
+          <div style={{background:'#eff6ff',border:'1.5px solid #bfdbfe',borderRadius:12,
+                       padding:'10px 14px',fontSize:12,color:'#1e40af',lineHeight:1.5}}>
+            💡 ค้นหาหรือสแกนสินค้า แล้วกรอกจำนวนที่นับได้ — ระบบจะ<b>ตั้งยอดคลัง</b>ตามที่กรอก
+            โดยไม่ต้องกำหนดตำแหน่งชั้น (ค่อยเอาขึ้นชั้นทีหลังได้)
+          </div>
+
+          {/* Search + Scan */}
+          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+            <input type="text" placeholder="🔍 ค้นหา SKU หรือชื่อสินค้า..."
+              value={stockSearch}
+              onChange={e => setStockSearch(e.target.value.toUpperCase())}
+              style={{flex:1,padding:'11px 14px',borderRadius:10,border:'1.5px solid var(--bdr)',
+                      fontSize:13,fontFamily:'inherit',background:'#fff'}}/>
+            <ScanButton size={46} onScan={sku => setStockSearch(sku.toUpperCase())}/>
+            {stockSearch && (
+              <button onClick={() => setStockSearch('')}
+                style={{width:46,height:46,borderRadius:10,border:'1.5px solid var(--bdr)',
+                        background:'#fff',cursor:'pointer',fontSize:18,fontFamily:'inherit',
+                        color:'var(--muted)',flexShrink:0}}>✕</button>
+            )}
+          </div>
+
+          {/* Search results — แตะเพื่อเพิ่มเข้ารายการนับ */}
+          {stockSearch.trim().length > 0 && (
+            <div style={{display:'flex',flexDirection:'column',gap:8}}>
+              {preShelfMatches.length === 0 ? (
+                <div style={{textAlign:'center',padding:'16px 0',color:'var(--muted)',fontSize:13}}>
+                  ไม่พบสินค้าที่ตรงกัน (หรือหยิบเข้ารายการแล้ว)
+                </div>
+              ) : (
+                <>
+                  <div style={{fontSize:11,color:'var(--muted)',fontWeight:600}}>
+                    พบ {preShelfMatches.length} รายการ — แตะเพื่อเพิ่มเข้ารายการนับ
+                  </div>
+                  {preShelfMatches.map(p => (
+                    <div key={p.sku} onClick={() => addPreShelf(p.sku)}
+                      style={{display:'flex',alignItems:'center',gap:12,background:'#fff',
+                              border:'1.5px solid var(--bdr)',borderRadius:12,padding:'10px 14px',
+                              cursor:'pointer',boxShadow:'0 1px 4px rgba(0,0,0,.04)'}}>
+                      {p.imageUrl ? (
+                        <img src={p.imageUrl} alt={p.name} loading="lazy"
+                          style={{width:44,height:44,objectFit:'contain',borderRadius:8,
+                                  background:'var(--g-50)',flexShrink:0}}/>
+                      ) : (
+                        <div style={{width:44,height:44,borderRadius:8,background:'var(--g-50)',
+                                     display:'flex',alignItems:'center',justifyContent:'center',
+                                     fontSize:22,flexShrink:0}}>{CAT_EMOJI[p.cat] || '📦'}</div>
+                      )}
+                      <div style={{flex:1,minWidth:0}}>
+                        <span style={{fontSize:11,fontWeight:700,color:'var(--g-500)',fontFamily:'monospace'}}>{p.sku}</span>
+                        <div style={{fontSize:12,fontWeight:600,color:'var(--g-800)',marginTop:2,
+                                     overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                          {p.name || '—'}
+                        </div>
+                      </div>
+                      <div style={{textAlign:'right',flexShrink:0}}>
+                        <div style={{fontSize:12,color:'var(--muted)'}}>คลัง {whQty(p)}</div>
+                        <div style={{fontSize:20,color:'var(--g-600)',fontWeight:800}}>+</div>
+                      </div>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* รายการที่หยิบเข้ามานับ */}
+          {!stockSearch.trim() && (
+            preShelfList.length === 0 ? (
+              <Empty title="ยังไม่มีรายการนับ"
+                sub="ค้นหาหรือสแกนสินค้าด้านบน แล้วแตะเพื่อเพิ่มเข้ามานับ"/>
+            ) : (
+              <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                <div style={{fontSize:12,fontWeight:700,color:'var(--muted)'}}>
+                  รายการนับ · {preShelfList.length} รายการ
+                </div>
+                {preShelfList.map(sku => {
+                  const p    = productMap[sku] || (data.products || []).find(x => x.sku === sku);
+                  const name = p ? p.name : sku;
+                  const sys  = p ? whQty(p) : null;
+                  const val  = checkedQtys[sku];
+                  const has  = val !== '' && val != null;
+                  const num  = has ? (parseInt(val)||0) : 0;
+                  const diff = (has && sys != null) ? num - sys : null;
+                  const saved = savedSkus.has(sku);
+                  const bdr   = saved ? 'var(--g-500)' : !has ? 'var(--bdr)' : 'var(--g-500)';
+                  return (
+                    <div key={sku} style={{display:'flex',alignItems:'center',gap:10,
+                        background: saved ? '#f0fdf4' : '#fff', border:'2px solid '+bdr,
+                        borderRadius:14,padding:'10px 12px',boxShadow:'0 1px 4px rgba(0,0,0,.04)'}}>
+                      {p && p.imageUrl ? (
+                        <img src={p.imageUrl} alt={name} loading="lazy"
+                          style={{width:48,height:48,objectFit:'contain',borderRadius:8,
+                                  background:'var(--g-50)',flexShrink:0}}/>
+                      ) : (
+                        <div style={{width:48,height:48,borderRadius:8,background:'var(--g-50)',
+                                     display:'flex',alignItems:'center',justifyContent:'center',
+                                     fontSize:22,flexShrink:0}}>{(p && CAT_EMOJI[p.cat]) || '📦'}</div>
+                      )}
+                      <div style={{flex:1,minWidth:0}}>
+                        <span style={{fontSize:11,fontWeight:700,color:'var(--g-500)',fontFamily:'monospace'}}>{sku}</span>
+                        <div style={{fontSize:12.5,fontWeight:600,color:'var(--g-800)',marginTop:1,
+                                     overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                          {name}
+                        </div>
+                        <div style={{fontSize:11,color:'var(--muted)',marginTop:1}}>
+                          คลังปัจจุบัน {sys != null ? sys : '—'}
+                          {diff != null && diff !== 0 && (
+                            <span style={{color:diff>0?'var(--g-600)':'var(--dang)',fontWeight:700}}>
+                              {' '}({diff>0?'+':''}{diff})
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <button onClick={() => openCalc(sku, name)}
+                        style={{minWidth:64,height:48,borderRadius:10,
+                                border:'2px solid '+(has?'var(--g-500)':'var(--bdr)'),
+                                background:has?'#f0fdf4':'#fff',
+                                fontSize:has?20:13,fontWeight:800,fontFamily:'inherit',
+                                color:has?'var(--g-800)':'var(--muted)',cursor:'pointer',flexShrink:0}}>
+                        {has ? num : 'กรอก'}
+                      </button>
+                      <button onClick={() => removePreShelf(sku)}
+                        style={{width:36,height:36,borderRadius:8,border:'1.5px solid var(--bdr)',
+                                background:'#fff',cursor:'pointer',fontSize:15,fontFamily:'inherit',
+                                color:'var(--muted)',flexShrink:0}}>✕</button>
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          )}
+        </div>
+      </>
+    );
+  }
+
   // ── SUPPLIER MODE — นับตามซัพพลายเออร์ ──────────────────────────
   if (supplierMode) {
     const suppFilledCount = Object.values(checkedQtys).filter(v => v !== '' && v != null).length;
@@ -2123,17 +2367,25 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
 
         {/* Mode toggle — ซ่อนเมื่อกำลังค้นหา */}
         {!stockSearch.trim() && (
-        <div style={{display:'flex',gap:8}}>
-          <button style={{flex:1,padding:'10px 0',borderRadius:10,border:'2px solid #1b5e20',
-                          background:'#1b5e20',color:'#fff',fontWeight:700,fontSize:13,
-                          cursor:'pointer',fontFamily:'inherit'}}>
-            📦 ตามล็อค
-          </button>
-          <button onClick={() => setSupplierMode(true)}
-            style={{flex:1,padding:'10px 0',borderRadius:10,border:'2px solid var(--bdr)',
-                    background:'#fff',color:'var(--g-700)',fontWeight:700,fontSize:13,
+        <div style={{display:'flex',flexDirection:'column',gap:8}}>
+          <div style={{display:'flex',gap:8}}>
+            <button style={{flex:1,padding:'10px 0',borderRadius:10,border:'2px solid #1b5e20',
+                            background:'#1b5e20',color:'#fff',fontWeight:700,fontSize:13,
+                            cursor:'pointer',fontFamily:'inherit'}}>
+              📦 ตามล็อค
+            </button>
+            <button onClick={() => setSupplierMode(true)}
+              style={{flex:1,padding:'10px 0',borderRadius:10,border:'2px solid var(--bdr)',
+                      background:'#fff',color:'var(--g-700)',fontWeight:700,fontSize:13,
+                      cursor:'pointer',fontFamily:'inherit'}}>
+              🏭 ตามซัพพลายเออร์
+            </button>
+          </div>
+          <button onClick={() => { setPreShelfMode(true); setStockSearch(''); }}
+            style={{padding:'11px 0',borderRadius:10,border:'2px dashed #2563eb',
+                    background:'#eff6ff',color:'#1e40af',fontWeight:700,fontSize:13,
                     cursor:'pointer',fontFamily:'inherit'}}>
-            🏭 ตามซัพพลายเออร์
+            📥 นับก่อนขึ้นชั้น (ยังไม่มีตำแหน่ง)
           </button>
         </div>
         )}
