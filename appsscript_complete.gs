@@ -5389,9 +5389,19 @@ function lineGroupTarget_(channel) {
   return props.getProperty('LINE_GROUP_ID') || '';
 }
 // แปลง target ในคิวเป็น id จริง: ''/'group'=กลุ่มของ channel · 'user'=LINE_USER_ID · อื่น=id ตรงตัว
+// LINE userId ผูกกับแต่ละ OA/channel แยกกัน — userId ของเจ้าของภายใต้บอทหลัก
+// ใช้กับบอทตัวที่ 2 ไม่ได้ (คนละ channel = คนละ id space)
+// channel secondary + target='user': ใช้ LINE_USER_ID_2 ถ้าตั้งไว้ (แอดบอทตัวที่ 2 เป็นเพื่อนแล้วดัก id เอง)
+// ไม่ตั้ง → fallback ส่งเข้ากลุ่มของ channel นั้นแทน กันข้อความหาย
 function resolveNotiTarget_(channel, target) {
   if (!target || target === 'group') return lineGroupTarget_(channel);
-  if (target === 'user') return LINE_USER_ID;
+  if (target === 'user') {
+    if (channel === 'secondary') {
+      var u2 = PropertiesService.getScriptProperties().getProperty('LINE_USER_ID_2');
+      return u2 || lineGroupTarget_(channel);
+    }
+    return LINE_USER_ID;
+  }
   return target;
 }
 
