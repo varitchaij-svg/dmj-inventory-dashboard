@@ -5440,39 +5440,34 @@ function notiQuotaUsed_(channel) {
     .getProperty('NOTI_SENT_' + channel + '_' + notiMonthKey_()) || '0', 10) || 0;
 }
 
-// ── ตัวสร้างข้อความการ์ด order (ใช้ทั้ง fallback ส่งตรง และ coalesce carousel) ──
-function orderBubble_(o) {
-  var imgUrl = o.imageUrl || "";
-  if (!imgUrl && o.sku) { try { imgUrl = (readImageMap_()[(o.sku||"").trim().toUpperCase()] || ""); } catch(e) {} }
-  var qtyNum = Number(o.qty) || 0;
-  if (qtyNum <= 0 && o.sku) qtyNum = lookupOrderQty_(o.sku);
-  var bubble = {
-    type: "bubble", size: "micro",
-    body: { type: "box", layout: "vertical", spacing: "xs", paddingAll: "12px", contents: [
-      { type: "text", text: "order 🚶", size: "xxs", color: "#1565c0", weight: "bold" },
-      { type: "text", text: o.name || o.sku || "-", weight: "bold", size: "sm", wrap: true, maxLines: 2 },
-      { type: "text", text: (o.sku || ""), size: "xxs", color: "#888888" },
-      { type: "text", text: (qtyNum > 0 ? ("× " + qtyNum + " ชิ้น") : ""), size: "sm", color: "#e53935", weight: "bold" }
-    ]}
-  };
-  if (imgUrl) bubble.hero = { type: "image", url: imgUrl, size: "full", aspectRatio: "4:3", aspectMode: "fit" };
-  return bubble;
-}
-// ส่งการ์ด order เป็นชุด (coalesce): 1 @All + 1 carousel (≤12) + overflow text
+// ปริมาณ order สูง (~5-10 ครั้ง/วัน) เทียบ quota ฟรี 200/เดือนแล้วตึงมาก — ถ้าส่ง 2 ข้อความ/ชุด
+// (mention+carousel) ตามเดิมจะชนเพดานเร็ว → ตัดเหลือ**ข้อความเดียว** (@All + สรุปรายชื่อ/จำนวนเป็น bullet)
+// ยังคง @All ไว้เพราะสำคัญสำหรับพนักงานที่ไม่ถนัดเทคโนโลยี ตัดเฉพาะ flex carousel (สวยแต่แพง) ออก
 function pushOrderBatch_(channel, orders) {
   if (!orders || !orders.length) return { ok:true, quota:false };
-  var show = orders.slice(0, 12);
-  var names = show.map(function(o){ return (o.name || o.sku || "-"); }).slice(0, 3).join(", ");
-  var mentionText = "@All order 🚶 " + orders.length + " รายการ" + (names ? (" — " + names + (orders.length > 3 ? " …" : "")) : "");
-  var r1 = linePush_(channel, [{ type: "text", text: mentionText,
+  var show = orders.slice(0, 20);
+  var lines = show.map(function(o) {
+    var qtyNum = Number(o.qty) || 0;
+    if (qtyNum <= 0 && o.sku) qtyNum = lookupOrderQty_(o.sku);
+    return "• " + (o.name || o.sku || "-") + (qtyNum > 0 ? (" × " + qtyNum) : "");
+  });
+  if (orders.length > show.length) lines.push("… และอีก " + (orders.length - show.length) + " รายการ");
+  var mentionText = "@All order 🚶 " + orders.length + " รายการ\n" + lines.join("\n");
+  return linePush_(channel, [{ type: "text", text: mentionText,
       mention: { mentionees: [{ index: 0, length: 4, type: "all" }] } }]);
-  if (!r1.ok) return r1;
-  var carousel = { type: "flex", altText: "order 🚶 " + orders.length + " รายการ",
-    contents: { type: "carousel", contents: show.map(orderBubble_) } };
-  var r2 = linePush_(channel, [carousel]);
-  if (!r2.ok) return r2;
-  if (orders.length > 12) linePush_(channel, [{ type: "text", text: "… และอีก " + (orders.length - 12) + " รายการ" }]);
-  return { ok: true, quota: false };
+}
+
+// หน้าต่าง coalesce order (นาที) ก่อนยอมส่ง — รวมออเดอร์ที่มาห่างกันแต่ยังในหน้าต่างเดียวกันเป็นชุดเดียว
+// ยิ่งใช้ quota เดือนนี้ไปเยอะ ยิ่งยืดหน้าต่างอัตโนมัติ (ประหยัด quota ที่เหลือ กันเงียบกลางเดือนซ้ำ)
+// ปรับ default ได้ผ่าน Script Property NOTI_ORDER_BATCH_MINUTES / NOTI_MONTHLY_CAP
+function notiOrderBatchWindowMin_(channel) {
+  var props = PropertiesService.getScriptProperties();
+  var base = parseInt(props.getProperty('NOTI_ORDER_BATCH_MINUTES') || '20', 10) || 20;
+  var cap  = parseInt(props.getProperty('NOTI_MONTHLY_CAP') || '200', 10) || 200;
+  var used = notiQuotaUsed_(channel);
+  if (used >= cap * 0.85) return base * 4;   // ใกล้เพดานมาก → ยืดยาว
+  if (used >= cap * 0.6)  return base * 2;   // เริ่มใกล้ → ยืด 2 เท่า
+  return base;
 }
 
 // ── เขียนเข้าคิว (หรือส่งตรงถ้ายังไม่เปิดระบบคิว) ──
@@ -5560,7 +5555,8 @@ function drainNotiQueue() {
       (byChannel[ch] = byChannel[ch] || []).push({
         row: i + 1, priority: Number(r[NOTI_COL.PRIORITY - 1]) || 5,
         type: String(r[NOTI_COL.TYPE - 1]) || 'text', target: String(r[NOTI_COL.TARGET - 1] || ''),
-        payload: payload, attempts: Number(r[NOTI_COL.ATTEMPTS - 1]) || 0
+        payload: payload, attempts: Number(r[NOTI_COL.ATTEMPTS - 1]) || 0,
+        created: r[NOTI_COL.CREATED - 1]
       });
     }
 
@@ -5572,13 +5568,25 @@ function drainNotiQueue() {
       var sends = 0;
 
       // 1) coalesce order ของ channel นี้เป็นชุดเดียว (นับเป็น 1 send)
+      //    ยังไม่ flush ทันที — รอจนออเดอร์ตัวที่เก่าสุดในคิวรอมาถึงหน้าต่าง batch (ดูดออเดอร์ที่มาห่างกัน
+      //    แต่ยังในหน้าต่างเดียวกันมารวมชุดเดียว) เว้นแต่คิวยาวเกิน NOTI_ORDER_BATCH_MAX ให้ flush เลยกันค้างนาน
       var orders = items.filter(function(x){ return x.type === 'order'; });
       if (orders.length) {
-        var res = pushOrderBatch_(ch, orders.map(function(x){ return x.payload; }));
-        if (res.ok) { orders.forEach(function(x){ sent.push(x.row); }); }
-        else { orders.forEach(function(x){ retry.push({ row: x.row, attempts: x.attempts, quota: res.quota }); }); }
-        sends++;
-        if (res.quota) return;   // channel ชนลิมิต → หยุด channel นี้ทั้งรอบ
+        var oldestMs = orders.reduce(function(m, x) {
+          var t = (x.created instanceof Date) ? x.created.getTime() : now;
+          return Math.min(m, t);
+        }, now);
+        var ageMin = (now - oldestMs) / 60000;
+        var windowMin = notiOrderBatchWindowMin_(ch);
+        var maxBatch = parseInt(PropertiesService.getScriptProperties().getProperty('NOTI_ORDER_BATCH_MAX') || '15', 10) || 15;
+        if (ageMin >= windowMin || orders.length >= maxBatch) {
+          var res = pushOrderBatch_(ch, orders.map(function(x){ return x.payload; }));
+          if (res.ok) { orders.forEach(function(x){ sent.push(x.row); }); }
+          else { orders.forEach(function(x){ retry.push({ row: x.row, attempts: x.attempts, quota: res.quota }); }); }
+          sends++;
+          if (res.quota) return;   // channel ชนลิมิต → หยุด channel นี้ทั้งรอบ
+        }
+        // ยังไม่ถึงหน้าต่าง → เว้นไว้ก่อน (ไม่แตะ status, รอบถัดไปค่อยเช็คใหม่)
       }
 
       // 2) ที่เหลือ (text/flex) ส่งทีละอันจนถึง throttle
@@ -5749,63 +5757,25 @@ function sendPendingTruckOrders() {
     if (!isPending) continue;
     pending.push({ sku: sku, name: name || sku, qty: qty });
   }
+  var dateStr = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy');
+  var hour = new Date().getHours();
+  var label = hour < 12 ? '🌅 เช้า' : '🌞 บ่าย';
+  // dedup กันรัน trigger ซ้ำในรอบเดียวกันส่งซ้ำ (key ผูกกับวันที่+ช่วงเวลา)
+  var dedupKey = 'truck:' + dateStr + ':' + (hour < 12 ? 'am' : 'pm');
+
   if (!pending.length) {
-    sendLineGroup_("✅ ไม่มีของรอขึ้นรถแล้ว\nจัดครบหมดแล้ว 👍");
+    enqueueNoti_({ channel: 'primary', priority: 3, type: 'text',
+      dedupKey: dedupKey, payload: { text: "✅ ไม่มีของรอขึ้นรถแล้ว\nจัดครบหมดแล้ว 👍" } });
     return;
   }
 
-  var hour = new Date().getHours();
-  var label = hour < 12 ? '🌅 เช้า' : '🌞 บ่าย';
-  var groupId = PropertiesService.getScriptProperties().getProperty('LINE_GROUP_ID');
-  if (!groupId) return;
-
-  // lookup รูปทุก SKU
-  var imgMap = {};
-  try { imgMap = readImageMap_(); } catch(e) {}
-
-  // @All mention text
-  var mentionText = "@All 🚚 " + label + " รอขึ้นรถ " + pending.length + " รายการ";
-  UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
-    method: "post", muteHttpExceptions: true,
-    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN },
-    payload: JSON.stringify({ to: groupId, messages: [{
-      type: "text", text: mentionText,
-      mention: { mentionees: [{ index: 0, length: 4, type: "all" }] }
-    }]})
-  });
-
-  // Flex Carousel — max 12 bubbles ต่อ carousel, max 5 messages ต่อ push
-  var show = pending.slice(0, 12);
-  var bubbles = show.map(function(o) {
-    var imgUrl = imgMap[(o.sku||"").toUpperCase()] || "";
-    var bubble = {
-      type: "bubble", size: "micro",
-      body: {
-        type: "box", layout: "vertical", spacing: "xs", paddingAll: "12px",
-        contents: [
-          { type: "text", text: o.name, weight: "bold", size: "sm", wrap: true, maxLines: 2 },
-          { type: "text", text: o.sku, size: "xxs", color: "#888888" },
-          { type: "text", text: "× " + o.qty + " ชิ้น", size: "sm", color: "#1d4ed8", weight: "bold" }
-        ]
-      }
-    };
-    if (imgUrl) {
-      bubble.hero = { type: "image", url: imgUrl, size: "full", aspectRatio: "4:3", aspectMode: "fit"};
-    }
-    return bubble;
-  });
-
-  var carousel = { type: "flex", altText: "🚚 รอขึ้นรถ " + pending.length + " รายการ",
-    contents: { type: "carousel", contents: bubbles } };
-  var r2 = UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
-    method: "post", muteHttpExceptions: true,
-    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN },
-    payload: JSON.stringify({ to: groupId, messages: [carousel] })
-  });
-  Logger.log("truck carousel: " + r2.getResponseCode() + " " + r2.getContentText().slice(0,300));
-  if (pending.length > 12) {
-    sendLineGroup_("... และอีก " + (pending.length - 12) + " รายการ");
-  }
+  // ตัดเหลือข้อความเดียว (@All + bullet list) แทน mention+carousel เดิม (2→1 ข้อความ ประหยัด quota)
+  var show = pending.slice(0, 20);
+  var lines = show.map(function(o) { return "• " + o.name + " × " + o.qty; });
+  if (pending.length > show.length) lines.push("… และอีก " + (pending.length - show.length) + " รายการ");
+  var text = "@All 🚚 " + label + " รอขึ้นรถ " + pending.length + " รายการ\n" + lines.join('\n');
+  enqueueNoti_({ channel: 'primary', priority: 3, type: 'text', dedupKey: dedupKey,
+    payload: { text: text, mention: true } });
 }
 
 // รันครั้งแรกเพื่อสร้าง trigger 08:00 และ 13:00 (รันเองใน GAS editor)
