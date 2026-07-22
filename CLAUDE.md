@@ -269,6 +269,50 @@ npm run test:coverage # coverage report (tests/helpers.js)
   ชีต imageUrl (ZORT auto ชนะ manual) → `invalidateCache_()` · ใช้หลังอัปรูปในแอป ZORT เสร็จ
   (ตอน AddProduct ยังไม่มีรูป) · ProductCard เก็บ `imgOverride` state โชว์รูปทันทีไม่ต้อง refresh
 
+## ระบบแจ้งเตือน LINE v2 — คิว + throttle + 2 ช่องทาง (Sprint 3)
+
+**ปัญหาเดิม**: quota push รายเดือนของ LINE OA หมดกลางเดือน → บอทเงียบ → งานสะดุด
+ตัวกินหนักสุด = การ์ด order (`sendLineGroupOrderCard_`) ส่ง **2 ข้อความ/ออเดอร์** ยิงเป็นชุดตอนสั่งของรัว
+
+**สถาปัตยกรรม** (ทั้งหมดใน `appsscript_complete.gs`, section "ระบบคิวแจ้งเตือน LINE v2"):
+- **คิวบนชีต** `SHEET_NOTI_QUEUE` ("คิวแจ้งเตือน LINE") — cols: id, createdAt, channel, priority,
+  type, dedupKey, target, payload(JSON), status, attempts, nextRetryAt, lastError, sentAt
+- **`enqueueNoti_({channel,priority,type,dedupKey,target,payload})`** — เขียนเข้าคิว · **dedup** ด้วย
+  dedupKey (มี pending คีย์เดียวกันแล้ว → ข้าม กันส่งซ้ำ) · ถ้า enqueue พัง → ส่งตรงกันข้อความหาย
+- **`drainNotiQueue()`** — trigger ทุก 1 นาที ปล่อยคิว · throttle `NOTI_MAX_SENDS_PER_RUN` (default 4)
+  push/channel/รอบ · retry/backoff: quota→30 นาที, error→2^att นาที (cap 15), ครบ `NOTI_MAX_ATTEMPTS` (6) → failed
+- **coalesce order แบบ time-window** (`pushOrderBatch_`/`notiOrderBatchWindowMin_`): ปริมาณ order จริง
+  (~5-10/วัน) ชนเพดานฟรี 200/เดือนได้ง่ายถ้าส่งทุกครั้ง จึง (1) **รวมทุกออเดอร์ที่มาห่างกันแต่ยังในหน้าต่างเดียวกัน
+  เป็นชุดเดียว** — ไม่ flush ทันที รอจนออเดอร์เก่าสุดในคิวรอครบ `NOTI_ORDER_BATCH_MINUTES` (default 20 นาที)
+  หรือคิวยาวเกิน `NOTI_ORDER_BATCH_MAX` (default 15) ค่อย flush (2) **ตัดเหลือข้อความเดียว/ชุด** (@All + bullet
+  list ชื่อ/จำนวน) แทน mention+flex carousel เดิม — ยังคง @All ไว้เพราะสำคัญกับพนักงานที่ไม่ถนัดเทคโนโลยี
+  ตัดเฉพาะ carousel (สวยแต่แพง) ออก (3) **หน้าต่างยืดอัตโนมัติเมื่อใกล้เพดาน**: ใช้ quota เดือนนี้ (`notiQuotaUsed_`)
+  ถึง 60% ของ `NOTI_MONTHLY_CAP` (default 200) → หน้าต่าง ×2, ถึง 85% → ×4 (ประหยัดสุดตอนใกล้หมด กันเงียบซ้ำ)
+- **`sendPendingTruckOrders`** เดิมส่งตรงผ่าน `UrlFetchApp` ไม่ผ่านคิว (นับ quota ไม่ได้) — เปลี่ยนให้ผ่าน
+  `enqueueNoti_` เหมือนกัน ตัดเหลือ 1 ข้อความ/รอบ (bullet list แทน mention+carousel) + dedup กันรัน trigger ซ้ำ
+- **2 ช่องทาง**: `primary` = `LINE_ACCESS_TOKEN` เดิม (งานจัดของ/order priority 1 ห้ามเงียบ) ·
+  `secondary` = `LINE_ACCESS_TOKEN_2` (สรุป/สต็อกต่ำ/health/ZORT-fail) · ไม่ตั้ง token2 → fallback ใช้ตัวหลัก
+  · `lineToken_/lineGroupTarget_/resolveNotiTarget_/linePush_` จัดการ routing · target: ''=กลุ่ม, 'user'=LINE_USER_ID
+  · **หมายเหตุ LINE ตัวที่ 2**: 1 กลุ่มไลน์ใส่ OA ได้แค่ 1 ตัว — ต้องสร้างกลุ่มแยกให้บอทตัวที่ 2 เชิญเข้ากลุ่มเดิมไม่ได้
+    (LINE เตะออกอัตโนมัติ) · userId ก็ผูกกับแต่ละ OA แยกกัน (`target:'user'` บน secondary ใช้ `LINE_USER_ID_2`
+    ถ้าตั้งไว้ ไม่ตั้ง fallback ไปกลุ่มแทน)
+- **นับ quota รายเดือน/ช่องทาง** ใน Script Property `NOTI_SENT_{channel}_{yyyyMM}` — ตัวนี้เป็นทั้งข้อมูลประกอบ
+  และ input ให้ `notiOrderBatchWindowMin_` ใช้ตัดสินใจยืดหน้าต่าง batch อัตโนมัติ
+- **SAFE ROLLOUT**: ทุกอย่าง gate ด้วย `NOTI_QUEUE_ENABLED='true'` — ยังไม่เปิด → `enqueueNoti_` ส่งตรง
+  ทันทีแบบเดิมทุกประการ (merge แล้วไม่พังของเดิม) · เปิดจริงเมื่อเจ้าของรัน **`setupNotiSystem()`** 1 ครั้ง
+- **สรุปรายวัน → รายสัปดาห์ + รายเดือน**: `sendWeeklySummary` (จันทร์ 08:00) + `sendMonthlySummary`
+  (วันที่ 1, 08:00) ส่ง secondary · `sendDailyMorningSummary` เลิก trigger (setupNotiSystem ลบให้)
+- **routed เข้าคิวแล้ว**: order card + truck reminder (primary), low stock, health check, ZORT-fail,
+  scheduledLineReminder (secondary)
+
+**เจ้าของต้องทำเองใน GAS editor** (clasp push ไม่รันให้):
+1. (ถ้าใช้ 2 ช่องทาง) สร้าง LINE OA ตัวที่ 2 → ตั้ง Script Property `LINE_ACCESS_TOKEN_2`
+   (+ `LINE_GROUP_ID_2` ถ้าแยกกลุ่ม — **ต้องเป็นกลุ่มใหม่ ไม่ใช่กลุ่มเดิม**) + เชิญบอทตัวที่ 2 เข้ากลุ่มใหม่นี้
+   · ไม่ทำก็ได้ ระบบ fallback ไปช่องเดียว ยังได้ประโยชน์จากคิว+coalesce+batch window เต็มที่
+2. รัน **`setupNotiSystem()`** 1 ครั้ง (เปิดคิว + ตั้ง trigger drain/สัปดาห์/เดือน + ลบ trigger รายวัน)
+3. ปรับ `NOTI_ORDER_BATCH_MINUTES`/`NOTI_MONTHLY_CAP` ผ่าน Script Properties ได้ถ้าอยากปรับความเร่งด่วน/เพดานให้ตรงแพ็กเกจ LINE จริง
+3. rollback ได้ด้วย `disableNotiSystem()` (กลับไปส่งตรงแบบเดิม)
+
 ## Features ที่เพิ่มก่อนหน้า (Sprint 1)
 
 - **Multi-token search** — StockView (views-main.jsx) + FrontStoreView (views-analytics.jsx)
