@@ -6757,40 +6757,81 @@ function decreaseMtoStockInZort_(items) {
 }
 
 // สร้าง ZORT Sale Order ราคา 0 (หักสต็อกผ่านรายการขาย ไม่ใช่ DecreaseStock โดยตรง)
+// สร้าง ZORT Sale Order (status="Success" → ZORT หักสต็อกให้เอง ไม่ต้องเรียก DecreaseStock ซ้ำ)
+// payload ยึดตาม pattern ที่พิสูจน์แล้วว่าใช้ได้ (addPurchaseIn/exploreAddPurchaseOrder):
+//   ต้องมี status + warehousecode + amount + list[].pricepernumber มิฉะนั้น ZORT ไม่ประมวลผล
+// MTO ตัดได้ทั้งคลัง (WH_SAI5) และหน้าร้าน (WH_FRONTSTORE) → group ตามคลัง สร้าง order แยกตามกลุ่ม
+//   (เหมือน decreaseMtoStockInZort_) เพราะ 1 order = 1 warehousecode
 function createZortSaleOrder_(items, jobName) {
   const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
-  const dateStr = Utilities.formatDate(new Date(), "Asia/Bangkok", "dd/MM/yyyy");
+  const dateStr = Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyy-MM-dd");
 
-  const list = items
-    .map(function(it) {
-      const net = Number(it.qty) - Math.max(0, Math.min(Number(it.returnedQty) || 0, Number(it.qty)));
-      return { sku: String(it.sku || "").trim(), name: String(it.name || "").trim(), number: net, price: 0, totalprice: 0 };
-    })
-    .filter(function(it) { return it.number > 0; });
-
-  if (!list.length) return { skipped: true };
-
-  const payload = {
-    date: dateStr,
-    remark: jobName || "",
-    list: list,
+  // Group net quantities by warehouse (รองรับ split format: qtyWH/qtyFS + legacy: warehouse)
+  const groups = {};
+  const push_ = (whCode, it, qty) => {
+    if (!it.sku || qty <= 0) return;
+    if (!groups[whCode]) groups[whCode] = [];
+    groups[whCode].push({
+      sku: String(it.sku || "").trim(),
+      name: String(it.name || "").trim(),
+      number: qty,
+      pricepernumber: 0,
+      discount: "0",
+      totalprice: 0,
+    });
   };
-
-  const res = UrlFetchApp.fetch(ZORT_BASE + "/Order/AddOrder", {
-    method: "post",
-    headers: headers,
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true,
+  items.forEach(function(item) {
+    const it = { sku: item.sku, name: item.name };
+    const hasNewFmt = item.qtyWH != null || item.qtyFS != null;
+    if (hasNewFmt) {
+      push_(WH_SAI5, it, Number(item.qtyWH) || 0);
+      push_(WH_FRONTSTORE, it, Number(item.qtyFS) || 0);
+    } else {
+      const qty = Number(item.qty) || 0;
+      const ret = Math.max(0, Math.min(Number(item.returnedQty) || 0, qty));
+      const net = qty - ret;
+      push_(item.warehouse === "frontstore" ? WH_FRONTSTORE : WH_SAI5, it, net);
+    }
   });
 
-  const err = zortRespError_(res);
-  if (err) {
-    logZortFailure_("สร้าง Sale Order งานจัดพิเศษ: " + jobName, err);
-    return { success: false, error: err };
-  }
-  const json = JSON.parse(res.getContentText() || "{}");
-  Logger.log("ZORT Sale Order created: " + JSON.stringify(json));
-  return { success: true, orderNumber: json.number || json.ordernumber || null };
+  const entries = Object.entries(groups).filter(function(e) { return e[1].length; });
+  if (!entries.length) return { skipped: true };
+
+  const orders = [];
+  let anyErr = null;
+  entries.forEach(function(entry) {
+    const whCode = entry[0];
+    const list = entry[1];
+    const payload = {
+      status: "Success",           // ขายสำเร็จ → ZORT หักสต็อกออกจากคลังนี้
+      warehousecode: whCode,
+      orderdate: dateStr,
+      amount: 0,                   // งานจัดพิเศษ = ราคา 0 (ตัดสต็อกอย่างเดียว)
+      remark: jobName || "",
+      list: list,
+    };
+    const res = UrlFetchApp.fetch(ZORT_BASE + "/Order/AddOrder", {
+      method: "post",
+      headers: headers,
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true,
+    });
+    Logger.log("AddOrder [" + whCode + "]: HTTP " + res.getResponseCode() + " — " + res.getContentText().substring(0, 400));
+    const err = zortRespError_(res);
+    if (err) {
+      anyErr = err;
+      logZortFailure_("สร้าง Sale Order งานจัดพิเศษ: " + jobName + " (" + whCode + ")",
+        err + " | SKU: " + list.map(function(s) { return s.sku; }).join(","));
+      return;
+    }
+    let json = {};
+    try { json = JSON.parse(res.getContentText() || "{}"); } catch (e) { /* HTTP 200 ผ่านแม้ parse ไม่ได้ */ }
+    orders.push({ warehousecode: whCode, orderNumber: json.number || json.ordernumber || json.id || null });
+  });
+
+  if (anyErr && !orders.length) return { success: false, error: anyErr };
+  if (anyErr) return { success: true, partial: true, error: anyErr, orders: orders };
+  return { success: true, orders: orders };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
