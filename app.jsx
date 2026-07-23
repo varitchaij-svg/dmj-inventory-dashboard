@@ -36,6 +36,16 @@ const ROLE_TABS = {
   frontstore: ["categories","stock","frontstore","orders","mtojobs","labels"],
   saler:      ["pos","categories","stock","orders","quotefollowup","mtojobs","labels"],
 };
+// หมวดหลักของ owner (nav 2 ชั้น) — กดหมวด → เห็นเมนูย่อยของหมวดนั้น
+// เรียงตามความสำคัญ/ที่ใช้บ่อย: ภาพรวม → การขาย → สต็อก → วิเคราะห์ → เครื่องมือ
+// tab ที่ไม่อยู่ในกลุ่มไหน จะถูกดันเข้ากลุ่ม "อื่นๆ" อัตโนมัติ (กัน tab หาย)
+const OWNER_GROUPS = [
+  { id: "g_overview", gi: "📊", name: "ภาพรวม",       tabs: ["overview"] },
+  { id: "g_sales",    gi: "💰", name: "การขาย",       tabs: ["pos", "orders", "quotefollowup", "customers", "frontstore", "mtojobs"] },
+  { id: "g_stock",    gi: "📦", name: "สต็อก & คลัง",  tabs: ["stock", "categories", "storage", "stockcount", "transfers", "ordersummary", "newproduct", "deadstock", "labels"] },
+  { id: "g_insight",  gi: "📈", name: "วิเคราะห์",      tabs: ["trends", "season"] },
+  { id: "g_tools",    gi: "⚙️", name: "เครื่องมือ",     tabs: ["upload", "connect", "auditlog"] },
+];
 // "โหมดง่าย" — เมนูที่ใช้ประจำวัน (เหลือไว้บนแถบหลัก) ที่เหลือดันเข้า "เพิ่มเติม"
 const SIMPLE_PRIMARY = ["categories", "stock", "frontstore", "orders"];
 
@@ -336,6 +346,7 @@ function App() {
   const [lastSaved, setLastSaved] = usS(null); // auto-save timestamp
   const [confirmAction, setConfirmAction] = usS(null); // { type:"clearLocal"|"logout" }
   const [moreOpen, setMoreOpen] = usS(false); // dropdown "เพิ่มเติม" บน navtabs (owner)
+  const [ownerGroup, setOwnerGroup] = usS(null); // หมวดหลักที่ owner "แตะดู" อยู่ (null = ตามหมวดของ tab ปัจจุบัน)
   const [simpleMode, setSimpleMode] = usS(() => localStorage.getItem("dmj_simple_mode") === "1"); // โหมดง่าย: ลดเมนู
   const [moreRect, setMoreRect] = usS(null);  // position ของปุ่มเพิ่มเติม (fixed dropdown)
   const moreButtonRef = React.useRef(null);
@@ -345,6 +356,8 @@ function App() {
   const [navToast, showNavToast, hideNavToast] = useToast(); // toast สำหรับ nav-level errors
   const tabHistoryRef = React.useRef([]); // track tab navigation for Android back
   const fetchingRef = React.useRef(false); // guard against concurrent fetchFromSheet calls
+  // เมื่อ tab เปลี่ยน (กด subtab / นำทางจากการ์ดภาพรวม) → ล้าง "แตะดู" ให้หมวดหลักวิ่งตาม tab
+  uE(() => { setOwnerGroup(null); }, [tab]);
 
   const sheetUrl = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : "data.json";
   const sheetViewUrl = "https://docs.google.com/spreadsheets/d/11yL4u-XLUTCBObMppAj12nnmG0YlDZWsDn2XPCneoHQ/edit";
@@ -636,6 +649,29 @@ function App() {
     return `${pad(dt.getDate())}/${pad(dt.getMonth()+1)} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
   })();
 
+  // ── ตัวเลขเตือนบนหมวด owner (จาก payload ที่เชื่อถือได้) ──
+  const pendingOrders = (data.orders || []).filter(o => o.status === "รอ").length;    // ออเดอร์ค้าง (status "รอ")
+  const pendingRecv   = (data.shipments || []).filter(s => !s.receivedAt).length;      // ของโอนแล้วรอรับ
+
+  // จัดกลุ่ม owner: map tab id → {label, icon} จริง + ดัน tab ที่ไม่เข้ากลุ่มไหนเข้า "อื่นๆ"
+  const ownerNav = (() => {
+    if (role !== "owner") return null;
+    const allowed = new Set(allowedTabIds);
+    const groups = OWNER_GROUPS
+      .map(g => ({ ...g, items: g.tabs.filter(id => allowed.has(id)).map(id => TABS.find(t => t.id === id)).filter(Boolean) }))
+      .filter(g => g.items.length > 0);
+    const grouped = new Set(groups.flatMap(g => g.items.map(t => t.id)));
+    const leftover = allowedTabIds.filter(id => !grouped.has(id)).map(id => TABS.find(t => t.id === id)).filter(Boolean);
+    if (leftover.length) groups.push({ id: "g_other", gi: "🗂️", name: "อื่นๆ", items: leftover });
+    // หมวดที่กำลังแสดง: ที่ "แตะดู" ไว้ ▸ ไม่งั้นหมวดที่มี tab ปัจจุบัน ▸ ไม่งั้นหมวดแรก
+    const groupOfTab = groups.find(g => g.items.some(t => t.id === activeTab));
+    const displayId  = (ownerGroup && groups.some(g => g.id === ownerGroup)) ? ownerGroup
+                     : (groupOfTab ? groupOfTab.id : groups[0].id);
+    const badgeFor = id => id === "g_sales" ? pendingOrders : id === "g_stock" ? pendingRecv : 0;
+    const subBadgeFor = id => id === "orders" ? pendingOrders : id === "transfers" ? pendingRecv : 0;
+    return { groups, displayId, badgeFor, subBadgeFor };
+  })();
+
   return (
     <div style={{maxWidth:"100vw", overflowX:"hidden", position:"relative"}}>
       {/* ─── Confirm modals ─── */}
@@ -675,8 +711,51 @@ function App() {
             </div>
           </div>
 
-          <div className={`navtabs${role === "owner" ? " navtabs-wrap" : ""}`} role="tablist">
-            {(() => {
+          <div className={role === "owner" ? "owner-nav" : "navtabs"} role="tablist">
+            {role === "owner" && ownerNav ? (() => {
+              const dg = ownerNav.groups.find(g => g.id === ownerNav.displayId) || ownerNav.groups[0];
+              return (
+                <>
+                  {/* ชั้น 1: หมวดหลัก */}
+                  <div className="owner-l1" role="tablist" aria-label="หมวดหลัก">
+                    {ownerNav.groups.map(g => {
+                      const badge = ownerNav.badgeFor(g.id);
+                      return (
+                        <button key={g.id} role="tab"
+                                aria-selected={g.id === dg.id}
+                                className={`owner-grp${g.id === dg.id ? " active" : ""}`}
+                                onClick={() => {
+                                  // หมวดที่มีเมนูเดียว → เข้าเลย · หลายเมนู → แค่เปิดดูเมนูย่อย
+                                  if (g.items.length === 1) handleSetTab(g.items[0].id);
+                                  else setOwnerGroup(g.id);
+                                }}>
+                          <span className="gi">{g.gi}</span>
+                          <span>{g.name}</span>
+                          {badge > 0 && <span className="gc">{badge}</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {/* ชั้น 2: เมนูย่อยของหมวดที่เลือก (ซ่อนเมื่อหมวดมีเมนูเดียว) */}
+                  {dg.items.length > 1 && (
+                    <div className="owner-l2" role="tablist" aria-label={`เมนูย่อย ${dg.name}`}>
+                      {dg.items.map(t => {
+                        const sb = ownerNav.subBadgeFor(t.id);
+                        return (
+                          <button key={t.id} role="tab"
+                                  aria-selected={activeTab === t.id}
+                                  className={`owner-sub${activeTab === t.id ? " active" : ""}`}
+                                  onClick={() => handleSetTab(t.id)}>
+                            {t.icon}<span>{t.label}</span>
+                            {sb > 0 && <span className="sb">{sb}</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              );
+            })() : (() => {
               // primaryTabs / secondaryTabs คำนวณไว้ด้านบน (รวมโหมดง่าย)
               // แสดงปุ่ม "เพิ่มเติม" เมื่อมี secondaryTabs
               if (secondaryTabs.length > 0) {

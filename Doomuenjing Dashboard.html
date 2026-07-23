@@ -132,6 +132,52 @@
   }
   .navtab svg { width: 15px; height: 15px; stroke-width: 2; }
 
+  /* ── Owner nav 2 ชั้น: หมวดหลัก + เมนูย่อย ── */
+  .owner-nav {
+    flex-basis: 100%; order: 3; margin-top: 8px; min-width: 0;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .owner-l1 { display: flex; gap: 6px; flex-wrap: wrap; }
+  .owner-grp {
+    background: none; border: 1px solid transparent; cursor: pointer;
+    font-family: inherit; font-size: 14px; font-weight: 600; color: var(--muted);
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 9px 15px; border-radius: 11px; min-height: 42px;
+    transition: background .15s, color .15s;
+  }
+  .owner-grp:hover { color: var(--text); background: var(--g-50); }
+  .owner-grp.active {
+    color: var(--g-700); background: var(--g-100); font-weight: 800;
+    box-shadow: inset 0 -2px 0 var(--g-600);
+  }
+  .owner-grp .gi { font-size: 17px; line-height: 1; }
+  .owner-grp .gc {
+    font-size: 11px; font-weight: 800; min-width: 18px; height: 18px;
+    padding: 0 5px; border-radius: 9px; display: inline-grid; place-items: center;
+    background: #fbf1dc; color: #9a6a0f;
+  }
+  .owner-l2 {
+    display: flex; gap: 8px; flex-wrap: wrap;
+    padding-top: 9px; border-top: 1px solid var(--bdr);
+  }
+  .owner-sub {
+    background: var(--paper); border: 1px solid var(--bdr); cursor: pointer;
+    font-family: inherit; font-size: 13.5px; font-weight: 600; color: var(--text);
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 8px 13px; border-radius: 10px; min-height: 42px;
+    transition: border-color .15s, background .15s, color .15s;
+  }
+  .owner-sub:hover { border-color: var(--g-400); background: var(--g-50); }
+  .owner-sub.active {
+    border-color: var(--g-600); background: var(--g-100);
+    color: var(--g-700); font-weight: 800;
+  }
+  .owner-sub svg { width: 15px; height: 15px; stroke-width: 2; }
+  .owner-sub .sb {
+    font-size: 11px; font-weight: 800; padding: 1px 7px; border-radius: 8px;
+    background: #fbf1dc; color: #9a6a0f;
+  }
+
   .nav-right { display: flex; align-items: center; gap: 10px; }
   .nav-status {
     display: inline-flex; align-items: center; gap: 7px;
@@ -261,6 +307,13 @@
     .navtabs::-webkit-scrollbar { height: 4px; }
     .navtab { padding: 7px 11px; font-size: 13px; flex-shrink: 0; }
     .navtab span { white-space: nowrap; }
+    /* owner 2 ชั้น: เลื่อนแนวนอนแทนตกบรรทัด — กดง่าย ไม่กินพื้นที่แนวตั้ง */
+    .owner-l1, .owner-l2 {
+      flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin;
+      padding-bottom: 4px; -webkit-overflow-scrolling: touch;
+    }
+    .owner-l1::-webkit-scrollbar, .owner-l2::-webkit-scrollbar { height: 4px; }
+    .owner-grp, .owner-sub { flex-shrink: 0; white-space: nowrap; }
     .main { padding: 16px; }
     .cat-layout { grid-template-columns: 200px 1fr; }
   }
