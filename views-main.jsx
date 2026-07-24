@@ -987,6 +987,27 @@ function OverviewView({ data, range, setRange, role }) {
   const [selCat, setSelCat] = uS("");          // "" = ทุกหมวด · เลือกหมวด → กรอง KPI/กราฟ/forecast/top สินค้า
   const monthStripRef = React.useRef(null);
   const mobile = useIsMobile();                // ซ่อนคอลัมน์รองบนมือถือให้พอดีจอ
+
+  // ── แถบฟิลเตอร์ย่อ (sticky) — โผล่มาเมื่อเลื่อนพ้นหัวข้อ ให้เปลี่ยนปี/เดือน/ช่วงได้โดยไม่ต้องเลื่อนขึ้นบนสุด ──
+  const headSentinelRef = React.useRef(null);
+  const [condensed, setCondensed] = uS(false);
+  const [barTop, setBarTop] = uS(0);
+  uE(() => {
+    let ticking = false;
+    const measure = () => {
+      ticking = false;
+      const nav = document.querySelector('.topnav');
+      const navH = nav ? nav.getBoundingClientRect().height : 0;
+      setBarTop(navH);
+      const sentinel = headSentinelRef.current;
+      if (sentinel) setCondensed(sentinel.getBoundingClientRect().top < navH);
+    };
+    const onScroll = () => { if (!ticking) { ticking = true; requestAnimationFrame(measure); } };
+    measure();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll);
+    return () => { window.removeEventListener('scroll', onScroll); window.removeEventListener('resize', onScroll); };
+  }, []);
   const [cmpSel,   setCmpSel]   = uS([]);     // explicit month selection for comparison
   const [showCmp,  setShowCmp]  = uS(false);
 
@@ -1535,8 +1556,47 @@ function OverviewView({ data, range, setRange, role }) {
     : range === 'month' ? (activeMonth ? monthLabel(activeMonth) : "เดือนล่าสุด")
     : selYear ? `ปี ${selYear} · ${yearMonths.length} เดือน` : `${months.length} เดือนรวม`;
 
+  // ตัวกรองหมวด/เดือน/ช่วง — ใช้ร่วมกันทั้งแถบปกติ (page-actions) และแถบย่อ sticky ด้านล่าง
+  // (ตัวแปรเดียว กันโค้ด/state หลุดจากกันตอนแก้ทีหลัง)
+  const filterControls = (
+    <>
+      <select value={selCat} onChange={e=>setSelCat(e.target.value)}
+        title="กรองตามหมวด"
+        style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid "+(selCat?"var(--g-500)":"var(--bdr)"),
+                background:selCat?"var(--g-50)":"#fff",color:selCat?"var(--g-700)":"var(--text)",
+                fontFamily:"inherit",fontSize:13,fontWeight:selCat?700:500,maxWidth:180}}>
+        <option value="">🏷️ ทุกหมวด</option>
+        {allCats.map(c => <option key={c} value={c}>{c}</option>)}
+      </select>
+      {months.length > 1 && (
+        <select value={range === 'month' ? (selMonth || months[months.length - 1] || "") : ""}
+          onChange={e => { const v = e.target.value; if (v) { setSelMonth(v); setRange('month'); } }}
+          title="เลือกดูเดือน"
+          style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid "+(range==='month'?"var(--g-500)":"var(--bdr)"),
+                  background:range==='month'?"var(--g-50)":"#fff",color:range==='month'?"var(--g-700)":"var(--text)",
+                  fontFamily:"inherit",fontSize:13,fontWeight:range==='month'?700:500,maxWidth:150}}>
+          <option value="">📅 เลือกเดือน…</option>
+          {months.slice().reverse().map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
+        </select>
+      )}
+      <Seg value={range} onChange={setRange} options={[
+        {value:"day",   label:"รายวัน"},
+        {value:"month", label:"รายเดือน"},
+        {value:"year",  label:"ทั้งปี"},
+      ]}/>
+    </>
+  );
+
   return (
     <div>
+      {/* ─── แถบฟิลเตอร์ย่อ sticky — โผล่มาเมื่อเลื่อนพ้นหัวข้อ ให้เปลี่ยนหมวด/เดือน/ช่วงได้เลยไม่ต้องเลื่อนขึ้น ─── */}
+      <div className={`overview-stickybar${condensed ? ' show' : ''}`} style={{top: barTop}} aria-hidden={!condensed}>
+        <div className="overview-stickybar-inner">
+          <span className="overview-stickybar-title">📊 ภาพรวมยอดขาย</span>
+          {filterControls}
+        </div>
+      </div>
+
       <div className="page-head">
         <div>
           <div className="page-title">ภาพรวมยอดขาย</div>
@@ -1556,32 +1616,11 @@ function OverviewView({ data, range, setRange, role }) {
           </div>
         </div>
         <div className="page-actions" style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-          <select value={selCat} onChange={e=>setSelCat(e.target.value)}
-            title="กรองตามหมวด"
-            style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid "+(selCat?"var(--g-500)":"var(--bdr)"),
-                    background:selCat?"var(--g-50)":"#fff",color:selCat?"var(--g-700)":"var(--text)",
-                    fontFamily:"inherit",fontSize:13,fontWeight:selCat?700:500,maxWidth:180}}>
-            <option value="">🏷️ ทุกหมวด</option>
-            {allCats.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
-          {months.length > 1 && (
-            <select value={range === 'month' ? (selMonth || months[months.length - 1] || "") : ""}
-              onChange={e => { const v = e.target.value; if (v) { setSelMonth(v); setRange('month'); } }}
-              title="เลือกดูเดือน"
-              style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid "+(range==='month'?"var(--g-500)":"var(--bdr)"),
-                      background:range==='month'?"var(--g-50)":"#fff",color:range==='month'?"var(--g-700)":"var(--text)",
-                      fontFamily:"inherit",fontSize:13,fontWeight:range==='month'?700:500,maxWidth:150}}>
-              <option value="">📅 เลือกเดือน…</option>
-              {months.slice().reverse().map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
-            </select>
-          )}
-          <Seg value={range} onChange={setRange} options={[
-            {value:"day",   label:"รายวัน"},
-            {value:"month", label:"รายเดือน"},
-            {value:"year",  label:"ทั้งปี"},
-          ]}/>
+          {filterControls}
         </div>
       </div>
+      {/* sentinel — จุดอ้างอิงว่าเลื่อนพ้นหัวข้อหรือยัง (วัดจาก getBoundingClientRect ใน effect ด้านบน) */}
+      <div ref={headSentinelRef} style={{height:1}}/>
       {selCat && (
         <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,fontSize:12,color:"var(--g-700)",background:"var(--g-50)",border:"1px solid var(--g-200)",borderRadius:20,padding:"5px 12px",width:"fit-content"}}>
           <span>🏷️ กรองเฉพาะหมวด: <b>{selCat}</b> — ทุกตัวเลข/กราฟ/Top สินค้าด้านล่างเป็นของหมวดนี้</span>
