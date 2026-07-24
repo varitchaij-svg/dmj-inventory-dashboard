@@ -588,22 +588,15 @@ function App() {
   });
 
   // แบ่งเมนูเป็น primary (บนแถบ) / secondary (ใน "เพิ่มเติม")
-  // โหมดง่าย: เหลือเฉพาะ SIMPLE_PRIMARY บนแถบ ที่เหลือเข้า "เพิ่มเติม"
-  // โหมดปกติ: แสดง 5 ตัวแรก + เพิ่มเติม เมื่อมีเกิน 9 ตัว
-  //   (แถบเลื่อนแนวนอนได้ — role คลัง 9 แท็บ/หน้าร้าน 6/Sale 5 แสดงครบไม่ต้องมีเพิ่มเติม
-  //    เหลือดันเข้าเพิ่มเติมเฉพาะ owner 17 / employee 10 ที่แท็บเยอะจริง)
+  // owner: 5 ตัวแรก + "เพิ่มเติม" สำหรับที่เหลือ (แท็บเยอะ 17 แท็บ)
+  // role อื่น: โชว์ทุกแท็บบนแถบ ไม่มี "เพิ่มเติม" (แถบเลื่อนแนวนอนได้)
   let primaryTabs, secondaryTabs;
   if (role === "owner") {
-    // owner: โชว์ทุกเมนูบนแถบ ไม่มี "เพิ่มเติม" (แถบเลื่อนแนวนอนได้)
-    primaryTabs   = visibleTabs;
-    secondaryTabs = [];
-  } else if (simpleMode) {
-    primaryTabs   = visibleTabs.filter(t => SIMPLE_PRIMARY.includes(t.id));
-    secondaryTabs = visibleTabs.filter(t => !SIMPLE_PRIMARY.includes(t.id));
-  } else if (visibleTabs.length > 9) {
+    // owner: แสดง 5 ตัวแรก + เพิ่มเติม สำหรับที่เหลือ
     primaryTabs   = visibleTabs.slice(0, 5);
     secondaryTabs = visibleTabs.slice(5);
   } else {
+    // role อื่น (employee/warehouse/frontstore/saler): โชว์ทุกแท็บ ไม่มี "เพิ่มเติม"
     primaryTabs   = visibleTabs;
     secondaryTabs = [];
   }
