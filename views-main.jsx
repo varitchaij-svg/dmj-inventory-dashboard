@@ -1256,6 +1256,8 @@ function OverviewView({ data, range, setRange, role }) {
     return { val, valWH, valStore, n, soldRev, nSold };
   }, [selCat, products, totals]);
 
+  // map SKU → product (ใช้แนบรูป + เปิด ProductModal ในการ์ดของเข้าใหม่)
+  const prodBySku = uM(() => new Map(products.map(p => [p.sku, p])), [products]);
   // ── ของเข้าใหม่ 30 วัน (จาก purchases[] = ชีต "รายการซื้อสินค้า") ──
   // จับกลุ่มตาม SKU: รวมจำนวน+ต้นทุน, เก็บวันล่าสุด/ซัพพลายเออร์/PO · เคารพตัวกรองหมวด (selCat)
   const recentIntake = uM(() => {
@@ -1775,23 +1777,41 @@ function OverviewView({ data, range, setRange, role }) {
                 <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>มูลค่าซื้อรวม</div>
               </div>
             </div>
-            {/* รายการ (เลื่อนดูได้) */}
-            <div style={{maxHeight:340,overflowY:"auto"}}>
-              {recentIntake.items.map((g, i) => (
-                <div key={g.sku} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 18px",borderTop:i===0?"none":"1px solid #e4eff6"}}>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:13.5,fontWeight:700,color:"var(--text)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{g.name || g.sku}</div>
-                    <div style={{fontSize:11,color:"var(--muted)",display:"flex",gap:6,flexWrap:"wrap",marginTop:2}}>
-                      <span style={{fontFamily:"monospace"}}>{g.sku}</span>
-                      {g.suppliers.length > 0 && <span>· {g.suppliers.join(", ")}</span>}
+            {/* รายการ (เลื่อนดูได้ · แตะเพื่อดูรูป+รายละเอียด) */}
+            <div style={{maxHeight:360,overflowY:"auto"}}>
+              {recentIntake.items.map((g, i) => {
+                const prod = prodBySku.get(g.sku);
+                const img = prod && prod.imageUrl;
+                return (
+                  <div key={g.sku} role="button" tabIndex={0}
+                       onClick={() => prod && setOverviewModalP(prod)}
+                       onKeyDown={e => { if (prod && (e.key==="Enter"||e.key===" ")) { e.preventDefault(); setOverviewModalP(prod); } }}
+                       style={{display:"flex",alignItems:"center",gap:11,padding:"10px 18px",
+                               borderTop:i===0?"none":"1px solid #e4eff6",
+                               cursor: prod ? "pointer" : "default"}}>
+                    {/* thumbnail */}
+                    {img ? (
+                      <div style={{width:44,height:44,borderRadius:9,flexShrink:0,border:"1px solid #dcecf5",
+                                   backgroundImage:`url("${img}")`,backgroundSize:"cover",backgroundPosition:"center",backgroundColor:"#fafcf7"}}/>
+                    ) : (
+                      <div style={{width:44,height:44,borderRadius:9,flexShrink:0,border:"1px solid #dcecf5",
+                                   background:"#eef4f8",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,color:"#9db4c4"}}>📦</div>
+                    )}
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:13.5,fontWeight:700,color:"var(--text)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{g.name || g.sku}</div>
+                      <div style={{fontSize:11,color:"var(--muted)",display:"flex",gap:6,flexWrap:"wrap",marginTop:2}}>
+                        <span style={{fontFamily:"monospace"}}>{g.sku}</span>
+                        {g.suppliers.length > 0 && <span>· {g.suppliers.join(", ")}</span>}
+                      </div>
                     </div>
+                    <div style={{textAlign:"right",flexShrink:0}}>
+                      <div style={{fontSize:14,fontWeight:800,color:"#1f7f44"}}>+{fmtN(g.qty)}</div>
+                      <div style={{fontSize:10.5,color:"var(--muted)",marginTop:2}}>{fmtIntakeDate(g.date)}</div>
+                    </div>
+                    {prod && <span style={{flexShrink:0,color:"#9db4c4",fontSize:16,marginLeft:2}}>›</span>}
                   </div>
-                  <div style={{textAlign:"right",flexShrink:0}}>
-                    <div style={{fontSize:14,fontWeight:800,color:"#1f7f44"}}>+{fmtN(g.qty)}</div>
-                    <div style={{fontSize:10.5,color:"var(--muted)",marginTop:2}}>{fmtIntakeDate(g.date)}</div>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
@@ -5892,19 +5912,20 @@ function StorageView({ data }) {
   const mismatchCount = Object.values(lockData).filter(d => d.mismatch).length;
 
   const searchSku = search.trim().toUpperCase();
+  // multi-token AND-match กับ hay = SKU+ชื่อ (เหมือนหน้า "สินค้า & สั่ง" — พิมพ์ "ฟาแลน 148" หาเจอ)
+  const searchTokens = uM(() => searchSku ? searchSku.split(/\s+/).filter(Boolean) : [], [searchSku]);
   const searchMatches = uM(() => {
-    if (!searchSku) return new Set();
+    if (!searchTokens.length) return new Set();
     const matches = new Set();
     Object.entries(lockData).forEach(([key, d]) => {
-      if (d.skus.some(s => s.toUpperCase().includes(searchSku))) matches.add(key);
-      // also match product name
       if (d.skus.some(s => {
         const p = productMap[s];
-        return p && (p.name||'').toUpperCase().includes(searchSku);
+        const hay = (s + ' ' + ((p && p.name) || '')).toUpperCase();
+        return searchTokens.every(t => hay.includes(t));
       })) matches.add(key);
     });
     return matches;
-  }, [searchSku, lockData, productMap]);
+  }, [searchTokens, lockData, productMap]);
 
   // sku → [lockKey, ...] reverse map
   const skuToLocks = uM(() => {
@@ -5920,16 +5941,16 @@ function StorageView({ data }) {
 
   // Enhanced search results (product cards with lock positions)
   const searchResults = uM(() => {
-    if (!searchSku || searchSku.length < 1) return [];
+    if (!searchTokens.length) return [];
     const results = [];
     products.forEach(p => {
-      if (p.sku.toUpperCase().includes(searchSku) ||
-          (p.name||'').toUpperCase().includes(searchSku)) {
+      const hay = (p.sku + ' ' + (p.name||'')).toUpperCase();
+      if (searchTokens.every(t => hay.includes(t))) {
         results.push({ p, locks: skuToLocks[p.sku] || [] });
       }
     });
     return results.slice(0, 12);
-  }, [searchSku, products, skuToLocks]);
+  }, [searchTokens, products, skuToLocks]);
 
   // Quick-assign: save sku → lock
   const handleQuickAssign = async () => {

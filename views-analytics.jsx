@@ -1609,8 +1609,10 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
       if (countFilter === 'mismatched' && !(h && !m)) return false;
     }
     if (!stockSearch) return true;
-    const sq = stockSearch.trim().toUpperCase();
-    return p.sku.toUpperCase().includes(sq) || (p.name||'').toUpperCase().includes(sq);
+    // multi-token AND-match (เหมือนหน้า "สินค้า & สั่ง" — พิมพ์ "ฟาแลน 148" หาเจอ)
+    const tokens = stockSearch.trim().toUpperCase().split(/\s+/).filter(Boolean);
+    const hay = (p.sku + ' ' + (p.name||'')).toUpperCase();
+    return tokens.every(t => hay.includes(t));
   }), [supplierProducts, countFilter, checkedQtys, stockSearch]);
 
   const supplierSummary = uM(() => {
@@ -1663,30 +1665,27 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
 
   // ── step 1 global search — must be declared before any early return (Rules of Hooks) ──
   const step1SearchResults = uM(() => {
-    const q = stockSearch.trim().toUpperCase();
-    if (!q) return [];
+    // multi-token AND-match กับ hay = SKU+ชื่อ (เหมือนหน้า "สินค้า & สั่ง")
+    const tokens = stockSearch.trim().toUpperCase().split(/\s+/).filter(Boolean);
+    if (!tokens.length) return [];
+    const match = (sku, p) => {
+      const hay = (sku + ' ' + (p && p.name ? p.name : '')).toUpperCase();
+      return tokens.every(t => hay.includes(t));
+    };
     const hits = [];
     Object.entries(lockData).forEach(([lk, d]) => {
       (d.skus || []).forEach(sku => {
         if (hits.length >= 30) return;
         const p = productMap[sku];
-        const skuUp = sku.toUpperCase();
-        const nameUp = (p && p.name ? p.name : '').toUpperCase();
-        if (skuUp.includes(q) || nameUp.includes(q)) {
-          hits.push({ sku, lockKey: lk, p });
-        }
+        if (match(sku, p)) hits.push({ sku, lockKey: lk, p });
       });
     });
     // also include products in no lock
     if (hits.length < 30) {
       products.forEach(p => {
         if (hits.length >= 30) return;
-        if (!skuToLock[p.sku]) {
-          const skuUp = p.sku.toUpperCase();
-          const nameUp = (p.name || '').toUpperCase();
-          if (skuUp.includes(q) || nameUp.includes(q)) {
-            hits.push({ sku: p.sku, lockKey: null, p });
-          }
+        if (!skuToLock[p.sku] && match(p.sku, p)) {
+          hits.push({ sku: p.sku, lockKey: null, p });
         }
       });
     }
@@ -2771,9 +2770,10 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
           <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10,width:"100%",minWidth:0,boxSizing:"border-box"}}>
             {lockSkus.filter(function(sku){
               if (!stockSearch) return true;
-              const sq = stockSearch.trim().toUpperCase();
+              const tokens = stockSearch.trim().toUpperCase().split(/\s+/).filter(Boolean);
               const p = productMap[sku];
-              return sku.toUpperCase().includes(sq) || (p && p.name && p.name.toUpperCase().includes(sq));
+              const hay = (sku + ' ' + (p && p.name ? p.name : '')).toUpperCase();
+              return tokens.every(function(t){ return hay.includes(t); });
             }).map(function(sku){
               const p      = productMap[sku] || (data.products || []).find(function(x){ return x.sku === sku; });
               const isFound = foundSet.has(sku); // 🆕 เจอในล็อคนี้ — บันทึกเฉพาะตำแหน่ง ไม่เทียบยอดคลังรวม
@@ -3019,7 +3019,13 @@ function TransferView({ data }) {
     let list = transfers;
     if (filterType !== 'all') list = list.filter(t => t.type === filterType);
     const sq = search.trim().toUpperCase();
-    if (sq) list = list.filter(t => t.sku.toUpperCase().includes(sq) || t.name.toUpperCase().includes(sq));
+    if (sq) {
+      const tokens = sq.split(/\s+/).filter(Boolean);
+      list = list.filter(t => {
+        const hay = ((t.sku||'') + ' ' + (t.name||'')).toUpperCase();
+        return tokens.every(tk => hay.includes(tk));
+      });
+    }
     return list;
   }, [transfers, filterType, search]);
 
@@ -4129,8 +4135,8 @@ function MaterialDrawModal({ open, orderName, products, onConfirm, onSkip, onCan
   const filtered = search.trim().length >= 1
     ? (products || []).filter(p =>
         !p.isMTO &&
-        (p.sku.toLowerCase().includes(search.toLowerCase()) ||
-         p.name.toLowerCase().includes(search.toLowerCase()))
+        search.trim().toLowerCase().split(/\s+/).filter(Boolean)
+          .every(t => ((p.sku||'') + ' ' + (p.name||'')).toLowerCase().includes(t))
       ).slice(0, 8)
     : [];
 
@@ -5532,11 +5538,11 @@ function MtoJobView({ data }) {
 
   const searchResults = uM(() => {
     if (!search.trim()) return [];
-    const q = search.trim().toLowerCase();
-    return products.filter(p =>
-      (p.sku && p.sku.toLowerCase().includes(q)) ||
-      (p.name && p.name.toLowerCase().includes(q))
-    ).slice(0, 5);
+    const tokens = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return products.filter(p => {
+      const hay = ((p.sku||'') + ' ' + (p.name||'')).toLowerCase();
+      return tokens.every(t => hay.includes(t));
+    }).slice(0, 5);
   }, [search, products]);
 
   const todayStr = () => {
@@ -6129,11 +6135,13 @@ function AuditLogView() {
     let list = rows;
     if (actionFilter !== "all") list = list.filter(r => r.action === actionFilter);
     const sq = search.trim().toLowerCase();
-    if (sq) list = list.filter(r =>
-      (r.actor || "").toLowerCase().includes(sq) ||
-      (r.sku || "").toLowerCase().includes(sq) ||
-      (r.detail || "").toLowerCase().includes(sq)
-    );
+    if (sq) {
+      const tokens = sq.split(/\s+/).filter(Boolean);
+      list = list.filter(r => {
+        const hay = ((r.actor||"") + ' ' + (r.sku||"") + ' ' + (r.detail||"")).toLowerCase();
+        return tokens.every(t => hay.includes(t));
+      });
+    }
     return list;
   }, [rows, search, actionFilter]);
 
