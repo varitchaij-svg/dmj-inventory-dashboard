@@ -49,6 +49,26 @@ tab "stock" = View "สต๊อก & แจ้งเตือน" = `StockView`
 tab "frontstore" = View "เช็คหน้าร้าน" = `FrontStoreView` (views-analytics.jsx)
 tab "newproduct" = View "เพิ่มสินค้าใหม่" = `AddProductView` (views-main.jsx, owner+warehouse)
 
+## UI Convention: สินค้าต้องมีรูป + กดดูรายละเอียดได้เสมอ (บังคับ)
+
+**ทุกที่ที่แสดง "รหัส SKU + ชื่อสินค้า" ต้องมีรูปสินค้าประกอบเสมอ** — ผู้ใช้หลักคือพนักงาน
+(บางคนอ่านไทย/รหัสไม่คล่อง) จำสินค้าจาก "รูป" ไม่ใช่รหัส · ห้ามทำ list/row/การ์ดที่โชว์แต่
+รหัส+ชื่อโดยไม่มี thumbnail
+
+- **รูป**: อ่านจาก `p.imageUrl` (มาจากชีต imageUrl) · ถ้าไม่มีรูป → โชว์ placeholder 📦
+  (กล่องเทา) ขนาดเท่ากัน ห้ามปล่อยว่าง · thumbnail มาตรฐาน ~38–44px มุมมน
+- **กดดูรายละเอียด**: แถว/การ์ด/รูปสินค้า **ต้องกดได้** เพื่อเปิด `ProductModal` (views-main.jsx)
+  ดูรูปใหญ่ + qtyWH/qtyStore/ราคา/ตำแหน่งล็อค/ยอดขาย · ส่ง product object เข้า modal
+  ผ่าน state (เช่น `const [modalProduct,setModalProduct]=uS(null)`) · ถ้าอยู่ในไฟล์
+  views-analytics.jsx ที่ไม่มี ProductModal ในสโคป ให้เปิดรูปใหญ่ (`imgOpen` modal) เป็นอย่างน้อย
+  หรือ nav ไปหน้าที่มีการ์ดเต็ม
+- **ค้นหา**: ช่องค้นหาสินค้าทุกหน้าใช้ multi-token AND-match (split `/\s+/` แล้ว
+  `tokens.every(t => hay.includes(t))` โดย hay = `sku+" "+name` lower-case) — พิมพ์
+  "ฟาแลน 148" ต้องเจอสินค้าที่มีทั้ง "ฟาแลน" และ "148" (ดูข้อ 10 ใน "บทเรียนที่เจอบ่อย")
+
+เวลาเพิ่ม/แก้ View ใดก็ตามที่ลิสต์สินค้า ให้ยึด convention นี้เป็น default — รูป + กดดูรายละเอียด +
+multi-token search ครบทั้ง 3 อย่างเสมอ
+
 ## Business Rule: การสร้างรหัสสินค้า (SKU)
 
 โครงสร้าง SKU: `[Product Prefix][Variant Code][Model Number]` เช่น `OL00001`,
