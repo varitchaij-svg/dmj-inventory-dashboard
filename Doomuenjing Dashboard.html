@@ -205,6 +205,22 @@
   .page-title { font-size: 24px; font-weight: 700; letter-spacing: -.02em; line-height: 1.2; }
   .page-sub { font-size: 13px; color: var(--muted); margin-top: 4px; }
   .page-actions { display: flex; gap: 10px; align-items: center; }
+
+  /* ── แถบฟิลเตอร์ย่อ sticky (OverviewView) — โผล่มาเมื่อเลื่อนพ้นหัวข้อ ── */
+  .overview-stickybar {
+    position: fixed; left: 0; right: 0; z-index: 45;
+    background: var(--paper); border-bottom: 1px solid var(--bdr);
+    box-shadow: 0 4px 14px rgba(0,0,0,.06);
+    transform: translateY(-8px); opacity: 0; pointer-events: none;
+    transition: transform .18s ease, opacity .18s ease;
+  }
+  .overview-stickybar.show { transform: translateY(0); opacity: 1; pointer-events: auto; }
+  .overview-stickybar-inner {
+    max-width: 1480px; margin: 0 auto; padding: 10px 28px;
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  }
+  .overview-stickybar-title { font-size: 13px; font-weight: 700; color: var(--text); margin-right: 4px; white-space: nowrap; }
+  @media (prefers-reduced-motion: reduce) { .overview-stickybar { transition: none; } }
   .btn {
     font-family: inherit; cursor: pointer;
     font-size: 13px; font-weight: 600;
@@ -292,6 +308,7 @@
   @media (max-width: 1200px) {
     .topnav-inner { padding: 12px 20px; gap: 16px; }
     .main { padding: 20px; }
+    .overview-stickybar-inner { padding: 10px 20px; }
   }
   @media (max-width: 1100px) {
     .row-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -315,6 +332,7 @@
     .owner-l1::-webkit-scrollbar, .owner-l2::-webkit-scrollbar { height: 4px; }
     .owner-grp, .owner-sub { flex-shrink: 0; white-space: nowrap; }
     .main { padding: 16px; }
+    .overview-stickybar-inner { padding: 8px 16px; }
     .cat-layout { grid-template-columns: 200px 1fr; }
   }
   @media (max-width: 900px) {
@@ -329,6 +347,8 @@
   @media (max-width: 768px) {
     .row-2 { grid-template-columns: 1fr; }
     .main { padding: 14px; }
+    .overview-stickybar-inner { padding: 8px 14px; }
+    .overview-stickybar-title { display: none; } /* พื้นที่แคบ — ปุ่มควบคุมสำคัญกว่าหัวข้อ */
     .cat-layout { grid-template-columns: 1fr; }
     .cat-sidebar { position: static !important; }
     .page-title { font-size: 22px; }
@@ -359,6 +379,7 @@
     .row-4 { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; } /* Keep 2x2 KPIs on phones */
     .row-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .main { padding: 10px; }
+    .overview-stickybar-inner { padding: 8px 10px; gap: 6px; }
     .topnav-inner { padding: 8px 10px; }
     .brand-mark { width: 32px; height: 32px; font-size: 15px; }
     .brand-name { font-size: 14px; }
