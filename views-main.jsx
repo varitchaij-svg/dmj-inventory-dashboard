@@ -2924,8 +2924,12 @@ function CategoryView({ data, role }) {
     }
     if (gq && !active) {
       // Global: search across all categories (no category selected)
+      // ยังกรอง สี/ร้าน/สินค้าจม/ของใหม่ ต่อได้ (ให้ค้นหาแล้วเลือกฟิลเตอร์ทีหลังได้)
       let f = products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า");
       f = applyCommon(f);
+      if (colorFilter)    f = f.filter(p => p.color && p.color.name === colorFilter);
+      if (supplierFilter) f = f.filter(p => (p.vendor || p.lastSupplier) === supplierFilter);
+      if (deadFilter)     f = f.filter(p => p.deadMonths === null || p.deadMonths >= deadFilter);
       if (newStockFilter) f = f.filter(p => isNew45(p.lastStockInDate));
       return [...f].sort(finalSort);
     }
@@ -3046,6 +3050,18 @@ function CategoryView({ data, role }) {
       : products.filter(p => p.cat === active)
   , [products, active]);
 
+  // base สำหรับชิปตัวกรอง สี/ร้าน — เคารพหมวด + คำค้นหา (แต่ไม่รวม color/supplier เอง กัน loop)
+  // → ค้นหาแล้ว ชิปร้าน/สีจะเหลือเฉพาะที่เกี่ยวกับผลค้นหา ไม่ใช่ทั้งคลัง
+  const refineBase = uM(() => {
+    const gq = globalSearch.trim().toLowerCase();
+    const tokens = gq ? gq.split(/\s+/) : [];
+    if (!tokens.length) return categoryBase;
+    return categoryBase.filter(p => {
+      const hay = ((p.sku||"") + " " + (p.name||"")).toLowerCase();
+      return tokens.every(t => hay.includes(t));
+    });
+  }, [categoryBase, globalSearch]);
+
   const catStats = uM(() => {
     const f = categoryBase;
     return {
@@ -3060,7 +3076,7 @@ function CategoryView({ data, role }) {
   // Supplier list for this category (ใช้สำหรับ dropdown filter)
   const supplierList = uM(() => {
     const m = {};
-    const base = categoryBase;
+    const base = refineBase;
     base.forEach(p => {
       const s = p.vendor || p.lastSupplier;
       // กรองชื่อขยะ: array รั่วจาก GAS ("[Ljava.lang.Object;@...") / ว่าง
@@ -3068,7 +3084,7 @@ function CategoryView({ data, role }) {
     });
     return Object.entries(m).map(([name, count]) => ({ name, count }))
       .sort((a,b) => b.count - a.count);
-  }, [categoryBase]);
+  }, [refineBase]);
 
   // กรอง supplier ตามช่องค้นหาใน modal (multi-token AND-match)
   const checkSupplierFiltered = uM(() => {
@@ -3084,13 +3100,13 @@ function CategoryView({ data, role }) {
   // Colors in this category for filter chips
   const colorChips = uM(() => {
     const m = {};
-    categoryBase.forEach(p => {
+    refineBase.forEach(p => {
       if (p.color) { if (!m[p.color.name]) m[p.color.name] = { count: 0, hex: p.color.hex }; m[p.color.name].count++; }
     });
     return Object.entries(m).map(([name, v]) => ({ name, ...v }))
       .sort((a,b) => (COLOR_ORDER.indexOf(a.name)===-1?99:COLOR_ORDER.indexOf(a.name)) -
                      (COLOR_ORDER.indexOf(b.name)===-1?99:COLOR_ORDER.indexOf(b.name)));
-  }, [categoryBase]);
+  }, [refineBase]);
 
   const color = catColor(active, allCats);
 
@@ -3131,7 +3147,7 @@ function CategoryView({ data, role }) {
           </span>
           <input
             value={globalSearch}
-            onChange={e => { setGlobalSearch(e.target.value); if (e.target.value) { setReorderFilter(false); setColorFilter(null); setSupplierFilter(null); setDeadFilter(null); setNewStockFilter(false); } }}
+            onChange={e => setGlobalSearch(e.target.value)}
             placeholder="ค้นหาสินค้าทั้งหมด (SKU / ชื่อ)..."
             style={{
               width:"100%", padding:"11px 40px 11px 38px",
@@ -3150,7 +3166,7 @@ function CategoryView({ data, role }) {
               }}>✕</button>
           )}
         </div>
-        <ScanButton size={44} onScan={sku => { setGlobalSearch(sku); setReorderFilter(false); setColorFilter(null); setSupplierFilter(null); setDeadFilter(null); setNewStockFilter(false); }}
+        <ScanButton size={44} onScan={sku => setGlobalSearch(sku)}
           style={{borderRadius:12,border:"1.5px solid var(--bdr)",background:"#fafcf7"}}/>
         </div>
         {isGlobalSearch && (
@@ -3276,8 +3292,8 @@ function CategoryView({ data, role }) {
             {role === "owner" && <KPI label="รายได้รวม" accent={color} icon={I.sales} value={fmtB(catStats.rev)} sub={"หมวดนี้"}/>}
           </div>
 
-          {/* Controls — hide in global search / vendor mode */}
-          <Card style={{marginBottom:14, display: (isGlobalSearch||isGlobalVendor) ? "none" : undefined, width:"100%", boxSizing:"border-box"}}>
+          {/* Controls — ซ่อนเฉพาะโหมด vendor · โหมดค้นหายังโชว์ (เลือกเรียง/สี/ร้าน/ฟิลเตอร์ต่อได้) */}
+          <Card style={{marginBottom:14, display: isGlobalVendor ? "none" : undefined, width:"100%", boxSizing:"border-box"}}>
             <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap",width:"100%",minWidth:0}}>
               {/* 🛒 ควรสั่ง — quick reorder filter (key action) */}
               {(() => {
