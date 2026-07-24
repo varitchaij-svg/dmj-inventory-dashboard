@@ -8735,7 +8735,8 @@ function TrackStageBadge({ stage }) {
 function TrackCard({ item, productMap }) {
   const st = TRACK_STAGE_MAP[item.stage] || {};
   const product = productMap[item.sku] || productMap[(item.sku||"").trim().toUpperCase()];
-  const p = product ? { ...product, imageUrl: item.image || product.imageUrl } : { imageUrl: item.image };
+  // fallback: ถ้า SKU ไม่เจอใน products ยังส่ง sku+ชื่อ+รูป เข้า modal ได้ (ปุ่มดึงรูป ZORT ใช้ได้)
+  const p = { ...(product || {}), sku: item.sku || (product && product.sku), name: (product && product.name) || item.name, imageUrl: item.image || (product && product.imageUrl) };
   const short = item.stage === "received_short";
   return (
     <div style={{
