@@ -12,6 +12,7 @@ const TABS = [
   { id: "frontstore",    label: "🏪 เช็คหน้าร้าน",           icon: I.store },
   { id: "transfers",     label: "🔄 โอน/ปรับ/ยกมา",        icon: I.arrowR },
   { id: "orders",        label: "📋 รายการสั่งของ",         icon: I.cart },
+  { id: "tracking",      label: "📡 ติดตามสถานะ",           icon: I.arrowR },
   { id: "ordersummary",  label: "📦 สรุปสินค้าออกจากคลัง",  icon: I.store },
   { id: "mtojobs",       label: "🎁 งานจัดพิเศษ",            icon: I.package },
   { id: "upload",        label: "⬆️ อัปโหลด Zort",          icon: I.upload },
@@ -30,18 +31,18 @@ const TABS = [
 const ROLE_TABS = {
   // เรียงตามที่ owner ใช้บ่อย: ภาพรวม/ลูกค้า → งานประจำวัน (สั่ง/สต๊อก/ออเดอร์/หน้าร้าน) → คลัง → วิเคราะห์ → เครื่องมือ/ตั้งค่าท้ายสุด
   // ("margin" ซ่อนไว้ก่อน — ยังไม่มีต้นทุนซื้อจริง · โค้ด MarginView คงไว้ ค่อยเพิ่ม id กลับเมื่อพร้อม)
-  owner:      ["overview","customers","pos","quotefollowup","categories","stock","orders","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog"],
-  employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","mtojobs","labels"],
-  warehouse:  ["categories","stock","storage","stockcount","newproduct","orders","ordersummary","mtojobs","labels"],
-  frontstore: ["categories","stock","frontstore","orders","mtojobs","labels"],
-  saler:      ["pos","categories","stock","orders","quotefollowup","mtojobs","labels"],
+  owner:      ["overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog"],
+  employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","tracking","ordersummary","mtojobs","labels"],
+  warehouse:  ["categories","stock","storage","stockcount","newproduct","orders","tracking","ordersummary","mtojobs","labels"],
+  frontstore: ["categories","stock","frontstore","orders","tracking","mtojobs","labels"],
+  saler:      ["pos","categories","stock","orders","tracking","quotefollowup","mtojobs","labels"],
 };
 // หมวดหลักของ owner (nav 2 ชั้น) — กดหมวด → เห็นเมนูย่อยของหมวดนั้น
 // เรียงตามความสำคัญ/ที่ใช้บ่อย: ภาพรวม → การขาย → สต็อก → วิเคราะห์ → เครื่องมือ
 // tab ที่ไม่อยู่ในกลุ่มไหน จะถูกดันเข้ากลุ่ม "อื่นๆ" อัตโนมัติ (กัน tab หาย)
 const OWNER_GROUPS = [
   { id: "g_overview", gi: "📊", name: "ภาพรวม",       tabs: ["overview"] },
-  { id: "g_sales",    gi: "💰", name: "การขาย",       tabs: ["pos", "orders", "quotefollowup", "customers", "frontstore", "mtojobs"] },
+  { id: "g_sales",    gi: "💰", name: "การขาย",       tabs: ["pos", "orders", "tracking", "quotefollowup", "customers", "frontstore", "mtojobs"] },
   { id: "g_stock",    gi: "📦", name: "สต็อก & คลัง",  tabs: ["stock", "categories", "storage", "stockcount", "transfers", "ordersummary", "newproduct", "deadstock", "labels"] },
   { id: "g_insight",  gi: "📈", name: "วิเคราะห์",      tabs: ["trends", "season"] },
   { id: "g_tools",    gi: "⚙️", name: "เครื่องมือ",     tabs: ["upload", "connect", "auditlog"] },
@@ -1034,6 +1035,7 @@ function App() {
         {activeTab === "frontstore"   && <ErrorBoundary key="frontstore"><FrontStoreView data={data} role={role} checkRequest={activeCheckRequest}/></ErrorBoundary>}
         {activeTab === "transfers"    && <ErrorBoundary key="transfers"><TransferView data={data}/></ErrorBoundary>}
         {activeTab === "orders"       && <ErrorBoundary key="orders"><OrderListView data={data} role={role}/></ErrorBoundary>}
+        {activeTab === "tracking"     && <ErrorBoundary key="tracking"><TrackingView data={data} role={role}/></ErrorBoundary>}
         {activeTab === "ordersummary" && <ErrorBoundary key="ordersummary"><OrderSummaryView data={data} onPrintRequest={handleOrderPrint}/></ErrorBoundary>}
         {activeTab === "mtojobs"      && <ErrorBoundary key="mtojobs"><MtoJobView data={data} /></ErrorBoundary>}
         {activeTab === "upload"       && <ErrorBoundary key="upload"><UploadView currentData={data} onDataLoaded={handleDataLoaded}/></ErrorBoundary>}

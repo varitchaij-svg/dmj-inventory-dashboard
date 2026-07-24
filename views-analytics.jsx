@@ -8692,6 +8692,226 @@ function PosReceipt80({ cart, totals, orderNumber, documentNumber, payMethod, ch
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// 📡 TRACKING VIEW — รายงานติดตามสถานะ realtime (สั่ง → จัด → ส่ง → รับ)
+// read-only · ทุก role ดูได้ · ไม่มีปุ่ม action (แค่ดู)
+// ข้อมูล: data.orders (ก่อนส่ง: รอจัด/จัดเสร็จ) + data.shipments (หลังส่ง: รอรับ/รับครบ/รับไม่ครบ)
+// order status "ส่งแล้ว" ตัดออก เพราะกลายเป็น shipment แล้ว (กันนับซ้ำ)
+// ─────────────────────────────────────────────────────────────────────
+const TRACK_STAGES = [
+  { key: "wait_prep",      label: "รอจัดของ",      short: "รอจัด",   emoji: "📦", color: "#e07b1a", bg: "#fff5ea" },
+  { key: "prepped",        label: "จัดเสร็จ รอส่ง", short: "รอส่ง",   emoji: "✅", color: "#2f7fd1", bg: "#eef6fd" },
+  { key: "in_transit",     label: "ส่งแล้ว รอรับ",  short: "รอรับ",   emoji: "🚚", color: "#c99a1e", bg: "#fdf8e8" },
+  { key: "received_ok",    label: "รับครบ ตรงที่ส่ง", short: "รับครบ", emoji: "✔️", color: "#2f9e56", bg: "#eef8f1" },
+  { key: "received_short", label: "รับไม่ครบ ต้องตรวจ", short: "ไม่ครบ", emoji: "⚠️", color: "#d23f3f", bg: "#fdeeee" },
+];
+const TRACK_STAGE_MAP = Object.fromEntries(TRACK_STAGES.map(s => [s.key, s]));
+
+// แสดงวันที่/เวลาแบบสั้น dd/MM HH:mm (ตัดปีออกถ้าเป็นปีนี้)
+function fmtTrackWhen(s) {
+  if (!s) return "";
+  const m = String(s).trim().match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})(?:[ ,]+(\d{1,2}):(\d{2}))?/);
+  if (m) {
+    const time = m[4] ? ` ${m[4]}:${m[5]}` : "";
+    return `${m[1]}/${m[2]}${time}`;
+  }
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return String(s);
+  return `${d.getDate()}/${d.getMonth() + 1} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+}
+
+function TrackStageBadge({ stage }) {
+  const st = TRACK_STAGE_MAP[stage];
+  if (!st) return null;
+  return (
+    <span style={{
+      display:"inline-flex", alignItems:"center", gap:3, whiteSpace:"nowrap",
+      background:st.bg, color:st.color, border:`1px solid ${st.color}44`,
+      borderRadius:20, fontSize:11, fontWeight:700, padding:"3px 9px", lineHeight:1.2,
+    }}>{st.emoji} {st.label}</span>
+  );
+}
+
+function TrackCard({ item, productMap }) {
+  const st = TRACK_STAGE_MAP[item.stage] || {};
+  const product = productMap[item.sku] || productMap[(item.sku||"").trim().toUpperCase()];
+  const p = product ? { ...product, imageUrl: item.image || product.imageUrl } : { imageUrl: item.image };
+  const short = item.stage === "received_short";
+  return (
+    <div style={{
+      background:"#fff", borderRadius:12, marginBottom:8, padding:"10px 12px",
+      border:`1.5px solid ${short ? "#d23f3f66" : "var(--bdr)"}`,
+      display:"flex", gap:10, alignItems:"flex-start",
+      borderLeft:`4px solid ${st.color || "var(--bdr)"}`,
+    }}>
+      <ProductThumb product={p} size={44}/>
+      <div style={{flex:1, minWidth:0}}>
+        <div style={{display:"flex", justifyContent:"space-between", gap:8, alignItems:"flex-start"}}>
+          <div style={{minWidth:0}}>
+            <div style={{fontWeight:700, fontSize:14, lineHeight:1.25, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{item.name || item.sku}</div>
+            <div style={{fontSize:11, color:"var(--muted)"}}>{item.sku}</div>
+          </div>
+          <TrackStageBadge stage={item.stage}/>
+        </div>
+        {/* qty line */}
+        <div style={{marginTop:6, fontSize:12.5, display:"flex", flexWrap:"wrap", gap:"2px 12px", alignItems:"center"}}>
+          {item.kind === "order" ? (
+            <span>สั่ง <b>{item.orderQty}</b> ชิ้น{item.preparedQty ? <span style={{color:"var(--muted)"}}> · จัดแล้ว {item.preparedQty}</span> : null}</span>
+          ) : (
+            <>
+              <span>ส่ง <b>{item.qty}</b> ชิ้น</span>
+              {item.receivedAt && (
+                <span style={{color: short ? "#d23f3f" : "#2f9e56", fontWeight:700}}>
+                  รับ {item.receivedQty}/{item.qty}{short ? ` · ขาด ${Math.max(0, item.qty - (item.receivedQty||0))}` : ""}
+                </span>
+              )}
+            </>
+          )}
+        </div>
+        {/* meta line: route + people + time */}
+        <div style={{marginTop:4, fontSize:10.5, color:"var(--muted)", display:"flex", flexWrap:"wrap", gap:"2px 10px"}}>
+          {item.kind === "ship" && item.from && <span>{item.from} → {item.to || "หน้าร้าน"}</span>}
+          {item.preparedBy && <span>จัดโดย {item.preparedBy}</span>}
+          {item.receivedBy && <span>รับโดย {item.receivedBy}</span>}
+          {item.when && <span>🕒 {fmtTrackWhen(item.when)}</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TrackingView({ data, role }) {
+  const orders    = data.orders    || [];
+  const shipments = data.shipments || [];
+  const products  = data.products  || [];
+  const [filter, setFilter] = uS("all");
+  const [q, setQ] = uS("");
+
+  const productMap = uM(() => {
+    const m = {};
+    products.forEach(p => {
+      if (p.sku) { m[p.sku] = p; m[p.sku.trim().toUpperCase()] = p; }
+    });
+    return m;
+  }, [products]);
+
+  // รวม orders (ก่อนส่ง) + shipments (หลังส่ง) เป็น event เดียวกัน
+  const items = uM(() => {
+    const list = [];
+    orders.forEach(o => {
+      const s = String(o.status || "รอ").trim();
+      let stage = null;
+      if (s === "รอ" || s === "pending") stage = "wait_prep";
+      else if (s === "สำเร็จ" || s === "done" || s === "completed") stage = "prepped";
+      // "ส่งแล้ว" ตัดออก → ไปโผล่เป็น shipment แทน
+      if (!stage) return;
+      list.push({
+        kind: "order", stage, sku: o.sku, name: o.name,
+        orderQty: o.orderQty, preparedQty: o.preparedQty,
+        image: o.image, when: o.date,
+        _ts: parseDateMs(o.date),
+      });
+    });
+    shipments.forEach(s => {
+      let stage;
+      if (!s.receivedAt) stage = "in_transit";
+      else if (s.receivedStatus === "รับไม่ครบ") stage = "received_short";
+      else stage = "received_ok";
+      list.push({
+        kind: "ship", stage, sku: s.sku, name: s.name,
+        qty: s.qty, receivedQty: s.receivedQty, receivedAt: s.receivedAt,
+        from: s.from, to: s.to, preparedBy: s.preparedBy, receivedBy: s.receivedBy,
+        image: s.image, refNum: s.refNum,
+        when: s.receivedAt || s.date,
+        _ts: parseCheckDateMs(s.receivedAt) || parseDateMs(s.date),
+      });
+    });
+    // ใหม่สุดอยู่บน
+    list.sort((a, b) => (isNaN(b._ts)?0:b._ts) - (isNaN(a._ts)?0:a._ts));
+    return list;
+  }, [orders, shipments]);
+
+  const counts = uM(() => {
+    const c = {};
+    TRACK_STAGES.forEach(s => c[s.key] = 0);
+    items.forEach(it => { c[it.stage] = (c[it.stage] || 0) + 1; });
+    return c;
+  }, [items]);
+
+  const shown = uM(() => {
+    const tokens = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return items.filter(it => {
+      if (filter !== "all" && it.stage !== filter) return false;
+      if (tokens.length) {
+        const hay = `${it.sku||""} ${it.name||""} ${it.refNum||""} ${it.preparedBy||""} ${it.receivedBy||""}`.toLowerCase();
+        if (!tokens.every(t => hay.includes(t))) return false;
+      }
+      return true;
+    });
+  }, [items, filter, q]);
+
+  const alertCount = counts.received_short || 0;
+
+  return (
+    <div style={{padding:"12px 12px 40px"}}>
+      <div style={{marginBottom:10}}>
+        <h2 style={{margin:"0 0 2px", fontSize:19}}>📡 ติดตามสถานะสินค้า</h2>
+        <div style={{fontSize:12, color:"var(--muted)"}}>สั่ง → จัด → ส่งไปหน้าร้าน → รับ (เช็คตรงกับที่ส่ง) · อัปเดตอัตโนมัติ</div>
+      </div>
+
+      {/* แถบเตือนถ้ามีรับไม่ครบ */}
+      {alertCount > 0 && (
+        <div onClick={() => setFilter("received_short")} style={{
+          background:"#fdeeee", border:"1.5px solid #d23f3f55", color:"#a12", borderRadius:10,
+          padding:"9px 12px", marginBottom:10, fontSize:13, fontWeight:600, cursor:"pointer",
+        }}>⚠️ มี {alertCount} รายการที่รับ<b>ไม่ตรง</b>กับที่ส่ง — แตะเพื่อดู</div>
+      )}
+
+      {/* stat tiles = filter */}
+      <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(64px, 1fr))", gap:6, marginBottom:10}}>
+        {TRACK_STAGES.map(s => {
+          const active = filter === s.key;
+          return (
+            <button key={s.key} onClick={() => setFilter(active ? "all" : s.key)} style={{
+              background: active ? s.color : s.bg, color: active ? "#fff" : s.color,
+              border:`1.5px solid ${active ? s.color : s.color + "40"}`, borderRadius:10,
+              padding:"7px 4px", cursor:"pointer", textAlign:"center", minWidth:0,
+            }}>
+              <div style={{fontSize:18, fontWeight:800, lineHeight:1}}>{counts[s.key] || 0}</div>
+              <div style={{fontSize:10, marginTop:2, fontWeight:600}}>{s.emoji} {s.short}</div>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* search + reset filter */}
+      <div style={{display:"flex", gap:6, marginBottom:10, alignItems:"center"}}>
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="🔍 ค้นหา ชื่อ / SKU / คนจัด / คนรับ"
+          style={{flex:1, minWidth:0, padding:"9px 11px", border:"1px solid var(--bdr)", borderRadius:9, fontSize:13.5}}/>
+        {filter !== "all" && (
+          <button onClick={() => setFilter("all")} style={{
+            padding:"9px 12px", border:"1px solid var(--bdr)", background:"#fff", borderRadius:9,
+            cursor:"pointer", fontSize:12.5, whiteSpace:"nowrap",
+          }}>✕ ทั้งหมด</button>
+        )}
+      </div>
+
+      {/* list */}
+      {shown.length === 0 ? (
+        <div style={{textAlign:"center", padding:"40px 20px", color:"var(--muted)"}}>
+          <div style={{fontSize:36, marginBottom:8}}>📭</div>
+          <div style={{fontSize:14}}>{items.length === 0 ? "ยังไม่มีรายการสั่ง/ส่ง" : "ไม่พบรายการตามที่กรอง"}</div>
+        </div>
+      ) : (
+        <>
+          <div style={{fontSize:11.5, color:"var(--muted)", marginBottom:6}}>{shown.length} รายการ</div>
+          {shown.map((it, i) => <TrackCard key={`${it.kind}_${it.sku}_${i}`} item={it} productMap={productMap}/>)}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ────────────── 🛒 สั่งซื้อ (Purchase/Reorder) ──────────────
 
-Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView, DeadStockView, QuoteFollowupView, CustomerView, MarginView, SeasonView, ProductThumb, ProductInfoModal, Pagination, WarehouseMapModal, PosView });
+Object.assign(window, { OverviewView, CategoryView, TrendsView, StockView, StorageView, StockCountView, TransferView, UploadView, ConnectView, LabelPrintView, ProductCard, OrderListView, OrderSummaryView, ConfirmModal, Toast, useToast, SkeletonCard, FrontStoreView, CalcPadModal, MaterialDrawModal, MtoJobView, useOnlineStatus, AuditLogView, DeadStockView, QuoteFollowupView, CustomerView, MarginView, SeasonView, ProductThumb, ProductInfoModal, Pagination, WarehouseMapModal, PosView, TrackingView });
