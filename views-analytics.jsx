@@ -2399,7 +2399,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:14,fontWeight:800}}>ควรนับก่อน · {countQueue.length} รายการ</div>
                 <div style={{fontSize:11,color:'var(--muted)'}}>
-                  สินค้าขายดี (A) หรือไม่ได้นับนาน — แตะเพื่อไปนับล็อคนั้นเลย
+                  สินค้าขายดี (A) หรือไม่ได้นับนาน — แตะเพื่อไปนับเลย (ยังไม่มีตำแหน่ง = นับก่อนขึ้นชั้น)
                 </div>
               </div>
             </div>
@@ -2407,17 +2407,24 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
               {(showAllQueue ? countQueue : countQueue.slice(0,5)).map((item, idx) => (
                 <div key={item.sku}
                   onClick={() => {
-                    if (!item.lock) return;
-                    setSelShelf(item.lock.split('/')[0]);
-                    setSelLockKey(item.lock);
-                    setStep(3);
+                    if (item.lock) {
+                      // มีตำแหน่งแล้ว → ไปนับล็อคนั้นเลย
+                      setSelShelf(item.lock.split('/')[0]);
+                      setSelLockKey(item.lock);
+                      setStep(3);
+                    } else {
+                      // ยังไม่มีตำแหน่ง → เข้าโหมด "นับก่อนขึ้นชั้น" + หยิบสินค้านี้เข้ารายการนับให้เลย
+                      setPreShelfList(prev => prev.includes(item.sku) ? prev : [item.sku, ...prev]);
+                      setStockSearch('');
+                      setPreShelfMode(true);
+                    }
                   }}
                   style={{
                     display:'flex',alignItems:'center',gap:10,
                     background: item.lock ? 'var(--g-50)' : '#fffbf0',
                     border:'1.5px solid ' + (item.lock ? 'var(--g-200)' : '#fbbf24'),
                     borderRadius:12,padding:'9px 12px',
-                    cursor: item.lock ? 'pointer' : 'default',
+                    cursor:'pointer',
                   }}>
                   <span style={{
                     width:26,height:26,borderRadius:8,flexShrink:0,
@@ -2434,7 +2441,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                       {item.lock ? ` · 📍 ${item.lock}` : ' · ยังไม่มีตำแหน่ง'}
                     </div>
                   </div>
-                  {item.lock && <span style={{color:'var(--g-600)',fontSize:16,flexShrink:0}}>›</span>}
+                  <span style={{color: item.lock ? 'var(--g-600)' : '#b45309',fontSize:16,flexShrink:0}}>›</span>
                 </div>
               ))}
             </div>
