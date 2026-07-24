@@ -641,6 +641,22 @@ function doGet(e) {
       }
     }
 
+    const data = buildFullData_();
+    const out = JSON.stringify(data);
+    putCachedPayload_(out); // เก็บ cache สำหรับ request ถัดไป
+    return ContentService.createTextOutput(out)
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    console.error("doGet Error:", error);
+    return ContentService.createTextOutput(JSON.stringify({
+      error: error.message, stack: error.stack
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// สร้าง data payload เต็ม (ชุดเดียวกับที่เว็บได้รับผ่าน doGet) — แยกออกมาเป็นฟังก์ชัน
+// เพื่อให้ backupToSupabase_() reuse ได้ ข้อมูลสำรองจะตรงกับที่เว็บเห็นเป๊ะ ไม่ต้องเขียน enrich ซ้ำ
+function buildFullData_() {
     const products  = readProducts_();
     const sysQtyMap = readSysQty_();
     const monthly   = readMonthlySales_();
@@ -808,16 +824,7 @@ function doGet(e) {
       }
     };
 
-    const out = JSON.stringify(data);
-    putCachedPayload_(out); // เก็บ cache สำหรับ request ถัดไป
-    return ContentService.createTextOutput(out)
-      .setMimeType(ContentService.MimeType.JSON);
-  } catch (error) {
-    console.error("doGet Error:", error);
-    return ContentService.createTextOutput(JSON.stringify({
-      error: error.message, stack: error.stack
-    })).setMimeType(ContentService.MimeType.JSON);
-  }
+    return data;
 }
 
 // ───────────────────────────────────────────────────────────
@@ -7608,4 +7615,122 @@ function completeStockCheckRequest_(reqId, actor) {
   }
   return ContentService.createTextOutput(JSON.stringify({ success: false, error: "reqId not found" }))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION: สำรองข้อมูลขึ้น Supabase (backup ทางเดียว — เว็บหลักไม่พึ่ง Supabase)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// จุดประสงค์: มีสำเนาข้อมูลอิสระนอก Google Sheets/ZORT ไว้ 2 อย่าง
+//   1) daily_snapshots — เก็บ payload เต็ม (เหมือนที่เว็บได้รับ) เป็น JSONB 1 แถว/วัน
+//      = ตัว restore จริง (กู้ข้อมูลย้อนหลังได้ทุกวันที่สำรองไว้)
+//   2) ตารางแยก products/orders/shipments/transfers/purchases/storage (replace-all ทุกครั้ง)
+//      = query ด้วย SQL ได้ + เป็น schema ตั้งต้นถ้าวันหน้าอยากทำ DB ของตัวเอง (เลิกพึ่ง ZORT)
+//
+// สถาปัตยกรรม: ส่ง payload ทั้งก้อนไปที่ Postgres function `refresh_backup` ครั้งเดียว
+//   (PostgREST RPC) → ฝั่ง DB จัดการ upsert snapshot + truncate/insert ตารางแยกใน transaction
+//   เดียว (atomic) ไม่ต้องยิงหลาย request ให้ข้อมูลไม่สอดคล้องกัน
+//
+// ความปลอดภัย: service key เก็บใน Script Property `SUPABASE_SERVICE_KEY` เท่านั้น (ไม่ลงโค้ด)
+// SAFE ROLLOUT: gate ด้วย `SUPABASE_BACKUP_ENABLED='true'` + ยังไม่ตั้ง URL/key → เป็น no-op
+//   ทั้งฟังก์ชันห่อ try/catch ไม่มีทาง throw ออกไปกระทบส่วนอื่นของระบบ
+//
+// เจ้าของต้องทำเองใน GAS editor 1 ครั้ง (clasp push ไม่รันให้):
+//   1. ตั้ง Script Properties: SUPABASE_URL (เช่น https://xxxx.supabase.co)
+//      + SUPABASE_SERVICE_KEY (service_role key จาก Supabase → Project Settings → API)
+//   2. รัน `setupSupabaseBackup()` 1 ครั้ง (ตั้ง trigger รายวัน 03:00 + เปิด flag)
+//   3. รัน `runSupabaseBackupNow()` เพื่อทดสอบสำรองทันที + ดู Log
+//   rollback: รัน `disableSupabaseBackup()` (ลบ trigger + ปิด flag)
+
+function supabaseCfg_() {
+  const p = PropertiesService.getScriptProperties();
+  return {
+    url:     (p.getProperty('SUPABASE_URL') || '').replace(/\/+$/, ''),
+    key:     p.getProperty('SUPABASE_SERVICE_KEY') || '',
+    enabled: String(p.getProperty('SUPABASE_BACKUP_ENABLED') || '').toLowerCase() === 'true',
+  };
+}
+
+// เรียก Postgres function ผ่าน PostgREST RPC endpoint
+function supabaseRpc_(fnName, body, cfg) {
+  cfg = cfg || supabaseCfg_();
+  const res = UrlFetchApp.fetch(cfg.url + '/rest/v1/rpc/' + fnName, {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { apikey: cfg.key, Authorization: 'Bearer ' + cfg.key },
+    payload: JSON.stringify(body),
+    muteHttpExceptions: true,
+  });
+  return { code: res.getResponseCode(), body: res.getContentText() };
+}
+
+// สำรองข้อมูลปัจจุบันขึ้น Supabase — ปลอดภัย (no-op ถ้ายังไม่ตั้งค่า/ปิดอยู่), ไม่ throw
+function backupToSupabase_() {
+  try {
+    const cfg = supabaseCfg_();
+    if (!cfg.url || !cfg.key) {
+      Logger.log('[supabaseBackup] ข้าม: ยังไม่ตั้ง SUPABASE_URL / SUPABASE_SERVICE_KEY');
+      return { skipped: true, reason: 'not_configured' };
+    }
+    if (!cfg.enabled) {
+      Logger.log('[supabaseBackup] ข้าม: SUPABASE_BACKUP_ENABLED != true (รัน setupSupabaseBackup() เพื่อเปิด)');
+      return { skipped: true, reason: 'disabled' };
+    }
+    const data = buildFullData_(); // ชุดข้อมูลเดียวกับที่เว็บได้รับเป๊ะ
+    const snapshotDate = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
+    const resp = supabaseRpc_('refresh_backup', {
+      p_payload: data,
+      p_snapshot_date: snapshotDate,
+      p_source: 'gas',
+    }, cfg);
+    if (resp.code >= 200 && resp.code < 300) {
+      Logger.log('[supabaseBackup] สำเร็จ ' + snapshotDate + ' → ' + resp.body);
+      return { ok: true, snapshotDate: snapshotDate, result: resp.body };
+    }
+    Logger.log('[supabaseBackup] ล้มเหลว code=' + resp.code + ' body=' + resp.body);
+    return { ok: false, code: resp.code, body: resp.body };
+  } catch (e) {
+    Logger.log('[supabaseBackup] ERROR ' + e);
+    return { ok: false, error: String(e) };
+  }
+}
+
+// ── ฟังก์ชันที่เจ้าของรันเอง / trigger เรียก (ชื่อไม่มี _ ต่อท้าย → โผล่ใน dropdown GAS editor) ──
+
+// trigger รายวันเรียกตัวนี้
+function backupDailyToSupabase() {
+  return backupToSupabase_();
+}
+
+// รันทดสอบสำรองทันที (ดูผลใน Log)
+function runSupabaseBackupNow() {
+  const r = backupToSupabase_();
+  Logger.log('runSupabaseBackupNow → ' + JSON.stringify(r));
+  return r;
+}
+
+// ตั้งค่าเปิดใช้งาน: ตั้ง trigger รายวัน 03:00 + เปิด flag (รัน 1 ครั้งหลังตั้ง URL/key)
+function setupSupabaseBackup() {
+  const cfg = supabaseCfg_();
+  if (!cfg.url || !cfg.key) {
+    throw new Error('ตั้ง Script Property SUPABASE_URL และ SUPABASE_SERVICE_KEY ก่อน แล้วค่อยรัน setupSupabaseBackup()');
+  }
+  // ลบ trigger เดิมกัน duplicate
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'backupDailyToSupabase') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('backupDailyToSupabase').timeBased().everyDays(1).atHour(3).create();
+  PropertiesService.getScriptProperties().setProperty('SUPABASE_BACKUP_ENABLED', 'true');
+  Logger.log('ตั้ง trigger สำรอง Supabase รายวัน ~03:00 + เปิด SUPABASE_BACKUP_ENABLED=true แล้ว');
+  return { ok: true };
+}
+
+// ปิดใช้งาน (rollback): ลบ trigger + ปิด flag
+function disableSupabaseBackup() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'backupDailyToSupabase') ScriptApp.deleteTrigger(t);
+  });
+  PropertiesService.getScriptProperties().setProperty('SUPABASE_BACKUP_ENABLED', 'false');
+  Logger.log('ปิดการสำรอง Supabase (ลบ trigger + SUPABASE_BACKUP_ENABLED=false) แล้ว');
+  return { ok: true };
 }
