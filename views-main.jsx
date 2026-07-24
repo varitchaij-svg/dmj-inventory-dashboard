@@ -7945,17 +7945,41 @@ function PurchaseInPanel({ data, showToast, onDone }) {
   const [dateStr, setDateStr]   = uS(() => new Date().toISOString().slice(0, 10));
   const [saving, setSaving]     = uS(false);
 
-  // ซัพพลายเออร์ที่เคยใช้ (ชิปแนะนำ)
-  const allSuppliers = uM(() => {
+  const [showAllSup, setShowAllSup] = uS(false);
+  const MAX_CART = 20;   // เพิ่มได้สูงสุด 20 SKU ต่อครั้ง (ตะกร้าซื้อเข้ารอบเดียว)
+
+  // ซัพพลายเออร์ที่เคยใช้ + จำนวนสินค้าต่อราย (ใช้ทั้งชิปเลือกและ guide)
+  const supplierCount = uM(() => {
     const cnt = {};
     products.forEach(p => {
       const v = (p.lastSupplier || p.vendor || "").trim();
       if (v) cnt[v] = (cnt[v] || 0) + 1;
     });
-    return Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a]).slice(0, 8);
+    return cnt;
   }, [products]);
+  const allSuppliers = uM(
+    () => Object.keys(supplierCount).sort((a, b) => supplierCount[b] - supplierCount[a]),
+    [supplierCount]
+  );
 
   const cartSkus = uM(() => new Set(cart.map(c => c.sku)), [cart]);
+
+  // guide: สินค้าทั้งหมดของซัพพลายเออร์ที่เลือก — เวลาของเข้าจะได้เห็นว่ามี SKU ไหนบ้าง แล้วแตะใส่ตะกร้า
+  const supplierProducts = uM(() => {
+    const sup = supplier.trim();
+    if (!sup) return [];
+    return products
+      .filter(p => {
+        const v = (p.lastSupplier || p.vendor || "").trim();
+        if (v !== sup) return false;
+        const cat = String(p.category || p.cat || "");
+        return !cat.includes("Made to Order");
+      })
+      .map(p => ({ sku: String(p.sku || "").trim().toUpperCase(), name: p.name || "",
+                   qtyWH: p.qtyWH || 0, qtyStore: p.qtyStore || 0, imageUrl: p.imageUrl || "" }))
+      .filter(p => p.sku)
+      .sort((a, b) => a.sku.localeCompare(b.sku));
+  }, [supplier, products]);
 
   // ค้นหาสินค้า (multi-token AND) — ตัดตัวที่อยู่ในตะกร้าแล้ว + ตัด MTO
   const matches = uM(() => {
@@ -7978,7 +8002,26 @@ function PurchaseInPanel({ data, showToast, onDone }) {
 
   const addToCart = (p) => {
     // ไม่เคลียร์ช่องค้นหา — ให้เพิ่มหลายตัวจากผลเดิมได้ต่อเนื่อง · กันเพิ่มซ้ำ SKU เดิม
-    setCart(cs => cs.some(c => c.sku === p.sku) ? cs : [...cs, { sku: p.sku, name: p.name, qty: 1, unitPrice: 0, imageUrl: p.imageUrl || "" }]);
+    if (cart.some(c => c.sku === p.sku)) return;
+    if (cart.length >= MAX_CART) {
+      showToast("warn", `เพิ่มได้สูงสุด ${MAX_CART} รายการต่อครั้ง — บันทึกรอบนี้ก่อนแล้วค่อยเพิ่มรอบใหม่`, "⚠️", 5000);
+      return;
+    }
+    setCart(cs => cs.some(c => c.sku === p.sku) ? cs
+      : [...cs, { sku: p.sku, name: p.name, qty: 1, unitPrice: 0, imageUrl: p.imageUrl || "" }]);
+  };
+  // เพิ่มทั้งหมดของซัพพลายเออร์ (ไม่เกินเพดาน 20) — ปุ่มลัดเวลาของเข้าทั้งล็อต
+  const addAllSupplier = () => {
+    const have = new Set(cart.map(c => c.sku));
+    const toAdd = [];
+    for (const p of supplierProducts) {
+      if (have.has(p.sku)) continue;
+      if (cart.length + toAdd.length >= MAX_CART) break;
+      toAdd.push({ sku: p.sku, name: p.name, qty: 1, unitPrice: 0, imageUrl: p.imageUrl || "" });
+    }
+    const remaining = supplierProducts.filter(p => !have.has(p.sku)).length - toAdd.length;
+    if (remaining > 0) showToast("warn", `เพิ่มครบเพดาน ${MAX_CART} รายการแล้ว — อีก ${remaining} ตัวค่อยทำรอบใหม่`, "⚠️", 5000);
+    if (toAdd.length) setCart(cs => [...cs, ...toAdd]);
   };
   const updateItem = (idx, field, val) => {
     setCart(cs => cs.map((c, i) => i === idx ? { ...c, [field]: val } : c));
@@ -8070,7 +8113,7 @@ function PurchaseInPanel({ data, showToast, onDone }) {
         {cart.length > 0 && (
           <div style={{ border: "1.5px solid var(--g-500)", borderRadius: 12, background: "var(--g-50)", padding: 12 }}>
             <div style={{ fontSize: 13, fontWeight: 800, color: "var(--g-700)", marginBottom: 8 }}>
-              🧺 รายการซื้อเข้า ({cart.length})
+              🧺 รายการซื้อเข้า ({cart.length}/{MAX_CART})
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {cart.map((c, i) => (
@@ -8114,19 +8157,32 @@ function PurchaseInPanel({ data, showToast, onDone }) {
           </div>
         )}
 
-        {/* ซัพพลายเออร์ */}
+        {/* ซัพพลายเออร์ — แตะเลือกร้าน แล้วโชว์สินค้าของร้านนั้น (guide เวลาของเข้า) */}
         <div>
-          <label style={labelStyle}>ซัพพลายเออร์/ร้านที่ซื้อ <span style={{ fontWeight: 400, color: "var(--muted)" }}>(ถ้ามี)</span></label>
+          <label style={labelStyle}>ซัพพลายเออร์/ร้านที่ซื้อ <span style={{ fontWeight: 400, color: "var(--muted)" }}>(แตะเพื่อดูสินค้าในร้าน)</span></label>
           {allSuppliers.length > 0 && (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-              {allSuppliers.map(s => (
-                <button key={s} type="button" onClick={() => setSupplier(s)}
+              {(showAllSup ? allSuppliers : allSuppliers.slice(0, 8)).map(s => {
+                const on = supplier.trim() === s;
+                return (
+                  <button key={s} type="button" onClick={() => setSupplier(on ? "" : s)}
+                    style={{ minHeight: 40, padding: "6px 12px", borderRadius: 999, cursor: "pointer",
+                             fontSize: 12.5, fontWeight: 600, fontFamily: "inherit",
+                             border: "1.5px solid " + (on ? "var(--g-500)" : "var(--bdr)"),
+                             background: on ? "var(--g-50)" : "#fff",
+                             color: on ? "var(--g-700)" : "var(--text)" }}>
+                    {s} <span style={{ fontSize: 10.5, color: on ? "var(--g-600)" : "var(--muted)", fontWeight: 700 }}>({supplierCount[s]})</span>
+                  </button>
+                );
+              })}
+              {allSuppliers.length > 8 && (
+                <button type="button" onClick={() => setShowAllSup(v => !v)}
                   style={{ minHeight: 40, padding: "6px 12px", borderRadius: 999, cursor: "pointer",
-                           fontSize: 12.5, fontWeight: 600, fontFamily: "inherit",
-                           border: "1.5px solid " + (supplier.trim() === s ? "var(--g-500)" : "var(--bdr)"),
-                           background: supplier.trim() === s ? "var(--g-50)" : "#fff",
-                           color: supplier.trim() === s ? "var(--g-700)" : "var(--text)" }}>{s}</button>
-              ))}
+                           fontSize: 12.5, fontWeight: 700, fontFamily: "inherit",
+                           border: "1.5px dashed var(--bdr)", background: "#fff", color: "var(--g-600)" }}>
+                  {showAllSup ? "▲ ย่อ" : `▾ ดูทั้งหมด (${allSuppliers.length})`}
+                </button>
+              )}
             </div>
           )}
           <input type="text" placeholder="🏪 พิมพ์ชื่อร้าน/ซัพพลายเออร์ (มีชื่อเดิมให้เลือก)"
@@ -8135,6 +8191,60 @@ function PurchaseInPanel({ data, showToast, onDone }) {
           <datalist id="dmjSupplierList">
             {allSuppliers.map(s => <option key={s} value={s}/>)}
           </datalist>
+
+          {/* guide: สินค้าของซัพพลายเออร์ที่เลือก — แตะเพื่อใส่ตะกร้า */}
+          {supplier.trim() && supplierProducts.length > 0 && (
+            <div style={{ marginTop: 10, border: "1.5px solid var(--bdr)", borderRadius: 12, overflow: "hidden" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 11px",
+                            background: "var(--g-50)", borderBottom: "1px solid var(--bdr)" }}>
+                <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 800, color: "var(--g-700)",
+                              whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  📋 สินค้าของ {supplier.trim()} ({supplierProducts.length})
+                </div>
+                <button type="button" onClick={addAllSupplier} disabled={cart.length >= MAX_CART}
+                  style={{ flexShrink: 0, minHeight: 34, padding: "5px 12px", borderRadius: 8, cursor: cart.length >= MAX_CART ? "default" : "pointer",
+                           fontSize: 12, fontWeight: 700, fontFamily: "inherit", border: "1.5px solid var(--g-500)",
+                           background: cart.length >= MAX_CART ? "var(--g-50)" : "#fff", color: "var(--g-700)",
+                           opacity: cart.length >= MAX_CART ? 0.5 : 1 }}>＋ เพิ่มทั้งหมด</button>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", maxHeight: 300, overflowY: "auto" }}>
+                {supplierProducts.map(p => {
+                  const inCart = cartSkus.has(p.sku);
+                  return (
+                    <button key={p.sku} type="button" onClick={() => addToCart(p)} disabled={inCart}
+                      style={{ display: "flex", alignItems: "center", gap: 10, textAlign: "left",
+                               background: inCart ? "var(--g-50)" : "#fff", border: "none",
+                               borderBottom: "1px solid var(--bdr)", padding: "9px 11px",
+                               cursor: inCart ? "default" : "pointer", fontFamily: "inherit", minHeight: 46 }}>
+                      {p.imageUrl ? (
+                        <div style={{ width: 40, height: 40, flexShrink: 0, borderRadius: 8, border: "1px solid var(--bdr)",
+                                      backgroundImage: `url("${p.imageUrl}")`, backgroundSize: "contain",
+                                      backgroundPosition: "center", backgroundRepeat: "no-repeat", backgroundColor: "#fff" }}/>
+                      ) : (
+                        <div style={{ width: 40, height: 40, flexShrink: 0, borderRadius: 8, border: "1px dashed var(--bdr)",
+                                      background: "var(--g-50)", display: "flex", alignItems: "center",
+                                      justifyContent: "center", fontSize: 15, color: "var(--light)" }}>🖼️</div>
+                      )}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                          <span style={{ fontFamily: "monospace", color: "var(--g-700)" }}>{p.sku}</span> · {p.name}
+                        </div>
+                        <div style={{ fontSize: 11, color: "var(--muted)" }}>คลัง {p.qtyWH} · หน้าร้าน {p.qtyStore}</div>
+                      </div>
+                      {inCart
+                        ? <span style={{ flexShrink: 0, fontSize: 12, color: "var(--g-700)", fontWeight: 700, whiteSpace: "nowrap" }}>✓ ในตะกร้า</span>
+                        : <span style={{ flexShrink: 0, fontSize: 20, color: "var(--g-600)", fontWeight: 800 }}>＋</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {supplier.trim() && supplierProducts.length === 0 && (
+            <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>
+              ยังไม่มีสินค้าผูกกับ “{supplier.trim()}” — ค้นหาด้านบนเพื่อเพิ่มเข้าตะกร้าได้เลย
+            </div>
+          )}
         </div>
 
         {/* คลัง + วันที่ */}
