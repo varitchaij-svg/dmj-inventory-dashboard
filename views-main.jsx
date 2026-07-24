@@ -1256,6 +1256,47 @@ function OverviewView({ data, range, setRange, role }) {
     return { val, valWH, valStore, n, soldRev, nSold };
   }, [selCat, products, totals]);
 
+  // ── ของเข้าใหม่ 30 วัน (จาก purchases[] = ชีต "รายการซื้อสินค้า") ──
+  // จับกลุ่มตาม SKU: รวมจำนวน+ต้นทุน, เก็บวันล่าสุด/ซัพพลายเออร์/PO · เคารพตัวกรองหมวด (selCat)
+  const recentIntake = uM(() => {
+    const purchases = (data && data.purchases) ? data.purchases : [];
+    if (!purchases.length) return null;
+    const cut = new Date(); cut.setDate(cut.getDate() - 30);
+    // readPurchases_ format วันที่เป็น ISO yyyy-MM-dd → เทียบ string ได้ตรงลำดับ
+    const cutStr = cut.toISOString().slice(0, 10);
+    const catOf = new Map(products.map(p => [p.sku, p.cat]));
+    const bySku = new Map();
+    for (const pu of purchases) {
+      if (!pu.date || pu.date < cutStr) continue;             // เฉพาะ 30 วันล่าสุด
+      if (selCat && catOf.get(pu.sku) !== selCat) continue;   // กรองตามหมวดที่เลือก
+      const g = bySku.get(pu.sku) || { sku: pu.sku, name: pu.name || "", qty: 0, cost: 0, date: pu.date, suppliers: new Set(), pos: new Set() };
+      g.qty  += pu.qty || 0;
+      g.cost += (pu.qty || 0) * (pu.unitPrice || 0);
+      if (pu.date > g.date) g.date = pu.date;                 // วันที่รับล่าสุดของ SKU นี้
+      if (pu.name && !g.name) g.name = pu.name;
+      if (pu.supplier) g.suppliers.add(pu.supplier);
+      if (pu.poNum) g.pos.add(pu.poNum);
+      bySku.set(pu.sku, g);
+    }
+    const items = [...bySku.values()]
+      .map(g => ({ ...g, suppliers: [...g.suppliers], pos: [...g.pos] }))
+      .sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : 0); // ใหม่สุดก่อน
+    if (!items.length) return null;
+    return {
+      items,
+      nSku:    items.length,
+      totQty:  items.reduce((s, g) => s + g.qty, 0),
+      totCost: items.reduce((s, g) => s + g.cost, 0),
+    };
+  }, [data, products, selCat]);
+  // ISO yyyy-MM-dd → "24 ก.ค." (ปีเดียวไม่ต้องโชว์)
+  const fmtIntakeDate = (iso) => {
+    const p = String(iso || "").split("-");
+    if (p.length !== 3) return iso || "";
+    const mon = ["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
+    return `${parseInt(p[2])} ${mon[parseInt(p[1]) - 1] || ""}`;
+  };
+
   const topSellers = uM(() =>
     sellable
       .filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า")
@@ -1708,6 +1749,53 @@ function OverviewView({ data, range, setRange, role }) {
                icon={I.trend} />
         )}
       </div>
+
+      {/* ─── ของเข้าใหม่ 30 วัน (จากรายการซื้อ) — owner only ─── */}
+      {role === 'owner' && recentIntake && (
+        <div style={{marginBottom:20}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+            <span style={{fontSize:15,fontWeight:800,color:"#1f6f8b"}}>📥 ของเข้าใหม่ 30 วัน</span>
+            <span style={{fontSize:11,color:"var(--muted)",fontWeight:500}}>
+              จากรายการซื้อ (PO) ล่าสุด{selCat ? ` · หมวด ${selCat}` : ""}
+            </span>
+          </div>
+          <div style={{borderRadius:14,border:"1.5px solid #cfe3f0",overflow:"hidden",background:"linear-gradient(135deg,#f2f9fd,#eef6fb)"}}>
+            {/* สรุปรวม */}
+            <div style={{display:"flex",gap:20,flexWrap:"wrap",padding:"14px 18px",borderBottom:"1px solid #dcecf5"}}>
+              <div>
+                <div style={{fontSize:22,fontWeight:800,color:"#1f6f8b",lineHeight:1.1}}>{fmtN(recentIntake.nSku)}</div>
+                <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>รายการ (SKU)</div>
+              </div>
+              <div>
+                <div style={{fontSize:22,fontWeight:800,color:"#1f6f8b",lineHeight:1.1}}>{fmtN(recentIntake.totQty)}</div>
+                <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>จำนวนชิ้นรวม</div>
+              </div>
+              <div>
+                <div style={{fontSize:22,fontWeight:800,color:"#1f6f8b",lineHeight:1.1}}>{fmtB(recentIntake.totCost)}</div>
+                <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>มูลค่าซื้อรวม</div>
+              </div>
+            </div>
+            {/* รายการ (เลื่อนดูได้) */}
+            <div style={{maxHeight:340,overflowY:"auto"}}>
+              {recentIntake.items.map((g, i) => (
+                <div key={g.sku} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 18px",borderTop:i===0?"none":"1px solid #e4eff6"}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13.5,fontWeight:700,color:"var(--text)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{g.name || g.sku}</div>
+                    <div style={{fontSize:11,color:"var(--muted)",display:"flex",gap:6,flexWrap:"wrap",marginTop:2}}>
+                      <span style={{fontFamily:"monospace"}}>{g.sku}</span>
+                      {g.suppliers.length > 0 && <span>· {g.suppliers.join(", ")}</span>}
+                    </div>
+                  </div>
+                  <div style={{textAlign:"right",flexShrink:0}}>
+                    <div style={{fontSize:14,fontWeight:800,color:"#1f7f44"}}>+{fmtN(g.qty)}</div>
+                    <div style={{fontSize:10.5,color:"var(--muted)",marginTop:2}}>{fmtIntakeDate(g.date)}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ─── Forecast Tool (owner only) ─── */}
       {role === 'owner' && forecast && (
