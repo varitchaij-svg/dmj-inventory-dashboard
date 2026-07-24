@@ -1006,6 +1006,7 @@ function createZortTransfer_(sku, productname, qty) {
   const dateStr = Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyy-MM-dd");
   const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
   const payload = {
+    status: "Success",            // ทำรายการโอนให้สำเร็จเลย (ไม่ค้าง "รอโอน" ให้ต้องกดอนุมัติซ้ำใน ZORT)
     date: dateStr,
     fromwarehousecode: WH_SAI5,
     towarehousecode: WH_FRONTSTORE,
@@ -1129,6 +1130,7 @@ function createZortTransferBatch_(items) {
   const dateStr = Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyy-MM-dd");
   const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
   const payload = {
+    status: "Success",            // ทำรายการโอนให้สำเร็จเลย (ไม่ค้าง "รอโอน" ให้ต้องกดอนุมัติซ้ำใน ZORT)
     date: dateStr,
     fromwarehousecode: WH_SAI5,
     towarehousecode: WH_FRONTSTORE,
