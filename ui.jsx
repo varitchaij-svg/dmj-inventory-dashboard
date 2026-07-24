@@ -59,8 +59,10 @@ const resetCatColorMap = () => { catColorMap.clear(); };
 
 // ────────────── Icons (lucide-style inline) ──────────────
 const Icon = ({ d, size, stroke = 2 }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={stroke}
-       strokeLinecap="round" strokeLinejoin="round" style={size?{width:size,height:size}:null}>
+  // width/height default 18 = กันไอคอนพองยักษ์เมื่อ CSS ยังไม่โหลด (viewBox-only svg default 300x150)
+  // CSS (.navtab svg ฯลฯ) ยัง override attribute ได้ปกติ · size prop ยัง override ผ่าน inline style
+  <svg viewBox="0 0 24 24" width={size||18} height={size||18} fill="none" stroke="currentColor" strokeWidth={stroke}
+       strokeLinecap="round" strokeLinejoin="round" style={size?{width:size,height:size}:undefined}>
     {Array.isArray(d) ? d.map((p, i) => <path key={i} d={p} />) : <path d={d} />}
   </svg>
 );

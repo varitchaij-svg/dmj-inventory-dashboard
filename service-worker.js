@@ -1,4 +1,4 @@
-const CACHE_NAME = "dmj-v6";
+const CACHE_NAME = "dmj-v7";
 
 const PRECACHE_ASSETS = [
   "/manifest.json",
@@ -43,13 +43,31 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
-  // ② ไฟล์ app เราเอง (.jsx .js .html) — stale-while-revalidate
+  // ②a HTML / หน้าเว็บหลัก (.html หรือ "/") — network-first
+  //     HTML คือไฟล์ที่พก CSS ทั้งหมด — ถ้า stale จะ skew กับ JSX ใหม่ (ไอคอนพอง/แถบซ้ำ)
+  //     จึงดึงสดเสมอเมื่อออนไลน์ · offline ค่อย fallback cache
+  const isHtml =
+    url.hostname === self.location.hostname &&
+    (url.pathname.endsWith(".html") || url.pathname === "/");
+
+  if (isHtml) {
+    const cacheP = caches.open(CACHE_NAME);
+    e.respondWith(
+      fetch(e.request)
+        .then((res) => {
+          if (res.ok) cacheP.then((c) => c.put(e.request, res.clone()));
+          return res;
+        })
+        .catch(() => cacheP.then((c) => c.match(e.request)))  // offline fallback
+    );
+    return;
+  }
+
+  // ②b ไฟล์ app อื่น (.jsx .js) — stale-while-revalidate
   const isAppFile =
     url.hostname === self.location.hostname &&
     (url.pathname.endsWith(".jsx") ||
-     url.pathname.endsWith(".js")  ||
-     url.pathname.endsWith(".html")||
-     url.pathname === "/");
+     url.pathname.endsWith(".js"));
 
   if (isAppFile) {
     // stale-while-revalidate — iOS-safe: e.waitUntil + e.respondWith ต้องเรียก synchronously
