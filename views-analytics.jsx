@@ -1107,29 +1107,15 @@ function WarehouseHomeView({ data, onNav }) {
   const storage   = data.storage   || {};
   const prodBySku = uM(() => { const m = {}; products.forEach(p => { m[p.sku] = p; }); return m; }, [products]);
   const [modalP, setModalP]   = uS(null);     // สินค้าที่กดดูรายละเอียด (ProductModal)
-  const [doneSkus, setDoneSkus] = uS(() => new Set()); // sku ที่กด "จัดครบ" ในรอบนี้ (optimistic)
+
+  // แตะสินค้าที่ยังไม่มีตำแหน่งล็อค → ไปหน้า "ตำแหน่งจัดเก็บ" พร้อมเปิดช่องระบุล็อคของ sku นั้นเลย
+  const goAddLocation = (sku) => { window._dmjStorageSku = sku; onNav("storage"); };
 
   // ── งานค้าง ──────────────────────────────────────────────
-  // 1) ออเดอร์ที่ต้องเตรียม (status "รอ") — หัก sku ที่เพิ่งกดจัดครบออก (optimistic ก่อน refetch)
+  // 1) ออเดอร์ที่ต้องเตรียม (status "รอ")
   const pendingOrders = uM(() =>
-    orders.filter(o => (o.status || "รอ") === "รอ" && (o.orderQty || 0) > 0 && !doneSkus.has(o.sku))
-  , [orders, doneSkus]);
-
-  // กด "จัดครบ" ที่ตำแหน่ง → mark ทุกออเดอร์ค้างของ sku นั้นเป็นเตรียมครบ+สำเร็จ (sync ข้ามเครื่อง)
-  const markSkuDone = (item) => {
-    (item.orders || []).forEach(o => {
-      patchOrderState(o.id, { preparedQty: o.orderQty || 0, status: "สำเร็จ" }, o.sig);
-      syncOrderUpdate(o, { preparedQty: o.orderQty || 0, status: "สำเร็จ" });
-    });
-    setDoneSkus(prev => new Set(prev).add(item.sku));
-  };
-  const undoSkuDone = (item) => {
-    (item.orders || []).forEach(o => {
-      patchOrderState(o.id, { status: "รอ" }, o.sig);
-      syncOrderUpdate(o, { status: "รอ" });
-    });
-    setDoneSkus(prev => { const n = new Set(prev); n.delete(item.sku); return n; });
-  };
+    orders.filter(o => (o.status || "รอ") === "รอ" && (o.orderQty || 0) > 0)
+  , [orders]);
   // 2) ของยังไม่จัดเก็บเข้าตำแหน่ง (มีของในคลังแต่ไม่มีล็อค)
   const putawayItems = uM(() =>
     (storage.unassigned || [])
@@ -1156,15 +1142,10 @@ function WarehouseHomeView({ data, onNav }) {
   }, [products]);
   const pickPath = uM(() => {
     const bySku = {};
-    // สร้างจาก orders ตรง ๆ (พร้อม index) เพื่อได้ id+sig ต่อออเดอร์ ใช้ mark จัดครบ/sync
-    // ไม่หัก doneSkus ที่นี่ — ให้แถวที่จัดครบแล้วยังโชว์อยู่ (มีปุ่มย้อนกลับ) จนกว่าจะ refetch
-    orders.forEach((o, i) => {
-      if ((o.status || "รอ") !== "รอ" || (o.orderQty || 0) <= 0) return;
+    pendingOrders.forEach(o => {
       const k = o.sku;
-      if (!bySku[k]) bySku[k] = { sku: k, name: o.name, qty: 0, prepared: 0, orders: [] };
-      bySku[k].qty      += o.orderQty || 0;
-      bySku[k].prepared += o.preparedQty || 0;
-      bySku[k].orders.push({ ...o, id: stableOrderId(o, i), sig: orderSig(o) });
+      if (!bySku[k]) bySku[k] = { sku: k, name: o.name, qty: 0 };
+      bySku[k].qty += o.orderQty || 0;
     });
     const items = Object.values(bySku).map(x => ({ ...x, loc: skuLoc[x.sku] || null, p: prodBySku[x.sku] }));
     const groups = {};
@@ -1177,7 +1158,7 @@ function WarehouseHomeView({ data, onNav }) {
       return as !== bs ? as.localeCompare(bs) : ah !== bh ? ah - bh : al - bl;
     });
     return sortedKeys.map(k => ({ loc: k === "__none__" ? null : k, items: groups[k].sort((a,b)=> (a.name||"").localeCompare(b.name||"")) }));
-  }, [orders, skuLoc, prodBySku]);
+  }, [pendingOrders, skuLoc, prodBySku]);
 
   // ของโอน: รับไม่ครบก่อน → รอรับ → ล่าสุด (โชว์ 20 แถว)
   const shipView = uM(() => {
@@ -1232,7 +1213,7 @@ function WarehouseHomeView({ data, onNav }) {
         <div style={{ marginBottom: 22 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
             <span style={{ fontSize: 15, fontWeight: 800, color: "var(--g-700)" }}>🧭 หยิบของตามตำแหน่ง</span>
-            <span style={{ fontSize: 11, color: "var(--muted)" }}>เรียงตามล็อค เดินหยิบรอบเดียวจบ · แตะรูป/ชื่อดูรายละเอียด · กด "จัดครบ" เมื่อหยิบเสร็จ</span>
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>เรียงตามล็อค เดินหยิบรอบเดียวจบ · แตะรูป/ชื่อดูรายละเอียด</span>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {pickPath.map(grp => (
@@ -1247,37 +1228,31 @@ function WarehouseHomeView({ data, onNav }) {
                 </div>
                 {grp.items.map(it => {
                   const img = it.p && it.p.imageUrl;
-                  const isDone = doneSkus.has(it.sku);
+                  const noLoc = !grp.loc;
+                  // ไม่มีตำแหน่ง → แตะเพื่อเพิ่มตำแหน่ง · มีตำแหน่ง → แตะดูรายละเอียดสินค้า
+                  const onTap = noLoc ? () => goAddLocation(it.sku) : () => (it.p && setModalP(it.p));
                   return (
-                    <div key={it.sku} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px",
-                                               borderTop: "1px solid #f1f5f9", background: isDone ? "#f0f9f2" : "transparent" }}>
-                      {/* รูป + ชื่อ = กดดูรายละเอียดสินค้า */}
-                      <button onClick={() => it.p && setModalP(it.p)}
-                        style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0, textAlign: "left",
-                                 border: "none", background: "transparent", padding: 0, cursor: it.p ? "pointer" : "default", fontFamily: "inherit" }}>
-                        {img
-                          ? <div style={{ width: 38, height: 38, borderRadius: 8, flexShrink: 0, border: "1px solid var(--bdr)", backgroundImage: `url("${img}")`, backgroundSize: "cover", backgroundPosition: "center" }} />
-                          : <div style={{ width: 38, height: 38, borderRadius: 8, flexShrink: 0, border: "1px solid var(--bdr)", background: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>📦</div>}
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textDecoration: isDone ? "line-through" : "none", color: isDone ? "var(--muted)" : "var(--text)" }}>{it.name || it.sku}</div>
-                          <div style={{ fontSize: 11, color: "var(--muted)" }}>
-                            <span style={{ fontFamily: "monospace" }}>{it.sku}</span> · ต้องหยิบ <b>{fmtN(it.qty)}</b> · คลังมี {fmtN((it.p && it.p.qtyWH) || 0)}
-                          </div>
-                        </div>
-                      </button>
-                      {/* ปุ่มจัดครบ / ย้อนกลับ */}
-                      {isDone
-                        ? <button onClick={() => undoSkuDone(it)}
-                            style={{ flexShrink: 0, fontSize: 12, fontWeight: 700, padding: "8px 12px", borderRadius: 10,
-                                     border: "1px solid #bbe6c9", background: "#e8f5e9", color: "#2f8f52", fontFamily: "inherit", cursor: "pointer" }}>
-                            ✓ จัดแล้ว · แก้
-                          </button>
-                        : <button onClick={() => markSkuDone(it)}
-                            style={{ flexShrink: 0, fontSize: 13, fontWeight: 800, padding: "9px 14px", borderRadius: 10,
-                                     border: "1.5px solid var(--g-500)", background: "var(--g-50)", color: "var(--g-700)", fontFamily: "inherit", cursor: "pointer" }}>
-                            จัดครบ
-                          </button>}
-                    </div>
+                    <button key={it.sku} onClick={onTap}
+                      style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", width: "100%", textAlign: "left",
+                               borderTop: "1px solid #f1f5f9", borderLeft: "none", borderRight: "none", borderBottom: "none",
+                               background: "transparent", fontFamily: "inherit", cursor: (noLoc || it.p) ? "pointer" : "default" }}>
+                      {img
+                        ? <div style={{ width: 38, height: 38, borderRadius: 8, flexShrink: 0, border: "1px solid var(--bdr)", backgroundImage: `url("${img}")`, backgroundSize: "cover", backgroundPosition: "center" }} />
+                        : <div style={{ width: 38, height: 38, borderRadius: 8, flexShrink: 0, border: "1px solid var(--bdr)", background: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>📦</div>}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.name || it.sku}</div>
+                        <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "monospace" }}>{it.sku}</div>
+                      </div>
+                      {noLoc
+                        ? <span style={{ flexShrink: 0, fontSize: 12, fontWeight: 800, padding: "8px 12px", borderRadius: 10,
+                                         border: "1.5px solid #f0c98a", background: "#fff7ed", color: "#b45309", whiteSpace: "nowrap" }}>
+                            ➕ เพิ่มตำแหน่ง
+                          </span>
+                        : <div style={{ textAlign: "right", flexShrink: 0 }}>
+                            <div style={{ fontSize: 14, fontWeight: 800, color: "var(--text)" }}>หยิบ {fmtN(it.qty)}</div>
+                            <div style={{ fontSize: 10, color: "var(--muted)" }}>คลังมี {fmtN((it.p && it.p.qtyWH) || 0)}</div>
+                          </div>}
+                    </button>
                   );
                 })}
               </div>

@@ -6534,6 +6534,15 @@ function UnassignedProductCards({ products, lockData, shelves, onAssigned }) {
   const [openPicker, setOpenPicker] = uS(null);
   const [toast, showToast, hideToast] = useToast();
 
+  // มาจากหน้า "งานคลังวันนี้" (แตะสินค้าที่ยังไม่มีตำแหน่ง) → seed ค้นหา + เปิดช่องระบุล็อคของ sku นั้นเลย
+  uE(() => {
+    const sku = window._dmjStorageSku;
+    if (sku) {
+      window._dmjStorageSku = null;
+      setSearch(sku); setPage(0); setCatFilter("ALL"); setOpenPicker(sku);
+    }
+  }, []);
+
   const filtered = uM(() => {
     let f = catFilter === "ALL" ? noLock : noLock.filter(p => p.cat === catFilter);
     if (search.trim()) {
