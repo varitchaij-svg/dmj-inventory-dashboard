@@ -3,6 +3,7 @@ const { useState: usS, useEffect: usE, useCallback: usC } = React;
 
 const TABS = [
   { id: "overview",      label: "📊 ภาพรวม",               icon: I.dashboard },
+  { id: "whhome",        label: "🏭 งานคลัง",              icon: I.dashboard },
   { id: "categories",    label: "🛍️ สินค้า & สั่ง",         icon: I.layers },
   { id: "trends",        label: "📈 เทรนด์",               icon: I.flame },
   { id: "stock",         label: "⚠️ สต๊อก & แจ้งเตือน",    icon: I.alert },
@@ -32,7 +33,8 @@ const ROLE_TABS = {
   // ("margin" ซ่อนไว้ก่อน — ยังไม่มีต้นทุนซื้อจริง · โค้ด MarginView คงไว้ ค่อยเพิ่ม id กลับเมื่อพร้อม)
   owner:      ["overview","customers","pos","quotefollowup","categories","stock","orders","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog"],
   employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","mtojobs","labels"],
-  warehouse:  ["categories","stock","storage","stockcount","newproduct","orders","ordersummary","mtojobs","labels"],
+  // 5 ตัวแรก = แถบหลัก (>9 แท็บ → ที่เหลือเข้า "เพิ่มเติม") จัดให้เป็นงานคลังที่ใช้บ่อยสุด
+  warehouse:  ["whhome","orders","stock","stockcount","storage","categories","newproduct","ordersummary","mtojobs","labels"],
   frontstore: ["categories","stock","frontstore","orders","mtojobs","labels"],
   saler:      ["pos","categories","stock","orders","quotefollowup","mtojobs","labels"],
 };
@@ -1015,6 +1017,7 @@ function App() {
       {/* ─── Main ─── */}
       <main className="main" data-screen-label={activeTab}>
         {activeTab === "overview"     && <ErrorBoundary key="overview"><OverviewView data={data} range={range} setRange={setRange} role={role}/></ErrorBoundary>}
+        {activeTab === "whhome"       && <ErrorBoundary key="whhome"><WarehouseHomeView data={data} onNav={handleSetTab}/></ErrorBoundary>}
         {activeTab === "categories"   && <ErrorBoundary key="categories"><CategoryView data={data} role={role}/></ErrorBoundary>}
         {activeTab === "trends"       && <ErrorBoundary key="trends"><TrendsView data={data} role={role}/></ErrorBoundary>}
         {activeTab === "stock"        && <ErrorBoundary key="stock"><StockView data={data} role={role}/></ErrorBoundary>}

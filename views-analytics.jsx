@@ -1096,6 +1096,200 @@ function parseCheckDateMs(s) {
   return d.getTime();
 }
 
+// ══════════════════════════════════════════════════════════════════════
+//  WarehouseHomeView — หน้าแรกงานคลัง (role warehouse ลงมาเจอหน้านี้ก่อน)
+//  รวมงานที่ต้องทำวันนี้ + หยิบของตามตำแหน่ง + สถานะของที่โอนไปหน้าร้าน
+// ══════════════════════════════════════════════════════════════════════
+function WarehouseHomeView({ data, onNav }) {
+  const products  = data.products  || [];
+  const orders    = data.orders    || [];
+  const shipments = data.shipments || [];
+  const storage   = data.storage   || {};
+  const prodBySku = uM(() => { const m = {}; products.forEach(p => { m[p.sku] = p; }); return m; }, [products]);
+
+  // ── งานค้าง ──────────────────────────────────────────────
+  // 1) ออเดอร์ที่ต้องเตรียม (status "รอ")
+  const pendingOrders = uM(() =>
+    orders.filter(o => (o.status || "รอ") === "รอ" && (o.orderQty || 0) > 0)
+  , [orders]);
+  // 2) ของยังไม่จัดเก็บเข้าตำแหน่ง (มีของในคลังแต่ไม่มีล็อค)
+  const putawayItems = uM(() =>
+    (storage.unassigned || [])
+      .map(sku => prodBySku[sku])
+      .filter(p => p && !p.isMTO && (p.qtyWH || 0) > 0)
+  , [storage.unassigned, prodBySku]);
+  // 3) ล็อคที่ยังไม่เคยนับ (lastCheck ว่าง) — คิว ABC ละเอียดอยู่ในหน้า "นับ stock คลัง"
+  const neverCounted = uM(() => {
+    const lm = storage.verifiedLockMap || {};
+    return Object.values(lm).filter(arr => (arr || []).some(e => !e.lastCheck)).length;
+  }, [storage.verifiedLockMap]);
+  // 4) ของที่โอนไปหน้าร้าน — รอรับ / รับไม่ครบ
+  const shipPending = uM(() => shipments.filter(s => !s.receivedAt), [shipments]);
+  const shipShort   = uM(() => shipments.filter(s => s.receivedAt && s.receivedQty != null && s.receivedQty < s.qty), [shipments]);
+
+  // ── หยิบของตามตำแหน่ง (pick path) — จัดกลุ่มออเดอร์ค้างตามล็อค เรียงเดินหยิบรอบเดียว ──
+  const skuLoc = uM(() => {
+    const m = {};
+    products.forEach(p => {
+      const loc = (p.locations || [])[0];
+      if (loc) m[p.sku] = `${loc.side}${loc.shelf}/${loc.lock}`;
+    });
+    return m;
+  }, [products]);
+  const pickPath = uM(() => {
+    const bySku = {};
+    pendingOrders.forEach(o => {
+      const k = o.sku;
+      if (!bySku[k]) bySku[k] = { sku: k, name: o.name, qty: 0, prepared: 0 };
+      bySku[k].qty      += o.orderQty || 0;
+      bySku[k].prepared += o.preparedQty || 0;
+    });
+    const items = Object.values(bySku).map(x => ({ ...x, loc: skuLoc[x.sku] || null, p: prodBySku[x.sku] }));
+    const groups = {};
+    items.forEach(it => { const key = it.loc || "__none__"; (groups[key] = groups[key] || []).push(it); });
+    const parseLoc = (k) => { const m = /^([A-Z]+)(\d+)\/(\d+)$/.exec(k); return m ? [m[1], parseInt(m[2]), parseInt(m[3])] : ["Z", 999, 999]; };
+    const sortedKeys = Object.keys(groups).sort((a, b) => {
+      if (a === "__none__") return 1;
+      if (b === "__none__") return -1;
+      const [as, ah, al] = parseLoc(a), [bs, bh, bl] = parseLoc(b);
+      return as !== bs ? as.localeCompare(bs) : ah !== bh ? ah - bh : al - bl;
+    });
+    return sortedKeys.map(k => ({ loc: k === "__none__" ? null : k, items: groups[k].sort((a,b)=> (a.name||"").localeCompare(b.name||"")) }));
+  }, [pendingOrders, skuLoc, prodBySku]);
+
+  // ของโอน: รับไม่ครบก่อน → รอรับ → ล่าสุด (โชว์ 20 แถว)
+  const shipView = uM(() => {
+    const score = s => s.receivedAt && s.receivedQty != null && s.receivedQty < s.qty ? 0 : !s.receivedAt ? 1 : 2;
+    return [...shipments].sort((a, b) => score(a) - score(b) || (b.date > a.date ? 1 : -1)).slice(0, 20);
+  }, [shipments]);
+
+  const nothingPending = pendingOrders.length === 0 && putawayItems.length === 0 &&
+                         shipPending.length === 0 && shipShort.length === 0;
+
+  const Tile = ({ emoji, n, label, color, tab, danger }) => (
+    <button onClick={tab ? () => onNav(tab) : undefined}
+      style={{ flex: "1 1 140px", minWidth: 0, textAlign: "left", cursor: tab ? "pointer" : "default",
+               background: n > 0 ? (danger ? "#fef2f2" : "#fff") : "#fff",
+               border: `1.5px solid ${n > 0 ? color : "var(--bdr)"}`, borderRadius: 14, padding: "14px 16px",
+               fontFamily: "inherit", display: "flex", flexDirection: "column", gap: 4 }}>
+      <div style={{ fontSize: 20 }}>{emoji}</div>
+      <div style={{ fontSize: 26, fontWeight: 800, lineHeight: 1, color: n > 0 ? color : "var(--muted)" }}>{fmtN(n)}</div>
+      <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>{label}</div>
+      {tab && n > 0 && <div style={{ fontSize: 11, color, fontWeight: 700, marginTop: 2 }}>แตะเพื่อจัดการ ›</div>}
+    </button>
+  );
+
+  return (
+    <div style={{ width: "100%", minWidth: 0, boxSizing: "border-box" }}>
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 20, fontWeight: 800, color: "var(--text)" }}>🏭 งานคลังวันนี้</div>
+        <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>รวมงานค้าง + ลำดับหยิบของ ให้จบในหน้าเดียว</div>
+      </div>
+
+      {nothingPending && (
+        <div style={{ background: "#f0f9f2", border: "1.5px solid #a8d9b4", borderRadius: 14, padding: "18px 20px", marginBottom: 18, display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: 28 }}>🎉</span>
+          <div>
+            <div style={{ fontWeight: 800, color: "var(--g-700)" }}>ไม่มีงานค้าง</div>
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>ออเดอร์เตรียมครบ · ของจัดเก็บครบ · หน้าร้านรับครบแล้ว</div>
+          </div>
+        </div>
+      )}
+
+      {/* ── ไทล์งานค้าง ── */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 22 }}>
+        <Tile emoji="📋" n={pendingOrders.length} label="ออเดอร์ต้องเตรียม" color="#1f7f44" tab="orders" />
+        <Tile emoji="📥" n={putawayItems.length}  label="ของยังไม่จัดเก็บ"  color="#a07417" tab="storage" />
+        <Tile emoji="📊" n={neverCounted}          label="ล็อคยังไม่เคยนับ"  color="#1f6f8b" tab="stockcount" />
+        <Tile emoji="🚚" n={shipPending.length}    label="ของโอนรอหน้าร้านรับ" color="#7a5cc8" />
+        <Tile emoji="⚠️" n={shipShort.length}      label="หน้าร้านรับไม่ครบ" color="#dc2626" danger />
+      </div>
+
+      {/* ── หยิบของตามตำแหน่ง ── */}
+      {pickPath.length > 0 && (
+        <div style={{ marginBottom: 22 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 15, fontWeight: 800, color: "var(--g-700)" }}>🧭 หยิบของตามตำแหน่ง</span>
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>เรียงตามล็อค เดินหยิบรอบเดียวจบ · แตะดูในหน้าออเดอร์เพื่อกดเตรียม</span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {pickPath.map(grp => (
+              <div key={grp.loc || "none"} style={{ border: "1.5px solid var(--bdr)", borderRadius: 12, overflow: "hidden" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px",
+                              background: grp.loc ? "#f2f9fd" : "#fff7ed", borderBottom: "1px solid var(--bdr)" }}>
+                  <span style={{ fontSize: 14 }}>{grp.loc ? "📍" : "❓"}</span>
+                  <span style={{ fontWeight: 800, fontSize: 14, color: grp.loc ? "#1f6f8b" : "#b45309" }}>
+                    {grp.loc || "ยังไม่มีตำแหน่งล็อค"}
+                  </span>
+                  <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>{grp.items.length} รายการ</span>
+                </div>
+                {grp.items.map(it => {
+                  const img = it.p && it.p.imageUrl;
+                  const done = it.prepared >= it.qty && it.qty > 0;
+                  return (
+                    <div key={it.sku} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", borderTop: "1px solid #f1f5f9" }}>
+                      {img
+                        ? <div style={{ width: 38, height: 38, borderRadius: 8, flexShrink: 0, border: "1px solid var(--bdr)", backgroundImage: `url("${img}")`, backgroundSize: "cover", backgroundPosition: "center" }} />
+                        : <div style={{ width: 38, height: 38, borderRadius: 8, flexShrink: 0, border: "1px solid var(--bdr)", background: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>📦</div>}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.name || it.sku}</div>
+                        <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "monospace" }}>{it.sku}</div>
+                      </div>
+                      <div style={{ textAlign: "right", flexShrink: 0 }}>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: done ? "#4fb472" : "var(--text)" }}>
+                          {done ? "✓ ครบ" : `${fmtN(it.prepared)}/${fmtN(it.qty)}`}
+                        </div>
+                        <div style={{ fontSize: 10, color: "var(--muted)" }}>คลังมี {fmtN((it.p && it.p.qtyWH) || 0)}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+          <button onClick={() => onNav("orders")}
+            style={{ marginTop: 10, width: "100%", padding: "11px", borderRadius: 10, border: "1.5px solid var(--g-500)",
+                     background: "var(--g-50)", color: "var(--g-700)", fontWeight: 700, fontSize: 14, fontFamily: "inherit", cursor: "pointer" }}>
+            ไปหน้าออเดอร์เพื่อกดเตรียม ›
+          </button>
+        </div>
+      )}
+
+      {/* ── สถานะของที่โอนไปหน้าร้าน ── */}
+      {shipView.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 15, fontWeight: 800, color: "var(--g-700)" }}>🚚 ของที่โอนไปหน้าร้าน</span>
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>ติดตามว่าหน้าร้านรับครบหรือยัง</span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {shipView.map(s => {
+              const short = s.receivedAt && s.receivedQty != null && s.receivedQty < s.qty;
+              const waiting = !s.receivedAt;
+              const chip = short ? { t: `รับ ${fmtN(s.receivedQty)}/${fmtN(s.qty)}`, bg: "#fef2f2", c: "#dc2626", b: "#fecaca" }
+                         : waiting ? { t: "รอรับ", bg: "#fffbeb", c: "#b45309", b: "#fde68a" }
+                         : { t: "รับครบ ✓", bg: "#f0f9f2", c: "#4fb472", b: "#bbe6c9" };
+              return (
+                <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px",
+                                         border: `1.5px solid ${chip.b}`, borderRadius: 12, background: short ? "#fffafa" : "#fff" }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.name || s.sku}</div>
+                    <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                      <span style={{ fontFamily: "monospace" }}>{s.sku}</span> · โอน {fmtN(s.qty)} ชิ้น{s.date ? ` · ${s.date}` : ""}
+                    </div>
+                  </div>
+                  <span style={{ flexShrink: 0, fontSize: 12, fontWeight: 800, padding: "4px 10px", borderRadius: 20,
+                                 background: chip.bg, color: chip.c, border: `1px solid ${chip.b}` }}>{chip.t}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StockCountView({ data, checkRequest, onCheckComplete }) {
   const storage    = data.storage  || {};
   const shelves    = storage.shelves || { A: 10, B: 10, locksPerShelf: 15 };
