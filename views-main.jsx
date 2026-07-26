@@ -3823,6 +3823,7 @@ function CategoryView({ data, role }) {
       </div>
       {orderProduct && <OrderModal product={orderProduct} onClose={() => setOrderProduct(null)}
         pendingOrderQty={pendingOrderQtyMap[(orderProduct.sku||"").trim().toUpperCase()] || 0}
+        role={role}
         onOrderSuccess={(sku, qty) => setLocalPendingOrders(prev => [...prev, {sku, orderQty: qty, status:"รอ"}])}/>}
       <Toast toast={checkToast} onClose={hideCheckToast}/>
 
@@ -3971,8 +3972,10 @@ function CategoryView({ data, role }) {
 // ────────────── Product Card ──────────────
 // ────────────── Order Modal ──────────────
 const QUICK_QTYS = [24, 36, 48, 60];
+// เช็คหน้าร้านล่าสุดใหม่กว่านี้ (นาที) = ถือว่ายังสด ไม่ต้องนับซ้ำตอนกดสั่ง
+const FS_CHECK_FRESH_MIN = 120;
 
-function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess, defaultQty }) {
+function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess, defaultQty, role }) {
   useBackHandler(onClose); // Android back = ปิด modal สั่งของ
   const [qty, setQty] = uS(defaultQty > 0 ? defaultQty : 24);
   const [customMode, setCustomMode] = uS(false);
@@ -3981,24 +3984,62 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
   const [done, setDone] = uS(false);
   const [err, setErr] = uS(null);
 
+  // ── role หน้าร้าน/พนักงาน: ต้องนับของที่เหลือหน้าร้านก่อน ถึงจะสั่งได้ ──
+  const effRole = role || sessionStorage.getItem("dmj_role") || "";
+  const needFsCheck = effRole === "frontstore" || effRole === "employee";
+  const [fsQty, setFsQty] = uS("");          // "" = ยังไม่กรอก
+  const [fsSaveFailed, setFsSaveFailed] = uS(false);
+  const fsQtyNum = fsQty === "" ? null : Math.max(0, parseInt(fsQty) || 0);
+
+  // เพิ่งเช็คไปไม่เกิน 2 ชม. → ข้ามการนับได้ (กันนับซ้ำตอนสั่งของรัว ๆ) แต่กด "นับใหม่" ได้เสมอ
+  const fsFreshMin = uM(() => {
+    if (!needFsCheck || !product.frontStoreCheckedAt) return null;
+    if (typeof parseCheckDateMs !== "function") return null;
+    const t = parseCheckDateMs(product.frontStoreCheckedAt);
+    if (isNaN(t)) return null;
+    const mins = Math.floor((Date.now() - t) / 60000);
+    return (mins >= 0 && mins < FS_CHECK_FRESH_MIN) ? mins : null;
+  }, [needFsCheck, product.frontStoreCheckedAt]);
+  const [fsRecount, setFsRecount] = uS(false);      // true = ผู้ใช้ขอนับใหม่ทั้งที่ยังสด
+  const fsSkipped = fsFreshMin != null && !fsRecount;
+  const fsBlocked = needFsCheck && !fsSkipped && fsQtyNum == null;
+
   const sheetUrl = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null;
   const outOfStock = (product.qtyWH !== undefined ? product.qtyWH : product.qty) <= 0;
 
-  const handleSubmit = () => {
-    if (outOfStock) return;
-    if (!sheetUrl) { setErr('ไม่พบ GOOGLE_SHEET_URL'); return; }
-    if (qty < 1) { setErr('กรุณาระบุจำนวน'); return; }
-    setLoading(true); setErr(null);
+  const placeOrder = () => {
     const _sep = sheetUrl.includes('?') ? '&' : '?';
     const url = `${sheetUrl}${_sep}action=order&sku=${encodeURIComponent(product.sku)}&qty=${qty}&orderType=${encodeURIComponent(orderType)}`;
-    fetch(url)
+    return fetch(url)
       .then(r => r.json())
       .then(d => {
         if (d.ok) { setDone(true); onOrderSuccess && onOrderSuccess(product.sku, qty); setTimeout(onClose, 2000); }
         else setErr(d.error || 'เกิดข้อผิดพลาด');
       })
-      .catch(e => setErr(e.message))
-      .finally(() => setLoading(false));
+      .catch(e => setErr(e.message));
+  };
+
+  const handleSubmit = async (skipFsSave) => {
+    if (outOfStock) return;
+    if (!sheetUrl) { setErr('ไม่พบ GOOGLE_SHEET_URL'); return; }
+    if (qty < 1) { setErr('กรุณาระบุจำนวน'); return; }
+    if (fsBlocked) { setErr('กรุณากรอกจำนวนที่เหลือหน้าร้านก่อน'); return; }
+    setLoading(true); setErr(null);
+    try {
+      // บันทึกจำนวนหน้าร้านที่นับได้ก่อน (เข้าชีต "จำนวนหน้าร้าน" + push ZORT)
+      if (needFsCheck && fsQtyNum != null && !skipFsSave) {
+        const res = await syncFrontStoreData([{ sku: product.sku, qty: fsQtyNum }]);
+        if (res && res.success === false) {
+          setFsSaveFailed(true);
+          setErr('บันทึกจำนวนหน้าร้านไม่สำเร็จ (เน็ตอาจหลุด) — ลองใหม่ หรือกดสั่งเลยโดยไม่บันทึก');
+          return;
+        }
+        setFsSaveFailed(false);
+      }
+      await placeOrder();
+    } finally {
+      setLoading(false);
+    }
   };
 
   const btnBase = {borderRadius:8, border:"1px solid var(--bdr)", cursor:"pointer",
@@ -4091,9 +4132,84 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
                 ⚠️ สินค้าหมดสต๊อก ไม่สามารถสั่งได้
               </div>
             ) : (<>
+              {/* เพิ่งเช็คไปไม่นาน → ข้ามการนับ แต่ยังกด "นับใหม่" ได้ */}
+              {needFsCheck && fsSkipped && (
+                <div style={{
+                  marginBottom:16, borderRadius:12, padding:"12px 14px",
+                  border:"1.5px solid var(--g-400)", background:"var(--g-50)",
+                  display:"flex", alignItems:"center", gap:10,
+                }}>
+                  <span style={{fontSize:20}}>✅</span>
+                  <div style={{flex:1, minWidth:0}}>
+                    <div style={{fontSize:12, fontWeight:700, color:"var(--g-700)"}}>
+                      เพิ่งเช็คหน้าร้านไป {fsFreshMin < 1 ? "เมื่อครู่นี้" : `${fsFreshMin} นาทีที่แล้ว`}
+                    </div>
+                    <div style={{fontSize:11, color:"var(--muted)", marginTop:1}}>
+                      หน้าร้าน {fmtN(product.qtyStore || 0)} ชิ้น · ไม่ต้องนับซ้ำ สั่งได้เลย
+                    </div>
+                  </div>
+                  <button onClick={() => setFsRecount(true)}
+                          style={{...btnBase, padding:"8px 10px", fontSize:12, flexShrink:0}}>
+                    ✏️ นับใหม่
+                  </button>
+                </div>
+              )}
+
+              {/* ① เช็คของหน้าร้านก่อนสั่ง (role หน้าร้าน/พนักงาน) */}
+              {needFsCheck && !fsSkipped && (
+                <div style={{
+                  marginBottom:16, borderRadius:12, padding:14,
+                  border: fsQtyNum == null ? "2px solid #f59e0b" : "2px solid var(--g-600)",
+                  background: fsQtyNum == null ? "#fffbeb" : "var(--g-50)",
+                }}>
+                  <div style={{fontSize:13, fontWeight:800, color: fsQtyNum == null ? "#92400e" : "var(--g-700)"}}>
+                    ① นับก่อนสั่ง — หน้าร้านเหลือกี่ชิ้น?
+                  </div>
+                  <div style={{fontSize:11, color:"var(--muted)", marginTop:3}}>
+                    ระบบบันทึกไว้ <b>{fmtN(product.qtyStore || 0)}</b> ชิ้น
+                    {product.frontStoreCheckedAt ? <> · เช็คล่าสุด {product.frontStoreCheckedAt}</> : <> · ยังไม่เคยเช็ค</>}
+                  </div>
+                  <div style={{display:"flex", gap:8, alignItems:"center", marginTop:10}}>
+                    <button onClick={() => setFsQty(String(Math.max(0, (fsQtyNum || 0) - 1)))}
+                            style={{...btnBase, width:48, height:48, padding:0, fontSize:22, flexShrink:0}}>−</button>
+                    <input type="number" inputMode="numeric" min={0} value={fsQty}
+                           placeholder="?"
+                           onFocus={ev => ev.target.select()}
+                           onChange={ev => {
+                             const v = ev.target.value;
+                             setFsQty(v === "" ? "" : String(Math.max(0, parseInt(v) || 0)));
+                             setFsSaveFailed(false);
+                           }}
+                           style={{flex:1, minWidth:0, padding:"10px 12px", height:48, boxSizing:"border-box",
+                                   border:"1.5px solid var(--g-400)", borderRadius:10,
+                                   fontSize:20, fontWeight:800, textAlign:"center", fontFamily:"inherit"}}/>
+                    <button onClick={() => setFsQty(String((fsQtyNum || 0) + 1))}
+                            style={{...btnBase, width:48, height:48, padding:0, fontSize:22, flexShrink:0}}>+</button>
+                  </div>
+                  <div style={{display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:6, marginTop:8}}>
+                    {[0, 6, 12, 24].map(q => (
+                      <button key={q} onClick={() => { setFsQty(String(q)); setFsSaveFailed(false); }}
+                              style={{...btnBase, padding:"9px 0",
+                                background: fsQtyNum === q ? "var(--g-700)" : "#fff",
+                                color: fsQtyNum === q ? "#fff" : "var(--text)",
+                                borderColor: fsQtyNum === q ? "var(--g-700)" : "var(--bdr)"}}>
+                        {q === 0 ? "0 หมด" : q}
+                      </button>
+                    ))}
+                  </div>
+                  {fsQtyNum != null && (
+                    <div style={{fontSize:11, color:"var(--muted)", marginTop:8}}>
+                      ✔️ จะบันทึกหน้าร้าน = <b>{fmtN(fsQtyNum)}</b> ชิ้น พร้อมกับตอนกดสั่ง
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Quick qty */}
               <div style={{marginBottom:14}}>
-                <div style={{fontSize:12, fontWeight:600, color:"var(--muted)", marginBottom:8}}>จำนวนที่สั่ง (ชิ้น)</div>
+                <div style={{fontSize:12, fontWeight:600, color:"var(--muted)", marginBottom:8}}>
+                  {needFsCheck && !fsSkipped ? "② จำนวนที่สั่ง (ชิ้น)" : "จำนวนที่สั่ง (ชิ้น)"}
+                </div>
                 <div style={{display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:6, marginBottom:8}}>
                   {QUICK_QTYS.map(q => (
                     <button key={q} onClick={() => { setQty(q); setCustomMode(false); }}
@@ -4147,13 +4263,27 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
                 </div>
               )}
 
-              <button onClick={handleSubmit} disabled={loading}
+              <button onClick={() => handleSubmit(false)} disabled={loading || fsBlocked}
                       style={{...btnBase, width:"100%", padding:"12px", fontSize:14,
-                              background:"var(--g-700)", color:"#fff", borderColor:"var(--g-700)"}}>
+                              background: fsBlocked ? "var(--g-100)" : "var(--g-700)",
+                              color: fsBlocked ? "var(--muted)" : "#fff",
+                              borderColor: fsBlocked ? "var(--bdr)" : "var(--g-700)",
+                              cursor: fsBlocked ? "not-allowed" : "pointer"}}>
                 {loading
                   ? <><span className="spin" style={{width:14,height:14,borderWidth:2,display:"inline-block",verticalAlign:"middle",marginRight:6}}/> กำลังบันทึก…</>
-                  : `✅ ยืนยันสั่ง ${fmtN(qty)} ชิ้น (${orderType})`}
+                  : fsBlocked
+                    ? "① กรอกจำนวนหน้าร้านก่อน"
+                    : `✅ ยืนยันสั่ง ${fmtN(qty)} ชิ้น (${orderType})`}
               </button>
+
+              {/* บันทึกจำนวนหน้าร้านพัง (เน็ตหลุด) → ยังสั่งของได้ ไม่ให้งานสะดุด */}
+              {fsSaveFailed && !loading && (
+                <button onClick={() => handleSubmit(true)}
+                        style={{...btnBase, width:"100%", padding:"11px", fontSize:13, marginTop:8,
+                                background:"#fff", color:"var(--dang)", borderColor:"#fcc"}}>
+                  ⏭️ สั่งเลยโดยไม่บันทึกจำนวนหน้าร้าน
+                </button>
+              )}
             </>)}
           </div>
         )}
@@ -4877,6 +5007,7 @@ function StockView({ data, role }) {
 
       {modalP && <ProductModal p={modalP} onClose={() => setModalP(null)} allCats={allCats}/>}
       {orderProduct && <OrderModal product={orderProduct} onClose={() => setOrderProduct(null)}
+                                    role={role}
                                     defaultQty={orderProduct.suggestedQty}/>}
     </div>
   );
@@ -8119,7 +8250,17 @@ function PurchaseInPanel({ data, showToast, onDone }) {
   const [saving, setSaving]     = uS(false);
 
   const [showAllSup, setShowAllSup] = uS(false);
+  const [supSearch, setSupSearch]   = uS("");   // ค้นหาต่อในลิสต์สินค้าของร้านที่เลือก
+  const [modalP, setModalP]         = uS(null); // สินค้าที่กดดูรูป/รายละเอียด (ProductModal)
   const MAX_CART = 20;   // เพิ่มได้สูงสุด 20 SKU ต่อครั้ง (ตะกร้าซื้อเข้ารอบเดียว)
+
+  // lookup สินค้าเต็ม (สำหรับเปิด ProductModal ดูรูปใหญ่/รายละเอียด)
+  const prodBySku = uM(() => {
+    const m = {};
+    products.forEach(p => { const k = String(p.sku || "").trim().toUpperCase(); if (k) m[k] = p; });
+    return m;
+  }, [products]);
+  const openDetail = (sku) => { const full = prodBySku[String(sku||"").trim().toUpperCase()]; if (full) setModalP(full); };
 
   // ซัพพลายเออร์ที่เคยใช้ + จำนวนสินค้าต่อราย (ใช้ทั้งชิปเลือกและ guide)
   const supplierCount = uM(() => {
@@ -8154,6 +8295,19 @@ function PurchaseInPanel({ data, showToast, onDone }) {
       .sort((a, b) => a.sku.localeCompare(b.sku));
   }, [supplier, products]);
 
+  // ค้นหาต่อในลิสต์ร้านที่เลือก (multi-token AND กับ SKU+ชื่อ)
+  const supplierProductsFiltered = uM(() => {
+    const q = supSearch.trim().toLowerCase();
+    if (!q) return supplierProducts;
+    const toks = q.split(/\s+/).filter(Boolean);
+    return supplierProducts.filter(p => {
+      const hay = p.sku.toLowerCase() + " " + (p.name || "").toLowerCase();
+      return toks.every(t => hay.includes(t));
+    });
+  }, [supplierProducts, supSearch]);
+  // เปลี่ยนร้าน → ล้างคำค้นในลิสต์ร้าน
+  uE(() => { setSupSearch(""); }, [supplier]);
+
   // ค้นหาสินค้า (multi-token AND) — ตัดตัวที่อยู่ในตะกร้าแล้ว + ตัด MTO
   const matches = uM(() => {
     const q = search.trim().toLowerCase();
@@ -8167,7 +8321,7 @@ function PurchaseInPanel({ data, showToast, onDone }) {
       if (cat.includes("Made to Order")) continue;
       const hay = sku.toLowerCase() + " " + String(p.name || "").toLowerCase();
       if (!toks.every(t => hay.includes(t))) continue;
-      out.push({ sku, name: p.name || "", qtyWH: p.qtyWH || 0, qtyStore: p.qtyStore || 0 });
+      out.push({ sku, name: p.name || "", qtyWH: p.qtyWH || 0, qtyStore: p.qtyStore || 0, imageUrl: p.imageUrl || "" });
       if (out.length >= 15) break;
     }
     return out;
@@ -8247,30 +8401,38 @@ function PurchaseInPanel({ data, showToast, onDone }) {
               {matches.map(p => {
                 const inCart = cart.some(c => c.sku === p.sku);
                 return (
-                <button key={p.sku} type="button" onClick={() => addToCart(p)} disabled={inCart}
-                  style={{ display: "flex", alignItems: "center", gap: 10, textAlign: "left",
-                           background: inCart ? "var(--g-50)" : "#fff",
-                           border: "1px solid " + (inCart ? "var(--g-500)" : "var(--bdr)"), borderRadius: 9,
-                           padding: "9px 11px", cursor: inCart ? "default" : "pointer", fontFamily: "inherit", minHeight: 44 }}>
-                  {p.imageUrl ? (
-                    <div style={{ width: 44, height: 44, flexShrink: 0, borderRadius: 8, border: "1px solid var(--bdr)",
-                                  backgroundImage: `url("${p.imageUrl}")`, backgroundSize: "contain",
-                                  backgroundPosition: "center", backgroundRepeat: "no-repeat", backgroundColor: "#fff" }}/>
-                  ) : (
-                    <div style={{ width: 44, height: 44, flexShrink: 0, borderRadius: 8, border: "1px dashed var(--bdr)",
-                                  background: "var(--g-50)", display: "flex", alignItems: "center",
-                                  justifyContent: "center", fontSize: 16, color: "var(--light)" }}>🖼️</div>
-                  )}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      <span style={{ fontFamily: "monospace", color: "var(--g-700)" }}>{p.sku}</span> · {p.name}
+                <div key={p.sku} style={{ display: "flex", alignItems: "center",
+                         background: inCart ? "var(--g-50)" : "#fff",
+                         border: "1px solid " + (inCart ? "var(--g-500)" : "var(--bdr)"), borderRadius: 9, overflow: "hidden" }}>
+                  {/* รูป = กดดูรูปใหญ่/รายละเอียด */}
+                  <button type="button" onClick={() => openDetail(p.sku)}
+                    style={{ border: "none", background: "transparent", padding: "9px 0 9px 11px", cursor: "pointer", flexShrink: 0, lineHeight: 0 }}>
+                    {p.imageUrl ? (
+                      <div style={{ width: 44, height: 44, borderRadius: 8, border: "1px solid var(--bdr)",
+                                    backgroundImage: `url("${p.imageUrl}")`, backgroundSize: "contain",
+                                    backgroundPosition: "center", backgroundRepeat: "no-repeat", backgroundColor: "#fff" }}/>
+                    ) : (
+                      <div style={{ width: 44, height: 44, borderRadius: 8, border: "1px dashed var(--bdr)",
+                                    background: "var(--g-50)", display: "flex", alignItems: "center",
+                                    justifyContent: "center", fontSize: 16, color: "var(--light)" }}>🖼️</div>
+                    )}
+                  </button>
+                  {/* ส่วนที่เหลือ = กดใส่ตะกร้า */}
+                  <button type="button" onClick={() => addToCart(p)} disabled={inCart}
+                    style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0, textAlign: "left",
+                             background: "transparent", border: "none", padding: "9px 11px",
+                             cursor: inCart ? "default" : "pointer", fontFamily: "inherit", minHeight: 44 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        <span style={{ fontFamily: "monospace", color: "var(--g-700)" }}>{p.sku}</span> · {p.name}
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--muted)" }}>คลัง {p.qtyWH} · หน้าร้าน {p.qtyStore}</div>
                     </div>
-                    <div style={{ fontSize: 11, color: "var(--muted)" }}>คลัง {p.qtyWH} · หน้าร้าน {p.qtyStore}</div>
-                  </div>
-                  {inCart
-                    ? <span style={{ flexShrink: 0, fontSize: 12, color: "var(--g-700)", fontWeight: 700, whiteSpace: "nowrap" }}>✓ ในตะกร้า</span>
-                    : <span style={{ flexShrink: 0, fontSize: 20, color: "var(--g-600)", fontWeight: 800 }}>＋</span>}
-                </button>
+                    {inCart
+                      ? <span style={{ flexShrink: 0, fontSize: 12, color: "var(--g-700)", fontWeight: 700, whiteSpace: "nowrap" }}>✓ ในตะกร้า</span>
+                      : <span style={{ flexShrink: 0, fontSize: 20, color: "var(--g-600)", fontWeight: 800 }}>＋</span>}
+                  </button>
+                </div>
                 );
               })}
             </div>
@@ -8380,36 +8542,54 @@ function PurchaseInPanel({ data, showToast, onDone }) {
                            background: cart.length >= MAX_CART ? "var(--g-50)" : "#fff", color: "var(--g-700)",
                            opacity: cart.length >= MAX_CART ? 0.5 : 1 }}>＋ เพิ่มทั้งหมด</button>
               </div>
+              {/* ค้นหาต่อในร้านนี้ (พิมพ์ชื่อ/SKU) */}
+              <div style={{ padding: "8px 11px", borderBottom: "1px solid var(--bdr)", background: "#fff" }}>
+                <input type="text" placeholder="🔍 ค้นหาต่อในร้านนี้ (ชื่อ/SKU)"
+                  value={supSearch} onChange={e => setSupSearch(e.target.value)}
+                  style={{ ...inputStyle, padding: "8px 11px", fontSize: 13 }} />
+              </div>
               <div style={{ display: "flex", flexDirection: "column", maxHeight: 300, overflowY: "auto" }}>
-                {supplierProducts.map(p => {
+                {supplierProductsFiltered.map(p => {
                   const inCart = cartSkus.has(p.sku);
                   return (
-                    <button key={p.sku} type="button" onClick={() => addToCart(p)} disabled={inCart}
-                      style={{ display: "flex", alignItems: "center", gap: 10, textAlign: "left",
-                               background: inCart ? "var(--g-50)" : "#fff", border: "none",
-                               borderBottom: "1px solid var(--bdr)", padding: "9px 11px",
-                               cursor: inCart ? "default" : "pointer", fontFamily: "inherit", minHeight: 46 }}>
-                      {p.imageUrl ? (
-                        <div style={{ width: 40, height: 40, flexShrink: 0, borderRadius: 8, border: "1px solid var(--bdr)",
-                                      backgroundImage: `url("${p.imageUrl}")`, backgroundSize: "contain",
-                                      backgroundPosition: "center", backgroundRepeat: "no-repeat", backgroundColor: "#fff" }}/>
-                      ) : (
-                        <div style={{ width: 40, height: 40, flexShrink: 0, borderRadius: 8, border: "1px dashed var(--bdr)",
-                                      background: "var(--g-50)", display: "flex", alignItems: "center",
-                                      justifyContent: "center", fontSize: 15, color: "var(--light)" }}>🖼️</div>
-                      )}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                          <span style={{ fontFamily: "monospace", color: "var(--g-700)" }}>{p.sku}</span> · {p.name}
+                    <div key={p.sku} style={{ display: "flex", alignItems: "center",
+                             background: inCart ? "var(--g-50)" : "#fff", borderBottom: "1px solid var(--bdr)" }}>
+                      {/* รูป = กดดูรูปใหญ่/รายละเอียด */}
+                      <button type="button" onClick={() => openDetail(p.sku)}
+                        style={{ border: "none", background: "transparent", padding: "9px 0 9px 11px", cursor: "pointer", flexShrink: 0, lineHeight: 0 }}>
+                        {p.imageUrl ? (
+                          <div style={{ width: 40, height: 40, borderRadius: 8, border: "1px solid var(--bdr)",
+                                        backgroundImage: `url("${p.imageUrl}")`, backgroundSize: "contain",
+                                        backgroundPosition: "center", backgroundRepeat: "no-repeat", backgroundColor: "#fff" }}/>
+                        ) : (
+                          <div style={{ width: 40, height: 40, borderRadius: 8, border: "1px dashed var(--bdr)",
+                                        background: "var(--g-50)", display: "flex", alignItems: "center",
+                                        justifyContent: "center", fontSize: 15, color: "var(--light)" }}>🖼️</div>
+                        )}
+                      </button>
+                      {/* ส่วนที่เหลือ = กดใส่ตะกร้า */}
+                      <button type="button" onClick={() => addToCart(p)} disabled={inCart}
+                        style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0, textAlign: "left",
+                                 background: "transparent", border: "none", padding: "9px 11px",
+                                 cursor: inCart ? "default" : "pointer", fontFamily: "inherit", minHeight: 46 }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            <span style={{ fontFamily: "monospace", color: "var(--g-700)" }}>{p.sku}</span> · {p.name}
+                          </div>
+                          <div style={{ fontSize: 11, color: "var(--muted)" }}>คลัง {p.qtyWH} · หน้าร้าน {p.qtyStore}</div>
                         </div>
-                        <div style={{ fontSize: 11, color: "var(--muted)" }}>คลัง {p.qtyWH} · หน้าร้าน {p.qtyStore}</div>
-                      </div>
-                      {inCart
-                        ? <span style={{ flexShrink: 0, fontSize: 12, color: "var(--g-700)", fontWeight: 700, whiteSpace: "nowrap" }}>✓ ในตะกร้า</span>
-                        : <span style={{ flexShrink: 0, fontSize: 20, color: "var(--g-600)", fontWeight: 800 }}>＋</span>}
-                    </button>
+                        {inCart
+                          ? <span style={{ flexShrink: 0, fontSize: 12, color: "var(--g-700)", fontWeight: 700, whiteSpace: "nowrap" }}>✓ ในตะกร้า</span>
+                          : <span style={{ flexShrink: 0, fontSize: 20, color: "var(--g-600)", fontWeight: 800 }}>＋</span>}
+                      </button>
+                    </div>
                   );
                 })}
+                {supplierProductsFiltered.length === 0 && (
+                  <div style={{ padding: "12px", fontSize: 12, color: "var(--muted)", textAlign: "center" }}>
+                    ไม่พบสินค้าในร้านนี้ที่ตรงกับ “{supSearch.trim()}”
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -8451,6 +8631,7 @@ function PurchaseInPanel({ data, showToast, onDone }) {
           บันทึกแล้วจะสร้างใบสั่งซื้อใน ZORT + เพิ่มสต็อกเข้าคลังทันที
         </div>
       </div>
+      {modalP && <ProductModal p={modalP} onClose={() => setModalP(null)} />}
     </Card>
   );
 }

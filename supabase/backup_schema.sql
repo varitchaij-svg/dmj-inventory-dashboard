@@ -154,6 +154,9 @@ returns jsonb
 language plpgsql
 security invoker
 set search_path = public
+-- ต้องตั้งเป็น function-level config (ไม่ใช่ `set local` ใน body) มิฉะนั้น
+-- PostgREST/RPC ยังใช้ statement_timeout=8s ของ role authenticator เดิม (เจอจริงตอนทดสอบ)
+set statement_timeout = '55s'
 as $$
 declare
   v_products integer;
@@ -239,3 +242,10 @@ begin
   );
 end;
 $$;
+
+-- ฟังก์ชันนี้ truncate/เขียนทับตารางสำรองทั้งหมด — ต้องเรียกได้เฉพาะ service_role
+-- (GAS ใช้ service key) ไม่ให้ anon/authenticated ที่หลุดออกไปฝั่ง client เรียกได้
+revoke execute on function public.refresh_backup(jsonb, date, text) from public;
+revoke execute on function public.refresh_backup(jsonb, date, text) from anon;
+revoke execute on function public.refresh_backup(jsonb, date, text) from authenticated;
+grant  execute on function public.refresh_backup(jsonb, date, text) to service_role;

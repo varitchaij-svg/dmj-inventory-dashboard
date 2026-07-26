@@ -247,6 +247,16 @@ npm run test:coverage # coverage report (tests/helpers.js)
     → ได้ "4/7/2569 11:30:45" — `new Date()` ตีเป็น ค.ศ. 2569 (อนาคต 543 ปี)
     ต้อง parse ด้วย `parseCheckDateMs` (views-analytics.jsx, ลบ 543 เมื่อปี ≥ 2400)
 
+## Features ที่เพิ่มล่าสุด (Sprint 4)
+
+- **นับหน้าร้านก่อนสั่ง** — `OrderModal` (views-main.jsx): role `frontstore`/`employee` ต้องกรอก
+  "หน้าร้านเหลือกี่ชิ้น" (ขั้น ①) ก่อน ปุ่มยืนยันสั่งถึงจะกดได้ · กดสั่ง → `syncFrontStoreData`
+  (ชีต "จำนวนหน้าร้าน" + push ZORT + audit) ก่อน แล้วค่อยยิง `action=order` · ถ้าเช็คล่าสุด
+  (`p.frontStoreCheckedAt`) ใหม่กว่า `FS_CHECK_FRESH_MIN` (120 นาที) → ข้ามการนับ โชว์แบนเนอร์
+  "เพิ่งเช็คไป N นาทีที่แล้ว" + ปุ่ม "นับใหม่" · บันทึกพัง (เน็ตหลุด) → มีปุ่ม "สั่งเลยโดยไม่บันทึก"
+  กันงานหน้าร้านสะดุด · role อื่นไม่เห็นขั้นตอนนี้ · `role` ส่งเป็น prop เข้า OrderModal
+  (fallback `sessionStorage.dmj_role`)
+
 ## Features ที่เพิ่มล่าสุด (Sprint 2)
 
 - **กราฟเทียบปีต่อปี (YoY)** — OverviewView (views-main.jsx): `buildYoYSeries` จัด
