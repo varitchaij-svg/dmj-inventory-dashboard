@@ -3534,7 +3534,10 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
     onPatch(order.id, {printFlag: f});
     syncOrderUpdate(order, {printFlag: f});
   };
-  const setCarryMode = m => onPatch(order.id, {carryMode: m});
+  const setCarryMode = m => {
+    onPatch(order.id, {carryMode: m});
+    syncOrderUpdate(order, {carryMode: m});
+  };
   const markComplete = () => {
     if (!order.printFlag) {
       showToast("warn", "เลือก PRINT หรือ SKIP ก่อน", "🖨️");
