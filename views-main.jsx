@@ -4049,6 +4049,16 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
       .catch(e => setErr(e.message));
   };
 
+  // คลังหมด → สั่งไม่ได้ แต่ยังนับหน้าร้านได้ (auto-save ยิงเองอยู่แล้ว ปุ่มนี้คือบันทึกทันทีแล้วปิด)
+  const handleSaveAndClose = async () => {
+    if (!fsDirty) { onClose(); return; }
+    setLoading(true); setErr(null);
+    const ok = await saveFsQty(fsQtyNum);
+    setLoading(false);
+    if (!ok) { setErr('บันทึกจำนวนหน้าร้านไม่สำเร็จ (เน็ตอาจหลุด) — ลองใหม่อีกครั้ง'); return; }
+    onClose();
+  };
+
   const handleSubmit = async (skipFsSave) => {
     if (outOfStock) return;
     if (!sheetUrl) { setErr('ไม่พบ GOOGLE_SHEET_URL'); return; }
@@ -4154,12 +4164,6 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
               </div>
             )}
 
-            {outOfStock ? (
-              <div style={{background:"#fff0f0", border:"1px solid #fcc", borderRadius:10,
-                           padding:16, textAlign:"center", fontSize:13, color:"var(--dang)", fontWeight:600}}>
-                ⚠️ สินค้าหมดสต๊อก ไม่สามารถสั่งได้
-              </div>
-            ) : (<>
               {/* เพิ่งเช็คไปไม่นาน → ข้ามการนับ แต่ยังกด "นับใหม่" ได้ */}
               {needFsCheck && fsSkipped && (
                 <div style={{
@@ -4173,7 +4177,7 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
                       เพิ่งเช็คหน้าร้านไป {fsFreshMin < 1 ? "เมื่อครู่นี้" : `${fsFreshMin} นาทีที่แล้ว`}
                     </div>
                     <div style={{fontSize:11, color:"var(--muted)", marginTop:1}}>
-                      หน้าร้าน {fmtN(product.qtyStore || 0)} ชิ้น · ไม่ต้องนับซ้ำ สั่งได้เลย
+                      หน้าร้าน {fmtN(product.qtyStore || 0)} ชิ้น · ไม่ต้องนับซ้ำ{outOfStock ? "" : " สั่งได้เลย"}
                     </div>
                   </div>
                   <button onClick={() => setFsRecount(true)}
@@ -4191,7 +4195,7 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
                   background: fsQtyNum == null ? "#fffbeb" : "var(--g-50)",
                 }}>
                   <div style={{fontSize:13, fontWeight:800, color: fsQtyNum == null ? "#92400e" : "var(--g-700)"}}>
-                    ① นับก่อนสั่ง — หน้าร้านเหลือกี่ชิ้น?
+                    {outOfStock ? "📋 หน้าร้านเหลือกี่ชิ้น?" : "① นับก่อนสั่ง — หน้าร้านเหลือกี่ชิ้น?"}
                   </div>
                   <div style={{fontSize:11, color:"var(--muted)", marginTop:3}}>
                     ระบบบันทึกไว้ <b>{fmtN(product.qtyStore || 0)}</b> ชิ้น
@@ -4231,15 +4235,35 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
                       {fsSaving
                         ? <>⏳ กำลังบันทึกเข้าระบบ…</>
                         : fsSaveFailed
-                          ? <>⚠️ บันทึกไม่สำเร็จ — จะลองใหม่ตอนกดสั่ง</>
+                          ? <>⚠️ บันทึกไม่สำเร็จ — จะลองใหม่ตอนกดปุ่มด้านล่าง</>
                           : !fsDirty
                             ? <>✅ บันทึกหน้าร้าน <b>{fmtN(fsSavedQty)}</b> ชิ้น เข้าระบบ + ZORT แล้ว</>
-                            : <>✏️ บันทึกอัตโนมัติใน 2 วิ (หรือกดสั่งเลยก็บันทึกทันที)</>}
+                            : <>✏️ บันทึกอัตโนมัติใน 2 วิ (กดปุ่มด้านล่างก็บันทึกทันที)</>}
                     </div>
                   )}
                 </div>
               )}
 
+            {outOfStock ? (<>
+              <div style={{background:"#fff0f0", border:"1px solid #fcc", borderRadius:10,
+                           padding:16, textAlign:"center", fontSize:13, color:"var(--dang)", fontWeight:600}}>
+                ⚠️ คลังหมดสต๊อก — สั่งไม่ได้ตอนนี้
+                {needFsCheck && (
+                  <div style={{fontSize:11, fontWeight:500, color:"var(--muted)", marginTop:5}}>
+                    แต่บันทึกยอดหน้าร้านไว้ได้ เจ้าของจะเห็นว่าของหมดทั้งคลังและหน้าร้าน
+                  </div>
+                )}
+              </div>
+              <button onClick={handleSaveAndClose} disabled={loading}
+                      style={{...btnBase, width:"100%", padding:"12px", fontSize:14, marginTop:12,
+                              background: fsDirty ? "var(--g-700)" : "#fff",
+                              color: fsDirty ? "#fff" : "var(--text)",
+                              borderColor: fsDirty ? "var(--g-700)" : "var(--bdr)"}}>
+                {loading
+                  ? <><span className="spin" style={{width:14,height:14,borderWidth:2,display:"inline-block",verticalAlign:"middle",marginRight:6}}/> กำลังบันทึก…</>
+                  : fsDirty ? `💾 บันทึกหน้าร้าน ${fmtN(fsQtyNum)} ชิ้น แล้วปิด` : "ปิด"}
+              </button>
+            </>) : (<>
               {/* Quick qty */}
               <div style={{marginBottom:14}}>
                 <div style={{fontSize:12, fontWeight:600, color:"var(--muted)", marginBottom:8}}>
@@ -4333,6 +4357,9 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
   const outOfStock = !p.isMTO && totalQty === 0;
   const hashHue = (p.sku || "").split("").reduce((a,c) => a + c.charCodeAt(0), 0) % 360;
   const [lightbox, setLightbox] = uS(false);
+  // role หน้าร้าน/พนักงาน: ของหมดทั้งคลัง+หน้าร้าน ก็ยังเปิด modal เพื่อ "นับหน้าร้าน" ได้
+  const canCountFs = role === "frontstore" || role === "employee";
+  const orderBtnDisabled = outOfStock && !canCountFs;
 
   // Image (real or placeholder) — imgOverride = รูปที่เพิ่งดึงจาก ZORT แบบ on-demand
   const [imgOverride, setImgOverride] = uS(null);
@@ -4518,19 +4545,19 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
       {/* Order button */}
       {onOrder && (
         <div className="pcard-order" style={{padding:"0 12px 12px", marginTop:"auto"}}>
-          <button onClick={() => !outOfStock && onOrder(p)}
-                  disabled={outOfStock}
+          <button onClick={() => !orderBtnDisabled && onOrder(p)}
+                  disabled={orderBtnDisabled}
                   style={{width:"100%", padding:"9px 12px", borderRadius:8,
                           background: outOfStock ? "var(--g-100)" : "var(--g-700)",
                           color: outOfStock ? "var(--muted)" : "#fff",
                           border: outOfStock ? "1px solid var(--bdr)" : "none",
                           fontWeight:700, fontSize:12.5,
-                          cursor: outOfStock ? "not-allowed" : "pointer",
+                          cursor: orderBtnDisabled ? "not-allowed" : "pointer",
                           fontFamily:"inherit", display:"flex", alignItems:"center",
                           justifyContent:"center", gap:6, transition:"background .15s"}}
                   onMouseEnter={e => { if (!outOfStock) e.currentTarget.style.background="var(--g-800)"; }}
                   onMouseLeave={e => { if (!outOfStock) e.currentTarget.style.background="var(--g-700)"; }}>
-            {outOfStock ? "⚫ หมดสต๊อก" : "🛒 สั่งไปขาย"}
+            {outOfStock ? (canCountFs ? "📋 หมด — นับหน้าร้าน" : "⚫ หมดสต๊อก") : "🛒 สั่งไปขาย"}
           </button>
         </div>
       )}
