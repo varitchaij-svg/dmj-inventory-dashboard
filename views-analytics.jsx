@@ -3493,9 +3493,9 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
   uE(() => { setPrepQtyDraft(String(prepQty)); }, [prepQty]);
   const [imgOpen, setImgOpen] = uS(false);
   const [mapOpen, setMapOpen] = uS(false); // warehouse map modal
-  const [zeroConfirm, setZeroConfirm] = uS(false);
-  const [zeroed, setZeroed] = uS(false);
-  const [zeroing, setZeroing] = uS(false);
+  const [cancelConfirm, setCancelConfirm] = uS(false);
+  const [canceled, setCanceled] = uS(false);
+  const [canceling, setCanceling] = uS(false);
   const [undoConfirm, setUndoConfirm] = uS(false);
   const [toast, showToast, hideToast] = useToast();
   uE(() => {
@@ -3539,15 +3539,15 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
     showToast("success", "ย้อนกลับเป็นรอดำเนินการแล้ว", "↩️", 2500);
   };
 
-  const doZeroStock = async () => {
-    setZeroConfirm(false);
-    setZeroing(true);
-    const res = await syncZeroStock(order.sku);
-    setZeroing(false);
-    if (res && res.success === true) {
-      setZeroed(true);
-      syncDeleteOrders([order.id]);
-      showToast("success", `ปรับ ${order.name} เป็น 0 แล้ว`, "✅", 4000);
+  // ยกเลิกจัดของ — ลบรายการนี้ออกจากรายการสั่ง เฉย ๆ (ไม่แตะ/ไม่ปรับสต็อกสินค้าเป็น 0)
+  const doCancelOrder = async () => {
+    setCancelConfirm(false);
+    setCanceling(true);
+    const res = await syncDeleteOrders([order.id]);
+    setCanceling(false);
+    if (res && res.success !== false) {
+      setCanceled(true);
+      showToast("success", `ยกเลิกจัดของ ${order.name} แล้ว`, "✅", 4000);
     } else {
       showToast("warn", `ไม่สำเร็จ: ${(res && res.error) || "ลองใหม่"}`, "⚠️", 5000);
     }
@@ -3636,29 +3636,29 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
             )}
           </div>
 
-          {/* ❌ ไม่ได้จัด — มุมขวาบน */}
-          {isPending && !zeroed && role !== "frontstore" && role !== "saler" && (
-            <button onClick={() => setZeroConfirm(true)}
-              title="ไม่ได้จัด — สินค้าหมด ปรับ ZORT เป็น 0"
-              disabled={zeroing}
+          {/* ✕ ยกเลิกจัดของ — มุมขวาบน (ลบออกจากรายการสั่ง ไม่แตะสต็อก) */}
+          {isPending && !canceled && role !== "frontstore" && role !== "saler" && (
+            <button onClick={() => setCancelConfirm(true)}
+              title="ยกเลิกจัดของ — ลบรายการนี้ออกจากรายการสั่ง"
+              disabled={canceling}
               style={{
                 alignSelf:"flex-start",flexShrink:0,
                 width:32,height:32,borderRadius:8,
                 border:"1.5px solid #fca5a5",background:"#fff5f5",color:"#dc2626",
-                cursor:zeroing?"not-allowed":"pointer",fontSize:16,
+                cursor:canceling?"not-allowed":"pointer",fontSize:16,
                 display:"flex",alignItems:"center",justifyContent:"center",
                 fontFamily:"inherit",padding:0,
               }}>
-              {zeroing ? "⏳" : "❌"}
+              {canceling ? "⏳" : "✕"}
             </button>
           )}
-          {zeroed && (
+          {canceled && (
             <div style={{
               alignSelf:"flex-start",flexShrink:0,
               fontSize:10,fontWeight:700,color:"#dc2626",padding:"4px 7px",
               background:"#fff5f5",borderRadius:8,border:"1.5px solid #fca5a5",
               whiteSpace:"nowrap",
-            }}>❌ ไม่ได้จัด</div>
+            }}>✕ ยกเลิกจัดของแล้ว</div>
           )}
         </div>
 
@@ -3815,14 +3815,14 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
         />
       )}
       <ConfirmModal
-        open={zeroConfirm}
+        open={cancelConfirm}
         type="warn"
-        emoji="❌"
-        title="ไม่ได้จัดสินค้า?"
-        detail={`${order.name} (${order.sku})\n\nจะปรับสต็อก WH ใน ZORT เป็น 0\nและลบรายการนี้ออกจากรายการสั่ง\n\n⚠️ ทำแล้วย้อนกลับไม่ได้`}
-        confirmLabel="ยืนยัน ไม่ได้จัด"
-        onConfirm={doZeroStock}
-        onCancel={() => setZeroConfirm(false)}
+        emoji="✕"
+        title="ยกเลิกจัดของ?"
+        detail={`${order.name} (${order.sku})\n\nจะลบรายการนี้ออกจากรายการสั่ง\n(ไม่ปรับสต็อกสินค้า)\n\n⚠️ ทำแล้วย้อนกลับไม่ได้`}
+        confirmLabel="ยืนยัน ยกเลิกจัดของ"
+        onConfirm={doCancelOrder}
+        onCancel={() => setCancelConfirm(false)}
       />
       <ConfirmModal
         open={undoConfirm}
@@ -4276,14 +4276,15 @@ async function syncZeroStock(sku) {
 
 // ลบหลาย order rows ในครั้งเดียว
 async function syncDeleteOrders(orderIds) {
-  if (!SHEET_DEPLOY_URL || !orderIds || !orderIds.length) return;
+  if (!SHEET_DEPLOY_URL || !orderIds || !orderIds.length) return { success: false };
   try {
     await fetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ deleteOrders: true, orderIds }),
     });
-  } catch(e) { console.warn("syncDeleteOrders error:", e.message); }
+    return { success: true };
+  } catch(e) { console.warn("syncDeleteOrders error:", e.message); return { success: false, error: e.message }; }
 }
 
 // สั่ง sync สต็อกจาก ZORT เดี๋ยวนี้ (ใช้เวลาสักครู่)
