@@ -1116,10 +1116,14 @@ function WarehouseHomeView({ data, onNav }) {
   , [orders, doneSkus]);
 
   // กด "จัดครบ" ที่ตำแหน่ง → mark ทุกออเดอร์ค้างของ sku นั้นเป็นเตรียมครบ+สำเร็จ (sync ข้ามเครื่อง)
+  // ⚠️ ห้ามทับ preparedQty ที่พนักงานกรอกไว้แล้วในหน้าออเดอร์ (เช่น สั่ง 36 แต่จัดจริง 48)
+  //    เดิมเซ็ต preparedQty = orderQty ตรง ๆ → จำนวนที่กรอกเองหายทุกครั้งที่กดปุ่มนี้
+  //    ใช้ค่าที่กรอกไว้ถ้ามี (>0) ไม่มีค่อย default เป็นจำนวนที่สั่ง
   const markSkuDone = (item) => {
     (item.orders || []).forEach(o => {
-      patchOrderState(o.id, { preparedQty: o.orderQty || 0, status: "สำเร็จ" }, o.sig);
-      syncOrderUpdate(o, { preparedQty: o.orderQty || 0, status: "สำเร็จ" });
+      const prep = (o.preparedQty || 0) > 0 ? o.preparedQty : (o.orderQty || 0);
+      patchOrderState(o.id, { preparedQty: prep, status: "สำเร็จ" }, o.sig);
+      syncOrderUpdate(o, { preparedQty: prep, status: "สำเร็จ" });
     });
     setDoneSkus(prev => new Set(prev).add(item.sku));
   };
@@ -1262,6 +1266,10 @@ function WarehouseHomeView({ data, onNav }) {
                           <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textDecoration: isDone ? "line-through" : "none", color: isDone ? "var(--muted)" : "var(--text)" }}>{it.name || it.sku}</div>
                           <div style={{ fontSize: 11, color: "var(--muted)" }}>
                             <span style={{ fontFamily: "monospace" }}>{it.sku}</span> · ต้องหยิบ <b>{fmtN(it.qty)}</b> · คลังมี {fmtN((it.p && it.p.qtyWH) || 0)}
+                            {/* จัดไว้ไม่เท่ายอดสั่ง (เช่น สั่ง 36 จัด 48) → โชว์ให้เห็น กดจัดครบแล้วเลขนี้จะไม่ถูกทับ */}
+                            {it.prepared > 0 && it.prepared !== it.qty && (
+                              <span style={{ color: "#b45309", fontWeight: 700 }}> · จัดไว้ {fmtN(it.prepared)}</span>
+                            )}
                           </div>
                         </div>
                       </button>
@@ -3551,8 +3559,12 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
       showToast("warn", "เลือก PRINT หรือ SKIP ก่อน", "🖨️");
       return;
     }
-    onPatch(order.id, { status: "สำเร็จ" });
-    syncOrderUpdate(order, { status: "สำเร็จ" });
+    // ส่ง preparedQty ไปพร้อม status ใน POST เดียว — เดิมจำนวนที่กรอกยิงแยกตอน blur
+    // ถ้า POST นั้นหลุด/ชน ScriptLock จำนวนจะไม่ถูกเขียนลงชีต พอ refetch ช่อง "จัด"
+    // จะ fallback กลับไปโชว์ยอดที่สั่งแทน (บรรทัด init prepQty) → พนักงานสับสน
+    const prep = Math.max(0, parseInt(prepQtyDraft) || 0);
+    onPatch(order.id, { status: "สำเร็จ", preparedQty: prep });
+    syncOrderUpdate(order, { status: "สำเร็จ", preparedQty: prep });
     showToast("success", "บันทึกแล้ว", "✅", 2500);
   };
 
