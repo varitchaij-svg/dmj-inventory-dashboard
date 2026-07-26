@@ -657,20 +657,28 @@ function doGet(e) {
 // สร้าง data payload เต็ม (ชุดเดียวกับที่เว็บได้รับผ่าน doGet) — แยกออกมาเป็นฟังก์ชัน
 // เพื่อให้ backupToSupabase_() reuse ได้ ข้อมูลสำรองจะตรงกับที่เว็บเห็นเป๊ะ ไม่ต้องเขียน enrich ซ้ำ
 function buildFullData_() {
-    const products  = readProducts_();
-    const sysQtyMap = readSysQty_();
-    const monthly   = readMonthlySales_();
-    const daily     = readDailySales_();
-    const transfers = readTransfers_();
-    const shipments = readShipments_();
-    const purchases = readPurchases_();
-    const storage   = readStorage_();
-    const orders    = readOrders_();
-    const mtoJobs   = readMtoJobs_();
-    const frontStoreQtys = readFrontStoreCheckedQty_();
-    const qtyLoc    = readQtyByLocation_();
-    const transferHist = readTransferHistory_(); // วันโอนสาย5→หน้าร้านล่าสุด ต่อ SKU
-    const unscannedMap = readUnscannedSalesMap_(); // ขายไม่สแกน (นับสต็อกแล้วของหาย=ขายออก) → บวกเข้า soldQty ไม่แตะยอดเงิน
+    // ── PERF: จับเวลาแต่ละขั้นเพื่อรู้ว่าเวลาไปอยู่ตรงไหนจริง ๆ ──
+    // Date.now() แทบไม่มีต้นทุน · log บรรทัดเดียวตอนจบ (build เกิดเฉพาะตอน cache หมดอายุ)
+    // ดูผลได้ที่ Executions log — ใช้ตัดสินใจว่าจะไปเร่งตรงไหนต่อ
+    const _tStart = Date.now();
+    const _ms = {};
+    let _tPrev = _tStart;
+    const _mark = function (name) { const n = Date.now(); _ms[name] = n - _tPrev; _tPrev = n; };
+
+    const products  = readProducts_();            _mark('products');
+    const sysQtyMap = readSysQty_();              _mark('sysQty');
+    const monthly   = readMonthlySales_();        _mark('monthlySales');
+    const daily     = readDailySales_();          _mark('dailySales');
+    const transfers = readTransfers_();           _mark('transfers');
+    const shipments = readShipments_();           _mark('shipments');
+    const purchases = readPurchases_();           _mark('purchases');
+    const storage   = readStorage_();             _mark('storage');
+    const orders    = readOrders_();              _mark('orders');
+    const mtoJobs   = readMtoJobs_();             _mark('mtoJobs');
+    const frontStoreQtys = readFrontStoreCheckedQty_(); _mark('frontStoreQty');
+    const qtyLoc    = readQtyByLocation_();       _mark('qtyByLocation');
+    const transferHist = readTransferHistory_();  _mark('transferHist'); // วันโอนสาย5→หน้าร้านล่าสุด ต่อ SKU
+    const unscannedMap = readUnscannedSalesMap_(); _mark('unscanned');   // ขายไม่สแกน (นับสต็อกแล้วของหาย=ขายออก) → บวกเข้า soldQty ไม่แตะยอดเงิน
 
     // ── PERF: index purchases/transfers ต่อ SKU ครั้งเดียวก่อนเข้า loop ──
     // เดิม loop สินค้าเรียก purchases.filter()/transfers.filter() สแกน array ทั้งก้อนใหม่ทุกตัว
@@ -694,6 +702,7 @@ function buildFullData_() {
       a.count++;
       a.qty += t.qty;
     });
+    _mark('index');
 
     products.forEach(p => {
       // normalize SKU ก่อน lookup — กัน qty จากชีต "ข้อมูลสินค้า" (เก่า) รั่วมาโชว์
@@ -761,6 +770,8 @@ function buildFullData_() {
         p.adjustmentQty  = adj.qty;
       }
     });
+
+    _mark('enrich');
 
     const mtoMap = {};
     products.filter(p => p.isMTO).forEach(p => {
@@ -845,6 +856,16 @@ function buildFullData_() {
         costRatio:       COST_RATIO,
       }
     };
+
+    _mark('assemble');
+    // สรุปเวลาแต่ละขั้น เรียงจากช้าไปเร็ว — ดูได้ที่ Executions log
+    try {
+      const _parts = Object.keys(_ms)
+        .sort(function (a, b) { return _ms[b] - _ms[a]; })
+        .map(function (k) { return k + '=' + _ms[k]; })
+        .join(' ');
+      Logger.log('[perf] buildFullData_ รวม ' + (Date.now() - _tStart) + 'ms · ' + _parts);
+    } catch (e) {}
 
     return data;
 }
