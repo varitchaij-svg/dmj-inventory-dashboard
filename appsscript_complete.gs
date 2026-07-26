@@ -5465,7 +5465,7 @@ function notiQuotaUsed_(channel) {
 // ปริมาณ order สูง (~5-10 ครั้ง/วัน) เทียบ quota ฟรี 200/เดือนแล้วตึงมาก — ถ้าส่ง 2 ข้อความ/ชุด
 // (mention+carousel) ตามเดิมจะชนเพดานเร็ว → ตัดเหลือ**ข้อความเดียว** (@All + สรุปรายชื่อ/จำนวนเป็น bullet)
 // ยังคง @All ไว้เพราะสำคัญสำหรับพนักงานที่ไม่ถนัดเทคโนโลยี ตัดเฉพาะ flex carousel (สวยแต่แพง) ออก
-function pushOrderBatch_(channel, orders) {
+function pushOrderBatch_(channel, orders, isDaily) {
   if (!orders || !orders.length) return { ok:true, quota:false };
   var show = orders.slice(0, 20);
   var lines = show.map(function(o) {
@@ -5474,9 +5474,39 @@ function pushOrderBatch_(channel, orders) {
     return "• " + (o.name || o.sku || "-") + (qtyNum > 0 ? (" × " + qtyNum) : "");
   });
   if (orders.length > show.length) lines.push("… และอีก " + (orders.length - show.length) + " รายการ");
-  var mentionText = "@All order 🚶 " + orders.length + " รายการ\n" + lines.join("\n");
+  // สรุปรอบวัน vs ออเดอร์นอกเวลา — พาดหัวต่างกัน พนักงานจะได้รู้ว่าต้องรีบแค่ไหน
+  var head = isDaily
+    ? "@All 📋 สรุปของที่ต้องจัด " + orders.length + " รายการ"
+    : "@All 🚶 order เข้าใหม่ " + orders.length + " รายการ";
+  var mentionText = head + "\n" + lines.join("\n");
   return linePush_(channel, [{ type: "text", text: mentionText,
       mention: { mentionees: [{ index: 0, length: 4, type: "all" }] } }]);
+}
+
+// ── รอบสรุปประจำวัน: กลั้นออเดอร์ทั้งวันไว้ส่งทีเดียวตอนเย็น ──────────────
+// เวลาตัดรอบ (ชั่วโมง 0–23) ตั้งผ่าน Script Property NOTI_ORDER_CUTOFF_HOUR — default 16 (4 โมงเย็น)
+// ตั้งเป็น -1 = ปิดโหมดนี้ กลับไปใช้หน้าต่าง coalesce แบบนาที (notiOrderBatchWindowMin_) เหมือนเดิม
+function notiOrderCutoffHour_() {
+  var v = PropertiesService.getScriptProperties().getProperty('NOTI_ORDER_CUTOFF_HOUR');
+  if (v == null || v === '') return 16;
+  var n = parseInt(v, 10);
+  return isNaN(n) ? 16 : n;
+}
+
+// เวลาที่ออเดอร์ใบนี้ "ถึงกำหนดแจ้งเตือน"
+//  - สั่งก่อนเวลาตัด  → รอรวมเป็นสรุปรอบเดียวตอนเวลาตัดของวันนั้น (ไม่กวนทั้งวัน)
+//  - สั่งหลังเวลาตัด  → ส่งทันที (เลยรอบจัดของแล้ว ถ้าไม่บอกเดี๋ยวนั้นจะตกค้างข้ามวัน)
+// คำนวณด้วยการบวก "นาทีที่เหลือจนถึงเวลาตัด" เข้ากับ timestamp ตรง ๆ
+// (ใช้แค่ ชม./นาที ตามเขตเวลาสคริปต์ — เลี่ยงการ parse string เป็น Date ที่เพี้ยนตาม timezone)
+function orderNotiDueMs_(createdMs, cutoffHour) {
+  var tz = Session.getScriptTimeZone();
+  var d  = new Date(createdMs);
+  var h  = parseInt(Utilities.formatDate(d, tz, 'H'), 10) || 0;
+  var mi = parseInt(Utilities.formatDate(d, tz, 'm'), 10) || 0;
+  var nowMins = h * 60 + mi;
+  var cutMins = cutoffHour * 60;
+  if (nowMins >= cutMins) return createdMs;              // เลยเวลาตัดแล้ว → ครบกำหนดทันที
+  return createdMs + (cutMins - nowMins) * 60000;        // รอถึงเวลาตัดของวันเดียวกัน
 }
 
 // หน้าต่าง coalesce order (นาที) ก่อนยอมส่ง — รวมออเดอร์ที่มาห่างกันแต่ยังในหน้าต่างเดียวกันเป็นชุดเดียว
@@ -5598,11 +5628,26 @@ function drainNotiQueue() {
           var t = (x.created instanceof Date) ? x.created.getTime() : now;
           return Math.min(m, t);
         }, now);
-        var ageMin = (now - oldestMs) / 60000;
-        var windowMin = notiOrderBatchWindowMin_(ch);
         var maxBatch = parseInt(PropertiesService.getScriptProperties().getProperty('NOTI_ORDER_BATCH_MAX') || '15', 10) || 15;
-        if (ageMin >= windowMin || orders.length >= maxBatch) {
-          var res = pushOrderBatch_(ch, orders.map(function(x){ return x.payload; }));
+        var cutoffHour = notiOrderCutoffHour_();
+        var useCutoff  = cutoffHour >= 0 && cutoffHour <= 23;
+        var flushNow, isDaily = false;
+        if (useCutoff) {
+          // ครบกำหนดเมื่อ "ใบที่ถึงกำหนดเร็วที่สุด" ถึงเวลา — ใบก่อนเวลาตัดจะถูกกลั้นไว้จนถึงเวลาตัด
+          // ส่วนใบที่สั่งหลังเวลาตัดครบกำหนดทันที แล้วลากใบที่ค้างอยู่ออกไปพร้อมกันในชุดเดียว
+          var dueMs = orders.reduce(function(m, x) {
+            var t = (x.created instanceof Date) ? x.created.getTime() : now;
+            return Math.min(m, orderNotiDueMs_(t, cutoffHour));
+          }, Infinity);
+          flushNow = now >= dueMs || orders.length >= maxBatch;
+          // ใบเก่าสุดสั่งไว้ "ก่อน" เวลาตัด = นี่คือรอบสรุปประจำวัน ไม่ใช่ออเดอร์นอกเวลา
+          isDaily = orderNotiDueMs_(oldestMs, cutoffHour) > oldestMs;
+        } else {
+          var ageMin = (now - oldestMs) / 60000;
+          flushNow = ageMin >= notiOrderBatchWindowMin_(ch) || orders.length >= maxBatch;
+        }
+        if (flushNow) {
+          var res = pushOrderBatch_(ch, orders.map(function(x){ return x.payload; }), isDaily);
           if (res.ok) { orders.forEach(function(x){ sent.push(x.row); }); }
           else { orders.forEach(function(x){ retry.push({ row: x.row, attempts: x.attempts, quota: res.quota }); }); }
           sends++;

@@ -316,7 +316,14 @@ npm run test:coverage # coverage report (tests/helpers.js)
   dedupKey (มี pending คีย์เดียวกันแล้ว → ข้าม กันส่งซ้ำ) · ถ้า enqueue พัง → ส่งตรงกันข้อความหาย
 - **`drainNotiQueue()`** — trigger ทุก 1 นาที ปล่อยคิว · throttle `NOTI_MAX_SENDS_PER_RUN` (default 4)
   push/channel/รอบ · retry/backoff: quota→30 นาที, error→2^att นาที (cap 15), ครบ `NOTI_MAX_ATTEMPTS` (6) → failed
-- **coalesce order แบบ time-window** (`pushOrderBatch_`/`notiOrderBatchWindowMin_`): ปริมาณ order จริง
+- **รอบสรุปประจำวัน (ค่าปัจจุบัน)** — `notiOrderCutoffHour_`/`orderNotiDueMs_`: ออเดอร์ที่สั่ง**ก่อน**
+  `NOTI_ORDER_CUTOFF_HOUR` (default 16 = 4 โมงเย็น) ถูกกลั้นไว้ทั้งวัน ส่งรวมเป็นข้อความเดียวตอนเวลาตัด
+  (พาดหัว "📋 สรุปของที่ต้องจัด") · สั่ง**หลัง**เวลาตัด → ส่งทันทีในรอบ drain ถัดไป (≤1 นาที,
+  พาดหัว "🚶 order เข้าใหม่") เพราะเลยรอบจัดของแล้ว ถ้าไม่บอกเดี๋ยวนั้นจะตกค้างข้ามวัน ·
+  คำนวณด้วยการบวก "นาทีที่เหลือจนถึงเวลาตัด" เข้ากับ timestamp (ใช้แค่ ชม./นาที จาก `Utilities.formatDate`
+  ตามเขตเวลาสคริปต์ — ห้าม parse string เป็น Date จะเพี้ยนตาม timezone) · quota ลดเหลือ ~30 ข้อความ/เดือน
+  + เฉพาะออเดอร์นอกเวลา · ตั้ง `NOTI_ORDER_CUTOFF_HOUR = -1` เพื่อปิดโหมดนี้ กลับไปใช้ time-window ข้างล่าง
+- **coalesce order แบบ time-window** (fallback เมื่อปิดโหมดรอบสรุป — `pushOrderBatch_`/`notiOrderBatchWindowMin_`): ปริมาณ order จริง
   (~5-10/วัน) ชนเพดานฟรี 200/เดือนได้ง่ายถ้าส่งทุกครั้ง จึง (1) **รวมทุกออเดอร์ที่มาห่างกันแต่ยังในหน้าต่างเดียวกัน
   เป็นชุดเดียว** — ไม่ flush ทันที รอจนออเดอร์เก่าสุดในคิวรอครบ `NOTI_ORDER_BATCH_MINUTES` (default 20 นาที)
   หรือคิวยาวเกิน `NOTI_ORDER_BATCH_MAX` (default 15) ค่อย flush (2) **ตัดเหลือข้อความเดียว/ชุด** (@All + bullet
