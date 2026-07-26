@@ -3526,8 +3526,12 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
       showToast("warn", "เลือก PRINT หรือ SKIP ก่อน", "🖨️");
       return;
     }
-    onPatch(order.id, { status: "สำเร็จ" });
-    syncOrderUpdate(order, { status: "สำเร็จ" });
+    // ส่ง preparedQty ไปพร้อม status ใน POST เดียว — เดิมจำนวนที่กรอกยิงแยกตอน blur
+    // ถ้า POST นั้นหลุด/ชน ScriptLock จำนวนจะไม่ถูกเขียนลงชีต พอ refetch ช่อง "จัด"
+    // จะ fallback กลับไปโชว์ยอดที่สั่งแทน (บรรทัด init prepQty) → พนักงานสับสน
+    const prep = Math.max(0, parseInt(prepQtyDraft) || 0);
+    onPatch(order.id, { status: "สำเร็จ", preparedQty: prep });
+    syncOrderUpdate(order, { status: "สำเร็จ", preparedQty: prep });
     showToast("success", "บันทึกแล้ว", "✅", 2500);
   };
 

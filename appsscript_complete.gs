@@ -5147,6 +5147,19 @@ function archiveReceivedShipments() {
   }
 }
 
+// ตั้ง trigger เก็บกวาดรายการที่รับของแล้วออกจากแท็บ "ส่งแล้ว" อัตโนมัติ ทุกวันตี 3
+// รันฟังก์ชันนี้เองครั้งเดียวใน GAS editor เพื่อสร้าง trigger (ชื่อไม่มี _ ต่อท้าย → โผล่ใน dropdown)
+// ผลลัพธ์: หน้า "รายการสั่งของ → 🚚 ส่งแล้ว" ของ frontstore จะเหลือเฉพาะที่ยังรอรับจริง ๆ
+function setupShipmentArchiveTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (t.getHandlerFunction() === "archiveReceivedShipments") ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger("archiveReceivedShipments").timeBased().everyDays(1).atHour(3).create();
+  Logger.log("✅ ตั้ง trigger: archiveReceivedShipments ทุกวัน 03:00");
+  // เก็บกวาดของที่ค้างสะสมอยู่ตอนนี้ให้เลย ไม่ต้องรอถึงตี 3
+  archiveReceivedShipments();
+}
+
 function readPurchases_() {
   const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PURCHASES);
   if (!sh) return [];
