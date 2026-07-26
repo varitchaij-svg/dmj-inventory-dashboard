@@ -159,6 +159,10 @@ declare
   v_products integer;
   v_orders   integer;
 begin
+  -- ขยาย statement_timeout เฉพาะ transaction นี้ (role authenticator/PostgREST default 8s
+  -- ไม่พอสำหรับ payload ก้อนใหญ่) ไม่กระทบ role/query อื่นในระบบ
+  set local statement_timeout = '55s';
+
   v_products := coalesce(jsonb_array_length(p_payload->'products'), 0);
   v_orders   := coalesce(jsonb_array_length(p_payload->'orders'), 0);
 
