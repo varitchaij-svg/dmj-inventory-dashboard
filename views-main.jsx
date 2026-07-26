@@ -3823,6 +3823,7 @@ function CategoryView({ data, role }) {
       </div>
       {orderProduct && <OrderModal product={orderProduct} onClose={() => setOrderProduct(null)}
         pendingOrderQty={pendingOrderQtyMap[(orderProduct.sku||"").trim().toUpperCase()] || 0}
+        role={role}
         onOrderSuccess={(sku, qty) => setLocalPendingOrders(prev => [...prev, {sku, orderQty: qty, status:"รอ"}])}/>}
       <Toast toast={checkToast} onClose={hideCheckToast}/>
 
@@ -3972,7 +3973,7 @@ function CategoryView({ data, role }) {
 // ────────────── Order Modal ──────────────
 const QUICK_QTYS = [24, 36, 48, 60];
 
-function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess, defaultQty }) {
+function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess, defaultQty, role }) {
   useBackHandler(onClose); // Android back = ปิด modal สั่งของ
   const [qty, setQty] = uS(defaultQty > 0 ? defaultQty : 24);
   const [customMode, setCustomMode] = uS(false);
@@ -3981,24 +3982,50 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
   const [done, setDone] = uS(false);
   const [err, setErr] = uS(null);
 
+  // ── role หน้าร้าน: ต้องนับของที่เหลือหน้าร้านก่อน ถึงจะสั่งได้ ──
+  const effRole = role || sessionStorage.getItem("dmj_role") || "";
+  const needFsCheck = effRole === "frontstore";
+  const [fsQty, setFsQty] = uS("");          // "" = ยังไม่กรอก
+  const [fsSaveFailed, setFsSaveFailed] = uS(false);
+  const fsQtyNum = fsQty === "" ? null : Math.max(0, parseInt(fsQty) || 0);
+  const fsBlocked = needFsCheck && fsQtyNum == null;
+
   const sheetUrl = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null;
   const outOfStock = (product.qtyWH !== undefined ? product.qtyWH : product.qty) <= 0;
 
-  const handleSubmit = () => {
-    if (outOfStock) return;
-    if (!sheetUrl) { setErr('ไม่พบ GOOGLE_SHEET_URL'); return; }
-    if (qty < 1) { setErr('กรุณาระบุจำนวน'); return; }
-    setLoading(true); setErr(null);
+  const placeOrder = () => {
     const _sep = sheetUrl.includes('?') ? '&' : '?';
     const url = `${sheetUrl}${_sep}action=order&sku=${encodeURIComponent(product.sku)}&qty=${qty}&orderType=${encodeURIComponent(orderType)}`;
-    fetch(url)
+    return fetch(url)
       .then(r => r.json())
       .then(d => {
         if (d.ok) { setDone(true); onOrderSuccess && onOrderSuccess(product.sku, qty); setTimeout(onClose, 2000); }
         else setErr(d.error || 'เกิดข้อผิดพลาด');
       })
-      .catch(e => setErr(e.message))
-      .finally(() => setLoading(false));
+      .catch(e => setErr(e.message));
+  };
+
+  const handleSubmit = async (skipFsSave) => {
+    if (outOfStock) return;
+    if (!sheetUrl) { setErr('ไม่พบ GOOGLE_SHEET_URL'); return; }
+    if (qty < 1) { setErr('กรุณาระบุจำนวน'); return; }
+    if (needFsCheck && fsQtyNum == null) { setErr('กรุณากรอกจำนวนที่เหลือหน้าร้านก่อน'); return; }
+    setLoading(true); setErr(null);
+    try {
+      // บันทึกจำนวนหน้าร้านที่นับได้ก่อน (เข้าชีต "จำนวนหน้าร้าน" + push ZORT)
+      if (needFsCheck && !skipFsSave) {
+        const res = await syncFrontStoreData([{ sku: product.sku, qty: fsQtyNum }]);
+        if (res && res.success === false) {
+          setFsSaveFailed(true);
+          setErr('บันทึกจำนวนหน้าร้านไม่สำเร็จ (เน็ตอาจหลุด) — ลองใหม่ หรือกดสั่งเลยโดยไม่บันทึก');
+          return;
+        }
+        setFsSaveFailed(false);
+      }
+      await placeOrder();
+    } finally {
+      setLoading(false);
+    }
   };
 
   const btnBase = {borderRadius:8, border:"1px solid var(--bdr)", cursor:"pointer",
@@ -4091,9 +4118,61 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
                 ⚠️ สินค้าหมดสต๊อก ไม่สามารถสั่งได้
               </div>
             ) : (<>
+              {/* ① เช็คของหน้าร้านก่อนสั่ง (role หน้าร้านเท่านั้น) */}
+              {needFsCheck && (
+                <div style={{
+                  marginBottom:16, borderRadius:12, padding:14,
+                  border: fsQtyNum == null ? "2px solid #f59e0b" : "2px solid var(--g-600)",
+                  background: fsQtyNum == null ? "#fffbeb" : "var(--g-50)",
+                }}>
+                  <div style={{fontSize:13, fontWeight:800, color: fsQtyNum == null ? "#92400e" : "var(--g-700)"}}>
+                    ① นับก่อนสั่ง — หน้าร้านเหลือกี่ชิ้น?
+                  </div>
+                  <div style={{fontSize:11, color:"var(--muted)", marginTop:3}}>
+                    ระบบบันทึกไว้ <b>{fmtN(product.qtyStore || 0)}</b> ชิ้น
+                    {product.frontStoreCheckedAt ? <> · เช็คล่าสุด {product.frontStoreCheckedAt}</> : <> · ยังไม่เคยเช็ค</>}
+                  </div>
+                  <div style={{display:"flex", gap:8, alignItems:"center", marginTop:10}}>
+                    <button onClick={() => setFsQty(String(Math.max(0, (fsQtyNum || 0) - 1)))}
+                            style={{...btnBase, width:48, height:48, padding:0, fontSize:22, flexShrink:0}}>−</button>
+                    <input type="number" inputMode="numeric" min={0} value={fsQty}
+                           placeholder="?"
+                           onFocus={ev => ev.target.select()}
+                           onChange={ev => {
+                             const v = ev.target.value;
+                             setFsQty(v === "" ? "" : String(Math.max(0, parseInt(v) || 0)));
+                             setFsSaveFailed(false);
+                           }}
+                           style={{flex:1, minWidth:0, padding:"10px 12px", height:48, boxSizing:"border-box",
+                                   border:"1.5px solid var(--g-400)", borderRadius:10,
+                                   fontSize:20, fontWeight:800, textAlign:"center", fontFamily:"inherit"}}/>
+                    <button onClick={() => setFsQty(String((fsQtyNum || 0) + 1))}
+                            style={{...btnBase, width:48, height:48, padding:0, fontSize:22, flexShrink:0}}>+</button>
+                  </div>
+                  <div style={{display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:6, marginTop:8}}>
+                    {[0, 6, 12, 24].map(q => (
+                      <button key={q} onClick={() => { setFsQty(String(q)); setFsSaveFailed(false); }}
+                              style={{...btnBase, padding:"9px 0",
+                                background: fsQtyNum === q ? "var(--g-700)" : "#fff",
+                                color: fsQtyNum === q ? "#fff" : "var(--text)",
+                                borderColor: fsQtyNum === q ? "var(--g-700)" : "var(--bdr)"}}>
+                        {q === 0 ? "0 หมด" : q}
+                      </button>
+                    ))}
+                  </div>
+                  {fsQtyNum != null && (
+                    <div style={{fontSize:11, color:"var(--muted)", marginTop:8}}>
+                      ✔️ จะบันทึกหน้าร้าน = <b>{fmtN(fsQtyNum)}</b> ชิ้น พร้อมกับตอนกดสั่ง
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Quick qty */}
               <div style={{marginBottom:14}}>
-                <div style={{fontSize:12, fontWeight:600, color:"var(--muted)", marginBottom:8}}>จำนวนที่สั่ง (ชิ้น)</div>
+                <div style={{fontSize:12, fontWeight:600, color:"var(--muted)", marginBottom:8}}>
+                  {needFsCheck ? "② จำนวนที่สั่ง (ชิ้น)" : "จำนวนที่สั่ง (ชิ้น)"}
+                </div>
                 <div style={{display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:6, marginBottom:8}}>
                   {QUICK_QTYS.map(q => (
                     <button key={q} onClick={() => { setQty(q); setCustomMode(false); }}
@@ -4147,13 +4226,27 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
                 </div>
               )}
 
-              <button onClick={handleSubmit} disabled={loading}
+              <button onClick={() => handleSubmit(false)} disabled={loading || fsBlocked}
                       style={{...btnBase, width:"100%", padding:"12px", fontSize:14,
-                              background:"var(--g-700)", color:"#fff", borderColor:"var(--g-700)"}}>
+                              background: fsBlocked ? "var(--g-100)" : "var(--g-700)",
+                              color: fsBlocked ? "var(--muted)" : "#fff",
+                              borderColor: fsBlocked ? "var(--bdr)" : "var(--g-700)",
+                              cursor: fsBlocked ? "not-allowed" : "pointer"}}>
                 {loading
                   ? <><span className="spin" style={{width:14,height:14,borderWidth:2,display:"inline-block",verticalAlign:"middle",marginRight:6}}/> กำลังบันทึก…</>
-                  : `✅ ยืนยันสั่ง ${fmtN(qty)} ชิ้น (${orderType})`}
+                  : fsBlocked
+                    ? "① กรอกจำนวนหน้าร้านก่อน"
+                    : `✅ ยืนยันสั่ง ${fmtN(qty)} ชิ้น (${orderType})`}
               </button>
+
+              {/* บันทึกจำนวนหน้าร้านพัง (เน็ตหลุด) → ยังสั่งของได้ ไม่ให้งานสะดุด */}
+              {fsSaveFailed && !loading && (
+                <button onClick={() => handleSubmit(true)}
+                        style={{...btnBase, width:"100%", padding:"11px", fontSize:13, marginTop:8,
+                                background:"#fff", color:"var(--dang)", borderColor:"#fcc"}}>
+                  ⏭️ สั่งเลยโดยไม่บันทึกจำนวนหน้าร้าน
+                </button>
+              )}
             </>)}
           </div>
         )}
@@ -4877,6 +4970,7 @@ function StockView({ data, role }) {
 
       {modalP && <ProductModal p={modalP} onClose={() => setModalP(null)} allCats={allCats}/>}
       {orderProduct && <OrderModal product={orderProduct} onClose={() => setOrderProduct(null)}
+                                    role={role}
                                     defaultQty={orderProduct.suggestedQty}/>}
     </div>
   );
