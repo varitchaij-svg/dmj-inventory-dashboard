@@ -8119,7 +8119,17 @@ function PurchaseInPanel({ data, showToast, onDone }) {
   const [saving, setSaving]     = uS(false);
 
   const [showAllSup, setShowAllSup] = uS(false);
+  const [supSearch, setSupSearch]   = uS("");   // ค้นหาต่อในลิสต์สินค้าของร้านที่เลือก
+  const [modalP, setModalP]         = uS(null); // สินค้าที่กดดูรูป/รายละเอียด (ProductModal)
   const MAX_CART = 20;   // เพิ่มได้สูงสุด 20 SKU ต่อครั้ง (ตะกร้าซื้อเข้ารอบเดียว)
+
+  // lookup สินค้าเต็ม (สำหรับเปิด ProductModal ดูรูปใหญ่/รายละเอียด)
+  const prodBySku = uM(() => {
+    const m = {};
+    products.forEach(p => { const k = String(p.sku || "").trim().toUpperCase(); if (k) m[k] = p; });
+    return m;
+  }, [products]);
+  const openDetail = (sku) => { const full = prodBySku[String(sku||"").trim().toUpperCase()]; if (full) setModalP(full); };
 
   // ซัพพลายเออร์ที่เคยใช้ + จำนวนสินค้าต่อราย (ใช้ทั้งชิปเลือกและ guide)
   const supplierCount = uM(() => {
@@ -8154,6 +8164,19 @@ function PurchaseInPanel({ data, showToast, onDone }) {
       .sort((a, b) => a.sku.localeCompare(b.sku));
   }, [supplier, products]);
 
+  // ค้นหาต่อในลิสต์ร้านที่เลือก (multi-token AND กับ SKU+ชื่อ)
+  const supplierProductsFiltered = uM(() => {
+    const q = supSearch.trim().toLowerCase();
+    if (!q) return supplierProducts;
+    const toks = q.split(/\s+/).filter(Boolean);
+    return supplierProducts.filter(p => {
+      const hay = p.sku.toLowerCase() + " " + (p.name || "").toLowerCase();
+      return toks.every(t => hay.includes(t));
+    });
+  }, [supplierProducts, supSearch]);
+  // เปลี่ยนร้าน → ล้างคำค้นในลิสต์ร้าน
+  uE(() => { setSupSearch(""); }, [supplier]);
+
   // ค้นหาสินค้า (multi-token AND) — ตัดตัวที่อยู่ในตะกร้าแล้ว + ตัด MTO
   const matches = uM(() => {
     const q = search.trim().toLowerCase();
@@ -8167,7 +8190,7 @@ function PurchaseInPanel({ data, showToast, onDone }) {
       if (cat.includes("Made to Order")) continue;
       const hay = sku.toLowerCase() + " " + String(p.name || "").toLowerCase();
       if (!toks.every(t => hay.includes(t))) continue;
-      out.push({ sku, name: p.name || "", qtyWH: p.qtyWH || 0, qtyStore: p.qtyStore || 0 });
+      out.push({ sku, name: p.name || "", qtyWH: p.qtyWH || 0, qtyStore: p.qtyStore || 0, imageUrl: p.imageUrl || "" });
       if (out.length >= 15) break;
     }
     return out;
@@ -8247,30 +8270,38 @@ function PurchaseInPanel({ data, showToast, onDone }) {
               {matches.map(p => {
                 const inCart = cart.some(c => c.sku === p.sku);
                 return (
-                <button key={p.sku} type="button" onClick={() => addToCart(p)} disabled={inCart}
-                  style={{ display: "flex", alignItems: "center", gap: 10, textAlign: "left",
-                           background: inCart ? "var(--g-50)" : "#fff",
-                           border: "1px solid " + (inCart ? "var(--g-500)" : "var(--bdr)"), borderRadius: 9,
-                           padding: "9px 11px", cursor: inCart ? "default" : "pointer", fontFamily: "inherit", minHeight: 44 }}>
-                  {p.imageUrl ? (
-                    <div style={{ width: 44, height: 44, flexShrink: 0, borderRadius: 8, border: "1px solid var(--bdr)",
-                                  backgroundImage: `url("${p.imageUrl}")`, backgroundSize: "contain",
-                                  backgroundPosition: "center", backgroundRepeat: "no-repeat", backgroundColor: "#fff" }}/>
-                  ) : (
-                    <div style={{ width: 44, height: 44, flexShrink: 0, borderRadius: 8, border: "1px dashed var(--bdr)",
-                                  background: "var(--g-50)", display: "flex", alignItems: "center",
-                                  justifyContent: "center", fontSize: 16, color: "var(--light)" }}>🖼️</div>
-                  )}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      <span style={{ fontFamily: "monospace", color: "var(--g-700)" }}>{p.sku}</span> · {p.name}
+                <div key={p.sku} style={{ display: "flex", alignItems: "center",
+                         background: inCart ? "var(--g-50)" : "#fff",
+                         border: "1px solid " + (inCart ? "var(--g-500)" : "var(--bdr)"), borderRadius: 9, overflow: "hidden" }}>
+                  {/* รูป = กดดูรูปใหญ่/รายละเอียด */}
+                  <button type="button" onClick={() => openDetail(p.sku)}
+                    style={{ border: "none", background: "transparent", padding: "9px 0 9px 11px", cursor: "pointer", flexShrink: 0, lineHeight: 0 }}>
+                    {p.imageUrl ? (
+                      <div style={{ width: 44, height: 44, borderRadius: 8, border: "1px solid var(--bdr)",
+                                    backgroundImage: `url("${p.imageUrl}")`, backgroundSize: "contain",
+                                    backgroundPosition: "center", backgroundRepeat: "no-repeat", backgroundColor: "#fff" }}/>
+                    ) : (
+                      <div style={{ width: 44, height: 44, borderRadius: 8, border: "1px dashed var(--bdr)",
+                                    background: "var(--g-50)", display: "flex", alignItems: "center",
+                                    justifyContent: "center", fontSize: 16, color: "var(--light)" }}>🖼️</div>
+                    )}
+                  </button>
+                  {/* ส่วนที่เหลือ = กดใส่ตะกร้า */}
+                  <button type="button" onClick={() => addToCart(p)} disabled={inCart}
+                    style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0, textAlign: "left",
+                             background: "transparent", border: "none", padding: "9px 11px",
+                             cursor: inCart ? "default" : "pointer", fontFamily: "inherit", minHeight: 44 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        <span style={{ fontFamily: "monospace", color: "var(--g-700)" }}>{p.sku}</span> · {p.name}
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--muted)" }}>คลัง {p.qtyWH} · หน้าร้าน {p.qtyStore}</div>
                     </div>
-                    <div style={{ fontSize: 11, color: "var(--muted)" }}>คลัง {p.qtyWH} · หน้าร้าน {p.qtyStore}</div>
-                  </div>
-                  {inCart
-                    ? <span style={{ flexShrink: 0, fontSize: 12, color: "var(--g-700)", fontWeight: 700, whiteSpace: "nowrap" }}>✓ ในตะกร้า</span>
-                    : <span style={{ flexShrink: 0, fontSize: 20, color: "var(--g-600)", fontWeight: 800 }}>＋</span>}
-                </button>
+                    {inCart
+                      ? <span style={{ flexShrink: 0, fontSize: 12, color: "var(--g-700)", fontWeight: 700, whiteSpace: "nowrap" }}>✓ ในตะกร้า</span>
+                      : <span style={{ flexShrink: 0, fontSize: 20, color: "var(--g-600)", fontWeight: 800 }}>＋</span>}
+                  </button>
+                </div>
                 );
               })}
             </div>
@@ -8380,36 +8411,54 @@ function PurchaseInPanel({ data, showToast, onDone }) {
                            background: cart.length >= MAX_CART ? "var(--g-50)" : "#fff", color: "var(--g-700)",
                            opacity: cart.length >= MAX_CART ? 0.5 : 1 }}>＋ เพิ่มทั้งหมด</button>
               </div>
+              {/* ค้นหาต่อในร้านนี้ (พิมพ์ชื่อ/SKU) */}
+              <div style={{ padding: "8px 11px", borderBottom: "1px solid var(--bdr)", background: "#fff" }}>
+                <input type="text" placeholder="🔍 ค้นหาต่อในร้านนี้ (ชื่อ/SKU)"
+                  value={supSearch} onChange={e => setSupSearch(e.target.value)}
+                  style={{ ...inputStyle, padding: "8px 11px", fontSize: 13 }} />
+              </div>
               <div style={{ display: "flex", flexDirection: "column", maxHeight: 300, overflowY: "auto" }}>
-                {supplierProducts.map(p => {
+                {supplierProductsFiltered.map(p => {
                   const inCart = cartSkus.has(p.sku);
                   return (
-                    <button key={p.sku} type="button" onClick={() => addToCart(p)} disabled={inCart}
-                      style={{ display: "flex", alignItems: "center", gap: 10, textAlign: "left",
-                               background: inCart ? "var(--g-50)" : "#fff", border: "none",
-                               borderBottom: "1px solid var(--bdr)", padding: "9px 11px",
-                               cursor: inCart ? "default" : "pointer", fontFamily: "inherit", minHeight: 46 }}>
-                      {p.imageUrl ? (
-                        <div style={{ width: 40, height: 40, flexShrink: 0, borderRadius: 8, border: "1px solid var(--bdr)",
-                                      backgroundImage: `url("${p.imageUrl}")`, backgroundSize: "contain",
-                                      backgroundPosition: "center", backgroundRepeat: "no-repeat", backgroundColor: "#fff" }}/>
-                      ) : (
-                        <div style={{ width: 40, height: 40, flexShrink: 0, borderRadius: 8, border: "1px dashed var(--bdr)",
-                                      background: "var(--g-50)", display: "flex", alignItems: "center",
-                                      justifyContent: "center", fontSize: 15, color: "var(--light)" }}>🖼️</div>
-                      )}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                          <span style={{ fontFamily: "monospace", color: "var(--g-700)" }}>{p.sku}</span> · {p.name}
+                    <div key={p.sku} style={{ display: "flex", alignItems: "center",
+                             background: inCart ? "var(--g-50)" : "#fff", borderBottom: "1px solid var(--bdr)" }}>
+                      {/* รูป = กดดูรูปใหญ่/รายละเอียด */}
+                      <button type="button" onClick={() => openDetail(p.sku)}
+                        style={{ border: "none", background: "transparent", padding: "9px 0 9px 11px", cursor: "pointer", flexShrink: 0, lineHeight: 0 }}>
+                        {p.imageUrl ? (
+                          <div style={{ width: 40, height: 40, borderRadius: 8, border: "1px solid var(--bdr)",
+                                        backgroundImage: `url("${p.imageUrl}")`, backgroundSize: "contain",
+                                        backgroundPosition: "center", backgroundRepeat: "no-repeat", backgroundColor: "#fff" }}/>
+                        ) : (
+                          <div style={{ width: 40, height: 40, borderRadius: 8, border: "1px dashed var(--bdr)",
+                                        background: "var(--g-50)", display: "flex", alignItems: "center",
+                                        justifyContent: "center", fontSize: 15, color: "var(--light)" }}>🖼️</div>
+                        )}
+                      </button>
+                      {/* ส่วนที่เหลือ = กดใส่ตะกร้า */}
+                      <button type="button" onClick={() => addToCart(p)} disabled={inCart}
+                        style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0, textAlign: "left",
+                                 background: "transparent", border: "none", padding: "9px 11px",
+                                 cursor: inCart ? "default" : "pointer", fontFamily: "inherit", minHeight: 46 }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            <span style={{ fontFamily: "monospace", color: "var(--g-700)" }}>{p.sku}</span> · {p.name}
+                          </div>
+                          <div style={{ fontSize: 11, color: "var(--muted)" }}>คลัง {p.qtyWH} · หน้าร้าน {p.qtyStore}</div>
                         </div>
-                        <div style={{ fontSize: 11, color: "var(--muted)" }}>คลัง {p.qtyWH} · หน้าร้าน {p.qtyStore}</div>
-                      </div>
-                      {inCart
-                        ? <span style={{ flexShrink: 0, fontSize: 12, color: "var(--g-700)", fontWeight: 700, whiteSpace: "nowrap" }}>✓ ในตะกร้า</span>
-                        : <span style={{ flexShrink: 0, fontSize: 20, color: "var(--g-600)", fontWeight: 800 }}>＋</span>}
-                    </button>
+                        {inCart
+                          ? <span style={{ flexShrink: 0, fontSize: 12, color: "var(--g-700)", fontWeight: 700, whiteSpace: "nowrap" }}>✓ ในตะกร้า</span>
+                          : <span style={{ flexShrink: 0, fontSize: 20, color: "var(--g-600)", fontWeight: 800 }}>＋</span>}
+                      </button>
+                    </div>
                   );
                 })}
+                {supplierProductsFiltered.length === 0 && (
+                  <div style={{ padding: "12px", fontSize: 12, color: "var(--muted)", textAlign: "center" }}>
+                    ไม่พบสินค้าในร้านนี้ที่ตรงกับ “{supSearch.trim()}”
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -8451,6 +8500,7 @@ function PurchaseInPanel({ data, showToast, onDone }) {
           บันทึกแล้วจะสร้างใบสั่งซื้อใน ZORT + เพิ่มสต็อกเข้าคลังทันที
         </div>
       </div>
+      {modalP && <ProductModal p={modalP} onClose={() => setModalP(null)} />}
     </Card>
   );
 }
