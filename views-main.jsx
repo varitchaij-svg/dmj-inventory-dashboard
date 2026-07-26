@@ -3972,6 +3972,8 @@ function CategoryView({ data, role }) {
 // ────────────── Product Card ──────────────
 // ────────────── Order Modal ──────────────
 const QUICK_QTYS = [24, 36, 48, 60];
+// เช็คหน้าร้านล่าสุดใหม่กว่านี้ (นาที) = ถือว่ายังสด ไม่ต้องนับซ้ำตอนกดสั่ง
+const FS_CHECK_FRESH_MIN = 120;
 
 function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess, defaultQty, role }) {
   useBackHandler(onClose); // Android back = ปิด modal สั่งของ
@@ -3982,13 +3984,25 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
   const [done, setDone] = uS(false);
   const [err, setErr] = uS(null);
 
-  // ── role หน้าร้าน: ต้องนับของที่เหลือหน้าร้านก่อน ถึงจะสั่งได้ ──
+  // ── role หน้าร้าน/พนักงาน: ต้องนับของที่เหลือหน้าร้านก่อน ถึงจะสั่งได้ ──
   const effRole = role || sessionStorage.getItem("dmj_role") || "";
-  const needFsCheck = effRole === "frontstore";
+  const needFsCheck = effRole === "frontstore" || effRole === "employee";
   const [fsQty, setFsQty] = uS("");          // "" = ยังไม่กรอก
   const [fsSaveFailed, setFsSaveFailed] = uS(false);
   const fsQtyNum = fsQty === "" ? null : Math.max(0, parseInt(fsQty) || 0);
-  const fsBlocked = needFsCheck && fsQtyNum == null;
+
+  // เพิ่งเช็คไปไม่เกิน 2 ชม. → ข้ามการนับได้ (กันนับซ้ำตอนสั่งของรัว ๆ) แต่กด "นับใหม่" ได้เสมอ
+  const fsFreshMin = uM(() => {
+    if (!needFsCheck || !product.frontStoreCheckedAt) return null;
+    if (typeof parseCheckDateMs !== "function") return null;
+    const t = parseCheckDateMs(product.frontStoreCheckedAt);
+    if (isNaN(t)) return null;
+    const mins = Math.floor((Date.now() - t) / 60000);
+    return (mins >= 0 && mins < FS_CHECK_FRESH_MIN) ? mins : null;
+  }, [needFsCheck, product.frontStoreCheckedAt]);
+  const [fsRecount, setFsRecount] = uS(false);      // true = ผู้ใช้ขอนับใหม่ทั้งที่ยังสด
+  const fsSkipped = fsFreshMin != null && !fsRecount;
+  const fsBlocked = needFsCheck && !fsSkipped && fsQtyNum == null;
 
   const sheetUrl = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null;
   const outOfStock = (product.qtyWH !== undefined ? product.qtyWH : product.qty) <= 0;
@@ -4009,11 +4023,11 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
     if (outOfStock) return;
     if (!sheetUrl) { setErr('ไม่พบ GOOGLE_SHEET_URL'); return; }
     if (qty < 1) { setErr('กรุณาระบุจำนวน'); return; }
-    if (needFsCheck && fsQtyNum == null) { setErr('กรุณากรอกจำนวนที่เหลือหน้าร้านก่อน'); return; }
+    if (fsBlocked) { setErr('กรุณากรอกจำนวนที่เหลือหน้าร้านก่อน'); return; }
     setLoading(true); setErr(null);
     try {
       // บันทึกจำนวนหน้าร้านที่นับได้ก่อน (เข้าชีต "จำนวนหน้าร้าน" + push ZORT)
-      if (needFsCheck && !skipFsSave) {
+      if (needFsCheck && fsQtyNum != null && !skipFsSave) {
         const res = await syncFrontStoreData([{ sku: product.sku, qty: fsQtyNum }]);
         if (res && res.success === false) {
           setFsSaveFailed(true);
@@ -4118,8 +4132,31 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
                 ⚠️ สินค้าหมดสต๊อก ไม่สามารถสั่งได้
               </div>
             ) : (<>
-              {/* ① เช็คของหน้าร้านก่อนสั่ง (role หน้าร้านเท่านั้น) */}
-              {needFsCheck && (
+              {/* เพิ่งเช็คไปไม่นาน → ข้ามการนับ แต่ยังกด "นับใหม่" ได้ */}
+              {needFsCheck && fsSkipped && (
+                <div style={{
+                  marginBottom:16, borderRadius:12, padding:"12px 14px",
+                  border:"1.5px solid var(--g-400)", background:"var(--g-50)",
+                  display:"flex", alignItems:"center", gap:10,
+                }}>
+                  <span style={{fontSize:20}}>✅</span>
+                  <div style={{flex:1, minWidth:0}}>
+                    <div style={{fontSize:12, fontWeight:700, color:"var(--g-700)"}}>
+                      เพิ่งเช็คหน้าร้านไป {fsFreshMin < 1 ? "เมื่อครู่นี้" : `${fsFreshMin} นาทีที่แล้ว`}
+                    </div>
+                    <div style={{fontSize:11, color:"var(--muted)", marginTop:1}}>
+                      หน้าร้าน {fmtN(product.qtyStore || 0)} ชิ้น · ไม่ต้องนับซ้ำ สั่งได้เลย
+                    </div>
+                  </div>
+                  <button onClick={() => setFsRecount(true)}
+                          style={{...btnBase, padding:"8px 10px", fontSize:12, flexShrink:0}}>
+                    ✏️ นับใหม่
+                  </button>
+                </div>
+              )}
+
+              {/* ① เช็คของหน้าร้านก่อนสั่ง (role หน้าร้าน/พนักงาน) */}
+              {needFsCheck && !fsSkipped && (
                 <div style={{
                   marginBottom:16, borderRadius:12, padding:14,
                   border: fsQtyNum == null ? "2px solid #f59e0b" : "2px solid var(--g-600)",
@@ -4171,7 +4208,7 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
               {/* Quick qty */}
               <div style={{marginBottom:14}}>
                 <div style={{fontSize:12, fontWeight:600, color:"var(--muted)", marginBottom:8}}>
-                  {needFsCheck ? "② จำนวนที่สั่ง (ชิ้น)" : "จำนวนที่สั่ง (ชิ้น)"}
+                  {needFsCheck && !fsSkipped ? "② จำนวนที่สั่ง (ชิ้น)" : "จำนวนที่สั่ง (ชิ้น)"}
                 </div>
                 <div style={{display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:6, marginBottom:8}}>
                   {QUICK_QTYS.map(q => (
