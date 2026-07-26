@@ -665,20 +665,31 @@ function buildFullData_() {
     let _tPrev = _tStart;
     const _mark = function (name) { const n = Date.now(); _ms[name] = n - _tPrev; _tPrev = n; };
 
-    // อ่านชีตสต็อกครั้งเดียวแล้วแชร์ให้ readProducts_ (self-heal) + readSysQty_
-    // เดิมทั้งคู่อ่านชีตนี้เองคนละรอบ = อ่านชีตเดียวกัน 2 ครั้งต่อการ build 1 ครั้ง
-    const stockRows = readStockSheetRows_();      _mark('stockSheet');
-    const products  = readProducts_(stockRows);   _mark('products');
-    const sysQtyMap = readSysQty_(stockRows);     _mark('sysQty');
-    const monthly   = readMonthlySales_();        _mark('monthlySales');
-    const daily     = readDailySales_();          _mark('dailySales');
-    const transfers = readTransfers_();           _mark('transfers');
-    const shipments = readShipments_();           _mark('shipments');
+    // ── PERF: ดึงทุกชีตที่อ่านแบบ displayValues มาในคำสั่งเดียว (batchGet) ──
+    // เดิมอ่านทีละชีต = วิ่งไป-กลับ Google server หลายรอบ ซึ่งกินเวลา ~96% ของ build
+    // ถ้า batchGet ใช้ไม่ได้ จะได้ null ทุกตัว → ทุก read fallback อ่านเองแบบเดิม
+    // (readPurchases_/readQtyByLocation_ ไม่รวมในนี้ เพราะใช้ getValues() = ค่าดิบ
+    //  ซึ่ง batchGet คืนวันที่เป็นเลข serial ไม่ใช่ Date object → parse เพี้ยน)
+    const B = batchReadFormatted_([
+      SHEET_PRODUCTS, SHEET_PRODUCT_META, SHEET_MONTHLY_SALES, SHEET_DAILY_SALES,
+      SHEET_TRANSFERS_HIST, SHEET_TRANSFERS, SHEET_LOCKS, SHEET_ORDERS,
+      SHEET_FRONTSTORE_QTY,
+    ]);
+    _mark('batchGet');
+
+    // ชีตสต็อกใช้ร่วมกันระหว่าง readProducts_ (self-heal) กับ readSysQty_
+    const stockRows = B[SHEET_PRODUCTS] || readStockSheetRows_();  _mark('stockSheet');
+    const products  = readProducts_(stockRows, B[SHEET_PRODUCT_META]); _mark('products');
+    const sysQtyMap = readSysQty_(stockRows);                      _mark('sysQty');
+    const monthly   = readMonthlySales_(B[SHEET_MONTHLY_SALES]);   _mark('monthlySales');
+    const daily     = readDailySales_(B[SHEET_DAILY_SALES]);       _mark('dailySales');
+    const transfers = readTransfers_(B[SHEET_TRANSFERS_HIST]);     _mark('transfers');
+    const shipments = readShipments_(B[SHEET_TRANSFERS]);          _mark('shipments');
     const purchases = readPurchases_();           _mark('purchases');
-    const storage   = readStorage_();             _mark('storage');
-    const orders    = readOrders_();              _mark('orders');
+    const storage   = readStorage_(B[SHEET_LOCKS]);                _mark('storage');
+    const orders    = readOrders_(B[SHEET_ORDERS]);                _mark('orders');
     const mtoJobs   = readMtoJobs_();             _mark('mtoJobs');
-    const frontStoreQtys = readFrontStoreCheckedQty_(); _mark('frontStoreQty');
+    const frontStoreQtys = readFrontStoreCheckedQty_(B[SHEET_FRONTSTORE_QTY]); _mark('frontStoreQty');
     const qtyLoc    = readQtyByLocation_();       _mark('qtyByLocation');
     const transferHist = readTransferHistory_();  _mark('transferHist'); // วันโอนสาย5→หน้าร้านล่าสุด ต่อ SKU
     const unscannedMap = readUnscannedSalesMap_(); _mark('unscanned');   // ขายไม่สแกน (นับสต็อกแล้วของหาย=ขายออก) → บวกเข้า soldQty ไม่แตะยอดเงิน
@@ -4946,6 +4957,49 @@ function readImageMap_() {
   return map;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// PERF: อ่านหลายชีตในคำสั่งเดียว (Advanced Sheets Service — batchGet)
+// ═══════════════════════════════════════════════════════════════════════════
+// SpreadsheetApp อ่านได้ทีละชีต = วิ่งไป-กลับ Google server ~14 รอบต่อการ build payload
+// 1 ครั้ง ซึ่งจาก timing log กินเวลา ~96% ของทั้งหมด · batchGet ดึงทุกชีตในรอบเดียว
+//
+// ความปลอดภัย: ถ้า Sheets API ใช้ไม่ได้ (ยังไม่เปิด service / โควตา / error ใด ๆ)
+// จะคืน null ทุกชีต → ผู้เรียกทุกตัว fallback ไปอ่านเองแบบเดิมทุกประการ ระบบไม่พัง
+//
+// หมายเหตุสำคัญ: batchGet ตัดเซลล์ว่างท้ายแถวออก ทำให้แต่ละแถวยาวไม่เท่ากัน
+// ต่างจาก getDisplayValues() ที่คืนตารางสี่เหลี่ยมเสมอ → ต้องเติม '' ให้ยาวเท่ากัน
+// ก่อนส่งต่อ มิฉะนั้น r[10] จะเป็น undefined แทน '' (เสี่ยง column index เพี้ยน)
+function batchReadFormatted_(sheetNames) {
+  const out = {};
+  sheetNames.forEach(function (n) { out[n] = null; });
+  try {
+    if (typeof Sheets === 'undefined' || !Sheets.Spreadsheets) return out;
+    const res = Sheets.Spreadsheets.Values.batchGet(SHEET_ID, {
+      // quote ชื่อชีต (มีภาษาไทย/ช่องว่าง) — escape ' ด้วย '' ตามไวยากรณ์ A1 notation
+      ranges: sheetNames.map(function (n) { return "'" + String(n).replace(/'/g, "''") + "'"; }),
+      valueRenderOption: 'FORMATTED_VALUE',   // ให้ตรงกับ getDisplayValues() เดิม
+      majorDimension: 'ROWS',
+    });
+    const vrs = (res && res.valueRanges) || [];
+    vrs.forEach(function (vr, i) {
+      const values = (vr && vr.values) || [];
+      let w = 0;
+      values.forEach(function (r) { if (r.length > w) w = r.length; });
+      out[sheetNames[i]] = values.map(function (r) {
+        if (r.length === w) return r;
+        const c = r.slice();
+        while (c.length < w) c.push('');
+        return c;
+      });
+    });
+  } catch (e) {
+    // ไม่ throw ต่อ — ปล่อยให้ทุกตัว fallback อ่านเองแบบเดิม
+    Logger.log('batchReadFormatted_ ใช้ไม่ได้ (fallback อ่านทีละชีตแบบเดิม): ' + e);
+    sheetNames.forEach(function (n) { out[n] = null; });
+  }
+  return out;
+}
+
 // อ่านชีตสต็อก (SHEET_PRODUCTS) เป็น displayValues ครั้งเดียว เพื่อส่งต่อให้หลายฟังก์ชันใช้ร่วมกัน
 // เดิม readProducts_ (ช่วง self-heal) กับ readSysQty_ ต่างคนต่างอ่านชีตเดียวกันด้วยคำสั่งเดียวกัน
 // = เสียเวลา I/O ซ้ำฟรี ๆ (~1.3 วิ จากที่วัดได้) · คืน null ถ้าอ่านไม่ได้ → ผู้เรียก fallback อ่านเอง
@@ -4960,9 +5014,12 @@ function readStockSheetRows_() {
 }
 
 // stockRowsOpt = แถวของชีตสต็อกที่อ่านมาแล้ว (จาก readStockSheetRows_) — ไม่ส่งมาก็อ่านเองเหมือนเดิม
-function readProducts_(stockRowsOpt) {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PRODUCT_META);
-  const rows = sh.getDataRange().getDisplayValues();
+function readProducts_(stockRowsOpt, metaRowsOpt) {
+  let rows = metaRowsOpt;
+  if (!rows) {
+    const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PRODUCT_META);
+    rows = sh.getDataRange().getDisplayValues();
+  }
   const imageMap = readImageMap_();
   const out = [];
   for (let i = 1; i < rows.length; i++) {
@@ -5058,10 +5115,13 @@ function readSysQty_(stockRowsOpt) {
   return map;
 }
 
-function readMonthlySales_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_MONTHLY_SALES);
-  if (!sh) return { monthLabels: [], monthlyByCat: {}, perSku: {} };
-  const rows = sh.getDataRange().getDisplayValues();
+function readMonthlySales_(rowsOpt) {
+  let rows = rowsOpt;
+  if (!rows) {
+    const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_MONTHLY_SALES);
+    if (!sh) return { monthLabels: [], monthlyByCat: {}, perSku: {} };
+    rows = sh.getDataRange().getDisplayValues();
+  }
   if (rows.length < 3) return { monthLabels: [], monthlyByCat: {}, perSku: {} };
   const monthRow = rows[0];
   const cols = [];
@@ -5098,10 +5158,13 @@ function readMonthlySales_() {
   return { monthLabels, monthlyByCat: byCat, perSku };
 }
 
-function readDailySales_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_DAILY_SALES);
-  if (!sh) return { dayLabels: [], dailyByCat: {} };
-  const rows = sh.getDataRange().getDisplayValues();
+function readDailySales_(rowsOpt) {
+  let rows = rowsOpt;
+  if (!rows) {
+    const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_DAILY_SALES);
+    if (!sh) return { dayLabels: [], dailyByCat: {} };
+    rows = sh.getDataRange().getDisplayValues();
+  }
   if (rows.length < 3) return { dayLabels: [], dailyByCat: {} };
   const dayRow = rows[0];
   const cols = [];
@@ -5133,10 +5196,13 @@ function readDailySales_() {
   return { dayLabels, dailyByCat: byCat };
 }
 
-function readTransfers_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_TRANSFERS_HIST);
-  if (!sh) return [];
-  const rows = sh.getDataRange().getDisplayValues();
+function readTransfers_(rowsOpt) {
+  let rows = rowsOpt;
+  if (!rows) {
+    const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_TRANSFERS_HIST);
+    if (!sh) return [];
+    rows = sh.getDataRange().getDisplayValues();
+  }
   if (rows.length < 3) return [];
   const list = [];
   for (let i = 2; i < rows.length; i++) {
@@ -5160,10 +5226,13 @@ function readTransfers_() {
 
 // อ่านชีต "รายการโอนสินค้า" (SHEET_TRANSFERS) — ของที่ warehouse ส่งออกจากคลัง
 // ใช้เป็น data source ของแท็บ "ส่งแล้ว" ให้ sale/FS ยืนยันรับของ
-function readShipments_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_TRANSFERS);
-  if (!sh) return [];
-  const rows = sh.getDataRange().getDisplayValues();
+function readShipments_(rowsOpt) {
+  let rows = rowsOpt;
+  if (!rows) {
+    const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_TRANSFERS);
+    if (!sh) return [];
+    rows = sh.getDataRange().getDisplayValues();
+  }
   if (rows.length < 3) return [];
   const list = [];
   for (let i = 2; i < rows.length; i++) {
@@ -5316,10 +5385,13 @@ function readPurchases_() {
   return list;
 }
 
-function readStorage_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_LOCKS);
-  if (!sh) return { entries: [], lockMap: {} };
-  const rows = sh.getDataRange().getDisplayValues();
+function readStorage_(rowsOpt) {
+  let rows = rowsOpt;
+  if (!rows) {
+    const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_LOCKS);
+    if (!sh) return { entries: [], lockMap: {} };
+    rows = sh.getDataRange().getDisplayValues();
+  }
   if (rows.length < 2) return { entries: [], lockMap: {} };
   const entries = [], lockMap = {};
   for (let i = 1; i < rows.length; i++) {
@@ -5350,15 +5422,17 @@ function readStorage_() {
   return { entries, lockMap };
 }
 
-function readOrders_() {
-  const ss = SpreadsheetApp.openById(SHEET_ID);
-  const sheet = ss.getSheetByName(SHEET_ORDERS);
-  if (!sheet) {
-    Logger.log("[readOrders_] ERROR: ไม่พบ sheet '" + SHEET_ORDERS + "'");
-    return [];
+function readOrders_(rowsOpt) {
+  let rows = rowsOpt;
+  if (!rows) {
+    const ss = SpreadsheetApp.openById(SHEET_ID);
+    const sheet = ss.getSheetByName(SHEET_ORDERS);
+    if (!sheet) {
+      Logger.log("[readOrders_] ERROR: ไม่พบ sheet '" + SHEET_ORDERS + "'");
+      return [];
+    }
+    rows = sheet.getDataRange().getDisplayValues();
   }
-
-  const rows = sheet.getDataRange().getDisplayValues();
   const result = [];
   let skippedBlank = 0, skippedHeader = 0, skippedNoSku = 0;
 
@@ -5402,10 +5476,13 @@ function readOrders_() {
   return result;
 }
 
-function readFrontStoreCheckedQty_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_FRONTSTORE_QTY);
-  if (!sh) return {};
-  const rows = sh.getDataRange().getDisplayValues();
+function readFrontStoreCheckedQty_(rowsOpt) {
+  let rows = rowsOpt;
+  if (!rows) {
+    const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_FRONTSTORE_QTY);
+    if (!sh) return {};
+    rows = sh.getDataRange().getDisplayValues();
+  }
   const map = {};
   for (let i = 1; i < rows.length; i++) {
     const sku = String(rows[i][1] || "").trim().toUpperCase();
