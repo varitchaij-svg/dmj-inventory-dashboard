@@ -672,6 +672,29 @@ function buildFullData_() {
     const transferHist = readTransferHistory_(); // วันโอนสาย5→หน้าร้านล่าสุด ต่อ SKU
     const unscannedMap = readUnscannedSalesMap_(); // ขายไม่สแกน (นับสต็อกแล้วของหาย=ขายออก) → บวกเข้า soldQty ไม่แตะยอดเงิน
 
+    // ── PERF: index purchases/transfers ต่อ SKU ครั้งเดียวก่อนเข้า loop ──
+    // เดิม loop สินค้าเรียก purchases.filter()/transfers.filter() สแกน array ทั้งก้อนใหม่ทุกตัว
+    // = O(สินค้า × รายการ) ซึ่งกับสินค้า 5,600+ ตัวคือหลายสิบล้านรอบต่อการ build payload 1 ครั้ง
+    // เปลี่ยนเป็น O(สินค้า + รายการ) — ผลลัพธ์เหมือนเดิมทุกประการ
+    // (ใช้ Object.create(null) กัน SKU ที่บังเอิญชนชื่อ property ของ Object.prototype)
+    const purchasesBySku = Object.create(null);
+    purchases.forEach(pu => {
+      (purchasesBySku[pu.sku] || (purchasesBySku[pu.sku] = [])).push(pu);
+    });
+    // เรียงใหม่→เก่า ครั้งเดียวต่อ SKU (comparator เดิม) แทนที่จะ sort ซ้ำทุกสินค้า
+    Object.keys(purchasesBySku).forEach(k => {
+      purchasesBySku[k].sort((a, b) => (a.date < b.date ? 1 : -1));
+    });
+
+    // รวมยอด "ปรับ" ต่อ SKU ครั้งเดียว (เดิม filter transfers ใหม่ทุกสินค้า)
+    const adjustBySku = Object.create(null);
+    transfers.forEach(t => {
+      if (t.type !== 'ปรับ') return;
+      const a = adjustBySku[t.sku] || (adjustBySku[t.sku] = { count: 0, qty: 0 });
+      a.count++;
+      a.qty += t.qty;
+    });
+
     products.forEach(p => {
       // normalize SKU ก่อน lookup — กัน qty จากชีต "ข้อมูลสินค้า" (เก่า) รั่วมาโชว์
       // เมื่อรหัสในชีต "อัพเดทจำนวนสินค้า" พิมพ์ต่าง case/ช่องว่าง (ที่อื่นในระบบใช้ trim().toUpperCase() หมด)
@@ -720,8 +743,7 @@ function buildFullData_() {
       p.frontStoreCheckedQty = fsChecked != null ? fsChecked.qty : null;
       p.frontStoreCheckedAt  = fsChecked != null && fsChecked.at ? fsChecked.at : null;
 
-      const my = purchases.filter(pu => pu.sku === p.sku)
-                          .sort((a, b) => (a.date < b.date ? 1 : -1));
+      const my = purchasesBySku[p.sku] || [];
       if (my.length > 0) {
         p.lastSupplier    = my[0].supplier;
         p.lastStockInDate = my[0].date ? my[0].date.split('-').reverse().join('/') : '';
@@ -733,10 +755,10 @@ function buildFullData_() {
       const th = transferHist[(p.sku || "").toUpperCase()];
       if (th) p.lastTransferDate = th;
 
-      const adjs = transfers.filter(t => t.sku === p.sku && t.type === 'ปรับ');
-      if (adjs.length > 0) {
-        p.adjustments    = adjs.length;
-        p.adjustmentQty  = adjs.reduce((s, a) => s + a.qty, 0);
+      const adj = adjustBySku[p.sku];
+      if (adj) {
+        p.adjustments    = adj.count;
+        p.adjustmentQty  = adj.qty;
       }
     });
 
