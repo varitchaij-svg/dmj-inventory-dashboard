@@ -4004,6 +4004,36 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
   const fsSkipped = fsFreshMin != null && !fsRecount;
   const fsBlocked = needFsCheck && !fsSkipped && fsQtyNum == null;
 
+  // ── auto-save จำนวนที่นับได้ (debounce 2 วิ) → ชีต "จำนวนหน้าร้าน" + push ZORT ทันที ──
+  //  นับแล้วถึงไม่สั่งต่อ (ปิด modal ทิ้ง) ยอดที่นับก็เข้าระบบแล้ว — ไม่เสียของที่นับมา
+  const [fsSavedQty, setFsSavedQty] = uS(null);     // ค่าที่บันทึกเข้าระบบไปแล้ว
+  const [fsSaving, setFsSaving] = uS(false);
+  const fsDirty = needFsCheck && !fsSkipped && fsQtyNum != null && fsQtyNum !== fsSavedQty;
+
+  const saveFsQty = async (n) => {
+    setFsSaving(true);
+    const res = await syncFrontStoreData([{ sku: product.sku, qty: n }]);
+    setFsSaving(false);
+    if (res && res.success === false) { setFsSaveFailed(true); return false; }
+    setFsSavedQty(n); setFsSaveFailed(false);
+    return true;
+  };
+
+  uE(() => {
+    // fsSaveFailed = หยุด auto-retry (กันยิงรัวตอนเน็ตหลุด) — แก้เลขใหม่/กดสั่ง ค่อยลองอีกที
+    if (!fsDirty || fsSaving || loading || fsSaveFailed) return;
+    const t = setTimeout(() => { saveFsQty(fsQtyNum); }, 2000);
+    return () => clearTimeout(t);
+  }, [fsDirty, fsQtyNum, fsSaving, loading, fsSaveFailed]);
+
+  // ปิด modal ก่อน debounce ครบ → ยิงบันทึกทิ้งไว้ (fire-and-forget) ไม่ให้ยอดที่นับหาย
+  const fsFlushRef = React.useRef({});
+  fsFlushRef.current = { sku: product.sku, qty: fsQtyNum, saved: fsSavedQty, dirty: fsDirty };
+  uE(() => () => {
+    const f = fsFlushRef.current;
+    if (f.dirty && f.qty != null) syncFrontStoreData([{ sku: f.sku, qty: f.qty }]);
+  }, []);
+
   const sheetUrl = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null;
   const outOfStock = (product.qtyWH !== undefined ? product.qtyWH : product.qty) <= 0;
 
@@ -4026,15 +4056,13 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
     if (fsBlocked) { setErr('กรุณากรอกจำนวนที่เหลือหน้าร้านก่อน'); return; }
     setLoading(true); setErr(null);
     try {
-      // บันทึกจำนวนหน้าร้านที่นับได้ก่อน (เข้าชีต "จำนวนหน้าร้าน" + push ZORT)
-      if (needFsCheck && fsQtyNum != null && !skipFsSave) {
-        const res = await syncFrontStoreData([{ sku: product.sku, qty: fsQtyNum }]);
-        if (res && res.success === false) {
-          setFsSaveFailed(true);
+      // บันทึกจำนวนหน้าร้านที่นับได้ก่อน (ปกติ auto-save ยิงไปแล้ว — เหลือเคสกดสั่งเร็วกว่า 2 วิ)
+      if (fsDirty && !skipFsSave) {
+        const ok = await saveFsQty(fsQtyNum);
+        if (!ok) {
           setErr('บันทึกจำนวนหน้าร้านไม่สำเร็จ (เน็ตอาจหลุด) — ลองใหม่ หรือกดสั่งเลยโดยไม่บันทึก');
           return;
         }
-        setFsSaveFailed(false);
       }
       await placeOrder();
     } finally {
@@ -4170,7 +4198,7 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
                     {product.frontStoreCheckedAt ? <> · เช็คล่าสุด {product.frontStoreCheckedAt}</> : <> · ยังไม่เคยเช็ค</>}
                   </div>
                   <div style={{display:"flex", gap:8, alignItems:"center", marginTop:10}}>
-                    <button onClick={() => setFsQty(String(Math.max(0, (fsQtyNum || 0) - 1)))}
+                    <button onClick={() => { setFsQty(String(Math.max(0, (fsQtyNum || 0) - 1))); setFsSaveFailed(false); }}
                             style={{...btnBase, width:48, height:48, padding:0, fontSize:22, flexShrink:0}}>−</button>
                     <input type="number" inputMode="numeric" min={0} value={fsQty}
                            placeholder="?"
@@ -4183,7 +4211,7 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
                            style={{flex:1, minWidth:0, padding:"10px 12px", height:48, boxSizing:"border-box",
                                    border:"1.5px solid var(--g-400)", borderRadius:10,
                                    fontSize:20, fontWeight:800, textAlign:"center", fontFamily:"inherit"}}/>
-                    <button onClick={() => setFsQty(String((fsQtyNum || 0) + 1))}
+                    <button onClick={() => { setFsQty(String((fsQtyNum || 0) + 1)); setFsSaveFailed(false); }}
                             style={{...btnBase, width:48, height:48, padding:0, fontSize:22, flexShrink:0}}>+</button>
                   </div>
                   <div style={{display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:6, marginTop:8}}>
@@ -4198,8 +4226,15 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
                     ))}
                   </div>
                   {fsQtyNum != null && (
-                    <div style={{fontSize:11, color:"var(--muted)", marginTop:8}}>
-                      ✔️ จะบันทึกหน้าร้าน = <b>{fmtN(fsQtyNum)}</b> ชิ้น พร้อมกับตอนกดสั่ง
+                    <div style={{fontSize:11, marginTop:8,
+                                 color: fsSaveFailed ? "var(--dang)" : (!fsDirty ? "var(--g-700)" : "var(--muted)")}}>
+                      {fsSaving
+                        ? <>⏳ กำลังบันทึกเข้าระบบ…</>
+                        : fsSaveFailed
+                          ? <>⚠️ บันทึกไม่สำเร็จ — จะลองใหม่ตอนกดสั่ง</>
+                          : !fsDirty
+                            ? <>✅ บันทึกหน้าร้าน <b>{fmtN(fsSavedQty)}</b> ชิ้น เข้าระบบ + ZORT แล้ว</>
+                            : <>✏️ บันทึกอัตโนมัติใน 2 วิ (หรือกดสั่งเลยก็บันทึกทันที)</>}
                     </div>
                   )}
                 </div>
