@@ -3959,6 +3959,43 @@ function setupNotiSystem() {
   Logger.log("   secondary channel: " + (LINE_ACCESS_TOKEN_2 ? "พร้อม (มี LINE_ACCESS_TOKEN_2)" : "ยังไม่ตั้ง → fallback ใช้ช่องทางหลัก"));
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// checkSystemStatus() — เช็คว่าอะไรตั้งไว้แล้ว/ยังต้องรันอะไร (รันเมื่อไหร่ก็ได้ ไม่แก้อะไรเลย)
+// ──────────────────────────────────────────────────────────────────────────
+// รันแล้วดูผลที่ Execution log — บอก 3 อย่าง: ระบบคิวเปิดหรือยัง, trigger ครบไหม,
+// และเวลาตัดรอบแจ้งเตือน order ปัจจุบัน · ปลอดภัย 100% เป็น read-only
+function checkSystemStatus() {
+  var props = PropertiesService.getScriptProperties();
+  var on = props.getProperty('NOTI_QUEUE_ENABLED') === 'true';
+  var trg = {};
+  ScriptApp.getProjectTriggers().forEach(function(t) { trg[t.getHandlerFunction()] = true; });
+  var need = [];
+
+  Logger.log("═══ สถานะระบบ DMJ ═══");
+  Logger.log("ระบบคิวแจ้งเตือน: " + (on ? "✅ เปิดอยู่" : "❌ ปิดอยู่ (ส่งตรงทุกใบแบบเดิม)"));
+  if (!on) need.push("setupNotiSystem()  → เปิดคิว + รอบสรุป 16:00");
+
+  var cut = notiOrderCutoffHour_();
+  Logger.log("เวลาตัดรอบ order: " + (cut >= 0 && cut <= 23
+    ? (cut + ":00 น. (สั่งก่อนเวลานี้รวมส่งทีเดียว · หลังเวลานี้ส่งทันที)")
+    : "ปิด → ใช้หน้าต่างรวม " + notiOrderBatchWindowMin_('primary') + " นาที"));
+  Logger.log("quota เดือนนี้ (primary): " + notiQuotaUsed_('primary') +
+             " / " + (parseInt(props.getProperty('NOTI_MONTHLY_CAP') || '200', 10) || 200));
+
+  Logger.log("── trigger ──");
+  [["drainNotiQueue", "ปล่อยคิวแจ้งเตือน (ทุก 1 นาที)", "setupNotiSystem()"],
+   ["archiveReceivedShipments", "เก็บกวาดของที่รับแล้ว (ทุกวัน 03:00)", "setupShipmentArchiveTrigger()"],
+   ["sweepEmptyShelfLocations", "นำสินค้าออกจากชั้นเมื่อคลัง=0 (จันทร์ 05:00)", "setupShelfSweepTrigger()"]
+  ].forEach(function(x) {
+    Logger.log((trg[x[0]] ? "  ✅ " : "  ❌ ") + x[0] + " — " + x[1]);
+    if (!trg[x[0]]) need.push(x[2] + "  → " + x[1]);
+  });
+
+  Logger.log("═══ สรุป ═══");
+  if (!need.length) Logger.log("🎉 ครบแล้ว ไม่ต้องรันอะไรเพิ่ม");
+  else need.forEach(function(s, i) { Logger.log((i + 1) + ") รัน " + s); });
+}
+
 // ปิดระบบคิว (กลับไปส่งตรงแบบเดิม) + ลบ trigger drain — เผื่ออยาก rollback
 function disableNotiSystem() {
   PropertiesService.getScriptProperties().setProperty('NOTI_QUEUE_ENABLED', 'false');
