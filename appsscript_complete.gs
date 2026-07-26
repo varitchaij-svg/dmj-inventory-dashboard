@@ -665,8 +665,11 @@ function buildFullData_() {
     let _tPrev = _tStart;
     const _mark = function (name) { const n = Date.now(); _ms[name] = n - _tPrev; _tPrev = n; };
 
-    const products  = readProducts_();            _mark('products');
-    const sysQtyMap = readSysQty_();              _mark('sysQty');
+    // อ่านชีตสต็อกครั้งเดียวแล้วแชร์ให้ readProducts_ (self-heal) + readSysQty_
+    // เดิมทั้งคู่อ่านชีตนี้เองคนละรอบ = อ่านชีตเดียวกัน 2 ครั้งต่อการ build 1 ครั้ง
+    const stockRows = readStockSheetRows_();      _mark('stockSheet');
+    const products  = readProducts_(stockRows);   _mark('products');
+    const sysQtyMap = readSysQty_(stockRows);     _mark('sysQty');
     const monthly   = readMonthlySales_();        _mark('monthlySales');
     const daily     = readDailySales_();          _mark('dailySales');
     const transfers = readTransfers_();           _mark('transfers');
@@ -864,7 +867,12 @@ function buildFullData_() {
         .sort(function (a, b) { return _ms[b] - _ms[a]; })
         .map(function (k) { return k + '=' + _ms[k]; })
         .join(' ');
-      Logger.log('[perf] buildFullData_ รวม ' + (Date.now() - _tStart) + 'ms · ' + _parts);
+      // ขนาดชีตสต็อก (แถว×คอลัมน์) — ได้มาฟรีจากข้อมูลที่อ่านไว้แล้ว
+      // ถ้าคอลัมน์กว้างกว่าที่ใช้จริงมาก แปลว่าคุ้มที่จะอ่านเฉพาะคอลัมน์ที่ต้องใช้ในรอบถัดไป
+      const _dim = (stockRows && stockRows.length)
+        ? ' · ชีตสต็อก ' + stockRows.length + 'แถว×' + (stockRows[0] || []).length + 'คอล'
+        : '';
+      Logger.log('[perf] buildFullData_ รวม ' + (Date.now() - _tStart) + 'ms · ' + _parts + _dim);
     } catch (e) {}
 
     return data;
@@ -4938,7 +4946,21 @@ function readImageMap_() {
   return map;
 }
 
-function readProducts_() {
+// อ่านชีตสต็อก (SHEET_PRODUCTS) เป็น displayValues ครั้งเดียว เพื่อส่งต่อให้หลายฟังก์ชันใช้ร่วมกัน
+// เดิม readProducts_ (ช่วง self-heal) กับ readSysQty_ ต่างคนต่างอ่านชีตเดียวกันด้วยคำสั่งเดียวกัน
+// = เสียเวลา I/O ซ้ำฟรี ๆ (~1.3 วิ จากที่วัดได้) · คืน null ถ้าอ่านไม่ได้ → ผู้เรียก fallback อ่านเอง
+function readStockSheetRows_() {
+  try {
+    const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PRODUCTS);
+    return sh ? sh.getDataRange().getDisplayValues() : null;
+  } catch (e) {
+    Logger.log('readStockSheetRows_ error: ' + e);
+    return null;
+  }
+}
+
+// stockRowsOpt = แถวของชีตสต็อกที่อ่านมาแล้ว (จาก readStockSheetRows_) — ไม่ส่งมาก็อ่านเองเหมือนเดิม
+function readProducts_(stockRowsOpt) {
   const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PRODUCT_META);
   const rows = sh.getDataRange().getDisplayValues();
   const imageMap = readImageMap_();
@@ -4976,9 +4998,13 @@ function readProducts_() {
     const seen = {};
     out.forEach(p => { if (p.sku) seen[p.sku.toUpperCase()] = true; });
 
-    const stockSh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PRODUCTS);
-    if (stockSh) {
-      const srows = stockSh.getDataRange().getDisplayValues();
+    // ใช้แถวที่อ่านมาแล้วถ้ามี (กันอ่านชีตเดิมซ้ำ) ไม่มีก็อ่านเองเหมือนเดิม
+    let srows = stockRowsOpt;
+    if (!srows) {
+      const stockSh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PRODUCTS);
+      srows = stockSh ? stockSh.getDataRange().getDisplayValues() : null;
+    }
+    if (srows) {
       for (let i = 1; i < srows.length; i++) {
         const r = srows[i];
         const sku = (r[COL_PROD_SKU - 1] || '').toString().trim();      // B
@@ -5014,10 +5040,14 @@ function readProducts_() {
   return out;
 }
 
-function readSysQty_() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PRODUCTS);
-  if (!sh) return {};
-  const rows = sh.getDataRange().getDisplayValues();
+// stockRowsOpt = แถวของชีตสต็อกที่อ่านมาแล้ว (จาก readStockSheetRows_) — ไม่ส่งมาก็อ่านเองเหมือนเดิม
+function readSysQty_(stockRowsOpt) {
+  let rows = stockRowsOpt;
+  if (!rows) {
+    const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PRODUCTS);
+    if (!sh) return {};
+    rows = sh.getDataRange().getDisplayValues();
+  }
   const map = {};
   for (let i = 2; i < rows.length; i++) {
     const r = rows[i];
