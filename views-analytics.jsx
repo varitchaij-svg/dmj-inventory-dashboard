@@ -1130,6 +1130,17 @@ function WarehouseHomeView({ data, onNav }) {
   // 4) ของที่โอนไปหน้าร้าน — รอรับ / รับไม่ครบ
   const shipPending = uM(() => shipments.filter(s => !s.receivedAt), [shipments]);
   const shipShort   = uM(() => shipments.filter(s => s.receivedAt && s.receivedQty != null && s.receivedQty < s.qty), [shipments]);
+  // 5) ของหิ้ว (ชีตคอลัมน์ A = "หิ้ว") ที่จัดเสร็จแล้ว แต่ยังไม่กด "ส่งแล้ว"
+  //    พนักงานหิ้วของไปหน้าร้านแล้วมักลืมกดในระบบ → สต็อกไม่ถูกโอนคลัง→หน้าร้าน
+  //    (finalizeShip เป็นตัวโอนจริง แล้วลบแถวออกจากชีต) ดังนั้นที่ยังค้างในชีต
+  //    ด้วยสถานะ "สำเร็จ" = ยังไม่ได้กดส่งจริง ๆ ไม่ต้องพึ่ง localStorage
+  //    ตัดตัวที่เครื่องนี้กดส่งไปแล้วออก (localStorage) ให้ตรงกับรายการในหน้า "สรุปสินค้าออกจากคลัง"
+  //    กันเคส deleteOrder พลาด → แถวยังค้างในชีต แต่โอนสต็อกไปแล้ว ตัวเลขจะได้ไม่ค้างกวนใจ
+  const carryToShip = uM(() => {
+    const done = new Set(["สำเร็จ", "completed", "done"]);
+    const shipped = getShippedOrders();
+    return orders.filter(o => o.carryMode === "carry" && done.has(o.status) && !shipped[o.id]);
+  }, [orders]);
 
   // ── หยิบของตามตำแหน่ง (pick path) — จัดกลุ่มออเดอร์ค้างตามล็อค เรียงเดินหยิบรอบเดียว ──
   const skuLoc = uM(() => {
@@ -1167,7 +1178,8 @@ function WarehouseHomeView({ data, onNav }) {
   }, [shipments]);
 
   const nothingPending = pendingOrders.length === 0 && putawayItems.length === 0 &&
-                         shipPending.length === 0 && shipShort.length === 0;
+                         shipPending.length === 0 && shipShort.length === 0 &&
+                         carryToShip.length === 0;
 
   const Tile = ({ emoji, n, label, color, tab, danger }) => (
     <button onClick={tab ? () => onNav(tab) : undefined}
@@ -1194,7 +1206,7 @@ function WarehouseHomeView({ data, onNav }) {
           <span style={{ fontSize: 28 }}>🎉</span>
           <div>
             <div style={{ fontWeight: 800, color: "var(--g-700)" }}>ไม่มีงานค้าง</div>
-            <div style={{ fontSize: 12, color: "var(--muted)" }}>ออเดอร์เตรียมครบ · ของจัดเก็บครบ · หน้าร้านรับครบแล้ว</div>
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>ออเดอร์เตรียมครบ · ของหิ้วกดส่งครบ · ของจัดเก็บครบ · หน้าร้านรับครบแล้ว</div>
           </div>
         </div>
       )}
@@ -1202,6 +1214,8 @@ function WarehouseHomeView({ data, onNav }) {
       {/* ── ไทล์งานค้าง ── */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 22 }}>
         <Tile emoji="📋" n={pendingOrders.length} label="ออเดอร์ต้องเตรียม" color="#1f7f44" tab="orders" />
+        {/* หิ้วไปแล้วแต่ลืมกดส่ง → สต็อกยังไม่ถูกโอนเข้าหน้าร้าน แตะไปหน้า "สรุปสินค้าออกจากคลัง" กดส่งได้เลย */}
+        <Tile emoji="🚶" n={carryToShip.length}   label="ของหิ้วรอกดส่ง"   color="#c2410c" tab="ordersummary" />
         <Tile emoji="📥" n={putawayItems.length}  label="ของยังไม่จัดเก็บ"  color="#a07417" tab="storage" />
         <Tile emoji="📊" n={neverCounted}          label="ล็อคยังไม่เคยนับ"  color="#1f6f8b" tab="stockcount" />
         <Tile emoji="🚚" n={shipPending.length}    label="ของโอนรอหน้าร้านรับ" color="#7a5cc8" />
