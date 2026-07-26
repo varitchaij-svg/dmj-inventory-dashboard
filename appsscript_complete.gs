@@ -7636,8 +7636,12 @@ function completeStockCheckRequest_(reqId, actor) {
 //   ทั้งฟังก์ชันห่อ try/catch ไม่มีทาง throw ออกไปกระทบส่วนอื่นของระบบ
 //
 // เจ้าของต้องทำเองใน GAS editor 1 ครั้ง (clasp push ไม่รันให้):
-//   1. ตั้ง Script Properties: SUPABASE_URL (เช่น https://xxxx.supabase.co)
-//      + SUPABASE_SERVICE_KEY (service_role key จาก Supabase → Project Settings → API)
+//   1. ตั้ง Script Properties: SUPABASE_URL (เช่น https://xxxx.supabase.co — ห้ามมี /rest/v1 ต่อท้าย)
+//      + SUPABASE_SERVICE_KEY = คีย์ service_role แบบ legacy (ขึ้นต้น eyJ...)
+//        จาก Supabase → Project Settings → API Keys → แท็บ "Legacy API keys"
+//        ⚠️ ห้ามใช้ secret key รุ่นใหม่ (sb_secret_...) — Supabase บล็อกเมื่อ User-Agent
+//        ดูเหมือน browser ซึ่ง UrlFetchApp ของ GAS ส่ง Mozilla/5.0 และแก้ไม่ได้
+//        → จะเจอ 401 "Forbidden use of secret API key in browser" เสมอ
 //   2. รัน `setupSupabaseBackup()` 1 ครั้ง (ตั้ง trigger รายวัน 03:00 + เปิด flag)
 //   3. รัน `runSupabaseBackupNow()` เพื่อทดสอบสำรองทันที + ดู Log
 //   rollback: รัน `disableSupabaseBackup()` (ลบ trigger + ปิด flag)

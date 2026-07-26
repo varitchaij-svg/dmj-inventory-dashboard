@@ -29,16 +29,23 @@ Supabase → **Project Settings** →
 **Project URL** (แท็บ *API*) — เช่น `https://xxxx.supabase.co`
 ⚠️ ต้องเป็น URL เปล่า ๆ **ห้ามมี `/rest/v1` ต่อท้าย** และห้ามมี `/` ปิดท้าย
 
-**คีย์ลับ** (แท็บ *API Keys*) — ใช้ได้ 2 แบบ เลือกอย่างใดอย่างหนึ่ง:
+**คีย์ลับ** — ต้องใช้ **`service_role` แบบ legacy เท่านั้น**:
+แท็บ *Legacy API keys* → แถว `service_role` → กด 👁️ reveal (ขึ้นต้น `eyJ...`)
 
-| แบบ | ที่อยู่ | หน้าตา |
-|---|---|---|
-| **Secret key** (แนะนำ) | แท็บ *API Keys* → *Secret keys* → Reveal | `sb_secret_...` |
-| **service_role** (legacy) | แท็บ *Legacy API keys* → แถว `service_role` | `eyJ...` |
+| แบบ | ใช้กับ GAS ได้ไหม |
+|---|---|
+| **`service_role`** (แท็บ *Legacy API keys*) | ✅ **ใช้ตัวนี้** |
+| `sb_secret_...` (แท็บ *API Keys* → Secret keys) | ❌ ไม่ได้ — ดูด้านล่าง |
+| `anon` / `sb_publishable_...` | ❌ ไม่ได้ (ไม่ bypass RLS) |
 
-⚠️ **กับดัก**: คีย์ legacy `anon` กับ `service_role` **ขึ้นต้น `eyJ` เหมือนกัน** —
-ถ้าหยิบ `anon` มาใส่ จะรันได้ถึงขั้นเขียนข้อมูลแล้วเจอ error
-`42501 new row violates row-level security policy` (เพราะ anon ไม่ bypass RLS)
+⚠️ **ทำไม `sb_secret_` ใช้ไม่ได้**: Supabase บล็อก secret key รุ่นใหม่เมื่อ request
+ดูเหมือนมาจาก browser (ตรวจจาก User-Agent) — `UrlFetchApp` ของ GAS ส่ง User-Agent
+ที่ขึ้นต้น `Mozilla/5.0` และ**แก้ไม่ได้** (เป็น header ต้องห้าม) จะเจอ
+`401 Forbidden use of secret API key in browser` เสมอ
+
+⚠️ **กับดักที่ 2**: คีย์ legacy `anon` กับ `service_role` **ขึ้นต้น `eyJ` เหมือนกัน** —
+ถ้าหยิบ `anon` มาใส่ จะรันได้ถึงขั้นเขียนข้อมูลแล้วเจอ
+`42501 new row violates row-level security policy`
 วิธีเช็ก: เอาคีย์ไปวางที่ jwt.io ดู payload ต้องเป็น `"role": "service_role"`
 
 🔒 คีย์นี้เข้าถึงข้อมูลได้เต็มสิทธิ์ — **เก็บใน Script Property เท่านั้น ห้าม commit ลงโค้ด**
