@@ -242,3 +242,10 @@ begin
   );
 end;
 $$;
+
+-- ฟังก์ชันนี้ truncate/เขียนทับตารางสำรองทั้งหมด — ต้องเรียกได้เฉพาะ service_role
+-- (GAS ใช้ service key) ไม่ให้ anon/authenticated ที่หลุดออกไปฝั่ง client เรียกได้
+revoke execute on function public.refresh_backup(jsonb, date, text) from public;
+revoke execute on function public.refresh_backup(jsonb, date, text) from anon;
+revoke execute on function public.refresh_backup(jsonb, date, text) from authenticated;
+grant  execute on function public.refresh_backup(jsonb, date, text) to service_role;
