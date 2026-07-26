@@ -24,9 +24,24 @@
 
 ### 2. หา service key
 
-Supabase → **Project Settings → API** →
-- `Project URL` (เช่น `https://xxxx.supabase.co`)
-- `service_role` key (อยู่ใต้ **Project API keys** — **เป็นความลับ ห้าม commit ลงโค้ด**)
+Supabase → **Project Settings** →
+
+**Project URL** (แท็บ *API*) — เช่น `https://xxxx.supabase.co`
+⚠️ ต้องเป็น URL เปล่า ๆ **ห้ามมี `/rest/v1` ต่อท้าย** และห้ามมี `/` ปิดท้าย
+
+**คีย์ลับ** (แท็บ *API Keys*) — ใช้ได้ 2 แบบ เลือกอย่างใดอย่างหนึ่ง:
+
+| แบบ | ที่อยู่ | หน้าตา |
+|---|---|---|
+| **Secret key** (แนะนำ) | แท็บ *API Keys* → *Secret keys* → Reveal | `sb_secret_...` |
+| **service_role** (legacy) | แท็บ *Legacy API keys* → แถว `service_role` | `eyJ...` |
+
+⚠️ **กับดัก**: คีย์ legacy `anon` กับ `service_role` **ขึ้นต้น `eyJ` เหมือนกัน** —
+ถ้าหยิบ `anon` มาใส่ จะรันได้ถึงขั้นเขียนข้อมูลแล้วเจอ error
+`42501 new row violates row-level security policy` (เพราะ anon ไม่ bypass RLS)
+วิธีเช็ก: เอาคีย์ไปวางที่ jwt.io ดู payload ต้องเป็น `"role": "service_role"`
+
+🔒 คีย์นี้เข้าถึงข้อมูลได้เต็มสิทธิ์ — **เก็บใน Script Property เท่านั้น ห้าม commit ลงโค้ด**
 
 ### 3. ตั้ง Script Properties ใน GAS
 
