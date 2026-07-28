@@ -1017,7 +1017,49 @@
 </style>
 <link rel="preconnect" href="https://unpkg.com" crossorigin>
 <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="preconnect" href="https://script.google.com">
 <script src="config.js"></script>
+
+<!-- ════════════════════════════════════════════════════════════════════
+     PERF: เริ่มโหลด "ข้อมูล" + "ไฟล์ JSX" ทันทีตั้งแต่ต้นหน้า
+     ════════════════════════════════════════════════════════════════════
+     เดิมทุกอย่างต่อคิวกัน: โหลด Babel 3MB → โหลด+compile JSX 1.1MB →
+     React mount → ค่อยยิงขอข้อมูลจาก GAS (~7 วิ) = ผู้ใช้รอยาวมากตอนเข้าครั้งแรก
+     ทั้งที่การขอข้อมูลไม่ต้องรอ Babel เลย · ยิงตั้งแต่ตรงนี้ทำให้เวลา GAS
+     เดินขนานไปกับการโหลด/compile แทนที่จะต่อคิว
+     ทุกอย่างห่อ try/catch + ล้มเหลวแล้วคืน null → ฝั่งแอปยิงเองตามปกติ ไม่พัง
+-->
+<script>
+(function () {
+  'use strict';
+
+  /* (1) ข้อมูลจาก GAS — ตัวที่กินเวลานานสุดในเส้นทาง เริ่มก่อนเลย
+         ยิงเฉพาะเมื่อมี role อยู่แล้ว (เคยล็อกอินไว้) เพื่อให้ตรงกับเงื่อนไขในแอป
+         ที่ว่า `if (!role) return;` — คนที่ยังไม่ล็อกอินจะได้ไม่ไปปลุก GAS ฟรี ๆ */
+  try {
+    var hasRole = false;
+    try { hasRole = !!sessionStorage.getItem('dmj_role'); } catch (_) {}
+    if (hasRole && typeof _SHEET_URL === 'string' && _SHEET_URL) {
+      var u = _SHEET_URL + (_SHEET_URL.indexOf('?') >= 0 ? '&' : '?')
+            + '_t=' + Date.now() + '&fresh=1';
+      var ctl = ('AbortController' in window) ? new AbortController() : null;
+      var to  = setTimeout(function () { try { ctl && ctl.abort(); } catch (_) {} }, 35000);
+      window._dataPrefetch = fetch(u, ctl ? { signal: ctl.signal } : undefined)
+        .then(function (r) { clearTimeout(to); return r.json(); })
+        .catch(function () { clearTimeout(to); return null; });  /* พังก็ไม่เป็นไร แอปยิงเอง */
+    }
+  } catch (_) {}
+
+  /* (2) ไฟล์ JSX ทั้ง 4 — เดิมโหลดต่อกันทีละไฟล์ (ui → views → app)
+         ยิงพร้อมกันตั้งแต่ตอนนี้ พอ Babel พร้อมก็ compile ได้เลยไม่ต้องรอ network */
+  try {
+    window._jsxPre = {};
+    ['ui.jsx', 'views-main.jsx', 'views-analytics.jsx', 'app.jsx'].forEach(function (s) {
+      try { window._jsxPre[s] = fetch(s); } catch (_) {}
+    });
+  } catch (_) {}
+}());
+</script>
 </head>
 <body>
   <div id="root">
@@ -1061,7 +1103,16 @@
   /* fetch + cache check + compile → คืน code string (ไม่ inject)
      แยกออกมาเพื่อให้ views-main + views-analytics compile พร้อมกันได้ */
   async function compileJsx(src) {
-    var resp = await fetch(src);
+    /* ใช้ response ที่เริ่มโหลดไว้ตั้งแต่ต้นหน้า (ดู script ใน <head>) ถ้ามี
+       เคลียร์ทิ้งหลังหยิบ เพราะ body ของ Response อ่านได้ครั้งเดียว */
+    var pre = null;
+    try {
+      if (window._jsxPre && window._jsxPre[src]) {
+        pre = window._jsxPre[src];
+        window._jsxPre[src] = null;
+      }
+    } catch (_) {}
+    var resp = await (pre || fetch(src));
     /* ETag หรือ Last-Modified จาก Cloudflare — อ่านได้โดยไม่ต้องอ่าน body */
     var etag = resp.headers.get('etag') || resp.headers.get('last-modified') || '';
 
