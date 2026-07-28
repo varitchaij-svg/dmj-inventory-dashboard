@@ -1034,12 +1034,20 @@
   'use strict';
 
   /* (1) ข้อมูลจาก GAS — ตัวที่กินเวลานานสุดในเส้นทาง เริ่มก่อนเลย
-         ยิงเฉพาะเมื่อมี role อยู่แล้ว (เคยล็อกอินไว้) เพื่อให้ตรงกับเงื่อนไขในแอป
-         ที่ว่า `if (!role) return;` — คนที่ยังไม่ล็อกอินจะได้ไม่ไปปลุก GAS ฟรี ๆ */
-  try {
-    var hasRole = false;
-    try { hasRole = !!sessionStorage.getItem('dmj_role'); } catch (_) {}
-    if (hasRole && typeof _SHEET_URL === 'string' && _SHEET_URL) {
+         ทำเป็นฟังก์ชัน idempotent (เรียกซ้ำได้ ไม่ยิงซ้ำ) เพราะมี 2 จังหวะที่ต้องเรียก:
+         (ก) ตอนโหลดหน้า ถ้ามี role ค้างจากรอบก่อน (refresh หน้าโดยไม่ปิดแท็บ)
+         (ข) ตอนผู้ใช้ "กดเลือกตำแหน่ง" ที่หน้า login — เรียกจาก app.jsx (LoginScreen)
+         ต้องมีจังหวะ (ข) ด้วย เพราะ sessionStorage หายทุกครั้งที่ปิดแอป/ปิดแท็บ
+         (โดยเฉพาะ PWA มือถือที่พนักงานเปิด-ปิดทุกกะ) → แทบทุกครั้งที่เปิดแอปจริง
+         จะไม่มี role ค้างเลย ถ้าไม่เรียกตอนกดเลือกตำแหน่งด้วย prefetch จะไม่ทำงาน
+         แทบทุกครั้ง (ตรงตามที่ผู้ใช้แจ้ง: "กดเลือกตำแหน่งแล้วโหลดนาน")
+         ข้อมูลที่ endpoint นี้คืนไม่ได้ผูกกับ role (payload เดียวกันทุกคน)
+         จึงยิงได้ทันทีโดยไม่ต้องรอรู้ role จริงก่อน — ให้เวลา GAS ซ้อนทับกับเวลา
+         ที่ผู้ใช้กำลังพิมพ์/ยืนยัน PIN (กรณี owner) */
+  window._prefetchData = function () {
+    try {
+      if (window._dataPrefetch) return; // กันยิงซ้ำถ้าเรียกซ้ำ
+      if (typeof _SHEET_URL !== 'string' || !_SHEET_URL) return;
       var u = _SHEET_URL + (_SHEET_URL.indexOf('?') >= 0 ? '&' : '?')
             + '_t=' + Date.now() + '&fresh=1';
       var ctl = ('AbortController' in window) ? new AbortController() : null;
@@ -1047,7 +1055,10 @@
       window._dataPrefetch = fetch(u, ctl ? { signal: ctl.signal } : undefined)
         .then(function (r) { clearTimeout(to); return r.json(); })
         .catch(function () { clearTimeout(to); return null; });  /* พังก็ไม่เป็นไร แอปยิงเอง */
-    }
+    } catch (_) {}
+  };
+  try {
+    if (sessionStorage.getItem('dmj_role')) window._prefetchData();
   } catch (_) {}
 
   /* (2) ไฟล์ JSX ทั้ง 4 — เดิมโหลดต่อกันทีละไฟล์ (ui → views → app)
