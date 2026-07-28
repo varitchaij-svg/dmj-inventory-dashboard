@@ -2301,6 +2301,104 @@ function exploreZortQuotations() {
   Logger.log("──────── เสร็จ — copy log ทั้งหมดส่งกลับมา ────────");
 }
 
+// ─── AddQuotation payload explorer — สร้างใบทดสอบจริงแล้วลบทิ้งทันที (test-then-void) ────
+// ทำไมต้อง "สร้างจริงแล้วลบ" แทนอ่านอย่างเดียว: /Quotation/AddQuotation ไม่มีเอกสารบอกชื่อ field
+// ที่แน่ชัด (ต่างจาก Order ที่มี POS_ZORT_FIELDS ยืนยันแล้ว) การเดา field เพื่อสร้างระบบออกใบเสนอราคา
+// ที่กระทบเงิน/ลูกค้าจริงเสี่ยงเกินไป — mirror pattern เดียวกับ exploreProductTag()
+// (สร้างทดสอบ → อ่านกลับ → ลบทิ้ง ไม่เหลือขยะ) ใช้ SKU สินค้าจริงที่มีอยู่แล้ว (ไม่กระทบสต็อก
+// เพราะ Quotation ไม่ตัดสต็อกใน ZORT) รันเองใน GAS editor 1 ครั้ง แล้วส่ง Execution log ทั้งหมดกลับมา
+function exploreZortAddQuotation() {
+  const H = zortHeaders_();
+  const jsonHeaders = Object.assign({}, H, { "Content-Type": "application/json" });
+
+  // 1) หา SKU จริงสักตัวจากชีตสต็อกมาใช้ทดสอบ (กันพลาดเรื่อง SKU ไม่มีอยู่จริง)
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const stockSh = ss.getSheetByName(SHEET_PRODUCTS);
+  const stockRows = stockSh ? stockSh.getDataRange().getValues() : [];
+  let testSku = "", testName = "สินค้าทดสอบ";
+  for (let i = 1; i < stockRows.length; i++) {
+    const sku = String(stockRows[i][1] || "").trim();
+    if (sku) { testSku = sku; testName = String(stockRows[i][2] || testName).trim(); break; }
+  }
+  if (!testSku) { Logger.log("❌ ไม่เจอ SKU ในชีตสต็อกเลย หาสินค้าทดสอบไม่ได้"); return; }
+  Logger.log("ใช้สินค้าทดสอบ: " + testSku + " (" + testName + ")");
+
+  // 2) ลองยิง AddQuotation ด้วย payload รูปแบบเดียวกับ AddOrder (มี field ลูกค้า+list+discount)
+  //    เผื่อ ZORT ใช้ schema ต่างกัน — ลอง field ชื่อที่เป็นไปได้ให้ครบในก้อนเดียว แล้วดูว่า field ไหน
+  //    ถูก echo กลับมาจริง (นั่นคือ field ที่ ZORT รู้จัก)
+  const payload = {
+    date: Utilities.formatDate(new Date(), "Asia/Bangkok", "dd/MM/yyyy"),
+    customername: "ทดสอบ Explore (ลบอัตโนมัติ)",
+    customertaxid: "0105500000000",
+    customerbranch: "สำนักงานใหญ่",
+    customerbranchcode: "00000",
+    customeraddress: "ที่อยู่ทดสอบ",
+    customerphone: "0800000000",
+    customeremail: "test@example.com",
+    remark: "ทดสอบสำรวจ field (ลบอัตโนมัติหลังรัน)",
+    discount: "6%",
+    tag: ["ทดสอบเซล"],
+    channel: "ทดสอบ",
+    list: [{
+      sku: testSku,
+      name: testName + " (ทดสอบ)",
+      number: 1,
+      pricepernumber: 10,
+      price: 10,
+      totalprice: 10,
+    }],
+  };
+  Logger.log("payload ที่ส่ง: " + JSON.stringify(payload));
+
+  const res = UrlFetchApp.fetch(ZORT_BASE + "/Quotation/AddQuotation", {
+    method: "post", headers: jsonHeaders, payload: JSON.stringify(payload), muteHttpExceptions: true,
+  });
+  Logger.log("AddQuotation HTTP " + res.getResponseCode());
+  const raw = res.getContentText();
+  Logger.log("AddQuotation raw response: " + raw.substring(0, 2000));
+
+  let json = {};
+  try { json = JSON.parse(raw); } catch (e) { Logger.log("⚠️ response ไม่ใช่ JSON: " + e); }
+  Logger.log("top-level keys: " + JSON.stringify(Object.keys(json)));
+
+  const qId = json.id || json.quotationid || json.quotationId || null;
+  const qNumber = json.number || json.quotationnumber || json.quotationNumber || null;
+  Logger.log("👉 id ที่ได้กลับ: " + qId + " | number ที่ได้กลับ: " + qNumber);
+
+  // 3) ถ้าสร้างสำเร็จ → ดึง GetQuotationDetail มาดู full schema (โดยเฉพาะ list/discount ที่ echo กลับ)
+  if (qId != null || qNumber) {
+    Utilities.sleep(1000);
+    const idParam = qId != null ? qId : qNumber;
+    const detRes = UrlFetchApp.fetch(ZORT_BASE + "/Quotation/GetQuotationDetail?id=" + encodeURIComponent(idParam),
+      { method: "get", headers: H, muteHttpExceptions: true });
+    Logger.log("GetQuotationDetail HTTP " + detRes.getResponseCode());
+    const detRaw = detRes.getContentText();
+    Logger.log("GetQuotationDetail raw: " + detRaw.substring(0, 2500));
+    try {
+      const detJson = JSON.parse(detRaw);
+      const d = detJson.quotation || detJson.data || detJson;
+      Logger.log("detail keys: " + JSON.stringify(Object.keys(d)));
+      Object.keys(d).forEach(k => {
+        if (Array.isArray(d[k]) && d[k].length && typeof d[k][0] === 'object') {
+          Logger.log(`detail.${k}[0] keys: ` + JSON.stringify(Object.keys(d[k][0])));
+          Logger.log(`detail.${k}[0] sample: ` + JSON.stringify(d[k][0]));
+        }
+      });
+    } catch (e) { Logger.log("⚠️ อ่าน detail JSON ไม่ได้: " + e); }
+  } else {
+    Logger.log("⚠️ ไม่ได้ id/number กลับมา — AddQuotation อาจ fail หรือ field ที่ส่งไปผิด ดู raw response ด้านบน");
+  }
+
+  // 4) ลบใบทดสอบทิ้ง (ใช้ helper เดิมที่รองรับหลาย transport อยู่แล้ว)
+  if (qId != null || qNumber) {
+    try {
+      const delResult = voidZortQuotation_(qId, qNumber, "explore-test");
+      Logger.log("ลบใบทดสอบ: " + delResult.getContent());
+    } catch (e) { Logger.log("⚠️ ลบใบทดสอบไม่สำเร็จ (ลบเองใน ZORT ถ้าเจอ number: " + qNumber + "): " + e); }
+  }
+  Logger.log("──────── เสร็จ — copy log ทั้งหมดตั้งแต่ต้นส่งกลับมา ────────");
+}
+
 // ─── Quotation conversion report per salesperson (READ-ONLY) ────────────────
 // นับใบเสนอราคา 90 วัน แยกตามเซล: เสนอกี่ใบ, ปิดได้ (Success) กี่ใบ, กี่ %, มูลค่าเสนอ vs ปิดได้
 // + แจกแจง status ทุกค่า (ไม่เดาว่า Success/Pending/Voided หมายถึงอะไร) · รันเองแล้วส่ง log กลับมา
