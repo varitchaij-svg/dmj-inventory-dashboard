@@ -6733,14 +6733,14 @@ function QuoteFollowupView() {
 
   const handleApprove = async (q) => {
     if (approvingId || voidingId) return;
-    if (!window.confirm(`อนุมัติใบเสนอราคา ${q.number || ""}\n"${q.customer}" (${(Number(q.amount) || 0).toLocaleString()} ฿)\n\nระบบจะสร้างออเดอร์ขายจริงใน ZORT (ตัดสต็อก) ตามรายการในใบนี้ แล้วปิดใบเสนอราคาทิ้ง — ยืนยัน?`)) return;
+    if (!window.confirm(`อนุมัติใบเสนอราคา ${q.number || ""}\n"${q.customer}" (${(Number(q.amount) || 0).toLocaleString()} ฿)\n\nZORT จะสร้างออเดอร์ขายจริงให้อัตโนมัติ (ตัดสต็อก) — ยืนยัน?`)) return;
     setApprovingId(q.id || q.number);
     const r = await syncApproveQuotation(q.id, q.number);
     setApprovingId(null);
     if (r && r.success) {
       const d = r.data || {};
-      showToast("success", `อนุมัติแล้ว → ออเดอร์ ${d.orderNumber || ""}${d.quotationVoided ? "" : " (ปิดใบเสนอราคาเดิมไม่สำเร็จ ต้องปิดเองใน ZORT)"}`, "✓");
-      setItems(prev => prev.map(x => (x.id || x.number) === (q.id || q.number) ? { ...x, status: d.quotationVoided ? "Voided" : x.status } : x));
+      showToast("success", `อนุมัติแล้ว → ออเดอร์ ${d.orderNumber || ""}`, "✓");
+      setItems(prev => prev.map(x => (x.id || x.number) === (q.id || q.number) ? { ...x, status: "Success" } : x));
       load();
     } else { showToast("error", "อนุมัติไม่สำเร็จ: " + ((r && r.error) || "ไม่ทราบสาเหตุ"), "❌"); }
   };
