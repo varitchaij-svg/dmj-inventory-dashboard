@@ -2644,6 +2644,82 @@ function exploreZortApproveQuotation() {
   Logger.log("──────── เสร็จ — copy log ทั้งหมดตั้งแต่ต้นส่งกลับมา ────────");
 }
 
+// ─── สำรวจแก้บั๊ก "มูลค่ารวมสุทธิ" (amount) ขึ้น 0 ในหน้า ZORT ─────────────────────
+// เจ้าของทดสอบสร้างใบเสนอราคาจริงผ่านเว็บเรา — line item ราคาถูกต้อง (3,000) แต่ยอดรวม
+// ("มูลค่ารวมสุทธิ"/amount) ในหน้า ZORT ขึ้น 0 · ย้อนดู log การทดสอบก่อนหน้า
+// (exploreZortAddQuotationV2) พบว่า amount/amount_pretax/vatamount เป็น 0 มาตั้งแต่รอบแรกแล้ว
+// (ตอนนั้นพลาดไม่ได้สังเกต เพราะโฟกัสแค่ field ลูกค้า/หมายเหตุ) — สงสัยว่า AddQuotation ไม่คำนวณ
+// ยอดรวมหัวเอกสารจาก list[].totalprice ให้อัตโนมัติ ต้องส่ง field ยอดรวมเข้าไปเองที่ระดับบนสุด
+// ทดสอบส่ง amount/amount_pretax/vatamount/vattype/vatpercent explicit ที่ header แล้วดูว่า
+// GetQuotationDetail อ่านกลับมาไม่เป็น 0 ไหม — ถ้าตัวไหนได้ผล จะเอาไปแก้ createQuotation ต่อ
+function exploreZortQuotationAmountFix() {
+  const H = zortHeaders_();
+  const jsonHeaders = Object.assign({}, H, { "Content-Type": "application/json" });
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const stockSh = ss.getSheetByName(SHEET_PRODUCTS);
+  const stockRows = stockSh ? stockSh.getDataRange().getValues() : [];
+  let testSku = "", testName = "สินค้าทดสอบ";
+  for (let i = 1; i < stockRows.length; i++) {
+    const sku = String(stockRows[i][1] || "").trim();
+    if (sku) { testSku = sku; testName = String(stockRows[i][2] || testName).trim(); break; }
+  }
+  if (!testSku) { Logger.log("❌ ไม่เจอ SKU ในชีตสต็อกเลย"); return; }
+
+  const dateStr = Utilities.formatDate(new Date(), "Asia/Bangkok", "dd/MM/yyyy");
+  const price = 1000, qty = 1;
+  const grand = price * qty;                     // ไม่เข้าเงื่อนไขขายส่ง (ชิ้น<6, ยอด<10000) → grand = ราคาเต็ม
+  const preVat = Math.round(grand / 1.07 * 100) / 100;
+  const vat = Math.round((grand - preVat) * 100) / 100;
+
+  function baseList() {
+    return [{ sku: testSku, name: testName + " (ทดสอบยอดรวม)", number: qty, pricepernumber: price, totalprice: grand }];
+  }
+  function getDetail(qId, qNumber) {
+    const idParam = qId != null ? qId : qNumber;
+    const r = UrlFetchApp.fetch(ZORT_BASE + "/Quotation/GetQuotationDetail?id=" + encodeURIComponent(idParam),
+      { method: "get", headers: H, muteHttpExceptions: true });
+    try { return JSON.parse(r.getContentText() || "{}"); } catch (e) { return {}; }
+  }
+
+  const variants = [
+    { label: "baseline (เหมือน createQuotation ปัจจุบัน — ไม่ส่ง amount)", extra: {} },
+    { label: "+ amount เฉย ๆ", extra: { amount: grand } },
+    { label: "+ amount + amount_pretax + vatamount", extra: { amount: grand, amount_pretax: preVat, vatamount: vat } },
+    { label: "+ vattype:1 + vatpercent:7 (ไม่ส่ง amount)", extra: { vattype: 1, vatpercent: 7 } },
+    { label: "+ ทุกอย่างรวมกัน", extra: { amount: grand, amount_pretax: preVat, vatamount: vat, vattype: 1, vatpercent: 7, discount: "0%" } },
+  ];
+
+  for (const v of variants) {
+    const payload = Object.assign({
+      date: dateStr,
+      customername: "ทดสอบ AmountFix (ลบอัตโนมัติ)",
+      description: "ทดสอบแก้บั๊กยอดรวม 0 — " + v.label,
+      list: baseList(),
+    }, v.extra);
+    Logger.log("▶ [" + v.label + "] payload=" + JSON.stringify(payload));
+    const res = UrlFetchApp.fetch(ZORT_BASE + "/Quotation/AddQuotation", {
+      method: "post", headers: jsonHeaders, payload: JSON.stringify(payload), muteHttpExceptions: true,
+    });
+    let json = {};
+    try { json = JSON.parse(res.getContentText() || "{}"); } catch (e) {}
+    const det = json.detail || {};
+    const qId = det.id != null ? det.id : (json.resDesc && !isNaN(Number(json.resDesc)) ? Number(json.resDesc) : null);
+    const qNumber = det.number || json.resDesc2 || null;
+    if (qId == null && !qNumber) { Logger.log("   ❌ สร้างไม่สำเร็จ: " + res.getContentText()); continue; }
+    Utilities.sleep(600);
+    const after = getDetail(qId, qNumber);
+    Logger.log("   → " + qNumber + " อ่านกลับ: amount=" + after.amount + " amount_pretax=" + after.amount_pretax + " vatamount=" + after.vatamount +
+      (after.amount > 0 ? "   ✅✅✅ ไม่เป็น 0 แล้ว!" : "   ⚠️ ยังเป็น 0"));
+    try {
+      const delResult = voidZortQuotation_(qId, qNumber, "explore-amountfix-cleanup");
+      Logger.log("   ลบใบทดสอบ: " + delResult.getContent());
+    } catch (e) { Logger.log("   ⚠️ ลบใบทดสอบไม่สำเร็จ (ลบเองใน ZORT ถ้าเจอ number: " + qNumber + "): " + e); }
+    Utilities.sleep(300);
+  }
+  Logger.log("──────── เสร็จ — copy log ทั้งหมดตั้งแต่ต้นส่งกลับมา ────────");
+}
+
 // ⚠️ ONE-OFF CLEANUP: ลบใบเสนอราคาทดสอบ QT-202607015 (id 346234) ที่หลุดค้างจริงใน ZORT
 // เพราะ exploreZortAddQuotation() รุ่นก่อนหน้าอ่าน id/number ผิดตำแหน่ง (อยู่ใน detail ไม่ใช่ top-level)
 // เลยไม่เรียก void ให้ — รันฟังก์ชันนี้ 1 ครั้งเพื่อลบทิ้ง แล้วลบฟังก์ชันนี้ออกได้เลย

@@ -52,11 +52,12 @@ async function syncDeleteQuotationDraft(draftId) {
   } catch (err) { return { success: false, error: err.message }; }
 }
 
-// หมายเหตุ default 3 บรรทัด (แก้ไข/ลบ/เพิ่มได้ในฟอร์ม) — ข้อ 3 ดึงบัญชีโอนจริงจาก POS_TRANSFER_INFO
+// หมายเหตุ default 3 บรรทัด (แก้ไข/ลบ/เพิ่มได้ในฟอร์ม) — ข้อความจริงตามที่เจ้าของยืนยัน
+// (ข้อ 3 = บัญชีโอนสำหรับใบเสนอราคา ต่างจาก POS_TRANSFER_INFO ที่ใช้ตอนออกบิลขายหน้าร้าน)
 const QUOTE_DEFAULT_REMARKS = [
-  "ใบเสนอราคานี้มีอายุ 30 วันนับจากวันที่ออกเอกสาร",
-  "สินค้าหมวดจัดแบบพิเศษ (Made to Order) ใช้เวลาเตรียม 3-5 วันทำการหลังยืนยันคำสั่งซื้อ",
-  `โอนเงินเข้าบัญชี ${POS_TRANSFER_INFO.bank} เลขที่ ${POS_TRANSFER_INFO.acctNo} ชื่อบัญชี ${POS_TRANSFER_INFO.acctName}`,
+  "ราคาที่เสนอนี้เป็นราคาขาย ไม่รวมค่าขนส่ง",
+  "ใบเสนอราคานี้มีอายุการใช้งาน 3 เดือน นับจากวันที่ออกเอกสารใบเสนอราคา หากพ้นระยะเวลาดังกล่าว กรุณาติดต่อเพื่อขอใบเสนอราคาใหม่",
+  "ชำระโดยโอนเข้าบัญชี ธนาคารกสิกรไทย ชื่อบัญชี บริษัท ดี.ยูนิตี้ จำกัด บัญชีออมทรัพย์ สาขาเทสโก้โลตัสศาลายา เลขที่บัญชี 0503342510",
 ];
 
 const QUOTE_SALES_REP_KEY = "dmj_quote_last_salesrep";
@@ -129,6 +130,20 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
   }
   function patchItem(i, patch) { setCart(c => c.map((it, idx) => idx === i ? Object.assign({}, it, patch) : it)); }
   function removeItem(i) { setCart(c => c.filter((_, idx) => idx !== i)); }
+
+  // เครื่องสแกนบาร์โค้ด (USB/มือถือ) ทำงานเหมือนคีย์บอร์ด: พิมพ์รหัส+Enter (mirror PosView)
+  function handleScanEnter(e) {
+    if (e.key !== "Enter") return;
+    const q = search.trim().toLowerCase();
+    if (!q) return;
+    let hit = products.find(p => String(p.sku || "").toLowerCase() === q);
+    if (!hit && matches.length === 1) hit = matches[0];
+    if (!hit) { showToast("warn", "ไม่พบสินค้า: " + search.trim(), "🔍"); return; }
+    const idx = cart.findIndex(c => c.sku === hit.sku);
+    if (idx >= 0) { patchItem(idx, { qty: (Number(cart[idx].qty) || 0) + 1 }); setSearch(""); }
+    else addToCart(hit);
+    showToast("success", "+ " + hit.name, "📦");
+  }
 
   async function doSearchCustomer() {
     const q = custQuery.trim();
@@ -293,7 +308,8 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
 
       {/* ── ค้นหาสินค้า ── */}
       <Card padding={true} title="🔍 เพิ่มสินค้า">
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="ค้นหาชื่อสินค้า/รหัส (พิมพ์ได้หลายคำ)" style={inp}/>
+        <input value={search} onChange={e => setSearch(e.target.value)} onKeyDown={handleScanEnter}
+          placeholder="ค้นหาชื่อสินค้า/รหัส (พิมพ์ได้หลายคำ) หรือสแกนบาร์โค้ด" style={inp}/>
         {matches.length > 0 && (
           <div style={{ marginTop: 8, border: "1px solid #eee", borderRadius: 8, maxHeight: 260, overflowY: "auto" }}>
             {matches.map(p => (
