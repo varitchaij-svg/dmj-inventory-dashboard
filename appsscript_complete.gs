@@ -7973,10 +7973,18 @@ function createQuotation(ss, data, actor) {
     ? data.remarks.map(function (r) { return String(r || "").trim(); }).filter(Boolean).join("\n")
     : String(data.remark || "").trim();
 
+  // ยืนยันจาก exploreZortQuotationAmountFix() (test-then-void): AddQuotation ไม่คำนวณ
+  // ยอดรวมหัวเอกสาร (amount/มูลค่ารวมสุทธิ) จาก list[].totalprice ให้เองเลย — ต้องส่ง
+  // amount/amount_pretax/vatamount ที่ header ตรงๆ ไม่งั้นขึ้น 0 ในหน้า ZORT ทั้งที่ line
+  // item ถูกต้อง (ห้ามส่ง vattype/vatpercent/discount ปนด้วย — ลองแล้วทำให้ amount_pretax/
+  // vatamount ถูก ZORT recompute ทับกลายเป็นค่าผิดแทน)
   var payload = {
     date: Utilities.formatDate(new Date(), "Asia/Bangkok", "dd/MM/yyyy"),
     list: list,
     description: remarkText,
+    amount: Math.round(totals.grandTotal * 100) / 100,
+    amount_pretax: Math.round(totals.preVat * 100) / 100,
+    vatamount: Math.round(totals.vat * 100) / 100,
   };
   if (cust.name)     payload.customername       = String(cust.name);
   if (cust.taxId)    payload.customeridnumber   = String(cust.taxId);
