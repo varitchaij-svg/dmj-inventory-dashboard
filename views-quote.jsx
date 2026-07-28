@@ -39,6 +39,15 @@ async function syncGetQuotationDrafts() {
     return await res.json(); // { success, data:{drafts:[]} }
   } catch (err) { return { success: false, error: err.message }; }
 }
+// ── sync helper: ดึงรายละเอียดใบเสนอราคาเดิม (สำหรับพิมพ์ A4 ย้อนหลัง) ──
+async function syncGetQuotationForPrint(idOrNumber) {
+  if (!SHEET_DEPLOY_URL) return { success: false, error: "ยังไม่ได้เชื่อมต่อ Sheet" };
+  try {
+    const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
+    const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getQuotationForPrint&id=${encodeURIComponent(idOrNumber)}&_t=${Date.now()}`, { cache: "no-store" });
+    return await res.json(); // { success, data:{quotationNumber,customer,items,remarks,salesRep,totals} }
+  } catch (err) { return { success: false, error: err.message }; }
+}
 // ── sync helper: ลบร่างทิ้ง ──
 async function syncDeleteQuotationDraft(draftId) {
   if (!SHEET_DEPLOY_URL) return { success: false, error: "ยังไม่ได้เชื่อมต่อ Sheet" };
@@ -88,6 +97,16 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
   const [saving, setSaving] = uS(false);
   const [savingDraft, setSavingDraft] = uS(false);
   const [result, setResult] = uS(null);
+  const [printReq, setPrintReq] = uS(0);
+
+  uE(() => {
+    if (printReq <= 0) return;
+    setPosPrintPageSize("a4");
+    window.print();
+    const onAfter = () => { setPosPrintPageSize("a4"); window.removeEventListener("afterprint", onAfter); };
+    window.addEventListener("afterprint", onAfter);
+  }, [printReq]);
+  function doPrint() { setPrintReq(n => n + 1); }
 
   const md = Math.max(0, parseFloat(manualDiscount) || 0);
   const totals = uM(() => computeBillTotals(cart, { manualDiscount: md }), [cart, md]);
@@ -260,16 +279,20 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
   if (result) {
     return (
       <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12, maxWidth: 480, margin: "0 auto" }}>
-        <Card padding={true}>
-          <div style={{ textAlign: "center", padding: "16px 0" }}>
-            <div style={{ fontSize: 44 }}>🎉</div>
-            <div style={{ fontSize: 18, fontWeight: 800, marginTop: 8 }}>สร้างใบเสนอราคาสำเร็จ</div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: "var(--g-700,#166534)", marginTop: 6, fontFamily: "monospace" }}>{result.quotationNumber || "—"}</div>
-            <div style={{ fontSize: 14, color: "var(--muted)", marginTop: 4 }}>ยอดสุทธิ {fmtBfull(result.totals ? result.totals.grandTotal : totals.grandTotal)}</div>
-          </div>
-        </Card>
-        <button onClick={() => { resetAll(); }} style={{ padding: 14, borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700 }}>📝 สร้างใบใหม่</button>
-        {onBack && <button onClick={onBack} style={{ padding: 14, borderRadius: 10, border: "none", background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 700 }}>← กลับไปหน้าติดตามสถานะ</button>}
+        <div className="no-print" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <Card padding={true}>
+            <div style={{ textAlign: "center", padding: "16px 0" }}>
+              <div style={{ fontSize: 44 }}>🎉</div>
+              <div style={{ fontSize: 18, fontWeight: 800, marginTop: 8 }}>สร้างใบเสนอราคาสำเร็จ</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: "var(--g-700,#166534)", marginTop: 6, fontFamily: "monospace" }}>{result.quotationNumber || "—"}</div>
+              <div style={{ fontSize: 14, color: "var(--muted)", marginTop: 4 }}>ยอดสุทธิ {fmtBfull(result.totals ? result.totals.grandTotal : totals.grandTotal)}</div>
+            </div>
+          </Card>
+          <button onClick={doPrint} style={{ padding: 14, borderRadius: 10, border: "none", background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 700 }}>🖨️ พิมพ์ใบเสนอราคา (A4)</button>
+          <button onClick={() => { resetAll(); }} style={{ padding: 14, borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700 }}>📝 สร้างใบใหม่</button>
+          {onBack && <button onClick={onBack} style={{ padding: 14, borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700 }}>← กลับไปหน้าติดตามสถานะ</button>}
+        </div>
+        <QuotationPrintDoc quotationNumber={result.quotationNumber} items={cart} customer={cust} remarks={remarks} salesRep={salesRep} totals={result.totals || totals}/>
         <Toast toast={toast} onClose={hideToast}/>
       </div>
     );
@@ -497,6 +520,126 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
       </div>
 
       <Toast toast={toast} onClose={hideToast}/>
+    </div>
+  );
+}
+
+// ใบเสนอราคา A4 สำหรับพิมพ์ (โชว์เฉพาะตอน print ผ่าน CSS .pos-print-area — mirror PosReceipt)
+// items = [{sku,name,qty,price,category}] ราคาปลีก/ชิ้น — คิดส่วนลดต่อหน่วยแบบเฉลี่ยเหมือนฝั่ง server
+function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep, totals }) {
+  const gross = (totals.retailEligible || 0) + (totals.retailExcluded || 0);
+  const factor = gross > 0 ? totals.grandTotal / gross : 1;
+  const rows = (items || []).map(it => {
+    const price = Number(it.price) || 0, qty = Number(it.qty) || 0;
+    const finalUnit = price * factor;
+    return { sku: it.sku, name: it.name, qty, price, discUnit: Math.max(0, price - finalUnit), amount: finalUnit * qty };
+  });
+  const totalUnits = rows.reduce((s, r) => s + r.qty, 0);
+  const POS_ROWS_PER_PAGE = 20;
+  const pages = [];
+  for (let i = 0; i < rows.length; i += POS_ROWS_PER_PAGE) pages.push(rows.slice(i, i + POS_ROWS_PER_PAGE));
+  if (pages.length === 0) pages.push([]);
+  const cell = { padding: "4px 6px", borderRight: "0.5px solid #999", fontSize: 12 };
+  const num = (n) => (Math.round(n * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const docDate = new Date().toLocaleDateString("th-TH", { year: "numeric", month: "long", day: "numeric" });
+  const cust = customer || {};
+
+  return (
+    <div className="pos-print-area">
+      {pages.map((pageRows, pi) => {
+        const isLast = pi === pages.length - 1;
+        const startIdx = pi * POS_ROWS_PER_PAGE;
+        return (
+          <div key={pi} className="pos-print-page" style={{ color: "#111", fontFamily: "inherit", display: "flex", flexDirection: "column" }}>
+            {/* ── หัวเอกสาร ── */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+              <div style={{ maxWidth: "62%" }}>
+                <div style={{ fontSize: 15, fontWeight: 800 }}>{POS_SELLER.name}</div>
+                <div style={{ fontSize: 11 }}>ที่อยู่: {POS_SELLER.address}</div>
+                <div style={{ fontSize: 11 }}>โทรศัพท์: {POS_SELLER.phone} โทรสาร: {POS_SELLER.fax} อีเมล: {POS_SELLER.email}</div>
+                <div style={{ fontSize: 11 }}>เลขประจำตัวผู้เสียภาษี: {POS_SELLER.taxId}</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 14, fontWeight: 800, border: "1px solid #000", padding: "3px 8px", borderRadius: 4 }}>ใบเสนอราคา</div>
+                <div style={{ fontSize: 11, marginTop: 4 }}>วันที่ : {docDate}</div>
+                <div style={{ fontSize: 11 }}>เลขที่เอกสาร : {quotationNumber || "—"}</div>
+                {salesRep ? <div style={{ fontSize: 11 }}>ผู้เสนอราคา : {salesRep}</div> : null}
+                {pages.length > 1 ? <div style={{ fontSize: 11 }}>หน้า {pi + 1}/{pages.length}</div> : null}
+              </div>
+            </div>
+            {/* ── กล่องลูกค้า (หน้าแรกเท่านั้น) ── */}
+            {pi === 0 && (
+              <div style={{ border: "1px solid #999", borderRadius: 4, padding: "6px 8px", marginBottom: 8, fontSize: 11.5, lineHeight: 1.6 }}>
+                <div><b>นามลูกค้า:</b> {cust.name || "—"} &nbsp;&nbsp; <b>เลขประจำตัวผู้เสียภาษี:</b> {cust.taxId || "—"}</div>
+                <div><b>ชื่อสาขา:</b> {cust.branch || "สำนักงานใหญ่"} &nbsp;&nbsp; <b>สาขาที่:</b> {cust.branchNo || "00000"}</div>
+                <div><b>ที่อยู่:</b> {cust.address || "—"}</div>
+                <div><b>โทรศัพท์:</b> {cust.phone || "—"} &nbsp;&nbsp; <b>อีเมล:</b> {cust.email || "—"}</div>
+              </div>
+            )}
+            {/* ── ตารางสินค้า ── */}
+            <table style={{ width: "100%", borderCollapse: "collapse", border: "0.5px solid #999" }}>
+              <thead>
+                <tr style={{ background: "#f3f4f6", borderBottom: "0.5px solid #999" }}>
+                  <th style={{ ...cell, width: 28, textAlign: "center" }}>#</th>
+                  <th style={{ ...cell, width: 80, textAlign: "left" }}>รหัสสินค้า</th>
+                  <th style={{ ...cell, textAlign: "left" }}>ชื่อสินค้า</th>
+                  <th style={{ ...cell, width: 60, textAlign: "center" }}>จำนวน</th>
+                  <th style={{ ...cell, width: 70, textAlign: "right" }}>มูลค่าต่อหน่วย</th>
+                  <th style={{ ...cell, width: 60, textAlign: "right" }}>ส่วนลดต่อหน่วย</th>
+                  <th style={{ ...cell, width: 80, textAlign: "right", borderRight: "none" }}>รวม</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pageRows.map((r, i) => (
+                  <tr key={i} style={{ borderBottom: "0.5px solid #e5e7eb" }}>
+                    <td style={{ ...cell, textAlign: "center" }}>{startIdx + i + 1}</td>
+                    <td style={cell}>{r.sku}</td>
+                    <td style={cell}>{r.name}</td>
+                    <td style={{ ...cell, textAlign: "center" }}>{r.qty} ชิ้น</td>
+                    <td style={{ ...cell, textAlign: "right" }}>{num(r.price)}</td>
+                    <td style={{ ...cell, textAlign: "right" }}>{r.discUnit > 0 ? num(r.discUnit) : "-"}</td>
+                    <td style={{ ...cell, textAlign: "right", borderRight: "none" }}>{num(r.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {/* ── หมายเหตุ + สรุปยอด (หน้าสุดท้ายเท่านั้น) ── */}
+            {isLast && (
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, gap: 12 }}>
+                <div style={{ fontSize: 11, maxWidth: "55%" }}>
+                  {(remarks || []).filter(Boolean).length > 0 && (
+                    <div>
+                      <div style={{ fontWeight: 700, marginBottom: 2 }}>หมายเหตุ</div>
+                      {(remarks || []).filter(Boolean).map((r, i) => <div key={i}>{i + 1}. {r}</div>)}
+                    </div>
+                  )}
+                  <div style={{ marginTop: 6 }}>จำนวนสินค้าทั้งหมด {totalUnits} หน่วย</div>
+                  <div>({bahtText(totals.grandTotal)})</div>
+                </div>
+                <div style={{ minWidth: 240, fontSize: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span>มูลค่าก่อนภาษี</span><span>{num(totals.preVat)} บาท</span></div>
+                  <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span>ภาษีมูลค่าเพิ่ม (7%)</span><span>{num(totals.vat)} บาท</span></div>
+                  <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontWeight: 800, fontSize: 14, borderTop: "1px solid #000", marginTop: 2 }}><span>มูลค่ารวมสุทธิ</span><span>{num(totals.grandTotal)} บาท</span></div>
+                </div>
+              </div>
+            )}
+            {/* ── ช่องเซ็น — ดันไปล่างสุดของกระดาษ (หน้าสุดท้ายเท่านั้น) ── */}
+            <div style={{ marginTop: "auto" }}>
+              {isLast && (
+                <div style={{ display: "flex", justifyContent: "space-around", paddingTop: 24, fontSize: 11, textAlign: "center" }}>
+                  {["ผู้เสนอราคา", "ผู้อนุมัติสั่งซื้อ"].map(l => (
+                    <div key={l} style={{ width: "35%" }}>
+                      <div style={{ borderBottom: "0.5px dotted #000", marginBottom: 4, height: 28 }}></div>
+                      {l}
+                      <div style={{ color: "#555", marginTop: 2 }}>วันที่ {docDate}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

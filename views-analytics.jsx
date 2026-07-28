@@ -6683,10 +6683,31 @@ function QuoteFollowupView({ data, role }) {
   const [qPage, setQPage] = uS(1);
   const [voidingId, setVoidingId] = uS(null);
   const [approvingId, setApprovingId] = uS(null);
+  const [printingId, setPrintingId] = uS(null);
+  const [printData, setPrintData] = uS(null);   // ผลจาก getQuotationForPrint ก่อน print
+  const [printReq, setPrintReq] = uS(0);
   const [toast, showToast, hideToast] = useToast();
   const listRef = React.useRef(null);
   const PAGE_SIZE = 20;
   const OVERDUE_DAYS = 90;
+
+  uE(() => {
+    if (printReq <= 0 || !printData) return;
+    setPosPrintPageSize("a4");
+    window.print();
+    const onAfter = () => { setPosPrintPageSize("a4"); window.removeEventListener("afterprint", onAfter); };
+    window.addEventListener("afterprint", onAfter);
+  }, [printReq, printData]);
+
+  async function handlePrint(q) {
+    if (printingId) return;
+    setPrintingId(q.id || q.number);
+    const r = await syncGetQuotationForPrint(q.id || q.number);
+    setPrintingId(null);
+    if (!r.success) { showToast("error", "ดึงรายละเอียดไม่สำเร็จ: " + (r.error || ""), "❌"); return; }
+    setPrintData(r.data || {});
+    setPrintReq(n => n + 1);
+  }
 
   const load = async () => {
     if (!SHEET_DEPLOY_URL) { setErr("ยังไม่ได้เชื่อมต่อ Sheet"); setLoading(false); return; }
@@ -7040,7 +7061,8 @@ function QuoteFollowupView({ data, role }) {
                         const overdue = q.ageDays !== null && q.ageDays > OVERDUE_DAYS;
                         const busy = voidingId === (q.id || q.number);
                         const approving = approvingId === (q.id || q.number);
-                        const anyBusy = !!voidingId || !!approvingId;
+                        const anyBusy = !!voidingId || !!approvingId || !!printingId;
+                        const printing = printingId === (q.id || q.number);
                         return (
                           <tr key={q.number || idx} style={{ borderBottom: "1px solid var(--bdr)", background: overdue ? "#fff5f5" : (idx % 2 === 0 ? "var(--paper)" : "var(--g-50)") }}>
                             <td style={{ padding: "8px 12px", minWidth: 160 }}>
@@ -7072,6 +7094,11 @@ function QuoteFollowupView({ data, role }) {
                                   color: overdue ? "#fff" : "var(--muted)", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700,
                                   cursor: anyBusy ? "default" : "pointer", opacity: anyBusy && !busy ? .5 : 1,
                                 }}>{busy ? "กำลังปิด…" : "ปิดใบ"}</button>
+                                <button onClick={() => handlePrint(q)} disabled={anyBusy} style={{
+                                  border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
+                                  borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 700,
+                                  cursor: anyBusy ? "default" : "pointer", opacity: anyBusy && !printing ? .5 : 1,
+                                }}>{printing ? "…" : "🖨️"}</button>
                               </div>
                             </td>
                           </tr>
@@ -7099,9 +7126,12 @@ function QuoteFollowupView({ data, role }) {
                       <th style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>มูลค่า</th>
                       <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, whiteSpace: "nowrap" }}>วันที่</th>
                       <th style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, whiteSpace: "nowrap" }}>เลขที่ / เซล</th>
+                      <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, whiteSpace: "nowrap" }}>พิมพ์</th>
                     </tr></thead>
                     <tbody>
-                      {approvedList.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => (
+                      {approvedList.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => {
+                        const printing = printingId === (q.id || q.number);
+                        return (
                         <tr key={q.number || idx} style={{ borderBottom: "1px solid var(--bdr)", background: idx % 2 === 0 ? "var(--paper)" : "var(--g-50)" }}>
                           <td style={{ padding: "8px 12px", minWidth: 160 }}>
                             <div style={{ fontWeight: 600, color: "var(--text)" }}>{q.customer}</div>
@@ -7115,8 +7145,16 @@ function QuoteFollowupView({ data, role }) {
                               onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} onBlur={(e) => saveSale(q, e.target.value)}
                               style={{ marginTop: 3, width: 110, minWidth: 0, padding: "3px 6px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/>
                           </td>
+                          <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                            <button onClick={() => handlePrint(q)} disabled={!!printingId} style={{
+                              border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
+                              borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 700,
+                              cursor: printingId ? "default" : "pointer", opacity: printingId && !printing ? .5 : 1,
+                            }}>{printing ? "…" : "🖨️"}</button>
+                          </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -7129,6 +7167,10 @@ function QuoteFollowupView({ data, role }) {
         </>
       )}
       <datalist id="dmjQuoteSales">{salesList.map(s => <option key={s} value={s}/>)}</datalist>
+      {printData && (
+        <QuotationPrintDoc quotationNumber={printData.quotationNumber} items={printData.items} customer={printData.customer}
+          remarks={printData.remarks} salesRep={printData.salesRep} totals={printData.totals}/>
+      )}
       <Toast toast={toast} onClose={hideToast}/>
     </div>
   );

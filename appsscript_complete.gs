@@ -570,6 +570,11 @@ function doGet(e) {
       return getQuotationDrafts(SpreadsheetApp.openById(SHEET_ID));
     }
 
+    // รายละเอียดใบเสนอราคาเดิม (สำหรับพิมพ์ A4 ย้อนหลัง จากหน้าติดตามสถานะ)
+    if (e && e.parameter && e.parameter.action === 'getQuotationForPrint') {
+      return getQuotationForPrint(e.parameter.id || e.parameter.number);
+    }
+
     // สรุปสถานะใบเสนอราคา (ทุกสถานะ อนุมัติ/รอ/ยกเลิก) — คืน raw ทั้งหมดให้ frontend รวมเอง
     if (e && e.parameter && e.parameter.action === 'getQuotationSummary') {
       return handleGetQuotationSummary_();
@@ -6743,6 +6748,49 @@ function handleGetPendingQuotations_() {
     return ContentService
       .createTextOutput(JSON.stringify({ items: [], error: err.message }))
       .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// ดึงรายละเอียดใบเสนอราคาเดิม (สำหรับพิมพ์ A4 ย้อนหลัง) — ปรับ field ให้ตรงกับที่
+// QuotationPrintDoc (views-quote.jsx) ต้องการ: customer/items/remarks/salesRep/totals
+// remarks แยกจาก description ด้วย \n (ตรงกับที่ createQuotation ต่อไว้ตอนสร้าง)
+function getQuotationForPrint(idOrNumber) {
+  var idParam = String(idOrNumber || "").trim();
+  if (!idParam) return error("ไม่มี id/number ของใบเสนอราคา");
+  try {
+    var res = UrlFetchApp.fetch(ZORT_BASE + "/Quotation/GetQuotationDetail?id=" + encodeURIComponent(idParam),
+      { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+    var zErr = zortRespError_(res);
+    if (zErr) return error("ดึงรายละเอียดใบเสนอราคาไม่สำเร็จ: " + zErr);
+    var od = {};
+    try { var json = JSON.parse(res.getContentText() || "{}"); od = json.quotation || json.data || json; } catch (e) { return error("อ่านรายละเอียดใบเสนอราคาไม่ได้: " + e); }
+    if (!od || !od.list) return error("ไม่พบข้อมูลใบเสนอราคา (id/number: " + idParam + ")");
+
+    var items = (od.list || []).map(function (it) {
+      var qty = Number(it.number) || 0;
+      var unit = Number(it.pricepernumber) || 0;
+      return { sku: it.sku || "", name: it.name || it.sku || "", qty: qty, price: unit, category: "" };
+    }).filter(function (it) { return it.qty > 0; });
+
+    var grand = Number(od.amount) || 0;
+    var preVat = Number(od.amount_pretax);
+    var vat = Number(od.vatamount);
+    if (!(preVat > 0) || isNaN(preVat)) { preVat = Math.round(grand / 1.07 * 100) / 100; vat = Math.round((grand - preVat) * 100) / 100; }
+
+    return ok({
+      quotationNumber: od.number || idParam,
+      customer: {
+        name: od.customername || "", taxId: od.customeridnumber || "",
+        branch: od.customerbranchname || "", branchNo: od.customerbranchno || "",
+        address: od.customeraddress || "", phone: od.customerphone || "", email: od.customeremail || "",
+      },
+      items: items,
+      remarks: String(od.description || "").split("\n").map(function (s) { return s.trim(); }).filter(Boolean),
+      salesRep: (Array.isArray(od.tag) && od.tag[0]) || "",
+      totals: { grandTotal: grand, preVat: preVat, vat: vat, retailEligible: grand, retailExcluded: 0 },
+    });
+  } catch (e) {
+    return error("ดึงรายละเอียดใบเสนอราคาไม่สำเร็จ: " + e);
   }
 }
 
