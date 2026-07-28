@@ -920,6 +920,14 @@
   .pos-print-page { padding: 12mm 10mm; box-sizing: border-box; }
   .pos-print-none { display: none !important; }   /* ซ่อนชนิดที่ไม่ได้เลือกพิมพ์ (ทั้งจอ+พิมพ์) */
 
+  /* ใบเสนอราคา A4 (QuotationPrintDoc) — class แยกจาก .pos-print-page/.pos-print-area โดยตั้งใจ
+     (ห้ามใช้ร่วมกับใบเสร็จ/ใบกำกับภาษี/บาร์โค้ด) เพื่อปรับแต่งได้อิสระโดยไม่กระทบการพิมพ์อื่น
+     min-height ตั้ง 293mm (เผื่อ buffer 4mm จาก A4 297mm) — วัดจริงพบว่าเนื้อหาที่ถูกบังคับ
+     สูงพอดี 297mm เป๊ะ (เท่า @page) ล้นได้จาก sub-pixel rounding ของเบราว์เซอร์ (~0.1-0.5px)
+     ทำให้เกิดหน้าที่ 2 เกือบว่างเปล่าโดยไม่มีเหตุผล — เผื่อ buffer ตัดปัญหานี้ทิ้งไปเลย */
+  .quote-print-area { display: none; }
+  .quote-print-page { padding: 12mm 10mm; box-sizing: border-box; }
+
   @media print {
     .no-print, .topnav, nav { display: none !important; }
     .pos-print-area, .pos-print80-area { display: block !important; }
@@ -932,6 +940,16 @@
       break-after: page;
     }
     .pos-print-page:last-child { page-break-after: avoid; break-after: avoid; }
+    .quote-print-area { display: block !important; }
+    .quote-print-page {
+      width: 210mm !important;
+      min-height: 293mm !important;
+      padding: 12mm 10mm !important;
+      box-sizing: border-box !important;
+      page-break-after: always;
+      break-after: page;
+    }
+    .quote-print-page:last-child { page-break-after: avoid; break-after: avoid; }
     /* ใบเสร็จ 80mm — ขนาดหน้ากระดาษจริงคุมด้วย JS (setPosPrintPageSize) เพราะ
        named @page (page: rc80) ไม่ทำงานเชื่อถือได้บน Chrome/Android print pipeline
        (เนื้อหาเลยไปฝังในหน้า A4 แล้วถูกเครื่องพิมพ์ย่อลงมาเล็กจิ๋วมุมกระดาษ) */

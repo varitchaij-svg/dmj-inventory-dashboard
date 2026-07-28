@@ -164,6 +164,16 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
     showToast("success", "+ " + hit.name, "📦");
   }
 
+  // กล้องสแกน (ScanButton จาก views-main.jsx) — ผลลัพธ์เป็น sku ตัวใหญ่แล้ว
+  function handleCameraScan(sku) {
+    const hit = products.find(p => String(p.sku || "").toUpperCase() === sku);
+    if (!hit) { showToast("warn", "ไม่พบสินค้า: " + sku, "🔍"); return; }
+    const idx = cart.findIndex(c => c.sku === hit.sku);
+    if (idx >= 0) patchItem(idx, { qty: (Number(cart[idx].qty) || 0) + 1 });
+    else addToCart(hit);
+    showToast("success", "+ " + hit.name, "📦");
+  }
+
   async function doSearchCustomer() {
     const q = custQuery.trim();
     if (q.length < 2) { showToast("warn", "พิมพ์อย่างน้อย 2 ตัวอักษร", "🔍"); return; }
@@ -331,8 +341,11 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
 
       {/* ── ค้นหาสินค้า ── */}
       <Card padding={true} title="🔍 เพิ่มสินค้า">
-        <input value={search} onChange={e => setSearch(e.target.value)} onKeyDown={handleScanEnter}
-          placeholder="ค้นหาชื่อสินค้า/รหัส (พิมพ์ได้หลายคำ) หรือสแกนบาร์โค้ด" style={inp}/>
+        <div style={{ display: "flex", gap: 6 }}>
+          <input value={search} onChange={e => setSearch(e.target.value)} onKeyDown={handleScanEnter}
+            placeholder="ค้นหาชื่อสินค้า/รหัส (พิมพ์ได้หลายคำ) หรือสแกนบาร์โค้ด" style={{ ...inp, flex: 1 }}/>
+          {typeof ScanButton === "function" && <ScanButton onScan={handleCameraScan} size={38}/>}
+        </div>
         {matches.length > 0 && (
           <div style={{ marginTop: 8, border: "1px solid #eee", borderRadius: 8, maxHeight: 260, overflowY: "auto" }}>
             {matches.map(p => (
@@ -545,12 +558,12 @@ function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep
   const cust = customer || {};
 
   return (
-    <div className="pos-print-area">
+    <div className="quote-print-area">
       {pages.map((pageRows, pi) => {
         const isLast = pi === pages.length - 1;
         const startIdx = pi * POS_ROWS_PER_PAGE;
         return (
-          <div key={pi} className="pos-print-page" style={{ color: "#111", fontFamily: "inherit", display: "flex", flexDirection: "column" }}>
+          <div key={pi} className="quote-print-page" style={{ color: "#111", fontFamily: "inherit", display: "flex", flexDirection: "column" }}>
             {/* ── หัวเอกสาร ── */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
               <div style={{ maxWidth: "62%" }}>
