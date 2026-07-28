@@ -74,6 +74,9 @@ function LoginScreen({ onLogin }) {
   ];
 
   const handleSelect = (p) => {
+    // ยิงขอข้อมูลตั้งแต่กดเลือกตำแหน่ง (ไม่ต้องรอ PIN/onLogin) — payload ไม่ผูกกับ role
+    // ให้เวลา GAS ซ้อนทับกับเวลาที่ผู้ใช้พิมพ์/ยืนยัน PIN แทนที่จะเริ่มนับหลัง login เสร็จ
+    try { if (typeof window !== 'undefined' && window._prefetchData) window._prefetchData(); } catch (e) {}
     if (p.needPin) { setPinTarget(p); setPin(""); setErr(false); }
     else { onLogin(p.role); }
   };
