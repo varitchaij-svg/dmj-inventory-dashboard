@@ -379,8 +379,17 @@ function App() {
     const timeoutMs = retryLeft === 3 ? 35000 : 20000;
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     const bustUrl = sheetUrl + (sheetUrl.includes('?') ? '&' : '?') + '_t=' + Date.now() + '&fresh=1';
-    fetch(bustUrl, { signal: controller.signal })
-      .then(r => r.json())
+    // ใช้ผลที่เริ่มโหลดไว้ตั้งแต่ต้นหน้า (script ใน <head> ของ HTML) — ตัดเวลา GAS
+    // ออกจากคิว เพราะมันเดินขนานไปกับการ compile JSX แล้ว · ใช้ได้ครั้งเดียว
+    // (เฉพาะ attempt แรก) การ refetch/retry ทุกครั้งหลังจากนี้ยิงใหม่เสมอ = ได้ข้อมูลสด
+    let prefetched = null;
+    if (retryLeft === 3 && typeof window !== 'undefined' && window._dataPrefetch) {
+      prefetched = window._dataPrefetch;
+      window._dataPrefetch = null;
+    }
+    (prefetched
+      ? prefetched.then(d => d || fetch(bustUrl, { signal: controller.signal }).then(r => r.json()))
+      : fetch(bustUrl, { signal: controller.signal }).then(r => r.json()))
       .then(d => {
         if (d && d.lastModified) window._dataLoadedAt = d.lastModified;
         if (typeof resetCatColorMap === 'function') resetCatColorMap();
