@@ -1040,7 +1040,7 @@ function App() {
                                             onInitConsumed={() => setLabelInitItems(null)}/></ErrorBoundary>}
         {activeTab === "auditlog"     && <ErrorBoundary key="auditlog"><AuditLogView/></ErrorBoundary>}
         {activeTab === "deadstock"    && <ErrorBoundary key="deadstock"><DeadStockView/></ErrorBoundary>}
-        {activeTab === "quotefollowup" && <ErrorBoundary key="quotefollowup"><QuoteFollowupView/></ErrorBoundary>}
+        {activeTab === "quotefollowup" && <ErrorBoundary key="quotefollowup"><QuoteFollowupView data={data} role={role}/></ErrorBoundary>}
         {activeTab === "pos"          && <ErrorBoundary key="pos"><PosView data={data} role={role}/></ErrorBoundary>}
         {activeTab === "customers"    && <ErrorBoundary key="customers"><CustomerView data={data}/></ErrorBoundary>}
         {activeTab === "margin"       && <ErrorBoundary key="margin"><MarginView data={data}/></ErrorBoundary>}

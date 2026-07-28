@@ -1101,15 +1101,16 @@
     return compileJsx(src).then(function (code) { injectCode(code); });
   }
 
-  /* โหลด ui ก่อน จากนั้น compile views-main + views-analytics พร้อมกัน
-     แล้ว inject ตามลำดับ (views-main ก่อนเสมอ เพราะ views-analytics ใช้ component จาก views-main) */
+  /* โหลด ui ก่อน จากนั้น compile views-main + views-analytics + views-quote พร้อมกัน
+     แล้ว inject ตามลำดับ (views-main ก่อนเสมอ, views-quote ใช้ component จากทั้งคู่) */
   window._appBoot = loadJsx('ui.jsx')
     .then(function () {
-      return Promise.all([compileJsx('views-main.jsx'), compileJsx('views-analytics.jsx')]);
+      return Promise.all([compileJsx('views-main.jsx'), compileJsx('views-analytics.jsx'), compileJsx('views-quote.jsx')]);
     })
     .then(function (codes) {
       injectCode(codes[0]); /* views-main ก่อน */
       injectCode(codes[1]); /* views-analytics หลัง */
+      injectCode(codes[2]); /* views-quote สุดท้าย (ก่อน app.jsx) */
       return loadJsx('app.jsx');
     })
     .catch(function (err) { console.error('[boot]', err); });

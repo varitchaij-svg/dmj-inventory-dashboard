@@ -10,9 +10,13 @@
   ห้ามเพิ่ม npm dependency ทุกอย่างต้องรันได้จากไฟล์ `.jsx` ที่โหลดผ่าน `<script>`
   - `views-main.jsx` (~6,600 บรรทัด) — View components ทั้งหมด **ยกเว้น** FrontStoreView/analytics
     (CategoryView, StockView, ProductCard, OrderModal, SupplierView ฯลฯ)
-  - `views-analytics.jsx` (~5,300 บรรทัด) — FrontStoreView + analytics
-  - **`Doomuenjing Dashboard.html` โหลดจริงแค่: ui.jsx → views-main.jsx → views-analytics.jsx → app.jsx**
-    (การแยก views-main / views-analytics ตั้งใจทำเพื่อลด Babel compile time — ห้ามกลับไปรวมเป็นไฟล์เดียว
+  - `views-analytics.jsx` (~5,300 บรรทัด) — FrontStoreView + analytics + QuoteFollowupView
+  - `views-quote.jsx` — QuotationFormView (สร้างใบเสนอราคาเอง แทนเข้า ZORT UI) + sync helper
+    (syncCreateQuotation/syncSaveQuotationDraft/syncGetQuotationDrafts/syncDeleteQuotationDraft)
+    ใช้ computeBillTotals/POS_SALES_CHANNELS/POS_TRANSFER_INFO/syncSearchContact จาก
+    views-analytics.jsx (global scope เดียวกัน) — เรียกจาก `QuoteFollowupView` โหมด `mode==="create"`
+  - **`Doomuenjing Dashboard.html` โหลดจริงแค่: ui.jsx → views-main.jsx → views-analytics.jsx → views-quote.jsx → app.jsx**
+    (การแยกไฟล์ตั้งใจทำเพื่อลด Babel compile time — ห้ามกลับไปรวมเป็นไฟล์เดียว
     มิฉะนั้น FrontStoreView จะถูกประกาศซ้ำ → redeclaration error + compile ช้า)
   - `app.jsx` (~670 บรรทัด) — routing, data loading, ROLE_TABS
   - `ui.jsx` (~190 บรรทัด) — shared UI primitives

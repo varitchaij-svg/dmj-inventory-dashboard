@@ -6669,7 +6669,7 @@ async function syncSetQuoteSale(number, sale) {
 // ───────────────────────────────────────────────────────────
 const QUOTE_MONTHS_TH = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
 
-function QuoteFollowupView() {
+function QuoteFollowupView({ data, role }) {
   const mobile = useIsMobile();
   const [items, setItems] = uS([]);
   const [loading, setLoading] = uS(true);
@@ -6833,6 +6833,10 @@ function QuoteFollowupView() {
 
   const rateColor = (r) => r >= 0.7 ? "#16a34a" : r >= 0.4 ? "#d97706" : "#dc2626";
 
+  if (mode === "create") {
+    return <QuotationFormView data={data} role={role} onBack={() => setMode("summary")} onSubmitted={load}/>;
+  }
+
   return (
     <div style={{ padding: "16px", maxWidth: 1040, margin: "0 auto" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
@@ -6840,9 +6844,12 @@ function QuoteFollowupView() {
           <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>📊 สรุปสถานะใบเสนอราคา</div>
           <div style={{ fontSize: 12, color: "var(--muted)" }}>ข้อมูลจากระบบ Zortout · ใบเสนอราคาทั้งหมด {items.length} ใบ</div>
         </div>
-        <button className="btn ghost" onClick={load} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          {loading ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }}/> : "🔄"}<span>รีโหลด</span>
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn primary" onClick={() => setMode("create")} style={{ display: "flex", alignItems: "center", gap: 6 }}>📝 สร้างใบใหม่</button>
+          <button className="btn ghost" onClick={load} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {loading ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }}/> : "🔄"}<span>รีโหลด</span>
+          </button>
+        </div>
       </div>
 
       {err && <div style={{ background: "#fff0f0", border: "1px solid var(--dang)", borderRadius: 8, padding: "10px 14px", color: "var(--dang)", marginBottom: 12, fontSize: 13 }}>⚠️ {err}</div>}
