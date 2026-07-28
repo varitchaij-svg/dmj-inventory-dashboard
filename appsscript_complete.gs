@@ -2588,20 +2588,17 @@ function exploreZortApproveQuotation() {
     try { return JSON.parse(r.getContentText() || "{}"); } catch (e) { return {}; }
   }
 
-  // รอบแรกยิง JSON body ล้วนแล้วโดน "Invalid ID" ทุกตัว (ยกเว้น ApproveQuotation ที่ตอบ error
-  // แบบมี resCode แปลว่า endpoint นี้มีจริง) — เหมือน VoidQuotation เป๊ะที่ปฏิเสธ JSON body id
-  // ต้องอ่าน id ผ่าน URL query/form-encoded แทน รอบนี้ลองทุก transport ของ ApproveQuotation
-  // + เผื่อ endpoint รับ array (ปุ่มจริงในหน้า ZORT เลือกได้หลายใบพร้อมกันด้วย checkbox)
-  const formHdr = Object.assign({}, H, { "Content-Type": "application/x-www-form-urlencoded" });
+  // รอบ 2 พบว่า "query id+approvedate, body {}" คือ transport ที่ถูก — id ผ่านแล้ว!
+  // ติดแค่ format วันที่: resCode 500 "String '28/07/2026' was not recognized as a valid
+  // DateTime." (ข้อความ error แบบ .NET) — รอบ 3 นี้คงตัว id ไว้ ลองหลาย format วันที่แทน
   const candidates = [
-    { label: "query id+approvedate, body {}", url: "/Quotation/ApproveQuotation?id=" + encodeURIComponent(qId) + "&approvedate=" + encodeURIComponent(dateStr), headers: jsonHeaders, payload: "{}" },
-    { label: "form id+approvedate", url: "/Quotation/ApproveQuotation", headers: formHdr, payload: "id=" + encodeURIComponent(qId) + "&approvedate=" + encodeURIComponent(dateStr) },
-    { label: "query number+approvedate, body {}", url: "/Quotation/ApproveQuotation?number=" + encodeURIComponent(qNumber) + "&approvedate=" + encodeURIComponent(dateStr), headers: jsonHeaders, payload: "{}" },
-    { label: "form number+approvedate", url: "/Quotation/ApproveQuotation", headers: formHdr, payload: "number=" + encodeURIComponent(qNumber) + "&approvedate=" + encodeURIComponent(dateStr) },
-    { label: "JSON body {ids:[id], approvedate}", url: "/Quotation/ApproveQuotation", headers: jsonHeaders, payload: JSON.stringify({ ids: [qId], approvedate: dateStr }) },
-    { label: "JSON body {list:[id], approvedate}", url: "/Quotation/ApproveQuotation", headers: jsonHeaders, payload: JSON.stringify({ list: [qId], approvedate: dateStr }) },
-    { label: "query ids[]+approvedate, body {}", url: "/Quotation/ApproveQuotation?ids%5B%5D=" + encodeURIComponent(qId) + "&approvedate=" + encodeURIComponent(dateStr), headers: jsonHeaders, payload: "{}" },
-    { label: "form ids[]+approvedate", url: "/Quotation/ApproveQuotation", headers: formHdr, payload: "ids%5B%5D=" + encodeURIComponent(qId) + "&approvedate=" + encodeURIComponent(dateStr) },
+    { label: "yyyy-MM-dd", url: "/Quotation/ApproveQuotation?id=" + encodeURIComponent(qId) + "&approvedate=" + encodeURIComponent(Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyy-MM-dd")), headers: jsonHeaders, payload: "{}" },
+    { label: "yyyy-MM-ddTHH:mm:ss", url: "/Quotation/ApproveQuotation?id=" + encodeURIComponent(qId) + "&approvedate=" + encodeURIComponent(Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyy-MM-dd'T'HH:mm:ss")), headers: jsonHeaders, payload: "{}" },
+    { label: "MM/dd/yyyy (US)", url: "/Quotation/ApproveQuotation?id=" + encodeURIComponent(qId) + "&approvedate=" + encodeURIComponent(Utilities.formatDate(new Date(), "Asia/Bangkok", "MM/dd/yyyy")), headers: jsonHeaders, payload: "{}" },
+    { label: "yyyy/MM/dd", url: "/Quotation/ApproveQuotation?id=" + encodeURIComponent(qId) + "&approvedate=" + encodeURIComponent(Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyy/MM/dd")), headers: jsonHeaders, payload: "{}" },
+    { label: "dd-MM-yyyy", url: "/Quotation/ApproveQuotation?id=" + encodeURIComponent(qId) + "&approvedate=" + encodeURIComponent(Utilities.formatDate(new Date(), "Asia/Bangkok", "dd-MM-yyyy")), headers: jsonHeaders, payload: "{}" },
+    { label: "M/d/yyyy (US no zero-pad)", url: "/Quotation/ApproveQuotation?id=" + encodeURIComponent(qId) + "&approvedate=" + encodeURIComponent(Utilities.formatDate(new Date(), "Asia/Bangkok", "M/d/yyyy")), headers: jsonHeaders, payload: "{}" },
+    { label: "no approvedate at all (ให้ ZORT ใส่วันปัจจุบันเอง)", url: "/Quotation/ApproveQuotation?id=" + encodeURIComponent(qId), headers: jsonHeaders, payload: "{}" },
   ];
 
   let succeeded = false;
