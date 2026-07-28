@@ -2588,25 +2588,31 @@ function exploreZortApproveQuotation() {
     try { return JSON.parse(r.getContentText() || "{}"); } catch (e) { return {}; }
   }
 
-  // รายชื่อ endpoint+payload ที่เป็นไปได้ — เรียงจากน่าจะเป็นไปได้มากสุดก่อน (mirror pattern เดียวกับ VoidQuotation)
+  // รอบแรกยิง JSON body ล้วนแล้วโดน "Invalid ID" ทุกตัว (ยกเว้น ApproveQuotation ที่ตอบ error
+  // แบบมี resCode แปลว่า endpoint นี้มีจริง) — เหมือน VoidQuotation เป๊ะที่ปฏิเสธ JSON body id
+  // ต้องอ่าน id ผ่าน URL query/form-encoded แทน รอบนี้ลองทุก transport ของ ApproveQuotation
+  // + เผื่อ endpoint รับ array (ปุ่มจริงในหน้า ZORT เลือกได้หลายใบพร้อมกันด้วย checkbox)
+  const formHdr = Object.assign({}, H, { "Content-Type": "application/x-www-form-urlencoded" });
   const candidates = [
-    { label: "ApproveQuotation {id, approvedate}", url: "/Quotation/ApproveQuotation", body: { id: qId, approvedate: dateStr } },
-    { label: "ApproveQuotation {number, approvedate}", url: "/Quotation/ApproveQuotation", body: { number: qNumber, approvedate: dateStr } },
-    { label: "UpdateQuotationStatus {id, status:Success}", url: "/Quotation/UpdateQuotationStatus", body: { id: qId, status: "Success" } },
-    { label: "EditQuotation {id, status:Success, approvedate}", url: "/Quotation/EditQuotation", body: { id: qId, status: "Success", approvedate: dateStr } },
-    { label: "ConvertQuotation {id}", url: "/Quotation/ConvertQuotation", body: { id: qId } },
-    { label: "ConvertQuotationToOrder {id}", url: "/Quotation/ConvertQuotationToOrder", body: { id: qId } },
+    { label: "query id+approvedate, body {}", url: "/Quotation/ApproveQuotation?id=" + encodeURIComponent(qId) + "&approvedate=" + encodeURIComponent(dateStr), headers: jsonHeaders, payload: "{}" },
+    { label: "form id+approvedate", url: "/Quotation/ApproveQuotation", headers: formHdr, payload: "id=" + encodeURIComponent(qId) + "&approvedate=" + encodeURIComponent(dateStr) },
+    { label: "query number+approvedate, body {}", url: "/Quotation/ApproveQuotation?number=" + encodeURIComponent(qNumber) + "&approvedate=" + encodeURIComponent(dateStr), headers: jsonHeaders, payload: "{}" },
+    { label: "form number+approvedate", url: "/Quotation/ApproveQuotation", headers: formHdr, payload: "number=" + encodeURIComponent(qNumber) + "&approvedate=" + encodeURIComponent(dateStr) },
+    { label: "JSON body {ids:[id], approvedate}", url: "/Quotation/ApproveQuotation", headers: jsonHeaders, payload: JSON.stringify({ ids: [qId], approvedate: dateStr }) },
+    { label: "JSON body {list:[id], approvedate}", url: "/Quotation/ApproveQuotation", headers: jsonHeaders, payload: JSON.stringify({ list: [qId], approvedate: dateStr }) },
+    { label: "query ids[]+approvedate, body {}", url: "/Quotation/ApproveQuotation?ids%5B%5D=" + encodeURIComponent(qId) + "&approvedate=" + encodeURIComponent(dateStr), headers: jsonHeaders, payload: "{}" },
+    { label: "form ids[]+approvedate", url: "/Quotation/ApproveQuotation", headers: formHdr, payload: "ids%5B%5D=" + encodeURIComponent(qId) + "&approvedate=" + encodeURIComponent(dateStr) },
   ];
 
   let succeeded = false;
   for (const c of candidates) {
     if (succeeded) break;
     const res = UrlFetchApp.fetch(ZORT_BASE + c.url, {
-      method: "post", headers: jsonHeaders, payload: JSON.stringify(c.body), muteHttpExceptions: true,
+      method: "post", headers: c.headers, payload: c.payload, muteHttpExceptions: true,
     });
     const code = res.getResponseCode();
     const text = res.getContentText();
-    Logger.log("▶ [" + c.label + "] POST " + c.url + " body=" + JSON.stringify(c.body) + "\n   HTTP " + code + " resp=" + text.substring(0, 300));
+    Logger.log("▶ [" + c.label + "] POST " + c.url + " payload=" + c.payload + "\n   HTTP " + code + " resp=" + text.substring(0, 300));
     const err = zortRespError_(res);
     if (code === 200 && !err) {
       Utilities.sleep(800);
