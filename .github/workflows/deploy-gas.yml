@@ -25,14 +25,21 @@ jobs:
       - name: Write clasp credentials
         run: echo '${{ secrets.CLASPRC_JSON }}' > ~/.clasprc.json
 
-      # clasp push อัปโค้ดเข้า HEAD ของ project — พอ deployment เดิมถูกตั้งเป็น
-      # version "Head" แล้ว (ทำครั้งเดียวใน GAS editor: Deploy → Manage deployments →
-      # แก้ deployment เดิม → Version = Head) เว็บแอป /exec จะรันโค้ด HEAD เสมอ
-      # ไม่ต้อง `clasp deploy` สร้าง version ใหม่อีกต่อไป
-      #
-      # ⚠️ ห้ามเพิ่ม `clasp deploy` กลับมาโดยไม่ตั้ง Version=Head ก่อน — Apps Script
-      # จำกัด version ไว้ที่ 200/project ตลอดอายุโปรเจกต์และ "ลบ version เก่าไม่ได้เลย"
-      # (ชนแล้วที่ 200 เมื่อ 2026-07-24 ถึง 2026-07-28 ทำให้ deploy fail ทุกครั้ง 4 วันติด
-      # แม้ push จะสำเร็จก็ตาม — โค้ดเข้า editor แต่เว็บแอปจริงยังรันโค้ดเก่า)
-      - name: Push to GAS (HEAD deployment — no new version needed)
+      - name: Push to GAS
         run: clasp push --force
+
+      # clasp push อัปแค่โค้ดใน project (HEAD) — เว็บแอป /exec ที่ pin เวอร์ชันไว้จะยัง
+      # เสิร์ฟโค้ดเก่า ทำให้ route ใหม่ได้ "Unknown action" · ต้อง redeploy เวอร์ชันใหม่
+      # เข้า deployment เดิม (ใช้ deploymentId = ส่วน AKfycb… ใน /exec URL ของ config.js)
+      # → คง URL เดิม แต่โค้ดใหม่ออกทันที
+      #
+      # ⚠️ ลองสลับ deployment นี้เป็น version "Head" แล้ว (2026-07-28) เพื่อเลี่ยงปัญหา
+      # 200-version-limit แต่ deployment ประเภทนี้ ("Anyone" access, token auth) ไม่มี
+      # ตัวเลือก Head ให้เลือกใน UI เลย (เจอแค่ "เวอร์ชันใหม่" + เลข version) — ต้องสร้าง
+      # version ใหม่ทุก deploy ต่อไปแบบเดิม
+      # โปรเจกต์นี้ชนลิมิต 200 version มาแล้วรอบนึง (2026-07-24 ถึง 2026-07-28, ~4 วัน
+      # deploy fail ทุกครั้งแม้ push จะสำเร็จ) แก้ชั่วคราวด้วยการ deploy version ใหม่มือ
+      # ใน GAS editor เอง — ถ้าเจอ error "reached the limit of 200 versions" อีกใน log
+      # workflow นี้ ทางแก้ถาวรคือย้ายไป Apps Script project ใหม่ (versions ลบไม่ได้เลย)
+      - name: Deploy new version to web app (same /exec URL)
+        run: clasp deploy --deploymentId AKfycbz4ARb5OaYZiY40X0VMDm6jca1BSC6UpQ-1QQ1nb4VGQ0jPch1MEmEOUvWEDaEPbVcONg --description "auto ${{ github.sha }}"

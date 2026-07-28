@@ -2532,6 +2532,115 @@ function checkDeployedCode() {
   Logger.log("scriptId ของ project นี้: " + ScriptApp.getScriptId());
 }
 
+// ─── สำรวจ endpoint "อนุมัติใบเสนอราคา" ตัวจริงของ ZORT (test-then-verify) ────────
+// เจ้าของเจอในหน้าเว็บ ZORT เอง: กด "รออนุมัติ" → popup "อนุมัติรายการ" มีแค่ช่อง
+// "วันที่อนุมัติ" → กดบันทึก → ZORT สร้างรายการขายให้เองอัตโนมัติ (ไม่ใช่สิ่งที่ approveQuotation()
+// ปัจจุบันทำ — ตอนนี้เรา mirror รายการเองไป AddOrder แล้ว void ใบเดิม ซึ่งอาจไม่ตรงกับ logic จริงของ
+// ZORT เช่น เลขอ้างอิงเชื่อมกลับใบเสนอราคา, ภาษี, หรือ field อื่นที่ AddOrder เพียว ๆ ไม่ได้ทำ)
+//
+// field "approvedate"/"approvedateString" ที่เห็นใน GetQuotationDetail (ว่างเป็น null ทุกใบที่เคยทดสอบ)
+// ตรงกับช่อง "วันที่อนุมัติ" ใน popup เป๊ะ — คาดว่ามี endpoint เฉพาะสำหรับตั้งค่านี้ (เดา field/endpoint
+// ชื่อไม่ได้ ไม่มีเอกสาร ต้องทดสอบจริงเหมือน AddQuotation)
+//
+// วิธีทำ: สร้างใบเสนอราคาทดสอบ 1 ใบ (ไม่ void) → ลองยิง endpoint ที่เดาไว้หลายแบบตามลำดับ →
+// เช็ค GetQuotationDetail ว่า approvedate/status เปลี่ยนไหม + เช็ค GetOrders 5 รายการล่าสุดว่ามี
+// order ใหม่ที่ตรงกับลูกค้า/ยอดของใบทดสอบนี้หรือไม่ (ดูว่า ZORT auto-create order ให้จริงตามที่เจ้าของเห็น)
+// ตัวไหนสำเร็จ → หยุดลอง (ไม่ลองต่อกันสร้างซ้ำ) · ถ้าไม่มีตัวไหนสำเร็จเลย → void ใบทดสอบทิ้งให้ (กันขยะ)
+// ถ้าตัวใดตัวหนึ่งสำเร็จ → ใบทดสอบจะกลายเป็น "อนุมัติแล้ว" จริง (แก้กลับไม่ได้ เหมือนกดในหน้า ZORT เอง)
+// แต่เป็นแค่สินค้าทดสอบ 1 ชิ้นราคา 10 บาท ผลกระทบต่ำมาก
+function exploreZortApproveQuotation() {
+  const H = zortHeaders_();
+  const jsonHeaders = Object.assign({}, H, { "Content-Type": "application/json" });
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const stockSh = ss.getSheetByName(SHEET_PRODUCTS);
+  const stockRows = stockSh ? stockSh.getDataRange().getValues() : [];
+  let testSku = "", testName = "สินค้าทดสอบ";
+  for (let i = 1; i < stockRows.length; i++) {
+    const sku = String(stockRows[i][1] || "").trim();
+    if (sku) { testSku = sku; testName = String(stockRows[i][2] || testName).trim(); break; }
+  }
+  if (!testSku) { Logger.log("❌ ไม่เจอ SKU ในชีตสต็อกเลย"); return; }
+
+  const dateStr = Utilities.formatDate(new Date(), "Asia/Bangkok", "dd/MM/yyyy");
+  const addPayload = {
+    date: dateStr,
+    customername: "ทดสอบ Approve (ห้ามลบเอง รอสคริปต์เคลียร์)",
+    customeridnumber: "0105500000000",
+    description: "ทดสอบ endpoint อนุมัติใบเสนอราคา",
+    tag: ["ทดสอบเซล-approve"],
+    list: [{ sku: testSku, name: testName + " (ทดสอบ approve)", number: 1, pricepernumber: 10, totalprice: 10 }],
+  };
+  const addRes = UrlFetchApp.fetch(ZORT_BASE + "/Quotation/AddQuotation", {
+    method: "post", headers: jsonHeaders, payload: JSON.stringify(addPayload), muteHttpExceptions: true,
+  });
+  let addJson = {};
+  try { addJson = JSON.parse(addRes.getContentText() || "{}"); } catch (e) {}
+  const det = addJson.detail || {};
+  const qId = det.id != null ? det.id : (addJson.resDesc && !isNaN(Number(addJson.resDesc)) ? Number(addJson.resDesc) : null);
+  const qNumber = det.number || addJson.resDesc2 || null;
+  if (qId == null && !qNumber) { Logger.log("❌ สร้างใบทดสอบไม่สำเร็จ: " + addRes.getContentText()); return; }
+  Logger.log("สร้างใบทดสอบแล้ว: id=" + qId + " number=" + qNumber);
+
+  function getDetail() {
+    const r = UrlFetchApp.fetch(ZORT_BASE + "/Quotation/GetQuotationDetail?id=" + encodeURIComponent(qId != null ? qId : qNumber),
+      { method: "get", headers: H, muteHttpExceptions: true });
+    try { return JSON.parse(r.getContentText() || "{}"); } catch (e) { return {}; }
+  }
+
+  // รายชื่อ endpoint+payload ที่เป็นไปได้ — เรียงจากน่าจะเป็นไปได้มากสุดก่อน (mirror pattern เดียวกับ VoidQuotation)
+  const candidates = [
+    { label: "ApproveQuotation {id, approvedate}", url: "/Quotation/ApproveQuotation", body: { id: qId, approvedate: dateStr } },
+    { label: "ApproveQuotation {number, approvedate}", url: "/Quotation/ApproveQuotation", body: { number: qNumber, approvedate: dateStr } },
+    { label: "UpdateQuotationStatus {id, status:Success}", url: "/Quotation/UpdateQuotationStatus", body: { id: qId, status: "Success" } },
+    { label: "EditQuotation {id, status:Success, approvedate}", url: "/Quotation/EditQuotation", body: { id: qId, status: "Success", approvedate: dateStr } },
+    { label: "ConvertQuotation {id}", url: "/Quotation/ConvertQuotation", body: { id: qId } },
+    { label: "ConvertQuotationToOrder {id}", url: "/Quotation/ConvertQuotationToOrder", body: { id: qId } },
+  ];
+
+  let succeeded = false;
+  for (const c of candidates) {
+    if (succeeded) break;
+    const res = UrlFetchApp.fetch(ZORT_BASE + c.url, {
+      method: "post", headers: jsonHeaders, payload: JSON.stringify(c.body), muteHttpExceptions: true,
+    });
+    const code = res.getResponseCode();
+    const text = res.getContentText();
+    Logger.log("▶ [" + c.label + "] POST " + c.url + " body=" + JSON.stringify(c.body) + "\n   HTTP " + code + " resp=" + text.substring(0, 300));
+    const err = zortRespError_(res);
+    if (code === 200 && !err) {
+      Utilities.sleep(800);
+      const after = getDetail();
+      Logger.log("   → อ่านกลับ status=" + JSON.stringify(after.status) + " approvedate=" + JSON.stringify(after.approvedateString || after.approvedate));
+      if (after.status !== "Pending" || after.approvedate) {
+        succeeded = true;
+        Logger.log("   ✅ endpoint นี้ใช้ได้จริง! status/approvedate เปลี่ยนแล้ว");
+      }
+    }
+    Utilities.sleep(200);
+  }
+
+  // เช็ค order 10 รายการล่าสุดว่ามีตัวที่ตรงกับใบทดสอบนี้ไหม (ลูกค้า "ทดสอบ Approve" + ยอด 10)
+  try {
+    const ordRes = UrlFetchApp.fetch(ZORT_BASE + "/Order/GetOrders?page=1&limit=10", { method: "get", headers: H, muteHttpExceptions: true });
+    const ordJson = JSON.parse(ordRes.getContentText() || "{}");
+    const list = ordJson.list || [];
+    const matched = list.filter(o => String(o.customername || "").indexOf("ทดสอบ Approve") >= 0);
+    Logger.log("── ออเดอร์ล่าสุดที่ชื่อลูกค้ามี \"ทดสอบ Approve\": " + JSON.stringify(matched.map(o => ({ number: o.number, amount: o.amount, status: o.status }))));
+  } catch (e) { Logger.log("เช็ค GetOrders ไม่สำเร็จ: " + e); }
+
+  if (!succeeded) {
+    Logger.log("⚠️ ไม่มี endpoint ไหนใช้ได้เลย — ลบใบทดสอบทิ้งให้อัตโนมัติ");
+    try {
+      const delResult = voidZortQuotation_(qId, qNumber, "explore-approve-cleanup");
+      Logger.log("ลบใบทดสอบ: " + delResult.getContent());
+    } catch (e) { Logger.log("⚠️ ลบใบทดสอบไม่สำเร็จ (ลบเองใน ZORT ถ้าเจอ number: " + qNumber + "): " + e); }
+  } else {
+    Logger.log("ℹ️ ใบทดสอบ " + qNumber + " ถูกอนุมัติจริงแล้ว (แก้กลับไม่ได้ เหมือนกดในหน้า ZORT) — เป็นแค่สินค้าทดสอบ 10 บาท ไม่ต้องลบ");
+  }
+  Logger.log("──────── เสร็จ — copy log ทั้งหมดตั้งแต่ต้นส่งกลับมา ────────");
+}
+
 // ⚠️ ONE-OFF CLEANUP: ลบใบเสนอราคาทดสอบ QT-202607015 (id 346234) ที่หลุดค้างจริงใน ZORT
 // เพราะ exploreZortAddQuotation() รุ่นก่อนหน้าอ่าน id/number ผิดตำแหน่ง (อยู่ใน detail ไม่ใช่ top-level)
 // เลยไม่เรียก void ให้ — รันฟังก์ชันนี้ 1 ครั้งเพื่อลบทิ้ง แล้วลบฟังก์ชันนี้ออกได้เลย
