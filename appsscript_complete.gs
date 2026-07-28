@@ -2513,6 +2513,25 @@ function exploreZortAddQuotationV2() {
   Logger.log("──────── เสร็จ V2 — copy log ทั้งหมดตั้งแต่ต้นส่งกลับมา ────────");
 }
 
+// 🔍 ตรวจว่าโค้ดใหม่เข้ามาถึง project นี้แล้วหรือยัง (รันในเอดิเตอร์ ไม่แตะข้อมูลใดๆ ปลอดภัย 100%)
+// ใช้แยกสาเหตุ "Unknown action": โค้ดยังไม่เข้า project vs เข้าแล้วแต่ deployment เสิร์ฟตัวเก่า
+function checkDeployedCode() {
+  var names = ["approveQuotation", "createQuotation", "saveQuotationDraft", "getQuotationDrafts",
+               "deleteQuotationDraft", "exploreZortAddQuotationV2"];
+  Logger.log("═══ ฟังก์ชันใหม่ที่ควรมีในโค้ดล่าสุด ═══");
+  var missing = 0;
+  names.forEach(function (n) {
+    var exists = false;
+    try { exists = eval("typeof " + n) === "function"; } catch (e) { exists = false; }
+    if (!exists) missing++;
+    Logger.log((exists ? "✅ มี   " : "❌ ไม่มี") + " : " + n);
+  });
+  Logger.log("───────────────────────────────");
+  if (missing === 0) Logger.log("👉 โค้ดใหม่เข้า project นี้ครบแล้ว — ถ้าเว็บยังขึ้น Unknown action = deployment เสิร์ฟโค้ดเก่า");
+  else Logger.log("👉 โค้ดใหม่ยังมาไม่ถึง project นี้ (ขาด " + missing + " ฟังก์ชัน) — clasp push อาจไปคนละ project");
+  Logger.log("scriptId ของ project นี้: " + ScriptApp.getScriptId());
+}
+
 // ⚠️ ONE-OFF CLEANUP: ลบใบเสนอราคาทดสอบ QT-202607015 (id 346234) ที่หลุดค้างจริงใน ZORT
 // เพราะ exploreZortAddQuotation() รุ่นก่อนหน้าอ่าน id/number ผิดตำแหน่ง (อยู่ใน detail ไม่ใช่ top-level)
 // เลยไม่เรียก void ให้ — รันฟังก์ชันนี้ 1 ครั้งเพื่อลบทิ้ง แล้วลบฟังก์ชันนี้ออกได้เลย
