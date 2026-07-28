@@ -6636,6 +6636,19 @@ async function syncVoidQuotation(id, number) {
   } catch (e) { return { ok: false, error: e.message }; }
 }
 
+// อนุมัติใบเสนอราคา → แปลงเป็นออเดอร์ขายจริงใน ZORT (ตัดสต็อก) แล้วปิดใบเสนอราคาเดิม
+async function syncApproveQuotation(id, number) {
+  if (!SHEET_DEPLOY_URL) return { ok: false, error: "ยังไม่ได้เชื่อมต่อ Sheet" };
+  try {
+    const res = await fetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ approveQuotation: true, quotationId: id, quotationNumber: number, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "owner" }),
+    });
+    return await res.json().catch(() => ({ ok: false, error: "อ่านผลลัพธ์ไม่ได้" }));
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
 // บันทึกชื่อเซลที่ทำใบเสนอราคา (เก็บในชีตเรา ไม่แตะ ZORT)
 async function syncSetQuoteSale(number, sale) {
   if (!SHEET_DEPLOY_URL) return { ok: false, error: "ยังไม่ได้เชื่อมต่อ Sheet" };
@@ -6669,6 +6682,7 @@ function QuoteFollowupView() {
   const [selMonth, setSelMonth] = uS("");       // "" = ทุกเดือน, "1".."12"
   const [qPage, setQPage] = uS(1);
   const [voidingId, setVoidingId] = uS(null);
+  const [approvingId, setApprovingId] = uS(null);
   const [toast, showToast, hideToast] = useToast();
   const listRef = React.useRef(null);
   const PAGE_SIZE = 20;
@@ -6715,6 +6729,20 @@ function QuoteFollowupView() {
       showToast("success", `ปิดใบ ${q.number || ""} แล้ว`, "✓");
       setItems(prev => prev.map(x => (x.id || x.number) === (q.id || q.number) ? { ...x, status: "Voided" } : x));
     } else { showToast("error", "ปิดใบไม่สำเร็จ: " + ((r && r.error) || "ไม่ทราบสาเหตุ"), "❌"); }
+  };
+
+  const handleApprove = async (q) => {
+    if (approvingId || voidingId) return;
+    if (!window.confirm(`อนุมัติใบเสนอราคา ${q.number || ""}\n"${q.customer}" (${(Number(q.amount) || 0).toLocaleString()} ฿)\n\nระบบจะสร้างออเดอร์ขายจริงใน ZORT (ตัดสต็อก) ตามรายการในใบนี้ แล้วปิดใบเสนอราคาทิ้ง — ยืนยัน?`)) return;
+    setApprovingId(q.id || q.number);
+    const r = await syncApproveQuotation(q.id, q.number);
+    setApprovingId(null);
+    if (r && r.success) {
+      const d = r.data || {};
+      showToast("success", `อนุมัติแล้ว → ออเดอร์ ${d.orderNumber || ""}${d.quotationVoided ? "" : " (ปิดใบเสนอราคาเดิมไม่สำเร็จ ต้องปิดเองใน ZORT)"}`, "✓");
+      setItems(prev => prev.map(x => (x.id || x.number) === (q.id || q.number) ? { ...x, status: d.quotationVoided ? "Voided" : x.status } : x));
+      load();
+    } else { showToast("error", "อนุมัติไม่สำเร็จ: " + ((r && r.error) || "ไม่ทราบสาเหตุ"), "❌"); }
   };
 
   // ── ปี/สถานะ ──
@@ -7004,6 +7032,8 @@ function QuoteFollowupView() {
                         const expSoon = q.expireInDays !== null && q.expireInDays !== undefined && q.expireInDays <= 14;
                         const overdue = q.ageDays !== null && q.ageDays > OVERDUE_DAYS;
                         const busy = voidingId === (q.id || q.number);
+                        const approving = approvingId === (q.id || q.number);
+                        const anyBusy = !!voidingId || !!approvingId;
                         return (
                           <tr key={q.number || idx} style={{ borderBottom: "1px solid var(--bdr)", background: overdue ? "#fff5f5" : (idx % 2 === 0 ? "var(--paper)" : "var(--g-50)") }}>
                             <td style={{ padding: "8px 12px", minWidth: 160 }}>
@@ -7024,11 +7054,18 @@ function QuoteFollowupView() {
                                 style={{ marginTop: 3, width: 110, minWidth: 0, padding: "3px 6px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/>
                             </td>
                             <td style={{ padding: "8px 12px", textAlign: "center", whiteSpace: "nowrap" }}>
-                              <button onClick={() => handleVoid(q)} disabled={busy || !!voidingId} style={{
-                                border: "1px solid " + (overdue ? "var(--dang)" : "var(--bdr)"), background: overdue ? "var(--dang)" : "var(--paper)",
-                                color: overdue ? "#fff" : "var(--muted)", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700,
-                                cursor: voidingId ? "default" : "pointer", opacity: (busy || voidingId) && !busy ? .5 : 1,
-                              }}>{busy ? "กำลังปิด…" : "ปิดใบ"}</button>
+                              <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
+                                <button onClick={() => handleApprove(q)} disabled={anyBusy} style={{
+                                  border: "1px solid var(--g-600)", background: "var(--g-600)",
+                                  color: "#fff", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700,
+                                  cursor: anyBusy ? "default" : "pointer", opacity: anyBusy && !approving ? .5 : 1,
+                                }}>{approving ? "กำลังอนุมัติ…" : "✓ อนุมัติ"}</button>
+                                <button onClick={() => handleVoid(q)} disabled={anyBusy} style={{
+                                  border: "1px solid " + (overdue ? "var(--dang)" : "var(--bdr)"), background: overdue ? "var(--dang)" : "var(--paper)",
+                                  color: overdue ? "#fff" : "var(--muted)", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700,
+                                  cursor: anyBusy ? "default" : "pointer", opacity: anyBusy && !busy ? .5 : 1,
+                                }}>{busy ? "กำลังปิด…" : "ปิดใบ"}</button>
+                              </div>
                             </td>
                           </tr>
                         );

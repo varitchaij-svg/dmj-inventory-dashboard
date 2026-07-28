@@ -358,6 +358,11 @@ function doPost(e) {
       return voidZortQuotation_(data.quotationId, data.quotationNumber, actor);
     }
 
+    // ─── Approve Quotation: แปลงใบเสนอราคาเป็นออเดอร์ขายจริงใน ZORT (ตัดสต็อก) แล้วปิดใบเสนอราคาเดิม ───
+    if (data.approveQuotation) {
+      return approveQuotation(ss, data.quotationId, data.quotationNumber, actor);
+    }
+
     // ─── Set Quotation Sale: บันทึกชื่อเซลที่ทำใบเสนอราคา (ในชีตเรา) ───
     if (data.setQuoteSale) {
       return setQuoteSale_(data.quoteNumber, data.sale, actor);
@@ -6721,6 +6726,90 @@ function voidZortQuotation_(quotationId, quotationNumber, actor) {
     return jsonOut({ ok: false, error: attempts.join(" | ") });
   } catch (e) {
     return jsonOut({ ok: false, error: String(e) });
+  }
+}
+
+// ─── อนุมัติใบเสนอราคา: แปลงเป็นออเดอร์ขายจริงใน ZORT (ตัดสต็อก) แล้วปิดใบเสนอราคาทิ้ง ───
+// ดึงรายการสินค้า+ราคา+ลูกค้าจากใบเสนอราคาเดิมตรงๆ (ไม่ต้องกรอกใหม่) — กันเลขไม่ตรงกับที่เสนอราคาไป
+// field name ฝั่ง Order ต่างจาก Quotation (ยืนยันจาก POS_ZORT_FIELDS/exploreZortAddQuotationV2):
+//   quotation.customeridnumber   → order.customertaxid
+//   quotation.customerbranchname → order.customerbranch
+//   quotation.customerbranchno   → order.customerbranchcode
+//   quotation.saleschannel       → order.channel
+// สำเร็จแล้วค่อย void ใบเสนอราคา — ถ้าสร้างออเดอร์ไม่สำเร็จ ใบเสนอราคายังคงอยู่ (กดอนุมัติใหม่ได้)
+function approveQuotation(ss, quotationId, quotationNumber, actor) {
+  var qId = (quotationId != null && quotationId !== "") ? quotationId : null;
+  var qNum = quotationNumber ? String(quotationNumber).trim() : "";
+  if (qId == null && !qNum) return error("ไม่มี id/number ของใบเสนอราคา");
+
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่ ลองใหม่อีกครั้ง");
+  try {
+    var H = zortHeaders_();
+    var headers = Object.assign({}, H, { "Content-Type": "application/json" });
+
+    // (1) ดึงรายละเอียดใบเสนอราคาเดิม
+    var idParam = qId != null ? qId : qNum;
+    var detRes = UrlFetchApp.fetch(ZORT_BASE + "/Quotation/GetQuotationDetail?id=" + encodeURIComponent(idParam),
+      { method: "get", headers: H, muteHttpExceptions: true });
+    var detErr = zortRespError_(detRes);
+    if (detErr) { logZortFailure_("อนุมัติใบเสนอราคา-ดึงรายละเอียด " + (qNum || qId), detErr); return error("ดึงรายละเอียดใบเสนอราคาไม่สำเร็จ: " + detErr); }
+    var od = {};
+    try { var detJson = JSON.parse(detRes.getContentText() || "{}"); od = detJson.quotation || detJson.data || detJson; } catch (e) { return error("อ่านรายละเอียดใบเสนอราคาไม่ได้: " + e); }
+    if (!od || !od.list) return error("ไม่พบข้อมูลใบเสนอราคา (id/number: " + (qNum || qId) + ")");
+
+    var list = (od.list || []).map(function (it) {
+      return {
+        sku: String(it.sku || "").trim(),
+        name: String(it.name || "").trim(),
+        number: Number(it.number) || 0,
+        pricepernumber: Number(it.pricepernumber) || 0,
+        totalprice: Number(it.totalprice) || 0,
+      };
+    }).filter(function (it) { return it.sku && it.number > 0; });
+    if (!list.length) return error("ใบเสนอราคานี้ไม่มีรายการสินค้าที่ถูกต้อง");
+
+    // (2) สร้างออเดอร์ขายจริง — mirror รายการ+ลูกค้าจากใบเสนอราคาเป๊ะ ไม่กรอกใหม่
+    var payload = {
+      date: Utilities.formatDate(new Date(), "Asia/Bangkok", "dd/MM/yyyy"),
+      remark: "แปลงจากใบเสนอราคา " + (od.number || qNum || ""),
+      list: list,
+    };
+    if (od.customername)       payload.customername       = String(od.customername);
+    if (od.customeridnumber)   payload.customertaxid       = String(od.customeridnumber);
+    if (od.customerbranchname) payload.customerbranch      = String(od.customerbranchname);
+    if (od.customerbranchno)   payload.customerbranchcode  = String(od.customerbranchno);
+    if (od.customeraddress)    payload.customeraddress     = String(od.customeraddress);
+    if (od.customerphone)      payload.customerphone       = String(od.customerphone);
+    if (od.customeremail)      payload.customeremail       = String(od.customeremail);
+    if (od.saleschannel)       payload.channel             = String(od.saleschannel);
+
+    var res = UrlFetchApp.fetch(ZORT_BASE + "/Order/AddOrder", {
+      method: "post", headers: headers, payload: JSON.stringify(payload), muteHttpExceptions: true,
+    });
+    var zErr = zortRespError_(res);
+    if (zErr) { logZortFailure_("อนุมัติใบเสนอราคา-สร้างออเดอร์ " + (od.number || qNum), zErr); return error("สร้างออเดอร์ขายใน ZORT ไม่สำเร็จ: " + zErr); }
+    var json = JSON.parse(res.getContentText() || "{}");
+    var orderId     = json.id || json.orderid || json.orderId || deepFindByKey_(json, /^(order)?id$/i) || null;
+    var orderNumber = json.number || json.ordernumber || json.orderNumber || deepFindByKey_(json, /^(order)?number$/i) || null;
+
+    // (3) ปิดใบเสนอราคาเดิม (สำเร็จแล้วเท่านั้น — กันเสียของถ้าออเดอร์สร้างไม่ผ่าน)
+    var voidOk = false, voidError = "";
+    try {
+      var voidRes = voidZortQuotation_(qId, od.number || qNum, actor);
+      var voidJson = JSON.parse(voidRes.getContent() || "{}");
+      voidOk = !!voidJson.ok;
+      if (!voidOk) voidError = voidJson.error || "";
+    } catch (e) { voidError = String(e); }
+
+    writeAuditLog_(actor || "owner", "อนุมัติใบเสนอราคา → สร้างออเดอร์ขาย", orderNumber || od.number || qNum,
+      auditDetail_({ after: { orderId: orderId, orderNumber: orderNumber, quotationNumber: od.number || qNum, items: list.length, quotationVoided: voidOk },
+        note: voidOk ? "" : ("ปิดใบเสนอราคาเดิมไม่สำเร็จ (ต้องปิดเองใน ZORT): " + voidError) }));
+
+    invalidateCache_();
+    return ok({ orderId: orderId, orderNumber: orderNumber, quotationVoided: voidOk, quotationVoidError: voidOk ? undefined : voidError });
+  } finally {
+    lock.releaseLock();
   }
 }
 
