@@ -118,6 +118,7 @@ const SHEET_CUST_PRODUCTS  = "สรุปลูกค้า-สินค้า"
 const SHEET_QUOTE_SALE     = "เซลใบเสนอราคา";    // mapping เลขที่ QT → ชื่อเซลที่ทำใบ (assign ใน dashboard)
 const SHEET_UNSCANNED_SALE = "ขายไม่สแกน";        // นับสต็อกแล้วของหาย=ขายออก (บวก soldQty ไม่แตะยอดเงิน) col: date,SKU,qty,actor,time
 const SHEET_ORDERS_RAW     = "ZORT ออเดอร์ดิบ";   // ออเดอร์ดิบทั้งระบบ (per-line) สำหรับ backfill+วิเคราะห์ย้อนหลัง
+const SHEET_QUOTE_DRAFTS   = "ร่างใบเสนอราคา";    // ร่างใบเสนอราคาที่ยังไม่ส่งเข้า ZORT
 const BACKFILL_START_YM    = "2024-01";           // เดือนแรกที่เริ่มใช้ ZORT — backfill ดึงตั้งแต่เดือนนี้
 const WH_NAME_SAI5    = "คลังสินค้าสาย5";
 const WH_NAME_FS      = "ดูเหมือนจริง";
@@ -440,6 +441,17 @@ function doPost(e) {
       return issueFullTaxInvoice(data.orderNumber, data.customer || {}, actor, data.orderId);
     }
 
+    // ─── ใบเสนอราคาจากเว็บ (sales staff สร้างเองแทนเข้า ZORT UI) ───
+    if (data.createQuotation) {
+      return createQuotation(ss, data.quote || {}, actor);
+    }
+    if (data.saveQuotationDraft) {
+      return saveQuotationDraft(ss, data.quote || {}, actor);
+    }
+    if (data.deleteQuotationDraft) {
+      return deleteQuotationDraft(ss, data.draftId, actor);
+    }
+
     // ─── Order Management ───
     if (data.deleteOrder) {
       return deleteOrderRow(ss, data.orderId, actor);
@@ -546,6 +558,11 @@ function doGet(e) {
     // ใบเสนอราคาค้าง (Pending): ดีลที่รอลูกค้าตัดสินใจ พร้อมข้อมูลติดต่อ — ไว้ตามปิดการขาย
     if (e && e.parameter && e.parameter.action === 'getPendingQuotations') {
       return handleGetPendingQuotations_();
+    }
+
+    // ร่างใบเสนอราคาที่ยังไม่ส่งเข้า ZORT (บันทึกไว้ทำต่อทีหลัง)
+    if (e && e.parameter && e.parameter.action === 'getQuotationDrafts') {
+      return getQuotationDrafts(SpreadsheetApp.openById(SHEET_ID));
     }
 
     // สรุปสถานะใบเสนอราคา (ทุกสถานะ อนุมัติ/รอ/ยกเลิก) — คืน raw ทั้งหมดให้ frontend รวมเอง
@@ -7651,6 +7668,191 @@ function issueFullTaxInvoice(orderNumber, customer, actor, orderId) {
     return ok({ orderNumber: num, documentNumber: documentNumber });
   } finally {
     lock.releaseLock();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 📄 ใบเสนอราคาจากเว็บ — sales staff สร้างเอง แทนเข้า ZORT UI (field name ยืนยันจาก
+// exploreZortAddQuotationV2 แล้ว: customeridnumber/customerbranchname/customerbranchno/
+// description/saleschannel — คนละชื่อกับ Order API)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// สร้างใบเสนอราคาจริงใน ZORT
+// data = {
+//   items:[{sku,name,qty,price,category}],   // price=ราคาปลีกต่อชิ้น (SKU ล็อค แต่ name แก้ได้ เช่น MTO)
+//   customer:{name,taxId,branch,branchNo,address,phone,email},
+//   salesRep, remarks:[string...] หรือ remark:string, channel, manualDiscount, dryRun, draftId
+// }
+// หมายเหตุ: คิดยอด+ส่วนลดขั้นบันไดฝั่ง server ด้วย computeBillTotalsGs_ ตรรกะเดียวกับ POS
+// (ไม่พึ่งฟิลด์ discount ของ ZORT — เฉลี่ยส่วนลดลงราคาต่อหน่วยเหมือน createSaleBill กันหมวดที่ยกเว้น
+// เช่น "จัดแบบพิเศษ"/MTO ได้ส่วนลดผิดพลาด)
+function createQuotation(ss, data, actor) {
+  var items = Array.isArray(data.items) ? data.items : [];
+  if (!items.length) return error("ไม่มีรายการสินค้าในใบเสนอราคา");
+
+  var totals = computeBillTotalsGs_(items, {
+    excludeKeywords: readBillExcludeCats_(),
+    manualDiscount: data.manualDiscount,
+  });
+
+  var gross = totals.retailEligible + totals.retailExcluded;
+  var factor = gross > 0 ? (totals.grandTotal / gross) : 1;
+  var list = items.map(function (it) {
+    var qty = Number(it.qty) || 0;
+    var netUnit = Math.round((Number(it.price) || 0) * factor * 100) / 100;
+    return {
+      sku: String(it.sku || "").trim(),
+      name: String(it.name || "").trim(),
+      number: qty,
+      pricepernumber: netUnit,
+      totalprice: Math.round(netUnit * qty * 100) / 100,
+    };
+  }).filter(function (it) { return it.sku && it.number > 0; });
+  if (!list.length) return error("ไม่มีรายการสินค้าที่ถูกต้องในใบเสนอราคา");
+
+  var cust = data.customer || {};
+  var remarkText = Array.isArray(data.remarks)
+    ? data.remarks.map(function (r) { return String(r || "").trim(); }).filter(Boolean).join("\n")
+    : String(data.remark || "").trim();
+
+  var payload = {
+    date: Utilities.formatDate(new Date(), "Asia/Bangkok", "dd/MM/yyyy"),
+    list: list,
+    description: remarkText,
+  };
+  if (cust.name)     payload.customername       = String(cust.name);
+  if (cust.taxId)    payload.customeridnumber   = String(cust.taxId);
+  if (cust.branch)   payload.customerbranchname = String(cust.branch);
+  if (cust.branchNo) payload.customerbranchno   = String(cust.branchNo);
+  if (cust.address)  payload.customeraddress    = String(cust.address);
+  if (cust.phone)    payload.customerphone      = String(cust.phone);
+  if (cust.email)    payload.customeremail      = String(cust.email);
+  if (data.salesRep) payload.tag = [String(data.salesRep)];   // QuoteFollowupView อ่านชื่อเซลจาก tag อยู่แล้ว
+  if (data.channel)  payload.saleschannel       = String(data.channel);
+
+  if (data.dryRun) return ok({ dryRun: true, totals: totals, payload: payload });
+
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่ ลองใหม่อีกครั้ง");
+  try {
+    var headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
+    var res = UrlFetchApp.fetch(ZORT_BASE + "/Quotation/AddQuotation", {
+      method: "post", headers: headers, payload: JSON.stringify(payload), muteHttpExceptions: true,
+    });
+    var zErr = zortRespError_(res);
+    if (zErr) { logZortFailure_("สร้างใบเสนอราคา (" + (cust.name || "") + ")", zErr); return error("สร้างใบเสนอราคาใน ZORT ไม่สำเร็จ: " + zErr); }
+    var json = JSON.parse(res.getContentText() || "{}");
+    var det = json.detail || {};
+    var qId = det.id != null ? det.id
+      : (json.resDesc && !isNaN(Number(json.resDesc)) ? Number(json.resDesc) : null);
+    var qNumber = det.number || json.resDesc2 || null;
+    if (qId == null && !qNumber) { logZortFailure_("สร้างใบเสนอราคา", "ไม่ได้ id/number กลับมา: " + res.getContentText()); return error("สร้างใบเสนอราคาไม่สำเร็จ (ไม่ได้เลขที่กลับมาจาก ZORT)"); }
+
+    writeAuditLog_(actor || "ไม่ระบุ", "สร้างใบเสนอราคา", qNumber || "(ไม่ทราบเลข)",
+      auditDetail_({ after: { total: totals.grandTotal, items: list.length, customer: cust.name || "", salesRep: data.salesRep || "" },
+        note: "สร้างผ่านเว็บแอป" }));
+
+    if (data.draftId) { try { deleteQuotationDraft_(ss, data.draftId); } catch (e) { Logger.log("ลบร่างหลังส่งไม่สำเร็จ (ไม่ critical): " + e); } }
+
+    invalidateCache_();
+    return ok({ quotationId: qId, quotationNumber: qNumber, totals: totals });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// บันทึกร่างใบเสนอราคา (ยังไม่ส่งเข้า ZORT) — ให้ทำต่อทีหลังได้ เก็บใน SHEET_QUOTE_DRAFTS
+// data = { draftId(ถ้าแก้ร่างเดิม), customer, items, salesRep, remarks, manualDiscount, channel }
+function saveQuotationDraft(ss, data, actor) {
+  try {
+    var sh = ss.getSheetByName(SHEET_QUOTE_DRAFTS);
+    if (!sh) {
+      sh = ss.insertSheet(SHEET_QUOTE_DRAFTS);
+      sh.appendRow(["draftId", "createdAt", "updatedAt", "actor", "customerJSON", "itemsJSON", "salesRep", "remarksJSON", "manualDiscount", "channel"]);
+      sh.getRange(1, 1, 1, 10).setFontWeight("bold");
+    }
+    var draftId = String(data.draftId || "").trim();
+    var now = new Date();
+    var createdAt = now;
+    var existingRowIdx = -1;
+
+    if (draftId) {
+      var values = sh.getDataRange().getValues();
+      for (var i = 1; i < values.length; i++) {
+        if (String(values[i][0]) === draftId) { createdAt = values[i][1]; existingRowIdx = i + 1; break; }
+      }
+    }
+    if (!draftId) draftId = Utilities.getUuid();
+
+    var row = [
+      draftId, createdAt, now, actor || "ไม่ระบุ",
+      JSON.stringify(data.customer || {}),
+      JSON.stringify(data.items || []),
+      String(data.salesRep || ""),
+      JSON.stringify(data.remarks || []),
+      Number(data.manualDiscount) || 0,
+      String(data.channel || ""),
+    ];
+
+    if (existingRowIdx > 0) sh.getRange(existingRowIdx, 1, 1, row.length).setValues([row]);
+    else sh.appendRow(row);
+
+    return ok({ draftId: draftId });
+  } catch (e) {
+    return error("บันทึกร่างไม่สำเร็จ: " + e);
+  }
+}
+
+// ลบร่างทิ้ง (ใช้ทั้งจาก action=deleteQuotationDraft และภายในหลังส่งเข้า ZORT สำเร็จ)
+function deleteQuotationDraft_(ss, draftId) {
+  var sh = ss.getSheetByName(SHEET_QUOTE_DRAFTS);
+  if (!sh) return;
+  var did = String(draftId || "").trim();
+  if (!did) return;
+  var values = sh.getDataRange().getValues();
+  for (var i = values.length - 1; i >= 1; i--) {
+    if (String(values[i][0]) === did) { sh.deleteRow(i + 1); break; }
+  }
+}
+
+function deleteQuotationDraft(ss, draftId, actor) {
+  try {
+    deleteQuotationDraft_(ss, draftId);
+    return ok({ deleted: true });
+  } catch (e) {
+    return error("ลบร่างไม่สำเร็จ: " + e);
+  }
+}
+
+// ดึงรายการร่างใบเสนอราคาทั้งหมด (ทุกคนเห็นร่วมกัน เหมือนข้อมูลอื่นในระบบ)
+function getQuotationDrafts(ss) {
+  try {
+    var sh = ss.getSheetByName(SHEET_QUOTE_DRAFTS);
+    if (!sh) return ok({ drafts: [] });
+    var values = sh.getDataRange().getValues();
+    var drafts = [];
+    for (var i = 1; i < values.length; i++) {
+      var r = values[i];
+      if (!r[0]) continue;
+      var customer = {}, items = [], remarks = [];
+      try { customer = JSON.parse(r[4] || "{}"); } catch (e) {}
+      try { items = JSON.parse(r[5] || "[]"); } catch (e) {}
+      try { remarks = JSON.parse(r[7] || "[]"); } catch (e) {}
+      drafts.push({
+        draftId: String(r[0]),
+        createdAt: r[1] ? new Date(r[1]).toISOString() : "",
+        updatedAt: r[2] ? new Date(r[2]).toISOString() : "",
+        actor: r[3] || "",
+        customer: customer, items: items,
+        salesRep: r[6] || "", remarks: remarks,
+        manualDiscount: Number(r[8]) || 0,
+        channel: r[9] || "",
+      });
+    }
+    drafts.sort(function (a, b) { return (b.updatedAt || "").localeCompare(a.updatedAt || ""); });
+    return ok({ drafts: drafts });
+  } catch (e) {
+    return error("ดึงร่างไม่สำเร็จ: " + e);
   }
 }
 
