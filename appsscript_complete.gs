@@ -2361,8 +2361,13 @@ function exploreZortAddQuotation() {
   try { json = JSON.parse(raw); } catch (e) { Logger.log("⚠️ response ไม่ใช่ JSON: " + e); }
   Logger.log("top-level keys: " + JSON.stringify(Object.keys(json)));
 
-  const qId = json.id || json.quotationid || json.quotationId || null;
-  const qNumber = json.number || json.quotationnumber || json.quotationNumber || null;
+  // AddQuotation ตอบกลับแบบเดียวกับ AddOrder: {resCode,resDesc=id,resDesc2=number,detail:{id,number,...}}
+  // ไม่ใช่ top-level id/number ตรงๆ — เช็ค detail ก่อน แล้วค่อย fallback resDesc/resDesc2
+  const det = json.detail || {};
+  const qId = det.id || json.id || json.quotationid || json.quotationId ||
+    (json.resDesc && !isNaN(Number(json.resDesc)) ? Number(json.resDesc) : null) || null;
+  const qNumber = det.number || json.number || json.quotationnumber || json.quotationNumber ||
+    json.resDesc2 || null;
   Logger.log("👉 id ที่ได้กลับ: " + qId + " | number ที่ได้กลับ: " + qNumber);
 
   // 3) ถ้าสร้างสำเร็จ → ดึง GetQuotationDetail มาดู full schema (โดยเฉพาะ list/discount ที่ echo กลับ)
@@ -2397,6 +2402,14 @@ function exploreZortAddQuotation() {
     } catch (e) { Logger.log("⚠️ ลบใบทดสอบไม่สำเร็จ (ลบเองใน ZORT ถ้าเจอ number: " + qNumber + "): " + e); }
   }
   Logger.log("──────── เสร็จ — copy log ทั้งหมดตั้งแต่ต้นส่งกลับมา ────────");
+}
+
+// ⚠️ ONE-OFF CLEANUP: ลบใบเสนอราคาทดสอบ QT-202607015 (id 346234) ที่หลุดค้างจริงใน ZORT
+// เพราะ exploreZortAddQuotation() รุ่นก่อนหน้าอ่าน id/number ผิดตำแหน่ง (อยู่ใน detail ไม่ใช่ top-level)
+// เลยไม่เรียก void ให้ — รันฟังก์ชันนี้ 1 ครั้งเพื่อลบทิ้ง แล้วลบฟังก์ชันนี้ออกได้เลย
+function cleanupTestQuotation_QT202607015() {
+  const result = voidZortQuotation_(346234, "QT-202607015", "cleanup-explore-leftover");
+  Logger.log("ผลการลบ QT-202607015: " + result.getContent());
 }
 
 // ─── Quotation conversion report per salesperson (READ-ONLY) ────────────────
