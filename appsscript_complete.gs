@@ -2404,6 +2404,93 @@ function exploreZortAddQuotation() {
   Logger.log("──────── เสร็จ — copy log ทั้งหมดตั้งแต่ต้นส่งกลับมา ────────");
 }
 
+// รอบ 2: ยืนยัน field name ที่แก้แล้ว (customeridnumber/customerbranchname/customerbranchno/
+// description/saleschannel) จริง ๆ ถูก ZORT รับ+echo กลับหรือไม่ — รอบแรกใช้ชื่อผิด (มิเรอร์จาก Order API)
+// ทำให้ field ลูกค้า/หมายเหตุ/ช่องทาง หาย รอบนี้แก้แล้วต้องเห็นค่า echo กลับตรงกับที่ส่งไปทุกตัว
+function exploreZortAddQuotationV2() {
+  const H = zortHeaders_();
+  const jsonHeaders = Object.assign({}, H, { "Content-Type": "application/json" });
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const stockSh = ss.getSheetByName(SHEET_PRODUCTS);
+  const stockRows = stockSh ? stockSh.getDataRange().getValues() : [];
+  let testSku = "", testName = "สินค้าทดสอบ";
+  for (let i = 1; i < stockRows.length; i++) {
+    const sku = String(stockRows[i][1] || "").trim();
+    if (sku) { testSku = sku; testName = String(stockRows[i][2] || testName).trim(); break; }
+  }
+  if (!testSku) { Logger.log("❌ ไม่เจอ SKU ในชีตสต็อกเลย"); return; }
+  Logger.log("ใช้สินค้าทดสอบ: " + testSku + " (" + testName + ")");
+
+  const payload = {
+    date: Utilities.formatDate(new Date(), "Asia/Bangkok", "dd/MM/yyyy"),
+    customername: "ทดสอบ ExploreV2 (ลบอัตโนมัติ)",
+    customeridnumber: "0105500000000",       // แก้จาก customertaxid
+    customerbranchname: "สำนักงานใหญ่",       // แก้จาก customerbranch
+    customerbranchno: "00000",                // แก้จาก customerbranchcode
+    customeraddress: "ที่อยู่ทดสอบ V2",
+    customerphone: "0811111111",
+    customeremail: "testv2@example.com",
+    description: "ทดสอบสำรวจ field รอบ 2 (ลบอัตโนมัติหลังรัน)",  // แก้จาก remark
+    discount: "6%",
+    tag: ["ทดสอบเซล V2"],
+    saleschannel: "ทดสอบ V2",                 // แก้จาก channel
+    list: [{
+      sku: testSku,
+      name: testName + " (ทดสอบ V2)",
+      number: 2,
+      pricepernumber: 20,
+      totalprice: 40,
+    }],
+  };
+  Logger.log("payload ที่ส่ง (V2): " + JSON.stringify(payload));
+
+  const res = UrlFetchApp.fetch(ZORT_BASE + "/Quotation/AddQuotation", {
+    method: "post", headers: jsonHeaders, payload: JSON.stringify(payload), muteHttpExceptions: true,
+  });
+  Logger.log("AddQuotation HTTP " + res.getResponseCode());
+  const raw = res.getContentText();
+  Logger.log("AddQuotation raw response: " + raw.substring(0, 2000));
+
+  let json = {};
+  try { json = JSON.parse(raw); } catch (e) { Logger.log("⚠️ response ไม่ใช่ JSON: " + e); }
+  const det = json.detail || {};
+  const qId = det.id || (json.resDesc && !isNaN(Number(json.resDesc)) ? Number(json.resDesc) : null) || null;
+  const qNumber = det.number || json.resDesc2 || null;
+  Logger.log("👉 id: " + qId + " | number: " + qNumber);
+
+  if (qId != null || qNumber) {
+    Utilities.sleep(1000);
+    const idParam = qId != null ? qId : qNumber;
+    const detRes = UrlFetchApp.fetch(ZORT_BASE + "/Quotation/GetQuotationDetail?id=" + encodeURIComponent(idParam),
+      { method: "get", headers: H, muteHttpExceptions: true });
+    const detRaw = detRes.getContentText();
+    Logger.log("GetQuotationDetail raw: " + detRaw.substring(0, 2500));
+    try {
+      const d = JSON.parse(detRaw);
+      Logger.log("── เช็ค echo ──");
+      Logger.log("customername: " + JSON.stringify(d.customername) + " (ต้องการ: ทดสอบ ExploreV2 (ลบอัตโนมัติ))");
+      Logger.log("customeridnumber: " + JSON.stringify(d.customeridnumber) + " (ต้องการ: 0105500000000)");
+      Logger.log("customerbranchname: " + JSON.stringify(d.customerbranchname) + " (ต้องการ: สำนักงานใหญ่)");
+      Logger.log("customerbranchno: " + JSON.stringify(d.customerbranchno) + " (ต้องการ: 00000)");
+      Logger.log("description: " + JSON.stringify(d.description) + " (ต้องการ: ทดสอบสำรวจ field รอบ 2...)");
+      Logger.log("saleschannel: " + JSON.stringify(d.saleschannel) + " (ต้องการ: ทดสอบ V2)");
+      Logger.log("discount: " + JSON.stringify(d.discount) + " discountamount: " + d.discountamount);
+      Logger.log("tag: " + JSON.stringify(d.tag));
+    } catch (e) { Logger.log("⚠️ อ่าน detail JSON ไม่ได้: " + e); }
+  } else {
+    Logger.log("⚠️ ไม่ได้ id/number กลับมา");
+  }
+
+  if (qId != null || qNumber) {
+    try {
+      const delResult = voidZortQuotation_(qId, qNumber, "explore-test-v2");
+      Logger.log("ลบใบทดสอบ V2: " + delResult.getContent());
+    } catch (e) { Logger.log("⚠️ ลบใบทดสอบไม่สำเร็จ (ลบเองใน ZORT ถ้าเจอ number: " + qNumber + "): " + e); }
+  }
+  Logger.log("──────── เสร็จ V2 — copy log ทั้งหมดตั้งแต่ต้นส่งกลับมา ────────");
+}
+
 // ⚠️ ONE-OFF CLEANUP: ลบใบเสนอราคาทดสอบ QT-202607015 (id 346234) ที่หลุดค้างจริงใน ZORT
 // เพราะ exploreZortAddQuotation() รุ่นก่อนหน้าอ่าน id/number ผิดตำแหน่ง (อยู่ใน detail ไม่ใช่ top-level)
 // เลยไม่เรียก void ให้ — รันฟังก์ชันนี้ 1 ครั้งเพื่อลบทิ้ง แล้วลบฟังก์ชันนี้ออกได้เลย
