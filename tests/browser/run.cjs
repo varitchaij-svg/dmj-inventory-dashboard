@@ -19,9 +19,9 @@ const { chromium } = require(path.join(CACHE, 'node_modules', 'playwright-core')
 const ROLE_TABS = {
   owner:      ["overview","categories","trends","stock","storage","stockcount","frontstore","transfers","orders","ordersummary","mtojobs","upload","connect","labels","auditlog","deadstock"],
   employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","mtojobs","labels"],
-  warehouse:  ["categories","storage","stockcount","orders","ordersummary","mtojobs","labels"],
-  frontstore: ["categories","stock","frontstore","orders","mtojobs","labels"],
-  saler:      ["pos","categories","stock","orders","mtojobs","labels"],
+  warehouse:  ["categories","storage","stockcount","orders","ordersummary","tracking","mtojobs","labels"],
+  frontstore: ["frontstore","categories","stock","orders","tracking","mtojobs","labels"],
+  saler:      ["pos","categories","stock","tracking","orders","mtojobs","labels"],
 };
 // tab id → ป้ายข้อความ (จาก TABS ใน app.jsx) สำหรับคลิก nav
 const TAB_LABEL = {
@@ -29,7 +29,7 @@ const TAB_LABEL = {
   storage:"ตำแหน่งคลัง", stockcount:"นับ stock คลัง", frontstore:"เช็คหน้าร้าน",
   transfers:"โอน/ปรับ/ยกมา", orders:"รายการสั่งของ", ordersummary:"สรุปสินค้าออกจากคลัง",
   mtojobs:"งานจัดพิเศษ", upload:"อัปโหลด Zort", connect:"Google Sheet", labels:"พิมพ์ Label",
-  auditlog:"Audit Log", deadstock:"สินค้าจม", pos:"ขาย/ออกบิล",
+  auditlog:"Audit Log", deadstock:"สินค้าจม", pos:"ขาย/ออกบิล", tracking:"ติดตามสถานะ",
 };
 
 // (ก) assert เฉพาะเจาะจงต่อ tab — อิงข้อมูลจาก fixture (deterministic)
