@@ -303,7 +303,7 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
           {onBack && <button onClick={onBack} style={{ padding: 14, borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700 }}>← กลับไปหน้าติดตามสถานะ</button>}
         </div>
         <QuotationPrintDoc quotationNumber={result.quotationNumber} items={cart} customer={cust} remarks={remarks} salesRep={salesRep} totals={result.totals || totals}/>
-        <Toast toast={toast} onClose={hideToast}/>
+        <div className="no-print"><Toast toast={toast} onClose={hideToast}/></div>
       </div>
     );
   }
@@ -636,8 +636,12 @@ function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep
                 </div>
               </div>
             )}
-            {/* ── ช่องเซ็น — ดันไปล่างสุดของกระดาษ (หน้าสุดท้ายเท่านั้น) ── */}
-            <div style={{ marginTop: "auto" }}>
+            {/* ── ช่องเซ็น — เว้นระยะคงที่ต่อจากเนื้อหา (หน้าสุดท้ายเท่านั้น) ──
+                หมายเหตุ: เดิมใช้ marginTop:"auto" + บังคับ min-height ให้ดันลงล่างสุดของกระดาษ
+                แต่ sub-pixel rounding ของเบราว์เซอร์ดันความสูงเกิน 297mm จนล้นเป็นหน้าที่ 2
+                (ค่าว่างเกือบทั้งหน้า) เปลี่ยนเป็นระยะห่างคงที่แทน — รับประกันไม่ล้นหน้า แลกกับ
+                ช่องเซ็นไม่ชิดขอบล่างสุดเป๊ะสำหรับเอกสารสั้น (ยอมรับได้ ดีกว่าเสี่ยงล้นหน้า) */}
+            <div style={{ marginTop: 40 }}>
               {isLast && (
                 <div style={{ display: "flex", justifyContent: "space-around", paddingTop: 24, fontSize: 11, textAlign: "center" }}>
                   {["ผู้เสนอราคา", "ผู้อนุมัติสั่งซื้อ"].map(l => (

@@ -941,9 +941,11 @@
     }
     .pos-print-page:last-child { page-break-after: avoid; break-after: avoid; }
     .quote-print-area { display: block !important; }
+    /* ไม่บังคับ min-height เท่ากับความสูงหน้า A4 (เคยลอง 293/297mm แล้วยังล้นเป็นหน้า 2
+       เกือบว่างเปล่าจาก sub-pixel rounding) — ปล่อยสูงตามเนื้อหาจริง (auto) รับประกัน
+       ไม่ล้นหน้า แลกกับช่องเซ็นไม่ชิดขอบล่างสุดเป๊ะในเอกสารสั้น (ดูใน views-quote.jsx) */
     .quote-print-page {
       width: 210mm !important;
-      min-height: 293mm !important;
       padding: 12mm 10mm !important;
       box-sizing: border-box !important;
       page-break-after: always;

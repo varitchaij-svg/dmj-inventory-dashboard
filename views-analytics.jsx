@@ -6860,6 +6860,9 @@ function QuoteFollowupView({ data, role }) {
 
   return (
     <div style={{ padding: "16px", maxWidth: 1040, margin: "0 auto" }}>
+    {/* เนื้อหาแดชบอร์ดทั้งหมด (KPI/ตาราง) ห้ามพิมพ์ปน — เหลือแค่ QuotationPrintDoc ด้านล่าง
+        (นอก .no-print นี้) ตอนกด 🖨️ พิมพ์ย้อนหลังจากตารางรออนุมัติ/อนุมัติแล้ว */}
+    <div className="no-print">
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
         <div>
           <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>📊 สรุปสถานะใบเสนอราคา</div>
@@ -7167,11 +7170,12 @@ function QuoteFollowupView({ data, role }) {
         </>
       )}
       <datalist id="dmjQuoteSales">{salesList.map(s => <option key={s} value={s}/>)}</datalist>
+      <Toast toast={toast} onClose={hideToast}/>
+    </div>
       {printData && (
         <QuotationPrintDoc quotationNumber={printData.quotationNumber} items={printData.items} customer={printData.customer}
           remarks={printData.remarks} salesRep={printData.salesRep} totals={printData.totals}/>
       )}
-      <Toast toast={toast} onClose={hideToast}/>
     </div>
   );
 }
