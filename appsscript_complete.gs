@@ -2733,33 +2733,30 @@ function exploreZortQuotationAmountFix() {
 // open-api.zortout.com (Partner API ที่เรามี APP key/secret) — endpoint นี้อาจเป็น
 // internal-only ของหน้าเว็บ ไม่เปิดให้ Partner API เรียกก็ได้ ต้องทดสอบดูก่อน (READ-ONLY
 // ปลอดภัย 100% ไม่มีการสร้าง/แก้ข้อมูลใดๆ — แค่ลองยิง GET หลาย endpoint ที่เป็นไปได้)
+// รอบ 2: เจ้าของลองเลขใหม่ "0105569044336" (ไม่เคยเจอ) เทียบกับเลขที่เคยเจอ
+// "0105566198464" (บริษัท สไปซี่ ซอมเบรโร จำกัด) — ตั้งสมมติฐานว่า GetContacts
+// ค้นได้เฉพาะ contact ที่ "มีอยู่ใน ZORT ของร้านนี้แล้ว" เท่านั้น (อาจเคยถูกสร้างไว้ผ่าน
+// การค้นในหน้าเว็บ secure.zortout.com ก่อนหน้านี้) ไม่ใช่ค้นทะเบียนธุรกิจสดจริงๆ ตามที่
+// เข้าใจผิดไปตอนแรก — ถ้าเลขใหม่ไม่เจอเลยสักตัว ยืนยันสมมติฐานนี้
 function exploreZortTaxIdLookup() {
   const H = zortHeaders_();
-  const testTaxId = "0105566198464"; // เลขจากตัวอย่างที่เจ้าของเจอ (บริษัท สไปซี่ ชอมเบรโร จำกัด)
+  const known = "0105566198464";  // เคยเจอ: บริษัท สไปซี่ ซอมเบรโร จำกัด
+  const unknown = "0105569044336"; // เลขใหม่ที่เจ้าของลอง — ยังไม่เคยเจอ
 
-  const candidates = [
-    "/Contact/SearchTaxId?taxid=" + testTaxId,
-    "/Contact/LookupTaxId?taxid=" + testTaxId,
-    "/Contact/GetTaxIdInfo?taxid=" + testTaxId,
-    "/Contact/SearchByTaxId?taxid=" + testTaxId,
-    "/Contact/GetContacts?keyword=" + testTaxId, // เผื่อ endpoint เดิมที่ใช้อยู่แล้วรองรับจริง (ยังไม่เคยทดสอบเลขที่ไม่ใช่ลูกค้าเก่า)
-    "/TaxId/Search?taxid=" + testTaxId,
-    "/TaxId/GetInfo?taxid=" + testTaxId,
-    "/Company/Search?taxid=" + testTaxId,
-    "/Company/GetInfo?taxid=" + testTaxId,
-    "/Contact/SearchTaxId?id=" + testTaxId,
-  ];
-
-  Logger.log("═══ ทดสอบ endpoint ค้นหาเลขผู้เสียภาษี " + testTaxId + " (บริษัท สไปซี่ ชอมเบรโร จำกัด) ═══");
-  candidates.forEach(function (path) {
+  [known, unknown].forEach(function (taxId) {
+    Logger.log("═══ ทดสอบเลข " + taxId + " ═══");
     try {
-      const res = UrlFetchApp.fetch(ZORT_BASE + path, { method: "get", headers: H, muteHttpExceptions: true });
+      const res = UrlFetchApp.fetch(ZORT_BASE + "/Contact/GetContacts?page=1&limit=10&keyword=" + taxId,
+        { method: "get", headers: H, muteHttpExceptions: true });
       const code = res.getResponseCode();
       const text = res.getContentText();
-      const looksReal = text.indexOf("สไปซี่") >= 0 || text.indexOf("ชอมเบรโร") >= 0;
-      Logger.log("▶ GET " + path + "\n   HTTP " + code + (looksReal ? "   ✅✅✅ เจอชื่อบริษัทจริง!" : "") + "\n   resp=" + text.substring(0, 400));
+      let json = {};
+      try { json = JSON.parse(text); } catch (e) {}
+      const list = json.list || [];
+      Logger.log("HTTP " + code + " — จำนวนผลลัพธ์: " + list.length);
+      Logger.log("resp=" + text.substring(0, 500));
     } catch (e) {
-      Logger.log("▶ GET " + path + "\n   ❌ error: " + e);
+      Logger.log("❌ error: " + e);
     }
   });
   Logger.log("──────── เสร็จ — copy log ทั้งหมดตั้งแต่ต้นส่งกลับมา ────────");
