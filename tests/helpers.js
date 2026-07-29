@@ -117,6 +117,68 @@ function nextModelForPrefix(prefix, products) {
   return String(max + 1).padStart(3, "0");
 }
 
+// ── attBuildTs: "yyyy-MM-dd" + "HH:mm(:ss)" → { ms, time } (จาก appsscript_complete.gs) ──
+// ใช้ตอนเจ้าของแก้เวลาลงเวลาย้อนหลัง — ms ที่ได้คือ serverTs ที่ทุกการคำนวณชั่วโมง/สาย/พัก
+// ใช้ต่อ ถ้าเพี้ยน ตัวเลขทั้งเดือนเพี้ยนตาม จึงต้องมี test คุมไว้
+function attBuildTs(dateStr, timeStr) {
+  const dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr).trim());
+  const tm = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(String(timeStr).trim());
+  if (!dm || !tm) return null;
+  const hh = parseInt(tm[1], 10), mi = parseInt(tm[2], 10), sec = tm[3] ? parseInt(tm[3], 10) : 0;
+  if (hh > 23 || mi > 59 || sec > 59) return null;
+  const d = new Date(Number(dm[1]), Number(dm[2]) - 1, Number(dm[3]), hh, mi, sec);
+  return {
+    ms: d.getTime(),
+    time: String(hh).padStart(2, "0") + ":" + String(mi).padStart(2, "0") + ":" + String(sec).padStart(2, "0"),
+  };
+}
+
+// ── attSequenceWarning: ตรวจลำดับเหตุการณ์ของวัน — เตือนอย่างเดียว ไม่บล็อก ──
+function attSequenceWarning(events) {
+  if (!events.length) return "";
+  const w = [];
+  if (events[0].type !== "in") w.push("เหตุการณ์แรกของวันไม่ใช่ \"เข้างาน\"");
+  if (events.filter(function (e) { return e.type === "in"; }).length > 1) w.push("มี \"เข้างาน\" มากกว่า 1 ครั้ง");
+  const outIdx = events.map(function (e) { return e.type; }).indexOf("out");
+  if (outIdx >= 0 && outIdx !== events.length - 1) w.push("มีเหตุการณ์ต่อหลัง \"ออกงาน\"");
+  return w.join(" · ");
+}
+
+// ── attSummarize: สรุปเวลาของวัน (จาก appsscript_complete.gs) ──
+// events ต้องเรียงตาม serverTs แล้ว · shift = { start: นาทีจากเที่ยงคืน } หรือ null
+function attSummarize(events, shift) {
+  const firstIn = events.find(function (e) { return e.type === "in"; }) || null;
+  let lastOut = null;
+  for (let i = events.length - 1; i >= 0; i--) { if (events[i].type === "out") { lastOut = events[i]; break; } }
+
+  let breakMin = 0, openBreak = null, forgotBreakEnd = false;
+  events.forEach(function (e) {
+    if (e.type === "breakStart") openBreak = e;
+    else if (e.type === "breakEnd" && openBreak) { breakMin += Math.round((e.serverTs - openBreak.serverTs) / 60000); openBreak = null; }
+  });
+  if (openBreak) {
+    forgotBreakEnd = true;
+    if (lastOut) breakMin += Math.round((lastOut.serverTs - openBreak.serverTs) / 60000);
+  }
+
+  const workedMin = (firstIn && lastOut) ? Math.max(0, Math.round((lastOut.serverTs - firstIn.serverTs) / 60000) - breakMin) : null;
+
+  let lateMin = null;
+  if (firstIn && shift && shift.start != null) {
+    const d = new Date(firstIn.serverTs);
+    const inMin = d.getHours() * 60 + d.getMinutes();
+    lateMin = Math.max(0, inMin - shift.start);
+  }
+
+  return {
+    inTime: firstIn ? firstIn.time : null,
+    outTime: lastOut ? lastOut.time : null,
+    breakMin, workedMin, lateMin,
+    onBreak: !!(openBreak && !lastOut),
+    forgotBreakEnd,
+  };
+}
+
 // ── จาก views.jsx บรรทัด 1355–1367 ──────────────────────────────────────────
 // รับ object ที่มี property .sku (เหมือน Array.sort comparator)
 function compareSku(a, b) {
@@ -662,5 +724,6 @@ module.exports = {
   buildYoYSeries, abcClassify, sanitizeThresholds, THRESHOLDS_DEFAULT,
   parseCheckDateMs, suggestNextSku,
   parseSkuParts, nextModelForPrefix,
+  attBuildTs, attSequenceWarning, attSummarize,
   computeBillTotals, wholesaleTierRate, isBillExcludedCat, BILL_EXCLUDE_CAT_KEYWORDS,
 };

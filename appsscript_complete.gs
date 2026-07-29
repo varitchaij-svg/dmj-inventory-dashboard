@@ -801,7 +801,7 @@ function punchHandler_(ss, data) {
     const photoId = saveAttPhoto_(data.photoBase64, s.displayName || s.lineDisplayName, dateStr, ATT_TYPE_TH[type]);
 
     const sh = attendanceSheet_(ss);
-    const id = "AT-" + Utilities.formatDate(now, "Asia/Bangkok", "yyyyMMdd") + "-" + String(sh.getLastRow()).padStart(4, "0");
+    const id = attNextId_(sh, dateStr);
     // วันที่/เวลาเขียนเป็น text — กัน Sheets แปลงรูปแบบเอง (บทเรียนข้อ 2 ใน CLAUDE.md)
     sh.appendRow([
       id, s.staffId, s.displayName || s.lineDisplayName, dateStr, attTimeStr_(now),
@@ -881,9 +881,10 @@ function attendanceTodayHandler_(ss, data) {
       const sid = String(r[1]);
       if (!byStaff[sid]) byStaff[sid] = { staffId: sid, name: r[2], events: [] };
       byStaff[sid].events.push({
-        type: r[7], time: r[4], serverTs: Number(r[5]) || 0,
+        id: r[0], type: r[7], time: r[4], serverTs: Number(r[5]) || 0,
         lat: r[8], distM: r[11], siteName: r[12],
         inArea: r[13] === true || r[13] === "TRUE", photo: r[14],
+        source: r[15], note: r[16],
       });
     });
   }
@@ -902,11 +903,289 @@ function attendanceTodayHandler_(ss, data) {
       shift: shift ? { name: shift.name, start: attFmtHm_(shift.start), end: attFmtHm_(shift.end) } : null,
       summary: sum,
       events: evs.map(function (e) {
-        return { type: e.type, typeTh: ATT_TYPE_TH[e.type], time: e.time, distM: e.distM, siteName: e.siteName, inArea: e.inArea, photo: e.photo };
+        return {
+          id: e.id, type: e.type, typeTh: ATT_TYPE_TH[e.type], time: e.time,
+          distM: e.distM, siteName: e.siteName, inArea: e.inArea, photo: e.photo,
+          fixed: String(e.source || "") === ATT_SOURCE_FIX, note: e.note,   // โชว์ว่าแถวนี้เจ้าของแก้เอง ไม่ใช่พนักงานกดจริง
+        };
       }),
     };
   });
   return ok({ date: dateStr, rows: rows });
+}
+
+// ═══════════════════════════════════════════════════════════
+// แก้ไขการลงเวลาย้อนหลัง (owner) — action=fixAttendance
+// ───────────────────────────────────────────────────────────
+// พนักงานลืมกด "ออกงาน" / กดผิดลำดับ / มือถือแบตหมด เป็นเรื่องที่เกิดทุกสัปดาห์
+// ถ้าแก้ไม่ได้ ชั่วโมงทำงานของทั้งเดือนจะใช้ไม่ได้ → ต้องมีเครื่องมือแก้ตั้งแต่วันแรกที่เปิดใช้
+//
+// กฎที่บังคับไว้ (กันเจ้าของแก้ตัวเลขแบบไม่มีร่องรอย):
+//   1. ต้องกรอกเหตุผลทุกครั้ง — ว่างไม่ได้
+//   2. แถวที่ถูกแก้/เพิ่มจะถูกมาร์ค col "ที่มา" = "แก้โดยเจ้าของ" แยกจากที่พนักงานกดเอง
+//   3. เขียน Audit Log ทุกครั้งพร้อม before/after — ย้อนดูได้ว่าใครแก้อะไรเมื่อไหร่
+// ═══════════════════════════════════════════════════════════
+const ATT_SOURCE_FIX = "แก้โดยเจ้าของ";
+
+// วันที่ในชีตเขียนเป็น text ("@") แต่ถ้าแถวเก่าหลุดเป็น Date ให้ normalize กลับเป็น yyyy-MM-dd
+function attRowDateStr_(v) {
+  if (v instanceof Date) return attDateKey_(v);
+  return String(v || "").trim();
+}
+
+// id ต้องไม่ซ้ำ — เดิมใช้ getLastRow() อย่างเดียว ซึ่งจะซ้ำทันทีที่มีการ "ลบแถว" (ซึ่งเพิ่งทำได้จากที่นี่)
+// และ id ซ้ำ = แก้/ลบผิดแถว จึงต้องเช็คของจริงในชีตก่อนเสมอ
+function attNextId_(sh, dateStr) {
+  const prefix = "AT-" + String(dateStr).replace(/-/g, "") + "-";
+  const used = {};
+  const last = sh.getLastRow();
+  if (last >= 2) {
+    sh.getRange(2, 1, last - 1, 1).getValues().forEach(function (r) { used[String(r[0])] = true; });
+  }
+  let n = last;
+  for (let i = 0; i < 10000; i++) {
+    const id = prefix + String(n).padStart(4, "0");
+    if (!used[id]) return id;
+    n++;
+  }
+  return prefix + Utilities.getUuid().slice(0, 4);
+}
+
+function findAttRowById_(sh, id) {
+  const last = sh.getLastRow();
+  if (last < 2 || !id) return -1;
+  const ids = sh.getRange(2, 1, last - 1, 1).getValues();
+  for (let i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) === String(id)) return i + 2;
+  }
+  return -1;
+}
+
+// สร้าง epoch ms จาก "yyyy-MM-dd" + "HH:mm(:ss)" — สคริปต์ตั้ง timeZone = Asia/Bangkok
+// (appsscript.json) ดังนั้น new Date(y,m,d,h,mi) คือเวลาไทยตรง ๆ ไม่ต้องชดเชย offset เอง
+function attBuildTs_(dateStr, timeStr) {
+  const dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr).trim());
+  const tm = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(String(timeStr).trim());
+  if (!dm || !tm) return null;
+  const hh = parseInt(tm[1], 10), mi = parseInt(tm[2], 10), sec = tm[3] ? parseInt(tm[3], 10) : 0;
+  if (hh > 23 || mi > 59 || sec > 59) return null;
+  const d = new Date(Number(dm[1]), Number(dm[2]) - 1, Number(dm[3]), hh, mi, sec);
+  return {
+    ms: d.getTime(),
+    time: String(hh).padStart(2, "0") + ":" + String(mi).padStart(2, "0") + ":" + String(sec).padStart(2, "0"),
+  };
+}
+
+// ตรวจว่าลำดับของวันสมเหตุสมผลไหม — **เตือนอย่างเดียว ไม่บล็อก**
+// เจ้าของอาจต้องแก้ทีละขั้นแล้วระหว่างทางลำดับยังไม่ครบ ถ้าบล็อกจะแก้ไม่จบ
+function attSequenceWarning_(events) {
+  if (!events.length) return "";
+  const w = [];
+  if (events[0].type !== "in") w.push("เหตุการณ์แรกของวันไม่ใช่ \"เข้างาน\"");
+  if (events.filter(function (e) { return e.type === "in"; }).length > 1) w.push("มี \"เข้างาน\" มากกว่า 1 ครั้ง");
+  const outIdx = events.map(function (e) { return e.type; }).indexOf("out");
+  if (outIdx >= 0 && outIdx !== events.length - 1) w.push("มีเหตุการณ์ต่อหลัง \"ออกงาน\"");
+  return w.join(" · ");
+}
+
+function fixAttendanceHandler_(ss, data) {
+  const s = resolveSession_(ss, data.sessionToken);
+  if (!s || !isAdminRole_(s.role) || s.status !== "active") return unauthorized_();
+
+  const op = String(data.op || "");
+  const reason = String(data.reason || "").trim();
+  if (["add", "edit", "delete"].indexOf(op) < 0) return attErr_("คำสั่งไม่ถูกต้อง");
+  if (!reason) return attErr_("ต้องกรอกเหตุผลที่แก้ทุกครั้ง");
+
+  const who = (s.displayName || s.lineDisplayName) + " (" + (STAFF_ROLE_TH_[s.role] || s.role) + ")";
+  const lock = LockService.getScriptLock();
+  try {
+    try { lock.waitLock(10000); } catch (e) {}
+    const sh = attendanceSheet_(ss);
+    let staffId = "", dateStr = "", before = null, after = null;
+
+    if (op === "add") {
+      staffId = String(data.staffId || "");
+      dateStr = String(data.date || "");
+      const type = String(data.type || "");
+      if (ATT_TYPES.indexOf(type) < 0) return attErr_("ประเภทการลงเวลาไม่ถูกต้อง");
+      const ts = attBuildTs_(dateStr, data.time);
+      if (!ts) return attErr_("วันที่หรือเวลาไม่ถูกต้อง (ต้องเป็น yyyy-MM-dd และ HH:mm)");
+      const staff = readStaffAll_(ss).filter(function (x) { return x.staffId === staffId; })[0];
+      if (!staff) return attErr_("ไม่พบพนักงานคนนี้");
+
+      const id = attNextId_(sh, dateStr);
+      sh.appendRow([
+        id, staffId, staff.displayName || staff.lineDisplayName, dateStr, ts.time,
+        ts.ms, "", type,
+        "", "", "", "", "", "",           // ไม่มีพิกัด/รูป — เป็นแถวที่เจ้าของเพิ่มเอง ไม่ใช่การกดจริง
+        "", ATT_SOURCE_FIX, reason + " [" + who + "]",
+      ]);
+      try { sh.getRange(sh.getLastRow(), 4, 1, 2).setNumberFormat("@"); } catch (e) {}
+      after = { id: id, date: dateStr, time: ts.time, type: type };
+
+    } else {
+      const row = findAttRowById_(sh, data.id);
+      if (row < 0) return attErr_("ไม่พบรายการนี้ (อาจถูกลบไปแล้ว) — กดรีโหลดแล้วลองใหม่");
+      const cur = sh.getRange(row, 1, 1, 17).getValues()[0];
+      staffId = String(cur[1]);
+      dateStr = attRowDateStr_(cur[3]);
+      before = { id: cur[0], date: dateStr, time: String(cur[4]), type: String(cur[7]), source: String(cur[15]) };
+
+      if (op === "delete") {
+        sh.deleteRow(row);
+        after = null;
+      } else {
+        const newType = data.type ? String(data.type) : before.type;
+        if (ATT_TYPES.indexOf(newType) < 0) return attErr_("ประเภทการลงเวลาไม่ถูกต้อง");
+        const ts = attBuildTs_(dateStr, data.time || before.time);
+        if (!ts) return attErr_("เวลาไม่ถูกต้อง (ต้องเป็น HH:mm)");
+        sh.getRange(row, 5).setValue(ts.time);
+        sh.getRange(row, 6).setValue(ts.ms);
+        sh.getRange(row, 8).setValue(newType);
+        sh.getRange(row, 16).setValue(ATT_SOURCE_FIX);
+        sh.getRange(row, 17).setValue(reason + " [" + who + "]");
+        try { sh.getRange(row, 4, 1, 2).setNumberFormat("@"); } catch (e) {}
+        after = { id: before.id, date: dateStr, time: ts.time, type: newType };
+      }
+    }
+
+    writeAuditLog_(who, "แก้ไขการลงเวลา (" + op + ")", staffId + " " + dateStr,
+      auditDetail_({ before: before, after: after, note: reason }));
+
+    // คำนวณสถานะของวันนั้นใหม่ ส่งกลับให้ UI โชว์ผลทันที + เตือนถ้าลำดับยังเพี้ยน
+    const events = readAttEvents_(ss, staffId, dateStr);
+    const staff2 = readStaffAll_(ss).filter(function (x) { return x.staffId === staffId; })[0];
+    const dp = dateStr.split("-");
+    const dow = new Date(Date.UTC(Number(dp[0]), Number(dp[1]) - 1, Number(dp[2]))).getUTCDay();
+    const shift = attShiftFor_(readAttShifts_(ss), staff2 ? staff2.role : "", dow);
+
+    return ok({
+      staffId: staffId, date: dateStr,
+      summary: attSummarize_(events, shift),
+      warning: attSequenceWarning_(events),
+    });
+  } catch (e) {
+    return attErr_(e.toString());
+  } finally {
+    try { lock.releaseLock(); } catch (e) {}
+  }
+}
+
+function attErr_(msg) {
+  return ContentService.createTextOutput(JSON.stringify({ success: false, error: msg }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ═══════════════════════════════════════════════════════════
+// งานดูแลข้อมูลลงเวลา — trigger รายวัน (ตั้งด้วย setupAttendanceMaintenance)
+// ───────────────────────────────────────────────────────────
+// รวม 3 งานที่ต้องทำสม่ำเสมอไว้ใน trigger เดียว (ประหยัดโควตา trigger ของ GAS):
+//   1. ลบรูปลงเวลาที่เกินอายุ — รูปพนักงานเป็นข้อมูลส่วนบุคคล (PDPA) + Drive โตไม่หยุด
+//   2. ลบแถวเซสชันที่หมดอายุ — resolveSession_ สแกนทั้งชีตทุก request ยิ่งโตยิ่งช้าทุกการกดปุ่ม
+//   3. เตือน "ลืมกดออกงาน" — ให้รู้ตั้งแต่คืนนั้น ดีกว่ามารู้ตอนสิ้นเดือนแล้วนึกเวลาไม่ออก
+//
+// ชื่อไม่มี _ ต่อท้าย → โผล่ใน dropdown ของ GAS editor ให้เจ้าของกดรันเองได้ (บทเรียนข้อ 1)
+// ═══════════════════════════════════════════════════════════
+const ATT_PHOTO_KEEP_DAYS_DEFAULT = 90;   // ปรับได้ที่ Script Property ATT_PHOTO_KEEP_DAYS
+const ATT_PHOTO_PURGE_MAX = 200;          // ต่อรอบ — กันรันเกิน 6 นาทีตอนล้างของเก่าครั้งแรก
+const ATT_SESSION_KEEP_DAYS = 7;          // เก็บเซสชันหมดอายุไว้อีก 7 วันเผื่อไล่ดูย้อนหลัง
+
+function dailyAttendanceMaintenance() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const out = [];
+  // แต่ละงานพังแยกกันได้ — ห้ามให้งานเดียวล้มแล้วอีก 2 งานไม่ได้รัน
+  try { out.push("ลบรูปเก่า " + purgeOldAttPhotos_(ss) + " รูป"); }
+  catch (e) { out.push("ลบรูปเก่า ล้มเหลว: " + e); }
+  try { out.push("ลบเซสชันหมดอายุ " + purgeExpiredSessions_(ss) + " แถว"); }
+  catch (e) { out.push("ลบเซสชัน ล้มเหลว: " + e); }
+  try { out.push("เตือนลืมออกงาน " + notifyForgotPunchOut_(ss) + " คน"); }
+  catch (e) { out.push("เตือนลืมออกงาน ล้มเหลว: " + e); }
+  Logger.log("dailyAttendanceMaintenance: " + out.join(" · "));
+}
+
+function purgeOldAttPhotos_(ss) {
+  const keepDays = parseInt(PropertiesService.getScriptProperties().getProperty("ATT_PHOTO_KEEP_DAYS") || "", 10) || ATT_PHOTO_KEEP_DAYS_DEFAULT;
+  const cutoff = attDateKey_(new Date(Date.now() - keepDays * 86400000));
+  const sh = attendanceSheet_(ss);
+  const last = sh.getLastRow();
+  if (last < 2) return 0;
+  const vals = sh.getRange(2, 1, last - 1, 17).getValues();
+  let n = 0;
+  for (let i = 0; i < vals.length && n < ATT_PHOTO_PURGE_MAX; i++) {
+    const photoId = String(vals[i][14] || "").trim();
+    if (!photoId) continue;
+    // yyyy-MM-dd เทียบแบบ string ได้ผลเดียวกับเทียบวันที่ (zero-padded, เรียงตามตัวอักษร = ตามเวลา)
+    if (attRowDateStr_(vals[i][3]) >= cutoff) continue;
+    try { DriveApp.getFileById(photoId).setTrashed(true); } catch (e) {}
+    // ล้างอ้างอิงเสมอ แม้ไฟล์จะหายไปก่อนแล้ว — ไม่งั้นปุ่ม "ดูรูป" จะค้างอยู่ตลอดไป
+    sh.getRange(i + 2, 15).setValue("");
+    n++;
+  }
+  return n;
+}
+
+function purgeExpiredSessions_(ss) {
+  const sh = sessionsSheet_(ss);
+  const last = sh.getLastRow();
+  if (last < 2) return 0;
+  const vals = sh.getRange(2, 1, last - 1, 6).getValues();
+  const graceMs = ATT_SESSION_KEEP_DAYS * 86400000;
+  const now = Date.now();
+  const drop = [];
+  for (let i = 0; i < vals.length; i++) {
+    const expiresAt = vals[i][3] ? new Date(vals[i][3]).getTime() : 0;
+    const createdAt = vals[i][2] ? new Date(vals[i][2]).getTime() : 0;
+    const revoked = vals[i][5] === true || vals[i][5] === "TRUE";
+    const dead = (expiresAt && expiresAt < now - graceMs) || (revoked && createdAt && createdAt < now - graceMs);
+    if (dead) drop.push(i + 2);
+  }
+  // ลบจากล่างขึ้นบน — ลบจากบนจะทำให้เลขแถวที่เหลือเลื่อนทั้งหมด
+  for (let i = drop.length - 1; i >= 0; i--) sh.deleteRow(drop[i]);
+  return drop.length;
+}
+
+// เตือนคนที่กด "เข้างาน" แล้วแต่ยังไม่กด "ออกงาน" — ส่งช่อง secondary รวมเป็นข้อความเดียว
+// dedupKey ผูกกับวันที่ → รัน trigger ซ้ำหรือกดรันเองอีกรอบก็ไม่ส่งซ้ำ (กันเปลืองโควตา)
+function notifyForgotPunchOut_(ss) {
+  const dateStr = attDateKey_(new Date());
+  const shifts = readAttShifts_(ss);
+  const dp = dateStr.split("-");
+  const dow = new Date(Date.UTC(Number(dp[0]), Number(dp[1]) - 1, Number(dp[2]))).getUTCDay();
+  // อ่านชีตครั้งเดียวแล้วจัดกลุ่ม — เรียก readAttEvents_ ต่อคนจะสแกนทั้งชีตซ้ำ N รอบ
+  const sh = attendanceSheet_(ss);
+  const last = sh.getLastRow();
+  const byStaff = {};
+  if (last >= 2) {
+    sh.getRange(2, 1, last - 1, 17).getValues().forEach(function (r) {
+      if (attRowDateStr_(r[3]) !== dateStr) return;
+      const sid = String(r[1]);
+      (byStaff[sid] = byStaff[sid] || []).push({ type: r[7], time: r[4], serverTs: Number(r[5]) || 0, lat: r[8], inArea: r[13] === true || r[13] === "TRUE" });
+    });
+  }
+  const names = [];
+  readStaffAll_(ss).filter(function (x) { return x.status === "active"; }).forEach(function (st) {
+    const evs = (byStaff[st.staffId] || []).sort(function (a, b) { return a.serverTs - b.serverTs; });
+    if (!evs.length) return;
+    const sum = attSummarize_(evs, attShiftFor_(shifts, st.role, dow));
+    if (sum.inTime && !sum.outTime) {
+      names.push("• " + (st.displayName || st.lineDisplayName) + " (เข้า " + String(sum.inTime).slice(0, 5) + ")");
+    }
+  });
+  if (!names.length) return 0;
+  enqueueNoti_({
+    channel: "secondary", priority: 5, type: "text",
+    dedupKey: "att-forgot-out-" + dateStr,
+    payload: { text: "⏰ ยังไม่ได้กด \"ออกงาน\" วันนี้ (" + dateStr + ")\n" + names.join("\n") + "\n\nแก้เวลาย้อนหลังได้ที่แท็บ \"ใครเข้างานวันนี้\"" },
+  });
+  return names.length;
+}
+
+function setupAttendanceMaintenance() {
+  removeTriggersByName_("dailyAttendanceMaintenance");
+  ScriptApp.newTrigger("dailyAttendanceMaintenance").timeBased().everyDays(1).atHour(22).create();
+  Logger.log("✅ ตั้ง trigger: dailyAttendanceMaintenance ทุกวัน 22:00 (ลบรูปเก่า/ล้างเซสชัน/เตือนลืมออกงาน)");
+  Logger.log("   เก็บรูปลงเวลา " + (parseInt(PropertiesService.getScriptProperties().getProperty("ATT_PHOTO_KEEP_DAYS") || "", 10) || ATT_PHOTO_KEEP_DAYS_DEFAULT) + " วัน (ปรับที่ Script Property ATT_PHOTO_KEEP_DAYS)");
 }
 
 // ───────────────────────────────────────────────────────────
@@ -1038,6 +1317,7 @@ function doPost(e) {
     if (data.action === 'punch')           return punchHandler_(ss, data);
     if (data.action === 'myToday')         return myTodayHandler_(ss, data);
     if (data.action === 'attendanceToday') return attendanceTodayHandler_(ss, data);
+    if (data.action === 'fixAttendance')   return fixAttendanceHandler_(ss, data);
 
     // มีการแก้ข้อมูล → ล้าง cache ให้ doGet ครั้งถัดไปคำนวณใหม่ (ข้อมูลไม่ค้าง)
     invalidateCache_(true); // clear payload cache เท่านั้น — ห้าม bump dmj_last_write_ts ก่อน conflict check
@@ -5251,7 +5531,8 @@ function checkSystemStatus() {
   Logger.log("── trigger ──");
   [["drainNotiQueue", "ปล่อยคิวแจ้งเตือน (ทุก 1 นาที)", "setupNotiSystem()"],
    ["archiveReceivedShipments", "เก็บกวาดของที่รับแล้ว (ทุกวัน 03:00)", "setupShipmentArchiveTrigger()"],
-   ["sweepEmptyShelfLocations", "นำสินค้าออกจากชั้นเมื่อคลัง=0 (จันทร์ 05:00)", "setupShelfSweepTrigger()"]
+   ["sweepEmptyShelfLocations", "นำสินค้าออกจากชั้นเมื่อคลัง=0 (จันทร์ 05:00)", "setupShelfSweepTrigger()"],
+   ["dailyAttendanceMaintenance", "ดูแลข้อมูลลงเวลา (ทุกวัน 22:00)", "setupAttendanceMaintenance()"]
   ].forEach(function(x) {
     Logger.log((trg[x[0]] ? "  ✅ " : "  ❌ ") + x[0] + " — " + x[1]);
     if (!trg[x[0]]) need.push(x[2] + "  → " + x[1]);

@@ -15,7 +15,10 @@
     (syncCreateQuotation/syncSaveQuotationDraft/syncGetQuotationDrafts/syncDeleteQuotationDraft)
     ใช้ computeBillTotals/POS_SALES_CHANNELS/POS_TRANSFER_INFO/syncSearchContact จาก
     views-analytics.jsx (global scope เดียวกัน) — เรียกจาก `QuoteFollowupView` โหมด `mode==="create"`
-  - **`Doomuenjing Dashboard.html` โหลดจริงแค่: ui.jsx → views-main.jsx → views-analytics.jsx → views-quote.jsx → app.jsx**
+  - `views-attendance.jsx` (~600 บรรทัด) — ลงเวลาเข้า-ออกงาน: `AttendanceView` (พนักงาน 4 ปุ่ม),
+    `AttendanceTodayView` (owner ดูใครเข้างาน + แก้ย้อนหลัง), `AttFixModal` · helper `attPost`
+    แนบ `sessionToken` จาก localStorage ให้ทุก request เอง (ไม่ใช้ syncXxx ของไฟล์อื่น)
+  - **`Doomuenjing Dashboard.html` โหลดจริงแค่: ui.jsx → views-main.jsx → views-analytics.jsx → views-quote.jsx → views-attendance.jsx → app.jsx**
     (การแยกไฟล์ตั้งใจทำเพื่อลด Babel compile time — ห้ามกลับไปรวมเป็นไฟล์เดียว
     มิฉะนั้น FrontStoreView จะถูกประกาศซ้ำ → redeclaration error + compile ช้า)
   - `app.jsx` (~670 บรรทัด) — routing, data loading, ROLE_TABS
@@ -36,17 +39,22 @@
 ```
 ROLE_TABS = {
   dev:        ทุกแท็บที่มีในระบบ (รวม margin ที่ยังซ่อนจาก owner)
-  owner:      overview, categories, trends, stock, storage, stockcount,
-              newproduct, frontstore, transfers, orders, ordersummary, mtojobs,
-              upload, connect, labels, auditlog, deadstock
-  employee:   categories, trends, stock, storage, frontstore, transfers,
-              orders, ordersummary, mtojobs, labels
-  warehouse:  categories, stock, storage, stockcount, newproduct, orders,
-              ordersummary, mtojobs, labels
-  frontstore: categories, stock, frontstore, orders, mtojobs, labels
-  saler:      categories, stock, orders, mtojobs, labels
+  owner:      attendance, overview, customers, pos, quotefollowup, categories,
+              stock, orders, tracking, frontstore, ordersummary, transfers,
+              storage, stockcount, newproduct, deadstock, trends, season,
+              mtojobs, labels, upload, connect, auditlog, staff, atttoday
+  employee:   attendance, categories, trends, stock, storage, frontstore,
+              transfers, orders, tracking, ordersummary, mtojobs, labels
+  warehouse:  attendance, whhome, orders, stock, stockcount, storage,
+              categories, newproduct, ordersummary, tracking, mtojobs, labels
+  frontstore: attendance, categories, stock, frontstore, orders, tracking,
+              mtojobs, labels
+  saler:      attendance, pos, categories, stock, orders, tracking,
+              quotefollowup, mtojobs, labels
 }
 ```
+(ค่าจริงอยู่ที่ `app.jsx` เสมอ — ถ้าสองที่ไม่ตรงให้เชื่อ `app.jsx` · `tests/browser/run.cjs`
+ก็ mirror ตารางนี้ไว้ ถ้าแก้ ROLE_TABS ต้องอัปเดตที่นั่นด้วย ไม่งั้น smoke test จะ NAV_FAIL)
 (navtabs: แสดงครบบนแถบเมื่อ ≤9 แท็บ เกินนั้น 5 ตัวแรก + "เพิ่มเติม" — owner/employee เท่านั้นที่เกิน)
 
 **role `dev`** = ผู้ดูแลระบบ/คนพัฒนา — สิทธิ์เท่า owner ทุกอย่าง + เห็นแท็บที่ยังซ่อน
@@ -224,7 +232,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 440 tests, 14 test files, ทั้งหมด pass
+**มี Vitest test suite แล้ว** — 583 tests, 18 test files, ทั้งหมด pass
 
 ```bash
 npm test              # run tests
@@ -235,7 +243,13 @@ npm run test:coverage # coverage report (tests/helpers.js)
   export: `compareSku, mtoBase, parseQty_, parseNum_, parseLocation_,
            detectColor, COLOR_MAP, COLOR_KEYS,
            monthKey_, dayKey_, deductStockCore, netOf, enrichDataCore`
-- `tests/*.test.js` — parsing, color, stock, dates, mto, app, format, schema, conflict, orderstate
+- `tests/*.test.js` — parsing, color, stock, dates, mto, app, format, schema, conflict, orderstate,
+  sku, billing, bahttext, transfer, cleanup, analytics, **attendance**, drift-guard
+- **`tests/drift-guard.test.js`** — กัน `helpers.js` drift จากต้นทาง: ทุก export ต้องมี entry ใน
+  `TRACKED` (พร้อม landmark ที่ต้องเจอทั้งในไฟล์ต้นทางและ helpers.js) หรืออยู่ใน
+  `BEHAVIORAL_MODELS` · **เพิ่ม export ใหม่ใน helpers.js แล้วไม่เพิ่ม landmark = test แดงทันที**
+- `tests/browser/run.cjs` — headless smoke test (ทุก role × ทุก tab) · mirror `ROLE_TABS` ไว้เอง
+  ต้องอัปเดตตามเมื่อแก้ ROLE_TABS · รัน `bash tests/browser/setup.sh && node tests/browser/run.cjs`
 - export pattern ในไฟล์ต้นฉบับ:
   `if (typeof module!=='undefined') module.exports={...}` (browser ข้าม)
 
@@ -261,6 +275,44 @@ npm run test:coverage # coverage report (tests/helpers.js)
 11. **วันที่ในชีตเป็นปี พ.ศ.**: client เขียน datetime ด้วย `toLocaleString("th-TH")`
     → ได้ "4/7/2569 11:30:45" — `new Date()` ตีเป็น ค.ศ. 2569 (อนาคต 543 ปี)
     ต้อง parse ด้วย `parseCheckDateMs` (views-analytics.jsx, ลบ 543 เมื่อปี ≥ 2400)
+
+## ระบบล็อกอินพนักงาน + ลงเวลาเข้า-ออกงาน (Sprint 5)
+
+แผนเต็ม: `docs/PLAN-EMPLOYEE-LOGIN.md` · `docs/PLAN-ATTENDANCE.md` · งานต่อ: `docs/PLAN-NEXT-STAFF-DATA.md`
+
+**ชีตใหม่** (สร้างอัตโนมัติเมื่อเรียกครั้งแรก ผ่าน `getOrCreateSheet_`):
+```
+SHEET_STAFF      = "พนักงาน"    // A=staffId B=provider C=providerUserId(LINE sub) D=displayName
+                                //   E=lineDisplayName F=role G=status H=pictureUrl I=createdAt
+                                //   J=lastLoginAt K=note
+SHEET_SESSIONS   = "เซสชัน"     // token, staffId, createdAt, expiresAt, lastSeenAt, revoked (TTL 30 วัน)
+SHEET_ATTENDANCE = "ลงเวลา"     // event log 17 คอลัมน์ (1 แถว = 1 การกดปุ่ม)
+                                //   A=id B=staffId C=ชื่อ D=วันที่ E=เวลา F=serverTs G=clientTs
+                                //   H=ประเภท I=lat J=lng K=accuracy L=ระยะห่าง M=จุดใกล้สุด
+                                //   N=ในพื้นที่ O=รูป(Drive fileId) P=ที่มา Q=หมายเหตุ
+SHEET_ATT_SITES  = "จุดลงเวลา"   // code, ชื่อจุด, lat, lng, รัศมี(ม.) — seed 2 จุดครั้งแรก
+SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, วัน(0=อา..6=ส), เริ่ม, เลิก, ชื่อกะ
+```
+
+**action ที่มี**: `authLine` `me` `logout` `listStaff` `saveStaff` · `punch` `myToday`
+`attendanceToday` `fixAttendance` · doGet: `lineLoginMeta` `attendancePhoto`
+
+**กฎที่ต้องรู้เวลาแก้ระบบนี้**:
+- ทุก action ของลงเวลา/staff ตรวจสิทธิ์ด้วย **`resolveSession_(ss, data.sessionToken)`**
+  (server-verified) — ต่างจาก action สต็อกเดิมที่ยังเชื่อ `data.role`/`data.actor` จาก client
+  · เฟส 4 (`canDo_` + `REQUIRE_LOGIN`) **ยังไม่ทำ** → ตัวเลข "งานรายคน" จาก Audit Log ยังปลอมได้
+- **`actor` เป็นชื่อจริง** ผ่าน `window._currentUser = "ชื่อ (ตำแหน่ง)"` ที่ตั้งใน
+  `applyStaffSession()` (app.jsx) ตอน login/resume — ไม่ต้องแก้จุดเรียก API ทีละจุด
+- **วันที่/เวลาในชีตลงเวลาเขียนเป็น text** (`setNumberFormat("@")`) — บทเรียนข้อ 2
+  · ทุกฟังก์ชันเวลาใช้ `Asia/Bangkok` เสมอ (`attDateKey_`/`attDowBkk_`/`attMinOfDay_`)
+  **ห้ามใช้ `toISOString()` ฝั่ง frontend** จะเพี้ยนไป 1 วัน → ใช้ `attTodayKey()`
+- **id ของแถวลงเวลาต้องสร้างด้วย `attNextId_`** (เช็ค id ที่มีจริงในชีต) — ห้ามกลับไปใช้
+  `getLastRow()` เฉย ๆ เพราะพอลบแถวได้แล้ว id จะชนกัน → แก้/ลบผิดแถว
+- **แก้เวลาย้อนหลัง (`fixAttendance`) บังคับเหตุผทุกครั้ง** + มาร์ค col P = `"แก้โดยเจ้าของ"`
+  + audit log before/after · ตรวจลำดับแบบ**เตือน ไม่บล็อก** (`attSequenceWarning_`)
+- **รูปลงเวลาไม่แชร์สาธารณะ** — เก็บ Drive แล้วดึงผ่าน `attendancePhoto` proxy ที่ตรวจ session
+  · `dailyAttendanceMaintenance()` (trigger 22:00) ลบรูปเกิน `ATT_PHOTO_KEEP_DAYS` (90 วัน) +
+  ล้างเซสชันหมดอายุ + เตือนคนที่ลืมกดออกงาน · เจ้าของต้องรัน **`setupAttendanceMaintenance()`** 1 ครั้ง
 
 ## Features ที่เพิ่มล่าสุด (Sprint 4)
 
