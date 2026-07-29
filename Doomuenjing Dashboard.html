@@ -1089,7 +1089,7 @@
          ยิงพร้อมกันตั้งแต่ตอนนี้ พอ Babel พร้อมก็ compile ได้เลยไม่ต้องรอ network */
   try {
     window._jsxPre = {};
-    ['ui.jsx', 'views-main.jsx', 'views-analytics.jsx', 'app.jsx'].forEach(function (s) {
+    ['ui.jsx', 'views-main.jsx', 'views-analytics.jsx', 'views-attendance.jsx', 'app.jsx'].forEach(function (s) {
       try { window._jsxPre[s] = fetch(s); } catch (_) {}
     });
   } catch (_) {}
@@ -1191,12 +1191,13 @@
      แล้ว inject ตามลำดับ (views-main ก่อนเสมอ, views-quote ใช้ component จากทั้งคู่) */
   window._appBoot = loadJsx('ui.jsx')
     .then(function () {
-      return Promise.all([compileJsx('views-main.jsx'), compileJsx('views-analytics.jsx'), compileJsx('views-quote.jsx')]);
+      return Promise.all([compileJsx('views-main.jsx'), compileJsx('views-analytics.jsx'), compileJsx('views-quote.jsx'), compileJsx('views-attendance.jsx')]);
     })
     .then(function (codes) {
       injectCode(codes[0]); /* views-main ก่อน */
       injectCode(codes[1]); /* views-analytics หลัง */
-      injectCode(codes[2]); /* views-quote สุดท้าย (ก่อน app.jsx) */
+      injectCode(codes[2]); /* views-quote */
+      injectCode(codes[3]); /* views-attendance สุดท้าย (ก่อน app.jsx) */
       return loadJsx('app.jsx');
     })
     .catch(function (err) { console.error('[boot]', err); });

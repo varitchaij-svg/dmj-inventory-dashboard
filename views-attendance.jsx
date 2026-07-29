@@ -1,0 +1,436 @@
+// views-attendance.jsx — ลงเวลาเข้า-ออกงาน (เฟส A)
+// depends on: ui.jsx (uS/uE/uM/uC aliases), views-main.jsx โหลดก่อน
+// แยกไฟล์ตามสถาปัตยกรรมเดิม — กัน Babel compile ช้าเพราะไฟล์ใหญ่เกิน
+
+// ── helper: POST action ไป GAS พร้อม session token ──
+async function attPost(body) {
+  const base = (typeof SHEET_DEPLOY_URL !== 'undefined') ? SHEET_DEPLOY_URL : null;
+  if (!base) throw new Error("ยังไม่ได้เชื่อมต่อ Sheet");
+  const res = await fetch(base, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify(Object.assign({ sessionToken: localStorage.getItem("dmj_session_token") }, body)),
+  });
+  return res.json();
+}
+
+const ATT_BTN = [
+  { type: "in",         label: "เข้างาน",     emoji: "🟢", color: "#1f7f44" },
+  { type: "breakStart", label: "เริ่มพัก",     emoji: "🍽️", color: "#a07417" },
+  { type: "breakEnd",   label: "กลับจากพัก",  emoji: "↩️", color: "#1f6f8b" },
+  { type: "out",        label: "ออกงาน",      emoji: "🏁", color: "#705d96" },
+];
+
+function attMinLabel(min) {
+  if (min == null) return "—";
+  const h = Math.floor(min / 60), m = min % 60;
+  return h > 0 ? `${h} ชม. ${m} นาที` : `${m} นาที`;
+}
+
+// ── ขอพิกัด GPS · คืน null ถ้าไม่ได้/ปฏิเสธ (ไม่บล็อกการลงเวลา ตามนโยบายที่เจ้าของเลือก) ──
+function attGetPosition(timeoutMs) {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) { resolve(null); return; }
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    navigator.geolocation.getCurrentPosition(
+      (p) => finish({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }),
+      () => finish(null),
+      { enableHighAccuracy: true, timeout: timeoutMs || 12000, maximumAge: 30000 }
+    );
+    setTimeout(() => finish(null), (timeoutMs || 12000) + 500); // กัน callback ไม่ยิงเลยบน iOS บางรุ่น
+  });
+}
+
+// ── ย่อรูปก่อนส่ง — กัน payload ใหญ่จน GAS timeout (ตั้งใจให้ ~60-100KB) ──
+function attShrinkImage(file, maxW) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("อ่านไฟล์รูปไม่สำเร็จ"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("เปิดรูปไม่สำเร็จ"));
+      img.onload = () => {
+        const w = Math.min(maxW || 640, img.width);
+        const h = Math.round(img.height * (w / img.width));
+        const c = document.createElement("canvas");
+        c.width = w; c.height = h;
+        c.getContext("2d").drawImage(img, 0, 0, w, h);
+        resolve(c.toDataURL("image/jpeg", 0.7));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// ═══════════════════════════════════════════════
+// AttendanceView — หน้าลงเวลาของพนักงาน (ทุก role)
+// ═══════════════════════════════════════════════
+function AttendanceView({ role }) {
+  const [today, setToday] = uS(null);
+  const [loading, setLoading] = uS(true);
+  const [err, setErr] = uS(null);
+  const [busy, setBusy] = uS(null);       // type ที่กำลังส่ง
+  const [toast, setToast] = uS(null);     // {kind:"ok"|"err", text}
+  const [gps, setGps] = uS({ state: "idle" }); // idle | loading | ok | denied
+  const [photo, setPhoto] = uS(null);     // dataURL ที่ย่อแล้ว
+  const [clock, setClock] = uS(() => new Date());
+  const fileRef = React.useRef(null);
+
+  // นาฬิกาเดินจริง — พนักงานเห็นเวลาตรงกับที่ระบบจะบันทึก
+  uE(() => { const t = setInterval(() => setClock(new Date()), 1000); return () => clearInterval(t); }, []);
+
+  const load = uC(async () => {
+    setLoading(true); setErr(null);
+    try {
+      const d = await attPost({ action: "myToday" });
+      if (d && d.success) setToday(d.data);
+      else setErr((d && d.error) || "โหลดไม่สำเร็จ — ต้องเข้าสู่ระบบด้วย LINE ก่อน");
+    } catch (e) { setErr(e.message); }
+    finally { setLoading(false); }
+  }, []);
+
+  uE(() => { load(); }, [load]);
+
+  // ขอ GPS ทันทีที่เปิดหน้า — ให้ผู้ใช้กดอนุญาตก่อน แล้วตอนกดปุ่มจริงจะเร็ว
+  uE(() => {
+    let alive = true;
+    setGps({ state: "loading" });
+    attGetPosition().then(p => {
+      if (!alive) return;
+      setGps(p ? { state: "ok", ...p } : { state: "denied" });
+    });
+    return () => { alive = false; };
+  }, []);
+
+  const allowed = (today && today.allowed) || [];
+  const needPhoto = allowed.indexOf("in") >= 0; // บังคับรูปเฉพาะตอนเข้างาน (ตามที่เจ้าของเลือก)
+
+  const pickPhoto = async (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    try { setPhoto(await attShrinkImage(f, 640)); }
+    catch (er) { setToast({ kind: "err", text: er.message }); }
+  };
+
+  const doPunch = async (type) => {
+    if (busy) return;
+    if (type === "in" && !photo) { setToast({ kind: "err", text: "ถ่ายรูปก่อนกดเข้างาน" }); return; }
+    setBusy(type); setToast(null);
+    try {
+      // ขอพิกัดสด ณ ตอนกด (ค่าที่ขอไว้ตอนเปิดหน้าอาจเก่าแล้ว)
+      const p = gps.state === "ok" ? gps : await attGetPosition(8000);
+      const d = await attPost({
+        action: "punch", type,
+        lat: p ? p.lat : null, lng: p ? p.lng : null, accuracy: p ? p.accuracy : null,
+        clientTs: Date.now(),
+        photoBase64: type === "in" ? photo : null,
+        source: "web",
+      });
+      if (d && d.success) {
+        setToday(d.data.today);
+        setPhoto(null);
+        if (fileRef.current) fileRef.current.value = "";
+        const dist = d.data.distM;
+        setToast({
+          kind: "ok",
+          text: `บันทึก "${d.data.punched}" แล้ว` +
+                (dist != null ? (d.data.inArea ? ` · อยู่ที่${d.data.siteName}` : ` · ⚠️ ห่าง${d.data.siteName} ${dist} ม.`) : ""),
+        });
+      } else {
+        setToast({ kind: "err", text: (d && d.error) || "บันทึกไม่สำเร็จ" });
+      }
+    } catch (e) {
+      setToast({ kind: "err", text: "บันทึกไม่สำเร็จ: " + e.message });
+    } finally { setBusy(null); }
+  };
+
+  const sum = today && today.summary;
+
+  return (
+    <div style={{ padding: 16, maxWidth: 480, margin: "0 auto" }}>
+      <div style={{ textAlign: "center", marginBottom: 16 }}>
+        <div style={{ fontSize: 34, fontWeight: 800, color: "var(--g-700)", letterSpacing: "-.02em", lineHeight: 1.1 }}>
+          {clock.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+        </div>
+        <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>
+          {clock.toLocaleDateString("th-TH", { weekday: "long", day: "numeric", month: "long" })}
+          {today && today.shift ? ` · กะ ${today.shift.start}-${today.shift.end}` : " · ไม่มีกะวันนี้"}
+        </div>
+        {today && today.staffName && (
+          <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text)", marginTop: 6 }}>{today.staffName}</div>
+        )}
+      </div>
+
+      {err && (
+        <div style={{ background: "#fff0f0", border: "1px solid var(--dang)", borderRadius: 10, padding: "10px 14px", color: "var(--dang)", marginBottom: 12, fontSize: 13 }}>
+          ⚠️ {err}
+        </div>
+      )}
+
+      {loading && !today ? (
+        <div style={{ textAlign: "center", padding: 40, color: "var(--muted)" }}>
+          <span className="spin" style={{ width: 24, height: 24, borderWidth: 3, display: "inline-block" }} />
+          <div style={{ marginTop: 8, fontSize: 13 }}>กำลังโหลด…</div>
+        </div>
+      ) : today && (
+        <>
+          {/* ── ① ถ่ายรูป (เฉพาะตอนเข้างาน) ── */}
+          {needPhoto && (
+            <div style={{
+              background: "var(--paper)", border: "1.5px solid " + (photo ? "var(--g-500)" : "var(--bdr)"),
+              borderRadius: 14, padding: 14, marginBottom: 12,
+            }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, color: "var(--text)" }}>
+                📷 ถ่ายรูปยืนยันก่อนเข้างาน {photo ? "✅" : ""}
+              </div>
+              <input ref={fileRef} type="file" accept="image/*" capture="user" onChange={pickPhoto}
+                style={{ display: "none" }} id="attphoto" />
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                {photo && <img src={photo} alt="" style={{ width: 64, height: 64, borderRadius: 10, objectFit: "cover" }} />}
+                <label htmlFor="attphoto" style={{
+                  flex: 1, textAlign: "center", padding: "12px", borderRadius: 10, cursor: "pointer",
+                  background: photo ? "var(--g-50)" : "var(--g-600)", color: photo ? "var(--g-700)" : "#fff",
+                  fontWeight: 700, fontSize: 14, border: photo ? "1.5px solid var(--g-500)" : "none",
+                }}>{photo ? "ถ่ายใหม่" : "เปิดกล้อง"}</label>
+              </div>
+            </div>
+          )}
+
+          {/* ── ② ปุ่มลงเวลา 4 ปุ่ม ── */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 10, marginBottom: 14 }}>
+            {ATT_BTN.map(b => {
+              const on = allowed.indexOf(b.type) >= 0;
+              const isBusy = busy === b.type;
+              return (
+                <button key={b.type} onClick={() => doPunch(b.type)} disabled={!on || !!busy}
+                  style={{
+                    display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+                    gap: 6, padding: "22px 8px", borderRadius: 16, fontFamily: "inherit",
+                    border: on ? `2px solid ${b.color}` : "1.5px solid var(--bdr)",
+                    background: on ? b.color : "var(--paper)",
+                    color: on ? "#fff" : "var(--muted)",
+                    fontSize: 15, fontWeight: 800, minHeight: 88,
+                    cursor: on && !busy ? "pointer" : "default", opacity: on ? 1 : .45,
+                    boxShadow: on ? `0 4px 14px ${b.color}33` : "none",
+                  }}>
+                  {isBusy ? <span className="spin" style={{ width: 20, height: 20, borderWidth: 3 }} />
+                          : <span style={{ fontSize: 24 }}>{b.emoji}</span>}
+                  <span>{b.label}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {allowed.length === 0 && (
+            <div style={{ textAlign: "center", fontSize: 13, color: "var(--muted)", marginBottom: 14 }}>
+              ✅ ลงเวลาออกงานครบแล้ววันนี้
+            </div>
+          )}
+
+          {toast && (
+            <div style={{
+              borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 13, fontWeight: 600,
+              background: toast.kind === "ok" ? "#e8f5e9" : "#fff0f0",
+              color: toast.kind === "ok" ? "#1b5e20" : "var(--dang)",
+              border: "1px solid " + (toast.kind === "ok" ? "#a5d6a7" : "var(--dang)"),
+            }}>{toast.kind === "ok" ? "✅ " : "⚠️ "}{toast.text}</div>
+          )}
+
+          {/* ── ③ สถานะ GPS / รูป ── */}
+          <div style={{ background: "var(--paper)", border: "1.5px solid var(--bdr)", borderRadius: 12, overflow: "hidden", marginBottom: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 14px", fontSize: 13, borderBottom: "1px solid var(--bdr)" }}>
+              <span style={{ color: "var(--muted)" }}>📍 ตำแหน่ง</span>
+              <span style={{ fontWeight: 700, color: gps.state === "ok" ? "var(--g-700)" : "#a07417" }}>
+                {gps.state === "loading" ? "กำลังหา…" : gps.state === "ok" ? `พร้อม (±${Math.round(gps.accuracy)} ม.)` : "ไม่ได้เปิด GPS"}
+              </span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 14px", fontSize: 13 }}>
+              <span style={{ color: "var(--muted)" }}>⏱ ทำงานวันนี้</span>
+              <span style={{ fontWeight: 700 }}>
+                {sum && sum.workedMin != null ? attMinLabel(sum.workedMin) : (sum && sum.inTime ? "กำลังทำงาน" : "—")}
+              </span>
+            </div>
+          </div>
+
+          {gps.state === "denied" && (
+            <div style={{ background: "#fff8e1", border: "1px solid #ffe082", borderRadius: 10, padding: "10px 14px", fontSize: 12.5, color: "#7a5a00", marginBottom: 14 }}>
+              ยังลงเวลาได้ตามปกติ แต่ระบบจะบันทึกว่า "ไม่มีพิกัด" — ถ้าอยากเปิด ให้ไปที่
+              ตั้งค่ามือถือ → เบราว์เซอร์ → ตำแหน่ง → อนุญาต แล้วเปิดหน้านี้ใหม่
+            </div>
+          )}
+
+          {/* ── ④ ไทม์ไลน์วันนี้ ── */}
+          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--muted)", marginBottom: 8 }}>วันนี้</div>
+          {today.events.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 24, color: "var(--muted)", fontSize: 13 }}>ยังไม่ได้ลงเวลาวันนี้</div>
+          ) : (
+            <div style={{ background: "var(--paper)", border: "1.5px solid var(--bdr)", borderRadius: 12, overflow: "hidden" }}>
+              {today.events.map((e, i) => (
+                <div key={i} style={{
+                  display: "flex", alignItems: "center", gap: 10, padding: "11px 14px",
+                  borderTop: i ? "1px solid var(--bdr)" : "none",
+                }}>
+                  <span style={{ fontSize: 16 }}>{(ATT_BTN.find(b => b.type === e.type) || {}).emoji}</span>
+                  <span style={{ flex: 1, fontSize: 14, fontWeight: 600 }}>{e.typeTh}</span>
+                  {e.inArea === false && <span title="อยู่นอกพื้นที่ร้าน" style={{ fontSize: 12 }}>⚠️</span>}
+                  {e.hasPhoto && <span title="มีรูป" style={{ fontSize: 12 }}>📷</span>}
+                  <span style={{ fontSize: 14, fontWeight: 700, color: "var(--g-700)" }}>{String(e.time).slice(0, 5)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {sum && (sum.lateMin > 0 || sum.breakMin > 0 || sum.forgotBreakEnd) && (
+            <div style={{ marginTop: 10, fontSize: 12.5, color: "var(--muted)", lineHeight: 1.7 }}>
+              {sum.lateMin > 0 && <div>⏰ เข้างานสาย {sum.lateMin} นาที</div>}
+              {sum.breakMin > 0 && <div>🍽️ พักรวม {attMinLabel(sum.breakMin)}</div>}
+              {sum.forgotBreakEnd && <div style={{ color: "#a07417" }}>⚠️ ลืมกด "กลับจากพัก" — แจ้งเจ้าของให้แก้ให้</div>}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// AttendanceTodayView — เจ้าของดูว่าใครเข้างานบ้างวันนี้
+// ═══════════════════════════════════════════════
+const ATT_STATE_STYLE = {
+  "ทำงานอยู่":   { background: "#e8f5e9", color: "#1b5e20" },
+  "พักอยู่":     { background: "#fff3e0", color: "#e65100" },
+  "ออกงานแล้ว":  { background: "#e3f2fd", color: "#0d47a1" },
+  "ยังไม่มา":    { background: "#f5f5f5", color: "#757575" },
+};
+
+function AttendanceTodayView() {
+  const [rows, setRows] = uS([]);
+  const [date, setDate] = uS("");
+  const [loading, setLoading] = uS(true);
+  const [err, setErr] = uS(null);
+  const [openId, setOpenId] = uS(null);
+  const [photo, setPhoto] = uS(null); // {loading, src}
+
+  const load = uC(async () => {
+    setLoading(true); setErr(null);
+    try {
+      const d = await attPost({ action: "attendanceToday" });
+      if (d && d.success) { setRows(d.data.rows || []); setDate(d.data.date || ""); }
+      else setErr((d && d.error) || "โหลดไม่สำเร็จ");
+    } catch (e) { setErr(e.message); }
+    finally { setLoading(false); }
+  }, []);
+
+  uE(() => { load(); }, [load]);
+
+  // รูปเก็บใน Drive แบบไม่แชร์สาธารณะ → ต้องดึงผ่าน proxy ที่ตรวจ session ก่อน
+  const viewPhoto = async (id) => {
+    setPhoto({ loading: true });
+    try {
+      const url = new URL(SHEET_DEPLOY_URL);
+      url.searchParams.set("action", "attendancePhoto");
+      url.searchParams.set("id", id);
+      url.searchParams.set("sessionToken", localStorage.getItem("dmj_session_token") || "");
+      const r = await fetch(url.toString());
+      const d = await r.json();
+      if (d && d.d) setPhoto({ src: d.d });
+      else setPhoto(null);
+    } catch (e) { setPhoto(null); }
+  };
+
+  const here = rows.filter(r => r.state === "ทำงานอยู่" || r.state === "พักอยู่");
+  const late = rows.filter(r => r.summary && r.summary.lateMin > 0);
+
+  return (
+    <div style={{ padding: 16, maxWidth: 720, margin: "0 auto" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, gap: 8, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>🕐 ใครเข้างานวันนี้</div>
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>{date} · อยู่ที่ร้าน {here.length} คน{late.length ? ` · สาย ${late.length} คน` : ""}</div>
+        </div>
+        <button className="btn ghost" onClick={load} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {loading ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }} /> : "🔄"}<span>รีโหลด</span>
+        </button>
+      </div>
+
+      {err && (
+        <div style={{ background: "#fff0f0", border: "1px solid var(--dang)", borderRadius: 8, padding: "10px 14px", color: "var(--dang)", marginBottom: 12, fontSize: 13 }}>⚠️ {err}</div>
+      )}
+
+      {loading && rows.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 40, color: "var(--muted)" }}>
+          <span className="spin" style={{ width: 24, height: 24, borderWidth: 3, display: "inline-block" }} />
+        </div>
+      ) : rows.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>ยังไม่มีพนักงานในระบบ</div>
+      ) : rows.map(r => (
+        <div key={r.staffId} style={{ background: "var(--paper)", border: "1.5px solid var(--bdr)", borderRadius: 14, marginBottom: 10, overflow: "hidden" }}>
+          <div onClick={() => setOpenId(openId === r.staffId ? null : r.staffId)}
+            style={{ display: "flex", alignItems: "center", gap: 12, padding: 12, cursor: "pointer" }}>
+            <div style={{ width: 42, height: 42, borderRadius: 11, overflow: "hidden", flexShrink: 0, background: "#eee", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>
+              {r.pictureUrl ? <img src={r.pictureUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : "👤"}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 700 }}>{r.name}</div>
+              <div style={{ fontSize: 11.5, color: "var(--muted)" }}>
+                {ROLE_TH_ATT[r.role] || r.role}
+                {r.summary && r.summary.inTime ? ` · เข้า ${String(r.summary.inTime).slice(0, 5)}` : ""}
+                {r.summary && r.summary.outTime ? ` · ออก ${String(r.summary.outTime).slice(0, 5)}` : ""}
+              </div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 20, ...(ATT_STATE_STYLE[r.state] || {}) }}>{r.state}</span>
+              {r.summary && r.summary.lateMin > 0 && (
+                <div style={{ fontSize: 11, color: "var(--dang)", fontWeight: 700, marginTop: 3 }}>สาย {r.summary.lateMin} น.</div>
+              )}
+            </div>
+          </div>
+
+          {openId === r.staffId && (
+            <div style={{ borderTop: "1px solid var(--bdr)", padding: "10px 14px", background: "var(--g-50)" }}>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>
+                กะ {r.shift ? `${r.shift.start}-${r.shift.end} (${r.shift.name})` : "— ไม่มีกะวันนี้"}
+                {r.summary && r.summary.breakMin > 0 ? ` · พัก ${attMinLabel(r.summary.breakMin)}` : ""}
+                {r.summary && r.summary.workedMin != null ? ` · ทำงาน ${attMinLabel(r.summary.workedMin)}` : ""}
+              </div>
+              {r.events.length === 0 ? (
+                <div style={{ fontSize: 12.5, color: "var(--muted)" }}>ยังไม่ได้ลงเวลา</div>
+              ) : r.events.map((e, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, padding: "5px 0" }}>
+                  <span style={{ fontWeight: 700, minWidth: 46 }}>{String(e.time).slice(0, 5)}</span>
+                  <span style={{ flex: 1 }}>{e.typeTh}</span>
+                  {e.distM !== "" && e.distM != null && (
+                    <span style={{ color: e.inArea ? "var(--muted)" : "var(--dang)", fontSize: 11.5 }}>
+                      {e.inArea ? `${e.siteName}` : `⚠️ ห่าง ${e.distM} ม.`}
+                    </span>
+                  )}
+                  {e.photo && (
+                    <button className="btn ghost" onClick={() => viewPhoto(e.photo)} style={{ fontSize: 11, padding: "3px 8px" }}>📷 ดูรูป</button>
+                  )}
+                </div>
+              ))}
+              {r.summary && r.summary.forgotBreakEnd && (
+                <div style={{ fontSize: 11.5, color: "#a07417", marginTop: 6 }}>⚠️ ลืมกด "กลับจากพัก" — เวลาพักอาจไม่ตรงจริง</div>
+              )}
+            </div>
+          )}
+        </div>
+      ))}
+
+      {photo && (
+        <div onClick={() => setPhoto(null)} style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,.8)", zIndex: 2000,
+          display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+        }}>
+          {photo.loading
+            ? <span className="spin" style={{ width: 30, height: 30, borderWidth: 3, borderTopColor: "#fff" }} />
+            : <img src={photo.src} alt="" style={{ maxWidth: "100%", maxHeight: "90vh", borderRadius: 12 }} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const ROLE_TH_ATT = { owner: "เจ้าของ", saler: "Sale", warehouse: "คลังสินค้า", frontstore: "หน้าร้าน", employee: "พนักงาน" };

@@ -132,6 +132,9 @@ const SHEET_ORDERS_RAW     = "ZORT ออเดอร์ดิบ";   // ออ�
 const SHEET_QUOTE_DRAFTS   = "ร่างใบเสนอราคา";    // ร่างใบเสนอราคาที่ยังไม่ส่งเข้า ZORT
 const SHEET_STAFF          = "พนักงาน";           // บัญชีพนักงาน (LINE Login) — ชื่อ/ตำแหน่ง/สถานะ
 const SHEET_SESSIONS       = "เซสชัน";            // session token ที่ออกให้ตอนล็อกอิน LINE
+const SHEET_ATTENDANCE     = "ลงเวลา";            // event log ลงเวลา (1 แถว = 1 การกดปุ่ม)
+const SHEET_ATT_SITES      = "จุดลงเวลา";         // พิกัดร้าน/คลัง + รัศมีที่ยอมรับ
+const SHEET_ATT_SHIFTS     = "ตั้งค่ากะ";          // เวลาเข้า-เลิกงานต่อตำแหน่ง/วัน
 const BACKFILL_START_YM    = "2024-01";           // เดือนแรกที่เริ่มใช้ ZORT — backfill ดึงตั้งแต่เดือนนี้
 const WH_NAME_SAI5    = "คลังสินค้าสาย5";
 const WH_NAME_FS      = "ดูเหมือนจริง";
@@ -498,6 +501,359 @@ function saveStaffHandler_(ss, data, actor) {
   return ContentService.createTextOutput(JSON.stringify({ success: true })).setMimeType(ContentService.MimeType.JSON);
 }
 
+// ═══════════════════════════════════════════════════════════
+// ระบบลงเวลาเข้า-ออกงาน (เฟส A) — ชีต "ลงเวลา" / "จุดลงเวลา" / "ตั้งค่ากะ"
+// ดูแผนเต็มที่ docs/PLAN-ATTENDANCE.md
+// ═══════════════════════════════════════════════════════════
+const ATT_TYPES = ["in", "breakStart", "breakEnd", "out"];
+const ATT_TYPE_TH = { in: "เข้างาน", breakStart: "เริ่มพัก", breakEnd: "กลับจากพัก", out: "ออกงาน" };
+
+// ค่าเริ่มต้นที่เจ้าของยืนยันแล้ว (2026-07-29) — seed ลงชีตครั้งแรก แก้ในชีตได้เองภายหลัง
+const ATT_SITES_SEED = [
+  ["FS", "หน้าร้าน (ดูเหมือนจริง)", 13.801321, 100.551213, 150],
+  ["WH", "คลังสินค้าสาย 5",         13.783555, 100.295249, 200],
+];
+// วันในสัปดาห์: 0=อาทิตย์ 1=จันทร์ … 6=เสาร์ (ตรงกับ Date.getDay())
+// หน้าร้านวันจันทร์ไม่ได้ระบุมา → ไม่ใส่แถว = "ไม่มีกะ" (ลงเวลาได้ปกติ แต่ไม่คิดสาย)
+const ATT_SHIFTS_SEED = [
+  ["warehouse",  "0,1,2,3,4,5,6", "08:30", "17:30", "คลังสินค้า"],
+  ["frontstore", "2,3,4",         "09:30", "17:30", "หน้าร้าน อังคาร-พฤหัส"],
+  ["frontstore", "5,6,0",         "09:00", "18:00", "หน้าร้าน ศุกร์-อาทิตย์"],
+];
+
+function attendanceSheet_(ss) {
+  return getOrCreateSheet_(ss, SHEET_ATTENDANCE, [
+    "id", "staffId", "ชื่อ", "วันที่", "เวลา", "serverTs", "clientTs", "ประเภท",
+    "lat", "lng", "accuracy(ม.)", "ระยะห่าง(ม.)", "จุดใกล้สุด", "ในพื้นที่", "รูป", "ที่มา", "หมายเหตุ",
+  ]);
+}
+
+function attSitesSheet_(ss) {
+  const existed = !!ss.getSheetByName(SHEET_ATT_SITES);
+  const sh = getOrCreateSheet_(ss, SHEET_ATT_SITES, ["code", "ชื่อจุด", "lat", "lng", "รัศมี(ม.)"]);
+  if (!existed) ATT_SITES_SEED.forEach(function (r) { sh.appendRow(r); });
+  return sh;
+}
+
+function attShiftsSheet_(ss) {
+  const existed = !!ss.getSheetByName(SHEET_ATT_SHIFTS);
+  const sh = getOrCreateSheet_(ss, SHEET_ATT_SHIFTS, ["ตำแหน่ง", "วัน(0=อา..6=ส)", "เริ่ม", "เลิก", "ชื่อกะ"]);
+  if (!existed) ATT_SHIFTS_SEED.forEach(function (r) { sh.appendRow(r); });
+  return sh;
+}
+
+function readAttSites_(ss) {
+  const sh = attSitesSheet_(ss);
+  const last = sh.getLastRow();
+  if (last < 2) return [];
+  return sh.getRange(2, 1, last - 1, 5).getValues()
+    .filter(function (r) { return r[0] && isFinite(Number(r[2])) && isFinite(Number(r[3])); })
+    .map(function (r) {
+      return { code: String(r[0]), name: String(r[1] || r[0]), lat: Number(r[2]), lng: Number(r[3]), radiusM: Number(r[4]) || 150 };
+    });
+}
+
+function readAttShifts_(ss) {
+  const sh = attShiftsSheet_(ss);
+  const last = sh.getLastRow();
+  if (last < 2) return [];
+  return sh.getRange(2, 1, last - 1, 5).getValues()
+    .filter(function (r) { return r[0] && r[2] && r[3]; })
+    .map(function (r) {
+      return {
+        role: String(r[0]).trim(),
+        days: String(r[1] || "").split(",").map(function (d) { return parseInt(String(d).trim(), 10); }).filter(function (d) { return !isNaN(d); }),
+        start: attParseHm_(r[2]),
+        end: attParseHm_(r[3]),
+        name: String(r[4] || ""),
+      };
+    });
+}
+
+// รับได้ทั้ง "08:30" (string) และค่าเวลาที่ Sheets แปลงเป็น Date อัตโนมัติ → คืนนาทีนับจากเที่ยงคืน
+function attParseHm_(v) {
+  if (v instanceof Date) return v.getHours() * 60 + v.getMinutes();
+  const m = String(v).trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+}
+
+function attFmtHm_(min) {
+  if (min == null) return "";
+  const h = Math.floor(min / 60), m = min % 60;
+  return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0");
+}
+
+// ระยะทางระหว่าง 2 พิกัด (เมตร) — Haversine
+function haversineM_(lat1, lng1, lat2, lng2) {
+  const R = 6371000, toRad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * toRad, dLng = (lng2 - lng1) * toRad;
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return Math.round(2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+}
+
+// หาจุดลงเวลาที่ใกล้ที่สุด — คืน null ถ้าไม่มีพิกัด (ผู้ใช้ไม่อนุญาต GPS)
+function nearestAttSite_(sites, lat, lng) {
+  if (!sites.length || !isFinite(lat) || !isFinite(lng)) return null;
+  let best = null;
+  sites.forEach(function (s) {
+    const d = haversineM_(lat, lng, s.lat, s.lng);
+    if (!best || d < best.distM) best = { site: s, distM: d, inArea: d <= s.radiusM };
+  });
+  return best;
+}
+
+function attDateKey_(d) { return Utilities.formatDate(d, "Asia/Bangkok", "yyyy-MM-dd"); }
+// วันในสัปดาห์ตามเวลาไทย (0=อาทิตย์ … 6=เสาร์)
+// คำนวณจาก yyyy-MM-dd ที่ format เป็นเวลาไทยแล้ว (ไม่พึ่ง pattern "u"/"E" ของ SimpleDateFormat
+// ที่ผลลัพธ์ต่างกันตาม locale ของสคริปต์) — ค่านี้ใช้เลือกกะ ผิดวันเดียวก็คิดสายผิดทั้งวัน
+function attDowBkk_(d) {
+  const p = attDateKey_(d).split("-");
+  return new Date(Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2]))).getUTCDay();
+}
+function attTimeStr_(d) { return Utilities.formatDate(d, "Asia/Bangkok", "HH:mm:ss"); }
+function attMinOfDay_(d) {
+  return parseInt(Utilities.formatDate(d, "Asia/Bangkok", "H"), 10) * 60 +
+         parseInt(Utilities.formatDate(d, "Asia/Bangkok", "m"), 10);
+}
+
+// อ่านเหตุการณ์ลงเวลาของ "คนเดียว วันเดียว" — เรียงตามเวลา
+function readAttEvents_(ss, staffId, dateStr) {
+  const sh = attendanceSheet_(ss);
+  const last = sh.getLastRow();
+  if (last < 2) return [];
+  const vals = sh.getRange(2, 1, last - 1, 17).getValues();
+  const out = [];
+  for (let i = 0; i < vals.length; i++) {
+    const r = vals[i];
+    if (String(r[1]) !== String(staffId)) continue;
+    if (String(r[3]) !== String(dateStr)) continue;
+    out.push({
+      id: r[0], staffId: r[1], name: r[2], date: r[3], time: r[4],
+      serverTs: Number(r[5]) || 0, type: r[7],
+      lat: r[8], lng: r[9], accuracy: r[10], distM: r[11], siteName: r[12],
+      inArea: r[13] === true || r[13] === "TRUE", photo: r[14], note: r[16],
+    });
+  }
+  out.sort(function (a, b) { return a.serverTs - b.serverTs; });
+  return out;
+}
+
+// ปุ่มไหนกดได้ต่อจากสถานะปัจจุบัน (กันกดผิดลำดับ เช่นกดออกงานทั้งที่ยังไม่เข้างาน)
+function attAllowedNext_(events) {
+  const types = events.map(function (e) { return e.type; });
+  const lastType = types.length ? types[types.length - 1] : null;
+  if (!lastType) return ["in"];
+  if (lastType === "in" || lastType === "breakEnd") return ["breakStart", "out"];
+  if (lastType === "breakStart") return ["breakEnd", "out"];
+  return []; // out แล้ว = จบวัน
+}
+
+// สรุปของวัน: เข้า/ออก/พักกี่นาที/ทำงานกี่นาที/สายกี่นาที + ธงเตือน
+function attSummarize_(events, shift) {
+  const firstIn = events.find(function (e) { return e.type === "in"; }) || null;
+  let lastOut = null;
+  for (let i = events.length - 1; i >= 0; i--) { if (events[i].type === "out") { lastOut = events[i]; break; } }
+
+  // พัก: จับคู่ breakStart→breakEnd · ถ้าลืมกดกลับจากพักแล้วกดออกงานเลย นับถึงเวลาออกงาน + ตั้งธง
+  let breakMin = 0, openBreak = null, forgotBreakEnd = false;
+  events.forEach(function (e) {
+    if (e.type === "breakStart") openBreak = e;
+    else if (e.type === "breakEnd" && openBreak) { breakMin += Math.round((e.serverTs - openBreak.serverTs) / 60000); openBreak = null; }
+  });
+  if (openBreak) {
+    forgotBreakEnd = true;
+    if (lastOut) breakMin += Math.round((lastOut.serverTs - openBreak.serverTs) / 60000);
+  }
+
+  const workedMin = (firstIn && lastOut) ? Math.max(0, Math.round((lastOut.serverTs - firstIn.serverTs) / 60000) - breakMin) : null;
+
+  // สาย: ไม่มีผ่อนผัน — เลยเวลาเริ่มกะถือว่าสาย และบันทึกว่าสายกี่นาที (ตามที่เจ้าของกำหนด)
+  let lateMin = null;
+  if (firstIn && shift && shift.start != null) {
+    const inMin = attMinOfDay_(new Date(firstIn.serverTs));
+    lateMin = Math.max(0, inMin - shift.start);
+  }
+
+  return {
+    inTime: firstIn ? firstIn.time : null,
+    outTime: lastOut ? lastOut.time : null,
+    breakMin: breakMin,
+    workedMin: workedMin,
+    lateMin: lateMin,
+    onBreak: !!(openBreak && !lastOut),
+    forgotBreakEnd: forgotBreakEnd,
+    outsideArea: events.some(function (e) { return e.lat !== "" && e.lat != null && !e.inArea; }),
+  };
+}
+
+function attShiftFor_(shifts, role, dayOfWeek) {
+  return shifts.find(function (s) { return s.role === role && s.days.indexOf(dayOfWeek) >= 0; }) || null;
+}
+
+// เก็บรูปลง Drive (โฟลเดอร์ "ลงเวลา DMJ") — ไม่แชร์สาธารณะ ดูผ่าน attendancePhoto proxy เท่านั้น
+function saveAttPhoto_(base64, staffName, dateStr, typeTh) {
+  if (!base64) return "";
+  try {
+    const props = PropertiesService.getScriptProperties();
+    let folderId = props.getProperty("ATT_PHOTO_FOLDER_ID");
+    let folder = null;
+    if (folderId) { try { folder = DriveApp.getFolderById(folderId); } catch (e) { folder = null; } }
+    if (!folder) { folder = DriveApp.createFolder("ลงเวลา DMJ"); props.setProperty("ATT_PHOTO_FOLDER_ID", folder.getId()); }
+    const clean = String(base64).replace(/^data:image\/\w+;base64,/, "");
+    const blob = Utilities.newBlob(Utilities.base64Decode(clean), "image/jpeg",
+      dateStr + "_" + (staffName || "staff") + "_" + typeTh + ".jpg");
+    return folder.createFile(blob).getId();
+  } catch (e) {
+    Logger.log("saveAttPhoto_ error: " + e);
+    return ""; // รูปพังไม่ควรทำให้ลงเวลาไม่ได้
+  }
+}
+
+// ─── action=punch : กดปุ่มลงเวลา ───
+function punchHandler_(ss, data) {
+  const s = resolveSession_(ss, data.sessionToken);
+  if (!s || s.status !== "active") return unauthorized_();
+
+  const type = String(data.type || "");
+  if (ATT_TYPES.indexOf(type) < 0) {
+    return ContentService.createTextOutput(JSON.stringify({ success: false, error: "ประเภทการลงเวลาไม่ถูกต้อง" }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  const lock = LockService.getScriptLock();
+  try {
+    // กันกดรัว/กดพร้อมกัน 2 เครื่องแล้วได้ 2 แถว
+    try { lock.waitLock(10000); } catch (e) {}
+
+    const now = new Date();
+    const dateStr = attDateKey_(now);
+    const events = readAttEvents_(ss, s.staffId, dateStr);
+
+    const allowed = attAllowedNext_(events);
+    if (allowed.indexOf(type) < 0) {
+      const lastTh = events.length ? ATT_TYPE_TH[events[events.length - 1].type] : "ยังไม่ได้ลงเวลา";
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false, error: "กดไม่ได้ตอนนี้ — สถานะล่าสุดคือ \"" + lastTh + "\"", allowed: allowed,
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    const lat = (data.lat === "" || data.lat == null) ? null : Number(data.lat);
+    const lng = (data.lng === "" || data.lng == null) ? null : Number(data.lng);
+    const near = nearestAttSite_(readAttSites_(ss), lat, lng);
+
+    const photoId = saveAttPhoto_(data.photoBase64, s.displayName || s.lineDisplayName, dateStr, ATT_TYPE_TH[type]);
+
+    const sh = attendanceSheet_(ss);
+    const id = "AT-" + Utilities.formatDate(now, "Asia/Bangkok", "yyyyMMdd") + "-" + String(sh.getLastRow()).padStart(4, "0");
+    // วันที่/เวลาเขียนเป็น text — กัน Sheets แปลงรูปแบบเอง (บทเรียนข้อ 2 ใน CLAUDE.md)
+    sh.appendRow([
+      id, s.staffId, s.displayName || s.lineDisplayName, dateStr, attTimeStr_(now),
+      now.getTime(), Number(data.clientTs) || "", type,
+      lat == null ? "" : lat, lng == null ? "" : lng, data.accuracy == null ? "" : Math.round(Number(data.accuracy)),
+      near ? near.distM : "", near ? near.site.name : "", near ? near.inArea : "",
+      photoId, data.source || "web", data.note || "",
+    ]);
+    try { sh.getRange(sh.getLastRow(), 4, 1, 2).setNumberFormat("@"); } catch (e) {}
+
+    const events2 = events.concat([{
+      type: type, time: attTimeStr_(now), serverTs: now.getTime(),
+      lat: lat, inArea: near ? near.inArea : true, photo: photoId,
+    }]);
+    const shifts = readAttShifts_(ss);
+    const shift = attShiftFor_(shifts, s.role, attDowBkk_(now));
+
+    writeAuditLog_((s.displayName || s.lineDisplayName) + " (" + (STAFF_ROLE_TH_[s.role] || s.role) + ")",
+      "ลงเวลา", ATT_TYPE_TH[type],
+      auditDetail_({ time: attTimeStr_(now), distM: near ? near.distM : null, inArea: near ? near.inArea : null }));
+
+    return ok({
+      punched: ATT_TYPE_TH[type],
+      distM: near ? near.distM : null,
+      siteName: near ? near.site.name : null,
+      inArea: near ? near.inArea : null,
+      today: attTodayPayload_(events2, shift),
+    });
+  } catch (e) {
+    return ContentService.createTextOutput(JSON.stringify({ success: false, error: e.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } finally {
+    try { lock.releaseLock(); } catch (e) {}
+  }
+}
+
+function attTodayPayload_(events, shift) {
+  return {
+    events: events.map(function (e) { return { type: e.type, typeTh: ATT_TYPE_TH[e.type], time: e.time, inArea: e.inArea, hasPhoto: !!e.photo }; }),
+    allowed: attAllowedNext_(events),
+    summary: attSummarize_(events, shift),
+    shift: shift ? { name: shift.name, start: attFmtHm_(shift.start), end: attFmtHm_(shift.end) } : null,
+  };
+}
+
+// ─── action=myToday : สถานะลงเวลาวันนี้ของตัวเอง (ใช้เปิดหน้าจอ) ───
+function myTodayHandler_(ss, data) {
+  const s = resolveSession_(ss, data.sessionToken);
+  if (!s || s.status !== "active") return unauthorized_();
+  const now = new Date();
+  const events = readAttEvents_(ss, s.staffId, attDateKey_(now));
+  const shift = attShiftFor_(readAttShifts_(ss), s.role, attDowBkk_(now));
+  const payload = attTodayPayload_(events, shift);
+  payload.sites = readAttSites_(ss).map(function (x) { return { name: x.name, lat: x.lat, lng: x.lng, radiusM: x.radiusM }; });
+  payload.staffName = s.displayName || s.lineDisplayName;
+  payload.serverDate = attDateKey_(now);
+  return ok(payload);
+}
+
+// ─── action=attendanceToday : ใครเข้างานบ้างวันนี้ (owner) ───
+function attendanceTodayHandler_(ss, data) {
+  const s = resolveSession_(ss, data.sessionToken);
+  if (!s || s.role !== "owner" || s.status !== "active") return unauthorized_();
+  const now = new Date();
+  const dateStr = data.date && /^\d{4}-\d{2}-\d{2}$/.test(data.date) ? data.date : attDateKey_(now);
+  // dow ต้องมาจาก "วันที่ที่กำลังดู" ไม่ใช่วันนี้ — ไม่งั้นย้อนดูวันอื่นแล้วเทียบกับกะผิดวัน
+  const dp = dateStr.split("-");
+  const dow = new Date(Date.UTC(Number(dp[0]), Number(dp[1]) - 1, Number(dp[2]))).getUTCDay();
+  const shifts = readAttShifts_(ss);
+
+  const sh = attendanceSheet_(ss);
+  const last = sh.getLastRow();
+  const byStaff = {};
+  if (last >= 2) {
+    sh.getRange(2, 1, last - 1, 17).getValues().forEach(function (r) {
+      if (String(r[3]) !== dateStr) return;
+      const sid = String(r[1]);
+      if (!byStaff[sid]) byStaff[sid] = { staffId: sid, name: r[2], events: [] };
+      byStaff[sid].events.push({
+        type: r[7], time: r[4], serverTs: Number(r[5]) || 0,
+        lat: r[8], distM: r[11], siteName: r[12],
+        inArea: r[13] === true || r[13] === "TRUE", photo: r[14],
+      });
+    });
+  }
+
+  const staffAll = readStaffAll_(ss).filter(function (x) { return x.status === "active"; });
+  const rows = staffAll.map(function (st) {
+    const rec = byStaff[st.staffId];
+    const evs = rec ? rec.events.sort(function (a, b) { return a.serverTs - b.serverTs; }) : [];
+    const shift = attShiftFor_(shifts, st.role, dow);
+    const sum = attSummarize_(evs, shift);
+    const lastType = evs.length ? evs[evs.length - 1].type : null;
+    return {
+      staffId: st.staffId, name: st.displayName || st.lineDisplayName, role: st.role,
+      pictureUrl: st.pictureUrl,
+      state: !lastType ? "ยังไม่มา" : (lastType === "out" ? "ออกงานแล้ว" : (sum.onBreak ? "พักอยู่" : "ทำงานอยู่")),
+      shift: shift ? { name: shift.name, start: attFmtHm_(shift.start), end: attFmtHm_(shift.end) } : null,
+      summary: sum,
+      events: evs.map(function (e) {
+        return { type: e.type, typeTh: ATT_TYPE_TH[e.type], time: e.time, distM: e.distM, siteName: e.siteName, inArea: e.inArea, photo: e.photo };
+      }),
+    };
+  });
+  return ok({ date: dateStr, rows: rows });
+}
+
 // ───────────────────────────────────────────────────────────
 // เกณฑ์แจ้งเตือนสต็อก (thresholds) — เก็บถาวรใน Script Property 'STOCK_THRESHOLDS'
 // เดิม hardcode ใน payload ทำให้ค่าที่ผู้ใช้ปรับหายเมื่อ reload
@@ -622,6 +978,11 @@ function doPost(e) {
     if (data.action === 'logout')    return logoutHandler_(ss, data);
     if (data.action === 'listStaff') return listStaffHandler_(ss, data);
     if (data.action === 'saveStaff') return saveStaffHandler_(ss, data, actor);
+
+    // ─── ลงเวลาเข้า-ออกงาน ───
+    if (data.action === 'punch')           return punchHandler_(ss, data);
+    if (data.action === 'myToday')         return myTodayHandler_(ss, data);
+    if (data.action === 'attendanceToday') return attendanceTodayHandler_(ss, data);
 
     // มีการแก้ข้อมูล → ล้าง cache ให้ doGet ครั้งถัดไปคำนวณใหม่ (ข้อมูลไม่ค้าง)
     invalidateCache_(true); // clear payload cache เท่านั้น — ห้าม bump dmj_last_write_ts ก่อน conflict check
@@ -827,6 +1188,23 @@ function doGet(e) {
       }
       return ContentService.createTextOutput(JSON.stringify(meta))
         .setMimeType(ContentService.MimeType.JSON);
+    }
+    // รูปลงเวลา — ไฟล์ใน Drive ไม่ได้แชร์สาธารณะ (ข้อมูลส่วนบุคคลของพนักงาน)
+    // จึงต้องดึงผ่าน proxy นี้ และเปิดได้เฉพาะเจ้าของที่ล็อกอินอยู่เท่านั้น
+    if (e && e.parameter && e.parameter.action === 'attendancePhoto') {
+      const ssP = SpreadsheetApp.openById(SHEET_ID);
+      const sP = resolveSession_(ssP, e.parameter.sessionToken);
+      if (!sP || sP.role !== 'owner' || sP.status !== 'active') return unauthorized_();
+      try {
+        const f = DriveApp.getFileById(String(e.parameter.id || ''));
+        const b = f.getBlob();
+        return ContentService.createTextOutput(JSON.stringify({
+          d: 'data:' + b.getContentType() + ';base64,' + Utilities.base64Encode(b.getBytes()),
+        })).setMimeType(ContentService.MimeType.JSON);
+      } catch (err) {
+        return ContentService.createTextOutput(JSON.stringify({ error: 'ไม่พบรูป' }))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
     }
     // Audit Log endpoint: ดึง 200 แถวล่าสุดจาก Audit Log sheet
     // เฉพาะ owner เท่านั้น — ตรวจจาก role parameter ที่ frontend ส่งมา

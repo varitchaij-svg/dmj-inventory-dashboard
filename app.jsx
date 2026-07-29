@@ -21,6 +21,8 @@ const TABS = [
   { id: "labels",        label: "🖨️ พิมพ์ Label",            icon: I.print },
   { id: "auditlog",      label: "📋 Audit Log",             icon: I.layers },
   { id: "staff",         label: "👥 พนักงาน",               icon: I.layers },
+  { id: "attendance",    label: "⏱️ ลงเวลา",                icon: I.layers },
+  { id: "atttoday",      label: "🕐 ใครเข้างานวันนี้",       icon: I.layers },
   { id: "deadstock",     label: "📦 สินค้าจม",              icon: I.alert },
   { id: "quotefollowup", label: "📄 ใบเสนอราคา",             icon: I.cart },
   { id: "pos",           label: "🧾 ขาย/ออกบิล",             icon: I.cart },
@@ -33,12 +35,12 @@ const TABS = [
 const ROLE_TABS = {
   // เรียงตามที่ owner ใช้บ่อย: ภาพรวม/ลูกค้า → งานประจำวัน (สั่ง/สต๊อก/ออเดอร์/หน้าร้าน) → คลัง → วิเคราะห์ → เครื่องมือ/ตั้งค่าท้ายสุด
   // ("margin" ซ่อนไว้ก่อน — ยังไม่มีต้นทุนซื้อจริง · โค้ด MarginView คงไว้ ค่อยเพิ่ม id กลับเมื่อพร้อม)
-  owner:      ["overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog","staff"],
-  employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","tracking","ordersummary","mtojobs","labels"],
+  owner:      ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog","staff","atttoday"],
+  employee:   ["attendance","categories","trends","stock","storage","frontstore","transfers","orders","tracking","ordersummary","mtojobs","labels"],
   // 5 ตัวแรก = แถบหลัก (>9 แท็บ → ที่เหลือเข้า "เพิ่มเติม") จัดให้เป็นงานคลังที่ใช้บ่อยสุด
-  warehouse:  ["whhome","orders","stock","stockcount","storage","categories","newproduct","ordersummary","tracking","mtojobs","labels"],
-  frontstore: ["categories","stock","frontstore","orders","tracking","mtojobs","labels"],
-  saler:      ["pos","categories","stock","orders","tracking","quotefollowup","mtojobs","labels"],
+  warehouse:  ["attendance","whhome","orders","stock","stockcount","storage","categories","newproduct","ordersummary","tracking","mtojobs","labels"],
+  frontstore: ["attendance","categories","stock","frontstore","orders","tracking","mtojobs","labels"],
+  saler:      ["attendance","pos","categories","stock","orders","tracking","quotefollowup","mtojobs","labels"],
 };
 // หมวดหลักของ owner (nav 2 ชั้น) — กดหมวด → เห็นเมนูย่อยของหมวดนั้น
 // เรียงตามความสำคัญ/ที่ใช้บ่อย: ภาพรวม → การขาย → สต็อก → วิเคราะห์ → เครื่องมือ
@@ -48,7 +50,8 @@ const OWNER_GROUPS = [
   { id: "g_sales",    gi: "💰", name: "การขาย",       tabs: ["pos", "orders", "tracking", "quotefollowup", "customers", "frontstore", "mtojobs"] },
   { id: "g_stock",    gi: "📦", name: "สต็อก & คลัง",  tabs: ["stock", "categories", "storage", "stockcount", "transfers", "ordersummary", "newproduct", "deadstock", "labels"] },
   { id: "g_insight",  gi: "📈", name: "วิเคราะห์",      tabs: ["trends", "season"] },
-  { id: "g_tools",    gi: "⚙️", name: "เครื่องมือ",     tabs: ["upload", "connect", "auditlog", "staff"] },
+  { id: "g_people",   gi: "👥", name: "พนักงาน",       tabs: ["attendance", "atttoday", "staff"] },
+  { id: "g_tools",    gi: "⚙️", name: "เครื่องมือ",     tabs: ["upload", "connect", "auditlog"] },
 ];
 // "โหมดง่าย" — เมนูที่ใช้ประจำวัน (เหลือไว้บนแถบหลัก) ที่เหลือดันเข้า "เพิ่มเติม"
 const SIMPLE_PRIMARY = ["categories", "stock", "frontstore", "orders"];
@@ -1496,6 +1499,8 @@ function App() {
                                             onInitConsumed={() => setLabelInitItems(null)}/></ErrorBoundary>}
         {activeTab === "auditlog"     && <ErrorBoundary key="auditlog"><AuditLogView/></ErrorBoundary>}
         {activeTab === "staff"        && <ErrorBoundary key="staff"><StaffView/></ErrorBoundary>}
+        {activeTab === "attendance"   && <ErrorBoundary key="attendance"><AttendanceView role={role}/></ErrorBoundary>}
+        {activeTab === "atttoday"     && <ErrorBoundary key="atttoday"><AttendanceTodayView/></ErrorBoundary>}
         {activeTab === "deadstock"    && <ErrorBoundary key="deadstock"><DeadStockView/></ErrorBoundary>}
         {activeTab === "quotefollowup" && <ErrorBoundary key="quotefollowup"><QuoteFollowupView data={data} role={role}/></ErrorBoundary>}
         {activeTab === "pos"          && <ErrorBoundary key="pos"><PosView data={data} role={role}/></ErrorBoundary>}
