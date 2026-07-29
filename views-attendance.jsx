@@ -21,6 +21,16 @@ const ATT_BTN = [
   { type: "out",        label: "ออกงาน",      emoji: "🏁", color: "#705d96" },
 ];
 
+// วันนี้แบบ yyyy-MM-dd ตามเวลาเครื่อง (ห้ามใช้ toISOString — จะเพี้ยนไป 1 วันเพราะแปลงเป็น UTC)
+function attTodayKey(d) {
+  const x = d || new Date();
+  return x.getFullYear() + "-" + String(x.getMonth() + 1).padStart(2, "0") + "-" + String(x.getDate()).padStart(2, "0");
+}
+function attHm(d) {
+  const x = d || new Date();
+  return String(x.getHours()).padStart(2, "0") + ":" + String(x.getMinutes()).padStart(2, "0");
+}
+
 function attMinLabel(min) {
   if (min == null) return "—";
   const h = Math.floor(min / 60), m = min % 60;
@@ -307,21 +317,23 @@ const ATT_STATE_STYLE = {
 
 function AttendanceTodayView() {
   const [rows, setRows] = uS([]);
-  const [date, setDate] = uS("");
+  const [date, setDate] = uS(attTodayKey());
   const [loading, setLoading] = uS(true);
   const [err, setErr] = uS(null);
   const [openId, setOpenId] = uS(null);
   const [photo, setPhoto] = uS(null); // {loading, src}
+  const [fix, setFix] = uS(null);     // {mode:"add"|"edit", staff, event}
+  const [toast, setToast] = uS(null);
 
-  const load = uC(async () => {
+  const load = uC(async (d0) => {
     setLoading(true); setErr(null);
     try {
-      const d = await attPost({ action: "attendanceToday" });
+      const d = await attPost({ action: "attendanceToday", date: d0 || date });
       if (d && d.success) { setRows(d.data.rows || []); setDate(d.data.date || ""); }
       else setErr((d && d.error) || "โหลดไม่สำเร็จ");
     } catch (e) { setErr(e.message); }
     finally { setLoading(false); }
-  }, []);
+  }, [date]);
 
   uE(() => { load(); }, [load]);
 
@@ -342,18 +354,46 @@ function AttendanceTodayView() {
 
   const here = rows.filter(r => r.state === "ทำงานอยู่" || r.state === "พักอยู่");
   const late = rows.filter(r => r.summary && r.summary.lateMin > 0);
+  const came = rows.filter(r => r.summary && r.summary.inTime);
+  const noOut = came.filter(r => !r.summary.outTime);
+  const isToday = date === attTodayKey();
 
   return (
     <div style={{ padding: 16, maxWidth: 720, margin: "0 auto" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, gap: 8, flexWrap: "wrap" }}>
         <div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>🕐 ใครเข้างานวันนี้</div>
-          <div style={{ fontSize: 12, color: "var(--muted)" }}>{date} · อยู่ที่ร้าน {here.length} คน{late.length ? ` · สาย ${late.length} คน` : ""}</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>
+            🕐 {isToday ? "ใครเข้างานวันนี้" : "ย้อนดูการลงเวลา"}
+          </div>
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>
+            {isToday ? `อยู่ที่ร้าน ${here.length} คน` : `มาทำงาน ${came.length} คน`}
+            {late.length ? ` · สาย ${late.length} คน` : ""}
+            {!isToday && noOut.length ? ` · ⚠️ ไม่ได้กดออกงาน ${noOut.length} คน` : ""}
+          </div>
         </div>
-        <button className="btn ghost" onClick={load} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          {loading ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }} /> : "🔄"}<span>รีโหลด</span>
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <input type="date" value={date} max={attTodayKey()} onChange={e => setDate(e.target.value)}
+            style={{ padding: "7px 9px", borderRadius: 9, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 13, minWidth: 0 }} />
+          <button className="btn ghost" onClick={() => load()} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {loading ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }} /> : "🔄"}
+          </button>
+        </div>
       </div>
+
+      {!isToday && (
+        <div style={{ background: "var(--g-50)", border: "1px solid var(--g-500)", borderRadius: 10, padding: "8px 12px", fontSize: 12.5, color: "var(--g-700)", marginBottom: 12 }}>
+          กำลังดูย้อนหลังวันที่ {date} · <span style={{ textDecoration: "underline", cursor: "pointer" }} onClick={() => setDate(attTodayKey())}>กลับมาวันนี้</span>
+        </div>
+      )}
+
+      {toast && (
+        <div style={{
+          borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 13, fontWeight: 600,
+          background: toast.kind === "ok" ? "#e8f5e9" : "#fff0f0",
+          color: toast.kind === "ok" ? "#1b5e20" : "var(--dang)",
+          border: "1px solid " + (toast.kind === "ok" ? "#a5d6a7" : "var(--dang)"),
+        }}>{toast.kind === "ok" ? "✅ " : "⚠️ "}{toast.text}</div>
+      )}
 
       {err && (
         <div style={{ background: "#fff0f0", border: "1px solid var(--dang)", borderRadius: 8, padding: "10px 14px", color: "var(--dang)", marginBottom: 12, fontSize: 13 }}>⚠️ {err}</div>
@@ -398,22 +438,38 @@ function AttendanceTodayView() {
               {r.events.length === 0 ? (
                 <div style={{ fontSize: 12.5, color: "var(--muted)" }}>ยังไม่ได้ลงเวลา</div>
               ) : r.events.map((e, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, padding: "5px 0" }}>
+                <div key={e.id || i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, padding: "5px 0" }}>
                   <span style={{ fontWeight: 700, minWidth: 46 }}>{String(e.time).slice(0, 5)}</span>
-                  <span style={{ flex: 1 }}>{e.typeTh}</span>
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    {e.typeTh}
+                    {e.fixed && <span title={e.note || "เจ้าของแก้เอง"} style={{ fontSize: 11, color: "#a07417", marginLeft: 5 }}>✏️ แก้แล้ว</span>}
+                  </span>
                   {e.distM !== "" && e.distM != null && (
                     <span style={{ color: e.inArea ? "var(--muted)" : "var(--dang)", fontSize: 11.5 }}>
                       {e.inArea ? `${e.siteName}` : `⚠️ ห่าง ${e.distM} ม.`}
                     </span>
                   )}
                   {e.photo && (
-                    <button className="btn ghost" onClick={() => viewPhoto(e.photo)} style={{ fontSize: 11, padding: "3px 8px" }}>📷 ดูรูป</button>
+                    <button className="btn ghost" onClick={() => viewPhoto(e.photo)} style={{ fontSize: 11, padding: "3px 8px" }}>📷</button>
                   )}
+                  <button className="btn ghost" title="แก้เวลา/ลบรายการนี้"
+                    onClick={() => setFix({ mode: "edit", staff: r, event: e })}
+                    style={{ fontSize: 11, padding: "3px 8px" }}>✏️</button>
                 </div>
               ))}
               {r.summary && r.summary.forgotBreakEnd && (
                 <div style={{ fontSize: 11.5, color: "#a07417", marginTop: 6 }}>⚠️ ลืมกด "กลับจากพัก" — เวลาพักอาจไม่ตรงจริง</div>
               )}
+              {/* วันนี้คนที่ยังทำงานอยู่ก็ยังไม่มี "ออกงาน" เป็นเรื่องปกติ — เตือนเฉพาะตอนย้อนดูวันเก่า */}
+              {!isToday && r.summary && r.summary.inTime && !r.summary.outTime && (
+                <div style={{ fontSize: 11.5, color: "#a07417", marginTop: 6 }}>
+                  ⚠️ ไม่ได้กด "ออกงาน" วันนี้ — ชั่วโมงทำงานคำนวณไม่ได้จนกว่าจะเติมเวลาออก
+                </div>
+              )}
+              <button className="btn ghost" onClick={() => setFix({ mode: "add", staff: r, event: null })}
+                style={{ marginTop: 8, fontSize: 12, padding: "7px 12px", width: "100%" }}>
+                ➕ เพิ่มการลงเวลาให้ {r.name}
+              </button>
             </div>
           )}
         </div>
@@ -429,6 +485,117 @@ function AttendanceTodayView() {
             : <img src={photo.src} alt="" style={{ maxWidth: "100%", maxHeight: "90vh", borderRadius: 12 }} />}
         </div>
       )}
+
+      {fix && (
+        <AttFixModal
+          mode={fix.mode} staff={fix.staff} event={fix.event} date={date}
+          onClose={() => setFix(null)}
+          onSaved={(msg) => { setFix(null); setToast({ kind: "ok", text: msg }); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
+// AttFixModal — เจ้าของแก้/เพิ่ม/ลบการลงเวลาย้อนหลัง
+// ───────────────────────────────────────────────
+// บังคับกรอกเหตุผลก่อนบันทึกเสมอ (ฝั่ง GAS ก็เช็คซ้ำ) — แถวที่แก้จะถูกมาร์คว่า
+// "แก้โดยเจ้าของ" + เขียน Audit Log ทุกครั้ง เพื่อให้ตัวเลขชั่วโมงทำงานตรวจสอบย้อนหลังได้
+// ═══════════════════════════════════════════════
+function AttFixModal({ mode, staff, event, date, onClose, onSaved }) {
+  const [type, setType] = uS(event ? event.type : "out");
+  const [time, setTime] = uS(event ? String(event.time).slice(0, 5) : attHm());
+  const [reason, setReason] = uS("");
+  const [busy, setBusy] = uS(null);   // "save" | "delete"
+  const [err, setErr] = uS(null);
+
+  const submit = async (op) => {
+    if (!reason.trim()) { setErr("ต้องกรอกเหตุผลก่อนบันทึก"); return; }
+    setBusy(op === "delete" ? "delete" : "save"); setErr(null);
+    try {
+      const d = await attPost({
+        action: "fixAttendance", op,
+        id: event ? event.id : null,
+        staffId: staff.staffId, date, type, time, reason: reason.trim(),
+      });
+      if (d && d.success) {
+        const w = d.data && d.data.warning;
+        onSaved((op === "delete" ? "ลบรายการแล้ว" : op === "add" ? "เพิ่มการลงเวลาแล้ว" : "แก้เวลาแล้ว") +
+                (w ? " · ⚠️ " + w : ""));
+      } else setErr((d && d.error) || "บันทึกไม่สำเร็จ");
+    } catch (e) { setErr("บันทึกไม่สำเร็จ: " + e.message); }
+    finally { setBusy(null); }
+  };
+
+  return (
+    <div onClick={e => { if (e.target === e.currentTarget && !busy) onClose(); }} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 2100,
+      display: "flex", alignItems: "flex-end", justifyContent: "center",
+    }}>
+      <div style={{
+        background: "var(--paper)", borderRadius: "18px 18px 0 0", width: "100%", maxWidth: 480,
+        padding: 18, maxHeight: "92vh", overflowY: "auto",
+      }}>
+        <div style={{ fontSize: 17, fontWeight: 800, color: "var(--g-700)", marginBottom: 3 }}>
+          {mode === "add" ? "➕ เพิ่มการลงเวลา" : "✏️ แก้การลงเวลา"}
+        </div>
+        <div style={{ fontSize: 12.5, color: "var(--muted)", marginBottom: 14 }}>{staff.name} · {date}</div>
+
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 7 }}>ประเภท</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 8, marginBottom: 14 }}>
+          {ATT_BTN.map(b => (
+            <button key={b.type} onClick={() => setType(b.type)} disabled={!!busy}
+              style={{
+                padding: "12px 8px", borderRadius: 11, fontFamily: "inherit", fontSize: 14, fontWeight: 700,
+                border: type === b.type ? `2px solid ${b.color}` : "1.5px solid var(--bdr)",
+                background: type === b.type ? b.color : "var(--paper)",
+                color: type === b.type ? "#fff" : "var(--text)", cursor: "pointer",
+              }}>{b.emoji} {b.label}</button>
+          ))}
+        </div>
+
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 7 }}>เวลา</div>
+        <input type="time" value={time} onChange={e => setTime(e.target.value)} disabled={!!busy}
+          style={{ width: "100%", padding: "12px", borderRadius: 11, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 16, marginBottom: 14, boxSizing: "border-box" }} />
+
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 7 }}>
+          เหตุผล <span style={{ color: "var(--dang)" }}>*</span>
+        </div>
+        <textarea value={reason} onChange={e => setReason(e.target.value)} disabled={!!busy}
+          placeholder="เช่น ลืมกดออกงาน แจ้งทางไลน์ว่ากลับ 18:00"
+          style={{ width: "100%", minHeight: 68, padding: 11, borderRadius: 11, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 14, marginBottom: 6, boxSizing: "border-box", resize: "vertical" }} />
+        <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 14, lineHeight: 1.6 }}>
+          รายการนี้จะถูกทำเครื่องหมายว่า "แก้โดยเจ้าของ" และบันทึกลงประวัติการใช้งาน
+        </div>
+
+        {err && (
+          <div style={{ background: "#fff0f0", border: "1px solid var(--dang)", borderRadius: 9, padding: "9px 12px", color: "var(--dang)", fontSize: 12.5, marginBottom: 12 }}>⚠️ {err}</div>
+        )}
+
+        <div style={{ display: "flex", gap: 9 }}>
+          <button className="btn ghost" onClick={onClose} disabled={!!busy} style={{ flex: 1, padding: "13px" }}>ยกเลิก</button>
+          <button onClick={() => submit(mode === "add" ? "add" : "edit")} disabled={!!busy}
+            style={{
+              flex: 2, padding: "13px", borderRadius: 11, border: "none", fontFamily: "inherit",
+              background: "var(--g-600)", color: "#fff", fontSize: 15, fontWeight: 800,
+              cursor: busy ? "default" : "pointer", opacity: busy ? .6 : 1,
+            }}>
+            {busy === "save" ? <span className="spin" style={{ width: 16, height: 16, borderWidth: 2 }} /> : "บันทึก"}
+          </button>
+        </div>
+
+        {mode === "edit" && (
+          <button onClick={() => submit("delete")} disabled={!!busy}
+            style={{
+              width: "100%", marginTop: 10, padding: "11px", borderRadius: 11, fontFamily: "inherit",
+              border: "1.5px solid var(--dang)", background: "transparent", color: "var(--dang)",
+              fontSize: 13.5, fontWeight: 700, cursor: busy ? "default" : "pointer",
+            }}>
+            {busy === "delete" ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }} /> : "🗑 ลบรายการนี้"}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

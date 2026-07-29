@@ -222,6 +222,27 @@ const TRACKED = [
     `else if (p === 0 && d === 1 && len > 1) s += "เอ็ด";`,
     `if (baht === 0 && satang === 0) return "ศูนย์บาทถ้วน";`,
   ]},
+  // ── ลงเวลาเข้า-ออกงาน (appsscript_complete.gs) ──────────────────────────
+  // helpers.js ตัดชื่อ _ ท้ายออก (attBuildTs_ → attBuildTs) แต่ตรรกะข้างในต้องตรงกัน
+  { names: ['attBuildTs'], sourceFile: 'appsscript_complete.gs', landmarks: [
+    `const dm = /^(\\d{4})-(\\d{2})-(\\d{2})$/.exec(String(dateStr).trim());`,
+    `const hh = parseInt(tm[1], 10), mi = parseInt(tm[2], 10), sec = tm[3] ? parseInt(tm[3], 10) : 0;`,
+    `if (hh > 23 || mi > 59 || sec > 59) return null;`,
+    `const d = new Date(Number(dm[1]), Number(dm[2]) - 1, Number(dm[3]), hh, mi, sec);`,
+  ]},
+  { names: ['attSequenceWarning'], sourceFile: 'appsscript_complete.gs', landmarks: [
+    `if (events[0].type !== "in") w.push("เหตุการณ์แรกของวันไม่ใช่ \\"เข้างาน\\"");`,
+    `if (outIdx >= 0 && outIdx !== events.length - 1) w.push("มีเหตุการณ์ต่อหลัง \\"ออกงาน\\"");`,
+  ]},
+  // หมายเหตุ: helpers.js ใช้ d.getHours() แทน attMinOfDay_ (Utilities ของ GAS ไม่มีใน Node)
+  // จึงไม่ landmark บรรทัดคิด lateMin ทั้งบรรทัด — เอาเฉพาะส่วนที่ต้องตรงกันจริง
+  { names: ['attSummarize'], sourceFile: 'appsscript_complete.gs', landmarks: [
+    `let breakMin = 0, openBreak = null, forgotBreakEnd = false;`,
+    `else if (e.type === "breakEnd" && openBreak) { breakMin += Math.round((e.serverTs - openBreak.serverTs) / 60000); openBreak = null; }`,
+    `if (lastOut) breakMin += Math.round((lastOut.serverTs - openBreak.serverTs) / 60000);`,
+    `const workedMin = (firstIn && lastOut) ? Math.max(0, Math.round((lastOut.serverTs - firstIn.serverTs) / 60000) - breakMin) : null;`,
+    `lateMin = Math.max(0, inMin - shift.start);`,
+  ]},
 ];
 
 // ฟังก์ชันใน helpers.js ที่เป็น "behavioral model" (จำลองพฤติกรรม ไม่ใช่ copy บรรทัดตรง ๆ)
