@@ -580,6 +580,7 @@ function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep
   for (let i = 0; i < rows.length; i += POS_ROWS_PER_PAGE) pages.push(rows.slice(i, i + POS_ROWS_PER_PAGE));
   if (pages.length === 0) pages.push([]);
   const cell = { padding: "4px 6px", borderRight: "0.5px solid #999", fontSize: 12 };
+  const boxCell = { padding: "3px 8px", border: "0.5px solid #999" };
   const num = (n) => (Math.round(n * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const docDate = new Date().toLocaleDateString("th-TH", { year: "numeric", month: "long", day: "numeric" });
   const cust = customer || {};
@@ -603,28 +604,37 @@ function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep
                 <div style={{ fontSize: 14, fontWeight: 800, border: "1px solid #000", padding: "3px 8px", borderRadius: 4 }}>ใบเสนอราคา</div>
                 <div style={{ fontSize: 11, marginTop: 4 }}>วันที่ : {docDate}</div>
                 <div style={{ fontSize: 11 }}>เลขที่เอกสาร : {quotationNumber || "—"}</div>
-                {salesRep ? <div style={{ fontSize: 11 }}>ผู้เสนอราคา : {salesRep}</div> : null}
                 {pages.length > 1 ? <div style={{ fontSize: 11 }}>หน้า {pi + 1}/{pages.length}</div> : null}
               </div>
             </div>
-            {/* ── กล่องลูกค้า (หน้าแรกเท่านั้น) — ตาราง 2 คอลัมน์ label:value จัดตำแหน่งเหมือน
-                เอกสาร ZORT จริง (ใบเสร็จ/ใบกำกับภาษี) ที่เจ้าของอ้างอิงมา ── */}
+            {/* ── กล่องลูกค้า (หน้าแรกเท่านั้น) — ตารางจริง (border-collapse) มีเส้นตาราง
+                ครบทุกแถว/คอลัมน์ จัดตำแหน่งตามเอกสาร ZORT ต้นฉบับที่เจ้าของอ้างอิงมาเป๊ะ
+                (QT-202607023.pdf) — "รหัสผู้ติดต่อ" เว้นว่างเสมอ (ไม่มี field นี้ในระบบเรา) ── */}
             {pi === 0 && (
-              <div style={{ border: "1px solid #999", borderRadius: 4, padding: "6px 8px", marginBottom: 8, fontSize: 11.5, lineHeight: 1.7 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", columnGap: 12 }}>
-                  <div><b>นามลูกค้า:</b> {cust.name || "—"}</div>
-                  <div><b>เลขประจำตัวผู้เสียภาษี:</b> {cust.taxId || "—"}</div>
+              <table style={{ width: "100%", borderCollapse: "collapse", border: "1px solid #999", marginBottom: 8, fontSize: 11.5 }}>
+                <tbody>
+                  <tr>
+                    <td style={boxCell}><b>รหัสผู้ติดต่อ:</b></td>
+                    <td style={boxCell}><b>เลขประจำตัวผู้เสียภาษี:</b> {cust.taxId || "—"}</td>
+                  </tr>
+                  <tr>
+                    <td colSpan={2} style={boxCell}><b>นามผู้ติดต่อ:</b> {cust.name || "—"}</td>
+                  </tr>
                   {(cust.branch || cust.branchNo) && (
-                    <React.Fragment>
-                      <div><b>ชื่อสาขา:</b> {cust.branch || "—"}</div>
-                      <div><b>สาขาที่:</b> {cust.branchNo || "—"}</div>
-                    </React.Fragment>
+                    <tr>
+                      <td style={boxCell}><b>ชื่อสาขา:</b> {cust.branch || "—"}</td>
+                      <td style={boxCell}><b>สาขาที่:</b> {cust.branchNo || "—"}</td>
+                    </tr>
                   )}
-                  <div style={{ gridColumn: "1 / -1" }}><b>ที่อยู่:</b> {cust.address || "—"}</div>
-                  <div><b>โทรศัพท์:</b> {cust.phone || "—"}</div>
-                  <div><b>อีเมล:</b> {cust.email || "—"}</div>
-                </div>
-              </div>
+                  <tr>
+                    <td colSpan={2} style={boxCell}><b>ที่อยู่:</b> {cust.address || "—"}</td>
+                  </tr>
+                  <tr>
+                    <td style={boxCell}><b>โทรศัพท์:</b> {cust.phone || "—"}</td>
+                    <td style={boxCell}><b>อีเมล:</b> {cust.email || "—"}</td>
+                  </tr>
+                </tbody>
+              </table>
             )}
             {/* ── ตารางสินค้า — กรอบเดียวกันยืดเต็มพื้นที่ที่เหลือ (flex:1) ให้เห็นเป็น
                 "ช่องสี่เหลี่ยม" ว่างต่อจากรายการจริง เหมือนเอกสาร ZORT ต้นฉบับที่เจ้าของ
@@ -658,33 +668,48 @@ function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep
               </table>
               <div style={{ flex: 1 }}></div>
             </div>
-            {/* ── "รวม" แยกบรรทัดต่อจากตารางทันที แล้วค่อยกล่องสรุปละเอียดด้านล่าง —
-                จัดตำแหน่งเหมือนเอกสาร ZORT จริงที่เจ้าของอ้างอิงมา (หน้าสุดท้ายเท่านั้น) ── */}
-            {isLast && (
-              <React.Fragment>
-                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4, fontSize: 12, fontWeight: 700 }}>
-                  <span style={{ minWidth: 240, display: "flex", justifyContent: "space-between" }}><span>รวม</span><span>{num(totals.grandTotal + totals.manualDiscount)} บาท</span></span>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, gap: 12 }}>
-                  <div style={{ fontSize: 11, maxWidth: "55%" }}>
-                    {(remarks || []).filter(Boolean).length > 0 && (
-                      <div>
-                        <div style={{ fontWeight: 700, marginBottom: 2 }}>หมายเหตุ</div>
-                        {(remarks || []).filter(Boolean).map((r, i) => <div key={i}>{i + 1}. {r}</div>)}
-                      </div>
-                    )}
-                    <div style={{ marginTop: 6 }}>สินค้าทั้งหมด {totalUnits} หน่วย</div>
-                    <div>({bahtText(totals.grandTotal)})</div>
+            {/* ── "รวม" + สรุปยอด — คำนวณตรงกับตรรกะส่วนลดขั้นบันไดจริง (computeBillTotals)
+                ตรวจสอบเทียบกับ QT-202607023.pdf แล้วตัวเลขตรงกันทุกบรรทัด:
+                "รวม" = หลังหักขายส่ง 20% (ถ้าเข้าเงื่อนไข) ก่อนหักขั้นบันได
+                "ส่วนลด" ในกล่องสรุป = tierRate เป็น % (ไม่ใช่บาท) — ไม่ใช่ manualDiscount
+                totals จาก getQuotationForPrint (พิมพ์ย้อนหลัง) ไม่มี wholesaleSubtotal/tierRate
+                (ไม่รู้ breakdown เดิม) → fallback ไปใช้ grandTotal ตรงๆ ไม่โชว์แถวส่วนลด ── */}
+            {isLast && (() => {
+              const hasBreakdown = totals.wholesaleSubtotal != null;
+              const rowmAmount = hasBreakdown ? totals.wholesaleSubtotal + (totals.retailExcluded || 0) : totals.grandTotal;
+              const tierRate = hasBreakdown ? (totals.tierRate || 0) : 0;
+              const manualDiscount = totals.manualDiscount || 0;
+              return (
+                <React.Fragment>
+                  <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4, fontSize: 12, fontWeight: 700 }}>
+                    <span style={{ minWidth: 240, display: "flex", justifyContent: "space-between" }}><span>รวม</span><span>{num(rowmAmount)} บาท</span></span>
                   </div>
-                  <div style={{ minWidth: 240, fontSize: 12, border: "1px solid #999", borderRadius: 4, padding: "6px 8px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span>ส่วนลด</span><span>{num(totals.manualDiscount)} บาท</span></div>
-                    <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span>มูลค่าก่อนภาษี</span><span>{num(totals.preVat)} บาท</span></div>
-                    <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span>ภาษีมูลค่าเพิ่ม (7%)</span><span>{num(totals.vat)} บาท</span></div>
-                    <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontWeight: 800, fontSize: 14, borderTop: "1px solid #000", marginTop: 2, background: "#f3f4f6" }}><span>มูลค่ารวมสุทธิ</span><span>{num(totals.grandTotal)} บาท</span></div>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, gap: 12 }}>
+                    <div style={{ fontSize: 11, maxWidth: "55%" }}>
+                      {(remarks || []).filter(Boolean).length > 0 && (
+                        <div>
+                          <div style={{ fontWeight: 700, marginBottom: 2 }}>หมายเหตุ</div>
+                          {(remarks || []).filter(Boolean).map((r, i) => <div key={i}>{i + 1}. {r}</div>)}
+                        </div>
+                      )}
+                      <div style={{ marginTop: 6 }}>สินค้าทั้งหมด {totalUnits} หน่วย</div>
+                      <div>({bahtText(totals.grandTotal)})</div>
+                    </div>
+                    <div style={{ minWidth: 240, fontSize: 12, border: "1px solid #999", borderRadius: 4, padding: "6px 8px" }}>
+                      {tierRate > 0 && (
+                        <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span>ส่วนลด</span><span>{(tierRate * 100).toFixed(2)}%</span></div>
+                      )}
+                      {manualDiscount > 0 && (
+                        <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span>ส่วนลดเพิ่มเติม</span><span>{num(manualDiscount)} บาท</span></div>
+                      )}
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span>มูลค่ารวมก่อนภาษี</span><span>{num(totals.preVat)} บาท</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span>ภาษีมูลค่าเพิ่ม (7%)</span><span>{num(totals.vat)} บาท</span></div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontWeight: 800, fontSize: 14, borderTop: "1px solid #000", marginTop: 2, background: "#f3f4f6" }}><span>มูลค่ารวมสุทธิ</span><span>{num(totals.grandTotal)} บาท</span></div>
+                    </div>
                   </div>
-                </div>
-              </React.Fragment>
-            )}
+                </React.Fragment>
+              );
+            })()}
             {/* ── ช่องเซ็น (หน้าสุดท้ายเท่านั้น) — ตารางสินค้าด้านบนยืดเต็มพื้นที่แล้ว
                 (flex:1) ไม่ต้องดัน marginTop:"auto" ที่นี่อีก แค่เว้นระยะปกติต่อจากกล่อง
                 สรุปยอด เหมือนเอกสาร ZORT ต้นฉบับ · ผู้เสนอราคาอยู่ขวา ผู้อนุมัติสั่งซื้ออยู่
