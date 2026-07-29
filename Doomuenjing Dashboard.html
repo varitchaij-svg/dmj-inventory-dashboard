@@ -941,13 +941,17 @@
     }
     .pos-print-page:last-child { page-break-after: avoid; break-after: avoid; }
     .quote-print-area { display: block !important; }
-    /* ไม่บังคับ min-height เท่ากับความสูงหน้า A4 (เคยลอง 293/297mm แล้วยังล้นเป็นหน้า 2
-       เกือบว่างเปล่าจาก sub-pixel rounding) — ปล่อยสูงตามเนื้อหาจริง (auto) รับประกัน
-       ไม่ล้นหน้า แลกกับช่องเซ็นไม่ชิดขอบล่างสุดเป๊ะในเอกสารสั้น (ดูใน views-quote.jsx) */
+    /* เคยลอง min-height 293/297mm แล้วล้นเป็นหน้า 2 — ตอนนั้นสาเหตุจริงคือเนื้อหาแดชบอร์ด
+       ที่ไม่ได้ห่อ .no-print รั่วเข้ามาพิมพ์ปน + ถูกบีบแคบซ้อนอยู่ใน div maxWidth (แก้แล้ว
+       ทั้งคู่) ตอนนี้กลับมาบังคับ min-height เต็มหน้า A4 (297mm เท่า .pos-print-page)
+       ให้เอกสารเต็ม 1 หน้าตามที่เจ้าของขอ — ช่องเซ็นใช้ marginTop:auto ดันลงล่างสุด */
     .quote-print-page {
       width: 210mm !important;
+      min-height: 297mm !important;
       padding: 12mm 10mm !important;
       box-sizing: border-box !important;
+      display: flex !important;
+      flex-direction: column !important;
       page-break-after: always;
       break-after: page;
     }

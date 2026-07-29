@@ -611,7 +611,9 @@ function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep
             {pi === 0 && (
               <div style={{ border: "1px solid #999", borderRadius: 4, padding: "6px 8px", marginBottom: 8, fontSize: 11.5, lineHeight: 1.6 }}>
                 <div><b>นามลูกค้า:</b> {cust.name || "—"} &nbsp;&nbsp; <b>เลขประจำตัวผู้เสียภาษี:</b> {cust.taxId || "—"}</div>
-                <div><b>ชื่อสาขา:</b> {cust.branch || "สำนักงานใหญ่"} &nbsp;&nbsp; <b>สาขาที่:</b> {cust.branchNo || "00000"}</div>
+                {(cust.branch || cust.branchNo) && (
+                  <div><b>ชื่อสาขา:</b> {cust.branch || "—"} &nbsp;&nbsp; <b>สาขาที่:</b> {cust.branchNo || "—"}</div>
+                )}
                 <div><b>ที่อยู่:</b> {cust.address || "—"}</div>
                 <div><b>โทรศัพท์:</b> {cust.phone || "—"} &nbsp;&nbsp; <b>อีเมล:</b> {cust.email || "—"}</div>
               </div>
@@ -663,12 +665,12 @@ function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep
                 </div>
               </div>
             )}
-            {/* ── ช่องเซ็น — เว้นระยะคงที่ต่อจากเนื้อหา (หน้าสุดท้ายเท่านั้น) ──
-                หมายเหตุ: เดิมใช้ marginTop:"auto" + บังคับ min-height ให้ดันลงล่างสุดของกระดาษ
-                แต่ sub-pixel rounding ของเบราว์เซอร์ดันความสูงเกิน 297mm จนล้นเป็นหน้าที่ 2
-                (ค่าว่างเกือบทั้งหน้า) เปลี่ยนเป็นระยะห่างคงที่แทน — รับประกันไม่ล้นหน้า แลกกับ
-                ช่องเซ็นไม่ชิดขอบล่างสุดเป๊ะสำหรับเอกสารสั้น (ยอมรับได้ ดีกว่าเสี่ยงล้นหน้า) */}
-            <div style={{ marginTop: 40 }}>
+            {/* ── ช่องเซ็น — ดันไปล่างสุดของกระดาษ (หน้าสุดท้ายเท่านั้น) ──
+                เดิมเคยล้นเป็นหน้า 2 จากสาเหตุอื่น (เนื้อหาแดชบอร์ดรั่วเข้ามาพิมพ์ปน +
+                ถูกบีบแคบซ้อนอยู่ใน div maxWidth) แก้ทั้งคู่แล้ว กลับมาใช้ marginTop:"auto"
+                ร่วมกับ .quote-print-page (min-height:297mm + display:flex column) เพื่อ
+                ให้เอกสารเต็ม 1 หน้าตามที่เจ้าของขอ */}
+            <div style={{ marginTop: "auto" }}>
               {isLast && (
                 <div style={{ display: "flex", justifyContent: "space-around", paddingTop: 24, fontSize: 11, textAlign: "center" }}>
                   {["ผู้เสนอราคา", "ผู้อนุมัติสั่งซื้อ"].map(l => (
