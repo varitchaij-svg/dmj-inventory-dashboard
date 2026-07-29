@@ -308,9 +308,12 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
   const inp = { width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 14, minWidth: 0, boxSizing: "border-box" };
 
   if (result) {
+    // หมายเหตุ: QuotationPrintDoc ต้องอยู่นอก div ที่จำกัด maxWidth (480px เพื่อความสวยงามบนจอ)
+    // เพราะ .quote-print-page บังคับ width:210mm ตอนพิมพ์ — ถ้าซ้อนอยู่ใน maxWidth เดิม
+    // เบราว์เซอร์จะบีบเนื้อหาพิมพ์ให้แคบลงไม่เต็มหน้า A4 (เห็นเป็นคอลัมน์แคบชิดซ้าย)
     return (
-      <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12, maxWidth: 480, margin: "0 auto" }}>
-        <div className="no-print" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <React.Fragment>
+        <div className="no-print" style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12, maxWidth: 480, margin: "0 auto" }}>
           <Card padding={true}>
             <div style={{ textAlign: "center", padding: "16px 0" }}>
               <div style={{ fontSize: 44 }}>🎉</div>
@@ -322,10 +325,10 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
           <button onClick={doPrint} style={{ padding: 14, borderRadius: 10, border: "none", background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 700 }}>🖨️ พิมพ์ใบเสนอราคา (A4)</button>
           <button onClick={() => { resetAll(); }} style={{ padding: 14, borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700 }}>📝 สร้างใบใหม่</button>
           {onBack && <button onClick={onBack} style={{ padding: 14, borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700 }}>← กลับไปหน้าติดตามสถานะ</button>}
+          <Toast toast={toast} onClose={hideToast}/>
         </div>
         <QuotationPrintDoc quotationNumber={result.quotationNumber} items={cart} customer={cust} remarks={remarks} salesRep={salesRep} totals={result.totals || totals}/>
-        <div className="no-print"><Toast toast={toast} onClose={hideToast}/></div>
-      </div>
+      </React.Fragment>
     );
   }
 

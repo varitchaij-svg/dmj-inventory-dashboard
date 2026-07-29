@@ -6859,10 +6859,13 @@ function QuoteFollowupView({ data, role }) {
   }
 
   return (
-    <div style={{ padding: "16px", maxWidth: 1040, margin: "0 auto" }}>
+    <React.Fragment>
     {/* เนื้อหาแดชบอร์ดทั้งหมด (KPI/ตาราง) ห้ามพิมพ์ปน — เหลือแค่ QuotationPrintDoc ด้านล่าง
-        (นอก .no-print นี้) ตอนกด 🖨️ พิมพ์ย้อนหลังจากตารางรออนุมัติ/อนุมัติแล้ว */}
-    <div className="no-print">
+        (นอก .no-print นี้) ตอนกด 🖨️ พิมพ์ย้อนหลังจากตารางรออนุมัติ/อนุมัติแล้ว
+        หมายเหตุ: maxWidth ต้องอยู่ใน .no-print เท่านั้น ห้ามอยู่ที่ div นอกสุด — เพราะ
+        .quote-print-page บังคับ width:210mm ตอนพิมพ์ ถ้าซ้อนอยู่ใน maxWidth เดิม
+        เบราว์เซอร์จะบีบเนื้อหาพิมพ์ให้แคบชิดซ้ายไม่เต็มหน้า A4 */}
+    <div className="no-print" style={{ padding: "16px", maxWidth: 1040, margin: "0 auto" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
         <div>
           <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>📊 สรุปสถานะใบเสนอราคา</div>
@@ -7176,7 +7179,7 @@ function QuoteFollowupView({ data, role }) {
         <QuotationPrintDoc quotationNumber={printData.quotationNumber} items={printData.items} customer={printData.customer}
           remarks={printData.remarks} salesRep={printData.salesRep} totals={printData.totals}/>
       )}
-    </div>
+    </React.Fragment>
   );
 }
 
