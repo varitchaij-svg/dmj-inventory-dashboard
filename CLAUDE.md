@@ -35,6 +35,7 @@
 
 ```
 ROLE_TABS = {
+  dev:        ทุกแท็บที่มีในระบบ (รวม margin ที่ยังซ่อนจาก owner)
   owner:      overview, categories, trends, stock, storage, stockcount,
               newproduct, frontstore, transfers, orders, ordersummary, mtojobs,
               upload, connect, labels, auditlog, deadstock
@@ -47,6 +48,16 @@ ROLE_TABS = {
 }
 ```
 (navtabs: แสดงครบบนแถบเมื่อ ≤9 แท็บ เกินนั้น 5 ตัวแรก + "เพิ่มเติม" — owner/employee เท่านั้นที่เกิน)
+
+**role `dev`** = ผู้ดูแลระบบ/คนพัฒนา — สิทธิ์เท่า owner ทุกอย่าง + เห็นแท็บที่ยังซ่อน
+- frontend: `isAdminRole(r)` (app.jsx) ใช้แทนการเทียบ `role === "owner"` ในเรื่อง nav/สิทธิ์
+- View ต่าง ๆ เช็ค `role === "owner"` อยู่หลายสิบจุด → app.jsx ส่ง `viewRole` (dev→"owner")
+  เข้าไปแทน `role` เพื่อไม่ต้องไล่แก้ทุกจุด · `role` ตัวจริงยังเป็น "dev" ใช้กับ nav/ป้ายชื่อ/audit
+- backend: `isAdminRole_(role)` (appsscript_complete.gs) ใช้แทน `role === 'owner'`
+  ทุกจุดที่ตรวจสิทธิ์ + `VALID_ROLES` มี "dev" แล้ว
+- เจ้าของตั้งให้ใครเป็น dev ได้ที่แท็บ "พนักงาน" (`STAFF_ROLE_OPTIONS` ใน views-analytics.jsx)
+- **ข้อควรรู้**: guard "กันถอดสิทธิ์ owner คนสุดท้าย" ยังนับเฉพาะ role `owner` เท่านั้น
+  — dev ไม่นับเป็น owner สำรอง
 
 tab "categories" = View "สินค้า & สั่ง" = `CategoryView` (views-main.jsx)
 tab "stock" = View "สต๊อก & แจ้งเตือน" = `StockView` (views-main.jsx)

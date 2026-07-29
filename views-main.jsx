@@ -4128,7 +4128,7 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
                   คลัง: <b style={{color: outOfStock ? "var(--dang)" : "var(--g-700)"}}>
                     {outOfStock ? "หมดสต๊อก" : `${fmtN(product.qtyWH ?? product.qty)} ชิ้น`}
                   </b>
-                  {product.price > 0 && sessionStorage.getItem("dmj_role") === "owner" && <> · ราคา <b>{fmtB(product.price)}</b></>}
+                  {product.price > 0 && ["owner","dev"].indexOf(sessionStorage.getItem("dmj_role")) >= 0 && <> · ราคา <b>{fmtB(product.price)}</b></>}
                 </div>
               </div>
             </div>

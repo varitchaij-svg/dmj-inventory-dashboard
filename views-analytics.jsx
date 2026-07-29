@@ -5483,7 +5483,7 @@ ${labelsHTML}
                   <span className="skucode" style={{fontSize:11,minWidth:80}}>{item.sku}</span>
                   <span style={{flex:1,fontSize:12,color:"var(--text)"}}>{p?.name || "—"}</span>
                   <span style={{fontSize:12,color:"var(--g-700)",fontWeight:700,minWidth:60,textAlign:"right"}}>
-                    {p?.price && sessionStorage.getItem("dmj_role") === "owner" ? `${p.price} ฿` : ""}
+                    {p?.price && ["owner","dev"].indexOf(sessionStorage.getItem("dmj_role")) >= 0 ? `${p.price} ฿` : ""}
                   </span>
                   <input type="number" value={item.qty} min={1} max={700}
                     onChange={e => updateQty(item.sku, parseInt(e.target.value) || 1)}
@@ -6339,6 +6339,8 @@ const STAFF_ROLE_OPTIONS = [
   { value: "saler",      label: "💼 Sale" },
   { value: "warehouse",  label: "🏭 คลังสินค้า" },
   { value: "frontstore", label: "🌸 หน้าร้าน" },
+  // dev = ผู้ดูแลระบบ/คนพัฒนา — เห็นทุกแท็บ + สิทธิ์ API เท่าเจ้าของ (ดู isAdminRole_ ฝั่ง GAS)
+  { value: "dev",        label: "🛠️ DEV (ผู้ดูแลระบบ)" },
 ];
 const STAFF_STATUS_LABEL = { pending: "รออนุมัติ", active: "ใช้งานอยู่", disabled: "ระงับแล้ว" };
 const STAFF_STATUS_STYLE = {

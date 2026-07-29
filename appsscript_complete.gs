@@ -452,9 +452,13 @@ function logoutHandler_(ss, data) {
   return ContentService.createTextOutput(JSON.stringify({ ok: true })).setMimeType(ContentService.MimeType.JSON);
 }
 
+// 'dev' = ตำแหน่งผู้ดูแลระบบ/คนพัฒนา — สิทธิ์ระดับเดียวกับ owner ทุกอย่าง
+// ใช้ตัวนี้แทนการเทียบ role === 'owner' ตรง ๆ ทุกจุดที่เป็นการตรวจสิทธิ์
+function isAdminRole_(role) { return role === 'owner' || role === 'dev'; }
+
 function listStaffHandler_(ss, data) {
   const s = resolveSession_(ss, data.sessionToken);
-  if (!s || s.role !== 'owner' || s.status !== 'active') return unauthorized_();
+  if (!s || !isAdminRole_(s.role) || s.status !== 'active') return unauthorized_();
   const all = readStaffAll_(ss);
   return ok(all.map(function (x) {
     return {
@@ -466,14 +470,14 @@ function listStaffHandler_(ss, data) {
 
 function saveStaffHandler_(ss, data, actor) {
   const s = resolveSession_(ss, data.sessionToken);
-  if (!s || s.role !== 'owner' || s.status !== 'active') return unauthorized_();
+  if (!s || !isAdminRole_(s.role) || s.status !== 'active') return unauthorized_();
   const sh = staffSheet_(ss);
   const rowIdx = findStaffRowById_(sh, data.staffId);
   if (rowIdx < 0) {
     return ContentService.createTextOutput(JSON.stringify({ success: false, error: "ไม่พบพนักงาน" })).setMimeType(ContentService.MimeType.JSON);
   }
   const beforeObj = staffRowToObj_(sh.getRange(rowIdx, 1, 1, 11).getValues()[0]);
-  const VALID_ROLES = ["owner", "saler", "warehouse", "frontstore", "employee"];
+  const VALID_ROLES = ["owner", "dev", "saler", "warehouse", "frontstore", "employee"];
   const VALID_STATUS = ["pending", "active", "disabled"];
 
   // กันล็อกตัวเองออก: ถ้าเจ้าของถอดสิทธิ์/ระงับตัวเองแล้วไม่เหลือ owner ที่ active เลย
@@ -809,7 +813,7 @@ function myTodayHandler_(ss, data) {
 // ─── action=attendanceToday : ใครเข้างานบ้างวันนี้ (owner) ───
 function attendanceTodayHandler_(ss, data) {
   const s = resolveSession_(ss, data.sessionToken);
-  if (!s || s.role !== "owner" || s.status !== "active") return unauthorized_();
+  if (!s || !isAdminRole_(s.role) || s.status !== "active") return unauthorized_();
   const now = new Date();
   const dateStr = data.date && /^\d{4}-\d{2}-\d{2}$/.test(data.date) ? data.date : attDateKey_(now);
   // dow ต้องมาจาก "วันที่ที่กำลังดู" ไม่ใช่วันนี้ — ไม่งั้นย้อนดูวันอื่นแล้วเทียบกับกะผิดวัน
@@ -1127,7 +1131,7 @@ function doPost(e) {
     // Owner only ตาม ADR-001 — ไม่มี legitimate caller อื่นจาก UI (ตรวจยืนยันแล้ว)
     // ปกติเรียกผ่าน resetNegativeStockOnce() ใน GAS editor โดยตรง ไม่ผ่าน path นี้เลย
     if (data.resetNegativeStock) {
-      if (data.role !== 'owner') return unauthorized_();
+      if (!isAdminRole_(data.role)) return unauthorized_();
       return resetNegativeStock_(ss, actor);
     }
 
@@ -1194,7 +1198,7 @@ function doGet(e) {
     if (e && e.parameter && e.parameter.action === 'attendancePhoto') {
       const ssP = SpreadsheetApp.openById(SHEET_ID);
       const sP = resolveSession_(ssP, e.parameter.sessionToken);
-      if (!sP || sP.role !== 'owner' || sP.status !== 'active') return unauthorized_();
+      if (!sP || !isAdminRole_(sP.role) || sP.status !== 'active') return unauthorized_();
       try {
         const f = DriveApp.getFileById(String(e.parameter.id || ''));
         const b = f.getBlob();
@@ -1209,7 +1213,7 @@ function doGet(e) {
     // Audit Log endpoint: ดึง 200 แถวล่าสุดจาก Audit Log sheet
     // เฉพาะ owner เท่านั้น — ตรวจจาก role parameter ที่ frontend ส่งมา
     if (e && e.parameter && e.parameter.action === 'getAuditLog') {
-      if (e.parameter.role !== 'owner') {
+      if (!isAdminRole_(e.parameter.role)) {
         return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Unauthorized" }))
           .setMimeType(ContentService.MimeType.JSON);
       }
@@ -1290,7 +1294,7 @@ function doGet(e) {
     // Debug endpoint: คืน raw row data ของชีตคำสั่งซื้อ (ใช้วินิจฉัย missing rows)
     // เฉพาะ owner เท่านั้น — ป้องกัน raw sheet data รั่วให้ role อื่น
     if (e && e.parameter && e.parameter.action === 'debugOrders') {
-      if (e.parameter.role !== 'owner') {
+      if (!isAdminRole_(e.parameter.role)) {
         return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Unauthorized" }))
           .setMimeType(ContentService.MimeType.JSON);
       }

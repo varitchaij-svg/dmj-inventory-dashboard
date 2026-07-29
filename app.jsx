@@ -33,6 +33,10 @@ const TABS = [
 
 // Role config
 const ROLE_TABS = {
+  // dev = ตำแหน่งสำหรับผู้ดูแลระบบ/คนพัฒนา — เห็นทุกแท็บที่มีในระบบ รวมแท็บที่ยังซ่อนจาก owner
+  // ("margin" ยังไม่มีต้นทุนซื้อจริง จึงไม่โชว์ให้ owner แต่ dev ต้องเข้าไปดู/ทดสอบได้)
+  // สิทธิ์ฝั่ง GAS เทียบเท่า owner (ดู isAdminRole_ ใน appsscript_complete.gs)
+  dev:        ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","margin","mtojobs","labels","upload","connect","auditlog","staff","atttoday","whhome"],
   // เรียงตามที่ owner ใช้บ่อย: ภาพรวม/ลูกค้า → งานประจำวัน (สั่ง/สต๊อก/ออเดอร์/หน้าร้าน) → คลัง → วิเคราะห์ → เครื่องมือ/ตั้งค่าท้ายสุด
   // ("margin" ซ่อนไว้ก่อน — ยังไม่มีต้นทุนซื้อจริง · โค้ด MarginView คงไว้ ค่อยเพิ่ม id กลับเมื่อพร้อม)
   owner:      ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog","staff","atttoday"],
@@ -46,10 +50,10 @@ const ROLE_TABS = {
 // เรียงตามความสำคัญ/ที่ใช้บ่อย: ภาพรวม → การขาย → สต็อก → วิเคราะห์ → เครื่องมือ
 // tab ที่ไม่อยู่ในกลุ่มไหน จะถูกดันเข้ากลุ่ม "อื่นๆ" อัตโนมัติ (กัน tab หาย)
 const OWNER_GROUPS = [
-  { id: "g_overview", gi: "📊", name: "ภาพรวม",       tabs: ["overview"] },
+  { id: "g_overview", gi: "📊", name: "ภาพรวม",       tabs: ["overview", "whhome"] },
   { id: "g_sales",    gi: "💰", name: "การขาย",       tabs: ["pos", "orders", "tracking", "quotefollowup", "customers", "frontstore", "mtojobs"] },
   { id: "g_stock",    gi: "📦", name: "สต็อก & คลัง",  tabs: ["stock", "categories", "storage", "stockcount", "transfers", "ordersummary", "newproduct", "deadstock", "labels"] },
-  { id: "g_insight",  gi: "📈", name: "วิเคราะห์",      tabs: ["trends", "season"] },
+  { id: "g_insight",  gi: "📈", name: "วิเคราะห์",      tabs: ["trends", "season", "margin"] },
   { id: "g_people",   gi: "👥", name: "พนักงาน",       tabs: ["attendance", "atttoday", "staff"] },
   { id: "g_tools",    gi: "⚙️", name: "เครื่องมือ",     tabs: ["upload", "connect", "auditlog"] },
 ];
@@ -62,6 +66,7 @@ const ROLE_LABELS = {
   warehouse:  "🏭 คลังสินค้า",
   frontstore: "🏪 หน้าร้าน",
   saler:      "💼 พนักงานขาย",
+  dev:        "🛠️ DEV",
 };
 
 // หน้าล็อกอินหลัก — ปุ่ม LINE ใหญ่ (ไม่ต้องพิมพ์อะไร) + ลิงก์เล็ก "รหัสสำรอง" สำหรับช่วงเปลี่ยนผ่าน
@@ -577,7 +582,10 @@ function saveToStorage(d, source) {
 }
 
 // ROLE_LABELS มี emoji นำหน้า — ใช้ตัวนี้แทนตอนต้องการข้อความล้วน (เช่น window._currentUser ที่โชว์ใน Audit Log)
-const ROLE_TH_PLAIN = { owner: "เจ้าของ", saler: "Sale", warehouse: "คลังสินค้า", frontstore: "หน้าร้าน", employee: "พนักงาน" };
+const ROLE_TH_PLAIN = { owner: "เจ้าของ", saler: "Sale", warehouse: "คลังสินค้า", frontstore: "หน้าร้าน", employee: "พนักงาน", dev: "DEV" };
+
+// role ที่ใช้ nav แบบ owner (2 ชั้น + "เพิ่มเติม") และมีสิทธิ์ระดับผู้ดูแล
+function isAdminRole(r) { return r === "owner" || r === "dev"; }
 const SESSION_TOKEN_KEY = "dmj_session_token";
 const LINE_STATE_KEY = "dmj_line_state";
 const LINE_REDIRECT_KEY = "dmj_line_redirect_uri";
@@ -1105,6 +1113,10 @@ function App() {
     />;
   }
 
+  // View ทุกตัวเช็คสิทธิ์ด้วย role === "owner" อยู่หลายสิบจุด (โชว์ยอดเงิน/ต้นทุน/ปุ่มพิเศษ)
+  // dev ต้องเห็นทุกอย่างเท่า owner → ส่ง "owner" เข้าไปแทน แทนที่จะไล่แก้ทุกจุด
+  // (ตัวแปร role ของจริงยังเป็น "dev" อยู่ ใช้กับ nav/ป้ายชื่อ/audit log ตามปกติ)
+  const viewRole = isAdminRole(role) ? "owner" : role;
   const allowedTabIds = ROLE_TABS[role] || ROLE_TABS.employee;
   // เรียงตามลำดับใน ROLE_TABS (ไม่ใช่ลำดับใน TABS) → จัดลำดับความสำคัญต่อ role ได้ (owner เรียงตามที่ใช้บ่อย)
   const visibleTabs = allowedTabIds.map(id => TABS.find(t => t.id === id)).filter(Boolean);
@@ -1120,8 +1132,8 @@ function App() {
   // owner: 5 ตัวแรก + "เพิ่มเติม" สำหรับที่เหลือ (แท็บเยอะ 17 แท็บ)
   // role อื่น: โชว์ทุกแท็บบนแถบ ไม่มี "เพิ่มเติม" (แถบเลื่อนแนวนอนได้)
   let primaryTabs, secondaryTabs;
-  if (role === "owner") {
-    // owner: แสดง 5 ตัวแรก + เพิ่มเติม สำหรับที่เหลือ
+  if (isAdminRole(role)) {
+    // owner/dev: แสดง 5 ตัวแรก + เพิ่มเติม สำหรับที่เหลือ
     primaryTabs   = visibleTabs.slice(0, 5);
     secondaryTabs = visibleTabs.slice(5);
   } else {
@@ -1180,7 +1192,7 @@ function App() {
 
   // จัดกลุ่ม owner: map tab id → {label, icon} จริง + ดัน tab ที่ไม่เข้ากลุ่มไหนเข้า "อื่นๆ"
   const ownerNav = (() => {
-    if (role !== "owner") return null;
+    if (!isAdminRole(role)) return null;
     const allowed = new Set(allowedTabIds);
     const groups = OWNER_GROUPS
       .map(g => ({ ...g, items: g.tabs.filter(id => allowed.has(id)).map(id => TABS.find(t => t.id === id)).filter(Boolean) }))
@@ -1236,8 +1248,8 @@ function App() {
             </div>
           </div>
 
-          <div className={role === "owner" ? "owner-nav" : "navtabs"} role="tablist">
-            {role === "owner" && ownerNav ? (() => {
+          <div className={isAdminRole(role) ? "owner-nav" : "navtabs"} role="tablist">
+            {isAdminRole(role) && ownerNav ? (() => {
               const dg = ownerNav.groups.find(g => g.id === ownerNav.displayId) || ownerNav.groups[0];
               return (
                 <>
@@ -1421,7 +1433,7 @@ function App() {
                     onClick={fetchFromSheet}>
               {syncing ? <span className="spin" style={{width:14,height:14,borderWidth:2}}/> : I.refresh}
             </button>
-            {role === "owner" && (
+            {isAdminRole(role) && (
               <button className="btn ghost"
                       title={zortSyncing ? "กำลังดึงสต็อกจาก ZORT..." : "ดึงสต็อกจาก ZORT เดี๋ยวนี้"}
                       disabled={zortSyncing}
@@ -1449,6 +1461,7 @@ function App() {
               ) : (
                 <span style={{width:30,height:30,borderRadius:"50%",
                            background:
+                             role==="dev"        ? "#4a4a6a" :
                              role==="owner"      ? "var(--g-700)" :
                              role==="warehouse"  ? "#8a6a2f" :
                              role==="frontstore" ? "#1f6f8b" :
@@ -1457,7 +1470,8 @@ function App() {
                            color:"#fff",
                            display:"flex",alignItems:"center",justifyContent:"center",
                            fontWeight:700,fontSize:13}}>
-                  {role==="owner"      ? "ด" :
+                  {role==="dev"        ? "D" :
+                   role==="owner"      ? "ด" :
                    role==="warehouse"  ? "ค" :
                    role==="frontstore" ? "ร" :
                    role==="saler"      ? "S" : "พ"}
@@ -1548,12 +1562,12 @@ function App() {
 
       {/* ─── Main ─── */}
       <main className="main" data-screen-label={activeTab}>
-        {activeTab === "overview"     && <ErrorBoundary key="overview"><OverviewView data={data} range={range} setRange={setRange} role={role}/></ErrorBoundary>}
+        {activeTab === "overview"     && <ErrorBoundary key="overview"><OverviewView data={data} range={range} setRange={setRange} role={viewRole}/></ErrorBoundary>}
         {activeTab === "whhome"       && <ErrorBoundary key="whhome"><WarehouseHomeView data={data} onNav={handleSetTab}/></ErrorBoundary>}
-        {activeTab === "categories"   && <ErrorBoundary key="categories"><CategoryView data={data} role={role}/></ErrorBoundary>}
-        {activeTab === "trends"       && <ErrorBoundary key="trends"><TrendsView data={data} role={role}/></ErrorBoundary>}
-        {activeTab === "stock"        && <ErrorBoundary key="stock"><StockView data={data} role={role}/></ErrorBoundary>}
-        {activeTab === "newproduct"   && <ErrorBoundary key="newproduct"><AddProductView data={data} role={role} onAdded={fetchFromSheet}/></ErrorBoundary>}
+        {activeTab === "categories"   && <ErrorBoundary key="categories"><CategoryView data={data} role={viewRole}/></ErrorBoundary>}
+        {activeTab === "trends"       && <ErrorBoundary key="trends"><TrendsView data={data} role={viewRole}/></ErrorBoundary>}
+        {activeTab === "stock"        && <ErrorBoundary key="stock"><StockView data={data} role={viewRole}/></ErrorBoundary>}
+        {activeTab === "newproduct"   && <ErrorBoundary key="newproduct"><AddProductView data={data} role={viewRole} onAdded={fetchFromSheet}/></ErrorBoundary>}
         {activeTab === "storage"      && <ErrorBoundary key="storage"><StorageView data={data}/></ErrorBoundary>}
         {activeTab === "stockcount"   && <ErrorBoundary key="stockcount"><StockCountView data={data}
                                             checkRequest={activeCheckRequest}
@@ -1566,10 +1580,10 @@ function App() {
                                                 fetchFromSheet();
                                               } catch(e){ console.error("completeStockCheck:", e); }
                                             }}/></ErrorBoundary>}
-        {activeTab === "frontstore"   && <ErrorBoundary key="frontstore"><FrontStoreView data={data} role={role} checkRequest={activeCheckRequest}/></ErrorBoundary>}
+        {activeTab === "frontstore"   && <ErrorBoundary key="frontstore"><FrontStoreView data={data} role={viewRole} checkRequest={activeCheckRequest}/></ErrorBoundary>}
         {activeTab === "transfers"    && <ErrorBoundary key="transfers"><TransferView data={data}/></ErrorBoundary>}
-        {activeTab === "orders"       && <ErrorBoundary key="orders"><OrderListView data={data} role={role}/></ErrorBoundary>}
-        {activeTab === "tracking"     && <ErrorBoundary key="tracking"><TrackingView data={data} role={role}/></ErrorBoundary>}
+        {activeTab === "orders"       && <ErrorBoundary key="orders"><OrderListView data={data} role={viewRole}/></ErrorBoundary>}
+        {activeTab === "tracking"     && <ErrorBoundary key="tracking"><TrackingView data={data} role={viewRole}/></ErrorBoundary>}
         {activeTab === "ordersummary" && <ErrorBoundary key="ordersummary"><OrderSummaryView data={data} onPrintRequest={handleOrderPrint}/></ErrorBoundary>}
         {activeTab === "mtojobs"      && <ErrorBoundary key="mtojobs"><MtoJobView data={data} /></ErrorBoundary>}
         {activeTab === "upload"       && <ErrorBoundary key="upload"><UploadView currentData={data} onDataLoaded={handleDataLoaded}/></ErrorBoundary>}
@@ -1578,11 +1592,11 @@ function App() {
                                             onInitConsumed={() => setLabelInitItems(null)}/></ErrorBoundary>}
         {activeTab === "auditlog"     && <ErrorBoundary key="auditlog"><AuditLogView/></ErrorBoundary>}
         {activeTab === "staff"        && <ErrorBoundary key="staff"><StaffView/></ErrorBoundary>}
-        {activeTab === "attendance"   && <ErrorBoundary key="attendance"><AttendanceView role={role}/></ErrorBoundary>}
+        {activeTab === "attendance"   && <ErrorBoundary key="attendance"><AttendanceView role={viewRole}/></ErrorBoundary>}
         {activeTab === "atttoday"     && <ErrorBoundary key="atttoday"><AttendanceTodayView/></ErrorBoundary>}
         {activeTab === "deadstock"    && <ErrorBoundary key="deadstock"><DeadStockView/></ErrorBoundary>}
-        {activeTab === "quotefollowup" && <ErrorBoundary key="quotefollowup"><QuoteFollowupView data={data} role={role}/></ErrorBoundary>}
-        {activeTab === "pos"          && <ErrorBoundary key="pos"><PosView data={data} role={role}/></ErrorBoundary>}
+        {activeTab === "quotefollowup" && <ErrorBoundary key="quotefollowup"><QuoteFollowupView data={data} role={viewRole}/></ErrorBoundary>}
+        {activeTab === "pos"          && <ErrorBoundary key="pos"><PosView data={data} role={viewRole}/></ErrorBoundary>}
         {activeTab === "customers"    && <ErrorBoundary key="customers"><CustomerView data={data}/></ErrorBoundary>}
         {activeTab === "margin"       && <ErrorBoundary key="margin"><MarginView data={data}/></ErrorBoundary>}
         {activeTab === "season"       && <ErrorBoundary key="season"><SeasonView data={data}/></ErrorBoundary>}
