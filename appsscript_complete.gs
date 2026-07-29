@@ -743,6 +743,11 @@ function attDowBkk_(d) {
   const p = attDateKey_(d).split("-");
   return new Date(Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2]))).getUTCDay();
 }
+// เหมือน attDowBkk_ แต่รับ "yyyy-MM-dd" ตรง ๆ — ใช้ตอนดูวันในอดีต/เดือนอื่น ไม่ใช่วันนี้
+function attDowOfDateStr_(dateStr) {
+  const p = String(dateStr).split("-");
+  return new Date(Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2]))).getUTCDay();
+}
 function attTimeStr_(d) { return Utilities.formatDate(d, "Asia/Bangkok", "HH:mm:ss"); }
 function attMinOfDay_(d) {
   return parseInt(Utilities.formatDate(d, "Asia/Bangkok", "H"), 10) * 60 +
@@ -937,6 +942,72 @@ function myTodayHandler_(ss, data) {
   return ok(payload);
 }
 
+// ─── action=myAttendanceSummary : "เวลาของฉัน" — สรุปเดือนนี้ของตัวเอง (ทุก role) ───
+// เฟส B: ให้พนักงานเช็คชั่วโมง/สาย/ขาดของตัวเองได้เอง ก่อนที่เจ้าของจะเอาไปใช้ที่ไหน
+// (เรื่องความไว้ใจ — เห็นตัวเลขเดียวกับที่เจ้าของเห็น ไม่ใช่รู้ทีหลังว่าโดนนับว่าสาย)
+//
+// range = วันที่ 1 ถึง "วันสุดท้ายของเดือน" หรือ "เมื่อวาน" ถ้าเป็นเดือนปัจจุบัน (ไม่โชว์วันอนาคต)
+function attMonthRange_(monthStr) {
+  const now = new Date();
+  const curMonth = attDateKey_(now).slice(0, 7);
+  const m = /^\d{4}-\d{2}$/.test(monthStr) ? monthStr : curMonth;
+  const y = Number(m.slice(0, 4)), mo = Number(m.slice(5, 7));
+  const daysInMonth = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  const lastDay = (m === curMonth) ? Number(attDateKey_(now).slice(8, 10)) : daysInMonth;
+  const dates = [];
+  for (let d = 1; d <= lastDay; d++) dates.push(m + "-" + String(d).padStart(2, "0"));
+  return { month: m, dates: dates, isCurrentMonth: m === curMonth };
+}
+
+function myAttendanceSummaryHandler_(ss, data) {
+  const s = resolveSession_(ss, data.sessionToken);
+  if (!s || s.status !== "active") return unauthorized_();
+
+  const range = attMonthRange_(String(data.month || ""));
+  const todayStr = attDateKey_(new Date());
+  const shifts = readAttShifts_(ss);
+
+  // อ่านชีตครั้งเดียว กรองเฉพาะของคนนี้+เดือนนี้ แล้วจัดกลุ่มตามวันที่
+  const sh = attendanceSheet_(ss);
+  const last = sh.getLastRow();
+  const byDate = {};
+  if (last >= 2) {
+    sh.getRange(2, 1, last - 1, 17).getValues().forEach(function (r) {
+      if (String(r[1]) !== String(s.staffId)) return;
+      const d = attRowDateStr_(r[3]);
+      if (d.slice(0, 7) !== range.month) return;
+      (byDate[d] = byDate[d] || []).push({ type: r[7], time: r[4], serverTs: Number(r[5]) || 0 });
+    });
+  }
+
+  let workedMin = 0, daysWorked = 0, lateDays = 0, lateMin = 0, daysAbsent = 0;
+  const days = range.dates.map(function (dateStr) {
+    const shift = attShiftFor_(shifts, s.role, attDowOfDateStr_(dateStr));
+    const evs = (byDate[dateStr] || []).sort(function (a, b) { return a.serverTs - b.serverTs; });
+    const sum = attSummarize_(evs, shift);
+    const isPast = dateStr < todayStr;
+
+    if (sum.workedMin != null) { workedMin += sum.workedMin; daysWorked++; }
+    if (sum.lateMin) { lateDays++; lateMin += sum.lateMin; }
+    // ขาดนับเฉพาะวันที่ผ่านไปแล้วจริง — วันนี้ยังไม่กดเข้างานไม่ใช่ "ขาด" (อาจจะยังไม่ถึงกะ)
+    if (isPast && shift && !sum.inTime) daysAbsent++;
+
+    return {
+      date: dateStr, dow: attDowOfDateStr_(dateStr), isToday: dateStr === todayStr, isPast: isPast,
+      shift: shift ? { name: shift.name, start: attFmtHm_(shift.start), end: attFmtHm_(shift.end) } : null,
+      inTime: sum.inTime, outTime: sum.outTime, workedMin: sum.workedMin, breakMin: sum.breakMin,
+      lateMin: sum.lateMin, forgotBreakEnd: sum.forgotBreakEnd,
+    };
+  });
+
+  return ok({
+    month: range.month, isCurrentMonth: range.isCurrentMonth,
+    staffName: s.displayName || s.lineDisplayName,
+    days: days,
+    totals: { workedMin: workedMin, daysWorked: daysWorked, lateDays: lateDays, lateMin: lateMin, daysAbsent: daysAbsent },
+  });
+}
+
 // ─── action=attendanceToday : ใครเข้างานบ้างวันนี้ (owner) ───
 function attendanceTodayHandler_(ss, data) {
   const s = resolveSession_(ss, data.sessionToken);
@@ -944,8 +1015,7 @@ function attendanceTodayHandler_(ss, data) {
   const now = new Date();
   const dateStr = data.date && /^\d{4}-\d{2}-\d{2}$/.test(data.date) ? data.date : attDateKey_(now);
   // dow ต้องมาจาก "วันที่ที่กำลังดู" ไม่ใช่วันนี้ — ไม่งั้นย้อนดูวันอื่นแล้วเทียบกับกะผิดวัน
-  const dp = dateStr.split("-");
-  const dow = new Date(Date.UTC(Number(dp[0]), Number(dp[1]) - 1, Number(dp[2]))).getUTCDay();
+  const dow = attDowOfDateStr_(dateStr);
   const shifts = readAttShifts_(ss);
 
   const sh = attendanceSheet_(ss);
@@ -1132,9 +1202,7 @@ function fixAttendanceHandler_(ss, data) {
     // คำนวณสถานะของวันนั้นใหม่ ส่งกลับให้ UI โชว์ผลทันที + เตือนถ้าลำดับยังเพี้ยน
     const events = readAttEvents_(ss, staffId, dateStr);
     const staff2 = readStaffAll_(ss).filter(function (x) { return x.staffId === staffId; })[0];
-    const dp = dateStr.split("-");
-    const dow = new Date(Date.UTC(Number(dp[0]), Number(dp[1]) - 1, Number(dp[2]))).getUTCDay();
-    const shift = attShiftFor_(readAttShifts_(ss), staff2 ? staff2.role : "", dow);
+    const shift = attShiftFor_(readAttShifts_(ss), staff2 ? staff2.role : "", attDowOfDateStr_(dateStr));
 
     return ok({
       staffId: staffId, date: dateStr,
@@ -1226,8 +1294,7 @@ function purgeExpiredSessions_(ss) {
 function notifyForgotPunchOut_(ss) {
   const dateStr = attDateKey_(new Date());
   const shifts = readAttShifts_(ss);
-  const dp = dateStr.split("-");
-  const dow = new Date(Date.UTC(Number(dp[0]), Number(dp[1]) - 1, Number(dp[2]))).getUTCDay();
+  const dow = attDowOfDateStr_(dateStr);
   // อ่านชีตครั้งเดียวแล้วจัดกลุ่ม — เรียก readAttEvents_ ต่อคนจะสแกนทั้งชีตซ้ำ N รอบ
   const sh = attendanceSheet_(ss);
   const last = sh.getLastRow();
@@ -1393,6 +1460,7 @@ function doPost(e) {
     // ─── ลงเวลาเข้า-ออกงาน ───
     if (data.action === 'punch')           return punchHandler_(ss, data);
     if (data.action === 'myToday')         return myTodayHandler_(ss, data);
+    if (data.action === 'myAttendanceSummary') return myAttendanceSummaryHandler_(ss, data);
     if (data.action === 'attendanceToday') return attendanceTodayHandler_(ss, data);
     if (data.action === 'fixAttendance')   return fixAttendanceHandler_(ss, data);
 

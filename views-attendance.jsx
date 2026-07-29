@@ -78,6 +78,7 @@ function attShrinkImage(file, maxW) {
 // AttendanceView — หน้าลงเวลาของพนักงาน (ทุก role)
 // ═══════════════════════════════════════════════
 function AttendanceView({ role }) {
+  const [mode, setMode] = uS("today");    // "today" | "month" — สลับ "วันนี้" / "เวลาของฉัน"
   const [today, setToday] = uS(null);
   const [loading, setLoading] = uS(true);
   const [err, setErr] = uS(null);
@@ -160,6 +161,15 @@ function AttendanceView({ role }) {
 
   return (
     <div style={{ padding: 16, maxWidth: 480, margin: "0 auto" }}>
+      <div style={{ marginBottom: 16 }}>
+        <Seg value={mode} onChange={setMode} options={[
+          { value: "today", label: "⏱️ วันนี้" },
+          { value: "month", label: "📅 เวลาของฉัน" },
+        ]} />
+      </div>
+
+      {mode === "month" ? <MyAttendanceMonth /> : (
+      <>
       <div style={{ textAlign: "center", marginBottom: 16 }}>
         <div style={{ fontSize: 34, fontWeight: 800, color: "var(--g-700)", letterSpacing: "-.02em", lineHeight: 1.1 }}>
           {clock.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
@@ -299,6 +309,124 @@ function AttendanceView({ role }) {
               {sum.forgotBreakEnd && <div style={{ color: "#a07417" }}>⚠️ ลืมกด "กลับจากพัก" — แจ้งเจ้าของให้แก้ให้</div>}
             </div>
           )}
+        </>
+      )}
+      </>
+      )}
+    </div>
+  );
+}
+
+const ATT_MONTH_NAMES = ["มกราคม","กุมภาพันธ์","มีนาคม","เมษายน","พฤษภาคม","มิถุนายน","กรกฎาคม","สิงหาคม","กันยายน","ตุลาคม","พฤศจิกายน","ธันวาคม"];
+const ATT_DOW_TH = ["อา","จ","อ","พ","พฤ","ศ","ส"];
+function attMonthLabel(ym) {
+  const p = String(ym || "").split("-");
+  return (ATT_MONTH_NAMES[parseInt(p[1], 10) - 1] || p[1]) + " " + p[0];
+}
+// เดือนถัดจาก ym แบบ "yyyy-MM" (delta: -1 ก่อนหน้า, +1 ถัดไป)
+function attShiftMonth(ym, delta) {
+  const p = String(ym || "").split("-");
+  const d = new Date(Number(p[0]), Number(p[1]) - 1 + delta, 1);
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+}
+
+// ═══════════════════════════════════════════════
+// MyAttendanceMonth — "เวลาของฉัน" สรุปเดือนนี้ (ทุก role)
+// ───────────────────────────────────────────────
+// ให้พนักงานเช็คชั่วโมง/สาย/ขาดของตัวเองได้เอง ก่อนที่เจ้าของจะเอาไปใช้ที่ไหน —
+// เห็นตัวเลขเดียวกับที่เจ้าของเห็นในแท็บ "สรุปลงเวลา" ไม่ใช่รู้ทีหลังว่าโดนนับว่าสาย
+// ═══════════════════════════════════════════════
+function MyAttendanceMonth() {
+  const [month, setMonth] = uS(attTodayKey().slice(0, 7));
+  const [data, setData] = uS(null);
+  const [loading, setLoading] = uS(true);
+  const [err, setErr] = uS(null);
+
+  const load = uC(async (m) => {
+    setLoading(true); setErr(null);
+    try {
+      const d = await attPost({ action: "myAttendanceSummary", month: m || month });
+      if (d && d.success) setData(d.data);
+      else setErr((d && d.error) || "โหลดไม่สำเร็จ");
+    } catch (e) { setErr(e.message); }
+    finally { setLoading(false); }
+  }, [month]);
+
+  uE(() => { load(month); }, [month]);
+
+  const isCurrentMonth = month === attTodayKey().slice(0, 7);
+  const t = data && data.totals;
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+        <button className="btn ghost" onClick={() => setMonth(m => attShiftMonth(m, -1))} style={{ padding: "8px 14px" }}>◀</button>
+        <div style={{ fontSize: 16, fontWeight: 800, color: "var(--g-700)" }}>{attMonthLabel(month)}</div>
+        <button className="btn ghost" onClick={() => setMonth(m => attShiftMonth(m, 1))} disabled={isCurrentMonth} style={{ padding: "8px 14px", opacity: isCurrentMonth ? .4 : 1 }}>▶</button>
+      </div>
+
+      {err && (
+        <div style={{ background: "#fff0f0", border: "1px solid var(--dang)", borderRadius: 10, padding: "10px 14px", color: "var(--dang)", marginBottom: 12, fontSize: 13 }}>⚠️ {err}</div>
+      )}
+
+      {loading && !data ? (
+        <div style={{ textAlign: "center", padding: 40, color: "var(--muted)" }}>
+          <span className="spin" style={{ width: 24, height: 24, borderWidth: 3, display: "inline-block" }} />
+        </div>
+      ) : t && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 8, marginBottom: 16 }}>
+            <div style={{ background: "var(--paper)", border: "1.5px solid var(--bdr)", borderRadius: 12, padding: 12, textAlign: "center" }}>
+              <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>{attMinLabel(t.workedMin)}</div>
+              <div style={{ fontSize: 11.5, color: "var(--muted)" }}>ทำงานรวม ({t.daysWorked} วัน)</div>
+            </div>
+            <div style={{ background: "var(--paper)", border: "1.5px solid var(--bdr)", borderRadius: 12, padding: 12, textAlign: "center" }}>
+              <div style={{ fontSize: 20, fontWeight: 800, color: t.lateDays > 0 ? "#a07417" : "var(--g-700)" }}>{t.lateDays} วัน</div>
+              <div style={{ fontSize: 11.5, color: "var(--muted)" }}>สาย{t.lateMin > 0 ? ` (รวม ${attMinLabel(t.lateMin)})` : ""}</div>
+            </div>
+            {t.daysAbsent > 0 && (
+              <div style={{ background: "#fff0f0", border: "1.5px solid var(--dang)", borderRadius: 12, padding: 12, textAlign: "center", gridColumn: "1 / -1" }}>
+                <div style={{ fontSize: 18, fontWeight: 800, color: "var(--dang)" }}>⚠️ ขาด {t.daysAbsent} วัน</div>
+                <div style={{ fontSize: 11.5, color: "var(--muted)" }}>มีกะแต่ไม่ได้ลงเวลา — ถ้าลาไว้แล้วแจ้งเจ้าของให้แก้ให้</div>
+              </div>
+            )}
+          </div>
+
+          <div style={{ background: "var(--paper)", border: "1.5px solid var(--bdr)", borderRadius: 12, overflow: "hidden" }}>
+            {[...data.days].reverse().map(d => (
+              <div key={d.date} style={{
+                display: "flex", alignItems: "center", gap: 10, padding: "10px 14px",
+                borderTop: "1px solid var(--bdr)",
+                background: d.isToday ? "var(--g-50)" : "transparent",
+              }}>
+                <div style={{ width: 44, flexShrink: 0, textAlign: "center" }}>
+                  <div style={{ fontSize: 14, fontWeight: 700 }}>{d.date.slice(8, 10)}</div>
+                  <div style={{ fontSize: 10.5, color: "var(--muted)" }}>{ATT_DOW_TH[d.dow]}</div>
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {d.inTime ? (
+                    <>
+                      <div style={{ fontSize: 13, fontWeight: 600 }}>
+                        {String(d.inTime).slice(0, 5)} – {d.outTime ? String(d.outTime).slice(0, 5) : (d.isToday ? "ยังทำงานอยู่" : "ไม่ได้กดออกงาน")}
+                      </div>
+                      <div style={{ fontSize: 11.5, color: "var(--muted)" }}>
+                        {d.workedMin != null ? `ทำงาน ${attMinLabel(d.workedMin)}` : ""}
+                        {!d.shift ? " · ไม่มีกะกำหนด" : ""}
+                      </div>
+                    </>
+                  ) : (
+                    <div style={{ fontSize: 13, color: d.isPast && d.shift ? "var(--dang)" : "var(--muted)" }}>
+                      {d.isPast && d.shift ? "❌ ขาด" : d.shift ? "ยังไม่ลงเวลา" : "ไม่มีกะ"}
+                    </div>
+                  )}
+                </div>
+                <div style={{ textAlign: "right", flexShrink: 0 }}>
+                  {d.lateMin > 0 && <div style={{ fontSize: 11, color: "#a07417", fontWeight: 700 }}>สาย {d.lateMin} น.</div>}
+                  {d.forgotBreakEnd && <div style={{ fontSize: 11, color: "#a07417" }}>⚠️ ลืมกลับจากพัก</div>}
+                </div>
+              </div>
+            ))}
+          </div>
         </>
       )}
     </div>

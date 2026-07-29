@@ -236,6 +236,12 @@ const TRACKED = [
   ]},
   // หมายเหตุ: helpers.js ใช้ d.getHours() แทน attMinOfDay_ (Utilities ของ GAS ไม่มีใน Node)
   // จึงไม่ landmark บรรทัดคิด lateMin ทั้งบรรทัด — เอาเฉพาะส่วนที่ต้องตรงกันจริง
+  // helpers.js รับ today เป็นพารามิเตอร์แทน new Date()/attDateKey_ (Bangkok tz ผ่าน Utilities
+  // ไม่มีใน Node) — landmark เอาเฉพาะตรรกะการหา "วันสุดท้ายของช่วง" ที่ต้องตรงกัน
+  { names: ['attMonthRange'], sourceFile: 'appsscript_complete.gs', landmarks: [
+    `const m = /^\\d{4}-\\d{2}$/.test(monthStr) ? monthStr : curMonth;`,
+    `const daysInMonth = new Date(Date.UTC(y, mo, 0)).getUTCDate();`,
+  ]},
   { names: ['attSummarize'], sourceFile: 'appsscript_complete.gs', landmarks: [
     `let breakMin = 0, openBreak = null, forgotBreakEnd = false;`,
     `else if (e.type === "breakEnd" && openBreak) { breakMin += Math.round((e.serverTs - openBreak.serverTs) / 60000); openBreak = null; }`,

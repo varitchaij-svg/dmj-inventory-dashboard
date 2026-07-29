@@ -179,6 +179,21 @@ function attSummarize(events, shift) {
   };
 }
 
+// ── attMonthRange: ช่วงวันของเดือน สำหรับ "เวลาของฉัน" (จาก appsscript_complete.gs) ──
+// เดือนปัจจุบัน → ตัดที่ "เมื่อวาน" (ไม่โชว์วันอนาคตที่ยังไม่ถึง) · เดือนอื่น → เต็มเดือน
+// today ส่งเข้ามาแยก (แทนที่จะเรียก new Date() ข้างใน) เพื่อให้ test กำหนดวันที่ "วันนี้" ได้แน่นอน
+function attMonthRange(monthStr, today) {
+  const now = today || new Date();
+  const curMonth = (now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0"));
+  const m = /^\d{4}-\d{2}$/.test(monthStr) ? monthStr : curMonth;
+  const y = Number(m.slice(0, 4)), mo = Number(m.slice(5, 7));
+  const daysInMonth = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  const lastDay = (m === curMonth) ? now.getDate() : daysInMonth;
+  const dates = [];
+  for (let d = 1; d <= lastDay; d++) dates.push(m + "-" + String(d).padStart(2, "0"));
+  return { month: m, dates, isCurrentMonth: m === curMonth };
+}
+
 // ── จาก views.jsx บรรทัด 1355–1367 ──────────────────────────────────────────
 // รับ object ที่มี property .sku (เหมือน Array.sort comparator)
 function compareSku(a, b) {
@@ -724,6 +739,6 @@ module.exports = {
   buildYoYSeries, abcClassify, sanitizeThresholds, THRESHOLDS_DEFAULT,
   parseCheckDateMs, suggestNextSku,
   parseSkuParts, nextModelForPrefix,
-  attBuildTs, attSequenceWarning, attSummarize,
+  attBuildTs, attSequenceWarning, attSummarize, attMonthRange,
   computeBillTotals, wholesaleTierRate, isBillExcludedCat, BILL_EXCLUDE_CAT_KEYWORDS,
 };

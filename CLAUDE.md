@@ -15,7 +15,8 @@
     (syncCreateQuotation/syncSaveQuotationDraft/syncGetQuotationDrafts/syncDeleteQuotationDraft)
     ใช้ computeBillTotals/POS_SALES_CHANNELS/POS_TRANSFER_INFO/syncSearchContact จาก
     views-analytics.jsx (global scope เดียวกัน) — เรียกจาก `QuoteFollowupView` โหมด `mode==="create"`
-  - `views-attendance.jsx` (~600 บรรทัด) — ลงเวลาเข้า-ออกงาน: `AttendanceView` (พนักงาน 4 ปุ่ม),
+  - `views-attendance.jsx` (~750 บรรทัด) — ลงเวลาเข้า-ออกงาน: `AttendanceView` (พนักงาน — `Seg`
+    สลับ "⏱️ วันนี้"/"📅 เวลาของฉัน", 4 ปุ่ม), `MyAttendanceMonth` (สรุปเดือนของตัวเอง ทุก role),
     `AttendanceTodayView` (owner ดูใครเข้างาน + แก้ย้อนหลัง), `AttFixModal` · helper `attPost`
     แนบ `sessionToken` จาก localStorage ให้ทุก request เอง (ไม่ใช้ syncXxx ของไฟล์อื่น)
   - **`Doomuenjing Dashboard.html` โหลดจริงแค่: ui.jsx → views-main.jsx → views-analytics.jsx → views-quote.jsx → views-attendance.jsx → app.jsx**
@@ -252,7 +253,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 583 tests, 18 test files, ทั้งหมด pass
+**มี Vitest test suite แล้ว** — 594 tests, 18 test files, ทั้งหมด pass
 
 ```bash
 npm test              # run tests
@@ -320,7 +321,7 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
 ```
 
 **action ที่มี**: `authLine` `me` `logout` `listStaff` `saveStaff` · `punch` `myToday`
-`attendanceToday` `fixAttendance` · doGet: `lineLoginMeta` `attendancePhoto`
+`attendanceToday` `fixAttendance` `myAttendanceSummary` · doGet: `lineLoginMeta` `attendancePhoto`
 
 **กฎที่ต้องรู้เวลาแก้ระบบนี้**:
 - ทุก action ของลงเวลา/staff ตรวจสิทธิ์ด้วย **`resolveSession_(ss, data.sessionToken)`**
@@ -338,6 +339,11 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
 - **รูปลงเวลาไม่แชร์สาธารณะ** — เก็บ Drive แล้วดึงผ่าน `attendancePhoto` proxy ที่ตรวจ session
   · `dailyAttendanceMaintenance()` (trigger 22:00) ลบรูปเกิน `ATT_PHOTO_KEEP_DAYS` (90 วัน) +
   ล้างเซสชันหมดอายุ + เตือนคนที่ลืมกดออกงาน · เจ้าของต้องรัน **`setupAttendanceMaintenance()`** 1 ครั้ง
+- **"เวลาของฉัน"** (ทุก role) = `Seg` toggle ในแท็บ "⏱️ ลงเวลา" เดิม ไม่ใช่แท็บใหม่ — ตั้งใจ กัน
+  role ที่มีแท็บเกิน 9 อยู่แล้วโดนดันเข้า "เพิ่มเติม" เพิ่ม · `attMonthRange_` ตัดเดือนปัจจุบันที่
+  วันนี้เสมอ (ไม่โชว์วันอนาคต) · ยังไม่นับ "ขาด" ถ้าเป็นวันนี้ (อาจยังไม่ถึงเวลากะ)
+  · `attDowOfDateStr_` = helper กลาง หา day-of-week จาก `"yyyy-MM-dd"` ตรง ๆ (ใช้แทน
+  `attDowBkk_` เมื่อไม่มี `Date` object เช่นตอนดูวันในอดีต/เดือนอื่น)
 
 ## Features ที่เพิ่มล่าสุด (Sprint 4)
 

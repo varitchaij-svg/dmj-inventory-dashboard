@@ -5,9 +5,10 @@
 //                    ถ้าเพี้ยน ชั่วโมงทำงานทั้งเดือนเพี้ยนตามโดยไม่มีใครสังเกต
 //   2. attSummarize — คิดชั่วโมงทำงาน/พัก/สาย จาก event log
 //   3. attSequenceWarning — เตือนลำดับเพี้ยนหลังเจ้าของแก้ย้อนหลัง (เตือน ไม่บล็อก)
+//   4. attMonthRange — ช่วงวันของ "เวลาของฉัน" เดือนนี้ต้องตัดที่เมื่อวาน ไม่โชว์วันอนาคต
 // ─────────────────────────────────────────────────────────────────────────────
 import { describe, it, expect } from 'vitest';
-import { attBuildTs, attSequenceWarning, attSummarize } from './helpers.js';
+import { attBuildTs, attSequenceWarning, attSummarize, attMonthRange } from './helpers.js';
 
 // event ปลอมจากวันที่/เวลา — เลียนแบบแถวในชีต "ลงเวลา"
 const ev = (type, hhmm) => {
@@ -164,5 +165,47 @@ describe('attSequenceWarning — เตือนลำดับเพี้ย�
 
   it('กด "เข้างาน" อย่างเดียว (ยังทำงานอยู่) → ไม่เตือน', () => {
     expect(attSequenceWarning([ev('in', '08:30')])).toBe('');
+  });
+});
+
+describe('attMonthRange — ช่วงวันของ "เวลาของฉัน"', () => {
+  it('เดือนที่ผ่านไปแล้ว → เต็มเดือน (ก.พ. 2026 = 28 วัน ไม่ใช่ปีอธิกสุรทิน)', () => {
+    const r = attMonthRange('2026-02', new Date(2026, 6, 29)); // วันนี้ = 29 ก.ค.
+    expect(r.dates.length).toBe(28);
+    expect(r.dates[0]).toBe('2026-02-01');
+    expect(r.dates[27]).toBe('2026-02-28');
+    expect(r.isCurrentMonth).toBe(false);
+  });
+
+  it('ปีอธิกสุรทิน → ก.พ. มี 29 วัน', () => {
+    const r = attMonthRange('2024-02', new Date(2024, 5, 1));
+    expect(r.dates.length).toBe(29);
+    expect(r.dates[28]).toBe('2024-02-29');
+  });
+
+  it('เดือนปัจจุบัน → ตัดที่วันนี้ ไม่โชว์วันอนาคต', () => {
+    const r = attMonthRange('2026-07', new Date(2026, 6, 29)); // วันนี้ = 29 ก.ค. 2026
+    expect(r.dates.length).toBe(29);
+    expect(r.dates[r.dates.length - 1]).toBe('2026-07-29');
+    expect(r.dates).not.toContain('2026-07-30');
+    expect(r.isCurrentMonth).toBe(true);
+  });
+
+  it('ไม่ระบุเดือน → default เป็นเดือนปัจจุบัน', () => {
+    const today = new Date(2026, 6, 5);
+    const r = attMonthRange('', today);
+    expect(r.month).toBe('2026-07');
+    expect(r.isCurrentMonth).toBe(true);
+  });
+
+  it('รูปแบบเดือนผิด → fallback เป็นเดือนปัจจุบันเหมือนไม่ระบุ', () => {
+    const today = new Date(2026, 6, 5);
+    expect(attMonthRange('July 2026', today).month).toBe('2026-07');
+    expect(attMonthRange('2026/07', today).month).toBe('2026-07');
+  });
+
+  it('วันที่ 1 ของเดือนปัจจุบัน → มีแค่วันเดียว', () => {
+    const r = attMonthRange('2026-07', new Date(2026, 6, 1));
+    expect(r.dates).toEqual(['2026-07-01']);
   });
 });
