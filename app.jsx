@@ -465,10 +465,11 @@ const LINE_STATE_KEY = "dmj_line_state";
 // → คำนวณที่เดียวเสมอ ห้าม inline ซ้ำ · normalize ไฟล์ .html เป็น "/" ด้วย เพราะ _redirects
 // ทำให้ "/" กับ "/Doomuenjing%20Dashboard.html" เป็นหน้าเดียวกัน แต่ LINE ลงทะเบียนไว้แค่ "/"
 function lineRedirectUri() {
-  let path = window.location.pathname || "/";
-  if (/\.html?$/i.test(path)) path = path.replace(/[^/]+\.html?$/i, "");
-  if (!path.endsWith("/")) path += "/";
-  return window.location.origin + path;
+  // เดิมเคย derive จาก window.location.pathname แล้วพยายาม normalize เอง — พังจริงเพราะ
+  // path ที่เห็นจริงในมือถือ (PWA / index.html meta-refresh / _redirects rewrite) ไม่แน่นอน
+  // เช่นเจอ "/Doomuenjing%20Dashboard/" ทั้งที่ Callback URL ที่ตั้งไว้ใน LINE คือแค่ origin+"/"
+  // → ไม่เดาอีกต่อไป ใช้ origin + "/" ตรง ๆ เสมอ ต้องตรงกับ Callback URL ที่ตั้งไว้ใน LINE Login เป๊ะ
+  return window.location.origin + "/";
 }
 
 // POST action ไปยัง GAS (ใช้กับ authLine/me/logout/listStaff/saveStaff) — SHEET_DEPLOY_URL มี ?token= ติดอยู่แล้ว
