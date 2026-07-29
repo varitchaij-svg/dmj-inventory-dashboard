@@ -626,33 +626,38 @@ function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep
                 </div>
               </div>
             )}
-            {/* ── ตารางสินค้า ── */}
-            <table style={{ width: "100%", borderCollapse: "collapse", border: "0.5px solid #999" }}>
-              <thead>
-                <tr style={{ background: "#f3f4f6", borderBottom: "0.5px solid #999" }}>
-                  <th style={{ ...cell, width: 28, textAlign: "center" }}>#</th>
-                  <th style={{ ...cell, width: 80, textAlign: "left" }}>รหัสสินค้า</th>
-                  <th style={{ ...cell, textAlign: "left" }}>ชื่อสินค้า</th>
-                  <th style={{ ...cell, width: 60, textAlign: "center" }}>จำนวน</th>
-                  <th style={{ ...cell, width: 70, textAlign: "right" }}>มูลค่าต่อหน่วย</th>
-                  <th style={{ ...cell, width: 60, textAlign: "right" }}>ส่วนลดต่อหน่วย</th>
-                  <th style={{ ...cell, width: 80, textAlign: "right", borderRight: "none" }}>รวม</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pageRows.map((r, i) => (
-                  <tr key={i} style={{ borderBottom: "0.5px solid #e5e7eb" }}>
-                    <td style={{ ...cell, textAlign: "center" }}>{startIdx + i + 1}</td>
-                    <td style={cell}>{r.sku}</td>
-                    <td style={cell}>{r.name}</td>
-                    <td style={{ ...cell, textAlign: "center" }}>{r.qty} ชิ้น</td>
-                    <td style={{ ...cell, textAlign: "right" }}>{num(r.price)}</td>
-                    <td style={{ ...cell, textAlign: "right" }}>{r.discUnit > 0 ? num(r.discUnit) : "-"}</td>
-                    <td style={{ ...cell, textAlign: "right", borderRight: "none" }}>{num(r.amount)}</td>
+            {/* ── ตารางสินค้า — กรอบเดียวกันยืดเต็มพื้นที่ที่เหลือ (flex:1) ให้เห็นเป็น
+                "ช่องสี่เหลี่ยม" ว่างต่อจากรายการจริง เหมือนเอกสาร ZORT ต้นฉบับที่เจ้าของ
+                อ้างอิงมา (QT-202607023.pdf) — ไม่ใช่ดันช่องเซ็นลงล่างสุดแบบเดิมอีกต่อไป ──*/}
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", border: "0.5px solid #999" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr style={{ background: "#f3f4f6", borderBottom: "0.5px solid #999" }}>
+                    <th style={{ ...cell, width: 28, textAlign: "center" }}>#</th>
+                    <th style={{ ...cell, width: 80, textAlign: "left" }}>รหัสสินค้า</th>
+                    <th style={{ ...cell, textAlign: "left" }}>ชื่อสินค้า</th>
+                    <th style={{ ...cell, width: 60, textAlign: "center" }}>จำนวน</th>
+                    <th style={{ ...cell, width: 70, textAlign: "right" }}>มูลค่าต่อหน่วย</th>
+                    <th style={{ ...cell, width: 60, textAlign: "right" }}>ส่วนลดต่อหน่วย</th>
+                    <th style={{ ...cell, width: 80, textAlign: "right", borderRight: "none" }}>รวม</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {pageRows.map((r, i) => (
+                    <tr key={i} style={{ borderBottom: "0.5px solid #e5e7eb" }}>
+                      <td style={{ ...cell, textAlign: "center" }}>{startIdx + i + 1}</td>
+                      <td style={cell}>{r.sku}</td>
+                      <td style={cell}>{r.name}</td>
+                      <td style={{ ...cell, textAlign: "center" }}>{r.qty} ชิ้น</td>
+                      <td style={{ ...cell, textAlign: "right" }}>{num(r.price)}</td>
+                      <td style={{ ...cell, textAlign: "right" }}>{r.discUnit > 0 ? num(r.discUnit) : "-"}</td>
+                      <td style={{ ...cell, textAlign: "right", borderRight: "none" }}>{num(r.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div style={{ flex: 1 }}></div>
+            </div>
             {/* ── "รวม" แยกบรรทัดต่อจากตารางทันที แล้วค่อยกล่องสรุปละเอียดด้านล่าง —
                 จัดตำแหน่งเหมือนเอกสาร ZORT จริงที่เจ้าของอ้างอิงมา (หน้าสุดท้ายเท่านั้น) ── */}
             {isLast && (
@@ -680,24 +685,21 @@ function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep
                 </div>
               </React.Fragment>
             )}
-            {/* ── ช่องเซ็น — ดันไปล่างสุดของกระดาษ (หน้าสุดท้ายเท่านั้น) ──
-                เดิมเคยล้นเป็นหน้า 2 จากสาเหตุอื่น (เนื้อหาแดชบอร์ดรั่วเข้ามาพิมพ์ปน +
-                ถูกบีบแคบซ้อนอยู่ใน div maxWidth) แก้ทั้งคู่แล้ว กลับมาใช้ marginTop:"auto"
-                ร่วมกับ .quote-print-page (min-height:297mm + display:flex column) เพื่อ
-                ให้เอกสารเต็ม 1 หน้าตามที่เจ้าของขอ */}
-            <div style={{ marginTop: "auto" }}>
-              {isLast && (
-                <div style={{ display: "flex", justifyContent: "space-around", paddingTop: 24, fontSize: 11, textAlign: "center" }}>
-                  {["ผู้เสนอราคา", "ผู้อนุมัติสั่งซื้อ"].map(l => (
-                    <div key={l} style={{ width: "35%" }}>
-                      <div style={{ borderBottom: "0.5px dotted #000", marginBottom: 4, height: 28 }}></div>
-                      {l}
-                      <div style={{ color: "#555", marginTop: 2 }}>วันที่ {docDate}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            {/* ── ช่องเซ็น (หน้าสุดท้ายเท่านั้น) — ตารางสินค้าด้านบนยืดเต็มพื้นที่แล้ว
+                (flex:1) ไม่ต้องดัน marginTop:"auto" ที่นี่อีก แค่เว้นระยะปกติต่อจากกล่อง
+                สรุปยอด เหมือนเอกสาร ZORT ต้นฉบับ · ผู้เสนอราคาอยู่ขวา ผู้อนุมัติสั่งซื้ออยู่
+                ซ้าย (สลับตำแหน่งตามที่เจ้าของขอ) */}
+            {isLast && (
+              <div style={{ display: "flex", justifyContent: "space-around", marginTop: 32, paddingTop: 24, fontSize: 11, textAlign: "center" }}>
+                {["ผู้อนุมัติสั่งซื้อ", "ผู้เสนอราคา"].map(l => (
+                  <div key={l} style={{ width: "35%" }}>
+                    <div style={{ borderBottom: "0.5px dotted #000", marginBottom: 4, height: 28 }}></div>
+                    {l}
+                    <div style={{ color: "#555", marginTop: 2 }}>วันที่ {docDate}</div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         );
       })}
