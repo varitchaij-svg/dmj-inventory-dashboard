@@ -20,6 +20,7 @@ const TABS = [
   { id: "connect",       label: "🔗 Google Sheet",          icon: I.sheets },
   { id: "labels",        label: "🖨️ พิมพ์ Label",            icon: I.print },
   { id: "auditlog",      label: "📋 Audit Log",             icon: I.layers },
+  { id: "staff",         label: "👥 พนักงาน",               icon: I.layers },
   { id: "deadstock",     label: "📦 สินค้าจม",              icon: I.alert },
   { id: "quotefollowup", label: "📄 ใบเสนอราคา",             icon: I.cart },
   { id: "pos",           label: "🧾 ขาย/ออกบิล",             icon: I.cart },
@@ -32,7 +33,7 @@ const TABS = [
 const ROLE_TABS = {
   // เรียงตามที่ owner ใช้บ่อย: ภาพรวม/ลูกค้า → งานประจำวัน (สั่ง/สต๊อก/ออเดอร์/หน้าร้าน) → คลัง → วิเคราะห์ → เครื่องมือ/ตั้งค่าท้ายสุด
   // ("margin" ซ่อนไว้ก่อน — ยังไม่มีต้นทุนซื้อจริง · โค้ด MarginView คงไว้ ค่อยเพิ่ม id กลับเมื่อพร้อม)
-  owner:      ["overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog"],
+  owner:      ["overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog","staff"],
   employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","tracking","ordersummary","mtojobs","labels"],
   // 5 ตัวแรก = แถบหลัก (>9 แท็บ → ที่เหลือเข้า "เพิ่มเติม") จัดให้เป็นงานคลังที่ใช้บ่อยสุด
   warehouse:  ["whhome","orders","stock","stockcount","storage","categories","newproduct","ordersummary","tracking","mtojobs","labels"],
@@ -47,7 +48,7 @@ const OWNER_GROUPS = [
   { id: "g_sales",    gi: "💰", name: "การขาย",       tabs: ["pos", "orders", "tracking", "quotefollowup", "customers", "frontstore", "mtojobs"] },
   { id: "g_stock",    gi: "📦", name: "สต็อก & คลัง",  tabs: ["stock", "categories", "storage", "stockcount", "transfers", "ordersummary", "newproduct", "deadstock", "labels"] },
   { id: "g_insight",  gi: "📈", name: "วิเคราะห์",      tabs: ["trends", "season"] },
-  { id: "g_tools",    gi: "⚙️", name: "เครื่องมือ",     tabs: ["upload", "connect", "auditlog"] },
+  { id: "g_tools",    gi: "⚙️", name: "เครื่องมือ",     tabs: ["upload", "connect", "auditlog", "staff"] },
 ];
 // "โหมดง่าย" — เมนูที่ใช้ประจำวัน (เหลือไว้บนแถบหลัก) ที่เหลือดันเข้า "เพิ่มเติม"
 const SIMPLE_PRIMARY = ["categories", "stock", "frontstore", "orders"];
@@ -60,7 +61,121 @@ const ROLE_LABELS = {
   saler:      "💼 พนักงานขาย",
 };
 
-function LoginScreen({ onLogin }) {
+// หน้าล็อกอินหลัก — ปุ่ม LINE ใหญ่ (ไม่ต้องพิมพ์อะไร) + ลิงก์เล็ก "รหัสสำรอง" สำหรับช่วงเปลี่ยนผ่าน
+function LoginScreen({ onLineLogin, onLegacyLogin, lineError }) {
+  const [showLegacy, setShowLegacy] = usS(false);
+
+  if (showLegacy) {
+    return <LegacyLoginScreen onLogin={onLegacyLogin} onBack={() => setShowLegacy(false)}/>;
+  }
+
+  return (
+    <div style={{
+      minHeight:"100vh", display:"flex", flexDirection:"column",
+      alignItems:"center", justifyContent:"center",
+      background:"var(--bg)", padding:"24px 16px",
+    }}>
+      <div style={{marginBottom:8}}>
+        <img src="logo.png" alt="Doomuenjing"
+             style={{height:56, objectFit:"contain"}}
+             onError={e => e.target.style.display="none"}/>
+      </div>
+      <div style={{fontSize:22, fontWeight:700, color:"var(--g-700)",
+                   marginBottom:4, letterSpacing:"-.01em"}}>Doomuenjing</div>
+      <div style={{fontSize:13, color:"var(--muted)", marginBottom:36}}>
+        เข้าสู่ระบบเพื่อใช้งาน
+      </div>
+
+      <button onClick={onLineLogin} style={{
+        display:"flex", alignItems:"center", justifyContent:"center", gap:10,
+        width:"100%", maxWidth:320, padding:"16px 20px",
+        background:"#06C755", color:"#fff", border:"none", borderRadius:14,
+        fontSize:16, fontWeight:700, cursor:"pointer", fontFamily:"inherit",
+        boxShadow:"0 6px 18px rgba(6,199,85,.3)",
+      }}>
+        <span style={{fontSize:20}}>💬</span> เข้าสู่ระบบด้วย LINE
+      </button>
+
+      {lineError && (
+        <div style={{color:"var(--dang)", fontSize:12, marginTop:12, textAlign:"center", maxWidth:300}}>
+          ⚠️ {lineError}
+        </div>
+      )}
+
+      <button onClick={() => setShowLegacy(true)} style={{
+        marginTop:24, background:"transparent", border:"none",
+        color:"var(--muted)", fontSize:13, textDecoration:"underline",
+        cursor:"pointer", fontFamily:"inherit",
+      }}>เข้าด้วยรหัสสำรอง</button>
+    </div>
+  );
+}
+
+// หน้า "รออนุมัติ" — โชว์หลังล็อกอิน LINE สำเร็จครั้งแรก แต่เจ้าของยังไม่กดอนุมัติ
+function PendingScreen({ staff, onRefresh, refreshing, onSwitchAccount }) {
+  return (
+    <div style={{
+      minHeight:"100vh", display:"flex", flexDirection:"column",
+      alignItems:"center", justifyContent:"center",
+      background:"var(--bg)", padding:"24px 16px", textAlign:"center",
+    }}>
+      {staff && staff.pictureUrl && (
+        <img src={staff.pictureUrl} alt="" style={{
+          width:72, height:72, borderRadius:"50%", objectFit:"cover", marginBottom:16,
+          border:"3px solid var(--g-300)",
+        }}/>
+      )}
+      <div style={{fontSize:18, fontWeight:700, color:"var(--text)", marginBottom:4}}>
+        {(staff && staff.name) || "สวัสดีครับ"}
+      </div>
+      <div style={{fontSize:44, marginBottom:8}}>⏳</div>
+      <div style={{fontSize:16, fontWeight:700, color:"var(--g-700)", marginBottom:6}}>
+        รอเจ้าของอนุมัติ
+      </div>
+      <div style={{fontSize:13, color:"var(--muted)", maxWidth:280, marginBottom:24}}>
+        แจ้งเจ้าของแล้วว่ามีคนขอเข้าใช้งานใหม่ — พอเจ้าของกดอนุมัติ + ตั้งตำแหน่งให้แล้ว
+        กดปุ่มด้านล่างอีกครั้ง
+      </div>
+      <button className="btn primary" onClick={onRefresh} disabled={refreshing}
+              style={{padding:"12px 24px", fontSize:14}}>
+        {refreshing ? <span className="spin" style={{width:14,height:14,borderWidth:2}}/> : "🔄"}
+        <span style={{marginLeft:6}}>เช็คอีกครั้ง</span>
+      </button>
+      <button onClick={onSwitchAccount} style={{
+        marginTop:16, background:"transparent", border:"none",
+        color:"var(--muted)", fontSize:13, textDecoration:"underline",
+        cursor:"pointer", fontFamily:"inherit",
+      }}>ออกจากระบบ / สลับบัญชี</button>
+    </div>
+  );
+}
+
+// หน้าถูกระงับ — owner กด "ระงับ" ในแท็บพนักงาน
+function DisabledScreen({ onSwitchAccount }) {
+  return (
+    <div style={{
+      minHeight:"100vh", display:"flex", flexDirection:"column",
+      alignItems:"center", justifyContent:"center",
+      background:"var(--bg)", padding:"24px 16px", textAlign:"center",
+    }}>
+      <div style={{fontSize:44, marginBottom:8}}>🚫</div>
+      <div style={{fontSize:16, fontWeight:700, color:"var(--dang)", marginBottom:6}}>
+        บัญชีนี้ถูกระงับการใช้งาน
+      </div>
+      <div style={{fontSize:13, color:"var(--muted)", maxWidth:280, marginBottom:24}}>
+        ติดต่อเจ้าของร้านถ้าคิดว่าไม่ถูกต้อง
+      </div>
+      <button onClick={onSwitchAccount} style={{
+        background:"transparent", border:"1px solid var(--bdr)", borderRadius:10,
+        padding:"10px 20px", color:"var(--muted)", fontSize:13,
+        cursor:"pointer", fontFamily:"inherit",
+      }}>ออกจากระบบ / สลับบัญชี</button>
+    </div>
+  );
+}
+
+// เดิม: หน้าเลือกตำแหน่ง + PIN — เก็บไว้เป็น "รหัสสำรอง" ระหว่างเปลี่ยนผ่านไปใช้ LINE Login
+function LegacyLoginScreen({ onLogin, onBack }) {
   const [pinTarget, setPinTarget] = usS(null);
   const [pin, setPin] = usS("");
   const [err, setErr] = usS(false);
@@ -109,8 +224,16 @@ function LoginScreen({ onLogin }) {
     <div style={{
       minHeight:"100vh", display:"flex", flexDirection:"column",
       alignItems:"center", justifyContent:"center",
-      background:"var(--bg)", padding:"24px 16px",
+      background:"var(--bg)", padding:"24px 16px", position:"relative",
     }}>
+      {onBack && (
+        <button onClick={onBack} style={{
+          position:"absolute", top:16, left:16, background:"transparent",
+          border:"none", color:"var(--muted)", fontSize:13, cursor:"pointer",
+          fontFamily:"inherit", display:"flex", alignItems:"center", gap:4,
+          padding:"8px 10px",
+        }}>← กลับ</button>
+      )}
       <div style={{marginBottom:8}}>
         <img src="logo.png" alt="Doomuenjing"
              style={{height:56, objectFit:"contain"}}
@@ -119,7 +242,7 @@ function LoginScreen({ onLogin }) {
       <div style={{fontSize:22, fontWeight:700, color:"var(--g-700)",
                    marginBottom:4, letterSpacing:"-.01em"}}>Doomuenjing</div>
       <div style={{fontSize:13, color:"var(--muted)", marginBottom:36}}>
-        เลือกบัญชีเพื่อเข้าใช้งาน
+        เลือกบัญชีเพื่อเข้าใช้งาน (รหัสสำรอง)
       </div>
 
       <div style={{
@@ -333,9 +456,31 @@ function saveToStorage(d, source) {
   }
 }
 
+// ROLE_LABELS มี emoji นำหน้า — ใช้ตัวนี้แทนตอนต้องการข้อความล้วน (เช่น window._currentUser ที่โชว์ใน Audit Log)
+const ROLE_TH_PLAIN = { owner: "เจ้าของ", saler: "Sale", warehouse: "คลังสินค้า", frontstore: "หน้าร้าน", employee: "พนักงาน" };
+const SESSION_TOKEN_KEY = "dmj_session_token";
+const LINE_STATE_KEY = "dmj_line_state";
+
+// POST action ไปยัง GAS (ใช้กับ authLine/me/logout/listStaff/saveStaff) — SHEET_DEPLOY_URL มี ?token= ติดอยู่แล้ว
+async function postAuthAction(body) {
+  const base = (typeof SHEET_DEPLOY_URL !== 'undefined') ? SHEET_DEPLOY_URL
+             : ((typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null);
+  if (!base) throw new Error("ยังไม่ได้ตั้งค่า Google Sheet URL");
+  const res = await fetch(base, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
 function App() {
   // ── ALL hooks first (no early returns before this block) ──
   const [role, setRole] = usS(() => sessionStorage.getItem("dmj_role") || null);
+  const [staff, setStaff] = usS(null);       // {staffId,name,role,status,pictureUrl} — เมื่อล็อกอินผ่าน LINE
+  const [authPhase, setAuthPhase] = usS("checking"); // checking | needLogin | pending | disabled | ready
+  const [lineError, setLineError] = usS(null);
+  const [authRefreshing, setAuthRefreshing] = usS(false);
   const [data, setData] = usS(null);
   const [error, setError] = usS(null);
   const [navLogoOk, setNavLogoOk] = usS(true);
@@ -570,6 +715,127 @@ function App() {
     setConfirmAction({ type: "clearLocal" });
   }, []);
 
+  // ตั้ง state+session จาก staff object ที่ได้จาก authLine/me — ใช้ร่วมกันทั้ง 2 flow
+  const applyStaffSession = usC((s) => {
+    setStaff(s);
+    if (typeof window !== 'undefined') {
+      window._currentUser = (s.name || "ไม่ระบุ") + " (" + (ROLE_TH_PLAIN[s.role] || s.role || "รอตำแหน่ง") + ")";
+    }
+    if (s.status === "active" && s.role) {
+      sessionStorage.setItem("dmj_role", s.role);
+      setRole(s.role);
+      setAuthPhase("ready");
+    } else if (s.status === "pending" || (s.status === "active" && !s.role)) {
+      setAuthPhase("pending");
+    } else {
+      setAuthPhase("disabled");
+    }
+  }, []);
+
+  // เช็คสถานะ session ปัจจุบัน (ใช้ทั้งตอนเปิดแอปครั้งแรก และปุ่ม "เช็คอีกครั้ง" ในหน้ารออนุมัติ)
+  const checkMe = usC(async () => {
+    const tok = localStorage.getItem(SESSION_TOKEN_KEY);
+    if (!tok) { setAuthPhase("needLogin"); return; }
+    setAuthRefreshing(true);
+    try {
+      const d = await postAuthAction({ action: "me", sessionToken: tok });
+      if (d && d.ok) applyStaffSession(d.staff);
+      else { localStorage.removeItem(SESSION_TOKEN_KEY); setAuthPhase("needLogin"); }
+    } catch (e) {
+      // ต่อเน็ตไม่ได้ — ถ้ามี role ค้างจาก session ก่อนหน้าอยู่แล้ว ให้ทำงานต่อได้ (offline-friendly)
+      setAuthPhase(role ? "ready" : "needLogin");
+    } finally {
+      setAuthRefreshing(false);
+    }
+  }, [applyStaffSession, role]);
+
+  const startLineLogin = usC(async () => {
+    setLineError(null);
+    try {
+      const base = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null;
+      if (!base) { setLineError("ยังไม่ได้เชื่อมต่อ Sheet"); return; }
+      const url = new URL(base);
+      url.searchParams.set("action", "lineLoginMeta");
+      const res = await fetch(url.toString());
+      const d = await res.json();
+      if (!d || !d.channelId) { setLineError("ยังไม่ได้ตั้งค่า LINE Login — ติดต่อเจ้าของร้าน"); return; }
+      const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
+      sessionStorage.setItem(LINE_STATE_KEY, state);
+      const redirectUri = window.location.origin + window.location.pathname;
+      const authUrl = "https://access.line.me/oauth2/v2.1/authorize"
+        + "?response_type=code"
+        + "&client_id=" + encodeURIComponent(d.channelId)
+        + "&redirect_uri=" + encodeURIComponent(redirectUri)
+        + "&state=" + encodeURIComponent(state)
+        + "&scope=" + encodeURIComponent("profile openid");
+      window.location.href = authUrl;
+    } catch (e) {
+      setLineError("เชื่อมต่อ LINE ไม่สำเร็จ ลองใหม่อีกครั้ง");
+    }
+  }, []);
+
+  const logoutClearSession = usC(() => {
+    const tok = localStorage.getItem(SESSION_TOKEN_KEY);
+    if (tok) { postAuthAction({ action: "logout", sessionToken: tok }).catch(() => {}); }
+    localStorage.removeItem(SESSION_TOKEN_KEY);
+    sessionStorage.removeItem("dmj_role");
+    if (typeof window !== 'undefined') window._currentUser = null;
+    setStaff(null);
+    setRole(null);
+    setAuthPhase("needLogin");
+  }, []);
+
+  // ── Bootstrap: เช็ค code/state จาก LINE redirect กลับมา, หรือ session token ที่เก็บไว้ ──
+  usE(() => {
+    let cancelled = false;
+    (async () => {
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get("code");
+      const stateParam = params.get("state");
+
+      if (code) {
+        window.history.replaceState({}, "", window.location.pathname); // ล้าง query กันรีเฟรชแล้วยิงซ้ำ
+        const savedState = sessionStorage.getItem(LINE_STATE_KEY);
+        sessionStorage.removeItem(LINE_STATE_KEY);
+        if (!stateParam || stateParam !== savedState) {
+          if (!cancelled) { setLineError("เซสชันล็อกอินไม่ตรงกัน กรุณาลองใหม่"); setAuthPhase("needLogin"); }
+          return;
+        }
+        try {
+          const redirectUri = window.location.origin + window.location.pathname;
+          const d = await postAuthAction({ action: "authLine", code, redirectUri });
+          if (cancelled) return;
+          if (d && d.ok) {
+            localStorage.setItem(SESSION_TOKEN_KEY, d.sessionToken);
+            applyStaffSession(d.staff);
+          } else {
+            setLineError((d && d.error) || "ล็อกอินด้วย LINE ไม่สำเร็จ");
+            setAuthPhase("needLogin");
+          }
+        } catch (e) {
+          if (!cancelled) { setLineError("ล็อกอินด้วย LINE ไม่สำเร็จ ลองใหม่อีกครั้ง"); setAuthPhase("needLogin"); }
+        }
+        return;
+      }
+
+      const tok = localStorage.getItem(SESSION_TOKEN_KEY);
+      if (!tok) {
+        if (!cancelled) setAuthPhase(role ? "ready" : "needLogin"); // role เก่าจาก sessionStorage (รหัสสำรอง) ยังใช้ได้
+        return;
+      }
+      try {
+        const d = await postAuthAction({ action: "me", sessionToken: tok });
+        if (cancelled) return;
+        if (d && d.ok) applyStaffSession(d.staff);
+        else { localStorage.removeItem(SESSION_TOKEN_KEY); setAuthPhase(role ? "ready" : "needLogin"); }
+      } catch (e) {
+        if (!cancelled) setAuthPhase(role ? "ready" : "needLogin"); // ต่อเน็ตไม่ได้ — ทำงานต่อด้วย role เดิมถ้ามี
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const doConfirmedAction = usC(() => {
     if (!confirmAction) return;
     if (confirmAction.type === "clearLocal") {
@@ -577,15 +843,34 @@ function App() {
       localStorage.removeItem(LS_SRC_KEY);
       fetchFromSheet();
     } else if (confirmAction.type === "logout") {
-      sessionStorage.removeItem("dmj_role");
-      setRole(null);
+      logoutClearSession();
     }
     setConfirmAction(null);
-  }, [confirmAction, fetchFromSheet]);
+  }, [confirmAction, fetchFromSheet, logoutClearSession]);
 
   // ── Conditional renders AFTER all hooks ──
+  if (authPhase === "checking") {
+    return (
+      <div className="loading-screen">
+        <span className="spin" style={{width:28,height:28,borderWidth:3}}/>
+      </div>
+    );
+  }
+
+  if (authPhase === "pending") {
+    return <PendingScreen staff={staff} onRefresh={checkMe} refreshing={authRefreshing} onSwitchAccount={logoutClearSession}/>;
+  }
+
+  if (authPhase === "disabled") {
+    return <DisabledScreen onSwitchAccount={logoutClearSession}/>;
+  }
+
   if (!role) {
-    return <LoginScreen onLogin={r => { sessionStorage.setItem("dmj_role", r); setRole(r); }}/>;
+    return <LoginScreen
+      onLineLogin={startLineLogin}
+      lineError={lineError}
+      onLegacyLogin={r => { sessionStorage.setItem("dmj_role", r); setRole(r); setAuthPhase("ready"); }}
+    />;
   }
 
   const allowedTabIds = ROLE_TABS[role] || ROLE_TABS.employee;
@@ -918,28 +1203,37 @@ function App() {
                 {zortSyncing ? <span className="spin" style={{width:14,height:14,borderWidth:2}}/> : "⬇️"}
               </button>
             )}
-            <button title={`${ROLE_LABELS[role]} · ออกจากระบบ`}
+            <button title={`${staff ? staff.name + " · " : ""}${ROLE_LABELS[role]} · ออกจากระบบ`}
                  onClick={() => setConfirmAction({ type: "logout" })}
                  style={{minHeight:44,minWidth:44,padding:"3px 8px",border:"none",
                          background:"transparent",cursor:"pointer",fontFamily:"inherit",
                          display:"flex",flexDirection:"column",alignItems:"center",
                          justifyContent:"center",gap:2}}>
-              <span style={{width:30,height:30,borderRadius:"50%",
-                         background:
-                           role==="owner"      ? "var(--g-700)" :
-                           role==="warehouse"  ? "#8a6a2f" :
-                           role==="frontstore" ? "#1f6f8b" :
-                           role==="saler"      ? "#705d96" :
-                           "var(--g-300)",
-                         color:"#fff",
-                         display:"flex",alignItems:"center",justifyContent:"center",
-                         fontWeight:700,fontSize:13}}>
-                {role==="owner"      ? "ด" :
-                 role==="warehouse"  ? "ค" :
-                 role==="frontstore" ? "ร" :
-                 role==="saler"      ? "S" : "พ"}
+              {staff && staff.pictureUrl ? (
+                <img src={staff.pictureUrl} alt="" style={{
+                  width:30,height:30,borderRadius:"50%",objectFit:"cover",
+                  border:"1.5px solid var(--bdr)",
+                }}/>
+              ) : (
+                <span style={{width:30,height:30,borderRadius:"50%",
+                           background:
+                             role==="owner"      ? "var(--g-700)" :
+                             role==="warehouse"  ? "#8a6a2f" :
+                             role==="frontstore" ? "#1f6f8b" :
+                             role==="saler"      ? "#705d96" :
+                             "var(--g-300)",
+                           color:"#fff",
+                           display:"flex",alignItems:"center",justifyContent:"center",
+                           fontWeight:700,fontSize:13}}>
+                  {role==="owner"      ? "ด" :
+                   role==="warehouse"  ? "ค" :
+                   role==="frontstore" ? "ร" :
+                   role==="saler"      ? "S" : "พ"}
+                </span>
+              )}
+              <span style={{fontSize:10,fontWeight:700,color:"var(--muted)",lineHeight:1,maxWidth:56,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                {staff ? staff.name : "🚪 ออก"}
               </span>
-              <span style={{fontSize:10,fontWeight:700,color:"var(--muted)",lineHeight:1}}>🚪 ออก</span>
             </button>
           </div>
         </div>
@@ -1051,6 +1345,7 @@ function App() {
                                             initItems={labelInitItems}
                                             onInitConsumed={() => setLabelInitItems(null)}/></ErrorBoundary>}
         {activeTab === "auditlog"     && <ErrorBoundary key="auditlog"><AuditLogView/></ErrorBoundary>}
+        {activeTab === "staff"        && <ErrorBoundary key="staff"><StaffView/></ErrorBoundary>}
         {activeTab === "deadstock"    && <ErrorBoundary key="deadstock"><DeadStockView/></ErrorBoundary>}
         {activeTab === "quotefollowup" && <ErrorBoundary key="quotefollowup"><QuoteFollowupView data={data} role={role}/></ErrorBoundary>}
         {activeTab === "pos"          && <ErrorBoundary key="pos"><PosView data={data} role={role}/></ErrorBoundary>}
