@@ -181,6 +181,15 @@ PURCHASES sheet = "รายการซื้อสินค้า"    // col(0
                                         //   19=status,20=warehouse,24=sku,25=name,26=qty,27=unitPrice
 ยอดขายรายเดือน / ยอดขายรายวัน           // header เป็น text format กัน Sheets แปลง MM/YYYY เป็นวันที่
 imageUrl sheet  = A=ID,B=SKU,C=ชื่อ,D=manual(fallback),E=ZORT(primary)
+SHEET_SALE_BILLS = "บิลขาย"             // log บิล POS ฝั่งเรา 22 คอลัมน์ (1 แถว = 1 บิล)
+  A=id(SB-yyyyMMdd-NNNN) B=วันที่ C=เวลา D=เลขบิล E=เลขใบกำกับ F=ผู้ขาย G=ช่องทาง H=วิธีชำระ
+  I=ยอดสุทธิ J=ก่อนVAT K=VAT L=ส่วนลดรวม M=จำนวนรายการ N=จำนวนชิ้น O=ลูกค้า P=เลขผู้เสียภาษี
+  Q=ใบกำกับภาษี R=รับเงินสด S=เงินทอน T=zortOrderId U=สถานะ V=หมายเหตุ
+  · B,C,D,E,T เป็น text format (setNumberFormat "@") — บทเรียนข้อ 2
+  · เขียนโดย `appendSaleBillRow_` ใน `createSaleBill` **หลัง ZORT สำเร็จแล้วเท่านั้น**
+    ฟังก์ชันนี้ **ไม่ throw** โดยเจตนา — บิลออกไปแล้ว เขียน log พลาดห้ามทำให้ผู้ขายไม่ได้เลขบิล
+    (พลาดแล้วลง SHEET_ZORT_FAILED ผ่าน logZortFailure_ แทน)
+  · รายละเอียด "สินค้าในบิล" ไม่ได้เก็บที่นี่ — ดึงจาก ZORT ด้วย `lookupSaleBill(เลขบิล)`
 
 WH_SAI5/W0002 = คลังสินค้าสาย5 → col H (qtyWH)
 WH_FRONTSTORE/W0001 = ดูเหมือนจริง(หน้าร้าน) → col G (qtyStore)

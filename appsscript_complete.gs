@@ -132,6 +132,7 @@ const SHEET_ORDERS_RAW     = "ZORT ออเดอร์ดิบ";   // ออ�
 const SHEET_QUOTE_DRAFTS   = "ร่างใบเสนอราคา";    // ร่างใบเสนอราคาที่ยังไม่ส่งเข้า ZORT
 const SHEET_STAFF          = "พนักงาน";           // บัญชีพนักงาน (LINE Login) — ชื่อ/ตำแหน่ง/สถานะ
 const SHEET_SESSIONS       = "เซสชัน";            // session token ที่ออกให้ตอนล็อกอิน LINE
+const SHEET_SALE_BILLS     = "บิลขาย";             // log บิลขายที่ออกผ่าน POS (1 แถว = 1 บิล) — ฝั่งเราเอง ไม่ต้องรอ sync ZORT
 const SHEET_ATTENDANCE     = "ลงเวลา";            // event log ลงเวลา (1 แถว = 1 การกดปุ่ม)
 const SHEET_ATT_SITES      = "จุดลงเวลา";         // พิกัดร้าน/คลัง + รัศมีที่ยอมรับ
 const SHEET_ATT_SHIFTS     = "ตั้งค่ากะ";          // เวลาเข้า-เลิกงานต่อตำแหน่ง/วัน
@@ -8844,6 +8845,73 @@ function searchContact(query) {
   return error("ค้นลูกค้าไม่สำเร็จ: " + lastErr);
 }
 
+// ── ชีต "บิลขาย" — log บิล POS ฝั่งเราเอง (1 แถว = 1 บิล) ────────────────────
+// ทำไมต้องมี: createSaleBill ยิงเข้า ZORT อย่างเดียว ไม่เหลือร่องรอยฝั่งเรา (เหลือแค่ audit log)
+// → ดู "ยอดขายวันนี้"/ปิดยอดเงินสด/แยกตามเซล ไม่ได้เลย จนกว่า syncZortSales จะรอบถัดไป (ทุก 2 ชม.)
+// เก็บระดับ "บิล" ไม่ใช่ระดับรายการ — รายละเอียดสินค้าในบิลดึงจาก ZORT ได้ด้วย lookupSaleBill(เลขบิล)
+function saleBillsSheet_(ss) {
+  return getOrCreateSheet_(ss, SHEET_SALE_BILLS, [
+    "id", "วันที่", "เวลา", "เลขบิล", "เลขใบกำกับ", "ผู้ขาย", "ช่องทาง", "วิธีชำระ",
+    "ยอดสุทธิ", "ก่อน VAT", "VAT", "ส่วนลดรวม", "จำนวนรายการ", "จำนวนชิ้น",
+    "ลูกค้า", "เลขผู้เสียภาษี", "ใบกำกับภาษี", "รับเงินสด", "เงินทอน",
+    "zortOrderId", "สถานะ", "หมายเหตุ",
+  ]);
+}
+
+// id กันชนกันแม้มีการลบแถว (บทเรียนเดียวกับ attNextId_ — ห้ามใช้ getLastRow() เฉย ๆ)
+function saleBillNextId_(sh, dateStr) {
+  var prefix = "SB-" + String(dateStr).replace(/-/g, "") + "-";
+  var used = {};
+  var last = sh.getLastRow();
+  if (last >= 2) {
+    sh.getRange(2, 1, last - 1, 1).getValues().forEach(function (r) { used[String(r[0])] = true; });
+  }
+  var n = last;
+  for (var i = 0; i < 10000; i++) {
+    var id = prefix + String(n).padStart(4, "0");
+    if (!used[id]) return id;
+    n++;
+  }
+  return prefix + Utilities.getUuid().slice(0, 4);
+}
+
+// เขียน 1 แถวลงชีตบิลขาย · คืน {ok:true,id} / {ok:false,error}
+// **ห้าม throw ออกไป** — ตอนถูกเรียก บิลถูกสร้างใน ZORT สำเร็จแล้ว (เงินรับมาแล้ว)
+// เขียนชีตพลาดต้องไม่ทำให้ทั้ง action พัง ผู้ขายต้องได้เลขบิลไปออกใบเสร็จเสมอ
+function appendSaleBillRow_(ss, rec) {
+  try {
+    var sh = saleBillsSheet_(ss);
+    var now = new Date();
+    var dateStr = Utilities.formatDate(now, "Asia/Bangkok", "yyyy-MM-dd");
+    var timeStr = Utilities.formatDate(now, "Asia/Bangkok", "HH:mm:ss");
+    var id = saleBillNextId_(sh, dateStr);
+    var row = [
+      id, dateStr, timeStr,
+      String(rec.orderNumber || ""), String(rec.documentNumber || ""),
+      String(rec.actor || ""), String(rec.channel || ""), String(rec.paymentMethod || ""),
+      Number(rec.grandTotal) || 0, Number(rec.preVat) || 0, Number(rec.vat) || 0,
+      Number(rec.discount) || 0, Number(rec.lineCount) || 0, Number(rec.unitCount) || 0,
+      String(rec.customerName || ""), String(rec.customerTaxId || ""),
+      rec.taxInvoice ? "ใช่" : "",
+      rec.cashReceived == null ? "" : Number(rec.cashReceived),
+      rec.cashChange == null ? "" : Number(rec.cashChange),
+      String(rec.zortOrderId == null ? "" : rec.zortOrderId),
+      "สำเร็จ", "",
+    ];
+    sh.appendRow(row);
+    // วันที่/เวลา/เลขบิล เป็น text — กัน Sheets แปลง "2026-07-29" เป็น Date และเลขบิลยาวเป็น
+    // number/exponential (บทเรียนข้อ 2 ใน CLAUDE.md) · ตั้งหลัง appendRow เพราะต้องรู้เลขแถว
+    var r = sh.getLastRow();
+    sh.getRange(r, 2, 1, 3).setNumberFormat("@");   // B วันที่, C เวลา, D เลขบิล
+    sh.getRange(r, 5, 1, 1).setNumberFormat("@");   // E เลขใบกำกับ
+    sh.getRange(r, 20, 1, 1).setNumberFormat("@");  // T zortOrderId
+    return { ok: true, id: id };
+  } catch (e) {
+    Logger.log("appendSaleBillRow_ error: " + e);
+    return { ok: false, error: String(e) };
+  }
+}
+
 // สร้างบิลขาย + (option) ใบกำกับภาษี + บันทึกรับชำระ
 // data = {
 //   items:[{sku,name,qty,price,category}],  // price=ราคาปลีก/ชิ้น (รวม VAT)
@@ -8978,8 +9046,32 @@ function createSaleBill(ss, data, actor) {
         cashReceived: data.cashReceived != null ? Number(data.cashReceived) : undefined,
         channel: data.channel || "" }, note: "saler ออกบิล/ใบกำกับผ่าน POS" }));
 
+    // ── log ลงชีต "บิลขาย" ฝั่งเรา (ไม่ต้องรอ syncZortSales รอบถัดไป) ──
+    // ทำหลัง ZORT สำเร็จแล้วเท่านั้น — บิลที่ยิง ZORT ไม่ผ่านจะ return ไปตั้งแต่ด้านบน ไม่ถึงตรงนี้
+    // appendSaleBillRow_ ไม่ throw (บิลออกไปแล้ว เขียน log พลาดต้องไม่ทำให้ผู้ขายไม่ได้เลขบิล)
+    var cashRecv = (data.paymentMethod === "เงินสด" && data.cashReceived != null)
+                     ? Number(data.cashReceived) : null;
+    var billLog = appendSaleBillRow_(ss, {
+      orderNumber: orderNumber, documentNumber: docNumber, zortOrderId: orderId,
+      actor: actor || "", channel: data.channel || "", paymentMethod: data.paymentMethod || "",
+      grandTotal: totals.grandTotal, preVat: totals.preVat, vat: totals.vat,
+      // ส่วนลดรวมทุกชนิด = มูลค่าสินค้าก่อนลด − ยอดสุทธิ
+      // (computeBillTotalsGs_ ไม่ได้คืน wholesaleDiscount/tierDiscount แยกแบบฝั่ง frontend
+      //  — คำนวณจากผลต่างแทน ได้ค่าเดียวกันและไม่ผูกกับ field ที่ไม่มีจริง)
+      discount: Math.max(0, gross - totals.grandTotal),
+      lineCount: list.length,
+      unitCount: list.reduce(function (s, it) { return s + (Number(it.number) || 0); }, 0),
+      customerName: (data.customer && data.customer.name) || "",
+      customerTaxId: (data.customer && data.customer.taxId) || "",
+      taxInvoice: !!data.taxInvoice,
+      cashReceived: cashRecv,
+      cashChange: cashRecv == null ? null : (cashRecv - totals.grandTotal),
+    });
+    if (!billLog.ok) logZortFailure_("บันทึกชีตบิลขาย " + (orderNumber || ""), billLog.error);
+
     invalidateCache_();
-    return ok({ orderId: orderId, orderNumber: orderNumber, documentNumber: docNumber, totals: totals });
+    return ok({ orderId: orderId, orderNumber: orderNumber, documentNumber: docNumber,
+                totals: totals, billLogId: billLog.ok ? billLog.id : null });
   } finally {
     lock.releaseLock();
   }
