@@ -198,6 +198,26 @@ shouldRejectConflict_(clientLoadedAt, sheetLastModified, slopMs=5000)
 - doPost บรรทัด 227 เรียก `invalidateCache_(true)` (skipTsUpdate) — ล้าง cache อย่างเดียว
   ไม่ bump timestamp ก่อน conflict check เพื่อไม่ให้ทุก request ดู conflict
 
+## Login handoff — กู้ล็อกอินที่ "เริ่มที่หนึ่ง ไปจบอีกที่หนึ่ง" (iOS PWA)
+
+ปัญหา: iPhone ที่เปิดแอปจากไอคอนหน้าโฮม กดล็อกอิน LINE แล้ว iOS เด้งไปจบใน Safari →
+sessionToken ไปอยู่ storage ของ Safari → กลับมาเปิดไอคอนก็ยังไม่ได้ล็อกอิน (วนไม่จบ)
+
+```
+PWA: สุ่ม secret (32 bytes) เก็บใน localStorage → state = SHA-256(secret) ส่งให้ LINE
+Safari (หรือที่ไหนก็ตามที่รับ callback): authLine → GAS เก็บผลไว้ใต้คีย์ = state (CacheService 15 นาที)
+PWA: ยื่น secret → claimLoginHandoff → GAS แฮชแล้วหาคีย์ → คืน sessionToken + ลบทิ้ง (ใช้ครั้งเดียว)
+```
+
+- frontend (`app.jsx`): `makeHandoffPair` (crypto.subtle) · `markHandoffPending(state)` ตอนแตะปุ่ม ·
+  `readPendingHandoff`/`clearHandoff` · `claimHandoff` + effect poll ทุก 4 วิ **และ**
+  ตอน `visibilitychange`/`focus` (iOS แช่แข็ง timer ตอน background — ห้ามพึ่ง interval อย่างเดียว)
+- backend: `saveLoginHandoff_` (เรียกจาก `authLine_` เมื่อมี `data.handoffId`) ·
+  `claimLoginHandoffHandler_` (action `claimLoginHandoff`) · `sha256Hex_`
+- ปลอดภัย: ค่าที่โผล่ใน URL/ประวัติคือ **แฮช** ไม่ใช่ secret · แลกคืนได้ครั้งเดียว · หมดอายุ 15 นาที
+- ต้องรัน https ถึงมี `crypto.subtle` — ถ้าไม่มีจะ fallback เป็น state สุ่มธรรมดา (ไม่มี handoff)
+  และ `markHandoffPending` จะไม่ตีตรารอ (กันหน้าจอค้าง "กำลังรอผล" ที่ไม่มีวันมา)
+
 ## ความลับ (Security) — ห้ามใส่ในโค้ดที่ push เด็ดขาด
 
 เก็บใน **GAS Script Properties เท่านั้น**: `SHEET_ID`, `OWNER_PIN`, `APP_TOKEN`,
@@ -261,6 +281,11 @@ npm run test:coverage # coverage report (tests/helpers.js)
 11. **วันที่ในชีตเป็นปี พ.ศ.**: client เขียน datetime ด้วย `toLocaleString("th-TH")`
     → ได้ "4/7/2569 11:30:45" — `new Date()` ตีเป็น ค.ศ. 2569 (อนาคต 543 ปี)
     ต้อง parse ด้วย `parseCheckDateMs` (views-analytics.jsx, ลบ 543 เมื่อปี ≥ 2400)
+12. **iOS PWA + OAuth = คนละ storage**: แอปที่เปิดจากไอคอนหน้าโฮม (standalone) พอ navigate
+    ข้าม origin iOS มักเด้งไปเปิด Safari → ล็อกอินสำเร็จ **ใน Safari** แต่ token อยู่ localStorage
+    ของ Safari ซึ่งคนละใบกับ PWA → กลับมาเปิดไอคอนก็ยังไม่ได้ล็อกอิน · การบังคับ
+    `window.location.href` ใน webview ตัวเอง (`lineLoginNavigate`) ช่วยได้บาง iOS เท่านั้น
+    **ห้ามพึ่งอย่างเดียว** — ต้องมี **login handoff** (ดูหัวข้อด้านล่าง) เป็นทางกู้เสมอ
 
 ## Features ที่เพิ่มล่าสุด (Sprint 4)
 

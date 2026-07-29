@@ -425,13 +425,16 @@ function authLine_(ss, data) {
     }
 
     const sessionToken = createSession_(ss, staffObj.staffId);
+    const staffPayload = {
+      staffId: staffObj.staffId,
+      name: staffObj.displayName || staffObj.lineDisplayName,
+      role: staffObj.role, status: staffObj.status, pictureUrl: staffObj.pictureUrl,
+    };
+    // ฝากผลไว้ให้ context ที่ "เริ่ม" ล็อกอินมารับเอง (iOS PWA ที่ถูกเด้งไปจบใน Safari)
+    // handoffId = ค่า state ที่ LINE ส่งกลับมา ซึ่งคือ SHA-256 ของ secret ที่อยู่กับ PWA เท่านั้น
+    saveLoginHandoff_(data.handoffId, sessionToken, staffPayload);
     return ContentService.createTextOutput(JSON.stringify({
-      ok: true, sessionToken: sessionToken,
-      staff: {
-        staffId: staffObj.staffId,
-        name: staffObj.displayName || staffObj.lineDisplayName,
-        role: staffObj.role, status: staffObj.status, pictureUrl: staffObj.pictureUrl,
-      },
+      ok: true, sessionToken: sessionToken, staff: staffPayload,
     })).setMimeType(ContentService.MimeType.JSON);
   } catch (e) {
     return ContentService.createTextOutput(JSON.stringify({ ok: false, error: e.toString() }))
@@ -450,6 +453,79 @@ function meHandler_(ss, data) {
 function logoutHandler_(ss, data) {
   revokeSession_(ss, data.sessionToken);
   return ContentService.createTextOutput(JSON.stringify({ ok: true })).setMimeType(ContentService.MimeType.JSON);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Login handoff — กู้เคส "เริ่มล็อกอินที่หนึ่ง แต่ไปจบอีกที่หนึ่ง"
+//
+//  อาการจริงบน iPhone: เปิดแอปจากไอคอนหน้าโฮม (standalone/PWA) แล้วกดล็อกอิน
+//  iOS มักเด้งออกไปเปิด Safari → ล็อกอินสำเร็จใน Safari แต่ sessionToken ไปอยู่ใน
+//  localStorage ของ Safari ซึ่ง "คนละใบ" กับของ PWA → กลับมาเปิดไอคอนหน้าโฮมก็ยัง
+//  ไม่ได้ล็อกอิน วนแบบนี้ตลอด · การบังคับ navigate ใน webview ของ PWA ช่วยได้บางเวอร์ชัน
+//  แต่ไม่ทุกเวอร์ชัน (พฤติกรรม iOS ต่างกันไปแต่ละรุ่น) จึงต้องมีทางกู้ที่ไม่พึ่ง storage ร่วมกัน
+//
+//  วิธี: ฝั่ง PWA สุ่ม "รหัสลับ" (secret) เก็บไว้กับตัว แล้วส่ง SHA-256 ของมันไปเป็น
+//  `state` ของ LINE · context ไหนก็ตามที่รับ callback (Safari ก็ได้) จะฝาก sessionToken
+//  ไว้ที่เซิร์ฟเวอร์ใต้คีย์ = state · PWA กลับมาเปิดเมื่อไหร่ก็ยื่น secret มาแลกคืน
+//
+//  ปลอดภัยเพราะ: คีย์ที่โผล่ใน URL/ประวัติเบราว์เซอร์คือ "แฮช" ไม่ใช่ secret — คนที่เห็น URL
+//  ย้อนกลับไปหา secret ไม่ได้ · แลกได้ครั้งเดียว (รับแล้วลบทิ้ง) · หมดอายุใน 15 นาที
+// ═══════════════════════════════════════════════════════════════════════════
+const LOGIN_HANDOFF_TTL_SEC = 900; // 15 นาที — เผื่อคนสลับแอปไปมา/เน็ตช้า แต่ไม่ค้างข้ามวัน
+
+function loginHandoffKey_(id) { return 'dmj_login_handoff_' + String(id).slice(0, 120); }
+
+function sha256Hex_(s) {
+  const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(s), Utilities.Charset.UTF_8);
+  let out = '';
+  for (let i = 0; i < bytes.length; i++) {
+    const b = bytes[i] < 0 ? bytes[i] + 256 : bytes[i];
+    out += (b < 16 ? '0' : '') + b.toString(16);
+  }
+  return out;
+}
+
+// ฝากผลล็อกอินไว้ให้ context ที่เริ่มล็อกอินมารับ (เรียกจาก authLine_ เมื่อ client ส่ง handoffId มา)
+function saveLoginHandoff_(handoffId, sessionToken, staff) {
+  if (!handoffId) return;
+  try {
+    CacheService.getScriptCache().put(
+      loginHandoffKey_(handoffId),
+      JSON.stringify({ sessionToken: sessionToken, staff: staff }),
+      LOGIN_HANDOFF_TTL_SEC
+    );
+  } catch (e) { Logger.log('saveLoginHandoff_ error: ' + e); }
+}
+
+// PWA ยื่น secret มาแลก sessionToken คืน — คีย์ที่ใช้หาคือ SHA-256 ของ secret
+function claimLoginHandoffHandler_(data) {
+  const secret = String(data.handoffSecret || '');
+  if (!secret) {
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: 'no-secret' }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  let raw = null;
+  try {
+    const cache = CacheService.getScriptCache();
+    const key = loginHandoffKey_(sha256Hex_(secret));
+    raw = cache.get(key);
+    if (raw) cache.remove(key); // ใช้ได้ครั้งเดียว
+  } catch (e) { Logger.log('claimLoginHandoff error: ' + e); }
+
+  if (!raw) {
+    // ยังไม่มีผล = ยังล็อกอินไม่เสร็จ (ไม่ใช่ error) → ฝั่ง client ให้รอต่อ
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, pending: true }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  let payload;
+  try { payload = JSON.parse(raw); } catch (e) { payload = null; }
+  if (!payload || !payload.sessionToken) {
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, pending: true }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  return ContentService.createTextOutput(JSON.stringify({
+    ok: true, sessionToken: payload.sessionToken, staff: payload.staff,
+  })).setMimeType(ContentService.MimeType.JSON);
 }
 
 // 'dev' = ตำแหน่งผู้ดูแลระบบ/คนพัฒนา — สิทธิ์ระดับเดียวกับ owner ทุกอย่าง
@@ -1029,6 +1105,7 @@ function doPost(e) {
 
     // ─── ล็อกอินพนักงาน (LINE Login) — ไม่แตะข้อมูลสต็อก จึงข้าม invalidateCache_ ด้านล่าง ───
     if (data.action === 'authLine')  return authLine_(ss, data);
+    if (data.action === 'claimLoginHandoff') return claimLoginHandoffHandler_(data);
     if (data.action === 'me')        return meHandler_(ss, data);
     if (data.action === 'logout')    return logoutHandler_(ss, data);
     if (data.action === 'listStaff') return listStaffHandler_(ss, data);

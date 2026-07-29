@@ -69,8 +69,32 @@ const ROLE_LABELS = {
   dev:        "🛠️ DEV",
 };
 
+// ป้ายแจ้ง "ล็อกอินสำเร็จ แต่คุณเริ่มมาจากแอปหน้าโฮม" — ขึ้นเฉพาะเบราว์เซอร์ที่รับ callback มาแทน
+// (iPhone: กดในแอปหน้าโฮม แล้ว iOS เด้งออกมาจบใน Safari) · เตือนให้กลับไปเปิดแอปนั้น ไม่ต้องล็อกอินซ้ำ
+function CrossContextNote({ onClose }) {
+  return (
+    <div style={{
+      position:"fixed", left:12, right:12, bottom:12, zIndex:9999,
+      background:"var(--paper)", border:"1.5px solid var(--g-300)", borderRadius:14,
+      boxShadow:"0 10px 30px rgba(0,0,0,.18)", padding:"12px 14px",
+      display:"flex", alignItems:"flex-start", gap:10, maxWidth:420, margin:"0 auto",
+    }}>
+      <span style={{fontSize:20, lineHeight:1.2}}>📱</span>
+      <div style={{flex:1, minWidth:0, fontSize:12.5, lineHeight:1.6, color:"var(--text)"}}>
+        เข้าสู่ระบบสำเร็จแล้วในเบราว์เซอร์นี้ — ถ้าคุณเริ่มกดจาก
+        <b> ไอคอนแอปหน้าโฮม </b> ให้กลับไปเปิดไอคอนนั้นได้เลย ระบบจะพาเข้าให้เอง (ไม่ต้องล็อกอินซ้ำ)
+      </div>
+      <button onClick={onClose} style={{
+        background:"transparent", border:"none", color:"var(--muted)",
+        fontSize:18, cursor:"pointer", fontFamily:"inherit", padding:"0 2px",
+      }}>✕</button>
+    </div>
+  );
+}
+
 // หน้าล็อกอินหลัก — ปุ่ม LINE ใหญ่ (ไม่ต้องพิมพ์อะไร) + ลิงก์เล็ก "รหัสสำรอง" สำหรับช่วงเปลี่ยนผ่าน
-function LoginScreen({ onLineLogin, onLegacyLogin, lineError, lineChannelId }) {
+function LoginScreen({ onLineLogin, onLegacyLogin, lineError, lineChannelId,
+                       handoffState, handoffWaiting, onClaimNow, onCancelWaiting, onStartWaiting }) {
   const [showLegacy, setShowLegacy] = usS(false);
   const [showDiag, setShowDiag] = usS(false);
 
@@ -86,7 +110,9 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError, lineChannelId }) {
   //   ไม่มี async คั่น · onClick แค่บันทึก state ลง storage (ทำงาน sync ก่อน navigate)
   const authBase = React.useMemo(() => {
     if (!lineChannelId) return null;
-    const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    // state = แฮชของรหัสลับรับช่วงล็อกอิน (ถ้าเตรียมทัน) — ทำให้กู้ล็อกอินที่ไปจบในเบราว์เซอร์อื่นได้
+    // เครื่องที่ไม่มี crypto.subtle (http/เบราว์เซอร์เก่า) ตกมาที่ค่าสุ่มธรรมดาเหมือนเดิม
+    const state = handoffState || (Math.random().toString(36).slice(2) + Date.now().toString(36));
     const redirectUri = lineRedirectUri();
     return {
       state, redirectUri,
@@ -97,7 +123,7 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError, lineChannelId }) {
         + "&state=" + encodeURIComponent(state)
         + "&scope=" + encodeURIComponent("profile openid"),
     };
-  }, [lineChannelId]);
+  }, [lineChannelId, handoffState]);
 
   if (showLegacy) {
     return <LegacyLoginScreen onLogin={onLegacyLogin} onBack={() => setShowLegacy(false)}/>;
@@ -141,7 +167,7 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError, lineChannelId }) {
         // ลิงก์จริง — แตะแล้วเบราว์เซอร์ navigate ทันทีในจังหวะเดียวกับการแตะ
         // จึงเปิดแอป LINE ได้ (universal link ต้องการ user gesture ที่ยังไม่ขาดตอน)
         <a href={authBase.url}
-           onClick={e => lineLoginNavigate(e, authBase)}
+           onClick={e => { lineLoginNavigate(e, authBase); onStartWaiting && onStartWaiting(); }}
            style={{
              display:"flex", alignItems:"center", justifyContent:"center", gap:10,
              width:"100%", maxWidth:320, padding:"16px 20px", boxSizing:"border-box",
@@ -172,6 +198,37 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError, lineChannelId }) {
         </div>
       )}
 
+      {/* กดล็อกอินไปแล้วแต่ยังอยู่หน้านี้ = iOS เด้งไปทำต่อในเบราว์เซอร์อื่น (Safari)
+          → หน้านี้จะไปตามผลมาให้เองทุก 4 วินาที ผู้ใช้แค่กลับมาที่แอป ไม่ต้องล็อกอินซ้ำ */}
+      {handoffWaiting && (
+        <div style={{
+          marginTop:14, maxWidth:320, width:"100%", boxSizing:"border-box",
+          background:"var(--paper)", border:"1.5px solid var(--g-300)", borderRadius:12,
+          padding:"12px 14px", fontSize:12.5, lineHeight:1.65, color:"var(--text)",
+        }}>
+          <div style={{display:"flex", alignItems:"center", gap:8, fontWeight:700, color:"var(--g-700)"}}>
+            <span className="spin" style={{width:13, height:13, borderWidth:2}}/>
+            กำลังรอผลการเข้าสู่ระบบ…
+          </div>
+          <div style={{marginTop:6, color:"var(--muted)"}}>
+            ถ้าเครื่องเด้งไปล็อกอินในเบราว์เซอร์อื่นแล้ว ให้ทำจนเสร็จ แล้ว
+            <b> กลับมาที่หน้านี้ </b> ระบบจะพาเข้าให้เอง ไม่ต้องล็อกอินซ้ำ
+          </div>
+          <div style={{display:"flex", gap:8, marginTop:10}}>
+            <button onClick={() => onClaimNow && onClaimNow()} style={{
+              flex:1, padding:"9px 10px", background:"var(--g-700)", color:"#fff",
+              border:"none", borderRadius:9, fontSize:12.5, fontWeight:700,
+              cursor:"pointer", fontFamily:"inherit",
+            }}>🔄 เช็คเดี๋ยวนี้</button>
+            <button onClick={() => onCancelWaiting && onCancelWaiting()} style={{
+              padding:"9px 12px", background:"transparent", color:"var(--muted)",
+              border:"1px solid var(--bdr)", borderRadius:9, fontSize:12.5,
+              cursor:"pointer", fontFamily:"inherit",
+            }}>ยกเลิก</button>
+          </div>
+        </div>
+      )}
+
       {/* เครื่องบล็อกที่เก็บข้อมูล = ล็อกอินค้างแน่นอน — เตือนก่อนกด ไม่ต้องรอให้พัง */}
       {!diag.localStorage && (
         <div style={{
@@ -188,7 +245,7 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError, lineChannelId }) {
           (การสลับไปแอปคือต้นเหตุที่ iOS กลับมาแล้ว "เซสชันไม่ตรงกัน" และ Android เด้ง error) */}
       {authBase ? (
         <a href={authBase.url + "&disable_auto_login=true&disable_ios_auto_login=true"}
-           onClick={e => lineLoginNavigate(e, authBase, "&disable_auto_login=true&disable_ios_auto_login=true")}
+           onClick={e => { lineLoginNavigate(e, authBase, "&disable_auto_login=true&disable_ios_auto_login=true"); onStartWaiting && onStartWaiting(); }}
            style={{
              marginTop:14, display:"block", width:"100%", maxWidth:320, padding:"11px 16px",
              boxSizing:"border-box", textAlign:"center", textDecoration:"none",
@@ -228,6 +285,7 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError, lineChannelId }) {
           <div>redirect_uri: {diag.redirect}</div>
           <div>โหมดแอป (standalone): {diag.standalone ? "ใช่ ✅" : "ไม่ (เบราว์เซอร์)"}</div>
           <div>ปุ่ม LINE พร้อม (channelId): {lineChannelId ? "ใช่ ✅" : "ยังไม่โหลด ⏳"}</div>
+          <div>รับช่วงล็อกอินข้ามเบราว์เซอร์: {handoffState ? "พร้อม ✅" : "ไม่รองรับ (เครื่องเก่า/ไม่ใช่ https)"}{handoffWaiting ? " · กำลังรอผล ⏳" : ""}</div>
           <div>localStorage: {diag.localStorage ? "ok ✅" : "บล็อก ❌"} · sessionStorage: {diag.sessionStorage ? "ok ✅" : "บล็อก ❌"}</div>
           <div>UA: {diag.ua}</div>
         </div>
@@ -592,6 +650,11 @@ const LINE_REDIRECT_KEY = "dmj_line_redirect_uri";
 const LINE_STATE_AT_KEY = "dmj_line_state_at";
 const LINE_CHANNEL_KEY = "dmj_line_channel"; // cache channelId — ให้ปุ่มเป็นลิงก์พร้อมกดตั้งแต่ render แรก
 const LINE_STATE_TTL_MS = 30 * 60 * 1000; // ครึ่งชั่วโมง — พอสำหรับล็อกอิน LINE ที่ต้องสลับไปแอป LINE
+// รับช่วงล็อกอินข้ามเบราว์เซอร์ (iOS PWA เด้งไปจบใน Safari) — ดูคำอธิบายเต็มที่ makeHandoffPair()
+const LINE_HANDOFF_SECRET_KEY = "dmj_line_handoff_secret";
+const LINE_HANDOFF_STATE_KEY = "dmj_line_handoff_state";
+const LINE_HANDOFF_AT_KEY = "dmj_line_handoff_at";
+const LINE_HANDOFF_TTL_MS = 15 * 60 * 1000; // ต้องไม่เกิน LOGIN_HANDOFF_TTL_SEC ฝั่ง GAS
 
 // ── Safe storage ──────────────────────────────────────────────────────────
 // iOS Safari โยน exception ตอนแตะ localStorage/sessionStorage ได้จริงหลายกรณี
@@ -642,10 +705,62 @@ function isStandaloneApp() {
 }
 function lineLoginNavigate(e, authBase, extra) {
   saveLineHandshake(authBase.state, authBase.redirectUri);
+  markHandoffPending(authBase.state);
   if (isStandaloneApp()) {
     e.preventDefault();
     window.location.href = authBase.url + (extra || "");
   }
+}
+
+// ── รับช่วงล็อกอินข้ามเบราว์เซอร์ (login handoff) ────────────────────────────
+// ปัญหาที่แก้: iPhone ที่เปิดแอปจากไอคอนหน้าโฮม (standalone) พอกดล็อกอิน iOS มักเด้ง
+// ออกไปเปิด Safari → ล็อกอินสำเร็จ "ใน Safari" แต่ token ไปอยู่ localStorage ของ Safari
+// ซึ่งคนละใบกับของแอปหน้าโฮม → กลับมาเปิดไอคอนก็ยังไม่ได้ล็อกอิน วนแบบนี้ตลอด
+// (การบังคับ navigate ในหน้าต่างของ PWA เองช่วยได้บาง iOS แต่ไม่ทุกรุ่น — ต้องมีทางกู้)
+//
+// วิธี: สุ่ม "รหัสลับ" เก็บไว้ในเครื่องฝั่งที่ "เริ่ม" ล็อกอิน แล้วส่ง SHA-256 ของมันไปเป็น
+// `state` ของ LINE · ฝั่งไหนก็ตามที่รับ callback จะฝากผลล็อกอินไว้ที่เซิร์ฟเวอร์ใต้คีย์ = state
+// · แอปหน้าโฮมกลับมาเปิดเมื่อไหร่ก็ยื่นรหัสลับแลก token คืนได้เอง ไม่ต้องแชร์ storage กัน
+//
+// ที่โผล่ใน URL/ประวัติเบราว์เซอร์คือ "แฮช" ไม่ใช่รหัสลับ — ย้อนกลับไม่ได้ · แลกได้ครั้งเดียว
+// · หมดอายุ 15 นาที (เท่ากับฝั่ง GAS)
+function hex_(bytes) {
+  let out = "";
+  for (let i = 0; i < bytes.length; i++) out += bytes[i].toString(16).padStart(2, "0");
+  return out;
+}
+async function makeHandoffPair() {
+  try {
+    const c = window.crypto;
+    if (!c || !c.getRandomValues || !c.subtle || !c.subtle.digest) return null; // เครื่องเก่า/ไม่ใช่ https
+    const rnd = new Uint8Array(32); c.getRandomValues(rnd);
+    const secret = hex_(rnd);
+    const digest = await c.subtle.digest("SHA-256", new TextEncoder().encode(secret));
+    return { secret, state: hex_(new Uint8Array(digest)) };
+  } catch (e) { return null; }
+}
+function saveHandoffPair(pair) {
+  if (!pair) return;
+  lsSet(LINE_HANDOFF_SECRET_KEY, pair.secret);
+  lsSet(LINE_HANDOFF_STATE_KEY, pair.state);
+}
+// ตีตราว่า "กำลังรอผลล็อกอินอยู่" — ตั้งตอนแตะปุ่มเท่านั้น เพื่อให้รู้ว่าควรไปตามผลมารึยัง
+// ตั้งให้ก็ต่อเมื่อ state ที่ส่งให้ LINE เป็นแฮชของรหัสลับที่เก็บไว้จริง ๆ เท่านั้น — ไม่งั้น
+// (เช่นแตะปุ่มก่อนสุ่มรหัสเสร็จ แล้วตกไปใช้ state สุ่มธรรมดา) จะรอผลที่ไม่มีวันมา
+function markHandoffPending(state) {
+  if (!state || lsGet(LINE_HANDOFF_STATE_KEY) !== state) return false;
+  return lsSet(LINE_HANDOFF_AT_KEY, String(Date.now()));
+}
+// คืนคู่รหัสที่ยังรอผลอยู่ (ยังไม่หมดอายุ) หรือ null
+function readPendingHandoff() {
+  const at = parseInt(lsGet(LINE_HANDOFF_AT_KEY) || "0", 10);
+  if (!at || (Date.now() - at) >= LINE_HANDOFF_TTL_MS) return null;
+  const secret = lsGet(LINE_HANDOFF_SECRET_KEY);
+  const state = lsGet(LINE_HANDOFF_STATE_KEY);
+  return secret ? { secret, state, at } : null;
+}
+function clearHandoff() {
+  lsDel(LINE_HANDOFF_SECRET_KEY); lsDel(LINE_HANDOFF_STATE_KEY); lsDel(LINE_HANDOFF_AT_KEY);
 }
 
 function clearLineHandshake() {
@@ -695,6 +810,11 @@ function App() {
   // channelId ของ LINE Login — cache ไว้เพื่อให้ปุ่มล็อกอินเป็น <a href> ที่กดได้ทันที
   // (ห้ามมี await คั่นระหว่าง "แตะปุ่ม" กับ "navigate" ไม่งั้นเปิดแอป LINE ไม่ได้)
   const [lineChannelId, setLineChannelId] = usS(() => lsGet(LINE_CHANNEL_KEY) || null);
+  // คู่รหัสรับช่วงล็อกอิน — `state` ที่ส่งให้ LINE คือ SHA-256 ของรหัสลับที่เก็บไว้ในเครื่องนี้
+  // ถ้ามีคู่ที่ "ยังรอผลอยู่" ต้องใช้ตัวเดิม ห้ามสุ่มใหม่ทับ ไม่งั้นแลก token ที่ฝากไว้คืนไม่ได้
+  const [handoffState, setHandoffState] = usS(() => { const p = readPendingHandoff(); return (p && p.state) || null; });
+  const [handoffWaiting, setHandoffWaiting] = usS(() => !!readPendingHandoff());
+  const [crossContextNote, setCrossContextNote] = usS(false); // ล็อกอินนี้เริ่มมาจากอีกที่ (แอปหน้าโฮม)
   const [authRefreshing, setAuthRefreshing] = usS(false);
   const [data, setData] = usS(null);
   const [error, setError] = usS(null);
@@ -930,8 +1050,16 @@ function App() {
     setConfirmAction({ type: "clearLocal" });
   }, []);
 
+  // ล้างคู่รหัสรับช่วงล็อกอิน แล้วให้ effect สุ่มคู่ใหม่ให้ (ใช้ตอนล็อกอินจบแล้ว/ยกเลิก/ออกจากระบบ)
+  const resetHandoff = usC(() => {
+    clearHandoff();
+    setHandoffState(null);
+    setHandoffWaiting(false);
+  }, []);
+
   // ตั้ง state+session จาก staff object ที่ได้จาก authLine/me — ใช้ร่วมกันทั้ง 2 flow
   const applyStaffSession = usC((s) => {
+    resetHandoff(); // ล็อกอินจบแล้ว ไม่ต้องรอผลจากเครื่อง/เบราว์เซอร์อื่นอีก
     setStaff(s);
     if (typeof window !== 'undefined') {
       window._currentUser = (s.name || "ไม่ระบุ") + " (" + (ROLE_TH_PLAIN[s.role] || s.role || "รอตำแหน่ง") + ")";
@@ -947,7 +1075,7 @@ function App() {
     ssDel("dmj_role");
     setRole(null);
     setAuthPhase((s.status === "pending" || (s.status === "active" && !s.role)) ? "pending" : "disabled");
-  }, []);
+  }, [resetHandoff]);
 
   // เช็คสถานะ session ปัจจุบัน (ใช้ทั้งตอนเปิดแอปครั้งแรก และปุ่ม "เช็คอีกครั้ง" ในหน้ารออนุมัติ)
   const checkMe = usC(async () => {
@@ -980,8 +1108,10 @@ function App() {
       const res = await fetch(url.toString());
       const d = await res.json();
       if (!d || !d.channelId) { setLineError("ยังไม่ได้ตั้งค่า LINE Login — ติดต่อเจ้าของร้าน"); return; }
-      const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
+      // ใช้ state จากคู่รหัสรับช่วง (ถ้าเตรียมทัน) เพื่อให้กู้ล็อกอินข้ามเบราว์เซอร์ได้เหมือนปุ่มหลัก
+      const state = handoffState || (Math.random().toString(36).slice(2) + Date.now().toString(36));
       const redirectUri = lineRedirectUri();
+      markHandoffPending(state); setHandoffWaiting(!!readPendingHandoff());
       // เก็บค่าที่ "ใช้จริง" ไว้ แล้วตอนแลก token ให้อ่านค่านี้แทนการเรียก lineRedirectUri() ซ้ำ —
       // กัน mismatch กรณี deploy คาบเกี่ยว (หน้าที่กด login โหลดจาก build เก่า แต่หน้าที่รับ
       // code กลับมาโหลด build ใหม่ที่คำนวณค่าไม่เหมือนเดิม) LINE เช็คว่า 2 ค่านี้ต้องตรงกันเป๊ะ
@@ -999,19 +1129,74 @@ function App() {
     } catch (e) {
       setLineError("เชื่อมต่อ LINE ไม่สำเร็จ ลองใหม่อีกครั้ง");
     }
-  }, []);
+  }, [handoffState]);
 
   const logoutClearSession = usC(() => {
     const tok = lsGet(SESSION_TOKEN_KEY);
     if (tok) { postAuthAction({ action: "logout", sessionToken: tok }).catch(() => {}); }
     lsDel(SESSION_TOKEN_KEY);
     clearLineHandshake();
+    resetHandoff();
     ssDel("dmj_role");
     if (typeof window !== 'undefined') window._currentUser = null;
     setStaff(null);
     setRole(null);
     setAuthPhase("needLogin");
-  }, []);
+  }, [resetHandoff]);
+
+  // ── เตรียมคู่รหัสรับช่วงล็อกอินไว้ล่วงหน้า ──
+  // ต้องพร้อมก่อนผู้ใช้แตะปุ่ม เพราะ state ที่ส่งให้ LINE ต้องเป็นแฮชของรหัสลับตัวนี้
+  // (การคำนวณ SHA-256 เป็น async — ทำตอนแตะปุ่มไม่ได้ จะทำให้ user gesture ขาด เปิดแอป LINE ไม่ได้)
+  usE(() => {
+    if (handoffState) return; // มีคู่ที่ยังรอผลอยู่/สุ่มไว้แล้ว — ห้ามทับ ไม่งั้นแลก token คืนไม่ได้
+    let cancelled = false;
+    (async () => {
+      const pair = await makeHandoffPair();
+      if (cancelled || !pair) return;
+      saveHandoffPair(pair);
+      setHandoffState(pair.state);
+    })();
+    return () => { cancelled = true; };
+  }, [handoffState]);
+
+  // ── ไปรับผลล็อกอินที่ฝากไว้ (กรณีล็อกอินไปจบในเบราว์เซอร์อื่น) ──
+  // คืน true เมื่อได้ session แล้ว · เงียบเสมอเมื่อยังไม่มีผล (ยังล็อกอินไม่เสร็จ = ไม่ใช่ error)
+  const claimHandoff = usC(async () => {
+    const p = readPendingHandoff();
+    if (!p) return false;
+    try {
+      const d = await postAuthAction({ action: "claimLoginHandoff", handoffSecret: p.secret });
+      if (!d || !d.ok || !d.sessionToken) return false;
+      setLineError(null);
+      if (!lsSet(SESSION_TOKEN_KEY, d.sessionToken)) {
+        setLineError("เข้าสู่ระบบได้ แต่เครื่องนี้บันทึกข้อมูลไม่ได้ (โหมดไม่ระบุตัวตน?) — เปิดใหม่ต้องล็อกอินอีกครั้ง");
+      }
+      applyStaffSession(d.staff);   // ล้าง handoff ให้เองแล้ว
+      return true;
+    } catch (e) { return false; }
+  }, [applyStaffSession]);
+
+  // ── ตามผลล็อกอินให้อัตโนมัติระหว่างที่ยังค้างอยู่หน้าล็อกอิน ──
+  // iOS แช่แข็ง timer ตอนแอปอยู่เบื้องหลัง → ต้องเช็คตอน "กลับมาที่แอป" ด้วย ไม่ใช่พึ่ง interval อย่างเดียว
+  usE(() => {
+    if (authPhase !== "needLogin" || !handoffWaiting) return;
+    let stop = false;
+    const tick = async () => {
+      if (stop) return;
+      if (!readPendingHandoff()) { setHandoffWaiting(false); return; } // หมดอายุแล้ว
+      await claimHandoff();
+    };
+    const id = setInterval(tick, 4000);
+    const onWake = () => { if (!document.hidden) tick(); };
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("focus", onWake);
+    tick();
+    return () => {
+      stop = true; clearInterval(id);
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("focus", onWake);
+    };
+  }, [authPhase, handoffWaiting, claimHandoff]);
 
   // ── ดึง channelId ของ LINE Login มาเตรียมไว้ตั้งแต่เปิดแอป ──
   // ต้องมีค่าพร้อม "ก่อน" ผู้ใช้แตะปุ่ม เพื่อให้ปุ่มเป็นลิงก์ที่ navigate ได้ทันทีในจังหวะแตะ
@@ -1060,7 +1245,10 @@ function App() {
           // authorize เป๊ะ ๆ ไม่งั้น LINE ตอบ "redirect_uri does not match" · savedRedirectUri||
           // lineRedirectUri() กันไว้เผื่อ sessionStorage หาย (เช่นเปิดจากแท็บ/เบราว์เซอร์อื่น)
           const redirectUri = savedRedirectUri || lineRedirectUri();
-          const d = await postAuthAction({ action: "authLine", code, redirectUri });
+          // handoffId = state ที่ LINE ส่งกลับมา — ฝากผลล็อกอินไว้ที่เซิร์ฟเวอร์ใต้คีย์นี้เสมอ
+          // เผื่อว่าที่นี่ "ไม่ใช่" ที่ที่ผู้ใช้เริ่มกดล็อกอิน (iOS เด้งจากแอปหน้าโฮมมาจบใน Safari)
+          // ฝั่งที่เริ่มจะยื่นรหัสลับมาแลกคืนเอง — ที่นี่ไม่รู้จักรหัสลับนั้น ฝากได้อย่างเดียว
+          const d = await postAuthAction({ action: "authLine", code, redirectUri, handoffId: stateParam || "" });
           if (cancelled) return;
           if (d && d.ok) {
             // localStorage เขียนไม่ได้ (iOS Private Browsing / บล็อกที่เก็บข้อมูล) → session token หาย
@@ -1068,6 +1256,9 @@ function App() {
             if (!lsSet(SESSION_TOKEN_KEY, d.sessionToken)) {
               setLineError("เข้าสู่ระบบได้ แต่เครื่องนี้บันทึกข้อมูลไม่ได้ (โหมดไม่ระบุตัวตน?) — เปิดใหม่ต้องล็อกอินอีกครั้ง");
             }
+            // ไม่มี state เก็บไว้ที่นี่เลย = การล็อกอินนี้ "เริ่มจากที่อื่น" (เช่นแอปหน้าโฮมของ iPhone
+            // ที่ถูกเด้งออกมาจบใน Safari) → บอกผู้ใช้ให้กลับไปเปิดแอปนั้น ไม่ต้องล็อกอินซ้ำ
+            if (!savedState && stateParam) setCrossContextNote(true);
             applyStaffSession(d.staff);
           } else {
             setLineError((d && d.error) || "ล็อกอินด้วย LINE ไม่สำเร็จ");
@@ -1121,8 +1312,13 @@ function App() {
     );
   }
 
+  // ป้ายบอกว่า "ล็อกอินนี้เริ่มมาจากแอปหน้าโฮม แต่มาจบที่เบราว์เซอร์นี้" — ให้กลับไปเปิดแอปนั้นได้เลย
+  const crossNoteEl = crossContextNote
+    ? <CrossContextNote onClose={() => setCrossContextNote(false)}/>
+    : null;
+
   if (authPhase === "pending") {
-    return <PendingScreen staff={staff} onRefresh={checkMe} refreshing={authRefreshing} onSwitchAccount={logoutClearSession}/>;
+    return <>{crossNoteEl}<PendingScreen staff={staff} onRefresh={checkMe} refreshing={authRefreshing} onSwitchAccount={logoutClearSession}/></>;
   }
 
   if (authPhase === "disabled") {
@@ -1134,6 +1330,11 @@ function App() {
       onLineLogin={startLineLogin}
       lineChannelId={lineChannelId}
       lineError={lineError}
+      handoffState={handoffState}
+      handoffWaiting={handoffWaiting}
+      onClaimNow={claimHandoff}
+      onCancelWaiting={resetHandoff}
+      onStartWaiting={() => setHandoffWaiting(!!readPendingHandoff())}
       onLegacyLogin={r => { sessionStorage.setItem("dmj_role", r); setRole(r); setAuthPhase("ready"); }}
     />;
   }
@@ -1236,6 +1437,7 @@ function App() {
 
   return (
     <div style={{maxWidth:"100vw", overflowX:"hidden", position:"relative"}}>
+      {crossNoteEl}
       {/* ─── Confirm modals ─── */}
       <ConfirmModal
         open={confirmAction?.type === "clearLocal"}
