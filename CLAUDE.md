@@ -197,6 +197,23 @@ WH_FRONTSTORE/W0001 = ดูเหมือนจริง(หน้าร้า
 ZORT_BASE = "https://open-api.zortout.com/v4"
 ```
 
+### หักสต็อกหลังขายผ่าน POS (`deductFrontStoreForSale_`)
+
+**คลัง default ของ ZORT = หน้าร้าน/ดูเหมือนจริง (W0001)** — เจ้าของยืนยันแล้ว (ก.ค. 2026)
+`createSaleBill` ไม่ได้ส่ง `warehousecode` ให้ `AddOrder` → ZORT ตัดสต็อกจากคลัง default ตัวนี้
+ฝั่งชีตจึงหัก **col G (qtyStore)** ให้ตรงกัน ตรงกับที่ POS โชว์ "คงเหลือ N" อยู่แล้ว
+
+- ⚠️ **ห้ามเรียก `pushStockToZort_` ในเส้นทางนี้เด็ดขาด** — `AddOrder` ตัดสต็อกฝั่ง ZORT
+  ให้เรียบร้อยแล้ว ยิงซ้ำ = **หักสองเด้ง** (ต่างจาก `deductStock`/`transferStock` ที่ต้อง push
+  เพราะไม่มี ZORT order มาตัดให้)
+- เป็นแค่การอัปเดตชีตให้เห็นทันที ไม่ต้องรอ `syncZortBoth` (ทุก 2 ชม.) — กันขายเกิน
+  รอบ sync ถัดไปจะเขียนทับด้วยเลขจริงจาก ZORT อยู่ดี (**ZORT = source of truth**)
+- ไม่ปล่อยติดลบ (clamp ที่ 0) + เก็บ `shortfall`/`notFound` ลง audit log ไว้ไล่ย้อน
+- เขียนทีละ cell เฉพาะแถวที่เปลี่ยน — `syncZortToColumn_` **ไม่ได้จับ LockService**
+  เขียนทับทั้งคอลัมน์จึงเสี่ยงทับงาน sync ที่รันคาบเกี่ยว
+- ไม่ throw (บิลออกไปแล้ว หักพลาดต้องไม่ทำให้ผู้ขายไม่ได้เลขบิล) → ลง `SHEET_ZORT_FAILED` แทน
+- pure logic มีสำเนาใน `tests/helpers.js` = `saleFrontStoreDeductCore` + drift-guard landmark
+
 ## Data payload (GAS → Frontend)
 
 `data` object ที่ frontend ได้รับมีทุก field นี้สำหรับทุก role:

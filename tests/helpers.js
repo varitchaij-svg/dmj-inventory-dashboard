@@ -442,6 +442,31 @@ function deductStockCore({ whQty, fsQty }, qty) {
   };
 }
 
+// ── saleFrontStoreDeductCore: pure math จาก deductFrontStoreForSale_ ─────────
+//    (appsscript_complete.gs — หักสต็อกหน้าร้าน col G หลังออกบิล POS)
+// แยก Sheet I/O ออก: รับ rows = [{sku, qtyStore}] แทนการอ่าน getDataRange()
+// ตรรกะที่ต้องตรงกับต้นทาง: รวม qty ต่อ SKU → หักแถวแรกที่เจอเท่านั้น → ไม่ปล่อยติดลบ
+function saleFrontStoreDeductCore(list, rows) {
+  const want = {};
+  (list || []).forEach(function (it) {
+    const sku = String(it.sku || "").trim().toUpperCase();
+    const q = Number(it.number) || 0;
+    if (sku && q > 0) want[sku] = (want[sku] || 0) + q;
+  });
+  const applied = [], shortfall = [];
+  (rows || []).forEach(function (r) {
+    const sku = String(r.sku || "").trim().toUpperCase();
+    if (!sku || want[sku] === undefined) return;
+    const qty = want[sku];
+    delete want[sku];
+    const cur = Number(r.qtyStore) || 0;
+    let next = cur - qty;
+    if (next < 0) { shortfall.push({ sku: sku, want: qty, had: cur }); next = 0; }
+    applied.push({ sku: sku, qty: qty, before: cur, after: next });
+  });
+  return { applied: applied, shortfall: shortfall, notFound: Object.keys(want) };
+}
+
 // ── netOf: pure logic จาก closeMtoJob (appsscript_complete.gs:3763) ──────────
 // คำนวณ qty สุทธิ หลังหักของที่ return คืน — clamp return ไว้ที่ [0, qty]
 function netOf(item) {
@@ -760,7 +785,7 @@ module.exports = {
   mapProductRow, shouldRejectConflict,
   orderSig, reconcileOrderState, patchOrderStateCore,
   monthKey_, dayKey_,
-  deductStockCore,
+  deductStockCore, saleFrontStoreDeductCore,
   netOf, writeMtoItemsCore,
   enrichDataCore,
   COLOR_MAP, COLOR_KEYS, detectColor,
