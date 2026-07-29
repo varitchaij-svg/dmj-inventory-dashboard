@@ -97,8 +97,11 @@ const LINE_ACCESS_TOKEN_2 = getSecret_('LINE_ACCESS_TOKEN_2', '');
 // ── LINE Login (ล็อกอินพนักงาน — คนละตัวกับ LINE_ACCESS_TOKEN ที่ใช้ส่งแจ้งเตือน) ──
 // สร้าง channel แยกที่ developers.line.biz (ประเภท "LINE Login", provider เดียวกับ OA)
 // ตั้ง Script Properties: LINE_LOGIN_CHANNEL_ID, LINE_LOGIN_CHANNEL_SECRET
-const LINE_LOGIN_CHANNEL_ID     = getSecret_('LINE_LOGIN_CHANNEL_ID', '');
-const LINE_LOGIN_CHANNEL_SECRET = getSecret_('LINE_LOGIN_CHANNEL_SECRET', '');
+// .trim() สำคัญ: getSecret_ เช็ค v.trim() แต่คืนค่า v ดิบ — ถ้าตอนวางค่าใน Script Properties
+// ติดช่องว่าง/ขึ้นบรรทัดมาด้วย (เกิดง่ายมากเวลา copy จากหน้า LINE Developers) client_id จะเพี้ยน
+// แล้ว LINE ตอบ 400 ทันทีตั้งแต่หน้า authorize
+const LINE_LOGIN_CHANNEL_ID     = getSecret_('LINE_LOGIN_CHANNEL_ID', '').trim();
+const LINE_LOGIN_CHANNEL_SECRET = getSecret_('LINE_LOGIN_CHANNEL_SECRET', '').trim();
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // session ค้าง 30 วัน (มือถือส่วนตัวทุกคน — ยอมรับความเสี่ยงนี้ได้)
 const STAFF_ROLE_TH_ = { owner: "เจ้าของ", saler: "Sale", warehouse: "คลังสินค้า", frontstore: "หน้าร้าน", employee: "พนักงาน" };
 
@@ -807,8 +810,22 @@ function doGet(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
     // Channel ID ของ LINE Login (ไม่ใช่ความลับ — ใช้ประกอบ authorize URL ฝั่ง frontend)
+    // debug=1 → บอกความยาว/รูปแบบค่าที่ตั้งไว้ (ไม่เปิดเผย secret) ไว้ไล่ปัญหา LINE 400
     if (e && e.parameter && e.parameter.action === 'lineLoginMeta') {
-      return ContentService.createTextOutput(JSON.stringify({ channelId: LINE_LOGIN_CHANNEL_ID || "" }))
+      const meta = { channelId: LINE_LOGIN_CHANNEL_ID || "" };
+      if (e.parameter.debug === '1') {
+        const rawId  = PropertiesService.getScriptProperties().getProperty('LINE_LOGIN_CHANNEL_ID') || '';
+        const rawSec = PropertiesService.getScriptProperties().getProperty('LINE_LOGIN_CHANNEL_SECRET') || '';
+        meta.diag = {
+          channelIdLen: LINE_LOGIN_CHANNEL_ID.length,
+          channelIdIsDigits: /^\d+$/.test(LINE_LOGIN_CHANNEL_ID),
+          channelIdHadWhitespace: rawId !== rawId.trim(),
+          secretSet: !!rawSec.trim(),
+          secretLen: rawSec.trim().length,
+          secretHadWhitespace: rawSec !== rawSec.trim(),
+        };
+      }
+      return ContentService.createTextOutput(JSON.stringify(meta))
         .setMimeType(ContentService.MimeType.JSON);
     }
     // Audit Log endpoint: ดึง 200 แถวล่าสุดจาก Audit Log sheet
