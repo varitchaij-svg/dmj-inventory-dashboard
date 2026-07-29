@@ -607,15 +607,23 @@ function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep
                 {pages.length > 1 ? <div style={{ fontSize: 11 }}>หน้า {pi + 1}/{pages.length}</div> : null}
               </div>
             </div>
-            {/* ── กล่องลูกค้า (หน้าแรกเท่านั้น) ── */}
+            {/* ── กล่องลูกค้า (หน้าแรกเท่านั้น) — ตาราง 2 คอลัมน์ label:value จัดตำแหน่งเหมือน
+                เอกสาร ZORT จริง (ใบเสร็จ/ใบกำกับภาษี) ที่เจ้าของอ้างอิงมา ── */}
             {pi === 0 && (
-              <div style={{ border: "1px solid #999", borderRadius: 4, padding: "6px 8px", marginBottom: 8, fontSize: 11.5, lineHeight: 1.6 }}>
-                <div><b>นามลูกค้า:</b> {cust.name || "—"} &nbsp;&nbsp; <b>เลขประจำตัวผู้เสียภาษี:</b> {cust.taxId || "—"}</div>
-                {(cust.branch || cust.branchNo) && (
-                  <div><b>ชื่อสาขา:</b> {cust.branch || "—"} &nbsp;&nbsp; <b>สาขาที่:</b> {cust.branchNo || "—"}</div>
-                )}
-                <div><b>ที่อยู่:</b> {cust.address || "—"}</div>
-                <div><b>โทรศัพท์:</b> {cust.phone || "—"} &nbsp;&nbsp; <b>อีเมล:</b> {cust.email || "—"}</div>
+              <div style={{ border: "1px solid #999", borderRadius: 4, padding: "6px 8px", marginBottom: 8, fontSize: 11.5, lineHeight: 1.7 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", columnGap: 12 }}>
+                  <div><b>นามลูกค้า:</b> {cust.name || "—"}</div>
+                  <div><b>เลขประจำตัวผู้เสียภาษี:</b> {cust.taxId || "—"}</div>
+                  {(cust.branch || cust.branchNo) && (
+                    <React.Fragment>
+                      <div><b>ชื่อสาขา:</b> {cust.branch || "—"}</div>
+                      <div><b>สาขาที่:</b> {cust.branchNo || "—"}</div>
+                    </React.Fragment>
+                  )}
+                  <div style={{ gridColumn: "1 / -1" }}><b>ที่อยู่:</b> {cust.address || "—"}</div>
+                  <div><b>โทรศัพท์:</b> {cust.phone || "—"}</div>
+                  <div><b>อีเมล:</b> {cust.email || "—"}</div>
+                </div>
               </div>
             )}
             {/* ── ตารางสินค้า ── */}
@@ -645,25 +653,32 @@ function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep
                 ))}
               </tbody>
             </table>
-            {/* ── หมายเหตุ + สรุปยอด (หน้าสุดท้ายเท่านั้น) ── */}
+            {/* ── "รวม" แยกบรรทัดต่อจากตารางทันที แล้วค่อยกล่องสรุปละเอียดด้านล่าง —
+                จัดตำแหน่งเหมือนเอกสาร ZORT จริงที่เจ้าของอ้างอิงมา (หน้าสุดท้ายเท่านั้น) ── */}
             {isLast && (
-              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, gap: 12 }}>
-                <div style={{ fontSize: 11, maxWidth: "55%" }}>
-                  {(remarks || []).filter(Boolean).length > 0 && (
-                    <div>
-                      <div style={{ fontWeight: 700, marginBottom: 2 }}>หมายเหตุ</div>
-                      {(remarks || []).filter(Boolean).map((r, i) => <div key={i}>{i + 1}. {r}</div>)}
-                    </div>
-                  )}
-                  <div style={{ marginTop: 6 }}>จำนวนสินค้าทั้งหมด {totalUnits} หน่วย</div>
-                  <div>({bahtText(totals.grandTotal)})</div>
+              <React.Fragment>
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4, fontSize: 12, fontWeight: 700 }}>
+                  <span style={{ minWidth: 240, display: "flex", justifyContent: "space-between" }}><span>รวม</span><span>{num(totals.grandTotal + totals.manualDiscount)} บาท</span></span>
                 </div>
-                <div style={{ minWidth: 240, fontSize: 12 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span>มูลค่าก่อนภาษี</span><span>{num(totals.preVat)} บาท</span></div>
-                  <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span>ภาษีมูลค่าเพิ่ม (7%)</span><span>{num(totals.vat)} บาท</span></div>
-                  <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontWeight: 800, fontSize: 14, borderTop: "1px solid #000", marginTop: 2 }}><span>มูลค่ารวมสุทธิ</span><span>{num(totals.grandTotal)} บาท</span></div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, gap: 12 }}>
+                  <div style={{ fontSize: 11, maxWidth: "55%" }}>
+                    {(remarks || []).filter(Boolean).length > 0 && (
+                      <div>
+                        <div style={{ fontWeight: 700, marginBottom: 2 }}>หมายเหตุ</div>
+                        {(remarks || []).filter(Boolean).map((r, i) => <div key={i}>{i + 1}. {r}</div>)}
+                      </div>
+                    )}
+                    <div style={{ marginTop: 6 }}>สินค้าทั้งหมด {totalUnits} หน่วย</div>
+                    <div>({bahtText(totals.grandTotal)})</div>
+                  </div>
+                  <div style={{ minWidth: 240, fontSize: 12, border: "1px solid #999", borderRadius: 4, padding: "6px 8px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span>ส่วนลด</span><span>{num(totals.manualDiscount)} บาท</span></div>
+                    <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span>มูลค่าก่อนภาษี</span><span>{num(totals.preVat)} บาท</span></div>
+                    <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span>ภาษีมูลค่าเพิ่ม (7%)</span><span>{num(totals.vat)} บาท</span></div>
+                    <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontWeight: 800, fontSize: 14, borderTop: "1px solid #000", marginTop: 2, background: "#f3f4f6" }}><span>มูลค่ารวมสุทธิ</span><span>{num(totals.grandTotal)} บาท</span></div>
+                  </div>
                 </div>
-              </div>
+              </React.Fragment>
             )}
             {/* ── ช่องเซ็น — ดันไปล่างสุดของกระดาษ (หน้าสุดท้ายเท่านั้น) ──
                 เดิมเคยล้นเป็นหน้า 2 จากสาเหตุอื่น (เนื้อหาแดชบอร์ดรั่วเข้ามาพิมพ์ปน +

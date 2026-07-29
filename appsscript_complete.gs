@@ -6827,7 +6827,7 @@ function getQuotationForPrint(idOrNumber) {
       items: items,
       remarks: String(od.description || "").split("\n").map(function (s) { return s.trim(); }).filter(Boolean),
       salesRep: (Array.isArray(od.tag) && od.tag[0]) || "",
-      totals: { grandTotal: grand, preVat: preVat, vat: vat, retailEligible: grand, retailExcluded: 0 },
+      totals: { grandTotal: grand, preVat: preVat, vat: vat, retailEligible: grand, retailExcluded: 0, manualDiscount: 0 },
     });
   } catch (e) {
     return error("ดึงรายละเอียดใบเสนอราคาไม่สำเร็จ: " + e);
