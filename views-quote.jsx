@@ -111,10 +111,21 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
   const md = Math.max(0, parseFloat(manualDiscount) || 0);
   const totals = uM(() => computeBillTotals(cart, { manualDiscount: md }), [cart, md]);
 
+  // หมวด Made to Order/จัดแบบพิเศษ — ขึ้นชิปแรกสุดเสมอ (เจ้าของขอ: หามุ่งงานพิเศษบ่อย
+  // สินค้าชื่อคล้ายกันเยอะ อยากเห็นหมวดนี้ก่อนหมวดอื่นไม่ต้องไล่หา) ไม่รวม "อุปกรณ์สำนักงาน"
+  // (อยู่ใน BILL_EXCLUDE_CAT_KEYWORDS เดียวกันแต่เป็นหมวดคนละความหมาย)
+  function isMtoCat(cat) {
+    const c = String(cat || "").toLowerCase();
+    return c.indexOf("made to order") >= 0 || c.indexOf("จัดแบบพิเศษ") >= 0;
+  }
   const cats = uM(() => {
     const m = {};
     products.forEach(p => { const c = (p.category || "อื่นๆ").trim(); m[c] = (m[c] || 0) + 1; });
-    return Object.keys(m).sort((a, b) => m[b] - m[a]);
+    return Object.keys(m).sort((a, b) => {
+      const am = isMtoCat(a), bm = isMtoCat(b);
+      if (am !== bm) return am ? -1 : 1;
+      return m[b] - m[a];
+    });
   }, [products]);
 
   const POS_GRID_PER = 9;
@@ -149,6 +160,16 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
   }
   function patchItem(i, patch) { setCart(c => c.map((it, idx) => idx === i ? Object.assign({}, it, patch) : it)); }
   function removeItem(i) { setCart(c => c.filter((_, idx) => idx !== i)); }
+
+  // เสนอ MTO หลายรายการในใบเดียว — กด "+" ที่แถว MTO เพื่อเพิ่มอีกแถว โดยระบบเลือก SKU
+  // ถัดไปในหมวดเดียวกันที่ยังไม่อยู่ในรายการให้เอง (ไม่ต้องไล่หาเอง เพราะสินค้ากลุ่มนี้
+  // ชื่อคล้ายกันเยอะ) ชื่อ/ราคา/จำนวน ยังแก้ได้ตามปกติหลังเพิ่ม
+  function addNextMto(item) {
+    const inCart = new Set(cart.map(c => c.sku));
+    const nextP = products.find(p => (p.category || "").trim() === item.category && !inCart.has(p.sku));
+    if (!nextP) { showToast("warn", "ไม่มี SKU ว่างเหลือในหมวดนี้แล้ว", "🔍"); return; }
+    addToCart(nextP);
+  }
 
   // เครื่องสแกนบาร์โค้ด (USB/มือถือ) ทำงานเหมือนคีย์บอร์ด: พิมพ์รหัส+Enter (mirror PosView)
   function handleScanEnter(e) {
@@ -430,7 +451,10 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
                           style={{ width: 80, padding: "6px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right", minWidth: 0 }}/>
                       </td>
                       <td style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600 }}>{fmtBfull((Number(it.qty) || 0) * (Number(it.price) || 0))}</td>
-                      <td style={{ padding: "8px 6px", textAlign: "center" }}>
+                      <td style={{ padding: "8px 6px", textAlign: "center", whiteSpace: "nowrap" }}>
+                        {isMtoCat(it.category) && (
+                          <button onClick={() => addNextMto(it)} title="เพิ่มรายการ Made to Order ถัดไป" style={{ border: "none", background: "none", color: "var(--g-600,#1f7f44)", fontSize: 16, cursor: "pointer", padding: "0 4px" }}>➕</button>
+                        )}
                         <button onClick={() => removeItem(i)} style={{ border: "none", background: "none", color: "#dc2626", fontSize: 18, cursor: "pointer" }}>✕</button>
                       </td>
                     </tr>
