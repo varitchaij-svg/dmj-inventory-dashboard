@@ -6515,8 +6515,10 @@ function AuditLogView() {
     setLoading(true); setErr(null);
     try {
       const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
-      const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getAuditLog&_t=${Date.now()}`, { cache: "no-store" });
+      const tok = encodeURIComponent(localStorage.getItem("dmj_session_token") || "");
+      const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getAuditLog&sessionToken=${tok}&_t=${Date.now()}`, { cache: "no-store" });
       const d = await res.json();
+      if (d && d.success === false) { setErr(d.error || "โหลดไม่สำเร็จ"); setRows([]); return; }
       setRows(Array.isArray(d.rows) ? d.rows : []);
     } catch (e) {
       setErr(e.message);

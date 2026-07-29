@@ -1750,13 +1750,17 @@ function doGet(e) {
       }
     }
     // Audit Log endpoint: ดึง 200 แถวล่าสุดจาก Audit Log sheet
-    // เฉพาะ owner เท่านั้น — ตรวจจาก role parameter ที่ frontend ส่งมา
+    // เฉพาะ owner เท่านั้น — เดิมเช็คจาก e.parameter.role ที่ frontend ไม่เคยส่งมาเลย
+    // (ไม่มีการันตี → getAuditLog ปฏิเสธทุกครั้ง หน้า Audit Log เลยว่างเปล่าไม่มี error ให้เห็น)
+    // เปลี่ยนเป็นตรวจ session จริงเหมือน attendancePhoto แทน
     if (e && e.parameter && e.parameter.action === 'getAuditLog') {
-      if (!isAdminRole_(e.parameter.role)) {
+      const ssA = SpreadsheetApp.openById(SHEET_ID);
+      const sA = resolveSession_(ssA, e.parameter.sessionToken);
+      if (!sA || !isAdminRole_(sA.role) || sA.status !== 'active') {
         return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Unauthorized" }))
           .setMimeType(ContentService.MimeType.JSON);
       }
-      const ss = SpreadsheetApp.openById(SHEET_ID);
+      const ss = ssA;
       const sh = ss.getSheetByName(SHEET_AUDIT);
       if (!sh) {
         return ContentService.createTextOutput(JSON.stringify({ rows: [] }))
