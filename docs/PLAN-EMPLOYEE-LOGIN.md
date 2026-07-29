@@ -1,6 +1,7 @@
 # แผน: ระบบล็อกอินพนักงาน (ระบุตัวตนรายบุคคล + ชื่อ + ตำแหน่ง)
 
-สถานะ: ข้อเสนอ (ยังไม่ implement) · เขียนเมื่อ 2026-07-29
+สถานะ: **เฟส 1-3 implement แล้ว** (2026-07-29) — LINE Login ใช้งานได้จริง, แท็บอนุมัติพนักงาน,
+actor เป็นชื่อจริง · เฟส 4 (บังคับสิทธิ์ฝั่ง server) ยังไม่ทำ — ดูหัวข้อ 7
 
 ---
 
@@ -158,18 +159,46 @@ if (sess && !canDo_(sess.role, data.action)) return jsonErr_("ไม่มีส
 
 ---
 
+## 4.5 บันทึกการ implement จริง (เบี่ยงจากแผนเดิมเล็กน้อย เพื่อความเรียบง่าย)
+
+**เฟส 1-3 ทำเสร็จแล้ว** (commit `feat: ล็อกอินพนักงานด้วย LINE Login (เฟส 1-3)`):
+
+- ชีต `พนักงาน` (11 คอลัมน์) + `เซสชัน` สร้างอัตโนมัติเมื่อเรียกครั้งแรก (เหมือน `writeAuditLog_`)
+- `authLine`/`me`/`logout`/`listStaff`/`saveStaff` ผ่าน `doPost` (`data.action === ...`) ·
+  `lineLoginMeta` ผ่าน `doGet` (คืน channel ID สาธารณะให้ frontend ประกอบ authorize URL เอง —
+  ไม่ต้อง hardcode channel ID ซ้ำใน `config.js`)
+- **actor = ชื่อจริงโดยไม่ต้องแก้ทุกจุดที่เรียก API**: พบว่าเกือบทุก write action ทั่วโค้ด (views-main/
+  views-analytics/views-quote) อ่าน `actor: window._currentUser || sessionStorage.getItem("dmj_role") || "..."`
+  อยู่แล้ว (เตรียมไว้ตั้งแต่แรกแต่ไม่เคยมีใคร set `window._currentUser` จริง — ตามที่ comment ใน
+  `writeAuditLog_` บอกไว้) → แค่ตั้ง `window._currentUser = "ชื่อ (ตำแหน่ง)"` ใน `applyStaffSession()`
+  ของ `app.jsx` ครั้งเดียวตอน login/resume session ก็ได้ actor เป็นชื่อจริงทันทีทุก action
+  **ยังไม่ได้ทำ**: เดิมแผนข้อ 3.4 เสนอ resolve session ฝั่ง server (ผ่าน `sessionToken` ใน body)
+  แล้ว override `actor` ที่ `doPost` — เบี่ยงมาใช้ `window._currentUser` ฝั่ง client แทนเพราะง่ายกว่ามาก
+  (ข้อเสีย: ยัง client-controlled เหมือนเดิม ไม่ใช่ server-verified — แก้ทีหลังพร้อมเฟส 4 ถ้าต้องการ
+  ความน่าเชื่อถือระดับ audit จริงจัง)
+- `LegacyLoginScreen` (ของเดิม) เก็บไว้เป็นลิงก์ "เข้าด้วยรหัสสำรอง" ใต้ปุ่ม LINE
+- แท็บ `staff` (owner) — การ์ดพนักงานพร้อมรูป LINE, ตั้งชื่อ/ตำแหน่ง, ปุ่มอนุมัติ/ระงับ/เปิดใช้งานอีกครั้ง
+- หน้า "รออนุมัติ"/"ถูกระงับ" แบบเต็มจอ + ปุ่ม "เช็คอีกครั้ง"/"ออกจากระบบ"
+
+**เจ้าของต้องทำเอง (ก่อนจะทดสอบได้จริง)**:
+1. สร้าง LINE Login channel ที่ [developers.line.biz](https://developers.line.biz) — provider เดียวกับ LINE OA
+   → Callback URL = `https://dmj-inventory-dashboard.pages.dev/` → เปิด scope `profile`+`openid`
+2. ใส่ Script Properties: `LINE_LOGIN_CHANNEL_ID`, `LINE_LOGIN_CHANNEL_SECRET` ✅ (ทำแล้ว 2026-07-29)
+3. **ต้องเป็นคนล็อกอินด้วย LINE คนแรก** — คนแรกที่กด "เข้าสู่ระบบด้วย LINE" สำเร็จจะได้
+   `role=owner, status=active` อัตโนมัติ คนถัดไปทั้งหมดจะเป็น `pending` รอกดอนุมัติในแท็บ "พนักงาน"
+
+---
+
 ## 5. แผนการทำเป็นเฟส
 
-| เฟส | ขอบเขต | ผลลัพธ์ที่จับต้องได้ |
-|---|---|---|
-| **0** | เจ้าของสร้าง LINE Login channel + ใส่ Script Properties 2 ตัว | พร้อมต่อ |
-| **1** | ชีต `พนักงาน` + `เซสชัน` · `authLine` / `me` / `logout` · LoginScreen ปุ่ม LINE · หน้า "รออนุมัติ" · ปุ่มรหัสสำรองยังอยู่ | ล็อกอินด้วย LINE ได้จริง แต่ยังไม่บังคับ |
-| **2** | แท็บ `staff` (owner) — อนุมัติ/ตั้งชื่อ/ตั้งตำแหน่ง/ระงับ | เจ้าของคุมรายชื่อ + ตำแหน่งได้เอง |
-| **3** | `actor` เป็นชื่อคนจริงทุก action + Audit Log แสดงชื่อ + filter รายคน | สืบได้ว่าใครทำอะไร |
-| **4** | `canDo_` บังคับสิทธิ์ฝั่ง server + เปิด `REQUIRE_LOGIN='true'` | ปิดช่องโกงสิทธิ์จาก DevTools |
+| เฟส | ขอบเขต | ผลลัพธ์ที่จับต้องได้ | สถานะ |
+|---|---|---|---|
+| **0** | เจ้าของสร้าง LINE Login channel + ใส่ Script Properties 2 ตัว | พร้อมต่อ | ✅ เสร็จ |
+| **1-3** | ชีต `พนักงาน`+`เซสชัน` · endpoint ทั้งหมด · LoginScreen ปุ่ม LINE · หน้า "รออนุมัติ"/"ถูกระงับ" · แท็บ `staff` (owner) อนุมัติ/ตั้งชื่อ/ตำแหน่ง/ระงับ · `actor` เป็นชื่อคนจริงทุก action | ล็อกอิน+อนุมัติ+audit ใช้ชื่อจริงได้จริง | ✅ เสร็จ — รอเจ้าของทดสอบบนมือถือ |
+| **4** | `canDo_` บังคับสิทธิ์ฝั่ง server (ตรวจ `sessionToken` แทนเชื่อ `data.actor`/`role` ที่ client ส่งมาตรง ๆ) + เปิด `REQUIRE_LOGIN='true'` | ปิดช่องโกงสิทธิ์จาก DevTools |
 | **5** *(ทางเลือก)* | Google Sign-In เป็นปุ่มที่ 2 · แจ้งเตือน LINE รายบุคคล · สรุปงานรายคน (นับกี่ล็อค/โอนกี่ครั้ง) | ต่อยอด |
 
-เฟส 1–2 คือแกนหลัก · เฟส 4 ห้ามเปิดจนกว่าพนักงานทุกคนจะย้ายมาครบ (ดูจาก `lastLoginAt` ในชีต)
+เฟส 4 ห้ามเปิดจนกว่าพนักงานทุกคนจะย้ายมาใช้ LINE Login ครบ (ดูจาก `lastLoginAt` ในชีต `พนักงาน`)
 
 ---
 
