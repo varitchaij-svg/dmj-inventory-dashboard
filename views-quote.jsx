@@ -375,8 +375,8 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
               {gridItems.map(p => (
                 <div key={p.sku} onClick={() => addToCart(p)} style={{ border: "1px solid #eee", borderRadius: 8, padding: 8, cursor: "pointer", textAlign: "center" }}>
                   {p.imageUrl
-                    ? <img src={p.imageUrl} loading="lazy" style={{ width: "100%", height: 60, objectFit: "cover", borderRadius: 5, background: "#f3f4f6" }} onError={e => { e.target.style.display = "none"; }}/>
-                    : <div style={{ width: "100%", height: 60, borderRadius: 5, background: "#f3f4f6", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>📦</div>}
+                    ? <img src={p.imageUrl} loading="lazy" style={{ width: "100%", aspectRatio: "1 / 1", objectFit: "contain", borderRadius: 5, background: "#f3f4f6" }} onError={e => { e.target.style.display = "none"; }}/>
+                    : <div style={{ width: "100%", aspectRatio: "1 / 1", borderRadius: 5, background: "#f3f4f6", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>📦</div>}
                   <div style={{ fontSize: 12, fontWeight: 600, marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</div>
                   <div style={{ fontSize: 10, color: "var(--muted)" }}>{p.sku}</div>
                 </div>
