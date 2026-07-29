@@ -460,6 +460,7 @@ function saveToStorage(d, source) {
 const ROLE_TH_PLAIN = { owner: "เจ้าของ", saler: "Sale", warehouse: "คลังสินค้า", frontstore: "หน้าร้าน", employee: "พนักงาน" };
 const SESSION_TOKEN_KEY = "dmj_session_token";
 const LINE_STATE_KEY = "dmj_line_state";
+const LINE_REDIRECT_KEY = "dmj_line_redirect_uri";
 
 // redirect_uri ต้อง "ตรงเป๊ะ" ทั้งตอนขอ authorize และตอนแลก token ไม่งั้น LINE ปฏิเสธ
 // → คำนวณที่เดียวเสมอ ห้าม inline ซ้ำ · normalize ไฟล์ .html เป็น "/" ด้วย เพราะ _redirects
@@ -784,6 +785,10 @@ function App() {
       const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
       sessionStorage.setItem(LINE_STATE_KEY, state);
       const redirectUri = lineRedirectUri();
+      // เก็บค่าที่ "ใช้จริง" ไว้ แล้วตอนแลก token ให้อ่านค่านี้แทนการเรียก lineRedirectUri() ซ้ำ —
+      // กัน mismatch กรณี deploy คาบเกี่ยว (หน้าที่กด login โหลดจาก build เก่า แต่หน้าที่รับ
+      // code กลับมาโหลด build ใหม่ที่คำนวณค่าไม่เหมือนเดิม) LINE เช็คว่า 2 ค่านี้ต้องตรงกันเป๊ะ
+      sessionStorage.setItem(LINE_REDIRECT_KEY, redirectUri);
       const authUrl = "https://access.line.me/oauth2/v2.1/authorize"
         + "?response_type=code"
         + "&client_id=" + encodeURIComponent(d.channelId)
@@ -818,13 +823,18 @@ function App() {
       if (code) {
         window.history.replaceState({}, "", window.location.pathname); // ล้าง query กันรีเฟรชแล้วยิงซ้ำ
         const savedState = sessionStorage.getItem(LINE_STATE_KEY);
+        const savedRedirectUri = sessionStorage.getItem(LINE_REDIRECT_KEY);
         sessionStorage.removeItem(LINE_STATE_KEY);
+        sessionStorage.removeItem(LINE_REDIRECT_KEY);
         if (!stateParam || stateParam !== savedState) {
           if (!cancelled) { setLineError("เซสชันล็อกอินไม่ตรงกัน กรุณาลองใหม่"); setAuthPhase("needLogin"); }
           return;
         }
         try {
-          const redirectUri = lineRedirectUri();
+          // ใช้ค่าที่บันทึกไว้ตอนกดล็อกอิน (ไม่คำนวณใหม่) — ต้องเป็นค่าเดียวกับที่ส่งให้ LINE ตอน
+          // authorize เป๊ะ ๆ ไม่งั้น LINE ตอบ "redirect_uri does not match" · savedRedirectUri||
+          // lineRedirectUri() กันไว้เผื่อ sessionStorage หาย (เช่นเปิดจากแท็บ/เบราว์เซอร์อื่น)
+          const redirectUri = savedRedirectUri || lineRedirectUri();
           const d = await postAuthAction({ action: "authLine", code, redirectUri });
           if (cancelled) return;
           if (d && d.ok) {

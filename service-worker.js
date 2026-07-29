@@ -1,4 +1,4 @@
-const CACHE_NAME = "dmj-v7";
+const CACHE_NAME = "dmj-v8";
 
 const PRECACHE_ASSETS = [
   "/manifest.json",
