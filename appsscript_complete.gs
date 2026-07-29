@@ -7710,22 +7710,31 @@ function getContactDetail(id) {
 }
 
 // ค้นลูกค้าด้วย keyword เดียว (ชื่อบริษัท หรือ เลขผู้เสียภาษี) → คืน list ที่ normalize แล้ว
+// เจอ "ที่อยู่ไม่สามารถใช้ได้" (UrlFetchApp exception ชั่วคราว คุยกับ ZORT ไม่สำเร็จ) เป็นระยะ
+// เมื่อค้นเลขผู้เสียภาษีที่ไม่เคยเป็นลูกค้ามาก่อน — ลอง retry สั้นๆ 1 ครั้งกันเสียเวลาเจ้าของ
+// ต้องกดค้นหาซ้ำเอง
 function searchContact(query) {
   var q = String(query || "").trim();
   if (q.length < 2) return ok({ contacts: [] });
-  try {
-    var url = ZORT_BASE + "/Contact/GetContacts?page=1&limit=10&" +
-      POS_ZORT_FIELDS.contactSearchParam + "=" + encodeURIComponent(q);
-    var res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
-    var zErr = zortRespError_(res);
-    if (zErr) { logZortFailure_("ค้นลูกค้า", q + " | " + zErr); return error("ค้นลูกค้าไม่สำเร็จ: " + zErr); }
-    var json = JSON.parse(res.getContentText() || "{}");
-    var list = json.list || json.contacts || json.data || [];
-    var out = list.map(normalizeContact_).filter(function (c) { return c.name || c.taxId; });
-    return ok({ contacts: out });
-  } catch (e) {
-    return error("ค้นลูกค้าไม่สำเร็จ: " + e);
+  var url = ZORT_BASE + "/Contact/GetContacts?page=1&limit=10&" +
+    POS_ZORT_FIELDS.contactSearchParam + "=" + encodeURIComponent(q);
+  var lastErr = null;
+  for (var attempt = 0; attempt < 2; attempt++) {
+    try {
+      var res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+      var zErr = zortRespError_(res);
+      if (zErr) { lastErr = zErr; break; } // resCode error จาก ZORT เอง ไม่ใช่ network — ไม่ retry
+      var json = JSON.parse(res.getContentText() || "{}");
+      var list = json.list || json.contacts || json.data || [];
+      var out = list.map(normalizeContact_).filter(function (c) { return c.name || c.taxId; });
+      return ok({ contacts: out });
+    } catch (e) {
+      lastErr = String(e);
+      if (attempt === 0) Utilities.sleep(800); // retry เดียวพอ กัน exception ชั่วคราวจากฝั่ง network
+    }
   }
+  logZortFailure_("ค้นลูกค้า", q + " | " + lastErr);
+  return error("ค้นลูกค้าไม่สำเร็จ: " + lastErr);
 }
 
 // สร้างบิลขาย + (option) ใบกำกับภาษี + บันทึกรับชำระ
