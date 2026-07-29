@@ -8912,6 +8912,53 @@ function appendSaleBillRow_(ss, rec) {
   }
 }
 
+// ── หักสต็อก "หน้าร้าน" (col G) ในชีตหลังขายผ่าน POS ────────────────────────
+// ทำไมหัก col G: POS ไม่ได้ส่ง warehousecode ให้ AddOrder → ZORT ตัดจากคลัง default
+// ซึ่งเจ้าของยืนยันแล้วว่าคือ "ดูเหมือนจริง/หน้าร้าน" (W0001) = col G (qtyStore)
+// ตรงกับที่ POS โชว์ "คงเหลือ N" และเตือน "เกินสต๊อกหน้าร้าน" อยู่แล้ว
+//
+// ⚠️ **ห้ามเรียก pushStockToZort_ ที่นี่** — AddOrder ตัดสต็อกฝั่ง ZORT ให้แล้ว
+//    ยิงซ้ำ = หักสองเด้ง · ตรงนี้เป็นแค่การอัปเดตชีตให้ทันทีไม่ต้องรอ sync (ทุก 2 ชม.)
+//    รอบ sync ถัดไปจะเขียนทับด้วยเลขจริงจาก ZORT อยู่ดี (ZORT เป็น source of truth)
+//
+// ไม่ throw — ตอนถูกเรียกบิลออกไปแล้ว หักสต็อกพลาดต้องไม่ทำให้ผู้ขายไม่ได้เลขบิล
+function deductFrontStoreForSale_(ss, list) {
+  try {
+    var sheet = ss.getSheetByName(SHEET_PRODUCTS);
+    if (!sheet) return { ok: false, error: "ไม่พบชีต " + SHEET_PRODUCTS };
+
+    // รวมจำนวนต่อ SKU ก่อน — บิลเดียวอาจมี SKU เดิมหลายบรรทัด
+    var want = {};
+    list.forEach(function (it) {
+      var sku = String(it.sku || "").trim().toUpperCase();
+      var q = Number(it.number) || 0;
+      if (sku && q > 0) want[sku] = (want[sku] || 0) + q;
+    });
+
+    var data = sheet.getDataRange().getValues();
+    var applied = [], shortfall = [];
+    for (var i = 1; i < data.length; i++) {
+      var sku = String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase();
+      if (!sku || want[sku] === undefined) continue;
+      var qty = want[sku];
+      delete want[sku];   // SKU ซ้ำหลายแถวในชีต → หักแถวแรกที่เจอแถวเดียว ไม่หักซ้ำ
+      var cur = Number(data[i][COL_PROD_QTYFS - 1]) || 0;
+      var next = cur - qty;
+      // ไม่ปล่อยติดลบ (สอดคล้องกับ deductStock เดิม) — ขายเกินที่ระบบรู้ = ชั้นมีของมากกว่าที่นับไว้
+      if (next < 0) { shortfall.push({ sku: sku, want: qty, had: cur }); next = 0; }
+      // เขียนทีละ cell เฉพาะแถวที่เปลี่ยน — syncZortToColumn_ ไม่ได้จับ LockService
+      // การเขียนทับทั้งคอลัมน์จึงเสี่ยงทับงาน sync ที่รันคาบเกี่ยว
+      sheet.getRange(i + 1, COL_PROD_QTYFS).setValue(next);
+      applied.push({ sku: sku, qty: qty, before: cur, after: next });
+    }
+    SpreadsheetApp.flush();
+    return { ok: true, applied: applied, shortfall: shortfall, notFound: Object.keys(want) };
+  } catch (e) {
+    Logger.log("deductFrontStoreForSale_ error: " + e);
+    return { ok: false, error: String(e) };
+  }
+}
+
 // สร้างบิลขาย + (option) ใบกำกับภาษี + บันทึกรับชำระ
 // data = {
 //   items:[{sku,name,qty,price,category}],  // price=ราคาปลีก/ชิ้น (รวม VAT)
@@ -9039,12 +9086,24 @@ function createSaleBill(ss, data, actor) {
       } catch (e) { logZortFailure_("ใบกำกับ/รับชำระ order " + orderNumber, String(e)); }
     }
 
+    // ── หักสต็อกหน้าร้านในชีตทันที (ไม่ต้องรอ sync ZORT ทุก 2 ชม.) ──
+    // กันขายเกิน: คนถัดไปที่เปิด POS จะเห็นเลขที่หักแล้ว ไม่ใช่เลขค้างของเมื่อ 2 ชม.ก่อน
+    var stockRes = deductFrontStoreForSale_(ss, list);
+    if (!stockRes.ok) {
+      logZortFailure_("หักสต็อกหน้าร้านหลังออกบิล " + (orderNumber || ""), stockRes.error);
+    }
+
     writeAuditLog_(actor || "ไม่ระบุ", "ออกบิลขาย", orderNumber || "(ไม่ทราบเลข)",
       auditDetail_({ after: { total: totals.grandTotal, items: list.length,
         customer: (data.customer && data.customer.name) || "", taxInvoice: !!data.taxInvoice,
         payment: data.paymentMethod || "",
         cashReceived: data.cashReceived != null ? Number(data.cashReceived) : undefined,
-        channel: data.channel || "" }, note: "saler ออกบิล/ใบกำกับผ่าน POS" }));
+        channel: data.channel || "",
+        // ร่องรอยการหักสต็อก — ไว้ไล่ย้อนตอนตัวเลขไม่ตรง
+        stockDeducted: stockRes.ok ? stockRes.applied.length : "FAILED",
+        stockShortfall: (stockRes.ok && stockRes.shortfall.length) ? stockRes.shortfall : undefined,
+        stockNotFound: (stockRes.ok && stockRes.notFound.length) ? stockRes.notFound : undefined },
+        note: "saler ออกบิล/ใบกำกับผ่าน POS" }));
 
     // ── log ลงชีต "บิลขาย" ฝั่งเรา (ไม่ต้องรอ syncZortSales รอบถัดไป) ──
     // ทำหลัง ZORT สำเร็จแล้วเท่านั้น — บิลที่ยิง ZORT ไม่ผ่านจะ return ไปตั้งแต่ด้านบน ไม่ถึงตรงนี้

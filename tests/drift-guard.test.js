@@ -79,6 +79,13 @@ const TRACKED = [
     `if (deductFS > fsQty) deductFS = fsQty;`,
     `const shortfall = qty - (deductWH + deductFS);`,
   ]},
+  // saleFrontStoreDeductCore: หักสต็อกหน้าร้านหลังออกบิล POS
+  // guard 3 จุดที่พลาดแล้วสต็อกเพี้ยน: รวม qty ต่อ SKU / หักแถวแรกแถวเดียว / ไม่ปล่อยติดลบ
+  { names: ['saleFrontStoreDeductCore'], sourceFile: 'appsscript_complete.gs', landmarks: [
+    `if (sku && q > 0) want[sku] = (want[sku] || 0) + q;`,
+    `delete want[sku];`,
+    `if (next < 0) { shortfall.push({ sku: sku, want: qty, had: cur }); next = 0; }`,
+  ]},
   // transferBatchCore: idempotency ต่างกันโดยตั้งใจ (helper=Set, ต้นทาง=CacheService)
   // จึงไม่ landmark บรรทัด cache — guard เฉพาะตรรกะ clamp/โอน/shortfall
   { names: ['transferBatchCore'], sourceFile: 'appsscript_complete.gs', landmarks: [
