@@ -7621,7 +7621,7 @@ var POS_ZORT_FIELDS = {
   // field ที่อ่านกลับจาก contact (normalize → ฝั่ง frontend ใช้ชื่อกลาง)
   contactId:      ["id", "contactid", "customerid"],
   contactName:    ["name", "contactname", "customername"],
-  contactTaxId:   ["taxid", "taxnumber", "customertaxid", "taxno", "idcard", "taxidnumber", "vatid"],
+  contactTaxId:   ["taxid", "taxnumber", "customertaxid", "taxno", "idcard", "taxidnumber", "vatid", "idnumber"],
   contactBranch:  ["branch", "branchname"],
   contactBranchNo:["branchcode", "branchno", "branchnumber"],
   contactAddress: ["address", "customeraddress", "fulladdress"],
