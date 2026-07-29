@@ -2725,6 +2725,46 @@ function exploreZortQuotationAmountFix() {
   Logger.log("──────── เสร็จ — copy log ทั้งหมดตั้งแต่ต้นส่งกลับมา ────────");
 }
 
+// ─── สำรวจ endpoint ค้นหาเลขผู้เสียภาษี (แม้ไม่ใช่ลูกค้าเก่าของร้าน) ────────────────
+// เจ้าของเจอฟีเจอร์นี้ในหน้าเว็บ ZORT เอง (secure.zortout.com/Sell/Add popup "เลือกข้อมูล
+// เลขประจำตัวผู้เสียภาษี") — พิมพ์เลข 13 หลักแล้วเจอชื่อบริษัท+ที่อยู่สาขาจริงจากทะเบียนธุรกิจ
+// แม้ไม่เคยเป็นลูกค้าร้านมาก่อน (ดึงจากฐานข้อมูลกรมพัฒนาธุรกิจการค้า ไม่ใช่ contact ของร้านเอง)
+// ⚠️ ข้อควรระวัง: secure.zortout.com (หน้าเว็บที่เจ้าของใช้) เป็นคนละระบบกับ
+// open-api.zortout.com (Partner API ที่เรามี APP key/secret) — endpoint นี้อาจเป็น
+// internal-only ของหน้าเว็บ ไม่เปิดให้ Partner API เรียกก็ได้ ต้องทดสอบดูก่อน (READ-ONLY
+// ปลอดภัย 100% ไม่มีการสร้าง/แก้ข้อมูลใดๆ — แค่ลองยิง GET หลาย endpoint ที่เป็นไปได้)
+function exploreZortTaxIdLookup() {
+  const H = zortHeaders_();
+  const testTaxId = "0105566198464"; // เลขจากตัวอย่างที่เจ้าของเจอ (บริษัท สไปซี่ ชอมเบรโร จำกัด)
+
+  const candidates = [
+    "/Contact/SearchTaxId?taxid=" + testTaxId,
+    "/Contact/LookupTaxId?taxid=" + testTaxId,
+    "/Contact/GetTaxIdInfo?taxid=" + testTaxId,
+    "/Contact/SearchByTaxId?taxid=" + testTaxId,
+    "/Contact/GetContacts?keyword=" + testTaxId, // เผื่อ endpoint เดิมที่ใช้อยู่แล้วรองรับจริง (ยังไม่เคยทดสอบเลขที่ไม่ใช่ลูกค้าเก่า)
+    "/TaxId/Search?taxid=" + testTaxId,
+    "/TaxId/GetInfo?taxid=" + testTaxId,
+    "/Company/Search?taxid=" + testTaxId,
+    "/Company/GetInfo?taxid=" + testTaxId,
+    "/Contact/SearchTaxId?id=" + testTaxId,
+  ];
+
+  Logger.log("═══ ทดสอบ endpoint ค้นหาเลขผู้เสียภาษี " + testTaxId + " (บริษัท สไปซี่ ชอมเบรโร จำกัด) ═══");
+  candidates.forEach(function (path) {
+    try {
+      const res = UrlFetchApp.fetch(ZORT_BASE + path, { method: "get", headers: H, muteHttpExceptions: true });
+      const code = res.getResponseCode();
+      const text = res.getContentText();
+      const looksReal = text.indexOf("สไปซี่") >= 0 || text.indexOf("ชอมเบรโร") >= 0;
+      Logger.log("▶ GET " + path + "\n   HTTP " + code + (looksReal ? "   ✅✅✅ เจอชื่อบริษัทจริง!" : "") + "\n   resp=" + text.substring(0, 400));
+    } catch (e) {
+      Logger.log("▶ GET " + path + "\n   ❌ error: " + e);
+    }
+  });
+  Logger.log("──────── เสร็จ — copy log ทั้งหมดตั้งแต่ต้นส่งกลับมา ────────");
+}
+
 // ⚠️ ONE-OFF CLEANUP: ลบใบเสนอราคาทดสอบ QT-202607015 (id 346234) ที่หลุดค้างจริงใน ZORT
 // เพราะ exploreZortAddQuotation() รุ่นก่อนหน้าอ่าน id/number ผิดตำแหน่ง (อยู่ใน detail ไม่ใช่ top-level)
 // เลยไม่เรียก void ให้ — รันฟังก์ชันนี้ 1 ครั้งเพื่อลบทิ้ง แล้วลบฟังก์ชันนี้ออกได้เลย
