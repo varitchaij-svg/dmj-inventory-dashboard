@@ -65,9 +65,34 @@ const ROLE_LABELS = {
 };
 
 // หน้าล็อกอินหลัก — ปุ่ม LINE ใหญ่ (ไม่ต้องพิมพ์อะไร) + ลิงก์เล็ก "รหัสสำรอง" สำหรับช่วงเปลี่ยนผ่าน
-function LoginScreen({ onLineLogin, onLegacyLogin, lineError }) {
+function LoginScreen({ onLineLogin, onLegacyLogin, lineError, lineChannelId }) {
   const [showLegacy, setShowLegacy] = usS(false);
   const [showDiag, setShowDiag] = usS(false);
+
+  // ── ทำไมปุ่ม LINE ต้องเป็น <a href> ไม่ใช่ <button onClick> ──────────────────
+  // การล็อกอินผ่าน "แอป LINE" (app-to-app) ทำงานด้วย universal link (iOS) /
+  // app link (Android) ซึ่งเบราว์เซอร์จะยอมเปิดแอปให้ก็ต่อเมื่อการ navigate นั้น
+  // "ผูกกับการแตะของผู้ใช้โดยตรง" เท่านั้น
+  // ของเดิม: แตะปุ่ม → await fetch(lineLoginMeta) → ค่อย window.location.href = …
+  // ระหว่าง await คือ async gap → user gesture หมดอายุ → iOS/Android ปฏิเสธการเปิดแอป
+  // → iOS ค้าง/เด้งกลับ, Android ขึ้น "เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ"
+  // (ตรงกับที่เจอ: โหมด "ไม่เปิดแอป LINE" ผ่าน เพราะเป็น navigate https ธรรมดา ไม่ต้องเปิดแอป)
+  // → ดึง channelId มาเตรียมไว้ล่วงหน้า แล้วให้ปุ่มเป็นลิงก์จริง: แตะ = navigate ทันที
+  //   ไม่มี async คั่น · onClick แค่บันทึก state ลง storage (ทำงาน sync ก่อน navigate)
+  const authBase = React.useMemo(() => {
+    if (!lineChannelId) return null;
+    const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    const redirectUri = lineRedirectUri();
+    return {
+      state, redirectUri,
+      url: "https://access.line.me/oauth2/v2.1/authorize"
+        + "?response_type=code"
+        + "&client_id=" + encodeURIComponent(lineChannelId)
+        + "&redirect_uri=" + encodeURIComponent(redirectUri)
+        + "&state=" + encodeURIComponent(state)
+        + "&scope=" + encodeURIComponent("profile openid"),
+    };
+  }, [lineChannelId]);
 
   if (showLegacy) {
     return <LegacyLoginScreen onLogin={onLegacyLogin} onBack={() => setShowLegacy(false)}/>;
@@ -107,15 +132,34 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError }) {
         เข้าสู่ระบบเพื่อใช้งาน
       </div>
 
-      <button onClick={() => onLineLogin(false)} style={{
-        display:"flex", alignItems:"center", justifyContent:"center", gap:10,
-        width:"100%", maxWidth:320, padding:"16px 20px",
-        background:"#06C755", color:"#fff", border:"none", borderRadius:14,
-        fontSize:16, fontWeight:700, cursor:"pointer", fontFamily:"inherit",
-        boxShadow:"0 6px 18px rgba(6,199,85,.3)",
-      }}>
-        <span style={{fontSize:20}}>💬</span> เข้าสู่ระบบด้วย LINE
-      </button>
+      {authBase ? (
+        // ลิงก์จริง — แตะแล้วเบราว์เซอร์ navigate ทันทีในจังหวะเดียวกับการแตะ
+        // จึงเปิดแอป LINE ได้ (universal link ต้องการ user gesture ที่ยังไม่ขาดตอน)
+        <a href={authBase.url}
+           onClick={() => saveLineHandshake(authBase.state, authBase.redirectUri)}
+           style={{
+             display:"flex", alignItems:"center", justifyContent:"center", gap:10,
+             width:"100%", maxWidth:320, padding:"16px 20px", boxSizing:"border-box",
+             background:"#06C755", color:"#fff", border:"none", borderRadius:14,
+             fontSize:16, fontWeight:700, cursor:"pointer", fontFamily:"inherit",
+             textDecoration:"none",
+             boxShadow:"0 6px 18px rgba(6,199,85,.3)",
+           }}>
+          <span style={{fontSize:20}}>💬</span> เข้าสู่ระบบด้วย LINE
+        </a>
+      ) : (
+        // ยังดึง channelId ไม่เสร็จ (เข้าครั้งแรก/เน็ตช้า) — ใช้ทางเดิมไปก่อน
+        // อาจเปิดแอป LINE ไม่ได้เพราะมี async คั่น แต่ดีกว่าปุ่มกดไม่ได้เลย
+        <button onClick={() => onLineLogin(false)} style={{
+          display:"flex", alignItems:"center", justifyContent:"center", gap:10,
+          width:"100%", maxWidth:320, padding:"16px 20px",
+          background:"#06C755", color:"#fff", border:"none", borderRadius:14,
+          fontSize:16, fontWeight:700, cursor:"pointer", fontFamily:"inherit", opacity:.75,
+          boxShadow:"0 6px 18px rgba(6,199,85,.3)",
+        }}>
+          <span style={{fontSize:20}}>💬</span> เข้าสู่ระบบด้วย LINE
+        </button>
+      )}
 
       {lineError && (
         <div style={{color:"var(--dang)", fontSize:12, marginTop:12, textAlign:"center", maxWidth:300}}>
@@ -137,11 +181,22 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError }) {
 
       {/* ทางเลี่ยงสำหรับมือถือ: ล็อกอินในเบราว์เซอร์ ไม่สลับไปแอป LINE
           (การสลับไปแอปคือต้นเหตุที่ iOS กลับมาแล้ว "เซสชันไม่ตรงกัน" และ Android เด้ง error) */}
-      <button onClick={() => onLineLogin(true)} style={{
-        marginTop:14, width:"100%", maxWidth:320, padding:"11px 16px",
-        background:"var(--paper)", color:"var(--g-700)", border:"1.5px solid var(--g-300)",
-        borderRadius:12, fontSize:13.5, fontWeight:600, cursor:"pointer", fontFamily:"inherit",
-      }}>🌐 เข้าสู่ระบบโดยไม่เปิดแอป LINE</button>
+      {authBase ? (
+        <a href={authBase.url + "&disable_auto_login=true&disable_ios_auto_login=true"}
+           onClick={() => saveLineHandshake(authBase.state, authBase.redirectUri)}
+           style={{
+             marginTop:14, display:"block", width:"100%", maxWidth:320, padding:"11px 16px",
+             boxSizing:"border-box", textAlign:"center", textDecoration:"none",
+             background:"var(--paper)", color:"var(--g-700)", border:"1.5px solid var(--g-300)",
+             borderRadius:12, fontSize:13.5, fontWeight:600, cursor:"pointer", fontFamily:"inherit",
+           }}>🌐 เข้าสู่ระบบโดยไม่เปิดแอป LINE</a>
+      ) : (
+        <button onClick={() => onLineLogin(true)} style={{
+          marginTop:14, width:"100%", maxWidth:320, padding:"11px 16px",
+          background:"var(--paper)", color:"var(--g-700)", border:"1.5px solid var(--g-300)",
+          borderRadius:12, fontSize:13.5, fontWeight:600, cursor:"pointer", fontFamily:"inherit",
+        }}>🌐 เข้าสู่ระบบโดยไม่เปิดแอป LINE</button>
+      )}
       <div style={{fontSize:11, color:"var(--light)", marginTop:6, textAlign:"center", maxWidth:300}}>
         ใช้ปุ่มนี้ถ้ากดปุ่มเขียวแล้วเด้งออกไปแอป LINE แล้วเข้าไม่ได้
       </div>
@@ -167,6 +222,7 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError }) {
           <div>path: {diag.path}</div>
           <div>redirect_uri: {diag.redirect}</div>
           <div>โหมดแอป (standalone): {diag.standalone ? "ใช่ ✅" : "ไม่ (เบราว์เซอร์)"}</div>
+          <div>ปุ่ม LINE พร้อม (channelId): {lineChannelId ? "ใช่ ✅" : "ยังไม่โหลด ⏳"}</div>
           <div>localStorage: {diag.localStorage ? "ok ✅" : "บล็อก ❌"} · sessionStorage: {diag.sessionStorage ? "ok ✅" : "บล็อก ❌"}</div>
           <div>UA: {diag.ua}</div>
         </div>
@@ -526,7 +582,7 @@ const SESSION_TOKEN_KEY = "dmj_session_token";
 const LINE_STATE_KEY = "dmj_line_state";
 const LINE_REDIRECT_KEY = "dmj_line_redirect_uri";
 const LINE_STATE_AT_KEY = "dmj_line_state_at";
-const LINE_NOAPP_KEY = "dmj_line_noapp";   // "1" = เครื่องนี้ให้ล็อกอินในเบราว์เซอร์ ไม่เด้งเข้าแอป LINE
+const LINE_CHANNEL_KEY = "dmj_line_channel"; // cache channelId — ให้ปุ่มเป็นลิงก์พร้อมกดตั้งแต่ render แรก
 const LINE_STATE_TTL_MS = 30 * 60 * 1000; // ครึ่งชั่วโมง — พอสำหรับล็อกอิน LINE ที่ต้องสลับไปแอป LINE
 
 // ── Safe storage ──────────────────────────────────────────────────────────
@@ -603,6 +659,9 @@ function App() {
     } catch (e) { return "checking"; }
   });
   const [lineError, setLineError] = usS(null);
+  // channelId ของ LINE Login — cache ไว้เพื่อให้ปุ่มล็อกอินเป็น <a href> ที่กดได้ทันที
+  // (ห้ามมี await คั่นระหว่าง "แตะปุ่ม" กับ "navigate" ไม่งั้นเปิดแอป LINE ไม่ได้)
+  const [lineChannelId, setLineChannelId] = usS(() => lsGet(LINE_CHANNEL_KEY) || null);
   const [authRefreshing, setAuthRefreshing] = usS(false);
   const [data, setData] = usS(null);
   const [error, setError] = usS(null);
@@ -875,10 +934,11 @@ function App() {
   }, [applyStaffSession, role]);
 
   // noApp = ล็อกอินในเบราว์เซอร์ล้วน ไม่สลับไปแอป LINE (disable_auto_login)
-  // มือถือที่เคยพังจะจำไว้ใน LINE_NOAPP_KEY แล้วใช้โหมดนี้เองอัตโนมัติในครั้งถัดไป
+  // ใช้เฉพาะตอนผู้ใช้กดปุ่ม "ไม่เปิดแอป LINE" เอง — ไม่บังคับอัตโนมัติ เพราะการล็อกอิน
+  // ผ่านแอป LINE (แตะเดียวจบ) คือทางที่พนักงานใช้จริง ห้ามถูกสลับทิ้งเงียบ ๆ
   const startLineLogin = usC(async (noApp) => {
     setLineError(null);
-    const useNoApp = (noApp === true) || lsGet(LINE_NOAPP_KEY) === "1";
+    const useNoApp = (noApp === true);
     try {
       const base = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null;
       if (!base) { setLineError("ยังไม่ได้เชื่อมต่อ Sheet"); return; }
@@ -920,6 +980,26 @@ function App() {
     setAuthPhase("needLogin");
   }, []);
 
+  // ── ดึง channelId ของ LINE Login มาเตรียมไว้ตั้งแต่เปิดแอป ──
+  // ต้องมีค่าพร้อม "ก่อน" ผู้ใช้แตะปุ่ม เพื่อให้ปุ่มเป็นลิงก์ที่ navigate ได้ทันทีในจังหวะแตะ
+  // (ถ้ารอ fetch หลังแตะ = user gesture ขาด → เบราว์เซอร์ไม่ยอมเปิดแอป LINE)
+  usE(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const base = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null;
+        if (!base) return;
+        const url = new URL(base);
+        url.searchParams.set("action", "lineLoginMeta");
+        const d = await (await fetch(url.toString())).json();
+        if (cancelled || !d || !d.channelId) return;
+        lsSet(LINE_CHANNEL_KEY, d.channelId);
+        setLineChannelId(d.channelId);
+      } catch (e) { /* เงียบไว้ — ปุ่มจะ fallback ไปทางเดิม */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   // ── Bootstrap: เช็ค code/state จาก LINE redirect กลับมา, หรือ session token ที่เก็บไว้ ──
   usE(() => {
     let cancelled = false;
@@ -939,8 +1019,7 @@ function App() {
         // ไม่งั้นพนักงาน iOS ล็อกอินไม่ได้ตลอดกาล — code จาก LINE ใช้ได้ครั้งเดียวและผูกกับ
         // redirect_uri + channel secret ฝั่ง server อยู่แล้ว จึงไปต่อได้โดยความเสี่ยงต่ำ
         if (savedState && stateParam !== savedState) {
-          lsSet(LINE_NOAPP_KEY, "1"); // รอบหน้าเลี่ยงการเด้งเข้าแอป LINE ให้อัตโนมัติ
-          if (!cancelled) { setLineError("เซสชันล็อกอินไม่ตรงกัน — กดปุ่ม LINE อีกครั้ง ระบบจะเปลี่ยนไปล็อกอินในเบราว์เซอร์ให้"); setAuthPhase("needLogin"); }
+          if (!cancelled) { setLineError("เซสชันล็อกอินไม่ตรงกัน กรุณาลองใหม่ (หรือใช้ปุ่ม \"ไม่เปิดแอป LINE\")"); setAuthPhase("needLogin"); }
           return;
         }
         try {
@@ -953,7 +1032,6 @@ function App() {
           if (d && d.ok) {
             // localStorage เขียนไม่ได้ (iOS Private Browsing / บล็อกที่เก็บข้อมูล) → session token หาย
             // ทันทีที่รีเฟรช · ยังให้ใช้งานรอบนี้ต่อได้ แต่ต้องบอกผู้ใช้ว่าทำไมต้องล็อกอินใหม่
-            lsDel(LINE_NOAPP_KEY); // วิธีที่เพิ่งใช้เวิร์ก — ไม่ต้องบังคับโหมดเบราว์เซอร์อีก
             if (!lsSet(SESSION_TOKEN_KEY, d.sessionToken)) {
               setLineError("เข้าสู่ระบบได้ แต่เครื่องนี้บันทึกข้อมูลไม่ได้ (โหมดไม่ระบุตัวตน?) — เปิดใหม่ต้องล็อกอินอีกครั้ง");
             }
@@ -1021,6 +1099,7 @@ function App() {
   if (!role) {
     return <LoginScreen
       onLineLogin={startLineLogin}
+      lineChannelId={lineChannelId}
       lineError={lineError}
       onLegacyLogin={r => { sessionStorage.setItem("dmj_role", r); setRole(r); setAuthPhase("ready"); }}
     />;
