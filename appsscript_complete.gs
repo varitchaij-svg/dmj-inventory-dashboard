@@ -94,6 +94,14 @@ const LINE_USER_ID = getSecret_('LINE_USER_ID', 'PLACEHOLDER_LINE_USER_ID');
 // ถ้าไม่ตั้ง = ระบบ fallback ไปใช้ช่องทางหลักอัตโนมัติ (ทำงานได้ปกติแบบช่องทางเดียว)
 const LINE_ACCESS_TOKEN_2 = getSecret_('LINE_ACCESS_TOKEN_2', '');
 
+// ── LINE Login (ล็อกอินพนักงาน — คนละตัวกับ LINE_ACCESS_TOKEN ที่ใช้ส่งแจ้งเตือน) ──
+// สร้าง channel แยกที่ developers.line.biz (ประเภท "LINE Login", provider เดียวกับ OA)
+// ตั้ง Script Properties: LINE_LOGIN_CHANNEL_ID, LINE_LOGIN_CHANNEL_SECRET
+const LINE_LOGIN_CHANNEL_ID     = getSecret_('LINE_LOGIN_CHANNEL_ID', '');
+const LINE_LOGIN_CHANNEL_SECRET = getSecret_('LINE_LOGIN_CHANNEL_SECRET', '');
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // session ค้าง 30 วัน (มือถือส่วนตัวทุกคน — ยอมรับความเสี่ยงนี้ได้)
+const STAFF_ROLE_TH_ = { owner: "เจ้าของ", saler: "Sale", warehouse: "คลังสินค้า", frontstore: "หน้าร้าน", employee: "พนักงาน" };
+
 // ── Sheet Config ──
 const SHEET_ID = getSecret_('SHEET_ID', 'PLACEHOLDER_SHEET_ID');
 const SHEET_PRODUCTS  = "อัพเดทจำนวนสินค้า";
@@ -119,6 +127,8 @@ const SHEET_QUOTE_SALE     = "เซลใบเสนอราคา";    // ma
 const SHEET_UNSCANNED_SALE = "ขายไม่สแกน";        // นับสต็อกแล้วของหาย=ขายออก (บวก soldQty ไม่แตะยอดเงิน) col: date,SKU,qty,actor,time
 const SHEET_ORDERS_RAW     = "ZORT ออเดอร์ดิบ";   // ออเดอร์ดิบทั้งระบบ (per-line) สำหรับ backfill+วิเคราะห์ย้อนหลัง
 const SHEET_QUOTE_DRAFTS   = "ร่างใบเสนอราคา";    // ร่างใบเสนอราคาที่ยังไม่ส่งเข้า ZORT
+const SHEET_STAFF          = "พนักงาน";           // บัญชีพนักงาน (LINE Login) — ชื่อ/ตำแหน่ง/สถานะ
+const SHEET_SESSIONS       = "เซสชัน";            // session token ที่ออกให้ตอนล็อกอิน LINE
 const BACKFILL_START_YM    = "2024-01";           // เดือนแรกที่เริ่มใช้ ZORT — backfill ดึงตั้งแต่เดือนนี้
 const WH_NAME_SAI5    = "คลังสินค้าสาย5";
 const WH_NAME_FS      = "ดูเหมือนจริง";
@@ -220,6 +230,269 @@ function auditDetail_(fields) {
   } catch (e) {
     return String((fields && fields.note) || "");
   }
+}
+
+// ───────────────────────────────────────────────────────────
+// ระบบล็อกอินพนักงาน (LINE Login) — ชีต "พนักงาน" + ชีต "เซสชัน"
+// ───────────────────────────────────────────────────────────
+function getOrCreateSheet_(ss, name, headers) {
+  let sh = ss.getSheetByName(name);
+  if (!sh) {
+    sh = ss.insertSheet(name);
+    sh.appendRow(headers);
+    sh.getRange(1, 1, 1, headers.length).setFontWeight("bold");
+  }
+  return sh;
+}
+
+function staffSheet_(ss) {
+  return getOrCreateSheet_(ss, SHEET_STAFF,
+    ["staffId", "provider", "providerUserId", "displayName", "lineDisplayName", "role", "status", "pictureUrl", "createdAt", "lastLoginAt", "note"]);
+}
+function sessionsSheet_(ss) {
+  return getOrCreateSheet_(ss, SHEET_SESSIONS,
+    ["token", "staffId", "createdAt", "expiresAt", "lastSeenAt", "revoked"]);
+}
+
+function staffRowToObj_(row) {
+  return {
+    staffId: row[0], provider: row[1], providerUserId: row[2],
+    displayName: row[3], lineDisplayName: row[4], role: row[5],
+    status: row[6], pictureUrl: row[7], createdAt: row[8],
+    lastLoginAt: row[9], note: row[10],
+  };
+}
+
+function readStaffAll_(ss) {
+  const sh = staffSheet_(ss);
+  const last = sh.getLastRow();
+  if (last < 2) return [];
+  const vals = sh.getRange(2, 1, last - 1, 11).getValues();
+  return vals.map(staffRowToObj_).filter(function (s) { return s.staffId; });
+}
+
+// คืน 1-indexed row number (>=2) หรือ -1 ถ้าไม่เจอ
+function findStaffRowIndex_(sh, providerUserId) {
+  const last = sh.getLastRow();
+  if (last < 2) return -1;
+  const ids = sh.getRange(2, 3, last - 1, 1).getValues(); // col C = providerUserId
+  for (let i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) === String(providerUserId)) return i + 2;
+  }
+  return -1;
+}
+
+function findStaffRowById_(sh, staffId) {
+  const last = sh.getLastRow();
+  if (last < 2) return -1;
+  const ids = sh.getRange(2, 1, last - 1, 1).getValues();
+  for (let i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) === String(staffId)) return i + 2;
+  }
+  return -1;
+}
+
+function nextStaffId_(sh) {
+  const last = sh.getLastRow();
+  const n = last < 2 ? 0 : last - 1;
+  return "ST" + String(n + 1).padStart(4, "0");
+}
+
+// แลก authorization code → access_token/id_token (server-to-server, ใช้ channel secret)
+function exchangeLineToken_(code, redirectUri) {
+  const res = UrlFetchApp.fetch("https://api.line.me/oauth2/v2.1/token", {
+    method: "post",
+    payload: {
+      grant_type: "authorization_code",
+      code: code,
+      redirect_uri: redirectUri,
+      client_id: LINE_LOGIN_CHANNEL_ID,
+      client_secret: LINE_LOGIN_CHANNEL_SECRET,
+    },
+    muteHttpExceptions: true,
+  });
+  const body = JSON.parse(res.getContentText());
+  if (res.getResponseCode() !== 200) {
+    throw new Error("LINE token exchange failed: " + (body.error_description || body.error || res.getResponseCode()));
+  }
+  return body; // { access_token, id_token, ... }
+}
+
+// ตรวจ id_token กับ LINE โดยตรง (ไม่ต้องมี JWT library ฝั่ง GAS) — คืน claims {sub,name,picture,...}
+function verifyLineIdToken_(idToken) {
+  const res = UrlFetchApp.fetch("https://api.line.me/oauth2/v2.1/verify", {
+    method: "post",
+    payload: { id_token: idToken, client_id: LINE_LOGIN_CHANNEL_ID },
+    muteHttpExceptions: true,
+  });
+  const body = JSON.parse(res.getContentText());
+  if (res.getResponseCode() !== 200) {
+    throw new Error("LINE id_token verify failed: " + (body.error_description || body.error || res.getResponseCode()));
+  }
+  return body;
+}
+
+function createSession_(ss, staffId) {
+  const sh = sessionsSheet_(ss);
+  const token = Utilities.getUuid();
+  const now = new Date();
+  const expires = new Date(now.getTime() + SESSION_TTL_MS);
+  sh.appendRow([token, staffId, now, expires, now, false]);
+  return token;
+}
+
+// คืน staff object (ถ้า session valid: ไม่ถูก revoke และยังไม่หมดอายุ) หรือ null
+function resolveSession_(ss, token) {
+  if (!token) return null;
+  const sh = sessionsSheet_(ss);
+  const last = sh.getLastRow();
+  if (last < 2) return null;
+  const vals = sh.getRange(2, 1, last - 1, 6).getValues();
+  for (let i = 0; i < vals.length; i++) {
+    const r = vals[i];
+    if (String(r[0]) !== String(token)) continue;
+    const revoked = r[5] === true || r[5] === 'TRUE';
+    const expiresAt = r[3] ? new Date(r[3]).getTime() : 0;
+    if (revoked || !expiresAt || expiresAt < Date.now()) return null;
+    try { sh.getRange(i + 2, 5).setValue(new Date()); } catch (e) {}
+    const staffSh = staffSheet_(ss);
+    const staffRow = findStaffRowById_(staffSh, r[1]);
+    if (staffRow < 0) return null;
+    return staffRowToObj_(staffSh.getRange(staffRow, 1, 1, 11).getValues()[0]);
+  }
+  return null;
+}
+
+function revokeSession_(ss, token) {
+  if (!token) return;
+  const sh = sessionsSheet_(ss);
+  const last = sh.getLastRow();
+  if (last < 2) return;
+  const vals = sh.getRange(2, 1, last - 1, 1).getValues();
+  for (let i = 0; i < vals.length; i++) {
+    if (String(vals[i][0]) === String(token)) {
+      sh.getRange(i + 2, 6).setValue(true);
+      return;
+    }
+  }
+}
+
+// ล็อกอินด้วย LINE — upsert แถวพนักงาน (คนแรกที่เคยล็อกอินในระบบ = owner อัตโนมัติ) + ออก session
+function authLine_(ss, data) {
+  try {
+    if (!LINE_LOGIN_CHANNEL_ID || !LINE_LOGIN_CHANNEL_SECRET) {
+      return ContentService.createTextOutput(JSON.stringify({ ok: false, error: "ยังไม่ได้ตั้งค่า LINE Login ฝั่งเซิร์ฟเวอร์ (Script Properties)" }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    const tokenRes = exchangeLineToken_(data.code, data.redirectUri);
+    const claims = verifyLineIdToken_(tokenRes.id_token);
+    const providerUserId = claims.sub;
+    const lineDisplayName = claims.name || "";
+    const pictureUrl = claims.picture || "";
+
+    const sh = staffSheet_(ss);
+    const rowIdx = findStaffRowIndex_(sh, providerUserId);
+    const now = new Date();
+    let staffObj;
+
+    if (rowIdx < 0) {
+      const isFirstEver = sh.getLastRow() < 2;
+      const staffId = nextStaffId_(sh);
+      const role = isFirstEver ? "owner" : "";
+      const status = isFirstEver ? "active" : "pending";
+      sh.appendRow([staffId, "line", providerUserId, lineDisplayName, lineDisplayName, role, status, pictureUrl, now, now, ""]);
+      staffObj = { staffId: staffId, provider: "line", providerUserId: providerUserId, displayName: lineDisplayName, lineDisplayName: lineDisplayName, role: role, status: status, pictureUrl: pictureUrl, createdAt: now, lastLoginAt: now, note: "" };
+      if (!isFirstEver) {
+        try {
+          enqueueNoti_({ channel: 'secondary', priority: 5, type: 'text', target: 'user',
+            payload: { text: "👤 มีคนขอเข้าใช้งานระบบใหม่: " + lineDisplayName + "\nเข้าแท็บ \"พนักงาน\" เพื่ออนุมัติ" } });
+        } catch (e) { Logger.log("authLine_ noti error: " + e); }
+      }
+    } else {
+      const vals = sh.getRange(rowIdx, 1, 1, 11).getValues()[0];
+      staffObj = staffRowToObj_(vals);
+      sh.getRange(rowIdx, 10).setValue(now);              // lastLoginAt
+      sh.getRange(rowIdx, 5).setValue(lineDisplayName);   // lineDisplayName สดจาก LINE ทุกครั้ง
+      if (!staffObj.pictureUrl && pictureUrl) sh.getRange(rowIdx, 8).setValue(pictureUrl);
+      staffObj.lastLoginAt = now;
+      staffObj.lineDisplayName = lineDisplayName;
+    }
+
+    const sessionToken = createSession_(ss, staffObj.staffId);
+    return ContentService.createTextOutput(JSON.stringify({
+      ok: true, sessionToken: sessionToken,
+      staff: {
+        staffId: staffObj.staffId,
+        name: staffObj.displayName || staffObj.lineDisplayName,
+        role: staffObj.role, status: staffObj.status, pictureUrl: staffObj.pictureUrl,
+      },
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (e) {
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: e.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function meHandler_(ss, data) {
+  const s = resolveSession_(ss, data.sessionToken);
+  if (!s) return ContentService.createTextOutput(JSON.stringify({ ok: false })).setMimeType(ContentService.MimeType.JSON);
+  return ContentService.createTextOutput(JSON.stringify({
+    ok: true, staff: { staffId: s.staffId, name: s.displayName || s.lineDisplayName, role: s.role, status: s.status, pictureUrl: s.pictureUrl },
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function logoutHandler_(ss, data) {
+  revokeSession_(ss, data.sessionToken);
+  return ContentService.createTextOutput(JSON.stringify({ ok: true })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function listStaffHandler_(ss, data) {
+  const s = resolveSession_(ss, data.sessionToken);
+  if (!s || s.role !== 'owner' || s.status !== 'active') return unauthorized_();
+  const all = readStaffAll_(ss);
+  return ok(all.map(function (x) {
+    return {
+      staffId: x.staffId, provider: x.provider, displayName: x.displayName, lineDisplayName: x.lineDisplayName,
+      role: x.role, status: x.status, pictureUrl: x.pictureUrl, createdAt: x.createdAt, lastLoginAt: x.lastLoginAt, note: x.note,
+    };
+  }));
+}
+
+function saveStaffHandler_(ss, data, actor) {
+  const s = resolveSession_(ss, data.sessionToken);
+  if (!s || s.role !== 'owner' || s.status !== 'active') return unauthorized_();
+  const sh = staffSheet_(ss);
+  const rowIdx = findStaffRowById_(sh, data.staffId);
+  if (rowIdx < 0) {
+    return ContentService.createTextOutput(JSON.stringify({ success: false, error: "ไม่พบพนักงาน" })).setMimeType(ContentService.MimeType.JSON);
+  }
+  const beforeObj = staffRowToObj_(sh.getRange(rowIdx, 1, 1, 11).getValues()[0]);
+  const VALID_ROLES = ["owner", "saler", "warehouse", "frontstore", "employee"];
+  const VALID_STATUS = ["pending", "active", "disabled"];
+
+  // กันล็อกตัวเองออก: ถ้าเจ้าของถอดสิทธิ์/ระงับตัวเองแล้วไม่เหลือ owner ที่ active เลย
+  // จะไม่มีใครอนุมัติใครได้อีกตลอดไป (ต้องไปแก้ในชีตเองเท่านั้น) → บล็อกไว้ก่อน
+  const losingOwner = (VALID_ROLES.indexOf(data.role) >= 0 && data.role !== 'owner' && beforeObj.role === 'owner')
+                   || (VALID_STATUS.indexOf(data.status) >= 0 && data.status !== 'active' && beforeObj.role === 'owner');
+  if (losingOwner) {
+    const activeOwners = readStaffAll_(ss).filter(function (x) {
+      return x.role === 'owner' && x.status === 'active' && x.staffId !== data.staffId;
+    });
+    if (activeOwners.length === 0) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false, error: "ทำไม่ได้ — นี่คือเจ้าของคนเดียวที่ใช้งานอยู่ ถ้าถอดสิทธิ์จะไม่มีใครอนุมัติพนักงานได้อีก (ตั้งเจ้าของอีกคนก่อน)",
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+  }
+
+  if (typeof data.displayName === 'string' && data.displayName.trim()) sh.getRange(rowIdx, 4).setValue(data.displayName.trim().slice(0, 100));
+  if (VALID_ROLES.indexOf(data.role) >= 0) sh.getRange(rowIdx, 6).setValue(data.role);
+  if (VALID_STATUS.indexOf(data.status) >= 0) sh.getRange(rowIdx, 7).setValue(data.status);
+  if (typeof data.note === 'string') sh.getRange(rowIdx, 11).setValue(data.note.slice(0, 300));
+  // actor มาจาก data.actor ที่ StaffView ไม่ได้ส่ง → ใช้ชื่อจาก session ที่ตรวจแล้วแทน (เชื่อถือได้กว่า)
+  const who = (s.displayName || s.lineDisplayName || actor || "ไม่ระบุ") + " (เจ้าของ)";
+  writeAuditLog_(who, "แก้ไขพนักงาน", data.staffId, auditDetail_({ before: beforeObj, after: data }));
+  return ContentService.createTextOutput(JSON.stringify({ success: true })).setMimeType(ContentService.MimeType.JSON);
 }
 
 // ───────────────────────────────────────────────────────────
@@ -339,6 +612,13 @@ function doPost(e) {
         .createTextOutput(JSON.stringify({ ok: okPin }))
         .setMimeType(ContentService.MimeType.JSON);
     }
+
+    // ─── ล็อกอินพนักงาน (LINE Login) — ไม่แตะข้อมูลสต็อก จึงข้าม invalidateCache_ ด้านล่าง ───
+    if (data.action === 'authLine')  return authLine_(ss, data);
+    if (data.action === 'me')        return meHandler_(ss, data);
+    if (data.action === 'logout')    return logoutHandler_(ss, data);
+    if (data.action === 'listStaff') return listStaffHandler_(ss, data);
+    if (data.action === 'saveStaff') return saveStaffHandler_(ss, data, actor);
 
     // มีการแก้ข้อมูล → ล้าง cache ให้ doGet ครั้งถัดไปคำนวณใหม่ (ข้อมูลไม่ค้าง)
     invalidateCache_(true); // clear payload cache เท่านั้น — ห้าม bump dmj_last_write_ts ก่อน conflict check
@@ -524,6 +804,11 @@ function doGet(e) {
       const okPin = String(e.parameter.pin || '').trim() === expected;
       return ContentService
         .createTextOutput(JSON.stringify({ ok: okPin }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    // Channel ID ของ LINE Login (ไม่ใช่ความลับ — ใช้ประกอบ authorize URL ฝั่ง frontend)
+    if (e && e.parameter && e.parameter.action === 'lineLoginMeta') {
+      return ContentService.createTextOutput(JSON.stringify({ channelId: LINE_LOGIN_CHANNEL_ID || "" }))
         .setMimeType(ContentService.MimeType.JSON);
     }
     // Audit Log endpoint: ดึง 200 แถวล่าสุดจาก Audit Log sheet

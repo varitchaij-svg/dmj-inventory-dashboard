@@ -6332,6 +6332,168 @@ function MtoJobView({ data }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// STAFF VIEW — อนุมัติ/ตั้งชื่อ/ตั้งตำแหน่งพนักงานที่ล็อกอินผ่าน LINE (เจ้าของเท่านั้น)
+// ─────────────────────────────────────────────────────────────────────
+const STAFF_ROLE_OPTIONS = [
+  { value: "owner",      label: "👑 เจ้าของ" },
+  { value: "saler",      label: "💼 Sale" },
+  { value: "warehouse",  label: "🏭 คลังสินค้า" },
+  { value: "frontstore", label: "🌸 หน้าร้าน" },
+];
+const STAFF_STATUS_LABEL = { pending: "รออนุมัติ", active: "ใช้งานอยู่", disabled: "ระงับแล้ว" };
+const STAFF_STATUS_STYLE = {
+  active:   { background: "#e8f5e9", color: "#1b5e20" },
+  pending:  { background: "#fff3e0", color: "#e65100" },
+  disabled: { background: "#ffebee", color: "#b71c1c" },
+};
+
+function StaffCard({ r, savingId, onSave }) {
+  const [name, setName] = uS(r.displayName || r.lineDisplayName || "");
+  const [roleVal, setRoleVal] = uS(r.role || "");
+  const dirty = name !== (r.displayName || r.lineDisplayName || "") || roleVal !== (r.role || "");
+
+  return (
+    <div style={{ background: "var(--paper)", border: "1.5px solid var(--bdr)", borderRadius: 14, padding: 14, marginBottom: 10, display: "flex", gap: 12, alignItems: "flex-start" }}>
+      <div style={{ width: 48, height: 48, borderRadius: 12, overflow: "hidden", flexShrink: 0, background: "#eee", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>
+        {r.pictureUrl ? <img src={r.pictureUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }}/> : "👤"}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>ชื่อ LINE: {r.lineDisplayName || "-"}</div>
+        <input value={name} onChange={e => setName(e.target.value)}
+          placeholder="ตั้งชื่อที่จะขึ้นในระบบ (เช่น ป้าแดง)"
+          style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: "1.5px solid var(--bdr)", fontSize: 13, fontFamily: "inherit", marginBottom: 8, boxSizing: "border-box" }}/>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <select value={roleVal} onChange={e => setRoleVal(e.target.value)}
+            style={{ padding: "6px 10px", borderRadius: 8, border: "1.5px solid var(--bdr)", fontSize: 13, fontFamily: "inherit" }}>
+            <option value="">— เลือกตำแหน่ง —</option>
+            {STAFF_ROLE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+          <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 20, ...(STAFF_STATUS_STYLE[r.status] || {}) }}>
+            {STAFF_STATUS_LABEL[r.status] || r.status}
+          </span>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+          {/* "อนุมัติ" เฉพาะคนใหม่ที่รออนุมัติ — คนที่ถูกระงับใช้ปุ่ม "เปิดใช้งานอีกครั้ง" ด้านล่างแทน
+              (ถ้าเช็ค !== "active" เฉย ๆ คนที่ถูกระงับจะเห็น 2 ปุ่มที่ทำงานเหมือนกัน สับสน) */}
+          {r.status === "pending" && (
+            <button className="btn primary" disabled={savingId === r.staffId || !roleVal}
+              onClick={() => onSave(r.staffId, { displayName: name, role: roleVal, status: "active" })}
+              style={{ fontSize: 12, padding: "6px 12px" }}>✅ อนุมัติ</button>
+          )}
+          {r.status === "active" && (
+            <button className="btn ghost" disabled={savingId === r.staffId}
+              onClick={() => onSave(r.staffId, { status: "disabled" })}
+              style={{ fontSize: 12, padding: "6px 12px" }}>🚫 ระงับ</button>
+          )}
+          {r.status === "disabled" && (
+            <button className="btn primary" disabled={savingId === r.staffId || !roleVal}
+              onClick={() => onSave(r.staffId, { status: "active" })}
+              style={{ fontSize: 12, padding: "6px 12px" }}>♻️ เปิดใช้งานอีกครั้ง</button>
+          )}
+          <button className="btn ghost" disabled={savingId === r.staffId || !dirty}
+            onClick={() => onSave(r.staffId, { displayName: name, role: roleVal })}
+            style={{ fontSize: 12, padding: "6px 12px" }}>💾 บันทึก</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StaffView() {
+  const [rows, setRows] = uS([]);
+  const [loading, setLoading] = uS(true);
+  const [err, setErr] = uS(null);
+  const [savingId, setSavingId] = uS(null);
+
+  const load = async () => {
+    setLoading(true); setErr(null);
+    try {
+      if (typeof SHEET_DEPLOY_URL === 'undefined' || !SHEET_DEPLOY_URL) { setErr("ยังไม่ได้เชื่อมต่อ Sheet"); setLoading(false); return; }
+      const tok = localStorage.getItem("dmj_session_token");
+      const res = await fetch(SHEET_DEPLOY_URL, {
+        method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ action: "listStaff", sessionToken: tok }),
+      });
+      const d = await res.json();
+      if (d && d.success) setRows(Array.isArray(d.data) ? d.data : []);
+      else setErr((d && d.error) || "โหลดไม่สำเร็จ — เข้าสู่ระบบด้วย LINE ก่อน");
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  uE(() => { load(); }, []);
+
+  const save = async (staffId, patch) => {
+    setSavingId(staffId);
+    try {
+      const tok = localStorage.getItem("dmj_session_token");
+      const res = await fetch(SHEET_DEPLOY_URL, {
+        method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(Object.assign({ action: "saveStaff", sessionToken: tok, staffId }, patch)),
+      });
+      const d = await res.json();
+      if (d && d.success) await load();
+      else alert("บันทึกไม่สำเร็จ: " + ((d && d.error) || ""));
+    } catch (e) {
+      alert("บันทึกไม่สำเร็จ: " + e.message);
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const pending = rows.filter(r => r.status === "pending");
+  const others = rows.filter(r => r.status !== "pending");
+
+  return (
+    <div style={{ padding: "16px", maxWidth: 720, margin: "0 auto" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>👥 พนักงาน</div>
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>อนุมัติคนใหม่ที่ล็อกอินผ่าน LINE + ตั้งชื่อ/ตำแหน่ง</div>
+        </div>
+        <button className="btn ghost" onClick={load} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {loading ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }}/> : "🔄"}
+          <span>รีโหลด</span>
+        </button>
+      </div>
+
+      {err && (
+        <div style={{ background: "#fff0f0", border: "1px solid var(--dang)", borderRadius: 8, padding: "10px 14px", color: "var(--dang)", marginBottom: 12, fontSize: 13 }}>
+          ⚠️ {err}
+        </div>
+      )}
+
+      {loading && rows.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 40, color: "var(--muted)" }}>
+          <span className="spin" style={{ width: 24, height: 24, borderWidth: 3, display: "inline-block" }}/>
+          <div style={{ marginTop: 8, fontSize: 13 }}>กำลังโหลด…</div>
+        </div>
+      ) : rows.length === 0 && !err ? (
+        <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>
+          ยังไม่มีใครล็อกอินผ่าน LINE เลย
+        </div>
+      ) : (<>
+        {pending.length > 0 && (
+          <>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#e65100", margin: "4px 0 8px" }}>🔔 รออนุมัติ ({pending.length})</div>
+            {pending.map(r => <StaffCard key={r.staffId} r={r} savingId={savingId} onSave={save}/>)}
+          </>
+        )}
+        {others.length > 0 && (
+          <>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "var(--muted)", margin: "16px 0 8px" }}>ทั้งหมด ({others.length})</div>
+            {others.map(r => <StaffCard key={r.staffId} r={r} savingId={savingId} onSave={save}/>)}
+          </>
+        )}
+      </>)}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // AUDIT LOG VIEW — แสดงประวัติการแก้ข้อมูล (เจ้าของเท่านั้น)
 // ─────────────────────────────────────────────────────────────────────
 function AuditLogView() {
