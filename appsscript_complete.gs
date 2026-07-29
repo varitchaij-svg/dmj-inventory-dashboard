@@ -383,6 +383,14 @@ function revokeSession_(ss, token) {
   }
 }
 
+// รายชื่อ LINE display name ที่ตั้งเป็น owner ให้อัตโนมัติทันทีที่ล็อกอิน (ไม่ต้องรออนุมัติ)
+// ⚠️ จับคู่ด้วย "ชื่อที่โชว์ใน LINE" ซึ่งใครก็เปลี่ยนเองได้ — ยอมรับความเสี่ยงนี้ได้เฉพาะทีมเล็ก
+// ที่ไว้ใจกัน ถ้าอยากปลอดภัยกว่านี้ให้เปลี่ยนไปจับคู่ด้วย providerUserId (คอลัมน์ C ชีต "พนักงาน") แทน
+const AUTO_OWNER_LINE_NAMES = ["tah", "jeed"]; // lower-case ไว้เทียบแบบไม่สนตัวพิมพ์
+function isAutoOwnerLineName_(name) {
+  return AUTO_OWNER_LINE_NAMES.indexOf(String(name || "").trim().toLowerCase()) >= 0;
+}
+
 // ล็อกอินด้วย LINE — upsert แถวพนักงาน (คนแรกที่เคยล็อกอินในระบบ = owner อัตโนมัติ) + ออก session
 function authLine_(ss, data) {
   try {
@@ -401,14 +409,16 @@ function authLine_(ss, data) {
     const now = new Date();
     let staffObj;
 
+    const autoOwner = isAutoOwnerLineName_(lineDisplayName);
+
     if (rowIdx < 0) {
       const isFirstEver = sh.getLastRow() < 2;
       const staffId = nextStaffId_(sh);
-      const role = isFirstEver ? "owner" : "";
-      const status = isFirstEver ? "active" : "pending";
+      const role = (isFirstEver || autoOwner) ? "owner" : "";
+      const status = (isFirstEver || autoOwner) ? "active" : "pending";
       sh.appendRow([staffId, "line", providerUserId, lineDisplayName, lineDisplayName, role, status, pictureUrl, now, now, ""]);
       staffObj = { staffId: staffId, provider: "line", providerUserId: providerUserId, displayName: lineDisplayName, lineDisplayName: lineDisplayName, role: role, status: status, pictureUrl: pictureUrl, createdAt: now, lastLoginAt: now, note: "" };
-      if (!isFirstEver) {
+      if (!isFirstEver && !autoOwner) {
         try {
           enqueueNoti_({ channel: 'secondary', priority: 5, type: 'text', target: 'user',
             payload: { text: "👤 มีคนขอเข้าใช้งานระบบใหม่: " + lineDisplayName + "\nเข้าแท็บ \"พนักงาน\" เพื่ออนุมัติ" } });
@@ -422,6 +432,13 @@ function authLine_(ss, data) {
       if (!staffObj.pictureUrl && pictureUrl) sh.getRange(rowIdx, 8).setValue(pictureUrl);
       staffObj.lastLoginAt = now;
       staffObj.lineDisplayName = lineDisplayName;
+      // ชื่ออยู่ใน whitelist แต่ยังไม่ใช่ owner/active (เช่นเคยตั้ง role อื่นไว้ หรือค้าง pending) → ยกระดับให้ทันที
+      if (autoOwner && (staffObj.role !== "owner" || staffObj.status !== "active")) {
+        sh.getRange(rowIdx, 6).setValue("owner");   // role
+        sh.getRange(rowIdx, 7).setValue("active");  // status
+        staffObj.role = "owner";
+        staffObj.status = "active";
+      }
     }
 
     const sessionToken = createSession_(ss, staffObj.staffId);
