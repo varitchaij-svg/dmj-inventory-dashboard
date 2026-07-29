@@ -141,7 +141,7 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError, lineChannelId }) {
         // ลิงก์จริง — แตะแล้วเบราว์เซอร์ navigate ทันทีในจังหวะเดียวกับการแตะ
         // จึงเปิดแอป LINE ได้ (universal link ต้องการ user gesture ที่ยังไม่ขาดตอน)
         <a href={authBase.url}
-           onClick={() => saveLineHandshake(authBase.state, authBase.redirectUri)}
+           onClick={e => lineLoginNavigate(e, authBase)}
            style={{
              display:"flex", alignItems:"center", justifyContent:"center", gap:10,
              width:"100%", maxWidth:320, padding:"16px 20px", boxSizing:"border-box",
@@ -188,7 +188,7 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError, lineChannelId }) {
           (การสลับไปแอปคือต้นเหตุที่ iOS กลับมาแล้ว "เซสชันไม่ตรงกัน" และ Android เด้ง error) */}
       {authBase ? (
         <a href={authBase.url + "&disable_auto_login=true&disable_ios_auto_login=true"}
-           onClick={() => saveLineHandshake(authBase.state, authBase.redirectUri)}
+           onClick={e => lineLoginNavigate(e, authBase, "&disable_auto_login=true&disable_ios_auto_login=true")}
            style={{
              marginTop:14, display:"block", width:"100%", maxWidth:320, padding:"11px 16px",
              boxSizing:"border-box", textAlign:"center", textDecoration:"none",
@@ -623,6 +623,31 @@ function readLineHandshake() {
     redirectUri: ssGet(LINE_REDIRECT_KEY) || (fresh ? lsGet(LINE_REDIRECT_KEY) : null),
   };
 }
+// เปิดหน้า authorize ของ LINE — ต้องแยกพฤติกรรม 2 แบบ ห้ามใช้แบบเดียวทั้งหมด
+//
+// ① เบราว์เซอร์ปกติ (Safari/Chrome) → ปล่อยให้ <a href> navigate เอง
+//    การแตะลิงก์จริงคือ user gesture เต็ม ๆ เบราว์เซอร์จึงยอมเปิดแอป LINE (universal/app link)
+//
+// ② PWA ที่เปิดจากไอคอนหน้าโฮม (standalone) → ต้อง preventDefault แล้ว set location เอง
+//    บน iOS การ "แตะลิงก์ข้าม origin" ในโหมด standalone จะเด้งออกไปเปิด Safari
+//    → ล็อกอินสำเร็จใน Safari แต่ token ไปอยู่ใน storage ของ Safari ซึ่งแยกจาก PWA คนละใบ
+//    → กลับมาเปิดไอคอนหน้าโฮมก็ยังไม่ได้ล็อกอิน (ตรงกับอาการที่เจอ)
+//    การ assign window.location.href แทน จะ navigate อยู่ใน webview ของ PWA เอง
+//    ทำใน onClick จึงยังอยู่ในจังหวะ gesture เดียวกัน ไม่เสียสิทธิ์เปิดแอป LINE
+function isStandaloneApp() {
+  try {
+    return !!navigator.standalone ||
+           !!(window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+  } catch (e) { return false; }
+}
+function lineLoginNavigate(e, authBase, extra) {
+  saveLineHandshake(authBase.state, authBase.redirectUri);
+  if (isStandaloneApp()) {
+    e.preventDefault();
+    window.location.href = authBase.url + (extra || "");
+  }
+}
+
 function clearLineHandshake() {
   ssDel(LINE_STATE_KEY); ssDel(LINE_REDIRECT_KEY);
   lsDel(LINE_STATE_KEY); lsDel(LINE_REDIRECT_KEY); lsDel(LINE_STATE_AT_KEY);

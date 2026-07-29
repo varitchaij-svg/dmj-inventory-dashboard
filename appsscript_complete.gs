@@ -456,6 +456,57 @@ function logoutHandler_(ss, data) {
 // ใช้ตัวนี้แทนการเทียบ role === 'owner' ตรง ๆ ทุกจุดที่เป็นการตรวจสิทธิ์
 function isAdminRole_(role) { return role === 'owner' || role === 'dev'; }
 
+// ══════════════════════════════════════════════════════════════════════════
+//  เครื่องมือตั้งตำแหน่งจาก GAS editor (ไม่ต้องผ่านหน้าเว็บ)
+//  ใช้ตอนที่ยัง "ไม่มีใครเป็น owner ที่ active" หรือคนที่จะตั้งยังเข้าเว็บไม่ได้
+//  (ติดหน้า "รออนุมัติ") ซึ่งเป็นไก่กับไข่ — ต้องมี owner ถึงจะอนุมัติใครได้
+//  ⚠️ ชื่อฟังก์ชันห้ามลงท้ายด้วย _ ไม่งั้นจะไม่โผล่ใน dropdown ของ GAS editor
+// ══════════════════════════════════════════════════════════════════════════
+
+// ① รันตัวนี้ก่อน เพื่อดูรายชื่อ + staffId ทั้งหมด (ดูผลที่เมนู "บันทึกการดำเนินการ")
+function listStaffQuick() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const all = readStaffAll_(ss);
+  if (!all.length) { Logger.log("ยังไม่มีพนักงานในระบบ — ให้ล็อกอินผ่านเว็บ 1 ครั้งก่อน"); return; }
+  all.forEach(function (s) {
+    Logger.log("%s | ชื่อในระบบ: %s | ชื่อ LINE: %s | ตำแหน่ง: %s | สถานะ: %s",
+      s.staffId, s.displayName || "-", s.lineDisplayName || "-", s.role || "(ยังไม่ตั้ง)", s.status);
+  });
+}
+
+// ② แก้ค่าใน 2 บรรทัดล่างให้ตรงกับคนที่ต้องการ แล้วกดรันตัวนี้
+//    TARGET ใส่ staffId (เช่น "ST0001") หรือชื่อ LINE ก็ได้ · ROLE = dev/owner/saler/warehouse/frontstore/employee
+function grantRoleQuick() {
+  const TARGET = "ST0001";   // ← เปลี่ยนเป็น staffId หรือชื่อ LINE ของคนที่จะตั้ง
+  const ROLE   = "dev";      // ← ตำแหน่งที่ต้องการ
+  Logger.log(setStaffRoleDirect_(TARGET, ROLE));
+}
+
+// ตั้งตำแหน่ง + เปิดใช้งานให้เลย (ข้ามขั้นรออนุมัติ) — ใช้ได้จาก GAS editor เท่านั้น
+// ไม่มี endpoint ไหนเรียกถึง จึงไม่เปิดช่องให้ยกระดับสิทธิ์จากภายนอก
+function setStaffRoleDirect_(staffIdOrLineName, role) {
+  const VALID = ["owner", "dev", "saler", "warehouse", "frontstore", "employee"];
+  if (VALID.indexOf(role) < 0) return "❌ ตำแหน่งไม่ถูกต้อง: " + role + " (ต้องเป็น " + VALID.join("/") + ")";
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const sh = staffSheet_(ss);
+  const all = readStaffAll_(ss);
+  const key = String(staffIdOrLineName || "").trim().toLowerCase();
+  let hit = -1;
+  for (let i = 0; i < all.length; i++) {
+    const s = all[i];
+    if (String(s.staffId).toLowerCase() === key ||
+        String(s.lineDisplayName || "").trim().toLowerCase() === key ||
+        String(s.displayName || "").trim().toLowerCase() === key) { hit = i; break; }
+  }
+  if (hit < 0) return "❌ ไม่พบพนักงานชื่อ/รหัส \"" + staffIdOrLineName + "\" — รัน listStaffQuick() ดูรายชื่อก่อน";
+  const rowIdx = hit + 2;                     // +1 ข้าม header, +1 เพราะ getRange เป็น 1-indexed
+  sh.getRange(rowIdx, 6).setValue(role);      // col F = role
+  sh.getRange(rowIdx, 7).setValue("active");  // col G = status
+  try { writeAuditLog_("GAS editor", "ตั้งตำแหน่งพนักงาน (จาก script)", all[hit].staffId, role); } catch (e) {}
+  return "✅ ตั้ง " + (all[hit].displayName || all[hit].lineDisplayName || all[hit].staffId) +
+         " เป็น \"" + role + "\" + เปิดใช้งานแล้ว — กลับไปที่เว็บแล้วกดรีเฟรช/เข้าใหม่";
+}
+
 function listStaffHandler_(ss, data) {
   const s = resolveSession_(ss, data.sessionToken);
   if (!s || !isAdminRole_(s.role) || s.status !== 'active') return unauthorized_();
