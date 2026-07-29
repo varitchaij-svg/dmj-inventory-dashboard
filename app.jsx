@@ -461,6 +461,16 @@ const ROLE_TH_PLAIN = { owner: "เจ้าของ", saler: "Sale", warehouse
 const SESSION_TOKEN_KEY = "dmj_session_token";
 const LINE_STATE_KEY = "dmj_line_state";
 
+// redirect_uri ต้อง "ตรงเป๊ะ" ทั้งตอนขอ authorize และตอนแลก token ไม่งั้น LINE ปฏิเสธ
+// → คำนวณที่เดียวเสมอ ห้าม inline ซ้ำ · normalize ไฟล์ .html เป็น "/" ด้วย เพราะ _redirects
+// ทำให้ "/" กับ "/Doomuenjing%20Dashboard.html" เป็นหน้าเดียวกัน แต่ LINE ลงทะเบียนไว้แค่ "/"
+function lineRedirectUri() {
+  let path = window.location.pathname || "/";
+  if (/\.html?$/i.test(path)) path = path.replace(/[^/]+\.html?$/i, "");
+  if (!path.endsWith("/")) path += "/";
+  return window.location.origin + path;
+}
+
 // POST action ไปยัง GAS (ใช้กับ authLine/me/logout/listStaff/saveStaff) — SHEET_DEPLOY_URL มี ?token= ติดอยู่แล้ว
 async function postAuthAction(body) {
   const base = (typeof SHEET_DEPLOY_URL !== 'undefined') ? SHEET_DEPLOY_URL
@@ -478,7 +488,16 @@ function App() {
   // ── ALL hooks first (no early returns before this block) ──
   const [role, setRole] = usS(() => sessionStorage.getItem("dmj_role") || null);
   const [staff, setStaff] = usS(null);       // {staffId,name,role,status,pictureUrl} — เมื่อล็อกอินผ่าน LINE
-  const [authPhase, setAuthPhase] = usS("checking"); // checking | needLogin | pending | disabled | ready
+  // checking | needLogin | pending | disabled | ready
+  // เริ่มที่ "ready" ทันทีถ้ามี role ค้างอยู่แล้ว (optimistic) — พนักงานเปิดแอปแล้วใช้งานได้เลย
+  // ไม่ต้องรอ GAS ตอบ (cold start หลายวินาทีบนเน็ตมือถือ) · bootstrap ยังยิง me ตามไปเงียบ ๆ
+  // แล้วค่อยเด้งเป็น pending/disabled/needLogin ถ้าสิทธิ์เปลี่ยน · ยกเว้นตอนมี ?code= (กำลังล็อกอิน) ต้องรอจริง
+  const [authPhase, setAuthPhase] = usS(() => {
+    try {
+      if (new URLSearchParams(window.location.search).get("code")) return "checking";
+      return sessionStorage.getItem("dmj_role") ? "ready" : "checking";
+    } catch (e) { return "checking"; }
+  });
   const [lineError, setLineError] = usS(null);
   const [authRefreshing, setAuthRefreshing] = usS(false);
   const [data, setData] = usS(null);
@@ -725,11 +744,13 @@ function App() {
       sessionStorage.setItem("dmj_role", s.role);
       setRole(s.role);
       setAuthPhase("ready");
-    } else if (s.status === "pending" || (s.status === "active" && !s.role)) {
-      setAuthPhase("pending");
-    } else {
-      setAuthPhase("disabled");
+      return;
     }
+    // ยังไม่อนุมัติ/ถูกระงับ → ต้องล้าง role ที่ค้างอยู่ด้วย ไม่งั้นพอ reload ค่า optimistic
+    // จะหยิบ role เก่า (เช่นเคยเข้าด้วยรหัสสำรอง) มาโชว์ UI ผิดสิทธิ์ชั่วครู่ก่อน me จะตอบกลับ
+    sessionStorage.removeItem("dmj_role");
+    setRole(null);
+    setAuthPhase((s.status === "pending" || (s.status === "active" && !s.role)) ? "pending" : "disabled");
   }, []);
 
   // เช็คสถานะ session ปัจจุบัน (ใช้ทั้งตอนเปิดแอปครั้งแรก และปุ่ม "เช็คอีกครั้ง" ในหน้ารออนุมัติ)
@@ -761,7 +782,7 @@ function App() {
       if (!d || !d.channelId) { setLineError("ยังไม่ได้ตั้งค่า LINE Login — ติดต่อเจ้าของร้าน"); return; }
       const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
       sessionStorage.setItem(LINE_STATE_KEY, state);
-      const redirectUri = window.location.origin + window.location.pathname;
+      const redirectUri = lineRedirectUri();
       const authUrl = "https://access.line.me/oauth2/v2.1/authorize"
         + "?response_type=code"
         + "&client_id=" + encodeURIComponent(d.channelId)
@@ -802,7 +823,7 @@ function App() {
           return;
         }
         try {
-          const redirectUri = window.location.origin + window.location.pathname;
+          const redirectUri = lineRedirectUri();
           const d = await postAuthAction({ action: "authLine", code, redirectUri });
           if (cancelled) return;
           if (d && d.ok) {

@@ -6373,7 +6373,9 @@ function StaffCard({ r, savingId, onSave }) {
           </span>
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-          {r.status !== "active" && (
+          {/* "อนุมัติ" เฉพาะคนใหม่ที่รออนุมัติ — คนที่ถูกระงับใช้ปุ่ม "เปิดใช้งานอีกครั้ง" ด้านล่างแทน
+              (ถ้าเช็ค !== "active" เฉย ๆ คนที่ถูกระงับจะเห็น 2 ปุ่มที่ทำงานเหมือนกัน สับสน) */}
+          {r.status === "pending" && (
             <button className="btn primary" disabled={savingId === r.staffId || !roleVal}
               onClick={() => onSave(r.staffId, { displayName: name, role: roleVal, status: "active" })}
               style={{ fontSize: 12, padding: "6px 12px" }}>✅ อนุมัติ</button>

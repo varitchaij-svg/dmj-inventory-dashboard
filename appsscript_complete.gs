@@ -469,11 +469,29 @@ function saveStaffHandler_(ss, data, actor) {
   const beforeObj = staffRowToObj_(sh.getRange(rowIdx, 1, 1, 11).getValues()[0]);
   const VALID_ROLES = ["owner", "saler", "warehouse", "frontstore", "employee"];
   const VALID_STATUS = ["pending", "active", "disabled"];
+
+  // กันล็อกตัวเองออก: ถ้าเจ้าของถอดสิทธิ์/ระงับตัวเองแล้วไม่เหลือ owner ที่ active เลย
+  // จะไม่มีใครอนุมัติใครได้อีกตลอดไป (ต้องไปแก้ในชีตเองเท่านั้น) → บล็อกไว้ก่อน
+  const losingOwner = (VALID_ROLES.indexOf(data.role) >= 0 && data.role !== 'owner' && beforeObj.role === 'owner')
+                   || (VALID_STATUS.indexOf(data.status) >= 0 && data.status !== 'active' && beforeObj.role === 'owner');
+  if (losingOwner) {
+    const activeOwners = readStaffAll_(ss).filter(function (x) {
+      return x.role === 'owner' && x.status === 'active' && x.staffId !== data.staffId;
+    });
+    if (activeOwners.length === 0) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false, error: "ทำไม่ได้ — นี่คือเจ้าของคนเดียวที่ใช้งานอยู่ ถ้าถอดสิทธิ์จะไม่มีใครอนุมัติพนักงานได้อีก (ตั้งเจ้าของอีกคนก่อน)",
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+  }
+
   if (typeof data.displayName === 'string' && data.displayName.trim()) sh.getRange(rowIdx, 4).setValue(data.displayName.trim().slice(0, 100));
   if (VALID_ROLES.indexOf(data.role) >= 0) sh.getRange(rowIdx, 6).setValue(data.role);
   if (VALID_STATUS.indexOf(data.status) >= 0) sh.getRange(rowIdx, 7).setValue(data.status);
   if (typeof data.note === 'string') sh.getRange(rowIdx, 11).setValue(data.note.slice(0, 300));
-  writeAuditLog_(actor, "แก้ไขพนักงาน", data.staffId, auditDetail_({ before: beforeObj, after: data }));
+  // actor มาจาก data.actor ที่ StaffView ไม่ได้ส่ง → ใช้ชื่อจาก session ที่ตรวจแล้วแทน (เชื่อถือได้กว่า)
+  const who = (s.displayName || s.lineDisplayName || actor || "ไม่ระบุ") + " (เจ้าของ)";
+  writeAuditLog_(who, "แก้ไขพนักงาน", data.staffId, auditDetail_({ before: beforeObj, after: data }));
   return ContentService.createTextOutput(JSON.stringify({ success: true })).setMimeType(ContentService.MimeType.JSON);
 }
 
