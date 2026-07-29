@@ -242,6 +242,14 @@ const TRACKED = [
     `const m = /^\\d{4}-\\d{2}$/.test(monthStr) ? monthStr : curMonth;`,
     `const daysInMonth = new Date(Date.UTC(y, mo, 0)).getUTCDate();`,
   ]},
+  // ── เฟส 4 ล็อกอิน: บังคับสิทธิ์ฝั่ง server ──────────────────────────────
+  // helpers.js รับ requireLoginOn เป็นพารามิเตอร์แทน PropertiesService (ไม่มีใน Node)
+  { names: ['canDo'], sourceFile: 'appsscript_complete.gs', landmarks: [
+    `if (sess && sess.status === 'active') return allowedRoles.indexOf(sess.role) >= 0;`,
+  ]},
+  { names: ['canDoStrict'], sourceFile: 'appsscript_complete.gs', landmarks: [
+    `return !!(sess && sess.status === 'active' && allowedRoles.indexOf(sess.role) >= 0);`,
+  ]},
   { names: ['attSummarize'], sourceFile: 'appsscript_complete.gs', landmarks: [
     `let breakMin = 0, openBreak = null, forgotBreakEnd = false;`,
     `else if (e.type === "breakEnd" && openBreak) { breakMin += Math.round((e.serverTs - openBreak.serverTs) / 60000); openBreak = null; }`,

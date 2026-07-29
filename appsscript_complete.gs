@@ -550,6 +550,35 @@ function claimLoginHandoffHandler_(data) {
 function isAdminRole_(role) { return role === 'owner' || role === 'dev'; }
 
 // ══════════════════════════════════════════════════════════════════════════
+// เฟส 4 ล็อกอิน: บังคับสิทธิ์ฝั่ง server สำหรับ action ที่กระทบเงิน/สต็อกจริง
+// (ตัด/อนุมัติออเดอร์ขาย ZORT, ปรับสต็อกเป็น 0, ลบ order, ออกใบกำกับภาษี) — ป้องกันคนเปิด
+// DevTools ยิง action ตรงข้าม UI (UI ซ่อนปุ่มไว้ แต่ endpoint เดิมไม่เคยเช็คสิทธิ์อะไรเลย)
+//
+// scope ของเฟสนี้: ไม่ใช่ "owner อย่างเดียวทุก action" ตามที่ร่างแผนไว้ตอนแรก — ตรวจกับ UI จริง
+// แล้วพบว่าหลาย action ให้ role อื่นใช้ได้ตามหน้าที่ (เช่น saler อนุมัติ/ปิดใบเสนอราคาของตัวเองได้,
+// warehouse/employee ยกเลิก-ปิดออเดอร์ได้) จึง whitelist ตาม role ที่ UI อนุญาตจริงต่อ action ไป
+// ส่วน action ที่ทุก role เข้าถึง tab ได้อยู่แล้ว (เช่น saveThresholds) ไม่ต้อง gate เพิ่ม — gate แล้ว
+// ก็ไม่ตัดสิทธิ์ใครออกจริง แค่เพิ่มความซับซ้อนเปล่าๆ
+//
+// role ที่เชื่อได้ต้องมาจาก session (server-verified) เท่านั้น — ไม่มี session (เครื่องเก่ายังไม่ได้
+// ย้ายมาใช้ LINE Login) → migration-safe คือ "ปล่อยผ่านเหมือนเดิม" (พฤติกรรมเดิมก่อนเฟสนี้ทั้งหมด)
+// จนกว่าเจ้าของจะตั้ง Script Property REQUIRE_LOGIN='true' เอง (ดู PLAN-EMPLOYEE-LOGIN.md ข้อ 5)
+function requireLoginOn_() {
+  return PropertiesService.getScriptProperties().getProperty('REQUIRE_LOGIN') === 'true';
+}
+function canDo_(sess, allowedRoles) {
+  if (sess && sess.status === 'active') return allowedRoles.indexOf(sess.role) >= 0;
+  return !requireLoginOn_();
+}
+// เข้มกว่า canDo_ — ไม่มี migration fallback (ไม่มี session = ปฏิเสธเสมอ ไม่ปล่อยผ่าน)
+// ใช้เฉพาะ action ที่ "ไม่มี legitimate caller จาก UI เลย" (resetNegativeStock, zeroStock) —
+// เดิมสอง action นี้ deny-by-default อยู่แล้ว (ไม่มีใครส่ง role/session มา) ถ้าใช้ canDo_ ปกติ
+// ตอน REQUIRE_LOGIN ยังปิดอยู่จะกลายเป็น "อนุญาตทุกคนที่ไม่มี session" ซึ่งเปิดช่องโหว่ใหม่แทน
+function canDoStrict_(sess, allowedRoles) {
+  return !!(sess && sess.status === 'active' && allowedRoles.indexOf(sess.role) >= 0);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 //  เครื่องมือตั้งตำแหน่งจาก GAS editor (ไม่ต้องผ่านหน้าเว็บ)
 //  ใช้ตอนที่ยัง "ไม่มีใครเป็น owner ที่ active" หรือคนที่จะตั้งยังเข้าเว็บไม่ได้
 //  (ติดหน้า "รออนุมัติ") ซึ่งเป็นไก่กับไข่ — ต้องมี owner ถึงจะอนุมัติใครได้
@@ -1454,8 +1483,15 @@ function doPost(e) {
     const _tok = (e && e.parameter && e.parameter.token) || data.token;
     if (!checkToken_(_tok)) return unauthorized_();
 
-    // ── ผู้ใช้ที่ส่ง action มา (frontend ส่งใน body.actor) ──
-    var actor = data.actor || "ไม่ระบุ";
+    // ── ผู้ใช้ที่ส่ง action มา ──
+    // เฟส 4 ล็อกอิน: ถ้ามี session ที่ valid ให้ actor เป็นชื่อจริงจาก session เสมอ (server-verified)
+    // ไม่เชื่อ data.actor ที่ client ส่งมาอีกต่อไปในกรณีนี้ — เดิม client ส่ง string หน้าตาเดียวกัน
+    // (window._currentUser = "ชื่อ (ตำแหน่ง)") อยู่แล้ว จึงไม่กระทบของเดิม แค่ตรวจสอบได้จริงแทนการเชื่อเฉยๆ
+    // ไม่มี session (เครื่องเก่า/ยังไม่ได้ล็อกอิน LINE) → fallback ไปใช้ data.actor แบบเดิม (migration-safe)
+    var _authSess = resolveSession_(ss, data.sessionToken);
+    var actor = (_authSess && _authSess.status === 'active')
+      ? (_authSess.displayName || _authSess.lineDisplayName) + " (" + (STAFF_ROLE_TH_[_authSess.role] || _authSess.role) + ")"
+      : (data.actor || "ไม่ระบุ");
 
     // ─── Verify PIN (POST path) ───
     if (data.action === 'verifyPin') {
@@ -1490,17 +1526,22 @@ function doPost(e) {
     }
 
     // ─── Zero Stock: ตั้ง WH qty=0 ใน Sheets + ZORT (สินค้าหมด ไม่ได้จัด) ───
+    // ไม่มี legitimate caller จาก UI ตอนนี้ (ยังไม่ได้ต่อปุ่ม) — ใช้ canDoStrict_ กัน "ไม่มี session
+    // = ผ่าน" ตาม migration fallback ปกติ เพราะไม่มีใครใช้งานจริงอยู่แล้วให้ต้อง backward-compatible
     if (data.zeroStock) {
+      if (!canDoStrict_(_authSess, ['owner', 'dev', 'warehouse'])) return unauthorized_();
       return zeroStockItem_(ss, data.sku, actor);
     }
 
     // ─── Void Quotation: ปิดใบเสนอราคาค้าง (ไม่อนุมัติ) ใน ZORT ───
     if (data.voidQuotation) {
+      if (!canDo_(_authSess, ['owner', 'dev', 'saler'])) return unauthorized_();
       return voidZortQuotation_(data.quotationId, data.quotationNumber, actor);
     }
 
     // ─── Approve Quotation: แปลงใบเสนอราคาเป็นออเดอร์ขายจริงใน ZORT (ตัดสต็อก) แล้วปิดใบเสนอราคาเดิม ───
     if (data.approveQuotation) {
+      if (!canDo_(_authSess, ['owner', 'dev', 'saler'])) return unauthorized_();
       return approveQuotation(ss, data.quotationId, data.quotationNumber, actor);
     }
 
@@ -1584,6 +1625,7 @@ function doPost(e) {
       return lookupSaleBill(data.orderNumber);
     }
     if (data.issueFullTaxInvoice) {
+      if (!canDo_(_authSess, ['owner', 'dev', 'saler'])) return unauthorized_();
       return issueFullTaxInvoice(data.orderNumber, data.customer || {}, actor, data.orderId);
     }
 
@@ -1599,10 +1641,13 @@ function doPost(e) {
     }
 
     // ─── Order Management ───
+    // ยกเว้น frontstore/saler ให้ตรงกับ UI จริง (OrderItemRow ซ่อนปุ่มยกเลิกสำหรับ 2 role นี้)
     if (data.deleteOrder) {
+      if (!canDo_(_authSess, ['owner', 'dev', 'employee', 'warehouse'])) return unauthorized_();
       return deleteOrderRow(ss, data.orderId, actor);
     }
     if (data.deleteOrders) {
+      if (!canDo_(_authSess, ['owner', 'dev', 'employee', 'warehouse'])) return unauthorized_();
       return deleteOrderRows(ss, data.orderIds || [], actor);
     }
 
@@ -1623,8 +1668,9 @@ function doPost(e) {
     // ─── Reset Negative Stock ───
     // Owner only ตาม ADR-001 — ไม่มี legitimate caller อื่นจาก UI (ตรวจยืนยันแล้ว)
     // ปกติเรียกผ่าน resetNegativeStockOnce() ใน GAS editor โดยตรง ไม่ผ่าน path นี้เลย
+    // เดิมเช็ค data.role (ไม่มีใครส่งมา = deny เสมออยู่แล้ว) → ใช้ canDoStrict_ รักษาพฤติกรรม deny-by-default เดิมไว้
     if (data.resetNegativeStock) {
-      if (!isAdminRole_(data.role)) return unauthorized_();
+      if (!canDoStrict_(_authSess, ['owner', 'dev'])) return unauthorized_();
       return resetNegativeStock_(ss, actor);
     }
 

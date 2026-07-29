@@ -253,7 +253,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 594 tests, 18 test files, ทั้งหมด pass
+**มี Vitest test suite แล้ว** — 612 tests, 19 test files, ทั้งหมด pass
 
 ```bash
 npm test              # run tests
@@ -265,7 +265,7 @@ npm run test:coverage # coverage report (tests/helpers.js)
            detectColor, COLOR_MAP, COLOR_KEYS,
            monthKey_, dayKey_, deductStockCore, netOf, enrichDataCore`
 - `tests/*.test.js` — parsing, color, stock, dates, mto, app, format, schema, conflict, orderstate,
-  sku, billing, bahttext, transfer, cleanup, analytics, **attendance**, drift-guard
+  sku, billing, bahttext, transfer, cleanup, analytics, **attendance**, **permissions**, drift-guard
 - **`tests/drift-guard.test.js`** — กัน `helpers.js` drift จากต้นทาง: ทุก export ต้องมี entry ใน
   `TRACKED` (พร้อม landmark ที่ต้องเจอทั้งในไฟล์ต้นทางและ helpers.js) หรืออยู่ใน
   `BEHAVIORAL_MODELS` · **เพิ่ม export ใหม่ใน helpers.js แล้วไม่เพิ่ม landmark = test แดงทันที**
@@ -325,10 +325,23 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
 
 **กฎที่ต้องรู้เวลาแก้ระบบนี้**:
 - ทุก action ของลงเวลา/staff ตรวจสิทธิ์ด้วย **`resolveSession_(ss, data.sessionToken)`**
-  (server-verified) — ต่างจาก action สต็อกเดิมที่ยังเชื่อ `data.role`/`data.actor` จาก client
-  · เฟส 4 (`canDo_` + `REQUIRE_LOGIN`) **ยังไม่ทำ** → ตัวเลข "งานรายคน" จาก Audit Log ยังปลอมได้
-- **`actor` เป็นชื่อจริง** ผ่าน `window._currentUser = "ชื่อ (ตำแหน่ง)"` ที่ตั้งใน
-  `applyStaffSession()` (app.jsx) ตอน login/resume — ไม่ต้องแก้จุดเรียก API ทีละจุด
+  (server-verified)
+- **เฟส 4 ✅**: `canDo_(sess, allowedRoles)` / `canDoStrict_(sess, allowedRoles)` (appsscript_complete.gs,
+  ใกล้ `isAdminRole_`) บังคับสิทธิ์ฝั่ง server สำหรับ action ที่กระทบเงิน/สต็อกจริง
+  (`zeroStock`→owner/dev/warehouse, `voidQuotation`/`approveQuotation`/`issueFullTaxInvoice`→owner/dev/saler,
+  `deleteOrder`/`deleteOrders`→owner/dev/employee/warehouse, `resetNegativeStock`→owner/dev) —
+  **whitelist ตรวจกับ UI จริงแล้ว ไม่ใช่ "owner อย่างเดียว"** หลาย action ให้ role อื่นใช้ได้ตามหน้าที่
+  (ดู `PLAN-EMPLOYEE-LOGIN.md` ข้อ 5.1 ก่อนแก้ role list พวกนี้ — เคยพังเพราะเดาจากแผนแทนที่จะเช็ค UI)
+  · `canDo_` = migration-safe (ไม่มี session → ปล่อยผ่านเหมือนเดิม) ใช้กับ action ที่มี caller จาก UI จริง
+  · `canDoStrict_` = ไม่มี session → ปฏิเสธเสมอ ใช้เฉพาะ action ที่ไม่มี caller จาก UI เลย (deny-by-default
+  อยู่แล้ว) **ห้ามสลับสองตัวนี้กัน** — ใช้ `canDo_` กับ action ที่ควร deny-by-default จะเปิดช่องโหว่แทน
+  · ทุกจุดที่เรียก action พวกนี้จาก frontend **ต้องส่ง** `sessionToken: localStorage.getItem("dmj_session_token")`
+  ไปด้วย ไม่งั้น `canDo_`/`canDoStrict_` resolve session ไม่ได้ (fallback behavior แล้วแต่ตัว)
+  · `REQUIRE_LOGIN='true'` (บังคับทุก action ต้องมี session) **ยังไม่เปิด** — เปิดได้เมื่อพนักงานทุกคน
+  ย้ายมาใช้ LINE Login ครบ (เช็คจาก `lastLoginAt` ในชีต `พนักงาน`)
+- **`actor` เป็นชื่อจริงจาก session เสมอ** (server-verified ที่ต้น `doPost`) ไม่มี session → fallback
+  `data.actor` ที่ client ส่ง (`window._currentUser = "ชื่อ (ตำแหน่ง)"` ตั้งใน `applyStaffSession()`
+  (app.jsx) ตอน login/resume — ไม่ต้องแก้จุดเรียก API ทีละจุด)
 - **วันที่/เวลาในชีตลงเวลาเขียนเป็น text** (`setNumberFormat("@")`) — บทเรียนข้อ 2
   · ทุกฟังก์ชันเวลาใช้ `Asia/Bangkok` เสมอ (`attDateKey_`/`attDowBkk_`/`attMinOfDay_`)
   **ห้ามใช้ `toISOString()` ฝั่ง frontend** จะเพี้ยนไป 1 วัน → ใช้ `attTodayKey()`

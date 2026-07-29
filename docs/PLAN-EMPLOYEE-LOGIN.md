@@ -205,10 +205,57 @@ if (sess && !canDo_(sess.role, data.action)) return jsonErr_("ไม่มีส
 |---|---|---|---|
 | **0** | เจ้าของสร้าง LINE Login channel + ใส่ Script Properties 2 ตัว | พร้อมต่อ | ✅ เสร็จ |
 | **1-3** | ชีต `พนักงาน`+`เซสชัน` · endpoint ทั้งหมด · LoginScreen ปุ่ม LINE · หน้า "รออนุมัติ"/"ถูกระงับ" · แท็บ `staff` (owner) อนุมัติ/ตั้งชื่อ/ตำแหน่ง/ระงับ · `actor` เป็นชื่อคนจริงทุก action | ล็อกอิน+อนุมัติ+audit ใช้ชื่อจริงได้จริง | ✅ เสร็จ — รอเจ้าของทดสอบบนมือถือ |
-| **4** | `canDo_` บังคับสิทธิ์ฝั่ง server (ตรวจ `sessionToken` แทนเชื่อ `data.actor`/`role` ที่ client ส่งมาตรง ๆ) + เปิด `REQUIRE_LOGIN='true'` | ปิดช่องโกงสิทธิ์จาก DevTools |
+| **4** | `canDo_`/`canDoStrict_` บังคับสิทธิ์ฝั่ง server (ตรวจ `sessionToken` แทนเชื่อ `data.actor`/`role` ที่ client ส่งมาตรง ๆ) | ปิดช่องโกงสิทธิ์จาก DevTools | ✅ เสร็จ 2026-07-29 (ดูข้อ 5.1) — **`REQUIRE_LOGIN='true'` ยังไม่เปิด** ตามเงื่อนไขเดิม |
 | **5** *(ทางเลือก)* | Google Sign-In เป็นปุ่มที่ 2 · แจ้งเตือน LINE รายบุคคล · สรุปงานรายคน (นับกี่ล็อค/โอนกี่ครั้ง) | ต่อยอด |
 
-เฟส 4 ห้ามเปิดจนกว่าพนักงานทุกคนจะย้ายมาใช้ LINE Login ครบ (ดูจาก `lastLoginAt` ในชีต `พนักงาน`)
+**`REQUIRE_LOGIN='true'` ห้ามเปิดจนกว่าพนักงานทุกคนจะย้ายมาใช้ LINE Login ครบ** (ดูจาก `lastLoginAt`
+ในชีต `พนักงาน`) — ข้อจำกัดนี้ยังใช้อยู่แม้เฟส 4 จะ implement เสร็จแล้ว เพราะ toggle ยังไม่ได้เปิด
+
+### 5.1 บันทึกการ implement เฟส 4 (2026-07-29)
+
+**เบี่ยงจากที่ร่างแผนไว้ตอนแรก**: แผนเดิมเขียนไว้ว่า action ที่ต้องเป็น owner เท่านั้นคือ
+`saveThresholds, resetNegativeStock, deleteOrderRows, zeroStockItem, approveQuotation,
+voidZortQuotation, saveStaff, issueFullTaxInvoice` — ตอน implement จริงไล่เช็คกับ UI ทีละ action
+พบว่า**ไม่ตรง**เกือบครึ่ง เพราะ role อื่นมีสิทธิ์ใช้งานจริงตามหน้าที่:
+
+| action | role ที่ gate จริง | เหตุผล (ตรวจจาก UI) |
+|---|---|---|
+| `approveQuotation` / `voidQuotation` | owner, dev, **saler** | `QuoteFollowupView` ไม่กันสิทธิ์ในคอมโพเนนต์ — ใครมีแท็บ `quotefollowup` (owner/dev/saler) ก็อนุมัติ/ปิดใบได้ |
+| `issueFullTaxInvoice` | owner, dev, **saler** | ปุ่ม "ใบกำกับย้อนหลัง" ใน `PosView` ไม่กันสิทธิ์ — ใครมีแท็บ `pos` (owner/dev/saler) ก็ออกได้ |
+| `deleteOrder` / `deleteOrders` | owner, dev, **employee, warehouse** (ไม่ใช่ owner อย่างเดียว) | `OrderItemRow` ซ่อนปุ่มยกเลิกด้วย `role !== "frontstore" && role !== "saler"` ตรง ๆ — ใช้เงื่อนไขเดียวกันฝั่ง server |
+| `resetNegativeStock` | owner, dev | ตรงกับแผนเดิม — ไม่มี UI caller เลย (admin tool) |
+| `zeroStock` | owner, dev, warehouse | **ตรวจแล้วพบว่าเป็น dead code** — `syncZeroStock` ประกาศไว้แต่ไม่มีปุ่มเรียกจริงที่ไหนเลย |
+| `saveThresholds` | **ไม่ gate** | `StockView` ให้ทุก role แก้เกณฑ์แจ้งเตือนได้อยู่แล้ว (ทุก role มีแท็บ `stock`) — gate เพิ่มจะไม่ตัดสิทธิ์ใครออกจริง แค่เพิ่มความซับซ้อนเปล่า ๆ |
+| `saveStaff` | owner, dev | **ทำไปแล้วตั้งแต่เฟส 1-3** (`saveStaffHandler_` เช็ค session อยู่แล้ว) |
+
+**บทเรียน**: ถ้า gate ตาม "owner อย่างเดียว" ตามแผนเดิมโดยไม่เช็ค UI ก่อน จะบล็อก saler ไม่ให้อนุมัติ
+ใบเสนอราคา/ออกใบกำกับของตัวเอง และบล็อก employee/warehouse ไม่ให้ยกเลิก/ปิดออเดอร์ — **พังงานประจำวัน
+จริงทันทีที่ deploy** ทั้งที่ endpoint ไม่เคยเปลี่ยน role การใช้งานเลย บทเรียนนี้คือ: เวลาทำ server-side
+authorization ต้องตรวจ "ใครใช้จริง" จาก UI ก่อนเขียนกฎ ไม่ใช่เดาจาก naming/แผนที่ร่างไว้ล่วงหน้า
+
+**`canDo_` vs `canDoStrict_`** — สองแบบ ต่างกันที่พฤติกรรมตอน "ไม่มี session":
+- `canDo_` (migration-safe): ไม่มี session → **ปล่อยผ่าน** เหมือนพฤติกรรมเดิมก่อนเฟสนี้ทั้งหมด
+  (เครื่องเก่าที่ยังไม่ได้ล็อกอิน LINE ยังทำงานได้ปกติ) ใช้กับ action ที่มี caller จาก UI จริงวันนี้
+- `canDoStrict_`: ไม่มี session → **ปฏิเสธเสมอ** ไม่มี fallback ใช้เฉพาะ `resetNegativeStock`/`zeroStock`
+  ที่เดิม deny-by-default อยู่แล้ว (ไม่มีใครส่ง `data.role` มาเลยจึงเช็คแล้ว false เสมอ) — ถ้าใช้ `canDo_`
+  ธรรมดากับ 2 action นี้ ตอน `REQUIRE_LOGIN` ยังปิดอยู่จะกลายเป็น "อนุญาตทุกคนที่ไม่มี session" ซึ่ง**เปิด
+  ช่องโหว่ใหม่แทนที่จะปิด** (นี่คือบั๊กที่เจอและแก้ระหว่าง implement — ตอนแรกใช้ `canDo_` กับทั้งคู่)
+
+**`actor` เป็นชื่อจริงจาก session เสมอ**: ที่ต้น `doPost` — มี session valid → override `actor` ด้วย
+`sess.displayName + " (" + role + ")"` ไม่เชื่อ `data.actor` จาก client อีกต่อไป (แต่ format เหมือนเดิม
+ทุกตัวอักษรกับที่ client เคยส่ง เพราะ client set `window._currentUser` แบบเดียวกันอยู่แล้ว — ไม่กระทบ
+ของเดิม แค่ตรวจสอบได้จริงแทนการเชื่อเฉย ๆ) ไม่มี session → fallback ไปใช้ `data.actor` แบบเดิม
+
+**Frontend ต้องส่ง `sessionToken` เพิ่ม**: 6 จุดเรียก (`syncZeroStock`, `syncDeleteOrders`,
+`finalizeShip`'s deleteOrder, `syncVoidQuotation`, `syncApproveQuotation`,
+`syncIssueFullTaxInvoice`) เดิม**ไม่เคยส่ง** `sessionToken`/`role` เลย — ถ้า gate ฝั่ง server อย่างเดียว
+โดยไม่แก้ตรงนี้ด้วย ทุก action จะถูกบล็อกทันทีสำหรับทุกคน (ไม่มี session ให้ resolve) เพิ่ม
+`sessionToken: localStorage.getItem("dmj_session_token")` เข้าไปในทุก payload
+
+**บั๊กที่เจอระหว่างทาง**: `syncDeleteOrders` เดิม `return {success:true}` แบบ hardcode ไม่สนผลจริงจาก
+server — ถ้า server ปฏิเสธ (เพราะไม่มีสิทธิ์) caller จะเห็น toast "ยกเลิกจัดของแล้ว" ผิด ๆ ทั้งที่ order
+ยังอยู่ในชีต แก้เป็น forward `res.json()` จริงกลับไปให้ caller (ตัว caller เช็ค `res.success !== false`
+อยู่แล้ว จึงพอแก้จุดเดียว)
 
 ---
 

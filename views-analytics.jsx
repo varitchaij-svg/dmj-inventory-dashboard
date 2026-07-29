@@ -4288,7 +4288,7 @@ async function syncZeroStock(sku) {
     const res = await fetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ zeroStock: true, sku, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "warehouse" }),
+      body: JSON.stringify({ zeroStock: true, sku, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "warehouse", sessionToken: localStorage.getItem("dmj_session_token") }),
     });
     const json = await res.json().catch(() => ({}));
     return json;
@@ -4299,12 +4299,14 @@ async function syncZeroStock(sku) {
 async function syncDeleteOrders(orderIds) {
   if (!SHEET_DEPLOY_URL || !orderIds || !orderIds.length) return { success: false };
   try {
-    await fetch(SHEET_DEPLOY_URL, {
+    const res = await fetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ deleteOrders: true, orderIds }),
+      body: JSON.stringify({ deleteOrders: true, orderIds, sessionToken: localStorage.getItem("dmj_session_token") }),
     });
-    return { success: true };
+    // เดิม return {success:true} เสมอไม่สนผลจริงจาก server — ทำให้ caller เห็น "สำเร็จ" ผิดๆ
+    // แม้ server จะปฏิเสธ (เช่นไม่มีสิทธิ์) ต้อง forward ผลจริงกลับไปให้ caller ตัดสินใจถูก
+    return await res.json().catch(() => ({ success: false, error: "อ่านผลลัพธ์ไม่ได้" }));
   } catch(e) { console.warn("syncDeleteOrders error:", e.message); return { success: false, error: e.message }; }
 }
 
@@ -4691,7 +4693,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
       await fetch(SHEET_DEPLOY_URL, {
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({ deleteOrder: true, orderId: order.id }),
+        body: JSON.stringify({ deleteOrder: true, orderId: order.id, sessionToken: localStorage.getItem("dmj_session_token") }),
       });
     } catch(e) { console.warn("deleteOrder failed:", e.message); }
 
@@ -6794,7 +6796,7 @@ async function syncVoidQuotation(id, number) {
     const res = await fetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ voidQuotation: true, quotationId: id, quotationNumber: number, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "owner" }),
+      body: JSON.stringify({ voidQuotation: true, quotationId: id, quotationNumber: number, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "owner", sessionToken: localStorage.getItem("dmj_session_token") }),
     });
     return await res.json().catch(() => ({ ok: false, error: "อ่านผลลัพธ์ไม่ได้" }));
   } catch (e) { return { ok: false, error: e.message }; }
@@ -6807,7 +6809,7 @@ async function syncApproveQuotation(id, number) {
     const res = await fetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ approveQuotation: true, quotationId: id, quotationNumber: number, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "owner" }),
+      body: JSON.stringify({ approveQuotation: true, quotationId: id, quotationNumber: number, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "owner", sessionToken: localStorage.getItem("dmj_session_token") }),
     });
     return await res.json().catch(() => ({ ok: false, error: "อ่านผลลัพธ์ไม่ได้" }));
   } catch (e) { return { ok: false, error: e.message }; }
@@ -8090,7 +8092,8 @@ async function syncIssueFullTaxInvoice(orderNumber, customer, orderId) {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ issueFullTaxInvoice: true, orderNumber, orderId, customer,
-        actor: window._currentUser || sessionStorage.getItem("dmj_role") || "saler" }),
+        actor: window._currentUser || sessionStorage.getItem("dmj_role") || "saler",
+        sessionToken: localStorage.getItem("dmj_session_token") }),
     });
     return await res.json(); // { success, data:{orderNumber, documentNumber} }
   } catch (err) { return { success: false, error: err.message }; }
