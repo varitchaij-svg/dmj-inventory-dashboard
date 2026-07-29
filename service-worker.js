@@ -55,10 +55,23 @@ self.addEventListener("fetch", (e) => {
     e.respondWith(
       fetch(e.request)
         .then((res) => {
-          if (res.ok) cacheP.then((c) => c.put(e.request, res.clone()));
+          // เก็บ cache ด้วย URL ที่ "ไม่มี query" เสมอ — ไม่งั้นการกลับมาจาก LINE Login
+          // ("/?code=…&state=…") จะสร้าง entry ใหม่ทุกครั้ง และ entry เดิมไม่มีวันถูก match
+          if (res.ok) cacheP.then((c) => c.put(new Request(url.origin + url.pathname), res.clone()));
           return res;
         })
-        .catch(() => cacheP.then((c) => c.match(e.request)))  // offline fallback
+        .catch(() =>
+          // offline/เน็ตกระตุก — ต้องคืน Response เสมอ ห้ามคืน undefined
+          // (respondWith(undefined) = หน้าโหลดไม่ขึ้นเลย — เจอบ่อยบน iOS เน็ตมือถือ
+          //  โดยเฉพาะจังหวะเด้งกลับจาก LINE ที่ URL มี ?code= ติดมา จึง match cache ไม่เจอ)
+          cacheP
+            .then((c) => c.match(e.request, { ignoreSearch: true }))
+            .then((hit) => hit || caches.match("/", { ignoreSearch: true }))
+            .then((hit) => hit || new Response(
+              "<meta charset='utf-8'><p style='font:16px sans-serif;padding:24px'>ต่อเน็ตไม่ได้ กรุณาลองใหม่</p>",
+              { status: 503, headers: { "Content-Type": "text/html;charset=utf-8" } }
+            ))
+        )
     );
     return;
   }

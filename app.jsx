@@ -64,10 +64,28 @@ const ROLE_LABELS = {
 // หน้าล็อกอินหลัก — ปุ่ม LINE ใหญ่ (ไม่ต้องพิมพ์อะไร) + ลิงก์เล็ก "รหัสสำรอง" สำหรับช่วงเปลี่ยนผ่าน
 function LoginScreen({ onLineLogin, onLegacyLogin, lineError }) {
   const [showLegacy, setShowLegacy] = usS(false);
+  const [showDiag, setShowDiag] = usS(false);
 
   if (showLegacy) {
     return <LegacyLoginScreen onLogin={onLegacyLogin} onBack={() => setShowLegacy(false)}/>;
   }
+
+  // ข้อมูลไล่ปัญหาล็อกอิน (โดยเฉพาะ iOS ที่ debug ยากเพราะไม่มี console ให้ดู)
+  // ผู้ใช้กด "ℹ️ ข้อมูลเครื่อง" แล้วส่งภาพหน้าจอมาให้ได้เลย
+  const diag = (() => {
+    const canLs = lsSet("dmj_diag", "1"); if (canLs) lsDel("dmj_diag");
+    const canSs = ssSet("dmj_diag", "1"); if (canSs) ssDel("dmj_diag");
+    return {
+      origin: (typeof window !== "undefined" && window.location.origin) || "?",
+      path: (typeof window !== "undefined" && window.location.pathname) || "?",
+      redirect: lineRedirectUri(),
+      standalone: !!(typeof navigator !== "undefined" && navigator.standalone) ||
+                  !!(typeof window !== "undefined" && window.matchMedia &&
+                     window.matchMedia("(display-mode: standalone)").matches),
+      localStorage: canLs, sessionStorage: canSs,
+      ua: (typeof navigator !== "undefined" ? navigator.userAgent : "").slice(0, 90),
+    };
+  })();
 
   return (
     <div style={{
@@ -86,7 +104,7 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError }) {
         เข้าสู่ระบบเพื่อใช้งาน
       </div>
 
-      <button onClick={onLineLogin} style={{
+      <button onClick={() => onLineLogin(false)} style={{
         display:"flex", alignItems:"center", justifyContent:"center", gap:10,
         width:"100%", maxWidth:320, padding:"16px 20px",
         background:"#06C755", color:"#fff", border:"none", borderRadius:14,
@@ -102,11 +120,54 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError }) {
         </div>
       )}
 
+      {/* เครื่องบล็อกที่เก็บข้อมูล = ล็อกอินค้างแน่นอน — เตือนก่อนกด ไม่ต้องรอให้พัง */}
+      {!diag.localStorage && (
+        <div style={{
+          marginTop:12, maxWidth:320, fontSize:12, lineHeight:1.6, textAlign:"center",
+          color:"var(--warn)", background:"var(--warn-t)", border:"1px solid var(--warn)",
+          borderRadius:10, padding:"10px 12px",
+        }}>
+          ⚠️ เครื่องนี้บล็อกการบันทึกข้อมูลเว็บ — ต้องปิด "โหมดไม่ระบุตัวตน / Private Browsing"
+          แล้วเปิดใหม่ ถึงจะล็อกอินค้างไว้ได้
+        </div>
+      )}
+
+      {/* ทางเลี่ยงสำหรับมือถือ: ล็อกอินในเบราว์เซอร์ ไม่สลับไปแอป LINE
+          (การสลับไปแอปคือต้นเหตุที่ iOS กลับมาแล้ว "เซสชันไม่ตรงกัน" และ Android เด้ง error) */}
+      <button onClick={() => onLineLogin(true)} style={{
+        marginTop:14, width:"100%", maxWidth:320, padding:"11px 16px",
+        background:"var(--paper)", color:"var(--g-700)", border:"1.5px solid var(--g-300)",
+        borderRadius:12, fontSize:13.5, fontWeight:600, cursor:"pointer", fontFamily:"inherit",
+      }}>🌐 เข้าสู่ระบบโดยไม่เปิดแอป LINE</button>
+      <div style={{fontSize:11, color:"var(--light)", marginTop:6, textAlign:"center", maxWidth:300}}>
+        ใช้ปุ่มนี้ถ้ากดปุ่มเขียวแล้วเด้งออกไปแอป LINE แล้วเข้าไม่ได้
+      </div>
+
       <button onClick={() => setShowLegacy(true)} style={{
-        marginTop:24, background:"transparent", border:"none",
+        marginTop:20, background:"transparent", border:"none",
         color:"var(--muted)", fontSize:13, textDecoration:"underline",
         cursor:"pointer", fontFamily:"inherit",
       }}>เข้าด้วยรหัสสำรอง</button>
+
+      <button onClick={() => setShowDiag(v => !v)} style={{
+        marginTop:10, background:"transparent", border:"none",
+        color:"var(--light)", fontSize:11, cursor:"pointer", fontFamily:"inherit",
+      }}>ℹ️ ข้อมูลเครื่อง (ไว้แจ้งปัญหา)</button>
+
+      {showDiag && (
+        <div style={{
+          marginTop:8, maxWidth:340, width:"100%", fontSize:10.5, lineHeight:1.7,
+          color:"var(--muted)", background:"var(--paper)", border:"1px solid var(--bdr)",
+          borderRadius:10, padding:"10px 12px", wordBreak:"break-all",
+        }}>
+          <div>origin: {diag.origin}</div>
+          <div>path: {diag.path}</div>
+          <div>redirect_uri: {diag.redirect}</div>
+          <div>โหมดแอป (standalone): {diag.standalone ? "ใช่ ✅" : "ไม่ (เบราว์เซอร์)"}</div>
+          <div>localStorage: {diag.localStorage ? "ok ✅" : "บล็อก ❌"} · sessionStorage: {diag.sessionStorage ? "ok ✅" : "บล็อก ❌"}</div>
+          <div>UA: {diag.ua}</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -461,6 +522,44 @@ const ROLE_TH_PLAIN = { owner: "เจ้าของ", saler: "Sale", warehouse
 const SESSION_TOKEN_KEY = "dmj_session_token";
 const LINE_STATE_KEY = "dmj_line_state";
 const LINE_REDIRECT_KEY = "dmj_line_redirect_uri";
+const LINE_STATE_AT_KEY = "dmj_line_state_at";
+const LINE_NOAPP_KEY = "dmj_line_noapp";   // "1" = เครื่องนี้ให้ล็อกอินในเบราว์เซอร์ ไม่เด้งเข้าแอป LINE
+const LINE_STATE_TTL_MS = 30 * 60 * 1000; // ครึ่งชั่วโมง — พอสำหรับล็อกอิน LINE ที่ต้องสลับไปแอป LINE
+
+// ── Safe storage ──────────────────────────────────────────────────────────
+// iOS Safari โยน exception ตอนแตะ localStorage/sessionStorage ได้จริงหลายกรณี
+// (Private Browsing, "ป้องกันการติดตาม" บล็อกที่เก็บข้อมูล, พื้นที่เต็ม) — เดิมเรียกตรง ๆ
+// ใน useState initializer ทำให้ App โยน error ตั้งแต่ render แรก = จอขาว เข้าไม่ได้เลย
+// ทุกจุดของ flow ล็อกอินต้องผ่าน 4 ฟังก์ชันนี้เท่านั้น (function declaration → hoist ใช้ได้ทั้งไฟล์)
+function ssGet(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
+function ssSet(k, v) { try { sessionStorage.setItem(k, v); return true; } catch (e) { return false; } }
+function ssDel(k) { try { sessionStorage.removeItem(k); } catch (e) {} }
+function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } }
+function lsDel(k) { try { localStorage.removeItem(k); } catch (e) {} }
+
+// state/redirect_uri ของ LINE Login เก็บใน localStorage (ไม่ใช่ sessionStorage) — สำคัญมากกับ iOS
+// เพราะการล็อกอินบนมือถือเด้งออกไปแอป LINE แล้วกลับมาที่ "แท็บใหม่" หรือคนละ browsing context
+// (โดยเฉพาะตอนเปิดจาก PWA หน้าโฮม) · sessionStorage ผูกกับแท็บ → หายเกลี้ยง → state ไม่ตรง
+// → ค้างที่ "เซสชันล็อกอินไม่ตรงกัน" ตลอด · localStorage แชร์ข้ามแท็บใน browser เดียวกัน
+// มี TTL กันค่าค้างข้ามวัน · เขียนทั้ง 2 ที่ (session ด้วย) เผื่อ localStorage ถูกบล็อก
+function saveLineHandshake(state, redirectUri) {
+  ssSet(LINE_STATE_KEY, state); ssSet(LINE_REDIRECT_KEY, redirectUri);
+  lsSet(LINE_STATE_KEY, state); lsSet(LINE_REDIRECT_KEY, redirectUri);
+  lsSet(LINE_STATE_AT_KEY, String(Date.now()));
+}
+function readLineHandshake() {
+  const at = parseInt(lsGet(LINE_STATE_AT_KEY) || "0", 10);
+  const fresh = at > 0 && (Date.now() - at) < LINE_STATE_TTL_MS;
+  return {
+    state: ssGet(LINE_STATE_KEY) || (fresh ? lsGet(LINE_STATE_KEY) : null),
+    redirectUri: ssGet(LINE_REDIRECT_KEY) || (fresh ? lsGet(LINE_REDIRECT_KEY) : null),
+  };
+}
+function clearLineHandshake() {
+  ssDel(LINE_STATE_KEY); ssDel(LINE_REDIRECT_KEY);
+  lsDel(LINE_STATE_KEY); lsDel(LINE_REDIRECT_KEY); lsDel(LINE_STATE_AT_KEY);
+}
 
 // redirect_uri ต้อง "ตรงเป๊ะ" ทั้งตอนขอ authorize และตอนแลก token ไม่งั้น LINE ปฏิเสธ
 // → คำนวณที่เดียวเสมอ ห้าม inline ซ้ำ · normalize ไฟล์ .html เป็น "/" ด้วย เพราะ _redirects
@@ -488,7 +587,7 @@ async function postAuthAction(body) {
 
 function App() {
   // ── ALL hooks first (no early returns before this block) ──
-  const [role, setRole] = usS(() => sessionStorage.getItem("dmj_role") || null);
+  const [role, setRole] = usS(() => ssGet("dmj_role") || null);
   const [staff, setStaff] = usS(null);       // {staffId,name,role,status,pictureUrl} — เมื่อล็อกอินผ่าน LINE
   // checking | needLogin | pending | disabled | ready
   // เริ่มที่ "ready" ทันทีถ้ามี role ค้างอยู่แล้ว (optimistic) — พนักงานเปิดแอปแล้วใช้งานได้เลย
@@ -497,7 +596,7 @@ function App() {
   const [authPhase, setAuthPhase] = usS(() => {
     try {
       if (new URLSearchParams(window.location.search).get("code")) return "checking";
-      return sessionStorage.getItem("dmj_role") ? "ready" : "checking";
+      return ssGet("dmj_role") ? "ready" : "checking";
     } catch (e) { return "checking"; }
   });
   const [lineError, setLineError] = usS(null);
@@ -505,25 +604,25 @@ function App() {
   const [data, setData] = usS(null);
   const [error, setError] = usS(null);
   const [navLogoOk, setNavLogoOk] = usS(true);
-  const [tab, setTab] = usS(() => sessionStorage.getItem("dmj_role") === "owner" ? "categories" : "overview");
+  const [tab, setTab] = usS(() => ssGet("dmj_role") === "owner" ? "categories" : "overview");
   const [range, setRange] = usS("year");
-  const [source, setSource] = usS(localStorage.getItem(LS_SRC_KEY) || "sheet");
+  const [source, setSource] = usS(lsGet(LS_SRC_KEY) || "sheet");
   const [syncing, setSyncing] = usS(false);
   const [zortSyncing, setZortSyncing] = usS(false);
   const [zortSalesSyncing, setZortSalesSyncing] = usS(false);
   const [retryMsg, setRetryMsg] = usS("");
-  const [lastSync, setLastSync] = usS(localStorage.getItem("dmj_last_sync") || null);
+  const [lastSync, setLastSync] = usS(lsGet("dmj_last_sync") || null);
   const [labelInitItems, setLabelInitItems] = usS(null); // for auto-populate from order summary
   const [isOnline, setIsOnline] = usS(() => navigator.onLine);
   const [lastSaved, setLastSaved] = usS(null); // auto-save timestamp
   const [confirmAction, setConfirmAction] = usS(null); // { type:"clearLocal"|"logout" }
   const [moreOpen, setMoreOpen] = usS(false); // dropdown "เพิ่มเติม" บน navtabs (owner)
   const [ownerGroup, setOwnerGroup] = usS(null); // หมวดหลักที่ owner "แตะดู" อยู่ (null = ตามหมวดของ tab ปัจจุบัน)
-  const [simpleMode, setSimpleMode] = usS(() => localStorage.getItem("dmj_simple_mode") === "1"); // โหมดง่าย: ลดเมนู
+  const [simpleMode, setSimpleMode] = usS(() => lsGet("dmj_simple_mode") === "1"); // โหมดง่าย: ลดเมนู
   const [moreRect, setMoreRect] = usS(null);  // position ของปุ่มเพิ่มเติม (fixed dropdown)
   const moreButtonRef = React.useRef(null);
   const [installPrompt, setInstallPrompt] = usS(null);
-  const [installDismissed, setInstallDismissed] = usS(() => !!sessionStorage.getItem("dmj_install_dismissed"));
+  const [installDismissed, setInstallDismissed] = usS(() => !!ssGet("dmj_install_dismissed"));
   const [activeCheckRequest, setActiveCheckRequest] = usS(null); // check request ที่ fs/wh กำลังทำ
   const [navToast, showNavToast, hideNavToast] = useToast(); // toast สำหรับ nav-level errors
   const tabHistoryRef = React.useRef([]); // track tab navigation for Android back
@@ -743,27 +842,27 @@ function App() {
       window._currentUser = (s.name || "ไม่ระบุ") + " (" + (ROLE_TH_PLAIN[s.role] || s.role || "รอตำแหน่ง") + ")";
     }
     if (s.status === "active" && s.role) {
-      sessionStorage.setItem("dmj_role", s.role);
+      ssSet("dmj_role", s.role);
       setRole(s.role);
       setAuthPhase("ready");
       return;
     }
     // ยังไม่อนุมัติ/ถูกระงับ → ต้องล้าง role ที่ค้างอยู่ด้วย ไม่งั้นพอ reload ค่า optimistic
     // จะหยิบ role เก่า (เช่นเคยเข้าด้วยรหัสสำรอง) มาโชว์ UI ผิดสิทธิ์ชั่วครู่ก่อน me จะตอบกลับ
-    sessionStorage.removeItem("dmj_role");
+    ssDel("dmj_role");
     setRole(null);
     setAuthPhase((s.status === "pending" || (s.status === "active" && !s.role)) ? "pending" : "disabled");
   }, []);
 
   // เช็คสถานะ session ปัจจุบัน (ใช้ทั้งตอนเปิดแอปครั้งแรก และปุ่ม "เช็คอีกครั้ง" ในหน้ารออนุมัติ)
   const checkMe = usC(async () => {
-    const tok = localStorage.getItem(SESSION_TOKEN_KEY);
+    const tok = lsGet(SESSION_TOKEN_KEY);
     if (!tok) { setAuthPhase("needLogin"); return; }
     setAuthRefreshing(true);
     try {
       const d = await postAuthAction({ action: "me", sessionToken: tok });
       if (d && d.ok) applyStaffSession(d.staff);
-      else { localStorage.removeItem(SESSION_TOKEN_KEY); setAuthPhase("needLogin"); }
+      else { lsDel(SESSION_TOKEN_KEY); setAuthPhase("needLogin"); }
     } catch (e) {
       // ต่อเน็ตไม่ได้ — ถ้ามี role ค้างจาก session ก่อนหน้าอยู่แล้ว ให้ทำงานต่อได้ (offline-friendly)
       setAuthPhase(role ? "ready" : "needLogin");
@@ -772,8 +871,11 @@ function App() {
     }
   }, [applyStaffSession, role]);
 
-  const startLineLogin = usC(async () => {
+  // noApp = ล็อกอินในเบราว์เซอร์ล้วน ไม่สลับไปแอป LINE (disable_auto_login)
+  // มือถือที่เคยพังจะจำไว้ใน LINE_NOAPP_KEY แล้วใช้โหมดนี้เองอัตโนมัติในครั้งถัดไป
+  const startLineLogin = usC(async (noApp) => {
     setLineError(null);
+    const useNoApp = (noApp === true) || lsGet(LINE_NOAPP_KEY) === "1";
     try {
       const base = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null;
       if (!base) { setLineError("ยังไม่ได้เชื่อมต่อ Sheet"); return; }
@@ -783,18 +885,20 @@ function App() {
       const d = await res.json();
       if (!d || !d.channelId) { setLineError("ยังไม่ได้ตั้งค่า LINE Login — ติดต่อเจ้าของร้าน"); return; }
       const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
-      sessionStorage.setItem(LINE_STATE_KEY, state);
       const redirectUri = lineRedirectUri();
       // เก็บค่าที่ "ใช้จริง" ไว้ แล้วตอนแลก token ให้อ่านค่านี้แทนการเรียก lineRedirectUri() ซ้ำ —
       // กัน mismatch กรณี deploy คาบเกี่ยว (หน้าที่กด login โหลดจาก build เก่า แต่หน้าที่รับ
       // code กลับมาโหลด build ใหม่ที่คำนวณค่าไม่เหมือนเดิม) LINE เช็คว่า 2 ค่านี้ต้องตรงกันเป๊ะ
-      sessionStorage.setItem(LINE_REDIRECT_KEY, redirectUri);
-      const authUrl = "https://access.line.me/oauth2/v2.1/authorize"
+      saveLineHandshake(state, redirectUri);
+      let authUrl = "https://access.line.me/oauth2/v2.1/authorize"
         + "?response_type=code"
         + "&client_id=" + encodeURIComponent(d.channelId)
         + "&redirect_uri=" + encodeURIComponent(redirectUri)
         + "&state=" + encodeURIComponent(state)
         + "&scope=" + encodeURIComponent("profile openid");
+      // อยู่ในเบราว์เซอร์ตลอด ไม่เด้งเข้าแอป LINE — ตัดต้นเหตุที่ทำให้มือถือเข้าไม่ได้ทั้ง 2 ค่าย
+      // (iOS: กลับมาคนละแท็บ → state หาย · Android: แอป LINE เด้ง "เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ")
+      if (useNoApp) authUrl += "&disable_auto_login=true&disable_ios_auto_login=true";
       window.location.href = authUrl;
     } catch (e) {
       setLineError("เชื่อมต่อ LINE ไม่สำเร็จ ลองใหม่อีกครั้ง");
@@ -802,10 +906,11 @@ function App() {
   }, []);
 
   const logoutClearSession = usC(() => {
-    const tok = localStorage.getItem(SESSION_TOKEN_KEY);
+    const tok = lsGet(SESSION_TOKEN_KEY);
     if (tok) { postAuthAction({ action: "logout", sessionToken: tok }).catch(() => {}); }
-    localStorage.removeItem(SESSION_TOKEN_KEY);
-    sessionStorage.removeItem("dmj_role");
+    lsDel(SESSION_TOKEN_KEY);
+    clearLineHandshake();
+    ssDel("dmj_role");
     if (typeof window !== 'undefined') window._currentUser = null;
     setStaff(null);
     setRole(null);
@@ -822,12 +927,17 @@ function App() {
 
       if (code) {
         window.history.replaceState({}, "", window.location.pathname); // ล้าง query กันรีเฟรชแล้วยิงซ้ำ
-        const savedState = sessionStorage.getItem(LINE_STATE_KEY);
-        const savedRedirectUri = sessionStorage.getItem(LINE_REDIRECT_KEY);
-        sessionStorage.removeItem(LINE_STATE_KEY);
-        sessionStorage.removeItem(LINE_REDIRECT_KEY);
-        if (!stateParam || stateParam !== savedState) {
-          if (!cancelled) { setLineError("เซสชันล็อกอินไม่ตรงกัน กรุณาลองใหม่"); setAuthPhase("needLogin"); }
+        const hs = readLineHandshake();
+        const savedState = hs.state;
+        const savedRedirectUri = hs.redirectUri;
+        clearLineHandshake();
+        // เจอ state ที่เก็บไว้ "แต่ไม่ตรง" = ของปลอม/คนละรอบ → ปฏิเสธ
+        // แต่ถ้า "ไม่มีเลย" (iOS: กลับมาคนละแท็บ/คนละ context, storage โดนบล็อก) ห้ามปฏิเสธ
+        // ไม่งั้นพนักงาน iOS ล็อกอินไม่ได้ตลอดกาล — code จาก LINE ใช้ได้ครั้งเดียวและผูกกับ
+        // redirect_uri + channel secret ฝั่ง server อยู่แล้ว จึงไปต่อได้โดยความเสี่ยงต่ำ
+        if (savedState && stateParam !== savedState) {
+          lsSet(LINE_NOAPP_KEY, "1"); // รอบหน้าเลี่ยงการเด้งเข้าแอป LINE ให้อัตโนมัติ
+          if (!cancelled) { setLineError("เซสชันล็อกอินไม่ตรงกัน — กดปุ่ม LINE อีกครั้ง ระบบจะเปลี่ยนไปล็อกอินในเบราว์เซอร์ให้"); setAuthPhase("needLogin"); }
           return;
         }
         try {
@@ -838,19 +948,27 @@ function App() {
           const d = await postAuthAction({ action: "authLine", code, redirectUri });
           if (cancelled) return;
           if (d && d.ok) {
-            localStorage.setItem(SESSION_TOKEN_KEY, d.sessionToken);
+            // localStorage เขียนไม่ได้ (iOS Private Browsing / บล็อกที่เก็บข้อมูล) → session token หาย
+            // ทันทีที่รีเฟรช · ยังให้ใช้งานรอบนี้ต่อได้ แต่ต้องบอกผู้ใช้ว่าทำไมต้องล็อกอินใหม่
+            lsDel(LINE_NOAPP_KEY); // วิธีที่เพิ่งใช้เวิร์ก — ไม่ต้องบังคับโหมดเบราว์เซอร์อีก
+            if (!lsSet(SESSION_TOKEN_KEY, d.sessionToken)) {
+              setLineError("เข้าสู่ระบบได้ แต่เครื่องนี้บันทึกข้อมูลไม่ได้ (โหมดไม่ระบุตัวตน?) — เปิดใหม่ต้องล็อกอินอีกครั้ง");
+            }
             applyStaffSession(d.staff);
           } else {
             setLineError((d && d.error) || "ล็อกอินด้วย LINE ไม่สำเร็จ");
             setAuthPhase("needLogin");
           }
         } catch (e) {
-          if (!cancelled) { setLineError("ล็อกอินด้วย LINE ไม่สำเร็จ ลองใหม่อีกครั้ง"); setAuthPhase("needLogin"); }
+          if (!cancelled) {
+            setLineError("ล็อกอินด้วย LINE ไม่สำเร็จ ลองใหม่อีกครั้ง (" + ((e && e.message) || "network") + ")");
+            setAuthPhase("needLogin");
+          }
         }
         return;
       }
 
-      const tok = localStorage.getItem(SESSION_TOKEN_KEY);
+      const tok = lsGet(SESSION_TOKEN_KEY);
       if (!tok) {
         if (!cancelled) setAuthPhase(role ? "ready" : "needLogin"); // role เก่าจาก sessionStorage (รหัสสำรอง) ยังใช้ได้
         return;
@@ -859,7 +977,7 @@ function App() {
         const d = await postAuthAction({ action: "me", sessionToken: tok });
         if (cancelled) return;
         if (d && d.ok) applyStaffSession(d.staff);
-        else { localStorage.removeItem(SESSION_TOKEN_KEY); setAuthPhase(role ? "ready" : "needLogin"); }
+        else { lsDel(SESSION_TOKEN_KEY); setAuthPhase(role ? "ready" : "needLogin"); }
       } catch (e) {
         if (!cancelled) setAuthPhase(role ? "ready" : "needLogin"); // ต่อเน็ตไม่ได้ — ทำงานต่อด้วย role เดิมถ้ามี
       }
