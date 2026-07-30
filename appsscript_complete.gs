@@ -5547,41 +5547,28 @@ function debugMissingProducts() {
 // ── DIAGNOSTIC (read-only) ────────────────────────────────────────────────
 // หา SKU ใน ZORT ที่ขึ้นต้นด้วย prefix ที่กำหนด (default "WL") แต่ยังไม่เข้าชีตเราเลย
 // (ทั้ง "อัพเดทจำนวนสินค้า" และ "ข้อมูลสินค้า") ต่างจาก debugMissingProducts ที่เทียบแค่
-// 2 ชีตของเรากันเอง — ตัวนี้ดึงจาก ZORT ตรงๆ (ไม่กรอง warehousecode = ครอบทุกคลัง) เพื่อจับเคส
-// สินค้าที่ syncNewProductsFromZort ไม่เคยเห็น (เช่น ถ้าอยู่คลังอื่นที่ไม่ใช่ WH_SAI5/WH_FRONTSTORE
-// fetchAllZortProducts_ ที่ filter ด้วย warehousecode จะไม่มีวันดึงมาเจอ)
+// 2 ชีตของเรากันเอง — ตัวนี้ดึงจาก ZORT ตรงๆ เพื่อจับเคสสินค้าที่ syncNewProductsFromZort
+// ไม่เคยเห็น (เช่น ถ้าอยู่คลังอื่นที่ไม่ใช่ WH_SAI5/WH_FRONTSTORE — fetchAllZortProducts_
+// ที่ filter ด้วย warehousecode จะไม่มีวันดึงมาเจอ)
+// ⚠️ ทดสอบแล้วพบว่า GetProducts `keyword=` **ไม่ได้ prefix/substring-match กับ sku** —
+// keyword="WL" คืน 0 รายการทั้งที่มีสินค้า WL จริงในระบบ (คงค้นแค่ name/exact) จึงเปลี่ยนมา
+// ดึง**สินค้าทั้งหมด** (ไม่ใส่ keyword, ไม่กรอง warehousecode) แล้วกรอง sku.startsWith เอง
+// ฝั่ง client แทน — ช้ากว่าแต่ชัวร์กว่า
 // รันเองใน GAS editor แล้วดู Log — ไม่เขียนทับข้อมูลใดๆ
 function debugFindMissingSkusByPrefix(prefix) {
   const pfx = String(prefix || "WL").trim().toUpperCase();
   const ss = SpreadsheetApp.openById(SHEET_ID);
   const existing = collectExistingSkus_(ss);
 
+  const allProducts = fetchAllZortProducts_();  // ไม่กรอง warehousecode = ทั้งบัญชี ZORT
+  Logger.log(`ZORT: ดึงสินค้าทั้งหมด ${allProducts.length} รายการ (ทุกคลัง)`);
+
   const found = {};
-  let page = 1;
-  const MAX_RETRIES = 3;
-  while (true) {
-    const url = `${ZORT_BASE}/Product/GetProducts?page=${page}&limit=200&keyword=${encodeURIComponent(pfx)}`;
-    let json = null;
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
-        json = JSON.parse(res.getContentText());
-        break;
-      } catch (err) {
-        Logger.log(`Page ${page} attempt ${attempt} failed: ${err.message}`);
-        if (attempt < MAX_RETRIES) Utilities.sleep(1000 * attempt); else json = null;
-      }
+  for (const p of allProducts) {
+    const sku = String(p.sku || p.barcode || "").trim().toUpperCase();
+    if (sku && sku.startsWith(pfx) && !found[sku]) {
+      found[sku] = { sku, name: p.name || "", stock: Number(p.stock || p.availablestock || 0) || 0 };
     }
-    if (!json || !json.list || json.list.length === 0) break;
-    for (const p of json.list) {
-      const sku = String(p.sku || p.barcode || "").trim().toUpperCase();
-      if (sku && sku.startsWith(pfx) && !found[sku]) {
-        found[sku] = { sku, name: p.name || "", stock: Number(p.stock || p.availablestock || 0) || 0 };
-      }
-    }
-    if (json.list.length < 200) break;
-    page++;
-    Utilities.sleep(300);
   }
 
   const foundList = Object.values(found);
@@ -5593,6 +5580,10 @@ function debugFindMissingSkusByPrefix(prefix) {
   missing.forEach(p => Logger.log(`${p.sku} | ${p.name} | ${p.stock}`));
   if (!missing.length && foundList.length) {
     Logger.log(`ทุกตัวเข้าชีตแล้ว — ถ้ายังไม่ขึ้นเว็บ ให้รัน debugMissingProducts() ต่อ (เช็คว่าเข้า "ข้อมูลสินค้า" หรือยัง)`);
+  }
+  if (!foundList.length) {
+    Logger.log(`ไม่พบ SKU ขึ้นต้นด้วย "${pfx}" ใน ZORT เลยแม้แต่ตัวเดียว (ดึงทั้งหมด ${allProducts.length} รายการแล้ว)`);
+    Logger.log(`→ แปลว่าสินค้านี้อาจยังไม่ถูกสร้างใน ZORT เลย (ไม่ใช่แค่ยังไม่ sync เข้าเว็บเรา) ต้องเช็คในแอป ZORT โดยตรง`);
   }
 }
 
