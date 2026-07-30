@@ -102,8 +102,13 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
   uE(() => {
     if (printReq <= 0) return;
     setPosPrintPageSize("a4");
+    document.body.classList.toggle("quote-print-mobile", typeof window !== "undefined" && window.innerWidth <= 600);
     window.print();
-    const onAfter = () => { setPosPrintPageSize("a4"); window.removeEventListener("afterprint", onAfter); };
+    const onAfter = () => {
+      setPosPrintPageSize("a4");
+      document.body.classList.remove("quote-print-mobile");
+      window.removeEventListener("afterprint", onAfter);
+    };
     window.addEventListener("afterprint", onAfter);
   }, [printReq]);
   function doPrint() { setPrintReq(n => n + 1); }
@@ -639,7 +644,7 @@ function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep
             {/* ── ตารางสินค้า — กรอบเดียวกันยืดเต็มพื้นที่ที่เหลือ (flex:1) ให้เห็นเป็น
                 "ช่องสี่เหลี่ยม" ว่างต่อจากรายการจริง เหมือนเอกสาร ZORT ต้นฉบับที่เจ้าของ
                 อ้างอิงมา (QT-202607023.pdf) — ไม่ใช่ดันช่องเซ็นลงล่างสุดแบบเดิมอีกต่อไป ──*/}
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", border: "0.5px solid #999" }}>
+            <div className="quote-items-fill" style={{ flex: 1, display: "flex", flexDirection: "column", border: "0.5px solid #999" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ background: "#f3f4f6", borderBottom: "0.5px solid #999" }}>

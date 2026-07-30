@@ -6862,8 +6862,13 @@ function QuoteFollowupView({ data, role }) {
   uE(() => {
     if (printReq <= 0 || !printData) return;
     setPosPrintPageSize("a4");
+    document.body.classList.toggle("quote-print-mobile", mobile);
     window.print();
-    const onAfter = () => { setPosPrintPageSize("a4"); window.removeEventListener("afterprint", onAfter); };
+    const onAfter = () => {
+      setPosPrintPageSize("a4");
+      document.body.classList.remove("quote-print-mobile");
+      window.removeEventListener("afterprint", onAfter);
+    };
     window.addEventListener("afterprint", onAfter);
   }, [printReq, printData]);
 
@@ -7218,6 +7223,59 @@ function QuoteFollowupView({ data, role }) {
               <>
                 <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>เกิน {OVERDUE_DAYS} วัน = ควรปิด (Void) · แถวแดง = ควรปิด</div>
                 <div ref={listRef}/>
+                {mobile ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {pendingList.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => {
+                      const c = ageColor(q.ageDays);
+                      const expSoon = q.expireInDays !== null && q.expireInDays !== undefined && q.expireInDays <= 14;
+                      const overdue = q.ageDays !== null && q.ageDays > OVERDUE_DAYS;
+                      const busy = voidingId === (q.id || q.number);
+                      const approving = approvingId === (q.id || q.number);
+                      const anyBusy = !!voidingId || !!approvingId || !!printingId;
+                      const printing = printingId === (q.id || q.number);
+                      return (
+                        <div key={q.number || idx} style={{ border: "1px solid var(--bdr)", borderRadius: 12, padding: 12, background: overdue ? "#fff5f5" : "var(--paper)" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontWeight: 700, color: "var(--text)" }}>{q.customer}</div>
+                              {q.phone && <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{q.phone}</div>}
+                            </div>
+                            <div style={{ fontWeight: 800, color: "var(--g-700)", whiteSpace: "nowrap", fontSize: 15 }}>{baht(q.amount)}</div>
+                          </div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                            <span style={{ display: "inline-block", padding: "2px 10px", borderRadius: 20, fontWeight: 700, fontSize: 12, background: c.bg, color: c.fg }}>ค้างมา {q.ageDays === null ? "—" : q.ageDays + " วัน"}</span>
+                            <span style={{ display: "inline-block", padding: "2px 10px", borderRadius: 20, fontWeight: 700, fontSize: 12, background: expSoon ? "#fee2e2" : "var(--g-50)", color: expSoon ? "#b71c1c" : "var(--muted)" }}>
+                              หมดอายุใน {q.expireInDays === null || q.expireInDays === undefined ? "—" : (q.expireInDays < 0 ? "หมดแล้ว" : q.expireInDays + " วัน")}
+                            </span>
+                          </div>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 8 }}>
+                            <div style={{ fontFamily: "monospace", fontSize: 12, color: "var(--muted)" }}>{q.number || "—"}</div>
+                            <input list="dmjQuoteSales" defaultValue={q.sale || ""} placeholder="+ ชื่อเซล"
+                              onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} onBlur={(e) => saveSale(q, e.target.value)}
+                              style={{ width: 130, minWidth: 0, padding: "5px 8px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/>
+                          </div>
+                          <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+                            <button onClick={() => handleApprove(q)} disabled={anyBusy} style={{
+                              flex: 1, border: "1px solid var(--g-600)", background: "var(--g-600)",
+                              color: "#fff", borderRadius: 8, padding: "10px 8px", fontSize: 13, fontWeight: 700,
+                              cursor: anyBusy ? "default" : "pointer", opacity: anyBusy && !approving ? .5 : 1,
+                            }}>{approving ? "กำลังอนุมัติ…" : "✓ อนุมัติ"}</button>
+                            <button onClick={() => handleVoid(q)} disabled={anyBusy} style={{
+                              flex: 1, border: "1px solid " + (overdue ? "var(--dang)" : "var(--bdr)"), background: overdue ? "var(--dang)" : "var(--paper)",
+                              color: overdue ? "#fff" : "var(--muted)", borderRadius: 8, padding: "10px 8px", fontSize: 13, fontWeight: 700,
+                              cursor: anyBusy ? "default" : "pointer", opacity: anyBusy && !busy ? .5 : 1,
+                            }}>{busy ? "กำลังปิด…" : "ปิดใบ"}</button>
+                            <button onClick={() => handlePrint(q)} disabled={anyBusy} style={{
+                              border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
+                              borderRadius: 8, padding: "10px 12px", fontSize: 13, fontWeight: 700,
+                              cursor: anyBusy ? "default" : "pointer", opacity: anyBusy && !printing ? .5 : 1,
+                            }}>{printing ? "…" : "🖨️"}</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
                 <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid var(--bdr)" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                     <thead><tr style={{ background: "var(--g-50)", borderBottom: "2px solid var(--bdr)", color: "var(--g-700)" }}>
@@ -7281,6 +7339,7 @@ function QuoteFollowupView({ data, role }) {
                     </tbody>
                   </table>
                 </div>
+                )}
                 <Pagination page={qPage} total={pendingList.length} pageSize={PAGE_SIZE} onChange={setQPage} listRef={listRef}/>
               </>
             )
@@ -7293,6 +7352,38 @@ function QuoteFollowupView({ data, role }) {
             ) : (
               <>
                 <div ref={listRef}/>
+                {mobile ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {approvedList.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => {
+                      const printing = printingId === (q.id || q.number);
+                      return (
+                        <div key={q.number || idx} style={{ border: "1px solid var(--bdr)", borderRadius: 12, padding: 12, background: "var(--paper)" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontWeight: 700, color: "var(--text)" }}>{q.customer}</div>
+                              {q.phone && <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{q.phone}</div>}
+                            </div>
+                            <div style={{ fontWeight: 800, color: "#16a34a", whiteSpace: "nowrap", fontSize: 15 }}>{baht(q.amount)}</div>
+                          </div>
+                          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>{q.quotationDate || "—"}</div>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 8 }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontFamily: "monospace", fontSize: 12, color: "var(--muted)" }}>{q.number || "—"}</div>
+                              <input list="dmjQuoteSales" defaultValue={q.sale || ""} placeholder="+ ชื่อเซล"
+                                onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} onBlur={(e) => saveSale(q, e.target.value)}
+                                style={{ marginTop: 3, width: 130, minWidth: 0, padding: "5px 8px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/>
+                            </div>
+                            <button onClick={() => handlePrint(q)} disabled={!!printingId} style={{
+                              border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
+                              borderRadius: 8, padding: "10px 14px", fontSize: 13, fontWeight: 700,
+                              cursor: printingId ? "default" : "pointer", opacity: printingId && !printing ? .5 : 1,
+                            }}>{printing ? "…" : "🖨️ พิมพ์"}</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
                 <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid var(--bdr)" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                     <thead><tr style={{ background: "var(--g-50)", borderBottom: "2px solid var(--bdr)", color: "var(--g-700)" }}>
@@ -7332,6 +7423,7 @@ function QuoteFollowupView({ data, role }) {
                     </tbody>
                   </table>
                 </div>
+                )}
                 <Pagination page={qPage} total={approvedList.length} pageSize={PAGE_SIZE} onChange={setQPage} listRef={listRef}/>
               </>
             )

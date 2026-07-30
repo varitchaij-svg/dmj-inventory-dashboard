@@ -956,6 +956,15 @@
       break-after: page;
     }
     .quote-print-page:last-child { page-break-after: avoid; break-after: avoid; }
+    /* พิมพ์จากมือถือ (JS ตั้ง class .quote-print-mobile ที่ <body> ก่อน window.print() —
+       ดูจาก window.innerWidth ตอนกดพิมพ์ ไม่ใช่ media query เพราะความกว้างตอนพิมพ์เท่ากันทั้ง
+       จอมือถือ/คอม): บั๊กที่เจอคือ min-height:297mm + flex:1 ของกล่องตารางสินค้า (ยืดเต็มหน้า
+       ให้ดูเหมือนเอกสาร ZORT ต้นฉบับ) รวมความสูงเกิน 1 หน้าบนเบราว์เซอร์มือถือ (rounding ต่างจาก
+       คอม) ดันกล่องสรุปยอด+ช่องเซ็นล้นไปหน้า 2 ที่มีแต่พื้นที่ว่าง — ปิด min-height บังคับ +
+       ปิด flex:1 ของกล่องตารางสินค้า ให้เนื้อหาไหลตามจริงพอดี 1 หน้าเสมอ (คอมไม่แตะ ยังยืดเต็ม
+       หน้าแบบเดิม) */
+    .quote-print-mobile .quote-print-page { min-height: 0 !important; }
+    .quote-print-mobile .quote-items-fill { flex: none !important; }
     /* ใบเสร็จ 80mm — ขนาดหน้ากระดาษจริงคุมด้วย JS (setPosPrintPageSize) เพราะ
        named @page (page: rc80) ไม่ทำงานเชื่อถือได้บน Chrome/Android print pipeline
        (เนื้อหาเลยไปฝังในหน้า A4 แล้วถูกเครื่องพิมพ์ย่อลงมาเล็กจิ๋วมุมกระดาษ) */
