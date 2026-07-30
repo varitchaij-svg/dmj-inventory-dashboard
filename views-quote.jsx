@@ -69,8 +69,6 @@ const QUOTE_DEFAULT_REMARKS = [
   "ชำระโดยโอนเข้าบัญชี ธนาคารกสิกรไทย ชื่อบัญชี บริษัท ดี.ยูนิตี้ จำกัด บัญชีออมทรัพย์ สาขาเทสโก้โลตัสศาลายา เลขที่บัญชี 0503342510",
 ];
 
-const QUOTE_SALES_REP_KEY = "dmj_quote_last_salesrep";
-
 function QuotationFormView({ data, role, onBack, onSubmitted }) {
   const products = (data && data.products) || [];
   const [toast, showToast, hideToast] = useToast();
@@ -85,7 +83,9 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
   const [custResults, setCustResults] = uS(null);
   const [searching, setSearching] = uS(false);
 
-  const [salesRep, setSalesRep] = uS(() => { try { return sessionStorage.getItem(QUOTE_SALES_REP_KEY) || ""; } catch (e) { return ""; } });
+  // ผู้ทำใบเสนอราคา — มาจากบัญชีที่ล็อกอินเสมอ ไม่ให้พิมพ์เอง (กันพิมพ์ชื่อคนอื่นผิดคน)
+  // server จะทับด้วยชื่อจาก session อีกชั้นตอนบันทึกจริงอยู่แล้ว อันนี้แค่โชว์ผลให้ตรงกันตั้งแต่จอ
+  const salesRep = window._currentUserName || sessionStorage.getItem("dmj_role") || "";
   const [channel, setChannel] = uS("หน้าร้าน");
   const [remarks, setRemarks] = uS(QUOTE_DEFAULT_REMARKS.slice());
   const [manualDiscount, setManualDiscount] = uS("");
@@ -98,6 +98,7 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
   const [savingDraft, setSavingDraft] = uS(false);
   const [result, setResult] = uS(null);
   const [printReq, setPrintReq] = uS(0);
+  const [printDocType, setPrintDocType] = uS("quotation"); // "quotation" | "invoice" — เอกสารหน้าตาเดียวกัน แค่เปลี่ยนป้าย
 
   uE(() => {
     if (printReq <= 0) return;
@@ -106,7 +107,7 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
     const onAfter = () => { setPosPrintPageSize("a4"); window.removeEventListener("afterprint", onAfter); };
     window.addEventListener("afterprint", onAfter);
   }, [printReq]);
-  function doPrint() { setPrintReq(n => n + 1); }
+  function doPrint(docType) { setPrintDocType(docType || "quotation"); setPrintReq(n => n + 1); }
 
   const md = Math.max(0, parseFloat(manualDiscount) || 0);
   const totals = uM(() => computeBillTotals(cart, { manualDiscount: md }), [cart, md]);
@@ -238,11 +239,6 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
     };
   }
 
-  function persistSalesRep(v) {
-    setSalesRep(v);
-    try { sessionStorage.setItem(QUOTE_SALES_REP_KEY, v); } catch (e) {}
-  }
-
   async function loadDrafts() {
     setLoadingDrafts(true);
     const r = await syncGetQuotationDrafts();
@@ -258,7 +254,7 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
   function loadDraft(d) {
     setCart(Array.isArray(d.items) ? d.items : []);
     setCust(d.customer || { name: "", taxId: "", branch: "", branchNo: "", address: "", phone: "", email: "" });
-    setSalesRep(d.salesRep || "");
+    // salesRep ไม่โหลดจากร่างเก่า — ยึดชื่อคนที่ล็อกอินอยู่ตอนนี้เสมอ (ใครหยิบร่างมาทำต่อ = คนนั้นเป็นผู้ทำ)
     setChannel(d.channel || "หน้าร้าน");
     setRemarks(Array.isArray(d.remarks) && d.remarks.length ? d.remarks : QUOTE_DEFAULT_REMARKS.slice());
     setManualDiscount(d.manualDiscount ? String(d.manualDiscount) : "");
@@ -287,12 +283,11 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
     if (!cart.length) { showToast("warn", "ยังไม่มีสินค้าในใบเสนอราคา", "🛒"); return; }
     if (cart.some(it => (Number(it.qty) || 0) <= 0)) { showToast("warn", "จำนวนต้องมากกว่า 0", "✏️"); return; }
     if (!cust.name.trim()) { showToast("warn", "กรุณากรอกชื่อลูกค้า", "👤"); return; }
-    if (!salesRep.trim()) { showToast("warn", "กรุณากรอกชื่อเซล", "🧑‍💼"); return; }
+    if (!salesRep.trim()) { showToast("warn", "ไม่พบชื่อผู้ทำใบเสนอราคา — กรุณาล็อกอินใหม่", "🧑‍💼"); return; }
     setSaving(true);
     const r = await syncCreateQuotation(buildQuotePayload());
     setSaving(false);
     if (!r.success) { showToast("error", "สร้างใบเสนอราคาไม่สำเร็จ: " + (r.error || ""), "❌"); return; }
-    persistSalesRep(salesRep.trim());
     setResult(r.data || {});
     showToast("success", "สร้างใบเสนอราคาสำเร็จ", "🎉");
     if (onSubmitted) onSubmitted();
@@ -322,12 +317,13 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
               <div style={{ fontSize: 14, color: "var(--muted)", marginTop: 4 }}>ยอดสุทธิ {fmtBfull(result.totals ? result.totals.grandTotal : totals.grandTotal)}</div>
             </div>
           </Card>
-          <button onClick={doPrint} style={{ padding: 14, borderRadius: 10, border: "none", background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 700 }}>🖨️ พิมพ์ใบเสนอราคา (A4)</button>
+          <button onClick={() => doPrint("quotation")} style={{ padding: 14, borderRadius: 10, border: "none", background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 700 }}>🖨️ พิมพ์ใบเสนอราคา (A4)</button>
+          <button onClick={() => doPrint("invoice")} style={{ padding: 14, borderRadius: 10, border: "1px solid var(--g-600,#1f7f44)", background: "#fff", color: "var(--g-700,#166534)", fontWeight: 700 }}>🧾 พิมพ์ใบแจ้งหนี้ (A4)</button>
           <button onClick={() => { resetAll(); }} style={{ padding: 14, borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700 }}>📝 สร้างใบใหม่</button>
           {onBack && <button onClick={onBack} style={{ padding: 14, borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700 }}>← กลับไปหน้าติดตามสถานะ</button>}
           <Toast toast={toast} onClose={hideToast}/>
         </div>
-        <QuotationPrintDoc quotationNumber={result.quotationNumber} items={cart} customer={cust} remarks={remarks} salesRep={salesRep} totals={result.totals || totals}/>
+        <QuotationPrintDoc quotationNumber={result.quotationNumber} items={cart} customer={cust} remarks={remarks} salesRep={salesRep} totals={result.totals || totals} docType={printDocType}/>
       </React.Fragment>
     );
   }
@@ -501,8 +497,11 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
 
       {/* ── เซล / ช่องทาง ── */}
       <Card padding={true} title="🧑‍💼 เซล / ช่องทาง">
-        <FieldLabel_>ชื่อเซล *</FieldLabel_>
-        <input value={salesRep} onChange={e => persistSalesRep(e.target.value)} placeholder="ชื่อผู้ทำใบเสนอราคา" style={inp}/>
+        <FieldLabel_>ชื่อเซล</FieldLabel_>
+        {/* มาจากบัญชีที่ล็อกอินเสมอ ไม่ให้พิมพ์เอง — กันพิมพ์ชื่อคนอื่นผิดคนบนเอกสารที่ส่งลูกค้า */}
+        <div style={{ ...inp, background: "#f3f4f6", color: "#374151", display: "flex", alignItems: "center", gap: 6 }}>
+          👤 {salesRep || "ไม่พบชื่อ — กรุณาล็อกอินใหม่"}
+        </div>
         <div style={{ marginTop: 10 }}>
           <FieldLabel_>ช่องทาง</FieldLabel_>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -566,7 +565,10 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
 
 // ใบเสนอราคา A4 สำหรับพิมพ์ (โชว์เฉพาะตอน print ผ่าน CSS .pos-print-area — mirror PosReceipt)
 // items = [{sku,name,qty,price,category}] ราคาปลีก/ชิ้น — คิดส่วนลดต่อหน่วยแบบเฉลี่ยเหมือนฝั่ง server
-function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep, totals }) {
+// docType="invoice" → หน้าตาเอกสารเหมือนใบเสนอราคาทุกอย่าง เปลี่ยนแค่ป้ายหัวเอกสาร
+// (เจ้าของขอ 2026-07-30 — หมายเหตุ/เนื้อหาเฉพาะใบแจ้งหนี้รอเจ้าของส่งมาเพิ่ม ตอนนี้ใช้ remarks ชุดเดียวกันไปก่อน)
+function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep, totals, docType }) {
+  const docLabel = docType === "invoice" ? "ใบแจ้งหนี้" : "ใบเสนอราคา";
   const gross = (totals.retailEligible || 0) + (totals.retailExcluded || 0);
   const factor = gross > 0 ? totals.grandTotal / gross : 1;
   const rows = (items || []).map(it => {
@@ -601,7 +603,7 @@ function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep
                 <div style={{ fontSize: 11 }}>เลขประจำตัวผู้เสียภาษี: {POS_SELLER.taxId}</div>
               </div>
               <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 14, fontWeight: 800, border: "1px solid #000", padding: "3px 8px", borderRadius: 4 }}>ใบเสนอราคา</div>
+                <div style={{ fontSize: 14, fontWeight: 800, border: "1px solid #000", padding: "3px 8px", borderRadius: 4 }}>{docLabel}</div>
                 <div style={{ fontSize: 11, marginTop: 4 }}>วันที่ : {docDate}</div>
                 <div style={{ fontSize: 11 }}>เลขที่เอกสาร : {quotationNumber || "—"}</div>
                 {pages.length > 1 ? <div style={{ fontSize: 11 }}>หน้า {pi + 1}/{pages.length}</div> : null}

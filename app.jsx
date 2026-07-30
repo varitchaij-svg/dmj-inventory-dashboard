@@ -1068,6 +1068,11 @@ function App() {
     setStaff(s);
     if (typeof window !== 'undefined') {
       window._currentUser = (s.name || "ไม่ระบุ") + " (" + (ROLE_TH_PLAIN[s.role] || s.role || "รอตำแหน่ง") + ")";
+      // ชื่อล้วน (ไม่มี "(ตำแหน่ง)" ต่อท้าย) + staffId — ใช้ตอนต้องโชว์/ผูกชื่อคนเข้าระบบตรงๆ
+      // เช่น ช่อง "ผู้ทำใบเสนอราคา" (views-quote.jsx) และผู้รับผิดชอบงาน MTO (views-analytics.jsx)
+      // ไม่ให้พิมพ์เอง — กันพิมพ์ชื่อคนอื่นผิดคน (เจ้าของขอ 2026-07-30)
+      window._currentUserName = s.name || "ไม่ระบุ";
+      window._currentStaffId = s.staffId || null;
     }
     if (s.status === "active" && s.role) {
       ssSet("dmj_role", s.role);
@@ -1143,7 +1148,7 @@ function App() {
     clearLineHandshake();
     resetHandoff();
     ssDel("dmj_role");
-    if (typeof window !== 'undefined') window._currentUser = null;
+    if (typeof window !== 'undefined') { window._currentUser = null; window._currentUserName = null; window._currentStaffId = null; }
     setStaff(null);
     setRole(null);
     setAuthPhase("needLogin");

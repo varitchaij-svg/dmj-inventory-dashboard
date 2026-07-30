@@ -254,6 +254,12 @@ describe('canDoOrNull_ — โหมดบังคับล็อกอิน (
   it('storedevice (เครื่องร้าน) ดู attendanceToday ได้ — เหตุผลหลักที่มี role นี้', () => {
     expect(A.canDoOrNull_({ role: 'storedevice' }, 'attendanceToday')).toBe(null);
   });
+  it('warehouse/employee มอบหมาย/ดูรายชื่อผู้รับผิดชอบงาน MTO ได้ (assignMtoJob, listActiveStaffNames)', () => {
+    ['warehouse', 'employee'].forEach(role => {
+      expect(A.canDoOrNull_({ role }, 'assignMtoJob'), role).toBe(null);
+      expect(A.canDoOrNull_({ role }, 'listActiveStaffNames'), role).toBe(null);
+    });
+  });
   it('role ที่ไม่รู้จัก → ปฏิเสธ (fail closed)', () => {
     expect(A.canDoOrNull_({ role: 'ghost' }, 'order')).not.toBe(null);
     expect(A.canDoOrNull_({}, 'order')).not.toBe(null);

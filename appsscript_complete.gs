@@ -621,12 +621,13 @@ var ROLE_ACTIONS_ = {
                "deductStock", "deductMaterials", "confirmStockCount", "updateLockData",
                "deleteLockEntry", "addNewProduct", "addPurchaseIn", "checkSkuExists",
                "fetchProductImage", "zeroStock", "createMtoJob", "closeMtoJob",
-               "saveMtoJobItems", "deleteMtoJob", "createStockCheck", "completeStockCheck",
+               "saveMtoJobItems", "deleteMtoJob", "assignMtoJob", "listActiveStaffNames",
+               "createStockCheck", "completeStockCheck",
                "confirmShipmentReceive", "deleteOrder", "deleteOrders", "punch", "myToday",
                "myAttendanceSummary"],
   employee:   ["order", "updateOrderState", "transferStock", "transferStockBatch",
                "updateFrontStore", "confirmShipmentReceive", "updateLockData",
-               "createMtoJob", "closeMtoJob", "saveMtoJobItems",
+               "createMtoJob", "closeMtoJob", "saveMtoJobItems", "assignMtoJob", "listActiveStaffNames",
                "deleteOrder", "deleteOrders", "punch", "myToday", "myAttendanceSummary"],
 };
 
@@ -692,7 +693,7 @@ function forbidden_(msg) {
 // รวมให้เหลือ "ชื่อ action" เดียวเพื่อเอาไปเช็คสิทธิ์ · ต้องอัปเดตลิสต์นี้เมื่อเพิ่ม dispatch ใหม่
 // (ชื่อที่ไม่รู้จัก → คืน null = ไม่ถูกเช็คสิทธิ์ ไม่ใช่ block — กันของเดิมพังโดยไม่ตั้งใจ)
 var POST_FLAG_ACTIONS_ = [
-  "addNewProduct", "addPurchaseIn", "approveQuotation", "checkSkuExists", "closeMtoJob",
+  "addNewProduct", "addPurchaseIn", "approveQuotation", "assignMtoJob", "checkSkuExists", "closeMtoJob",
   "completeStockCheck", "confirmShipmentReceive", "confirmStockCount", "createMtoJob",
   "createQuotation", "createSaleBill", "createStockCheck", "deductMaterials", "deductStock",
   "deleteLockEntry", "deleteMtoJob", "deleteOrder", "deleteOrders", "deleteQuotationDraft",
@@ -761,6 +762,17 @@ function setStaffRoleDirect_(staffIdOrLineName, role) {
   try { writeAuditLog_("GAS editor", "ตั้งตำแหน่งพนักงาน (จาก script)", all[hit].staffId, role); } catch (e) {}
   return "✅ ตั้ง " + (all[hit].displayName || all[hit].lineDisplayName || all[hit].staffId) +
          " เป็น \"" + role + "\" + เปิดใช้งานแล้ว — กลับไปที่เว็บแล้วกดรีเฟรช/เข้าใหม่";
+}
+
+// ─── action=listActiveStaffNames : รายชื่อพนักงาน active แบบย่อ (staffId+name เท่านั้น) ───
+// ต่างจาก listStaff (owner/dev เท่านั้น เห็นข้อมูลเต็ม) — อันนี้ทุก role ที่ล็อกอินแล้วเรียกได้
+// เพราะไม่มี field อ่อนไหว (ไม่มี lastLoginAt/note/pictureUrl) ใช้เติมดรอปดาวน์เลือกผู้รับผิดชอบ
+// งาน MTO (assignMtoJob) ที่ไม่ใช่ owner/dev ก็ต้องมองเห็นเพื่อนร่วมงานให้เลือกได้
+function listActiveStaffNamesHandler_(ss, data) {
+  const s = resolveSession_(ss, data.sessionToken);
+  if (!s || s.status !== 'active') return unauthorized_();
+  const all = readStaffAll_(ss).filter(function (x) { return x.status === 'active'; });
+  return ok(all.map(function (x) { return { staffId: x.staffId, name: x.displayName || x.lineDisplayName || x.staffId }; }));
 }
 
 function listStaffHandler_(ss, data) {
@@ -1717,6 +1729,7 @@ function doPost(e) {
     if (data.action === 'logout')    return logoutHandler_(ss, data);
     if (data.action === 'listStaff') return listStaffHandler_(ss, data);
     if (data.action === 'saveStaff') return saveStaffHandler_(ss, data, actor);
+    if (data.action === 'listActiveStaffNames') return listActiveStaffNamesHandler_(ss, data);
 
     // ─── ลงเวลาเข้า-ออกงาน ───
     if (data.action === 'punch')           return punchHandler_(ss, data);
@@ -1833,11 +1846,17 @@ function doPost(e) {
     }
 
     // ─── ใบเสนอราคาจากเว็บ (sales staff สร้างเองแทนเข้า ZORT UI) ───
+    // ผู้ทำใบเสนอราคา (salesRep) ทับด้วยชื่อจาก session เสมอถ้ามี — ห้ามให้พิมพ์เอง
+    // (เจ้าของขอ 2026-07-30: กันพิมพ์ชื่อคนอื่นผิดคนบนเอกสารที่ส่งลูกค้า)
     if (data.createQuotation) {
-      return createQuotation(ss, data.quote || {}, actor);
+      var q1 = data.quote || {};
+      if (_sess) q1 = Object.assign({}, q1, { salesRep: _sess.displayName || _sess.lineDisplayName || q1.salesRep });
+      return createQuotation(ss, q1, actor);
     }
     if (data.saveQuotationDraft) {
-      return saveQuotationDraft(ss, data.quote || {}, actor);
+      var q2 = data.quote || {};
+      if (_sess) q2 = Object.assign({}, q2, { salesRep: _sess.displayName || _sess.lineDisplayName || q2.salesRep });
+      return saveQuotationDraft(ss, q2, actor);
     }
     if (data.deleteQuotationDraft) {
       return deleteQuotationDraft(ss, data.draftId, actor);
@@ -1874,10 +1893,11 @@ function doPost(e) {
     }
 
     // ─── MTO Jobs ───
-    if (data.createMtoJob)    return createMtoJob(ss, data);
+    if (data.createMtoJob)    return createMtoJob(ss, data, actor, _sess && _sess.staffId);
     if (data.closeMtoJob)     return closeMtoJob(ss, data, actor);
     if (data.deleteMtoJob)    return deleteMtoJob(ss, data);
     if (data.saveMtoJobItems) return saveMtoJobItems(ss, data);
+    if (data.assignMtoJob)    return assignMtoJob(ss, data, actor);
 
     // ─── Stock Check Requests ───
     if (data.createStockCheck) return createStockCheckRequest_(data.skus, data.names, actor);
@@ -8830,7 +8850,10 @@ function getOrCreateMtoJobSheet_(ss) {
   let sh = ss.getSheetByName(SHEET_MTO_JOBS);
   if (!sh) {
     sh = ss.insertSheet("งาน MTO");
-    sh.appendRow(["JobID","วันที่","ชื่องาน","ลูกค้า","ราคา","รูป","สถานะ","ปิดงานเมื่อ"]);
+    sh.appendRow(["JobID","วันที่","ชื่องาน","ลูกค้า","ราคา","รูป","สถานะ","ปิดงานเมื่อ","ผู้รับผิดชอบ(staffId)","ชื่อผู้รับผิดชอบ"]);
+  } else if (!sh.getRange(1, 9).getValue()) {
+    // self-heal: ชีตเก่าที่สร้างไว้ก่อนมีคอลัมน์ผู้รับผิดชอบ — เติม header ให้ ไม่กระทบแถวข้อมูลเดิม
+    sh.getRange(1, 9, 1, 2).setValues([["ผู้รับผิดชอบ(staffId)", "ชื่อผู้รับผิดชอบ"]]);
   }
   return sh;
 }
@@ -8844,7 +8867,10 @@ function getOrCreateMtoItemSheet_(ss) {
   return sh;
 }
 
-function createMtoJob(ss, data) {
+// actor/staffId มาจาก session ที่ doPost ตรวจแล้ว (ไม่ใช่ data.actor ดิบจาก client) —
+// ผู้รับผิดชอบ default = คนสร้างงานเอง ("ขึ้นตามเครื่องที่เป็นคนสร้าง" ตามที่เจ้าของขอ 2026-07-30)
+// เปลี่ยนภายหลังได้ด้วย action=assignMtoJob — ไม่มี session (migration) → เว้นว่างไว้ก่อน
+function createMtoJob(ss, data, actor, staffId) {
   const sh = getOrCreateMtoJobSheet_(ss);
 
   // Lock กัน race condition (2 คนสร้างพร้อมกัน → เลขซ้ำ)
@@ -8865,9 +8891,10 @@ function createMtoJob(ss, data) {
     }
     const jobId = prefix + String(maxSeq + 1).padStart(3, "0");
 
-    sh.appendRow([jobId, data.dateStr || "", data.jobName || "", data.customer || "", data.price || "", data.imageUrl || "", "กำลังจัด", ""]);
+    sh.appendRow([jobId, data.dateStr || "", data.jobName || "", data.customer || "", data.price || "", data.imageUrl || "", "กำลังจัด", "",
+      staffId || "", staffId ? (actor || "") : ""]);
     // ถึงจุดนี้ = สร้างสำเร็จ → เขียน audit log (creation ไม่มี before-state)
-    writeAuditLog_(data.actor || "ไม่ระบุ", "สร้างงาน MTO", jobId, auditDetail_({
+    writeAuditLog_(actor || data.actor || "ไม่ระบุ", "สร้างงาน MTO", jobId, auditDetail_({
       before: null,
       after: { jobName: data.jobName || "", customer: data.customer || "", price: data.price || "" },
       note: "สร้างงาน MTO (" + (data.jobName || jobId) + ")",
@@ -8878,6 +8905,35 @@ function createMtoJob(ss, data) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// ─── action=assignMtoJob : มอบหมาย/เปลี่ยนผู้รับผิดชอบงาน MTO (เว้น staffId ว่าง = ถอดออก) ───
+function assignMtoJob(ss, data, actor) {
+  const jobId = String(data.jobId || "").trim();
+  if (!jobId) return error("ไม่มี jobId");
+  const staffId = String(data.staffId || "").trim();
+
+  let assigneeName = "";
+  if (staffId) {
+    const staff = readStaffAll_(ss).find(function (x) { return x.staffId === staffId; });
+    if (!staff) return error("ไม่พบพนักงานคนนี้");
+    assigneeName = staff.displayName || staff.lineDisplayName || "";
+  }
+
+  const sh = getOrCreateMtoJobSheet_(ss);
+  const rows = sh.getDataRange().getValues();
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]).trim() === jobId) {
+      const before = { staffId: String(rows[i][8] || ""), name: String(rows[i][9] || "") };
+      sh.getRange(i + 1, 9, 1, 2).setValues([[staffId, assigneeName]]);
+      writeAuditLog_(actor || "ไม่ระบุ", "มอบหมายงาน MTO", jobId, auditDetail_({
+        before: before, after: { staffId: staffId, name: assigneeName },
+      }));
+      invalidateCache_();
+      return ok({ jobId: jobId, staffId: staffId, name: assigneeName });
+    }
+  }
+  return error("ไม่พบงานนี้");
 }
 
 function closeMtoJob(ss, data, actor) {
@@ -10179,6 +10235,8 @@ function readMtoJobs_() {
       imageUrl: String(r[5]||"").trim(),
       status: String(r[6]||"กำลังจัด").trim(),
       closedAt: String(r[7]||"").trim(),
+      assigneeId: String(r[8]||"").trim(),
+      assigneeName: String(r[9]||"").trim(),
       items: itemsMap[jobId] || [],
     });
   }

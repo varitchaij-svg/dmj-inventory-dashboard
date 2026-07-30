@@ -5772,6 +5772,57 @@ function MtoJobView({ data }) {
   // Android back: detail/create → list
   useBackHandler(view !== "list" ? () => setView("list") : null);
 
+  // ── ผู้รับผิดชอบงาน (เฟส "งานของฉัน" — MTO) ──
+  const [showMineOnly, setShowMineOnly] = uS(false);
+  const [staffRoster, setStaffRoster] = uS(null); // [{staffId,name}] — โหลดครั้งแรกที่เปิดตัวเลือก
+  const [loadingRoster, setLoadingRoster] = uS(false);
+  const [showAssignPicker, setShowAssignPicker] = uS(false);
+  const [assigning, setAssigning] = uS(false);
+
+  const loadStaffRoster = uC(async () => {
+    if (staffRoster || loadingRoster) return;
+    setLoadingRoster(true);
+    try {
+      const res = await dmjFetch(SHEET_DEPLOY_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ action: "listActiveStaffNames" }),
+      });
+      const json = await res.json();
+      setStaffRoster(json.success ? (json.data || []) : []);
+    } catch (e) {
+      setStaffRoster([]);
+    } finally {
+      setLoadingRoster(false);
+    }
+  }, [staffRoster, loadingRoster]);
+
+  const handleAssign = async (staffId, name) => {
+    if (!activeJob) return;
+    setAssigning(true);
+    try {
+      const res = await dmjFetch(SHEET_DEPLOY_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ assignMtoJob: true, jobId: activeJob.jobId, staffId: staffId || "" }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        const updatedJob = { ...activeJob, assigneeId: staffId || "", assigneeName: staffId ? name : "" };
+        setJobs(prev => prev.map(j => j.jobId === activeJob.jobId ? updatedJob : j));
+        setActiveJob(updatedJob);
+        setShowAssignPicker(false);
+        showToast("success", staffId ? `มอบหมายให้ ${name} แล้ว` : "ถอดผู้รับผิดชอบแล้ว");
+      } else {
+        showToast("error", json.error || "เกิดข้อผิดพลาด");
+      }
+    } catch (e) {
+      showToast("error", e.message);
+    } finally {
+      setAssigning(false);
+    }
+  };
+
   const products = data.products || [];
 
   const searchResults = uM(() => {
@@ -5823,6 +5874,9 @@ function MtoJobView({ data }) {
           imageUrl: newJob.imageUrl.trim(),
           status: "กำลังจัด",
           closedAt: "",
+          // server ตั้งผู้รับผิดชอบ = คนสร้าง (จาก session) ให้เองแล้ว — สะท้อนผลไว้ก่อน refetch
+          assigneeId: window._currentStaffId || "",
+          assigneeName: window._currentUserName || "",
           items: [],
         };
         setJobs(prev => [created, ...prev]);
@@ -6010,15 +6064,27 @@ function MtoJobView({ data }) {
         </button>
       </div>
 
-      {jobs.length === 0 ? (
+      {/* งานของฉัน — กรองเฉพาะงานที่ผูกชื่อฉันไว้ (ไม่ซ่อนใครจากงานไหน คนอื่นยังกดดูลิสต์เต็มได้ปกติ) */}
+      {window._currentStaffId && (
+        <div style={{ marginBottom: 12 }}>
+          <Seg value={showMineOnly ? "mine" : "all"} onChange={v => setShowMineOnly(v === "mine")} options={[
+            { value: "all", label: "ทั้งหมด" },
+            { value: "mine", label: "🙋 งานของฉัน" },
+          ]} />
+        </div>
+      )}
+
+      {(() => {
+        const visibleJobs = showMineOnly ? jobs.filter(j => j.assigneeId === window._currentStaffId) : jobs;
+        if (visibleJobs.length === 0) return (
         <div style={{ textAlign: "center", padding: "60px 20px", color: "var(--muted)" }}>
           <div style={{ fontSize: 48, marginBottom: 12 }}>🎁</div>
-          <div style={{ fontSize: 15, fontWeight: 600 }}>ยังไม่มีงานจัดพิเศษ</div>
-          <div style={{ fontSize: 13, marginTop: 4 }}>กดปุ่ม "สร้างงานใหม่" เพื่อเริ่มต้น</div>
+          <div style={{ fontSize: 15, fontWeight: 600 }}>{showMineOnly ? "ยังไม่มีงานที่มอบหมายให้คุณ" : "ยังไม่มีงานจัดพิเศษ"}</div>
+          <div style={{ fontSize: 13, marginTop: 4 }}>{showMineOnly ? "" : 'กดปุ่ม "สร้างงานใหม่" เพื่อเริ่มต้น'}</div>
         </div>
-      ) : (
+        ); return (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {jobs.map(job => (
+          {visibleJobs.map(job => (
             <div key={job.jobId}
               onClick={() => openDetail(job)}
               style={{
@@ -6039,6 +6105,9 @@ function MtoJobView({ data }) {
                       ฿{Number(job.price).toLocaleString()}
                     </div>
                   )}
+                  <div style={{ fontSize: 11.5, color: job.assigneeName ? "var(--g-700)" : "var(--muted)", marginTop: 3 }}>
+                    👤 {job.assigneeName ? (job.assigneeId === window._currentStaffId ? `${job.assigneeName} (ฉัน)` : job.assigneeName) : "ยังไม่มอบหมาย"}
+                  </div>
                 </div>
                 <div style={{
                   fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 20,
@@ -6053,7 +6122,8 @@ function MtoJobView({ data }) {
             </div>
           ))}
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 
@@ -6160,6 +6230,41 @@ function MtoJobView({ data }) {
           </div>
           {activeJob.imageUrl && (
             <img src={activeJob.imageUrl} alt="job" style={{ width: "100%", borderRadius: 8, marginTop: 12, maxHeight: 200, objectFit: "cover" }} />
+          )}
+
+          {/* ── ผู้รับผิดชอบ — default = คนสร้างงาน เปลี่ยนได้ ── */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--bdr)" }}>
+            <span style={{ fontSize: 13, color: "var(--muted)" }}>
+              👤 ผู้รับผิดชอบ: <b style={{ color: activeJob.assigneeName ? "var(--text)" : "var(--muted)" }}>{activeJob.assigneeName || "ยังไม่มอบหมาย"}</b>
+            </span>
+            <button className="btn ghost" style={{ marginLeft: "auto", fontSize: 12, padding: "5px 10px" }}
+              onClick={() => { setShowAssignPicker(true); loadStaffRoster(); }}>เปลี่ยน</button>
+          </div>
+
+          {showAssignPicker && (
+            <div style={{ marginTop: 10, background: "var(--g-50)", border: "1px solid var(--g-500)", borderRadius: 10, padding: 10 }}>
+              {loadingRoster ? (
+                <div style={{ fontSize: 12.5, color: "var(--muted)", textAlign: "center", padding: 8 }}>กำลังโหลดรายชื่อ…</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {(staffRoster || []).map(st => (
+                    <button key={st.staffId} disabled={assigning} onClick={() => handleAssign(st.staffId, st.name)}
+                      style={{
+                        textAlign: "left", padding: "9px 12px", borderRadius: 8, fontFamily: "inherit", fontSize: 13.5,
+                        border: activeJob.assigneeId === st.staffId ? "2px solid var(--g-600)" : "1px solid var(--bdr)",
+                        background: activeJob.assigneeId === st.staffId ? "#fff" : "var(--paper)", cursor: "pointer",
+                      }}>{st.staffId === window._currentStaffId ? `👋 ${st.name} (ฉัน)` : st.name}</button>
+                  ))}
+                  {activeJob.assigneeId && (
+                    <button disabled={assigning} onClick={() => handleAssign("", "")}
+                      style={{ textAlign: "center", padding: "9px 12px", borderRadius: 8, fontFamily: "inherit", fontSize: 12.5, border: "1px dashed var(--dang)", color: "var(--dang)", background: "transparent", cursor: "pointer" }}>
+                      ✕ ถอดผู้รับผิดชอบ
+                    </button>
+                  )}
+                  <button onClick={() => setShowAssignPicker(false)} style={{ textAlign: "center", padding: "7px", border: "none", background: "none", color: "var(--muted)", fontSize: 12, cursor: "pointer" }}>ยกเลิก</button>
+                </div>
+              )}
+            </div>
           )}
         </div>
 
