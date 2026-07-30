@@ -4193,6 +4193,116 @@ function exploreZortQuotationAmountFix() {
   Logger.log("──────── เสร็จ — copy log ทั้งหมดตั้งแต่ต้นส่งกลับมา ────────");
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// สำรวจ EditQuotationInfo / EditQuotation — ยังไม่เคยเรียกจริงในระบบนี้เลย (แค่มีชื่ออยู่ใน
+// ZORTOUT_API.md ที่ดึงมาจากเอกสาร ZORT เฉยๆ ไม่ได้แปลว่าทดสอบแล้วใช้ได้จริง) ต้องรู้ก่อนว่า:
+//   1. รับ id ทาง JSON body / query string / form-encoded — VoidQuotation เคยเจอมาแล้วว่า
+//      ปฏิเสธ JSON body {id} ทั้งที่ id ถูกต้อง ต้องส่งทาง query/form แทน (ดู voidZortQuotation_)
+//      EditQuotation อาจเจอเรื่องเดียวกัน
+//   2. EditQuotation (รวมรายการสินค้า) ต้องส่ง list ทั้งก้อนใหม่ทับของเดิม หรือส่งเฉพาะที่เปลี่ยน
+//   3. แก้ราคา/จำนวนแล้ว amount/amount_pretax/vatamount คำนวณให้เองไหม (AddQuotation ไม่คำนวณให้
+//      ต้องส่งเองตรงๆ — ดู exploreZortQuotationAmountFix ด้านบน) EditQuotation อาจเหมือนกัน
+//   4. แก้ใบที่ "อนุมัติแล้ว" ได้ไหม หรือทำได้เฉพาะใบที่ยังไม่อนุมัติ (ตอบคำถามเรื่องขอบเขตฟีเจอร์
+//      "แก้ใบเสนอราคาได้เฉพาะใบที่ลูกค้ายังไม่อนุมัติ" ที่เจ้าของขอ 2026-07-30 ด้วยในตัว)
+//
+// วิธีรัน: เลือกฟังก์ชันนี้ใน GAS editor → กด Run → เปิด Execution log (Ctrl+Enter) →
+// copy log ทั้งหมดตั้งแต่ต้นจนจบส่งกลับมาให้ Claude อ่าน — ปลอดภัย 100% สร้างใบทดสอบเอง
+// (ชื่อลูกค้าขึ้นต้น "ทดสอบ EditQuotation") แล้วลบทิ้งให้เองท้ายฟังก์ชัน ไม่กระทบใบจริงของร้าน
+// ═══════════════════════════════════════════════════════════════════════════
+function exploreZortEditQuotation() {
+  const H = zortHeaders_();
+  const jsonHdr = Object.assign({}, H, { "Content-Type": "application/json" });
+  const formHdr = Object.assign({}, H, { "Content-Type": "application/x-www-form-urlencoded" });
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const stockSh = ss.getSheetByName(SHEET_PRODUCTS);
+  const stockRows = stockSh ? stockSh.getDataRange().getValues() : [];
+  let testSku = "", testName = "สินค้าทดสอบ";
+  for (let i = 1; i < stockRows.length; i++) {
+    const sku = String(stockRows[i][1] || "").trim();
+    if (sku) { testSku = sku; testName = String(stockRows[i][2] || testName).trim(); break; }
+  }
+  if (!testSku) { Logger.log("❌ ไม่เจอ SKU ในชีตสต็อกเลย"); return; }
+
+  function getDetail(qId, qNumber) {
+    const idParam = qId != null ? qId : qNumber;
+    const r = UrlFetchApp.fetch(ZORT_BASE + "/Quotation/GetQuotationDetail?id=" + encodeURIComponent(idParam),
+      { method: "get", headers: H, muteHttpExceptions: true });
+    try { return JSON.parse(r.getContentText() || "{}"); } catch (e) { return {}; }
+  }
+
+  // ── ①  สร้างใบทดสอบก่อน (เหมือน exploreZortQuotationAmountFix — วิธีที่ยืนยันแล้วว่าสร้างได้จริง) ──
+  const dateStr = Utilities.formatDate(new Date(), "Asia/Bangkok", "dd/MM/yyyy");
+  const price = 500, qty = 1, grand = price * qty;
+  const preVat = Math.round(grand / 1.07 * 100) / 100;
+  const vat = Math.round((grand - preVat) * 100) / 100;
+  const addPayload = {
+    date: dateStr,
+    customername: "ทดสอบ EditQuotation (ลบอัตโนมัติ)",
+    description: "ก่อนแก้ไข",
+    list: [{ sku: testSku, name: testName, number: qty, pricepernumber: price, totalprice: grand }],
+    amount: grand, amount_pretax: preVat, vatamount: vat,
+  };
+  Logger.log("① สร้างใบทดสอบ payload=" + JSON.stringify(addPayload));
+  const addRes = UrlFetchApp.fetch(ZORT_BASE + "/Quotation/AddQuotation", {
+    method: "post", headers: jsonHdr, payload: JSON.stringify(addPayload), muteHttpExceptions: true,
+  });
+  let addJson = {};
+  try { addJson = JSON.parse(addRes.getContentText() || "{}"); } catch (e) {}
+  const det = addJson.detail || {};
+  const qId = det.id != null ? det.id : (addJson.resDesc && !isNaN(Number(addJson.resDesc)) ? Number(addJson.resDesc) : null);
+  const qNumber = det.number || addJson.resDesc2 || null;
+  if (qId == null && !qNumber) { Logger.log("❌ สร้างใบทดสอบไม่สำเร็จ เลยทดสอบแก้ไขต่อไม่ได้: " + addRes.getContentText()); return; }
+  Logger.log("   → สร้างสำเร็จ id=" + qId + " number=" + qNumber);
+  Utilities.sleep(600);
+
+  // ── ②  ลองแก้ไขด้วยหลาย transport/payload variant — หยุดดูผลทุกตัวไม่หยุดที่ตัวแรกที่สำเร็จ
+  //       (ต่างจาก voidZortQuotation_ ที่หยุดทันทีที่เจอ — ตรงนี้อยากเห็นครบทุกแบบเพื่อเลือกวิธีที่ถูกต้องจริง) ──
+  const newDesc = "แก้ไขแล้ว " + new Date().getTime();
+  const editInfoVariants = [
+    { label: "EditQuotationInfo: JSON body {id, description}", url: ZORT_BASE + "/Quotation/EditQuotationInfo",
+      opt: { method: "post", headers: jsonHdr, payload: JSON.stringify({ id: qId, description: newDesc }), muteHttpExceptions: true } },
+    { label: "EditQuotationInfo: query id + JSON body {description}", url: ZORT_BASE + "/Quotation/EditQuotationInfo?id=" + encodeURIComponent(qId),
+      opt: { method: "post", headers: jsonHdr, payload: JSON.stringify({ description: newDesc }), muteHttpExceptions: true } },
+    { label: "EditQuotationInfo: form-encoded id+description", url: ZORT_BASE + "/Quotation/EditQuotationInfo",
+      opt: { method: "post", headers: formHdr, payload: "id=" + encodeURIComponent(qId) + "&description=" + encodeURIComponent(newDesc), muteHttpExceptions: true } },
+  ];
+  editInfoVariants.forEach(function (v) {
+    Logger.log("② [" + v.label + "]");
+    const res = UrlFetchApp.fetch(v.url, v.opt);
+    Logger.log("   HTTP " + res.getResponseCode() + " — " + res.getContentText().substring(0, 400));
+  });
+  Utilities.sleep(600);
+  const afterInfo = getDetail(qId, qNumber);
+  Logger.log("   → description หลังลอง EditQuotationInfo ทั้งหมด = " + JSON.stringify(afterInfo.description));
+
+  // ── ③  ลองแก้รายการสินค้า (ราคา/จำนวน) ด้วย EditQuotation ──
+  const newPrice = 750, newGrand = newPrice * qty;
+  const newPreVat = Math.round(newGrand / 1.07 * 100) / 100;
+  const newVat = Math.round((newGrand - newPreVat) * 100) / 100;
+  const editListPayload = {
+    id: qId,
+    list: [{ sku: testSku, name: testName, number: qty, pricepernumber: newPrice, totalprice: newGrand }],
+    amount: newGrand, amount_pretax: newPreVat, vatamount: newVat,
+  };
+  Logger.log("③ [EditQuotation: JSON body {id, list, amount...}] payload=" + JSON.stringify(editListPayload));
+  const editRes = UrlFetchApp.fetch(ZORT_BASE + "/Quotation/EditQuotation", {
+    method: "post", headers: jsonHdr, payload: JSON.stringify(editListPayload), muteHttpExceptions: true,
+  });
+  Logger.log("   HTTP " + editRes.getResponseCode() + " — " + editRes.getContentText().substring(0, 500));
+  Utilities.sleep(600);
+  const afterList = getDetail(qId, qNumber);
+  Logger.log("   → หลังแก้: amount=" + afterList.amount + " (ควรเป็น " + newGrand + " ถ้าสำเร็จ) list=" + JSON.stringify(afterList.list));
+
+  // ── ④  ลบใบทดสอบทิ้งเสมอ ไม่ว่าผลข้างบนจะเป็นยังไง ──
+  try {
+    const delResult = voidZortQuotation_(qId, qNumber, "explore-editquotation-cleanup");
+    Logger.log("④ ลบใบทดสอบ: " + delResult.getContent());
+  } catch (e) { Logger.log("④ ⚠️ ลบใบทดสอบไม่สำเร็จ (ลบเองใน ZORT ถ้าเจอ number: " + qNumber + "): " + e); }
+
+  Logger.log("──────── เสร็จ — copy log ทั้งหมดตั้งแต่ต้น (①②③④) ส่งกลับมาให้ Claude อ่าน ────────");
+}
+
 // ─── สำรวจ endpoint ค้นหาเลขผู้เสียภาษี (แม้ไม่ใช่ลูกค้าเก่าของร้าน) ────────────────
 // เจ้าของเจอฟีเจอร์นี้ในหน้าเว็บ ZORT เอง (secure.zortout.com/Sell/Add popup "เลือกข้อมูล
 // เลขประจำตัวผู้เสียภาษี") — พิมพ์เลข 13 หลักแล้วเจอชื่อบริษัท+ที่อยู่สาขาจริงจากทะเบียนธุรกิจ
