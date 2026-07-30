@@ -607,31 +607,41 @@ var SESSION_EXEMPT_ACTIONS_ = {
 // 2026-07-30 — MtoJobView ไม่เคยเช็ค role เลย ปุ่มสร้าง/ปิดงานโชว์ให้ทุกคนเห็นอยู่แล้วแต่ก่อนหน้านี้
 // ROLE_ACTIONS_ อนุญาตแค่ warehouse/employee เป็นช่องโหว่ที่เพิ่งเจอตอนเปิด REQUIRE_LOGIN จริง)
 var MTO_JOB_ACTIONS_ = ["createMtoJob", "closeMtoJob", "saveMtoJobItems", "deleteMtoJob",
-                         "assignMtoJob", "listActiveStaffNames"];
+                         "assignMtoJob", "listActiveStaffNames", "deductMaterials"];
+
+// ── action พื้นฐานที่ "ทุก role ที่ไม่ใช่ owner" ต้องทำได้ ──
+// ทุก role มีแท็บ categories/stock/orders/tracking เหมือนกันหมด (ดู ROLE_TABS ใน app.jsx) และ
+// view เหล่านั้นใช้ component ร่วมกัน (ProductCard/OrderModal/StockView) ซึ่งยิง action ชุดนี้ —
+// ถ้า role ไหนขาดตัวใดตัวหนึ่ง = ปุ่มที่ UI โชว์อยู่กดแล้วขึ้น "ไม่มีสิทธิ์" ทันทีที่เปิด REQUIRE_LOGIN
+//
+// ⚠️ บทเรียน 2026-07-30: เปิด REQUIRE_LOGIN='true' ครั้งแรกแล้วทั้งร้านใช้งานไม่ได้ เพราะ
+// ROLE_ACTIONS_ เดิมเขียนจาก "เดาว่า role นี้น่าจะทำอะไร" ไม่ได้ไล่จาก ROLE_TABS + view จริง
+// เวลาเพิ่ม role หรือแท็บใหม่ ให้ไล่จาก ROLE_TABS → view → action ที่ view นั้นเรียกจริงเสมอ
+var COMMON_ACTIONS_ = ["order", "updateOrderState", "transferStock", "transferStockBatch",
+                        "confirmShipmentReceive", "updateFrontStore", "fetchProductImage",
+                        "checkSkuExists", "updateLockData",
+                        "punch", "myToday", "myAttendanceSummary"];
+
 var ROLE_ACTIONS_ = {
   saler:      ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
                "getContactDetail", "createQuotation", "saveQuotationDraft", "deleteQuotationDraft",
-               "voidQuotation", "approveQuotation", "setQuoteSale", "order", "updateOrderState",
-               "punch", "myToday", "myAttendanceSummary"].concat(MTO_JOB_ACTIONS_),
+               "voidQuotation", "approveQuotation", "setQuoteSale",
+               ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   // storedevice = บัญชี LINE กลางประจำเครื่อง/แท็บเล็ตร้าน — สิทธิ์ API เท่า saler ทุกอย่าง
   // + attendanceToday (ดู "ใครเข้างานวันนี้" — เหตุผลที่มี role นี้อยู่เลย ต้องเปิดให้)
   storedevice: ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
                "getContactDetail", "createQuotation", "saveQuotationDraft", "deleteQuotationDraft",
-               "voidQuotation", "approveQuotation", "setQuoteSale", "order", "updateOrderState",
-               "punch", "myToday", "myAttendanceSummary", "attendanceToday"].concat(MTO_JOB_ACTIONS_),
-  frontstore: ["updateFrontStore", "order", "updateOrderState", "transferStock",
-               "transferStockBatch", "confirmShipmentReceive", "recordUnscannedSale",
-               "punch", "myToday", "myAttendanceSummary"].concat(MTO_JOB_ACTIONS_),
-  warehouse:  ["order", "updateOrderState", "transferStock", "transferStockBatch",
-               "deductStock", "deductMaterials", "confirmStockCount", "updateLockData",
-               "deleteLockEntry", "addNewProduct", "addPurchaseIn", "checkSkuExists",
-               "fetchProductImage", "zeroStock",
-               "createStockCheck", "completeStockCheck",
-               "confirmShipmentReceive", "deleteOrder", "deleteOrders", "punch", "myToday",
-               "myAttendanceSummary"].concat(MTO_JOB_ACTIONS_),
-  employee:   ["order", "updateOrderState", "transferStock", "transferStockBatch",
-               "updateFrontStore", "confirmShipmentReceive", "updateLockData",
-               "deleteOrder", "deleteOrders", "punch", "myToday", "myAttendanceSummary"].concat(MTO_JOB_ACTIONS_),
+               "voidQuotation", "approveQuotation", "setQuoteSale", "attendanceToday",
+               ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
+  frontstore: ["recordUnscannedSale"].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
+  warehouse:  ["deductStock", "confirmStockCount", "deleteLockEntry", "addNewProduct",
+               "addPurchaseIn", "zeroStock", "createStockCheck", "completeStockCheck",
+               "deleteOrder", "deleteOrders",
+               ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
+  // employee มีแท็บ frontstore (FrontStoreView) ด้วย → ต้องมี recordUnscannedSale เหมือน frontstore
+  employee:   ["deleteLockEntry", "deleteOrder", "deleteOrders", "confirmStockCount",
+               "createStockCheck", "completeStockCheck", "recordUnscannedSale",
+               ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
 };
 
 // ── action ที่กระทบเงิน/สต็อกจริง (ตัด/อนุมัติออเดอร์ขาย ZORT, ปรับสต็อกเป็น 0, ลบ order,

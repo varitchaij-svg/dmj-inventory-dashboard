@@ -44,6 +44,7 @@ function loadAuth(requireLogin) {
     grab(/function requireLoginEnabled_\(\) \{[\s\S]*?\n\}/),
     grab(/var SESSION_EXEMPT_ACTIONS_ = \{[\s\S]*?\n\};/),
     grab(/var MTO_JOB_ACTIONS_ = \[[\s\S]*?\n *\];/),
+    grab(/var COMMON_ACTIONS_ = \[[\s\S]*?\n *\];/),
     grab(/var ROLE_ACTIONS_ = \{[\s\S]*?\n\};/),
     grab(/var IMMEDIATE_GATE_ACTIONS_ = \{[\s\S]*?\n\};/),
     grab(/var IMMEDIATE_GATE_STRICT_ACTIONS_ = \{[\s\S]*?\n\};/),
@@ -274,6 +275,18 @@ describe('canDoOrNull_ — โหมดบังคับล็อกอิน (
   it('ทุก role ที่ใช้จริงมีสิทธิ์สั่งของ (order) — งานพื้นฐานร่วมกัน', () => {
     ['saler', 'warehouse', 'frontstore', 'employee'].forEach(role => {
       expect(A.canDoOrNull_({ role }, 'order'), role).toBe(null);
+    });
+  });
+
+  // ⚠️ กันเหตุการณ์ 2026-07-30 ซ้ำ: เปิด REQUIRE_LOGIN แล้วทั้งร้านใช้งานไม่ได้ เพราะ role
+  // ขาด action พื้นฐานที่ view ร่วม (ProductCard/OrderModal/StockView) เรียกอยู่ทุกวัน
+  it('ทุก role ที่ไม่ใช่ owner ต้องมี COMMON_ACTIONS_ ครบ — ไม่งั้นเปิด REQUIRE_LOGIN แล้วงานหยุด', () => {
+    ['saler', 'storedevice', 'frontstore', 'warehouse', 'employee'].forEach(role => {
+      ['order', 'updateOrderState', 'transferStock', 'transferStockBatch',
+       'confirmShipmentReceive', 'updateFrontStore', 'fetchProductImage',
+       'punch', 'myToday', 'myAttendanceSummary'].forEach(action => {
+        expect(A.canDoOrNull_({ role }, action), role + '/' + action).toBe(null);
+      });
     });
   });
 });
