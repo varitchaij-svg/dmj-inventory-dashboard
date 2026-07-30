@@ -256,6 +256,12 @@ const TRACKED = [
     `if (lastOut) breakMin += Math.round((lastOut.serverTs - openBreak.serverTs) / 60000);`,
     `const workedMin = (firstIn && lastOut) ? Math.max(0, Math.round((lastOut.serverTs - firstIn.serverTs) / 60000) - breakMin) : null;`,
     `lateMin = Math.max(0, inMin - shift.start);`,
+    `else if (e.type === "bathroomEnd" && openBathroom) { bathroomMin += Math.round((e.serverTs - openBathroom.serverTs) / 60000); openBathroom = null; }`,
+  ]},
+  { names: ['attAllowedNext'], sourceFile: 'appsscript_complete.gs', landmarks: [
+    `if (lastType === "in" || lastType === "breakEnd" || lastType === "bathroomEnd") return ["breakStart", "bathroomStart", "out"];`,
+    `if (lastType === "breakStart") return ["breakEnd", "out"];`,
+    `if (lastType === "bathroomStart") return ["bathroomEnd", "out"];`,
   ]},
 ];
 

@@ -253,7 +253,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 612 tests, 19 test files, ทั้งหมด pass
+**มี Vitest test suite แล้ว** — 633 tests, 19 test files, ทั้งหมด pass
 
 ```bash
 npm test              # run tests
@@ -352,6 +352,14 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
 - **รูปลงเวลาไม่แชร์สาธารณะ** — เก็บ Drive แล้วดึงผ่าน `attendancePhoto` proxy ที่ตรวจ session
   · `dailyAttendanceMaintenance()` (trigger 22:00) ลบรูปเกิน `ATT_PHOTO_KEEP_DAYS` (90 วัน) +
   ล้างเซสชันหมดอายุ + เตือนคนที่ลืมกดออกงาน · เจ้าของต้องรัน **`setupAttendanceMaintenance()`** 1 ครั้ง
+- **ปุ่มลงเวลาเป็น "ปุ่มสลับสถานะ"** ไม่ใช่ 4 ปุ่มตายตัว — `ATT_TOGGLE_GROUPS` (views-attendance.jsx)
+  3 กลุ่ม (`work`=เข้า/ออกงาน, `break`=พัก, `bathroom`=ห้องน้ำ) แต่ละกลุ่มมีปุ่มเดียวสลับป้าย/สี
+  ตาม `allowed` ที่ server ส่งมา · `ATT_TYPE_META` = flat lookup กลาง (label/emoji/color ต่อ
+  ประเภท) ใช้ทั้งปุ่ม/ไทม์ไลน์/`AttFixModal` — **ห้ามกลับไปใช้ `ATT_BTN`** (ลบไปแล้ว)
+  · พัก/ห้องน้ำเป็นคนละสถานะ ทำพร้อมกันไม่ได้ (`attAllowedNext_`) แต่ "ออกงาน" กดได้เสมอแม้กลาง
+  พัก/ห้องน้ำ (กันคนลืมกดกลับ) · เวลาห้องน้ำ**ไม่หัก**จากชั่วโมงทำงาน (ต่างจากพักที่หัก) —
+  ตัดสินใจไว้ที่ `attSummarize_`, แก้ได้บรรทัดเดียวถ้าเจ้าของอยากเปลี่ยน (event log ไม่เสียข้อมูล)
+  · "ใครเข้างานวันนี้" นับคนแยก หน้าร้าน/คลังสินค้า จาก **role** (ไม่ใช่ GPS)
 - **"เวลาของฉัน"** (ทุก role) = `Seg` toggle ในแท็บ "⏱️ ลงเวลา" เดิม ไม่ใช่แท็บใหม่ — ตั้งใจ กัน
   role ที่มีแท็บเกิน 9 อยู่แล้วโดนดันเข้า "เพิ่มเติม" เพิ่ม · `attMonthRange_` ตัดเดือนปัจจุบันที่
   วันนี้เสมอ (ไม่โชว์วันอนาคต) · ยังไม่นับ "ขาด" ถ้าเป็นวันนี้ (อาจยังไม่ถึงเวลากะ)

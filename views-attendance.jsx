@@ -14,11 +14,22 @@ async function attPost(body) {
   return res.json();
 }
 
-const ATT_BTN = [
-  { type: "in",         label: "เข้างาน",     emoji: "🟢", color: "#1f7f44" },
-  { type: "breakStart", label: "เริ่มพัก",     emoji: "🍽️", color: "#a07417" },
-  { type: "breakEnd",   label: "กลับจากพัก",  emoji: "↩️", color: "#1f6f8b" },
-  { type: "out",        label: "ออกงาน",      emoji: "🏁", color: "#705d96" },
+// ข้อมูลกลางของทุกประเภทการลงเวลา — ใช้ทั้งไทม์ไลน์/AttFixModal/ปุ่มสลับสถานะ
+const ATT_TYPE_META = {
+  in:            { label: "เข้างาน",          emoji: "🟢", color: "#1f7f44" },
+  out:           { label: "ออกงาน",           emoji: "🏁", color: "#705d96" },
+  breakStart:    { label: "เริ่มพัก",          emoji: "🍽️", color: "#a07417" },
+  breakEnd:      { label: "กลับจากพัก",       emoji: "↩️", color: "#1f6f8b" },
+  bathroomStart: { label: "ไปห้องน้ำ",         emoji: "🚻", color: "#2563a8" },
+  bathroomEnd:   { label: "กลับจากห้องน้ำ",    emoji: "↩️", color: "#1f6f8b" },
+};
+// เดิม 4 ปุ่มตายตัว (เข้างาน/เริ่มพัก/กลับจากพัก/ออกงาน) ตอนนี้รวมเป็น "ปุ่มสลับสถานะ" 3 กลุ่ม —
+// แต่ละกลุ่มโชว์ปุ่มเดียวที่ตำแหน่งเดิม สลับป้าย/สีตามว่าตอนนี้ "ยังไม่เริ่ม" หรือ "กำลังทำอยู่"
+// (เข้างาน⟷ออกงาน, เริ่มพัก⟷กลับจากพัก, ไปห้องน้ำ⟷กลับจากห้องน้ำ)
+const ATT_TOGGLE_GROUPS = [
+  { key: "work",     idle: "in",            active: "out" },
+  { key: "break",    idle: "breakStart",    active: "breakEnd" },
+  { key: "bathroom", idle: "bathroomStart", active: "bathroomEnd" },
 ];
 
 // วันนี้แบบ yyyy-MM-dd ตามเวลาเครื่อง (ห้ามใช้ toISOString — จะเพี้ยนไป 1 วันเพราะแปลงเป็น UTC)
@@ -72,6 +83,36 @@ function attShrinkImage(file, maxW) {
     };
     reader.readAsDataURL(file);
   });
+}
+
+// ปุ่มสลับสถานะ 1 ปุ่ม/กลุ่ม — โชว์ฝั่ง idle (ยังไม่เริ่ม) หรือ active (กำลังทำอยู่ กดเพื่อจบ)
+// ตาม allowed ที่ server คำนวณมาให้ · ทั้ง idle/active ไม่อยู่ใน allowed เลย = ปิดปุ่มไว้ก่อน
+// (เช่น ยังไม่ได้เข้างาน หรือกำลังอยู่ในอีกสถานะหนึ่งพร้อมกันไม่ได้ เช่น กำลังพักอยู่กดห้องน้ำไม่ได้)
+function AttToggleButton({ group, allowed, busy, onPunch, big }) {
+  const isActive = allowed.indexOf(group.active) >= 0;
+  const isIdle = allowed.indexOf(group.idle) >= 0;
+  const type = isActive ? group.active : group.idle;
+  const meta = ATT_TYPE_META[type];
+  const on = isActive || isIdle;
+  const isBusy = busy === type;
+  return (
+    <button onClick={() => onPunch(type)} disabled={!on || !!busy}
+      style={{
+        display: "flex", flexDirection: big ? "row" : "column", alignItems: "center", justifyContent: "center",
+        gap: big ? 10 : 6, padding: big ? "18px 8px" : "22px 8px", borderRadius: 16, fontFamily: "inherit",
+        width: "100%", boxSizing: "border-box",
+        border: on ? `2px solid ${meta.color}` : "1.5px solid var(--bdr)",
+        background: on ? meta.color : "var(--paper)",
+        color: on ? "#fff" : "var(--muted)",
+        fontSize: big ? 17 : 15, fontWeight: 800, minHeight: big ? 64 : 88,
+        cursor: on && !busy ? "pointer" : "default", opacity: on ? 1 : .45,
+        boxShadow: on ? `0 4px 14px ${meta.color}33` : "none",
+      }}>
+      {isBusy ? <span className="spin" style={{ width: big ? 22 : 20, height: big ? 22 : 20, borderWidth: 3 }} />
+              : <span style={{ fontSize: big ? 26 : 24 }}>{meta.emoji}</span>}
+      <span>{meta.label}</span>
+    </button>
+  );
 }
 
 // ═══════════════════════════════════════════════
@@ -218,29 +259,12 @@ function AttendanceView({ role }) {
             </div>
           )}
 
-          {/* ── ② ปุ่มลงเวลา 4 ปุ่ม ── */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 10, marginBottom: 14 }}>
-            {ATT_BTN.map(b => {
-              const on = allowed.indexOf(b.type) >= 0;
-              const isBusy = busy === b.type;
-              return (
-                <button key={b.type} onClick={() => doPunch(b.type)} disabled={!on || !!busy}
-                  style={{
-                    display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-                    gap: 6, padding: "22px 8px", borderRadius: 16, fontFamily: "inherit",
-                    border: on ? `2px solid ${b.color}` : "1.5px solid var(--bdr)",
-                    background: on ? b.color : "var(--paper)",
-                    color: on ? "#fff" : "var(--muted)",
-                    fontSize: 15, fontWeight: 800, minHeight: 88,
-                    cursor: on && !busy ? "pointer" : "default", opacity: on ? 1 : .45,
-                    boxShadow: on ? `0 4px 14px ${b.color}33` : "none",
-                  }}>
-                  {isBusy ? <span className="spin" style={{ width: 20, height: 20, borderWidth: 3 }} />
-                          : <span style={{ fontSize: 24 }}>{b.emoji}</span>}
-                  <span>{b.label}</span>
-                </button>
-              );
-            })}
+          {/* ── ② ปุ่มสลับสถานะ 3 ปุ่ม (เข้า/ออกงาน ใหญ่ด้านบน · พัก/ห้องน้ำ คู่กันด้านล่าง) ── */}
+          {/* แต่ละปุ่มอยู่ตำแหน่งเดิมเสมอ สลับป้าย/สีไปมาตามสถานะ (ไม่ใช่ปุ่มแยกที่จางลงเวลากดไม่ได้) */}
+          <AttToggleButton group={ATT_TOGGLE_GROUPS[0]} allowed={allowed} busy={busy} onPunch={doPunch} big />
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 10, marginTop: 10, marginBottom: 14 }}>
+            <AttToggleButton group={ATT_TOGGLE_GROUPS[1]} allowed={allowed} busy={busy} onPunch={doPunch} />
+            <AttToggleButton group={ATT_TOGGLE_GROUPS[2]} allowed={allowed} busy={busy} onPunch={doPunch} />
           </div>
 
           {allowed.length === 0 && (
@@ -292,7 +316,7 @@ function AttendanceView({ role }) {
                   display: "flex", alignItems: "center", gap: 10, padding: "11px 14px",
                   borderTop: i ? "1px solid var(--bdr)" : "none",
                 }}>
-                  <span style={{ fontSize: 16 }}>{(ATT_BTN.find(b => b.type === e.type) || {}).emoji}</span>
+                  <span style={{ fontSize: 16 }}>{(ATT_TYPE_META[e.type] || {}).emoji}</span>
                   <span style={{ flex: 1, fontSize: 14, fontWeight: 600 }}>{e.typeTh}</span>
                   {e.inArea === false && <span title="อยู่นอกพื้นที่ร้าน" style={{ fontSize: 12 }}>⚠️</span>}
                   {e.hasPhoto && <span title="มีรูป" style={{ fontSize: 12 }}>📷</span>}
@@ -302,11 +326,13 @@ function AttendanceView({ role }) {
             </div>
           )}
 
-          {sum && (sum.lateMin > 0 || sum.breakMin > 0 || sum.forgotBreakEnd) && (
+          {sum && (sum.lateMin > 0 || sum.breakMin > 0 || sum.bathroomMin > 0 || sum.forgotBreakEnd || sum.forgotBathroomEnd) && (
             <div style={{ marginTop: 10, fontSize: 12.5, color: "var(--muted)", lineHeight: 1.7 }}>
               {sum.lateMin > 0 && <div>⏰ เข้างานสาย {sum.lateMin} นาที</div>}
               {sum.breakMin > 0 && <div>🍽️ พักรวม {attMinLabel(sum.breakMin)}</div>}
+              {sum.bathroomMin > 0 && <div>🚻 ห้องน้ำรวม {attMinLabel(sum.bathroomMin)}</div>}
               {sum.forgotBreakEnd && <div style={{ color: "#a07417" }}>⚠️ ลืมกด "กลับจากพัก" — แจ้งเจ้าของให้แก้ให้</div>}
+              {sum.forgotBathroomEnd && <div style={{ color: "#a07417" }}>⚠️ ลืมกด "กลับจากห้องน้ำ" — แจ้งเจ้าของให้แก้ให้</div>}
             </div>
           )}
         </>
@@ -423,6 +449,7 @@ function MyAttendanceMonth() {
                 <div style={{ textAlign: "right", flexShrink: 0 }}>
                   {d.lateMin > 0 && <div style={{ fontSize: 11, color: "#a07417", fontWeight: 700 }}>สาย {d.lateMin} น.</div>}
                   {d.forgotBreakEnd && <div style={{ fontSize: 11, color: "#a07417" }}>⚠️ ลืมกลับจากพัก</div>}
+                  {d.forgotBathroomEnd && <div style={{ fontSize: 11, color: "#a07417" }}>⚠️ ลืมกลับจากห้องน้ำ</div>}
                 </div>
               </div>
             ))}
@@ -439,9 +466,12 @@ function MyAttendanceMonth() {
 const ATT_STATE_STYLE = {
   "ทำงานอยู่":   { background: "#e8f5e9", color: "#1b5e20" },
   "พักอยู่":     { background: "#fff3e0", color: "#e65100" },
+  "ไปห้องน้ำ":   { background: "#f3e5f5", color: "#6a1b9a" },
   "ออกงานแล้ว":  { background: "#e3f2fd", color: "#0d47a1" },
   "ยังไม่มา":    { background: "#f5f5f5", color: "#757575" },
 };
+// role ที่มีอยู่จริงตอนนี้ = อยู่ที่ร้าน (ไม่นับ "ยังไม่มา"/"ออกงานแล้ว")
+const ATT_HERE_STATES = new Set(["ทำงานอยู่", "พักอยู่", "ไปห้องน้ำ"]);
 
 function AttendanceTodayView() {
   const [rows, setRows] = uS([]);
@@ -480,7 +510,9 @@ function AttendanceTodayView() {
     } catch (e) { setPhoto(null); }
   };
 
-  const here = rows.filter(r => r.state === "ทำงานอยู่" || r.state === "พักอยู่");
+  const here = rows.filter(r => ATT_HERE_STATES.has(r.state));
+  const frontstoreHere = here.filter(r => r.role === "frontstore");
+  const warehouseHere = here.filter(r => r.role === "warehouse");
   const late = rows.filter(r => r.summary && r.summary.lateMin > 0);
   const came = rows.filter(r => r.summary && r.summary.inTime);
   const noOut = came.filter(r => !r.summary.outTime);
@@ -494,7 +526,9 @@ function AttendanceTodayView() {
             🕐 {isToday ? "ใครเข้างานวันนี้" : "ย้อนดูการลงเวลา"}
           </div>
           <div style={{ fontSize: 12, color: "var(--muted)" }}>
-            {isToday ? `อยู่ที่ร้าน ${here.length} คน` : `มาทำงาน ${came.length} คน`}
+            {isToday
+              ? `🏪 หน้าร้าน ${frontstoreHere.length} คน · 📦 คลังสินค้า ${warehouseHere.length} คน`
+              : `มาทำงาน ${came.length} คน`}
             {late.length ? ` · สาย ${late.length} คน` : ""}
             {!isToday && noOut.length ? ` · ⚠️ ไม่ได้กดออกงาน ${noOut.length} คน` : ""}
           </div>
@@ -561,6 +595,7 @@ function AttendanceTodayView() {
               <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>
                 กะ {r.shift ? `${r.shift.start}-${r.shift.end} (${r.shift.name})` : "— ไม่มีกะวันนี้"}
                 {r.summary && r.summary.breakMin > 0 ? ` · พัก ${attMinLabel(r.summary.breakMin)}` : ""}
+                {r.summary && r.summary.bathroomMin > 0 ? ` · ห้องน้ำ ${attMinLabel(r.summary.bathroomMin)}` : ""}
                 {r.summary && r.summary.workedMin != null ? ` · ทำงาน ${attMinLabel(r.summary.workedMin)}` : ""}
               </div>
               {r.events.length === 0 ? (
@@ -587,6 +622,9 @@ function AttendanceTodayView() {
               ))}
               {r.summary && r.summary.forgotBreakEnd && (
                 <div style={{ fontSize: 11.5, color: "#a07417", marginTop: 6 }}>⚠️ ลืมกด "กลับจากพัก" — เวลาพักอาจไม่ตรงจริง</div>
+              )}
+              {r.summary && r.summary.forgotBathroomEnd && (
+                <div style={{ fontSize: 11.5, color: "#a07417", marginTop: 6 }}>⚠️ ลืมกด "กลับจากห้องน้ำ" — เวลาห้องน้ำอาจไม่ตรงจริง</div>
               )}
               {/* วันนี้คนที่ยังทำงานอยู่ก็ยังไม่มี "ออกงาน" เป็นเรื่องปกติ — เตือนเฉพาะตอนย้อนดูวันเก่า */}
               {!isToday && r.summary && r.summary.inTime && !r.summary.outTime && (
@@ -672,14 +710,14 @@ function AttFixModal({ mode, staff, event, date, onClose, onSaved }) {
 
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 7 }}>ประเภท</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 8, marginBottom: 14 }}>
-          {ATT_BTN.map(b => (
-            <button key={b.type} onClick={() => setType(b.type)} disabled={!!busy}
+          {Object.keys(ATT_TYPE_META).map(t => (
+            <button key={t} onClick={() => setType(t)} disabled={!!busy}
               style={{
                 padding: "12px 8px", borderRadius: 11, fontFamily: "inherit", fontSize: 14, fontWeight: 700,
-                border: type === b.type ? `2px solid ${b.color}` : "1.5px solid var(--bdr)",
-                background: type === b.type ? b.color : "var(--paper)",
-                color: type === b.type ? "#fff" : "var(--text)", cursor: "pointer",
-              }}>{b.emoji} {b.label}</button>
+                border: type === t ? `2px solid ${ATT_TYPE_META[t].color}` : "1.5px solid var(--bdr)",
+                background: type === t ? ATT_TYPE_META[t].color : "var(--paper)",
+                color: type === t ? "#fff" : "var(--text)", cursor: "pointer",
+              }}>{ATT_TYPE_META[t].emoji} {ATT_TYPE_META[t].label}</button>
           ))}
         </div>
 

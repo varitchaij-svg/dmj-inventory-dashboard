@@ -144,6 +144,18 @@ function attSequenceWarning(events) {
   return w.join(" · ");
 }
 
+// ── attAllowedNext: ปุ่มไหนกดได้ต่อจากสถานะปัจจุบัน (จาก appsscript_complete.gs) ──
+// พัก/ห้องน้ำเป็นคนละสถานะกัน ทำพร้อมกันไม่ได้ — "ออกงาน" กดได้เสมอแม้กลางพัก/ห้องน้ำ
+function attAllowedNext(events) {
+  const types = events.map(function (e) { return e.type; });
+  const lastType = types.length ? types[types.length - 1] : null;
+  if (!lastType) return ["in"];
+  if (lastType === "in" || lastType === "breakEnd" || lastType === "bathroomEnd") return ["breakStart", "bathroomStart", "out"];
+  if (lastType === "breakStart") return ["breakEnd", "out"];
+  if (lastType === "bathroomStart") return ["bathroomEnd", "out"];
+  return [];
+}
+
 // ── attSummarize: สรุปเวลาของวัน (จาก appsscript_complete.gs) ──
 // events ต้องเรียงตาม serverTs แล้ว · shift = { start: นาทีจากเที่ยงคืน } หรือ null
 function attSummarize(events, shift) {
@@ -152,13 +164,20 @@ function attSummarize(events, shift) {
   for (let i = events.length - 1; i >= 0; i--) { if (events[i].type === "out") { lastOut = events[i]; break; } }
 
   let breakMin = 0, openBreak = null, forgotBreakEnd = false;
+  let bathroomMin = 0, openBathroom = null, forgotBathroomEnd = false;
   events.forEach(function (e) {
     if (e.type === "breakStart") openBreak = e;
     else if (e.type === "breakEnd" && openBreak) { breakMin += Math.round((e.serverTs - openBreak.serverTs) / 60000); openBreak = null; }
+    else if (e.type === "bathroomStart") openBathroom = e;
+    else if (e.type === "bathroomEnd" && openBathroom) { bathroomMin += Math.round((e.serverTs - openBathroom.serverTs) / 60000); openBathroom = null; }
   });
   if (openBreak) {
     forgotBreakEnd = true;
     if (lastOut) breakMin += Math.round((lastOut.serverTs - openBreak.serverTs) / 60000);
+  }
+  if (openBathroom) {
+    forgotBathroomEnd = true;
+    if (lastOut) bathroomMin += Math.round((lastOut.serverTs - openBathroom.serverTs) / 60000);
   }
 
   const workedMin = (firstIn && lastOut) ? Math.max(0, Math.round((lastOut.serverTs - firstIn.serverTs) / 60000) - breakMin) : null;
@@ -173,9 +192,11 @@ function attSummarize(events, shift) {
   return {
     inTime: firstIn ? firstIn.time : null,
     outTime: lastOut ? lastOut.time : null,
-    breakMin, workedMin, lateMin,
+    breakMin, bathroomMin, workedMin, lateMin,
     onBreak: !!(openBreak && !lastOut),
+    onBathroom: !!(openBathroom && !lastOut),
     forgotBreakEnd,
+    forgotBathroomEnd,
   };
 }
 
@@ -749,7 +770,7 @@ module.exports = {
   buildYoYSeries, abcClassify, sanitizeThresholds, THRESHOLDS_DEFAULT,
   parseCheckDateMs, suggestNextSku,
   parseSkuParts, nextModelForPrefix,
-  attBuildTs, attSequenceWarning, attSummarize, attMonthRange,
+  attBuildTs, attSequenceWarning, attSummarize, attMonthRange, attAllowedNext,
   canDo, canDoStrict,
   computeBillTotals, wholesaleTierRate, isBillExcludedCat, BILL_EXCLUDE_CAT_KEYWORDS,
 };

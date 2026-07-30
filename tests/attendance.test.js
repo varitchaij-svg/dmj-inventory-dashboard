@@ -6,9 +6,10 @@
 //   2. attSummarize — คิดชั่วโมงทำงาน/พัก/สาย จาก event log
 //   3. attSequenceWarning — เตือนลำดับเพี้ยนหลังเจ้าของแก้ย้อนหลัง (เตือน ไม่บล็อก)
 //   4. attMonthRange — ช่วงวันของ "เวลาของฉัน" เดือนนี้ต้องตัดที่เมื่อวาน ไม่โชว์วันอนาคต
+//   5. attAllowedNext — สถานะ ห้องน้ำ/พัก แยกกัน ทำพร้อมกันไม่ได้ (กันกดข้ามสถานะ)
 // ─────────────────────────────────────────────────────────────────────────────
 import { describe, it, expect } from 'vitest';
-import { attBuildTs, attSequenceWarning, attSummarize, attMonthRange } from './helpers.js';
+import { attBuildTs, attSequenceWarning, attSummarize, attMonthRange, attAllowedNext } from './helpers.js';
 
 // event ปลอมจากวันที่/เวลา — เลียนแบบแถวในชีต "ลงเวลา"
 const ev = (type, hhmm) => {
@@ -135,6 +136,33 @@ describe('attSummarize — คิดชั่วโมงทำงาน/พั�
     const after = attSummarize([ev('in', '08:30'), ev('out', '18:00')], { start: 8 * 60 + 30 });
     expect(after.workedMin).toBe(9 * 60 + 30);
   });
+
+  it('ไปห้องน้ำ 10 นาที → bathroomMin นับได้ แต่ "ไม่หัก" จาก workedMin (ต่างจากพักที่หัก)', () => {
+    const s = attSummarize([ev('in', '08:30'), ev('bathroomStart', '10:00'), ev('bathroomEnd', '10:10'), ev('out', '17:30')], null);
+    expect(s.bathroomMin).toBe(10);
+    expect(s.workedMin).toBe(9 * 60);   // ไม่ลบ bathroomMin ออก (ต่างจาก breakMin ที่ลบ)
+  });
+
+  it('พัก + ห้องน้ำพร้อมกันในวันเดียว → นับแยกกันคนละยอด', () => {
+    const s = attSummarize([
+      ev('in', '08:30'), ev('breakStart', '12:00'), ev('breakEnd', '13:00'),
+      ev('bathroomStart', '15:00'), ev('bathroomEnd', '15:05'), ev('out', '17:30'),
+    ], null);
+    expect(s.breakMin).toBe(60);
+    expect(s.bathroomMin).toBe(5);
+    expect(s.workedMin).toBe(9 * 60 - 60);   // หักแค่ breakMin ไม่หัก bathroomMin
+  });
+
+  it('ลืมกด "กลับจากห้องน้ำ" → ตั้งธง forgotBathroomEnd + นับถึงเวลาออกงาน', () => {
+    const s = attSummarize([ev('in', '08:30'), ev('bathroomStart', '16:00'), ev('out', '17:30')], null);
+    expect(s.forgotBathroomEnd).toBe(true);
+    expect(s.bathroomMin).toBe(90);
+  });
+
+  it('กำลังอยู่ห้องน้ำ (ยังไม่ออกงาน) → onBathroom = true', () => {
+    const s = attSummarize([ev('in', '08:30'), ev('bathroomStart', '10:00')], null);
+    expect(s.onBathroom).toBe(true);
+  });
 });
 
 describe('attSequenceWarning — เตือนลำดับเพี้ยนหลังแก้ย้อนหลัง', () => {
@@ -207,5 +235,45 @@ describe('attMonthRange — ช่วงวันของ "เวลาขอ�
   it('วันที่ 1 ของเดือนปัจจุบัน → มีแค่วันเดียว', () => {
     const r = attMonthRange('2026-07', new Date(2026, 6, 1));
     expect(r.dates).toEqual(['2026-07-01']);
+  });
+});
+
+describe('attAllowedNext — ห้องน้ำ/พัก เป็นคนละสถานะ ทำพร้อมกันไม่ได้', () => {
+  it('ยังไม่ลงเวลาเลย → กดได้แค่ "เข้างาน"', () => {
+    expect(attAllowedNext([])).toEqual(['in']);
+  });
+
+  it('เพิ่งเข้างาน → เริ่มพัก/ไปห้องน้ำ/ออกงาน ได้ทั้ง 3', () => {
+    expect(attAllowedNext([{ type: 'in' }])).toEqual(['breakStart', 'bathroomStart', 'out']);
+  });
+
+  it('กำลังพักอยู่ → กดได้แค่ "กลับจากพัก" หรือ "ออกงาน" — ไปห้องน้ำระหว่างพักไม่ได้', () => {
+    const allowed = attAllowedNext([{ type: 'in' }, { type: 'breakStart' }]);
+    expect(allowed).toEqual(['breakEnd', 'out']);
+    expect(allowed).not.toContain('bathroomStart');
+  });
+
+  it('กำลังอยู่ห้องน้ำ → กดได้แค่ "กลับจากห้องน้ำ" หรือ "ออกงาน" — เริ่มพักระหว่างเข้าห้องน้ำไม่ได้', () => {
+    const allowed = attAllowedNext([{ type: 'in' }, { type: 'bathroomStart' }]);
+    expect(allowed).toEqual(['bathroomEnd', 'out']);
+    expect(allowed).not.toContain('breakStart');
+  });
+
+  it('กลับจากพักแล้ว → เริ่มพัก/ไปห้องน้ำ/ออกงาน ได้ใหม่อีกครั้ง', () => {
+    expect(attAllowedNext([{ type: 'in' }, { type: 'breakStart' }, { type: 'breakEnd' }]))
+      .toEqual(['breakStart', 'bathroomStart', 'out']);
+  });
+
+  it('กลับจากห้องน้ำแล้ว → เริ่มพัก/ไปห้องน้ำ/ออกงาน ได้ใหม่อีกครั้ง', () => {
+    expect(attAllowedNext([{ type: 'in' }, { type: 'bathroomStart' }, { type: 'bathroomEnd' }]))
+      .toEqual(['breakStart', 'bathroomStart', 'out']);
+  });
+
+  it('ออกงานแล้ว → จบวัน กดอะไรไม่ได้อีก', () => {
+    expect(attAllowedNext([{ type: 'in' }, { type: 'out' }])).toEqual([]);
+  });
+
+  it('ออกงานตอนกำลังพักอยู่ (ลืมกดกลับจากพัก) → ยอมให้ออกงานได้', () => {
+    expect(attAllowedNext([{ type: 'in' }, { type: 'breakStart' }, { type: 'out' }])).toEqual([]);
   });
 });

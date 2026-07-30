@@ -682,8 +682,11 @@ function saveStaffHandler_(ss, data, actor) {
 // ระบบลงเวลาเข้า-ออกงาน (เฟส A) — ชีต "ลงเวลา" / "จุดลงเวลา" / "ตั้งค่ากะ"
 // ดูแผนเต็มที่ docs/PLAN-ATTENDANCE.md
 // ═══════════════════════════════════════════════════════════
-const ATT_TYPES = ["in", "breakStart", "breakEnd", "out"];
-const ATT_TYPE_TH = { in: "เข้างาน", breakStart: "เริ่มพัก", breakEnd: "กลับจากพัก", out: "ออกงาน" };
+const ATT_TYPES = ["in", "breakStart", "breakEnd", "bathroomStart", "bathroomEnd", "out"];
+const ATT_TYPE_TH = {
+  in: "เข้างาน", breakStart: "เริ่มพัก", breakEnd: "กลับจากพัก",
+  bathroomStart: "ไปห้องน้ำ", bathroomEnd: "กลับจากห้องน้ำ", out: "ออกงาน",
+};
 
 // ค่าเริ่มต้นที่เจ้าของยืนยันแล้ว (2026-07-29) — seed ลงชีตครั้งแรก แก้ในชีตได้เองภายหลัง
 const ATT_SITES_SEED = [
@@ -823,16 +826,21 @@ function readAttEvents_(ss, staffId, dateStr) {
 }
 
 // ปุ่มไหนกดได้ต่อจากสถานะปัจจุบัน (กันกดผิดลำดับ เช่นกดออกงานทั้งที่ยังไม่เข้างาน)
+// พัก/ห้องน้ำ เป็นคนละสถานะกัน ทำพร้อมกันไม่ได้ (ต้องกลับจากอันหนึ่งก่อนเริ่มอีกอันได้) —
+// "ออกงาน" ยังกดได้เสมอแม้อยู่กลางพัก/ห้องน้ำ (เผื่อลืมกดกลับแล้วต้องรีบกลับบ้าน — attSummarize_ ดักไว้)
 function attAllowedNext_(events) {
   const types = events.map(function (e) { return e.type; });
   const lastType = types.length ? types[types.length - 1] : null;
   if (!lastType) return ["in"];
-  if (lastType === "in" || lastType === "breakEnd") return ["breakStart", "out"];
+  if (lastType === "in" || lastType === "breakEnd" || lastType === "bathroomEnd") return ["breakStart", "bathroomStart", "out"];
   if (lastType === "breakStart") return ["breakEnd", "out"];
+  if (lastType === "bathroomStart") return ["bathroomEnd", "out"];
   return []; // out แล้ว = จบวัน
 }
 
-// สรุปของวัน: เข้า/ออก/พักกี่นาที/ทำงานกี่นาที/สายกี่นาที + ธงเตือน
+// สรุปของวัน: เข้า/ออก/พักกี่นาที/ห้องน้ำกี่นาที/ทำงานกี่นาที/สายกี่นาที + ธงเตือน
+// หมายเหตุ: เวลาห้องน้ำ "ไม่หัก" ออกจากชั่วโมงทำงาน (ต่างจากพักที่หัก) — ตามธรรมเนียมทั่วไปที่ห้องน้ำ
+// เป็นเรื่องจำเป็นระหว่างงาน ไม่ใช่พักยาว ถ้าเจ้าของอยากให้หักด้วยเปลี่ยนสูตร workedMin บรรทัดเดียวได้เลย
 function attSummarize_(events, shift) {
   const firstIn = events.find(function (e) { return e.type === "in"; }) || null;
   let lastOut = null;
@@ -840,13 +848,20 @@ function attSummarize_(events, shift) {
 
   // พัก: จับคู่ breakStart→breakEnd · ถ้าลืมกดกลับจากพักแล้วกดออกงานเลย นับถึงเวลาออกงาน + ตั้งธง
   let breakMin = 0, openBreak = null, forgotBreakEnd = false;
+  let bathroomMin = 0, openBathroom = null, forgotBathroomEnd = false;
   events.forEach(function (e) {
     if (e.type === "breakStart") openBreak = e;
     else if (e.type === "breakEnd" && openBreak) { breakMin += Math.round((e.serverTs - openBreak.serverTs) / 60000); openBreak = null; }
+    else if (e.type === "bathroomStart") openBathroom = e;
+    else if (e.type === "bathroomEnd" && openBathroom) { bathroomMin += Math.round((e.serverTs - openBathroom.serverTs) / 60000); openBathroom = null; }
   });
   if (openBreak) {
     forgotBreakEnd = true;
     if (lastOut) breakMin += Math.round((lastOut.serverTs - openBreak.serverTs) / 60000);
+  }
+  if (openBathroom) {
+    forgotBathroomEnd = true;
+    if (lastOut) bathroomMin += Math.round((lastOut.serverTs - openBathroom.serverTs) / 60000);
   }
 
   const workedMin = (firstIn && lastOut) ? Math.max(0, Math.round((lastOut.serverTs - firstIn.serverTs) / 60000) - breakMin) : null;
@@ -862,10 +877,13 @@ function attSummarize_(events, shift) {
     inTime: firstIn ? firstIn.time : null,
     outTime: lastOut ? lastOut.time : null,
     breakMin: breakMin,
+    bathroomMin: bathroomMin,
     workedMin: workedMin,
     lateMin: lateMin,
     onBreak: !!(openBreak && !lastOut),
+    onBathroom: !!(openBathroom && !lastOut),
     forgotBreakEnd: forgotBreakEnd,
+    forgotBathroomEnd: forgotBathroomEnd,
     outsideArea: events.some(function (e) { return e.lat !== "" && e.lat != null && !e.inArea; }),
   };
 }
@@ -1042,7 +1060,8 @@ function myAttendanceSummaryHandler_(ss, data) {
       date: dateStr, dow: attDowOfDateStr_(dateStr), isToday: dateStr === todayStr, isPast: isPast,
       shift: shift ? { name: shift.name, start: attFmtHm_(shift.start), end: attFmtHm_(shift.end) } : null,
       inTime: sum.inTime, outTime: sum.outTime, workedMin: sum.workedMin, breakMin: sum.breakMin,
-      lateMin: sum.lateMin, forgotBreakEnd: sum.forgotBreakEnd,
+      bathroomMin: sum.bathroomMin,
+      lateMin: sum.lateMin, forgotBreakEnd: sum.forgotBreakEnd, forgotBathroomEnd: sum.forgotBathroomEnd,
     };
   });
 
@@ -1091,7 +1110,7 @@ function attendanceTodayHandler_(ss, data) {
     return {
       staffId: st.staffId, name: st.displayName || st.lineDisplayName, role: st.role,
       pictureUrl: st.pictureUrl,
-      state: !lastType ? "ยังไม่มา" : (lastType === "out" ? "ออกงานแล้ว" : (sum.onBreak ? "พักอยู่" : "ทำงานอยู่")),
+      state: !lastType ? "ยังไม่มา" : (lastType === "out" ? "ออกงานแล้ว" : (sum.onBreak ? "พักอยู่" : (sum.onBathroom ? "ไปห้องน้ำ" : "ทำงานอยู่"))),
       shift: shift ? { name: shift.name, start: attFmtHm_(shift.start), end: attFmtHm_(shift.end) } : null,
       summary: sum,
       events: evs.map(function (e) {
