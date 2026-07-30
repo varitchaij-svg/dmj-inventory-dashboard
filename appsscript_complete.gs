@@ -571,6 +571,26 @@ function requireLoginEnabled_() {
   return PropertiesService.getScriptProperties().getProperty('REQUIRE_LOGIN') === 'true';
 }
 
+// ─── เปิด/ปิด REQUIRE_LOGIN ทีเดียว — เจ้าของรันเองใน GAS editor (เลือกชื่อนี้ในดรอปดาวน์ แล้วกด Run) ───
+// enableRequireLogin เช็ค lastLoginAt ให้ก่อน — ถ้ามีพนักงาน active คนไหนยังไม่เคยล็อกอิน LINE
+// จะไม่เปิดให้ (กันคนนั้นทำงานไม่ได้ทั้งร้านโดยไม่ทันรู้ตัว) ดูชื่อคนที่ยังไม่ล็อกอินได้ที่ Execution log
+function enableRequireLogin() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const notLoggedIn = readStaffAll_(ss).filter(function (x) { return x.status === 'active' && !x.lastLoginAt; });
+  if (notLoggedIn.length) {
+    Logger.log("⚠️ ยังไม่เปิด — พนักงานต่อไปนี้ยังไม่เคยล็อกอิน LINE เลย: " +
+      notLoggedIn.map(function (x) { return x.displayName || x.lineDisplayName || x.staffId; }).join(", "));
+    Logger.log("   ให้รอคนกลุ่มนี้ล็อกอินก่อน หรือเปลี่ยนสถานะเป็น disabled ถ้าเลิกใช้แล้ว แล้วรันฟังก์ชันนี้ใหม่");
+    return;
+  }
+  PropertiesService.getScriptProperties().setProperty('REQUIRE_LOGIN', 'true');
+  Logger.log("✅ เปิด REQUIRE_LOGIN แล้ว — ทุก action ที่มีสิทธิ์กำหนดใน ROLE_ACTIONS_ บังคับล็อกอินทันที");
+}
+function disableRequireLogin() {
+  PropertiesService.getScriptProperties().deleteProperty('REQUIRE_LOGIN');
+  Logger.log("🔙 ปิด REQUIRE_LOGIN แล้ว — กลับไปโหมด rollout เดิม (บังคับเฉพาะ 7 action สำคัญที่กระทบเงิน/สต็อก)");
+}
+
 // action ที่ยกเว้น ไม่ต้องมี session (ล็อกอิน/สาธารณะ) — ตรวจก่อน gate ทุกครั้ง
 var SESSION_EXEMPT_ACTIONS_ = {
   verifyPin: true, authLine: true, claimLoginHandoff: true, me: true, logout: true,
@@ -579,31 +599,35 @@ var SESSION_EXEMPT_ACTIONS_ = {
 // สิทธิ์ฝั่ง server — ล้อ ROLE_TABS ใน app.jsx (frontend ซ่อนแท็บ ≠ กันคนยิง API ตรง)
 // key = ชื่อ field/action ที่ doPost ใช้ตัดสินใจ · owner/dev ผ่านทุกอย่าง (isAdminRole_)
 // ⚠️ ยังไม่บังคับใช้จนกว่า REQUIRE_LOGIN='true' — ดู canDoOrNull_ ด้านล่าง
+// ⚠️ myAttendanceSummary ("เวลาของฉัน") ต้องอยู่ในทุก role — ปุ่มนี้อยู่ในแท็บ "ลงเวลา" ที่ทุก role
+// มีเหมือนกัน (ดู AttendanceView ใน views-attendance.jsx) ลืมใส่ role ไหน = role นั้นเปิด "เวลาของฉัน"
+// ไม่ได้ทันทีที่ REQUIRE_LOGIN='true' (เคยเกือบพลาดตอนเปิดจริง 2026-07-30 — myAttendanceSummary/
+// attendanceToday ไม่เคยผ่าน canDoOrNull_ มาก่อนเพราะ REQUIRE_LOGIN ปิดอยู่ตลอด ไม่มีอะไรเตือน)
 var ROLE_ACTIONS_ = {
   saler:      ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
                "getContactDetail", "createQuotation", "saveQuotationDraft", "deleteQuotationDraft",
                "voidQuotation", "approveQuotation", "setQuoteSale", "order", "updateOrderState",
-               "punch", "myToday"],
+               "punch", "myToday", "myAttendanceSummary"],
   // storedevice = บัญชี LINE กลางประจำเครื่อง/แท็บเล็ตร้าน — สิทธิ์ API เท่า saler ทุกอย่าง
-  // + attendanceToday (ดู "ใครเข้างานวันนี้" อย่างเดียว — ไม่ได้เพิ่มในนี้เพราะ attendanceToday
-  // ไม่ผ่าน ROLE_ACTIONS_/canDoOrNull_ แต่เช็ค isAdminRole_ ตรง ๆ ใน attendanceTodayHandler_)
+  // + attendanceToday (ดู "ใครเข้างานวันนี้" — เหตุผลที่มี role นี้อยู่เลย ต้องเปิดให้)
   storedevice: ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
                "getContactDetail", "createQuotation", "saveQuotationDraft", "deleteQuotationDraft",
                "voidQuotation", "approveQuotation", "setQuoteSale", "order", "updateOrderState",
-               "punch", "myToday"],
+               "punch", "myToday", "myAttendanceSummary", "attendanceToday"],
   frontstore: ["updateFrontStore", "order", "updateOrderState", "transferStock",
                "transferStockBatch", "confirmShipmentReceive", "recordUnscannedSale",
-               "punch", "myToday"],
+               "punch", "myToday", "myAttendanceSummary"],
   warehouse:  ["order", "updateOrderState", "transferStock", "transferStockBatch",
                "deductStock", "deductMaterials", "confirmStockCount", "updateLockData",
                "deleteLockEntry", "addNewProduct", "addPurchaseIn", "checkSkuExists",
                "fetchProductImage", "zeroStock", "createMtoJob", "closeMtoJob",
                "saveMtoJobItems", "deleteMtoJob", "createStockCheck", "completeStockCheck",
-               "confirmShipmentReceive", "deleteOrder", "deleteOrders", "punch", "myToday"],
+               "confirmShipmentReceive", "deleteOrder", "deleteOrders", "punch", "myToday",
+               "myAttendanceSummary"],
   employee:   ["order", "updateOrderState", "transferStock", "transferStockBatch",
                "updateFrontStore", "confirmShipmentReceive", "updateLockData",
                "createMtoJob", "closeMtoJob", "saveMtoJobItems",
-               "deleteOrder", "deleteOrders", "punch", "myToday"],
+               "deleteOrder", "deleteOrders", "punch", "myToday", "myAttendanceSummary"],
 };
 
 // ── action ที่กระทบเงิน/สต็อกจริง (ตัด/อนุมัติออเดอร์ขาย ZORT, ปรับสต็อกเป็น 0, ลบ order,
