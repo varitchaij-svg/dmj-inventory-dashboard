@@ -603,32 +603,35 @@ var SESSION_EXEMPT_ACTIONS_ = {
 // มีเหมือนกัน (ดู AttendanceView ใน views-attendance.jsx) ลืมใส่ role ไหน = role นั้นเปิด "เวลาของฉัน"
 // ไม่ได้ทันทีที่ REQUIRE_LOGIN='true' (เคยเกือบพลาดตอนเปิดจริง 2026-07-30 — myAttendanceSummary/
 // attendanceToday ไม่เคยผ่าน canDoOrNull_ มาก่อนเพราะ REQUIRE_LOGIN ปิดอยู่ตลอด ไม่มีอะไรเตือน)
+// action MTO ("mtojobs" tab) — ทุก role ที่มีแท็บนี้ทำได้เต็มสิทธิ์เหมือนกันหมด (เจ้าของยืนยันแล้ว
+// 2026-07-30 — MtoJobView ไม่เคยเช็ค role เลย ปุ่มสร้าง/ปิดงานโชว์ให้ทุกคนเห็นอยู่แล้วแต่ก่อนหน้านี้
+// ROLE_ACTIONS_ อนุญาตแค่ warehouse/employee เป็นช่องโหว่ที่เพิ่งเจอตอนเปิด REQUIRE_LOGIN จริง)
+var MTO_JOB_ACTIONS_ = ["createMtoJob", "closeMtoJob", "saveMtoJobItems", "deleteMtoJob",
+                         "assignMtoJob", "listActiveStaffNames"];
 var ROLE_ACTIONS_ = {
   saler:      ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
                "getContactDetail", "createQuotation", "saveQuotationDraft", "deleteQuotationDraft",
                "voidQuotation", "approveQuotation", "setQuoteSale", "order", "updateOrderState",
-               "punch", "myToday", "myAttendanceSummary"],
+               "punch", "myToday", "myAttendanceSummary"].concat(MTO_JOB_ACTIONS_),
   // storedevice = บัญชี LINE กลางประจำเครื่อง/แท็บเล็ตร้าน — สิทธิ์ API เท่า saler ทุกอย่าง
   // + attendanceToday (ดู "ใครเข้างานวันนี้" — เหตุผลที่มี role นี้อยู่เลย ต้องเปิดให้)
   storedevice: ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
                "getContactDetail", "createQuotation", "saveQuotationDraft", "deleteQuotationDraft",
                "voidQuotation", "approveQuotation", "setQuoteSale", "order", "updateOrderState",
-               "punch", "myToday", "myAttendanceSummary", "attendanceToday"],
+               "punch", "myToday", "myAttendanceSummary", "attendanceToday"].concat(MTO_JOB_ACTIONS_),
   frontstore: ["updateFrontStore", "order", "updateOrderState", "transferStock",
                "transferStockBatch", "confirmShipmentReceive", "recordUnscannedSale",
-               "punch", "myToday", "myAttendanceSummary"],
+               "punch", "myToday", "myAttendanceSummary"].concat(MTO_JOB_ACTIONS_),
   warehouse:  ["order", "updateOrderState", "transferStock", "transferStockBatch",
                "deductStock", "deductMaterials", "confirmStockCount", "updateLockData",
                "deleteLockEntry", "addNewProduct", "addPurchaseIn", "checkSkuExists",
-               "fetchProductImage", "zeroStock", "createMtoJob", "closeMtoJob",
-               "saveMtoJobItems", "deleteMtoJob", "assignMtoJob", "listActiveStaffNames",
+               "fetchProductImage", "zeroStock",
                "createStockCheck", "completeStockCheck",
                "confirmShipmentReceive", "deleteOrder", "deleteOrders", "punch", "myToday",
-               "myAttendanceSummary"],
+               "myAttendanceSummary"].concat(MTO_JOB_ACTIONS_),
   employee:   ["order", "updateOrderState", "transferStock", "transferStockBatch",
                "updateFrontStore", "confirmShipmentReceive", "updateLockData",
-               "createMtoJob", "closeMtoJob", "saveMtoJobItems", "assignMtoJob", "listActiveStaffNames",
-               "deleteOrder", "deleteOrders", "punch", "myToday", "myAttendanceSummary"],
+               "deleteOrder", "deleteOrders", "punch", "myToday", "myAttendanceSummary"].concat(MTO_JOB_ACTIONS_),
 };
 
 // ── action ที่กระทบเงิน/สต็อกจริง (ตัด/อนุมัติออเดอร์ขาย ZORT, ปรับสต็อกเป็น 0, ลบ order,

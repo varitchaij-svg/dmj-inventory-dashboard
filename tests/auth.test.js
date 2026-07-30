@@ -43,6 +43,7 @@ function loadAuth(requireLogin) {
     grab(/function staffActorName_\(s\) \{[\s\S]*?\n\}/),
     grab(/function requireLoginEnabled_\(\) \{[\s\S]*?\n\}/),
     grab(/var SESSION_EXEMPT_ACTIONS_ = \{[\s\S]*?\n\};/),
+    grab(/var MTO_JOB_ACTIONS_ = \[[\s\S]*?\n *\];/),
     grab(/var ROLE_ACTIONS_ = \{[\s\S]*?\n\};/),
     grab(/var IMMEDIATE_GATE_ACTIONS_ = \{[\s\S]*?\n\};/),
     grab(/var IMMEDIATE_GATE_STRICT_ACTIONS_ = \{[\s\S]*?\n\};/),
@@ -254,10 +255,11 @@ describe('canDoOrNull_ — โหมดบังคับล็อกอิน (
   it('storedevice (เครื่องร้าน) ดู attendanceToday ได้ — เหตุผลหลักที่มี role นี้', () => {
     expect(A.canDoOrNull_({ role: 'storedevice' }, 'attendanceToday')).toBe(null);
   });
-  it('warehouse/employee มอบหมาย/ดูรายชื่อผู้รับผิดชอบงาน MTO ได้ (assignMtoJob, listActiveStaffNames)', () => {
-    ['warehouse', 'employee'].forEach(role => {
-      expect(A.canDoOrNull_({ role }, 'assignMtoJob'), role).toBe(null);
-      expect(A.canDoOrNull_({ role }, 'listActiveStaffNames'), role).toBe(null);
+  it('ทุก role ที่มีแท็บ mtojobs สร้าง/ปิด/มอบหมายงาน MTO ได้เท่ากันหมด (เจ้าของยืนยัน 2026-07-30)', () => {
+    ['saler', 'storedevice', 'frontstore', 'warehouse', 'employee'].forEach(role => {
+      ['createMtoJob', 'closeMtoJob', 'saveMtoJobItems', 'deleteMtoJob', 'assignMtoJob', 'listActiveStaffNames'].forEach(action => {
+        expect(A.canDoOrNull_({ role }, action), role + '/' + action).toBe(null);
+      });
     });
   });
   it('role ที่ไม่รู้จัก → ปฏิเสธ (fail closed)', () => {
