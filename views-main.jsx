@@ -1602,12 +1602,13 @@ function OverviewView({ data, range, setRange, role }) {
   // ตัวกรองหมวด/เดือน/ช่วง — ใช้ร่วมกันทั้งแถบปกติ (page-actions) และแถบย่อ sticky ด้านล่าง
   // (ตัวแปรเดียว กันโค้ด/state หลุดจากกันตอนแก้ทีหลัง)
   const filterControls = (
-    <>
+    <div className="ov-filterbar">
       <select value={selCat} onChange={e=>setSelCat(e.target.value)}
         title="กรองตามหมวด"
-        style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid "+(selCat?"var(--g-500)":"var(--bdr)"),
+        style={{padding:"9px 10px",borderRadius:8,border:"1.5px solid "+(selCat?"var(--g-500)":"var(--bdr)"),
                 background:selCat?"var(--g-50)":"#fff",color:selCat?"var(--g-700)":"var(--text)",
-                fontFamily:"inherit",fontSize:13,fontWeight:selCat?700:500,maxWidth:180}}>
+                fontFamily:"inherit",fontSize:13,fontWeight:selCat?700:500,minHeight:40,
+                maxWidth:180,flex:"1 1 130px",minWidth:0}}>
         <option value="">🏷️ ทุกหมวด</option>
         {allCats.map(c => <option key={c} value={c}>{c}</option>)}
       </select>
@@ -1615,9 +1616,10 @@ function OverviewView({ data, range, setRange, role }) {
         <select value={range === 'month' ? (selMonth || months[months.length - 1] || "") : ""}
           onChange={e => { const v = e.target.value; if (v) { setSelMonth(v); setRange('month'); } }}
           title="เลือกดูเดือน"
-          style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid "+(range==='month'?"var(--g-500)":"var(--bdr)"),
+          style={{padding:"9px 10px",borderRadius:8,border:"1.5px solid "+(range==='month'?"var(--g-500)":"var(--bdr)"),
                   background:range==='month'?"var(--g-50)":"#fff",color:range==='month'?"var(--g-700)":"var(--text)",
-                  fontFamily:"inherit",fontSize:13,fontWeight:range==='month'?700:500,maxWidth:150}}>
+                  fontFamily:"inherit",fontSize:13,fontWeight:range==='month'?700:500,minHeight:40,
+                  maxWidth:150,flex:"1 1 110px",minWidth:0}}>
           <option value="">📅 เลือกเดือน…</option>
           {months.slice().reverse().map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
         </select>
@@ -1627,7 +1629,7 @@ function OverviewView({ data, range, setRange, role }) {
         {value:"month", label:"รายเดือน"},
         {value:"year",  label:"ทั้งปี"},
       ]}/>
-    </>
+    </div>
   );
 
   return (

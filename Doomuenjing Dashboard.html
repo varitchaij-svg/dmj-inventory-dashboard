@@ -610,6 +610,22 @@
     .fchip { font-size: 12px; padding: 8px 12px; min-height: 44px; }
   }
 
+  /* ── OverviewView filter bar — จัดกลุ่ม select หมวด/เดือน + Seg ไว้ในกล่องเดียว
+       กันหน้าตา "ลอย" แยกกัน ให้รู้สึกเป็นแถบตัวกรองเดียวที่จับต้องได้ ── */
+  .ov-filterbar {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    background: var(--g-50); border: 1px solid var(--bdr); border-radius: 14px;
+    padding: 5px; box-sizing: border-box;
+  }
+  .overview-stickybar-inner .ov-filterbar { background: var(--paper); }
+  .ov-filterbar select { font-family: inherit; cursor: pointer; box-sizing: border-box; }
+  .ov-filterbar .seg { background: #fff; }
+  @media (max-width: 480px) {
+    .ov-filterbar { width: 100%; padding: 5px; gap: 5px; }
+    .ov-filterbar select { flex: 1 1 auto; min-width: 0; }
+    .ov-filterbar .seg { flex-shrink: 0; }
+  }
+
   /* KPI Card */
   .kpi {
     background: var(--paper);
