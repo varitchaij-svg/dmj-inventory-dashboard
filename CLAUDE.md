@@ -16,9 +16,9 @@
     ใช้ computeBillTotals/POS_SALES_CHANNELS/POS_TRANSFER_INFO/syncSearchContact จาก
     views-analytics.jsx (global scope เดียวกัน) — เรียกจาก `QuoteFollowupView` โหมด `mode==="create"`
   - `views-attendance.jsx` (~750 บรรทัด) — ลงเวลาเข้า-ออกงาน: `AttendanceView` (พนักงาน — `Seg`
-    สลับ "⏱️ วันนี้"/"📅 เวลาของฉัน", 4 ปุ่ม), `MyAttendanceMonth` (สรุปเดือนของตัวเอง ทุก role),
-    `AttendanceTodayView` (owner ดูใครเข้างาน + แก้ย้อนหลัง), `AttFixModal` · helper `attPost`
-    แนบ `sessionToken` จาก localStorage ให้ทุก request เอง (ไม่ใช้ syncXxx ของไฟล์อื่น)
+    สลับ "⏱️ วันนี้"/"📅 เวลาของฉัน", ปุ่มสลับสถานะ 3 กลุ่ม), `MyAttendanceMonth` (สรุปเดือนของ
+    ตัวเอง ทุก role), `AttendanceTodayView` (owner ดูใครเข้างาน + แก้ย้อนหลัง), `AttFixModal` ·
+    helper `attPost` แนบ `sessionToken` จาก localStorage ให้ทุก request เอง (ไม่ใช้ syncXxx ของไฟล์อื่น)
   - **`Doomuenjing Dashboard.html` โหลดจริงแค่: ui.jsx → views-main.jsx → views-analytics.jsx → views-quote.jsx → views-attendance.jsx → app.jsx**
     (การแยกไฟล์ตั้งใจทำเพื่อลด Babel compile time — ห้ามกลับไปรวมเป็นไฟล์เดียว
     มิฉะนั้น FrontStoreView จะถูกประกาศซ้ำ → redeclaration error + compile ช้า)
@@ -55,8 +55,14 @@ ROLE_TABS = {
 }
 ```
 (ค่าจริงอยู่ที่ `app.jsx` เสมอ — ถ้าสองที่ไม่ตรงให้เชื่อ `app.jsx` · `tests/browser/run.cjs`
-ก็ mirror ตารางนี้ไว้ ถ้าแก้ ROLE_TABS ต้องอัปเดตที่นั่นด้วย ไม่งั้น smoke test จะ NAV_FAIL)
-(navtabs: แสดงครบบนแถบเมื่อ ≤9 แท็บ เกินนั้น 5 ตัวแรก + "เพิ่มเติม" — owner/employee เท่านั้นที่เกิน)
+ก็ mirror ตารางนี้ไว้ (บางส่วน — ไม่ครบทุก role/tab) ถ้าแก้ ROLE_TABS ควรอัปเดตที่นั่นด้วย)
+(navtabs: **owner/dev เท่านั้น** ที่ได้ nav 2 ชั้นแบบกลุ่ม (`OWNER_GROUPS`) — 5 หมวดหลัก + "อื่นๆ"
+ถ้ามีเหลือ · role อื่นทั้งหมด (employee/warehouse/frontstore/saler) ไม่มี "เพิ่มเติม" เลย ไม่ว่าจะกี่แท็บ
+โชว์ทุกแท็บบนแถบเลื่อนแนวนอนเดียว — ลำดับใน ROLE_TABS จึงมีผลแค่ว่าอันไหนอยู่ซ้ายสุด/ไม่ต้องเลื่อนหา)
+(**`tests/browser/run.cjs` สถานะปัจจุบัน (2026-07): NAV_FAIL เกือบทุก tab ที่ไม่ใช่ตัวแรกของ role**
+— pre-existing ไม่เกี่ยวกับการแก้ ROLE_TABS ล่าสุด กลไกคลิก nav ในเทสต์เก่ากว่า owner-group-nav
+2 ชั้น · ยืนยันด้วย git stash แล้วรันเทสต์กับโค้ดเดิมได้ผล NAV_FAIL เท่ากันเป๊ะ (10/46 ผ่าน) — ยังไม่ได้แก้
+ไฟล์นี้ ต้องแก้ click logic ให้รองรับ 2-tier nav ก่อนถึงจะเชื่อผลเทสต์ตัวนี้ได้จริง)
 
 **role `dev`** = ผู้ดูแลระบบ/คนพัฒนา — สิทธิ์เท่า owner ทุกอย่าง + เห็นแท็บที่ยังซ่อน
 - frontend: `isAdminRole(r)` (app.jsx) ใช้แทนการเทียบ `role === "owner"` ในเรื่อง nav/สิทธิ์
@@ -176,11 +182,37 @@ PURCHASES sheet = "รายการซื้อสินค้า"    // col(0
                                         //   19=status,20=warehouse,24=sku,25=name,26=qty,27=unitPrice
 ยอดขายรายเดือน / ยอดขายรายวัน           // header เป็น text format กัน Sheets แปลง MM/YYYY เป็นวันที่
 imageUrl sheet  = A=ID,B=SKU,C=ชื่อ,D=manual(fallback),E=ZORT(primary)
+SHEET_SALE_BILLS = "บิลขาย"             // log บิล POS ฝั่งเรา 22 คอลัมน์ (1 แถว = 1 บิล)
+  A=id(SB-yyyyMMdd-NNNN) B=วันที่ C=เวลา D=เลขบิล E=เลขใบกำกับ F=ผู้ขาย G=ช่องทาง H=วิธีชำระ
+  I=ยอดสุทธิ J=ก่อนVAT K=VAT L=ส่วนลดรวม M=จำนวนรายการ N=จำนวนชิ้น O=ลูกค้า P=เลขผู้เสียภาษี
+  Q=ใบกำกับภาษี R=รับเงินสด S=เงินทอน T=zortOrderId U=สถานะ V=หมายเหตุ
+  · B,C,D,E,T เป็น text format (setNumberFormat "@") — บทเรียนข้อ 2
+  · เขียนโดย `appendSaleBillRow_` ใน `createSaleBill` **หลัง ZORT สำเร็จแล้วเท่านั้น**
+    ฟังก์ชันนี้ **ไม่ throw** โดยเจตนา — บิลออกไปแล้ว เขียน log พลาดห้ามทำให้ผู้ขายไม่ได้เลขบิล
+    (พลาดแล้วลง SHEET_ZORT_FAILED ผ่าน logZortFailure_ แทน)
+  · รายละเอียด "สินค้าในบิล" ไม่ได้เก็บที่นี่ — ดึงจาก ZORT ด้วย `lookupSaleBill(เลขบิล)`
 
 WH_SAI5/W0002 = คลังสินค้าสาย5 → col H (qtyWH)
 WH_FRONTSTORE/W0001 = ดูเหมือนจริง(หน้าร้าน) → col G (qtyStore)
 ZORT_BASE = "https://open-api.zortout.com/v4"
 ```
+
+### หักสต็อกหลังขายผ่าน POS (`deductFrontStoreForSale_`)
+
+**คลัง default ของ ZORT = หน้าร้าน/ดูเหมือนจริง (W0001)** — เจ้าของยืนยันแล้ว (ก.ค. 2026)
+`createSaleBill` ไม่ได้ส่ง `warehousecode` ให้ `AddOrder` → ZORT ตัดสต็อกจากคลัง default ตัวนี้
+ฝั่งชีตจึงหัก **col G (qtyStore)** ให้ตรงกัน ตรงกับที่ POS โชว์ "คงเหลือ N" อยู่แล้ว
+
+- ⚠️ **ห้ามเรียก `pushStockToZort_` ในเส้นทางนี้เด็ดขาด** — `AddOrder` ตัดสต็อกฝั่ง ZORT
+  ให้เรียบร้อยแล้ว ยิงซ้ำ = **หักสองเด้ง** (ต่างจาก `deductStock`/`transferStock` ที่ต้อง push
+  เพราะไม่มี ZORT order มาตัดให้)
+- เป็นแค่การอัปเดตชีตให้เห็นทันที ไม่ต้องรอ `syncZortBoth` (ทุก 2 ชม.) — กันขายเกิน
+  รอบ sync ถัดไปจะเขียนทับด้วยเลขจริงจาก ZORT อยู่ดี (**ZORT = source of truth**)
+- ไม่ปล่อยติดลบ (clamp ที่ 0) + เก็บ `shortfall`/`notFound` ลง audit log ไว้ไล่ย้อน
+- เขียนทีละ cell เฉพาะแถวที่เปลี่ยน — `syncZortToColumn_` **ไม่ได้จับ LockService**
+  เขียนทับทั้งคอลัมน์จึงเสี่ยงทับงาน sync ที่รันคาบเกี่ยว
+- ไม่ throw (บิลออกไปแล้ว หักพลาดต้องไม่ทำให้ผู้ขายไม่ได้เลขบิล) → ลง `SHEET_ZORT_FAILED` แทน
+- pure logic มีสำเนาใน `tests/helpers.js` = `saleFrontStoreDeductCore` + drift-guard landmark
 
 ## Data payload (GAS → Frontend)
 
@@ -253,7 +285,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 633 tests, 19 test files, ทั้งหมด pass
+**มี Vitest test suite แล้ว** — 665 tests, 19 test files, ทั้งหมด pass
 
 ```bash
 npm test              # run tests
@@ -265,7 +297,10 @@ npm run test:coverage # coverage report (tests/helpers.js)
            detectColor, COLOR_MAP, COLOR_KEYS,
            monthKey_, dayKey_, deductStockCore, netOf, enrichDataCore`
 - `tests/*.test.js` — parsing, color, stock, dates, mto, app, format, schema, conflict, orderstate,
-  sku, billing, bahttext, transfer, cleanup, analytics, **attendance**, **permissions**, drift-guard
+  sku, billing, bahttext, transfer, cleanup, analytics, **attendance**, **auth**, drift-guard
+- **`tests/auth.test.js`** — เฟส 4 ล็อกอิน (`canDoOrNull_`/`ROLE_ACTIONS_`/`IMMEDIATE_GATE_*`) —
+  **ไม่ copy โค้ดเข้า helpers.js** แต่ eval ฟังก์ชันจริงจาก `.gs` ตรง ๆ (กันสำเนา drift ของโค้ด
+  ด้านความปลอดภัย) ต่างจากไฟล์เทสต์อื่นที่ copy pure function เข้า `helpers.js`
 - **`tests/drift-guard.test.js`** — กัน `helpers.js` drift จากต้นทาง: ทุก export ต้องมี entry ใน
   `TRACKED` (พร้อม landmark ที่ต้องเจอทั้งในไฟล์ต้นทางและ helpers.js) หรืออยู่ใน
   `BEHAVIORAL_MODELS` · **เพิ่ม export ใหม่ใน helpers.js แล้วไม่เพิ่ม landmark = test แดงทันที**
@@ -321,27 +356,42 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
 ```
 
 **action ที่มี**: `authLine` `me` `logout` `listStaff` `saveStaff` · `punch` `myToday`
-`attendanceToday` `fixAttendance` `myAttendanceSummary` · doGet: `lineLoginMeta` `attendancePhoto`
+`myAttendanceSummary` `attendanceToday` `fixAttendance` · doGet: `lineLoginMeta`
+`attendancePhoto` `getAuditLog`
 
 **กฎที่ต้องรู้เวลาแก้ระบบนี้**:
 - ทุก action ของลงเวลา/staff ตรวจสิทธิ์ด้วย **`resolveSession_(ss, data.sessionToken)`**
   (server-verified)
-- **เฟส 4 ✅**: `canDo_(sess, allowedRoles)` / `canDoStrict_(sess, allowedRoles)` (appsscript_complete.gs,
-  ใกล้ `isAdminRole_`) บังคับสิทธิ์ฝั่ง server สำหรับ action ที่กระทบเงิน/สต็อกจริง
-  (`zeroStock`→owner/dev/warehouse, `voidQuotation`/`approveQuotation`/`issueFullTaxInvoice`→owner/dev/saler,
-  `deleteOrder`/`deleteOrders`→owner/dev/employee/warehouse, `resetNegativeStock`→owner/dev) —
-  **whitelist ตรวจกับ UI จริงแล้ว ไม่ใช่ "owner อย่างเดียว"** หลาย action ให้ role อื่นใช้ได้ตามหน้าที่
-  (ดู `PLAN-EMPLOYEE-LOGIN.md` ข้อ 5.1 ก่อนแก้ role list พวกนี้ — เคยพังเพราะเดาจากแผนแทนที่จะเช็ค UI)
-  · `canDo_` = migration-safe (ไม่มี session → ปล่อยผ่านเหมือนเดิม) ใช้กับ action ที่มี caller จาก UI จริง
-  · `canDoStrict_` = ไม่มี session → ปฏิเสธเสมอ ใช้เฉพาะ action ที่ไม่มี caller จาก UI เลย (deny-by-default
-  อยู่แล้ว) **ห้ามสลับสองตัวนี้กัน** — ใช้ `canDo_` กับ action ที่ควร deny-by-default จะเปิดช่องโหว่แทน
-  · ทุกจุดที่เรียก action พวกนี้จาก frontend **ต้องส่ง** `sessionToken: localStorage.getItem("dmj_session_token")`
-  ไปด้วย ไม่งั้น `canDo_`/`canDoStrict_` resolve session ไม่ได้ (fallback behavior แล้วแต่ตัว)
-  · `REQUIRE_LOGIN='true'` (บังคับทุก action ต้องมี session) **ยังไม่เปิด** — เปิดได้เมื่อพนักงานทุกคน
-  ย้ายมาใช้ LINE Login ครบ (เช็คจาก `lastLoginAt` ในชีต `พนักงาน`)
-- **`actor` เป็นชื่อจริงจาก session เสมอ** (server-verified ที่ต้น `doPost`) ไม่มี session → fallback
-  `data.actor` ที่ client ส่ง (`window._currentUser = "ชื่อ (ตำแหน่ง)"` ตั้งใน `applyStaffSession()`
-  (app.jsx) ตอน login/resume — ไม่ต้องแก้จุดเรียก API ทีละจุด)
+- **เฟส 4 ทำแล้ว (ก.ค. 2026)** — `doPost` resolve session ทุก request แล้ว **ทับ `actor`
+  ด้วยชื่อจาก session เสมอ** (`staffActorName_` → "ชื่อ (ตำแหน่ง)" ตรง format กับ frontend)
+  ถ้าไม่มี session ยังรับ `data.actor` ต่อ เพื่อให้ช่วงเปลี่ยนผ่านไม่พัง
+  · **`dmjFetch` (ui.jsx)** ห่อ `fetch` แนบ `sessionToken` เข้า body ของทุก POST อัตโนมัติ
+    — ทำที่เดียวจบ **เวลาเพิ่มจุดเรียก API ใหม่ให้ใช้ `dmjFetch` ไม่ใช่ `fetch`** (`getAuditLog`
+    เป็น GET ไม่ผ่าน `dmjFetch` — แนบ `sessionToken` เป็น query param เองแทน)
+  · `canDoOrNull_(sess, action)` + ตาราง `ROLE_ACTIONS_` (ล้อ ROLE_TABS)
+    · `resolvePostAction_` แปลง dispatch 2 แบบ (`data.action` / `data.someFlag`) เป็นชื่อเดียว
+    **เพิ่ม dispatch ใหม่ใน doPost ต้องเติมชื่อใน `POST_FLAG_ACTIONS_` ด้วย** ไม่งั้น
+    action นั้นหลุดการตรวจสิทธิ์ (มี meta-test ใน `tests/auth.test.js` คอยจับให้แล้ว)
+  · ⚠️ **`REQUIRE_LOGIN` ยัง default ปิด** → `ROLE_ACTIONS_`/`canDoOrNull_` ส่วนใหญ่เป็น no-op
+    (ของเดิมไม่พัง) **ยกเว้น `IMMEDIATE_GATE_ACTIONS_`/`IMMEDIATE_GATE_STRICT_ACTIONS_`** (ใกล้
+    `canDoOrNull_`) — 7 action ที่กระทบเงิน/สต็อกจริง (`voidQuotation`/`approveQuotation`/
+    `issueFullTaxInvoice`→saler, `deleteOrder`/`deleteOrders`→employee/warehouse,
+    `zeroStock`→warehouse, `resetNegativeStock`→เฉพาะ owner/dev) **เช็คสิทธิ์ทันทีไม่รอ
+    REQUIRE_LOGIN** เพราะเดิมไม่เคยเช็คอะไรเลย เสี่ยงเกินกว่าจะรอ rollout ของ role ที่เหลือ
+    · `IMMEDIATE_GATE_ACTIONS_` = migration-safe (ไม่มี session → ปล่อยผ่าน) ใช้กับ action ที่มี
+    caller จาก UI จริง · `IMMEDIATE_GATE_STRICT_ACTIONS_` = deny-by-default เสมอ (ไม่มี session
+    → ปฏิเสธ) ใช้กับ `zeroStock`/`resetNegativeStock` ที่ไม่มี caller จาก UI เลย — **ห้ามสลับ
+    สองตัวนี้กัน** ใช้ตัว migration-safe กับ action ที่ควร deny-by-default จะเปิดช่องโหว่แทน
+    · `canDoOrNull_` **ไม่เช็ค `sess.status`** — `resolveSession_` ต้นทางคืนเฉพาะ session ที่
+    active อยู่แล้ว เช็คซ้ำจะขัด convention
+    · เปิด `REQUIRE_LOGIN='true'` ให้ครบทุก action **ต่อเมื่อพนักงานล็อกอิน LINE ครบทุกคนแล้ว**
+    (เช็ค `lastLoginAt` ในชีต "พนักงาน") — เปิดก่อนคนครบ = คนที่ยังไม่ล็อกอินทำงานไม่ได้ทั้งร้าน
+  · role ที่ gate จริงตรวจกับ UI แล้ว **ไม่ใช่ "owner อย่างเดียว"** ตามที่ร่างแผนไว้ตอนแรก — ดู
+    `PLAN-EMPLOYEE-LOGIN.md` ข้อ 5.1 ก่อนแก้ role list พวกนี้ (เคยพังเพราะเดาจากแผนแทนที่จะเช็ค UI)
+  · `getAuditLog` (doGet) ตรวจ session จริงแล้ว (เหมือน `attendancePhoto`) — **ไม่เช็คจาก
+    `role`/`data.role` query param ที่ client ส่งเองอีกต่อไป**
+- **`actor` เป็นชื่อจริง** ผ่าน `window._currentUser = "ชื่อ (ตำแหน่ง)"` ที่ตั้งใน
+  `applyStaffSession()` (app.jsx) ตอน login/resume — ไม่ต้องแก้จุดเรียก API ทีละจุด
 - **วันที่/เวลาในชีตลงเวลาเขียนเป็น text** (`setNumberFormat("@")`) — บทเรียนข้อ 2
   · ทุกฟังก์ชันเวลาใช้ `Asia/Bangkok` เสมอ (`attDateKey_`/`attDowBkk_`/`attMinOfDay_`)
   **ห้ามใช้ `toISOString()` ฝั่ง frontend** จะเพี้ยนไป 1 วัน → ใช้ `attTodayKey()`

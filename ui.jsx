@@ -185,11 +185,34 @@ function Empty({ icon, title, sub }) {
   );
 }
 
+// ────────────── dmjFetch — แนบ sessionToken ให้ทุก POST ที่ยิงไป GAS ──────────
+// เฟส 4 ของระบบล็อกอิน: server ต้องยืนยัน "ใครทำ" เองจาก session ไม่ใช่เชื่อ actor
+// ที่ client ส่งมา (ซึ่งปลอมได้) · ทำที่เดียวจบ ไม่ต้องไล่แก้ payload ทีละจุด (39 จุด/4 ไฟล์)
+//
+// ปลอดภัยแบบ no-op: ถ้าไม่มี token / body ไม่ใช่ JSON object / ไม่ใช่ POST /
+// มี sessionToken อยู่แล้ว → ส่งต่อของเดิมไม่แตะเลย
+function dmjFetch(url, opts) {
+  try {
+    if (opts && opts.method === "POST" && typeof opts.body === "string") {
+      const tok = localStorage.getItem("dmj_session_token");
+      if (tok) {
+        const b = JSON.parse(opts.body);
+        if (b && typeof b === "object" && !Array.isArray(b) && b.sessionToken == null) {
+          b.sessionToken = tok;
+          opts = Object.assign({}, opts, { body: JSON.stringify(b) });
+        }
+      }
+    }
+  } catch (e) { /* body ไม่ใช่ JSON (เช่น FormData) → ปล่อยผ่านตามเดิม */ }
+  return fetch(url, opts);
+}
+
 // Make available everywhere
 Object.assign(window, {
   fmtN, fmtB, fmtBfull, fmtPct, monthLabel,
   CAT_COLORS, catColor, resetCatColorMap,
   I, Icon, KPI, Card, Seg, Sparkline, Empty,
+  dmjFetch,
 });
 
 if (typeof module !== 'undefined') module.exports = { resetCatColorMap, catColor, CAT_COLORS };

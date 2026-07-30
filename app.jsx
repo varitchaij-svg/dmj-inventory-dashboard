@@ -41,10 +41,14 @@ const ROLE_TABS = {
   // ("margin" ซ่อนไว้ก่อน — ยังไม่มีต้นทุนซื้อจริง · โค้ด MarginView คงไว้ ค่อยเพิ่ม id กลับเมื่อพร้อม)
   owner:      ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog","staff","atttoday"],
   employee:   ["attendance","categories","trends","stock","storage","frontstore","transfers","orders","tracking","ordersummary","mtojobs","labels"],
-  // 5 ตัวแรก = แถบหลัก (>9 แท็บ → ที่เหลือเข้า "เพิ่มเติม") จัดให้เป็นงานคลังที่ใช้บ่อยสุด
+  // role อื่น (employee/warehouse/frontstore/saler) ไม่มี "เพิ่มเติม" — โชว์ทุกแท็บบนแถบเลื่อนแนวนอน
+  // (ต่างจาก owner/dev) ดังนั้นลำดับที่นี่แค่กำหนดว่าอันไหนอยู่ซ้ายสุด/เจอก่อนโดยไม่ต้องเลื่อน
+  // whhome เป็นหน้า dashboard งานคลังวันนี้อยู่แล้ว (2nd) — พนักงานคลังกด whhome ก่อนแล้ว nav ต่อผ่าน tile ในนั้น
   warehouse:  ["attendance","whhome","orders","stock","stockcount","storage","categories","newproduct","ordersummary","tracking","mtojobs","labels"],
-  frontstore: ["attendance","categories","stock","frontstore","orders","tracking","mtojobs","labels"],
-  saler:      ["attendance","pos","categories","stock","orders","tracking","quotefollowup","mtojobs","labels"],
+  // frontstore ดันขึ้นเป็นตัวที่ 2 — งานหลักของ role นี้คือ "เช็คหน้าร้าน" ไม่ใช่ "สินค้า & สั่ง"
+  frontstore: ["attendance","frontstore","categories","stock","orders","tracking","mtojobs","labels"],
+  // quotefollowup ดันขึ้นมาติด pos — เป็นงานขายหลักคู่กับ pos แต่เดิมอยู่ตัวที่ 7 ต้องเลื่อนหา
+  saler:      ["attendance","pos","quotefollowup","categories","stock","tracking","orders","mtojobs","labels"],
 };
 // หมวดหลักของ owner (nav 2 ชั้น) — กดหมวด → เห็นเมนูย่อยของหมวดนั้น
 // เรียงตามความสำคัญ/ที่ใช้บ่อย: ภาพรวม → การขาย → สต็อก → วิเคราะห์ → เครื่องมือ
@@ -57,9 +61,6 @@ const OWNER_GROUPS = [
   { id: "g_people",   gi: "👥", name: "พนักงาน",       tabs: ["attendance", "atttoday", "staff"] },
   { id: "g_tools",    gi: "⚙️", name: "เครื่องมือ",     tabs: ["upload", "connect", "auditlog"] },
 ];
-// "โหมดง่าย" — เมนูที่ใช้ประจำวัน (เหลือไว้บนแถบหลัก) ที่เหลือดันเข้า "เพิ่มเติม"
-const SIMPLE_PRIMARY = ["categories", "stock", "frontstore", "orders"];
-
 const ROLE_LABELS = {
   owner:      "👑 เจ้าของ",
   employee:   "👤 พนักงาน",
@@ -833,7 +834,6 @@ function App() {
   const [confirmAction, setConfirmAction] = usS(null); // { type:"clearLocal"|"logout" }
   const [moreOpen, setMoreOpen] = usS(false); // dropdown "เพิ่มเติม" บน navtabs (owner)
   const [ownerGroup, setOwnerGroup] = usS(null); // หมวดหลักที่ owner "แตะดู" อยู่ (null = ตามหมวดของ tab ปัจจุบัน)
-  const [simpleMode, setSimpleMode] = usS(() => lsGet("dmj_simple_mode") === "1"); // โหมดง่าย: ลดเมนู
   const [moreRect, setMoreRect] = usS(null);  // position ของปุ่มเพิ่มเติม (fixed dropdown)
   const moreButtonRef = React.useRef(null);
   const [installPrompt, setInstallPrompt] = usS(null);
@@ -1348,12 +1348,6 @@ function App() {
   const visibleTabs = allowedTabIds.map(id => TABS.find(t => t.id === id)).filter(Boolean);
   const activeTab = allowedTabIds.includes(tab) ? tab : (allowedTabIds[0] || "categories");
 
-  const toggleSimpleMode = () => setSimpleMode(v => {
-    const next = !v;
-    try { localStorage.setItem("dmj_simple_mode", next ? "1" : "0"); } catch (e) {}
-    return next;
-  });
-
   // แบ่งเมนูเป็น primary (บนแถบ) / secondary (ใน "เพิ่มเติม")
   // owner: 5 ตัวแรก + "เพิ่มเติม" สำหรับที่เหลือ (แท็บเยอะ 17 แท็บ)
   // role อื่น: โชว์ทุกแท็บบนแถบ ไม่มี "เพิ่มเติม" (แถบเลื่อนแนวนอนได้)
@@ -1564,40 +1558,6 @@ function App() {
                             <div style={{width:40,height:4,borderRadius:2,background:"var(--bdr)",margin:"0 auto 10px"}}/>
                             <div style={{fontSize:13,fontWeight:700,color:"var(--muted)"}}>เมนูเพิ่มเติม</div>
                           </div>
-                          {/* โหมดง่าย toggle — อยู่บนสุดให้เจอง่าย */}
-                          <div style={{padding:"0 12px 8px", flexShrink:0}}>
-                            <button onClick={toggleSimpleMode}
-                                    style={{
-                                      width:"100%", minHeight:52,
-                                      display:"flex", alignItems:"center", gap:12,
-                                      padding:"10px 14px", borderRadius:14, cursor:"pointer",
-                                      fontFamily:"inherit", textAlign:"left",
-                                      border: simpleMode ? "2px solid var(--g-500)" : "1.5px solid var(--bdr)",
-                                      background: simpleMode ? "var(--g-50)" : "var(--paper)",
-                                    }}>
-                              <span style={{fontSize:22,lineHeight:1}}>{simpleMode ? "😊" : "🧩"}</span>
-                              <span style={{flex:1, minWidth:0}}>
-                                <span style={{display:"block", fontSize:14, fontWeight:700,
-                                              color: simpleMode ? "var(--g-700)" : "var(--text)"}}>
-                                  โหมดง่าย {simpleMode ? "(เปิดอยู่ — กดเพื่อปิด)" : "(ปิดอยู่ — กดเพื่อเปิด)"}
-                                </span>
-                                <span style={{display:"block", fontSize:11, color:"var(--muted)", lineHeight:1.4}}>
-                                  แสดงเฉพาะเมนูที่ใช้บ่อย กดง่ายขึ้น
-                                </span>
-                              </span>
-                              <span style={{
-                                width:46, height:28, borderRadius:14, flexShrink:0, position:"relative",
-                                background: simpleMode ? "var(--g-500)" : "var(--bdr)",
-                                transition:"background .15s",
-                              }}>
-                                <span style={{
-                                  position:"absolute", top:3, left: simpleMode ? 21 : 3,
-                                  width:22, height:22, borderRadius:"50%", background:"#fff",
-                                  transition:"left .15s", boxShadow:"0 1px 3px rgba(0,0,0,.2)",
-                                }}/>
-                              </span>
-                            </button>
-                          </div>
                           {/* tab list */}
                           <div style={{overflowY:"auto",padding:"4px 12px 16px"}}>
                             <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) minmax(0,1fr)",gap:8}}>
@@ -1638,19 +1598,6 @@ function App() {
           </div>
 
           <div className="nav-right">
-            {/* ปุ่มปิดโหมดง่าย — โชว์เฉพาะตอน simpleMode เปิดอยู่ กดปิดได้ตลอดไม่ต้องเข้า bottom sheet */}
-            {simpleMode && (
-              <button onClick={toggleSimpleMode} title="ปิดโหมดง่าย"
-                style={{
-                  display:"flex", alignItems:"center", gap:4,
-                  padding:"4px 10px", borderRadius:20, border:"1.5px solid var(--g-400)",
-                  background:"var(--g-50)", color:"var(--g-700)",
-                  fontFamily:"inherit", fontSize:12, fontWeight:700, cursor:"pointer",
-                  minHeight:32,
-                }}>
-                😊 <span style={{lineHeight:1}}>ปิดโหมดง่าย</span>
-              </button>
-            )}
             <span className="nav-status" title={source==="upload" ? "ใช้ข้อมูลจากไฟล์ที่อัปโหลด" : "ใช้ข้อมูลจาก Google Sheet"}>
               <span className="nav-dot" style={{background: source==="upload" ? "#a07417" : "var(--g-500)"}}></span>
               {source==="upload" ? "ไฟล์อัปโหลด" : "Sheet"} · {syncLabel}
@@ -1800,7 +1747,7 @@ function App() {
                                             checkRequest={activeCheckRequest}
                                             onCheckComplete={async function(reqId){
                                               try {
-                                                await fetch(SHEET_DEPLOY_URL, {method:"POST",
+                                                await dmjFetch(SHEET_DEPLOY_URL, {method:"POST",
                                                   headers:{"Content-Type":"text/plain;charset=utf-8"},
                                                   body: JSON.stringify({completeStockCheck:true, reqId:reqId, actor:role})});
                                                 setActiveCheckRequest(null);

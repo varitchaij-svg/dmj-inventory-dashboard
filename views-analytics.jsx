@@ -692,7 +692,7 @@ async function confirmStockCount(entries) {
   // entries = [{ sku, qty }]
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
   try {
-    const res = await fetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
@@ -712,7 +712,7 @@ async function confirmStockCount(entries) {
 async function syncRecordUnscanned(sku, qty) {
   if (!SHEET_DEPLOY_URL) return { ok: false };
   try {
-    const res = await fetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ recordUnscannedSale: true, sku, qty,
@@ -727,7 +727,7 @@ async function syncLockData(lockKey, entries) {
   // entries = [{ sku, qty, isNew }]
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
   try {
-    await fetch(SHEET_DEPLOY_URL, {
+    await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
@@ -745,7 +745,7 @@ async function syncLockData(lockKey, entries) {
 async function syncDeleteLockEntry(lockKey, sku) {
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
   try {
-    await fetch(SHEET_DEPLOY_URL, {
+    await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ deleteLockEntry: true, lockKey, sku, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน" }),
@@ -3462,7 +3462,7 @@ function cleanupOrdersState(orders) {
 async function syncOrderUpdate(order, updates) {
   if (!SHEET_DEPLOY_URL) return;
   try {
-    await fetch(SHEET_DEPLOY_URL, {
+    await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
@@ -3484,7 +3484,7 @@ async function syncOrderUpdate(order, updates) {
 async function syncShipmentReceive(rowId, sku, receivedQty) {
   if (!SHEET_DEPLOY_URL) return { success:false };
   try {
-    const res = await fetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"},
       body: JSON.stringify({
         confirmShipmentReceive:true, rowId, sku, receivedQty,
@@ -4256,7 +4256,7 @@ function OrderListView({ data, role }) {
 async function syncStockDeduct(sku, qty, name) {
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
   try {
-    const res = await fetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ transferStock: true, sku, qty, name, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน" }),
@@ -4271,7 +4271,7 @@ async function syncStockDeduct(sku, qty, name) {
 async function syncStockTransferBatch(items) {
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
   try {
-    const res = await fetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ transferStockBatch: true, list: items, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน", clientLoadedAt: window._dataLoadedAt || 0 }),
@@ -4285,10 +4285,10 @@ async function syncStockTransferBatch(items) {
 async function syncZeroStock(sku) {
   if (!SHEET_DEPLOY_URL) return { success: false };
   try {
-    const res = await fetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ zeroStock: true, sku, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "warehouse", sessionToken: localStorage.getItem("dmj_session_token") }),
+      body: JSON.stringify({ zeroStock: true, sku, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "warehouse" }),
     });
     const json = await res.json().catch(() => ({}));
     return json;
@@ -4299,10 +4299,10 @@ async function syncZeroStock(sku) {
 async function syncDeleteOrders(orderIds) {
   if (!SHEET_DEPLOY_URL || !orderIds || !orderIds.length) return { success: false };
   try {
-    const res = await fetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ deleteOrders: true, orderIds, sessionToken: localStorage.getItem("dmj_session_token") }),
+      body: JSON.stringify({ deleteOrders: true, orderIds }),
     });
     // เดิม return {success:true} เสมอไม่สนผลจริงจาก server — ทำให้ caller เห็น "สำเร็จ" ผิดๆ
     // แม้ server จะปฏิเสธ (เช่นไม่มีสิทธิ์) ต้อง forward ผลจริงกลับไปให้ caller ตัดสินใจถูก
@@ -4316,7 +4316,7 @@ async function syncZortNow() {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 120000);
-    const res = await fetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ syncZortNow: true }),
@@ -4332,7 +4332,7 @@ async function syncZortSalesNow() {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 180000); // 3 นาที — sync ยอดขาย 365 วันใช้เวลานาน
-    const res = await fetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ syncZortSalesNow: true }),
@@ -4347,7 +4347,7 @@ async function syncZortSalesNow() {
 async function syncDeductMaterials(items) {
   if (!SHEET_DEPLOY_URL || !items.length) return { success: false };
   try {
-    await fetch(SHEET_DEPLOY_URL, {
+    await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ deductMaterials: true, items }),
@@ -4690,10 +4690,10 @@ function OrderSummaryView({ data, onPrintRequest }) {
     }
 
     try {
-      await fetch(SHEET_DEPLOY_URL, {
+      await dmjFetch(SHEET_DEPLOY_URL, {
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({ deleteOrder: true, orderId: order.id, sessionToken: localStorage.getItem("dmj_session_token") }),
+        body: JSON.stringify({ deleteOrder: true, orderId: order.id }),
       });
     } catch(e) { console.warn("deleteOrder failed:", e.message); }
 
@@ -5799,7 +5799,7 @@ function MtoJobView({ data }) {
     if (!newJob.jobName.trim()) { showToast("error", "กรุณาระบุชื่องาน"); return; }
     setSaving(true);
     try {
-      const res = await fetch(SHEET_DEPLOY_URL, {
+      const res = await dmjFetch(SHEET_DEPLOY_URL, {
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({
@@ -5894,7 +5894,7 @@ function MtoJobView({ data }) {
     if (!activeJob) return;
     setSaving(true);
     try {
-      const res = await fetch(SHEET_DEPLOY_URL, {
+      const res = await dmjFetch(SHEET_DEPLOY_URL, {
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({
@@ -5926,7 +5926,7 @@ function MtoJobView({ data }) {
     setSaving(true);
     try {
       const closed = nowStr();
-      const res = await fetch(SHEET_DEPLOY_URL, {
+      const res = await dmjFetch(SHEET_DEPLOY_URL, {
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({
@@ -5963,7 +5963,7 @@ function MtoJobView({ data }) {
   const handleDeleteJob = async (job) => {
     setSaving(true);
     try {
-      const res = await fetch(SHEET_DEPLOY_URL, {
+      const res = await dmjFetch(SHEET_DEPLOY_URL, {
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({ deleteMtoJob: true, jobId: job.jobId, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน" }),
@@ -6414,7 +6414,7 @@ function StaffView() {
     try {
       if (typeof SHEET_DEPLOY_URL === 'undefined' || !SHEET_DEPLOY_URL) { setErr("ยังไม่ได้เชื่อมต่อ Sheet"); setLoading(false); return; }
       const tok = localStorage.getItem("dmj_session_token");
-      const res = await fetch(SHEET_DEPLOY_URL, {
+      const res = await dmjFetch(SHEET_DEPLOY_URL, {
         method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({ action: "listStaff", sessionToken: tok }),
       });
@@ -6434,7 +6434,7 @@ function StaffView() {
     setSavingId(staffId);
     try {
       const tok = localStorage.getItem("dmj_session_token");
-      const res = await fetch(SHEET_DEPLOY_URL, {
+      const res = await dmjFetch(SHEET_DEPLOY_URL, {
         method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify(Object.assign({ action: "saveStaff", sessionToken: tok, staffId }, patch)),
       });
@@ -6795,10 +6795,10 @@ function DeadStockView() {
 async function syncVoidQuotation(id, number) {
   if (!SHEET_DEPLOY_URL) return { ok: false, error: "ยังไม่ได้เชื่อมต่อ Sheet" };
   try {
-    const res = await fetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ voidQuotation: true, quotationId: id, quotationNumber: number, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "owner", sessionToken: localStorage.getItem("dmj_session_token") }),
+      body: JSON.stringify({ voidQuotation: true, quotationId: id, quotationNumber: number, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "owner" }),
     });
     return await res.json().catch(() => ({ ok: false, error: "อ่านผลลัพธ์ไม่ได้" }));
   } catch (e) { return { ok: false, error: e.message }; }
@@ -6808,10 +6808,10 @@ async function syncVoidQuotation(id, number) {
 async function syncApproveQuotation(id, number) {
   if (!SHEET_DEPLOY_URL) return { ok: false, error: "ยังไม่ได้เชื่อมต่อ Sheet" };
   try {
-    const res = await fetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ approveQuotation: true, quotationId: id, quotationNumber: number, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "owner", sessionToken: localStorage.getItem("dmj_session_token") }),
+      body: JSON.stringify({ approveQuotation: true, quotationId: id, quotationNumber: number, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "owner" }),
     });
     return await res.json().catch(() => ({ ok: false, error: "อ่านผลลัพธ์ไม่ได้" }));
   } catch (e) { return { ok: false, error: e.message }; }
@@ -6821,7 +6821,7 @@ async function syncApproveQuotation(id, number) {
 async function syncSetQuoteSale(number, sale) {
   if (!SHEET_DEPLOY_URL) return { ok: false, error: "ยังไม่ได้เชื่อมต่อ Sheet" };
   try {
-    const res = await fetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ setQuoteSale: true, quoteNumber: number, sale, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "owner" }),
@@ -8041,7 +8041,7 @@ function SeasonView({ data }) {
 async function syncSearchContact(query) {
   if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
   try {
-    const res = await fetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ searchContact: true, query }),
@@ -8053,7 +8053,7 @@ async function syncSearchContact(query) {
 async function syncGetContactDetail(contactId) {
   if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
   try {
-    const res = await fetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ getContactDetail: true, contactId }),
@@ -8065,7 +8065,7 @@ async function syncGetContactDetail(contactId) {
 async function syncCreateSaleBill(bill) {
   if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
   try {
-    const res = await fetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify(Object.assign({ createSaleBill: true,
@@ -8078,7 +8078,7 @@ async function syncCreateSaleBill(bill) {
 async function syncLookupSaleBill(orderNumber) {
   if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
   try {
-    const res = await fetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ lookupSaleBill: true, orderNumber }),
@@ -8090,12 +8090,11 @@ async function syncLookupSaleBill(orderNumber) {
 async function syncIssueFullTaxInvoice(orderNumber, customer, orderId) {
   if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
   try {
-    const res = await fetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ issueFullTaxInvoice: true, orderNumber, orderId, customer,
-        actor: window._currentUser || sessionStorage.getItem("dmj_role") || "saler",
-        sessionToken: localStorage.getItem("dmj_session_token") }),
+        actor: window._currentUser || sessionStorage.getItem("dmj_role") || "saler" }),
     });
     return await res.json(); // { success, data:{orderNumber, documentNumber} }
   } catch (err) { return { success: false, error: err.message }; }

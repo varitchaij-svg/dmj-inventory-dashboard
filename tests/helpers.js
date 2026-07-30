@@ -215,16 +215,6 @@ function attMonthRange(monthStr, today) {
   return { month: m, dates, isCurrentMonth: m === curMonth };
 }
 
-// ── canDo/canDoStrict: บังคับสิทธิ์ฝั่ง server เฟส 4 ล็อกอิน (จาก appsscript_complete.gs) ──
-// helpers.js รับ requireLoginOn เป็นพารามิเตอร์แทน PropertiesService (ไม่มีใน Node)
-function canDo(sess, allowedRoles, requireLoginOn) {
-  if (sess && sess.status === 'active') return allowedRoles.indexOf(sess.role) >= 0;
-  return !requireLoginOn;
-}
-function canDoStrict(sess, allowedRoles) {
-  return !!(sess && sess.status === 'active' && allowedRoles.indexOf(sess.role) >= 0);
-}
-
 // ── จาก views.jsx บรรทัด 1355–1367 ──────────────────────────────────────────
 // รับ object ที่มี property .sku (เหมือน Array.sort comparator)
 function compareSku(a, b) {
@@ -440,6 +430,31 @@ function deductStockCore({ whQty, fsQty }, qty) {
     shortfall: shortfall > 0,
     shortfall_qty: shortfall,
   };
+}
+
+// ── saleFrontStoreDeductCore: pure math จาก deductFrontStoreForSale_ ─────────
+//    (appsscript_complete.gs — หักสต็อกหน้าร้าน col G หลังออกบิล POS)
+// แยก Sheet I/O ออก: รับ rows = [{sku, qtyStore}] แทนการอ่าน getDataRange()
+// ตรรกะที่ต้องตรงกับต้นทาง: รวม qty ต่อ SKU → หักแถวแรกที่เจอเท่านั้น → ไม่ปล่อยติดลบ
+function saleFrontStoreDeductCore(list, rows) {
+  const want = {};
+  (list || []).forEach(function (it) {
+    const sku = String(it.sku || "").trim().toUpperCase();
+    const q = Number(it.number) || 0;
+    if (sku && q > 0) want[sku] = (want[sku] || 0) + q;
+  });
+  const applied = [], shortfall = [];
+  (rows || []).forEach(function (r) {
+    const sku = String(r.sku || "").trim().toUpperCase();
+    if (!sku || want[sku] === undefined) return;
+    const qty = want[sku];
+    delete want[sku];
+    const cur = Number(r.qtyStore) || 0;
+    let next = cur - qty;
+    if (next < 0) { shortfall.push({ sku: sku, want: qty, had: cur }); next = 0; }
+    applied.push({ sku: sku, qty: qty, before: cur, after: next });
+  });
+  return { applied: applied, shortfall: shortfall, notFound: Object.keys(want) };
 }
 
 // ── netOf: pure logic จาก closeMtoJob (appsscript_complete.gs:3763) ──────────
@@ -760,7 +775,7 @@ module.exports = {
   mapProductRow, shouldRejectConflict,
   orderSig, reconcileOrderState, patchOrderStateCore,
   monthKey_, dayKey_,
-  deductStockCore,
+  deductStockCore, saleFrontStoreDeductCore,
   netOf, writeMtoItemsCore,
   enrichDataCore,
   COLOR_MAP, COLOR_KEYS, detectColor,
@@ -771,6 +786,5 @@ module.exports = {
   parseCheckDateMs, suggestNextSku,
   parseSkuParts, nextModelForPrefix,
   attBuildTs, attSequenceWarning, attSummarize, attMonthRange, attAllowedNext,
-  canDo, canDoStrict,
   computeBillTotals, wholesaleTierRate, isBillExcludedCat, BILL_EXCLUDE_CAT_KEYWORDS,
 };

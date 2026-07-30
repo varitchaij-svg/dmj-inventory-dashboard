@@ -79,6 +79,13 @@ const TRACKED = [
     `if (deductFS > fsQty) deductFS = fsQty;`,
     `const shortfall = qty - (deductWH + deductFS);`,
   ]},
+  // saleFrontStoreDeductCore: หักสต็อกหน้าร้านหลังออกบิล POS
+  // guard 3 จุดที่พลาดแล้วสต็อกเพี้ยน: รวม qty ต่อ SKU / หักแถวแรกแถวเดียว / ไม่ปล่อยติดลบ
+  { names: ['saleFrontStoreDeductCore'], sourceFile: 'appsscript_complete.gs', landmarks: [
+    `if (sku && q > 0) want[sku] = (want[sku] || 0) + q;`,
+    `delete want[sku];`,
+    `if (next < 0) { shortfall.push({ sku: sku, want: qty, had: cur }); next = 0; }`,
+  ]},
   // transferBatchCore: idempotency ต่างกันโดยตั้งใจ (helper=Set, ต้นทาง=CacheService)
   // จึงไม่ landmark บรรทัด cache — guard เฉพาะตรรกะ clamp/โอน/shortfall
   { names: ['transferBatchCore'], sourceFile: 'appsscript_complete.gs', landmarks: [
@@ -242,14 +249,8 @@ const TRACKED = [
     `const m = /^\\d{4}-\\d{2}$/.test(monthStr) ? monthStr : curMonth;`,
     `const daysInMonth = new Date(Date.UTC(y, mo, 0)).getUTCDate();`,
   ]},
-  // ── เฟส 4 ล็อกอิน: บังคับสิทธิ์ฝั่ง server ──────────────────────────────
-  // helpers.js รับ requireLoginOn เป็นพารามิเตอร์แทน PropertiesService (ไม่มีใน Node)
-  { names: ['canDo'], sourceFile: 'appsscript_complete.gs', landmarks: [
-    `if (sess && sess.status === 'active') return allowedRoles.indexOf(sess.role) >= 0;`,
-  ]},
-  { names: ['canDoStrict'], sourceFile: 'appsscript_complete.gs', landmarks: [
-    `return !!(sess && sess.status === 'active' && allowedRoles.indexOf(sess.role) >= 0);`,
-  ]},
+  // เฟส 4 ล็อกอิน (canDoOrNull_/ROLE_ACTIONS_/IMMEDIATE_GATE_*) ไม่ copy เข้า helpers.js —
+  // ดู tests/auth.test.js (eval ฟังก์ชันจริงจาก .gs ตรง ๆ กันสำเนา drift ของโค้ดด้านความปลอดภัย)
   { names: ['attSummarize'], sourceFile: 'appsscript_complete.gs', landmarks: [
     `let breakMin = 0, openBreak = null, forgotBreakEnd = false;`,
     `else if (e.type === "breakEnd" && openBreak) { breakMin += Math.round((e.serverTs - openBreak.serverTs) / 60000); openBreak = null; }`,

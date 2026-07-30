@@ -103,7 +103,9 @@ const LINE_ACCESS_TOKEN_2 = getSecret_('LINE_ACCESS_TOKEN_2', '');
 const LINE_LOGIN_CHANNEL_ID     = getSecret_('LINE_LOGIN_CHANNEL_ID', '').trim();
 const LINE_LOGIN_CHANNEL_SECRET = getSecret_('LINE_LOGIN_CHANNEL_SECRET', '').trim();
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // session ค้าง 30 วัน (มือถือส่วนตัวทุกคน — ยอมรับความเสี่ยงนี้ได้)
-const STAFF_ROLE_TH_ = { owner: "เจ้าของ", saler: "Sale", warehouse: "คลังสินค้า", frontstore: "หน้าร้าน", employee: "พนักงาน" };
+// ต้องตรงกับ ROLE_TH_PLAIN ใน app.jsx — ใช้ประกอบชื่อ actor ให้ audit log หน้าตาเหมือนกัน
+// ทั้งตอน client ส่งมาเอง (ก่อนเฟส 4) และตอน server ประกอบจาก session (เฟส 4)
+const STAFF_ROLE_TH_ = { owner: "เจ้าของ", saler: "Sale", warehouse: "คลังสินค้า", frontstore: "หน้าร้าน", employee: "พนักงาน", dev: "DEV" };
 
 // ── Sheet Config ──
 const SHEET_ID = getSecret_('SHEET_ID', 'PLACEHOLDER_SHEET_ID');
@@ -132,6 +134,7 @@ const SHEET_ORDERS_RAW     = "ZORT ออเดอร์ดิบ";   // ออ�
 const SHEET_QUOTE_DRAFTS   = "ร่างใบเสนอราคา";    // ร่างใบเสนอราคาที่ยังไม่ส่งเข้า ZORT
 const SHEET_STAFF          = "พนักงาน";           // บัญชีพนักงาน (LINE Login) — ชื่อ/ตำแหน่ง/สถานะ
 const SHEET_SESSIONS       = "เซสชัน";            // session token ที่ออกให้ตอนล็อกอิน LINE
+const SHEET_SALE_BILLS     = "บิลขาย";             // log บิลขายที่ออกผ่าน POS (1 แถว = 1 บิล) — ฝั่งเราเอง ไม่ต้องรอ sync ZORT
 const SHEET_ATTENDANCE     = "ลงเวลา";            // event log ลงเวลา (1 แถว = 1 การกดปุ่ม)
 const SHEET_ATT_SITES      = "จุดลงเวลา";         // พิกัดร้าน/คลัง + รัศมีที่ยอมรับ
 const SHEET_ATT_SHIFTS     = "ตั้งค่ากะ";          // เวลาเข้า-เลิกงานต่อตำแหน่ง/วัน
@@ -550,32 +553,132 @@ function claimLoginHandoffHandler_(data) {
 function isAdminRole_(role) { return role === 'owner' || role === 'dev'; }
 
 // ══════════════════════════════════════════════════════════════════════════
-// เฟส 4 ล็อกอิน: บังคับสิทธิ์ฝั่ง server สำหรับ action ที่กระทบเงิน/สต็อกจริง
-// (ตัด/อนุมัติออเดอร์ขาย ZORT, ปรับสต็อกเป็น 0, ลบ order, ออกใบกำกับภาษี) — ป้องกันคนเปิด
-// DevTools ยิง action ตรงข้าม UI (UI ซ่อนปุ่มไว้ แต่ endpoint เดิมไม่เคยเช็คสิทธิ์อะไรเลย)
-//
-// scope ของเฟสนี้: ไม่ใช่ "owner อย่างเดียวทุก action" ตามที่ร่างแผนไว้ตอนแรก — ตรวจกับ UI จริง
-// แล้วพบว่าหลาย action ให้ role อื่นใช้ได้ตามหน้าที่ (เช่น saler อนุมัติ/ปิดใบเสนอราคาของตัวเองได้,
-// warehouse/employee ยกเลิก-ปิดออเดอร์ได้) จึง whitelist ตาม role ที่ UI อนุญาตจริงต่อ action ไป
-// ส่วน action ที่ทุก role เข้าถึง tab ได้อยู่แล้ว (เช่น saveThresholds) ไม่ต้อง gate เพิ่ม — gate แล้ว
-// ก็ไม่ตัดสิทธิ์ใครออกจริง แค่เพิ่มความซับซ้อนเปล่าๆ
-//
-// role ที่เชื่อได้ต้องมาจาก session (server-verified) เท่านั้น — ไม่มี session (เครื่องเก่ายังไม่ได้
-// ย้ายมาใช้ LINE Login) → migration-safe คือ "ปล่อยผ่านเหมือนเดิม" (พฤติกรรมเดิมก่อนเฟสนี้ทั้งหมด)
-// จนกว่าเจ้าของจะตั้ง Script Property REQUIRE_LOGIN='true' เอง (ดู PLAN-EMPLOYEE-LOGIN.md ข้อ 5)
-function requireLoginOn_() {
+//  เฟส 4 ของระบบล็อกอิน — ตัวตนที่ server ยืนยันเอง (ไม่เชื่อ actor จาก client)
+// ══════════════════════════════════════════════════════════════════════════
+
+// ชื่อ actor มาตรฐาน "ชื่อ (ตำแหน่ง)" — ต้องตรงกับ window._currentUser ฝั่ง frontend
+// (applyStaffSession ใน app.jsx) เพื่อให้ audit log ก่อน/หลังเฟส 4 หน้าตาเหมือนกัน
+function staffActorName_(s) {
+  if (!s) return null;
+  var name = s.displayName || s.lineDisplayName || "ไม่ระบุ";
+  return name + " (" + (STAFF_ROLE_TH_[s.role] || s.role || "รอตำแหน่ง") + ")";
+}
+
+// เปิดโหมด "บังคับล็อกอิน" ด้วย Script Property REQUIRE_LOGIN='true'
+// ⚠️ เปิดได้ต่อเมื่อพนักงานทุกคนล็อกอิน LINE ครบแล้ว (ดู lastLoginAt ในชีต "พนักงาน")
+//    ไม่งั้นคนที่ยังไม่ได้ล็อกอินจะทำงานไม่ได้ทั้งร้าน
+function requireLoginEnabled_() {
   return PropertiesService.getScriptProperties().getProperty('REQUIRE_LOGIN') === 'true';
 }
-function canDo_(sess, allowedRoles) {
-  if (sess && sess.status === 'active') return allowedRoles.indexOf(sess.role) >= 0;
-  return !requireLoginOn_();
+
+// action ที่ยกเว้น ไม่ต้องมี session (ล็อกอิน/สาธารณะ) — ตรวจก่อน gate ทุกครั้ง
+var SESSION_EXEMPT_ACTIONS_ = {
+  verifyPin: true, authLine: true, claimLoginHandoff: true, me: true, logout: true,
+};
+
+// สิทธิ์ฝั่ง server — ล้อ ROLE_TABS ใน app.jsx (frontend ซ่อนแท็บ ≠ กันคนยิง API ตรง)
+// key = ชื่อ field/action ที่ doPost ใช้ตัดสินใจ · owner/dev ผ่านทุกอย่าง (isAdminRole_)
+// ⚠️ ยังไม่บังคับใช้จนกว่า REQUIRE_LOGIN='true' — ดู canDoOrNull_ ด้านล่าง
+var ROLE_ACTIONS_ = {
+  saler:      ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
+               "getContactDetail", "createQuotation", "saveQuotationDraft", "deleteQuotationDraft",
+               "voidQuotation", "approveQuotation", "setQuoteSale", "order", "updateOrderState",
+               "punch", "myToday"],
+  frontstore: ["updateFrontStore", "order", "updateOrderState", "transferStock",
+               "transferStockBatch", "confirmShipmentReceive", "recordUnscannedSale",
+               "punch", "myToday"],
+  warehouse:  ["order", "updateOrderState", "transferStock", "transferStockBatch",
+               "deductStock", "deductMaterials", "confirmStockCount", "updateLockData",
+               "deleteLockEntry", "addNewProduct", "addPurchaseIn", "checkSkuExists",
+               "fetchProductImage", "zeroStock", "createMtoJob", "closeMtoJob",
+               "saveMtoJobItems", "deleteMtoJob", "createStockCheck", "completeStockCheck",
+               "confirmShipmentReceive", "deleteOrder", "deleteOrders", "punch", "myToday"],
+  employee:   ["order", "updateOrderState", "transferStock", "transferStockBatch",
+               "updateFrontStore", "confirmShipmentReceive", "updateLockData",
+               "createMtoJob", "closeMtoJob", "saveMtoJobItems",
+               "deleteOrder", "deleteOrders", "punch", "myToday"],
+};
+
+// ── action ที่กระทบเงิน/สต็อกจริง (ตัด/อนุมัติออเดอร์ขาย ZORT, ปรับสต็อกเป็น 0, ลบ order,
+// ออกใบกำกับภาษี) — เดิม endpoint พวกนี้ไม่เคยเช็คสิทธิ์อะไรเลย จึงเช็ค "ทันที" ไม่รอเปิด
+// REQUIRE_LOGIN เหมือน ROLE_ACTIONS_ ด้านบน (ของเดิมยังไม่บังคับ เผื่อพนักงานยังไม่ย้ายมาล็อกอิน
+// LINE ครบ แต่ 7 action นี้เสี่ยงเกินกว่าจะรอ) — role ตรวจกับ UI จริงแล้ว ไม่ใช่ "owner อย่างเดียว"
+// ตามที่ร่างแผนไว้ตอนแรก (saler อนุมัติ/ปิดใบเสนอราคาของตัวเองได้, warehouse/employee ยกเลิก-ปิด
+// ออเดอร์ได้ — ตรงกับ ROLE_ACTIONS_ ด้านบนที่เพิ่งเติม deleteOrder/deleteOrders ให้ 2 role นี้)
+//
+// migration-safe (ไม่มี session → ปล่อยผ่านเหมือนเดิม) — มี caller จาก UI จริงวันนี้ deny ตอนไม่มี
+// session จะพังงานประจำวันของคนที่ยังไม่ได้ล็อกอิน LINE
+var IMMEDIATE_GATE_ACTIONS_ = {
+  voidQuotation:       ["saler"],
+  approveQuotation:    ["saler"],
+  issueFullTaxInvoice: ["saler"],
+  deleteOrder:         ["employee", "warehouse"],
+  deleteOrders:        ["employee", "warehouse"],
+};
+// deny-by-default เสมอ ไม่มี migration fallback — ไม่มี legitimate caller จาก UI เลยทั้งคู่
+// (resetNegativeStock = admin tool ไม่มีปุ่มเรียก, zeroStock = ประกาศไว้แต่ยังไม่ได้ต่อปุ่ม)
+var IMMEDIATE_GATE_STRICT_ACTIONS_ = {
+  resetNegativeStock: [],
+  zeroStock:           ["warehouse"],
+};
+
+// คืน null = ผ่าน · คืน response = ถูกปฏิเสธ
+// ยังไม่มี session (REQUIRE_LOGIN ปิด) → ผ่านหมด เพื่อไม่ให้ของเดิมพังตอน rollout
+// ยกเว้น IMMEDIATE_GATE_*_ACTIONS_ (ดู comment ด้านบน) ที่เช็คก่อนเสมอไม่รอ REQUIRE_LOGIN
+function canDoOrNull_(sess, action) {
+  if (!action || SESSION_EXEMPT_ACTIONS_[action]) return null;
+
+  // หมายเหตุ: ไม่เช็ค sess.status ซ้ำ — resolveSession_ คืนค่าเฉพาะ session ที่ active อยู่แล้ว
+  // (หมดอายุ/ถูก revoke = คืน null ไปตั้งแต่ต้นทาง) เช็คซ้ำที่นี่จะขัดกับ convention เดิม
+  var strictRoles = IMMEDIATE_GATE_STRICT_ACTIONS_[action];
+  if (strictRoles) {
+    if (sess && (isAdminRole_(sess.role) || strictRoles.indexOf(sess.role) >= 0)) return null;
+    return forbidden_("ไม่มีสิทธิ์ทำรายการนี้");
+  }
+  var immediateRoles = IMMEDIATE_GATE_ACTIONS_[action];
+  if (immediateRoles) {
+    if (!sess) return requireLoginEnabled_() ? forbidden_("ต้องล็อกอินก่อนใช้งาน") : null;
+    if (isAdminRole_(sess.role) || immediateRoles.indexOf(sess.role) >= 0) return null;
+    return forbidden_("ไม่มีสิทธิ์ทำรายการนี้");
+  }
+
+  if (!requireLoginEnabled_()) return null;          // โหมด rollout — action อื่นยังไม่บังคับ
+  if (!sess) return forbidden_("ต้องล็อกอินก่อนใช้งาน");
+  if (isAdminRole_(sess.role)) return null;          // owner/dev ผ่านทุกอย่าง
+  var allowed = ROLE_ACTIONS_[sess.role];
+  if (!allowed) return forbidden_("ตำแหน่ง '" + (sess.role || "-") + "' ยังไม่ได้กำหนดสิทธิ์");
+  if (allowed.indexOf(action) < 0) return forbidden_("ตำแหน่ง '" + sess.role + "' ไม่มีสิทธิ์ทำ '" + action + "'");
+  return null;
 }
-// เข้มกว่า canDo_ — ไม่มี migration fallback (ไม่มี session = ปฏิเสธเสมอ ไม่ปล่อยผ่าน)
-// ใช้เฉพาะ action ที่ "ไม่มี legitimate caller จาก UI เลย" (resetNegativeStock, zeroStock) —
-// เดิมสอง action นี้ deny-by-default อยู่แล้ว (ไม่มีใครส่ง role/session มา) ถ้าใช้ canDo_ ปกติ
-// ตอน REQUIRE_LOGIN ยังปิดอยู่จะกลายเป็น "อนุญาตทุกคนที่ไม่มี session" ซึ่งเปิดช่องโหว่ใหม่แทน
-function canDoStrict_(sess, allowedRoles) {
-  return !!(sess && sess.status === 'active' && allowedRoles.indexOf(sess.role) >= 0);
+
+function forbidden_(msg) {
+  return ContentService
+    .createTextOutput(JSON.stringify({ success: false, forbidden: true, error: msg || "ไม่มีสิทธิ์" }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// doPost แยกงานด้วย 2 แบบ: data.action === 'x' (ล็อกอิน/ลงเวลา) และ data.someFlag (สต็อก)
+// รวมให้เหลือ "ชื่อ action" เดียวเพื่อเอาไปเช็คสิทธิ์ · ต้องอัปเดตลิสต์นี้เมื่อเพิ่ม dispatch ใหม่
+// (ชื่อที่ไม่รู้จัก → คืน null = ไม่ถูกเช็คสิทธิ์ ไม่ใช่ block — กันของเดิมพังโดยไม่ตั้งใจ)
+var POST_FLAG_ACTIONS_ = [
+  "addNewProduct", "addPurchaseIn", "approveQuotation", "checkSkuExists", "closeMtoJob",
+  "completeStockCheck", "confirmShipmentReceive", "confirmStockCount", "createMtoJob",
+  "createQuotation", "createSaleBill", "createStockCheck", "deductMaterials", "deductStock",
+  "deleteLockEntry", "deleteMtoJob", "deleteOrder", "deleteOrders", "deleteQuotationDraft",
+  "fetchProductImage", "getContactDetail", "issueFullTaxInvoice", "lookupSaleBill",
+  "recordUnscannedSale", "resetNegativeStock", "saveMtoJobItems", "saveQuotationDraft",
+  "saveThresholds", "searchContact", "setQuoteSale", "syncZortNow", "syncZortPurchasesNow",
+  "syncZortSalesNow", "transferStock", "transferStockBatch", "updateFrontStore",
+  "updateLockData", "updateOrderState", "voidQuotation", "zeroStock",
+];
+
+function resolvePostAction_(data) {
+  if (!data) return null;
+  if (data.action) return String(data.action);
+  for (var i = 0; i < POST_FLAG_ACTIONS_.length; i++) {
+    if (data[POST_FLAG_ACTIONS_[i]]) return POST_FLAG_ACTIONS_[i];
+  }
+  return null;
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -1502,15 +1605,20 @@ function doPost(e) {
     const _tok = (e && e.parameter && e.parameter.token) || data.token;
     if (!checkToken_(_tok)) return unauthorized_();
 
-    // ── ผู้ใช้ที่ส่ง action มา ──
-    // เฟส 4 ล็อกอิน: ถ้ามี session ที่ valid ให้ actor เป็นชื่อจริงจาก session เสมอ (server-verified)
-    // ไม่เชื่อ data.actor ที่ client ส่งมาอีกต่อไปในกรณีนี้ — เดิม client ส่ง string หน้าตาเดียวกัน
-    // (window._currentUser = "ชื่อ (ตำแหน่ง)") อยู่แล้ว จึงไม่กระทบของเดิม แค่ตรวจสอบได้จริงแทนการเชื่อเฉยๆ
-    // ไม่มี session (เครื่องเก่า/ยังไม่ได้ล็อกอิน LINE) → fallback ไปใช้ data.actor แบบเดิม (migration-safe)
-    var _authSess = resolveSession_(ss, data.sessionToken);
-    var actor = (_authSess && _authSess.status === 'active')
-      ? (_authSess.displayName || _authSess.lineDisplayName) + " (" + (STAFF_ROLE_TH_[_authSess.role] || _authSess.role) + ")"
-      : (data.actor || "ไม่ระบุ");
+    // ── ตัวตนผู้ใช้ (เฟส 4) ────────────────────────────────────────────────
+    // ลำดับความเชื่อถือ: session ที่ server ตรวจเอง > actor ที่ client ส่งมา
+    // มี session ที่ใช้ได้ → **ทับ** actor ด้วยชื่อจาก session เสมอ (ห้ามเชื่อ data.actor อีก)
+    // ไม่มี session → ยังรับ data.actor ต่อไป เพื่อให้ช่วงเปลี่ยนผ่านไม่พัง
+    //   (คนที่ยังไม่ได้ล็อกอิน LINE ยังทำงานได้ จนกว่าจะเปิด REQUIRE_LOGIN)
+    var actor = data.actor || "ไม่ระบุ";
+    var _sess = null;
+    try { _sess = resolveSession_(ss, data.sessionToken); } catch (e) { Logger.log("resolveSession_ error: " + e); }
+    if (_sess) actor = staffActorName_(_sess) || actor;
+
+    // ตรวจสิทธิ์ฝั่ง server (frontend ซ่อนแท็บ ≠ กันคนยิง API ตรง)
+    // ยังเป็น no-op จนกว่า Script Property REQUIRE_LOGIN='true'
+    var _denied = canDoOrNull_(_sess, resolvePostAction_(data));
+    if (_denied) return _denied;
 
     // ─── Verify PIN (POST path) ───
     if (data.action === 'verifyPin') {
@@ -1545,22 +1653,17 @@ function doPost(e) {
     }
 
     // ─── Zero Stock: ตั้ง WH qty=0 ใน Sheets + ZORT (สินค้าหมด ไม่ได้จัด) ───
-    // ไม่มี legitimate caller จาก UI ตอนนี้ (ยังไม่ได้ต่อปุ่ม) — ใช้ canDoStrict_ กัน "ไม่มี session
-    // = ผ่าน" ตาม migration fallback ปกติ เพราะไม่มีใครใช้งานจริงอยู่แล้วให้ต้อง backward-compatible
     if (data.zeroStock) {
-      if (!canDoStrict_(_authSess, ['owner', 'dev', 'warehouse'])) return unauthorized_();
       return zeroStockItem_(ss, data.sku, actor);
     }
 
     // ─── Void Quotation: ปิดใบเสนอราคาค้าง (ไม่อนุมัติ) ใน ZORT ───
     if (data.voidQuotation) {
-      if (!canDo_(_authSess, ['owner', 'dev', 'saler'])) return unauthorized_();
       return voidZortQuotation_(data.quotationId, data.quotationNumber, actor);
     }
 
     // ─── Approve Quotation: แปลงใบเสนอราคาเป็นออเดอร์ขายจริงใน ZORT (ตัดสต็อก) แล้วปิดใบเสนอราคาเดิม ───
     if (data.approveQuotation) {
-      if (!canDo_(_authSess, ['owner', 'dev', 'saler'])) return unauthorized_();
       return approveQuotation(ss, data.quotationId, data.quotationNumber, actor);
     }
 
@@ -1644,7 +1747,6 @@ function doPost(e) {
       return lookupSaleBill(data.orderNumber);
     }
     if (data.issueFullTaxInvoice) {
-      if (!canDo_(_authSess, ['owner', 'dev', 'saler'])) return unauthorized_();
       return issueFullTaxInvoice(data.orderNumber, data.customer || {}, actor, data.orderId);
     }
 
@@ -1660,13 +1762,10 @@ function doPost(e) {
     }
 
     // ─── Order Management ───
-    // ยกเว้น frontstore/saler ให้ตรงกับ UI จริง (OrderItemRow ซ่อนปุ่มยกเลิกสำหรับ 2 role นี้)
     if (data.deleteOrder) {
-      if (!canDo_(_authSess, ['owner', 'dev', 'employee', 'warehouse'])) return unauthorized_();
       return deleteOrderRow(ss, data.orderId, actor);
     }
     if (data.deleteOrders) {
-      if (!canDo_(_authSess, ['owner', 'dev', 'employee', 'warehouse'])) return unauthorized_();
       return deleteOrderRows(ss, data.orderIds || [], actor);
     }
 
@@ -1687,9 +1786,8 @@ function doPost(e) {
     // ─── Reset Negative Stock ───
     // Owner only ตาม ADR-001 — ไม่มี legitimate caller อื่นจาก UI (ตรวจยืนยันแล้ว)
     // ปกติเรียกผ่าน resetNegativeStockOnce() ใน GAS editor โดยตรง ไม่ผ่าน path นี้เลย
-    // เดิมเช็ค data.role (ไม่มีใครส่งมา = deny เสมออยู่แล้ว) → ใช้ canDoStrict_ รักษาพฤติกรรม deny-by-default เดิมไว้
+    // สิทธิ์เช็คแล้วที่ต้น doPost (canDoOrNull_ + IMMEDIATE_GATE_STRICT_ACTIONS_) ไม่ต้องเช็คซ้ำ
     if (data.resetNegativeStock) {
-      if (!canDoStrict_(_authSess, ['owner', 'dev'])) return unauthorized_();
       return resetNegativeStock_(ss, actor);
     }
 
@@ -8981,6 +9079,120 @@ function searchContact(query) {
   return error("ค้นลูกค้าไม่สำเร็จ: " + lastErr);
 }
 
+// ── ชีต "บิลขาย" — log บิล POS ฝั่งเราเอง (1 แถว = 1 บิล) ────────────────────
+// ทำไมต้องมี: createSaleBill ยิงเข้า ZORT อย่างเดียว ไม่เหลือร่องรอยฝั่งเรา (เหลือแค่ audit log)
+// → ดู "ยอดขายวันนี้"/ปิดยอดเงินสด/แยกตามเซล ไม่ได้เลย จนกว่า syncZortSales จะรอบถัดไป (ทุก 2 ชม.)
+// เก็บระดับ "บิล" ไม่ใช่ระดับรายการ — รายละเอียดสินค้าในบิลดึงจาก ZORT ได้ด้วย lookupSaleBill(เลขบิล)
+function saleBillsSheet_(ss) {
+  return getOrCreateSheet_(ss, SHEET_SALE_BILLS, [
+    "id", "วันที่", "เวลา", "เลขบิล", "เลขใบกำกับ", "ผู้ขาย", "ช่องทาง", "วิธีชำระ",
+    "ยอดสุทธิ", "ก่อน VAT", "VAT", "ส่วนลดรวม", "จำนวนรายการ", "จำนวนชิ้น",
+    "ลูกค้า", "เลขผู้เสียภาษี", "ใบกำกับภาษี", "รับเงินสด", "เงินทอน",
+    "zortOrderId", "สถานะ", "หมายเหตุ",
+  ]);
+}
+
+// id กันชนกันแม้มีการลบแถว (บทเรียนเดียวกับ attNextId_ — ห้ามใช้ getLastRow() เฉย ๆ)
+function saleBillNextId_(sh, dateStr) {
+  var prefix = "SB-" + String(dateStr).replace(/-/g, "") + "-";
+  var used = {};
+  var last = sh.getLastRow();
+  if (last >= 2) {
+    sh.getRange(2, 1, last - 1, 1).getValues().forEach(function (r) { used[String(r[0])] = true; });
+  }
+  var n = last;
+  for (var i = 0; i < 10000; i++) {
+    var id = prefix + String(n).padStart(4, "0");
+    if (!used[id]) return id;
+    n++;
+  }
+  return prefix + Utilities.getUuid().slice(0, 4);
+}
+
+// เขียน 1 แถวลงชีตบิลขาย · คืน {ok:true,id} / {ok:false,error}
+// **ห้าม throw ออกไป** — ตอนถูกเรียก บิลถูกสร้างใน ZORT สำเร็จแล้ว (เงินรับมาแล้ว)
+// เขียนชีตพลาดต้องไม่ทำให้ทั้ง action พัง ผู้ขายต้องได้เลขบิลไปออกใบเสร็จเสมอ
+function appendSaleBillRow_(ss, rec) {
+  try {
+    var sh = saleBillsSheet_(ss);
+    var now = new Date();
+    var dateStr = Utilities.formatDate(now, "Asia/Bangkok", "yyyy-MM-dd");
+    var timeStr = Utilities.formatDate(now, "Asia/Bangkok", "HH:mm:ss");
+    var id = saleBillNextId_(sh, dateStr);
+    var row = [
+      id, dateStr, timeStr,
+      String(rec.orderNumber || ""), String(rec.documentNumber || ""),
+      String(rec.actor || ""), String(rec.channel || ""), String(rec.paymentMethod || ""),
+      Number(rec.grandTotal) || 0, Number(rec.preVat) || 0, Number(rec.vat) || 0,
+      Number(rec.discount) || 0, Number(rec.lineCount) || 0, Number(rec.unitCount) || 0,
+      String(rec.customerName || ""), String(rec.customerTaxId || ""),
+      rec.taxInvoice ? "ใช่" : "",
+      rec.cashReceived == null ? "" : Number(rec.cashReceived),
+      rec.cashChange == null ? "" : Number(rec.cashChange),
+      String(rec.zortOrderId == null ? "" : rec.zortOrderId),
+      "สำเร็จ", "",
+    ];
+    sh.appendRow(row);
+    // วันที่/เวลา/เลขบิล เป็น text — กัน Sheets แปลง "2026-07-29" เป็น Date และเลขบิลยาวเป็น
+    // number/exponential (บทเรียนข้อ 2 ใน CLAUDE.md) · ตั้งหลัง appendRow เพราะต้องรู้เลขแถว
+    var r = sh.getLastRow();
+    sh.getRange(r, 2, 1, 3).setNumberFormat("@");   // B วันที่, C เวลา, D เลขบิล
+    sh.getRange(r, 5, 1, 1).setNumberFormat("@");   // E เลขใบกำกับ
+    sh.getRange(r, 20, 1, 1).setNumberFormat("@");  // T zortOrderId
+    return { ok: true, id: id };
+  } catch (e) {
+    Logger.log("appendSaleBillRow_ error: " + e);
+    return { ok: false, error: String(e) };
+  }
+}
+
+// ── หักสต็อก "หน้าร้าน" (col G) ในชีตหลังขายผ่าน POS ────────────────────────
+// ทำไมหัก col G: POS ไม่ได้ส่ง warehousecode ให้ AddOrder → ZORT ตัดจากคลัง default
+// ซึ่งเจ้าของยืนยันแล้วว่าคือ "ดูเหมือนจริง/หน้าร้าน" (W0001) = col G (qtyStore)
+// ตรงกับที่ POS โชว์ "คงเหลือ N" และเตือน "เกินสต๊อกหน้าร้าน" อยู่แล้ว
+//
+// ⚠️ **ห้ามเรียก pushStockToZort_ ที่นี่** — AddOrder ตัดสต็อกฝั่ง ZORT ให้แล้ว
+//    ยิงซ้ำ = หักสองเด้ง · ตรงนี้เป็นแค่การอัปเดตชีตให้ทันทีไม่ต้องรอ sync (ทุก 2 ชม.)
+//    รอบ sync ถัดไปจะเขียนทับด้วยเลขจริงจาก ZORT อยู่ดี (ZORT เป็น source of truth)
+//
+// ไม่ throw — ตอนถูกเรียกบิลออกไปแล้ว หักสต็อกพลาดต้องไม่ทำให้ผู้ขายไม่ได้เลขบิล
+function deductFrontStoreForSale_(ss, list) {
+  try {
+    var sheet = ss.getSheetByName(SHEET_PRODUCTS);
+    if (!sheet) return { ok: false, error: "ไม่พบชีต " + SHEET_PRODUCTS };
+
+    // รวมจำนวนต่อ SKU ก่อน — บิลเดียวอาจมี SKU เดิมหลายบรรทัด
+    var want = {};
+    list.forEach(function (it) {
+      var sku = String(it.sku || "").trim().toUpperCase();
+      var q = Number(it.number) || 0;
+      if (sku && q > 0) want[sku] = (want[sku] || 0) + q;
+    });
+
+    var data = sheet.getDataRange().getValues();
+    var applied = [], shortfall = [];
+    for (var i = 1; i < data.length; i++) {
+      var sku = String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase();
+      if (!sku || want[sku] === undefined) continue;
+      var qty = want[sku];
+      delete want[sku];   // SKU ซ้ำหลายแถวในชีต → หักแถวแรกที่เจอแถวเดียว ไม่หักซ้ำ
+      var cur = Number(data[i][COL_PROD_QTYFS - 1]) || 0;
+      var next = cur - qty;
+      // ไม่ปล่อยติดลบ (สอดคล้องกับ deductStock เดิม) — ขายเกินที่ระบบรู้ = ชั้นมีของมากกว่าที่นับไว้
+      if (next < 0) { shortfall.push({ sku: sku, want: qty, had: cur }); next = 0; }
+      // เขียนทีละ cell เฉพาะแถวที่เปลี่ยน — syncZortToColumn_ ไม่ได้จับ LockService
+      // การเขียนทับทั้งคอลัมน์จึงเสี่ยงทับงาน sync ที่รันคาบเกี่ยว
+      sheet.getRange(i + 1, COL_PROD_QTYFS).setValue(next);
+      applied.push({ sku: sku, qty: qty, before: cur, after: next });
+    }
+    SpreadsheetApp.flush();
+    return { ok: true, applied: applied, shortfall: shortfall, notFound: Object.keys(want) };
+  } catch (e) {
+    Logger.log("deductFrontStoreForSale_ error: " + e);
+    return { ok: false, error: String(e) };
+  }
+}
+
 // สร้างบิลขาย + (option) ใบกำกับภาษี + บันทึกรับชำระ
 // data = {
 //   items:[{sku,name,qty,price,category}],  // price=ราคาปลีก/ชิ้น (รวม VAT)
@@ -9108,15 +9320,51 @@ function createSaleBill(ss, data, actor) {
       } catch (e) { logZortFailure_("ใบกำกับ/รับชำระ order " + orderNumber, String(e)); }
     }
 
+    // ── หักสต็อกหน้าร้านในชีตทันที (ไม่ต้องรอ sync ZORT ทุก 2 ชม.) ──
+    // กันขายเกิน: คนถัดไปที่เปิด POS จะเห็นเลขที่หักแล้ว ไม่ใช่เลขค้างของเมื่อ 2 ชม.ก่อน
+    var stockRes = deductFrontStoreForSale_(ss, list);
+    if (!stockRes.ok) {
+      logZortFailure_("หักสต็อกหน้าร้านหลังออกบิล " + (orderNumber || ""), stockRes.error);
+    }
+
     writeAuditLog_(actor || "ไม่ระบุ", "ออกบิลขาย", orderNumber || "(ไม่ทราบเลข)",
       auditDetail_({ after: { total: totals.grandTotal, items: list.length,
         customer: (data.customer && data.customer.name) || "", taxInvoice: !!data.taxInvoice,
         payment: data.paymentMethod || "",
         cashReceived: data.cashReceived != null ? Number(data.cashReceived) : undefined,
-        channel: data.channel || "" }, note: "saler ออกบิล/ใบกำกับผ่าน POS" }));
+        channel: data.channel || "",
+        // ร่องรอยการหักสต็อก — ไว้ไล่ย้อนตอนตัวเลขไม่ตรง
+        stockDeducted: stockRes.ok ? stockRes.applied.length : "FAILED",
+        stockShortfall: (stockRes.ok && stockRes.shortfall.length) ? stockRes.shortfall : undefined,
+        stockNotFound: (stockRes.ok && stockRes.notFound.length) ? stockRes.notFound : undefined },
+        note: "saler ออกบิล/ใบกำกับผ่าน POS" }));
+
+    // ── log ลงชีต "บิลขาย" ฝั่งเรา (ไม่ต้องรอ syncZortSales รอบถัดไป) ──
+    // ทำหลัง ZORT สำเร็จแล้วเท่านั้น — บิลที่ยิง ZORT ไม่ผ่านจะ return ไปตั้งแต่ด้านบน ไม่ถึงตรงนี้
+    // appendSaleBillRow_ ไม่ throw (บิลออกไปแล้ว เขียน log พลาดต้องไม่ทำให้ผู้ขายไม่ได้เลขบิล)
+    var cashRecv = (data.paymentMethod === "เงินสด" && data.cashReceived != null)
+                     ? Number(data.cashReceived) : null;
+    var billLog = appendSaleBillRow_(ss, {
+      orderNumber: orderNumber, documentNumber: docNumber, zortOrderId: orderId,
+      actor: actor || "", channel: data.channel || "", paymentMethod: data.paymentMethod || "",
+      grandTotal: totals.grandTotal, preVat: totals.preVat, vat: totals.vat,
+      // ส่วนลดรวมทุกชนิด = มูลค่าสินค้าก่อนลด − ยอดสุทธิ
+      // (computeBillTotalsGs_ ไม่ได้คืน wholesaleDiscount/tierDiscount แยกแบบฝั่ง frontend
+      //  — คำนวณจากผลต่างแทน ได้ค่าเดียวกันและไม่ผูกกับ field ที่ไม่มีจริง)
+      discount: Math.max(0, gross - totals.grandTotal),
+      lineCount: list.length,
+      unitCount: list.reduce(function (s, it) { return s + (Number(it.number) || 0); }, 0),
+      customerName: (data.customer && data.customer.name) || "",
+      customerTaxId: (data.customer && data.customer.taxId) || "",
+      taxInvoice: !!data.taxInvoice,
+      cashReceived: cashRecv,
+      cashChange: cashRecv == null ? null : (cashRecv - totals.grandTotal),
+    });
+    if (!billLog.ok) logZortFailure_("บันทึกชีตบิลขาย " + (orderNumber || ""), billLog.error);
 
     invalidateCache_();
-    return ok({ orderId: orderId, orderNumber: orderNumber, documentNumber: docNumber, totals: totals });
+    return ok({ orderId: orderId, orderNumber: orderNumber, documentNumber: docNumber,
+                totals: totals, billLogId: billLog.ok ? billLog.id : null });
   } finally {
     lock.releaseLock();
   }

@@ -1,6 +1,6 @@
-// tests/stock.test.js — ทดสอบ stockQty, whQty, deductStockCore
+// tests/stock.test.js — ทดสอบ stockQty, whQty, deductStockCore, saleFrontStoreDeductCore
 import { describe, it, expect } from 'vitest';
-import { stockQty, whQty, deductStockCore } from './helpers.js';
+import { stockQty, whQty, deductStockCore, saleFrontStoreDeductCore } from './helpers.js';
 
 describe('stockQty', () => {
   it('มีทั้ง qtyStore และ qtyWH → รวมกัน', () => {
@@ -109,5 +109,78 @@ describe('deductStockCore', () => {
     expect(r.deductFS).toBe(5);
     expect(r.newFS).toBe(3);
     expect(r.shortfall).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// saleFrontStoreDeductCore — หักสต็อกหน้าร้าน (col G) หลังออกบิล POS
+// ZORT AddOrder ตัดจากคลัง default = หน้าร้าน (W0001) แล้ว ฝั่งชีตจึงหัก col G ให้ตรงกัน
+// ─────────────────────────────────────────────────────────────────────────────
+describe('saleFrontStoreDeductCore', () => {
+  const rows = [
+    { sku: 'VAS001', qtyStore: 10 },
+    { sku: 'FLW002', qtyStore: 3 },
+    { sku: 'DEC003', qtyStore: 0 },
+  ];
+
+  it('หักปกติ — สต็อกพอ', () => {
+    const r = saleFrontStoreDeductCore([{ sku: 'VAS001', number: 4 }], rows);
+    expect(r.applied).toEqual([{ sku: 'VAS001', qty: 4, before: 10, after: 6 }]);
+    expect(r.shortfall).toEqual([]);
+    expect(r.notFound).toEqual([]);
+  });
+
+  it('หักหลาย SKU ในบิลเดียว', () => {
+    const r = saleFrontStoreDeductCore(
+      [{ sku: 'VAS001', number: 2 }, { sku: 'FLW002', number: 1 }], rows);
+    expect(r.applied.map(a => [a.sku, a.after])).toEqual([['VAS001', 8], ['FLW002', 2]]);
+    expect(r.shortfall).toEqual([]);
+  });
+
+  it('SKU ซ้ำหลายบรรทัดในบิล → รวม qty ก่อนหักครั้งเดียว', () => {
+    const r = saleFrontStoreDeductCore(
+      [{ sku: 'VAS001', number: 3 }, { sku: 'VAS001', number: 2 }], rows);
+    expect(r.applied).toEqual([{ sku: 'VAS001', qty: 5, before: 10, after: 5 }]);
+  });
+
+  it('ขายเกินสต็อก → clamp ที่ 0 + รายงาน shortfall (ไม่ปล่อยติดลบ)', () => {
+    const r = saleFrontStoreDeductCore([{ sku: 'FLW002', number: 8 }], rows);
+    expect(r.applied).toEqual([{ sku: 'FLW002', qty: 8, before: 3, after: 0 }]);
+    expect(r.shortfall).toEqual([{ sku: 'FLW002', want: 8, had: 3 }]);
+  });
+
+  it('สต็อกเป็น 0 อยู่แล้ว → after=0 และเข้า shortfall', () => {
+    const r = saleFrontStoreDeductCore([{ sku: 'DEC003', number: 1 }], rows);
+    expect(r.applied[0].after).toBe(0);
+    expect(r.shortfall).toEqual([{ sku: 'DEC003', want: 1, had: 0 }]);
+  });
+
+  it('SKU ไม่มีในชีต → เข้า notFound ไม่ทำให้พัง', () => {
+    const r = saleFrontStoreDeductCore([{ sku: 'NOPE999', number: 2 }], rows);
+    expect(r.applied).toEqual([]);
+    expect(r.notFound).toEqual(['NOPE999']);
+  });
+
+  it('SKU ซ้ำหลายแถวในชีต → หักแถวแรกแถวเดียว ไม่หักซ้ำ', () => {
+    const dupRows = [{ sku: 'VAS001', qtyStore: 10 }, { sku: 'VAS001', qtyStore: 7 }];
+    const r = saleFrontStoreDeductCore([{ sku: 'VAS001', number: 4 }], dupRows);
+    expect(r.applied).toEqual([{ sku: 'VAS001', qty: 4, before: 10, after: 6 }]);
+  });
+
+  it('sku ต่างตัวพิมพ์/มีช่องว่าง → normalize แล้วเจอ', () => {
+    const r = saleFrontStoreDeductCore([{ sku: ' vas001 ', number: 1 }], rows);
+    expect(r.applied).toEqual([{ sku: 'VAS001', qty: 1, before: 10, after: 9 }]);
+  });
+
+  it('qty <= 0 หรือ sku ว่าง → ข้าม ไม่หัก', () => {
+    const r = saleFrontStoreDeductCore(
+      [{ sku: 'VAS001', number: 0 }, { sku: '', number: 5 }], rows);
+    expect(r.applied).toEqual([]);
+    expect(r.notFound).toEqual([]);
+  });
+
+  it('list/rows ว่าง → ไม่พัง', () => {
+    expect(saleFrontStoreDeductCore([], rows).applied).toEqual([]);
+    expect(saleFrontStoreDeductCore(null, null).applied).toEqual([]);
   });
 });
