@@ -1747,7 +1747,7 @@ function App() {
                                             checkRequest={activeCheckRequest}
                                             onCheckComplete={async function(reqId){
                                               try {
-                                                await fetch(SHEET_DEPLOY_URL, {method:"POST",
+                                                await dmjFetch(SHEET_DEPLOY_URL, {method:"POST",
                                                   headers:{"Content-Type":"text/plain;charset=utf-8"},
                                                   body: JSON.stringify({completeStockCheck:true, reqId:reqId, actor:role})});
                                                 setActiveCheckRequest(null);
