@@ -81,6 +81,110 @@ const INVOICE_DEFAULT_REMARKS = [
   "บัญชีออมทรัพย์ สาขาเทสโก้โลตัสศาลายา เลขที่บัญชี 0503342510",
 ];
 
+function fmtInvoiceBaht(n) {
+  return (Math.round((Number(n) || 0) * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// ═══════════════════════════════════════════════
+// InvoiceOptionsModal — ตั้งค่าก่อนพิมพ์ใบแจ้งหนี้: เต็มจำนวน / เรียกเก็บมัดจำ / เรียกเก็บยอดคงเหลือ
+// ───────────────────────────────────────────────
+// เจ้าของขอ 2026-07-30: ลูกค้าบางรายขอแยกใบแจ้งหนี้เป็น "มัดจำ" กับ "ยอดคงเหลือ" ทีหลัง —
+// กรอกยอดมัดจำครั้งเดียว อีกฝั่งคำนวณให้เอง + หมายเหตุเงื่อนไขใส่อัตโนมัติ (แก้ต่อได้อิสระในช่อง)
+// หมายเหตุ auto-suggest ทำงานจนกว่าผู้ใช้จะพิมพ์ในช่องเอง (touched=true) — กันเขียนทับสิ่งที่แก้ไว้
+// ═══════════════════════════════════════════════
+function InvoiceOptionsModal({ grandTotal, onCancel, onConfirm }) {
+  const [kind, setKind] = uS("full"); // "full" | "deposit" | "remaining"
+  const [depositStr, setDepositStr] = uS("");
+  const deposit = Math.max(0, Math.min(Number(depositStr) || 0, grandTotal));
+  const remaining = Math.max(0, grandTotal - deposit);
+
+  const baseText = INVOICE_DEFAULT_REMARKS.join("\n");
+  const [remarksText, setRemarksText] = uS(baseText);
+  const [touched, setTouched] = uS(false);
+
+  uE(() => {
+    if (touched) return;
+    let extra = "";
+    if (kind === "deposit" && deposit > 0) {
+      extra = `4. ใบแจ้งหนี้ฉบับนี้เรียกเก็บเงินมัดจำ ${fmtInvoiceBaht(deposit)} บาท จากยอดรวม ${fmtInvoiceBaht(grandTotal)} บาท `
+            + `ส่วนที่เหลืออีก ${fmtInvoiceBaht(remaining)} บาท จะเรียกเก็บในใบแจ้งหนี้ฉบับถัดไป`;
+    } else if (kind === "remaining" && deposit > 0) {
+      extra = `4. ใบแจ้งหนี้ฉบับนี้เรียกเก็บยอดคงเหลือ หลังหักเงินมัดจำที่ชำระแล้ว ${fmtInvoiceBaht(deposit)} บาท `
+            + `จากยอดรวม ${fmtInvoiceBaht(grandTotal)} บาท คงเหลือเรียกเก็บ ${fmtInvoiceBaht(remaining)} บาท`;
+    }
+    setRemarksText(extra ? baseText + "\n" + extra : baseText);
+  }, [kind, deposit, touched]);
+
+  const dueAmount = kind === "deposit" ? deposit : (kind === "remaining" ? remaining : null);
+  const dueLabel = kind === "deposit" ? "ยอดมัดจำที่เรียกเก็บ" : (kind === "remaining" ? "ยอดคงเหลือที่เรียกเก็บ" : null);
+  const needDeposit = kind !== "full" && deposit <= 0;
+
+  const confirm = () => {
+    if (needDeposit) return;
+    onConfirm({ remarks: remarksText.split("\n"), dueAmount, dueLabel });
+  };
+
+  const opts = [
+    { v: "full", label: "เต็มจำนวน", desc: "เรียกเก็บยอดเต็มตามใบเสนอราคา" },
+    { v: "deposit", label: "เรียกเก็บมัดจำ", desc: "แจ้งหนี้บางส่วนก่อน ส่วนที่เหลือแจ้งทีหลัง" },
+    { v: "remaining", label: "เรียกเก็บยอดคงเหลือ", desc: "หักมัดจำที่ชำระแล้วออกจากยอดรวม" },
+  ];
+
+  return (
+    <div onClick={e => { if (e.target === e.currentTarget) onCancel(); }} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 2100,
+      display: "flex", alignItems: "flex-end", justifyContent: "center",
+    }}>
+      <div style={{ background: "#fff", borderRadius: "18px 18px 0 0", width: "100%", maxWidth: 480, padding: 18, maxHeight: "92vh", overflowY: "auto", boxSizing: "border-box" }}>
+        <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 3 }}>🧾 ตั้งค่าใบแจ้งหนี้</div>
+        <div style={{ fontSize: 12.5, color: "#6b7280", marginBottom: 14 }}>ยอดรวมในใบเสนอราคา: {fmtInvoiceBaht(grandTotal)} บาท</div>
+
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 7 }}>ประเภทใบแจ้งหนี้</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+          {opts.map(o => (
+            <button key={o.v} onClick={() => setKind(o.v)} style={{
+              textAlign: "left", padding: "10px 12px", borderRadius: 10, fontFamily: "inherit", cursor: "pointer",
+              border: kind === o.v ? "2px solid var(--g-600,#1f7f44)" : "1.5px solid #d1d5db",
+              background: kind === o.v ? "#f0fdf4" : "#fff",
+            }}>
+              <div style={{ fontSize: 14, fontWeight: 700 }}>{o.label}</div>
+              <div style={{ fontSize: 11.5, color: "#6b7280" }}>{o.desc}</div>
+            </button>
+          ))}
+        </div>
+
+        {kind !== "full" && (
+          <>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 7 }}>
+              ยอดมัดจำ (บาท) <span style={{ color: "#dc2626" }}>*</span>
+            </div>
+            <input type="number" value={depositStr} onChange={e => setDepositStr(e.target.value)}
+              placeholder="0" style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1.5px solid #d1d5db", fontSize: 15, marginBottom: 10, boxSizing: "border-box" }} />
+            <div style={{ fontSize: 12.5, color: "#6b7280", marginBottom: 14 }}>
+              {kind === "deposit"
+                ? `เรียกเก็บ ${fmtInvoiceBaht(deposit)} บาท · เหลืออีก ${fmtInvoiceBaht(remaining)} บาท`
+                : `เรียกเก็บ ${fmtInvoiceBaht(remaining)} บาท (หลังหักมัดจำ ${fmtInvoiceBaht(deposit)} บาท)`}
+            </div>
+          </>
+        )}
+
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 7 }}>หมายเหตุ (แก้ไขได้)</div>
+        <textarea value={remarksText} onChange={e => { setRemarksText(e.target.value); setTouched(true); }}
+          style={{ width: "100%", minHeight: 130, padding: 11, borderRadius: 10, border: "1.5px solid #d1d5db", fontFamily: "inherit", fontSize: 13, marginBottom: 14, boxSizing: "border-box", resize: "vertical" }} />
+
+        <div style={{ display: "flex", gap: 9 }}>
+          <button onClick={onCancel} style={{ flex: 1, padding: "13px", borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontFamily: "inherit", fontWeight: 700, cursor: "pointer" }}>ยกเลิก</button>
+          <button onClick={confirm} disabled={needDeposit} style={{
+            flex: 2, padding: "13px", borderRadius: 10, border: "none", fontFamily: "inherit",
+            background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 800, fontSize: 15,
+            cursor: needDeposit ? "default" : "pointer", opacity: needDeposit ? .5 : 1,
+          }}>🖨️ พิมพ์ใบแจ้งหนี้</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function QuotationFormView({ data, role, onBack, onSubmitted }) {
   const products = (data && data.products) || [];
   const [toast, showToast, hideToast] = useToast();
@@ -111,6 +215,8 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
   const [result, setResult] = uS(null);
   const [printReq, setPrintReq] = uS(0);
   const [printDocType, setPrintDocType] = uS("quotation"); // "quotation" | "invoice" — เอกสารหน้าตาเดียวกัน แค่เปลี่ยนป้าย
+  const [invoiceModal, setInvoiceModal] = uS(false);        // เปิด InvoiceOptionsModal ก่อนพิมพ์ใบแจ้งหนี้
+  const [invoiceExtra, setInvoiceExtra] = uS(null);         // {remarks, dueAmount, dueLabel} จาก modal
 
   uE(() => {
     if (printReq <= 0) return;
@@ -330,12 +436,21 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
             </div>
           </Card>
           <button onClick={() => doPrint("quotation")} style={{ padding: 14, borderRadius: 10, border: "none", background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 700 }}>🖨️ พิมพ์ใบเสนอราคา (A4)</button>
-          <button onClick={() => doPrint("invoice")} style={{ padding: 14, borderRadius: 10, border: "1px solid var(--g-600,#1f7f44)", background: "#fff", color: "var(--g-700,#166534)", fontWeight: 700 }}>🧾 พิมพ์ใบแจ้งหนี้ (A4)</button>
+          <button onClick={() => setInvoiceModal(true)} style={{ padding: 14, borderRadius: 10, border: "1px solid var(--g-600,#1f7f44)", background: "#fff", color: "var(--g-700,#166534)", fontWeight: 700 }}>🧾 พิมพ์ใบแจ้งหนี้ (A4)</button>
           <button onClick={() => { resetAll(); }} style={{ padding: 14, borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700 }}>📝 สร้างใบใหม่</button>
           {onBack && <button onClick={onBack} style={{ padding: 14, borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700 }}>← กลับไปหน้าติดตามสถานะ</button>}
           <Toast toast={toast} onClose={hideToast}/>
         </div>
-        <QuotationPrintDoc quotationNumber={result.quotationNumber} items={cart} customer={cust} remarks={remarks} salesRep={salesRep} totals={result.totals || totals} docType={printDocType}/>
+        {invoiceModal && (
+          <InvoiceOptionsModal grandTotal={(result.totals || totals).grandTotal}
+            onCancel={() => setInvoiceModal(false)}
+            onConfirm={(extra) => { setInvoiceExtra(extra); setInvoiceModal(false); doPrint("invoice"); }}/>
+        )}
+        <QuotationPrintDoc quotationNumber={result.quotationNumber} items={cart} customer={cust}
+          remarks={printDocType === "invoice" ? (invoiceExtra ? invoiceExtra.remarks : INVOICE_DEFAULT_REMARKS) : remarks}
+          salesRep={salesRep} totals={result.totals || totals} docType={printDocType}
+          dueAmount={printDocType === "invoice" && invoiceExtra ? invoiceExtra.dueAmount : null}
+          dueLabel={printDocType === "invoice" && invoiceExtra ? invoiceExtra.dueLabel : null}/>
       </React.Fragment>
     );
   }
@@ -577,11 +692,12 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
 
 // ใบเสนอราคา A4 สำหรับพิมพ์ (โชว์เฉพาะตอน print ผ่าน CSS .pos-print-area — mirror PosReceipt)
 // items = [{sku,name,qty,price,category}] ราคาปลีก/ชิ้น — คิดส่วนลดต่อหน่วยแบบเฉลี่ยเหมือนฝั่ง server
-// docType="invoice" → หน้าตาเอกสารเหมือนใบเสนอราคาทุกอย่าง เปลี่ยนป้ายหัวเอกสาร +
-// ใช้ INVOICE_DEFAULT_REMARKS แทน remarks ของใบเสนอราคาต้นฉบับ (เจ้าของขอ 2026-07-30 — คนละชุดกัน)
-function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep, totals, docType }) {
+// docType="invoice" → หน้าตาเอกสารเหมือนใบเสนอราคาทุกอย่าง เปลี่ยนป้ายหัวเอกสาร — remarks ของ
+// ใบแจ้งหนี้ (default = INVOICE_DEFAULT_REMARKS หรือแก้ไขแล้วจาก InvoiceOptionsModal) ผู้เรียกส่งมาตรงๆ
+// dueAmount/dueLabel (ไม่บังคับ) = กล่องเน้นยอดที่เรียกเก็บจริง เมื่อพิมพ์แบบมัดจำ/ยอดคงเหลือ
+function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep, totals, docType, dueAmount, dueLabel }) {
   const docLabel = docType === "invoice" ? "ใบแจ้งหนี้" : "ใบเสนอราคา";
-  const effRemarks = docType === "invoice" ? INVOICE_DEFAULT_REMARKS : remarks;
+  const effRemarks = remarks || [];
   const gross = (totals.retailEligible || 0) + (totals.retailExcluded || 0);
   const factor = gross > 0 ? totals.grandTotal / gross : 1;
   const rows = (items || []).map(it => {
@@ -722,6 +838,13 @@ function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep
                       <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span>มูลค่ารวมก่อนภาษี</span><span>{num(totals.preVat)} บาท</span></div>
                       <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}><span>ภาษีมูลค่าเพิ่ม (7%)</span><span>{num(totals.vat)} บาท</span></div>
                       <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontWeight: 800, fontSize: 14, borderTop: "1px solid #000", marginTop: 2, background: "#f3f4f6" }}><span>มูลค่ารวมสุทธิ</span><span>{num(totals.grandTotal)} บาท</span></div>
+                      {/* ยอดที่เรียกเก็บจริงในใบแจ้งหนี้ฉบับนี้ — โผล่เฉพาะพิมพ์แบบมัดจำ/ยอดคงเหลือ
+                          (dueAmount==null = เต็มจำนวน ไม่ต้องมีกล่องนี้ซ้ำกับ "มูลค่ารวมสุทธิ") */}
+                      {dueAmount != null && (
+                        <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0 2px", marginTop: 4, borderTop: "2px solid #f59e0b", fontWeight: 800, fontSize: 15, color: "#92400e" }}>
+                          <span>{dueLabel || "ยอดที่เรียกเก็บ"}</span><span>{num(dueAmount)} บาท</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </React.Fragment>

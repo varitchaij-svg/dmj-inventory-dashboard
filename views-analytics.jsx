@@ -6963,6 +6963,8 @@ function QuoteFollowupView({ data, role }) {
   const [printData, setPrintData] = uS(null);   // ผลจาก getQuotationForPrint ก่อน print
   const [printReq, setPrintReq] = uS(0);
   const [printDocType, setPrintDocType] = uS("quotation"); // "quotation" | "invoice" — เอกสารเดียวกัน เปลี่ยนแค่ป้าย
+  const [invoiceModal, setInvoiceModal] = uS(false);        // เปิด InvoiceOptionsModal ก่อนพิมพ์ใบแจ้งหนี้
+  const [invoiceExtra, setInvoiceExtra] = uS(null);         // {remarks, dueAmount, dueLabel} จาก modal
   const [toast, showToast, hideToast] = useToast();
   const listRef = React.useRef(null);
   const PAGE_SIZE = 20;
@@ -6976,8 +6978,8 @@ function QuoteFollowupView({ data, role }) {
     window.addEventListener("afterprint", onAfter);
   }, [printReq, printData]);
 
-  // docType: "quotation" (ค่าเริ่มต้น) | "invoice" — ใบแจ้งหนี้ใช้ข้อมูล/หน้าตาเดียวกันทั้งหมด
-  // ต่างแค่ป้ายหัวเอกสาร (เจ้าของยืนยัน 2026-07-30)
+  // docType: "quotation" (ค่าเริ่มต้น) → พิมพ์ทันที · "invoice" → เปิด InvoiceOptionsModal ก่อน
+  // (เลือกเต็มจำนวน/มัดจำ/ยอดคงเหลือ + แก้หมายเหตุได้ ก่อนค่อยสั่งพิมพ์จริง)
   async function handlePrint(q, docType) {
     if (printingId) return;
     setPrintingId(q.id || q.number);
@@ -6985,7 +6987,12 @@ function QuoteFollowupView({ data, role }) {
     setPrintingId(null);
     if (!r.success) { showToast("error", "ดึงรายละเอียดไม่สำเร็จ: " + (r.error || ""), "❌"); return; }
     setPrintData(r.data || {});
-    setPrintDocType(docType || "quotation");
+    if (docType === "invoice") {
+      setInvoiceExtra(null);
+      setInvoiceModal(true);
+      return;
+    }
+    setPrintDocType("quotation");
     setPrintReq(n => n + 1);
   }
 
@@ -7466,9 +7473,17 @@ function QuoteFollowupView({ data, role }) {
       <datalist id="dmjQuoteSales">{salesList.map(s => <option key={s} value={s}/>)}</datalist>
       <Toast toast={toast} onClose={hideToast}/>
     </div>
+      {invoiceModal && printData && (
+        <InvoiceOptionsModal grandTotal={(printData.totals || {}).grandTotal}
+          onCancel={() => setInvoiceModal(false)}
+          onConfirm={(extra) => { setInvoiceExtra(extra); setInvoiceModal(false); setPrintDocType("invoice"); setPrintReq(n => n + 1); }}/>
+      )}
       {printData && (
         <QuotationPrintDoc quotationNumber={printData.quotationNumber} items={printData.items} customer={printData.customer}
-          remarks={printData.remarks} salesRep={printData.salesRep} totals={printData.totals} docType={printDocType}/>
+          remarks={printDocType === "invoice" ? (invoiceExtra ? invoiceExtra.remarks : INVOICE_DEFAULT_REMARKS) : printData.remarks}
+          salesRep={printData.salesRep} totals={printData.totals} docType={printDocType}
+          dueAmount={printDocType === "invoice" && invoiceExtra ? invoiceExtra.dueAmount : null}
+          dueLabel={printDocType === "invoice" && invoiceExtra ? invoiceExtra.dueLabel : null}/>
       )}
     </React.Fragment>
   );
