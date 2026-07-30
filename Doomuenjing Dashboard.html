@@ -611,17 +611,32 @@
   }
 
   /* ── OverviewView filter bar — จัดกลุ่ม select หมวด/เดือน + Seg ไว้ในกล่องเดียว
-       กันหน้าตา "ลอย" แยกกัน ให้รู้สึกเป็นแถบตัวกรองเดียวที่จับต้องได้ ── */
+       กันหน้าตา "ลอย" แยกกัน ให้รู้สึกเป็นแถบตัวกรองเดียวที่จับต้องได้
+       สำคัญ: iOS Safari เรนเดอร์ <select> เป็น native control ที่มีกรอบ/เงาของตัวเอง
+       เสมอ ต่อให้ห่อด้วย wrapper ก็ยังดู "ลอยเป็นกล่องแยก" อยู่ดี ต้อง appearance:none
+       ปิด native chrome แล้ววาดลูกศรเองถึงจะแบนเข้ากับแถบเดียวกันได้จริง ── */
   .ov-filterbar {
-    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-    background: var(--g-50); border: 1px solid var(--bdr); border-radius: 14px;
-    padding: 5px; box-sizing: border-box;
+    display: flex; align-items: stretch; flex-wrap: wrap;
+    background: var(--paper); border: 1.5px solid var(--bdr); border-radius: 12px;
+    padding: 2px; box-sizing: border-box; overflow: hidden;
   }
   .overview-stickybar-inner .ov-filterbar { background: var(--paper); }
-  .ov-filterbar select { font-family: inherit; cursor: pointer; box-sizing: border-box; }
-  .ov-filterbar .seg { background: #fff; }
+  .ov-filterbar select {
+    -webkit-appearance: none; -moz-appearance: none; appearance: none;
+    font-family: inherit; cursor: pointer; box-sizing: border-box;
+    border: none; background: transparent; border-radius: 10px;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M1 1l4 4 4-4' stroke='%236b7a70' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+    background-repeat: no-repeat; background-position: right 8px center;
+    padding-right: 22px !important;
+  }
+  .ov-filterbar select + select { border-left: 1px solid var(--bdr); }
+  .ov-filterbar select.active { background-color: var(--g-50); color: var(--g-700); }
+  .ov-filterbar .seg {
+    background: transparent; border: none; border-left: 1px solid var(--bdr);
+    border-radius: 0; margin: 0; padding: 2px; flex-shrink: 0;
+  }
   @media (max-width: 480px) {
-    .ov-filterbar { width: 100%; padding: 5px; gap: 5px; }
+    .ov-filterbar { width: 100%; }
     .ov-filterbar select { flex: 1 1 auto; min-width: 0; }
     .ov-filterbar .seg { flex-shrink: 0; }
   }
