@@ -4299,12 +4299,14 @@ async function syncZeroStock(sku) {
 async function syncDeleteOrders(orderIds) {
   if (!SHEET_DEPLOY_URL || !orderIds || !orderIds.length) return { success: false };
   try {
-    await dmjFetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ deleteOrders: true, orderIds }),
     });
-    return { success: true };
+    // เดิม return {success:true} เสมอไม่สนผลจริงจาก server — ทำให้ caller เห็น "สำเร็จ" ผิดๆ
+    // แม้ server จะปฏิเสธ (เช่นไม่มีสิทธิ์) ต้อง forward ผลจริงกลับไปให้ caller ตัดสินใจถูก
+    return await res.json().catch(() => ({ success: false, error: "อ่านผลลัพธ์ไม่ได้" }));
   } catch(e) { console.warn("syncDeleteOrders error:", e.message); return { success: false, error: e.message }; }
 }
 
@@ -6513,8 +6515,10 @@ function AuditLogView() {
     setLoading(true); setErr(null);
     try {
       const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
-      const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getAuditLog&_t=${Date.now()}`, { cache: "no-store" });
+      const tok = encodeURIComponent(localStorage.getItem("dmj_session_token") || "");
+      const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getAuditLog&sessionToken=${tok}&_t=${Date.now()}`, { cache: "no-store" });
       const d = await res.json();
+      if (d && d.success === false) { setErr(d.error || "โหลดไม่สำเร็จ"); setRows([]); return; }
       setRows(Array.isArray(d.rows) ? d.rows : []);
     } catch (e) {
       setErr(e.message);

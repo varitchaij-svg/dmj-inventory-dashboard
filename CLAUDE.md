@@ -15,9 +15,10 @@
     (syncCreateQuotation/syncSaveQuotationDraft/syncGetQuotationDrafts/syncDeleteQuotationDraft)
     ใช้ computeBillTotals/POS_SALES_CHANNELS/POS_TRANSFER_INFO/syncSearchContact จาก
     views-analytics.jsx (global scope เดียวกัน) — เรียกจาก `QuoteFollowupView` โหมด `mode==="create"`
-  - `views-attendance.jsx` (~600 บรรทัด) — ลงเวลาเข้า-ออกงาน: `AttendanceView` (พนักงาน 4 ปุ่ม),
-    `AttendanceTodayView` (owner ดูใครเข้างาน + แก้ย้อนหลัง), `AttFixModal` · helper `attPost`
-    แนบ `sessionToken` จาก localStorage ให้ทุก request เอง (ไม่ใช้ syncXxx ของไฟล์อื่น)
+  - `views-attendance.jsx` (~750 บรรทัด) — ลงเวลาเข้า-ออกงาน: `AttendanceView` (พนักงาน — `Seg`
+    สลับ "⏱️ วันนี้"/"📅 เวลาของฉัน", ปุ่มสลับสถานะ 3 กลุ่ม), `MyAttendanceMonth` (สรุปเดือนของ
+    ตัวเอง ทุก role), `AttendanceTodayView` (owner ดูใครเข้างาน + แก้ย้อนหลัง), `AttFixModal` ·
+    helper `attPost` แนบ `sessionToken` จาก localStorage ให้ทุก request เอง (ไม่ใช้ syncXxx ของไฟล์อื่น)
   - **`Doomuenjing Dashboard.html` โหลดจริงแค่: ui.jsx → views-main.jsx → views-analytics.jsx → views-quote.jsx → views-attendance.jsx → app.jsx**
     (การแยกไฟล์ตั้งใจทำเพื่อลด Babel compile time — ห้ามกลับไปรวมเป็นไฟล์เดียว
     มิฉะนั้น FrontStoreView จะถูกประกาศซ้ำ → redeclaration error + compile ช้า)
@@ -284,7 +285,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 583 tests, 18 test files, ทั้งหมด pass
+**มี Vitest test suite แล้ว** — 665 tests, 19 test files, ทั้งหมด pass
 
 ```bash
 npm test              # run tests
@@ -296,7 +297,10 @@ npm run test:coverage # coverage report (tests/helpers.js)
            detectColor, COLOR_MAP, COLOR_KEYS,
            monthKey_, dayKey_, deductStockCore, netOf, enrichDataCore`
 - `tests/*.test.js` — parsing, color, stock, dates, mto, app, format, schema, conflict, orderstate,
-  sku, billing, bahttext, transfer, cleanup, analytics, **attendance**, drift-guard
+  sku, billing, bahttext, transfer, cleanup, analytics, **attendance**, **auth**, drift-guard
+- **`tests/auth.test.js`** — เฟส 4 ล็อกอิน (`canDoOrNull_`/`ROLE_ACTIONS_`/`IMMEDIATE_GATE_*`) —
+  **ไม่ copy โค้ดเข้า helpers.js** แต่ eval ฟังก์ชันจริงจาก `.gs` ตรง ๆ (กันสำเนา drift ของโค้ด
+  ด้านความปลอดภัย) ต่างจากไฟล์เทสต์อื่นที่ copy pure function เข้า `helpers.js`
 - **`tests/drift-guard.test.js`** — กัน `helpers.js` drift จากต้นทาง: ทุก export ต้องมี entry ใน
   `TRACKED` (พร้อม landmark ที่ต้องเจอทั้งในไฟล์ต้นทางและ helpers.js) หรืออยู่ใน
   `BEHAVIORAL_MODELS` · **เพิ่ม export ใหม่ใน helpers.js แล้วไม่เพิ่ม landmark = test แดงทันที**
@@ -352,7 +356,8 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
 ```
 
 **action ที่มี**: `authLine` `me` `logout` `listStaff` `saveStaff` · `punch` `myToday`
-`attendanceToday` `fixAttendance` · doGet: `lineLoginMeta` `attendancePhoto`
+`myAttendanceSummary` `attendanceToday` `fixAttendance` · doGet: `lineLoginMeta`
+`attendancePhoto` `getAuditLog`
 
 **กฎที่ต้องรู้เวลาแก้ระบบนี้**:
 - ทุก action ของลงเวลา/staff ตรวจสิทธิ์ด้วย **`resolveSession_(ss, data.sessionToken)`**
@@ -361,17 +366,30 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
   ด้วยชื่อจาก session เสมอ** (`staffActorName_` → "ชื่อ (ตำแหน่ง)" ตรง format กับ frontend)
   ถ้าไม่มี session ยังรับ `data.actor` ต่อ เพื่อให้ช่วงเปลี่ยนผ่านไม่พัง
   · **`dmjFetch` (ui.jsx)** ห่อ `fetch` แนบ `sessionToken` เข้า body ของทุก POST อัตโนมัติ
-    — ทำที่เดียวจบ **เวลาเพิ่มจุดเรียก API ใหม่ให้ใช้ `dmjFetch` ไม่ใช่ `fetch`**
-  · `canDo_` = **`canDoOrNull_(sess, action)`** + ตาราง `ROLE_ACTIONS_` (ล้อ ROLE_TABS)
+    — ทำที่เดียวจบ **เวลาเพิ่มจุดเรียก API ใหม่ให้ใช้ `dmjFetch` ไม่ใช่ `fetch`** (`getAuditLog`
+    เป็น GET ไม่ผ่าน `dmjFetch` — แนบ `sessionToken` เป็น query param เองแทน)
+  · `canDoOrNull_(sess, action)` + ตาราง `ROLE_ACTIONS_` (ล้อ ROLE_TABS)
     · `resolvePostAction_` แปลง dispatch 2 แบบ (`data.action` / `data.someFlag`) เป็นชื่อเดียว
     **เพิ่ม dispatch ใหม่ใน doPost ต้องเติมชื่อใน `POST_FLAG_ACTIONS_` ด้วย** ไม่งั้น
     action นั้นหลุดการตรวจสิทธิ์ (มี meta-test ใน `tests/auth.test.js` คอยจับให้แล้ว)
-  · ⚠️ **`REQUIRE_LOGIN` ยัง default ปิด** → `canDoOrNull_` เป็น no-op ทั้งหมด (ของเดิมไม่พัง)
-    เปิดด้วย Script Property `REQUIRE_LOGIN='true'` **ต่อเมื่อพนักงานล็อกอิน LINE ครบทุกคนแล้ว**
+  · ⚠️ **`REQUIRE_LOGIN` ยัง default ปิด** → `ROLE_ACTIONS_`/`canDoOrNull_` ส่วนใหญ่เป็น no-op
+    (ของเดิมไม่พัง) **ยกเว้น `IMMEDIATE_GATE_ACTIONS_`/`IMMEDIATE_GATE_STRICT_ACTIONS_`** (ใกล้
+    `canDoOrNull_`) — 7 action ที่กระทบเงิน/สต็อกจริง (`voidQuotation`/`approveQuotation`/
+    `issueFullTaxInvoice`→saler, `deleteOrder`/`deleteOrders`→employee/warehouse,
+    `zeroStock`→warehouse, `resetNegativeStock`→เฉพาะ owner/dev) **เช็คสิทธิ์ทันทีไม่รอ
+    REQUIRE_LOGIN** เพราะเดิมไม่เคยเช็คอะไรเลย เสี่ยงเกินกว่าจะรอ rollout ของ role ที่เหลือ
+    · `IMMEDIATE_GATE_ACTIONS_` = migration-safe (ไม่มี session → ปล่อยผ่าน) ใช้กับ action ที่มี
+    caller จาก UI จริง · `IMMEDIATE_GATE_STRICT_ACTIONS_` = deny-by-default เสมอ (ไม่มี session
+    → ปฏิเสธ) ใช้กับ `zeroStock`/`resetNegativeStock` ที่ไม่มี caller จาก UI เลย — **ห้ามสลับ
+    สองตัวนี้กัน** ใช้ตัว migration-safe กับ action ที่ควร deny-by-default จะเปิดช่องโหว่แทน
+    · `canDoOrNull_` **ไม่เช็ค `sess.status`** — `resolveSession_` ต้นทางคืนเฉพาะ session ที่
+    active อยู่แล้ว เช็คซ้ำจะขัด convention
+    · เปิด `REQUIRE_LOGIN='true'` ให้ครบทุก action **ต่อเมื่อพนักงานล็อกอิน LINE ครบทุกคนแล้ว**
     (เช็ค `lastLoginAt` ในชีต "พนักงาน") — เปิดก่อนคนครบ = คนที่ยังไม่ล็อกอินทำงานไม่ได้ทั้งร้าน
-  · ตัวเลข "งานรายคน" เชื่อได้เมื่อ **เปิด REQUIRE_LOGIN แล้ว** เท่านั้น ก่อนหน้านั้นยังปลอมได้
-  · ยังไม่ได้ทำ: `getAuditLog` (doGet) ยังเช็คสิทธิ์จาก `role` ที่ client ส่งมา — dmjFetch
-    แนบ token ให้เฉพาะ POST ไม่ครอบ GET (read-only ความเสี่ยงต่ำ แต่ควรปิดทีหลัง)
+  · role ที่ gate จริงตรวจกับ UI แล้ว **ไม่ใช่ "owner อย่างเดียว"** ตามที่ร่างแผนไว้ตอนแรก — ดู
+    `PLAN-EMPLOYEE-LOGIN.md` ข้อ 5.1 ก่อนแก้ role list พวกนี้ (เคยพังเพราะเดาจากแผนแทนที่จะเช็ค UI)
+  · `getAuditLog` (doGet) ตรวจ session จริงแล้ว (เหมือน `attendancePhoto`) — **ไม่เช็คจาก
+    `role`/`data.role` query param ที่ client ส่งเองอีกต่อไป**
 - **`actor` เป็นชื่อจริง** ผ่าน `window._currentUser = "ชื่อ (ตำแหน่ง)"` ที่ตั้งใน
   `applyStaffSession()` (app.jsx) ตอน login/resume — ไม่ต้องแก้จุดเรียก API ทีละจุด
 - **วันที่/เวลาในชีตลงเวลาเขียนเป็น text** (`setNumberFormat("@")`) — บทเรียนข้อ 2
@@ -384,6 +402,19 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
 - **รูปลงเวลาไม่แชร์สาธารณะ** — เก็บ Drive แล้วดึงผ่าน `attendancePhoto` proxy ที่ตรวจ session
   · `dailyAttendanceMaintenance()` (trigger 22:00) ลบรูปเกิน `ATT_PHOTO_KEEP_DAYS` (90 วัน) +
   ล้างเซสชันหมดอายุ + เตือนคนที่ลืมกดออกงาน · เจ้าของต้องรัน **`setupAttendanceMaintenance()`** 1 ครั้ง
+- **ปุ่มลงเวลาเป็น "ปุ่มสลับสถานะ"** ไม่ใช่ 4 ปุ่มตายตัว — `ATT_TOGGLE_GROUPS` (views-attendance.jsx)
+  3 กลุ่ม (`work`=เข้า/ออกงาน, `break`=พัก, `bathroom`=ห้องน้ำ) แต่ละกลุ่มมีปุ่มเดียวสลับป้าย/สี
+  ตาม `allowed` ที่ server ส่งมา · `ATT_TYPE_META` = flat lookup กลาง (label/emoji/color ต่อ
+  ประเภท) ใช้ทั้งปุ่ม/ไทม์ไลน์/`AttFixModal` — **ห้ามกลับไปใช้ `ATT_BTN`** (ลบไปแล้ว)
+  · พัก/ห้องน้ำเป็นคนละสถานะ ทำพร้อมกันไม่ได้ (`attAllowedNext_`) แต่ "ออกงาน" กดได้เสมอแม้กลาง
+  พัก/ห้องน้ำ (กันคนลืมกดกลับ) · เวลาห้องน้ำ**ไม่หัก**จากชั่วโมงทำงาน (ต่างจากพักที่หัก) —
+  ตัดสินใจไว้ที่ `attSummarize_`, แก้ได้บรรทัดเดียวถ้าเจ้าของอยากเปลี่ยน (event log ไม่เสียข้อมูล)
+  · "ใครเข้างานวันนี้" นับคนแยก หน้าร้าน/คลังสินค้า จาก **role** (ไม่ใช่ GPS)
+- **"เวลาของฉัน"** (ทุก role) = `Seg` toggle ในแท็บ "⏱️ ลงเวลา" เดิม ไม่ใช่แท็บใหม่ — ตั้งใจ กัน
+  role ที่มีแท็บเกิน 9 อยู่แล้วโดนดันเข้า "เพิ่มเติม" เพิ่ม · `attMonthRange_` ตัดเดือนปัจจุบันที่
+  วันนี้เสมอ (ไม่โชว์วันอนาคต) · ยังไม่นับ "ขาด" ถ้าเป็นวันนี้ (อาจยังไม่ถึงเวลากะ)
+  · `attDowOfDateStr_` = helper กลาง หา day-of-week จาก `"yyyy-MM-dd"` ตรง ๆ (ใช้แทน
+  `attDowBkk_` เมื่อไม่มี `Date` object เช่นตอนดูวันในอดีต/เดือนอื่น)
 
 ## Features ที่เพิ่มล่าสุด (Sprint 4)
 

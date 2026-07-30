@@ -215,16 +215,6 @@ function attMonthRange(monthStr, today) {
   return { month: m, dates, isCurrentMonth: m === curMonth };
 }
 
-// ── canDo/canDoStrict: บังคับสิทธิ์ฝั่ง server เฟส 4 ล็อกอิน (จาก appsscript_complete.gs) ──
-// helpers.js รับ requireLoginOn เป็นพารามิเตอร์แทน PropertiesService (ไม่มีใน Node)
-function canDo(sess, allowedRoles, requireLoginOn) {
-  if (sess && sess.status === 'active') return allowedRoles.indexOf(sess.role) >= 0;
-  return !requireLoginOn;
-}
-function canDoStrict(sess, allowedRoles) {
-  return !!(sess && sess.status === 'active' && allowedRoles.indexOf(sess.role) >= 0);
-}
-
 // ── จาก views.jsx บรรทัด 1355–1367 ──────────────────────────────────────────
 // รับ object ที่มี property .sku (เหมือน Array.sort comparator)
 function compareSku(a, b) {
@@ -796,6 +786,5 @@ module.exports = {
   parseCheckDateMs, suggestNextSku,
   parseSkuParts, nextModelForPrefix,
   attBuildTs, attSequenceWarning, attSummarize, attMonthRange, attAllowedNext,
-  canDo, canDoStrict,
   computeBillTotals, wholesaleTierRate, isBillExcludedCat, BILL_EXCLUDE_CAT_KEYWORDS,
 };

@@ -592,17 +592,57 @@ var ROLE_ACTIONS_ = {
                "deleteLockEntry", "addNewProduct", "addPurchaseIn", "checkSkuExists",
                "fetchProductImage", "zeroStock", "createMtoJob", "closeMtoJob",
                "saveMtoJobItems", "deleteMtoJob", "createStockCheck", "completeStockCheck",
-               "confirmShipmentReceive", "punch", "myToday"],
+               "confirmShipmentReceive", "deleteOrder", "deleteOrders", "punch", "myToday"],
   employee:   ["order", "updateOrderState", "transferStock", "transferStockBatch",
                "updateFrontStore", "confirmShipmentReceive", "updateLockData",
-               "createMtoJob", "closeMtoJob", "saveMtoJobItems", "punch", "myToday"],
+               "createMtoJob", "closeMtoJob", "saveMtoJobItems",
+               "deleteOrder", "deleteOrders", "punch", "myToday"],
+};
+
+// ── action ที่กระทบเงิน/สต็อกจริง (ตัด/อนุมัติออเดอร์ขาย ZORT, ปรับสต็อกเป็น 0, ลบ order,
+// ออกใบกำกับภาษี) — เดิม endpoint พวกนี้ไม่เคยเช็คสิทธิ์อะไรเลย จึงเช็ค "ทันที" ไม่รอเปิด
+// REQUIRE_LOGIN เหมือน ROLE_ACTIONS_ ด้านบน (ของเดิมยังไม่บังคับ เผื่อพนักงานยังไม่ย้ายมาล็อกอิน
+// LINE ครบ แต่ 7 action นี้เสี่ยงเกินกว่าจะรอ) — role ตรวจกับ UI จริงแล้ว ไม่ใช่ "owner อย่างเดียว"
+// ตามที่ร่างแผนไว้ตอนแรก (saler อนุมัติ/ปิดใบเสนอราคาของตัวเองได้, warehouse/employee ยกเลิก-ปิด
+// ออเดอร์ได้ — ตรงกับ ROLE_ACTIONS_ ด้านบนที่เพิ่งเติม deleteOrder/deleteOrders ให้ 2 role นี้)
+//
+// migration-safe (ไม่มี session → ปล่อยผ่านเหมือนเดิม) — มี caller จาก UI จริงวันนี้ deny ตอนไม่มี
+// session จะพังงานประจำวันของคนที่ยังไม่ได้ล็อกอิน LINE
+var IMMEDIATE_GATE_ACTIONS_ = {
+  voidQuotation:       ["saler"],
+  approveQuotation:    ["saler"],
+  issueFullTaxInvoice: ["saler"],
+  deleteOrder:         ["employee", "warehouse"],
+  deleteOrders:        ["employee", "warehouse"],
+};
+// deny-by-default เสมอ ไม่มี migration fallback — ไม่มี legitimate caller จาก UI เลยทั้งคู่
+// (resetNegativeStock = admin tool ไม่มีปุ่มเรียก, zeroStock = ประกาศไว้แต่ยังไม่ได้ต่อปุ่ม)
+var IMMEDIATE_GATE_STRICT_ACTIONS_ = {
+  resetNegativeStock: [],
+  zeroStock:           ["warehouse"],
 };
 
 // คืน null = ผ่าน · คืน response = ถูกปฏิเสธ
 // ยังไม่มี session (REQUIRE_LOGIN ปิด) → ผ่านหมด เพื่อไม่ให้ของเดิมพังตอน rollout
+// ยกเว้น IMMEDIATE_GATE_*_ACTIONS_ (ดู comment ด้านบน) ที่เช็คก่อนเสมอไม่รอ REQUIRE_LOGIN
 function canDoOrNull_(sess, action) {
   if (!action || SESSION_EXEMPT_ACTIONS_[action]) return null;
-  if (!requireLoginEnabled_()) return null;          // โหมด rollout — ยังไม่บังคับ
+
+  // หมายเหตุ: ไม่เช็ค sess.status ซ้ำ — resolveSession_ คืนค่าเฉพาะ session ที่ active อยู่แล้ว
+  // (หมดอายุ/ถูก revoke = คืน null ไปตั้งแต่ต้นทาง) เช็คซ้ำที่นี่จะขัดกับ convention เดิม
+  var strictRoles = IMMEDIATE_GATE_STRICT_ACTIONS_[action];
+  if (strictRoles) {
+    if (sess && (isAdminRole_(sess.role) || strictRoles.indexOf(sess.role) >= 0)) return null;
+    return forbidden_("ไม่มีสิทธิ์ทำรายการนี้");
+  }
+  var immediateRoles = IMMEDIATE_GATE_ACTIONS_[action];
+  if (immediateRoles) {
+    if (!sess) return requireLoginEnabled_() ? forbidden_("ต้องล็อกอินก่อนใช้งาน") : null;
+    if (isAdminRole_(sess.role) || immediateRoles.indexOf(sess.role) >= 0) return null;
+    return forbidden_("ไม่มีสิทธิ์ทำรายการนี้");
+  }
+
+  if (!requireLoginEnabled_()) return null;          // โหมด rollout — action อื่นยังไม่บังคับ
   if (!sess) return forbidden_("ต้องล็อกอินก่อนใช้งาน");
   if (isAdminRole_(sess.role)) return null;          // owner/dev ผ่านทุกอย่าง
   var allowed = ROLE_ACTIONS_[sess.role];
@@ -745,8 +785,11 @@ function saveStaffHandler_(ss, data, actor) {
 // ระบบลงเวลาเข้า-ออกงาน (เฟส A) — ชีต "ลงเวลา" / "จุดลงเวลา" / "ตั้งค่ากะ"
 // ดูแผนเต็มที่ docs/PLAN-ATTENDANCE.md
 // ═══════════════════════════════════════════════════════════
-const ATT_TYPES = ["in", "breakStart", "breakEnd", "out"];
-const ATT_TYPE_TH = { in: "เข้างาน", breakStart: "เริ่มพัก", breakEnd: "กลับจากพัก", out: "ออกงาน" };
+const ATT_TYPES = ["in", "breakStart", "breakEnd", "bathroomStart", "bathroomEnd", "out"];
+const ATT_TYPE_TH = {
+  in: "เข้างาน", breakStart: "เริ่มพัก", breakEnd: "กลับจากพัก",
+  bathroomStart: "ไปห้องน้ำ", bathroomEnd: "กลับจากห้องน้ำ", out: "ออกงาน",
+};
 
 // ค่าเริ่มต้นที่เจ้าของยืนยันแล้ว (2026-07-29) — seed ลงชีตครั้งแรก แก้ในชีตได้เองภายหลัง
 const ATT_SITES_SEED = [
@@ -852,6 +895,11 @@ function attDowBkk_(d) {
   const p = attDateKey_(d).split("-");
   return new Date(Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2]))).getUTCDay();
 }
+// เหมือน attDowBkk_ แต่รับ "yyyy-MM-dd" ตรง ๆ — ใช้ตอนดูวันในอดีต/เดือนอื่น ไม่ใช่วันนี้
+function attDowOfDateStr_(dateStr) {
+  const p = String(dateStr).split("-");
+  return new Date(Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2]))).getUTCDay();
+}
 function attTimeStr_(d) { return Utilities.formatDate(d, "Asia/Bangkok", "HH:mm:ss"); }
 function attMinOfDay_(d) {
   return parseInt(Utilities.formatDate(d, "Asia/Bangkok", "H"), 10) * 60 +
@@ -881,16 +929,21 @@ function readAttEvents_(ss, staffId, dateStr) {
 }
 
 // ปุ่มไหนกดได้ต่อจากสถานะปัจจุบัน (กันกดผิดลำดับ เช่นกดออกงานทั้งที่ยังไม่เข้างาน)
+// พัก/ห้องน้ำ เป็นคนละสถานะกัน ทำพร้อมกันไม่ได้ (ต้องกลับจากอันหนึ่งก่อนเริ่มอีกอันได้) —
+// "ออกงาน" ยังกดได้เสมอแม้อยู่กลางพัก/ห้องน้ำ (เผื่อลืมกดกลับแล้วต้องรีบกลับบ้าน — attSummarize_ ดักไว้)
 function attAllowedNext_(events) {
   const types = events.map(function (e) { return e.type; });
   const lastType = types.length ? types[types.length - 1] : null;
   if (!lastType) return ["in"];
-  if (lastType === "in" || lastType === "breakEnd") return ["breakStart", "out"];
+  if (lastType === "in" || lastType === "breakEnd" || lastType === "bathroomEnd") return ["breakStart", "bathroomStart", "out"];
   if (lastType === "breakStart") return ["breakEnd", "out"];
+  if (lastType === "bathroomStart") return ["bathroomEnd", "out"];
   return []; // out แล้ว = จบวัน
 }
 
-// สรุปของวัน: เข้า/ออก/พักกี่นาที/ทำงานกี่นาที/สายกี่นาที + ธงเตือน
+// สรุปของวัน: เข้า/ออก/พักกี่นาที/ห้องน้ำกี่นาที/ทำงานกี่นาที/สายกี่นาที + ธงเตือน
+// หมายเหตุ: เวลาห้องน้ำ "ไม่หัก" ออกจากชั่วโมงทำงาน (ต่างจากพักที่หัก) — ตามธรรมเนียมทั่วไปที่ห้องน้ำ
+// เป็นเรื่องจำเป็นระหว่างงาน ไม่ใช่พักยาว ถ้าเจ้าของอยากให้หักด้วยเปลี่ยนสูตร workedMin บรรทัดเดียวได้เลย
 function attSummarize_(events, shift) {
   const firstIn = events.find(function (e) { return e.type === "in"; }) || null;
   let lastOut = null;
@@ -898,13 +951,20 @@ function attSummarize_(events, shift) {
 
   // พัก: จับคู่ breakStart→breakEnd · ถ้าลืมกดกลับจากพักแล้วกดออกงานเลย นับถึงเวลาออกงาน + ตั้งธง
   let breakMin = 0, openBreak = null, forgotBreakEnd = false;
+  let bathroomMin = 0, openBathroom = null, forgotBathroomEnd = false;
   events.forEach(function (e) {
     if (e.type === "breakStart") openBreak = e;
     else if (e.type === "breakEnd" && openBreak) { breakMin += Math.round((e.serverTs - openBreak.serverTs) / 60000); openBreak = null; }
+    else if (e.type === "bathroomStart") openBathroom = e;
+    else if (e.type === "bathroomEnd" && openBathroom) { bathroomMin += Math.round((e.serverTs - openBathroom.serverTs) / 60000); openBathroom = null; }
   });
   if (openBreak) {
     forgotBreakEnd = true;
     if (lastOut) breakMin += Math.round((lastOut.serverTs - openBreak.serverTs) / 60000);
+  }
+  if (openBathroom) {
+    forgotBathroomEnd = true;
+    if (lastOut) bathroomMin += Math.round((lastOut.serverTs - openBathroom.serverTs) / 60000);
   }
 
   const workedMin = (firstIn && lastOut) ? Math.max(0, Math.round((lastOut.serverTs - firstIn.serverTs) / 60000) - breakMin) : null;
@@ -920,10 +980,13 @@ function attSummarize_(events, shift) {
     inTime: firstIn ? firstIn.time : null,
     outTime: lastOut ? lastOut.time : null,
     breakMin: breakMin,
+    bathroomMin: bathroomMin,
     workedMin: workedMin,
     lateMin: lateMin,
     onBreak: !!(openBreak && !lastOut),
+    onBathroom: !!(openBathroom && !lastOut),
     forgotBreakEnd: forgotBreakEnd,
+    forgotBathroomEnd: forgotBathroomEnd,
     outsideArea: events.some(function (e) { return e.lat !== "" && e.lat != null && !e.inArea; }),
   };
 }
@@ -1046,6 +1109,73 @@ function myTodayHandler_(ss, data) {
   return ok(payload);
 }
 
+// ─── action=myAttendanceSummary : "เวลาของฉัน" — สรุปเดือนนี้ของตัวเอง (ทุก role) ───
+// เฟส B: ให้พนักงานเช็คชั่วโมง/สาย/ขาดของตัวเองได้เอง ก่อนที่เจ้าของจะเอาไปใช้ที่ไหน
+// (เรื่องความไว้ใจ — เห็นตัวเลขเดียวกับที่เจ้าของเห็น ไม่ใช่รู้ทีหลังว่าโดนนับว่าสาย)
+//
+// range = วันที่ 1 ถึง "วันสุดท้ายของเดือน" หรือ "เมื่อวาน" ถ้าเป็นเดือนปัจจุบัน (ไม่โชว์วันอนาคต)
+function attMonthRange_(monthStr) {
+  const now = new Date();
+  const curMonth = attDateKey_(now).slice(0, 7);
+  const m = /^\d{4}-\d{2}$/.test(monthStr) ? monthStr : curMonth;
+  const y = Number(m.slice(0, 4)), mo = Number(m.slice(5, 7));
+  const daysInMonth = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  const lastDay = (m === curMonth) ? Number(attDateKey_(now).slice(8, 10)) : daysInMonth;
+  const dates = [];
+  for (let d = 1; d <= lastDay; d++) dates.push(m + "-" + String(d).padStart(2, "0"));
+  return { month: m, dates: dates, isCurrentMonth: m === curMonth };
+}
+
+function myAttendanceSummaryHandler_(ss, data) {
+  const s = resolveSession_(ss, data.sessionToken);
+  if (!s || s.status !== "active") return unauthorized_();
+
+  const range = attMonthRange_(String(data.month || ""));
+  const todayStr = attDateKey_(new Date());
+  const shifts = readAttShifts_(ss);
+
+  // อ่านชีตครั้งเดียว กรองเฉพาะของคนนี้+เดือนนี้ แล้วจัดกลุ่มตามวันที่
+  const sh = attendanceSheet_(ss);
+  const last = sh.getLastRow();
+  const byDate = {};
+  if (last >= 2) {
+    sh.getRange(2, 1, last - 1, 17).getValues().forEach(function (r) {
+      if (String(r[1]) !== String(s.staffId)) return;
+      const d = attRowDateStr_(r[3]);
+      if (d.slice(0, 7) !== range.month) return;
+      (byDate[d] = byDate[d] || []).push({ type: r[7], time: r[4], serverTs: Number(r[5]) || 0 });
+    });
+  }
+
+  let workedMin = 0, daysWorked = 0, lateDays = 0, lateMin = 0, daysAbsent = 0;
+  const days = range.dates.map(function (dateStr) {
+    const shift = attShiftFor_(shifts, s.role, attDowOfDateStr_(dateStr));
+    const evs = (byDate[dateStr] || []).sort(function (a, b) { return a.serverTs - b.serverTs; });
+    const sum = attSummarize_(evs, shift);
+    const isPast = dateStr < todayStr;
+
+    if (sum.workedMin != null) { workedMin += sum.workedMin; daysWorked++; }
+    if (sum.lateMin) { lateDays++; lateMin += sum.lateMin; }
+    // ขาดนับเฉพาะวันที่ผ่านไปแล้วจริง — วันนี้ยังไม่กดเข้างานไม่ใช่ "ขาด" (อาจจะยังไม่ถึงกะ)
+    if (isPast && shift && !sum.inTime) daysAbsent++;
+
+    return {
+      date: dateStr, dow: attDowOfDateStr_(dateStr), isToday: dateStr === todayStr, isPast: isPast,
+      shift: shift ? { name: shift.name, start: attFmtHm_(shift.start), end: attFmtHm_(shift.end) } : null,
+      inTime: sum.inTime, outTime: sum.outTime, workedMin: sum.workedMin, breakMin: sum.breakMin,
+      bathroomMin: sum.bathroomMin,
+      lateMin: sum.lateMin, forgotBreakEnd: sum.forgotBreakEnd, forgotBathroomEnd: sum.forgotBathroomEnd,
+    };
+  });
+
+  return ok({
+    month: range.month, isCurrentMonth: range.isCurrentMonth,
+    staffName: s.displayName || s.lineDisplayName,
+    days: days,
+    totals: { workedMin: workedMin, daysWorked: daysWorked, lateDays: lateDays, lateMin: lateMin, daysAbsent: daysAbsent },
+  });
+}
+
 // ─── action=attendanceToday : ใครเข้างานบ้างวันนี้ (owner) ───
 function attendanceTodayHandler_(ss, data) {
   const s = resolveSession_(ss, data.sessionToken);
@@ -1053,8 +1183,7 @@ function attendanceTodayHandler_(ss, data) {
   const now = new Date();
   const dateStr = data.date && /^\d{4}-\d{2}-\d{2}$/.test(data.date) ? data.date : attDateKey_(now);
   // dow ต้องมาจาก "วันที่ที่กำลังดู" ไม่ใช่วันนี้ — ไม่งั้นย้อนดูวันอื่นแล้วเทียบกับกะผิดวัน
-  const dp = dateStr.split("-");
-  const dow = new Date(Date.UTC(Number(dp[0]), Number(dp[1]) - 1, Number(dp[2]))).getUTCDay();
+  const dow = attDowOfDateStr_(dateStr);
   const shifts = readAttShifts_(ss);
 
   const sh = attendanceSheet_(ss);
@@ -1084,7 +1213,7 @@ function attendanceTodayHandler_(ss, data) {
     return {
       staffId: st.staffId, name: st.displayName || st.lineDisplayName, role: st.role,
       pictureUrl: st.pictureUrl,
-      state: !lastType ? "ยังไม่มา" : (lastType === "out" ? "ออกงานแล้ว" : (sum.onBreak ? "พักอยู่" : "ทำงานอยู่")),
+      state: !lastType ? "ยังไม่มา" : (lastType === "out" ? "ออกงานแล้ว" : (sum.onBreak ? "พักอยู่" : (sum.onBathroom ? "ไปห้องน้ำ" : "ทำงานอยู่"))),
       shift: shift ? { name: shift.name, start: attFmtHm_(shift.start), end: attFmtHm_(shift.end) } : null,
       summary: sum,
       events: evs.map(function (e) {
@@ -1241,9 +1370,7 @@ function fixAttendanceHandler_(ss, data) {
     // คำนวณสถานะของวันนั้นใหม่ ส่งกลับให้ UI โชว์ผลทันที + เตือนถ้าลำดับยังเพี้ยน
     const events = readAttEvents_(ss, staffId, dateStr);
     const staff2 = readStaffAll_(ss).filter(function (x) { return x.staffId === staffId; })[0];
-    const dp = dateStr.split("-");
-    const dow = new Date(Date.UTC(Number(dp[0]), Number(dp[1]) - 1, Number(dp[2]))).getUTCDay();
-    const shift = attShiftFor_(readAttShifts_(ss), staff2 ? staff2.role : "", dow);
+    const shift = attShiftFor_(readAttShifts_(ss), staff2 ? staff2.role : "", attDowOfDateStr_(dateStr));
 
     return ok({
       staffId: staffId, date: dateStr,
@@ -1335,8 +1462,7 @@ function purgeExpiredSessions_(ss) {
 function notifyForgotPunchOut_(ss) {
   const dateStr = attDateKey_(new Date());
   const shifts = readAttShifts_(ss);
-  const dp = dateStr.split("-");
-  const dow = new Date(Date.UTC(Number(dp[0]), Number(dp[1]) - 1, Number(dp[2]))).getUTCDay();
+  const dow = attDowOfDateStr_(dateStr);
   // อ่านชีตครั้งเดียวแล้วจัดกลุ่ม — เรียก readAttEvents_ ต่อคนจะสแกนทั้งชีตซ้ำ N รอบ
   const sh = attendanceSheet_(ss);
   const last = sh.getLastRow();
@@ -1514,6 +1640,7 @@ function doPost(e) {
     // ─── ลงเวลาเข้า-ออกงาน ───
     if (data.action === 'punch')           return punchHandler_(ss, data);
     if (data.action === 'myToday')         return myTodayHandler_(ss, data);
+    if (data.action === 'myAttendanceSummary') return myAttendanceSummaryHandler_(ss, data);
     if (data.action === 'attendanceToday') return attendanceTodayHandler_(ss, data);
     if (data.action === 'fixAttendance')   return fixAttendanceHandler_(ss, data);
 
@@ -1659,8 +1786,8 @@ function doPost(e) {
     // ─── Reset Negative Stock ───
     // Owner only ตาม ADR-001 — ไม่มี legitimate caller อื่นจาก UI (ตรวจยืนยันแล้ว)
     // ปกติเรียกผ่าน resetNegativeStockOnce() ใน GAS editor โดยตรง ไม่ผ่าน path นี้เลย
+    // สิทธิ์เช็คแล้วที่ต้น doPost (canDoOrNull_ + IMMEDIATE_GATE_STRICT_ACTIONS_) ไม่ต้องเช็คซ้ำ
     if (data.resetNegativeStock) {
-      if (!isAdminRole_(data.role)) return unauthorized_();
       return resetNegativeStock_(ss, actor);
     }
 
@@ -1740,13 +1867,17 @@ function doGet(e) {
       }
     }
     // Audit Log endpoint: ดึง 200 แถวล่าสุดจาก Audit Log sheet
-    // เฉพาะ owner เท่านั้น — ตรวจจาก role parameter ที่ frontend ส่งมา
+    // เฉพาะ owner เท่านั้น — เดิมเช็คจาก e.parameter.role ที่ frontend ไม่เคยส่งมาเลย
+    // (ไม่มีการันตี → getAuditLog ปฏิเสธทุกครั้ง หน้า Audit Log เลยว่างเปล่าไม่มี error ให้เห็น)
+    // เปลี่ยนเป็นตรวจ session จริงเหมือน attendancePhoto แทน
     if (e && e.parameter && e.parameter.action === 'getAuditLog') {
-      if (!isAdminRole_(e.parameter.role)) {
+      const ssA = SpreadsheetApp.openById(SHEET_ID);
+      const sA = resolveSession_(ssA, e.parameter.sessionToken);
+      if (!sA || !isAdminRole_(sA.role) || sA.status !== 'active') {
         return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Unauthorized" }))
           .setMimeType(ContentService.MimeType.JSON);
       }
-      const ss = SpreadsheetApp.openById(SHEET_ID);
+      const ss = ssA;
       const sh = ss.getSheetByName(SHEET_AUDIT);
       if (!sh) {
         return ContentService.createTextOutput(JSON.stringify({ rows: [] }))
