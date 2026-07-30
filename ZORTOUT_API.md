@@ -191,8 +191,8 @@
 | GET  | `/Quotation/GetQuotationDetail` | ดึงรายละเอียด Quotation |
 | POST | `/Quotation/AddQuotation`       | สร้าง Quotation |
 | POST | `/Quotation/ApproveQuotation`   | อนุมัติ Quotation |
-| POST | `/Quotation/EditQuotationInfo`  | แก้ไขข้อมูล Quotation |
-| POST | `/Quotation/EditQuotation`      | แก้ไข Quotation (รวมรายการสินค้า) |
+| POST | `/Quotation/EditQuotationInfo`  | แก้ไขข้อมูล Quotation — ✅ **ทดสอบแล้ว 2026-07-30** ต้องส่ง `id` ทาง **query string** (`?id=348989`) + JSON body สำหรับ field ที่เหลือ · ส่ง `id` ใน JSON body หรือ form-encoded → `"Invalid ID."` (พฤติกรรมเดียวกับ `VoidQuotation`) |
+| POST | `/Quotation/EditQuotation`      | แก้ไข Quotation (รวมรายการสินค้า) — ⚠️ JSON body `{id,...}` → `"Invalid ID."` ยังไม่ยืนยันว่า query-id ใช้ได้ไหม (ดู `exploreZortEditQuotationV2()`) |
 | POST | `/Quotation/VoidQuotation`      | ยกเลิก Quotation |
 
 ---
