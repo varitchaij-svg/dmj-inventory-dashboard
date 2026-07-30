@@ -6962,6 +6962,7 @@ function QuoteFollowupView({ data, role }) {
   const [printingId, setPrintingId] = uS(null);
   const [printData, setPrintData] = uS(null);   // ผลจาก getQuotationForPrint ก่อน print
   const [printReq, setPrintReq] = uS(0);
+  const [printDocType, setPrintDocType] = uS("quotation"); // "quotation" | "invoice" — เอกสารเดียวกัน เปลี่ยนแค่ป้าย
   const [toast, showToast, hideToast] = useToast();
   const listRef = React.useRef(null);
   const PAGE_SIZE = 20;
@@ -6975,13 +6976,16 @@ function QuoteFollowupView({ data, role }) {
     window.addEventListener("afterprint", onAfter);
   }, [printReq, printData]);
 
-  async function handlePrint(q) {
+  // docType: "quotation" (ค่าเริ่มต้น) | "invoice" — ใบแจ้งหนี้ใช้ข้อมูล/หน้าตาเดียวกันทั้งหมด
+  // ต่างแค่ป้ายหัวเอกสาร (เจ้าของยืนยัน 2026-07-30)
+  async function handlePrint(q, docType) {
     if (printingId) return;
     setPrintingId(q.id || q.number);
     const r = await syncGetQuotationForPrint(q.id || q.number);
     setPrintingId(null);
     if (!r.success) { showToast("error", "ดึงรายละเอียดไม่สำเร็จ: " + (r.error || ""), "❌"); return; }
     setPrintData(r.data || {});
+    setPrintDocType(docType || "quotation");
     setPrintReq(n => n + 1);
   }
 
@@ -7376,11 +7380,16 @@ function QuoteFollowupView({ data, role }) {
                                   color: overdue ? "#fff" : "var(--muted)", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700,
                                   cursor: anyBusy ? "default" : "pointer", opacity: anyBusy && !busy ? .5 : 1,
                                 }}>{busy ? "กำลังปิด…" : "ปิดใบ"}</button>
-                                <button onClick={() => handlePrint(q)} disabled={anyBusy} style={{
+                                <button onClick={() => handlePrint(q, "quotation")} disabled={anyBusy} title="พิมพ์ใบเสนอราคา" style={{
                                   border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
                                   borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 700,
                                   cursor: anyBusy ? "default" : "pointer", opacity: anyBusy && !printing ? .5 : 1,
                                 }}>{printing ? "…" : "🖨️"}</button>
+                                <button onClick={() => handlePrint(q, "invoice")} disabled={anyBusy} title="พิมพ์ใบแจ้งหนี้" style={{
+                                  border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
+                                  borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 700,
+                                  cursor: anyBusy ? "default" : "pointer", opacity: anyBusy && !printing ? .5 : 1,
+                                }}>{printing ? "…" : "🧾"}</button>
                               </div>
                             </td>
                           </tr>
@@ -7427,12 +7436,18 @@ function QuoteFollowupView({ data, role }) {
                               onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} onBlur={(e) => saveSale(q, e.target.value)}
                               style={{ marginTop: 3, width: 110, minWidth: 0, padding: "3px 6px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/>
                           </td>
-                          <td style={{ padding: "8px 12px", textAlign: "center" }}>
-                            <button onClick={() => handlePrint(q)} disabled={!!printingId} style={{
+                          <td style={{ padding: "8px 12px", textAlign: "center", whiteSpace: "nowrap" }}>
+                            <button onClick={() => handlePrint(q, "quotation")} disabled={!!printingId} title="พิมพ์ใบเสนอราคา" style={{
                               border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
                               borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 700,
                               cursor: printingId ? "default" : "pointer", opacity: printingId && !printing ? .5 : 1,
                             }}>{printing ? "…" : "🖨️"}</button>
+                            <button onClick={() => handlePrint(q, "invoice")} disabled={!!printingId} title="พิมพ์ใบแจ้งหนี้" style={{
+                              marginLeft: 4,
+                              border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
+                              borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 700,
+                              cursor: printingId ? "default" : "pointer", opacity: printingId && !printing ? .5 : 1,
+                            }}>{printing ? "…" : "🧾"}</button>
                           </td>
                         </tr>
                         );
@@ -7453,7 +7468,7 @@ function QuoteFollowupView({ data, role }) {
     </div>
       {printData && (
         <QuotationPrintDoc quotationNumber={printData.quotationNumber} items={printData.items} customer={printData.customer}
-          remarks={printData.remarks} salesRep={printData.salesRep} totals={printData.totals}/>
+          remarks={printData.remarks} salesRep={printData.salesRep} totals={printData.totals} docType={printDocType}/>
       )}
     </React.Fragment>
   );
