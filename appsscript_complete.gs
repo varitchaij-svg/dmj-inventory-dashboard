@@ -2099,6 +2099,15 @@ function buildFullData_() {
         p.qtyWH = loc.qtyWH;
         p.warehouseQty = loc.qtyWH;
         if (loc.price > 0) p.price = loc.price;
+        // BUG FIX: p.qty/qtyStatus/isOOS ที่ readProducts_ ตั้งไว้มาจากคอลัมน์ I/J/K
+        // ของชีต "ข้อมูลสินค้า" (เก่า/ไม่อัปเดต) — ถ้าไม่คำนวณใหม่ตรงนี้ สินค้าที่มีสต็อกจริง
+        // ในชีต "อัพเดทจำนวนสินค้า" (เช่น WL00002 qtyStore=41,qtyWH=240) จะยังโชว์ "หมด"/qty=0
+        // บนเว็บอยู่ดี เพราะ qty ไม่เคยถูกรีเฟรชตาม qtyStore/qtyWH ที่เพิ่งเขียนทับข้างบน
+        const locTotal = loc.qtyStore + loc.qtyWH;
+        p.qty = locTotal;
+        p.qtyStatus  = locTotal < 0 ? 'negative' : 'ok';
+        p.isOversold = locTotal < 0;
+        p.isOOS      = locTotal <= 0;
       }
 
       const m = monthly.perSku[p.sku] || monthly.perSku[skuU];
