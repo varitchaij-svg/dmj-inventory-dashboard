@@ -473,6 +473,26 @@ const ATT_STATE_STYLE = {
 // role ที่มีอยู่จริงตอนนี้ = อยู่ที่ร้าน (ไม่นับ "ยังไม่มา"/"ออกงานแล้ว")
 const ATT_HERE_STATES = new Set(["ทำงานอยู่", "พักอยู่", "ไปห้องน้ำ"]);
 
+// จุดที่อยู่ล่าสุด — เดินย้อนจากอีเวนต์ท้ายสุดหาอันที่มีพิกัด GPS ยืนยันแล้ว (เผื่อกดล่าสุดไม่มี
+// สัญญาณ/ปฏิเสธ GPS ก็ยังใช้จุดที่เคยยืนยันไว้ก่อนหน้าในวันเดียวกันได้) — คืน null ถ้าไม่มีเลยทั้งวัน
+function attLatestSiteName(events) {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].siteName) return events[i].siteName;
+  }
+  return null;
+}
+// หน้าร้าน/คลังสินค้า จาก GPS จริง แม่นกว่าเดาจาก role — role เดาไม่ได้ว่า saler อยู่หน้าร้านจริงไหม
+// (saler/frontstore ทำงานที่หน้าร้านทั้งคู่ตามที่เจ้าของยืนยัน) ไม่มี GPS วันนี้เลย → fallback ไปใช้
+// role เฉพาะ frontstore/warehouse ที่มี mapping ชัดเจน role อื่นปล่อยเป็น "ไม่ทราบตำแหน่ง"
+function attSiteBucket(row) {
+  const site = attLatestSiteName(row.events);
+  if (site && site.indexOf("หน้าร้าน") >= 0) return "frontstore";
+  if (site && site.indexOf("คลังสินค้า") >= 0) return "warehouse";
+  if (row.role === "frontstore") return "frontstore";
+  if (row.role === "warehouse") return "warehouse";
+  return null;
+}
+
 function AttendanceTodayView() {
   const [rows, setRows] = uS([]);
   const [date, setDate] = uS(attTodayKey());
@@ -511,8 +531,9 @@ function AttendanceTodayView() {
   };
 
   const here = rows.filter(r => ATT_HERE_STATES.has(r.state));
-  const frontstoreHere = here.filter(r => r.role === "frontstore");
-  const warehouseHere = here.filter(r => r.role === "warehouse");
+  const frontstoreHere = here.filter(r => attSiteBucket(r) === "frontstore");
+  const warehouseHere = here.filter(r => attSiteBucket(r) === "warehouse");
+  const unknownHere = here.length - frontstoreHere.length - warehouseHere.length;
   const late = rows.filter(r => r.summary && r.summary.lateMin > 0);
   const came = rows.filter(r => r.summary && r.summary.inTime);
   const noOut = came.filter(r => !r.summary.outTime);
@@ -527,7 +548,8 @@ function AttendanceTodayView() {
           </div>
           <div style={{ fontSize: 12, color: "var(--muted)" }}>
             {isToday
-              ? `🏪 หน้าร้าน ${frontstoreHere.length} คน · 📦 คลังสินค้า ${warehouseHere.length} คน`
+              ? `🏪 หน้าร้าน ${frontstoreHere.length} คน · 📦 คลังสินค้า ${warehouseHere.length} คน` +
+                (unknownHere > 0 ? ` · ❓ ไม่ทราบตำแหน่ง ${unknownHere} คน` : "")
               : `มาทำงาน ${came.length} คน`}
             {late.length ? ` · สาย ${late.length} คน` : ""}
             {!isToday && noOut.length ? ` · ⚠️ ไม่ได้กดออกงาน ${noOut.length} คน` : ""}

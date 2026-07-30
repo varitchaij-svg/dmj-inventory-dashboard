@@ -7,9 +7,13 @@
 //   3. attSequenceWarning — เตือนลำดับเพี้ยนหลังเจ้าของแก้ย้อนหลัง (เตือน ไม่บล็อก)
 //   4. attMonthRange — ช่วงวันของ "เวลาของฉัน" เดือนนี้ต้องตัดที่เมื่อวาน ไม่โชว์วันอนาคต
 //   5. attAllowedNext — สถานะ ห้องน้ำ/พัก แยกกัน ทำพร้อมกันไม่ได้ (กันกดข้ามสถานะ)
+//   6. attSiteBucket — นับ "ใครอยู่หน้าร้าน/คลังสินค้า" จาก GPS จริงแทนเดาจาก role
 // ─────────────────────────────────────────────────────────────────────────────
 import { describe, it, expect } from 'vitest';
-import { attBuildTs, attSequenceWarning, attSummarize, attMonthRange, attAllowedNext } from './helpers.js';
+import {
+  attBuildTs, attSequenceWarning, attSummarize, attMonthRange, attAllowedNext,
+  attLatestSiteName, attSiteBucket,
+} from './helpers.js';
 
 // event ปลอมจากวันที่/เวลา — เลียนแบบแถวในชีต "ลงเวลา"
 const ev = (type, hhmm) => {
@@ -275,5 +279,51 @@ describe('attAllowedNext — ห้องน้ำ/พัก เป็นคน�
 
   it('ออกงานตอนกำลังพักอยู่ (ลืมกดกลับจากพัก) → ยอมให้ออกงานได้', () => {
     expect(attAllowedNext([{ type: 'in' }, { type: 'breakStart' }, { type: 'out' }])).toEqual([]);
+  });
+});
+
+describe('attSiteBucket — นับหน้าร้าน/คลังสินค้าจาก GPS จริง (ไม่ใช่เดาจาก role)', () => {
+  const FS = "หน้าร้าน (ดูเหมือนจริง)";
+  const WH = "คลังสินค้าสาย 5";
+
+  it('saler ที่ GPS ยืนยันว่าอยู่หน้าร้าน → นับเป็นหน้าร้าน (role เดียวไม่พอ)', () => {
+    const row = { role: 'saler', events: [{ siteName: FS }] };
+    expect(attSiteBucket(row)).toBe('frontstore');
+  });
+
+  it('frontstore ที่ GPS บอกว่าจริงๆ อยู่คลังสินค้าวันนี้ (ไปช่วยงาน) → นับตาม GPS ไม่ใช่ role', () => {
+    const row = { role: 'frontstore', events: [{ siteName: WH }] };
+    expect(attSiteBucket(row)).toBe('warehouse');
+  });
+
+  it('ไม่มี GPS เลยทั้งวัน → fallback ไปตาม role (เฉพาะ frontstore/warehouse ที่มี mapping ชัด)', () => {
+    expect(attSiteBucket({ role: 'frontstore', events: [{ siteName: '' }, { siteName: null }] })).toBe('frontstore');
+    expect(attSiteBucket({ role: 'warehouse', events: [] })).toBe('warehouse');
+  });
+
+  it('saler ไม่มี GPS เลย → ไม่มี default ที่แม่นพอ คืน null (ไม่ทราบตำแหน่ง)', () => {
+    expect(attSiteBucket({ role: 'saler', events: [] })).toBeNull();
+  });
+
+  it('employee/owner/dev ไม่มี GPS เลย → คืน null เช่นกัน', () => {
+    ['employee', 'owner', 'dev'].forEach(role => {
+      expect(attSiteBucket({ role, events: [] }), role).toBeNull();
+    });
+  });
+
+  it('ใช้จุดล่าสุดที่มี GPS จริง แม้การกดครั้งล่าสุดจะไม่มีสัญญาณ', () => {
+    const row = { role: 'saler', events: [{ siteName: FS }, { siteName: '' }, { siteName: null }] };
+    expect(attSiteBucket(row)).toBe('frontstore');
+  });
+
+  it('เจอชื่อจุดที่ไม่รู้จัก (ไม่ใช่หน้าร้าน/คลังสินค้า) → fallback ไป role', () => {
+    const row = { role: 'warehouse', events: [{ siteName: 'จุดใหม่ที่เพิ่งเพิ่ม' }] };
+    expect(attSiteBucket(row)).toBe('warehouse');
+  });
+
+  it('attLatestSiteName: เดินย้อนหาอีเวนต์ล่าสุดที่มีพิกัด', () => {
+    expect(attLatestSiteName([{ siteName: FS }, { siteName: '' }])).toBe(FS);
+    expect(attLatestSiteName([])).toBeNull();
+    expect(attLatestSiteName([{ siteName: '' }, { siteName: null }])).toBeNull();
   });
 });

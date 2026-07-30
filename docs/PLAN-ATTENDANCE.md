@@ -372,11 +372,12 @@ breakEnd/out) — ไม่ต้องแก้ schema ชีต (คอลั�
 (emoji ต่อ event), และตัวเลือกประเภทใน `AttFixModal` (ตอนนี้มี 6 ประเภทให้เลือกแทน 4)
 
 ### 13.3 นับคนตามจุด (หน้าร้าน/คลังสินค้า) ใน "ใครเข้างานวันนี้"
-`AttendanceTodayView` แยกนับจาก `role` ของพนักงาน (ไม่ใช่ GPS — role ผูกกับจุดทำงานอยู่แล้ว
-ในระบบเดิม `frontstore`/`warehouse`) แทนตัวเลขรวม "อยู่ที่ร้าน N คน" เดิม:
+`AttendanceTodayView` แยกนับจาก `role` ของพนักงาน แทนตัวเลขรวม "อยู่ที่ร้าน N คน" เดิม:
 `🏪 หน้าร้าน N คน · 📦 คลังสินค้า N คน` — นับรวมคนที่ "ไปห้องน้ำ"/"พักอยู่" ด้วย (ยังถือว่าอยู่ที่ร้าน
 แค่ไม่ได้อยู่หน้างานชั่วคราว) เพิ่ม state ใหม่ **"ไปห้องน้ำ"** เข้า `ATT_STATE_STYLE` (สีม่วงอ่อน
 แยกจากพัก/ทำงานอยู่) badge ต่อคนขึ้นอัตโนมัติ
+
+> **อัปเดต (2026-07-30 รอบถัดมา)**: เปลี่ยนจาก role-based เป็น **GPS-based** แล้ว — ดูข้อ 14
 
 **อุปกรณ์กลาง (LINE OA "Doomuenjing")**: เจ้าของถามว่า account ที่ล็อกอินอยู่ (role `dev`/`owner`)
 เห็นสถานะนี้ได้ไหม — **เห็นได้อยู่แล้ว** ไม่ต้องแก้สิทธิ์เพิ่ม เพราะแท็บ "🕐 ใครเข้างานวันนี้"
@@ -388,3 +389,48 @@ breakEnd/out) — ไม่ต้องแก้ schema ชีต (คอลั�
 
 tests: attAllowedNext (state machine ใหม่ 8 เคส) + attSummarize ส่วนห้องน้ำ (5 เคส) +
 drift-guard landmark ของทั้งคู่
+
+---
+
+## 14. บันทึกเหตุการณ์ (2026-07-30) — โค้ดหายจาก concurrent session + เปลี่ยนนับจุดเป็น GPS
+
+### 14.1 โค้ดหายตอน merge (แก้แล้ว)
+เจ้าของทดสอบเฟส A+/B/13 แล้วรายงานว่าเครื่องกลาง (LINE OA "Doomuenjing") ไม่เห็นฟีเจอร์ที่เพิ่งเพิ่ม
+ไล่ดู GitHub Actions logs พบว่ามี Claude session อื่นทำ "เฟส 4 ล็อกอิน" เวอร์ชันของตัวเอง
+(`canDoOrNull_`/`ROLE_ACTIONS_`) แล้ว push ทับ commit ของ session นี้ไปทั้งหมดโดยไม่รู้ตัว —
+`bathroomStart`/`bathroomEnd`, `myAttendanceSummaryHandler_`, เฟส 4 เดิม (`canDo_`/`canDoStrict_`
+7 gate), `getAuditLog` session fix หายไปจาก `master` หมด
+
+**กู้คืนโดยไม่ทิ้งงานของอีก session** — รวมสองระบบสิทธิ์เข้าด้วยกันแทนที่จะทำคู่ขนาน: เพิ่ม
+`IMMEDIATE_GATE_ACTIONS_`/`IMMEDIATE_GATE_STRICT_ACTIONS_` เข้า `canDoOrNull_` ของอีก session
+ให้ครอบคลุม 7 action เดิมที่เคยปิดช่องโหว่ไว้ (ดู `PLAN-EMPLOYEE-LOGIN.md` ข้อ 5.1) · เจอบั๊กเล็ก
+ระหว่างรวม (`sess.status==='active'` เช็คซ้ำ ทำให้ owner/dev ถูกบล็อกผิด — เทสต์เดิมของอีก session
+จับได้ทันที) แก้แล้ว
+
+**บทเรียน**: หลาย session ทำงานพร้อมกันบน repo เดียวกันโดยไม่รู้ตัวของกันและกัน = เสี่ยงเขียนทับ
+งานกันเงียบ ๆ แม้ git จะ fast-forward ได้สำเร็จ (ไม่มี merge conflict ก็ไม่ได้แปลว่าไม่มีอะไรหาย ถ้า
+คนละ session แก้คนละจุดที่บังเอิญไม่ overlap กันในเชิง text) — วิธีจับได้คือรัน test suite เต็ม +
+diff เทียบ commit ก่อน/หลังทุกครั้งที่ push แล้วมีคนบอกว่า "ของหาย"
+
+### 14.2 นับหน้าร้าน/คลังสินค้า เปลี่ยนจาก role เป็น GPS จริง
+เจ้าของท้วงว่า role-based (`role === "frontstore"`) นับตกคน — **`saler` ก็ทำงานที่หน้าร้านจริง**
+ไม่ใช่แค่ `frontstore` role และเสนอให้ยึดตาม GPS แทน
+
+แก้: `attSiteBucket(row)` (views-attendance.jsx) — เดินย้อนหาอีเวนต์ล่าสุดของคนนั้นที่มีพิกัด GPS
+ยืนยันแล้ว (`attLatestSiteName`) เทียบชื่อจุดกับคำว่า "หน้าร้าน"/"คลังสินค้า" (ตรงกับชื่อจุดจริงใน
+`ATT_SITES_SEED`: "หน้าร้าน (ดูเหมือนจริง)" / "คลังสินค้าสาย 5") **แม่นกว่า role เพราะสะท้อนว่า
+"อยู่ที่ไหนจริงตอนนี้"** ไม่ใช่แค่ตำแหน่งงาน — saler ที่ GPS ยืนยันว่าอยู่หน้าร้านจะถูกนับเป็นหน้าร้าน
+ทันที ไม่ต้องรอแก้ role
+
+**Fallback**: ถ้าคนนั้นไม่มี GPS เลยทั้งวัน (ปฏิเสธสิทธิ์/ไม่มีสัญญาณทุกครั้งที่กด) — fallback ไปใช้
+role เฉพาะ `frontstore`/`warehouse` ที่มี mapping ชัดเจน 1:1 กับจุด · role อื่น (`saler`/`employee`/
+`owner`/`dev`) ไม่มี default ที่แม่นพอ ถ้าไม่มี GPS จะไม่ถูกนับในทั้งสองฝั่ง (โผล่เป็น
+"❓ ไม่ทราบตำแหน่ง N คน" ต่อท้ายถ้ามี แทนที่จะเดาผิด)
+
+ไม่แตะ backend เลย — ข้อมูล GPS ต่ออีเวนต์ (`siteName`) ถูกส่งมาให้ frontend อยู่แล้วตั้งแต่เฟส A
+(`nearestAttSite_` คำนวณตอน `punch`) จึงแก้แค่ฝั่ง `AttendanceTodayView` (frontend) ล้วน ๆ
+
+tests: `attSiteBucket`/`attLatestSiteName` 8 เคส (saler จาก GPS, fallback role, ไม่มี GPS เลย,
+จุดใหม่ที่ไม่รู้จัก) + drift-guard landmark (เพิ่ม `views-attendance.jsx` เข้า `SRC` ของ
+`drift-guard.test.js` เป็นไฟล์แรกที่ไม่ใช่ appsscript_complete.gs/ui.jsx/views-main.jsx/
+views-analytics.jsx/app.jsx)

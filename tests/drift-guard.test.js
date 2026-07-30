@@ -40,6 +40,7 @@ const SRC = {
   'ui.jsx':                 squash(read('ui.jsx')),
   'views-main.jsx':         squash(read('views-main.jsx')),
   'views-analytics.jsx':    squash(read('views-analytics.jsx')),
+  'views-attendance.jsx':   squash(read('views-attendance.jsx')),
   'app.jsx':                squash(read('app.jsx')),
 };
 
@@ -248,6 +249,15 @@ const TRACKED = [
   { names: ['attMonthRange'], sourceFile: 'appsscript_complete.gs', landmarks: [
     `const m = /^\\d{4}-\\d{2}$/.test(monthStr) ? monthStr : curMonth;`,
     `const daysInMonth = new Date(Date.UTC(y, mo, 0)).getUTCDate();`,
+  ]},
+  // หน้าร้าน/คลังสินค้า จาก GPS จริงแทนเดาจาก role — role เดาไม่ได้ว่า saler อยู่หน้าร้านจริงไหม
+  { names: ['attLatestSiteName'], sourceFile: 'views-attendance.jsx', landmarks: [
+    `for (let i = events.length - 1; i >= 0; i--) {`,
+    `if (events[i].siteName) return events[i].siteName;`,
+  ]},
+  { names: ['attSiteBucket'], sourceFile: 'views-attendance.jsx', landmarks: [
+    `if (site && site.indexOf("หน้าร้าน") >= 0) return "frontstore";`,
+    `if (site && site.indexOf("คลังสินค้า") >= 0) return "warehouse";`,
   ]},
   // เฟส 4 ล็อกอิน (canDoOrNull_/ROLE_ACTIONS_/IMMEDIATE_GATE_*) ไม่ copy เข้า helpers.js —
   // ดู tests/auth.test.js (eval ฟังก์ชันจริงจาก .gs ตรง ๆ กันสำเนา drift ของโค้ดด้านความปลอดภัย)

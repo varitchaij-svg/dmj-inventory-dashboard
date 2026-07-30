@@ -200,6 +200,23 @@ function attSummarize(events, shift) {
   };
 }
 
+// ── attLatestSiteName/attSiteBucket: หาว่าคนคนนี้อยู่หน้าร้าน/คลังสินค้าจาก GPS จริง
+// (จาก views-attendance.jsx) — role เดาไม่ได้ว่า saler อยู่หน้าร้านจริงไหม แต่ GPS ยืนยันได้ตรง ๆ
+function attLatestSiteName(events) {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].siteName) return events[i].siteName;
+  }
+  return null;
+}
+function attSiteBucket(row) {
+  const site = attLatestSiteName(row.events);
+  if (site && site.indexOf("หน้าร้าน") >= 0) return "frontstore";
+  if (site && site.indexOf("คลังสินค้า") >= 0) return "warehouse";
+  if (row.role === "frontstore") return "frontstore";
+  if (row.role === "warehouse") return "warehouse";
+  return null;
+}
+
 // ── attMonthRange: ช่วงวันของเดือน สำหรับ "เวลาของฉัน" (จาก appsscript_complete.gs) ──
 // เดือนปัจจุบัน → ตัดที่ "เมื่อวาน" (ไม่โชว์วันอนาคตที่ยังไม่ถึง) · เดือนอื่น → เต็มเดือน
 // today ส่งเข้ามาแยก (แทนที่จะเรียก new Date() ข้างใน) เพื่อให้ test กำหนดวันที่ "วันนี้" ได้แน่นอน
@@ -786,5 +803,6 @@ module.exports = {
   parseCheckDateMs, suggestNextSku,
   parseSkuParts, nextModelForPrefix,
   attBuildTs, attSequenceWarning, attSummarize, attMonthRange, attAllowedNext,
+  attLatestSiteName, attSiteBucket,
   computeBillTotals, wholesaleTierRate, isBillExcludedCat, BILL_EXCLUDE_CAT_KEYWORDS,
 };
