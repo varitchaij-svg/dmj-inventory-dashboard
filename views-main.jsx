@@ -2860,6 +2860,22 @@ function CategoryView({ data, role }) {
     return m;
   }, [data.orders, localPendingOrders]);
 
+  // map SKU → รายการออเดอร์ที่คลังจัดของเสร็จแล้ว (status "สำเร็จ") แต่ยังไม่ถูกส่งออกเป็น
+  // shipment (ยังไม่ขึ้นรถ) — ใช้แสดง badge "จัดของแล้ว" ต่อจาก "สั่งแล้ว" กันพนักงานเข้าใจผิด
+  // ว่ายังไม่มีใครจัดของให้ ทั้งที่คลังจัดเสร็จรอส่งอยู่
+  const whReadyMap = uM(() => {
+    const orders = data.orders || [];
+    const m = {};
+    orders.forEach(o => {
+      if (!o.sku) return;
+      if (o.status === "สำเร็จ" && (o.preparedQty || 0) > 0) {
+        const key = (o.sku || "").trim().toUpperCase();
+        (m[key] = m[key] || []).push(o);
+      }
+    });
+    return m;
+  }, [data.orders]);
+
   const sortFn = uC((a, b) => {
     switch (sortBy) {
       case "sku":        return compareSku(a, b);
@@ -3780,6 +3796,7 @@ function CategoryView({ data, role }) {
                                      reasonTags={[]}
                                      onOrder={purchasePlanMode ? null : setOrderProduct}
                                      pendingOrderQty={pendingOrderQtyMap[(p.sku||"").trim().toUpperCase()] || 0}
+                                     whReady={whReadyMap[(p.sku||"").trim().toUpperCase()] || []}
                                      role={role}/>
                       </div>
                     ))}
@@ -3810,6 +3827,7 @@ function CategoryView({ data, role }) {
                                reasonTags={isGlobalSearch ? [] : (reasonMap[p.sku] || [])}
                                onOrder={setOrderProduct}
                                pendingOrderQty={pendingOrderQtyMap[(p.sku||"").trim().toUpperCase()] || 0}
+                               whReady={whReadyMap[(p.sku||"").trim().toUpperCase()] || []}
                                role={role}/>
                 </div>
               ))}
@@ -3823,6 +3841,7 @@ function CategoryView({ data, role }) {
       </div>
       {orderProduct && <OrderModal product={orderProduct} onClose={() => setOrderProduct(null)}
         pendingOrderQty={pendingOrderQtyMap[(orderProduct.sku||"").trim().toUpperCase()] || 0}
+        whReady={whReadyMap[(orderProduct.sku||"").trim().toUpperCase()] || []}
         role={role}
         onOrderSuccess={(sku, qty) => setLocalPendingOrders(prev => [...prev, {sku, orderQty: qty, status:"รอ"}])}/>}
       <Toast toast={checkToast} onClose={hideCheckToast}/>
@@ -4351,7 +4370,8 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
   );
 }
 
-function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pendingOrderQty }) {
+function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pendingOrderQty, whReady }) {
+  const whReadyQty = whReady ? whReady.reduce((s,o)=>s+(o.preparedQty||0),0) : 0;
   const totalQty = (p.qtyStore > 0 || p.qtyWH > 0) ? (p.qtyStore || 0) + (p.qtyWH || 0) : (p.qty || 0);
   const lowStock = !p.isMTO && totalQty > 0 && totalQty <= 36;
   const outOfStock = !p.isMTO && totalQty === 0;
@@ -4462,6 +4482,24 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
             lineHeight:1.2,
             boxShadow:"0 1px 3px rgba(0,0,0,.15)",
           }}>สั่งแล้ว {pendingOrderQty}</div>
+        )}
+
+        {/* WH จัดของแล้ว badge — เตรียมของเสร็จ รอขึ้นรถ (status "สำเร็จ" ยังไม่กลายเป็น shipment) */}
+        {whReadyQty > 0 && (
+          <div style={{
+            position:"absolute",
+            top: (rank != null ? 34 : 6) + (pendingOrderQty > 0 ? 26 : 0),
+            left:6,
+            background:"#2563eb",
+            color:"#fff",
+            fontSize:10,
+            fontWeight:700,
+            padding:"3px 7px",
+            borderRadius:6,
+            zIndex:2,
+            lineHeight:1.2,
+            boxShadow:"0 1px 3px rgba(0,0,0,.15)",
+          }}>📦 จัดของแล้ว {whReadyQty}</div>
         )}
 
         {/* Stock badge */}
