@@ -69,6 +69,18 @@ const QUOTE_DEFAULT_REMARKS = [
   "ชำระโดยโอนเข้าบัญชี ธนาคารกสิกรไทย ชื่อบัญชี บริษัท ดี.ยูนิตี้ จำกัด บัญชีออมทรัพย์ สาขาเทสโก้โลตัสศาลายา เลขที่บัญชี 0503342510",
 ];
 
+// หมายเหตุของใบแจ้งหนี้ — คนละชุดกับใบเสนอราคา (เจ้าของยืนยัน 2026-07-30) ตายตัว ไม่ผูกกับ
+// หมายเหตุที่บันทึกไว้ในใบเสนอราคาต้นฉบับ · แต่ละบรรทัดคือ 1 แถวตามที่เจ้าของพิมพ์มาเป๊ะ
+// (มีเลขข้อในเนื้อหาเองแล้ว — QuotationPrintDoc ไม่เติมเลขซ้ำ)
+const INVOICE_DEFAULT_REMARKS = [
+  "1. กรุณาตรวจสอบรายละเอียดในใบแจ้งหนี้ หากมีข้อผิดพลาด กรุณาแจ้งกลับภายใน 3 วันทำการ",
+  "บริษัทขอสงวนสิทธิ์ในการเปลี่ยนแปลงราคาโดยไม่แจ้งให้ทราบล่วงหน้า หากยังไม่มีการชำระเงิน",
+  "2. ราคานี้ยังไม่รวมค่าขนส่ง",
+  "ค่าขนส่งจะคำนวณเพิ่มเติมตามระยะทางและวิธีขนส่งที่ลูกค้าเลือก",
+  "3. ชำระโดยโอนเข้าบัญชี ธนาคารกสิกรไทย ชื่อบัญชี บริษัท ดี.ยูนิตี้ จำกัด",
+  "บัญชีออมทรัพย์ สาขาเทสโก้โลตัสศาลายา เลขที่บัญชี 0503342510",
+];
+
 function QuotationFormView({ data, role, onBack, onSubmitted }) {
   const products = (data && data.products) || [];
   const [toast, showToast, hideToast] = useToast();
@@ -565,10 +577,11 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
 
 // ใบเสนอราคา A4 สำหรับพิมพ์ (โชว์เฉพาะตอน print ผ่าน CSS .pos-print-area — mirror PosReceipt)
 // items = [{sku,name,qty,price,category}] ราคาปลีก/ชิ้น — คิดส่วนลดต่อหน่วยแบบเฉลี่ยเหมือนฝั่ง server
-// docType="invoice" → หน้าตาเอกสารเหมือนใบเสนอราคาทุกอย่าง เปลี่ยนแค่ป้ายหัวเอกสาร
-// (เจ้าของขอ 2026-07-30 — หมายเหตุ/เนื้อหาเฉพาะใบแจ้งหนี้รอเจ้าของส่งมาเพิ่ม ตอนนี้ใช้ remarks ชุดเดียวกันไปก่อน)
+// docType="invoice" → หน้าตาเอกสารเหมือนใบเสนอราคาทุกอย่าง เปลี่ยนป้ายหัวเอกสาร +
+// ใช้ INVOICE_DEFAULT_REMARKS แทน remarks ของใบเสนอราคาต้นฉบับ (เจ้าของขอ 2026-07-30 — คนละชุดกัน)
 function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep, totals, docType }) {
   const docLabel = docType === "invoice" ? "ใบแจ้งหนี้" : "ใบเสนอราคา";
+  const effRemarks = docType === "invoice" ? INVOICE_DEFAULT_REMARKS : remarks;
   const gross = (totals.retailEligible || 0) + (totals.retailExcluded || 0);
   const factor = gross > 0 ? totals.grandTotal / gross : 1;
   const rows = (items || []).map(it => {
@@ -688,12 +701,12 @@ function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, gap: 12 }}>
                     <div style={{ fontSize: 11, maxWidth: "55%" }}>
-                      {(remarks || []).filter(Boolean).length > 0 && (
+                      {(effRemarks || []).filter(Boolean).length > 0 && (
                         <div>
                           <div style={{ fontWeight: 700, marginBottom: 2 }}>หมายเหตุ</div>
                           {/* ไม่เติมเลขข้อให้เอง — ผู้ใช้พิมพ์เลขข้อไว้ในเนื้อหาแต่ละบรรทัดเองอยู่แล้ว
                               (เจ้าของแจ้ง 2026-07-30: เติมซ้ำเป็น "1. 1. ..." ) */}
-                          {(remarks || []).filter(Boolean).map((r, i) => <div key={i}>{r}</div>)}
+                          {(effRemarks || []).filter(Boolean).map((r, i) => <div key={i}>{r}</div>)}
                         </div>
                       )}
                       <div style={{ marginTop: 6 }}>สินค้าทั้งหมด {totalUnits} หน่วย</div>
