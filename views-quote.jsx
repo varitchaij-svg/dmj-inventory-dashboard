@@ -691,7 +691,9 @@ function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep
                       {(remarks || []).filter(Boolean).length > 0 && (
                         <div>
                           <div style={{ fontWeight: 700, marginBottom: 2 }}>หมายเหตุ</div>
-                          {(remarks || []).filter(Boolean).map((r, i) => <div key={i}>{i + 1}. {r}</div>)}
+                          {/* ไม่เติมเลขข้อให้เอง — ผู้ใช้พิมพ์เลขข้อไว้ในเนื้อหาแต่ละบรรทัดเองอยู่แล้ว
+                              (เจ้าของแจ้ง 2026-07-30: เติมซ้ำเป็น "1. 1. ..." ) */}
+                          {(remarks || []).filter(Boolean).map((r, i) => <div key={i}>{r}</div>)}
                         </div>
                       )}
                       <div style={{ marginTop: 6 }}>สินค้าทั้งหมด {totalUnits} หน่วย</div>

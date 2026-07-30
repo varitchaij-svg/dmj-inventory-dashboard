@@ -1,7 +1,7 @@
 // bump เลขทุกครั้งที่แก้ไฟล์ .jsx แล้วต้องให้มีผล "ทันทีในโหลดแรก"
 // (.jsx ใช้ stale-while-revalidate — ไม่ bump = โหลดแรกหลัง deploy ยังได้โค้ดเก่า
 //  ต้องเปิดซ้ำอีกรอบถึงจะได้ของใหม่ ซึ่งทำให้เข้าใจผิดว่า "แก้แล้วยังไม่หาย")
-const CACHE_NAME = "dmj-v10";
+const CACHE_NAME = "dmj-v11";
 
 const PRECACHE_ASSETS = [
   "/manifest.json",
