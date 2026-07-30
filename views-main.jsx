@@ -1604,10 +1604,9 @@ function OverviewView({ data, range, setRange, role }) {
   const filterControls = (
     <div className="ov-filterbar">
       <select value={selCat} onChange={e=>setSelCat(e.target.value)}
-        title="กรองตามหมวด"
-        style={{padding:"9px 10px",borderRadius:8,border:"1.5px solid "+(selCat?"var(--g-500)":"var(--bdr)"),
-                background:selCat?"var(--g-50)":"#fff",color:selCat?"var(--g-700)":"var(--text)",
-                fontFamily:"inherit",fontSize:13,fontWeight:selCat?700:500,minHeight:40,
+        title="กรองตามหมวด" className={selCat ? "active" : ""}
+        style={{padding:"9px 10px",color:selCat?"var(--g-700)":"var(--text)",
+                fontSize:13,fontWeight:selCat?700:500,minHeight:40,
                 maxWidth:180,flex:"1 1 130px",minWidth:0}}>
         <option value="">🏷️ ทุกหมวด</option>
         {allCats.map(c => <option key={c} value={c}>{c}</option>)}
@@ -1615,10 +1614,9 @@ function OverviewView({ data, range, setRange, role }) {
       {months.length > 1 && (
         <select value={range === 'month' ? (selMonth || months[months.length - 1] || "") : ""}
           onChange={e => { const v = e.target.value; if (v) { setSelMonth(v); setRange('month'); } }}
-          title="เลือกดูเดือน"
-          style={{padding:"9px 10px",borderRadius:8,border:"1.5px solid "+(range==='month'?"var(--g-500)":"var(--bdr)"),
-                  background:range==='month'?"var(--g-50)":"#fff",color:range==='month'?"var(--g-700)":"var(--text)",
-                  fontFamily:"inherit",fontSize:13,fontWeight:range==='month'?700:500,minHeight:40,
+          title="เลือกดูเดือน" className={range==='month' ? "active" : ""}
+          style={{padding:"9px 10px",color:range==='month'?"var(--g-700)":"var(--text)",
+                  fontSize:13,fontWeight:range==='month'?700:500,minHeight:40,
                   maxWidth:150,flex:"1 1 110px",minWidth:0}}>
           <option value="">📅 เลือกเดือน…</option>
           {months.slice().reverse().map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
