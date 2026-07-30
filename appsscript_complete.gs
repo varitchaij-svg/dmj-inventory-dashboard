@@ -105,7 +105,7 @@ const LINE_LOGIN_CHANNEL_SECRET = getSecret_('LINE_LOGIN_CHANNEL_SECRET', '').tr
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // session ค้าง 30 วัน (มือถือส่วนตัวทุกคน — ยอมรับความเสี่ยงนี้ได้)
 // ต้องตรงกับ ROLE_TH_PLAIN ใน app.jsx — ใช้ประกอบชื่อ actor ให้ audit log หน้าตาเหมือนกัน
 // ทั้งตอน client ส่งมาเอง (ก่อนเฟส 4) และตอน server ประกอบจาก session (เฟส 4)
-const STAFF_ROLE_TH_ = { owner: "เจ้าของ", saler: "Sale", warehouse: "คลังสินค้า", frontstore: "หน้าร้าน", employee: "พนักงาน", dev: "DEV" };
+const STAFF_ROLE_TH_ = { owner: "เจ้าของ", saler: "Sale", warehouse: "คลังสินค้า", frontstore: "หน้าร้าน", employee: "พนักงาน", dev: "DEV", storedevice: "เครื่องร้าน" };
 
 // ── Sheet Config ──
 const SHEET_ID = getSecret_('SHEET_ID', 'PLACEHOLDER_SHEET_ID');
@@ -584,6 +584,13 @@ var ROLE_ACTIONS_ = {
                "getContactDetail", "createQuotation", "saveQuotationDraft", "deleteQuotationDraft",
                "voidQuotation", "approveQuotation", "setQuoteSale", "order", "updateOrderState",
                "punch", "myToday"],
+  // storedevice = บัญชี LINE กลางประจำเครื่อง/แท็บเล็ตร้าน — สิทธิ์ API เท่า saler ทุกอย่าง
+  // + attendanceToday (ดู "ใครเข้างานวันนี้" อย่างเดียว — ไม่ได้เพิ่มในนี้เพราะ attendanceToday
+  // ไม่ผ่าน ROLE_ACTIONS_/canDoOrNull_ แต่เช็ค isAdminRole_ ตรง ๆ ใน attendanceTodayHandler_)
+  storedevice: ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
+               "getContactDetail", "createQuotation", "saveQuotationDraft", "deleteQuotationDraft",
+               "voidQuotation", "approveQuotation", "setQuoteSale", "order", "updateOrderState",
+               "punch", "myToday"],
   frontstore: ["updateFrontStore", "order", "updateOrderState", "transferStock",
                "transferStockBatch", "confirmShipmentReceive", "recordUnscannedSale",
                "punch", "myToday"],
@@ -609,9 +616,9 @@ var ROLE_ACTIONS_ = {
 // migration-safe (ไม่มี session → ปล่อยผ่านเหมือนเดิม) — มี caller จาก UI จริงวันนี้ deny ตอนไม่มี
 // session จะพังงานประจำวันของคนที่ยังไม่ได้ล็อกอิน LINE
 var IMMEDIATE_GATE_ACTIONS_ = {
-  voidQuotation:       ["saler"],
-  approveQuotation:    ["saler"],
-  issueFullTaxInvoice: ["saler"],
+  voidQuotation:       ["saler", "storedevice"],
+  approveQuotation:    ["saler", "storedevice"],
+  issueFullTaxInvoice: ["saler", "storedevice"],
   deleteOrder:         ["employee", "warehouse"],
   deleteOrders:        ["employee", "warehouse"],
 };
@@ -753,7 +760,7 @@ function saveStaffHandler_(ss, data, actor) {
     return ContentService.createTextOutput(JSON.stringify({ success: false, error: "ไม่พบพนักงาน" })).setMimeType(ContentService.MimeType.JSON);
   }
   const beforeObj = staffRowToObj_(sh.getRange(rowIdx, 1, 1, 11).getValues()[0]);
-  const VALID_ROLES = ["owner", "dev", "saler", "warehouse", "frontstore", "employee"];
+  const VALID_ROLES = ["owner", "dev", "saler", "warehouse", "frontstore", "employee", "storedevice"];
   const VALID_STATUS = ["pending", "active", "disabled"];
 
   // กันล็อกตัวเองออก: ถ้าเจ้าของถอดสิทธิ์/ระงับตัวเองแล้วไม่เหลือ owner ที่ active เลย
@@ -1176,10 +1183,10 @@ function myAttendanceSummaryHandler_(ss, data) {
   });
 }
 
-// ─── action=attendanceToday : ใครเข้างานบ้างวันนี้ (owner) ───
+// ─── action=attendanceToday : ใครเข้างานบ้างวันนี้ (owner/dev + storedevice ดูอย่างเดียว) ───
 function attendanceTodayHandler_(ss, data) {
   const s = resolveSession_(ss, data.sessionToken);
-  if (!s || !isAdminRole_(s.role) || s.status !== "active") return unauthorized_();
+  if (!s || !(isAdminRole_(s.role) || s.role === "storedevice") || s.status !== "active") return unauthorized_();
   const now = new Date();
   const dateStr = data.date && /^\d{4}-\d{2}-\d{2}$/.test(data.date) ? data.date : attDateKey_(now);
   // dow ต้องมาจาก "วันที่ที่กำลังดู" ไม่ใช่วันนี้ — ไม่งั้นย้อนดูวันอื่นแล้วเทียบกับกะผิดวัน

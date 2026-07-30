@@ -493,7 +493,7 @@ function attSiteBucket(row) {
   return null;
 }
 
-function AttendanceTodayView() {
+function AttendanceTodayView({ canEdit = true } = {}) {
   const [rows, setRows] = uS([]);
   const [date, setDate] = uS(attTodayKey());
   const [loading, setLoading] = uS(true);
@@ -637,9 +637,11 @@ function AttendanceTodayView() {
                   {e.photo && (
                     <button className="btn ghost" onClick={() => viewPhoto(e.photo)} style={{ fontSize: 11, padding: "3px 8px" }}>📷</button>
                   )}
-                  <button className="btn ghost" title="แก้เวลา/ลบรายการนี้"
-                    onClick={() => setFix({ mode: "edit", staff: r, event: e })}
-                    style={{ fontSize: 11, padding: "3px 8px" }}>✏️</button>
+                  {canEdit && (
+                    <button className="btn ghost" title="แก้เวลา/ลบรายการนี้"
+                      onClick={() => setFix({ mode: "edit", staff: r, event: e })}
+                      style={{ fontSize: 11, padding: "3px 8px" }}>✏️</button>
+                  )}
                 </div>
               ))}
               {r.summary && r.summary.forgotBreakEnd && (
@@ -654,10 +656,12 @@ function AttendanceTodayView() {
                   ⚠️ ไม่ได้กด "ออกงาน" วันนี้ — ชั่วโมงทำงานคำนวณไม่ได้จนกว่าจะเติมเวลาออก
                 </div>
               )}
-              <button className="btn ghost" onClick={() => setFix({ mode: "add", staff: r, event: null })}
-                style={{ marginTop: 8, fontSize: 12, padding: "7px 12px", width: "100%" }}>
-                ➕ เพิ่มการลงเวลาให้ {r.name}
-              </button>
+              {canEdit && (
+                <button className="btn ghost" onClick={() => setFix({ mode: "add", staff: r, event: null })}
+                  style={{ marginTop: 8, fontSize: 12, padding: "7px 12px", width: "100%" }}>
+                  ➕ เพิ่มการลงเวลาให้ {r.name}
+                </button>
+              )}
             </div>
           )}
         </div>

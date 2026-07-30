@@ -22,6 +22,7 @@ const ROLE_TABS = {
   warehouse:  ["categories","storage","stockcount","orders","ordersummary","tracking","mtojobs","labels"],
   frontstore: ["frontstore","categories","stock","orders","tracking","mtojobs","labels"],
   saler:      ["pos","categories","stock","tracking","orders","mtojobs","labels"],
+  storedevice: ["pos","categories","stock","tracking","orders","mtojobs","labels"],
 };
 // tab id → ป้ายข้อความ (จาก TABS ใน app.jsx) สำหรับคลิก nav
 const TAB_LABEL = {

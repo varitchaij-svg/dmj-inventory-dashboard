@@ -6341,6 +6341,9 @@ const STAFF_ROLE_OPTIONS = [
   { value: "saler",      label: "💼 Sale" },
   { value: "warehouse",  label: "🏭 คลังสินค้า" },
   { value: "frontstore", label: "🌸 หน้าร้าน" },
+  // storedevice = บัญชี LINE กลาง ติดไว้ที่เครื่อง/แท็บเล็ตประจำร้าน ใช้ร่วมกันหลายคน — สิทธิ์เท่า
+  // saler + ดู "ใครเข้างานวันนี้" ได้ (ดูอย่างเดียว แก้เวลาย้อนหลังไม่ได้)
+  { value: "storedevice", label: "🖥️ เครื่องร้าน" },
   // dev = ผู้ดูแลระบบ/คนพัฒนา — เห็นทุกแท็บ + สิทธิ์ API เท่าเจ้าของ (ดู isAdminRole_ ฝั่ง GAS)
   { value: "dev",        label: "🛠️ DEV (ผู้ดูแลระบบ)" },
 ];

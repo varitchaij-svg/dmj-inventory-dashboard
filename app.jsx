@@ -49,6 +49,10 @@ const ROLE_TABS = {
   frontstore: ["attendance","frontstore","categories","stock","orders","tracking","mtojobs","labels"],
   // quotefollowup ดันขึ้นมาติด pos — เป็นงานขายหลักคู่กับ pos แต่เดิมอยู่ตัวที่ 7 ต้องเลื่อนหา
   saler:      ["attendance","pos","quotefollowup","categories","stock","tracking","orders","mtojobs","labels"],
+  // storedevice = บัญชี LINE กลางที่ใช้ร่วมกันหลายคน (ติดไว้ที่เครื่อง/แท็บเล็ตประจำร้าน ไม่ผูกกับ
+  // พนักงานคนใดคนหนึ่ง) — สิทธิ์เท่า saler ทุกอย่าง + เพิ่ม "atttoday" ให้เปิดดูว่าใครเข้างาน/พัก/
+  // เข้าห้องน้ำอยู่ได้ (ดูอย่างเดียว ไม่ใช่แก้เวลาย้อนหลัง — ดู isAdminRole_ ฝั่ง GAS + canEdit ฝั่ง UI)
+  storedevice: ["attendance","pos","quotefollowup","categories","stock","tracking","orders","mtojobs","labels","atttoday"],
 };
 // หมวดหลักของ owner (nav 2 ชั้น) — กดหมวด → เห็นเมนูย่อยของหมวดนั้น
 // เรียงตามความสำคัญ/ที่ใช้บ่อย: ภาพรวม → การขาย → สต็อก → วิเคราะห์ → เครื่องมือ
@@ -68,6 +72,7 @@ const ROLE_LABELS = {
   frontstore: "🏪 หน้าร้าน",
   saler:      "💼 พนักงานขาย",
   dev:        "🛠️ DEV",
+  storedevice: "🖥️ เครื่องร้าน",
 };
 
 // ป้ายแจ้ง "ล็อกอินสำเร็จ แต่คุณเริ่มมาจากแอปหน้าโฮม" — ขึ้นเฉพาะเบราว์เซอร์ที่รับ callback มาแทน
@@ -1767,7 +1772,7 @@ function App() {
         {activeTab === "auditlog"     && <ErrorBoundary key="auditlog"><AuditLogView/></ErrorBoundary>}
         {activeTab === "staff"        && <ErrorBoundary key="staff"><StaffView/></ErrorBoundary>}
         {activeTab === "attendance"   && <ErrorBoundary key="attendance"><AttendanceView role={viewRole}/></ErrorBoundary>}
-        {activeTab === "atttoday"     && <ErrorBoundary key="atttoday"><AttendanceTodayView/></ErrorBoundary>}
+        {activeTab === "atttoday"     && <ErrorBoundary key="atttoday"><AttendanceTodayView canEdit={isAdminRole(role)}/></ErrorBoundary>}
         {activeTab === "deadstock"    && <ErrorBoundary key="deadstock"><DeadStockView/></ErrorBoundary>}
         {activeTab === "quotefollowup" && <ErrorBoundary key="quotefollowup"><QuoteFollowupView data={data} role={viewRole}/></ErrorBoundary>}
         {activeTab === "pos"          && <ErrorBoundary key="pos"><PosView data={data} role={viewRole}/></ErrorBoundary>}

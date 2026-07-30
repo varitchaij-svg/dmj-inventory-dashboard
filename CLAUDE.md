@@ -52,8 +52,17 @@ ROLE_TABS = {
               mtojobs, labels
   saler:      attendance, pos, categories, stock, orders, tracking,
               quotefollowup, mtojobs, labels
+  storedevice: attendance, pos, quotefollowup, categories, stock, tracking,
+              orders, mtojobs, labels, atttoday
 }
 ```
+role `storedevice` = บัญชี LINE กลาง ("เครื่องกลาง"/เครื่องแท็บเล็ตประจำร้าน ใช้ร่วมกันหลายคน
+ไม่ผูกกับพนักงานคนใดคนหนึ่ง) — สิทธิ์ API เท่า `saler` ทุกอย่าง (`ROLE_ACTIONS_`/
+`IMMEDIATE_GATE_ACTIONS_` มี `storedevice` คู่กับ `saler` ทุกจุด) + เพิ่มแท็บ `atttoday`
+("ใครเข้างานวันนี้") ให้ดูว่าใครทำงาน/พัก/เข้าห้องน้ำอยู่ได้ — **ดูอย่างเดียว** แก้เวลาย้อนหลัง
+(`fixAttendance`) ไม่ได้ (`fixAttendanceHandler_` ยังเช็ค `isAdminRole_` เดิม, ไม่รวม
+`storedevice`) · frontend ซ่อนปุ่มแก้/เพิ่มการลงเวลาใน `AttendanceTodayView` ด้วย prop
+`canEdit={isAdminRole(role)}` (app.jsx ส่งเข้าไป)
 (ค่าจริงอยู่ที่ `app.jsx` เสมอ — ถ้าสองที่ไม่ตรงให้เชื่อ `app.jsx` · `tests/browser/run.cjs`
 ก็ mirror ตารางนี้ไว้ (บางส่วน — ไม่ครบทุก role/tab) ถ้าแก้ ROLE_TABS ควรอัปเดตที่นั่นด้วย)
 (navtabs: **owner/dev เท่านั้น** ที่ได้ nav 2 ชั้นแบบกลุ่ม (`OWNER_GROUPS`) — 5 หมวดหลัก + "อื่นๆ"
