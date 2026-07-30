@@ -461,6 +461,80 @@ function MyAttendanceMonth() {
 }
 
 // ═══════════════════════════════════════════════
+// AttendanceMonthlySummaryView — สรุปลงเวลาทั้งเดือน "เดือน × คน" (owner/dev เท่านั้น) — เฟส C1
+// ───────────────────────────────────────────────
+// ต่างจาก MyAttendanceMonth (รายวันของคนเดียว) — อันนี้รวมทุกคนไว้ในหน้าเดียว ให้เจ้าของเห็นภาพรวม
+// เดือนทีเดียวโดยไม่ต้องไล่เปิดทีละคน · เรียงคนที่สายบ่อยสุดขึ้นก่อน ช่วยให้เห็นจุดที่ต้องคุยก่อน
+// ═══════════════════════════════════════════════
+function AttendanceMonthlySummaryView() {
+  const [month, setMonth] = uS(attTodayKey().slice(0, 7));
+  const [rows, setRows] = uS(null);
+  const [loading, setLoading] = uS(true);
+  const [err, setErr] = uS(null);
+
+  const load = uC(async (m) => {
+    setLoading(true); setErr(null);
+    try {
+      const d = await attPost({ action: "attendanceMonthlySummary", month: m || month });
+      if (d && d.success) setRows(d.data.rows || []);
+      else setErr((d && d.error) || "โหลดไม่สำเร็จ");
+    } catch (e) { setErr(e.message); }
+    finally { setLoading(false); }
+  }, [month]);
+
+  uE(() => { load(month); }, [month]);
+
+  const isCurrentMonth = month === attTodayKey().slice(0, 7);
+  const sorted = rows ? [...rows].sort((a, b) => b.lateDays - a.lateDays || b.workedMin - a.workedMin) : [];
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+        <button className="btn ghost" onClick={() => setMonth(m => attShiftMonth(m, -1))} style={{ padding: "8px 14px" }}>◀</button>
+        <div style={{ fontSize: 16, fontWeight: 800, color: "var(--g-700)" }}>{attMonthLabel(month)}</div>
+        <button className="btn ghost" onClick={() => setMonth(m => attShiftMonth(m, 1))} disabled={isCurrentMonth} style={{ padding: "8px 14px", opacity: isCurrentMonth ? .4 : 1 }}>▶</button>
+      </div>
+
+      {err && (
+        <div style={{ background: "#fff0f0", border: "1px solid var(--dang)", borderRadius: 10, padding: "10px 14px", color: "var(--dang)", marginBottom: 12, fontSize: 13 }}>⚠️ {err}</div>
+      )}
+
+      {loading && !rows ? (
+        <div style={{ textAlign: "center", padding: 40, color: "var(--muted)" }}>
+          <span className="spin" style={{ width: 24, height: 24, borderWidth: 3, display: "inline-block" }} />
+        </div>
+      ) : sorted.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>ยังไม่มีพนักงานในระบบ</div>
+      ) : (
+        <div style={{ background: "var(--paper)", border: "1.5px solid var(--bdr)", borderRadius: 12, overflow: "hidden" }}>
+          {sorted.map((r, i) => (
+            <div key={r.staffId} style={{
+              display: "flex", alignItems: "center", gap: 10, padding: "12px 14px",
+              borderTop: i ? "1px solid var(--bdr)" : "none",
+            }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>{r.name}</div>
+                <div style={{ fontSize: 11.5, color: "var(--muted)" }}>
+                  {ROLE_TH_ATT[r.role] || r.role} · มา {r.daysWorked} วัน
+                  {r.daysAbsent > 0 ? ` · ⚠️ ขาด ${r.daysAbsent} วัน` : ""}
+                  {r.bathroomMin > 0 ? ` · ห้องน้ำ ${attMinLabel(r.bathroomMin)}` : ""}
+                </div>
+              </div>
+              <div style={{ textAlign: "right", flexShrink: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "var(--g-700)" }}>{attMinLabel(r.workedMin)}</div>
+                {r.lateDays > 0 && (
+                  <div style={{ fontSize: 11, color: "#a07417", fontWeight: 700 }}>สาย {r.lateDays} วัน ({attMinLabel(r.lateMin)})</div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════
 // AttendanceTodayView — เจ้าของดูว่าใครเข้างานบ้างวันนี้
 // ═══════════════════════════════════════════════
 const ATT_STATE_STYLE = {
@@ -494,6 +568,9 @@ function attSiteBucket(row) {
 }
 
 function AttendanceTodayView({ canEdit = true } = {}) {
+  // สลับ "วันนี้"/"สรุปเดือน" — เฉพาะ owner/dev (canEdit) เท่านั้นที่เห็นตัวเลือกนี้
+  // storedevice (เครื่องร้าน) เห็นแค่ "วันนี้" เหมือนเดิม เพราะสรุปทั้งเดือนใกล้เคียงข้อมูลเงินเดือน
+  const [mode, setMode] = uS("today");
   const [rows, setRows] = uS([]);
   const [date, setDate] = uS(attTodayKey());
   const [loading, setLoading] = uS(true);
@@ -541,6 +618,17 @@ function AttendanceTodayView({ canEdit = true } = {}) {
 
   return (
     <div style={{ padding: 16, maxWidth: 720, margin: "0 auto" }}>
+      {canEdit && (
+        <div style={{ marginBottom: 16 }}>
+          <Seg value={mode} onChange={setMode} options={[
+            { value: "today", label: "🕐 วันนี้" },
+            { value: "summary", label: "📊 สรุปเดือน" },
+          ]} />
+        </div>
+      )}
+
+      {mode === "summary" ? <AttendanceMonthlySummaryView /> : (
+      <>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, gap: 8, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>
@@ -684,6 +772,8 @@ function AttendanceTodayView({ canEdit = true } = {}) {
           onClose={() => setFix(null)}
           onSaved={(msg) => { setFix(null); setToast({ kind: "ok", text: msg }); load(); }}
         />
+      )}
+      </>
       )}
     </div>
   );

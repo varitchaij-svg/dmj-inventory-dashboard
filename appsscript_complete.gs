@@ -1235,6 +1235,56 @@ function attendanceTodayHandler_(ss, data) {
   return ok({ date: dateStr, rows: rows });
 }
 
+// ─── action=attendanceMonthlySummary : สรุปลงเวลาทั้งเดือน ทุกคนพร้อมกัน (owner/dev เท่านั้น) ───
+// เฟส C1: ให้เจ้าของเห็นภาพรวมทั้งเดือนทีเดียว ("เดือน × คน") ไม่ต้องไล่ดูทีละคนทีละวัน
+// เหมือน myAttendanceSummaryHandler_ แต่รวมทุกคนแทนที่จะกรองแค่ staffId เดียว
+// ไม่เปิดให้ storedevice เห็น (ต่างจาก attendanceToday) — ตัวเลขรวมทั้งเดือนใกล้เคียงข้อมูลเงินเดือน
+function attendanceMonthlySummaryHandler_(ss, data) {
+  const s = resolveSession_(ss, data.sessionToken);
+  if (!s || !isAdminRole_(s.role) || s.status !== 'active') return unauthorized_();
+
+  const range = attMonthRange_(String(data.month || ''));
+  const shifts = readAttShifts_(ss);
+  const todayStr = attDateKey_(new Date());
+
+  const sh = attendanceSheet_(ss);
+  const last = sh.getLastRow();
+  const byStaffDate = {}; // staffId -> { dateStr -> events[] }
+  if (last >= 2) {
+    sh.getRange(2, 1, last - 1, 17).getValues().forEach(function (r) {
+      const d = attRowDateStr_(r[3]);
+      if (d.slice(0, 7) !== range.month) return;
+      const sid = String(r[1]);
+      const byDate = byStaffDate[sid] || (byStaffDate[sid] = {});
+      (byDate[d] = byDate[d] || []).push({ type: r[7], time: r[4], serverTs: Number(r[5]) || 0 });
+    });
+  }
+
+  const staffAll = readStaffAll_(ss).filter(function (x) { return x.status === 'active'; });
+  const rows = staffAll.map(function (st) {
+    const byDate = byStaffDate[st.staffId] || {};
+    let workedMin = 0, daysWorked = 0, lateDays = 0, lateMin = 0, daysAbsent = 0, breakMin = 0, bathroomMin = 0;
+    range.dates.forEach(function (dateStr) {
+      const shift = attShiftFor_(shifts, st.role, attDowOfDateStr_(dateStr));
+      const evs = (byDate[dateStr] || []).sort(function (a, b) { return a.serverTs - b.serverTs; });
+      const sum = attSummarize_(evs, shift);
+      const isPast = dateStr < todayStr;
+      if (sum.workedMin != null) { workedMin += sum.workedMin; daysWorked++; }
+      if (sum.lateMin) { lateDays++; lateMin += sum.lateMin; }
+      if (isPast && shift && !sum.inTime) daysAbsent++;
+      breakMin += sum.breakMin;
+      bathroomMin += sum.bathroomMin;
+    });
+    return {
+      staffId: st.staffId, name: st.displayName || st.lineDisplayName, role: st.role,
+      daysWorked: daysWorked, daysAbsent: daysAbsent, lateDays: lateDays, lateMin: lateMin,
+      workedMin: workedMin, breakMin: breakMin, bathroomMin: bathroomMin,
+    };
+  });
+
+  return ok({ month: range.month, isCurrentMonth: range.isCurrentMonth, rows: rows });
+}
+
 // ═══════════════════════════════════════════════════════════
 // แก้ไขการลงเวลาย้อนหลัง (owner) — action=fixAttendance
 // ───────────────────────────────────────────────────────────
@@ -1649,6 +1699,7 @@ function doPost(e) {
     if (data.action === 'myToday')         return myTodayHandler_(ss, data);
     if (data.action === 'myAttendanceSummary') return myAttendanceSummaryHandler_(ss, data);
     if (data.action === 'attendanceToday') return attendanceTodayHandler_(ss, data);
+    if (data.action === 'attendanceMonthlySummary') return attendanceMonthlySummaryHandler_(ss, data);
     if (data.action === 'fixAttendance')   return fixAttendanceHandler_(ss, data);
 
     // มีการแก้ข้อมูล → ล้าง cache ให้ doGet ครั้งถัดไปคำนวณใหม่ (ข้อมูลไม่ค้าง)
