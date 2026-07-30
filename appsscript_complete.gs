@@ -5558,7 +5558,27 @@ function debugMissingProducts() {
 function debugFindMissingSkusByPrefix(prefix) {
   const pfx = String(prefix || "WL").trim().toUpperCase();
   const ss = SpreadsheetApp.openById(SHEET_ID);
-  const existing = collectExistingSkus_(ss);
+
+  // เช็คแยกทีละชีต (ไม่ใช้ collectExistingSkus_ รวม) เพื่อรู้ว่าอยู่ชีตไหนบ้าง
+  const metaSh  = ss.getSheetByName(SHEET_PRODUCT_META);
+  const stockSh = ss.getSheetByName(SHEET_PRODUCTS);
+  const metaRows  = metaSh  ? metaSh.getDataRange().getDisplayValues()  : [];
+  const stockRows = stockSh ? stockSh.getDataRange().getDisplayValues() : [];
+
+  const metaMap = {};   // sku -> row data
+  for (let i = 1; i < metaRows.length; i++) {
+    const sku = String(metaRows[i][1] || "").trim().toUpperCase();  // B
+    if (sku) metaMap[sku] = { name: metaRows[i][2] || "" };
+  }
+  const stockMap = {};
+  for (let i = 1; i < stockRows.length; i++) {
+    const sku = String(stockRows[i][COL_PROD_SKU - 1] || "").trim().toUpperCase();
+    if (sku) stockMap[sku] = {
+      name: stockRows[i][2] || "",
+      qtyStore: Number(stockRows[i][COL_PROD_QTYFS - 1]) || 0,
+      qtyWH: Number(stockRows[i][COL_PROD_QTYWH - 1]) || 0,
+    };
+  }
 
   const allProducts = fetchAllZortProducts_();  // ไม่กรอง warehousecode = ทั้งบัญชี ZORT
   Logger.log(`ZORT: ดึงสินค้าทั้งหมด ${allProducts.length} รายการ (ทุกคลัง)`);
@@ -5570,20 +5590,31 @@ function debugFindMissingSkusByPrefix(prefix) {
       found[sku] = { sku, name: p.name || "", stock: Number(p.stock || p.availablestock || 0) || 0 };
     }
   }
-
   const foundList = Object.values(found);
-  const missing = foundList.filter(p => !existing[p.sku]);
-
   Logger.log(`ZORT: พบ SKU ขึ้นต้นด้วย "${pfx}" ทั้งหมด ${foundList.length} ตัว`);
-  Logger.log(`── ยังไม่เข้าชีตเราเลย (ทั้ง "อัพเดทจำนวนสินค้า" และ "ข้อมูลสินค้า"): ${missing.length} ตัว ──`);
-  Logger.log("SKU | ชื่อ | stock ใน ZORT");
-  missing.forEach(p => Logger.log(`${p.sku} | ${p.name} | ${p.stock}`));
-  if (!missing.length && foundList.length) {
-    Logger.log(`ทุกตัวเข้าชีตแล้ว — ถ้ายังไม่ขึ้นเว็บ ให้รัน debugMissingProducts() ต่อ (เช็คว่าเข้า "ข้อมูลสินค้า" หรือยัง)`);
-  }
-  if (!foundList.length) {
-    Logger.log(`ไม่พบ SKU ขึ้นต้นด้วย "${pfx}" ใน ZORT เลยแม้แต่ตัวเดียว (ดึงทั้งหมด ${allProducts.length} รายการแล้ว)`);
-    Logger.log(`→ แปลว่าสินค้านี้อาจยังไม่ถูกสร้างใน ZORT เลย (ไม่ใช่แค่ยังไม่ sync เข้าเว็บเรา) ต้องเช็คในแอป ZORT โดยตรง`);
+  Logger.log("SKU | ชื่อ(ZORT) | stockZORT | อยู่ในชีต\"ข้อมูลสินค้า\"? | อยู่ในชีต\"อัพเดทจำนวนสินค้า\"?(qtyStore/qtyWH)");
+  foundList.forEach(p => {
+    const inMeta  = !!metaMap[p.sku];
+    const inStock = !!stockMap[p.sku];
+    const stockInfo = inStock ? `qtyStore=${stockMap[p.sku].qtyStore},qtyWH=${stockMap[p.sku].qtyWH}` : "-";
+    Logger.log(`${p.sku} | ${p.name} | ${p.stock} | ${inMeta ? "✅" : "❌ ไม่มี"} | ${inStock ? "✅ "+stockInfo : "❌ ไม่มี"}`);
+  });
+
+  // จำลอง path จริงที่ frontend ใช้ (readProducts_ = ตัวสร้าง data.products) เช็คว่าจริงๆ
+  // แล้ว SKU พวกนี้โผล่ในผลลัพธ์ที่ส่งให้เว็บหรือไม่ (ครอบคลุม self-heal ด้วย)
+  try {
+    const dataProducts = readProducts_();
+    const dpMap = {};
+    dataProducts.forEach(p => { if (p.sku) dpMap[p.sku.toUpperCase()] = p; });
+    Logger.log(`── เช็คใน readProducts_() (path จริงที่เว็บใช้) ──`);
+    foundList.forEach(p => {
+      const dp = dpMap[p.sku];
+      Logger.log(dp
+        ? `${p.sku}: ✅ อยู่ใน data.products (name="${dp.name}", qty=${dp.qty}, category="${dp.category}", fromStockSheet=${!!dp._fromStockSheet})`
+        : `${p.sku}: ❌ ไม่อยู่ใน data.products เลย — จุดนี้แหละที่หายจากเว็บ`);
+    });
+  } catch (e) {
+    Logger.log("readProducts_() error: " + e);
   }
 }
 
