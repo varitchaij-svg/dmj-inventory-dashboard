@@ -3919,7 +3919,7 @@ function CategoryView({ data, role }) {
                       if(!ps.length) return;
                       setSendingCheck(true);
                       try {
-                        var res = await fetch(SHEET_DEPLOY_URL, {
+                        var res = await dmjFetch(SHEET_DEPLOY_URL, {
                           method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"},
                           body: JSON.stringify({createStockCheck:true, actor: role,
                             skus: ps.map(function(p){ return p.sku; }),
@@ -4613,7 +4613,7 @@ function StockView({ data, role }) {
     if (snap === thrSavedSnapRef.current) return;
     const id = setTimeout(() => {
       setThrStatus("saving");
-      fetch(SHEET_DEPLOY_URL, {
+      dmjFetch(SHEET_DEPLOY_URL, {
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({
@@ -7513,7 +7513,7 @@ function ScanButton({ onScan, continuous = false, size = 36, style: extraStyle }
 async function syncFrontStoreData(entries) {
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
   try {
-    await fetch(SHEET_DEPLOY_URL, {
+    await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
@@ -7531,7 +7531,7 @@ async function syncFrontStoreData(entries) {
 async function syncAddProduct(product) {
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false, error: "ไม่พบ URL" }; }
   try {
-    const res = await fetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
@@ -7549,7 +7549,7 @@ async function syncAddProduct(product) {
 async function syncPurchaseIn(purchase) {
   if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
   try {
-    const res = await fetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
@@ -7566,7 +7566,7 @@ async function syncPurchaseIn(purchase) {
 async function syncFetchProductImage(sku) {
   if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
   try {
-    const res = await fetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ fetchProductImage: true, sku }),
@@ -7579,7 +7579,7 @@ async function syncFetchProductImage(sku) {
 async function checkSkuExistsRemote(sku) {
   if (!SHEET_DEPLOY_URL) return { success: false };
   try {
-    const res = await fetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ checkSkuExists: true, sku }),

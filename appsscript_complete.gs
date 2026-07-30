@@ -103,7 +103,9 @@ const LINE_ACCESS_TOKEN_2 = getSecret_('LINE_ACCESS_TOKEN_2', '');
 const LINE_LOGIN_CHANNEL_ID     = getSecret_('LINE_LOGIN_CHANNEL_ID', '').trim();
 const LINE_LOGIN_CHANNEL_SECRET = getSecret_('LINE_LOGIN_CHANNEL_SECRET', '').trim();
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // session ค้าง 30 วัน (มือถือส่วนตัวทุกคน — ยอมรับความเสี่ยงนี้ได้)
-const STAFF_ROLE_TH_ = { owner: "เจ้าของ", saler: "Sale", warehouse: "คลังสินค้า", frontstore: "หน้าร้าน", employee: "พนักงาน" };
+// ต้องตรงกับ ROLE_TH_PLAIN ใน app.jsx — ใช้ประกอบชื่อ actor ให้ audit log หน้าตาเหมือนกัน
+// ทั้งตอน client ส่งมาเอง (ก่อนเฟส 4) และตอน server ประกอบจาก session (เฟส 4)
+const STAFF_ROLE_TH_ = { owner: "เจ้าของ", saler: "Sale", warehouse: "คลังสินค้า", frontstore: "หน้าร้าน", employee: "พนักงาน", dev: "DEV" };
 
 // ── Sheet Config ──
 const SHEET_ID = getSecret_('SHEET_ID', 'PLACEHOLDER_SHEET_ID');
@@ -549,6 +551,95 @@ function claimLoginHandoffHandler_(data) {
 // 'dev' = ตำแหน่งผู้ดูแลระบบ/คนพัฒนา — สิทธิ์ระดับเดียวกับ owner ทุกอย่าง
 // ใช้ตัวนี้แทนการเทียบ role === 'owner' ตรง ๆ ทุกจุดที่เป็นการตรวจสิทธิ์
 function isAdminRole_(role) { return role === 'owner' || role === 'dev'; }
+
+// ══════════════════════════════════════════════════════════════════════════
+//  เฟส 4 ของระบบล็อกอิน — ตัวตนที่ server ยืนยันเอง (ไม่เชื่อ actor จาก client)
+// ══════════════════════════════════════════════════════════════════════════
+
+// ชื่อ actor มาตรฐาน "ชื่อ (ตำแหน่ง)" — ต้องตรงกับ window._currentUser ฝั่ง frontend
+// (applyStaffSession ใน app.jsx) เพื่อให้ audit log ก่อน/หลังเฟส 4 หน้าตาเหมือนกัน
+function staffActorName_(s) {
+  if (!s) return null;
+  var name = s.displayName || s.lineDisplayName || "ไม่ระบุ";
+  return name + " (" + (STAFF_ROLE_TH_[s.role] || s.role || "รอตำแหน่ง") + ")";
+}
+
+// เปิดโหมด "บังคับล็อกอิน" ด้วย Script Property REQUIRE_LOGIN='true'
+// ⚠️ เปิดได้ต่อเมื่อพนักงานทุกคนล็อกอิน LINE ครบแล้ว (ดู lastLoginAt ในชีต "พนักงาน")
+//    ไม่งั้นคนที่ยังไม่ได้ล็อกอินจะทำงานไม่ได้ทั้งร้าน
+function requireLoginEnabled_() {
+  return PropertiesService.getScriptProperties().getProperty('REQUIRE_LOGIN') === 'true';
+}
+
+// action ที่ยกเว้น ไม่ต้องมี session (ล็อกอิน/สาธารณะ) — ตรวจก่อน gate ทุกครั้ง
+var SESSION_EXEMPT_ACTIONS_ = {
+  verifyPin: true, authLine: true, claimLoginHandoff: true, me: true, logout: true,
+};
+
+// สิทธิ์ฝั่ง server — ล้อ ROLE_TABS ใน app.jsx (frontend ซ่อนแท็บ ≠ กันคนยิง API ตรง)
+// key = ชื่อ field/action ที่ doPost ใช้ตัดสินใจ · owner/dev ผ่านทุกอย่าง (isAdminRole_)
+// ⚠️ ยังไม่บังคับใช้จนกว่า REQUIRE_LOGIN='true' — ดู canDoOrNull_ ด้านล่าง
+var ROLE_ACTIONS_ = {
+  saler:      ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
+               "getContactDetail", "createQuotation", "saveQuotationDraft", "deleteQuotationDraft",
+               "voidQuotation", "approveQuotation", "setQuoteSale", "order", "updateOrderState",
+               "punch", "myToday"],
+  frontstore: ["updateFrontStore", "order", "updateOrderState", "transferStock",
+               "transferStockBatch", "confirmShipmentReceive", "recordUnscannedSale",
+               "punch", "myToday"],
+  warehouse:  ["order", "updateOrderState", "transferStock", "transferStockBatch",
+               "deductStock", "deductMaterials", "confirmStockCount", "updateLockData",
+               "deleteLockEntry", "addNewProduct", "addPurchaseIn", "checkSkuExists",
+               "fetchProductImage", "zeroStock", "createMtoJob", "closeMtoJob",
+               "saveMtoJobItems", "deleteMtoJob", "createStockCheck", "completeStockCheck",
+               "confirmShipmentReceive", "punch", "myToday"],
+  employee:   ["order", "updateOrderState", "transferStock", "transferStockBatch",
+               "updateFrontStore", "confirmShipmentReceive", "updateLockData",
+               "createMtoJob", "closeMtoJob", "saveMtoJobItems", "punch", "myToday"],
+};
+
+// คืน null = ผ่าน · คืน response = ถูกปฏิเสธ
+// ยังไม่มี session (REQUIRE_LOGIN ปิด) → ผ่านหมด เพื่อไม่ให้ของเดิมพังตอน rollout
+function canDoOrNull_(sess, action) {
+  if (!action || SESSION_EXEMPT_ACTIONS_[action]) return null;
+  if (!requireLoginEnabled_()) return null;          // โหมด rollout — ยังไม่บังคับ
+  if (!sess) return forbidden_("ต้องล็อกอินก่อนใช้งาน");
+  if (isAdminRole_(sess.role)) return null;          // owner/dev ผ่านทุกอย่าง
+  var allowed = ROLE_ACTIONS_[sess.role];
+  if (!allowed) return forbidden_("ตำแหน่ง '" + (sess.role || "-") + "' ยังไม่ได้กำหนดสิทธิ์");
+  if (allowed.indexOf(action) < 0) return forbidden_("ตำแหน่ง '" + sess.role + "' ไม่มีสิทธิ์ทำ '" + action + "'");
+  return null;
+}
+
+function forbidden_(msg) {
+  return ContentService
+    .createTextOutput(JSON.stringify({ success: false, forbidden: true, error: msg || "ไม่มีสิทธิ์" }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// doPost แยกงานด้วย 2 แบบ: data.action === 'x' (ล็อกอิน/ลงเวลา) และ data.someFlag (สต็อก)
+// รวมให้เหลือ "ชื่อ action" เดียวเพื่อเอาไปเช็คสิทธิ์ · ต้องอัปเดตลิสต์นี้เมื่อเพิ่ม dispatch ใหม่
+// (ชื่อที่ไม่รู้จัก → คืน null = ไม่ถูกเช็คสิทธิ์ ไม่ใช่ block — กันของเดิมพังโดยไม่ตั้งใจ)
+var POST_FLAG_ACTIONS_ = [
+  "addNewProduct", "addPurchaseIn", "approveQuotation", "checkSkuExists", "closeMtoJob",
+  "completeStockCheck", "confirmShipmentReceive", "confirmStockCount", "createMtoJob",
+  "createQuotation", "createSaleBill", "createStockCheck", "deductMaterials", "deductStock",
+  "deleteLockEntry", "deleteMtoJob", "deleteOrder", "deleteOrders", "deleteQuotationDraft",
+  "fetchProductImage", "getContactDetail", "issueFullTaxInvoice", "lookupSaleBill",
+  "recordUnscannedSale", "resetNegativeStock", "saveMtoJobItems", "saveQuotationDraft",
+  "saveThresholds", "searchContact", "setQuoteSale", "syncZortNow", "syncZortPurchasesNow",
+  "syncZortSalesNow", "transferStock", "transferStockBatch", "updateFrontStore",
+  "updateLockData", "updateOrderState", "voidQuotation", "zeroStock",
+];
+
+function resolvePostAction_(data) {
+  if (!data) return null;
+  if (data.action) return String(data.action);
+  for (var i = 0; i < POST_FLAG_ACTIONS_.length; i++) {
+    if (data[POST_FLAG_ACTIONS_[i]]) return POST_FLAG_ACTIONS_[i];
+  }
+  return null;
+}
 
 // ══════════════════════════════════════════════════════════════════════════
 //  เครื่องมือตั้งตำแหน่งจาก GAS editor (ไม่ต้องผ่านหน้าเว็บ)
@@ -1388,8 +1479,20 @@ function doPost(e) {
     const _tok = (e && e.parameter && e.parameter.token) || data.token;
     if (!checkToken_(_tok)) return unauthorized_();
 
-    // ── ผู้ใช้ที่ส่ง action มา (frontend ส่งใน body.actor) ──
+    // ── ตัวตนผู้ใช้ (เฟส 4) ────────────────────────────────────────────────
+    // ลำดับความเชื่อถือ: session ที่ server ตรวจเอง > actor ที่ client ส่งมา
+    // มี session ที่ใช้ได้ → **ทับ** actor ด้วยชื่อจาก session เสมอ (ห้ามเชื่อ data.actor อีก)
+    // ไม่มี session → ยังรับ data.actor ต่อไป เพื่อให้ช่วงเปลี่ยนผ่านไม่พัง
+    //   (คนที่ยังไม่ได้ล็อกอิน LINE ยังทำงานได้ จนกว่าจะเปิด REQUIRE_LOGIN)
     var actor = data.actor || "ไม่ระบุ";
+    var _sess = null;
+    try { _sess = resolveSession_(ss, data.sessionToken); } catch (e) { Logger.log("resolveSession_ error: " + e); }
+    if (_sess) actor = staffActorName_(_sess) || actor;
+
+    // ตรวจสิทธิ์ฝั่ง server (frontend ซ่อนแท็บ ≠ กันคนยิง API ตรง)
+    // ยังเป็น no-op จนกว่า Script Property REQUIRE_LOGIN='true'
+    var _denied = canDoOrNull_(_sess, resolvePostAction_(data));
+    if (_denied) return _denied;
 
     // ─── Verify PIN (POST path) ───
     if (data.action === 'verifyPin') {

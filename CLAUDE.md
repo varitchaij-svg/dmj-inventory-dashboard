@@ -356,8 +356,22 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
 
 **กฎที่ต้องรู้เวลาแก้ระบบนี้**:
 - ทุก action ของลงเวลา/staff ตรวจสิทธิ์ด้วย **`resolveSession_(ss, data.sessionToken)`**
-  (server-verified) — ต่างจาก action สต็อกเดิมที่ยังเชื่อ `data.role`/`data.actor` จาก client
-  · เฟส 4 (`canDo_` + `REQUIRE_LOGIN`) **ยังไม่ทำ** → ตัวเลข "งานรายคน" จาก Audit Log ยังปลอมได้
+  (server-verified)
+- **เฟส 4 ทำแล้ว (ก.ค. 2026)** — `doPost` resolve session ทุก request แล้ว **ทับ `actor`
+  ด้วยชื่อจาก session เสมอ** (`staffActorName_` → "ชื่อ (ตำแหน่ง)" ตรง format กับ frontend)
+  ถ้าไม่มี session ยังรับ `data.actor` ต่อ เพื่อให้ช่วงเปลี่ยนผ่านไม่พัง
+  · **`dmjFetch` (ui.jsx)** ห่อ `fetch` แนบ `sessionToken` เข้า body ของทุก POST อัตโนมัติ
+    — ทำที่เดียวจบ **เวลาเพิ่มจุดเรียก API ใหม่ให้ใช้ `dmjFetch` ไม่ใช่ `fetch`**
+  · `canDo_` = **`canDoOrNull_(sess, action)`** + ตาราง `ROLE_ACTIONS_` (ล้อ ROLE_TABS)
+    · `resolvePostAction_` แปลง dispatch 2 แบบ (`data.action` / `data.someFlag`) เป็นชื่อเดียว
+    **เพิ่ม dispatch ใหม่ใน doPost ต้องเติมชื่อใน `POST_FLAG_ACTIONS_` ด้วย** ไม่งั้น
+    action นั้นหลุดการตรวจสิทธิ์ (มี meta-test ใน `tests/auth.test.js` คอยจับให้แล้ว)
+  · ⚠️ **`REQUIRE_LOGIN` ยัง default ปิด** → `canDoOrNull_` เป็น no-op ทั้งหมด (ของเดิมไม่พัง)
+    เปิดด้วย Script Property `REQUIRE_LOGIN='true'` **ต่อเมื่อพนักงานล็อกอิน LINE ครบทุกคนแล้ว**
+    (เช็ค `lastLoginAt` ในชีต "พนักงาน") — เปิดก่อนคนครบ = คนที่ยังไม่ล็อกอินทำงานไม่ได้ทั้งร้าน
+  · ตัวเลข "งานรายคน" เชื่อได้เมื่อ **เปิด REQUIRE_LOGIN แล้ว** เท่านั้น ก่อนหน้านั้นยังปลอมได้
+  · ยังไม่ได้ทำ: `getAuditLog` (doGet) ยังเช็คสิทธิ์จาก `role` ที่ client ส่งมา — dmjFetch
+    แนบ token ให้เฉพาะ POST ไม่ครอบ GET (read-only ความเสี่ยงต่ำ แต่ควรปิดทีหลัง)
 - **`actor` เป็นชื่อจริง** ผ่าน `window._currentUser = "ชื่อ (ตำแหน่ง)"` ที่ตั้งใน
   `applyStaffSession()` (app.jsx) ตอน login/resume — ไม่ต้องแก้จุดเรียก API ทีละจุด
 - **วันที่/เวลาในชีตลงเวลาเขียนเป็น text** (`setNumberFormat("@")`) — บทเรียนข้อ 2
