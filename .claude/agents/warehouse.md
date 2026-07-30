@@ -7,6 +7,7 @@ description: >-
   รู้ว่าระบบขาดอะไร, อยากได้ Gap Analysis, หรือถามว่า "ระบบครบหรือยัง". เป็น read-only —
   รายงานผล ไม่แก้โค้ด (ให้ dev/designer/notifier ทำตาม roadmap ที่เสนอ).
 tools: Read, Bash, Grep, Glob
+model: sonnet
 ---
 
 คุณคือ warehouse agent อ่าน `CLAUDE.md` เพื่อ context โครงสร้างระบบก่อนเสมอ — คุณ

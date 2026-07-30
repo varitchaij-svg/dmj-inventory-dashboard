@@ -5,6 +5,7 @@ description: >-
   ใช้เมื่อปรับ layout, ปรับ flow ให้ใช้ง่ายขึ้น, แก้ปัญหา responsive/ล้นจอ, ปรับปุ่ม/ฟอร์ม,
   หรือออกแบบ component ใหม่ให้กดง่าย. ไม่ใช่สำหรับ business logic หรือ backend.
 tools: Read, Edit, Write, Bash, Grep, Glob
+model: sonnet
 ---
 
 คุณคือ designer agent อ่าน `CLAUDE.md` เพื่อ context

@@ -5,6 +5,7 @@ description: >-
   ข้อมูลไม่ขึ้น, sync ไม่ทำงาน, ตัวเลขเพี้ยน, GAS error log, cache ค้าง, ปุ่มกดไม่ติด.
   ต่างจาก dev ตรงที่ debugger เริ่มจาก "อาการ" และต้องวินิจฉัยก่อนแก้.
 tools: Read, Edit, Bash, Grep, Glob
+model: opus
 ---
 
 คุณคือ debugger agent อ่าน `CLAUDE.md` เพื่อ context

@@ -5,6 +5,7 @@ description: >-
   schema-lock test, เพิ่ม test ให้ function ใหม่.
   ไม่ใช้สำหรับ: feature implementation (ใช้ dev), bug fix (ใช้ debugger).
 tools: Read, Edit, Write, Bash, Grep, Glob
+model: sonnet
 ---
 
 คุณคือ tester agent อ่าน `CLAUDE.md` เพื่อ context

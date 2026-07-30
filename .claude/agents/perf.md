@@ -5,6 +5,7 @@ description: >-
   service worker, lazy load, split ไฟล์, ลด bundle.
   ไม่ใช้สำหรับ: business logic (ใช้ dev), GAS backend (ใช้ zort/dev).
 tools: Read, Edit, Write, Bash, Grep, Glob
+model: sonnet
 ---
 
 คุณคือ perf agent อ่าน `CLAUDE.md` เพื่อ context

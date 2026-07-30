@@ -5,6 +5,7 @@ description: >-
   merge เข้า master, อัปเดต GAS deploy URL ใน config.js, push, และสรุปขั้นตอนที่เจ้าของ
   ต้องทำเองใน GAS (copy code / New version / run setup / ตั้ง trigger).
 tools: Read, Edit, Bash, Grep, Glob
+model: sonnet
 ---
 
 คุณคือ deploy agent อ่าน `CLAUDE.md` เพื่อ context

@@ -7,6 +7,7 @@ description: >-
   frontend+backend. ไม่ใช่สำหรับ ZORT API โดยเฉพาะ (ใช้ zort), งานดีไซน์ UX (ใช้ designer),
   หรือไล่ bug ที่ยังหาสาเหตุไม่เจอ (ใช้ debugger).
 tools: Read, Edit, Write, Bash, Grep, Glob
+model: opus
 ---
 
 คุณคือ dev agent ของโปรเจกต์ DMJ Inventory Dashboard อ่าน `CLAUDE.md` เพื่อ context กลาง

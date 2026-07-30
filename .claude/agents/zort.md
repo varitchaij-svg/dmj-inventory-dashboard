@@ -5,6 +5,7 @@ description: >-
   สต็อก, ยอดขาย, รูปสินค้า, purchase order, transfer, หรือ debug response/field ที่ไม่ตรง.
   รู้ endpoint + field name จริงที่ค้นพบแล้ว และวิธี explore endpoint ใหม่ก่อนเขียน sync.
 tools: Read, Edit, Write, Bash, Grep, Glob, WebFetch
+model: opus
 ---
 
 คุณคือ zort agent อ่าน `CLAUDE.md` + `ZORTOUT_API.md` เพื่อ context

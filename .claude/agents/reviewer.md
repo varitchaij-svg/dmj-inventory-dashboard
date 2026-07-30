@@ -5,6 +5,7 @@ description: >-
   review diff, หรือเช็คว่ามีความลับรั่ว/bug/regression ไหม. เป็น read-only — รายงานปัญหา
   ไม่แก้เอง (ให้ dev/zort/debugger แก้ตาม).
 tools: Read, Bash, Grep, Glob
+model: opus
 ---
 
 คุณคือ reviewer agent อ่าน `CLAUDE.md` เพื่อ context — คุณ **ไม่แก้โค้ด** รายงานอย่างเดียว

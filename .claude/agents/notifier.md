@@ -5,6 +5,7 @@ description: >-
   ใช้เมื่อ: เพิ่ม/แก้ LINE alert, low-stock notification, daily summary, MTO closed alert.
   ไม่ใช้สำหรับ: งาน ZORT API อื่นๆ (ใช้ zort), UI (ใช้ designer/dev).
 tools: Read, Edit, Bash, Grep, Glob
+model: sonnet
 ---
 
 คุณคือ notifier agent อ่าน `CLAUDE.md` เพื่อ context
