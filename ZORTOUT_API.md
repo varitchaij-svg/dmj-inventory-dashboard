@@ -192,7 +192,7 @@
 | POST | `/Quotation/AddQuotation`       | สร้าง Quotation |
 | POST | `/Quotation/ApproveQuotation`   | อนุมัติ Quotation |
 | POST | `/Quotation/EditQuotationInfo`  | แก้ไขข้อมูล Quotation — ✅ **ทดสอบแล้ว 2026-07-30** ต้องส่ง `id` ทาง **query string** (`?id=348989`) + JSON body สำหรับ field ที่เหลือ · ส่ง `id` ใน JSON body หรือ form-encoded → `"Invalid ID."` (พฤติกรรมเดียวกับ `VoidQuotation`) |
-| POST | `/Quotation/EditQuotation`      | แก้ไข Quotation (รวมรายการสินค้า) — ⚠️ JSON body `{id,...}` → `"Invalid ID."` ยังไม่ยืนยันว่า query-id ใช้ได้ไหม (ดู `exploreZortEditQuotationV2()`) |
+| POST | `/Quotation/EditQuotation`      | แก้ไข Quotation (รวมรายการสินค้า) — ✅ **ทดสอบแล้ว 2026-07-30** ต้องส่ง `id` ทาง **query string** เหมือน `EditQuotationInfo` · `list` ที่ส่งไป **แทนที่ของเดิมทั้งก้อน** (ส่ง 2 รายการทับ 1 → เหลือ 2) · ZORT คำนวณ `amount` จาก `list` ให้เองได้ถ้าไม่ส่ง แต่เราส่ง `amount/amount_pretax/vatamount` เองเหมือน `AddQuotation` เพื่อให้ตรงกับที่ระบบคำนวณเป๊ะ |
 | POST | `/Quotation/VoidQuotation`      | ยกเลิก Quotation |
 
 ---

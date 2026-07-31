@@ -18,6 +18,18 @@ async function syncCreateQuotation(quote) {
     return await res.json(); // { success, data:{quotationId, quotationNumber, totals} }
   } catch (err) { return { success: false, error: err.message }; }
 }
+// ── sync helper: แก้ไขใบเสนอราคาเดิมใน ZORT (ใบที่ลูกค้ายังไม่อนุมัติ) ──
+async function syncEditQuotation(quote) {
+  if (!SHEET_DEPLOY_URL) return { success: false, error: "ยังไม่ได้เชื่อมต่อ Sheet" };
+  try {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ editQuotation: true, quote, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "saler" }),
+    });
+    return await res.json(); // { success, data:{quotationId, quotationNumber, totals, infoWarning} }
+  } catch (err) { return { success: false, error: err.message }; }
+}
 // ── sync helper: บันทึกร่างใบเสนอราคา (ยังไม่ส่งเข้า ZORT) ──
 async function syncSaveQuotationDraft(quote) {
   if (!SHEET_DEPLOY_URL) return { success: false, error: "ยังไม่ได้เชื่อมต่อ Sheet" };
@@ -185,16 +197,40 @@ function InvoiceOptionsModal({ grandTotal, onCancel, onConfirm }) {
   );
 }
 
-function QuotationFormView({ data, role, onBack, onSubmitted }) {
+// editQuote (ไม่บังคับ) = ใบเสนอราคาเดิมที่จะแก้ไข — ได้จาก getQuotationForPrint + id/number
+//   { quotationId, quotationNumber, customer, items, remarks, totals }
+// ⚠️ items[].price ที่ได้จาก ZORT เป็น "ราคาหลังเฉลี่ยส่วนลดแล้ว" (createQuotation ส่ง netUnit
+// เข้าไป ไม่ใช่ราคาตั้ง) ถ้าโหลดกลับมาตรงๆ แล้วให้ฟอร์มคิดส่วนลดซ้ำ = โดนหักสองเด้ง
+// → คืนราคาตั้งจาก catalog (products) ตาม SKU ก่อนเสมอ ถ้าไม่เจอ SKU ค่อย fallback ใช้ราคาจาก ZORT
+// (ผู้ใช้แก้ราคาต่อบรรทัดได้อยู่แล้ว + มีแบนเนอร์เตือนให้ตรวจราคาก่อนบันทึก)
+function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
   const products = (data && data.products) || [];
   const [toast, showToast, hideToast] = useToast();
 
-  const [cart, setCart] = uS([]);
+  const [cart, setCart] = uS(() => {
+    if (!editQuote) return [];
+    const bySku = {};
+    products.forEach(p => { bySku[String(p.sku || "").trim().toUpperCase()] = p; });
+    return (editQuote.items || []).map(it => {
+      const p = bySku[String(it.sku || "").trim().toUpperCase()];
+      return {
+        sku: it.sku, name: it.name,
+        qty: Number(it.qty) || 0,
+        price: p && Number(p.price) > 0 ? Number(p.price) : (Number(it.price) || 0),
+        category: (p && p.category) || it.category || "",
+        imageUrl: (p && p.imageUrl) || "",
+        _priceFromCatalog: !!(p && Number(p.price) > 0),
+      };
+    });
+  });
   const [search, setSearch] = uS("");
   const [catFilter, setCatFilter] = uS("ทั้งหมด");
   const [catPage, setCatPage] = uS(0);
 
-  const [cust, setCust] = uS({ name: "", taxId: "", branch: "", branchNo: "", address: "", phone: "", email: "" });
+  const [cust, setCust] = uS(() => Object.assign(
+    { name: "", taxId: "", branch: "", branchNo: "", address: "", phone: "", email: "" },
+    (editQuote && editQuote.customer) || {}
+  ));
   const [custQuery, setCustQuery] = uS("");
   const [custResults, setCustResults] = uS(null);
   const [searching, setSearching] = uS(false);
@@ -203,7 +239,9 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
   // server จะทับด้วยชื่อจาก session อีกชั้นตอนบันทึกจริงอยู่แล้ว อันนี้แค่โชว์ผลให้ตรงกันตั้งแต่จอ
   const salesRep = window._currentUserName || sessionStorage.getItem("dmj_role") || "";
   const [channel, setChannel] = uS("หน้าร้าน");
-  const [remarks, setRemarks] = uS(QUOTE_DEFAULT_REMARKS.slice());
+  const [remarks, setRemarks] = uS(() =>
+    (editQuote && Array.isArray(editQuote.remarks) && editQuote.remarks.length)
+      ? editQuote.remarks.slice() : QUOTE_DEFAULT_REMARKS.slice());
   const [manualDiscount, setManualDiscount] = uS("");
 
   const [draftId, setDraftId] = uS(null);
@@ -348,6 +386,9 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
   function buildQuotePayload() {
     return {
       draftId: draftId || undefined,
+      // โหมดแก้ไข: ส่ง id/number ของใบเดิมไปด้วย — server ใช้ id ยิง EditQuotation ที่ใบนั้นตรงๆ
+      quotationId: editQuote ? editQuote.quotationId : undefined,
+      quotationNumber: editQuote ? editQuote.quotationNumber : undefined,
       items: cart.map(it => ({ sku: it.sku, name: it.name, category: it.category, qty: Number(it.qty) || 0, price: Number(it.price) || 0 })),
       customer: cust,
       salesRep: salesRep.trim(),
@@ -403,11 +444,17 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
     if (!cust.name.trim()) { showToast("warn", "กรุณากรอกชื่อลูกค้า", "👤"); return; }
     if (!salesRep.trim()) { showToast("warn", "ไม่พบชื่อผู้ทำใบเสนอราคา — กรุณาล็อกอินใหม่", "🧑‍💼"); return; }
     setSaving(true);
-    const r = await syncCreateQuotation(buildQuotePayload());
+    const r = editQuote ? await syncEditQuotation(buildQuotePayload()) : await syncCreateQuotation(buildQuotePayload());
     setSaving(false);
-    if (!r.success) { showToast("error", "สร้างใบเสนอราคาไม่สำเร็จ: " + (r.error || ""), "❌"); return; }
-    setResult(r.data || {});
-    showToast("success", "สร้างใบเสนอราคาสำเร็จ", "🎉");
+    if (!r.success) {
+      showToast("error", (editQuote ? "แก้ไขใบเสนอราคาไม่สำเร็จ: " : "สร้างใบเสนอราคาไม่สำเร็จ: ") + (r.error || ""), "❌");
+      return;
+    }
+    // แก้ไขสำเร็จแต่ข้อมูลลูกค้าอัปเดตไม่ผ่าน — รายการ/ยอดเปลี่ยนแล้วจริง ต้องบอกให้รู้ ไม่ใช่เงียบ
+    if (r.data && r.data.infoWarning) showToast("warn", "แก้รายการสำเร็จ แต่ข้อมูลลูกค้าอัปเดตไม่ผ่าน: " + r.data.infoWarning, "⚠️");
+    // ใบที่แก้ไขยังเป็นใบเดิม — เติมเลขที่เอกสารเดิมกลับให้หน้าผลลัพธ์/ปุ่มพิมพ์ใช้ต่อได้
+    setResult(Object.assign({ quotationNumber: editQuote ? editQuote.quotationNumber : null }, r.data || {}));
+    showToast("success", editQuote ? "แก้ไขใบเสนอราคาสำเร็จ" : "สร้างใบเสนอราคาสำเร็จ", "🎉");
     if (onSubmitted) onSubmitted();
   }
 
@@ -430,14 +477,15 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
           <Card padding={true}>
             <div style={{ textAlign: "center", padding: "16px 0" }}>
               <div style={{ fontSize: 44 }}>🎉</div>
-              <div style={{ fontSize: 18, fontWeight: 800, marginTop: 8 }}>สร้างใบเสนอราคาสำเร็จ</div>
+              <div style={{ fontSize: 18, fontWeight: 800, marginTop: 8 }}>{editQuote ? "แก้ไขใบเสนอราคาสำเร็จ" : "สร้างใบเสนอราคาสำเร็จ"}</div>
               <div style={{ fontSize: 22, fontWeight: 800, color: "var(--g-700,#166534)", marginTop: 6, fontFamily: "monospace" }}>{result.quotationNumber || "—"}</div>
               <div style={{ fontSize: 14, color: "var(--muted)", marginTop: 4 }}>ยอดสุทธิ {fmtBfull(result.totals ? result.totals.grandTotal : totals.grandTotal)}</div>
+              {editQuote && <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 6 }}>อัปเดตใบเดิมใน ZORT แล้ว (ไม่ได้สร้างใบใหม่)</div>}
             </div>
           </Card>
           <button onClick={() => doPrint("quotation")} style={{ padding: 14, borderRadius: 10, border: "none", background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 700 }}>🖨️ พิมพ์ใบเสนอราคา (A4)</button>
           <button onClick={() => setInvoiceModal(true)} style={{ padding: 14, borderRadius: 10, border: "1px solid var(--g-600,#1f7f44)", background: "#fff", color: "var(--g-700,#166534)", fontWeight: 700 }}>🧾 พิมพ์ใบแจ้งหนี้ (A4)</button>
-          <button onClick={() => { resetAll(); }} style={{ padding: 14, borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700 }}>📝 สร้างใบใหม่</button>
+          {!editQuote && <button onClick={() => { resetAll(); }} style={{ padding: 14, borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700 }}>📝 สร้างใบใหม่</button>}
           {onBack && <button onClick={onBack} style={{ padding: 14, borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700 }}>← กลับไปหน้าติดตามสถานะ</button>}
           <Toast toast={toast} onClose={hideToast}/>
         </div>
@@ -458,11 +506,26 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
   return (
     <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12, maxWidth: 640, margin: "0 auto" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ fontSize: 18, fontWeight: 800 }}>📝 สร้างใบเสนอราคาใหม่</div>
+        <div style={{ fontSize: 18, fontWeight: 800 }}>
+          {editQuote ? `✏️ แก้ไขใบเสนอราคา ${editQuote.quotationNumber || ""}` : "📝 สร้างใบเสนอราคาใหม่"}
+        </div>
         {onBack && <button onClick={onBack} style={{ border: "none", background: "none", color: "var(--muted)", fontWeight: 600, cursor: "pointer" }}>✕ ปิด</button>}
       </div>
 
-      {/* ── ร่างที่บันทึกไว้ ── */}
+      {/* โหมดแก้ไข: เตือนเรื่องราคา — ราคาที่ ZORT เก็บไว้เป็นราคาหลังเฉลี่ยส่วนลดแล้ว โหลดกลับมา
+          ตรงๆ ไม่ได้ (จะโดนหักซ้ำ) จึงคืนราคาตั้งจาก catalog ปัจจุบันให้แทน — ถ้าตอนออกใบเดิม
+          ใช้ราคาพิเศษที่ไม่ตรง catalog ต้องพิมพ์แก้เอง ระบบเดาแทนไม่ได้ */}
+      {editQuote && (
+        <div style={{ background: "#fff8e1", border: "1px solid #ffe082", borderRadius: 10, padding: "10px 14px", fontSize: 12.5, color: "#7a5a00", lineHeight: 1.7 }}>
+          ⚠️ <b>ตรวจราคาก่อนบันทึก</b> — ราคาต่อชิ้นดึงจาก<b>ราคาขายปัจจุบัน</b>ของสินค้าแต่ละตัว
+          ไม่ใช่ราคาที่พิมพ์ในใบเดิม (ระบบย้อนราคาเดิมกลับไม่ได้เพราะใบเก่าเก็บเป็นราคาหลังหักส่วนลดแล้ว)
+          ถ้าใบเดิมใช้ราคาพิเศษ กรุณาพิมพ์แก้ในช่องราคาให้ตรงก่อนกดบันทึก
+          <div style={{ marginTop: 4 }}>บันทึกแล้วจะ<b>อัปเดตใบเดิม</b>ใน ZORT (เลขที่เอกสารเท่าเดิม ไม่ได้สร้างใบใหม่)</div>
+        </div>
+      )}
+
+      {/* ── ร่างที่บันทึกไว้ (โหมดแก้ไขไม่ต้องมี — ร่างเป็นคนละเรื่องกับใบที่ออกไปแล้ว) ── */}
+      {!editQuote && (
       <Card padding={true} title="📂 ร่างที่บันทึกไว้" action={
         <button onClick={toggleDrafts} style={{ border: "none", background: "none", color: "var(--g-600,#1f7f44)", fontWeight: 700, cursor: "pointer" }}>
           {showDrafts ? "ซ่อน ▲" : "แสดง ▼"}
@@ -485,6 +548,7 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
           )
         )}
       </Card>
+      )}
 
       {/* ── ค้นหาสินค้า ── */}
       <Card padding={true} title="🔍 เพิ่มสินค้า">
@@ -676,12 +740,17 @@ function QuotationFormView({ data, role, onBack, onSubmitted }) {
       </Card>
 
       <div style={{ display: "flex", gap: 8, position: "sticky", bottom: 12 }}>
-        <button onClick={saveDraft} disabled={savingDraft} style={{ flex: 1, padding: 16, borderRadius: 12, border: "1px solid #d1d5db", background: "#fff", fontWeight: 800, fontSize: 15 }}>
-          {savingDraft ? "กำลังบันทึก…" : "💾 บันทึกร่าง"}
-        </button>
+        {/* โหมดแก้ไขไม่มีปุ่มบันทึกร่าง — ใบออกไปแล้ว เก็บเป็นร่างซ้ำไม่มีความหมาย */}
+        {!editQuote && (
+          <button onClick={saveDraft} disabled={savingDraft} style={{ flex: 1, padding: 16, borderRadius: 12, border: "1px solid #d1d5db", background: "#fff", fontWeight: 800, fontSize: 15 }}>
+            {savingDraft ? "กำลังบันทึก…" : "💾 บันทึกร่าง"}
+          </button>
+        )}
         <button onClick={submit} disabled={saving || !cart.length} style={{ flex: 2, padding: 16, borderRadius: 12, border: "none", fontWeight: 800, fontSize: 16,
           background: (saving || !cart.length) ? "#9ca3af" : "var(--g-600,#1f7f44)", color: "#fff", boxShadow: "0 4px 14px rgba(0,0,0,.15)" }}>
-          {saving ? "กำลังส่ง..." : `📤 ส่งเข้า ZORT · ${fmtBfull(totals.grandTotal)}`}
+          {saving
+            ? (editQuote ? "กำลังบันทึก..." : "กำลังส่ง...")
+            : (editQuote ? `💾 บันทึกการแก้ไข · ${fmtBfull(totals.grandTotal)}` : `📤 ส่งเข้า ZORT · ${fmtBfull(totals.grandTotal)}`)}
         </button>
       </div>
 

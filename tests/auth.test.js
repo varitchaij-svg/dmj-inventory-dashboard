@@ -234,6 +234,14 @@ describe('canDoOrNull_ — โหมดบังคับล็อกอิน (
     expect(A.canDoOrNull_({ role: 'saler' }, 'deductStock')).not.toBe(null);
     expect(A.canDoOrNull_({ role: 'saler' }, 'confirmStockCount')).not.toBe(null);
   });
+  it('editQuotation: saler/storedevice แก้ใบเสนอราคาได้ · warehouse/frontstore/employee ห้าม', () => {
+    ['saler', 'storedevice'].forEach(role => {
+      expect(A.canDoOrNull_({ role }, 'editQuotation'), role).toBe(null);
+    });
+    ['warehouse', 'frontstore', 'employee'].forEach(role => {
+      expect(A.canDoOrNull_({ role }, 'editQuotation'), role).not.toBe(null);
+    });
+  });
   it('warehouse: จัดการสต็อกได้ แต่ห้ามออกบิลขาย', () => {
     expect(A.canDoOrNull_({ role: 'warehouse' }, 'confirmStockCount')).toBe(null);
     expect(A.canDoOrNull_({ role: 'warehouse' }, 'createSaleBill')).not.toBe(null);

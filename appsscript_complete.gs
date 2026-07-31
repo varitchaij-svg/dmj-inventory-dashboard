@@ -624,13 +624,13 @@ var COMMON_ACTIONS_ = ["order", "updateOrderState", "transferStock", "transferSt
 
 var ROLE_ACTIONS_ = {
   saler:      ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
-               "getContactDetail", "createQuotation", "saveQuotationDraft", "deleteQuotationDraft",
+               "getContactDetail", "createQuotation", "editQuotation", "saveQuotationDraft", "deleteQuotationDraft",
                "voidQuotation", "approveQuotation", "setQuoteSale",
                ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   // storedevice = บัญชี LINE กลางประจำเครื่อง/แท็บเล็ตร้าน — สิทธิ์ API เท่า saler ทุกอย่าง
   // + attendanceToday (ดู "ใครเข้างานวันนี้" — เหตุผลที่มี role นี้อยู่เลย ต้องเปิดให้)
   storedevice: ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
-               "getContactDetail", "createQuotation", "saveQuotationDraft", "deleteQuotationDraft",
+               "getContactDetail", "createQuotation", "editQuotation", "saveQuotationDraft", "deleteQuotationDraft",
                "voidQuotation", "approveQuotation", "setQuoteSale", "attendanceToday",
                ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   frontstore: ["recordUnscannedSale"].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
@@ -656,6 +656,7 @@ var ROLE_ACTIONS_ = {
 var IMMEDIATE_GATE_ACTIONS_ = {
   voidQuotation:       ["saler", "storedevice"],
   approveQuotation:    ["saler", "storedevice"],
+  editQuotation:       ["saler", "storedevice"],
   issueFullTaxInvoice: ["saler", "storedevice"],
   deleteOrder:         ["employee", "warehouse"],
   deleteOrders:        ["employee", "warehouse"],
@@ -709,7 +710,7 @@ var POST_FLAG_ACTIONS_ = [
   "addNewProduct", "addPurchaseIn", "approveQuotation", "assignMtoJob", "checkSkuExists", "closeMtoJob",
   "completeStockCheck", "confirmShipmentReceive", "confirmStockCount", "createMtoJob",
   "createQuotation", "createSaleBill", "createStockCheck", "deductMaterials", "deductStock",
-  "deleteLockEntry", "deleteMtoJob", "deleteOrder", "deleteOrders", "deleteQuotationDraft",
+  "deleteLockEntry", "deleteMtoJob", "deleteOrder", "deleteOrders", "deleteQuotationDraft", "editQuotation",
   "fetchProductImage", "getContactDetail", "issueFullTaxInvoice", "lookupSaleBill",
   "recordUnscannedSale", "resetNegativeStock", "saveMtoJobItems", "saveQuotationDraft",
   "saveThresholds", "searchContact", "setQuoteSale", "syncZortNow", "syncZortPurchasesNow",
@@ -1870,6 +1871,12 @@ function doPost(e) {
       var q2 = data.quote || {};
       if (_sess) q2 = Object.assign({}, q2, { salesRep: _sess.displayName || _sess.lineDisplayName || q2.salesRep });
       return saveQuotationDraft(ss, q2, actor);
+    }
+    // แก้ไขใบเสนอราคาเดิม (เฉพาะใบที่ลูกค้ายังไม่อนุมัติ — frontend โชว์ปุ่มเฉพาะตาราง "รออนุมัติ")
+    if (data.editQuotation) {
+      var q3 = data.quote || {};
+      if (_sess) q3 = Object.assign({}, q3, { salesRep: _sess.displayName || _sess.lineDisplayName || q3.salesRep });
+      return editQuotation(ss, q3, actor);
     }
     if (data.deleteQuotationDraft) {
       return deleteQuotationDraft(ss, data.draftId, actor);
@@ -10089,6 +10096,111 @@ function createQuotation(ss, data, actor) {
 
     invalidateCache_();
     return ok({ quotationId: qId, quotationNumber: qNumber, totals: totals });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// แก้ไขใบเสนอราคาเดิมใน ZORT (ใบที่ลูกค้ายังไม่อนุมัติ) — action=editQuotation
+// ───────────────────────────────────────────────────────────────────────────
+// data = เหมือน createQuotation ทุกอย่าง + quotationId (id จริงจาก ZORT ไม่ใช่เลขที่เอกสาร)
+//
+// ยืนยันพฤติกรรม ZORT แล้วด้วย exploreZortEditQuotation/V2 (2026-07-30, test-then-void):
+//   · ทั้ง EditQuotation และ EditQuotationInfo ต้องส่ง `id` ทาง **query string** เท่านั้น
+//     (JSON body {id,...} / form-encoded → "Invalid ID." เหมือน VoidQuotation เป๊ะ)
+//   · EditQuotation: list ที่ส่งไป **แทนที่ของเดิมทั้งก้อน** (ส่ง 2 รายการทับ 1 → เหลือ 2 ไม่ใช่ 3)
+//   · ZORT คำนวณ amount จาก list ให้เองได้ แต่เรายังส่ง amount/amount_pretax/vatamount เอง
+//     เหมือน createQuotation เพื่อให้ตัวเลขตรงกับที่ระบบเราคำนวณเป๊ะ (ส่วนลดขั้นบันไดเฉลี่ยลง
+//     ราคาต่อหน่วย — ปัดเศษคนละที่อาจคลาดกัน 1 สตางค์)
+//   · EditQuotationInfo แก้ข้อมูลลูกค้าได้ครบ (ชื่อ/ที่อยู่/โทร/เลขภาษี/description)
+//
+// ต้องยิง 2 ครั้ง: EditQuotation (รายการ+ยอด) แล้วตามด้วย EditQuotationInfo (ลูกค้า+หมายเหตุ)
+// ถ้าตัวแรกพัง → หยุดเลย ไม่ยิงตัวที่สอง (กันใบมีข้อมูลลูกค้าใหม่แต่รายการเก่า = ยิ่งสับสน)
+// ═══════════════════════════════════════════════════════════════════════════
+function editQuotation(ss, data, actor) {
+  var qId = String(data.quotationId || "").trim();
+  if (!qId) return error("ไม่มี id ของใบเสนอราคาที่จะแก้ไข");
+
+  var items = Array.isArray(data.items) ? data.items : [];
+  if (!items.length) return error("ไม่มีรายการสินค้าในใบเสนอราคา");
+
+  var totals = computeBillTotalsGs_(items, {
+    excludeKeywords: readBillExcludeCats_(),
+    manualDiscount: data.manualDiscount,
+  });
+
+  // เฉลี่ยส่วนลดลงราคาต่อหน่วย — ตรรกะเดียวกับ createQuotation เป๊ะ (ห้ามให้ 2 ที่คิดคนละแบบ
+  // ไม่งั้นแก้ใบแล้วยอดเปลี่ยนทั้งที่ไม่ได้แตะราคา)
+  var gross = totals.retailEligible + totals.retailExcluded;
+  var factor = gross > 0 ? (totals.grandTotal / gross) : 1;
+  var list = items.map(function (it) {
+    var qty = Number(it.qty) || 0;
+    var netUnit = Math.round((Number(it.price) || 0) * factor * 100) / 100;
+    return {
+      sku: String(it.sku || "").trim(),
+      name: String(it.name || "").trim(),
+      number: qty,
+      pricepernumber: netUnit,
+      totalprice: Math.round(netUnit * qty * 100) / 100,
+    };
+  }).filter(function (it) { return it.sku && it.number > 0; });
+  if (!list.length) return error("ไม่มีรายการสินค้าที่ถูกต้องในใบเสนอราคา");
+
+  var cust = data.customer || {};
+  var remarkText = Array.isArray(data.remarks)
+    ? data.remarks.map(function (r) { return String(r || "").trim(); }).filter(Boolean).join("\n")
+    : String(data.remark || "").trim();
+
+  if (data.dryRun) return ok({ dryRun: true, totals: totals, list: list });
+
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่ ลองใหม่อีกครั้ง");
+  try {
+    var headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
+
+    // ── ① รายการสินค้า + ยอดรวม ──
+    var editRes = UrlFetchApp.fetch(ZORT_BASE + "/Quotation/EditQuotation?id=" + encodeURIComponent(qId), {
+      method: "post", headers: headers, muteHttpExceptions: true,
+      payload: JSON.stringify({
+        list: list,
+        amount: Math.round(totals.grandTotal * 100) / 100,
+        amount_pretax: Math.round(totals.preVat * 100) / 100,
+        vatamount: Math.round(totals.vat * 100) / 100,
+      }),
+    });
+    var zErr = zortRespError_(editRes);
+    if (zErr) {
+      logZortFailure_("แก้ไขใบเสนอราคา (" + (data.quotationNumber || qId) + ")", zErr);
+      return error("แก้ไขรายการสินค้าใน ZORT ไม่สำเร็จ: " + zErr);
+    }
+
+    // ── ② ข้อมูลลูกค้า + หมายเหตุ + ชื่อเซล/ช่องทาง ──
+    var infoPayload = { description: remarkText };
+    if (cust.name)     infoPayload.customername       = String(cust.name);
+    if (cust.taxId)    infoPayload.customeridnumber   = String(cust.taxId);
+    if (cust.branch)   infoPayload.customerbranchname = String(cust.branch);
+    if (cust.branchNo) infoPayload.customerbranchno   = String(cust.branchNo);
+    if (cust.address)  infoPayload.customeraddress    = String(cust.address);
+    if (cust.phone)    infoPayload.customerphone      = String(cust.phone);
+    if (cust.email)    infoPayload.customeremail      = String(cust.email);
+    if (data.salesRep) infoPayload.tag = [String(data.salesRep)];
+    if (data.channel)  infoPayload.saleschannel       = String(data.channel);
+
+    var infoRes = UrlFetchApp.fetch(ZORT_BASE + "/Quotation/EditQuotationInfo?id=" + encodeURIComponent(qId), {
+      method: "post", headers: headers, payload: JSON.stringify(infoPayload), muteHttpExceptions: true,
+    });
+    var infoErr = zortRespError_(infoRes);
+    // รายการสินค้าแก้สำเร็จไปแล้ว — ข้อมูลลูกค้าพลาดไม่ควรทำให้ทั้งงานล้มเหลว แค่เตือน
+    if (infoErr) logZortFailure_("แก้ข้อมูลลูกค้าในใบเสนอราคา (" + (data.quotationNumber || qId) + ")", infoErr);
+
+    writeAuditLog_(actor || "ไม่ระบุ", "แก้ไขใบเสนอราคา", data.quotationNumber || qId,
+      auditDetail_({ after: { total: totals.grandTotal, items: list.length, customer: cust.name || "", salesRep: data.salesRep || "" },
+        note: "แก้ไขผ่านเว็บแอป" + (infoErr ? " (ข้อมูลลูกค้าอัปเดตไม่สำเร็จ: " + infoErr + ")" : "") }));
+
+    invalidateCache_();
+    return ok({ quotationId: qId, quotationNumber: data.quotationNumber || null, totals: totals,
+      infoWarning: infoErr || null });
   } finally {
     lock.releaseLock();
   }

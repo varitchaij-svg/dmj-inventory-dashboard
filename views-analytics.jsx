@@ -6965,6 +6965,8 @@ function QuoteFollowupView({ data, role }) {
   const [printDocType, setPrintDocType] = uS("quotation"); // "quotation" | "invoice" — เอกสารเดียวกัน เปลี่ยนแค่ป้าย
   const [invoiceModal, setInvoiceModal] = uS(false);        // เปิด InvoiceOptionsModal ก่อนพิมพ์ใบแจ้งหนี้
   const [invoiceExtra, setInvoiceExtra] = uS(null);         // {remarks, dueAmount, dueLabel} จาก modal
+  const [editQuote, setEditQuote] = uS(null);               // ใบที่กำลังแก้ไข → ส่งเข้า QuotationFormView
+  const [editingId, setEditingId] = uS(null);               // ปุ่มแก้ไขที่กำลังโหลดรายละเอียดอยู่
   const [toast, showToast, hideToast] = useToast();
   const listRef = React.useRef(null);
   const PAGE_SIZE = 20;
@@ -6977,6 +6979,23 @@ function QuoteFollowupView({ data, role }) {
     const onAfter = () => { setPosPrintPageSize("a4"); window.removeEventListener("afterprint", onAfter); };
     window.addEventListener("afterprint", onAfter);
   }, [printReq, printData]);
+
+  // เปิดฟอร์มแก้ไขใบเสนอราคาเดิม — ดึงรายละเอียดเต็มจาก ZORT ก่อน (ตารางมีแค่ยอด/ชื่อ ไม่มีรายการสินค้า)
+  // เฉพาะใบที่ยัง "รออนุมัติ" เท่านั้น (ปุ่มโชว์เฉพาะตารางนั้น) — อนุมัติแล้ว = ลูกค้าตกลงแล้ว ห้ามแก้ย้อนหลัง
+  async function handleEdit(q) {
+    if (editingId) return;
+    setEditingId(q.id || q.number);
+    const r = await syncGetQuotationForPrint(q.id || q.number);
+    setEditingId(null);
+    if (!r.success) { showToast("error", "ดึงรายละเอียดไม่สำเร็จ: " + (r.error || ""), "❌"); return; }
+    const d = r.data || {};
+    setEditQuote({
+      quotationId: q.id || null,          // EditQuotation ต้องใช้ id จริง ไม่ใช่เลขที่เอกสาร
+      quotationNumber: d.quotationNumber || q.number || "",
+      customer: d.customer || {}, items: d.items || [], remarks: d.remarks || [], totals: d.totals || {},
+    });
+    setMode("create");
+  }
 
   // docType: "quotation" (ค่าเริ่มต้น) → พิมพ์ทันที · "invoice" → เปิด InvoiceOptionsModal ก่อน
   // (เลือกเต็มจำนวน/มัดจำ/ยอดคงเหลือ + แก้หมายเหตุได้ ก่อนค่อยสั่งพิมพ์จริง)
@@ -7142,7 +7161,7 @@ function QuoteFollowupView({ data, role }) {
   const rateColor = (r) => r >= 0.7 ? "#16a34a" : r >= 0.4 ? "#d97706" : "#dc2626";
 
   if (mode === "create") {
-    return <QuotationFormView data={data} role={role} onBack={() => setMode("summary")} onSubmitted={load}/>;
+    return <QuotationFormView data={data} role={role} onBack={() => { setEditQuote(null); setMode("summary"); }} onSubmitted={load} editQuote={editQuote}/>;
   }
 
   return (
@@ -7354,8 +7373,9 @@ function QuoteFollowupView({ data, role }) {
                         const overdue = q.ageDays !== null && q.ageDays > OVERDUE_DAYS;
                         const busy = voidingId === (q.id || q.number);
                         const approving = approvingId === (q.id || q.number);
-                        const anyBusy = !!voidingId || !!approvingId || !!printingId;
+                        const anyBusy = !!voidingId || !!approvingId || !!printingId || !!editingId;
                         const printing = printingId === (q.id || q.number);
+                        const editingThis = editingId === (q.id || q.number);
                         return (
                           <tr key={q.number || idx} style={{ borderBottom: "1px solid var(--bdr)", background: overdue ? "#fff5f5" : (idx % 2 === 0 ? "var(--paper)" : "var(--g-50)") }}>
                             <td style={{ padding: "8px 12px", minWidth: 160 }}>
@@ -7387,6 +7407,12 @@ function QuoteFollowupView({ data, role }) {
                                   color: overdue ? "#fff" : "var(--muted)", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700,
                                   cursor: anyBusy ? "default" : "pointer", opacity: anyBusy && !busy ? .5 : 1,
                                 }}>{busy ? "กำลังปิด…" : "ปิดใบ"}</button>
+                                {/* แก้ไขได้เฉพาะใบที่ยังรออนุมัติ — ตารางอนุมัติแล้วไม่มีปุ่มนี้ */}
+                                <button onClick={() => handleEdit(q)} disabled={anyBusy} title="แก้ไขใบเสนอราคา" style={{
+                                  border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
+                                  borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 700,
+                                  cursor: anyBusy ? "default" : "pointer", opacity: anyBusy && !editingThis ? .5 : 1,
+                                }}>{editingThis ? "…" : "✏️"}</button>
                                 <button onClick={() => handlePrint(q, "quotation")} disabled={anyBusy} title="พิมพ์ใบเสนอราคา" style={{
                                   border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
                                   borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 700,
