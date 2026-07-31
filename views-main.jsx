@@ -2756,7 +2756,7 @@ function mtoBase(name) {
     .trim() || 'งานพิเศษ';
 }
 
-function CategoryView({ data, role }) {
+function CategoryView({ data, role, onNav }) {
   const { products } = data;
   const allCats = uM(() => {
     const s = new Set();
@@ -3152,6 +3152,10 @@ function CategoryView({ data, role }) {
           </div>
         )}
       </div>
+
+      {/* งานที่มอบหมายให้คนที่ล็อกอินอยู่ (MTO) — วางบนสุดเพราะ role ส่วนใหญ่ลงมาเจอแท็บนี้ก่อน
+          ไม่ได้ล็อกอิน/ไม่มีงานค้าง → MyJobsCard คืน null เอง ไม่กินที่ */}
+      <MyJobsCard data={data} onNav={onNav} />
 
       {/* ── Global Search Bar ── */}
       <div style={{marginBottom:14}}>

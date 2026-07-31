@@ -53,7 +53,15 @@ const ASSERT = {
     const svg = await page.locator('svg.recharts-surface').count();
     return { ok: svg >= 1, detail: `recharts svg=${svg}` };
   },
-  categories: async (page) => hasText(page, ['VAS001', 'FLW002', 'DEC003'], 'product SKU'),
+  // categories: สินค้า + การ์ด "งานของฉัน" (MyJobsCard) ที่มาจากงาน MTO ของ STF001 ใน fixture
+  // นับเฉพาะงานที่ยังไม่เสร็จ → ต้องได้ 1 งาน (อีกงานปิดแล้ว + เป็นของ STF002)
+  categories: async (page) => {
+    const base = await hasText(page, ['VAS001', 'FLW002', 'DEC003'], 'product SKU');
+    if (!base.ok) return base;
+    const mine = await hasText(page, ['งานของฉัน', 'มี 1 งานที่ยังไม่เสร็จ'], 'การ์ดงานของฉัน');
+    return { ok: mine.ok, detail: base.detail + ' | ' + mine.detail };
+  },
+  whhome:     async (page) => hasText(page, ['งานของฉัน', 'มี 1 งานที่ยังไม่เสร็จ'], 'การ์ดงานของฉัน'),
   stock:      async (page) => hasText(page, ['FLW002'], 'low-stock SKU (FLW002 qty8<threshold)'),
   storage:    async (page) => hasText(page, ['A1/05', 'A2/03', 'DEC003'], 'lock/สินค้าในคลัง'),
   orders:     async (page) => hasText(page, ['VAS001', 'FLW002'], 'order SKU'),

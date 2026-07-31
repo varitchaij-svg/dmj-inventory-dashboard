@@ -28,6 +28,14 @@
   sessionStorage.setItem('dmj_role', role);
   if (tab) sessionStorage.setItem('dmj_active_tab', tab); // เผื่อ app อ่าน (ไม่บังคับ)
 
+  // ── จำลอง "ล็อกอินแล้ว" ── ปกติ applyStaffSession() (app.jsx) เป็นคนตั้งค่าพวกนี้ตอน login
+  // ต้อง seed เองเพราะ harness bypass login · ถ้าไม่ตั้ง MyJobsCard ("งานของฉัน") จะคืน null
+  // ตลอด → เทสต์จะไม่มีวันเห็นการ์ดนี้เลย (ผ่านแบบไม่ได้ทดสอบอะไร)
+  // ค่า staffId ตรงกับ assigneeId ของงาน MTO ใน fixture.js — แก้ที่ไหนต้องแก้ให้ตรงกัน
+  window._currentStaffId  = 'STF001';
+  window._currentUserName = 'สมชาย';
+  window._currentUser     = 'สมชาย (' + role + ')';
+
   // ── จำลองการตัด payload ตาม role แบบเดียวกับ GAS (PAYLOAD_VARIANT_DROPS_) ──
   // ต้อง mirror ไว้ที่นี่ ไม่งั้นเทสต์จะรันด้วย payload เต็มตลอด แล้วไม่มีวันจับได้ว่า
   // "view ของ role นี้ต้องใช้คีย์ที่ server ตัดทิ้งไป" ซึ่งคือความเสี่ยงหลักของการแยกตาม role

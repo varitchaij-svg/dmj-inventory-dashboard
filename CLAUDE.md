@@ -329,7 +329,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 683 tests, 19 test files, ทั้งหมด pass
+**มี Vitest test suite แล้ว** — 732 tests, 22 test files, ทั้งหมด pass
 
 ```bash
 npm test              # run tests
@@ -345,6 +345,12 @@ npm run test:coverage # coverage report (tests/helpers.js)
 - **`tests/auth.test.js`** — เฟส 4 ล็อกอิน (`canDoOrNull_`/`ROLE_ACTIONS_`/`IMMEDIATE_GATE_*`) —
   **ไม่ copy โค้ดเข้า helpers.js** แต่ eval ฟังก์ชันจริงจาก `.gs` ตรง ๆ (กันสำเนา drift ของโค้ด
   ด้านความปลอดภัย) ต่างจากไฟล์เทสต์อื่นที่ copy pure function เข้า `helpers.js`
+- **`tests/qtyloc.test.js`** — `applyQtyLocToProduct_` (eval จาก `.gs` เหมือน auth.test.js ไม่ copy)
+  ตรรกะ "ชีตสต็อกชนะค่าเก่าเสมอ" ที่ตัดสินว่าสินค้า**มีของหรือหมด**บนหน้าเว็บ
+  · ที่มา: ก.ค. 2026 สินค้ารหัส WL ทุกตัวโชว์ "หมด" ทั้งที่มีของจริง (WL00002 = 41+240) เพราะ
+  `buildFullData_` เขียนทับ `qtyStore/qtyWH` แต่ไม่คำนวณ `qty/isOOS` ใหม่ → ค้างค่า 0 จากชีต
+  "ข้อมูลสินค้า" (คอลัมน์ I/J/K เก่า) **โดยไม่มี error ให้เห็น** เจ้าของนึกว่า ZORT ยังไม่ sync เข้า
+  · มี meta-test เช็คว่า `buildFullData_` ยังเรียกฟังก์ชันนี้จริง (กันเทสต์เขียวแต่ของจริงไม่ได้เรียก)
 - **`tests/drift-guard.test.js`** — กัน `helpers.js` drift จากต้นทาง: ทุก export ต้องมี entry ใน
   `TRACKED` (พร้อม landmark ที่ต้องเจอทั้งในไฟล์ต้นทางและ helpers.js) หรืออยู่ใน
   `BEHAVIORAL_MODELS` · **เพิ่ม export ใหม่ใน helpers.js แล้วไม่เพิ่ม landmark = test แดงทันที**

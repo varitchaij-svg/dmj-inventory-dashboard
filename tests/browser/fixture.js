@@ -66,10 +66,15 @@
   ];
 
   const mtoJobs = [
+    // assigneeId ตรงกับ window._currentStaffId ที่ harness.html seed ไว้ ('STF001')
+    // → งานนี้ต้องโผล่ในการ์ด "งานของฉัน" (MyJobsCard) · แก้ที่ไหนต้องแก้ให้ตรงกัน
     { jobId: 'MTO-202506001', date: '01/06/2025', jobName: 'จัดช่อพิเศษ งานแต่ง', customer: 'คุณเอ',
-      price: 1500, imageUrl: '', status: 'กำลังจัด', closedAt: '', items: [] },
+      price: 1500, imageUrl: '', status: 'กำลังจัด', closedAt: '', items: [],
+      assigneeId: 'STF001', assigneeName: 'สมชาย' },
+    // ปิดงานแล้ว + เป็นของคนอื่น → ต้อง **ไม่** ถูกนับในการ์ด "งานของฉัน"
     { jobId: 'MTO-202505009', date: '20/05/2025', jobName: 'จัดกระเช้าปีใหม่', customer: 'บริษัท B',
-      price: 3000, imageUrl: '', status: 'เสร็จแล้ว', closedAt: '20/05/2025 16:00', items: [] },
+      price: 3000, imageUrl: '', status: 'เสร็จแล้ว', closedAt: '20/05/2025 16:00', items: [],
+      assigneeId: 'STF002', assigneeName: 'สมหญิง' },
   ];
 
   const transfers = months.map((m, i) => ({

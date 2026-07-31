@@ -1785,7 +1785,7 @@ function App() {
       <main className="main" data-screen-label={activeTab}>
         {activeTab === "overview"     && <ErrorBoundary key="overview"><OverviewView data={data} range={range} setRange={setRange} role={viewRole}/></ErrorBoundary>}
         {activeTab === "whhome"       && <ErrorBoundary key="whhome"><WarehouseHomeView data={data} onNav={handleSetTab}/></ErrorBoundary>}
-        {activeTab === "categories"   && <ErrorBoundary key="categories"><CategoryView data={data} role={viewRole}/></ErrorBoundary>}
+        {activeTab === "categories"   && <ErrorBoundary key="categories"><CategoryView data={data} role={viewRole} onNav={handleSetTab}/></ErrorBoundary>}
         {activeTab === "trends"       && <ErrorBoundary key="trends"><TrendsView data={data} role={viewRole}/></ErrorBoundary>}
         {activeTab === "stock"        && <ErrorBoundary key="stock"><StockView data={data} role={viewRole}/></ErrorBoundary>}
         {activeTab === "newproduct"   && <ErrorBoundary key="newproduct"><AddProductView data={data} role={viewRole} onAdded={fetchFromSheet}/></ErrorBoundary>}
