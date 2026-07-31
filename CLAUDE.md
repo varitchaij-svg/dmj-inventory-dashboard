@@ -30,6 +30,16 @@
   - Database = Google Sheets
   - มี server-side cache (CacheService, chunk 30k chars, TTL 180s) — แก้ข้อมูลแล้วต้อง
     เรียก `invalidateCache_()`
+  - **cache ถูกใช้จริงแล้ว (2026-07-31)** — เดิม frontend ส่ง `fresh=1` มา **ทุก request**
+    (ทั้งตอนเปิดแอปและ poll ทุก 30 วิ ในแท็บ stockcount/frontstore) → cache ถูกข้ามตลอด
+    ทุกคนที่เปิดแอปสั่ง build ใหม่ (อ่าน 11 ชีต) ซึ่งเป็นงานที่หนักที่สุดในเส้นทาง
+    · ตอนนี้ `fresh=1` ส่งเฉพาะตอนผู้ใช้ **กดปุ่ม Sync / ลองใหม่ เอง** เท่านั้น
+    · ปลอดภัยเพราะ `doPost` เรียก `invalidateCache_(true)` ก่อนทุก action ที่แก้ข้อมูล →
+      เครื่องอื่นบันทึกแล้วเราเห็นทันที (ไม่ต้องรอ TTL) — เป็นเงื่อนไขหลักที่ทำให้เปิด cache ได้
+    · **ที่ยังช้าได้ถึง 3 นาที**: แก้ชีตด้วยมือใน Google Sheets ตรง ๆ (ไม่ผ่านแอป) —
+      กดปุ่ม Sync เพื่อเห็นทันที · ย้อนกลับได้ด้วยการใส่ `fresh=1` คืนใน `fetchFromSheet` (app.jsx)
+    · sync ที่เขียนชีตยอดขาย (`rebuildSalesFromRaw`/`syncZortSales`) เพิ่ม `invalidateCache_()`
+      แล้ว — เดิมไม่มีก็ไม่มีผลเพราะ cache ไม่เคยถูกใช้
   - `invalidateCache_(skipTsUpdate)` — ถ้า `skipTsUpdate=true` จะล้าง payload cache อย่างเดียว
     ไม่ bump `dmj_last_write_ts` (ใช้ที่ต้น doPost ก่อน conflict check เพื่อไม่ poison timestamp)
 - **Hosting**: Cloudflare Pages (`dmj-inventory-dashboard.pages.dev`) auto-deploy จาก

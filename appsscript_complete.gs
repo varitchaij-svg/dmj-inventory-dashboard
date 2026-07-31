@@ -4768,6 +4768,7 @@ function syncZortSales() {
   Logger.log("ZORT orders fetched: " + allOrders.length + " (fallback — ยังไม่มีชีตดิบ)");
   const r = aggregateAndWriteSales_(ss, allOrders, fromDate, today, DAILY_DAYS);
   Logger.log("✅ syncZortSales เสร็จ · orders=" + allOrders.length + " SKUs=" + r.skus + " · ลูกค้า=" + r.customers);
+  invalidateCache_(); // ยอดขายเปลี่ยน → payload เปลี่ยน (ดูหมายเหตุใน rebuildSalesFromRaw)
 }
 
 // รวมยอด (รายเดือน/รายวัน/ลูกค้า) จาก orders แล้วเขียนลงชีต — ใช้ร่วมกันโดย syncZortSales + rebuildSalesFromRaw
@@ -4976,6 +4977,9 @@ function rebuildSalesFromRaw() {
   const today = new Date();
   const r = aggregateAndWriteSales_(ss, orders, fromDate, today, 60);
   Logger.log("✅ rebuild เสร็จ · SKUs=" + r.skus + " · ลูกค้า=" + r.customers + " · เดือน=" + (r.months ? r.months.length : 0));
+  // เขียนชีตยอดขายรายเดือน/รายวันใหม่ = payload เปลี่ยน → ต้องล้าง cache
+  // (เดิมไม่ล้างก็ไม่มีผล เพราะเว็บส่ง fresh=1 ทุกครั้งจน cache ไม่เคยถูกใช้ — ตอนนี้ใช้แล้ว)
+  invalidateCache_();
 }
 
 // ยกเลิก backfill (ลบ trigger ค้าง) — เผื่อต้องหยุดกลางคัน · cursor ยังคงไว้ → resumeBackfill ทำต่อได้
