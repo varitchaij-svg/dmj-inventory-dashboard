@@ -13,9 +13,12 @@
   const months = [5, 4, 3, 2, 1, 0].map(monthKey);
   const monthLabels = months.slice();
 
-  function monthly(base) {
-    // สร้าง series 6 เดือน มี qty/sales เพิ่มขึ้นเรื่อย ๆ (มีเทรนด์ให้ chart วาด)
-    return months.map((m, i) => ({ month: m, qty: base + i * 3, sales: (base + i * 3) * 100 }));
+  // ยอดรายเดือนแบบ "ย่อ" แบบเดียวกับที่ GAS ส่งจริง: [ดัชนีเดือนใน monthLabels, qty, sales]
+  // ตั้งใจใช้รูปแบบย่อในฟิกซ์เจอร์ เพื่อให้เทสต์เดินผ่านโค้ดกาง (expandMonthlyCompact) จริง
+  // ถ้าใส่เป็น monthly เต็มไว้ เทสต์จะผ่านแม้โค้ดกางพัง = คุมไม่ได้จริง
+  function monthlyCompact(base) {
+    // series 6 เดือน qty/sales เพิ่มขึ้นเรื่อย ๆ (มีเทรนด์ให้ chart วาด)
+    return months.map((m, i) => [i, base + i * 3, (base + i * 3) * 100]);
   }
 
   const products = [
@@ -24,25 +27,25 @@
       qty: 40, qtyStore: 15, qtyWH: 25, price: 250, soldQty: 60, soldRev: 15000,
       isMTO: false, imageUrl: '', vendor: 'ACME', lastSupplier: 'ACME',
       lastStockInDate: monthKey(1).split('/').reverse().join('-') + '-01',
-      threshold: 36, monthly: monthly(8),
+      threshold: 36, mo: monthlyCompact(8),
     },
     {
       sku: 'FLW002', name: 'ดอกไม้ประดิษฐ์ สีแดง', cat: 'ดอกไม้', tag: 'BLOOM',
       qty: 8, qtyStore: 3, qtyWH: 5, price: 120, soldQty: 90, soldRev: 10800,
       isMTO: false, imageUrl: '', vendor: 'BLOOM', lastSupplier: 'BLOOM',
       lastStockInDate: monthKey(2).split('/').reverse().join('-') + '-15',
-      threshold: 36, monthly: monthly(12),
+      threshold: 36, mo: monthlyCompact(12),
     },
     {
       sku: 'DEC003', name: 'ของตกแต่งเรซิ่น รูปนก', cat: 'เรซิ่นและอื่นๆ', tag: 'CRAFT',
       qty: 120, qtyStore: 100, qtyWH: 20, price: 80, soldQty: 4, soldRev: 320,
       isMTO: false, imageUrl: '', vendor: 'CRAFT', lastSupplier: 'CRAFT',
-      lastStockInDate: '2024-01-01', threshold: 36, monthly: monthly(1),
+      lastStockInDate: '2024-01-01', threshold: 36, mo: monthlyCompact(1),
     },
     {
       sku: 'MTO900', name: 'จัดช่อพิเศษ #1 งานแต่ง', cat: 'งานพิเศษ', tag: '',
       qty: 0, qtyStore: 0, qtyWH: 0, price: 1500, soldQty: 5, soldRev: 7500,
-      isMTO: true, imageUrl: '', monthly: monthly(2),
+      isMTO: true, imageUrl: '', mo: monthlyCompact(2),
     },
   ];
 
@@ -112,5 +115,60 @@
                  monthlysales: new Date().toISOString(), transferDetail: new Date().toISOString(),
                  transactionDetail: new Date().toISOString() },
     lastModified: Date.now(),
+  };
+})();
+
+// ── fixture ของระบบลงเวลา (คนละก้อนกับ payload หลัก — มาจาก action POST ไม่ใช่ doGet) ──
+// harness ใช้ตอบ attPost() ตาม action · shape ต้องตรงกับที่ views-attendance.jsx อ่านจริง
+// (today.events / rows[].events / totals) ไม่งั้นได้แค่หน้าเปล่า ไม่ได้ทดสอบการเรนเดอร์จริง
+(function () {
+  const today = (function () {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  })();
+  const ev = (type, typeTh, time, siteName) => ({
+    id: type + '-' + time, type, typeTh, time, siteName: siteName || 'หน้าร้าน',
+    inArea: true, distM: 12, hasPhoto: type === 'in', photo: '', fixed: false,
+  });
+  const myEvents = [
+    ev('in', 'เข้างาน', '08:05'),
+    ev('breakStart', 'เริ่มพัก', '12:00'),
+    ev('breakEnd', 'กลับจากพัก', '12:45'),
+  ];
+  window.__DMJ_ATT_FIXTURE = {
+    myToday: {
+      date: today, staffName: 'สมชาย ใจดี',
+      shift: { start: '08:00', end: '17:00', name: 'กะปกติ' },
+      allowed: ['out', 'breakStart', 'bathroomStart'],
+      events: myEvents,
+      summary: { inTime: '08:05', outTime: '', workedMin: 275, lateMin: 5, breakMin: 45, bathroomMin: 0 },
+    },
+    myAttendanceSummary: {
+      month: today.slice(0, 7),
+      totals: { workedMin: 2480, daysWorked: 6, lateDays: 1, lateMin: 5, daysAbsent: 0, breakMin: 270, bathroomMin: 25 },
+      days: [{ date: today, inTime: '08:05', outTime: '', workedMin: 275, lateMin: 5, absent: false }],
+    },
+    attendanceToday: {
+      date: today,
+      rows: [
+        { staffId: 'S001', name: 'สมชาย ใจดี', role: 'frontstore', state: 'ทำงานอยู่',
+          shift: { start: '08:00', end: '17:00', name: 'กะปกติ' }, events: myEvents,
+          summary: { inTime: '08:05', outTime: '', workedMin: 275, lateMin: 5, breakMin: 45, bathroomMin: 0 } },
+        { staffId: 'S002', name: 'สมหญิง ขยัน', role: 'warehouse', state: 'พักอยู่',
+          shift: { start: '08:00', end: '17:00', name: 'กะปกติ' },
+          events: [ev('in', 'เข้างาน', '07:58', 'คลังสินค้าสาย5'), ev('breakStart', 'เริ่มพัก', '12:10', 'คลังสินค้าสาย5')],
+          summary: { inTime: '07:58', outTime: '', workedMin: 250, lateMin: 0, breakMin: 20, bathroomMin: 0 } },
+        { staffId: 'S003', name: 'มานะ อดทน', role: 'saler', state: 'ยังไม่มา',
+          shift: null, events: [], summary: { inTime: '', outTime: '', workedMin: null, lateMin: 0 } },
+      ],
+    },
+    attendanceMonthlySummary: {
+      month: today.slice(0, 7),
+      rows: [
+        { staffId: 'S001', name: 'สมชาย ใจดี', role: 'frontstore', daysWorked: 6, daysAbsent: 0, lateDays: 1, lateMin: 5, workedMin: 2480, bathroomMin: 25 },
+        { staffId: 'S002', name: 'สมหญิง ขยัน', role: 'warehouse', daysWorked: 7, daysAbsent: 1, lateDays: 0, lateMin: 0, workedMin: 2900, bathroomMin: 10 },
+      ],
+    },
+    listActiveStaffNames: { staff: [{ staffId: 'S001', name: 'สมชาย ใจดี' }, { staffId: 'S002', name: 'สมหญิง ขยัน' }] },
   };
 })();

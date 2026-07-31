@@ -157,6 +157,9 @@ function AttendanceView({ role }) {
   }, []);
 
   const allowed = (today && today.allowed) || [];
+  // กันหน้าขาว: ถ้า myToday ตอบกลับไม่ครบ field (เน็ตแปลก/เวอร์ชัน backend เก่า) ต้องไม่ crash
+  // ทั้งแท็บ — "ลงเวลา" เป็นแท็บแรกของทุก role ที่ไม่ใช่ owner พังแล้วเข้าแท็บอื่นไม่ได้เลย
+  const events = (today && today.events) || [];
   const needPhoto = allowed.indexOf("in") >= 0; // บังคับรูปเฉพาะตอนเข้างาน (ตามที่เจ้าของเลือก)
 
   const pickPhoto = async (e) => {
@@ -307,11 +310,11 @@ function AttendanceView({ role }) {
 
           {/* ── ④ ไทม์ไลน์วันนี้ ── */}
           <div style={{ fontSize: 13, fontWeight: 700, color: "var(--muted)", marginBottom: 8 }}>วันนี้</div>
-          {today.events.length === 0 ? (
+          {events.length === 0 ? (
             <div style={{ textAlign: "center", padding: 24, color: "var(--muted)", fontSize: 13 }}>ยังไม่ได้ลงเวลาวันนี้</div>
           ) : (
             <div style={{ background: "var(--paper)", border: "1.5px solid var(--bdr)", borderRadius: 12, overflow: "hidden" }}>
-              {today.events.map((e, i) => (
+              {events.map((e, i) => (
                 <div key={i} style={{
                   display: "flex", alignItems: "center", gap: 10, padding: "11px 14px",
                   borderTop: i ? "1px solid var(--bdr)" : "none",

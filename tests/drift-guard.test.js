@@ -186,6 +186,11 @@ const TRACKED = [
     `if (now.getDate() < ref.getDate()) mo -= 1;`,
     `return mo < 0 ? 0 : mo;`,
   ]},
+  { names: ['expandMonthlyCompact'], sourceFile: 'app.jsx', landmarks: [
+    `const dense = labels.map(ml => ({ month: ml, qty: 0, sales: 0 }));`,
+    `if (cell) { cell.qty = row[1]; cell.sales = row[2]; }`,
+    `p.monthly = dense;`,
+  ]},
   { names: ['enrichDataCore'], sourceFile: 'app.jsx', landmarks: [
     `const THAI_RE = /[฀-๿]/;`,
     `p.supplierTags = rawTags.filter(t => !THAI_RE.test(t));`,

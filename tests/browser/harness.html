@@ -28,8 +28,30 @@
   sessionStorage.setItem('dmj_role', role);
   if (tab) sessionStorage.setItem('dmj_active_tab', tab); // เผื่อ app อ่าน (ไม่บังคับ)
 
+  // ── จำลองการตัด payload ตาม role แบบเดียวกับ GAS (PAYLOAD_VARIANT_DROPS_) ──
+  // ต้อง mirror ไว้ที่นี่ ไม่งั้นเทสต์จะรันด้วย payload เต็มตลอด แล้วไม่มีวันจับได้ว่า
+  // "view ของ role นี้ต้องใช้คีย์ที่ server ตัดทิ้งไป" ซึ่งคือความเสี่ยงหลักของการแยกตาม role
+  // ⚠️ แก้ PAYLOAD_VARIANT_DROPS_ ใน appsscript_complete.gs แล้วต้องอัปเดตตารางนี้ด้วย
+  var VARIANT_DROPS = {
+    full: [],
+    ops:  ['monthlyByCat', 'dailyByCat', 'dayLabels', 'purchases'],
+    lite: ['monthlyByCat', 'dailyByCat', 'dayLabels', 'purchases', 'transfers', 'transferStats'],
+  };
+  var ROLE_VARIANT = {
+    owner: 'full', dev: 'full', employee: 'ops',
+    warehouse: 'lite', frontstore: 'lite', saler: 'lite', storedevice: 'lite',
+  };
+  function shapeForRole(payload, r) {
+    var drops = VARIANT_DROPS[ROLE_VARIANT[r] || 'full'] || [];
+    if (!drops.length) return payload;
+    var out = {};
+    Object.keys(payload).forEach(function (k) { if (drops.indexOf(k) < 0) out[k] = payload[k]; });
+    return out;
+  }
+  window.__DMJ_PAYLOAD = shapeForRole(window.__DMJ_FIXTURE, role);
+
   // ── seed ข้อมูลลง localStorage เพื่อให้ loadFromStorage() render ทันที ──
-  localStorage.setItem('dmj_dashboard_data_v1', JSON.stringify(window.__DMJ_FIXTURE));
+  localStorage.setItem('dmj_dashboard_data_v1', JSON.stringify(window.__DMJ_PAYLOAD));
   localStorage.setItem('dmj_dashboard_source_v1', 'sheet');
 
   // ── stub fetch: ตัด network จริงทั้งหมด → ตอบ fixture/verifyPin ──
@@ -40,13 +62,18 @@
     const body = (init && init.body) || '';
     const isVerifyPin = /verifyPin/.test(url) || /verifyPin/.test(String(body));
     if (isVerifyPin) return Promise.resolve(new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } }));
-    // POST actions (write) — ตอบ success จำลอง
+    // POST actions (write) — ตอบ success จำลอง · action ลงเวลาต้องตอบให้ครบ field
+    // (views-attendance.jsx อ่าน today.events/rows ตรง ๆ — payload ว่างจะได้แค่หน้าเปล่า ไม่ได้ทดสอบอะไร)
     if (init && init.method === 'POST') {
-      return Promise.resolve(new Response(JSON.stringify({ success: true, data: {} }), { headers: { 'Content-Type': 'application/json' } }));
+      let action = '';
+      try { action = (JSON.parse(body) || {}).action || ''; } catch (e) {}
+      const att = window.__DMJ_ATT_FIXTURE || {};
+      const data = Object.prototype.hasOwnProperty.call(att, action) ? att[action] : {};
+      return Promise.resolve(new Response(JSON.stringify({ success: true, data: data }), { headers: { 'Content-Type': 'application/json' } }));
     }
     // GET payload
     if (/script\.google|exec|action=orders|action=getAuditLog|action=getDeadStock/.test(url) || url.indexOf('http') === 0) {
-      const payload = Object.assign({}, window.__DMJ_FIXTURE, { lastModified: Date.now() });
+      const payload = Object.assign({}, window.__DMJ_PAYLOAD, { lastModified: Date.now() });
       return Promise.resolve(new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } }));
     }
     return realFetch ? realFetch(input, init) : Promise.reject(new Error('fetch blocked in harness: ' + url));
@@ -56,7 +83,9 @@
 </script>
 <script src="/config.js"></script>
 
-<!-- boot: mirror ของจริง (ui → views-main → views-analytics → app) แต่ libs local -->
+<!-- boot: mirror ของจริง (ui → views-main → views-analytics → views-quote → views-attendance → app)
+     แต่ libs local · ลำดับต้องตรงกับ "Doomuenjing Dashboard.html" เป๊ะ ไม่งั้น component หาย
+     (เช่น AttendanceView ไม่ถูกประกาศ → ทุก role ที่มีแท็บ "attendance" white-screen) -->
 <script>
 (function () {
   function injectCode(code) { const s = document.createElement('script'); s.textContent = code; document.head.appendChild(s); }
@@ -65,9 +94,11 @@
     const text = await resp.text();
     return Babel.transform(text, { presets: ['react'], sourceType: 'script', filename: src }).code;
   }
+  // compile ขนานกัน (เร็วกว่า) แต่ inject ตามลำดับเสมอ — global scope เดียวกัน ลำดับสำคัญ
+  const ORDER = ['/views-main.jsx', '/views-analytics.jsx', '/views-quote.jsx', '/views-attendance.jsx'];
   compileJsx('/ui.jsx').then(injectCode)
-    .then(() => Promise.all([compileJsx('/views-main.jsx'), compileJsx('/views-analytics.jsx')]))
-    .then((codes) => { injectCode(codes[0]); injectCode(codes[1]); return compileJsx('/app.jsx').then(injectCode); })
+    .then(() => Promise.all(ORDER.map(compileJsx)))
+    .then((codes) => { codes.forEach(injectCode); return compileJsx('/app.jsx').then(injectCode); })
     .then(() => { window.__BOOTED = true; })
     .catch((e) => { window.__BOOT_ERR = String(e && e.stack || e); });
 }());

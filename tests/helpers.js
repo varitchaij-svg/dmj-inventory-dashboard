@@ -482,6 +482,26 @@ function netOf(item) {
   return qty - ret;
 }
 
+// ── expandMonthlyCompact: สำเนาจาก app.jsx ───────────────────────────────────
+// GAS ส่งยอดรายเดือนแบบย่อ `p.mo = [[ดัชนีเดือน, qty, sales], ...]` เฉพาะเดือนที่มียอดจริง
+// ตัวนี้กางกลับเป็น `p.monthly` ที่มีครบทุกเดือนเรียงตาม monthLabels
+// ต้องกางเป็น array เต็มเสมอ เพราะ view ตีความตามตำแหน่ง (slice(-3) = 3 เดือนหลังสุด)
+function expandMonthlyCompact(d) {
+  if (!d || !Array.isArray(d.products)) return d;
+  const labels = d.monthLabels || [];
+  d.products.forEach(p => {
+    if (!p || !p.mo) return;
+    const dense = labels.map(ml => ({ month: ml, qty: 0, sales: 0 }));
+    p.mo.forEach(row => {
+      const cell = dense[row[0]];
+      if (cell) { cell.qty = row[1]; cell.sales = row[2]; }
+    });
+    p.monthly = dense;
+    delete p.mo;
+  });
+  return d;
+}
+
 // ── enrichDataCore: pure logic จาก enrichData (app.jsx:231) ──────────────────
 // ไม่รวม browser globals (detectColor, mtoBase) เพื่อให้รันใน Node ได้
 // ใช้ monthsSince ที่นิยามไว้ด้านบนในไฟล์นี้
@@ -794,7 +814,7 @@ module.exports = {
   monthKey_, dayKey_,
   deductStockCore, saleFrontStoreDeductCore,
   netOf, writeMtoItemsCore,
-  enrichDataCore,
+  enrichDataCore, expandMonthlyCompact,
   COLOR_MAP, COLOR_KEYS, detectColor,
   parseQty_, parseNum_, parseLocation_,
   transferBatchCore,
