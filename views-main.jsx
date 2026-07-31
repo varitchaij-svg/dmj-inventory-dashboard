@@ -975,7 +975,12 @@ function buildYoYSeries(monthLabels, monthlyByCat) {
 
 // ── ปุ่มกรองแบบ pill สำหรับ OverviewView ──────────────────────────────
 // ประกาศนอก OverviewView โดยตั้งใจ: ถ้าประกาศข้างในจะกลายเป็น component ตัวใหม่
-// ทุกครั้งที่ re-render → React unmount/remount ทั้งแถบ = ตำแหน่ง scroll-x ของแถบเดือนดีดกลับ
+// ทุกครั้งที่ re-render → React unmount/remount ทั้งแถบ
+// ── ปุ่ม/แถวเป็น "wrap ตกบรรทัด" ไม่ใช้ horizontal-scroll แล้ว (เดิมเคยลอง sticky bar
+//    + เลื่อนแนวนอน แต่ใช้ยากทั้งมือถือแนวตั้ง/แนวนอน/iPad — จอสั้นลง (แนวนอน) หรือ
+//    จอกว้างขึ้น (iPad) ทำให้ตำแหน่ง/ขนาดของ sticky bar เพี้ยน แถมเลื่อนแนวนอนโดย
+//    ไม่มี indicator ก็มองไม่เห็นว่ามีตัวเลือกอีก โดยเฉพาะผู้ใช้ที่ไม่ถนัดเทคโนโลยี
+//    → เปลี่ยนเป็น "เห็นทุกปุ่มพร้อมกัน ตกบรรทัดเอง" ใช้ได้เหมือนกันทุกขนาดจอ/orientation) ──
 function OvPill({ on, onClick, children, tone, ...rest }) {
   return (
     <button type="button" onClick={onClick}
@@ -984,25 +989,23 @@ function OvPill({ on, onClick, children, tone, ...rest }) {
     </button>
   );
 }
-function OvPillRow({ icon, label, hint, stripRef, children }) {
+function OvPillRow({ icon, label, hint, children }) {
   return (
     <div className="ov-pillrow">
       <span className="ov-pillrow-label">{icon} {label}</span>
-      <div className="ov-pillrow-scroll" ref={stripRef}>{children}</div>
+      <div className="ov-pillrow-wrap">{children}</div>
       {hint && <span className="ov-pillrow-hint">{hint}</span>}
     </div>
   );
 }
 
-// เลื่อนไปยังหัวข้อที่กด — เผื่อความสูงของ topnav + แถบ sticky ไว้ ไม่งั้นหัวข้อโดนบัง
+// เลื่อนไปยังหัวข้อที่กด — เผื่อความสูงของ topnav ไว้ ไม่งั้นหัวข้อโดนบัง
 function ovJumpTo(id) {
   const el = document.getElementById(id);
   if (!el) return;
   const nav = document.querySelector('.topnav');
   const navH = nav ? nav.getBoundingClientRect().height : 0;
-  const bar = document.querySelector('.overview-stickybar.show');
-  const barH = bar ? bar.getBoundingClientRect().height : 0;
-  const y = window.scrollY + el.getBoundingClientRect().top - navH - barH - 10;
+  const y = window.scrollY + el.getBoundingClientRect().top - navH - 10;
   window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
 }
 
@@ -1018,21 +1021,21 @@ function OverviewView({ data, range, setRange, role }) {
   // ── new states for month picker + comparison ──────────────────────
   const [selMonth, setSelMonth] = uS(null);   // null = latest
   const [selCat, setSelCat] = uS("");          // "" = ทุกหมวด · เลือกหมวด → กรอง KPI/กราฟ/forecast/top สินค้า
-  const monthStripRef = React.useRef(null);
   const mobile = useIsMobile();                // ซ่อนคอลัมน์รองบนมือถือให้พอดีจอ
 
-  // ── แถบฟิลเตอร์ย่อ (sticky) — โผล่มาเมื่อเลื่อนพ้นหัวข้อ ให้เปลี่ยนปี/เดือน/ช่วงได้โดยไม่ต้องเลื่อนขึ้นบนสุด ──
+  // ── แถบลัด: ปุ่มลอย (FAB) มุมล่างขวา เปิด modal ตัวกรอง+ไปที่หัวข้อ ──────────────
+  // โผล่เมื่อเลื่อนพ้นหัวข้อหน้า (ไม่โผล่ตั้งแต่แรก กันซ้ำกับตัวกรองที่อยู่บนสุดอยู่แล้ว)
+  // ตำแหน่ง fixed มุมล่างขวา + safe-area ไม่ขึ้นกับความสูง/กว้างจอ ใช้ได้เหมือนกันทั้ง
+  // มือถือแนวตั้ง/แนวนอน/iPad (ต่างจาก sticky bar แบบเดิมที่ต้องคำนวณความสูง topnav)
   const headSentinelRef = React.useRef(null);
   const [condensed, setCondensed] = uS(false);
-  const [barTop, setBarTop] = uS(0);
-  const [stickyFilters, setStickyFilters] = uS(false); // กางตัวกรองเต็มในแถบ sticky (default ยุบ)
+  const [filterModalOpen, setFilterModalOpen] = uS(false);
   uE(() => {
     let ticking = false;
     const measure = () => {
       ticking = false;
       const nav = document.querySelector('.topnav');
       const navH = nav ? nav.getBoundingClientRect().height : 0;
-      setBarTop(navH);
       const sentinel = headSentinelRef.current;
       if (sentinel) setCondensed(sentinel.getBoundingClientRect().top < navH);
     };
@@ -1042,18 +1045,12 @@ function OverviewView({ data, range, setRange, role }) {
     window.addEventListener('resize', onScroll);
     return () => { window.removeEventListener('scroll', onScroll); window.removeEventListener('resize', onScroll); };
   }, []);
+  useBackHandler(filterModalOpen ? () => setFilterModalOpen(false) : null); // Android back = ปิด modal
   const [cmpSel,   setCmpSel]   = uS([]);     // explicit month selection for comparison
   const [showCmp,  setShowCmp]  = uS(false);
 
   // activeMonth: currently selected month (for "รายเดือน" mode)
   const activeMonth = selMonth || months[months.length - 1] || null;
-
-  // เลื่อนแถบเดือนไปที่เดือนที่เลือกอัตโนมัติ (เดือนล่าสุดอยู่ขวาสุด นอกจอ — ไม่งั้นหาไม่เจอ)
-  uE(() => {
-    if (range !== 'month' || !monthStripRef.current) return;
-    const el = monthStripRef.current.querySelector('[data-active="1"]');
-    if (el && el.scrollIntoView) el.scrollIntoView({ inline: 'center', block: 'nearest' });
-  }, [range, activeMonth]);
 
   // ── ตัวกรองปี (สำหรับโหมด "ทั้งปี") — เลือกดูปีใดปีหนึ่ง เช่น 2025 / 2026 ──
   const [selYear, setSelYear] = uS(null); // null = ทุกปีรวมกัน
@@ -1633,13 +1630,9 @@ function OverviewView({ data, range, setRange, role }) {
     : range === 'month' ? (activeMonth ? monthLabel(activeMonth) : "เดือนล่าสุด")
     : selYear ? `ปี ${selYear} · ${yearMonths.length} เดือน` : `${months.length} เดือนรวม`;
 
-  // ── ตัวกรอง หมวด / ปี / เดือน — โชว์เป็น "ปุ่มกดครบทุกตัว" ไม่ใช้ dropdown ──────────
-  // เดิมเป็น <select> + Seg + แถบปี/เดือนแยกอีก 2 ก้อน → ผู้ใช้ต้องเดาว่าอันไหนคุมอะไร
-  // และบน iOS ตัว select เป็น native control ที่ดูลอยแยกจากของอื่นเสมอ
-  // ตอนนี้รวมเป็นบล็อกเดียว 3 แถว แต่ละแถวเลื่อนแนวนอนได้ เห็นตัวเลือกทั้งหมดโดยไม่ต้องเปิด dropdown
-  // เลือกปีแล้วแถวเดือนจะเหลือเฉพาะเดือนของปีนั้น (เลือกปี/เดือนแยกกันชัดเจน)
-  // รับ isSticky เพื่อผูก monthStripRef กับก้อนบนสุดก้อนเดียว (เรนเดอร์ 2 ที่ ref จะชนกัน)
-  const renderFilters = (isSticky) => (
+  // ── ตัวกรอง หมวด / ปี / เดือน — โชว์เป็น "ปุ่มกดครบทุกตัว ตกบรรทัดเอง" ไม่ใช้ dropdown
+  //    และไม่ใช้ horizontal-scroll (ดูหมายเหตุที่ OvPillRow ด้านบน) ──────────────────
+  const renderFilters = () => (
     <div className="ov-filterbar">
       <OvPillRow icon="🏷️" label="หมวด">
         <OvPill on={!selCat} onClick={()=>setSelCat("")}>ทุกหมวด</OvPill>
@@ -1658,7 +1651,6 @@ function OverviewView({ data, range, setRange, role }) {
       )}
 
       <OvPillRow icon="🗓️" label="เดือน"
-        stripRef={isSticky ? null : monthStripRef}
         hint={range==='day' && !hasDailyData ? "ยังไม่มีข้อมูลรายวัน" : null}>
         <OvPill on={range==='year'} onClick={()=>setRange('year')}>ทั้งปี</OvPill>
         {hasDailyData && (
@@ -1666,7 +1658,6 @@ function OverviewView({ data, range, setRange, role }) {
         )}
         {yearMonths.map(m => (
           <OvPill key={m}
-            data-active={range==='month' && activeMonth===m ? "1" : "0"}
             on={range==='month' && activeMonth===m}
             onClick={()=>{ setSelMonth(m); setRange('month'); }}>
             {monthLabel(m)}
@@ -1676,8 +1667,8 @@ function OverviewView({ data, range, setRange, role }) {
     </div>
   );
 
-  // ── หัวข้อทั้งหมดในหน้านี้ (สำหรับปุ่มลัดกระโดด) ────────────────────────────────
-  // หน้านี้ยาวมากบนมือถือ — เลื่อนหาหัวข้อเองไม่ไหว จึงมีแถบปุ่มลัดกดไปได้ทันที
+  // ── หัวข้อทั้งหมดในหน้านี้ (สำหรับปุ่มลัดกระโดด ในโมดัลของ FAB) ──────────────────
+  // หน้านี้ยาวมากบนมือถือ — เลื่อนหาหัวข้อเองไม่ไหว จึงมีปุ่มลัดกดไปได้ทันที
   // show ต้องตรงกับเงื่อนไข render ของแต่ละ section ข้างล่าง ไม่งั้นกดแล้วไม่มีที่ให้ไป
   const ovSections = uM(() => [
     { id:"ov-kpi",      label:"📊 ตัวเลขรวม",   show:true },
@@ -1695,44 +1686,13 @@ function OverviewView({ data, range, setRange, role }) {
     { id:"ov-dead",     label:"🧊 สต๊อกตาย",     show: deadStock.count > 0 },
   ].filter(s => s.show), [role, recentIntake, forecast, yoy, months, mtoGroups, momMovers, velocity, abc, deadStock]);
 
-  const jumpBar = (
-    <div className="ov-jumpbar">
-      <span className="ov-jumpbar-label">⚡ ไปที่</span>
-      <div className="ov-jumpbar-scroll">
-        {ovSections.map(s => (
-          <button key={s.id} type="button" className="ov-jumpchip"
-            onClick={()=>ovJumpTo(s.id)}>{s.label}</button>
-        ))}
-      </div>
-    </div>
-  );
-
-  // ป้ายสรุปช่วงเวลาที่เลือกอยู่ — โชว์ในแถบ sticky (พื้นที่แคบ กางตัวกรองครบไม่ไหว)
+  // ป้ายสรุปช่วงเวลาที่เลือกอยู่ — โชว์บนปุ่ม FAB
   const periodChip = range === 'day' ? "รายวัน"
     : range === 'month' ? (activeMonth ? monthLabel(activeMonth) : "รายเดือน")
     : (selYear ? `ปี ${selYear}` : "ทุกปีรวม");
 
   return (
     <div>
-      {/* ─── แถบย่อ sticky — โผล่มาเมื่อเลื่อนพ้นหัวข้อ ─────────────────────────────
-           แถวบน = ปุ่มลัดไปแต่ละหัวข้อ (หน้านี้ยาวมาก อยู่กลางหน้าแล้วต้องกระโดดได้)
-             + ปุ่มสรุปช่วงเวลาที่เลือกอยู่ กดแล้วกางตัวกรองเต็มลงมา
-           กางเฉพาะตอนกด เพราะตัวกรอง 3 แถวสูงเกินกว่าจะปักไว้ตลอดบนจอมือถือ ─── */}
-      <div className={`overview-stickybar${condensed ? ' show' : ''}`} style={{top: barTop}} aria-hidden={!condensed}>
-        <div className="overview-stickybar-inner">
-          <div className="ov-stickyrow">
-            <button type="button"
-              className={`ov-periodbtn${stickyFilters ? " on" : ""}`}
-              onClick={()=>setStickyFilters(v=>!v)}
-              aria-expanded={stickyFilters}>
-              🔎 {periodChip}{selCat ? ` · ${selCat}` : ""} <span className="ov-caret">{stickyFilters ? "▲" : "▼"}</span>
-            </button>
-            {jumpBar}
-          </div>
-          {stickyFilters && renderFilters(true)}
-        </div>
-      </div>
-
       <div className="page-head">
         <div>
           <div className="page-title">ภาพรวมยอดขาย</div>
@@ -1753,10 +1713,10 @@ function OverviewView({ data, range, setRange, role }) {
         </div>
       </div>
 
-      {/* ตัวกรองเต็ม (หมวด/ปี/เดือน) + ปุ่มลัดหัวข้อ — กางเต็มความกว้าง ไม่เบียดกับหัวข้อหน้า */}
-      {renderFilters(false)}
-      {jumpBar}
-      {/* sentinel — จุดอ้างอิงว่าเลื่อนพ้นหัวข้อหรือยัง (วัดจาก getBoundingClientRect ใน effect ด้านบน) */}
+      {/* ตัวกรองเต็ม (หมวด/ปี/เดือน) — ปุ่มตกบรรทัดเอง เห็นตัวเลือกครบไม่ต้องเลื่อนหา
+          ใช้แบบเดียวกันทุกขนาดจอ/แนวจอ (ไม่มี layout พิเศษของมือถือ/iPad แยกกัน) */}
+      {renderFilters()}
+      {/* sentinel — จุดอ้างอิงว่าเลื่อนพ้นหัวข้อหรือยัง (คุมการโผล่ของปุ่มลอย FAB ด้านล่าง) */}
       <div ref={headSentinelRef} style={{height:1}}/>
       {selCat && (
         <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,fontSize:12,color:"var(--g-700)",background:"var(--g-50)",border:"1px solid var(--g-200)",borderRadius:20,padding:"5px 12px",width:"fit-content"}}>
@@ -1765,8 +1725,42 @@ function OverviewView({ data, range, setRange, role }) {
         </div>
       )}
 
-      {/* แถบเลือกปี/เดือนเดิม 2 ก้อนถูกยุบเข้าไปใน renderFilters แล้ว — เลือกได้ตลอดเวลา
-          ไม่ต้องสลับโหมดก่อนถึงจะเห็นตัวเลือก */}
+      {/* ─── ปุ่มลอย (FAB) มุมล่างขวา — โผล่เมื่อเลื่อนพ้นหัวข้อหน้า ─────────────────────
+           เปิด modal เดียวที่รวม "ตัวกรอง" + "ไปที่หัวข้อ" — ใช้ modal กลางจอแทน sticky
+           bar เดิม เพราะ modal (fixed inset:0 + card กลางจอ + max-height + scroll ภายใน)
+           ไม่ขึ้นกับความสูง/กว้างจอเหมือน sticky bar ที่ปักไว้ใต้ topnav — ใช้ได้เหมือนกัน
+           ทั้งมือถือแนวตั้ง (จอสูงแคบ), แนวนอน (จอเตี้ยกว้าง), และ iPad ─── */}
+      {condensed && (
+        <button type="button" className="ov-fab" onClick={()=>setFilterModalOpen(true)}>
+          🔎 <span className="ov-fab-label">{periodChip}{selCat ? ` · ${selCat}` : ""}</span>
+        </button>
+      )}
+      {filterModalOpen && (
+        <div className="ov-modal-overlay" onClick={()=>setFilterModalOpen(false)}>
+          <div className="ov-modal-card" onClick={e=>e.stopPropagation()}>
+            <div className="ov-modal-header">
+              <span>🔎 ตัวกรอง & ไปที่หัวข้อ</span>
+              <button type="button" className="ov-modal-close" onClick={()=>setFilterModalOpen(false)}>×</button>
+            </div>
+            <div className="ov-modal-body">
+              {renderFilters()}
+              {ovSections.length > 0 && (
+                <>
+                  <div className="ov-modal-section-title">⚡ ไปที่หัวข้อ</div>
+                  <div className="ov-jumplist">
+                    {ovSections.map(s => (
+                      <button key={s.id} type="button" className="ov-jumplist-item"
+                        onClick={()=>{ setFilterModalOpen(false); setTimeout(()=>ovJumpTo(s.id), 50); }}>
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div id="ov-kpi" className={`row ${role==='employee'?'row-2':'row-4'}`} style={{marginBottom: 20}}>
         {role === 'owner' && (
