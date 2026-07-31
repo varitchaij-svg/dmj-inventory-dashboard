@@ -678,6 +678,16 @@
     background: #1b5e20; border-color: #1b5e20; color: #fff; font-weight: 700;
     box-shadow: 0 2px 6px rgba(31,127,68,.25);
   }
+  .ov-pill.disabled {
+    opacity: .4; cursor: not-allowed; color: var(--muted);
+  }
+  .ov-pill.disabled:hover { background: var(--paper); border-color: var(--bdr); }
+  .ov-chevron { font-size: 10px; opacity: .8; }
+  /* หมวด: ลิสต์ที่กางลงมาเมื่อกดปุ่ม "🏷️ ทุกหมวด ▾" — เยื้องเข้ามาให้เห็นว่าเป็นลูกของปุ่มด้านบน */
+  .ov-catlist {
+    display: flex; flex-wrap: wrap; gap: 6px;
+    margin: 8px 0 0; padding: 8px 0 0 4px; border-top: 1px dashed var(--bdr);
+  }
   @media (max-width: 480px) {
     .ov-filterbar { padding: 8px; border-radius: 12px; }
     .ov-pill { padding: 7px 12px; font-size: 12px; min-height: 40px; }
