@@ -104,7 +104,25 @@ const TRACKED = [
     `const COL_PROD_QTYWH  = 8;`,
   ]},
 
+  // แจ้งเตือนในแอป: audience/read เป็นตรรกะ "ใครเห็นอะไร" — drift = คนเห็นแจ้งเตือน
+  // ของคนอื่น หรือไม่เห็นของตัวเอง โดยไม่มี error ให้จับ
+  { names: ['inappAudienceMatch'], sourceFile: 'appsscript_complete.gs', landmarks: [
+    `if (!a || a === 'all') return true;`,
+    // ไม่ landmark คำว่า var/const — ต้นทางเป็น .gs (var) ส่วน helpers.js ใช้ const ตามสไตล์ไฟล์
+    `effRole = (role === 'dev') ? 'owner' : String(role || '');`,
+    `if (kind === 'role')  return list.indexOf(effRole) >= 0 || (role === 'dev' && list.indexOf('dev') >= 0);`,
+    `if (kind === 'staff') return list.indexOf(String(staffId || '')) >= 0;`,
+  ]},
+  { names: ['inappIsRead'], sourceFile: 'appsscript_complete.gs', landmarks: [
+    `if (parts[i].trim() === String(staffId)) return true;`,
+  ]},
+
   // ── ui.jsx ──────────────────────────────────────────────────────────────
+  { names: ['notiAgo'], sourceFile: 'ui.jsx', landmarks: [
+    `if (s < 60) return "เมื่อสักครู่";`,
+    `if (m < 60) return \`\${m} นาทีที่แล้ว\`;`,
+    `if (h < 24) return \`\${h} ชม.ที่แล้ว\`;`,
+  ]},
   { names: ['fmtN'], sourceFile: 'ui.jsx', landmarks: [
     `(n == null || isNaN(n)) ? "0" : Math.round(n).toLocaleString()`,
   ]},

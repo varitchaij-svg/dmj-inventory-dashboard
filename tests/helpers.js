@@ -45,6 +45,43 @@ function monthLabel(ym) {
   return `${names[parseInt(m,10)-1] || m} ${y ? y.slice(-2) : ""}`;
 }
 
+// "2 นาทีที่แล้ว" — สำเนาจาก ui.jsx (กระดิ่งแจ้งเตือนในแอป)
+function notiAgo(ts) {
+  if (!ts) return "";
+  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (s < 60) return "เมื่อสักครู่";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} นาทีที่แล้ว`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} ชม.ที่แล้ว`;
+  return `${Math.floor(h / 24)} วันที่แล้ว`;
+}
+
+// ── จาก appsscript_complete.gs — แจ้งเตือนในแอป ──────────────────────────────
+// audience 3 รูปแบบ: "all" · "role:warehouse,owner" · "staff:ST0001,ST0002"
+// dev นับเป็น owner เสมอ (ตรงกับ viewRole ฝั่ง frontend)
+function inappAudienceMatch(audience, staffId, role) {
+  const a = String(audience || '').trim();
+  if (!a || a === 'all') return true;
+  const effRole = (role === 'dev') ? 'owner' : String(role || '');
+  const sep = a.indexOf(':');
+  if (sep < 0) return false;
+  const kind = a.slice(0, sep);
+  const list = a.slice(sep + 1).split(',').map(s => s.trim()).filter(Boolean);
+  if (kind === 'role')  return list.indexOf(effRole) >= 0 || (role === 'dev' && list.indexOf('dev') >= 0);
+  if (kind === 'staff') return list.indexOf(String(staffId || '')) >= 0;
+  return false;
+}
+
+function inappIsRead(readBy, staffId) {
+  if (!staffId) return false;
+  const parts = String(readBy || '').split(',');
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i].trim() === String(staffId)) return true;
+  }
+  return false;
+}
+
 // ── จาก views.jsx บรรทัด 1466–1489 ──────────────────────────────────────────
 function stockQty(p) {
   if (!p) return 0;
@@ -806,6 +843,7 @@ function bahtText(amount) {
 
 module.exports = {
   monthsSince, fmtN, fmtB, fmtPct, monthLabel,
+  notiAgo, inappAudienceMatch, inappIsRead,
   bahtText, readThaiInt_,
   stockQty, whQty, mtoBase, compareSku,
   COL_PROD_SKU, COL_PROD_QTYFS, COL_PROD_QTYWH,
