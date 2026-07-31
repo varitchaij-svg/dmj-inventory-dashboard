@@ -884,7 +884,11 @@ function App() {
 
   // Full payload fetch (หนัก — ใช้ตอนโหลดครั้งแรก/กด Sync)
   // retryLeft: จำนวนครั้งที่เหลือ (3→2→1→0) กัน GAS cold start หลายชั้น
-  const fetchFromSheet = usC((retryLeft) => {
+  // force=true → ใส่ `fresh=1` บังคับให้ GAS สร้าง payload ใหม่ ข้าม cache ฝั่ง server
+  // ใช้เฉพาะตอนผู้ใช้ "กดสั่งเอง" (ปุ่ม Sync / ลองใหม่) เท่านั้น
+  // ปกติ (โหลดแอป/poll/refetch หลังบันทึก) ปล่อยให้ใช้ cache ได้ — doPost เรียก invalidateCache_
+  // ทุกครั้งที่มีการแก้ข้อมูล ดังนั้น "เครื่องอื่นบันทึกแล้วเราต้องเห็น" ยังทำงานเหมือนเดิม
+  const fetchFromSheet = usC((retryLeft, force) => {
     if (fetchingRef.current) return;
     fetchingRef.current = true;
     retryLeft = (typeof retryLeft === 'number' && retryLeft >= 0) ? retryLeft : 3;
@@ -897,7 +901,8 @@ function App() {
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     // role → GAS ตัดก้อนข้อมูลที่ role นี้ไม่มีแท็บให้เปิดดูออก (ประวัติซื้อ/โอน/กราฟยอดขาย)
     // pv=2 → บอกว่าเว็บเวอร์ชันนี้อ่านยอดรายเดือนแบบย่อ (`mo`) เป็น · ไม่ส่ง = ได้รูปแบบเดิม
-    const bustUrl = sheetUrl + (sheetUrl.includes('?') ? '&' : '?') + '_t=' + Date.now() + '&fresh=1'
+    const bustUrl = sheetUrl + (sheetUrl.includes('?') ? '&' : '?') + '_t=' + Date.now()
+                  + (force ? '&fresh=1' : '')
                   + '&pv=2&role=' + encodeURIComponent(role || '');
     // ใช้ผลที่เริ่มโหลดไว้ตั้งแต่ต้นหน้า (script ใน <head> ของ HTML) — ตัดเวลา GAS
     // ออกจากคิว เพราะมันเดินขนานไปกับการ compile JSX แล้ว · ใช้ได้ครั้งเดียว
@@ -936,7 +941,7 @@ function App() {
           const delay = retryLeft === 3 ? 800 : retryLeft === 2 ? 2000 : 4000;
           const attempt = 4 - retryLeft; // 1, 2, 3
           setRetryMsg(`เชื่อมต่อช้า กำลังลองใหม่ครั้งที่ ${attempt}…`);
-          setTimeout(() => fetchFromSheet(retryLeft - 1), delay);
+          setTimeout(() => fetchFromSheet(retryLeft - 1, force), delay); // คง force ไว้ตอน retry
           return;
         }
         setRetryMsg("");
@@ -1414,7 +1419,7 @@ function App() {
       <div className="loading-screen">
         <div style={{color:"var(--dang)",fontWeight:600}}>โหลดข้อมูลไม่สำเร็จ</div>
         <div style={{color:"var(--muted)",fontSize:12}}>{error}</div>
-        <button className="btn primary" onClick={fetchFromSheet} style={{marginTop:12}}>
+        <button className="btn primary" onClick={()=>fetchFromSheet(3,true)} style={{marginTop:12}}>
           {I.refresh}<span>ลองใหม่</span>
         </button>
       </div>
@@ -1433,7 +1438,7 @@ function App() {
                 ลอง: ปิด VPN · ปิด Content Blocker ใน Safari · ปิด iCloud Private Relay · หรือเปลี่ยนมาใช้ 4G/5G
               </div>
             )}
-            <button className="btn" onClick={()=>fetchFromSheet()} style={{minHeight:44,padding:"0 24px"}}>🔄 ลองใหม่</button>
+            <button className="btn" onClick={()=>fetchFromSheet(3,true)} style={{minHeight:44,padding:"0 24px"}}>🔄 ลองใหม่</button>
           </>
         ) : (
           <>
@@ -1651,7 +1656,7 @@ function App() {
             </span>
             <button className="btn ghost" title={syncing ? "กำลัง sync..." : "Sync ใหม่"}
                     disabled={syncing}
-                    onClick={fetchFromSheet}>
+                    onClick={()=>fetchFromSheet(3,true)}>
               {syncing ? <span className="spin" style={{width:14,height:14,borderWidth:2}}/> : I.refresh}
             </button>
             {isAdminRole(role) && (
@@ -1779,7 +1784,7 @@ function App() {
         }}>
           <span>⚠️ Sync ล้มเหลว: {error}</span>
           <button className="btn ghost" style={{fontSize:12,padding:"2px 8px"}}
-                  onClick={fetchFromSheet}>ลองใหม่</button>
+                  onClick={()=>fetchFromSheet(3,true)}>ลองใหม่</button>
         </div>
       )}
 

@@ -1260,8 +1260,11 @@
       if (typeof _SHEET_URL !== 'string' || !_SHEET_URL) return;
       var role = roleHint || '';
       if (!role) { try { role = sessionStorage.getItem('dmj_role') || ''; } catch (_) {} }
+      /* ไม่ส่ง fresh=1 → ใช้ cache ฝั่ง GAS ได้ (เร็วกว่ามาก ไม่ต้อง build ใหม่ทั้ง 11 ชีต)
+         ปลอดภัยเพราะ doPost เรียก invalidateCache_ ทุกครั้งที่มีการแก้ข้อมูล — เครื่องอื่น
+         บันทึกอะไรไว้เราก็ยังเห็นทันที · ผู้ใช้กดปุ่ม Sync เองเมื่อไหร่ค่อยบังคับ fresh=1 */
       var u = _SHEET_URL + (_SHEET_URL.indexOf('?') >= 0 ? '&' : '?')
-            + '_t=' + Date.now() + '&fresh=1'
+            + '_t=' + Date.now()
             + '&pv=2&role=' + encodeURIComponent(role);
       var ctl = ('AbortController' in window) ? new AbortController() : null;
       var to  = setTimeout(function () { try { ctl && ctl.abort(); } catch (_) {} }, 35000);
