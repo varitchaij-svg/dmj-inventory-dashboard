@@ -50,6 +50,22 @@
 | POST | `/Product/AddSerialNo`                    | เพิ่ม Serial Number |
 | POST | `/Product/DeleteSerialNo`                 | ลบ Serial Number |
 
+### ⚠️ `GetProducts?keyword=` **ไม่ match แบบขึ้นต้น (prefix) กับ SKU**
+
+ทดสอบจริง 2026-07-31: ยิง `keyword=WL` คืน **0 รายการ** ทั้งที่ในระบบมีสินค้า SKU ขึ้นต้นด้วย
+`WL` อยู่ 9 ตัว (WL00001–WL00009) · แต่พอดึงสินค้าทั้งหมด (ไม่ใส่ keyword) แล้วกรอง
+`sku.startsWith('WL')` ฝั่งเราเอง เจอครบทั้ง 9 ตัว
+
+- ⇒ `keyword` ใช้ได้กับ **SKU เต็ม ๆ (exact)** หรือคำในชื่อสินค้า — **ห้ามใช้หา "สินค้าทุกตัวที่ขึ้นต้นด้วย X"**
+- ⇒ งานที่ต้องกวาดตาม prefix ให้ `fetchAllZortProducts_()` (ไม่ใส่ warehousecode = ครบทุกคลัง)
+  แล้วกรองเองฝั่งเรา — ช้ากว่า (~5,800 รายการ / 12 หน้า / ~15 วิ) แต่ได้ครบจริง
+- ตัวอย่างการใช้: `debugFindMissingSkusByPrefix()` ใน `appsscript_complete.gs`
+- **กับดัก**: ถ้าเชื่อผล `keyword` ตรง ๆ จะสรุปผิดว่า "สินค้าไม่มีใน ZORT" ทั้งที่มีอยู่จริง
+  (เคยพาไปหาผิดทางมาแล้ว — ของจริงบั๊กอยู่ที่ฝั่งเราคำนวณ `qty` ไม่รีเฟรช ไม่ใช่ ZORT ไม่มีของ)
+
+> `fetchAllZortProducts_(warehousecode)` ถ้าใส่ `warehousecode` จะได้เฉพาะสินค้าในคลังนั้น —
+> `syncNewProductsFromZort` ดึงแค่ `WH_SAI5`/`WH_FRONTSTORE` ⇒ สินค้าที่อยู่คลังอื่นจะไม่ถูกดึงเข้าระบบเลย
+
 ---
 
 ## 🏭 WAREHOUSE
