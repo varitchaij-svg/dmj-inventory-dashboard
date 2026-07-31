@@ -8997,7 +8997,41 @@ function SupplierSearch({ value, onChange, allSuppliers }) {
   );
 }
 // ─── Memoized FrontStore Card ───
-const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty, onImageClick, onOpenCalc, onOrder }) {
+// ⭐ ป้าย "ใครดูแลสินค้าตัวนี้" — วางทับมุมขวาบนของรูป
+// เป็นป้ายบอกเฉย ๆ ไม่ได้จำกัดสิทธิ์อะไร ทุกคนยังหยิบ/สั่ง/เช็คสินค้าทุกตัวได้เหมือนเดิม
+// owner = null (ยังไม่มีคนดูแล) | {staffId, name}
+function OwnerStar({ owner, isMine, onToggle }) {
+  if (!onToggle) return null;                 // ระบบยังไม่เปิด (PRODUCT_OWNER_ENABLED) → ไม่ต้องโชว์
+  const initial = owner && owner.name ? owner.name.trim().charAt(0) : "";
+  const label = isMine ? "สินค้าที่ฉันดูแล (แตะเพื่อเอาออก)"
+    : owner ? `${owner.name} ดูแลอยู่` : "ยังไม่มีคนดูแล — แตะเพื่อรับดูแล";
+  return (
+    <button title={label} aria-label={label}
+      onClick={(e) => { e.stopPropagation(); onToggle(); }}
+      style={{
+        position:"absolute", top:6, right:6, minWidth:34, height:34, padding:"0 6px",
+        borderRadius:17, cursor:"pointer", fontFamily:"inherit", lineHeight:1,
+        display:"flex", alignItems:"center", justifyContent:"center", gap:3,
+        border: isMine ? "1.5px solid #f59e0b" : "1.5px solid rgba(0,0,0,.12)",
+        background: isMine ? "#fef3c7" : "rgba(255,255,255,.92)",
+        boxShadow:"0 1px 4px rgba(0,0,0,.15)",
+        fontSize: isMine ? 16 : 14, fontWeight:800,
+        color: isMine ? "#b45309" : "var(--muted)",
+      }}>
+      {isMine ? "⭐" : owner ? (
+        <>
+          <span style={{fontSize:12}}>👤</span>
+          <span style={{fontSize:11,maxWidth:52,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+            {initial || "?"}
+          </span>
+        </>
+      ) : "☆"}
+    </button>
+  );
+}
+
+const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty, onImageClick, onOpenCalc, onOrder,
+                                            owner, isMine, onToggleOwner }) {
   const sysStore  = p.qtyStore ?? 0;
   const wh        = p.qtyWH ?? 0;
   const hasVal    = val !== "" && val != null;
@@ -9040,6 +9074,7 @@ const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty
                        display:"flex",alignItems:"center",justifyContent:"center",
                        fontSize:48,color:"var(--g-300)"}}>📦</div>
         )}
+        <OwnerStar owner={owner} isMine={isMine} onToggle={onToggleOwner}/>
         {p.imageUrl && p.color && (
           <span style={{position:"absolute",bottom:8,right:8,width:12,height:12,
                         borderRadius:"50%",background:p.color.hex,
@@ -9063,6 +9098,12 @@ const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty
         {(p.lastSupplier || p.vendor) && (
           <div style={{fontSize:10,color:"var(--muted)",marginTop:3}}>
             🏪 {p.lastSupplier || p.vendor}
+          </div>
+        )}
+        {onToggleOwner && owner && (
+          <div style={{fontSize:10,marginTop:3,fontWeight:700,
+                       color: isMine ? "#b45309" : "var(--muted)"}}>
+            ⭐ {isMine ? "ฉันดูแล" : `ดูแลโดย ${owner.name || "-"}`}
           </div>
         )}
       </div>
