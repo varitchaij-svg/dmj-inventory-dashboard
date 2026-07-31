@@ -81,9 +81,12 @@
       // จะทำให้ checkMe() ลบ dmj_session_token ทิ้งแล้วเด้งไปหน้าล็อกอิน (ของจริงไม่เป็นแบบนั้น)
       // ผลข้างเคียงที่เคยมองไม่เห็น: ทุกอย่างที่ต้องใช้ token (เช่นกระดิ่งแจ้งเตือน) ไม่เคยถูกทดสอบเลย
       if (action === 'me') {
+        // ⚠️ staffId ต้องเป็น 'STF001' ให้ตรงกับที่ seed ไว้ข้างบน + assigneeId ใน fixture.js
+        // เพราะ applyStaffSession() (app.jsx) **เขียนทับ** window._currentStaffId ด้วยค่าจากตรงนี้
+        // ใส่เลขอื่นเมื่อไหร่ MyJobsCard ("งานของฉัน") จะหางานของตัวเองไม่เจอแล้วคืน null เงียบ ๆ
         return Promise.resolve(new Response(JSON.stringify({
           ok: true,
-          staff: { staffId: 'S001', name: 'ทดสอบ ระบบ', role: role, status: 'active', pictureUrl: '' },
+          staff: { staffId: 'STF001', name: 'ทดสอบ ระบบ', role: role, status: 'active', pictureUrl: '' },
         }), { headers: { 'Content-Type': 'application/json' } }));
       }
       const att = window.__DMJ_ATT_FIXTURE || {};
