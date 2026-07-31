@@ -1096,17 +1096,25 @@
          (โดยเฉพาะ PWA มือถือที่พนักงานเปิด-ปิดทุกกะ) → แทบทุกครั้งที่เปิดแอปจริง
          จะไม่มี role ค้างเลย ถ้าไม่เรียกตอนกดเลือกตำแหน่งด้วย prefetch จะไม่ทำงาน
          แทบทุกครั้ง (ตรงตามที่ผู้ใช้แจ้ง: "กดเลือกตำแหน่งแล้วโหลดนาน")
-         ข้อมูลที่ endpoint นี้คืนไม่ได้ผูกกับ role (payload เดียวกันทุกคน)
-         จึงยิงได้ทันทีโดยไม่ต้องรอรู้ role จริงก่อน — ให้เวลา GAS ซ้อนทับกับเวลา
-         ที่ผู้ใช้กำลังพิมพ์/ยืนยัน PIN (กรณี owner) */
-  window._prefetchData = function () {
+         payload ผูกกับ role แล้ว (GAS ตัดก้อนที่ role นั้นไม่มีแท็บให้เปิดออก) — แต่ทั้งสอง
+         จังหวะข้างบนรู้ role อยู่แล้วทั้งคู่ ((ก) อ่านจาก sessionStorage, (ข) เพิ่งกดเลือก)
+         จึงยังยิงได้เร็วเท่าเดิม ให้เวลา GAS ซ้อนทับกับเวลาที่ผู้ใช้พิมพ์/ยืนยัน PIN
+         ⚠️ ถ้า role ยังไม่รู้จริง ๆ จะไม่ส่ง role ไป → GAS คืน payload เต็ม (ปลอดภัย ไม่ขาด) */
+  window._prefetchData = function (roleHint) {
     try {
       if (window._dataPrefetch) return; // กันยิงซ้ำถ้าเรียกซ้ำ
       if (typeof _SHEET_URL !== 'string' || !_SHEET_URL) return;
+      var role = roleHint || '';
+      if (!role) { try { role = sessionStorage.getItem('dmj_role') || ''; } catch (_) {} }
       var u = _SHEET_URL + (_SHEET_URL.indexOf('?') >= 0 ? '&' : '?')
-            + '_t=' + Date.now() + '&fresh=1';
+            + '_t=' + Date.now() + '&fresh=1'
+            + '&pv=2&role=' + encodeURIComponent(role);
       var ctl = ('AbortController' in window) ? new AbortController() : null;
       var to  = setTimeout(function () { try { ctl && ctl.abort(); } catch (_) {} }, 35000);
+      /* จำ role ที่ใช้ยิงไว้ด้วย — payload ผูกกับ role แล้ว ถ้าสุดท้ายผู้ใช้ล็อกอินเป็น role อื่น
+         (เช่น LINE login คืนตำแหน่งจริงจาก server ไม่ตรงกับที่ค้างใน sessionStorage)
+         ผลที่ prefetch ไว้จะ "ขาดก้อนข้อมูล" สำหรับ role ใหม่ → app.jsx ต้องทิ้งแล้วยิงใหม่ */
+      window._dataPrefetchRole = role;
       window._dataPrefetch = fetch(u, ctl ? { signal: ctl.signal } : undefined)
         .then(function (r) { clearTimeout(to); return r.json(); })
         .catch(function () { clearTimeout(to); return null; });  /* พังก็ไม่เป็นไร แอปยิงเอง */
@@ -1120,7 +1128,7 @@
          ยิงพร้อมกันตั้งแต่ตอนนี้ พอ Babel พร้อมก็ compile ได้เลยไม่ต้องรอ network */
   try {
     window._jsxPre = {};
-    ['ui.jsx', 'views-main.jsx', 'views-analytics.jsx', 'views-attendance.jsx', 'app.jsx'].forEach(function (s) {
+    ['ui.jsx', 'views-main.jsx', 'views-analytics.jsx', 'views-quote.jsx', 'views-attendance.jsx', 'app.jsx'].forEach(function (s) {
       try { window._jsxPre[s] = fetch(s); } catch (_) {}
     });
   } catch (_) {}

@@ -28,8 +28,30 @@
   sessionStorage.setItem('dmj_role', role);
   if (tab) sessionStorage.setItem('dmj_active_tab', tab); // เผื่อ app อ่าน (ไม่บังคับ)
 
+  // ── จำลองการตัด payload ตาม role แบบเดียวกับ GAS (PAYLOAD_VARIANT_DROPS_) ──
+  // ต้อง mirror ไว้ที่นี่ ไม่งั้นเทสต์จะรันด้วย payload เต็มตลอด แล้วไม่มีวันจับได้ว่า
+  // "view ของ role นี้ต้องใช้คีย์ที่ server ตัดทิ้งไป" ซึ่งคือความเสี่ยงหลักของการแยกตาม role
+  // ⚠️ แก้ PAYLOAD_VARIANT_DROPS_ ใน appsscript_complete.gs แล้วต้องอัปเดตตารางนี้ด้วย
+  var VARIANT_DROPS = {
+    full: [],
+    ops:  ['monthlyByCat', 'dailyByCat', 'dayLabels', 'purchases'],
+    lite: ['monthlyByCat', 'dailyByCat', 'dayLabels', 'purchases', 'transfers', 'transferStats'],
+  };
+  var ROLE_VARIANT = {
+    owner: 'full', dev: 'full', employee: 'ops',
+    warehouse: 'lite', frontstore: 'lite', saler: 'lite', storedevice: 'lite',
+  };
+  function shapeForRole(payload, r) {
+    var drops = VARIANT_DROPS[ROLE_VARIANT[r] || 'full'] || [];
+    if (!drops.length) return payload;
+    var out = {};
+    Object.keys(payload).forEach(function (k) { if (drops.indexOf(k) < 0) out[k] = payload[k]; });
+    return out;
+  }
+  window.__DMJ_PAYLOAD = shapeForRole(window.__DMJ_FIXTURE, role);
+
   // ── seed ข้อมูลลง localStorage เพื่อให้ loadFromStorage() render ทันที ──
-  localStorage.setItem('dmj_dashboard_data_v1', JSON.stringify(window.__DMJ_FIXTURE));
+  localStorage.setItem('dmj_dashboard_data_v1', JSON.stringify(window.__DMJ_PAYLOAD));
   localStorage.setItem('dmj_dashboard_source_v1', 'sheet');
 
   // ── stub fetch: ตัด network จริงทั้งหมด → ตอบ fixture/verifyPin ──
@@ -51,7 +73,7 @@
     }
     // GET payload
     if (/script\.google|exec|action=orders|action=getAuditLog|action=getDeadStock/.test(url) || url.indexOf('http') === 0) {
-      const payload = Object.assign({}, window.__DMJ_FIXTURE, { lastModified: Date.now() });
+      const payload = Object.assign({}, window.__DMJ_PAYLOAD, { lastModified: Date.now() });
       return Promise.resolve(new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } }));
     }
     return realFetch ? realFetch(input, init) : Promise.reject(new Error('fetch blocked in harness: ' + url));

@@ -226,16 +226,50 @@ ZORT_BASE = "https://open-api.zortout.com/v4"
 
 ## Data payload (GAS → Frontend)
 
-`data` object ที่ frontend ได้รับมีทุก field นี้สำหรับทุก role:
 ```
 data.products[]     — สินค้า (qtyWH=คลัง, qtyStore=หน้าร้าน, soldQty, soldRev ฯลฯ)
 data.orders[]       — ลำดับที่สั่งสินค้า (pending = status "รอ")
 data.shipments[]    — รายการโอนสินค้า (pending = receivedAt ว่าง/null)
-data.transfers[]    — ประวัติโอน
-data.purchases[]    — รายการซื้อ
+data.transfers[]    — ประวัติโอน            ← owner/dev/employee เท่านั้น
+data.purchases[]    — รายการซื้อ             ← owner/dev เท่านั้น
 data.mtoJobs[]      — งานจัดพิเศษ
 data.storage{}      — ตำแหน่งจัดเก็บ
+data.monthlyByCat / dailyByCat / dayLabels   ← owner/dev เท่านั้น
 ```
+
+### payload แยกตาม role + ยอดรายเดือนแบบย่อ (PERF, 2026-07-31)
+
+**1. แยกตาม role** — `PAYLOAD_VARIANT_DROPS_` / `PAYLOAD_ROLE_VARIANT_` (appsscript_complete.gs)
+GAS ตัดคีย์ที่ role นั้นไม่มีแท็บให้เปิดดูออกก่อนส่ง · 3 variant: `full` (owner/dev) ·
+`ops` (employee — ยังมี transfers เพราะมีแท็บ "โอน/ปรับ/ยกมา") · `lite` (warehouse/frontstore/
+saler/storedevice) · **role ที่ไม่รู้จัก/ไม่ส่งมา → `full` เสมอ** (ส่งเกินดีกว่าส่งขาดจนหน้าพัง)
+- frontend ส่ง `&role=` มากับ GET ทั้งใน `fetchFromSheet` (app.jsx) และ prefetch ใน `<head>`
+- ⚠️ **`products[].mo` + `monthLabels` ตัดไม่ได้ทุก role** — CategoryView (ป้าย "กำลังมาแรง")
+  และ StockView (คำนวณ "ควรสั่ง" จากเฉลี่ย 3 เดือนหลัง) ใช้ด้วย ซึ่งเกือบทุก role มีสองแท็บนี้
+- ⚠️ จะตัดคีย์เพิ่มต้อง **ไล่ดู view จริงก่อนเสมอ** ห้ามเดาจากชื่อคีย์
+- cache แยกคีย์ต่อ variant (`_cacheKeyCount_`/`_cacheKeyPart_`) · `invalidateCache_` ล้างครบทุกตัว
+  — ลืม variant ไหน = role นั้นเห็นข้อมูลเก่าค้างหลังมีคนแก้ข้อมูล (บั๊กที่หาสาเหตุยากสุด)
+- prefetch ใน `<head>` จำ role ที่ใช้ยิงไว้ที่ `window._dataPrefetchRole` — ถ้าสุดท้ายล็อกอินเป็น
+  role อื่น (LINE คืนตำแหน่งจริงจาก server) app.jsx **ทิ้งผล prefetch แล้วยิงใหม่**
+
+**2. ยอดรายเดือนแบบย่อ** — เดิมส่ง `p.monthly = [{month,qty,sales}]` ครบทุกเดือนต่อสินค้าทุกตัว
+(~39 ตัวอักษร/เดือน) ซึ่ง**โตขึ้นเองทุกเดือนไม่มีเพดาน** · ตอนนี้ส่ง
+`p.mo = [[ดัชนีเดือนใน monthLabels, qty, sales], ...]` **เฉพาะเดือนที่มียอดจริง**
+- frontend กางกลับเป็น `p.monthly` เต็มรูปแบบเดิมที่ `expandMonthlyCompact` (app.jsx)
+  → call site ทั้ง ~15 จุดไม่ต้องแก้เลย **ข้อมูลเท่าเดิมเป๊ะ ไม่ได้ตัดเดือนทิ้ง**
+- ⚠️ **ห้ามเก็บเป็นแบบย่อไว้ใช้ตรง ๆ** — view อ่าน `p.monthly` ตาม**ตำแหน่ง** ไม่ใช่ชื่อเดือน
+  (`m.slice(-3)` = 3 เดือนหลังสุด, `m.slice(0,half)` = ครึ่งแรกของช่วง) ถ้าเดือนที่ยอด 0 หายไป
+  ตัวเลข "ควรสั่ง"/"สินค้าจม" เพี้ยนแบบ**ไม่มี error ให้เห็น**
+- **มีคีย์ `mo` (แม้เป็น array ว่าง)** = สินค้ามีแถวในชีตยอดขาย → กางเป็น array ยาวเท่าจำนวนเดือน ·
+  **ไม่มีคีย์ `mo` เลย** = ไม่มีข้อมูลขาย → ไม่สร้าง `p.monthly` (OverviewView ใช้แยกสองกรณีนี้)
+- **`pv=2`** = client บอกว่าอ่านรูปแบบย่อเป็น · **ไม่ส่ง pv → GAS คืนรูปแบบเดิม (dense)**
+  จำเป็นเพราะ `.jsx` ใช้ stale-while-revalidate (service-worker.js) → **โหลดแรกหลัง deploy
+  ยังรันโค้ดเก่า** ถ้าเปลี่ยนรูปแบบทันทีทุกคน เครื่องที่ยังเก่าจะได้ตัวเลขเพี้ยนเงียบ ๆ
+  · ลบ `expandMonthlyForLegacy_` + `pv` ทิ้งได้เมื่อมั่นใจว่าไม่มีเครื่องค้างโค้ดเก่าแล้ว (~1-2 สัปดาห์)
+- วัดผลจริงได้ที่ Executions log — `logPayloadSizes_` พิมพ์ขนาดแต่ละก้อน + ขนาด `products[].mo`
+- เทสต์: `tests/payload-variant.test.js` (eval ฟังก์ชันจริงจาก `.gs` ไม่ copy — เหมือน auth.test.js)
+  + `tests/monthly-compact.test.js` · `tests/browser/harness.html` **mirror ตารางการตัดไว้** และมี
+  meta-test บังคับให้ตรงกับ `.gs` (ไม่ตรง = เทสต์ browser รันด้วย payload ผิดชุดแล้วเคลมว่าผ่าน)
 
 ## Conflict detection
 

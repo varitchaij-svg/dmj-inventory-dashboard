@@ -2120,8 +2120,11 @@ function doGet(e) {
     // หมายเหตุ: lastModified อ่านสด ๆ เสมอแม้ serve จาก cache
     //           เพื่อให้ conflict detection ฝั่ง client ทำงานได้จริง
     const wantFresh = e && e.parameter && e.parameter.fresh === '1';
+    const variant = payloadVariantForRole_(e && e.parameter && e.parameter.role);
+    const enc     = payloadEncodingForRequest_(e);
+    const cacheVariant = payloadCacheVariant_(variant, enc);
     if (!wantFresh) {
-      const cached = getCachedPayload_();
+      const cached = getCachedPayload_(cacheVariant);
       if (cached) {
         // แทรก lastModified สด ๆ ลงใน cached payload ก่อน return
         // แทนที่ค่าใน JSON string ตรง ๆ เพื่อความเร็ว (ไม่ parse ทั้งก้อน)
@@ -2134,9 +2137,22 @@ function doGet(e) {
       }
     }
 
+    // build ครั้งเดียว (แพงสุดในเส้นทาง) แล้วแตกเป็นทุก variant เก็บ cache ให้ครบในรอบเดียว
+    // ถ้าเก็บเฉพาะ variant ที่ขอ role อื่นที่มาทีหลังจะ miss แล้ว build ใหม่ทั้งก้อนอีกรอบ
     const data = buildFullData_();
-    const out = JSON.stringify(data);
-    putCachedPayload_(out); // เก็บ cache สำหรับ request ถัดไป
+    let out = null;
+    PAYLOAD_VARIANTS_.forEach(function (v) {
+      const s = JSON.stringify(shapePayloadForVariant_(data, v));
+      putCachedPayload_(s, payloadCacheVariant_(v, 2));
+      if (v === variant && enc === 2) out = s;
+    });
+    // client เวอร์ชันเก่า (ไม่ส่ง pv) — กางกลับเป็นรูปแบบเดิมแล้ว cache แยกคีย์
+    // ทำเฉพาะ variant ที่ถูกขอจริง ไม่ทำเผื่อทุกตัว เพราะเป็นทางผ่านชั่วคราวช่วง deploy เท่านั้น
+    if (out == null) {
+      out = JSON.stringify(shapePayloadForVariant_(expandMonthlyForLegacy_(data), variant));
+      putCachedPayload_(out, cacheVariant);
+    }
+    logPayloadSizes_(data, cacheVariant, out.length);
     return ContentService.createTextOutput(out)
       .setMimeType(ContentService.MimeType.JSON);
   } catch (error) {
@@ -2234,11 +2250,23 @@ function buildFullData_() {
 
       const m = monthly.perSku[p.sku] || monthly.perSku[skuU];
       if (m) {
-        p.monthly = monthly.monthLabels.map(ml => ({
-          month: ml,
-          qty:   (m.months[ml] || {}).qty   || 0,
-          sales: (m.months[ml] || {}).sales || 0,
-        }));
+        // ── PERF: ส่งยอดรายเดือนแบบย่อ `mo` แทน array เต็ม `monthly` ──
+        // เดิมส่ง {month:"07/2026",qty:0,sales:0} ครบทุกเดือนต่อสินค้าทุกตัว (~39 ตัวอักษร/เดือน)
+        // สินค้า 5,600 ตัว × เดือนสะสมตั้งแต่เปิดร้าน = payload หลาย MB และ**โตขึ้นทุกเดือน**
+        // ทั้งที่ส่วนใหญ่เป็นเลข 0 (สินค้าหนึ่งตัวขายจริงไม่กี่เดือน)
+        // ใหม่: [ดัชนีเดือนใน monthLabels, qty, sales] เฉพาะเดือนที่มียอดจริง (~10 ตัวอักษร)
+        // → frontend กางกลับเป็น `p.monthly` เต็มรูปแบบเดิมใน enrichData (ข้อมูลเท่าเดิมเป๊ะ)
+        // ⚠️ ต้องส่ง `mo` เสมอแม้เป็น array ว่าง — การ "มีคีย์ mo" = สินค้าตัวนี้มีแถวในชีตยอดขาย
+        //    ซึ่ง OverviewView ใช้แยก "ไม่มีข้อมูลขาย" ออกจาก "มีข้อมูลแต่ขายไม่ได้" (p.monthly.length)
+        const mo = [];
+        for (let mi = 0; mi < monthly.monthLabels.length; mi++) {
+          const cell = m.months[monthly.monthLabels[mi]];
+          if (!cell) continue;
+          const q = cell.qty || 0, s = cell.sales || 0;
+          if (q === 0 && s === 0) continue;
+          mo.push([mi, q, s]);
+        }
+        p.mo = mo;
         p.soldQty = m.totalQty;
         p.soldRev = m.totalRev;
         if (m.totalQty > 0 && p.price <= 0) p.price = m.totalRev / m.totalQty;
@@ -9045,10 +9073,117 @@ const _CACHE_TTL_SEC   = 180;     // 3 นาที (เพิ่มเป็น
 const _CACHE_CHUNK_LEN = 30000;   // อักขระต่อ chunk (Thai 3 ไบต์ → ~90KB ปลอดภัย)
 const _CACHE_KEY_COUNT = 'dmj_payload_n';
 const _CACHE_KEY_PART  = 'dmj_payload_';
+// PERF: payload แยกตาม role แล้ว → cache ต้องแยกคีย์ต่อ variant ด้วย
+// ไม่งั้น warehouse ที่มาก่อนจะ cache ก้อนที่ตัดแล้วทับ แล้ว owner ที่มาทีหลังได้ข้อมูลขาด
+// (variant 'full' คงคีย์เดิมไว้ — ของที่ cache ไว้ก่อน deploy ยังใช้ได้ ไม่ต้องรอ cache อุ่นใหม่)
+const PAYLOAD_VARIANTS_ = ['full', 'ops', 'lite'];
+function _cacheKeyCount_(variant) {
+  return (!variant || variant === 'full') ? _CACHE_KEY_COUNT : _CACHE_KEY_COUNT + '_' + variant;
+}
+function _cacheKeyPart_(variant) {
+  return (!variant || variant === 'full') ? _CACHE_KEY_PART : _CACHE_KEY_PART + variant + '_';
+}
 
-function getCachedPayload_() {
+// ───────────────────────────────────────────────────────────
+// PERF: payload ต่อ role — ส่งเฉพาะก้อนที่ role นั้นเปิดดูได้จริง
+// ───────────────────────────────────────────────────────────
+// ที่มา: ไล่ดูจริงว่าแต่ละก้อนถูกใช้ใน view ไหน แล้วเทียบกับ ROLE_TABS (app.jsx)
+//   monthlyByCat/dailyByCat/dayLabels → OverviewView, UploadView, MarginView, SeasonView
+//   purchases                         → OverviewView, CustomerView, MarginView
+//   transfers/transferStats           → TransferView (แท็บ "transfers")
+// ⚠️ `products[].mo` (ยอดรายเดือน) **ตัดไม่ได้ทุก role** — CategoryView (ป้าย "กำลังมาแรง")
+//    และ StockView (คำนวณ "ควรสั่ง" จากเฉลี่ย 3 เดือนหลัง) ใช้ด้วย ซึ่งเกือบทุก role มีสองแท็บนี้
+//    เช่นเดียวกับ monthLabels ที่เป็นฐานดัชนีของ `mo` — ต้องส่งเสมอ
+// ⚠️ ตัดเพิ่มทีหลังต้องไล่ดู view จริงก่อนเสมอ ห้ามเดาจากชื่อคีย์ (เคยพลาดมาแล้วตอนเฟส 4 ล็อกอิน)
+const PAYLOAD_VARIANT_DROPS_ = {
+  full: [],                                                     // owner/dev — เห็นทุกแท็บ ต้องได้ครบ
+  ops:  ['monthlyByCat', 'dailyByCat', 'dayLabels', 'purchases'],           // employee — มีแท็บ transfers
+  lite: ['monthlyByCat', 'dailyByCat', 'dayLabels', 'purchases',
+         'transfers', 'transferStats'],                         // warehouse/frontstore/saler/storedevice
+};
+// role → variant · role แปลก/ไม่ส่งมา = full เสมอ (ไม่รู้จักแล้วส่งครบ ปลอดภัยกว่าส่งขาดจนหน้าพัง)
+const PAYLOAD_ROLE_VARIANT_ = {
+  owner: 'full', dev: 'full',
+  employee: 'ops',
+  warehouse: 'lite', frontstore: 'lite', saler: 'lite', storedevice: 'lite',
+};
+// หมายเหตุความปลอดภัย: อ่าน role จาก query param ตรง ๆ (ไม่ verify session) โดยตั้งใจ —
+// การ verify ต้องสแกนชีต "เซสชัน" ทุก request ซึ่งเพิ่มเวลาให้กับสิ่งที่กำลังพยายามทำให้เร็วขึ้น
+// และตัวนี้เป็นแค่ "ตัดของที่ไม่ได้ใช้ออก" ไม่ใช่ประตูความปลอดภัย — ปลอมเป็น owner ก็ได้ข้อมูล
+// เท่าที่ทุกคนเคยได้อยู่แล้วก่อนหน้านี้ (ไม่เปิดช่องใหม่) · ของที่ต้องกันจริงยังกันที่ endpoint ของมันเอง
+// วัดขนาดจริงของแต่ละก้อนใน payload → ดูที่ Executions log
+// มีไว้เพราะ "เดาว่าอะไรหนัก" คือวิธีที่ทำให้จูนผิดจุด — ตัวเลขจริงบอกได้ว่าควรไปต่อตรงไหน
+// รันเฉพาะตอน cache miss (ไม่กี่ครั้งต่อชั่วโมง) และ JSON.stringify ต่อคีย์ก็ไม่ได้แพงเทียบกับ build
+function logPayloadSizes_(data, variant, sentLen) {
+  try {
+    const parts = Object.keys(data).map(function (k) {
+      let n = 0;
+      try { n = JSON.stringify(data[k]).length; } catch (e) {}
+      return { k: k, n: n };
+    }).sort(function (a, b) { return b.n - a.n; }).slice(0, 8);
+    // ยอดรายเดือนแยกออกมาดูต่างหาก — เป็นก้อนที่โตขึ้นเองทุกเดือน ต้องจับตา
+    let moLen = 0, moRows = 0;
+    (data.products || []).forEach(function (p) {
+      if (!p.mo) return;
+      moLen += JSON.stringify(p.mo).length;
+      moRows += p.mo.length;
+    });
+    Logger.log('[perf] payload variant=' + variant + ' ส่งจริง=' + Math.round(sentLen / 1024) + 'KB · '
+      + parts.map(function (x) { return x.k + '=' + Math.round(x.n / 1024) + 'KB'; }).join(' ')
+      + ' · products[].mo=' + Math.round(moLen / 1024) + 'KB (' + moRows + ' แถว)');
+  } catch (e) {}
+}
+
+function payloadVariantForRole_(role) {
+  return PAYLOAD_ROLE_VARIANT_[String(role || '').trim()] || 'full';
+}
+
+// ── payload version (pv) — กันช่วงเปลี่ยนผ่านตอน deploy ──
+// `.jsx` ฝั่งเว็บใช้ stale-while-revalidate (ดู service-worker.js) → **โหลดแรกหลัง deploy
+// ยังได้โค้ดเก่า** ถ้าเปลี่ยนรูปแบบ payload ทันทีทุกคน เครื่องที่ยังรันโค้ดเก่าจะอ่าน `mo` ไม่เป็น
+// → p.monthly ว่าง → "ควรสั่ง"/"กำลังมาแรง" เพี้ยนเงียบ ๆ โดยไม่มี error ให้เห็น (อันตรายกว่าพังดัง ๆ)
+// จึงให้ client บอกเวอร์ชันที่ตัวเองอ่านได้มาเอง: ไม่ส่ง pv = ของเดิม (dense) เป๊ะทุกประการ
+// ลบทิ้งได้เมื่อมั่นใจว่าไม่มีเครื่องไหนค้างโค้ดเก่าแล้ว (ราว 1-2 สัปดาห์หลัง deploy)
+function payloadEncodingForRequest_(e) {
+  return (e && e.parameter && String(e.parameter.pv) === '2') ? 2 : 1;
+}
+// กาง `mo` (ย่อ) กลับเป็น `monthly` (เต็ม) ให้ client เวอร์ชันเก่า — ผลลัพธ์เท่าของเดิมเป๊ะ
+function expandMonthlyForLegacy_(data) {
+  const labels = data.monthLabels || [];
+  const out = {};
+  Object.keys(data).forEach(function (k) { out[k] = data[k]; });
+  out.products = (data.products || []).map(function (p) {
+    if (!p.mo) return p;
+    const q = {};
+    Object.keys(p).forEach(function (k) { if (k !== 'mo') q[k] = p[k]; });
+    const dense = labels.map(function (ml) { return { month: ml, qty: 0, sales: 0 }; });
+    p.mo.forEach(function (row) {
+      const cell = dense[row[0]];
+      if (cell) { cell.qty = row[1]; cell.sales = row[2]; }
+    });
+    q.monthly = dense;
+    return q;
+  });
+  return out;
+}
+// คีย์ cache ต้องแยกทั้งตาม role และตามเวอร์ชันการเข้ารหัส ไม่งั้นเสิร์ฟข้ามกันแล้วพัง
+function payloadCacheVariant_(variant, enc) {
+  return enc === 2 ? variant : variant + '_v1';
+}
+// คืน payload ที่ตัดคีย์ตาม variant แล้ว — ไม่แตะ object เดิม (ผู้เรียกยังเอา full ไปใช้ต่อได้)
+function shapePayloadForVariant_(data, variant) {
+  const drops = PAYLOAD_VARIANT_DROPS_[variant] || [];
+  if (!drops.length) return data;
+  const out = {};
+  Object.keys(data).forEach(function (k) { if (drops.indexOf(k) < 0) out[k] = data[k]; });
+  return out;
+}
+
+function getCachedPayload_(variant) {
   try {
     const c = CacheService.getScriptCache();
+    const _CACHE_KEY_COUNT = _cacheKeyCount_(variant);
+    const _CACHE_KEY_PART  = _cacheKeyPart_(variant);
     const nStr = c.get(_CACHE_KEY_COUNT);
     if (!nStr) return null;
     const n = parseInt(nStr, 10);
@@ -9066,9 +9201,11 @@ function getCachedPayload_() {
   } catch (err) { return null; }
 }
 
-function putCachedPayload_(str) {
+function putCachedPayload_(str, variant) {
   try {
     const c = CacheService.getScriptCache();
+    const _CACHE_KEY_COUNT = _cacheKeyCount_(variant);
+    const _CACHE_KEY_PART  = _cacheKeyPart_(variant);
     const entries = {};
     let n = 0;
     for (let i = 0; i < str.length; i += _CACHE_CHUNK_LEN) {
@@ -9083,11 +9220,21 @@ function putCachedPayload_(str) {
 function invalidateCache_(skipTsUpdate) {
   try {
     const c = CacheService.getScriptCache();
-    const nStr = c.get(_CACHE_KEY_COUNT);
-    const n = nStr ? parseInt(nStr, 10) : 0;
-    const keys = [_CACHE_KEY_COUNT];
-    for (let i = 0; i < n; i++) keys.push(_CACHE_KEY_PART + i);
-    c.removeAll(keys);
+    // ล้างทุก variant × ทุกเวอร์ชันการเข้ารหัส — ลืมคีย์ไหนไว้ = role นั้นเห็นข้อมูลเก่าค้าง
+    // หลังมีคนแก้ข้อมูล (บั๊กแบบที่หาสาเหตุยากที่สุด เพราะเห็นไม่ตรงกันเฉพาะบางเครื่อง)
+    const keys = [];
+    const allCacheVariants = [];
+    PAYLOAD_VARIANTS_.forEach(function (v) {
+      allCacheVariants.push(payloadCacheVariant_(v, 2), payloadCacheVariant_(v, 1));
+    });
+    allCacheVariants.forEach(function (v) {
+      const kCount = _cacheKeyCount_(v), kPart = _cacheKeyPart_(v);
+      const nStr = c.get(kCount);
+      const n = nStr ? parseInt(nStr, 10) : 0;
+      keys.push(kCount);
+      for (let i = 0; i < n; i++) keys.push(kPart + i);
+    });
+    if (keys.length) c.removeAll(keys);
   } catch (err) { /* ignore */ }
   if (!skipTsUpdate) {
     // บันทึก timestamp การเขียนล่าสุดลง Script Properties (ไม่ผ่าน CacheService)

@@ -378,9 +378,11 @@ function LegacyLoginScreen({ onLogin, onBack }) {
   ];
 
   const handleSelect = (p) => {
-    // ยิงขอข้อมูลตั้งแต่กดเลือกตำแหน่ง (ไม่ต้องรอ PIN/onLogin) — payload ไม่ผูกกับ role
-    // ให้เวลา GAS ซ้อนทับกับเวลาที่ผู้ใช้พิมพ์/ยืนยัน PIN แทนที่จะเริ่มนับหลัง login เสร็จ
-    try { if (typeof window !== 'undefined' && window._prefetchData) window._prefetchData(); } catch (e) {}
+    // ยิงขอข้อมูลตั้งแต่กดเลือกตำแหน่ง (ไม่ต้องรอ PIN/onLogin) — ให้เวลา GAS ซ้อนทับกับเวลา
+    // ที่ผู้ใช้พิมพ์/ยืนยัน PIN แทนที่จะเริ่มนับหลัง login เสร็จ
+    // ส่ง role ที่เพิ่งกดเข้าไปด้วย (sessionStorage ยังไม่ถูกตั้งตอนนี้) — GAS จะได้ตัดก้อนที่
+    // role นี้ไม่ได้ใช้ออกตั้งแต่ request แรก ไม่ต้องรอ fetch รอบสองหลัง login
+    try { if (typeof window !== 'undefined' && window._prefetchData) window._prefetchData(p.role); } catch (e) {}
     if (p.needPin) { setPinTarget(p); setPin(""); setErr(false); }
     else { onLogin(p.role); }
   };
@@ -562,8 +564,32 @@ function ZortBanner({ data }) {
 const LS_KEY      = "dmj_dashboard_data_v1";
 const LS_SRC_KEY  = "dmj_dashboard_source_v1"; // "upload" | "sheet"
 
+// กาง `p.mo` (รูปแบบย่อจาก GAS) กลับเป็น `p.monthly` เต็มรูปแบบเดิม
+// ทำไมต้องกางเป็น array เต็มทุกเดือน ไม่ใช่เก็บแบบย่อไว้ใช้เลย:
+// view หลายจุดตีความ p.monthly ตาม **ตำแหน่ง** ไม่ใช่ตามชื่อเดือน — StockView ใช้ `m.slice(-3)`
+// = "3 เดือนหลังสุด", TrendsView ใช้ `m.slice(0, half)` = "ครึ่งแรกของช่วงเวลา" ถ้าเก็บเฉพาะเดือน
+// ที่มียอด `slice(-3)` จะกลายเป็น "3 เดือนหลังสุดที่ขายได้" ซึ่งคนละความหมาย → ตัวเลข "ควรสั่ง"
+// และ "สินค้าจม" เพี้ยนแบบไม่มี error ให้เห็น · การย่อจึงทำแค่ตอนส่งผ่านเน็ต ไม่ใช่ตอนใช้งาน
+// (payload เก่าที่ไม่มี `mo` — เช่นข้อมูลค้างใน localStorage ก่อนอัปเดต — ปล่อยผ่านตามเดิม)
+function expandMonthlyCompact(d) {
+  if (!d || !Array.isArray(d.products)) return d;
+  const labels = d.monthLabels || [];
+  d.products.forEach(p => {
+    if (!p || !p.mo) return;
+    const dense = labels.map(ml => ({ month: ml, qty: 0, sales: 0 }));
+    p.mo.forEach(row => {
+      const cell = dense[row[0]];
+      if (cell) { cell.qty = row[1]; cell.sales = row[2]; }
+    });
+    p.monthly = dense;
+    delete p.mo;   // ไม่เก็บซ้ำสองรูปแบบ — localStorage จะบวมโดยไม่จำเป็น
+  });
+  return d;
+}
+
 function enrichData(d) {
   if (!d || !Array.isArray(d.products)) return d;
+  expandMonthlyCompact(d);
   // Normalize field names from Google Sheets (category → cat, etc.)
   d.products.forEach(p => {
     if (!p.cat && p.category) p.cat = p.category;
@@ -632,7 +658,10 @@ function loadFromStorage() {
   try {
     const raw = localStorage.getItem(LS_KEY);
     if (!raw) return null;
-    return JSON.parse(raw);
+    // ปกติของที่เซฟไว้ถูกกางแล้ว (saveToStorage เรียกหลัง enrichData) — กางซ้ำที่นี่เป็นตาข่ายกันพลาด
+    // เผื่อมีเส้นทางไหนเซฟข้อมูลดิบลงไป จะได้ไม่กลายเป็น "กราฟว่างเงียบ ๆ" ที่ไล่หาสาเหตุยาก
+    // (ไม่มีคีย์ `mo` = ไม่ทำอะไรเลย จึงไม่มีต้นทุนกับข้อมูลที่กางแล้ว)
+    return expandMonthlyCompact(JSON.parse(raw));
   } catch (e) { return null; }
 }
 
@@ -866,13 +895,19 @@ function App() {
     // retry ถัดไป: 20s (GAS warm แล้ว ควรตอบ < 5s)
     const timeoutMs = retryLeft === 3 ? 35000 : 20000;
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
-    const bustUrl = sheetUrl + (sheetUrl.includes('?') ? '&' : '?') + '_t=' + Date.now() + '&fresh=1';
+    // role → GAS ตัดก้อนข้อมูลที่ role นี้ไม่มีแท็บให้เปิดดูออก (ประวัติซื้อ/โอน/กราฟยอดขาย)
+    // pv=2 → บอกว่าเว็บเวอร์ชันนี้อ่านยอดรายเดือนแบบย่อ (`mo`) เป็น · ไม่ส่ง = ได้รูปแบบเดิม
+    const bustUrl = sheetUrl + (sheetUrl.includes('?') ? '&' : '?') + '_t=' + Date.now() + '&fresh=1'
+                  + '&pv=2&role=' + encodeURIComponent(role || '');
     // ใช้ผลที่เริ่มโหลดไว้ตั้งแต่ต้นหน้า (script ใน <head> ของ HTML) — ตัดเวลา GAS
     // ออกจากคิว เพราะมันเดินขนานไปกับการ compile JSX แล้ว · ใช้ได้ครั้งเดียว
     // (เฉพาะ attempt แรก) การ refetch/retry ทุกครั้งหลังจากนี้ยิงใหม่เสมอ = ได้ข้อมูลสด
     let prefetched = null;
     if (retryLeft === 3 && typeof window !== 'undefined' && window._dataPrefetch) {
-      prefetched = window._dataPrefetch;
+      // ใช้ผล prefetch ได้เฉพาะเมื่อยิงด้วย role เดียวกับที่ล็อกอินจริง — payload ผูกกับ role แล้ว
+      // ถ้า role ไม่ตรง ก้อนที่ prefetch มาอาจขาดข้อมูลที่ role นี้ต้องใช้ (เช่น owner ได้ก้อนของ
+      // saler มาแล้วหน้าภาพรวมไม่มีกราฟ) → ทิ้งแล้วยิงใหม่ ช้ากว่านิดเดียวแต่ข้อมูลไม่ขาด
+      if ((window._dataPrefetchRole || '') === (role || '')) prefetched = window._dataPrefetch;
       window._dataPrefetch = null;
     }
     (prefetched
@@ -910,7 +945,9 @@ function App() {
         setSyncing(false);
       })
       .finally(() => { fetchingRef.current = false; clearTimeout(timeout); if (!controller.signal.aborted) setSyncing(false); });
-  }, [sheetUrl]);
+    // role อยู่ใน deps เพราะถูกใช้ประกอบ URL แล้ว — ถ้าไม่ใส่ จะค้าง role ตอน mount (null)
+    // แล้วยิงขอ payload ผิด variant ตลอดทั้ง session หลังผู้ใช้ล็อกอิน
+  }, [sheetUrl, role]);
 
   // Lightweight fetch: ดึงเฉพาะรายการสั่งของ (เบา/เร็ว) — ใช้ polling หน้า orders จะได้ไม่โหลดทั้งก้อน
   const fetchOrdersOnly = usC(() => {

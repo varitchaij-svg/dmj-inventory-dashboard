@@ -13,9 +13,12 @@
   const months = [5, 4, 3, 2, 1, 0].map(monthKey);
   const monthLabels = months.slice();
 
-  function monthly(base) {
-    // สร้าง series 6 เดือน มี qty/sales เพิ่มขึ้นเรื่อย ๆ (มีเทรนด์ให้ chart วาด)
-    return months.map((m, i) => ({ month: m, qty: base + i * 3, sales: (base + i * 3) * 100 }));
+  // ยอดรายเดือนแบบ "ย่อ" แบบเดียวกับที่ GAS ส่งจริง: [ดัชนีเดือนใน monthLabels, qty, sales]
+  // ตั้งใจใช้รูปแบบย่อในฟิกซ์เจอร์ เพื่อให้เทสต์เดินผ่านโค้ดกาง (expandMonthlyCompact) จริง
+  // ถ้าใส่เป็น monthly เต็มไว้ เทสต์จะผ่านแม้โค้ดกางพัง = คุมไม่ได้จริง
+  function monthlyCompact(base) {
+    // series 6 เดือน qty/sales เพิ่มขึ้นเรื่อย ๆ (มีเทรนด์ให้ chart วาด)
+    return months.map((m, i) => [i, base + i * 3, (base + i * 3) * 100]);
   }
 
   const products = [
@@ -24,25 +27,25 @@
       qty: 40, qtyStore: 15, qtyWH: 25, price: 250, soldQty: 60, soldRev: 15000,
       isMTO: false, imageUrl: '', vendor: 'ACME', lastSupplier: 'ACME',
       lastStockInDate: monthKey(1).split('/').reverse().join('-') + '-01',
-      threshold: 36, monthly: monthly(8),
+      threshold: 36, mo: monthlyCompact(8),
     },
     {
       sku: 'FLW002', name: 'ดอกไม้ประดิษฐ์ สีแดง', cat: 'ดอกไม้', tag: 'BLOOM',
       qty: 8, qtyStore: 3, qtyWH: 5, price: 120, soldQty: 90, soldRev: 10800,
       isMTO: false, imageUrl: '', vendor: 'BLOOM', lastSupplier: 'BLOOM',
       lastStockInDate: monthKey(2).split('/').reverse().join('-') + '-15',
-      threshold: 36, monthly: monthly(12),
+      threshold: 36, mo: monthlyCompact(12),
     },
     {
       sku: 'DEC003', name: 'ของตกแต่งเรซิ่น รูปนก', cat: 'เรซิ่นและอื่นๆ', tag: 'CRAFT',
       qty: 120, qtyStore: 100, qtyWH: 20, price: 80, soldQty: 4, soldRev: 320,
       isMTO: false, imageUrl: '', vendor: 'CRAFT', lastSupplier: 'CRAFT',
-      lastStockInDate: '2024-01-01', threshold: 36, monthly: monthly(1),
+      lastStockInDate: '2024-01-01', threshold: 36, mo: monthlyCompact(1),
     },
     {
       sku: 'MTO900', name: 'จัดช่อพิเศษ #1 งานแต่ง', cat: 'งานพิเศษ', tag: '',
       qty: 0, qtyStore: 0, qtyWH: 0, price: 1500, soldQty: 5, soldRev: 7500,
-      isMTO: true, imageUrl: '', monthly: monthly(2),
+      isMTO: true, imageUrl: '', mo: monthlyCompact(2),
     },
   ];
 
