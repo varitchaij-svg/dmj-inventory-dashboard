@@ -53,6 +53,8 @@
   // ── seed ข้อมูลลง localStorage เพื่อให้ loadFromStorage() render ทันที ──
   localStorage.setItem('dmj_dashboard_data_v1', JSON.stringify(window.__DMJ_PAYLOAD));
   localStorage.setItem('dmj_dashboard_source_v1', 'sheet');
+  // กระดิ่งแจ้งเตือนยิง GET เฉพาะเมื่อมี session token — ไม่ seed = กระดิ่งไม่เคยถูกทดสอบเลย
+  localStorage.setItem('dmj_session_token', 'harness-token');
 
   // ── stub fetch: ตัด network จริงทั้งหมด → ตอบ fixture/verifyPin ──
   const realFetch = window.fetch;
@@ -67,9 +69,23 @@
     if (init && init.method === 'POST') {
       let action = '';
       try { action = (JSON.parse(body) || {}).action || ''; } catch (e) {}
+      // action=me ต้องตอบรูปแบบจริง {ok:true, staff:{...}} — ตอบ {success:true} เฉย ๆ
+      // จะทำให้ checkMe() ลบ dmj_session_token ทิ้งแล้วเด้งไปหน้าล็อกอิน (ของจริงไม่เป็นแบบนั้น)
+      // ผลข้างเคียงที่เคยมองไม่เห็น: ทุกอย่างที่ต้องใช้ token (เช่นกระดิ่งแจ้งเตือน) ไม่เคยถูกทดสอบเลย
+      if (action === 'me') {
+        return Promise.resolve(new Response(JSON.stringify({
+          ok: true,
+          staff: { staffId: 'S001', name: 'ทดสอบ ระบบ', role: role, status: 'active', pictureUrl: '' },
+        }), { headers: { 'Content-Type': 'application/json' } }));
+      }
       const att = window.__DMJ_ATT_FIXTURE || {};
       const data = Object.prototype.hasOwnProperty.call(att, action) ? att[action] : {};
       return Promise.resolve(new Response(JSON.stringify({ success: true, data: data }), { headers: { 'Content-Type': 'application/json' } }));
+    }
+    // แจ้งเตือนในแอป (กระดิ่ง) — ต้องมาก่อน branch payload รวม ไม่งั้นจะได้ payload สินค้าแทน
+    if (/action=inappNoti/.test(url)) {
+      return Promise.resolve(new Response(JSON.stringify(window.__DMJ_NOTI_FIXTURE || { ok: true, items: [], unread: 0 }),
+        { headers: { 'Content-Type': 'application/json' } }));
     }
     // GET payload
     if (/script\.google|exec|action=orders|action=getAuditLog|action=getDeadStock/.test(url) || url.indexOf('http') === 0) {

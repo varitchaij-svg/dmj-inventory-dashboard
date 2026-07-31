@@ -1668,6 +1668,9 @@ function App() {
                 {zortSyncing ? <span className="spin" style={{width:14,height:14,borderWidth:2}}/> : "⬇️"}
               </button>
             )}
+            {/* กระดิ่งแจ้งเตือนในแอป — แจ้งได้ไม่จำกัดเพราะไม่กิน quota LINE
+                แท็บปลายทางที่ role นี้ไม่มีสิทธิ์เปิด → ไม่ nav (แต่ยังกดอ่านได้ตามปกติ) */}
+            <NotiBell onNavigate={(t) => { if (allowedTabIds.includes(t)) handleSetTab(t); }}/>
             <button title={`${staff ? staff.name + " · " : ""}${ROLE_LABELS[role]} · ออกจากระบบ`}
                  onClick={() => setConfirmAction({ type: "logout" })}
                  style={{minHeight:44,minWidth:44,padding:"3px 8px",border:"none",

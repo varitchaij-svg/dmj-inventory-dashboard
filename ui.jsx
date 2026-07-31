@@ -207,12 +207,218 @@ function dmjFetch(url, opts) {
   return fetch(url, opts);
 }
 
+// ────────────── กระดิ่งแจ้งเตือนในแอป 🔔 ──────────────
+// ทำไมอยู่ในไฟล์นี้: ui.jsx เป็นไฟล์เล็กสุด (โหลดก่อนใคร) — ยัดลง views-main/analytics ที่
+// ใหญ่อยู่แล้วจะยิ่งถ่วง Babel compile time (เหตุผลเดียวกับที่แยกไฟล์ view ไว้แต่แรก)
+//
+// ขอบเขต: เห็นเฉพาะตอนเปิดแอปอยู่ — ไม่เด้งหน้าจอล็อก (ดู comment ฝั่ง .gs)
+// backend gate ด้วย INAPP_NOTI_ENABLED — ยังไม่เปิด → คืน {off:true} กระดิ่งซ่อนตัวเงียบ ๆ
+
+const NOTI_TYPE_META = {
+  order:      { emoji: "📦", color: "#1f7f44" },
+  shipment:   { emoji: "🚚", color: "#1f6f8b" },
+  stock:      { emoji: "🚨", color: "#b8341c" },
+  mto:        { emoji: "🎁", color: "#705d96" },
+  quote:      { emoji: "📄", color: "#a07417" },
+  attendance: { emoji: "⏱️", color: "#5c8a3c" },
+  system:     { emoji: "🔔", color: "#6b8a8a" },
+};
+
+// "2 นาทีที่แล้ว" — พนักงานอ่านเวลาสัมพัทธ์ง่ายกว่า timestamp เต็ม
+const notiAgo = (ts) => {
+  if (!ts) return "";
+  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (s < 60) return "เมื่อสักครู่";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} นาทีที่แล้ว`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} ชม.ที่แล้ว`;
+  return `${Math.floor(h / 24)} วันที่แล้ว`;
+};
+
+// เสียง "ติ๊ง" สั้น ๆ สร้างด้วย WebAudio — ไม่ต้องมีไฟล์เสียง (ไม่มี build step + ไม่เพิ่ม asset)
+// เบราว์เซอร์บล็อกเสียงก่อนผู้ใช้แตะจอ → ห่อ try/catch ทั้งหมด ล้มเหลวก็แค่ไม่มีเสียง
+function notiPing() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    const osc = ctx.createOscillator(), gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.35);
+    osc.start(); osc.stop(ctx.currentTime + 0.36);
+    setTimeout(() => { try { ctx.close(); } catch (e) {} }, 600);
+  } catch (e) { /* เงียบ */ }
+  try { if (navigator.vibrate) navigator.vibrate([90, 60, 90]); } catch (e) { /* เงียบ */ }
+}
+
+const NOTI_POLL_MS = 25000;
+
+function NotiBell({ onNavigate }) {
+  const [items, setItems] = useState([]);
+  const [unread, setUnread] = useState(0);
+  const [open, setOpen] = useState(false);
+  // backend ยังไม่เปิดระบบ (INAPP_NOTI_ENABLED) → ซ่อนกระดิ่งไปเลย
+  // เริ่มที่ "ซ่อน" จนกว่าจะรู้ผลจริง แล้วจำไว้ในเครื่อง — ไม่งั้นเครื่องที่ยังไม่เปิดระบบ
+  // จะเห็นกระดิ่งโผล่แล้วหายทุกครั้งที่เปิดแอป (กะพริบ) ส่วนเครื่องที่เปิดแล้วก็ต้องรอ
+  // โหลดรอบแรกทุกครั้งกว่ากระดิ่งจะขึ้น
+  const [off, setOff] = useState(() => {
+    try { return localStorage.getItem("dmj_noti_on") !== "1"; } catch (e) { return true; }
+  });
+  const prevUnread = useRef(null);             // null = ยังไม่เคยโหลด (ห้ามเด้งเสียงรอบแรก)
+  const busy = useRef(false);
+  const btnRef = useRef(null);
+  const [rect, setRect] = useState(null);      // ตำแหน่งปุ่มตอนเปิด — ใช้วาง panel ที่ portal ไป body
+
+  const base = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null;
+
+  const fetchNotis = useCallback(() => {
+    if (!base || busy.current || !navigator.onLine) return;
+    const tok = localStorage.getItem("dmj_session_token");
+    if (!tok) return;                          // ยังไม่ล็อกอิน → ไม่มีอะไรให้ดึง
+    busy.current = true;
+    const sep = base.includes('?') ? '&' : '?';
+    fetch(`${base}${sep}action=inappNoti&sessionToken=${encodeURIComponent(tok)}&_t=${Date.now()}`,
+          { cache: 'no-store' })
+      .then(r => r.json())
+      .then(d => {
+        if (!d || d.ok === false) return;
+        try { localStorage.setItem("dmj_noti_on", d.off ? "0" : "1"); } catch (e) {}
+        if (d.off) { setOff(true); return; }
+        setOff(false);
+        setItems(Array.isArray(d.items) ? d.items : []);
+        const n = Number(d.unread) || 0;
+        // เด้งเสียงเฉพาะตอน "เพิ่มขึ้นจริง" หลังโหลดรอบแรกไปแล้ว —
+        // ไม่งั้นเปิดแอปมาทีไรก็ติ๊งทุกครั้งทั้งที่ไม่มีอะไรใหม่
+        if (prevUnread.current != null && n > prevUnread.current) notiPing();
+        prevUnread.current = n;
+        setUnread(n);
+      })
+      .catch(() => {})                          // background poll — ไม่รบกวนผู้ใช้
+      .finally(() => { busy.current = false; });
+  }, [base]);
+
+  useEffect(() => {
+    fetchNotis();
+    const id = setInterval(fetchNotis, NOTI_POLL_MS);
+    // iOS แช่แข็ง timer ตอนแอปอยู่ background — ต้องดึงซ้ำตอนกลับมาด้วย
+    // (บทเรียนเดียวกับ login handoff ใน app.jsx — ห้ามพึ่ง interval อย่างเดียว)
+    const wake = () => { if (!document.hidden) fetchNotis(); };
+    document.addEventListener("visibilitychange", wake);
+    window.addEventListener("focus", wake);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", wake);
+      window.removeEventListener("focus", wake);
+    };
+  }, [fetchNotis]);
+
+  const markRead = useCallback((ids, all) => {
+    if (!base) return;
+    const body = all ? { action: "markNotiRead", all: true }
+                     : { action: "markNotiRead", ids: ids };
+    // optimistic: ทำเครื่องหมายในจอทันที ไม่รอ GAS ตอบ (ช้า 1-3 วิ กดแล้วต้องรู้สึกว่าติด)
+    setItems(prev => prev.map(it => (all || ids.indexOf(it.id) >= 0) ? { ...it, read: true } : it));
+    setUnread(prev => {
+      const n = all ? 0 : Math.max(0, prev - ids.length);
+      prevUnread.current = n;
+      return n;
+    });
+    dmjFetch(base, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(body),
+    }).catch(() => {});
+  }, [base]);
+
+  const openItem = useCallback((it) => {
+    if (!it.read) markRead([it.id], false);
+    setOpen(false);
+    if (it.tab && typeof onNavigate === 'function') onNavigate(it.tab);
+  }, [markRead, onNavigate]);
+
+  if (off) return null;
+
+  // ⚠️ panel ต้อง portal ออกไปที่ body — `.topnav` มี `overflow-x: hidden` (+ backdrop-filter)
+  // ซึ่งตัดกล่องที่ยื่นออกนอกแถบ nav ทิ้ง ถ้าวางไว้ในนั้นจะเห็นแค่ขอบบางๆ ไม่เห็นเนื้อหาเลย
+  // (เมนู "เพิ่มเติม" ของ owner เลี่ยงปัญหานี้ด้วยการเป็น bottom sheet position:fixed เช่นกัน)
+  // ตำแหน่งวัดจากปุ่มจริงตอนเปิด — แถบ nav ของ owner สูง 2 ชั้น ใช้ค่า top ตายตัวไม่ได้
+  const openPanel = () => {
+    if (!open && btnRef.current) setRect(btnRef.current.getBoundingClientRect());
+    setOpen(o => !o);
+  };
+  const narrow = typeof window !== 'undefined' && window.innerWidth <= 480;
+  const pos = rect
+    ? (narrow
+        ? { top: Math.round(rect.bottom + 6), left: 8, right: 8 }
+        : { top: Math.round(rect.bottom + 6), right: Math.max(8, Math.round(window.innerWidth - rect.right)) })
+    : { top: 64, right: 8 };
+
+  const panel = (
+    <>
+      <div className="noti-backdrop" onClick={() => setOpen(false)}/>
+      <div className="noti-panel" role="dialog" aria-label="การแจ้งเตือน" style={pos}>
+            <div className="noti-head">
+              <span style={{fontWeight:700,fontSize:15}}>🔔 การแจ้งเตือน</span>
+              <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                {unread > 0 && (
+                  <button className="noti-readall" onClick={() => markRead([], true)}>อ่านทั้งหมด</button>
+                )}
+                <button className="noti-close" onClick={() => setOpen(false)} aria-label="ปิด">✕</button>
+              </div>
+            </div>
+
+            <div className="noti-list">
+              {items.length === 0 ? (
+                <div className="noti-empty">
+                  <div style={{fontSize:30,marginBottom:6}}>🔕</div>
+                  <div style={{fontWeight:600,marginBottom:2}}>ยังไม่มีการแจ้งเตือน</div>
+                  <div style={{fontSize:12,color:"var(--muted)"}}>มีของเข้า/ของโอน จะขึ้นตรงนี้</div>
+                </div>
+              ) : items.map(it => {
+                const meta = NOTI_TYPE_META[it.type] || NOTI_TYPE_META.system;
+                return (
+                  <button key={it.id} className={`noti-item${it.read ? "" : " unread"}`}
+                          onClick={() => openItem(it)}>
+                    <span className="noti-emoji" style={{background: meta.color + "18"}}>{meta.emoji}</span>
+                    <span className="noti-text">
+                      <span className="noti-title">{it.title}</span>
+                      {it.body && <span className="noti-body">{it.body}</span>}
+                      <span className="noti-time">
+                        {notiAgo(it.ts)}{it.by ? ` · ${it.by}` : ""}
+                      </span>
+                    </span>
+                    {!it.read && <span className="noti-dot" aria-label="ยังไม่อ่าน"/>}
+                  </button>
+                );
+              })}
+            </div>
+      </div>
+    </>
+  );
+
+  return (
+    <div style={{position:"relative"}}>
+      <button ref={btnRef} className="noti-btn"
+              aria-label={`การแจ้งเตือน${unread ? ` (${unread} ใหม่)` : ""}`}
+              onClick={openPanel}>
+        <span style={{fontSize:20,lineHeight:1}}>🔔</span>
+        {unread > 0 && <span className="noti-badge">{unread > 99 ? "99+" : unread}</span>}
+      </button>
+      {open && ReactDOM.createPortal(panel, document.body)}
+    </div>
+  );
+}
+
 // Make available everywhere
 Object.assign(window, {
   fmtN, fmtB, fmtBfull, fmtPct, monthLabel,
   CAT_COLORS, catColor, resetCatColorMap,
   I, Icon, KPI, Card, Seg, Sparkline, Empty,
-  dmjFetch,
+  dmjFetch, NotiBell, notiAgo, NOTI_TYPE_META,
 });
 
-if (typeof module !== 'undefined') module.exports = { resetCatColorMap, catColor, CAT_COLORS };
+if (typeof module !== 'undefined') module.exports = { resetCatColorMap, catColor, CAT_COLORS, notiAgo };
