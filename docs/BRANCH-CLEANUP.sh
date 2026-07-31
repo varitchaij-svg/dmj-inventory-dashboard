@@ -51,3 +51,12 @@ git push origin --delete claude/zort-data-mismatch-check-b5nf2u
 git push origin --delete claude/zort-quotation-closure-yj84n1
 git push origin --delete claude/zort-sales-list-creation-fy1pxr
 git push origin --delete claude/zort-wl-products-missing-1yq425
+
+# เพิ่ม 2026-07-31 (รอบ 2) — ตรวจแบบละเอียดกว่าเดิม (เทียบ function-level ไม่ใช่แค่ diff --stat)
+# gas-batch-read: batchReadFormatted_ + ฟังก์ชันที่แก้ให้รับ param ทั้งหมดอยู่ใน master แล้ว
+#   (ยืนยันด้วย diff เนื้อหาฟังก์ชันจริง = ว่างเปล่า ไม่ใช่แค่ชื่อเหมือนกัน)
+git push origin --delete claude/gas-batch-read
+# system-analysis-owner-saler-i4lp08: ทุกชื่อฟังก์ชันใน branch มีอยู่ใน master (comm -23 = ว่าง)
+#   จุดที่ต่างกันจริง (เช่น salesRep ใน views-quote.jsx) master มีดีไซน์ใหม่กว่าแทนที่แล้ว
+#   ("ผู้ทำใบเสนอราคาตามบัญชี" จาก window._currentUserName แทนกรอกเอง+จำใน sessionStorage)
+git push origin --delete claude/system-analysis-owner-saler-i4lp08
