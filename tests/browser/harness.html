@@ -83,7 +83,10 @@
       if (action === 'me') {
         return Promise.resolve(new Response(JSON.stringify({
           ok: true,
-          staff: { staffId: 'S001', name: 'ทดสอบ ระบบ', role: role, status: 'active', pictureUrl: '' },
+          // ⚠️ staffId ต้องเป็น 'STF001' ให้ตรงกับ window._currentStaffId ที่ seed ไว้ + assigneeId
+          // ใน fixture.js — applyStaffSession() เขียนทับ _currentStaffId ด้วยค่าจาก action=me เสมอ
+          // ตอบ 'S001' เฉย ๆ = MyJobsCard หางานของตัวเองไม่เจอ → categories/whhome แดงทุก role
+          staff: { staffId: 'STF001', name: 'ทดสอบ ระบบ', role: role, status: 'active', pictureUrl: '' },
         }), { headers: { 'Content-Type': 'application/json' } }));
       }
       const att = window.__DMJ_ATT_FIXTURE || {};
@@ -99,7 +102,7 @@
     // (ตอบ payload สินค้าแทนจะได้ owners={} + off=false โดยบังเอิญ = เทสต์ผ่านแบบไม่ได้ทดสอบจริง)
     if (/action=productOwners/.test(url)) {
       return Promise.resolve(new Response(JSON.stringify(window.__DMJ_OWNER_FIXTURE ||
-        { ok: true, owners: {}, me: 'S001', meName: 'ทดสอบ', off: false }),
+        { ok: true, owners: {}, me: 'STF001', meName: 'ทดสอบ', off: false }),
         { headers: { 'Content-Type': 'application/json' } }));
     }
     // GET payload
