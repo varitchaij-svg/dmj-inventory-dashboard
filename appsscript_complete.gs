@@ -2231,22 +2231,7 @@ function buildFullData_() {
       // normalize SKU ก่อน lookup — กัน qty จากชีต "ข้อมูลสินค้า" (เก่า) รั่วมาโชว์
       // เมื่อรหัสในชีต "อัพเดทจำนวนสินค้า" พิมพ์ต่าง case/ช่องว่าง (ที่อื่นในระบบใช้ trim().toUpperCase() หมด)
       const skuU = (p.sku || '').toString().trim().toUpperCase();
-      const loc = qtyLoc[skuU];
-      if (loc) {
-        p.qtyStore = loc.qtyStore;
-        p.qtyWH = loc.qtyWH;
-        p.warehouseQty = loc.qtyWH;
-        if (loc.price > 0) p.price = loc.price;
-        // BUG FIX: p.qty/qtyStatus/isOOS ที่ readProducts_ ตั้งไว้มาจากคอลัมน์ I/J/K
-        // ของชีต "ข้อมูลสินค้า" (เก่า/ไม่อัปเดต) — ถ้าไม่คำนวณใหม่ตรงนี้ สินค้าที่มีสต็อกจริง
-        // ในชีต "อัพเดทจำนวนสินค้า" (เช่น WL00002 qtyStore=41,qtyWH=240) จะยังโชว์ "หมด"/qty=0
-        // บนเว็บอยู่ดี เพราะ qty ไม่เคยถูกรีเฟรชตาม qtyStore/qtyWH ที่เพิ่งเขียนทับข้างบน
-        const locTotal = loc.qtyStore + loc.qtyWH;
-        p.qty = locTotal;
-        p.qtyStatus  = locTotal < 0 ? 'negative' : 'ok';
-        p.isOversold = locTotal < 0;
-        p.isOOS      = locTotal <= 0;
-      }
+      applyQtyLocToProduct_(p, qtyLoc[skuU]);
 
       const m = monthly.perSku[p.sku] || monthly.perSku[skuU];
       if (m) {
@@ -7803,6 +7788,31 @@ function readQtyByLocation_() {
     };
   });
   return map;
+}
+
+// ── รวมจำนวนจริงจากชีต "อัพเดทจำนวนสินค้า" (loc) เข้ากับสินค้า 1 ตัว ──
+// loc = 1 entry จาก readQtyByLocation_ ({qtyStore, qtyWH, price}) · แก้ p ในที่ (mutate)
+// ไม่มี loc (สินค้าไม่มีแถวในชีตสต็อก) → ไม่แตะอะไรเลย ปล่อยค่าจาก readProducts_ ตามเดิม
+//
+// ⚠️ ประวัติบั๊ก (2026-07-31, เคสสินค้า WL ทั้งหมดโชว์ "หมด" ทั้งที่มีของจริง):
+// เดิมโค้ดตรงนี้เขียนทับแค่ qtyStore/qtyWH แล้ว **ไม่คำนวณ qty/qtyStatus/isOOS ใหม่**
+// ค่าพวกนั้นจึงค้างจากคอลัมน์ I/J/K ของชีต "ข้อมูลสินค้า" ซึ่งเก่า/ไม่อัปเดต (มักเป็น 0)
+// → สินค้าที่มีสต็อกจริง เช่น WL00002 (qtyStore=41, qtyWH=240) โชว์ qty=0 = "หมด" บนเว็บ
+// โดยไม่มี error ให้เห็น · ชีตสต็อกคือแหล่งที่ ZORT sync เขียน = สดกว่าเสมอ ต้องชนะทุกครั้ง
+// แยกออกมาเป็นฟังก์ชันเดี่ยวเพื่อให้ tests/qtyloc.test.js eval จาก .gs ได้ตรง ๆ (ไม่ copy = ไม่ drift)
+function applyQtyLocToProduct_(p, loc) {
+  if (!p || !loc) return p;
+  p.qtyStore     = loc.qtyStore;
+  p.qtyWH        = loc.qtyWH;
+  p.warehouseQty = loc.qtyWH;
+  if (loc.price > 0) p.price = loc.price;
+
+  const locTotal = loc.qtyStore + loc.qtyWH;
+  p.qty        = locTotal;
+  p.qtyStatus  = locTotal < 0 ? 'negative' : 'ok';
+  p.isOversold = locTotal < 0;
+  p.isOOS      = locTotal <= 0;
+  return p;
 }
 
 function handleOrder_(params) {
