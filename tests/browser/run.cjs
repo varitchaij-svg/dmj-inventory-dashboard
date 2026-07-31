@@ -16,22 +16,29 @@ fs.mkdirSync(SHOTS, { recursive: true });
 const { chromium } = require(path.join(CACHE, 'node_modules', 'playwright-core'));
 
 // mirror ROLE_TABS จาก app.jsx (ถ้าแก้ที่นั่นต้องอัปเดตที่นี่ด้วย)
+// dev ไม่อยู่ในนี้โดยเจตนา — เป็น superset ของ owner (+margin +whhome ซึ่ง warehouse ครอบให้แล้ว)
+// การรันซ้ำอีก 27 tab กินเวลาโดยไม่ได้ coverage เพิ่ม
 const ROLE_TABS = {
-  owner:      ["overview","categories","trends","stock","storage","stockcount","frontstore","transfers","orders","ordersummary","mtojobs","upload","connect","labels","auditlog","deadstock"],
-  employee:   ["categories","trends","stock","storage","frontstore","transfers","orders","ordersummary","mtojobs","labels"],
-  warehouse:  ["categories","storage","stockcount","orders","ordersummary","tracking","mtojobs","labels"],
-  frontstore: ["frontstore","categories","stock","orders","tracking","mtojobs","labels"],
-  saler:      ["pos","categories","stock","tracking","orders","mtojobs","labels"],
-  storedevice: ["pos","categories","stock","tracking","orders","mtojobs","labels"],
+  owner:      ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog","staff","atttoday"],
+  employee:   ["attendance","categories","trends","stock","storage","frontstore","transfers","orders","tracking","ordersummary","mtojobs","labels"],
+  warehouse:  ["attendance","whhome","orders","stock","stockcount","storage","categories","newproduct","ordersummary","tracking","mtojobs","labels"],
+  frontstore: ["attendance","frontstore","categories","stock","orders","tracking","mtojobs","labels"],
+  saler:      ["attendance","pos","quotefollowup","categories","stock","tracking","orders","mtojobs","labels"],
+  storedevice: ["attendance","pos","quotefollowup","categories","stock","tracking","orders","mtojobs","labels","atttoday"],
 };
-// tab id → ป้ายข้อความ (จาก TABS ใน app.jsx) สำหรับคลิก nav
+// tab id → ป้ายข้อความ (จาก TABS ใน app.jsx) สำหรับคลิก nav — ตัดอิโมจินำหน้าออก (คลิกด้วย substring)
 const TAB_LABEL = {
-  overview:"ภาพรวม", categories:"สินค้า & สั่ง", trends:"เทรนด์", stock:"สต๊อก & แจ้งเตือน",
-  storage:"ตำแหน่งคลัง", stockcount:"นับ stock คลัง", frontstore:"เช็คหน้าร้าน",
-  transfers:"โอน/ปรับ/ยกมา", orders:"รายการสั่งของ", ordersummary:"สรุปสินค้าออกจากคลัง",
+  overview:"ภาพรวม", whhome:"งานคลัง", categories:"สินค้า & สั่ง", trends:"เทรนด์",
+  stock:"สต๊อก & แจ้งเตือน", storage:"ตำแหน่งคลัง", stockcount:"นับ stock คลัง",
+  newproduct:"เพิ่มสินค้าใหม่", frontstore:"เช็คหน้าร้าน", transfers:"โอน/ปรับ/ยกมา",
+  orders:"รายการสั่งของ", tracking:"ติดตามสถานะ", ordersummary:"สรุปสินค้าออกจากคลัง",
   mtojobs:"งานจัดพิเศษ", upload:"อัปโหลด Zort", connect:"Google Sheet", labels:"พิมพ์ Label",
-  auditlog:"Audit Log", deadstock:"สินค้าจม", pos:"ขาย/ออกบิล", tracking:"ติดตามสถานะ",
+  auditlog:"Audit Log", staff:"พนักงาน", attendance:"ลงเวลา", atttoday:"ใครเข้างานวันนี้",
+  deadstock:"สินค้าจม", quotefollowup:"ใบเสนอราคา", pos:"ขาย/ออกบิล",
+  customers:"ลูกค้า & ยอดซื้อ", season:"ช่วงขายดี",
 };
+// role ที่ใช้ nav 2 ชั้นแบบกลุ่ม (owner-l1 หมวด → owner-l2 เมนูย่อย) — ตรงกับ isAdminRole ใน app.jsx
+const ADMIN_ROLES = new Set(["owner", "dev"]);
 
 // (ก) assert เฉพาะเจาะจงต่อ tab — อิงข้อมูลจาก fixture (deterministic)
 // คืน {ok, detail}; tab ที่ไม่มีใน map = smoke อย่างเดียว (แค่ไม่ crash)
@@ -53,10 +60,50 @@ const ASSERT = {
   mtojobs:    async (page) => hasText(page, ['จัดช่อพิเศษ', 'จัดกระเช้า'], 'MTO job name'),
   frontstore: async (page) => hasText(page, ['VAS001', 'FLW002', 'DEC003'], 'product SKU'),
   pos:        async (page) => hasText(page, ['ขาย / ออกบิล', 'รายการในบิล', 'รับชำระ'], 'PosView UI'),
+  attendance: async (page) => hasText(page, ['สมชาย ใจดี'], 'ชื่อ+ไทม์ไลน์จาก myToday'),
+  atttoday:   async (page) => hasText(page, ['สมชาย ใจดี', 'สมหญิง ขยัน'], 'รายชื่อจาก attendanceToday'),
   // หมายเหตุ: ordersummary/labels เป็น smoke-only — เนื้อหาขึ้นกับ workflow state
   // (ordersummary โชว์เฉพาะ order สถานะ "สำเร็จ" พร้อมส่ง, labels โชว์คิวพิมพ์ที่ seed จาก view อื่น)
   // fixture แบบ static จึงไม่มีเนื้อหา deterministic ให้ assert — ตรวจแค่ "ไม่ crash"
 };
+// nav ไป tab เป้าหมาย — รองรับทั้ง nav ชั้นเดียว (role ทั่วไป) และ 2 ชั้นแบบกลุ่ม (owner/dev)
+// ยืนยันผลด้วย <main data-screen-label="<tabid>"> เสมอ ไม่ใช่แค่ "กดปุ่มแล้ว"
+// (Playwright locator click = ตรวจ visible/enabled จริง เชื่อถือได้กว่า evaluate .click())
+async function navigateTo(page, role, tab) {
+  const label = TAB_LABEL[tab] || tab;
+  const onTab = () => page.locator(`main[data-screen-label="${tab}"]`).count().then(n => n > 0);
+  const click = async (loc) => {
+    if (!(await loc.count())) return false;
+    await loc.first().click({ timeout: 2000 }).catch(() => {});
+    await page.waitForTimeout(150);
+    return true;
+  };
+  if (await onTab()) return true;
+
+  if (ADMIN_ROLES.has(role)) {
+    // ชั้น 2 ของหมวดที่เปิดอยู่ก่อน → ไม่เจอค่อยไล่กดหมวดในชั้น 1 ทีละอัน
+    // (ไล่กดแทนการ mirror OWNER_GROUPS ไว้ที่นี่ — กันเทสต์ drift เมื่อมีการสลับ tab ข้ามหมวด)
+    if (await click(page.locator('.owner-l2 button', { hasText: label })) && await onTab()) return true;
+    const groups = page.locator('.owner-l1 button');
+    const n = await groups.count();
+    for (let i = 0; i < n; i++) {
+      await groups.nth(i).click({ timeout: 2000 }).catch(() => {});
+      await page.waitForTimeout(150);
+      if (await onTab()) return true;  // หมวดที่มีเมนูเดียว → กดแล้วเข้าเลย (ชั้น 2 ถูกซ่อน)
+      if (await click(page.locator('.owner-l2 button', { hasText: label })) && await onTab()) return true;
+    }
+    return false;
+  }
+
+  // role ทั่วไป: ทุกแท็บอยู่บนแถบเลื่อนแนวนอนเดียว ไม่มี "เพิ่มเติม"
+  await click(page.locator('.navtabs button', { hasText: label }));
+  if (await onTab()) return true;
+  // เผื่อกรณีที่ role นั้นถูกปรับให้มี "เพิ่มเติม" ในอนาคต
+  if (await click(page.locator('.navtabs button', { hasText: 'เพิ่มเติม' }))) {
+    await click(page.locator('button', { hasText: label }));
+  }
+  return onTab();
+}
 async function hasText(page, tokens, label) {
   const body = await page.evaluate(() => document.body.innerText);
   const found = tokens.find(t => body.includes(t));
@@ -115,6 +162,9 @@ function startServer() {
         const t = m.text();
         // ข้าม network 404 ของ asset (favicon/logo/รูป/ฟอนต์) — ไม่ใช่ bug ของ app logic
         if (/Failed to load resource|favicon|net::ERR|ERR_/.test(t)) return;
+        // ข้ามคำเตือนของ Babel standalone (ไฟล์ view ใหญ่เกิน 500KB) — เป็น note ของ compiler
+        // ไม่ใช่ error ของ app · ของจริงบนเว็บก็ขึ้นแบบเดียวกัน
+        if (/\[BABEL\]|deoptimised the styling/.test(t)) return;
         errors.push('CONSOLE: ' + t.slice(0, 200));
       });
       let status = 'ok', note = '';
@@ -124,23 +174,7 @@ function startServer() {
         const bootErr = await page.evaluate(() => window.__BOOT_ERR || null);
         if (bootErr) { status = 'BOOT_FAIL'; note = bootErr.slice(0, 160); }
         else {
-          // คลิก nav ไป tab เป้าหมาย แล้วยืนยันด้วย <main data-screen-label="<tabid>">
-          // (Playwright locator click = ตรวจ visible/enabled จริง, เชื่อถือได้กว่า evaluate .click())
-          const label = TAB_LABEL[tab];
-          const onTab = () => page.locator(`main[data-screen-label="${tab}"]`).count().then(n => n > 0);
-          const tryClick = async (lbl) => {
-            const btn = page.locator('button', { hasText: lbl }).first();
-            if (await btn.count()) { await btn.click({ timeout: 2000 }).catch(() => {}); }
-          };
-          if (!(await onTab())) {
-            await tryClick(label);
-            if (!(await onTab())) {                          // อาจอยู่ใน "เพิ่มเติม" sheet
-              await tryClick('เพิ่มเติม');
-              await page.waitForTimeout(200);
-              await tryClick(label);
-            }
-          }
-          const navigated = await onTab();
+          const navigated = await navigateTo(page, role, tab);
           if (!navigated) { status = 'NAV_FAIL'; note = 'สลับ tab ไม่สำเร็จ (data-screen-label ไม่ตรง)'; }
           await page.waitForTimeout(700); // ให้ view render + chart placeholder→chart
           const info = await page.evaluate(() => ({
@@ -176,8 +210,7 @@ function startServer() {
   // CategoryView order button ต้องเลือกหมวดก่อน (view-state) จึงไม่เพิ่ม test ที่เปราะ —
   // ถ้าจะเพิ่ม flow อื่นในอนาคต (โอนสต็อก/นับ stock) เพิ่มใน array นี้ได้เลย
   const interactions = [
-    { name: 'StockView "ควรสั่ง" → OrderModal เปิด+ปิด', tab: 'stock', label: 'สต๊อก & แจ้งเตือน',
-      trigger: 'ควรสั่ง' },
+    { name: 'StockView "ควรสั่ง" → OrderModal เปิด+ปิด', tab: 'stock', trigger: 'ควรสั่ง' },
   ];
   const MODAL = '[data-modal="order"]';
   for (const it of interactions) {
@@ -186,18 +219,15 @@ function startServer() {
     try {
       await page.goto(`${base}?role=owner&tab=${it.tab}`, { timeout: 15000 });
       await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
-      const onTab = () => page.locator(`main[data-screen-label="${it.tab}"]`).count().then(n => n > 0);
-      if (!(await onTab())) {
-        const nav = page.locator('button', { hasText: it.label }).first();
-        if (await nav.count()) await nav.click({ timeout: 2000 }).catch(() => {});
-      }
+      if (!(await navigateTo(page, 'owner', it.tab))) { status = 'NAV_FAIL'; note = 'สลับ tab ไม่สำเร็จ'; }
       await page.waitForTimeout(400);
       if (it.preStep) { // เช่น เลือกหมวดก่อน เพื่อให้การ์ดโชว์ปุ่มสั่ง
         const pre = page.locator('button', { hasText: it.preStep }).first();
         if (await pre.count()) { await pre.click({ timeout: 2000 }).catch(() => {}); await page.waitForTimeout(400); }
       }
       const trig = page.locator('button', { hasText: it.trigger }).first();
-      if (!(await trig.count())) { status = 'NO_TRIGGER'; note = `ไม่พบปุ่ม "${it.trigger}"`; }
+      if (status !== 'ok') { /* nav ไม่ผ่าน — ไม่ต้องทับด้วยผลขั้นถัดไป */ }
+      else if (!(await trig.count())) { status = 'NO_TRIGGER'; note = `ไม่พบปุ่ม "${it.trigger}"`; }
       else {
         await trig.click({ timeout: 2000 }).catch(() => {});
         await page.waitForTimeout(400);
