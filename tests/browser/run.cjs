@@ -53,7 +53,15 @@ const ASSERT = {
     const svg = await page.locator('svg.recharts-surface').count();
     return { ok: svg >= 1, detail: `recharts svg=${svg}` };
   },
-  categories: async (page) => hasText(page, ['VAS001', 'FLW002', 'DEC003'], 'product SKU'),
+  // categories: สินค้า + การ์ด "งานของฉัน" (MyJobsCard) ที่มาจากงาน MTO ของ STF001 ใน fixture
+  // นับเฉพาะงานที่ยังไม่เสร็จ → ต้องได้ 1 งาน (อีกงานปิดแล้ว + เป็นของ STF002)
+  categories: async (page) => {
+    const base = await hasText(page, ['VAS001', 'FLW002', 'DEC003'], 'product SKU');
+    if (!base.ok) return base;
+    const mine = await hasText(page, ['งานของฉัน', 'มี 1 งานที่ยังไม่เสร็จ'], 'การ์ดงานของฉัน');
+    return { ok: mine.ok, detail: base.detail + ' | ' + mine.detail };
+  },
+  whhome:     async (page) => hasText(page, ['งานของฉัน', 'มี 1 งานที่ยังไม่เสร็จ'], 'การ์ดงานของฉัน'),
   stock:      async (page) => hasText(page, ['FLW002'], 'low-stock SKU (FLW002 qty8<threshold)'),
   storage:    async (page) => hasText(page, ['A1/05', 'A2/03', 'DEC003'], 'lock/สินค้าในคลัง'),
   orders:     async (page) => hasText(page, ['VAS001', 'FLW002'], 'order SKU'),
@@ -244,6 +252,42 @@ function startServer() {
     } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
     await page.screenshot({ path: path.join(SHOTS, `interaction__${it.tab}.png`) }).catch(()=>{});
     results.push({ role: 'interact', tab: it.name, status, note });
+    await page.close();
+  }
+
+  // ── (ค) กระดิ่งแจ้งเตือนในแอป: badge → เปิด panel → กดแล้วพาไป tab ปลายทาง ──
+  // รันข้าม role เพราะกระดิ่งอยู่บน topnav ของทุก role (คนละ nav layout กัน owner vs อื่น ๆ)
+  for (const bellRole of ['owner', 'warehouse']) {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=${bellRole}&tab=stock`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      await page.waitForSelector('.noti-btn', { timeout: 8000 });
+      const badge = (await page.locator('.noti-badge').first().textContent().catch(() => '') || '').trim();
+      if (badge !== '1') { status = 'BADGE_FAIL'; note = `badge = "${badge}" (คาด "1")`; }
+      else {
+        await page.locator('.noti-btn').first().click({ timeout: 2000 });
+        await page.waitForTimeout(300);
+        const rows = await page.locator('.noti-item').count();
+        const unreadRows = await page.locator('.noti-item.unread').count();
+        if (rows !== 2 || unreadRows !== 1) {
+          status = 'PANEL_FAIL'; note = `รายการ=${rows} (คาด 2), ยังไม่อ่าน=${unreadRows} (คาด 1)`;
+        } else {
+          // กดรายการที่ยังไม่อ่าน → ต้องปิด panel + พาไปแท็บ orders
+          await page.locator('.noti-item.unread').first().click({ timeout: 2000 });
+          await page.waitForTimeout(500);
+          const stillOpen = await page.locator('.noti-panel').count();
+          const onOrders = await page.locator('body').innerText()
+            .then(t => /รายการสั่งของ|VAS001/.test(t)).catch(() => false);
+          if (stillOpen) { status = 'PANEL_CLOSE_FAIL'; note = 'กดแล้ว panel ไม่ปิด'; }
+          else if (!onOrders) { status = 'NAV_FAIL'; note = 'กดแล้วไม่พาไปแท็บปลายทาง'; }
+          else note = 'badge/panel/nav ครบ';
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, `notibell__${bellRole}.png`) }).catch(() => {});
+    results.push({ role: 'interact', tab: `กระดิ่งแจ้งเตือน (${bellRole})`, status, note });
     await page.close();
   }
 

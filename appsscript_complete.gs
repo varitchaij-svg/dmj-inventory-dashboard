@@ -125,6 +125,7 @@ const SHEET_DAILY_SALES    = "ยอดขายรายวัน";    // ย�
 const SHEET_TRANSFERS_HIST = "รายการโอน";        // ประวัติโอนสินค้า (ต่างจาก SHEET_TRANSFERS)
 const SHEET_MTO_JOBS       = "งาน MTO";          // งานจัดพิเศษ (make-to-order)
 const SHEET_NOTI_QUEUE     = "คิวแจ้งเตือน LINE"; // คิวข้อความ LINE (throttle/กันชนลิมิต/กันส่งซ้ำ)
+const SHEET_INAPP_NOTI     = "แจ้งเตือนในแอป";   // กระดิ่งบนหัวจอ (ไม่ยิง LINE = ไม่กิน quota)
 const SHEET_MTO_ITEMS      = "วัตถุดิบ MTO";    // วัตถุดิบสำหรับงาน MTO
 const SHEET_CUST_MONTHLY   = "สรุปลูกค้า-เดือน";  // ยอดซื้อลูกค้า แยกตามเดือน (customer×month)
 const SHEET_CUST_PRODUCTS  = "สรุปลูกค้า-สินค้า"; // สินค้าที่ลูกค้าแต่ละรายซื้อบ่อย (top-N/ลูกค้า)
@@ -620,7 +621,10 @@ var MTO_JOB_ACTIONS_ = ["createMtoJob", "closeMtoJob", "saveMtoJobItems", "delet
 var COMMON_ACTIONS_ = ["order", "updateOrderState", "transferStock", "transferStockBatch",
                         "confirmShipmentReceive", "updateFrontStore", "fetchProductImage",
                         "checkSkuExists", "updateLockData",
-                        "punch", "myToday", "myAttendanceSummary"];
+                        "punch", "myToday", "myAttendanceSummary",
+                        // กระดิ่งแจ้งเตือนอยู่บนหัวจอทุกแท็บทุก role → ต้องอยู่ใน COMMON เสมอ
+                        // (ลืมใส่ = role นั้นกดอ่านแจ้งเตือนไม่ได้ทันทีที่เปิด REQUIRE_LOGIN)
+                        "markNotiRead"];
 
 var ROLE_ACTIONS_ = {
   saler:      ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
@@ -1520,6 +1524,8 @@ function dailyAttendanceMaintenance() {
   catch (e) { out.push("ลบเซสชัน ล้มเหลว: " + e); }
   try { out.push("เตือนลืมออกงาน " + notifyForgotPunchOut_(ss) + " คน"); }
   catch (e) { out.push("เตือนลืมออกงาน ล้มเหลว: " + e); }
+  try { out.push("ลบแจ้งเตือนในแอปหมดอายุ " + purgeInappNoti_(ss) + " แถว"); }
+  catch (e) { out.push("ลบแจ้งเตือนในแอป ล้มเหลว: " + e); }
   Logger.log("dailyAttendanceMaintenance: " + out.join(" · "));
 }
 
@@ -1752,6 +1758,11 @@ function doPost(e) {
     if (data.action === 'attendanceToday') return attendanceTodayHandler_(ss, data);
     if (data.action === 'attendanceMonthlySummary') return attendanceMonthlySummaryHandler_(ss, data);
     if (data.action === 'fixAttendance')   return fixAttendanceHandler_(ss, data);
+
+    // ─── แจ้งเตือนในแอป: ทำเครื่องหมายว่าอ่านแล้ว ───
+    // อยู่เหนือ invalidateCache_ โดยตั้งใจ — ไม่ได้แตะข้อมูลสต็อก/ออเดอร์เลย
+    // ถ้าปล่อยให้ตกไปด้านล่าง การกดอ่านแจ้งเตือนจะล้าง payload cache ทั้งก้อนทุกครั้ง
+    if (data.action === 'markNotiRead') return markInappNotiReadHandler_(ss, data);
 
     // มีการแก้ข้อมูล → ล้าง cache ให้ doGet ครั้งถัดไปคำนวณใหม่ (ข้อมูลไม่ค้าง)
     invalidateCache_(true); // clear payload cache เท่านั้น — ห้าม bump dmj_last_write_ts ก่อน conflict check
@@ -2058,6 +2069,12 @@ function doGet(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
 
+    // แจ้งเตือนในแอป (กระดิ่ง) — frontend poll ทุก ~25 วิ ทุกแท็บ
+    // ตรวจ session จริงเหมือน attendancePhoto/getAuditLog (ไม่เชื่อ role จาก query param)
+    if (e && e.parameter && e.parameter.action === 'inappNoti') {
+      return listInappNotiHandler_(e);
+    }
+
     // Lightweight endpoint: ดึงเฉพาะรายการสั่งของ (เบา/เร็ว) สำหรับ polling หน้า orders
     if (e && e.parameter && e.parameter.action === 'orders') {
       const ordersResult = readOrders_();
@@ -2231,22 +2248,7 @@ function buildFullData_() {
       // normalize SKU ก่อน lookup — กัน qty จากชีต "ข้อมูลสินค้า" (เก่า) รั่วมาโชว์
       // เมื่อรหัสในชีต "อัพเดทจำนวนสินค้า" พิมพ์ต่าง case/ช่องว่าง (ที่อื่นในระบบใช้ trim().toUpperCase() หมด)
       const skuU = (p.sku || '').toString().trim().toUpperCase();
-      const loc = qtyLoc[skuU];
-      if (loc) {
-        p.qtyStore = loc.qtyStore;
-        p.qtyWH = loc.qtyWH;
-        p.warehouseQty = loc.qtyWH;
-        if (loc.price > 0) p.price = loc.price;
-        // BUG FIX: p.qty/qtyStatus/isOOS ที่ readProducts_ ตั้งไว้มาจากคอลัมน์ I/J/K
-        // ของชีต "ข้อมูลสินค้า" (เก่า/ไม่อัปเดต) — ถ้าไม่คำนวณใหม่ตรงนี้ สินค้าที่มีสต็อกจริง
-        // ในชีต "อัพเดทจำนวนสินค้า" (เช่น WL00002 qtyStore=41,qtyWH=240) จะยังโชว์ "หมด"/qty=0
-        // บนเว็บอยู่ดี เพราะ qty ไม่เคยถูกรีเฟรชตาม qtyStore/qtyWH ที่เพิ่งเขียนทับข้างบน
-        const locTotal = loc.qtyStore + loc.qtyWH;
-        p.qty = locTotal;
-        p.qtyStatus  = locTotal < 0 ? 'negative' : 'ok';
-        p.isOversold = locTotal < 0;
-        p.isOOS      = locTotal <= 0;
-      }
+      applyQtyLocToProduct_(p, qtyLoc[skuU]);
 
       const m = monthly.perSku[p.sku] || monthly.perSku[skuU];
       if (m) {
@@ -2714,6 +2716,17 @@ function transferStockBatch(ss, list, actor, clientLoadedAt) {
       transferred.forEach(function(t) {
         writeAuditLog_(actor, "โอนสต็อก", t.sku, "qty " + t.qty + ": W0002→W0001");
       });
+      // แจ้งหน้าร้านว่ามีของกำลังมา — เรื่องนี้ไม่เคยแจ้ง LINE เลย (ไม่คุ้ม quota)
+      // รวมทั้งชุดเป็นแจ้งเตือนเดียว ไม่ยิงราย SKU (โอนทีนึงมีหลายสิบตัว)
+      pushInappNoti_({
+        audience: 'role:frontstore,employee,owner',
+        type: 'shipment', tab: 'stock',
+        title: '🚚 ของโอนมาหน้าร้าน ' + transferred.length + ' รายการ',
+        body: transferred.slice(0, 3).map(function (t) { return t.name || t.sku; }).join(', ')
+              + (transferred.length > 3 ? ' และอีก ' + (transferred.length - 3) + ' รายการ' : '')
+              + ' · รอกดรับ',
+        by: actor,
+      });
     }
 
     return ok({ count: transferred.length, zortNumber, zortError, shortfalls, results });
@@ -3123,6 +3136,16 @@ function confirmShipmentReceive(ss, rowId, sku, receivedQty, actor) {
     sheet.getRange(rowNum, COL_SHIP_RECVBY).setValue(actor || "");
 
     try { writeAuditLog_(actor, "รับสินค้า", rowSku, status + " " + recv + "/" + sentQty); } catch (e) {}
+    // "รับไม่ครบ" คือเรื่องที่คลังต้องรู้เดี๋ยวนั้น (ของหาย/นับพลาด) — รับครบไม่ต้องกวน
+    if (status === "รับไม่ครบ") {
+      pushInappNoti_({
+        audience: 'role:warehouse,owner',
+        type: 'shipment', tab: 'tracking',
+        title: '⚠️ หน้าร้านรับของไม่ครบ',
+        body: rowSku + ' · รับ ' + recv + '/' + sentQty + ' ชิ้น' + (actor ? ' · ' + actor : ''),
+        by: actor,
+      });
+    }
     return ok({ row: rowNum, receivedQty: recv, status });
   } finally {
     lock.releaseLock();
@@ -6082,6 +6105,18 @@ function syncZortBoth() {
         } else {
           Logger.log('Low-stock: already sent today (' + todayKey + ') — skip LINE');
         }
+        // กระดิ่งในแอปยิงได้ทุกวันโดยไม่ต้องกลัว quota — dedupKey ผูกวันที่
+        // จึงยังคงเป็น 1 ครั้ง/วัน แม้ตัวเช็คจะรันทุก 2 ชม.
+        pushInappNoti_({
+          audience: 'role:owner,warehouse',
+          type: 'stock', tab: 'stock',
+          dedupKey: 'lowstock-' + todayKey,
+          title: '🚨 สต็อกใกล้หมด ' + lowStockItems.length + ' รายการ',
+          body: lowStockItems.slice(0, 3).map(function (it) {
+                  return (it.name || it.sku) + ' เหลือ ' + it.qty;
+                }).join(', ')
+                + (lowStockItems.length > 3 ? ' และอีก ' + (lowStockItems.length - 3) + ' รายการ' : ''),
+        });
       } else {
         Logger.log('Low-stock check: ไม่พบสินค้าต่ำกว่าเกณฑ์ (threshold=' + threshold + ', สแกน ' + scanned + ')');
       }
@@ -7809,6 +7844,31 @@ function readQtyByLocation_() {
   return map;
 }
 
+// ── รวมจำนวนจริงจากชีต "อัพเดทจำนวนสินค้า" (loc) เข้ากับสินค้า 1 ตัว ──
+// loc = 1 entry จาก readQtyByLocation_ ({qtyStore, qtyWH, price}) · แก้ p ในที่ (mutate)
+// ไม่มี loc (สินค้าไม่มีแถวในชีตสต็อก) → ไม่แตะอะไรเลย ปล่อยค่าจาก readProducts_ ตามเดิม
+//
+// ⚠️ ประวัติบั๊ก (2026-07-31, เคสสินค้า WL ทั้งหมดโชว์ "หมด" ทั้งที่มีของจริง):
+// เดิมโค้ดตรงนี้เขียนทับแค่ qtyStore/qtyWH แล้ว **ไม่คำนวณ qty/qtyStatus/isOOS ใหม่**
+// ค่าพวกนั้นจึงค้างจากคอลัมน์ I/J/K ของชีต "ข้อมูลสินค้า" ซึ่งเก่า/ไม่อัปเดต (มักเป็น 0)
+// → สินค้าที่มีสต็อกจริง เช่น WL00002 (qtyStore=41, qtyWH=240) โชว์ qty=0 = "หมด" บนเว็บ
+// โดยไม่มี error ให้เห็น · ชีตสต็อกคือแหล่งที่ ZORT sync เขียน = สดกว่าเสมอ ต้องชนะทุกครั้ง
+// แยกออกมาเป็นฟังก์ชันเดี่ยวเพื่อให้ tests/qtyloc.test.js eval จาก .gs ได้ตรง ๆ (ไม่ copy = ไม่ drift)
+function applyQtyLocToProduct_(p, loc) {
+  if (!p || !loc) return p;
+  p.qtyStore     = loc.qtyStore;
+  p.qtyWH        = loc.qtyWH;
+  p.warehouseQty = loc.qtyWH;
+  if (loc.price > 0) p.price = loc.price;
+
+  const locTotal = loc.qtyStore + loc.qtyWH;
+  p.qty        = locTotal;
+  p.qtyStatus  = locTotal < 0 ? 'negative' : 'ok';
+  p.isOversold = locTotal < 0;
+  p.isOOS      = locTotal <= 0;
+  return p;
+}
+
 function handleOrder_(params) {
   try {
     const sku = (params.sku || '').toString().trim();
@@ -7851,6 +7911,254 @@ function handleOrder_(params) {
       .createTextOutput(JSON.stringify({ok:false, error:err.message}))
       .setMimeType(ContentService.MimeType.JSON);
   }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// แจ้งเตือนในแอป (in-app notification) — กระดิ่ง 🔔 บนหัวจอ
+// ──────────────────────────────────────────────────────────────────────────
+// ทำไมต้องมี: quota push ของ LINE OA จำกัด (~200 ข้อความ/เดือน) จนต้องกลั้นออเดอร์
+//   ไว้ส่งรอบเดียวตอน 16:00 (notiOrderCutoffHour_) — เรื่องที่ "อยากรู้เดี๋ยวนี้" อีกหลายอย่าง
+//   เลยไม่ได้แจ้งเลยเพราะไม่คุ้ม quota · ช่องทางนี้เขียนลงชีตเฉย ๆ ไม่ยิง LINE
+//   = ไม่กิน quota เลย ส่งกี่เรื่องก็ได้ และผู้ใช้เห็นภายใน ~25 วิ (frontend poll)
+//
+// ⚠️ ขอบเขตที่ต้องรู้: เห็นเฉพาะ "ตอนเปิดแอปอยู่" — ไม่เด้งขึ้นหน้าจอล็อกเหมือน LINE
+//   (จะเด้งได้ต้องทำ Web Push ซึ่ง GAS เซ็น VAPID เองไม่ได้ ต้องมีตัวส่งข้างนอก เช่น
+//    Cloudflare Worker) จึง **ไม่ใช่ตัวแทน LINE** สำหรับเรื่องด่วน แต่เป็นที่รวมเรื่องที่
+//   เมื่อก่อน "ไม่กล้าแจ้งเพราะเปลือง quota" — LINE ยังทำหน้าที่ปลุกตอนปิดแอปเหมือนเดิม
+//
+// SAFE ROLLOUT: gate ด้วย Script Property INAPP_NOTI_ENABLED='true'
+//   ยังไม่เปิด → pushInappNoti_ เป็น no-op เงียบ ๆ (deploy แล้วไม่มีอะไรเปลี่ยนเลย)
+//   เปิดจริงเมื่อเจ้าของรัน setupInappNoti() 1 ครั้งใน GAS editor · ปิดด้วย disableInappNoti()
+// ══════════════════════════════════════════════════════════════════════════
+
+// คอลัมน์ชีตแจ้งเตือนในแอป (1-indexed): A..K
+var INAPP_COL = { ID:1, CREATED:2, AUDIENCE:3, TYPE:4, TITLE:5, BODY:6,
+                  TAB:7, BY:8, DEDUP:9, READBY:10, EXPIRES:11 };
+var INAPP_HEADERS = ["id","createdAt","audience","type","title","body",
+                     "tab","createdBy","dedupKey","readBy","expiresAt"];
+
+var INAPP_KEEP_DAYS_DEFAULT = 14;   // ปรับได้ที่ Script Property INAPP_NOTI_KEEP_DAYS
+var INAPP_MAX_RETURN        = 30;   // จำนวนแถวที่ส่งกลับให้ frontend ต่อรอบ poll
+var INAPP_SCAN_ROWS         = 300;  // อ่านย้อนหลังไม่เกินกี่แถว (กัน getRange โตไม่มีเพดาน)
+var INAPP_PURGE_MAX         = 300;  // ลบต่อรอบ — กันรันเกิน 6 นาทีตอนล้างครั้งแรก
+
+function inappNotiEnabled_() {
+  return PropertiesService.getScriptProperties().getProperty('INAPP_NOTI_ENABLED') === 'true';
+}
+
+function inappNotiSheet_(ss) {
+  return getOrCreateSheet_(ss, SHEET_INAPP_NOTI, INAPP_HEADERS);
+}
+
+// ── ใครควรเห็นแถวนี้ ──────────────────────────────────────────────────────
+// audience 3 รูปแบบ: "all" · "role:warehouse,owner" · "staff:ST0001,ST0002"
+// dev นับเป็น owner เสมอ (convention เดียวกับ viewRole ฝั่ง frontend) — ไม่งั้นเจ้าของ
+// ที่ตั้งตัวเองเป็น dev จะไม่เห็นแจ้งเตือนที่ยิงหา owner เลยสักอัน
+// pure function — มีสำเนาใน tests/helpers.js (ดู drift-guard.test.js)
+function inappAudienceMatch_(audience, staffId, role) {
+  var a = String(audience || '').trim();
+  if (!a || a === 'all') return true;
+  var effRole = (role === 'dev') ? 'owner' : String(role || '');
+  var sep = a.indexOf(':');
+  if (sep < 0) return false;
+  var kind = a.slice(0, sep);
+  var list = a.slice(sep + 1).split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+  if (kind === 'role')  return list.indexOf(effRole) >= 0 || (role === 'dev' && list.indexOf('dev') >= 0);
+  if (kind === 'staff') return list.indexOf(String(staffId || '')) >= 0;
+  return false;
+}
+
+// อ่านแล้วหรือยัง — readBy เก็บเป็น staffId คั่นด้วย comma
+// pure function — มีสำเนาใน tests/helpers.js
+function inappIsRead_(readBy, staffId) {
+  if (!staffId) return false;
+  var parts = String(readBy || '').split(',');
+  for (var i = 0; i < parts.length; i++) {
+    if (parts[i].trim() === String(staffId)) return true;
+  }
+  return false;
+}
+
+// ── เขียนแจ้งเตือน 1 เรื่องเข้าชีต ────────────────────────────────────────
+// opts: {audience, type, title, body, tab, by, dedupKey, ttlDays}
+// ⚠️ ห้าม throw เด็ดขาด — ตัวเรียกคือเส้นทางสั่งของ/โอนของจริง แจ้งเตือนพลาด
+//    ต้องไม่ทำให้งานหลักล้ม (หลักเดียวกับ appendSaleBillRow_)
+function pushInappNoti_(opts) {
+  try {
+    if (!inappNotiEnabled_()) return;          // ยังไม่เปิดระบบ → เงียบ ไม่ทำอะไรเลย
+    opts = opts || {};
+    var title = String(opts.title || '').trim();
+    if (!title) return;                        // ไม่มีหัวข้อ = ไม่มีอะไรให้แสดง
+
+    var ss = SpreadsheetApp.openById(SHEET_ID);
+    var sh = inappNotiSheet_(ss);
+    var now = new Date();
+    var dedupKey = String(opts.dedupKey || '');
+
+    // dedup: มีแถว dedupKey เดียวกันที่ยังไม่หมดอายุอยู่แล้ว → ข้าม (กันรัวซ้ำเรื่องเดิม)
+    // สแกนเฉพาะเมื่อมี dedupKey — ไม่งั้นทุกออเดอร์ต้องอ่านชีตฟรี ๆ
+    if (dedupKey) {
+      var last = sh.getLastRow();
+      if (last >= 2) {
+        var from = Math.max(2, last - INAPP_SCAN_ROWS + 1);
+        var scan = sh.getRange(from, 1, last - from + 1, INAPP_HEADERS.length).getValues();
+        for (var i = 0; i < scan.length; i++) {
+          if (String(scan[i][INAPP_COL.DEDUP - 1]) !== dedupKey) continue;
+          var exp = scan[i][INAPP_COL.EXPIRES - 1];
+          if (!exp || new Date(exp).getTime() > now.getTime()) return;   // ยังสด → ข้าม
+        }
+      }
+    }
+
+    var keepDays = parseInt(PropertiesService.getScriptProperties().getProperty('INAPP_NOTI_KEEP_DAYS') || '', 10)
+                   || INAPP_KEEP_DAYS_DEFAULT;
+    var ttlDays = Number(opts.ttlDays) > 0 ? Number(opts.ttlDays) : keepDays;
+
+    sh.appendRow([
+      Utilities.getUuid().slice(0, 8),
+      now,
+      String(opts.audience || 'all'),
+      String(opts.type || 'system'),
+      title,
+      String(opts.body || ''),
+      String(opts.tab || ''),
+      String(opts.by || ''),
+      dedupKey,
+      '',
+      new Date(now.getTime() + ttlDays * 86400000),
+    ]);
+  } catch (e) {
+    Logger.log('pushInappNoti_ error (ข้ามไป ไม่กระทบงานหลัก): ' + e);
+  }
+}
+
+// ── doGet action=inappNoti — frontend poll ทุก ~25 วิ ─────────────────────
+// คืนรายการล่าสุดของ "คนที่ล็อกอินอยู่" + จำนวนที่ยังไม่อ่าน
+// ไม่ใช้ since/merge เพราะรายการมีเพดาน 30 แถวอยู่แล้ว — ส่งทั้งชุดให้ client แทนที่ทิ้ง
+// ง่ายกว่าและไม่มีบั๊ก merge (เคยเจอ pattern นี้พังเงียบมาแล้วกับ orders polling)
+function listInappNotiHandler_(e) {
+  try {
+    var ss = SpreadsheetApp.openById(SHEET_ID);
+    var sess = resolveSession_(ss, (e && e.parameter && e.parameter.sessionToken) || '');
+    if (!sess || sess.status !== 'active') return unauthorized_();
+    if (!inappNotiEnabled_()) {
+      return ContentService.createTextOutput(JSON.stringify({ ok: true, off: true, items: [], unread: 0 }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    var sh = ss.getSheetByName(SHEET_INAPP_NOTI);
+    if (!sh) {
+      return ContentService.createTextOutput(JSON.stringify({ ok: true, items: [], unread: 0 }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    var last = sh.getLastRow();
+    if (last < 2) {
+      return ContentService.createTextOutput(JSON.stringify({ ok: true, items: [], unread: 0 }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    var from = Math.max(2, last - INAPP_SCAN_ROWS + 1);
+    var vals = sh.getRange(from, 1, last - from + 1, INAPP_HEADERS.length).getValues();
+
+    var nowMs = Date.now();
+    var items = [], unread = 0;
+    for (var i = vals.length - 1; i >= 0 && items.length < INAPP_MAX_RETURN; i--) {
+      var r = vals[i];
+      var exp = r[INAPP_COL.EXPIRES - 1];
+      if (exp && new Date(exp).getTime() < nowMs) continue;                   // หมดอายุแล้ว
+      if (!inappAudienceMatch_(r[INAPP_COL.AUDIENCE - 1], sess.staffId, sess.role)) continue;
+      var isRead = inappIsRead_(r[INAPP_COL.READBY - 1], sess.staffId);
+      if (!isRead) unread++;
+      items.push({
+        id:    String(r[INAPP_COL.ID - 1] || ''),
+        ts:    r[INAPP_COL.CREATED - 1] ? new Date(r[INAPP_COL.CREATED - 1]).getTime() : 0,
+        type:  String(r[INAPP_COL.TYPE - 1] || 'system'),
+        title: String(r[INAPP_COL.TITLE - 1] || ''),
+        body:  String(r[INAPP_COL.BODY - 1] || ''),
+        tab:   String(r[INAPP_COL.TAB - 1] || ''),
+        by:    String(r[INAPP_COL.BY - 1] || ''),
+        read:  isRead,
+      });
+    }
+    return ContentService.createTextOutput(JSON.stringify({ ok: true, items: items, unread: unread, serverTs: nowMs }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// ── doPost action=markNotiRead — {ids:[...]} หรือ {all:true} ──────────────
+function markInappNotiReadHandler_(ss, data) {
+  try {
+    var sess = resolveSession_(ss, data.sessionToken);
+    if (!sess || sess.status !== 'active') return unauthorized_();
+
+    var sh = ss.getSheetByName(SHEET_INAPP_NOTI);
+    if (!sh) return ContentService.createTextOutput(JSON.stringify({ ok: true, marked: 0 }))
+      .setMimeType(ContentService.MimeType.JSON);
+    var last = sh.getLastRow();
+    if (last < 2) return ContentService.createTextOutput(JSON.stringify({ ok: true, marked: 0 }))
+      .setMimeType(ContentService.MimeType.JSON);
+
+    var wantAll = data.all === true;
+    var ids = {};
+    if (!wantAll && Array.isArray(data.ids)) {
+      for (var k = 0; k < data.ids.length; k++) ids[String(data.ids[k])] = true;
+    }
+
+    var from = Math.max(2, last - INAPP_SCAN_ROWS + 1);
+    var vals = sh.getRange(from, 1, last - from + 1, INAPP_HEADERS.length).getValues();
+    var marked = 0;
+    for (var i = 0; i < vals.length; i++) {
+      var r = vals[i];
+      if (!wantAll && !ids[String(r[INAPP_COL.ID - 1])]) continue;
+      // ต้องเป็นแถวที่คนนี้มีสิทธิ์เห็นจริง — กันยิง id มั่วมาปั๊มสถานะแถวของคนอื่น
+      if (!inappAudienceMatch_(r[INAPP_COL.AUDIENCE - 1], sess.staffId, sess.role)) continue;
+      if (inappIsRead_(r[INAPP_COL.READBY - 1], sess.staffId)) continue;
+      var cur = String(r[INAPP_COL.READBY - 1] || '').trim();
+      sh.getRange(from + i, INAPP_COL.READBY).setValue(cur ? cur + ',' + sess.staffId : String(sess.staffId));
+      marked++;
+    }
+    return ContentService.createTextOutput(JSON.stringify({ ok: true, marked: marked }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// ── ล้างแถวหมดอายุ (เรียกจาก dailyAttendanceMaintenance) ──────────────────
+// ลบจากล่างขึ้นบน — ลบจากบนลงล่าง index จะเลื่อนทุกครั้งที่ลบ (บทเรียนข้อ 5)
+function purgeInappNoti_(ss) {
+  var sh = ss.getSheetByName(SHEET_INAPP_NOTI);
+  if (!sh) return 0;
+  var last = sh.getLastRow();
+  if (last < 2) return 0;
+  var vals = sh.getRange(2, 1, last - 1, INAPP_HEADERS.length).getValues();
+  var nowMs = Date.now();
+  var n = 0;
+  for (var i = vals.length - 1; i >= 0 && n < INAPP_PURGE_MAX; i--) {
+    var exp = vals[i][INAPP_COL.EXPIRES - 1];
+    if (!exp || new Date(exp).getTime() >= nowMs) continue;
+    sh.deleteRow(i + 2);
+    n++;
+  }
+  return n;
+}
+
+// ⚠️ ชื่อฟังก์ชันห้ามลงท้าย _ ไม่งั้นไม่โผล่ใน dropdown ของ GAS editor (บทเรียนข้อ 1)
+function setupInappNoti() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  inappNotiSheet_(ss);   // สร้างชีตให้เลย จะได้เห็นหัวตารางทันที
+  PropertiesService.getScriptProperties().setProperty('INAPP_NOTI_ENABLED', 'true');
+  Logger.log('✅ เปิดแจ้งเตือนในแอปแล้ว — ชีต "' + SHEET_INAPP_NOTI + '" พร้อมใช้งาน');
+  Logger.log('   เก็บแจ้งเตือน ' + INAPP_KEEP_DAYS_DEFAULT + ' วัน (ปรับที่ Script Property INAPP_NOTI_KEEP_DAYS)');
+  Logger.log('   ล้างของเก่าอัตโนมัติพ่วงกับ dailyAttendanceMaintenance (trigger 22:00) — ไม่ต้องตั้ง trigger เพิ่ม');
+}
+
+function disableInappNoti() {
+  PropertiesService.getScriptProperties().setProperty('INAPP_NOTI_ENABLED', 'false');
+  Logger.log('ปิดแจ้งเตือนในแอปแล้ว — กระดิ่งจะว่างเปล่า ระบบอื่นไม่กระทบ');
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -8276,6 +8584,14 @@ function sendLineGroupOrderCard_(name, sku, date, imageUrl, qty) {
   enqueueNoti_({
     channel: 'primary', priority: 1, type: 'order',
     payload: { name: name || '', sku: sku || '', date: date || '', imageUrl: imageUrl || '', qty: Number(qty) || 0 }
+  });
+  // แจ้งเตือนในแอปด้วย — จุดนี้ครอบคลุมทุกที่ที่สั่งของ (ทั้ง 3 call site) ในที่เดียว
+  // ต่างจาก LINE ตรงที่ **ไม่ถูกกลั้นรอรอบ 16:00** เพราะไม่กิน quota → คลังเห็นทันที
+  pushInappNoti_({
+    audience: 'role:warehouse,employee,owner',
+    type: 'order', tab: 'orders',
+    title: '📦 ออเดอร์ใหม่ ' + (Number(qty) || 0) + ' ชิ้น',
+    body: (name || sku || '-') + (sku ? ' · ' + sku : ''),
   });
 }
 

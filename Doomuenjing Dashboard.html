@@ -2,7 +2,27 @@
 <html lang="th">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1.0" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0" id="dmj-viewport-meta" />
+<script>
+  // แก้เฉพาะเครื่องที่ UA รายงานเป็น desktop (X11; Linux x86_64, ไม่มี Android/Mobile)
+  // ทั้งที่จริงเป็นจอสัมผัสมือถือ — เจอเคสจริง: WebView แบบนี้ไม่ยึด width=device-width
+  // ตามที่ควร ทำให้ทั้งหน้าถูกคำนวณ viewport กว้างเกิน แล้วบีบ (zoom) ลงมาให้พอดีจอ
+  // ผลคือทุกอย่างเล็กลงทั้งหน้า (ตัวหนังสือ/ปุ่ม) — แก้โดยบังคับความกว้าง viewport ตาม
+  // จอจริง (screen.width) แทน device-width เฉยๆ + ขยาย UI ทั้งหน้าด้วย zoom ให้อ่านง่ายขึ้น
+  (function () {
+    try {
+      var ua = navigator.userAgent || "";
+      var looksDesktopUA = /X11;\s*Linux/i.test(ua) && !/Android|Mobile|iPhone|iPad/i.test(ua);
+      var isTouch = ("ontouchstart" in window) || (navigator.maxTouchPoints > 0);
+      if (looksDesktopUA && isTouch) {
+        var w = Math.round(window.screen && window.screen.width || window.innerWidth || 390);
+        var vp = document.getElementById("dmj-viewport-meta");
+        if (vp) vp.setAttribute("content", "width=" + w + ",initial-scale=1,maximum-scale=1");
+        document.documentElement.classList.add("dmj-device-zoomfix");
+      }
+    } catch (e) {}
+  })();
+</script>
 <title>Doomuenjing · Dashboard</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#1f7f44">
@@ -56,6 +76,9 @@
 
   html, body { font-family: "IBM Plex Sans Thai","Inter",system-ui,sans-serif; }
   html { overflow-x: hidden; }
+  /* เฉพาะเครื่องที่ตรวจพบว่า UA รายงานเป็น desktop ทั้งที่เป็นจอสัมผัส (ดู <script> บนสุดของ head)
+     ขยาย UI ทั้งหน้าให้อ่านง่ายขึ้น — zoom เป็น non-standard property แต่ WebView กลุ่มนี้ (Blink/Chrome) รองรับ */
+  html.dmj-device-zoomfix { zoom: 1.3; }
   body {
     background: var(--bg);
     color: var(--text);
@@ -206,21 +229,62 @@
   .page-sub { font-size: 13px; color: var(--muted); margin-top: 4px; }
   .page-actions { display: flex; gap: 10px; align-items: center; }
 
-  /* ── แถบฟิลเตอร์ย่อ sticky (OverviewView) — โผล่มาเมื่อเลื่อนพ้นหัวข้อ ── */
-  .overview-stickybar {
-    position: fixed; left: 0; right: 0; z-index: 45;
-    background: var(--paper); border-bottom: 1px solid var(--bdr);
-    box-shadow: 0 4px 14px rgba(0,0,0,.06);
-    transform: translateY(-8px); opacity: 0; pointer-events: none;
-    transition: transform .18s ease, opacity .18s ease;
+  /* ── OverviewView: ปุ่มลอย (FAB) + modal ตัวกรอง/ไปที่หัวข้อ ─────────────────────
+       เคยลองทั้ง sticky bar เต็มความกว้าง และการ์ดลอยชิดขอบซ้ายมาก่อน — ทั้งคู่ยังต้อง
+       คำนวณความสูง topnav + จัดวางแบบ fixed ใต้ nav ซึ่งพัง/บังเนื้อหาต่างกันไปเวลา
+       สลับมือถือแนวตั้ง (จอสูงแคบ) ↔ แนวนอน (จอเตี้ยกว้าง) ↔ iPad (จอใหญ่)
+       → เปลี่ยนมาใช้ FAB มุมล่างขวา (ตำแหน่งเดียวกันทุกขนาดจอ ไม่ต้องคำนวณอะไร)
+       เปิด modal กลางจอ (fixed inset:0 + card กลาง + max-height + scroll ภายใน)
+       ซึ่งเป็น pattern เดียวกับ modal อื่นในแอป (ดู ProductModal) ที่ทนทุก orientation
+       อยู่แล้วเพราะไม่ผูกกับตำแหน่ง/ความสูงของ nav เลย ── */
+  .ov-fab {
+    position: fixed; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    z-index: 45; font-family: inherit; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 12px 18px; border-radius: 99px; font-size: 13px; font-weight: 700;
+    background: #1b5e20; color: #fff; border: none;
+    box-shadow: 0 6px 18px rgba(0,0,0,.25);
+    max-width: calc(100vw - 32px);
   }
-  .overview-stickybar.show { transform: translateY(0); opacity: 1; pointer-events: auto; }
-  .overview-stickybar-inner {
-    max-width: 1480px; margin: 0 auto; padding: 10px 28px;
-    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  .ov-fab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (max-width: 380px) { .ov-fab-label { max-width: 38vw; } }
+
+  .ov-modal-overlay {
+    position: fixed; inset: 0; z-index: 200;
+    background: rgba(20,30,20,.5); backdrop-filter: blur(3px);
+    display: flex; align-items: center; justify-content: center; padding: 16px;
+    box-sizing: border-box;
   }
-  .overview-stickybar-title { font-size: 13px; font-weight: 700; color: var(--text); margin-right: 4px; white-space: nowrap; }
-  @media (prefers-reduced-motion: reduce) { .overview-stickybar { transition: none; } }
+  .ov-modal-card {
+    background: var(--paper); border-radius: 16px; width: 100%; max-width: 560px;
+    max-height: 88vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,.3);
+    box-sizing: border-box;
+  }
+  .ov-modal-header {
+    position: sticky; top: 0; z-index: 1; background: var(--paper);
+    padding: 16px 18px; border-bottom: 1px solid var(--bdr);
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 15px; font-weight: 800; color: var(--text);
+  }
+  .ov-modal-close {
+    border: 1px solid var(--bdr); background: #fff; border-radius: 10px;
+    width: 40px; height: 40px; cursor: pointer; font-size: 20px; color: var(--muted);
+    font-family: inherit; flex-shrink: 0;
+  }
+  .ov-modal-body { padding: 14px 18px 22px; }
+  .ov-modal-body .ov-filterbar { margin: 0 0 16px; }
+  .ov-modal-section-title {
+    font-size: 12px; font-weight: 700; color: var(--muted);
+    margin: 4px 0 8px; padding-top: 12px; border-top: 1px solid var(--bdr);
+  }
+  .ov-jumplist { display: flex; flex-direction: column; gap: 6px; }
+  .ov-jumplist-item {
+    font-family: inherit; cursor: pointer; text-align: left; white-space: nowrap;
+    padding: 12px 14px; border-radius: 10px; font-size: 13.5px; font-weight: 600;
+    border: 1px solid var(--bdr); background: var(--g-50); color: var(--g-700);
+    min-height: 44px; overflow: hidden; text-overflow: ellipsis;
+  }
+  .ov-jumplist-item:active { background: var(--g-100, var(--g-50)); }
   .btn {
     font-family: inherit; cursor: pointer;
     font-size: 13px; font-weight: 600;
@@ -308,7 +372,6 @@
   @media (max-width: 1200px) {
     .topnav-inner { padding: 12px 20px; gap: 16px; }
     .main { padding: 20px; }
-    .overview-stickybar-inner { padding: 10px 20px; }
   }
   @media (max-width: 1100px) {
     .row-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -332,7 +395,6 @@
     .owner-l1::-webkit-scrollbar, .owner-l2::-webkit-scrollbar { height: 4px; }
     .owner-grp, .owner-sub { flex-shrink: 0; white-space: nowrap; }
     .main { padding: 16px; }
-    .overview-stickybar-inner { padding: 8px 16px; }
     .cat-layout { grid-template-columns: 200px 1fr; }
   }
   @media (max-width: 900px) {
@@ -347,8 +409,6 @@
   @media (max-width: 768px) {
     .row-2 { grid-template-columns: 1fr; }
     .main { padding: 14px; }
-    .overview-stickybar-inner { padding: 8px 14px; }
-    .overview-stickybar-title { display: none; } /* พื้นที่แคบ — ปุ่มควบคุมสำคัญกว่าหัวข้อ */
     .cat-layout { grid-template-columns: 1fr; }
     .cat-sidebar { position: static !important; }
     .page-title { font-size: 22px; }
@@ -379,7 +439,6 @@
     .row-4 { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; } /* Keep 2x2 KPIs on phones */
     .row-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .main { padding: 10px; }
-    .overview-stickybar-inner { padding: 8px 10px; gap: 6px; }
     .topnav-inner { padding: 8px 10px; }
     .brand-mark { width: 32px; height: 32px; font-size: 15px; }
     .brand-name { font-size: 14px; }
@@ -610,35 +669,51 @@
     .fchip { font-size: 12px; padding: 8px 12px; min-height: 44px; }
   }
 
-  /* ── OverviewView filter bar — จัดกลุ่ม select หมวด/เดือน + Seg ไว้ในกล่องเดียว
-       กันหน้าตา "ลอย" แยกกัน ให้รู้สึกเป็นแถบตัวกรองเดียวที่จับต้องได้
-       สำคัญ: iOS Safari เรนเดอร์ <select> เป็น native control ที่มีกรอบ/เงาของตัวเอง
-       เสมอ ต่อให้ห่อด้วย wrapper ก็ยังดู "ลอยเป็นกล่องแยก" อยู่ดี ต้อง appearance:none
-       ปิด native chrome แล้ววาดลูกศรเองถึงจะแบนเข้ากับแถบเดียวกันได้จริง ── */
+  /* ── OverviewView: ตัวกรอง หมวด/ปี/เดือน แบบ "ปุ่มกดครบทุกตัว ตกบรรทัดเอง" ──────
+       เลิกใช้ <select> ทั้งหมด — บน iOS มันเป็น native control ที่มีกรอบ/เงาของตัวเอง
+       ดูลอยแยกจาก UI อื่นเสมอ แก้ด้วย CSS ไม่หายขาด และผู้ใช้ต้องกด 2 ครั้ง
+       (เปิด dropdown → เลือก) กว่าจะเห็นว่ามีตัวเลือกอะไรบ้าง
+       เคยลองเป็นแถวเลื่อนแนวนอนมาก่อน แต่ใช้ยากพอๆ กันข้ามอุปกรณ์ — จอแคบ (มือถือ
+       แนวตั้ง) เห็นได้ทีละนิด, จอกว้าง/เตี้ย (แนวนอน, iPad) ไม่มี indicator บอกว่ายัง
+       เลื่อนได้อีก คนไม่ถนัดเทคโนโลยีจะไม่รู้ว่ามีตัวเลือกซ่อนอยู่ด้านขวา
+       → เปลี่ยนเป็น "ตกบรรทัดเอง" (flex-wrap) เห็นทุกตัวเลือกพร้อมกันเสมอ ไม่ว่าจอ
+       จะกว้าง/แคบ/สูง/เตี้ยแค่ไหน ── */
   .ov-filterbar {
-    display: flex; align-items: stretch; flex-wrap: wrap;
-    background: var(--paper); border: 1.5px solid var(--bdr); border-radius: 12px;
-    padding: 2px; box-sizing: border-box; overflow: hidden;
+    background: var(--paper); border: 1.5px solid var(--bdr); border-radius: 14px;
+    padding: 8px 10px; box-sizing: border-box; margin-bottom: 10px;
+    display: flex; flex-direction: column; gap: 10px;
   }
-  .overview-stickybar-inner .ov-filterbar { background: var(--paper); }
-  .ov-filterbar select {
-    -webkit-appearance: none; -moz-appearance: none; appearance: none;
-    font-family: inherit; cursor: pointer; box-sizing: border-box;
-    border: none; background: transparent; border-radius: 10px;
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M1 1l4 4 4-4' stroke='%236b7a70' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
-    background-repeat: no-repeat; background-position: right 8px center;
-    padding-right: 22px !important;
+  .ov-pillrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+  .ov-pillrow-label {
+    flex: 0 0 auto; font-size: 11.5px; font-weight: 700;
+    color: var(--muted); white-space: nowrap;
   }
-  .ov-filterbar select + select { border-left: 1px solid var(--bdr); }
-  .ov-filterbar select.active { background-color: var(--g-50); color: var(--g-700); }
-  .ov-filterbar .seg {
-    background: transparent; border: none; border-left: 1px solid var(--bdr);
-    border-radius: 0; margin: 0; padding: 2px; flex-shrink: 0;
+  .ov-pillrow-hint { flex: 0 0 auto; font-size: 11px; color: #b26a00; white-space: nowrap; }
+  .ov-pillrow-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ov-pill {
+    font-family: inherit; cursor: pointer; white-space: nowrap;
+    padding: 8px 14px; border-radius: 99px; font-size: 12.5px; font-weight: 600;
+    border: 1.5px solid var(--bdr); background: var(--paper); color: var(--g-700);
+    min-height: 38px; transition: background .15s, color .15s, border-color .15s;
+  }
+  .ov-pill:hover { border-color: var(--g-400); background: var(--g-50); }
+  .ov-pill.on {
+    background: #1b5e20; border-color: #1b5e20; color: #fff; font-weight: 700;
+    box-shadow: 0 2px 6px rgba(31,127,68,.25);
+  }
+  .ov-pill.disabled {
+    opacity: .4; cursor: not-allowed; color: var(--muted);
+  }
+  .ov-pill.disabled:hover { background: var(--paper); border-color: var(--bdr); }
+  .ov-chevron { font-size: 10px; opacity: .8; }
+  /* หมวด: ลิสต์ที่กางลงมาเมื่อกดปุ่ม "🏷️ ทุกหมวด ▾" — เยื้องเข้ามาให้เห็นว่าเป็นลูกของปุ่มด้านบน */
+  .ov-catlist {
+    display: flex; flex-wrap: wrap; gap: 6px;
+    margin: 8px 0 0; padding: 8px 0 0 4px; border-top: 1px dashed var(--bdr);
   }
   @media (max-width: 480px) {
-    .ov-filterbar { width: 100%; }
-    .ov-filterbar select { flex: 1 1 auto; min-width: 0; }
-    .ov-filterbar .seg { flex-shrink: 0; }
+    .ov-filterbar { padding: 8px; border-radius: 12px; }
+    .ov-pill { padding: 7px 12px; font-size: 12px; min-height: 40px; }
   }
 
   /* KPI Card */
@@ -987,6 +1062,15 @@
       break-after: page;
     }
     .quote-print-page:last-child { page-break-after: avoid; break-after: avoid; }
+    /* พิมพ์จากมือถือ (JS ตั้ง class .quote-print-mobile ที่ <body> ก่อน window.print() —
+       ดูจาก window.innerWidth ตอนกดพิมพ์ ไม่ใช่ media query เพราะความกว้างตอนพิมพ์เท่ากันทั้ง
+       จอมือถือ/คอม): บั๊กที่เจอคือ min-height:297mm + flex:1 ของกล่องตารางสินค้า (ยืดเต็มหน้า
+       ให้ดูเหมือนเอกสาร ZORT ต้นฉบับ) รวมความสูงเกิน 1 หน้าบนเบราว์เซอร์มือถือ (rounding ต่างจาก
+       คอม) ดันกล่องสรุปยอด+ช่องเซ็นล้นไปหน้า 2 ที่มีแต่พื้นที่ว่าง — ปิด min-height บังคับ +
+       ปิด flex:1 ของกล่องตารางสินค้า ให้เนื้อหาไหลตามจริงพอดี 1 หน้าเสมอ (คอมไม่แตะ ยังยืดเต็ม
+       หน้าแบบเดิม) */
+    .quote-print-mobile .quote-print-page { min-height: 0 !important; }
+    .quote-print-mobile .quote-items-fill { flex: none !important; }
     /* ใบเสร็จ 80mm — ขนาดหน้ากระดาษจริงคุมด้วย JS (setPosPrintPageSize) เพราะ
        named @page (page: rc80) ไม่ทำงานเชื่อถือได้บน Chrome/Android print pipeline
        (เนื้อหาเลยไปฝังในหน้า A4 แล้วถูกเครื่องพิมพ์ย่อลงมาเล็กจิ๋วมุมกระดาษ) */
@@ -1067,6 +1151,76 @@
 }
 @media (min-width: 900px) {
   .storage-product-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+}
+
+/* ── กระดิ่งแจ้งเตือนในแอป 🔔 ── */
+.noti-btn {
+  position: relative;
+  min-width: 44px; min-height: 44px;      /* touch target — พนักงานกดบนมือถือ */
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: transparent; cursor: pointer; padding: 0;
+  border-radius: var(--r-sm);
+}
+.noti-btn:hover { background: var(--g-50); }
+.noti-badge {
+  position: absolute; top: 4px; right: 2px;
+  min-width: 18px; height: 18px; padding: 0 4px;
+  border-radius: 9px; background: var(--dang); color: #fff;
+  font-size: 11px; font-weight: 800; line-height: 18px; text-align: center;
+  border: 2px solid var(--paper); box-sizing: content-box;
+}
+.noti-backdrop { position: fixed; inset: 0; z-index: 1000; background: transparent; }
+/* position/top/right มาจาก inline style (วัดจากปุ่มจริง) — panel ถูก portal ไปที่ body
+   เพราะ .topnav มี overflow-x:hidden ที่ตัดกล่องนี้ทิ้งถ้าวางไว้ข้างใน */
+.noti-panel {
+  position: fixed; z-index: 1001;
+  width: min(360px, calc(100vw - 24px));
+  background: var(--paper); border: 1px solid var(--bdr);
+  border-radius: var(--r-md, 12px); box-shadow: 0 12px 32px rgba(16,62,35,.18);
+  overflow: hidden;
+}
+.noti-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 11px 12px; border-bottom: 1px solid var(--bdr);
+  background: var(--g-50, #f2f8f2);
+}
+.noti-readall {
+  border: 1px solid var(--bdr-2); background: var(--paper); color: var(--g-700);
+  font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+  padding: 6px 9px; border-radius: var(--r-sm); min-height: 32px;
+}
+.noti-close {
+  border: none; background: transparent; color: var(--muted); cursor: pointer;
+  font-size: 15px; line-height: 1; padding: 6px 8px; min-height: 32px; min-width: 32px;
+  font-family: inherit;
+}
+.noti-list { max-height: min(70vh, 460px); overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.noti-empty { padding: 30px 16px; text-align: center; color: var(--text); }
+.noti-item {
+  display: flex; align-items: flex-start; gap: 10px; width: 100%;
+  padding: 11px 12px; border: none; border-bottom: 1px solid var(--bdr);
+  background: var(--paper); cursor: pointer; text-align: left;
+  font-family: inherit; color: var(--text);
+}
+.noti-item:last-child { border-bottom: none; }
+.noti-item:hover { background: var(--g-50, #f2f8f2); }
+.noti-item.unread { background: #f3faf5; }
+.noti-emoji {
+  flex: 0 0 auto; width: 34px; height: 34px; border-radius: 9px;
+  display: flex; align-items: center; justify-content: center; font-size: 17px;
+}
+/* minWidth:0 = กันข้อความยาวดันการ์ดล้นจอ (บทเรียนข้อ 4 เรื่อง flex child) */
+.noti-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.noti-title { font-size: 13.5px; font-weight: 700; line-height: 1.35; }
+.noti-body  { font-size: 12.5px; color: var(--muted); line-height: 1.4; word-break: break-word; }
+.noti-time  { font-size: 11px; color: var(--light); }
+.noti-dot {
+  flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%;
+  background: var(--g-600); margin-top: 6px;
+}
+@media (max-width: 480px) {
+  /* จอเล็ก: กางเต็มความกว้าง ไม่ให้ล้นขอบขวา (left/right มาจาก inline style) */
+  .noti-panel { width: auto; }
 }
 
 </style>

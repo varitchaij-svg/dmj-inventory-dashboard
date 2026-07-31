@@ -1673,6 +1673,9 @@ function App() {
                 {zortSyncing ? <span className="spin" style={{width:14,height:14,borderWidth:2}}/> : "⬇️"}
               </button>
             )}
+            {/* กระดิ่งแจ้งเตือนในแอป — แจ้งได้ไม่จำกัดเพราะไม่กิน quota LINE
+                แท็บปลายทางที่ role นี้ไม่มีสิทธิ์เปิด → ไม่ nav (แต่ยังกดอ่านได้ตามปกติ) */}
+            <NotiBell onNavigate={(t) => { if (allowedTabIds.includes(t)) handleSetTab(t); }}/>
             <button title={`${staff ? staff.name + " · " : ""}${ROLE_LABELS[role]} · ออกจากระบบ`}
                  onClick={() => setConfirmAction({ type: "logout" })}
                  style={{minHeight:44,minWidth:44,padding:"3px 8px",border:"none",
@@ -1790,7 +1793,7 @@ function App() {
       <main className="main" data-screen-label={activeTab}>
         {activeTab === "overview"     && <ErrorBoundary key="overview"><OverviewView data={data} range={range} setRange={setRange} role={viewRole}/></ErrorBoundary>}
         {activeTab === "whhome"       && <ErrorBoundary key="whhome"><WarehouseHomeView data={data} onNav={handleSetTab}/></ErrorBoundary>}
-        {activeTab === "categories"   && <ErrorBoundary key="categories"><CategoryView data={data} role={viewRole}/></ErrorBoundary>}
+        {activeTab === "categories"   && <ErrorBoundary key="categories"><CategoryView data={data} role={viewRole} onNav={handleSetTab}/></ErrorBoundary>}
         {activeTab === "trends"       && <ErrorBoundary key="trends"><TrendsView data={data} role={viewRole}/></ErrorBoundary>}
         {activeTab === "stock"        && <ErrorBoundary key="stock"><StockView data={data} role={viewRole}/></ErrorBoundary>}
         {activeTab === "newproduct"   && <ErrorBoundary key="newproduct"><AddProductView data={data} role={viewRole} onAdded={fetchFromSheet}/></ErrorBoundary>}

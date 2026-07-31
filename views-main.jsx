@@ -973,6 +973,50 @@ function buildYoYSeries(monthLabels, monthlyByCat) {
   return { years, rows };
 }
 
+// ── ปุ่มกรองแบบ pill สำหรับ OverviewView ──────────────────────────────
+// ประกาศนอก OverviewView โดยตั้งใจ: ถ้าประกาศข้างในจะกลายเป็น component ตัวใหม่
+// ทุกครั้งที่ re-render → React unmount/remount ทั้งแถบ
+// ── ปุ่ม/แถวเป็น "wrap ตกบรรทัด" ไม่ใช้ horizontal-scroll แล้ว (เดิมเคยลอง sticky bar
+//    + เลื่อนแนวนอน แต่ใช้ยากทั้งมือถือแนวตั้ง/แนวนอน/iPad — จอสั้นลง (แนวนอน) หรือ
+//    จอกว้างขึ้น (iPad) ทำให้ตำแหน่ง/ขนาดของ sticky bar เพี้ยน แถมเลื่อนแนวนอนโดย
+//    ไม่มี indicator ก็มองไม่เห็นว่ามีตัวเลือกอีก โดยเฉพาะผู้ใช้ที่ไม่ถนัดเทคโนโลยี
+//    → เปลี่ยนเป็น "เห็นทุกปุ่มพร้อมกัน ตกบรรทัดเอง" ใช้ได้เหมือนกันทุกขนาดจอ/orientation) ──
+function OvPill({ on, onClick, children, tone, ...rest }) {
+  return (
+    <button type="button" onClick={onClick}
+      className={`ov-pill${on ? " on" : ""}${tone ? " " + tone : ""}`} {...rest}>
+      {children}
+    </button>
+  );
+}
+function OvPillRow({ icon, label, hint, children }) {
+  return (
+    <div className="ov-pillrow">
+      <span className="ov-pillrow-label">{icon} {label}</span>
+      <div className="ov-pillrow-wrap">{children}</div>
+      {hint && <span className="ov-pillrow-hint">{hint}</span>}
+    </div>
+  );
+}
+
+// เลื่อนไปยังหัวข้อที่กด — เผื่อความสูงของ topnav ไว้ ไม่งั้นหัวข้อโดนบัง
+function ovJumpTo(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const nav = document.querySelector('.topnav');
+  const navH = nav ? nav.getBoundingClientRect().height : 0;
+  const y = window.scrollY + el.getBoundingClientRect().top - navH - 10;
+  window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+}
+
+const OV_QUARTERS = [
+  { n: 1, label: "ไตรมาส 1", sub: "ม.ค.-มี.ค.", months: [1,2,3] },
+  { n: 2, label: "ไตรมาส 2", sub: "เม.ย.-มิ.ย.", months: [4,5,6] },
+  { n: 3, label: "ไตรมาส 3", sub: "ก.ค.-ก.ย.", months: [7,8,9] },
+  { n: 4, label: "ไตรมาส 4", sub: "ต.ค.-ธ.ค.", months: [10,11,12] },
+];
+const OV_MONTH_ABBR = ["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
+
 function OverviewView({ data, range, setRange, role }) {
   const rechartsReady = useRechartsReady(); // gate กราฟจนกว่า Recharts (defer) จะพร้อม
   const { products, monthLabels, monthlyByCat, totals, mtoGroups,
@@ -985,44 +1029,26 @@ function OverviewView({ data, range, setRange, role }) {
   // ── new states for month picker + comparison ──────────────────────
   const [selMonth, setSelMonth] = uS(null);   // null = latest
   const [selCat, setSelCat] = uS("");          // "" = ทุกหมวด · เลือกหมวด → กรอง KPI/กราฟ/forecast/top สินค้า
-  const monthStripRef = React.useRef(null);
   const mobile = useIsMobile();                // ซ่อนคอลัมน์รองบนมือถือให้พอดีจอ
 
-  // ── แถบฟิลเตอร์ย่อ (sticky) — โผล่มาเมื่อเลื่อนพ้นหัวข้อ ให้เปลี่ยนปี/เดือน/ช่วงได้โดยไม่ต้องเลื่อนขึ้นบนสุด ──
-  const headSentinelRef = React.useRef(null);
-  const [condensed, setCondensed] = uS(false);
-  const [barTop, setBarTop] = uS(0);
-  uE(() => {
-    let ticking = false;
-    const measure = () => {
-      ticking = false;
-      const nav = document.querySelector('.topnav');
-      const navH = nav ? nav.getBoundingClientRect().height : 0;
-      setBarTop(navH);
-      const sentinel = headSentinelRef.current;
-      if (sentinel) setCondensed(sentinel.getBoundingClientRect().top < navH);
-    };
-    const onScroll = () => { if (!ticking) { ticking = true; requestAnimationFrame(measure); } };
-    measure();
-    window.addEventListener('scroll', onScroll, { passive: true });
-    window.addEventListener('resize', onScroll);
-    return () => { window.removeEventListener('scroll', onScroll); window.removeEventListener('resize', onScroll); };
-  }, []);
+  // ── แถบลัด: ปุ่มลอย (FAB) มุมล่างขวา เปิด modal ตัวกรอง+ไปที่หัวข้อ ──────────────
+  // ตำแหน่ง fixed มุมล่างขวา + safe-area ไม่ขึ้นกับความสูง/กว้างจอ ใช้ได้เหมือนกันทั้ง
+  // มือถือแนวตั้ง/แนวนอน/iPad · ตั้งใจโชว์ "ตลอดเวลา" ไม่ผูกกับ scroll position — เคยลอง
+  // ให้โผล่เฉพาะตอนเลื่อนพ้นหัวข้อ (วัดจาก sentinel เทียบความสูง topnav) แล้วพัง: ปุ่ม
+  // หายไปเฉยๆ ระหว่างใช้งาน + มือถือแนวตั้งบางเครื่องไม่โผล่เลย (แนวตั้ง/นอนทำให้ navH/
+  // ความสูงหน้าเปลี่ยน จังหวะ resize/scroll คำนวณผิดจังหวะได้ง่าย) — โชว์ตลอดแม่นยำกว่า
+  const [filterModalOpen, setFilterModalOpen] = uS(false);
+  useBackHandler(filterModalOpen ? () => setFilterModalOpen(false) : null); // Android back = ปิด modal
+  const [catOpen, setCatOpen] = uS(false); // แถวหมวด: ยุบเป็นปุ่มเดียวโดยดีฟอลต์ กันตัวหนังสือเยอะลายตา
   const [cmpSel,   setCmpSel]   = uS([]);     // explicit month selection for comparison
   const [showCmp,  setShowCmp]  = uS(false);
 
   // activeMonth: currently selected month (for "รายเดือน" mode)
   const activeMonth = selMonth || months[months.length - 1] || null;
 
-  // เลื่อนแถบเดือนไปที่เดือนที่เลือกอัตโนมัติ (เดือนล่าสุดอยู่ขวาสุด นอกจอ — ไม่งั้นหาไม่เจอ)
-  uE(() => {
-    if (range !== 'month' || !monthStripRef.current) return;
-    const el = monthStripRef.current.querySelector('[data-active="1"]');
-    if (el && el.scrollIntoView) el.scrollIntoView({ inline: 'center', block: 'nearest' });
-  }, [range, activeMonth]);
-
   // ── ตัวกรองปี (สำหรับโหมด "ทั้งปี") — เลือกดูปีใดปีหนึ่ง เช่น 2025 / 2026 ──
-  const [selYear, setSelYear] = uS(null); // null = ทุกปีรวมกัน
+  const [selYear, setSelYear] = uS(null); // null = ทุกปีรวมกัน (เฉพาะโหมด "ทั้งปี")
+  const [selQuarter, setSelQuarter] = uS(null); // 1-4
   const availYears = uM(() => {
     const s = new Set();
     months.forEach(m => { const y = m.split("/")[1]; if (y) s.add(y); });
@@ -1031,6 +1057,28 @@ function OverviewView({ data, range, setRange, role }) {
   const yearMonths = uM(() =>
     selYear ? months.filter(m => m.split("/")[1] === selYear) : months
   , [months, selYear]);
+
+  // ── ปีที่ใช้แสดงตัวเลือก "เดือน"/"ไตรมาส" — ต่างจาก selYear ตรงที่ไม่มีค่า "ทุกปีรวม"
+  //    ผู้ใช้อยากให้เดือนมีแค่ 12 ตัวเลือกพอ ไม่ใช่รวมทุกปีมากองกันเป็น 20-30 ปุ่ม
+  //    → ถ้ายังไม่ได้เลือกปี ใช้ปีล่าสุดที่มีข้อมูลเป็นค่าเริ่มต้นไปก่อน ──────────────────
+  const pickerYear = selYear || availYears[availYears.length - 1] || null;
+  const pickerMonthSet = uM(() => new Set(
+    months.filter(m => m.split("/")[1] === pickerYear).map(m => m.split("/")[0])
+  ), [months, pickerYear]);
+  // 12 เดือนเสมอ (ม.ค.-ธ.ค.) — เดือนที่ไม่มีข้อมูลยังโชว์อยู่แต่กดไม่ได้ (เทาไว้)
+  const pickerMonths = uM(() => {
+    if (!pickerYear) return [];
+    return Array.from({length:12}, (_, i) => {
+      const mm = String(i + 1).padStart(2, "0");
+      const key = mm + "/" + pickerYear;
+      return { key, mm: i + 1, label: OV_MONTH_ABBR[i], has: pickerMonthSet.has(mm) };
+    });
+  }, [pickerYear, pickerMonthSet]);
+  const quarterMonths = uM(() => {
+    if (!selQuarter) return [];
+    const qs = OV_QUARTERS.find(q => q.n === selQuarter);
+    return pickerMonths.filter(m => qs.months.includes(m.mm) && m.has).map(m => m.key);
+  }, [selQuarter, pickerMonths]);
 
   const monthlySeries = uM(() => months.map(m => {
     const cats = monthlyByCat[m] || {};
@@ -1092,9 +1140,10 @@ function OverviewView({ data, range, setRange, role }) {
   const filtered = uM(() => {
     if (range === 'day') return dailySeries;
     if (range === 'year') return selYear ? monthlySeries.filter(m => m.month.split("/")[1] === selYear) : monthlySeries;
+    if (range === 'quarter') return monthlySeries.filter(m => quarterMonths.includes(m.month));
     if (range === 'month') return monthlySeries.filter(m => m.month === activeMonth);
     return monthlySeries;
-  }, [monthlySeries, dailySeries, range, activeMonth, selYear]);
+  }, [monthlySeries, dailySeries, range, activeMonth, selYear, quarterMonths]);
 
   const sumRev = filtered.reduce((s,m) => s + m.rev, 0);
   const sumQty = filtered.reduce((s,m) => s + m.qty, 0);
@@ -1129,7 +1178,9 @@ function OverviewView({ data, range, setRange, role }) {
         }
       }
     } else {
-      const targetMonths = range === 'year' ? yearMonths : (activeMonth ? [activeMonth] : months.slice(-1));
+      const targetMonths = range === 'year' ? yearMonths
+        : range === 'quarter' ? quarterMonths
+        : (activeMonth ? [activeMonth] : months.slice(-1));
       for (const m of targetMonths) {
         const cats = monthlyByCat[m] || {};
         for (const c of Object.keys(cats)) {
@@ -1141,7 +1192,7 @@ function OverviewView({ data, range, setRange, role }) {
     return Object.entries(accum)
       .map(([cat, rev]) => ({ cat, rev, color: catColor(cat, allCats) }))
       .sort((a,b) => b.rev - a.rev);
-  }, [monthlyByCat, dailyByCat, range, months, yearMonths, days, allCats, hasDailyData]);
+  }, [monthlyByCat, dailyByCat, range, months, yearMonths, quarterMonths, days, allCats, hasDailyData]);
 
   const topCats = catShare.slice(0, 6).map(c => c.cat);
 
@@ -1188,8 +1239,11 @@ function OverviewView({ data, range, setRange, role }) {
         return row;
       });
     }
-    // ทั้งปี / รายเดือน (no daily) — use monthly data
-    const targetMonths = range === 'month' && activeMonth ? [activeMonth] : (range === 'year' ? yearMonths : months);
+    // ทั้งปี / ไตรมาส / รายเดือน (no daily) — use monthly data
+    const targetMonths = range === 'month' && activeMonth ? [activeMonth]
+      : range === 'year' ? yearMonths
+      : range === 'quarter' ? quarterMonths
+      : months;
     return targetMonths.map(m => {
       const row = { label: monthLabel(m) };
       const cats = monthlyByCat[m] || {};
@@ -1201,7 +1255,7 @@ function OverviewView({ data, range, setRange, role }) {
       row["อื่นๆ"] = Math.round(other);
       return row;
     });
-  }, [months, yearMonths, days, monthlyByCat, dailyByCat, topCats, range, hasDailyData, activeMonth, selMonthDailySeries]);
+  }, [months, yearMonths, quarterMonths, days, monthlyByCat, dailyByCat, topCats, range, hasDailyData, activeMonth, selMonthDailySeries]);
 
   // ── Period selector: map range → per-product {qty, rev} for selected window ──
   const periodInfo = uM(() => {
@@ -1225,6 +1279,20 @@ function OverviewView({ data, range, setRange, role }) {
         perProduct: p => ({ qty: p.soldQty || 0, rev: p.soldRev || 0 }),
       };
     }
+    if (range === 'quarter' && selQuarter) {
+      const qs = OV_QUARTERS.find(q => q.n === selQuarter);
+      const tag = `${qs.label} ปี ${pickerYear}`;
+      return {
+        label: tag, tag,
+        perProduct: p => {
+          let qty = 0, rev = 0;
+          (p.monthly || []).forEach(x => {
+            if (x.month && quarterMonths.includes(x.month)) { qty += x.qty || 0; rev += x.sales || 0; }
+          });
+          return { qty, rev };
+        },
+      };
+    }
     const mk = activeMonth; // month + day mode drill to the active month
     return {
       label: mk ? monthLabel(mk) : "เดือนล่าสุด",
@@ -1234,7 +1302,7 @@ function OverviewView({ data, range, setRange, role }) {
         return { qty: mm ? mm.qty : 0, rev: mm ? mm.sales : 0 };
       },
     };
-  }, [range, activeMonth, months, selYear]);
+  }, [range, activeMonth, months, selYear, selQuarter, pickerYear, quarterMonths]);
 
   // สินค้าที่ไม่ใช่ MTO — คำนวณครั้งเดียว ใช้ร่วมหลาย memo ด้านล่าง (เดิม filter ซ้ำ 6 รอบ/render)
   const sellable = uM(() => products.filter(p => !p.isMTO && (!selCat || p.cat === selCat)), [products, selCat]);
@@ -1592,54 +1660,142 @@ function OverviewView({ data, range, setRange, role }) {
     };
   }, [monthlySeries, dailySeries]);
 
-  const deltaVal  = range === 'day' ? dailyDelta : (range !== 'year' ? momDelta : null);
+  // เทียบไตรมาสก่อนหน้า (QoQ) — ไตรมาส 1 เทียบ Q4 ปีก่อน, อื่นๆ เทียบไตรมาสก่อนหน้าปีเดียวกัน
+  const quarterDelta = uM(() => {
+    if (!selQuarter || !pickerYear) return null;
+    const prevQ = selQuarter === 1 ? 4 : selQuarter - 1;
+    const prevYear = selQuarter === 1 ? String(Number(pickerYear) - 1) : pickerYear;
+    const prevMonthNums = OV_QUARTERS.find(q => q.n === prevQ).months;
+    const prevRevSum = monthlySeries
+      .filter(m => prevMonthNums.includes(Number(m.month.split("/")[0])) && m.month.split("/")[1] === prevYear)
+      .reduce((s, m) => s + m.rev, 0);
+    const curRevSum = filtered.reduce((s, m) => s + m.rev, 0);
+    if (!prevRevSum) return null;
+    return ((curRevSum - prevRevSum) / prevRevSum * 100).toFixed(1);
+  }, [selQuarter, pickerYear, monthlySeries, filtered]);
+
+  const deltaVal  = range === 'day' ? dailyDelta
+    : range === 'month' ? momDelta
+    : range === 'quarter' ? quarterDelta
+    : null;
   const deltaDir  = deltaVal && parseFloat(deltaVal) < 0 ? 'down' : 'up';
   const subLabel  = range === 'day'
     ? (hasDailyData ? `${days.length} วัน (${dailySeries[0]?.label}–${dailySeries[dailySeries.length-1]?.label})` : "ยังไม่มีข้อมูลรายวัน")
     : range === 'month' ? (activeMonth ? monthLabel(activeMonth) : "เดือนล่าสุด")
+    : range === 'quarter' ? (selQuarter ? `${OV_QUARTERS.find(q=>q.n===selQuarter).label} ปี ${pickerYear}` : "เลือกไตรมาส")
     : selYear ? `ปี ${selYear} · ${yearMonths.length} เดือน` : `${months.length} เดือนรวม`;
 
-  // ตัวกรองหมวด/เดือน/ช่วง — ใช้ร่วมกันทั้งแถบปกติ (page-actions) และแถบย่อ sticky ด้านล่าง
-  // (ตัวแปรเดียว กันโค้ด/state หลุดจากกันตอนแก้ทีหลัง)
-  const filterControls = (
-    <div className="ov-filterbar">
-      <select value={selCat} onChange={e=>setSelCat(e.target.value)}
-        title="กรองตามหมวด" className={selCat ? "active" : ""}
-        style={{padding:"9px 10px",color:selCat?"var(--g-700)":"var(--text)",
-                fontSize:13,fontWeight:selCat?700:500,minHeight:40,
-                maxWidth:180,flex:"1 1 130px",minWidth:0}}>
-        <option value="">🏷️ ทุกหมวด</option>
-        {allCats.map(c => <option key={c} value={c}>{c}</option>)}
-      </select>
-      {months.length > 1 && (
-        <select value={range === 'month' ? (selMonth || months[months.length - 1] || "") : ""}
-          onChange={e => { const v = e.target.value; if (v) { setSelMonth(v); setRange('month'); } }}
-          title="เลือกดูเดือน" className={range==='month' ? "active" : ""}
-          style={{padding:"9px 10px",color:range==='month'?"var(--g-700)":"var(--text)",
-                  fontSize:13,fontWeight:range==='month'?700:500,minHeight:40,
-                  maxWidth:150,flex:"1 1 110px",minWidth:0}}>
-          <option value="">📅 เลือกเดือน…</option>
-          {months.slice().reverse().map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
-        </select>
+  // ── ตัวกรอง หมวด / ปี / เดือน — โชว์เป็น "ปุ่มกดครบทุกตัว ตกบรรทัดเอง" ไม่ใช้ dropdown
+  //    และไม่ใช้ horizontal-scroll (ดูหมายเหตุที่ OvPillRow ด้านบน) ──────────────────
+  // ── หมวด: ยุบเป็นปุ่มเดียว "🏷️ [หมวดที่เลือก] ▾" กดถึงกางลิสต์ — ไม่โชว์หมวดทุกอัน
+  //    ตลอดเวลา (ร้านมีหลายหมวด โชว์ครบทุกครั้งลายตาเกินไป) ──────────────────────────
+  const renderCatRow = () => (
+    <div>
+      <div className="ov-pillrow">
+        <span className="ov-pillrow-label">🏷️ หมวด</span>
+        <div className="ov-pillrow-wrap">
+          <OvPill on={catOpen} onClick={()=>setCatOpen(v=>!v)}>
+            {selCat || "ทุกหมวด"} <span className="ov-chevron">{catOpen ? "▴" : "▾"}</span>
+          </OvPill>
+        </div>
+      </div>
+      {catOpen && (
+        <div className="ov-catlist">
+          <OvPill on={!selCat} onClick={()=>{ setSelCat(""); setCatOpen(false); }}>ทุกหมวด</OvPill>
+          {allCats.map(c => (
+            <OvPill key={c} on={selCat===c} onClick={()=>{ setSelCat(selCat===c ? "" : c); setCatOpen(false); }}>{c}</OvPill>
+          ))}
+        </div>
       )}
-      <Seg value={range} onChange={setRange} options={[
-        {value:"day",   label:"รายวัน"},
-        {value:"month", label:"รายเดือน"},
-        {value:"year",  label:"ทั้งปี"},
-      ]}/>
     </div>
   );
 
+  // ── มุมมอง: ทั้งปี / ไตรมาส / เดือน / รายวัน — คุม range ── แยกจากตัวเลือกย่อย
+  //    (ไตรมาสไหน/เดือนไหน) ให้ไม่ปนกันเป็นแถวยาวแถวเดียวจนอ่านยาก
+  const renderPeriodRows = () => (
+    <>
+      <OvPillRow icon="👁️" label="มุมมอง">
+        <OvPill on={range==='year'} onClick={()=>setRange('year')}>ทั้งปี</OvPill>
+        <OvPill on={range==='quarter'} onClick={()=>{ setRange('quarter'); if (!selQuarter) setSelQuarter(1); }}>ไตรมาส</OvPill>
+        <OvPill on={range==='month'} onClick={()=>setRange('month')}>เดือน</OvPill>
+        {hasDailyData && (
+          <OvPill on={range==='day'} onClick={()=>setRange('day')}>รายวัน</OvPill>
+        )}
+      </OvPillRow>
+
+      {availYears.length > 1 && (
+        <OvPillRow icon="📅" label="ปี">
+          {range === 'year' && (
+            <OvPill on={!selYear} onClick={()=>setSelYear(null)}>ทุกปีรวม</OvPill>
+          )}
+          {availYears.slice().reverse().map(y => (
+            <OvPill key={y} on={(range==='year' ? selYear : pickerYear)===y}
+              onClick={()=>setSelYear(range==='year' && selYear===y ? null : y)}>ปี {y}</OvPill>
+          ))}
+        </OvPillRow>
+      )}
+
+      {range === 'quarter' && (
+        <OvPillRow icon="🗓️" label="ไตรมาส">
+          {OV_QUARTERS.map(q => (
+            <OvPill key={q.n} on={selQuarter===q.n} onClick={()=>setSelQuarter(q.n)}>
+              {q.label} <span style={{opacity:.7,fontWeight:500}}>({q.sub})</span>
+            </OvPill>
+          ))}
+        </OvPillRow>
+      )}
+
+      {range === 'month' && (
+        <OvPillRow icon="🗓️" label="เดือน">
+          {pickerMonths.map(m => (
+            <OvPill key={m.key} on={activeMonth===m.key} tone={!m.has ? "disabled" : null}
+              onClick={()=>{ if (!m.has) return; setSelMonth(m.key); }}>
+              {m.label}
+            </OvPill>
+          ))}
+        </OvPillRow>
+      )}
+
+      {range === 'day' && !hasDailyData && (
+        <div className="ov-pillrow-hint" style={{padding:"0 2px"}}>ยังไม่มีข้อมูลรายวัน — อัปโหลด dailySales ก่อน</div>
+      )}
+    </>
+  );
+
+  const renderFilters = () => (
+    <div className="ov-filterbar">
+      {renderCatRow()}
+      {renderPeriodRows()}
+    </div>
+  );
+
+  // ── หัวข้อทั้งหมดในหน้านี้ (สำหรับปุ่มลัดกระโดด ในโมดัลของ FAB) ──────────────────
+  // หน้านี้ยาวมากบนมือถือ — เลื่อนหาหัวข้อเองไม่ไหว จึงมีปุ่มลัดกดไปได้ทันที
+  // show ต้องตรงกับเงื่อนไข render ของแต่ละ section ข้างล่าง ไม่งั้นกดแล้วไม่มีที่ให้ไป
+  const ovSections = uM(() => [
+    { id:"ov-kpi",      label:"📊 ตัวเลขรวม",   show:true },
+    { id:"ov-intake",   label:"📥 ของเข้าใหม่",  show: role==='owner' && !!recentIntake },
+    { id:"ov-forecast", label:"📈 Forecast",    show: role==='owner' && !!forecast },
+    { id:"ov-yoy",      label:"📅 เทียบปีต่อปี",  show: yoy.years.length >= 2 },
+    { id:"ov-charts",   label:"📉 กราฟยอดขาย",  show:true },
+    { id:"ov-cmp",      label:"🆚 เทียบรายเดือน", show: months.length >= 2 && role==='owner' },
+    { id:"ov-mto",      label:"🎨 งานจัดพิเศษ",  show: !!(mtoGroups && mtoGroups.length > 0) },
+    { id:"ov-top10",    label:"🏆 Top 10",      show:true },
+    { id:"ov-topcat",   label:"🏆 Top ตามหมวด",  show:true },
+    { id:"ov-movers",   label:"📊 มาแรง · ตก",   show: momMovers.risers.length > 0 || momMovers.fallers.length > 0 },
+    { id:"ov-velocity", label:"⏱️ ความเร็วขาย",  show: velocity.reorder.length > 0 || velocity.overstock.length > 0 },
+    { id:"ov-abc",      label:"🎯 ABC",         show: abc.n > 0 },
+    { id:"ov-dead",     label:"🧊 สต๊อกตาย",     show: deadStock.count > 0 },
+  ].filter(s => s.show), [role, recentIntake, forecast, yoy, months, mtoGroups, momMovers, velocity, abc, deadStock]);
+
+  // ป้ายสรุปช่วงเวลาที่เลือกอยู่ — โชว์บนปุ่ม FAB
+  const periodChip = range === 'day' ? "รายวัน"
+    : range === 'month' ? (activeMonth ? monthLabel(activeMonth) : "รายเดือน")
+    : range === 'quarter' ? (selQuarter ? `${OV_QUARTERS.find(q=>q.n===selQuarter).label} ปี ${pickerYear}` : "ไตรมาส")
+    : (selYear ? `ปี ${selYear}` : "ทุกปีรวม");
+
   return (
     <div>
-      {/* ─── แถบฟิลเตอร์ย่อ sticky — โผล่มาเมื่อเลื่อนพ้นหัวข้อ ให้เปลี่ยนหมวด/เดือน/ช่วงได้เลยไม่ต้องเลื่อนขึ้น ─── */}
-      <div className={`overview-stickybar${condensed ? ' show' : ''}`} style={{top: barTop}} aria-hidden={!condensed}>
-        <div className="overview-stickybar-inner">
-          <span className="overview-stickybar-title">📊 ภาพรวมยอดขาย</span>
-          {filterControls}
-        </div>
-      </div>
-
       <div className="page-head">
         <div>
           <div className="page-title">ภาพรวมยอดขาย</div>
@@ -1658,12 +1814,11 @@ function OverviewView({ data, range, setRange, role }) {
             )}
           </div>
         </div>
-        <div className="page-actions" style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-          {filterControls}
-        </div>
       </div>
-      {/* sentinel — จุดอ้างอิงว่าเลื่อนพ้นหัวข้อหรือยัง (วัดจาก getBoundingClientRect ใน effect ด้านบน) */}
-      <div ref={headSentinelRef} style={{height:1}}/>
+
+      {/* ตัวกรองเต็ม (หมวด/ปี/เดือน) — ปุ่มตกบรรทัดเอง เห็นตัวเลือกครบไม่ต้องเลื่อนหา
+          ใช้แบบเดียวกันทุกขนาดจอ/แนวจอ (ไม่มี layout พิเศษของมือถือ/iPad แยกกัน) */}
+      {renderFilters()}
       {selCat && (
         <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,fontSize:12,color:"var(--g-700)",background:"var(--g-50)",border:"1px solid var(--g-200)",borderRadius:20,padding:"5px 12px",width:"fit-content"}}>
           <span>🏷️ กรองเฉพาะหมวด: <b>{selCat}</b> — ทุกตัวเลข/กราฟ/Top สินค้าด้านล่างเป็นของหมวดนี้</span>
@@ -1671,56 +1826,41 @@ function OverviewView({ data, range, setRange, role }) {
         </div>
       )}
 
-      {/* ── Year picker strip — เลือกปีเมื่ออยู่ใน "ทั้งปี" ── */}
-      {range === 'year' && availYears.length > 1 && (
-        <div style={{
-          overflowX:'auto', display:'flex', gap:8, paddingBottom:6, marginBottom:16,
-          scrollbarWidth:'none', WebkitOverflowScrolling:'touch',
-        }}>
-          {[null, ...availYears.slice().reverse()].map(y => {
-            const on = selYear === y;
-            return (
-              <button key={y || 'all'} onClick={() => setSelYear(y)}
-                style={{
-                  flexShrink:0, padding:'7px 16px', borderRadius:20,
-                  border:'1.5px solid ' + (on ? '#1b5e20' : 'var(--bdr)'),
-                  background: on ? '#1b5e20' : '#fff',
-                  color: on ? '#fff' : 'var(--g-700)',
-                  fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'inherit',
-                  transition:'background .15s, color .15s, border-color .15s',
-                  whiteSpace:'nowrap',
-                }}>
-                {y ? `ปี ${y}` : 'ทุกปีรวม'}
-              </button>
-            );
-          })}
+      {/* ─── ปุ่มลอย (FAB) มุมล่างขวา — โชว์ตลอดเวลา (ไม่ผูกกับ scroll) ─────────────────
+           เปิด modal เดียวที่รวม "ตัวกรอง" + "ไปที่หัวข้อ" — ใช้ modal กลางจอ เพราะ modal
+           (fixed inset:0 + card กลางจอ + max-height + scroll ภายใน) ไม่ขึ้นกับความสูง/
+           กว้างจอ ใช้ได้เหมือนกันทั้งมือถือแนวตั้ง (จอสูงแคบ), แนวนอน (จอเตี้ยกว้าง), iPad ─── */}
+      <button type="button" className="ov-fab" onClick={()=>setFilterModalOpen(true)}>
+        🔎 <span className="ov-fab-label">{periodChip}{selCat ? ` · ${selCat}` : ""}</span>
+      </button>
+      {filterModalOpen && (
+        <div className="ov-modal-overlay" onClick={()=>setFilterModalOpen(false)}>
+          <div className="ov-modal-card" onClick={e=>e.stopPropagation()}>
+            <div className="ov-modal-header">
+              <span>🔎 ตัวกรอง & ไปที่หัวข้อ</span>
+              <button type="button" className="ov-modal-close" onClick={()=>setFilterModalOpen(false)}>×</button>
+            </div>
+            <div className="ov-modal-body">
+              {renderFilters()}
+              {ovSections.length > 0 && (
+                <>
+                  <div className="ov-modal-section-title">⚡ ไปที่หัวข้อ</div>
+                  <div className="ov-jumplist">
+                    {ovSections.map(s => (
+                      <button key={s.id} type="button" className="ov-jumplist-item"
+                        onClick={()=>{ setFilterModalOpen(false); setTimeout(()=>ovJumpTo(s.id), 50); }}>
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
-      {/* ── Month picker strip — เลือกเดือนเมื่ออยู่ใน "รายเดือน" (auto-scroll ไปเดือนที่เลือก) ── */}
-      {range === 'month' && months.length > 1 && (
-        <div ref={monthStripRef} style={{
-          overflowX:'auto', display:'flex', gap:8, paddingBottom:6, marginBottom:16,
-          scrollbarWidth:'thin', WebkitOverflowScrolling:'touch',
-        }}>
-          {months.map(m => (
-            <button key={m} data-active={activeMonth === m ? "1" : "0"} onClick={() => setSelMonth(m)}
-              style={{
-                flexShrink:0, padding:'7px 16px', borderRadius:20,
-                border:'1.5px solid ' + (activeMonth === m ? '#1b5e20' : 'var(--bdr)'),
-                background: activeMonth === m ? '#1b5e20' : '#fff',
-                color: activeMonth === m ? '#fff' : 'var(--g-700)',
-                fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'inherit',
-                transition:'background .15s, color .15s, border-color .15s',
-                whiteSpace:'nowrap',
-              }}>
-              {monthLabel(m)}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <div className={`row ${role==='employee'?'row-2':'row-4'}`} style={{marginBottom: 20}}>
+      <div id="ov-kpi" className={`row ${role==='employee'?'row-2':'row-4'}`} style={{marginBottom: 20}}>
         {role === 'owner' && (
           <KPI label="ยอดขายรวม" accent="#1f7f44"
                value={fmtB(sumRev)}
@@ -1752,6 +1892,7 @@ function OverviewView({ data, range, setRange, role }) {
         )}
       </div>
 
+      <div id="ov-intake"/>
       {/* ─── ของเข้าใหม่ 30 วัน (จากรายการซื้อ) — owner only ─── */}
       {role === 'owner' && recentIntake && (
         <div style={{marginBottom:20}}>
@@ -1817,6 +1958,7 @@ function OverviewView({ data, range, setRange, role }) {
         </div>
       )}
 
+      <div id="ov-forecast"/>
       {/* ─── Forecast Tool (owner only) ─── */}
       {role === 'owner' && forecast && (
         <div style={{marginBottom: 20}}>
@@ -1939,6 +2081,7 @@ function OverviewView({ data, range, setRange, role }) {
         </div>
       )}
 
+      <div id="ov-yoy"/>
       {/* ── เทียบปีต่อปี (YoY) — seasonality/เทศกาล ── */}
       {yoy.years.length >= 2 && (
         <Card title="📅 เทียบยอดขายปีต่อปี"
@@ -1994,12 +2137,13 @@ function OverviewView({ data, range, setRange, role }) {
         </Card>
       )}
 
-      <div className="row row-12-5" style={{marginBottom: 20}}>
+      <div id="ov-charts" className="row row-12-5" style={{marginBottom: 20}}>
         <Card title={
           range === 'day' ? "ยอดขายรายวัน · แยกหมวด" :
           range === 'month' ? (hasDailyData && selMonthDailySeries.length > 0
             ? `ยอดขายรายวัน · ${activeMonth ? monthLabel(activeMonth) : ''}`
             : `ยอดขายรายเดือน · ${activeMonth ? monthLabel(activeMonth) : ''}`)
+          : range === 'quarter' ? `ยอดขายรายเดือน · ${selQuarter ? OV_QUARTERS.find(q=>q.n===selQuarter).label : ''}`
           : "แนวโน้มยอดขายรายเดือน · แยกหมวด"}
               sub={range === 'month' && hasDailyData && selMonthDailySeries.length > 0
                 ? `${selMonthDailySeries.length} วัน · แท่งซ้อน Top 6 หมวด`
@@ -2026,7 +2170,11 @@ function OverviewView({ data, range, setRange, role }) {
         </Card>
 
         <Card title="สัดส่วนยอดขายตามหมวด"
-              sub={`${catShare.length} หมวด · ` + (range==='year' ? (selYear ? `ปี ${selYear}` : "ทั้งปี") : range==='day' ? `${days.length} วันล่าสุด` : (activeMonth ? monthLabel(activeMonth) : "เดือนล่าสุด"))}>
+              sub={`${catShare.length} หมวด · ` + (
+                range==='year' ? (selYear ? `ปี ${selYear}` : "ทั้งปี")
+                : range==='day' ? `${days.length} วันล่าสุด`
+                : range==='quarter' ? (selQuarter ? `${OV_QUARTERS.find(q=>q.n===selQuarter).label} ปี ${pickerYear}` : "เลือกไตรมาส")
+                : (activeMonth ? monthLabel(activeMonth) : "เดือนล่าสุด"))}>
           <div style={{display:"flex",alignItems:"center",gap:16}}>
             {rechartsReady ? <ResponsiveContainer width={160} height={200}>
               <PieChart>
@@ -2055,6 +2203,7 @@ function OverviewView({ data, range, setRange, role }) {
         </Card>
       </div>
 
+      <div id="ov-cmp"/>
       {/* ─── Monthly Comparison Chart ─── */}
       {months.length >= 2 && role === 'owner' && (
         <div style={{marginBottom:20}}>
@@ -2147,6 +2296,7 @@ function OverviewView({ data, range, setRange, role }) {
         </div>
       )}
 
+      <div id="ov-mto"/>
       {/* MTO Section */}
       {mtoGroups && mtoGroups.length > 0 && (
         <Card title="🎨 งานจัดพิเศษ (Made to Order)" sub={`${mtoGroups.length} ประเภท · ไม่นับสต๊อก`} style={{marginBottom: 20}}>
@@ -2171,6 +2321,7 @@ function OverviewView({ data, range, setRange, role }) {
         </Card>
       )}
 
+      <div id="ov-top10"/>
       <Card title={`Top 10 สินค้าขายดี · ${periodInfo.tag} (ไม่รวม MTO)`}
             sub={`เรียงตามรายได้ · ${periodInfo.label}`}
             action={null}>
@@ -2241,6 +2392,7 @@ function OverviewView({ data, range, setRange, role }) {
         </div>
       </Card>
 
+      <div id="ov-topcat"/>
       {/* Top sellers per category */}
       <Card title={`🏆 Top 10 ขายดี · แยกตามหมวด · ${periodInfo.tag}`}
             sub={`ขายดีในช่วง ${periodInfo.label} · กดที่สินค้าเพื่อดูรายละเอียด`}
@@ -2331,6 +2483,7 @@ function OverviewView({ data, range, setRange, role }) {
         </div>
       </Card>
 
+      <div id="ov-movers"/>
       {/* ── Movers: มาแรง / ตก (เดือนล่าสุด vs เดือนก่อน) ── */}
       {(momMovers.risers.length > 0 || momMovers.fallers.length > 0) && (
         <Card title="📊 สินค้ามาแรง · ตก"
@@ -2359,6 +2512,7 @@ function OverviewView({ data, range, setRange, role }) {
         </Card>
       )}
 
+      <div id="ov-velocity"/>
       {/* ── Velocity: สต๊อกพอขายกี่วัน ── */}
       {(velocity.reorder.length > 0 || velocity.overstock.length > 0) && (
         <Card title="⏱️ ความเร็วการขาย · สต๊อกพอกี่วัน"
@@ -2389,6 +2543,7 @@ function OverviewView({ data, range, setRange, role }) {
         </Card>
       )}
 
+      <div id="ov-abc"/>
       {/* ── ABC / Pareto ── */}
       {abc.n > 0 && (
         <Card title="🎯 ABC · สินค้ากลุ่มไหนทำรายได้หลัก"
@@ -2471,6 +2626,7 @@ function OverviewView({ data, range, setRange, role }) {
         );
       })()}
 
+      <div id="ov-dead"/>
       {/* ── Dead stock ── */}
       {deadStock.count > 0 && (
         <Card title="🧊 สต๊อกตาย · มีของแต่ไม่ขายเลย 2 เดือน"
@@ -2756,7 +2912,7 @@ function mtoBase(name) {
     .trim() || 'งานพิเศษ';
 }
 
-function CategoryView({ data, role }) {
+function CategoryView({ data, role, onNav }) {
   const { products } = data;
   const allCats = uM(() => {
     const s = new Set();
@@ -3152,6 +3308,10 @@ function CategoryView({ data, role }) {
           </div>
         )}
       </div>
+
+      {/* งานที่มอบหมายให้คนที่ล็อกอินอยู่ (MTO) — วางบนสุดเพราะ role ส่วนใหญ่ลงมาเจอแท็บนี้ก่อน
+          ไม่ได้ล็อกอิน/ไม่มีงานค้าง → MyJobsCard คืน null เอง ไม่กินที่ */}
+      <MyJobsCard data={data} onNav={onNav} />
 
       {/* ── Global Search Bar ── */}
       <div style={{marginBottom:14}}>

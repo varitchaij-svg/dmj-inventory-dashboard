@@ -78,7 +78,7 @@ role `storedevice` = บัญชี LINE กลาง ("เครื่อง�
 (navtabs: **owner/dev เท่านั้น** ที่ได้ nav 2 ชั้นแบบกลุ่ม (`OWNER_GROUPS`) — 5 หมวดหลัก + "อื่นๆ"
 ถ้ามีเหลือ · role อื่นทั้งหมด (employee/warehouse/frontstore/saler) ไม่มี "เพิ่มเติม" เลย ไม่ว่าจะกี่แท็บ
 โชว์ทุกแท็บบนแถบเลื่อนแนวนอนเดียว — ลำดับใน ROLE_TABS จึงมีผลแค่ว่าอันไหนอยู่ซ้ายสุด/ไม่ต้องเลื่อนหา)
-(**`tests/browser/run.cjs` แก้ NAV_FAIL แล้ว (2026-07-31) — ผ่าน 77/77** · `navigateTo()` รองรับ
+(**`tests/browser/run.cjs` แก้ NAV_FAIL แล้ว (2026-07-31) — ผ่าน 79/79** · `navigateTo()` รองรับ
 nav 2 ชั้นของ owner/dev แล้ว: ลองเมนูย่อยของหมวดที่เปิดอยู่ก่อน ไม่เจอค่อยไล่กดหมวดในชั้น 1 ทีละอัน
 จนกว่าเมนูย่อยที่ต้องการจะโผล่ (**ไล่กดแทนการ mirror `OWNER_GROUPS` ไว้ในเทสต์ — จะได้ไม่ drift
 เวลาย้ายแท็บข้ามหมวด**) · `harness.html` โหลด `views-quote.jsx`/`views-attendance.jsx` ครบตาม
@@ -339,7 +339,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 683 tests, 19 test files, ทั้งหมด pass
+**มี Vitest test suite แล้ว** — 773 tests, 22 test files, ทั้งหมด pass
 
 ```bash
 npm test              # run tests
@@ -355,6 +355,12 @@ npm run test:coverage # coverage report (tests/helpers.js)
 - **`tests/auth.test.js`** — เฟส 4 ล็อกอิน (`canDoOrNull_`/`ROLE_ACTIONS_`/`IMMEDIATE_GATE_*`) —
   **ไม่ copy โค้ดเข้า helpers.js** แต่ eval ฟังก์ชันจริงจาก `.gs` ตรง ๆ (กันสำเนา drift ของโค้ด
   ด้านความปลอดภัย) ต่างจากไฟล์เทสต์อื่นที่ copy pure function เข้า `helpers.js`
+- **`tests/qtyloc.test.js`** — `applyQtyLocToProduct_` (eval จาก `.gs` เหมือน auth.test.js ไม่ copy)
+  ตรรกะ "ชีตสต็อกชนะค่าเก่าเสมอ" ที่ตัดสินว่าสินค้า**มีของหรือหมด**บนหน้าเว็บ
+  · ที่มา: ก.ค. 2026 สินค้ารหัส WL ทุกตัวโชว์ "หมด" ทั้งที่มีของจริง (WL00002 = 41+240) เพราะ
+  `buildFullData_` เขียนทับ `qtyStore/qtyWH` แต่ไม่คำนวณ `qty/isOOS` ใหม่ → ค้างค่า 0 จากชีต
+  "ข้อมูลสินค้า" (คอลัมน์ I/J/K เก่า) **โดยไม่มี error ให้เห็น** เจ้าของนึกว่า ZORT ยังไม่ sync เข้า
+  · มี meta-test เช็คว่า `buildFullData_` ยังเรียกฟังก์ชันนี้จริง (กันเทสต์เขียวแต่ของจริงไม่ได้เรียก)
 - **`tests/drift-guard.test.js`** — กัน `helpers.js` drift จากต้นทาง: ทุก export ต้องมี entry ใน
   `TRACKED` (พร้อม landmark ที่ต้องเจอทั้งในไฟล์ต้นทางและ helpers.js) หรืออยู่ใน
   `BEHAVIORAL_MODELS` · **เพิ่ม export ใหม่ใน helpers.js แล้วไม่เพิ่ม landmark = test แดงทันที**
@@ -581,6 +587,70 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
 2. รัน **`setupNotiSystem()`** 1 ครั้ง (เปิดคิว + ตั้ง trigger drain/สัปดาห์/เดือน + ลบ trigger รายวัน)
 3. ปรับ `NOTI_ORDER_BATCH_MINUTES`/`NOTI_MONTHLY_CAP` ผ่าน Script Properties ได้ถ้าอยากปรับความเร่งด่วน/เพดานให้ตรงแพ็กเกจ LINE จริง
 3. rollback ได้ด้วย `disableNotiSystem()` (กลับไปส่งตรงแบบเดิม)
+
+## แจ้งเตือนในแอป 🔔 (in-app notification, Sprint 6)
+
+กระดิ่งบนหัวจอ — **ไม่ยิง LINE จึงไม่กิน quota เลย** แจ้งกี่เรื่องก็ได้ · แก้ปัญหาที่ LINE OA
+จำกัด ~200 ข้อความ/เดือนจนต้องกลั้นออเดอร์ไว้ส่งรอบเดียวตอน 16:00 และเรื่องอื่นไม่กล้าแจ้งเลย
+
+**⚠️ ขอบเขตที่ต้องรู้ก่อนต่อยอด**: เห็นเฉพาะ "ตอนเปิดแอปอยู่" — **ไม่เด้งหน้าจอล็อกเหมือน LINE**
+จะเด้งได้ต้องทำ Web Push ซึ่ง **GAS เซ็น VAPID (ECDSA P-256) เองไม่ได้** ต้องมีตัวส่งข้างนอก
+(Cloudflare Pages Function — โฮสต์อยู่แล้ว) + iOS ใช้ได้เฉพาะเครื่องที่เพิ่มลงหน้าโฮมแล้ว (16.4+)
+→ **ยังไม่ทำ** · LINE ยังทำหน้าที่ "ปลุกตอนปิดแอป" เหมือนเดิม อันนี้เป็นที่รวมเรื่องที่เมื่อก่อน
+ไม่กล้าแจ้งเพราะเปลือง quota
+
+```
+SHEET_INAPP_NOTI = "แจ้งเตือนในแอป"   // A=id B=createdAt C=audience D=type E=title
+                                        //   F=body G=tab H=createdBy I=dedupKey J=readBy K=expiresAt
+audience 3 แบบ: "all" · "role:warehouse,owner" · "staff:ST0001,ST0002"   (dev นับเป็น owner เสมอ)
+```
+
+- **`pushInappNoti_({audience,type,title,body,tab,by,dedupKey,ttlDays})`** — เขียน 1 แถว ·
+  **ไม่ throw เด็ดขาด** (ตัวเรียกคือเส้นทางสั่งของ/โอนของจริง แจ้งเตือนพลาดต้องไม่ทำให้งานหลักล้ม
+  — หลักเดียวกับ `appendSaleBillRow_`) · dedup ด้วย dedupKey เฉพาะแถวที่ยังไม่หมดอายุ
+- **doGet `action=inappNoti`** → `listInappNotiHandler_` คืน 30 แถวล่าสุดของ "คนที่ล็อกอินอยู่"
+  + จำนวนที่ยังไม่อ่าน · **ส่งทั้งชุดให้ client แทนที่ทิ้ง ไม่ทำ since/merge** (รายการมีเพดานอยู่แล้ว
+  merge เป็นบ่อเกิดบั๊กเงียบ)
+- **doPost `action=markNotiRead`** `{ids:[...]}` หรือ `{all:true}` — ต่อท้าย staffId ใน col J ·
+  ⚠️ **dispatch อยู่เหนือ `invalidateCache_(true)` โดยตั้งใจ** — กดอ่านแจ้งเตือนไม่ได้แตะข้อมูล
+  สต็อก ถ้าตกไปด้านล่างจะล้าง payload cache ทั้งก้อนทุกครั้งที่มีคนกดกระดิ่ง
+- ทั้ง 2 endpoint ตรวจ **`resolveSession_` จริง** (เหมือน `attendancePhoto`/`getAuditLog`) ·
+  `markNotiRead` เช็ค `inappAudienceMatch_` ซ้ำด้วย — กันยิง id มั่วมาปั๊มสถานะแถวของคนอื่น
+- **`markNotiRead` ต้องอยู่ใน `COMMON_ACTIONS_` เสมอ** (กระดิ่งอยู่ทุก role ทุกแท็บ) —
+  ลืม = role นั้นกดอ่านไม่ได้ทันทีที่เปิด `REQUIRE_LOGIN`
+- ล้างของเก่า: `purgeInappNoti_` พ่วงกับ `dailyAttendanceMaintenance` (trigger 22:00 เดิม
+  **ไม่ต้องตั้ง trigger ใหม่**) · เก็บ 14 วัน (`INAPP_NOTI_KEEP_DAYS`) · **ลบจากล่างขึ้นบน**
+- **SAFE ROLLOUT**: gate ด้วย `INAPP_NOTI_ENABLED='true'` — ยังไม่เปิด → `pushInappNoti_`
+  no-op เงียบ ๆ + endpoint คืน `{off:true}` → กระดิ่งซ่อนตัว (deploy แล้วไม่มีอะไรเปลี่ยนเลย)
+  · เปิดจริงเมื่อเจ้าของรัน **`setupInappNoti()`** 1 ครั้ง · ปิดด้วย `disableInappNoti()`
+
+**เหตุการณ์ที่ยิงเข้ากระดิ่งแล้ว** (เพิ่มจุดใหม่ = เรียก `pushInappNoti_` ตรงจุดนั้นได้เลย):
+
+| เหตุการณ์ | ใครเห็น | tab | หมายเหตุ |
+|---|---|---|---|
+| ออเดอร์ใหม่ | warehouse, employee, owner | orders | hook ใน `sendLineGroupOrderCard_` = ครอบทั้ง 3 call site · **ไม่ถูกกลั้นรอ 16:00** |
+| ของโอนมาหน้าร้าน | frontstore, employee, owner | stock | ใน `transferStockBatch` · รวมทั้งชุดเป็นอันเดียว ไม่ยิงราย SKU |
+| หน้าร้านรับของไม่ครบ | warehouse, owner | tracking | ใน `confirmShipmentReceive` · **รับครบไม่แจ้ง** (ไม่กวน) |
+| สต็อกใกล้หมด | owner, warehouse | stock | dedupKey ผูกวันที่ = 1 ครั้ง/วัน แม้ตัวเช็ครันทุก 2 ชม. |
+
+**ฝั่ง frontend** — `NotiBell` (ui.jsx, self-contained: fetch+poll+panel · app.jsx แตะแค่ 1 บรรทัด)
+- poll ทุก 25 วิ **ทุกแท็บ** + ดึงซ้ำตอน `visibilitychange`/`focus` (iOS แช่แข็ง timer — บทเรียนเดียว
+  กับ login handoff **ห้ามพึ่ง interval อย่างเดียว**)
+- ⚠️ **panel ต้อง `ReactDOM.createPortal` ไป `document.body`** — `.topnav` มี `overflow-x: hidden`
+  (+ `backdrop-filter`) ที่ **ตัดกล่อง dropdown ทิ้ง** ถ้าวางไว้ข้างใน จะเห็นแค่ขอบบาง ๆ ไม่เห็น
+  เนื้อหาเลย (เจอจริงตอนทำ — เมนู "เพิ่มเติม" ของ owner เลี่ยงด้วยการเป็น bottom sheet `position:fixed`)
+  · ตำแหน่งวัดจาก `getBoundingClientRect()` ของปุ่มตอนเปิด — nav ของ owner สูง 2 ชั้น ใช้ top ตายตัวไม่ได้
+- เสียง "ติ๊ง" สร้างด้วย WebAudio (ไม่มีไฟล์เสียง = ไม่เพิ่ม asset) + `navigator.vibrate` ·
+  **ดังเฉพาะตอน unread เพิ่มขึ้นจริงหลังโหลดรอบแรก** (`prevUnread.current != null`) ไม่งั้นเปิดแอป
+  ทีไรก็ติ๊งทุกครั้ง
+- จำสถานะเปิด/ปิดระบบไว้ที่ `localStorage.dmj_noti_on` — กันกระดิ่งกะพริบโผล่แล้วหายทุกครั้งที่เปิดแอป
+- กดรายการ → mark read (optimistic ไม่รอ GAS) + พาไปแท็บปลายทาง (เช็ค `allowedTabIds` ก่อน)
+
+**เทสต์**: `tests/inapp-noti.test.js` (audience/read/notiAgo + meta-test จุดเชื่อมต่อ เช่น
+"tab ปลายทางทุกอันมีจริงใน TABS", "dispatch อยู่เหนือ invalidateCache_") ·
+browser test มี interaction badge→panel→nav ทั้ง owner และ warehouse
+· ⚠️ **harness เดิมตอบ `action=me` เป็น `{success:true}`** ทำให้ app ลบ session token ทิ้ง →
+อะไรก็ตามที่ต้องใช้ token **ไม่เคยถูกทดสอบเลย** แก้ให้ตอบ `{ok:true,staff:{...}}` ตามของจริงแล้ว
 
 ## Features ที่เพิ่มก่อนหน้า (Sprint 1)
 

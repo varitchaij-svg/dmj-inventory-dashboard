@@ -66,10 +66,15 @@
   ];
 
   const mtoJobs = [
+    // assigneeId ตรงกับ window._currentStaffId ที่ harness.html seed ไว้ ('STF001')
+    // → งานนี้ต้องโผล่ในการ์ด "งานของฉัน" (MyJobsCard) · แก้ที่ไหนต้องแก้ให้ตรงกัน
     { jobId: 'MTO-202506001', date: '01/06/2025', jobName: 'จัดช่อพิเศษ งานแต่ง', customer: 'คุณเอ',
-      price: 1500, imageUrl: '', status: 'กำลังจัด', closedAt: '', items: [] },
+      price: 1500, imageUrl: '', status: 'กำลังจัด', closedAt: '', items: [],
+      assigneeId: 'STF001', assigneeName: 'สมชาย' },
+    // ปิดงานแล้ว + เป็นของคนอื่น → ต้อง **ไม่** ถูกนับในการ์ด "งานของฉัน"
     { jobId: 'MTO-202505009', date: '20/05/2025', jobName: 'จัดกระเช้าปีใหม่', customer: 'บริษัท B',
-      price: 3000, imageUrl: '', status: 'เสร็จแล้ว', closedAt: '20/05/2025 16:00', items: [] },
+      price: 3000, imageUrl: '', status: 'เสร็จแล้ว', closedAt: '20/05/2025 16:00', items: [],
+      assigneeId: 'STF002', assigneeName: 'สมหญิง' },
   ];
 
   const transfers = months.map((m, i) => ({
@@ -170,5 +175,19 @@
       ],
     },
     listActiveStaffNames: { staff: [{ staffId: 'S001', name: 'สมชาย ใจดี' }, { staffId: 'S002', name: 'สมหญิง ขยัน' }] },
+  };
+
+  // ── แจ้งเตือนในแอป (กระดิ่ง 🔔) — 2 เรื่อง อ่านแล้ว 1 ยังไม่อ่าน 1 ──
+  // unread = 1 → badge ต้องขึ้นเลข 1 · tab ของอันที่ยังไม่อ่านชี้ไป "orders" (มีทุก role)
+  window.__DMJ_NOTI_FIXTURE = {
+    ok: true,
+    unread: 1,
+    items: [
+      { id: 'n1', ts: Date.now() - 3 * 60000, type: 'order', tab: 'orders',
+        title: '📦 ออเดอร์ใหม่ 12 ชิ้น', body: 'แจกันแก้วใส · VAS001', by: '', read: false },
+      { id: 'n2', ts: Date.now() - 2 * 3600000, type: 'shipment', tab: 'stock',
+        title: '🚚 ของโอนมาหน้าร้าน 3 รายการ', body: 'ดอกกุหลาบแดง และอีก 2 รายการ · รอกดรับ',
+        by: 'สมหญิง ขยัน (คลังสินค้า)', read: true },
+    ],
   };
 })();

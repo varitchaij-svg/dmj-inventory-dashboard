@@ -1097,6 +1097,72 @@ function parseCheckDateMs(s) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+//  MyJobsCard — "งานของฉัน" (เฟส Tier 2 ข้อ 3.1 ใน PLAN-NEXT-STAFF-DATA.md)
+// ══════════════════════════════════════════════════════════════════════
+// ทำไมต้องมี: ทุกหน้าในระบบเป็น "ลิสต์กลาง ใครทำก็ได้" พนักงานที่ไม่ถนัดเทคโนโลยี
+// ต้องเดาเองว่าอันไหนคืองานของตัวเอง · พอมี staffId จากล็อกอิน LINE แล้วบอกตรง ๆ ได้
+//
+// เริ่มจาก **งาน MTO อย่างเดียว** ตามที่แผนแนะนำ เพราะเป็นงานประเภทเดียวที่มีช่อง
+// "ผู้รับผิดชอบ" จริงแล้ว (ชีต "งานจัดพิเศษ" col I/J + action assignMtoJob)
+// งานประเภทอื่น (order จัดของ / คิวนับล็อค) ยังไม่มีคอลัมน์ผู้รับผิดชอบ — จะต่อเมื่อเพิ่มแล้ว
+//
+// ไม่ได้ล็อกอิน (ไม่มี staffId เช่นเครื่องกลาง storedevice ที่ยังไม่ผูกคน) หรือไม่มีงานค้าง
+// → คืน null ไม่โชว์อะไรเลย กันการ์ดว่างกวนตาในหน้าที่คนอื่นใช้
+function MyJobsCard({ data, onNav }) {
+  const staffId = (typeof window !== "undefined" && window._currentStaffId) || null;
+
+  const myJobs = uM(() => {
+    if (!staffId) return [];
+    // "ยังไม่เสร็จ" = สถานะไม่ใช่ "เสร็จแล้ว" (ตรงกับป้ายในหน้า MtoJobView)
+    return (data.mtoJobs || []).filter(j => j.assigneeId === staffId && j.status !== "เสร็จแล้ว");
+  }, [data.mtoJobs, staffId]);
+
+  if (!staffId || myJobs.length === 0) return null;
+
+  // ส่งธงให้ MtoJobView ติ๊ก "เฉพาะของฉัน" ให้เอง (pattern เดียวกับ window._dmjStorageSku)
+  const goMyJobs = () => { window._dmjMtoMineOnly = true; onNav && onNav("mtojobs"); };
+
+  return (
+    <button onClick={goMyJobs}
+      style={{ width: "100%", textAlign: "left", cursor: "pointer", fontFamily: "inherit",
+               background: "#fff8e1", border: "1.5px solid #f59e0b", borderRadius: 14,
+               padding: "14px 16px", marginBottom: 16, display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 20 }}>🎯</span>
+        <span style={{ fontSize: 15, fontWeight: 800, color: "#a07417" }}>
+          งานของฉัน — มี {fmtN(myJobs.length)} งานที่ยังไม่เสร็จ
+        </span>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {myJobs.slice(0, 3).map(j => (
+          <div key={j.jobId} style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+            {j.imageUrl
+              ? <img src={j.imageUrl} alt="" style={{ width: 34, height: 34, borderRadius: 8, objectFit: "cover", flex: "0 0 auto" }} />
+              : <div style={{ width: 34, height: 34, borderRadius: 8, background: "var(--paper)", border: "1px solid var(--bdr)",
+                              display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flex: "0 0 auto" }}>🎨</div>}
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", overflow: "hidden",
+                            textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {j.jobName || j.jobId}
+              </div>
+              {j.customer && (
+                <div style={{ fontSize: 11, color: "var(--muted)", overflow: "hidden",
+                              textOverflow: "ellipsis", whiteSpace: "nowrap" }}>ลูกค้า: {j.customer}</div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ fontSize: 11.5, color: "#a07417", fontWeight: 700 }}>
+        {myJobs.length > 3 ? `และอีก ${fmtN(myJobs.length - 3)} งาน · ` : ""}แตะเพื่อดูงานของฉันทั้งหมด ›
+      </div>
+    </button>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════
 //  WarehouseHomeView — หน้าแรกงานคลัง (role warehouse ลงมาเจอหน้านี้ก่อน)
 //  รวมงานที่ต้องทำวันนี้ + หยิบของตามตำแหน่ง + สถานะของที่โอนไปหน้าร้าน
 // ══════════════════════════════════════════════════════════════════════
@@ -1200,6 +1266,9 @@ function WarehouseHomeView({ data, onNav }) {
         <div style={{ fontSize: 20, fontWeight: 800, color: "var(--text)" }}>🏭 งานคลังวันนี้</div>
         <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>รวมงานค้าง + ลำดับหยิบของ ให้จบในหน้าเดียว</div>
       </div>
+
+      {/* งานที่มอบหมายให้คนที่ล็อกอินอยู่โดยเฉพาะ — โชว์ก่อนงานรวมของทั้งคลัง */}
+      <MyJobsCard data={data} onNav={onNav} />
 
       {nothingPending && (
         <div style={{ background: "#f0f9f2", border: "1.5px solid #a8d9b4", borderRadius: 14, padding: "18px 20px", marginBottom: 18, display: "flex", alignItems: "center", gap: 12 }}>
@@ -5774,6 +5843,14 @@ function MtoJobView({ data }) {
 
   // ── ผู้รับผิดชอบงาน (เฟส "งานของฉัน" — MTO) ──
   const [showMineOnly, setShowMineOnly] = uS(false);
+  // มาจากการแตะการ์ด "งานของฉัน" (MyJobsCard) → ติ๊กตัวกรองให้เลย ไม่ต้องกดซ้ำ
+  // ล้างธงทิ้งทันทีที่ใช้ กันค้างไปมีผลกับการเข้าแท็บนี้รอบถัดไปที่ผู้ใช้กดเอง
+  uE(() => {
+    if (typeof window !== "undefined" && window._dmjMtoMineOnly) {
+      window._dmjMtoMineOnly = false;
+      setShowMineOnly(true);
+    }
+  }, []);
   const [staffRoster, setStaffRoster] = uS(null); // [{staffId,name}] — โหลดครั้งแรกที่เปิดตัวเลือก
   const [loadingRoster, setLoadingRoster] = uS(false);
   const [showAssignPicker, setShowAssignPicker] = uS(false);
@@ -6975,8 +7052,13 @@ function QuoteFollowupView({ data, role }) {
   uE(() => {
     if (printReq <= 0 || !printData) return;
     setPosPrintPageSize("a4");
+    document.body.classList.toggle("quote-print-mobile", mobile);
     window.print();
-    const onAfter = () => { setPosPrintPageSize("a4"); window.removeEventListener("afterprint", onAfter); };
+    const onAfter = () => {
+      setPosPrintPageSize("a4");
+      document.body.classList.remove("quote-print-mobile");
+      window.removeEventListener("afterprint", onAfter);
+    };
     window.addEventListener("afterprint", onAfter);
   }, [printReq, printData]);
 
@@ -7356,6 +7438,59 @@ function QuoteFollowupView({ data, role }) {
               <>
                 <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>เกิน {OVERDUE_DAYS} วัน = ควรปิด (Void) · แถวแดง = ควรปิด</div>
                 <div ref={listRef}/>
+                {mobile ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {pendingList.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => {
+                      const c = ageColor(q.ageDays);
+                      const expSoon = q.expireInDays !== null && q.expireInDays !== undefined && q.expireInDays <= 14;
+                      const overdue = q.ageDays !== null && q.ageDays > OVERDUE_DAYS;
+                      const busy = voidingId === (q.id || q.number);
+                      const approving = approvingId === (q.id || q.number);
+                      const anyBusy = !!voidingId || !!approvingId || !!printingId;
+                      const printing = printingId === (q.id || q.number);
+                      return (
+                        <div key={q.number || idx} style={{ border: "1px solid var(--bdr)", borderRadius: 12, padding: 12, background: overdue ? "#fff5f5" : "var(--paper)" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontWeight: 700, color: "var(--text)" }}>{q.customer}</div>
+                              {q.phone && <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{q.phone}</div>}
+                            </div>
+                            <div style={{ fontWeight: 800, color: "var(--g-700)", whiteSpace: "nowrap", fontSize: 15 }}>{baht(q.amount)}</div>
+                          </div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                            <span style={{ display: "inline-block", padding: "2px 10px", borderRadius: 20, fontWeight: 700, fontSize: 12, background: c.bg, color: c.fg }}>ค้างมา {q.ageDays === null ? "—" : q.ageDays + " วัน"}</span>
+                            <span style={{ display: "inline-block", padding: "2px 10px", borderRadius: 20, fontWeight: 700, fontSize: 12, background: expSoon ? "#fee2e2" : "var(--g-50)", color: expSoon ? "#b71c1c" : "var(--muted)" }}>
+                              หมดอายุใน {q.expireInDays === null || q.expireInDays === undefined ? "—" : (q.expireInDays < 0 ? "หมดแล้ว" : q.expireInDays + " วัน")}
+                            </span>
+                          </div>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 8 }}>
+                            <div style={{ fontFamily: "monospace", fontSize: 12, color: "var(--muted)" }}>{q.number || "—"}</div>
+                            <input list="dmjQuoteSales" defaultValue={q.sale || ""} placeholder="+ ชื่อเซล"
+                              onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} onBlur={(e) => saveSale(q, e.target.value)}
+                              style={{ width: 130, minWidth: 0, padding: "5px 8px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/>
+                          </div>
+                          <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+                            <button onClick={() => handleApprove(q)} disabled={anyBusy} style={{
+                              flex: 1, border: "1px solid var(--g-600)", background: "var(--g-600)",
+                              color: "#fff", borderRadius: 8, padding: "10px 8px", fontSize: 13, fontWeight: 700,
+                              cursor: anyBusy ? "default" : "pointer", opacity: anyBusy && !approving ? .5 : 1,
+                            }}>{approving ? "กำลังอนุมัติ…" : "✓ อนุมัติ"}</button>
+                            <button onClick={() => handleVoid(q)} disabled={anyBusy} style={{
+                              flex: 1, border: "1px solid " + (overdue ? "var(--dang)" : "var(--bdr)"), background: overdue ? "var(--dang)" : "var(--paper)",
+                              color: overdue ? "#fff" : "var(--muted)", borderRadius: 8, padding: "10px 8px", fontSize: 13, fontWeight: 700,
+                              cursor: anyBusy ? "default" : "pointer", opacity: anyBusy && !busy ? .5 : 1,
+                            }}>{busy ? "กำลังปิด…" : "ปิดใบ"}</button>
+                            <button onClick={() => handlePrint(q)} disabled={anyBusy} style={{
+                              border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
+                              borderRadius: 8, padding: "10px 12px", fontSize: 13, fontWeight: 700,
+                              cursor: anyBusy ? "default" : "pointer", opacity: anyBusy && !printing ? .5 : 1,
+                            }}>{printing ? "…" : "🖨️"}</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
                 <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid var(--bdr)" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                     <thead><tr style={{ background: "var(--g-50)", borderBottom: "2px solid var(--bdr)", color: "var(--g-700)" }}>
@@ -7431,6 +7566,7 @@ function QuoteFollowupView({ data, role }) {
                     </tbody>
                   </table>
                 </div>
+                )}
                 <Pagination page={qPage} total={pendingList.length} pageSize={PAGE_SIZE} onChange={setQPage} listRef={listRef}/>
               </>
             )
@@ -7443,6 +7579,38 @@ function QuoteFollowupView({ data, role }) {
             ) : (
               <>
                 <div ref={listRef}/>
+                {mobile ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {approvedList.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => {
+                      const printing = printingId === (q.id || q.number);
+                      return (
+                        <div key={q.number || idx} style={{ border: "1px solid var(--bdr)", borderRadius: 12, padding: 12, background: "var(--paper)" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontWeight: 700, color: "var(--text)" }}>{q.customer}</div>
+                              {q.phone && <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{q.phone}</div>}
+                            </div>
+                            <div style={{ fontWeight: 800, color: "#16a34a", whiteSpace: "nowrap", fontSize: 15 }}>{baht(q.amount)}</div>
+                          </div>
+                          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>{q.quotationDate || "—"}</div>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 8 }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontFamily: "monospace", fontSize: 12, color: "var(--muted)" }}>{q.number || "—"}</div>
+                              <input list="dmjQuoteSales" defaultValue={q.sale || ""} placeholder="+ ชื่อเซล"
+                                onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} onBlur={(e) => saveSale(q, e.target.value)}
+                                style={{ marginTop: 3, width: 130, minWidth: 0, padding: "5px 8px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/>
+                            </div>
+                            <button onClick={() => handlePrint(q)} disabled={!!printingId} style={{
+                              border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
+                              borderRadius: 8, padding: "10px 14px", fontSize: 13, fontWeight: 700,
+                              cursor: printingId ? "default" : "pointer", opacity: printingId && !printing ? .5 : 1,
+                            }}>{printing ? "…" : "🖨️ พิมพ์"}</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
                 <div style={{ overflowX: "auto", borderRadius: 12, border: "1px solid var(--bdr)" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                     <thead><tr style={{ background: "var(--g-50)", borderBottom: "2px solid var(--bdr)", color: "var(--g-700)" }}>
@@ -7488,6 +7656,7 @@ function QuoteFollowupView({ data, role }) {
                     </tbody>
                   </table>
                 </div>
+                )}
                 <Pagination page={qPage} total={approvedList.length} pageSize={PAGE_SIZE} onChange={setQPage} listRef={listRef}/>
               </>
             )
