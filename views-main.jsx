@@ -973,6 +973,39 @@ function buildYoYSeries(monthLabels, monthlyByCat) {
   return { years, rows };
 }
 
+// ── ปุ่มกรองแบบ pill สำหรับ OverviewView ──────────────────────────────
+// ประกาศนอก OverviewView โดยตั้งใจ: ถ้าประกาศข้างในจะกลายเป็น component ตัวใหม่
+// ทุกครั้งที่ re-render → React unmount/remount ทั้งแถบ = ตำแหน่ง scroll-x ของแถบเดือนดีดกลับ
+function OvPill({ on, onClick, children, tone, ...rest }) {
+  return (
+    <button type="button" onClick={onClick}
+      className={`ov-pill${on ? " on" : ""}${tone ? " " + tone : ""}`} {...rest}>
+      {children}
+    </button>
+  );
+}
+function OvPillRow({ icon, label, hint, stripRef, children }) {
+  return (
+    <div className="ov-pillrow">
+      <span className="ov-pillrow-label">{icon} {label}</span>
+      <div className="ov-pillrow-scroll" ref={stripRef}>{children}</div>
+      {hint && <span className="ov-pillrow-hint">{hint}</span>}
+    </div>
+  );
+}
+
+// เลื่อนไปยังหัวข้อที่กด — เผื่อความสูงของ topnav + แถบ sticky ไว้ ไม่งั้นหัวข้อโดนบัง
+function ovJumpTo(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const nav = document.querySelector('.topnav');
+  const navH = nav ? nav.getBoundingClientRect().height : 0;
+  const bar = document.querySelector('.overview-stickybar.show');
+  const barH = bar ? bar.getBoundingClientRect().height : 0;
+  const y = window.scrollY + el.getBoundingClientRect().top - navH - barH - 10;
+  window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+}
+
 function OverviewView({ data, range, setRange, role }) {
   const rechartsReady = useRechartsReady(); // gate กราฟจนกว่า Recharts (defer) จะพร้อม
   const { products, monthLabels, monthlyByCat, totals, mtoGroups,
@@ -992,6 +1025,7 @@ function OverviewView({ data, range, setRange, role }) {
   const headSentinelRef = React.useRef(null);
   const [condensed, setCondensed] = uS(false);
   const [barTop, setBarTop] = uS(0);
+  const [stickyFilters, setStickyFilters] = uS(false); // กางตัวกรองเต็มในแถบ sticky (default ยุบ)
   uE(() => {
     let ticking = false;
     const measure = () => {
@@ -1599,44 +1633,103 @@ function OverviewView({ data, range, setRange, role }) {
     : range === 'month' ? (activeMonth ? monthLabel(activeMonth) : "เดือนล่าสุด")
     : selYear ? `ปี ${selYear} · ${yearMonths.length} เดือน` : `${months.length} เดือนรวม`;
 
-  // ตัวกรองหมวด/เดือน/ช่วง — ใช้ร่วมกันทั้งแถบปกติ (page-actions) และแถบย่อ sticky ด้านล่าง
-  // (ตัวแปรเดียว กันโค้ด/state หลุดจากกันตอนแก้ทีหลัง)
-  const filterControls = (
+  // ── ตัวกรอง หมวด / ปี / เดือน — โชว์เป็น "ปุ่มกดครบทุกตัว" ไม่ใช้ dropdown ──────────
+  // เดิมเป็น <select> + Seg + แถบปี/เดือนแยกอีก 2 ก้อน → ผู้ใช้ต้องเดาว่าอันไหนคุมอะไร
+  // และบน iOS ตัว select เป็น native control ที่ดูลอยแยกจากของอื่นเสมอ
+  // ตอนนี้รวมเป็นบล็อกเดียว 3 แถว แต่ละแถวเลื่อนแนวนอนได้ เห็นตัวเลือกทั้งหมดโดยไม่ต้องเปิด dropdown
+  // เลือกปีแล้วแถวเดือนจะเหลือเฉพาะเดือนของปีนั้น (เลือกปี/เดือนแยกกันชัดเจน)
+  // รับ isSticky เพื่อผูก monthStripRef กับก้อนบนสุดก้อนเดียว (เรนเดอร์ 2 ที่ ref จะชนกัน)
+  const renderFilters = (isSticky) => (
     <div className="ov-filterbar">
-      <select value={selCat} onChange={e=>setSelCat(e.target.value)}
-        title="กรองตามหมวด" className={selCat ? "active" : ""}
-        style={{padding:"9px 10px",color:selCat?"var(--g-700)":"var(--text)",
-                fontSize:13,fontWeight:selCat?700:500,minHeight:40,
-                maxWidth:180,flex:"1 1 130px",minWidth:0}}>
-        <option value="">🏷️ ทุกหมวด</option>
-        {allCats.map(c => <option key={c} value={c}>{c}</option>)}
-      </select>
-      {months.length > 1 && (
-        <select value={range === 'month' ? (selMonth || months[months.length - 1] || "") : ""}
-          onChange={e => { const v = e.target.value; if (v) { setSelMonth(v); setRange('month'); } }}
-          title="เลือกดูเดือน" className={range==='month' ? "active" : ""}
-          style={{padding:"9px 10px",color:range==='month'?"var(--g-700)":"var(--text)",
-                  fontSize:13,fontWeight:range==='month'?700:500,minHeight:40,
-                  maxWidth:150,flex:"1 1 110px",minWidth:0}}>
-          <option value="">📅 เลือกเดือน…</option>
-          {months.slice().reverse().map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
-        </select>
+      <OvPillRow icon="🏷️" label="หมวด">
+        <OvPill on={!selCat} onClick={()=>setSelCat("")}>ทุกหมวด</OvPill>
+        {allCats.map(c => (
+          <OvPill key={c} on={selCat===c} onClick={()=>setSelCat(selCat===c ? "" : c)}>{c}</OvPill>
+        ))}
+      </OvPillRow>
+
+      {availYears.length > 1 && (
+        <OvPillRow icon="📅" label="ปี">
+          <OvPill on={!selYear} onClick={()=>setSelYear(null)}>ทุกปีรวม</OvPill>
+          {availYears.slice().reverse().map(y => (
+            <OvPill key={y} on={selYear===y} onClick={()=>setSelYear(selYear===y ? null : y)}>ปี {y}</OvPill>
+          ))}
+        </OvPillRow>
       )}
-      <Seg value={range} onChange={setRange} options={[
-        {value:"day",   label:"รายวัน"},
-        {value:"month", label:"รายเดือน"},
-        {value:"year",  label:"ทั้งปี"},
-      ]}/>
+
+      <OvPillRow icon="🗓️" label="เดือน"
+        stripRef={isSticky ? null : monthStripRef}
+        hint={range==='day' && !hasDailyData ? "ยังไม่มีข้อมูลรายวัน" : null}>
+        <OvPill on={range==='year'} onClick={()=>setRange('year')}>ทั้งปี</OvPill>
+        {hasDailyData && (
+          <OvPill on={range==='day'} onClick={()=>setRange('day')}>รายวัน</OvPill>
+        )}
+        {yearMonths.map(m => (
+          <OvPill key={m}
+            data-active={range==='month' && activeMonth===m ? "1" : "0"}
+            on={range==='month' && activeMonth===m}
+            onClick={()=>{ setSelMonth(m); setRange('month'); }}>
+            {monthLabel(m)}
+          </OvPill>
+        ))}
+      </OvPillRow>
     </div>
   );
 
+  // ── หัวข้อทั้งหมดในหน้านี้ (สำหรับปุ่มลัดกระโดด) ────────────────────────────────
+  // หน้านี้ยาวมากบนมือถือ — เลื่อนหาหัวข้อเองไม่ไหว จึงมีแถบปุ่มลัดกดไปได้ทันที
+  // show ต้องตรงกับเงื่อนไข render ของแต่ละ section ข้างล่าง ไม่งั้นกดแล้วไม่มีที่ให้ไป
+  const ovSections = uM(() => [
+    { id:"ov-kpi",      label:"📊 ตัวเลขรวม",   show:true },
+    { id:"ov-intake",   label:"📥 ของเข้าใหม่",  show: role==='owner' && !!recentIntake },
+    { id:"ov-forecast", label:"📈 Forecast",    show: role==='owner' && !!forecast },
+    { id:"ov-yoy",      label:"📅 เทียบปีต่อปี",  show: yoy.years.length >= 2 },
+    { id:"ov-charts",   label:"📉 กราฟยอดขาย",  show:true },
+    { id:"ov-cmp",      label:"🆚 เทียบรายเดือน", show: months.length >= 2 && role==='owner' },
+    { id:"ov-mto",      label:"🎨 งานจัดพิเศษ",  show: !!(mtoGroups && mtoGroups.length > 0) },
+    { id:"ov-top10",    label:"🏆 Top 10",      show:true },
+    { id:"ov-topcat",   label:"🏆 Top ตามหมวด",  show:true },
+    { id:"ov-movers",   label:"📊 มาแรง · ตก",   show: momMovers.risers.length > 0 || momMovers.fallers.length > 0 },
+    { id:"ov-velocity", label:"⏱️ ความเร็วขาย",  show: velocity.reorder.length > 0 || velocity.overstock.length > 0 },
+    { id:"ov-abc",      label:"🎯 ABC",         show: abc.n > 0 },
+    { id:"ov-dead",     label:"🧊 สต๊อกตาย",     show: deadStock.count > 0 },
+  ].filter(s => s.show), [role, recentIntake, forecast, yoy, months, mtoGroups, momMovers, velocity, abc, deadStock]);
+
+  const jumpBar = (
+    <div className="ov-jumpbar">
+      <span className="ov-jumpbar-label">⚡ ไปที่</span>
+      <div className="ov-jumpbar-scroll">
+        {ovSections.map(s => (
+          <button key={s.id} type="button" className="ov-jumpchip"
+            onClick={()=>ovJumpTo(s.id)}>{s.label}</button>
+        ))}
+      </div>
+    </div>
+  );
+
+  // ป้ายสรุปช่วงเวลาที่เลือกอยู่ — โชว์ในแถบ sticky (พื้นที่แคบ กางตัวกรองครบไม่ไหว)
+  const periodChip = range === 'day' ? "รายวัน"
+    : range === 'month' ? (activeMonth ? monthLabel(activeMonth) : "รายเดือน")
+    : (selYear ? `ปี ${selYear}` : "ทุกปีรวม");
+
   return (
     <div>
-      {/* ─── แถบฟิลเตอร์ย่อ sticky — โผล่มาเมื่อเลื่อนพ้นหัวข้อ ให้เปลี่ยนหมวด/เดือน/ช่วงได้เลยไม่ต้องเลื่อนขึ้น ─── */}
+      {/* ─── แถบย่อ sticky — โผล่มาเมื่อเลื่อนพ้นหัวข้อ ─────────────────────────────
+           แถวบน = ปุ่มลัดไปแต่ละหัวข้อ (หน้านี้ยาวมาก อยู่กลางหน้าแล้วต้องกระโดดได้)
+             + ปุ่มสรุปช่วงเวลาที่เลือกอยู่ กดแล้วกางตัวกรองเต็มลงมา
+           กางเฉพาะตอนกด เพราะตัวกรอง 3 แถวสูงเกินกว่าจะปักไว้ตลอดบนจอมือถือ ─── */}
       <div className={`overview-stickybar${condensed ? ' show' : ''}`} style={{top: barTop}} aria-hidden={!condensed}>
         <div className="overview-stickybar-inner">
-          <span className="overview-stickybar-title">📊 ภาพรวมยอดขาย</span>
-          {filterControls}
+          <div className="ov-stickyrow">
+            <button type="button"
+              className={`ov-periodbtn${stickyFilters ? " on" : ""}`}
+              onClick={()=>setStickyFilters(v=>!v)}
+              aria-expanded={stickyFilters}>
+              🔎 {periodChip}{selCat ? ` · ${selCat}` : ""} <span className="ov-caret">{stickyFilters ? "▲" : "▼"}</span>
+            </button>
+            {jumpBar}
+          </div>
+          {stickyFilters && renderFilters(true)}
         </div>
       </div>
 
@@ -1658,10 +1751,11 @@ function OverviewView({ data, range, setRange, role }) {
             )}
           </div>
         </div>
-        <div className="page-actions" style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-          {filterControls}
-        </div>
       </div>
+
+      {/* ตัวกรองเต็ม (หมวด/ปี/เดือน) + ปุ่มลัดหัวข้อ — กางเต็มความกว้าง ไม่เบียดกับหัวข้อหน้า */}
+      {renderFilters(false)}
+      {jumpBar}
       {/* sentinel — จุดอ้างอิงว่าเลื่อนพ้นหัวข้อหรือยัง (วัดจาก getBoundingClientRect ใน effect ด้านบน) */}
       <div ref={headSentinelRef} style={{height:1}}/>
       {selCat && (
@@ -1671,56 +1765,10 @@ function OverviewView({ data, range, setRange, role }) {
         </div>
       )}
 
-      {/* ── Year picker strip — เลือกปีเมื่ออยู่ใน "ทั้งปี" ── */}
-      {range === 'year' && availYears.length > 1 && (
-        <div style={{
-          overflowX:'auto', display:'flex', gap:8, paddingBottom:6, marginBottom:16,
-          scrollbarWidth:'none', WebkitOverflowScrolling:'touch',
-        }}>
-          {[null, ...availYears.slice().reverse()].map(y => {
-            const on = selYear === y;
-            return (
-              <button key={y || 'all'} onClick={() => setSelYear(y)}
-                style={{
-                  flexShrink:0, padding:'7px 16px', borderRadius:20,
-                  border:'1.5px solid ' + (on ? '#1b5e20' : 'var(--bdr)'),
-                  background: on ? '#1b5e20' : '#fff',
-                  color: on ? '#fff' : 'var(--g-700)',
-                  fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'inherit',
-                  transition:'background .15s, color .15s, border-color .15s',
-                  whiteSpace:'nowrap',
-                }}>
-                {y ? `ปี ${y}` : 'ทุกปีรวม'}
-              </button>
-            );
-          })}
-        </div>
-      )}
+      {/* แถบเลือกปี/เดือนเดิม 2 ก้อนถูกยุบเข้าไปใน renderFilters แล้ว — เลือกได้ตลอดเวลา
+          ไม่ต้องสลับโหมดก่อนถึงจะเห็นตัวเลือก */}
 
-      {/* ── Month picker strip — เลือกเดือนเมื่ออยู่ใน "รายเดือน" (auto-scroll ไปเดือนที่เลือก) ── */}
-      {range === 'month' && months.length > 1 && (
-        <div ref={monthStripRef} style={{
-          overflowX:'auto', display:'flex', gap:8, paddingBottom:6, marginBottom:16,
-          scrollbarWidth:'thin', WebkitOverflowScrolling:'touch',
-        }}>
-          {months.map(m => (
-            <button key={m} data-active={activeMonth === m ? "1" : "0"} onClick={() => setSelMonth(m)}
-              style={{
-                flexShrink:0, padding:'7px 16px', borderRadius:20,
-                border:'1.5px solid ' + (activeMonth === m ? '#1b5e20' : 'var(--bdr)'),
-                background: activeMonth === m ? '#1b5e20' : '#fff',
-                color: activeMonth === m ? '#fff' : 'var(--g-700)',
-                fontSize:12, fontWeight:700, cursor:'pointer', fontFamily:'inherit',
-                transition:'background .15s, color .15s, border-color .15s',
-                whiteSpace:'nowrap',
-              }}>
-              {monthLabel(m)}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <div className={`row ${role==='employee'?'row-2':'row-4'}`} style={{marginBottom: 20}}>
+      <div id="ov-kpi" className={`row ${role==='employee'?'row-2':'row-4'}`} style={{marginBottom: 20}}>
         {role === 'owner' && (
           <KPI label="ยอดขายรวม" accent="#1f7f44"
                value={fmtB(sumRev)}
@@ -1752,6 +1800,7 @@ function OverviewView({ data, range, setRange, role }) {
         )}
       </div>
 
+      <div id="ov-intake"/>
       {/* ─── ของเข้าใหม่ 30 วัน (จากรายการซื้อ) — owner only ─── */}
       {role === 'owner' && recentIntake && (
         <div style={{marginBottom:20}}>
@@ -1817,6 +1866,7 @@ function OverviewView({ data, range, setRange, role }) {
         </div>
       )}
 
+      <div id="ov-forecast"/>
       {/* ─── Forecast Tool (owner only) ─── */}
       {role === 'owner' && forecast && (
         <div style={{marginBottom: 20}}>
@@ -1939,6 +1989,7 @@ function OverviewView({ data, range, setRange, role }) {
         </div>
       )}
 
+      <div id="ov-yoy"/>
       {/* ── เทียบปีต่อปี (YoY) — seasonality/เทศกาล ── */}
       {yoy.years.length >= 2 && (
         <Card title="📅 เทียบยอดขายปีต่อปี"
@@ -1994,7 +2045,7 @@ function OverviewView({ data, range, setRange, role }) {
         </Card>
       )}
 
-      <div className="row row-12-5" style={{marginBottom: 20}}>
+      <div id="ov-charts" className="row row-12-5" style={{marginBottom: 20}}>
         <Card title={
           range === 'day' ? "ยอดขายรายวัน · แยกหมวด" :
           range === 'month' ? (hasDailyData && selMonthDailySeries.length > 0
@@ -2055,6 +2106,7 @@ function OverviewView({ data, range, setRange, role }) {
         </Card>
       </div>
 
+      <div id="ov-cmp"/>
       {/* ─── Monthly Comparison Chart ─── */}
       {months.length >= 2 && role === 'owner' && (
         <div style={{marginBottom:20}}>
@@ -2147,6 +2199,7 @@ function OverviewView({ data, range, setRange, role }) {
         </div>
       )}
 
+      <div id="ov-mto"/>
       {/* MTO Section */}
       {mtoGroups && mtoGroups.length > 0 && (
         <Card title="🎨 งานจัดพิเศษ (Made to Order)" sub={`${mtoGroups.length} ประเภท · ไม่นับสต๊อก`} style={{marginBottom: 20}}>
@@ -2171,6 +2224,7 @@ function OverviewView({ data, range, setRange, role }) {
         </Card>
       )}
 
+      <div id="ov-top10"/>
       <Card title={`Top 10 สินค้าขายดี · ${periodInfo.tag} (ไม่รวม MTO)`}
             sub={`เรียงตามรายได้ · ${periodInfo.label}`}
             action={null}>
@@ -2241,6 +2295,7 @@ function OverviewView({ data, range, setRange, role }) {
         </div>
       </Card>
 
+      <div id="ov-topcat"/>
       {/* Top sellers per category */}
       <Card title={`🏆 Top 10 ขายดี · แยกตามหมวด · ${periodInfo.tag}`}
             sub={`ขายดีในช่วง ${periodInfo.label} · กดที่สินค้าเพื่อดูรายละเอียด`}
@@ -2331,6 +2386,7 @@ function OverviewView({ data, range, setRange, role }) {
         </div>
       </Card>
 
+      <div id="ov-movers"/>
       {/* ── Movers: มาแรง / ตก (เดือนล่าสุด vs เดือนก่อน) ── */}
       {(momMovers.risers.length > 0 || momMovers.fallers.length > 0) && (
         <Card title="📊 สินค้ามาแรง · ตก"
@@ -2359,6 +2415,7 @@ function OverviewView({ data, range, setRange, role }) {
         </Card>
       )}
 
+      <div id="ov-velocity"/>
       {/* ── Velocity: สต๊อกพอขายกี่วัน ── */}
       {(velocity.reorder.length > 0 || velocity.overstock.length > 0) && (
         <Card title="⏱️ ความเร็วการขาย · สต๊อกพอกี่วัน"
@@ -2389,6 +2446,7 @@ function OverviewView({ data, range, setRange, role }) {
         </Card>
       )}
 
+      <div id="ov-abc"/>
       {/* ── ABC / Pareto ── */}
       {abc.n > 0 && (
         <Card title="🎯 ABC · สินค้ากลุ่มไหนทำรายได้หลัก"
@@ -2471,6 +2529,7 @@ function OverviewView({ data, range, setRange, role }) {
         );
       })()}
 
+      <div id="ov-dead"/>
       {/* ── Dead stock ── */}
       {deadStock.count > 0 && (
         <Card title="🧊 สต๊อกตาย · มีของแต่ไม่ขายเลย 2 เดือน"

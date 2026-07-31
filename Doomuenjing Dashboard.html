@@ -610,35 +610,81 @@
     .fchip { font-size: 12px; padding: 8px 12px; min-height: 44px; }
   }
 
-  /* ── OverviewView filter bar — จัดกลุ่ม select หมวด/เดือน + Seg ไว้ในกล่องเดียว
-       กันหน้าตา "ลอย" แยกกัน ให้รู้สึกเป็นแถบตัวกรองเดียวที่จับต้องได้
-       สำคัญ: iOS Safari เรนเดอร์ <select> เป็น native control ที่มีกรอบ/เงาของตัวเอง
-       เสมอ ต่อให้ห่อด้วย wrapper ก็ยังดู "ลอยเป็นกล่องแยก" อยู่ดี ต้อง appearance:none
-       ปิด native chrome แล้ววาดลูกศรเองถึงจะแบนเข้ากับแถบเดียวกันได้จริง ── */
+  /* ── OverviewView: ตัวกรอง หมวด/ปี/เดือน แบบ "ปุ่มกดครบทุกตัว" ─────────────────
+       เลิกใช้ <select> ทั้งหมด — บน iOS มันเป็น native control ที่มีกรอบ/เงาของตัวเอง
+       ดูลอยแยกจาก UI อื่นเสมอ แก้ด้วย CSS ไม่หายขาด และผู้ใช้ต้องกด 2 ครั้ง
+       (เปิด dropdown → เลือก) กว่าจะเห็นว่ามีตัวเลือกอะไรบ้าง
+       ตอนนี้เป็นแถวปุ่ม pill เลื่อนแนวนอน เห็นทุกตัวเลือก กดครั้งเดียวจบ ── */
   .ov-filterbar {
-    display: flex; align-items: stretch; flex-wrap: wrap;
-    background: var(--paper); border: 1.5px solid var(--bdr); border-radius: 12px;
-    padding: 2px; box-sizing: border-box; overflow: hidden;
+    background: var(--paper); border: 1.5px solid var(--bdr); border-radius: 14px;
+    padding: 6px 10px; box-sizing: border-box; margin-bottom: 10px;
+    display: flex; flex-direction: column; gap: 2px;
   }
-  .overview-stickybar-inner .ov-filterbar { background: var(--paper); }
-  .ov-filterbar select {
-    -webkit-appearance: none; -moz-appearance: none; appearance: none;
-    font-family: inherit; cursor: pointer; box-sizing: border-box;
-    border: none; background: transparent; border-radius: 10px;
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M1 1l4 4 4-4' stroke='%236b7a70' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
-    background-repeat: no-repeat; background-position: right 8px center;
-    padding-right: 22px !important;
+  .ov-pillrow { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .ov-pillrow + .ov-pillrow { border-top: 1px solid var(--bdr); }
+  .ov-pillrow-label {
+    flex: 0 0 auto; width: 62px; font-size: 11.5px; font-weight: 700;
+    color: var(--muted); white-space: nowrap;
   }
-  .ov-filterbar select + select { border-left: 1px solid var(--bdr); }
-  .ov-filterbar select.active { background-color: var(--g-50); color: var(--g-700); }
-  .ov-filterbar .seg {
-    background: transparent; border: none; border-left: 1px solid var(--bdr);
-    border-radius: 0; margin: 0; padding: 2px; flex-shrink: 0;
+  .ov-pillrow-hint { flex: 0 0 auto; font-size: 11px; color: #b26a00; white-space: nowrap; }
+  .ov-pillrow-scroll {
+    flex: 1 1 auto; min-width: 0; display: flex; gap: 6px;
+    overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+    padding: 5px 2px; scroll-padding-inline: 8px;
   }
+  .ov-pillrow-scroll::-webkit-scrollbar { display: none; }
+  .ov-pill {
+    flex: 0 0 auto; font-family: inherit; cursor: pointer; white-space: nowrap;
+    padding: 8px 14px; border-radius: 99px; font-size: 12.5px; font-weight: 600;
+    border: 1.5px solid var(--bdr); background: var(--paper); color: var(--g-700);
+    min-height: 38px; transition: background .15s, color .15s, border-color .15s;
+  }
+  .ov-pill:hover { border-color: var(--g-400); background: var(--g-50); }
+  .ov-pill.on {
+    background: #1b5e20; border-color: #1b5e20; color: #fff; font-weight: 700;
+    box-shadow: 0 2px 6px rgba(31,127,68,.25);
+  }
+
+  /* ── ปุ่มลัดไปแต่ละหัวข้อ — หน้า Overview ยาวมากบนมือถือ ── */
+  .ov-jumpbar {
+    display: flex; align-items: center; gap: 8px; min-width: 0; margin-bottom: 14px;
+  }
+  .ov-jumpbar-label {
+    flex: 0 0 auto; font-size: 11.5px; font-weight: 700; color: var(--muted); white-space: nowrap;
+  }
+  .ov-jumpbar-scroll {
+    flex: 1 1 auto; min-width: 0; display: flex; gap: 6px;
+    overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+    padding: 3px 2px;
+  }
+  .ov-jumpbar-scroll::-webkit-scrollbar { display: none; }
+  .ov-jumpchip {
+    flex: 0 0 auto; font-family: inherit; cursor: pointer; white-space: nowrap;
+    padding: 7px 13px; border-radius: 99px; font-size: 12px; font-weight: 600;
+    border: 1px dashed var(--bdr); background: var(--g-50); color: var(--g-700);
+    min-height: 36px; transition: background .15s, border-color .15s;
+  }
+  .ov-jumpchip:hover { background: var(--g-100, var(--g-50)); border-color: var(--g-400); border-style: solid; }
+
+  /* แถบ sticky: แถวเดียว = ปุ่มสรุปช่วงเวลา (กดกางตัวกรอง) + ปุ่มลัดหัวข้อ */
+  .ov-stickyrow { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; }
+  .ov-stickyrow .ov-jumpbar { margin-bottom: 0; flex: 1 1 auto; min-width: 0; }
+  .ov-stickyrow .ov-jumpbar-label { display: none; }
+  .ov-periodbtn {
+    flex: 0 0 auto; font-family: inherit; cursor: pointer; white-space: nowrap;
+    padding: 8px 12px; border-radius: 10px; font-size: 12.5px; font-weight: 700;
+    border: 1.5px solid var(--bdr); background: var(--paper); color: var(--g-700);
+    min-height: 38px; max-width: 46vw; overflow: hidden; text-overflow: ellipsis;
+  }
+  .ov-periodbtn.on { background: var(--g-50); border-color: var(--g-500); }
+  .ov-caret { font-size: 9px; opacity: .6; }
+  .overview-stickybar-inner { flex-direction: column; align-items: stretch; gap: 0; }
+  .overview-stickybar-inner .ov-filterbar { margin-bottom: 0; margin-top: 6px; }
+
   @media (max-width: 480px) {
-    .ov-filterbar { width: 100%; }
-    .ov-filterbar select { flex: 1 1 auto; min-width: 0; }
-    .ov-filterbar .seg { flex-shrink: 0; }
+    .ov-filterbar { padding: 4px 8px; border-radius: 12px; }
+    .ov-pillrow-label { width: 50px; font-size: 11px; }
+    .ov-pill { padding: 7px 12px; font-size: 12px; }
   }
 
   /* KPI Card */
