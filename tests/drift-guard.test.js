@@ -113,6 +113,16 @@ const TRACKED = [
     `if (kind === 'role')  return list.indexOf(effRole) >= 0 || (role === 'dev' && list.indexOf('dev') >= 0);`,
     `if (kind === 'staff') return list.indexOf(String(staffId || '')) >= 0;`,
   ]},
+  // ⭐ ผู้ดูแลสินค้า: drift = ดาวของคนอื่นโผล่เป็นของเรา หรือแย่งดาวกันได้โดยไม่ถาม
+  { names: ['productOwnerMapFromRows'], sourceFile: 'appsscript_complete.gs', landmarks: [
+    `if (status === 'off' || !staffId) { delete out[sku]; continue; }`,
+  ]},
+  { names: ['productOwnerCanSet'], sourceFile: 'appsscript_complete.gs', landmarks: [
+    `if (role === 'owner' || role === 'dev') return true;`,
+    `if (!current || !current.staffId) return true;`,
+    `if (String(current.staffId) === String(staffId)) return true;`,
+    `return takeover === true;`,
+  ]},
   { names: ['inappIsRead'], sourceFile: 'appsscript_complete.gs', landmarks: [
     `if (parts[i].trim() === String(staffId)) return true;`,
   ]},

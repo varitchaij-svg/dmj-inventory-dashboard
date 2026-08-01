@@ -73,6 +73,31 @@ function inappAudienceMatch(audience, staffId, role) {
   return false;
 }
 
+// ── จาก appsscript_complete.gs — ⭐ ผู้ดูแลสินค้า ────────────────────────────
+// POWN_COL (1-indexed): SKU=1 STAFF=2 NAME=3 UPDATED=4 STATUS=5 NOTE=6
+// แถวดิบ → map {sku: {staffId, name}} เฉพาะแถวที่ยัง active
+function productOwnerMapFromRows(rows) {
+  const out = {};
+  for (let i = 0; i < (rows || []).length; i++) {
+    const r = rows[i];
+    const sku = String(r[0] || '').trim();
+    if (!sku) continue;
+    const status = String(r[4] || '').trim();
+    const staffId = String(r[1] || '').trim();
+    if (status === 'off' || !staffId) { delete out[sku]; continue; }
+    out[sku] = { staffId: staffId, name: String(r[2] || '').trim() };
+  }
+  return out;
+}
+
+// ยังไม่มีคนดูแล → ใครกดก็ได้ · มีแล้ว → เจ้าของเดิม/owner/dev หรือยืนยัน takeover เท่านั้น
+function productOwnerCanSet(current, staffId, role, takeover) {
+  if (role === 'owner' || role === 'dev') return true;
+  if (!current || !current.staffId) return true;
+  if (String(current.staffId) === String(staffId)) return true;
+  return takeover === true;
+}
+
 function inappIsRead(readBy, staffId) {
   if (!staffId) return false;
   const parts = String(readBy || '').split(',');
@@ -844,6 +869,7 @@ function bahtText(amount) {
 module.exports = {
   monthsSince, fmtN, fmtB, fmtPct, monthLabel,
   notiAgo, inappAudienceMatch, inappIsRead,
+  productOwnerMapFromRows, productOwnerCanSet,
   bahtText, readThaiInt_,
   stockQty, whQty, mtoBase, compareSku,
   COL_PROD_SKU, COL_PROD_QTYFS, COL_PROD_QTYWH,

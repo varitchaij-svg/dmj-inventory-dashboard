@@ -78,6 +78,10 @@ role `storedevice` = บัญชี LINE กลาง ("เครื่อง�
 (navtabs: **owner/dev เท่านั้น** ที่ได้ nav 2 ชั้นแบบกลุ่ม (`OWNER_GROUPS`) — 5 หมวดหลัก + "อื่นๆ"
 ถ้ามีเหลือ · role อื่นทั้งหมด (employee/warehouse/frontstore/saler) ไม่มี "เพิ่มเติม" เลย ไม่ว่าจะกี่แท็บ
 โชว์ทุกแท็บบนแถบเลื่อนแนวนอนเดียว — ลำดับใน ROLE_TABS จึงมีผลแค่ว่าอันไหนอยู่ซ้ายสุด/ไม่ต้องเลื่อนหา)
+(**⚠️ harness `action=me` เคยตอบ `staffId:'S001'` ไม่ตรงกับ `window._currentStaffId='STF001'`
+ที่ seed ไว้ — `applyStaffSession()` เขียนทับด้วยค่าจาก `me` เสมอ → `MyJobsCard` ("งานของฉัน")
+หางานไม่เจอ ทำให้ categories/whhome แดง 7 ข้อทุก role (72/79) แก้แล้ว 2026-07-31 · บทเรียน:
+ค่าใน stub ต้องตรงกับ fixture ทุกตัว ไม่งั้น "เทสต์แดงที่ไม่ได้เกิดจากโค้ดจริง" จะกลบของจริง)
 (**`tests/browser/run.cjs` แก้ NAV_FAIL แล้ว (2026-07-31) — ผ่าน 79/79** · `navigateTo()` รองรับ
 nav 2 ชั้นของ owner/dev แล้ว: ลองเมนูย่อยของหมวดที่เปิดอยู่ก่อน ไม่เจอค่อยไล่กดหมวดในชั้น 1 ทีละอัน
 จนกว่าเมนูย่อยที่ต้องการจะโผล่ (**ไล่กดแทนการ mirror `OWNER_GROUPS` ไว้ในเทสต์ — จะได้ไม่ drift
@@ -339,7 +343,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 773 tests, 22 test files, ทั้งหมด pass
+**มี Vitest test suite แล้ว** — 812 tests, 24 test files, ทั้งหมด pass
 
 ```bash
 npm test              # run tests
@@ -651,6 +655,45 @@ audience 3 แบบ: "all" · "role:warehouse,owner" · "staff:ST0001,ST0002"  
 browser test มี interaction badge→panel→nav ทั้ง owner และ warehouse
 · ⚠️ **harness เดิมตอบ `action=me` เป็น `{success:true}`** ทำให้ app ลบ session token ทิ้ง →
 อะไรก็ตามที่ต้องใช้ token **ไม่เคยถูกทดสอบเลย** แก้ให้ตอบ `{ok:true,staff:{...}}` ตามของจริงแล้ว
+
+## ⭐ ผู้ดูแลสินค้า (Product Owner, Sprint 7)
+
+ปุ่มดาวบนการ์ดสินค้าในแท็บ "เช็คหน้าร้าน" — บอกว่า **สินค้าตัวนี้ใครดูแล/เก็บไว้ที่ใคร**
+เพื่อให้พนักงานกรองเหลือของตัวเองตอนเช็ค และคนอื่นที่หยิบ/สั่งแทนรู้ว่าถามใคร
+
+**⚠️ เป็น "ป้ายบอก" ไม่ใช่ "สิทธิ์"** (เจ้าของยืนยัน 2026-07-31) — ทุกคนยังเช็ค/สั่ง/โอน
+สินค้าทุกตัวได้เหมือนเดิมทุกอย่าง **ห้ามเอาไป gate อะไรทั้งสิ้น** (มีเทสต์กันไว้ใน
+`tests/product-owner.test.js` ว่า `FSCard` ไม่มี `disabled` ที่ผูกกับ `owner`/`isMine`)
+
+```
+SHEET_PRODUCT_OWNER = "ผู้ดูแลสินค้า"   // A=sku B=staffId C=ชื่อผู้ดูแล D=updatedAt E=status F=หมายเหตุ
+```
+- **1 สินค้า = 1 คนดูแล** → 1 แถวต่อ SKU **เขียนทับ**เวลาเปลี่ยนคน (แถวไม่โตตามจำนวนครั้งที่กด
+  — เพดานคือจำนวน SKU) · ประวัติการเปลี่ยนมืออยู่ใน audit log
+- **doGet `action=productOwners`** → `listProductOwnersHandler_` คืนทั้งแมพ `{sku:{staffId,name}}`
+  + `me` (staffId ของคนที่ล็อกอิน) ให้ client filter "ของฉัน" เอง — ไม่ทำ since/merge
+- **doPost `action=setProductOwner`** `{sku,on,takeover,targetStaffId}` — staffId มาจาก **session
+  เสมอ** (owner/dev ส่ง `targetStaffId` มอบหมายแทนคนอื่นได้) · ⚠️ **dispatch อยู่เหนือ
+  `invalidateCache_(true)` โดยตั้งใจ** เหมือน `markNotiRead` — กดดาวไม่ได้แตะข้อมูลสต็อก
+- **`productOwnerCanSet_`**: ของว่าง=ใครกดก็ได้ · ของตัวเอง=ถอด/แก้ได้ · **ของคนอื่น=ต้อง
+  `takeover:true`** (frontend `confirm()` ก่อน) — กันแย่งดาวเงียบ ๆ · owner/dev ผ่านเสมอ
+- ⚠️ **ห้ามยัดลง `data.products` ใน payload หลักเด็ดขาด** — payload cache แยกตาม **role**
+  ไม่ใช่ตามคน (`PAYLOAD_ROLE_VARIANT_`) → frontstore ทุกคนจะเห็นดาวของคนที่ทำ cache warm คนแรก
+  (มี meta-test เช็คว่า `buildFullData_` ไม่แตะ `SHEET_PRODUCT_OWNER`)
+- **role `storedevice` กดดาวไม่ได้** (เครื่องกลางใช้ร่วมกันหลายคน ดาวจะกลายเป็นของ "เครื่อง")
+  — เห็นว่าใครดูแลอะไรได้ตามปกติ
+- **SAFE ROLLOUT**: gate ด้วย `PRODUCT_OWNER_ENABLED='true'` — ยังไม่เปิด → endpoint คืน
+  `{off:true}` → ดาวซ่อนทั้งหมด (deploy แล้วไม่มีอะไรเปลี่ยน) · เปิดเมื่อเจ้าของรัน
+  **`setupProductOwner()`** 1 ครั้ง · ปิดด้วย `disableProductOwner()` (ข้อมูลในชีตยังอยู่ครบ)
+
+**ฝั่ง frontend**: `useProductOwners()` (views-analytics.jsx) = fetch + optimistic toggle +
+cache ใน `localStorage.dmj_prod_owners` (กันดาวกะพริบตอนเปิดแอป — หลักเดียวกับ `NotiBell`)
+· `OwnerStar` (views-main.jsx) วางทับมุมขวาบนรูปใน `FSCard` · ชิป **"⭐ ของฉัน (N)"** ใน `Seg`
+เดิม (ไม่เพิ่ม UI ใหม่ให้เรียนรู้) · คิว "ควรเช็คก่อน" เรียง**ของฉันขึ้นก่อน แต่ยังโชว์ของคนอื่น
+ต่อท้าย ไม่ซ่อน** (สินค้าที่ไม่มีเจ้าภาพต้องไม่หายไปจากคิว)
+
+**ต่อยอดได้ (ยังไม่ทำ)**: หน้าสรุปฝั่งเจ้าของ (ใครดูแลกี่ SKU / "ยังไม่มีคนดูแล N ตัว") ·
+แจ้งเตือนเจาะตัวผ่านกระดิ่ง `pushInappNoti_({audience:"staff:STxxxx"})` เมื่อของที่ตัวเองดูแลใกล้หมด
 
 ## Features ที่เพิ่มก่อนหน้า (Sprint 1)
 

@@ -121,6 +121,101 @@ function PurchaseGroupView({ products }) {
 }
 
 // ─── FrontStoreView ───
+// ══════════════════════════════════════════════════════════════════════════
+// ⭐ ผู้ดูแลสินค้า — sync helper + hook
+// ──────────────────────────────────────────────────────────────────────────
+// endpoint แยกจาก payload หลักโดยตั้งใจ: payload cache ฝั่ง GAS แยกตาม role ไม่ใช่ตามคน
+// ถ้าเอา "ดาวของฉัน" ไปฝากใน data.products พนักงานหน้าร้านทุกคนจะเห็นดาวของคนแรก
+// ที่ทำให้ cache warm (ดู PAYLOAD_ROLE_VARIANT_ ใน appsscript_complete.gs)
+var PRODUCT_OWNER_CACHE_KEY = "dmj_prod_owners";   // cache ในเครื่อง — กันดาวกะพริบตอนเปิดแอป
+
+async function syncGetProductOwners() {
+  if (!GOOGLE_SHEET_URL) return { ok: false };
+  var tok = null;
+  try { tok = localStorage.getItem("dmj_session_token"); } catch (e) {}
+  if (!tok) return { ok: false, noSession: true };   // ยังไม่ล็อกอิน → ไม่มี "ของฉัน" ให้ดู
+  try {
+    var sep = GOOGLE_SHEET_URL.indexOf("?") >= 0 ? "&" : "?";
+    var r = await fetch(GOOGLE_SHEET_URL + sep + "action=productOwners&sessionToken="
+                        + encodeURIComponent(tok) + "&_t=" + Date.now(), { cache: "no-store" });
+    var d = await r.json();
+    // ต้องเป็น ok:true เท่านั้น — unauthorized_() คืน {success:false} ที่ไม่มีคีย์ ok เลย
+    // ถ้าเช็คแค่ `d.ok === false` จะหลุดเป็น "สำเร็จ" แล้ว off กลายเป็น false → ดาวโผล่ทั้งที่
+    // session หมดอายุ (กดแล้วพังทุกครั้ง)
+    if (!d || d.ok !== true) return { ok: false };
+    return d;
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
+// on=false → ถอดดาว · takeover=true → ยืนยันรับช่วงต่อจากคนอื่น (server บังคับถามก่อนเสมอ)
+async function syncSetProductOwner(sku, on, opts) {
+  if (!SHEET_DEPLOY_URL) return { success: false };
+  opts = opts || {};
+  try {
+    var r = await dmjFetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        action: "setProductOwner", sku: sku, on: !!on,
+        takeover: opts.takeover === true,
+        targetStaffId: opts.targetStaffId || "",
+      }),
+    });
+    return await r.json();
+  } catch (e) { return { success: false, error: e.message }; }
+}
+
+// คืน { owners, me, off, toggle } — ใช้ใน FrontStoreView (แยกออกมาเพื่อให้ view อื่นหยิบไปใช้ต่อได้)
+function useProductOwners(showToast) {
+  var cached = {};
+  try { cached = JSON.parse(localStorage.getItem(PRODUCT_OWNER_CACHE_KEY) || "{}") || {}; } catch (e) {}
+  const [owners, setOwners] = uS(cached.owners || {});
+  const [me, setMe] = uS(cached.me || "");
+  const [meName, setMeName] = uS(cached.meName || "ฉัน");
+  // เริ่มที่ "ปิด" จนกว่าจะรู้ผลจริง แล้วจำไว้ในเครื่อง — หลักเดียวกับกระดิ่ง (NotiBell)
+  // ไม่งั้นเครื่องที่ยังไม่เปิดระบบจะเห็นดาวโผล่แล้วหายทุกครั้งที่เปิดแอป
+  const [off, setOff] = uS(cached.off !== false);
+
+  const reload = uC(async function () {
+    var d = await syncGetProductOwners();
+    if (!d || d.ok !== true) return;   // ไม่ล็อกอิน/session หมดอายุ → คงค่าเดิม (ยังซ่อนดาวอยู่)
+    var next = { owners: d.owners || {}, me: d.me || "", meName: d.meName || "ฉัน", off: !!d.off };
+    setOwners(next.owners); setMe(next.me); setMeName(next.meName); setOff(next.off);
+    try { localStorage.setItem(PRODUCT_OWNER_CACHE_KEY, JSON.stringify(next)); } catch (e) {}
+  }, []);
+
+  uE(function () { reload(); }, [reload]);
+
+  // optimistic: ดาวติดทันทีไม่รอ GAS (ช้า 1-3 วิ) · พลาดแล้วค่อยคืนค่าเดิม
+  const toggle = uC(async function (sku, opts) {
+    opts = opts || {};
+    var cur = owners[sku] || null;
+    var mine = cur && String(cur.staffId) === String(me);
+    var wantOn = !mine;
+    if (cur && !mine && !opts.takeover) {
+      var ok = window.confirm("สินค้านี้ " + (cur.name || "คนอื่น") + " ดูแลอยู่\nจะรับมาดูแลแทนไหม?");
+      if (!ok) return;
+      opts.takeover = true;
+    }
+    var prev = owners;
+    setOwners(function (o) {
+      var n = Object.assign({}, o);
+      if (wantOn) n[sku] = { staffId: me, name: meName };
+      else delete n[sku];
+      return n;
+    });
+    var res = await syncSetProductOwner(sku, wantOn, { takeover: opts.takeover === true });
+    if (!res || res.success === false) {
+      setOwners(prev);   // คืนค่าเดิม — ห้ามปล่อยให้จอโชว์ดาวที่ server ไม่ได้รับ
+      if (showToast) showToast("error", (res && res.error) || "บันทึกไม่สำเร็จ", "⚠️");
+      return;
+    }
+    reload();            // ดึงชื่อจริงจาก server ทับค่าที่เดาไว้
+  }, [owners, me, meName, reload, showToast]);
+
+  return { owners: owners, me: me, off: off, toggle: toggle, reload: reload };
+}
+
 function FrontStoreView({ data, role, checkRequest }) {
   const products = data.products || [];
   const [toast, showToast, hideToast] = useToast();
@@ -151,6 +246,16 @@ function FrontStoreView({ data, role, checkRequest }) {
   const [savedSkus, setSavedSkus] = uS(new Set());
   const [scrollToSku, setScrollToSku] = uS(null);
   const [showMode, setShowMode] = uS("all");
+  // ⭐ ใครดูแลสินค้าตัวไหน — ป้ายบอกเฉย ๆ ไม่จำกัดสิทธิ์ (ทุกคนยังเช็ค/สั่ง/โอนได้ทุกตัว)
+  const prodOwner = useProductOwners(showToast);
+  const mySkus = uM(function () {
+    var s = new Set();
+    if (!prodOwner.me) return s;
+    Object.keys(prodOwner.owners || {}).forEach(function (sku) {
+      if (String(prodOwner.owners[sku].staffId) === String(prodOwner.me)) s.add(sku);
+    });
+    return s;
+  }, [prodOwner.owners, prodOwner.me]);
   const [purchaseMode, setPurchaseMode] = uS(false);
   const [mounted, setMounted] = uS(false);
   uE(() => { const t = setTimeout(() => setMounted(true), 350); return () => clearTimeout(t); }, []);
@@ -231,8 +336,9 @@ function FrontStoreView({ data, role, checkRequest }) {
         return parseInt(v) !== (p.qtyStore ?? 0);
       });
     if (showMode === "reorder") return baseFiltered.filter(function(p) { return (p.qtyStore||0) <= 12 && (p.qtyWH||0) > 0; });
+    if (showMode === "mine") return baseFiltered.filter(function(p) { return mySkus.has(p.sku); });
     return baseFiltered;
-  }, [baseFiltered, showMode, checkedQtys]);
+  }, [baseFiltered, showMode, checkedQtys, mySkus]);
 
   const counts = uM(() => {
     let unchecked = 0, mismatch = 0;
@@ -267,18 +373,21 @@ function FrontStoreView({ data, role, checkRequest }) {
       .map(p => {
         const t = p.frontStoreCheckedAt ? parseCheckDateMs(p.frontStoreCheckedAt) : NaN;
         const days = !isNaN(t) ? Math.floor((now - t) / 86400000) : null;
-        return { sku: p.sku, name: p.name, imageUrl: p.imageUrl,
+        return { sku: p.sku, name: p.name, imageUrl: p.imageUrl, mine: mySkus.has(p.sku),
                  cls: abc[p.sku] || 'C', days, qtyStore: p.qtyStore || 0 };
       })
       .filter(x => x.days == null || x.days >= dueDays[x.cls])
       .sort((a, b) => {
+        // ของที่ตัวเองดูแลขึ้นก่อน — แต่ยังโชว์ของคนอื่นต่อท้าย ไม่ซ่อน
+        // (สินค้าที่ไม่มีเจ้าภาพต้องไม่หายไปจากคิว ไม่งั้นไม่มีใครเช็คเลย)
+        if (a.mine !== b.mine) return a.mine ? -1 : 1;
         if (clsRank[a.cls] !== clsRank[b.cls]) return clsRank[a.cls] - clsRank[b.cls];
         const da = a.days == null ? Infinity : a.days;
         const db = b.days == null ? Infinity : b.days;
         return db - da; // นานสุด/ไม่เคยเช็ค มาก่อน
       })
       .slice(0, 10);
-  }, [products]);
+  }, [products, mySkus]);
   const [showAllCheckQueue, setShowAllCheckQueue] = uS(false);
 
   const touchedWithValue = uM(() =>
@@ -448,7 +557,10 @@ function FrontStoreView({ data, role, checkRequest }) {
               {value:"unchecked", label:`⬜ รอเช็ค${uncheckedCount>0?` (${uncheckedCount})`:""}`},
               {value:"mismatch",  label:`❌ ไม่ตรง${mismatchCount>0?` (${mismatchCount})`:""}`},
               {value:"reorder",   label:"🔄 ควรสั่ง"},
-            ]}/>
+            ].concat(prodOwner.off ? [] : [
+              // ⭐ โชว์เฉพาะตอนเปิดระบบผู้ดูแลสินค้าแล้ว (ไม่งั้นเป็นชิปที่กดแล้วว่างเปล่า)
+              {value:"mine", label:`⭐ ของฉัน${mySkus.size>0?` (${mySkus.size})`:""}`},
+            ])}/>
           </div>
           {supplierFilter && (
             <button onClick={() => setSupplierFilter("")}
@@ -518,7 +630,8 @@ function FrontStoreView({ data, role, checkRequest }) {
                 }}>{item.cls}</span>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontSize:13,fontWeight:700,whiteSpace:'nowrap',
-                               overflow:'hidden',textOverflow:'ellipsis'}}>{item.name}</div>
+                               overflow:'hidden',textOverflow:'ellipsis'}}>
+                    {item.mine && <span style={{marginRight:4}}>⭐</span>}{item.name}</div>
                   <div style={{fontSize:11,color:'var(--muted)'}}>
                     {item.days == null ? 'ยังไม่เคยเช็ค' : `เช็คล่าสุด ${item.days} วันก่อน`}
                     {' · หน้าร้าน '}{item.qtyStore}{' ชิ้น'}
@@ -563,6 +676,9 @@ function FrontStoreView({ data, role, checkRequest }) {
                 const cur = checkedQtys[sku];
                 setFsCalcPad({ sku, name, val: (cur != null && cur !== '') ? String(cur) : '' });
               }}
+              owner={prodOwner.owners[p.sku] || null}
+              isMine={mySkus.has(p.sku)}
+              onToggleOwner={prodOwner.off ? undefined : () => prodOwner.toggle(p.sku)}
               onOrder={(p.qtyWH || 0) > 0 ? () => {
                 setTransferTarget({ sku: p.sku, name: p.name, maxQty: p.qtyWH || 0 });
                 setTransferQty(Math.min(p.qtyWH || 0, Math.max(1, 12 - (p.qtyStore || 0))));

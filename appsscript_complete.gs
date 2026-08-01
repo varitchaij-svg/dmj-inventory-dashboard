@@ -126,6 +126,7 @@ const SHEET_TRANSFERS_HIST = "รายการโอน";        // ประ�
 const SHEET_MTO_JOBS       = "งาน MTO";          // งานจัดพิเศษ (make-to-order)
 const SHEET_NOTI_QUEUE     = "คิวแจ้งเตือน LINE"; // คิวข้อความ LINE (throttle/กันชนลิมิต/กันส่งซ้ำ)
 const SHEET_INAPP_NOTI     = "แจ้งเตือนในแอป";   // กระดิ่งบนหัวจอ (ไม่ยิง LINE = ไม่กิน quota)
+const SHEET_PRODUCT_OWNER  = "ผู้ดูแลสินค้า";     // ⭐ ใครดูแลสินค้าตัวไหน (1 สินค้า = 1 คน) — ป้ายบอก ไม่ใช่สิทธิ์
 const SHEET_MTO_ITEMS      = "วัตถุดิบ MTO";    // วัตถุดิบสำหรับงาน MTO
 const SHEET_CUST_MONTHLY   = "สรุปลูกค้า-เดือน";  // ยอดซื้อลูกค้า แยกตามเดือน (customer×month)
 const SHEET_CUST_PRODUCTS  = "สรุปลูกค้า-สินค้า"; // สินค้าที่ลูกค้าแต่ละรายซื้อบ่อย (top-N/ลูกค้า)
@@ -624,7 +625,10 @@ var COMMON_ACTIONS_ = ["order", "updateOrderState", "transferStock", "transferSt
                         "punch", "myToday", "myAttendanceSummary",
                         // กระดิ่งแจ้งเตือนอยู่บนหัวจอทุกแท็บทุก role → ต้องอยู่ใน COMMON เสมอ
                         // (ลืมใส่ = role นั้นกดอ่านแจ้งเตือนไม่ได้ทันทีที่เปิด REQUIRE_LOGIN)
-                        "markNotiRead"];
+                        "markNotiRead",
+                        // ⭐ ปุ่มดาว "สินค้าที่ฉันดูแล" — เป็นป้ายบอกว่าใครดูแล ไม่ใช่สิทธิ์ทำอะไร
+                        // ทุกคนตั้ง/ถอดของตัวเองได้ (handler บังคับให้เขียนได้เฉพาะ staffId ของ session)
+                        "setProductOwner"];
 
 var ROLE_ACTIONS_ = {
   saler:      ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
@@ -1764,6 +1768,11 @@ function doPost(e) {
     // ถ้าปล่อยให้ตกไปด้านล่าง การกดอ่านแจ้งเตือนจะล้าง payload cache ทั้งก้อนทุกครั้ง
     if (data.action === 'markNotiRead') return markInappNotiReadHandler_(ss, data);
 
+    // ─── ⭐ ตั้ง/ถอด "คนดูแลสินค้า" — เขียนชีตของตัวเอง ไม่แตะข้อมูลสต็อก ───
+    // อยู่เหนือ invalidateCache_ ด้วยเหตุผลเดียวกับ markNotiRead: กดดาวไม่ควรล้าง
+    // payload cache ทั้งก้อนจนทั้งร้านต้องโหลดใหม่
+    if (data.action === 'setProductOwner') return setProductOwnerHandler_(ss, data);
+
     // มีการแก้ข้อมูล → ล้าง cache ให้ doGet ครั้งถัดไปคำนวณใหม่ (ข้อมูลไม่ค้าง)
     invalidateCache_(true); // clear payload cache เท่านั้น — ห้าม bump dmj_last_write_ts ก่อน conflict check
 
@@ -2073,6 +2082,12 @@ function doGet(e) {
     // ตรวจ session จริงเหมือน attendancePhoto/getAuditLog (ไม่เชื่อ role จาก query param)
     if (e && e.parameter && e.parameter.action === 'inappNoti') {
       return listInappNotiHandler_(e);
+    }
+
+    // ⭐ ใครดูแลสินค้าตัวไหน — endpoint แยกจาก payload หลักโดยตั้งใจ
+    // (payload cache แยกตาม role ไม่ใช่ตามคน → ยัดลงไปจะเห็นดาวของคนอื่น)
+    if (e && e.parameter && e.parameter.action === 'productOwners') {
+      return listProductOwnersHandler_(e);
     }
 
     // Lightweight endpoint: ดึงเฉพาะรายการสั่งของ (เบา/เร็ว) สำหรับ polling หน้า orders
@@ -8159,6 +8174,193 @@ function setupInappNoti() {
 function disableInappNoti() {
   PropertiesService.getScriptProperties().setProperty('INAPP_NOTI_ENABLED', 'false');
   Logger.log('ปิดแจ้งเตือนในแอปแล้ว — กระดิ่งจะว่างเปล่า ระบบอื่นไม่กระทบ');
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ⭐ ผู้ดูแลสินค้า (Product Owner) — "สินค้าตัวนี้ใครดูแล"
+// ──────────────────────────────────────────────────────────────────────────
+// เจตนา: หน้าร้านแต่ละคนมีสินค้า/ที่เก็บของตัวเอง แต่เดิมทุกคนเห็นลิสต์เดียวกันหมด
+//   ไม่มีใครรู้ว่าของตัวไหนอยู่กับใคร → กดดาวไว้ให้ (1) กรองเหลือของตัวเองตอนเช็ค
+//   (2) คนอื่นหยิบของ/สั่งแทนได้แล้วรู้ว่าถามใคร
+// ⚠️ นี่คือ "ป้ายบอก" ไม่ใช่ระบบสิทธิ์ — ห้ามเอาไป gate การสั่ง/โอน/เช็คสินค้าเด็ดขาด
+//   ทุกคนยังทำกับสินค้าทุกตัวได้เหมือนเดิมทุกอย่าง (เจ้าของยืนยัน 2026-07-31)
+// 1 สินค้า = 1 คนดูแล → เก็บ 1 แถวต่อ SKU แล้ว "เขียนทับ" เวลาเปลี่ยนคน
+//   (แถวไม่โตตาม action ที่กด — เพดานคือจำนวน SKU) · ประวัติการเปลี่ยนมือดูที่ audit log
+// ⚠️ ห้ามยัดข้อมูลนี้ลง data.products ใน payload หลัก — payload cache แยกตาม role ไม่ใช่ตามคน
+//   (PAYLOAD_ROLE_VARIANT_) ใส่ "ดาวของฉัน" เข้าไป = frontstore ทุกคนเห็นดาวของคนที่ทำ
+//   cache warm คนแรก · จึงเป็น endpoint แยกแบบเดียวกับกระดิ่ง (inappNoti)
+// SAFE ROLLOUT: gate ด้วย Script Property PRODUCT_OWNER_ENABLED='true'
+//   ยังไม่เปิด → endpoint คืน {off:true} → frontend ซ่อนดาวทั้งหมด (deploy แล้วไม่มีอะไรเปลี่ยน)
+//   เปิดจริงเมื่อเจ้าของรัน setupProductOwner() 1 ครั้งใน GAS editor
+// ══════════════════════════════════════════════════════════════════════════
+
+// คอลัมน์ชีตผู้ดูแลสินค้า (1-indexed): A..F
+var POWN_COL = { SKU:1, STAFF:2, NAME:3, UPDATED:4, STATUS:5, NOTE:6 };
+var POWN_HEADERS = ["sku","staffId","ชื่อผู้ดูแล","updatedAt","status","หมายเหตุ"];
+var POWN_MAX_ROWS = 5000;   // เพดานอ่าน/สแกน — SKU จริงหลักพัน เผื่อไว้ไม่ให้ getRange โตไม่มีเพดาน
+
+// ชื่อที่โชว์บนป้ายดาว — ใช้ชื่อสั้น ไม่ใช่ "ชื่อ (ตำแหน่ง)" แบบ actor
+// (ป้ายอยู่บนแถวสินค้าที่แคบมาก ชื่อเต็มล้นแน่นอน)
+function productOwnerShortName_(s) {
+  if (!s) return '';
+  return String(s.displayName || s.lineDisplayName || '').trim();
+}
+
+function productOwnerEnabled_() {
+  return PropertiesService.getScriptProperties().getProperty('PRODUCT_OWNER_ENABLED') === 'true';
+}
+
+function productOwnerSheet_(ss) {
+  return getOrCreateSheet_(ss, SHEET_PRODUCT_OWNER, POWN_HEADERS);
+}
+
+// แถวดิบ → map {sku: {staffId, name}} เฉพาะแถวที่ยัง active
+// pure function — มีสำเนาใน tests/helpers.js (ดู drift-guard.test.js)
+function productOwnerMapFromRows_(rows) {
+  var out = {};
+  for (var i = 0; i < (rows || []).length; i++) {
+    var r = rows[i];
+    var sku = String(r[POWN_COL.SKU - 1] || '').trim();
+    if (!sku) continue;
+    var status = String(r[POWN_COL.STATUS - 1] || '').trim();
+    var staffId = String(r[POWN_COL.STAFF - 1] || '').trim();
+    if (status === 'off' || !staffId) { delete out[sku]; continue; }   // ถอดดาวแล้ว = ไม่มีคนดูแล
+    out[sku] = { staffId: staffId, name: String(r[POWN_COL.NAME - 1] || '').trim() };
+  }
+  return out;
+}
+
+// ใครมีสิทธิ์เปลี่ยน "คนดูแล" ของ SKU นี้ — เจ้าของปัจจุบันคือใครมีผลด้วย
+// กติกา: ยังไม่มีคนดูแล → ใครกดก็ได้ · มีคนดูแลแล้ว → เจ้าของเดิมเท่านั้น (หรือ owner/dev)
+// ตั้งใจให้ "แย่งดาว" ไม่ได้เงียบ ๆ — frontend ถามยืนยันแล้วส่ง takeover:true มาถึงจะยอมเปลี่ยนมือ
+// pure function — มีสำเนาใน tests/helpers.js
+function productOwnerCanSet_(current, staffId, role, takeover) {
+  if (role === 'owner' || role === 'dev') return true;         // เจ้าของ/dev จัดสรรแทนได้เสมอ
+  if (!current || !current.staffId) return true;               // ของว่าง — ใครก็รับดูแลได้
+  if (String(current.staffId) === String(staffId)) return true; // ของตัวเอง — ถอด/แก้ได้
+  return takeover === true;                                     // ของคนอื่น — ต้องยืนยันรับช่วงต่อ
+}
+
+// ── doGet action=productOwners — frontend ดึงตอนเปิดแท็บหน้าร้าน ──────────
+// คืนทั้งแมพ (sku → ผู้ดูแล) ให้ client ไป filter เอาของตัวเองเอง — ไม่ทำ since/merge
+// (เหตุผลเดียวกับกระดิ่ง: ข้อมูลมีเพดานอยู่แล้ว merge เป็นบ่อเกิดบั๊กเงียบ)
+function listProductOwnersHandler_(e) {
+  try {
+    var ss = SpreadsheetApp.openById(SHEET_ID);
+    var sess = resolveSession_(ss, (e && e.parameter && e.parameter.sessionToken) || '');
+    if (!sess || sess.status !== 'active') return unauthorized_();
+    if (!productOwnerEnabled_()) {
+      return ContentService.createTextOutput(JSON.stringify({ ok: true, off: true, owners: {}, me: '' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    var sh = ss.getSheetByName(SHEET_PRODUCT_OWNER);
+    var owners = {};
+    if (sh) {
+      var last = Math.min(sh.getLastRow(), POWN_MAX_ROWS + 1);
+      if (last >= 2) owners = productOwnerMapFromRows_(sh.getRange(2, 1, last - 1, POWN_HEADERS.length).getValues());
+    }
+    return ContentService.createTextOutput(JSON.stringify({
+      ok: true, owners: owners, me: String(sess.staffId || ''),
+      meName: productOwnerShortName_(sess), serverTs: Date.now(),
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// ── doPost action=setProductOwner {sku, on, takeover, targetStaffId} ──────
+// on=true  → ตั้งคนดูแล (ปกติ = ตัวเอง · owner/dev ส่ง targetStaffId มอบหมายแทนคนอื่นได้)
+// on=false → ถอดออก (เหลือ "ยังไม่มีคนดูแล")
+// ⚠️ staffId มาจาก session เสมอ ไม่รับจาก client (นอกจาก owner/dev ที่ส่ง targetStaffId)
+function setProductOwnerHandler_(ss, data) {
+  try {
+    var sess = resolveSession_(ss, data.sessionToken);
+    if (!sess || sess.status !== 'active') return unauthorized_();
+    if (!productOwnerEnabled_()) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, off: true, error: 'ยังไม่ได้เปิดใช้งานระบบผู้ดูแลสินค้า' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    var sku = String(data.sku || '').trim().toUpperCase();
+    if (!sku) return ContentService.createTextOutput(JSON.stringify({ success: false, error: 'ไม่ได้ระบุ SKU' }))
+      .setMimeType(ContentService.MimeType.JSON);
+
+    var isAdmin = isAdminRole_(sess.role);
+    var on = data.on !== false;
+    // บัญชีเครื่องกลางใช้ร่วมกันหลายคน — ดาวจะกลายเป็นของ "เครื่อง" ไม่ใช่ของคน
+    if (sess.role === 'storedevice' && !isAdmin) {
+      return forbidden_('เครื่องกลางใช้ร่วมกันหลายคน — กดดาวจากบัญชีของตัวเองแทน');
+    }
+
+    var staffId = String(sess.staffId || '');
+    var staffName = productOwnerShortName_(sess);   // ชื่อสั้นสำหรับป้ายบนการ์ด (audit ใช้ชื่อเต็มแยกต่างหาก)
+    if (isAdmin && data.targetStaffId) {
+      var target = findStaffRowById_(staffSheet_(ss), String(data.targetStaffId));
+      if (target < 0) return ContentService.createTextOutput(JSON.stringify({ success: false, error: 'ไม่พบพนักงานที่ระบุ' }))
+        .setMimeType(ContentService.MimeType.JSON);
+      var tObj = staffRowToObj_(staffSheet_(ss).getRange(target, 1, 1, 11).getValues()[0]);
+      staffId = String(tObj.staffId || '');
+      staffName = productOwnerShortName_(tObj);
+    }
+
+    var lock = LockService.getScriptLock();
+    try { lock.waitLock(10000); } catch (e) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: 'ระบบกำลังยุ่ง ลองใหม่อีกครั้ง' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    try {
+      var sh = productOwnerSheet_(ss);
+      var last = Math.min(sh.getLastRow(), POWN_MAX_ROWS + 1);
+      var rowIdx = -1, curRow = null;
+      if (last >= 2) {
+        var vals = sh.getRange(2, 1, last - 1, POWN_HEADERS.length).getValues();
+        for (var i = 0; i < vals.length; i++) {
+          if (String(vals[i][POWN_COL.SKU - 1] || '').trim().toUpperCase() === sku) { rowIdx = i + 2; curRow = vals[i]; }
+        }
+      }
+      var current = curRow ? productOwnerMapFromRows_([curRow])[sku] : null;
+      if (!productOwnerCanSet_(current || null, sess.staffId, sess.role, data.takeover === true)) {
+        return ContentService.createTextOutput(JSON.stringify({
+          success: false, conflict: true, owner: current,
+          error: 'สินค้านี้ ' + (current.name || 'คนอื่น') + ' ดูแลอยู่',
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+
+      var now = new Date();
+      var row = on ? [sku, staffId, staffName, now, 'active', String(data.note || '')]
+                   : [sku, '', '', now, 'off', String(data.note || '')];
+      if (rowIdx > 0) sh.getRange(rowIdx, 1, 1, POWN_HEADERS.length).setValues([row]);
+      else            sh.appendRow(row);
+
+      writeAuditLog_(staffActorName_(sess), on ? 'setProductOwner' : 'clearProductOwner', sku,
+        auditDetail_({ sku: sku, ผู้ดูแลเดิม: current ? current.name : '-', ผู้ดูแลใหม่: on ? staffName : '-' }));
+
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true, sku: sku, owner: on ? { staffId: staffId, name: staffName } : null,
+      })).setMimeType(ContentService.MimeType.JSON);
+    } finally {
+      try { lock.releaseLock(); } catch (e) {}
+    }
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ success: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// ⚠️ ชื่อฟังก์ชันห้ามลงท้าย _ ไม่งั้นไม่โผล่ใน dropdown ของ GAS editor (บทเรียนข้อ 1)
+function setupProductOwner() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  productOwnerSheet_(ss);
+  PropertiesService.getScriptProperties().setProperty('PRODUCT_OWNER_ENABLED', 'true');
+  Logger.log('✅ เปิดระบบผู้ดูแลสินค้าแล้ว — ชีต "' + SHEET_PRODUCT_OWNER + '" พร้อมใช้งาน');
+  Logger.log('   พนักงานกดดาว ⭐ ที่แท็บ "เช็คหน้าร้าน" ได้เลย (ต้องล็อกอิน LINE ก่อน)');
+  Logger.log('   1 สินค้า = 1 คนดูแล · เป็นป้ายบอกเฉย ๆ ไม่ได้จำกัดสิทธิ์ใครทำอะไรกับสินค้า');
+}
+
+function disableProductOwner() {
+  PropertiesService.getScriptProperties().setProperty('PRODUCT_OWNER_ENABLED', 'false');
+  Logger.log('ปิดระบบผู้ดูแลสินค้าแล้ว — ดาวจะซ่อนหมด ข้อมูลในชีตยังอยู่ครบ');
 }
 
 // ══════════════════════════════════════════════════════════════════════════

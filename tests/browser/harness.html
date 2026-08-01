@@ -98,6 +98,13 @@
       return Promise.resolve(new Response(JSON.stringify(window.__DMJ_NOTI_FIXTURE || { ok: true, items: [], unread: 0 }),
         { headers: { 'Content-Type': 'application/json' } }));
     }
+    // ⭐ ผู้ดูแลสินค้า — ต้องมาก่อน branch payload รวมเหมือนกระดิ่ง
+    // (ตอบ payload สินค้าแทนจะได้ owners={} + off=false โดยบังเอิญ = เทสต์ผ่านแบบไม่ได้ทดสอบจริง)
+    if (/action=productOwners/.test(url)) {
+      return Promise.resolve(new Response(JSON.stringify(window.__DMJ_OWNER_FIXTURE ||
+        { ok: true, owners: {}, me: 'STF001', meName: 'ทดสอบ', off: false }),
+        { headers: { 'Content-Type': 'application/json' } }));
+    }
     // GET payload
     if (/script\.google|exec|action=orders|action=getAuditLog|action=getDeadStock/.test(url) || url.indexOf('http') === 0) {
       const payload = Object.assign({}, window.__DMJ_PAYLOAD, { lastModified: Date.now() });
