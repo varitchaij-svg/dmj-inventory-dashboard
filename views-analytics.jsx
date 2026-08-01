@@ -8081,12 +8081,7 @@ function CustomerView({ data }) {
 
 // ────────────── 💰 กำไรขั้นต้น (MarginView) ──────────────
 // วิเคราะห์กำไรจริงต่อสินค้า/หมวด: ต้นทุน = ราคาซื้อจริงเฉลี่ยถ่วงน้ำหนักจาก PO (data.purchases)
-// ไม่ใช้ค่าสมมติ COST_RATIO 0.8
-// **กำไร = soldRev − ต้นทุน × จำนวนที่สร้างรายได้** (ไม่ใช่ (ราคาป้าย − ต้นทุน) × จำนวน)
-//   · ราคาป้าย (p.price) = ราคาปลีกจาก ZORT แต่ของจริงขายส่ง/ลดราคาได้ → กำไรที่คิดจาก
-//     ราคาป้ายจะเกินจริงเสมอเท่ากับส่วนลด (ร้านนี้ขายส่ง −20% เป็นปกติ)
-//   · จำนวนที่ใช้คือ soldQty − soldQtyUnscanned เพราะ soldQty รวมของที่ถูกดึงไปทำงาน MTO
-//     ซึ่งเงินไปอยู่ในงาน MTO ไม่ได้อยู่ใน soldRev ของ SKU นี้ (นับต้นทุนด้วยจะกลายเป็นขาดทุนปลอม)
+// ไม่ใช้ค่าสมมติ COST_RATIO 0.8 · กำไร/ชิ้น = ราคาขาย − ต้นทุน · กำไรรวม = กำไร/ชิ้น × ที่ขายได้
 // สินค้าที่ไม่มีประวัติซื้อ = คำนวณต้นทุนไม่ได้ → แยกไว้ + โชว์ % ครอบคลุม (coverage)
 function MarginView({ data }) {
   const mobile = useIsMobile();
@@ -8127,37 +8122,27 @@ function MarginView({ data }) {
       const soldQty = Number(p.soldQty) || 0;
       const soldRev = Number(p.soldRev) || 0;
       if (soldQty <= 0 && soldRev <= 0) return;   // เอาเฉพาะที่ขายได้ในช่วง
-      const price = Number(p.price) || 0;         // ราคาป้าย (ปลีก) — ใช้โชว์เฉย ๆ ไม่เอามาคิดกำไร
+      const price = Number(p.price) || 0;
       const cost  = costOf(p.sku);
       const cat   = p.cat || "ไม่ระบุ";
       totRev += soldRev;
 
-      // จำนวนที่ "สร้างรายได้จริง" — soldQty รวม soldQtyUnscanned (ของที่ถูกดึงไปทำงาน MTO)
-      // ซึ่งเงินไปอยู่ในงาน MTO ไม่ได้อยู่ใน soldRev ของ SKU นี้ · ถ้านับต้นทุนของล็อตนั้นด้วย
-      // จะกลายเป็น "มีต้นทุนแต่ไม่มีรายได้" → กำไรติดลบทั้งที่ไม่ได้ขาดทุน
-      const revQty = Math.max(0, soldQty - (Number(p.soldQtyUnscanned) || 0));
-
-      let unitMargin = null, marginPct = null, profit = null, avgSell = null;
-      if (cost != null && revQty > 0 && soldRev > 0) {
-        // กำไร = เงินที่เข้าจริง − ต้นทุนของจำนวนที่ขายได้
-        // เดิมใช้ (ราคาป้าย − ต้นทุน) × จำนวน ซึ่งไม่สนใจว่าขายจริงได้เท่าไร —
-        // ขายส่ง/ลดราคาเท่าไรก็ยังโชว์กำไรเท่าราคาป้าย = เกินจริงตลอด
-        avgSell    = soldRev / revQty;            // ราคาขายเฉลี่ยที่ได้จริง
-        unitMargin = avgSell - cost;
-        profit     = soldRev - cost * revQty;
-        marginPct  = profit / soldRev;            // % ของรายได้ ไม่ใช่ % ของราคาป้าย
-        totCost    += cost * revQty;
+      let unitMargin = null, marginPct = null, profit = null;
+      if (cost != null && price > 0) {
+        unitMargin = price - cost;
+        marginPct  = unitMargin / price;
+        profit     = unitMargin * soldQty;
+        totCost    += cost * soldQty;
         totProfit  += profit;
         revWithCost += soldRev;
         if (!catAgg[cat]) catAgg[cat] = { rev: 0, cost: 0, profit: 0 };
         catAgg[cat].rev    += soldRev;
-        catAgg[cat].cost   += cost * revQty;
+        catAgg[cat].cost   += cost * soldQty;
         catAgg[cat].profit += profit;
       } else {
         noCostCount++;
       }
-      rows.push({ sku: p.sku, name: p.name || p.sku, cat, soldQty, revQty, soldRev,
-                  price, avgSell, cost, unitMargin, marginPct, profit });
+      rows.push({ sku: p.sku, name: p.name || p.sku, cat, soldQty, soldRev, price, cost, unitMargin, marginPct, profit });
     });
 
     const cats = Object.keys(catAgg).map(cat => ({
@@ -8209,21 +8194,8 @@ function MarginView({ data }) {
         <h2 style={{ margin: 0, fontSize: 20 }}>💰 กำไรขั้นต้น</h2>
       </div>
       <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>
-        ต้นทุน = ราคาซื้อจริงเฉลี่ยจากใบสั่งซื้อ (PO) · กำไร = <b>เงินที่เข้าจริง</b> − ต้นทุน × จำนวนที่ขายได้
-        · <b>ไม่ใช่ค่าสมมติ</b>
+        ต้นทุน = ราคาซื้อจริงเฉลี่ยจากใบสั่งซื้อ (PO) · กำไร = ราคาขาย − ต้นทุน × จำนวนที่ขายได้ · <b>ไม่ใช่ค่าสมมติ</b>
       </div>
-      {/* ZORT ไม่มีราคาต้นทุนใน PO เกือบทุกใบ (ตรวจแล้ว ส.ค. 2026 — ทุกฟิลด์ราคาเป็น 0)
-          ถ้าไม่บอก ผู้ใช้จะเห็นหน้าว่างแล้วนึกว่าระบบพัง แทนที่จะรู้ว่าต้องไปกรอกที่ต้นทาง */}
-      {A.coverage < 0.5 && (
-        <div style={{ fontSize: 12.5, color: "#7a5c00", background: "#fff8e6", border: "1px solid #f0e2bd",
-                      borderRadius: 10, padding: "10px 12px", marginBottom: 14, lineHeight: 1.55 }}>
-          ⚠️ <b>ตอนนี้คำนวณกำไรได้แค่ {Math.round(A.coverage * 100)}% ของยอดขาย</b> —
-          เพราะใบสั่งซื้อ (PO) ฝั่ง ZORT ส่วนใหญ่ไม่ได้กรอก "ราคาต่อหน่วย" ไว้
-          <div style={{ marginTop: 4 }}>
-            💡 กรอกราคาใน ZORT ให้ครบ แล้วตัวเลขหน้านี้จะสมบูรณ์เอง — ไม่ต้องแก้อะไรในระบบนี้
-          </div>
-        </div>
-      )}
 
       {/* KPIs */}
       <div className="row row-4" style={{ marginBottom: 14 }}>
@@ -8247,9 +8219,7 @@ function MarginView({ data }) {
 
       <div style={{ fontSize: 12, color: "var(--muted)", background: "var(--g-50)", borderRadius: 10, padding: "8px 12px", marginBottom: 16 }}>
         📊 คำนวณจากยอดขาย <b>{Math.round(A.coverage * 100)}%</b> ที่มีประวัติต้นทุนจาก PO
-        {/* ไม่เคลมว่า "ไม่มีประวัติซื้อ" อย่างเดียว — ตัวที่ขายเข้างาน MTO ทั้งก้อน (เงินอยู่ในงาน
-            ไม่ได้อยู่ที่ SKU นี้) ก็ตกมาที่นี่เหมือนกัน ทั้งที่มีราคาทุนอยู่ */}
-        {A.noCostCount > 0 && <> · อีก <b>{A.noCostCount}</b> สินค้ายังคำนวณกำไรไม่ได้ (ไม่มีราคาทุนใน PO หรือไม่มียอดเงินผูกกับสินค้านี้)</>}
+        {A.noCostCount > 0 && <> · อีก <b>{A.noCostCount}</b> สินค้ายังไม่มีประวัติซื้อ (คำนวณกำไรไม่ได้)</>}
       </div>
 
       {/* Flags: ขายดีแต่กำไรบาง / ขาดทุน */}
@@ -8341,9 +8311,7 @@ function MarginView({ data }) {
               {!mobile && <th style={{ textAlign: "right", padding: "8px 8px" }}>ขายได้</th>}
               <th style={{ textAlign: "right", padding: "8px 8px" }}>ยอดขาย</th>
               {!mobile && <th style={{ textAlign: "right", padding: "8px 8px" }}>ต้นทุน/ชิ้น</th>}
-              {/* ราคาที่ขายได้จริง (ยอดขาย ÷ จำนวน) ไม่ใช่ราคาป้าย — เป็นตัวที่ % กำไรคิดมาจาก
-                  ถ้าโชว์ราคาป้ายคู่กับ % ที่คิดจากราคาจริง ผู้ใช้จะกดคิดเลขตามแล้วไม่ตรง */}
-              {!mobile && <th style={{ textAlign: "right", padding: "8px 8px" }}>ขายจริง/ชิ้น</th>}
+              {!mobile && <th style={{ textAlign: "right", padding: "8px 8px" }}>ขาย/ชิ้น</th>}
               <th style={{ textAlign: "right", padding: "8px 8px" }}>% กำไร</th>
               <th style={{ textAlign: "right", padding: "8px 8px" }}>กำไรรวม</th>
             </tr></thead>
@@ -8359,18 +8327,10 @@ function MarginView({ data }) {
                       </div>
                     </div>
                   </td>
-                  {/* โชว์จำนวนที่ออกจากสต๊อกจริง (รวมที่ดึงไปงาน MTO) แต่กำไรคิดจากเฉพาะส่วน
-                      ที่มีเงินเข้า — ถ้าสองตัวไม่เท่ากันให้ hover ดูได้ว่าทำไม */}
-                  {!mobile && <td style={{ textAlign: "right", padding: "8px 8px" }}
-                                   title={r.revQty !== r.soldQty ? `คิดกำไรจาก ${r.revQty} ชิ้น (อีก ${r.soldQty - r.revQty} ชิ้นถูกดึงไปงานจัดพิเศษ)` : undefined}>
-                    {r.soldQty}{r.revQty !== r.soldQty && <span style={{ color: "var(--muted)", fontSize: 10 }}> *</span>}
-                  </td>}
+                  {!mobile && <td style={{ textAlign: "right", padding: "8px 8px" }}>{r.soldQty}</td>}
                   <td style={{ textAlign: "right", padding: "8px 8px" }}>{baht(r.soldRev)}</td>
                   {!mobile && <td style={{ textAlign: "right", padding: "8px 8px", color: r.cost == null ? "var(--muted)" : "var(--text)" }}>{r.cost == null ? "—" : baht(r.cost)}</td>}
-                  {!mobile && <td style={{ textAlign: "right", padding: "8px 8px" }}
-                                   title={r.avgSell != null && r.price > 0 ? `ราคาป้าย ${baht(r.price)}` : undefined}>
-                    {r.avgSell == null ? (r.price > 0 ? baht(r.price) : "—") : baht(r.avgSell)}
-                  </td>}
+                  {!mobile && <td style={{ textAlign: "right", padding: "8px 8px" }}>{baht(r.price)}</td>}
                   <td style={{ textAlign: "right", padding: "8px 8px", fontWeight: 800, color: marginColor(r.marginPct) }}>{pct(r.marginPct)}</td>
                   <td style={{ textAlign: "right", padding: "8px 8px", fontWeight: 700, color: marginColor(r.marginPct) }}>{r.profit == null ? "—" : baht(r.profit)}</td>
                 </tr>

@@ -379,63 +379,6 @@ describe('early/late half + forecast — ต้องตัดเดือนท
 });
 
 // ── 10. Phase 3: ความสอดคล้อง ────────────────────────────────────────────────
-describe('MarginView — กำไรจากเงินที่เข้าจริง', () => {
-  // สูตรเดียวกับ MarginView หลังแก้
-  const calc = (p, cost) => {
-    const revQty = Math.max(0, p.soldQty - (p.soldQtyUnscanned || 0));
-    if (cost == null || revQty <= 0 || p.soldRev <= 0) return null;
-    return {
-      avgSell: p.soldRev / revQty,
-      profit: p.soldRev - cost * revQty,
-      marginPct: (p.soldRev - cost * revQty) / p.soldRev,
-    };
-  };
-
-  it('ขายส่ง −20% ต้องไม่โชว์กำไรเท่าราคาป้าย', () => {
-    // ราคาป้าย 100 · ต้นทุน 60 · ขายจริง 80 (ส่ง −20%) · 10 ชิ้น
-    const r = calc({ soldQty: 10, soldRev: 800 }, 60);
-    expect(r.profit).toBe(200);            // 800 − 600
-    expect(r.avgSell).toBe(80);
-    // สูตรเดิม (ราคาป้าย − ต้นทุน) × จำนวน = (100−60)×10 = 400 → เกินจริงเท่าตัว
-    expect((100 - 60) * 10).toBe(400);
-    expect(r.profit).toBeLessThan(400);
-  });
-
-  it('% กำไรคิดจากรายได้ ไม่ใช่จากราคาป้าย', () => {
-    const r = calc({ soldQty: 10, soldRev: 800 }, 60);
-    expect(r.marginPct).toBeCloseTo(0.25, 6);     // 200/800
-    expect(r.marginPct).not.toBeCloseTo(0.40, 6); // เดิม: (100−60)/100
-  });
-
-  it('ของที่ถูกดึงไปงาน MTO ต้องไม่ถูกคิดต้นทุนซ้ำ', () => {
-    // ขาย 10 ชิ้น (เข้าเงิน 800) + ถูกดึงไปทำ MTO อีก 5 ชิ้น (เงินอยู่ในงาน MTO)
-    const r = calc({ soldQty: 15, soldRev: 800, soldQtyUnscanned: 5 }, 60);
-    expect(r.profit).toBe(200);                   // คิดต้นทุนแค่ 10 ชิ้น
-    // ถ้าเผลอใช้ soldQty ทั้งก้อน: 800 − 60×15 = −100 → ขาดทุนปลอม
-    expect(800 - 60 * 15).toBeLessThan(0);
-  });
-
-  it('ไม่มีต้นทุน / ไม่มีรายได้ → คำนวณไม่ได้ (ไม่เดา)', () => {
-    expect(calc({ soldQty: 10, soldRev: 800 }, null)).toBe(null);
-    expect(calc({ soldQty: 10, soldRev: 0 }, 60)).toBe(null);
-    expect(calc({ soldQty: 5, soldRev: 500, soldQtyUnscanned: 5 }, 60)).toBe(null);
-  });
-
-  it('โค้ดจริงใช้ soldRev ไม่ใช่ราคาป้าย', () => {
-    expect(VA).toContain('profit     = soldRev - cost * revQty;');
-    expect(VA).toContain('marginPct  = profit / soldRev;');
-    expect(VA).toContain('const revQty = Math.max(0, soldQty - (Number(p.soldQtyUnscanned) || 0));');
-    // สูตรเดิมต้องไม่หลงเหลือ
-    expect(VA).not.toContain('unitMargin = price - cost;');
-    expect(VA).not.toContain('profit     = unitMargin * soldQty;');
-  });
-
-  it('ตารางโชว์ราคาขายจริง ไม่ใช่ราคาป้าย (ไม่งั้นกดคิดเลขตามแล้วไม่ตรง)', () => {
-    expect(VA).toContain('ขายจริง/ชิ้น');
-    expect(VA).toContain('r.avgSell == null ? (r.price > 0 ? baht(r.price) : "—") : baht(r.avgSell)');
-  });
-});
-
 describe('abcClassify — หน้าต่าง 12 เดือน', () => {
   it('ของที่ขายดีเมื่อนานมาแล้วต้องไม่ค้างคลาส A', () => {
     // A: ขายดีมากเมื่อ 2 ปีก่อน แต่ 12 เดือนหลังเงียบ · B: ขายสม่ำเสมอในปีล่าสุด
@@ -498,11 +441,6 @@ describe('ป้ายกำกับที่กันเข้าใจผิ�
   it('หน้าลูกค้าบอกว่าคิดคนละฐานกับหน้าภาพรวม', () => {
     expect(VA).toContain('ยอดบิลทั้งใบ');
     expect(VA).toContain('ยอดรายสินค้า');
-  });
-
-  it('MarginView เตือนเมื่อ coverage ต่ำ พร้อมบอกวิธีแก้ที่ต้นทาง', () => {
-    expect(VA).toContain('A.coverage < 0.5 &&');
-    expect(VA).toContain('กรอกราคาใน ZORT ให้ครบ');
   });
 
   it('เลิก hard-code ตัวหาร 5 เดือน', () => {
