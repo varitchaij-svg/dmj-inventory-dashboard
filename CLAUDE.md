@@ -334,7 +334,7 @@ backend ไม่รู้ว่าผู้ใช้กดดูเดือน
 — เดิมอ่าน `totals.nSold` ที่ backend **ไม่เคยส่งมา** → `undefined` → `fmtN()` โชว์ `0`
 ทั้งที่ขายไปหลายพันชิ้น (บั๊กแบบนี้ไม่มี error ให้เห็นเลย)
 
-**เทสต์**: `tests/dashboard-metrics.test.js` (36 เคส) คุมทั้งสูตรและ**จุดเชื่อมต่อ** —
+**เทสต์**: `tests/dashboard-metrics.test.js` (41 เคส) คุมทั้งสูตรและ**จุดเชื่อมต่อ** —
 มี meta-test เช็คว่า `whRatio` ประกาศก่อนใช้จริง, `completeMonths` ถูกเรียกที่ StockView จริง,
 และ KPI turnover ไม่ถูกใส่กลับมาเงียบ ๆ
 
@@ -400,7 +400,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 857 tests, 25 test files, ทั้งหมด pass
+**มี Vitest test suite แล้ว** — 862 tests, 25 test files, ทั้งหมด pass
 
 ```bash
 npm test              # run tests

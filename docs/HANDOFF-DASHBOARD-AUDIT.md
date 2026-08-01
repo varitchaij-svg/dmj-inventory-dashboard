@@ -5,28 +5,21 @@
 
 ---
 
-## 🔴 ทำก่อนอย่างอื่น: merge `cc00a23` เข้า master
+## สถานะ branch
 
-**master ตอนนี้ยังรันโค้ดที่มีบั๊กอยู่** — Phase 0+2 ถูก merge เข้า master ไปแล้ว (`2fae347`)
-แต่รอบนั้น `completeMonths()` เช็คแค่ `m.month` ทำให้ตอนถูกเรียกด้วย **array ของ string**
-(`completeMonths(monthLabels)`) มันไม่กรองอะไรเลย — **เป็น no-op เงียบ ๆ ไม่มี error**
-
-ผลบนเว็บจริงตอนนี้: `velocity` กับ `momMovers` ยังนับเดือนที่ยังไม่จบเหมือนเดิม
-(ส่วน "ควรสั่ง" ใน StockView ใช้ `p.monthly` ซึ่งเป็น array ของ object → อันนั้นทำงานถูกอยู่แล้ว)
+| branch/commit | มีอะไร | สถานะ |
+|---|---|---|
+| `master` @ `868ee9d` | Phase 0 + Phase 1 ครบ + Phase 2 กลุ่ม A + fix `completeMonths` | ✅ **live แล้ว** |
+| `claude/dashboard-analysis-plan-2r6kn9` | Phase 2 กลุ่ม B (5 จุดสุดท้าย) + เทสต์ 41 เคส | ⏳ รอ merge |
 
 ```bash
 git checkout master && git pull origin master
 git merge --no-ff claude/dashboard-analysis-plan-2r6kn9
-npx vitest run && node tests/browser/run.cjs      # ต้อง 855 + 79/79
+npx vitest run && node tests/browser/run.cjs      # ต้อง 862 + 79/79
 git push origin master
 ```
 
 merge แล้ว Cloudflare Pages + GAS จะ auto-deploy เอง
-
-| branch/commit | มีอะไร | สถานะ |
-|---|---|---|
-| `master` @ `2fae347` | Phase 0 (`debugPurchasePrices`) + Phase 2 รอบแรก (บั๊ก) | 🔴 live อยู่ตอนนี้ |
-| `claude/dashboard-analysis-plan-2r6kn9` @ `cc00a23` | Phase 1 ครบ + fix `completeMonths` + เทสต์ 36 เคส | ⏳ **ยังไม่ merge** |
 
 ---
 
@@ -51,38 +44,26 @@ merge แล้ว Cloudflare Pages + GAS จะ auto-deploy เอง
 | `มูลค่าซื้อรวม ฿1` | โชว์เฉพาะตอนราคาครบทุกรายการ (`costComplete`) · ไม่ครบ → `—` + แถบบอกให้กรอกราคาใน ZORT |
 | มูลค่าสต๊อก ฿36.23M (ปลีก) | **฿28.98M** ราคาขายส่ง = ปลีก × `WHOLESALE_RATIO` + ป้าย "ราคาขายส่ง (ปลีก −20%)" |
 
-### Phase 2 — 3 จาก 8 จุด
+### Phase 2 — ครบ 8/8 จุด
 
-แก้แล้ว: **StockView `suggestedQty`** (จุดอันตรายสุด — เดิมต่ำกว่าจริง ~33% = เสี่ยงสั่งของขาด ·
-`overstocked` พลอยถูกแก้ด้วยเพราะคิดต่อจาก `avgMonthly` เดียวกัน) · **`velocity`** · **`momMovers`**
-· **`deadStock`** (offset `[1,2]`)
+**กลุ่ม A** (อยู่บน master แล้ว): StockView `suggestedQty` (จุดอันตรายสุด — เดิมต่ำกว่าจริง ~33%
+= เสี่ยงสั่งของขาด · `overstocked` พลอยถูกแก้ด้วยเพราะคิดต่อจาก `avgMonthly` เดียวกัน) ·
+`velocity` · `momMovers` · `deadStock` (offset `[1,2]`)
+
+**กลุ่ม B** (branch, รอ merge) — พวก "ครึ่งแรก vs ครึ่งหลัง" + regression:
+StockView `declining` · CategoryView ป้าย "กำลังมาแรง" · TrendsView `enriched`+`fading` ·
+SeasonView · OverviewView `forecast`
+
+⚠️ **`forecast` เปลี่ยนความหมายการ์ดด้วย** ไม่ใช่แค่ filter — พอตัดเดือนที่ยังไม่จบออก
+เป้าพยากรณ์ 1 ก้าวถัดไปมักกลายเป็น **เดือนปัจจุบัน** จึงส่ง `targetKey`/`isCurrentMonth`/
+`baseMonthKey` ออกมาให้หัวการ์ดเขียนป้ายตามจริง ("ประมาณยอดขาย ส.ค. 26 (ทั้งเดือน)")
+และ `revChangePct` เทียบกับเดือนเต็มล่าสุด ("vs ก.ค. 26") แทน "vs เดือนนี้"
 
 ---
 
 ## ⏳ ที่เหลือ
 
-### 1. Phase 2 ที่ยังไม่ได้แก้ — 5 จุด
-
-ทุกจุดเป็นแบบ "ครึ่งแรก vs ครึ่งหลัง" หรือ regression ที่ยังลาก**เดือนปัจจุบันที่ยอดเกือบ 0**
-เข้าไปอยู่ในครึ่งหลัง/จุดสุดท้าย → ทุกต้นเดือนตัวเลขจะเพี้ยนแรงที่สุด
-
-| ที่ | บรรทัด | อาการ |
-|---|---|---|
-| StockView `declining` | `views-main.jsx:5018-5036` | ธง "ยอดขายตก > 60%" ขึ้นปลอมทุกต้นเดือน |
-| OverviewView `forecast` | `views-main.jsx:1685-1701` | จุดสุดท้ายเกือบ 0 กด regression ลง → พยากรณ์ต่ำ |
-| CategoryView ป้าย "กำลังมาแรง 📈" | `views-main.jsx:3310-3315` | ป้ายหายจากสินค้าที่มาแรงจริง |
-| TrendsView (2 จุด) | `views-main.jsx:5424-5426`, `5481-5482` | "มาแรง"/"เสี่ยงหาย" จัดกลุ่มผิด |
-| SeasonView `yrsOf(m)` | `views-analytics.jsx:8355-8365` | เดือนปัจจุบันหารด้วยจำนวนปีเต็ม → เฉลี่ยฤดูกาลต่ำเกิน |
-
-วิธีแก้เหมือนกันหมด: `const m = completeMonths(p.monthly || []);` ก่อนแบ่งครึ่ง/ทำ regression
-· `completeMonths` เป็น global ใน `views-main.jsx` — **`views-analytics.jsx` เรียกได้เลย**
-(global scope เดียวกัน โหลดทีหลัง) ไม่ต้อง import
-· ⚠️ SeasonView คนละเรื่องเล็กน้อย: ต้องไม่นับ**เดือนปัจจุบัน**เป็นปีเต็มใน `yrsOf` ไม่ใช่แค่ filter array
-
-**ค่าคงที่ที่ควรล้างไปด้วย** (เจอตอนตรวจ): `soldQty/5` (`views-main.jsx:4985`) และคำอธิบาย
-"ตลอด 5 เดือน" (`views-main.jsx:5500`) — ข้อมูลจริงยาวกว่า 5 เดือนมากแล้ว
-
-### 2. Phase 3 — ความไม่สอดคล้อง (P1)
+### 1. Phase 3 — ความไม่สอดคล้อง (P1)
 
 | # | เรื่อง | ที่ | หมายเหตุ |
 |---|---|---|---|
@@ -93,21 +74,26 @@ merge แล้ว Cloudflare Pages + GAS จะ auto-deploy เอง
 | 3.4 | ยอดขายรวม Overview ≠ CustomerView | — | คนละฐาน (ยอดรายสินค้า vs ยอดบิลรวมค่าส่ง) — **แก้ไม่ได้ ต้องติดหมายเหตุแทน** |
 | 3.6 | "ของเข้าใหม่ 30 วัน" ไม่ขยับตามเดือนที่เลือก | `views-main.jsx:~1430` | ตั้งใจให้เป็น 30 วันเสมอ แต่วางใต้ตัวกรองเดือน → ติดป้ายกำกับ |
 
-### 3. Phase 4 — เทสต์ที่ยังขาด
+### 2. Phase 4 — เทสต์ที่ยังขาด
 
-`tests/dashboard-metrics.test.js` (36 เคส) คุม Phase 1 + Phase 2 ส่วนที่ทำแล้ว
-· ยังต้องเพิ่มเมื่อทำ Phase 2 ที่เหลือ + Phase 3 (โดยเฉพาะสูตรกำไรของ MarginView)
+`tests/dashboard-metrics.test.js` (41 เคส) คุม Phase 1 + Phase 2 ครบแล้ว
+· ยังต้องเพิ่มเมื่อทำ Phase 3 (โดยเฉพาะสูตรกำไรของ MarginView)
 · **ต้องมีเคส "วันนี้เป็นวันที่ 1 ของเดือน"** — เป็นวันที่บั๊กกลุ่มนี้แสดงตัวแรงที่สุด
+
+### 3. งานเก็บตก (เล็ก แต่เกี่ยวกัน)
+
+- `soldQty/5` (`views-main.jsx:4985`) — fallback ตอนมีเดือนเต็มไม่ถึง 3 เดือน ยัง hard-code เลข 5
+- คำอธิบาย "ตลอด 5 เดือน" (`views-main.jsx:5500`) — ข้อมูลจริงยาวกว่า 5 เดือนมากแล้ว
 
 ### 4. Phase 5 — ตรวจ + deploy
 
-review diff → `npx vitest run` (855) → `node tests/browser/run.cjs` (79/79) → merge เข้า `master`
+review diff → `npx vitest run` (862) → `node tests/browser/run.cjs` (79/79) → merge เข้า `master`
 
 ---
 
 ## 📌 สิ่งที่เจ้าของต้องทำเอง (ไม่ใช่งานโค้ด)
 
-1. **merge `cc00a23`** (ดูหัวข้อบนสุด) — จนกว่าจะ merge เว็บจริงยังใช้เวอร์ชันบั๊ก
+1. **merge branch ที่ค้างอยู่** (ดูตารางบนสุด)
 2. **ปรับอัตราขายส่งได้เอง** ที่ Script Property **`WHOLESALE_RATIO`**
    เช่น `0.85` = ปลีก −15% · ไม่ตั้ง = `0.8` · ค่าที่ไม่ใช่ตัวเลข/นอกช่วง `0 < r ≤ 1` → กลับไปใช้ 0.8
 3. **ถ้าอยากได้ KPI ต้นทุน/กำไร/turnover จริงกลับมา** → ต้อง**กรอกราคาต่อหน่วยใน PO ฝั่ง ZORT**
@@ -134,8 +120,8 @@ review diff → `npx vitest run` (855) → `node tests/browser/run.cjs` (79/79) 
 ## คำสั่งที่ใช้บ่อย
 
 ```bash
-npx vitest run                                    # 855 tests
-npx vitest run tests/dashboard-metrics.test.js    # 36 เคสของงานนี้
+npx vitest run                                    # 862 tests
+npx vitest run tests/dashboard-metrics.test.js    # 41 เคสของงานนี้
 bash tests/browser/setup.sh                       # ครั้งเดียว (ติดตั้ง vendor + playwright)
 node tests/browser/run.cjs                        # 79/79 · ใช้เวลา ~4-5 นาที
 ```
