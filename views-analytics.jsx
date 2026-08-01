@@ -8340,7 +8340,10 @@ function SeasonView({ data }) {
 
   const S = uM(() => {
     const catTotals = {}, cm = {}, monthTotal = {}, monthYears = {};
-    monthLabels.forEach(mk => {
+    // ตัดเดือนปัจจุบันที่ยังไม่จบทิ้ง — ไม่งั้นมันทั้งเติมยอดแค่บางส่วนเข้า cm[m] และยังถูก
+    // นับเป็น 1 ปีเต็มใน monthYears[m] → ค่าเฉลี่ยของเดือนนั้นต่ำกว่าจริงสองต่อ
+    // (completeMonths ประกาศใน views-main.jsx ซึ่งโหลดก่อนไฟล์นี้ — global scope เดียวกัน)
+    completeMonths(monthLabels).forEach(mk => {
       const parts = String(mk).split("/"); const m = Number(parts[0]), yy = parts[1];
       if (!m) return;
       (monthYears[m] = monthYears[m] || {})[yy] = true;

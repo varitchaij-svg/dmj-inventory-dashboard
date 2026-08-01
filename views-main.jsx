@@ -1682,7 +1682,9 @@ function OverviewView({ data, range, setRange, role }) {
     };
 
     const useLast = 6;
-    const mSlice = monthlySeries.slice(-useLast);
+    // ใช้เฉพาะเดือนที่จบแล้ว — เดือนปัจจุบันยอดยังไม่ครบ ถ้าปล่อยไว้จุดสุดท้ายจะเกือบ 0
+    // แล้วกดเส้น regression ลงทั้งเส้น → พยากรณ์ต่ำกว่าจริงทุกต้นเดือน
+    const mSlice = completeMonths(monthlySeries).slice(-useLast);
     if (mSlice.length < 2) return null;
 
     const revVals = mSlice.map(m => m.rev);
@@ -1698,8 +1700,9 @@ function OverviewView({ data, range, setRange, role }) {
     const revMAE = revVals.reduce((s, v, i) => s + Math.abs(v - (revLR.slope * i + revLR.intercept)), 0) / revVals.length;
     const qtyMAE = qtyVals.reduce((s, v, i) => s + Math.abs(v - (qtyLR.slope * i + qtyLR.intercept)), 0) / qtyVals.length;
 
-    const curMonthRev = mSlice[mSlice.length - 1].rev;
-    const revChangePct = curMonthRev > 0 ? ((nextMonthRev - curMonthRev) / curMonthRev * 100) : 0;
+    // เทียบกับ "เดือนเต็มล่าสุด" ไม่ใช่เดือนที่กำลังเดินอยู่ (ฐานไม่ครบ = % เว่อร์)
+    const baseMonthRev = mSlice[mSlice.length - 1].rev;
+    const revChangePct = baseMonthRev > 0 ? ((nextMonthRev - baseMonthRev) / baseMonthRev * 100) : 0;
 
     // Weekly forecast from daily data (last 8 weeks → project next 7 days)
     let weekly = null;
@@ -1733,18 +1736,20 @@ function OverviewView({ data, range, setRange, role }) {
       label: m.label, actual: Math.round(m.rev),
       trend: Math.round(Math.max(0, revLR.slope * i + revLR.intercept)),
     }));
-    // Add next month projected point
-    const nextMonthLabel = (() => {
+    // เดือนที่พยากรณ์ = เดือนถัดจาก "เดือนเต็มล่าสุด" — ซึ่งพอตัดเดือนที่ยังไม่จบออกแล้ว
+    // มักกลายเป็น **เดือนปัจจุบัน** (ตอบว่า "เดือนนี้จะจบที่เท่าไร" ซึ่งใช้วางแผนได้จริงกว่า)
+    // จึงต้องส่ง targetKey/isCurrentMonth ไปให้หัวการ์ดเขียนป้ายให้ตรง ไม่ใช่ทับว่า "เดือนหน้า" เสมอ
+    const target = (() => {
       const last = mSlice[mSlice.length - 1].month;
-      if (!last) return "ถัดไป";
-      // month = "MM/YYYY" (เช่น "07/2026") — เดิม split("-") ทำให้ได้ NaN/aN
-      const [mo, yr] = String(last).split("/").map(Number);
-      if (!mo || !yr) return "ถัดไป";
+      const [mo, yr] = String(last || "").split("/").map(Number);
+      if (!mo || !yr) return { key: null, label: "ถัดไป" };
       const nm = mo === 12 ? 1 : mo + 1;
       const ny = mo === 12 ? yr + 1 : yr;
-      return `${nm}/${String(ny).slice(-2)}`;
+      return { key: `${String(nm).padStart(2,'0')}/${ny}`, label: `${nm}/${String(ny).slice(-2)}` };
     })();
-    chartData.push({ label: nextMonthLabel, forecast: Math.round(nextMonthRev) });
+    const now = new Date();
+    const curKey = `${String(now.getMonth()+1).padStart(2,'0')}/${now.getFullYear()}`;
+    chartData.push({ label: target.label, forecast: Math.round(nextMonthRev) });
 
     return {
       nextMonthRev, nextMonthQty,
@@ -1753,6 +1758,9 @@ function OverviewView({ data, range, setRange, role }) {
       chartData,
       weekly,
       basedOn: mSlice.length,
+      targetKey: target.key,
+      isCurrentMonth: target.key === curKey,
+      baseMonthKey: mSlice[mSlice.length - 1].month,
     };
   }, [monthlySeries, dailySeries]);
 
@@ -2081,7 +2089,7 @@ function OverviewView({ data, range, setRange, role }) {
           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
             <span style={{fontSize:15,fontWeight:800,color:"var(--g-700)"}}>📈 Forecast Tool</span>
             <span style={{fontSize:11,color:"var(--muted)",fontWeight:500}}>
-              พยากรณ์จากข้อมูล {forecast.basedOn} เดือนล่าสุด · Linear Regression
+              พยากรณ์จากข้อมูล {forecast.basedOn} เดือนเต็มล่าสุด · Linear Regression
             </span>
             <span style={{
               fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:20,
@@ -2100,7 +2108,9 @@ function OverviewView({ data, range, setRange, role }) {
               border:"1.5px solid #a8d9b4",
             }}>
               <div style={{fontSize:11,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",letterSpacing:".06em",marginBottom:8}}>
-                ประมาณยอดขาย เดือนหน้า
+                {forecast.isCurrentMonth
+                  ? `ประมาณยอดขาย ${monthLabel(forecast.targetKey)} (ทั้งเดือน)`
+                  : `ประมาณยอดขาย ${forecast.targetKey ? monthLabel(forecast.targetKey) : "เดือนหน้า"}`}
               </div>
               <div style={{display:"flex",alignItems:"flex-end",gap:12,flexWrap:"wrap"}}>
                 <div>
@@ -2119,7 +2129,9 @@ function OverviewView({ data, range, setRange, role }) {
                   fontSize:12,fontWeight:700,
                 }}>
                   {forecast.revChangePct >= 0 ? "▲" : "▼"} {Math.abs(forecast.revChangePct).toFixed(1)}%
-                  <span style={{fontWeight:400,fontSize:10,marginLeft:2}}>vs เดือนนี้</span>
+                  <span style={{fontWeight:400,fontSize:10,marginLeft:2}}>
+                    vs {forecast.baseMonthKey ? monthLabel(forecast.baseMonthKey) : "เดือนก่อน"}
+                  </span>
                 </div>
               </div>
               <div style={{fontSize:12,color:"var(--muted)",marginTop:8}}>
@@ -2176,7 +2188,8 @@ function OverviewView({ data, range, setRange, role }) {
           </div>
 
           {/* Trend chart: historical + forecast */}
-          <Card title="แนวโน้ม + Forecast เดือนหน้า" sub="เส้นประ = ค่าพยากรณ์ | เส้นทึบ = Trend Line">
+          <Card title={`แนวโน้ม + Forecast ${forecast.targetKey ? monthLabel(forecast.targetKey) : "เดือนหน้า"}`}
+                sub="เส้นประ = ค่าพยากรณ์ | เส้นทึบ = Trend Line · คิดจากเดือนที่จบแล้วเท่านั้น">
             {rechartsReady ? <ResponsiveContainer width="100%" height={220}>
               <LineChart data={forecast.chartData} margin={{top:6,right:16,bottom:6,left:0}}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2eadd" vertical={false}/>
@@ -3323,7 +3336,9 @@ function CategoryView({ data, role, onNav }) {
     const map = {};
     filtered.forEach((p, idx) => {
       const tags = [];
-      const m = p.monthly || [];
+      // ตัดเดือนปัจจุบันออก — ครึ่งหลังจะถูกเดือนที่เพิ่งเริ่ม (ยอดเกือบ 0) ถ่วงจนป้าย
+      // "กำลังมาแรง" หายไปจากสินค้าที่มาแรงจริงทุกต้นเดือน
+      const m = completeMonths(p.monthly || []);
       // Rising trend: late half avg > early half avg × 1.4
       if (m.length >= 4) {
         const half = Math.floor(m.length / 2);
@@ -5068,9 +5083,11 @@ function StockView({ data, role }) {
     [enriched]);
 
   // Sales decline detection: was selling well early, dropped off late
+  // ตัดเดือนปัจจุบันออกก่อนแบ่งครึ่ง — ไม่งั้นเดือนที่เพิ่งเริ่ม (ยอดเกือบ 0) ไปถ่วงครึ่งหลัง
+  // ทำให้ธง "ยอดขายตก > 60%" ขึ้นปลอมกับสินค้าปกติทุกต้นเดือน
   const declining = uM(() => enriched
     .map(p => {
-      const m = p.monthly || [];
+      const m = completeMonths(p.monthly || []);
       if (m.length < 4) return null;
       const half = Math.floor(m.length / 2);
       const early = m.slice(0, half);
@@ -5471,7 +5488,9 @@ function TrendsView({ data }) {
 
   const enriched = uM(() => products.filter(p => !p.isMTO && p.cat && p.cat !== "ไม่มีรหัสสินค้า"
                                                   && p.cat !== "Made to Order จัดแบบพิเศษ").map(p => {
-    const m = p.monthly || [];
+    // ตัดเดือนปัจจุบันออกก่อนแบ่งครึ่ง — ไม่งั้นครึ่งหลังถูกเดือนที่เพิ่งเริ่มถ่วง
+    // ทำให้ "มาแรง" หายและ "เสี่ยงหาย" ขึ้นปลอมทุกต้นเดือน
+    const m = completeMonths(p.monthly || []);
     let earlyAvg = 0, lateAvg = 0, soldMonths = 0;
     if (m.length >= 2) {
       const half = Math.floor(m.length / 2);
@@ -5529,7 +5548,8 @@ function TrendsView({ data }) {
     .filter(p => {
       if (stockQty(p) <= 0) return false;
       if (p.soldQty === 0) return false;   // ← ไปอยู่ "ไม่ขายเลย" แทน
-      const m = p.monthly || [];
+      // เดือนปัจจุบันยังไม่จบ ถ้านับรวมจะทำให้ "ครึ่งหลังไม่ขายเลย" เป็นจริงง่ายเกินไป
+      const m = completeMonths(p.monthly || []);
       if (m.length < 4) return false;
       const half = Math.floor(m.length / 2);
       const earlySold = m.slice(0, half).reduce((s,x) => s + (x.qty||0), 0);

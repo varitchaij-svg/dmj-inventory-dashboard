@@ -18,6 +18,7 @@ import { completeMonths } from './helpers';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const GS   = readFileSync(join(ROOT, 'appsscript_complete.gs'), 'utf8');
 const VM   = readFileSync(join(ROOT, 'views-main.jsx'), 'utf8');
+const VA   = readFileSync(join(ROOT, 'views-analytics.jsx'), 'utf8');
 
 // คีย์เดือนปัจจุบัน/เดือนก่อน ๆ แบบเดียวกับที่ระบบใช้ ("MM/YYYY")
 function mkey(offset) {
@@ -294,5 +295,85 @@ describe('meta — จุดที่ต้องเรียกจริง', (
 
   it('deadStock ดูย้อนหลังจากเดือนที่จบแล้ว (offset 1,2 ไม่ใช่ 0,1)', () => {
     expect(VM).toMatch(/const recent = \[1, 2\]\.map\(offset =>/);
+  });
+});
+
+// ── 9. จุดที่แบ่ง "ครึ่งแรก vs ครึ่งหลัง" / regression ────────────────────────
+// ทั้งกลุ่มนี้เพี้ยนแรงที่สุดทุกต้นเดือน เพราะเดือนที่เพิ่งเริ่ม (ยอดเกือบ 0) ไปตกอยู่ครึ่งหลัง
+describe('early/late half + forecast — ต้องตัดเดือนที่ยังไม่จบ', () => {
+  const half = (m) => {
+    const h = Math.floor(m.length / 2);
+    const e = m.slice(0, h).reduce((s, x) => s + x.qty, 0) / Math.max(h, 1);
+    const l = m.slice(h).reduce((s, x) => s + x.qty, 0) / Math.max(m.length - h, 1);
+    return { earlyAvg: e, lateAvg: l };
+  };
+
+  it('เดือนปัจจุบันยอด ~0 เคยทำให้ "ยอดขายตก" เป็นจริงทั้งที่ขายปกติ', () => {
+    const rows = [
+      { month: mkey(4), qty: 100 }, { month: M3, qty: 100 },
+      { month: M2, qty: 100 },      { month: M1, qty: 100 },
+      { month: CUR, qty: 1 },
+    ];
+    // ไม่ตัด → ครึ่งหลังโดนถ่วง เข้าเงื่อนไข declining (late < early × 0.4)
+    const naive = half(rows);
+    expect(naive.lateAvg).toBeLessThan(naive.earlyAvg * 0.9);
+    // ตัดแล้ว → ทรงตัว ไม่ควรติดธง
+    const fixed = half(completeMonths(rows));
+    expect(fixed.lateAvg).toBe(fixed.earlyAvg);
+    expect(fixed.lateAvg >= fixed.earlyAvg * 0.4).toBe(true);
+  });
+
+  it('สินค้ามาแรงจริงต้องยังได้ป้าย "กำลังมาแรง" (late ≥ early × 1.4)', () => {
+    const rows = [
+      { month: mkey(4), qty: 10 }, { month: M3, qty: 10 },
+      { month: M2, qty: 15 },      { month: M1, qty: 15 },
+      { month: CUR, qty: 0 },      // เดือนใหม่ยังไม่ขาย
+    ];
+    // เดิม: ครึ่งหลัง = (15+15+0)/3 = 10 → ไม่ถึง 10 × 1.4 → ป้ายหาย
+    const naive = half(rows);
+    expect(naive.lateAvg >= naive.earlyAvg * 1.4).toBe(false);
+    // ตอนนี้: ครึ่งหลัง = 15 → ถึงเกณฑ์ → ได้ป้าย
+    const f = half(completeMonths(rows));
+    expect(f.lateAvg >= f.earlyAvg * 1.4).toBe(true);
+  });
+
+  it('forecast: จุดสุดท้ายที่เกือบ 0 กดความชันของ regression ลง', () => {
+    const linSlope = (v) => {
+      const n = v.length, xM = (n - 1) / 2, yM = v.reduce((s, x) => s + x, 0) / n;
+      let sxx = 0, sxy = 0;
+      for (let i = 0; i < n; i++) { sxx += (i - xM) ** 2; sxy += (i - xM) * (v[i] - yM); }
+      return sxx === 0 ? 0 : sxy / sxx;
+    };
+    const series = [
+      { month: mkey(4), rev: 100 }, { month: M3, rev: 110 },
+      { month: M2, rev: 120 },      { month: M1, rev: 130 },
+      { month: CUR, rev: 3 },
+    ];
+    expect(linSlope(series.map(s => s.rev))).toBeLessThan(0);                       // เดิม: เทรนด์ลง
+    expect(linSlope(completeMonths(series).map(s => s.rev))).toBeGreaterThan(0);    // ตอนนี้: เทรนด์ขึ้น
+  });
+
+  it('call site ทั้ง 5 จุดเรียก completeMonths จริง', () => {
+    const CM = 'completeMonths(p.monthly || []);';
+    // StockView declining (return null) vs TrendsView fading (return false) — คนละอัน
+    expect(VM).toContain(CM + '\n      if (m.length < 4) return null;');
+    expect(VM).toContain(CM + '\n      if (m.length < 4) return false;');
+    // CategoryView ป้าย "กำลังมาแรง"
+    expect(VM).toContain(CM + '\n      // Rising trend:');
+    // TrendsView enriched (rising ใช้ earlyAvg/lateAvg จากตรงนี้)
+    expect(VM).toContain(CM + '\n    let earlyAvg = 0');
+    // OverviewView forecast
+    expect(VM).toContain('const mSlice = completeMonths(monthlySeries).slice(-useLast);');
+    // SeasonView (คนละไฟล์ — เรียกข้ามไฟล์ได้เพราะ global scope เดียวกัน)
+    expect(VA).toContain('completeMonths(monthLabels).forEach(mk =>');
+  });
+
+  it('forecast บอกเดือนที่พยากรณ์จริง ไม่ใช่ทับว่า "เดือนหน้า" เสมอ', () => {
+    // พอตัดเดือนที่ยังไม่จบออก เป้าพยากรณ์มักกลายเป็น "เดือนปัจจุบัน" — ป้ายต้องตรง
+    expect(VM).toMatch(/isCurrentMonth: target\.key === curKey/);
+    expect(VM).toMatch(/forecast\.isCurrentMonth/);
+    // และ % ต้องเทียบกับเดือนเต็มล่าสุด ไม่ใช่เดือนที่กำลังเดินอยู่
+    expect(VM).toMatch(/const baseMonthRev = mSlice\[mSlice\.length - 1\]\.rev;/);
+    expect(VM).not.toMatch(/vs เดือนนี้/);
   });
 });
