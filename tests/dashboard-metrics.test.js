@@ -5,6 +5,9 @@
 //   3) ABC ใช้หน้าต่าง 12 เดือนล่าสุด ไม่ใช่ยอดสะสมทั้งประวัติ — ข้อ 3.5
 // เคสที่ต้องมีเสมอ: **วันนี้เป็นวันที่ 1 ของเดือน** — วันที่บั๊ก "เดือนที่ยังไม่จบ" แสดงตัวแรงสุด
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import {
   completeMonths, currentMonthInfo, isCountableProduct,
   marginRowCore, abcClassify, abcWindowRev, ABC_WINDOW_MONTHS,
@@ -306,5 +309,22 @@ describe('มูลค่าสต๊อกที่ราคาขายส่�
   it('input ว่าง ไม่ throw', () => {
     expect(stockValuesOf(null, 0.8)).toEqual({ all: 0, wh: 0, store: 0 });
     expect(stockValuesOf({ qty: 5 }, 0.8).all).toBe(0);   // ไม่มีราคา
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// meta-test: หน้าภาพรวมมี ABC ของตัวเองแยกอีกชุด (สร้างกลุ่ม A/B/C ให้กดดูรายการ)
+// ถ้ามันใช้ฐานคนละแบบกับ abcClassify สินค้าตัวเดียวกันจะเป็น A ที่หน้าหนึ่ง C อีกหน้าหนึ่ง
+// — เป็นบั๊กที่ไม่มี error ให้เห็น ต้องล็อกไว้ว่าสองที่ใช้ฐานเดียวกันจริง
+describe('ABC บนหน้าภาพรวมใช้ฐานเดียวกับคิว "ควรนับ/ควรเช็คก่อน"', () => {
+  const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const SRC = readFileSync(join(ROOT, 'views-main.jsx'), 'utf8');
+
+  it('คิดรายได้ด้วย abcWindowRev (12 เดือนล่าสุด) ไม่ใช่ p.soldRev สะสม', () => {
+    expect(SRC).toContain('const revOf = p => { const w = abcWindowRev(p);');
+  });
+
+  it('ตัดคลาสด้วย cumulative ก่อนบวกตัวเอง (ตัวท็อปต้องเป็น A เสมอ)', () => {
+    expect(SRC).toContain("const cls = before < 0.8 ? 'A' : before < 0.95 ? 'B' : 'C';");
   });
 });

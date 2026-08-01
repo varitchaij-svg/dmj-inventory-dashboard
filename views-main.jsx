@@ -1558,18 +1558,25 @@ function OverviewView({ data, range, setRange, role }) {
   }, [sellable, months, wholesaleRatio]);
 
   // ── ABC / Pareto classification by revenue ───────────────────────────
+  // Phase 3 (3.5): ใช้ฐานเดียวกับ `abcClassify` (views-analytics.jsx) ที่คิว "ควรนับก่อน"/
+  // "ควรเช็คก่อน" ใช้ — ไม่งั้นสินค้าตัวเดียวกันเป็น A ที่หน้าหนึ่ง C อีกหน้าหนึ่ง
+  //   (ก) ยอดขาย = 12 เดือนสมบูรณ์ล่าสุด (`abcWindowRev`) ไม่ใช่ยอดสะสมทั้งประวัติ
+  //   (ข) ตัดคลาสด้วย cumulative **ก่อนบวกตัวเอง** — ตัวท็อปเป็น A เสมอแม้ตัวเดียวเกิน 80%
+  //       (ของเดิมที่นี่บวกตัวเองก่อนค่อยเทียบ ทำให้สินค้าตัวใหญ่มากหลุดไปกลุ่ม B/C)
   const abc = uM(() => {
-    const sorted = sellable.filter(p => (p.soldRev||0) > 0)
-                           .sort((a,b)=>(b.soldRev||0)-(a.soldRev||0));
-    const total = sorted.reduce((s,p)=>s+(p.soldRev||0),0);
+    const revOf = p => { const w = abcWindowRev(p); return w == null ? (p.soldRev || 0) : w; };
+    const sorted = sellable.map(p => ({ p, r: revOf(p) }))
+                           .filter(x => x.r > 0)
+                           .sort((a,b) => b.r - a.r);
+    const total = sorted.reduce((s,x) => s + x.r, 0);
     let cum = 0;
     const counts = { A:0, B:0, C:0 }, rev = { A:0, B:0, C:0 }, groups = { A:[], B:[], C:[] };
-    sorted.forEach(p => {
-      cum += p.soldRev||0;
-      const cumPct = total>0 ? cum/total : 0;
-      const cls = cumPct <= 0.8 ? 'A' : cumPct <= 0.95 ? 'B' : 'C';
-      counts[cls]++; rev[cls] += p.soldRev||0;
-      groups[cls].push(p);
+    sorted.forEach(x => {
+      const before = total > 0 ? cum / total : 0;
+      cum += x.r;
+      const cls = before < 0.8 ? 'A' : before < 0.95 ? 'B' : 'C';
+      counts[cls]++; rev[cls] += x.r;
+      groups[cls].push(x.p);
     });
     return { total, counts, rev, groups, n: sorted.length };
   }, [sellable]);
@@ -2705,7 +2712,7 @@ function OverviewView({ data, range, setRange, role }) {
       {/* ── ABC / Pareto ── */}
       {abc.n > 0 && (
         <Card title="🎯 ABC · สินค้ากลุ่มไหนทำรายได้หลัก"
-              sub="A = 80% แรกของรายได้ · B = 80–95% · C = ที่เหลือ · กดที่กลุ่มเพื่อดูรายการสินค้า"
+              sub="A = 80% แรกของรายได้ · B = 80–95% · C = ที่เหลือ · กดที่กลุ่มเพื่อดูรายการสินค้า · วัดจากยอดขาย 12 เดือนล่าสุด (ไม่ขึ้นกับช่วงเวลาที่เลือก)"
               style={{marginTop:20}}>
           <div className="row" style={{gridTemplateColumns:"repeat(auto-fit, minmax(180px, 1fr))"}}>
             {[{ cls:"A", label:"กลุ่ม A · ดาวเด่น", cc:"#1f7f44", desc:"โฟกัส อย่าให้ขาด" },
