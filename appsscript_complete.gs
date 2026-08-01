@@ -6599,6 +6599,199 @@ function exploreZortPurchases() {
   Logger.log("════ เสร็จ ════");
 }
 
+// ═══════════════════════════════════════════════════════════
+// PHASE 0 — วินิจฉัย "มูลค่าซื้อรวม ฿1" ในการ์ด "ของเข้าใหม่ 30 วัน"
+// ═══════════════════════════════════════════════════════════
+// อาการ: การ์ดโชว์ 38 SKU / 11,848 ชิ้น แต่มูลค่าซื้อรวม ฿1
+//   → OverviewView คิดจาก sum(qty × unitPrice) ที่ readPurchases_() อ่านจากคอลัมน์ 27 (0-indexed)
+//   → จำนวนชิ้น (คอล 26) / ชื่อ / SKU (คอล 24-25) ออกมาถูก แปลว่าดัชนีคอลัมน์ไม่น่าเพี้ยน
+//     เหลือความเป็นไปได้หลักว่า pricepernumber ที่ ZORT คืนมาเป็น 0/ว่าง
+// ห้ามเดาแล้วแก้ — ตัวนี้พิมพ์ข้อมูลจริงออกมาให้ตัดสินก่อนว่าจะ fallback ไปฟิลด์ไหน
+//
+// ⚠️ อ่านอย่างเดียว ไม่แก้ชีต ไม่แตะ ZORT ฝั่งเขียน · ไม่ log header (มี apikey/apisecret อยู่)
+// ⚠️ ชื่อไม่มี "_" ต่อท้าย เพื่อให้โผล่ใน dropdown ของ GAS editor (บทเรียนข้อ 1)
+function debugPurchasePrices() {
+  const IDX_TYPE = 1, IDX_PO = 2, IDX_SUPPLIER = 4, IDX_DATE = 11,
+        IDX_STATUS = 19, IDX_SKU = 24, IDX_NAME = 25, IDX_QTY = 26, IDX_PRICE = 27;
+  const tz = "Asia/Bangkok";
+
+  Logger.log("════════ PHASE 0: ตรวจราคาต้นทุนในรายการซื้อ ════════");
+
+  // ── 1) ชีต "รายการซื้อสินค้า" — ของที่หน้าเว็บอ่านจริง ──────────────
+  Logger.log("");
+  Logger.log("──── 1) ชีต \"" + SHEET_PURCHASES + "\" ────");
+  let sheetVerdict = "อ่านชีตไม่ได้";
+  try {
+    const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_PURCHASES);
+    if (!sh) {
+      Logger.log("❌ ไม่พบชีต");
+    } else {
+      const rows = sh.getDataRange().getValues();
+      Logger.log("แถวทั้งหมด (รวม header 2 แถว): " + rows.length + " · คอลัมน์: " + sh.getLastColumn());
+
+      // header 2 แถวแรก พร้อม index — ถ้าราคาไปอยู่คอลัมน์อื่น จะเห็นตรงนี้ทันที
+      for (let h = 0; h < Math.min(2, rows.length); h++) {
+        const labeled = rows[h].map(function (v, i) {
+          const s = String(v == null ? "" : v).trim();
+          return s ? (i + "=" + s) : null;
+        }).filter(Boolean);
+        Logger.log("header แถว " + (h + 1) + ": " + (labeled.join(" | ") || "(ว่าง)"));
+      }
+
+      // ช่วง 30 วันล่าสุด = ช่วงเดียวกับที่การ์ด "ของเข้าใหม่" ใช้
+      const cut = new Date(); cut.setDate(cut.getDate() - 30);
+      const cutStr = Utilities.formatDate(cut, tz, "yyyy-MM-dd");
+      Logger.log("ช่วงที่การ์ดใช้: วันที่ >= " + cutStr);
+
+      const dateStr = function (v) {
+        if (v instanceof Date && !isNaN(v)) return Utilities.formatDate(v, tz, "yyyy-MM-dd");
+        return String(v == null ? "" : v).trim();
+      };
+
+      let nRecent = 0, nPriced = 0, sumQty = 0, sumCost = 0;
+      const byType = {};
+      const skuSet = {}, skuNoPrice = {};
+      const samples = [];
+      for (let i = 2; i < rows.length; i++) {
+        const r = rows[i];
+        const sku = String(r[IDX_SKU] == null ? "" : r[IDX_SKU]).trim();
+        if (!sku) continue;
+        const d = dateStr(r[IDX_DATE]);
+        if (!d || d < cutStr) continue;
+        const qty   = parseInt(r[IDX_QTY]) || 0;
+        const price = parseNum_(r[IDX_PRICE]);
+        nRecent++;
+        sumQty  += qty;
+        sumCost += qty * price;
+        skuSet[sku] = true;
+        if (price > 0) nPriced++; else skuNoPrice[sku] = true;
+        const t = String(r[IDX_TYPE] == null ? "" : r[IDX_TYPE]).trim() || "(ว่าง)";
+        byType[t] = (byType[t] || 0) + 1;
+        if (samples.length < 15) {
+          samples.push("  " + d + " · " + t + " · PO=" + String(r[IDX_PO] || "-") +
+                       " · " + sku + " · qty=" + qty + " · ราคา/หน่วย=" + JSON.stringify(r[IDX_PRICE]) +
+                       " (parse=" + price + ")");
+        }
+      }
+
+      Logger.log("");
+      Logger.log("แถวใน 30 วันล่าสุด: " + nRecent + " · SKU ไม่ซ้ำ: " + Object.keys(skuSet).length);
+      Logger.log("จำนวนชิ้นรวม: " + sumQty + "   ← การ์ดโชว์ 11,848");
+      Logger.log("มูลค่าซื้อรวม: " + sumCost + "   ← การ์ดโชว์ ฿1");
+      Logger.log("แถวที่มีราคา > 0: " + nPriced + " / " + nRecent +
+                 (nRecent ? (" (" + Math.round(nPriced / nRecent * 100) + "%)") : ""));
+      Logger.log("SKU ที่ไม่มีราคาเลย: " + Object.keys(skuNoPrice).length);
+      Logger.log("แยกตามประเภท (คอลัมน์ " + IDX_TYPE + "): " + JSON.stringify(byType));
+      Logger.log("  → \"สั่งซื้อ\" = มาจาก syncZortPurchases · \"ซื้อเข้า\" = สร้างในแอป (PurchaseInPanel)");
+      Logger.log("");
+      Logger.log("ตัวอย่าง 15 แถวแรกในช่วง:");
+      samples.forEach(function (s) { Logger.log(s); });
+
+      if (nRecent === 0)      sheetVerdict = "ไม่มีแถวในช่วง 30 วัน (การ์ดไม่ควรโชว์ด้วยซ้ำ — ต้องดูต่อ)";
+      else if (nPriced === 0) sheetVerdict = "ราคาเป็น 0 ทุกแถว → ต้นเหตุอยู่ที่ตอนเขียนชีต ไม่ใช่ตอนอ่าน";
+      else if (nPriced < nRecent) sheetVerdict = "ราคามีบ้างไม่มีบ้าง (" + nPriced + "/" + nRecent + ") → ยอดรวมต่ำกว่าจริง ห้ามโชว์เงียบ ๆ";
+      else                    sheetVerdict = "ราคาครบทุกแถว → ต้นเหตุอยู่ที่ฝั่งคำนวณ/แสดงผล ไม่ใช่ข้อมูล";
+
+      // แถวล่าสุดแบบดิบทั้งแถว — จับกรณีคอลัมน์เลื่อน (ราคาไปโผล่คอลัมน์อื่น)
+      Logger.log("");
+      Logger.log("── ค่าดิบทั้งแถวของ 2 แถวสุดท้าย (ดูว่ามีตัวเลขที่หน้าตาเหมือนราคาไปอยู่คอลัมน์ไหน) ──");
+      for (let i = Math.max(2, rows.length - 2); i < rows.length; i++) {
+        const cells = rows[i].map(function (v, idx) {
+          const s = String(v == null ? "" : v).trim();
+          return s ? (idx + "=" + s) : null;
+        }).filter(Boolean);
+        Logger.log("แถว " + (i + 1) + ": " + (cells.join(" | ") || "(ว่าง)"));
+      }
+    }
+  } catch (e) {
+    Logger.log("❌ อ่านชีตพัง: " + e);
+  }
+
+  // ── 2) ZORT ของจริง — PO ดิบ ดูว่าฟิลด์ราคาชื่ออะไรและมีค่าไหม ──────
+  Logger.log("");
+  Logger.log("──── 2) ZORT /PurchaseOrder/GetPurchaseOrders (30 วันล่าสุด) ────");
+  let zortVerdict = "ยิง ZORT ไม่สำเร็จ";
+  try {
+    const today = new Date();
+    const from  = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const fromStr = Utilities.formatDate(from, tz, "yyyy-MM-dd");
+    const toStr   = Utilities.formatDate(today, tz, "yyyy-MM-dd");
+    const url = ZORT_BASE + "/PurchaseOrder/GetPurchaseOrders?page=1&limit=20" +
+                "&fromdate=" + fromStr + "&todate=" + toStr;
+    Logger.log("GET " + url);
+    const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
+    const code = res.getResponseCode();
+    Logger.log("HTTP " + code);
+    if (code !== 200) {
+      Logger.log("body: " + res.getContentText().substring(0, 500));
+      zortVerdict = "ZORT ตอบ HTTP " + code;
+    } else {
+      const list = (JSON.parse(res.getContentText()) || {}).list || [];
+      Logger.log("จำนวน PO ที่ได้: " + list.length);
+
+      // หา PO ใบแรกที่มี line item จริง
+      let po = null, items = null;
+      for (let i = 0; i < list.length; i++) {
+        const cand = list[i];
+        const it = Array.isArray(cand.list) ? cand.list
+                 : Array.isArray(cand.items) ? cand.items
+                 : Array.isArray(cand.productlist) ? cand.productlist : [];
+        if (it.length) { po = cand; items = it; break; }
+      }
+
+      if (!po) {
+        Logger.log("⚠️ ไม่มี PO ใบไหนมี line item เลยในช่วงนี้");
+        Logger.log("field ระดับ PO ของใบแรก: " + (list[0] ? Object.keys(list[0]).join(", ") : "(ไม่มี PO)"));
+        zortVerdict = "ZORT ไม่คืน line item → syncZortPurchases เขียนแถวว่าง ราคาจึงเป็น 0";
+      } else {
+        Logger.log("PO ตัวอย่าง: number=" + po.number + " · วันที่=" + (po.purchaseorderdateString || "") +
+                   " · status=" + po.status + " · line items=" + items.length);
+        Logger.log("");
+        Logger.log("── item ตัวแรก (JSON เต็ม — ดูชื่อฟิลด์ราคาทั้งหมด) ──");
+        Logger.log(JSON.stringify(items[0], null, 2));
+
+        // สรุปเฉพาะฟิลด์ที่น่าจะเป็นราคา ข้าม item หลายตัว
+        Logger.log("");
+        Logger.log("── ฟิลด์ที่น่าจะเป็นราคา ของ 5 item แรก ──");
+        const priceKeys = ["pricepernumber", "price", "totalprice", "unitprice", "cost", "costpernumber", "amount"];
+        items.slice(0, 5).forEach(function (it, i) {
+          const parts = priceKeys.map(function (k) {
+            return it[k] === undefined ? null : (k + "=" + JSON.stringify(it[k]));
+          }).filter(Boolean);
+          Logger.log("  #" + (i + 1) + " sku=" + (it.sku || it.productcode || "-") +
+                     " number=" + JSON.stringify(it.number) + " | " + (parts.join(" · ") || "ไม่มีฟิลด์ราคาเลย"));
+        });
+
+        // นับทั้งชุดว่า pricepernumber (ตัวที่ syncZortPurchases ใช้อยู่) ใช้ได้จริงกี่ %
+        let nItem = 0, nPPN = 0, nTotal = 0;
+        list.forEach(function (p) {
+          const it = Array.isArray(p.list) ? p.list : [];
+          it.forEach(function (x) {
+            nItem++;
+            if ((Number(x.pricepernumber) || 0) > 0) nPPN++;
+            if ((Number(x.totalprice)     || 0) > 0) nTotal++;
+          });
+        });
+        Logger.log("");
+        Logger.log("จาก " + nItem + " item ในช่วง 30 วัน:");
+        Logger.log("  pricepernumber > 0 : " + nPPN + " (ฟิลด์ที่ syncZortPurchases ใช้อยู่ตอนนี้)");
+        Logger.log("  totalprice     > 0 : " + nTotal + " (ตัวเลือก fallback → totalprice ÷ number)");
+        zortVerdict = nPPN > 0 ? "pricepernumber ใช้ได้ (" + nPPN + "/" + nItem + ")"
+                    : nTotal > 0 ? "pricepernumber ว่าง แต่ totalprice ใช้ได้ → fallback ได้"
+                    : "ZORT ไม่ให้ราคาต้นทุนมาเลยทั้ง 2 ฟิลด์";
+      }
+    }
+  } catch (e) {
+    Logger.log("❌ ยิง ZORT พัง: " + e);
+  }
+
+  Logger.log("");
+  Logger.log("════════ สรุป ════════");
+  Logger.log("ฝั่งชีต: " + sheetVerdict);
+  Logger.log("ฝั่ง ZORT: " + zortVerdict);
+  Logger.log("→ copy log ทั้งหมดส่งกลับมา แล้วจะแก้ตามผลจริง (ไม่เดา)");
+}
+
 // ดึง PurchaseOrder จาก ZORT แบบ paginated
 function fetchZortPurchasesPaged_(fromStr, toStr) {
   const all = [], limit = 200, MAX_PAGES = 60;

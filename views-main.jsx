@@ -50,6 +50,20 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+// ────────────────────────────────────────────────────────────
+// Phase 2: completeMonths helper — filter out current incomplete month
+// ────────────────────────────────────────────────────────────
+// ปัญหา: ทั้งหมดที่ใช้ "last N months average" รวมเดือนปัจจุบันไป
+// ทำให้ค่าสัดส่วนต่ำกว่าจริง 33% (เดือนเพิ่งเริ่ม 1 วันจาก 30)
+// วิธีแก้: filter monthly data เพื่อเก็บเฉพาะเดือนที่เสร็จสมบูรณ์
+// = ทั้งหมด ยกเว้นเดือนปัจจุบัน (today's month)
+function completeMonths(monthly) {
+  if (!Array.isArray(monthly) || monthly.length === 0) return monthly;
+  const now = new Date();
+  const currentMonth = `${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
+  return monthly.filter(m => m && m.month !== currentMonth);
+}
+
 async function ensureXlsx() {
   if (window.XLSX) return;
   await new Promise(function (res, rej) {
@@ -1026,6 +1040,9 @@ function OverviewView({ data, range, setRange, role }) {
   const days   = (dayLabels && dayLabels.length > 0) ? dayLabels : [];
   const hasDailyData = days.length > 0;
 
+  // Phase 2: คำนวณเดือนที่สมบูรณ์ (ไม่รวมเดือนปัจจุบัน) สำหรับ KPI
+  const completeMonthsList = uM(() => completeMonths(months), [months]);
+
   // ── new states for month picker + comparison ──────────────────────
   const [selMonth, setSelMonth] = uS(null);   // null = latest
   const [selCat, setSelCat] = uS("");          // "" = ทุกหมวด · เลือกหมวด → กรอง KPI/กราฟ/forecast/top สินค้า
@@ -1378,9 +1395,10 @@ function OverviewView({ data, range, setRange, role }) {
   );
 
   // ── Movers: current vs previous month (MoM) ──────────────────────────
+  // Phase 2: ใช้ completeMonthsList ไม่ให้เปรียบเทียบเดือนที่ยังไม่เสร็จกับเดือนก่อนหน้า
   const momMovers = uM(() => {
-    if (months.length < 2) return { risers: [], fallers: [], cur: null, prev: null };
-    const cur = months[months.length-1], prev = months[months.length-2];
+    if (completeMonthsList.length < 2) return { risers: [], fallers: [], cur: null, prev: null };
+    const cur = completeMonthsList[completeMonthsList.length-1], prev = completeMonthsList[completeMonthsList.length-2];
     const MIN = 300; // ตัด noise: ต้องมียอดอย่างน้อยเดือนใดเดือนหนึ่ง
     const rows = sellable.map(p => {
       const c  = (p.monthly||[]).find(x=>x.month===cur);
@@ -1394,12 +1412,13 @@ function OverviewView({ data, range, setRange, role }) {
     const risers  = rows.filter(r => r.delta > 0).sort((a,b)=>b.delta-a.delta).slice(0,6);
     const fallers = rows.filter(r => r.delta < 0).sort((a,b)=>a.delta-b.delta).slice(0,6);
     return { risers, fallers, cur, prev };
-  }, [sellable, months]);
+  }, [sellable, completeMonthsList]);
 
   // ── Velocity: avg sales rate → days of stock left ────────────────────
+  // Phase 2: ใช้ completeMonthsList เพื่อไม่รวมเดือนปัจจุบันที่ยังไม่เสร็จ
   const velocity = uM(() => {
-    const n = Math.max(1, Math.min(months.length, 3));
-    const recent = months.slice(-n);
+    const n = Math.max(1, Math.min(completeMonthsList.length, 3));
+    const recent = completeMonthsList.slice(-n);
     const rows = sellable.map(p => {
       const qty = (p.monthly||[]).filter(x=>recent.includes(x.month)).reduce((s,x)=>s+x.qty,0);
       const perDay = qty / (n*30);
@@ -1412,16 +1431,17 @@ function OverviewView({ data, range, setRange, role }) {
     const overstock = rows.filter(r => r.perDay>0 && r.daysLeft>120 && r.stock>10)
                           .sort((a,b)=>b.daysLeft-a.daysLeft).slice(0,10);
     return { reorder, overstock, n };
-  }, [sellable, months]);
+  }, [sellable, completeMonthsList]);
 
   // ── Dead stock: holding inventory but no recent sales ────────────────
   const deadStock = uM(() => {
-    // คำนวณ 2 เดือนปฏิทินจริงล่าสุด (ไม่ใช่ 2 เดือนสุดท้ายในไฟล์ ซึ่งอาจเก่าถ้าไม่ sync)
+    // คำนวณ 2 เดือนปฏิทินจริงล่าสุดที่เสร็จแล้ว (ไม่รวมเดือนปัจจุบัน)
+    // (ไม่ใช่ 2 เดือนสุดท้ายในไฟล์ ซึ่งอาจเก่าถ้าไม่ sync)
     const now = new Date();
-    const recent = [0, 1].map(offset => {
+    const recent = [1, 2].map(offset => {
       const d = new Date(now.getFullYear(), now.getMonth() - offset, 1);
       return `${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
-    }); // ["06/2026","05/2026"]
+    }); // ["07/2026","06/2026"]
     // ถ้าไฟล์ข้อมูลไม่มีเดือนล่าสุดเลย → ไม่สามารถตัดสินได้
     const hasRecentData = recent.some(m => months.includes(m));
     if (!hasRecentData) return { list: [], count: 0, totalValue: 0 };
@@ -4859,10 +4879,11 @@ function StockView({ data, role }) {
   const enriched = uM(() => checkable.map(p => {
     const currentQty = (p.qtyStore > 0 || p.qtyWH > 0) ? (p.qtyStore || 0) + (p.qtyWH || 0) : (p.qty || 0);
     // เน้นความเร็วล่าสุด: ถ้ามี monthly ใช้เฉลี่ย 3 เดือนหลัง (ไวต่อเทรนด์) มิฉะนั้น fallback soldQty/5
-    const m = p.monthly || [];
+    // Phase 2: กรองออกเดือนปัจจุบัน (ยังไม่เสร็จ) เพื่อทำให้ avg ถูกต้อง
+    const complete = completeMonths(p.monthly || []);
     let avgMonthly;
-    if (m.length >= 3) {
-      const last3 = m.slice(-3);
+    if (complete.length >= 3) {
+      const last3 = complete.slice(-3);
       avgMonthly = last3.reduce((s,x) => s + (x.qty||0), 0) / 3;
     } else {
       avgMonthly = (p.soldQty || 0) / 5;
