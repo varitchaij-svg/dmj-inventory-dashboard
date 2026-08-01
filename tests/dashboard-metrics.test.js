@@ -377,3 +377,137 @@ describe('early/late half + forecast — ต้องตัดเดือนท
     expect(VM).not.toMatch(/vs เดือนนี้/);
   });
 });
+
+// ── 10. Phase 3: ความสอดคล้อง ────────────────────────────────────────────────
+describe('MarginView — กำไรจากเงินที่เข้าจริง', () => {
+  // สูตรเดียวกับ MarginView หลังแก้
+  const calc = (p, cost) => {
+    const revQty = Math.max(0, p.soldQty - (p.soldQtyUnscanned || 0));
+    if (cost == null || revQty <= 0 || p.soldRev <= 0) return null;
+    return {
+      avgSell: p.soldRev / revQty,
+      profit: p.soldRev - cost * revQty,
+      marginPct: (p.soldRev - cost * revQty) / p.soldRev,
+    };
+  };
+
+  it('ขายส่ง −20% ต้องไม่โชว์กำไรเท่าราคาป้าย', () => {
+    // ราคาป้าย 100 · ต้นทุน 60 · ขายจริง 80 (ส่ง −20%) · 10 ชิ้น
+    const r = calc({ soldQty: 10, soldRev: 800 }, 60);
+    expect(r.profit).toBe(200);            // 800 − 600
+    expect(r.avgSell).toBe(80);
+    // สูตรเดิม (ราคาป้าย − ต้นทุน) × จำนวน = (100−60)×10 = 400 → เกินจริงเท่าตัว
+    expect((100 - 60) * 10).toBe(400);
+    expect(r.profit).toBeLessThan(400);
+  });
+
+  it('% กำไรคิดจากรายได้ ไม่ใช่จากราคาป้าย', () => {
+    const r = calc({ soldQty: 10, soldRev: 800 }, 60);
+    expect(r.marginPct).toBeCloseTo(0.25, 6);     // 200/800
+    expect(r.marginPct).not.toBeCloseTo(0.40, 6); // เดิม: (100−60)/100
+  });
+
+  it('ของที่ถูกดึงไปงาน MTO ต้องไม่ถูกคิดต้นทุนซ้ำ', () => {
+    // ขาย 10 ชิ้น (เข้าเงิน 800) + ถูกดึงไปทำ MTO อีก 5 ชิ้น (เงินอยู่ในงาน MTO)
+    const r = calc({ soldQty: 15, soldRev: 800, soldQtyUnscanned: 5 }, 60);
+    expect(r.profit).toBe(200);                   // คิดต้นทุนแค่ 10 ชิ้น
+    // ถ้าเผลอใช้ soldQty ทั้งก้อน: 800 − 60×15 = −100 → ขาดทุนปลอม
+    expect(800 - 60 * 15).toBeLessThan(0);
+  });
+
+  it('ไม่มีต้นทุน / ไม่มีรายได้ → คำนวณไม่ได้ (ไม่เดา)', () => {
+    expect(calc({ soldQty: 10, soldRev: 800 }, null)).toBe(null);
+    expect(calc({ soldQty: 10, soldRev: 0 }, 60)).toBe(null);
+    expect(calc({ soldQty: 5, soldRev: 500, soldQtyUnscanned: 5 }, 60)).toBe(null);
+  });
+
+  it('โค้ดจริงใช้ soldRev ไม่ใช่ราคาป้าย', () => {
+    expect(VA).toContain('profit     = soldRev - cost * revQty;');
+    expect(VA).toContain('marginPct  = profit / soldRev;');
+    expect(VA).toContain('const revQty = Math.max(0, soldQty - (Number(p.soldQtyUnscanned) || 0));');
+    // สูตรเดิมต้องไม่หลงเหลือ
+    expect(VA).not.toContain('unitMargin = price - cost;');
+    expect(VA).not.toContain('profit     = unitMargin * soldQty;');
+  });
+
+  it('ตารางโชว์ราคาขายจริง ไม่ใช่ราคาป้าย (ไม่งั้นกดคิดเลขตามแล้วไม่ตรง)', () => {
+    expect(VA).toContain('ขายจริง/ชิ้น');
+    expect(VA).toContain('r.avgSell == null ? (r.price > 0 ? baht(r.price) : "—") : baht(r.avgSell)');
+  });
+});
+
+describe('abcClassify — หน้าต่าง 12 เดือน', () => {
+  it('ของที่ขายดีเมื่อนานมาแล้วต้องไม่ค้างคลาส A', () => {
+    // A: ขายดีมากเมื่อ 2 ปีก่อน แต่ 12 เดือนหลังเงียบ · B: ขายสม่ำเสมอในปีล่าสุด
+    const old = [], recent = [];
+    for (let i = 30; i >= 19; i--) old.push({ month: mkey(i), sales: 100000 });
+    for (let i = 12; i >= 1; i--) recent.push({ month: mkey(i), sales: 0 });
+    const A = { sku: 'OLD', monthly: [...old, ...recent] };
+    const B = { sku: 'NEW', monthly: [...old.map(m => ({ ...m, sales: 0 })),
+                                     ...recent.map(m => ({ ...m, sales: 5000 }))] };
+    const win = (p) => completeMonths(p.monthly).slice(-12).reduce((s, x) => s + x.sales, 0);
+    expect(win(A)).toBe(0);        // 12 เดือนล่าสุดไม่มียอด
+    expect(win(B)).toBe(60000);
+    // ยอดสะสมทั้งประวัติจะบอกตรงข้าม (A ชนะขาด) = ที่มาของบั๊ก
+    const allTime = (p) => p.monthly.reduce((s, x) => s + x.sales, 0);
+    expect(allTime(A)).toBeGreaterThan(allTime(B));
+  });
+
+  it('ไม่มี p.monthly เลย → fallback ไป soldRev (ไม่ให้ทุกตัวกลายเป็น C พร้อมกัน)', () => {
+    expect(VA).toContain('if (!m || !m.length) return p.soldRev || 0;');
+  });
+
+  it('หน้าต่าง = 12 เดือน และตัดเดือนที่ยังไม่จบก่อน', () => {
+    expect(VA).toContain('const ABC_WINDOW_MONTHS = 12;');
+    expect(VA).toContain('completeMonths(p.monthly || [])');
+  });
+});
+
+describe('ฐานสินค้าของ KPI ยอดขาย vs มูลค่าสต๊อก', () => {
+  it('sellable ตัดทั้ง MTO และ "ไม่มีรหัสสินค้า" ให้ตรงกับ monthlySeries', () => {
+    // monthlySeries (ตัวที่ให้ยอดขายรวม) ตัด "ไม่มีรหัสสินค้า" ออก — ฐานต้องตรงกัน
+    expect(VM).toContain('!p.isMTO && p.cat && p.cat !== "ไม่มีรหัสสินค้า" && (!selCat || p.cat === selCat)');
+  });
+
+  it('stockAgg ไม่ตัด MTO อีกแล้ว — บวกทุกหมวดต้องเท่ายอดรวม', () => {
+    // เดิม: ไม่กรองหมวด → ใช้ totals (รวม MTO) · กรองหมวด → ตัด MTO ทิ้ง
+    // ผล: เลือกหมวด MTO ได้ ฿0 ทั้งที่มีของ และบวกทุกหมวดไม่เท่ายอดรวม
+    expect(VM).not.toContain('if (p.isMTO || p.cat !== selCat) return;');
+    expect(VM).toContain('if (p.cat !== selCat) return;');
+  });
+
+  it('รวมทุกหมวดต้องเท่ายอดรวมเมื่อใช้กติกาเดียวกัน', () => {
+    const products = [
+      { cat: 'A', stockValue: 100 }, { cat: 'B', stockValue: 250 },
+      { cat: 'Made to Order จัดแบบพิเศษ', isMTO: true, stockValue: 60 },
+      { cat: 'ไม่มีรหัสสินค้า', stockValue: 40 },
+    ];
+    const total = products.reduce((s, p) => s + p.stockValue, 0);
+    const byCat = [...new Set(products.map(p => p.cat))]
+      .reduce((s, c) => s + products.filter(p => p.cat === c).reduce((x, p) => x + p.stockValue, 0), 0);
+    expect(byCat).toBe(total);
+    expect(total).toBe(450);
+  });
+});
+
+describe('ป้ายกำกับที่กันเข้าใจผิด', () => {
+  it('การ์ด "ของเข้าใหม่" บอกว่าไม่ขึ้นกับเดือนที่เลือก', () => {
+    expect(VM).toContain('30 วันล่าสุดเสมอ ไม่ขึ้นกับเดือนที่เลือก');
+  });
+
+  it('หน้าลูกค้าบอกว่าคิดคนละฐานกับหน้าภาพรวม', () => {
+    expect(VA).toContain('ยอดบิลทั้งใบ');
+    expect(VA).toContain('ยอดรายสินค้า');
+  });
+
+  it('MarginView เตือนเมื่อ coverage ต่ำ พร้อมบอกวิธีแก้ที่ต้นทาง', () => {
+    expect(VA).toContain('A.coverage < 0.5 &&');
+    expect(VA).toContain('กรอกราคาใน ZORT ให้ครบ');
+  });
+
+  it('เลิก hard-code ตัวหาร 5 เดือน', () => {
+    expect(VM).not.toContain('(p.soldQty || 0) / 5;');
+    expect(VM).toContain('avgMonthly = (p.soldQty || 0) / dataMonthsCount;');
+    expect(VM).not.toContain('ขายไม่ได้ตลอด 5 เดือน');
+  });
+});

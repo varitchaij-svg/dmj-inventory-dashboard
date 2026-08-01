@@ -1,29 +1,19 @@
 # HANDOFF — งานตรวจ/แก้ตัวเลข Dashboard (อัปเดต 1 ส.ค. 2026)
 
-เอกสารนี้ = **"ตอนนี้อยู่ตรงไหน · ต้องทำอะไรต่อ"**
+เอกสารนี้ = **สรุปว่าแก้อะไรไปบ้าง + เจ้าของต้องทำอะไรเอง**
 รายละเอียดการวิเคราะห์เต็ม (ทำไมแต่ละเลขถึงผิด) อยู่ที่ `docs/PLAN-DASHBOARD-AUDIT.md`
+· กติกาที่ต้องยึดเวลาแก้ตัวเลขต่อจากนี้ อยู่ใน `CLAUDE.md` หัวข้อ "กติกาตัวเลขบน Dashboard"
 
 ---
 
-## สถานะ branch
+## สถานะ
 
-| branch/commit | มีอะไร | สถานะ |
-|---|---|---|
-| `master` @ `868ee9d` | Phase 0 + Phase 1 ครบ + Phase 2 กลุ่ม A + fix `completeMonths` | ✅ **live แล้ว** |
-| `claude/dashboard-analysis-plan-2r6kn9` | Phase 2 กลุ่ม B (5 จุดสุดท้าย) + เทสต์ 41 เคส | ⏳ รอ merge |
-
-```bash
-git checkout master && git pull origin master
-git merge --no-ff claude/dashboard-analysis-plan-2r6kn9
-npx vitest run && node tests/browser/run.cjs      # ต้อง 862 + 79/79
-git push origin master
-```
-
-merge แล้ว Cloudflare Pages + GAS จะ auto-deploy เอง
+**งานตรวจ/แก้ตัวเลข Dashboard เสร็จครบทุกเฟสแล้ว** (Phase 0–5)
+· เทสต์ 888 เคส + browser 79/79 ผ่านหมด · อยู่บน `master` แล้ว (auto-deploy)
 
 ---
 
-## ✅ ที่ทำเสร็จแล้ว
+## ✅ สรุปสิ่งที่แก้
 
 ### Phase 0 — วินิจฉัยราคาต้นทุน (เจ้าของรัน `debugPurchasePrices()` แล้ว)
 
@@ -61,39 +51,33 @@ SeasonView · OverviewView `forecast`
 
 ---
 
-## ⏳ ที่เหลือ
+### Phase 3 — ความสอดคล้อง ✅
 
-### 1. Phase 3 — ความไม่สอดคล้อง (P1)
+| # | แก้เป็น |
+|---|---|
+| 3.2 | **MarginView: `profit = soldRev − ต้นทุน × revQty`** (เดิม `(ราคาป้าย − ต้นทุน) × จำนวน` → ขายส่ง −20% ทำให้กำไรเกินจริงเท่าส่วนลดเสมอ) · ตารางโชว์ **"ขายจริง/ชิ้น"** แทนราคาป้าย |
+| 3.3 | `revQty = soldQty − soldQtyUnscanned` — ของที่ถูกดึงไปงาน MTO ไม่ถูกคิดต้นทุน (เดิม = ขาดทุนปลอม) |
+| 3.1 | `stockAgg` เลิกตัด MTO ตอนกรองหมวด → บวกทุกหมวดเท่ายอดรวม + เลือกหมวด MTO เห็นของจริง · `sellable` ตัด `"ไม่มีรหัสสินค้า"` ให้ตรงกับ `monthlySeries` |
+| 3.5 | `abcClassify` ใช้หน้าต่าง **12 เดือนเต็มล่าสุด** (`abcRevWindow_`) แทนยอดสะสมทั้งประวัติ |
+| 3.4 | ติดหมายเหตุที่หน้าลูกค้า: คิดจาก **ยอดบิลทั้งใบ** ส่วนภาพรวมคิดจาก **ยอดรายสินค้า** — แก้ให้เท่ากันไม่ได้ |
+| 3.6 | การ์ด "ของเข้าใหม่" ติดป้าย "30 วันล่าสุดเสมอ ไม่ขึ้นกับเดือนที่เลือก" |
 
-| # | เรื่อง | ที่ | หมายเหตุ |
-|---|---|---|---|
-| 3.2 | **MarginView คิดกำไรจากราคาป้าย** `unitMargin = price − cost` | `views-analytics.jsx:7997-8008` | 🔴 สำคัญสุดในเฟสนี้ · ขายส่ง −20% → กำไรที่โชว์เกินจริง · ต้องเป็น `profit = soldRev − cost × soldQty` |
-| 3.3 | `soldQty` บวก `soldQtyUnscanned` แต่ `soldRev` ไม่บวก | `appsscript_complete.gs:~2291` | ทำให้ "กำไร/ชิ้น × จำนวน" เพี้ยน (เกี่ยวกับ 3.2) |
-| 3.1 | MTO / "ไม่มีรหัสสินค้า" นับบ้างไม่นับบ้าง | `views-main.jsx` stockAgg / sellable | บวกทุกหมวดแล้วไม่เท่า "ทุกหมวด" |
-| 3.5 | `abcClassify` ใช้ยอดขายทั้งประวัติ | `views-analytics.jsx:1063-1078` | ของขายดีเมื่อ 2 ปีก่อนยังเป็นคลาส A → คิว "ควรนับก่อน" ผิดลำดับ · ควรใช้หน้าต่าง 12 เดือน |
-| 3.4 | ยอดขายรวม Overview ≠ CustomerView | — | คนละฐาน (ยอดรายสินค้า vs ยอดบิลรวมค่าส่ง) — **แก้ไม่ได้ ต้องติดหมายเหตุแทน** |
-| 3.6 | "ของเข้าใหม่ 30 วัน" ไม่ขยับตามเดือนที่เลือก | `views-main.jsx:~1430` | ตั้งใจให้เป็น 30 วันเสมอ แต่วางใต้ตัวกรองเดือน → ติดป้ายกำกับ |
+**เพิ่มเติม**: MarginView ขึ้นแบนเนอร์เตือนเมื่อ coverage < 50% พร้อมบอกว่าต้องกรอกราคาใน PO
+ฝั่ง ZORT (ตรงกับผล Phase 0 — ไม่ใช่ระบบพัง)
 
-### 2. Phase 4 — เทสต์ที่ยังขาด
+**งานเก็บตก**: `soldQty / 5` → หารด้วยจำนวนเดือนเต็มที่มีข้อมูลจริง (ตัวหาร 5 ค้างมาตั้งแต่ตอน
+ข้อมูลมีแค่ 5 เดือน ยิ่งข้อมูลยาวยิ่งทำให้ "ควรสั่ง" สูงเกินจริง) · ข้อความ "ตลอด 5 เดือน" นับจริง
 
-`tests/dashboard-metrics.test.js` (41 เคส) คุม Phase 1 + Phase 2 ครบแล้ว
-· ยังต้องเพิ่มเมื่อทำ Phase 3 (โดยเฉพาะสูตรกำไรของ MarginView)
-· **ต้องมีเคส "วันนี้เป็นวันที่ 1 ของเดือน"** — เป็นวันที่บั๊กกลุ่มนี้แสดงตัวแรงที่สุด
+### Phase 4 + 5 — เทสต์ + deploy ✅
 
-### 3. งานเก็บตก (เล็ก แต่เกี่ยวกัน)
-
-- `soldQty/5` (`views-main.jsx:4985`) — fallback ตอนมีเดือนเต็มไม่ถึง 3 เดือน ยัง hard-code เลข 5
-- คำอธิบาย "ตลอด 5 เดือน" (`views-main.jsx:5500`) — ข้อมูลจริงยาวกว่า 5 เดือนมากแล้ว
-
-### 4. Phase 5 — ตรวจ + deploy
-
-review diff → `npx vitest run` (862) → `node tests/browser/run.cjs` (79/79) → merge เข้า `master`
+`tests/dashboard-metrics.test.js` **57 เคส** · รวมทั้ง suite **888 tests / 25 files** ·
+browser **79/79** · merge เข้า `master` แล้ว
 
 ---
 
 ## 📌 สิ่งที่เจ้าของต้องทำเอง (ไม่ใช่งานโค้ด)
 
-1. **merge branch ที่ค้างอยู่** (ดูตารางบนสุด)
+1. **ไม่มีอะไรต้อง merge แล้ว** — งานทั้งหมดอยู่บน `master` เรียบร้อย
 2. **ปรับอัตราขายส่งได้เอง** ที่ Script Property **`WHOLESALE_RATIO`**
    เช่น `0.85` = ปลีก −15% · ไม่ตั้ง = `0.8` · ค่าที่ไม่ใช่ตัวเลข/นอกช่วง `0 < r ≤ 1` → กลับไปใช้ 0.8
 3. **ถ้าอยากได้ KPI ต้นทุน/กำไร/turnover จริงกลับมา** → ต้อง**กรอกราคาต่อหน่วยใน PO ฝั่ง ZORT**
@@ -120,8 +104,8 @@ review diff → `npx vitest run` (862) → `node tests/browser/run.cjs` (79/79) 
 ## คำสั่งที่ใช้บ่อย
 
 ```bash
-npx vitest run                                    # 862 tests
-npx vitest run tests/dashboard-metrics.test.js    # 41 เคสของงานนี้
+npx vitest run                                    # 888 tests
+npx vitest run tests/dashboard-metrics.test.js    # 57 เคสของงานนี้
 bash tests/browser/setup.sh                       # ครั้งเดียว (ติดตั้ง vendor + playwright)
 node tests/browser/run.cjs                        # 79/79 · ใช้เวลา ~4-5 นาที
 ```

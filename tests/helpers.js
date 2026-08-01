@@ -722,10 +722,18 @@ function buildYoYSeries(monthLabels, monthlyByCat) {
 }
 
 // ── abcClassify: ABC classification จาก cumulative revenue (จาก views-analytics.jsx) ──
+// ใช้ยอด 12 เดือนเต็มล่าสุด ไม่ใช่ยอดสะสมทั้งประวัติ (ของขายดีเมื่อ 2 ปีก่อนต้องไม่ค้างคลาส A)
+const ABC_WINDOW_MONTHS = 12;
+function abcRevWindow_(p) {
+  const m = completeMonths(p.monthly || []);
+  if (!m || !m.length) return p.soldRev || 0;
+  return m.slice(-ABC_WINDOW_MONTHS).reduce((s, x) => s + ((x && x.sales) || 0), 0);
+}
+
 function abcClassify(products) {
   const sorted = (products || [])
     .filter(p => p && p.sku && p.cat !== "ไม่มีรหัสสินค้า")
-    .map(p => ({ sku: p.sku, rev: p.soldRev || 0 }))
+    .map(p => ({ sku: p.sku, rev: abcRevWindow_(p) }))
     .sort((a, b) => b.rev - a.rev);
   const total = sorted.reduce((s, p) => s + p.rev, 0);
   const map = {};
@@ -898,7 +906,7 @@ module.exports = {
   parseQty_, parseNum_, parseLocation_,
   transferBatchCore,
   cleanupOrdersStateCore, stableOrderId,
-  buildYoYSeries, abcClassify, sanitizeThresholds, THRESHOLDS_DEFAULT,
+  buildYoYSeries, abcClassify, abcRevWindow_, ABC_WINDOW_MONTHS, sanitizeThresholds, THRESHOLDS_DEFAULT,
   parseCheckDateMs, suggestNextSku,
   parseSkuParts, nextModelForPrefix,
   attBuildTs, attSequenceWarning, attSummarize, attMonthRange, attAllowedNext,

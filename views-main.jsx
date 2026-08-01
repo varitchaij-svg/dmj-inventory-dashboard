@@ -1387,15 +1387,25 @@ function OverviewView({ data, range, setRange, role }) {
     };
   }, [range, activeMonth, months, selYear, selQuarter, pickerYear, quarterMonths]);
 
-  // สินค้าที่ไม่ใช่ MTO — คำนวณครั้งเดียว ใช้ร่วมหลาย memo ด้านล่าง (เดิม filter ซ้ำ 6 รอบ/render)
-  const sellable = uM(() => products.filter(p => !p.isMTO && (!selCat || p.cat === selCat)), [products, selCat]);
+  // ฐานสินค้าสำหรับ "ตัวเลขยอดขาย" ทุกตัวบนหน้านี้ — ต้องตรงกับ monthlySeries (ตัวที่ให้
+  // ยอดขายรวม/จำนวนชิ้น) ซึ่งตัดหมวด "ไม่มีรหัสสินค้า" ออก · ถ้าฐานไม่ตรงกัน KPI ข้าง ๆ กัน
+  // จะนับคนละชุดสินค้าโดยไม่มีอะไรบอก (เช่น "N SKU มียอดขาย" นับตัวที่ยอดไม่ได้อยู่ในยอดรวม)
+  // MTO ตัดออกเพราะเงินอยู่ในงานจัดพิเศษ (mtoGroups) ไม่ใช่ยอดขายรายสินค้า
+  const sellable = uM(() => products.filter(p =>
+    !p.isMTO && p.cat && p.cat !== "ไม่มีรหัสสินค้า" && (!selCat || p.cat === selCat)
+  ), [products, selCat]);
+
   // KPI มูลค่าสต๊อก (ราคาขายส่งแล้วจาก GAS) — กรองหมวดแล้วคำนวณเฉพาะหมวดนั้น
+  // ⚠️ ต่างจาก sellable โดยตั้งใจ: นี่คือ "ของที่อยู่ในสต๊อกจริง" จึงนับทุกอย่างรวม MTO
+  //    และของที่ยังไม่มีรหัส — เป็นเงินที่จมอยู่ในคลังเหมือนกัน
+  //    เดิมตอน "ทุกหมวด" ใช้ totals (รวม MTO) แต่พอเลือกหมวดกลับตัด MTO ทิ้ง →
+  //    บวกทุกหมวดแล้วไม่เท่ายอดรวม และเลือกหมวด MTO ได้ ฿0 ทั้งที่มีของ
   const stockAgg = uM(() => {
     if (!selCat) return { val: totals.totalStockValue, valWH: totals.totalStockValueWH || 0,
       valStore: totals.totalStockValueStore || 0 };
     let val = 0, valWH = 0, valStore = 0;
     products.forEach(p => {
-      if (p.isMTO || p.cat !== selCat) return;
+      if (p.cat !== selCat) return;
       val += p.stockValue || 0;
       valWH += p.stockValueWH || 0;
       valStore += p.stockValueStore || 0;
@@ -2002,8 +2012,11 @@ function OverviewView({ data, range, setRange, role }) {
         <div style={{marginBottom:20}}>
           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
             <span style={{fontSize:15,fontWeight:800,color:"#1f6f8b"}}>📥 ของเข้าใหม่ 30 วัน</span>
+            {/* บล็อกนี้ยึด "30 วันล่าสุด" เสมอ ไม่ขยับตามเดือนที่เลือกด้านบน — ต้องบอกให้ชัด
+                ไม่งั้นกด มิ.ย./ก.ค. แล้วเห็นตัวเลขเท่าเดิมจะนึกว่าตัวกรองพัง (เคารพเฉพาะตัวกรองหมวด) */}
             <span style={{fontSize:11,color:"var(--muted)",fontWeight:500}}>
-              จากรายการซื้อ (PO) ล่าสุด{selCat ? ` · หมวด ${selCat}` : ""}
+              จากรายการซื้อ (PO) · <b>30 วันล่าสุดเสมอ ไม่ขึ้นกับเดือนที่เลือก</b>
+              {selCat ? ` · หมวด ${selCat}` : ""}
             </span>
           </div>
           <div style={{borderRadius:14,border:"1.5px solid #cfe3f0",overflow:"hidden",background:"linear-gradient(135deg,#f2f9fd,#eef6fb)"}}>
@@ -4979,6 +4992,12 @@ function StatusBadge({ p, filter }) {
 
 function StockView({ data, role }) {
   const { products, thresholds: dataThresholds } = data;
+  // จำนวนเดือนเต็มที่ระบบมีข้อมูลขาย — ใช้เป็นตัวหารตอน fallback (ดู avgMonthly ด้านล่าง)
+  // อย่างน้อย 1 กันหารศูนย์ตอนเพิ่งเริ่มใช้ระบบ
+  const dataMonthsCount = uM(
+    () => Math.max(1, (completeMonths(data.monthLabels || []) || []).length),
+    [data.monthLabels]
+  );
   const [filter, setFilter] = uS("low");
   const [modalP, setModalP] = uS(null);
   const [orderProduct, setOrderProduct] = uS(null);
@@ -5042,15 +5061,21 @@ function StockView({ data, role }) {
 
   const enriched = uM(() => checkable.map(p => {
     const currentQty = (p.qtyStore > 0 || p.qtyWH > 0) ? (p.qtyStore || 0) + (p.qtyWH || 0) : (p.qty || 0);
-    // เน้นความเร็วล่าสุด: ถ้ามี monthly ใช้เฉลี่ย 3 เดือนหลัง (ไวต่อเทรนด์) มิฉะนั้น fallback soldQty/5
+    // เน้นความเร็วล่าสุด: ถ้ามี monthly ใช้เฉลี่ย 3 เดือนหลัง (ไวต่อเทรนด์)
     // ตัดเดือนปัจจุบันที่ยังไม่จบออกก่อน ไม่งั้น "ควรสั่ง" ต่ำกว่าจริง ~33%
     const complete = completeMonths(p.monthly || []);
     let avgMonthly;
     if (complete.length >= 3) {
       const last3 = complete.slice(-3);
       avgMonthly = last3.reduce((s,x) => s + (x.qty||0), 0) / 3;
+    } else if (complete.length > 0) {
+      // มีข้อมูลไม่ถึง 3 เดือน — หารด้วยจำนวนเดือนที่มีจริง
+      avgMonthly = complete.reduce((s,x) => s + (x.qty||0), 0) / complete.length;
     } else {
-      avgMonthly = (p.soldQty || 0) / 5;
+      // ไม่มีข้อมูลรายเดือนเลย — เฉลี่ยยอดสะสมด้วยจำนวนเดือนที่ระบบมีข้อมูลจริง
+      // (เดิม hard-code หาร 5 มาตั้งแต่ตอนข้อมูลยังมีแค่ 5 เดือน · ตอนนี้ยาวกว่านั้นมาก
+      //  ยิ่งข้อมูลยาวขึ้น ตัวหารที่ค้างไว้ 5 ยิ่งทำให้ "ควรสั่ง" สูงเกินจริงเรื่อย ๆ)
+      avgMonthly = (p.soldQty || 0) / dataMonthsCount;
     }
     const monthsLeft = avgMonthly > 0 ? currentQty / avgMonthly : null;
     const dailyVel   = avgMonthly / 30;
@@ -5060,7 +5085,7 @@ function StockView({ data, role }) {
     const suggestedQty = avgMonthly > 0 ? Math.max(0, Math.ceil(avgMonthly * coverMonths - currentQty)) : 0;
     const threshold = getThr(p.cat);
     return { ...p, qty: currentQty, avgMonthly, monthsLeft, dailyVel, daysLeft, stockoutAt, suggestedQty, threshold };
-  }), [checkable, getThr, coverMonths]);
+  }), [checkable, getThr, coverMonths, dataMonthsCount]);
 
   const nearOut = uM(() => enriched
     .filter(p => p.qty > 0 && p.qty <= p.threshold)
@@ -5475,6 +5500,12 @@ function StockView({ data, role }) {
 // ─────────────────────────────────────────────────────────────────────
 function TrendsView({ data }) {
   const { products } = data;
+  // จำนวนเดือนเต็มที่มีข้อมูล — ใช้เขียนคำอธิบายให้ตรงความจริง
+  // (เดิมเขียนตายตัวว่า "ตลอด 5 เดือน" ตั้งแต่ตอนข้อมูลยังมีแค่ 5 เดือน ตอนนี้ยาวกว่านั้นมาก)
+  const nMonths = uM(
+    () => (completeMonths(data.monthLabels || []) || []).length,
+    [data.monthLabels]
+  );
   const [section, setSection] = uS("rising");
   const [modalP, setModalP] = uS(null);
   const [trendPage, setTrendPage] = uS(0);
@@ -5570,7 +5601,7 @@ function TrendsView({ data }) {
     rising:  { list: rising,       label: "🔥 มาแรง",          color: "#c2570a", desc: "ยอดขายครึ่งหลังเพิ่ม > 40% จากครึ่งแรก" },
     new:     { list: newArrivals,  label: "🆕 สินค้าใหม่น่าจับตา", color: "#705d96", desc: "เข้าสต๊อกใน 60 วัน + เริ่มมียอด" },
     fading:  { list: fading,       label: "🆘 เสี่ยงหายจากตลาด",  color: "#b8341c", desc: "เคยขาย แต่ครึ่งหลังขายไม่ได้เลย" },
-    zero:    { list: zeroSales,    label: "💀 ไม่ขายเลย",       color: "#5b6b5e", desc: "มีของในสต๊อก แต่ขายไม่ได้ตลอด 5 เดือน" },
+    zero:    { list: zeroSales,    label: "💀 ไม่ขายเลย",       color: "#5b6b5e", desc: nMonths > 0 ? `มีของในสต๊อก แต่ขายไม่ได้เลยตลอด ${nMonths} เดือนที่มีข้อมูล` : "มีของในสต๊อก แต่ยังไม่เคยขายได้" },
   };
   const cur = sections[section];
   const totalPages = Math.ceil(cur.list.length / PAGE);
