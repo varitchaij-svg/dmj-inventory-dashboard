@@ -1,6 +1,7 @@
 # ตรวจความถูกต้องของ Dashboard ทั้งระบบ + แผนแก้ (ส.ค. 2026)
 
-สถานะ: **Phase 0 · 1 · 2 เสร็จแล้ว** (1 ส.ค. 2026) — เหลือ Phase 3 (ความสอดคล้อง) + Phase 5 (ตรวจก่อน deploy)
+สถานะ (1 ส.ค. 2026): **Phase 0 ✅ · Phase 1 ✅ · Phase 2 ⚠️ 3/8 จุด** — เหลือ Phase 2 (5 จุด) +
+Phase 3 + Phase 5 · **สรุปสถานะ + ขั้นตอนถัดไปอ่านที่ `docs/HANDOFF-DASHBOARD-AUDIT.md`**
 ที่มา: เจ้าของส่งภาพหน้า "ภาพรวม" 2 ใบ (เลือก มิ.ย. 26 / ก.ค. 26) — "เลขบางอันแค่มองก็ผิดแล้ว"
 ขอบเขตที่ไล่ดู: `OverviewView` · `StockView` · `TrendsView` · `SeasonView` · `MarginView` ·
 `CustomerView` · `DeadStockView` · `abcClassify` (StockCount/FrontStore) · `WarehouseHomeView` ·
@@ -259,25 +260,35 @@ KPI ข้อ 1.3 ต้องใช้ **ราคาทุน** (จาก PO)
 **เทสต์**: `tests/dashboard-metrics.test.js` (36 เคส) — คุมทั้งสูตรและจุดเชื่อมต่อ
 (meta-test เช็คว่า `whRatio` ถูกประกาศก่อนใช้จริง, `completeMonths` ถูกเรียกที่ StockView จริง)
 
-### Phase 2 — ล้าง "เดือนที่ยังไม่จบ" ทั้งระบบ ✅ COMPLETED
+### Phase 2 — ล้าง "เดือนที่ยังไม่จบ" ทั้งระบบ ⚠️ เสร็จบางส่วน (3/8 จุด)
 | งาน | สถานะ | หมายเหตุ |
 |---|---|---|
-| ออกแบบ helper `completeMonths()` + ตัดสินว่าจุดไหนควรตัด/ไม่ตัด | ✅ เสร็จ | ฟังก์ชั่นตัวแม่กรอง monthly array โดยไม่รวมเดือนปัจจุบัน |
-| ไล่แก้ call site ทั้ง 8 จุด | ✅ เสร็จ | **StockView** suggestedQty (ควรสั่ง) · **OverviewView** momMovers + velocity + deadStock |
+| ออกแบบ helper `completeMonths()` | ✅ เสร็จ | รับได้ทั้ง array ของ `{month}` และ array ของ string |
+| ไล่แก้ call site | ⚠️ **3 จาก 8 จุด** | ที่เหลือ 5 จุดยังไม่แก้ — ดูตารางด้านล่าง |
 
-**ผลลัพธ์**:
-- `completeMonths()` helper ที่ filter monthly data โดยแยกเดือนปัจจุบัน (today's month key)
-- **StockView**: "ควรสั่ง" ใช้ 3 เดือนสมบูรณ์แทน 3 เดือนล่าสุด (รวมเดือนที่ยังไม่จบ)
-- **OverviewView**:
-  - `momMovers`: เปรียบเทียบเดือนสมบูรณ์ 2 เดือนล่าสุดแทนรวมเดือนที่ยังไม่จบ
-  - `velocity`: ใช้ completeMonthsList แทน months
-  - `deadStock`: ดึงข้อมูลจาก 2 เดือนปฏิทินจริงที่เสร็จแล้ว (offsets [1,2] → [07,06] แทน [08,07])
-- commit: `b108c0e`
+**แก้แล้ว**:
+- **StockView `suggestedQty`** ("ควรสั่ง") — จุดที่อันตรายที่สุด แก้แล้ว
+  · `overstocked` (`monthsLeft > 12`) พลอยถูกแก้ไปด้วย เพราะคิดต่อจาก `avgMonthly` ตัวเดียวกัน
+- **OverviewView `velocity`** — ใช้ `completeMonthsList`
+- **OverviewView `momMovers`** — เทียบ 2 เดือนที่จบแล้ว
+- **OverviewView `deadStock`** — offset `[1,2]` แทน `[0,1]`
 
-⚠️ **บั๊กที่เจอตอนเขียนเทสต์ (แก้แล้วใน Phase 1)**: `completeMonths` รอบแรกเช็คแค่ `m.month`
-แต่ `completeMonthsList = completeMonths(months)` ส่ง array ของ **string** `"MM/YYYY"` เข้าไป
-→ `m.month` เป็น `undefined` ตลอด → **ไม่กรองอะไรเลยและไม่มี error ให้เห็น** (velocity/momMovers
-ยังเพี้ยนเหมือนเดิมทั้งที่ "แก้แล้ว") ตอนนี้รองรับทั้งสองรูปแบบ + มีเทสต์คุมทั้งคู่
+**ยังไม่แก้ (5 จุด)** — ทั้งหมดเป็นชนิด "early half vs late half" หรือ regression
+ที่ยังลาก**เดือนปัจจุบันที่ยอดเกือบ 0** เข้าไปอยู่ในครึ่งหลัง/จุดสุดท้าย:
+
+| ที่ | บรรทัด | อาการที่ผู้ใช้เห็น |
+|---|---|---|
+| StockView `declining` | `views-main.jsx:5018-5036` | ธง "ยอดขายตก > 60%" ขึ้นปลอมทุกต้นเดือน |
+| OverviewView `forecast` | `views-main.jsx:1685-1701` | จุดสุดท้ายเกือบ 0 กดเส้น regression ลง → พยากรณ์ต่ำกว่าจริง |
+| CategoryView ป้าย "กำลังมาแรง 📈" | `views-main.jsx:3310-3315` | ป้ายหายจากการ์ดสินค้าที่กำลังมาแรงจริง |
+| TrendsView (2 จุด) | `views-main.jsx:5424-5426`, `5481-5482` | "มาแรง"/"เสี่ยงหาย" จัดกลุ่มผิด |
+| SeasonView `yrsOf(m)` | `views-analytics.jsx:8355-8365` | เดือนปัจจุบันถูกหารด้วยจำนวนปีเต็ม → ค่าเฉลี่ยฤดูกาลต่ำเกิน |
+
+⚠️ **บั๊กใน helper รอบแรก (แก้แล้วใน `cc00a23` แต่ยังไม่ขึ้น master)**: `completeMonths`
+รอบแรกเช็คแค่ `m.month` แต่ `completeMonthsList = completeMonths(months)` ส่ง array ของ
+**string** `"MM/YYYY"` เข้าไป → `m.month` เป็น `undefined` ตลอด → **ไม่กรองอะไรเลยและ
+ไม่มี error ให้เห็น** · **master ตอนนี้ (`2fae347`) ยังรันเวอร์ชันบั๊กนี้อยู่** →
+`velocity`/`momMovers` บนเว็บจริงยังเพี้ยนจนกว่าจะ merge `cc00a23`
 
 ### Phase 3 — ความสอดคล้อง (P1)
 | งาน | โมเดล |
