@@ -360,7 +360,7 @@ function FrontStoreView({ data, role, checkRequest }) {
   const uncheckedCount = counts.unchecked;
   const mismatchCount  = counts.mismatch;
 
-  // ── คิว "ควรเช็คก่อน" — ABC + เช็คหน้าร้านล่าสุดนานสุด ──
+  // ── คิว "ควรเช็คก่อน" — ABC (ยอดขาย 12 เดือนล่าสุด) + เช็คหน้าร้านล่าสุดนานสุด ──
   // หน้าร้านของเคลื่อน/หายง่ายกว่าคลัง → รอบเช็คถี่กว่า: A ทุก 7 วัน, B ทุก 14 วัน, C ทุก 30 วัน
   // (ยังไม่เคยเช็ค = ครบกำหนดเสมอ) ใช้ p.frontStoreCheckedAt จากชีต "จำนวนหน้าร้าน" col I
   const checkQueue = uM(() => {
@@ -609,6 +609,7 @@ function FrontStoreView({ data, role, checkRequest }) {
               <div style={{fontSize:14,fontWeight:800}}>ควรเช็คก่อน · {checkQueue.length} รายการ</div>
               <div style={{fontSize:11,color:'var(--muted)'}}>
                 สินค้าขายดี (A) หรือไม่ได้เช็คนาน — แตะเพื่อไปเช็คตัวนั้นเลย
+                <div style={{fontSize:10,opacity:.75,marginTop:1}}>A/B/C วัดจากยอดขาย 12 เดือนล่าสุด (ไม่นับเดือนที่ยังไม่จบ)</div>
               </div>
             </div>
           </div>
@@ -1176,10 +1177,39 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
 // A = กลุ่มแรกที่รวมกันได้ 80% ของยอดขาย, B = ถัดมาถึง 95%, C = ที่เหลือ/ไม่มียอด
 // ใช้ cumulative "ก่อนบวกตัวเอง" เพื่อให้ตัวท็อปเป็น A เสมอแม้ตัวเดียวเกิน 80%
 // pure function — มี copy ใน tests/helpers.js สำหรับ unit test
-function abcClassify(products) {
+const ABC_WINDOW_MONTHS = 12;
+
+// ยอดขายที่ใช้จัดคลาส = 12 เดือน "สมบูรณ์" ล่าสุด (ตัดเดือนปัจจุบันที่ยังไม่จบออก เหมือน completeMonths)
+// เดิมใช้ p.soldRev = ยอดสะสมทั้งประวัติ (2.5 ปี) → ของที่ขายดีเมื่อ 2 ปีก่อนแต่ตอนนี้ไม่ขยับ
+// ยังค้างคลาส A → คิว "ควรนับก่อน" (StockCount) / "ควรเช็คก่อน" (หน้าร้าน) จัดลำดับผิด
+// คืน null เมื่อสินค้าไม่มี array รายเดือนเลย → ผู้เรียก fallback ไป soldRev สะสม
+// (เกิดได้เฉพาะกรณี payload ไม่ส่งยอดรายเดือนมา — ปกติสินค้าที่เคยขายจะมีเสมอ)
+// ⚠️ ตัดหน้าต่างด้วย "เดือนปฏิทินจริง" ไม่ใช่ slice(-12) ท้าย array — p.monthly ปกติ
+//    เป็น dense (ยาวเท่า monthLabels) แต่ห้ามพึ่งข้อนั้น ถ้าวันไหนกลายเป็น sparse
+//    slice จะไปหยิบยอดเมื่อ 2 ปีก่อนมานับเป็น "12 เดือนล่าสุด" เงียบ ๆ
+function abcWindowRev(p, windowMonths) {
+  const mm = p && p.monthly;
+  if (!Array.isArray(mm) || mm.length === 0) return null;
+  const n = windowMonths || ABC_WINDOW_MONTHS;
+  const now = new Date();
+  const curIdx = now.getFullYear() * 12 + now.getMonth();   // ดัชนีเดือนแบบเทียบกันได้ข้ามปี
+  const fromIdx = curIdx - n;                               // เดือนปัจจุบันยังไม่จบ → ไม่นับ
+  let sum = 0;
+  for (const x of mm) {
+    if (!x || !x.month) continue;
+    const parts = String(x.month).split("/");
+    const m = Number(parts[0]), y = Number(parts[1]);
+    if (!m || !y) continue;
+    const idx = y * 12 + (m - 1);
+    if (idx >= fromIdx && idx < curIdx) sum += x.sales || 0;
+  }
+  return sum;
+}
+
+function abcClassify(products, windowMonths) {
   const sorted = (products || [])
     .filter(p => p && p.sku && p.cat !== "ไม่มีรหัสสินค้า") // ตัดสินค้าไม่มีรหัส/หมวด — วัดไม่ได้ ทำให้สัดส่วนเพี้ยน
-    .map(p => ({ sku: p.sku, rev: p.soldRev || 0 }))
+    .map(p => { const w = abcWindowRev(p, windowMonths); return { sku: p.sku, rev: w == null ? (p.soldRev || 0) : w }; })
     .sort((a, b) => b.rev - a.rev);
   const total = sorted.reduce((s, p) => s + p.rev, 0);
   const map = {};
@@ -1546,7 +1576,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     return m;
   }, [products]);
 
-  // ── คิว "ควรนับก่อน" — ABC + นับล่าสุดนานสุด (cycle count recommendation) ──
+  // ── คิว "ควรนับก่อน" — ABC (ยอดขาย 12 เดือนล่าสุด) + นับล่าสุดนานสุด (cycle count) ──
   // ครบกำหนดนับ: A ทุก 30 วัน, B ทุก 60 วัน, C ทุก 90 วัน (ไม่เคยนับ = ครบกำหนดเสมอ)
   const countQueue = uM(() => {
     const abc = abcClassify(data.products || []);
@@ -2812,6 +2842,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                 <div style={{fontSize:14,fontWeight:800}}>ควรนับก่อน · {countQueue.length} รายการ</div>
                 <div style={{fontSize:11,color:'var(--muted)'}}>
                   สินค้าขายดี (A) หรือไม่ได้นับนาน — แตะเพื่อไปนับเลย (ยังไม่มีตำแหน่ง = นับก่อนขึ้นชั้น)
+                  <div style={{fontSize:10,opacity:.75,marginTop:1}}>A/B/C วัดจากยอดขาย 12 เดือนล่าสุด (ไม่นับเดือนที่ยังไม่จบ)</div>
                 </div>
               </div>
             </div>
@@ -7922,6 +7953,13 @@ function CustomerView({ data }) {
         <div>
           <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>👥 ลูกค้า & ยอดซื้อ</div>
           <div style={{ fontSize: 12, color: "var(--muted)" }}>ยอดที่ลูกค้าซื้อจริง — แตะแถวเพื่อดูสินค้าที่ซื้อบ่อย</div>
+          {/* ยอดหน้านี้มาจาก "ยอดบิล" (order.amount) ส่วนหน้าภาพรวมรวมจาก "รายการสินค้าในบิล"
+              สองก้อนนี้ไม่มีทางเท่ากันเป๊ะ เพราะบิลมีค่าส่ง/ส่วนลดท้ายบิลที่ไม่ผูกกับสินค้า
+              — ไม่บอกไว้ เจ้าของเทียบสองหน้าแล้วจะคิดว่าระบบคำนวณพลาด */}
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>
+            💡 ตัวเลขที่นี่คือ <b>ยอดทั้งบิล</b> (รวมค่าส่ง/ส่วนลดท้ายบิล) จึงไม่เท่ากับ "ยอดขายรวม" ในหน้าภาพรวม
+            ที่บวกจากรายการสินค้าในบิล
+          </div>
           {months.length > 0 && (
             <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>
               📅 ข้อมูลครอบคลุม <b>{months[0]}</b> – <b>{months[months.length - 1]}</b> ({months.length} เดือน)
@@ -8062,9 +8100,35 @@ function CustomerView({ data }) {
   );
 }
 
+// ── กำไรของสินค้า 1 ตัว (pure function — มี copy ใน tests/helpers.js) ──
+// Phase 3 ข้อ 3.2 + 3.3: สูตรเดิม `profit = (ราคาป้าย − ต้นทุน) × soldQty` ผิด 2 ชั้นซ้อนกัน
+//   (ก) "ราคาป้าย" (p.price จาก ZORT) ไม่ใช่เงินที่เข้าจริง — ขายส่ง/ลดราคาแล้ว
+//       กำไรที่โชว์เกินจริงเต็ม ๆ ตามส่วนลด (ร้านนี้ขายส่ง −20% เป็นเรื่องปกติ)
+//   (ข) soldQty รวม soldQtyUnscanned = ของที่ถูกดึงไปทำงานจัดพิเศษ (MTO) ซึ่ง **ไม่มีเงิน
+//       เข้าใน soldRev** (เงินอยู่ในใบงาน MTO) → เอาไปคูณต้นทุน = ต้นทุนบวม กำไรต่ำเกินจริง
+// ใหม่: revQty = จำนวนที่ทำให้เกิด soldRev จริง · profit = soldRev − ต้นทุน × revQty
+//       (= กำไรขั้นต้นตามนิยามบัญชี: รายได้จริง − COGS ของรายได้ก้อนนั้น)
+function marginRowCore(p, cost) {
+  const soldQty   = Number(p && p.soldQty) || 0;
+  const unscanned = Number(p && p.soldQtyUnscanned) || 0;
+  const soldRev   = Number(p && p.soldRev) || 0;
+  const price     = Number(p && p.price) || 0;
+  const revQty    = Math.max(0, soldQty - unscanned);
+  const avgPrice  = revQty > 0 ? soldRev / revQty : null;   // ราคาขายเฉลี่ยจริง (เงินเข้า ÷ ชิ้นที่ขาย)
+  const c = (cost != null && cost > 0) ? cost : null;
+  let cogs = null, profit = null, marginPct = null, unitMargin = null;
+  if (c != null && revQty > 0 && soldRev > 0) {
+    cogs       = c * revQty;
+    profit     = soldRev - cogs;
+    marginPct  = profit / soldRev;
+    unitMargin = avgPrice - c;
+  }
+  return { soldQty, unscanned, revQty, soldRev, price, avgPrice, cost: c, cogs, profit, marginPct, unitMargin };
+}
+
 // ────────────── 💰 กำไรขั้นต้น (MarginView) ──────────────
 // วิเคราะห์กำไรจริงต่อสินค้า/หมวด: ต้นทุน = ราคาซื้อจริงเฉลี่ยถ่วงน้ำหนักจาก PO (data.purchases)
-// ไม่ใช้ค่าสมมติ COST_RATIO 0.8 · กำไร/ชิ้น = ราคาขาย − ต้นทุน · กำไรรวม = กำไร/ชิ้น × ที่ขายได้
+// ไม่ใช้ค่าสมมติ COST_RATIO 0.8 · กำไร = ยอดขายจริง (soldRev) − ต้นทุน × จำนวนที่ขายจริง
 // สินค้าที่ไม่มีประวัติซื้อ = คำนวณต้นทุนไม่ได้ → แยกไว้ + โชว์ % ครอบคลุม (coverage)
 function MarginView({ data }) {
   const mobile = useIsMobile();
@@ -8099,33 +8163,30 @@ function MarginView({ data }) {
     const rows = [];
     const catAgg = {};   // cat -> {rev, cost, profit, revKnown}
     let totRev = 0, totCost = 0, totProfit = 0, revWithCost = 0, noCostCount = 0;
+    let drawOnlyCount = 0, drawOnlyQty = 0;   // ของที่ถูกดึงไป MTO อย่างเดียว (ไม่มีเงินเข้าที่นี่)
 
     products.forEach(p => {
       if (p.isMTO) return;
-      const soldQty = Number(p.soldQty) || 0;
-      const soldRev = Number(p.soldRev) || 0;
-      if (soldQty <= 0 && soldRev <= 0) return;   // เอาเฉพาะที่ขายได้ในช่วง
-      const price = Number(p.price) || 0;
-      const cost  = costOf(p.sku);
-      const cat   = p.cat || "ไม่ระบุ";
-      totRev += soldRev;
+      const r = marginRowCore(p, costOf(p.sku));
+      if (r.soldQty <= 0 && r.soldRev <= 0) return;   // เอาเฉพาะที่ขายได้ในช่วง
+      // ขายไม่สแกนล้วน = ถูกเบิกไปทำงานจัดพิเศษทั้งจำนวน เงินไปอยู่ในใบงาน MTO
+      // นับแยกไว้บอกผู้ใช้ แต่ไม่เอาเข้าตารางกำไร (ยอดขาย 0 → % กำไรไม่มีความหมาย)
+      if (r.revQty <= 0 && r.soldRev <= 0) { drawOnlyCount++; drawOnlyQty += r.unscanned; return; }
+      const cat = p.cat || "ไม่ระบุ";
+      totRev += r.soldRev;
 
-      let unitMargin = null, marginPct = null, profit = null;
-      if (cost != null && price > 0) {
-        unitMargin = price - cost;
-        marginPct  = unitMargin / price;
-        profit     = unitMargin * soldQty;
-        totCost    += cost * soldQty;
-        totProfit  += profit;
-        revWithCost += soldRev;
+      if (r.profit != null) {
+        totCost     += r.cogs;
+        totProfit   += r.profit;
+        revWithCost += r.soldRev;
         if (!catAgg[cat]) catAgg[cat] = { rev: 0, cost: 0, profit: 0 };
-        catAgg[cat].rev    += soldRev;
-        catAgg[cat].cost   += cost * soldQty;
-        catAgg[cat].profit += profit;
+        catAgg[cat].rev    += r.soldRev;
+        catAgg[cat].cost   += r.cogs;
+        catAgg[cat].profit += r.profit;
       } else {
         noCostCount++;
       }
-      rows.push({ sku: p.sku, name: p.name || p.sku, cat, soldQty, soldRev, price, cost, unitMargin, marginPct, profit });
+      rows.push({ sku: p.sku, name: p.name || p.sku, cat, ...r });
     });
 
     const cats = Object.keys(catAgg).map(cat => ({
@@ -8144,6 +8205,7 @@ function MarginView({ data }) {
 
     return {
       rows, cats, totRev, totCost, totProfit, revWithCost, noCostCount,
+      drawOnlyCount, drawOnlyQty,
       coverage: totRev > 0 ? revWithCost / totRev : 0,
       avgMargin: revWithCost > 0 ? totProfit / revWithCost : null,
       thinButBig, lossMakers,
@@ -8177,7 +8239,10 @@ function MarginView({ data }) {
         <h2 style={{ margin: 0, fontSize: 20 }}>💰 กำไรขั้นต้น</h2>
       </div>
       <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>
-        ต้นทุน = ราคาซื้อจริงเฉลี่ยจากใบสั่งซื้อ (PO) · กำไร = ราคาขาย − ต้นทุน × จำนวนที่ขายได้ · <b>ไม่ใช่ค่าสมมติ</b>
+        ต้นทุน = ราคาซื้อจริงเฉลี่ยจากใบสั่งซื้อ (PO) · กำไร = <b>ยอดขายที่เข้าจริง</b> − ต้นทุน × จำนวนที่ขาย · <b>ไม่ใช่ค่าสมมติ</b>
+        <div style={{ marginTop: 2 }}>
+          คิดจากเงินที่เข้าจริง ไม่ใช่ราคาป้าย — ขายส่ง/ลดราคาแล้วกำไรที่โชว์ตรงตามจริง
+        </div>
       </div>
 
       {/* KPIs */}
@@ -8203,6 +8268,12 @@ function MarginView({ data }) {
       <div style={{ fontSize: 12, color: "var(--muted)", background: "var(--g-50)", borderRadius: 10, padding: "8px 12px", marginBottom: 16 }}>
         📊 คำนวณจากยอดขาย <b>{Math.round(A.coverage * 100)}%</b> ที่มีประวัติต้นทุนจาก PO
         {A.noCostCount > 0 && <> · อีก <b>{A.noCostCount}</b> สินค้ายังไม่มีประวัติซื้อ (คำนวณกำไรไม่ได้)</>}
+        {A.drawOnlyCount > 0 && (
+          <div style={{ marginTop: 3 }}>
+            🧰 ไม่รวม <b>{A.drawOnlyCount}</b> สินค้า ({baht(A.drawOnlyQty)} ชิ้น) ที่ถูกเบิกไปงานจัดพิเศษอย่างเดียว —
+            เงินอยู่ในใบงาน MTO ไม่ใช่ยอดขายสินค้า
+          </div>
+        )}
       </div>
 
       {/* Flags: ขายดีแต่กำไรบาง / ขาดทุน */}
@@ -8294,7 +8365,7 @@ function MarginView({ data }) {
               {!mobile && <th style={{ textAlign: "right", padding: "8px 8px" }}>ขายได้</th>}
               <th style={{ textAlign: "right", padding: "8px 8px" }}>ยอดขาย</th>
               {!mobile && <th style={{ textAlign: "right", padding: "8px 8px" }}>ต้นทุน/ชิ้น</th>}
-              {!mobile && <th style={{ textAlign: "right", padding: "8px 8px" }}>ขาย/ชิ้น</th>}
+              {!mobile && <th style={{ textAlign: "right", padding: "8px 8px" }}>ขายจริง/ชิ้น</th>}
               <th style={{ textAlign: "right", padding: "8px 8px" }}>% กำไร</th>
               <th style={{ textAlign: "right", padding: "8px 8px" }}>กำไรรวม</th>
             </tr></thead>
@@ -8310,10 +8381,24 @@ function MarginView({ data }) {
                       </div>
                     </div>
                   </td>
-                  {!mobile && <td style={{ textAlign: "right", padding: "8px 8px" }}>{r.soldQty}</td>}
+                  {!mobile && (
+                    <td style={{ textAlign: "right", padding: "8px 8px" }}>
+                      {r.revQty}
+                      {/* ของที่เบิกไป MTO ไม่ได้ทำให้เกิดยอดขาย — แยกให้เห็น ไม่เอาไปคูณต้นทุน */}
+                      {r.unscanned > 0 && <div style={{ fontSize: 10, color: "var(--muted)" }}>+{r.unscanned} เบิก MTO</div>}
+                    </td>
+                  )}
                   <td style={{ textAlign: "right", padding: "8px 8px" }}>{baht(r.soldRev)}</td>
                   {!mobile && <td style={{ textAlign: "right", padding: "8px 8px", color: r.cost == null ? "var(--muted)" : "var(--text)" }}>{r.cost == null ? "—" : baht(r.cost)}</td>}
-                  {!mobile && <td style={{ textAlign: "right", padding: "8px 8px" }}>{baht(r.price)}</td>}
+                  {!mobile && (
+                    <td style={{ textAlign: "right", padding: "8px 8px" }}>
+                      {r.avgPrice == null ? "—" : baht(r.avgPrice)}
+                      {/* ราคาป้ายไว้เทียบ — ต่างจากราคาขายจริงเมื่อขายส่ง/ลดราคา */}
+                      {r.avgPrice != null && r.price > 0 && Math.abs(r.avgPrice - r.price) / r.price > 0.02 && (
+                        <div style={{ fontSize: 10, color: "var(--muted)" }}>ป้าย {baht(r.price)}</div>
+                      )}
+                    </td>
+                  )}
                   <td style={{ textAlign: "right", padding: "8px 8px", fontWeight: 800, color: marginColor(r.marginPct) }}>{pct(r.marginPct)}</td>
                   <td style={{ textAlign: "right", padding: "8px 8px", fontWeight: 700, color: marginColor(r.marginPct) }}>{r.profit == null ? "—" : baht(r.profit)}</td>
                 </tr>

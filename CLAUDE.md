@@ -343,7 +343,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 814 tests, 24 test files, ทั้งหมด pass
+**มี Vitest test suite แล้ว** — 863 tests, 25 test files, ทั้งหมด pass
 
 ```bash
 npm test              # run tests
@@ -355,7 +355,13 @@ npm run test:coverage # coverage report (tests/helpers.js)
            detectColor, COLOR_MAP, COLOR_KEYS,
            monthKey_, dayKey_, deductStockCore, netOf, enrichDataCore`
 - `tests/*.test.js` — parsing, color, stock, dates, mto, app, format, schema, conflict, orderstate,
-  sku, billing, bahttext, transfer, cleanup, analytics, **attendance**, **auth**, drift-guard
+  sku, billing, bahttext, transfer, cleanup, analytics, **attendance**, **auth**, **dashboard-metrics**,
+  drift-guard
+- **`tests/dashboard-metrics.test.js`** — ความถูกต้องของตัวเลขบนแดชบอร์ด (แผน
+  `docs/PLAN-DASHBOARD-AUDIT.md`): `completeMonths`/`currentMonthInfo` (เดือนที่ยังไม่จบ) ·
+  `isCountableProduct` (กติกาเดียวว่าสินค้าตัวไหนนับเข้าสถิติ) · `marginRowCore` (กำไรจาก
+  เงินที่เข้าจริง) · `abcClassify`/`abcWindowRev` (หน้าต่าง 12 เดือน) — **มีเคส "วันนี้เป็นวันที่ 1
+  ของเดือน" ทุกหัวข้อ** เพราะเป็นวันที่บั๊กกลุ่มนี้แสดงตัวแรงที่สุด
 - **`tests/auth.test.js`** — เฟส 4 ล็อกอิน (`canDoOrNull_`/`ROLE_ACTIONS_`/`IMMEDIATE_GATE_*`) —
   **ไม่ copy โค้ดเข้า helpers.js** แต่ eval ฟังก์ชันจริงจาก `.gs` ตรง ๆ (กันสำเนา drift ของโค้ด
   ด้านความปลอดภัย) ต่างจากไฟล์เทสต์อื่นที่ copy pure function เข้า `helpers.js`
@@ -400,6 +406,21 @@ npm run test:coverage # coverage report (tests/helpers.js)
     ของ Safari ซึ่งคนละใบกับ PWA → กลับมาเปิดไอคอนก็ยังไม่ได้ล็อกอิน · การบังคับ
     `window.location.href` ใน webview ตัวเอง (`lineLoginNavigate`) ช่วยได้บาง iOS เท่านั้น
     **ห้ามพึ่งอย่างเดียว** — ต้องมี **login handoff** (ดูหัวข้อด้านล่าง) เป็นทางกู้เสมอ
+13. **สถิติ "ระดับสินค้า" ต้องใช้กติกาเดียวกันทุกหน้า** — `isCountableProduct(p)` (views-main.jsx)
+    = `!isMTO && cat && cat !== "ไม่มีรหัสสินค้า"` · เดิม KPI "ทุกหมวด" อ่าน `data.totals` จาก GAS
+    (รวม MTO) แต่ตอนเลือกหมวดตัด MTO ออก → **บวกทุกหมวดแล้วไม่เท่ากับ "ทุกหมวด"**
+    · เขียน memo ใหม่ที่นับสินค้า ให้ใช้ `sellable`/`isCountableProduct` เสมอ อย่า filter เองซ้ำ
+    · **ยอดขายรวมจากชีตยอดขาย (`monthlyByCat`) ยังรวม MTO ไว้ตามเดิม** — เป็นเงินที่เข้าร้านจริง
+    คนละเรื่องกับ "สินค้าที่สั่ง/นับ/เติมสต๊อกได้"
+14. **"เฉลี่ย N เดือนล่าสุด" ห้ามนับเดือนปัจจุบัน** — ใช้ `completeMonths(p.monthly)` เสมอ
+    (วันที่ 1 ของเดือน เดือนนั้นมียอดเกือบ 0 แต่ถูกหารเท่ากับเดือนเต็ม → ต่ำกว่าจริง ~33%)
+    · ถ้าตัดด้วย "หน้าต่างกี่เดือน" ให้เทียบ **เดือนปฏิทินจริง** (`y*12 + (m-1)`) อย่าใช้
+    `slice(-N)` ท้าย array — `p.monthly` เป็น dense วันนี้ แต่ถ้าวันไหนกลายเป็น sparse
+    slice จะหยิบยอดเมื่อ 2 ปีก่อนมานับเป็น "12 เดือนล่าสุด" เงียบ ๆ (ดู `abcWindowRev`)
+15. **กำไรคิดจาก `soldRev` ไม่ใช่ `price` (ราคาป้าย)** — ร้านขายส่ง −20% เป็นเรื่องปกติ
+    เอาราคาป้ายไปลบต้นทุนแล้วคูณจำนวน = กำไรเกินจริงเต็มส่วนลด · และ **`soldQty` รวม
+    `soldQtyUnscanned`** (ของที่เบิกไปงาน MTO ซึ่งไม่มีเงินเข้าใน `soldRev`) ต้องหักออกก่อน
+    เอาไปคูณต้นทุน — ดู `marginRowCore` (views-analytics.jsx)
 
 ## ระบบล็อกอินพนักงาน + ลงเวลาเข้า-ออกงาน (Sprint 5)
 

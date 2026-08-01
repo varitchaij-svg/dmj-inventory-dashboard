@@ -231,9 +231,27 @@ const TRACKED = [
     `const cats = (monthlyByCat || {})[mm + "/" + y];`,
     `row["y" + y] = rev;`,
   ]},
-  { names: ['abcClassify'], sourceFile: 'views-analytics.jsx', landmarks: [
+  { names: ['abcClassify', 'abcWindowRev', 'ABC_WINDOW_MONTHS'], sourceFile: 'views-analytics.jsx', landmarks: [
     `if (total <= 0 || p.rev <= 0) { map[p.sku] = "C"; return; }`,
     `map[p.sku] = before < 0.8 ? "A" : before < 0.95 ? "B" : "C";`,
+    // หน้าต่าง 12 เดือนสมบูรณ์ — ถ้าฝั่งไหนกลับไปใช้ soldRev สะสม คิว "ควรนับ/ควรเช็ค" จะเพี้ยน
+    `const ABC_WINDOW_MONTHS = 12;`,
+    `const curIdx = now.getFullYear() * 12 + now.getMonth();`,
+    `if (idx >= fromIdx && idx < curIdx) sum += x.sales || 0;`,
+    `.map(p => { const w = abcWindowRev(p, windowMonths); return { sku: p.sku, rev: w == null ? (p.soldRev || 0) : w }; })`,
+  ]},
+  // Phase 3: กำไรขั้นต้นคิดจากเงินที่เข้าจริง ไม่ใช่ราคาป้าย + ไม่คิดต้นทุนของที่เบิกไป MTO
+  { names: ['marginRowCore'], sourceFile: 'views-analytics.jsx', landmarks: [
+    `const revQty    = Math.max(0, soldQty - unscanned);`,
+    `const avgPrice  = revQty > 0 ? soldRev / revQty : null;`,
+    `profit     = soldRev - cogs;`,
+    `marginPct  = profit / soldRev;`,
+  ]},
+  // ── เดือนที่ยังไม่จบ + กติกา "สินค้าตัวไหนนับเข้าสถิติ" (Phase 2 + 3) ──────
+  { names: ['completeMonths', 'currentMonthInfo', 'isCountableProduct'], sourceFile: 'views-main.jsx', landmarks: [
+    `return monthly.filter(m => m && m.month !== currentMonth);`,
+    `daysInMonth: new Date(y, m, 0).getDate(),`,
+    `return !!p && !p.isMTO && !!p.cat && p.cat !== "ไม่มีรหัสสินค้า";`,
   ]},
   { names: ['parseCheckDateMs'], sourceFile: 'views-analytics.jsx', landmarks: [
     `if (yr >= 2400) yr -= 543; // พ.ศ. → ค.ศ.`,

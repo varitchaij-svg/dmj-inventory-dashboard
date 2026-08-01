@@ -707,11 +707,75 @@ function buildYoYSeries(monthLabels, monthlyByCat) {
   return { years, rows };
 }
 
+// ── completeMonths: ตัดเดือนปัจจุบันที่ยังไม่จบออกจาก array รายเดือน (จาก views-main.jsx) ──
+function completeMonths(monthly) {
+  if (!Array.isArray(monthly) || monthly.length === 0) return monthly;
+  const now = new Date();
+  const currentMonth = `${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
+  return monthly.filter(m => m && m.month !== currentMonth);
+}
+
+// ── currentMonthInfo: เดือนปัจจุบัน + ผ่านไปกี่วัน (จาก views-main.jsx) ──
+function currentMonthInfo(now) {
+  const d = now || new Date();
+  const y = d.getFullYear(), m = d.getMonth() + 1;
+  return {
+    key: `${String(m).padStart(2, '0')}/${y}`,
+    dayOfMonth: d.getDate(),
+    daysInMonth: new Date(y, m, 0).getDate(),
+  };
+}
+
+// ── isCountableProduct: กติกากลาง "สินค้าตัวไหนนับเข้าสถิติ" (จาก views-main.jsx) ──
+function isCountableProduct(p) {
+  return !!p && !p.isMTO && !!p.cat && p.cat !== "ไม่มีรหัสสินค้า";
+}
+
+// ── marginRowCore: กำไรขั้นต้นของสินค้า 1 ตัว (จาก views-analytics.jsx) ──
+function marginRowCore(p, cost) {
+  const soldQty   = Number(p && p.soldQty) || 0;
+  const unscanned = Number(p && p.soldQtyUnscanned) || 0;
+  const soldRev   = Number(p && p.soldRev) || 0;
+  const price     = Number(p && p.price) || 0;
+  const revQty    = Math.max(0, soldQty - unscanned);
+  const avgPrice  = revQty > 0 ? soldRev / revQty : null;
+  const c = (cost != null && cost > 0) ? cost : null;
+  let cogs = null, profit = null, marginPct = null, unitMargin = null;
+  if (c != null && revQty > 0 && soldRev > 0) {
+    cogs       = c * revQty;
+    profit     = soldRev - cogs;
+    marginPct  = profit / soldRev;
+    unitMargin = avgPrice - c;
+  }
+  return { soldQty, unscanned, revQty, soldRev, price, avgPrice, cost: c, cogs, profit, marginPct, unitMargin };
+}
+
 // ── abcClassify: ABC classification จาก cumulative revenue (จาก views-analytics.jsx) ──
-function abcClassify(products) {
+const ABC_WINDOW_MONTHS = 12;
+
+function abcWindowRev(p, windowMonths) {
+  const mm = p && p.monthly;
+  if (!Array.isArray(mm) || mm.length === 0) return null;
+  const n = windowMonths || ABC_WINDOW_MONTHS;
+  const now = new Date();
+  const curIdx = now.getFullYear() * 12 + now.getMonth();
+  const fromIdx = curIdx - n;
+  let sum = 0;
+  for (const x of mm) {
+    if (!x || !x.month) continue;
+    const parts = String(x.month).split("/");
+    const m = Number(parts[0]), y = Number(parts[1]);
+    if (!m || !y) continue;
+    const idx = y * 12 + (m - 1);
+    if (idx >= fromIdx && idx < curIdx) sum += x.sales || 0;
+  }
+  return sum;
+}
+
+function abcClassify(products, windowMonths) {
   const sorted = (products || [])
     .filter(p => p && p.sku && p.cat !== "ไม่มีรหัสสินค้า")
-    .map(p => ({ sku: p.sku, rev: p.soldRev || 0 }))
+    .map(p => { const w = abcWindowRev(p, windowMonths); return { sku: p.sku, rev: w == null ? (p.soldRev || 0) : w }; })
     .sort((a, b) => b.rev - a.rev);
   const total = sorted.reduce((s, p) => s + p.rev, 0);
   const map = {};
@@ -883,7 +947,9 @@ module.exports = {
   parseQty_, parseNum_, parseLocation_,
   transferBatchCore,
   cleanupOrdersStateCore, stableOrderId,
-  buildYoYSeries, abcClassify, sanitizeThresholds, THRESHOLDS_DEFAULT,
+  buildYoYSeries, abcClassify, abcWindowRev, ABC_WINDOW_MONTHS,
+  completeMonths, currentMonthInfo, isCountableProduct, marginRowCore,
+  sanitizeThresholds, THRESHOLDS_DEFAULT,
   parseCheckDateMs, suggestNextSku,
   parseSkuParts, nextModelForPrefix,
   attBuildTs, attSequenceWarning, attSummarize, attMonthRange, attAllowedNext,

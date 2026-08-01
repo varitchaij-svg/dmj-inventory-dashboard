@@ -64,6 +64,32 @@ function completeMonths(monthly) {
   return monthly.filter(m => m && m.month !== currentMonth);
 }
 
+// "MM/YYYY" ของเดือนปัจจุบัน + ผ่านไปกี่วันจากกี่วัน — ใช้ติดป้าย "ยังไม่จบเดือน"
+// (คู่กับ completeMonths: ตัวนั้นตัดออกจากการคำนวณ ตัวนี้บอกผู้ใช้ว่าทำไมเลขเดือนนี้ยังน้อย)
+function currentMonthInfo(now) {
+  const d = now || new Date();
+  const y = d.getFullYear(), m = d.getMonth() + 1;
+  return {
+    key: `${String(m).padStart(2, '0')}/${y}`,
+    dayOfMonth: d.getDate(),
+    daysInMonth: new Date(y, m, 0).getDate(),
+  };
+}
+
+// ────────────────────────────────────────────────────────────
+// Phase 3 (3.1): กติกาเดียวว่า "สินค้าตัวไหนนับเข้าสถิติ"
+// ────────────────────────────────────────────────────────────
+// เดิมแต่ละที่ตัดคนละแบบ — KPI "ทุกหมวด" ใช้ totals.* จาก GAS (รวม MTO + "ไม่มีรหัสสินค้า")
+// แต่พอเลือกหมวดกลับตัด MTO ออก → บวกทุกหมวดแล้วไม่เท่ากับ "ทุกหมวด" (เจ้าของถามซ้ำหลายรอบ)
+// กติกากลาง (ตรงกับที่ StockView/TrendsView/topSellers ใช้อยู่แล้ว):
+//   ตัด MTO — งานจัดพิเศษ เงินอยู่ในใบงาน ไม่ใช่สินค้าที่สั่ง/นับ/เติมสต๊อกได้
+//   ตัด "ไม่มีรหัสสินค้า" + หมวดว่าง — ไม่มี SKU ให้อ้างอิง วัดไม่ได้ ทำให้สัดส่วนเพี้ยน
+// ⚠️ ใช้กับสถิติ "ระดับสินค้า" เท่านั้น · ยอดขายรวมที่มาจากชีตยอดขาย (monthlyByCat)
+//    ยังรวม MTO ไว้ตามเดิม เพราะเป็นเงินที่เข้าร้านจริง
+function isCountableProduct(p) {
+  return !!p && !p.isMTO && !!p.cat && p.cat !== "ไม่มีรหัสสินค้า";
+}
+
 async function ensureXlsx() {
   if (window.XLSX) return;
   await new Promise(function (res, rej) {
@@ -1033,7 +1059,9 @@ const OV_MONTH_ABBR = ["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.�
 
 function OverviewView({ data, range, setRange, role }) {
   const rechartsReady = useRechartsReady(); // gate กราฟจนกว่า Recharts (defer) จะพร้อม
-  const { products, monthLabels, monthlyByCat, totals, mtoGroups,
+  // หมายเหตุ: ไม่ดึง data.totals มาใช้แล้ว — KPI สต๊อกคำนวณเองจาก products ที่ผ่าน
+  // isCountableProduct เพื่อให้ "ทุกหมวด" กับ "เลือกหมวด" ใช้กติกาเดียวกัน (Phase 3 ข้อ 3.1)
+  const { products, monthLabels, monthlyByCat, mtoGroups,
           dayLabels, dailyByCat } = data;
 
   const months = monthLabels || [];
@@ -1177,9 +1205,12 @@ function OverviewView({ data, range, setRange, role }) {
     return ((last - prev) / prev * 100).toFixed(1);
   }, [range, dailySeries]);
 
+  // หมวดที่กรองได้ = หมวดที่นับเข้าสถิติเท่านั้น (กติกาเดียวกับ isCountableProduct)
+  // เดิมรวม "ไม่มีรหัสสินค้า" + หมวด Made to Order ไว้ในปุ่มด้วย → กดแล้ว KPI เป็น 0 ทั้งแถบ
+  // เพราะ stockAgg/sellable ตัดสองอันนี้ทิ้งอยู่แล้ว (ปุ่มที่กดแล้วหน้าว่างคือปุ่มที่ไม่ควรมี)
   const allCats = uM(() => {
     const s = new Set();
-    products.forEach(p => p.cat && s.add(p.cat));
+    products.forEach(p => { if (isCountableProduct(p)) s.add(p.cat); });
     return [...s].sort();
   }, [products]);
 
@@ -1321,25 +1352,32 @@ function OverviewView({ data, range, setRange, role }) {
     };
   }, [range, activeMonth, months, selYear, selQuarter, pickerYear, quarterMonths]);
 
-  // สินค้าที่ไม่ใช่ MTO — คำนวณครั้งเดียว ใช้ร่วมหลาย memo ด้านล่าง (เดิม filter ซ้ำ 6 รอบ/render)
-  const sellable = uM(() => products.filter(p => !p.isMTO && (!selCat || p.cat === selCat)), [products, selCat]);
-  // KPI สต๊อก/หมุนเวียน — ถ้ากรองหมวด คำนวณเฉพาะหมวดนั้น มิฉะนั้นใช้ totals ทั้งร้าน
+  // สินค้าที่นับเข้าสถิติ — คำนวณครั้งเดียว ใช้ร่วมหลาย memo ด้านล่าง (เดิม filter ซ้ำ 6 รอบ/render)
+  const sellable = uM(() => products.filter(p => isCountableProduct(p) && (!selCat || p.cat === selCat)), [products, selCat]);
+  // KPI สต๊อก/หมุนเวียน — Phase 3 (3.1): ใช้ "ลูปเดียว + กติกาเดียว" ทั้งตอนเลือกหมวดและทุกหมวด
+  //   เดิมทุกหมวดอ่าน totals.* จาก GAS (รวม MTO + ไม่มีรหัสสินค้า) แต่ตอนเลือกหมวดตัด MTO ออก
+  //   → บวกทุกหมวดแล้วไม่เท่ากับ "ทุกหมวด" · ผลพลอยได้: totals.nSold ที่ GAS ไม่เคยส่งมา
+  //   (โชว์ "0 SKU มียอดขาย" มาตลอด) หายไปเอง เพราะนับจากสินค้าจริงตรงนี้แล้ว
+  //   nSold นับตาม "ช่วงที่เลือก" (periodInfo) ให้ตรงกับตัวเลขจำนวนชิ้นที่มันอยู่ใต้
+  //   exVal/exN = ส่วนที่ถูกตัดออก โชว์เป็นหมายเหตุ ไม่ให้มูลค่าหายไปเงียบ ๆ
   const stockAgg = uM(() => {
-    if (!selCat) return { val: totals.totalStockValue, valWH: totals.totalStockValueWH || 0,
-      valStore: totals.totalStockValueStore || 0, n: totals.nWithStock,
-      soldRev: totals.totalSoldRev, nSold: totals.nSold };
-    let val = 0, valWH = 0, valStore = 0, n = 0, soldRev = 0, nSold = 0;
+    let val = 0, valWH = 0, valStore = 0, n = 0, soldRev = 0, nSold = 0, exVal = 0, exN = 0;
     products.forEach(p => {
-      if (p.isMTO || p.cat !== selCat) return;
+      if (!isCountableProduct(p)) {
+        if ((p.qty || 0) > 0) { exVal += p.stockValue || 0; exN++; }
+        return;
+      }
+      if (selCat && p.cat !== selCat) return;
       val += p.stockValue || 0;
       valWH += p.stockValueWH || 0;
       valStore += p.stockValueStore || 0;
       if ((p.qty || 0) > 0) n++;
       soldRev += p.soldRev || 0;
-      if ((p.soldQty || 0) > 0) nSold++;
+      const v = periodInfo.perProduct(p);
+      if ((v.qty || 0) > 0 || (v.rev || 0) > 0) nSold++;
     });
-    return { val, valWH, valStore, n, soldRev, nSold };
-  }, [selCat, products, totals]);
+    return { val, valWH, valStore, n, soldRev, nSold, exVal, exN };
+  }, [selCat, products, periodInfo]);
 
   // map SKU → product (ใช้แนบรูป + เปิด ProductModal ในการ์ดของเข้าใหม่)
   const prodBySku = uM(() => new Map(products.map(p => [p.sku, p])), [products]);
@@ -1385,8 +1423,7 @@ function OverviewView({ data, range, setRange, role }) {
   };
 
   const topSellers = uM(() =>
-    sellable
-      .filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า")
+    sellable   // sellable ตัด MTO/ไม่มีรหัสสินค้า/หมวดว่างให้แล้ว (isCountableProduct)
       .map(p => { const v = periodInfo.perProduct(p); return { ...p, _pQty: v.qty, _pRev: v.rev }; })
       .filter(p => p._pRev > 0 || p._pQty > 0)
       .sort((a,b) => b._pRev - a._pRev)
@@ -1480,7 +1517,7 @@ function OverviewView({ data, range, setRange, role }) {
   // Top sellers per category — period-aware (ตามช่วงเวลาที่เลือก)
   const topByCategory = uM(() => {
     const byCat = {};
-    sellable.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า")
+    sellable   // กติกาเดียวกับ topSellers/stockAgg แล้ว (isCountableProduct)
       .forEach(p => {
         const v = periodInfo.perProduct(p);
         if (v.rev <= 0 && v.qty <= 0) return;
@@ -1699,9 +1736,17 @@ function OverviewView({ data, range, setRange, role }) {
     : range === 'quarter' ? quarterDelta
     : null;
   const deltaDir  = deltaVal && parseFloat(deltaVal) < 0 ? 'down' : 'up';
+  // ป้าย "ยังไม่จบเดือน" — เดือนปัจจุบันมียอดแค่บางส่วนของเดือน เทียบกับเดือนเต็มไม่ได้
+  // (ต้นเหตุเดียวกับที่ completeMonths ตัดเดือนนี้ออกจากการเฉลี่ย/พยากรณ์)
+  const curMonth = uM(() => currentMonthInfo(), []);
+  const activeIsCurrentMonth = range === 'month' && activeMonth === curMonth.key;
   const subLabel  = range === 'day'
     ? (hasDailyData ? `${days.length} วัน (${dailySeries[0]?.label}–${dailySeries[dailySeries.length-1]?.label})` : "ยังไม่มีข้อมูลรายวัน")
-    : range === 'month' ? (activeMonth ? monthLabel(activeMonth) : "เดือนล่าสุด")
+    : range === 'month' ? (activeMonth
+        ? (activeIsCurrentMonth
+            ? `${monthLabel(activeMonth)} · ยังไม่จบเดือน (${curMonth.dayOfMonth}/${curMonth.daysInMonth} วัน)`
+            : monthLabel(activeMonth))
+        : "เดือนล่าสุด")
     : range === 'quarter' ? (selQuarter ? `${OV_QUARTERS.find(q=>q.n===selQuarter).label} ปี ${pickerYear}` : "เลือกไตรมาส")
     : selYear ? `ปี ${selYear} · ${yearMonths.length} เดือน` : `${months.length} เดือนรวม`;
 
@@ -1900,6 +1945,12 @@ function OverviewView({ data, range, setRange, role }) {
                  <span style={{display:'flex',flexDirection:'column',gap:1,lineHeight:1.35}}>
                    <span>🏭 คลัง {fmtB(stockAgg.valWH)}</span>
                    <span>🏬 หน้าร้าน {fmtB(stockAgg.valStore)}</span>
+                   {/* โชว์เฉพาะตอน "ทุกหมวด" — ของที่ถูกตัดไม่ได้อยู่ในหมวดที่กรองอยู่แล้ว */}
+                   {!selCat && stockAgg.exN > 0 && (
+                     <span style={{opacity:.75}}>
+                       (ไม่รวมงานจัดพิเศษ/ไม่มีรหัส {fmtN(stockAgg.exN)} รายการ {fmtB(stockAgg.exVal)})
+                     </span>
+                   )}
                  </span>
                }
                icon={I.package} />
@@ -1920,6 +1971,12 @@ function OverviewView({ data, range, setRange, role }) {
             <span style={{fontSize:15,fontWeight:800,color:"#1f6f8b"}}>📥 ของเข้าใหม่ 30 วัน</span>
             <span style={{fontSize:11,color:"var(--muted)",fontWeight:500}}>
               จากรายการซื้อ (PO) ล่าสุด{selCat ? ` · หมวด ${selCat}` : ""}
+            </span>
+            {/* บล็อกนี้เป็น "30 วันล่าสุดเสมอ" ไม่ขยับตามเดือน/ไตรมาสที่เลือกด้านบน —
+                เดิมไม่มีป้ายบอก คนกด มิ.ย./ก.ค. แล้วเห็นเลขเท่ากันเป๊ะ นึกว่าระบบพัง */}
+            <span style={{fontSize:11,fontWeight:700,color:"#1f6f8b",background:"#e3f1f9",
+                          border:"1px solid #cfe3f0",borderRadius:20,padding:"2px 9px"}}>
+              🕒 30 วันล่าสุดเสมอ · ไม่ขึ้นกับช่วงเวลาที่เลือก
             </span>
           </div>
           <div style={{borderRadius:14,border:"1.5px solid #cfe3f0",overflow:"hidden",background:"linear-gradient(135deg,#f2f9fd,#eef6fb)"}}>
