@@ -140,6 +140,26 @@ describe('การเชื่อมต่อ (meta)', () => {
     expect(VM).toMatch(/function OwnerStar[\s\S]*?if \(!onToggle\) return null;/);
   });
 
+  it('หน้า "สินค้า & สั่ง" มีทางเข้า "ของฉัน" ครบ 2 จุด (การ์ดบนสุด + ตัวเลือกใน dropdown หมวด)', () => {
+    // 2 จุดนี้คือทางที่พนักงานใช้จริง — หายไปจุดใดจุดหนึ่ง = คนที่จำอีกทางไม่ได้หาไม่เจอเลย
+    expect(VM, 'ไม่มีการ์ด "สินค้าที่ฉันดูแล" บนสุดของ CategoryView')
+      .toMatch(/สินค้าที่ฉันดูแล — \{fmtN\(mySkus\.size\)\}/);
+    expect(VM, 'ไม่มีตัวเลือก "⭐ ของฉัน" ใน dropdown หมวด')
+      .toContain('<option value="__MINE__">⭐ ของฉัน ({mySkus.size})</option>');
+    // ทั้งคู่ต้องซ่อนเมื่อระบบปิด/ยังไม่เคยกดดาว — ไม่งั้นกดแล้วได้หน้าว่างเปล่า
+    expect(VM).toContain('const showMineUI = !prodOwner.off && mySkus.size > 0;');
+  });
+
+  it('"ของฉัน" เป็น filter เสริม ไม่ใช่หมวด — ไม่ไปทับ logic ของ active', () => {
+    // ถ้าเผลอเก็บเป็นค่าใน active ("__MINE__") จะไปโผล่เป็นชื่อหมวดในป้าย/สถิติ/ตัวกรอง
+    // อีกหลายสิบจุดที่อ่าน active อยู่ → ต้องแปลงเป็น mineOnly + active="" เสมอ
+    expect(VM).toContain('setMineOnly(v === "__MINE__");');
+    expect(VM).toContain('setActive(v === "__MINE__" ? "" : v);');
+    // กรองใน applyCommon จุดเดียว → มีผลทุกโหมด (ค้นหาทั้งระบบ / เลือกร้าน / เลือกหมวด)
+    const applyCommon = VM.match(/const applyCommon = \(arr\) => \{[\s\S]*?\n    \};/)[0];
+    expect(applyCommon).toContain('if (mineOnly) f = f.filter(p => mySkus.has(p.sku));');
+  });
+
   it('ดาวเป็นป้ายบอก ไม่ใช่สิทธิ์ — ปุ่มเช็ค/สั่ง/โอนไม่ถูก disable ตามเจ้าของ', () => {
     // FSCard รับ owner/isMine ไว้แค่แสดงผล — ห้ามเอาไปคุม disabled ของ input/ปุ่มใด ๆ
     const card = VM.match(/const FSCard = React\.memo[\s\S]*?\n\}\);/)[0];

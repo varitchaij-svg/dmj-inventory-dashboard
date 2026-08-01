@@ -343,7 +343,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 812 tests, 24 test files, ทั้งหมด pass
+**มี Vitest test suite แล้ว** — 814 tests, 24 test files, ทั้งหมด pass
 
 ```bash
 npm test              # run tests
@@ -688,9 +688,26 @@ SHEET_PRODUCT_OWNER = "ผู้ดูแลสินค้า"   // A=sku B=sta
 
 **ฝั่ง frontend**: `useProductOwners()` (views-analytics.jsx) = fetch + optimistic toggle +
 cache ใน `localStorage.dmj_prod_owners` (กันดาวกะพริบตอนเปิดแอป — หลักเดียวกับ `NotiBell`)
-· `OwnerStar` (views-main.jsx) วางทับมุมขวาบนรูปใน `FSCard` · ชิป **"⭐ ของฉัน (N)"** ใน `Seg`
-เดิม (ไม่เพิ่ม UI ใหม่ให้เรียนรู้) · คิว "ควรเช็คก่อน" เรียง**ของฉันขึ้นก่อน แต่ยังโชว์ของคนอื่น
-ต่อท้าย ไม่ซ่อน** (สินค้าที่ไม่มีเจ้าภาพต้องไม่หายไปจากคิว)
+· `OwnerStar` (views-main.jsx) รับ prop `style` เพื่อวางได้ 2 แบบ: **ลอยทับมุมขวาบนรูป** (`FSCard`)
+กับ **inline ชิดขวาแถว SKU** (`ProductCard`)
+
+**ดาวโผล่ 2 แท็บ** (ทั้งคู่ toggle ตัวเดียวกัน กดที่ไหนก็ sync):
+- **"เช็คหน้าร้าน"** (`FrontStoreView`) — ดาวมุมรูป + ชิป **"⭐ ของฉัน (N)"** ใน `Seg` เดิม ·
+  คิว "ควรเช็คก่อน" เรียง**ของฉันขึ้นก่อน แต่ยังโชว์ของคนอื่นต่อท้าย ไม่ซ่อน**
+  (สินค้าที่ไม่มีเจ้าภาพต้องไม่หายไปจากคิว)
+- **"สินค้า & สั่ง"** (`CategoryView` — หน้าที่สั่งของบ่อยสุด) — ดาวในแถว SKU + ทางเข้า "ของฉัน"
+  **2 จุด**: การ์ดเหลืองบนสุดคู่กับ "งานของฉัน" (`MyJobsCard`) + ตัวเลือกแรกใน dropdown หมวด
+  · `useProductOwners()` เรียก**ครั้งเดียวที่ CategoryView** แล้วส่ง `prodOwner` เป็น prop ลง
+  `ProductCard` — **ห้ามเรียกใน `ProductCard`** จะยิง fetch ซ้ำเป็นร้อยครั้งต่อหน้า
+  · ⚠️ **"ของฉัน" เก็บเป็น state `mineOnly` แยก ไม่ใช่ค่าใน `active`** — `active` คือ "หมวด" ที่มี
+  จุดอ่านค่าอีกหลายสิบแห่ง (ป้ายชื่อ/สถิติ/ตัวกรองสี-ร้าน-ของใหม่) ยัด `"__MINE__"` เข้าไปจะเพี้ยน
+  ทุกจุด · dropdown แค่ map `"__MINE__"` → `setMineOnly(true) + setActive("")` ให้ผู้ใช้รู้สึกว่า
+  เป็นหมวดหนึ่ง · ตัวกรองจริงอยู่ใน `applyCommon` **จุดเดียว** จึงมีผลทุกโหมด (ค้นหาทั้งระบบ/
+  เลือกร้าน/เลือกหมวด)
+  · `showMineUI = !prodOwner.off && mySkus.size > 0` — ยังไม่เคยกดดาว = ซ่อนทั้ง 2 จุด (กดแล้ว
+  ได้หน้าว่างเปล่าจะงงกว่าไม่มี)
+  · ⚠️ `listTopRef` ใน CategoryView **มีตัวเดียว** (ใช้ร่วมกับ scroll ของ pagination) —
+  ห้ามประกาศตัวใหม่/ผูก `ref` ซ้ำที่ element อื่น
 
 **ต่อยอดได้ (ยังไม่ทำ)**: หน้าสรุปฝั่งเจ้าของ (ใครดูแลกี่ SKU / "ยังไม่มีคนดูแล N ตัว") ·
 แจ้งเตือนเจาะตัวผ่านกระดิ่ง `pushInappNoti_({audience:"staff:STxxxx"})` เมื่อของที่ตัวเองดูแลใกล้หมด

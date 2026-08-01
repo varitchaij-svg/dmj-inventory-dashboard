@@ -2965,6 +2965,12 @@ function CategoryView({ data, role, onNav }) {
   const [active, setActive] = uS(""); // "" = ทั้งหมด (default)
   const [globalSearch, setGlobalSearch] = uS("");
   const [reorderFilter, setReorderFilter] = uS(false); // 🛒 ควรสั่ง (หน้าร้าน ≤12 && คลังมีของ)
+  // ⭐ "ของฉัน" — เป็น filter เสริมเหมือน reorderFilter ไม่ใช่ "หมวด" เพื่อไม่ต้องไปแตะ
+  // logic ป้ายชื่อหมวด/สถิติ/ตัวกรองสี-ร้าน-ของใหม่ ที่อ่านค่า active อยู่หลายสิบจุด
+  // (dropdown แค่ map ค่า "__MINE__" มาเป็น setMineOnly(true) + active="" ให้ผู้ใช้รู้สึกว่าเป็นหมวดหนึ่ง)
+  const [mineOnly, setMineOnly] = uS(false);
+  // (เลื่อนจอหลังกดการ์ด "สินค้าที่ฉันดูแล" ใช้ listTopRef ตัวเดิมที่ประกาศด้านล่าง —
+  //  มันชี้ที่หัวรายการสินค้าอยู่แล้ว ห้ามประกาศตัวใหม่/ผูก ref ซ้ำ เดี๋ยว scroll ของ pagination พัง)
   const [sortBy, setSortBy] = uS("sku");
   const [page, setPage] = uS(1); // pagination (20/หน้า)
   const listTopRef = React.useRef(null);
@@ -2977,6 +2983,15 @@ function CategoryView({ data, role, onNav }) {
   const [checkToast, showCheckToast, hideCheckToast] = useToast();
   // ⭐ ผู้ดูแลสินค้า — หน้านี้เป็นที่สั่งของบ่อยสุด จึงโชว์ป้ายด้วย (ป้ายบอกเฉย ๆ ไม่จำกัดสิทธิ์)
   const prodOwner = useProductOwners(showCheckToast);
+  const mySkus = uM(() => {
+    const s = new Set();
+    if (!prodOwner.me) return s;
+    Object.keys(prodOwner.owners || {}).forEach(sku => {
+      if (String(prodOwner.owners[sku].staffId) === String(prodOwner.me)) s.add(sku);
+    });
+    return s;
+  }, [prodOwner.owners, prodOwner.me]);
+  const showMineUI = !prodOwner.off && mySkus.size > 0;   // ยังไม่กดดาวเลย = ไม่ต้องมีให้งง
   const [sendingCheck, setSendingCheck] = uS(false);
   const [checkSendOpen, setCheckSendOpen] = uS(false);       // floating button → modal
   const [checkSuppliers, setCheckSuppliers] = uS(new Set()); // ชื่อ supplier ที่ owner เลือก
@@ -3106,6 +3121,8 @@ function CategoryView({ data, role, onNav }) {
         return tokens.every(t => hay.includes(t));
       });
       if (reorderFilter) f = f.filter(needsReorder);
+      // ⭐ ของฉัน — อยู่ใน applyCommon จึงมีผลทุกโหมด (ค้นหาทั้งระบบ/เลือกร้าน/เลือกหมวด)
+      if (mineOnly) f = f.filter(p => mySkus.has(p.sku));
       return f;
     };
     const purchaseSort = (a, b) => (a.qtyStore||0) - (b.qtyStore||0);
@@ -3137,10 +3154,10 @@ function CategoryView({ data, role, onNav }) {
     if (deadFilter)     f = f.filter(p => p.deadMonths === null || p.deadMonths >= deadFilter);
     if (newStockFilter) f = f.filter(p => isNew45(p.lastStockInDate));
     return [...f].sort(finalSort);
-  }, [products, active, globalSearch, globalVendor, colorFilter, supplierFilter, deadFilter, newStockFilter, reorderFilter, needsReorder, sortFn, purchasePlanMode]);
+  }, [products, active, globalSearch, globalVendor, colorFilter, supplierFilter, deadFilter, newStockFilter, reorderFilter, needsReorder, sortFn, purchasePlanMode, mineOnly, mySkus]);
 
   // reset page เมื่อ filter/category/search เปลี่ยน
-  uE(() => { setPage(1); }, [active, globalSearch, globalVendor, colorFilter, supplierFilter, deadFilter, newStockFilter, reorderFilter, sortBy, purchasePlanMode]);
+  uE(() => { setPage(1); }, [active, globalSearch, globalVendor, colorFilter, supplierFilter, deadFilter, newStockFilter, reorderFilter, sortBy, purchasePlanMode, mineOnly]);
 
   // pagination — 20 รายการต่อหน้า
   const PAGE_SIZE = 20;
@@ -3335,6 +3352,35 @@ function CategoryView({ data, role, onNav }) {
           ไม่ได้ล็อกอิน/ไม่มีงานค้าง → MyJobsCard คืน null เอง ไม่กินที่ */}
       <MyJobsCard data={data} onNav={onNav} />
 
+      {/* ⭐ สินค้าที่ฉันดูแล — การ์ดทางลัด วางคู่กับ "งานของฉัน" ให้เป็นชุดเดียวกัน
+          (คนที่ไม่ถนัดเทคโนโลยีจำ "การ์ดสีเหลืองบนสุด" ได้ง่ายกว่าเมนู)
+          ยังไม่กดดาวไว้เลย → ไม่โชว์ ไม่กินที่ · หลักเดียวกับ MyJobsCard */}
+      {showMineUI && (
+        <button onClick={() => {
+                  setMineOnly(v => !v);
+                  if (!mineOnly && listTopRef.current) {
+                    setTimeout(() => listTopRef.current &&
+                      listTopRef.current.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
+                  }
+                }}
+          style={{ width:"100%", textAlign:"left", cursor:"pointer", fontFamily:"inherit",
+                   background: mineOnly ? "#fef3c7" : "#fff8e1",
+                   border: `1.5px solid ${mineOnly ? "#b45309" : "#f59e0b"}`,
+                   borderRadius:14, padding:"14px 16px", marginBottom:16,
+                   display:"flex", alignItems:"center", gap:10 }}>
+          <span style={{fontSize:20}}>⭐</span>
+          <div style={{flex:1, minWidth:0}}>
+            <div style={{fontSize:15, fontWeight:800, color:"#a07417"}}>
+              สินค้าที่ฉันดูแล — {fmtN(mySkus.size)} รายการ
+            </div>
+            <div style={{fontSize:12, color:"var(--muted)", marginTop:2}}>
+              {mineOnly ? "กำลังดูเฉพาะของฉัน · แตะเพื่อดูทั้งหมด" : "แตะเพื่อดูเฉพาะของฉัน"}
+            </div>
+          </div>
+          <span style={{fontSize:18, color:"var(--g-600)", flexShrink:0}}>{mineOnly ? "✕" : "›"}</span>
+        </button>
+      )}
+
       {/* ── Global Search Bar ── */}
       <div style={{marginBottom:14}}>
         <div style={{display:"flex",gap:8,alignItems:"center"}}>
@@ -3373,7 +3419,7 @@ function CategoryView({ data, role, onNav }) {
             display:"flex", alignItems:"center", gap:6,
           }}>
             <span style={{width:8,height:8,borderRadius:"50%",background:"var(--g-500)",display:"inline-block"}}/>
-            พบ {filtered.length} รายการ {active ? `ในหมวด: ${active}` : "จากทุกหมวดหมู่"}
+            พบ {filtered.length} รายการ {active ? `ในหมวด: ${active}` : (mineOnly ? "จากสินค้าที่ฉันดูแล" : "จากทุกหมวดหมู่")}
             {filtered.length === 0 && <span style={{color:"var(--muted)",fontWeight:400}}>— ลองค้นหาด้วยคำอื่น</span>}
           </div>
         )}
@@ -3421,8 +3467,14 @@ function CategoryView({ data, role, onNav }) {
       {!isGlobalVendor && (
         <div style={{marginBottom:14}}>
           <select
-            value={active}
-            onChange={e => { setActive(e.target.value); setColorFilter(null); setSupplierFilter(null); setDeadFilter(null); setNewStockFilter(false); setPage(1); }}
+            value={mineOnly ? "__MINE__" : active}
+            onChange={e => {
+              const v = e.target.value;
+              // "__MINE__" ไม่ใช่หมวดจริง — แปลงเป็น filter เสริม + active="" (ดูคอมเมนต์ที่ state)
+              setMineOnly(v === "__MINE__");
+              setActive(v === "__MINE__" ? "" : v);
+              setColorFilter(null); setSupplierFilter(null); setDeadFilter(null); setNewStockFilter(false); setPage(1);
+            }}
             style={{
               width:"100%", padding:"10px 14px", borderRadius:12,
               border:"1.5px solid var(--bdr)", background:"#fafcf7",
@@ -3430,6 +3482,7 @@ function CategoryView({ data, role, onNav }) {
               cursor:"pointer", boxSizing:"border-box",
               color:"var(--text)", outline:"none",
             }}>
+            {showMineUI && <option value="__MINE__">⭐ ของฉัน ({mySkus.size})</option>}
             <option value="">📋 ทั้งหมด ({products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า").length})</option>
             {allCats.map(c => {
               const n = products.filter(p => p.cat === c).length;
@@ -3653,9 +3706,9 @@ function CategoryView({ data, role, onNav }) {
             <div className="sec-head" style={{margin:"4px 0 14px"}}>
               <div>
                 <div className="sec-title" style={{display:"flex",alignItems:"center",gap:8}}>
-                  <span style={{fontSize:20,lineHeight:1}}>{active === "" ? "📋" : (CAT_EMOJI[active] || "📁")}</span>
+                  <span style={{fontSize:20,lineHeight:1}}>{mineOnly ? "⭐" : active === "" ? "📋" : (CAT_EMOJI[active] || "📁")}</span>
                   <span style={{width:10,height:10,borderRadius:"50%",background:color,flexShrink:0}}/>
-                  {active === "" ? "ทั้งหมด" : (isMtoCat ? "งานจัดพิเศษ (MTO)" : active)}
+                  {mineOnly ? "สินค้าที่ฉันดูแล" : active === "" ? "ทั้งหมด" : (isMtoCat ? "งานจัดพิเศษ (MTO)" : active)}
                   <span style={{fontSize:12, fontWeight:500, color:"var(--muted)"}}>
                     · {filtered.length} รายการ
                   </span>
@@ -3816,7 +3869,7 @@ function CategoryView({ data, role, onNav }) {
               </div>
             );
           })() : filtered.length === 0 ? (
-            <Empty title="ไม่พบสินค้า" sub={isGlobalSearch ? "ลองค้นหาด้วยคำอื่น" : reorderFilter ? "ไม่มีสินค้าที่ควรสั่ง 🎉" : "หมวดนี้ยังไม่มีสินค้า"}/>
+            <Empty title="ไม่พบสินค้า" sub={isGlobalSearch ? "ลองค้นหาด้วยคำอื่น" : reorderFilter ? "ไม่มีสินค้าที่ควรสั่ง 🎉" : mineOnly ? "ยังไม่มีสินค้าที่คุณดูแลตรงกับตัวกรองนี้ — กดดาว ☆ บนการ์ดสินค้าเพื่อรับดูแล" : "หมวดนี้ยังไม่มีสินค้า"}/>
           ) : viewMode === 'list' ? (
             /* ── List view — compact horizontal rows ── */
             <div style={{display:'flex',flexDirection:'column',gap:6}}>
