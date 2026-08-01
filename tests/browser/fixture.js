@@ -113,7 +113,10 @@
     monthlyByCat,
     dayLabels: days,
     dailyByCat,
-    totals: { totalStockValue: 250000, totalSoldRev: 33620, totalSoldQty: 159, totalProfit: 6724 },
+    // มูลค่าสต๊อกเป็นราคาขายส่งแล้ว (GAS คูณ wholesaleRatio ให้ก่อนส่ง) — ส่ง ratio มาด้วย
+    // เพื่อให้หน้าเว็บติดป้าย "ปลีก −20%" ได้ตรงกับตัวเลขที่โชว์
+    totals: { totalStockValue: 250000, totalSoldRev: 33620, totalSoldQty: 159, totalProfit: 6724,
+              nSold: 3, wholesaleRatio: 0.8 },
     thresholds: { default: 36, overrides: { 'แจกันแก้ว': 3, 'เรซิ่นและอื่นๆ': 3 } },
     mtoGroups: [],
     updatedAt: { product: new Date().toISOString(), dailysales: new Date().toISOString(),

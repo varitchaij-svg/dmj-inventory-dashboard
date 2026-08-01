@@ -285,6 +285,59 @@ saler/storedevice) · **role ที่ไม่รู้จัก/ไม่ส�
   + `tests/monthly-compact.test.js` · `tests/browser/harness.html` **mirror ตารางการตัดไว้** และมี
   meta-test บังคับให้ตรงกับ `.gs` (ไม่ตรง = เทสต์ browser รันด้วย payload ผิดชุดแล้วเคลมว่าผ่าน)
 
+## กติกาตัวเลขบน Dashboard (ตรวจทั้งระบบ ส.ค. 2026 — `docs/PLAN-DASHBOARD-AUDIT.md`)
+
+**1. เดือนปัจจุบันไม่ใช่เดือนเต็ม — ห้ามเอาไปหาค่าเฉลี่ย**
+`aggregateAndWriteSales_` สร้างคอลัมน์เดือนใหม่ทันทีที่มีบิลใบแรกของเดือน → `monthLabels`
+มีเดือนที่ยังไม่จบเสมอ · เดิมทุกที่ที่คิด "เฉลี่ย N เดือนล่าสุด" นับเดือนนั้นเป็นเดือนเต็ม
+→ ค่าเฉลี่ยต่ำกว่าจริงได้ถึง ~33% → **"ควรสั่ง" ต่ำตาม = เสี่ยงสั่งของขาด**
+- ใช้ **`completeMonths(arr)`** (views-main.jsx) กรองทิ้งก่อนเสมอ · รับได้ทั้ง array ของ
+  `{month:"MM/YYYY"}` (`p.monthly`) และ array ของ string `"MM/YYYY"` (`monthLabels`)
+- ⚠️ **เคยพังเพราะรองรับแค่แบบเดียว** — รอบแรกเช็คแค่ `m.month` พอส่ง array ของ string เข้าไป
+  `m.month` เป็น `undefined` ตลอด → ไม่กรองอะไรเลย **และไม่มี error ให้เห็น**
+- จุดที่ใช้แล้ว: StockView `suggestedQty` · OverviewView `velocity`/`momMovers` ·
+  `deadStock` (ใช้ offset `[1,2]` = 2 เดือนก่อนหน้า ไม่ใช่ `[0,1]`)
+
+**2. มูลค่าสต๊อกคิดที่ราคาขายส่ง ไม่ใช่ราคาปลีก**
+`p.price` ที่ ZORT คืนมา = **ราคาขายปลีก** · มูลค่าสต๊อกที่เจ้าของใช้ตัดสินใจคิดที่ขายส่ง
+- `p.stockValue`/`stockValueWH`/`stockValueStore` ทั้ง 3 ตัวคูณ `wholesaleRatio_()` แล้ว
+  (ต้องคูณครบทั้ง 3 ไม่งั้นคลัง+หน้าร้านบวกกันไม่เท่ายอดรวม)
+- อัตราอยู่ที่ **Script Property `WHOLESALE_RATIO`** (default 0.8 = ปลีก −20%) เจ้าของปรับเองได้
+  · ค่าไม่ใช่ตัวเลข/นอกช่วง `0 < r ≤ 1` → กลับไปใช้ 0.8
+- **ห้ามแก้ `p.price` ที่ต้นทาง** — ราคาขายใน POS/ใบเสนอราคาใช้ตัวเดียวกัน จะเพี้ยนทั้งระบบ
+- `totals.wholesaleRatio` ส่งมาให้ frontend ติดป้าย "% ที่ลด" ให้ตรงกับตัวเลขที่โชว์
+
+**3. ZORT ไม่มีราคาต้นทุนให้ (ยืนยันด้วยข้อมูลจริง ส.ค. 2026)**
+PO ทุกใบคืน `pricepernumber`/`totalprice`/`*_pretax`/`*_vat` = **0 ทั้งหมด** (91 item มีค่าแค่ 3)
+เพราะคนสร้าง PO ใน ZORT ไม่ได้กรอกราคา — **ไม่ใช่บั๊กในโค้ด ไม่มี fallback field ให้ใช้**
+- ผลคือ **คำนวณ COGS/gross margin/inventory turnover จริงไม่ได้** → KPI "ยอดขาย/ต้นทุนสต๊อก"
+  ถูกถอดออก **ห้ามใส่กลับจนกว่าจะมีราคาทุนจริง**
+- การ์ด "ของเข้าใหม่ 30 วัน" โชว์ยอดรวม**เฉพาะเมื่อทุกรายการมีราคา** (`costComplete`)
+  ไม่ครบ → `—` + บอกให้ไปกรอกราคาใน ZORT (แก้ที่ต้นทางแล้วยอดขึ้นเอง ไม่ต้องแก้โค้ด)
+- `COST_RATIO = 0.8` ที่มีอยู่เดิมเป็น **ค่าสมมติ** ใช้กับ `p.cost`/`p.profit` เท่านั้น
+  ไม่ใช่ต้นทุนจริง — อย่าเอาไปอ้างเป็นตัวเลขทางการเงิน
+- เครื่องมือตรวจซ้ำ: รัน **`debugPurchasePrices()`** ใน GAS editor (อ่านอย่างเดียว ไม่แก้ข้อมูล)
+
+**4. เทียบเดือน (MoM) ต้องอิงเดือนที่ผู้ใช้เลือก**
+เดิมเทียบ 2 เดือนท้ายสุดของข้อมูลเสมอ → กดเลือกเดือนไหนก็ได้เลขเดียวกัน และเดือนท้ายสุด
+คือเดือนปัจจุบันที่เพิ่งเริ่ม → โชว์ `↓99.9%` ทุกครั้ง
+- หาเดือนก่อนหน้าจาก **ปฏิทินจริง** (`new Date(y, m-2, 1)`) ไม่ใช่ตำแหน่งใน array —
+  เดือนที่ยอด 0 ทั้งเดือนอาจไม่มีคอลัมน์ในชีต ทำให้ "ตัวก่อนหน้า" ข้ามไป 2 เดือน
+- เดือนปัจจุบัน → เทียบ **"วันที่ 1–N" กับเดือนก่อนช่วงเดียวกัน** จากข้อมูลรายวัน (60 วัน)
+  · ไม่มีข้อมูลรายวันครอบคลุมวันที่ 1 ของเดือนก่อน → **ไม่โชว์ delta เลย** (ฐานขาด = % สูงเกินจริง)
+  · วันที่ 1–2 ของเดือน → ไม่โชว์ (กลุ่มตัวอย่างเล็กเกินไป ขายดีวันเดียวเด้งเป็น +300%)
+- ต้องเทียบจาก **แหล่งเดียวกันทั้งสองฝั่ง** — `monthlySeries` ตัดหมวด "ไม่มีรหัสสินค้า" ออก
+  แต่ `dailySeries` ไม่ตัด ถ้าจับคู่ข้ามแหล่งจะเทียบคนละฐาน
+
+**5. KPI ที่เป็นค่า "ตามช่วงเวลาที่เลือก" ต้องคำนวณฝั่ง frontend**
+backend ไม่รู้ว่าผู้ใช้กดดูเดือน/ไตรมาส/ปีไหน · `nSoldPeriod` นับจาก `periodInfo.perProduct(p)`
+— เดิมอ่าน `totals.nSold` ที่ backend **ไม่เคยส่งมา** → `undefined` → `fmtN()` โชว์ `0`
+ทั้งที่ขายไปหลายพันชิ้น (บั๊กแบบนี้ไม่มี error ให้เห็นเลย)
+
+**เทสต์**: `tests/dashboard-metrics.test.js` (36 เคส) คุมทั้งสูตรและ**จุดเชื่อมต่อ** —
+มี meta-test เช็คว่า `whRatio` ประกาศก่อนใช้จริง, `completeMonths` ถูกเรียกที่ StockView จริง,
+และ KPI turnover ไม่ถูกใส่กลับมาเงียบ ๆ
+
 ## Conflict detection
 
 ```
@@ -325,6 +378,10 @@ PWA: ยื่น secret → claimLoginHandoff → GAS แฮชแล้วห�
   (กันคนสุ่มเจอ URL เท่านั้น ไม่ใช่ security จริง)
 - ห้ามใส่ model ID / ชื่อ internal ใน commit message, PR, หรือ comment ในโค้ด
 
+**Script Property ที่ไม่ใช่ความลับ** (ปรับค่าได้โดยไม่ต้องแก้โค้ด — ไม่ตั้งก็มี default):
+`WHOLESALE_RATIO` (0.8) · `STOCK_THRESHOLDS` · `NOTI_QUEUE_ENABLED` · `NOTI_ORDER_CUTOFF_HOUR` (16) ·
+`NOTI_ORDER_BATCH_MINUTES` (20) · `NOTI_MONTHLY_CAP` (200) · `INAPP_NOTI_ENABLED` · `REQUIRE_LOGIN`
+
 ## ZORT API endpoints ที่ค้นพบแล้ว (ใช้ได้จริง)
 
 ```
@@ -343,7 +400,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 814 tests, 24 test files, ทั้งหมด pass
+**มี Vitest test suite แล้ว** — 857 tests, 25 test files, ทั้งหมด pass
 
 ```bash
 npm test              # run tests
@@ -355,7 +412,8 @@ npm run test:coverage # coverage report (tests/helpers.js)
            detectColor, COLOR_MAP, COLOR_KEYS,
            monthKey_, dayKey_, deductStockCore, netOf, enrichDataCore`
 - `tests/*.test.js` — parsing, color, stock, dates, mto, app, format, schema, conflict, orderstate,
-  sku, billing, bahttext, transfer, cleanup, analytics, **attendance**, **auth**, drift-guard
+  sku, billing, bahttext, transfer, cleanup, analytics, **attendance**, **auth**, drift-guard,
+  **dashboard-metrics**
 - **`tests/auth.test.js`** — เฟส 4 ล็อกอิน (`canDoOrNull_`/`ROLE_ACTIONS_`/`IMMEDIATE_GATE_*`) —
   **ไม่ copy โค้ดเข้า helpers.js** แต่ eval ฟังก์ชันจริงจาก `.gs` ตรง ๆ (กันสำเนา drift ของโค้ด
   ด้านความปลอดภัย) ต่างจากไฟล์เทสต์อื่นที่ copy pure function เข้า `helpers.js`

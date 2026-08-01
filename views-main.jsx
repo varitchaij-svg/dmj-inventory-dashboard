@@ -51,17 +51,23 @@ class ErrorBoundary extends React.Component {
 }
 
 // ────────────────────────────────────────────────────────────
-// Phase 2: completeMonths helper — filter out current incomplete month
+// completeMonths — ตัด "เดือนปัจจุบันที่ยังไม่จบ" ออกก่อนหาค่าเฉลี่ย
 // ────────────────────────────────────────────────────────────
-// ปัญหา: ทั้งหมดที่ใช้ "last N months average" รวมเดือนปัจจุบันไป
-// ทำให้ค่าสัดส่วนต่ำกว่าจริง 33% (เดือนเพิ่งเริ่ม 1 วันจาก 30)
-// วิธีแก้: filter monthly data เพื่อเก็บเฉพาะเดือนที่เสร็จสมบูรณ์
-// = ทั้งหมด ยกเว้นเดือนปัจจุบัน (today's month)
+// ทุกที่ที่คิด "เฉลี่ย N เดือนล่าสุด" เคยนับเดือนปัจจุบันเป็นเดือนเต็ม ทั้งที่เพิ่งผ่านไปไม่กี่วัน
+// → ค่าเฉลี่ยต่ำกว่าจริงได้ถึง ~33% (วันที่ 1 ของเดือน ยอดเกือบ 0 แต่ถูกหาร 3 เท่ากัน)
+// → ตัวเลข "ควรสั่ง" ต่ำตาม = เสี่ยงสั่งของขาด
+// รับได้ทั้ง array ของ object `{month:"MM/YYYY"}` (p.monthly) และ array ของ string
+// "MM/YYYY" (monthLabels) — สองแบบนี้ใช้กันคนละที่ ถ้ารองรับแบบเดียวอีกแบบจะเงียบ ๆ
+// ไม่กรองอะไรเลย (เจอมาแล้วตอนเขียนรอบแรก)
 function completeMonths(monthly) {
   if (!Array.isArray(monthly) || monthly.length === 0) return monthly;
   const now = new Date();
   const currentMonth = `${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
-  return monthly.filter(m => m && m.month !== currentMonth);
+  return monthly.filter(m => {
+    if (m == null) return false;
+    const key = typeof m === 'string' ? m : m.month;
+    return key !== currentMonth;
+  });
 }
 
 async function ensureXlsx() {
@@ -1039,8 +1045,11 @@ function OverviewView({ data, range, setRange, role }) {
   const months = monthLabels || [];
   const days   = (dayLabels && dayLabels.length > 0) ? dayLabels : [];
   const hasDailyData = days.length > 0;
+  // อัตราแปลงราคาปลีก(ZORT)→ขายส่ง ที่ backend ใช้คูณมูลค่าสต๊อกมาแล้ว (Script Property)
+  // ค้างไว้ 0.8 ถ้า payload เก่ายังไม่มีคีย์นี้ — ให้ป้ายบอก % ตรงกับตัวเลขที่โชว์เสมอ
+  const whRatio = (totals && totals.wholesaleRatio) || 0.8;
 
-  // Phase 2: คำนวณเดือนที่สมบูรณ์ (ไม่รวมเดือนปัจจุบัน) สำหรับ KPI
+  // เดือนที่จบแล้วเท่านั้น — ใช้กับทุกอย่างที่หา "ค่าเฉลี่ย/ความเร็วขาย" (ดู completeMonths)
   const completeMonthsList = uM(() => completeMonths(months), [months]);
 
   // ── new states for month picker + comparison ──────────────────────
@@ -1164,9 +1173,66 @@ function OverviewView({ data, range, setRange, role }) {
 
   const sumRev = filtered.reduce((s,m) => s + m.rev, 0);
   const sumQty = filtered.reduce((s,m) => s + m.qty, 0);
-  const prevRev = monthlySeries.length >= 2 ? monthlySeries[monthlySeries.length-2].rev : 0;
-  const curRev = monthlySeries[monthlySeries.length-1]?.rev || 0;
-  const momDelta = prevRev > 0 ? ((curRev - prevRev) / prevRev * 100).toFixed(1) : null;
+
+  // ── MoM: เทียบ "เดือนที่กดเลือก" กับเดือนก่อนหน้าตามปฏิทิน ────────────────────
+  // เดิมใช้ 2 เดือนท้ายสุดของข้อมูลเสมอ ไม่สนใจเดือนที่ผู้ใช้เลือก → กด มิ.ย. หรือ ก.ค.
+  // ก็ได้เลขเดียวกัน · และเดือนท้ายสุดคือเดือนปัจจุบันที่เพิ่งเริ่ม → ออกมา −99.9% ทุกครั้ง
+  // เดือนที่ยังไม่จบเทียบกับเดือนเต็มไม่ได้ จึงเทียบ "วันที่ 1–N ของเดือนนี้" กับ
+  // "วันที่ 1–N ของเดือนก่อน" จากข้อมูลรายวัน (60 วันล่าสุด) แทน — ถ้าข้อมูลรายวัน
+  // ไม่ครอบคลุมเดือนก่อนพอ จะไม่โชว์ delta เลย ดีกว่าโชว์เลขที่ต่ำกว่าจริง
+  const momInfo = uM(() => {
+    const none = { pct: null, note: null };
+    if (!activeMonth) return none;
+    const [amo, ayr] = activeMonth.split("/");
+    if (!ayr) return none;
+    const now = new Date();
+    const curKey = `${String(now.getMonth()+1).padStart(2,'0')}/${now.getFullYear()}`;
+    const isCurrent = activeMonth === curKey;
+    // เดือนก่อนหน้าตามปฏิทินจริง (ไม่ใช่ "ตัวก่อนหน้าใน array" ซึ่งข้ามเดือนที่ยอด 0 ได้)
+    const pd = new Date(Number(ayr), Number(amo) - 2, 1);
+    const prevKey = `${String(pd.getMonth()+1).padStart(2,'0')}/${pd.getFullYear()}`;
+    const curM  = monthlySeries.find(m => m.month === activeMonth);
+    const prevM = monthlySeries.find(m => m.month === prevKey);
+
+    if (!isCurrent) {
+      if (!prevM || !(prevM.rev > 0)) return none;
+      const cur = curM ? curM.rev : 0;
+      return { pct: ((cur - prevM.rev) / prevM.rev * 100).toFixed(1), note: null };
+    }
+
+    // เดือนปัจจุบัน — เทียบช่วงวันเดียวกัน
+    const dayN = now.getDate();
+    const note = `ผ่านไป ${dayN} วัน`;
+    // 1–2 วันแรกของเดือน กลุ่มตัวอย่างเล็กเกินไป ขายดีวันเดียวก็เด้งเป็น +300% ได้
+    // → ไม่โชว์ delta เลย เหลือแค่ป้ายบอกว่าเดือนยังไม่จบ (ไม่แทนเลขหลอกด้วยเลขหลอก)
+    if (dayN < 3) return { pct: null, note };
+    if (!hasDailyData) return { pct: null, note };
+    const [pmo, pyr] = prevKey.split("/");
+    // ข้อมูลรายวันต้องครอบคลุมวันที่ 1 ของเดือนก่อน ไม่งั้นฐานเทียบจะขาดไปเงียบ ๆ
+    if (!days.includes(`01/${pmo}/${pyr}`)) return { pct: null, note };
+    // อ่านจาก dailyByCat ตรง ๆ ด้วยกติกาเดียวกับ monthlySeries (ตัด "ไม่มีรหัสสินค้า",
+    // เคารพหมวดที่เลือก) — ใช้ dailySeries ไม่ได้เพราะไม่ได้ตัดหมวดนั้นออก จะเทียบคนละฐาน
+    const sumTo = (mo, yr) => days.reduce((s, d) => {
+      const p = d.split("/");                           // DD/MM/YYYY
+      if (p.length < 3 || p[1] !== mo || p[2] !== yr || Number(p[0]) > dayN) return s;
+      const cats = (dailyByCat || {})[d] || {};
+      let rev = 0;
+      for (const c of Object.keys(cats)) {
+        if (c === "ไม่มีรหัสสินค้า") continue;
+        if (selCat && c !== selCat) continue;
+        rev += cats[c].sales;
+      }
+      return s + rev;
+    }, 0);
+    const prevPart = sumTo(pmo, pyr);
+    if (!(prevPart > 0)) return { pct: null, note };
+    const curPart = sumTo(amo, ayr);
+    return {
+      pct: ((curPart - prevPart) / prevPart * 100).toFixed(1),
+      note: `1–${dayN} เทียบเดือนก่อนช่วงเดียวกัน`,
+    };
+  }, [activeMonth, monthlySeries, days, dailyByCat, hasDailyData, selCat]);
+  const momDelta = momInfo.pct;
 
   // For daily delta: last day vs previous day
   const dailyDelta = uM(() => {
@@ -1323,23 +1389,27 @@ function OverviewView({ data, range, setRange, role }) {
 
   // สินค้าที่ไม่ใช่ MTO — คำนวณครั้งเดียว ใช้ร่วมหลาย memo ด้านล่าง (เดิม filter ซ้ำ 6 รอบ/render)
   const sellable = uM(() => products.filter(p => !p.isMTO && (!selCat || p.cat === selCat)), [products, selCat]);
-  // KPI สต๊อก/หมุนเวียน — ถ้ากรองหมวด คำนวณเฉพาะหมวดนั้น มิฉะนั้นใช้ totals ทั้งร้าน
+  // KPI มูลค่าสต๊อก (ราคาขายส่งแล้วจาก GAS) — กรองหมวดแล้วคำนวณเฉพาะหมวดนั้น
   const stockAgg = uM(() => {
     if (!selCat) return { val: totals.totalStockValue, valWH: totals.totalStockValueWH || 0,
-      valStore: totals.totalStockValueStore || 0, n: totals.nWithStock,
-      soldRev: totals.totalSoldRev, nSold: totals.nSold };
-    let val = 0, valWH = 0, valStore = 0, n = 0, soldRev = 0, nSold = 0;
+      valStore: totals.totalStockValueStore || 0 };
+    let val = 0, valWH = 0, valStore = 0;
     products.forEach(p => {
       if (p.isMTO || p.cat !== selCat) return;
       val += p.stockValue || 0;
       valWH += p.stockValueWH || 0;
       valStore += p.stockValueStore || 0;
-      if ((p.qty || 0) > 0) n++;
-      soldRev += p.soldRev || 0;
-      if ((p.soldQty || 0) > 0) nSold++;
     });
-    return { val, valWH, valStore, n, soldRev, nSold };
+    return { val, valWH, valStore };
   }, [selCat, products, totals]);
+
+  // จำนวน SKU ที่มียอดขาย **ในช่วงเวลาที่เลือก** — ต้องคำนวณฝั่งนี้เพราะ backend ไม่รู้ว่า
+  // ผู้ใช้กดดูเดือน/ไตรมาส/ปีไหน · เดิมอ่าน totals.nSold ที่ backend ไม่เคยส่งมา →
+  // undefined → fmtN() โชว์ "0 SKU มียอดขาย" ทั้งที่ขายไปหลายพันชิ้น
+  const nSoldPeriod = uM(
+    () => sellable.reduce((n, p) => n + (periodInfo.perProduct(p).qty > 0 ? 1 : 0), 0),
+    [sellable, periodInfo]
+  );
 
   // map SKU → product (ใช้แนบรูป + เปิด ProductModal ในการ์ดของเข้าใหม่)
   const prodBySku = uM(() => new Map(products.map(p => [p.sku, p])), [products]);
@@ -1369,11 +1439,17 @@ function OverviewView({ data, range, setRange, role }) {
       .map(g => ({ ...g, suppliers: [...g.suppliers], pos: [...g.pos] }))
       .sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : 0); // ใหม่สุดก่อน
     if (!items.length) return null;
+    // ราคาต่อหน่วยใน PO ของ ZORT ว่างเกือบทุกแถว (ยืนยันแล้ว ส.ค. 2026 — ทุกฟิลด์ราคา
+    // ที่ API คืนมาเป็น 0) ถ้าบวกแล้วโชว์เฉย ๆ จะได้ "฿1" ซึ่งดูเหมือนตัวเลขจริง
+    // → นับ coverage ไว้ ให้ UI ตัดสินใจว่าจะโชว์ยอดรวมหรือบอกว่าข้อมูลไม่ครบ
+    const nPriced = items.filter(g => g.cost > 0).length;
     return {
       items,
       nSku:    items.length,
       totQty:  items.reduce((s, g) => s + g.qty, 0),
       totCost: items.reduce((s, g) => s + g.cost, 0),
+      nPriced,
+      costComplete: nPriced === items.length,
     };
   }, [data, products, selCat]);
   // ISO yyyy-MM-dd → "24 ก.ค." (ปีเดียวไม่ต้องโชว์)
@@ -1395,7 +1471,7 @@ function OverviewView({ data, range, setRange, role }) {
   );
 
   // ── Movers: current vs previous month (MoM) ──────────────────────────
-  // Phase 2: ใช้ completeMonthsList ไม่ให้เปรียบเทียบเดือนที่ยังไม่เสร็จกับเดือนก่อนหน้า
+  // เทียบเฉพาะเดือนที่จบแล้ว — เดือนปัจจุบันยอดยังไม่ครบ จะโผล่เป็น "ยอดตก" ทุกตัว
   const momMovers = uM(() => {
     if (completeMonthsList.length < 2) return { risers: [], fallers: [], cur: null, prev: null };
     const cur = completeMonthsList[completeMonthsList.length-1], prev = completeMonthsList[completeMonthsList.length-2];
@@ -1415,7 +1491,7 @@ function OverviewView({ data, range, setRange, role }) {
   }, [sellable, completeMonthsList]);
 
   // ── Velocity: avg sales rate → days of stock left ────────────────────
-  // Phase 2: ใช้ completeMonthsList เพื่อไม่รวมเดือนปัจจุบันที่ยังไม่เสร็จ
+  // เฉลี่ยจากเดือนที่จบแล้วเท่านั้น ไม่งั้นความเร็วขายต่ำกว่าจริง
   const velocity = uM(() => {
     const n = Math.max(1, Math.min(completeMonthsList.length, 3));
     const recent = completeMonthsList.slice(-n);
@@ -1701,7 +1777,8 @@ function OverviewView({ data, range, setRange, role }) {
   const deltaDir  = deltaVal && parseFloat(deltaVal) < 0 ? 'down' : 'up';
   const subLabel  = range === 'day'
     ? (hasDailyData ? `${days.length} วัน (${dailySeries[0]?.label}–${dailySeries[dailySeries.length-1]?.label})` : "ยังไม่มีข้อมูลรายวัน")
-    : range === 'month' ? (activeMonth ? monthLabel(activeMonth) : "เดือนล่าสุด")
+    // เดือนที่ยังไม่จบต้องบอกให้ชัด ไม่งั้นเห็นยอดต่ำแล้วเข้าใจว่ายอดตก
+    : range === 'month' ? (activeMonth ? monthLabel(activeMonth) + (momInfo.note ? ` · ${momInfo.note}` : "") : "เดือนล่าสุด")
     : range === 'quarter' ? (selQuarter ? `${OV_QUARTERS.find(q=>q.n===selQuarter).label} ปี ${pickerYear}` : "เลือกไตรมาส")
     : selYear ? `ปี ${selYear} · ${yearMonths.length} เดือน` : `${months.length} เดือนรวม`;
 
@@ -1880,7 +1957,7 @@ function OverviewView({ data, range, setRange, role }) {
         </div>
       )}
 
-      <div id="ov-kpi" className={`row ${role==='employee'?'row-2':'row-4'}`} style={{marginBottom: 20}}>
+      <div id="ov-kpi" className={`row ${role==='employee'?'row-2':'row-3'}`} style={{marginBottom: 20}}>
         {role === 'owner' && (
           <KPI label="ยอดขายรวม" accent="#1f7f44"
                value={fmtB(sumRev)}
@@ -1891,7 +1968,7 @@ function OverviewView({ data, range, setRange, role }) {
         )}
         <KPI label="จำนวนชิ้นที่ขาย" accent="#4fb472"
              value={fmtN(sumQty)}
-             sub={range === 'day' ? `${days.length} วันล่าสุด` : `${fmtN(stockAgg.nSold)} SKU มียอดขาย`}
+             sub={range === 'day' ? `${days.length} วันล่าสุด` : `${fmtN(nSoldPeriod)} SKU มียอดขาย`}
              icon={I.cart} />
         {role === 'owner' && (
           <KPI label="มูลค่าสต๊อกคงเหลือ" accent="#a07417"
@@ -1900,16 +1977,15 @@ function OverviewView({ data, range, setRange, role }) {
                  <span style={{display:'flex',flexDirection:'column',gap:1,lineHeight:1.35}}>
                    <span>🏭 คลัง {fmtB(stockAgg.valWH)}</span>
                    <span>🏬 หน้าร้าน {fmtB(stockAgg.valStore)}</span>
+                   <span style={{opacity:.75}}>ราคาขายส่ง (ปลีก −{Math.round((1-whRatio)*100)}%)</span>
                  </span>
                }
                icon={I.package} />
         )}
-        {role === 'owner' && (
-          <KPI label="ยอดขาย / ต้นทุนสต๊อก" accent="#1f6f8b"
-               value={stockAgg.val > 0 ? `${(stockAgg.soldRev / stockAgg.val).toFixed(2)}×` : "—"}
-               sub="หมุนเวียนสินค้า"
-               icon={I.trend} />
-        )}
+        {/* KPI "ยอดขาย/ต้นทุนสต๊อก" ถูกถอดออก (ส.ค. 2026) — ไม่ใช่ inventory turnover จริง:
+            เอายอดขายสะสมทั้งประวัติ ÷ มูลค่าสต๊อกวันนี้ที่ราคาขาย ไม่ใช่ราคาทุน
+            จะทำใหม่ให้ถูกต้องได้ต้องมี COGS จริง ซึ่งต้องรอราคาต้นทุนใน PO ของ ZORT
+            (Phase 0 ยืนยันแล้วว่าตอนนี้ ZORT คืนราคามาเป็น 0 เกือบทุกแถว) */}
       </div>
 
       <div id="ov-intake"/>
@@ -1933,11 +2009,31 @@ function OverviewView({ data, range, setRange, role }) {
                 <div style={{fontSize:22,fontWeight:800,color:"#1f6f8b",lineHeight:1.1}}>{fmtN(recentIntake.totQty)}</div>
                 <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>จำนวนชิ้นรวม</div>
               </div>
+              {/* มูลค่าซื้อรวม: โชว์ต่อเมื่อมีราคาครบทุกรายการ ไม่งั้นเลขจะดูเหมือนจริงแต่ต่ำกว่ามาก
+                  (ก.ค. 2026: 38 จาก 39 รายการไม่มีราคาใน PO → เคยโชว์ "฿1") */}
               <div>
-                <div style={{fontSize:22,fontWeight:800,color:"#1f6f8b",lineHeight:1.1}}>{fmtB(recentIntake.totCost)}</div>
-                <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>มูลค่าซื้อรวม</div>
+                {recentIntake.costComplete ? (
+                  <>
+                    <div style={{fontSize:22,fontWeight:800,color:"#1f6f8b",lineHeight:1.1}}>{fmtB(recentIntake.totCost)}</div>
+                    <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>มูลค่าซื้อรวม</div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{fontSize:22,fontWeight:800,color:"#b98900",lineHeight:1.1}}>—</div>
+                    <div style={{fontSize:11,color:"#b98900",marginTop:2,fontWeight:600}}>
+                      มูลค่าซื้อรวม · ไม่มีราคาใน PO {recentIntake.nPriced > 0 ? `(${recentIntake.nPriced}/${recentIntake.nSku} รายการเท่านั้นที่มี)` : ""}
+                    </div>
+                  </>
+                )}
               </div>
             </div>
+            {!recentIntake.costComplete && (
+              <div style={{padding:"8px 18px",background:"#fff8e6",borderBottom:"1px solid #f0e2bd",
+                           fontSize:11.5,color:"#7a5c00",lineHeight:1.5}}>
+                💡 ราคาต่อหน่วยไม่ได้ถูกกรอกไว้ในใบสั่งซื้อ (PO) ฝั่ง ZORT — กรอกราคาใน ZORT
+                แล้วยอดนี้จะขึ้นเองอัตโนมัติ
+              </div>
+            )}
             {/* รายการ (เลื่อนดูได้ · แตะเพื่อดูรูป+รายละเอียด) */}
             <div style={{maxHeight:360,overflowY:"auto"}}>
               {recentIntake.items.map((g, i) => {
@@ -4932,7 +5028,7 @@ function StockView({ data, role }) {
   const enriched = uM(() => checkable.map(p => {
     const currentQty = (p.qtyStore > 0 || p.qtyWH > 0) ? (p.qtyStore || 0) + (p.qtyWH || 0) : (p.qty || 0);
     // เน้นความเร็วล่าสุด: ถ้ามี monthly ใช้เฉลี่ย 3 เดือนหลัง (ไวต่อเทรนด์) มิฉะนั้น fallback soldQty/5
-    // Phase 2: กรองออกเดือนปัจจุบัน (ยังไม่เสร็จ) เพื่อทำให้ avg ถูกต้อง
+    // ตัดเดือนปัจจุบันที่ยังไม่จบออกก่อน ไม่งั้น "ควรสั่ง" ต่ำกว่าจริง ~33%
     const complete = completeMonths(p.monthly || []);
     let avgMonthly;
     if (complete.length >= 3) {
