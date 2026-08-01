@@ -253,6 +253,19 @@ const TRACKED = [
     `daysInMonth: new Date(y, m, 0).getDate(),`,
     `return !!p && !p.isMTO && !!p.cat && p.cat !== "ไม่มีรหัสสินค้า";`,
   ]},
+  // Phase 1: % MoM ต้องอิงเดือนที่เลือก + ไม่โชว์เมื่อเดือนยังไม่จบ
+  { names: ['momDeltaOf'], sourceFile: 'views-main.jsx', landmarks: [
+    `if (currentMonthKey && activeMonth === currentMonthKey) return null;`,
+    `const prevKey = \`\${String(m === 1 ? 12 : m - 1).padStart(2, "0")}/\${m === 1 ? y - 1 : y}\`;`,
+    `return ((cur.rev - prev.rev) / prev.rev * 100).toFixed(1);`,
+  ]},
+  // Phase 1: มูลค่าสต๊อกคิดที่ราคาขายส่ง — ห้าม hard-code อัตราคนละที่กับ payload
+  { names: ['wholesaleRatioOf', 'stockValuesOf', 'WHOLESALE_RATIO_FALLBACK'],
+    sourceFile: 'views-main.jsx', landmarks: [
+    `const WHOLESALE_RATIO_FALLBACK = 0.8;`,
+    `return (typeof r === "number" && r > 0 && r <= 1) ? r : WHOLESALE_RATIO_FALLBACK;`,
+    `all:   typeof p.stockValue      === "number" ? p.stockValue      : stockQty(p)       * price * r,`,
+  ]},
   { names: ['parseCheckDateMs'], sourceFile: 'views-analytics.jsx', landmarks: [
     `if (yr >= 2400) yr -= 543; // พ.ศ. → ค.ศ.`,
     `if (d.getFullYear() >= 2400) d.setFullYear(d.getFullYear() - 543); // ISO ปี พ.ศ.`,

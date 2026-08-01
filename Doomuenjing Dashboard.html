@@ -377,6 +377,10 @@
     .row-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .row-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .row-3 { grid-template-columns: minmax(0, 1fr); }
+    /* KPI หน้าภาพรวม (3 ใบ) — จอเล็กให้เป็น 2 คอลัมน์ (2+1) ไม่ใช่เรียงลงมา 3 แถวยาว
+       ต้องดันให้พ้น fold บนมือถือ (ผู้ใช้หลักดูจากมือถือ) · scope แค่ #ov-kpi
+       เพื่อไม่ไปเปลี่ยน .row-3 ที่หน้าโอน/ปรับ/ยกมา ใช้อยู่ */
+    #ov-kpi.row-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .row-12-5 { grid-template-columns: minmax(0, 1fr); }
   }
   /* ── iPad landscape (1024px) — nav starts getting cramped ── */

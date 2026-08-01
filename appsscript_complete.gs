@@ -207,6 +207,22 @@ const DASH_TABS = {
 };
 const COST_RATIO = 0.8;
 
+// ── มูลค่าสต๊อกคิดที่ "ราคาขายส่ง" ไม่ใช่ราคาป้าย (เจ้าของเคาะ 1 ส.ค. 2026) ──
+// p.price ที่ sync มาจาก ZORT = ราคาขายปลีก · ร้านนี้ขายส่งเป็นหลัก มูลค่าสต๊อกที่คิด
+// ด้วยราคาปลีกจึงสูงกว่าเงินที่จะได้จริง (฿36.23M → ฿28.98M ที่อัตรา 0.8)
+// ⚠️ **คนละตัวกับ COST_RATIO** ห้ามยุบรวมกัน — COST_RATIO ใช้กับ p.cost/p.profit
+//    ("ราคาทุน" = เงินที่จ่ายซัพพลายเออร์) ตัวนี้คือ "ราคาขายส่ง" = เงินที่เราจะได้รับ
+// ตั้งค่าอื่นได้ที่ Script Property `WHOLESALE_RATIO` (ต้องเป็น 0 < x ≤ 1 ไม่งั้น fallback 0.8)
+const WHOLESALE_RATIO_DEFAULT_ = 0.8;
+function wholesaleRatio_() {
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty('WHOLESALE_RATIO');
+    const v = parseFloat(raw);
+    if (isNaN(v) || v <= 0 || v > 1) return WHOLESALE_RATIO_DEFAULT_;
+    return v;
+  } catch (e) { return WHOLESALE_RATIO_DEFAULT_; }
+}
+
 // ───────────────────────────────────────────────────────────
 // Audit Log helper — fire-and-forget, ห้าม throw กระทบ main flow
 // resource: generic resource id — ไม่จำกัดแค่ SKU (order/MTO job/transfer/ฯลฯ)
@@ -2259,6 +2275,8 @@ function buildFullData_() {
     });
     _mark('index');
 
+    const wholesaleRatio = wholesaleRatio_();   // อ่าน Script Property ครั้งเดียว ไม่ใช่ต่อสินค้า
+
     products.forEach(p => {
       // normalize SKU ก่อน lookup — กัน qty จากชีต "ข้อมูลสินค้า" (เก่า) รั่วมาโชว์
       // เมื่อรหัสในชีต "อัพเดทจำนวนสินค้า" พิมพ์ต่าง case/ช่องว่าง (ที่อื่นในระบบใช้ trim().toUpperCase() หมด)
@@ -2296,9 +2314,10 @@ function buildFullData_() {
       }
       p.cost       = p.price * COST_RATIO;
       p.profit     = p.soldRev * (1 - COST_RATIO);
-      p.stockValue      = p.qty     * p.price;
-      p.stockValueWH    = (p.qtyWH    || 0) * p.price; // มูลค่าฝั่งคลัง
-      p.stockValueStore = (p.qtyStore || 0) * p.price; // มูลค่าฝั่งหน้าร้าน
+      // มูลค่าสต๊อก = ราคาขายส่ง (ปลีก × WHOLESALE_RATIO) — ดูหมายเหตุที่ wholesaleRatio_()
+      p.stockValue      = p.qty     * p.price * wholesaleRatio;
+      p.stockValueWH    = (p.qtyWH    || 0) * p.price * wholesaleRatio; // มูลค่าฝั่งคลัง
+      p.stockValueStore = (p.qtyStore || 0) * p.price * wholesaleRatio; // มูลค่าฝั่งหน้าร้าน
 
       const sys = sysQtyMap[skuU];
       if (sys) {
@@ -2396,6 +2415,9 @@ function buildFullData_() {
         totalSoldRev:    products.reduce((s, p) => s + (p.soldRev || 0), 0),
         totalSoldQty:    products.reduce((s, p) => s + (p.soldQty || 0), 0),
         totalProfit:     products.reduce((s, p) => s + (p.profit || 0), 0),
+        // อัตราขายส่งที่ใช้คิด stockValue — ส่งลงมาให้หน้าเว็บติดป้ายบอกฐานราคา
+        // **ห้าม hard-code 0.8 ซ้ำฝั่ง frontend** วันที่เปลี่ยนส่วนลดสองฝั่งจะไม่ตรงกันเงียบ ๆ
+        wholesaleRatio,
       },
       mtoGroups: Object.values(mtoMap),
       stockCheckRequests: readStockCheckRequests_().filter(function(r){ return r.status === "pending"; }),
@@ -6857,7 +6879,14 @@ function syncZortPurchases() {
         const sku  = String(item.sku || item.productcode || "").trim().toUpperCase();
         const name = String(item.name || "").trim();
         const qty  = Number(item.number || 0);
-        const price= Number(item.pricepernumber || 0);
+        // ราคาต่อหน่วย: ใช้ pricepernumber เป็นหลัก · ถ้าว่างแต่มี totalprice ให้หารเอา
+        // (ยืนยันด้วย debugPurchasePrices() 1 ส.ค. 2026: PO ส่วนใหญ่ ZORT คืน 0 ทั้งสองฟิลด์
+        //  — fallback นี้จึงยังไม่ช่วยวันนี้ แต่กันไว้สำหรับ PO ที่กรอกมาแบบมีแต่ยอดรวม)
+        let price = Number(item.pricepernumber || 0);
+        if (!(price > 0)) {
+          const tot = Number(item.totalprice || 0);
+          if (tot > 0 && qty > 0) price = tot / qty;
+        }
 
         const row = new Array(28).fill("");
         row[1]  = type;

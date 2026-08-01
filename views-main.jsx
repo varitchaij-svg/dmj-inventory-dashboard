@@ -90,6 +90,55 @@ function isCountableProduct(p) {
   return !!p && !p.isMTO && !!p.cat && p.cat !== "ไม่มีรหัสสินค้า";
 }
 
+// ────────────────────────────────────────────────────────────
+// Phase 1 (1.1): % เทียบเดือนก่อนหน้า ต้องอิง "เดือนที่ผู้ใช้เลือก"
+// ────────────────────────────────────────────────────────────
+// เดิมใช้ 2 เดือนท้ายของ monthlySeries เสมอ ไม่สนใจเดือนที่กดเลย → 2 ปัญหาซ้อนกัน
+//   (ก) กด มิ.ย. หรือ ก.ค. ก็ได้ % เดียวกัน แต่ป้ายใต้ KPI เขียนชื่อเดือนที่กด → อ่านผิดแน่นอน
+//   (ข) เดือนท้ายสุดในข้อมูลคือเดือนปัจจุบันที่เพิ่งเริ่ม (ยอดเกือบ 0) → ได้ ↓99.9% ทุกครั้ง
+// เดือนที่ยังไม่จบเทียบกับเดือนเต็มไม่ได้ → คืน null ไม่โชว์ % เลย
+// (KPI ขึ้นป้าย "ยังไม่จบเดือน (N/M วัน)" อธิบายแทน — ดีกว่าโชว์เลขติดลบที่ไม่จริง)
+// เทียบกับ **เดือนปฏิทินก่อนหน้า** ไม่ใช่ "รายการก่อนหน้าใน array" — ถ้าเดือนก่อนหน้า
+// ไม่มีในข้อมูล (ไม่มียอดขายเลย) ให้คืน null แทนการข้ามไปเทียบกับเดือนที่ไกลกว่านั้น
+// pure function — มี copy ใน tests/helpers.js สำหรับ unit test
+function momDeltaOf(monthlySeries, activeMonth, currentMonthKey) {
+  if (!Array.isArray(monthlySeries) || !activeMonth) return null;
+  if (currentMonthKey && activeMonth === currentMonthKey) return null;
+  const parts = String(activeMonth).split("/");
+  const m = Number(parts[0]), y = Number(parts[1]);
+  if (!m || !y) return null;
+  const prevKey = `${String(m === 1 ? 12 : m - 1).padStart(2, "0")}/${m === 1 ? y - 1 : y}`;
+  const cur  = monthlySeries.find(x => x && x.month === activeMonth);
+  const prev = monthlySeries.find(x => x && x.month === prevKey);
+  if (!cur || !prev || !(prev.rev > 0)) return null;
+  return ((cur.rev - prev.rev) / prev.rev * 100).toFixed(1);
+}
+
+// ────────────────────────────────────────────────────────────
+// Phase 1 (1.5): "มูลค่าสต๊อก" คิดที่ราคาขายส่ง ไม่ใช่ราคาป้าย
+// ────────────────────────────────────────────────────────────
+// GAS คูณ WHOLESALE_RATIO ให้แล้วใน p.stockValue/WH/Store (ดู wholesaleRatio_() ใน .gs)
+// → ฝั่งเว็บ**ใช้ค่าที่ส่งมาเสมอ** ห้ามคูณ price เองแล้วเรียกว่า "มูลค่า" (จะได้คนละฐาน)
+// อัตราจริงอ่านจาก totals.wholesaleRatio — **ห้าม hard-code 0.8** วันที่เจ้าของเปลี่ยนส่วนลด
+// สองฝั่งจะไม่ตรงกันเงียบ ๆ · ค่า fallback ด้านล่างใช้เฉพาะ payload ที่ไม่มีฟิลด์นี้
+// (เช่นข้อมูล preview จากไฟล์ที่อัปโหลดเอง ซึ่งไม่ได้ผ่าน GAS)
+const WHOLESALE_RATIO_FALLBACK = 0.8;
+function wholesaleRatioOf(data) {
+  const r = data && data.totals && data.totals.wholesaleRatio;
+  return (typeof r === "number" && r > 0 && r <= 1) ? r : WHOLESALE_RATIO_FALLBACK;
+}
+// มูลค่าสต๊อกที่ราคาขายส่ง (รวม / คลัง / หน้าร้าน) ของสินค้า 1 ตัว
+function stockValuesOf(p, ratio) {
+  if (!p) return { all: 0, wh: 0, store: 0 };
+  const r = (typeof ratio === "number" && ratio > 0) ? ratio : WHOLESALE_RATIO_FALLBACK;
+  const price = p.price || 0;
+  return {
+    all:   typeof p.stockValue      === "number" ? p.stockValue      : stockQty(p)       * price * r,
+    wh:    typeof p.stockValueWH    === "number" ? p.stockValueWH    : (p.qtyWH    || 0) * price * r,
+    store: typeof p.stockValueStore === "number" ? p.stockValueStore : (p.qtyStore || 0) * price * r,
+  };
+}
+
 async function ensureXlsx() {
   if (window.XLSX) return;
   await new Promise(function (res, rej) {
@@ -1059,10 +1108,13 @@ const OV_MONTH_ABBR = ["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.�
 
 function OverviewView({ data, range, setRange, role }) {
   const rechartsReady = useRechartsReady(); // gate กราฟจนกว่า Recharts (defer) จะพร้อม
-  // หมายเหตุ: ไม่ดึง data.totals มาใช้แล้ว — KPI สต๊อกคำนวณเองจาก products ที่ผ่าน
+  // หมายเหตุ: ไม่ดึงยอดรวมจาก data.totals มาใช้แล้ว — KPI สต๊อกคำนวณเองจาก products ที่ผ่าน
   // isCountableProduct เพื่อให้ "ทุกหมวด" กับ "เลือกหมวด" ใช้กติกาเดียวกัน (Phase 3 ข้อ 3.1)
+  // (ยังอ่าน totals.wholesaleRatio เพื่อรู้ว่ามูลค่าสต๊อกคิดที่กี่ % ของราคาป้าย)
   const { products, monthLabels, monthlyByCat, mtoGroups,
           dayLabels, dailyByCat } = data;
+  const wholesaleRatio = wholesaleRatioOf(data);
+  const wholesaleOffPct = Math.round((1 - wholesaleRatio) * 100);
 
   const months = monthLabels || [];
   const days   = (dayLabels && dayLabels.length > 0) ? dayLabels : [];
@@ -1070,6 +1122,8 @@ function OverviewView({ data, range, setRange, role }) {
 
   // Phase 2: คำนวณเดือนที่สมบูรณ์ (ไม่รวมเดือนปัจจุบัน) สำหรับ KPI
   const completeMonthsList = uM(() => completeMonths(months), [months]);
+  // เดือนปัจจุบัน + ผ่านไปกี่วัน — ใช้ทั้งกับ momDelta และป้าย "ยังไม่จบเดือน"
+  const curMonth = uM(() => currentMonthInfo(), []);
 
   // ── new states for month picker + comparison ──────────────────────
   const [selMonth, setSelMonth] = uS(null);   // null = latest
@@ -1192,9 +1246,8 @@ function OverviewView({ data, range, setRange, role }) {
 
   const sumRev = filtered.reduce((s,m) => s + m.rev, 0);
   const sumQty = filtered.reduce((s,m) => s + m.qty, 0);
-  const prevRev = monthlySeries.length >= 2 ? monthlySeries[monthlySeries.length-2].rev : 0;
-  const curRev = monthlySeries[monthlySeries.length-1]?.rev || 0;
-  const momDelta = prevRev > 0 ? ((curRev - prevRev) / prevRev * 100).toFixed(1) : null;
+  const momDelta = uM(() => momDeltaOf(monthlySeries, activeMonth, curMonth.key),
+    [monthlySeries, activeMonth, curMonth]);
 
   // For daily delta: last day vs previous day
   const dailyDelta = uM(() => {
@@ -1361,23 +1414,23 @@ function OverviewView({ data, range, setRange, role }) {
   //   nSold นับตาม "ช่วงที่เลือก" (periodInfo) ให้ตรงกับตัวเลขจำนวนชิ้นที่มันอยู่ใต้
   //   exVal/exN = ส่วนที่ถูกตัดออก โชว์เป็นหมายเหตุ ไม่ให้มูลค่าหายไปเงียบ ๆ
   const stockAgg = uM(() => {
-    let val = 0, valWH = 0, valStore = 0, n = 0, soldRev = 0, nSold = 0, exVal = 0, exN = 0;
+    let val = 0, valWH = 0, valStore = 0, n = 0, nSold = 0, exVal = 0, exN = 0;
     products.forEach(p => {
+      const sv = stockValuesOf(p, wholesaleRatio);
       if (!isCountableProduct(p)) {
-        if ((p.qty || 0) > 0) { exVal += p.stockValue || 0; exN++; }
+        if ((p.qty || 0) > 0) { exVal += sv.all; exN++; }
         return;
       }
       if (selCat && p.cat !== selCat) return;
-      val += p.stockValue || 0;
-      valWH += p.stockValueWH || 0;
-      valStore += p.stockValueStore || 0;
+      val += sv.all;
+      valWH += sv.wh;
+      valStore += sv.store;
       if ((p.qty || 0) > 0) n++;
-      soldRev += p.soldRev || 0;
       const v = periodInfo.perProduct(p);
       if ((v.qty || 0) > 0 || (v.rev || 0) > 0) nSold++;
     });
-    return { val, valWH, valStore, n, soldRev, nSold, exVal, exN };
-  }, [selCat, products, periodInfo]);
+    return { val, valWH, valStore, n, nSold, exVal, exN };
+  }, [selCat, products, periodInfo, wholesaleRatio]);
 
   // map SKU → product (ใช้แนบรูป + เปิด ProductModal ในการ์ดของเข้าใหม่)
   const prodBySku = uM(() => new Map(products.map(p => [p.sku, p])), [products]);
@@ -1407,11 +1460,17 @@ function OverviewView({ data, range, setRange, role }) {
       .map(g => ({ ...g, suppliers: [...g.suppliers], pos: [...g.pos] }))
       .sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : 0); // ใหม่สุดก่อน
     if (!items.length) return null;
+    // Phase 1 ข้อ 1.4: ห้ามโชว์ "มูลค่าซื้อรวม" เงียบ ๆ เมื่อราคาไม่ครบ
+    // debugPurchasePrices() (1 ส.ค. 2026) ยืนยันว่า ZORT คืนราคา 0 เกือบทุก line item
+    // → ยอดรวมที่เคยโชว์คือ "฿1" จาก 11,848 ชิ้น ซึ่งดูเหมือนระบบพัง (และมันพังจริง)
+    const nWithCost = items.filter(g => g.cost > 0).length;
     return {
       items,
       nSku:    items.length,
       totQty:  items.reduce((s, g) => s + g.qty, 0),
       totCost: items.reduce((s, g) => s + g.cost, 0),
+      nWithCost,
+      nNoCost: items.length - nWithCost,
     };
   }, [data, products, selCat]);
   // ISO yyyy-MM-dd → "24 ก.ค." (ปีเดียวไม่ต้องโชว์)
@@ -1490,12 +1549,13 @@ function OverviewView({ data, range, setRange, role }) {
     ).map(p => {
       const recentQty = p.monthly.filter(x=>recent.includes(x.month)).reduce((s,x)=>s+x.qty,0);
       const stock = (p.qtyStore||0) + (p.qtyWH||0);
-      return { p, recentQty, stock, value: stock * (p.price||0) };
+      // "เงินจม" ต้องอยู่ฐานเดียวกับ KPI มูลค่าสต๊อก = ราคาขายส่ง (ไม่ใช่ราคาป้าย)
+      return { p, recentQty, stock, value: stockValuesOf(p, wholesaleRatio).all };
     }).filter(r => r.recentQty === 0);
     rows.sort((a,b)=>b.value-a.value);
     return { list: rows.slice(0,12), count: rows.length,
              totalValue: rows.reduce((s,r)=>s+r.value,0) };
-  }, [sellable, months]);
+  }, [sellable, months, wholesaleRatio]);
 
   // ── ABC / Pareto classification by revenue ───────────────────────────
   const abc = uM(() => {
@@ -1737,8 +1797,7 @@ function OverviewView({ data, range, setRange, role }) {
     : null;
   const deltaDir  = deltaVal && parseFloat(deltaVal) < 0 ? 'down' : 'up';
   // ป้าย "ยังไม่จบเดือน" — เดือนปัจจุบันมียอดแค่บางส่วนของเดือน เทียบกับเดือนเต็มไม่ได้
-  // (ต้นเหตุเดียวกับที่ completeMonths ตัดเดือนนี้ออกจากการเฉลี่ย/พยากรณ์)
-  const curMonth = uM(() => currentMonthInfo(), []);
+  // (ต้นเหตุเดียวกับที่ completeMonths ตัดเดือนนี้ออกจากการเฉลี่ย/พยากรณ์ และที่ momDelta คืน null)
   const activeIsCurrentMonth = range === 'month' && activeMonth === curMonth.key;
   const subLabel  = range === 'day'
     ? (hasDailyData ? `${days.length} วัน (${dailySeries[0]?.label}–${dailySeries[dailySeries.length-1]?.label})` : "ยังไม่มีข้อมูลรายวัน")
@@ -1925,7 +1984,9 @@ function OverviewView({ data, range, setRange, role }) {
         </div>
       )}
 
-      <div id="ov-kpi" className={`row ${role==='employee'?'row-2':'row-4'}`} style={{marginBottom: 20}}>
+      {/* owner เหลือ 3 ใบหลังถอด KPI หมุนเวียนสินค้าออก (ข้อ 1.3) — row-3
+          (มี CSS เฉพาะ #ov-kpi ให้จอเล็กเป็น 2 คอลัมน์ ไม่ใช่เรียงลงมา 3 แถวยาว) */}
+      <div id="ov-kpi" className={`row ${role==='owner'?'row-3':'row-2'}`} style={{marginBottom: 20}}>
         {role === 'owner' && (
           <KPI label="ยอดขายรวม" accent="#1f7f44"
                value={fmtB(sumRev)}
@@ -1943,6 +2004,8 @@ function OverviewView({ data, range, setRange, role }) {
                value={fmtB(stockAgg.val)}
                sub={
                  <span style={{display:'flex',flexDirection:'column',gap:1,lineHeight:1.35}}>
+                   {/* บอกฐานราคาให้ชัด — เจ้าของสั่งให้โชว์ราคาขายส่งตัวเดียว ไม่มีปุ่มสลับ */}
+                   <span style={{fontWeight:700}}>ราคาขายส่ง (ปลีก −{wholesaleOffPct}%)</span>
                    <span>🏭 คลัง {fmtB(stockAgg.valWH)}</span>
                    <span>🏬 หน้าร้าน {fmtB(stockAgg.valStore)}</span>
                    {/* โชว์เฉพาะตอน "ทุกหมวด" — ของที่ถูกตัดไม่ได้อยู่ในหมวดที่กรองอยู่แล้ว */}
@@ -1955,12 +2018,14 @@ function OverviewView({ data, range, setRange, role }) {
                }
                icon={I.package} />
         )}
-        {role === 'owner' && (
-          <KPI label="ยอดขาย / ต้นทุนสต๊อก" accent="#1f6f8b"
-               value={stockAgg.val > 0 ? `${(stockAgg.soldRev / stockAgg.val).toFixed(2)}×` : "—"}
-               sub="หมุนเวียนสินค้า"
-               icon={I.trend} />
-        )}
+        {/* ─── KPI "ยอดขาย / ต้นทุนสต๊อก (หมุนเวียนสินค้า)" ถูกถอดออก (Phase 1 ข้อ 1.3) ───
+            ของเดิม = ยอดขาย**สะสมทั้งประวัติ 2.5 ปี** ÷ มูลค่าสต๊อก**วันนี้** ซึ่งไม่ใช่ inventory
+            turnover ตามป้ายที่เขียนไว้ · ที่เคยได้พอดี 1.00× เป็นเรื่องบังเอิญล้วน ๆ
+            turnover ที่ถูกต้อง = COGS 12 เดือนล่าสุด ÷ มูลค่าสต๊อก**ที่ราคาทุน** ซึ่งทำไม่ได้
+            เพราะไม่มีราคาทุน — `debugPurchasePrices()` (รัน 1 ส.ค. 2026) ยืนยันว่า ZORT คืน
+            pricepernumber/totalprice = 0 ทั้งคู่ใน 88 จาก 91 line item ของ PO 30 วันล่าสุด
+            เจ้าของเคาะแล้วว่า "โชว์เลขที่คำนวณจากค่าสมมติ อันตรายกว่าไม่โชว์" (ข้อ 7.3 ในแผน)
+            → จะเอากลับมาได้เมื่อมีราคาทุนจริงในใบสั่งซื้อ แล้วเปลี่ยนป้ายเป็น "ครั้ง/ปี" */}
       </div>
 
       <div id="ov-intake"/>
@@ -1990,10 +2055,26 @@ function OverviewView({ data, range, setRange, role }) {
                 <div style={{fontSize:22,fontWeight:800,color:"#1f6f8b",lineHeight:1.1}}>{fmtN(recentIntake.totQty)}</div>
                 <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>จำนวนชิ้นรวม</div>
               </div>
-              <div>
-                <div style={{fontSize:22,fontWeight:800,color:"#1f6f8b",lineHeight:1.1}}>{fmtB(recentIntake.totCost)}</div>
-                <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>มูลค่าซื้อรวม</div>
-              </div>
+              {/* มูลค่าซื้อรวม: โชว์ก็ต่อเมื่อมีราคาจริงบ้าง + บอกเสมอว่าครอบคลุมกี่รายการ
+                  ไม่มีราคาเลย = ไม่โชว์ตัวเลข (เลขที่ผิดชัด ๆ ทำให้ทั้งการ์ดดูเชื่อถือไม่ได้) */}
+              {recentIntake.nWithCost > 0 ? (
+                <div>
+                  <div style={{fontSize:22,fontWeight:800,color:"#1f6f8b",lineHeight:1.1}}>{fmtB(recentIntake.totCost)}</div>
+                  <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>
+                    มูลค่าซื้อรวม
+                    {recentIntake.nNoCost > 0 && (
+                      <span style={{color:"#b45309",fontWeight:700}}> · ไม่มีราคา {fmtN(recentIntake.nNoCost)}/{fmtN(recentIntake.nSku)} รายการ</span>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div style={{maxWidth:260}}>
+                  <div style={{fontSize:15,fontWeight:800,color:"#b45309",lineHeight:1.2}}>ยังไม่มีราคาทุน</div>
+                  <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>
+                    ใบสั่งซื้อจาก ZORT ไม่ได้กรอกราคาต่อหน่วยมา — คำนวณมูลค่าซื้อ/กำไรไม่ได้
+                  </div>
+                </div>
+              )}
             </div>
             {/* รายการ (เลื่อนดูได้ · แตะเพื่อดูรูป+รายละเอียด) */}
             <div style={{maxHeight:360,overflowY:"auto"}}>
@@ -2991,6 +3072,7 @@ function mtoBase(name) {
 
 function CategoryView({ data, role, onNav }) {
   const { products } = data;
+  const catWholesaleRatio = wholesaleRatioOf(data);   // มูลค่าสต๊อก = ราคาขายส่ง (ดู stockValuesOf)
   const allCats = uM(() => {
     const s = new Set();
     products.forEach(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า" && s.add(p.cat));
@@ -3337,9 +3419,10 @@ function CategoryView({ data, role, onNav }) {
       stock: f.reduce((s,p)=>s+stockQty(p),0),
       sold: f.reduce((s,p)=>s+p.soldQty,0),
       rev: f.reduce((s,p)=>s+p.soldRev,0),
-      stockValue: f.reduce((s,p)=>s+(stockQty(p)*p.price),0),
+      // ฐานเดียวกับ KPI มูลค่าสต๊อกหน้าภาพรวม = ราคาขายส่ง (ไม่ใช่ราคาป้าย)
+      stockValue: f.reduce((s,p)=>s+stockValuesOf(p, catWholesaleRatio).all,0),
     };
-  }, [categoryBase]);
+  }, [categoryBase, catWholesaleRatio]);
 
   // Supplier list for this category (ใช้สำหรับ dropdown filter)
   const supplierList = uM(() => {
@@ -3591,7 +3674,8 @@ function CategoryView({ data, role, onNav }) {
           <div className="row row-4" style={{marginBottom:18, display: (isGlobalSearch||isGlobalVendor) ? "none" : undefined}}>
             <KPI label="สินค้าในหมวด" accent={color} icon={I.layers} value={fmtN(catStats.n)} sub="SKU"/>
             {!isMtoCat ? (
-              <KPI label="สต๊อกคงเหลือ" accent={color} icon={I.package} value={fmtN(catStats.stock)} sub={role === "owner" ? fmtB(catStats.stockValue) : undefined}/>
+              <KPI label="สต๊อกคงเหลือ" accent={color} icon={I.package} value={fmtN(catStats.stock)}
+                   sub={role === "owner" ? `${fmtB(catStats.stockValue)} · ราคาขายส่ง` : undefined}/>
             ) : (
               <KPI label="ประเภทงาน" accent={color} icon={I.layers}
                    value={fmtN(new Set(products.filter(p=>p.cat===active).map(p=>p.mtoBase)).size)} sub="กลุ่ม"/>
@@ -6072,11 +6156,14 @@ function UploadView({ onDataLoaded, currentData }) {
         }, {})
       ).sort((a,b) => b.totalRev - a.totalRev);
 
+      // ข้อมูลจากไฟล์ที่อัปโหลดเองไม่ได้ผ่าน GAS จึงไม่มี wholesaleRatio จริง —
+      // ใช้ค่า fallback แล้วประกาศไว้ใน totals ให้หน้าเว็บติดป้ายฐานราคาได้เหมือนกัน
       const totals = {
         nSold: products.filter(p => p.soldQty > 0 && !p.isMTO).length,
         nWithStock: products.filter(p => stockQty(p) > 0).length,
-        totalStockValue: products.reduce((s, p) => s + stockQty(p) * p.price, 0),
+        totalStockValue: products.reduce((s, p) => s + stockQty(p) * p.price * WHOLESALE_RATIO_FALLBACK, 0),
         totalSoldRev: products.reduce((s, p) => s + p.soldRev, 0),
+        wholesaleRatio: WHOLESALE_RATIO_FALLBACK,
       };
 
       const newData = {

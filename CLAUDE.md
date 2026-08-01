@@ -323,6 +323,10 @@ PWA: ยื่น secret → claimLoginHandoff → GAS แฮชแล้วห�
 `ZORT_STORE`, `ZORT_APIKEY`, `ZORT_SECRET`, `LINE_ACCESS_TOKEN`, `LINE_USER_ID`
 - `APP_TOKEN` ใน `config.js` เป็น public (frontend) — ตรงกับ Script Property `APP_TOKEN`
   (กันคนสุ่มเจอ URL เท่านั้น ไม่ใช่ security จริง)
+- Script Property ที่**ไม่ใช่ความลับ** (ปรับพฤติกรรมระบบ ไม่ต้องตั้งก็มี default):
+  `STOCK_THRESHOLDS` · `WHOLESALE_RATIO` (อัตราราคาขายส่งของมูลค่าสต๊อก default `0.8`) ·
+  `NOTI_QUEUE_ENABLED`/`NOTI_ORDER_CUTOFF_HOUR`/`NOTI_MONTHLY_CAP` ·
+  `INAPP_NOTI_ENABLED` · `PRODUCT_OWNER_ENABLED` · `REQUIRE_LOGIN`
 - ห้ามใส่ model ID / ชื่อ internal ใน commit message, PR, หรือ comment ในโค้ด
 
 ## ZORT API endpoints ที่ค้นพบแล้ว (ใช้ได้จริง)
@@ -343,7 +347,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 863 tests, 25 test files, ทั้งหมด pass
+**มี Vitest test suite แล้ว** — 901 tests, 26 test files, ทั้งหมด pass
 
 ```bash
 npm test              # run tests
@@ -417,7 +421,17 @@ npm run test:coverage # coverage report (tests/helpers.js)
     · ถ้าตัดด้วย "หน้าต่างกี่เดือน" ให้เทียบ **เดือนปฏิทินจริง** (`y*12 + (m-1)`) อย่าใช้
     `slice(-N)` ท้าย array — `p.monthly` เป็น dense วันนี้ แต่ถ้าวันไหนกลายเป็น sparse
     slice จะหยิบยอดเมื่อ 2 ปีก่อนมานับเป็น "12 เดือนล่าสุด" เงียบ ๆ (ดู `abcWindowRev`)
-15. **กำไรคิดจาก `soldRev` ไม่ใช่ `price` (ราคาป้าย)** — ร้านขายส่ง −20% เป็นเรื่องปกติ
+15. **"มูลค่าสต๊อก" = ราคาขายส่ง ไม่ใช่ราคาป้าย** — GAS คูณ `WHOLESALE_RATIO`
+    (Script Property, default 0.8, sanitize 0 < x ≤ 1) เข้า `p.stockValue`/`WH`/`Store`
+    แล้วส่งอัตรามาที่ `totals.wholesaleRatio` · ฝั่งเว็บใช้ `stockValuesOf(p, ratio)` เสมอ
+    **ห้ามคูณ `price` เองแล้วเรียกว่า "มูลค่า"** และ **ห้าม hard-code 0.8 ซ้ำ**
+    · ⚠️ **คนละตัวกับ `COST_RATIO`** — ราคาขายส่ง = เงินที่เราจะได้ · ราคาทุน = เงินที่จ่ายซัพ
+16. **ZORT ไม่ให้ราคาทุนใน PO** (ยืนยัน `debugPurchasePrices()` 1 ส.ค. 2026: `pricepernumber`
+    และ `totalprice` = 0 ใน 88/91 line item) → **หน้ากำไรขั้นต้นคำนวณอะไรไม่ได้** และ KPI
+    "หมุนเวียนสินค้า" ถูกถอดออก · ที่ไหนก็ตามที่จะโชว์ตัวเลขจากราคาทุน **ต้องเช็คก่อนว่ามีข้อมูล
+    จริงไหม แล้วบอกผู้ใช้ตรง ๆ ถ้าไม่มี** — ห้ามบวกแล้วโชว์เงียบ ๆ (ของเดิมโชว์ "฿1" จาก 11,848 ชิ้น)
+    · แก้ที่ต้นทาง: กรอก "มูลค่าต่อหน่วย" ในใบสั่งซื้อฝั่ง ZORT แล้วตัวเลขจะขึ้นเอง
+17. **กำไรคิดจาก `soldRev` ไม่ใช่ `price` (ราคาป้าย)** — ร้านขายส่ง −20% เป็นเรื่องปกติ
     เอาราคาป้ายไปลบต้นทุนแล้วคูณจำนวน = กำไรเกินจริงเต็มส่วนลด · และ **`soldQty` รวม
     `soldQtyUnscanned`** (ของที่เบิกไปงาน MTO ซึ่งไม่มีเงินเข้าใน `soldRev`) ต้องหักออกก่อน
     เอาไปคูณต้นทุน — ดู `marginRowCore` (views-analytics.jsx)

@@ -8265,6 +8265,20 @@ function MarginView({ data }) {
         </div>
       </div>
 
+      {/* ไม่มีราคาทุนเลยสักรายการ = หน้านี้คำนวณอะไรไม่ได้ ต้องบอกตรง ๆ ว่าทำไม
+          (debugPurchasePrices() 1 ส.ค. 2026: ZORT คืนราคา 0 ใน 88/91 line item ของ PO 30 วัน)
+          ไม่งั้นเจ้าของเห็นตาราง "—" เต็มหน้าแล้วนึกว่าแอปพัง */}
+      {A.rows.length > 0 && A.revWithCost <= 0 && (
+        <div style={{ fontSize: 12.5, color: "#92400e", background: "#fffbeb", border: "1.5px solid #fcd34d",
+                      borderRadius: 10, padding: "10px 12px", marginBottom: 12, lineHeight: 1.5 }}>
+          ⚠️ <b>ยังคำนวณกำไรไม่ได้</b> — ใบสั่งซื้อ (PO) ที่ดึงมาจาก ZORT ไม่มีราคาต่อหน่วยเลยสักรายการ
+          <div style={{ marginTop: 3 }}>
+            วิธีแก้: กรอก "มูลค่าต่อหน่วย" ในใบสั่งซื้อฝั่ง ZORT แล้วรอ sync รอบถัดไป —
+            ตัวเลขในหน้านี้จะขึ้นเองโดยไม่ต้องแก้อะไรในแอป
+          </div>
+        </div>
+      )}
+
       <div style={{ fontSize: 12, color: "var(--muted)", background: "var(--g-50)", borderRadius: 10, padding: "8px 12px", marginBottom: 16 }}>
         📊 คำนวณจากยอดขาย <b>{Math.round(A.coverage * 100)}%</b> ที่มีประวัติต้นทุนจาก PO
         {A.noCostCount > 0 && <> · อีก <b>{A.noCostCount}</b> สินค้ายังไม่มีประวัติซื้อ (คำนวณกำไรไม่ได้)</>}

@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   completeMonths, currentMonthInfo, isCountableProduct,
   marginRowCore, abcClassify, abcWindowRev, ABC_WINDOW_MONTHS,
+  momDeltaOf, wholesaleRatioOf, stockValuesOf, WHOLESALE_RATIO_FALLBACK,
 } from './helpers.js';
 
 // สร้าง array รายเดือนย้อนหลังจากเดือน anchor: ["MM/YYYY", ...] เรียงเก่า→ใหม่
@@ -210,5 +211,100 @@ describe('abcClassify — หน้าต่าง 12 เดือนล่า�
     ]);
     expect(map.NOCODE).toBeUndefined();
     expect(map.OK).toBe('A');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+describe('momDeltaOf — % เทียบเดือนก่อนหน้า (ข้อ 1.1)', () => {
+  const series = [
+    { month: '05/2026', rev: 1000000 },
+    { month: '06/2026', rev: 1100000 },
+    { month: '07/2026', rev: 1280000 },
+    { month: '08/2026', rev: 900 },      // เดือนปัจจุบัน เพิ่งผ่านไป 1 วัน
+  ];
+  const CUR = '08/2026';
+
+  it('เทียบเดือนที่เลือกกับเดือนก่อนหน้าเดือนนั้น ไม่ใช่ 2 เดือนท้ายเสมอ', () => {
+    expect(momDeltaOf(series, '06/2026', CUR)).toBe('10.0');   // 1.1M vs 1.0M
+    expect(momDeltaOf(series, '07/2026', CUR)).toBe('16.4');   // 1.28M vs 1.1M
+  });
+
+  it('กดคนละเดือนต้องได้คนละค่า (บั๊กเดิม: ได้ −99.9% เท่ากันทุกเดือน)', () => {
+    expect(momDeltaOf(series, '06/2026', CUR)).not.toBe(momDeltaOf(series, '07/2026', CUR));
+  });
+
+  it('เดือนปัจจุบันที่ยังไม่จบ → ไม่โชว์ % เลย (null) แทนการโชว์ ↓99.9%', () => {
+    expect(momDeltaOf(series, CUR, CUR)).toBe(null);
+    // ยืนยันว่าสูตรเก่าจะได้อะไร: (900 − 1,280,000) / 1,280,000 ≈ −99.9%
+    const oldFormula = ((series[3].rev - series[2].rev) / series[2].rev * 100).toFixed(1);
+    expect(oldFormula).toBe('-99.9');
+  });
+
+  it('ข้ามปีถูก (ม.ค. เทียบ ธ.ค. ปีก่อน)', () => {
+    const s = [{ month: '12/2025', rev: 500 }, { month: '01/2026', rev: 750 }];
+    expect(momDeltaOf(s, '01/2026', '03/2026')).toBe('50.0');
+  });
+
+  it('เดือนก่อนหน้าไม่มีในข้อมูล → null (ไม่ข้ามไปเทียบเดือนที่ไกลกว่า)', () => {
+    const s = [{ month: '03/2026', rev: 500 }, { month: '07/2026', rev: 900 }];
+    expect(momDeltaOf(s, '07/2026', '08/2026')).toBe(null);
+  });
+
+  it('เดือนก่อนหน้ายอด 0 → null (หารศูนย์ไม่ได้)', () => {
+    const s = [{ month: '06/2026', rev: 0 }, { month: '07/2026', rev: 900 }];
+    expect(momDeltaOf(s, '07/2026', '08/2026')).toBe(null);
+  });
+
+  it('input ว่าง/พัง ไม่ throw', () => {
+    expect(momDeltaOf(null, '07/2026', '08/2026')).toBe(null);
+    expect(momDeltaOf(series, null, '08/2026')).toBe(null);
+    expect(momDeltaOf(series, 'ขยะ', '08/2026')).toBe(null);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+describe('มูลค่าสต๊อกที่ราคาขายส่ง (ข้อ 1.5)', () => {
+  it('อ่านอัตราจาก payload — ไม่ hard-code ฝั่งเว็บ', () => {
+    expect(wholesaleRatioOf({ totals: { wholesaleRatio: 0.75 } })).toBe(0.75);
+    expect(wholesaleRatioOf({ totals: { wholesaleRatio: 1 } })).toBe(1);
+  });
+
+  it('อัตราที่ใช้ไม่ได้ → fallback 0.8 (ไม่ใช่ 0 ที่จะทำให้มูลค่าหายทั้งร้าน)', () => {
+    expect(WHOLESALE_RATIO_FALLBACK).toBe(0.8);
+    for (const bad of [undefined, null, 0, -1, 1.5, '0.9', NaN]) {
+      expect(wholesaleRatioOf({ totals: { wholesaleRatio: bad } })).toBe(0.8);
+    }
+    expect(wholesaleRatioOf(null)).toBe(0.8);
+    expect(wholesaleRatioOf({})).toBe(0.8);
+  });
+
+  it('ใช้ค่าที่ GAS คิดมาเสมอเมื่อมี (จะได้ตรงกับ KPI ทุกหน้า)', () => {
+    const p = { qtyStore: 10, qtyWH: 5, price: 100, stockValue: 1200, stockValueWH: 400, stockValueStore: 800 };
+    const v = stockValuesOf(p, 0.8);
+    expect(v).toEqual({ all: 1200, wh: 400, store: 800 });
+  });
+
+  it('ไม่มีค่าจาก GAS (เช่นข้อมูลจากไฟล์อัปโหลด) → คูณอัตราขายส่งเอง', () => {
+    const p = { qtyStore: 10, qtyWH: 5, price: 100 };
+    const v = stockValuesOf(p, 0.8);
+    expect(v.all).toBe(1200);     // 15 × 100 × 0.8 — ไม่ใช่ 1,500 (ราคาป้าย)
+    expect(v.wh).toBe(400);
+    expect(v.store).toBe(800);
+  });
+
+  it('คลัง + หน้าร้าน = ยอดรวม (ตัวเลขบน KPI ต้องบวกกันได้)', () => {
+    const p = { qtyStore: 7, qtyWH: 3, price: 250 };
+    const v = stockValuesOf(p, 0.8);
+    expect(v.wh + v.store).toBeCloseTo(v.all);
+  });
+
+  it('stockValue = 0 จริง ๆ ต้องไม่ถูกมองว่า "ไม่มีค่า" แล้วคำนวณใหม่', () => {
+    const p = { qtyStore: 10, qtyWH: 0, price: 100, stockValue: 0, stockValueWH: 0, stockValueStore: 0 };
+    expect(stockValuesOf(p, 0.8).all).toBe(0);
+  });
+
+  it('input ว่าง ไม่ throw', () => {
+    expect(stockValuesOf(null, 0.8)).toEqual({ all: 0, wh: 0, store: 0 });
+    expect(stockValuesOf({ qty: 5 }, 0.8).all).toBe(0);   // ไม่มีราคา
   });
 });

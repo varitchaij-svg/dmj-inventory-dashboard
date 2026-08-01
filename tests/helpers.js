@@ -731,6 +731,38 @@ function isCountableProduct(p) {
   return !!p && !p.isMTO && !!p.cat && p.cat !== "ไม่มีรหัสสินค้า";
 }
 
+// ── momDeltaOf: % เทียบเดือนก่อนหน้าของ "เดือนที่เลือก" (จาก views-main.jsx) ──
+function momDeltaOf(monthlySeries, activeMonth, currentMonthKey) {
+  if (!Array.isArray(monthlySeries) || !activeMonth) return null;
+  if (currentMonthKey && activeMonth === currentMonthKey) return null;
+  const parts = String(activeMonth).split("/");
+  const m = Number(parts[0]), y = Number(parts[1]);
+  if (!m || !y) return null;
+  const prevKey = `${String(m === 1 ? 12 : m - 1).padStart(2, "0")}/${m === 1 ? y - 1 : y}`;
+  const cur  = monthlySeries.find(x => x && x.month === activeMonth);
+  const prev = monthlySeries.find(x => x && x.month === prevKey);
+  if (!cur || !prev || !(prev.rev > 0)) return null;
+  return ((cur.rev - prev.rev) / prev.rev * 100).toFixed(1);
+}
+
+// ── มูลค่าสต๊อกที่ราคาขายส่ง (จาก views-main.jsx) ──
+// (stockQty มีสำเนาอยู่แล้วด้านบนของไฟล์นี้ — stockValuesOf เรียกตัวนั้น)
+const WHOLESALE_RATIO_FALLBACK = 0.8;
+function wholesaleRatioOf(data) {
+  const r = data && data.totals && data.totals.wholesaleRatio;
+  return (typeof r === "number" && r > 0 && r <= 1) ? r : WHOLESALE_RATIO_FALLBACK;
+}
+function stockValuesOf(p, ratio) {
+  if (!p) return { all: 0, wh: 0, store: 0 };
+  const r = (typeof ratio === "number" && ratio > 0) ? ratio : WHOLESALE_RATIO_FALLBACK;
+  const price = p.price || 0;
+  return {
+    all:   typeof p.stockValue      === "number" ? p.stockValue      : stockQty(p)       * price * r,
+    wh:    typeof p.stockValueWH    === "number" ? p.stockValueWH    : (p.qtyWH    || 0) * price * r,
+    store: typeof p.stockValueStore === "number" ? p.stockValueStore : (p.qtyStore || 0) * price * r,
+  };
+}
+
 // ── marginRowCore: กำไรขั้นต้นของสินค้า 1 ตัว (จาก views-analytics.jsx) ──
 function marginRowCore(p, cost) {
   const soldQty   = Number(p && p.soldQty) || 0;
@@ -949,6 +981,7 @@ module.exports = {
   cleanupOrdersStateCore, stableOrderId,
   buildYoYSeries, abcClassify, abcWindowRev, ABC_WINDOW_MONTHS,
   completeMonths, currentMonthInfo, isCountableProduct, marginRowCore,
+  momDeltaOf, wholesaleRatioOf, stockValuesOf, WHOLESALE_RATIO_FALLBACK,
   sanitizeThresholds, THRESHOLDS_DEFAULT,
   parseCheckDateMs, suggestNextSku,
   parseSkuParts, nextModelForPrefix,
