@@ -207,6 +207,19 @@ const DASH_TABS = {
 };
 const COST_RATIO = 0.8;
 
+// ราคาที่ ZORT คืนมา (p.price) = **ราคาขายปลีก** · มูลค่าสต๊อกที่เจ้าของใช้ตัดสินใจจริง
+// คิดที่ **ราคาขายส่ง** = ปลีก − 20% → เก็บอัตราไว้ที่ Script Property ปรับได้โดยไม่ต้องแก้โค้ด
+// (ค่าที่ยอมรับ 0 < r ≤ 1 · นอกช่วง/ไม่ใช่ตัวเลข → กลับไปใช้ 0.8)
+const WHOLESALE_RATIO_DEFAULT = 0.8;
+function wholesaleRatio_() {
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty('WHOLESALE_RATIO');
+    const r = Number(raw);
+    if (raw !== null && raw !== '' && isFinite(r) && r > 0 && r <= 1) return r;
+  } catch (e) {}
+  return WHOLESALE_RATIO_DEFAULT;
+}
+
 // ───────────────────────────────────────────────────────────
 // Audit Log helper — fire-and-forget, ห้าม throw กระทบ main flow
 // resource: generic resource id — ไม่จำกัดแค่ SKU (order/MTO job/transfer/ฯลฯ)
@@ -2235,6 +2248,8 @@ function buildFullData_() {
     const transferHist = readTransferHistory_();  _mark('transferHist'); // วันโอนสาย5→หน้าร้านล่าสุด ต่อ SKU
     const unscannedMap = readUnscannedSalesMap_(); _mark('unscanned');   // ขายไม่สแกน (นับสต็อกแล้วของหาย=ขายออก) → บวกเข้า soldQty ไม่แตะยอดเงิน
 
+    const whRatio = wholesaleRatio_();  // ปลีก→ขายส่ง (อ่านครั้งเดียวต่อ build)
+
     // ── PERF: index purchases/transfers ต่อ SKU ครั้งเดียวก่อนเข้า loop ──
     // เดิม loop สินค้าเรียก purchases.filter()/transfers.filter() สแกน array ทั้งก้อนใหม่ทุกตัว
     // = O(สินค้า × รายการ) ซึ่งกับสินค้า 5,600+ ตัวคือหลายสิบล้านรอบต่อการ build payload 1 ครั้ง
@@ -2296,9 +2311,11 @@ function buildFullData_() {
       }
       p.cost       = p.price * COST_RATIO;
       p.profit     = p.soldRev * (1 - COST_RATIO);
-      p.stockValue      = p.qty     * p.price;
-      p.stockValueWH    = (p.qtyWH    || 0) * p.price; // มูลค่าฝั่งคลัง
-      p.stockValueStore = (p.qtyStore || 0) * p.price; // มูลค่าฝั่งหน้าร้าน
+      // มูลค่าสต๊อกคิดที่ **ราคาขายส่ง** (ปลีกจาก ZORT × wholesaleRatio) ตามที่เจ้าของใช้จริง
+      // p.price ยังเป็นราคาปลีกเหมือนเดิม — ที่นี่แปลงเฉพาะตอนคูณเป็นมูลค่า
+      p.stockValue      = p.qty     * p.price * whRatio;
+      p.stockValueWH    = (p.qtyWH    || 0) * p.price * whRatio; // มูลค่าฝั่งคลัง
+      p.stockValueStore = (p.qtyStore || 0) * p.price * whRatio; // มูลค่าฝั่งหน้าร้าน
 
       const sys = sysQtyMap[skuU];
       if (sys) {
@@ -2396,6 +2413,11 @@ function buildFullData_() {
         totalSoldRev:    products.reduce((s, p) => s + (p.soldRev || 0), 0),
         totalSoldQty:    products.reduce((s, p) => s + (p.soldQty || 0), 0),
         totalProfit:     products.reduce((s, p) => s + (p.profit || 0), 0),
+        // จำนวน SKU ที่เคยมียอดขาย (ตลอดกาล) — frontend คำนวณเองรายช่วงเวลาอีกที
+        // แต่ต้องมีคีย์นี้ไว้ ไม่งั้น fmtN(undefined) โชว์ 0 เงียบ ๆ
+        nSold:           products.filter(p => (p.soldQty || 0) > 0).length,
+        // ราคาขายส่ง = ปลีก × อัตรานี้ (มูลค่าสต๊อกด้านบนคูณไว้แล้ว) — ส่งมาให้ frontend ติดป้ายได้ถูก
+        wholesaleRatio:  whRatio,
       },
       mtoGroups: Object.values(mtoMap),
       stockCheckRequests: readStockCheckRequests_().filter(function(r){ return r.status === "pending"; }),

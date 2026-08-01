@@ -225,6 +225,13 @@ const TRACKED = [
     `if (p.supplierTags.length) p.vendor = p.supplierTags[0];`,
   ]},
 
+  // ── dashboard audit (ส.ค. 2026): ตัดเดือนที่ยังไม่จบออกจากค่าเฉลี่ย ────────
+  { names: ['completeMonths'], sourceFile: 'views-main.jsx', landmarks: [
+    `const currentMonth = \`\${String(now.getMonth() + 1).padStart(2, '0')}/\${now.getFullYear()}\`;`,
+    `const key = typeof m === 'string' ? m : m.month;`,
+    `return key !== currentMonth;`,
+  ]},
+
   // ── analytics (Sprint: YoY + ABC + thresholds ถาวร) ─────────────────────
   { names: ['buildYoYSeries'], sourceFile: 'views-main.jsx', landmarks: [
     `.map(m => String(m).split("/")[1])`,

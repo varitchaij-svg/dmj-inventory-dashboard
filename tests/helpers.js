@@ -107,6 +107,20 @@ function inappIsRead(readBy, staffId) {
   return false;
 }
 
+// ── จาก views-main.jsx: completeMonths ──────────────────────────────────────
+// กรอง "เดือนปัจจุบันที่ยังไม่จบ" ออกจากข้อมูลรายเดือน ก่อนเอาไปหาค่าเฉลี่ย
+// (รับได้ทั้ง array ของ {month} และ array ของ string "MM/YYYY")
+function completeMonths(monthly) {
+  if (!Array.isArray(monthly) || monthly.length === 0) return monthly;
+  const now = new Date();
+  const currentMonth = `${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
+  return monthly.filter(m => {
+    if (m == null) return false;
+    const key = typeof m === 'string' ? m : m.month;
+    return key !== currentMonth;
+  });
+}
+
 // ── จาก views.jsx บรรทัด 1466–1489 ──────────────────────────────────────────
 function stockQty(p) {
   if (!p) return 0;
@@ -871,6 +885,7 @@ module.exports = {
   notiAgo, inappAudienceMatch, inappIsRead,
   productOwnerMapFromRows, productOwnerCanSet,
   bahtText, readThaiInt_,
+  completeMonths,
   stockQty, whQty, mtoBase, compareSku,
   COL_PROD_SKU, COL_PROD_QTYFS, COL_PROD_QTYWH,
   mapProductRow, shouldRejectConflict,

@@ -376,7 +376,9 @@
   @media (max-width: 1100px) {
     .row-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .row-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .row-3 { grid-template-columns: minmax(0, 1fr); }
+    /* KPI 3 ใบ: เรียง 2+1 เหมือน row-4 — เดิมยุบเหลือคอลัมน์เดียวทำให้การ์ดยาวเป็นตับ
+       ต้องเลื่อนจอนานกว่าจะพ้น KPI (มือถือคือจอหลักของร้าน) */
+    .row-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .row-12-5 { grid-template-columns: minmax(0, 1fr); }
   }
   /* ── iPad landscape (1024px) — nav starts getting cramped ── */
