@@ -241,6 +241,13 @@ const TRACKED = [
   { names: ['abcClassify'], sourceFile: 'views-analytics.jsx', landmarks: [
     `if (total <= 0 || p.rev <= 0) { map[p.sku] = "C"; return; }`,
     `map[p.sku] = before < 0.8 ? "A" : before < 0.95 ? "B" : "C";`,
+    `.map(p => ({ sku: p.sku, rev: abcRevWindow_(p) }))`,
+  ]},
+  // หน้าต่าง 12 เดือนของ ABC — ถ้าต้นทางเปลี่ยนไปใช้ยอดสะสมอีก คิว "ควรนับก่อน" จะเพี้ยนเงียบ ๆ
+  { names: ['abcRevWindow_', 'ABC_WINDOW_MONTHS'], sourceFile: 'views-analytics.jsx', landmarks: [
+    `const ABC_WINDOW_MONTHS = 12;`,
+    `if (!m || !m.length) return p.soldRev || 0;`,
+    `return m.slice(-ABC_WINDOW_MONTHS).reduce((s, x) => s + ((x && x.sales) || 0), 0);`,
   ]},
   { names: ['parseCheckDateMs'], sourceFile: 'views-analytics.jsx', landmarks: [
     `if (yr >= 2400) yr -= 543; // พ.ศ. → ค.ศ.`,
