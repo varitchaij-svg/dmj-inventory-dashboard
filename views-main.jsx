@@ -2955,6 +2955,8 @@ function CategoryView({ data, role, onNav }) {
   const [purchasePlanMode, setPurchasePlanMode] = uS(role === "owner");
   const [supplierPage, setSupplierPage] = uS(0);
   const [checkToast, showCheckToast, hideCheckToast] = useToast();
+  // ⭐ ผู้ดูแลสินค้า — หน้านี้เป็นที่สั่งของบ่อยสุด จึงโชว์ป้ายด้วย (ป้ายบอกเฉย ๆ ไม่จำกัดสิทธิ์)
+  const prodOwner = useProductOwners(showCheckToast);
   const [sendingCheck, setSendingCheck] = uS(false);
   const [checkSendOpen, setCheckSendOpen] = uS(false);       // floating button → modal
   const [checkSuppliers, setCheckSuppliers] = uS(new Set()); // ชื่อ supplier ที่ owner เลือก
@@ -3784,7 +3786,7 @@ function CategoryView({ data, role, onNav }) {
                         .map(function(p) {
                           return (
                             <div key={p.sku}>
-                              <ProductCard p={p} accent={catColor(p.cat,allCats)} allCats={allCats} reasonTags={[]} onOrder={null} role={role}/>
+                              <ProductCard p={p} accent={catColor(p.cat,allCats)} allCats={allCats} reasonTags={[]} onOrder={null} role={role} prodOwner={prodOwner}/>
                             </div>
                           );
                         })}
@@ -3957,7 +3959,7 @@ function CategoryView({ data, role, onNav }) {
                                      onOrder={purchasePlanMode ? null : setOrderProduct}
                                      pendingOrderQty={pendingOrderQtyMap[(p.sku||"").trim().toUpperCase()] || 0}
                                      whReady={whReadyMap[(p.sku||"").trim().toUpperCase()] || []}
-                                     role={role}/>
+                                     role={role} prodOwner={prodOwner}/>
                       </div>
                     ))}
                   </div>
@@ -3988,7 +3990,7 @@ function CategoryView({ data, role, onNav }) {
                                onOrder={setOrderProduct}
                                pendingOrderQty={pendingOrderQtyMap[(p.sku||"").trim().toUpperCase()] || 0}
                                whReady={whReadyMap[(p.sku||"").trim().toUpperCase()] || []}
-                               role={role}/>
+                               role={role} prodOwner={prodOwner}/>
                 </div>
               ))}
             </div>
@@ -4530,8 +4532,13 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
   );
 }
 
-function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pendingOrderQty, whReady }) {
+function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pendingOrderQty, whReady, prodOwner }) {
   const whReadyQty = whReady ? whReady.reduce((s,o)=>s+(o.preparedQty||0),0) : 0;
+  // ⭐ ผู้ดูแลสินค้า — prodOwner มาจาก useProductOwners() ตัวเดียวที่ CategoryView เรียกครั้งเดียว
+  // (ไม่เรียกซ้ำต่อการ์ด กันยิง fetch ซ้ำเป็นร้อยครั้งต่อหน้า) การ์ดนี้แค่หยิบข้อมูล/toggle ไปใช้
+  const powOwner = prodOwner ? (prodOwner.owners[p.sku] || null) : null;
+  const powIsMine = !!(powOwner && prodOwner.me && String(powOwner.staffId) === String(prodOwner.me));
+  const powToggle = (prodOwner && !prodOwner.off) ? () => prodOwner.toggle(p.sku) : undefined;
   const totalQty = (p.qtyStore > 0 || p.qtyWH > 0) ? (p.qtyStore || 0) + (p.qtyWH || 0) : (p.qty || 0);
   const lowStock = !p.isMTO && totalQty > 0 && totalQty <= 36;
   const outOfStock = !p.isMTO && totalQty === 0;
@@ -4686,6 +4693,9 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
               {p.color.name}
             </span>
           )}
+          <OwnerStar owner={powOwner} isMine={powIsMine} onToggle={powToggle}
+            style={{position:"static", marginLeft:"auto", minWidth:28, height:28,
+                    fontSize: powIsMine ? 14 : 12, boxShadow:"none"}}/>
         </div>
         <div style={{fontSize:12.5, fontWeight:600, lineHeight:1.35,
                      overflow:"hidden", display:"-webkit-box",
@@ -9000,7 +9010,8 @@ function SupplierSearch({ value, onChange, allSuppliers }) {
 // ⭐ ป้าย "ใครดูแลสินค้าตัวนี้" — วางทับมุมขวาบนของรูป
 // เป็นป้ายบอกเฉย ๆ ไม่ได้จำกัดสิทธิ์อะไร ทุกคนยังหยิบ/สั่ง/เช็คสินค้าทุกตัวได้เหมือนเดิม
 // owner = null (ยังไม่มีคนดูแล) | {staffId, name}
-function OwnerStar({ owner, isMine, onToggle }) {
+// style: override ตำแหน่ง/ขนาด — ใช้ตอนวางแบบ inline ในแถวข้อความแทนลอยทับมุมรูป (ProductCard)
+function OwnerStar({ owner, isMine, onToggle, style }) {
   if (!onToggle) return null;                 // ระบบยังไม่เปิด (PRODUCT_OWNER_ENABLED) → ไม่ต้องโชว์
   const initial = owner && owner.name ? owner.name.trim().charAt(0) : "";
   const label = isMine ? "สินค้าที่ฉันดูแล (แตะเพื่อเอาออก)"
@@ -9008,7 +9019,7 @@ function OwnerStar({ owner, isMine, onToggle }) {
   return (
     <button title={label} aria-label={label}
       onClick={(e) => { e.stopPropagation(); onToggle(); }}
-      style={{
+      style={Object.assign({
         position:"absolute", top:6, right:6, minWidth:34, height:34, padding:"0 6px",
         borderRadius:17, cursor:"pointer", fontFamily:"inherit", lineHeight:1,
         display:"flex", alignItems:"center", justifyContent:"center", gap:3,
@@ -9017,7 +9028,7 @@ function OwnerStar({ owner, isMine, onToggle }) {
         boxShadow:"0 1px 4px rgba(0,0,0,.15)",
         fontSize: isMine ? 16 : 14, fontWeight:800,
         color: isMine ? "#b45309" : "var(--muted)",
-      }}>
+      }, style || {})}>
       {isMine ? "⭐" : owner ? (
         <>
           <span style={{fontSize:12}}>👤</span>
