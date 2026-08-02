@@ -483,6 +483,14 @@ npm run test:coverage # coverage report (tests/helpers.js)
     ของ Safari ซึ่งคนละใบกับ PWA → กลับมาเปิดไอคอนก็ยังไม่ได้ล็อกอิน · การบังคับ
     `window.location.href` ใน webview ตัวเอง (`lineLoginNavigate`) ช่วยได้บาง iOS เท่านั้น
     **ห้ามพึ่งอย่างเดียว** — ต้องมี **login handoff** (ดูหัวข้อด้านล่าง) เป็นทางกู้เสมอ
+13. **GAS ไม่ได้ตอบ JSON เสมอไป** — deployment ที่ลิงก์หมดอายุ/ถูกลบ, เว็บแอปที่ต้องขอสิทธิ์ใหม่,
+    quota เต็ม, Google ล่มชั่วคราว → ตอบกลับเป็น **หน้า HTML** และ `fetch` **ไม่ throw**
+    · เอาเข้า `res.json()` ตรง ๆ = พนักงานเห็น `Unexpected token '<', "<!DOCTYPE "…` (เจอจริง
+    ส.ค. 2026 ตอนพนักงานกดสั่งของไม่ได้) → **ใช้ `dmjJson(res)` (ui.jsx) ทุกจุด** แปลงเป็นข้อความ
+    ไทย + เก็บ status/ต้นข้อความลง console · error จาก fetch เองแปลงด้วย `dmjErrText(e)`
+    · ที่อันตรายกว่าคือ **"สำเร็จปลอม"**: `syncFrontStoreData` เดิม `await dmjFetch(...)` แล้ว
+    `return {success:true}` โดยไม่เคยอ่านคำตอบ → หน้าจอขึ้น "✅ บันทึกแล้ว" ทั้งที่ไม่มีอะไรถูกบันทึก
+    **ทุก syncXxx ต้องอ่านคำตอบจริงเสมอ** (เทสต์: `tests/gasjson.test.js` มี meta-test กันถอยกลับ)
 
 ## ระบบล็อกอินพนักงาน + ลงเวลาเข้า-ออกงาน (Sprint 5)
 

@@ -4388,11 +4388,17 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
   const [fsSaving, setFsSaving] = uS(false);
   const fsDirty = needFsCheck && !fsSkipped && fsQtyNum != null && fsQtyNum !== fsSavedQty;
 
+  const fsErrRef = React.useRef("");   // เหตุผลจริงที่บันทึกไม่ผ่าน (เอาไปโชว์ตอนกดสั่ง)
   const saveFsQty = async (n) => {
     setFsSaving(true);
     const res = await syncFrontStoreData([{ sku: product.sku, qty: n }]);
     setFsSaving(false);
-    if (res && res.success === false) { setFsSaveFailed(true); return false; }
+    if (res && res.success === false) {
+      fsErrRef.current = res.error || "";
+      setFsSaveFailed(true);
+      return false;
+    }
+    fsErrRef.current = "";
     setFsSavedQty(n); setFsSaveFailed(false);
     return true;
   };
@@ -4415,16 +4421,38 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
   const sheetUrl = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null;
   const outOfStock = (product.qtyWH !== undefined ? product.qtyWH : product.qty) <= 0;
 
-  const placeOrder = () => {
+  // ยิง action=order ไป GAS
+  //  · ใช้ dmjJson แทน r.json() — GAS ที่ล่ม/ลิงก์หมดอายุจะตอบเป็นหน้า HTML กลับมา
+  //    ถ้า parse ตรง ๆ พนักงานจะเห็น "Unexpected token '<' … is not valid JSON" ซึ่งอ่านไม่ออก
+  //  · ลองซ้ำอัตโนมัติ 1 ครั้ง เฉพาะกรณีที่พลาดแบบชั่วคราว (เน็ตมือถือกระตุก/GAS cold start)
+  //    ถ้า GAS ตอบ JSON มาว่า "ไม่สำเร็จ" = เหตุผลจริงจากหลังบ้าน → ไม่ลองซ้ำ (กันสั่งซ้ำซ้อน)
+  const placeOrder = async () => {
     const _sep = sheetUrl.includes('?') ? '&' : '?';
-    const url = `${sheetUrl}${_sep}action=order&sku=${encodeURIComponent(product.sku)}&qty=${qty}&orderType=${encodeURIComponent(orderType)}`;
-    return fetch(url)
-      .then(r => r.json())
-      .then(d => {
-        if (d.ok) { setDone(true); onOrderSuccess && onOrderSuccess(product.sku, qty); setTimeout(onClose, 2000); }
-        else setErr(d.error || 'เกิดข้อผิดพลาด');
-      })
-      .catch(e => setErr(e.message));
+    // ส่ง name/image ไปด้วย — handleOrder_ เขียนลงคอลัมน์ G/J ของชีต "ลำดับที่สั่งสินค้า"
+    // (เดิมไม่ส่ง ทุกออเดอร์เลยได้ชื่อ/รูปว่าง คลังต้องเปิดหารหัสเองว่าคือของอะไร)
+    const img = String(product.imageUrl || '');
+    const url = `${sheetUrl}${_sep}action=order&sku=${encodeURIComponent(product.sku)}`
+              + `&qty=${qty}&orderType=${encodeURIComponent(orderType)}`
+              + `&name=${encodeURIComponent(product.name || '')}`
+              + (img && img.length <= 300 ? `&image=${encodeURIComponent(img)}` : '')
+              + `&_t=${Date.now()}`;
+    let lastErr = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) await new Promise(r => setTimeout(r, 1200));
+      try {
+        const d = await dmjJson(await fetch(url, { cache: 'no-store' }));
+        if (d && d.ok) {
+          setDone(true);
+          onOrderSuccess && onOrderSuccess(product.sku, qty);
+          setTimeout(onClose, 2000);
+          return true;
+        }
+        setErr((d && d.error) || 'บันทึกรายการสั่งไม่สำเร็จ');
+        return false;
+      } catch (e) { lastErr = e; }
+    }
+    setErr(dmjErrText(lastErr));
+    return false;
   };
 
   // คลังหมด → สั่งไม่ได้ แต่ยังนับหน้าร้านได้ (auto-save ยิงเองอยู่แล้ว ปุ่มนี้คือบันทึกทันทีแล้วปิด)
@@ -4433,7 +4461,7 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
     setLoading(true); setErr(null);
     const ok = await saveFsQty(fsQtyNum);
     setLoading(false);
-    if (!ok) { setErr('บันทึกจำนวนหน้าร้านไม่สำเร็จ (เน็ตอาจหลุด) — ลองใหม่อีกครั้ง'); return; }
+    if (!ok) { setErr('บันทึกจำนวนหน้าร้านไม่สำเร็จ — ' + (fsErrRef.current || 'ลองใหม่อีกครั้ง')); return; }
     onClose();
   };
 
@@ -4448,7 +4476,8 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
       if (fsDirty && !skipFsSave) {
         const ok = await saveFsQty(fsQtyNum);
         if (!ok) {
-          setErr('บันทึกจำนวนหน้าร้านไม่สำเร็จ (เน็ตอาจหลุด) — ลองใหม่ หรือกดสั่งเลยโดยไม่บันทึก');
+          setErr('บันทึกจำนวนหน้าร้านไม่สำเร็จ — ' + (fsErrRef.current || 'เน็ตอาจหลุด')
+                 + ' · ลองใหม่ หรือกดสั่งเลยโดยไม่บันทึก');
           return;
         }
       }
@@ -4695,8 +4724,15 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
 
               {err && (
                 <div style={{background:"#fff0f0", border:"1px solid #fcc", borderRadius:8,
-                             padding:"8px 12px", fontSize:12, color:"var(--dang)", marginBottom:12}}>
+                             padding:"10px 12px", fontSize:12, color:"var(--dang)", marginBottom:12,
+                             lineHeight:1.5}}>
                   ⚠️ {err}
+                  {/* ปุ่มลองใหม่ในกล่อง error เอง — พนักงานไม่ต้องเดาว่ากดปุ่มไหนต่อ */}
+                  <button onClick={() => { setErr(null); handleSubmit(false); }} disabled={loading}
+                          style={{...btnBase, width:"100%", marginTop:8, padding:"9px 0",
+                                  background:"#fff", color:"var(--dang)", borderColor:"#fcc"}}>
+                    🔄 ลองใหม่อีกครั้ง
+                  </button>
                 </div>
               )}
 
@@ -7939,10 +7975,14 @@ function ScanButton({ onScan, continuous = false, size = 36, style: extraStyle }
 }
 
 // ─── sync front store data ───
+// ⚠️ เดิมฟังก์ชันนี้ `await dmjFetch(...)` แล้ว **คืน success:true ทุกครั้ง** โดยไม่เคยอ่านคำตอบเลย
+//    → GAS ล่ม/ลิงก์หมดอายุ (ตอบหน้า HTML กลับมา) fetch ก็ไม่ throw หน้าจอจึงขึ้น
+//    "✅ บันทึกหน้าร้าน N ชิ้น เข้าระบบ + ZORT แล้ว" ทั้งที่ไม่มีอะไรถูกบันทึกจริง — ยอดที่พนักงาน
+//    อุตส่าห์นับหายเงียบ ๆ · ตอนนี้อ่านคำตอบจริงผ่าน dmjJson แล้ว (แนวเดียวกับ syncXxx ตัวอื่น)
 async function syncFrontStoreData(entries) {
-  if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
+  if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false, error: "ไม่พบ URL" }; }
   try {
-    await dmjFetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
@@ -7952,8 +7992,10 @@ async function syncFrontStoreData(entries) {
         actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
       }),
     });
-    return { success: true };
-  } catch (err) { return { success: false, error: err.message }; }
+    const d = await dmjJson(res);
+    if (d && d.success === false) return { success: false, error: d.error || "บันทึกไม่สำเร็จ" };
+    return { success: true, data: d && d.data };
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
 
 // ─── เพิ่มสินค้าใหม่เข้า ZORT ───

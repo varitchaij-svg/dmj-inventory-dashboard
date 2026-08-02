@@ -207,6 +207,43 @@ function dmjFetch(url, opts) {
   return fetch(url, opts);
 }
 
+// ────────────── dmjJson / dmjErrText — อ่านคำตอบจาก GAS ให้ปลอดภัย ──────────────
+// ทำไมต้องมี: GAS **ไม่ได้ตอบ JSON เสมอไป** — deployment ที่ถูกลบ/เปลี่ยน URL, เว็บแอปที่
+// ต้องขอสิทธิ์ใหม่, quota เต็ม, หรือ Google ล่มชั่วคราว จะตอบกลับมาเป็น "หน้า HTML"
+// พอเอาเข้า `res.json()` ตรง ๆ จะโยน error ดิบภาษาอังกฤษ
+//   Unexpected token '<', "<!DOCTYPE "... is not valid JSON
+// ซึ่งไปโผล่บนจอพนักงานหน้าร้าน (อ่านไม่ออก + ไม่รู้ว่าต้องทำอะไรต่อ) — เจอจริง ส.ค. 2026
+// ตอนพนักงานกดสั่งของไม่ได้ · ตัวนี้แปลงเป็นข้อความไทยที่บอกวิธีแก้ และเก็บของจริง
+// (status + ต้นข้อความ) ไว้ใน console ให้เจ้าของ/คนดูแลไล่สาเหตุต่อได้
+async function dmjJson(res) {
+  const txt = await res.text();
+  try {
+    return JSON.parse(txt);
+  } catch (e) {
+    const head = String(txt || "").slice(0, 300);
+    console.warn("[dmjJson] GAS ตอบกลับไม่ใช่ JSON", { status: res.status, url: res.url, head });
+    const err = new Error(/^\s*</.test(txt)
+      ? "ระบบหลังบ้าน (Google) ตอบกลับไม่ถูกต้อง — อาจกำลังอัปเดตอยู่ หรือลิงก์ระบบหมดอายุ กรุณาลองใหม่ ถ้ายังไม่ได้ให้แจ้งเจ้าของ"
+      : "ระบบหลังบ้านตอบข้อมูลไม่ครบ กรุณาลองใหม่อีกครั้ง");
+    err.dmjKind = "badjson";
+    err.dmjStatus = res.status;
+    err.dmjBody = head;
+    throw err;
+  }
+}
+
+// แปลง error (ทั้งจาก dmjJson และ fetch ที่ล้มเอง) เป็นข้อความไทยสั้น ๆ ที่พนักงานอ่านรู้เรื่อง
+function dmjErrText(e) {
+  if (!e) return "เกิดข้อผิดพลาด กรุณาลองใหม่";
+  if (e.dmjKind === "badjson") return e.message;
+  if (e.name === "AbortError") return "เซิร์ฟเวอร์ตอบช้าเกินไป — กรุณาลองใหม่อีกครั้ง";
+  const m = String(e.message || "");
+  if (e instanceof TypeError || /Failed to fetch|Load failed|NetworkError/i.test(m)) {
+    return "ต่อเน็ตไม่ได้ — เช็คสัญญาณ/Wi-Fi แล้วลองใหม่อีกครั้ง";
+  }
+  return m || "เกิดข้อผิดพลาด กรุณาลองใหม่";
+}
+
 // ────────────── กระดิ่งแจ้งเตือนในแอป 🔔 ──────────────
 // ทำไมอยู่ในไฟล์นี้: ui.jsx เป็นไฟล์เล็กสุด (โหลดก่อนใคร) — ยัดลง views-main/analytics ที่
 // ใหญ่อยู่แล้วจะยิ่งถ่วง Babel compile time (เหตุผลเดียวกับที่แยกไฟล์ view ไว้แต่แรก)
