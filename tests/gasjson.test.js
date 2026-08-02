@@ -150,3 +150,28 @@ describe('meta — จุดเชื่อมต่อในโค้ดจร�
     expect(UI).toMatch(/function dmjErrText\(/);
   });
 });
+
+// ── meta-test: ห้ามยิง updateFrontStore ซ้อนกัน ────────────────────────────────
+// GAS ปฏิเสธ execution ที่ซ้อนกันด้วย "หน้า HTML" ไม่ใช่ JSON — ถ้า auto-save (debounce 2 วิ)
+// กับปุ่มยืนยันสั่งยิงพร้อมกันเมื่อไหร่ บั๊ก "Unexpected token '<'" จะกลับมาทันที
+describe('meta — OrderModal ต้องต่อคิวคำขอ ไม่ยิงขนาน', () => {
+  const saveFs = grab(VIEWS_MAIN, /const saveFsQty = \(n\) => \{[\s\S]*?\n  \};/, 'saveFsQty');
+  const placeOrder = grab(VIEWS_MAIN, /const placeOrder = async \(\) => \{[\s\S]*?\n  \};/, 'placeOrder');
+
+  it('saveFsQty ต่อคิวกับงานที่ค้างอยู่ผ่าน fsInflightRef', () => {
+    expect(saveFs).toMatch(/fsInflightRef\.current\s*\|\|\s*Promise\.resolve\(\)/);
+    expect(saveFs).toMatch(/fsInflightRef\.current\s*=\s*p/);
+  });
+
+  it('saveFsQty ข้ามงานซ้ำเมื่อค่าถูกบันทึกไปแล้วระหว่างรอคิว', () => {
+    expect(saveFs).toMatch(/fsSavedRef\.current === n/);
+  });
+
+  it('placeOrder ต้องรองานบันทึกหน้าร้านที่ค้างอยู่ก่อนยิง action=order', () => {
+    expect(placeOrder).toMatch(/await fsInflightRef\.current/);
+  });
+
+  it('dmjJson เก็บ error ล่าสุดไว้ให้เจ้าของเปิดดูย้อนหลังได้', () => {
+    expect(UI).toContain('dmj_last_backend_error');
+  });
+});

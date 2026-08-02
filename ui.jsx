@@ -222,9 +222,16 @@ async function dmjJson(res) {
   } catch (e) {
     const head = String(txt || "").slice(0, 300);
     console.warn("[dmjJson] GAS ตอบกลับไม่ใช่ JSON", { status: res.status, url: res.url, head });
-    const err = new Error(/^\s*</.test(txt)
+    // เก็บของจริงไว้ให้เจ้าของเปิดดูย้อนหลังได้ — พนักงานอยู่หน้าร้านเปิด console ไม่ได้
+    // (ดูด้วย localStorage.getItem("dmj_last_backend_error") ใน DevTools)
+    try {
+      localStorage.setItem("dmj_last_backend_error", JSON.stringify({
+        when: new Date().toISOString(), status: res.status, url: res.url, head,
+      }));
+    } catch (e) { /* localStorage เต็ม/ปิดอยู่ → ข้าม ไม่ให้กระทบงานหลัก */ }
+    const err = new Error((/^\s*</.test(txt)
       ? "ระบบหลังบ้าน (Google) ตอบกลับไม่ถูกต้อง — อาจกำลังอัปเดตอยู่ หรือลิงก์ระบบหมดอายุ กรุณาลองใหม่ ถ้ายังไม่ได้ให้แจ้งเจ้าของ"
-      : "ระบบหลังบ้านตอบข้อมูลไม่ครบ กรุณาลองใหม่อีกครั้ง");
+      : "ระบบหลังบ้านตอบข้อมูลไม่ครบ กรุณาลองใหม่อีกครั้ง") + ` [รหัส ${res.status}]`);
     err.dmjKind = "badjson";
     err.dmjStatus = res.status;
     err.dmjBody = head;

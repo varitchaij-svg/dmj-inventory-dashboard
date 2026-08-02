@@ -4389,18 +4389,33 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
   const fsDirty = needFsCheck && !fsSkipped && fsQtyNum != null && fsQtyNum !== fsSavedQty;
 
   const fsErrRef = React.useRef("");   // เหตุผลจริงที่บันทึกไม่ผ่าน (เอาไปโชว์ตอนกดสั่ง)
-  const saveFsQty = async (n) => {
-    setFsSaving(true);
-    const res = await syncFrontStoreData([{ sku: product.sku, qty: n }]);
-    setFsSaving(false);
-    if (res && res.success === false) {
-      fsErrRef.current = res.error || "";
-      setFsSaveFailed(true);
-      return false;
-    }
-    fsErrRef.current = "";
-    setFsSavedQty(n); setFsSaveFailed(false);
-    return true;
+  const fsSavedRef = React.useRef(null);   // ค่าที่บันทึกแล้ว (ref — closure ของ timer เห็นค่าล่าสุดเสมอ)
+  const fsInflightRef = React.useRef(null); // งานบันทึกที่กำลังวิ่งอยู่ (มีได้ทีละงานเดียว)
+
+  // ⚠️ ต้อง "ต่อคิว" ไม่ใช่ยิงขนาน — เดิม auto-save (debounce 2 วิ) กับปุ่มยืนยันสั่ง
+  //    เรียกตัวนี้ซ้อนกันได้ (timer ยิงไปแล้ว แต่ fsDirty ยังไม่ทันเป็น false ตอนผู้ใช้กดปุ่ม)
+  //    → updateFrontStore 2 ตัววิ่งพร้อมกัน แย่ง LockService กันเอง และ GAS ปฏิเสธ
+  //    execution ที่ซ้อนกันด้วย **หน้า HTML** (ไม่ใช่ JSON) = ต้นตอ "Unexpected token '<'"
+  //    ที่พนักงานเจอ · คิวเดียวจบ ทั้งเร็วกว่าและไม่ต้องแย่ง lock
+  const saveFsQty = (n) => {
+    const run = async () => {
+      if (fsSavedRef.current === n) return true;   // มีคนบันทึกค่านี้ไปแล้วระหว่างรอคิว
+      setFsSaving(true);
+      const res = await syncFrontStoreData([{ sku: product.sku, qty: n }]);
+      setFsSaving(false);
+      if (res && res.success === false) {
+        fsErrRef.current = res.error || "";
+        setFsSaveFailed(true);
+        return false;
+      }
+      fsErrRef.current = "";
+      fsSavedRef.current = n;
+      setFsSavedQty(n); setFsSaveFailed(false);
+      return true;
+    };
+    const p = (fsInflightRef.current || Promise.resolve()).catch(() => {}).then(run);
+    fsInflightRef.current = p;
+    return p;
   };
 
   uE(() => {
@@ -4415,7 +4430,14 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
   fsFlushRef.current = { sku: product.sku, qty: fsQtyNum, saved: fsSavedQty, dirty: fsDirty };
   uE(() => () => {
     const f = fsFlushRef.current;
-    if (f.dirty && f.qty != null) syncFrontStoreData([{ sku: f.sku, qty: f.qty }]);
+    // เช็คกับ ref ไม่ใช่ state — กันยิงซ้ำกับงานที่เพิ่งบันทึกค่าเดียวกันไปแล้ว
+    if (f.dirty && f.qty != null && fsSavedRef.current !== f.qty) {
+      const p = (fsInflightRef.current || Promise.resolve()).catch(() => {});
+      p.then(() => {
+        if (fsSavedRef.current === f.qty) return;   // คิวก่อนหน้าบันทึกให้แล้ว
+        syncFrontStoreData([{ sku: f.sku, qty: f.qty }]);
+      });
+    }
   }, []);
 
   const sheetUrl = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null;
@@ -4427,6 +4449,9 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
   //  · ลองซ้ำอัตโนมัติ 1 ครั้ง เฉพาะกรณีที่พลาดแบบชั่วคราว (เน็ตมือถือกระตุก/GAS cold start)
   //    ถ้า GAS ตอบ JSON มาว่า "ไม่สำเร็จ" = เหตุผลจริงจากหลังบ้าน → ไม่ลองซ้ำ (กันสั่งซ้ำซ้อน)
   const placeOrder = async () => {
+    // รอให้ updateFrontStore ที่ค้างอยู่จบก่อนเสมอ — ยิงชนกันคือเหตุที่ GAS ตอบหน้า HTML
+    // (auto-save อาจยิงไปแล้วโดยที่ fsDirty เป็น false ตอน handleSubmit อ่านค่า)
+    if (fsInflightRef.current) { try { await fsInflightRef.current; } catch (e) { /* จัดการแล้วใน saveFsQty */ } }
     const _sep = sheetUrl.includes('?') ? '&' : '?';
     // ส่ง name/image ไปด้วย — handleOrder_ เขียนลงคอลัมน์ G/J ของชีต "ลำดับที่สั่งสินค้า"
     // (เดิมไม่ส่ง ทุกออเดอร์เลยได้ชื่อ/รูปว่าง คลังต้องเปิดหารหัสเองว่าคือของอะไร)

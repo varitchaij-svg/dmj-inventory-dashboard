@@ -491,6 +491,13 @@ npm run test:coverage # coverage report (tests/helpers.js)
     · ที่อันตรายกว่าคือ **"สำเร็จปลอม"**: `syncFrontStoreData` เดิม `await dmjFetch(...)` แล้ว
     `return {success:true}` โดยไม่เคยอ่านคำตอบ → หน้าจอขึ้น "✅ บันทึกแล้ว" ทั้งที่ไม่มีอะไรถูกบันทึก
     **ทุก syncXxx ต้องอ่านคำตอบจริงเสมอ** (เทสต์: `tests/gasjson.test.js` มี meta-test กันถอยกลับ)
+    · **ต้นเหตุที่ทำให้ GAS ตอบ HTML บ่อยสุดคือ "ยิงซ้อนกัน"** — GAS ปฏิเสธ execution ที่ซ้อนกัน
+    ของ user เดียวกันด้วยหน้า HTML ไม่ใช่ JSON · ใน `OrderModal` auto-save (debounce 2 วิ) กับ
+    ปุ่มยืนยันสั่งเคยยิงพร้อมกันได้ (timer ยิงไปแล้วแต่ `fsDirty` ยังไม่ทันเป็น false ตอนกดปุ่ม)
+    → แก้ด้วยการ **ต่อคิวผ่าน `fsInflightRef`** (`saveFsQty` chain ต่อกัน + `placeOrder` รอคิวจบก่อน)
+    **เวลาเพิ่มปุ่มที่ยิง GAS ใกล้กัน ให้ต่อคิวแบบเดียวกันเสมอ อย่ายิงขนาน**
+    · error ล่าสุดถูกเก็บไว้ที่ `localStorage.dmj_last_backend_error` (เวลา/status/ต้นข้อความ)
+    — พนักงานอยู่หน้าร้านเปิด console ไม่ได้ เจ้าของเปิดดูย้อนหลังได้จากตรงนี้
 
 ## ระบบล็อกอินพนักงาน + ลงเวลาเข้า-ออกงาน (Sprint 5)
 
