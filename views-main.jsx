@@ -4419,7 +4419,17 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
     const _sep = sheetUrl.includes('?') ? '&' : '?';
     const url = `${sheetUrl}${_sep}action=order&sku=${encodeURIComponent(product.sku)}&qty=${qty}&orderType=${encodeURIComponent(orderType)}`;
     return fetch(url)
-      .then(r => r.json())
+      .then(r => r.text())
+      .then(t => {
+        try { return JSON.parse(t); }
+        catch (e) {
+          // เซิร์ฟเวอร์ตอบกลับไม่ใช่ JSON — มักเป็นเน็ตหลุดกลางทาง หรือ Google ตอบหน้า error ของตัวเอง
+          // (ไม่ใช่ error จากโค้ดเรา — handleOrder_ ฝั่ง GAS ห่อ try/catch คืน JSON เสมอ)
+          // ไม่รู้แน่ว่าคำสั่งบันทึกเข้าชีตไปแล้วหรือยัง จึงไม่ auto-retry เอง (เสี่ยงสั่งซ้ำสองเด้ง)
+          console.warn('placeOrder: non-JSON response', t.slice(0, 200));
+          throw new Error('เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ — เช็กแท็บ "รายการสั่งของ" ก่อนกดยืนยันซ้ำ');
+        }
+      })
       .then(d => {
         if (d.ok) { setDone(true); onOrderSuccess && onOrderSuccess(product.sku, qty); setTimeout(onClose, 2000); }
         else setErr(d.error || 'เกิดข้อผิดพลาด');

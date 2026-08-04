@@ -483,6 +483,15 @@ npm run test:coverage # coverage report (tests/helpers.js)
     ของ Safari ซึ่งคนละใบกับ PWA → กลับมาเปิดไอคอนก็ยังไม่ได้ล็อกอิน · การบังคับ
     `window.location.href` ใน webview ตัวเอง (`lineLoginNavigate`) ช่วยได้บาง iOS เท่านั้น
     **ห้ามพึ่งอย่างเดียว** — ต้องมี **login handoff** (ดูหัวข้อด้านล่าง) เป็นทางกู้เสมอ
+13. **`fetch().then(r => r.json())` ตรง ๆ พังเมื่อเน็ตหลุดกลางทาง**: มือถือ/เน็ตร้านมักเจอ
+    proxy/captive portal ตอบ HTML error page แทน JSON → `r.json()` throw
+    `Unexpected token '<', "<!DOCTYPE "... is not valid JSON` ซึ่งเป็นข้อความ JS ดิบที่
+    พนักงานอ่านไม่รู้เรื่อง (เจอที่ `OrderModal.placeOrder`, views-main.jsx) · แก้ด้วย
+    `r.text()` ก่อนแล้ว `try/catch` รอบ `JSON.parse` เอง โชว์ข้อความไทยที่บอกให้เช็ครายการ
+    ก่อนกดซ้ำแทน — **ห้าม auto-retry คำสั่งที่เป็นการเขียนข้อมูล** (เช่นสั่งของ) เมื่อ parse
+    พลาด เพราะ backend อาจเขียนแถวสำเร็จไปแล้วก่อนที่ response จะเสียกลางทาง
+    (`handleOrder_` ไม่มี idempotency key) retry ซ้ำจะสั่งของสองเด้ง — ปล่อยให้ผู้ใช้เป็น
+    คนตัดสินใจกดปุ่มยืนยันซ้ำเอง (เหมือนแพทเทิร์น `fsSaveFailed` ในไฟล์เดียวกัน)
 
 ## ระบบล็อกอินพนักงาน + ลงเวลาเข้า-ออกงาน (Sprint 5)
 
