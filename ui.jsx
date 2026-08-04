@@ -383,7 +383,17 @@ function NotiBell({ onNavigate }) {
                 return (
                   <button key={it.id} className={`noti-item${it.read ? "" : " unread"}`}
                           onClick={() => openItem(it)}>
-                    <span className="noti-emoji" style={{background: meta.color + "18"}}>{meta.emoji}</span>
+                    {it.image && (
+                      <img src={it.image} alt="" className="noti-thumb" loading="lazy"
+                           onError={(e) => {
+                             e.target.style.display = "none";
+                             e.target.nextElementSibling.style.display = "flex";
+                           }}/>
+                    )}
+                    <span className="noti-emoji" style={{background: meta.color + "18",
+                                                           display: it.image ? "none" : "flex"}}>
+                      {meta.emoji}
+                    </span>
                     <span className="noti-text">
                       <span className="noti-title">{it.title}</span>
                       {it.body && <span className="noti-body">{it.body}</span>}

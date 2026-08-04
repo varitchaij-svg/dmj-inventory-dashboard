@@ -3181,6 +3181,7 @@ function confirmShipmentReceive(ss, rowId, sku, receivedQty, actor) {
         title: '⚠️ หน้าร้านรับของไม่ครบ',
         body: rowSku + ' · รับ ' + recv + '/' + sentQty + ' ชิ้น' + (actor ? ' · ' + actor : ''),
         by: actor,
+        image: String(sheet.getRange(rowNum, COL_SHIP_IMAGE).getDisplayValue() || ''),   // แถวนี้ SKU เดียว — ดึงรูปจากคอลัมน์ J ได้ตรง ๆ
       });
     }
     return ok({ row: rowNum, receivedQty: recv, status });
@@ -8161,11 +8162,13 @@ function handleOrder_(params) {
 //   เปิดจริงเมื่อเจ้าของรัน setupInappNoti() 1 ครั้งใน GAS editor · ปิดด้วย disableInappNoti()
 // ══════════════════════════════════════════════════════════════════════════
 
-// คอลัมน์ชีตแจ้งเตือนในแอป (1-indexed): A..K
+// คอลัมน์ชีตแจ้งเตือนในแอป (1-indexed): A..L
+// ⚠️ IMAGE ต่อท้ายเป็นคอลัมน์ L (ไม่แทรกกลาง) — ชีตจริงมีแถวเก่าที่เขียนด้วย layout 11
+// คอลัมน์อยู่แล้ว แทรกกลางจะทำให้ตำแหน่งคอลัมน์เดิม (READBY/EXPIRES) เพี้ยนย้อนหลังทั้งชีต
 var INAPP_COL = { ID:1, CREATED:2, AUDIENCE:3, TYPE:4, TITLE:5, BODY:6,
-                  TAB:7, BY:8, DEDUP:9, READBY:10, EXPIRES:11 };
+                  TAB:7, BY:8, DEDUP:9, READBY:10, EXPIRES:11, IMAGE:12 };
 var INAPP_HEADERS = ["id","createdAt","audience","type","title","body",
-                     "tab","createdBy","dedupKey","readBy","expiresAt"];
+                     "tab","createdBy","dedupKey","readBy","expiresAt","image"];
 
 var INAPP_KEEP_DAYS_DEFAULT = 14;   // ปรับได้ที่ Script Property INAPP_NOTI_KEEP_DAYS
 var INAPP_MAX_RETURN        = 30;   // จำนวนแถวที่ส่งกลับให้ frontend ต่อรอบ poll
@@ -8256,6 +8259,7 @@ function pushInappNoti_(opts) {
       dedupKey,
       '',
       new Date(now.getTime() + ttlDays * 86400000),
+      String(opts.image || ''),   // รูปสินค้า — ใส่เฉพาะแจ้งเตือนที่ผูกกับ SKU เดียว (ดูหมายเหตุ IMAGE ด้านบน)
     ]);
   } catch (e) {
     Logger.log('pushInappNoti_ error (ข้ามไป ไม่กระทบงานหลัก): ' + e);
@@ -8306,6 +8310,7 @@ function listInappNotiHandler_(e) {
         body:  String(r[INAPP_COL.BODY - 1] || ''),
         tab:   String(r[INAPP_COL.TAB - 1] || ''),
         by:    String(r[INAPP_COL.BY - 1] || ''),
+        image: String(r[INAPP_COL.IMAGE - 1] || ''),
         read:  isRead,
       });
     }
@@ -9009,6 +9014,7 @@ function sendLineGroupOrderCard_(name, sku, date, imageUrl, qty) {
     type: 'order', tab: 'orders',
     title: '📦 ออเดอร์ใหม่ ' + (Number(qty) || 0) + ' ชิ้น',
     body: (name || sku || '-') + (sku ? ' · ' + sku : ''),
+    image: imageUrl || '',   // ออเดอร์เดียวมี SKU เดียว — มีรูปให้ใส่ตรง ๆ
   });
 }
 
