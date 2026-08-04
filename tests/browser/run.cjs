@@ -64,7 +64,14 @@ const ASSERT = {
   whhome:     async (page) => hasText(page, ['งานของฉัน', 'มี 1 งานที่ยังไม่เสร็จ'], 'การ์ดงานของฉัน'),
   stock:      async (page) => hasText(page, ['FLW002'], 'low-stock SKU (FLW002 qty8<threshold)'),
   storage:    async (page) => hasText(page, ['A1/05', 'A2/03', 'DEC003'], 'lock/สินค้าในคลัง'),
-  orders:     async (page) => hasText(page, ['VAS001', 'FLW002'], 'order SKU'),
+  // ชื่อผู้สั่ง/ผู้จัดต้องขึ้นจริงบนแถวออเดอร์ (ไม่ใช่แค่มีข้อมูลอยู่ใน payload)
+  orders:     async (page) => {
+    const base = await hasText(page, ['VAS001', 'FLW002'], 'order SKU');
+    if (!base.ok) return base;
+    const who = await hasAllText(page,
+      ['สั่ง: สมชาย ใจดี (หน้าร้าน)', 'จัด: สมหญิง ขยัน (คลังสินค้า)'], 'ชื่อผู้สั่ง/ผู้จัด');
+    return { ok: who.ok, detail: base.detail + ' | ' + who.detail };
+  },
   mtojobs:    async (page) => hasText(page, ['จัดช่อพิเศษ', 'จัดกระเช้า'], 'MTO job name'),
   frontstore: async (page) => hasText(page, ['VAS001', 'FLW002', 'DEC003'], 'product SKU'),
   pos:        async (page) => hasText(page, ['ขาย / ออกบิล', 'รายการในบิล', 'รับชำระ'], 'PosView UI'),
@@ -116,6 +123,17 @@ async function hasText(page, tokens, label) {
   const body = await page.evaluate(() => document.body.innerText);
   const found = tokens.find(t => body.includes(t));
   return { ok: !!found, detail: found ? `พบ "${found}"` : `ไม่พบ ${label} (${tokens.join('/')})` };
+}
+
+// เหมือน hasText แต่ต้องเจอ "ครบทุกตัว" — ใช้ตอนที่ต้องพิสูจน์ว่าหลายอย่างขึ้นพร้อมกันจริง
+// (hasText เป็น OR: ใส่ token เพิ่มแล้วเทสต์ยังเขียวทั้งที่ของใหม่ไม่ได้ถูกเรนเดอร์เลย)
+async function hasAllText(page, tokens, label) {
+  const body = await page.evaluate(() => document.body.innerText);
+  const missing = tokens.filter(t => !body.includes(t));
+  return {
+    ok: missing.length === 0,
+    detail: missing.length ? `ไม่พบ ${label}: ${missing.join(' / ')}` : `พบครบ (${tokens.join(', ')})`,
+  };
 }
 
 // หา executablePath: agent env ใช้ headless_shell ที่ /opt/pw-browsers,

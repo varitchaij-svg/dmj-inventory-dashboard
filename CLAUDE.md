@@ -193,7 +193,8 @@ SHEET_PRODUCTS  = "อัพเดทจำนวนสินค้า"   // B=S
 SHEET_ORDERS    = "ลำดับที่สั่งสินค้า"
   COL_ORD_TYPE=1(A), COL_ORD_DATE=2(B), COL_ORD_STATUS=3(C),
   COL_ORD_SKU=6(F), name=G, orderQty=H, COL_ORD_PREPQTY=9(I),
-  image=J, remaining=K, COL_ORD_PRINTFLAG=14(N)
+  image=J, remaining=K, COL_ORD_ORDERBY=12(L), COL_ORD_PREPBY=13(M),
+  COL_ORD_PRINTFLAG=14(N)
   status values: "รอ"=pending, "สำเร็จ"=done, "ส่งแล้ว"=shipped
   printFlag values: "print"=selected, "no-print"=skip, "printed"=already printed
 
@@ -586,6 +587,32 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
   วันนี้เสมอ (ไม่โชว์วันอนาคต) · ยังไม่นับ "ขาด" ถ้าเป็นวันนี้ (อาจยังไม่ถึงเวลากะ)
   · `attDowOfDateStr_` = helper กลาง หา day-of-week จาก `"yyyy-MM-dd"` ตรง ๆ (ใช้แทน
   `attDowBkk_` เมื่อไม่มี `Date` object เช่นตอนดูวันในอดีต/เดือนอื่น)
+
+## ใครสั่ง / ใครจัด / ใครรับ (ส.ค. 2026)
+
+ชื่อคนทำติดอยู่ทุกขั้นของเส้นทางสินค้า — **ชื่อทุกตัวมาจาก session ที่ server ยืนยันเอง**
+ไม่ใช่ค่าที่ client ส่งมา (ปลอมได้ = แย่กว่าไม่มีเลย เพราะเชื่อผิดโดยไม่รู้ตัว)
+
+| ขั้น | เก็บที่ | เขียนโดย |
+|---|---|---|
+| สั่งของ | ชีตสั่งสินค้า col **L** (`orderedBy`) | `handleOrder_` ← `resolveSession_(ss, params.sessionToken)` |
+| จัดของ (ตามออเดอร์) | ชีตสั่งสินค้า col **M** (`preparedBy`) | `updateOrderState` ← `actor` (session) |
+| จัดของ (ตอนโอน) | ชีตโอน col **O** | `logTransferBatch_`/`logTransfer_` |
+| หน้าร้านรับของ | ชีตโอน col **N** | `confirmShipmentReceive` |
+
+- ⚠️ **`handleOrder_` เป็น doGet** จึงไม่ได้ resolve session อัตโนมัติเหมือน doPost —
+  `placeOrder` (views-main.jsx) ต้องแนบ `&sessionToken=` เองในทุก URL (`dmjFetch` แนบให้เฉพาะ POST)
+- ⚠️ **doPost ทับ `data.actor` ด้วยชื่อจาก session ด้วย ไม่ใช่แค่ตัวแปร `actor`** — handler ที่รับ
+  `data` ทั้งก้อนแล้วอ่าน `body.actor` เอง (เช่น `updateOrderState`) เคยหลุดไปใช้ค่าจาก client
+- **L/M เป็นคอลัมน์ว่างเดิมระหว่าง K กับ N** — ต่อท้ายในช่องว่าง **ห้ามแทรกคอลัมน์ใหม่**
+  ไม่งั้น `COL_ORD_PRINTFLAG=14` เพี้ยนทั้งระบบ · `handleOrder_` เขียนแถวกว้าง **13** (เดิม 11)
+- **แถวเก่าก่อนวันที่เพิ่มจะว่างทั้งสองช่อง** — ทุกจุดที่แสดงต้องรองรับค่าว่าง (ไม่โชว์ช่องเปล่า)
+- แสดงผลด้วย **`WhoDidIt` (ui.jsx)** ตัวเดียวทุกหน้า (รายการสั่ง/สรุปออเดอร์/ติดตามของ)
+  — ไม่มีชื่อเลย → คืน `null` · ค้นหาด้วยชื่อคนได้ในหน้าติดตาม
+- `OrderModal` โชว์ **"🧑 สั่งโดย X · ถามก่อนสั่งซ้ำ"** บนแบนเนอร์ของที่ค้างอยู่ (`pendingOrderByMap`)
+- เทสต์: `tests/who-did-it.test.js` (25 เคส — คุม column index ไม่ให้ชนกัน + ที่มาของชื่อ)
+  · browser test ใช้ `hasAllText` (AND) ยืนยันว่าชื่อขึ้นจริงบนจอ — **`hasText` เป็น OR
+  ใส่ token เพิ่มแล้วเทสต์ยังเขียวทั้งที่ของใหม่ไม่ถูกเรนเดอร์**
 
 ## Features ที่เพิ่มล่าสุด (Sprint 4)
 

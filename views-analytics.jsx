@@ -3841,6 +3841,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
             <div style={{fontSize:11,color:"var(--muted)"}}>
               {order.date}{order.from ? ` · ${order.from}` : ""}{order.to ? ` → ${order.to}` : ""}
             </div>
+            <WhoDidIt orderedBy={order.orderedBy} preparedBy={order.preparedBy}/>
             {primaryLock && (
               <button onClick={() => setMapOpen(true)} style={{
                 marginTop:4,display:"inline-flex",alignItems:"center",gap:4,
@@ -4161,12 +4162,7 @@ function ShipmentRow({ s, role, productMap, onConfirm }) {
               <div style={{fontSize:11,color:"var(--muted)"}}>
                 รับ {rq} / ส่ง {s.qty} pcs
               </div>
-              {s.receivedBy && (
-                <div style={{fontSize:10,color:"var(--muted)"}}>รับโดย {s.receivedBy}</div>
-              )}
-              {s.preparedBy && (
-                <div style={{fontSize:10,color:"var(--muted)"}}>จัดโดย {s.preparedBy}</div>
-              )}
+              <WhoDidIt preparedBy={s.preparedBy} receivedBy={s.receivedBy}/>
             </div>
           </div>
           {canEdit && !full && (
@@ -5147,6 +5143,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
                   <div style={{fontSize:13,fontWeight:600,lineHeight:1.3}}>
                     {order.name}{order.carryMode === "carry" ? <span style={{fontSize:10,fontWeight:700,color:"#1565c0",marginLeft:5,background:"#e3f2fd",borderRadius:4,padding:"1px 5px"}}>order</span> : null}
                   </div>
+                  <WhoDidIt orderedBy={order.orderedBy} preparedBy={order.preparedBy} size={10}/>
                   {/* chip ตำแหน่งคลัง — กดเปิดแผนที่คลัง */}
                   {(() => {
                     const sk = (order.sku||'').trim().toUpperCase();
@@ -9746,8 +9743,9 @@ function TrackCard({ item, productMap }) {
         {/* meta line: route + people + time */}
         <div style={{marginTop:4, fontSize:10.5, color:"var(--muted)", display:"flex", flexWrap:"wrap", gap:"2px 10px"}}>
           {item.kind === "ship" && item.from && <span>{item.from} → {item.to || "หน้าร้าน"}</span>}
-          {item.preparedBy && <span>จัดโดย {item.preparedBy}</span>}
-          {item.receivedBy && <span>รับโดย {item.receivedBy}</span>}
+          {item.orderedBy  && <span>🧑 สั่ง: <b style={{color:"var(--text)",fontWeight:600}}>{item.orderedBy}</b></span>}
+          {item.preparedBy && <span>📦 จัด: <b style={{color:"var(--text)",fontWeight:600}}>{item.preparedBy}</b></span>}
+          {item.receivedBy && <span>🏪 รับ: <b style={{color:"var(--text)",fontWeight:600}}>{item.receivedBy}</b></span>}
           {item.when && <span>🕒 {fmtTrackWhen(item.when)}</span>}
         </div>
       </div>
@@ -9783,6 +9781,7 @@ function TrackingView({ data, role }) {
       list.push({
         kind: "order", stage, sku: o.sku, name: o.name,
         orderQty: o.orderQty, preparedQty: o.preparedQty,
+        orderedBy: o.orderedBy, preparedBy: o.preparedBy,
         image: o.image, when: o.date,
         _ts: parseDateMs(o.date),
       });
@@ -9818,7 +9817,8 @@ function TrackingView({ data, role }) {
     return items.filter(it => {
       if (filter !== "all" && it.stage !== filter) return false;
       if (tokens.length) {
-        const hay = `${it.sku||""} ${it.name||""} ${it.refNum||""} ${it.preparedBy||""} ${it.receivedBy||""}`.toLowerCase();
+        // ค้นหาด้วยชื่อคนได้ด้วย ("สมชาย" → เห็นทุกอย่างที่สมชายสั่ง/จัด/รับ)
+        const hay = `${it.sku||""} ${it.name||""} ${it.refNum||""} ${it.orderedBy||""} ${it.preparedBy||""} ${it.receivedBy||""}`.toLowerCase();
         if (!tokens.every(t => hay.includes(t))) return false;
       }
       return true;

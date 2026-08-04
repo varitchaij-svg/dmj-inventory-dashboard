@@ -3181,6 +3181,21 @@ function CategoryView({ data, role, onNav }) {
     return m;
   }, [data.orders, data.ordersFetchedAt, localPendingOrders]);
 
+  // map SKU → รายชื่อคนที่สั่งค้างไว้ (ไม่ซ้ำ) — โชว์ใน OrderModal ให้ไปถามคนนั้นก่อนสั่งซ้ำ
+  // แถวเก่าที่ยังไม่มีชื่อผู้สั่งจะถูกข้าม (ไม่โชว์ชื่อว่าง)
+  const pendingOrderByMap = uM(() => {
+    const m = {};
+    (data.orders || []).forEach(o => {
+      if (!o.sku || !o.orderedBy) return;
+      const isPending = !o.status || o.status === "รอ" || o.status === "pending";
+      if (!isPending) return;
+      const key = (o.sku || "").trim().toUpperCase();
+      if (!m[key]) m[key] = [];
+      if (m[key].indexOf(o.orderedBy) < 0) m[key].push(o.orderedBy);
+    });
+    return m;
+  }, [data.orders]);
+
   // map SKU → รายการออเดอร์ที่คลังจัดของเสร็จแล้ว (status "สำเร็จ") แต่ยังไม่ถูกส่งออกเป็น
   // shipment (ยังไม่ขึ้นรถ) — ใช้แสดง badge "จัดของแล้ว" ต่อจาก "สั่งแล้ว" กันพนักงานเข้าใจผิด
   // ว่ายังไม่มีใครจัดของให้ ทั้งที่คลังจัดเสร็จรอส่งอยู่
@@ -4206,6 +4221,7 @@ function CategoryView({ data, role, onNav }) {
       </div>
       {orderProduct && <OrderModal product={orderProduct} onClose={() => setOrderProduct(null)}
         pendingOrderQty={pendingOrderQtyMap[(orderProduct.sku||"").trim().toUpperCase()] || 0}
+        pendingOrderBy={pendingOrderByMap[(orderProduct.sku||"").trim().toUpperCase()] || []}
         whReady={whReadyMap[(orderProduct.sku||"").trim().toUpperCase()] || []}
         role={role}
         onOrderSuccess={(sku, qty) => {
@@ -4368,7 +4384,7 @@ const QUICK_QTYS = [24, 36, 48, 60];
 // เช็คหน้าร้านล่าสุดใหม่กว่านี้ (นาที) = ถือว่ายังสด ไม่ต้องนับซ้ำตอนกดสั่ง
 const FS_CHECK_FRESH_MIN = 120;
 
-function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess, defaultQty, role }) {
+function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady, onOrderSuccess, defaultQty, role }) {
   useBackHandler(onClose); // Android back = ปิด modal สั่งของ
   const [qty, setQty] = uS(defaultQty > 0 ? defaultQty : 24);
   const [customMode, setCustomMode] = uS(false);
@@ -4508,6 +4524,9 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
               + `&qty=${qty}&orderType=${encodeURIComponent(orderType)}`
               + `&name=${encodeURIComponent(product.name || '')}`
               + (img && img.length <= 300 ? `&image=${encodeURIComponent(img)}` : '')
+              // sessionToken → GAS หา "ใครเป็นคนสั่ง" จาก session เอง (ไม่เชื่อชื่อที่ client ส่ง)
+              // doGet ไม่ผ่าน dmjFetch ที่แนบ token ให้อัตโนมัติ จึงต้องแนบเองเหมือน getAuditLog
+              + `&sessionToken=${encodeURIComponent(localStorage.getItem('dmj_session_token') || '')}`
               + `&_t=${Date.now()}`;
     // ยอดที่ค้างอยู่ "ก่อนสั่ง" — ใช้เป็นฐานเทียบตอนต้องไปเช็คชีตเอง
     const before = Number(pendingOrderQty) || 0;
@@ -4620,7 +4639,12 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
                     <span style={{fontSize:20}}>🟡</span>
                     <div>
                       <div style={{fontSize:12, fontWeight:700, color:"#92400e"}}>สั่งแล้ว {pendingOrderQty} ชิ้น (ยังค้างอยู่)</div>
-                      <div style={{fontSize:11, color:"#b45309", marginTop:1}}>ตรวจสอบก่อนสั่งซ้ำ</div>
+                      {/* บอกชื่อคนสั่งไปเลย — พนักงานจะได้ไปถามคนนั้นได้ตรงตัว ไม่ต้องเดา/สั่งซ้ำ */}
+                      <div style={{fontSize:11, color:"#b45309", marginTop:1}}>
+                        {pendingOrderBy && pendingOrderBy.length > 0
+                          ? <>🧑 สั่งโดย <b>{pendingOrderBy.join(", ")}</b> · ถามก่อนสั่งซ้ำ</>
+                          : <>ตรวจสอบก่อนสั่งซ้ำ</>}
+                      </div>
                     </div>
                   </div>
                 )}

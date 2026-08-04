@@ -185,6 +185,30 @@ function Empty({ icon, title, sub }) {
   );
 }
 
+// ────────────── WhoDidIt — ป้ายบอกว่าใครสั่ง / ใครจัด / ใครรับ ──────────────
+// ใช้ร่วมกันทุกหน้าที่โชว์รายการสั่ง/รายการโอน เพื่อให้รูปแบบเหมือนกันหมดทั้งแอป
+// (พนักงานจะได้จำรูปแบบเดียว ไม่ต้องอ่านใหม่ทุกหน้า)
+//
+// ⚠️ แถวเก่าก่อนมีฟีเจอร์นี้จะไม่มีชื่อเลย → คืน null ไม่โชว์ช่องว่าง ๆ ให้สงสัยว่าข้อมูลหาย
+// ชื่อที่ได้มาอยู่ในรูป "ชื่อ (ตำแหน่ง)" จาก staffActorName_ ฝั่ง server
+function WhoDidIt({ orderedBy, preparedBy, receivedBy, size, style }) {
+  const items = [];
+  if (orderedBy)  items.push(["🧑", "สั่ง", orderedBy]);
+  if (preparedBy) items.push(["📦", "จัด", preparedBy]);
+  if (receivedBy) items.push(["🏪", "รับ", receivedBy]);
+  if (!items.length) return null;
+  return (
+    <div style={{display:"flex", flexWrap:"wrap", gap:"2px 10px", marginTop:3,
+                 fontSize:size || 10.5, color:"var(--muted)", lineHeight:1.5, ...style}}>
+      {items.map(([ico, label, name]) => (
+        <span key={label}>
+          {ico} {label}: <b style={{color:"var(--text)", fontWeight:600}}>{name}</b>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 // ────────────── dmjFetch — แนบ sessionToken ให้ทุก POST ที่ยิงไป GAS ──────────
 // เฟส 4 ของระบบล็อกอิน: server ต้องยืนยัน "ใครทำ" เองจาก session ไม่ใช่เชื่อ actor
 // ที่ client ส่งมา (ซึ่งปลอมได้) · ทำที่เดียวจบ ไม่ต้องไล่แก้ payload ทีละจุด (39 จุด/4 ไฟล์)

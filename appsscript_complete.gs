@@ -154,6 +154,11 @@ const COL_ORD_SKU      = 6;   // F
 const COL_ORD_DATE     = 2;   // B
 const COL_ORD_STATUS   = 3;   // C
 const COL_ORD_PREPQTY  = 9;   // I
+// ผู้สั่ง/ผู้จัด — เพิ่มใหม่ (ส.ค. 2026) ใช้คอลัมน์ว่างระหว่าง K (เหลือ) กับ N (printFlag)
+// ⚠️ ต่อท้ายในช่องว่างเดิม ไม่แทรกคอลัมน์ใหม่ กัน column-index ของ N เพี้ยน
+// แถวเก่าก่อนวันที่เพิ่มจะว่างทั้งสองช่อง — frontend ต้องรองรับค่าว่างเสมอ
+const COL_ORD_ORDERBY  = 12;  // L ผู้สั่ง (มาจาก session ไม่ใช่ค่าที่ client ส่งมา)
+const COL_ORD_PREPBY   = 13;  // M ผู้จัด (คนที่กดจัดของ/ปิดงานในแท็บรายการสั่ง)
 const COL_ORD_PRINTFLAG= 14;  // N
 
 // ชีต "รายการโอนสินค้า" (SHEET_TRANSFERS) — warehouse ส่งของ → log ผ่าน logTransferBatch_/logTransfer_
@@ -1743,7 +1748,13 @@ function doPost(e) {
     var actor = data.actor || "ไม่ระบุ";
     var _sess = null;
     try { _sess = resolveSession_(ss, data.sessionToken); } catch (e) { Logger.log("resolveSession_ error: " + e); }
-    if (_sess) actor = staffActorName_(_sess) || actor;
+    if (_sess) {
+      actor = staffActorName_(_sess) || actor;
+      // ⚠️ ต้องทับ data.actor ด้วย ไม่ใช่แค่ตัวแปร actor — handler ที่รับ `data` ทั้งก้อน
+      // (เช่น updateOrderState ที่อ่าน body.actor เอง) จะได้ชื่อจาก session เหมือนกันหมด
+      // ไม่งั้นชื่อ "ผู้จัด"/audit log ของ handler กลุ่มนั้นยังเป็นค่าที่ client ส่งมา = ปลอมได้
+      data.actor = actor;
+    }
 
     // ตรวจสิทธิ์ฝั่ง server (frontend ซ่อนแท็บ ≠ กันคนยิง API ตรง)
     // ยังเป็น no-op จนกว่า Script Property REQUIRE_LOGIN='true'
@@ -3073,6 +3084,11 @@ function updateOrderState(ss, body) {
         // 2) เขียนจริง
         if (body.status)              sheet.getRange(sheetRow, COL_ORD_STATUS).setValue(body.status);
         if (body.preparedQty != null) sheet.getRange(sheetRow, COL_ORD_PREPQTY).setValue(body.preparedQty);
+        // ผู้จัด = คนที่ลงมือจัดของจริง (กรอกจำนวนที่จัด หรือกดเปลี่ยนสถานะเป็นสำเร็จ)
+        // actor ตัวนี้ doPost ทับด้วยชื่อจาก session มาแล้ว (เฟส 4) — เชื่อถือได้
+        // ไม่นับการกด "พิมพ์ label" (printFlag อย่างเดียว) ว่าเป็นการจัดของ
+        if (body.preparedQty != null || body.status)
+          sheet.getRange(sheetRow, COL_ORD_PREPBY).setValue(actor);
         if (body.printFlag != null)    sheet.getRange(sheetRow, COL_ORD_PRINTFLAG).setValue(body.printFlag); // M2: != null กัน false ถูกข้าม
         if (body.carryMode != null) {
           sheet.getRange(sheetRow, COL_ORD_TYPE).setValue(body.carryMode === "carry" ? "หิ้ว" : "รอขึ้นรถ");
@@ -3115,6 +3131,9 @@ function updateOrderState(ss, body) {
         // 2) เขียนจริง
         if (body.status)              sheet.getRange(row, COL_ORD_STATUS).setValue(body.status);
         if (body.preparedQty != null) sheet.getRange(row, COL_ORD_PREPQTY).setValue(body.preparedQty);
+        // ผู้จัด — ต้องบันทึกทั้ง 2 เส้นทาง (orderId และ match by sku+date) ไม่งั้นชื่อหายเป็นบางแถว
+        if (body.preparedQty != null || body.status)
+          sheet.getRange(row, COL_ORD_PREPBY).setValue(actor);
         if (body.printFlag != null)    sheet.getRange(row, COL_ORD_PRINTFLAG).setValue(body.printFlag); // M2: != null กัน false ถูกข้าม
         if (body.carryMode != null) {
           sheet.getRange(row, COL_ORD_TYPE).setValue(body.carryMode === "carry" ? "หิ้ว" : "รอขึ้นรถ");
@@ -8029,6 +8048,9 @@ function readOrders_(rowsOpt) {
       preparedQty: Number(r[8]) || 0,
       image:       r[9] || "",
       remaining:   r[10] !== "" ? Number(r[10]) : null,
+      // ผู้สั่ง (L) / ผู้จัด (M) — แถวเก่าก่อนเพิ่มฟีเจอร์นี้จะว่าง frontend ต้องรองรับ
+      orderedBy:   String(r[11] || "").trim(),
+      preparedBy:  String(r[12] || "").trim(),
       printFlag:   r[13] || null,
     });
   }
@@ -8099,6 +8121,18 @@ function applyQtyLocToProduct_(p, loc) {
   return p;
 }
 
+// เขียนหัวคอลัมน์ L/M ให้ครั้งแรกที่ใช้ — เจ้าของเปิดชีตดูเองจะได้รู้ว่าช่องนี้คืออะไร
+// idempotent: มีค่าอยู่แล้วไม่แตะ · ไม่ throw (หัวตารางไม่ขึ้นห้ามทำให้สั่งของไม่ได้)
+function ensureOrderPeopleHeaders_(sheet) {
+  try {
+    var rng = sheet.getRange(1, COL_ORD_ORDERBY, 1, 2);
+    var v = rng.getValues()[0];
+    if (String(v[0] || '').trim() === '' && String(v[1] || '').trim() === '') {
+      rng.setValues([['ผู้สั่ง', 'ผู้จัด']]);
+    }
+  } catch (e) { /* ignore */ }
+}
+
 function handleOrder_(params) {
   try {
     const sku = (params.sku || '').toString().trim();
@@ -8125,7 +8159,17 @@ function handleOrder_(params) {
     if (nextRow === -1) nextRow = orderSh.getLastRow() + 1; // C4: fallback ถ้าชีตเต็ม ไม่เขียนทับ row 3
     var productName = (params.name || '').toString().trim();
     var imageUrl = (params.image || '').toString().trim();
-    orderSh.getRange(nextRow, 1, 1, 11).setValues([[orderType, now, 'รอ', 'คลังสินค้าสาย5', 'ดูเหมือนจริง', sku, productName, qty, '', imageUrl, '']]);
+    // ── ผู้สั่ง: เอาจาก session ที่ server ยืนยันเอง ไม่ใช่ชื่อที่ client ส่งมา (ปลอมได้) ──
+    // doGet ไม่ผ่าน doPost จึงไม่มีการ resolve session ให้อัตโนมัติ ต้องทำเองที่นี่
+    // (รับ sessionToken เป็น query param แบบเดียวกับ attendancePhoto/getAuditLog)
+    // ยังไม่ได้ล็อกอิน → เว้นว่างไว้ ดีกว่าใส่ชื่อมั่ว ๆ ที่เชื่อไม่ได้
+    var orderedBy = '';
+    try {
+      var sess = resolveSession_(ss, params.sessionToken);
+      if (sess) orderedBy = staffActorName_(sess);
+    } catch (e) { /* session พัง → ปล่อยว่าง ไม่ให้กระทบการสั่งของ */ }
+    ensureOrderPeopleHeaders_(orderSh);
+    orderSh.getRange(nextRow, 1, 1, 13).setValues([[orderType, now, 'รอ', 'คลังสินค้าสาย5', 'ดูเหมือนจริง', sku, productName, qty, '', imageUrl, '', orderedBy, '']]);
     // แจ้งเตือน LINE เมื่อมี order ใหม่
     if (orderType === 'หิ้ว') {
       sendLineGroupOrderCard_(productName || sku, sku, Utilities.formatDate(now, 'Asia/Bangkok', 'dd/MM/yyyy HH:mm'), "", qty);
