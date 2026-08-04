@@ -2,8 +2,17 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="refresh" content="0; url=Doomuenjing%20Dashboard.html">
   <title>Doomuenjing Dashboard</title>
+  <script>
+    // ต่อ query string (เช่น ?code=...&state=... ตอน LINE ล็อกอินเด้งกลับมาที่ "/") เข้าไปด้วยเสมอ
+    // เดิมใช้ meta http-equiv="refresh" ธรรมดา ซึ่ง "ตัด query string ทิ้ง" ทุกครั้ง —
+    // authLine ฝั่ง Doomuenjing Dashboard.html เลยไม่มีวันเห็น code เลย ค้าง "กำลังรอผล" ตลอดกาล
+    // location.replace (ไม่ใช่ href/assign) กัน index.html โผล่ในปุ่มย้อนกลับด้วย
+    location.replace("Doomuenjing%20Dashboard.html" + location.search + location.hash);
+  </script>
+  <noscript>
+    <meta http-equiv="refresh" content="0; url=Doomuenjing%20Dashboard.html">
+  </noscript>
 </head>
 <body>
   <a href="Doomuenjing%20Dashboard.html">Click here if not redirected</a>
