@@ -3161,8 +3161,14 @@ function CategoryView({ data, role, onNav }) {
 
   // map SKU → จำนวนรวมที่สั่งค้างอยู่ (ใช้แสดง badge "สั่งแล้ว" บนการ์ดสินค้า)
   // รวม localPendingOrders เพื่อ optimistic update หลังสั่งสำเร็จทันที
+  //
+  // ⚠️ ต้องตัด optimistic entry ที่ "ชุดจากชีตตามมาทันแล้ว" ออก ไม่งั้นนับซ้ำ 2 เด้ง
+  //    (สั่ง 48 → เห็น "สั่งแล้ว 96") · เทียบ ts ของ entry กับ data.ordersFetchedAt:
+  //    ดึงข้อมูลหลังจากที่สั่งไป = ชุดนั้นมีออเดอร์ใบนี้อยู่แล้ว → ทิ้ง entry ท้องถิ่นได้
   const pendingOrderQtyMap = uM(() => {
-    const orders = [...(data.orders || []), ...localPendingOrders];
+    const fetchedAt = data.ordersFetchedAt || 0;
+    const freshLocal = localPendingOrders.filter(o => !o.ts || o.ts > fetchedAt);
+    const orders = [...(data.orders || []), ...freshLocal];
     const m = {};
     orders.forEach(o => {
       if (!o.sku) return;
@@ -3173,7 +3179,7 @@ function CategoryView({ data, role, onNav }) {
       }
     });
     return m;
-  }, [data.orders, localPendingOrders]);
+  }, [data.orders, data.ordersFetchedAt, localPendingOrders]);
 
   // map SKU → รายการออเดอร์ที่คลังจัดของเสร็จแล้ว (status "สำเร็จ") แต่ยังไม่ถูกส่งออกเป็น
   // shipment (ยังไม่ขึ้นรถ) — ใช้แสดง badge "จัดของแล้ว" ต่อจาก "สั่งแล้ว" กันพนักงานเข้าใจผิด
@@ -4202,7 +4208,16 @@ function CategoryView({ data, role, onNav }) {
         pendingOrderQty={pendingOrderQtyMap[(orderProduct.sku||"").trim().toUpperCase()] || 0}
         whReady={whReadyMap[(orderProduct.sku||"").trim().toUpperCase()] || []}
         role={role}
-        onOrderSuccess={(sku, qty) => setLocalPendingOrders(prev => [...prev, {sku, orderQty: qty, status:"รอ"}])}/>}
+        onOrderSuccess={(sku, qty) => {
+          // ① ขึ้นป้าย "สั่งแล้ว" ทันที ไม่ต้องรอ GAS
+          setLocalPendingOrders(prev => [...prev, {sku, orderQty: qty, status:"รอ", ts: Date.now()}]);
+          // ② ตามด้วยการดึงรายการสั่งจริงจากชีต (เบา — action=orders อ่านตรงไม่ผ่าน cache)
+          //    ไม่ทำข้อนี้ ป้ายจะอยู่แค่ใน state ของหน้านี้ → สลับแท็บแล้วกลับมา CategoryView
+          //    remount ป้ายหายทั้งที่ของถูกสั่งไปแล้ว และเครื่องอื่นก็ไม่เห็นจนกว่าจะกด Sync
+          if (typeof window !== 'undefined' && window._dmjRefetchOrders) {
+            setTimeout(() => { try { window._dmjRefetchOrders(); } catch (e) {} }, 600);
+          }
+        }}/>}
       <Toast toast={checkToast} onClose={hideCheckToast}/>
 
       {/* ── Check Send Modal (bottom sheet) — owner เลือก supplier ก่อนส่ง ── */}
@@ -4443,11 +4458,44 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
   const sheetUrl = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null;
   const outOfStock = (product.qtyWH !== undefined ? product.qtyWH : product.qty) <= 0;
 
+  const orderDone = () => {
+    setDone(true);
+    onOrderSuccess && onOrderSuccess(product.sku, qty);
+    setTimeout(onClose, 2000);
+  };
+
+  // เช็คจากชีตจริงว่า "ออเดอร์ลงไปแล้วหรือยัง" — ใช้ตอนยิงไปแล้วไม่ได้คำตอบที่อ่านได้
+  //
+  // ทำไมต้องมี: GAS เขียนออเดอร์ลงชีตเสร็จแล้วยังตอบกลับเป็นหน้า HTML ได้ (execution ซ้อนกัน/
+  // ตอบช้าจนหลุด) → ของถูกสั่งจริงแต่เว็บไม่รู้ เลยไม่ขึ้น "✅ บันทึกรายการสำเร็จ" และไม่ขึ้น
+  // ป้าย "สั่งแล้ว" ทั้งที่คลังเห็นออเดอร์แล้ว — อาการที่เจ้าของแจ้งมาตรง ๆ
+  //
+  // ⚠️ ห้ามแก้ด้วยการ "ยิงซ้ำอัตโนมัติ" เด็ดขาด — action=order ไม่ idempotent
+  //    ยิงซ้ำตอนที่ใบแรกลงไปแล้ว = สั่งซ้ำ 2 ใบ คลังจัดของ 2 รอบ · ต้องเช็คก่อนเสมอ
+  //
+  // วิธีเทียบ: ยอด "รอ" ของ SKU นี้จากชีต ต้องเพิ่มขึ้นอย่างน้อยเท่าจำนวนที่เพิ่งสั่ง
+  // (ไม่ต้อง parse วันที่ในชีตซึ่งเป็น พ.ศ. — บทเรียนข้อ 11)
+  const verifyOrderLanded = async (before) => {
+    const _sep = sheetUrl.includes('?') ? '&' : '?';
+    try {
+      const d = await dmjJson(await fetch(`${sheetUrl}${_sep}action=orders&_t=${Date.now()}`,
+                                          { cache: 'no-store' }));
+      if (!d || !Array.isArray(d.orders)) return false;
+      const key = String(product.sku || '').trim().toUpperCase();
+      let total = 0;
+      d.orders.forEach(o => {
+        if (String(o.sku || '').trim().toUpperCase() !== key) return;
+        const isPending = !o.status || o.status === 'รอ' || o.status === 'pending';
+        if (isPending) total += Number(o.orderQty) || 0;
+      });
+      return total >= before + qty;
+    } catch (e) { return false; }
+  };
+
   // ยิง action=order ไป GAS
-  //  · ใช้ dmjJson แทน r.json() — GAS ที่ล่ม/ลิงก์หมดอายุจะตอบเป็นหน้า HTML กลับมา
-  //    ถ้า parse ตรง ๆ พนักงานจะเห็น "Unexpected token '<' … is not valid JSON" ซึ่งอ่านไม่ออก
-  //  · ลองซ้ำอัตโนมัติ 1 ครั้ง เฉพาะกรณีที่พลาดแบบชั่วคราว (เน็ตมือถือกระตุก/GAS cold start)
-  //    ถ้า GAS ตอบ JSON มาว่า "ไม่สำเร็จ" = เหตุผลจริงจากหลังบ้าน → ไม่ลองซ้ำ (กันสั่งซ้ำซ้อน)
+  //  · ใช้ dmjJson แทน r.json() — GAS ที่ล่ม/ตอบช้าจะคืนหน้า HTML มา ถ้า parse ตรง ๆ
+  //    พนักงานจะเห็น "Unexpected token '<' … is not valid JSON" ซึ่งอ่านไม่ออก
+  //  · อ่านคำตอบไม่ได้ → ไปเช็คชีตว่าลงไปแล้วหรือยัง (ไม่ยิงซ้ำ — กันสั่งซ้ำ)
   const placeOrder = async () => {
     // รอให้ updateFrontStore ที่ค้างอยู่จบก่อนเสมอ — ยิงชนกันคือเหตุที่ GAS ตอบหน้า HTML
     // (auto-save อาจยิงไปแล้วโดยที่ fsDirty เป็น false ตอน handleSubmit อ่านค่า)
@@ -4461,23 +4509,19 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
               + `&name=${encodeURIComponent(product.name || '')}`
               + (img && img.length <= 300 ? `&image=${encodeURIComponent(img)}` : '')
               + `&_t=${Date.now()}`;
-    let lastErr = null;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      if (attempt > 0) await new Promise(r => setTimeout(r, 1200));
-      try {
-        const d = await dmjJson(await fetch(url, { cache: 'no-store' }));
-        if (d && d.ok) {
-          setDone(true);
-          onOrderSuccess && onOrderSuccess(product.sku, qty);
-          setTimeout(onClose, 2000);
-          return true;
-        }
-        setErr((d && d.error) || 'บันทึกรายการสั่งไม่สำเร็จ');
-        return false;
-      } catch (e) { lastErr = e; }
+    // ยอดที่ค้างอยู่ "ก่อนสั่ง" — ใช้เป็นฐานเทียบตอนต้องไปเช็คชีตเอง
+    const before = Number(pendingOrderQty) || 0;
+    try {
+      const d = await dmjJson(await fetch(url, { cache: 'no-store' }));
+      if (d && d.ok) { orderDone(); return true; }
+      setErr((d && d.error) || 'บันทึกรายการสั่งไม่สำเร็จ');
+      return false;
+    } catch (e) {
+      // อ่านคำตอบไม่ได้ ≠ สั่งไม่สำเร็จ — ไปดูของจริงในชีตก่อนตัดสิน
+      if (await verifyOrderLanded(before)) { orderDone(); return true; }
+      setErr(dmjErrText(e) + ' · ยังไม่พบรายการในระบบ กดลองใหม่ได้');
+      return false;
     }
-    setErr(dmjErrText(lastErr));
-    return false;
   };
 
   // คลังหมด → สั่งไม่ได้ แต่ยังนับหน้าร้านได้ (auto-save ยิงเองอยู่แล้ว ปุ่มนี้คือบันทึกทันทีแล้วปิด)

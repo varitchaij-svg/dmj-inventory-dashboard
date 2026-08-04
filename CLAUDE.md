@@ -498,6 +498,11 @@ npm run test:coverage # coverage report (tests/helpers.js)
     **เวลาเพิ่มปุ่มที่ยิง GAS ใกล้กัน ให้ต่อคิวแบบเดียวกันเสมอ อย่ายิงขนาน**
     · error ล่าสุดถูกเก็บไว้ที่ `localStorage.dmj_last_backend_error` (เวลา/status/ต้นข้อความ)
     — พนักงานอยู่หน้าร้านเปิด console ไม่ได้ เจ้าของเปิดดูย้อนหลังได้จากตรงนี้
+    · ⚠️ **"อ่านคำตอบไม่ได้" ≠ "ทำไม่สำเร็จ"** — GAS เขียนชีตเสร็จแล้วยังตอบ HTML ได้ (ของถูกสั่ง
+    จริงแต่เว็บไม่ขึ้น "สั่งแล้ว") · **ห้ามแก้ด้วยการยิงซ้ำอัตโนมัติ** กับ action ที่ไม่ idempotent
+    (`action=order` = สั่งซ้ำ 2 ใบ คลังจัดของ 2 รอบ) → ต้อง **เช็คของจริงก่อน** เหมือน
+    `verifyOrderLanded` (OrderModal) ที่ดึง `action=orders` มาเทียบว่ายอด "รอ" ของ SKU นั้น
+    เพิ่มขึ้นครบไหม (ไม่ parse วันที่ในชีตซึ่งเป็น พ.ศ. — ข้อ 11)
 
 ## ระบบล็อกอินพนักงาน + ลงเวลาเข้า-ออกงาน (Sprint 5)
 
@@ -596,6 +601,14 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
   · บันทึกพัง → มีปุ่ม "สั่งเลยโดยไม่บันทึก"
   กันงานหน้าร้านสะดุด · role อื่นไม่เห็นขั้นตอนนี้ · `role` ส่งเป็น prop เข้า OrderModal
   (fallback `sessionStorage.dmj_role`)
+- **ป้าย "สั่งแล้ว N" บนการ์ดสินค้า** — `pendingOrderQtyMap` (CategoryView) รวม `data.orders`
+  กับ `localPendingOrders` (optimistic หลังสั่งสำเร็จ) · หลังสั่งสำเร็จเรียก
+  `window._dmjRefetchOrders()` (= `fetchOrdersOnly`, `action=orders` อ่านชีตตรงไม่ผ่าน cache)
+  ดึงของจริงตามมา — **ไม่ทำข้อนี้ ป้ายจะอยู่แค่ใน state ของหน้านี้** สลับแท็บแล้วกลับมา
+  CategoryView remount ป้ายหายทั้งที่ของถูกสั่งไปแล้ว และเครื่องอื่นไม่เห็นจนกว่าจะกด Sync
+  · ⚠️ optimistic entry ต้องมี `ts` และถูกตัดทิ้งเมื่อ `ts <= data.ordersFetchedAt`
+  (ประทับทั้งใน `fetchOrdersOnly` และ `fetchFromSheet`) ไม่งั้น**นับซ้ำ 2 เด้ง** — สั่ง 48
+  แล้วเห็น "สั่งแล้ว 96"
 
 ## Features ที่เพิ่มล่าสุด (Sprint 2)
 

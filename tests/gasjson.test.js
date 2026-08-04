@@ -175,3 +175,50 @@ describe('meta — OrderModal ต้องต่อคิวคำขอ ไม�
     expect(UI).toContain('dmj_last_backend_error');
   });
 });
+
+// ── meta-test: สั่งของต้องไม่ซ้ำ และต้องรู้ว่าสั่งไปแล้ว ──────────────────────
+// อาการที่เจ้าของแจ้ง: "ไม่ขึ้นว่าสั่งแล้ว แต่ของถูกสั่ง" = GAS เขียนชีตเสร็จแล้วแต่ตอบ HTML
+// → เว็บไม่รู้ว่าสำเร็จ · ห้ามแก้ด้วยการยิงซ้ำ (action=order ไม่ idempotent = สั่งซ้ำ 2 ใบ)
+describe('meta — placeOrder ต้องเช็คชีต ไม่ใช่ยิงซ้ำ', () => {
+  const placeOrder = grab(VIEWS_MAIN, /const placeOrder = async \(\) => \{[\s\S]*?\n  \};/, 'placeOrder');
+
+  it('อ่านคำตอบไม่ได้ → ไปเช็คชีตว่าออเดอร์ลงไปแล้วหรือยัง', () => {
+    expect(placeOrder).toMatch(/await verifyOrderLanded\(before\)/);
+  });
+
+  it('ห้ามมี loop ยิงซ้ำอัตโนมัติใน placeOrder (สั่งซ้ำ 2 ใบ)', () => {
+    expect(placeOrder).not.toMatch(/for \(\s*(let|var)\s+attempt/);
+  });
+
+  it('verifyOrderLanded เทียบยอด "รอ" ที่เพิ่มขึ้น ไม่ parse วันที่ในชีต (ปี พ.ศ.)', () => {
+    const verify = grab(VIEWS_MAIN, /const verifyOrderLanded = async \(before\) => \{[\s\S]*?\n  \};/, 'verifyOrderLanded');
+    expect(verify).toMatch(/total >= before \+ qty/);
+    expect(verify).not.toMatch(/new Date\(|parseCheckDateMs/);
+  });
+});
+
+describe('meta — ป้าย "สั่งแล้ว" ต้องมาจากข้อมูลจริง และห้ามนับซ้ำ', () => {
+  const APP = readFileSync(join(ROOT, 'app.jsx'), 'utf8');
+
+  it('app.jsx เปิดทาง _dmjRefetchOrders ให้ view เรียกหลังสั่งสำเร็จ', () => {
+    expect(APP).toContain('window._dmjRefetchOrders = fetchOrdersOnly');
+  });
+
+  it('fetchOrdersOnly ประทับ ordersFetchedAt ทุกครั้งที่อัปเดต orders', () => {
+    expect(APP).toMatch(/orders: d\.orders, ordersFetchedAt: Date\.now\(\)/);
+  });
+
+  it('fetchFromSheet ก็ประทับ ordersFetchedAt ด้วย (ไม่งั้น optimistic entry ค้างค้ำ)', () => {
+    expect(APP).toMatch(/ordersFetchedAt: Date\.now\(\)[\s\S]{0,80}setData\(enriched\)/);
+  });
+
+  it('pendingOrderQtyMap ตัด optimistic entry ที่ชีตตามมาทันแล้ว (กันนับซ้ำ 2 เด้ง)', () => {
+    const map = grab(VIEWS_MAIN, /const pendingOrderQtyMap = uM\(\(\) => \{[\s\S]*?\n  \}, \[[^\]]*\]\);/, 'pendingOrderQtyMap');
+    expect(map).toMatch(/o\.ts > fetchedAt/);
+    expect(map).toMatch(/data\.ordersFetchedAt/);
+  });
+
+  it('onOrderSuccess ต้องประทับ ts ให้ optimistic entry (ไม่มี ts = ตัดไม่ได้)', () => {
+    expect(VIEWS_MAIN).toMatch(/orderQty: qty, status:"รอ", ts: Date\.now\(\)/);
+  });
+});
