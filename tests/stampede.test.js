@@ -431,7 +431,7 @@ describe('Phase 7.4 — ฝั่ง frontend (จุดที่ถอยกล
   it('กดปุ่ม Sync เอง (force) ต้องข้ามตัวตรวจ ver เสมอ', () => {
     // แก้ชีตด้วยมือใน Google Sheets **ไม่ขยับ `dmj_last_write_ts`** → ver จะตอบว่า "ไม่เปลี่ยน"
     // ถ้าเชื่อตอนผู้ใช้กด Sync = ปุ่มดูเหมือนพัง ทั้งที่เขาแก้ข้อมูลมาแล้วจริง ๆ
-    expect(APP).toMatch(/const verGate = \(!force && !prefetched && hasDataRef\.current\)/);
+    expect(APP).toMatch(/const verGate = \(!force &&/);
   });
 
   it('ใบรับรอง ver ผูกกับ role และมีเพดานอายุ', () => {
@@ -441,6 +441,33 @@ describe('Phase 7.4 — ฝั่ง frontend (จุดที่ถอยกล
     expect(fn).toMatch(/stamp\.role \|\| ""\) !== \(role \|\| ""\)/);
     expect(fn).toMatch(/VER_MAX_SKIP_MS/);
     expect(fn).toMatch(/\.catch\(\(\) => false\)/);   // ตอบไม่ได้ = ไปโหลดจริง ห้ามเดาว่าไม่เปลี่ยน
+  });
+
+
+  it('ถือของสำรองอยู่ (stale) ต้องข้ามตัวตรวจ ver — ไม่งั้นแถบเหลืองค้างถาวร', () => {
+    // ของสำรองถูกเสิร์ฟตอน TTL หมดได้ด้วย (ไม่มีใครเขียน) → `lastModified` ของมัน = ts ปัจจุบันพอดี
+    // → ver ตอบ "ไม่เปลี่ยน" → ข้ามการโหลด → setStaleAt(0) ไม่ถูกเรียก → แถบเหลืองไม่มีวันหาย
+    expect(APP).toMatch(/const verGate = \(!force && !prefetched && !staleRef\.current && hasDataRef\.current\)/);
+    expect(APP).toMatch(/staleRef\.current = staleAt/);
+  });
+
+  it('อัปโหลดไฟล์ทับต้องทิ้งใบรับรอง ver', () => {
+    // ไม่ทิ้ง = ts ยังตรงกับ server → รอบถัดไปข้ามการโหลด → ข้อมูลจากไฟล์ค้างอยู่
+    // พร้อมป้าย "ซิงค์แล้ว" ทั้งที่ไม่เคยดึงจากชีตเลย
+    const upload = APP.slice(APP.indexOf('const handleDataLoaded'), APP.indexOf('setTab("overview")'));
+    expect(upload).toMatch(/clearVerStamp\(\)/);
+  });
+
+
+  it('GAS โค้ดเก่าที่ไม่รู้จัก action=ver → เลิกถามชั่วคราว (ไม่จ่ายไบต์ซ้ำซ้อนยาว)', () => {
+    // โค้ดเก่าจะคืน payload เต็มก้อนแทนคำตอบจิ๋ว = จ่าย 4.2MB ฟรีแล้วยังต้องโหลดซ้ำอีกรอบ
+    // Cloudflare กับ GAS deploy คนละจังหวะ และถ้า Actions พังจะค้างสถานะนี้ยาว
+    const fn = APP.slice(APP.indexOf('function checkDataUnchanged'), APP.indexOf('function saveToStorage'));
+    expect(fn).toMatch(/VER_UNSUPPORTED_KEY/);
+    expect(fn).toMatch(/if \(!v \|\| !v\.ok\)/);
+    // "เน็ตพัง" ต้องไม่ถูกตีตราว่าเป็นเรื่องเวอร์ชัน — .catch ห้ามเขียนธงนี้
+    const catchPart = fn.slice(fn.indexOf('.catch('));
+    expect(catchPart).not.toMatch(/VER_UNSUPPORTED_KEY/);
   });
 
   it('เขียนใบรับรองพร้อม role ทุกครั้งที่โหลด payload สำเร็จ', () => {

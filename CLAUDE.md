@@ -109,6 +109,14 @@
      การแก้ผ่านแอป + `syncZortBoth` (ทุก 2 ชม.) · **แก้ชีตด้วยมือไม่ขยับ** เชื่อยาวไป =
      คนแก้ชีตเองไม่เห็นผลตลอดไปโดยไม่มีอะไรบอก
    · **ตอบไม่ได้/ไม่แน่ใจ → โหลดจริงเสมอ** (เดาผิดทางนี้แค่ช้า อีกทางคือเห็นสต็อกเก่าโดยไม่รู้ตัว)
+   · **ข้ามการถามด้วยเมื่อกำลังถือของสำรอง (stale)** — ของสำรองถูกเสิร์ฟตอน TTL หมดได้ด้วย
+     ซึ่งกรณีนั้น `lastModified` ของมัน = ts ปัจจุบันพอดี → ver ตอบ "ไม่เปลี่ยน" → ข้ามการโหลด →
+     `setStaleAt(0)` ไม่ถูกเรียก → **แถบเหลืองค้างถาวรจนกว่าจะกด Sync**
+   · **อัปโหลดไฟล์ทับต้อง `clearVerStamp()`** — ไม่งั้น ts ยังตรงกับ server → รอบถัดไปข้ามการโหลด
+     แล้วข้อมูลจากไฟล์ค้างอยู่พร้อมป้าย "ซิงค์แล้ว" ทั้งที่ไม่เคยดึงจากชีตเลย
+   · GAS โค้ดเก่าไม่รู้จัก `action=ver` → **คืน payload เต็มก้อนแทน** = จ่าย 4.2MB ฟรีแล้วยังต้อง
+     โหลดซ้ำ · จำไว้ที่ `localStorage.dmj_ver_unsupported` แล้วเลิกถาม 1 ชม. (Cloudflare กับ GAS
+     deploy คนละจังหวะ และถ้า Actions พังจะค้างสถานะนี้ยาว) · "เน็ตพัง" ไม่นับเป็นเรื่องเวอร์ชัน
 - **Hosting**: Cloudflare Pages (`dmj-inventory-dashboard.pages.dev`) auto-deploy จาก
   branch `master`
 
@@ -493,7 +501,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 1008 tests, 30 test files, ทั้งหมด pass
+**มี Vitest test suite แล้ว** — 1011 tests, 30 test files, ทั้งหมด pass
 
 ```bash
 npm test              # run tests

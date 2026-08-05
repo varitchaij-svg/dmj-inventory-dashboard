@@ -697,6 +697,12 @@ const VER_MAX_SKIP_MS = 30 * 60 * 1000;
 function readVerStamp() {
   try { return JSON.parse(localStorage.getItem(VER_KEY) || "null"); } catch (e) { return null; }
 }
+// ทิ้งใบรับรอง — ใช้เมื่อข้อมูลในมือ "ไม่ได้มาจากชีตแล้ว" (เช่นผู้ใช้อัปโหลดไฟล์ทับ)
+// ถ้าไม่ทิ้ง: ts ยังตรงกับ server → รอบถัดไปจะข้ามการโหลด แล้วข้อมูลจากไฟล์ค้างอยู่
+// พร้อมป้าย "ซิงค์แล้ว" ทั้งที่ไม่เคยดึงจากชีตเลย
+function clearVerStamp() {
+  try { localStorage.removeItem(VER_KEY); } catch (e) { /* ignore */ }
+}
 function writeVerStamp(ts, role) {
   try {
     localStorage.setItem(VER_KEY, JSON.stringify({ ts: ts || 0, at: Date.now(), role: role || "" }));
@@ -705,9 +711,20 @@ function writeVerStamp(ts, role) {
 // คืน true = "server ยังเป็นข้อมูลชุดเดียวกับที่เราถืออยู่" → ข้ามการโหลด payload ได้
 // **ตอบไม่ได้/ไม่แน่ใจ → false เสมอ** (ไปโหลดจริง) — เดาผิดทางนี้แค่ช้าลง
 // เดาผิดอีกทางคือผู้ใช้เห็นตัวเลขสต็อกเก่าโดยไม่รู้ตัว ซึ่งใช้ตัดสินใจสั่งของจริง
+// GAS ที่ยังเป็นโค้ดเก่าจะไม่รู้จัก `action=ver` แล้ว **คืน payload เต็มก้อนแทน** (action ที่ไม่รู้จัก
+// ตกลงเส้นทางปกติ) = จ่ายไบต์ฟรี 4.2MB แล้วยังต้องโหลดซ้ำอีกรอบ — เสียเป็นสองเท่าพอดี
+// เกิดได้จริงเพราะ Cloudflare (เว็บ) กับ GitHub Actions (GAS) deploy คนละจังหวะ และถ้า
+// Actions พัง จะค้างสถานะนี้ยาว → จำไว้ 1 ชม. แล้วเลิกถาม (กลับมาถามเองเมื่อครบเวลา)
+const VER_UNSUPPORTED_KEY = "dmj_ver_unsupported";
+const VER_UNSUPPORTED_MS  = 60 * 60 * 1000;
+
 function checkDataUnchanged(sheetUrl, role) {
   const stamp = readVerStamp();
   if (!stamp || !stamp.ts) return Promise.resolve(false);
+  try {
+    const off = parseInt(localStorage.getItem(VER_UNSUPPORTED_KEY) || "0", 10);
+    if (off && Date.now() - off < VER_UNSUPPORTED_MS) return Promise.resolve(false);
+  } catch (e) { /* อ่านไม่ได้ก็ถามตามปกติ */ }
   // payload ผูกกับ role (GAS ตัดก้อนที่ role นั้นไม่มีแท็บให้เปิดออก) — คนละ role = คนละรูปร่าง
   // ts ตรงกันไม่ได้แปลว่าใช้แทนกันได้ ถ้าไม่เช็คตรงนี้ owner ที่เพิ่งสลับมาจะได้ก้อนที่ขาดกราฟ
   if ((stamp.role || "") !== (role || "")) return Promise.resolve(false);
@@ -717,7 +734,15 @@ function checkDataUnchanged(sheetUrl, role) {
   const sep = sheetUrl.includes("?") ? "&" : "?";
   return fetch(`${sheetUrl}${sep}action=ver&_t=${Date.now()}`, { signal: controller.signal, cache: "no-store" })
     .then(r => r.json())
-    .then(v => !!(v && v.ok && v.ts && v.ts === stamp.ts))
+    .then(v => {
+      // ตอบมาแต่ไม่ใช่รูปแบบของ `ver` = GAS ยังไม่รู้จัก action นี้ → เลิกถามไปสักพัก
+      // (ต่างจาก .catch ข้างล่างซึ่งคือ "เน็ตพัง/ตอบไม่ได้" — อันนั้นไม่ใช่เรื่องเวอร์ชัน ห้ามตีตรา)
+      if (!v || !v.ok) {
+        try { localStorage.setItem(VER_UNSUPPORTED_KEY, String(Date.now())); } catch (e) {}
+        return false;
+      }
+      return !!(v.ts && v.ts === stamp.ts);
+    })
     .catch(() => false)
     .finally(() => clearTimeout(timeout));
 }
@@ -918,6 +943,12 @@ function App() {
   const [handoffWaiting, setHandoffWaiting] = usS(() => !!readPendingHandoff());
   const [crossContextNote, setCrossContextNote] = usS(false); // ล็อกอินนี้เริ่มมาจากอีกที่ (แอปหน้าโฮม)
   const [authRefreshing, setAuthRefreshing] = usS(false);
+  // "ตอนนี้เรามีข้อมูลอยู่ในมือหรือยัง" — ใช้ตัดสินว่าจะถาม `action=ver` ก่อนโหลดได้ไหม
+  // ต้องเป็น ref ไม่ใช่อ่าน `data` ตรง ๆ เพราะ fetchFromSheet เป็น useCallback ที่ไม่มี `data`
+  // ใน deps (ใส่ไม่ได้ — จะสร้างใหม่ทุกครั้งที่ข้อมูลเปลี่ยน แล้ว effect ที่ผูกกับมันจะยิงรัว)
+  const hasDataRef = React.useRef(false);
+  // "ตอนนี้เราถือ *ของสำรอง* (Phase 7.3) อยู่หรือเปล่า" — ต้องเป็น ref ด้วยเหตุผลเดียวกับ hasDataRef
+  const staleRef = React.useRef(0);
   const [data, setData] = usS(null);
   usE(() => { hasDataRef.current = !!(data && Array.isArray(data.products) && data.products.length); }, [data]);
   const [error, setError] = usS(null);
@@ -932,6 +963,7 @@ function App() {
   // Phase 7.3: >0 = ข้อมูลชุดนี้เป็น "ของสำรอง" ที่ server ส่งมาระหว่างมีคนอื่นกำลังสร้างชุดใหม่
   // (ค่า = เวลาที่ข้อมูลชุดนั้นถูกสร้าง) · 0 = ข้อมูลสด
   const [staleAt, setStaleAt] = usS(0);
+  usE(() => { staleRef.current = staleAt; }, [staleAt]);
   const [lastSync, setLastSync] = usS(lsGet("dmj_last_sync") || null);
   const [labelInitItems, setLabelInitItems] = usS(null); // for auto-populate from order summary
   const [isOnline, setIsOnline] = usS(() => navigator.onLine);
@@ -947,10 +979,6 @@ function App() {
   const [navToast, showNavToast, hideNavToast] = useToast(); // toast สำหรับ nav-level errors
   const tabHistoryRef = React.useRef([]); // track tab navigation for Android back
   const fetchingRef = React.useRef(false); // guard against concurrent fetchFromSheet calls
-  // "ตอนนี้เรามีข้อมูลอยู่ในมือหรือยัง" — ใช้ตัดสินว่าจะถาม `action=ver` ก่อนโหลดได้ไหม
-  // ต้องเป็น ref ไม่ใช่อ่าน `data` ตรง ๆ เพราะ fetchFromSheet เป็น useCallback ที่ไม่มี `data`
-  // ใน deps (ใส่ไม่ได้ — จะสร้างใหม่ทุกครั้งที่ข้อมูลเปลี่ยน แล้ว effect ที่ผูกกับมันจะยิงรัว)
-  const hasDataRef = React.useRef(false);
   // เมื่อ tab เปลี่ยน (กด subtab / นำทางจากการ์ดภาพรวม) → ล้าง "แตะดู" ให้หมวดหลักวิ่งตาม tab
   uE(() => { setOwnerGroup(null); }, [tab]);
 
@@ -991,11 +1019,14 @@ function App() {
       window._dataPrefetch = null;
     }
     // ── Phase 7.4: ถามก่อนโหลด — "ข้อมูลเปลี่ยนหรือยัง" (คำตอบ ~40 ไบต์) ──
-    // ไม่เปลี่ยน = ข้ามการโหลด 4.2MB ไปเลย · **ข้ามการถาม** ใน 3 กรณีที่ถามแล้วไม่ได้อะไร:
+    // ไม่เปลี่ยน = ข้ามการโหลด 4.2MB ไปเลย · **ข้ามการถาม** ใน 4 กรณีที่ถามแล้วได้ผลผิด/ไม่ได้อะไร:
     //   · force (ผู้ใช้กด Sync/ลองใหม่เอง) — อาจเพิ่งแก้ชีตด้วยมือ ซึ่ง ts ไม่ขยับ ต้องดึงจริงเสมอ
     //   · ยังไม่มีข้อมูลในมือ — ไม่มีอะไรให้เทียบ ถามไปก็เสียเวลาเปล่าหนึ่งรอบ
     //   · มีผล prefetch อยู่แล้ว — ไบต์ถูกโหลดไปตั้งแต่ต้นหน้าแล้ว ถามตอนนี้ไม่ประหยัดอะไร
-    const verGate = (!force && !prefetched && hasDataRef.current)
+    //   · **กำลังถือของสำรองอยู่ (staleRef)** — ของสำรองถูกเสิร์ฟตอน TTL หมดได้ด้วย ซึ่งกรณีนั้น
+    //     `lastModified` ของมันเท่ากับ ts ปัจจุบันพอดี → ver จะตอบ "ไม่เปลี่ยน" → ข้ามการโหลด →
+    //     `setStaleAt(0)` ไม่ถูกเรียก → **แถบเหลือง "กำลังอัปเดตข้อมูล" ค้างถาวรจนกว่าจะกด Sync**
+    const verGate = (!force && !prefetched && !staleRef.current && hasDataRef.current)
       ? checkDataUnchanged(sheetUrl, role)
       : Promise.resolve(false);
     verGate.then(unchanged => {
@@ -1124,6 +1155,11 @@ function App() {
         });
         // **ไม่ saveToStorage โดยตั้งใจ** — เขียน JSON หลายเมกะไบต์ลง localStorage ทุก 30 วิ
         // ทำให้เครื่องมือถือกระตุกทั้งที่ไม่จำเป็น · ถ้าปิดแล้วเปิดใหม่ ตัวเลขจะถูกดึงสดอยู่แล้ว
+        // ⚠️ ยอดรวมใน `data.totals` (totalStockValue ฯลฯ) **ไม่ถูกคำนวณใหม่** ที่นี่ —
+        // จะไม่ตรงกับผลรวมของ products ชั่วคราวจนกว่าจะโหลดเต็มรอบถัดไป · ยอมรับได้เพราะสองแท็บ
+        // ที่ใช้ poll ตัวนี้ไม่ได้แสดงยอดรวมพวกนั้น · **ถ้าจะเอา poll นี้ไปใช้กับแท็บที่โชว์ยอดรวม
+        // ต้องคำนวณ totals ใหม่ด้วย** ไม่งั้นตัวเลขบนจอจะขัดกันเองโดยไม่มีอะไรบอก
+        //
         // เดินเวลา "ข้อมูลที่เราถือ" ให้สด — poll ตัวเดิมก็ทำแบบนี้ทุก 30 วิ ถ้าไม่ทำ คนที่นับสต็อก
         // อยู่นาน ๆ จะโดน conflict ปฏิเสธการบันทึกทุกครั้งที่มีใครบันทึกอะไรที่อื่น (งานหายทั้งรอบนับ)
         // ⚠️ ต่างจาก poll เดิมตรงที่ก้อนนี้รีเฟรช **เฉพาะจำนวนสต็อก** — ล็อค/ออเดอร์/โอน ยังเป็น
@@ -1257,6 +1293,8 @@ function App() {
     }
     setData(enriched);
     saveToStorage(enriched, "upload");
+    // ข้อมูลในมือไม่ได้มาจากชีตแล้ว — ใบรับรอง ver ใช้ไม่ได้ ต้องทิ้ง (ดูคำอธิบายที่ clearVerStamp)
+    clearVerStamp();
     setSource("upload");
     const now = new Date().toISOString();
     localStorage.setItem("dmj_last_sync", now);
