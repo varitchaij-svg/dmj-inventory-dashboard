@@ -889,6 +889,9 @@ function App() {
   const [zortSyncing, setZortSyncing] = usS(false);
   const [zortSalesSyncing, setZortSalesSyncing] = usS(false);
   const [retryMsg, setRetryMsg] = usS("");
+  // Phase 7.3: >0 = ข้อมูลชุดนี้เป็น "ของสำรอง" ที่ server ส่งมาระหว่างมีคนอื่นกำลังสร้างชุดใหม่
+  // (ค่า = เวลาที่ข้อมูลชุดนั้นถูกสร้าง) · 0 = ข้อมูลสด
+  const [staleAt, setStaleAt] = usS(0);
   const [lastSync, setLastSync] = usS(lsGet("dmj_last_sync") || null);
   const [labelInitItems, setLabelInitItems] = usS(null); // for auto-populate from order summary
   const [isOnline, setIsOnline] = usS(() => navigator.onLine);
@@ -949,6 +952,12 @@ function App() {
       .then(d => {
         if (d && d.lastModified) window._dataLoadedAt = d.lastModified;
         if (typeof resetCatColorMap === 'function') resetCatColorMap();
+        // Phase 7.3: server ติดธง `stale` มาเมื่อมีคนอื่นกำลังสร้างข้อมูลชุดใหม่อยู่
+        // แล้วเราได้ "ชุดสำรอง" (ก่อนการบันทึกล่าสุด) กลับมาทันทีแทนการต่อคิวรอ ~10 วิ
+        // → ต้องบอกผู้ใช้ให้รู้ตัว **ห้ามโชว์เงียบ ๆ** เพราะตัวเลขสต็อกใช้ตัดสินใจสั่งของจริง
+        // เก็บเป็น state แยก ไม่ยัดเข้า `data` เพราะ `data` ถูก save ลง localStorage —
+        // ธงจะติดค้างข้ามการเปิดแอปครั้งถัดไปทั้งที่ตอนนั้นข้อมูลสดแล้ว
+        setStaleAt((d && d.stale) ? (d.staleAt || Date.now()) : 0);
         let enriched;
         try { enriched = enrichData(d); } catch (e) {
           console.warn("enrichData failed during fetchFromSheet:", e);
@@ -1040,6 +1049,15 @@ function App() {
     }
     fetchFromSheet(); // refresh ใน background เสมอ
   }, [role, fetchFromSheet]);
+
+  // Phase 7.3: ได้ของสำรองมา → คนที่กำลัง build อยู่จะเสร็จในไม่กี่วินาที ดึงซ้ำอีกรอบให้เอง
+  // ไม่ต้องรอผู้ใช้กด Sync หรือรอ poll 30 วิ (ซึ่งมีเฉพาะบางแท็บ) · ยิงครั้งเดียวต่อ 1 ครั้งที่ได้ของสำรอง
+  // **สุ่มหน่วง 5-9 วิ** เพราะทุกเครื่องได้ของสำรองพร้อมกัน — ถ้าตั้งเวลาตายตัวจะกลับมายิงพร้อมกันอีก
+  usE(() => {
+    if (!staleAt) return;
+    const id = setTimeout(() => { if (navigator.onLine) fetchFromSheet(); }, 5000 + Math.random() * 4000);
+    return () => clearTimeout(id);
+  }, [staleAt, fetchFromSheet]);
 
   // expose refetch ให้ child component เรียกได้เมื่อเจอ conflict (จะอัปเดต window._dataLoadedAt ให้สด)
   usE(() => { window._dmjRefetch = fetchFromSheet; return () => { delete window._dmjRefetch; }; }, [fetchFromSheet]);
@@ -1760,6 +1778,25 @@ function App() {
           <span style={{fontSize:18}}>📵</span>
           <span>ไม่มีอินเทอร์เน็ต — ข้อมูลอาจไม่ใช่ล่าสุด</span>
           <span style={{fontSize:11,fontWeight:400,opacity:.7}}>No connection · cached data</span>
+        </div>
+      )}
+
+      {/* ─── Phase 7.3: กำลังดูข้อมูลสำรองระหว่างระบบสร้างชุดใหม่ ─── */}
+      {/* เจตนา: ไม่ให้ผู้ใช้ตัดสินใจสั่งของจากตัวเลขเก่าโดยไม่รู้ตัว · ไม่ต้องกดอะไร
+          เดี๋ยวระบบดึงชุดใหม่ให้เองใน 5-9 วิ (ดู effect ด้านบน) — บอกไว้เพื่อไม่ให้กด Sync รัว */}
+      {staleAt > 0 && isOnline && (
+        <div style={{
+          background:"#fffbeb", borderBottom:"1px solid #fcd34d", color:"#78350f",
+          padding:"8px 16px", fontSize:13, display:"flex", alignItems:"center", gap:8,
+        }}>
+          <span style={{fontSize:16}}>⏳</span>
+          <div style={{flex:1,minWidth:0}}>
+            <b>กำลังอัปเดตข้อมูล</b> — ที่เห็นตอนนี้คือข้อมูล ณ{" "}
+            {new Date(staleAt).toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit"})}
+            <span style={{opacity:.8}}> · เดี๋ยวขึ้นเองอัตโนมัติ</span>
+          </div>
+          <button className="btn ghost" style={{padding:"4px 10px",fontSize:12}}
+                  disabled={syncing} onClick={()=>fetchFromSheet(3,true)}>ดึงเดี๋ยวนี้</button>
         </div>
       )}
 

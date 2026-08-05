@@ -2194,49 +2194,111 @@ function doGet(e) {
     const variant = payloadVariantForRole_(e && e.parameter && e.parameter.role);
     const enc     = payloadEncodingForRequest_(e);
     const cacheVariant = payloadCacheVariant_(variant, enc);
+    // แทรก lastModified สด ๆ ลงใน cached payload ก่อน return
+    // แทนที่ค่าใน JSON string ตรง ๆ เพื่อความเร็ว (ไม่ parse ทั้งก้อน)
+    const serveCached = function (str, kind) {
+      const patched = str.replace(/"lastModified"\s*:\s*\d+/, '"lastModified":' + getSheetLastModified_());
+      perfLogDoGet_(kind, cacheVariant, _tReq, patched.length);
+      return ContentService.createTextOutput(patched).setMimeType(ContentService.MimeType.JSON);
+    };
     if (!wantFresh) {
       const cached = getCachedPayload_(cacheVariant);
-      if (cached) {
-        // แทรก lastModified สด ๆ ลงใน cached payload ก่อน return
-        // แทนที่ค่าใน JSON string ตรง ๆ เพื่อความเร็ว (ไม่ parse ทั้งก้อน)
-        const freshMod = getSheetLastModified_();
-        const patched = cached.replace(
-          /"lastModified"\s*:\s*\d+/,
-          '"lastModified":' + freshMod
-        );
-        perfLogDoGet_('HIT', cacheVariant, _tReq, patched.length);
-        return ContentService.createTextOutput(patched).setMimeType(ContentService.MimeType.JSON);
+      if (cached) return serveCached(cached, 'HIT');
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Phase 7.3 — single-flight + stale-while-rebuild
+    // ─────────────────────────────────────────────────────────────────────
+    // เดิม: cache miss → `buildFullData_()` เลย โดยไม่มีอะไรกันไม่ให้หลายคนทำพร้อมกัน
+    // พอมีใครบันทึกอะไร (`invalidateCache_`) หรือ TTL หมด → ทุกเครื่องที่ poll ในวินาทีถัดไป
+    // miss พร้อมกันแล้วสั่ง build พร้อมกันทั้งหมด · วัดจริง 5 ส.ค. 2026 (docs/PHASE0-RESULTS.md):
+    // 15 request พร้อมกัน → **87-93% ได้หน้า HTML แทน JSON, มัธยฐาน 41-52 วิ, ช้าสุด 115 วิ**
+    // นี่คือสิ่งที่พนักงานเจอทุกเช้าที่เปิดแอปพร้อมกัน ไม่ใช่กรณีขอบ
+    //
+    // ตอนนี้: คนแรกที่คว้าล็อกได้ build คนเดียว · คนที่เหลือได้ "ของสำรอง" (ชุดก่อนหน้า
+    // ที่ยังไม่ถูกล้าง) กลับไปทันทีในหลักร้อย ms แทนที่จะไปต่อคิว build ทีละ 10 วินาที
+    let buildLock = acquireBuildLock_(0);
+
+    // ผู้ที่คว้าล็อกไม่ได้ = มีคนกำลัง build อยู่ → เสิร์ฟของสำรองไปก่อน
+    // ⚠️ **ห้ามปั๊ม `lastModified` สดลงในก้อนนี้** (ต่างจากเส้นทาง HIT) — ของสำรองคือข้อมูล
+    // ก่อนการบันทึกล่าสุด ถ้าปั๊มเป็นเวลาปัจจุบัน client จะเข้าใจว่าถืออยู่คือข้อมูลล่าสุด
+    // → conflict detection ปล่อยผ่าน → **เขียนทับงานคนอื่นเงียบ ๆ** ซึ่งแย่กว่าเห็นข้อมูลช้า
+    // ปล่อยให้ `lastModified` เป็นค่าเดิมที่ติดมากับก้อน = server ปฏิเสธการเขียนที่อิงของเก่าถูกต้อง
+    if (!buildLock && !wantFresh) {
+      const stale = readStalePayload_(cacheVariant);
+      if (stale.str) {
+        const outStale = markStalePayload_(stale.str, stale.ts);
+        perfLogDoGet_('STALE', cacheVariant, _tReq, outStale.length,
+          ' อายุ=' + Math.round((Date.now() - (stale.ts || Date.now())) / 1000) + 'วิ');
+        return ContentService.createTextOutput(outStale).setMimeType(ContentService.MimeType.JSON);
       }
     }
 
-    // build ครั้งเดียว (แพงสุดในเส้นทาง) แล้วแตกเป็นทุก variant เก็บ cache ให้ครบในรอบเดียว
-    // ถ้าเก็บเฉพาะ variant ที่ขอ role อื่นที่มาทีหลังจะ miss แล้ว build ใหม่ทั้งก้อนอีกรอบ
-    const data = buildFullData_();
-    const _tBuilt = Date.now();
-    let out = null;
-    PAYLOAD_VARIANTS_.forEach(function (v) {
-      const s = JSON.stringify(shapePayloadForVariant_(data, v));
-      putCachedPayload_(s, payloadCacheVariant_(v, 2));
-      if (v === variant && enc === 2) out = s;
-    });
-    // client เวอร์ชันเก่า (ไม่ส่ง pv) — กางกลับเป็นรูปแบบเดิมแล้ว cache แยกคีย์
-    // ทำเฉพาะ variant ที่ถูกขอจริง ไม่ทำเผื่อทุกตัว เพราะเป็นทางผ่านชั่วคราวช่วง deploy เท่านั้น
-    if (out == null) {
-      out = JSON.stringify(shapePayloadForVariant_(expandMonthlyForLegacy_(data), variant));
-      putCachedPayload_(out, cacheVariant);
+    // มาถึงตรงนี้ได้ 2 กรณี: (1) ไม่มีของสำรองเลย (เพิ่ง deploy / cache เย็นสนิท)
+    // (2) ผู้ใช้กดปุ่ม Sync เอง (`fresh=1`) ซึ่งขอข้อมูลใหม่จริง ๆ จะเอาของสำรองให้ไม่ได้
+    // → รอคิว build ของคนแรกแทนการ build ซ้อน (15 คนกด "ลองใหม่" พร้อมกันตอนเจอ error
+    //   คือจังหวะที่ระบบกำลังแย่อยู่แล้ว ยิ่ง build ซ้อนยิ่งพังหนัก)
+    if (!buildLock) {
+      buildLock = acquireBuildLock_(_BUILD_LOCK_WAIT_MS);
+      const after = readFreshPayload_(cacheVariant);
+      // สำหรับคนกด Sync: รับของที่คนอื่น build ไว้ **เฉพาะที่ build หลังคำขอเราเริ่ม**
+      // ไม่งั้นจะได้ก้อนที่ build ก่อนหน้าไปแล้ว ซึ่งอาจยังไม่มีสิ่งที่เขากด Sync มาหา
+      if (after.str && (!wantFresh || after.ts >= _tReq)) {
+        releaseBuildLock_(buildLock);
+        return serveCached(after.str, 'WAIT-HIT');
+      }
+      // รอจนหมดเวลาแล้วยังไม่มีของ → build เองแม้ไม่ได้ล็อก
+      // ยอมให้ build ซ้อนในกรณีนี้ ดีกว่าปล่อยให้ผู้ใช้ได้หน้าเปล่าโดยไม่มีอะไรเลย
     }
-    // แยก "เวลา build" ออกจาก "เวลา stringify+เขียน cache ทุก variant" — ก้อนหลังเดิมมองไม่เห็นเลย
-    // ถ้าก้อนหลังหนัก การไปเร่ง buildFullData_ อย่างเดียวจะไม่ช่วยอะไร (ดู perfMeasureBuild)
-    //
-    // ⚠️ **ต้องเรียกก่อน `logPayloadSizes_` เสมอ** — ตัวนั้น JSON.stringify ทุกคีย์ + `mo`
-    // ของสินค้าทุกตัวเพื่อวัดขนาด ซึ่งเป็นต้นทุนของ "เครื่องมือวัด" ไม่ใช่ของเส้นทางจริง
-    // สลับลำดับเมื่อไหร่ `shape+cache=` จะโป่งด้วยเวลาของตัววัดเอง แล้วสรุปผิดว่า payload หนัก
-    // (เครื่องมือวัดที่วัดตัวเองรวมไปด้วย = ตัวเลขที่ทำให้จูนผิดจุดอย่างมั่นใจ)
-    perfLogDoGet_(wantFresh ? 'FRESH' : 'MISS', cacheVariant, _tReq, out.length,
-      ' build=' + (_tBuilt - _tReq) + 'ms shape+cache=' + (Date.now() - _tBuilt) + 'ms');
-    logPayloadSizes_(data, cacheVariant, out.length);
-    return ContentService.createTextOutput(out)
-      .setMimeType(ContentService.MimeType.JSON);
+
+    try {
+      // จำไว้ก่อนว่ารอบนี้ถือล็อกมาหรือเปล่า — ด้านล่างมีการ set `buildLock = null`
+      // ถ้าไปอ่าน `buildLock` ทีหลังจะได้ null เสมอ แล้ว log จะรายงานว่า "build ซ้อน" ทุกครั้ง
+      // ทั้งที่ single-flight ทำงานปกติ = ตัวเลขที่ทำให้สรุปผิดว่าตัวแก้ไม่ได้ผล
+      const hadLock = !!buildLock;
+      // build ครั้งเดียว (แพงสุดในเส้นทาง) แล้วแตกเป็นทุก variant เก็บ cache ให้ครบในรอบเดียว
+      // ถ้าเก็บเฉพาะ variant ที่ขอ role อื่นที่มาทีหลังจะ miss แล้ว build ใหม่ทั้งก้อนอีกรอบ
+      const data = buildFullData_();
+      const _tBuilt = Date.now();
+      let out = null;
+      PAYLOAD_VARIANTS_.forEach(function (v) {
+        const s = JSON.stringify(shapePayloadForVariant_(data, v));
+        const cv = payloadCacheVariant_(v, 2);
+        putCachedPayload_(s, cv);
+        putStalePayload_(s, cv);   // Phase 7.3: เขียนชั้นสำรองคู่กันเสมอ
+        if (v === variant && enc === 2) out = s;
+      });
+      // client เวอร์ชันเก่า (ไม่ส่ง pv) — กางกลับเป็นรูปแบบเดิมแล้ว cache แยกคีย์
+      // ทำเฉพาะ variant ที่ถูกขอจริง ไม่ทำเผื่อทุกตัว เพราะเป็นทางผ่านชั่วคราวช่วง deploy เท่านั้น
+      if (out == null) {
+        out = JSON.stringify(shapePayloadForVariant_(expandMonthlyForLegacy_(data), variant));
+        putCachedPayload_(out, cacheVariant);
+        putStalePayload_(out, cacheVariant);
+      }
+      // ปล่อยล็อกทันทีที่ cache พร้อมให้คนอื่นอ่านแล้ว — ที่เหลือด้านล่างเป็น "การวัดผล" ล้วน
+      // `logPayloadSizes_` stringify ทุกคีย์ + `mo` ของสินค้าทุกตัวเพื่อวัดขนาด (หลายร้อย ms)
+      // ถือล็อกคร่อมมันไว้ = คนที่รอคิวอยู่ต้องรอ "ต้นทุนของเครื่องมือวัด" ไม่ใช่ต้นทุนของงานจริง
+      // (finally ด้านล่างยังทำงานปกติ — `releaseBuildLock_` กัน error ให้แล้วถ้าปล่อยซ้ำ)
+      releaseBuildLock_(buildLock);
+      buildLock = null;
+      // แยก "เวลา build" ออกจาก "เวลา stringify+เขียน cache ทุก variant" — ก้อนหลังเดิมมองไม่เห็นเลย
+      // ถ้าก้อนหลังหนัก การไปเร่ง buildFullData_ อย่างเดียวจะไม่ช่วยอะไร (ดู perfMeasureBuild)
+      //
+      // ⚠️ **ต้องเรียกก่อน `logPayloadSizes_` เสมอ** — ตัวนั้น JSON.stringify ทุกคีย์ + `mo`
+      // ของสินค้าทุกตัวเพื่อวัดขนาด ซึ่งเป็นต้นทุนของ "เครื่องมือวัด" ไม่ใช่ของเส้นทางจริง
+      // สลับลำดับเมื่อไหร่ `shape+cache=` จะโป่งด้วยเวลาของตัววัดเอง แล้วสรุปผิดว่า payload หนัก
+      // (เครื่องมือวัดที่วัดตัวเองรวมไปด้วย = ตัวเลขที่ทำให้จูนผิดจุดอย่างมั่นใจ)
+      perfLogDoGet_(wantFresh ? 'FRESH' : 'MISS', cacheVariant, _tReq, out.length,
+        ' build=' + (_tBuilt - _tReq) + 'ms shape+cache=' + (Date.now() - _tBuilt) + 'ms'
+        + (hadLock ? '' : ' (build ซ้อน — รอคิวไม่ทัน)'));
+      logPayloadSizes_(data, cacheVariant, out.length);
+      return ContentService.createTextOutput(out)
+        .setMimeType(ContentService.MimeType.JSON);
+    } finally {
+      // ปล่อยล็อก **หลังเขียน cache เสร็จแล้วเท่านั้น** — ปล่อยก่อนหน้านั้นคนที่รออยู่จะตื่นมา
+      // เจอ cache ว่างแล้ว build ซ้ำ ซึ่งคือปัญหาเดิมที่กำลังแก้อยู่พอดี
+      releaseBuildLock_(buildLock);
+    }
   } catch (error) {
     console.error("doGet Error:", error);
     return ContentService.createTextOutput(JSON.stringify({
@@ -9939,6 +10001,19 @@ const _CACHE_TTL_SEC   = 180;     // 3 นาที (เพิ่มเป็น
 const _CACHE_CHUNK_LEN = 30000;   // อักขระต่อ chunk (Thai 3 ไบต์ → ~90KB ปลอดภัย)
 const _CACHE_KEY_COUNT = 'dmj_payload_n';
 const _CACHE_KEY_PART  = 'dmj_payload_';
+const _CACHE_TS_SUFFIX = '_ts';   // เก็บ "เขียน cache ก้อนนี้เมื่อไหร่" คู่กับคีย์นับ chunk
+
+// ── Phase 7.3: ชั้น "ของสำรอง" (stale) สำหรับ stale-while-rebuild ──
+// คีย์แยกคนละชุดกับชั้นสด **โดยตั้งใจ** — `invalidateCache_` ไล่ลบเฉพาะคีย์ชั้นสด
+// ของสำรองจึงรอดจากการล้าง cache ทุกครั้งที่มีคนบันทึกข้อมูล ซึ่งเป็นทั้งหมดที่เราต้องการ:
+// คนที่มาถึงระหว่างคนแรกกำลัง build ได้ข้อมูลเก่าไม่กี่วินาทีทันที แทนที่จะไปต่อคิว build
+// TTL 30 นาที (ไม่ยาวกว่านี้) — ถ้า build พังติดกันนานกว่านี้ ปล่อยให้ผู้ใช้เห็น error
+// ดีกว่าเสิร์ฟตัวเลขสต็อกอายุครึ่งวันโดยที่เขาไม่รู้ตัว
+const _STALE_TTL_SEC   = 1800;
+const _STALE_KEY_COUNT = 'dmj_stale_n_';
+const _STALE_KEY_PART  = 'dmj_stale_';
+// รอคิว build ของคนแรกนานสุดเท่าไหร่ ก่อนยอม build เอง (build จริงวัดได้ ~10 วิ)
+const _BUILD_LOCK_WAIT_MS = 25000;
 // PERF: payload แยกตาม role แล้ว → cache ต้องแยกคีย์ต่อ variant ด้วย
 // ไม่งั้น warehouse ที่มาก่อนจะ cache ก้อนที่ตัดแล้วทับ แล้ว owner ที่มาทีหลังได้ข้อมูลขาด
 // (variant 'full' คงคีย์เดิมไว้ — ของที่ cache ไว้ก่อน deploy ยังใช้ได้ ไม่ต้องรอ cache อุ่นใหม่)
@@ -10045,42 +10120,89 @@ function shapePayloadForVariant_(data, variant) {
   return out;
 }
 
-function getCachedPayload_(variant) {
+// อ่านก้อนที่ถูกหั่นเป็น chunk กลับมาต่อกัน — คืน { str, ts } เสมอ (str=null คือใช้ไม่ได้)
+// `ts` = เวลาที่เขียน cache ก้อนนี้ ใช้ 2 ที่: (1) ตัดสินว่าของที่ build เสร็จระหว่างเรารอคิว
+// ใหม่พอสำหรับคนที่กดปุ่ม Sync ไหม (2) บอกอายุของ "ของสำรอง" ให้ผู้ใช้เห็น
+function _readChunked_(kCount, kPart) {
   try {
     const c = CacheService.getScriptCache();
-    const _CACHE_KEY_COUNT = _cacheKeyCount_(variant);
-    const _CACHE_KEY_PART  = _cacheKeyPart_(variant);
-    const nStr = c.get(_CACHE_KEY_COUNT);
-    if (!nStr) return null;
+    const head = c.getAll([kCount, kCount + _CACHE_TS_SUFFIX]);
+    const nStr = head[kCount];
+    if (!nStr) return { str: null, ts: 0 };
     const n = parseInt(nStr, 10);
-    if (!n) return null;
+    if (!n) return { str: null, ts: 0 };
+    const ts = parseInt(head[kCount + _CACHE_TS_SUFFIX], 10) || 0;
     const keys = [];
-    for (let i = 0; i < n; i++) keys.push(_CACHE_KEY_PART + i);
+    for (let i = 0; i < n; i++) keys.push(kPart + i);
     const map = c.getAll(keys);
     let out = '';
     for (let i = 0; i < n; i++) {
-      const part = map[_CACHE_KEY_PART + i];
-      if (part == null) return null; // chunk หาย → ถือว่า cache ใช้ไม่ได้
+      const part = map[kPart + i];
+      if (part == null) return { str: null, ts: 0 }; // chunk หาย → ถือว่า cache ใช้ไม่ได้
       out += part;
     }
-    return out;
-  } catch (err) { return null; }
+    return { str: out, ts: ts };
+  } catch (err) { return { str: null, ts: 0 }; }
 }
 
-function putCachedPayload_(str, variant) {
+function _writeChunked_(str, kCount, kPart, ttlSec) {
   try {
     const c = CacheService.getScriptCache();
-    const _CACHE_KEY_COUNT = _cacheKeyCount_(variant);
-    const _CACHE_KEY_PART  = _cacheKeyPart_(variant);
     const entries = {};
     let n = 0;
     for (let i = 0; i < str.length; i += _CACHE_CHUNK_LEN) {
-      entries[_CACHE_KEY_PART + n] = str.substring(i, i + _CACHE_CHUNK_LEN);
+      entries[kPart + n] = str.substring(i, i + _CACHE_CHUNK_LEN);
       n++;
     }
-    entries[_CACHE_KEY_COUNT] = String(n);
-    c.putAll(entries, _CACHE_TTL_SEC);
+    entries[kCount] = String(n);
+    entries[kCount + _CACHE_TS_SUFFIX] = String(Date.now());
+    c.putAll(entries, ttlSec);
   } catch (err) { /* cache ล้มเหลวไม่เป็นไร — แค่ช้าลง */ }
+}
+
+// ชั้นสด (TTL 3 นาที) — ถูกล้างทุกครั้งที่มีคนบันทึกข้อมูล
+function readFreshPayload_(variant) {
+  return _readChunked_(_cacheKeyCount_(variant), _cacheKeyPart_(variant));
+}
+function getCachedPayload_(variant) { return readFreshPayload_(variant).str; }
+function putCachedPayload_(str, variant) {
+  _writeChunked_(str, _cacheKeyCount_(variant), _cacheKeyPart_(variant), _CACHE_TTL_SEC);
+}
+
+// ชั้นสำรอง (TTL 30 นาที) — `invalidateCache_` ไม่แตะ จึงยังอยู่ระหว่างที่คนแรกกำลัง build ใหม่
+function _staleKeyCount_(variant) { return _STALE_KEY_COUNT + (variant || 'full'); }
+function _staleKeyPart_(variant)  { return _STALE_KEY_PART  + (variant || 'full') + '_'; }
+function readStalePayload_(variant) {
+  return _readChunked_(_staleKeyCount_(variant), _staleKeyPart_(variant));
+}
+function putStalePayload_(str, variant) {
+  _writeChunked_(str, _staleKeyCount_(variant), _staleKeyPart_(variant), _STALE_TTL_SEC);
+}
+
+// ── Phase 7.3: single-flight — ให้ "คนเดียว" สร้าง payload ต่อหนึ่งรอบ ──
+// ใช้ `getUserLock()` ไม่ใช่ `getScriptLock()` **โดยตั้งใจ**:
+//   · web app deploy แบบ `executeAs: USER_DEPLOYING` (ดู appsscript.json) → ทุก doGet
+//     รันในฐานะเจ้าของคนเดียวกัน → user lock จึงเป็นล็อกร่วมของทุก request จริง
+//   · แต่เป็น **คนละตัว** กับ `getScriptLock()` ที่เส้นทางเขียนข้อมูลใช้ (สั่งของ/โอน/รับของ)
+//     → การ build ที่กิน ~10 วิ จะไม่ไปขวางคนกดสั่งของให้รอตาม
+//   · ถ้าวันหนึ่งเปลี่ยนเป็น `USER_ACCESSING` ล็อกจะแยกตามคน → single-flight ทำงานได้น้อยลง
+//     (build บ่อยขึ้น) **แต่ข้อมูลไม่ผิด** — ความถูกต้องไม่ได้ผูกกับล็อกตัวนี้เลย เป็นแค่ตัวลดงานซ้ำ
+//   · ล็อกค้างไม่ได้: ทุกเส้นทางปล่อยใน `finally` และ GAS ปล่อยล็อกให้เองเมื่อ execution จบ
+function acquireBuildLock_(waitMs) {
+  try {
+    const lock = LockService.getUserLock();
+    return lock.tryLock(waitMs || 0) ? lock : null;
+  } catch (err) { return null; }   // ล็อกใช้ไม่ได้ → ถือว่าคว้าไม่ได้ แล้วไปทางสำรอง/build เอง
+}
+function releaseBuildLock_(lock) {
+  if (lock) { try { lock.releaseLock(); } catch (err) { /* ปล่อยไม่ได้ก็หมดอายุเองตอน execution จบ */ } }
+}
+
+// แทรกธง "นี่คือของสำรอง" เข้าไปใน JSON string ตรง ๆ โดยไม่ parse ทั้งก้อน (payload ~4.5MB)
+// frontend ใช้ `stale` ขึ้นป้ายเตือน และ `staleAt` บอกว่าข้อมูล ณ เวลาไหน
+function markStalePayload_(s, ts) {
+  if (!s || s.charAt(0) !== '{' || s.charAt(1) === '}') return s;
+  return '{"stale":1,"staleAt":' + (ts || 0) + ',' + s.slice(1);
 }
 
 function invalidateCache_(skipTsUpdate) {
@@ -10097,9 +10219,14 @@ function invalidateCache_(skipTsUpdate) {
       const kCount = _cacheKeyCount_(v), kPart = _cacheKeyPart_(v);
       const nStr = c.get(kCount);
       const n = nStr ? parseInt(nStr, 10) : 0;
-      keys.push(kCount);
+      keys.push(kCount, kCount + _CACHE_TS_SUFFIX);
       for (let i = 0; i < n; i++) keys.push(kPart + i);
     });
+    // ⚠️ Phase 7.3: **ล้างเฉพาะชั้นสด ห้ามแตะชั้นสำรอง (`dmj_stale_*`)**
+    // ของสำรองคือสิ่งเดียวที่คนอื่นมีให้อ่านระหว่างคนแรกกำลัง build ใหม่ (~10 วิ)
+    // ถ้าล้างด้วย = กลับไปเป็น stampede เหมือนเดิมทันที (ทุกคน miss พร้อมกัน → build พร้อมกัน)
+    // ของสำรองไม่ทำให้ข้อมูลผิด เพราะถูกติดธง `stale` + คง `lastModified` เดิมไว้เสมอ
+    // → conflict detection ฝั่ง server ยังปฏิเสธการเขียนทับที่อิงข้อมูลเก่าได้ตามปกติ
     if (keys.length) c.removeAll(keys);
   } catch (err) { /* ignore */ }
   if (!skipTsUpdate) {

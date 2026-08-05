@@ -42,6 +42,35 @@
       แล้ว — เดิมไม่มีก็ไม่มีผลเพราะ cache ไม่เคยถูกใช้
   - `invalidateCache_(skipTsUpdate)` — ถ้า `skipTsUpdate=true` จะล้าง payload cache อย่างเดียว
     ไม่ bump `dmj_last_write_ts` (ใช้ที่ต้น doPost ก่อน conflict check เพื่อไม่ poison timestamp)
+
+### single-flight + stale-while-rebuild (Phase 7.3, ส.ค. 2026)
+
+**วัดจริงก่อนแก้** (`docs/PHASE0-RESULTS.md`): ยิง 15 request พร้อมกัน (= พนักงานทั้งร้าน
+เปิดแอปตอนเช้า) → **87-93% ได้หน้า HTML แทน JSON · มัธยฐาน 41-52 วิ · ช้าสุด 115 วิ**
+ทั้งรอบที่ไม่มีใครเขียนข้อมูลเลย และรอบที่เพิ่งมีคนสั่งของ — พอกัน แปลว่า**ไม่ใช่กรณีขอบ**
+ต้นเหตุ: cache miss พร้อมกัน → ทุกคนสั่ง `buildFullData_()` (9.8 วิ, อ่าน 9 ชีต) พร้อมกัน
+
+- **cache 2 ชั้น**: ชั้นสด `dmj_payload_*` (TTL 180 วิ) + **ชั้นสำรอง `dmj_stale_*` (TTL 30 นาที)**
+  · เขียนคู่กันเสมอตอน build · **`invalidateCache_` ล้างเฉพาะชั้นสด ห้ามแตะชั้นสำรอง**
+  (ล้างด้วย = กลับไป stampede ทันทีโดยไม่มีอะไรพังให้เห็น)
+- **`acquireBuildLock_` ใช้ `LockService.getUserLock()` ไม่ใช่ `getScriptLock()`** — web app
+  deploy แบบ `executeAs: USER_DEPLOYING` → ทุก doGet รันในฐานะเจ้าของคนเดียวกัน user lock
+  จึงเป็นล็อกร่วมของทุก request **แต่เป็นคนละตัวกับล็อกฝั่งเขียนข้อมูล** → build 10 วิ
+  ไม่ไปขวางคนกดสั่งของ · ความถูกต้องไม่ได้ผูกกับล็อกนี้ (คว้าไม่ได้ก็ยังทำงานได้ แค่ build ซ้ำ)
+- **เส้นทางใน `doGet`**: hit → คืนเลย · miss → คว้าล็อก `tryLock(0)` ได้ → build คนเดียว ·
+  คว้าไม่ได้ → คืนของสำรอง + ธง `stale` ทันที (~0.3 วิ) · ไม่มีของสำรอง → รอคิว 25 วิ
+  แล้วรับของที่คนแรก build เสร็จ · รอไม่ทัน → build เอง (ห้ามปล่อยให้ผู้ใช้ได้หน้าเปล่า)
+- ⚠️ **เส้นทาง stale ห้ามปั๊ม `lastModified` สด** (ต่างจากเส้นทาง HIT ที่ปั๊ม) — ของสำรองคือ
+  ข้อมูล**ก่อน**การบันทึกล่าสุด ถ้าปั๊มเป็นเวลาปัจจุบัน client จะคิดว่าถือข้อมูลล่าสุดอยู่ →
+  conflict detection ปล่อยผ่าน → **เขียนทับงานคนอื่นเงียบ ๆ** (แย่กว่าเห็นข้อมูลช้า)
+- `fresh=1` (กดปุ่ม Sync) **ไม่มีวันได้ของสำรอง** — แต่ยังเข้าคิว single-flight เพื่อกัน
+  15 คนกด "ลองใหม่" พร้อมกันแล้ว build 15 รอบ · รับของจากคิวได้เฉพาะที่ `ts >= _tReq`
+- **frontend**: `staleAt` state (app.jsx) → แถบเหลือง "กำลังอัปเดตข้อมูล — ที่เห็นตอนนี้คือ
+  ข้อมูล ณ HH:MM" + **ดึงซ้ำเองอัตโนมัติใน 5-9 วิ (สุ่ม — ทุกเครื่องได้ของสำรองพร้อมกัน
+  ถ้าตั้งเวลาตายตัวจะกลับมายิงพร้อมกันอีก)** · เก็บเป็น state แยก **ห้ามยัดเข้า `data`**
+  เพราะ `data` ถูก save ลง localStorage ธงจะติดค้างข้ามการเปิดแอป
+- เทสต์: `tests/stampede.test.js` (23 เคส — eval ฟังก์ชันจริงจาก `.gs` + CacheService ปลอม
+  เหมือน auth.test.js ไม่ copy) คุมทั้ง 4 ข้อที่ "พังแล้วไม่มี error ให้เห็น" ข้างบน
 - **Hosting**: Cloudflare Pages (`dmj-inventory-dashboard.pages.dev`) auto-deploy จาก
   branch `master`
 
@@ -426,7 +455,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 967 tests, 29 test files, ทั้งหมด pass
+**มี Vitest test suite แล้ว** — 991 tests, 30 test files, ทั้งหมด pass
 
 ```bash
 npm test              # run tests
@@ -439,7 +468,7 @@ npm run test:coverage # coverage report (tests/helpers.js)
            monthKey_, dayKey_, deductStockCore, netOf, enrichDataCore`
 - `tests/*.test.js` — parsing, color, stock, dates, mto, app, format, schema, conflict, orderstate,
   sku, billing, bahttext, transfer, cleanup, analytics, **attendance**, **auth**, drift-guard,
-  **dashboard-metrics**
+  **dashboard-metrics**, **stampede**
 - **`tests/auth.test.js`** — เฟส 4 ล็อกอิน (`canDoOrNull_`/`ROLE_ACTIONS_`/`IMMEDIATE_GATE_*`) —
   **ไม่ copy โค้ดเข้า helpers.js** แต่ eval ฟังก์ชันจริงจาก `.gs` ตรง ๆ (กันสำเนา drift ของโค้ด
   ด้านความปลอดภัย) ต่างจากไฟล์เทสต์อื่นที่ copy pure function เข้า `helpers.js`
