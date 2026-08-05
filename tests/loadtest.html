@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>DMJ — วัดโหลด GAS (Phase 0)</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, "Noto Sans Thai", sans-serif;
+         margin: 0; padding: 16px; max-width: 900px; margin-inline: auto; line-height: 1.6; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { opacity: .7; font-size: 13px; margin-bottom: 16px; }
+  fieldset { border: 1px solid #8883; border-radius: 10px; padding: 12px; margin: 0 0 12px; }
+  legend { font-weight: 600; font-size: 13px; padding: 0 6px; }
+  label { display: block; font-size: 13px; margin-top: 8px; }
+  input, select { width: 100%; box-sizing: border-box; padding: 8px; border-radius: 8px;
+                  border: 1px solid #8886; font: inherit; background: transparent; color: inherit; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row > * { flex: 1; min-width: 0; }
+  button { font: inherit; font-weight: 600; padding: 12px 18px; border-radius: 10px;
+           border: 0; background: #2563eb; color: #fff; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.ghost { background: #8883; color: inherit; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+  th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid #8883; }
+  th:first-child, td:first-child { text-align: left; }
+  .ok { color: #16a34a; } .bad { color: #dc2626; font-weight: 700; } .warn { color: #d97706; }
+  pre { background: #8881; padding: 10px; border-radius: 8px; overflow-x: auto; font-size: 12px; }
+  .note { font-size: 12px; opacity: .8; }
+</style>
+</head>
+<body>
+
+<h1>วัดโหลด GAS — เส้นฐาน Phase 0</h1>
+<div class="sub">
+  ยิงหลาย request พร้อมกันเหมือนพนักงานเปิดแอปพร้อมกัน แล้วรายงานว่าเร็ว/ช้าแค่ไหน
+  และมีกี่อันที่ <b>ได้ HTML แทน JSON</b> (= GAS ปฏิเสธเพราะล้น)
+  · <b>อ่านอย่างเดียว ไม่บันทึกอะไรลงชีต</b>
+</div>
+
+<fieldset>
+  <legend>ตั้งค่า</legend>
+  <label>URL ของ GAS web app (/exec)
+    <input id="url" placeholder="https://script.google.com/macros/s/.../exec">
+  </label>
+  <label>APP_TOKEN (ค่าเดียวกับใน config.js)
+    <input id="token" placeholder="dmj_...">
+  </label>
+  <div class="row">
+    <label>ยิงพร้อมกันกี่ request
+      <input id="n" type="number" value="15" min="1" max="30">
+    </label>
+    <label>ยิงซ้ำกี่รอบ (เว้น 5 วิ)
+      <input id="rounds" type="number" value="1" min="1" max="5">
+    </label>
+    <label>role ที่ใช้ยิง
+      <select id="role">
+        <option value="mix">ผสมเหมือนจริง (owner 1 · frontstore/saler ที่เหลือ)</option>
+        <option value="owner">owner ทั้งหมด (payload ใหญ่สุด)</option>
+        <option value="frontstore">frontstore ทั้งหมด (payload เล็กสุด)</option>
+      </select>
+    </label>
+  </div>
+  <label>ยิงไปที่
+    <select id="target">
+      <option value="payload">payload ทั้งก้อน (เส้นทางที่หนักที่สุด)</option>
+      <option value="orders">action=orders (ที่แท็บ orders poll ทุก 15 วิ)</option>
+      <option value="ping">action=ping (มีหลัง Phase 2.1 เท่านั้น)</option>
+    </select>
+  </label>
+</fieldset>
+
+<div class="row">
+  <button id="go">▶ เริ่มยิง</button>
+  <button id="clear" class="ghost">ล้างผล</button>
+</div>
+
+<div id="out"></div>
+
+<fieldset style="margin-top:16px">
+  <legend>วิธีใช้ให้ได้ตัวเลขที่มีความหมาย</legend>
+  <ol class="note" style="margin:0;padding-left:18px">
+    <li><b>รอบ "cache อุ่น"</b> — กดยิงตอนไม่มีใครบันทึกอะไร → วัดกรณีดีที่สุด</li>
+    <li><b>รอบ "cache หมดอายุพร้อมกัน" (สำคัญที่สุด)</b> — ให้คนในร้านกดบันทึกอะไรสักอย่าง
+        (สั่งของ/โอน/รับของ) แล้ว <u>กดยิงทันที</u> ภายใน 2-3 วิ → นี่คือ
+        <b>cache stampede</b> ในแผนข้อ 7.3 ตัวที่จะพังก่อนเพื่อนตอน 15 คน</li>
+    <li>เก็บผลทั้งสองรอบไว้เป็น <b>เส้นฐาน</b> แล้วรันซ้ำหลังแก้แต่ละ Phase เทียบกัน</li>
+  </ol>
+  <div class="note" style="margin-top:8px">
+    เกณฑ์ผ่านตามแผน 7.5: เปิดแอปเห็นข้อมูล ≤ 3 วิ · <b>ได้ HTML แทน JSON = 0%</b>
+  </div>
+</fieldset>
+
+<script>
+var $ = function (id) { return document.getElementById(id); };
+var LS = 'dmj_loadtest_cfg';
+
+// เติมค่าที่เคยกรอกไว้
+try {
+  var saved = JSON.parse(localStorage.getItem(LS) || '{}');
+  if (saved.url) $('url').value = saved.url;
+  if (saved.token) $('token').value = saved.token;
+} catch (e) {}
+
+// ถ้าเปิดผ่านเว็บ (ไม่ใช่ file://) ลองอ่านค่าจาก config.js ให้อัตโนมัติ
+// ค่าทั้งสองตัวเป็น public อยู่แล้ว (config.js โหลดคู่กับหน้าเว็บหลัก) — ไม่ได้เปิดเผยอะไรใหม่
+if (location.protocol !== 'file:' && !$('url').value) {
+  var s = document.createElement('script');
+  s.src = '../config.js';
+  s.onload = function () {
+    try {
+      if (typeof _SHEET_BASE === 'string') $('url').value = _SHEET_BASE;
+      if (typeof APP_TOKEN === 'string') $('token').value = APP_TOKEN;
+    } catch (e) {}
+  };
+  document.head.appendChild(s);
+}
+
+function rolesFor(n, mode) {
+  if (mode !== 'mix') { var a = []; for (var i = 0; i < n; i++) a.push(mode); return a; }
+  var out = ['owner'];
+  var pool = ['frontstore', 'saler', 'warehouse', 'employee'];
+  for (var i = 1; i < n; i++) out.push(pool[(i - 1) % pool.length]);
+  return out;
+}
+
+function buildUrl(base, token, target, role) {
+  var u = base + '?token=' + encodeURIComponent(token);
+  if (target === 'orders') u += '&action=orders';
+  else if (target === 'ping') u += '&action=ping';
+  else u += '&role=' + encodeURIComponent(role) + '&pv=2';
+  // กัน browser cache ตอบแทน — ไม่กระทบ cache ฝั่ง GAS (แยกตาม variant เท่านั้น)
+  return u + '&_t=' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+}
+
+function classify(text) {
+  var head = String(text || '').slice(0, 200).trim();
+  if (!head) return 'ว่าง';
+  if (head.charAt(0) === '<') return 'HTML';       // GAS ปฏิเสธ/เด้งหน้า error
+  try { JSON.parse(text); return 'JSON'; } catch (e) { return 'พังไม่ใช่ JSON'; }
+}
+
+function pct(arr, p) {
+  if (!arr.length) return 0;
+  var a = arr.slice().sort(function (x, y) { return x - y; });
+  return a[Math.min(a.length - 1, Math.floor((a.length - 1) * p))];
+}
+
+async function fireOne(url) {
+  var t0 = performance.now();
+  try {
+    var res = await fetch(url, { method: 'GET', redirect: 'follow' });
+    var text = await res.text();
+    return { ms: Math.round(performance.now() - t0), status: res.status,
+             kind: classify(text), kb: Math.round(text.length / 1024) };
+  } catch (err) {
+    return { ms: Math.round(performance.now() - t0), status: 0,
+             kind: 'ยิงไม่ออก', kb: 0, err: String(err && err.message || err) };
+  }
+}
+
+async function runRound(cfg, roundNo) {
+  var roles = rolesFor(cfg.n, cfg.role);
+  var urls = roles.map(function (r) { return buildUrl(cfg.url, cfg.token, cfg.target, r); });
+  var wall0 = performance.now();
+  var results = await Promise.all(urls.map(fireOne));
+  var wall = Math.round(performance.now() - wall0);
+  return { roundNo: roundNo, results: results, wall: wall, roles: roles };
+}
+
+function render(round, cfg) {
+  var R = round.results;
+  var ms = R.map(function (r) { return r.ms; });
+  var htmlCnt = R.filter(function (r) { return r.kind === 'HTML'; }).length;
+  var badCnt = R.filter(function (r) { return r.kind !== 'JSON'; }).length;
+  var kb = R.length ? Math.round(R.reduce(function (a, r) { return a + r.kb; }, 0) / R.length) : 0;
+
+  var wrap = document.createElement('fieldset');
+  var badge = badCnt === 0
+    ? '<span class="ok">JSON ครบทุกอัน ✅</span>'
+    : '<span class="bad">ไม่ใช่ JSON ' + badCnt + '/' + R.length + ' อัน ❌</span>';
+  var pingWarn = '';
+  if (cfg.target === 'ping' && kb > 20) {
+    pingWarn = '<div class="warn note">⚠️ ตอบกลับมา ' + kb + 'KB — แปลว่ายังไม่มี '
+      + '<code>action=ping</code> จริง (Phase 2.1 ยังไม่ได้ทำ) GAS จึงตกไปคืน payload ทั้งก้อนแทน '
+      + 'ตัวเลขรอบนี้จึงไม่ใช่ค่าของ ping</div>';
+  }
+
+  wrap.innerHTML =
+    '<legend>รอบที่ ' + round.roundNo + ' — ' + cfg.n + ' request พร้อมกัน → ' + cfg.target + '</legend>' +
+    '<div>' + badge + ' · เฉลี่ยก้อนละ ' + kb + 'KB · ทั้งชุดเสร็จใน ' + round.wall + ' ms</div>' +
+    pingWarn +
+    '<table>' +
+      '<tr><th>เร็วสุด</th><th>มัธยฐาน</th><th>p90</th><th>ช้าสุด</th><th>ได้ HTML</th></tr>' +
+      '<tr><td>' + pct(ms, 0) + ' ms</td><td>' + pct(ms, .5) + ' ms</td><td>' + pct(ms, .9) +
+      ' ms</td><td>' + pct(ms, 1) + ' ms</td><td class="' + (htmlCnt ? 'bad' : 'ok') + '">' +
+      htmlCnt + '</td></tr>' +
+    '</table>' +
+    '<details><summary class="note">ดูรายตัว</summary><pre>' +
+      R.map(function (r, i) {
+        return String(i + 1).padStart(2, ' ') + '. ' + String(round.roles[i]).padEnd(11, ' ') +
+               String(r.ms + 'ms').padStart(8, ' ') + '  HTTP ' + r.status +
+               '  ' + r.kind + '  ' + r.kb + 'KB' + (r.err ? '  ' + r.err : '');
+      }).join('\n') +
+    '</pre></details>';
+  $('out').appendChild(wrap);
+}
+
+$('go').onclick = async function () {
+  var cfg = {
+    url: $('url').value.trim().replace(/\?.*$/, ''),
+    token: $('token').value.trim(),
+    n: Math.max(1, Math.min(30, parseInt($('n').value, 10) || 1)),
+    rounds: Math.max(1, Math.min(5, parseInt($('rounds').value, 10) || 1)),
+    role: $('role').value,
+    target: $('target').value
+  };
+  if (!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(cfg.url)) {
+    alert('URL ต้องเป็นลิงก์ /exec ของ GAS web app'); return;
+  }
+  try { localStorage.setItem(LS, JSON.stringify({ url: cfg.url, token: cfg.token })); } catch (e) {}
+
+  $('go').disabled = true;
+  var label = $('go').textContent;
+  try {
+    for (var i = 1; i <= cfg.rounds; i++) {
+      $('go').textContent = 'กำลังยิงรอบ ' + i + '/' + cfg.rounds + '…';
+      render(await runRound(cfg, i), cfg);
+      if (i < cfg.rounds) await new Promise(function (r) { setTimeout(r, 5000); });
+    }
+  } finally {
+    $('go').disabled = false;
+    $('go').textContent = label;
+  }
+};
+
+$('clear').onclick = function () { $('out').innerHTML = ''; };
+</script>
+</body>
+</html>

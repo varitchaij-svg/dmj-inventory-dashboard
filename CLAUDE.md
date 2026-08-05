@@ -426,7 +426,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 881 tests, 25 test files, ทั้งหมด pass
+**มี Vitest test suite แล้ว** — 967 tests, 29 test files, ทั้งหมด pass
 
 ```bash
 npm test              # run tests
@@ -452,6 +452,12 @@ npm run test:coverage # coverage report (tests/helpers.js)
 - **`tests/drift-guard.test.js`** — กัน `helpers.js` drift จากต้นทาง: ทุก export ต้องมี entry ใน
   `TRACKED` (พร้อม landmark ที่ต้องเจอทั้งในไฟล์ต้นทางและ helpers.js) หรืออยู่ใน
   `BEHAVIORAL_MODELS` · **เพิ่ม export ใหม่ใน helpers.js แล้วไม่เพิ่ม landmark = test แดงทันที**
+- **`tests/perf-phase0.test.js`** — เครื่องมือวัดผล Phase 0 (`perfCheckTriggers`/`perfMeasureBuild`/
+  `perfLogDoGet_`) · คุม **ความน่าเชื่อถือของตัวเลขที่ใช้ตัดสินใจ** ไม่ใช่ตรรกะธุรกิจ —
+  ตาราง `PERF_TRIGGER_SCHEDULE_` ต้องครบทุก trigger ที่โค้ดตั้งจริง (GAS ไม่มี API ให้อ่าน
+  ความถี่ clock trigger กลับมา ตารางจึงเป็นแหล่งเดียว · ตกหล่น = ประเมินโควตาต่ำกว่าจริงเงียบ ๆ),
+  `PERF_SAFE_PROPS_` ต้องไม่มีคีย์ความลับ, และ `doGet` ต้องเรียก `perfLogDoGet_`
+  **ทั้งเส้นทาง HIT และ MISS** (ขาดข้างใดข้างหนึ่ง = วัดได้ครึ่งเดียวแล้วสรุปเหมือนวัดครบ)
 - `tests/browser/run.cjs` — headless smoke test (ทุก role × ทุก tab) · mirror `ROLE_TABS` ไว้เอง
   ต้องอัปเดตตามเมื่อแก้ ROLE_TABS · รัน `bash tests/browser/setup.sh && node tests/browser/run.cjs`
 - export pattern ในไฟล์ต้นฉบับ:

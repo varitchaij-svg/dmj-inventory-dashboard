@@ -2185,6 +2185,11 @@ function doGet(e) {
     // ?fresh=1 หรือหลังมีการแก้ข้อมูล (doPost ล้าง cache) จะคำนวณใหม่
     // หมายเหตุ: lastModified อ่านสด ๆ เสมอแม้ serve จาก cache
     //           เพื่อให้ conflict detection ฝั่ง client ทำงานได้จริง
+    // PERF (Phase 0): จับเวลาเส้นทาง payload ทั้งเส้น — เดิมวัดแต่ `buildFullData_`
+    // ซึ่งเป็นเส้นทางที่เกิดน้อยที่สุด ส่วนเส้นทาง cache hit (เกิดบ่อยที่สุด) ไม่เคยถูกวัดเลย
+    // และ Executions list ก็บอกได้แค่ "รวมกี่วินาที" ไม่บอกว่า hit หรือ miss → แยกไม่ออกว่า
+    // ที่ช้าเพราะ build หรือเพราะ cache เองก็ช้า · ต้นทุนบรรทัดนี้ = Date.now() + Logger.log
+    const _tReq = Date.now();
     const wantFresh = e && e.parameter && e.parameter.fresh === '1';
     const variant = payloadVariantForRole_(e && e.parameter && e.parameter.role);
     const enc     = payloadEncodingForRequest_(e);
@@ -2199,6 +2204,7 @@ function doGet(e) {
           /"lastModified"\s*:\s*\d+/,
           '"lastModified":' + freshMod
         );
+        perfLogDoGet_('HIT', cacheVariant, _tReq, patched.length);
         return ContentService.createTextOutput(patched).setMimeType(ContentService.MimeType.JSON);
       }
     }
@@ -2206,6 +2212,7 @@ function doGet(e) {
     // build ครั้งเดียว (แพงสุดในเส้นทาง) แล้วแตกเป็นทุก variant เก็บ cache ให้ครบในรอบเดียว
     // ถ้าเก็บเฉพาะ variant ที่ขอ role อื่นที่มาทีหลังจะ miss แล้ว build ใหม่ทั้งก้อนอีกรอบ
     const data = buildFullData_();
+    const _tBuilt = Date.now();
     let out = null;
     PAYLOAD_VARIANTS_.forEach(function (v) {
       const s = JSON.stringify(shapePayloadForVariant_(data, v));
@@ -2218,6 +2225,15 @@ function doGet(e) {
       out = JSON.stringify(shapePayloadForVariant_(expandMonthlyForLegacy_(data), variant));
       putCachedPayload_(out, cacheVariant);
     }
+    // แยก "เวลา build" ออกจาก "เวลา stringify+เขียน cache ทุก variant" — ก้อนหลังเดิมมองไม่เห็นเลย
+    // ถ้าก้อนหลังหนัก การไปเร่ง buildFullData_ อย่างเดียวจะไม่ช่วยอะไร (ดู perfMeasureBuild)
+    //
+    // ⚠️ **ต้องเรียกก่อน `logPayloadSizes_` เสมอ** — ตัวนั้น JSON.stringify ทุกคีย์ + `mo`
+    // ของสินค้าทุกตัวเพื่อวัดขนาด ซึ่งเป็นต้นทุนของ "เครื่องมือวัด" ไม่ใช่ของเส้นทางจริง
+    // สลับลำดับเมื่อไหร่ `shape+cache=` จะโป่งด้วยเวลาของตัววัดเอง แล้วสรุปผิดว่า payload หนัก
+    // (เครื่องมือวัดที่วัดตัวเองรวมไปด้วย = ตัวเลขที่ทำให้จูนผิดจุดอย่างมั่นใจ)
+    perfLogDoGet_(wantFresh ? 'FRESH' : 'MISS', cacheVariant, _tReq, out.length,
+      ' build=' + (_tBuilt - _tReq) + 'ms shape+cache=' + (Date.now() - _tBuilt) + 'ms');
     logPayloadSizes_(data, cacheVariant, out.length);
     return ContentService.createTextOutput(out)
       .setMimeType(ContentService.MimeType.JSON);
@@ -11826,4 +11842,192 @@ function disableSupabaseBackup() {
   PropertiesService.getScriptProperties().setProperty('SUPABASE_BACKUP_ENABLED', 'false');
   Logger.log('ปิดการสำรอง Supabase (ลบ trigger + SUPABASE_BACKUP_ENABLED=false) แล้ว');
   return { ok: true };
+}
+
+// ═══════════════════════════════════════════════════════════
+// SECTION: เครื่องมือวัดผล Phase 0 (docs/PLAN-PERF-LOGIN-MULTIUSER.md)
+// ═══════════════════════════════════════════════════════════
+// ทั้งสองฟังก์ชันในส่วนนี้ **อ่านอย่างเดียว** — ไม่เขียนชีต ไม่เขียน cache ไม่ยิง ZORT/LINE
+// ตั้งชื่อไม่มี `_` ต่อท้ายโดยตั้งใจ เพื่อให้โผล่ใน dropdown ของ GAS editor (บทเรียนข้อ 1)
+
+// 1 บรรทัดต่อ 1 request ของเส้นทาง payload — ใช้ดูใน Executions log ว่ารอบไหน hit/miss
+// และแต่ละแบบใช้เวลาเท่าไหร่จริง · **ห้าม throw** (เป็นบรรทัดสุดท้ายก่อนตอบผู้ใช้
+// — log พลาดต้องไม่ทำให้ทั้ง request ล้ม หลักเดียวกับ appendSaleBillRow_/pushInappNoti_)
+// ต้นทุนต่อรอบ = Date.now() + Logger.log เท่านั้น ไม่มีการอ่าน Property/ชีตเพิ่ม
+// (จงใจไม่ใส่สวิตช์เปิด-ปิดผ่าน Script Property เพราะการอ่าน Property ทุก request
+//  แพงกว่าตัว log ที่พยายามจะปิดเสียอีก) · เอาออกได้เมื่อจบ Phase 0 ถ้ารกเกินไป
+function perfLogDoGet_(kind, variant, tStart, bytes, extra) {
+  try {
+    Logger.log('[perf] doGet ' + kind + ' variant=' + variant
+      + ' รวม=' + (Date.now() - tStart) + 'ms'
+      + ' ส่ง=' + Math.round((bytes || 0) / 1024) + 'KB'
+      + (extra || ''));
+  } catch (e) {}
+}
+
+// ตารางอ้างอิง: trigger แต่ละตัวถูกตั้งด้วยความถี่เท่าไหร่ (จาก setup function ในไฟล์นี้)
+// จำเป็นต้อง hard-code เพราะ **GAS ไม่มี API ให้อ่านความถี่ของ clock trigger กลับมา**
+// (`ScriptApp.getProjectTriggers()` บอกได้แค่ชื่อ handler กับชนิด) — ตัวไหนไม่อยู่ในตารางนี้
+// จะถูกรายงานว่า "ไม่รู้จัก" ให้ไปตรวจเอง ดีกว่าเดาแล้วรายงานเลขผิด
+const PERF_TRIGGER_SCHEDULE_ = {
+  drainNotiQueue:          { every: 'ทุก 1 นาที',        perDay: 1440, setup: 'setupNotiSystem()' },
+  backfillZortOrders:      { every: 'ทุก 5 นาที',        perDay: 288,  setup: 'startBackfill()' },
+  syncZortBoth:            { every: 'ทุก 2 ชม.',          perDay: 12,   setup: 'setupZortStockTrigger()' },
+  syncZortSales:           { every: 'ทุก 2 ชม.',          perDay: 12,   setup: 'setupZortSalesTrigger()' },
+  sendPendingTruckOrders:  { every: 'วันละ 2 รอบ 08/13น.', perDay: 1,   setup: 'setupOrderReminders()' },
+  dailyAttendanceMaintenance: { every: 'ทุกวัน 22:00',    perDay: 1,    setup: 'setupAttendanceMaintenance()' },
+  archiveReceivedShipments:{ every: 'ทุกวัน 03:00',       perDay: 1,    setup: 'setupShipmentArchiveTrigger()' },
+  backupDailyToSupabase:   { every: 'ทุกวัน 03:00',       perDay: 1,    setup: 'setupSupabaseBackup()' },
+  sendWeeklySummary:       { every: 'จันทร์ 08:00',       perDay: 0.14, setup: 'setupNotiSystem()' },
+  sendMonthlySummary:      { every: 'วันที่ 1 08:00',      perDay: 0.03, setup: 'setupNotiSystem()' },
+  syncZortImages:          { every: 'จันทร์ 05:00',       perDay: 0.14, setup: 'setupZortImageTrigger()' },
+  syncZortPurchases:       { every: 'จันทร์ 06:00',       perDay: 0.14, setup: 'setupZortPurchasesTrigger()' },
+  sweepEmptyShelfLocations:{ every: 'จันทร์ 05:00',       perDay: 0.14, setup: 'setupShelfSweepTrigger()' },
+  rebuildSalesFromRaw:     { every: 'ครั้งเดียว (after)',  perDay: 0,    setup: 'ตั้งเองจาก backfillZortOrders' },
+};
+
+// Script Property ที่ปลอดภัยจะพิมพ์ออก log — **allowlist เท่านั้น**
+// ห้ามเปลี่ยนเป็น "พิมพ์ทุกคีย์แล้วกรองความลับออก" เด็ดขาด: คีย์ใหม่ที่เป็นความลับ
+// จะหลุดออก log ทันทีโดยไม่มีใครรู้ (SHEET_ID/OWNER_PIN/APP_TOKEN/ZORT_*/LINE_* อยู่ที่เดียวกัน)
+const PERF_SAFE_PROPS_ = [
+  'REQUIRE_LOGIN', 'NOTI_QUEUE_ENABLED', 'INAPP_NOTI_ENABLED', 'PRODUCT_OWNER_ENABLED',
+  'SUPABASE_BACKUP_ENABLED', 'NOTI_ORDER_CUTOFF_HOUR', 'NOTI_ORDER_BATCH_MINUTES',
+  'NOTI_ORDER_BATCH_MAX', 'NOTI_MONTHLY_CAP', 'NOTI_MAX_SENDS_PER_RUN',
+  'WHOLESALE_RATIO', 'STOCK_THRESHOLDS', 'backfill_done', 'dmj_last_write_ts',
+];
+
+/**
+ * Phase 0 — ตรวจว่ามี trigger อะไรติดตั้งอยู่จริง กินโควตาเท่าไหร่ และมีตัวที่ควรลบค้างอยู่ไหม
+ * รันจาก GAS editor: เลือก `perfCheckTriggers` → Run → ดูผลที่ Execution log
+ * อ่านอย่างเดียว ไม่แก้อะไรทั้งสิ้น
+ */
+function perfCheckTriggers() {
+  const props = PropertiesService.getScriptProperties();
+  const triggers = ScriptApp.getProjectTriggers();
+  const counts = {};
+  triggers.forEach(function (t) {
+    const fn = t.getHandlerFunction();
+    counts[fn] = (counts[fn] || 0) + 1;
+  });
+
+  const lines = [];
+  const warn = [];
+  let perDayTotal = 0;
+
+  lines.push('══ trigger ที่ติดตั้งอยู่จริง (' + triggers.length + ' ตัว) ══');
+  Object.keys(counts).sort().forEach(function (fn) {
+    const n = counts[fn];
+    const meta = PERF_TRIGGER_SCHEDULE_[fn];
+    if (!meta) {
+      lines.push('  ❓ ' + fn + ' ×' + n + ' — ไม่รู้จักความถี่ (ไม่ได้ตั้งจาก setup ในไฟล์นี้?)');
+      warn.push('มี trigger ที่ไม่รู้จัก: ' + fn + ' — เปิด Triggers ในเมนูซ้ายของ GAS editor ดูความถี่เอง');
+      return;
+    }
+    const perDay = meta.perDay * n;
+    perDayTotal += perDay;
+    lines.push('  • ' + fn + ' ×' + n + ' — ' + meta.every + ' ≈ ' + perDay + ' ครั้ง/วัน');
+    if (n > 1 && meta.perDay > 0 && fn !== 'sendPendingTruckOrders') {
+      warn.push('⚠️ ' + fn + ' ติดตั้งซ้ำ ' + n + ' ตัว — รัน ' + n + ' เท่าโดยไม่ได้ตั้งใจ '
+        + '(รัน ' + meta.setup + ' ใหม่ 1 ครั้ง จะลบตัวซ้ำให้เอง)');
+    }
+  });
+  lines.push('  รวม ≈ ' + Math.round(perDayTotal) + ' ครั้ง/วัน');
+
+  // ── ตัวที่แผน Phase 0 ระบุให้ตรวจเป็นพิเศษ ──
+  const backfillDone = props.getProperty('backfill_done') === '1';
+  if (counts.backfillZortOrders && backfillDone) {
+    warn.push('⚠️ `backfillZortOrders` ยังวิ่งอยู่ทั้งที่ backfill_done=1 แล้ว (288 ครั้ง/วันฟรี ๆ) '
+      + '— รัน `stopBackfill()` หรือปล่อยให้มันลบตัวเองรอบถัดไป');
+  }
+  if (counts.drainNotiQueue) {
+    warn.push('ℹ️ `drainNotiQueue` = ' + (counts.drainNotiQueue * 1440) + ' ครั้ง/วัน และ**จับล็อกกลาง**ทุกครั้ง '
+      + '(Phase 1.1) — ถ้าเวลารวม trigger ใกล้เต็ม 90 นาที/วัน ให้ลดเหลือทุก 5 นาทีก่อน');
+  }
+  if (counts.syncZortBoth || counts.syncZortSales) {
+    warn.push('ℹ️ `syncZortBoth`/`syncZortSales` ล้าง cache ทั้งร้านทุก 2 ชม. (Phase 4.1) '
+      + '— ตกกลางเวลาทำงานแน่นอน');
+  }
+
+  // ── สถานะระบบ (เฉพาะคีย์ใน allowlist) ──
+  lines.push('');
+  lines.push('══ Script Properties (เฉพาะที่ไม่ใช่ความลับ) ══');
+  PERF_SAFE_PROPS_.forEach(function (k) {
+    let v = props.getProperty(k);
+    if (v == null) { lines.push('  ' + k + ' = (ไม่ได้ตั้ง → ใช้ค่า default)'); return; }
+    if (k === 'dmj_last_write_ts') {
+      const ms = parseInt(v, 10);
+      v = v + '  (' + (ms > 0 ? Utilities.formatDate(new Date(ms), 'Asia/Bangkok', 'dd/MM HH:mm:ss') : '?') + ')';
+    }
+    if (v.length > 120) v = v.slice(0, 120) + '…';
+    lines.push('  ' + k + ' = ' + v);
+  });
+
+  // ── โควตาแจ้งเตือน LINE เดือนนี้ (input ของ notiOrderBatchWindowMin_) ──
+  const ym = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyyMM');
+  lines.push('');
+  lines.push('══ โควตา LINE เดือน ' + ym + ' ══');
+  ['primary', 'secondary'].forEach(function (ch) {
+    const used = props.getProperty('NOTI_SENT_' + ch + '_' + ym);
+    lines.push('  ' + ch + ' = ' + (used || 0) + ' ข้อความ');
+  });
+
+  if (warn.length) {
+    lines.push('');
+    lines.push('══ ข้อที่ควรดู ══');
+    warn.forEach(function (w) { lines.push('  ' + w); });
+  }
+
+  lines.push('');
+  lines.push('ต่อไป: เปิดเมนูซ้าย → Executions ดู "จำนวน/เวลา/error ต่อชั่วโมง" ช่วงคนใช้เยอะสุด');
+  lines.push('แล้วรัน `perfMeasureBuild()` เพื่อได้เวลา build จริง');
+
+  const out = lines.join('\n');
+  Logger.log(out);
+  return out;
+}
+
+/**
+ * Phase 0 — วัดว่า "สร้าง payload หนึ่งรอบ" ใช้เวลาเท่าไหร่ และเวลาไปอยู่ขั้นไหน
+ * รันจาก GAS editor: เลือก `perfMeasureBuild` → Run → ดู Execution log
+ *
+ * ต่างจากการรอ cache miss เกิดเอง: สั่งวัดได้ทันทีเมื่ออยากรู้ · **ไม่เขียน cache**
+ * (จึงไม่ไปอุ่น cache ให้ใครหรือทำให้ตัวเลขรอบหน้าเพี้ยน) และ **ไม่เขียนชีต**
+ *
+ * ตัวเลขที่ได้ตอบคำถาม Phase 0 ข้อ "build ครั้งหนึ่งกี่วินาที + เวลาไปอยู่ขั้นไหน"
+ * และเป็นตัวตัดสิน Phase 4 โดยตรง (ดูตารางในแผน: enrich หนัก → แยก cache 2 ชั้นคุ้ม ·
+ * batchGet หนัก → แยกชั้นช่วยน้อย · รวมต่ำกว่า 2-3 วิ → ข้าม Phase 4 ไปเลย)
+ */
+function perfMeasureBuild() {
+  const t0 = Date.now();
+  const data = buildFullData_();          // ตัวมันเองพิมพ์ [perf] buildFullData_ … ให้อยู่แล้ว
+  const tBuild = Date.now() - t0;
+
+  // ขั้นตอนหลัง build ที่ **เดิมไม่เคยถูกวัด** — doGet stringify ทุก variant แล้วเขียน cache
+  // ต่อจากนี้ ถ้าก้อนนี้กินหลายวินาที การไปเร่ง buildFullData_ อย่างเดียวจะไม่ช่วยอะไรเลย
+  const perVariant = [];
+  let tShapeTotal = 0;
+  PAYLOAD_VARIANTS_.forEach(function (v) {
+    const t1 = Date.now();
+    const s = JSON.stringify(shapePayloadForVariant_(data, v));
+    const ms = Date.now() - t1;
+    tShapeTotal += ms;
+    perVariant.push(v + '=' + Math.round(s.length / 1024) + 'KB/' + ms + 'ms/'
+      + Math.ceil(s.length / _CACHE_CHUNK_LEN) + 'chunk');
+  });
+
+  const lines = [
+    '══ Phase 0: วัดเวลาสร้าง payload ══',
+    'buildFullData_        = ' + tBuild + ' ms   (รายละเอียดต่อขั้นอยู่ในบรรทัด [perf] ด้านบน)',
+    'stringify ทุก variant = ' + tShapeTotal + ' ms   ' + perVariant.join(' · '),
+    'รวมที่ผู้ใช้คนแรกต้องรอ ≈ ' + (tBuild + tShapeTotal) + ' ms (ยังไม่รวมเวลาเขียน cache/ส่งข้อมูล)',
+    '',
+    'ตัดสิน Phase 4 จากตัวเลขนี้:',
+    '  • รวม < 2,000 ms  → ข้าม Phase 4 ไปเลย ไปลงแรง Phase 1-3 คุ้มกว่า',
+    '  • enrich/index หนักสุด → แยก cache 2 ชั้นได้ผลเต็ม',
+    '  • batchGet หนักสุด    → แยกชั้นช่วยน้อย ควรลดจำนวน/ขนาดชีตที่อ่านแทน',
+    '  • stringify หนักสุด   → ปัญหาอยู่ที่ "payload ใหญ่" → ไป 7.4(ข) ลด payload ก่อน',
+  ];
+  const out = lines.join('\n');
+  Logger.log(out);
+  return out;
 }
