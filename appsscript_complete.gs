@@ -1523,6 +1523,272 @@ function attErr_(msg) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// 🏅 สรุปผลงานพนักงาน (action=staffPerf) — owner/dev เท่านั้น
+// ───────────────────────────────────────────────────────────
+// รวมยอด "ใครทำอะไรไปกี่รายการเดือนนี้" จากข้อมูลที่ระบบเก็บอยู่แล้ว 2 แหล่ง:
+//   1. ชีต "Audit Log"  → จำนวนงานแต่ละประเภท (นับสต็อก/เช็คหน้าร้าน/จัดออเดอร์/โอน/ขาย ...)
+//   2. ชีต "ลงเวลา"     → ชั่วโมงทำงานจริง → คิดเป็น "งาน/ชั่วโมง" ได้
+//
+// ⚠️ รวมยอด **ฝั่ง server** ไม่ส่งแถวดิบให้ client — ชีต Audit Log โตทุกครั้งที่มีคนแก้ข้อมูล
+//    (`getAuditLog` ส่งได้แค่ 200 แถวล่าสุด ซึ่งไม่พอสำหรับสรุปทั้งเดือนอยู่แล้ว) และการส่ง
+//    แถวดิบเป็นหมื่นแถวคือปัญหา "ขนาด payload" เดียวกับที่ Phase 7.4 เพิ่งแก้ไป
+//
+// ⚠️ **ตัวเลขนี้คือ "งานที่ระบบบันทึกได้" ไม่ใช่ "งานทั้งหมดที่ทำ"** — เดินหาของ/ยกของ/ตอบลูกค้า
+//    ไม่มีใน log · เอาไปเทียบข้ามตำแหน่งกันตรง ๆ ไม่ได้ (คนนับสต็อกได้ 1 แถว/SKU แต่คนขาย
+//    ได้ 1 แถว/บิล) UI จึงต้องเทียบ "คนตำแหน่งเดียวกัน" และติดหมายเหตุนี้ไว้เสมอ
+//
+// ⚠️ actor ในชีตเป็น **ชื่อ** ("สมชาย (คลังสินค้า)") ไม่ใช่ staffId — จับคู่กลับด้วยชื่อ
+//    ที่ตัดวงเล็บตำแหน่งออก · ชื่อที่จับคู่ไม่ได้ **ต้องรายงานออกไป (`unmatched`) ห้ามทิ้งเงียบ**
+//    ไม่งั้นเจ้าของเห็นยอดพนักงานคนหนึ่งเป็น 0 แล้วนึกว่าไม่ได้ทำงาน ทั้งที่แค่ชื่อไม่ตรงกัน
+//    (เช่น เปลี่ยนชื่อในชีตพนักงานทีหลัง — log เก่ายังเป็นชื่อเดิม)
+// ═══════════════════════════════════════════════════════════
+
+// หมวดงาน — จับจาก "ต้นข้อความ" ของ action ที่ writeAuditLog_ เขียน (prefix match)
+// เพราะบาง action ต่อท้ายด้วยข้อมูลเพิ่ม เช่น "แก้ไขการลงเวลา (" + op + ")"
+//   ops:true  = งานหน้างานจริง (หยิบ/นับ/โอน/ขาย) — เอาไปคิด "งาน/ชั่วโมง"
+//   ops:false = งานตั้งค่า/แก้ข้อมูล — นับรวมไว้ให้เห็น แต่ไม่ใช่ปริมาณงานหน้างาน
+//   skip:true = **ไม่นับเป็น "งาน" เลย** — โชว์ให้เห็นได้ แต่ไม่เข้ายอดรวม/ไม่เข้า งาน/ชม.
+//               (การกดลงเวลามี ~4-6 ครั้ง/วัน/คน ถ้านับรวมจะกลบงานจริงจนตัวเลขไม่มีความหมาย
+//                — ชั่วโมงทำงานที่ได้จากการกดพวกนี้ถูกนับแยกอยู่แล้วในคอลัมน์ "ชั่วโมง")
+// ⚠️ เพิ่ม action ใหม่ใน writeAuditLog_ แล้วต้องมาเติม prefix ที่นี่ด้วย ไม่งั้นตกไปอยู่ "อื่นๆ"
+//    (tests/staff-perf.test.js มี meta-test ไล่ทุก call site ให้แล้ว — ลืมแล้วเทสต์แดงทันที)
+const STAFF_PERF_CATEGORIES_ = [
+  { key: "count",      emoji: "📊", label: "นับสต็อกคลัง",      ops: true,  unit: "รายการ", prefixes: ["นับสต็อก"] },
+  { key: "fscheck",    emoji: "🏪", label: "เช็คหน้าร้าน",       ops: true,  unit: "รายการ", prefixes: ["ตรวจหน้าร้าน"] },
+  { key: "order",      emoji: "📋", label: "จัดออเดอร์",         ops: true,  unit: "ครั้ง",  prefixes: ["อัปเดต order"] },
+  { key: "transfer",   emoji: "🔄", label: "โอนของ",             ops: true,  unit: "รายการ", prefixes: ["โอนสต็อก"] },
+  { key: "receive",    emoji: "📥", label: "หน้าร้านรับของ",     ops: true,  unit: "รายการ", prefixes: ["รับสินค้า"] },
+  { key: "location",   emoji: "🗺️", label: "จัดตำแหน่งล็อค",     ops: true,  unit: "ครั้ง",  prefixes: ["updateLockData", "ลบตำแหน่งจัดเก็บ", "sweepEmptyShelf"] },
+  { key: "purchase",   emoji: "🛒", label: "รับของเข้าคลัง",     ops: true,  unit: "ครั้ง",  prefixes: ["ซื้อสินค้าเข้า"] },
+  { key: "newproduct", emoji: "➕", label: "เพิ่มสินค้าใหม่",     ops: true,  unit: "รายการ", prefixes: ["เพิ่มสินค้าใหม่"] },
+  { key: "mto",        emoji: "🎁", label: "งานจัดพิเศษ",        ops: true,  unit: "ครั้ง",  prefixes: ["สร้างงาน MTO", "มอบหมายงาน MTO", "ปิดงาน MTO", "ลบงาน MTO", "deductMaterials"] },
+  { key: "sale",       emoji: "🧾", label: "ออกบิลขาย",          ops: true,  unit: "ใบ",    prefixes: ["ออกบิลขาย", "ออกใบกำกับภาษีย้อนหลัง"] },
+  { key: "quote",      emoji: "📄", label: "ใบเสนอราคา",         ops: true,  unit: "ใบ",    prefixes: ["สร้างใบเสนอราคา", "แก้ไขใบเสนอราคา", "อนุมัติใบเสนอราคา", "ปิดใบเสนอราคา"] },
+  { key: "adjust",     emoji: "⚙️", label: "ปรับ/ลบข้อมูล",      ops: false, unit: "ครั้ง",  prefixes: ["ปรับสต็อก0", "resetNegativeStock", "ลบ order"] },
+  { key: "star",       emoji: "⭐", label: "ตั้งผู้ดูแลสินค้า",   ops: false, unit: "ครั้ง",  prefixes: ["setProductOwner", "clearProductOwner"] },
+  { key: "admin",      emoji: "🔧", label: "ตั้งค่าระบบ",        ops: false, unit: "ครั้ง",  prefixes: ["แก้ไขพนักงาน", "แก้ไขการลงเวลา", "saveThresholds", "ตั้งตำแหน่งพนักงาน"] },
+  { key: "punch",      emoji: "🕐", label: "กดลงเวลา",           ops: false, unit: "ครั้ง",  skip: true, prefixes: ["ลงเวลา"] },
+];
+const STAFF_PERF_OTHER_ = { key: "other", emoji: "➖", label: "อื่นๆ", ops: false, unit: "ครั้ง" };
+
+// actor ที่ไม่ใช่คน — ไม่ต้องเอาไปรายงานว่า "จับคู่ชื่อไม่ได้" (ไม่ใช่พนักงานตั้งแต่แรก)
+const STAFF_PERF_SYSTEM_ACTORS_ = ["ระบบ", "ระบบ (อัตโนมัติ)", "GAS editor", "ไม่ระบุ", "owner", ""];
+
+const STAFF_PERF_CACHE_TTL_SEC_ = 300;   // 5 นาที — เป็นรายงานย้อนหลัง ไม่ใช่ตัวเลขที่ต้องสด
+
+function staffPerfCategoryOf_(action) {
+  const a = String(action == null ? "" : action).trim();
+  if (!a) return STAFF_PERF_OTHER_.key;
+  for (let i = 0; i < STAFF_PERF_CATEGORIES_.length; i++) {
+    const c = STAFF_PERF_CATEGORIES_[i];
+    for (let j = 0; j < c.prefixes.length; j++) {
+      if (a.indexOf(c.prefixes[j]) === 0) return c.key;
+    }
+  }
+  return STAFF_PERF_OTHER_.key;
+}
+
+// "สมชาย (คลังสินค้า)" → "สมชาย" · ตัดเฉพาะวงเล็บ "ท้ายสุด" ชุดเดียว
+function staffPerfNormalizeActor_(actor) {
+  return String(actor == null ? "" : actor).trim().replace(/\s*\([^()]*\)\s*$/, "").trim();
+}
+
+// วันที่ในชีต Audit Log — appendRow เขียนเป็น Date object จริง แต่รับ string เผื่อแถวที่แก้มือ
+// ⚠️ ปี พ.ศ. (บทเรียนข้อ 11): "5/8/2569" ถ้าปล่อยให้ new Date() ตีความจะได้อนาคต 543 ปี
+function staffPerfDayKey_(v) {
+  if (v === null || v === undefined || v === "") return "";
+  if (Object.prototype.toString.call(v) === "[object Date]") {
+    return isNaN(v.getTime()) ? "" : Utilities.formatDate(v, "Asia/Bangkok", "yyyy-MM-dd");
+  }
+  const s = String(v).trim();
+  const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (iso) return iso[1] + "-" + iso[2] + "-" + iso[3];
+  const th = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(s);   // d/M/yyyy — toLocaleString("th-TH")
+  if (th) {
+    let y = Number(th[3]);
+    if (y >= 2400) y -= 543;
+    return y + "-" + String(Number(th[2])).padStart(2, "0") + "-" + String(Number(th[1])).padStart(2, "0");
+  }
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? "" : Utilities.formatDate(d, "Asia/Bangkok", "yyyy-MM-dd");
+}
+
+// รวมยอดจาก Audit Log — คืน { byActor: {ชื่อดิบ: {display, total, byCat, byDay}}, rows }
+// แยกออกมาเป็นฟังก์ชัน pure (รับ array ไม่ใช่ชีต) เพื่อเทสต์ได้โดยไม่ต้องมี Spreadsheet
+function staffPerfAggregateAudit_(rows, monthKey) {
+  const byActor = {};
+  let counted = 0;
+  (rows || []).forEach(function (r) {
+    const day = staffPerfDayKey_(r[0]);
+    if (!day || day.slice(0, 7) !== monthKey) return;
+    const raw = String(r[1] == null ? "" : r[1]).trim();
+    const cat = staffPerfCategoryOf_(r[2]);
+    counted++;
+    let b = byActor[raw];
+    if (!b) b = byActor[raw] = { display: raw, total: 0, opsTotal: 0, byCat: {}, byDay: {} };
+    b.byCat[cat] = (b.byCat[cat] || 0) + 1;
+    // skip:true (กดลงเวลา) — เก็บให้เห็นใน byCat ได้ แต่ห้ามเข้ายอดรวม/กราฟรายวัน
+    if (staffPerfCatDef_(cat).skip) return;
+    b.total++;
+    if (staffPerfCatDef_(cat).ops) b.opsTotal++;
+    b.byDay[day] = (b.byDay[day] || 0) + 1;
+  });
+  return { byActor: byActor, rows: counted };
+}
+
+function staffPerfCatDef_(key) {
+  for (let i = 0; i < STAFF_PERF_CATEGORIES_.length; i++) {
+    if (STAFF_PERF_CATEGORIES_[i].key === key) return STAFF_PERF_CATEGORIES_[i];
+  }
+  return STAFF_PERF_OTHER_;
+}
+
+function staffPerfBuild_(ss, monthStr) {
+  const range = attMonthRange_(monthStr);   // ตัดวันอนาคตให้แล้ว (เดือนปัจจุบัน = ถึงวันนี้)
+  const monthKey = range.month;
+
+  // ── 1) Audit Log — อ่านคอลัมน์วันที่ก่อน (คอลัมน์เดียว) เพื่อหาช่วงแถวของเดือนนี้
+  //      แล้วค่อยอ่าน 5 คอลัมน์เฉพาะช่วงนั้น · ชีตนี้ append อย่างเดียวจึงเรียงตามเวลาอยู่แล้ว
+  //      (แถวนอกช่วงที่หลุดเข้ามาถูกกรองซ้ำใน staffPerfAggregateAudit_ อีกชั้น)
+  let audit = { byActor: {}, rows: 0 };
+  const shA = ss.getSheetByName(SHEET_AUDIT);
+  if (shA) {
+    const lastA = shA.getLastRow();
+    if (lastA >= 2) {
+      const dcol = shA.getRange(2, 1, lastA - 1, 1).getValues();
+      let startIdx = -1, endIdx = -1;
+      for (let i = 0; i < dcol.length; i++) {
+        const dk = staffPerfDayKey_(dcol[i][0]);
+        if (!dk || dk.slice(0, 7) !== monthKey) continue;
+        if (startIdx < 0) startIdx = i;
+        endIdx = i;
+      }
+      if (startIdx >= 0) {
+        audit = staffPerfAggregateAudit_(
+          shA.getRange(2 + startIdx, 1, endIdx - startIdx + 1, 5).getValues(), monthKey);
+      }
+    }
+  }
+
+  // ── 2) ลงเวลา → ชั่วโมงทำงานจริง (อ่านแค่ col B..H ที่ใช้จริง ไม่ใช่ทั้ง 17 คอลัมน์) ──
+  const shifts = readAttShifts_(ss);
+  const shAtt = attendanceSheet_(ss);
+  const lastAtt = shAtt.getLastRow();
+  const attByStaff = {};
+  if (lastAtt >= 2) {
+    // idx: 0=staffId 1=ชื่อ 2=วันที่ 3=เวลา 4=serverTs 5=clientTs 6=ประเภท
+    shAtt.getRange(2, 2, lastAtt - 1, 7).getValues().forEach(function (r) {
+      const d = attRowDateStr_(r[2]);
+      if (!d || d.slice(0, 7) !== monthKey) return;
+      const sid = String(r[0]);
+      if (!sid) return;
+      const per = attByStaff[sid] || (attByStaff[sid] = {});
+      (per[d] = per[d] || []).push({ type: r[6], time: r[3], serverTs: Number(r[4]) || 0 });
+    });
+  }
+
+  // ── 3) จับคู่ actor (ชื่อ) กลับเป็นพนักงาน ──
+  const staffAll = readStaffAll_(ss);
+  const nameToId = {};
+  staffAll.forEach(function (st) {
+    [st.displayName, st.lineDisplayName].forEach(function (n) {
+      const k = String(n || "").trim().toLowerCase();
+      if (k && !nameToId[k]) nameToId[k] = st.staffId;
+    });
+  });
+
+  const perStaff = {};          // staffId -> รวมยอดจาก audit
+  const unmatched = [];         // ชื่อใน log ที่หาพนักงานไม่เจอ — ต้องโชว์ ห้ามทิ้งเงียบ
+  Object.keys(audit.byActor).forEach(function (raw) {
+    const b = audit.byActor[raw];
+    const sid = nameToId[raw.toLowerCase()] ||
+                nameToId[staffPerfNormalizeActor_(raw).toLowerCase()] || null;
+    if (!sid) {
+      if (STAFF_PERF_SYSTEM_ACTORS_.indexOf(raw) < 0) unmatched.push({ actor: raw, total: b.total });
+      return;
+    }
+    const cur = perStaff[sid];
+    if (!cur) { perStaff[sid] = b; return; }
+    // พนักงานคนเดียวมีได้หลายชื่อใน log (เปลี่ยนตำแหน่งแล้ววงเล็บเปลี่ยน) → รวมเข้าด้วยกัน
+    cur.total += b.total;
+    cur.opsTotal += b.opsTotal;
+    Object.keys(b.byCat).forEach(function (k) { cur.byCat[k] = (cur.byCat[k] || 0) + b.byCat[k]; });
+    Object.keys(b.byDay).forEach(function (k) { cur.byDay[k] = (cur.byDay[k] || 0) + b.byDay[k]; });
+  });
+  unmatched.sort(function (a, b) { return b.total - a.total; });
+
+  // ── 4) ประกอบเป็นแถวต่อคน ──
+  const todayStr = attDateKey_(new Date());
+  const staff = staffAll.map(function (st) {
+    const a = perStaff[st.staffId] || { total: 0, opsTotal: 0, byCat: {}, byDay: {} };
+    const perDate = attByStaff[st.staffId] || {};
+
+    let workedMin = 0, daysWorked = 0, lateDays = 0, lateMin = 0, daysAbsent = 0;
+    range.dates.forEach(function (dateStr) {
+      const shift = attShiftFor_(shifts, st.role, attDowOfDateStr_(dateStr));
+      const evs = (perDate[dateStr] || []).sort(function (x, y) { return x.serverTs - y.serverTs; });
+      const sum = attSummarize_(evs, shift);
+      if (sum.workedMin != null) { workedMin += sum.workedMin; daysWorked++; }
+      if (sum.lateMin) { lateDays++; lateMin += sum.lateMin; }
+      if (dateStr < todayStr && shift && !sum.inTime) daysAbsent++;
+    });
+
+    // งาน/ชั่วโมง — ไม่โชว์เมื่อชั่วโมงน้อยเกินไป (ฐานเล็ก = ตัวเลขเว่อร์ หลักเดียวกับ MoM
+    //   ที่ไม่โชว์ delta ในวันที่ 1–2 ของเดือน) · ต้องมีทั้งชั่วโมงและงานถึงจะมีความหมาย
+    const perHour = (workedMin >= 60 && a.total > 0)
+      ? Math.round((a.total / (workedMin / 60)) * 10) / 10 : null;
+
+    return {
+      staffId: st.staffId, name: st.displayName || st.lineDisplayName || st.staffId,
+      role: st.role, status: st.status, pictureUrl: st.pictureUrl || "",
+      total: a.total, opsTotal: a.opsTotal, byCat: a.byCat, byDay: a.byDay,
+      workedMin: workedMin, daysWorked: daysWorked,
+      lateDays: lateDays, lateMin: lateMin, daysAbsent: daysAbsent,
+      perHour: perHour,
+    };
+  }).filter(function (row) {
+    // คนที่ลาออกแล้วและไม่มีความเคลื่อนไหวในเดือนนั้น — ไม่ต้องรกหน้าจอ
+    return row.status === "active" || row.total > 0 || row.workedMin > 0;
+  }).sort(function (a, b) { return b.total - a.total || b.workedMin - a.workedMin; });
+
+  return {
+    month: monthKey,
+    isCurrentMonth: range.isCurrentMonth,
+    lastDate: range.dates.length ? range.dates[range.dates.length - 1] : monthKey + "-01",
+    cats: STAFF_PERF_CATEGORIES_.map(function (c) {
+      return { key: c.key, emoji: c.emoji, label: c.label, ops: c.ops, unit: c.unit, skip: !!c.skip };
+    }).concat([{ key: STAFF_PERF_OTHER_.key, emoji: STAFF_PERF_OTHER_.emoji,
+                 label: STAFF_PERF_OTHER_.label, ops: false, unit: STAFF_PERF_OTHER_.unit, skip: false }]),
+    staff: staff,
+    unmatched: unmatched,
+    auditRows: audit.rows,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+function staffPerfHandler_(e) {
+  const p = (e && e.parameter) || {};
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const sess = resolveSession_(ss, p.sessionToken);
+  // ข้อมูลผลงานรายคนเป็นเรื่องอ่อนไหว — owner/dev เท่านั้น (เหมือน getAuditLog)
+  if (!sess || !isAdminRole_(sess.role) || sess.status !== 'active') return unauthorized_();
+
+  const month = /^\d{4}-\d{2}$/.test(String(p.month || "")) ? String(p.month) : "";
+  const cacheKey = "dmj_staffperf_" + (month || attDateKey_(new Date()).slice(0, 7));
+  const cache = CacheService.getScriptCache();
+  if (p.fresh !== "1") {
+    try {
+      const hit = cache.get(cacheKey);
+      if (hit) return ContentService.createTextOutput(hit).setMimeType(ContentService.MimeType.JSON);
+    } catch (err) { /* cache อ่านไม่ได้ก็แค่คำนวณใหม่ */ }
+  }
+
+  const body = JSON.stringify({ success: true, data: staffPerfBuild_(ss, month) });
+  try { cache.put(cacheKey, body, STAFF_PERF_CACHE_TTL_SEC_); } catch (err) { /* ใหญ่เกิน/เต็ม = ข้าม */ }
+  return ContentService.createTextOutput(body).setMimeType(ContentService.MimeType.JSON);
+}
+
+// ═══════════════════════════════════════════════════════════
 // งานดูแลข้อมูลลงเวลา — trigger รายวัน (ตั้งด้วย setupAttendanceMaintenance)
 // ───────────────────────────────────────────────────────────
 // รวม 3 งานที่ต้องทำสม่ำเสมอไว้ใน trigger เดียว (ประหยัดโควตา trigger ของ GAS):
@@ -2096,6 +2362,12 @@ function doGet(e) {
       });
       return ContentService.createTextOutput(JSON.stringify({ rows: rows }))
         .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 🏅 สรุปผลงานพนักงานรายเดือน — รวมยอดฝั่ง server จาก Audit Log + ชีตลงเวลา
+    // (ตรวจ session จริงข้างในเหมือน getAuditLog — owner/dev เท่านั้น)
+    if (e && e.parameter && e.parameter.action === 'staffPerf') {
+      return staffPerfHandler_(e);
     }
 
     // สินค้าจม: ดึงสินค้าที่มีในหน้าร้านแต่ไม่ได้รับโอนมานานกว่า 3 เดือน
