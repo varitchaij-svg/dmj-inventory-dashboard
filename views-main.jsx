@@ -4415,26 +4415,103 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
   const sheetUrl = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null;
   const outOfStock = (product.qtyWH !== undefined ? product.qtyWH : product.qty) <= 0;
 
-  const placeOrder = () => {
+  // ── cid = กุญแจกันสั่งซ้ำ (idempotency key) ──────────────────────────────
+  // GAS เก็บ cid ไว้กับแถวที่สั่ง (col M) → ยิงซ้ำด้วย cid เดิมจะไม่เกิดแถวใหม่
+  // ต้องคงค่าเดิมไว้ตลอดที่ผู้ใช้ยัง "สั่งของชิ้นเดิม จำนวนเดิม ประเภทเดิม" อยู่
+  // (ทั้งตอน auto-retry และตอนผู้ใช้กดยืนยันซ้ำเอง) · เปลี่ยนจำนวน/ประเภท = คนละคำสั่ง → cid ใหม่
+  const orderCidRef = React.useRef({ key: "", cid: "" });
+  const orderCid = () => {
+    const key = `${product.sku}|${qty}|${orderType}`;
+    if (orderCidRef.current.key !== key || !orderCidRef.current.cid) {
+      orderCidRef.current = {
+        key,
+        cid: `${product.sku}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      };
+    }
+    return orderCidRef.current.cid;
+  };
+
+  const [retryNote, setRetryNote] = uS("");
+
+  // ยิงคำสั่งซื้อ พร้อม retry — ปลอดภัยเพราะ cid กันแถวซ้ำฝั่ง GAS แล้ว
+  // (เดิมห้าม retry เด็ดขาด เพราะไม่มี idempotency key → เน็ตกระตุกทีเดียวก็ขึ้นแดงทันที
+  //  ทั้งที่เกือบทุกครั้งแค่ลองใหม่ก็ผ่าน — เป็นต้นเหตุที่ผู้ใช้เห็นแถบแดง "ตลอด")
+  const ORDER_ATTEMPTS = 3;
+  const placeOrder = async () => {
+    const cid = orderCid();
     const _sep = sheetUrl.includes('?') ? '&' : '?';
-    const url = `${sheetUrl}${_sep}action=order&sku=${encodeURIComponent(product.sku)}&qty=${qty}&orderType=${encodeURIComponent(orderType)}`;
-    return fetch(url)
-      .then(r => r.text())
-      .then(t => {
-        try { return JSON.parse(t); }
-        catch (e) {
-          // เซิร์ฟเวอร์ตอบกลับไม่ใช่ JSON — มักเป็นเน็ตหลุดกลางทาง หรือ Google ตอบหน้า error ของตัวเอง
-          // (ไม่ใช่ error จากโค้ดเรา — handleOrder_ ฝั่ง GAS ห่อ try/catch คืน JSON เสมอ)
-          // ไม่รู้แน่ว่าคำสั่งบันทึกเข้าชีตไปแล้วหรือยัง จึงไม่ auto-retry เอง (เสี่ยงสั่งซ้ำสองเด้ง)
-          console.warn('placeOrder: non-JSON response', t.slice(0, 200));
-          throw new Error('เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ — เช็กแท็บ "รายการสั่งของ" ก่อนกดยืนยันซ้ำ');
+    const base = `${sheetUrl}${_sep}action=order&sku=${encodeURIComponent(product.sku)}&qty=${qty}`
+               + `&orderType=${encodeURIComponent(orderType)}&cid=${encodeURIComponent(cid)}`
+               + `&name=${encodeURIComponent((product.name || '').slice(0, 80))}`;
+    let lastErr = "";
+    for (let attempt = 1; attempt <= ORDER_ATTEMPTS; attempt++) {
+      if (attempt > 1) setRetryNote(`เน็ตไม่นิ่ง — กำลังลองใหม่ครั้งที่ ${attempt - 1}…`);
+      try {
+        const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+        // ครั้งแรกให้เวลา GAS cold start (สคริปต์ใหญ่ ตื่นได้ถึง ~25 วิ) · ครั้งถัดไปควรอุ่นแล้ว
+        const to = setTimeout(() => { try { ctl && ctl.abort(); } catch (_) {} },
+                              attempt === 1 ? 25000 : 15000);
+        let d;
+        try {
+          const r = await fetch(base + '&_t=' + Date.now(), ctl ? { signal: ctl.signal } : undefined);
+          const t = await r.text();
+          try { d = JSON.parse(t); }
+          catch (_) {
+            // ไม่ใช่ JSON = เน็ตหลุดกลางทาง / Google ตอบหน้า error ของตัวเอง
+            // (ไม่ใช่ error จากโค้ดเรา — handleOrder_ ห่อ try/catch คืน JSON เสมอ)
+            console.warn('placeOrder: non-JSON response', String(t).slice(0, 200));
+            throw new Error('เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ');
+          }
+        } finally { clearTimeout(to); }
+
+        if (d.ok) {
+          setRetryNote("");
+          setDone(true);
+          onOrderSuccess && onOrderSuccess(product.sku, qty);
+          setTimeout(onClose, 2000);
+          return;
         }
-      })
-      .then(d => {
-        if (d.ok) { setDone(true); onOrderSuccess && onOrderSuccess(product.sku, qty); setTimeout(onClose, 2000); }
-        else setErr(d.error || 'เกิดข้อผิดพลาด');
-      })
-      .catch(e => setErr(e.message));
+        // error จริงจากฝั่งเรา (ข้อมูลไม่ครบ/ไม่พบชีต) — ลองใหม่ก็ได้ผลเดิม ยกเว้นที่บอกว่า retryable
+        if (!d.retryable) { setRetryNote(""); setErr(d.error || 'เกิดข้อผิดพลาด'); return; }
+        lastErr = d.error || "";
+      } catch (e) {
+        lastErr = (e && e.message) || "";
+      }
+      if (attempt < ORDER_ATTEMPTS) {
+        await new Promise(res => setTimeout(res, attempt === 1 ? 800 : 2500));
+      }
+    }
+    // ยิงไม่ผ่านสักครั้ง — แต่ "ไม่ผ่าน" อาจแปลว่า *ผลลัพธ์* หายกลางทาง ทั้งที่ชีตบันทึกไปแล้ว
+    // จึงถามระบบตรง ๆ ว่าคำสั่ง cid นี้เข้าไปหรือยัง ก่อนจะขึ้นแดงให้ผู้ใช้ตกใจ
+    setRetryNote("กำลังตรวจสอบว่าคำสั่งเข้าระบบหรือยัง…");
+    const landed = await verifyOrderLanded(cid);
+    setRetryNote("");
+    if (landed) {
+      setDone(true);
+      onOrderSuccess && onOrderSuccess(product.sku, qty);
+      setTimeout(onClose, 2000);
+      return;
+    }
+    // ยืนยันแล้วว่ายังไม่เข้า — กดซ้ำได้เลย ระบบกัน "สั่งสองเด้ง" ให้แล้วด้วย cid
+    setErr(landed === null
+      ? 'ส่งคำสั่งไม่สำเร็จ (เน็ตไม่นิ่ง) — กดปุ่มยืนยันซ้ำได้เลย ระบบกันสั่งซ้ำให้แล้ว'
+      : 'ยังไม่ได้สั่ง (เน็ตไม่นิ่ง) — กดปุ่มยืนยันซ้ำได้เลย');
+    console.warn('placeOrder failed after retries:', lastErr);
+  };
+
+  // true = เจอในระบบแล้ว · false = ยังไม่เข้าแน่นอน · null = ถามไม่ได้ (เน็ตพังจริง)
+  const verifyOrderLanded = async (cid) => {
+    const _sep = sheetUrl.includes('?') ? '&' : '?';
+    try {
+      const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+      const to = setTimeout(() => { try { ctl && ctl.abort(); } catch (_) {} }, 15000);
+      try {
+        const r = await fetch(`${sheetUrl}${_sep}action=orderCheck&cid=${encodeURIComponent(cid)}&_t=${Date.now()}`,
+                              ctl ? { signal: ctl.signal } : undefined);
+        const d = JSON.parse(await r.text());
+        return d && d.ok ? !!d.found : null;
+      } finally { clearTimeout(to); }
+    } catch (_) { return null; }
   };
 
   // คลังหมด → สั่งไม่ได้ แต่ยังนับหน้าร้านได้ (auto-save ยิงเองอยู่แล้ว ปุ่มนี้คือบันทึกทันทีแล้วปิด)
@@ -4452,7 +4529,7 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
     if (!sheetUrl) { setErr('ไม่พบ GOOGLE_SHEET_URL'); return; }
     if (qty < 1) { setErr('กรุณาระบุจำนวน'); return; }
     if (fsBlocked) { setErr('กรุณากรอกจำนวนที่เหลือหน้าร้านก่อน'); return; }
-    setLoading(true); setErr(null);
+    setLoading(true); setErr(null); setRetryNote("");
     try {
       // บันทึกจำนวนหน้าร้านที่นับได้ก่อน (ปกติ auto-save ยิงไปแล้ว — เหลือเคสกดสั่งเร็วกว่า 2 วิ)
       if (fsDirty && !skipFsSave) {
@@ -4703,7 +4780,15 @@ function OrderModal({ product, onClose, pendingOrderQty, whReady, onOrderSuccess
                 </div>
               </div>
 
-              {err && (
+              {/* กำลัง retry อยู่ — บอกให้รู้ว่าระบบยังทำงาน อย่าเพิ่งกดซ้ำ (แถบเหลือง ไม่ใช่แดง) */}
+              {retryNote && (
+                <div style={{background:"#fffbeb", border:"1px solid #fcd34d", borderRadius:8,
+                             padding:"8px 12px", fontSize:12, color:"#92400e", marginBottom:12}}>
+                  ⏳ {retryNote}
+                </div>
+              )}
+
+              {err && !retryNote && (
                 <div style={{background:"#fff0f0", border:"1px solid #fcc", borderRadius:8,
                              padding:"8px 12px", fontSize:12, color:"var(--dang)", marginBottom:12}}>
                   ⚠️ {err}

@@ -193,7 +193,7 @@ SHEET_PRODUCTS  = "อัพเดทจำนวนสินค้า"   // B=S
 SHEET_ORDERS    = "ลำดับที่สั่งสินค้า"
   COL_ORD_TYPE=1(A), COL_ORD_DATE=2(B), COL_ORD_STATUS=3(C),
   COL_ORD_SKU=6(F), name=G, orderQty=H, COL_ORD_PREPQTY=9(I),
-  image=J, remaining=K, COL_ORD_PRINTFLAG=14(N)
+  image=J, remaining=K, COL_ORD_CID=13(M), COL_ORD_PRINTFLAG=14(N)
   status values: "รอ"=pending, "สำเร็จ"=done, "ส่งแล้ว"=shipped
   printFlag values: "print"=selected, "no-print"=skip, "printed"=already printed
 
@@ -488,10 +488,36 @@ npm run test:coverage # coverage report (tests/helpers.js)
     `Unexpected token '<', "<!DOCTYPE "... is not valid JSON` ซึ่งเป็นข้อความ JS ดิบที่
     พนักงานอ่านไม่รู้เรื่อง (เจอที่ `OrderModal.placeOrder`, views-main.jsx) · แก้ด้วย
     `r.text()` ก่อนแล้ว `try/catch` รอบ `JSON.parse` เอง โชว์ข้อความไทยที่บอกให้เช็ครายการ
-    ก่อนกดซ้ำแทน — **ห้าม auto-retry คำสั่งที่เป็นการเขียนข้อมูล** (เช่นสั่งของ) เมื่อ parse
-    พลาด เพราะ backend อาจเขียนแถวสำเร็จไปแล้วก่อนที่ response จะเสียกลางทาง
-    (`handleOrder_` ไม่มี idempotency key) retry ซ้ำจะสั่งของสองเด้ง — ปล่อยให้ผู้ใช้เป็น
-    คนตัดสินใจกดปุ่มยืนยันซ้ำเอง (เหมือนแพทเทิร์น `fsSaveFailed` ในไฟล์เดียวกัน)
+    ก่อนกดซ้ำแทน — **ห้าม auto-retry คำสั่งที่เป็นการเขียนข้อมูลถ้า action นั้นยังไม่มี
+    idempotency key** เพราะ backend อาจเขียนแถวสำเร็จไปแล้วก่อนที่ response จะเสียกลางทาง
+    retry ซ้ำจะสั่งของสองเด้ง · **การสั่งของ (`action=order`) แก้ด้วย `cid` แล้ว** (ดูหัวข้อ
+    ข้างล่าง) จึง retry ได้ — action อื่นที่ยังไม่มี cid ยังห้าม retry เหมือนเดิม
+    (เหมือนแพทเทิร์น `fsSaveFailed` ในไฟล์เดียวกัน)
+
+### สั่งของแล้วขึ้นแถบแดง "เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ" (แก้แล้ว ส.ค. 2026)
+
+อาการ: กด "ยืนยันสั่ง" ใน `OrderModal` แล้วขึ้นแถบแดงบ่อยมาก · ต้นเหตุคือเน็ตร้าน/มือถือ
+กระตุกทีเดียวก็จบ (GAS ตอบไม่ครบ/หน้า error ของ Google) แล้ว frontend **ห้าม retry เด็ดขาด**
+เพราะยิงซ้ำ = แถวใหม่ทุกครั้ง — ผู้ใช้เลยเห็นแดงทั้งที่แค่ลองใหม่ก็ผ่าน (และบางครั้งของถูกสั่ง
+ไปแล้วจริง แต่หน้าจอบอกว่าไม่สำเร็จ)
+
+- **`cid` (client order id)** — `OrderModal` สร้าง 1 ค่าต่อ "สินค้า+จำนวน+ประเภท" เก็บใน ref
+  (`orderCidRef`) แนบไปกับ `action=order` · **คงค่าเดิมตลอดทั้งตอน auto-retry และตอนผู้ใช้กด
+  ยืนยันซ้ำเอง** — เปลี่ยนจำนวน/ประเภท = คนละคำสั่ง → cid ใหม่
+- **`handleOrder_`** เก็บ cid ไว้ที่ **col M (`COL_ORD_CID`=13)** ของชีต "ลำดับที่สั่งสินค้า"
+  (ว่างไว้เดิม ไม่ทับ A..K ที่เขียนอยู่ และไม่ทับ N=printFlag) · ก่อนเขียนแถวใหม่เช็ค
+  `findOrderRowByCid_` ก่อนเสมอ — เจอแล้ว → ตอบ `{ok:true,dedup:true}` ไม่เขียนซ้ำ
+- **จับ `LockService` คร่อม "หาแถวว่าง → เขียน"** (เดิมไม่มีเลย — สองเครื่องกดสั่งพร้อมกัน
+  ได้ `nextRow` เดียวกันแล้วทับกัน = order หายเงียบ ๆ) · ล็อกไม่ได้ → ตอบ `retryable:true`
+  ให้ frontend ลองใหม่ ไม่ใช่ทิ้งคำสั่งของผู้ใช้
+- **frontend retry 3 ครั้ง** (25 วิ/15 วิ/15 วิ + backoff) โชว์แถบ**เหลือง** "กำลังลองใหม่…"
+  ระหว่างนั้น (ไม่ใช่แดง — ยังไม่ถือว่าพัง) · ครบแล้วยังไม่ผ่าน → ถาม
+  **doGet `action=orderCheck&cid=`** ว่าคำสั่งเข้าระบบไปหรือยัง เจอ = โชว์สำเร็จ
+  **ห้ามขึ้นแดงโดยไม่ตรวจก่อน** (response หายกลางทางไม่ได้แปลว่าชีตไม่ได้บันทึก)
+- ข้อความตอนพังจริงบอกให้ "กดยืนยันซ้ำได้เลย" ได้แล้ว เพราะ cid กันสั่งซ้ำให้แน่นอน
+- เทสต์: `tests/order-idempotent.test.js` (eval จาก `.gs` ไม่ copy — เหมือน auth.test.js)
+  + meta-test ว่า `handleOrder_` ยังเรียก `findOrderRowByCid_`/จับล็อก/เขียน cid จริง และ
+  frontend ยังส่ง cid อยู่ (หลุดข้อใดข้อหนึ่ง = กลับไปสั่งซ้ำสองเด้งโดยไม่มี error ให้เห็น)
 
 ## ระบบล็อกอินพนักงาน + ลงเวลาเข้า-ออกงาน (Sprint 5)
 
