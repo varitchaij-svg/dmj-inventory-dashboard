@@ -1987,6 +1987,16 @@ function doGet(e) {
     if (e && e.parameter && e.parameter.action === 'order') {
       return handleOrder_(e.parameter);
     }
+    // "คำสั่งนี้เข้าระบบไปแล้วหรือยัง" — ใช้ตอน response ของ action=order หายกลางทาง
+    // (เน็ตร้าน/มือถือหลุดบ่อย) frontend จะได้บอกความจริงแทนการขึ้นแดงทั้งที่ของถูกสั่งแล้ว
+    if (e && e.parameter && e.parameter.action === 'orderCheck') {
+      var _cidQ = String(e.parameter.cid || '').trim();
+      var _shQ  = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_ORDERS);
+      var _rowQ = (_shQ && _cidQ) ? findOrderRowByCid_(_shQ, _cidQ) : -1;
+      return ContentService
+        .createTextOutput(JSON.stringify({ ok: true, found: _rowQ > 0, orderId: _rowQ > 0 ? _rowQ - 2 : null }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
     // ตรวจ PIN เจ้าของฝั่ง server (PIN ไม่อยู่ใน source โค้ด frontend)
     // ตั้งค่าใน Script Property ชื่อ OWNER_PIN; ถ้าไม่ตั้ง ใช้ค่า default 'DMJ' (backward compatible)
     if (e && e.parameter && e.parameter.action === 'verifyPin') {
@@ -8134,11 +8144,35 @@ function ensureOrderPeopleHeaders_(sheet) {
   } catch (e) { /* ignore */ }
 }
 
+// ── กันสั่งซ้ำ (idempotency) ──────────────────────────────────────────────────
+// เดิม: เน็ตหลุดกลางทาง/GAS ตอบไม่ครบ → frontend ไม่กล้า retry เลย (สั่งซ้ำสองเด้ง)
+// ผู้ใช้เลยเห็นแถบแดง "เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ" ทั้งที่บางครั้งของถูกสั่งไปแล้ว
+// ตอนนี้เครื่องผู้ใช้แนบ cid (client order id) มาด้วย → แถวเดิมที่มี cid นี้อยู่แล้ว
+// จะไม่ถูกเขียนซ้ำ ตอบ ok กลับไปเลย ทำให้ retry/กดยืนยันซ้ำปลอดภัย 100%
+// ⚠️ คอลัมน์ O — L/M เป็นผู้สั่ง/ผู้จัด และ N เป็น printFlag แล้ว ห้ามทับ
+var COL_ORD_CID       = 15;   // O — cid (ว่างไว้สำหรับแถวเก่า/แถวที่สร้างจากที่อื่น)
+var ORD_CID_SCAN_ROWS = 500;  // ค้นย้อนหลังไม่เกินกี่แถว (กัน getRange โตไม่มีเพดาน)
+
+// หาแถวที่เคยบันทึกด้วย cid นี้แล้ว — คืนเลขแถว (1-indexed) หรือ -1 ถ้าไม่เจอ
+function findOrderRowByCid_(sh, cid) {
+  if (!cid) return -1;
+  var last = sh.getLastRow();
+  if (last < 3) return -1;
+  var from = Math.max(3, last - ORD_CID_SCAN_ROWS + 1);
+  var vals = sh.getRange(from, COL_ORD_CID, last - from + 1, 1).getDisplayValues();
+  for (var i = vals.length - 1; i >= 0; i--) {          // ล่างขึ้นบน — แถวใหม่เจอก่อน
+    if (String(vals[i][0] || '').trim() === cid) return from + i;
+  }
+  return -1;
+}
+
 function handleOrder_(params) {
+  var lock = null;
   try {
     const sku = (params.sku || '').toString().trim();
     const qty = parseInt(params.qty) || 0;
     const orderType = (params.orderType || 'หิ้ว').toString().trim();
+    const cid = (params.cid || '').toString().trim().slice(0, 64);
     if (!sku || qty < 1) return ContentService
       .createTextOutput(JSON.stringify({ok:false, error:'ข้อมูลไม่ครบ'}))
       .setMimeType(ContentService.MimeType.JSON);
@@ -8149,7 +8183,24 @@ function handleOrder_(params) {
       .createTextOutput(JSON.stringify({ok:false, error:'ไม่พบ Sheet'}))
       .setMimeType(ContentService.MimeType.JSON);
 
-    const orderNum = orderSh.getLastRow();
+    // ล็อกคร่อม "หาแถวว่าง → เขียน" — เดิมไม่มีเลย สองเครื่องกดสั่งพร้อมกันได้แถวเดียวกัน
+    // แล้วทับกัน (order หายไปเงียบ ๆ) · retryable=true → frontend ลองใหม่ได้ปลอดภัย
+    lock = LockService.getScriptLock();
+    if (!lock.tryLock(20000)) {
+      lock = null;
+      return ContentService
+        .createTextOutput(JSON.stringify({ok:false, retryable:true, error:'ระบบกำลังบันทึกคำสั่งอื่นอยู่ กรุณาลองใหม่'}))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // เคยบันทึก cid นี้ไปแล้ว = คำสั่งเดิมที่ response หายกลางทาง → ตอบ ok ไม่เขียนซ้ำ
+    var dupRow = findOrderRowByCid_(orderSh, cid);
+    if (dupRow > 0) {
+      return ContentService
+        .createTextOutput(JSON.stringify({ok:true, dedup:true, orderId: dupRow - 2, sku: sku, qty: qty}))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
     const now = new Date(); // เก็บเป็น Date object ให้ Sheets จัดการ format เอง
     var startRow = 3;
     var colA = orderSh.getRange('A' + startRow + ':A').getValues();
@@ -8171,6 +8222,16 @@ function handleOrder_(params) {
     } catch (e) { /* session พัง → ปล่อยว่าง ไม่ให้กระทบการสั่งของ */ }
     ensureOrderPeopleHeaders_(orderSh);
     orderSh.getRange(nextRow, 1, 1, 13).setValues([[orderType, now, 'รอ', 'คลังสินค้าสาย5', 'ดูเหมือนจริง', sku, productName, qty, '', imageUrl, '', orderedBy, '']]);
+    if (cid) {
+      // text format — cid มีตัวอักษรเสมอ แต่กันไว้ตามบทเรียนข้อ 2 (Sheets แปลงค่าเอง)
+      orderSh.getRange(nextRow, COL_ORD_CID).setNumberFormat('@').setValue(cid);
+    }
+    SpreadsheetApp.flush();  // เขียนให้ลงจริงก่อนปล่อยล็อก — คำขอถัดไปจะได้เห็น cid นี้
+    // ปล่อยล็อกทันทีที่เขียนเสร็จ — ที่เหลือ (ยิง LINE/ล้าง cache) ไม่แตะแถวแล้ว
+    // ⚠️ ห้ามถือล็อกคร่อม UrlFetchApp ไปหา LINE เด็ดขาด: ScriptLock เป็นล็อกตัวเดียวของทั้ง
+    // สคริปต์ คนสั่งของพร้อมกันหลายคนจะต่อคิวรอ LINE ตอบ → tryLock หมดเวลากันเป็นแถว
+    try { lock.releaseLock(); } catch (_) {}
+    lock = null;
     // แจ้งเตือน LINE เมื่อมี order ใหม่
     if (orderType === 'หิ้ว') {
       sendLineGroupOrderCard_(productName || sku, sku, Utilities.formatDate(now, 'Asia/Bangkok', 'dd/MM/yyyy HH:mm'), "", qty);
@@ -8185,6 +8246,8 @@ function handleOrder_(params) {
     return ContentService
       .createTextOutput(JSON.stringify({ok:false, error:err.message}))
       .setMimeType(ContentService.MimeType.JSON);
+  } finally {
+    if (lock) { try { lock.releaseLock(); } catch (_) {} }
   }
 }
 

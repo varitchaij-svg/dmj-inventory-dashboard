@@ -4480,6 +4480,38 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
     setTimeout(onClose, 2000);
   };
 
+  // ── cid = กุญแจกันสั่งซ้ำ (idempotency key) ──────────────────────────────
+  // GAS เก็บ cid ไว้กับแถวที่สั่ง (col O) → ยิงซ้ำด้วย cid เดิมจะไม่เกิดแถวใหม่
+  // ต้องคงค่าเดิมไว้ตลอดที่ผู้ใช้ยัง "สั่งของชิ้นเดิม จำนวนเดิม ประเภทเดิม" อยู่
+  // (ทั้งตอน retry เองและตอนผู้ใช้กดยืนยันซ้ำ) · เปลี่ยนจำนวน/ประเภท = คนละคำสั่ง → cid ใหม่
+  const orderCidRef = React.useRef({ key: "", cid: "" });
+  const orderCid = () => {
+    const key = `${product.sku}|${qty}|${orderType}`;
+    if (orderCidRef.current.key !== key || !orderCidRef.current.cid) {
+      orderCidRef.current = {
+        key,
+        cid: `${product.sku}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      };
+    }
+    return orderCidRef.current.cid;
+  };
+
+  const [retryNote, setRetryNote] = uS("");
+
+  // ถาม GAS ตรง ๆ ว่าคำสั่ง cid นี้ลงชีตไปแล้วหรือยัง
+  //  true  = ลงแล้ว · false = ยังไม่ลง (เชื่อถือได้ = ยิงซ้ำได้ปลอดภัย)
+  //  null  = ตอบไม่ได้/ตอบมาไม่ใช่รูปแบบนี้ (เน็ตพัง หรือ GAS ยังเป็นโค้ดเก่าที่ไม่รู้จัก
+  //          orderCheck) — **ห้ามยิงซ้ำเมื่อได้ null** เพราะถ้าเป็นโค้ดเก่า cid จะไม่กันซ้ำให้
+  const checkOrderByCid = async (cid) => {
+    const _sep = sheetUrl.includes('?') ? '&' : '?';
+    try {
+      const d = await dmjJson(await fetch(
+        `${sheetUrl}${_sep}action=orderCheck&cid=${encodeURIComponent(cid)}&_t=${Date.now()}`,
+        { cache: 'no-store' }));
+      return (d && d.ok === true && typeof d.found === 'boolean') ? d.found : null;
+    } catch (e) { return null; }
+  };
+
   // เช็คจากชีตจริงว่า "ออเดอร์ลงไปแล้วหรือยัง" — ใช้ตอนยิงไปแล้วไม่ได้คำตอบที่อ่านได้
   //
   // ทำไมต้องมี: GAS เขียนออเดอร์ลงชีตเสร็จแล้วยังตอบกลับเป็นหน้า HTML ได้ (execution ซ้อนกัน/
@@ -4511,11 +4543,15 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
   // ยิง action=order ไป GAS
   //  · ใช้ dmjJson แทน r.json() — GAS ที่ล่ม/ตอบช้าจะคืนหน้า HTML มา ถ้า parse ตรง ๆ
   //    พนักงานจะเห็น "Unexpected token '<' … is not valid JSON" ซึ่งอ่านไม่ออก
-  //  · อ่านคำตอบไม่ได้ → ไปเช็คชีตว่าลงไปแล้วหรือยัง (ไม่ยิงซ้ำ — กันสั่งซ้ำ)
+  //  · อ่านคำตอบไม่ได้ ≠ สั่งไม่สำเร็จ → ถาม cid ก่อนเสมอ (ลงแล้ว = สำเร็จ)
+  //  · ยิงซ้ำได้เฉพาะเมื่อ **ยืนยันแล้วว่ายังไม่ลง** — ถามไม่ได้/ตอบกำกวมห้ามยิงซ้ำ
+  //    (GAS ที่ยังเป็นโค้ดเก่าไม่รู้จัก cid → ยิงซ้ำ = สั่งสองใบ ซึ่งแย่กว่าขึ้นแดง)
+  const ORDER_ATTEMPTS = 3;
   const placeOrder = async () => {
     // รอให้ updateFrontStore ที่ค้างอยู่จบก่อนเสมอ — ยิงชนกันคือเหตุที่ GAS ตอบหน้า HTML
     // (auto-save อาจยิงไปแล้วโดยที่ fsDirty เป็น false ตอน handleSubmit อ่านค่า)
     if (fsInflightRef.current) { try { await fsInflightRef.current; } catch (e) { /* จัดการแล้วใน saveFsQty */ } }
+    const cid = orderCid();
     const _sep = sheetUrl.includes('?') ? '&' : '?';
     // ส่ง name/image ไปด้วย — handleOrder_ เขียนลงคอลัมน์ G/J ของชีต "ลำดับที่สั่งสินค้า"
     // (เดิมไม่ส่ง ทุกออเดอร์เลยได้ชื่อ/รูปว่าง คลังต้องเปิดหารหัสเองว่าคือของอะไร)
@@ -4524,23 +4560,52 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
               + `&qty=${qty}&orderType=${encodeURIComponent(orderType)}`
               + `&name=${encodeURIComponent(product.name || '')}`
               + (img && img.length <= 300 ? `&image=${encodeURIComponent(img)}` : '')
+              // cid → GAS เช็คก่อนเขียนว่าคำสั่งนี้เคยลงไปแล้วหรือยัง (กันสั่งสองเด้ง)
+              + `&cid=${encodeURIComponent(cid)}`
               // sessionToken → GAS หา "ใครเป็นคนสั่ง" จาก session เอง (ไม่เชื่อชื่อที่ client ส่ง)
               // doGet ไม่ผ่าน dmjFetch ที่แนบ token ให้อัตโนมัติ จึงต้องแนบเองเหมือน getAuditLog
-              + `&sessionToken=${encodeURIComponent(localStorage.getItem('dmj_session_token') || '')}`
-              + `&_t=${Date.now()}`;
-    // ยอดที่ค้างอยู่ "ก่อนสั่ง" — ใช้เป็นฐานเทียบตอนต้องไปเช็คชีตเอง
+              + `&sessionToken=${encodeURIComponent(localStorage.getItem('dmj_session_token') || '')}`;
+    // ยอดที่ค้างอยู่ "ก่อนสั่ง" — ใช้เป็นฐานเทียบตอน cid ถามไม่ได้ (GAS โค้ดเก่า)
     const before = Number(pendingOrderQty) || 0;
-    try {
-      const d = await dmjJson(await fetch(url, { cache: 'no-store' }));
-      if (d && d.ok) { orderDone(); return true; }
-      setErr((d && d.error) || 'บันทึกรายการสั่งไม่สำเร็จ');
-      return false;
-    } catch (e) {
-      // อ่านคำตอบไม่ได้ ≠ สั่งไม่สำเร็จ — ไปดูของจริงในชีตก่อนตัดสิน
-      if (await verifyOrderLanded(before)) { orderDone(); return true; }
-      setErr(dmjErrText(e) + ' · ยังไม่พบรายการในระบบ กดลองใหม่ได้');
-      return false;
+    let lastErr = null;
+
+    for (let attempt = 1; attempt <= ORDER_ATTEMPTS; attempt++) {
+      if (attempt > 1) setRetryNote(`เน็ตไม่นิ่ง — กำลังลองใหม่ครั้งที่ ${attempt - 1}…`);
+      try {
+        const d = await dmjJson(await fetch(url + `&_t=${Date.now()}`, { cache: 'no-store' }));
+        if (d && d.ok) { setRetryNote(""); orderDone(); return true; }
+        // ล็อกไม่ว่าง (retryable) → ลองใหม่ได้ · error อื่นคือของจริง ลองกี่ครั้งก็เหมือนเดิม
+        if (!d || !d.retryable) {
+          setRetryNote(""); setErr((d && d.error) || 'บันทึกรายการสั่งไม่สำเร็จ');
+          return false;
+        }
+        lastErr = new Error(d.error || '');
+      } catch (e) {
+        lastErr = e;
+      }
+
+      // อ่านคำตอบไม่ได้ → ถามชีตก่อนว่าลงไปแล้วหรือยัง
+      setRetryNote("กำลังตรวจสอบว่าคำสั่งเข้าระบบหรือยัง…");
+      const landed = await checkOrderByCid(cid);
+      if (landed === true) { setRetryNote(""); orderDone(); return true; }
+      if (landed === null) {
+        // ถามด้วย cid ไม่ได้ → ใช้วิธีเดิม (นับยอด "รอ" ของ SKU นี้) แล้วหยุด ห้ามยิงซ้ำ
+        setRetryNote("");
+        if (await verifyOrderLanded(before)) { orderDone(); return true; }
+        setErr(dmjErrText(lastErr) + ' · ยังไม่พบรายการในระบบ กดลองใหม่ได้');
+        return false;
+      }
+      // landed === false → ยืนยันแล้วว่ายังไม่ลง ยิงซ้ำได้ปลอดภัย
+      if (attempt < ORDER_ATTEMPTS) {
+        await new Promise(res => setTimeout(res, attempt === 1 ? 800 : 2500));
+      }
     }
+
+    setRetryNote("");
+    // ครบทุกครั้งแล้วยังไม่ลง — บอกตรง ๆ ว่ายังไม่ได้สั่ง และกดซ้ำได้ (cid กันซ้ำให้แล้ว)
+    setErr('ยังสั่งไม่สำเร็จ (เน็ตไม่นิ่ง) — กดปุ่มยืนยันซ้ำได้เลย ระบบกันสั่งซ้ำให้แล้ว');
+    console.warn('placeOrder failed after retries:', lastErr);
+    return false;
   };
 
   // คลังหมด → สั่งไม่ได้ แต่ยังนับหน้าร้านได้ (auto-save ยิงเองอยู่แล้ว ปุ่มนี้คือบันทึกทันทีแล้วปิด)
@@ -4558,7 +4623,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
     if (!sheetUrl) { setErr('ไม่พบ GOOGLE_SHEET_URL'); return; }
     if (qty < 1) { setErr('กรุณาระบุจำนวน'); return; }
     if (fsBlocked) { setErr('กรุณากรอกจำนวนที่เหลือหน้าร้านก่อน'); return; }
-    setLoading(true); setErr(null);
+    setLoading(true); setErr(null); setRetryNote("");
     try {
       // บันทึกจำนวนหน้าร้านที่นับได้ก่อน (ปกติ auto-save ยิงไปแล้ว — เหลือเคสกดสั่งเร็วกว่า 2 วิ)
       if (fsDirty && !skipFsSave) {
@@ -4815,7 +4880,15 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
                 </div>
               </div>
 
-              {err && (
+              {/* กำลัง retry อยู่ — บอกให้รู้ว่าระบบยังทำงาน อย่าเพิ่งกดซ้ำ (แถบเหลือง ไม่ใช่แดง) */}
+              {retryNote && (
+                <div style={{background:"#fffbeb", border:"1px solid #fcd34d", borderRadius:8,
+                             padding:"8px 12px", fontSize:12, color:"#92400e", marginBottom:12}}>
+                  ⏳ {retryNote}
+                </div>
+              )}
+
+              {err && !retryNote && (
                 <div style={{background:"#fff0f0", border:"1px solid #fcc", borderRadius:8,
                              padding:"10px 12px", fontSize:12, color:"var(--dang)", marginBottom:12,
                              lineHeight:1.5}}>

@@ -178,16 +178,32 @@ describe('meta — OrderModal ต้องต่อคิวคำขอ ไม�
 
 // ── meta-test: สั่งของต้องไม่ซ้ำ และต้องรู้ว่าสั่งไปแล้ว ──────────────────────
 // อาการที่เจ้าของแจ้ง: "ไม่ขึ้นว่าสั่งแล้ว แต่ของถูกสั่ง" = GAS เขียนชีตเสร็จแล้วแต่ตอบ HTML
-// → เว็บไม่รู้ว่าสำเร็จ · ห้ามแก้ด้วยการยิงซ้ำ (action=order ไม่ idempotent = สั่งซ้ำ 2 ใบ)
-describe('meta — placeOrder ต้องเช็คชีต ไม่ใช่ยิงซ้ำ', () => {
+// → เว็บไม่รู้ว่าสำเร็จ · ห้ามตัดสินว่าพังโดยไม่เช็คของจริงก่อน
+//
+// ⚠️ เดิมกฎคือ "ห้ามยิงซ้ำเด็ดขาด" เพราะ action=order ไม่ idempotent · ตอนนี้มี cid
+// (handleOrder_ เช็ค findOrderRowByCid_ ก่อนเขียน) แล้ว จึงยิงซ้ำได้ **เฉพาะเมื่อเช็คแล้ว
+// ยืนยันว่ายังไม่ลงจริง ๆ** — เงื่อนไขนั้นคือสิ่งที่เทสต์ชุดนี้คุมไว้ ห้ามหลุด
+describe('meta — placeOrder ต้องเช็คก่อนเสมอ ยิงซ้ำได้เฉพาะที่ปลอดภัย', () => {
   const placeOrder = grab(VIEWS_MAIN, /const placeOrder = async \(\) => \{[\s\S]*?\n  \};/, 'placeOrder');
 
   it('อ่านคำตอบไม่ได้ → ไปเช็คชีตว่าออเดอร์ลงไปแล้วหรือยัง', () => {
-    expect(placeOrder).toMatch(/await verifyOrderLanded\(before\)/);
+    expect(placeOrder).toMatch(/await checkOrderByCid\(cid\)/);
+    expect(placeOrder).toMatch(/await verifyOrderLanded\(before\)/);  // ทางถอยเมื่อ cid ถามไม่ได้
   });
 
-  it('ห้ามมี loop ยิงซ้ำอัตโนมัติใน placeOrder (สั่งซ้ำ 2 ใบ)', () => {
-    expect(placeOrder).not.toMatch(/for \(\s*(let|var)\s+attempt/);
+  it('ยิงซ้ำได้เฉพาะหลังเช็คแล้ว — ทุก retry ต้องผ่าน checkOrderByCid ก่อน', () => {
+    // ลำดับต้องเป็น: ยิง → (พลาด) → เช็ค → ค่อยวน · ถ้า setTimeout หน่วงรอบถัดไปมาก่อนการเช็ค
+    // แปลว่ามีเส้นทางยิงซ้ำโดยไม่เช็ค = กลับไปสั่งซ้ำ 2 ใบ
+    expect(placeOrder.indexOf('checkOrderByCid')).toBeLessThan(placeOrder.indexOf('attempt < ORDER_ATTEMPTS'));
+  });
+
+  it('เช็คด้วย cid ไม่ได้ (เช่น GAS ยังเป็นโค้ดเก่า) → ต้องหยุด ห้ามวนยิงซ้ำ', () => {
+    expect(placeOrder).toMatch(/landed === null[\s\S]*?return false;/);
+  });
+
+  it('cid ต้องคงเดิมทั้งรอบ (สร้างครั้งเดียวก่อนเข้า loop) ไม่งั้นยิงซ้ำ = แถวใหม่', () => {
+    expect(placeOrder.indexOf('const cid = orderCid()'))
+      .toBeLessThan(placeOrder.indexOf('for (let attempt'));
   });
 
   it('verifyOrderLanded เทียบยอด "รอ" ที่เพิ่มขึ้น ไม่ parse วันที่ในชีต (ปี พ.ศ.)', () => {
