@@ -134,6 +134,7 @@ const SHEET_QUOTE_SALE     = "เซลใบเสนอราคา";    // ma
 const SHEET_UNSCANNED_SALE = "ขายไม่สแกน";        // นับสต็อกแล้วของหาย=ขายออก (บวก soldQty ไม่แตะยอดเงิน) col: date,SKU,qty,actor,time
 const SHEET_ORDERS_RAW     = "ZORT ออเดอร์ดิบ";   // ออเดอร์ดิบทั้งระบบ (per-line) สำหรับ backfill+วิเคราะห์ย้อนหลัง
 const SHEET_QUOTE_DRAFTS   = "ร่างใบเสนอราคา";    // ร่างใบเสนอราคาที่ยังไม่ส่งเข้า ZORT
+const SHEET_INVOICE_NUM    = "เลขที่ใบแจ้งหนี้";   // เลขที่ใบแจ้งหนี้ของเราเอง (IVB-yyyyMM###) ผูกกับเลขที่ใบเสนอราคาต้นทาง
 const SHEET_STAFF          = "พนักงาน";           // บัญชีพนักงาน (LINE Login) — ชื่อ/ตำแหน่ง/สถานะ
 const SHEET_SESSIONS       = "เซสชัน";            // session token ที่ออกให้ตอนล็อกอิน LINE
 const SHEET_SALE_BILLS     = "บิลขาย";             // log บิลขายที่ออกผ่าน POS (1 แถว = 1 บิล) — ฝั่งเราเอง ไม่ต้องรอ sync ZORT
@@ -651,13 +652,13 @@ var COMMON_ACTIONS_ = ["order", "updateOrderState", "transferStock", "transferSt
 var ROLE_ACTIONS_ = {
   saler:      ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
                "getContactDetail", "createQuotation", "editQuotation", "saveQuotationDraft", "deleteQuotationDraft",
-               "voidQuotation", "approveQuotation", "setQuoteSale",
+               "voidQuotation", "approveQuotation", "setQuoteSale", "getInvoiceNumber",
                ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   // storedevice = บัญชี LINE กลางประจำเครื่อง/แท็บเล็ตร้าน — สิทธิ์ API เท่า saler ทุกอย่าง
   // + attendanceToday (ดู "ใครเข้างานวันนี้" — เหตุผลที่มี role นี้อยู่เลย ต้องเปิดให้)
   storedevice: ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
                "getContactDetail", "createQuotation", "editQuotation", "saveQuotationDraft", "deleteQuotationDraft",
-               "voidQuotation", "approveQuotation", "setQuoteSale", "attendanceToday",
+               "voidQuotation", "approveQuotation", "setQuoteSale", "getInvoiceNumber", "attendanceToday",
                ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   frontstore: ["recordUnscannedSale"].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   warehouse:  ["deductStock", "confirmStockCount", "deleteLockEntry", "addNewProduct",
@@ -737,7 +738,7 @@ var POST_FLAG_ACTIONS_ = [
   "completeStockCheck", "confirmShipmentReceive", "confirmStockCount", "createMtoJob",
   "createQuotation", "createSaleBill", "createStockCheck", "deductMaterials", "deductStock",
   "deleteLockEntry", "deleteMtoJob", "deleteOrder", "deleteOrders", "deleteQuotationDraft", "editQuotation",
-  "fetchProductImage", "getContactDetail", "issueFullTaxInvoice", "lookupSaleBill",
+  "fetchProductImage", "getContactDetail", "getInvoiceNumber", "issueFullTaxInvoice", "lookupSaleBill",
   "recordUnscannedSale", "resetNegativeStock", "saveMtoJobItems", "saveQuotationDraft",
   "saveThresholds", "searchContact", "setQuoteSale", "syncZortNow", "syncZortPurchasesNow",
   "syncZortSalesNow", "transferStock", "transferStockBatch", "updateFrontStore",
@@ -1823,6 +1824,11 @@ function doPost(e) {
     // ─── Set Quotation Sale: บันทึกชื่อเซลที่ทำใบเสนอราคา (ในชีตเรา) ───
     if (data.setQuoteSale) {
       return setQuoteSale_(data.quoteNumber, data.sale, actor);
+    }
+
+    // ─── ออกเลขที่ใบแจ้งหนี้ของเราเอง (ผูกกับเลขที่ใบเสนอราคาต้นทาง — ในชีตเรา ไม่แตะ ZORT) ───
+    if (data.getInvoiceNumber) {
+      return nextInvoiceNumber_(data.quotationNumber, actor);
     }
 
     // ─── Record Unscanned Sale: นับสต็อกแล้วของหาย = ขายออก (บวก soldQty ไม่แตะเงิน) ───
@@ -9516,6 +9522,45 @@ function getQuotationForPrint(idOrNumber) {
     });
   } catch (e) {
     return error("ดึงรายละเอียดใบเสนอราคาไม่สำเร็จ: " + e);
+  }
+}
+
+// เลขที่ใบแจ้งหนี้ของเราเอง (คนละเลขกับใบเสนอราคาของ ZORT) — รูปแบบ IVB-yyyyMM### วิ่งต่อเนื่อง
+// ต่อเดือนเหมือนเลข QT ของ ZORT · ผูกกับเลขที่ใบเสนอราคาต้นทาง 1 แถว/1 ใบเสนอราคา — พิมพ์ซ้ำใบเดิม
+// ได้เลขเดิมเสมอ (idempotent กันเลขวิ่งเปลืองตอนกดพิมพ์ซ้ำ) เก็บใน SHEET_INVOICE_NUM
+// เลขที่ใบเสนอราคาต้นทางยังโชว์อยู่บนใบแจ้งหนี้ในบรรทัด "เลขที่เอกสารอ้างอิง1" (QuotationPrintDoc)
+function nextInvoiceNumber_(quotationNumber, actor) {
+  const jsonOut = (o) => ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);
+  const qNum = String(quotationNumber || "").trim();
+  if (!qNum) return jsonOut({ ok: false, error: "ไม่มีเลขที่ใบเสนอราคาอ้างอิง" });
+  const lock = LockService.getScriptLock();
+  try {
+    if (!lock.tryLock(10000)) return jsonOut({ ok: false, error: "ระบบไม่ว่าง ลองใหม่อีกครั้ง" });
+    const ss = SpreadsheetApp.openById(SHEET_ID);
+    const sh = getOrCreateSheet_(ss, SHEET_INVOICE_NUM, ["เลขที่ใบเสนอราคา", "เลขที่ใบแจ้งหนี้", "โดย", "เมื่อ"]);
+    const rows = sh.getDataRange().getDisplayValues();
+    for (let i = 1; i < rows.length; i++) {
+      if (String(rows[i][0] || "").trim() === qNum) {
+        return jsonOut({ ok: true, invoiceNumber: String(rows[i][1] || "").trim(), reused: true });
+      }
+    }
+    const prefix = "IVB-" + Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyyMM");
+    let maxSeq = 0;
+    for (let i = 1; i < rows.length; i++) {
+      const v = String(rows[i][1] || "").trim();
+      if (v.indexOf(prefix) === 0) {
+        const seq = parseInt(v.substring(prefix.length), 10);
+        if (!isNaN(seq) && seq > maxSeq) maxSeq = seq;
+      }
+    }
+    const invoiceNumber = prefix + String(maxSeq + 1).padStart(3, "0");
+    const stamp = Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyy-MM-dd HH:mm");
+    sh.appendRow([qNum, invoiceNumber, actor || "ไม่ระบุ", stamp]);
+    return jsonOut({ ok: true, invoiceNumber: invoiceNumber, reused: false });
+  } catch (e) {
+    return jsonOut({ ok: false, error: String(e) });
+  } finally {
+    try { lock.releaseLock(); } catch (e2) {}
   }
 }
 

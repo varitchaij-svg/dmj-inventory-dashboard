@@ -60,6 +60,19 @@ async function syncGetQuotationForPrint(idOrNumber) {
     return await res.json(); // { success, data:{quotationNumber,customer,items,remarks,salesRep,totals} }
   } catch (err) { return { success: false, error: err.message }; }
 }
+// ── sync helper: ออกเลขที่ใบแจ้งหนี้ของเราเอง (IVB-yyyyMM###) ผูกกับเลขที่ใบเสนอราคาต้นทาง —
+// พิมพ์ซ้ำใบเดิมได้เลขเดิมเสมอ (idempotent ฝั่ง backend)
+async function syncGetInvoiceNumber(quotationNumber) {
+  if (!SHEET_DEPLOY_URL) return { ok: false, error: "ยังไม่ได้เชื่อมต่อ Sheet" };
+  try {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ getInvoiceNumber: true, quotationNumber, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "saler" }),
+    });
+    return await res.json().catch(() => ({ ok: false, error: "อ่านผลลัพธ์ไม่ได้" })); // { ok, invoiceNumber, reused }
+  } catch (err) { return { ok: false, error: err.message }; }
+}
 // ── sync helper: ลบร่างทิ้ง ──
 async function syncDeleteQuotationDraft(draftId) {
   if (!SHEET_DEPLOY_URL) return { success: false, error: "ยังไม่ได้เชื่อมต่อ Sheet" };
@@ -255,6 +268,8 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
   const [printDocType, setPrintDocType] = uS("quotation"); // "quotation" | "invoice" — เอกสารหน้าตาเดียวกัน แค่เปลี่ยนป้าย
   const [invoiceModal, setInvoiceModal] = uS(false);        // เปิด InvoiceOptionsModal ก่อนพิมพ์ใบแจ้งหนี้
   const [invoiceExtra, setInvoiceExtra] = uS(null);         // {remarks, dueAmount, dueLabel} จาก modal
+  const [invoiceNumber, setInvoiceNumber] = uS(null);       // เลขที่ใบแจ้งหนี้ของเราเอง (IVB-yyyyMM###) จาก syncGetInvoiceNumber
+  const [invoiceNumberBusy, setInvoiceNumberBusy] = uS(false);
 
   uE(() => {
     if (printReq <= 0) return;
@@ -269,6 +284,20 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
     window.addEventListener("afterprint", onAfter);
   }, [printReq]);
   function doPrint(docType) { setPrintDocType(docType || "quotation"); setPrintReq(n => n + 1); }
+
+  // ก่อนพิมพ์ใบแจ้งหนี้ ต้องออก "เลขที่ใบแจ้งหนี้" ของเราเองก่อนเสมอ (IVB-yyyyMM###) — พิมพ์ซ้ำใบเดิม
+  // ได้เลขเดิม (backend idempotent) แต่ถ้าออกเลขไม่สำเร็จ (เน็ตหลุด/GAS ตอบ HTML) ห้ามพิมพ์เอกสารที่ไม่มี
+  // เลขที่เอกสาร — โชว์ toast แดงแล้วหยุด ให้ผู้ใช้กดลองใหม่เอง
+  async function confirmInvoicePrint(extra) {
+    setInvoiceExtra(extra);
+    setInvoiceModal(false);
+    setInvoiceNumberBusy(true);
+    const r = await syncGetInvoiceNumber(result.quotationNumber);
+    setInvoiceNumberBusy(false);
+    if (!r || !r.ok) { showToast("error", "ออกเลขที่ใบแจ้งหนี้ไม่สำเร็จ: " + ((r && r.error) || ""), "❌"); return; }
+    setInvoiceNumber(r.invoiceNumber);
+    doPrint("invoice");
+  }
 
   const md = Math.max(0, parseFloat(manualDiscount) || 0);
   const totals = uM(() => computeBillTotals(cart, { manualDiscount: md }), [cart, md]);
@@ -489,7 +518,7 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
             </div>
           </Card>
           <button onClick={() => doPrint("quotation")} style={{ padding: 14, borderRadius: 10, border: "none", background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 700 }}>🖨️ พิมพ์ใบเสนอราคา (A4)</button>
-          <button onClick={() => setInvoiceModal(true)} style={{ padding: 14, borderRadius: 10, border: "1px solid var(--g-600,#1f7f44)", background: "#fff", color: "var(--g-700,#166534)", fontWeight: 700 }}>🧾 พิมพ์ใบแจ้งหนี้ (A4)</button>
+          <button onClick={() => setInvoiceModal(true)} disabled={invoiceNumberBusy} style={{ padding: 14, borderRadius: 10, border: "1px solid var(--g-600,#1f7f44)", background: "#fff", color: "var(--g-700,#166534)", fontWeight: 700, opacity: invoiceNumberBusy ? .6 : 1 }}>{invoiceNumberBusy ? "⏳ กำลังออกเลขที่..." : "🧾 พิมพ์ใบแจ้งหนี้ (A4)"}</button>
           {!editQuote && <button onClick={() => { resetAll(); }} style={{ padding: 14, borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700 }}>📝 สร้างใบใหม่</button>}
           {onBack && <button onClick={onBack} style={{ padding: 14, borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700 }}>← กลับไปหน้าติดตามสถานะ</button>}
           <Toast toast={toast} onClose={hideToast}/>
@@ -497,9 +526,9 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
         {invoiceModal && (
           <InvoiceOptionsModal grandTotal={(result.totals || totals).grandTotal}
             onCancel={() => setInvoiceModal(false)}
-            onConfirm={(extra) => { setInvoiceExtra(extra); setInvoiceModal(false); doPrint("invoice"); }}/>
+            onConfirm={confirmInvoicePrint}/>
         )}
-        <QuotationPrintDoc quotationNumber={result.quotationNumber} items={cart} customer={cust}
+        <QuotationPrintDoc quotationNumber={result.quotationNumber} invoiceNumber={invoiceNumber} items={cart} customer={cust}
           remarks={printDocType === "invoice" ? (invoiceExtra ? invoiceExtra.remarks : INVOICE_DEFAULT_REMARKS) : remarks}
           salesRep={salesRep} totals={result.totals || totals} docType={printDocType}
           dueAmount={printDocType === "invoice" && invoiceExtra ? invoiceExtra.dueAmount : null}
@@ -769,7 +798,7 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
 // docType="invoice" → หน้าตาเอกสารเหมือนใบเสนอราคาทุกอย่าง เปลี่ยนป้ายหัวเอกสาร — remarks ของ
 // ใบแจ้งหนี้ (default = INVOICE_DEFAULT_REMARKS หรือแก้ไขแล้วจาก InvoiceOptionsModal) ผู้เรียกส่งมาตรงๆ
 // dueAmount/dueLabel (ไม่บังคับ) = กล่องเน้นยอดที่เรียกเก็บจริง เมื่อพิมพ์แบบมัดจำ/ยอดคงเหลือ
-function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep, totals, docType, dueAmount, dueLabel }) {
+function QuotationPrintDoc({ quotationNumber, invoiceNumber, items, customer, remarks, salesRep, totals, docType, dueAmount, dueLabel }) {
   const docLabel = docType === "invoice" ? "ใบแจ้งหนี้" : "ใบเสนอราคา";
   const effRemarks = remarks || [];
   const gross = (totals.retailEligible || 0) + (totals.retailExcluded || 0);
@@ -808,7 +837,10 @@ function QuotationPrintDoc({ quotationNumber, items, customer, remarks, salesRep
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontSize: 14, fontWeight: 800, border: "1px solid #000", padding: "3px 8px", borderRadius: 4 }}>{docLabel}</div>
                 <div style={{ fontSize: 11, marginTop: 4 }}>วันที่ : {docDate}</div>
-                <div style={{ fontSize: 11 }}>เลขที่เอกสาร : {quotationNumber || "—"}</div>
+                <div style={{ fontSize: 11 }}>เลขที่เอกสาร : {(docType === "invoice" ? invoiceNumber : quotationNumber) || "—"}</div>
+                {docType === "invoice" && (
+                  <div style={{ fontSize: 11 }}>เลขที่เอกสารอ้างอิง1 : {quotationNumber || "—"}</div>
+                )}
                 {pages.length > 1 ? <div style={{ fontSize: 11 }}>หน้า {pi + 1}/{pages.length}</div> : null}
               </div>
             </div>
