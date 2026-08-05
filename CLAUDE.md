@@ -485,8 +485,9 @@ npm run test:coverage # coverage report (tests/helpers.js)
     `window.location.href` ใน webview ตัวเอง (`lineLoginNavigate`) ช่วยได้บาง iOS เท่านั้น
     **ห้ามพึ่งอย่างเดียว** — ต้องมี **login handoff** (ดูหัวข้อด้านล่าง) เป็นทางกู้เสมอ
 13. **GAS ไม่ได้ตอบ JSON เสมอไป** — deployment ที่ลิงก์หมดอายุ/ถูกลบ, เว็บแอปที่ต้องขอสิทธิ์ใหม่,
-    quota เต็ม, Google ล่มชั่วคราว → ตอบกลับเป็น **หน้า HTML** และ `fetch` **ไม่ throw**
-    · เอาเข้า `res.json()` ตรง ๆ = พนักงานเห็น `Unexpected token '<', "<!DOCTYPE "…` (เจอจริง
+    quota เต็ม, Google ล่มชั่วคราว, หรือมือถือ/เน็ตร้านเจอ proxy/captive portal → ตอบกลับเป็น
+    **หน้า HTML** และ `fetch` **ไม่ throw** · เอาเข้า `res.json()` ตรง ๆ = พนักงานเห็น
+    `Unexpected token '<', "<!DOCTYPE "…` ซึ่งเป็นข้อความ JS ดิบที่อ่านไม่รู้เรื่อง (เจอจริง
     ส.ค. 2026 ตอนพนักงานกดสั่งของไม่ได้) → **ใช้ `dmjJson(res)` (ui.jsx) ทุกจุด** แปลงเป็นข้อความ
     ไทย + เก็บ status/ต้นข้อความลง console · error จาก fetch เองแปลงด้วย `dmjErrText(e)`
     · ที่อันตรายกว่าคือ **"สำเร็จปลอม"**: `syncFrontStoreData` เดิม `await dmjFetch(...)` แล้ว
@@ -501,9 +502,10 @@ npm run test:coverage # coverage report (tests/helpers.js)
     — พนักงานอยู่หน้าร้านเปิด console ไม่ได้ เจ้าของเปิดดูย้อนหลังได้จากตรงนี้
     · ⚠️ **"อ่านคำตอบไม่ได้" ≠ "ทำไม่สำเร็จ"** — GAS เขียนชีตเสร็จแล้วยังตอบ HTML ได้ (ของถูกสั่ง
     จริงแต่เว็บไม่ขึ้น "สั่งแล้ว") · **ห้ามแก้ด้วยการยิงซ้ำอัตโนมัติ** กับ action ที่ไม่ idempotent
-    (`action=order` = สั่งซ้ำ 2 ใบ คลังจัดของ 2 รอบ) → ต้อง **เช็คของจริงก่อน** เหมือน
-    `verifyOrderLanded` (OrderModal) ที่ดึง `action=orders` มาเทียบว่ายอด "รอ" ของ SKU นั้น
-    เพิ่มขึ้นครบไหม (ไม่ parse วันที่ในชีตซึ่งเป็น พ.ศ. — ข้อ 11)
+    (`action=order` = สั่งซ้ำ 2 ใบ คลังจัดของ 2 รอบ, `handleOrder_` ไม่มี idempotency key) →
+    ต้อง **เช็คของจริงก่อน** เหมือน `verifyOrderLanded` (OrderModal) ที่ดึง `action=orders`
+    มาเทียบว่ายอด "รอ" ของ SKU นั้นเพิ่มขึ้นครบไหม (ไม่ parse วันที่ในชีตซึ่งเป็น พ.ศ. — ข้อ 11)
+    — ปล่อยให้ผู้ใช้เป็นคนตัดสินใจกดปุ่มยืนยันซ้ำเอง (เหมือนแพทเทิร์น `fsSaveFailed`)
 
 ## ระบบล็อกอินพนักงาน + ลงเวลาเข้า-ออกงาน (Sprint 5)
 

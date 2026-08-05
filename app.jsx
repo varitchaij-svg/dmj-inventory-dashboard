@@ -103,6 +103,7 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError, lineChannelId,
                        handoffState, handoffWaiting, onClaimNow, onCancelWaiting, onStartWaiting }) {
   const [showLegacy, setShowLegacy] = usS(false);
   const [showDiag, setShowDiag] = usS(false);
+  const inLineBrowser = React.useMemo(() => isLineInAppBrowser(), []);
 
   // ── ทำไมปุ่ม LINE ต้องเป็น <a href> ไม่ใช่ <button onClick> ──────────────────
   // การล็อกอินผ่าน "แอป LINE" (app-to-app) ทำงานด้วย universal link (iOS) /
@@ -148,7 +149,8 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError, lineChannelId,
                   !!(typeof window !== "undefined" && window.matchMedia &&
                      window.matchMedia("(display-mode: standalone)").matches),
       localStorage: canLs, sessionStorage: canSs,
-      ua: (typeof navigator !== "undefined" ? navigator.userAgent : "").slice(0, 90),
+      inLineApp: isLineInAppBrowser(),
+      ua: (typeof navigator !== "undefined" ? navigator.userAgent : "").slice(0, 140),
     };
   })();
 
@@ -168,6 +170,21 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError, lineChannelId,
       <div style={{fontSize:13, color:"var(--muted)", marginBottom:36}}>
         เข้าสู่ระบบเพื่อใช้งาน
       </div>
+
+      {/* เปิดลิงก์นี้มาจากในแชท/ประกาศ LINE โดยตรง = ติดอยู่ในเว็บวิวของ LINE เอง —
+          ล็อกอินผ่านปุ่มด้านล่างจะเจอ error แปลกๆ ตอนแลก token เกือบทุกครั้ง (ข้อจำกัดของ
+          เว็บวิว LINE ไม่เกี่ยวกับเว็บเรา) ต้องกดออกไปเบราว์เซอร์จริงก่อนถึงจะล็อกอินได้ */}
+      {inLineBrowser && (
+        <div style={{
+          marginBottom:16, maxWidth:320, width:"100%", boxSizing:"border-box",
+          background:"var(--warn-t)", border:"1.5px solid var(--warn)", borderRadius:12,
+          padding:"14px 16px", fontSize:13, lineHeight:1.7, color:"var(--text)", textAlign:"center",
+        }}>
+          <div style={{fontWeight:800, marginBottom:4}}>⚠️ กำลังเปิดในแอป LINE</div>
+          เข้าสู่ระบบตรงนี้มักจะล็อกอินไม่ผ่าน — กด <b>"···"</b> มุมขวาบน แล้วเลือก
+          <b> "เปิดด้วยเบราว์เซอร์อื่น"</b> (Open in Browser) ก่อน แล้วค่อยกดปุ่มด้านล่างในนั้น
+        </div>
+      )}
 
       {authBase ? (
         // ลิงก์จริง — แตะแล้วเบราว์เซอร์ navigate ทันทีในจังหวะเดียวกับการแตะ
@@ -290,6 +307,7 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError, lineChannelId,
           <div>path: {diag.path}</div>
           <div>redirect_uri: {diag.redirect}</div>
           <div>โหมดแอป (standalone): {diag.standalone ? "ใช่ ✅" : "ไม่ (เบราว์เซอร์)"}</div>
+          <div>เปิดในแอป LINE (in-app browser): {diag.inLineApp ? "ใช่ ⚠️" : "ไม่ใช่ ✅"}</div>
           <div>ปุ่ม LINE พร้อม (channelId): {lineChannelId ? "ใช่ ✅" : "ยังไม่โหลด ⏳"}</div>
           <div>รับช่วงล็อกอินข้ามเบราว์เซอร์: {handoffState ? "พร้อม ✅" : "ไม่รองรับ (เครื่องเก่า/ไม่ใช่ https)"}{handoffWaiting ? " · กำลังรอผล ⏳" : ""}</div>
           <div>localStorage: {diag.localStorage ? "ok ✅" : "บล็อก ❌"} · sessionStorage: {diag.sessionStorage ? "ok ✅" : "บล็อก ❌"}</div>
@@ -737,6 +755,16 @@ function isStandaloneApp() {
     return !!navigator.standalone ||
            !!(window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
   } catch (e) { return false; }
+}
+// เปิดลิงก์จากในแชท/ประกาศ LINE โดยตรง = อยู่ใน "เบราว์เซอร์ในแอป LINE" เอง (คนละอย่างกับ
+// สลับไปเปิดแอป LINE จาก Safari) — เว็บวิวของ LINE เอง (ไม่ใช่ Safari/Chrome) มักบล็อก/ทำให้
+// fetch() ไปเซิร์ฟเวอร์นอกโดเมนพังกลางทางในหลายเวอร์ชัน (มือถือ) → ล็อกอินเสร็จ (ได้ code จาก LINE)
+// แต่ตอนแลก code เป็น token ผ่าน fetch() กลับ error แปลกๆ (เจอจริง: "The string did not match
+// the expected pattern.") ทั้งที่ localStorage/handoff ทุกอย่างพร้อมหมด — ไม่มีทางแก้ฝั่งเว็บเรา
+// เพราะเป็นข้อจำกัดของเว็บวิว LINE เอง ทางออกเดียวคือให้ผู้ใช้ "เปิดด้วยเบราว์เซอร์อื่น" ก่อน
+// (LINE เองก็มีเมนูนี้ให้อยู่แล้วที่ "•••" มุมขวาบน)
+function isLineInAppBrowser() {
+  try { return /\bLine\//i.test(navigator.userAgent || ""); } catch (e) { return false; }
 }
 function lineLoginNavigate(e, authBase, extra) {
   saveLineHandshake(authBase.state, authBase.redirectUri);

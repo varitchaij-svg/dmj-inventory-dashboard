@@ -15,10 +15,14 @@ self.addEventListener("install", (e) => {
   self.skipWaiting();
 });
 
+// ⚠️ "dmj-babel-*" (ตั้งใน BC ของ "Doomuenjing Dashboard.html") = cache แยกต่างหากที่เก็บ
+// ผลลัพธ์ compile JSX ไว้ (คนละก้อนกับ CACHE_NAME ของไฟล์ตรงนี้) — ห้ามลบ ไม่งั้นทุกครั้งที่
+// deploy (bump CACHE_NAME) เครื่องทุกเครื่องต้อง Babel.transform() ไฟล์ .jsx ทั้งหมด (~1.3MB)
+// ใหม่หมดทุกรอบ ทั้งที่ตัวโค้ด .jsx เองอาจไม่ได้เปลี่ยนเลย (ETag เหมือนเดิม = compile ซ้ำเปล่าๆ)
 self.addEventListener("activate", (e) => {
   e.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+      Promise.all(keys.filter((k) => k !== CACHE_NAME && !k.startsWith("dmj-babel")).map((k) => caches.delete(k)))
     )
   );
   self.clients.claim();
