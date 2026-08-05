@@ -65,6 +65,9 @@ function makeCacheModule() {
     grab(/const _STALE_TTL_SEC {3}= \d+;/),
     grab(/const _STALE_KEY_COUNT = '[^']*';/),
     grab(/const _STALE_KEY_PART {2}= '[^']*';/),
+    grab(/const _STOCKLITE_TTL_SEC {3}= \d+;/),
+    grab(/const _STOCKLITE_KEY_COUNT = '[^']*';/),
+    grab(/const _STOCKLITE_KEY_PART {2}= '[^']*';/),
     grab(/const PAYLOAD_VARIANTS_ = \[[\s\S]*?\];/),
     grab(/function _cacheKeyCount_\(variant\) \{[\s\S]*?\n\}/),
     grab(/function _cacheKeyPart_\(variant\) \{[\s\S]*?\n\}/),
@@ -84,8 +87,9 @@ function makeCacheModule() {
     INVALIDATE,
     `return { getCachedPayload_, putCachedPayload_, readFreshPayload_,
               readStalePayload_, putStalePayload_, markStalePayload_,
-              invalidateCache_, payloadCacheVariant_,
-              _CACHE_TTL_SEC, _STALE_TTL_SEC };`,
+              invalidateCache_, payloadCacheVariant_, _readChunked_, _writeChunked_,
+              _CACHE_TTL_SEC, _STALE_TTL_SEC, _STOCKLITE_TTL_SEC,
+              _STOCKLITE_KEY_COUNT, _STOCKLITE_KEY_PART };`,
   ].join('\n');
   const fakeDate = { now: () => now };
   // eslint-disable-next-line no-new-func
@@ -303,5 +307,143 @@ describe('เส้นทาง build ต้องเติมชั้นสำ
   it('เส้นทาง client เก่า (ไม่ส่ง pv) ก็เติมชั้นสำรองด้วย', () => {
     const legacy = DOGET.slice(DOGET.indexOf('expandMonthlyForLegacy_(data)'));
     expect(legacy).toMatch(/putStalePayload_\(out, cacheVariant\)/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 7.4 — ตัดไบต์ออกจากเส้นทางที่วิ่งบ่อยที่สุด
+// ─────────────────────────────────────────────────────────────────────────────
+// ที่มา (วัดจริง 5 ส.ค. 2026 หลัง Phase 7.3 deploy): executions ฝั่ง GAS เหลือ 2-3.6 วิ ทุกอัน
+// แต่ browser ยังได้ HTTP 404 ที่ 24-28 วิ 5 จาก 15 อัน · `action=ping` (คำตอบ 0KB) ยิงพร้อมกัน
+// 15 อันเท่ากันกลับผ่านครบ → **คอขวดที่เหลือคือจำนวนไบต์ ไม่ใช่จำนวนคนพร้อมกัน**
+// payload 4.2MB × 15 = 63MB ผ่านท่อเดียวที่ ~2.3MB/วิ ≈ 27 วิ = นานเกินอายุลิงก์ดาวน์โหลด
+//
+// เทสต์ชุดนี้คุม "ของที่ถอยกลับแล้วไม่มี error ให้เห็น" เหมือนเดิม:
+//   1. poll ทุก 30 วิ กลับไปดึง payload ทั้งก้อน → กิน 500MB/ชม./เครื่อง เงียบ ๆ
+//   2. ก้อนเบาสลับลำดับคอลัมน์ → เลขสต็อกเพี้ยนโดยไม่มีอะไรฟ้อง
+//   3. ลืมล้าง cache ก้อนเบา → เพื่อนบันทึกแล้วเราไม่เห็นในแท็บที่ตั้งใจให้เห็นสด
+describe('Phase 7.4 — ก้อนเบา stocklite', () => {
+  const STOCKLITE = grab(/function stockLiteHandler_\(\) \{[\s\S]*?\n\}/);
+
+  it('อ่าน cache ก่อนแตะชีตเสมอ', () => {
+    // ไม่มี cache = 15 เครื่องที่ poll พร้อมกันสั่งอ่านชีตพร้อมกัน 15 ครั้งทุก 30 วิ
+    const beforeSheets = STOCKLITE.slice(0, STOCKLITE.indexOf('readQtyByLocation_'));
+    expect(beforeSheets).toContain('_readChunked_');
+    expect(beforeSheets).toMatch(/if \(cached\.str\) return/);
+  });
+
+  it('อ่านแค่ 2 ชีต (สต็อก + จำนวนหน้าร้าน) ไม่ใช่ buildFullData_', () => {
+    // เผลอเรียก buildFullData_ = ก้อนเบาแพงเท่าก้อนหนัก แค่ส่งกลับน้อยลง (แย่ที่สุดของสองโลก)
+    expect(STOCKLITE).not.toContain('buildFullData_');
+    expect(STOCKLITE).toContain('readQtyByLocation_');
+    expect(STOCKLITE).toContain('readFrontStoreCheckedQty_');
+  });
+
+  it('ลำดับคอลัมน์ในแต่ละแถวต้องตรงกับที่ฝั่ง client อ่าน', () => {
+    // client อ่านตาม **ตำแหน่ง** (row[1]=หน้าร้าน, row[2]=คลัง) ไม่ใช่ชื่อคีย์
+    // สลับสองตัวนี้ = ของในคลังไปโผล่เป็นของหน้าร้านทั้งระบบ โดยไม่มี error ให้เห็นเลย
+    expect(STOCKLITE).toMatch(/skuU, loc\.qtyStore, loc\.qtyWH/);
+  });
+
+  it('ส่งเป็น array ไม่ใช่ object (ชื่อคีย์ซ้ำทุกแถวคือส่วนที่ใหญ่ที่สุด)', () => {
+    expect(STOCKLITE).toMatch(/items\.push\(\[/);
+  });
+
+  it('แยก "ยังไม่เคยเช็ค" (null) ออกจาก "เช็คแล้วได้ 0"', () => {
+    // ส่ง 0 แทน null = หน้าเช็คหน้าร้านจะคิดว่าเช็คไปแล้วทั้งร้าน คิว "ควรเช็คก่อน" ว่างเปล่า
+    expect(STOCKLITE).toMatch(/fs \? fs\.qty : null/);
+  });
+
+  it('invalidateCache_ ล้าง cache ก้อนเบาด้วย (เพื่อนบันทึกแล้วต้องเห็นทันที)', () => {
+    const M = makeCacheModule();
+    M._writeChunked_('{"ok":true}', M._STOCKLITE_KEY_COUNT, M._STOCKLITE_KEY_PART, M._STOCKLITE_TTL_SEC);
+    expect(M._readChunked_(M._STOCKLITE_KEY_COUNT, M._STOCKLITE_KEY_PART).str).toBe('{"ok":true}');
+    M.invalidateCache_(true);
+    expect(M._readChunked_(M._STOCKLITE_KEY_COUNT, M._STOCKLITE_KEY_PART).str).toBe(null);
+  });
+
+  it('ล้างก้อนเบาแล้วชั้นสำรองต้องยังอยู่ (ห้ามลามไปโดนของ Phase 7.3)', () => {
+    const M = makeCacheModule();
+    M.putStalePayload_('{"v":"full"}', 'full');
+    M._writeChunked_('{"ok":true}', M._STOCKLITE_KEY_COUNT, M._STOCKLITE_KEY_PART, M._STOCKLITE_TTL_SEC);
+    M.invalidateCache_(true);
+    expect(M.readStalePayload_('full').str).toBe('{"v":"full"}');
+  });
+
+  it('TTL สั้นกว่าชั้นสด — ก้อนนี้ถูก poll ถี่กว่ามาก', () => {
+    const M = makeCacheModule();
+    expect(M._STOCKLITE_TTL_SEC).toBeLessThan(M._CACHE_TTL_SEC);
+  });
+
+  it('doGet ตอบ ver/stocklite ก่อนเข้าเส้นทาง payload หนัก', () => {
+    // ตกไปอยู่หลังเส้นทาง payload = ก้อนเบาต้องรอ build 10 วิ ซึ่งทำลายเหตุผลที่มีมันอยู่
+    const iVer   = DOGET.indexOf("action === 'ver'");
+    const iLite  = DOGET.indexOf("action === 'stocklite'");
+    const iHeavy = DOGET.indexOf('buildFullData_()');
+    expect(iVer).toBeGreaterThan(-1);
+    expect(iLite).toBeGreaterThan(-1);
+    expect(iVer).toBeLessThan(iHeavy);
+    expect(iLite).toBeLessThan(iHeavy);
+  });
+
+  it('action=ver ต้องไม่แตะชีตเลย (ไม่งั้นตัวตรวจแพงกว่าของที่ตรวจ)', () => {
+    const verBlock = DOGET.slice(iOf(DOGET, "action === 'ver'"), iOf(DOGET, "action === 'stocklite'"));
+    expect(verBlock).toContain('getSheetLastModified_()');
+    expect(verBlock).not.toContain('SpreadsheetApp');
+    expect(verBlock).not.toContain('buildFullData_');
+  });
+});
+
+function iOf(s, needle) { return s.indexOf(needle); }
+
+describe('Phase 7.4 — ฝั่ง frontend (จุดที่ถอยกลับแล้วไม่มีอะไรฟ้อง)', () => {
+  const APP = readFileSync(join(ROOT, 'app.jsx'), 'utf8');
+  const LITE = APP.slice(APP.indexOf('const fetchStockLite'), APP.indexOf('const fetchOrdersOnly'));
+
+  it('poll ของแท็บนับสต็อก/เช็คหน้าร้านใช้ก้อนเบา ไม่ใช่ payload ทั้งก้อน', () => {
+    // ถอยกลับไป fetchFromSheet = เครื่องที่จอดหน้าร้านทั้งวันกลับไปกิน ~500MB/ชม.
+    // โดยที่ทุกอย่างยังทำงานถูกต้อง 100% — ไม่มีทางรู้ได้เลยถ้าไม่มีเทสต์ข้อนี้
+    const pollBlock = APP.slice(APP.indexOf('const LIVE_TABS'));
+    const poll = pollBlock.slice(0, pollBlock.indexOf('}, [tab, role'));
+    expect(poll).toContain('fetchStockLite()');
+    expect(poll).not.toContain('fetchFromSheet()');
+  });
+
+  it('ก้อนเบาคำนวณ qty/isOOS ใหม่ทุกครั้งที่แตะจำนวน (บั๊ก WL)', () => {
+    // เขียนทับแค่ qtyStore/qtyWH แล้วปล่อย qty เดิม = สินค้าที่มีของจริงโชว์ "หมด" ทั้งระบบ
+    // เคยเกิดจริง ก.ค. 2026 (WL00002 มี 41+240 แต่หน้าเว็บขึ้นหมด) และไม่มี error ให้เห็นเลย
+    expect(LITE).toMatch(/qty:\s*total/);
+    expect(LITE).toMatch(/isOOS:\s*total <= 0/);
+    expect(LITE).toMatch(/isOversold:\s*total < 0/);
+    expect(LITE).toMatch(/qtyStatus:\s*total < 0/);
+  });
+
+  it('ก้อนเบาอ่านคอลัมน์ตามตำแหน่งเดียวกับที่ GAS ส่ง', () => {
+    expect(LITE).toMatch(/qtyStore\s*=\s*Number\(row\[1\]\)/);
+    expect(LITE).toMatch(/qtyWH\s*=\s*Number\(row\[2\]\)/);
+  });
+
+  it('ก้อนเบาไม่เขียน localStorage (เขียนหลายเมกะทุก 30 วิ = เครื่องกระตุก)', () => {
+    // เช็ค "การเรียก" ไม่ใช่แค่ชื่อ — คอมเมนต์ในโค้ดอธิบายเหตุผลไว้ จึงมีคำนี้อยู่โดยตั้งใจ
+    expect(LITE).not.toMatch(/saveToStorage\s*\(/);
+  });
+
+  it('กดปุ่ม Sync เอง (force) ต้องข้ามตัวตรวจ ver เสมอ', () => {
+    // แก้ชีตด้วยมือใน Google Sheets **ไม่ขยับ `dmj_last_write_ts`** → ver จะตอบว่า "ไม่เปลี่ยน"
+    // ถ้าเชื่อตอนผู้ใช้กด Sync = ปุ่มดูเหมือนพัง ทั้งที่เขาแก้ข้อมูลมาแล้วจริง ๆ
+    expect(APP).toMatch(/const verGate = \(!force && !prefetched && hasDataRef\.current\)/);
+  });
+
+  it('ใบรับรอง ver ผูกกับ role และมีเพดานอายุ', () => {
+    // ไม่ผูก role = สลับ role แล้วได้ก้อนที่ขาดข้อมูลของ role ใหม่ (payload ตัดตาม role)
+    // ไม่มีเพดานอายุ = คนที่แก้ชีตด้วยมือจะไม่เห็นผลตลอดไปจนกว่าจะกด Sync
+    const fn = APP.slice(APP.indexOf('function checkDataUnchanged'), APP.indexOf('function saveToStorage'));
+    expect(fn).toMatch(/stamp\.role \|\| ""\) !== \(role \|\| ""\)/);
+    expect(fn).toMatch(/VER_MAX_SKIP_MS/);
+    expect(fn).toMatch(/\.catch\(\(\) => false\)/);   // ตอบไม่ได้ = ไปโหลดจริง ห้ามเดาว่าไม่เปลี่ยน
+  });
+
+  it('เขียนใบรับรองพร้อม role ทุกครั้งที่โหลด payload สำเร็จ', () => {
+    expect(APP).toMatch(/writeVerStamp\(d && d\.lastModified, role\)/);
   });
 });

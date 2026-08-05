@@ -1992,6 +1992,21 @@ function doGet(e) {
       return ContentService.createTextOutput(JSON.stringify({ ok: true, t: Date.now() }))
         .setMimeType(ContentService.MimeType.JSON);
     }
+    // ── Phase 7.4: "ข้อมูลเปลี่ยนหรือยัง" — คำตอบจิ๋ว ไม่แตะชีตเลย (อ่าน Script Property ตัวเดียว) ──
+    // วัดจริง 5 ส.ค. 2026: ก้อน payload = 4.2MB · 15 เครื่องเปิดพร้อมกัน = 63MB ไหลผ่านท่อเดียว
+    // ที่ ~2.3MB/วิ → 27 วินาที ซึ่งนานกว่าอายุลิงก์ดาวน์โหลดของ Google → **HTTP 404 กลางคัน**
+    // (ยืนยันด้วย action=ping ที่ตอบ 0KB แล้วผ่านครบ 15/15 ทั้งที่ยิงพร้อมกันเท่ากัน)
+    // → ตัวนี้ให้ client เทียบก่อนว่าก้อนที่ถืออยู่ยังตรงกับของบน server ไหม ตรง = ไม่ต้องโหลดซ้ำเลย
+    // ⚠️ `dmj_last_write_ts` ขยับเฉพาะเมื่อแก้ข้อมูล **ผ่านแอป** — แก้ชีตด้วยมือใน Google Sheets
+    // ไม่ขยับ (ข้อจำกัดเดิมของระบบ ไม่ใช่ของใหม่) client จึงต้องมีเพดานอายุกำกับเสมอ ห้ามเชื่อยาว
+    if (e && e.parameter && e.parameter.action === 'ver') {
+      return ContentService.createTextOutput(JSON.stringify({ ok: true, ts: getSheetLastModified_() }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    // ── Phase 7.4: ก้อนเบาสำหรับ poll ทุก 30 วิ (แท็บนับสต็อก / เช็คหน้าร้าน) ──
+    if (e && e.parameter && e.parameter.action === 'stocklite') {
+      return stockLiteHandler_();
+    }
     if (e && e.parameter && e.parameter.action === 'order') {
       return handleOrder_(e.parameter);
     }
@@ -8193,6 +8208,39 @@ function readQtyByLocation_() {
   return map;
 }
 
+// ── Phase 7.4: ก้อนเบาสำหรับ poll เลขสต็อก (แท็บนับสต็อก / เช็คหน้าร้าน) ─────────────
+// เดิมสองแท็บนี้ดึง **payload ทั้งก้อน (~4.2MB) ทุก 30 วินาที** ทั้งที่ต้องการแค่ "เลขสต็อกอ้างอิง"
+// ให้หลายเครื่องเห็นงานของกันและกัน → เครื่องที่จอดหน้าร้านทั้งวันกินราว **500MB/ชม./เครื่อง**
+// และเป็นตัวเดียวกับที่ทำให้ 15 เครื่องพร้อมกันได้ HTTP 404 (ดูคำอธิบายที่ `action=ver`)
+//
+// ก้อนนี้อ่านแค่ 2 ชีต (สต็อก + จำนวนหน้าร้าน) แทน 9 ชีต และส่งเฉพาะตัวเลขที่แท็บพวกนั้นใช้จริง
+// **ส่งเป็น array ไม่ใช่ object โดยตั้งใจ** — เมื่อมีสินค้าหลักพันตัว ชื่อคีย์ที่ซ้ำทุกแถว
+// คือส่วนที่ใหญ่ที่สุดของก้อน (`{"sku":...,"qtyStore":...}` ยาวกว่า `[...]` เกิน 2 เท่า)
+// ลำดับคอลัมน์: [sku, หน้าร้าน, คลัง, จำนวนที่เช็คไว้, วันที่เช็คล่าสุด]
+// ⚠️ **ห้ามสลับ/แทรกคอลัมน์กลางแถว** — ฝั่ง client อ่านตามตำแหน่ง สลับแล้วเลขสต็อกจะเพี้ยน
+// แบบไม่มี error ให้เห็น (บทเรียนเดียวกับ column index ในชีต) ถ้าต้องเพิ่มให้ต่อท้ายเท่านั้น
+function stockLiteHandler_() {
+  const cached = _readChunked_(_STOCKLITE_KEY_COUNT, _STOCKLITE_KEY_PART);
+  if (cached.str) return ContentService.createTextOutput(cached.str)
+    .setMimeType(ContentService.MimeType.JSON);
+
+  const locMap = readQtyByLocation_();          // ชีตสต็อก = แหล่งที่ ZORT sync เขียน (สดที่สุด)
+  const fsMap  = readFrontStoreCheckedQty_();
+  const items = [];
+  Object.keys(locMap).forEach(function (skuU) {
+    const loc = locMap[skuU];
+    const fs  = fsMap[skuU];
+    items.push([
+      skuU, loc.qtyStore, loc.qtyWH,
+      fs ? fs.qty : null,                       // null = ยังไม่เคยเช็ค (ต่างจากเช็คแล้วได้ 0)
+      (fs && fs.at) ? fs.at : ''
+    ]);
+  });
+  const out = JSON.stringify({ ok: true, ts: getSheetLastModified_(), items: items });
+  _writeChunked_(out, _STOCKLITE_KEY_COUNT, _STOCKLITE_KEY_PART, _STOCKLITE_TTL_SEC);
+  return ContentService.createTextOutput(out).setMimeType(ContentService.MimeType.JSON);
+}
+
 // ── รวมจำนวนจริงจากชีต "อัพเดทจำนวนสินค้า" (loc) เข้ากับสินค้า 1 ตัว ──
 // loc = 1 entry จาก readQtyByLocation_ ({qtyStore, qtyWH, price}) · แก้ p ในที่ (mutate)
 // ไม่มี loc (สินค้าไม่มีแถวในชีตสต็อก) → ไม่แตะอะไรเลย ปล่อยค่าจาก readProducts_ ตามเดิม
@@ -10022,6 +10070,15 @@ const _STALE_KEY_COUNT = 'dmj_stale_n_';
 const _STALE_KEY_PART  = 'dmj_stale_';
 // รอคิว build ของคนแรกนานสุดเท่าไหร่ ก่อนยอม build เอง (build จริงวัดได้ ~10 วิ)
 const _BUILD_LOCK_WAIT_MS = 25000;
+
+// ── Phase 7.4: cache ของก้อนเบา `action=stocklite` ──
+// TTL สั้นมากโดยตั้งใจ — ก้อนนี้ถูก poll ทุก 30 วิ จากทุกเครื่องที่เปิดแท็บนับสต็อก/เช็คหน้าร้าน
+// 15 วิ = อ่านชีตอย่างมาก 4 ครั้ง/นาที ไม่ว่าจะมีกี่เครื่อง (เดิมคือ "กี่เครื่อง × 2 ครั้ง/นาที")
+// และ `invalidateCache_` ล้างคีย์นี้ด้วย → เครื่องอื่นบันทึกแล้วเห็นทันที ไม่ต้องรอ TTL หมด
+// (ต่างจากชั้นสำรอง `dmj_stale_*` ที่ห้ามล้าง — ตัวนี้ไม่ใช่ของสำรอง ล้างได้ปลอดภัย)
+const _STOCKLITE_TTL_SEC   = 15;
+const _STOCKLITE_KEY_COUNT = 'dmj_stocklite_n';
+const _STOCKLITE_KEY_PART  = 'dmj_stocklite_';
 // PERF: payload แยกตาม role แล้ว → cache ต้องแยกคีย์ต่อ variant ด้วย
 // ไม่งั้น warehouse ที่มาก่อนจะ cache ก้อนที่ตัดแล้วทับ แล้ว owner ที่มาทีหลังได้ข้อมูลขาด
 // (variant 'full' คงคีย์เดิมไว้ — ของที่ cache ไว้ก่อน deploy ยังใช้ได้ ไม่ต้องรอ cache อุ่นใหม่)
@@ -10230,6 +10287,15 @@ function invalidateCache_(skipTsUpdate) {
       keys.push(kCount, kCount + _CACHE_TS_SUFFIX);
       for (let i = 0; i < n; i++) keys.push(kPart + i);
     });
+    // Phase 7.4: ก้อนเบา `stocklite` ล้างด้วย — TTL มันสั้น (15 วิ) แต่ถ้าไม่ล้าง คนที่เปิดแท็บ
+    // นับสต็อก/เช็คหน้าร้านค้างไว้จะเห็นเลขเก่าได้อีกถึง 15 วิหลังเพื่อนบันทึก ทั้งที่ปลายทาง
+    // ของแท็บพวกนี้คือ "เห็นงานของกันและกันแบบสด" · ไม่ใช่ของสำรอง จึงล้างได้ปลอดภัย
+    (function () {
+      const nStr = c.get(_STOCKLITE_KEY_COUNT);
+      const n = nStr ? parseInt(nStr, 10) : 0;
+      keys.push(_STOCKLITE_KEY_COUNT, _STOCKLITE_KEY_COUNT + _CACHE_TS_SUFFIX);
+      for (let i = 0; i < n; i++) keys.push(_STOCKLITE_KEY_PART + i);
+    })();
     // ⚠️ Phase 7.3: **ล้างเฉพาะชั้นสด ห้ามแตะชั้นสำรอง (`dmj_stale_*`)**
     // ของสำรองคือสิ่งเดียวที่คนอื่นมีให้อ่านระหว่างคนแรกกำลัง build ใหม่ (~10 วิ)
     // ถ้าล้างด้วย = กลับไปเป็น stampede เหมือนเดิมทันที (ทุกคน miss พร้อมกัน → build พร้อมกัน)

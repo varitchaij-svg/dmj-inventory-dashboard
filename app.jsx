@@ -683,6 +683,45 @@ function loadFromStorage() {
   } catch (e) { return null; }
 }
 
+// ── Phase 7.4: "ใบรับรองว่าข้อมูลชุดที่เราถืออยู่ยังตรงกับ server" ─────────────────
+// payload หนัก ~4.2MB · วัดจริง 5 ส.ค. 2026: 15 เครื่องโหลดพร้อมกัน = 63MB ผ่านท่อเดียว
+// ที่ ~2.3MB/วิ → 27 วิ ซึ่งนานเกินอายุลิงก์ดาวน์โหลดของ Google → พังเป็น HTTP 404 กลางคัน
+// ถามก่อนด้วยคำตอบ ~40 ไบต์ว่า "เปลี่ยนหรือยัง" ถ้ายัง = ไม่ต้องโหลดซ้ำเลยสักไบต์
+const VER_KEY = "dmj_data_ver";
+// ⚠️ เพดานอายุ **จำเป็น ห้ามถอด** — `dmj_last_write_ts` ขยับเมื่อแก้ข้อมูลผ่านแอป และตอน
+// syncZortBoth (ทุก 2 ชม.) เท่านั้น · **แก้ชีตด้วยมือใน Google Sheets ไม่ขยับ** (ข้อจำกัดเดิม
+// ของระบบ ไม่ใช่ของใหม่) ถ้าเชื่อ ts ได้ตลอดไป คนที่แก้ชีตเองจะไม่เห็นผลจนกว่าจะกดปุ่ม Sync
+// ซึ่งเป็นการ "ไม่เห็นข้อมูลใหม่โดยไม่มีอะไรบอก" — แย่กว่าโหลดช้าเสมอ
+const VER_MAX_SKIP_MS = 30 * 60 * 1000;
+
+function readVerStamp() {
+  try { return JSON.parse(localStorage.getItem(VER_KEY) || "null"); } catch (e) { return null; }
+}
+function writeVerStamp(ts, role) {
+  try {
+    localStorage.setItem(VER_KEY, JSON.stringify({ ts: ts || 0, at: Date.now(), role: role || "" }));
+  } catch (e) { /* localStorage เต็ม/ปิดอยู่ → แค่ไม่ได้ประหยัดรอบหน้า ไม่กระทบการทำงาน */ }
+}
+// คืน true = "server ยังเป็นข้อมูลชุดเดียวกับที่เราถืออยู่" → ข้ามการโหลด payload ได้
+// **ตอบไม่ได้/ไม่แน่ใจ → false เสมอ** (ไปโหลดจริง) — เดาผิดทางนี้แค่ช้าลง
+// เดาผิดอีกทางคือผู้ใช้เห็นตัวเลขสต็อกเก่าโดยไม่รู้ตัว ซึ่งใช้ตัดสินใจสั่งของจริง
+function checkDataUnchanged(sheetUrl, role) {
+  const stamp = readVerStamp();
+  if (!stamp || !stamp.ts) return Promise.resolve(false);
+  // payload ผูกกับ role (GAS ตัดก้อนที่ role นั้นไม่มีแท็บให้เปิดออก) — คนละ role = คนละรูปร่าง
+  // ts ตรงกันไม่ได้แปลว่าใช้แทนกันได้ ถ้าไม่เช็คตรงนี้ owner ที่เพิ่งสลับมาจะได้ก้อนที่ขาดกราฟ
+  if ((stamp.role || "") !== (role || "")) return Promise.resolve(false);
+  if (Date.now() - (stamp.at || 0) > VER_MAX_SKIP_MS) return Promise.resolve(false);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  const sep = sheetUrl.includes("?") ? "&" : "?";
+  return fetch(`${sheetUrl}${sep}action=ver&_t=${Date.now()}`, { signal: controller.signal, cache: "no-store" })
+    .then(r => r.json())
+    .then(v => !!(v && v.ok && v.ts && v.ts === stamp.ts))
+    .catch(() => false)
+    .finally(() => clearTimeout(timeout));
+}
+
 function saveToStorage(d, source) {
   try {
     localStorage.setItem(LS_KEY, JSON.stringify(d));
@@ -880,6 +919,7 @@ function App() {
   const [crossContextNote, setCrossContextNote] = usS(false); // ล็อกอินนี้เริ่มมาจากอีกที่ (แอปหน้าโฮม)
   const [authRefreshing, setAuthRefreshing] = usS(false);
   const [data, setData] = usS(null);
+  usE(() => { hasDataRef.current = !!(data && Array.isArray(data.products) && data.products.length); }, [data]);
   const [error, setError] = usS(null);
   const [navLogoOk, setNavLogoOk] = usS(true);
   const [tab, setTab] = usS(() => ssGet("dmj_role") === "owner" ? "categories" : "overview");
@@ -907,6 +947,10 @@ function App() {
   const [navToast, showNavToast, hideNavToast] = useToast(); // toast สำหรับ nav-level errors
   const tabHistoryRef = React.useRef([]); // track tab navigation for Android back
   const fetchingRef = React.useRef(false); // guard against concurrent fetchFromSheet calls
+  // "ตอนนี้เรามีข้อมูลอยู่ในมือหรือยัง" — ใช้ตัดสินว่าจะถาม `action=ver` ก่อนโหลดได้ไหม
+  // ต้องเป็น ref ไม่ใช่อ่าน `data` ตรง ๆ เพราะ fetchFromSheet เป็น useCallback ที่ไม่มี `data`
+  // ใน deps (ใส่ไม่ได้ — จะสร้างใหม่ทุกครั้งที่ข้อมูลเปลี่ยน แล้ว effect ที่ผูกกับมันจะยิงรัว)
+  const hasDataRef = React.useRef(false);
   // เมื่อ tab เปลี่ยน (กด subtab / นำทางจากการ์ดภาพรวม) → ล้าง "แตะดู" ให้หมวดหลักวิ่งตาม tab
   uE(() => { setOwnerGroup(null); }, [tab]);
 
@@ -946,7 +990,29 @@ function App() {
       if ((window._dataPrefetchRole || '') === (role || '')) prefetched = window._dataPrefetch;
       window._dataPrefetch = null;
     }
-    (prefetched
+    // ── Phase 7.4: ถามก่อนโหลด — "ข้อมูลเปลี่ยนหรือยัง" (คำตอบ ~40 ไบต์) ──
+    // ไม่เปลี่ยน = ข้ามการโหลด 4.2MB ไปเลย · **ข้ามการถาม** ใน 3 กรณีที่ถามแล้วไม่ได้อะไร:
+    //   · force (ผู้ใช้กด Sync/ลองใหม่เอง) — อาจเพิ่งแก้ชีตด้วยมือ ซึ่ง ts ไม่ขยับ ต้องดึงจริงเสมอ
+    //   · ยังไม่มีข้อมูลในมือ — ไม่มีอะไรให้เทียบ ถามไปก็เสียเวลาเปล่าหนึ่งรอบ
+    //   · มีผล prefetch อยู่แล้ว — ไบต์ถูกโหลดไปตั้งแต่ต้นหน้าแล้ว ถามตอนนี้ไม่ประหยัดอะไร
+    const verGate = (!force && !prefetched && hasDataRef.current)
+      ? checkDataUnchanged(sheetUrl, role)
+      : Promise.resolve(false);
+    verGate.then(unchanged => {
+      if (unchanged) {
+        // ข้อมูลชุดเดิมยังถูกต้อง — ถือว่า "ซิงค์สำเร็จ" จริง ๆ (เราเพิ่งยืนยันกับ server มา)
+        // ต้องอัปเดต lastSync ด้วย ไม่งั้นผู้ใช้จะเห็นเวลาซิงค์ค้างแล้วนึกว่าแอปแขวน
+        clearTimeout(timeout);
+        fetchingRef.current = false;
+        setSyncing(false);
+        setError(null);
+        setRetryMsg("");
+        const now = new Date().toISOString();
+        try { localStorage.setItem("dmj_last_sync", now); } catch (e) {}
+        setLastSync(now);
+        return;
+      }
+      return (prefetched
       ? prefetched.then(d => d || fetch(bustUrl, { signal: controller.signal }).then(r => r.json()))
       : fetch(bustUrl, { signal: controller.signal }).then(r => r.json()))
       .then(d => {
@@ -970,6 +1036,9 @@ function App() {
         setData(enriched);
         saveToStorage(enriched, "sheet");
         setSource("sheet");
+        // Phase 7.4: จำไว้ว่า "ก้อนที่ถืออยู่ตอนนี้คือเวอร์ชันไหน ของ role ไหน ตอนกี่โมง"
+        // ครั้งหน้าที่ต้อง refresh จะถาม `action=ver` เทียบกับค่านี้ก่อน แล้วข้ามการโหลดได้ถ้ายังตรง
+        writeVerStamp(d && d.lastModified, role);
         const now = new Date().toISOString();
         localStorage.setItem("dmj_last_sync", now);
         setLastSync(now);
@@ -990,9 +1059,81 @@ function App() {
         setSyncing(false);
       })
       .finally(() => { fetchingRef.current = false; clearTimeout(timeout); if (!controller.signal.aborted) setSyncing(false); });
+    // ตาข่ายกันแอปค้าง: ถ้ามีอะไรหลุดออกมาถึงตรงนี้ `fetchingRef` จะค้าง true ตลอดกาล
+    // แล้วแอปจะ "ดึงข้อมูลไม่ได้อีกเลยทั้ง session" โดยไม่มี error ให้เห็น (guard ที่ต้นฟังก์ชัน
+    // return เงียบ ๆ) — ปลดล็อกไว้เสมอ ราคาถูกกว่าการต้องปิดแอปเปิดใหม่มาก
+    }).catch(() => { fetchingRef.current = false; setSyncing(false); });
     // role อยู่ใน deps เพราะถูกใช้ประกอบ URL แล้ว — ถ้าไม่ใส่ จะค้าง role ตอน mount (null)
     // แล้วยิงขอ payload ผิด variant ตลอดทั้ง session หลังผู้ใช้ล็อกอิน
   }, [sheetUrl, role]);
+
+  // ── Phase 7.4: ดึงเฉพาะ "เลขสต็อกอ้างอิง" สำหรับแท็บนับสต็อก/เช็คหน้าร้าน ──
+  // เดิมสองแท็บนี้ poll payload **ทั้งก้อน (~4.2MB) ทุก 30 วิ** ทั้งที่ต้องการแค่ตัวเลขสต็อก
+  // → เครื่องที่จอดหน้าร้านทั้งวันกินราว 500MB/ชม. และ 15 เครื่องพร้อมกัน = 63MB ผ่านท่อเดียว
+  // ซึ่งวัดได้ว่าทำให้ลิงก์ดาวน์โหลดของ Google หมดอายุกลางคัน (HTTP 404 — ดู PHASE0-RESULTS.md)
+  // ก้อนใหม่เล็กกว่าราว 50 เท่า และอ่านแค่ 2 ชีตแทน 9
+  //
+  // ⚠️ **ต้องคำนวณ qty/isOOS ใหม่ทุกครั้งที่แตะ qtyStore/qtyWH** — เขียนทับแค่สองตัวแล้วปล่อย
+  // qty เดิมไว้คือบั๊กเดียวกับเคส WL (ก.ค. 2026) ที่สินค้ามีของจริงแต่โชว์ "หมด" ทั้งระบบ
+  // โดยไม่มี error ให้เห็น · สูตรตรงนี้ต้องตรงกับ `applyQtyLocToProduct_` ฝั่ง GAS เสมอ
+  const fetchStockLite = usC(() => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20000);
+    const sep = sheetUrl.includes('?') ? '&' : '?';
+    const url = `${sheetUrl}${sep}action=stocklite&_t=${Date.now()}`;
+    return fetch(url, { signal: controller.signal, cache: 'no-store' })
+      .then(r => (typeof dmjJson === 'function' ? dmjJson(r) : r.json()))
+      .then(d => {
+        // GAS ยังเป็นโค้ดเก่า (ไม่รู้จัก action นี้) → คืน payload เต็ม/HTML → ไม่มี items
+        // ไม่ทำอะไรเลยดีกว่าเดา — poll รอบหน้าค่อยว่ากัน (แท็บพวกนี้ยังใช้งานได้ปกติ)
+        if (!d || !Array.isArray(d.items)) return;
+        const m = {};
+        d.items.forEach(row => { if (row && row[0]) m[row[0]] = row; });
+        setData(prev => {
+          if (!prev || !Array.isArray(prev.products)) return prev;
+          // อัตราขายส่งมาจาก payload เดิม (ไม่ได้ส่งมากับก้อนเบา) — ค่า default ตรงกับฝั่ง GAS
+          const whR = (prev.totals && prev.totals.wholesaleRatio) || 0.8;
+          let changed = false;
+          const products = prev.products.map(p => {
+            const row = m[String(p.sku || '').toUpperCase()];
+            if (!row) return p;
+            const qtyStore = Number(row[1]) || 0;
+            const qtyWH    = Number(row[2]) || 0;
+            const fsQty    = row[3] == null ? null : Number(row[3]);
+            const fsAt     = row[4] || null;
+            if (p.qtyStore === qtyStore && p.qtyWH === qtyWH
+                && p.frontStoreCheckedQty === fsQty && p.frontStoreCheckedAt === fsAt) return p;
+            changed = true;
+            const total = qtyStore + qtyWH;
+            const price = p.price || 0;
+            return Object.assign({}, p, {
+              qtyStore, qtyWH, warehouseQty: qtyWH,
+              qty:        total,
+              qtyStatus:  total < 0 ? 'negative' : 'ok',
+              isOversold: total < 0,
+              isOOS:      total <= 0,
+              stockValue:      total    * price * whR,
+              stockValueWH:    qtyWH    * price * whR,
+              stockValueStore: qtyStore * price * whR,
+              frontStoreCheckedQty: fsQty,
+              frontStoreCheckedAt:  fsAt,
+            });
+          });
+          if (!changed) return prev;   // ไม่มีอะไรเปลี่ยน → ไม่ re-render ทั้งหน้า
+          return Object.assign({}, prev, { products });
+        });
+        // **ไม่ saveToStorage โดยตั้งใจ** — เขียน JSON หลายเมกะไบต์ลง localStorage ทุก 30 วิ
+        // ทำให้เครื่องมือถือกระตุกทั้งที่ไม่จำเป็น · ถ้าปิดแล้วเปิดใหม่ ตัวเลขจะถูกดึงสดอยู่แล้ว
+        // เดินเวลา "ข้อมูลที่เราถือ" ให้สด — poll ตัวเดิมก็ทำแบบนี้ทุก 30 วิ ถ้าไม่ทำ คนที่นับสต็อก
+        // อยู่นาน ๆ จะโดน conflict ปฏิเสธการบันทึกทุกครั้งที่มีใครบันทึกอะไรที่อื่น (งานหายทั้งรอบนับ)
+        // ⚠️ ต่างจาก poll เดิมตรงที่ก้อนนี้รีเฟรช **เฉพาะจำนวนสต็อก** — ล็อค/ออเดอร์/โอน ยังเป็น
+        // ชุดจากการโหลดเต็มครั้งล่าสุด · ยอมรับได้เพราะสองแท็บนี้เขียนงานที่อิงจำนวนสต็อกเป็นหลัก
+        // แต่ถ้าวันหนึ่งมีแท็บอื่นมาใช้ poll ตัวนี้ ต้องทบทวนข้อนี้ก่อนเสมอ
+        if (d.ts) window._dataLoadedAt = d.ts;
+      })
+      .catch(() => {})   // เงียบ — เป็น background polling ไม่ต้องรบกวนผู้ใช้
+      .finally(() => clearTimeout(timeout));
+  }, [sheetUrl]);
 
   // Lightweight fetch: ดึงเฉพาะรายการสั่งของ (เบา/เร็ว) — ใช้ polling หน้า orders จะได้ไม่โหลดทั้งก้อน
   // คืน promise ด้วย — ตัวเรียก (เช่นหลังสั่งของสำเร็จ) จะได้รู้ว่าดึงเสร็จเมื่อไหร่
@@ -1096,15 +1237,16 @@ function App() {
   }, [tab, role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Auto-sync เมื่ออยู่หน้านับสต็อก/เช็คหน้าร้าน — ให้หลายเครื่องเห็นข้อมูลของกันและกัน ──
-  // ดึง payload ทั้งก้อนทุก 30 วิ (อัปเดตเลขคลังอ้างอิง) — จำนวนที่ผู้ใช้พิมพ์เก็บใน local state
-  // (checkedQtys) แยกต่างหาก จึงไม่ถูกทับ ส่วน window._dataLoadedAt จะอัปเดตให้สด กัน false conflict
+  // ดึงเฉพาะเลขสต็อกอ้างอิงทุก 30 วิ (Phase 7.4 — เดิมดึง payload ทั้งก้อน ~4.2MB ทุกรอบ)
+  // จำนวนที่ผู้ใช้พิมพ์เก็บใน local state (checkedQtys) แยกต่างหาก จึงไม่ถูกทับ
+  // ส่วน window._dataLoadedAt จะอัปเดตให้สด กัน false conflict ตอนบันทึกจากแท็บนี้
   usE(() => {
     if (!role) return;
     const LIVE_TABS = ["stockcount", "frontstore"];
     if (!LIVE_TABS.includes(tab)) return;
-    const id = setInterval(() => { if (navigator.onLine) fetchFromSheet(); }, 30000);
+    const id = setInterval(() => { if (navigator.onLine) fetchStockLite(); }, 30000);
     return () => clearInterval(id);
-  }, [tab, role, fetchFromSheet]);
+  }, [tab, role, fetchStockLite]);
 
   const handleDataLoaded = usC((newData) => {
     if (typeof resetCatColorMap === 'function') resetCatColorMap();
