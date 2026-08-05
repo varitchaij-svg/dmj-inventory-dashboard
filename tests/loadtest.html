@@ -141,6 +141,12 @@ function classify(text) {
   try { JSON.parse(text); return 'JSON'; } catch (e) { return 'พังไม่ใช่ JSON'; }
 }
 
+// เนื้อหาที่โชว์เป็น HTML ดิบจาก server — ต้อง escape ก่อนยัดลง innerHTML
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 function pct(arr, p) {
   if (!arr.length) return 0;
   var a = arr.slice().sort(function (x, y) { return x - y; });
@@ -152,8 +158,13 @@ async function fireOne(url) {
   try {
     var res = await fetch(url, { method: 'GET', redirect: 'follow' });
     var text = await res.text();
+    var kind = classify(text);
+    // เก็บ "ต้นฉบับของคำตอบที่ไม่ใช่ JSON" ไว้ดูด้วย — ไม่งั้นรู้แค่ว่า "ได้ HTML"
+    // แต่ไม่รู้ว่าเป็นหน้าอะไร (quota เต็ม / ต้องขอสิทธิ์ / redirect พัง) ซึ่งคนละสาเหตุกันคนละทางแก้
     return { ms: Math.round(performance.now() - t0), status: res.status,
-             kind: classify(text), kb: Math.round(text.length / 1024) };
+             kind: kind, kb: Math.round(text.length / 1024),
+             finalUrl: res.url || '', redirected: !!res.redirected,
+             body: kind === 'JSON' ? '' : String(text).replace(/\s+/g, ' ').slice(0, 400) };
   } catch (err) {
     return { ms: Math.round(performance.now() - t0), status: 0,
              kind: 'ยิงไม่ออก', kb: 0, err: String(err && err.message || err) };
@@ -203,7 +214,16 @@ function render(round, cfg) {
                String(r.ms + 'ms').padStart(8, ' ') + '  HTTP ' + r.status +
                '  ' + r.kind + '  ' + r.kb + 'KB' + (r.err ? '  ' + r.err : '');
       }).join('\n') +
-    '</pre></details>';
+    '</pre></details>' +
+    (badCnt ? '<details open><summary class="note">คำตอบที่ไม่ใช่ JSON — ต้นฉบับ (400 ตัวอักษรแรก)</summary><pre>' +
+      R.map(function (r, i) { return { r: r, i: i }; })
+       .filter(function (x) { return x.r.kind !== 'JSON'; })
+       .slice(0, 4)
+       .map(function (x) {
+         return '#' + (x.i + 1) + '  HTTP ' + x.r.status + (x.r.redirected ? ' (redirected)' : '') +
+                '\nurl: ' + esc(x.r.finalUrl) + '\n' + esc(x.r.body || x.r.err || '');
+       }).join('\n\n') +
+    '</pre></details>' : '');
   $('out').appendChild(wrap);
 }
 

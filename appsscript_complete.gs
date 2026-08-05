@@ -1984,6 +1984,14 @@ function doPost(e) {
 function doGet(e) {
   try {
     if (!checkToken_(e && e.parameter && e.parameter.token)) return unauthorized_();
+    // ตัวแยกสาเหตุ: เส้นทางเดียวกันเป๊ะกับ payload แต่คำตอบจิ๋วและไม่แตะชีตเลย
+    // ยิงพร้อมกัน 15 แล้วได้ JSON ครบ = คอขวดอยู่ที่ "ขนาดคำตอบตอนส่งกลับ" ไม่ใช่ "จำนวนคนพร้อมกัน"
+    // (5 ส.ค. 2026: Executions บอกว่า doGet เสร็จใน 2-5 วิ ทุกอัน แต่ browser ได้ HTML ที่ 23-49 วิ
+    //  → เวลาที่หายไปอยู่นอก execution ต้องพิสูจน์ว่าอยู่ช่วงส่งคำตอบจริงไหม)
+    if (e && e.parameter && e.parameter.action === 'ping') {
+      return ContentService.createTextOutput(JSON.stringify({ ok: true, t: Date.now() }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
     if (e && e.parameter && e.parameter.action === 'order') {
       return handleOrder_(e.parameter);
     }
