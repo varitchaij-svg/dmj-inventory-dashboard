@@ -955,6 +955,9 @@ function App() {
           enriched = d;
         }
         setRetryMsg("");
+        // ordersFetchedAt = "ข้อมูลออเดอร์ชุดนี้ดึงมาเมื่อไหร่" — ฝั่ง view ใช้ตัดสินว่า
+        // optimistic entry ที่เพิ่งสั่งไป ถูกชุดจากชีตครอบคลุมแล้วหรือยัง (กันนับซ้ำ 2 เด้ง)
+        enriched = Object.assign({}, enriched, { ordersFetchedAt: Date.now() });
         setData(enriched);
         saveToStorage(enriched, "sheet");
         setSource("sheet");
@@ -983,12 +986,13 @@ function App() {
   }, [sheetUrl, role]);
 
   // Lightweight fetch: ดึงเฉพาะรายการสั่งของ (เบา/เร็ว) — ใช้ polling หน้า orders จะได้ไม่โหลดทั้งก้อน
+  // คืน promise ด้วย — ตัวเรียก (เช่นหลังสั่งของสำเร็จ) จะได้รู้ว่าดึงเสร็จเมื่อไหร่
   const fetchOrdersOnly = usC(() => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 20000);
     const sep = sheetUrl.includes('?') ? '&' : '?';
     const url = `${sheetUrl}${sep}action=orders&_t=${Date.now()}`;
-    fetch(url, { signal: controller.signal, cache: 'no-store' })
+    return fetch(url, { signal: controller.signal, cache: 'no-store' })
       .then(r => r.json())
       .then(d => {
         if (!d || d.error || !Array.isArray(d.orders)) return; // d.error = sheet_not_found → skip
@@ -1013,7 +1017,7 @@ function App() {
           if (!prev) return prev;
           // ไม่มี guard 0-orders แล้ว: ถ้า orders ถูกลบจริงๆ ควร clear ได้
           // GAS มี retry อยู่แล้ว ถ้า response ว่างเพราะ error จะถูก retry รอบถัดไป
-          return { ...prev, orders: d.orders };
+          return { ...prev, orders: d.orders, ordersFetchedAt: Date.now() };
         });
         const now = new Date().toISOString();
         localStorage.setItem("dmj_last_sync", now);
@@ -1039,6 +1043,9 @@ function App() {
 
   // expose refetch ให้ child component เรียกได้เมื่อเจอ conflict (จะอัปเดต window._dataLoadedAt ให้สด)
   usE(() => { window._dmjRefetch = fetchFromSheet; return () => { delete window._dmjRefetch; }; }, [fetchFromSheet]);
+  // ตัวเบา: ดึงเฉพาะรายการสั่งของ (action=orders อ่านชีตตรง ไม่ผ่าน cache) — ใช้หลังสั่งของสำเร็จ
+  // เพื่อให้ป้าย "สั่งแล้ว" มาจากข้อมูลจริง ไม่ใช่ค้างอยู่แค่ state ในหน้าเดียว
+  usE(() => { window._dmjRefetchOrders = fetchOrdersOnly; return () => { delete window._dmjRefetchOrders; }; }, [fetchOrdersOnly]);
 
   // ── Offline / online detection ──
   usE(() => {

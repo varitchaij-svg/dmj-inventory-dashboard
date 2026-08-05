@@ -193,7 +193,8 @@ SHEET_PRODUCTS  = "อัพเดทจำนวนสินค้า"   // B=S
 SHEET_ORDERS    = "ลำดับที่สั่งสินค้า"
   COL_ORD_TYPE=1(A), COL_ORD_DATE=2(B), COL_ORD_STATUS=3(C),
   COL_ORD_SKU=6(F), name=G, orderQty=H, COL_ORD_PREPQTY=9(I),
-  image=J, remaining=K, COL_ORD_PRINTFLAG=14(N)
+  image=J, remaining=K, COL_ORD_ORDERBY=12(L), COL_ORD_PREPBY=13(M),
+  COL_ORD_PRINTFLAG=14(N)
   status values: "รอ"=pending, "สำเร็จ"=done, "ส่งแล้ว"=shipped
   printFlag values: "print"=selected, "no-print"=skip, "printed"=already printed
 
@@ -483,15 +484,28 @@ npm run test:coverage # coverage report (tests/helpers.js)
     ของ Safari ซึ่งคนละใบกับ PWA → กลับมาเปิดไอคอนก็ยังไม่ได้ล็อกอิน · การบังคับ
     `window.location.href` ใน webview ตัวเอง (`lineLoginNavigate`) ช่วยได้บาง iOS เท่านั้น
     **ห้ามพึ่งอย่างเดียว** — ต้องมี **login handoff** (ดูหัวข้อด้านล่าง) เป็นทางกู้เสมอ
-13. **`fetch().then(r => r.json())` ตรง ๆ พังเมื่อเน็ตหลุดกลางทาง**: มือถือ/เน็ตร้านมักเจอ
-    proxy/captive portal ตอบ HTML error page แทน JSON → `r.json()` throw
-    `Unexpected token '<', "<!DOCTYPE "... is not valid JSON` ซึ่งเป็นข้อความ JS ดิบที่
-    พนักงานอ่านไม่รู้เรื่อง (เจอที่ `OrderModal.placeOrder`, views-main.jsx) · แก้ด้วย
-    `r.text()` ก่อนแล้ว `try/catch` รอบ `JSON.parse` เอง โชว์ข้อความไทยที่บอกให้เช็ครายการ
-    ก่อนกดซ้ำแทน — **ห้าม auto-retry คำสั่งที่เป็นการเขียนข้อมูล** (เช่นสั่งของ) เมื่อ parse
-    พลาด เพราะ backend อาจเขียนแถวสำเร็จไปแล้วก่อนที่ response จะเสียกลางทาง
-    (`handleOrder_` ไม่มี idempotency key) retry ซ้ำจะสั่งของสองเด้ง — ปล่อยให้ผู้ใช้เป็น
-    คนตัดสินใจกดปุ่มยืนยันซ้ำเอง (เหมือนแพทเทิร์น `fsSaveFailed` ในไฟล์เดียวกัน)
+13. **GAS ไม่ได้ตอบ JSON เสมอไป** — deployment ที่ลิงก์หมดอายุ/ถูกลบ, เว็บแอปที่ต้องขอสิทธิ์ใหม่,
+    quota เต็ม, Google ล่มชั่วคราว, หรือมือถือ/เน็ตร้านเจอ proxy/captive portal → ตอบกลับเป็น
+    **หน้า HTML** และ `fetch` **ไม่ throw** · เอาเข้า `res.json()` ตรง ๆ = พนักงานเห็น
+    `Unexpected token '<', "<!DOCTYPE "…` ซึ่งเป็นข้อความ JS ดิบที่อ่านไม่รู้เรื่อง (เจอจริง
+    ส.ค. 2026 ตอนพนักงานกดสั่งของไม่ได้) → **ใช้ `dmjJson(res)` (ui.jsx) ทุกจุด** แปลงเป็นข้อความ
+    ไทย + เก็บ status/ต้นข้อความลง console · error จาก fetch เองแปลงด้วย `dmjErrText(e)`
+    · ที่อันตรายกว่าคือ **"สำเร็จปลอม"**: `syncFrontStoreData` เดิม `await dmjFetch(...)` แล้ว
+    `return {success:true}` โดยไม่เคยอ่านคำตอบ → หน้าจอขึ้น "✅ บันทึกแล้ว" ทั้งที่ไม่มีอะไรถูกบันทึก
+    **ทุก syncXxx ต้องอ่านคำตอบจริงเสมอ** (เทสต์: `tests/gasjson.test.js` มี meta-test กันถอยกลับ)
+    · **ต้นเหตุที่ทำให้ GAS ตอบ HTML บ่อยสุดคือ "ยิงซ้อนกัน"** — GAS ปฏิเสธ execution ที่ซ้อนกัน
+    ของ user เดียวกันด้วยหน้า HTML ไม่ใช่ JSON · ใน `OrderModal` auto-save (debounce 2 วิ) กับ
+    ปุ่มยืนยันสั่งเคยยิงพร้อมกันได้ (timer ยิงไปแล้วแต่ `fsDirty` ยังไม่ทันเป็น false ตอนกดปุ่ม)
+    → แก้ด้วยการ **ต่อคิวผ่าน `fsInflightRef`** (`saveFsQty` chain ต่อกัน + `placeOrder` รอคิวจบก่อน)
+    **เวลาเพิ่มปุ่มที่ยิง GAS ใกล้กัน ให้ต่อคิวแบบเดียวกันเสมอ อย่ายิงขนาน**
+    · error ล่าสุดถูกเก็บไว้ที่ `localStorage.dmj_last_backend_error` (เวลา/status/ต้นข้อความ)
+    — พนักงานอยู่หน้าร้านเปิด console ไม่ได้ เจ้าของเปิดดูย้อนหลังได้จากตรงนี้
+    · ⚠️ **"อ่านคำตอบไม่ได้" ≠ "ทำไม่สำเร็จ"** — GAS เขียนชีตเสร็จแล้วยังตอบ HTML ได้ (ของถูกสั่ง
+    จริงแต่เว็บไม่ขึ้น "สั่งแล้ว") · **ห้ามแก้ด้วยการยิงซ้ำอัตโนมัติ** กับ action ที่ไม่ idempotent
+    (`action=order` = สั่งซ้ำ 2 ใบ คลังจัดของ 2 รอบ, `handleOrder_` ไม่มี idempotency key) →
+    ต้อง **เช็คของจริงก่อน** เหมือน `verifyOrderLanded` (OrderModal) ที่ดึง `action=orders`
+    มาเทียบว่ายอด "รอ" ของ SKU นั้นเพิ่มขึ้นครบไหม (ไม่ parse วันที่ในชีตซึ่งเป็น พ.ศ. — ข้อ 11)
+    — ปล่อยให้ผู้ใช้เป็นคนตัดสินใจกดปุ่มยืนยันซ้ำเอง (เหมือนแพทเทิร์น `fsSaveFailed`)
 
 ## ระบบล็อกอินพนักงาน + ลงเวลาเข้า-ออกงาน (Sprint 5)
 
@@ -576,6 +590,32 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
   · `attDowOfDateStr_` = helper กลาง หา day-of-week จาก `"yyyy-MM-dd"` ตรง ๆ (ใช้แทน
   `attDowBkk_` เมื่อไม่มี `Date` object เช่นตอนดูวันในอดีต/เดือนอื่น)
 
+## ใครสั่ง / ใครจัด / ใครรับ (ส.ค. 2026)
+
+ชื่อคนทำติดอยู่ทุกขั้นของเส้นทางสินค้า — **ชื่อทุกตัวมาจาก session ที่ server ยืนยันเอง**
+ไม่ใช่ค่าที่ client ส่งมา (ปลอมได้ = แย่กว่าไม่มีเลย เพราะเชื่อผิดโดยไม่รู้ตัว)
+
+| ขั้น | เก็บที่ | เขียนโดย |
+|---|---|---|
+| สั่งของ | ชีตสั่งสินค้า col **L** (`orderedBy`) | `handleOrder_` ← `resolveSession_(ss, params.sessionToken)` |
+| จัดของ (ตามออเดอร์) | ชีตสั่งสินค้า col **M** (`preparedBy`) | `updateOrderState` ← `actor` (session) |
+| จัดของ (ตอนโอน) | ชีตโอน col **O** | `logTransferBatch_`/`logTransfer_` |
+| หน้าร้านรับของ | ชีตโอน col **N** | `confirmShipmentReceive` |
+
+- ⚠️ **`handleOrder_` เป็น doGet** จึงไม่ได้ resolve session อัตโนมัติเหมือน doPost —
+  `placeOrder` (views-main.jsx) ต้องแนบ `&sessionToken=` เองในทุก URL (`dmjFetch` แนบให้เฉพาะ POST)
+- ⚠️ **doPost ทับ `data.actor` ด้วยชื่อจาก session ด้วย ไม่ใช่แค่ตัวแปร `actor`** — handler ที่รับ
+  `data` ทั้งก้อนแล้วอ่าน `body.actor` เอง (เช่น `updateOrderState`) เคยหลุดไปใช้ค่าจาก client
+- **L/M เป็นคอลัมน์ว่างเดิมระหว่าง K กับ N** — ต่อท้ายในช่องว่าง **ห้ามแทรกคอลัมน์ใหม่**
+  ไม่งั้น `COL_ORD_PRINTFLAG=14` เพี้ยนทั้งระบบ · `handleOrder_` เขียนแถวกว้าง **13** (เดิม 11)
+- **แถวเก่าก่อนวันที่เพิ่มจะว่างทั้งสองช่อง** — ทุกจุดที่แสดงต้องรองรับค่าว่าง (ไม่โชว์ช่องเปล่า)
+- แสดงผลด้วย **`WhoDidIt` (ui.jsx)** ตัวเดียวทุกหน้า (รายการสั่ง/สรุปออเดอร์/ติดตามของ)
+  — ไม่มีชื่อเลย → คืน `null` · ค้นหาด้วยชื่อคนได้ในหน้าติดตาม
+- `OrderModal` โชว์ **"🧑 สั่งโดย X · ถามก่อนสั่งซ้ำ"** บนแบนเนอร์ของที่ค้างอยู่ (`pendingOrderByMap`)
+- เทสต์: `tests/who-did-it.test.js` (25 เคส — คุม column index ไม่ให้ชนกัน + ที่มาของชื่อ)
+  · browser test ใช้ `hasAllText` (AND) ยืนยันว่าชื่อขึ้นจริงบนจอ — **`hasText` เป็น OR
+  ใส่ token เพิ่มแล้วเทสต์ยังเขียวทั้งที่ของใหม่ไม่ถูกเรนเดอร์**
+
 ## Features ที่เพิ่มล่าสุด (Sprint 4)
 
 - **นับหน้าร้านก่อนสั่ง** — `OrderModal` (views-main.jsx): role `frontstore`/`employee` ต้องกรอก
@@ -590,6 +630,14 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
   · บันทึกพัง → มีปุ่ม "สั่งเลยโดยไม่บันทึก"
   กันงานหน้าร้านสะดุด · role อื่นไม่เห็นขั้นตอนนี้ · `role` ส่งเป็น prop เข้า OrderModal
   (fallback `sessionStorage.dmj_role`)
+- **ป้าย "สั่งแล้ว N" บนการ์ดสินค้า** — `pendingOrderQtyMap` (CategoryView) รวม `data.orders`
+  กับ `localPendingOrders` (optimistic หลังสั่งสำเร็จ) · หลังสั่งสำเร็จเรียก
+  `window._dmjRefetchOrders()` (= `fetchOrdersOnly`, `action=orders` อ่านชีตตรงไม่ผ่าน cache)
+  ดึงของจริงตามมา — **ไม่ทำข้อนี้ ป้ายจะอยู่แค่ใน state ของหน้านี้** สลับแท็บแล้วกลับมา
+  CategoryView remount ป้ายหายทั้งที่ของถูกสั่งไปแล้ว และเครื่องอื่นไม่เห็นจนกว่าจะกด Sync
+  · ⚠️ optimistic entry ต้องมี `ts` และถูกตัดทิ้งเมื่อ `ts <= data.ordersFetchedAt`
+  (ประทับทั้งใน `fetchOrdersOnly` และ `fetchFromSheet`) ไม่งั้น**นับซ้ำ 2 เด้ง** — สั่ง 48
+  แล้วเห็น "สั่งแล้ว 96"
 
 ## Features ที่เพิ่มล่าสุด (Sprint 2)
 

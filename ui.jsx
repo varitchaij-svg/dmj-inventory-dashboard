@@ -185,6 +185,30 @@ function Empty({ icon, title, sub }) {
   );
 }
 
+// ────────────── WhoDidIt — ป้ายบอกว่าใครสั่ง / ใครจัด / ใครรับ ──────────────
+// ใช้ร่วมกันทุกหน้าที่โชว์รายการสั่ง/รายการโอน เพื่อให้รูปแบบเหมือนกันหมดทั้งแอป
+// (พนักงานจะได้จำรูปแบบเดียว ไม่ต้องอ่านใหม่ทุกหน้า)
+//
+// ⚠️ แถวเก่าก่อนมีฟีเจอร์นี้จะไม่มีชื่อเลย → คืน null ไม่โชว์ช่องว่าง ๆ ให้สงสัยว่าข้อมูลหาย
+// ชื่อที่ได้มาอยู่ในรูป "ชื่อ (ตำแหน่ง)" จาก staffActorName_ ฝั่ง server
+function WhoDidIt({ orderedBy, preparedBy, receivedBy, size, style }) {
+  const items = [];
+  if (orderedBy)  items.push(["🧑", "สั่ง", orderedBy]);
+  if (preparedBy) items.push(["📦", "จัด", preparedBy]);
+  if (receivedBy) items.push(["🏪", "รับ", receivedBy]);
+  if (!items.length) return null;
+  return (
+    <div style={{display:"flex", flexWrap:"wrap", gap:"2px 10px", marginTop:3,
+                 fontSize:size || 10.5, color:"var(--muted)", lineHeight:1.5, ...style}}>
+      {items.map(([ico, label, name]) => (
+        <span key={label}>
+          {ico} {label}: <b style={{color:"var(--text)", fontWeight:600}}>{name}</b>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 // ────────────── dmjFetch — แนบ sessionToken ให้ทุก POST ที่ยิงไป GAS ──────────
 // เฟส 4 ของระบบล็อกอิน: server ต้องยืนยัน "ใครทำ" เองจาก session ไม่ใช่เชื่อ actor
 // ที่ client ส่งมา (ซึ่งปลอมได้) · ทำที่เดียวจบ ไม่ต้องไล่แก้ payload ทีละจุด (39 จุด/4 ไฟล์)
@@ -205,6 +229,50 @@ function dmjFetch(url, opts) {
     }
   } catch (e) { /* body ไม่ใช่ JSON (เช่น FormData) → ปล่อยผ่านตามเดิม */ }
   return fetch(url, opts);
+}
+
+// ────────────── dmjJson / dmjErrText — อ่านคำตอบจาก GAS ให้ปลอดภัย ──────────────
+// ทำไมต้องมี: GAS **ไม่ได้ตอบ JSON เสมอไป** — deployment ที่ถูกลบ/เปลี่ยน URL, เว็บแอปที่
+// ต้องขอสิทธิ์ใหม่, quota เต็ม, หรือ Google ล่มชั่วคราว จะตอบกลับมาเป็น "หน้า HTML"
+// พอเอาเข้า `res.json()` ตรง ๆ จะโยน error ดิบภาษาอังกฤษ
+//   Unexpected token '<', "<!DOCTYPE "... is not valid JSON
+// ซึ่งไปโผล่บนจอพนักงานหน้าร้าน (อ่านไม่ออก + ไม่รู้ว่าต้องทำอะไรต่อ) — เจอจริง ส.ค. 2026
+// ตอนพนักงานกดสั่งของไม่ได้ · ตัวนี้แปลงเป็นข้อความไทยที่บอกวิธีแก้ และเก็บของจริง
+// (status + ต้นข้อความ) ไว้ใน console ให้เจ้าของ/คนดูแลไล่สาเหตุต่อได้
+async function dmjJson(res) {
+  const txt = await res.text();
+  try {
+    return JSON.parse(txt);
+  } catch (e) {
+    const head = String(txt || "").slice(0, 300);
+    console.warn("[dmjJson] GAS ตอบกลับไม่ใช่ JSON", { status: res.status, url: res.url, head });
+    // เก็บของจริงไว้ให้เจ้าของเปิดดูย้อนหลังได้ — พนักงานอยู่หน้าร้านเปิด console ไม่ได้
+    // (ดูด้วย localStorage.getItem("dmj_last_backend_error") ใน DevTools)
+    try {
+      localStorage.setItem("dmj_last_backend_error", JSON.stringify({
+        when: new Date().toISOString(), status: res.status, url: res.url, head,
+      }));
+    } catch (e) { /* localStorage เต็ม/ปิดอยู่ → ข้าม ไม่ให้กระทบงานหลัก */ }
+    const err = new Error((/^\s*</.test(txt)
+      ? "ระบบหลังบ้าน (Google) ตอบกลับไม่ถูกต้อง — อาจกำลังอัปเดตอยู่ หรือลิงก์ระบบหมดอายุ กรุณาลองใหม่ ถ้ายังไม่ได้ให้แจ้งเจ้าของ"
+      : "ระบบหลังบ้านตอบข้อมูลไม่ครบ กรุณาลองใหม่อีกครั้ง") + ` [รหัส ${res.status}]`);
+    err.dmjKind = "badjson";
+    err.dmjStatus = res.status;
+    err.dmjBody = head;
+    throw err;
+  }
+}
+
+// แปลง error (ทั้งจาก dmjJson และ fetch ที่ล้มเอง) เป็นข้อความไทยสั้น ๆ ที่พนักงานอ่านรู้เรื่อง
+function dmjErrText(e) {
+  if (!e) return "เกิดข้อผิดพลาด กรุณาลองใหม่";
+  if (e.dmjKind === "badjson") return e.message;
+  if (e.name === "AbortError") return "เซิร์ฟเวอร์ตอบช้าเกินไป — กรุณาลองใหม่อีกครั้ง";
+  const m = String(e.message || "");
+  if (e instanceof TypeError || /Failed to fetch|Load failed|NetworkError/i.test(m)) {
+    return "ต่อเน็ตไม่ได้ — เช็คสัญญาณ/Wi-Fi แล้วลองใหม่อีกครั้ง";
+  }
+  return m || "เกิดข้อผิดพลาด กรุณาลองใหม่";
 }
 
 // ────────────── กระดิ่งแจ้งเตือนในแอป 🔔 ──────────────

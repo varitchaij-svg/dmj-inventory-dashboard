@@ -50,10 +50,13 @@
   ];
 
   const orders = [
+    // orderedBy/preparedBy = ใครสั่ง/ใครจัด · R3 จงใจไม่มีชื่อผู้จัด (ยังไม่มีใครจัด)
     { id: 'R3', type: 'รอขึ้นรถ', date: '01/06/2025', status: 'รอ', from: 'สาย5', to: 'หน้าร้าน',
-      sku: 'VAS001', name: 'แจกันแก้วใส ทรงสูง', orderQty: 24, preparedQty: 0, printFlag: '' },
+      sku: 'VAS001', name: 'แจกันแก้วใส ทรงสูง', orderQty: 24, preparedQty: 0, printFlag: '',
+      orderedBy: 'สมชาย ใจดี (หน้าร้าน)', preparedBy: '' },
     { id: 'R4', type: 'หิ้ว', date: '01/06/2025', status: 'รอ', from: 'สาย5', to: 'หน้าร้าน',
-      sku: 'FLW002', name: 'ดอกไม้ประดิษฐ์ สีแดง', orderQty: 12, preparedQty: 12, printFlag: 'print' },
+      sku: 'FLW002', name: 'ดอกไม้ประดิษฐ์ สีแดง', orderQty: 12, preparedQty: 12, printFlag: 'print',
+      orderedBy: 'สมชาย ใจดี (หน้าร้าน)', preparedBy: 'สมหญิง ขยัน (คลังสินค้า)' },
   ];
 
   const shipments = [
