@@ -7725,7 +7725,8 @@ function readProducts_(stockRowsOpt, metaRowsOpt) {
     out.push({
       sku, name,
       imageUrl:    imageMap[sku.toUpperCase()] || (r[3] || '').toString().trim(),
-      locationRaw: (r[4] || '').toString().trim(),
+      // ไม่ส่ง `locationRaw` — ไม่มีฝั่งไหนอ่านเลย (ข้อมูลเดียวกันถูกแปลงเป็น `locations` แล้ว)
+      // ค่านี้ติดไปกับสินค้า **ทุกตัว** จึงเป็นไบต์เปล่าที่คูณด้วยจำนวน SKU
       locations:   locParsed ? [locParsed] : [],
       category:    (r[5] || '').toString().trim(),
       tag:         (r[6] || '').toString().trim(),
@@ -7766,7 +7767,6 @@ function readProducts_(stockRowsOpt, metaRowsOpt) {
           sku,
           name:        (r[2] || '').toString().trim(),                  // C = ชื่อ
           imageUrl:    imageMap[sku.toUpperCase()] || '',
-          locationRaw: '',
           locations:   [],
           category:    cat,
           tag:         (r[5] || '').toString().trim(),                  // F = TAG

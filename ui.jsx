@@ -228,7 +228,23 @@ function dmjFetch(url, opts) {
       }
     }
   } catch (e) { /* body ไม่ใช่ JSON (เช่น FormData) → ปล่อยผ่านตามเดิม */ }
-  return fetch(url, opts);
+
+  // ── เพดานเวลา (บังคับทุกจุด) ──────────────────────────────────────────────
+  // `fetch` **ไม่มี timeout ในตัว** — คำขอที่ไปถึง Google แล้วแต่ไม่มีคำตอบกลับมา
+  // (ลิงก์ดาวน์โหลดตาย / เน็ตร้านหลุดกลางคัน / GAS ค้าง) จะ **ค้าง pending ข้ามนาที**
+  // เจอจริง 5 ส.ค. 2026: DevTools เห็นคำขอค้างอยู่หลังเปิดหน้าไป 7.7 นาที
+  // ผลกับผู้ใช้คือปุ่มหมุนไม่จบ ไม่ขึ้นทั้งสำเร็จและล้มเหลว = พนักงานไม่รู้ว่าต้องทำอะไรต่อ
+  // ซึ่งแย่กว่าขึ้น error เพราะยังกดซ้ำไม่ได้ด้วย
+  // ⚠️ "ตัดเวลา" ไม่ได้แปลว่า "ไม่สำเร็จ" — GAS เขียนชีตเสร็จแล้วยังตอบไม่ทันได้ (บทเรียนข้อ 13)
+  //    ตัวเรียกที่เขียนข้อมูลต้องเช็คของจริงก่อนขึ้นแดงเสมอ เหมือนที่ทำกับ `action=order` (cid)
+  // ตั้งค่าเองได้ด้วย opts.dmjTimeoutMs · ตัวเรียกที่ส่ง signal มาเองถือว่าคุมเวลาเองแล้ว
+  if (opts && opts.signal) return fetch(url, opts);
+  if (typeof AbortController === "undefined") return fetch(url, opts);
+  const ms = (opts && opts.dmjTimeoutMs) || 60000;
+  const ctl = new AbortController();
+  const to = setTimeout(() => { try { ctl.abort(); } catch (e) {} }, ms);
+  return fetch(url, Object.assign({}, opts, { signal: ctl.signal }))
+    .finally(() => clearTimeout(to));
 }
 
 // ────────────── dmjJson / dmjErrText — อ่านคำตอบจาก GAS ให้ปลอดภัย ──────────────

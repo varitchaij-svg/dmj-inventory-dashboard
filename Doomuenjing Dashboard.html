@@ -1278,8 +1278,32 @@
          (เช่น LINE login คืนตำแหน่งจริงจาก server ไม่ตรงกับที่ค้างใน sessionStorage)
          ผลที่ prefetch ไว้จะ "ขาดก้อนข้อมูล" สำหรับ role ใหม่ → app.jsx ต้องทิ้งแล้วยิงใหม่ */
       window._dataPrefetchRole = role;
+      /* ต้องยกเลิกได้จากข้างนอก — ถ้าสุดท้าย role ไม่ตรง app.jsx จะทิ้งผลก้อนนี้แล้วยิงใหม่
+         ถ้าไม่ยกเลิก ก้อนเก่า (หลายเมกะ) **ยังไหลต่อจนจบ** เบียดท่อเดียวกับก้อนใหม่
+         = โหลดหน้าเดียวกินสองเท่า ซึ่งเป็นสาเหตุที่ทำให้ลิงก์ดาวน์โหลดหมดอายุ (404) */
+      window._dataPrefetchAbort = function () {
+        try { ctl && ctl.abort(); } catch (_) {}
+        clearTimeout(to);
+      };
       window._dataPrefetch = fetch(u, ctl ? { signal: ctl.signal } : undefined)
-        .then(function (r) { clearTimeout(to); return r.json(); })
+        /* ห้าม r.json() ตรง ๆ — GAS ตอบหน้า HTML ได้ (ลิงก์หมดอายุ/กำลัง deploy/quota)
+           แล้ว JSON.parse จะโยน SyntaxError ที่กลืนหายไปใน .catch ข้างล่างโดยไม่รู้สาเหตุ
+           เก็บต้นฉบับไว้ให้เจ้าของเปิดดูย้อนหลังได้ (หลักเดียวกับ dmjJson ใน ui.jsx ซึ่ง
+           ตอนนี้ยังโหลดไม่เสร็จ จึงต้องทำซ้ำแบบย่อตรงนี้) */
+        .then(function (r) {
+          clearTimeout(to);
+          return r.text().then(function (t) {
+            try { return JSON.parse(t); } catch (_) {
+              try {
+                localStorage.setItem('dmj_last_backend_error', JSON.stringify({
+                  when: new Date().toISOString(), status: r.status, url: r.url,
+                  head: String(t || '').slice(0, 300), where: 'prefetch',
+                }));
+              } catch (_) {}
+              return null;   /* แอปจะยิงเองตามปกติ */
+            }
+          });
+        })
         .catch(function () { clearTimeout(to); return null; });  /* พังก็ไม่เป็นไร แอปยิงเอง */
     } catch (_) {}
   };
