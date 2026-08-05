@@ -474,3 +474,156 @@ describe('Phase 7.4 — ฝั่ง frontend (จุดที่ถอยกล
     expect(APP).toMatch(/writeVerStamp\(d && d\.lastModified, role\)/);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 7.5 — ตัดวงจรที่แอป "ทำร้ายตัวเอง" ตอนท่อเต็ม
+//
+// อาการจริง (5 ส.ค. 2026, เครื่องผู้ใช้จริงไม่ใช่ loadtest): จอค้างที่ "กำลังโหลดข้อมูล
+// Dashboard…" · DevTools เห็น `googleusercontent/macros/echo` **404 สองอัน ที่ 11.9 และ
+// 14.7 วิ** แล้วยังมีอีกอันค้าง pending — คือแอปดาวน์โหลด payload หลายเมกะ **ซ้ำแล้วซ้ำอีก**
+// ในท่อที่เต็มอยู่แล้ว ทุกครั้งที่โดนตัดก็ยิงใหม่ทันที = เติมเชื้อให้ตัวเอง
+//
+// เทสต์ชุดนี้คุม 4 ข้อที่ถอยกลับแล้ว **ทุกอย่างยังทำงานถูกต้อง 100%** ไม่มี error ให้เห็น
+// แต่กลับไปพังแบบเดิมทันทีเมื่อคนใช้พร้อมกันเยอะ
+// ─────────────────────────────────────────────────────────────────────────────
+describe('Phase 7.5 — ไม่ทำให้ท่อที่เต็มอยู่แล้วเต็มกว่าเดิม', () => {
+  const APP  = readFileSync(join(ROOT, 'app.jsx'), 'utf8');
+  const HTML = readFileSync(join(ROOT, 'Doomuenjing Dashboard.html'), 'utf8');
+  const FETCH = APP.slice(APP.indexOf('const fetchFromSheet'), APP.indexOf('const fetchStockLite'));
+
+  it('prefetch ที่ role ไม่ตรง ต้องถูก "ยกเลิก" ไม่ใช่แค่ทิ้งตัวแปร', () => {
+    // ตั้ง window._dataPrefetch = null เฉย ๆ ตัดแค่ "ตัวชี้" — ก้อนจริงยังไหลต่อจนจบ
+    // กินท่อเดียวกับก้อนใหม่ที่กำลังยิง = โหลดหน้าเดียวจ่ายสองเท่า ซึ่งเป็นตัวเร่ง 404 โดยตรง
+    // และมองไม่เห็นเลยจาก UI เพราะข้อมูลที่ได้ถูกต้องทุกประการ
+    expect(HTML).toMatch(/window\._dataPrefetchAbort\s*=\s*function/);
+    expect(HTML).toMatch(/ctl && ctl\.abort\(\)/);
+    const mismatch = FETCH.slice(FETCH.indexOf('_dataPrefetchRole'));
+    expect(mismatch).toMatch(/else\s*\{[^}]*_dataPrefetchAbort/);
+  });
+
+  it('prefetch ไม่ใช้ r.json() ตรง ๆ (GAS ตอบ HTML ได้)', () => {
+    const pre = HTML.slice(HTML.indexOf('window._prefetchData'), HTML.indexOf('window._jsxPre'));
+    expect(pre).not.toMatch(/return r\.json\(\)/);
+    expect(pre).toMatch(/dmj_last_backend_error/);   // เก็บต้นฉบับไว้ให้เจ้าของไล่ย้อนได้
+  });
+
+  it('payload หลักอ่านคำตอบผ่าน dmjJson — ผู้ใช้ต้องไม่เห็น SyntaxError ดิบ', () => {
+    // บทเรียนข้อ 13: `Unexpected token '<', "<!DOCTYPE "…` คือสิ่งที่พนักงานหน้าร้านเคยเห็นจริง
+    expect(FETCH).toMatch(/dmjJson\s*\(\s*r\s*\)/);
+    expect(FETCH).not.toMatch(/\.then\(r => r\.json\(\)\)/);
+    expect(FETCH).toMatch(/dmjErrText/);
+  });
+
+  it('เจอ HTML แล้วถอยนานกว่า + สุ่มเวลา + ลองน้อยครั้งกว่าเน็ตพัง', () => {
+    // เหตุผล: "ตอบเป็น HTML" = ไปถึง Google แล้วแต่ก้อนถูกตัดกลางคัน (ท่อเต็ม)
+    // ยิงซ้ำทันทีคือเติมอีก 4 เมกะเข้าไปในท่อที่เต็ม · ถอยเท่ากันทุกเครื่อง = กลับมาชนกันอีก
+    expect(FETCH).toMatch(/dmjKind === "badjson"/);
+    expect(FETCH).toMatch(/Math\.random\(\)/);
+    expect(FETCH).toMatch(/isBadJson \? Math\.max\(0, retryLeft - 2\) : retryLeft - 1/);
+  });
+
+  it('จำนวนครั้งที่เหลือห้ามติดลบ (ติดลบ = ลองใหม่ไม่รู้จบ)', () => {
+    // `fetchFromSheet` ปกติค่าที่ไม่ใช่ตัวเลข>=0 กลับเป็น 3 → ส่ง -1 เข้าไปจะได้ 3 คืน
+    // = วนยิง payload หลายเมกะไม่มีวันหยุด ซึ่งจะทำให้ทั้งร้านใช้งานไม่ได้
+    expect(FETCH).toMatch(/retryLeft >= 0\) \? retryLeft : 3/);
+    const nextLeft = (isBadJson, retryLeft) =>
+      isBadJson ? Math.max(0, retryLeft - 2) : retryLeft - 1;
+    for (const bad of [true, false]) {
+      for (let r = 3; r > 0; r--) expect(nextLeft(bad, r)).toBeGreaterThanOrEqual(0);
+    }
+    // และต้องจบจริง: badjson ยิงรวม 3 ครั้ง (3→1→0), เน็ตพัง 4 ครั้ง (3→2→1→0)
+    const attempts = (bad) => { let n = 1, r = 3; while (r > 0) { r = nextLeft(bad, r); n++; } return n; };
+    expect(attempts(true)).toBe(3);
+    expect(attempts(false)).toBe(4);
+  });
+
+  it('ไม่ส่ง locationRaw ที่ไม่มีใครอ่าน (ไบต์เปล่าคูณจำนวน SKU ทุกตัว)', () => {
+    expect(SRC).not.toMatch(/locationRaw:/);
+    const jsx = ['app.jsx', 'ui.jsx', 'views-main.jsx', 'views-analytics.jsx']
+      .map(f => readFileSync(join(ROOT, f), 'utf8')).join('\n');
+    expect(jsx).not.toMatch(/locationRaw/);   // ถ้าวันหลังมีคนเริ่มใช้ ต้องรู้ตัวว่าไม่มีค่าส่งมาแล้ว
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 7.5b — `fetch` ไม่มี timeout ในตัว
+//
+// อาการจริง (5 ส.ค. 2026): DevTools ของเครื่องผู้ใช้ เห็นคำขอ **ค้าง pending หลังเปิดหน้าไป
+// 7.7 นาที** · คำขอที่ไปถึง Google แล้วแต่ไม่มีคำตอบกลับ (ลิงก์ตาย/เน็ตร้านหลุดกลางคัน)
+// จะไม่ resolve และไม่ reject **ตลอดกาล** → ปุ่มหมุนไม่จบ ไม่ขึ้นทั้งสำเร็จและล้มเหลว
+// พนักงานกดซ้ำก็ไม่ได้ ไม่รู้ว่าต้องทำอะไรต่อ — แย่กว่าขึ้น error
+// ─────────────────────────────────────────────────────────────────────────────
+describe('Phase 7.5b — dmjFetch ต้องมีเพดานเวลาเสมอ', () => {
+  const UI = readFileSync(join(ROOT, 'ui.jsx'), 'utf8');
+
+  // เอาฟังก์ชันจริงมารัน ไม่ copy (หลักเดียวกับ auth.test.js)
+  function loadDmjFetch(fetchImpl) {
+    const src = UI.slice(UI.indexOf('function dmjFetch'), UI.indexOf('// ────────────── dmjJson'));
+    const timers = [];
+    const sandbox = {
+      fetch: fetchImpl,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      AbortController: class { constructor() { this.signal = { aborted: false }; }
+                              abort() { this.signal.aborted = true; if (this.signal.onabort) this.signal.onabort(); } },
+      setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
+      clearTimeout: (id) => { if (timers[id - 1]) timers[id - 1].cleared = true; },
+    };
+    const make = new Function(...Object.keys(sandbox), src + '; return dmjFetch;');
+    return { dmjFetch: make(...Object.values(sandbox)), timers };
+  }
+
+  it('คำขอที่ไม่มีวันตอบ ต้องถูกตัดด้วย AbortController ไม่ค้างตลอดกาล', async () => {
+    let seenSignal = null;
+    const { dmjFetch, timers } = loadDmjFetch((u, o) => {
+      seenSignal = o && o.signal;
+      return new Promise(() => {});         // ไม่ resolve ไม่ reject — เหมือนของจริงที่ค้าง
+    });
+    dmjFetch('https://example.test/exec');
+    expect(seenSignal).toBeTruthy();        // ต้องแนบ signal ให้ fetch จริง ๆ
+    expect(timers.length).toBe(1);
+    expect(timers[0].ms).toBeGreaterThan(0);
+    expect(seenSignal.aborted).toBe(false);
+    timers[0].fn();                          // เวลาครบ
+    expect(seenSignal.aborted).toBe(true);   // ← หลุดข้อนี้ = กลับไปค้างข้ามนาทีเหมือนเดิม
+  });
+
+  it('ตัวเรียกที่คุมเวลาเองอยู่แล้ว (ส่ง signal มา) ต้องไม่ถูกแทรกแซง', async () => {
+    const mine = { aborted: false, mine: true };
+    let seen = null;
+    const { dmjFetch, timers } = loadDmjFetch((u, o) => { seen = o.signal; return Promise.resolve('ok'); });
+    await dmjFetch('u', { signal: mine });
+    expect(seen).toBe(mine);                 // ห้ามเขียนทับ signal ของตัวเรียก
+    expect(timers.length).toBe(0);
+  });
+
+  it('ยกเลิกตัวจับเวลาเมื่อคำขอจบแล้ว (ไม่ปล่อย timer ค้าง)', async () => {
+    const { dmjFetch, timers } = loadDmjFetch(() => Promise.resolve('ok'));
+    await dmjFetch('u');
+    expect(timers[0].cleared).toBe(true);
+  });
+
+  it('ปรับเพดานเองได้ผ่าน dmjTimeoutMs', async () => {
+    const { dmjFetch, timers } = loadDmjFetch(() => new Promise(() => {}));
+    dmjFetch('u', { dmjTimeoutMs: 1234 });
+    expect(timers[0].ms).toBe(1234);
+  });
+
+  it('การดึงออเดอร์อ่านคำตอบผ่าน dmjJson ด้วย (GAS ตอบ HTML ได้ทุกเส้นทาง)', () => {
+    const APP = readFileSync(join(ROOT, 'app.jsx'), 'utf8');
+    const orders = APP.slice(APP.indexOf('const fetchOrdersOnly'), APP.indexOf('const fetchOrdersOnly') + 900);
+    expect(orders).toMatch(/dmjJson\s*\(\s*r\s*\)/);
+  });
+});
+
+describe('Phase 7.5b — จุดที่ยิง GAS เองโดยไม่ผ่าน dmjFetch', () => {
+  it('attPost (ลงเวลา+อัปโหลดรูป) ต้องมีเพดานเวลา + อ่านคำตอบให้ปลอดภัย', () => {
+    // ลงเวลาแนบรูปมาด้วย = หนักและช้าที่สุดใน action ทั้งหมด · ถ้าค้างตลอดกาล พนักงานจะเห็น
+    // ปุ่มหมุนไม่จบ ไม่รู้ว่าลงเวลาสำเร็จหรือยัง แล้วกดซ้ำก็ไม่ได้ (ต้นทุนจริงคือเงินเดือนคนนั้น)
+    const ATT = readFileSync(join(ROOT, 'views-attendance.jsx'), 'utf8');
+    const fn = ATT.slice(ATT.indexOf('async function attPost'), ATT.indexOf('const ATT_TYPE_META'));
+    expect(fn).toMatch(/dmjFetch/);
+    expect(fn).toMatch(/dmjTimeoutMs/);
+    expect(fn).toMatch(/dmjJson/);
+    expect(fn).not.toMatch(/return res\.json\(\);/);
+  });
+});

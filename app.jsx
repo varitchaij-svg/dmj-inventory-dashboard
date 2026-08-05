@@ -1016,6 +1016,10 @@ function App() {
       // ถ้า role ไม่ตรง ก้อนที่ prefetch มาอาจขาดข้อมูลที่ role นี้ต้องใช้ (เช่น owner ได้ก้อนของ
       // saler มาแล้วหน้าภาพรวมไม่มีกราฟ) → ทิ้งแล้วยิงใหม่ ช้ากว่านิดเดียวแต่ข้อมูลไม่ขาด
       if ((window._dataPrefetchRole || '') === (role || '')) prefetched = window._dataPrefetch;
+      // ⚠️ role ไม่ตรง = ทิ้งผล **แต่ต้องยกเลิกของจริงด้วย** ไม่ใช่แค่ปล่อยตัวแปรเป็น null
+      // ก้อน prefetch หนักหลายเมกะ ถ้าปล่อยไหลต่อจะกินท่อเดียวกับก้อนใหม่ที่กำลังจะยิง
+      // → โหลดหน้าเดียวจ่ายสองเท่า ซึ่งเป็นตัวเร่งให้ลิงก์ดาวน์โหลดของ Google หมดอายุ (404)
+      else { try { if (window._dataPrefetchAbort) window._dataPrefetchAbort(); } catch (e) {} }
       window._dataPrefetch = null;
     }
     // ── Phase 7.4: ถามก่อนโหลด — "ข้อมูลเปลี่ยนหรือยัง" (คำตอบ ~40 ไบต์) ──
@@ -1043,9 +1047,12 @@ function App() {
         setLastSync(now);
         return;
       }
+      // ห้าม `r.json()` ตรง ๆ — GAS ตอบหน้า HTML ได้ (ลิงก์หมดอายุ/กำลัง deploy/quota เต็ม)
+      // แล้วผู้ใช้จะเห็น `SyntaxError: Unexpected token '<'` ซึ่งอ่านไม่รู้เรื่อง (บทเรียนข้อ 13)
+      const getJson = r => (typeof dmjJson === 'function' ? dmjJson(r) : r.json());
       return (prefetched
-      ? prefetched.then(d => d || fetch(bustUrl, { signal: controller.signal }).then(r => r.json()))
-      : fetch(bustUrl, { signal: controller.signal }).then(r => r.json()))
+      ? prefetched.then(d => d || fetch(bustUrl, { signal: controller.signal }).then(getJson))
+      : fetch(bustUrl, { signal: controller.signal }).then(getJson))
       .then(d => {
         if (d && d.lastModified) window._dataLoadedAt = d.lastModified;
         if (typeof resetCatColorMap === 'function') resetCatColorMap();
@@ -1077,16 +1084,30 @@ function App() {
       })
       .catch(e => {
         clearTimeout(timeout);
+        // "ตอบมาเป็น HTML" (dmjKind==='badjson') ต่างจาก "เน็ตพัง" อย่างสำคัญ:
+        // มันแปลว่า **คำขอเดินทางไปถึง Google แล้ว แต่ก้อนข้อมูลถูกตัดกลางคัน** — สาเหตุที่วัดได้
+        // คือท่อเต็ม (ทุกคนเปิดแอปพร้อมกันตอนเช้า) จนดาวน์โหลดนานเกินอายุลิงก์ googleusercontent
+        // → **ยิงซ้ำทันทีคือการเติมเชื้อ**: อีก 4 เมกะเข้าไปในท่อที่เต็มอยู่แล้ว มีแต่จะโดนตัดซ้ำ
+        // จึงถอยนานกว่า + สุ่มเวลา (ทุกเครื่องพังพร้อมกัน ถ้าถอยเท่ากันก็กลับมาชนกันอีก
+        // — หลักเดียวกับการดึงซ้ำตอนได้ของสำรองใน Phase 7.3) + ลดจำนวนครั้งลง
+        // เพราะแต่ละครั้งมีราคา 4 เมกะจริง ๆ ไม่ใช่การ ping เบา ๆ
+        const isBadJson = e && e.dmjKind === "badjson";
+        const nextLeft  = isBadJson ? Math.max(0, retryLeft - 2) : retryLeft - 1;
         if (retryLeft > 0) {
-          const delay = retryLeft === 3 ? 800 : retryLeft === 2 ? 2000 : 4000;
+          const base  = isBadJson ? 3000 : (retryLeft === 3 ? 800 : retryLeft === 2 ? 2000 : 4000);
+          const delay = base + Math.random() * base;   // สุ่มกระจาย 1–2 เท่าของฐาน
           const attempt = 4 - retryLeft; // 1, 2, 3
-          setRetryMsg(`เชื่อมต่อช้า กำลังลองใหม่ครั้งที่ ${attempt}…`);
-          setTimeout(() => fetchFromSheet(retryLeft - 1, force), delay); // คง force ไว้ตอน retry
+          setRetryMsg(isBadJson
+            ? `ระบบหลังบ้านตอบไม่ครบ (อาจมีคนใช้พร้อมกันเยอะ) กำลังลองใหม่ครั้งที่ ${attempt}…`
+            : `เชื่อมต่อช้า กำลังลองใหม่ครั้งที่ ${attempt}…`);
+          setTimeout(() => fetchFromSheet(nextLeft, force), delay); // คง force ไว้ตอน retry
           return;
         }
         setRetryMsg("");
-        if (e.name === "AbortError") setError("เซิร์ฟเวอร์ตอบช้า — กรุณาลองใหม่อีกครั้ง [timeout]");
-        else setError(`${e.name}: ${e.message}`);
+        // ข้อความสุดท้ายที่ผู้ใช้เห็นต้องเป็นภาษาไทยที่พนักงานหน้าร้านอ่านรู้เรื่อง
+        // ไม่ใช่ `SyntaxError: Unexpected token '<'` (ต้นฉบับเก็บไว้ใน dmj_last_backend_error แล้ว)
+        if (e && e.name === "AbortError") setError("เซิร์ฟเวอร์ตอบช้า — กรุณาลองใหม่อีกครั้ง [timeout]");
+        else setError(typeof dmjErrText === 'function' ? dmjErrText(e) : `${e.name}: ${e.message}`);
         setSyncing(false);
       })
       .finally(() => { fetchingRef.current = false; clearTimeout(timeout); if (!controller.signal.aborted) setSyncing(false); });
@@ -1179,7 +1200,7 @@ function App() {
     const sep = sheetUrl.includes('?') ? '&' : '?';
     const url = `${sheetUrl}${sep}action=orders&_t=${Date.now()}`;
     return fetch(url, { signal: controller.signal, cache: 'no-store' })
-      .then(r => r.json())
+      .then(r => (typeof dmjJson === 'function' ? dmjJson(r) : r.json()))
       .then(d => {
         if (!d || d.error || !Array.isArray(d.orders)) return; // d.error = sheet_not_found → skip
         // ถ้า GAS คืน date เป็น Date object string ("Thu Jun 06 2026...") แทน "dd/mm/yyyy"
