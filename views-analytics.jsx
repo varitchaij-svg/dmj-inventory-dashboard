@@ -3664,15 +3664,21 @@ function cleanupOrdersState(orders) {
     return s;
   } catch { return getOrdersState(); }
 }
+// ⚠️ ต้อง **อ่านคำตอบจริง** เสมอ (บทเรียนข้อ 13) — เดิม `await dmjFetch(...)` แล้วจบ
+// ไม่เคยดูว่า GAS ตอบอะไรกลับมา · GAS ตอบ **หน้า HTML** ได้เมื่อ execution ซ้อนกัน/เน็ตร้าน
+// กระตุก → จำนวนที่จัดไม่ถูกบันทึกเลย แต่หน้าจอขึ้น "บันทึกแล้ว" → พนักงานเดินจากไป
+// แล้วรอบ sync ถัดมาเลขเด้งกลับเป็นค่าเก่า (= อาการ "ระบบเด้งจำนวนอื่น" ที่เจ้าของแจ้ง)
+// คืน { success, error, data } ให้ผู้เรียกตัดสินใจ — **ห้ามยิงซ้ำอัตโนมัติ** (ยังไม่ idempotent)
 async function syncOrderUpdate(order, updates) {
-  if (!SHEET_DEPLOY_URL) return;
+  if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL ปลายทาง" };
   try {
-    await dmjFetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
         updateOrderState: true,
         orderId: order.id,
+        // sku/date = ตัวยืนยันว่าแถวที่ orderId ชี้ไปยังเป็นใบเดิม (กันแถวเลื่อนหลังมีคนลบ order)
         sku:         order.sku,
         date:        order.date,
         status:      updates.status,
@@ -3682,7 +3688,15 @@ async function syncOrderUpdate(order, updates) {
         actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
       }),
     });
-  } catch(e) { console.warn("syncOrderUpdate failed:", e.message); }
+    const d = await dmjJson(res);
+    // notFound = ทั้ง orderId และ sku+date หาแถวไม่เจอ (ใบถูกลบไปแล้ว) — ไม่ใช่ "สำเร็จ"
+    if (d && d.success !== false && d.data && d.data.notFound)
+      return { success: false, error: "ไม่พบรายการนี้ในชีตแล้ว (อาจถูกลบไป) — กดซิงค์" };
+    return (d && typeof d.success === "boolean") ? d : { success: true, data: d };
+  } catch(e) {
+    console.warn("syncOrderUpdate failed:", e.message);
+    return { success: false, error: (typeof dmjErrText === "function" ? dmjErrText(e) : e.message) };
+  }
 }
 
 // ยืนยันรับของจากชีต "รายการโอนสินค้า" (sync ข้ามเครื่อง)
@@ -3721,11 +3735,17 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
     setPrepQty(prev => prev === 0 ? (order.orderQty || 0) : prev);
   }, [order.orderQty]);
 
-  const savePrepQty = v => {
+  // saveFailed = บันทึกลงชีตไม่ผ่าน · เลขบนจอยังเป็นค่าที่พนักงานกรอก (ไม่ทิ้งงานที่นับมา)
+  // แต่ต้อง **บอกให้รู้ว่ายังไม่เข้าระบบ** ไม่งั้นเดินจากไปแล้วรอบ sync ถัดมาเลขเด้งกลับค่าเก่า
+  const [saveFailed, setSaveFailed] = uS(false);
+  const savePrepQty = async v => {
     const n = Math.max(0, parseInt(v)||0);
     setPrepQty(n);
     onPatch(order.id, {preparedQty: n});
-    syncOrderUpdate(order, {preparedQty: n});
+    const res = await syncOrderUpdate(order, {preparedQty: n});
+    const bad = res && res.success === false;
+    setSaveFailed(!!bad);
+    if (bad) showToast("warn", `ยังไม่ได้บันทึกจำนวน — ${res.error || "เน็ตอาจหลุด"} · กรอกใหม่อีกครั้ง`, "⚠️", 8000);
   };
   // commit ค่าจาก draft ตอน blur/Enter เท่านั้น — ระหว่างพิมพ์ไม่ save ค่ากลาง (เช่น ว่างชั่วคราว)
   // (แทนที่ setPrepQtyLocal ของ branch นี้ — เป้าหมายเดียวกัน: ไม่ยิง POST/audit ทุก keystroke
@@ -3743,7 +3763,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
     onPatch(order.id, {carryMode: m});
     syncOrderUpdate(order, {carryMode: m});
   };
-  const markComplete = () => {
+  const markComplete = async () => {
     if (!order.printFlag) {
       showToast("warn", "เลือก PRINT หรือ SKIP ก่อน", "🖨️");
       return;
@@ -3753,7 +3773,18 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
     // จะ fallback กลับไปโชว์ยอดที่สั่งแทน (บรรทัด init prepQty) → พนักงานสับสน
     const prep = Math.max(0, parseInt(prepQtyDraft) || 0);
     onPatch(order.id, { status: "สำเร็จ", preparedQty: prep });
-    syncOrderUpdate(order, { status: "สำเร็จ", preparedQty: prep });
+    // ⚠️ ต้อง await แล้วดูผลจริงก่อนขึ้น "บันทึกแล้ว" — เดิมขึ้นทันทีโดยไม่รอ ทำให้ตอน GAS
+    //    ตอบหน้า HTML (execution ซ้อนกัน) พนักงานเห็น ✅ ทั้งที่ชีตไม่ได้เปลี่ยนอะไรเลย
+    const res = await syncOrderUpdate(order, { status: "สำเร็จ", preparedQty: prep });
+    if (res && res.success === false) {
+      // ถอย optimistic patch กลับเป็น "รอ" — ปล่อยไว้ = แถวหายจากคิว "รอดำเนินการ" บนเครื่องนี้
+      // ทั้งที่ชีตยังค้างอยู่ → คนอื่นเห็นว่ายังไม่จัด แต่คนจัดคิดว่าจัดเสร็จแล้ว
+      onPatch(order.id, { status: "รอ" });
+      setSaveFailed(true);
+      showToast("warn", `ยังไม่ได้บันทึก — ${res.error || "เน็ตอาจหลุด"} · กดใหม่อีกครั้ง`, "⚠️", 8000);
+      return;
+    }
+    setSaveFailed(false);
     showToast("success", "บันทึกแล้ว", "✅", 2500);
   };
 
@@ -3769,7 +3800,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
   const doCancelOrder = async () => {
     setCancelConfirm(false);
     setCanceling(true);
-    const res = await syncDeleteOrders([order.id]);
+    const res = await syncDeleteOrders([order]);
     setCanceling(false);
     if (res && res.success !== false) {
       setCanceled(true);
@@ -3904,7 +3935,9 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
 
             {/* จัด — พิมพ์เลขตรงๆ (ตัดปุ่ม +/- ออก กันพนักงานกดผิด) */}
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5}}>
-              <div style={{fontSize:10,color:"var(--muted)"}}>📦 จัด</div>
+              <div style={{fontSize:10,color: saveFailed ? "var(--dang)" : "var(--muted)"}}>
+                {saveFailed ? "⚠️ ยังไม่บันทึก" : "📦 จัด"}
+              </div>
               <input type="number" value={prepQtyDraft} min={0} max={9999}
                 onChange={e => setPrepQtyDraft(e.target.value)}
                 onBlur={commitPrepQtyDraft}
@@ -3913,8 +3946,11 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
                 className="order-adj-input"
                 style={{
                   width:76,height:44,textAlign:"center",borderRadius:8,
-                  border:"2px solid var(--g-500)",fontSize:18,fontWeight:800,
-                  background:isPending?"#f0fdf4":"var(--g-50)",fontFamily:"inherit",
+                  // ขอบแดงเมื่อบันทึกไม่ผ่าน — เลขที่กรอกยังอยู่ให้เห็น แต่ต้องรู้ว่ายังไม่เข้าระบบ
+                  border:`2px solid ${saveFailed ? "var(--dang)" : "var(--g-500)"}`,
+                  fontSize:18,fontWeight:800,
+                  background: saveFailed ? "#fff5f5" : (isPending?"#f0fdf4":"var(--g-50)"),
+                  fontFamily:"inherit",
                 }}/>
             </div>
 
@@ -4447,7 +4483,10 @@ function OrderListView({ data, role }) {
           <Empty title="ไม่มีรายการใน filter นี้" sub="ลองเลือก filter อื่น"/>
         </div>
       ) : (
-        filtered.map(order => <OrderItemRow key={order.id} order={order} onPatch={patch} productMap={productMap} role={role} skuLocks={skuLocks} storageData={data.storage}/>)
+        // ⚠️ key ต้องมี orderSig ด้วย ห้ามใช้ order.id เดี่ยว ๆ — id = "R<เลขแถว>" ถูก reuse
+        //    เมื่อมีคนลบ order ทิ้งแล้วแถวล่างเลื่อนขึ้นมาแทน · key เดิม = React ใช้ component
+        //    instance เดิมต่อ → เลขในช่อง "จัด" (state ภายในแถว) ของใบเก่าค้างมาโชว์บนใบใหม่
+        filtered.map(order => <OrderItemRow key={order.id + "|" + orderSig(order)} order={order} onPatch={patch} productMap={productMap} role={role} skuLocks={skuLocks} storageData={data.storage}/>)
       )}
     </div>
   );
@@ -4555,13 +4594,18 @@ async function syncZeroStock(sku) {
 }
 
 // ลบหลาย order rows ในครั้งเดียว
-async function syncDeleteOrders(orderIds) {
-  if (!SHEET_DEPLOY_URL || !orderIds || !orderIds.length) return { success: false };
+// orders = array ของ order object (หรือ id ล้วนแบบเดิม) — ส่ง SKU ไปด้วยเสมอถ้ามี
+// เพราะ order.id = "R<เลขแถว>" เป็น **ตำแหน่ง** ที่เลื่อนได้เมื่อมีคนลบใบอื่นไปก่อน
+// GAS เอา SKU ไปเทียบกับแถวจริงก่อนลบ ไม่ตรง = ไม่ลบ (ลบผิดใบแล้วกู้ไม่ได้)
+async function syncDeleteOrders(orders) {
+  if (!SHEET_DEPLOY_URL || !orders || !orders.length) return { success: false };
+  const orderIds  = orders.map(o => (o && typeof o === "object") ? o.id  : o);
+  const orderSkus = orders.map(o => (o && typeof o === "object") ? (o.sku || "") : "");
   try {
     const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ deleteOrders: true, orderIds }),
+      body: JSON.stringify({ deleteOrders: true, orderIds, orderSkus }),
     });
     // เดิม return {success:true} เสมอไม่สนผลจริงจาก server — ทำให้ caller เห็น "สำเร็จ" ผิดๆ
     // แม้ server จะปฏิเสธ (เช่นไม่มีสิทธิ์) ต้อง forward ผลจริงกลับไปให้ caller ตัดสินใจถูก
@@ -5160,7 +5204,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
     setSt(nextSt);
 
     // ลบเฉพาะ order ที่ส่งสำเร็จออกจาก Sheet — order ที่คลังไม่พอจะคงไว้ให้ส่งใหม่ภายหลัง
-    if (succeeded.length) syncDeleteOrders(succeeded.map(o => o.id));
+    if (succeeded.length) syncDeleteOrders(succeeded);
     // ชุดนี้จบแล้ว (ผลรายตัวถึงมือ client เรียบร้อย) → ทิ้ง tid ไม่ให้ไปกันชุดถัดไปที่บังเอิญ
     // เป็นสินค้า/จำนวนเดิม · ที่เหลือ (kept) จะได้ tid ใหม่เองเพราะรายการในชุดเปลี่ยนไปแล้ว
     clearShipTid();
@@ -5270,11 +5314,16 @@ function OrderSummaryView({ data, onPrintRequest }) {
     localStorage.setItem(LS_SHIPPED_ORDERS, JSON.stringify(nextShipped));
     localStorage.setItem(LS_ORDERS_STATE, JSON.stringify(nextSt));
     setSt(nextSt);
-    const res = await syncDeleteOrders(matches.map(m => m.order.id));
+    const res = await syncDeleteOrders(matches.map(m => m.order));
     clearShipTid();
     setReconciling(false);
+    // mismatched = ใบที่แถวเลื่อน (มีคนลบ order อื่นไปก่อน) GAS ไม่ยอมลบให้เพราะเสี่ยงลบผิดใบ
+    // ต้องบอกผู้ใช้ตรง ๆ ว่ายังไม่ครบ ไม่งั้นเห็น "เคลียร์ N รายการ" แล้วงงว่าทำไมยังค้างอยู่
+    const skipped = (res && res.data && res.data.mismatched) || (res && res.mismatched) || [];
     if (res && res.success === false) {
       showToast("warn", `เคลียร์บนหน้าจอแล้ว ${matches.length} รายการ แต่ลบออกจากชีตไม่สำเร็จ (${res.error || ""}) — กด Sync แล้วลองอีกครั้ง`, "⚠️", 9000);
+    } else if (skipped.length) {
+      showToast("warn", `เคลียร์แล้ว ${matches.length - skipped.length} รายการ · อีก ${skipped.length} รายการข้อมูลเลื่อนแถว (${skipped.join(", ")}) — กด Sync แล้วลองอีกครั้ง`, "⚠️", 9000);
     } else {
       showToast("success", `เคลียร์ ${matches.length} รายการที่ส่งไปแล้ว (ไม่ตัดสต็อกซ้ำ)`, "🧾", 7000);
     }

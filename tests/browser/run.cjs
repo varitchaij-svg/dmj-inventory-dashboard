@@ -272,12 +272,43 @@ function startServer() {
         await page.waitForTimeout(400);
         if (!(await page.locator(MODAL).count())) { status = 'MODAL_FAIL'; note = 'กดแล้ว modal ไม่เปิด'; }
         else {
+          // ── ช่อง "กรอกเอง" ต้องเก็บเลขที่พิมพ์ไว้ตรง ๆ ห้ามเด้งเป็นเลขอื่น ──
+          // บั๊กจริง ส.ค. 2026: onChange clamp ทุก keystroke → ลบจนว่างแล้วเด้งเป็น "1"
+          // ทันที เลขที่พิมพ์ต่อไปเลยไปต่อท้าย: ตั้งใจ 6 ได้ 16 · พนักงานเห็นว่ากรอกถูก
+          // แต่ระบบสั่งอีกจำนวน · ต้องทดสอบผ่าน UI จริง — unit test เห็นแค่ source ไม่เห็น
+          // พฤติกรรมของ controlled input ตอนผู้ใช้ลบแล้วพิมพ์ใหม่
+          const customBtn = page.locator(`${MODAL} button`, { hasText: 'กรอกเอง' }).first();
+          if (await customBtn.count()) {
+            await customBtn.click({ timeout: 2000 }).catch(() => {});
+            await page.waitForTimeout(200);
+            const box = page.locator(`${MODAL} input[type="number"]`).last();
+            if (await box.count()) {
+              await box.fill('');                       // ลบจนว่าง — จุดที่เคยเด้งเป็น "1"
+              await page.waitForTimeout(120);
+              const afterClear = await box.inputValue();
+              await box.type('6');                      // พิมพ์ทีละตัวเหมือนคนใช้จริง
+              await page.waitForTimeout(180);
+              const typed = await box.inputValue();
+              const confirm = (await page.locator(`${MODAL} button`, { hasText: 'ยืนยันสั่ง' })
+                                         .first().textContent().catch(() => '') || '').trim();
+              if (afterClear !== '') {
+                status = 'QTY_AUTOFILL'; note = `ลบจนว่างแล้วช่องเด้งเป็น "${afterClear}"`;
+              } else if (typed !== '6') {
+                status = 'QTY_MISMATCH'; note = `พิมพ์ "6" แต่ช่องเป็น "${typed}"`;
+              } else if (!/\b6\b/.test(confirm)) {
+                status = 'QTY_MISMATCH'; note = `ช่องเป็น 6 แต่ปุ่มยืนยันบอก "${confirm}"`;
+              } else {
+                note = 'กรอกเอง 6 ชิ้น → ช่องและปุ่มยืนยันตรงกัน';
+              }
+            }
+          }
           // ปิด modal — คลิก × ในหัว modal
           const closeBtn = page.locator(`${MODAL} button`, { hasText: '×' }).first();
           if (await closeBtn.count()) await closeBtn.click({ timeout: 2000 }).catch(() => {});
           await page.waitForTimeout(300);
-          note = (await page.locator(MODAL).count()) ? 'modal เปิดได้ แต่ปิดไม่หาย' : 'modal เปิด+ปิดสำเร็จ';
-          if (note.includes('ปิดไม่หาย')) status = 'MODAL_CLOSE_FAIL';
+          const stuck = !!(await page.locator(MODAL).count());
+          if (stuck) { status = 'MODAL_CLOSE_FAIL'; note = 'modal เปิดได้ แต่ปิดไม่หาย'; }
+          else if (status === 'ok') note = (note ? note + ' · ' : '') + 'modal เปิด+ปิดสำเร็จ';
         }
       }
     } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }

@@ -556,7 +556,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 1108 tests, 32 test files, ทั้งหมด pass
+**มี Vitest test suite แล้ว** — 1149 tests, 34 test files, ทั้งหมด pass
 
 ```bash
 npm test              # run tests
@@ -570,7 +570,7 @@ npm run test:coverage # coverage report (tests/helpers.js)
 - `tests/*.test.js` — parsing, color, stock, dates, mto, app, format, schema, conflict, orderstate,
   sku, billing, bahttext, transfer, **transfer-idempotent**, cleanup, analytics, **attendance**,
   **auth**, drift-guard,
-  **dashboard-metrics**, **stampede**, **staff-perf**
+  **dashboard-metrics**, **stampede**, **staff-perf**, **order-rowshift**
 - **`tests/auth.test.js`** — เฟส 4 ล็อกอิน (`canDoOrNull_`/`ROLE_ACTIONS_`/`IMMEDIATE_GATE_*`) —
   **ไม่ copy โค้ดเข้า helpers.js** แต่ eval ฟังก์ชันจริงจาก `.gs` ตรง ๆ (กันสำเนา drift ของโค้ด
   ด้านความปลอดภัย) ต่างจากไฟล์เทสต์อื่นที่ copy pure function เข้า `helpers.js`
@@ -673,6 +673,71 @@ npm run test:coverage # coverage report (tests/helpers.js)
 - เทสต์: `tests/order-idempotent.test.js` (eval จาก `.gs` ไม่ copy — เหมือน auth.test.js)
   + meta-test ว่า `handleOrder_` ยังเรียก `findOrderRowByCid_`/จับล็อก/เขียน cid จริง และ
   frontend ยังส่ง cid อยู่ (หลุดข้อใดข้อหนึ่ง = กลับไปสั่งซ้ำสองเด้งโดยไม่มี error ให้เห็น)
+
+### จำนวนที่กรอกไปโผล่ผิดใบ / เด้งเป็นเลขอื่น (แก้แล้ว ส.ค. 2026)
+
+เจ้าของแจ้ง 2 อาการพร้อมภาพหน้าจอ — **คนละต้นเหตุกัน แต่ผลลัพธ์เหมือนกันคือ "กรอกถูก บันทึกผิด"**
+
+**อาการ 1 — ช่อง "📦 จัด" ในหน้ารายการสั่งของ เด้งเป็นจำนวนอื่น**
+
+`readOrders_` ตั้ง `order.id = "R" + เลขแถวในชีต` ซึ่งเป็น **ตำแหน่ง ไม่ใช่รหัสถาวร** ·
+กด ❌ ยกเลิก order 1 ใบ → `deleteRow` → **ทุกแถวที่อยู่ล่างกว่านั้นเลื่อนขึ้น 1** →
+`orderId` ที่เครื่องอื่น (หรือแท็บที่เปิดค้าง) ถืออยู่ ชี้ไปคนละใบทันที
+- เดิม `updateOrderState` **เขียนทับตามเลขแถวทันทีโดยไม่ตรวจอะไรเลย** → จำนวนที่พนักงาน
+  กรอกไปลงสินค้าตัวอื่น **ไม่มี error ให้เห็น** (ของเราไม่เข้า + ของคนอื่นเพี้ยน 2 เด้ง)
+- ตอนนี้เช็ค **`orderRowMatchesSku_(sheet, rowNum, body.sku)`** ก่อนเสมอ · ไม่ตรง → ตกไป
+  เส้นทาง match by sku+date ซึ่ง**เลือกแถวที่ใกล้เลขแถวเดิมที่สุด ไม่ใช่แถวแรกที่เจอ**
+  (สินค้าตัวเดียวกันสั่งซ้ำวันเดียวกันได้ = sku+date ตรงกัน 2 แถว · การเลื่อนแถวจากการลบ
+  มักห่างไม่กี่แถว ระยะห่างจึงเป็นตัวชี้ที่แม่นที่สุดที่มี) → คืน `shifted:true` มาด้วย
+- ⚠️ **การลบใช้คนละท่า: ปฏิเสธ ไม่กู้** — `deleteOrderRow`/`deleteOrderRows` เทียบ SKU แล้ว
+  ไม่ตรง = ไม่ลบ + บอกให้กดซิงค์ (`deleteOrderRows` ข้ามใบนั้นแล้วรายงานใน `mismatched`
+  **ห้ามเงียบ**) · เดิมเช็คแค่ "แถวนี้มี SKU อยู่ไหม" ซึ่งผ่านเสมอหลังแถวเลื่อน ·
+  **ลบผิดใบกู้ไม่ได้ จึงห้ามเดาแถวใกล้เคียงให้** ต่างจากการแก้จำนวนที่แก้ทับใหม่ได้
+- frontend: `syncDeleteOrders(orders)` รับ **order object** แล้วส่ง `orderSkus` คู่กับ `orderIds`
+  — ส่ง id ล้วนเมื่อไหร่ guard ฝั่ง GAS เป็นเท็จหมด = กลับไปลบผิดใบเงียบ ๆ (มี meta-test คุม)
+- ⚠️ **React key ของ `OrderItemRow` ต้องเป็น `order.id + "|" + orderSig(order)`** — `key={order.id}`
+  เดี่ยว ๆ ทำให้ React ใช้ component instance เดิมต่อเมื่อเลขแถวถูก reuse → เลขในช่อง "จัด"
+  (state ภายในแถว) ของใบเก่าค้างมาโชว์บนใบใหม่ · `orderSig`/`reconcileOrderState` มีอยู่แล้ว
+  สำหรับ localStorage แต่ **ไม่เคยถูกใช้กับ React key และฝั่ง server เลย**
+
+**อาการ 1ข — "บันทึกแล้ว" ทั้งที่ไม่ได้บันทึก (ตัวซ้ำเติมของอาการ 1)**
+
+`syncOrderUpdate` เดิม `await dmjFetch(...)` แล้วจบ **ไม่เคยอ่านคำตอบเลย** — ผิดบทเรียนข้อ 13
+ตรง ๆ (`syncFrontStoreData`/`placeOrder` แก้ไปแล้ว แต่ตัวนี้หลุด และ meta-test ใน
+`gasjson.test.js` ก็ไม่ได้คลุมถึง) · GAS ตอบ **หน้า HTML** ได้เมื่อ execution ซ้อนกัน →
+ชีตไม่เปลี่ยนอะไรเลย แต่ `markComplete` ขึ้น "✅ บันทึกแล้ว" **ทันทีโดยไม่รอผล** →
+พนักงานเดินจากไป รอบ sync ถัดมาเลขเด้งกลับค่าเก่า
+- ตอนนี้อ่านผ่าน `dmjJson` แล้วคืน `{success, error}` · `notFound` (หาแถวไม่เจอทั้ง 2 ทาง
+  = ใบถูกลบไปแล้ว) **นับเป็นล้มเหลว** ไม่ใช่สำเร็จ
+- `savePrepQty`/`markComplete` เป็น `async` รอผลจริงก่อนแสดงผล · ล้มเหลว → `saveFailed`
+  ทำให้ช่อง "จัด" **ขอบแดง + ป้าย "⚠️ ยังไม่บันทึก"** · **เลขที่กรอกยังอยู่บนจอ** (ไม่ทิ้ง
+  งานที่นับมา) แต่ต้องเห็นชัดว่ายังไม่เข้าระบบ
+- **ห้ามยิงซ้ำอัตโนมัติ** — `updateOrderState` ยังไม่ idempotent เหมือน `action=order` ที่มี `cid`
+
+**อาการ 2 — ช่อง "กรอกเอง" ใน `OrderModal` เด้งเลขเอง**
+
+```js
+onChange={ev => setQty(Math.max(1, parseInt(ev.target.value)||1))}   // ❌ ต้นเหตุ
+```
+clamp **ทุก keystroke** → ลบเลขจนช่องว่าง `parseInt("")=NaN` → ช่องเด้งเป็น `"1"` ทันที →
+เลขที่พิมพ์ต่อไปต่อท้าย 1 นั้น: **ตั้งใจ 6 ได้ 16 · ตั้งใจ 2 ได้ 12** พนักงานเห็นว่าตัวเองกรอกถูก
+- แก้เป็น **draft pattern** (`qtyDraft` เก็บข้อความดิบ ปล่อยว่างได้) — หลักเดียวกับ
+  `prepQtyDraft` ใน `OrderItemRow` ที่แก้ไปแล้วก่อนหน้า · ว่าง/ไม่ใช่ตัวเลข = `qty` 0
+  = **ปุ่มยืนยันกดไม่ได้** ("👆 เลือกจำนวนที่จะสั่งก่อน") ปลอดภัยกว่าเดาแทนผู้ใช้
+- **เลิกตั้งค่าเริ่มต้นเป็น 24** (`uS(defaultQty > 0 ? defaultQty : 0)`) — เดิมกดยืนยันพลาด
+  ได้ 24 ชิ้นทั้งที่ไม่ได้เลือก · `defaultQty` ("ควรสั่ง") ที่ไม่ตรงปุ่มลัด → เปิดโหมดกรอกเอง
+  ให้เลย ไม่งั้นเลขนั้นโผล่แค่บนปุ่มยืนยัน มองไม่เห็นว่าแก้ได้ที่ไหน
+- **`QUICK_QTYS` = `[6, 12, 24, 36, 48, 60]`** — 24 **ไม่ใช่ขั้นต่ำ** (เจ้าของยืนยัน ส.ค. 2026)
+  ของบางอย่างสั่งน้อยกว่านั้น · กดปุ่มลัดต้อง `setQtyDraft` ตามไปด้วย ไม่งั้นสลับไปโหมด
+  กรอกเองแล้วเห็นเลขเก่า
+
+เทสต์: **`tests/order-rowshift.test.js`** (24 เคส — eval จาก `.gs` ไม่ copy เหมือน auth.test.js)
+คุมทั้ง `orderRowMatchesSku_` และ **จุดเชื่อมต่อที่พังแล้วเงียบ**: guard ยังถูกเรียกจริง,
+fallback ยังเลือกแถวใกล้สุด, ทุก call site ของ `syncDeleteOrders` ส่ง object ไม่ใช่ id ล้วน,
+React key ยังมี `orderSig`, และช่องกรอกจำนวนยังไม่กลับไป clamp ระหว่างพิมพ์
+· `tests/gasjson.test.js` เพิ่ม meta-test คลุม `syncOrderUpdate`/`markComplete`/`savePrepQty`
+· browser test พิมพ์เลขในช่อง "กรอกเอง" จริงแล้วเทียบกับปุ่มยืนยัน — **unit test เห็นแค่
+  source เห็นพฤติกรรม controlled input ตอนผู้ใช้ลบแล้วพิมพ์ใหม่ไม่ได้**
 
 ### กดส่งของแล้วขึ้น "ส่งไม่สำเร็จ" ทั้งที่ ZORT โอนไปแล้ว (แก้แล้ว ส.ค. 2026)
 
