@@ -157,7 +157,8 @@ ROLE_TABS = {
   owner:      attendance, overview, customers, pos, quotefollowup, categories,
               stock, orders, tracking, frontstore, ordersummary, transfers,
               storage, stockcount, newproduct, deadstock, trends, season,
-              mtojobs, labels, upload, connect, auditlog, staff, atttoday
+              mtojobs, labels, upload, connect, auditlog, staff, staffperf,
+              atttoday
   employee:   attendance, categories, trends, stock, storage, frontstore,
               transfers, orders, tracking, ordersummary, mtojobs, labels
   warehouse:  attendance, whhome, orders, stock, stockcount, storage,
@@ -530,7 +531,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 1011 tests, 30 test files, ทั้งหมด pass
+**มี Vitest test suite แล้ว** — 1050 tests, 31 test files, ทั้งหมด pass
 
 ```bash
 npm test              # run tests
@@ -543,10 +544,15 @@ npm run test:coverage # coverage report (tests/helpers.js)
            monthKey_, dayKey_, deductStockCore, netOf, enrichDataCore`
 - `tests/*.test.js` — parsing, color, stock, dates, mto, app, format, schema, conflict, orderstate,
   sku, billing, bahttext, transfer, cleanup, analytics, **attendance**, **auth**, drift-guard,
-  **dashboard-metrics**, **stampede**
+  **dashboard-metrics**, **stampede**, **staff-perf**
 - **`tests/auth.test.js`** — เฟส 4 ล็อกอิน (`canDoOrNull_`/`ROLE_ACTIONS_`/`IMMEDIATE_GATE_*`) —
   **ไม่ copy โค้ดเข้า helpers.js** แต่ eval ฟังก์ชันจริงจาก `.gs` ตรง ๆ (กันสำเนา drift ของโค้ด
   ด้านความปลอดภัย) ต่างจากไฟล์เทสต์อื่นที่ copy pure function เข้า `helpers.js`
+- **`tests/staff-perf.test.js`** — 🏅 สรุปผลงานพนักงาน (eval จาก `.gs` ไม่ copy — เหมือน auth.test.js)
+  · ตัวสำคัญคือ meta-test ที่**สแกน call site ของ `writeAuditLog_` ในโค้ดจริง** แล้วบังคับว่าทุก
+  action ต้องมีหมวดใน `STAFF_PERF_CATEGORIES_` — เพิ่ม action ใหม่แล้วลืมเติมหมวด = เทสต์แดงทันที
+  (ไม่งั้นงานนั้นจะไปกองอยู่ "อื่นๆ" เงียบ ๆ) · + กัน prefix คลุมกันข้ามหมวด, กันการนับ "กดลงเวลา"
+  เป็นงาน, กัน column index ของชีตลงเวลาเลื่อน, และกัน UI กลับไปทำอันดับรวมข้ามตำแหน่ง
 - **`tests/qtyloc.test.js`** — `applyQtyLocToProduct_` (eval จาก `.gs` เหมือน auth.test.js ไม่ copy)
   ตรรกะ "ชีตสต็อกชนะค่าเก่าเสมอ" ที่ตัดสินว่าสินค้า**มีของหรือหมด**บนหน้าเว็บ
   · ที่มา: ก.ค. 2026 สินค้ารหัส WL ทุกตัวโชว์ "หมด" ทั้งที่มีของจริง (WL00002 = 41+240) เพราะ
@@ -986,6 +992,58 @@ cache ใน `localStorage.dmj_prod_owners` (กันดาวกะพริ�
 
 **ต่อยอดได้ (ยังไม่ทำ)**: หน้าสรุปฝั่งเจ้าของ (ใครดูแลกี่ SKU / "ยังไม่มีคนดูแล N ตัว") ·
 แจ้งเตือนเจาะตัวผ่านกระดิ่ง `pushInappNoti_({audience:"staff:STxxxx"})` เมื่อของที่ตัวเองดูแลใกล้หมด
+
+## 🏅 สรุปผลงานพนักงาน (แท็บ `staffperf`, Sprint 8)
+
+แท็บ "🏅 ผลงานพนักงาน" (**owner/dev เท่านั้น**) — รวมยอด "ใครทำอะไรไปกี่รายการเดือนนี้"
+จากข้อมูลที่ระบบเก็บอยู่แล้ว **ไม่ต้องเพิ่มชีตใหม่ ไม่ต้องให้พนักงานกรอกอะไรเพิ่ม**:
+ชีต **"Audit Log"** (จำนวนงานแต่ละประเภท) + ชีต **"ลงเวลา"** (ชั่วโมงทำงานจริง) → คิด "งาน/ชั่วโมง" ได้
+
+- **doGet `action=staffPerf&month=YYYY-MM`** → `staffPerfHandler_` · `resolveSession_` + `isAdminRole_`
+  จริง (**ไม่เชื่อ `role` จาก query param** — หลักเดียวกับ `getAuditLog`/`attendancePhoto`)
+  · cache 300 วิ ต่อเดือน (`dmj_staffperf_<month>`) · `fresh=1` เมื่อกดรีโหลดเอง
+- ⚠️ **รวมยอดฝั่ง server เสมอ ห้ามส่งแถวดิบกลับไปให้ client** — `getAuditLog` ส่งได้แค่ 200 แถวล่าสุด
+  ซึ่งไม่พอสรุปทั้งเดือนอยู่แล้ว และการส่งแถวดิบเป็นหมื่นคือปัญหา "ขนาด payload" เดียวกับ Phase 7.4
+- ⚠️ **อ่านคอลัมน์วันที่ก่อน (คอลัมน์เดียว) เพื่อหาช่วงแถวของเดือนนั้น แล้วค่อยอ่าน 5 คอลัมน์
+  เฉพาะช่วงนั้น** — ชีต Audit Log โตทุกครั้งที่มีคนแก้ข้อมูล `getDataRange()` ทั้งชีตไม่ไหว
+  (มีเทสต์กันไว้ว่าห้ามกลับไปใช้ `getDataRange()`)
+- ⚠️ ชีตลงเวลาอ่าน **col B กว้าง 7** (B..H) ไม่ใช่เริ่ม A → index เลื่อนไป 1 จากที่คุ้นเคย
+  (`r[0]`=staffId `r[2]`=วันที่ `r[3]`=เวลา `r[4]`=serverTs `r[6]`=ประเภท) — บทเรียนข้อ 5
+  · ชั่วโมง/สาย/ขาด คิดด้วย `attSummarize_`+`attShiftFor_` **ตัวเดียวกับหน้า "เวลาของฉัน"**
+  ห้ามคำนวณเองซ้ำ ไม่งั้นเลขสองหน้าไม่ตรงกันแล้วไม่มีใครรู้ว่าอันไหนถูก
+
+**`STAFF_PERF_CATEGORIES_`** = ตารางแปลง action → หมวดงาน (จับแบบ **prefix** เพราะบาง action
+ต่อท้ายด้วยข้อมูลเพิ่ม เช่น `"แก้ไขการลงเวลา (" + op + ")"`)
+- `ops:true` = งานหน้างานจริง · `ops:false` = งานตั้งค่า/แก้ข้อมูล (นับให้เห็นแต่ไม่ใช่ปริมาณงาน)
+- ⚠️ **`skip:true` = ไม่นับเป็น "งาน" เลย** — ตอนนี้มีตัวเดียวคือ `punch` (การกดลงเวลา) ซึ่งมี
+  ~4-6 ครั้ง/วัน/คน **ถ้านับรวมจะกลบงานจริงจนตัวเลขไม่มีความหมาย** (ชั่วโมงที่ได้จากการกดพวกนี้
+  ถูกนับแยกอยู่แล้วในคอลัมน์ "ชั่วโมง") · ยังโชว์ใน `byCat` ได้ แต่ไม่เข้า `total`/`byDay`/งานต่อ ชม.
+- ⚠️ **เพิ่ม action ใหม่ใน `writeAuditLog_` ต้องมาเติม prefix ที่นี่ด้วย** ไม่งั้นตกไป "อื่นๆ"
+  — `tests/staff-perf.test.js` มี meta-test **สแกน call site ของ `writeAuditLog_` ในโค้ดจริง**
+  (นับวงเล็บ + ข้าม string literal) แล้วบังคับว่าทุก action ต้องมีหมวด · ลืมแล้วเทสต์แดงทันที
+  (จับได้จริงตอนทำ — `"ลงเวลา"` หลุดตารางรอบแรก)
+- meta-test อีกตัวกัน **prefix คลุมกันข้ามหมวด** (เช่นถ้าเผลอใส่ prefix `"ลบ"` เฉย ๆ งานลบทุกชนิด
+  จะไปกองหมวดเดียวตามลำดับที่เขียน โดยไม่มี error ให้เห็น)
+
+**ข้อจำกัดที่ต้องบอกผู้ใช้เสมอ ห้ามซ่อน** (แถบเหลืองบนหน้าจอ + คอมเมนต์ในโค้ด):
+- **"งานที่ระบบบันทึกได้" ≠ "งานทั้งหมดที่ทำ"** — เดินหาของ/ยกของ/ตอบลูกค้า ไม่มีใน log
+- **เทียบข้ามตำแหน่งไม่ได้** — นับสต็อก = 1 แถว/SKU · ขาย = 1 แถว/บิล → UI **จัดกลุ่มตามตำแหน่ง**
+  (`STAFF_PERF_ROLE_LABEL`) **ห้ามทำเป็นตารางอันดับรวมทั้งร้าน** (มีเทสต์กันไว้)
+- `perHour` ไม่โชว์เมื่อ `workedMin < 60` (ฐานเล็ก = ตัวเลขเว่อร์ — หลักเดียวกับ MoM ที่ไม่โชว์
+  delta ในวันที่ 1–2 ของเดือน)
+- ⚠️ actor ในชีตเป็น **ชื่อ** ("สมชาย (คลังสินค้า)") ไม่ใช่ staffId → จับคู่กลับด้วยชื่อที่ตัดวงเล็บออก
+  (`staffPerfNormalizeActor_`) · **ชื่อที่จับคู่ไม่ได้ต้องรายงานออกไปที่การ์ด `unmatched` ห้ามทิ้งเงียบ**
+  ไม่งั้นเจ้าของเห็นยอดพนักงานคนหนึ่งเป็น 0 แล้วนึกว่าไม่ได้ทำงาน ทั้งที่แค่เปลี่ยนชื่อในชีตทีหลัง
+- actor ถูก server ยืนยันเองตั้งแต่เฟส 4 (ก.ค. 2026) — log ก่อนหน้านั้นเป็นค่าที่ client ส่งมา
+
+**ฝั่ง frontend**: `StaffPerformanceView` + `syncGetStaffPerf` + `StaffPerfDayBars` (views-analytics.jsx)
+· อ่านคำตอบผ่าน `dmjJson` เสมอ (บทเรียนข้อ 13) · การ์ดต่อคนกดกางดูรายละเอียด (หมวดงาน +
+วันทำงาน/สาย/ขาด + แท่งงานรายวัน) · เลือกเดือนย้อนหลังได้ 12 เดือน
+· ⚠️ `tests/browser/run.cjs` — `TAB_LABEL.staff` ต้องใส่อิโมจิ `"👥 พนักงาน"` เพราะคลิกด้วย
+substring และคำว่า "พนักงาน" ไปตรงกับ "🏅 ผลงานพนักงาน" ด้วย
+
+**ต่อยอดได้ (ยังไม่ทำ)**: จับเวลาแต่ละขั้น (เริ่ม→จบจัดออเดอร์) เพื่อให้ได้ "เฉลี่ยกี่นาที/ออเดอร์"
+ซึ่งเป็นตัวเลขที่ Audit Log ปัจจุบันให้ไม่ได้ (มีแต่ "เมื่อไหร่" ไม่มี "ใช้เวลาเท่าไหร่")
 
 ## Features ที่เพิ่มก่อนหน้า (Sprint 1)
 

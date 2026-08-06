@@ -19,7 +19,7 @@ const { chromium } = require(path.join(CACHE, 'node_modules', 'playwright-core')
 // dev ไม่อยู่ในนี้โดยเจตนา — เป็น superset ของ owner (+margin +whhome ซึ่ง warehouse ครอบให้แล้ว)
 // การรันซ้ำอีก 27 tab กินเวลาโดยไม่ได้ coverage เพิ่ม
 const ROLE_TABS = {
-  owner:      ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog","staff","atttoday"],
+  owner:      ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog","staff","staffperf","atttoday"],
   employee:   ["attendance","categories","trends","stock","storage","frontstore","transfers","orders","tracking","ordersummary","mtojobs","labels"],
   warehouse:  ["attendance","whhome","orders","stock","stockcount","storage","categories","newproduct","ordersummary","tracking","mtojobs","labels"],
   frontstore: ["attendance","frontstore","categories","stock","orders","tracking","mtojobs","labels"],
@@ -33,7 +33,10 @@ const TAB_LABEL = {
   newproduct:"เพิ่มสินค้าใหม่", frontstore:"เช็คหน้าร้าน", transfers:"โอน/ปรับ/ยกมา",
   orders:"รายการสั่งของ", tracking:"ติดตามสถานะ", ordersummary:"สรุปสินค้าออกจากคลัง",
   mtojobs:"งานจัดพิเศษ", upload:"อัปโหลด Zort", connect:"Google Sheet", labels:"พิมพ์ Label",
-  auditlog:"Audit Log", staff:"พนักงาน", attendance:"ลงเวลา", atttoday:"ใครเข้างานวันนี้",
+  // ⚠️ staff ต้องใส่อิโมจินำหน้าด้วย — คลิกด้วย substring และ "พนักงาน" ไปตรงกับ
+  //    "🏅 ผลงานพนักงาน" ด้วย (จะกดผิดปุ่มเมื่อลำดับใน OWNER_GROUPS สลับ)
+  auditlog:"Audit Log", staff:"👥 พนักงาน", staffperf:"ผลงานพนักงาน",
+  attendance:"ลงเวลา", atttoday:"ใครเข้างานวันนี้",
   deadstock:"สินค้าจม", quotefollowup:"ใบเสนอราคา", pos:"ขาย/ออกบิล",
   customers:"ลูกค้า & ยอดซื้อ", season:"ช่วงขายดี",
 };
@@ -77,6 +80,11 @@ const ASSERT = {
   pos:        async (page) => hasText(page, ['ขาย / ออกบิล', 'รายการในบิล', 'รับชำระ'], 'PosView UI'),
   attendance: async (page) => hasText(page, ['สมชาย ใจดี'], 'ชื่อ+ไทม์ไลน์จาก myToday'),
   atttoday:   async (page) => hasText(page, ['สมชาย ใจดี', 'สมหญิง ขยัน'], 'รายชื่อจาก attendanceToday'),
+  // ผลงานพนักงาน: ต้องขึ้น "ครบ" ทั้งชื่อคน ยอดงาน หัวข้อกลุ่มตามตำแหน่ง (ไม่ใช่อันดับรวม)
+  // และการ์ดเตือนชื่อที่จับคู่ไม่ได้ — hasText เป็น OR จึงต้องใช้ hasAllText ตรงนี้
+  staffperf:  async (page) => hasAllText(page,
+    ['สมหญิง ขยัน', 'สมชาย ใจดี', '🏭 คลังสินค้า', '🌸 หน้าร้าน', '148',
+     'ชื่อที่จับคู่กับพนักงานไม่ได้'], 'สรุปผลงานแยกตามตำแหน่ง'),
   // หมายเหตุ: ordersummary/labels เป็น smoke-only — เนื้อหาขึ้นกับ workflow state
   // (ordersummary โชว์เฉพาะ order สถานะ "สำเร็จ" พร้อมส่ง, labels โชว์คิวพิมพ์ที่ seed จาก view อื่น)
   // fixture แบบ static จึงไม่มีเนื้อหา deterministic ให้ assert — ตรวจแค่ "ไม่ crash"

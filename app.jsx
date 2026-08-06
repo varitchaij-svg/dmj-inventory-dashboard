@@ -21,6 +21,7 @@ const TABS = [
   { id: "labels",        label: "🖨️ พิมพ์ Label",            icon: I.print },
   { id: "auditlog",      label: "📋 Audit Log",             icon: I.layers },
   { id: "staff",         label: "👥 พนักงาน",               icon: I.layers },
+  { id: "staffperf",     label: "🏅 ผลงานพนักงาน",           icon: I.flame },
   { id: "attendance",    label: "⏱️ ลงเวลา",                icon: I.layers },
   { id: "atttoday",      label: "🕐 ใครเข้างานวันนี้",       icon: I.layers },
   { id: "deadstock",     label: "📦 สินค้าจม",              icon: I.alert },
@@ -36,10 +37,10 @@ const ROLE_TABS = {
   // dev = ตำแหน่งสำหรับผู้ดูแลระบบ/คนพัฒนา — เห็นทุกแท็บที่มีในระบบ รวมแท็บที่ยังซ่อนจาก owner
   // ("margin" ยังไม่มีต้นทุนซื้อจริง จึงไม่โชว์ให้ owner แต่ dev ต้องเข้าไปดู/ทดสอบได้)
   // สิทธิ์ฝั่ง GAS เทียบเท่า owner (ดู isAdminRole_ ใน appsscript_complete.gs)
-  dev:        ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","margin","mtojobs","labels","upload","connect","auditlog","staff","atttoday","whhome"],
+  dev:        ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","margin","mtojobs","labels","upload","connect","auditlog","staff","staffperf","atttoday","whhome"],
   // เรียงตามที่ owner ใช้บ่อย: ภาพรวม/ลูกค้า → งานประจำวัน (สั่ง/สต๊อก/ออเดอร์/หน้าร้าน) → คลัง → วิเคราะห์ → เครื่องมือ/ตั้งค่าท้ายสุด
   // ("margin" ซ่อนไว้ก่อน — ยังไม่มีต้นทุนซื้อจริง · โค้ด MarginView คงไว้ ค่อยเพิ่ม id กลับเมื่อพร้อม)
-  owner:      ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog","staff","atttoday"],
+  owner:      ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog","staff","staffperf","atttoday"],
   employee:   ["attendance","categories","trends","stock","storage","frontstore","transfers","orders","tracking","ordersummary","mtojobs","labels"],
   // role อื่น (employee/warehouse/frontstore/saler) ไม่มี "เพิ่มเติม" — โชว์ทุกแท็บบนแถบเลื่อนแนวนอน
   // (ต่างจาก owner/dev) ดังนั้นลำดับที่นี่แค่กำหนดว่าอันไหนอยู่ซ้ายสุด/เจอก่อนโดยไม่ต้องเลื่อน
@@ -62,7 +63,7 @@ const OWNER_GROUPS = [
   { id: "g_sales",    gi: "💰", name: "การขาย",       tabs: ["pos", "orders", "tracking", "quotefollowup", "customers", "frontstore", "mtojobs"] },
   { id: "g_stock",    gi: "📦", name: "สต็อก & คลัง",  tabs: ["stock", "categories", "storage", "stockcount", "transfers", "ordersummary", "newproduct", "deadstock", "labels"] },
   { id: "g_insight",  gi: "📈", name: "วิเคราะห์",      tabs: ["trends", "season", "margin"] },
-  { id: "g_people",   gi: "👥", name: "พนักงาน",       tabs: ["attendance", "atttoday", "staff"] },
+  { id: "g_people",   gi: "👥", name: "พนักงาน",       tabs: ["attendance", "atttoday", "staff", "staffperf"] },
   { id: "g_tools",    gi: "⚙️", name: "เครื่องมือ",     tabs: ["upload", "connect", "auditlog"] },
 ];
 const ROLE_LABELS = {
@@ -2094,6 +2095,7 @@ function App() {
                                             onInitConsumed={() => setLabelInitItems(null)}/></ErrorBoundary>}
         {activeTab === "auditlog"     && <ErrorBoundary key="auditlog"><AuditLogView/></ErrorBoundary>}
         {activeTab === "staff"        && <ErrorBoundary key="staff"><StaffView/></ErrorBoundary>}
+        {activeTab === "staffperf"    && <ErrorBoundary key="staffperf"><StaffPerformanceView/></ErrorBoundary>}
         {activeTab === "attendance"   && <ErrorBoundary key="attendance"><AttendanceView role={viewRole}/></ErrorBoundary>}
         {activeTab === "atttoday"     && <ErrorBoundary key="atttoday"><AttendanceTodayView canEdit={isAdminRole(role)}/></ErrorBoundary>}
         {activeTab === "deadstock"    && <ErrorBoundary key="deadstock"><DeadStockView/></ErrorBoundary>}

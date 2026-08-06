@@ -6968,6 +6968,342 @@ function AuditLogView() {
 }
 
 // ───────────────────────────────────────────────────────────
+// 🏅 StaffPerformanceView — สรุปผลงานพนักงานรายเดือน (owner/dev)
+// ───────────────────────────────────────────────────────────
+// รวมยอดจาก Audit Log + ชีตลงเวลา ฝั่ง GAS (action=staffPerf) — ที่นี่แค่แสดงผล
+//
+// ⚠️ **จัดกลุ่มตามตำแหน่งเสมอ ห้ามทำเป็นตารางอันดับรวมทั้งร้าน** — งานคนละแบบนับคนละหน่วย
+//    (นับสต็อก = 1 แถว/SKU · ขาย = 1 แถว/บิล) เอามาเรียงอันดับปนกันคือเทียบคนละฐาน
+//    แล้วเจ้าของจะตัดสินคนผิด ซึ่งแย่กว่าไม่มีตัวเลขให้ดูเลย
+// ⚠️ แถบ "งานที่ระบบบันทึกได้ ≠ งานทั้งหมด" ต้องอยู่ตลอด ห้ามซ่อน/ยุบ
+// ───────────────────────────────────────────────────────────
+const STAFF_PERF_ROLE_LABEL = {
+  owner: "👑 เจ้าของ", dev: "🛠️ ผู้ดูแลระบบ", saler: "💼 Sale",
+  warehouse: "🏭 คลังสินค้า", frontstore: "🌸 หน้าร้าน",
+  storedevice: "🖥️ เครื่องร้าน", employee: "👤 พนักงาน",
+};
+// สีประจำคน — ไล่ตามลำดับในกลุ่ม ให้แถบ/ตัวเลขของแต่ละคนแยกออกจากกันด้วยตา
+const STAFF_PERF_COLORS = ["#1f7f44", "#1f6f8b", "#7a5cc8", "#c2410c", "#a07417", "#b8341c"];
+
+function staffPerfHm(min) {
+  const m = Math.max(0, Math.round(min || 0));
+  const h = Math.floor(m / 60);
+  return h > 0 ? h + " ชม. " + (m % 60) + " น." : m + " น.";
+}
+// 12 เดือนย้อนหลังนับจากเดือนปัจจุบัน — ใช้เป็นตัวเลือกในดรอปดาวน์
+function staffPerfMonthOptions() {
+  const now = new Date();
+  const out = [];
+  for (let i = 0; i < 12; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const key = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+    out.push({ value: key, label: d.toLocaleDateString("th-TH", { month: "long", year: "numeric" }) });
+  }
+  return out;
+}
+
+async function syncGetStaffPerf(month, fresh) {
+  if (typeof SHEET_DEPLOY_URL === "undefined" || !SHEET_DEPLOY_URL) {
+    return { ok: false, error: "ยังไม่ได้เชื่อมต่อ Sheet" };
+  }
+  let tok = "";
+  try { tok = localStorage.getItem("dmj_session_token") || ""; } catch (e) {}
+  if (!tok) return { ok: false, error: "ต้องล็อกอินก่อนถึงจะดูผลงานพนักงานได้" };
+  const sep = SHEET_DEPLOY_URL.indexOf("?") >= 0 ? "&" : "?";
+  try {
+    const res = await fetch(SHEET_DEPLOY_URL + sep + "action=staffPerf&month=" + encodeURIComponent(month || "") +
+      (fresh ? "&fresh=1" : "") + "&sessionToken=" + encodeURIComponent(tok) + "&_t=" + Date.now(),
+      { cache: "no-store" });
+    // ต้องอ่านคำตอบจริงเสมอ — GAS ตอบหน้า HTML ได้ (บทเรียนข้อ 13)
+    const d = await dmjJson(res);
+    if (!d || d.success === false) return { ok: false, error: (d && d.error) || "โหลดไม่สำเร็จ" };
+    return { ok: true, data: d.data || d };
+  } catch (e) {
+    return { ok: false, error: dmjErrText(e) };
+  }
+}
+
+function StaffPerformanceView() {
+  const monthOpts = uM(() => staffPerfMonthOptions(), []);
+  const [month, setMonth]     = uS(() => monthOpts[0].value);
+  const [d, setD]             = uS(null);
+  const [loading, setLoading] = uS(true);
+  const [err, setErr]         = uS(null);
+  const [openId, setOpenId]   = uS(null);   // staffId ที่กางรายละเอียดอยู่
+
+  const load = uC(async (m, fresh) => {
+    setLoading(true); setErr(null);
+    const r = await syncGetStaffPerf(m, fresh);
+    if (r.ok) { setD(r.data); } else { setErr(r.error); setD(null); }
+    setLoading(false);
+  }, []);
+
+  uE(() => { load(month, false); }, [month, load]);
+
+  const catMap = uM(() => {
+    const m = {};
+    ((d && d.cats) || []).forEach(c => { m[c.key] = c; });
+    return m;
+  }, [d]);
+
+  // จัดกลุ่มตามตำแหน่ง — เทียบกันได้เฉพาะคนที่ทำงานแบบเดียวกัน
+  const groups = uM(() => {
+    const g = {};
+    ((d && d.staff) || []).forEach(s => {
+      const k = s.role || "unknown";
+      (g[k] = g[k] || []).push(s);
+    });
+    // ตำแหน่งที่มีคนทำงานเยอะสุดขึ้นก่อน
+    return Object.keys(g)
+      .map(k => ({ role: k, rows: g[k], total: g[k].reduce((a, s) => a + s.total, 0) }))
+      .sort((a, b) => b.total - a.total);
+  }, [d]);
+
+  const totals = uM(() => {
+    const rows = (d && d.staff) || [];
+    return {
+      people:    rows.filter(s => s.total > 0 || s.workedMin > 0).length,
+      actions:   rows.reduce((a, s) => a + s.total, 0),
+      workedMin: rows.reduce((a, s) => a + s.workedMin, 0),
+    };
+  }, [d]);
+
+  const monthLabel = (monthOpts.find(o => o.value === month) || {}).label || month;
+
+  return (
+    <div style={{ padding: 16, maxWidth: 960, margin: "0 auto" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between",
+                    marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>🏅 ผลงานพนักงาน</div>
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>
+            ใครทำอะไรไปเท่าไหร่ · รวมจากประวัติการใช้งานจริง + เวลาเข้า-ออกงาน
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <select value={month} onChange={e => { setOpenId(null); setMonth(e.target.value); }}
+            style={{ minHeight: 40, padding: "8px 10px", borderRadius: 10, border: "1.5px solid var(--bdr)",
+                     background: "var(--paper)", fontFamily: "inherit", fontSize: 13, fontWeight: 600 }}>
+            {monthOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+          <button className="btn ghost" onClick={() => load(month, true)} disabled={loading}
+            style={{ minHeight: 40, display: "flex", alignItems: "center", gap: 6 }}>
+            {loading ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }}/> : "🔄"}
+            <span>รีโหลด</span>
+          </button>
+        </div>
+      </div>
+
+      {/* ห้ามซ่อน — ตัวเลขนี้ตีความผิดง่ายมากถ้าไม่มีบรรทัดนี้กำกับ */}
+      <div style={{ background: "#fff8e1", border: "1.5px solid #ffe082", borderRadius: 12,
+                    padding: "11px 14px", marginBottom: 16, fontSize: 12, lineHeight: 1.7, color: "#7a5c00" }}>
+        <b>อ่านตัวเลขนี้ยังไง</b> — นับเฉพาะ<b>งานที่ทำผ่านแอป</b> (นับสต็อก · เช็คหน้าร้าน · จัดออเดอร์ ·
+        โอนของ · ออกบิล ฯลฯ) งานที่ไม่ได้กดในแอป เช่น เดินหาของ ยกของ ตอบลูกค้า <b>ไม่ถูกนับ</b> ·
+        แต่ละตำแหน่งนับคนละหน่วย (นับสต็อก = 1 ต่อสินค้า 1 ตัว · ขาย = 1 ต่อบิล 1 ใบ)
+        จึง<b>เทียบข้ามตำแหน่งไม่ได้</b> — ใช้ดูแนวโน้มของคนคนเดียวข้ามเดือน กับเทียบคนตำแหน่งเดียวกัน
+      </div>
+
+      {err && (
+        <Card padding={true}>
+          <div style={{ color: "#b8341c", fontWeight: 700, marginBottom: 6 }}>โหลดไม่สำเร็จ</div>
+          <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 12 }}>{err}</div>
+          <button className="btn" onClick={() => load(month, true)}>ลองใหม่</button>
+        </Card>
+      )}
+
+      {loading && !d && (
+        <Card padding={true}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--muted)", fontSize: 13 }}>
+            <span className="spin" style={{ width: 16, height: 16, borderWidth: 2 }}/>
+            กำลังรวมยอดของเดือน{monthLabel}…
+          </div>
+        </Card>
+      )}
+
+      {d && (<>
+        <div className="row row-3" style={{ marginBottom: 16 }}>
+          <KPI label="พนักงานที่มีความเคลื่อนไหว" value={fmtN(totals.people)} sub={"เดือน" + monthLabel}
+               accent="#1f7f44" icon={I.layers}/>
+          <KPI label="งานที่ระบบบันทึกได้" value={fmtN(totals.actions)} sub="รายการรวมทุกคน"
+               accent="#1f6f8b" icon={I.check}/>
+          <KPI label="ชั่วโมงทำงานรวม" value={staffPerfHm(totals.workedMin)}
+               sub={d.isCurrentMonth ? "ถึงวันที่ " + String(d.lastDate).slice(8) : "ทั้งเดือน"}
+               accent="#7a5cc8" icon={I.alert}/>
+        </div>
+
+        {totals.actions === 0 && (
+          <Card padding={true}>
+            <Empty title="ยังไม่มีข้อมูลของเดือนนี้"
+                   sub="ระบบเริ่มเก็บประวัติตั้งแต่มีคนใช้งานผ่านแอป — ลองเลือกเดือนอื่นดู"/>
+          </Card>
+        )}
+
+        {groups.map(g => {
+          const maxTotal = Math.max(1, ...g.rows.map(s => s.total));
+          return (
+            <Card key={g.role} padding={true} style={{ marginBottom: 16 }}
+                  title={STAFF_PERF_ROLE_LABEL[g.role] || g.role}
+                  sub={g.rows.length + " คน · รวม " + fmtN(g.total) + " งาน"}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {g.rows.map((s, i) => {
+                  const color = STAFF_PERF_COLORS[i % STAFF_PERF_COLORS.length];
+                  const open  = openId === s.staffId;
+                  // หมวดที่ทำจริง เรียงมากไปน้อย · หมวด skip (กดลงเวลา) ดันไปท้ายสุดเสมอ
+                  // — ไม่ได้นับรวมในยอด "งาน" ถ้าเอาไปปนบนสุดจะอ่านเหมือนเป็นงานด้วย
+                  const cats = Object.keys(s.byCat || {})
+                    .map(k => ({ ...(catMap[k] || { key: k, emoji: "➖", label: k, unit: "ครั้ง" }), n: s.byCat[k] }))
+                    .sort((a, b) => (a.skip ? 1 : 0) - (b.skip ? 1 : 0) || b.n - a.n);
+                  return (
+                    <div key={s.staffId} style={{ border: "1.5px solid var(--bdr)", borderRadius: 12,
+                                                  overflow: "hidden", background: "var(--paper)" }}>
+                      <button onClick={() => setOpenId(open ? null : s.staffId)}
+                        style={{ width: "100%", textAlign: "left", cursor: "pointer", fontFamily: "inherit",
+                                 background: "transparent", border: "none", padding: "12px 14px",
+                                 display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+                        {s.pictureUrl
+                          ? <img src={s.pictureUrl} alt="" style={{ width: 42, height: 42, borderRadius: "50%",
+                                   objectFit: "cover", flex: "0 0 auto" }}/>
+                          : <div style={{ width: 42, height: 42, borderRadius: "50%", flex: "0 0 auto",
+                                          background: color + "1a", color: color, display: "flex",
+                                          alignItems: "center", justifyContent: "center",
+                                          fontSize: 17, fontWeight: 800 }}>{(s.name || "?").slice(0, 1)}</div>}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 14, fontWeight: 800, color: "var(--text)",
+                                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {s.name}
+                          </div>
+                          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                            ⏱️ {staffPerfHm(s.workedMin)} · {fmtN(s.daysWorked)} วัน
+                            {s.perHour != null && <> · <b style={{ color: color }}>{s.perHour} งาน/ชม.</b></>}
+                          </div>
+                          {/* แถบสัดส่วนเทียบกับคนที่ทำมากสุดในตำแหน่งเดียวกัน */}
+                          <div style={{ height: 6, borderRadius: 99, background: "var(--bdr)",
+                                        marginTop: 7, overflow: "hidden" }}>
+                            <div style={{ width: Math.round((s.total / maxTotal) * 100) + "%", height: "100%",
+                                          background: color, borderRadius: 99 }}/>
+                          </div>
+                        </div>
+                        <div style={{ textAlign: "right", flex: "0 0 auto" }}>
+                          <div style={{ fontSize: 22, fontWeight: 800, lineHeight: 1,
+                                        color: s.total > 0 ? color : "var(--muted)" }}>{fmtN(s.total)}</div>
+                          <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 3 }}>งาน</div>
+                          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>{open ? "▲" : "▼"}</div>
+                        </div>
+                      </button>
+
+                      {open && (
+                        <div style={{ padding: "0 14px 14px", borderTop: "1px solid var(--bdr)" }}>
+                          {/* เวลาทำงาน */}
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, margin: "12px 0" }}>
+                            {[
+                              { l: "วันที่มาทำงาน", v: fmtN(s.daysWorked) + " วัน", c: "#1f7f44" },
+                              { l: "มาสาย",        v: fmtN(s.lateDays) + " วัน" + (s.lateMin ? " (" + staffPerfHm(s.lateMin) + ")" : ""), c: s.lateDays ? "#c2410c" : "var(--muted)" },
+                              { l: "ขาด",          v: fmtN(s.daysAbsent) + " วัน", c: s.daysAbsent ? "#b8341c" : "var(--muted)" },
+                            ].map(x => (
+                              <div key={x.l} style={{ flex: "1 1 110px", minWidth: 0, background: "var(--bg)",
+                                                      border: "1px solid var(--bdr)", borderRadius: 10, padding: "8px 10px" }}>
+                                <div style={{ fontSize: 10, color: "var(--muted)", fontWeight: 600 }}>{x.l}</div>
+                                <div style={{ fontSize: 13, fontWeight: 800, color: x.c, marginTop: 2 }}>{x.v}</div>
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* งานแยกตามประเภท */}
+                          {cats.length === 0 ? (
+                            <div style={{ fontSize: 12, color: "var(--muted)", padding: "6px 0" }}>
+                              เดือนนี้ยังไม่มีงานที่ระบบบันทึกได้
+                            </div>
+                          ) : (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                              {cats.map(c => (
+                                <div key={c.key} style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0,
+                                                          opacity: c.skip ? 0.55 : 1 }}>
+                                  <span style={{ fontSize: 15, flex: "0 0 auto" }}>{c.emoji}</span>
+                                  <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: "var(--text)",
+                                                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    {c.label}
+                                    {c.skip && <span style={{ fontSize: 10.5, color: "var(--muted)" }}> · ไม่นับเป็นงาน</span>}
+                                  </span>
+                                  <span style={{ flex: "0 0 auto", fontSize: 13, fontWeight: 800,
+                                                 color: c.skip ? "var(--muted)" : color }}>
+                                    {fmtN(c.n)} <span style={{ fontSize: 10, fontWeight: 600, color: "var(--muted)" }}>{c.unit}</span>
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* งานรายวัน — เห็นว่าทำสม่ำเสมอหรือกระจุกวันเดียว */}
+                          <StaffPerfDayBars byDay={s.byDay} color={color} month={d.month} lastDate={d.lastDate}/>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          );
+        })}
+
+        {/* ชื่อใน log ที่จับคู่กับพนักงานไม่ได้ — ต้องบอก ไม่งั้นยอดหายไปเงียบ ๆ */}
+        {d.unmatched && d.unmatched.length > 0 && (
+          <Card padding={true} style={{ marginBottom: 16 }} title="⚠️ ชื่อที่จับคู่กับพนักงานไม่ได้"
+                sub="งานเหล่านี้ถูกบันทึกไว้ แต่ชื่อในประวัติไม่ตรงกับใครในชีตพนักงาน จึงไม่ได้รวมเข้าใครเลย">
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {d.unmatched.slice(0, 20).map(u => (
+                <div key={u.actor} style={{ display: "flex", justifyContent: "space-between", gap: 10,
+                                            fontSize: 12.5, padding: "6px 0", borderBottom: "1px solid var(--bdr)" }}>
+                  <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis",
+                                 whiteSpace: "nowrap" }}>{u.actor}</span>
+                  <b style={{ flex: "0 0 auto", color: "#c2410c" }}>{fmtN(u.total)} งาน</b>
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10, lineHeight: 1.6 }}>
+              มักเกิดจากเปลี่ยนชื่อในชีต "พนักงาน" ทีหลัง (ประวัติเก่ายังเป็นชื่อเดิม) หรือเป็นงานที่ทำก่อน
+              ระบบล็อกอินจะเริ่มใช้ — แก้ได้โดยตั้งชื่อในชีตพนักงานให้ตรงกับชื่อที่เห็นตรงนี้
+            </div>
+          </Card>
+        )}
+      </>)}
+    </div>
+  );
+}
+
+// แถบงานรายวันของคนหนึ่งคน — 1 แท่ง = 1 วัน (สูงตามจำนวนงาน)
+function StaffPerfDayBars({ byDay, color, month, lastDate }) {
+  const days = uM(() => {
+    const lastDay = Number(String(lastDate || "").slice(8)) ||
+                    new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate();
+    const out = [];
+    for (let i = 1; i <= lastDay; i++) {
+      const key = month + "-" + String(i).padStart(2, "0");
+      out.push({ d: i, n: (byDay && byDay[key]) || 0 });
+    }
+    return out;
+  }, [byDay, month, lastDate]);
+  const max = Math.max(1, ...days.map(x => x.n));
+  if (!days.length) return null;
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 700, marginBottom: 6 }}>
+        งานรายวัน (สูงสุด {fmtN(max)} งาน/วัน)
+      </div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 46,
+                    overflowX: "auto", paddingBottom: 2 }}>
+        {days.map(x => (
+          <div key={x.d} title={"วันที่ " + x.d + " — " + x.n + " งาน"}
+            style={{ flex: "1 0 6px", minWidth: 6, height: "100%", display: "flex", alignItems: "flex-end" }}>
+            <div style={{ width: "100%", height: Math.max(2, Math.round((x.n / max) * 100)) + "%",
+                          background: x.n > 0 ? color : "var(--bdr)", borderRadius: "3px 3px 0 0" }}/>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ───────────────────────────────────────────────────────────
 // DeadStockView — สินค้าจม (read-only, เจ้าของดูคนเดียว)
 // ดึง action=getDeadStock จาก GAS แสดงสินค้าที่มีหน้าร้าน > 0
 // และไม่ได้รับโอนมานานกว่า 3 เดือน
