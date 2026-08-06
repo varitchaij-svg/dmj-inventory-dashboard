@@ -370,30 +370,81 @@ function createSession_(ss, staffId) {
   return token;
 }
 
+// ── cache การตรวจ session ───────────────────────────────────────────────────
+// ทำไมต้องมี: `resolveSession_` ถูกเรียก **ทุก doPost** (บรรทัด ~1750) และเดิมมันทั้ง
+// อ่านชีต "เซสชัน" ทั้งใบ **และเขียน lastSeenAt กลับไปทุกครั้ง** (การเขียนบังคับ flush = ช้าสุด)
+// ชีตนี้โตตามจำนวนครั้งที่มีคนล็อกอิน (TTL 30 วัน) ไม่ใช่ตามจำนวนพนักงาน
+// พอคูณกับ poll ของ login handoff ที่ยิงทุก 4 วิ ของทุกเครื่องที่กำลังรอล็อกอิน = ตัวการหลัก
+// ของอาการ "ล็อกอินช้ามาก แต่สุดท้ายเข้าได้"
+//
+// ⚠️ cache เฉพาะ "token นี้ผูกกับ staffId ไหน + ยังไม่หมดอายุ" เท่านั้น **ห้าม cache ตัว staff**
+// เพราะ role/สถานะเปลี่ยนได้จากแท็บ "พนักงาน" — ถ้า cache ทั้งก้อน เจ้าของถอดสิทธิ์ใครแล้ว
+// คนนั้นยังใช้ต่อได้อีก 5 นาทีโดยไม่มีอะไรบอก · แถวพนักงานมีไม่กี่สิบแถว อ่านสดทุกครั้งถูกกว่ามาก
+const SESSION_CACHE_TTL_SEC = 300;
+const SESSION_LASTSEEN_MIN_MS = 10 * 60 * 1000; // เขียน lastSeenAt เมื่อค่าเดิมเก่ากว่านี้เท่านั้น
+
+function sessionCacheKey_(token) { return 'dmj_sess_' + sha256Hex_(token).slice(0, 48); }
+
+function invalidateSessionCache_(token) {
+  if (!token) return;
+  try { CacheService.getScriptCache().remove(sessionCacheKey_(token)); } catch (e) {}
+}
+
 // คืน staff object (ถ้า session valid: ไม่ถูก revoke และยังไม่หมดอายุ) หรือ null
 function resolveSession_(ss, token) {
   if (!token) return null;
-  const sh = sessionsSheet_(ss);
-  const last = sh.getLastRow();
-  if (last < 2) return null;
-  const vals = sh.getRange(2, 1, last - 1, 6).getValues();
-  for (let i = 0; i < vals.length; i++) {
-    const r = vals[i];
-    if (String(r[0]) !== String(token)) continue;
-    const revoked = r[5] === true || r[5] === 'TRUE';
-    const expiresAt = r[3] ? new Date(r[3]).getTime() : 0;
-    if (revoked || !expiresAt || expiresAt < Date.now()) return null;
-    try { sh.getRange(i + 2, 5).setValue(new Date()); } catch (e) {}
-    const staffSh = staffSheet_(ss);
-    const staffRow = findStaffRowById_(staffSh, r[1]);
-    if (staffRow < 0) return null;
-    return staffRowToObj_(staffSh.getRange(staffRow, 1, 1, 11).getValues()[0]);
+
+  var staffId = null;
+  var cache = null;
+  try { cache = CacheService.getScriptCache(); } catch (e) { cache = null; }
+  if (cache) {
+    try {
+      const hit = cache.get(sessionCacheKey_(token));
+      if (hit) staffId = hit;
+    } catch (e) {}
   }
-  return null;
+
+  if (staffId === null) {
+    const sh = sessionsSheet_(ss);
+    const last = sh.getLastRow();
+    if (last < 2) return null;
+    const vals = sh.getRange(2, 1, last - 1, 6).getValues();
+    var found = false;
+    var cacheSec = SESSION_CACHE_TTL_SEC;
+    for (let i = 0; i < vals.length; i++) {
+      const r = vals[i];
+      if (String(r[0]) !== String(token)) continue;
+      const revoked = r[5] === true || r[5] === 'TRUE';
+      const expiresAt = r[3] ? new Date(r[3]).getTime() : 0;
+      if (revoked || !expiresAt || expiresAt < Date.now()) return null;
+      // ห้าม cache ยาวเกินอายุที่เหลือของ session — ไม่งั้น session ที่เพิ่งหมดอายุ
+      // ยังใช้ต่อได้อีกจนกว่า cache จะหมด (ยืดอายุให้เองโดยไม่ตั้งใจ)
+      cacheSec = Math.max(0, Math.min(SESSION_CACHE_TTL_SEC, Math.floor((expiresAt - Date.now()) / 1000)));
+      // lastSeenAt เป็นข้อมูลประกอบ (ไว้ดูว่าใครยังใช้งานอยู่) — ความละเอียดระดับ 10 นาทีพอ
+      // การเขียนทุก request คือส่วนที่แพงที่สุดของฟังก์ชันนี้ และไม่มีใครใช้ค่าละเอียดขนาดนั้น
+      const seenAt = r[4] ? new Date(r[4]).getTime() : 0;
+      if (!seenAt || (Date.now() - seenAt) > SESSION_LASTSEEN_MIN_MS) {
+        try { sh.getRange(i + 2, 5).setValue(new Date()); } catch (e) {}
+      }
+      staffId = String(r[1]);
+      found = true;
+      break;
+    }
+    if (!found) return null;
+    if (cache && cacheSec > 0) { try { cache.put(sessionCacheKey_(token), staffId, cacheSec); } catch (e) {} }
+  }
+
+  const staffSh = staffSheet_(ss);
+  const staffRow = findStaffRowById_(staffSh, staffId);
+  if (staffRow < 0) return null;
+  return staffRowToObj_(staffSh.getRange(staffRow, 1, 1, 11).getValues()[0]);
 }
 
 function revokeSession_(ss, token) {
   if (!token) return;
+  // ⚠️ ต้องล้าง cache ด้วยเสมอ — ไม่งั้นกด "ออกจากระบบ" แล้ว token ยังใช้ได้ต่ออีกจนกว่า
+  // cache จะหมดอายุ (เป็นบั๊กความปลอดภัยที่ไม่มี error ให้เห็นเลย)
+  invalidateSessionCache_(token);
   const sh = sessionsSheet_(ss);
   const last = sh.getLastRow();
   if (last < 2) return;
@@ -511,7 +562,13 @@ function logoutHandler_(ss, data) {
 //  ปลอดภัยเพราะ: คีย์ที่โผล่ใน URL/ประวัติเบราว์เซอร์คือ "แฮช" ไม่ใช่ secret — คนที่เห็น URL
 //  ย้อนกลับไปหา secret ไม่ได้ · แลกได้ครั้งเดียว (รับแล้วลบทิ้ง) · หมดอายุใน 15 นาที
 // ═══════════════════════════════════════════════════════════════════════════
-const LOGIN_HANDOFF_TTL_SEC = 900; // 15 นาที — เผื่อคนสลับแอปไปมา/เน็ตช้า แต่ไม่ค้างข้ามวัน
+// ⚠️ ต้องตรงกับ LINE_HANDOFF_TTL_MS + LINE_STATE_TTL_MS ฝั่ง app.jsx ทั้ง 3 ที่
+const LOGIN_HANDOFF_TTL_SEC = 1800; // 30 นาที — เผื่อคนสลับแอปไปมา/เน็ตช้า แต่ไม่ค้างข้ามวัน
+// ช่วงผ่อนผันหลังมีคนมารับผลไปแล้ว — คำตอบที่ถูกตัดกลางทาง (เน็ตร้านหลุด/ลิงก์หมดอายุ)
+// ทำให้ฝั่ง client ไม่ได้ token ทั้งที่ server ปล่อยออกไปแล้ว ถ้าลบทิ้งทันทีคือ **หายถาวร**
+// ผู้ใช้ต้องล็อกอินใหม่ทั้งรอบโดยไม่มีอะไรบอกว่าเกิดอะไรขึ้น (= อาการ "วนกลับไปหน้าล็อกอินซ้ำ")
+// ยังคง "ใช้ครั้งเดียวต่อการล็อกอิน 1 รอบ" อยู่ แค่ยอมให้ยื่นซ้ำได้ในช่วงสั้น ๆ
+const LOGIN_HANDOFF_GRACE_SEC = 60;
 
 function loginHandoffKey_(id) { return 'dmj_login_handoff_' + String(id).slice(0, 120); }
 
@@ -549,7 +606,10 @@ function claimLoginHandoffHandler_(data) {
     const cache = CacheService.getScriptCache();
     const key = loginHandoffKey_(sha256Hex_(secret));
     raw = cache.get(key);
-    if (raw) cache.remove(key); // ใช้ได้ครั้งเดียว
+    // ใช้ครั้งเดียว — แต่ **ห้ามลบทิ้งทันที** เพราะคำตอบรอบนี้อาจไปไม่ถึงเครื่องผู้ใช้
+    // (เน็ตหลุดกลางคัน / ลิงก์ googleusercontent หมดอายุ) แล้ว token จะหายถาวร
+    // → เขียนทับด้วยค่าเดิม TTL สั้น ให้ยื่นซ้ำได้อีกไม่กี่วินาที แล้วค่อยหายไปเอง
+    if (raw) cache.put(key, raw, LOGIN_HANDOFF_GRACE_SEC);
   } catch (e) { Logger.log('claimLoginHandoff error: ' + e); }
 
   if (!raw) {
@@ -1747,7 +1807,13 @@ function doPost(e) {
     //   (คนที่ยังไม่ได้ล็อกอิน LINE ยังทำงานได้ จนกว่าจะเปิด REQUIRE_LOGIN)
     var actor = data.actor || "ไม่ระบุ";
     var _sess = null;
-    try { _sess = resolveSession_(ss, data.sessionToken); } catch (e) { Logger.log("resolveSession_ error: " + e); }
+    // action กลุ่มล็อกอินไม่ต้องใช้ session ที่นี่เลย — `canDoOrNull_` ปล่อยผ่านทันที
+    // (SESSION_EXEMPT_ACTIONS_) ส่วน me/logout resolve เองอยู่แล้วในตัว handler
+    // ⚠️ `claimLoginHandoff` ถูกยิงทุกไม่กี่วินาทีระหว่างรอล็อกอิน — เดิมจ่ายค่าอ่าน+เขียน
+    // ชีตเซสชันเต็ม ๆ ทุกรอบทั้งที่ไม่ได้ใช้ผลลัพธ์เลยแม้แต่นิดเดียว
+    if (!SESSION_EXEMPT_ACTIONS_[data.action]) {
+      try { _sess = resolveSession_(ss, data.sessionToken); } catch (e) { Logger.log("resolveSession_ error: " + e); }
+    }
     if (_sess) {
       actor = staffActorName_(_sess) || actor;
       // ⚠️ ต้องทับ data.actor ด้วย ไม่ใช่แค่ตัวแปร actor — handler ที่รับ `data` ทั้งก้อน
@@ -2473,14 +2539,11 @@ function buildFullData_() {
 
     _mark('enrich');
 
-    const mtoMap = {};
-    products.filter(p => p.isMTO).forEach(p => {
-      const k = p.cat || 'MTO';
-      mtoMap[k] = mtoMap[k] || { base: k, variants: [], totalQty: 0, totalRev: 0 };
-      mtoMap[k].variants.push(p);
-      mtoMap[k].totalQty += p.qty;
-      mtoMap[k].totalRev += p.soldRev || 0;
-    });
+    // Phase 8: เลิกส่ง `mtoGroups` — frontend สร้างใหม่ทับทุกครั้งใน `enrichData` (app.jsx)
+    // ก้อนนี้เก็บ **product object เต็ม ๆ ซ้ำอีกชุด** ใน `variants[]` = จ่ายไบต์ฟรีล้วน ๆ
+    // (ที่จริงมันคำนวณผิดมาตลอดด้วย: จัดกลุ่มด้วย `p.cat` ซึ่งฝั่ง GAS ไม่มีคีย์นี้เลย —
+    //  มีแต่ `category` · client เป็นคนเติม `p.cat` ทีหลัง → ที่นี่ทุกตัวตกเข้ากลุ่ม 'MTO' อันเดียว)
+    // ไม่ต้อง gate ด้วย pv เพราะเครื่องที่ยังรันโค้ดเก่าก็สร้างทับเองอยู่แล้วเหมือนกัน
 
     const productLockMap = {}, unassigned = [];
     products.forEach(p => {
@@ -2541,7 +2604,6 @@ function buildFullData_() {
         // ราคาขายส่ง = ปลีก × อัตรานี้ (มูลค่าสต๊อกด้านบนคูณไว้แล้ว) — ส่งมาให้ frontend ติดป้ายได้ถูก
         wholesaleRatio:  whRatio,
       },
-      mtoGroups: Object.values(mtoMap),
       stockCheckRequests: readStockCheckRequests_().filter(function(r){ return r.status === "pending"; }),
       // SKU ที่เพิ่งถูกนับ (30 นาที) sku→qty — ให้ทุกเครื่องเห็นว่าใครนับอะไรไปแล้ว (นับพร้อมกันหลายเครื่อง)
       recentCountedSkus: (function(){
@@ -7736,7 +7798,10 @@ function readProducts_(stockRowsOpt, metaRowsOpt) {
       isOversold: qTotal.status === 'negative',
       isOOS:      qTotal.status === 'oosfull' || qTotal.num <= 0,
       isMTO:      (r[5] || '').toString().includes('Made to Order'),
-      price: 0, cost: 0, soldQty: 0, soldRev: 0, monthly: [], color: null,
+      // Phase 8: เลิกส่ง `color` — เดิมเป็น `null` ทุกแถวเสมอ (ไม่เคยมีค่าจากที่นี่เลย)
+      // ฝั่ง client เติมเองจากชื่อสินค้าด้วย `detectColor(p.name)` ใน enrichData อยู่แล้ว
+      // เงื่อนไขที่นั่นคือ `if (!p.color)` → ไม่มีคีย์ก็เข้าเงื่อนไขเดิม เครื่องที่รันโค้ดเก่าไม่กระทบ
+      price: 0, cost: 0, soldQty: 0, soldRev: 0, monthly: [],
     });
   }
 
@@ -7776,7 +7841,7 @@ function readProducts_(stockRowsOpt, metaRowsOpt) {
           isOversold: (qStore.num < 0 || qWH.num < 0),
           isOOS:      total <= 0,
           isMTO:      cat.includes('Made to Order'),
-          price: 0, cost: 0, soldQty: 0, soldRev: 0, monthly: [], color: null,
+          price: 0, cost: 0, soldQty: 0, soldRev: 0, monthly: [],
           _fromStockSheet: true,   // มาจากชีตสต็อก (ยังไม่มีใน "ข้อมูลสินค้า")
         });
       }
@@ -10137,7 +10202,71 @@ function logPayloadSizes_(data, variant, sentLen) {
     Logger.log('[perf] payload variant=' + variant + ' ส่งจริง=' + Math.round(sentLen / 1024) + 'KB · '
       + parts.map(function (x) { return x.k + '=' + Math.round(x.n / 1024) + 'KB'; }).join(' ')
       + ' · products[].mo=' + Math.round(moLen / 1024) + 'KB (' + moRows + ' แถว)');
+    logProductKeyCost_(data.products, variant);
   } catch (e) {}
+}
+
+// ── Phase 8 ขั้นที่ 0: วัดว่าไบต์ใน products[] ไปอยู่ที่ "ชื่อคีย์" หรือ "ค่า" ──
+// สมมติฐานของ Phase 8 คือชื่อคีย์ชุดเดิมถูกส่งซ้ำทุกแถว (~39 คีย์ × จำนวนสินค้า) จนกินไบต์
+// มากกว่าตัวข้อมูลเอง — **ห้ามลงมือตัดก่อนเห็นตัวเลขนี้** เพราะรอบ Phase 7.4 เคยสรุปสาเหตุผิด
+// จากตัวเลขที่ "ดูใกล้เคียง" มาแล้วครั้งหนึ่ง (นึกว่าติดคิวล็อก ที่จริงคือเวลาดาวน์โหลด)
+//
+// รันเฉพาะตอน cache miss เหมือน logPayloadSizes_ · ไม่ throw (เป็นเครื่องมือวัด
+// ห้ามทำให้เส้นทางเสิร์ฟข้อมูลจริงล้มเด็ดขาด)
+function logProductKeyCost_(products, variant) {
+  try {
+    if (!products || !products.length) return;
+    const keyBytes = {};   // ไบต์ที่หมดไปกับ "ชื่อคีย์ + เครื่องหมาย" ต่อคีย์
+    const valBytes = {};   // ไบต์ของค่าจริง
+    const rows = {};       // จำนวนแถวที่ "มี" คีย์นั้นจริง — คีย์ที่มีน้อยแถวไม่คุ้มทำคอลัมน์
+    for (let i = 0; i < products.length; i++) {
+      const p = products[i];
+      for (const k in p) {
+        if (!Object.prototype.hasOwnProperty.call(p, k)) continue;
+        if (p[k] === undefined) continue;          // JSON.stringify ตัดทิ้งอยู่แล้ว ไม่นับ
+        let v = 0;
+        try { v = JSON.stringify(p[k]).length; } catch (e) {}
+        keyBytes[k] = (keyBytes[k] || 0) + k.length + 3; // "k": และ , ที่คั่น
+        valBytes[k] = (valBytes[k] || 0) + v;
+        rows[k] = (rows[k] || 0) + 1;
+      }
+    }
+    let totKey = 0, totVal = 0;
+    const list = Object.keys(keyBytes).map(function (k) {
+      totKey += keyBytes[k]; totVal += valBytes[k];
+      return { k: k, kb: keyBytes[k], vb: valBytes[k], n: rows[k] };
+    }).sort(function (a, b) { return (b.kb + b.vb) - (a.kb + a.vb); });
+
+    Logger.log('[perf] products[] variant=' + variant + ' สินค้า=' + products.length
+      + ' · ชื่อคีย์รวม=' + Math.round(totKey / 1024) + 'KB'
+      + ' · ค่ารวม=' + Math.round(totVal / 1024) + 'KB'
+      + ' · ชื่อคีย์คิดเป็น ' + Math.round((totKey / Math.max(1, totKey + totVal)) * 100) + '%');
+    // ทุกคีย์ ไม่ตัดที่ 8 อันดับ — ตัวที่ตัดทิ้งได้มักเป็นตัวเล็ก ๆ ที่ซ้ำทุกแถว ไม่ใช่ตัวใหญ่
+    Logger.log('[perf] products[] รายคีย์ (คีย์=ชื่อKB+ค่าKB×แถว): '
+      + list.map(function (x) {
+          return x.k + '=' + (x.kb / 1024).toFixed(1) + '+' + (x.vb / 1024).toFixed(1) + '×' + x.n;
+        }).join(' '));
+
+    // imageUrl: prefix ซ้ำกันทุกแถวจริงไหม — ยืนยันจากโค้ดไม่ได้ (pickZortImage_ คืน URL ดิบ
+    // ตามที่ ZORT ให้มา) ต้องดูของจริงเท่านั้น ถ้าซ้ำจริงก็ส่ง prefix ครั้งเดียวได้
+    const urls = [];
+    for (let i = 0; i < products.length && urls.length < 200; i++) {
+      const u = products[i] && products[i].imageUrl;
+      if (u) urls.push(String(u));
+    }
+    if (urls.length) {
+      let pre = urls[0];
+      for (let i = 1; i < urls.length; i++) {
+        let j = 0;
+        while (j < pre.length && j < urls[i].length && pre[j] === urls[i][j]) j++;
+        pre = pre.slice(0, j);
+        if (!pre) break;
+      }
+      Logger.log('[perf] imageUrl ตัวอย่าง=' + urls.length + ' · prefix ร่วม=' + pre.length + ' ตัวอักษร'
+        + (pre ? ' ("' + pre.slice(0, 80) + '")' : ' (ไม่มีร่วมกันเลย)')
+        + ' · ตัวอย่างแรก="' + urls[0].slice(0, 120) + '"');
+    }
+  } catch (e) { Logger.log('logProductKeyCost_ error: ' + e); }
 }
 
 function payloadVariantForRole_(role) {
