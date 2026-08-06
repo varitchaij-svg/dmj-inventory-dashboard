@@ -112,6 +112,13 @@
         { success: true, data: { month: '2026-08', cats: [], staff: [], unmatched: [] } }),
         { headers: { 'Content-Type': 'application/json' } }));
     }
+    // 👥 ลูกค้า & ยอดซื้อ — ต้องมาก่อน branch payload รวมเหมือนกระดิ่ง/ดาว/ผลงานพนักงาน
+    // (ตอบ payload สินค้าแทนจะได้ customers=undefined → หน้า "ยังไม่มีข้อมูลลูกค้า" = เทสต์เขียวลวง)
+    if (/action=getCustomerAnalytics/.test(url)) {
+      return Promise.resolve(new Response(JSON.stringify(window.__DMJ_CUSTOMER_FIXTURE ||
+        { customers: [], months: [], grandTotal: 0 }),
+        { headers: { 'Content-Type': 'application/json' } }));
+    }
     // GET payload
     if (/script\.google|exec|action=orders|action=getAuditLog|action=getDeadStock/.test(url) || url.indexOf('http') === 0) {
       const payload = Object.assign({}, window.__DMJ_PAYLOAD, { lastModified: Date.now() });
