@@ -4524,6 +4524,22 @@ async function syncRecentTransfers(days) {
   } catch(e) { console.warn("syncRecentTransfers error:", e.message); return null; }
 }
 
+// ค้นเอกสารโอนจาก "เลขที่ ZORT" ที่ผู้ใช้พิมพ์เอง
+// จำเป็นเพราะมีกรณีที่ **ZORT มีเอกสารโอนอยู่ฝ่ายเดียว แต่ชีตเราไม่มีบันทึก** (สคริปต์ถูกตัด
+// กลางคันหลังยิง ZORT สำเร็จ / มีคนสร้างรายการโอนใน ZORT เอง) → หาในชีตยังไงก็ไม่เจอ
+// คืน { list, transfer } หรือ null เมื่อถามไม่ได้ · { found:false } เมื่อ ZORT ไม่มีเลขนี้
+async function syncZortTransferLookup(number) {
+  if (!SHEET_DEPLOY_URL || !number) return null;
+  const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
+  try {
+    const d = await dmjJson(await fetch(
+      `${SHEET_DEPLOY_URL}${sep}action=zortTransfer&number=${encodeURIComponent(number)}&_t=${Date.now()}`,
+      { cache: "no-store" }));
+    if (!d || d.ok !== true) return null;
+    return d.found ? { list: d.list || [], transfer: d.transfer, sheetLogged: !!d.sheetLogged } : { found: false };
+  } catch(e) { console.warn("syncZortTransferLookup error:", e.message); return null; }
+}
+
 // ปรับ WH qty=0 ใน Sheets + ZORT (สินค้าหมด ไม่ได้จัด)
 async function syncZeroStock(sku) {
   if (!SHEET_DEPLOY_URL) return { success: false };
@@ -4848,8 +4864,9 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const [materialDraw, setMaterialDraw]  = uS(null); // { order, afterConfirm: fn }
   const [resetConfirm, setResetConfirm]  = uS(false); // ยืนยันรีเซ็ตสถานะการส่ง
   const [bulkBusy, setBulkBusy] = uS(false);          // กำลังส่งทั้งชุด — ล็อกปุ่มกันกดซ้ำระหว่างรอ
-  const [reconcile, setReconcile] = uS(null);         // [{order, ship}] ที่พบว่าโอนไปแล้วในชีต
+  const [reconcile, setReconcile] = uS(null);         // ผลการเทียบกับประวัติการโอนจริง
   const [reconciling, setReconciling] = uS(false);
+  const [zortNumInput, setZortNumInput] = uS("");     // เลขที่เอกสารโอนใน ZORT ที่ผู้ใช้พิมพ์
   const isOnline = useOnlineStatus(); // ตรวจสอบการเชื่อมต่อก่อนส่งสถานะ
   // warehouse map modal state — shared สำหรับ card ทุกใบในหน้านี้
   const [mapModal, setMapModal] = uS(null); // { lockKey, productName, sku } | null
@@ -5206,14 +5223,32 @@ function OrderSummaryView({ data, onPrintRequest }) {
     const rows = fresh || (data.shipments || []);
     const res = findAlreadyShipped(rows);
     setReconciling(false);
-    if (!res.matches.length) {
-      showToast("warn",
-        `ไม่พบหลักฐานว่ามีของถูกโอนไปแล้ว (ตรวจ ${res.pending.length} รายการที่ค้าง)` +
-        (fresh ? " — แปลว่ายังไม่ได้ส่งจริง กดส่งได้ตามปกติ" : " · อ่านประวัติสดไม่ได้ ให้กด Sync แล้วลองใหม่") +
-        " · ถ้าหน้าร้านกดรับของไปแล้วจะไม่เจอที่นี่", "🔎", 10000);
+    // เปิดหน้าต่างเสมอแม้หาไม่เจอ — เพราะยังมีทางที่สอง: ค้นจากเลขที่ ZORT โดยตรง
+    // (ชีตเราไม่มีบันทึกก็ได้ ถ้าสคริปต์ถูกตัดกลางคันหลังยิง ZORT สำเร็จ)
+    setReconcile({ ...res, fresh: !!fresh, src: "sheet" });
+  };
+
+  // ค้นจากเลขที่เอกสารโอนใน ZORT ที่ผู้ใช้พิมพ์เอง (เช่น TF-20260803-005)
+  const lookupByZort = async () => {
+    const num = (zortNumInput || "").trim();
+    if (!num) return;
+    setReconciling(true);
+    const r = await syncZortTransferLookup(num);
+    setReconciling(false);
+    if (!r) {
+      showToast("warn", "ถามระบบไม่ได้ — เน็ตขัดข้อง หรือระบบหลังบ้านยังไม่ได้อัปเดต ลองใหม่อีกครั้ง", "⚠️", 8000);
       return;
     }
-    setReconcile({ ...res, fresh: !!fresh });
+    if (r.found === false) {
+      showToast("warn", `ไม่พบเอกสารโอนเลขที่ "${num}" ใน ZORT (ค้นย้อนหลัง 14 วัน) — ลองคัดลอกเลขจาก ZORT มาวางอีกครั้ง`, "🔎", 9000);
+      return;
+    }
+    const res = findAlreadyShipped(r.list);
+    if (!res.matches.length) {
+      showToast("warn", `เอกสาร ${r.transfer.number} มี ${r.list.length} รายการ แต่ไม่ตรงกับรายการที่ค้างอยู่เลย (อาจถูกเคลียร์ไปแล้ว)`, "🔎", 9000);
+      return;
+    }
+    setReconcile({ ...res, fresh: true, src: "zort", zort: r.transfer, zortSheetLogged: r.sheetLogged });
   };
 
   const toggleReconcilePick = (idx) => {
@@ -5587,18 +5622,50 @@ function OrderSummaryView({ data, onPrintRequest }) {
             <div style={{background:"#e3f2fd",padding:"16px 18px",borderBottom:"3px solid #0d47a133"}}>
               <div style={{fontSize:32,lineHeight:1,marginBottom:4}}>🧾</div>
               <div style={{fontSize:16,fontWeight:700,color:"#0d47a1"}}>
-                พบหลักฐานว่าโอนไปแล้ว {reconcile.matches.length} จาก {reconcile.pending.length} รายการ
+                {reconcile.matches.length
+                  ? `พบหลักฐานว่าโอนไปแล้ว ${reconcile.matches.length} จาก ${reconcile.pending.length} รายการ`
+                  : `ไม่พบหลักฐานการโอนในระบบเรา (ตรวจ ${reconcile.pending.length} รายการที่ค้าง)`}
               </div>
               <div style={{fontSize:12,color:"#0d47a1",marginTop:4,lineHeight:1.5}}>
-                มาจากชีต "รายการโอนสินค้า" {reconcile.fresh ? "(อ่านสดจากระบบเมื่อครู่)" : "(ข้อมูลในเครื่อง — กด Sync แล้วเช็คใหม่จะแม่นกว่า)"}
-                <br/>อีก <b>{reconcile.unmatched.length} รายการยังไม่พบหลักฐาน = ยังไม่ได้ส่ง</b> จะคงไว้ในรายการให้
+                {reconcile.src === "zort"
+                  ? <>มาจาก <b>เอกสารโอนใน ZORT {reconcile.zort?.number}</b> ({reconcile.zort?.date} · สถานะ {reconcile.zort?.status})
+                      {!reconcile.zortSheetLogged && <><br/><b style={{color:"#b45309"}}>⚠️ ชีต "รายการโอนสินค้า" ของเราไม่มีบันทึกเลขที่นี้</b> — แจ้งเจ้าของให้รัน checkZortTransfer เพื่อซ่อมข้อมูลฝั่งเรา</>}</>
+                  : <>มาจากชีต "รายการโอนสินค้า" {reconcile.fresh ? "(อ่านสดจากระบบเมื่อครู่)" : "(ข้อมูลในเครื่อง — กด Sync แล้วเช็คใหม่จะแม่นกว่า)"}</>}
+                {reconcile.matches.length > 0 &&
+                  <><br/>อีก <b>{reconcile.unmatched.length} รายการยังไม่พบหลักฐาน = ยังไม่ได้ส่ง</b> จะคงไว้ในรายการให้</>}
               </div>
             </div>
-            <div style={{padding:"10px 14px",fontSize:12,color:"var(--muted)",borderBottom:"1px solid var(--bdr)"}}>
-              ติ๊กเลือกเองได้ — ที่ติ๊กไว้จะถูกลบออกจากรายการและมาร์คว่าส่งแล้ว
-              <b style={{color:"var(--g-700)"}}> โดยไม่ตัดสต็อกซ้ำ</b>
+            {/* ทางที่สอง: ZORT มีเอกสารโอนอยู่ฝ่ายเดียว ชีตเราไม่มีบันทึก → ค้นจากเลขที่ตรง ๆ */}
+            <div style={{padding:"10px 14px",borderBottom:"1px solid var(--bdr)",background:"#fafafa"}}>
+              <div style={{fontSize:12,fontWeight:600,marginBottom:6}}>ไม่เจอของที่ส่งไปแล้ว? ใส่เลขที่โอนจาก ZORT</div>
+              <div style={{display:"flex",gap:6}}>
+                <input value={zortNumInput} onChange={e => setZortNumInput(e.target.value)}
+                  placeholder="เช่น TF-20260803-005"
+                  style={{flex:1,minWidth:0,padding:"9px 10px",borderRadius:8,
+                          border:"1.5px solid var(--bdr)",fontSize:13,fontFamily:"inherit"}}/>
+                <button onClick={lookupByZort} disabled={reconciling || !zortNumInput.trim()} style={{
+                  padding:"9px 14px",borderRadius:8,border:"none",
+                  background: (reconciling || !zortNumInput.trim()) ? "#9ca3af" : "#1565c0",
+                  color:"#fff",fontSize:13,fontWeight:700,fontFamily:"inherit",
+                  cursor: (reconciling || !zortNumInput.trim()) ? "not-allowed" : "pointer",
+                }}>{reconciling ? "…" : "ค้นหา"}</button>
+              </div>
             </div>
+            {reconcile.matches.length > 0 && (
+              <div style={{padding:"10px 14px",fontSize:12,color:"var(--muted)",borderBottom:"1px solid var(--bdr)"}}>
+                ติ๊กเลือกเองได้ — ที่ติ๊กไว้จะถูกลบออกจากรายการและมาร์คว่าส่งแล้ว
+                <b style={{color:"var(--g-700)"}}> โดยไม่ตัดสต็อกซ้ำ</b>
+              </div>
+            )}
             <div style={{flex:1,overflowY:"auto",padding:"8px 12px"}}>
+              {!reconcile.matches.length && (
+                <div style={{padding:"18px 8px",fontSize:13,color:"var(--muted)",lineHeight:1.6}}>
+                  ระบบไม่พบบันทึกว่ามีของถูกโอนไปแล้ว แปลว่าอย่างใดอย่างหนึ่ง:
+                  <br/>• ยังไม่ได้ส่งจริง → กด "ส่งทั้งหมด" ได้ตามปกติ
+                  <br/>• ส่งไปแล้วแต่บันทึกฝั่งเราขาด → ใส่เลขที่โอนจาก ZORT ด้านบนแล้วกดค้นหา
+                  <br/>• หน้าร้านกดรับของไปแล้ว → จะไม่ขึ้นที่นี่ (ไม่ต้องทำอะไร)
+                </div>
+              )}
               {reconcile.matches.map((m, i) => (
                 <label key={m.order.id} style={{
                   display:"flex",gap:10,alignItems:"flex-start",padding:"9px 8px",

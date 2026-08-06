@@ -2326,6 +2326,10 @@ function doGet(e) {
     if (e && e.parameter && e.parameter.action === 'recentTransfers') {
       return recentTransfersHandler_(Number(e.parameter.days) || 3);
     }
+    // ค้นเอกสารโอนจาก "เลขที่ ZORT" — ใช้ตอน ZORT มีของฝ่ายเดียว ชีตเราไม่มีบันทึก
+    if (e && e.parameter && e.parameter.action === 'zortTransfer') {
+      return zortTransferHandler_(String(e.parameter.number || '').trim());
+    }
     // ตรวจ PIN เจ้าของฝั่ง server (PIN ไม่อยู่ใน source โค้ด frontend)
     // ตั้งค่าใน Script Property ชื่อ OWNER_PIN; ถ้าไม่ตั้ง ใช้ค่า default 'DMJ' (backward compatible)
     if (e && e.parameter && e.parameter.action === 'verifyPin') {
@@ -3124,6 +3128,251 @@ function findTidInShipments_(ss, tid) {
     items.push({ sku: String(rows[i][COL_SHIP_SKU - 1] || '').trim(), qty: Number(rows[i][COL_SHIP_QTY - 1]) || 0 });
   }
   return items.length ? { refNum, items } : null;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// "ZORT โอนไปแล้ว แต่ระบบเราไม่มี/ไม่หัก" — เครื่องมือตรวจสองฝั่งแล้วซ่อม
+// ────────────────────────────────────────────────────────────────────────────
+// ลำดับการทำงานจริงของ transferStockBatch คือ  หักสต็อกในชีต → flush → ยิง ZORT →
+// เขียนชีตโอน → audit → noti  · แปลว่าถ้า **ZORT มีเอกสารแต่ชีตเราไม่มี** ต้องเป็นอย่างใด
+// อย่างหนึ่งใน 3 ข้อนี้ ซึ่งแยกจากกันไม่ได้ถ้าไม่เปิดดูข้อมูลจริงทั้งสองฝั่ง:
+//   (1) สคริปต์ถูกตัดกลางคัน (เพดาน 6 นาทีของ GAS) หลังยิง ZORT สำเร็จ
+//   (2) เอกสารใน ZORT ยังไม่ได้ย้ายสต็อกจริง → syncZortBoth (ทุก 2 ชม.) เขียนยอดเดิมทับกลับมา
+//   (3) มีคนสร้างรายการโอนใน ZORT เองโดยไม่ผ่านแอป
+// → `checkZortTransfer` อ่านอย่างเดียว บอกว่าเป็นข้อไหน · แล้วค่อยเลือกตัวซ่อมให้ตรงเหตุ
+// ⚠️ ชื่อฟังก์ชันห้ามลงท้าย `_` ไม่งั้นไม่โผล่ใน dropdown ของ GAS editor (บทเรียนข้อ 1)
+// ════════════════════════════════════════════════════════════════════════════
+const ZORT_TF_LOOKUP_DAYS = 14;
+
+// หาเอกสารโอนใน ZORT จาก "เลขที่" · คืน null ถ้าไม่เจอ
+function zortFindTransfer_(number, days) {
+  const want = String(number || '').trim().toUpperCase();
+  if (!want) return null;
+  const tz = 'Asia/Bangkok';
+  const now = new Date();
+  const fromStr = Utilities.formatDate(new Date(now.getTime() - (days || ZORT_TF_LOOKUP_DAYS) * 86400000), tz, 'yyyy-MM-dd');
+  const toStr   = Utilities.formatDate(new Date(now.getTime() + 86400000), tz, 'yyyy-MM-dd'); // เผื่อ timezone คลาด
+  const limit = 200;
+  for (let page = 1; page <= 30; page++) {
+    const url = ZORT_BASE + '/Transfer/GetTransfers?page=' + page + '&limit=' + limit +
+                '&fromdate=' + fromStr + '&todate=' + toStr;
+    const res = UrlFetchApp.fetch(url, { method: 'get', headers: zortHeaders_(), muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) {
+      Logger.log('zortFindTransfer_ HTTP ' + res.getResponseCode() + ': ' + res.getContentText().substring(0, 200));
+      return null;
+    }
+    const list = JSON.parse(res.getContentText()).list || [];
+    for (const t of list) {
+      const num = String(t.number || t.id || '').trim().toUpperCase();
+      // ผู้ใช้มักพิมพ์เลขโดยไม่ใส่ขีด → เทียบแบบตัดอักขระที่ไม่ใช่ตัวเลข/ตัวอักษรออกด้วย
+      if (num === want || num.replace(/[^A-Z0-9]/g, '') === want.replace(/[^A-Z0-9]/g, '')) {
+        return {
+          number: String(t.number || t.id || ''),
+          status: String(t.status || ''),
+          date: t.transferdateString || (t.transferdate ? String(t.transferdate).substring(0, 10) : ''),
+          fromWarehouse: String(t.fromwarehousecode || ''),
+          toWarehouse: String(t.towarehousecode || ''),
+          // ⚠️ ใน ZORT `list[].number` = **จำนวน** ไม่ใช่เลขที่เอกสาร (เลขที่เอกสารคือ t.number)
+          items: (Array.isArray(t.list) ? t.list : []).map(function (it) {
+            return { sku: String(it.sku || '').trim().toUpperCase(), name: String(it.name || ''), qty: Number(it.number) || 0 };
+          }).filter(function (it) { return it.sku; }),
+        };
+      }
+    }
+    if (list.length < limit) break;
+    Utilities.sleep(200);
+  }
+  return null;
+}
+
+// นับแถวในชีตโอนที่อ้างเลขที่นี้ (ยืนยันว่า "ระบบเราบันทึกไว้แล้วหรือยัง")
+function countTransferLogRows_(ss, refNum) {
+  const sh = ss.getSheetByName(SHEET_TRANSFERS);
+  if (!sh) return { rows: 0, skus: [] };
+  const last = sh.getLastRow();
+  if (last < 2) return { rows: 0, skus: [] };
+  const from = Math.max(2, last - RECENT_TF_SCAN_ROWS + 1);
+  const vals = sh.getRange(from, 1, last - from + 1, COL_SHIP_QTY).getDisplayValues();
+  const want = String(refNum || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const skus = [];
+  vals.forEach(function (r) {
+    const ref = String(r[COL_SHIP_REF - 1] || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (ref && ref === want) skus.push({ sku: String(r[COL_SHIP_SKU - 1] || '').trim().toUpperCase(), qty: Number(r[COL_SHIP_QTY - 1]) || 0 });
+  });
+  return { rows: skus.length, skus };
+}
+
+// หา audit log "โอนสต็อก" ของ SKU ชุดนี้ ในวันที่กำหนด — หลักฐานว่า **แอปเราหักสต็อกไปแล้วจริง**
+// (คนละเรื่องกับชีตโอน: audit ถูกเขียนหลังหักสต็อกเสมอ ทั้งเส้นทาง batch)
+function auditTransferSkusOnDate_(ss, skuList, dateStr) {
+  const sh = ss.getSheetByName(SHEET_AUDIT);
+  const out = {};
+  if (!sh) return out;
+  const last = sh.getLastRow();
+  if (last < 2) return out;
+  const from = Math.max(2, last - 4000 + 1);
+  const vals = sh.getRange(from, 1, last - from + 1, 4).getValues();
+  const want = {};
+  skuList.forEach(function (s) { want[String(s).toUpperCase()] = true; });
+  vals.forEach(function (r) {
+    if (String(r[2] || '') !== 'โอนสต็อก') return;
+    const sku = String(r[3] || '').trim().toUpperCase();
+    if (!want[sku]) return;
+    let d = '';
+    try { d = Utilities.formatDate(new Date(r[0]), Session.getScriptTimeZone(), 'yyyy-MM-dd'); } catch (e) {}
+    if (dateStr && d !== dateStr) return;
+    out[sku] = (out[sku] || 0) + 1;
+  });
+  return out;
+}
+
+// ── รันเองใน GAS editor: checkZortTransfer("TF-20260803-005") ────────────────
+// อ่านอย่างเดียว ไม่แก้ข้อมูลใด ๆ · พิมพ์รายงานเทียบ ZORT ↔ ชีตของเรา ลง Logger
+function checkZortTransfer(number) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const t = zortFindTransfer_(number);
+  if (!t) {
+    Logger.log('❌ ไม่พบเอกสารโอนเลขที่ "' + number + '" ใน ZORT (ค้นย้อนหลัง ' + ZORT_TF_LOOKUP_DAYS + ' วัน)');
+    return { found: false };
+  }
+  Logger.log('📄 ZORT: ' + t.number + ' · สถานะ ' + t.status + ' · ' + t.date +
+             ' · ' + t.fromWarehouse + ' → ' + t.toWarehouse + ' · ' + t.items.length + ' รายการ');
+
+  const log = countTransferLogRows_(ss, t.number);
+  Logger.log(log.rows
+    ? '✅ ชีต "' + SHEET_TRANSFERS + '" มีแถวของเลขที่นี้ ' + log.rows + ' แถว'
+    : '⚠️ ชีต "' + SHEET_TRANSFERS + '" **ไม่มีแถว** ของเลขที่นี้เลย → ระบบเราไม่ได้บันทึกการโอนนี้');
+
+  const audit = auditTransferSkusOnDate_(ss, t.items.map(function (i) { return i.sku; }), t.date);
+  const nAudit = Object.keys(audit).length;
+  Logger.log(nAudit
+    ? '✅ Audit Log พบ "โอนสต็อก" ของ ' + nAudit + '/' + t.items.length + ' SKU ในวันเดียวกัน → แอปเราหักสต็อกไปแล้ว'
+    : '⚠️ Audit Log **ไม่มี** "โอนสต็อก" ของ SKU ชุดนี้ในวันนั้น → แอปเราน่าจะไม่ได้หักสต็อกให้');
+
+  // ยอดคงเหลือปัจจุบันในชีต เทียบให้ดูด้วยตา
+  const sheet = ss.getSheetByName(SHEET_PRODUCTS);
+  const data = sheet ? sheet.getDataRange().getValues() : [];
+  const idx = {};
+  for (let i = 1; i < data.length; i++) {
+    const s = String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase();
+    if (s && !(s in idx)) idx[s] = i;
+  }
+  t.items.forEach(function (it) {
+    const i = idx[it.sku];
+    const inLog = log.skus.filter(function (x) { return x.sku === it.sku; }).length;
+    Logger.log('  · ' + it.sku + ' โอน ' + it.qty + ' ชิ้น | ชีตโอน ' + (inLog ? 'มี' : 'ไม่มี') +
+               ' | audit ' + (audit[it.sku] ? 'มี' : 'ไม่มี') +
+               (i === undefined ? ' | ❗ไม่พบ SKU ในชีตสินค้า'
+                 : ' | ตอนนี้ คลัง=' + (Number(data[i][COL_PROD_QTYWH - 1]) || 0) +
+                   ' หน้าร้าน=' + (Number(data[i][COL_PROD_QTYFS - 1]) || 0)));
+  });
+
+  Logger.log('── สรุปว่าควรทำอะไรต่อ ──');
+  if (!log.rows && nAudit) Logger.log('→ สต็อกหักไปแล้ว ขาดแค่บันทึกในชีตโอน: รัน repairZortTransferLog("' + t.number + '")');
+  else if (!log.rows && !nAudit) Logger.log('→ ระบบเราไม่ได้ทำอะไรเลยกับการโอนนี้: รัน applyZortTransferStock("' + t.number + '") เพื่อหักสต็อก + บันทึกให้ตรง ZORT');
+  else Logger.log('→ ระบบเราบันทึกครบแล้ว ปัญหาน่าจะอยู่ที่รายการค้างบนหน้าจอเท่านั้น (ใช้ปุ่ม "🧾 เช็คของที่ส่งไปแล้ว")');
+  return { found: true, transfer: t, logRows: log.rows, auditSkus: nAudit };
+}
+
+// ── ซ่อมเฉพาะ "บันทึกในชีตโอน" ที่ขาดหาย (ไม่แตะสต็อก ไม่ยิง ZORT) ──────────
+function repairZortTransferLog(number) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const t = zortFindTransfer_(number);
+  if (!t) { Logger.log('❌ ไม่พบเลขที่นี้ใน ZORT'); return { ok: false }; }
+  if (countTransferLogRows_(ss, t.number).rows) {
+    Logger.log('⏭️ ชีตโอนมีแถวของเลขที่นี้อยู่แล้ว — ไม่เขียนซ้ำ');
+    return { ok: true, skipped: true };
+  }
+  logTransferBatch_(ss, t.items.map(function (i) { return { sku: i.sku, name: i.name, qty: i.qty }; }),
+                    t.number, 'ซ่อมจาก ZORT ' + t.number, '');
+  invalidateCache_();
+  Logger.log('✅ เขียนชีตโอน ' + t.items.length + ' แถว (ไม่ได้แตะสต็อก)');
+  return { ok: true, rows: t.items.length };
+}
+
+// ── ซ่อม "สต็อกไม่ถูกหัก" ตามเอกสารโอนใน ZORT (ไม่ยิง ZORT ซ้ำเด็ดขาด) ────────
+// ⚠️ ใช้เมื่อ checkZortTransfer บอกว่าไม่มีทั้งชีตโอนและ audit เท่านั้น
+//    ถ้ามี audit อยู่แล้ว = หักไปแล้ว รันซ้ำจะหักสองเด้ง → ฟังก์ชันนี้จะปฏิเสธเอง
+function applyZortTransferStock(number) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const t = zortFindTransfer_(number);
+  if (!t) { Logger.log('❌ ไม่พบเลขที่นี้ใน ZORT'); return { ok: false }; }
+  const audit = auditTransferSkusOnDate_(ss, t.items.map(function (i) { return i.sku; }), t.date);
+  if (Object.keys(audit).length) {
+    Logger.log('🛑 หยุด — Audit Log บอกว่าแอปหักสต็อกของการโอนนี้ไปแล้ว (' +
+               Object.keys(audit).length + ' SKU) รันต่อจะหักสองเด้ง');
+    return { ok: false, reason: 'already_deducted' };
+  }
+  if (countTransferLogRows_(ss, t.number).rows) {
+    Logger.log('🛑 หยุด — ชีตโอนมีแถวของเลขที่นี้แล้ว (น่าจะหักไปแล้ว) ตรวจด้วย checkZortTransfer ก่อน');
+    return { ok: false, reason: 'already_logged' };
+  }
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) { Logger.log('🛑 ระบบกำลังบันทึกข้อมูลอื่นอยู่ ลองใหม่'); return { ok: false }; }
+  try {
+    const sheet = ss.getSheetByName(SHEET_PRODUCTS);
+    const data = sheet.getDataRange().getValues();
+    const idx = {};
+    for (let i = 1; i < data.length; i++) {
+      const s = String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase();
+      if (s && !(s in idx)) idx[s] = i;
+    }
+    const done = [];
+    t.items.forEach(function (it) {
+      const i = idx[it.sku];
+      if (i === undefined) { Logger.log('  ❗ ข้าม ' + it.sku + ' — ไม่พบในชีตสินค้า'); return; }
+      const wh = Number(data[i][COL_PROD_QTYWH - 1]) || 0;
+      const fs = Number(data[i][COL_PROD_QTYFS - 1]) || 0;
+      const actual = Math.min(it.qty, wh);          // ไม่ปล่อยติดลบ เหมือน transferStockBatch
+      if (actual <= 0) { Logger.log('  ❗ ข้าม ' + it.sku + ' — คลังเหลือ 0'); return; }
+      sheet.getRange(i + 1, COL_PROD_QTYFS, 1, 2).setValues([[fs + actual, wh - actual]]);
+      data[i][COL_PROD_QTYWH - 1] = wh - actual;
+      data[i][COL_PROD_QTYFS - 1] = fs + actual;
+      done.push({ sku: it.sku, name: it.name, qty: actual });
+      if (actual < it.qty) Logger.log('  ⚠️ ' + it.sku + ' คลังพอแค่ ' + actual + '/' + it.qty);
+    });
+    SpreadsheetApp.flush();
+    if (done.length) {
+      logTransferBatch_(ss, done, t.number, 'ซ่อมจาก ZORT ' + t.number, '');
+      writeAuditLogBatch_('ซ่อมจาก ZORT ' + t.number, 'โอนสต็อก', done.map(function (d) {
+        return { resource: d.sku, detail: 'qty ' + d.qty + ': W0002→W0001 (ซ่อมตามเอกสาร ZORT ' + t.number + ')' };
+      }));
+    }
+    Logger.log('✅ หักสต็อกตามเอกสาร ZORT แล้ว ' + done.length + '/' + t.items.length + ' รายการ (ไม่ได้ยิง ZORT ซ้ำ)');
+    return { ok: true, applied: done.length };
+  } finally {
+    try { invalidateCache_(); } catch (e) {}
+    lock.releaseLock();
+  }
+}
+
+// doGet action=zortTransfer — ให้หน้าเว็บค้นเอกสารโอนจากเลขที่ ZORT ได้เอง
+// ใช้ตอนชีตของเราไม่มีบันทึก (ZORT มีอยู่ฝ่ายเดียว) → ยังเคลียร์รายการที่ค้างได้
+function zortTransferHandler_(number) {
+  try {
+    const t = zortFindTransfer_(number);
+    if (!t) return ContentService.createTextOutput(JSON.stringify({ ok: true, found: false }))
+      .setMimeType(ContentService.MimeType.JSON);
+    const ss = SpreadsheetApp.openById(SHEET_ID);
+    const log = countTransferLogRows_(ss, t.number);
+    const logged = {};
+    log.skus.forEach(function (s) { logged[s.sku] = true; });
+    return ContentService.createTextOutput(JSON.stringify({
+      ok: true, found: true, transfer: {
+        number: t.number, status: t.status, date: t.date,
+        fromWarehouse: t.fromWarehouse, toWarehouse: t.toWarehouse,
+      },
+      sheetLogged: log.rows > 0,
+      list: t.items.map(function (it) {
+        return { refNum: t.number, date: t.date, sku: it.sku, name: it.name, qty: it.qty,
+                 receivedAt: '', preparedBy: '', fromZort: true, sheetLogged: !!logged[it.sku] };
+      }),
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    Logger.log('zortTransferHandler_ error: ' + err);
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
 }
 
 // doGet action=recentTransfers — ประวัติการโอนคลัง→หน้าร้าน N วันล่าสุด (ของจริงจากชีต)

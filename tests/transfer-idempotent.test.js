@@ -320,6 +320,87 @@ describe('meta — กดส่งทีละใบก็ต้องไม่�
   });
 });
 
+// ── "ZORT โอนไปแล้ว แต่ระบบเราไม่มี/ไม่หัก" ──────────────────────────────────
+// ลำดับจริงของ transferStockBatch: หักสต็อก → flush → ยิง ZORT → เขียนชีตโอน → audit
+// ⚠️ ลำดับนี้คือฐานของเครื่องมือซ่อมทั้งหมด — สลับเมื่อไหร่ การวินิจฉัยจะผิดทันที
+//    (เช่นถ้าย้าย ZORT ไปก่อนหักสต็อก "ZORT มี แต่ audit ไม่มี" จะไม่ได้แปลว่ายังไม่หัก)
+describe('เครื่องมือตรวจ/ซ่อมเมื่อ ZORT กับชีตเราไม่ตรงกัน', () => {
+  const batch = grab(SRC, /function transferStockBatch\(ss, list, actor, clientLoadedAt, tid\) \{[\s\S]*?\n\}\n\n\/\/ สร้าง ZORT Transfer/);
+
+  it('ลำดับ หักสต็อก → ยิง ZORT → เขียนชีตโอน → audit ต้องไม่สลับ', () => {
+    const iDeduct = batch.indexOf('sheet.getRange(row, COL_PROD_QTYFS, 1, 2)');
+    const iZort   = batch.indexOf('createZortTransferBatch_');
+    const iLog    = batch.indexOf('logTransferBatch_');
+    const iAudit  = batch.indexOf('writeAuditLogBatch_');
+    expect(iDeduct).toBeGreaterThan(-1);
+    expect(iDeduct).toBeLessThan(iZort);
+    expect(iZort).toBeLessThan(iLog);
+    expect(iLog).toBeLessThan(iAudit);
+  });
+
+  it('เครื่องมือตรวจต้องรันเองได้จาก GAS editor (ชื่อห้ามลงท้าย _ — บทเรียนข้อ 1)', () => {
+    ['checkZortTransfer', 'repairZortTransferLog', 'applyZortTransferStock'].forEach(n => {
+      expect(SRC).toMatch(new RegExp('function ' + n + '\\('));
+      expect(SRC).not.toMatch(new RegExp('function ' + n + '_\\('));
+    });
+  });
+
+  it('checkZortTransfer อ่านอย่างเดียว — ห้ามเขียน/ยิง ZORT', () => {
+    const f = grab(SRC, /function checkZortTransfer\(number\) \{[\s\S]*?\n\}/);
+    expect(f).not.toMatch(/setValue|setValues|logTransferBatch_\(|writeAuditLog/);
+    expect(f).not.toMatch(/AddTransfer/);
+  });
+
+  it('repairZortTransferLog เขียนแค่ชีตโอน — ห้ามแตะสต็อก และห้ามเขียนซ้ำ', () => {
+    const f = grab(SRC, /function repairZortTransferLog\(number\) \{[\s\S]*?\n\}/);
+    expect(f).toMatch(/countTransferLogRows_/);       // กันเขียนซ้ำ
+    expect(f).toMatch(/logTransferBatch_/);
+    expect(f).not.toMatch(/COL_PROD_QTYWH|COL_PROD_QTYFS/);
+    expect(f).not.toMatch(/AddTransfer|pushStockToZort_/);
+  });
+
+  it('applyZortTransferStock ต้องปฏิเสธเมื่อหักไปแล้ว และห้ามยิง ZORT ซ้ำ', () => {
+    const f = grab(SRC, /function applyZortTransferStock\(number\) \{[\s\S]*?\n\}\n\n\/\/ doGet action=zortTransfer/);
+    expect(f).toMatch(/auditTransferSkusOnDate_/);
+    expect(f).toMatch(/already_deducted/);
+    expect(f).toMatch(/already_logged/);
+    // ⚠️ ห้ามยิง ZORT — เอกสารโอนมีอยู่แล้ว ยิงซ้ำ = ของย้ายสองรอบ
+    expect(f).toMatch(/ไม่ได้ยิง ZORT ซ้ำ/);
+    expect(f).not.toMatch(/createZortTransfer|AddTransfer|pushStockToZort_/);
+    // ต้องจับล็อก + ไม่ปล่อยสต็อกติดลบ เหมือนเส้นทางโอนปกติ
+    expect(f).toMatch(/LockService\.getScriptLock\(\)/);
+    expect(f).toMatch(/Math\.min\(it\.qty, wh\)/);
+    // เขียน audit เพื่อให้รันซ้ำครั้งหน้าถูกบล็อก (ไม่งั้นกันซ้ำได้ครั้งเดียว)
+    expect(f).toMatch(/writeAuditLogBatch_\(/);
+  });
+
+  it('zortFindTransfer_ อ่าน "จำนวน" จาก list[].number ไม่ใช่ list[].qty', () => {
+    const f = grab(SRC, /function zortFindTransfer_\(number, days\) \{[\s\S]*?\n\}/);
+    expect(f).toMatch(/qty: Number\(it\.number\)/);
+    // เลขที่เอกสารมาจาก t.number — คนละตัวกับ it.number (ZORT ใช้ชื่อซ้ำกัน)
+    expect(f).toMatch(/t\.number \|\| t\.id/);
+  });
+
+  it('เทียบเลขที่แบบตัดขีดออก — ผู้ใช้พิมพ์ TF-202608035 แทน TF-20260803-005 ได้', () => {
+    const f = grab(SRC, /function zortFindTransfer_\(number, days\) \{[\s\S]*?\n\}/);
+    expect(f).toMatch(/replace\(\/\[\^A-Z0-9\]\/g, ''\)/);
+  });
+
+  it('doGet มี action=zortTransfer และบอกด้วยว่าชีตเรามีบันทึกหรือยัง', () => {
+    expect(SRC).toMatch(/e\.parameter\.action === 'zortTransfer'/);
+    const h = grab(SRC, /function zortTransferHandler_\(number\) \{[\s\S]*?\n\}/);
+    expect(h).toMatch(/sheetLogged/);
+    expect(h).toMatch(/fromZort: true/);
+  });
+
+  it('frontend มีทางค้นจากเลขที่ ZORT และเตือนเมื่อชีตเราไม่มีบันทึก', () => {
+    const look = grab(VA, /const lookupByZort = async \(\) => \{[\s\S]*?\n  \};/);
+    expect(look).toMatch(/syncZortTransferLookup/);
+    expect(look).toMatch(/findAlreadyShipped\(r\.list\)/);   // ใช้ตัวจับคู่ตัวเดียวกัน ไม่เขียนใหม่
+    expect(VA).toMatch(/zortSheetLogged/);
+  });
+});
+
 describe('meta — action=recentTransfers (ประวัติจริงว่าอะไรโอนไปแล้ว)', () => {
   it('doGet มี endpoint และอ่านเฉพาะช่วงท้ายชีต', () => {
     expect(SRC).toMatch(/e\.parameter\.action === 'recentTransfers'/);
