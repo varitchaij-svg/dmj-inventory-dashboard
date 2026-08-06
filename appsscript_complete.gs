@@ -250,6 +250,32 @@ function writeAuditLog_(actor, action, resource, detail) {
   }
 }
 
+// เขียน Audit Log หลายแถวรวดเดียว — ผลลัพธ์ในชีตเหมือน writeAuditLog_ ทีละแถวเป๊ะ
+// (1 งาน = 1 แถว เท่าเดิม ตัวเลขในแท็บ "ผลงานพนักงาน" จึงไม่เปลี่ยน) แต่เขียนครั้งเดียว
+// มีไว้เพราะงานที่ทำทีละหลายสิบ SKU (โอนของขึ้นรถ) เสียเวลาไปกับ appendRow ทีละแถวมากจน
+// คำตอบกลับไม่ทันเพดานเวลาฝั่ง browser → ผู้ใช้เห็น "ส่งไม่สำเร็จ" ทั้งที่ของโอนไปแล้ว
+// ⚠️ ชื่อ action ที่ส่งเข้ามาต้องมีหมวดใน STAFF_PERF_CATEGORIES_ เหมือน writeAuditLog_ ทุกประการ
+//    (tests/staff-perf.test.js สแกน call site ของทั้งสองฟังก์ชัน)
+function writeAuditLogBatch_(actor, action, items) {
+  try {
+    if (!items || !items.length) return;
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sh = ss.getSheetByName(SHEET_AUDIT);
+    if (!sh) {
+      sh = ss.insertSheet(SHEET_AUDIT);
+      sh.appendRow(["วันที่เวลา", "ผู้ใช้", "Action", "Resource", "รายละเอียด"]);
+      sh.getRange(1, 1, 1, 5).setFontWeight("bold");
+    }
+    const now = new Date();
+    const rows = items.map(function (it) {
+      return [now, actor || "ไม่ระบุ", action || "", (it && it.resource) || "", (it && it.detail) || ""];
+    });
+    sh.getRange(sh.getLastRow() + 1, 1, rows.length, 5).setValues(rows);
+  } catch (e) {
+    Logger.log("writeAuditLogBatch_ error: " + e);
+  }
+}
+
 // สร้าง detail string แบบ JSON มาตรฐาน สำหรับ audit log ที่ต้องเก็บ before/after
 // รับ object อิสระ (ไม่ fix shape) เพื่อรองรับข้อมูลเพิ่มเติมในอนาคตโดยไม่ต้องแก้ signature
 // ตัวอย่าง: auditDetail_({ before: {status:"รอ"}, after: null, note: "ลบ order หลังส่งสำเร็จ" })
@@ -2068,7 +2094,7 @@ function doPost(e) {
 
     // ─── Stock Transfer (Batch): คลัง → หน้าร้าน หลาย SKU ในครั้งเดียว ───
     if (data.transferStockBatch) {
-      return transferStockBatch(ss, data.list || [], actor, data.clientLoadedAt);
+      return transferStockBatch(ss, data.list || [], actor, data.clientLoadedAt, data.tid);
     }
 
     // ─── Zero Stock: ตั้ง WH qty=0 ใน Sheets + ZORT (สินค้าหมด ไม่ได้จัด) ───
@@ -2285,6 +2311,13 @@ function doGet(e) {
       return ContentService
         .createTextOutput(JSON.stringify({ ok: true, found: _rowQ > 0, orderId: _rowQ > 0 ? _rowQ - 2 : null }))
         .setMimeType(ContentService.MimeType.JSON);
+    }
+    // "ชุดที่กดส่งขึ้นรถนี้ ลงระบบไปแล้วหรือยัง" — ใช้ตอนคำตอบของ transferStockBatch หายกลางทาง
+    // โอนทีละหลายสิบ SKU ใช้เวลานานกว่าเพดานเวลาฝั่ง browser → browser ตัดสายทั้งที่ GAS
+    // ยังเขียนชีต + สร้างเอกสารโอนใน ZORT ต่อจนจบ · ถ้าไม่ถามก่อน frontend จะขึ้น "ส่งไม่สำเร็จ"
+    // ทั้งที่ของโอนไปแล้ว แล้วผู้ใช้กดซ้ำ = โอนสองเด้ง (หลักเดียวกับ action=orderCheck)
+    if (e && e.parameter && e.parameter.action === 'transferCheck') {
+      return transferCheckHandler_(String(e.parameter.tid || '').trim());
     }
     // ตรวจ PIN เจ้าของฝั่ง server (PIN ไม่อยู่ใน source โค้ด frontend)
     // ตั้งค่าใน Script Property ชื่อ OWNER_PIN; ถ้าไม่ตั้ง ใช้ค่า default 'DMJ' (backward compatible)
@@ -3016,7 +3049,7 @@ function resetNegativeStock_(ss, actor) {
   }
 }
 
-const SHIP_HEADERS = ["หมายเลขรายการ","วันที่ทำรายการ","สถานะ(รอ,สำเร็จ)","จากคลัง/สาขา","ไปคลัง/สาขา","รหัสสินค้า","ชื่อสินค้า","จำนวน","จำนวนที่จัด","รูปภาพ","จำนวนที่รับ","สถานะรับ","รับเมื่อ","ผู้รับ","ผู้จัด"];
+const SHIP_HEADERS = ["หมายเลขรายการ","วันที่ทำรายการ","สถานะ(รอ,สำเร็จ)","จากคลัง/สาขา","ไปคลัง/สาขา","รหัสสินค้า","ชื่อสินค้า","จำนวน","จำนวนที่จัด","รูปภาพ","จำนวนที่รับ","สถานะรับ","รับเมื่อ","ผู้รับ","ผู้จัด","รหัสชุดที่ส่ง"];
 
 function logTransfer_(ss, sku, productName, qty, actor) {
   let logSheet = ss.getSheetByName(SHEET_TRANSFERS);
@@ -3055,14 +3088,79 @@ function createZortTransfer_(sku, productname, qty) {
   return json;
 }
 
+// ── ตัวกันโอนซ้ำระดับ "ทั้งชุด" (tid) ────────────────────────────────────────
+// tid = รหัสที่ client สร้าง 1 ค่าต่อการกด "ส่งทั้งหมด" 1 ครั้ง และ **คงค่าเดิมตอนลองใหม่**
+// ทำไมต้องมี: โอนทีละหลายสิบ SKU ใช้เวลานานกว่าเพดานเวลาฝั่ง browser → browser ตัดสาย
+//   ทั้งที่ GAS ยังเขียนชีต + สร้างเอกสารโอนใน ZORT ต่อจนจบ · ผู้ใช้เห็น "ส่งไม่สำเร็จ" แล้วกดซ้ำ
+//   = **โอนสองเด้ง** (ตัวกันซ้ำรายชิ้น `shp2_` อายุแค่ 90 วิ ไม่ครอบคลุมกรณีนี้)
+// หลักเดียวกับ `cid` ของ action=order — เห็น tid เดิม = คืนผลเดิม ไม่เขียนอะไรใหม่
+const TFB_REPLAY_TTL_SEC = 21600;  // 6 ชม. (เพดานของ CacheService)
+const COL_SHIP_TID       = 16;     // P รหัสชุดที่กดส่ง — ต่อท้าย ห้ามแทรกกลาง (บทเรียนข้อ 5)
+const TFB_TID_SCAN_ROWS  = 600;    // แถวท้ายสุดที่ไล่หา tid ในชีตโอน (เผื่อ cache หลุด)
+
+// หา tid ในชีตโอน (ของจริงที่ถาวร — ใช้เมื่อ cache หมดอายุ/ถูกเขี่ยทิ้ง)
+// คืน { refNum, items:[{sku,qty}] } หรือ null · อ่านเฉพาะช่วงท้ายชีต ไม่ getDataRange ทั้งก้อน
+function findTidInShipments_(ss, tid) {
+  if (!tid) return null;
+  const sh = ss.getSheetByName(SHEET_TRANSFERS);
+  if (!sh) return null;
+  const last = sh.getLastRow();
+  if (last < 2) return null;
+  const from = Math.max(2, last - TFB_TID_SCAN_ROWS + 1);
+  const n = last - from + 1;
+  const rows = sh.getRange(from, 1, n, COL_SHIP_TID).getValues();
+  const items = [];
+  let refNum = '';
+  for (let i = 0; i < rows.length; i++) {
+    if (String(rows[i][COL_SHIP_TID - 1] || '').trim() !== tid) continue;
+    refNum = String(rows[i][COL_SHIP_REF - 1] || '').trim();
+    items.push({ sku: String(rows[i][COL_SHIP_SKU - 1] || '').trim(), qty: Number(rows[i][COL_SHIP_QTY - 1]) || 0 });
+  }
+  return items.length ? { refNum, items } : null;
+}
+
+// doGet action=transferCheck — "ชุด tid นี้โอนไปแล้วหรือยัง"
+// คืน found=false เมื่อ **ยืนยันได้ว่ายังไม่ลง** เท่านั้น (frontend ใช้ตัดสินใจว่ายิงซ้ำได้ไหม)
+// ตอบไม่ได้/ผิดรูปแบบ → frontend ต้องถือว่า "ไม่รู้" และห้ามยิงซ้ำ
+function transferCheckHandler_(tid) {
+  const out = { ok: true, found: false };
+  try {
+    if (tid) {
+      const cached = CacheService.getScriptCache().get('tfb_' + tid);
+      if (cached) {
+        const o = JSON.parse(cached);
+        out.found   = true;
+        out.results = o.results || [];
+        out.refNum  = o.refNum || null;
+        out.count   = o.count || 0;
+        out.zortNumber = o.zortNumber || null;
+      } else {
+        const hit = findTidInShipments_(SpreadsheetApp.openById(SHEET_ID), tid);
+        if (hit) {
+          // cache หมดอายุ/หลุด — ยืนยันจากชีตได้ว่าลงแล้ว แต่ไม่มีผลรายตัว (ไม่มี orderId ในชีต)
+          out.found = true; out.fromSheet = true;
+          out.refNum = hit.refNum; out.items = hit.items; out.count = hit.items.length;
+        }
+      }
+    }
+  } catch (err) {
+    Logger.log('transferCheckHandler_ error: ' + err);
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);
+}
+
 // Batch: หักสต็อกหลาย SKU ในครั้งเดียว → สร้าง ZORT Transfer เอกสารเดียว (เลขที่ auto)
 // list = [{ sku, qty, name, orderId }, ...]
 // clientLoadedAt = epoch ms ที่ client โหลดข้อมูล (ใช้ตรวจ conflict ก่อนทำ batch)
+// tid = รหัสชุด (ดูหัวข้อด้านบน) — ไม่ส่งมาก็ทำงานได้เหมือนเดิม แค่ไม่มีตัวกันโอนซ้ำ
 // หมายเหตุ: AddTransfer ย้ายสต็อกใน ZORT ให้อยู่แล้ว จึงไม่ต้อง push absolute ทับ
-function transferStockBatch(ss, list, actor, clientLoadedAt) {
+function transferStockBatch(ss, list, actor, clientLoadedAt, tid) {
   if (!Array.isArray(list) || !list.length) return error("list ว่างเปล่า");
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_PRODUCTS);
+  tid = String(tid || '').trim();
 
   // หมายเหตุ: เลิกใช้ global conflict detection (dmj_last_write_ts) ที่นี่แล้ว
   // เหตุผล: การโอนอ่าน whQty สดจาก sheet "ใน lock" แล้ว clamp ด้วย Math.min(qty, whQty)
@@ -3075,6 +3173,26 @@ function transferStockBatch(ss, list, actor, clientLoadedAt) {
 
   const cache = CacheService.getScriptCache();
   try {
+    // ── กดส่งชุดนี้ไปแล้ว? → คืนผลเดิม ไม่เขียนอะไรซ้ำ ──────────────────────
+    // เช็ค **ในล็อก** เพื่อให้สองคำขอที่ tid เดียวกันมาพร้อมกันได้ผลเดียวกันแน่นอน
+    if (tid) {
+      const prevRaw = cache.get('tfb_' + tid);
+      if (prevRaw) {
+        try {
+          const prev = JSON.parse(prevRaw);
+          prev.replay = true;
+          return ok(prev);
+        } catch (e) { /* cache เพี้ยน → ตกไปเช็คจากชีตแทน */ }
+      }
+      const onSheet = findTidInShipments_(ss, tid);
+      if (onSheet) {
+        // cache หมดอายุแล้วแต่ของจริงอยู่ในชีต — ไม่มีผลรายตัวให้ (results ว่าง)
+        // frontend ต้องไปเคลียร์ผ่าน "เช็คของที่ส่งไปแล้ว" แทนการเดาว่าอันไหนสำเร็จ
+        return ok({ count: onSheet.items.length, replay: true, fromSheet: true,
+                    refNum: onSheet.refNum, items: onSheet.items, results: [] });
+      }
+    }
+
     const data = sheet.getDataRange().getValues();
     const transferred = [];   // { sku, name, qty } ที่หักได้จริง
     const results = [];
@@ -3114,8 +3232,10 @@ function transferStockBatch(ss, list, actor, clientLoadedAt) {
       const newWH  = whQty - actual;
       const newFS  = fsQty + actual;
 
-      sheet.getRange(row, COL_PROD_QTYWH).setValue(newWH);
-      sheet.getRange(row, COL_PROD_QTYFS).setValue(newFS);
+      // G กับ H ติดกัน → เขียนครั้งเดียวต่อแถว (เดิม 2 ครั้ง) — โอน 77 SKU ลดจาก 154 เหลือ 77 call
+      // ⚠️ ยังเขียน "เฉพาะแถวที่เปลี่ยน" เหมือนเดิม ห้ามเปลี่ยนเป็นเขียนทั้งบล็อกรวด
+      //    เพราะ syncZortToColumn_ เขียนทับทั้งคอลัมน์โดยไม่จับล็อก → บล็อกใหญ่จะย้อนงานมันทิ้ง
+      sheet.getRange(row, COL_PROD_QTYFS, 1, 2).setValues([[newFS, newWH]]);
       data[i][COL_PROD_QTYWH - 1] = newWH;
       data[i][COL_PROD_QTYFS - 1] = newFS;
 
@@ -3129,7 +3249,7 @@ function transferStockBatch(ss, list, actor, clientLoadedAt) {
 
     SpreadsheetApp.flush();
 
-    let zortNumber = null, zortError = null;
+    let zortNumber = null, zortError = null, refNum = null;
     if (transferred.length) {
       try {
         const zr = createZortTransferBatch_(transferred);
@@ -3142,11 +3262,13 @@ function transferStockBatch(ss, list, actor, clientLoadedAt) {
           zortError + " | SKU: " + transferred.map(t => t.sku + "x" + t.qty).join(","));
       }
 
-      try { logTransferBatch_(ss, transferred, zortNumber, actor); } catch (e) { Logger.log("logTransferBatch_ error: " + e); }
-      // Audit log: บันทึกทุก SKU ที่โอนจริง
-      transferred.forEach(function(t) {
-        writeAuditLog_(actor, "โอนสต็อก", t.sku, "qty " + t.qty + ": W0002→W0001");
-      });
+      try { refNum = logTransferBatch_(ss, transferred, zortNumber, actor, tid); } catch (e) { Logger.log("logTransferBatch_ error: " + e); }
+      // Audit log: บันทึกทุก SKU ที่โอนจริง (1 แถว/SKU เท่าเดิม — แต่เขียนรวดเดียว)
+      // เดิม appendRow ทีละแถว: โอน 77 SKU = 77 รอบเขียนชีต ซึ่งเป็นตัวกินเวลาหลักจน
+      // คำตอบกลับไม่ทันเพดานเวลาฝั่ง browser แล้วขึ้น "ส่งไม่สำเร็จ" ทั้งที่โอนไปแล้ว
+      writeAuditLogBatch_(actor, "โอนสต็อก", transferred.map(function (t) {
+        return { resource: t.sku, detail: "qty " + t.qty + ": W0002→W0001" };
+      }));
       // แจ้งหน้าร้านว่ามีของกำลังมา — เรื่องนี้ไม่เคยแจ้ง LINE เลย (ไม่คุ้ม quota)
       // รวมทั้งชุดเป็นแจ้งเตือนเดียว ไม่ยิงราย SKU (โอนทีนึงมีหลายสิบตัว)
       pushInappNoti_({
@@ -3160,7 +3282,15 @@ function transferStockBatch(ss, list, actor, clientLoadedAt) {
       });
     }
 
-    return ok({ count: transferred.length, zortNumber, zortError, shortfalls, results });
+    const payload = { count: transferred.length, zortNumber, zortError, shortfalls, results, refNum, tid: tid || null };
+    // เก็บผลไว้ตอบซ้ำ — คนกดส่งที่ browser ตัดสายไปแล้วจะได้ "ผลจริง" ตอนถาม action=transferCheck
+    // แทนที่จะต้องเดา หรือกดส่งซ้ำจนโอนสองเด้ง
+    if (tid) {
+      try { cache.put('tfb_' + tid, JSON.stringify(payload), TFB_REPLAY_TTL_SEC); } catch (e) {
+        Logger.log('tfb cache put error: ' + e);   // ผลใหญ่เกิน 100KB → ยังมีชีตเป็นตัวยืนยันสำรอง
+      }
+    }
+    return ok(payload);
   } finally {
     try { invalidateCache_(); } catch(e) {} // C5: ล้าง cache หลัง write เสมอ
     lock.releaseLock();
@@ -3200,8 +3330,8 @@ function createZortTransferBatch_(items) {
   return lastErr;
 }
 
-// log หลายรายการที่อ้าง ZORT number เดียวกัน
-function logTransferBatch_(ss, items, zortNumber, actor) {
+// log หลายรายการที่อ้าง ZORT number เดียวกัน · คืนเลขที่รายการ (refNum) ให้ผู้เรียกเก็บไว้ตอบซ้ำ
+function logTransferBatch_(ss, items, zortNumber, actor, tid) {
   let logSheet = ss.getSheetByName(SHEET_TRANSFERS);
   if (!logSheet) {
     logSheet = ss.insertSheet(SHEET_TRANSFERS);
@@ -3216,10 +3346,12 @@ function logTransferBatch_(ss, items, zortNumber, actor) {
     : "TF-" + Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyyMMdd") + "-" + String(baseRow).padStart(3, "0");
   const rows = items.map(it => {
     const img = imgMap[(it.sku || "").toUpperCase()] || "";
-    // คอลัมน์ O (preparedBy) เพิ่มใหม่ Sprint 2 — ต่อท้าย ไม่แทรกกลาง กัน column-index เพี้ยน
-    return [refNum, dateStr, "สำเร็จ", WH_NAME_SAI5, WH_NAME_FS, it.sku, it.name, it.qty, it.qty, img, "", "รอรับ", "", "", actor || ""];
+    // คอลัมน์ O (preparedBy) เพิ่มใหม่ Sprint 2, P (tid) เพิ่ม ส.ค. 2026 — ต่อท้ายทั้งคู่
+    // ไม่แทรกกลาง กัน column-index เพี้ยน (บทเรียนข้อ 5)
+    return [refNum, dateStr, "สำเร็จ", WH_NAME_SAI5, WH_NAME_FS, it.sku, it.name, it.qty, it.qty, img, "", "รอรับ", "", "", actor || "", tid || ""];
   });
-  logSheet.getRange(baseRow + 1, 1, rows.length, 15).setValues(rows);
+  logSheet.getRange(baseRow + 1, 1, rows.length, COL_SHIP_TID).setValues(rows);
+  return refNum;
 }
 
 // ════════════════════════════════════════════════════════════════════

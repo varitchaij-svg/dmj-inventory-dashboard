@@ -1,0 +1,287 @@
+// tests/transfer-idempotent.test.js — กด "ส่งทั้งหมด" แล้วขึ้นว่าไม่สำเร็จ ทั้งที่ของโอนไปแล้ว
+// ─────────────────────────────────────────────────────────────────────────────
+// เหมือน order-idempotent.test.js / auth.test.js: **ไม่ copy โค้ดเข้า helpers.js** แต่ eval
+// ฟังก์ชันจริงจากต้นทาง เพราะนี่คือตรรกะที่กัน "โอนของสองเด้ง" — สำเนา drift แล้วเทสต์จะเขียว
+// ทั้งที่ของจริงโอนซ้ำ (สต็อกคลังหายไปฟรี ๆ + เอกสารโอนใน ZORT ซ้ำ)
+//
+// ที่มา (ส.ค. 2026): พนักงานกด "ส่งทั้งหมด" 77 รายการ → มีแจ้งเตือนเข้า, ZORT สร้างรายการโอน
+//   เรียบร้อย แต่หน้าจอขึ้น "ส่งไม่สำเร็จ" และรายการทั้ง 77 ยังค้างอยู่
+//   ต้นเหตุ: ชุดใหญ่ใช้เวลานานกว่าเพดานเวลาของ dmjFetch (60 วิ) → browser ตัดสายทั้งที่ GAS
+//   ยังเขียนชีต + ยิง ZORT ต่อจนจบ · frontend เดิมแปลว่า "ล้มเหลว" ทันที
+//   ที่อันตรายกว่าคือถ้าพนักงานกดซ้ำ ตัวกันซ้ำรายชิ้น (shp2_, 90 วิ) หมดอายุไปแล้ว = โอนสองเด้ง
+//
+// สิ่งที่คุมไว้:
+//   1. findTidInShipments_ หา tid ในชีตโอนเจอ/ไม่เจอถูกต้อง + อ่านเฉพาะช่วงท้ายชีต
+//   2. shipResultsFromSheetItems จับคู่ sku กลับเป็นผลรายตัวแบบ 1 ต่อ 1 (ไม่ใช้แถวซ้ำ)
+//   3. meta: transferStockBatch ต้องรับ tid, เช็คซ้ำก่อนเขียน, เก็บผลไว้ตอบซ้ำ
+//   4. meta: doGet ต้องมี action=transferCheck และ doPost ต้องส่ง tid เข้า transferStockBatch
+//   5. meta: frontend ต้องส่ง tid + ถาม transferCheck ก่อนขึ้น "ส่งไม่สำเร็จ"
+//   6. meta: ปุ่มเคลียร์ของที่ส่งแล้ว ต้อง **ไม่** เรียกการโอนซ้ำ
+// ─────────────────────────────────────────────────────────────────────────────
+import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const SRC = readFileSync(join(ROOT, 'appsscript_complete.gs'), 'utf8');
+const VA = readFileSync(join(ROOT, 'views-analytics.jsx'), 'utf8');
+
+function grab(src, re) {
+  const m = src.match(re);
+  if (!m) throw new Error('หาโค้ดในต้นทางไม่เจอ (โครงสร้างเปลี่ยน?): ' + re);
+  return m[0];
+}
+
+// ── ฟังก์ชันจริงจาก .gs ──────────────────────────────────────────────────────
+const { findTidInShipments_, COL_SHIP_TID, TFB_TID_SCAN_ROWS } = (() => {
+  const cols = grab(SRC, /const COL_SHIP_REF\s*=[\s\S]*?const COL_SHIP_PREPAREDBY\s*=\s*\d+;/);
+  const consts = grab(SRC, /const TFB_REPLAY_TTL_SEC[\s\S]*?const TFB_TID_SCAN_ROWS\s*=\s*\d+;/);
+  const fn = grab(SRC, /function findTidInShipments_\(ss, tid\) \{[\s\S]*?\n\}/);
+  // eslint-disable-next-line no-new-func
+  return new Function(
+    `const SHEET_TRANSFERS = "รายการโอนสินค้า";\n${cols}\n${consts}\n${fn}\n` +
+    `return { findTidInShipments_, COL_SHIP_TID, TFB_TID_SCAN_ROWS };`
+  )();
+})();
+
+// ── ฟังก์ชันจริงจาก views-analytics.jsx ──────────────────────────────────────
+const shipResultsFromSheetItems = (() => {
+  const fn = grab(VA, /function shipResultsFromSheetItems\(transferItems, sheetItems\) \{[\s\S]*?\n\}/);
+  // eslint-disable-next-line no-new-func
+  return new Function(`${fn}\nreturn shipResultsFromSheetItems;`)();
+})();
+
+// ชีตปลอม: rows[i] = แถวที่ 2+i (แถว 1 เป็นหัวตาราง) · แต่ละแถวคือ array ตามคอลัมน์จริง
+function fakeShipSheet(rows) {
+  const calls = [];
+  return {
+    calls,
+    getLastRow: () => 1 + rows.length,
+    getRange(row, col, numRows, numCols) {
+      calls.push({ row, col, numRows, numCols });
+      const out = [];
+      for (let i = 0; i < numRows; i++) {
+        const r = rows[row - 2 + i] || [];
+        out.push(Array.from({ length: numCols }, (_, c) => r[c] ?? ''));
+      }
+      return { getValues: () => out };
+    },
+  };
+}
+function fakeSs(sheet) {
+  return { getSheetByName: () => sheet };
+}
+// สร้างแถวชีตโอน: A=ref … F=sku … H=qty … P=tid
+function shipRow({ ref = 'TF-1', sku = 'AA001', qty = 5, tid = '' } = {}) {
+  const r = new Array(COL_SHIP_TID).fill('');
+  r[0] = ref; r[5] = sku; r[7] = qty; r[COL_SHIP_TID - 1] = tid;
+  return r;
+}
+
+describe('findTidInShipments_ — หาชุดที่โอนไปแล้วจากชีต (ของจริงที่ถาวร)', () => {
+  it('เจอทุกแถวที่มี tid เดียวกัน พร้อมเลขที่รายการ', () => {
+    const sh = fakeShipSheet([
+      shipRow({ ref: 'TF-OLD', sku: 'ZZ999', qty: 1, tid: 'TBold' }),
+      shipRow({ ref: 'TF-9', sku: 'AA001', qty: 5, tid: 'TBx' }),
+      shipRow({ ref: 'TF-9', sku: 'BB002', qty: 7, tid: 'TBx' }),
+    ]);
+    const hit = findTidInShipments_(fakeSs(sh), 'TBx');
+    expect(hit).not.toBeNull();
+    expect(hit.refNum).toBe('TF-9');
+    expect(hit.items).toEqual([{ sku: 'AA001', qty: 5 }, { sku: 'BB002', qty: 7 }]);
+  });
+
+  it('ไม่เจอ tid → คืน null (frontend ต้องแปลว่า "ยังไม่ลง" ได้อย่างมั่นใจ)', () => {
+    const sh = fakeShipSheet([shipRow({ tid: 'TBa' })]);
+    expect(findTidInShipments_(fakeSs(sh), 'TBb')).toBeNull();
+  });
+
+  it('tid ว่าง → คืน null ทันที ไม่ไปแมตช์กับแถวเก่าที่คอลัมน์ P ว่างยกแผง', () => {
+    const sh = fakeShipSheet([shipRow({ tid: '' }), shipRow({ tid: '' })]);
+    expect(findTidInShipments_(fakeSs(sh), '')).toBeNull();
+    expect(sh.calls.length).toBe(0);   // ไม่แตะชีตเลย
+  });
+
+  it('ค่าที่มีช่องว่างติดมาจากชีต ต้องยังจับคู่ได้', () => {
+    const sh = fakeShipSheet([shipRow({ tid: '  TBx \n' })]);
+    expect(findTidInShipments_(fakeSs(sh), 'TBx')).not.toBeNull();
+  });
+
+  it('ไม่มีชีต / ชีตว่าง → null ไม่ throw', () => {
+    expect(findTidInShipments_({ getSheetByName: () => null }, 'TBx')).toBeNull();
+    expect(findTidInShipments_(fakeSs(fakeShipSheet([])), 'TBx')).toBeNull();
+  });
+
+  it('อ่านเฉพาะช่วงท้ายชีต ไม่เกิน TFB_TID_SCAN_ROWS แถว (ชีตโอนโตทุกวัน)', () => {
+    const many = Array.from({ length: 5000 }, (_, i) => shipRow({ sku: 'S' + i, tid: 'TBz' }));
+    const sh = fakeShipSheet(many);
+    findTidInShipments_(fakeSs(sh), 'TBz');
+    expect(sh.calls.length).toBe(1);
+    expect(sh.calls[0].numRows).toBeLessThanOrEqual(TFB_TID_SCAN_ROWS);
+    expect(sh.calls[0].row).toBeGreaterThan(2);         // เริ่มอ่านจากท้าย ไม่ใช่หัวชีต
+    expect(sh.calls[0].numCols).toBe(COL_SHIP_TID);     // ต้องครอบถึงคอลัมน์ tid
+  });
+
+  it('ชีตสั้นกว่าเพดาน → เริ่มอ่านที่แถว 2 ไม่หลุดไปแถวหัวตาราง', () => {
+    const sh = fakeShipSheet([shipRow({ tid: 'TBz' })]);
+    findTidInShipments_(fakeSs(sh), 'TBz');
+    expect(sh.calls[0].row).toBe(2);
+  });
+});
+
+describe('shipResultsFromSheetItems — กางผลรายตัวกลับจากชีต (ตอน cache ผลหมดอายุ)', () => {
+  const items = [
+    { orderId: 'R3', sku: 'AA001', qty: 5 },
+    { orderId: 'R4', sku: 'BB002', qty: 7 },
+  ];
+
+  it('จับคู่ sku+จำนวนตรงกัน → ได้ผลรายตัวครบ พร้อม orderId เดิม', () => {
+    const out = shipResultsFromSheetItems(items, [{ sku: 'AA001', qty: 5 }, { sku: 'BB002', qty: 7 }]);
+    expect(out).toEqual([
+      { sku: 'AA001', orderId: 'R3', requested: 5, transferred: 5 },
+      { sku: 'BB002', orderId: 'R4', requested: 7, transferred: 7 },
+    ]);
+  });
+
+  it('คลังไม่พอ (จำนวนในชีตน้อยกว่าที่สั่ง) → ยังจับคู่ได้ และรายงานจำนวนที่โอนจริง', () => {
+    const out = shipResultsFromSheetItems(items, [{ sku: 'AA001', qty: 2 }]);
+    expect(out).toEqual([{ sku: 'AA001', orderId: 'R3', requested: 5, transferred: 2 }]);
+  });
+
+  it('SKU เดียวกัน 2 ใบ ต้องใช้คนละแถว — แถวเดียวห้ามเคลียร์ทั้งคู่', () => {
+    const two = [
+      { orderId: 'R3', sku: 'AA001', qty: 5 },
+      { orderId: 'R9', sku: 'AA001', qty: 5 },
+    ];
+    const out = shipResultsFromSheetItems(two, [{ sku: 'AA001', qty: 5 }]);
+    expect(out).toHaveLength(1);
+    expect(out[0].orderId).toBe('R3');   // ใบที่สองไม่มีแถวรองรับ → คงไว้ในรายการ
+  });
+
+  it('ตัวที่ไม่มีแถวโอนรองรับ ต้องไม่โผล่ในผล (จะได้ไม่ถูกลบทิ้งทั้งที่ยังไม่ได้ส่ง)', () => {
+    const out = shipResultsFromSheetItems(items, [{ sku: 'BB002', qty: 7 }]);
+    expect(out.map(r => r.orderId)).toEqual(['R4']);
+  });
+
+  it('เทียบ sku แบบไม่สนตัวพิมพ์/ช่องว่าง', () => {
+    const out = shipResultsFromSheetItems([{ orderId: 'R3', sku: ' aa001 ', qty: 5 }],
+                                          [{ sku: 'AA001', qty: 5 }]);
+    expect(out).toHaveLength(1);
+  });
+
+  it('ไม่มีรายการจากชีตเลย → คืน array ว่าง (ไม่เดาว่าสำเร็จ)', () => {
+    expect(shipResultsFromSheetItems(items, [])).toEqual([]);
+    expect(shipResultsFromSheetItems(items, undefined)).toEqual([]);
+  });
+});
+
+// ── meta: จุดเชื่อมต่อที่ "พังแล้วไม่มี error ให้เห็น" ────────────────────────
+describe('meta — เส้นทางกันโอนซ้ำต้องยังต่อกันครบ', () => {
+  const fn = grab(SRC, /function transferStockBatch\(ss, list, actor, clientLoadedAt, tid\) \{[\s\S]*?\n\}\n\n\/\/ สร้าง ZORT Transfer/);
+
+  it('transferStockBatch รับ tid และเช็ค "ทำไปแล้วหรือยัง" ก่อนเขียนอะไร', () => {
+    expect(fn).toMatch(/cache\.get\('tfb_'\s*\+\s*tid\)/);
+    expect(fn).toMatch(/findTidInShipments_\(ss, tid\)/);
+    // ต้องเช็คก่อนอ่าน/เขียนชีตสินค้า ไม่งั้นการเช็คไม่มีความหมาย
+    expect(fn.indexOf("cache.get('tfb_'")).toBeLessThan(fn.indexOf('sheet.getDataRange()'));
+  });
+
+  it('transferStockBatch เก็บผลไว้ตอบซ้ำ (ไม่งั้น transferCheck ตอบไม่ได้)', () => {
+    expect(fn).toMatch(/cache\.put\('tfb_'\s*\+\s*tid/);
+  });
+
+  it('การเช็คซ้ำอยู่ "ในล็อก" — สองคำขอ tid เดียวกันพร้อมกันต้องได้ผลเดียวกัน', () => {
+    expect(fn.indexOf('lock.tryLock')).toBeLessThan(fn.indexOf("cache.get('tfb_'"));
+  });
+
+  it('doPost ส่ง tid ต่อเข้า transferStockBatch (ไม่ส่ง = ตัวกันซ้ำไม่ทำงานเลย)', () => {
+    expect(SRC).toMatch(/transferStockBatch\(ss, data\.list \|\| \[\], actor, data\.clientLoadedAt, data\.tid\)/);
+  });
+
+  it('doGet มี action=transferCheck ให้ frontend ถามก่อนขึ้นแดง', () => {
+    expect(SRC).toMatch(/e\.parameter\.action === 'transferCheck'/);
+    expect(SRC).toMatch(/function transferCheckHandler_\(tid\)/);
+  });
+
+  it('logTransferBatch_ เขียน tid ลงคอลัมน์ P จริง (ไม่งั้นเช็คจากชีตไม่เจอตลอดกาล)', () => {
+    const lg = grab(SRC, /function logTransferBatch_\(ss, items, zortNumber, actor, tid\) \{[\s\S]*?\n\}/);
+    expect(lg).toMatch(/tid \|\| ""/);
+    expect(lg).toMatch(/rows\.length, COL_SHIP_TID/);
+  });
+
+  it('SHIP_HEADERS กว้างเท่าคอลัมน์ tid พอดี (หัวตารางกับข้อมูลต้องไม่เหลื่อมกัน)', () => {
+    const headers = grab(SRC, /const SHIP_HEADERS = \[[\s\S]*?\];/);
+    // eslint-disable-next-line no-new-func
+    const arr = new Function(`${headers}\nreturn SHIP_HEADERS;`)();
+    expect(arr.length).toBe(COL_SHIP_TID);
+  });
+
+  it('COL_SHIP_TID ต้องต่อท้ายคอลัมน์เดิม ไม่ทับ "ผู้จัด" (บทเรียนข้อ 5)', () => {
+    const prepBy = Number(grab(SRC, /const COL_SHIP_PREPAREDBY\s*=\s*\d+/).match(/\d+/)[0]);
+    expect(COL_SHIP_TID).toBe(prepBy + 1);
+  });
+});
+
+describe('meta — frontend ต้องไม่ประกาศว่า "ส่งไม่สำเร็จ" ก่อนถามของจริง', () => {
+  const doShipAll = grab(VA, /const doShipAll = async \(\) => \{[\s\S]*?\n  \};/);
+
+  it('ส่ง tid ไปกับการโอนทั้งชุด', () => {
+    expect(VA).toMatch(/transferStockBatch: true, list: items, tid: tid \|\| ""/);
+    expect(doShipAll).toMatch(/tid = getShipTid\(ready\)/);
+    expect(doShipAll).toMatch(/syncStockTransferBatch\(transferItems, tid\)/);
+  });
+
+  it('อ่านคำตอบไม่ได้ → ถาม transferCheck ก่อน แล้วค่อยตัดสิน', () => {
+    expect(doShipAll).toMatch(/batchRes\.unreadable/);
+    expect(doShipAll).toMatch(/await syncTransferCheck\(tid\)/);
+    expect(doShipAll.indexOf('syncTransferCheck')).toBeLessThan(doShipAll.indexOf('const batchOk'));
+  });
+
+  it('ถามไม่ได้คำตอบ (chk = null) ต้องไม่ชวนให้กดส่งซ้ำ — ยังไม่รู้ว่าโอนไปหรือยัง', () => {
+    const unknownBranch = grab(doShipAll, /\} else if \(batchRes && batchRes\.unreadable\) \{[\s\S]*?\n      \}/);
+    expect(unknownBranch).not.toMatch(/อีกครั้งได้เลย/);
+    expect(unknownBranch).toMatch(/เช็คของที่ส่งไปแล้ว/);
+  });
+
+  it('tid คงค่าเดิมตลอดชุดเดิม และถูกล้างเมื่อชุดจบแล้วเท่านั้น', () => {
+    const getTid = grab(VA, /function getShipTid\(orders\) \{[\s\S]*?\n\}/);
+    expect(getTid).toMatch(/cur\.key === key/);            // ชุดเดิม = tid เดิม
+    expect(getTid).toMatch(/SHIP_TID_MAX_AGE_MS/);         // มีอายุ ไม่ค้างข้ามวัน
+    expect(doShipAll).toMatch(/clearShipTid\(\)/);
+    // ต้องล้างหลังรู้ผลรายตัวแล้วเท่านั้น — ล้างก่อนถาม = ลองใหม่แล้วโอนซ้ำ
+    expect(doShipAll.indexOf('clearShipTid()')).toBeGreaterThan(doShipAll.indexOf('const batchOk'));
+  });
+
+  it('เพดานเวลาของการโอนทั้งชุดต้องยาวกว่าค่า default 60 วิ ของ dmjFetch', () => {
+    const sync = grab(VA, /async function syncStockTransferBatch\(items, tid\) \{[\s\S]*?\n\}/);
+    const ms = Number(sync.match(/dmjTimeoutMs:\s*(\d+)/)[1]);
+    expect(ms).toBeGreaterThan(60000);
+    expect(sync).toMatch(/await dmjJson\(res\)/);        // ห้ามกลับไปใช้ res.json() (บทเรียนข้อ 13)
+    expect(sync).toMatch(/unreadable: true/);
+  });
+});
+
+describe('meta — ปุ่ม "เช็คของที่ส่งไปแล้ว" ต้องไม่ตัดสต็อกซ้ำ', () => {
+  const apply = grab(VA, /const applyReconcile = async \(\) => \{[\s\S]*?\n  \};/);
+  const find  = grab(VA, /const findAlreadyShipped = \(\) => \{[\s\S]*?\n  \};/);
+
+  it('ลบ order + มาร์คส่งแล้วเท่านั้น — ห้ามเรียกการโอนใด ๆ', () => {
+    expect(apply).toMatch(/syncDeleteOrders/);
+    expect(apply).not.toMatch(/syncStockTransferBatch|syncStockDeduct/);
+  });
+
+  it('ตัดสินจากชีตรายการโอนจริง ไม่ใช่เดาจากหน้าจอ', () => {
+    expect(find).toMatch(/data\.shipments/);
+    expect(find).toMatch(/!s\.receivedAt/);
+  });
+
+  it('จับคู่ 1 ต่อ 1 — แถวโอนแถวเดียวห้ามเคลียร์ order หลายใบ', () => {
+    expect(find).toMatch(/used = true/);
+    expect(find).toMatch(/!s\.used/);
+  });
+
+  it('ไม่แตะรายการ MTO (ไม่ได้โอนสต็อกคลังตั้งแต่แรก)', () => {
+    expect(find).toMatch(/!o\.product\?\.isMTO/);
+  });
+});

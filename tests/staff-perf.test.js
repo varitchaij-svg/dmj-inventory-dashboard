@@ -60,8 +60,13 @@ const M = load();
 
 // ── ดึง action literal จาก call site ของ writeAuditLog_ ในโค้ดจริง ──
 // นับวงเล็บ + ข้าม string literal (arg แรกมี `" ("` อยู่จริง naive counting จะเพี้ยน)
+// ⚠️ ต้องสแกน writeAuditLogBatch_ ด้วย — งานที่ทำทีละหลายสิบ SKU (โอนของขึ้นรถ) ย้ายไปใช้
+//    ตัวนั้นแล้ว ถ้าสแกนแค่ตัวเดิม action ของมันจะหลุดการตรวจไปเงียบ ๆ ทั้งที่เทสต์ยังเขียว
 function auditActionLiterals(src) {
-  const NEEDLE = 'writeAuditLog_(';
+  return ['writeAuditLog_(', 'writeAuditLogBatch_('].reduce(
+    (acc, n) => acc.concat(auditActionLiteralsFor(src, n)), []);
+}
+function auditActionLiteralsFor(src, NEEDLE) {
   const out = new Set();
   let i = 0;
   while ((i = src.indexOf(NEEDLE, i)) >= 0) {

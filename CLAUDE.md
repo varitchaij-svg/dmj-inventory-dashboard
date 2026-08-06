@@ -307,7 +307,8 @@ SHEET_LOCKS     = "ตำแหน่งจัดเก็บ"      // B=SKU, C=
 SHEET_TRANSFERS = "รายการโอนสินค้า"     // shipments log (warehouse→frontstore)
   COL_SHIP_REF=1(A), date=B, status=C, from=D, to=E, SKU=F, name=G,
   qty=H, prepared=I, image=J, receivedQty=K, receivedStatus=L,
-  COL_SHIP_RECVAT=13(M)←ว่าง=รอรับ/มีค่า=รับแล้ว, receivedBy=N
+  COL_SHIP_RECVAT=13(M)←ว่าง=รอรับ/มีค่า=รับแล้ว, receivedBy=N, preparedBy=O,
+  COL_SHIP_TID=16(P) รหัสชุดที่กดส่ง (กันโอนซ้ำ — ดูหัวข้อ "กดส่งของแล้วขึ้นส่งไม่สำเร็จ")
 PURCHASES sheet = "รายการซื้อสินค้า"    // col(0-idx) 1=type,2=poNum,4=supplier,11=date,
                                         //   19=status,20=warehouse,24=sku,25=name,26=qty,27=unitPrice
 ยอดขายรายเดือน / ยอดขายรายวัน           // header เป็น text format กัน Sheets แปลง MM/YYYY เป็นวันที่
@@ -531,7 +532,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 1050 tests, 31 test files, ทั้งหมด pass
+**มี Vitest test suite แล้ว** — 1092 tests, 32 test files, ทั้งหมด pass
 
 ```bash
 npm test              # run tests
@@ -543,7 +544,8 @@ npm run test:coverage # coverage report (tests/helpers.js)
            detectColor, COLOR_MAP, COLOR_KEYS,
            monthKey_, dayKey_, deductStockCore, netOf, enrichDataCore`
 - `tests/*.test.js` — parsing, color, stock, dates, mto, app, format, schema, conflict, orderstate,
-  sku, billing, bahttext, transfer, cleanup, analytics, **attendance**, **auth**, drift-guard,
+  sku, billing, bahttext, transfer, **transfer-idempotent**, cleanup, analytics, **attendance**,
+  **auth**, drift-guard,
   **dashboard-metrics**, **stampede**, **staff-perf**
 - **`tests/auth.test.js`** — เฟส 4 ล็อกอิน (`canDoOrNull_`/`ROLE_ACTIONS_`/`IMMEDIATE_GATE_*`) —
   **ไม่ copy โค้ดเข้า helpers.js** แต่ eval ฟังก์ชันจริงจาก `.gs` ตรง ๆ (กันสำเนา drift ของโค้ด
@@ -647,6 +649,49 @@ npm run test:coverage # coverage report (tests/helpers.js)
 - เทสต์: `tests/order-idempotent.test.js` (eval จาก `.gs` ไม่ copy — เหมือน auth.test.js)
   + meta-test ว่า `handleOrder_` ยังเรียก `findOrderRowByCid_`/จับล็อก/เขียน cid จริง และ
   frontend ยังส่ง cid อยู่ (หลุดข้อใดข้อหนึ่ง = กลับไปสั่งซ้ำสองเด้งโดยไม่มี error ให้เห็น)
+
+### กดส่งของแล้วขึ้น "ส่งไม่สำเร็จ" ทั้งที่ ZORT โอนไปแล้ว (แก้แล้ว ส.ค. 2026)
+
+อาการ: พนักงานกด **"✅ ส่งทั้งหมด" 77 รายการ** ในแท็บ "สรุปสินค้าออกจากคลัง" → มีแจ้งเตือนเข้า,
+ZORT สร้างรายการโอนเรียบร้อย, สต็อกในชีตถูกหักแล้ว **แต่หน้าจอขึ้น "ส่งไม่สำเร็จ" และรายการทั้ง 77
+ยังค้างอยู่ครบ** · ต้นเหตุคือเรื่อง **เวลา ไม่ใช่ความผิดพลาด**:
+
+- `dmjFetch` มีเพดาน 60 วิ (Phase 7.5) แต่ `transferStockBatch` กับชุด 77 SKU ใช้เวลานานกว่านั้น
+  — เขียนชีตสินค้า 154 cell + ยิง ZORT (retry ได้ 3 รอบ) + `logTransferBatch_` +
+  **`writeAuditLog_` แบบ `appendRow` ทีละแถว 77 รอบ** (ตัวกินเวลาหลัก) + noti
+- browser ตัดสายก่อน → `syncStockTransferBatch` catch → `{success:false}` → ขึ้นแดงทันที
+  ทั้งที่ฝั่ง GAS ทำงานต่อจนจบทุกอย่าง — ⚠️ **"อ่านคำตอบไม่ได้" ≠ "ไม่สำเร็จ"** (บทเรียนข้อ 13)
+- ที่อันตรายกว่าคือถ้าพนักงานกดซ้ำ: ตัวกันซ้ำรายชิ้น `shp2_<orderId>` อายุแค่ **90 วิ** ซึ่งสั้นกว่า
+  เวลาที่ใช้ไปกับการรอ → **โอนสองเด้ง** (สต็อกคลังหายฟรี + เอกสารโอนใน ZORT ซ้ำ)
+
+**สิ่งที่ทำ** (หลักเดียวกับ `cid`/`orderCheck` ของการสั่งของ ทุกข้อ):
+1. **`tid` = รหัสชุดที่กดส่ง** — client สร้าง 1 ค่าต่อการกด "ส่งทั้งหมด" 1 ครั้ง และ **คงค่าเดิม
+   ตลอดการลองใหม่ชุดเดิม** (เก็บใน `localStorage.dmj_ship_tid_v1` เพราะชุดใหญ่ใช้เวลาเป็นนาที
+   พนักงานอาจปิด/รีเฟรชหน้าไปก่อนคำตอบกลับมา) · GAS เห็น tid ซ้ำ → **คืนผลเดิม ไม่เขียนอะไรใหม่**
+   · เช็ค **ในล็อก** เพื่อให้สองคำขอ tid เดียวกันพร้อมกันได้ผลเดียวกันแน่นอน
+   · ⚠️ `clearShipTid()` เรียกได้**หลังผลรายตัวถึงมือ client แล้วเท่านั้น** — ล้างก่อนถาม =
+     ลองใหม่แล้วโอนซ้ำ (มีเทสต์กันลำดับนี้ไว้)
+2. **tid ถูกเขียนลงชีตโอน คอลัมน์ P (`COL_SHIP_TID`=16)** — ต่อท้าย ไม่แทรกกลาง (บทเรียนข้อ 5)
+   ทำให้ยืนยันได้แม้ cache หมดอายุ · `findTidInShipments_` อ่านเฉพาะ **600 แถวท้าย** ไม่ getDataRange
+3. **doGet `action=transferCheck&tid=`** — frontend ถามก่อนเสมอเมื่ออ่านคำตอบไม่ได้
+   · `found:true` → เดินเส้นทางสำเร็จตามปกติ · `found:false` (เชื่อถือได้) → บอกให้กดซ้ำได้เลย
+   · **ตอบไม่ได้/รูปแบบไม่ตรง → ห้ามชวนให้กดซ้ำ** (GAS โค้ดเก่าไม่รู้จัก tid = กดซ้ำแล้วโอนสองเด้ง)
+   · cache ผลไว้ 6 ชม. (`tfb_<tid>`) · cache หลุด → ยืนยันจากชีตแทน แต่ไม่มีผลรายตัว
+     (`shipResultsFromSheetItems` จับคู่กลับด้วย sku **แบบ 1 ต่อ 1** — แถวเดียวห้ามเคลียร์ order 2 ใบ)
+4. **เพดานเวลาการโอนทั้งชุด 240 วิ** (`dmjTimeoutMs`) + `dmjJson` แทน `res.json()` +
+   แถบเหลือง "กำลังส่งของ… อย่ากดซ้ำ" + ปุ่มถูกล็อกระหว่างรอ
+5. **เร่งฝั่ง GAS ให้ทันเพดาน**: เขียน G:H รวดเดียวต่อแถว (154→77 call) + **`writeAuditLogBatch_`**
+   เขียน audit หลายแถวครั้งเดียว (**ยัง 1 งาน = 1 แถวเท่าเดิม** ตัวเลขแท็บ "ผลงานพนักงาน" ไม่เปลี่ยน)
+   · ⚠️ `tests/staff-perf.test.js` ต้องสแกน **ทั้ง `writeAuditLog_` และ `writeAuditLogBatch_`**
+     ไม่งั้น action ที่ย้ายมาใช้ตัวใหม่จะหลุดการตรวจ "มีหมวดรองรับไหม" ไปเงียบ ๆ
+6. **ปุ่ม "🧾 เช็คของที่ส่งไปแล้ว"** (หัวหน้า "สรุปสินค้าออกจากคลัง") — ทางกู้ของที่ค้างอยู่แล้ว
+   · เทียบ order ที่ค้างกับ **ชีตรายการโอนจริง** (`data.shipments`, เฉพาะที่ยังไม่มีใครกดรับ +
+     ไม่เกิน 3 วัน) จับคู่ sku 1 ต่อ 1 → โชว์เลขที่รายการให้ตรวจก่อน → กดยืนยันแล้ว
+     **ลบ order + มาร์คส่งแล้ว โดยไม่ตัดสต็อกซ้ำ** (ไม่เรียกการโอนใด ๆ — มีเทสต์กันไว้)
+   · หน้าร้านกดรับของไปแล้ว → จะไม่เจอที่นี่ (ตั้งใจ กันไปแมตช์กับของเก่าที่ปิดเคสแล้ว)
+
+เทสต์: `tests/transfer-idempotent.test.js` (30 เคส — eval ฟังก์ชันจริงจาก `.gs` + `.jsx` ไม่ copy
+เหมือน `order-idempotent.test.js`) คุมทั้งตรรกะและ **จุดเชื่อมต่อที่พังแล้วไม่มี error ให้เห็น**
 
 ## ระบบล็อกอินพนักงาน + ลงเวลาเข้า-ออกงาน (Sprint 5)
 

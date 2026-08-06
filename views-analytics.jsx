@@ -458,6 +458,15 @@ function FrontStoreView({ data, role, checkRequest }) {
     setTransferring(true);
     try {
       const res = await syncStockTransferBatch([{ sku: transferTarget.sku, qty: transferQty, name: transferTarget.name }]);
+      // อ่านคำตอบไม่ได้ ≠ โอนไม่สำเร็จ — GAS เขียนชีตเสร็จแล้วยังตอบไม่ทันได้ (บทเรียนข้อ 13)
+      // ห้ามบอกว่า "ไม่สำเร็จ" ลอย ๆ เพราะผู้ใช้จะกดโอนซ้ำแล้วของไปสองรอบ
+      if (res && res.unreadable) {
+        showToast("warn", "ไม่แน่ใจว่าโอนสำเร็จหรือไม่ — กด Sync แล้วเช็คจำนวนก่อนโอนซ้ำ", "❓", 9000);
+        setTransferTarget(null);
+        setTransferQty(1);
+        setTransferring(false);
+        return;
+      }
       if (res && res.success === false) throw new Error(res.error || "ไม่สำเร็จ");
       showToast("success", `โอน ${transferQty} ชิ้น "${transferTarget.name}" แล้ว`, "📦");
       setTransferTarget(null);
@@ -4459,18 +4468,43 @@ async function syncStockDeduct(sku, qty, name) {
 }
 
 // ส่งหลายรายการในครั้งเดียว → Apps Script สร้าง ZORT Transfer เอกสารเดียว (เลขที่ auto)
-// items = [{ sku, qty, name }, ...]
-async function syncStockTransferBatch(items) {
+// items = [{ sku, qty, name, orderId }, ...] · tid = รหัสชุด (กันโอนซ้ำตอนลองใหม่ — ดู doShipAll)
+//
+// ⚠️ คืน `unreadable:true` เมื่อ **อ่านคำตอบไม่ได้** (หมดเวลา/เน็ตหลุด/GAS ตอบหน้า HTML)
+//    ซึ่ง **ไม่เท่ากับ "โอนไม่สำเร็จ"** — GAS เขียนชีต + สร้างเอกสารใน ZORT เสร็จแล้วยังตอบไม่ทันได้
+//    ตัวเรียกต้องไปถาม action=transferCheck ก่อนตัดสินใจเสมอ (บทเรียนข้อ 13)
+async function syncStockTransferBatch(items, tid) {
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
   try {
     const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ transferStockBatch: true, list: items, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน", clientLoadedAt: window._dataLoadedAt || 0 }),
+      body: JSON.stringify({ transferStockBatch: true, list: items, tid: tid || "", actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน", clientLoadedAt: window._dataLoadedAt || 0 }),
+      // โอนขึ้นรถทีนึงมีได้ 70-80 SKU → เขียนชีต + ยิง ZORT + log ทุกแถว กินเวลาเกินเพดาน
+      // เดิม 60 วิ ของ dmjFetch ได้ง่าย ๆ · เพดานเดิมทำให้ browser ตัดสายทั้งที่ฝั่ง GAS ทำจนจบ
+      // แล้วหน้าจอขึ้น "ส่งไม่สำเร็จ" ทั้งที่ ZORT มีเอกสารโอนแล้ว (อาการที่เจ้าของแจ้ง ส.ค. 2026)
+      dmjTimeoutMs: 240000,
     });
-    const json = await res.json().catch(() => ({}));
-    return json;
-  } catch(e) { console.warn("syncStockTransferBatch error:", e.message); return { success: false, error: e.message }; }
+    return await dmjJson(res);
+  } catch(e) {
+    console.warn("syncStockTransferBatch error:", e.message);
+    return { success: false, error: dmjErrText(e), unreadable: true };
+  }
+}
+
+// ถาม GAS ว่า "ชุด tid นี้โอนลงระบบไปแล้วหรือยัง" — ใช้ตอนอ่านคำตอบของการส่งไม่ได้
+//  { found:true, ... } = ลงแล้ว (ห้ามยิงซ้ำ) · { found:false } = ยังไม่ลง (ยิงซ้ำได้ปลอดภัย)
+//  null = ตอบไม่ได้/รูปแบบไม่ตรง (เน็ตพัง หรือ GAS ยังเป็นโค้ดเก่าที่ไม่รู้จัก transferCheck)
+//         → **ห้ามยิงซ้ำ** เพราะโค้ดเก่าไม่มี tid กันซ้ำให้ (หลักเดียวกับ orderCheck)
+async function syncTransferCheck(tid) {
+  if (!SHEET_DEPLOY_URL || !tid) return null;
+  const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
+  try {
+    const d = await dmjJson(await fetch(
+      `${SHEET_DEPLOY_URL}${sep}action=transferCheck&tid=${encodeURIComponent(tid)}&_t=${Date.now()}`,
+      { cache: "no-store" }));
+    return (d && d.ok === true && typeof d.found === "boolean") ? d : null;
+  } catch(e) { console.warn("syncTransferCheck error:", e.message); return null; }
 }
 
 // ปรับ WH qty=0 ใน Sheets + ZORT (สินค้าหมด ไม่ได้จัด)
@@ -4713,6 +4747,57 @@ const LS_MISSED_TRUCK   = "dmj_missed_truck_v1";
 function getShippedOrders() { try { return JSON.parse(localStorage.getItem(LS_SHIPPED_ORDERS)||"{}"); } catch { return {}; } }
 function getMissedOrders()  { try { return JSON.parse(localStorage.getItem(LS_MISSED_TRUCK)  ||"{}"); } catch { return {}; } }
 
+// ── รหัสชุดที่กดส่ง (tid) — กันโอนซ้ำเวลาลองใหม่ ──────────────────────────────
+// 1 ค่าต่อการกด "ส่งทั้งหมด" 1 ครั้ง และ **คงค่าเดิมตลอดการลองใหม่ชุดเดิม** → GAS เห็น tid ซ้ำ
+// แล้วคืนผลเดิมโดยไม่โอนอีกรอบ (หลักเดียวกับ `cid` ของการสั่งของ)
+// เก็บใน localStorage เพราะการส่งชุดใหญ่ใช้เวลาเป็นนาที พนักงานอาจปิด/รีเฟรชหน้าไปก่อน
+// คำตอบจะกลับมา — เปิดกลับมากดส่งใหม่ต้องได้ tid เดิม ไม่งั้นของโอนซ้ำโดยไม่มีอะไรเตือน
+const LS_SHIP_TID = "dmj_ship_tid_v1";
+const SHIP_TID_MAX_AGE_MS = 6 * 60 * 60 * 1000;   // เท่าอายุที่ GAS เก็บผลไว้ตอบซ้ำ
+function shipBatchKey(orders) {
+  return (orders || []).map(o => `${o.id}:${o.sku}:${o.preparedQty || o.orderQty || 0}`).sort().join("|");
+}
+function getShipTid(orders) {
+  const key = shipBatchKey(orders);
+  try {
+    const cur = JSON.parse(localStorage.getItem(LS_SHIP_TID) || "null");
+    if (cur && cur.key === key && cur.tid && (Date.now() - (cur.at || 0)) < SHIP_TID_MAX_AGE_MS) return cur.tid;
+  } catch (e) { /* ค่าเสีย → สร้างใหม่ */ }
+  const tid = "TB" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  try { localStorage.setItem(LS_SHIP_TID, JSON.stringify({ key, tid, at: Date.now() })); } catch (e) {}
+  return tid;
+}
+function clearShipTid() { try { localStorage.removeItem(LS_SHIP_TID); } catch (e) {} }
+
+// GAS ยืนยันว่าชุดนี้ลงระบบแล้ว แต่ผลรายตัวหมดอายุใน cache → เหลือแค่ [{sku,qty}] จากชีตโอน
+// ชีตไม่ได้เก็บ orderId จึงต้องจับคู่กลับด้วย sku (จำนวนตรงก่อน — คลังไม่พอทำให้จำนวนไม่ตรงได้)
+// จับคู่ 1 ต่อ 1 ไม่ให้แถวเดียวถูกใช้ซ้ำ กัน order คนละใบที่ SKU เดียวกันถูกเคลียร์ทั้งคู่จากแถวเดียว
+function shipResultsFromSheetItems(transferItems, sheetItems) {
+  if (!Array.isArray(sheetItems) || !sheetItems.length) return [];
+  const pool = sheetItems.map(it => ({ sku: String(it.sku || "").trim().toUpperCase(), qty: Number(it.qty) || 0, used: false }));
+  const out = [];
+  (transferItems || []).forEach(it => {
+    const sku = String(it.sku || "").trim().toUpperCase();
+    const q   = Number(it.qty) || 0;
+    let m = pool.find(p => !p.used && p.sku === sku && p.qty === q);
+    if (!m) m = pool.find(p => !p.used && p.sku === sku);
+    if (!m) return;                    // ไม่มีแถวรองรับ = ตัวนี้ไม่ได้โอน → คงไว้ในรายการ
+    m.used = true;
+    out.push({ sku: it.sku, orderId: it.orderId, requested: q, transferred: m.qty });
+  });
+  return out;
+}
+
+// วันที่ในชีตโอนเป็น "dd/MM/yyyy" (เขียนด้วย Utilities.formatDate = ค.ศ.)
+// เผื่อแถวเก่าที่เคยเขียนด้วย toLocaleString("th-TH") ไว้ → ลบ 543 เมื่อปี ≥ 2400 (บทเรียนข้อ 11)
+function parseShipDateMs(s) {
+  const m = String(s || "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (!m) return null;
+  let y = parseInt(m[3], 10);
+  if (y >= 2400) y -= 543;
+  return new Date(y, parseInt(m[2], 10) - 1, parseInt(m[1], 10)).getTime();
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // ORDER SUMMARY VIEW
 // ─────────────────────────────────────────────────────────────────────
@@ -4745,6 +4830,9 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const [shipAllConfirm, setShipAllConfirm] = uS(null); // ready[] array
   const [materialDraw, setMaterialDraw]  = uS(null); // { order, afterConfirm: fn }
   const [resetConfirm, setResetConfirm]  = uS(false); // ยืนยันรีเซ็ตสถานะการส่ง
+  const [bulkBusy, setBulkBusy] = uS(false);          // กำลังส่งทั้งชุด — ล็อกปุ่มกันกดซ้ำระหว่างรอ
+  const [reconcile, setReconcile] = uS(null);         // [{order, ship}] ที่พบว่าโอนไปแล้วในชีต
+  const [reconciling, setReconciling] = uS(false);
   const isOnline = useOnlineStatus(); // ตรวจสอบการเชื่อมต่อก่อนส่งสถานะ
   // warehouse map modal state — shared สำหรับ card ทุกใบในหน้านี้
   const [mapModal, setMapModal] = uS(null); // { lockKey, productName, sku } | null
@@ -4942,8 +5030,31 @@ function OrderSummaryView({ data, onPrintRequest }) {
       .filter(it => it.sku && it.qty > 0);
 
     let batchRes = { success: true };
+    let tid = "";
     if (transferItems.length) {
-      batchRes = await syncStockTransferBatch(transferItems);
+      tid = getShipTid(ready);
+      setBulkBusy(true);
+      batchRes = await syncStockTransferBatch(transferItems, tid);
+
+      // ⚠️ "อ่านคำตอบไม่ได้" ≠ "โอนไม่สำเร็จ" — ชุดใหญ่ (70-80 SKU) ใช้เวลานานกว่าที่ browser
+      // ยอมรอ แล้วตัดสายทั้งที่ GAS เขียนชีต + สร้างเอกสารโอนใน ZORT เสร็จไปแล้ว
+      // เดิมตรงนี้ขึ้น "ส่งไม่สำเร็จ" ทันที → พนักงานกดซ้ำ = โอนสองเด้ง · ต้องถามของจริงก่อนเสมอ
+      if (batchRes && batchRes.unreadable && tid) {
+        showToast("warn", "ตอบกลับช้า — กำลังตรวจสอบว่าของถูกส่งไปแล้วหรือยัง…", "🔄", 6000);
+        const chk = await syncTransferCheck(tid);
+        if (chk && chk.found) {
+          // ลงระบบไปแล้วจริง → เดินเส้นทางสำเร็จตามปกติ ด้วยผลรายตัวที่ server ยืนยัน
+          batchRes = { success: true, verified: true, data: {
+            count: chk.count, zortNumber: chk.zortNumber, refNum: chk.refNum,
+            results: (chk.results && chk.results.length)
+              ? chk.results
+              : shipResultsFromSheetItems(transferItems, chk.items),
+          } };
+        } else if (chk && chk.found === false) {
+          batchRes = { ...batchRes, notLanded: true };   // ยืนยันแล้วว่ายังไม่ลง → กดซ้ำได้ปลอดภัย
+        }
+      }
+      setBulkBusy(false);
     }
     const batchOk = batchRes && batchRes.success === true;
 
@@ -4954,6 +5065,12 @@ function OrderSummaryView({ data, onPrintRequest }) {
         // conflict = ข้อมูลฝั่ง server ใหม่กว่าที่เครื่องนี้โหลด → ดึงข้อมูลล่าสุดให้ แล้วให้ลองอีกครั้ง
         showToast("warn", "ข้อมูลมีการอัปเดต — กำลังโหลดใหม่ แล้วลองส่งอีกครั้ง", "🔄", 6000);
         if (typeof window._dmjRefetch === "function") window._dmjRefetch();
+      } else if (batchRes && batchRes.notLanded) {
+        // server ยืนยันว่ายังไม่มีอะไรลงระบบ → บอกให้กดซ้ำได้เลย (tid กันโอนซ้ำให้แล้ว)
+        showToast("warn", "ยังส่งไม่สำเร็จ — ของยังไม่ถูกโอน กด \"ส่งทั้งหมด\" อีกครั้งได้เลย (ระบบกันโอนซ้ำให้แล้ว)", "⚠️", 8000);
+      } else if (batchRes && batchRes.unreadable) {
+        // ถามก็ไม่ได้คำตอบ → **ห้ามบอกให้กดซ้ำ** เพราะไม่รู้ว่าโอนไปแล้วหรือยัง
+        showToast("warn", "ไม่แน่ใจว่าส่งสำเร็จหรือไม่ — กด Sync แล้วใช้ปุ่ม \"🧾 เช็คของที่ส่งไปแล้ว\" ก่อนกดส่งซ้ำ", "❓", 9000);
       } else {
         showToast("warn", `ส่งไม่สำเร็จ — ระบบมีปัญหา ${batchRes.error || batchRes.message || ""} · คงรายการไว้ ลองใหม่อีกครั้ง`, "⚠️", 7000);
       }
@@ -5001,6 +5118,9 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
     // ลบเฉพาะ order ที่ส่งสำเร็จออกจาก Sheet — order ที่คลังไม่พอจะคงไว้ให้ส่งใหม่ภายหลัง
     if (succeeded.length) syncDeleteOrders(succeeded.map(o => o.id));
+    // ชุดนี้จบแล้ว (ผลรายตัวถึงมือ client เรียบร้อย) → ทิ้ง tid ไม่ให้ไปกันชุดถัดไปที่บังเอิญ
+    // เป็นสินค้า/จำนวนเดิม · ที่เหลือ (kept) จะได้ tid ใหม่เองเพราะรายการในชุดเปลี่ยนไปแล้ว
+    clearShipTid();
 
     const zErr = batchRes && batchRes.data && batchRes.data.zortError;
     const partialMsg = partials.length
@@ -5017,6 +5137,69 @@ function OrderSummaryView({ data, onPrintRequest }) {
     } else {
       const zNum = batchRes && batchRes.data && batchRes.data.zortNumber;
       showToast("success", `ส่ง ${succeeded.length} รายการแล้ว${zNum ? ` (ZORT ${zNum})` : ""}`, "📦");
+    }
+  };
+
+  // ── 🧾 เช็คของที่ส่งไปแล้ว — เคลียร์รายการที่โอนจริงแต่หน้าจอยังค้าง ──────────
+  // ใช้ตอนกดส่งแล้วขึ้นว่าไม่สำเร็จ ทั้งที่ ZORT มีเอกสารโอนแล้ว (คำตอบหายกลางทาง)
+  // เทียบกับ "ชีตรายการโอนสินค้า" (data.shipments) ซึ่งเป็นบันทึกที่ GAS เขียนตอนโอนจริงเท่านั้น
+  // — ไม่ใช่การเดาจากหน้าจอ · จับคู่ 1 ต่อ 1 ไม่ให้แถวโอนแถวเดียวไปเคลียร์ order หลายใบ
+  // ⚠️ การเคลียร์นี้ **ไม่ตัดสต็อกซ้ำ** (ไม่เรียก transfer เลย) แค่ลบ order + มาร์คว่าส่งแล้ว
+  const RECONCILE_DAYS = 3;
+  const findAlreadyShipped = () => {
+    const cutoff = Date.now() - RECONCILE_DAYS * 24 * 60 * 60 * 1000;
+    const pool = (data.shipments || [])
+      .filter(s => !s.receivedAt)                       // หน้าร้านยังไม่กดรับ = เพิ่งโอนมา
+      .filter(s => { const t = parseShipDateMs(s.date); return t == null || t >= cutoff; })
+      .map(s => ({ ...s, used: false }));
+    const pending = [...carryOrders, ...truckOrders]
+      .filter(o => !shipped[o.id] && !o.product?.isMTO && o.sku);
+    const matches = [];
+    pending.forEach(o => {
+      const sku = String(o.sku).trim().toUpperCase();
+      const q   = o.preparedQty || o.orderQty || 0;
+      let m = pool.find(s => !s.used && String(s.sku || "").trim().toUpperCase() === sku && Number(s.qty) === q);
+      if (!m) m = pool.find(s => !s.used && String(s.sku || "").trim().toUpperCase() === sku); // คลังไม่พอ → จำนวนไม่ตรง
+      if (!m) return;
+      m.used = true;
+      matches.push({ order: o, ship: m });
+    });
+    return matches;
+  };
+
+  const openReconcile = () => {
+    const matches = findAlreadyShipped();
+    if (!matches.length) {
+      // ไม่เจอ ≠ ไม่มีปัญหา — อาจแค่ข้อมูลในเครื่องยังเก่า หรือหน้าร้านกดรับของไปแล้ว
+      // (ตัวนี้ดูเฉพาะรายการโอนที่ "ยังไม่มีใครกดรับ" เพื่อไม่ให้ไปแมตช์กับของเก่าที่ปิดเคสแล้ว)
+      showToast("warn", "ไม่พบรายการที่ค้าง — ถ้าเพิ่งกดส่ง ให้กด Sync ก่อนแล้วลองใหม่ · ถ้าหน้าร้านกดรับของไปแล้วจะไม่เจอที่นี่", "🔎", 9000);
+      return;
+    }
+    setReconcile(matches);
+  };
+
+  const applyReconcile = async () => {
+    const matches = reconcile || [];
+    setReconcile(null);
+    if (!matches.length) return;
+    setReconciling(true);
+    const nextShipped = { ...shipped };
+    let nextSt = getOrdersState();
+    matches.forEach(({ order }) => {
+      nextShipped[order.id] = Date.now();
+      nextSt[order.id] = { ...(nextSt[order.id] || {}), status: "ส่งแล้ว", sig: orderSig(order), markedAt: new Date().toISOString() };
+    });
+    setShipped(nextShipped);
+    localStorage.setItem(LS_SHIPPED_ORDERS, JSON.stringify(nextShipped));
+    localStorage.setItem(LS_ORDERS_STATE, JSON.stringify(nextSt));
+    setSt(nextSt);
+    const res = await syncDeleteOrders(matches.map(m => m.order.id));
+    clearShipTid();
+    setReconciling(false);
+    if (res && res.success === false) {
+      showToast("warn", `เคลียร์บนหน้าจอแล้ว ${matches.length} รายการ แต่ลบออกจากชีตไม่สำเร็จ (${res.error || ""}) — กด Sync แล้วลองอีกครั้ง`, "⚠️", 9000);
+    } else {
+      showToast("success", `เคลียร์ ${matches.length} รายการที่ส่งไปแล้ว (ไม่ตัดสต็อกซ้ำ)`, "🧾", 7000);
     }
   };
 
@@ -5077,12 +5260,13 @@ function OrderSummaryView({ data, onPrintRequest }) {
               </button>
             )}
             {readyCount > 0 && (
-              <button onClick={() => handleShipAll(orders)} style={{
-                padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",
-                background: isTruck?"#1d4ed8":"var(--g-700)",color:"#fff",
+              <button onClick={() => handleShipAll(orders)} disabled={bulkBusy} style={{
+                padding:"6px 14px",borderRadius:8,border:"none",
+                cursor: bulkBusy ? "wait" : "pointer",
+                background: bulkBusy ? "#9ca3af" : (isTruck?"#1d4ed8":"var(--g-700)"),color:"#fff",
                 fontSize:12,fontWeight:700,fontFamily:"inherit",
               }}>
-                ✅ ส่งทั้งหมด ({readyCount})
+                {bulkBusy ? "⏳ กำลังส่ง…" : `✅ ส่งทั้งหมด (${readyCount})`}
               </button>
             )}
           </div>
@@ -5252,12 +5436,30 @@ function OrderSummaryView({ data, onPrintRequest }) {
             {Object.keys(shipped).length > 0 && ` · ส่งแล้ว ${Object.keys(shipped).filter(id=>doneOrders.find(o=>o.id===id)).length} รายการ`}
           </div>
         </div>
-        <button onClick={() => setResetConfirm(true)} style={{
-          padding:"6px 12px",borderRadius:8,border:"1.5px solid var(--bdr)",
-          background:"#fff",color:"var(--muted)",fontSize:11,fontWeight:600,
-          cursor:"pointer",fontFamily:"inherit",
-        }}>🔄 รีเซ็ตสถานะ</button>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          {/* ทางออกเวลากดส่งแล้วขึ้นว่าไม่สำเร็จ ทั้งที่ของโอนเข้าระบบไปแล้ว (คำตอบหายกลางทาง) */}
+          <button onClick={openReconcile} disabled={reconciling} style={{
+            padding:"6px 12px",borderRadius:8,border:"1.5px solid #93c5fd",
+            background: reconciling ? "#eff6ff" : "#dbeafe", color:"#1d4ed8",
+            fontSize:11,fontWeight:700,cursor: reconciling ? "wait" : "pointer",fontFamily:"inherit",
+          }}>{reconciling ? "กำลังเคลียร์…" : "🧾 เช็คของที่ส่งไปแล้ว"}</button>
+          <button onClick={() => setResetConfirm(true)} style={{
+            padding:"6px 12px",borderRadius:8,border:"1.5px solid var(--bdr)",
+            background:"#fff",color:"var(--muted)",fontSize:11,fontWeight:600,
+            cursor:"pointer",fontFamily:"inherit",
+          }}>🔄 รีเซ็ตสถานะ</button>
+        </div>
       </div>
+
+      {/* กำลังส่งทั้งชุด — ชุดใหญ่ใช้เวลาเป็นนาที ถ้าไม่บอกอะไรเลยพนักงานจะกดซ้ำ */}
+      {bulkBusy && (
+        <div className="no-print" style={{
+          padding:"10px 14px",marginBottom:12,borderRadius:10,
+          background:"#fef9c3",border:"1.5px solid #fde047",fontSize:13,fontWeight:600,color:"#854d0e",
+        }}>
+          ⏳ กำลังส่งของ… ชุดใหญ่ใช้เวลาถึง 2-3 นาที <b>อย่าปิดหน้านี้และอย่ากดซ้ำ</b>
+        </div>
+      )}
 
       {renderSection("หิ้วเอง", "🚶", carryOrders, false)}
       {renderSection("ขึ้นรถ",  "🚛", truckOrders, true)}
@@ -5327,6 +5529,24 @@ function OrderSummaryView({ data, onPrintRequest }) {
         confirmLabel="ส่ง"
         onConfirm={doShip}
         onCancel={() => setShipConfirm(null)}
+      />
+      {/* เคลียร์รายการที่พบว่าโอนเข้าระบบไปแล้ว — ไม่ตัดสต็อกซ้ำ */}
+      <ConfirmModal
+        open={!!reconcile}
+        type="ship"
+        emoji="🧾"
+        title={`พบของที่ส่งไปแล้ว ${(reconcile||[]).length} รายการ`}
+        detail={reconcile ? [
+          "รายการเหล่านี้มีเอกสารโอนอยู่ในระบบแล้ว (คลัง → หน้าร้าน)",
+          "จะลบออกจากรายการและมาร์คว่าส่งแล้ว โดย ไม่ตัดสต็อกซ้ำ",
+          "",
+          ...reconcile.slice(0, 8).map(m =>
+            `• ${m.order.name || m.order.sku} ${m.ship.qty} ชิ้น · ${m.ship.refNum || "ไม่มีเลขที่"} · ${m.ship.date || ""}`),
+          reconcile.length > 8 ? `…และอีก ${reconcile.length - 8} รายการ` : "",
+        ].filter(Boolean).join("\n") : ""}
+        confirmLabel="เคลียร์รายการ"
+        onConfirm={applyReconcile}
+        onCancel={() => setReconcile(null)}
       />
       <ConfirmModal
         open={!!shipAllConfirm}
