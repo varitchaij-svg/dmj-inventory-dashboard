@@ -7819,6 +7819,9 @@ function QuoteFollowupView({ data, role }) {
         <QuotationPrintDoc quotationNumber={printData.quotationNumber} invoiceNumber={invoiceNumber} items={printData.items} customer={printData.customer}
           remarks={printDocType === "invoice" ? (invoiceExtra ? invoiceExtra.remarks : INVOICE_DEFAULT_REMARKS) : printData.remarks}
           salesRep={printData.salesRep} totals={printData.totals} docType={printDocType}
+          invoiceKind={invoiceExtra ? invoiceExtra.kind : "full"}
+          deposit={invoiceExtra ? invoiceExtra.deposit : 0}
+          poNumber={invoiceExtra ? invoiceExtra.poNumber : ""}
           dueAmount={printDocType === "invoice" && invoiceExtra ? invoiceExtra.dueAmount : null}
           dueLabel={printDocType === "invoice" && invoiceExtra ? invoiceExtra.dueLabel : null}/>
       )}
