@@ -2851,7 +2851,7 @@ function buildFullData_() {
         totalSoldRev:    products.reduce((s, p) => s + (p.soldRev || 0), 0),
         totalSoldQty:    products.reduce((s, p) => s + (p.soldQty || 0), 0),
         totalProfit:     products.reduce((s, p) => s + (p.profit || 0), 0),
-        // จำนวน SKU ที่เคยมียอดขาย (ตลอดกาล) — frontend คำนวณเองรายช่วงเวลาอีกที
+        // จำนวน SKU ที่เคยมียอดขาย (ตลวดกาล) — frontend คำนวณเองรายช่วงเวลาอีกที
         // แต่ต้องมีคีย์นี้ไว้ ไม่งั้น fmtN(undefined) โชว์ 0 เงียบ ๆ
         nSold:           products.filter(p => (p.soldQty || 0) > 0).length,
         // ราคาขายส่ง = ปลีก × อัตรานี้ (มูลค่าสต๊อกด้านบนคูณไว้แล้ว) — ส่งมาให้ frontend ติดป้ายได้ถูก
@@ -8971,7 +8971,6 @@ function applyQtyLocToProduct_(p, loc) {
   if (!p || !loc) return p;
   p.qtyStore     = loc.qtyStore;
   p.qtyWH        = loc.qtyWH;
-  p.warehouseQty = loc.qtyWH;
   if (loc.price > 0) p.price = loc.price;
 
   const locTotal = loc.qtyStore + loc.qtyWH;
