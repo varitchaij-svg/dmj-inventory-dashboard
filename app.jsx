@@ -56,13 +56,20 @@ const ROLE_TABS = {
   storedevice: ["attendance","pos","quotefollowup","categories","stock","tracking","orders","mtojobs","labels","atttoday"],
 };
 // หมวดหลักของ owner (nav 2 ชั้น) — กดหมวด → เห็นเมนูย่อยของหมวดนั้น
-// เรียงตามความสำคัญ/ที่ใช้บ่อย: ภาพรวม → การขาย → สต็อก → วิเคราะห์ → เครื่องมือ
+// เรียงตามความสำคัญ/ที่ใช้บ่อย: ภาพรวม → การขาย → สต็อก → พนักงาน → เครื่องมือ
 // tab ที่ไม่อยู่ในกลุ่มไหน จะถูกดันเข้ากลุ่ม "อื่นๆ" อัตโนมัติ (กัน tab หาย)
+//
+// "ภาพรวม" = ทุกอย่างที่เจ้าของเปิดดูเพื่อ **ตัดสินใจ** (ไม่ใช่ลงมือทำงาน) — เจ้าของสั่งไว้ ส.ค. 2026
+//   ให้รวม: ภาพรวมร้าน · งานของแต่ละฝ่าย (คลัง/หน้าร้าน/ขาย) · ลูกค้า · ติดตามสถานะ ·
+//   ใบเสนอราคา · เทรนด์/ช่วงขายดี  ไว้ที่เดียว จะได้ไม่ต้องไล่เปิดข้ามหมวด
+//   ⚠️ ต่างจากหมวดอื่นที่แบ่งตาม "ประเภทงาน" — หมวดนี้แบ่งตาม "คนดู" (เจ้าของ) โดยตั้งใจ
+//   ผลข้างเคียง: g_insight เหลือแค่ margin ซึ่ง owner ไม่มีสิทธิ์ → หมวดหายไปเองสำหรับ owner
+//   (ตัวกรอง .filter(g => g.items.length > 0) ด้านล่างจัดการให้) แต่ dev ยังเห็น
 const OWNER_GROUPS = [
-  { id: "g_overview", gi: "📊", name: "ภาพรวม",       tabs: ["overview", "whhome"] },
-  { id: "g_sales",    gi: "💰", name: "การขาย",       tabs: ["pos", "orders", "tracking", "quotefollowup", "customers", "frontstore", "mtojobs"] },
+  { id: "g_overview", gi: "📊", name: "ภาพรวม",       tabs: ["overview", "whhome", "customers", "tracking", "quotefollowup", "trends", "season"] },
+  { id: "g_sales",    gi: "💰", name: "การขาย",       tabs: ["pos", "orders", "frontstore", "mtojobs"] },
   { id: "g_stock",    gi: "📦", name: "สต็อก & คลัง",  tabs: ["stock", "categories", "storage", "stockcount", "transfers", "ordersummary", "newproduct", "deadstock", "labels"] },
-  { id: "g_insight",  gi: "📈", name: "วิเคราะห์",      tabs: ["trends", "season", "margin"] },
+  { id: "g_insight",  gi: "📈", name: "วิเคราะห์",      tabs: ["margin"] },
   { id: "g_people",   gi: "👥", name: "พนักงาน",       tabs: ["attendance", "atttoday", "staff", "staffperf"] },
   { id: "g_tools",    gi: "⚙️", name: "เครื่องมือ",     tabs: ["upload", "connect", "auditlog"] },
 ];
