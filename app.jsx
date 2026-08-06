@@ -917,6 +917,14 @@ function lineRedirectUri() {
   return window.location.origin + "/";
 }
 
+// ประทับหมุดเวลาลงในบันทึกการเปิดแอป (ตัวจริงอยู่ใน <head> ของ HTML — ดูคำอธิบายที่นั่น)
+// ⚠️ **ห้ามตั้งชื่อว่า `dmjMark`** — app.jsx รันใน global scope การประกาศฟังก์ชันชื่อเดียวกัน
+// จะไปทับ `window.dmjMark` ตัวจริง แล้วหมุดทั้งหมดจะหายเงียบ ๆ โดยที่ยังดูเหมือนทำงานปกติ
+// ต้องไม่โยนเมื่อไม่มีตัวจริง (เช่นตอนรัน browser test ที่ harness ไม่ได้โหลด HTML นี้)
+function trMark(name, extra) {
+  try { if (typeof window !== "undefined" && window.dmjMark) window.dmjMark(name, extra); } catch (e) {}
+}
+
 // POST action ไปยัง GAS (ใช้กับ authLine/me/logout/listStaff/saveStaff) — SHEET_DEPLOY_URL มี ?token= ติดอยู่แล้ว
 //
 // ⚠️ เดิมใช้ `fetch` ดิบ + `res.json()` ดิบ ทำให้ **ทั้งเส้นทางล็อกอินหลุดจาก Phase 7.5 ทั้งเส้น**:
@@ -932,13 +940,23 @@ async function postAuthAction(body, timeoutMs) {
   const base = (typeof SHEET_DEPLOY_URL !== 'undefined') ? SHEET_DEPLOY_URL
              : ((typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null);
   if (!base) throw new Error("ยังไม่ได้ตั้งค่า Google Sheet URL");
-  const res = await dmjFetch(base, {
-    method: "POST",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify(body),
-    dmjTimeoutMs: timeoutMs || AUTH_TIMEOUT_MS,
-  });
-  return dmjJson(res);
+  const act = (body && body.action) || "?";
+  const t0 = Date.now();
+  trMark("auth:" + act + " เริ่ม");
+  try {
+    const res = await dmjFetch(base, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(body),
+      dmjTimeoutMs: timeoutMs || AUTH_TIMEOUT_MS,
+    });
+    const d = await dmjJson(res);
+    trMark("auth:" + act + " เสร็จ", (Date.now() - t0) + "ms");
+    return d;
+  } catch (e) {
+    trMark("auth:" + act + " ล้ม", (Date.now() - t0) + "ms · " + ((e && e.name) || "error"));
+    throw e;
+  }
 }
 
 // ── แถบความคืบหน้าตอนโหลดก้อนข้อมูลหลัก ────────────────────────────────────
@@ -980,6 +998,135 @@ function LoadProgress({ bytes }) {
       {started && pct >= 95 && (
         <div style={{marginTop:4, fontSize:12, color:"var(--muted)"}}>เกือบเสร็จแล้ว…</div>
       )}
+    </div>
+  );
+}
+
+// ── หน้าจอ "เปิดแอปช้าตรงไหน" ────────────────────────────────────────────
+// พนักงานอยู่หน้าร้าน เปิด DevTools ไม่ได้ · เปิดจากการแตะแถบสถานะ 3 ครั้ง แล้วถ่ายจอส่งให้เจ้าของ
+//
+// ⚠️ ตัวเลขที่ต้องดูคือ **ส่วนต่างระหว่างหมุด** ไม่ใช่เวลาสะสม — "ล็อกอิน 60 วิ" บอกอะไรไม่ได้เลย
+// แต่ "ดาวน์โหลดข้อมูล 42 วิ" กับ "compile โค้ด 42 วิ" คือคนละปัญหาที่แก้คนละทางสิ้นเชิง
+// จึงเรียงตามลำดับเวลาแล้วเน้นช่องที่กินเวลามากสุดให้เห็นทันที
+function BootTraceModal({ onClose }) {
+  const [idx, setIdx] = usS(0);
+  const runs = (() => {
+    try { const a = JSON.parse(lsGet("dmj_boot_trace") || "[]"); return Array.isArray(a) ? a : []; }
+    catch (e) { return []; }
+  })();
+  const lastErr = (() => {
+    try { return JSON.parse(lsGet("dmj_last_backend_error") || "null"); } catch (e) { return null; }
+  })();
+  const run = runs[idx];
+  const marks = (run && run.marks) || [];
+  // ส่วนต่างจากหมุดก่อนหน้า = เวลาที่ "ขั้นนั้น" ใช้จริง
+  const rows = marks.map((m, i) => ({
+    n: m.n, x: m.x, t: m.t, d: m.t - (i > 0 ? marks[i - 1].t : 0),
+  }));
+  const worst = rows.reduce((a, r) => Math.max(a, r.d), 0);
+  const total = rows.length ? rows[rows.length - 1].t : 0;
+
+  const asText = () =>
+    (run ? `[${run.at}] ${run.label || "-"} ${run.standalone ? "PWA" : "เบราว์เซอร์"}\n` : "") +
+    rows.map(r => `${(r.t / 1000).toFixed(1)}s  +${(r.d / 1000).toFixed(1)}s  ${r.n}${r.x ? " (" + r.x + ")" : ""}`).join("\n") +
+    (lastErr ? `\n\nปัญหาล่าสุด: ${lastErr.when} [${lastErr.status}] ${String(lastErr.head || "").slice(0, 120)}` : "");
+
+  return (
+    <div onClick={onClose} style={{
+      position:"fixed", inset:0, background:"rgba(0,0,0,.5)", zIndex:9999,
+      display:"flex", alignItems:"center", justifyContent:"center", padding:12,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background:"var(--card, #fff)", borderRadius:14, padding:16, width:"100%", maxWidth:460,
+        maxHeight:"85vh", overflowY:"auto", boxShadow:"0 10px 40px rgba(0,0,0,.3)",
+      }}>
+        <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:4}}>
+          <b style={{fontSize:16}}>⏱️ เปิดแอปช้าตรงไหน</b>
+          <button className="btn ghost" onClick={onClose}>ปิด</button>
+        </div>
+
+        {!run && (
+          <div style={{fontSize:13, color:"var(--muted)", padding:"18px 0"}}>
+            ยังไม่มีบันทึก — ลองปิดแอปแล้วเปิดใหม่ 1 ครั้ง แล้วกลับมาดูที่นี่
+          </div>
+        )}
+
+        {run && (
+          <>
+            <div style={{fontSize:12, color:"var(--muted)", marginBottom:10}}>
+              {new Date(run.at).toLocaleString("th-TH")} · {run.label || "ยังไม่ล็อกอิน"}
+              {" · "}{run.standalone ? "เปิดจากไอคอนหน้าโฮม" : "เปิดในเบราว์เซอร์"}
+              {" · รวม "}<b>{(total / 1000).toFixed(1)} วินาที</b>
+            </div>
+
+            {runs.length > 1 && (
+              <div style={{display:"flex", gap:6, flexWrap:"wrap", marginBottom:10}}>
+                {runs.map((r, i) => (
+                  <button key={i} className={"btn" + (i === idx ? "" : " ghost")}
+                          style={{fontSize:12, padding:"4px 10px"}} onClick={() => setIdx(i)}>
+                    {i === 0 ? "ล่าสุด" : `ย้อน ${i}`}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div style={{display:"flex", flexDirection:"column", gap:2}}>
+              {rows.map((r, i) => {
+                const hot = r.d === worst && worst > 500;   // ช่องที่กินเวลามากสุด
+                return (
+                  <div key={i} style={{
+                    display:"flex", alignItems:"center", gap:8, fontSize:12.5,
+                    padding:"5px 8px", borderRadius:6,
+                    background: hot ? "rgba(220,80,60,.12)" : "transparent",
+                    fontWeight: hot ? 700 : 400,
+                  }}>
+                    <span style={{minWidth:52, textAlign:"right", color:"var(--muted)",
+                                  fontVariantNumeric:"tabular-nums"}}>
+                      {(r.t / 1000).toFixed(1)}s
+                    </span>
+                    <span style={{minWidth:56, textAlign:"right", fontVariantNumeric:"tabular-nums",
+                                  color: hot ? "var(--dang)" : "inherit"}}>
+                      +{(r.d / 1000).toFixed(1)}s
+                    </span>
+                    <span style={{flex:1, minWidth:0, wordBreak:"break-word"}}>
+                      {r.n}{r.x ? <span style={{color:"var(--muted)"}}> · {r.x}</span> : null}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {worst > 500 && (
+              <div style={{marginTop:10, fontSize:12, color:"var(--muted)"}}>
+                แถบสีแดง = ขั้นที่กินเวลามากสุด ({(worst / 1000).toFixed(1)} วินาที) — คือจุดที่ต้องแก้
+              </div>
+            )}
+          </>
+        )}
+
+        {lastErr && (
+          <div style={{marginTop:12, padding:10, borderRadius:8, background:"rgba(220,80,60,.1)", fontSize:12}}>
+            <b>ปัญหาล่าสุดจากระบบหลังบ้าน</b>
+            <div style={{color:"var(--muted)", marginTop:4, wordBreak:"break-all"}}>
+              {new Date(lastErr.when).toLocaleString("th-TH")} · รหัส {lastErr.status}
+              <br/>{String(lastErr.head || "").slice(0, 160)}
+            </div>
+          </div>
+        )}
+
+        <div style={{display:"flex", gap:8, marginTop:14}}>
+          <button className="btn" style={{flex:1}} onClick={() => {
+            try { navigator.clipboard.writeText(asText()); } catch (e) {}
+          }}>📋 คัดลอกข้อความ</button>
+          <button className="btn ghost" onClick={() => {
+            try { localStorage.removeItem("dmj_boot_trace"); } catch (e) {}
+            onClose();
+          }}>ล้างบันทึก</button>
+        </div>
+        <div style={{marginTop:8, fontSize:11.5, color:"var(--muted)"}}>
+          ถ่ายจอนี้ส่งให้เจ้าของได้เลย — บอกได้ว่าช้าเพราะโหลดโค้ด, เพราะล็อกอิน, หรือเพราะข้อมูลใหญ่
+        </div>
+      </div>
     </div>
   );
 }
@@ -1032,6 +1179,10 @@ function App() {
   // เทียบกับขนาดครั้งล่าสุดที่สำเร็จ ซึ่งเก็บไว้ใน localStorage แล้วโตตามจริงเอง
   // (ห้าม hard-code ขนาด — จำนวนสินค้าเพิ่มขึ้นเรื่อย ๆ ค่าที่ค้างไว้จะเพี้ยนขึ้นทุกเดือน)
   const [loadBytes, setLoadBytes] = usS(0);
+  // หน้าจอวินิจฉัย "เปิดแอปช้าตรงไหน" — เปิดด้วยการแตะแถบสถานะ 3 ครั้ง
+  // (ไม่ทำเป็นแท็บ เพราะไม่ใช่ของที่ใช้ทุกวัน และ role ที่มีแท็บเยอะอยู่แล้วจะยิ่งแน่น)
+  const [showTrace, setShowTrace] = usS(false);
+  const traceTapRef = React.useRef({ n: 0, at: 0 });
   // Phase 7.3: >0 = ข้อมูลชุดนี้เป็น "ของสำรอง" ที่ server ส่งมาระหว่างมีคนอื่นกำลังสร้างชุดใหม่
   // (ค่า = เวลาที่ข้อมูลชุดนั้นถูกสร้าง) · 0 = ข้อมูลสด
   const [staleAt, setStaleAt] = usS(0);
@@ -1117,6 +1268,8 @@ function App() {
         const now = new Date().toISOString();
         try { localStorage.setItem("dmj_last_sync", now); } catch (e) {}
         setLastSync(now);
+        trMark("ข้อมูล ข้ามการโหลด", "ยังเป็นชุดเดิม (action=ver)");
+        try { window.dmjSaveTrace && window.dmjSaveTrace(role || ""); } catch (e) {}
         return;
       }
       // ห้าม `r.json()` ตรง ๆ — GAS ตอบหน้า HTML ได้ (ลิงก์หมดอายุ/กำลัง deploy/quota เต็ม)
@@ -1124,7 +1277,12 @@ function App() {
       // นับไบต์ที่ได้รับจริงระหว่างดาวน์โหลด เพื่อให้จอโหลดบอกได้ว่าไปถึงไหนแล้ว
       // (ก้อนนี้หลายเมกะบนเน็ตร้าน = ผู้ใช้ยืนรอหลายสิบวินาทีโดยไม่มีอะไรบอกว่าคืบหน้าไหม)
       let gotBytes = 0;
-      const onBytes = n => { gotBytes = n; setLoadBytes(n); };
+      const tData = Date.now();
+      trMark("ข้อมูล เริ่มโหลด", prefetched ? "ใช้ prefetch" : "ยิงใหม่");
+      const onBytes = n => {
+        if (gotBytes === 0) trMark("ข้อมูล ไบต์แรก", (Date.now() - tData) + "ms");
+        gotBytes = n; setLoadBytes(n);
+      };
       const getJson = r => (typeof dmjJsonProgress === 'function' ? dmjJsonProgress(r, onBytes)
                           : typeof dmjJson === 'function' ? dmjJson(r) : r.json());
       return (prefetched
@@ -1161,6 +1319,8 @@ function App() {
         // จำขนาดจริงของครั้งที่สำเร็จไว้เป็นตัวหารของแถบครั้งถัดไป — โตเองตามจำนวนสินค้า
         // (prefetch ไม่ผ่านตัวนับ จึงได้ 0 → ไม่เขียนทับค่าเดิมที่ยังใช้ได้อยู่)
         if (gotBytes > 0) { try { localStorage.setItem("dmj_last_payload_bytes", String(gotBytes)); } catch (e) {} }
+        trMark("ข้อมูล เสร็จ", (Date.now() - tData) + "ms · " + (gotBytes ? (gotBytes / 1048576).toFixed(1) + "MB" : "ไม่ทราบขนาด"));
+        try { window.dmjSaveTrace && window.dmjSaveTrace(role || ""); } catch (e) {}
       })
       .catch(e => {
         clearTimeout(timeout);
@@ -1189,6 +1349,9 @@ function App() {
         if (e && e.name === "AbortError") setError("เซิร์ฟเวอร์ตอบช้า — กรุณาลองใหม่อีกครั้ง [timeout]");
         else setError(typeof dmjErrText === 'function' ? dmjErrText(e) : `${e.name}: ${e.message}`);
         setSyncing(false);
+        // เก็บบันทึกไว้ด้วยตอนล้ม — รอบที่พังคือรอบที่อยากดูย้อนหลังที่สุด
+        trMark("ข้อมูล ล้ม", (e && e.dmjKind) || (e && e.name) || "error");
+        try { window.dmjSaveTrace && window.dmjSaveTrace(role || ""); } catch (e2) {}
       })
       .finally(() => { fetchingRef.current = false; clearTimeout(timeout); setLoadBytes(0); if (!controller.signal.aborted) setSyncing(false); });
     // ตาข่ายกันแอปค้าง: ถ้ามีอะไรหลุดออกมาถึงตรงนี้ `fetchingRef` จะค้าง true ตลอดกาล
@@ -1440,6 +1603,8 @@ function App() {
 
   // ตั้ง state+session จาก staff object ที่ได้จาก authLine/me — ใช้ร่วมกันทั้ง 2 flow
   const applyStaffSession = usC((s) => {
+    trMark("ล็อกอินสำเร็จ", (s && s.role) || "ยังไม่มีตำแหน่ง");
+    try { window.dmjSaveTrace && window.dmjSaveTrace((s && s.role) || ""); } catch (e) {}
     resetHandoff(); // ล็อกอินจบแล้ว ไม่ต้องรอผลจากเครื่อง/เบราว์เซอร์อื่นอีก
     setStaff(s);
     if (typeof window !== 'undefined') {
@@ -1529,6 +1694,9 @@ function App() {
     setRole(null);
     setAuthPhase("needLogin");
   }, [resetHandoff]);
+
+  // ระยะจากหมุด 'jsx-ready' ถึงตรงนี้ = เวลาที่ React ใช้ render ครั้งแรก
+  usE(() => { trMark("react พร้อม"); }, []);
 
   // ── นับวินาทีระหว่างค้างอยู่ที่จอ "กำลังเข้าสู่ระบบ" ──
   usE(() => {
@@ -1824,6 +1992,12 @@ function App() {
         <button className="btn primary" onClick={()=>fetchFromSheet(3,true)} style={{marginTop:12}}>
           {I.refresh}<span>ลองใหม่</span>
         </button>
+        {/* รอบที่พังคือรอบที่อยากรู้ที่สุดว่าช้า/ตายตรงไหน — ต้องกดดูได้จากตรงนี้เลย
+            ไม่ใช่ต้องเข้าแอปให้สำเร็จก่อน (ซึ่งตอนนี้ยังทำไม่ได้) */}
+        <button className="btn ghost" style={{marginTop:8,fontSize:12}} onClick={()=>setShowTrace(true)}>
+          ⏱️ ดูว่าช้าตรงไหน
+        </button>
+        {showTrace && <BootTraceModal onClose={() => setShowTrace(false)}/>}
       </div>
     );
   }
@@ -1850,6 +2024,10 @@ function App() {
             {retryMsg && <div style={{fontSize:12,color:"var(--muted)",marginTop:6}}>{retryMsg}</div>}
           </>
         )}
+        <button className="btn ghost" style={{marginTop:10,fontSize:12}} onClick={()=>setShowTrace(true)}>
+          ⏱️ ดูว่าช้าตรงไหน
+        </button>
+        {showTrace && <BootTraceModal onClose={() => setShowTrace(false)}/>}
       </div>
     );
   }
@@ -2053,7 +2231,14 @@ function App() {
           </div>
 
           <div className="nav-right">
-            <span className="nav-status" title={source==="upload" ? "ใช้ข้อมูลจากไฟล์ที่อัปโหลด" : "ใช้ข้อมูลจาก Google Sheet"}>
+            <span className="nav-status" title={source==="upload" ? "ใช้ข้อมูลจากไฟล์ที่อัปโหลด" : "ใช้ข้อมูลจาก Google Sheet"}
+                  onClick={() => {
+                    // แตะ 3 ครั้งภายใน 1.5 วิ → เปิดหน้าจอ "เปิดแอปช้าตรงไหน"
+                    const r = traceTapRef.current, now = Date.now();
+                    r.n = (now - r.at < 1500) ? r.n + 1 : 1;
+                    r.at = now;
+                    if (r.n >= 3) { r.n = 0; setShowTrace(true); }
+                  }}>
               <span className="nav-dot" style={{background: source==="upload" ? "#a07417" : "var(--g-500)"}}></span>
               {source==="upload" ? "ไฟล์อัปโหลด" : "Sheet"} · {syncLabel}
             </span>
@@ -2271,6 +2456,7 @@ function App() {
                                     }}
                                     /></ErrorBoundary>}
       </main>
+      {showTrace && <BootTraceModal onClose={() => setShowTrace(false)}/>}
     </div>
   );
 }

@@ -458,7 +458,144 @@ describe('claimHandoff ฝั่ง client', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 10. Phase 8 ขั้นวัด + คีย์ที่ตัดทิ้งแล้ว
+// 10. บันทึกเวลาเปิดแอป — เครื่องมือที่ใช้ตัดสินว่า "1 นาที" หมดไปกับอะไร
+// ═══════════════════════════════════════════════════════════════════════════
+describe('dmjMark / dmjSaveTrace — รันของจริงจาก HTML', () => {
+  function boot() {
+    const src = grab(HTML, /var t0 = Date\.now\(\);[\s\S]*?window\.dmjMark\('html'\);/, 'ตัวจับเวลาใน <head>');
+    const store = new Map();
+    const win = {
+      performance: { timeOrigin: 1_000_000 },
+      navigator: { userAgent: 'test-agent', standalone: false },
+      matchMedia: () => ({ matches: false }),
+    };
+    const localStorage = {
+      getItem: k => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: k => store.delete(k),
+    };
+    win.localStorage = localStorage;
+    new Function('window', 'localStorage', 'navigator', src)(win, localStorage, win.navigator);
+    return { win, read: () => JSON.parse(store.get('dmj_boot_trace') || '[]') };
+  }
+
+  it('ประทับหมุดแรกทันทีที่หน้าเริ่มโหลด', () => {
+    const { win } = boot();
+    expect(win.dmjMarks().map(m => m.n)).toEqual(['html']);
+  });
+
+  // ⚠️ เคสที่อยากดูที่สุดคือเคสที่แอป "ไม่มีวันโหลดเสร็จ" — ถ้ารอเซฟตอนจบ
+  // ก็จะไม่มีอะไรให้ดูเลยพอดีกับตอนที่ต้องการมากที่สุด
+  it('บันทึกลงเครื่องทุกหมุด ไม่ใช่รอตอนจบ', () => {
+    const { win, read } = boot();
+    expect(read().length).toBe(1);
+    win.dmjMark('babel');
+    expect(read()[0].marks.map(m => m.n)).toEqual(['html', 'babel']);
+  });
+
+  it('การเปิดหน้าครั้งเดียวได้ 1 รายการ ไม่ใช่รายการใหม่ทุกหมุด', () => {
+    const { win, read } = boot();
+    win.dmjMark('a'); win.dmjMark('b'); win.dmjMark('c');
+    expect(read().length).toBe(1);
+    expect(read()[0].marks.length).toBe(4);
+  });
+
+  it('เก็บได้หลายรอบ แต่ไม่เกิน 5 (ไว้เทียบว่าช้าทุกครั้งหรือช้าบางครั้ง)', () => {
+    let last = null;
+    for (let i = 0; i < 7; i++) { last = boot(); last.win.dmjMark('run' + i); }
+    expect(last.read().length).toBeLessThanOrEqual(5);
+  });
+
+  it('รอบใหม่อยู่บนสุด (ล่าสุดคือตัวที่คนอยากดู)', () => {
+    const a = boot(); a.win.dmjSaveTrace('owner');
+    const b = boot(); b.win.dmjSaveTrace('warehouse');
+    expect(b.read()[0].label).toBe('warehouse');
+  });
+
+  // การเซฟอัตโนมัติทุกหมุดไม่ได้ส่ง label มาด้วย — ถ้าเขียนทับด้วยค่าว่าง
+  // ชื่อตำแหน่งที่เพิ่งล็อกอินสำเร็จจะหายทันทีในหมุดถัดไป
+  it('label ที่เคยตั้งไว้ต้องไม่ถูกลบโดยการเซฟอัตโนมัติ', () => {
+    const { win, read } = boot();
+    win.dmjSaveTrace('frontstore');
+    win.dmjMark('ข้อมูล เสร็จ');
+    expect(read()[0].label).toBe('frontstore');
+  });
+
+  it('บันทึกว่าเปิดจากไอคอนหน้าโฮมหรือเบราว์เซอร์ (คนละพฤติกรรมกันบน iOS)', () => {
+    const { win, read } = boot();
+    win.dmjSaveTrace('x');
+    expect(read()[0]).toHaveProperty('standalone');
+  });
+
+  it('localStorage ใช้ไม่ได้ (โหมดไม่ระบุตัวตน) ต้องไม่ทำให้แอปพัง', () => {
+    const src = grab(HTML, /var t0 = Date\.now\(\);[\s\S]*?window\.dmjMark\('html'\);/, 'ตัวจับเวลา');
+    const win = { navigator: { userAgent: 'x' }, matchMedia: () => ({ matches: false }) };
+    const ls = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); } };
+    win.localStorage = ls;
+    expect(() => new Function('window', 'localStorage', 'navigator', src)(win, ls, win.navigator)).not.toThrow();
+    expect(() => win.dmjMark('babel')).not.toThrow();
+  });
+});
+
+describe('การต่อหมุดเข้ากับแอป', () => {
+  // ⚠️ กับดักที่เจอตอนทำ: app.jsx รันใน global scope — ประกาศ `function dmjMark()`
+  // ที่นั่นจะไปทับตัวจริงบน window แล้วหมุดทั้งหมดหายเงียบ ๆ โดยยังดูเหมือนทำงานปกติ
+  it('app.jsx ต้องไม่ประกาศฟังก์ชันชื่อ dmjMark ทับของจริง', () => {
+    expect(APP).not.toMatch(/function dmjMark\s*\(/);
+    expect(APP).toMatch(/function trMark\(name, extra\)/);
+  });
+
+  it('trMark ต้องไม่โยนเมื่อไม่มีตัวจริง (browser test ไม่ได้โหลด HTML นี้)', () => {
+    const fn = grab(APP, /function trMark\(name, extra\) \{[\s\S]*?\n\}/, 'trMark');
+    const make = new Function('window', fn + '; return trMark;');
+    expect(() => make(undefined)('x')).not.toThrow();
+    expect(() => make({})('x')).not.toThrow();
+  });
+
+  it('วัดครบทั้ง 3 ช่วงที่แก้คนละวิธีกัน (โค้ด · ล็อกอิน · ข้อมูล)', () => {
+    expect(HTML).toMatch(/dmjMark\('babel'\)/);        // ช่วง A: โหลด/compile โค้ด
+    expect(HTML).toMatch(/dmjMark\('jsx-ready'\)/);
+    expect(APP).toMatch(/trMark\("auth:" \+ act/);      // ช่วง B: ล็อกอิน
+    expect(APP).toMatch(/trMark\("ข้อมูล เริ่มโหลด"/);   // ช่วง C: ดาวน์โหลด payload
+    expect(APP).toMatch(/trMark\("ข้อมูล เสร็จ"/);
+  });
+
+  it('แยก cache hit ออกจาก compile จริง — ต้องรู้ว่า Babel cache ทำงานไหมบนเครื่องนั้น', () => {
+    expect(HTML).toMatch(/dmjMark\('jsx:' \+ src, 'hit'\)/);
+    expect(HTML).toMatch(/'compile ' \+ \(Date\.now\(\) - _tc\)/);
+  });
+
+  it('เก็บบันทึกตอนโหลดล้มด้วย — รอบที่พังคือรอบที่อยากดูที่สุด', () => {
+    expect(APP).toMatch(/trMark\("ข้อมูล ล้ม"/);
+  });
+});
+
+describe('BootTraceModal — หน้าจอที่พนักงานถ่ายส่งให้เจ้าของ', () => {
+  const COMP = grab(APP, /function BootTraceModal\(\{ onClose \}\)[\s\S]*?\n\}\n/, 'BootTraceModal');
+
+  // "รวม 60 วินาที" บอกอะไรไม่ได้เลย · "ดาวน์โหลด 42 วิ" กับ "compile 42 วิ" คือคนละปัญหา
+  it('โชว์ส่วนต่างระหว่างหมุด ไม่ใช่แค่เวลาสะสม', () => {
+    expect(COMP).toMatch(/d: m\.t - \(i > 0 \? marks\[i - 1\]\.t : 0\)/);
+  });
+
+  it('เน้นขั้นที่กินเวลามากสุดให้เห็นทันที', () => {
+    expect(COMP).toMatch(/worst/);
+  });
+
+  it('รวมปัญหาล่าสุดจากระบบหลังบ้านไว้ในจอเดียวกัน', () => {
+    expect(COMP).toMatch(/dmj_last_backend_error/);
+  });
+
+  it('เปิดได้จากจอโหลด/จอ error ด้วย — ไม่ต้องเข้าแอปให้สำเร็จก่อน', () => {
+    // ตอนที่อยากดูที่สุดคือตอนที่ยังเข้าไม่ได้ ถ้าเปิดได้เฉพาะหลังโหลดเสร็จก็ไร้ประโยชน์
+    const loading = APP.slice(APP.indexOf('if (error && !data) {'), APP.indexOf('const syncLabel = (() => {'));
+    expect((loading.match(/setShowTrace\(true\)/g) || []).length).toBe(2);
+    expect((loading.match(/<BootTraceModal/g) || []).length).toBe(2);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 11. Phase 8 ขั้นวัด + คีย์ที่ตัดทิ้งแล้ว
 // ═══════════════════════════════════════════════════════════════════════════
 describe('Phase 8 — เครื่องมือวัดและคีย์ที่ตายแล้ว', () => {
   it('logPayloadSizes_ เรียกตัววัด "ชื่อคีย์ vs ค่า" จริง (ไม่ใช่มีฟังก์ชันลอยไว้เฉย ๆ)', () => {

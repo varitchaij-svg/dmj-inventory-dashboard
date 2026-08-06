@@ -3,6 +3,70 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1.0" id="dmj-viewport-meta" />
+
+<!-- ════════════════════════════════════════════════════════════════════
+     จับเวลาเปิดแอป — ต้องเป็น script แรกสุดของหน้า
+     ════════════════════════════════════════════════════════════════════
+     ทำไมต้องมี: ผู้ใช้บอกว่า "ล็อกอินใช้เวลา 1 นาทีกว่า" แต่ 1 นาทีนั้นประกอบด้วย
+     3 ช่วงที่แก้คนละวิธีกันสิ้นเชิง — โหลด/compile โค้ด · แลก token กับ LINE ·
+     ดาวน์โหลด payload 4.2MB · **เดาผิดช่วง = เสียเวลาทั้งวันแก้ผิดที่**
+     (เคยพลาดมาแล้วรอบ Phase 7.4: สรุปว่าติดคิวล็อก ที่จริงคือเวลาดาวน์โหลด
+      เพราะตัวเลขบังเอิญใกล้กัน — เวลาที่ผู้ใช้เห็น ≠ เวลาที่ script ใช้)
+
+     พนักงานอยู่หน้าร้าน **เปิด DevTools ไม่ได้** จึงต้องเก็บไว้ในเครื่องแล้วเปิดดู
+     ย้อนหลังได้จากในแอปเอง (แตะแถบสถานะ 3 ครั้ง) เพื่อถ่ายจอส่งให้เจ้าของ
+     — หลักเดียวกับ dmj_last_backend_error ที่ทำไว้ตอน Phase 7.5
+
+     ห้ามให้ตัวนี้ทำให้แอปพัง: ทุกอย่างห่อ try/catch และไม่มี network call
+-->
+<script>
+(function () {
+  'use strict';
+  var t0 = Date.now();
+  var marks = [];
+  try { if (window.performance && performance.timeOrigin) t0 = Math.round(performance.timeOrigin); } catch (_) {}
+
+  // ประทับเวลาหนึ่งหมุด · เรียกได้จากทุกไฟล์ (HTML/app.jsx) · ซ้ำได้ไม่พัง
+  //
+  // ⚠️ **บันทึกลงเครื่องทุกหมุด ไม่ใช่ตอนจบ** — เคสที่เราอยากดูที่สุดคือเคสที่แอป
+  // "ไม่มีวันโหลดเสร็จ" (ค้างหน้าล็อกอิน/จอโหลด) ถ้ารอเซฟตอนจบก็จะไม่มีอะไรให้ดูเลย
+  // พอดีกับเคสที่ต้องการมากที่สุด · การเขียนแต่ละครั้งเป็นข้อมูลไม่กี่ร้อยไบต์
+  window.dmjMark = function (name, extra) {
+    try {
+      marks.push({ n: String(name), t: Date.now() - t0, x: (extra == null ? undefined : extra) });
+    } catch (_) {}
+    try { window.dmjSaveTrace(); } catch (_) {}
+  };
+  window.dmjMarks = function () { try { return marks.slice(); } catch (_) { return []; } };
+
+  // ปิดรอบแล้วเก็บลงเครื่อง — เก็บ 5 รอบล่าสุดพอ (ไว้เทียบว่า "ช้าทุกครั้ง" หรือ "ช้าบางครั้ง"
+  // ซึ่งเป็นคนละปัญหากัน) · เขียนทับรอบเดิมของการเปิดหน้าครั้งนี้ได้ ไม่สร้างรายการใหม่
+  var savedIdx = null;
+  var lastLabel = '';
+  window.dmjSaveTrace = function (label) {
+    try {
+      // เก็บ label ล่าสุดที่ "มีค่าจริง" ไว้ — การเซฟอัตโนมัติทุกหมุดไม่ได้ส่ง label มาด้วย
+      // ถ้าเขียนทับด้วยค่าว่าง ชื่อตำแหน่งที่เพิ่งล็อกอินสำเร็จจะหายไปทันทีในหมุดถัดไป
+      if (label) lastLabel = label;
+      var all = JSON.parse(localStorage.getItem('dmj_boot_trace') || '[]');
+      if (!Array.isArray(all)) all = [];
+      var rec = {
+        at: new Date(t0).toISOString(),
+        label: lastLabel,
+        ua: (navigator.userAgent || '').slice(0, 120),
+        standalone: !!(window.navigator.standalone || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)),
+        marks: marks.slice(),
+      };
+      if (savedIdx != null && all[savedIdx]) all[savedIdx] = rec;
+      else { all.unshift(rec); savedIdx = 0; all = all.slice(0, 5); }
+      localStorage.setItem('dmj_boot_trace', JSON.stringify(all));
+    } catch (_) {}
+  };
+
+  window.dmjMark('html');
+}());
+</script>
+
 <script>
   // แก้เฉพาะเครื่องที่ UA รายงานเป็น desktop (X11; Linux x86_64, ไม่มี Android/Mobile)
   // ทั้งที่จริงเป็นจอสัมผัสมือถือ — เจอเคสจริง: WebView แบบนี้ไม่ยึด width=device-width
@@ -1297,6 +1361,7 @@
          (เช่น LINE login คืนตำแหน่งจริงจาก server ไม่ตรงกับที่ค้างใน sessionStorage)
          ผลที่ prefetch ไว้จะ "ขาดก้อนข้อมูล" สำหรับ role ใหม่ → app.jsx ต้องทิ้งแล้วยิงใหม่ */
       window._dataPrefetchRole = role;
+      try { window.dmjMark && window.dmjMark('prefetch', role || '(ไม่รู้ role)'); } catch (_) {}
       /* ต้องยกเลิกได้จากข้างนอก — ถ้าสุดท้าย role ไม่ตรง app.jsx จะทิ้งผลก้อนนี้แล้วยิงใหม่
          ถ้าไม่ยกเลิก ก้อนเก่า (หลายเมกะ) **ยังไหลต่อจนจบ** เบียดท่อเดียวกับก้อนใหม่
          = โหลดหน้าเดียวกินสองเท่า ซึ่งเป็นสาเหตุที่ทำให้ลิงก์ดาวน์โหลดหมดอายุ (404) */
@@ -1378,6 +1443,10 @@
     document.head.appendChild(s);
   }
 
+  /* Babel โหลดเสร็จแล้ว (script ตัวนี้เป็น classic script ต่อจาก babel.min.js)
+     ระยะจากหมุด 'html' ถึงตรงนี้ = เวลาที่หมดไปกับการดาวน์โหลด CDN ทั้งหมด */
+  try { window.dmjMark && window.dmjMark('babel'); } catch (_) {}
+
   var BC = 'dmj-babel-v2'; // bump เมื่อ format เปลี่ยน
 
   /* fetch + cache check + compile → คืน code string (ไม่ inject)
@@ -1402,18 +1471,25 @@
         var bc = await caches.open(BC);
         var hit = await bc.match(src + '.compiled');
         if (hit && hit.headers.get('x-etag') === etag) {
-          return await hit.text(); /* cache hit — ไม่ต้องอ่าน body หรือ compile เลย */
+          /* cache hit — ไม่ต้องอ่าน body หรือ compile เลย
+             ⚠️ หมุดนี้สำคัญ: ถ้าเห็น "compile" แทน "hit" ทุกครั้งที่เปิดแอป แปลว่า
+             cache ใช้ไม่ได้จริงบนเครื่องนั้น (iOS ล้าง Cache API เองได้ / ETag เปลี่ยนทุกรอบ)
+             ซึ่งคือการจ่ายเวลา compile 24,000 บรรทัดใหม่ทุกครั้งโดยไม่มีอะไรบอก */
+          try { window.dmjMark && window.dmjMark('jsx:' + src, 'hit'); } catch (_) {}
+          return await hit.text();
         }
       } catch (_) {}
     }
 
     /* ── Cache miss: อ่าน body แล้ว compile ── */
     var text = await resp.text();
+    var _tc = Date.now();
     var compiled = Babel.transform(text, {
       presets: ['react'],
       sourceType: 'script',
       filename: src,
     }).code;
+    try { window.dmjMark && window.dmjMark('jsx:' + src, 'compile ' + (Date.now() - _tc) + 'ms'); } catch (_) {}
 
     /* บันทึก compiled code ไว้ใช้ครั้งหน้า */
     if (typeof caches !== 'undefined') {
@@ -1445,6 +1521,7 @@
       injectCode(codes[3]); /* views-attendance สุดท้าย (ก่อน app.jsx) */
       return loadJsx('app.jsx');
     })
+    .then(function () { try { window.dmjMark && window.dmjMark('jsx-ready'); } catch (_) {} })
     .catch(function (err) { console.error('[boot]', err); });
 }());
   </script>
