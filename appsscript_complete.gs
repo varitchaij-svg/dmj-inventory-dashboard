@@ -2319,6 +2319,13 @@ function doGet(e) {
     if (e && e.parameter && e.parameter.action === 'transferCheck') {
       return transferCheckHandler_(String(e.parameter.tid || '').trim());
     }
+    // "มีอะไรถูกโอนคลัง→หน้าร้านไปแล้วบ้างช่วงนี้" — ประวัติจริงจากชีต "รายการโอนสินค้า"
+    // ใช้ตอบคำถาม "ตกลงของอันไหนส่งไปแล้วกันแน่" หลังกดส่งแล้วคำตอบหายกลางทาง
+    // ⚠️ ต้องอ่านสด **ไม่ผ่าน cache** — คนถามตอนนี้คือคนที่ไม่แน่ใจว่าของไปหรือยัง
+    //    ตอบด้วยของเก่าค้าง cache = เขาจะเคลียร์ผิดตัว · ก้อนเล็ก (ไม่กี่ร้อยแถว) จึงไม่ต้อง cache
+    if (e && e.parameter && e.parameter.action === 'recentTransfers') {
+      return recentTransfersHandler_(Number(e.parameter.days) || 3);
+    }
     // ตรวจ PIN เจ้าของฝั่ง server (PIN ไม่อยู่ใน source โค้ด frontend)
     // ตั้งค่าใน Script Property ชื่อ OWNER_PIN; ถ้าไม่ตั้ง ใช้ค่า default 'DMJ' (backward compatible)
     if (e && e.parameter && e.parameter.action === 'verifyPin') {
@@ -3117,6 +3124,62 @@ function findTidInShipments_(ss, tid) {
     items.push({ sku: String(rows[i][COL_SHIP_SKU - 1] || '').trim(), qty: Number(rows[i][COL_SHIP_QTY - 1]) || 0 });
   }
   return items.length ? { refNum, items } : null;
+}
+
+// doGet action=recentTransfers — ประวัติการโอนคลัง→หน้าร้าน N วันล่าสุด (ของจริงจากชีต)
+// ครอบคลุมทั้งการกด "ส่งทั้งหมด" (logTransferBatch_) และกดส่งทีละใบ (logTransfer_)
+// เพราะทั้งสองทางเขียนลงชีตเดียวกัน — ตัวนี้จึงเป็น "ประวัติ" ที่เชื่อได้ว่าอะไรโอนไปแล้วจริง
+const RECENT_TF_SCAN_ROWS = 1500;   // แถวท้ายสุดที่ไล่อ่าน (ชีตโอนโตทุกวัน ห้าม getDataRange)
+function recentTransfersHandler_(days) {
+  try {
+    const ss = SpreadsheetApp.openById(SHEET_ID);
+    const sh = ss.getSheetByName(SHEET_TRANSFERS);
+    if (!sh) return ContentService.createTextOutput(JSON.stringify({ ok: true, list: [] }))
+      .setMimeType(ContentService.MimeType.JSON);
+    const last = sh.getLastRow();
+    if (last < 2) return ContentService.createTextOutput(JSON.stringify({ ok: true, list: [] }))
+      .setMimeType(ContentService.MimeType.JSON);
+    const from = Math.max(2, last - RECENT_TF_SCAN_ROWS + 1);
+    // getDisplayValues เพื่อให้วันที่ออกมาเป็นข้อความอย่างที่เห็นในชีต (เหมือน readShipments_)
+    const rows = sh.getRange(from, 1, last - from + 1, COL_SHIP_TID).getDisplayValues();
+    const cutoff = new Date(Date.now() - Math.max(1, days) * 24 * 60 * 60 * 1000);
+    const list = [];
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const sku = String(r[COL_SHIP_SKU - 1] || '').trim();
+      if (!sku) continue;
+      const dateStr = String(r[COL_SHIP_DATE - 1] || '').trim();
+      const d = parseShipDayStr_(dateStr);
+      if (d && d < cutoff) continue;      // เก่าเกินช่วงที่ถาม · อ่านวันที่ไม่ออก = เก็บไว้ให้ client ตัดสิน
+      list.push({
+        row: from + i,
+        refNum: String(r[COL_SHIP_REF - 1] || '').trim(),
+        date: dateStr,
+        sku,
+        name: String(r[COL_SHIP_NAME - 1] || '').trim(),
+        qty: Number(r[COL_SHIP_QTY - 1]) || 0,
+        receivedAt: String(r[COL_SHIP_RECVAT - 1] || '').trim(),
+        preparedBy: String(r[COL_SHIP_PREPAREDBY - 1] || '').trim(),
+        tid: String(r[COL_SHIP_TID - 1] || '').trim(),
+      });
+    }
+    return ContentService.createTextOutput(JSON.stringify({ ok: true, days, list }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    Logger.log('recentTransfersHandler_ error: ' + err);
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// "dd/MM/yyyy" (ค่าที่ logTransfer_/logTransferBatch_ เขียน) → Date · อ่านไม่ออกคืน null
+// เผื่อแถวเก่าที่เป็นปี พ.ศ. → ลบ 543 เมื่อปี ≥ 2400 (บทเรียนข้อ 11)
+function parseShipDayStr_(s) {
+  const m = String(s || '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (!m) return null;
+  let y = parseInt(m[3], 10);
+  if (y >= 2400) y -= 543;
+  return new Date(y, parseInt(m[2], 10) - 1, parseInt(m[1], 10));
 }
 
 // doGet action=transferCheck — "ชุด tid นี้โอนไปแล้วหรือยัง"

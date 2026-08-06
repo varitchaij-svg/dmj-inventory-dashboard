@@ -262,18 +262,31 @@ describe('meta — frontend ต้องไม่ประกาศว่า "�
   });
 });
 
-describe('meta — ปุ่ม "เช็คของที่ส่งไปแล้ว" ต้องไม่ตัดสต็อกซ้ำ', () => {
+describe('meta — ปุ่ม "เช็คของที่ส่งไปแล้ว" ต้องไม่ตัดสต็อกซ้ำ และไม่เคลียร์เหมารวม', () => {
   const apply = grab(VA, /const applyReconcile = async \(\) => \{[\s\S]*?\n  \};/);
-  const find  = grab(VA, /const findAlreadyShipped = \(\) => \{[\s\S]*?\n  \};/);
+  const find  = grab(VA, /const findAlreadyShipped = \(rows\) => \{[\s\S]*?\n  \};/);
+  const open  = grab(VA, /const openReconcile = async \(\) => \{[\s\S]*?\n  \};/);
 
   it('ลบ order + มาร์คส่งแล้วเท่านั้น — ห้ามเรียกการโอนใด ๆ', () => {
     expect(apply).toMatch(/syncDeleteOrders/);
     expect(apply).not.toMatch(/syncStockTransferBatch|syncStockDeduct/);
   });
 
-  it('ตัดสินจากชีตรายการโอนจริง ไม่ใช่เดาจากหน้าจอ', () => {
-    expect(find).toMatch(/data\.shipments/);
+  it('เคลียร์เฉพาะรายการที่ผู้ใช้ติ๊กเลือก — ไม่ใช่ทุกอันที่แมตช์', () => {
+    expect(apply).toMatch(/\.filter\(m => m\.pick\)/);
+  });
+
+  it('ตัดสินจากประวัติการโอนจริง อ่านสดจากชีตก่อน ไม่ใช่เดาจากหน้าจอ', () => {
+    expect(open).toMatch(/await syncRecentTransfers\(RECONCILE_DAYS\)/);
+    expect(open).toMatch(/data\.shipments/);      // ถามสดไม่ได้ → ถอยไปใช้ของในเครื่อง
     expect(find).toMatch(/!s\.receivedAt/);
+  });
+
+  it('ตัวที่ไม่มีแถวโอนรองรับ ต้องเข้ากอง unmatched เสมอ (= ยังไม่ได้ส่ง คงไว้)', () => {
+    expect(find).toMatch(/unmatched\.push\(o\); return;/);
+    expect(find).toMatch(/return \{ matches, unmatched, pending \};/);
+    // unmatched ต้องไม่ถูกส่งต่อไปให้ applyReconcile ลบ
+    expect(apply).not.toMatch(/unmatched/);
   });
 
   it('จับคู่ 1 ต่อ 1 — แถวโอนแถวเดียวห้ามเคลียร์ order หลายใบ', () => {
@@ -283,5 +296,46 @@ describe('meta — ปุ่ม "เช็คของที่ส่งไป�
 
   it('ไม่แตะรายการ MTO (ไม่ได้โอนสต็อกคลังตั้งแต่แรก)', () => {
     expect(find).toMatch(/!o\.product\?\.isMTO/);
+  });
+});
+
+describe('meta — กดส่งทีละใบก็ต้องไม่ขึ้นแดงมั่ว (เส้นทางที่ไม่มี tid กันซ้ำ)', () => {
+  const finalize = grab(VA, /const finalizeShip = async \(order, matItems\) => \{[\s\S]*?\n  \};/);
+  const deduct = grab(VA, /async function syncStockDeduct\(sku, qty, name\) \{[\s\S]*?\n\}/);
+
+  it('syncStockDeduct อ่านผลด้วย dmjJson และบอกได้ว่า "อ่านไม่ได้"', () => {
+    expect(deduct).toMatch(/await dmjJson\(res\)/);
+    expect(deduct).toMatch(/unreadable: true/);
+    expect(deduct).not.toMatch(/res\.json\(\)/);
+  });
+
+  it('อ่านคำตอบไม่ได้ → ห้ามบอกว่า "คลังไม่พอ" และห้ามชวนกดส่งซ้ำ', () => {
+    expect(finalize).toMatch(/if \(unreadable\)/);
+    const branch = grab(finalize, /if \(unreadable\) \{[\s\S]*?\n    \}/);
+    expect(branch).toMatch(/เช็คของที่ส่งไปแล้ว/);
+    expect(branch).toMatch(/อย่ากดส่งซ้ำ/);
+    expect(branch).not.toMatch(/คลังไม่พอ/);
+    // ต้องตัดจบก่อนถึงเส้นทาง "คลังไม่พอ/ไม่พบสินค้า" เดิม
+    expect(finalize.indexOf('if (unreadable)')).toBeLessThan(finalize.indexOf('if (!transferOk)'));
+  });
+});
+
+describe('meta — action=recentTransfers (ประวัติจริงว่าอะไรโอนไปแล้ว)', () => {
+  it('doGet มี endpoint และอ่านเฉพาะช่วงท้ายชีต', () => {
+    expect(SRC).toMatch(/e\.parameter\.action === 'recentTransfers'/);
+    const h = grab(SRC, /function recentTransfersHandler_\(days\) \{[\s\S]*?\n\}/);
+    expect(h).toMatch(/RECENT_TF_SCAN_ROWS/);
+    expect(h).not.toMatch(/getDataRange\(\)/);
+  });
+
+  it('ต้องไม่อ่านผ่าน payload cache — คนถามคือคนที่ไม่แน่ใจว่าของไปหรือยัง', () => {
+    const h = grab(SRC, /function recentTransfersHandler_\(days\) \{[\s\S]*?\n\}/);
+    expect(h).not.toMatch(/CacheService|_readChunked_/);
+  });
+
+  it('ครอบคลุมทั้งทาง "ส่งทั้งหมด" และ "กดส่งทีละใบ" (เขียนชีตเดียวกัน)', () => {
+    const single = grab(SRC, /function transferStock\(ss, sku, qty, productName, actor\) \{[\s\S]*?\n\}/);
+    expect(single).toMatch(/logTransfer_\(ss, sku, name, actual, actor\)/);
+    expect(SRC).toMatch(/function logTransfer_\(ss, sku, productName, qty, actor\)/);
   });
 });
