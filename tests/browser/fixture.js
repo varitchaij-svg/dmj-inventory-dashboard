@@ -196,4 +196,31 @@
         by: 'สมหญิง ขยัน (คลังสินค้า)', read: true },
     ],
   };
+
+  // ── 🏅 ผลงานพนักงาน (action=staffPerf) — 2 คน คนละตำแหน่ง + 1 ชื่อที่จับคู่ไม่ได้ ──
+  // ต้องมี 2 role ต่างกัน เพื่อยืนยันว่า UI **แยกกลุ่มตามตำแหน่ง** ไม่ใช่อันดับรวมทั้งร้าน
+  // และต้องมี unmatched เพื่อยืนยันว่าการ์ดเตือน "จับคู่ชื่อไม่ได้" ถูกเรนเดอร์จริง
+  window.__DMJ_STAFFPERF_FIXTURE = {
+    success: true,
+    data: {
+      month: '2026-08', isCurrentMonth: true, lastDate: '2026-08-05', auditRows: 260,
+      cats: [
+        { key: 'count',    emoji: '📊', label: 'นับสต็อกคลัง', ops: true,  unit: 'รายการ', skip: false },
+        { key: 'transfer', emoji: '🔄', label: 'โอนของ',       ops: true,  unit: 'รายการ', skip: false },
+        { key: 'fscheck',  emoji: '🏪', label: 'เช็คหน้าร้าน',  ops: true,  unit: 'รายการ', skip: false },
+        { key: 'punch',    emoji: '🕐', label: 'กดลงเวลา',     ops: false, unit: 'ครั้ง',  skip: true },
+      ],
+      staff: [
+        { staffId: 'STF002', name: 'สมหญิง ขยัน', role: 'warehouse', status: 'active', pictureUrl: '',
+          total: 148, opsTotal: 148, byCat: { count: 120, transfer: 28, punch: 42 },
+          byDay: { '2026-08-01': 60, '2026-08-04': 88 },
+          workedMin: 2400, daysWorked: 5, lateDays: 1, lateMin: 12, daysAbsent: 0, perHour: 3.7 },
+        { staffId: 'STF001', name: 'สมชาย ใจดี', role: 'frontstore', status: 'active', pictureUrl: '',
+          total: 63, opsTotal: 63, byCat: { fscheck: 63, punch: 38 },
+          byDay: { '2026-08-03': 63 },
+          workedMin: 1980, daysWorked: 4, lateDays: 0, lateMin: 0, daysAbsent: 1, perHour: 1.9 },
+      ],
+      unmatched: [{ actor: 'พนักงานเก่า (หน้าร้าน)', total: 9 }],
+    },
+  };
 })();

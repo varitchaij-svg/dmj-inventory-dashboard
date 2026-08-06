@@ -105,6 +105,13 @@
         { ok: true, owners: {}, me: 'STF001', meName: 'ทดสอบ', off: false }),
         { headers: { 'Content-Type': 'application/json' } }));
     }
+    // 🏅 ผลงานพนักงาน — ต้องมาก่อน branch payload รวมเหมือนกระดิ่ง/ดาว
+    // (ตอบ payload สินค้าแทนจะได้ d.data undefined → หน้าว่างเปล่าแต่ไม่ crash = เทสต์เขียวลวง)
+    if (/action=staffPerf/.test(url)) {
+      return Promise.resolve(new Response(JSON.stringify(window.__DMJ_STAFFPERF_FIXTURE ||
+        { success: true, data: { month: '2026-08', cats: [], staff: [], unmatched: [] } }),
+        { headers: { 'Content-Type': 'application/json' } }));
+    }
     // GET payload
     if (/script\.google|exec|action=orders|action=getAuditLog|action=getDeadStock/.test(url) || url.indexOf('http') === 0) {
       const payload = Object.assign({}, window.__DMJ_PAYLOAD, { lastModified: Date.now() });
