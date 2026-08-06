@@ -507,12 +507,87 @@ function NotiBell({ onNavigate }) {
   );
 }
 
+// ── ตารางเวลาเปิดแอปรอบล่าสุด ────────────────────────────────────────────────
+// เก็บไว้ใน localStorage เฉย ๆ ไม่พอ — เจ้าของเปิด DevTools บนมือถือไม่ได้
+// ต้องมีที่ให้ "ดูตัวเลขได้จากในแอปเอง" ไม่งั้นเครื่องมือวัดก็ไม่มีใครได้ใช้
+//
+// อ่านค่าที่ `dmjSaveTrace()` (ใน <head> ของ HTML) เขียนไว้ แล้วกางเป็นช่วง ๆ
+// ⚠️ โชว์ "ช่วงละกี่ ms" ไม่ใช่แค่เวลาสะสม — คนอ่านต้องตอบได้ทันทีว่า
+//    *ขั้นไหน* กินเวลา ซึ่งเวลาสะสมล้วน ๆ ต้องมานั่งลบเอง แล้วมักอ่านผิด
+function BootTrace() {
+  // ⚠️ ต้องเลือก "รอบนี้" ก่อน "รอบที่แล้ว" เสมอ — จุดที่ต้องใช้เครื่องมือนี้มากที่สุดคือ
+  // ตอนจอค้างอยู่ ซึ่งรอบนี้ยังไม่จบจึงยังไม่ถูกบันทึกลง localStorage เลย
+  // ถ้าอ่านแต่ของที่บันทึกไว้ จะได้เลขของ "รอบก่อนที่สำเร็จ" มาดูตอนกำลังพัง = หลงทาง
+  // ⚠️ ui.jsx ใช้ `useState`/`useEffect` ตรง ๆ — alias `uS`/`uE` ถูกประกาศใน views-main.jsx
+  // ซึ่งโหลด **หลัง** ไฟล์นี้ · เผอิญใช้ได้เพราะ const ระดับบนสุดอยู่ใน global lexical scope
+  // เดียวกันและ render เกิดหลังโหลดครบ — แต่เป็นการพึ่งลำดับโหลดโดยไม่จำเป็น
+  const [tick, setTick] = useState(0);
+  const [saved, setSaved] = useState(null);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('dmj_boot_trace');
+      if (raw) setSaved(JSON.parse(raw));
+    } catch (e) {}
+    const id = setInterval(() => setTick(x => x + 1), 1000);  // รอบที่ยังเดินอยู่ต้องขยับให้เห็น
+    return () => clearInterval(id);
+  }, []);
+
+  const live = (() => {
+    try { return (typeof window.dmjTrace === 'function') ? window.dmjTrace() : []; }
+    catch (e) { return []; }
+  })();
+  const useLive = live.length >= 2;
+  const marks = useLive ? live : (saved && saved.marks) || [];
+
+  if (!marks.length) {
+    return <div style={{fontSize:12,color:"var(--muted)"}}>ยังไม่มีข้อมูล — ปิดแอปแล้วเปิดใหม่ 1 ครั้ง</div>;
+  }
+  const rows = marks.map((m, i) => {
+    const prev = i > 0 ? marks[i - 1][1] : 0;
+    return { name: m[0], at: m[1], dur: m[1] - prev };
+  });
+  const total = marks[marks.length - 1][1];
+  const worst = rows.reduce((a, r) => Math.max(a, r.dur), 0);
+  return (
+    <div>
+      <div style={{fontSize:13,fontWeight:700,marginBottom:2}}>
+        {useLive ? "รอบนี้" : "รอบล่าสุด"} — ถึงตอนนี้ {(total / 1000).toFixed(1)} วินาที
+      </div>
+      <div style={{fontSize:11,color:"var(--muted)",marginBottom:8}}>
+        {useLive ? "กำลังเดินอยู่" : (saved && saved.at ? new Date(saved.at).toLocaleString('th-TH') : "")}
+      </div>
+      <div style={{display:"grid",gap:3}}>
+        {rows.map((r, i) => (
+          <div key={i} style={{display:"flex",alignItems:"center",gap:8,fontSize:12}}>
+            <span style={{flex:"0 0 42%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.name}</span>
+            <span style={{flex:1,height:8,background:"var(--g-100)",borderRadius:4,overflow:"hidden"}}>
+              <span style={{
+                display:"block", height:"100%", borderRadius:4,
+                width: (worst > 0 ? Math.round(r.dur / worst * 100) : 0) + "%",
+                background: r.dur >= 3000 ? "var(--dang)" : r.dur >= 1000 ? "#f0a020" : "var(--g-500)",
+              }}></span>
+            </span>
+            <span style={{flex:"0 0 62px",textAlign:"right",fontVariantNumeric:"tabular-nums"}}>
+              {r.dur >= 1000 ? (r.dur / 1000).toFixed(1) + " วิ" : r.dur + " ms"}
+            </span>
+          </div>
+        ))}
+      </div>
+      <div style={{fontSize:10.5,color:"var(--muted)",marginTop:8,lineHeight:1.6}}>
+        แถบยาว = ขั้นนั้นกินเวลามากที่สุด · <b>cachehit</b> = ไม่ต้องแปลงโค้ดใหม่ ·
+        <b> compile</b> = ต้องแปลง JSX ใหม่ (เกิดหลัง deploy ทุกครั้ง) ·
+        <b> payload</b> = ก้อนข้อมูลสินค้า
+      </div>
+    </div>
+  );
+}
+
 // Make available everywhere
 Object.assign(window, {
   fmtN, fmtB, fmtBfull, fmtPct, monthLabel,
   CAT_COLORS, catColor, resetCatColorMap,
   I, Icon, KPI, Card, Seg, Sparkline, Empty,
-  dmjFetch, NotiBell, notiAgo, NOTI_TYPE_META,
+  dmjFetch, NotiBell, notiAgo, NOTI_TYPE_META, BootTrace,
 });
 
 if (typeof module !== 'undefined') module.exports = { resetCatColorMap, catColor, CAT_COLORS, notiAgo };

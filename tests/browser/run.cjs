@@ -322,6 +322,38 @@ function startServer() {
     await page.close();
   }
 
+  // ── (ง) ทางด่วนลงเวลา: ข้อมูลก้อนใหญ่ยังไม่มา แต่ต้องลงเวลาได้แล้ว ──────────
+  // `?nodata=1` = ไม่ seed localStorage + คำขอ payload ค้างไม่ตอบ (เหมือนเน็ตร้านช้า)
+  // นี่คือสภาพจริงของพนักงานที่เปิดแอปบนเครื่องใหม่/หลังล้าง cache แล้วมาสแกนเข้างาน
+  // ⚠️ เทสต์ปกติทุกตัวเดินผ่านเส้นทาง "มีข้อมูลแล้ว" เท่านั้น เส้นนี้จึงไม่เคยถูกทดสอบเลย
+  for (const fpRole of ['frontstore', 'warehouse']) {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=${fpRole}&tab=attendance&nodata=1`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      await page.waitForTimeout(1200);
+      const txt = await page.locator('body').innerText();
+      const punchable = /เข้างาน|ลงเวลา/.test(txt);
+      const stuck     = /กำลังโหลดข้อมูล Dashboard/.test(txt);
+      const navCount  = await page.locator('.topnav, nav').count();
+      if (stuck)          { status = 'BLOCKED';  note = 'ยังติดจอโหลด — ทางด่วนไม่ทำงาน'; }
+      else if (!punchable){ status = 'NO_PUNCH'; note = 'ไม่เห็นปุ่มลงเวลา'; }
+      else if (!navCount) { status = 'NO_NAV';   note = 'ไม่มีแถบเมนู — ออกจากแท็บนี้แล้วกลับมาไม่ได้'; }
+      else {
+        // กดไปแท็บที่ต้องใช้ข้อมูล → ต้องเห็นจอโหลด **แต่แถบเมนูต้องยังอยู่**
+        await navigateTo(page, fpRole, 'stock').catch(() => {});
+        await page.waitForTimeout(600);
+        const navAfter = await page.locator('.topnav, nav').count();
+        if (!navAfter) { status = 'NAV_LOST'; note = 'กดแท็บอื่นแล้วแถบเมนูหาย = กลับมาลงเวลาไม่ได้'; }
+        else note = 'ลงเวลาได้ทั้งที่ยังไม่มีข้อมูล + เมนูอยู่ครบ';
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, `fastpath__${fpRole}.png`) }).catch(() => {});
+    results.push({ role: 'interact', tab: `ทางด่วนลงเวลา (${fpRole})`, status, note });
+    await page.close();
+  }
+
   await browser.close();
   srv.close();
 

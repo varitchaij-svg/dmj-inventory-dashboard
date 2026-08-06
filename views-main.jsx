@@ -6522,6 +6522,13 @@ function ConnectView({ sheetUrl, sheetViewUrl, syncing, lastSync, source, onSync
         </div>
       </div>
 
+      {/* เวลาเปิดแอปรอบล่าสุด — วางไว้ที่นี่เพราะเป็นแท็บเครื่องมือของเจ้าของอยู่แล้ว
+          และ "ช้าตรงไหน" มักถูกถามคู่กับ "sync ล่าสุดเมื่อไหร่" ที่อยู่ในหน้าเดียวกัน */}
+      <Card style={{marginBottom: 18}}>
+        <div style={{fontSize:12,fontWeight:700,color:"var(--muted)",marginBottom:10}}>⏱️ เวลาเปิดแอป</div>
+        <BootTrace/>
+      </Card>
+
       <Card style={{marginBottom: 18}}>
         <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:18,flexWrap:"wrap"}}>
           <div style={{width:42,height:42,borderRadius:10,background:"var(--g-100)",color:"var(--g-700)",

@@ -912,12 +912,25 @@ async function postAuthAction(body) {
   const base = (typeof SHEET_DEPLOY_URL !== 'undefined') ? SHEET_DEPLOY_URL
              : ((typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null);
   if (!base) throw new Error("ยังไม่ได้ตั้งค่า Google Sheet URL");
-  const res = await fetch(base, {
-    method: "POST",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify(body),
-  });
-  return res.json();
+  // วัดเวลาต่อ action แยกกัน — `me` (กลับเข้าแอปด้วย session เดิม) คือตัวที่อยู่บนเส้นทาง
+  // "พนักงานมาสแกนเข้างาน" จริง ๆ ส่วน authLine/claimLoginHandoff เกิดเฉพาะตอนล็อกอินใหม่
+  // ถ้าไม่แยก จะเห็นแค่ "auth ช้า" แล้วไปเร่งผิดตัว
+  // ⚠️ รอบนี้ **แตะแค่การวัด ไม่แตะพฤติกรรม** — การเปลี่ยนมาใช้ dmjFetch/dmjJson + เพดานเวลา
+  //    เป็นงาน Phase 7.6 ที่ถูกถอยออกไป ยังไม่เอากลับเข้ามาปนกับรอบนี้ (จะได้แยกออกว่าอะไรพัง)
+  const _act = (body && body.action) || 'auth';
+  window.dmjMark('auth:' + _act);
+  try {
+    const res = await fetch(base, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(body),
+    });
+    return await res.json();
+  } finally {
+    // ต้องอยู่ใน finally — เวลาที่ "ล้มเหลว" มีค่าพอ ๆ กับเวลาที่สำเร็จ
+    // (เคสที่เจ็บที่สุดคือรอนานแล้วค่อยพัง ซึ่งจะหายไปเลยถ้าวัดแต่ทางสำเร็จ)
+    window.dmjMark('auth-done:' + _act);
+  }
 }
 
 function App() {
@@ -1050,11 +1063,17 @@ function App() {
       }
       // ห้าม `r.json()` ตรง ๆ — GAS ตอบหน้า HTML ได้ (ลิงก์หมดอายุ/กำลัง deploy/quota เต็ม)
       // แล้วผู้ใช้จะเห็น `SyntaxError: Unexpected token '<'` ซึ่งอ่านไม่รู้เรื่อง (บทเรียนข้อ 13)
+      // ⚠️ `payload:ไบต์แรก` ต้องมาจากไบต์จริง ไม่ใช่เดา — การนับไบต์ระหว่างสตรีม
+      // (`dmjJsonProgress`) เป็นงาน Phase 7.6 ที่ยังไม่เอากลับเข้ามารอบนี้ · ที่นี่จึงวัดได้แค่
+      // "เริ่มยิง" กับ "ได้ก้อนครบ" ซึ่งยังแยก **รอ GAS คิด+ดาวน์โหลด** ออกจากขั้นอื่นได้อยู่
+      // (จะแยกสองอันนั้นออกจากกันต้องรอ 7.6 กลับมา — บันทึกไว้ใน CLAUDE.md แล้ว)
       const getJson = r => (typeof dmjJson === 'function' ? dmjJson(r) : r.json());
+      window.dmjMark(prefetched ? 'payload:เริ่ม(prefetch)' : 'payload:เริ่ม');
       return (prefetched
       ? prefetched.then(d => d || fetch(bustUrl, { signal: controller.signal }).then(getJson))
       : fetch(bustUrl, { signal: controller.signal }).then(getJson))
       .then(d => {
+        window.dmjMark('payload:ครบ');
         if (d && d.lastModified) window._dataLoadedAt = d.lastModified;
         if (typeof resetCatColorMap === 'function') resetCatColorMap();
         // Phase 7.3: server ติดธง `stale` มาเมื่อมีคนอื่นกำลังสร้างข้อมูลชุดใหม่อยู่
@@ -1082,6 +1101,9 @@ function App() {
         localStorage.setItem("dmj_last_sync", now);
         setLastSync(now);
         setError(null);
+        // จบเส้นทางเปิดแอปแล้ว — บันทึกไว้ให้เปิดดูย้อนหลังได้ (พนักงานเปิด DevTools ไม่ได้)
+        window.dmjMark('พร้อมใช้งาน');
+        window.dmjSaveTrace();
       })
       .catch(e => {
         clearTimeout(timeout);
@@ -1093,6 +1115,10 @@ function App() {
         // — หลักเดียวกับการดึงซ้ำตอนได้ของสำรองใน Phase 7.3) + ลดจำนวนครั้งลง
         // เพราะแต่ละครั้งมีราคา 4 เมกะจริง ๆ ไม่ใช่การ ping เบา ๆ
         const isBadJson = e && e.dmjKind === "badjson";
+        // รอบที่ "พัง" คือรอบที่ต้องรู้เวลามากที่สุด — ถ้าบันทึกเฉพาะตอนสำเร็จ
+        // เคสที่เจ็บที่สุด (รอ 30 วิแล้วค่อยล้ม) จะไม่เหลือร่องรอยให้ดูเลยสักครั้ง
+        window.dmjMark('payload:ล้มเหลว' + (isBadJson ? '(ตอบไม่ครบ)' : ''));
+        window.dmjSaveTrace();
         const nextLeft  = isBadJson ? Math.max(0, retryLeft - 2) : retryLeft - 1;
         if (retryLeft > 0) {
           const base  = isBadJson ? 3000 : (retryLeft === 3 ? 800 : retryLeft === 2 ? 2000 : 4000);
@@ -1669,42 +1695,55 @@ function App() {
     secondaryTabs = [];
   }
 
-  if (error && !data) {
-    return (
-      <div className="loading-screen">
-        <div style={{color:"var(--dang)",fontWeight:600}}>โหลดข้อมูลไม่สำเร็จ</div>
-        <div style={{color:"var(--muted)",fontSize:12}}>{error}</div>
-        <button className="btn primary" onClick={()=>fetchFromSheet(3,true)} style={{marginTop:12}}>
-          {I.refresh}<span>ลองใหม่</span>
-        </button>
-      </div>
-    );
-  }
+  // ── ทางด่วนลงเวลา ────────────────────────────────────────────────────────
+  // AttendanceView / AttendanceTodayView **ไม่ได้ใช้ `data` เลยแม้แต่ฟิลด์เดียว**
+  // (views-attendance.jsx — รับแค่ role/canEdit แล้วยิง endpoint ของตัวเองผ่าน attPost
+  //  ซึ่งแนบ sessionToken เอง ไม่พึ่ง payload หลัก)
+  // แต่เดิมทั้งคู่ถูกกั้นหลัง `if (!data)` ข้างล่าง = พนักงานที่มาสแกนเข้า-ออกงาน
+  // ต้องรอ payload หลายเมกะที่ตัวเองไม่ได้ใช้ ก่อนจะเห็นปุ่มลงเวลา
+  // → ปล่อยให้ 2 แท็บนี้เรนเดอร์ได้ทันทีที่รู้ว่าเป็นใคร ส่วนข้อมูลก้อนใหญ่โหลดอยู่เบื้องหลัง
+  //
+  // ⚠️ **ห้ามขยายรายชื่อนี้โดยไม่เปิดดู view จริงก่อน** — แท็บอื่นทุกตัวอ่าน `data` จริง
+  //    ปล่อยผ่านมาที่นี่ = จอขาว (อ่าน property ของ null) ซึ่งไม่มี error ให้ผู้ใช้เห็นเลย
+  // ⚠️ ตั้งใจ**ไม่**ทำเป็นจอแยก/early-return — ถ้าแยกจอ พอข้อมูลมาถึงแล้วสลับกลับเข้า shell
+  //    ปกติ ตำแหน่งของ <AttendanceView> ในต้นไม้จะเปลี่ยน → React unmount แล้ว mount ใหม่
+  //    = state ข้างในหายกลางคัน (คนที่กำลังถ่ายรูป/รอ GPS อยู่ต้องเริ่มใหม่โดยไม่รู้สาเหตุ)
+  //    การใช้ shell เดียวกันทำให้ตำแหน่งคงที่ ข้อมูลมาถึงแล้วหน้าที่เปิดอยู่ไม่สะดุด
+  const ATT_FAST_TABS = ["attendance", "atttoday"];
+  const attFastPath = !data && ATT_FAST_TABS.includes(activeTab);
 
-  if (!data) {
-    return (
-      <div className="loading-screen">
-        {error ? (
-          <>
-            <div style={{fontSize:32,marginBottom:8}}>⚠️</div>
-            <div style={{fontSize:14,color:"#c62828",marginBottom:12,textAlign:"center",padding:"0 24px"}}>{error}</div>
-            {error.includes("timeout") && (
-              <div style={{fontSize:12,color:"var(--muted)",marginBottom:16,textAlign:"center",padding:"0 28px",lineHeight:1.6}}>
-                ลอง: ปิด VPN · ปิด Content Blocker ใน Safari · ปิด iCloud Private Relay · หรือเปลี่ยนมาใช้ 4G/5G
-              </div>
-            )}
-            <button className="btn" onClick={()=>fetchFromSheet(3,true)} style={{minHeight:44,padding:"0 24px"}}>🔄 ลองใหม่</button>
-          </>
-        ) : (
-          <>
-            <div className="spin"></div>
-            <div style={{fontSize:13,color:"var(--muted)"}}>กำลังโหลดข้อมูล Dashboard…</div>
-            {retryMsg && <div style={{fontSize:12,color:"var(--muted)",marginTop:6}}>{retryMsg}</div>}
-          </>
-        )}
-      </div>
-    );
-  }
+  // จอ "ยังไม่มีข้อมูลก้อนใหญ่" — เดิมเป็น early return ทั้งหน้า **แถบเมนูจึงหายไปด้วย**
+  // พอมีทางด่วนลงเวลาแล้ว อันนั้นกลายเป็นกับดัก: ลงเวลาเสร็จ กดแท็บอื่นดูสักที
+  // แล้วกลับมาแท็บลงเวลาไม่ได้อีกเลยจนกว่าข้อมูลจะมาครบ (ไม่มีปุ่มอะไรให้กดเลย)
+  // → ย้ายมาเรนเดอร์ "ข้างใน <main>" แทน แถบเมนูอยู่ครบเสมอ เดินกลับได้ตลอด
+  const dataPane = (
+    <div className="loading-screen">
+      {error ? (
+        <>
+          <div style={{fontSize:32,marginBottom:8}}>⚠️</div>
+          <div style={{fontSize:14,color:"#c62828",marginBottom:12,textAlign:"center",padding:"0 24px"}}>{error}</div>
+          {error.includes("timeout") && (
+            <div style={{fontSize:12,color:"var(--muted)",marginBottom:16,textAlign:"center",padding:"0 28px",lineHeight:1.6}}>
+              ลอง: ปิด VPN · ปิด Content Blocker ใน Safari · ปิด iCloud Private Relay · หรือเปลี่ยนมาใช้ 4G/5G
+            </div>
+          )}
+          <button className="btn" onClick={()=>fetchFromSheet(3,true)} style={{minHeight:44,padding:"0 24px"}}>🔄 ลองใหม่</button>
+          {/* ตอนพังคือตอนที่ต้องการเลขที่สุด — ให้ดูได้ตรงนี้เลย ไม่ต้องรอเข้าแอปสำเร็จก่อน
+              (ซึ่งเป็นข้อที่ทำให้รอบก่อนไล่สาเหตุไม่ได้: แอปเข้าไม่ได้ = เครื่องมือวัดก็เข้าไม่ถึง) */}
+          <details style={{marginTop:18,width:"100%",maxWidth:420,padding:"0 16px"}}>
+            <summary style={{fontSize:12,color:"var(--muted)",cursor:"pointer"}}>⏱️ ดูเวลาแต่ละขั้น</summary>
+            <div style={{marginTop:10}}><BootTrace/></div>
+          </details>
+        </>
+      ) : (
+        <>
+          <div className="spin"></div>
+          <div style={{fontSize:13,color:"var(--muted)"}}>กำลังโหลดข้อมูล Dashboard…</div>
+          {retryMsg && <div style={{fontSize:12,color:"var(--muted)",marginTop:6}}>{retryMsg}</div>}
+        </>
+      )}
+    </div>
+  );
 
   const syncLabel = (() => {
     if (!lastSync) return "ยังไม่ sync";
@@ -1714,8 +1753,10 @@ function App() {
   })();
 
   // ── ตัวเลขเตือนบนหมวด owner (จาก payload ที่เชื่อถือได้) ──
-  const pendingOrders = (data.orders || []).filter(o => o.status === "รอ").length;    // ออเดอร์ค้าง (status "รอ")
-  const pendingRecv   = (data.shipments || []).filter(s => !s.receivedAt).length;      // ของโอนแล้วรอรับ
+  // `data` เป็น null ได้เมื่ออยู่บนทางด่วนลงเวลา (ข้อมูลก้อนใหญ่ยังโหลดไม่เสร็จ) —
+  // ตัวเลขบนป้ายเตือนยังไม่รู้ ก็แค่ไม่ต้องโชว์ ห้ามอ่าน property ของ null (จอขาวทั้งแอป)
+  const pendingOrders = ((data && data.orders) || []).filter(o => o.status === "รอ").length;    // ออเดอร์ค้าง (status "รอ")
+  const pendingRecv   = ((data && data.shipments) || []).filter(s => !s.receivedAt).length;      // ของโอนแล้วรอรับ
 
   // จัดกลุ่ม owner: map tab id → {label, icon} จริง + ดัน tab ที่ไม่เข้ากลุ่มไหนเข้า "อื่นๆ"
   const ownerNav = (() => {
@@ -2049,6 +2090,31 @@ function App() {
         </div>
       )}
 
+      {/* ─── ทางด่วนลงเวลา: บอกว่าหน้านี้ใช้ได้แล้ว ส่วนที่เหลือยังตามมา ───
+           ต้องมี ไม่งั้นพนักงานกดแท็บอื่นแล้วเจอจอโหลดจะนึกว่าแอปพัง/ค้าง
+           ทั้งที่ตั้งใจให้ลงเวลาได้ก่อน · โชว์ไบต์ที่โหลดมาแล้วด้วยเพื่อให้เห็นว่ามันเดินอยู่จริง */}
+      {attFastPath && !error && (
+        <div className="no-print" style={{
+          background:"#e8f5e9", color:"#1b5e20", padding:"6px 16px",
+          fontSize:12, display:"flex", alignItems:"center", gap:8,
+          borderBottom:"1px solid #a5d6a7",
+        }}>
+          <span className="spin" style={{width:12,height:12,borderWidth:2,flexShrink:0}}></span>
+          <span>ลงเวลาได้เลย — ข้อมูลสินค้ากำลังโหลดอยู่เบื้องหลัง</span>
+        </div>
+      )}
+      {attFastPath && error && (
+        <div className="no-print" style={{
+          background:"#fff3cd", color:"#856404", padding:"6px 16px",
+          fontSize:12, display:"flex", alignItems:"center", justifyContent:"space-between",
+          gap:8, borderBottom:"1px solid #ffc107",
+        }}>
+          <span>⚠️ โหลดข้อมูลสินค้าไม่สำเร็จ — แต่ลงเวลาได้ตามปกติ</span>
+          <button className="btn ghost" style={{fontSize:12,padding:"2px 8px"}}
+                  onClick={()=>fetchFromSheet(3,true)}>ลองใหม่</button>
+        </div>
+      )}
+
       {/* ─── Sync error banner (non-blocking, only when data already loaded) ─── */}
       {error && data && (
         <div className="no-print" style={{
@@ -2065,6 +2131,10 @@ function App() {
 
       {/* ─── Main ─── */}
       <main className="main" data-screen-label={activeTab}>
+        {/* ⚠️ ด่านเดียวที่กัน view ที่ต้องใช้ `data` ไม่ให้เจอ null — ทุก view ข้างล่างนี้
+            (ยกเว้น 2 แท็บลงเวลา) อ่าน data.products/data.orders ตรง ๆ เจอ null = จอขาว
+            เงื่อนไขต้องตรงกับ ATT_FAST_TABS ข้างบนเป๊ะ ๆ */}
+        {!data && !ATT_FAST_TABS.includes(activeTab) ? dataPane : (<>
         {activeTab === "overview"     && <ErrorBoundary key="overview"><OverviewView data={data} range={range} setRange={setRange} role={viewRole}/></ErrorBoundary>}
         {activeTab === "whhome"       && <ErrorBoundary key="whhome"><WarehouseHomeView data={data} onNav={handleSetTab}/></ErrorBoundary>}
         {activeTab === "categories"   && <ErrorBoundary key="categories"><CategoryView data={data} role={viewRole} onNav={handleSetTab}/></ErrorBoundary>}
@@ -2122,6 +2192,7 @@ function App() {
                                       else showNavToast("error", "Sync ยอดขาย ZORT ไม่สำเร็จ: " + ((r && r.error) || "timeout"));
                                     }}
                                     /></ErrorBoundary>}
+        </>)}
       </main>
     </div>
   );

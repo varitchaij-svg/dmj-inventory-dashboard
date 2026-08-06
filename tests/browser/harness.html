@@ -10,6 +10,20 @@
 <body>
 <div id="root"></div>
 
+<!-- เครื่องมือวัดเวลาเปิดแอป — ของจริงประกาศไว้เป็นสคริปต์ตัวแรกใน <head> ของ
+     "Doomuenjing Dashboard.html" · ที่นี่ต้องมีเหมือนกัน เพราะ app.jsx/HTML loader
+     เรียก window.dmjMark() ตรง ๆ โดยไม่เช็คก่อน (ตั้งใจ — จะได้ไม่ต้องเช็คทุกจุดเรียก)
+     ⚠️ ขาดตัวนี้ = ทุก role จอขาวหมดจาก TypeError โดยที่โค้ดจริงไม่ได้ผิดอะไรเลย -->
+<script>
+  (function () {
+    var t0 = performance.now(), marks = [];
+    window.dmjMark = function (n) { marks.push([String(n), Math.round(performance.now() - t0)]); };
+    window.dmjTrace = function () { return marks.slice(); };
+    window.dmjSaveTrace = function () {};
+    window.dmjMark('html');
+  })();
+</script>
+
 <!-- libs (vendored locally via setup.sh — CDN ถูกบล็อกในสภาพแวดล้อมทดสอบ) -->
 <script src="/tests/browser/vendor/react.js"></script>
 <script src="/tests/browser/vendor/react-dom.js"></script>
@@ -58,9 +72,20 @@
   }
   window.__DMJ_PAYLOAD = shapeForRole(window.__DMJ_FIXTURE, role);
 
+  // ── โหมด ?nodata=1 : จำลอง "ข้อมูลก้อนใหญ่ยังไม่มา" ──────────────────────
+  // ใช้ทดสอบทางด่วนลงเวลา ซึ่งเป็นเส้นทางที่เทสต์ปกติ **ไม่มีวันเดินผ่าน** เพราะ
+  // harness seed ข้อมูลลง localStorage ไว้ให้ตั้งแต่ต้น (data ไม่เคยเป็น null เลย)
+  // → ของจริงพนักงานเปิดแอปครั้งแรกบนเครื่องใหม่จะเจอ data=null เสมอ ซึ่งไม่เคยถูกทดสอบ
+  const NO_DATA = q.get('nodata') === '1';
+
   // ── seed ข้อมูลลง localStorage เพื่อให้ loadFromStorage() render ทันที ──
-  localStorage.setItem('dmj_dashboard_data_v1', JSON.stringify(window.__DMJ_PAYLOAD));
-  localStorage.setItem('dmj_dashboard_source_v1', 'sheet');
+  if (!NO_DATA) {
+    localStorage.setItem('dmj_dashboard_data_v1', JSON.stringify(window.__DMJ_PAYLOAD));
+    localStorage.setItem('dmj_dashboard_source_v1', 'sheet');
+  } else {
+    localStorage.removeItem('dmj_dashboard_data_v1');
+    localStorage.removeItem('dmj_dashboard_source_v1');
+  }
   // กระดิ่งแจ้งเตือนยิง GET เฉพาะเมื่อมี session token — ไม่ seed = กระดิ่งไม่เคยถูกทดสอบเลย
   localStorage.setItem('dmj_session_token', 'harness-token');
 
@@ -121,6 +146,10 @@
     }
     // GET payload
     if (/script\.google|exec|action=orders|action=getAuditLog|action=getDeadStock/.test(url) || url.indexOf('http') === 0) {
+      // โหมด nodata: ค้างไว้ไม่ตอบเลย (เหมือนเน็ตร้านช้า/ก้อนใหญ่ยังไหลไม่จบ)
+      // ต้อง "ไม่ตอบ" ไม่ใช่ "ตอบ error" — เพราะสิ่งที่ทดสอบคือช่วง *ระหว่างรอ*
+      // ซึ่งเป็นช่วงที่พนักงานต้องลงเวลาได้ ไม่ใช่ช่วงหลังจากมันล้มเหลวไปแล้ว
+      if (NO_DATA) return new Promise(function () {});
       const payload = Object.assign({}, window.__DMJ_PAYLOAD, { lastModified: Date.now() });
       return Promise.resolve(new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } }));
     }
