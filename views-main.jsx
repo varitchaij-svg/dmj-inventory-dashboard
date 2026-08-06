@@ -4380,14 +4380,25 @@ function CategoryView({ data, role, onNav }) {
 
 // ────────────── Product Card ──────────────
 // ────────────── Order Modal ──────────────
-const QUICK_QTYS = [24, 36, 48, 60];
+// ปุ่มลัดจำนวนที่สั่งบ่อย — **ไม่ใช่ขั้นต่ำ** ของบางอย่างสั่งน้อยกว่านี้ได้ (เจ้าของยืนยัน ส.ค. 2026)
+// เดิมเริ่มที่ 24 และตั้ง 24 เป็นค่าเริ่มต้นไว้ให้เลย → พนักงานที่อยากสั่ง 6 ต้องไปแก้ในช่อง
+// "กรอกเอง" ที่มีเลข 24 ค้างอยู่ ซึ่งเป็นจุดที่เลขเพี้ยนบ่อยที่สุด (ดูคอมเมนต์ที่ช่องกรอกเอง)
+const QUICK_QTYS = [6, 12, 24, 36, 48, 60];
 // เช็คหน้าร้านล่าสุดใหม่กว่านี้ (นาที) = ถือว่ายังสด ไม่ต้องนับซ้ำตอนกดสั่ง
 const FS_CHECK_FRESH_MIN = 120;
 
 function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady, onOrderSuccess, defaultQty, role }) {
   useBackHandler(onClose); // Android back = ปิด modal สั่งของ
-  const [qty, setQty] = uS(defaultQty > 0 ? defaultQty : 24);
-  const [customMode, setCustomMode] = uS(false);
+  // qty = จำนวนที่จะสั่งจริง · 0 = ยังไม่เลือก (ปุ่มยืนยันจะยังกดไม่ได้)
+  // **ห้ามตั้งค่าเริ่มต้นเป็นตัวเลขลอย ๆ** — เดิม default 24 ทำให้พนักงานที่เผลอกดยืนยัน
+  // ได้ 24 ชิ้นทั้งที่ไม่ได้ตั้งใจเลือก และของหลายอย่างสั่งน้อยกว่า 24
+  const [qty, setQty] = uS(defaultQty > 0 ? defaultQty : 0);
+  // เปิดโหมดกรอกเองให้เลยถ้า defaultQty ("ควรสั่ง") ไม่ตรงปุ่มลัดอันไหน — ไม่งั้นตัวเลขนั้น
+  // จะโผล่แค่บนปุ่มยืนยัน มองไม่เห็นว่าแก้ได้ที่ไหน
+  const [customMode, setCustomMode] = uS(defaultQty > 0 && QUICK_QTYS.indexOf(defaultQty) < 0);
+  // ช่อง "กรอกเอง" ผูกกับ draft (ข้อความดิบ) ไม่ผูกกับ qty โดยตรง — หลักเดียวกับ prepQtyDraft
+  // ในหน้ารายการสั่งของ · ดูเหตุผลเต็มที่คอมเมนต์ตรง <input> ด้านล่าง
+  const [qtyDraft, setQtyDraft] = uS(() => (defaultQty > 0 ? String(defaultQty) : ""));
   const [orderType, setOrderType] = uS('รอขึ้นรถ');
   const [loading, setLoading] = uS(false);
   const [done, setDone] = uS(false);
@@ -4834,9 +4845,9 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
                 <div style={{fontSize:12, fontWeight:600, color:"var(--muted)", marginBottom:8}}>
                   {needFsCheck && !fsSkipped ? "② จำนวนที่สั่ง (ชิ้น)" : "จำนวนที่สั่ง (ชิ้น)"}
                 </div>
-                <div style={{display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:6, marginBottom:8}}>
+                <div style={{display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:6, marginBottom:8}}>
                   {QUICK_QTYS.map(q => (
-                    <button key={q} onClick={() => { setQty(q); setCustomMode(false); }}
+                    <button key={q} onClick={() => { setQty(q); setQtyDraft(String(q)); setCustomMode(false); }}
                             style={{...btnBase,
                               background: !customMode && qty===q ? "var(--g-700)" : "#fff",
                               color: !customMode && qty===q ? "#fff" : "var(--text)",
@@ -4852,9 +4863,21 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
                   ✏️ กรอกเอง
                 </button>
                 {customMode && (
-                  <input type="number" value={qty} min={1} autoFocus
+                  // ⚠️ ห้าม clamp ค่าระหว่างพิมพ์เด็ดขาด (เดิมเป็น Math.max(1, parseInt(v)||1))
+                  //    ลบเลขจนช่องว่าง → parseInt("")=NaN → เด้งเป็น "1" ทันทีในช่อง แล้วเลขที่
+                  //    พิมพ์ต่อไปจะไปต่อท้าย 1 นั้น: ตั้งใจสั่ง 6 ได้ 16 · ตั้งใจ 2 ได้ 12
+                  //    พนักงานเห็นว่าตัวเองกรอกถูก แต่ระบบบันทึกอีกเลข (เจ้าของแจ้งมาจริง ส.ค. 2026)
+                  //    → เก็บข้อความดิบไว้ใน draft ปล่อยให้ว่างได้ แล้วแปลงเป็นตัวเลขแยกต่างหาก
+                  //    ว่าง/ไม่ใช่ตัวเลข = qty 0 = ปุ่มยืนยันกดไม่ได้ (ปลอดภัยกว่าเดาแทนผู้ใช้)
+                  <input type="number" value={qtyDraft} min={1} max={9999} autoFocus
+                         inputMode="numeric"
                          onFocus={ev => ev.target.select()}
-                         onChange={ev => setQty(Math.max(1, parseInt(ev.target.value)||1))}
+                         onChange={ev => {
+                           const raw = ev.target.value;
+                           setQtyDraft(raw);
+                           const n = parseInt(raw, 10);
+                           setQty(n > 0 ? Math.min(n, 9999) : 0);
+                         }}
                          style={{marginTop:8, width:"100%", padding:"10px 12px",
                                  border:"1.5px solid var(--g-400)", borderRadius:8,
                                  fontSize:16, fontWeight:700, textAlign:"center",
@@ -4902,17 +4925,21 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
                 </div>
               )}
 
-              <button onClick={() => handleSubmit(false)} disabled={loading || fsBlocked}
+              {/* qty < 1 = ยังไม่ได้เลือกจำนวน (หรือลบช่องกรอกเองจนว่าง) — กันสั่งด้วยเลขที่
+                  ระบบเดาให้ ซึ่งเป็นสิ่งที่ทำให้สั่งผิดจำนวนมาก่อน */}
+              <button onClick={() => handleSubmit(false)} disabled={loading || fsBlocked || qty < 1}
                       style={{...btnBase, width:"100%", padding:"12px", fontSize:14,
-                              background: fsBlocked ? "var(--g-100)" : "var(--g-700)",
-                              color: fsBlocked ? "var(--muted)" : "#fff",
-                              borderColor: fsBlocked ? "var(--bdr)" : "var(--g-700)",
-                              cursor: fsBlocked ? "not-allowed" : "pointer"}}>
+                              background: (fsBlocked || qty < 1) ? "var(--g-100)" : "var(--g-700)",
+                              color: (fsBlocked || qty < 1) ? "var(--muted)" : "#fff",
+                              borderColor: (fsBlocked || qty < 1) ? "var(--bdr)" : "var(--g-700)",
+                              cursor: (fsBlocked || qty < 1) ? "not-allowed" : "pointer"}}>
                 {loading
                   ? <><span className="spin" style={{width:14,height:14,borderWidth:2,display:"inline-block",verticalAlign:"middle",marginRight:6}}/> กำลังบันทึก…</>
                   : fsBlocked
                     ? "① กรอกจำนวนหน้าร้านก่อน"
-                    : `✅ ยืนยันสั่ง ${fmtN(qty)} ชิ้น (${orderType})`}
+                    : qty < 1
+                      ? "👆 เลือกจำนวนที่จะสั่งก่อน"
+                      : `✅ ยืนยันสั่ง ${fmtN(qty)} ชิ้น (${orderType})`}
               </button>
 
               {/* บันทึกจำนวนหน้าร้านพัง (เน็ตหลุด) → ยังสั่งของได้ ไม่ให้งานสะดุด */}

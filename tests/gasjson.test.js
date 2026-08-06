@@ -17,6 +17,7 @@ import { dirname, join } from 'node:path';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const UI = readFileSync(join(ROOT, 'ui.jsx'), 'utf8');
 const VIEWS_MAIN = readFileSync(join(ROOT, 'views-main.jsx'), 'utf8');
+const VIEWS_ANA = readFileSync(join(ROOT, 'views-analytics.jsx'), 'utf8');
 
 function grab(src, re, label) {
   const m = src.match(re);
@@ -148,6 +149,42 @@ describe('meta — จุดเชื่อมต่อในโค้ดจร�
   it('dmjJson/dmjErrText ต้องอยู่ใน ui.jsx (โหลดก่อนไฟล์ view ทุกตัว)', () => {
     expect(UI).toMatch(/async function dmjJson\(/);
     expect(UI).toMatch(/function dmjErrText\(/);
+  });
+
+  // ── บันทึก "จำนวนที่จัด" ก็ต้องอ่านคำตอบจริงเหมือนกัน (ส.ค. 2026) ──
+  // เดิม syncOrderUpdate ยิงแล้วจบ ไม่เคยดูว่า GAS ตอบอะไร → GAS ตอบหน้า HTML
+  // (execution ซ้อนกัน) = ไม่มีอะไรถูกบันทึก แต่หน้าจอขึ้น "บันทึกแล้ว" ทันที
+  // พนักงานเดินจากไป รอบ sync ถัดมาเลขเด้งกลับค่าเก่า — อาการที่เจ้าของแจ้งว่า
+  // "เปลี่ยนจำนวนที่จัดแล้วระบบเด้งเป็นจำนวนอื่น"
+  const syncOrd = grab(
+    VIEWS_ANA,
+    /async function syncOrderUpdate\(order, updates\) \{[\s\S]*?\n\}/,
+    'syncOrderUpdate'
+  );
+
+  it('syncOrderUpdate ต้องอ่านคำตอบจริงด้วย dmjJson', () => {
+    expect(syncOrd).toContain('dmjJson');
+  });
+
+  it('syncOrderUpdate ต้องคืนผลจริงให้ผู้เรียก (ไม่ใช่ยิงแล้วจบเงียบ ๆ)', () => {
+    expect(syncOrd).toMatch(/return \{ success: false/);
+    expect(syncOrd).toMatch(/success !== false|typeof d\.success === "boolean"/);
+  });
+
+  it('markComplete ต้องรอผลก่อนขึ้น "บันทึกแล้ว"', () => {
+    const mc = grab(VIEWS_ANA, /const markComplete = async \(\) => \{[\s\S]*?\n  \};/, 'markComplete');
+    expect(mc).toMatch(/await syncOrderUpdate\(/);
+    // ต้องเช็คผลก่อนโชว์ success — ไม่งั้นก็เท่าเดิม
+    expect(mc).toMatch(/success === false/);
+    const okIdx = mc.indexOf('"success", "บันทึกแล้ว"');
+    const badIdx = mc.indexOf('success === false');
+    expect(okIdx).toBeGreaterThan(badIdx);   // ทางล้มเหลวต้องถูกตรวจก่อน
+  });
+
+  it('savePrepQty (กรอกจำนวนที่จัด) ต้องรอผลและบอกเมื่อบันทึกไม่ผ่าน', () => {
+    const sp = grab(VIEWS_ANA, /const savePrepQty = async v => \{[\s\S]*?\n  \};/, 'savePrepQty');
+    expect(sp).toMatch(/await syncOrderUpdate\(/);
+    expect(sp).toMatch(/setSaveFailed/);
   });
 });
 

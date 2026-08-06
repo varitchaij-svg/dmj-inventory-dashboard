@@ -2242,10 +2242,10 @@ function doPost(e) {
 
     // ─── Order Management ───
     if (data.deleteOrder) {
-      return deleteOrderRow(ss, data.orderId, actor);
+      return deleteOrderRow(ss, data.orderId, actor, data.sku);
     }
     if (data.deleteOrders) {
-      return deleteOrderRows(ss, data.orderIds || [], actor);
+      return deleteOrderRows(ss, data.orderIds || [], actor, data.orderSkus || []);
     }
 
     // ─── Manual ZORT Sync ───
@@ -3909,6 +3909,22 @@ function deductMaterials(ss, items, actor) {
   }
 }
 
+// แถวที่ orderId ชี้ไป ยังเป็นสินค้าตัวเดิมอยู่ไหม
+//
+// ⚠️ `order.id` = `R<เลขแถวในชีต>` (readOrders_) ซึ่งเป็น **ตำแหน่ง ไม่ใช่รหัสถาวร** —
+// พอมีคนกด ❌ ยกเลิก order (deleteRow) แถวทั้งหมดที่อยู่ล่างกว่านั้น **เลื่อนขึ้น 1**
+// เครื่องที่ยังถือรายการชุดก่อนหน้าจะส่ง orderId เก่ามา = ชี้ไปคนละใบ
+// เขียนทับโดยไม่ตรวจ = จำนวนที่จัดไปลงสินค้าตัวอื่นเงียบ ๆ (ทั้งของเราหายและของเขาเพี้ยน)
+//
+// sku ว่าง → คืน false ตั้งใจ: ยอมให้ตกไปเส้นทาง match by sku+date ดีกว่าเขียนมั่ว
+function orderRowMatchesSku_(sheet, rowNum, sku) {
+  const want = String(sku || "").trim().toUpperCase();
+  if (!want) return false;
+  if (!(rowNum >= 1) || rowNum > sheet.getLastRow()) return false;
+  const rowSku = String(sheet.getRange(rowNum, COL_ORD_SKU).getDisplayValue()).trim().toUpperCase();
+  return rowSku === want;
+}
+
 function updateOrderState(ss, body) {
   const sheet = ss.getSheetByName(SHEET_ORDERS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_ORDERS);
@@ -3921,7 +3937,7 @@ function updateOrderState(ss, body) {
     // Try direct row match via orderId ("R3" = sheet row 3, readOrders_ uses id:`R${i+1}` where i is 0-indexed)
     if (body.orderId) {
       const rowNum = parseInt(String(body.orderId).replace(/[^0-9]/g, ""));
-      if (rowNum >= 1) {
+      if (rowNum >= 1 && orderRowMatchesSku_(sheet, rowNum, body.sku)) {
         const sheetRow = rowNum; // id already encodes 1-indexed sheet row
         // 1) อ่าน before-state ก่อนเขียน (เฉพาะ field ที่จะถูกแก้)
         const before = {
@@ -3961,14 +3977,28 @@ function updateOrderState(ss, body) {
       }
     }
 
-    // Fallback: match by sku + date
+    // Fallback: match by sku + date — ใช้เมื่อ orderId ชี้ไปแถวที่ SKU ไม่ตรงแล้ว
+    // (แถวเลื่อนขึ้นเพราะมีคนลบ order อื่นทิ้ง ระหว่างที่เครื่องนี้ถือข้อมูลชุดเก่าอยู่)
+    // ⚠️ เลือกแถวที่ "ใกล้เลขแถวเดิมที่สุด" ไม่ใช่แถวแรกที่เจอ — สินค้าตัวเดียวกันสั่งซ้ำ
+    //    วันเดียวกันได้ (2 แถว sku+date เหมือนกันเป๊ะ) การหยิบแถวแรกเสมอจะแก้ผิดใบเงียบ ๆ
+    //    ส่วนการเลื่อนแถวจากการลบมักห่างจากเดิมไม่กี่แถว ระยะห่างจึงเป็นตัวชี้ที่แม่นที่สุดที่มี
     const data = sheet.getDataRange().getValues();
-    for (let i = 1; i < data.length; i++) {
-      const rowSku  = String(data[i][COL_ORD_SKU - 1]).trim().toUpperCase();
-      const rowDate = String(data[i][COL_ORD_DATE - 1]).trim();
-      const matchSku  = body.sku && rowSku === body.sku.trim().toUpperCase();
-      const matchDate = !body.date || rowDate.includes(String(body.date).trim());
-      if (matchSku && matchDate) {
+    const wantSku = String(body.sku || "").trim().toUpperCase();
+    const expectRow = parseInt(String(body.orderId || "").replace(/[^0-9]/g, "")) || 0;
+    let bestI = -1, bestDist = Infinity;
+    if (wantSku) {
+      for (let i = 1; i < data.length; i++) {
+        const rowSku  = String(data[i][COL_ORD_SKU - 1]).trim().toUpperCase();
+        const rowDate = String(data[i][COL_ORD_DATE - 1]).trim();
+        if (rowSku !== wantSku) continue;
+        if (body.date && !rowDate.includes(String(body.date).trim())) continue;
+        const dist = expectRow ? Math.abs((i + 1) - expectRow) : i;
+        if (dist < bestDist) { bestDist = dist; bestI = i; }
+      }
+    }
+    {
+      const i = bestI;
+      if (i >= 1) {
         const row = i + 1;
         // 1) อ่าน before-state จาก data ที่โหลดไว้แล้ว (ไม่ต้องอ่านซ้ำ)
         const before = {
@@ -4000,9 +4030,11 @@ function updateOrderState(ss, body) {
         writeAuditLog_(actor, "อัปเดต order", body.sku, auditDetail_({
           before: before,
           after: { status: body.status, preparedQty: body.preparedQty, printFlag: body.printFlag, carryMode: body.carryMode },
-          note: "อัปเดต order (match by sku+date, row " + row + ")",
+          note: "อัปเดต order (กู้แถวเลื่อน: orderId=" + (body.orderId || "-") +
+                " → row " + row + ", match by sku+date)",
         }));
-        return ok({ updated: body.sku, row });
+        // shifted → บอก client ว่าแถวเลื่อน (ไม่ใช่ error — เขียนถูกใบแล้ว) เผื่อเอาไปเตือน/รีเฟรช
+        return ok({ updated: body.sku, row, shifted: expectRow > 0 && expectRow !== row });
       }
     }
     return ok({ notFound: body.orderId || body.sku });
@@ -4305,7 +4337,7 @@ function confirmStockCount(ss, entries, clientLoadedAt, actor) {
   }
 }
 
-function deleteOrderRow(ss, orderId, actor) {
+function deleteOrderRow(ss, orderId, actor, expectSku) {
   const sheet = ss.getSheetByName(SHEET_ORDERS);
   if (!sheet) return error("ไม่พบชีต ลำดับที่สั่งสินค้า");
   const rowNum = parseInt(String(orderId).replace(/[^0-9]/g, ""));
@@ -4313,7 +4345,6 @@ function deleteOrderRow(ss, orderId, actor) {
 
   // orderId encode row number ณ เวลาที่โหลดข้อมูล — LockService ป้องกัน concurrent delete
   // แต่ถ้าเวลาผ่านไปนานและมี delete อื่นเกิดขึ้น row อาจเลื่อน
-  // ตรวจ sanity: row ต้องมีข้อมูล SKU (col F, index 5) ก่อนลบ
   const lock = LockService.getScriptLock();
   if (!lock.waitLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
   try {
@@ -4321,6 +4352,11 @@ function deleteOrderRow(ss, orderId, actor) {
     const rowData = sheet.getRange(rowNum, 1, 1, 9).getValues()[0];
     const sku = String(rowData[5] || '').trim();
     if (!sku) return error("แถวที่ " + rowNum + " ไม่มีข้อมูล SKU — อาจเลื่อนแถวแล้ว");
+    // ⚠️ "มี SKU" ยังไม่พอ ต้องเป็น SKU **ตัวที่ผู้ใช้กดลบ** ด้วย — แถวเลื่อนขึ้นเพราะมีคน
+    //    ลบใบอื่นไปก่อน แล้วเราลบตามเลขแถวเดิม = ลบออเดอร์ของคนอื่นทิ้งโดยไม่มีใครรู้
+    //    (ลบแล้วกู้ไม่ได้ จึงปฏิเสธให้รีเฟรช ไม่ไล่หาแถวใกล้เคียงเองเหมือนตอนแก้จำนวน)
+    if (expectSku && String(expectSku).trim().toUpperCase() !== sku.toUpperCase())
+      return error("รายการเลื่อนแถว (แถวนี้เป็น " + sku + ") — กดซิงค์แล้วลองใหม่");
     const before = {
       status: rowData[2] || "", sku: sku, name: rowData[6] || "",
       orderQty: rowData[7] || "", preparedQty: rowData[8] || "",
@@ -4337,24 +4373,34 @@ function deleteOrderRow(ss, orderId, actor) {
 }
 
 // ลบหลาย order rows ในครั้งเดียว — เรียงจากแถวล่างขึ้นบนกัน index เลื่อน
-function deleteOrderRows(ss, orderIds, actor) {
+// orderSkus = SKU ที่ client คาดว่าอยู่ในแต่ละแถว (index ตรงกับ orderIds) — ใช้กันลบผิดใบ
+function deleteOrderRows(ss, orderIds, actor, orderSkus) {
   if (!Array.isArray(orderIds) || !orderIds.length) return error("orderIds ว่างเปล่า");
   const sheet = ss.getSheetByName(SHEET_ORDERS);
   if (!sheet) return error("ไม่พบชีต ลำดับที่สั่งสินค้า");
+  const skus = Array.isArray(orderSkus) ? orderSkus : [];
 
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
   try {
     const items = orderIds
-      .map(id => ({ id: id, rowNum: parseInt(String(id).replace(/[^0-9]/g, "")) }))
+      .map((id, i) => ({ id: id, sku: skus[i] || "", rowNum: parseInt(String(id).replace(/[^0-9]/g, "")) }))
       .filter(x => x.rowNum >= 3)
       .sort((a, b) => b.rowNum - a.rowNum);   // มาก→น้อย กัน index เลื่อนตอนลบ
     let deleted = 0;
+    const mismatched = [];
     for (const item of items) {
       // 1) อ่าน before-state ก่อนลบ (A..I: mode,date,status,from,to,sku,name,orderQty,preparedQty)
       const rowData = sheet.getRange(item.rowNum, 1, 1, 9).getValues()[0];
+      const rowSku = String(rowData[5] || "").trim();
+      // ⚠️ แถวเลื่อน (มีคนลบใบอื่นไปก่อน) → ข้ามใบนี้ ห้ามลบ · ลบแล้วกู้ไม่ได้
+      //    เก็บใส่ mismatched แล้วรายงานกลับ ไม่เงียบ — ผู้ใช้ต้องรู้ว่าใบไหนยังไม่ถูกลบ
+      if (item.sku && rowSku.toUpperCase() !== String(item.sku).trim().toUpperCase()) {
+        mismatched.push(item.sku);
+        continue;
+      }
       const before = {
-        status: rowData[2] || "", sku: rowData[5] || "", name: rowData[6] || "",
+        status: rowData[2] || "", sku: rowSku, name: rowData[6] || "",
         orderQty: rowData[7] || "", preparedQty: rowData[8] || "",
       };
       // 2) ลบจริง — GAS deleteRow() เป็น synchronous, throw ถ้าล้มเหลว
@@ -4364,7 +4410,9 @@ function deleteOrderRows(ss, orderIds, actor) {
       writeAuditLog_(actor, "ลบ order (batch)", item.id, auditDetail_({ before: before, after: null, note: "ลบ order แบบ batch" }));
     }
     if (deleted > 0) invalidateCache_(); // P0-4: bump dmj_last_write_ts ครั้งเดียวหลัง batch เสร็จ
-    return ok({ deleted });
+    if (mismatched.length && !deleted)
+      return error("รายการเลื่อนแถว (" + mismatched.join(", ") + ") — กดซิงค์แล้วลองใหม่");
+    return ok({ deleted, mismatched });
   } finally {
     lock.releaseLock();
   }
