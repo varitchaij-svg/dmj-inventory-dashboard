@@ -458,6 +458,15 @@ function FrontStoreView({ data, role, checkRequest }) {
     setTransferring(true);
     try {
       const res = await syncStockTransferBatch([{ sku: transferTarget.sku, qty: transferQty, name: transferTarget.name }]);
+      // อ่านคำตอบไม่ได้ ≠ โอนไม่สำเร็จ — GAS เขียนชีตเสร็จแล้วยังตอบไม่ทันได้ (บทเรียนข้อ 13)
+      // ห้ามบอกว่า "ไม่สำเร็จ" ลอย ๆ เพราะผู้ใช้จะกดโอนซ้ำแล้วของไปสองรอบ
+      if (res && res.unreadable) {
+        showToast("warn", "ไม่แน่ใจว่าโอนสำเร็จหรือไม่ — กด Sync แล้วเช็คจำนวนก่อนโอนซ้ำ", "❓", 9000);
+        setTransferTarget(null);
+        setTransferQty(1);
+        setTransferring(false);
+        return;
+      }
       if (res && res.success === false) throw new Error(res.error || "ไม่สำเร็จ");
       showToast("success", `โอน ${transferQty} ชิ้น "${transferTarget.name}" แล้ว`, "📦");
       setTransferTarget(null);
@@ -4453,24 +4462,82 @@ async function syncStockDeduct(sku, qty, name) {
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ transferStock: true, sku, qty, name, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน" }),
     });
-    const json = await res.json().catch(() => ({}));
-    return json;
-  } catch(e) { console.warn("syncStockDeduct error:", e.message); return { success: false, error: e.message }; }
+    return await dmjJson(res);
+  } catch(e) {
+    // อ่านคำตอบไม่ได้ ≠ โอนไม่สำเร็จ — ผู้เรียกต้องไปเช็คประวัติจริงก่อนขึ้นแดง (บทเรียนข้อ 13)
+    console.warn("syncStockDeduct error:", e.message);
+    return { success: false, error: dmjErrText(e), unreadable: true };
+  }
 }
 
 // ส่งหลายรายการในครั้งเดียว → Apps Script สร้าง ZORT Transfer เอกสารเดียว (เลขที่ auto)
-// items = [{ sku, qty, name }, ...]
-async function syncStockTransferBatch(items) {
+// items = [{ sku, qty, name, orderId }, ...] · tid = รหัสชุด (กันโอนซ้ำตอนลองใหม่ — ดู doShipAll)
+//
+// ⚠️ คืน `unreadable:true` เมื่อ **อ่านคำตอบไม่ได้** (หมดเวลา/เน็ตหลุด/GAS ตอบหน้า HTML)
+//    ซึ่ง **ไม่เท่ากับ "โอนไม่สำเร็จ"** — GAS เขียนชีต + สร้างเอกสารใน ZORT เสร็จแล้วยังตอบไม่ทันได้
+//    ตัวเรียกต้องไปถาม action=transferCheck ก่อนตัดสินใจเสมอ (บทเรียนข้อ 13)
+async function syncStockTransferBatch(items, tid) {
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
   try {
     const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ transferStockBatch: true, list: items, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน", clientLoadedAt: window._dataLoadedAt || 0 }),
+      body: JSON.stringify({ transferStockBatch: true, list: items, tid: tid || "", actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน", clientLoadedAt: window._dataLoadedAt || 0 }),
+      // โอนขึ้นรถทีนึงมีได้ 70-80 SKU → เขียนชีต + ยิง ZORT + log ทุกแถว กินเวลาเกินเพดาน
+      // เดิม 60 วิ ของ dmjFetch ได้ง่าย ๆ · เพดานเดิมทำให้ browser ตัดสายทั้งที่ฝั่ง GAS ทำจนจบ
+      // แล้วหน้าจอขึ้น "ส่งไม่สำเร็จ" ทั้งที่ ZORT มีเอกสารโอนแล้ว (อาการที่เจ้าของแจ้ง ส.ค. 2026)
+      dmjTimeoutMs: 240000,
     });
-    const json = await res.json().catch(() => ({}));
-    return json;
-  } catch(e) { console.warn("syncStockTransferBatch error:", e.message); return { success: false, error: e.message }; }
+    return await dmjJson(res);
+  } catch(e) {
+    console.warn("syncStockTransferBatch error:", e.message);
+    return { success: false, error: dmjErrText(e), unreadable: true };
+  }
+}
+
+// ถาม GAS ว่า "ชุด tid นี้โอนลงระบบไปแล้วหรือยัง" — ใช้ตอนอ่านคำตอบของการส่งไม่ได้
+//  { found:true, ... } = ลงแล้ว (ห้ามยิงซ้ำ) · { found:false } = ยังไม่ลง (ยิงซ้ำได้ปลอดภัย)
+//  null = ตอบไม่ได้/รูปแบบไม่ตรง (เน็ตพัง หรือ GAS ยังเป็นโค้ดเก่าที่ไม่รู้จัก transferCheck)
+//         → **ห้ามยิงซ้ำ** เพราะโค้ดเก่าไม่มี tid กันซ้ำให้ (หลักเดียวกับ orderCheck)
+async function syncTransferCheck(tid) {
+  if (!SHEET_DEPLOY_URL || !tid) return null;
+  const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
+  try {
+    const d = await dmjJson(await fetch(
+      `${SHEET_DEPLOY_URL}${sep}action=transferCheck&tid=${encodeURIComponent(tid)}&_t=${Date.now()}`,
+      { cache: "no-store" }));
+    return (d && d.ok === true && typeof d.found === "boolean") ? d : null;
+  } catch(e) { console.warn("syncTransferCheck error:", e.message); return null; }
+}
+
+// ประวัติการโอนคลัง→หน้าร้าน N วันล่าสุด อ่านสดจากชีต (ไม่ผ่าน cache, ก้อนเล็ก)
+// ครอบคลุมทั้งการกด "ส่งทั้งหมด" และกดส่งทีละใบ — ทั้งสองทางเขียนลงชีตเดียวกัน
+// คืน null = ถามไม่ได้ (เน็ตพัง / GAS ยังเป็นโค้ดเก่าที่ไม่รู้จัก) → ผู้เรียกต้องถอยไปใช้ data.shipments
+async function syncRecentTransfers(days) {
+  if (!SHEET_DEPLOY_URL) return null;
+  const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
+  try {
+    const d = await dmjJson(await fetch(
+      `${SHEET_DEPLOY_URL}${sep}action=recentTransfers&days=${days || 3}&_t=${Date.now()}`,
+      { cache: "no-store" }));
+    return (d && d.ok === true && Array.isArray(d.list)) ? d.list : null;
+  } catch(e) { console.warn("syncRecentTransfers error:", e.message); return null; }
+}
+
+// ค้นเอกสารโอนจาก "เลขที่ ZORT" ที่ผู้ใช้พิมพ์เอง
+// จำเป็นเพราะมีกรณีที่ **ZORT มีเอกสารโอนอยู่ฝ่ายเดียว แต่ชีตเราไม่มีบันทึก** (สคริปต์ถูกตัด
+// กลางคันหลังยิง ZORT สำเร็จ / มีคนสร้างรายการโอนใน ZORT เอง) → หาในชีตยังไงก็ไม่เจอ
+// คืน { list, transfer } หรือ null เมื่อถามไม่ได้ · { found:false } เมื่อ ZORT ไม่มีเลขนี้
+async function syncZortTransferLookup(number) {
+  if (!SHEET_DEPLOY_URL || !number) return null;
+  const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
+  try {
+    const d = await dmjJson(await fetch(
+      `${SHEET_DEPLOY_URL}${sep}action=zortTransfer&number=${encodeURIComponent(number)}&_t=${Date.now()}`,
+      { cache: "no-store" }));
+    if (!d || d.ok !== true) return null;
+    return d.found ? { list: d.list || [], transfer: d.transfer, sheetLogged: !!d.sheetLogged } : { found: false };
+  } catch(e) { console.warn("syncZortTransferLookup error:", e.message); return null; }
 }
 
 // ปรับ WH qty=0 ใน Sheets + ZORT (สินค้าหมด ไม่ได้จัด)
@@ -4713,6 +4780,57 @@ const LS_MISSED_TRUCK   = "dmj_missed_truck_v1";
 function getShippedOrders() { try { return JSON.parse(localStorage.getItem(LS_SHIPPED_ORDERS)||"{}"); } catch { return {}; } }
 function getMissedOrders()  { try { return JSON.parse(localStorage.getItem(LS_MISSED_TRUCK)  ||"{}"); } catch { return {}; } }
 
+// ── รหัสชุดที่กดส่ง (tid) — กันโอนซ้ำเวลาลองใหม่ ──────────────────────────────
+// 1 ค่าต่อการกด "ส่งทั้งหมด" 1 ครั้ง และ **คงค่าเดิมตลอดการลองใหม่ชุดเดิม** → GAS เห็น tid ซ้ำ
+// แล้วคืนผลเดิมโดยไม่โอนอีกรอบ (หลักเดียวกับ `cid` ของการสั่งของ)
+// เก็บใน localStorage เพราะการส่งชุดใหญ่ใช้เวลาเป็นนาที พนักงานอาจปิด/รีเฟรชหน้าไปก่อน
+// คำตอบจะกลับมา — เปิดกลับมากดส่งใหม่ต้องได้ tid เดิม ไม่งั้นของโอนซ้ำโดยไม่มีอะไรเตือน
+const LS_SHIP_TID = "dmj_ship_tid_v1";
+const SHIP_TID_MAX_AGE_MS = 6 * 60 * 60 * 1000;   // เท่าอายุที่ GAS เก็บผลไว้ตอบซ้ำ
+function shipBatchKey(orders) {
+  return (orders || []).map(o => `${o.id}:${o.sku}:${o.preparedQty || o.orderQty || 0}`).sort().join("|");
+}
+function getShipTid(orders) {
+  const key = shipBatchKey(orders);
+  try {
+    const cur = JSON.parse(localStorage.getItem(LS_SHIP_TID) || "null");
+    if (cur && cur.key === key && cur.tid && (Date.now() - (cur.at || 0)) < SHIP_TID_MAX_AGE_MS) return cur.tid;
+  } catch (e) { /* ค่าเสีย → สร้างใหม่ */ }
+  const tid = "TB" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  try { localStorage.setItem(LS_SHIP_TID, JSON.stringify({ key, tid, at: Date.now() })); } catch (e) {}
+  return tid;
+}
+function clearShipTid() { try { localStorage.removeItem(LS_SHIP_TID); } catch (e) {} }
+
+// GAS ยืนยันว่าชุดนี้ลงระบบแล้ว แต่ผลรายตัวหมดอายุใน cache → เหลือแค่ [{sku,qty}] จากชีตโอน
+// ชีตไม่ได้เก็บ orderId จึงต้องจับคู่กลับด้วย sku (จำนวนตรงก่อน — คลังไม่พอทำให้จำนวนไม่ตรงได้)
+// จับคู่ 1 ต่อ 1 ไม่ให้แถวเดียวถูกใช้ซ้ำ กัน order คนละใบที่ SKU เดียวกันถูกเคลียร์ทั้งคู่จากแถวเดียว
+function shipResultsFromSheetItems(transferItems, sheetItems) {
+  if (!Array.isArray(sheetItems) || !sheetItems.length) return [];
+  const pool = sheetItems.map(it => ({ sku: String(it.sku || "").trim().toUpperCase(), qty: Number(it.qty) || 0, used: false }));
+  const out = [];
+  (transferItems || []).forEach(it => {
+    const sku = String(it.sku || "").trim().toUpperCase();
+    const q   = Number(it.qty) || 0;
+    let m = pool.find(p => !p.used && p.sku === sku && p.qty === q);
+    if (!m) m = pool.find(p => !p.used && p.sku === sku);
+    if (!m) return;                    // ไม่มีแถวรองรับ = ตัวนี้ไม่ได้โอน → คงไว้ในรายการ
+    m.used = true;
+    out.push({ sku: it.sku, orderId: it.orderId, requested: q, transferred: m.qty });
+  });
+  return out;
+}
+
+// วันที่ในชีตโอนเป็น "dd/MM/yyyy" (เขียนด้วย Utilities.formatDate = ค.ศ.)
+// เผื่อแถวเก่าที่เคยเขียนด้วย toLocaleString("th-TH") ไว้ → ลบ 543 เมื่อปี ≥ 2400 (บทเรียนข้อ 11)
+function parseShipDateMs(s) {
+  const m = String(s || "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (!m) return null;
+  let y = parseInt(m[3], 10);
+  if (y >= 2400) y -= 543;
+  return new Date(y, parseInt(m[2], 10) - 1, parseInt(m[1], 10)).getTime();
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // ORDER SUMMARY VIEW
 // ─────────────────────────────────────────────────────────────────────
@@ -4745,6 +4863,10 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const [shipAllConfirm, setShipAllConfirm] = uS(null); // ready[] array
   const [materialDraw, setMaterialDraw]  = uS(null); // { order, afterConfirm: fn }
   const [resetConfirm, setResetConfirm]  = uS(false); // ยืนยันรีเซ็ตสถานะการส่ง
+  const [bulkBusy, setBulkBusy] = uS(false);          // กำลังส่งทั้งชุด — ล็อกปุ่มกันกดซ้ำระหว่างรอ
+  const [reconcile, setReconcile] = uS(null);         // ผลการเทียบกับประวัติการโอนจริง
+  const [reconciling, setReconciling] = uS(false);
+  const [zortNumInput, setZortNumInput] = uS("");     // เลขที่เอกสารโอนใน ZORT ที่ผู้ใช้พิมพ์
   const isOnline = useOnlineStatus(); // ตรวจสอบการเชื่อมต่อก่อนส่งสถานะ
   // warehouse map modal state — shared สำหรับ card ทุกใบในหน้านี้
   const [mapModal, setMapModal] = uS(null); // { lockKey, productName, sku } | null
@@ -4862,18 +4984,27 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
     // ถ้าไม่ใช่ MTO → โอนสต็อกคลัง→หน้าร้าน / ถ้าเป็น MTO → เบิกวัตถุดิบ (ถ้ามี)
     // เก็บผลโอนไว้ตัดสินว่า "ส่งสำเร็จจริง" ไหม — กันบั๊กข้อมูลหาย (เดิมลบ order ทิ้งแม้คลังไม่พอ)
-    let transferOk = true, transferred = qty, errMsg = "";
+    let transferOk = true, transferred = qty, errMsg = "", unreadable = false;
     if (!order.product?.isMTO) {
       const res = await syncStockDeduct(order.sku, qty, order.carryMode === "carry" ? order.name + " order" : order.name);
       const ok = res && res.success === true;
       transferred = (res && res.data && res.data.transferred != null) ? Number(res.data.transferred) : (ok ? qty : 0);
       transferOk = ok && transferred > 0;       // โอนได้จริง > 0 ชิ้น = สำเร็จ
       errMsg = (res && res.error) || "";
+      unreadable = !!(res && res.unreadable);
     } else if (matItems && matItems.length > 0) {
       await syncDeductMaterials(matItems);
     }
 
     setSending(null);
+
+    // ⚠️ "อ่านคำตอบไม่ได้" ≠ "คลังไม่พอ" — GAS เขียนชีต + สร้างเอกสารโอนใน ZORT เสร็จแล้ว
+    // ยังตอบไม่ทันได้ (บทเรียนข้อ 13) · เส้นทางนี้ยังไม่มีตัวกันโอนซ้ำ (ไม่มี tid เหมือน "ส่งทั้งหมด")
+    // → **ห้ามชวนให้กดส่งซ้ำเด็ดขาด** ต้องให้ไปเช็คประวัติจริงก่อน ไม่งั้นของโอนสองเด้ง
+    if (unreadable) {
+      showToast("warn", "ไม่แน่ใจว่าส่งสำเร็จหรือไม่ (ระบบตอบกลับไม่ครบ) — กดปุ่ม \"🧾 เช็คของที่ส่งไปแล้ว\" ด้านบนก่อน อย่ากดส่งซ้ำ", "❓", 10000);
+      return;
+    }
 
     // คลังไม่พอ/ไม่พบสินค้า → ไม่ลบ order, ไม่มาร์คส่งแล้ว, คงไว้ให้ส่งใหม่ภายหลัง
     if (!transferOk) {
@@ -4942,8 +5073,31 @@ function OrderSummaryView({ data, onPrintRequest }) {
       .filter(it => it.sku && it.qty > 0);
 
     let batchRes = { success: true };
+    let tid = "";
     if (transferItems.length) {
-      batchRes = await syncStockTransferBatch(transferItems);
+      tid = getShipTid(ready);
+      setBulkBusy(true);
+      batchRes = await syncStockTransferBatch(transferItems, tid);
+
+      // ⚠️ "อ่านคำตอบไม่ได้" ≠ "โอนไม่สำเร็จ" — ชุดใหญ่ (70-80 SKU) ใช้เวลานานกว่าที่ browser
+      // ยอมรอ แล้วตัดสายทั้งที่ GAS เขียนชีต + สร้างเอกสารโอนใน ZORT เสร็จไปแล้ว
+      // เดิมตรงนี้ขึ้น "ส่งไม่สำเร็จ" ทันที → พนักงานกดซ้ำ = โอนสองเด้ง · ต้องถามของจริงก่อนเสมอ
+      if (batchRes && batchRes.unreadable && tid) {
+        showToast("warn", "ตอบกลับช้า — กำลังตรวจสอบว่าของถูกส่งไปแล้วหรือยัง…", "🔄", 6000);
+        const chk = await syncTransferCheck(tid);
+        if (chk && chk.found) {
+          // ลงระบบไปแล้วจริง → เดินเส้นทางสำเร็จตามปกติ ด้วยผลรายตัวที่ server ยืนยัน
+          batchRes = { success: true, verified: true, data: {
+            count: chk.count, zortNumber: chk.zortNumber, refNum: chk.refNum,
+            results: (chk.results && chk.results.length)
+              ? chk.results
+              : shipResultsFromSheetItems(transferItems, chk.items),
+          } };
+        } else if (chk && chk.found === false) {
+          batchRes = { ...batchRes, notLanded: true };   // ยืนยันแล้วว่ายังไม่ลง → กดซ้ำได้ปลอดภัย
+        }
+      }
+      setBulkBusy(false);
     }
     const batchOk = batchRes && batchRes.success === true;
 
@@ -4954,6 +5108,12 @@ function OrderSummaryView({ data, onPrintRequest }) {
         // conflict = ข้อมูลฝั่ง server ใหม่กว่าที่เครื่องนี้โหลด → ดึงข้อมูลล่าสุดให้ แล้วให้ลองอีกครั้ง
         showToast("warn", "ข้อมูลมีการอัปเดต — กำลังโหลดใหม่ แล้วลองส่งอีกครั้ง", "🔄", 6000);
         if (typeof window._dmjRefetch === "function") window._dmjRefetch();
+      } else if (batchRes && batchRes.notLanded) {
+        // server ยืนยันว่ายังไม่มีอะไรลงระบบ → บอกให้กดซ้ำได้เลย (tid กันโอนซ้ำให้แล้ว)
+        showToast("warn", "ยังส่งไม่สำเร็จ — ของยังไม่ถูกโอน กด \"ส่งทั้งหมด\" อีกครั้งได้เลย (ระบบกันโอนซ้ำให้แล้ว)", "⚠️", 8000);
+      } else if (batchRes && batchRes.unreadable) {
+        // ถามก็ไม่ได้คำตอบ → **ห้ามบอกให้กดซ้ำ** เพราะไม่รู้ว่าโอนไปแล้วหรือยัง
+        showToast("warn", "ไม่แน่ใจว่าส่งสำเร็จหรือไม่ — กด Sync แล้วใช้ปุ่ม \"🧾 เช็คของที่ส่งไปแล้ว\" ก่อนกดส่งซ้ำ", "❓", 9000);
       } else {
         showToast("warn", `ส่งไม่สำเร็จ — ระบบมีปัญหา ${batchRes.error || batchRes.message || ""} · คงรายการไว้ ลองใหม่อีกครั้ง`, "⚠️", 7000);
       }
@@ -5001,6 +5161,9 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
     // ลบเฉพาะ order ที่ส่งสำเร็จออกจาก Sheet — order ที่คลังไม่พอจะคงไว้ให้ส่งใหม่ภายหลัง
     if (succeeded.length) syncDeleteOrders(succeeded.map(o => o.id));
+    // ชุดนี้จบแล้ว (ผลรายตัวถึงมือ client เรียบร้อย) → ทิ้ง tid ไม่ให้ไปกันชุดถัดไปที่บังเอิญ
+    // เป็นสินค้า/จำนวนเดิม · ที่เหลือ (kept) จะได้ tid ใหม่เองเพราะรายการในชุดเปลี่ยนไปแล้ว
+    clearShipTid();
 
     const zErr = batchRes && batchRes.data && batchRes.data.zortError;
     const partialMsg = partials.length
@@ -5017,6 +5180,103 @@ function OrderSummaryView({ data, onPrintRequest }) {
     } else {
       const zNum = batchRes && batchRes.data && batchRes.data.zortNumber;
       showToast("success", `ส่ง ${succeeded.length} รายการแล้ว${zNum ? ` (ZORT ${zNum})` : ""}`, "📦");
+    }
+  };
+
+  // ── 🧾 เช็คของที่ส่งไปแล้ว — หา "ประวัติจริง" ว่าอันไหนโอนไปแล้วบ้าง ────────────
+  // ใช้ตอนกดส่งแล้วขึ้นว่าไม่สำเร็จ ทั้งที่ ZORT มีเอกสารโอนแล้ว (คำตอบหายกลางทาง)
+  //
+  // ⚠️ **ไม่ใช่ปุ่ม "เคลียร์ทั้งหมด"** — คนกดส่งอาจส่งไปแค่บางส่วน (กดทีละใบ/กดค้างไว้)
+  //    ตัวนี้เทียบรายตัวกับ **ชีต "รายการโอนสินค้า"** ซึ่ง GAS เขียนเมื่อโอนสำเร็จจริงเท่านั้น
+  //    (ทั้งทาง "ส่งทั้งหมด" = logTransferBatch_ และทาง "กดส่งทีละใบ" = logTransfer_)
+  //    ตัวที่ไม่มีแถวรองรับ = ยังไม่ได้ส่งจริง → **คงไว้ในรายการเสมอ ห้ามเคลียร์**
+  // · จับคู่ 1 ต่อ 1 ไม่ให้แถวโอนแถวเดียวไปเคลียร์ order หลายใบ
+  // · ผู้ใช้ติ๊กเลือกได้รายตัวก่อนยืนยัน (ค่าเริ่มต้นติ๊กไว้ทุกอัน) — ตัดสินใจสุดท้ายอยู่ที่คน
+  // · การเคลียร์นี้ **ไม่ตัดสต็อกซ้ำ** (ไม่เรียก transfer เลย) แค่ลบ order + มาร์คว่าส่งแล้ว
+  const RECONCILE_DAYS = 3;
+  const findAlreadyShipped = (rows) => {
+    const cutoff = Date.now() - RECONCILE_DAYS * 24 * 60 * 60 * 1000;
+    const pool = (rows || [])
+      .filter(s => !s.receivedAt)                       // หน้าร้านยังไม่กดรับ = เพิ่งโอนมา
+      .filter(s => { const t = parseShipDateMs(s.date); return t == null || t >= cutoff; })
+      .map(s => ({ ...s, used: false }));
+    const pending = [...carryOrders, ...truckOrders]
+      .filter(o => !shipped[o.id] && !o.product?.isMTO && o.sku);
+    const matches = [], unmatched = [];
+    pending.forEach(o => {
+      const sku = String(o.sku).trim().toUpperCase();
+      const q   = o.preparedQty || o.orderQty || 0;
+      let m = pool.find(s => !s.used && String(s.sku || "").trim().toUpperCase() === sku && Number(s.qty) === q);
+      if (!m) m = pool.find(s => !s.used && String(s.sku || "").trim().toUpperCase() === sku); // คลังไม่พอ → จำนวนไม่ตรง
+      if (!m) { unmatched.push(o); return; }
+      m.used = true;
+      matches.push({ order: o, ship: m, pick: true });
+    });
+    return { matches, unmatched, pending };
+  };
+
+  const openReconcile = async () => {
+    setReconciling(true);
+    // อ่านประวัติ "สด" จากชีตก่อนเสมอ — ข้อมูลในเครื่องอาจเป็นก้อนก่อนกดส่ง
+    // ตอบไม่ได้ (GAS ยังเป็นโค้ดเก่า/เน็ตพัง) → ถอยไปใช้ data.shipments ที่มีอยู่ แล้วบอกให้กด Sync
+    const fresh = await syncRecentTransfers(RECONCILE_DAYS);
+    const rows = fresh || (data.shipments || []);
+    const res = findAlreadyShipped(rows);
+    setReconciling(false);
+    // เปิดหน้าต่างเสมอแม้หาไม่เจอ — เพราะยังมีทางที่สอง: ค้นจากเลขที่ ZORT โดยตรง
+    // (ชีตเราไม่มีบันทึกก็ได้ ถ้าสคริปต์ถูกตัดกลางคันหลังยิง ZORT สำเร็จ)
+    setReconcile({ ...res, fresh: !!fresh, src: "sheet" });
+  };
+
+  // ค้นจากเลขที่เอกสารโอนใน ZORT ที่ผู้ใช้พิมพ์เอง (เช่น TF-20260803-005)
+  const lookupByZort = async () => {
+    const num = (zortNumInput || "").trim();
+    if (!num) return;
+    setReconciling(true);
+    const r = await syncZortTransferLookup(num);
+    setReconciling(false);
+    if (!r) {
+      showToast("warn", "ถามระบบไม่ได้ — เน็ตขัดข้อง หรือระบบหลังบ้านยังไม่ได้อัปเดต ลองใหม่อีกครั้ง", "⚠️", 8000);
+      return;
+    }
+    if (r.found === false) {
+      showToast("warn", `ไม่พบเอกสารโอนเลขที่ "${num}" ใน ZORT (ค้นย้อนหลัง 14 วัน) — ลองคัดลอกเลขจาก ZORT มาวางอีกครั้ง`, "🔎", 9000);
+      return;
+    }
+    const res = findAlreadyShipped(r.list);
+    if (!res.matches.length) {
+      showToast("warn", `เอกสาร ${r.transfer.number} มี ${r.list.length} รายการ แต่ไม่ตรงกับรายการที่ค้างอยู่เลย (อาจถูกเคลียร์ไปแล้ว)`, "🔎", 9000);
+      return;
+    }
+    setReconcile({ ...res, fresh: true, src: "zort", zort: r.transfer, zortSheetLogged: r.sheetLogged });
+  };
+
+  const toggleReconcilePick = (idx) => {
+    setReconcile(r => r ? { ...r, matches: r.matches.map((m, i) => i === idx ? { ...m, pick: !m.pick } : m) } : r);
+  };
+
+  const applyReconcile = async () => {
+    const matches = ((reconcile && reconcile.matches) || []).filter(m => m.pick);
+    setReconcile(null);
+    if (!matches.length) return;
+    setReconciling(true);
+    const nextShipped = { ...shipped };
+    let nextSt = getOrdersState();
+    matches.forEach(({ order }) => {
+      nextShipped[order.id] = Date.now();
+      nextSt[order.id] = { ...(nextSt[order.id] || {}), status: "ส่งแล้ว", sig: orderSig(order), markedAt: new Date().toISOString() };
+    });
+    setShipped(nextShipped);
+    localStorage.setItem(LS_SHIPPED_ORDERS, JSON.stringify(nextShipped));
+    localStorage.setItem(LS_ORDERS_STATE, JSON.stringify(nextSt));
+    setSt(nextSt);
+    const res = await syncDeleteOrders(matches.map(m => m.order.id));
+    clearShipTid();
+    setReconciling(false);
+    if (res && res.success === false) {
+      showToast("warn", `เคลียร์บนหน้าจอแล้ว ${matches.length} รายการ แต่ลบออกจากชีตไม่สำเร็จ (${res.error || ""}) — กด Sync แล้วลองอีกครั้ง`, "⚠️", 9000);
+    } else {
+      showToast("success", `เคลียร์ ${matches.length} รายการที่ส่งไปแล้ว (ไม่ตัดสต็อกซ้ำ)`, "🧾", 7000);
     }
   };
 
@@ -5077,12 +5337,13 @@ function OrderSummaryView({ data, onPrintRequest }) {
               </button>
             )}
             {readyCount > 0 && (
-              <button onClick={() => handleShipAll(orders)} style={{
-                padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",
-                background: isTruck?"#1d4ed8":"var(--g-700)",color:"#fff",
+              <button onClick={() => handleShipAll(orders)} disabled={bulkBusy} style={{
+                padding:"6px 14px",borderRadius:8,border:"none",
+                cursor: bulkBusy ? "wait" : "pointer",
+                background: bulkBusy ? "#9ca3af" : (isTruck?"#1d4ed8":"var(--g-700)"),color:"#fff",
                 fontSize:12,fontWeight:700,fontFamily:"inherit",
               }}>
-                ✅ ส่งทั้งหมด ({readyCount})
+                {bulkBusy ? "⏳ กำลังส่ง…" : `✅ ส่งทั้งหมด (${readyCount})`}
               </button>
             )}
           </div>
@@ -5252,12 +5513,30 @@ function OrderSummaryView({ data, onPrintRequest }) {
             {Object.keys(shipped).length > 0 && ` · ส่งแล้ว ${Object.keys(shipped).filter(id=>doneOrders.find(o=>o.id===id)).length} รายการ`}
           </div>
         </div>
-        <button onClick={() => setResetConfirm(true)} style={{
-          padding:"6px 12px",borderRadius:8,border:"1.5px solid var(--bdr)",
-          background:"#fff",color:"var(--muted)",fontSize:11,fontWeight:600,
-          cursor:"pointer",fontFamily:"inherit",
-        }}>🔄 รีเซ็ตสถานะ</button>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          {/* ทางออกเวลากดส่งแล้วขึ้นว่าไม่สำเร็จ ทั้งที่ของโอนเข้าระบบไปแล้ว (คำตอบหายกลางทาง) */}
+          <button onClick={openReconcile} disabled={reconciling} style={{
+            padding:"6px 12px",borderRadius:8,border:"1.5px solid #93c5fd",
+            background: reconciling ? "#eff6ff" : "#dbeafe", color:"#1d4ed8",
+            fontSize:11,fontWeight:700,cursor: reconciling ? "wait" : "pointer",fontFamily:"inherit",
+          }}>{reconciling ? "กำลังตรวจประวัติ…" : "🧾 เช็คของที่ส่งไปแล้ว"}</button>
+          <button onClick={() => setResetConfirm(true)} style={{
+            padding:"6px 12px",borderRadius:8,border:"1.5px solid var(--bdr)",
+            background:"#fff",color:"var(--muted)",fontSize:11,fontWeight:600,
+            cursor:"pointer",fontFamily:"inherit",
+          }}>🔄 รีเซ็ตสถานะ</button>
+        </div>
       </div>
+
+      {/* กำลังส่งทั้งชุด — ชุดใหญ่ใช้เวลาเป็นนาที ถ้าไม่บอกอะไรเลยพนักงานจะกดซ้ำ */}
+      {bulkBusy && (
+        <div className="no-print" style={{
+          padding:"10px 14px",marginBottom:12,borderRadius:10,
+          background:"#fef9c3",border:"1.5px solid #fde047",fontSize:13,fontWeight:600,color:"#854d0e",
+        }}>
+          ⏳ กำลังส่งของ… ชุดใหญ่ใช้เวลาถึง 2-3 นาที <b>อย่าปิดหน้านี้และอย่ากดซ้ำ</b>
+        </div>
+      )}
 
       {renderSection("หิ้วเอง", "🚶", carryOrders, false)}
       {renderSection("ขึ้นรถ",  "🚛", truckOrders, true)}
@@ -5328,6 +5607,113 @@ function OrderSummaryView({ data, onPrintRequest }) {
         onConfirm={doShip}
         onCancel={() => setShipConfirm(null)}
       />
+      {/* ── ประวัติการโอนจริง: เลือกเองว่าจะเคลียร์อันไหน (ไม่ตัดสต็อกซ้ำ) ── */}
+      {reconcile && (
+        <div onClick={() => setReconcile(null)} style={{
+          position:"fixed",inset:0,background:"rgba(0,0,0,.6)",zIndex:2000,
+          display:"flex",alignItems:"center",justifyContent:"center",padding:12,
+          backdropFilter:"blur(4px)",
+        }}>
+          <div onClick={e => e.stopPropagation()} style={{
+            background:"#fff",borderRadius:16,maxWidth:480,width:"100%",
+            maxHeight:"90vh",display:"flex",flexDirection:"column",overflow:"hidden",
+            boxShadow:"0 20px 60px rgba(0,0,0,.3)",
+          }}>
+            <div style={{background:"#e3f2fd",padding:"16px 18px",borderBottom:"3px solid #0d47a133"}}>
+              <div style={{fontSize:32,lineHeight:1,marginBottom:4}}>🧾</div>
+              <div style={{fontSize:16,fontWeight:700,color:"#0d47a1"}}>
+                {reconcile.matches.length
+                  ? `พบหลักฐานว่าโอนไปแล้ว ${reconcile.matches.length} จาก ${reconcile.pending.length} รายการ`
+                  : `ไม่พบหลักฐานการโอนในระบบเรา (ตรวจ ${reconcile.pending.length} รายการที่ค้าง)`}
+              </div>
+              <div style={{fontSize:12,color:"#0d47a1",marginTop:4,lineHeight:1.5}}>
+                {reconcile.src === "zort"
+                  ? <>มาจาก <b>เอกสารโอนใน ZORT {reconcile.zort?.number}</b> ({reconcile.zort?.date} · สถานะ {reconcile.zort?.status})
+                      {!reconcile.zortSheetLogged && <><br/><b style={{color:"#b45309"}}>⚠️ ชีต "รายการโอนสินค้า" ของเราไม่มีบันทึกเลขที่นี้</b> — แจ้งเจ้าของให้รัน checkZortTransfer เพื่อซ่อมข้อมูลฝั่งเรา</>}</>
+                  : <>มาจากชีต "รายการโอนสินค้า" {reconcile.fresh ? "(อ่านสดจากระบบเมื่อครู่)" : "(ข้อมูลในเครื่อง — กด Sync แล้วเช็คใหม่จะแม่นกว่า)"}</>}
+                {reconcile.matches.length > 0 &&
+                  <><br/>อีก <b>{reconcile.unmatched.length} รายการยังไม่พบหลักฐาน = ยังไม่ได้ส่ง</b> จะคงไว้ในรายการให้</>}
+              </div>
+            </div>
+            {/* ทางที่สอง: ZORT มีเอกสารโอนอยู่ฝ่ายเดียว ชีตเราไม่มีบันทึก → ค้นจากเลขที่ตรง ๆ */}
+            <div style={{padding:"10px 14px",borderBottom:"1px solid var(--bdr)",background:"#fafafa"}}>
+              <div style={{fontSize:12,fontWeight:600,marginBottom:6}}>ไม่เจอของที่ส่งไปแล้ว? ใส่เลขที่โอนจาก ZORT</div>
+              <div style={{display:"flex",gap:6}}>
+                <input value={zortNumInput} onChange={e => setZortNumInput(e.target.value)}
+                  placeholder="เช่น TF-20260803-005"
+                  style={{flex:1,minWidth:0,padding:"9px 10px",borderRadius:8,
+                          border:"1.5px solid var(--bdr)",fontSize:13,fontFamily:"inherit"}}/>
+                <button onClick={lookupByZort} disabled={reconciling || !zortNumInput.trim()} style={{
+                  padding:"9px 14px",borderRadius:8,border:"none",
+                  background: (reconciling || !zortNumInput.trim()) ? "#9ca3af" : "#1565c0",
+                  color:"#fff",fontSize:13,fontWeight:700,fontFamily:"inherit",
+                  cursor: (reconciling || !zortNumInput.trim()) ? "not-allowed" : "pointer",
+                }}>{reconciling ? "…" : "ค้นหา"}</button>
+              </div>
+            </div>
+            {reconcile.matches.length > 0 && (
+              <div style={{padding:"10px 14px",fontSize:12,color:"var(--muted)",borderBottom:"1px solid var(--bdr)"}}>
+                ติ๊กเลือกเองได้ — ที่ติ๊กไว้จะถูกลบออกจากรายการและมาร์คว่าส่งแล้ว
+                <b style={{color:"var(--g-700)"}}> โดยไม่ตัดสต็อกซ้ำ</b>
+              </div>
+            )}
+            <div style={{flex:1,overflowY:"auto",padding:"8px 12px"}}>
+              {!reconcile.matches.length && (
+                <div style={{padding:"18px 8px",fontSize:13,color:"var(--muted)",lineHeight:1.6}}>
+                  ระบบไม่พบบันทึกว่ามีของถูกโอนไปแล้ว แปลว่าอย่างใดอย่างหนึ่ง:
+                  <br/>• ยังไม่ได้ส่งจริง → กด "ส่งทั้งหมด" ได้ตามปกติ
+                  <br/>• ส่งไปแล้วแต่บันทึกฝั่งเราขาด → ใส่เลขที่โอนจาก ZORT ด้านบนแล้วกดค้นหา
+                  <br/>• หน้าร้านกดรับของไปแล้ว → จะไม่ขึ้นที่นี่ (ไม่ต้องทำอะไร)
+                </div>
+              )}
+              {reconcile.matches.map((m, i) => (
+                <label key={m.order.id} style={{
+                  display:"flex",gap:10,alignItems:"flex-start",padding:"9px 8px",
+                  borderBottom:"1px solid var(--bdr)",cursor:"pointer",
+                }}>
+                  <input type="checkbox" checked={m.pick} onChange={() => toggleReconcilePick(i)}
+                    style={{width:20,height:20,marginTop:2,flexShrink:0}}/>
+                  {(m.order.image || m.order.product?.imageUrl) ? (
+                    <img src={m.order.image || m.order.product?.imageUrl} alt=""
+                      onError={e=>{e.target.style.display="none"}}
+                      style={{width:40,height:40,objectFit:"cover",borderRadius:8,flexShrink:0,background:"var(--g-50)"}}/>
+                  ) : (
+                    <div style={{width:40,height:40,borderRadius:8,background:"var(--g-100)",flexShrink:0,
+                                 display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>📦</div>
+                  )}
+                  <div style={{minWidth:0,flex:1}}>
+                    <div style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {m.order.name || m.order.sku}
+                    </div>
+                    <div style={{fontSize:11,color:"var(--muted)"}}>{m.order.sku} · จัด {m.order.preparedQty || m.order.orderQty || 0} ชิ้น</div>
+                    <div style={{fontSize:11,color:"#1d4ed8",marginTop:2}}>
+                      โอนแล้ว {m.ship.qty} ชิ้น · {m.ship.refNum || "ไม่มีเลขที่"} · {m.ship.date || ""}
+                      {m.ship.preparedBy ? ` · ${m.ship.preparedBy}` : ""}
+                    </div>
+                    {Number(m.ship.qty) !== (m.order.preparedQty || m.order.orderQty || 0) && (
+                      <div style={{fontSize:11,color:"var(--dang)",marginTop:2}}>⚠️ จำนวนไม่ตรงกับที่จัดไว้ — ตรวจก่อนติ๊ก</div>
+                    )}
+                  </div>
+                </label>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:8,padding:"12px 14px",borderTop:"1px solid var(--bdr)"}}>
+              <button onClick={() => setReconcile(null)} style={{
+                flex:1,padding:"14px",borderRadius:12,border:"none",background:"var(--g-100)",
+                color:"var(--g-700)",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:"inherit",minHeight:52,
+              }}>❌ ยกเลิก</button>
+              <button onClick={applyReconcile}
+                disabled={!reconcile.matches.some(m => m.pick)} style={{
+                flex:1.4,padding:"14px",borderRadius:12,border:"none",
+                background: reconcile.matches.some(m => m.pick) ? "#1565c0" : "#9ca3af",
+                color:"#fff",fontSize:15,fontWeight:700,
+                cursor: reconcile.matches.some(m => m.pick) ? "pointer" : "not-allowed",
+                fontFamily:"inherit",minHeight:52,
+              }}>🧾 เคลียร์ {reconcile.matches.filter(m => m.pick).length} รายการ</button>
+            </div>
+          </div>
+        </div>
+      )}
       <ConfirmModal
         open={!!shipAllConfirm}
         type="ship"
