@@ -223,4 +223,41 @@
       unmatched: [{ actor: 'พนักงานเก่า (หน้าร้าน)', total: 9 }],
     },
   };
+
+  // ── 👥 ลูกค้า & ยอดซื้อ (action=getCustomerAnalytics) ──
+  // ครอบ 3 ปี (ข้อมูลเริ่มกลางปี 2024 เหมือนของจริง) เพื่อให้บล็อก "ลูกค้าใหม่ vs เก่า" มีอะไรให้เทียบ
+  // ลูกค้าแต่ละรายจงใจให้ตกคนละกลุ่ม: ใหม่ / ซื้อเพิ่ม / ซื้อลด / กลับมา / หายไป
+  // ไม่มี fixture นี้ = CustomerView ทั้งหน้าเรนเดอร์แค่ "ยังไม่มีข้อมูลลูกค้า" (เทสต์เขียวโดยไม่ได้ทดสอบอะไร)
+  (function () {
+    const months = [];
+    for (let y = 2024; y <= 2026; y++) {
+      for (let m = 1; m <= 12; m++) {
+        if (y === 2024 && m < 3) continue;
+        if (y === 2026 && m > 8) continue;
+        months.push(String(m).padStart(2, '0') + '/' + y);
+      }
+    }
+    const bm = (obj) => {
+      const o = {};
+      Object.keys(obj).forEach(k => { o[k] = { total: obj[k], count: 1 }; });
+      return o;
+    };
+    const raw = [
+      { key: 'C1', name: 'บริษัท กรีน เฮ้าส์ จำกัด',  byMonth: bm({ '05/2024': 90000, '03/2025': 120000, '03/2026': 190000 }) },
+      { key: 'C2', name: 'บริษัท สินแพทย์ จำกัด',     byMonth: bm({ '04/2025': 150000, '04/2026': 60000 }) },
+      { key: 'C3', name: 'บริษัท ใหม่ล่าสุด จำกัด',    byMonth: bm({ '02/2026': 80000, '06/2026': 45000 }) },
+      { key: 'C4', name: 'บริษัท กลับมาซื้อ จำกัด',    byMonth: bm({ '07/2024': 70000, '05/2026': 52000 }) },
+      { key: 'C5', name: 'บริษัท หายไปแล้ว จำกัด',     byMonth: bm({ '06/2025': 110000 }) },
+    ];
+    const customers = raw.map(c => {
+      let total = 0, orderCount = 0, lastMonth = null;
+      months.forEach(mk => { const e = c.byMonth[mk]; if (e && e.total > 0) { total += e.total; orderCount += e.count; lastMonth = mk; } });
+      return Object.assign({}, c, { total, orderCount, lastMonth, products: [{ sku: 'VAS001', name: 'แจกันแก้วใส', qty: 12, rev: 3600 }] });
+    }).sort((a, b) => b.total - a.total);
+    window.__DMJ_CUSTOMER_FIXTURE = {
+      months, customers,
+      grandTotal: customers.reduce((s, c) => s + c.total, 0),
+      generatedAt: new Date().toISOString(),
+    };
+  })();
 })();

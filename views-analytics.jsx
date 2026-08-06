@@ -8161,6 +8161,9 @@ function CustomerView({ data }) {
   const [threshold, setThreshold] = uS(15000);
   const [selMonth, setSelMonth] = uS("");
   const [expandedKey, setExpandedKey] = uS(null);
+  const [yoyYear, setYoyYear] = uS(null);
+  const [yoyMode, setYoyMode] = uS("same");  // same = เทียบช่วงเดียวกันของสองปี · full = ทั้งปีปฏิทิน
+  const [yoyList, setYoyList] = uS("");      // รายชื่อที่กางอยู่: "" | new | up | down | back | lost
   const SILENT_GAP = 2; // หาย ≥2 เดือน = เงียบ
 
   const load = async () => {
@@ -8199,6 +8202,109 @@ function CustomerView({ data }) {
     const i = months.indexOf(selMonth);
     return i > 0 ? months[i - 1] : null;
   })();
+
+  // ── 📊 ลูกค้าใหม่ vs ลูกค้าเก่า (เทียบปีต่อปี) ────────────────────────────────
+  // คิดฝั่ง frontend ทั้งหมดจาก customers[].byMonth ที่ backend ส่งมาอยู่แล้ว — ไม่ต้องแก้ GAS
+  // "ใหม่" = เดือนแรกที่มียอดซื้อ (ทั้งประวัติที่มีข้อมูล) อยู่ในปีที่เลือก
+  const yearsAvail = uM(() => {
+    const s = {};
+    months.forEach(mk => { const y = Number(String(mk).split("/")[1]); if (y) s[y] = true; });
+    return Object.keys(s).map(Number).sort((a, b) => a - b);
+  }, [months]);
+  uE(() => {
+    if (yearsAvail.length && (yoyYear == null || yearsAvail.indexOf(yoyYear) < 0)) setYoyYear(yearsAvail[yearsAvail.length - 1]);
+  }, [yearsAvail]);
+
+  const THAI_MON = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+
+  const yoy = uM(() => {
+    if (!yoyYear || !customers.length || !months.length) return null;
+    const prevYear = yoyYear - 1;
+    const now = new Date();
+
+    // เดือนสุดท้ายที่นับ — โหมด "เทียบช่วงเดียวกัน" ต้องตัด **เดือนปัจจุบันที่ยังไม่จบ** ออกเสมอ
+    // (กติกาข้อ 1 ใน CLAUDE.md — เอาเดือนที่ยังไม่จบไปเทียบทั้งเดือน = ปีนี้ดูหดทุกครั้ง)
+    let endM = 12;
+    if (yoyMode === "same") {
+      const inYear = months.filter(mk => Number(String(mk).split("/")[1]) === yoyYear)
+                           .map(mk => Number(String(mk).split("/")[0]));
+      let last = inYear.length ? Math.max.apply(null, inYear) : 0;
+      if (yoyYear === now.getFullYear() && last >= now.getMonth() + 1) last = now.getMonth();
+      endM = last;
+    }
+    if (endM < 1) return { tooEarly: true, prevYear, endM: 0 };
+
+    const inWindow = (c, year) => {
+      let total = 0, count = 0;
+      for (let m = 1; m <= endM; m++) {
+        const e = c.byMonth && c.byMonth[String(m).padStart(2, "0") + "/" + year];
+        if (e) { total += Number(e.total) || 0; count += Number(e.count) || 0; }
+      }
+      return { total, count };
+    };
+    // ปีของเดือนแรกที่ลูกค้ารายนี้เคยมียอดซื้อ (months เรียงเก่า→ใหม่) — ดูทั้งประวัติ ไม่จำกัดหน้าต่าง
+    const firstYear = (c) => {
+      for (let i = 0; i < months.length; i++) {
+        const e = c.byMonth && c.byMonth[months[i]];
+        if (e && (Number(e.total) || 0) > 0) return Number(String(months[i]).split("/")[1]);
+      }
+      return null;
+    };
+
+    const rows = [];
+    customers.forEach(c => {
+      const cur = inWindow(c, yoyYear), prv = inWindow(c, prevYear);
+      if (cur.total <= 0 && prv.total <= 0) return;
+      const deltaPct = prv.total > 0 ? (cur.total - prv.total) / prv.total * 100 : null;
+      let bucket;
+      if (cur.total <= 0) bucket = "lost";                          // ปีที่แล้วซื้อ ปีนี้ยังไม่ซื้อเลย
+      else if (firstYear(c) === yoyYear) bucket = "new";            // ซื้อครั้งแรกในปีนี้
+      else if (prv.total <= 0) bucket = "back";                     // ลูกค้าเก่า ปีที่แล้วเงียบ ปีนี้กลับมา
+      else if (deltaPct > 5) bucket = "up";
+      else if (deltaPct < -5) bucket = "down";
+      else bucket = "flat";
+      rows.push({ key: c.key, name: c.name, products: c.products, cur, prv, deltaPct, bucket });
+    });
+
+    const sum = (arr, f) => arr.reduce((s, r) => s + f(r), 0);
+    const byBucket = (b) => rows.filter(r => r.bucket === b).sort((a, x) => x.cur.total - a.cur.total);
+    const newRows  = byBucket("new");
+    const backRows = byBucket("back");
+    const upRows   = byBucket("up");
+    const downRows = byBucket("down");
+    const flatRows = byBucket("flat");
+    const lostRows = rows.filter(r => r.bucket === "lost").sort((a, x) => x.prv.total - a.prv.total);
+
+    const activeRows = rows.filter(r => r.cur.total > 0);
+    const oldRows    = activeRows.filter(r => r.bucket !== "new");
+    const curTotal   = sum(activeRows, r => r.cur.total);
+    const bothRows   = upRows.concat(downRows, flatRows);   // เก่าที่ซื้อทั้งสองปี = เทียบกันได้ตรง ๆ
+    const bothCur    = sum(bothRows, r => r.cur.total);
+    const bothPrv    = sum(bothRows, r => r.prv.total);
+
+    // เตือนเมื่อฐานเทียบไม่น่าเชื่อถือ — ไม่บอกแล้วเจ้าของจะอ่านตัวเลขผิดโดยไม่มีอะไรค้าน
+    const warns = [];
+    const firstDataYear  = yearsAvail[0];
+    const firstDataMonth = Number(String(months[0]).split("/")[0]);
+    if (yoyYear <= firstDataYear) warns.push(`ปี ${yoyYear} เป็นปีแรกที่มีข้อมูล — ลูกค้าเกือบทุกรายจะถูกนับเป็น "ใหม่" ทั้งที่อาจซื้อมาก่อนแล้ว`);
+    if (prevYear < firstDataYear) warns.push(`ไม่มีข้อมูลปี ${prevYear} เลย — ตัวเลข "เทียบปีที่แล้ว" ยังเทียบไม่ได้`);
+    else if (prevYear === firstDataYear && firstDataMonth > 1) warns.push(`ข้อมูลเริ่มที่ ${months[0]} — ปี ${prevYear} ขาดเดือน ${THAI_MON[0]}–${THAI_MON[firstDataMonth - 2]} ฐานเทียบจึงต่ำกว่าจริง`);
+    if (yoyMode === "full" && yoyYear === now.getFullYear()) warns.push(`โหมด "ทั้งปี" กำลังเอาปี ${yoyYear} ที่ยังไม่จบไปเทียบกับปี ${prevYear} เต็มปี — ปีนี้จะดูหดเสมอ`);
+
+    return {
+      prevYear, endM, warns,
+      newRows, backRows, upRows, downRows, flatRows, lostRows, oldRows, activeRows,
+      nActive: activeRows.length, curTotal,
+      nNew: newRows.length, newRev: sum(newRows, r => r.cur.total),
+      nOld: oldRows.length,  oldRev: sum(oldRows, r => r.cur.total),
+      bothCur, bothPrv,
+      bothDeltaPct: bothPrv > 0 ? (bothCur - bothPrv) / bothPrv * 100 : null,
+      lostRev: sum(lostRows, r => r.prv.total),
+    };
+  }, [customers, months, yoyYear, yoyMode, yearsAvail]);
+
+  const pctOf = (n, d) => (d > 0 ? (n / d * 100) : 0);
+  const signed = (n, digits) => (n > 0 ? "+" : "") + (Number(n) || 0).toFixed(digits == null ? 1 : digits);
 
   // Section A: ลูกค้ายอด ≥ threshold ในเดือนที่เลือก + แนวโน้มเทียบเดือนก่อน (โต/หด)
   const monthRows = customers
@@ -8301,6 +8407,142 @@ function CustomerView({ data }) {
         </div>
       ) : (
         <>
+          {/* ── 📊 ลูกค้าใหม่ vs ลูกค้าเก่า (เทียบปีต่อปี) ── */}
+          {yoy && (() => {
+            const cardBox = { flex: "1 1 200px", minWidth: 0, border: "1px solid var(--bdr)", borderRadius: 12, padding: "10px 12px", background: "var(--paper)" };
+            const listBtn = (id, label, n, color) => (
+              <button className="btn ghost" onClick={() => setYoyList(prev => prev === id ? "" : id)} disabled={!n}
+                      style={{ fontSize: 12, padding: "4px 10px", borderRadius: 999, color: n ? color : "var(--muted)", fontWeight: 700, opacity: n ? 1 : .5 }}>
+                {label} {n} ราย {n ? (yoyList === id ? "▾" : "▸") : ""}
+              </button>
+            );
+            const LISTS = {
+              new:  { title: "🆕 ลูกค้าใหม่ปีนี้", rows: yoy.newRows,  showPrev: false },
+              back: { title: "🔙 ลูกค้าเก่าที่กลับมาซื้อ (ปีที่แล้วเงียบ)", rows: yoy.backRows, showPrev: false },
+              up:   { title: "▲ ลูกค้าเก่าที่ซื้อเพิ่ม", rows: yoy.upRows,   showPrev: true },
+              down: { title: "▼ ลูกค้าเก่าที่ซื้อลดลง", rows: yoy.downRows, showPrev: true },
+              lost: { title: "❌ ปีที่แล้วซื้อ ปีนี้ยังไม่ซื้อเลย", rows: yoy.lostRows, showPrev: true },
+            };
+            const open = LISTS[yoyList];
+            return (
+              <div style={{ border: "1px solid var(--bdr)", borderRadius: 14, padding: mobile ? 12 : 16, marginBottom: 22, background: "var(--g-50)" }}>
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: "var(--g-700)" }}>📊 ลูกค้าใหม่ vs ลูกค้าเก่า — เทียบปีต่อปี</div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <select value={yoyYear || ""} onChange={e => { setYoyYear(Number(e.target.value)); setYoyList(""); }}
+                            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--bdr)", fontSize: 14, background: "var(--paper)", color: "var(--text)" }}>
+                      {yearsAvail.slice().reverse().map(y => <option key={y} value={y}>ปี {y}</option>)}
+                    </select>
+                    <Seg value={yoyMode} onChange={v => { setYoyMode(v); setYoyList(""); }}
+                         options={[{ value: "same", label: "เทียบช่วงเดียวกัน" }, { value: "full", label: "ทั้งปี" }]}/>
+                  </div>
+                </div>
+
+                {yoy.tooEarly ? (
+                  <div style={{ fontSize: 13, color: "var(--muted)" }}>
+                    ปี {yoyYear} ยังไม่มีเดือนที่จบครบสักเดือน — ยังเทียบไม่ได้ (ลองสลับเป็น "ทั้งปี" หรือเลือกปีก่อนหน้า)
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10, lineHeight: 1.6 }}>
+                      เทียบ <b>{THAI_MON[0]}–{THAI_MON[yoy.endM - 1]} ปี {yoyYear}</b> กับ <b>ช่วงเดียวกันของปี {yoy.prevYear}</b>
+                      {yoyMode === "same" && <> · ตัดเดือนที่ยังไม่จบออกแล้ว</>}
+                      {" "}· นับเฉพาะลูกค้าที่ระบุตัวตนได้ (มีชื่อ/รหัสในบิล)
+                    </div>
+                    {yoy.warns.map((w, i) => (
+                      <div key={i} style={{ background: "#fffbe6", border: "1px solid #f0c000", borderRadius: 8, padding: "7px 10px", color: "#8a6100", fontSize: 12, marginBottom: 8, lineHeight: 1.5 }}>⚠️ {w}</div>
+                    ))}
+
+                    {/* แถวการ์ด: ใหม่ / เก่า */}
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+                      <div style={cardBox}>
+                        <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 700 }}>🆕 ลูกค้าใหม่</div>
+                        <div style={{ fontSize: 22, fontWeight: 800, color: "#1565c0" }}>{yoy.nNew} <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)" }}>ราย · {pctOf(yoy.nNew, yoy.nActive).toFixed(0)}%</span></div>
+                        <div style={{ fontSize: 12, color: "var(--muted)" }}>ยอด {baht(yoy.newRev)} ฿ · {pctOf(yoy.newRev, yoy.curTotal).toFixed(0)}% ของยอดปีนี้</div>
+                      </div>
+                      <div style={cardBox}>
+                        <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 700 }}>🔁 ลูกค้าเก่า</div>
+                        <div style={{ fontSize: 22, fontWeight: 800, color: "var(--g-700)" }}>{yoy.nOld} <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)" }}>ราย · {pctOf(yoy.nOld, yoy.nActive).toFixed(0)}%</span></div>
+                        <div style={{ fontSize: 12, color: "var(--muted)" }}>ยอด {baht(yoy.oldRev)} ฿ · {pctOf(yoy.oldRev, yoy.curTotal).toFixed(0)}% ของยอดปีนี้</div>
+                      </div>
+                      <div style={cardBox}>
+                        <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 700 }}>👥 ซื้อในช่วงนี้ทั้งหมด</div>
+                        <div style={{ fontSize: 22, fontWeight: 800, color: "var(--text)" }}>{yoy.nActive} <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)" }}>ราย</span></div>
+                        <div style={{ fontSize: 12, color: "var(--muted)" }}>ยอดรวม {baht(yoy.curTotal)} ฿</div>
+                      </div>
+                    </div>
+
+                    {/* ลูกค้าเก่า ซื้อเพิ่ม/ลด */}
+                    <div style={{ border: "1px solid var(--bdr)", borderRadius: 12, padding: "10px 12px", background: "var(--paper)" }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: "var(--g-700)", marginBottom: 6 }}>ลูกค้าเก่า — ซื้อเพิ่มหรือลดลง (เทียบช่วงเดียวกันปี {yoy.prevYear})</div>
+                      {yoy.bothDeltaPct == null ? (
+                        <div style={{ fontSize: 12, color: "var(--muted)" }}>ยังไม่มีลูกค้าเก่าที่ซื้อทั้งสองปี — เทียบไม่ได้</div>
+                      ) : (
+                        <div style={{ fontSize: 13, color: "var(--text)", lineHeight: 1.8, marginBottom: 6 }}>
+                          ยอดรวมของลูกค้าเก่าที่ซื้อ<b>ทั้งสองปี</b> ({yoy.upRows.length + yoy.downRows.length + yoy.flatRows.length} ราย):{" "}
+                          {baht(yoy.bothPrv)} → <b>{baht(yoy.bothCur)} ฿</b>{" "}
+                          <span style={{ fontWeight: 800, color: yoy.bothDeltaPct > 0 ? "#16a34a" : yoy.bothDeltaPct < 0 ? "#dc2626" : "var(--muted)" }}>
+                            {yoy.bothDeltaPct > 0 ? "▲" : yoy.bothDeltaPct < 0 ? "▼" : "▬"} {signed(yoy.bothDeltaPct)}%
+                          </span>
+                        </div>
+                      )}
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {listBtn("up", "▲ ซื้อเพิ่ม", yoy.upRows.length, "#16a34a")}
+                        {listBtn("down", "▼ ซื้อลดลง", yoy.downRows.length, "#dc2626")}
+                        <span style={{ fontSize: 12, color: "var(--muted)", alignSelf: "center" }}>▬ ใกล้เคียง {yoy.flatRows.length} ราย</span>
+                        {listBtn("back", "🔙 กลับมาซื้อ", yoy.backRows.length, "#7b1fa2")}
+                        {listBtn("new", "🆕 ใหม่", yoy.nNew, "#1565c0")}
+                        {listBtn("lost", "❌ หายไป", yoy.lostRows.length, "#e65100")}
+                      </div>
+                      {yoy.lostRows.length > 0 && (
+                        <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>
+                          ลูกค้าที่หายไปเคยซื้อรวม {baht(yoy.lostRev)} ฿ ในช่วงเดียวกันปี {yoy.prevYear}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* รายชื่อที่กางอยู่ */}
+                    {open && open.rows.length > 0 && (
+                      <div style={{ marginTop: 10, border: "1px solid var(--bdr)", borderRadius: 12, overflowX: "auto", background: "var(--paper)" }}>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: "var(--g-700)", padding: "8px 12px", borderBottom: "1px solid var(--bdr)" }}>
+                          {open.title} ({open.rows.length} ราย)
+                        </div>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                          <thead>
+                            <tr style={{ background: "var(--g-50)", borderBottom: "1px solid var(--bdr)" }}>
+                              <th style={{ padding: "8px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>ลูกค้า</th>
+                              {open.showPrev && <th style={{ padding: "8px 8px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>ปี {yoy.prevYear}</th>}
+                              <th style={{ padding: "8px 8px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>ปี {yoyYear}</th>
+                              {open.showPrev && <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>เปลี่ยน</th>}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {open.rows.slice(0, 50).map((r, i) => (
+                              <tr key={r.key || i} style={{ borderBottom: "1px solid var(--bdr)", background: i % 2 ? "var(--g-50)" : "var(--paper)" }}>
+                                <td style={{ padding: "7px 12px", fontWeight: 600, color: "var(--text)" }}>{r.name}</td>
+                                {open.showPrev && <td style={{ padding: "7px 8px", textAlign: "right", color: "var(--muted)", whiteSpace: "nowrap" }}>{baht(r.prv.total)}</td>}
+                                <td style={{ padding: "7px 8px", textAlign: "right", fontWeight: 800, color: "var(--g-700)", whiteSpace: "nowrap" }}>{baht(r.cur.total)}</td>
+                                {open.showPrev && (
+                                  <td style={{ padding: "7px 12px", textAlign: "right", whiteSpace: "nowrap", fontWeight: 700,
+                                               color: r.deltaPct == null ? "var(--muted)" : r.deltaPct > 0 ? "#16a34a" : r.deltaPct < 0 ? "#dc2626" : "var(--muted)" }}>
+                                    {r.deltaPct == null ? "—" : signed(r.deltaPct, 0) + "%"}
+                                  </td>
+                                )}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {open.rows.length > 50 && (
+                          <div style={{ fontSize: 11, color: "var(--muted)", padding: "6px 12px" }}>แสดง 50 รายแรกจาก {open.rows.length} ราย (เรียงตามยอด)</div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })()}
+
           {/* controls */}
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 14 }}>
             <label style={{ fontSize: 12, color: "var(--muted)" }}>
