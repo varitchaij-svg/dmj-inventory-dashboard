@@ -380,6 +380,52 @@ describe('เครื่องมือตรวจ/ซ่อมเมื่อ
     expect(f).toMatch(/repairZortTransferLog\("' \+ t\.number \+ '"\)"? จะเติมเฉพาะ SKU ที่ขาด|เติมเฉพาะ SKU ที่ขาด/);
   });
 
+  // ที่มา (ส.ค. 2026): 52 SKU ของ TF-202608035 ที่หายไปแล้วถูก repairZortTransferLog เติม
+  // กลับเป็น "รอรับ" เสมอ — แต่บางตัวพนักงานอาจเคยกดรับไปแล้วก่อนแถวจะหาย confirmShipmentReceive
+  // เขียน Audit Log ทุกครั้งที่กดรับจริง (action="รับสินค้า") ใช้ร่องรอยนี้กู้สถานะกลับได้
+  describe('กู้สถานะ "รับของแล้ว" จาก Audit Log', () => {
+    it('matchTransferReceiptsFromAudit_ ต้องไม่แตะแถวที่มีสถานะรับอยู่แล้ว (COL_SHIP_RECVAT ไม่ว่าง)', () => {
+      const f = grab(SRC, /function matchTransferReceiptsFromAudit_\(ss, t\) \{[\s\S]*?\n\}/);
+      expect(f).toMatch(/if \(rowInfo\.recvAt\) \{ out\[sku\] = \{ matched: false, reason: 'already_set'/);
+    });
+
+    it('matchTransferReceiptsFromAudit_ ต้องเทียบจำนวนที่ส่ง (sentQty) ก่อนจับคู่ ไม่เดาเมื่อชนกัน', () => {
+      const f = grab(SRC, /function matchTransferReceiptsFromAudit_\(ss, t\) \{[\s\S]*?\n\}/);
+      expect(f).toMatch(/e\.sentQty === skuSet\[sku\]/);
+      expect(f).toMatch(/entries\.length > 1.*ambiguous/);
+    });
+
+    it('auditReceiptEntriesForSkus_ อ่านเฉพาะ action="รับสินค้า" และกรองตามเวลาที่โอน (กันจับคู่ข้ามรอบเก่า)', () => {
+      const f = grab(SRC, /function auditReceiptEntriesForSkus_\(ss, skuSet, sinceMs\) \{[\s\S]*?\n\}/);
+      expect(f).toMatch(/'รับสินค้า'/);
+      expect(f).toMatch(/when < sinceMs/);
+      expect(f).toMatch(/\^\(รับครบ\|รับไม่ครบ\)/);
+    });
+
+    it('applyTransferReceiptsFromAudit เขียนเฉพาะ SKU ที่จับคู่ได้ชัดเจน (matched===true) เท่านั้น', () => {
+      const f = grab(SRC, /function applyTransferReceiptsFromAudit\(number\) \{[\s\S]*?\n\}/);
+      expect(f).toMatch(/m\[sku\]\.matched/);
+      expect(f).toMatch(/COL_SHIP_RECVQTY/);
+      expect(f).toMatch(/COL_SHIP_RECVSTATUS/);
+      expect(f).toMatch(/COL_SHIP_RECVAT/);
+      expect(f).toMatch(/COL_SHIP_RECVBY/);
+      expect(f).toMatch(/LockService\.getScriptLock\(\)/);
+      expect(f).not.toMatch(/COL_PROD_QTYWH|COL_PROD_QTYFS|AddTransfer|pushStockToZort_/);
+    });
+
+    it('previewTransferReceiptsFromAudit อ่านอย่างเดียว — ห้ามเขียน', () => {
+      const f = grab(SRC, /function previewTransferReceiptsFromAudit\(number\) \{[\s\S]*?\n\}/);
+      expect(f).not.toMatch(/setValue|setValues/);
+    });
+
+    it('doGet มี action=previewTransferReceipts และ applyTransferReceipts', () => {
+      expect(SRC).toMatch(/e\.parameter\.action === 'previewTransferReceipts'/);
+      expect(SRC).toMatch(/e\.parameter\.action === 'applyTransferReceipts'/);
+      expect(SRC).toMatch(/function previewTransferReceiptsHandler_\(number\) \{/);
+      expect(SRC).toMatch(/function applyTransferReceiptsHandler_\(number\) \{/);
+    });
+  });
+
   it('applyZortTransferStock ต้องปฏิเสธเมื่อหักไปแล้ว และห้ามยิง ZORT ซ้ำ', () => {
     const f = grab(SRC, /function applyZortTransferStock\(number\) \{[\s\S]*?\n\}\n\n\/\/ doGet action=zortTransfer/);
     expect(f).toMatch(/auditTransferSkusOnDate_/);

@@ -2385,6 +2385,14 @@ function doGet(e) {
     if (e && e.parameter && e.parameter.action === 'repairTransferLog') {
       return repairTransferLogHandler_(String(e.parameter.number || '').trim());
     }
+    // กู้สถานะ "รับของแล้ว" จาก Audit Log ผ่าน URL (ดู previewTransferReceiptsFromAudit /
+    // applyTransferReceiptsFromAudit — ตัวนี้แค่ห่อให้เรียกได้เมื่อ GAS editor ใช้ไม่ได้)
+    if (e && e.parameter && e.parameter.action === 'previewTransferReceipts') {
+      return previewTransferReceiptsHandler_(String(e.parameter.number || '').trim());
+    }
+    if (e && e.parameter && e.parameter.action === 'applyTransferReceipts') {
+      return applyTransferReceiptsHandler_(String(e.parameter.number || '').trim());
+    }
     // ตรวจ PIN เจ้าของฝั่ง server (PIN ไม่อยู่ใน source โค้ด frontend)
     // ตั้งค่าใน Script Property ชื่อ OWNER_PIN; ถ้าไม่ตั้ง ใช้ค่า default 'DMJ' (backward compatible)
     if (e && e.parameter && e.parameter.action === 'verifyPin') {
@@ -3356,6 +3364,140 @@ function repairZortTransferLog(number) {
   return { ok: true, rows: missing.length, alreadyHad: log.rows };
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// ── กู้สถานะ "รับของแล้ว" จาก Audit Log ──────────────────────────────────────
+// ที่มา (ส.ค. 2026): TF-202608035 มี 52/75 แถวหายจากชีตโอน แล้วถูกเติมกลับด้วย
+// repairZortTransferLog() จาก ZORT — แต่ตัวนั้นเติมเป็น "รอรับ" เสมอ (ไม่รู้ว่าใครเคยกดรับ
+// ไปแล้วบ้างก่อนที่แถวจะหาย) confirmShipmentReceive เขียน Audit Log ทุกครั้งที่กดรับจริง
+// (action="รับสินค้า" resource=sku detail="รับครบ N/M"/"รับไม่ครบ N/M") → ใช้ร่องรอยนี้กู้
+// สถานะกลับได้โดยไม่ต้องเดา ตราบใดที่จับคู่ SKU+จำนวนที่ส่งชัดเจนไม่ชนกัน
+// ⚠️ แก้เฉพาะแถวที่ยังเป็น "รอรับ" (คอลัมน์ M ว่าง) เท่านั้น — แถวที่มีสถานะอยู่แล้วไม่แตะ
+//    กันทับของจริงที่พนักงานเพิ่งกดรับหลัง repair
+// ════════════════════════════════════════════════════════════════════════════
+const AUDIT_RECEIPT_SCAN_ROWS = 6000;
+
+// หา entry "รับสินค้า" ใน Audit Log ของ SKU ชุดนี้ ตั้งแต่เวลา sinceMs เป็นต้นไป
+function auditReceiptEntriesForSkus_(ss, skuSet, sinceMs) {
+  const sh = ss.getSheetByName(SHEET_AUDIT);
+  const out = {};
+  if (!sh) return out;
+  const last = sh.getLastRow();
+  if (last < 2) return out;
+  const from = Math.max(2, last - AUDIT_RECEIPT_SCAN_ROWS + 1);
+  const vals = sh.getRange(from, 1, last - from + 1, 5).getValues();
+  vals.forEach(function (r) {
+    if (String(r[2] || '') !== 'รับสินค้า') return;
+    const sku = String(r[3] || '').trim().toUpperCase();
+    if (!skuSet[sku]) return;
+    const when = r[0] instanceof Date ? r[0].getTime() : null;
+    if (when == null || when < sinceMs) return;
+    const m = String(r[4] || '').match(/^(รับครบ|รับไม่ครบ)\s+(\d+)\/(\d+)$/);
+    if (!m) return;
+    (out[sku] = out[sku] || []).push({
+      when: when, status: m[1], recv: Number(m[2]), sentQty: Number(m[3]), actor: String(r[1] || ''),
+    });
+  });
+  return out;
+}
+
+// จับคู่ต่อ SKU: { matched:true, rowNum, entry } หรือ { matched:false, reason, rowNum? }
+// reason: 'no_row' (ยังไม่มีแถวในชีตโอน — รัน repairZortTransferLog ก่อน) ·
+//         'already_set' (มีสถานะอยู่แล้ว ไม่แตะ) · 'no_audit' (ไม่มีร่องรอยกดรับ) ·
+//         'ambiguous' (audit จับคู่จำนวนได้มากกว่า 1 รายการ ไม่เดา)
+function matchTransferReceiptsFromAudit_(ss, t) {
+  const skuSet = {};
+  t.items.forEach(function (it) { skuSet[it.sku] = it.qty; });
+  const sinceMs = parseShipDayMs_(t.date) || 0;
+  const found = auditReceiptEntriesForSkus_(ss, skuSet, sinceMs);
+
+  const sheet = ss.getSheetByName(SHEET_TRANSFERS);
+  const data = sheet ? sheet.getDataRange().getValues() : [];
+  const want = String(t.number).trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const rowBySku = {};
+  for (let i = 2; i < data.length; i++) {
+    const ref = String(data[i][COL_SHIP_REF - 1] || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (ref !== want) continue;
+    const sku = String(data[i][COL_SHIP_SKU - 1] || '').trim().toUpperCase();
+    if (sku) rowBySku[sku] = { rowNum: i + 1, recvAt: String(data[i][COL_SHIP_RECVAT - 1] || '').trim() };
+  }
+
+  const out = {};
+  Object.keys(skuSet).forEach(function (sku) {
+    const rowInfo = rowBySku[sku];
+    if (!rowInfo) { out[sku] = { matched: false, reason: 'no_row' }; return; }
+    if (rowInfo.recvAt) { out[sku] = { matched: false, reason: 'already_set', rowNum: rowInfo.rowNum }; return; }
+    const entries = (found[sku] || []).filter(function (e) { return e.sentQty === skuSet[sku]; });
+    if (!entries.length) { out[sku] = { matched: false, reason: 'no_audit', rowNum: rowInfo.rowNum }; return; }
+    if (entries.length > 1) { out[sku] = { matched: false, reason: 'ambiguous', rowNum: rowInfo.rowNum, count: entries.length }; return; }
+    out[sku] = { matched: true, rowNum: rowInfo.rowNum, entry: entries[0] };
+  });
+  return out;
+}
+
+// อ่านอย่างเดียว — ดูก่อนว่าจะเติมอะไรบ้างโดยไม่เขียนอะไรเลย
+function previewTransferReceiptsFromAudit(number) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const t = zortFindTransfer_(number);
+  if (!t) { Logger.log('❌ ไม่พบเลขที่นี้ใน ZORT'); return { ok: false }; }
+  const m = matchTransferReceiptsFromAudit_(ss, t);
+  const toApply = [], ambiguousSkus = [], noRowSkus = [];
+  let already = 0, none = 0;
+  Object.keys(m).forEach(function (sku) {
+    const r = m[sku];
+    if (r.matched) {
+      toApply.push({ sku: sku, status: r.entry.status, recv: r.entry.recv, sentQty: r.entry.sentQty,
+                      actor: r.entry.actor, when: new Date(r.entry.when).toLocaleString('th-TH') });
+    } else if (r.reason === 'already_set') { already++; }
+    else if (r.reason === 'no_audit') { none++; }
+    else if (r.reason === 'ambiguous') { ambiguousSkus.push(sku); }
+    else if (r.reason === 'no_row') { noRowSkus.push(sku); }
+  });
+  toApply.forEach(function (x) {
+    Logger.log('  ✅ ' + x.sku + ' → ' + x.status + ' ' + x.recv + '/' + x.sentQty + ' โดย ' + x.actor + ' (' + x.when + ')');
+  });
+  ambiguousSkus.forEach(function (s) { Logger.log('  ❓ ' + s + ' — audit จับคู่จำนวนได้มากกว่า 1 รายการ ต้องเช็คเอง'); });
+  noRowSkus.forEach(function (s) { Logger.log('  ⚠️ ' + s + ' — ไม่มีแถวในชีตโอน (รัน repairZortTransferLog ก่อน)'); });
+  Logger.log('── สรุป: จะเติมสถานะรับของ ' + toApply.length + ' SKU · มีสถานะอยู่แล้ว ' + already +
+             ' · ยังไม่มีร่องรอยรับของ ' + none + ' · ไม่ชัดเจน ' + ambiguousSkus.length +
+             ' · ไม่มีแถว ' + noRowSkus.length + ' ──');
+  if (toApply.length) Logger.log('รัน applyTransferReceiptsFromAudit("' + number + '") เพื่อเขียนจริง');
+  return { ok: true, apply: toApply.length, already: already, none: none,
+           ambiguous: ambiguousSkus.length, noRow: noRowSkus.length,
+           toApply: toApply, ambiguousSkus: ambiguousSkus, noRowSkus: noRowSkus };
+}
+
+// เขียนจริง — เฉพาะ SKU ที่จับคู่ได้ชัดเจนเท่านั้น (ดู matchTransferReceiptsFromAudit_)
+function applyTransferReceiptsFromAudit(number) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const t = zortFindTransfer_(number);
+  if (!t) { Logger.log('❌ ไม่พบเลขที่นี้ใน ZORT'); return { ok: false }; }
+  const m = matchTransferReceiptsFromAudit_(ss, t);
+  const toApply = Object.keys(m).filter(function (sku) { return m[sku].matched; });
+  if (!toApply.length) {
+    Logger.log('⏭️ ไม่มีอะไรต้องเติม (รัน previewTransferReceiptsFromAudit ก่อนเพื่อดูสาเหตุ)');
+    return { ok: true, applied: 0 };
+  }
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) { Logger.log('🛑 ระบบกำลังบันทึกข้อมูลอื่นอยู่ ลองใหม่'); return { ok: false }; }
+  try {
+    const sheet = ss.getSheetByName(SHEET_TRANSFERS);
+    toApply.forEach(function (sku) {
+      const r = m[sku];
+      const nowStr = Utilities.formatDate(new Date(r.entry.when), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm');
+      sheet.getRange(r.rowNum, COL_SHIP_RECVQTY).setValue(r.entry.recv);
+      sheet.getRange(r.rowNum, COL_SHIP_RECVSTATUS).setValue(r.entry.status);
+      sheet.getRange(r.rowNum, COL_SHIP_RECVAT).setValue(nowStr);
+      sheet.getRange(r.rowNum, COL_SHIP_RECVBY).setValue(r.entry.actor || '');
+    });
+    Logger.log('✅ เติมสถานะรับของกลับ ' + toApply.length + ' SKU จาก Audit Log: ' + toApply.join(', '));
+    return { ok: true, applied: toApply.length, skus: toApply };
+  } finally {
+    try { invalidateCache_(); } catch (e) {}
+    lock.releaseLock();
+  }
+}
+
 // ── ซ่อม "สต็อกไม่ถูกหัก" ตามเอกสารโอนใน ZORT (ไม่ยิง ZORT ซ้ำเด็ดขาด) ────────
 // ⚠️ ใช้เมื่อ checkZortTransfer บอกว่าไม่มีทั้งชีตโอนและ audit เท่านั้น
 //    ถ้ามี audit อยู่แล้ว = หักไปแล้ว รันซ้ำจะหักสองเด้ง → ฟังก์ชันนี้จะปฏิเสธเอง
@@ -3449,6 +3591,28 @@ function repairTransferLogHandler_(number) {
     return ContentService.createTextOutput(JSON.stringify(r)).setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
     Logger.log('repairTransferLogHandler_ error: ' + err);
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function previewTransferReceiptsHandler_(number) {
+  try {
+    const r = previewTransferReceiptsFromAudit(number);
+    return ContentService.createTextOutput(JSON.stringify(r)).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    Logger.log('previewTransferReceiptsHandler_ error: ' + err);
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function applyTransferReceiptsHandler_(number) {
+  try {
+    const r = applyTransferReceiptsFromAudit(number);
+    return ContentService.createTextOutput(JSON.stringify(r)).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    Logger.log('applyTransferReceiptsHandler_ error: ' + err);
     return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
       .setMimeType(ContentService.MimeType.JSON);
   }
