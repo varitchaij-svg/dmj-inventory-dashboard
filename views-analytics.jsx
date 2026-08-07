@@ -10838,9 +10838,11 @@ function TrackBatchCard({ batch, productMap, defaultOpen }) {
               {age != null && !done && <span style={{color:ageTone, fontWeight:700}}> · ⏳ ค้าง {age === 0 ? "วันนี้" : age + " วัน"}</span>}
             </div>
           </div>
+          {/* ⚠️ เดิมเขียนว่า "0/1 ใบ" ซึ่งชนกับ "2 ใบโอน" ข้างบน — คำว่า "ใบ" แปลได้ 2 อย่าง
+              ในหน้าเดียว · ตรงนี้คือ "รายการสินค้าในใบโอน" ต้องใช้คำว่า "รายการ" เท่านั้น */}
           <div style={{textAlign:"right", whiteSpace:"nowrap"}}>
             <div style={{fontSize:15, fontWeight:800, color: done ? "#2f9e56" : "#c99a1e", lineHeight:1.2}}>
-              {t.recvRows}/{t.rows} <span style={{fontSize:11, fontWeight:600}}>ใบ</span>
+              รับแล้ว {t.recvRows}/{t.rows} <span style={{fontSize:11, fontWeight:600}}>รายการ</span>
             </div>
             <div style={{fontSize:11, color:"var(--muted)", fontWeight:600}}>{open ? "▲ ย่อ" : "▼ ดูรายตัว"}</div>
           </div>
@@ -10850,11 +10852,12 @@ function TrackBatchCard({ batch, productMap, defaultOpen }) {
         <div style={{marginTop:8, height:6, background:"#eef1f4", borderRadius:99, overflow:"hidden"}}>
           <div style={{width:barPct + "%", height:"100%", background: hasShort ? "#d23f3f" : "#2f9e56"}}/>
         </div>
+        {/* ทุกตัวเลขในบรรทัดนี้เป็น "ชิ้น" — ติดหน่วยให้ครบ ไม่ให้ชนกับ "รายการ" ด้านบน */}
         <div style={{marginTop:5, fontSize:12, display:"flex", flexWrap:"wrap", gap:"2px 12px"}}>
           <span>ส่ง <b>{fmtN(t.sentPcs)}</b> ชิ้น</span>
-          <span style={{color:"#2f9e56", fontWeight:700}}>รับ {fmtN(t.recvPcs)}</span>
-          {t.waitPcs > 0 && <span style={{color:"#c99a1e", fontWeight:700}}>รอรับ {fmtN(t.waitPcs)}</span>}
-          {t.shortPcs > 0 && <span style={{color:"#d23f3f", fontWeight:800}}>⚠️ ขาด {fmtN(t.shortPcs)}</span>}
+          <span style={{color:"#2f9e56", fontWeight:700}}>รับ {fmtN(t.recvPcs)} ชิ้น</span>
+          {t.waitPcs > 0 && <span style={{color:"#c99a1e", fontWeight:700}}>รอรับ {fmtN(t.waitPcs)} ชิ้น</span>}
+          {t.shortPcs > 0 && <span style={{color:"#d23f3f", fontWeight:800}}>⚠️ ขาด {fmtN(t.shortPcs)} ชิ้น</span>}
         </div>
       </div>
 
@@ -11049,7 +11052,12 @@ function TrackingView({ data, role }) {
         }}>⚠️ มี {alertCount} รายการที่รับ<b>ไม่ตรง</b>กับที่ส่ง — แตะเพื่อดู</div>
       )}
 
-      {/* stat tiles = filter */}
+      {/* stat tiles = filter
+          ⚠️ ไทล์นับ "รายการ" แต่บล็อกสรุปข้างล่างนับ "ชิ้น" — คำว่า "รอรับ" จึงโผล่สองที่
+          ด้วยเลขคนละตัว (1 กับ 24) · ต้องติดหน่วยกำกับทั้งสองฝั่ง ไม่งั้นอ่านไม่ออกว่าอันไหนคืออะไร */}
+      <div style={{fontSize:10.5, color:"var(--muted)", fontWeight:600, marginBottom:4}}>
+        🔢 นับเป็น <b>รายการ</b> · แตะเพื่อกรอง
+      </div>
       <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(64px, 1fr))", gap:6, marginBottom:10}}>
         {TRACK_STAGES.map(s => {
           const active = filter === s.key;
@@ -11073,23 +11081,28 @@ function TrackingView({ data, role }) {
           padding:"10px 12px", marginBottom:10,
         }}>
           <div style={{fontSize:11, color:"var(--muted)", marginBottom:6, fontWeight:600}}>
-            📊 รวมของที่ส่งไปหน้าร้าน {filter !== "all" || q.trim() ? "(เฉพาะที่กรองอยู่)" : "(30 วันล่าสุด)"}
+            📦 รวมของที่ส่งไปหน้าร้าน · นับเป็น <b>ชิ้น</b>
+            {filter !== "all" || q.trim() ? " (เฉพาะที่กรองอยู่)" : ""}
           </div>
           <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(72px, 1fr))", gap:8}}>
             {[
-              { n: totals.sentPcs,  label: "ส่งไป (ชิ้น)", c: "var(--text)" },
-              { n: totals.recvPcs,  label: "รับแล้ว",      c: "#2f9e56" },
-              { n: totals.waitPcs,  label: "รอรับ",        c: "#c99a1e" },
-              { n: totals.shortPcs, label: "ขาด",          c: totals.shortPcs > 0 ? "#d23f3f" : "var(--muted)" },
+              { n: totals.sentPcs,  label: "ส่งไป",  c: "var(--text)" },
+              { n: totals.recvPcs,  label: "รับแล้ว", c: "#2f9e56" },
+              { n: totals.waitPcs,  label: "รอรับ",   c: "#c99a1e" },
+              { n: totals.shortPcs, label: "ขาด",     c: totals.shortPcs > 0 ? "#d23f3f" : "var(--muted)" },
             ].map(x => (
               <div key={x.label} style={{textAlign:"center", minWidth:0}}>
-                <div style={{fontSize:17, fontWeight:800, color:x.c, lineHeight:1.15}}>{fmtN(x.n)}</div>
+                {/* หน่วยติดกับตัวเลขทุกช่อง — ไม่ใช่แค่ช่องแรก */}
+                <div style={{fontSize:17, fontWeight:800, color:x.c, lineHeight:1.15}}>
+                  {fmtN(x.n)}<span style={{fontSize:10, fontWeight:600}}> ชิ้น</span>
+                </div>
                 <div style={{fontSize:10, color:"var(--muted)", fontWeight:600}}>{x.label}</div>
               </div>
             ))}
           </div>
+          {/* สั้นและขนานกัน — ผู้ใช้บางคนอ่านไทยไม่คล่อง ประโยคยาวคือประโยคที่ไม่มีใครอ่าน */}
           <div style={{fontSize:10, color:"var(--muted)", marginTop:6, lineHeight:1.4}}>
-            "ขาด" นับเฉพาะใบที่หน้าร้านกดรับแล้วและได้ไม่ครบ · ของที่ยังไม่มีใครกดรับนับเป็น "รอรับ"
+            "ขาด" = กดรับแล้วได้ไม่ครบ · ยังไม่ได้กดรับ = "รอรับ"
           </div>
         </div>
       )}
