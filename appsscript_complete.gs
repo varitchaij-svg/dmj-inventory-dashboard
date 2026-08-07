@@ -2378,6 +2378,13 @@ function doGet(e) {
     if (e && e.parameter && e.parameter.action === 'zortTransfer') {
       return zortTransferHandler_(String(e.parameter.number || '').trim());
     }
+    // เติมแถวชีตโอนที่ขาดหาย (ไม่แตะสต็อก ไม่ยิง ZORT) ผ่าน URL — สำรองไว้เมื่อ GAS editor
+    // ของเจ้าของมีปัญหาแคช/เปิดผิดโปรเจกต์แล้วรัน repairZortTransferLog() ตรง ๆ ไม่ได้
+    // (เจอจริง ส.ค. 2026 — TF-202608035) ปลอดภัยเพราะ repairZortTransferLog เทียบราย SKU
+    // ก่อนเขียนเสมอ (ดูฟังก์ชันนั้น) เรียกซ้ำกี่ครั้งก็ไม่ซ้ำ
+    if (e && e.parameter && e.parameter.action === 'repairTransferLog') {
+      return repairTransferLogHandler_(String(e.parameter.number || '').trim());
+    }
     // ตรวจ PIN เจ้าของฝั่ง server (PIN ไม่อยู่ใน source โค้ด frontend)
     // ตั้งค่าใน Script Property ชื่อ OWNER_PIN; ถ้าไม่ตั้ง ใช้ค่า default 'DMJ' (backward compatible)
     if (e && e.parameter && e.parameter.action === 'verifyPin') {
@@ -3429,6 +3436,19 @@ function zortTransferHandler_(number) {
     })).setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
     Logger.log('zortTransferHandler_ error: ' + err);
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// doGet action=repairTransferLog — เวอร์ชัน URL ของ repairZortTransferLog() (ดูฟังก์ชันนั้น
+// สำหรับตรรกะจริง — ตัวนี้แค่ห่อให้เรียกผ่าน URL ได้เมื่อ GAS editor ใช้ไม่ได้)
+function repairTransferLogHandler_(number) {
+  try {
+    const r = repairZortTransferLog(number);
+    return ContentService.createTextOutput(JSON.stringify(r)).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    Logger.log('repairTransferLogHandler_ error: ' + err);
     return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
       .setMimeType(ContentService.MimeType.JSON);
   }

@@ -414,6 +414,14 @@ describe('เครื่องมือตรวจ/ซ่อมเมื่อ
     expect(h).toMatch(/fromZort: true/);
   });
 
+  // สำรองไว้เมื่อ GAS editor ของเจ้าของใช้ไม่ได้ (แคชค้าง/เปิดผิดโปรเจกต์) — เรียกผ่าน URL
+  // แทนได้ ต้องห่อ repairZortTransferLog ตรง ๆ ไม่ประกอบ query ใหม่ (กัน logic แยกทาง)
+  it('doGet มี action=repairTransferLog เป็นทางเลือกเรียกซ่อมชีตโอนผ่าน URL', () => {
+    expect(SRC).toMatch(/e\.parameter\.action === 'repairTransferLog'/);
+    const h = grab(SRC, /function repairTransferLogHandler_\(number\) \{[\s\S]*?\n\}/);
+    expect(h).toMatch(/repairZortTransferLog\(number\)/);
+  });
+
   it('frontend มีทางค้นจากเลขที่ ZORT และเตือนเมื่อชีตเราไม่มีบันทึก', () => {
     const look = grab(VA, /const lookupByZort = async \(\) => \{[\s\S]*?\n  \};/);
     expect(look).toMatch(/syncZortTransferLookup/);
