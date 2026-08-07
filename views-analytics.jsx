@@ -10774,6 +10774,99 @@ function TrackStageBadge({ stage }) {
   );
 }
 
+// อายุของใบโอน = ค้างรับมากี่วันแล้ว · ใช้ parseCheckDateMs (ไม่ใช่ parseDateMs) เพราะ
+// วันที่ในชีตโอนบางแถวเขียนด้วย toLocaleString("th-TH") = ปี พ.ศ. — บทเรียนข้อ 11
+// ตัวนี้คือจุดที่เคยมองไม่เห็น: ของที่ส่งเมื่อเช้ากับของที่ค้างมา 5 วันเคยหน้าตาเหมือนกัน
+function trackAgeDays(dateStr) {
+  let ms = parseCheckDateMs(dateStr);
+  if (isNaN(ms)) ms = parseDateMs(dateStr);
+  if (isNaN(ms)) return null;
+  const d = Math.floor((Date.now() - ms) / 86400000);
+  // อนาคต (นาฬิกาเครื่องเพี้ยน/ปีเพี้ยน) หรือเก่าเกินจริง → ไม่เดา ดีกว่าโชว์เลขมั่ว
+  if (d < 0 || d > 400) return null;
+  return d;
+}
+
+// สรุปตัวเลข "ชิ้น" ของกลุ่มรายการส่ง — เจ้าของอ่านรายงานต้องการจำนวนชิ้น ไม่ใช่จำนวน SKU
+// ⚠️ "ขาด" นับเฉพาะแถวที่ **กดรับแล้ว** เท่านั้น — แถวที่ยังไม่มีใครกดรับยังไม่รู้ว่าขาดหรือไม่
+// (นับรวมเป็น "ขาด" = หัวหน้าเห็นตัวเลขแดงทั้งที่ของอาจอยู่ครบ แค่ยังไม่ได้กด)
+function trackShipTotals(items) {
+  let sentPcs = 0, recvPcs = 0, shortPcs = 0, waitPcs = 0, recvRows = 0, rows = 0;
+  items.forEach(it => {
+    if (it.kind !== "ship") return;
+    rows++;
+    const qty = Number(it.qty) || 0;
+    sentPcs += qty;
+    if (it.receivedAt) {
+      const got = Number(it.receivedQty) || 0;
+      recvRows++;
+      recvPcs  += got;
+      shortPcs += Math.max(0, qty - got);
+    } else {
+      waitPcs += qty;
+    }
+  });
+  return { sentPcs, recvPcs, shortPcs, waitPcs, recvRows, rows, pending: rows - recvRows };
+}
+
+// การ์ด "1 ใบโอน" — หัวหน้าเปิดมาต้องตอบได้ทันทีว่า ใบนี้รับไปกี่/กี่ กี่ชิ้น ขาดไหม ค้างกี่วัน
+// โดยไม่ต้องนับการ์ดรายตัวเอง (เดิมส่ง 75 ตัว = 75 การ์ดเรียงกัน ตรวจไม่ไหว)
+function TrackBatchCard({ batch, productMap, defaultOpen }) {
+  const [open, setOpen] = uS(!!defaultOpen);
+  const t = batch.totals;
+  const done    = t.pending === 0;
+  const hasShort = t.shortPcs > 0;
+  const age     = done ? null : trackAgeDays(batch.date);
+  // ค้าง 3 วันขึ้นไป = ผิดปกติจริง (ปกติหน้าร้านรับภายในวันเดียวกับที่รถมาส่ง)
+  const ageTone = age == null ? null : age >= 3 ? "#d23f3f" : age >= 1 ? "#e07b1a" : "var(--muted)";
+  const barPct  = t.sentPcs > 0 ? Math.min(100, Math.round((t.recvPcs / t.sentPcs) * 100)) : 0;
+  const edge    = hasShort ? "#d23f3f" : done ? "#2f9e56" : age >= 3 ? "#d23f3f" : "#c99a1e";
+
+  return (
+    <div style={{
+      background:"#fff", borderRadius:12, marginBottom:8, overflow:"hidden",
+      border:"1.5px solid var(--bdr)", borderLeft:`4px solid ${edge}`,
+    }}>
+      <div onClick={() => setOpen(o => !o)} style={{padding:"10px 12px", cursor:"pointer"}}>
+        <div style={{display:"flex", justifyContent:"space-between", gap:8, alignItems:"flex-start"}}>
+          <div style={{minWidth:0}}>
+            <div style={{fontWeight:800, fontSize:14, lineHeight:1.25}}>
+              {batch.refNum || "— ไม่มีเลขที่ใบโอน —"}
+            </div>
+            <div style={{fontSize:11, color:"var(--muted)", marginTop:1}}>
+              🕒 {batch.date || "—"}
+              {age != null && !done && <span style={{color:ageTone, fontWeight:700}}> · ⏳ ค้าง {age === 0 ? "วันนี้" : age + " วัน"}</span>}
+            </div>
+          </div>
+          <div style={{textAlign:"right", whiteSpace:"nowrap"}}>
+            <div style={{fontSize:15, fontWeight:800, color: done ? "#2f9e56" : "#c99a1e", lineHeight:1.2}}>
+              {t.recvRows}/{t.rows} <span style={{fontSize:11, fontWeight:600}}>ใบ</span>
+            </div>
+            <div style={{fontSize:11, color:"var(--muted)", fontWeight:600}}>{open ? "▲ ย่อ" : "▼ ดูรายตัว"}</div>
+          </div>
+        </div>
+
+        {/* แถบความคืบหน้าเป็น "ชิ้น" — ตัวเลขที่เจ้าของใช้จริง */}
+        <div style={{marginTop:8, height:6, background:"#eef1f4", borderRadius:99, overflow:"hidden"}}>
+          <div style={{width:barPct + "%", height:"100%", background: hasShort ? "#d23f3f" : "#2f9e56"}}/>
+        </div>
+        <div style={{marginTop:5, fontSize:12, display:"flex", flexWrap:"wrap", gap:"2px 12px"}}>
+          <span>ส่ง <b>{fmtN(t.sentPcs)}</b> ชิ้น</span>
+          <span style={{color:"#2f9e56", fontWeight:700}}>รับ {fmtN(t.recvPcs)}</span>
+          {t.waitPcs > 0 && <span style={{color:"#c99a1e", fontWeight:700}}>รอรับ {fmtN(t.waitPcs)}</span>}
+          {t.shortPcs > 0 && <span style={{color:"#d23f3f", fontWeight:800}}>⚠️ ขาด {fmtN(t.shortPcs)}</span>}
+        </div>
+      </div>
+
+      {open && (
+        <div style={{borderTop:"1px solid var(--bdr)", background:"#fbfcfd", padding:"8px 8px 2px"}}>
+          {batch.items.map((it, i) => <TrackCard key={`${it.sku}_${i}`} item={it} productMap={productMap}/>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TrackCard({ item, productMap }) {
   const st = TRACK_STAGE_MAP[item.stage] || {};
   const product = productMap[item.sku] || productMap[(item.sku||"").trim().toUpperCase()];
@@ -10830,6 +10923,9 @@ function TrackingView({ data, role }) {
   const products  = data.products  || [];
   const [filter, setFilter] = uS("all");
   const [q, setQ] = uS("");
+  // "รายใบโอน" เป็นค่าตั้งต้น — คำถามที่หัวหน้าถามจริงคือ "ใบนี้รับครบหรือยัง"
+  // ไม่ใช่ "เมื่อกี้เกิดอะไรขึ้นบ้าง" (ซึ่งคือสิ่งที่ลิสต์เรียงตามเวลาตอบ)
+  const [mode, setMode] = uS("batch");
 
   const productMap = uM(() => {
     const m = {};
@@ -10867,6 +10963,9 @@ function TrackingView({ data, role }) {
         qty: s.qty, receivedQty: s.receivedQty, receivedAt: s.receivedAt,
         from: s.from, to: s.to, preparedBy: s.preparedBy, receivedBy: s.receivedBy,
         image: s.image, refNum: s.refNum,
+        // date = วันที่ "ส่ง" (คงไว้แยกจาก when) — ใช้คิดอายุใบโอนว่าค้างรับมากี่วัน
+        // when ใช้ไม่ได้เพราะแถวที่รับแล้ว when = เวลาที่กดรับ ไม่ใช่เวลาที่ส่ง
+        date: s.date,
         when: s.receivedAt || s.date,
         _ts: parseCheckDateMs(s.receivedAt) || parseDateMs(s.date),
       });
@@ -10883,20 +10982,57 @@ function TrackingView({ data, role }) {
     return c;
   }, [items]);
 
-  const shown = uM(() => {
+  // ค้นหาอย่างเดียว (ยังไม่กรองตามสถานะ) — ใช้เป็นฐานของ "ยอดรวมทั้งใบโอน"
+  const searched = uM(() => {
     const tokens = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!tokens.length) return items;
     return items.filter(it => {
-      if (filter !== "all" && it.stage !== filter) return false;
-      if (tokens.length) {
-        // ค้นหาด้วยชื่อคนได้ด้วย ("สมชาย" → เห็นทุกอย่างที่สมชายสั่ง/จัด/รับ)
-        const hay = `${it.sku||""} ${it.name||""} ${it.refNum||""} ${it.orderedBy||""} ${it.preparedBy||""} ${it.receivedBy||""}`.toLowerCase();
-        if (!tokens.every(t => hay.includes(t))) return false;
-      }
-      return true;
+      // ค้นหาด้วยชื่อคนได้ด้วย ("สมชาย" → เห็นทุกอย่างที่สมชายสั่ง/จัด/รับ)
+      const hay = `${it.sku||""} ${it.name||""} ${it.refNum||""} ${it.orderedBy||""} ${it.preparedBy||""} ${it.receivedBy||""}`.toLowerCase();
+      return tokens.every(t => hay.includes(t));
     });
-  }, [items, filter, q]);
+  }, [items, q]);
+
+  const shown = uM(
+    () => (filter === "all" ? searched : searched.filter(it => it.stage === filter)),
+    [searched, filter]
+  );
 
   const alertCount = counts.received_short || 0;
+
+  // ยอดรวมเป็น "ชิ้น" ของสิ่งที่กรองอยู่ตอนนี้ — ตัวเลขจึงขยับตามตัวกรอง (ตั้งใจ + ติดป้ายบอก)
+  const totals = uM(() => trackShipTotals(shown), [shown]);
+
+  // จัดกลุ่มรายการส่งตามใบโอน · order (รอจัด/รอส่ง) ยังไม่มีใบโอน → แยกไปกองล่าง
+  //
+  // ⚠️ ยอดหัวการ์ดคิดจาก **ทั้งใบ** (`searched`) ไม่ใช่เฉพาะที่ผ่านตัวกรองสถานะ (`shown`) —
+  // กรอง "รับไม่ครบ" แล้วให้หัวการ์ดบอก "ส่ง 10 ชิ้น" ทั้งที่ใบนั้นส่งไป 100 คือการโกหก
+  // เงียบ ๆ ที่ไม่มี error ให้เห็น · ตัวกรองมีผลแค่ว่า "กางออกมาแล้วเห็นรายการไหน"
+  const batches = uM(() => {
+    const map = {};
+    const preShip = [];
+    const keep = filter === "all" ? null : filter;
+    searched.forEach(it => {
+      if (it.kind !== "ship") {
+        if (!keep || it.stage === keep) preShip.push(it);
+        return;
+      }
+      const key = it.refNum || "—";
+      if (!map[key]) map[key] = { refNum: it.refNum, date: it.date || it.when, items: [], all: [] };
+      map[key].all.push(it);
+      if (!keep || it.stage === keep) map[key].items.push(it);
+    });
+    const arr = Object.values(map)
+      .filter(b => b.items.length > 0)                    // ไม่มีอะไรตรงตัวกรอง → ไม่ต้องโชว์ใบนี้
+      .map(b => ({ ...b, totals: trackShipTotals(b.all) }));
+    arr.sort((a, b) => {
+      // ใบที่ยังรับไม่ครบขึ้นก่อนเสมอ — เป็นกองเดียวที่ต้องลงมือทำอะไรต่อ
+      if ((a.totals.pending > 0) !== (b.totals.pending > 0)) return a.totals.pending > 0 ? -1 : 1;
+      const da = parseCheckDateMs(a.date), db = parseCheckDateMs(b.date);
+      return (isNaN(db) ? 0 : db) - (isNaN(da) ? 0 : da);
+    });
+    return { arr, preShip };
+  }, [searched, filter]);
 
   return (
     <div style={{padding:"12px 12px 40px"}}>
@@ -10930,9 +11066,37 @@ function TrackingView({ data, role }) {
         })}
       </div>
 
+      {/* สรุปเป็น "ชิ้น" — บล็อกนี้คือส่วนที่แคปส่งเจ้าของได้ทั้งอัน */}
+      {totals.rows > 0 && (
+        <div style={{
+          background:"#f8fafc", border:"1.5px solid var(--bdr)", borderRadius:12,
+          padding:"10px 12px", marginBottom:10,
+        }}>
+          <div style={{fontSize:11, color:"var(--muted)", marginBottom:6, fontWeight:600}}>
+            📊 รวมของที่ส่งไปหน้าร้าน {filter !== "all" || q.trim() ? "(เฉพาะที่กรองอยู่)" : "(30 วันล่าสุด)"}
+          </div>
+          <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(72px, 1fr))", gap:8}}>
+            {[
+              { n: totals.sentPcs,  label: "ส่งไป (ชิ้น)", c: "var(--text)" },
+              { n: totals.recvPcs,  label: "รับแล้ว",      c: "#2f9e56" },
+              { n: totals.waitPcs,  label: "รอรับ",        c: "#c99a1e" },
+              { n: totals.shortPcs, label: "ขาด",          c: totals.shortPcs > 0 ? "#d23f3f" : "var(--muted)" },
+            ].map(x => (
+              <div key={x.label} style={{textAlign:"center", minWidth:0}}>
+                <div style={{fontSize:17, fontWeight:800, color:x.c, lineHeight:1.15}}>{fmtN(x.n)}</div>
+                <div style={{fontSize:10, color:"var(--muted)", fontWeight:600}}>{x.label}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{fontSize:10, color:"var(--muted)", marginTop:6, lineHeight:1.4}}>
+            "ขาด" นับเฉพาะใบที่หน้าร้านกดรับแล้วและได้ไม่ครบ · ของที่ยังไม่มีใครกดรับนับเป็น "รอรับ"
+          </div>
+        </div>
+      )}
+
       {/* search + reset filter */}
-      <div style={{display:"flex", gap:6, marginBottom:10, alignItems:"center"}}>
-        <input value={q} onChange={e => setQ(e.target.value)} placeholder="🔍 ค้นหา ชื่อ / SKU / คนจัด / คนรับ"
+      <div style={{display:"flex", gap:6, marginBottom:8, alignItems:"center"}}>
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="🔍 ค้นหา ชื่อ / SKU / เลขที่ใบโอน / คนจัด / คนรับ"
           style={{flex:1, minWidth:0, padding:"9px 11px", border:"1px solid var(--bdr)", borderRadius:9, fontSize:13.5}}/>
         {filter !== "all" && (
           <button onClick={() => setFilter("all")} style={{
@@ -10942,12 +11106,41 @@ function TrackingView({ data, role }) {
         )}
       </div>
 
+      <div style={{marginBottom:10}}>
+        <Seg value={mode} onChange={setMode} options={[
+          { value:"batch",    label:"📋 รายใบโอน" },
+          { value:"timeline", label:"🧾 รายชิ้น (ตามเวลา)" },
+        ]}/>
+      </div>
+
       {/* list */}
       {shown.length === 0 ? (
         <div style={{textAlign:"center", padding:"40px 20px", color:"var(--muted)"}}>
           <div style={{fontSize:36, marginBottom:8}}>📭</div>
           <div style={{fontSize:14}}>{items.length === 0 ? "ยังไม่มีรายการสั่ง/ส่ง" : "ไม่พบรายการตามที่กรอง"}</div>
         </div>
+      ) : mode === "batch" ? (
+        <>
+          {batches.arr.length > 0 && (
+            <div style={{fontSize:11.5, color:"var(--muted)", marginBottom:6}}>
+              {batches.arr.length} ใบโอน · ใบที่ยังรับไม่ครบอยู่บนสุด
+              {/* ตัวเลขสองที่ไม่เท่ากันได้ ต้องบอกว่าทำไม (ไม่งั้นหัวหน้าจะคิดว่าตัวกรองพัง) */}
+              {filter !== "all" && <span> · ยอดบนหัวการ์ดเป็นของ<b>ทั้งใบ</b> ไม่ใช่เฉพาะที่กรอง</span>}
+            </div>
+          )}
+          {batches.arr.map(b => (
+            <TrackBatchCard key={b.refNum || "—"} batch={b} productMap={productMap}
+              defaultOpen={batches.arr.length === 1}/>
+          ))}
+          {batches.preShip.length > 0 && (
+            <div style={{marginTop:14}}>
+              <div style={{fontSize:12, fontWeight:700, marginBottom:6}}>
+                🕐 ยังไม่ได้ส่ง — รอจัด/รอส่ง ({batches.preShip.length})
+              </div>
+              {batches.preShip.map((it, i) => <TrackCard key={`o_${it.sku}_${i}`} item={it} productMap={productMap}/>)}
+            </div>
+          )}
+        </>
       ) : (
         <>
           <div style={{fontSize:11.5, color:"var(--muted)", marginBottom:6}}>{shown.length} รายการ</div>
