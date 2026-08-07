@@ -64,8 +64,13 @@ const TRACKED = [
     `return isNaN(n) ? 0 : n;`,
   ]},
   { names: ['parseLocation_'], sourceFile: 'appsscript_complete.gs', landmarks: [
+    `const f = String(loc).trim().match(/^([AB])0$/i);`,
+    `shelf: 0, lock: 0, floor: true`,
     `const m = String(loc).trim().match(/^([AB])(\\d+)\\/(\\d+)$/i);`,
     `side: m[1].toUpperCase(), shelf: +m[2], lock: +m[3]`,
+  ]},
+  { names: ['lockKeyOf_'], sourceFile: 'appsscript_complete.gs', landmarks: [
+    `return loc.floor ? loc.side + '0' : loc.side + loc.shelf + '/' + loc.lock;`,
   ]},
   { names: ['monthKey_'], sourceFile: 'appsscript_complete.gs', landmarks: [
     `let m = s.match(/^(\\d{1,2})\\/(\\d{4})$/);`,

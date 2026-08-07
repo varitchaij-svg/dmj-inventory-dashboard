@@ -458,6 +458,15 @@ function FrontStoreView({ data, role, checkRequest }) {
     setTransferring(true);
     try {
       const res = await syncStockTransferBatch([{ sku: transferTarget.sku, qty: transferQty, name: transferTarget.name }]);
+      // อ่านคำตอบไม่ได้ ≠ โอนไม่สำเร็จ — GAS เขียนชีตเสร็จแล้วยังตอบไม่ทันได้ (บทเรียนข้อ 13)
+      // ห้ามบอกว่า "ไม่สำเร็จ" ลอย ๆ เพราะผู้ใช้จะกดโอนซ้ำแล้วของไปสองรอบ
+      if (res && res.unreadable) {
+        showToast("warn", "ไม่แน่ใจว่าโอนสำเร็จหรือไม่ — กด Sync แล้วเช็คจำนวนก่อนโอนซ้ำ", "❓", 9000);
+        setTransferTarget(null);
+        setTransferQty(1);
+        setTransferring(false);
+        return;
+      }
       if (res && res.success === false) throw new Error(res.error || "ไม่สำเร็จ");
       showToast("success", `โอน ${transferQty} ชิ้น "${transferTarget.name}" แล้ว`, "📦");
       setTransferTarget(null);
@@ -1340,7 +1349,7 @@ function WarehouseHomeView({ data, onNav }) {
     const m = {};
     products.forEach(p => {
       const loc = (p.locations || [])[0];
-      if (loc) m[p.sku] = `${loc.side}${loc.shelf}/${loc.lock}`;
+      if (loc) m[p.sku] = lockKeyOf(loc);
     });
     return m;
   }, [products]);
@@ -2891,6 +2900,38 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                 </div>
                 <div style={{display:'grid',
                              gridTemplateColumns:'repeat(auto-fill,minmax(90px,1fr))',gap:10}}>
+                  {/* ช่อง "ไม่ได้อยู่บนชั้น" (A0/B0) — ไม่มีเลขล็อค จึงข้ามขั้น 2 ไปนับเลย */}
+                  {(function(){
+                    const fk = floorLockKey(side);
+                    const fd = lockData[fk];
+                    const fn = fd ? fd.skus.length : 0;
+                    return (
+                      <div key={fk}
+                        onClick={() => { if (fn > 0) { setSelShelf(fk); setSelLockKey(fk); setStep(3); } }}
+                        style={{
+                          gridColumn:'1/-1',
+                          background: fn>0 ? '#fffbeb' : '#f8fafc',
+                          border:'2px dashed ' + (fn>0 ? '#fbbf24' : '#e2e8f0'),
+                          borderRadius:14, padding:'12px 14px',
+                          cursor: fn>0 ? 'pointer' : 'default',
+                          opacity: fn>0 ? 1 : 0.55,
+                          display:'flex', alignItems:'center', gap:10,
+                        }}>
+                        <span style={{fontSize:20}}>📥</span>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:16,fontWeight:800,color:'var(--g-700)',
+                                       fontFamily:'monospace'}}>{fk}</div>
+                          <div style={{fontSize:11,color:'var(--muted)'}}>
+                            ไม่ได้อยู่บนชั้น (วางพื้น/นอกชั้นวาง)
+                          </div>
+                        </div>
+                        <div style={{fontSize:11,fontWeight:700,
+                                     color: fn>0 ? '#b45309' : '#94a3b8'}}>
+                          {fn>0 ? fn+' SKU ›' : 'ว่าง'}
+                        </div>
+                      </div>
+                    );
+                  })()}
                   {shelfList.filter(s => s[0] === side).map(sh => {
                     const shN = parseInt(sh.replace(/[A-Za-z]/g,''));
                     const isR = shN % 2 !== 0;
@@ -3042,13 +3083,16 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
       <div style={{display:'flex',flexDirection:'column',gap:12,width:"100%",minWidth:0,boxSizing:"border-box"}}>
 
         <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
-          <button onClick={() => setStep(2)}
+          {/* ช่อง A0/B0 ไม่มีขั้น 2 (ไม่มีตารางเลขล็อค) — ย้อนกลับต้องไปขั้น 1 ไม่งั้นเจอตารางว่างเปล่า */}
+          <button onClick={() => setStep(isFloorLock(selLockKey) ? 1 : 2)}
             style={{width:44,height:44,borderRadius:10,border:'1.5px solid var(--bdr)',
                     background:'#fff',cursor:'pointer',fontSize:20,fontFamily:'inherit',flexShrink:0}}>
             ←
           </button>
           <div style={{flex:1}}>
-            <div style={{fontSize:15,fontWeight:800}}>ล็อค {selLockKey}</div>
+            <div style={{fontSize:15,fontWeight:800}}>
+              {isFloorLock(selLockKey) ? `📥 ${selLockKey} · ไม่ได้อยู่บนชั้น` : `ล็อค ${selLockKey}`}
+            </div>
             <div style={{fontSize:11,color:'var(--muted)'}}>ขั้น 3 — กรอกจำนวนที่นับได้จริง</div>
           </div>
           <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}}>
@@ -3655,15 +3699,21 @@ function cleanupOrdersState(orders) {
     return s;
   } catch { return getOrdersState(); }
 }
+// ⚠️ ต้อง **อ่านคำตอบจริง** เสมอ (บทเรียนข้อ 13) — เดิม `await dmjFetch(...)` แล้วจบ
+// ไม่เคยดูว่า GAS ตอบอะไรกลับมา · GAS ตอบ **หน้า HTML** ได้เมื่อ execution ซ้อนกัน/เน็ตร้าน
+// กระตุก → จำนวนที่จัดไม่ถูกบันทึกเลย แต่หน้าจอขึ้น "บันทึกแล้ว" → พนักงานเดินจากไป
+// แล้วรอบ sync ถัดมาเลขเด้งกลับเป็นค่าเก่า (= อาการ "ระบบเด้งจำนวนอื่น" ที่เจ้าของแจ้ง)
+// คืน { success, error, data } ให้ผู้เรียกตัดสินใจ — **ห้ามยิงซ้ำอัตโนมัติ** (ยังไม่ idempotent)
 async function syncOrderUpdate(order, updates) {
-  if (!SHEET_DEPLOY_URL) return;
+  if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL ปลายทาง" };
   try {
-    await dmjFetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
         updateOrderState: true,
         orderId: order.id,
+        // sku/date = ตัวยืนยันว่าแถวที่ orderId ชี้ไปยังเป็นใบเดิม (กันแถวเลื่อนหลังมีคนลบ order)
         sku:         order.sku,
         date:        order.date,
         status:      updates.status,
@@ -3673,22 +3723,42 @@ async function syncOrderUpdate(order, updates) {
         actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
       }),
     });
-  } catch(e) { console.warn("syncOrderUpdate failed:", e.message); }
+    // ⚠️ ต้องอ่านคำตอบจริงเสมอ (บทเรียนข้อ 13 ใน CLAUDE.md) — เดิม await แล้วจบเลย
+    const d = await dmjJson(res);
+    // notFound = ทั้ง orderId และ sku+date หาแถวไม่เจอ (ใบถูกลบไปแล้ว) — ไม่ใช่ "สำเร็จ"
+    if (d && d.success !== false && d.data && d.data.notFound)
+      return { success: false, error: "ไม่พบรายการนี้ในชีตแล้ว (อาจถูกลบไป) — กดซิงค์" };
+    if (!d || d.success === false) {
+      console.warn("syncOrderUpdate: GAS ปฏิเสธ", { orderId: order.id, error: d && d.error });
+      return { success:false, error:(d && d.error) || "บันทึกไม่สำเร็จ" };
+    }
+    return { success:true };
+  } catch(e) {
+    console.warn("syncOrderUpdate failed:", e.message);
+    return { success: false, error: dmjErrText(e) };
+  }
 }
 
 // ยืนยันรับของจากชีต "รายการโอนสินค้า" (sync ข้ามเครื่อง)
-async function syncShipmentReceive(rowId, sku, receivedQty) {
-  if (!SHEET_DEPLOY_URL) return { success:false };
+// ส่ง refNum (เลขใบโอน TF-...) ไปด้วยเสมอ — ฝั่ง GAS ใช้หาแถวที่ถูกต้องเมื่อ `rowId`
+// (= เลขแถวในชีต) ที่เครื่องนี้ถืออยู่เก่าไปแล้วเพราะมีแถวถูกลบออกไประหว่างนั้น
+async function syncShipmentReceive(rowId, sku, receivedQty, refNum) {
+  if (!SHEET_DEPLOY_URL) return { success:false, error:"ยังไม่ได้ตั้งค่าที่อยู่เซิร์ฟเวอร์" };
   try {
     const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"},
       body: JSON.stringify({
-        confirmShipmentReceive:true, rowId, sku, receivedQty,
+        confirmShipmentReceive:true, rowId, sku, receivedQty, refNum,
         actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
       }),
     });
-    return await res.json().catch(()=>({success:false}));
-  } catch(e){ return { success:false, error:e.message }; }
+    // ⚠️ ต้องอ่านคำตอบจริงเสมอ — เดิมใช้ `res.json().catch(()=>({success:false}))` ซึ่ง
+    // กลืนหน้า HTML ของ GAS ทิ้งเป็น success:false เปล่า ๆ ไม่มีข้อความบอกสาเหตุ
+    // แล้วตัวเรียกก็ไม่เคยอ่านค่าที่คืนอยู่ดี → จอขึ้น "รับครบ ✅" ทั้งที่ไม่มีอะไรถูกบันทึก
+    const j = await dmjJson(res);
+    if (!j || j.success === false) return { success:false, error:(j && j.error) || "บันทึกไม่สำเร็จ" };
+    return { success:true, data:(j && j.data) || null };
+  } catch(e){ return { success:false, error: dmjErrText(e) }; }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -3712,11 +3782,17 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
     setPrepQty(prev => prev === 0 ? (order.orderQty || 0) : prev);
   }, [order.orderQty]);
 
-  const savePrepQty = v => {
+  // saveFailed = บันทึกลงชีตไม่ผ่าน · เลขบนจอยังเป็นค่าที่พนักงานกรอก (ไม่ทิ้งงานที่นับมา)
+  // แต่ต้อง **บอกให้รู้ว่ายังไม่เข้าระบบ** ไม่งั้นเดินจากไปแล้วรอบ sync ถัดมาเลขเด้งกลับค่าเก่า
+  const [saveFailed, setSaveFailed] = uS(false);
+  const savePrepQty = async v => {
     const n = Math.max(0, parseInt(v)||0);
     setPrepQty(n);
     onPatch(order.id, {preparedQty: n});
-    syncOrderUpdate(order, {preparedQty: n});
+    const res = await syncOrderUpdate(order, {preparedQty: n});
+    const bad = res && res.success === false;
+    setSaveFailed(!!bad);
+    if (bad) showToast("warn", `ยังไม่ได้บันทึกจำนวน — ${res.error || "เน็ตอาจหลุด"} · กรอกใหม่อีกครั้ง`, "⚠️", 8000);
   };
   // commit ค่าจาก draft ตอน blur/Enter เท่านั้น — ระหว่างพิมพ์ไม่ save ค่ากลาง (เช่น ว่างชั่วคราว)
   // (แทนที่ setPrepQtyLocal ของ branch นี้ — เป้าหมายเดียวกัน: ไม่ยิง POST/audit ทุก keystroke
@@ -3734,7 +3810,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
     onPatch(order.id, {carryMode: m});
     syncOrderUpdate(order, {carryMode: m});
   };
-  const markComplete = () => {
+  const markComplete = async () => {
     if (!order.printFlag) {
       showToast("warn", "เลือก PRINT หรือ SKIP ก่อน", "🖨️");
       return;
@@ -3744,7 +3820,18 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
     // จะ fallback กลับไปโชว์ยอดที่สั่งแทน (บรรทัด init prepQty) → พนักงานสับสน
     const prep = Math.max(0, parseInt(prepQtyDraft) || 0);
     onPatch(order.id, { status: "สำเร็จ", preparedQty: prep });
-    syncOrderUpdate(order, { status: "สำเร็จ", preparedQty: prep });
+    // ⚠️ ต้อง await แล้วดูผลจริงก่อนขึ้น "บันทึกแล้ว" — เดิมขึ้นทันทีโดยไม่รอ ทำให้ตอน GAS
+    //    ตอบหน้า HTML (execution ซ้อนกัน) พนักงานเห็น ✅ ทั้งที่ชีตไม่ได้เปลี่ยนอะไรเลย
+    const res = await syncOrderUpdate(order, { status: "สำเร็จ", preparedQty: prep });
+    if (res && res.success === false) {
+      // ถอย optimistic patch กลับเป็น "รอ" — ปล่อยไว้ = แถวหายจากคิว "รอดำเนินการ" บนเครื่องนี้
+      // ทั้งที่ชีตยังค้างอยู่ → คนอื่นเห็นว่ายังไม่จัด แต่คนจัดคิดว่าจัดเสร็จแล้ว
+      onPatch(order.id, { status: "รอ" });
+      setSaveFailed(true);
+      showToast("warn", `ยังไม่ได้บันทึก — ${res.error || "เน็ตอาจหลุด"} · กดใหม่อีกครั้ง`, "⚠️", 8000);
+      return;
+    }
+    setSaveFailed(false);
     showToast("success", "บันทึกแล้ว", "✅", 2500);
   };
 
@@ -3760,7 +3847,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
   const doCancelOrder = async () => {
     setCancelConfirm(false);
     setCanceling(true);
-    const res = await syncDeleteOrders([order.id]);
+    const res = await syncDeleteOrders([order]);
     setCanceling(false);
     if (res && res.success !== false) {
       setCanceled(true);
@@ -3776,7 +3863,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
   const product = productMap ? productMap[order.sku] : null;
   const locs = product?.locations || [];
   const locStr = locs.length
-    ? locs.map(l => `${l.side}${l.shelf}/${l.lock}`).join(", ")
+    ? locs.map(lockKeyOf).join(", ")
     : null;
 
   // ตำแหน่งล็อคจาก storage data (data.storage.productLockMap / verifiedLockMap)
@@ -3895,7 +3982,9 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
 
             {/* จัด — พิมพ์เลขตรงๆ (ตัดปุ่ม +/- ออก กันพนักงานกดผิด) */}
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5}}>
-              <div style={{fontSize:10,color:"var(--muted)"}}>📦 จัด</div>
+              <div style={{fontSize:10,color: saveFailed ? "var(--dang)" : "var(--muted)"}}>
+                {saveFailed ? "⚠️ ยังไม่บันทึก" : "📦 จัด"}
+              </div>
               <input type="number" value={prepQtyDraft} min={0} max={9999}
                 onFocus={e => e.target.select()}
                 onChange={e => setPrepQtyDraft(e.target.value)}
@@ -3905,8 +3994,11 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
                 className="order-adj-input"
                 style={{
                   width:76,height:44,textAlign:"center",borderRadius:8,
-                  border:"2px solid var(--g-500)",fontSize:18,fontWeight:800,
-                  background:isPending?"#f0fdf4":"var(--g-50)",fontFamily:"inherit",
+                  // ขอบแดงเมื่อบันทึกไม่ผ่าน — เลขที่กรอกยังอยู่ให้เห็น แต่ต้องรู้ว่ายังไม่เข้าระบบ
+                  border:`2px solid ${saveFailed ? "var(--dang)" : "var(--g-500)"}`,
+                  fontSize:18,fontWeight:800,
+                  background: saveFailed ? "#fff5f5" : (isPending?"#f0fdf4":"var(--g-50)"),
+                  fontFamily:"inherit",
                 }}/>
             </div>
 
@@ -4293,11 +4385,20 @@ function ShipmentReceiveList({ data, role, productMap }) {
     return arr;
   }, [rows]);
 
-  const handleConfirm = (s, n) => {
+  // ⚠️ ต้องรอผลจริงจาก GAS ก่อนบอกว่าสำเร็จ — เดิมยิงแล้วขึ้น toast เขียวทันทีโดยไม่เคยอ่าน
+  // คำตอบเลย ("สำเร็จปลอม") พอบันทึกไม่ผ่านจริง (เลขแถวเลื่อน/เน็ตหลุด) จอยังบอกว่ารับแล้ว
+  // แต่ชีตไม่มีอะไรเปลี่ยน → เปิดแอปใหม่รายการเด้งกลับมาเป็น "ยังไม่รับ" ให้กดซ้ำอีก 2-3 รอบ
+  const handleConfirm = async (s, n) => {
     const status = n >= s.qty ? "รับครบ" : "รับไม่ครบ";
     setConfirmed(prev => ({ ...prev, [s.id]: { receivedQty:n, receivedStatus:status, receivedAt:new Date().toISOString() } }));
-    syncShipmentReceive(s.id, s.sku, n);
-    showToast("success", status==="รับครบ" ? "รับครบ ✅" : `รับ ${n}/${s.qty} pcs ⚠️`, "📦", 3000);
+    const r = await syncShipmentReceive(s.id, s.sku, n, s.refNum);
+    if (r && r.success) {
+      showToast("success", status==="รับครบ" ? "รับครบ ✅" : `รับ ${n}/${s.qty} pcs ⚠️`, "📦", 3000);
+      return;
+    }
+    // ถอนภาพ "รับแล้ว" ออก ไม่ให้หน้าจอโกหกว่าบันทึกสำเร็จ แล้วบอกสาเหตุจริงเป็นภาษาไทย
+    setConfirmed(prev => { const next = { ...prev }; delete next[s.id]; return next; });
+    showToast("error", (r && r.error) || "บันทึกไม่สำเร็จ — กรุณาลองใหม่", "⚠️", 6000);
   };
 
   if (!shipments.length) return (
@@ -4440,7 +4541,10 @@ function OrderListView({ data, role }) {
           <Empty title="ไม่มีรายการใน filter นี้" sub="ลองเลือก filter อื่น"/>
         </div>
       ) : (
-        filtered.map(order => <OrderItemRow key={order.id} order={order} onPatch={patch} productMap={productMap} role={role} skuLocks={skuLocks} storageData={data.storage}/>)
+        // ⚠️ key ต้องมี orderSig ด้วย ห้ามใช้ order.id เดี่ยว ๆ — id = "R<เลขแถว>" ถูก reuse
+        //    เมื่อมีคนลบ order ทิ้งแล้วแถวล่างเลื่อนขึ้นมาแทน · key เดิม = React ใช้ component
+        //    instance เดิมต่อ → เลขในช่อง "จัด" (state ภายในแถว) ของใบเก่าค้างมาโชว์บนใบใหม่
+        filtered.map(order => <OrderItemRow key={order.id + "|" + orderSig(order)} order={order} onPatch={patch} productMap={productMap} role={role} skuLocks={skuLocks} storageData={data.storage}/>)
       )}
     </div>
   );
@@ -4455,24 +4559,82 @@ async function syncStockDeduct(sku, qty, name) {
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ transferStock: true, sku, qty, name, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน" }),
     });
-    const json = await res.json().catch(() => ({}));
-    return json;
-  } catch(e) { console.warn("syncStockDeduct error:", e.message); return { success: false, error: e.message }; }
+    return await dmjJson(res);
+  } catch(e) {
+    // อ่านคำตอบไม่ได้ ≠ โอนไม่สำเร็จ — ผู้เรียกต้องไปเช็คประวัติจริงก่อนขึ้นแดง (บทเรียนข้อ 13)
+    console.warn("syncStockDeduct error:", e.message);
+    return { success: false, error: dmjErrText(e), unreadable: true };
+  }
 }
 
 // ส่งหลายรายการในครั้งเดียว → Apps Script สร้าง ZORT Transfer เอกสารเดียว (เลขที่ auto)
-// items = [{ sku, qty, name }, ...]
-async function syncStockTransferBatch(items) {
+// items = [{ sku, qty, name, orderId }, ...] · tid = รหัสชุด (กันโอนซ้ำตอนลองใหม่ — ดู doShipAll)
+//
+// ⚠️ คืน `unreadable:true` เมื่อ **อ่านคำตอบไม่ได้** (หมดเวลา/เน็ตหลุด/GAS ตอบหน้า HTML)
+//    ซึ่ง **ไม่เท่ากับ "โอนไม่สำเร็จ"** — GAS เขียนชีต + สร้างเอกสารใน ZORT เสร็จแล้วยังตอบไม่ทันได้
+//    ตัวเรียกต้องไปถาม action=transferCheck ก่อนตัดสินใจเสมอ (บทเรียนข้อ 13)
+async function syncStockTransferBatch(items, tid) {
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
   try {
     const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ transferStockBatch: true, list: items, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน", clientLoadedAt: window._dataLoadedAt || 0 }),
+      body: JSON.stringify({ transferStockBatch: true, list: items, tid: tid || "", actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน", clientLoadedAt: window._dataLoadedAt || 0 }),
+      // โอนขึ้นรถทีนึงมีได้ 70-80 SKU → เขียนชีต + ยิง ZORT + log ทุกแถว กินเวลาเกินเพดาน
+      // เดิม 60 วิ ของ dmjFetch ได้ง่าย ๆ · เพดานเดิมทำให้ browser ตัดสายทั้งที่ฝั่ง GAS ทำจนจบ
+      // แล้วหน้าจอขึ้น "ส่งไม่สำเร็จ" ทั้งที่ ZORT มีเอกสารโอนแล้ว (อาการที่เจ้าของแจ้ง ส.ค. 2026)
+      dmjTimeoutMs: 240000,
     });
-    const json = await res.json().catch(() => ({}));
-    return json;
-  } catch(e) { console.warn("syncStockTransferBatch error:", e.message); return { success: false, error: e.message }; }
+    return await dmjJson(res);
+  } catch(e) {
+    console.warn("syncStockTransferBatch error:", e.message);
+    return { success: false, error: dmjErrText(e), unreadable: true };
+  }
+}
+
+// ถาม GAS ว่า "ชุด tid นี้โอนลงระบบไปแล้วหรือยัง" — ใช้ตอนอ่านคำตอบของการส่งไม่ได้
+//  { found:true, ... } = ลงแล้ว (ห้ามยิงซ้ำ) · { found:false } = ยังไม่ลง (ยิงซ้ำได้ปลอดภัย)
+//  null = ตอบไม่ได้/รูปแบบไม่ตรง (เน็ตพัง หรือ GAS ยังเป็นโค้ดเก่าที่ไม่รู้จัก transferCheck)
+//         → **ห้ามยิงซ้ำ** เพราะโค้ดเก่าไม่มี tid กันซ้ำให้ (หลักเดียวกับ orderCheck)
+async function syncTransferCheck(tid) {
+  if (!SHEET_DEPLOY_URL || !tid) return null;
+  const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
+  try {
+    const d = await dmjJson(await fetch(
+      `${SHEET_DEPLOY_URL}${sep}action=transferCheck&tid=${encodeURIComponent(tid)}&_t=${Date.now()}`,
+      { cache: "no-store" }));
+    return (d && d.ok === true && typeof d.found === "boolean") ? d : null;
+  } catch(e) { console.warn("syncTransferCheck error:", e.message); return null; }
+}
+
+// ประวัติการโอนคลัง→หน้าร้าน N วันล่าสุด อ่านสดจากชีต (ไม่ผ่าน cache, ก้อนเล็ก)
+// ครอบคลุมทั้งการกด "ส่งทั้งหมด" และกดส่งทีละใบ — ทั้งสองทางเขียนลงชีตเดียวกัน
+// คืน null = ถามไม่ได้ (เน็ตพัง / GAS ยังเป็นโค้ดเก่าที่ไม่รู้จัก) → ผู้เรียกต้องถอยไปใช้ data.shipments
+async function syncRecentTransfers(days) {
+  if (!SHEET_DEPLOY_URL) return null;
+  const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
+  try {
+    const d = await dmjJson(await fetch(
+      `${SHEET_DEPLOY_URL}${sep}action=recentTransfers&days=${days || 3}&_t=${Date.now()}`,
+      { cache: "no-store" }));
+    return (d && d.ok === true && Array.isArray(d.list)) ? d.list : null;
+  } catch(e) { console.warn("syncRecentTransfers error:", e.message); return null; }
+}
+
+// ค้นเอกสารโอนจาก "เลขที่ ZORT" ที่ผู้ใช้พิมพ์เอง
+// จำเป็นเพราะมีกรณีที่ **ZORT มีเอกสารโอนอยู่ฝ่ายเดียว แต่ชีตเราไม่มีบันทึก** (สคริปต์ถูกตัด
+// กลางคันหลังยิง ZORT สำเร็จ / มีคนสร้างรายการโอนใน ZORT เอง) → หาในชีตยังไงก็ไม่เจอ
+// คืน { list, transfer } หรือ null เมื่อถามไม่ได้ · { found:false } เมื่อ ZORT ไม่มีเลขนี้
+async function syncZortTransferLookup(number) {
+  if (!SHEET_DEPLOY_URL || !number) return null;
+  const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
+  try {
+    const d = await dmjJson(await fetch(
+      `${SHEET_DEPLOY_URL}${sep}action=zortTransfer&number=${encodeURIComponent(number)}&_t=${Date.now()}`,
+      { cache: "no-store" }));
+    if (!d || d.ok !== true) return null;
+    return d.found ? { list: d.list || [], transfer: d.transfer, sheetLogged: !!d.sheetLogged } : { found: false };
+  } catch(e) { console.warn("syncZortTransferLookup error:", e.message); return null; }
 }
 
 // ปรับ WH qty=0 ใน Sheets + ZORT (สินค้าหมด ไม่ได้จัด)
@@ -4490,13 +4652,18 @@ async function syncZeroStock(sku) {
 }
 
 // ลบหลาย order rows ในครั้งเดียว
-async function syncDeleteOrders(orderIds) {
-  if (!SHEET_DEPLOY_URL || !orderIds || !orderIds.length) return { success: false };
+// orders = array ของ order object (หรือ id ล้วนแบบเดิม) — ส่ง SKU ไปด้วยเสมอถ้ามี
+// เพราะ order.id = "R<เลขแถว>" เป็น **ตำแหน่ง** ที่เลื่อนได้เมื่อมีคนลบใบอื่นไปก่อน
+// GAS เอา SKU ไปเทียบกับแถวจริงก่อนลบ ไม่ตรง = ไม่ลบ (ลบผิดใบแล้วกู้ไม่ได้)
+async function syncDeleteOrders(orders) {
+  if (!SHEET_DEPLOY_URL || !orders || !orders.length) return { success: false };
+  const orderIds  = orders.map(o => (o && typeof o === "object") ? o.id  : o);
+  const orderSkus = orders.map(o => (o && typeof o === "object") ? (o.sku || "") : "");
   try {
     const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ deleteOrders: true, orderIds }),
+      body: JSON.stringify({ deleteOrders: true, orderIds, orderSkus }),
     });
     // เดิม return {success:true} เสมอไม่สนผลจริงจาก server — ทำให้ caller เห็น "สำเร็จ" ผิดๆ
     // แม้ server จะปฏิเสธ (เช่นไม่มีสิทธิ์) ต้อง forward ผลจริงกลับไปให้ caller ตัดสินใจถูก
@@ -4715,6 +4882,57 @@ const LS_MISSED_TRUCK   = "dmj_missed_truck_v1";
 function getShippedOrders() { try { return JSON.parse(localStorage.getItem(LS_SHIPPED_ORDERS)||"{}"); } catch { return {}; } }
 function getMissedOrders()  { try { return JSON.parse(localStorage.getItem(LS_MISSED_TRUCK)  ||"{}"); } catch { return {}; } }
 
+// ── รหัสชุดที่กดส่ง (tid) — กันโอนซ้ำเวลาลองใหม่ ──────────────────────────────
+// 1 ค่าต่อการกด "ส่งทั้งหมด" 1 ครั้ง และ **คงค่าเดิมตลอดการลองใหม่ชุดเดิม** → GAS เห็น tid ซ้ำ
+// แล้วคืนผลเดิมโดยไม่โอนอีกรอบ (หลักเดียวกับ `cid` ของการสั่งของ)
+// เก็บใน localStorage เพราะการส่งชุดใหญ่ใช้เวลาเป็นนาที พนักงานอาจปิด/รีเฟรชหน้าไปก่อน
+// คำตอบจะกลับมา — เปิดกลับมากดส่งใหม่ต้องได้ tid เดิม ไม่งั้นของโอนซ้ำโดยไม่มีอะไรเตือน
+const LS_SHIP_TID = "dmj_ship_tid_v1";
+const SHIP_TID_MAX_AGE_MS = 6 * 60 * 60 * 1000;   // เท่าอายุที่ GAS เก็บผลไว้ตอบซ้ำ
+function shipBatchKey(orders) {
+  return (orders || []).map(o => `${o.id}:${o.sku}:${o.preparedQty || o.orderQty || 0}`).sort().join("|");
+}
+function getShipTid(orders) {
+  const key = shipBatchKey(orders);
+  try {
+    const cur = JSON.parse(localStorage.getItem(LS_SHIP_TID) || "null");
+    if (cur && cur.key === key && cur.tid && (Date.now() - (cur.at || 0)) < SHIP_TID_MAX_AGE_MS) return cur.tid;
+  } catch (e) { /* ค่าเสีย → สร้างใหม่ */ }
+  const tid = "TB" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  try { localStorage.setItem(LS_SHIP_TID, JSON.stringify({ key, tid, at: Date.now() })); } catch (e) {}
+  return tid;
+}
+function clearShipTid() { try { localStorage.removeItem(LS_SHIP_TID); } catch (e) {} }
+
+// GAS ยืนยันว่าชุดนี้ลงระบบแล้ว แต่ผลรายตัวหมดอายุใน cache → เหลือแค่ [{sku,qty}] จากชีตโอน
+// ชีตไม่ได้เก็บ orderId จึงต้องจับคู่กลับด้วย sku (จำนวนตรงก่อน — คลังไม่พอทำให้จำนวนไม่ตรงได้)
+// จับคู่ 1 ต่อ 1 ไม่ให้แถวเดียวถูกใช้ซ้ำ กัน order คนละใบที่ SKU เดียวกันถูกเคลียร์ทั้งคู่จากแถวเดียว
+function shipResultsFromSheetItems(transferItems, sheetItems) {
+  if (!Array.isArray(sheetItems) || !sheetItems.length) return [];
+  const pool = sheetItems.map(it => ({ sku: String(it.sku || "").trim().toUpperCase(), qty: Number(it.qty) || 0, used: false }));
+  const out = [];
+  (transferItems || []).forEach(it => {
+    const sku = String(it.sku || "").trim().toUpperCase();
+    const q   = Number(it.qty) || 0;
+    let m = pool.find(p => !p.used && p.sku === sku && p.qty === q);
+    if (!m) m = pool.find(p => !p.used && p.sku === sku);
+    if (!m) return;                    // ไม่มีแถวรองรับ = ตัวนี้ไม่ได้โอน → คงไว้ในรายการ
+    m.used = true;
+    out.push({ sku: it.sku, orderId: it.orderId, requested: q, transferred: m.qty });
+  });
+  return out;
+}
+
+// วันที่ในชีตโอนเป็น "dd/MM/yyyy" (เขียนด้วย Utilities.formatDate = ค.ศ.)
+// เผื่อแถวเก่าที่เคยเขียนด้วย toLocaleString("th-TH") ไว้ → ลบ 543 เมื่อปี ≥ 2400 (บทเรียนข้อ 11)
+function parseShipDateMs(s) {
+  const m = String(s || "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (!m) return null;
+  let y = parseInt(m[3], 10);
+  if (y >= 2400) y -= 543;
+  return new Date(y, parseInt(m[2], 10) - 1, parseInt(m[1], 10)).getTime();
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // ORDER SUMMARY VIEW
 // ─────────────────────────────────────────────────────────────────────
@@ -4747,6 +4965,10 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const [shipAllConfirm, setShipAllConfirm] = uS(null); // ready[] array
   const [materialDraw, setMaterialDraw]  = uS(null); // { order, afterConfirm: fn }
   const [resetConfirm, setResetConfirm]  = uS(false); // ยืนยันรีเซ็ตสถานะการส่ง
+  const [bulkBusy, setBulkBusy] = uS(false);          // กำลังส่งทั้งชุด — ล็อกปุ่มกันกดซ้ำระหว่างรอ
+  const [reconcile, setReconcile] = uS(null);         // ผลการเทียบกับประวัติการโอนจริง
+  const [reconciling, setReconciling] = uS(false);
+  const [zortNumInput, setZortNumInput] = uS("");     // เลขที่เอกสารโอนใน ZORT ที่ผู้ใช้พิมพ์
   const isOnline = useOnlineStatus(); // ตรวจสอบการเชื่อมต่อก่อนส่งสถานะ
   // warehouse map modal state — shared สำหรับ card ทุกใบในหน้านี้
   const [mapModal, setMapModal] = uS(null); // { lockKey, productName, sku } | null
@@ -4864,18 +5086,27 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
     // ถ้าไม่ใช่ MTO → โอนสต็อกคลัง→หน้าร้าน / ถ้าเป็น MTO → เบิกวัตถุดิบ (ถ้ามี)
     // เก็บผลโอนไว้ตัดสินว่า "ส่งสำเร็จจริง" ไหม — กันบั๊กข้อมูลหาย (เดิมลบ order ทิ้งแม้คลังไม่พอ)
-    let transferOk = true, transferred = qty, errMsg = "";
+    let transferOk = true, transferred = qty, errMsg = "", unreadable = false;
     if (!order.product?.isMTO) {
       const res = await syncStockDeduct(order.sku, qty, order.carryMode === "carry" ? order.name + " order" : order.name);
       const ok = res && res.success === true;
       transferred = (res && res.data && res.data.transferred != null) ? Number(res.data.transferred) : (ok ? qty : 0);
       transferOk = ok && transferred > 0;       // โอนได้จริง > 0 ชิ้น = สำเร็จ
       errMsg = (res && res.error) || "";
+      unreadable = !!(res && res.unreadable);
     } else if (matItems && matItems.length > 0) {
       await syncDeductMaterials(matItems);
     }
 
     setSending(null);
+
+    // ⚠️ "อ่านคำตอบไม่ได้" ≠ "คลังไม่พอ" — GAS เขียนชีต + สร้างเอกสารโอนใน ZORT เสร็จแล้ว
+    // ยังตอบไม่ทันได้ (บทเรียนข้อ 13) · เส้นทางนี้ยังไม่มีตัวกันโอนซ้ำ (ไม่มี tid เหมือน "ส่งทั้งหมด")
+    // → **ห้ามชวนให้กดส่งซ้ำเด็ดขาด** ต้องให้ไปเช็คประวัติจริงก่อน ไม่งั้นของโอนสองเด้ง
+    if (unreadable) {
+      showToast("warn", "ไม่แน่ใจว่าส่งสำเร็จหรือไม่ (ระบบตอบกลับไม่ครบ) — กดปุ่ม \"🧾 เช็คของที่ส่งไปแล้ว\" ด้านบนก่อน อย่ากดส่งซ้ำ", "❓", 10000);
+      return;
+    }
 
     // คลังไม่พอ/ไม่พบสินค้า → ไม่ลบ order, ไม่มาร์คส่งแล้ว, คงไว้ให้ส่งใหม่ภายหลัง
     if (!transferOk) {
@@ -4944,8 +5175,31 @@ function OrderSummaryView({ data, onPrintRequest }) {
       .filter(it => it.sku && it.qty > 0);
 
     let batchRes = { success: true };
+    let tid = "";
     if (transferItems.length) {
-      batchRes = await syncStockTransferBatch(transferItems);
+      tid = getShipTid(ready);
+      setBulkBusy(true);
+      batchRes = await syncStockTransferBatch(transferItems, tid);
+
+      // ⚠️ "อ่านคำตอบไม่ได้" ≠ "โอนไม่สำเร็จ" — ชุดใหญ่ (70-80 SKU) ใช้เวลานานกว่าที่ browser
+      // ยอมรอ แล้วตัดสายทั้งที่ GAS เขียนชีต + สร้างเอกสารโอนใน ZORT เสร็จไปแล้ว
+      // เดิมตรงนี้ขึ้น "ส่งไม่สำเร็จ" ทันที → พนักงานกดซ้ำ = โอนสองเด้ง · ต้องถามของจริงก่อนเสมอ
+      if (batchRes && batchRes.unreadable && tid) {
+        showToast("warn", "ตอบกลับช้า — กำลังตรวจสอบว่าของถูกส่งไปแล้วหรือยัง…", "🔄", 6000);
+        const chk = await syncTransferCheck(tid);
+        if (chk && chk.found) {
+          // ลงระบบไปแล้วจริง → เดินเส้นทางสำเร็จตามปกติ ด้วยผลรายตัวที่ server ยืนยัน
+          batchRes = { success: true, verified: true, data: {
+            count: chk.count, zortNumber: chk.zortNumber, refNum: chk.refNum,
+            results: (chk.results && chk.results.length)
+              ? chk.results
+              : shipResultsFromSheetItems(transferItems, chk.items),
+          } };
+        } else if (chk && chk.found === false) {
+          batchRes = { ...batchRes, notLanded: true };   // ยืนยันแล้วว่ายังไม่ลง → กดซ้ำได้ปลอดภัย
+        }
+      }
+      setBulkBusy(false);
     }
     const batchOk = batchRes && batchRes.success === true;
 
@@ -4956,6 +5210,12 @@ function OrderSummaryView({ data, onPrintRequest }) {
         // conflict = ข้อมูลฝั่ง server ใหม่กว่าที่เครื่องนี้โหลด → ดึงข้อมูลล่าสุดให้ แล้วให้ลองอีกครั้ง
         showToast("warn", "ข้อมูลมีการอัปเดต — กำลังโหลดใหม่ แล้วลองส่งอีกครั้ง", "🔄", 6000);
         if (typeof window._dmjRefetch === "function") window._dmjRefetch();
+      } else if (batchRes && batchRes.notLanded) {
+        // server ยืนยันว่ายังไม่มีอะไรลงระบบ → บอกให้กดซ้ำได้เลย (tid กันโอนซ้ำให้แล้ว)
+        showToast("warn", "ยังส่งไม่สำเร็จ — ของยังไม่ถูกโอน กด \"ส่งทั้งหมด\" อีกครั้งได้เลย (ระบบกันโอนซ้ำให้แล้ว)", "⚠️", 8000);
+      } else if (batchRes && batchRes.unreadable) {
+        // ถามก็ไม่ได้คำตอบ → **ห้ามบอกให้กดซ้ำ** เพราะไม่รู้ว่าโอนไปแล้วหรือยัง
+        showToast("warn", "ไม่แน่ใจว่าส่งสำเร็จหรือไม่ — กด Sync แล้วใช้ปุ่ม \"🧾 เช็คของที่ส่งไปแล้ว\" ก่อนกดส่งซ้ำ", "❓", 9000);
       } else {
         showToast("warn", `ส่งไม่สำเร็จ — ระบบมีปัญหา ${batchRes.error || batchRes.message || ""} · คงรายการไว้ ลองใหม่อีกครั้ง`, "⚠️", 7000);
       }
@@ -5002,7 +5262,10 @@ function OrderSummaryView({ data, onPrintRequest }) {
     setSt(nextSt);
 
     // ลบเฉพาะ order ที่ส่งสำเร็จออกจาก Sheet — order ที่คลังไม่พอจะคงไว้ให้ส่งใหม่ภายหลัง
-    if (succeeded.length) syncDeleteOrders(succeeded.map(o => o.id));
+    if (succeeded.length) syncDeleteOrders(succeeded);
+    // ชุดนี้จบแล้ว (ผลรายตัวถึงมือ client เรียบร้อย) → ทิ้ง tid ไม่ให้ไปกันชุดถัดไปที่บังเอิญ
+    // เป็นสินค้า/จำนวนเดิม · ที่เหลือ (kept) จะได้ tid ใหม่เองเพราะรายการในชุดเปลี่ยนไปแล้ว
+    clearShipTid();
 
     const zErr = batchRes && batchRes.data && batchRes.data.zortError;
     const partialMsg = partials.length
@@ -5019,6 +5282,108 @@ function OrderSummaryView({ data, onPrintRequest }) {
     } else {
       const zNum = batchRes && batchRes.data && batchRes.data.zortNumber;
       showToast("success", `ส่ง ${succeeded.length} รายการแล้ว${zNum ? ` (ZORT ${zNum})` : ""}`, "📦");
+    }
+  };
+
+  // ── 🧾 เช็คของที่ส่งไปแล้ว — หา "ประวัติจริง" ว่าอันไหนโอนไปแล้วบ้าง ────────────
+  // ใช้ตอนกดส่งแล้วขึ้นว่าไม่สำเร็จ ทั้งที่ ZORT มีเอกสารโอนแล้ว (คำตอบหายกลางทาง)
+  //
+  // ⚠️ **ไม่ใช่ปุ่ม "เคลียร์ทั้งหมด"** — คนกดส่งอาจส่งไปแค่บางส่วน (กดทีละใบ/กดค้างไว้)
+  //    ตัวนี้เทียบรายตัวกับ **ชีต "รายการโอนสินค้า"** ซึ่ง GAS เขียนเมื่อโอนสำเร็จจริงเท่านั้น
+  //    (ทั้งทาง "ส่งทั้งหมด" = logTransferBatch_ และทาง "กดส่งทีละใบ" = logTransfer_)
+  //    ตัวที่ไม่มีแถวรองรับ = ยังไม่ได้ส่งจริง → **คงไว้ในรายการเสมอ ห้ามเคลียร์**
+  // · จับคู่ 1 ต่อ 1 ไม่ให้แถวโอนแถวเดียวไปเคลียร์ order หลายใบ
+  // · ผู้ใช้ติ๊กเลือกได้รายตัวก่อนยืนยัน (ค่าเริ่มต้นติ๊กไว้ทุกอัน) — ตัดสินใจสุดท้ายอยู่ที่คน
+  // · การเคลียร์นี้ **ไม่ตัดสต็อกซ้ำ** (ไม่เรียก transfer เลย) แค่ลบ order + มาร์คว่าส่งแล้ว
+  const RECONCILE_DAYS = 3;
+  const findAlreadyShipped = (rows) => {
+    const cutoff = Date.now() - RECONCILE_DAYS * 24 * 60 * 60 * 1000;
+    const pool = (rows || [])
+      .filter(s => !s.receivedAt)                       // หน้าร้านยังไม่กดรับ = เพิ่งโอนมา
+      .filter(s => { const t = parseShipDateMs(s.date); return t == null || t >= cutoff; })
+      .map(s => ({ ...s, used: false }));
+    const pending = [...carryOrders, ...truckOrders]
+      .filter(o => !shipped[o.id] && !o.product?.isMTO && o.sku);
+    const matches = [], unmatched = [];
+    pending.forEach(o => {
+      const sku = String(o.sku).trim().toUpperCase();
+      const q   = o.preparedQty || o.orderQty || 0;
+      let m = pool.find(s => !s.used && String(s.sku || "").trim().toUpperCase() === sku && Number(s.qty) === q);
+      if (!m) m = pool.find(s => !s.used && String(s.sku || "").trim().toUpperCase() === sku); // คลังไม่พอ → จำนวนไม่ตรง
+      if (!m) { unmatched.push(o); return; }
+      m.used = true;
+      matches.push({ order: o, ship: m, pick: true });
+    });
+    return { matches, unmatched, pending };
+  };
+
+  const openReconcile = async () => {
+    setReconciling(true);
+    // อ่านประวัติ "สด" จากชีตก่อนเสมอ — ข้อมูลในเครื่องอาจเป็นก้อนก่อนกดส่ง
+    // ตอบไม่ได้ (GAS ยังเป็นโค้ดเก่า/เน็ตพัง) → ถอยไปใช้ data.shipments ที่มีอยู่ แล้วบอกให้กด Sync
+    const fresh = await syncRecentTransfers(RECONCILE_DAYS);
+    const rows = fresh || (data.shipments || []);
+    const res = findAlreadyShipped(rows);
+    setReconciling(false);
+    // เปิดหน้าต่างเสมอแม้หาไม่เจอ — เพราะยังมีทางที่สอง: ค้นจากเลขที่ ZORT โดยตรง
+    // (ชีตเราไม่มีบันทึกก็ได้ ถ้าสคริปต์ถูกตัดกลางคันหลังยิง ZORT สำเร็จ)
+    setReconcile({ ...res, fresh: !!fresh, src: "sheet" });
+  };
+
+  // ค้นจากเลขที่เอกสารโอนใน ZORT ที่ผู้ใช้พิมพ์เอง (เช่น TF-20260803-005)
+  const lookupByZort = async () => {
+    const num = (zortNumInput || "").trim();
+    if (!num) return;
+    setReconciling(true);
+    const r = await syncZortTransferLookup(num);
+    setReconciling(false);
+    if (!r) {
+      showToast("warn", "ถามระบบไม่ได้ — เน็ตขัดข้อง หรือระบบหลังบ้านยังไม่ได้อัปเดต ลองใหม่อีกครั้ง", "⚠️", 8000);
+      return;
+    }
+    if (r.found === false) {
+      showToast("warn", `ไม่พบเอกสารโอนเลขที่ "${num}" ใน ZORT (ค้นย้อนหลัง 14 วัน) — ลองคัดลอกเลขจาก ZORT มาวางอีกครั้ง`, "🔎", 9000);
+      return;
+    }
+    const res = findAlreadyShipped(r.list);
+    if (!res.matches.length) {
+      showToast("warn", `เอกสาร ${r.transfer.number} มี ${r.list.length} รายการ แต่ไม่ตรงกับรายการที่ค้างอยู่เลย (อาจถูกเคลียร์ไปแล้ว)`, "🔎", 9000);
+      return;
+    }
+    setReconcile({ ...res, fresh: true, src: "zort", zort: r.transfer, zortSheetLogged: r.sheetLogged });
+  };
+
+  const toggleReconcilePick = (idx) => {
+    setReconcile(r => r ? { ...r, matches: r.matches.map((m, i) => i === idx ? { ...m, pick: !m.pick } : m) } : r);
+  };
+
+  const applyReconcile = async () => {
+    const matches = ((reconcile && reconcile.matches) || []).filter(m => m.pick);
+    setReconcile(null);
+    if (!matches.length) return;
+    setReconciling(true);
+    const nextShipped = { ...shipped };
+    let nextSt = getOrdersState();
+    matches.forEach(({ order }) => {
+      nextShipped[order.id] = Date.now();
+      nextSt[order.id] = { ...(nextSt[order.id] || {}), status: "ส่งแล้ว", sig: orderSig(order), markedAt: new Date().toISOString() };
+    });
+    setShipped(nextShipped);
+    localStorage.setItem(LS_SHIPPED_ORDERS, JSON.stringify(nextShipped));
+    localStorage.setItem(LS_ORDERS_STATE, JSON.stringify(nextSt));
+    setSt(nextSt);
+    const res = await syncDeleteOrders(matches.map(m => m.order));
+    clearShipTid();
+    setReconciling(false);
+    // mismatched = ใบที่แถวเลื่อน (มีคนลบ order อื่นไปก่อน) GAS ไม่ยอมลบให้เพราะเสี่ยงลบผิดใบ
+    // ต้องบอกผู้ใช้ตรง ๆ ว่ายังไม่ครบ ไม่งั้นเห็น "เคลียร์ N รายการ" แล้วงงว่าทำไมยังค้างอยู่
+    const skipped = (res && res.data && res.data.mismatched) || (res && res.mismatched) || [];
+    if (res && res.success === false) {
+      showToast("warn", `เคลียร์บนหน้าจอแล้ว ${matches.length} รายการ แต่ลบออกจากชีตไม่สำเร็จ (${res.error || ""}) — กด Sync แล้วลองอีกครั้ง`, "⚠️", 9000);
+    } else if (skipped.length) {
+      showToast("warn", `เคลียร์แล้ว ${matches.length - skipped.length} รายการ · อีก ${skipped.length} รายการข้อมูลเลื่อนแถว (${skipped.join(", ")}) — กด Sync แล้วลองอีกครั้ง`, "⚠️", 9000);
+    } else {
+      showToast("success", `เคลียร์ ${matches.length} รายการที่ส่งไปแล้ว (ไม่ตัดสต็อกซ้ำ)`, "🧾", 7000);
     }
   };
 
@@ -5079,12 +5444,13 @@ function OrderSummaryView({ data, onPrintRequest }) {
               </button>
             )}
             {readyCount > 0 && (
-              <button onClick={() => handleShipAll(orders)} style={{
-                padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",
-                background: isTruck?"#1d4ed8":"var(--g-700)",color:"#fff",
+              <button onClick={() => handleShipAll(orders)} disabled={bulkBusy} style={{
+                padding:"6px 14px",borderRadius:8,border:"none",
+                cursor: bulkBusy ? "wait" : "pointer",
+                background: bulkBusy ? "#9ca3af" : (isTruck?"#1d4ed8":"var(--g-700)"),color:"#fff",
                 fontSize:12,fontWeight:700,fontFamily:"inherit",
               }}>
-                ✅ ส่งทั้งหมด ({readyCount})
+                {bulkBusy ? "⏳ กำลังส่ง…" : `✅ ส่งทั้งหมด (${readyCount})`}
               </button>
             )}
           </div>
@@ -5254,12 +5620,30 @@ function OrderSummaryView({ data, onPrintRequest }) {
             {Object.keys(shipped).length > 0 && ` · ส่งแล้ว ${Object.keys(shipped).filter(id=>doneOrders.find(o=>o.id===id)).length} รายการ`}
           </div>
         </div>
-        <button onClick={() => setResetConfirm(true)} style={{
-          padding:"6px 12px",borderRadius:8,border:"1.5px solid var(--bdr)",
-          background:"#fff",color:"var(--muted)",fontSize:11,fontWeight:600,
-          cursor:"pointer",fontFamily:"inherit",
-        }}>🔄 รีเซ็ตสถานะ</button>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          {/* ทางออกเวลากดส่งแล้วขึ้นว่าไม่สำเร็จ ทั้งที่ของโอนเข้าระบบไปแล้ว (คำตอบหายกลางทาง) */}
+          <button onClick={openReconcile} disabled={reconciling} style={{
+            padding:"6px 12px",borderRadius:8,border:"1.5px solid #93c5fd",
+            background: reconciling ? "#eff6ff" : "#dbeafe", color:"#1d4ed8",
+            fontSize:11,fontWeight:700,cursor: reconciling ? "wait" : "pointer",fontFamily:"inherit",
+          }}>{reconciling ? "กำลังตรวจประวัติ…" : "🧾 เช็คของที่ส่งไปแล้ว"}</button>
+          <button onClick={() => setResetConfirm(true)} style={{
+            padding:"6px 12px",borderRadius:8,border:"1.5px solid var(--bdr)",
+            background:"#fff",color:"var(--muted)",fontSize:11,fontWeight:600,
+            cursor:"pointer",fontFamily:"inherit",
+          }}>🔄 รีเซ็ตสถานะ</button>
+        </div>
       </div>
+
+      {/* กำลังส่งทั้งชุด — ชุดใหญ่ใช้เวลาเป็นนาที ถ้าไม่บอกอะไรเลยพนักงานจะกดซ้ำ */}
+      {bulkBusy && (
+        <div className="no-print" style={{
+          padding:"10px 14px",marginBottom:12,borderRadius:10,
+          background:"#fef9c3",border:"1.5px solid #fde047",fontSize:13,fontWeight:600,color:"#854d0e",
+        }}>
+          ⏳ กำลังส่งของ… ชุดใหญ่ใช้เวลาถึง 2-3 นาที <b>อย่าปิดหน้านี้และอย่ากดซ้ำ</b>
+        </div>
+      )}
 
       {renderSection("หิ้วเอง", "🚶", carryOrders, false)}
       {renderSection("ขึ้นรถ",  "🚛", truckOrders, true)}
@@ -5330,6 +5714,113 @@ function OrderSummaryView({ data, onPrintRequest }) {
         onConfirm={doShip}
         onCancel={() => setShipConfirm(null)}
       />
+      {/* ── ประวัติการโอนจริง: เลือกเองว่าจะเคลียร์อันไหน (ไม่ตัดสต็อกซ้ำ) ── */}
+      {reconcile && (
+        <div onClick={() => setReconcile(null)} style={{
+          position:"fixed",inset:0,background:"rgba(0,0,0,.6)",zIndex:2000,
+          display:"flex",alignItems:"center",justifyContent:"center",padding:12,
+          backdropFilter:"blur(4px)",
+        }}>
+          <div onClick={e => e.stopPropagation()} style={{
+            background:"#fff",borderRadius:16,maxWidth:480,width:"100%",
+            maxHeight:"90vh",display:"flex",flexDirection:"column",overflow:"hidden",
+            boxShadow:"0 20px 60px rgba(0,0,0,.3)",
+          }}>
+            <div style={{background:"#e3f2fd",padding:"16px 18px",borderBottom:"3px solid #0d47a133"}}>
+              <div style={{fontSize:32,lineHeight:1,marginBottom:4}}>🧾</div>
+              <div style={{fontSize:16,fontWeight:700,color:"#0d47a1"}}>
+                {reconcile.matches.length
+                  ? `พบหลักฐานว่าโอนไปแล้ว ${reconcile.matches.length} จาก ${reconcile.pending.length} รายการ`
+                  : `ไม่พบหลักฐานการโอนในระบบเรา (ตรวจ ${reconcile.pending.length} รายการที่ค้าง)`}
+              </div>
+              <div style={{fontSize:12,color:"#0d47a1",marginTop:4,lineHeight:1.5}}>
+                {reconcile.src === "zort"
+                  ? <>มาจาก <b>เอกสารโอนใน ZORT {reconcile.zort?.number}</b> ({reconcile.zort?.date} · สถานะ {reconcile.zort?.status})
+                      {!reconcile.zortSheetLogged && <><br/><b style={{color:"#b45309"}}>⚠️ ชีต "รายการโอนสินค้า" ของเราไม่มีบันทึกเลขที่นี้</b> — แจ้งเจ้าของให้รัน checkZortTransfer เพื่อซ่อมข้อมูลฝั่งเรา</>}</>
+                  : <>มาจากชีต "รายการโอนสินค้า" {reconcile.fresh ? "(อ่านสดจากระบบเมื่อครู่)" : "(ข้อมูลในเครื่อง — กด Sync แล้วเช็คใหม่จะแม่นกว่า)"}</>}
+                {reconcile.matches.length > 0 &&
+                  <><br/>อีก <b>{reconcile.unmatched.length} รายการยังไม่พบหลักฐาน = ยังไม่ได้ส่ง</b> จะคงไว้ในรายการให้</>}
+              </div>
+            </div>
+            {/* ทางที่สอง: ZORT มีเอกสารโอนอยู่ฝ่ายเดียว ชีตเราไม่มีบันทึก → ค้นจากเลขที่ตรง ๆ */}
+            <div style={{padding:"10px 14px",borderBottom:"1px solid var(--bdr)",background:"#fafafa"}}>
+              <div style={{fontSize:12,fontWeight:600,marginBottom:6}}>ไม่เจอของที่ส่งไปแล้ว? ใส่เลขที่โอนจาก ZORT</div>
+              <div style={{display:"flex",gap:6}}>
+                <input value={zortNumInput} onChange={e => setZortNumInput(e.target.value)}
+                  placeholder="เช่น TF-20260803-005"
+                  style={{flex:1,minWidth:0,padding:"9px 10px",borderRadius:8,
+                          border:"1.5px solid var(--bdr)",fontSize:13,fontFamily:"inherit"}}/>
+                <button onClick={lookupByZort} disabled={reconciling || !zortNumInput.trim()} style={{
+                  padding:"9px 14px",borderRadius:8,border:"none",
+                  background: (reconciling || !zortNumInput.trim()) ? "#9ca3af" : "#1565c0",
+                  color:"#fff",fontSize:13,fontWeight:700,fontFamily:"inherit",
+                  cursor: (reconciling || !zortNumInput.trim()) ? "not-allowed" : "pointer",
+                }}>{reconciling ? "…" : "ค้นหา"}</button>
+              </div>
+            </div>
+            {reconcile.matches.length > 0 && (
+              <div style={{padding:"10px 14px",fontSize:12,color:"var(--muted)",borderBottom:"1px solid var(--bdr)"}}>
+                ติ๊กเลือกเองได้ — ที่ติ๊กไว้จะถูกลบออกจากรายการและมาร์คว่าส่งแล้ว
+                <b style={{color:"var(--g-700)"}}> โดยไม่ตัดสต็อกซ้ำ</b>
+              </div>
+            )}
+            <div style={{flex:1,overflowY:"auto",padding:"8px 12px"}}>
+              {!reconcile.matches.length && (
+                <div style={{padding:"18px 8px",fontSize:13,color:"var(--muted)",lineHeight:1.6}}>
+                  ระบบไม่พบบันทึกว่ามีของถูกโอนไปแล้ว แปลว่าอย่างใดอย่างหนึ่ง:
+                  <br/>• ยังไม่ได้ส่งจริง → กด "ส่งทั้งหมด" ได้ตามปกติ
+                  <br/>• ส่งไปแล้วแต่บันทึกฝั่งเราขาด → ใส่เลขที่โอนจาก ZORT ด้านบนแล้วกดค้นหา
+                  <br/>• หน้าร้านกดรับของไปแล้ว → จะไม่ขึ้นที่นี่ (ไม่ต้องทำอะไร)
+                </div>
+              )}
+              {reconcile.matches.map((m, i) => (
+                <label key={m.order.id} style={{
+                  display:"flex",gap:10,alignItems:"flex-start",padding:"9px 8px",
+                  borderBottom:"1px solid var(--bdr)",cursor:"pointer",
+                }}>
+                  <input type="checkbox" checked={m.pick} onChange={() => toggleReconcilePick(i)}
+                    style={{width:20,height:20,marginTop:2,flexShrink:0}}/>
+                  {(m.order.image || m.order.product?.imageUrl) ? (
+                    <img src={m.order.image || m.order.product?.imageUrl} alt=""
+                      onError={e=>{e.target.style.display="none"}}
+                      style={{width:40,height:40,objectFit:"cover",borderRadius:8,flexShrink:0,background:"var(--g-50)"}}/>
+                  ) : (
+                    <div style={{width:40,height:40,borderRadius:8,background:"var(--g-100)",flexShrink:0,
+                                 display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>📦</div>
+                  )}
+                  <div style={{minWidth:0,flex:1}}>
+                    <div style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {m.order.name || m.order.sku}
+                    </div>
+                    <div style={{fontSize:11,color:"var(--muted)"}}>{m.order.sku} · จัด {m.order.preparedQty || m.order.orderQty || 0} ชิ้น</div>
+                    <div style={{fontSize:11,color:"#1d4ed8",marginTop:2}}>
+                      โอนแล้ว {m.ship.qty} ชิ้น · {m.ship.refNum || "ไม่มีเลขที่"} · {m.ship.date || ""}
+                      {m.ship.preparedBy ? ` · ${m.ship.preparedBy}` : ""}
+                    </div>
+                    {Number(m.ship.qty) !== (m.order.preparedQty || m.order.orderQty || 0) && (
+                      <div style={{fontSize:11,color:"var(--dang)",marginTop:2}}>⚠️ จำนวนไม่ตรงกับที่จัดไว้ — ตรวจก่อนติ๊ก</div>
+                    )}
+                  </div>
+                </label>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:8,padding:"12px 14px",borderTop:"1px solid var(--bdr)"}}>
+              <button onClick={() => setReconcile(null)} style={{
+                flex:1,padding:"14px",borderRadius:12,border:"none",background:"var(--g-100)",
+                color:"var(--g-700)",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:"inherit",minHeight:52,
+              }}>❌ ยกเลิก</button>
+              <button onClick={applyReconcile}
+                disabled={!reconcile.matches.some(m => m.pick)} style={{
+                flex:1.4,padding:"14px",borderRadius:12,border:"none",
+                background: reconcile.matches.some(m => m.pick) ? "#1565c0" : "#9ca3af",
+                color:"#fff",fontSize:15,fontWeight:700,
+                cursor: reconcile.matches.some(m => m.pick) ? "pointer" : "not-allowed",
+                fontFamily:"inherit",minHeight:52,
+              }}>🧾 เคลียร์ {reconcile.matches.filter(m => m.pick).length} รายการ</button>
+            </div>
+          </div>
+        </div>
+      )}
       <ConfirmModal
         open={!!shipAllConfirm}
         type="ship"
@@ -6970,6 +7461,342 @@ function AuditLogView() {
 }
 
 // ───────────────────────────────────────────────────────────
+// 🏅 StaffPerformanceView — สรุปผลงานพนักงานรายเดือน (owner/dev)
+// ───────────────────────────────────────────────────────────
+// รวมยอดจาก Audit Log + ชีตลงเวลา ฝั่ง GAS (action=staffPerf) — ที่นี่แค่แสดงผล
+//
+// ⚠️ **จัดกลุ่มตามตำแหน่งเสมอ ห้ามทำเป็นตารางอันดับรวมทั้งร้าน** — งานคนละแบบนับคนละหน่วย
+//    (นับสต็อก = 1 แถว/SKU · ขาย = 1 แถว/บิล) เอามาเรียงอันดับปนกันคือเทียบคนละฐาน
+//    แล้วเจ้าของจะตัดสินคนผิด ซึ่งแย่กว่าไม่มีตัวเลขให้ดูเลย
+// ⚠️ แถบ "งานที่ระบบบันทึกได้ ≠ งานทั้งหมด" ต้องอยู่ตลอด ห้ามซ่อน/ยุบ
+// ───────────────────────────────────────────────────────────
+const STAFF_PERF_ROLE_LABEL = {
+  owner: "👑 เจ้าของ", dev: "🛠️ ผู้ดูแลระบบ", saler: "💼 Sale",
+  warehouse: "🏭 คลังสินค้า", frontstore: "🌸 หน้าร้าน",
+  storedevice: "🖥️ เครื่องร้าน", employee: "👤 พนักงาน",
+};
+// สีประจำคน — ไล่ตามลำดับในกลุ่ม ให้แถบ/ตัวเลขของแต่ละคนแยกออกจากกันด้วยตา
+const STAFF_PERF_COLORS = ["#1f7f44", "#1f6f8b", "#7a5cc8", "#c2410c", "#a07417", "#b8341c"];
+
+function staffPerfHm(min) {
+  const m = Math.max(0, Math.round(min || 0));
+  const h = Math.floor(m / 60);
+  return h > 0 ? h + " ชม. " + (m % 60) + " น." : m + " น.";
+}
+// 12 เดือนย้อนหลังนับจากเดือนปัจจุบัน — ใช้เป็นตัวเลือกในดรอปดาวน์
+function staffPerfMonthOptions() {
+  const now = new Date();
+  const out = [];
+  for (let i = 0; i < 12; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const key = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+    out.push({ value: key, label: d.toLocaleDateString("th-TH", { month: "long", year: "numeric" }) });
+  }
+  return out;
+}
+
+async function syncGetStaffPerf(month, fresh) {
+  if (typeof SHEET_DEPLOY_URL === "undefined" || !SHEET_DEPLOY_URL) {
+    return { ok: false, error: "ยังไม่ได้เชื่อมต่อ Sheet" };
+  }
+  let tok = "";
+  try { tok = localStorage.getItem("dmj_session_token") || ""; } catch (e) {}
+  if (!tok) return { ok: false, error: "ต้องล็อกอินก่อนถึงจะดูผลงานพนักงานได้" };
+  const sep = SHEET_DEPLOY_URL.indexOf("?") >= 0 ? "&" : "?";
+  try {
+    const res = await fetch(SHEET_DEPLOY_URL + sep + "action=staffPerf&month=" + encodeURIComponent(month || "") +
+      (fresh ? "&fresh=1" : "") + "&sessionToken=" + encodeURIComponent(tok) + "&_t=" + Date.now(),
+      { cache: "no-store" });
+    // ต้องอ่านคำตอบจริงเสมอ — GAS ตอบหน้า HTML ได้ (บทเรียนข้อ 13)
+    const d = await dmjJson(res);
+    if (!d || d.success === false) return { ok: false, error: (d && d.error) || "โหลดไม่สำเร็จ" };
+    return { ok: true, data: d.data || d };
+  } catch (e) {
+    return { ok: false, error: dmjErrText(e) };
+  }
+}
+
+function StaffPerformanceView() {
+  const monthOpts = uM(() => staffPerfMonthOptions(), []);
+  const [month, setMonth]     = uS(() => monthOpts[0].value);
+  const [d, setD]             = uS(null);
+  const [loading, setLoading] = uS(true);
+  const [err, setErr]         = uS(null);
+  const [openId, setOpenId]   = uS(null);   // staffId ที่กางรายละเอียดอยู่
+
+  const load = uC(async (m, fresh) => {
+    setLoading(true); setErr(null);
+    const r = await syncGetStaffPerf(m, fresh);
+    if (r.ok) { setD(r.data); } else { setErr(r.error); setD(null); }
+    setLoading(false);
+  }, []);
+
+  uE(() => { load(month, false); }, [month, load]);
+
+  const catMap = uM(() => {
+    const m = {};
+    ((d && d.cats) || []).forEach(c => { m[c.key] = c; });
+    return m;
+  }, [d]);
+
+  // จัดกลุ่มตามตำแหน่ง — เทียบกันได้เฉพาะคนที่ทำงานแบบเดียวกัน
+  const groups = uM(() => {
+    const g = {};
+    ((d && d.staff) || []).forEach(s => {
+      const k = s.role || "unknown";
+      (g[k] = g[k] || []).push(s);
+    });
+    // ตำแหน่งที่มีคนทำงานเยอะสุดขึ้นก่อน
+    return Object.keys(g)
+      .map(k => ({ role: k, rows: g[k], total: g[k].reduce((a, s) => a + s.total, 0) }))
+      .sort((a, b) => b.total - a.total);
+  }, [d]);
+
+  const totals = uM(() => {
+    const rows = (d && d.staff) || [];
+    return {
+      people:    rows.filter(s => s.total > 0 || s.workedMin > 0).length,
+      actions:   rows.reduce((a, s) => a + s.total, 0),
+      workedMin: rows.reduce((a, s) => a + s.workedMin, 0),
+    };
+  }, [d]);
+
+  const monthLabel = (monthOpts.find(o => o.value === month) || {}).label || month;
+
+  return (
+    <div style={{ padding: 16, maxWidth: 960, margin: "0 auto" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between",
+                    marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>🏅 ผลงานพนักงาน</div>
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>
+            ใครทำอะไรไปเท่าไหร่ · รวมจากประวัติการใช้งานจริง + เวลาเข้า-ออกงาน
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <select value={month} onChange={e => { setOpenId(null); setMonth(e.target.value); }}
+            style={{ minHeight: 40, padding: "8px 10px", borderRadius: 10, border: "1.5px solid var(--bdr)",
+                     background: "var(--paper)", fontFamily: "inherit", fontSize: 13, fontWeight: 600 }}>
+            {monthOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+          <button className="btn ghost" onClick={() => load(month, true)} disabled={loading}
+            style={{ minHeight: 40, display: "flex", alignItems: "center", gap: 6 }}>
+            {loading ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }}/> : "🔄"}
+            <span>รีโหลด</span>
+          </button>
+        </div>
+      </div>
+
+      {/* ห้ามซ่อน — ตัวเลขนี้ตีความผิดง่ายมากถ้าไม่มีบรรทัดนี้กำกับ */}
+      <div style={{ background: "#fff8e1", border: "1.5px solid #ffe082", borderRadius: 12,
+                    padding: "11px 14px", marginBottom: 16, fontSize: 12, lineHeight: 1.7, color: "#7a5c00" }}>
+        <b>อ่านตัวเลขนี้ยังไง</b> — นับเฉพาะ<b>งานที่ทำผ่านแอป</b> (นับสต็อก · เช็คหน้าร้าน · จัดออเดอร์ ·
+        โอนของ · ออกบิล ฯลฯ) งานที่ไม่ได้กดในแอป เช่น เดินหาของ ยกของ ตอบลูกค้า <b>ไม่ถูกนับ</b> ·
+        แต่ละตำแหน่งนับคนละหน่วย (นับสต็อก = 1 ต่อสินค้า 1 ตัว · ขาย = 1 ต่อบิล 1 ใบ)
+        จึง<b>เทียบข้ามตำแหน่งไม่ได้</b> — ใช้ดูแนวโน้มของคนคนเดียวข้ามเดือน กับเทียบคนตำแหน่งเดียวกัน
+      </div>
+
+      {err && (
+        <Card padding={true}>
+          <div style={{ color: "#b8341c", fontWeight: 700, marginBottom: 6 }}>โหลดไม่สำเร็จ</div>
+          <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 12 }}>{err}</div>
+          <button className="btn" onClick={() => load(month, true)}>ลองใหม่</button>
+        </Card>
+      )}
+
+      {loading && !d && (
+        <Card padding={true}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--muted)", fontSize: 13 }}>
+            <span className="spin" style={{ width: 16, height: 16, borderWidth: 2 }}/>
+            กำลังรวมยอดของเดือน{monthLabel}…
+          </div>
+        </Card>
+      )}
+
+      {d && (<>
+        <div className="row row-3" style={{ marginBottom: 16 }}>
+          <KPI label="พนักงานที่มีความเคลื่อนไหว" value={fmtN(totals.people)} sub={"เดือน" + monthLabel}
+               accent="#1f7f44" icon={I.layers}/>
+          <KPI label="งานที่ระบบบันทึกได้" value={fmtN(totals.actions)} sub="รายการรวมทุกคน"
+               accent="#1f6f8b" icon={I.check}/>
+          <KPI label="ชั่วโมงทำงานรวม" value={staffPerfHm(totals.workedMin)}
+               sub={d.isCurrentMonth ? "ถึงวันที่ " + String(d.lastDate).slice(8) : "ทั้งเดือน"}
+               accent="#7a5cc8" icon={I.alert}/>
+        </div>
+
+        {totals.actions === 0 && (
+          <Card padding={true}>
+            <Empty title="ยังไม่มีข้อมูลของเดือนนี้"
+                   sub="ระบบเริ่มเก็บประวัติตั้งแต่มีคนใช้งานผ่านแอป — ลองเลือกเดือนอื่นดู"/>
+          </Card>
+        )}
+
+        {groups.map(g => {
+          const maxTotal = Math.max(1, ...g.rows.map(s => s.total));
+          return (
+            <Card key={g.role} padding={true} style={{ marginBottom: 16 }}
+                  title={STAFF_PERF_ROLE_LABEL[g.role] || g.role}
+                  sub={g.rows.length + " คน · รวม " + fmtN(g.total) + " งาน"}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {g.rows.map((s, i) => {
+                  const color = STAFF_PERF_COLORS[i % STAFF_PERF_COLORS.length];
+                  const open  = openId === s.staffId;
+                  // หมวดที่ทำจริง เรียงมากไปน้อย · หมวด skip (กดลงเวลา) ดันไปท้ายสุดเสมอ
+                  // — ไม่ได้นับรวมในยอด "งาน" ถ้าเอาไปปนบนสุดจะอ่านเหมือนเป็นงานด้วย
+                  const cats = Object.keys(s.byCat || {})
+                    .map(k => ({ ...(catMap[k] || { key: k, emoji: "➖", label: k, unit: "ครั้ง" }), n: s.byCat[k] }))
+                    .sort((a, b) => (a.skip ? 1 : 0) - (b.skip ? 1 : 0) || b.n - a.n);
+                  return (
+                    <div key={s.staffId} style={{ border: "1.5px solid var(--bdr)", borderRadius: 12,
+                                                  overflow: "hidden", background: "var(--paper)" }}>
+                      <button onClick={() => setOpenId(open ? null : s.staffId)}
+                        style={{ width: "100%", textAlign: "left", cursor: "pointer", fontFamily: "inherit",
+                                 background: "transparent", border: "none", padding: "12px 14px",
+                                 display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+                        {s.pictureUrl
+                          ? <img src={s.pictureUrl} alt="" style={{ width: 42, height: 42, borderRadius: "50%",
+                                   objectFit: "cover", flex: "0 0 auto" }}/>
+                          : <div style={{ width: 42, height: 42, borderRadius: "50%", flex: "0 0 auto",
+                                          background: color + "1a", color: color, display: "flex",
+                                          alignItems: "center", justifyContent: "center",
+                                          fontSize: 17, fontWeight: 800 }}>{(s.name || "?").slice(0, 1)}</div>}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 14, fontWeight: 800, color: "var(--text)",
+                                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {s.name}
+                          </div>
+                          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                            ⏱️ {staffPerfHm(s.workedMin)} · {fmtN(s.daysWorked)} วัน
+                            {s.perHour != null && <> · <b style={{ color: color }}>{s.perHour} งาน/ชม.</b></>}
+                          </div>
+                          {/* แถบสัดส่วนเทียบกับคนที่ทำมากสุดในตำแหน่งเดียวกัน */}
+                          <div style={{ height: 6, borderRadius: 99, background: "var(--bdr)",
+                                        marginTop: 7, overflow: "hidden" }}>
+                            <div style={{ width: Math.round((s.total / maxTotal) * 100) + "%", height: "100%",
+                                          background: color, borderRadius: 99 }}/>
+                          </div>
+                        </div>
+                        <div style={{ textAlign: "right", flex: "0 0 auto" }}>
+                          <div style={{ fontSize: 22, fontWeight: 800, lineHeight: 1,
+                                        color: s.total > 0 ? color : "var(--muted)" }}>{fmtN(s.total)}</div>
+                          <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 3 }}>งาน</div>
+                          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>{open ? "▲" : "▼"}</div>
+                        </div>
+                      </button>
+
+                      {open && (
+                        <div style={{ padding: "0 14px 14px", borderTop: "1px solid var(--bdr)" }}>
+                          {/* เวลาทำงาน */}
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, margin: "12px 0" }}>
+                            {[
+                              { l: "วันที่มาทำงาน", v: fmtN(s.daysWorked) + " วัน", c: "#1f7f44" },
+                              { l: "มาสาย",        v: fmtN(s.lateDays) + " วัน" + (s.lateMin ? " (" + staffPerfHm(s.lateMin) + ")" : ""), c: s.lateDays ? "#c2410c" : "var(--muted)" },
+                              { l: "ขาด",          v: fmtN(s.daysAbsent) + " วัน", c: s.daysAbsent ? "#b8341c" : "var(--muted)" },
+                            ].map(x => (
+                              <div key={x.l} style={{ flex: "1 1 110px", minWidth: 0, background: "var(--bg)",
+                                                      border: "1px solid var(--bdr)", borderRadius: 10, padding: "8px 10px" }}>
+                                <div style={{ fontSize: 10, color: "var(--muted)", fontWeight: 600 }}>{x.l}</div>
+                                <div style={{ fontSize: 13, fontWeight: 800, color: x.c, marginTop: 2 }}>{x.v}</div>
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* งานแยกตามประเภท */}
+                          {cats.length === 0 ? (
+                            <div style={{ fontSize: 12, color: "var(--muted)", padding: "6px 0" }}>
+                              เดือนนี้ยังไม่มีงานที่ระบบบันทึกได้
+                            </div>
+                          ) : (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                              {cats.map(c => (
+                                <div key={c.key} style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0,
+                                                          opacity: c.skip ? 0.55 : 1 }}>
+                                  <span style={{ fontSize: 15, flex: "0 0 auto" }}>{c.emoji}</span>
+                                  <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: "var(--text)",
+                                                 overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    {c.label}
+                                    {c.skip && <span style={{ fontSize: 10.5, color: "var(--muted)" }}> · ไม่นับเป็นงาน</span>}
+                                  </span>
+                                  <span style={{ flex: "0 0 auto", fontSize: 13, fontWeight: 800,
+                                                 color: c.skip ? "var(--muted)" : color }}>
+                                    {fmtN(c.n)} <span style={{ fontSize: 10, fontWeight: 600, color: "var(--muted)" }}>{c.unit}</span>
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* งานรายวัน — เห็นว่าทำสม่ำเสมอหรือกระจุกวันเดียว */}
+                          <StaffPerfDayBars byDay={s.byDay} color={color} month={d.month} lastDate={d.lastDate}/>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          );
+        })}
+
+        {/* ชื่อใน log ที่จับคู่กับพนักงานไม่ได้ — ต้องบอก ไม่งั้นยอดหายไปเงียบ ๆ */}
+        {d.unmatched && d.unmatched.length > 0 && (
+          <Card padding={true} style={{ marginBottom: 16 }} title="⚠️ ชื่อที่จับคู่กับพนักงานไม่ได้"
+                sub="งานเหล่านี้ถูกบันทึกไว้ แต่ชื่อในประวัติไม่ตรงกับใครในชีตพนักงาน จึงไม่ได้รวมเข้าใครเลย">
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {d.unmatched.slice(0, 20).map(u => (
+                <div key={u.actor} style={{ display: "flex", justifyContent: "space-between", gap: 10,
+                                            fontSize: 12.5, padding: "6px 0", borderBottom: "1px solid var(--bdr)" }}>
+                  <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis",
+                                 whiteSpace: "nowrap" }}>{u.actor}</span>
+                  <b style={{ flex: "0 0 auto", color: "#c2410c" }}>{fmtN(u.total)} งาน</b>
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10, lineHeight: 1.6 }}>
+              มักเกิดจากเปลี่ยนชื่อในชีต "พนักงาน" ทีหลัง (ประวัติเก่ายังเป็นชื่อเดิม) หรือเป็นงานที่ทำก่อน
+              ระบบล็อกอินจะเริ่มใช้ — แก้ได้โดยตั้งชื่อในชีตพนักงานให้ตรงกับชื่อที่เห็นตรงนี้
+            </div>
+          </Card>
+        )}
+      </>)}
+    </div>
+  );
+}
+
+// แถบงานรายวันของคนหนึ่งคน — 1 แท่ง = 1 วัน (สูงตามจำนวนงาน)
+function StaffPerfDayBars({ byDay, color, month, lastDate }) {
+  const days = uM(() => {
+    const lastDay = Number(String(lastDate || "").slice(8)) ||
+                    new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate();
+    const out = [];
+    for (let i = 1; i <= lastDay; i++) {
+      const key = month + "-" + String(i).padStart(2, "0");
+      out.push({ d: i, n: (byDay && byDay[key]) || 0 });
+    }
+    return out;
+  }, [byDay, month, lastDate]);
+  const max = Math.max(1, ...days.map(x => x.n));
+  if (!days.length) return null;
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 700, marginBottom: 6 }}>
+        งานรายวัน (สูงสุด {fmtN(max)} งาน/วัน)
+      </div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 46,
+                    overflowX: "auto", paddingBottom: 2 }}>
+        {days.map(x => (
+          <div key={x.d} title={"วันที่ " + x.d + " — " + x.n + " งาน"}
+            style={{ flex: "1 0 6px", minWidth: 6, height: "100%", display: "flex", alignItems: "flex-end" }}>
+            <div style={{ width: "100%", height: Math.max(2, Math.round((x.n / max) * 100)) + "%",
+                          background: x.n > 0 ? color : "var(--bdr)", borderRadius: "3px 3px 0 0" }}/>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ───────────────────────────────────────────────────────────
 // DeadStockView — สินค้าจม (read-only, เจ้าของดูคนเดียว)
 // ดึง action=getDeadStock จาก GAS แสดงสินค้าที่มีหน้าร้าน > 0
 // และไม่ได้รับโอนมานานกว่า 3 เดือน
@@ -7827,6 +8654,9 @@ function CustomerView({ data }) {
   const [threshold, setThreshold] = uS(15000);
   const [selMonth, setSelMonth] = uS("");
   const [expandedKey, setExpandedKey] = uS(null);
+  const [yoyYear, setYoyYear] = uS(null);
+  const [yoyMode, setYoyMode] = uS("same");  // same = เทียบช่วงเดียวกันของสองปี · full = ทั้งปีปฏิทิน
+  const [yoyList, setYoyList] = uS("");      // รายชื่อที่กางอยู่: "" | new | up | down | back | lost
   const SILENT_GAP = 2; // หาย ≥2 เดือน = เงียบ
 
   const load = async () => {
@@ -7865,6 +8695,109 @@ function CustomerView({ data }) {
     const i = months.indexOf(selMonth);
     return i > 0 ? months[i - 1] : null;
   })();
+
+  // ── 📊 ลูกค้าใหม่ vs ลูกค้าเก่า (เทียบปีต่อปี) ────────────────────────────────
+  // คิดฝั่ง frontend ทั้งหมดจาก customers[].byMonth ที่ backend ส่งมาอยู่แล้ว — ไม่ต้องแก้ GAS
+  // "ใหม่" = เดือนแรกที่มียอดซื้อ (ทั้งประวัติที่มีข้อมูล) อยู่ในปีที่เลือก
+  const yearsAvail = uM(() => {
+    const s = {};
+    months.forEach(mk => { const y = Number(String(mk).split("/")[1]); if (y) s[y] = true; });
+    return Object.keys(s).map(Number).sort((a, b) => a - b);
+  }, [months]);
+  uE(() => {
+    if (yearsAvail.length && (yoyYear == null || yearsAvail.indexOf(yoyYear) < 0)) setYoyYear(yearsAvail[yearsAvail.length - 1]);
+  }, [yearsAvail]);
+
+  const THAI_MON = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+
+  const yoy = uM(() => {
+    if (!yoyYear || !customers.length || !months.length) return null;
+    const prevYear = yoyYear - 1;
+    const now = new Date();
+
+    // เดือนสุดท้ายที่นับ — โหมด "เทียบช่วงเดียวกัน" ต้องตัด **เดือนปัจจุบันที่ยังไม่จบ** ออกเสมอ
+    // (กติกาข้อ 1 ใน CLAUDE.md — เอาเดือนที่ยังไม่จบไปเทียบทั้งเดือน = ปีนี้ดูหดทุกครั้ง)
+    let endM = 12;
+    if (yoyMode === "same") {
+      const inYear = months.filter(mk => Number(String(mk).split("/")[1]) === yoyYear)
+                           .map(mk => Number(String(mk).split("/")[0]));
+      let last = inYear.length ? Math.max.apply(null, inYear) : 0;
+      if (yoyYear === now.getFullYear() && last >= now.getMonth() + 1) last = now.getMonth();
+      endM = last;
+    }
+    if (endM < 1) return { tooEarly: true, prevYear, endM: 0 };
+
+    const inWindow = (c, year) => {
+      let total = 0, count = 0;
+      for (let m = 1; m <= endM; m++) {
+        const e = c.byMonth && c.byMonth[String(m).padStart(2, "0") + "/" + year];
+        if (e) { total += Number(e.total) || 0; count += Number(e.count) || 0; }
+      }
+      return { total, count };
+    };
+    // ปีของเดือนแรกที่ลูกค้ารายนี้เคยมียอดซื้อ (months เรียงเก่า→ใหม่) — ดูทั้งประวัติ ไม่จำกัดหน้าต่าง
+    const firstYear = (c) => {
+      for (let i = 0; i < months.length; i++) {
+        const e = c.byMonth && c.byMonth[months[i]];
+        if (e && (Number(e.total) || 0) > 0) return Number(String(months[i]).split("/")[1]);
+      }
+      return null;
+    };
+
+    const rows = [];
+    customers.forEach(c => {
+      const cur = inWindow(c, yoyYear), prv = inWindow(c, prevYear);
+      if (cur.total <= 0 && prv.total <= 0) return;
+      const deltaPct = prv.total > 0 ? (cur.total - prv.total) / prv.total * 100 : null;
+      let bucket;
+      if (cur.total <= 0) bucket = "lost";                          // ปีที่แล้วซื้อ ปีนี้ยังไม่ซื้อเลย
+      else if (firstYear(c) === yoyYear) bucket = "new";            // ซื้อครั้งแรกในปีนี้
+      else if (prv.total <= 0) bucket = "back";                     // ลูกค้าเก่า ปีที่แล้วเงียบ ปีนี้กลับมา
+      else if (deltaPct > 5) bucket = "up";
+      else if (deltaPct < -5) bucket = "down";
+      else bucket = "flat";
+      rows.push({ key: c.key, name: c.name, products: c.products, cur, prv, deltaPct, bucket });
+    });
+
+    const sum = (arr, f) => arr.reduce((s, r) => s + f(r), 0);
+    const byBucket = (b) => rows.filter(r => r.bucket === b).sort((a, x) => x.cur.total - a.cur.total);
+    const newRows  = byBucket("new");
+    const backRows = byBucket("back");
+    const upRows   = byBucket("up");
+    const downRows = byBucket("down");
+    const flatRows = byBucket("flat");
+    const lostRows = rows.filter(r => r.bucket === "lost").sort((a, x) => x.prv.total - a.prv.total);
+
+    const activeRows = rows.filter(r => r.cur.total > 0);
+    const oldRows    = activeRows.filter(r => r.bucket !== "new");
+    const curTotal   = sum(activeRows, r => r.cur.total);
+    const bothRows   = upRows.concat(downRows, flatRows);   // เก่าที่ซื้อทั้งสองปี = เทียบกันได้ตรง ๆ
+    const bothCur    = sum(bothRows, r => r.cur.total);
+    const bothPrv    = sum(bothRows, r => r.prv.total);
+
+    // เตือนเมื่อฐานเทียบไม่น่าเชื่อถือ — ไม่บอกแล้วเจ้าของจะอ่านตัวเลขผิดโดยไม่มีอะไรค้าน
+    const warns = [];
+    const firstDataYear  = yearsAvail[0];
+    const firstDataMonth = Number(String(months[0]).split("/")[0]);
+    if (yoyYear <= firstDataYear) warns.push(`ปี ${yoyYear} เป็นปีแรกที่มีข้อมูล — ลูกค้าเกือบทุกรายจะถูกนับเป็น "ใหม่" ทั้งที่อาจซื้อมาก่อนแล้ว`);
+    if (prevYear < firstDataYear) warns.push(`ไม่มีข้อมูลปี ${prevYear} เลย — ตัวเลข "เทียบปีที่แล้ว" ยังเทียบไม่ได้`);
+    else if (prevYear === firstDataYear && firstDataMonth > 1) warns.push(`ข้อมูลเริ่มที่ ${months[0]} — ปี ${prevYear} ขาดเดือน ${THAI_MON[0]}–${THAI_MON[firstDataMonth - 2]} ฐานเทียบจึงต่ำกว่าจริง`);
+    if (yoyMode === "full" && yoyYear === now.getFullYear()) warns.push(`โหมด "ทั้งปี" กำลังเอาปี ${yoyYear} ที่ยังไม่จบไปเทียบกับปี ${prevYear} เต็มปี — ปีนี้จะดูหดเสมอ`);
+
+    return {
+      prevYear, endM, warns,
+      newRows, backRows, upRows, downRows, flatRows, lostRows, oldRows, activeRows,
+      nActive: activeRows.length, curTotal,
+      nNew: newRows.length, newRev: sum(newRows, r => r.cur.total),
+      nOld: oldRows.length,  oldRev: sum(oldRows, r => r.cur.total),
+      bothCur, bothPrv,
+      bothDeltaPct: bothPrv > 0 ? (bothCur - bothPrv) / bothPrv * 100 : null,
+      lostRev: sum(lostRows, r => r.prv.total),
+    };
+  }, [customers, months, yoyYear, yoyMode, yearsAvail]);
+
+  const pctOf = (n, d) => (d > 0 ? (n / d * 100) : 0);
+  const signed = (n, digits) => (n > 0 ? "+" : "") + (Number(n) || 0).toFixed(digits == null ? 1 : digits);
 
   // Section A: ลูกค้ายอด ≥ threshold ในเดือนที่เลือก + แนวโน้มเทียบเดือนก่อน (โต/หด)
   const monthRows = customers
@@ -7967,6 +8900,142 @@ function CustomerView({ data }) {
         </div>
       ) : (
         <>
+          {/* ── 📊 ลูกค้าใหม่ vs ลูกค้าเก่า (เทียบปีต่อปี) ── */}
+          {yoy && (() => {
+            const cardBox = { flex: "1 1 200px", minWidth: 0, border: "1px solid var(--bdr)", borderRadius: 12, padding: "10px 12px", background: "var(--paper)" };
+            const listBtn = (id, label, n, color) => (
+              <button className="btn ghost" onClick={() => setYoyList(prev => prev === id ? "" : id)} disabled={!n}
+                      style={{ fontSize: 12, padding: "4px 10px", borderRadius: 999, color: n ? color : "var(--muted)", fontWeight: 700, opacity: n ? 1 : .5 }}>
+                {label} {n} ราย {n ? (yoyList === id ? "▾" : "▸") : ""}
+              </button>
+            );
+            const LISTS = {
+              new:  { title: "🆕 ลูกค้าใหม่ปีนี้", rows: yoy.newRows,  showPrev: false },
+              back: { title: "🔙 ลูกค้าเก่าที่กลับมาซื้อ (ปีที่แล้วเงียบ)", rows: yoy.backRows, showPrev: false },
+              up:   { title: "▲ ลูกค้าเก่าที่ซื้อเพิ่ม", rows: yoy.upRows,   showPrev: true },
+              down: { title: "▼ ลูกค้าเก่าที่ซื้อลดลง", rows: yoy.downRows, showPrev: true },
+              lost: { title: "❌ ปีที่แล้วซื้อ ปีนี้ยังไม่ซื้อเลย", rows: yoy.lostRows, showPrev: true },
+            };
+            const open = LISTS[yoyList];
+            return (
+              <div style={{ border: "1px solid var(--bdr)", borderRadius: 14, padding: mobile ? 12 : 16, marginBottom: 22, background: "var(--g-50)" }}>
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: "var(--g-700)" }}>📊 ลูกค้าใหม่ vs ลูกค้าเก่า — เทียบปีต่อปี</div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <select value={yoyYear || ""} onChange={e => { setYoyYear(Number(e.target.value)); setYoyList(""); }}
+                            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--bdr)", fontSize: 14, background: "var(--paper)", color: "var(--text)" }}>
+                      {yearsAvail.slice().reverse().map(y => <option key={y} value={y}>ปี {y}</option>)}
+                    </select>
+                    <Seg value={yoyMode} onChange={v => { setYoyMode(v); setYoyList(""); }}
+                         options={[{ value: "same", label: "เทียบช่วงเดียวกัน" }, { value: "full", label: "ทั้งปี" }]}/>
+                  </div>
+                </div>
+
+                {yoy.tooEarly ? (
+                  <div style={{ fontSize: 13, color: "var(--muted)" }}>
+                    ปี {yoyYear} ยังไม่มีเดือนที่จบครบสักเดือน — ยังเทียบไม่ได้ (ลองสลับเป็น "ทั้งปี" หรือเลือกปีก่อนหน้า)
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10, lineHeight: 1.6 }}>
+                      เทียบ <b>{THAI_MON[0]}–{THAI_MON[yoy.endM - 1]} ปี {yoyYear}</b> กับ <b>ช่วงเดียวกันของปี {yoy.prevYear}</b>
+                      {yoyMode === "same" && <> · ตัดเดือนที่ยังไม่จบออกแล้ว</>}
+                      {" "}· นับเฉพาะลูกค้าที่ระบุตัวตนได้ (มีชื่อ/รหัสในบิล)
+                    </div>
+                    {yoy.warns.map((w, i) => (
+                      <div key={i} style={{ background: "#fffbe6", border: "1px solid #f0c000", borderRadius: 8, padding: "7px 10px", color: "#8a6100", fontSize: 12, marginBottom: 8, lineHeight: 1.5 }}>⚠️ {w}</div>
+                    ))}
+
+                    {/* แถวการ์ด: ใหม่ / เก่า */}
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+                      <div style={cardBox}>
+                        <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 700 }}>🆕 ลูกค้าใหม่</div>
+                        <div style={{ fontSize: 22, fontWeight: 800, color: "#1565c0" }}>{yoy.nNew} <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)" }}>ราย · {pctOf(yoy.nNew, yoy.nActive).toFixed(0)}%</span></div>
+                        <div style={{ fontSize: 12, color: "var(--muted)" }}>ยอด {baht(yoy.newRev)} ฿ · {pctOf(yoy.newRev, yoy.curTotal).toFixed(0)}% ของยอดปีนี้</div>
+                      </div>
+                      <div style={cardBox}>
+                        <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 700 }}>🔁 ลูกค้าเก่า</div>
+                        <div style={{ fontSize: 22, fontWeight: 800, color: "var(--g-700)" }}>{yoy.nOld} <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)" }}>ราย · {pctOf(yoy.nOld, yoy.nActive).toFixed(0)}%</span></div>
+                        <div style={{ fontSize: 12, color: "var(--muted)" }}>ยอด {baht(yoy.oldRev)} ฿ · {pctOf(yoy.oldRev, yoy.curTotal).toFixed(0)}% ของยอดปีนี้</div>
+                      </div>
+                      <div style={cardBox}>
+                        <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 700 }}>👥 ซื้อในช่วงนี้ทั้งหมด</div>
+                        <div style={{ fontSize: 22, fontWeight: 800, color: "var(--text)" }}>{yoy.nActive} <span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)" }}>ราย</span></div>
+                        <div style={{ fontSize: 12, color: "var(--muted)" }}>ยอดรวม {baht(yoy.curTotal)} ฿</div>
+                      </div>
+                    </div>
+
+                    {/* ลูกค้าเก่า ซื้อเพิ่ม/ลด */}
+                    <div style={{ border: "1px solid var(--bdr)", borderRadius: 12, padding: "10px 12px", background: "var(--paper)" }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: "var(--g-700)", marginBottom: 6 }}>ลูกค้าเก่า — ซื้อเพิ่มหรือลดลง (เทียบช่วงเดียวกันปี {yoy.prevYear})</div>
+                      {yoy.bothDeltaPct == null ? (
+                        <div style={{ fontSize: 12, color: "var(--muted)" }}>ยังไม่มีลูกค้าเก่าที่ซื้อทั้งสองปี — เทียบไม่ได้</div>
+                      ) : (
+                        <div style={{ fontSize: 13, color: "var(--text)", lineHeight: 1.8, marginBottom: 6 }}>
+                          ยอดรวมของลูกค้าเก่าที่ซื้อ<b>ทั้งสองปี</b> ({yoy.upRows.length + yoy.downRows.length + yoy.flatRows.length} ราย):{" "}
+                          {baht(yoy.bothPrv)} → <b>{baht(yoy.bothCur)} ฿</b>{" "}
+                          <span style={{ fontWeight: 800, color: yoy.bothDeltaPct > 0 ? "#16a34a" : yoy.bothDeltaPct < 0 ? "#dc2626" : "var(--muted)" }}>
+                            {yoy.bothDeltaPct > 0 ? "▲" : yoy.bothDeltaPct < 0 ? "▼" : "▬"} {signed(yoy.bothDeltaPct)}%
+                          </span>
+                        </div>
+                      )}
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {listBtn("up", "▲ ซื้อเพิ่ม", yoy.upRows.length, "#16a34a")}
+                        {listBtn("down", "▼ ซื้อลดลง", yoy.downRows.length, "#dc2626")}
+                        <span style={{ fontSize: 12, color: "var(--muted)", alignSelf: "center" }}>▬ ใกล้เคียง {yoy.flatRows.length} ราย</span>
+                        {listBtn("back", "🔙 กลับมาซื้อ", yoy.backRows.length, "#7b1fa2")}
+                        {listBtn("new", "🆕 ใหม่", yoy.nNew, "#1565c0")}
+                        {listBtn("lost", "❌ หายไป", yoy.lostRows.length, "#e65100")}
+                      </div>
+                      {yoy.lostRows.length > 0 && (
+                        <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>
+                          ลูกค้าที่หายไปเคยซื้อรวม {baht(yoy.lostRev)} ฿ ในช่วงเดียวกันปี {yoy.prevYear}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* รายชื่อที่กางอยู่ */}
+                    {open && open.rows.length > 0 && (
+                      <div style={{ marginTop: 10, border: "1px solid var(--bdr)", borderRadius: 12, overflowX: "auto", background: "var(--paper)" }}>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: "var(--g-700)", padding: "8px 12px", borderBottom: "1px solid var(--bdr)" }}>
+                          {open.title} ({open.rows.length} ราย)
+                        </div>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                          <thead>
+                            <tr style={{ background: "var(--g-50)", borderBottom: "1px solid var(--bdr)" }}>
+                              <th style={{ padding: "8px 12px", textAlign: "left", fontWeight: 700, color: "var(--g-700)" }}>ลูกค้า</th>
+                              {open.showPrev && <th style={{ padding: "8px 8px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>ปี {yoy.prevYear}</th>}
+                              <th style={{ padding: "8px 8px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>ปี {yoyYear}</th>
+                              {open.showPrev && <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, color: "var(--g-700)", whiteSpace: "nowrap" }}>เปลี่ยน</th>}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {open.rows.slice(0, 50).map((r, i) => (
+                              <tr key={r.key || i} style={{ borderBottom: "1px solid var(--bdr)", background: i % 2 ? "var(--g-50)" : "var(--paper)" }}>
+                                <td style={{ padding: "7px 12px", fontWeight: 600, color: "var(--text)" }}>{r.name}</td>
+                                {open.showPrev && <td style={{ padding: "7px 8px", textAlign: "right", color: "var(--muted)", whiteSpace: "nowrap" }}>{baht(r.prv.total)}</td>}
+                                <td style={{ padding: "7px 8px", textAlign: "right", fontWeight: 800, color: "var(--g-700)", whiteSpace: "nowrap" }}>{baht(r.cur.total)}</td>
+                                {open.showPrev && (
+                                  <td style={{ padding: "7px 12px", textAlign: "right", whiteSpace: "nowrap", fontWeight: 700,
+                                               color: r.deltaPct == null ? "var(--muted)" : r.deltaPct > 0 ? "#16a34a" : r.deltaPct < 0 ? "#dc2626" : "var(--muted)" }}>
+                                    {r.deltaPct == null ? "—" : signed(r.deltaPct, 0) + "%"}
+                                  </td>
+                                )}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {open.rows.length > 50 && (
+                          <div style={{ fontSize: 11, color: "var(--muted)", padding: "6px 12px" }}>แสดง 50 รายแรกจาก {open.rows.length} ราย (เรียงตามยอด)</div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })()}
+
           {/* controls */}
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 14 }}>
             <label style={{ fontSize: 12, color: "var(--muted)" }}>

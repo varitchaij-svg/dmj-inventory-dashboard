@@ -17,6 +17,7 @@ import { dirname, join } from 'node:path';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const UI = readFileSync(join(ROOT, 'ui.jsx'), 'utf8');
 const VIEWS_MAIN = readFileSync(join(ROOT, 'views-main.jsx'), 'utf8');
+const VIEWS_ANA = readFileSync(join(ROOT, 'views-analytics.jsx'), 'utf8');
 
 function grab(src, re, label) {
   const m = src.match(re);
@@ -149,6 +150,42 @@ describe('meta — จุดเชื่อมต่อในโค้ดจร�
     expect(UI).toMatch(/async function dmjJson\(/);
     expect(UI).toMatch(/function dmjErrText\(/);
   });
+
+  // ── บันทึก "จำนวนที่จัด" ก็ต้องอ่านคำตอบจริงเหมือนกัน (ส.ค. 2026) ──
+  // เดิม syncOrderUpdate ยิงแล้วจบ ไม่เคยดูว่า GAS ตอบอะไร → GAS ตอบหน้า HTML
+  // (execution ซ้อนกัน) = ไม่มีอะไรถูกบันทึก แต่หน้าจอขึ้น "บันทึกแล้ว" ทันที
+  // พนักงานเดินจากไป รอบ sync ถัดมาเลขเด้งกลับค่าเก่า — อาการที่เจ้าของแจ้งว่า
+  // "เปลี่ยนจำนวนที่จัดแล้วระบบเด้งเป็นจำนวนอื่น"
+  const syncOrd = grab(
+    VIEWS_ANA,
+    /async function syncOrderUpdate\(order, updates\) \{[\s\S]*?\n\}/,
+    'syncOrderUpdate'
+  );
+
+  it('syncOrderUpdate ต้องอ่านคำตอบจริงด้วย dmjJson', () => {
+    expect(syncOrd).toContain('dmjJson');
+  });
+
+  it('syncOrderUpdate ต้องคืนผลจริงให้ผู้เรียก (ไม่ใช่ยิงแล้วจบเงียบ ๆ)', () => {
+    expect(syncOrd).toMatch(/return \{ success: false/);
+    expect(syncOrd).toMatch(/success !== false|typeof d\.success === "boolean"/);
+  });
+
+  it('markComplete ต้องรอผลก่อนขึ้น "บันทึกแล้ว"', () => {
+    const mc = grab(VIEWS_ANA, /const markComplete = async \(\) => \{[\s\S]*?\n  \};/, 'markComplete');
+    expect(mc).toMatch(/await syncOrderUpdate\(/);
+    // ต้องเช็คผลก่อนโชว์ success — ไม่งั้นก็เท่าเดิม
+    expect(mc).toMatch(/success === false/);
+    const okIdx = mc.indexOf('"success", "บันทึกแล้ว"');
+    const badIdx = mc.indexOf('success === false');
+    expect(okIdx).toBeGreaterThan(badIdx);   // ทางล้มเหลวต้องถูกตรวจก่อน
+  });
+
+  it('savePrepQty (กรอกจำนวนที่จัด) ต้องรอผลและบอกเมื่อบันทึกไม่ผ่าน', () => {
+    const sp = grab(VIEWS_ANA, /const savePrepQty = async v => \{[\s\S]*?\n  \};/, 'savePrepQty');
+    expect(sp).toMatch(/await syncOrderUpdate\(/);
+    expect(sp).toMatch(/setSaveFailed/);
+  });
 });
 
 // ── meta-test: ห้ามยิง updateFrontStore ซ้อนกัน ────────────────────────────────
@@ -178,16 +215,32 @@ describe('meta — OrderModal ต้องต่อคิวคำขอ ไม�
 
 // ── meta-test: สั่งของต้องไม่ซ้ำ และต้องรู้ว่าสั่งไปแล้ว ──────────────────────
 // อาการที่เจ้าของแจ้ง: "ไม่ขึ้นว่าสั่งแล้ว แต่ของถูกสั่ง" = GAS เขียนชีตเสร็จแล้วแต่ตอบ HTML
-// → เว็บไม่รู้ว่าสำเร็จ · ห้ามแก้ด้วยการยิงซ้ำ (action=order ไม่ idempotent = สั่งซ้ำ 2 ใบ)
-describe('meta — placeOrder ต้องเช็คชีต ไม่ใช่ยิงซ้ำ', () => {
+// → เว็บไม่รู้ว่าสำเร็จ · ห้ามตัดสินว่าพังโดยไม่เช็คของจริงก่อน
+//
+// ⚠️ เดิมกฎคือ "ห้ามยิงซ้ำเด็ดขาด" เพราะ action=order ไม่ idempotent · ตอนนี้มี cid
+// (handleOrder_ เช็ค findOrderRowByCid_ ก่อนเขียน) แล้ว จึงยิงซ้ำได้ **เฉพาะเมื่อเช็คแล้ว
+// ยืนยันว่ายังไม่ลงจริง ๆ** — เงื่อนไขนั้นคือสิ่งที่เทสต์ชุดนี้คุมไว้ ห้ามหลุด
+describe('meta — placeOrder ต้องเช็คก่อนเสมอ ยิงซ้ำได้เฉพาะที่ปลอดภัย', () => {
   const placeOrder = grab(VIEWS_MAIN, /const placeOrder = async \(\) => \{[\s\S]*?\n  \};/, 'placeOrder');
 
   it('อ่านคำตอบไม่ได้ → ไปเช็คชีตว่าออเดอร์ลงไปแล้วหรือยัง', () => {
-    expect(placeOrder).toMatch(/await verifyOrderLanded\(before\)/);
+    expect(placeOrder).toMatch(/await checkOrderByCid\(cid\)/);
+    expect(placeOrder).toMatch(/await verifyOrderLanded\(before\)/);  // ทางถอยเมื่อ cid ถามไม่ได้
   });
 
-  it('ห้ามมี loop ยิงซ้ำอัตโนมัติใน placeOrder (สั่งซ้ำ 2 ใบ)', () => {
-    expect(placeOrder).not.toMatch(/for \(\s*(let|var)\s+attempt/);
+  it('ยิงซ้ำได้เฉพาะหลังเช็คแล้ว — ทุก retry ต้องผ่าน checkOrderByCid ก่อน', () => {
+    // ลำดับต้องเป็น: ยิง → (พลาด) → เช็ค → ค่อยวน · ถ้า setTimeout หน่วงรอบถัดไปมาก่อนการเช็ค
+    // แปลว่ามีเส้นทางยิงซ้ำโดยไม่เช็ค = กลับไปสั่งซ้ำ 2 ใบ
+    expect(placeOrder.indexOf('checkOrderByCid')).toBeLessThan(placeOrder.indexOf('attempt < ORDER_ATTEMPTS'));
+  });
+
+  it('เช็คด้วย cid ไม่ได้ (เช่น GAS ยังเป็นโค้ดเก่า) → ต้องหยุด ห้ามวนยิงซ้ำ', () => {
+    expect(placeOrder).toMatch(/landed === null[\s\S]*?return false;/);
+  });
+
+  it('cid ต้องคงเดิมทั้งรอบ (สร้างครั้งเดียวก่อนเข้า loop) ไม่งั้นยิงซ้ำ = แถวใหม่', () => {
+    expect(placeOrder.indexOf('const cid = orderCid()'))
+      .toBeLessThan(placeOrder.indexOf('for (let attempt'));
   });
 
   it('verifyOrderLanded เทียบยอด "รอ" ที่เพิ่มขึ้น ไม่ parse วันที่ในชีต (ปี พ.ศ.)', () => {

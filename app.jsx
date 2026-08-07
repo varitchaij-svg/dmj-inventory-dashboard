@@ -21,6 +21,7 @@ const TABS = [
   { id: "labels",        label: "🖨️ พิมพ์ Label",            icon: I.print },
   { id: "auditlog",      label: "📋 Audit Log",             icon: I.layers },
   { id: "staff",         label: "👥 พนักงาน",               icon: I.layers },
+  { id: "staffperf",     label: "🏅 ผลงานพนักงาน",           icon: I.flame },
   { id: "attendance",    label: "⏱️ ลงเวลา",                icon: I.layers },
   { id: "atttoday",      label: "🕐 ใครเข้างานวันนี้",       icon: I.layers },
   { id: "deadstock",     label: "📦 สินค้าจม",              icon: I.alert },
@@ -36,10 +37,10 @@ const ROLE_TABS = {
   // dev = ตำแหน่งสำหรับผู้ดูแลระบบ/คนพัฒนา — เห็นทุกแท็บที่มีในระบบ รวมแท็บที่ยังซ่อนจาก owner
   // ("margin" ยังไม่มีต้นทุนซื้อจริง จึงไม่โชว์ให้ owner แต่ dev ต้องเข้าไปดู/ทดสอบได้)
   // สิทธิ์ฝั่ง GAS เทียบเท่า owner (ดู isAdminRole_ ใน appsscript_complete.gs)
-  dev:        ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","margin","mtojobs","labels","upload","connect","auditlog","staff","atttoday","whhome"],
+  dev:        ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","margin","mtojobs","labels","upload","connect","auditlog","staff","staffperf","atttoday","whhome"],
   // เรียงตามที่ owner ใช้บ่อย: ภาพรวม/ลูกค้า → งานประจำวัน (สั่ง/สต๊อก/ออเดอร์/หน้าร้าน) → คลัง → วิเคราะห์ → เครื่องมือ/ตั้งค่าท้ายสุด
   // ("margin" ซ่อนไว้ก่อน — ยังไม่มีต้นทุนซื้อจริง · โค้ด MarginView คงไว้ ค่อยเพิ่ม id กลับเมื่อพร้อม)
-  owner:      ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog","staff","atttoday"],
+  owner:      ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog","staff","staffperf","atttoday"],
   employee:   ["attendance","categories","trends","stock","storage","frontstore","transfers","orders","tracking","ordersummary","mtojobs","labels"],
   // role อื่น (employee/warehouse/frontstore/saler) ไม่มี "เพิ่มเติม" — โชว์ทุกแท็บบนแถบเลื่อนแนวนอน
   // (ต่างจาก owner/dev) ดังนั้นลำดับที่นี่แค่กำหนดว่าอันไหนอยู่ซ้ายสุด/เจอก่อนโดยไม่ต้องเลื่อน
@@ -55,14 +56,21 @@ const ROLE_TABS = {
   storedevice: ["attendance","pos","quotefollowup","categories","stock","tracking","orders","mtojobs","labels","atttoday"],
 };
 // หมวดหลักของ owner (nav 2 ชั้น) — กดหมวด → เห็นเมนูย่อยของหมวดนั้น
-// เรียงตามความสำคัญ/ที่ใช้บ่อย: ภาพรวม → การขาย → สต็อก → วิเคราะห์ → เครื่องมือ
+// เรียงตามความสำคัญ/ที่ใช้บ่อย: ภาพรวม → การขาย → สต็อก → พนักงาน → เครื่องมือ
 // tab ที่ไม่อยู่ในกลุ่มไหน จะถูกดันเข้ากลุ่ม "อื่นๆ" อัตโนมัติ (กัน tab หาย)
+//
+// "ภาพรวม" = ทุกอย่างที่เจ้าของเปิดดูเพื่อ **ตัดสินใจ** (ไม่ใช่ลงมือทำงาน) — เจ้าของสั่งไว้ ส.ค. 2026
+//   ให้รวม: ภาพรวมร้าน · งานของแต่ละฝ่าย (คลัง/หน้าร้าน/ขาย) · ลูกค้า · ติดตามสถานะ ·
+//   ใบเสนอราคา · เทรนด์/ช่วงขายดี  ไว้ที่เดียว จะได้ไม่ต้องไล่เปิดข้ามหมวด
+//   ⚠️ ต่างจากหมวดอื่นที่แบ่งตาม "ประเภทงาน" — หมวดนี้แบ่งตาม "คนดู" (เจ้าของ) โดยตั้งใจ
+//   ผลข้างเคียง: g_insight เหลือแค่ margin ซึ่ง owner ไม่มีสิทธิ์ → หมวดหายไปเองสำหรับ owner
+//   (ตัวกรอง .filter(g => g.items.length > 0) ด้านล่างจัดการให้) แต่ dev ยังเห็น
 const OWNER_GROUPS = [
-  { id: "g_overview", gi: "📊", name: "ภาพรวม",       tabs: ["overview", "whhome"] },
-  { id: "g_sales",    gi: "💰", name: "การขาย",       tabs: ["pos", "orders", "tracking", "quotefollowup", "customers", "frontstore", "mtojobs"] },
+  { id: "g_overview", gi: "📊", name: "ภาพรวม",       tabs: ["overview", "whhome", "customers", "tracking", "quotefollowup", "trends", "season"] },
+  { id: "g_sales",    gi: "💰", name: "การขาย",       tabs: ["pos", "orders", "frontstore", "mtojobs"] },
   { id: "g_stock",    gi: "📦", name: "สต็อก & คลัง",  tabs: ["stock", "categories", "storage", "stockcount", "transfers", "ordersummary", "newproduct", "deadstock", "labels"] },
-  { id: "g_insight",  gi: "📈", name: "วิเคราะห์",      tabs: ["trends", "season", "margin"] },
-  { id: "g_people",   gi: "👥", name: "พนักงาน",       tabs: ["attendance", "atttoday", "staff"] },
+  { id: "g_insight",  gi: "📈", name: "วิเคราะห์",      tabs: ["margin"] },
+  { id: "g_people",   gi: "👥", name: "พนักงาน",       tabs: ["attendance", "atttoday", "staff", "staffperf"] },
   { id: "g_tools",    gi: "⚙️", name: "เครื่องมือ",     tabs: ["upload", "connect", "auditlog"] },
 ];
 const ROLE_LABELS = {
@@ -683,6 +691,70 @@ function loadFromStorage() {
   } catch (e) { return null; }
 }
 
+// ── Phase 7.4: "ใบรับรองว่าข้อมูลชุดที่เราถืออยู่ยังตรงกับ server" ─────────────────
+// payload หนัก ~4.2MB · วัดจริง 5 ส.ค. 2026: 15 เครื่องโหลดพร้อมกัน = 63MB ผ่านท่อเดียว
+// ที่ ~2.3MB/วิ → 27 วิ ซึ่งนานเกินอายุลิงก์ดาวน์โหลดของ Google → พังเป็น HTTP 404 กลางคัน
+// ถามก่อนด้วยคำตอบ ~40 ไบต์ว่า "เปลี่ยนหรือยัง" ถ้ายัง = ไม่ต้องโหลดซ้ำเลยสักไบต์
+const VER_KEY = "dmj_data_ver";
+// ⚠️ เพดานอายุ **จำเป็น ห้ามถอด** — `dmj_last_write_ts` ขยับเมื่อแก้ข้อมูลผ่านแอป และตอน
+// syncZortBoth (ทุก 2 ชม.) เท่านั้น · **แก้ชีตด้วยมือใน Google Sheets ไม่ขยับ** (ข้อจำกัดเดิม
+// ของระบบ ไม่ใช่ของใหม่) ถ้าเชื่อ ts ได้ตลอดไป คนที่แก้ชีตเองจะไม่เห็นผลจนกว่าจะกดปุ่ม Sync
+// ซึ่งเป็นการ "ไม่เห็นข้อมูลใหม่โดยไม่มีอะไรบอก" — แย่กว่าโหลดช้าเสมอ
+const VER_MAX_SKIP_MS = 30 * 60 * 1000;
+
+function readVerStamp() {
+  try { return JSON.parse(localStorage.getItem(VER_KEY) || "null"); } catch (e) { return null; }
+}
+// ทิ้งใบรับรอง — ใช้เมื่อข้อมูลในมือ "ไม่ได้มาจากชีตแล้ว" (เช่นผู้ใช้อัปโหลดไฟล์ทับ)
+// ถ้าไม่ทิ้ง: ts ยังตรงกับ server → รอบถัดไปจะข้ามการโหลด แล้วข้อมูลจากไฟล์ค้างอยู่
+// พร้อมป้าย "ซิงค์แล้ว" ทั้งที่ไม่เคยดึงจากชีตเลย
+function clearVerStamp() {
+  try { localStorage.removeItem(VER_KEY); } catch (e) { /* ignore */ }
+}
+function writeVerStamp(ts, role) {
+  try {
+    localStorage.setItem(VER_KEY, JSON.stringify({ ts: ts || 0, at: Date.now(), role: role || "" }));
+  } catch (e) { /* localStorage เต็ม/ปิดอยู่ → แค่ไม่ได้ประหยัดรอบหน้า ไม่กระทบการทำงาน */ }
+}
+// คืน true = "server ยังเป็นข้อมูลชุดเดียวกับที่เราถืออยู่" → ข้ามการโหลด payload ได้
+// **ตอบไม่ได้/ไม่แน่ใจ → false เสมอ** (ไปโหลดจริง) — เดาผิดทางนี้แค่ช้าลง
+// เดาผิดอีกทางคือผู้ใช้เห็นตัวเลขสต็อกเก่าโดยไม่รู้ตัว ซึ่งใช้ตัดสินใจสั่งของจริง
+// GAS ที่ยังเป็นโค้ดเก่าจะไม่รู้จัก `action=ver` แล้ว **คืน payload เต็มก้อนแทน** (action ที่ไม่รู้จัก
+// ตกลงเส้นทางปกติ) = จ่ายไบต์ฟรี 4.2MB แล้วยังต้องโหลดซ้ำอีกรอบ — เสียเป็นสองเท่าพอดี
+// เกิดได้จริงเพราะ Cloudflare (เว็บ) กับ GitHub Actions (GAS) deploy คนละจังหวะ และถ้า
+// Actions พัง จะค้างสถานะนี้ยาว → จำไว้ 1 ชม. แล้วเลิกถาม (กลับมาถามเองเมื่อครบเวลา)
+const VER_UNSUPPORTED_KEY = "dmj_ver_unsupported";
+const VER_UNSUPPORTED_MS  = 60 * 60 * 1000;
+
+function checkDataUnchanged(sheetUrl, role) {
+  const stamp = readVerStamp();
+  if (!stamp || !stamp.ts) return Promise.resolve(false);
+  try {
+    const off = parseInt(localStorage.getItem(VER_UNSUPPORTED_KEY) || "0", 10);
+    if (off && Date.now() - off < VER_UNSUPPORTED_MS) return Promise.resolve(false);
+  } catch (e) { /* อ่านไม่ได้ก็ถามตามปกติ */ }
+  // payload ผูกกับ role (GAS ตัดก้อนที่ role นั้นไม่มีแท็บให้เปิดออก) — คนละ role = คนละรูปร่าง
+  // ts ตรงกันไม่ได้แปลว่าใช้แทนกันได้ ถ้าไม่เช็คตรงนี้ owner ที่เพิ่งสลับมาจะได้ก้อนที่ขาดกราฟ
+  if ((stamp.role || "") !== (role || "")) return Promise.resolve(false);
+  if (Date.now() - (stamp.at || 0) > VER_MAX_SKIP_MS) return Promise.resolve(false);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  const sep = sheetUrl.includes("?") ? "&" : "?";
+  return fetch(`${sheetUrl}${sep}action=ver&_t=${Date.now()}`, { signal: controller.signal, cache: "no-store" })
+    .then(r => r.json())
+    .then(v => {
+      // ตอบมาแต่ไม่ใช่รูปแบบของ `ver` = GAS ยังไม่รู้จัก action นี้ → เลิกถามไปสักพัก
+      // (ต่างจาก .catch ข้างล่างซึ่งคือ "เน็ตพัง/ตอบไม่ได้" — อันนั้นไม่ใช่เรื่องเวอร์ชัน ห้ามตีตรา)
+      if (!v || !v.ok) {
+        try { localStorage.setItem(VER_UNSUPPORTED_KEY, String(Date.now())); } catch (e) {}
+        return false;
+      }
+      return !!(v.ts && v.ts === stamp.ts);
+    })
+    .catch(() => false)
+    .finally(() => clearTimeout(timeout));
+}
+
 function saveToStorage(d, source) {
   try {
     localStorage.setItem(LS_KEY, JSON.stringify(d));
@@ -847,12 +919,37 @@ async function postAuthAction(body) {
   const base = (typeof SHEET_DEPLOY_URL !== 'undefined') ? SHEET_DEPLOY_URL
              : ((typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null);
   if (!base) throw new Error("ยังไม่ได้ตั้งค่า Google Sheet URL");
-  const res = await fetch(base, {
-    method: "POST",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify(body),
-  });
-  return res.json();
+  // วัดเวลาต่อ action แยกกัน — `me` (กลับเข้าแอปด้วย session เดิม) คือตัวที่อยู่บนเส้นทาง
+  // "พนักงานมาสแกนเข้างาน" จริง ๆ ส่วน authLine/claimLoginHandoff เกิดเฉพาะตอนล็อกอินใหม่
+  // ถ้าไม่แยก จะเห็นแค่ "auth ช้า" แล้วไปเร่งผิดตัว
+  // ⚠️ รอบนี้ **แตะแค่การวัด ไม่แตะพฤติกรรม** — การเปลี่ยนมาใช้ dmjFetch/dmjJson + เพดานเวลา
+  //    เป็นงาน Phase 7.6 ที่ถูกถอยออกไป ยังไม่เอากลับเข้ามาปนกับรอบนี้ (จะได้แยกออกว่าอะไรพัง)
+  const _act = (body && body.action) || 'auth';
+  window.dmjMark('auth:' + _act);
+  try {
+    const res = await fetch(base, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(body),
+    });
+    return await res.json();
+  } catch (e) {
+    // เน็ตมือถือในร้าน/คลังหลุดเป็นช่วง ๆ — คำขอที่ reject กลางทางคือสาเหตุหนึ่ง
+    // ที่พนักงานต้องกดล็อกอินซ้ำหลายรอบ · ลองใหม่ให้เอง 2 ครั้ง (เว้น 1.5 / 3 วิ)
+    // ⚠️ จงใจ "ไม่ใส่ timeout/เพดานเวลา" — Phase 7.6 ที่ตัดคำขอช้าทิ้งถูก revert
+    //    ไปแล้วเพราะทำให้เข้าแอปไม่ได้ · ตรงนี้ retry เฉพาะตอน fetch reject จริงเท่านั้น
+    //    ยิง authLine ซ้ำปลอดภัย เพราะ GAS cache ผลต่อ code ไว้ 10 นาที (authCodeCacheKey_)
+    const tries = (arguments.length > 1 && arguments[1]) || 0;
+    if (tries < 2) {
+      await new Promise(r => setTimeout(r, 1500 * (tries + 1)));
+      return postAuthAction(body, tries + 1);
+    }
+    throw e;
+  } finally {
+    // ต้องอยู่ใน finally — เวลาที่ "ล้มเหลว" มีค่าพอ ๆ กับเวลาที่สำเร็จ
+    // (เคสที่เจ็บที่สุดคือรอนานแล้วค่อยพัง ซึ่งจะหายไปเลยถ้าวัดแต่ทางสำเร็จ)
+    window.dmjMark('auth-done:' + _act);
+  }
 }
 
 function App() {
@@ -879,7 +976,14 @@ function App() {
   const [handoffWaiting, setHandoffWaiting] = usS(() => !!readPendingHandoff());
   const [crossContextNote, setCrossContextNote] = usS(false); // ล็อกอินนี้เริ่มมาจากอีกที่ (แอปหน้าโฮม)
   const [authRefreshing, setAuthRefreshing] = usS(false);
+  // "ตอนนี้เรามีข้อมูลอยู่ในมือหรือยัง" — ใช้ตัดสินว่าจะถาม `action=ver` ก่อนโหลดได้ไหม
+  // ต้องเป็น ref ไม่ใช่อ่าน `data` ตรง ๆ เพราะ fetchFromSheet เป็น useCallback ที่ไม่มี `data`
+  // ใน deps (ใส่ไม่ได้ — จะสร้างใหม่ทุกครั้งที่ข้อมูลเปลี่ยน แล้ว effect ที่ผูกกับมันจะยิงรัว)
+  const hasDataRef = React.useRef(false);
+  // "ตอนนี้เราถือ *ของสำรอง* (Phase 7.3) อยู่หรือเปล่า" — ต้องเป็น ref ด้วยเหตุผลเดียวกับ hasDataRef
+  const staleRef = React.useRef(0);
   const [data, setData] = usS(null);
+  usE(() => { hasDataRef.current = !!(data && Array.isArray(data.products) && data.products.length); }, [data]);
   const [error, setError] = usS(null);
   const [navLogoOk, setNavLogoOk] = usS(true);
   const [tab, setTab] = usS(() => ssGet("dmj_role") === "owner" ? "categories" : "overview");
@@ -889,6 +993,10 @@ function App() {
   const [zortSyncing, setZortSyncing] = usS(false);
   const [zortSalesSyncing, setZortSalesSyncing] = usS(false);
   const [retryMsg, setRetryMsg] = usS("");
+  // Phase 7.3: >0 = ข้อมูลชุดนี้เป็น "ของสำรอง" ที่ server ส่งมาระหว่างมีคนอื่นกำลังสร้างชุดใหม่
+  // (ค่า = เวลาที่ข้อมูลชุดนั้นถูกสร้าง) · 0 = ข้อมูลสด
+  const [staleAt, setStaleAt] = usS(0);
+  usE(() => { staleRef.current = staleAt; }, [staleAt]);
   const [lastSync, setLastSync] = usS(lsGet("dmj_last_sync") || null);
   const [labelInitItems, setLabelInitItems] = usS(null); // for auto-populate from order summary
   const [isOnline, setIsOnline] = usS(() => navigator.onLine);
@@ -941,14 +1049,58 @@ function App() {
       // ถ้า role ไม่ตรง ก้อนที่ prefetch มาอาจขาดข้อมูลที่ role นี้ต้องใช้ (เช่น owner ได้ก้อนของ
       // saler มาแล้วหน้าภาพรวมไม่มีกราฟ) → ทิ้งแล้วยิงใหม่ ช้ากว่านิดเดียวแต่ข้อมูลไม่ขาด
       if ((window._dataPrefetchRole || '') === (role || '')) prefetched = window._dataPrefetch;
+      // ⚠️ role ไม่ตรง = ทิ้งผล **แต่ต้องยกเลิกของจริงด้วย** ไม่ใช่แค่ปล่อยตัวแปรเป็น null
+      // ก้อน prefetch หนักหลายเมกะ ถ้าปล่อยไหลต่อจะกินท่อเดียวกับก้อนใหม่ที่กำลังจะยิง
+      // → โหลดหน้าเดียวจ่ายสองเท่า ซึ่งเป็นตัวเร่งให้ลิงก์ดาวน์โหลดของ Google หมดอายุ (404)
+      else { try { if (window._dataPrefetchAbort) window._dataPrefetchAbort(); } catch (e) {} }
       window._dataPrefetch = null;
     }
-    (prefetched
-      ? prefetched.then(d => d || fetch(bustUrl, { signal: controller.signal }).then(r => r.json()))
-      : fetch(bustUrl, { signal: controller.signal }).then(r => r.json()))
+    // ── Phase 7.4: ถามก่อนโหลด — "ข้อมูลเปลี่ยนหรือยัง" (คำตอบ ~40 ไบต์) ──
+    // ไม่เปลี่ยน = ข้ามการโหลด 4.2MB ไปเลย · **ข้ามการถาม** ใน 4 กรณีที่ถามแล้วได้ผลผิด/ไม่ได้อะไร:
+    //   · force (ผู้ใช้กด Sync/ลองใหม่เอง) — อาจเพิ่งแก้ชีตด้วยมือ ซึ่ง ts ไม่ขยับ ต้องดึงจริงเสมอ
+    //   · ยังไม่มีข้อมูลในมือ — ไม่มีอะไรให้เทียบ ถามไปก็เสียเวลาเปล่าหนึ่งรอบ
+    //   · มีผล prefetch อยู่แล้ว — ไบต์ถูกโหลดไปตั้งแต่ต้นหน้าแล้ว ถามตอนนี้ไม่ประหยัดอะไร
+    //   · **กำลังถือของสำรองอยู่ (staleRef)** — ของสำรองถูกเสิร์ฟตอน TTL หมดได้ด้วย ซึ่งกรณีนั้น
+    //     `lastModified` ของมันเท่ากับ ts ปัจจุบันพอดี → ver จะตอบ "ไม่เปลี่ยน" → ข้ามการโหลด →
+    //     `setStaleAt(0)` ไม่ถูกเรียก → **แถบเหลือง "กำลังอัปเดตข้อมูล" ค้างถาวรจนกว่าจะกด Sync**
+    const verGate = (!force && !prefetched && !staleRef.current && hasDataRef.current)
+      ? checkDataUnchanged(sheetUrl, role)
+      : Promise.resolve(false);
+    verGate.then(unchanged => {
+      if (unchanged) {
+        // ข้อมูลชุดเดิมยังถูกต้อง — ถือว่า "ซิงค์สำเร็จ" จริง ๆ (เราเพิ่งยืนยันกับ server มา)
+        // ต้องอัปเดต lastSync ด้วย ไม่งั้นผู้ใช้จะเห็นเวลาซิงค์ค้างแล้วนึกว่าแอปแขวน
+        clearTimeout(timeout);
+        fetchingRef.current = false;
+        setSyncing(false);
+        setError(null);
+        setRetryMsg("");
+        const now = new Date().toISOString();
+        try { localStorage.setItem("dmj_last_sync", now); } catch (e) {}
+        setLastSync(now);
+        return;
+      }
+      // ห้าม `r.json()` ตรง ๆ — GAS ตอบหน้า HTML ได้ (ลิงก์หมดอายุ/กำลัง deploy/quota เต็ม)
+      // แล้วผู้ใช้จะเห็น `SyntaxError: Unexpected token '<'` ซึ่งอ่านไม่รู้เรื่อง (บทเรียนข้อ 13)
+      // ⚠️ `payload:ไบต์แรก` ต้องมาจากไบต์จริง ไม่ใช่เดา — การนับไบต์ระหว่างสตรีม
+      // (`dmjJsonProgress`) เป็นงาน Phase 7.6 ที่ยังไม่เอากลับเข้ามารอบนี้ · ที่นี่จึงวัดได้แค่
+      // "เริ่มยิง" กับ "ได้ก้อนครบ" ซึ่งยังแยก **รอ GAS คิด+ดาวน์โหลด** ออกจากขั้นอื่นได้อยู่
+      // (จะแยกสองอันนั้นออกจากกันต้องรอ 7.6 กลับมา — บันทึกไว้ใน CLAUDE.md แล้ว)
+      const getJson = r => (typeof dmjJson === 'function' ? dmjJson(r) : r.json());
+      window.dmjMark(prefetched ? 'payload:เริ่ม(prefetch)' : 'payload:เริ่ม');
+      return (prefetched
+      ? prefetched.then(d => d || fetch(bustUrl, { signal: controller.signal }).then(getJson))
+      : fetch(bustUrl, { signal: controller.signal }).then(getJson))
       .then(d => {
+        window.dmjMark('payload:ครบ');
         if (d && d.lastModified) window._dataLoadedAt = d.lastModified;
         if (typeof resetCatColorMap === 'function') resetCatColorMap();
+        // Phase 7.3: server ติดธง `stale` มาเมื่อมีคนอื่นกำลังสร้างข้อมูลชุดใหม่อยู่
+        // แล้วเราได้ "ชุดสำรอง" (ก่อนการบันทึกล่าสุด) กลับมาทันทีแทนการต่อคิวรอ ~10 วิ
+        // → ต้องบอกผู้ใช้ให้รู้ตัว **ห้ามโชว์เงียบ ๆ** เพราะตัวเลขสต็อกใช้ตัดสินใจสั่งของจริง
+        // เก็บเป็น state แยก ไม่ยัดเข้า `data` เพราะ `data` ถูก save ลง localStorage —
+        // ธงจะติดค้างข้ามการเปิดแอปครั้งถัดไปทั้งที่ตอนนั้นข้อมูลสดแล้ว
+        setStaleAt((d && d.stale) ? (d.staleAt || Date.now()) : 0);
         let enriched;
         try { enriched = enrichData(d); } catch (e) {
           console.warn("enrichData failed during fetchFromSheet:", e);
@@ -961,29 +1113,130 @@ function App() {
         setData(enriched);
         saveToStorage(enriched, "sheet");
         setSource("sheet");
+        // Phase 7.4: จำไว้ว่า "ก้อนที่ถืออยู่ตอนนี้คือเวอร์ชันไหน ของ role ไหน ตอนกี่โมง"
+        // ครั้งหน้าที่ต้อง refresh จะถาม `action=ver` เทียบกับค่านี้ก่อน แล้วข้ามการโหลดได้ถ้ายังตรง
+        writeVerStamp(d && d.lastModified, role);
         const now = new Date().toISOString();
         localStorage.setItem("dmj_last_sync", now);
         setLastSync(now);
         setError(null);
+        // จบเส้นทางเปิดแอปแล้ว — บันทึกไว้ให้เปิดดูย้อนหลังได้ (พนักงานเปิด DevTools ไม่ได้)
+        window.dmjMark('พร้อมใช้งาน');
+        window.dmjSaveTrace();
       })
       .catch(e => {
         clearTimeout(timeout);
+        // "ตอบมาเป็น HTML" (dmjKind==='badjson') ต่างจาก "เน็ตพัง" อย่างสำคัญ:
+        // มันแปลว่า **คำขอเดินทางไปถึง Google แล้ว แต่ก้อนข้อมูลถูกตัดกลางคัน** — สาเหตุที่วัดได้
+        // คือท่อเต็ม (ทุกคนเปิดแอปพร้อมกันตอนเช้า) จนดาวน์โหลดนานเกินอายุลิงก์ googleusercontent
+        // → **ยิงซ้ำทันทีคือการเติมเชื้อ**: อีก 4 เมกะเข้าไปในท่อที่เต็มอยู่แล้ว มีแต่จะโดนตัดซ้ำ
+        // จึงถอยนานกว่า + สุ่มเวลา (ทุกเครื่องพังพร้อมกัน ถ้าถอยเท่ากันก็กลับมาชนกันอีก
+        // — หลักเดียวกับการดึงซ้ำตอนได้ของสำรองใน Phase 7.3) + ลดจำนวนครั้งลง
+        // เพราะแต่ละครั้งมีราคา 4 เมกะจริง ๆ ไม่ใช่การ ping เบา ๆ
+        const isBadJson = e && e.dmjKind === "badjson";
+        // รอบที่ "พัง" คือรอบที่ต้องรู้เวลามากที่สุด — ถ้าบันทึกเฉพาะตอนสำเร็จ
+        // เคสที่เจ็บที่สุด (รอ 30 วิแล้วค่อยล้ม) จะไม่เหลือร่องรอยให้ดูเลยสักครั้ง
+        window.dmjMark('payload:ล้มเหลว' + (isBadJson ? '(ตอบไม่ครบ)' : ''));
+        window.dmjSaveTrace();
+        const nextLeft  = isBadJson ? Math.max(0, retryLeft - 2) : retryLeft - 1;
         if (retryLeft > 0) {
-          const delay = retryLeft === 3 ? 800 : retryLeft === 2 ? 2000 : 4000;
+          const base  = isBadJson ? 3000 : (retryLeft === 3 ? 800 : retryLeft === 2 ? 2000 : 4000);
+          const delay = base + Math.random() * base;   // สุ่มกระจาย 1–2 เท่าของฐาน
           const attempt = 4 - retryLeft; // 1, 2, 3
-          setRetryMsg(`เชื่อมต่อช้า กำลังลองใหม่ครั้งที่ ${attempt}…`);
-          setTimeout(() => fetchFromSheet(retryLeft - 1, force), delay); // คง force ไว้ตอน retry
+          setRetryMsg(isBadJson
+            ? `ระบบหลังบ้านตอบไม่ครบ (อาจมีคนใช้พร้อมกันเยอะ) กำลังลองใหม่ครั้งที่ ${attempt}…`
+            : `เชื่อมต่อช้า กำลังลองใหม่ครั้งที่ ${attempt}…`);
+          setTimeout(() => fetchFromSheet(nextLeft, force), delay); // คง force ไว้ตอน retry
           return;
         }
         setRetryMsg("");
-        if (e.name === "AbortError") setError("เซิร์ฟเวอร์ตอบช้า — กรุณาลองใหม่อีกครั้ง [timeout]");
-        else setError(`${e.name}: ${e.message}`);
+        // ข้อความสุดท้ายที่ผู้ใช้เห็นต้องเป็นภาษาไทยที่พนักงานหน้าร้านอ่านรู้เรื่อง
+        // ไม่ใช่ `SyntaxError: Unexpected token '<'` (ต้นฉบับเก็บไว้ใน dmj_last_backend_error แล้ว)
+        if (e && e.name === "AbortError") setError("เซิร์ฟเวอร์ตอบช้า — กรุณาลองใหม่อีกครั้ง [timeout]");
+        else setError(typeof dmjErrText === 'function' ? dmjErrText(e) : `${e.name}: ${e.message}`);
         setSyncing(false);
       })
       .finally(() => { fetchingRef.current = false; clearTimeout(timeout); if (!controller.signal.aborted) setSyncing(false); });
+    // ตาข่ายกันแอปค้าง: ถ้ามีอะไรหลุดออกมาถึงตรงนี้ `fetchingRef` จะค้าง true ตลอดกาล
+    // แล้วแอปจะ "ดึงข้อมูลไม่ได้อีกเลยทั้ง session" โดยไม่มี error ให้เห็น (guard ที่ต้นฟังก์ชัน
+    // return เงียบ ๆ) — ปลดล็อกไว้เสมอ ราคาถูกกว่าการต้องปิดแอปเปิดใหม่มาก
+    }).catch(() => { fetchingRef.current = false; setSyncing(false); });
     // role อยู่ใน deps เพราะถูกใช้ประกอบ URL แล้ว — ถ้าไม่ใส่ จะค้าง role ตอน mount (null)
     // แล้วยิงขอ payload ผิด variant ตลอดทั้ง session หลังผู้ใช้ล็อกอิน
   }, [sheetUrl, role]);
+
+  // ── Phase 7.4: ดึงเฉพาะ "เลขสต็อกอ้างอิง" สำหรับแท็บนับสต็อก/เช็คหน้าร้าน ──
+  // เดิมสองแท็บนี้ poll payload **ทั้งก้อน (~4.2MB) ทุก 30 วิ** ทั้งที่ต้องการแค่ตัวเลขสต็อก
+  // → เครื่องที่จอดหน้าร้านทั้งวันกินราว 500MB/ชม. และ 15 เครื่องพร้อมกัน = 63MB ผ่านท่อเดียว
+  // ซึ่งวัดได้ว่าทำให้ลิงก์ดาวน์โหลดของ Google หมดอายุกลางคัน (HTTP 404 — ดู PHASE0-RESULTS.md)
+  // ก้อนใหม่เล็กกว่าราว 50 เท่า และอ่านแค่ 2 ชีตแทน 9
+  //
+  // ⚠️ **ต้องคำนวณ qty/isOOS ใหม่ทุกครั้งที่แตะ qtyStore/qtyWH** — เขียนทับแค่สองตัวแล้วปล่อย
+  // qty เดิมไว้คือบั๊กเดียวกับเคส WL (ก.ค. 2026) ที่สินค้ามีของจริงแต่โชว์ "หมด" ทั้งระบบ
+  // โดยไม่มี error ให้เห็น · สูตรตรงนี้ต้องตรงกับ `applyQtyLocToProduct_` ฝั่ง GAS เสมอ
+  const fetchStockLite = usC(() => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20000);
+    const sep = sheetUrl.includes('?') ? '&' : '?';
+    const url = `${sheetUrl}${sep}action=stocklite&_t=${Date.now()}`;
+    return fetch(url, { signal: controller.signal, cache: 'no-store' })
+      .then(r => (typeof dmjJson === 'function' ? dmjJson(r) : r.json()))
+      .then(d => {
+        // GAS ยังเป็นโค้ดเก่า (ไม่รู้จัก action นี้) → คืน payload เต็ม/HTML → ไม่มี items
+        // ไม่ทำอะไรเลยดีกว่าเดา — poll รอบหน้าค่อยว่ากัน (แท็บพวกนี้ยังใช้งานได้ปกติ)
+        if (!d || !Array.isArray(d.items)) return;
+        const m = {};
+        d.items.forEach(row => { if (row && row[0]) m[row[0]] = row; });
+        setData(prev => {
+          if (!prev || !Array.isArray(prev.products)) return prev;
+          // อัตราขายส่งมาจาก payload เดิม (ไม่ได้ส่งมากับก้อนเบา) — ค่า default ตรงกับฝั่ง GAS
+          const whR = (prev.totals && prev.totals.wholesaleRatio) || 0.8;
+          let changed = false;
+          const products = prev.products.map(p => {
+            const row = m[String(p.sku || '').toUpperCase()];
+            if (!row) return p;
+            const qtyStore = Number(row[1]) || 0;
+            const qtyWH    = Number(row[2]) || 0;
+            const fsQty    = row[3] == null ? null : Number(row[3]);
+            const fsAt     = row[4] || null;
+            if (p.qtyStore === qtyStore && p.qtyWH === qtyWH
+                && p.frontStoreCheckedQty === fsQty && p.frontStoreCheckedAt === fsAt) return p;
+            changed = true;
+            const total = qtyStore + qtyWH;
+            const price = p.price || 0;
+            return Object.assign({}, p, {
+              qtyStore, qtyWH, warehouseQty: qtyWH,
+              qty:        total,
+              qtyStatus:  total < 0 ? 'negative' : 'ok',
+              isOversold: total < 0,
+              isOOS:      total <= 0,
+              stockValue:      total    * price * whR,
+              stockValueWH:    qtyWH    * price * whR,
+              stockValueStore: qtyStore * price * whR,
+              frontStoreCheckedQty: fsQty,
+              frontStoreCheckedAt:  fsAt,
+            });
+          });
+          if (!changed) return prev;   // ไม่มีอะไรเปลี่ยน → ไม่ re-render ทั้งหน้า
+          return Object.assign({}, prev, { products });
+        });
+        // **ไม่ saveToStorage โดยตั้งใจ** — เขียน JSON หลายเมกะไบต์ลง localStorage ทุก 30 วิ
+        // ทำให้เครื่องมือถือกระตุกทั้งที่ไม่จำเป็น · ถ้าปิดแล้วเปิดใหม่ ตัวเลขจะถูกดึงสดอยู่แล้ว
+        // ⚠️ ยอดรวมใน `data.totals` (totalStockValue ฯลฯ) **ไม่ถูกคำนวณใหม่** ที่นี่ —
+        // จะไม่ตรงกับผลรวมของ products ชั่วคราวจนกว่าจะโหลดเต็มรอบถัดไป · ยอมรับได้เพราะสองแท็บ
+        // ที่ใช้ poll ตัวนี้ไม่ได้แสดงยอดรวมพวกนั้น · **ถ้าจะเอา poll นี้ไปใช้กับแท็บที่โชว์ยอดรวม
+        // ต้องคำนวณ totals ใหม่ด้วย** ไม่งั้นตัวเลขบนจอจะขัดกันเองโดยไม่มีอะไรบอก
+        //
+        // เดินเวลา "ข้อมูลที่เราถือ" ให้สด — poll ตัวเดิมก็ทำแบบนี้ทุก 30 วิ ถ้าไม่ทำ คนที่นับสต็อก
+        // อยู่นาน ๆ จะโดน conflict ปฏิเสธการบันทึกทุกครั้งที่มีใครบันทึกอะไรที่อื่น (งานหายทั้งรอบนับ)
+        // ⚠️ ต่างจาก poll เดิมตรงที่ก้อนนี้รีเฟรช **เฉพาะจำนวนสต็อก** — ล็อค/ออเดอร์/โอน ยังเป็น
+        // ชุดจากการโหลดเต็มครั้งล่าสุด · ยอมรับได้เพราะสองแท็บนี้เขียนงานที่อิงจำนวนสต็อกเป็นหลัก
+        // แต่ถ้าวันหนึ่งมีแท็บอื่นมาใช้ poll ตัวนี้ ต้องทบทวนข้อนี้ก่อนเสมอ
+        if (d.ts) window._dataLoadedAt = d.ts;
+      })
+      .catch(() => {})   // เงียบ — เป็น background polling ไม่ต้องรบกวนผู้ใช้
+      .finally(() => clearTimeout(timeout));
+  }, [sheetUrl]);
 
   // Lightweight fetch: ดึงเฉพาะรายการสั่งของ (เบา/เร็ว) — ใช้ polling หน้า orders จะได้ไม่โหลดทั้งก้อน
   // คืน promise ด้วย — ตัวเรียก (เช่นหลังสั่งของสำเร็จ) จะได้รู้ว่าดึงเสร็จเมื่อไหร่
@@ -993,7 +1246,7 @@ function App() {
     const sep = sheetUrl.includes('?') ? '&' : '?';
     const url = `${sheetUrl}${sep}action=orders&_t=${Date.now()}`;
     return fetch(url, { signal: controller.signal, cache: 'no-store' })
-      .then(r => r.json())
+      .then(r => (typeof dmjJson === 'function' ? dmjJson(r) : r.json()))
       .then(d => {
         if (!d || d.error || !Array.isArray(d.orders)) return; // d.error = sheet_not_found → skip
         // ถ้า GAS คืน date เป็น Date object string ("Thu Jun 06 2026...") แทน "dd/mm/yyyy"
@@ -1041,6 +1294,15 @@ function App() {
     fetchFromSheet(); // refresh ใน background เสมอ
   }, [role, fetchFromSheet]);
 
+  // Phase 7.3: ได้ของสำรองมา → คนที่กำลัง build อยู่จะเสร็จในไม่กี่วินาที ดึงซ้ำอีกรอบให้เอง
+  // ไม่ต้องรอผู้ใช้กด Sync หรือรอ poll 30 วิ (ซึ่งมีเฉพาะบางแท็บ) · ยิงครั้งเดียวต่อ 1 ครั้งที่ได้ของสำรอง
+  // **สุ่มหน่วง 5-9 วิ** เพราะทุกเครื่องได้ของสำรองพร้อมกัน — ถ้าตั้งเวลาตายตัวจะกลับมายิงพร้อมกันอีก
+  usE(() => {
+    if (!staleAt) return;
+    const id = setTimeout(() => { if (navigator.onLine) fetchFromSheet(); }, 5000 + Math.random() * 4000);
+    return () => clearTimeout(id);
+  }, [staleAt, fetchFromSheet]);
+
   // expose refetch ให้ child component เรียกได้เมื่อเจอ conflict (จะอัปเดต window._dataLoadedAt ให้สด)
   usE(() => { window._dmjRefetch = fetchFromSheet; return () => { delete window._dmjRefetch; }; }, [fetchFromSheet]);
   // ตัวเบา: ดึงเฉพาะรายการสั่งของ (action=orders อ่านชีตตรง ไม่ผ่าน cache) — ใช้หลังสั่งของสำเร็จ
@@ -1078,15 +1340,16 @@ function App() {
   }, [tab, role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Auto-sync เมื่ออยู่หน้านับสต็อก/เช็คหน้าร้าน — ให้หลายเครื่องเห็นข้อมูลของกันและกัน ──
-  // ดึง payload ทั้งก้อนทุก 30 วิ (อัปเดตเลขคลังอ้างอิง) — จำนวนที่ผู้ใช้พิมพ์เก็บใน local state
-  // (checkedQtys) แยกต่างหาก จึงไม่ถูกทับ ส่วน window._dataLoadedAt จะอัปเดตให้สด กัน false conflict
+  // ดึงเฉพาะเลขสต็อกอ้างอิงทุก 30 วิ (Phase 7.4 — เดิมดึง payload ทั้งก้อน ~4.2MB ทุกรอบ)
+  // จำนวนที่ผู้ใช้พิมพ์เก็บใน local state (checkedQtys) แยกต่างหาก จึงไม่ถูกทับ
+  // ส่วน window._dataLoadedAt จะอัปเดตให้สด กัน false conflict ตอนบันทึกจากแท็บนี้
   usE(() => {
     if (!role) return;
     const LIVE_TABS = ["stockcount", "frontstore"];
     if (!LIVE_TABS.includes(tab)) return;
-    const id = setInterval(() => { if (navigator.onLine) fetchFromSheet(); }, 30000);
+    const id = setInterval(() => { if (navigator.onLine) fetchStockLite(); }, 30000);
     return () => clearInterval(id);
-  }, [tab, role, fetchFromSheet]);
+  }, [tab, role, fetchStockLite]);
 
   const handleDataLoaded = usC((newData) => {
     if (typeof resetCatColorMap === 'function') resetCatColorMap();
@@ -1097,6 +1360,8 @@ function App() {
     }
     setData(enriched);
     saveToStorage(enriched, "upload");
+    // ข้อมูลในมือไม่ได้มาจากชีตแล้ว — ใบรับรอง ver ใช้ไม่ได้ ต้องทิ้ง (ดูคำอธิบายที่ clearVerStamp)
+    clearVerStamp();
     setSource("upload");
     const now = new Date().toISOString();
     localStorage.setItem("dmj_last_sync", now);
@@ -1172,7 +1437,11 @@ function App() {
     try {
       const d = await postAuthAction({ action: "me", sessionToken: tok });
       if (d && d.ok) applyStaffSession(d.staff);
-      else { lsDel(SESSION_TOKEN_KEY); setAuthPhase("needLogin"); }
+      // ลบ token ทิ้งเฉพาะตอน server ยืนยันว่า session ตายจริง (invalid:true)
+      // error อื่นคือปัญหาชั่วคราว (doPost catch ตอบ {success:false} ซึ่งก็ "ไม่มี ok")
+      // ถ้าลบตามนั้นด้วย = เตะพนักงานออกทั้งที่ session ยังดี แล้วต้องล็อกอินใหม่ฟรี ๆ
+      else if (d && d.invalid) { lsDel(SESSION_TOKEN_KEY); setAuthPhase("needLogin"); }
+      else setAuthPhase(role ? "ready" : "needLogin");
     } catch (e) {
       // ต่อเน็ตไม่ได้ — ถ้ามี role ค้างจาก session ก่อนหน้าอยู่แล้ว ให้ทำงานต่อได้ (offline-friendly)
       setAuthPhase(role ? "ready" : "needLogin");
@@ -1369,7 +1638,9 @@ function App() {
         const d = await postAuthAction({ action: "me", sessionToken: tok });
         if (cancelled) return;
         if (d && d.ok) applyStaffSession(d.staff);
-        else { lsDel(SESSION_TOKEN_KEY); setAuthPhase(role ? "ready" : "needLogin"); }
+        // เช่นเดียวกับ checkMe — ลบ token เฉพาะตอน server ยืนยันว่า session ตายจริง
+        else if (d && d.invalid) { lsDel(SESSION_TOKEN_KEY); setAuthPhase(role ? "ready" : "needLogin"); }
+        else setAuthPhase(role ? "ready" : "needLogin");
       } catch (e) {
         if (!cancelled) setAuthPhase(role ? "ready" : "needLogin"); // ต่อเน็ตไม่ได้ — ทำงานต่อด้วย role เดิมถ้ามี
       }
@@ -1449,42 +1720,55 @@ function App() {
     secondaryTabs = [];
   }
 
-  if (error && !data) {
-    return (
-      <div className="loading-screen">
-        <div style={{color:"var(--dang)",fontWeight:600}}>โหลดข้อมูลไม่สำเร็จ</div>
-        <div style={{color:"var(--muted)",fontSize:12}}>{error}</div>
-        <button className="btn primary" onClick={()=>fetchFromSheet(3,true)} style={{marginTop:12}}>
-          {I.refresh}<span>ลองใหม่</span>
-        </button>
-      </div>
-    );
-  }
+  // ── ทางด่วนลงเวลา ────────────────────────────────────────────────────────
+  // AttendanceView / AttendanceTodayView **ไม่ได้ใช้ `data` เลยแม้แต่ฟิลด์เดียว**
+  // (views-attendance.jsx — รับแค่ role/canEdit แล้วยิง endpoint ของตัวเองผ่าน attPost
+  //  ซึ่งแนบ sessionToken เอง ไม่พึ่ง payload หลัก)
+  // แต่เดิมทั้งคู่ถูกกั้นหลัง `if (!data)` ข้างล่าง = พนักงานที่มาสแกนเข้า-ออกงาน
+  // ต้องรอ payload หลายเมกะที่ตัวเองไม่ได้ใช้ ก่อนจะเห็นปุ่มลงเวลา
+  // → ปล่อยให้ 2 แท็บนี้เรนเดอร์ได้ทันทีที่รู้ว่าเป็นใคร ส่วนข้อมูลก้อนใหญ่โหลดอยู่เบื้องหลัง
+  //
+  // ⚠️ **ห้ามขยายรายชื่อนี้โดยไม่เปิดดู view จริงก่อน** — แท็บอื่นทุกตัวอ่าน `data` จริง
+  //    ปล่อยผ่านมาที่นี่ = จอขาว (อ่าน property ของ null) ซึ่งไม่มี error ให้ผู้ใช้เห็นเลย
+  // ⚠️ ตั้งใจ**ไม่**ทำเป็นจอแยก/early-return — ถ้าแยกจอ พอข้อมูลมาถึงแล้วสลับกลับเข้า shell
+  //    ปกติ ตำแหน่งของ <AttendanceView> ในต้นไม้จะเปลี่ยน → React unmount แล้ว mount ใหม่
+  //    = state ข้างในหายกลางคัน (คนที่กำลังถ่ายรูป/รอ GPS อยู่ต้องเริ่มใหม่โดยไม่รู้สาเหตุ)
+  //    การใช้ shell เดียวกันทำให้ตำแหน่งคงที่ ข้อมูลมาถึงแล้วหน้าที่เปิดอยู่ไม่สะดุด
+  const ATT_FAST_TABS = ["attendance", "atttoday"];
+  const attFastPath = !data && ATT_FAST_TABS.includes(activeTab);
 
-  if (!data) {
-    return (
-      <div className="loading-screen">
-        {error ? (
-          <>
-            <div style={{fontSize:32,marginBottom:8}}>⚠️</div>
-            <div style={{fontSize:14,color:"#c62828",marginBottom:12,textAlign:"center",padding:"0 24px"}}>{error}</div>
-            {error.includes("timeout") && (
-              <div style={{fontSize:12,color:"var(--muted)",marginBottom:16,textAlign:"center",padding:"0 28px",lineHeight:1.6}}>
-                ลอง: ปิด VPN · ปิด Content Blocker ใน Safari · ปิด iCloud Private Relay · หรือเปลี่ยนมาใช้ 4G/5G
-              </div>
-            )}
-            <button className="btn" onClick={()=>fetchFromSheet(3,true)} style={{minHeight:44,padding:"0 24px"}}>🔄 ลองใหม่</button>
-          </>
-        ) : (
-          <>
-            <div className="spin"></div>
-            <div style={{fontSize:13,color:"var(--muted)"}}>กำลังโหลดข้อมูล Dashboard…</div>
-            {retryMsg && <div style={{fontSize:12,color:"var(--muted)",marginTop:6}}>{retryMsg}</div>}
-          </>
-        )}
-      </div>
-    );
-  }
+  // จอ "ยังไม่มีข้อมูลก้อนใหญ่" — เดิมเป็น early return ทั้งหน้า **แถบเมนูจึงหายไปด้วย**
+  // พอมีทางด่วนลงเวลาแล้ว อันนั้นกลายเป็นกับดัก: ลงเวลาเสร็จ กดแท็บอื่นดูสักที
+  // แล้วกลับมาแท็บลงเวลาไม่ได้อีกเลยจนกว่าข้อมูลจะมาครบ (ไม่มีปุ่มอะไรให้กดเลย)
+  // → ย้ายมาเรนเดอร์ "ข้างใน <main>" แทน แถบเมนูอยู่ครบเสมอ เดินกลับได้ตลอด
+  const dataPane = (
+    <div className="loading-screen">
+      {error ? (
+        <>
+          <div style={{fontSize:32,marginBottom:8}}>⚠️</div>
+          <div style={{fontSize:14,color:"#c62828",marginBottom:12,textAlign:"center",padding:"0 24px"}}>{error}</div>
+          {error.includes("timeout") && (
+            <div style={{fontSize:12,color:"var(--muted)",marginBottom:16,textAlign:"center",padding:"0 28px",lineHeight:1.6}}>
+              ลอง: ปิด VPN · ปิด Content Blocker ใน Safari · ปิด iCloud Private Relay · หรือเปลี่ยนมาใช้ 4G/5G
+            </div>
+          )}
+          <button className="btn" onClick={()=>fetchFromSheet(3,true)} style={{minHeight:44,padding:"0 24px"}}>🔄 ลองใหม่</button>
+          {/* ตอนพังคือตอนที่ต้องการเลขที่สุด — ให้ดูได้ตรงนี้เลย ไม่ต้องรอเข้าแอปสำเร็จก่อน
+              (ซึ่งเป็นข้อที่ทำให้รอบก่อนไล่สาเหตุไม่ได้: แอปเข้าไม่ได้ = เครื่องมือวัดก็เข้าไม่ถึง) */}
+          <details style={{marginTop:18,width:"100%",maxWidth:420,padding:"0 16px"}}>
+            <summary style={{fontSize:12,color:"var(--muted)",cursor:"pointer"}}>⏱️ ดูเวลาแต่ละขั้น</summary>
+            <div style={{marginTop:10}}><BootTrace/></div>
+          </details>
+        </>
+      ) : (
+        <>
+          <div className="spin"></div>
+          <div style={{fontSize:13,color:"var(--muted)"}}>กำลังโหลดข้อมูล Dashboard…</div>
+          {retryMsg && <div style={{fontSize:12,color:"var(--muted)",marginTop:6}}>{retryMsg}</div>}
+        </>
+      )}
+    </div>
+  );
 
   const syncLabel = (() => {
     if (!lastSync) return "ยังไม่ sync";
@@ -1494,8 +1778,10 @@ function App() {
   })();
 
   // ── ตัวเลขเตือนบนหมวด owner (จาก payload ที่เชื่อถือได้) ──
-  const pendingOrders = (data.orders || []).filter(o => o.status === "รอ").length;    // ออเดอร์ค้าง (status "รอ")
-  const pendingRecv   = (data.shipments || []).filter(s => !s.receivedAt).length;      // ของโอนแล้วรอรับ
+  // `data` เป็น null ได้เมื่ออยู่บนทางด่วนลงเวลา (ข้อมูลก้อนใหญ่ยังโหลดไม่เสร็จ) —
+  // ตัวเลขบนป้ายเตือนยังไม่รู้ ก็แค่ไม่ต้องโชว์ ห้ามอ่าน property ของ null (จอขาวทั้งแอป)
+  const pendingOrders = ((data && data.orders) || []).filter(o => o.status === "รอ").length;    // ออเดอร์ค้าง (status "รอ")
+  const pendingRecv   = ((data && data.shipments) || []).filter(s => !s.receivedAt).length;      // ของโอนแล้วรอรับ
 
   // จัดกลุ่ม owner: map tab id → {label, icon} จริง + ดัน tab ที่ไม่เข้ากลุ่มไหนเข้า "อื่นๆ"
   const ownerNav = (() => {
@@ -1763,6 +2049,25 @@ function App() {
         </div>
       )}
 
+      {/* ─── Phase 7.3: กำลังดูข้อมูลสำรองระหว่างระบบสร้างชุดใหม่ ─── */}
+      {/* เจตนา: ไม่ให้ผู้ใช้ตัดสินใจสั่งของจากตัวเลขเก่าโดยไม่รู้ตัว · ไม่ต้องกดอะไร
+          เดี๋ยวระบบดึงชุดใหม่ให้เองใน 5-9 วิ (ดู effect ด้านบน) — บอกไว้เพื่อไม่ให้กด Sync รัว */}
+      {staleAt > 0 && isOnline && (
+        <div style={{
+          background:"#fffbeb", borderBottom:"1px solid #fcd34d", color:"#78350f",
+          padding:"8px 16px", fontSize:13, display:"flex", alignItems:"center", gap:8,
+        }}>
+          <span style={{fontSize:16}}>⏳</span>
+          <div style={{flex:1,minWidth:0}}>
+            <b>กำลังอัปเดตข้อมูล</b> — ที่เห็นตอนนี้คือข้อมูล ณ{" "}
+            {new Date(staleAt).toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit"})}
+            <span style={{opacity:.8}}> · เดี๋ยวขึ้นเองอัตโนมัติ</span>
+          </div>
+          <button className="btn ghost" style={{padding:"4px 10px",fontSize:12}}
+                  disabled={syncing} onClick={()=>fetchFromSheet(3,true)}>ดึงเดี๋ยวนี้</button>
+        </div>
+      )}
+
       {/* ─── PWA install prompt ─── */}
       {installPrompt && !installDismissed && (
         <div style={{background:"#ecfdf5",borderBottom:"1px solid #6ee7b7",
@@ -1810,6 +2115,31 @@ function App() {
         </div>
       )}
 
+      {/* ─── ทางด่วนลงเวลา: บอกว่าหน้านี้ใช้ได้แล้ว ส่วนที่เหลือยังตามมา ───
+           ต้องมี ไม่งั้นพนักงานกดแท็บอื่นแล้วเจอจอโหลดจะนึกว่าแอปพัง/ค้าง
+           ทั้งที่ตั้งใจให้ลงเวลาได้ก่อน · โชว์ไบต์ที่โหลดมาแล้วด้วยเพื่อให้เห็นว่ามันเดินอยู่จริง */}
+      {attFastPath && !error && (
+        <div className="no-print" style={{
+          background:"#e8f5e9", color:"#1b5e20", padding:"6px 16px",
+          fontSize:12, display:"flex", alignItems:"center", gap:8,
+          borderBottom:"1px solid #a5d6a7",
+        }}>
+          <span className="spin" style={{width:12,height:12,borderWidth:2,flexShrink:0}}></span>
+          <span>ลงเวลาได้เลย — ข้อมูลสินค้ากำลังโหลดอยู่เบื้องหลัง</span>
+        </div>
+      )}
+      {attFastPath && error && (
+        <div className="no-print" style={{
+          background:"#fff3cd", color:"#856404", padding:"6px 16px",
+          fontSize:12, display:"flex", alignItems:"center", justifyContent:"space-between",
+          gap:8, borderBottom:"1px solid #ffc107",
+        }}>
+          <span>⚠️ โหลดข้อมูลสินค้าไม่สำเร็จ — แต่ลงเวลาได้ตามปกติ</span>
+          <button className="btn ghost" style={{fontSize:12,padding:"2px 8px"}}
+                  onClick={()=>fetchFromSheet(3,true)}>ลองใหม่</button>
+        </div>
+      )}
+
       {/* ─── Sync error banner (non-blocking, only when data already loaded) ─── */}
       {error && data && (
         <div className="no-print" style={{
@@ -1826,6 +2156,10 @@ function App() {
 
       {/* ─── Main ─── */}
       <main className="main" data-screen-label={activeTab}>
+        {/* ⚠️ ด่านเดียวที่กัน view ที่ต้องใช้ `data` ไม่ให้เจอ null — ทุก view ข้างล่างนี้
+            (ยกเว้น 2 แท็บลงเวลา) อ่าน data.products/data.orders ตรง ๆ เจอ null = จอขาว
+            เงื่อนไขต้องตรงกับ ATT_FAST_TABS ข้างบนเป๊ะ ๆ */}
+        {!data && !ATT_FAST_TABS.includes(activeTab) ? dataPane : (<>
         {activeTab === "overview"     && <ErrorBoundary key="overview"><OverviewView data={data} range={range} setRange={setRange} role={viewRole}/></ErrorBoundary>}
         {activeTab === "whhome"       && <ErrorBoundary key="whhome"><WarehouseHomeView data={data} onNav={handleSetTab}/></ErrorBoundary>}
         {activeTab === "categories"   && <ErrorBoundary key="categories"><CategoryView data={data} role={viewRole} onNav={handleSetTab}/></ErrorBoundary>}
@@ -1856,6 +2190,7 @@ function App() {
                                             onInitConsumed={() => setLabelInitItems(null)}/></ErrorBoundary>}
         {activeTab === "auditlog"     && <ErrorBoundary key="auditlog"><AuditLogView/></ErrorBoundary>}
         {activeTab === "staff"        && <ErrorBoundary key="staff"><StaffView/></ErrorBoundary>}
+        {activeTab === "staffperf"    && <ErrorBoundary key="staffperf"><StaffPerformanceView/></ErrorBoundary>}
         {activeTab === "attendance"   && <ErrorBoundary key="attendance"><AttendanceView role={viewRole}/></ErrorBoundary>}
         {activeTab === "atttoday"     && <ErrorBoundary key="atttoday"><AttendanceTodayView canEdit={isAdminRole(role)}/></ErrorBoundary>}
         {activeTab === "deadstock"    && <ErrorBoundary key="deadstock"><DeadStockView/></ErrorBoundary>}
@@ -1882,6 +2217,7 @@ function App() {
                                       else showNavToast("error", "Sync ยอดขาย ZORT ไม่สำเร็จ: " + ((r && r.error) || "timeout"));
                                     }}
                                     /></ErrorBoundary>}
+        </>)}
       </main>
     </div>
   );

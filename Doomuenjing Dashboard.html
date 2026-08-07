@@ -4,6 +4,48 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1.0" id="dmj-viewport-meta" />
 <script>
+  /* ─── เครื่องมือวัด "เปิดแอปช้าตรงไหน" ──────────────────────────────────────
+     ต้องเป็นสคริปต์ตัวแรกสุดของหน้า — จุดเริ่มนับคือตอนนี้ ไม่ใช่ตอน React พร้อม
+     เก็บแค่ชื่อขั้น + มิลลิวินาที ไม่เก็บข้อมูลผู้ใช้/ชื่อ/token อะไรทั้งสิ้น
+
+     ⚠️ ตัวนี้ต้อง **ไม่มีทางทำให้แอปพัง** ไม่ว่าอะไรจะเกิดขึ้น — เป็นแค่เครื่องมือวัด
+        ทุกฟังก์ชันจึงห่อ try/catch และไม่ throw ออกไปเลย (ถ้าวัดไม่ได้ก็แค่ไม่มีเลข
+        ห้ามลากแอปล่มไปด้วย) · ครั้งก่อนที่ใส่เครื่องมือวัดแล้วแอปเข้าไม่ได้
+        เสียเวลาไล่หาสาเหตุนาน เพราะแยกไม่ออกว่าของวัดพังหรือของจริงพัง
+
+     อ่านผลย้อนหลังได้ที่ localStorage.dmj_boot_trace (เก็บรอบล่าสุด) */
+  (function () {
+    try {
+      var t0 = (window.performance && performance.now) ? performance.now() : 0;
+      var marks = [];
+      window.dmjMark = function (name) {
+        try {
+          var now = (window.performance && performance.now) ? performance.now() : 0;
+          marks.push([String(name), Math.round(now - t0)]);
+        } catch (e) {}
+      };
+      window.dmjTrace = function () { try { return marks.slice(); } catch (e) { return []; } };
+      /* เขียนลง localStorage เพื่อให้เปิดดูย้อนหลังได้ แม้แอปจะค้างจนกดอะไรไม่ได้
+         (พนักงานอยู่หน้าร้าน เปิด DevTools ไม่ได้ — เจ้าของมาเปิดดูทีหลังจากตรงนี้) */
+      window.dmjSaveTrace = function () {
+        try {
+          localStorage.setItem('dmj_boot_trace', JSON.stringify({
+            at: Date.now(),
+            ua: (navigator.userAgent || '').slice(0, 120),
+            marks: marks,
+          }));
+        } catch (e) {}
+      };
+      window.dmjMark('html');
+    } catch (e) {
+      /* วัดไม่ได้ → ใส่ตัวเปล่าไว้ ให้ที่อื่นเรียกได้โดยไม่ต้องเช็คก่อนทุกจุด */
+      window.dmjMark = function () {};
+      window.dmjTrace = function () { return []; };
+      window.dmjSaveTrace = function () {};
+    }
+  })();
+</script>
+<script>
   // แก้เฉพาะเครื่องที่ UA รายงานเป็น desktop (X11; Linux x86_64, ไม่มี Android/Mobile)
   // ทั้งที่จริงเป็นจอสัมผัสมือถือ — เจอเคสจริง: WebView แบบนี้ไม่ยึด width=device-width
   // ตามที่ควร ทำให้ทั้งหน้าถูกคำนวณ viewport กว้างเกิน แล้วบีบ (zoom) ลงมาให้พอดีจอ
@@ -1278,8 +1320,32 @@
          (เช่น LINE login คืนตำแหน่งจริงจาก server ไม่ตรงกับที่ค้างใน sessionStorage)
          ผลที่ prefetch ไว้จะ "ขาดก้อนข้อมูล" สำหรับ role ใหม่ → app.jsx ต้องทิ้งแล้วยิงใหม่ */
       window._dataPrefetchRole = role;
+      /* ต้องยกเลิกได้จากข้างนอก — ถ้าสุดท้าย role ไม่ตรง app.jsx จะทิ้งผลก้อนนี้แล้วยิงใหม่
+         ถ้าไม่ยกเลิก ก้อนเก่า (หลายเมกะ) **ยังไหลต่อจนจบ** เบียดท่อเดียวกับก้อนใหม่
+         = โหลดหน้าเดียวกินสองเท่า ซึ่งเป็นสาเหตุที่ทำให้ลิงก์ดาวน์โหลดหมดอายุ (404) */
+      window._dataPrefetchAbort = function () {
+        try { ctl && ctl.abort(); } catch (_) {}
+        clearTimeout(to);
+      };
       window._dataPrefetch = fetch(u, ctl ? { signal: ctl.signal } : undefined)
-        .then(function (r) { clearTimeout(to); return r.json(); })
+        /* ห้าม r.json() ตรง ๆ — GAS ตอบหน้า HTML ได้ (ลิงก์หมดอายุ/กำลัง deploy/quota)
+           แล้ว JSON.parse จะโยน SyntaxError ที่กลืนหายไปใน .catch ข้างล่างโดยไม่รู้สาเหตุ
+           เก็บต้นฉบับไว้ให้เจ้าของเปิดดูย้อนหลังได้ (หลักเดียวกับ dmjJson ใน ui.jsx ซึ่ง
+           ตอนนี้ยังโหลดไม่เสร็จ จึงต้องทำซ้ำแบบย่อตรงนี้) */
+        .then(function (r) {
+          clearTimeout(to);
+          return r.text().then(function (t) {
+            try { return JSON.parse(t); } catch (_) {
+              try {
+                localStorage.setItem('dmj_last_backend_error', JSON.stringify({
+                  when: new Date().toISOString(), status: r.status, url: r.url,
+                  head: String(t || '').slice(0, 300), where: 'prefetch',
+                }));
+              } catch (_) {}
+              return null;   /* แอปจะยิงเองตามปกติ */
+            }
+          });
+        })
         .catch(function () { clearTimeout(to); return null; });  /* พังก็ไม่เป็นไร แอปยิงเอง */
     } catch (_) {}
   };
@@ -1359,18 +1425,25 @@
         var bc = await caches.open(BC);
         var hit = await bc.match(src + '.compiled');
         if (hit && hit.headers.get('x-etag') === etag) {
-          return await hit.text(); /* cache hit — ไม่ต้องอ่าน body หรือ compile เลย */
+          var cached = await hit.text(); /* cache hit — ไม่ต้องอ่าน body หรือ compile เลย */
+          window.dmjMark('cachehit:' + src);
+          return cached;
         }
       } catch (_) {}
     }
 
     /* ── Cache miss: อ่าน body แล้ว compile ── */
+    /* วัดแยก hit/miss เพราะราคาต่างกันคนละโลก: hit ≈ อ่านไฟล์, miss = Babel ต้อง
+       แปลง JSX ครึ่งเมกะบนซีพียูมือถือ · deploy ที่แตะ .jsx ทำให้ ETag เปลี่ยน =
+       ทุกเครื่องจ่ายค่า compile ใหม่รอบหนึ่ง ซึ่งเป็นค่าที่เรามองไม่เห็นมาตลอด */
     var text = await resp.text();
+    window.dmjMark('compile:' + src);
     var compiled = Babel.transform(text, {
       presets: ['react'],
       sourceType: 'script',
       filename: src,
     }).code;
+    window.dmjMark('compiled:' + src);
 
     /* บันทึก compiled code ไว้ใช้ครั้งหน้า */
     if (typeof caches !== 'undefined') {
@@ -1402,7 +1475,8 @@
       injectCode(codes[3]); /* views-attendance สุดท้าย (ก่อน app.jsx) */
       return loadJsx('app.jsx');
     })
-    .catch(function (err) { console.error('[boot]', err); });
+    .then(function () { window.dmjMark('jsx-ready'); })
+    .catch(function (err) { console.error('[boot]', err); window.dmjMark('jsx-error'); window.dmjSaveTrace(); });
 }());
   </script>
 

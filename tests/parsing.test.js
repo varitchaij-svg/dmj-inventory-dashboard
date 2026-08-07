@@ -1,6 +1,6 @@
 // tests/parsing.test.js — ทดสอบ compareSku, mtoBase, parseQty_, parseNum_, parseLocation_
 import { describe, it, expect } from 'vitest';
-import { compareSku, mtoBase, parseQty_, parseNum_, parseLocation_ } from './helpers.js';
+import { compareSku, mtoBase, parseQty_, parseNum_, parseLocation_, lockKeyOf_ } from './helpers.js';
 
 describe('compareSku', () => {
   it('เรียง SKU แบบธรรมชาติ (prefix → num1 → num2)', () => {
@@ -172,5 +172,60 @@ describe('parseLocation_', () => {
   it('รูปแบบไม่รู้จัก → null', () => {
     expect(parseLocation_('blah')).toBeNull();
     expect(parseLocation_('A/3')).toBeNull();  // ขาดเลขชั้น
+  });
+});
+
+// ─── ช่อง "ไม่ได้อยู่บนชั้น" (A0 / B0) ────────────────────────────────────────
+// ของที่วางพื้น/นอกชั้นวางในซอยนั้น — ไม่มีเลขล็อค จึงเป็นรูปแบบพิเศษของตำแหน่งจัดเก็บ
+describe('parseLocation_ — ช่องไม่ได้อยู่บนชั้น A0/B0', () => {
+  it('"A0" → shelf 0, lock 0, floor true', () => {
+    expect(parseLocation_('A0')).toEqual({
+      raw: 'A0', valid: true, side: 'A', shelf: 0, lock: 0, floor: true,
+    });
+  });
+
+  it('"B0" → side B', () => {
+    expect(parseLocation_('B0')).toEqual({
+      raw: 'B0', valid: true, side: 'B', shelf: 0, lock: 0, floor: true,
+    });
+  });
+
+  it('"b0" (พิมพ์เล็ก) / มีช่องว่างหน้า-หลัง → ยังอ่านได้', () => {
+    expect(parseLocation_('b0').side).toBe('B');
+    expect(parseLocation_(' A0 ')).toMatchObject({ side: 'A', floor: true });
+  });
+
+  it('"C0" → null (ซอยมีแค่ A กับ B)', () => {
+    expect(parseLocation_('C0')).toBeNull();
+  });
+
+  it('ล็อคปกติต้องไม่ถูกตีเป็นช่องไม่อยู่บนชั้น', () => {
+    expect(parseLocation_('A1/3').floor).toBeUndefined();
+    expect(parseLocation_('A10/1').shelf).toBe(10);   // "A10" ต้องไม่ชนกับ "A1"+"0"
+  });
+});
+
+describe('lockKeyOf_', () => {
+  it('ล็อคปกติ → "A3/7" (รูปแบบเดิมทุกประการ)', () => {
+    expect(lockKeyOf_(parseLocation_('A3/7'))).toBe('A3/7');
+    expect(lockKeyOf_(parseLocation_('B12/15'))).toBe('B12/15');
+  });
+
+  // ⚠️ ข้อนี้คือเหตุผลที่ helper นี้มีอยู่ — ต่อ string เองจะได้ "A0/0"
+  //    ซึ่งไม่ตรงกับคีย์ที่เขียนในชีต แล้วของจะหายจากแผนผังโดยไม่มี error ให้เห็น
+  it('ช่องไม่อยู่บนชั้น → "A0" ไม่ใช่ "A0/0"', () => {
+    expect(lockKeyOf_(parseLocation_('A0'))).toBe('A0');
+    expect(lockKeyOf_(parseLocation_('B0'))).toBe('B0');
+  });
+
+  it('ไป-กลับแล้วได้ค่าเดิม (parse → key → parse)', () => {
+    ['A0', 'B0', 'A3/7', 'B12/15'].forEach(raw => {
+      expect(lockKeyOf_(parseLocation_(raw))).toBe(raw);
+    });
+  });
+
+  it('null → null', () => {
+    expect(lockKeyOf_(null)).toBeNull();
+    expect(lockKeyOf_(parseLocation_('blah'))).toBeNull();
   });
 });
