@@ -359,6 +359,27 @@ describe('เครื่องมือตรวจ/ซ่อมเมื่อ
     expect(f).not.toMatch(/AddTransfer|pushStockToZort_/);
   });
 
+  // ที่มา (ส.ค. 2026): TF-202608035 ถูกสคริปต์ตัดกลางคันตอนเขียนชุด 75 SKU → เขียนไปได้แค่ 23
+  // แถว เดิม repairZortTransferLog เจอ "มีแถวไหนของเลขที่นี้อยู่แล้ว" ก็ข้ามทั้งชุดทันที
+  // (countTransferLogRows_(...).rows เป็นค่าความจริงแล้ว return ก่อนเขียนอะไรเลย) →
+  // 52 SKU ที่ขาดไม่มีวันถูกเติมแม้จะรันซ้ำกี่ครั้งก็ตาม ต้องกรองเหลือเฉพาะ SKU ที่ยังไม่มี
+  it('repairZortTransferLog ต้องเติมเฉพาะ SKU ที่ขาด ไม่ข้ามทั้งชุดเมื่อมีแค่บางแถว (partial write)', () => {
+    const f = grab(SRC, /function repairZortTransferLog\(number\) \{[\s\S]*?\n\}/);
+    // ต้องสร้างชุด SKU ที่บันทึกแล้วจาก log.skus แล้วกรอง t.items เหลือเฉพาะที่ยังไม่มี
+    expect(f).toMatch(/log\.skus\.forEach/);
+    expect(f).toMatch(/t\.items\.filter/);
+    // ต้อง "เขียนเมื่อไม่มีอะไรขาด (missing.length===0)" ไม่ใช่ "เขียนเมื่อไม่มีแถวเลย (log.rows===0)"
+    expect(f).not.toMatch(/if \(countTransferLogRows_\(ss, t\.number\)\.rows\) \{\s*\n\s*Logger\.log\('⏭️/);
+    expect(f).toMatch(/if \(!missing\.length\)/);
+    expect(f).toMatch(/logTransferBatch_\(ss, missing\.map/);
+  });
+
+  it('checkZortTransfer ต้องแยกเคส "บันทึกไม่ครบ" ออกจาก "บันทึกครบแล้ว" — ห้ามเหมาว่ามีแถวใดแถวหนึ่งคือครบ', () => {
+    const f = grab(SRC, /function checkZortTransfer\(number\) \{[\s\S]*?\n\}/);
+    expect(f).toMatch(/log\.rows < t\.items\.length/);
+    expect(f).toMatch(/repairZortTransferLog\("' \+ t\.number \+ '"\)"? จะเติมเฉพาะ SKU ที่ขาด|เติมเฉพาะ SKU ที่ขาด/);
+  });
+
   it('applyZortTransferStock ต้องปฏิเสธเมื่อหักไปแล้ว และห้ามยิง ZORT ซ้ำ', () => {
     const f = grab(SRC, /function applyZortTransferStock\(number\) \{[\s\S]*?\n\}\n\n\/\/ doGet action=zortTransfer/);
     expect(f).toMatch(/auditTransferSkusOnDate_/);

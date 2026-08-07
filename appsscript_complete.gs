@@ -3318,24 +3318,35 @@ function checkZortTransfer(number) {
   Logger.log('── สรุปว่าควรทำอะไรต่อ ──');
   if (!log.rows && nAudit) Logger.log('→ สต็อกหักไปแล้ว ขาดแค่บันทึกในชีตโอน: รัน repairZortTransferLog("' + t.number + '")');
   else if (!log.rows && !nAudit) Logger.log('→ ระบบเราไม่ได้ทำอะไรเลยกับการโอนนี้: รัน applyZortTransferStock("' + t.number + '") เพื่อหักสต็อก + บันทึกให้ตรง ZORT');
+  else if (log.rows < t.items.length) Logger.log('→ บันทึกไว้ไม่ครบ (มี ' + log.rows + '/' + t.items.length +
+    ' รายการ — สคริปต์อาจถูกตัดกลางคันตอนเขียนชุดใหญ่): รัน repairZortTransferLog("' + t.number + '") จะเติมเฉพาะ SKU ที่ขาด ไม่แตะสต็อก');
   else Logger.log('→ ระบบเราบันทึกครบแล้ว ปัญหาน่าจะอยู่ที่รายการค้างบนหน้าจอเท่านั้น (ใช้ปุ่ม "🧾 เช็คของที่ส่งไปแล้ว")');
   return { found: true, transfer: t, logRows: log.rows, auditSkus: nAudit };
 }
 
 // ── ซ่อมเฉพาะ "บันทึกในชีตโอน" ที่ขาดหาย (ไม่แตะสต็อก ไม่ยิง ZORT) ──────────
+// ⚠️ เทียบเป็นราย SKU ไม่ใช่ "มีแถวไหนอยู่แล้วก็ข้ามทั้งชุด" — ชุดใหญ่ (77 SKU) ที่โดน
+// สคริปต์ตัดกลางคัน (เพดาน 6 นาที) มักเขียนไปได้บางส่วนแล้วหยุด (เช่น 23/75) เดิมฟังก์ชันนี้
+// เจอแถวไหนของเลขที่นี้ก็ข้ามทั้งหมด = ส่วนที่ขาดไม่มีวันถูกเติม ต้องกรองเหลือเฉพาะ SKU ที่
+// ยังไม่มีในชีตโอนแล้วเขียนเพิ่มเฉพาะนั้น
 function repairZortTransferLog(number) {
   const ss = SpreadsheetApp.openById(SHEET_ID);
   const t = zortFindTransfer_(number);
   if (!t) { Logger.log('❌ ไม่พบเลขที่นี้ใน ZORT'); return { ok: false }; }
-  if (countTransferLogRows_(ss, t.number).rows) {
-    Logger.log('⏭️ ชีตโอนมีแถวของเลขที่นี้อยู่แล้ว — ไม่เขียนซ้ำ');
+  const log = countTransferLogRows_(ss, t.number);
+  const loggedSkus = {};
+  log.skus.forEach(function (s) { loggedSkus[s.sku] = true; });
+  const missing = t.items.filter(function (i) { return !loggedSkus[i.sku]; });
+  if (!missing.length) {
+    Logger.log('⏭️ ชีตโอนมีครบทุก SKU ของเลขที่นี้แล้ว (' + log.rows + ' แถว) — ไม่เขียนซ้ำ');
     return { ok: true, skipped: true };
   }
-  logTransferBatch_(ss, t.items.map(function (i) { return { sku: i.sku, name: i.name, qty: i.qty }; }),
+  logTransferBatch_(ss, missing.map(function (i) { return { sku: i.sku, name: i.name, qty: i.qty }; }),
                     t.number, 'ซ่อมจาก ZORT ' + t.number, '');
   invalidateCache_();
-  Logger.log('✅ เขียนชีตโอน ' + t.items.length + ' แถว (ไม่ได้แตะสต็อก)');
-  return { ok: true, rows: t.items.length };
+  Logger.log('✅ เขียนชีตโอนเพิ่ม ' + missing.length + ' แถวที่ขาดหาย (มีอยู่แล้ว ' + log.rows +
+             ' แถว, รวมเป็น ' + t.items.length + ' — ไม่ได้แตะสต็อก)');
+  return { ok: true, rows: missing.length, alreadyHad: log.rows };
 }
 
 // ── ซ่อม "สต็อกไม่ถูกหัก" ตามเอกสารโอนใน ZORT (ไม่ยิง ZORT ซ้ำเด็ดขาด) ────────
