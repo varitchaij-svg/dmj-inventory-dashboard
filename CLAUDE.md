@@ -261,6 +261,19 @@ role `storedevice` = บัญชี LINE กลาง ("เครื่อง�
 (navtabs: **owner/dev เท่านั้น** ที่ได้ nav 2 ชั้นแบบกลุ่ม (`OWNER_GROUPS`) — 5 หมวดหลัก + "อื่นๆ"
 ถ้ามีเหลือ · role อื่นทั้งหมด (employee/warehouse/frontstore/saler) ไม่มี "เพิ่มเติม" เลย ไม่ว่าจะกี่แท็บ
 โชว์ทุกแท็บบนแถบเลื่อนแนวนอนเดียว — ลำดับใน ROLE_TABS จึงมีผลแค่ว่าอันไหนอยู่ซ้ายสุด/ไม่ต้องเลื่อนหา)
+
+### หมวด "📊 ภาพรวม" ของ owner — แบ่งตาม "คนดู" ไม่ใช่ "ประเภทงาน" (ส.ค. 2026)
+
+เจ้าของสั่งให้รวมทุกอย่างที่เปิดดูเพื่อ**ตัดสินใจ** ไว้หมวดเดียว จะได้ไม่ต้องไล่เปิดข้ามหมวด:
+`overview` · `whhome` · `customers` · `tracking` · `quotefollowup` · `trends` · `season`
+- ⚠️ **ต่างจากหมวดอื่นที่แบ่งตามประเภทงานโดยตั้งใจ** — `tracking`/`quotefollowup`/`customers`
+  ย้ายออกจาก "การขาย" และ `trends`/`season` ย้ายออกจาก "วิเคราะห์" · จะย้ายกลับต้องถามเจ้าของก่อน
+- ผลข้างเคียง: **`g_insight` เหลือแค่ `margin` ซึ่ง owner ไม่มีสิทธิ์ → หมวดหายไปเองสำหรับ owner**
+  (ตัวกรอง `.filter(g => g.items.length > 0)` ใน `ownerNav`) แต่ dev ยังเห็น — ตั้งใจ ไม่ใช่บั๊ก
+- ⚠️ **`badgeFor` ผูกหมวดกับ tab ต้นทางแบบ hard-code** (`g_sales`←`orders`, `g_stock`←`transfers`)
+  ย้าย tab ข้ามหมวดแล้วลืมแก้ = เลขเตือนขึ้นบนหมวดที่กดเข้าไปแล้วไม่เจออะไร **ไม่มี error ให้เห็น**
+- เทสต์: `tests/owner-nav.test.js` (14 เคส — eval ตารางจริงจาก `app.jsx` ไม่ copy) คุมทั้ง
+  tab id ที่ไม่มีจริง, tab ซ้ำ 2 หมวด, tab ที่ตกไป "อื่นๆ", และ **badge ที่ชี้หมวดที่ไม่มี tab ต้นทางแล้ว**
 (**⚠️ harness `action=me` เคยตอบ `staffId:'S001'` ไม่ตรงกับ `window._currentStaffId='STF001'`
 ที่ seed ไว้ — `applyStaffSession()` เขียนทับด้วยค่าจาก `me` เสมอ → `MyJobsCard` ("งานของฉัน")
 หางานไม่เจอ ทำให้ categories/whhome แดง 7 ข้อทุก role (72/79) แก้แล้ว 2026-07-31 · บทเรียน:
@@ -659,7 +672,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 1149 tests, 34 test files, ทั้งหมด pass
+**มี Vitest test suite แล้ว** — 1192 tests, 37 test files, ทั้งหมด pass
 
 ```bash
 npm test              # run tests
