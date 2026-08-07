@@ -3874,7 +3874,10 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
 
   return (
     <>
-      <div className="order-item-row" style={{
+      {/* data-order-sku = จุดจอดของการ "กดแจ้งเตือนแล้วพามาที่ของชิ้นนี้" (dmjScrollToSku)
+          ⚠️ ใช้ attribute ไม่ใช่ id — SKU เดียวกันสั่งซ้ำได้หลายใบ id ซ้ำใน DOM ไม่ถูกต้อง
+          (ตัวแรกที่เจอ = ใบบนสุด ซึ่งหลังเรียงใหม่คือใบที่ต้องจัดก่อน — ตรงกับที่ต้องการพอดี) */}
+      <div className="order-item-row" data-order-sku={order.sku || ""} style={{
         background:"#fff", borderRadius:12, marginBottom:8,
         border:`1.5px solid ${isPending?"var(--bdr)":"#4fb472"}`,
         overflow:"hidden", opacity: isPending ? 1 : 0.75,
@@ -4443,6 +4446,25 @@ function ShipmentReceiveList({ data, role, productMap }) {
   );
 }
 
+// หัวข้อคั่นกลุ่มในหน้า "รายการสั่งของ" — ใช้สีชุดเดียวกับหน้า "สรุปสินค้าออกจากคลัง"
+// (เขียว = หิ้ว · ฟ้า = ขึ้นรถ) พนักงานจะได้จำสีเดียวทั้ง 2 หน้า ไม่ต้องเรียนรู้ใหม่
+function OrderGroupHead({ carry, n }) {
+  return (
+    <div className="no-print" style={{
+      display:"flex", alignItems:"center", gap:8, flexWrap:"wrap",
+      padding:"7px 13px", marginBottom:8, marginTop: carry ? 0 : 18, borderRadius:10,
+      background: carry ? "#f0fdf4" : "#eff6ff",
+      border: `1.5px solid ${carry ? "#bbf7d0" : "#bfdbfe"}`,
+    }}>
+      <span style={{fontSize:16}}>{carry ? "🚶" : "🚛"}</span>
+      <span style={{fontWeight:700, fontSize:13.5, color: carry ? "var(--g-700)" : "#1d4ed8"}}>
+        {carry ? "หิ้วเอง — จัดก่อน" : "ขึ้นรถ"}
+      </span>
+      <span style={{fontSize:12, color:"var(--muted)"}}>{n} รายการ</span>
+    </div>
+  );
+}
+
 function OrderListView({ data, role }) {
   const orders = data.orders || [];
   const [filter, setFilter] = uS("all");
@@ -4479,17 +4501,23 @@ function OrderListView({ data, role }) {
     });
   }, [orders, st]);
 
+  // ลำดับบนจอ — ที่เดียวที่ตัดสินว่าอะไรอยู่บน (หัวข้อคั่นกลุ่มด้านล่างอ่านจากลำดับนี้ ไม่จัดเรียงเอง)
+  // ① ของหิ้วขึ้นก่อนเสมอ — ลูกค้ายืนรออยู่หน้าร้าน ต่างจากของขึ้นรถที่รอรอบส่งทีหลังได้
+  // ② ในแต่ละกลุ่ม ที่ยังไม่จัดขึ้นก่อนที่จัดเสร็จแล้ว
+  const isPendingOrder = o => !o.status || o.status === "รอ" || o.status === "pending";
   const sorted = uM(() => [...enriched].sort((a,b) => {
-    const aP = !a.status||a.status==="รอ"||a.status==="pending";
-    const bP = !b.status||b.status==="รอ"||b.status==="pending";
-    return (aP&&!bP)?-1:(!aP&&bP)?1:0;
+    const aC = a.carryMode === "carry", bC = b.carryMode === "carry";
+    if (aC !== bC) return aC ? -1 : 1;
+    const aP = isPendingOrder(a), bP = isPendingOrder(b);
+    if (aP !== bP) return aP ? -1 : 1;
+    return 0;
   }), [enriched]);
 
   const isShippedOut = o => o.status === "ส่งแล้ว" || o.status === "shipped";
   const filtered = uM(() => {
     if (filter === "shipped") return sorted.filter(isShippedOut);
     const base = sorted.filter(o => !isShippedOut(o));
-    if (filter==="pending")   return base.filter(o => !o.status||o.status==="รอ"||o.status==="pending");
+    if (filter==="pending")   return base.filter(isPendingOrder);
     if (filter==="completed") return base.filter(o => o.status==="สำเร็จ"||o.status==="completed");
     return base;
   }, [sorted, filter]);
@@ -4500,9 +4528,21 @@ function OrderListView({ data, role }) {
     setSt(patchOrderState(id, updates, o ? orderSig(o) : undefined));
   };
 
-  const pendingCount = sorted.filter(o => !o.status||o.status==="รอ"||o.status==="pending").length;
+  const pendingCount = sorted.filter(isPendingOrder).length;
 
   const hasShipments = (data.shipments||[]).length > 0;
+
+  // กดแจ้งเตือน "ออเดอร์ใหม่" → พามาหยุดที่ใบนั้นเลย ไม่ใช่ปล่อยไว้กลางลิสต์ให้ไล่หาเอง
+  // ⚠️ ต้องดึง filter กลับเป็น "ทั้งหมด" ก่อน — ถ้าคนค้างไว้ที่ "สำเร็จ"/"ส่งแล้ว" ใบที่จะพาไปหา
+  //    ไม่อยู่ในจอเลย แล้วการเด้งจะเงียบสนิทโดยไม่มีอะไรบอกว่าทำไมกดแล้วไม่เกิดอะไรขึ้น
+  // ⚠️ ต้องอยู่เหนือ early-return ด้านล่าง — hook ห้ามอยู่หลังทางออกของ component
+  const [focusMiss, setFocusMiss] = uS("");
+  useSkuFocus("orders", (sku) => {
+    setFilter("all");
+    setFocusMiss("");
+    // หาไม่เจอ = ใบนั้นถูกยกเลิก/ส่งไปแล้ว — ต้องบอก ไม่ใช่เงียบแล้วปล่อยให้เข้าใจว่าแอปค้าง
+    dmjScrollToSku("data-order-sku", sku, (found) => { if (!found) setFocusMiss(sku); });
+  });
 
   // orders ว่าง แต่มี shipments → ดึง tab "ส่งแล้ว" มาไว้หน้าแรก ให้ saler/FS ยืนยันรับได้
   if (!orders.length && !hasShipments) return (
@@ -4534,18 +4574,47 @@ function OrderListView({ data, role }) {
         ]}/>
       </div>
 
+      {/* กดแจ้งเตือนแล้วพาไปหาไม่เจอ — ต้องบอกเหตุผล ไม่งั้นดูเหมือนกดแล้วแอปไม่ทำอะไร */}
+      {focusMiss && (
+        <div className="no-print" style={{
+          display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",
+          padding:"10px 14px",marginBottom:12,borderRadius:10,
+          background:"#fef9c3",border:"1.5px solid #fde047",fontSize:13,color:"#854d0e",
+        }}>
+          <span>🔎 ไม่พบ <b>{focusMiss}</b> ในรายการนี้ — อาจถูกจัด/ส่ง/ยกเลิกไปแล้ว</span>
+          <button onClick={() => setFocusMiss("")} style={{
+            marginLeft:"auto",padding:"4px 10px",borderRadius:7,border:"1.5px solid #fde047",
+            background:"#fff",color:"#854d0e",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+          }}>ปิด</button>
+        </div>
+      )}
+
       {effectiveFilter === "shipped" ? (
         <ShipmentReceiveList data={data} role={role} productMap={productMap}/>
       ) : filtered.length === 0 ? (
         <div style={{padding:"40px 20px"}}>
           <Empty title="ไม่มีรายการใน filter นี้" sub="ลองเลือก filter อื่น"/>
         </div>
-      ) : (
-        // ⚠️ key ต้องมี orderSig ด้วย ห้ามใช้ order.id เดี่ยว ๆ — id = "R<เลขแถว>" ถูก reuse
-        //    เมื่อมีคนลบ order ทิ้งแล้วแถวล่างเลื่อนขึ้นมาแทน · key เดิม = React ใช้ component
-        //    instance เดิมต่อ → เลขในช่อง "จัด" (state ภายในแถว) ของใบเก่าค้างมาโชว์บนใบใหม่
-        filtered.map(order => <OrderItemRow key={order.id + "|" + orderSig(order)} order={order} onPatch={patch} productMap={productMap} role={role} skuLocks={skuLocks} storageData={data.storage}/>)
-      )}
+      ) : (() => {
+        // หัวข้อคั่น "หิ้ว / ขึ้นรถ" — โผล่เฉพาะเมื่อมีทั้ง 2 แบบในจอ (มีแบบเดียวก็ไม่มีอะไรให้แยก)
+        // ⚠️ อ่านจากลำดับใน `filtered` ตรง ๆ ไม่จัดกลุ่มซ้ำเอง — ไม่งั้นจะมีตัวจัดลำดับ 2 ตัว
+        //    ที่เพี้ยนคนละทางได้ (ตัวจริงคือ `sorted` ข้างบนที่เดียว)
+        const nCarry = filtered.filter(o => o.carryMode === "carry").length;
+        const both = nCarry > 0 && nCarry < filtered.length;
+        return filtered.map((order, i) => {
+          const carry = order.carryMode === "carry";
+          const head = both && (i === 0 || (filtered[i-1].carryMode === "carry") !== carry);
+          return (
+            // ⚠️ key ต้องมี orderSig ด้วย ห้ามใช้ order.id เดี่ยว ๆ — id = "R<เลขแถว>" ถูก reuse
+            //    เมื่อมีคนลบ order ทิ้งแล้วแถวล่างเลื่อนขึ้นมาแทน · key เดิม = React ใช้ component
+            //    instance เดิมต่อ → เลขในช่อง "จัด" (state ภายในแถว) ของใบเก่าค้างมาโชว์บนใบใหม่
+            <React.Fragment key={order.id + "|" + orderSig(order)}>
+              {head && <OrderGroupHead carry={carry} n={carry ? nCarry : filtered.length - nCarry}/>}
+              <OrderItemRow order={order} onPatch={patch} productMap={productMap} role={role} skuLocks={skuLocks} storageData={data.storage}/>
+            </React.Fragment>
+          );
+        });
+      })()}
     </div>
   );
 }
@@ -10929,6 +10998,13 @@ function TrackingView({ data, role }) {
   // "รายใบโอน" เป็นค่าตั้งต้น — คำถามที่หัวหน้าถามจริงคือ "ใบนี้รับครบหรือยัง"
   // ไม่ใช่ "เมื่อกี้เกิดอะไรขึ้นบ้าง" (ซึ่งคือสิ่งที่ลิสต์เรียงตามเวลาตอบ)
   const [mode, setMode] = uS("batch");
+
+  // กดแจ้งเตือน "หน้าร้านรับของไม่ครบ" → กรองเหลือตัวนั้นตัวเดียวเลย
+  // ใช้ "ใส่คำค้น" แทนการเลื่อนไปหา เพราะสินค้าตัวเดียวมีได้หลาย event (สั่ง/จัด/ส่ง/รับ)
+  // เลื่อนไปหาจะปักหมุดที่ event เดียวโดยที่ตัวอื่นยังปนอยู่ในลิสต์ — กรองแล้วเห็นครบกว่า
+  // ⚠️ จงใจไม่แตะ `mode` — "รายใบโอน" เป็นค่าตั้งต้นที่เลือกไว้เพราะตอบคำถาม "ใบนี้รับครบหรือยัง"
+  //    ซึ่งเป็นคำถามเดียวกับที่แจ้งเตือนนี้ทำให้เกิด · บังคับสลับโหมด = แย่งการตัดสินใจนั้นไปเฉย ๆ
+  useSkuFocus("tracking", (sku) => { setFilter("all"); setQ(sku); });
 
   const productMap = uM(() => {
     const m = {};

@@ -329,6 +329,34 @@ function startServer() {
     await page.close();
   }
 
+  // ── (ค0) รายการสั่งของ: ของหิ้วต้องอยู่บนสุด + มีหัวข้อคั่นกลุ่ม ─────────────
+  // fixture: R4=FLW002 (หิ้ว) · R3=VAS001 (ขึ้นรถ) — ในชีตหิ้วอยู่แถวล่างกว่า
+  // ถ้าตัวจัดลำดับหลุด จอจะยังเรนเดอร์ครบทุกใบเหมือนเดิม แค่หิ้วจมอยู่ล่าง = ไม่มี error ให้เห็น
+  {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=warehouse&tab=orders`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      if (!(await navigateTo(page, 'warehouse', 'orders'))) { status = 'NAV_FAIL'; note = 'สลับ tab ไม่สำเร็จ'; }
+      else {
+        await page.waitForTimeout(500);
+        const order = await page.locator('[data-order-sku]')
+          .evaluateAll(els => els.map(e => e.getAttribute('data-order-sku'))).catch(() => []);
+        const body = await page.locator('body').innerText().catch(() => '');
+        if (order.length < 2) { status = 'NO_ROWS'; note = `เจอแถว ${order.length} แถว (คาด ≥2)`; }
+        else if (order[0] !== 'FLW002') {
+          status = 'CARRY_ORDER_FAIL'; note = `แถวบนสุดคือ ${order[0]} (คาด FLW002 ของหิ้ว)`;
+        } else if (!/หิ้วเอง/.test(body) || !/ขึ้นรถ/.test(body)) {
+          status = 'GROUP_HEAD_FAIL'; note = 'ไม่เห็นหัวข้อคั่นกลุ่ม หิ้ว/ขึ้นรถ';
+        } else note = `ของหิ้วอยู่บนสุด (${order.join(' → ')}) + มีหัวข้อคั่น`;
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'orders__carry-first.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'รายการสั่งของ — ของหิ้วอยู่บนสุด', status, note });
+    await page.close();
+  }
+
   // ── (ค) กระดิ่งแจ้งเตือนในแอป: badge → เปิด panel → กดแล้วพาไป tab ปลายทาง ──
   // รันข้าม role เพราะกระดิ่งอยู่บน topnav ของทุก role (คนละ nav layout กัน owner vs อื่น ๆ)
   for (const bellRole of ['owner', 'warehouse']) {
@@ -348,15 +376,22 @@ function startServer() {
         if (rows !== 2 || unreadRows !== 1) {
           status = 'PANEL_FAIL'; note = `รายการ=${rows} (คาด 2), ยังไม่อ่าน=${unreadRows} (คาด 1)`;
         } else {
-          // กดรายการที่ยังไม่อ่าน → ต้องปิด panel + พาไปแท็บ orders
+          // กดรายการที่ยังไม่อ่าน → ต้องปิด panel + พาไปแท็บ orders + **เด้งไปที่ของชิ้นนั้น**
           await page.locator('.noti-item.unread').first().click({ timeout: 2000 });
           await page.waitForTimeout(500);
           const stillOpen = await page.locator('.noti-panel').count();
           const onOrders = await page.locator('body').innerText()
             .then(t => /รายการสั่งของ|VAS001/.test(t)).catch(() => false);
+          // fixture ตั้ง focus:'VAS001' ไว้ ซึ่งเป็นใบ "ขึ้นรถ" = แถวที่ 2 (แถวแรกคือของหิ้ว FLW002)
+          // ต้องกะพริบที่ใบนั้นใบเดียว — ไปกะพริบใบแรกแทน = เด้งผิดใบแต่ดูเหมือนทำงาน
+          const flashed = await page.locator('.dmj-focus-flash[data-order-sku]')
+            .first().getAttribute('data-order-sku').catch(() => null);
           if (stillOpen) { status = 'PANEL_CLOSE_FAIL'; note = 'กดแล้ว panel ไม่ปิด'; }
           else if (!onOrders) { status = 'NAV_FAIL'; note = 'กดแล้วไม่พาไปแท็บปลายทาง'; }
-          else note = 'badge/panel/nav ครบ';
+          else if (flashed !== 'VAS001') {
+            status = 'FOCUS_FAIL'; note = `กะพริบที่ "${flashed}" (คาด VAS001) — ไม่ได้เด้งไปที่ของที่ต้องจัด`;
+          }
+          else note = 'badge/panel/nav/เด้งไปที่สินค้า ครบ';
         }
       }
     } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }

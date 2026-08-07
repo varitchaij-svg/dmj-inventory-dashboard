@@ -51,10 +51,14 @@
 
   const orders = [
     // orderedBy/preparedBy = ใครสั่ง/ใครจัด · R3 จงใจไม่มีชื่อผู้จัด (ยังไม่มีใครจัด)
-    { id: 'R3', type: 'รอขึ้นรถ', date: '01/06/2025', status: 'รอ', from: 'สาย5', to: 'หน้าร้าน',
+    // ⚠️ ต้องมี `carryMode` ด้วย ไม่ใช่ `type` อย่างเดียว — `type` คือค่าดิบในชีต (คอลัมน์ A)
+    //    ส่วนที่ frontend อ่านจริงคือ `carryMode` ที่ readOrders_ แปลงมาให้ ("หิ้ว"→carry)
+    //    ขาดไปเมื่อไหร่ = ทุกใบกลายเป็น "ขึ้นรถ" หมด แล้วเส้นทางของหิ้วไม่เคยถูกทดสอบเลย
+    //    ทั้งที่หน้าจอยังเรนเดอร์ครบทุกใบเหมือนปกติ · R3=ขึ้นรถ R4=หิ้ว (ต้องขึ้นก่อน R3)
+    { id: 'R3', type: 'รอขึ้นรถ', carryMode: 'truck', date: '01/06/2025', status: 'รอ', from: 'สาย5', to: 'หน้าร้าน',
       sku: 'VAS001', name: 'แจกันแก้วใส ทรงสูง', orderQty: 24, preparedQty: 0, printFlag: '',
       orderedBy: 'สมชาย ใจดี (หน้าร้าน)', preparedBy: '' },
-    { id: 'R4', type: 'หิ้ว', date: '01/06/2025', status: 'รอ', from: 'สาย5', to: 'หน้าร้าน',
+    { id: 'R4', type: 'หิ้ว', carryMode: 'carry', date: '01/06/2025', status: 'รอ', from: 'สาย5', to: 'หน้าร้าน',
       sku: 'FLW002', name: 'ดอกไม้ประดิษฐ์ สีแดง', orderQty: 12, preparedQty: 12, printFlag: 'print',
       orderedBy: 'สมชาย ใจดี (หน้าร้าน)', preparedBy: 'สมหญิง ขยัน (คลังสินค้า)' },
   ];
@@ -196,7 +200,9 @@
     ok: true,
     unread: 1,
     items: [
-      { id: 'n1', ts: Date.now() - 3 * 60000, type: 'order', tab: 'orders',
+      // focus = SKU ที่ต้องพาไปหยุดหลังกด · จงใจเลือก VAS001 ซึ่งเป็นใบ "ขึ้นรถ" = แถวที่ 2
+      // (แถวแรกคือ FLW002 ของหิ้ว) → พิสูจน์ว่าเด้งไป "ใบที่ถูก" ไม่ใช่ใบแรกที่เจอเฉย ๆ
+      { id: 'n1', ts: Date.now() - 3 * 60000, type: 'order', tab: 'orders', focus: 'VAS001',
         title: '📦 ออเดอร์ใหม่ 12 ชิ้น', body: 'แจกันแก้วใส · VAS001', by: '', read: false },
       { id: 'n2', ts: Date.now() - 2 * 3600000, type: 'shipment', tab: 'stock',
         title: '🚚 ของโอนมาหน้าร้าน 3 รายการ', body: 'ดอกกุหลาบแดง และอีก 2 รายการ · รอกดรับ',

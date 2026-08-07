@@ -4344,6 +4344,7 @@ function confirmShipmentReceive(ss, rowId, sku, receivedQty, actor, refNum) {
         body: rowSku + ' · รับ ' + recv + '/' + sentQty + ' ชิ้น' + (actor ? ' · ' + actor : ''),
         by: actor,
         image: String(sheet.getRange(rowNum, COL_SHIP_IMAGE).getDisplayValue() || ''),   // แถวนี้ SKU เดียว — ดึงรูปจากคอลัมน์ J ได้ตรง ๆ
+        focus: rowSku || '',   // กดแล้วพาไปหยุดที่สินค้าตัวที่รับไม่ครบเลย
       });
     }
     // healed = เลขแถวที่เครื่องผู้ใช้ส่งมาชี้ผิด แต่เราหาแถวที่ถูกเจอเองแล้ว (ไม่ต้องให้กดซ้ำ)
@@ -9674,13 +9675,15 @@ function handleOrder_(params) {
 //   เปิดจริงเมื่อเจ้าของรัน setupInappNoti() 1 ครั้งใน GAS editor · ปิดด้วย disableInappNoti()
 // ══════════════════════════════════════════════════════════════════════════
 
-// คอลัมน์ชีตแจ้งเตือนในแอป (1-indexed): A..L
-// ⚠️ IMAGE ต่อท้ายเป็นคอลัมน์ L (ไม่แทรกกลาง) — ชีตจริงมีแถวเก่าที่เขียนด้วย layout 11
+// คอลัมน์ชีตแจ้งเตือนในแอป (1-indexed): A..M
+// ⚠️ IMAGE/FOCUS ต่อท้าย (ไม่แทรกกลาง) — ชีตจริงมีแถวเก่าที่เขียนด้วย layout 11/12
 // คอลัมน์อยู่แล้ว แทรกกลางจะทำให้ตำแหน่งคอลัมน์เดิม (READBY/EXPIRES) เพี้ยนย้อนหลังทั้งชีต
+// FOCUS = SKU ที่ต้องพาไปดูต่อหลังกดแจ้งเตือน (ว่าง = พาไปแค่แท็บเหมือนเดิม — แถวเก่าทุกแถว
+// เป็นแบบนี้ จึงต้องทนค่าว่างได้เสมอ ห้ามถือว่า "ต้องมี")
 var INAPP_COL = { ID:1, CREATED:2, AUDIENCE:3, TYPE:4, TITLE:5, BODY:6,
-                  TAB:7, BY:8, DEDUP:9, READBY:10, EXPIRES:11, IMAGE:12 };
+                  TAB:7, BY:8, DEDUP:9, READBY:10, EXPIRES:11, IMAGE:12, FOCUS:13 };
 var INAPP_HEADERS = ["id","createdAt","audience","type","title","body",
-                     "tab","createdBy","dedupKey","readBy","expiresAt","image"];
+                     "tab","createdBy","dedupKey","readBy","expiresAt","image","focusSku"];
 
 var INAPP_KEEP_DAYS_DEFAULT = 14;   // ปรับได้ที่ Script Property INAPP_NOTI_KEEP_DAYS
 var INAPP_MAX_RETURN        = 30;   // จำนวนแถวที่ส่งกลับให้ frontend ต่อรอบ poll
@@ -9725,7 +9728,10 @@ function inappIsRead_(readBy, staffId) {
 }
 
 // ── เขียนแจ้งเตือน 1 เรื่องเข้าชีต ────────────────────────────────────────
-// opts: {audience, type, title, body, tab, by, dedupKey, ttlDays}
+// opts: {audience, type, title, body, tab, by, dedupKey, ttlDays, image, focus}
+// focus = SKU เดียวที่ผู้ใช้ต้องไปทำต่อ — ใส่ได้เฉพาะแจ้งเตือนที่ผูกกับสินค้าตัวเดียวจริง ๆ
+//   (ออเดอร์ใหม่ / รับของไม่ครบ) · เรื่องที่รวมหลาย SKU (โอนทั้งชุด, สต็อกใกล้หมด) **ห้ามใส่**
+//   เพราะเลือกตัวใดตัวหนึ่งมาเด้ง = พาไปผิดตัวโดยที่ผู้ใช้ไม่รู้ว่ายังมีตัวอื่นอีก
 // ⚠️ ห้าม throw เด็ดขาด — ตัวเรียกคือเส้นทางสั่งของ/โอนของจริง แจ้งเตือนพลาด
 //    ต้องไม่ทำให้งานหลักล้ม (หลักเดียวกับ appendSaleBillRow_)
 function pushInappNoti_(opts) {
@@ -9772,6 +9778,7 @@ function pushInappNoti_(opts) {
       '',
       new Date(now.getTime() + ttlDays * 86400000),
       String(opts.image || ''),   // รูปสินค้า — ใส่เฉพาะแจ้งเตือนที่ผูกกับ SKU เดียว (ดูหมายเหตุ IMAGE ด้านบน)
+      String(opts.focus || ''),   // SKU ที่ต้องพาไปดูต่อ (ว่าง = พาไปแค่แท็บ)
     ]);
   } catch (e) {
     Logger.log('pushInappNoti_ error (ข้ามไป ไม่กระทบงานหลัก): ' + e);
@@ -9823,6 +9830,7 @@ function listInappNotiHandler_(e) {
         tab:   String(r[INAPP_COL.TAB - 1] || ''),
         by:    String(r[INAPP_COL.BY - 1] || ''),
         image: String(r[INAPP_COL.IMAGE - 1] || ''),
+        focus: String(r[INAPP_COL.FOCUS - 1] || ''),   // แถวเก่าไม่มีคอลัมน์นี้ → '' = ไม่เด้งไปไหนต่อ
         read:  isRead,
       });
     }
@@ -10527,6 +10535,7 @@ function sendLineGroupOrderCard_(name, sku, date, imageUrl, qty) {
     title: '📦 ออเดอร์ใหม่ ' + (Number(qty) || 0) + ' ชิ้น',
     body: (name || sku || '-') + (sku ? ' · ' + sku : ''),
     image: imageUrl || '',   // ออเดอร์เดียวมี SKU เดียว — มีรูปให้ใส่ตรง ๆ
+    focus: sku || '',        // กดแล้วพาไปหยุดที่ใบนี้เลย ไม่ต้องไล่หาเองในลิสต์เป็นสิบใบ
   });
 }
 
