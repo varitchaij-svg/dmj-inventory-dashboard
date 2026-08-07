@@ -3656,9 +3656,9 @@ function cleanupOrdersState(orders) {
   } catch { return getOrdersState(); }
 }
 async function syncOrderUpdate(order, updates) {
-  if (!SHEET_DEPLOY_URL) return;
+  if (!SHEET_DEPLOY_URL) return { success:false, error:"ยังไม่ได้ตั้งค่าที่อยู่เซิร์ฟเวอร์" };
   try {
-    await dmjFetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
@@ -3673,22 +3673,41 @@ async function syncOrderUpdate(order, updates) {
         actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
       }),
     });
-  } catch(e) { console.warn("syncOrderUpdate failed:", e.message); }
+    // ⚠️ ต้องอ่านคำตอบจริงเสมอ (บทเรียนข้อ 13 ใน CLAUDE.md) — เดิม await แล้วจบเลย
+    // ไม่เคยรู้ว่า GAS ตอบ error หรือตอบหน้า HTML มา · ตอนนี้อย่างน้อยของจริงถูกเก็บลง
+    // console + localStorage.dmj_last_backend_error ให้ไล่ย้อนได้ และคืนผลให้ตัวเรียกใช้ต่อ
+    const j = await dmjJson(res);
+    if (!j || j.success === false) {
+      console.warn("syncOrderUpdate: GAS ปฏิเสธ", { orderId: order.id, error: j && j.error });
+      return { success:false, error:(j && j.error) || "บันทึกไม่สำเร็จ" };
+    }
+    return { success:true };
+  } catch(e) {
+    console.warn("syncOrderUpdate failed:", e.message);
+    return { success:false, error: dmjErrText(e) };
+  }
 }
 
 // ยืนยันรับของจากชีต "รายการโอนสินค้า" (sync ข้ามเครื่อง)
-async function syncShipmentReceive(rowId, sku, receivedQty) {
-  if (!SHEET_DEPLOY_URL) return { success:false };
+// ส่ง refNum (เลขใบโอน TF-...) ไปด้วยเสมอ — ฝั่ง GAS ใช้หาแถวที่ถูกต้องเมื่อ `rowId`
+// (= เลขแถวในชีต) ที่เครื่องนี้ถืออยู่เก่าไปแล้วเพราะมีแถวถูกลบออกไประหว่างนั้น
+async function syncShipmentReceive(rowId, sku, receivedQty, refNum) {
+  if (!SHEET_DEPLOY_URL) return { success:false, error:"ยังไม่ได้ตั้งค่าที่อยู่เซิร์ฟเวอร์" };
   try {
     const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"},
       body: JSON.stringify({
-        confirmShipmentReceive:true, rowId, sku, receivedQty,
+        confirmShipmentReceive:true, rowId, sku, receivedQty, refNum,
         actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
       }),
     });
-    return await res.json().catch(()=>({success:false}));
-  } catch(e){ return { success:false, error:e.message }; }
+    // ⚠️ ต้องอ่านคำตอบจริงเสมอ — เดิมใช้ `res.json().catch(()=>({success:false}))` ซึ่ง
+    // กลืนหน้า HTML ของ GAS ทิ้งเป็น success:false เปล่า ๆ ไม่มีข้อความบอกสาเหตุ
+    // แล้วตัวเรียกก็ไม่เคยอ่านค่าที่คืนอยู่ดี → จอขึ้น "รับครบ ✅" ทั้งที่ไม่มีอะไรถูกบันทึก
+    const j = await dmjJson(res);
+    if (!j || j.success === false) return { success:false, error:(j && j.error) || "บันทึกไม่สำเร็จ" };
+    return { success:true, data:(j && j.data) || null };
+  } catch(e){ return { success:false, error: dmjErrText(e) }; }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -4291,11 +4310,20 @@ function ShipmentReceiveList({ data, role, productMap }) {
     return arr;
   }, [rows]);
 
-  const handleConfirm = (s, n) => {
+  // ⚠️ ต้องรอผลจริงจาก GAS ก่อนบอกว่าสำเร็จ — เดิมยิงแล้วขึ้น toast เขียวทันทีโดยไม่เคยอ่าน
+  // คำตอบเลย ("สำเร็จปลอม") พอบันทึกไม่ผ่านจริง (เลขแถวเลื่อน/เน็ตหลุด) จอยังบอกว่ารับแล้ว
+  // แต่ชีตไม่มีอะไรเปลี่ยน → เปิดแอปใหม่รายการเด้งกลับมาเป็น "ยังไม่รับ" ให้กดซ้ำอีก 2-3 รอบ
+  const handleConfirm = async (s, n) => {
     const status = n >= s.qty ? "รับครบ" : "รับไม่ครบ";
     setConfirmed(prev => ({ ...prev, [s.id]: { receivedQty:n, receivedStatus:status, receivedAt:new Date().toISOString() } }));
-    syncShipmentReceive(s.id, s.sku, n);
-    showToast("success", status==="รับครบ" ? "รับครบ ✅" : `รับ ${n}/${s.qty} pcs ⚠️`, "📦", 3000);
+    const r = await syncShipmentReceive(s.id, s.sku, n, s.refNum);
+    if (r && r.success) {
+      showToast("success", status==="รับครบ" ? "รับครบ ✅" : `รับ ${n}/${s.qty} pcs ⚠️`, "📦", 3000);
+      return;
+    }
+    // ถอนภาพ "รับแล้ว" ออก ไม่ให้หน้าจอโกหกว่าบันทึกสำเร็จ แล้วบอกสาเหตุจริงเป็นภาษาไทย
+    setConfirmed(prev => { const next = { ...prev }; delete next[s.id]; return next; });
+    showToast("error", (r && r.error) || "บันทึกไม่สำเร็จ — กรุณาลองใหม่", "⚠️", 6000);
   };
 
   if (!shipments.length) return (
