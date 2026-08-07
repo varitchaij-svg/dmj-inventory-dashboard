@@ -672,7 +672,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 1295 tests, 40 test files, ทั้งหมด pass (+ browser 82/82)
+**มี Vitest test suite แล้ว** — 1300 tests, 41 test files, ทั้งหมด pass (+ browser 82/82)
 
 ```bash
 npm test              # run tests
