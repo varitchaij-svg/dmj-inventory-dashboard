@@ -4,7 +4,7 @@
 // ⚠️ ตอน revert ต้อง bump **เดินหน้า** เสมอ ห้ามย้อนเลขกลับ — .jsx เป็น stale-while-revalidate
 // ถ้าย้อนกลับไปเลขเก่า เครื่องที่ cache โค้ดรุ่นที่มีปัญหาไว้แล้วจะยังเสิร์ฟของเดิมในโหลดแรก
 // = revert แล้วผู้ใช้ยังเข้าไม่ได้อยู่ดี โดยไม่มีอะไรบอกว่าทำไม
-const CACHE_NAME = "dmj-v21";
+const CACHE_NAME = "dmj-v22";
 
 const PRECACHE_ASSETS = [
   "/manifest.json",

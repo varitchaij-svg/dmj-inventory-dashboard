@@ -441,12 +441,33 @@ function isAutoOwnerLineName_(name) {
 }
 
 // ล็อกอินด้วย LINE — upsert แถวพนักงาน (คนแรกที่เคยล็อกอินในระบบ = owner อัตโนมัติ) + ออก session
+// cache key ของผลลัพธ์แลก code — code จาก LINE ยาวเกิน key limit ของ CacheService
+// ย่อด้วย MD5 ก่อน (ไม่ได้ใช้เชิงความปลอดภัย แค่ให้ key สั้นและไม่ชนกัน)
+function authCodeCacheKey_(code) {
+  const raw = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, String(code));
+  return "authline_" + raw.map(function (b) { return ((b & 0xFF) + 256).toString(16).slice(1); }).join("");
+}
+
 function authLine_(ss, data) {
   try {
     if (!LINE_LOGIN_CHANNEL_ID || !LINE_LOGIN_CHANNEL_SECRET) {
       return ContentService.createTextOutput(JSON.stringify({ ok: false, error: "ยังไม่ได้ตั้งค่า LINE Login ฝั่งเซิร์ฟเวอร์ (Script Properties)" }))
         .setMimeType(ContentService.MimeType.JSON);
     }
+
+    // ── idempotent ต่อ 1 code ──────────────────────────────────────────────
+    // code จาก LINE ใช้ได้ครั้งเดียว ยิงซ้ำได้ invalid_grant
+    // เคสจริงที่ทำให้พนักงานต้องกดล็อกอินซ้ำ 3-4 รอบ: ฝั่งนี้ทำสำเร็จไปแล้ว
+    // (ออก session + เขียนชีตครบ) แต่ response หายกลางทางเพราะเน็ตมือถือหลุด
+    // → พนักงานกดใหม่ เจอ invalid_grant → ต้องเริ่มจากแอป LINE ใหม่ทั้งรอบ
+    // → เก็บผลที่สำเร็จไว้ 10 นาที ยิง code เดิมซ้ำได้ session เดิมกลับไปเลย
+    const ck = authCodeCacheKey_(data.code);
+    const cache = CacheService.getScriptCache();
+    const cachedRes = cache.get(ck);
+    if (cachedRes) {
+      return ContentService.createTextOutput(cachedRes).setMimeType(ContentService.MimeType.JSON);
+    }
+
     const tokenRes = exchangeLineToken_(data.code, data.redirectUri);
     const claims = verifyLineIdToken_(tokenRes.id_token);
     const providerUserId = claims.sub;
@@ -499,9 +520,9 @@ function authLine_(ss, data) {
     // ฝากผลไว้ให้ context ที่ "เริ่ม" ล็อกอินมารับเอง (iOS PWA ที่ถูกเด้งไปจบใน Safari)
     // handoffId = ค่า state ที่ LINE ส่งกลับมา ซึ่งคือ SHA-256 ของ secret ที่อยู่กับ PWA เท่านั้น
     saveLoginHandoff_(data.handoffId, sessionToken, staffPayload);
-    return ContentService.createTextOutput(JSON.stringify({
-      ok: true, sessionToken: sessionToken, staff: staffPayload,
-    })).setMimeType(ContentService.MimeType.JSON);
+    const payload = JSON.stringify({ ok: true, sessionToken: sessionToken, staff: staffPayload });
+    try { cache.put(ck, payload, 600); } catch (e) { Logger.log("authLine_ cache put: " + e); }
+    return ContentService.createTextOutput(payload).setMimeType(ContentService.MimeType.JSON);
   } catch (e) {
     return ContentService.createTextOutput(JSON.stringify({ ok: false, error: e.toString() }))
       .setMimeType(ContentService.MimeType.JSON);
@@ -510,7 +531,11 @@ function authLine_(ss, data) {
 
 function meHandler_(ss, data) {
   const s = resolveSession_(ss, data.sessionToken);
-  if (!s) return ContentService.createTextOutput(JSON.stringify({ ok: false })).setMimeType(ContentService.MimeType.JSON);
+  // invalid:true = "session นี้ใช้ไม่ได้จริง ๆ" (หมดอายุ/ถูก revoke/ไม่มีในชีต) → client ลบ token ได้
+  // ต้องแยกออกจาก error ชั่วคราว เพราะ doPost catch ตอบ {success:false} ซึ่ง "ไม่มี ok" เหมือนกัน
+  // ถ้า client ลบ token ตามทุกกรณีที่ไม่ ok พนักงานจะโดนเตะออกทั้งที่ session ยังดี
+  // (ชีตชนกัน/quota/timeout ชั่วคราว) แล้วต้องล็อกอินใหม่โดยไม่มีเหตุผล
+  if (!s) return ContentService.createTextOutput(JSON.stringify({ ok: false, invalid: true })).setMimeType(ContentService.MimeType.JSON);
   return ContentService.createTextOutput(JSON.stringify({
     ok: true, staff: { staffId: s.staffId, name: s.displayName || s.lineDisplayName, role: s.role, status: s.status, pictureUrl: s.pictureUrl },
   })).setMimeType(ContentService.MimeType.JSON);

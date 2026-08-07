@@ -933,6 +933,18 @@ async function postAuthAction(body) {
       body: JSON.stringify(body),
     });
     return await res.json();
+  } catch (e) {
+    // เน็ตมือถือในร้าน/คลังหลุดเป็นช่วง ๆ — คำขอที่ reject กลางทางคือสาเหตุหนึ่ง
+    // ที่พนักงานต้องกดล็อกอินซ้ำหลายรอบ · ลองใหม่ให้เอง 2 ครั้ง (เว้น 1.5 / 3 วิ)
+    // ⚠️ จงใจ "ไม่ใส่ timeout/เพดานเวลา" — Phase 7.6 ที่ตัดคำขอช้าทิ้งถูก revert
+    //    ไปแล้วเพราะทำให้เข้าแอปไม่ได้ · ตรงนี้ retry เฉพาะตอน fetch reject จริงเท่านั้น
+    //    ยิง authLine ซ้ำปลอดภัย เพราะ GAS cache ผลต่อ code ไว้ 10 นาที (authCodeCacheKey_)
+    const tries = (arguments.length > 1 && arguments[1]) || 0;
+    if (tries < 2) {
+      await new Promise(r => setTimeout(r, 1500 * (tries + 1)));
+      return postAuthAction(body, tries + 1);
+    }
+    throw e;
   } finally {
     // ต้องอยู่ใน finally — เวลาที่ "ล้มเหลว" มีค่าพอ ๆ กับเวลาที่สำเร็จ
     // (เคสที่เจ็บที่สุดคือรอนานแล้วค่อยพัง ซึ่งจะหายไปเลยถ้าวัดแต่ทางสำเร็จ)
@@ -1425,7 +1437,11 @@ function App() {
     try {
       const d = await postAuthAction({ action: "me", sessionToken: tok });
       if (d && d.ok) applyStaffSession(d.staff);
-      else { lsDel(SESSION_TOKEN_KEY); setAuthPhase("needLogin"); }
+      // ลบ token ทิ้งเฉพาะตอน server ยืนยันว่า session ตายจริง (invalid:true)
+      // error อื่นคือปัญหาชั่วคราว (doPost catch ตอบ {success:false} ซึ่งก็ "ไม่มี ok")
+      // ถ้าลบตามนั้นด้วย = เตะพนักงานออกทั้งที่ session ยังดี แล้วต้องล็อกอินใหม่ฟรี ๆ
+      else if (d && d.invalid) { lsDel(SESSION_TOKEN_KEY); setAuthPhase("needLogin"); }
+      else setAuthPhase(role ? "ready" : "needLogin");
     } catch (e) {
       // ต่อเน็ตไม่ได้ — ถ้ามี role ค้างจาก session ก่อนหน้าอยู่แล้ว ให้ทำงานต่อได้ (offline-friendly)
       setAuthPhase(role ? "ready" : "needLogin");
@@ -1622,7 +1638,9 @@ function App() {
         const d = await postAuthAction({ action: "me", sessionToken: tok });
         if (cancelled) return;
         if (d && d.ok) applyStaffSession(d.staff);
-        else { lsDel(SESSION_TOKEN_KEY); setAuthPhase(role ? "ready" : "needLogin"); }
+        // เช่นเดียวกับ checkMe — ลบ token เฉพาะตอน server ยืนยันว่า session ตายจริง
+        else if (d && d.invalid) { lsDel(SESSION_TOKEN_KEY); setAuthPhase(role ? "ready" : "needLogin"); }
+        else setAuthPhase(role ? "ready" : "needLogin");
       } catch (e) {
         if (!cancelled) setAuthPhase(role ? "ready" : "needLogin"); // ต่อเน็ตไม่ได้ — ทำงานต่อด้วย role เดิมถ้ามี
       }
