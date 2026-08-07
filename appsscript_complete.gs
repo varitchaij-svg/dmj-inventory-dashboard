@@ -2191,7 +2191,8 @@ function doPost(e) {
 
     // ─── Confirm Shipment Receive (sale/FS ยืนยันรับของจากชีตรายการโอนสินค้า) ───
     if (data.confirmShipmentReceive) {
-      return confirmShipmentReceive(ss, data.rowId, data.sku, Number(data.receivedQty) || 0, actor);
+      // refNum = ใบโอน (TF-...) ใช้หาแถวที่ถูกต้องเมื่อเลขแถวที่เครื่องผู้ใช้ถืออยู่เลื่อนไปแล้ว
+      return confirmShipmentReceive(ss, data.rowId, data.sku, Number(data.receivedQty) || 0, actor, data.refNum);
     }
 
     // ─── Lock Data ───
@@ -4071,7 +4072,50 @@ function updateOrderState(ss, body) {
 
 // sale/FS ยืนยันรับสินค้าจากชีต "รายการโอนสินค้า"
 // rowId = 'S<sheetRow>' (อ้าง 1-indexed). เช็ค sku กัน row เลื่อนก่อนเขียน
-function confirmShipmentReceive(ss, rowId, sku, receivedQty, actor) {
+// หาแถวของรายการโอนให้เจอ แม้ "เลขแถว" ที่เครื่องผู้ใช้ถืออยู่จะเก่าไปแล้ว
+// ─────────────────────────────────────────────────────────────────────
+// ทำไมต้องมี: id ของ shipment คือ **เลขแถวในชีต** (`readShipments_` → 'S'+(i+1)) ซึ่ง
+// เลื่อนทุกครั้งที่มีการลบแถวออก — archiveReceivedShipments (ตี 3), cleanupOldPendingShipments,
+// หรือเจ้าของแก้ชีตด้วยมือ · เครื่องที่ยังถือข้อมูลเก่า (localStorage / payload cache / ของสำรอง
+// จาก stale-while-rebuild) จะส่งเลขแถวที่ชี้ผิดแถวมา แล้วเดิมระบบตอบ
+// "ข้อมูลไม่ตรง (แถวอาจเลื่อน) — โปรดรีเฟรชแล้วลองใหม่" ทั้งที่พนักงานทำถูกทุกอย่าง
+// → ต้องกดซ้ำ 2-3 รอบกว่าจะติด (พนักงานแจ้งจริง ส.ค. 2026) และยิ่งหลายเครื่องยิ่งเจอบ่อย
+//
+// ตอนนี้: เลขแถวใช้ไม่ได้ → ไล่หาแถวที่ refNum+SKU ตรงกันแทน แล้วบันทึกได้ในรอบเดียว
+// ยังคงความปลอดภัยไว้: ถ้าเจอหลายแถวที่ตรงกันจนเลือกไม่ได้ **ไม่เดา** — ตอบ error ตามเดิม
+// (เขียนผิดแถวแย่กว่าให้กดใหม่ เพราะของหายไปจากบัญชีเงียบ ๆ)
+function findShipmentRow_(sheet, rowNum, refNum, sku) {
+  const want    = String(sku || '').trim().toUpperCase();
+  const wantRef = String(refNum || '').trim();
+  if (!want) return { row: 0, reason: 'ไม่มีรหัสสินค้าในคำขอ' };
+
+  // 1) เชื่อเลขแถวก่อน (เส้นทางปกติ — เร็วสุด อ่านแถวเดียว)
+  if (rowNum >= 3 && rowNum <= sheet.getLastRow()) {
+    const r = sheet.getRange(rowNum, 1, 1, Math.max(sheet.getLastColumn(), SHIP_HEADERS.length)).getDisplayValues()[0];
+    const rowSku = String(r[COL_SHIP_SKU - 1] || '').trim().toUpperCase();
+    const rowRef = String(r[COL_SHIP_REF - 1] || '').trim();
+    if (rowSku === want && (!wantRef || rowRef === wantRef)) return { row: rowNum, healed: false };
+  }
+
+  // 2) เลขแถวชี้ผิด → ไล่หาจากใบโอน (refNum) + SKU
+  const vals = sheet.getDataRange().getDisplayValues();
+  const hits = [];
+  for (let i = 2; i < vals.length; i++) {
+    if (String(vals[i][COL_SHIP_SKU - 1] || '').trim().toUpperCase() !== want) continue;
+    if (wantRef && String(vals[i][COL_SHIP_REF - 1] || '').trim() !== wantRef) continue;
+    hits.push({ row: i + 1, received: !!String(vals[i][COL_SHIP_RECVAT - 1] || '').trim() });
+  }
+  if (!hits.length) {
+    return { row: 0, reason: 'ไม่พบรายการนี้แล้ว (อาจถูกย้ายเข้าประวัติ) — กด Sync แล้วลองใหม่' };
+  }
+  // ยังไม่ถูกรับ เหลือแถวเดียว = ชัดเจนที่สุด
+  const pending = hits.filter(function (h) { return !h.received; });
+  if (pending.length === 1) return { row: pending[0].row, healed: true };
+  if (pending.length === 0 && hits.length === 1) return { row: hits[0].row, healed: true }; // แก้จำนวนที่รับซ้ำ
+  return { row: 0, reason: 'เจอหลายรายการที่ตรงกัน เลือกให้อัตโนมัติไม่ได้ — กด Sync แล้วลองใหม่' };
+}
+
+function confirmShipmentReceive(ss, rowId, sku, receivedQty, actor, refNum) {
   const sheet = ss.getSheetByName(SHEET_TRANSFERS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_TRANSFERS);
 
@@ -4079,13 +4123,11 @@ function confirmShipmentReceive(ss, rowId, sku, receivedQty, actor) {
   if (!lock.tryLock(8000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
 
   try {
-    const rowNum = parseInt(String(rowId).replace(/[^0-9]/g, ""));
-    if (!(rowNum >= 3)) return error("rowId ไม่ถูกต้อง");
-
-    // กัน row เลื่อน: เทียบ SKU ของแถวกับที่ client ส่งมา
+    const askedRow = parseInt(String(rowId).replace(/[^0-9]/g, ""));
+    const found = findShipmentRow_(sheet, askedRow, refNum, sku);
+    if (!found.row) return error(found.reason || "ไม่พบรายการนี้");
+    const rowNum = found.row;
     const rowSku = String(sheet.getRange(rowNum, COL_SHIP_SKU).getDisplayValue()).trim().toUpperCase();
-    if (sku && rowSku !== String(sku).trim().toUpperCase())
-      return error("ข้อมูลไม่ตรง (แถวอาจเลื่อน) — โปรดรีเฟรชแล้วลองใหม่");
 
     const sentQty = parseInt(sheet.getRange(rowNum, COL_SHIP_QTY).getDisplayValue()) || 0;
     const recv    = Math.max(0, receivedQty || 0);
@@ -4109,7 +4151,8 @@ function confirmShipmentReceive(ss, rowId, sku, receivedQty, actor) {
         image: String(sheet.getRange(rowNum, COL_SHIP_IMAGE).getDisplayValue() || ''),   // แถวนี้ SKU เดียว — ดึงรูปจากคอลัมน์ J ได้ตรง ๆ
       });
     }
-    return ok({ row: rowNum, receivedQty: recv, status });
+    // healed = เลขแถวที่เครื่องผู้ใช้ส่งมาชี้ผิด แต่เราหาแถวที่ถูกเจอเองแล้ว (ไม่ต้องให้กดซ้ำ)
+    return ok({ row: rowNum, receivedQty: recv, status, healed: !!found.healed, askedRow: askedRow });
   } finally {
     lock.releaseLock();
     try { invalidateCache_(); } catch(e) {}
@@ -8775,18 +8818,59 @@ function readShipments_(rowsOpt) {
   return list;
 }
 
-// ย้ายรายการที่ "รับครบ" แล้ว ออกจากชีต "รายการโอนสินค้า" → เก็บในชีตประวัติ
-// เพื่อไม่ให้ชีตหลัก/แท็บส่งแล้วบวม ส่วนที่ "รับไม่ครบ" ค้างเกิน SHIP_PARTIAL_ARCHIVE_DAYS วัน
-// (นับจากเวลายืนยันรับครั้งล่าสุด) ก็จะถูกย้ายออกด้วยเช่นกัน ถือว่าปิดเคสแล้ว
-// ส่วนที่ยังไม่เคยยืนยันรับเลย (receivedAt ว่าง) จะคาไว้เสมอ เพราะยังรอ action จริง
+// ย้ายรายการที่ "ปิดเคสแล้ว" (รับครบ/รับไม่ครบ) ออกจากชีต "รายการโอนสินค้า" → เก็บในชีตประวัติ
+// เพื่อไม่ให้ชีตหลัก/แท็บส่งแล้วบวม ส่วนที่ยังไม่เคยยืนยันรับเลย (receivedAt ว่าง) จะคาไว้เสมอ
+// เพราะยังรอ action จริงจากหน้าร้าน
 // ⚠️ ตั้ง trigger รายวัน (เช่น ตี 3) + รันเองครั้งแรกได้ (ชื่อไม่มี _ ต่อท้าย → โผล่ใน dropdown)
-const SHIP_PARTIAL_ARCHIVE_DAYS = 7;
+//
+// ⚠️⚠️ เดิม "รับครบ" ถูกย้ายออก **ทันทีในรอบ trigger ถัดไป ไม่รอเลย** — ของที่หน้าร้านกดรับ
+// ตอนเย็น พอเช้ามาก็หายจากหน้าจอแล้ว ทำให้ "เช็คซ้ำว่าได้ของครบจริงไหม" ทำไม่ได้เลย ทั้งที่
+// การเช็คซ้ำเป็นขั้นตอนปกติของหน้าร้าน (เจอจริง ส.ค. 2026 — หาใบ TF ที่เพิ่งรับเมื่อวานไม่เจอ
+// แล้วเข้าใจกันว่า "ข้อมูลหาย" ทั้งที่ยังอยู่ครบในชีตประวัติที่ไม่มีหน้าไหนอ่าน)
+// ตอนนี้ทุกสถานะเก็บไว้ในชีตหลัก SHIP_ARCHIVE_KEEP_DAYS วันก่อนเสมอ นับจากเวลายืนยันรับ
+// → หน้าร้านย้อนดูของทั้งเดือนได้
+const SHIP_ARCHIVE_KEEP_DAYS = 30;
+
+// "ของเก่าที่ยังไม่มีใครกดรับเลย" เก็บไว้กี่วันก่อนย้ายเข้าประวัติ (ใช้กับ cleanupOldPendingShipments)
+// 1 = เหลือของเมื่อวาน + วันนี้ ที่เก่ากว่านั้นถือว่าเลยรอบเช็คไปแล้ว
+const PENDING_CLEANUP_KEEP_DAYS = 1;
+
+// แปลง "dd/MM/yyyy" หรือ "dd/MM/yyyy HH:mm" ในชีตโอน → epoch ms (null ถ้าอ่านไม่ออก)
+// รองรับปี พ.ศ. ด้วย เผื่อแถวเก่าที่เคยเขียนมาจากฝั่ง client (บทเรียนข้อ 11 ใน CLAUDE.md)
+function parseShipDayMs_(s) {
+  const m = String(s || '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2}))?/);
+  if (!m) return null;
+  let y = +m[3];
+  if (y >= 2400) y -= 543;
+  return new Date(y, +m[2] - 1, +m[1], +(m[4] || 0), +(m[5] || 0)).getTime();
+}
 
 // แปลง "dd/MM/yyyy HH:mm" (ค่าที่ confirmShipmentReceive เขียนลง COL_SHIP_RECVAT) เป็น Date
 function parseShipRecvAt_(s) {
-  const m = String(s || '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})/);
-  if (!m) return null;
-  return new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5]);
+  const ms = parseShipDayMs_(s);
+  return ms == null ? null : new Date(ms);
+}
+
+// เวลาที่ถือว่าแถวนี้ "ปิดเคส" — ใช้เวลายืนยันรับเป็นหลัก อ่านไม่ออกก็ถอยไปใช้วันที่ทำรายการ
+function shipCloseMs_(row) {
+  const a = parseShipDayMs_(row[COL_SHIP_RECVAT - 1]);
+  if (a != null) return a;
+  return parseShipDayMs_(row[COL_SHIP_DATE - 1]);
+}
+
+// คีย์กันซ้ำ เวลาย้ายแถวไป-กลับระหว่างชีตหลักกับชีตประวัติ
+function shipDedupKey_(row) {
+  const sku = String(row[COL_SHIP_SKU - 1] || '').trim().toUpperCase();
+  if (!sku) return '';
+  return String(row[COL_SHIP_REF - 1] || '').trim() + '|' + sku + '|'
+       + String(row[COL_SHIP_QTY - 1] || '').trim();
+}
+
+// ปรับความกว้างแถวให้เท่าชีตปลายทาง (setValues บังคับให้ทุกแถวกว้างเท่ากันเป๊ะ)
+function normalizeShipRow_(row, width) {
+  const out = [];
+  for (let i = 0; i < width; i++) out.push(i < row.length ? row[i] : '');
+  return out;
 }
 
 function archiveReceivedShipments() {
@@ -8801,24 +8885,20 @@ function archiveReceivedShipments() {
     const data = sheet.getDataRange().getValues();
     if (data.length < 3) return;  // มีแค่หัวตาราง 2 แถว
 
-    // หาแถวที่ปิดเคสแล้ว (ข้อมูลเริ่ม index 2 = sheet row 3):
-    //  - "รับครบ" → archive ทันที
-    //  - "รับไม่ครบ" ที่ค้างเกิน SHIP_PARTIAL_ARCHIVE_DAYS วันนับจากยืนยันรับครั้งล่าสุด → archive เช่นกัน
-    const partialCutoffMs = SHIP_PARTIAL_ARCHIVE_DAYS * 24 * 60 * 60 * 1000;
+    // หาแถวที่ "ปิดเคสแล้ว **และ** เลยรอบเช็คของหน้าร้านไปแล้ว" (ข้อมูลเริ่ม index 2 = sheet row 3)
+    // ทั้ง "รับครบ" และ "รับไม่ครบ" ใช้เกณฑ์เดียวกัน = ครบ SHIP_ARCHIVE_KEEP_DAYS วันนับจาก
+    // เวลายืนยันรับ · อ่านวันที่ไม่ออกเลย (แถวเก่า/รูปแบบเพี้ยน) → ย้ายได้ ถือว่าเก่าจริง
+    const keepMs = SHIP_ARCHIVE_KEEP_DAYS * 24 * 60 * 60 * 1000;
     const now = Date.now();
     const toArchive = [];  // { rowNum, values }
     for (let i = 2; i < data.length; i++) {
       const sku    = String(data[i][COL_SHIP_SKU - 1] || "").trim();
       if (!sku) continue;
       const status = String(data[i][COL_SHIP_RECVSTATUS - 1] || "").trim();
-      if (status === "รับครบ") {
-        toArchive.push({ rowNum: i + 1, values: data[i] });
-      } else if (status === "รับไม่ครบ") {
-        const recvAt = parseShipRecvAt_(data[i][COL_SHIP_RECVAT - 1]);
-        if (recvAt && (now - recvAt.getTime()) >= partialCutoffMs) {
-          toArchive.push({ rowNum: i + 1, values: data[i] });
-        }
-      }
+      if (status !== "รับครบ" && status !== "รับไม่ครบ") continue;  // ยังไม่มีใครกดรับ → คาไว้
+      const closeMs = shipCloseMs_(data[i]);
+      if (closeMs != null && (now - closeMs) < keepMs) continue;    // ยังอยู่ในช่วงให้เช็คซ้ำ
+      toArchive.push({ rowNum: i + 1, values: data[i] });
     }
     if (!toArchive.length) { Logger.log("archiveReceivedShipments: ไม่มีรายการที่ต้อง archive"); return; }
 
@@ -8851,6 +8931,179 @@ function setupShipmentArchiveTrigger() {
   Logger.log("✅ ตั้ง trigger: archiveReceivedShipments ทุกวัน 03:00");
   // เก็บกวาดของที่ค้างสะสมอยู่ตอนนี้ให้เลย ไม่ต้องรอถึงตี 3
   archiveReceivedShipments();
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// กู้ / เคลียร์ รายการโอน — เครื่องมือให้เจ้าของรันเองใน GAS editor
+// ─────────────────────────────────────────────────────────────────────
+// ทั้งสองตัวเป็นการ **ย้ายแถวระหว่าง 2 ชีต** ไม่มีการลบข้อมูลทิ้งเลย → กลับทางได้เสมอ
+// (restore ↔ cleanup เป็นคู่กัน) · ชีตหลัก "รายการโอนสินค้า" = สิ่งที่หน้าเว็บอ่าน,
+// ชีต "ประวัติรับสินค้า" = คลังเก็บที่ยังไม่มีหน้าไหนอ่าน (ดู PLAN ต่อยอดท้ายไฟล์นี้)
+
+// กู้รายการที่ถูกย้ายเข้าประวัติ "เร็วเกินไป" กลับเข้าชีตหลัก
+// เกณฑ์ = อะไรที่ยังไม่ครบ SHIP_ARCHIVE_KEEP_DAYS วัน ควรอยู่ในชีตหลักตามนโยบายใหม่
+// ข้ามแถวที่มีอยู่ในชีตหลักแล้ว (เทียบด้วย shipDedupKey_) → รันซ้ำกี่รอบก็ไม่เกิดของซ้ำ
+function restoreArchivedShipments() {
+  const ss   = SpreadsheetApp.openById(SHEET_ID);
+  const main = ss.getSheetByName(SHEET_TRANSFERS);
+  const arch = ss.getSheetByName(SHEET_SHIP_ARCHIVE);
+  if (!main) { Logger.log("restoreArchivedShipments: ไม่พบชีต " + SHEET_TRANSFERS); return; }
+  if (!arch) { Logger.log("restoreArchivedShipments: ยังไม่มีชีต " + SHEET_SHIP_ARCHIVE + " — ไม่มีอะไรให้กู้"); return; }
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) { Logger.log("restoreArchivedShipments: lock ไม่ได้"); return; }
+  try {
+    const aVals = arch.getDataRange().getValues();
+    if (aVals.length < 2) { Logger.log("restoreArchivedShipments: ชีตประวัติว่าง"); return; }
+
+    const mainWidth = Math.max(main.getLastColumn(), SHIP_HEADERS.length);
+    const archWidth = Math.max(aVals[0].length, SHIP_HEADERS.length);
+
+    // แถวที่มีในชีตหลักอยู่แล้ว — กันกู้ซ้ำ
+    const mVals = main.getDataRange().getValues();
+    const seen = {};
+    for (let i = 2; i < mVals.length; i++) {
+      const k = shipDedupKey_(mVals[i]);
+      if (k) seen[k] = true;
+    }
+
+    const cutoff = Date.now() - SHIP_ARCHIVE_KEEP_DAYS * 24 * 60 * 60 * 1000;
+    const bring = [], keep = [];
+    for (let i = 1; i < aVals.length; i++) {     // ชีตประวัติมีหัวตารางแถวเดียว
+      const r   = aVals[i];
+      const sku = String(r[COL_SHIP_SKU - 1] || "").trim();
+      if (!sku) continue;                        // แถวว่าง → ทิ้งไปเลย ไม่ต้องเก็บต่อ
+      const closeMs = shipCloseMs_(r);
+      const k = shipDedupKey_(r);
+      // อ่านวันที่ไม่ออก → ไม่กู้ (ปล่อยไว้ในประวัติ ดีกว่าเดาแล้วดันของเก่ากลับขึ้นหน้าจอ)
+      if (closeMs != null && closeMs >= cutoff && k && !seen[k]) {
+        bring.push(normalizeShipRow_(r, mainWidth));
+        seen[k] = true;
+      } else {
+        keep.push(normalizeShipRow_(r, archWidth));
+      }
+    }
+
+    if (!bring.length) {
+      Logger.log("restoreArchivedShipments: ไม่มีรายการที่ต้องกู้ (ในประวัติมี " + (aVals.length - 1) + " แถว)");
+      return;
+    }
+
+    main.getRange(main.getLastRow() + 1, 1, bring.length, mainWidth).setValues(bring);
+    // ลบออกจากประวัติ = "ย้าย" ไม่ใช่ "ก็อป" — ไม่งั้น archive รอบหน้าจะเจอทั้งสองที่แล้วซ้ำ
+    if (arch.getLastRow() > 1) arch.getRange(2, 1, arch.getLastRow() - 1, archWidth).clearContent();
+    if (keep.length)           arch.getRange(2, 1, keep.length, archWidth).setValues(keep);
+
+    SpreadsheetApp.flush();
+    invalidateCache_();
+    Logger.log("✅ restoreArchivedShipments: กู้กลับ " + bring.length + " แถว (เหลือในประวัติ " + keep.length + " แถว)");
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ย้าย "ของที่ส่งออกจากคลังแล้วแต่ไม่เคยมีใครกดรับเลย" ที่เก่ากว่า PENDING_CLEANUP_KEEP_DAYS วัน
+// เข้าชีตประวัติ — ล้างแท็บ "🚚 ส่งแล้ว" ให้เหลือเฉพาะรอบที่ยังต้องเช็คจริง
+// ⚠️ ย้าย ไม่ใช่ลบ — ข้อมูลอยู่ครบใน "ประวัติรับสินค้า" · เอากลับได้ด้วย restoreArchivedShipments()
+//    (ตัวนั้นกู้เฉพาะที่ปิดเคสแล้ว ถ้าอยากได้ค้างรับเก่ากลับต้องก็อปจากชีตประวัติเอง)
+function cleanupOldPendingShipments() {
+  const ss   = SpreadsheetApp.openById(SHEET_ID);
+  const main = ss.getSheetByName(SHEET_TRANSFERS);
+  if (!main) { Logger.log("cleanupOldPendingShipments: ไม่พบชีต " + SHEET_TRANSFERS); return; }
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) { Logger.log("cleanupOldPendingShipments: lock ไม่ได้"); return; }
+  try {
+    const data = main.getDataRange().getValues();
+    if (data.length < 3) { Logger.log("cleanupOldPendingShipments: ไม่มีข้อมูล"); return; }
+
+    const t = new Date();
+    const startToday = new Date(t.getFullYear(), t.getMonth(), t.getDate()).getTime();
+    const cutoff = startToday - PENDING_CLEANUP_KEEP_DAYS * 24 * 60 * 60 * 1000;
+
+    const toMove = [];   // { rowNum, values }
+    for (let i = 2; i < data.length; i++) {
+      const sku = String(data[i][COL_SHIP_SKU - 1] || "").trim();
+      if (!sku) continue;
+      const recvAt = String(data[i][COL_SHIP_RECVAT - 1] || "").trim();
+      if (recvAt) continue;                       // เคยกดรับแล้ว → ให้ archiveReceivedShipments จัดการตามอายุ
+      const dayMs = parseShipDayMs_(data[i][COL_SHIP_DATE - 1]);
+      if (dayMs == null) continue;                // อ่านวันที่ไม่ออก → ไม่แตะ (ไม่เดา)
+      if (dayMs >= cutoff) continue;              // ของเมื่อวาน/วันนี้ → เก็บไว้ให้เช็ค
+      toMove.push({ rowNum: i + 1, values: data[i] });
+    }
+    if (!toMove.length) { Logger.log("cleanupOldPendingShipments: ไม่มีของค้างเก่าที่ต้องเคลียร์"); return; }
+
+    let arch = ss.getSheetByName(SHEET_SHIP_ARCHIVE);
+    if (!arch) { arch = ss.insertSheet(SHEET_SHIP_ARCHIVE); arch.appendRow(SHIP_HEADERS); }
+    const archWidth = Math.max(arch.getLastColumn(), SHIP_HEADERS.length);
+    const rows = toMove.map(function (x) { return normalizeShipRow_(x.values, archWidth); });
+    arch.getRange(arch.getLastRow() + 1, 1, rows.length, archWidth).setValues(rows);
+
+    // ลบจากแถวล่างขึ้นบน กัน index เลื่อน (แพทเทิร์นเดียวกับ archiveReceivedShipments)
+    toMove.sort(function (a, b) { return b.rowNum - a.rowNum; });
+    toMove.forEach(function (x) { main.deleteRow(x.rowNum); });
+
+    SpreadsheetApp.flush();
+    invalidateCache_();
+    Logger.log("✅ cleanupOldPendingShipments: ย้ายของค้างเก่า " + toMove.length + " แถวเข้า " + SHEET_SHIP_ARCHIVE);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ดูก่อนว่า 2 ตัวข้างบนจะทำอะไรบ้าง — **อ่านอย่างเดียว ไม่แก้ข้อมูล** รันดูก่อนได้เสมอ
+function previewShipmentCleanup() {
+  const ss   = SpreadsheetApp.openById(SHEET_ID);
+  const main = ss.getSheetByName(SHEET_TRANSFERS);
+  const arch = ss.getSheetByName(SHEET_SHIP_ARCHIVE);
+  const now = Date.now();
+  const restoreCutoff = now - SHIP_ARCHIVE_KEEP_DAYS * 24 * 60 * 60 * 1000;
+  const t = new Date();
+  const startToday = new Date(t.getFullYear(), t.getMonth(), t.getDate()).getTime();
+  const pendCutoff = startToday - PENDING_CLEANUP_KEEP_DAYS * 24 * 60 * 60 * 1000;
+
+  let willRestore = 0, staysArchived = 0;
+  if (arch) {
+    const aVals = arch.getDataRange().getValues();
+    for (let i = 1; i < aVals.length; i++) {
+      if (!String(aVals[i][COL_SHIP_SKU - 1] || "").trim()) continue;
+      const closeMs = shipCloseMs_(aVals[i]);
+      if (closeMs != null && closeMs >= restoreCutoff) {
+        willRestore++;
+        if (willRestore <= 20) {
+          Logger.log("  กู้กลับ: " + String(aVals[i][COL_SHIP_REF - 1] || "") + " · "
+            + String(aVals[i][COL_SHIP_SKU - 1] || "") + " · รับเมื่อ "
+            + String(aVals[i][COL_SHIP_RECVAT - 1] || "-"));
+        }
+      } else staysArchived++;
+    }
+  }
+
+  let willClear = 0, pendKept = 0, closedKept = 0;
+  if (main) {
+    const mVals = main.getDataRange().getValues();
+    for (let i = 2; i < mVals.length; i++) {
+      if (!String(mVals[i][COL_SHIP_SKU - 1] || "").trim()) continue;
+      const recvAt = String(mVals[i][COL_SHIP_RECVAT - 1] || "").trim();
+      if (recvAt) { closedKept++; continue; }
+      const dayMs = parseShipDayMs_(mVals[i][COL_SHIP_DATE - 1]);
+      if (dayMs != null && dayMs < pendCutoff) {
+        willClear++;
+        if (willClear <= 20) {
+          Logger.log("  เคลียร์ค้างเก่า: " + String(mVals[i][COL_SHIP_REF - 1] || "") + " · "
+            + String(mVals[i][COL_SHIP_SKU - 1] || "") + " · ส่งวันที่ "
+            + String(mVals[i][COL_SHIP_DATE - 1] || "-"));
+        }
+      } else pendKept++;
+    }
+  }
+
+  Logger.log("── สรุป (ยังไม่ได้แก้อะไร) ──");
+  Logger.log("restoreArchivedShipments() จะกู้กลับ " + willRestore + " แถว (ค้างในประวัติต่อ " + staysArchived + ")");
+  Logger.log("cleanupOldPendingShipments() จะย้ายของค้างเก่า " + willClear + " แถว (เหลือค้างรับ " + pendKept + ")");
+  Logger.log("ในชีตหลักมีของที่กดรับแล้ว " + closedKept + " แถว (เก็บไว้ " + SHIP_ARCHIVE_KEEP_DAYS + " วันตามนโยบายใหม่)");
+  return { willRestore: willRestore, staysArchived: staysArchived, willClear: willClear, pendKept: pendKept, closedKept: closedKept };
 }
 
 function readPurchases_() {
