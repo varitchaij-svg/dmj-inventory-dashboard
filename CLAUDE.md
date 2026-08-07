@@ -652,6 +652,36 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
   ผู้สั่งซื้อ/ผู้มีอำนาจ) — **ห้ามแก้ฝั่ง `else` ไปด้วย** ใบเสนอราคาตรวจเทียบ `QT-202607023.pdf`
   ไว้แล้ว เปลี่ยนเมื่อไหร่คือทำของที่ยืนยันแล้วพัง
 
+### บันทึกเป็น PDF + ชื่อไฟล์ + วันที่เอกสาร (ส.ค. 2026)
+
+- **ชื่อไฟล์ = `"[ชื่อเอกสาร] _ [เลขที่เอกสาร]"`** เช่น `ใบแจ้งหนี้ยอดมัดจำ _ IVB-202608002` ·
+  `ใบเสนอราคา _ QT-202606002` — ประกอบด้วย **`docFileName()`** (views-quote.jsx) ซึ่งตัดอักขระ
+  ที่ใช้ในชื่อไฟล์ไม่ได้ (`\ / : * ? " < > |`) ทิ้ง
+- **ทำผ่าน `document.title` + `window.print()` ไม่ใช่ html2canvas/jsPDF — ห้ามเปลี่ยนกลับ**
+  เบราว์เซอร์ตั้งชื่อไฟล์ตอน "บันทึกเป็น PDF" จาก `document.title` → **`runQuoteDocPrint(fileName)`**
+  (views-quote.jsx, ใช้ร่วมกันทั้ง 2 view) ตั้ง title ชั่วคราวแล้วคืนค่าเดิมตอน `afterprint`
+  · เหตุผลที่ห้าม rasterize DOM: เลย์เอาต์ A4 จริง (`width:210mm`/`min-height:297mm`/flex column)
+  อยู่ใน **`@media print` ทั้งชุด** และ `.quote-print-area` ถูก `display:none` บนจอ →
+  จับภาพจากจอได้เอกสารคนละหน้าตากับที่พิมพ์จริง · อีกทั้งไม่ต้องเพิ่ม CDN (repo นี้เคย
+  self-host `html2canvas` เพราะ CDN ไม่เสถียรบนเน็ตร้าน/iPad มาแล้ว)
+  · ผูก `afterprint` listener **ก่อน** เรียก `window.print()` ไม่งั้น title ค้างเป็นชื่อไฟล์ทั้งแอป
+- ⚠️ **สั่งพิมพ์ผ่าน effect ที่เฝ้า `printReq` เท่านั้น ห้ามเรียก `runQuoteDocPrint` ตรง ๆ ใน handler**
+  — `confirmInvoicePrint` เพิ่ง `setInvoiceNumber`/`setInvoiceExtra`/`setPrintDocType` ไป
+  DOM ยังเป็น render รอบก่อน · พิมพ์ทันที = ได้เอกสารที่**เลขที่ใบแจ้งหนี้เป็น `null`** และ
+  `printDocType` ยังค้างที่ `"quotation"` (หัวเอกสาร/หมายเหตุ/กล่องยอดมัดจำผิดหมด)
+  โดยไม่มี error ให้เห็น
+- **วันที่เอกสารระบุเองได้** — ช่อง `type="date"` ใน `InvoiceOptionsModal` → `docDate` (`yyyy-MM-dd`)
+  → prop `docDate` ของ `QuotationPrintDoc` → **`docDateLabel()`** แปลงเป็นวันที่ไทย (ปี พ.ศ.)
+  · ไม่ส่ง = วันนี้ (ใบเสนอราคายังเป็นแบบเดิม)
+  · ⚠️ `docDateLabel` แยก y/m/d เป็นตัวเลขเองแทน `new Date("yyyy-MM-dd")` เพราะรูปแบบนั้นถูกตี
+  เป็น **UTC** → timezone ติดลบได้วันที่เลื่อน 1 วัน (ญาติกับบทเรียนข้อ 11) + กันวันที่ไม่มีจริง
+  (`2026-02-31` ที่ JS เลื่อนเป็น 3 มี.ค. เงียบ ๆ)
+- **ไม่มี action `trackPdfExport` และไม่ต้องมี** — "ใบเดิมได้เลขเดิม" มาจาก `nextInvoiceNumber_`
+  (1 แถวต่อ 1 เลข QT) อยู่แล้ว · เคยเผลอเพิ่ม handler ที่ไม่เขียนอะไรเลยแต่ไปอยู่**ใต้**
+  `invalidateCache_(true)` = กดพิมพ์ทีล้าง payload cache ทั้งระบบทุก role
+- เทสต์: `tests/invoice-pdf.test.js` (25 เคส — eval `docFileName`/`docDateLabel` จากต้นทางจริง
+  + meta-test คุมจุดเชื่อมต่อทั้งหมดข้างบน รวมทั้งกันการถอยกลับไป html2pdf/jsPDF)
+
 ## ใครสั่ง / ใครจัด / ใครรับ (ส.ค. 2026)
 
 ชื่อคนทำติดอยู่ทุกขั้นของเส้นทางสินค้า — **ชื่อทุกตัวมาจาก session ที่ server ยืนยันเอง**

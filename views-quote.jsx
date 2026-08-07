@@ -86,20 +86,6 @@ async function syncDeleteQuotationDraft(draftId) {
   } catch (err) { return { success: false, error: err.message }; }
 }
 
-// ── sync helper: บันทึกข้อมูลการส่งออก PDF (รายการเอกสาร + เลขที่ + วันที่ล่าสุด) ──
-// เพื่อให้พิมพ์ซ้ำ/ส่งออกซ้ำใบเดิมได้เลขเดิม (idempotent ตรงกับใบแจ้งหนี้)
-async function syncTrackPdfExport(documentId, documentType, documentNumber, docDate) {
-  if (!SHEET_DEPLOY_URL) return { ok: false };
-  try {
-    const res = await dmjFetch(SHEET_DEPLOY_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ trackPdfExport: true, documentId, documentType, documentNumber, docDate, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "saler" }),
-    });
-    return await res.json().catch(() => ({ ok: false }));
-  } catch (err) { return { ok: false }; }
-}
-
 // หมายเหตุ default 3 บรรทัด (แก้ไข/ลบ/เพิ่มได้ในฟอร์ม) — ข้อความจริงตามที่เจ้าของยืนยัน
 // (ข้อ 3 = บัญชีโอนสำหรับใบเสนอราคา ต่างจาก POS_TRANSFER_INFO ที่ใช้ตอนออกบิลขายหน้าร้าน)
 const QUOTE_DEFAULT_REMARKS = [
@@ -112,54 +98,57 @@ function fmtInvoiceBaht(n) {
   return (Math.round((Number(n) || 0) * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-// ส่งออก PDF จากเอกสารที่ render บน DOM — ใช้ html2pdf library ที่โหลดไว้
-// documentType = "invoice" | "quotation"
-// docNumber = เลขที่เอกสาร (IVB-yyyyMM### สำหรับใบแจ้งหนี้, QT-xxxxxx สำหรับใบเสนอราคา)
-// docTitle = ชื่อเอกสาร ("ใบแจ้งหนี้ยอดมัดจำ", "ใบเสนอราคา", เป็นต้น)
-// showToastFn = ฟังก์ชัน toast จาก useToast hook
-// fileName ที่ส่งออก = "[docTitle] _ [docNumber]"
-async function exportDocumentAsPdf(documentType, docNumber, docTitle, docDate, showToastFn) {
-  try {
-    // รอให้ html2pdf library โหลดเสร็จ
-    if (typeof window.html2pdf !== "function") {
-      if (showToastFn) showToastFn("error", "ไลบรารี PDF ยังไม่พร้อม กรุณารอสักครู่แล้วลองใหม่", "❌");
-      return false;
-    }
+// ── ชื่อไฟล์ตอนผู้ใช้เลือก "บันทึกเป็น PDF" ในหน้าต่างพิมพ์ ──
+// รูปแบบที่เจ้าของขอ: "ใบแจ้งหนี้ยอดมัดจำ _ IVB-202608002" (ชื่อเอกสาร + เลขที่เอกสาร)
+// เบราว์เซอร์ตั้งชื่อไฟล์ PDF จาก `document.title` → เปลี่ยน title ชั่วคราวก่อนสั่งพิมพ์
+// **ทำแบบนี้แทนการ rasterize DOM ด้วย html2canvas/jsPDF โดยตั้งใจ**: เลย์เอาต์ A4 จริงของ
+// เอกสาร (width 210mm / min-height 297mm / flex column) อยู่ใน `@media print` ทั้งชุด และ
+// `.quote-print-area` ถูก `display:none` บนจอ — จับภาพจากจอจึงได้เอกสารคนละหน้าตากับที่พิมพ์
+// จริง อีกทั้งไม่ต้องเพิ่ม CDN (repo นี้เคยเจอ CDN ไม่เสถียรบน iPad/เน็ตร้านมาแล้ว จน
+// ต้อง self-host html2canvas)
+// ตัดอักขระที่ใช้ในชื่อไฟล์ไม่ได้ทิ้ง — เลขที่เอกสาร/ชื่อมาจากผู้ใช้และ backend ได้ทั้งคู่
+function docFileName(docTitle, docNumber) {
+  const clean = (s) => String(s == null ? "" : s).replace(/[\\/:*?"<>|]/g, " ").replace(/\s+/g, " ").trim();
+  const t = clean(docTitle), n = clean(docNumber);
+  if (t && n) return t + " _ " + n;
+  return t || n;
+}
 
-    // ดึง element ที่ต้อง export — มี class="quote-print-page" ตามที่ใช้ในการพิมพ์
-    const pages = document.querySelectorAll(".quote-print-page");
-    if (!pages.length) {
-      if (showToastFn) showToastFn("error", "ไม่พบเอกสารที่ต้องส่งออก", "❌");
-      return false;
-    }
-
-    // ตั้งค่าฟังก์ชัน html2pdf
-    // opt = object ที่มีตัวเลือกต่าง ๆ (margin, page size, ฯลฯ)
-    const opt = {
-      margin: 0,
-      filename: docTitle + " _ " + docNumber + ".pdf",
-      image: { type: "jpeg", quality: 0.98 },
-      html2canvas: { scale: 2 },
-      jsPDF: { orientation: "portrait", unit: "mm", format: "a4" }
-    };
-
-    // ส่งออก — ผ่านทุกหน้า (เดิมใบเสนอราคา/ใบแจ้งหนี้อาจมีหลายหน้า)
-    // ถ้า QuotationPrintDoc render หลายหน้า pages จะมี DOM node หลายตัว
-    const html = document.createElement("div");
-    pages.forEach(p => html.appendChild(p.cloneNode(true)));
-
-    await window.html2pdf().set(opt).from(html).save();
-
-    // บันทึกว่าเอกสารนี้ถูกส่งออก (สำหรับติดตามเลขที่) เพื่อพิมพ์/ส่งออกซ้ำครั้งต่อไปได้เลขเดิม
-    await syncTrackPdfExport(docNumber, documentType, docNumber, docDate);
-
-    if (showToastFn) showToastFn("success", "ส่งออก PDF สำเร็จ", "✅");
-    return true;
-  } catch (err) {
-    console.error("PDF export error:", err);
-    if (showToastFn) showToastFn("error", "ส่งออก PDF ไม่สำเร็จ: " + err.message, "❌");
-    return false;
+// ── วันที่บนหัวเอกสาร ──
+// รับ "yyyy-MM-dd" จากช่องเลือกวันที่ (InvoiceOptionsModal) · ไม่ส่งมา/รูปแบบไม่ตรง = ใช้วันนี้
+// ⚠️ แยก y/m/d เป็นตัวเลขเองแทน `new Date("yyyy-MM-dd")` เพราะรูปแบบนั้นถูกตีเป็น **UTC**
+// → เครื่องที่ timezone ติดลบได้วันที่เลื่อนไป 1 วัน (ญาติกับบทเรียนข้อ 11)
+// th-TH ให้ปี พ.ศ. อยู่แล้ว → "7 สิงหาคม 2569"
+function docDateLabel(ymd) {
+  const m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(String(ymd == null ? "" : ymd).trim());
+  let d = null;
+  if (m) {
+    const y = Number(m[1]), mo = Number(m[2]), da = Number(m[3]);
+    const cand = new Date(y, mo - 1, da);
+    // กันวันที่ที่ไม่มีจริง (เช่น 2026-02-31 ที่ JS จะเลื่อนไปเป็น 3 มี.ค. เงียบ ๆ)
+    if (cand.getFullYear() === y && cand.getMonth() === mo - 1 && cand.getDate() === da) d = cand;
   }
+  return (d || new Date()).toLocaleDateString("th-TH", { year: "numeric", month: "long", day: "numeric" });
+}
+
+// ── สั่งพิมพ์เอกสาร A4 พร้อมตั้งชื่อไฟล์ ──
+// ใช้ร่วมกันทั้ง QuotationFormView (views-quote.jsx) และ QuoteFollowupView (views-analytics.jsx)
+// — เดิม effect พิมพ์ถูก copy ไว้สองที่ · คืน document.title เดิมเสมอตอน afterprint
+// ⚠️ ผูก listener **ก่อน** window.print() (เดิมผูกทีหลัง) ไม่งั้นเบราว์เซอร์ที่ยิง afterprint
+// เร็วกว่าจังหวะผูกจะทำให้ title ค้างเป็นชื่อไฟล์ไปทั้งแอป
+function runQuoteDocPrint(fileName, isMobile) {
+  const prevTitle = document.title;
+  if (fileName) document.title = fileName;
+  const onAfter = () => {
+    document.title = prevTitle;
+    setPosPrintPageSize("a4");
+    document.body.classList.remove("quote-print-mobile");
+    window.removeEventListener("afterprint", onAfter);
+  };
+  window.addEventListener("afterprint", onAfter);
+  setPosPrintPageSize("a4");
+  document.body.classList.toggle("quote-print-mobile", !!isMobile);
+  window.print();
 }
 
 // ป้ายหัวเอกสาร 3 แบบ — ต้องตรงกับ kind ที่ InvoiceOptionsModal ส่งมา
@@ -300,18 +289,20 @@ function InvoiceOptionsModal({ grandTotal, onCancel, onConfirm }) {
         <textarea value={remarksText} onChange={e => { setRemarksText(e.target.value); setTouched(true); }}
           style={{ width: "100%", minHeight: 130, padding: 11, borderRadius: 10, border: "1.5px solid #d1d5db", fontFamily: "inherit", fontSize: 13, marginBottom: 14, boxSizing: "border-box", resize: "vertical" }} />
 
+        {/* ชื่อไฟล์ที่จะได้ตอนเลือก "บันทึกเป็น PDF" ในหน้าต่างพิมพ์ — โชว์ให้เห็นก่อนกด
+            (เลขที่เอกสารยังไม่ออกจนกว่าจะกดพิมพ์ จึงโชว์เป็นตัวอย่างรูปแบบ) */}
+        <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 12, lineHeight: 1.5 }}>
+          📄 เลือก “บันทึกเป็น PDF” ในหน้าต่างพิมพ์ จะได้ไฟล์ชื่อ<br/>
+          <span style={{ fontWeight: 700, color: "#374151" }}>{INVOICE_KIND_LABEL[kind] || "ใบแจ้งหนี้"} _ IVB-…</span>
+        </div>
+
         <div style={{ display: "flex", gap: 9 }}>
           <button onClick={onCancel} style={{ flex: 1, padding: "13px", borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontFamily: "inherit", fontWeight: 700, cursor: "pointer" }}>ยกเลิก</button>
-          <button onClick={() => onConfirm({ kind, remarks: remarksText.split("\n"), dueAmount, dueLabel, deposit, poNumber: poNumber.trim(), docDate, _action: "print" })} disabled={needDeposit} style={{
-            flex: 1.8, padding: "13px", borderRadius: 10, border: "none", fontFamily: "inherit",
-            background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 700, fontSize: 13.5,
+          <button onClick={confirm} disabled={needDeposit} style={{
+            flex: 2, padding: "13px", borderRadius: 10, border: "none", fontFamily: "inherit",
+            background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 800, fontSize: 15,
             cursor: needDeposit ? "default" : "pointer", opacity: needDeposit ? .5 : 1,
-          }}>🖨️ พิมพ์</button>
-          <button onClick={() => onConfirm({ kind, remarks: remarksText.split("\n"), dueAmount, dueLabel, deposit, poNumber: poNumber.trim(), docDate, _action: "pdf" })} disabled={needDeposit} style={{
-            flex: 1.8, padding: "13px", borderRadius: 10, border: "none", fontFamily: "inherit",
-            background: "#4b5563", color: "#fff", fontWeight: 700, fontSize: 13.5,
-            cursor: needDeposit ? "default" : "pointer", opacity: needDeposit ? .5 : 1,
-          }}>📥 PDF</button>
+          }}>🖨️ พิมพ์{INVOICE_KIND_LABEL[kind] || "ใบแจ้งหนี้"}</button>
         </div>
       </div>
     </div>
@@ -378,44 +369,37 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
   const [invoiceExtra, setInvoiceExtra] = uS(null);         // {remarks, dueAmount, dueLabel, docDate} จาก modal
   const [invoiceNumber, setInvoiceNumber] = uS(null);       // เลขที่ใบแจ้งหนี้ของเราเอง (IVB-yyyyMM###) จาก syncGetInvoiceNumber
   const [invoiceNumberBusy, setInvoiceNumberBusy] = uS(false);
-  const [exportAction, setExportAction] = uS(null);         // "print" | "pdf" — จำไว้ว่าจะทำอะไรหลังดึงเลข
+  const [printFileName, setPrintFileName] = uS("");          // ชื่อไฟล์ตอนเลือก "บันทึกเป็น PDF"
 
+  // ⚠️ พิมพ์ผ่าน effect (ไม่พิมพ์ทันทีในตัว handler) เพราะเลขที่ใบแจ้งหนี้/หมายเหตุ/ชนิดเอกสาร
+  // เพิ่งถูก setState ไป — DOM ยังเป็นของ render รอบก่อน · effect ทำงานหลัง React commit
+  // เอกสารที่พิมพ์จึงเป็นชุดที่อัปเดตแล้วเสมอ
   uE(() => {
     if (printReq <= 0) return;
-    setPosPrintPageSize("a4");
-    document.body.classList.toggle("quote-print-mobile", typeof window !== "undefined" && window.innerWidth <= 600);
-    window.print();
-    const onAfter = () => {
-      setPosPrintPageSize("a4");
-      document.body.classList.remove("quote-print-mobile");
-      window.removeEventListener("afterprint", onAfter);
-    };
-    window.addEventListener("afterprint", onAfter);
+    runQuoteDocPrint(printFileName, typeof window !== "undefined" && window.innerWidth <= 600);
   }, [printReq]);
-  function doPrint(docType) { setPrintDocType(docType || "quotation"); setPrintReq(n => n + 1); }
+  function doPrint(docType, fileName) {
+    setPrintDocType(docType || "quotation");
+    setPrintFileName(fileName || "");
+    setPrintReq(n => n + 1);
+  }
+  // ใบเสนอราคา — ไม่ต้องออกเลขใหม่ ใช้เลข QT ของ ZORT เป็นชื่อไฟล์ได้เลย
+  function printQuotation() {
+    doPrint("quotation", docFileName("ใบเสนอราคา", result.quotationNumber));
+  }
 
   // ก่อนพิมพ์ใบแจ้งหนี้ ต้องออก "เลขที่ใบแจ้งหนี้" ของเราเองก่อนเสมอ (IVB-yyyyMM###) — พิมพ์ซ้ำใบเดิม
   // ได้เลขเดิม (backend idempotent) แต่ถ้าออกเลขไม่สำเร็จ (เน็ตหลุด/GAS ตอบ HTML) ห้ามพิมพ์เอกสารที่ไม่มี
   // เลขที่เอกสาร — โชว์ toast แดงแล้วหยุด ให้ผู้ใช้กดลองใหม่เอง
   async function confirmInvoicePrint(extra) {
-    const action = (extra && extra._action) || "print";
-    const cleanExtra = Object.assign({}, extra);
-    delete cleanExtra._action;
-    setInvoiceExtra(cleanExtra);
+    setInvoiceExtra(extra);
     setInvoiceModal(false);
-    setExportAction(action);
     setInvoiceNumberBusy(true);
     const r = await syncGetInvoiceNumber(result.quotationNumber);
     setInvoiceNumberBusy(false);
     if (!r || !r.ok) { showToast("error", "ออกเลขที่ใบแจ้งหนี้ไม่สำเร็จ: " + ((r && r.error) || ""), "❌"); return; }
     setInvoiceNumber(r.invoiceNumber);
-    if (action === "pdf") {
-      // ส่งออก PDF แล้ว
-      await exportDocumentAsPdf("invoice", r.invoiceNumber, INVOICE_KIND_LABEL[cleanExtra.kind] || "ใบแจ้งหนี้", cleanExtra.docDate, showToast);
-    } else {
-      // พิมพ์ปกติ
-      doPrint("invoice");
-    }
+    doPrint("invoice", docFileName(INVOICE_KIND_LABEL[(extra && extra.kind) || "full"], r.invoiceNumber));
   }
 
   const md = Math.max(0, parseFloat(manualDiscount) || 0);
@@ -636,7 +620,7 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
               {editQuote && <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 6 }}>อัปเดตใบเดิมใน ZORT แล้ว (ไม่ได้สร้างใบใหม่)</div>}
             </div>
           </Card>
-          <button onClick={() => doPrint("quotation")} style={{ padding: 14, borderRadius: 10, border: "none", background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 700 }}>🖨️ พิมพ์ใบเสนอราคา (A4)</button>
+          <button onClick={printQuotation} style={{ padding: 14, borderRadius: 10, border: "none", background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 700 }}>🖨️ พิมพ์ใบเสนอราคา (A4)</button>
           <button onClick={() => setInvoiceModal(true)} disabled={invoiceNumberBusy} style={{ padding: 14, borderRadius: 10, border: "1px solid var(--g-600,#1f7f44)", background: "#fff", color: "var(--g-700,#166534)", fontWeight: 700, opacity: invoiceNumberBusy ? .6 : 1 }}>{invoiceNumberBusy ? "⏳ กำลังออกเลขที่..." : "🧾 พิมพ์ใบแจ้งหนี้ (A4)"}</button>
           {!editQuote && <button onClick={() => { resetAll(); }} style={{ padding: 14, borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700 }}>📝 สร้างใบใหม่</button>}
           {onBack && <button onClick={onBack} style={{ padding: 14, borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontWeight: 700 }}>← กลับไปหน้าติดตามสถานะ</button>}
@@ -654,7 +638,8 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
           deposit={invoiceExtra ? invoiceExtra.deposit : 0}
           poNumber={invoiceExtra ? invoiceExtra.poNumber : ""}
           dueAmount={printDocType === "invoice" && invoiceExtra ? invoiceExtra.dueAmount : null}
-          dueLabel={printDocType === "invoice" && invoiceExtra ? invoiceExtra.dueLabel : null}/>
+          dueLabel={printDocType === "invoice" && invoiceExtra ? invoiceExtra.dueLabel : null}
+          docDate={printDocType === "invoice" && invoiceExtra ? invoiceExtra.docDate : null}/>
       </React.Fragment>
     );
   }
@@ -925,7 +910,7 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
 // หลายจุด: มีคอลัมน์ "หน่วย" แยก · ไม่มีคอลัมน์ส่วนลด (ส่วนลดเฉลี่ยลงราคา/หน่วยแล้ว) · กล่องลูกค้า
 // ใช้ "นามลูกค้า/เลขที่สาขา" ไม่มีโทรศัพท์-อีเมล · ช่องเซ็นเป็น ผู้สั่งซื้อ/ผู้มีอำนาจ
 // **ห้ามเอาไปใช้กับใบเสนอราคา** — ฝั่งนั้นตรวจเทียบกับ QT-202607023.pdf ไว้แล้ว ต้องคงเดิม
-function QuotationPrintDoc({ quotationNumber, invoiceNumber, items, customer, remarks, salesRep, totals, docType, dueAmount, dueLabel, invoiceKind, deposit, poNumber }) {
+function QuotationPrintDoc({ quotationNumber, invoiceNumber, items, customer, remarks, salesRep, totals, docType, dueAmount, dueLabel, invoiceKind, deposit, poNumber, docDate: docDateProp }) {
   const isInvoice = docType === "invoice";
   const kind = invoiceKind || "full";
   const docLabel = isInvoice ? (INVOICE_KIND_LABEL[kind] || "ใบแจ้งหนี้") : "ใบเสนอราคา";
@@ -946,7 +931,9 @@ function QuotationPrintDoc({ quotationNumber, invoiceNumber, items, customer, re
   const cell = { padding: "4px 6px", borderRight: "0.5px solid #999", fontSize: 12 };
   const boxCell = { padding: "3px 8px", border: "0.5px solid #999" };
   const num = (n) => (Math.round(n * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const docDate = new Date().toLocaleDateString("th-TH", { year: "numeric", month: "long", day: "numeric" });
+  // วันที่เอกสาร — ผู้ใช้ระบุเองได้จาก InvoiceOptionsModal (prop docDate = "yyyy-MM-dd")
+  // ไม่ส่งมา = วันนี้ (พฤติกรรมเดิมของใบเสนอราคา)
+  const docDate = docDateLabel(docDateProp);
   const cust = customer || {};
 
   // ── ยอดที่เรียกเก็บจริงในใบนี้ + ฐานภาษีของยอดนั้น ──

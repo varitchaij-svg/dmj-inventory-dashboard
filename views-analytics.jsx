@@ -7165,9 +7165,10 @@ function QuoteFollowupView({ data, role }) {
   const [printReq, setPrintReq] = uS(0);
   const [printDocType, setPrintDocType] = uS("quotation"); // "quotation" | "invoice" — เอกสารเดียวกัน เปลี่ยนแค่ป้าย
   const [invoiceModal, setInvoiceModal] = uS(false);        // เปิด InvoiceOptionsModal ก่อนพิมพ์ใบแจ้งหนี้
-  const [invoiceExtra, setInvoiceExtra] = uS(null);         // {remarks, dueAmount, dueLabel} จาก modal
+  const [invoiceExtra, setInvoiceExtra] = uS(null);         // {remarks, dueAmount, dueLabel, docDate} จาก modal
   const [invoiceNumber, setInvoiceNumber] = uS(null);       // เลขที่ใบแจ้งหนี้ของเราเอง (IVB-yyyyMM###) จาก syncGetInvoiceNumber
   const [invoiceNumberBusy, setInvoiceNumberBusy] = uS(false);
+  const [printFileName, setPrintFileName] = uS("");         // ชื่อไฟล์ตอนเลือก "บันทึกเป็น PDF"
   const [editQuote, setEditQuote] = uS(null);               // ใบที่กำลังแก้ไข → ส่งเข้า QuotationFormView
   const [editingId, setEditingId] = uS(null);               // ปุ่มแก้ไขที่กำลังโหลดรายละเอียดอยู่
   const [toast, showToast, hideToast] = useToast();
@@ -7175,17 +7176,13 @@ function QuoteFollowupView({ data, role }) {
   const PAGE_SIZE = 20;
   const OVERDUE_DAYS = 90;
 
+  // ⚠️ พิมพ์ผ่าน effect (ไม่พิมพ์ทันทีในตัว handler) เพราะเลขที่ใบแจ้งหนี้/หมายเหตุ/ชนิดเอกสาร
+  // เพิ่งถูก setState ไป — DOM ยังเป็นของ render รอบก่อน · effect ทำงานหลัง React commit
+  // `runQuoteDocPrint` (views-quote.jsx) ตั้ง document.title ให้ตรงกับชื่อไฟล์ที่ต้องการก่อนพิมพ์
+  // แล้วคืนค่าเดิมตอน afterprint
   uE(() => {
     if (printReq <= 0 || !printData) return;
-    setPosPrintPageSize("a4");
-    document.body.classList.toggle("quote-print-mobile", mobile);
-    window.print();
-    const onAfter = () => {
-      setPosPrintPageSize("a4");
-      document.body.classList.remove("quote-print-mobile");
-      window.removeEventListener("afterprint", onAfter);
-    };
-    window.addEventListener("afterprint", onAfter);
+    runQuoteDocPrint(printFileName, mobile);
   }, [printReq, printData]);
 
   // เปิดฟอร์มแก้ไขใบเสนอราคาเดิม — ดึงรายละเอียดเต็มจาก ZORT ก่อน (ตารางมีแค่ยอด/ชื่อ ไม่มีรายการสินค้า)
@@ -7221,6 +7218,8 @@ function QuoteFollowupView({ data, role }) {
       return;
     }
     setPrintDocType("quotation");
+    // ใบเสนอราคาใช้เลข QT ของ ZORT เป็นชื่อไฟล์ได้เลย ไม่ต้องออกเลขใหม่
+    setPrintFileName(docFileName("ใบเสนอราคา", (r.data || {}).quotationNumber || q.number));
     setPrintReq(n => n + 1);
   }
 
@@ -7236,6 +7235,7 @@ function QuoteFollowupView({ data, role }) {
     if (!r || !r.ok) { showToast("error", "ออกเลขที่ใบแจ้งหนี้ไม่สำเร็จ: " + ((r && r.error) || ""), "❌"); return; }
     setInvoiceNumber(r.invoiceNumber);
     setPrintDocType("invoice");
+    setPrintFileName(docFileName(INVOICE_KIND_LABEL[(extra && extra.kind) || "full"], r.invoiceNumber));
     setPrintReq(n => n + 1);
   }
 
@@ -7823,7 +7823,8 @@ function QuoteFollowupView({ data, role }) {
           deposit={invoiceExtra ? invoiceExtra.deposit : 0}
           poNumber={invoiceExtra ? invoiceExtra.poNumber : ""}
           dueAmount={printDocType === "invoice" && invoiceExtra ? invoiceExtra.dueAmount : null}
-          dueLabel={printDocType === "invoice" && invoiceExtra ? invoiceExtra.dueLabel : null}/>
+          dueLabel={printDocType === "invoice" && invoiceExtra ? invoiceExtra.dueLabel : null}
+          docDate={printDocType === "invoice" && invoiceExtra ? invoiceExtra.docDate : null}/>
       )}
     </React.Fragment>
   );
