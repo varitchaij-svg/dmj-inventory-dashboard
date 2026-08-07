@@ -169,9 +169,21 @@ describe('meta: React key ของแถว order ต้องไม่ใช�
   it('key มี orderSig ผสมอยู่ด้วย', () => {
     // key={order.id} เดี่ยว ๆ → React ใช้ component instance เดิมต่อเมื่อแถวถูก reuse
     // → เลขในช่อง "จัด" (state ภายในแถว) ของใบเก่าค้างมาโชว์บนใบใหม่
-    const m = VANA.match(/<OrderItemRow key=\{([^}]*)\}/);
-    expect(m, 'หา <OrderItemRow key={...}> ไม่เจอ (โครงสร้างเปลี่ยน?)').toBeTruthy();
-    expect(m[1]).toMatch(/orderSig\(order\)/);
+    //
+    // ⚠️ ตาม "key" ไม่ใช่ชื่อ element — key ย้ายไปอยู่บนตัวห่อได้ (ตอนใส่หัวข้อคั่นกลุ่ม
+    //    หิ้ว/ขึ้นรถ ก็ย้ายไป <React.Fragment>) แต่ข้อบังคับยังเป็นเรื่องเดียวกันเป๊ะ:
+    //    element ที่ React ใช้จับคู่ order แต่ละใบ ต้องมี orderSig อยู่ใน key
+    const m = VANA.match(/key=\{([^}]*)\}\s*>\s*(?:\{[^\n]*\}\s*)?\n?\s*(?:<OrderGroupHead[\s\S]{0,200}?)?<OrderItemRow/)
+           || VANA.match(/<OrderItemRow key=\{([^}]*)\}/);
+    expect(m, 'หา key ของแถว order ไม่เจอ (โครงสร้างเปลี่ยน?)').toBeTruthy();
+    expect(m[1], 'key ของแถว order ไม่มี orderSig — แถวถูก reuse แล้ว state ค้างข้ามใบ')
+      .toMatch(/orderSig\(order\)/);
+  });
+
+  it('แถว order มีจุดจอดให้ "กดแจ้งเตือนแล้วพามาที่ของชิ้นนี้"', () => {
+    // ไม่มี attribute นี้ = dmjScrollToSku หาไม่เจอตลอดกาล → กดแจ้งเตือนแล้วได้แค่สลับแท็บ
+    // เงียบ ๆ เหมือนเดิม โดยไม่มี error ให้เห็นเลยสักบรรทัด
+    expect(VANA).toMatch(/data-order-sku=\{order\.sku/);
   });
 });
 

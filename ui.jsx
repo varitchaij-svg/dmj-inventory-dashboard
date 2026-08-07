@@ -341,6 +341,78 @@ function notiPing() {
 
 const NOTI_POLL_MS = 25000;
 
+// ── "พาไปที่ของชิ้นนั้นเลย" หลังกดแจ้งเตือน ───────────────────────────────────
+// กดแจ้งเตือน "ออเดอร์ใหม่" แล้วได้แค่หน้ารายการที่มีอยู่ 46 ใบ = ยังต้องไล่หาเองอยู่ดี
+// (หาไม่เจอแล้วเลื่อนผ่าน = ของไม่ถูกจัด ทั้งที่ระบบแจ้งไปเรียบร้อยแล้ว)
+//
+// ⚠️ เก็บเป็น "คำขอค้างไว้ใน window + CustomEvent" ไม่ใช่ prop/state ของ App เพราะ
+//    view ปลายทางส่วนใหญ่ยัง **ไม่ mount** ตอนกด (กดแจ้งเตือน = สลับแท็บ view เพิ่งเกิด
+//    หลังจากนั้น) ตัวที่เพิ่ง mount จึงต้องอ่านคำขอที่ค้างไว้เองได้ ไม่ใช่รอรับ event ที่ยิงผ่านไปแล้ว
+const DMJ_FOCUS_TTL_MS = 20000;   // เกินนี้ถือว่าเป็นคำสั่งเก่า (คนเดินไปทำอย่างอื่นแล้ว) — อย่าเด้ง
+
+// tab = แท็บปลายทางของคำขอ (กันแท็บอื่นแย่งกินคำขอที่ไม่ใช่ของตัวเอง) · sku ว่าง = ล้างคำขอค้าง
+function dmjRequestFocus(tab, sku) {
+  try {
+    const s = String(sku || "").trim();
+    // ไม่มีเป้าหมาย → ล้างของเก่าทิ้งด้วย ไม่งั้นคำขอจากแจ้งเตือนอันก่อนจะไปเด้งตอนสลับแท็บครั้งถัดไป
+    if (!s) { window._dmjFocusReq = null; return; }
+    window._dmjFocusReq = { tab: String(tab || ""), sku: s, ts: Date.now() };
+    window.dispatchEvent(new CustomEvent("dmj:focus"));
+  } catch (e) { /* เครื่องมือช่วยเหลือ — ล้มเหลวต้องไม่ลากอะไรพัง */ }
+}
+
+// view ที่รองรับการเด้ง เรียกตัวนี้: useSkuFocus("orders", sku => { ...พาไปหา... })
+function useSkuFocus(tab, onFocus) {
+  const cb = useRef(onFocus);
+  cb.current = onFocus;
+  useEffect(() => {
+    const run = () => {
+      let req = null;
+      try { req = window._dmjFocusReq; } catch (e) { return; }
+      if (!req || !req.sku) return;
+      if (req.tab && tab && req.tab !== tab) return;                     // คำขอของแท็บอื่น
+      if (Date.now() - (req.ts || 0) > DMJ_FOCUS_TTL_MS) { window._dmjFocusReq = null; return; }
+      window._dmjFocusReq = null;      // ใช้ครั้งเดียว — ไม่เคลียร์ = เด้งซ้ำทุกครั้งที่ re-render
+      try { cb.current(req.sku); } catch (e) {}
+    };
+    run();                             // เพิ่ง mount จากการสลับแท็บ = คำขอค้างอยู่ตั้งแต่ก่อน mount
+    window.addEventListener("dmj:focus", run);
+    return () => window.removeEventListener("dmj:focus", run);
+  }, [tab]);
+}
+
+// เลื่อนไปหาแถวที่ attribute ตรงกับ sku แล้วกะพริบให้เห็นว่า "อันนี้แหละ"
+// ⚠️ ไล่เทียบค่าเอง ไม่ประกอบ CSS selector จาก sku — sku มาจากชีต มีอักขระอะไรก็ได้
+//    ประกอบเป็น selector แล้ว querySelector โยน error ทั้งก้อน (เด้งไม่ได้แถมพาหน้าพัง)
+// ⚠️ ต้องลองซ้ำ ไม่ใช่ยิงครั้งเดียว — สลับแท็บมาแล้วข้อมูลอาจยังโหลดไม่เสร็จ แถวยังไม่มีในจอ
+function dmjScrollToSku(attr, sku, onResult) {
+  const want = String(sku || "").trim().toUpperCase();
+  if (!want) return;
+  let n = 0;
+  const tick = () => {
+    n++;
+    let el = null;
+    try {
+      const rows = document.querySelectorAll("[" + attr + "]");
+      for (let i = 0; i < rows.length; i++) {
+        if (String(rows[i].getAttribute(attr) || "").trim().toUpperCase() === want) { el = rows[i]; break; }
+      }
+    } catch (e) { return; }
+    if (el) {
+      try {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("dmj-focus-flash");
+        setTimeout(() => { try { el.classList.remove("dmj-focus-flash"); } catch (e) {} }, 2600);
+      } catch (e) {}
+      if (typeof onResult === "function") onResult(true);
+      return;
+    }
+    if (n < 10) { setTimeout(tick, 300); return; }        // ~3 วิ เผื่อ payload ยังมาไม่ถึง
+    if (typeof onResult === "function") onResult(false);  // หาไม่เจอ — ผู้เรียกต้องบอกผู้ใช้ ไม่ใช่เงียบ
+  };
+  setTimeout(tick, 120);
+}
+
 function NotiBell({ onNavigate }) {
   const [items, setItems] = useState([]);
   const [unread, setUnread] = useState(0);
@@ -421,7 +493,9 @@ function NotiBell({ onNavigate }) {
   const openItem = useCallback((it) => {
     if (!it.read) markRead([it.id], false);
     setOpen(false);
-    if (it.tab && typeof onNavigate === 'function') onNavigate(it.tab);
+    // ส่ง focus (SKU) ไปด้วย — แท็บอย่างเดียวยังไม่พอ ปลายทางมีเป็นสิบใบต้องไล่หาเอง
+    // แถวเก่าที่ยังไม่มีคอลัมน์นี้ → undefined → ปลายทางแค่สลับแท็บเหมือนเดิม
+    if (it.tab && typeof onNavigate === 'function') onNavigate(it.tab, it.focus);
   }, [markRead, onNavigate]);
 
   if (off) return null;
@@ -588,6 +662,7 @@ Object.assign(window, {
   CAT_COLORS, catColor, resetCatColorMap,
   I, Icon, KPI, Card, Seg, Sparkline, Empty,
   dmjFetch, NotiBell, notiAgo, NOTI_TYPE_META, BootTrace,
+  dmjRequestFocus, useSkuFocus, dmjScrollToSku,
 });
 
 if (typeof module !== 'undefined') module.exports = { resetCatColorMap, catColor, CAT_COLORS, notiAgo };

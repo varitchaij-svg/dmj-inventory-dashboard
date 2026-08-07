@@ -1995,8 +1995,14 @@ function App() {
               </button>
             )}
             {/* กระดิ่งแจ้งเตือนในแอป — แจ้งได้ไม่จำกัดเพราะไม่กิน quota LINE
-                แท็บปลายทางที่ role นี้ไม่มีสิทธิ์เปิด → ไม่ nav (แต่ยังกดอ่านได้ตามปกติ) */}
-            <NotiBell onNavigate={(t) => { if (allowedTabIds.includes(t)) handleSetTab(t); }}/>
+                แท็บปลายทางที่ role นี้ไม่มีสิทธิ์เปิด → ไม่ nav (แต่ยังกดอ่านได้ตามปกติ)
+                focus = SKU ที่ต้องพาไปดูต่อ · ตั้งคำขอไว้ก่อน view ปลายทางจะ mount
+                (view เพิ่งเกิดหลังสลับแท็บ จึงต้องอ่านคำขอที่ค้างไว้เอง ไม่ใช่รอรับ event) */}
+            <NotiBell onNavigate={(t, focus) => {
+              if (!allowedTabIds.includes(t)) return;
+              dmjRequestFocus(t, focus);
+              handleSetTab(t);
+            }}/>
             <button title={`${staff ? staff.name + " · " : ""}${ROLE_LABELS[role]} · ออกจากระบบ`}
                  onClick={() => setConfirmAction({ type: "logout" })}
                  style={{minHeight:44,minWidth:44,padding:"3px 8px",border:"none",
