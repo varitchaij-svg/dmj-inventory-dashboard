@@ -103,11 +103,18 @@
     mtoJobs,
     transfers,
     purchases,
+    // ⚠️ รูปร่างต้องตรงกับที่ buildFullData_ สร้างจริง:
+    //    productLockMap/verifiedLockMap = { lockKey: [...] } (คีย์คือ "ล็อค" ไม่ใช่ SKU) ·
+    //    shelves = { A, B, locksPerShelf } · unassigned = [sku, ...]
+    //    ก่อนหน้านี้ productLockMap กลับข้าง (คีย์เป็น SKU) → แผนผังคลังไม่มีล็อคไหนขึ้นเลย
+    //    แต่เทสต์ยังเขียวเพราะเช็คแบบ OR แล้วไปเจอ DEC003 ในรายการ "ยังไม่ระบุล็อค" แทน
+    // FLW002 อยู่ที่ "A0" = ช่องของที่ไม่ได้อยู่บนชั้นวางของซอย A (วางพื้น/นอกชั้น)
     storage: {
-      productLockMap: { VAS001: ['A1/05'], FLW002: ['A2/03'] },
-      verifiedLockMap: { 'A1/05': [{ sku: 'VAS001', qty: 25 }] },
-      shelves: [{ key: 'A1', locks: ['A1/01', 'A1/05'] }, { key: 'A2', locks: ['A2/03'] }],
-      unassigned: [{ sku: 'DEC003', qty: 20 }],
+      // เลขล็อคไม่เติมศูนย์นำหน้า — lockKeyOf_ สร้างจากตัวเลข ("A1/05" ในชีตกลายเป็นคีย์ "A1/5")
+      productLockMap:  { 'A1/5': ['VAS001'], 'A0': ['FLW002'] },
+      verifiedLockMap: { 'A1/5': [{ sku: 'VAS001', qty: 25, sysQty: 25 }] },
+      shelves: { A: 10, B: 10, locksPerShelf: 15 },
+      unassigned: ['DEC003'],
     },
     transferStats: { 'โอน': { count: 6, qty: 75 }, 'ปรับ': { count: 1, qty: 3 }, 'ยกมา': { count: 0, qty: 0 } },
     stockCheckRequests: [],

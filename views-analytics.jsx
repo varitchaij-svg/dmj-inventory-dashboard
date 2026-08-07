@@ -1349,7 +1349,7 @@ function WarehouseHomeView({ data, onNav }) {
     const m = {};
     products.forEach(p => {
       const loc = (p.locations || [])[0];
-      if (loc) m[p.sku] = `${loc.side}${loc.shelf}/${loc.lock}`;
+      if (loc) m[p.sku] = lockKeyOf(loc);
     });
     return m;
   }, [products]);
@@ -2900,6 +2900,38 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                 </div>
                 <div style={{display:'grid',
                              gridTemplateColumns:'repeat(auto-fill,minmax(90px,1fr))',gap:10}}>
+                  {/* ช่อง "ไม่ได้อยู่บนชั้น" (A0/B0) — ไม่มีเลขล็อค จึงข้ามขั้น 2 ไปนับเลย */}
+                  {(function(){
+                    const fk = floorLockKey(side);
+                    const fd = lockData[fk];
+                    const fn = fd ? fd.skus.length : 0;
+                    return (
+                      <div key={fk}
+                        onClick={() => { if (fn > 0) { setSelShelf(fk); setSelLockKey(fk); setStep(3); } }}
+                        style={{
+                          gridColumn:'1/-1',
+                          background: fn>0 ? '#fffbeb' : '#f8fafc',
+                          border:'2px dashed ' + (fn>0 ? '#fbbf24' : '#e2e8f0'),
+                          borderRadius:14, padding:'12px 14px',
+                          cursor: fn>0 ? 'pointer' : 'default',
+                          opacity: fn>0 ? 1 : 0.55,
+                          display:'flex', alignItems:'center', gap:10,
+                        }}>
+                        <span style={{fontSize:20}}>📥</span>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:16,fontWeight:800,color:'var(--g-700)',
+                                       fontFamily:'monospace'}}>{fk}</div>
+                          <div style={{fontSize:11,color:'var(--muted)'}}>
+                            ไม่ได้อยู่บนชั้น (วางพื้น/นอกชั้นวาง)
+                          </div>
+                        </div>
+                        <div style={{fontSize:11,fontWeight:700,
+                                     color: fn>0 ? '#b45309' : '#94a3b8'}}>
+                          {fn>0 ? fn+' SKU ›' : 'ว่าง'}
+                        </div>
+                      </div>
+                    );
+                  })()}
                   {shelfList.filter(s => s[0] === side).map(sh => {
                     const shN = parseInt(sh.replace(/[A-Za-z]/g,''));
                     const isR = shN % 2 !== 0;
@@ -3051,13 +3083,16 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
       <div style={{display:'flex',flexDirection:'column',gap:12,width:"100%",minWidth:0,boxSizing:"border-box"}}>
 
         <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
-          <button onClick={() => setStep(2)}
+          {/* ช่อง A0/B0 ไม่มีขั้น 2 (ไม่มีตารางเลขล็อค) — ย้อนกลับต้องไปขั้น 1 ไม่งั้นเจอตารางว่างเปล่า */}
+          <button onClick={() => setStep(isFloorLock(selLockKey) ? 1 : 2)}
             style={{width:44,height:44,borderRadius:10,border:'1.5px solid var(--bdr)',
                     background:'#fff',cursor:'pointer',fontSize:20,fontFamily:'inherit',flexShrink:0}}>
             ←
           </button>
           <div style={{flex:1}}>
-            <div style={{fontSize:15,fontWeight:800}}>ล็อค {selLockKey}</div>
+            <div style={{fontSize:15,fontWeight:800}}>
+              {isFloorLock(selLockKey) ? `📥 ${selLockKey} · ไม่ได้อยู่บนชั้น` : `ล็อค ${selLockKey}`}
+            </div>
             <div style={{fontSize:11,color:'var(--muted)'}}>ขั้น 3 — กรอกจำนวนที่นับได้จริง</div>
           </div>
           <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}}>
@@ -3816,7 +3851,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
   const product = productMap ? productMap[order.sku] : null;
   const locs = product?.locations || [];
   const locStr = locs.length
-    ? locs.map(l => `${l.side}${l.shelf}/${l.lock}`).join(", ")
+    ? locs.map(lockKeyOf).join(", ")
     : null;
 
   // ตำแหน่งล็อคจาก storage data (data.storage.productLockMap / verifiedLockMap)
