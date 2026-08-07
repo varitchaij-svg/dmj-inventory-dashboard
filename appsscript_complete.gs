@@ -2824,7 +2824,7 @@ function buildFullData_() {
     products.forEach(p => {
       if (!p.locations || p.locations.length === 0) { unassigned.push(p.sku); return; }
       p.locations.forEach(loc => {
-        const key = `${loc.side}${loc.shelf}/${loc.lock}`;
+        const key = lockKeyOf_(loc);
         productLockMap[key] = productLockMap[key] || [];
         productLockMap[key].push(p.sku);
       });
@@ -8389,11 +8389,23 @@ function parseNum_(val) {
   return isNaN(n) ? 0 : n;
 }
 
+// ตำแหน่งจัดเก็บมี 2 แบบ:
+//   "A3/7" = ชั้น A3 ล็อคที่ 7 (แบบเดิม)
+//   "A0"   = ของที่ "ไม่ได้อยู่บนชั้น" ในซอย A (วางพื้น/นอกชั้นวาง) — 1 ซอยมีช่องเดียว ไม่มีเลขล็อค
+// ⚠️ ห้ามประกอบคีย์ด้วย `${side}${shelf}/${lock}` เองอีก — ช่อง A0/B0 จะกลายเป็น "A0/0"
+//    ที่ไม่ตรงกับสิ่งที่เขียนอยู่ในชีตแล้วของหายจากแผนผังเงียบ ๆ → ใช้ lockKeyOf_ เสมอ
 function parseLocation_(loc) {
   if (!loc) return null;
+  const f = String(loc).trim().match(/^([AB])0$/i);
+  if (f) return { raw: String(loc).trim(), valid: true, side: f[1].toUpperCase(), shelf: 0, lock: 0, floor: true };
   const m = String(loc).trim().match(/^([AB])(\d+)\/(\d+)$/i);
   if (!m) return null;
   return { raw: String(loc).trim(), valid: true, side: m[1].toUpperCase(), shelf: +m[2], lock: +m[3] };
+}
+
+function lockKeyOf_(loc) {
+  if (!loc) return null;
+  return loc.floor ? loc.side + '0' : loc.side + loc.shelf + '/' + loc.lock;
 }
 
 function monthKey_(val) {
@@ -8888,10 +8900,11 @@ function readStorage_(rowsOpt) {
       side:    parsed ? parsed.side  : null,
       shelf:   parsed ? parsed.shelf : null,
       lockNum: parsed ? parsed.lock  : null,
+      floor:   parsed ? !!parsed.floor : false,   // A0/B0 = ไม่ได้อยู่บนชั้นวาง
     };
     entries.push(e);
     if (parsed) {
-      const key = `${parsed.side}${parsed.shelf}/${parsed.lock}`;
+      const key = lockKeyOf_(parsed);
       lockMap[key] = lockMap[key] || [];
       lockMap[key].push({ sku: e.sku, qty: e.qty, sysQty: e.sysQty, status: e.status, lastCheck: e.lastCheck });
     }

@@ -66,7 +66,10 @@ const ASSERT = {
   },
   whhome:     async (page) => hasText(page, ['งานของฉัน', 'มี 1 งานที่ยังไม่เสร็จ'], 'การ์ดงานของฉัน'),
   stock:      async (page) => hasText(page, ['FLW002'], 'low-stock SKU (FLW002 qty8<threshold)'),
-  storage:    async (page) => hasText(page, ['A1/05', 'A2/03', 'DEC003'], 'lock/สินค้าในคลัง'),
+  // ต้องเจอ "ครบทุกตัว": ช่อง A0/B0 (ของที่ไม่ได้อยู่บนชั้น) ต้องขึ้นทั้ง 2 ซอยเสมอแม้ซอยนั้นว่าง
+  // + รายการ "ยังไม่ระบุล็อค" ยังทำงาน — hasText (OR) เคยผ่านได้ด้วย token เดียว
+  storage:    async (page) => hasAllText(page,
+                ['A0', 'B0', 'ไม่ได้อยู่บนชั้น', 'DEC003'], 'ช่องไม่อยู่บนชั้น/สินค้าในคลัง'),
   // ชื่อผู้สั่ง/ผู้จัดต้องขึ้นจริงบนแถวออเดอร์ (ไม่ใช่แค่มีข้อมูลอยู่ใน payload)
   orders:     async (page) => {
     const base = await hasText(page, ['VAS001', 'FLW002'], 'order SKU');
