@@ -3897,6 +3897,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5}}>
               <div style={{fontSize:10,color:"var(--muted)"}}>📦 จัด</div>
               <input type="number" value={prepQtyDraft} min={0} max={9999}
+                onFocus={e => e.target.select()}
                 onChange={e => setPrepQtyDraft(e.target.value)}
                 onBlur={commitPrepQtyDraft}
                 onKeyDown={e => { if (e.key === "Enter") { commitPrepQtyDraft(); e.target.blur(); } }}
@@ -4180,6 +4181,7 @@ function ShipmentRow({ s, role, productMap, onConfirm }) {
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
               <div style={{fontSize:10,color:"var(--muted)"}}>📥 {editing ? "แก้ไข" : "รับจริง"}</div>
               <input type="number" value={recvQty} min={0} max={9999}
+                onFocus={e => e.target.select()}
                 onChange={e => setRecvQty(Math.max(0,parseInt(e.target.value)||0))}
                 style={{
                   width:64,height:44,textAlign:"center",borderRadius:8,
