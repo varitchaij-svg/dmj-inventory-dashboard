@@ -1322,6 +1322,9 @@
        เดิมโหลดจาก CDN แต่ไม่เสถียรบน iPad/เน็ตร้าน (โหลดไม่ทัน → พิมพ์ Bluetooth พัง) → เก็บไฟล์เองใน repo
        fallback CDN ถ้าไฟล์ local หาย -->
   <script defer src="/html2canvas.min.js" onerror="var s=document.createElement('script');s.defer=true;s.src='https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';document.head.appendChild(s);"></script>
+  <!-- jsPDF + html2pdf: สร้างและส่งออก PDF ด้วยชื่อไฟล์ที่กำหนด (defer — ใช้เฉพาะตอนกด "ส่งออก PDF") -->
+  <script defer src="https://unpkg.com/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script defer src="https://unpkg.com/html2pdf@0.10.1/dist/html2pdf.bundle.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 
   <script>

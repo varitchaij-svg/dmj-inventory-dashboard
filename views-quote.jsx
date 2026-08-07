@@ -86,6 +86,20 @@ async function syncDeleteQuotationDraft(draftId) {
   } catch (err) { return { success: false, error: err.message }; }
 }
 
+// ── sync helper: บันทึกข้อมูลการส่งออก PDF (รายการเอกสาร + เลขที่ + วันที่ล่าสุด) ──
+// เพื่อให้พิมพ์ซ้ำ/ส่งออกซ้ำใบเดิมได้เลขเดิม (idempotent ตรงกับใบแจ้งหนี้)
+async function syncTrackPdfExport(documentId, documentType, documentNumber, docDate) {
+  if (!SHEET_DEPLOY_URL) return { ok: false };
+  try {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ trackPdfExport: true, documentId, documentType, documentNumber, docDate, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "saler" }),
+    });
+    return await res.json().catch(() => ({ ok: false }));
+  } catch (err) { return { ok: false }; }
+}
+
 // หมายเหตุ default 3 บรรทัด (แก้ไข/ลบ/เพิ่มได้ในฟอร์ม) — ข้อความจริงตามที่เจ้าของยืนยัน
 // (ข้อ 3 = บัญชีโอนสำหรับใบเสนอราคา ต่างจาก POS_TRANSFER_INFO ที่ใช้ตอนออกบิลขายหน้าร้าน)
 const QUOTE_DEFAULT_REMARKS = [
@@ -96,6 +110,56 @@ const QUOTE_DEFAULT_REMARKS = [
 
 function fmtInvoiceBaht(n) {
   return (Math.round((Number(n) || 0) * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// ส่งออก PDF จากเอกสารที่ render บน DOM — ใช้ html2pdf library ที่โหลดไว้
+// documentType = "invoice" | "quotation"
+// docNumber = เลขที่เอกสาร (IVB-yyyyMM### สำหรับใบแจ้งหนี้, QT-xxxxxx สำหรับใบเสนอราคา)
+// docTitle = ชื่อเอกสาร ("ใบแจ้งหนี้ยอดมัดจำ", "ใบเสนอราคา", เป็นต้น)
+// showToastFn = ฟังก์ชัน toast จาก useToast hook
+// fileName ที่ส่งออก = "[docTitle] _ [docNumber]"
+async function exportDocumentAsPdf(documentType, docNumber, docTitle, docDate, showToastFn) {
+  try {
+    // รอให้ html2pdf library โหลดเสร็จ
+    if (typeof window.html2pdf !== "function") {
+      if (showToastFn) showToastFn("error", "ไลบรารี PDF ยังไม่พร้อม กรุณารอสักครู่แล้วลองใหม่", "❌");
+      return false;
+    }
+
+    // ดึง element ที่ต้อง export — มี class="quote-print-page" ตามที่ใช้ในการพิมพ์
+    const pages = document.querySelectorAll(".quote-print-page");
+    if (!pages.length) {
+      if (showToastFn) showToastFn("error", "ไม่พบเอกสารที่ต้องส่งออก", "❌");
+      return false;
+    }
+
+    // ตั้งค่าฟังก์ชัน html2pdf
+    // opt = object ที่มีตัวเลือกต่าง ๆ (margin, page size, ฯลฯ)
+    const opt = {
+      margin: 0,
+      filename: docTitle + " _ " + docNumber + ".pdf",
+      image: { type: "jpeg", quality: 0.98 },
+      html2canvas: { scale: 2 },
+      jsPDF: { orientation: "portrait", unit: "mm", format: "a4" }
+    };
+
+    // ส่งออก — ผ่านทุกหน้า (เดิมใบเสนอราคา/ใบแจ้งหนี้อาจมีหลายหน้า)
+    // ถ้า QuotationPrintDoc render หลายหน้า pages จะมี DOM node หลายตัว
+    const html = document.createElement("div");
+    pages.forEach(p => html.appendChild(p.cloneNode(true)));
+
+    await window.html2pdf().set(opt).from(html).save();
+
+    // บันทึกว่าเอกสารนี้ถูกส่งออก (สำหรับติดตามเลขที่) เพื่อพิมพ์/ส่งออกซ้ำครั้งต่อไปได้เลขเดิม
+    await syncTrackPdfExport(docNumber, documentType, docNumber, docDate);
+
+    if (showToastFn) showToastFn("success", "ส่งออก PDF สำเร็จ", "✅");
+    return true;
+  } catch (err) {
+    console.error("PDF export error:", err);
+    if (showToastFn) showToastFn("error", "ส่งออก PDF ไม่สำเร็จ: " + err.message, "❌");
+    return false;
+  }
 }
 
 // ป้ายหัวเอกสาร 3 แบบ — ต้องตรงกับ kind ที่ InvoiceOptionsModal ส่งมา
@@ -142,6 +206,10 @@ function InvoiceOptionsModal({ grandTotal, onCancel, onConfirm }) {
   const [kind, setKind] = uS("full"); // "full" | "deposit" | "remaining"
   const [depositStr, setDepositStr] = uS("");
   const [poNumber, setPoNumber] = uS("");   // เลขที่ใบสั่งซื้อของลูกค้า → "เอกสารอ้างอิง1" บนใบแจ้งหนี้
+  const [docDate, setDocDate] = uS(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  });
   const deposit = Math.max(0, Math.min(Number(depositStr) || 0, grandTotal));
   const remaining = Math.max(0, grandTotal - deposit);
 
@@ -161,7 +229,7 @@ function InvoiceOptionsModal({ grandTotal, onCancel, onConfirm }) {
 
   const confirm = () => {
     if (needDeposit) return;
-    onConfirm({ kind, remarks: remarksText.split("\n"), dueAmount, dueLabel, deposit, poNumber: poNumber.trim() });
+    onConfirm({ kind, remarks: remarksText.split("\n"), dueAmount, dueLabel, deposit, poNumber: poNumber.trim(), docDate });
   };
 
   const opts = [
@@ -224,17 +292,26 @@ function InvoiceOptionsModal({ grandTotal, onCancel, onConfirm }) {
         <input value={poNumber} onChange={e => setPoNumber(e.target.value)} placeholder="เช่น PO148983"
           style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1.5px solid #d1d5db", fontSize: 15, marginBottom: 14, boxSizing: "border-box", fontFamily: "inherit" }} />
 
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 7 }}>วันที่เอกสาร <span style={{ fontWeight: 500, color: "#6b7280" }}>(ค่าปัจจุบัน)</span></div>
+        <input type="date" value={docDate} onChange={e => setDocDate(e.target.value)}
+          style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1.5px solid #d1d5db", fontSize: 15, marginBottom: 14, boxSizing: "border-box", fontFamily: "inherit" }} />
+
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 7 }}>หมายเหตุ (แก้ไขได้)</div>
         <textarea value={remarksText} onChange={e => { setRemarksText(e.target.value); setTouched(true); }}
           style={{ width: "100%", minHeight: 130, padding: 11, borderRadius: 10, border: "1.5px solid #d1d5db", fontFamily: "inherit", fontSize: 13, marginBottom: 14, boxSizing: "border-box", resize: "vertical" }} />
 
         <div style={{ display: "flex", gap: 9 }}>
           <button onClick={onCancel} style={{ flex: 1, padding: "13px", borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", fontFamily: "inherit", fontWeight: 700, cursor: "pointer" }}>ยกเลิก</button>
-          <button onClick={confirm} disabled={needDeposit} style={{
-            flex: 2, padding: "13px", borderRadius: 10, border: "none", fontFamily: "inherit",
-            background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 800, fontSize: 15,
+          <button onClick={() => onConfirm({ kind, remarks: remarksText.split("\n"), dueAmount, dueLabel, deposit, poNumber: poNumber.trim(), docDate, _action: "print" })} disabled={needDeposit} style={{
+            flex: 1.8, padding: "13px", borderRadius: 10, border: "none", fontFamily: "inherit",
+            background: "var(--g-600,#1f7f44)", color: "#fff", fontWeight: 700, fontSize: 13.5,
             cursor: needDeposit ? "default" : "pointer", opacity: needDeposit ? .5 : 1,
-          }}>🖨️ พิมพ์{INVOICE_KIND_LABEL[kind] || "ใบแจ้งหนี้"}</button>
+          }}>🖨️ พิมพ์</button>
+          <button onClick={() => onConfirm({ kind, remarks: remarksText.split("\n"), dueAmount, dueLabel, deposit, poNumber: poNumber.trim(), docDate, _action: "pdf" })} disabled={needDeposit} style={{
+            flex: 1.8, padding: "13px", borderRadius: 10, border: "none", fontFamily: "inherit",
+            background: "#4b5563", color: "#fff", fontWeight: 700, fontSize: 13.5,
+            cursor: needDeposit ? "default" : "pointer", opacity: needDeposit ? .5 : 1,
+          }}>📥 PDF</button>
         </div>
       </div>
     </div>
@@ -298,9 +375,10 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
   const [printReq, setPrintReq] = uS(0);
   const [printDocType, setPrintDocType] = uS("quotation"); // "quotation" | "invoice" — เอกสารหน้าตาเดียวกัน แค่เปลี่ยนป้าย
   const [invoiceModal, setInvoiceModal] = uS(false);        // เปิด InvoiceOptionsModal ก่อนพิมพ์ใบแจ้งหนี้
-  const [invoiceExtra, setInvoiceExtra] = uS(null);         // {remarks, dueAmount, dueLabel} จาก modal
+  const [invoiceExtra, setInvoiceExtra] = uS(null);         // {remarks, dueAmount, dueLabel, docDate} จาก modal
   const [invoiceNumber, setInvoiceNumber] = uS(null);       // เลขที่ใบแจ้งหนี้ของเราเอง (IVB-yyyyMM###) จาก syncGetInvoiceNumber
   const [invoiceNumberBusy, setInvoiceNumberBusy] = uS(false);
+  const [exportAction, setExportAction] = uS(null);         // "print" | "pdf" — จำไว้ว่าจะทำอะไรหลังดึงเลข
 
   uE(() => {
     if (printReq <= 0) return;
@@ -320,14 +398,24 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
   // ได้เลขเดิม (backend idempotent) แต่ถ้าออกเลขไม่สำเร็จ (เน็ตหลุด/GAS ตอบ HTML) ห้ามพิมพ์เอกสารที่ไม่มี
   // เลขที่เอกสาร — โชว์ toast แดงแล้วหยุด ให้ผู้ใช้กดลองใหม่เอง
   async function confirmInvoicePrint(extra) {
-    setInvoiceExtra(extra);
+    const action = (extra && extra._action) || "print";
+    const cleanExtra = Object.assign({}, extra);
+    delete cleanExtra._action;
+    setInvoiceExtra(cleanExtra);
     setInvoiceModal(false);
+    setExportAction(action);
     setInvoiceNumberBusy(true);
     const r = await syncGetInvoiceNumber(result.quotationNumber);
     setInvoiceNumberBusy(false);
     if (!r || !r.ok) { showToast("error", "ออกเลขที่ใบแจ้งหนี้ไม่สำเร็จ: " + ((r && r.error) || ""), "❌"); return; }
     setInvoiceNumber(r.invoiceNumber);
-    doPrint("invoice");
+    if (action === "pdf") {
+      // ส่งออก PDF แล้ว
+      await exportDocumentAsPdf("invoice", r.invoiceNumber, INVOICE_KIND_LABEL[cleanExtra.kind] || "ใบแจ้งหนี้", cleanExtra.docDate, showToast);
+    } else {
+      // พิมพ์ปกติ
+      doPrint("invoice");
+    }
   }
 
   const md = Math.max(0, parseFloat(manualDiscount) || 0);

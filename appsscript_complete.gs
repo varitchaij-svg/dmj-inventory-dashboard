@@ -652,13 +652,13 @@ var COMMON_ACTIONS_ = ["order", "updateOrderState", "transferStock", "transferSt
 var ROLE_ACTIONS_ = {
   saler:      ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
                "getContactDetail", "createQuotation", "editQuotation", "saveQuotationDraft", "deleteQuotationDraft",
-               "voidQuotation", "approveQuotation", "setQuoteSale", "getInvoiceNumber",
+               "voidQuotation", "approveQuotation", "setQuoteSale", "getInvoiceNumber", "trackPdfExport",
                ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   // storedevice = บัญชี LINE กลางประจำเครื่อง/แท็บเล็ตร้าน — สิทธิ์ API เท่า saler ทุกอย่าง
   // + attendanceToday (ดู "ใครเข้างานวันนี้" — เหตุผลที่มี role นี้อยู่เลย ต้องเปิดให้)
   storedevice: ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
                "getContactDetail", "createQuotation", "editQuotation", "saveQuotationDraft", "deleteQuotationDraft",
-               "voidQuotation", "approveQuotation", "setQuoteSale", "getInvoiceNumber", "attendanceToday",
+               "voidQuotation", "approveQuotation", "setQuoteSale", "getInvoiceNumber", "trackPdfExport", "attendanceToday",
                ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   frontstore: ["recordUnscannedSale"].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   warehouse:  ["deductStock", "confirmStockCount", "deleteLockEntry", "addNewProduct",
@@ -741,7 +741,7 @@ var POST_FLAG_ACTIONS_ = [
   "fetchProductImage", "getContactDetail", "getInvoiceNumber", "issueFullTaxInvoice", "lookupSaleBill",
   "recordUnscannedSale", "resetNegativeStock", "saveMtoJobItems", "saveQuotationDraft",
   "saveThresholds", "searchContact", "setQuoteSale", "syncZortNow", "syncZortPurchasesNow",
-  "syncZortSalesNow", "transferStock", "transferStockBatch", "updateFrontStore",
+  "syncZortSalesNow", "trackPdfExport", "transferStock", "transferStockBatch", "updateFrontStore",
   "updateLockData", "updateOrderState", "voidQuotation", "zeroStock",
 ];
 
@@ -1829,6 +1829,13 @@ function doPost(e) {
     // ─── ออกเลขที่ใบแจ้งหนี้ของเราเอง (ผูกกับเลขที่ใบเสนอราคาต้นทาง — ในชีตเรา ไม่แตะ ZORT) ───
     if (data.getInvoiceNumber) {
       return nextInvoiceNumber_(data.quotationNumber, actor);
+    }
+
+    // ─── Track PDF Export: บันทึกว่าเอกสารใดถูกส่งออก PDF ตรวจสอบการส่งออกซ้ำได้ ───
+    if (data.trackPdfExport) {
+      // สำหรับติดตามที่เคยส่งออก PDF (ไม่ต้องตอบค่าอะไร) — การใช้งานจริงคือการรักษาประวัติเพื่อ
+      // ใช้ในการค้นหา/สรุปรายงาน อนาคต ยังไม่มีชีตสำหรับเก็บนี้
+      return { ok: true };
     }
 
     // ─── Record Unscanned Sale: นับสต็อกแล้วของหาย = ขายออก (บวก soldQty ไม่แตะเงิน) ───
