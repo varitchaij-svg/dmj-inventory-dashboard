@@ -1,36 +1,43 @@
 // Main App — routing + data load
 const { useState: usS, useEffect: usE, useCallback: usC } = React;
 
+// `desc` = คำอธิบาย 1 บรรทัดที่โชว์บนการ์ดใน "หน้าหลัก" (HomeMenuView) เท่านั้น
+// ผู้ใช้หลักคือพนักงานที่ไม่ได้เปิดทุกเมนูทุกวัน — ชื่อเมนูอย่างเดียวเดาไม่ออกว่าข้างในทำอะไรได้
+// ⚠️ เพิ่มแท็บใหม่ต้องใส่ `desc` ด้วยเสมอ (มีเทสต์บังคับ) ไม่งั้นการ์ดนั้นจะว่างครึ่งใบ
 const TABS = [
-  { id: "overview",      label: "📊 ภาพรวม",               icon: I.dashboard },
-  { id: "whhome",        label: "🏭 งานคลัง",              icon: I.dashboard },
-  { id: "categories",    label: "🛍️ สินค้า & สั่ง",         icon: I.layers },
-  { id: "trends",        label: "📈 เทรนด์",               icon: I.flame },
-  { id: "stock",         label: "⚠️ สต๊อก & แจ้งเตือน",    icon: I.alert },
-  { id: "storage",       label: "🗺️ ตำแหน่งคลัง",           icon: I.warehouse },
-  { id: "stockcount",    label: "📊 นับ stock คลัง",         icon: I.alert },
-  { id: "newproduct",    label: "➕ เพิ่มสินค้าใหม่",         icon: I.plus },
-  { id: "frontstore",    label: "🏪 เช็คหน้าร้าน",           icon: I.store },
-  { id: "transfers",     label: "🔄 โอน/ปรับ/ยกมา",        icon: I.arrowR },
-  { id: "orders",        label: "📋 รายการสั่งของ",         icon: I.cart },
-  { id: "tracking",      label: "📡 ติดตามสถานะ",           icon: I.arrowR },
-  { id: "ordersummary",  label: "📦 สรุปสินค้าออกจากคลัง",  icon: I.store },
-  { id: "mtojobs",       label: "🎁 งานจัดพิเศษ",            icon: I.package },
-  { id: "upload",        label: "⬆️ อัปโหลด Zort",          icon: I.upload },
-  { id: "connect",       label: "🔗 Google Sheet",          icon: I.sheets },
-  { id: "labels",        label: "🖨️ พิมพ์ Label",            icon: I.print },
-  { id: "auditlog",      label: "📋 Audit Log",             icon: I.layers },
-  { id: "staff",         label: "👥 พนักงาน",               icon: I.layers },
-  { id: "staffperf",     label: "🏅 ผลงานพนักงาน",           icon: I.flame },
-  { id: "attendance",    label: "⏱️ ลงเวลา",                icon: I.layers },
-  { id: "atttoday",      label: "🕐 ใครเข้างานวันนี้",       icon: I.layers },
-  { id: "deadstock",     label: "📦 สินค้าจม",              icon: I.alert },
-  { id: "quotefollowup", label: "📄 ใบเสนอราคา",             icon: I.cart },
-  { id: "pos",           label: "🧾 ขาย/ออกบิล",             icon: I.cart },
-  { id: "customers",     label: "👥 ลูกค้า & ยอดซื้อ",        icon: I.store },
-  { id: "margin",        label: "💰 กำไรขั้นต้น",             icon: I.flame },
-  { id: "season",        label: "🌸 ช่วงขายดี",              icon: I.flame },
+  { id: "overview",      label: "📊 ภาพรวม",               icon: I.dashboard, desc: "ยอดขาย/มูลค่าสต๊อกทั้งร้าน · กราฟเทียบเดือน-ปี" },
+  { id: "whhome",        label: "🏭 งานคลัง",              icon: I.dashboard, desc: "งานคลังวันนี้ · ของต้องจัด/จัดเก็บ/รอรับ" },
+  { id: "categories",    label: "🛍️ สินค้า & สั่ง",         icon: I.layers,    desc: "ดูสินค้าตามหมวด · กดสั่งของเข้าหน้าร้าน" },
+  { id: "trends",        label: "📈 เทรนด์",               icon: I.flame,     desc: "สินค้ากำลังมาแรง / ยอดตกช่วงล่าสุด" },
+  { id: "stock",         label: "⚠️ สต๊อก & แจ้งเตือน",    icon: I.alert,     desc: "ของใกล้หมด · ควรสั่งเพิ่มกี่ชิ้น" },
+  { id: "storage",       label: "🗺️ ตำแหน่งคลัง",           icon: I.warehouse, desc: "แผนผังชั้น/ล็อค · ของตัวนี้อยู่ตรงไหน" },
+  { id: "stockcount",    label: "📊 นับ stock คลัง",         icon: I.alert,     desc: "นับของจริงในคลังทีละล็อค · คิวควรนับก่อน" },
+  { id: "newproduct",    label: "➕ เพิ่มสินค้าใหม่",         icon: I.plus,      desc: "สร้างรหัสสินค้าใหม่เข้าระบบ + ZORT" },
+  { id: "frontstore",    label: "🏪 เช็คหน้าร้าน",           icon: I.store,     desc: "นับของหน้าร้าน · คิวควรเช็คก่อน" },
+  { id: "transfers",     label: "🔄 โอน/ปรับ/ยกมา",        icon: I.arrowR,    desc: "โอนของคลัง ↔ หน้าร้าน · ปรับยอดคงเหลือ" },
+  { id: "orders",        label: "📋 รายการสั่งของ",         icon: I.cart,      desc: "ใบสั่งที่ต้องจัด · กรอกจำนวนที่จัดได้" },
+  { id: "tracking",      label: "📡 ติดตามสถานะ",           icon: I.arrowR,    desc: "ของส่งไปถึงไหน · ใบไหนยังไม่มีคนรับ" },
+  { id: "ordersummary",  label: "📦 สรุปสินค้าออกจากคลัง",  icon: I.store,     desc: "ของจัดเสร็จแล้ว รอกดส่งออกจากคลัง" },
+  { id: "mtojobs",       label: "🎁 งานจัดพิเศษ",            icon: I.package,   desc: "งานจัดช่อ/กระเช้าตามที่ลูกค้าสั่ง" },
+  { id: "upload",        label: "⬆️ อัปโหลด Zort",          icon: I.upload,    desc: "อัปโหลดไฟล์จาก ZORT เข้าระบบเอง" },
+  { id: "connect",       label: "🔗 Google Sheet",          icon: I.sheets,    desc: "สถานะการเชื่อมต่อข้อมูล · สั่ง sync เอง" },
+  { id: "labels",        label: "🖨️ พิมพ์ Label",            icon: I.print,     desc: "พิมพ์ป้ายชื่อ/บาร์โค้ดสินค้า" },
+  { id: "auditlog",      label: "📋 Audit Log",             icon: I.layers,    desc: "ประวัติว่าใครแก้อะไร เมื่อไหร่" },
+  { id: "staff",         label: "👥 พนักงาน",               icon: I.layers,    desc: "รายชื่อพนักงาน · ตั้งตำแหน่ง/สิทธิ์" },
+  { id: "staffperf",     label: "🏅 ผลงานพนักงาน",           icon: I.flame,     desc: "สรุปงานที่แต่ละคนทำในเดือนนี้" },
+  { id: "attendance",    label: "⏱️ ลงเวลา",                icon: I.layers,    desc: "กดเข้า-ออกงาน/พัก · ดูเวลาของฉัน" },
+  { id: "atttoday",      label: "🕐 ใครเข้างานวันนี้",       icon: I.layers,    desc: "ใครเข้างาน/พัก/ออกแล้ว ตอนนี้" },
+  { id: "deadstock",     label: "📦 สินค้าจม",              icon: I.alert,     desc: "ของค้างคลังไม่ขยับ · เงินจมอยู่เท่าไหร่" },
+  { id: "quotefollowup", label: "📄 ใบเสนอราคา",             icon: I.cart,      desc: "สร้าง/ตามใบเสนอราคาของลูกค้า" },
+  { id: "pos",           label: "🧾 ขาย/ออกบิล",             icon: I.cart,      desc: "ขายหน้าร้าน ออกบิล/ใบกำกับภาษี" },
+  { id: "customers",     label: "👥 ลูกค้า & ยอดซื้อ",        icon: I.store,     desc: "ลูกค้าแต่ละเจ้าซื้อเท่าไหร่ · ใหม่/เก่า" },
+  { id: "margin",        label: "💰 กำไรขั้นต้น",             icon: I.flame,     desc: "กำไรรายสินค้าจากราคาป้าย" },
+  { id: "season",        label: "🌸 ช่วงขายดี",              icon: I.flame,     desc: "ช่วงไหนของปีที่ของแต่ละแบบขายดี" },
 ];
+// id ของ "หน้าหลัก" — ตั้งใจ **ไม่ใส่ใน ROLE_TABS** เพราะไม่ใช่แท็บบนแถบเมนู แต่เป็นหน้ารวมเมนู
+// ที่เข้าได้จากการแตะโลโก้เท่านั้น · ใส่ใน ROLE_TABS เมื่อไหร่ = โผล่เป็นปุ่มเกินบนแถบทุก role
+// และของ owner จะตกไปกอง "อื่นๆ" (มีเทสต์กันไว้)
+const HOME_TAB = "home";
 
 // Role config
 const ROLE_TABS = {
@@ -73,6 +80,98 @@ const OWNER_GROUPS = [
   { id: "g_people",   gi: "👥", name: "พนักงาน",       tabs: ["attendance", "atttoday", "staff", "staffperf"] },
   { id: "g_tools",    gi: "⚙️", name: "เครื่องมือ",     tabs: ["upload", "connect", "auditlog"] },
 ];
+// จัดกลุ่มแท็บของ role หนึ่ง ๆ ตาม OWNER_GROUPS — **ใช้ร่วมกัน 2 ที่**: nav 2 ชั้นของ owner/dev
+// และ "หน้าหลัก" (HomeMenuView) ของทุก role · ต้องเป็นตัวเดียวกันเสมอ ห้ามแยกเป็น 2 ชุด
+// (ตารางซ้ำ = drift แล้วเมนูสองที่ไม่ตรงกัน โดยไม่มี error ให้เห็น)
+// แท็บที่ไม่เข้ากลุ่มไหนเลยถูกดันเข้า "อื่นๆ" เสมอ — กันแท็บหายจากเมนูทั้งอัน
+function groupTabsFor(allowedTabIds) {
+  const allowed = new Set(allowedTabIds);
+  const groups = OWNER_GROUPS
+    .map(g => ({ ...g, items: g.tabs.filter(id => allowed.has(id)).map(id => TABS.find(t => t.id === id)).filter(Boolean) }))
+    .filter(g => g.items.length > 0);
+  const grouped = new Set(groups.flatMap(g => g.items.map(t => t.id)));
+  const leftover = allowedTabIds.filter(id => !grouped.has(id)).map(id => TABS.find(t => t.id === id)).filter(Boolean);
+  if (leftover.length) groups.push({ id: "g_other", gi: "🗂️", name: "อื่นๆ", items: leftover });
+  return groups;
+}
+
+// ป้ายใน TABS เก็บเป็น "อีโมจิ + เว้นวรรค + ชื่อ" ("📊 ภาพรวม") → แยกเพื่อวางอีโมจิใหญ่บนการ์ด
+// ⚠️ ตัดที่ "ช่องว่างแรก" เสมอ ห้ามตัดตามจำนวนตัวอักษร — อีโมจิหลายตัวมี variation selector
+//    (U+FE0F) ต่อท้าย ทำให้ความยาวไม่เท่ากัน ("⏱️" = 2 code unit, "📊" = 2 แต่ "🛍️" = 3)
+function splitTabLabel(label) {
+  const s = label || "";
+  const i = s.indexOf(" ");
+  return i > 0 ? { emoji: s.slice(0, i), name: s.slice(i + 1) } : { emoji: "📄", name: s };
+}
+
+// ── หน้าหลัก / เมนูทั้งหมด ─────────────────────────────────────────────────────
+// เข้าได้จากการแตะโลโก้มุมซ้ายบน · โชว์ทุกเมนูที่ "ตำแหน่งนี้" มีสิทธิ์เปิด จัดกลุ่มเหมือน nav
+// ของเจ้าของ พร้อมคำอธิบายสั้น ๆ ให้คนที่ไม่ได้เปิดเมนูนั้นทุกวันรู้ว่าข้างในทำอะไรได้
+//
+// ⚠️ **ห้ามรับ prop ชื่อ `data`** — หน้านี้อยู่ในรายชื่อแท็บที่เรนเดอร์ได้ทั้งที่ข้อมูลก้อนใหญ่
+//    ยังโหลดไม่เสร็จ (NO_DATA_TABS) เพื่อให้กดเข้า "ลงเวลา" ได้ทันทีเหมือน Phase 7.7
+//    รับ `data` เมื่อไหร่ = อ่าน property ของ null → จอขาวโดยไม่มี error ให้ผู้ใช้เห็น
+//    (ตัวเลขงานค้างรับมาเป็น "ตัวเลขสำเร็จรูป" จาก App ซึ่งกัน null ไว้แล้ว)
+function HomeMenuView({ groups, roleLabel, staffName, tabBadge, onNav }) {
+  const allIds = new Set(groups.flatMap(g => g.items.map(t => t.id)));
+  // ชิปงานค้างด้านบน — โชว์เฉพาะเมนูที่ role นี้เปิดได้จริง (กดแล้วต้องไปถึงเสมอ)
+  const quick = [
+    { id: "orders",    emoji: "📋", label: "ออเดอร์ต้องจัด" },
+    { id: "transfers", emoji: "🚚", label: "ของรอรับ" },
+  ].filter(q => allIds.has(q.id) && tabBadge(q.id) > 0);
+
+  return (
+    <div>
+      <div className="page-head">
+        <div>
+          <h1 className="page-title">🏠 หน้าหลัก</h1>
+          <div className="page-sub">
+            เมนูทั้งหมดของ {roleLabel}{staffName ? ` · ${staffName}` : ""} — แตะการ์ดเพื่อเข้าใช้งาน
+          </div>
+        </div>
+      </div>
+
+      {quick.length > 0 && (
+        <div className="home-quick">
+          {quick.map(q => (
+            <button key={q.id} className="home-quick-chip" onClick={() => onNav(q.id)}>
+              <span style={{fontSize:18,lineHeight:1}}>{q.emoji}</span>
+              <span>{q.label}</span>
+              <span className="home-quick-n">{tabBadge(q.id)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {groups.map(g => (
+        <section key={g.id} className="home-grp">
+          <div className="home-grp-head">
+            <span style={{fontSize:18,lineHeight:1}}>{g.gi}</span>
+            <span>{g.name}</span>
+            <span className="home-grp-n">{g.items.length} เมนู</span>
+          </div>
+          <div className="home-grid">
+            {g.items.map(t => {
+              const { emoji, name } = splitTabLabel(t.label);
+              const badge = tabBadge(t.id);
+              return (
+                <button key={t.id} className="home-card" onClick={() => onNav(t.id)}>
+                  <span className="home-card-emoji">{emoji}</span>
+                  <span className="home-card-body">
+                    <span className="home-card-name">{name}</span>
+                    <span className="home-card-desc">{t.desc || ""}</span>
+                  </span>
+                  {badge > 0 && <span className="home-card-badge">{badge}</span>}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 const ROLE_LABELS = {
   owner:      "👑 เจ้าของ",
   employee:   "👤 พนักงาน",
@@ -1704,7 +1803,9 @@ function App() {
   const allowedTabIds = ROLE_TABS[role] || ROLE_TABS.employee;
   // เรียงตามลำดับใน ROLE_TABS (ไม่ใช่ลำดับใน TABS) → จัดลำดับความสำคัญต่อ role ได้ (owner เรียงตามที่ใช้บ่อย)
   const visibleTabs = allowedTabIds.map(id => TABS.find(t => t.id === id)).filter(Boolean);
-  const activeTab = allowedTabIds.includes(tab) ? tab : (allowedTabIds[0] || "categories");
+  // "home" ไม่ได้อยู่ใน ROLE_TABS โดยเจตนา (ดูหมายเหตุที่ HOME_TAB) — ปล่อยผ่านที่นี่ที่เดียว
+  // ทุก role เข้าหน้าหลักได้เท่ากัน เพราะหน้านี้โชว์แค่เมนูที่ role นั้นมีสิทธิ์อยู่แล้ว
+  const activeTab = (tab === HOME_TAB || allowedTabIds.includes(tab)) ? tab : (allowedTabIds[0] || "categories");
 
   // แบ่งเมนูเป็น primary (บนแถบ) / secondary (ใน "เพิ่มเติม")
   // owner: 5 ตัวแรก + "เพิ่มเติม" สำหรับที่เหลือ (แท็บเยอะ 17 แท็บ)
@@ -1734,8 +1835,11 @@ function App() {
   //    ปกติ ตำแหน่งของ <AttendanceView> ในต้นไม้จะเปลี่ยน → React unmount แล้ว mount ใหม่
   //    = state ข้างในหายกลางคัน (คนที่กำลังถ่ายรูป/รอ GPS อยู่ต้องเริ่มใหม่โดยไม่รู้สาเหตุ)
   //    การใช้ shell เดียวกันทำให้ตำแหน่งคงที่ ข้อมูลมาถึงแล้วหน้าที่เปิดอยู่ไม่สะดุด
-  const ATT_FAST_TABS = ["attendance", "atttoday"];
-  const attFastPath = !data && ATT_FAST_TABS.includes(activeTab);
+  // "home" อยู่ในรายชื่อนี้ด้วยเพราะ HomeMenuView ไม่แตะ `data` เลย (รับแค่รายการเมนู + ตัวเลข
+  // สำเร็จรูปที่กัน null แล้ว) — และเป็นทางเข้าหลักของแท็บลงเวลา ถ้าหน้าหลักติดจอโหลดไปด้วย
+  // ทางด่วนลงเวลาก็เสียความหมายไปครึ่งหนึ่ง (กดโลโก้แล้วเจอสปินเนอร์ กดต่อไปไหนไม่ได้)
+  const NO_DATA_TABS = ["attendance", "atttoday", HOME_TAB];
+  const attFastPath = !data && NO_DATA_TABS.includes(activeTab);
 
   // จอ "ยังไม่มีข้อมูลก้อนใหญ่" — เดิมเป็น early return ทั้งหน้า **แถบเมนูจึงหายไปด้วย**
   // พอมีทางด่วนลงเวลาแล้ว อันนั้นกลายเป็นกับดัก: ลงเวลาเสร็จ กดแท็บอื่นดูสักที
@@ -1783,22 +1887,23 @@ function App() {
   const pendingOrders = ((data && data.orders) || []).filter(o => o.status === "รอ").length;    // ออเดอร์ค้าง (status "รอ")
   const pendingRecv   = ((data && data.shipments) || []).filter(s => !s.receivedAt).length;      // ของโอนแล้วรอรับ
 
+  // เลขเตือนระดับ "เมนู" — ใช้ทั้งเมนูย่อยของ owner และการ์ดในหน้าหลักของทุก role
+  // (ตัวเดียวกันเสมอ ไม่งั้นเลขบนสองที่ไม่ตรงกันแล้วไม่มีใครรู้ว่าอันไหนถูก)
+  const tabBadge = id => id === "orders" ? pendingOrders : id === "transfers" ? pendingRecv : 0;
+
+  // เมนูของ role นี้ จัดกลุ่มแล้ว (ใช้ตัวเดียวกับหน้าหลัก — ดู groupTabsFor)
+  const navGroups = groupTabsFor(allowedTabIds);
+
   // จัดกลุ่ม owner: map tab id → {label, icon} จริง + ดัน tab ที่ไม่เข้ากลุ่มไหนเข้า "อื่นๆ"
   const ownerNav = (() => {
     if (!isAdminRole(role)) return null;
-    const allowed = new Set(allowedTabIds);
-    const groups = OWNER_GROUPS
-      .map(g => ({ ...g, items: g.tabs.filter(id => allowed.has(id)).map(id => TABS.find(t => t.id === id)).filter(Boolean) }))
-      .filter(g => g.items.length > 0);
-    const grouped = new Set(groups.flatMap(g => g.items.map(t => t.id)));
-    const leftover = allowedTabIds.filter(id => !grouped.has(id)).map(id => TABS.find(t => t.id === id)).filter(Boolean);
-    if (leftover.length) groups.push({ id: "g_other", gi: "🗂️", name: "อื่นๆ", items: leftover });
+    const groups = navGroups;
     // หมวดที่กำลังแสดง: ที่ "แตะดู" ไว้ ▸ ไม่งั้นหมวดที่มี tab ปัจจุบัน ▸ ไม่งั้นหมวดแรก
     const groupOfTab = groups.find(g => g.items.some(t => t.id === activeTab));
     const displayId  = (ownerGroup && groups.some(g => g.id === ownerGroup)) ? ownerGroup
                      : (groupOfTab ? groupOfTab.id : groups[0].id);
     const badgeFor = id => id === "g_sales" ? pendingOrders : id === "g_stock" ? pendingRecv : 0;
-    const subBadgeFor = id => id === "orders" ? pendingOrders : id === "transfers" ? pendingRecv : 0;
+    const subBadgeFor = tabBadge;
     return { groups, displayId, badgeFor, subBadgeFor };
   })();
 
@@ -1828,7 +1933,13 @@ function App() {
       {/* ─── Top Nav ─── */}
       <nav className="topnav">
         <div className="topnav-inner">
-          <div className="brand">
+          {/* โลโก้ = ปุ่มกลับ "หน้าหลัก" (เมนูทั้งหมดของตำแหน่งนี้) — ต้องเป็น <button> จริง
+              ไม่ใช่ div ที่มี onClick เพื่อให้กดด้วยคีย์บอร์ด/โปรแกรมอ่านหน้าจอได้ตามปกติ
+              บรรทัดใต้ชื่อเขียนบอกตรง ๆ ว่า "แตะเพื่อดูเมนูทั้งหมด" — ไม่งั้นไม่มีอะไรบอกว่ากดได้ */}
+          <button className={`brand${activeTab === HOME_TAB ? " active" : ""}`}
+                  aria-label="หน้าหลัก — เมนูทั้งหมด"
+                  aria-current={activeTab === HOME_TAB ? "page" : undefined}
+                  onClick={() => { setMoreOpen(false); handleSetTab(HOME_TAB); }}>
             {navLogoOk ? (
               <img src="logo.png" alt="Doomuenjing"
                    style={{height:38, width:"auto", objectFit:"contain"}}
@@ -1838,9 +1949,9 @@ function App() {
             )}
             <div className="brand-text">
               <div className="brand-name">Doomuenjing</div>
-              <div className="brand-sub">Inventory & Sales Dashboard</div>
+              <div className="brand-sub">🏠 แตะเพื่อดูเมนูทั้งหมด</div>
             </div>
-          </div>
+          </button>
 
           <div className={isAdminRole(role) ? "owner-nav" : "navtabs"} role="tablist">
             {isAdminRole(role) && ownerNav ? (() => {
@@ -2131,7 +2242,7 @@ function App() {
           borderBottom:"1px solid #a5d6a7",
         }}>
           <span className="spin" style={{width:12,height:12,borderWidth:2,flexShrink:0}}></span>
-          <span>ลงเวลาได้เลย — ข้อมูลสินค้ากำลังโหลดอยู่เบื้องหลัง</span>
+          <span>{activeTab === HOME_TAB ? "เลือกเมนูได้เลย" : "ลงเวลาได้เลย"} — ข้อมูลสินค้ากำลังโหลดอยู่เบื้องหลัง</span>
         </div>
       )}
       {attFastPath && error && (
@@ -2140,7 +2251,7 @@ function App() {
           fontSize:12, display:"flex", alignItems:"center", justifyContent:"space-between",
           gap:8, borderBottom:"1px solid #ffc107",
         }}>
-          <span>⚠️ โหลดข้อมูลสินค้าไม่สำเร็จ — แต่ลงเวลาได้ตามปกติ</span>
+          <span>⚠️ โหลดข้อมูลสินค้าไม่สำเร็จ — แต่{activeTab === HOME_TAB ? "เมนูลงเวลายัง" : "ลงเวลา"}ใช้ได้ตามปกติ</span>
           <button className="btn ghost" style={{fontSize:12,padding:"2px 8px"}}
                   onClick={()=>fetchFromSheet(3,true)}>ลองใหม่</button>
         </div>
@@ -2163,9 +2274,15 @@ function App() {
       {/* ─── Main ─── */}
       <main className="main" data-screen-label={activeTab}>
         {/* ⚠️ ด่านเดียวที่กัน view ที่ต้องใช้ `data` ไม่ให้เจอ null — ทุก view ข้างล่างนี้
-            (ยกเว้น 2 แท็บลงเวลา) อ่าน data.products/data.orders ตรง ๆ เจอ null = จอขาว
-            เงื่อนไขต้องตรงกับ ATT_FAST_TABS ข้างบนเป๊ะ ๆ */}
-        {!data && !ATT_FAST_TABS.includes(activeTab) ? dataPane : (<>
+            (ยกเว้น 2 แท็บลงเวลา + หน้าหลัก) อ่าน data.products/data.orders ตรง ๆ เจอ null = จอขาว
+            เงื่อนไขต้องตรงกับ NO_DATA_TABS ข้างบนเป๊ะ ๆ */}
+        {!data && !NO_DATA_TABS.includes(activeTab) ? dataPane : (<>
+        {activeTab === HOME_TAB       && <ErrorBoundary key="home"><HomeMenuView
+                                            groups={navGroups}
+                                            roleLabel={ROLE_LABELS[role] || role}
+                                            staffName={staff ? staff.name : ""}
+                                            tabBadge={tabBadge}
+                                            onNav={handleSetTab}/></ErrorBoundary>}
         {activeTab === "overview"     && <ErrorBoundary key="overview"><OverviewView data={data} range={range} setRange={setRange} role={viewRole}/></ErrorBoundary>}
         {activeTab === "whhome"       && <ErrorBoundary key="whhome"><WarehouseHomeView data={data} onNav={handleSetTab}/></ErrorBoundary>}
         {activeTab === "categories"   && <ErrorBoundary key="categories"><CategoryView data={data} role={viewRole} onNav={handleSetTab}/></ErrorBoundary>}

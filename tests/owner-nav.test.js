@@ -146,16 +146,25 @@ describe('badge บนหมวด ต้องผูกกับหมวดท
 });
 
 describe('การเรนเดอร์หมวด — กันหมวดว่าง/ปุ่มกดแล้วไม่มีอะไร', () => {
-  const navFn = APP.match(/const ownerNav = \(\(\) => \{[\s\S]*?\n  \}\)\(\);/)[0];
+  // ตัวจัดกลุ่มถูกแยกออกมาเป็น groupTabsFor เพราะ "หน้าหลัก" (HomeMenuView) ใช้ตัวเดียวกัน
+  // → เช็คที่ฟังก์ชันนั้น ไม่ใช่ในบล็อก ownerNav (ซึ่งตอนนี้แค่เรียกใช้)
+  const groupFn = APP.match(/function groupTabsFor\(allowedTabIds\) \{[\s\S]*?\n\}/)[0];
 
   it('หมวดที่ไม่มี tab ที่ role นั้นเข้าถึงได้ ต้องถูกตัดทิ้ง', () => {
     // g_insight เหลือแค่ margin ซึ่ง owner ไม่มีสิทธิ์ → ต้องหายไปเองสำหรับ owner (แต่ dev ยังเห็น)
-    expect(navFn).toMatch(/\.filter\(g => g\.items\.length > 0\)/);
+    expect(groupFn).toMatch(/\.filter\(g => g\.items\.length > 0\)/);
   });
 
   it('tab ที่ไม่มีหมวด ยังถูกดันเข้า "อื่นๆ" (กัน tab หายจากเมนูทั้งอัน)', () => {
-    expect(navFn).toMatch(/leftover/);
-    expect(navFn).toMatch(/g_other/);
+    expect(groupFn).toMatch(/leftover/);
+    expect(groupFn).toMatch(/g_other/);
+  });
+
+  it('nav ของ owner ใช้ตัวจัดกลุ่มตัวเดียวกับหน้าหลัก (ห้ามจัดกลุ่มเองซ้ำ)', () => {
+    // แยกเมื่อไหร่ = เมนูบนแถบกับเมนูในหน้าหลักคนละชุด โดยไม่มี error ให้เห็น
+    expect(APP).toMatch(/const navGroups = groupTabsFor\(allowedTabIds\)/);
+    const navFn = APP.match(/const ownerNav = \(\(\) => \{[\s\S]*?\n  \}\)\(\);/)[0];
+    expect(navFn).toMatch(/const groups = navGroups;/);
   });
 
   it('หมวดที่มีเมนูเดียว กดแล้วเข้าเลย ไม่ต้องกด 2 ชั้น', () => {

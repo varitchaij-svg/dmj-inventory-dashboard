@@ -432,6 +432,69 @@ function startServer() {
     await page.close();
   }
 
+  // ── (จ) หน้าหลัก: แตะโลโก้ → เมนูทั้งหมดของตำแหน่งนั้น → กดการ์ดแล้วเข้าเมนูจริง ──
+  // "home" ไม่อยู่ใน ROLE_TABS โดยเจตนา (เข้าจากโลโก้ทางเดียว) → ลูปหลักข้างบนไม่แตะเส้นนี้เลย
+  // นับจำนวนการ์ดเทียบกับ ROLE_TABS ตรง ๆ เพราะ "เมนูหายไป 1 อัน" คือความพังที่หน้าจอยัง
+  // ดูปกติทุกประการ — พนักงานแค่หาเมนูนั้นไม่เจอแล้วเลิกใช้ ไม่มีใครรายงานว่าเป็นบั๊ก
+  for (const hmRole of ['owner', 'warehouse', 'frontstore']) {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=${hmRole}&tab=stock`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      await page.locator('.brand').first().click({ timeout: 2000 });
+      await page.waitForTimeout(400);
+      if (!(await page.locator('main[data-screen-label="home"]').count())) {
+        status = 'HOME_FAIL'; note = 'กดโลโก้แล้วไม่เข้าหน้าหลัก';
+      } else {
+        const cards = await page.locator('.home-card').count();
+        const expected = ROLE_TABS[hmRole].length;
+        if (cards !== expected) {
+          status = 'MENU_COUNT'; note = `การ์ด ${cards} ใบ (คาด ${expected} ตาม ROLE_TABS)`;
+        } else {
+          await page.locator('.home-card', { hasText: TAB_LABEL.orders }).first().click({ timeout: 2000 });
+          await page.waitForTimeout(500);
+          if (!(await page.locator('main[data-screen-label="orders"]').count())) {
+            status = 'CARD_NAV_FAIL'; note = 'กดการ์ดแล้วไม่เข้าเมนูปลายทาง';
+          } else note = `เมนูครบ ${cards} ใบ + กดการ์ดเข้าเมนูได้`;
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, `home__${hmRole}.png`) }).catch(() => {});
+    results.push({ role: 'interact', tab: `หน้าหลัก (${hmRole})`, status, note });
+    await page.close();
+  }
+
+  // หน้าหลักต้องเปิดได้ทั้งที่ข้อมูลก้อนใหญ่ยังไม่มา — ถ้าติดจอโหลด ทางด่วนลงเวลาก็เสียครึ่งหนึ่ง
+  // (กดโลโก้ตอนเปิดแอปใหม่แล้วเจอสปินเนอร์ = ไปไหนต่อไม่ได้เลย)
+  {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=warehouse&tab=attendance&nodata=1`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      await page.waitForTimeout(800);
+      await page.locator('.brand').first().click({ timeout: 2000 });
+      await page.waitForTimeout(500);
+      const txt = await page.locator('body').innerText();
+      const onHome = await page.locator('main[data-screen-label="home"]').count();
+      const cards  = await page.locator('.home-card').count();
+      if (!onHome)                                     { status = 'HOME_FAIL'; note = 'กดโลโก้แล้วไม่เข้าหน้าหลัก'; }
+      else if (/กำลังโหลดข้อมูล Dashboard/.test(txt))  { status = 'BLOCKED';   note = 'หน้าหลักติดจอโหลด'; }
+      else if (!cards)                                 { status = 'NO_CARDS';  note = 'เข้าหน้าหลักได้แต่ไม่มีการ์ดเมนู'; }
+      else {
+        await page.locator('.home-card', { hasText: TAB_LABEL.attendance }).first().click({ timeout: 2000 });
+        await page.waitForTimeout(500);
+        if (!(await page.locator('main[data-screen-label="attendance"]').count())) {
+          status = 'CARD_NAV_FAIL'; note = 'กดการ์ด "ลงเวลา" แล้วไม่กลับไปหน้าลงเวลา';
+        } else note = `เข้าหน้าหลักได้ทั้งที่ยังไม่มีข้อมูล (${cards} เมนู) + กดเข้าลงเวลาได้`;
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'home__nodata.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'หน้าหลัก (ยังไม่มีข้อมูล)', status, note });
+    await page.close();
+  }
+
   await browser.close();
   srv.close();
 
