@@ -228,7 +228,23 @@ function dmjFetch(url, opts) {
       }
     }
   } catch (e) { /* body ไม่ใช่ JSON (เช่น FormData) → ปล่อยผ่านตามเดิม */ }
-  return fetch(url, opts);
+
+  // ── เพดานเวลา (บังคับทุกจุด) ──────────────────────────────────────────────
+  // `fetch` **ไม่มี timeout ในตัว** — คำขอที่ไปถึง Google แล้วแต่ไม่มีคำตอบกลับมา
+  // (ลิงก์ดาวน์โหลดตาย / เน็ตร้านหลุดกลางคัน / GAS ค้าง) จะ **ค้าง pending ข้ามนาที**
+  // เจอจริง 5 ส.ค. 2026: DevTools เห็นคำขอค้างอยู่หลังเปิดหน้าไป 7.7 นาที
+  // ผลกับผู้ใช้คือปุ่มหมุนไม่จบ ไม่ขึ้นทั้งสำเร็จและล้มเหลว = พนักงานไม่รู้ว่าต้องทำอะไรต่อ
+  // ซึ่งแย่กว่าขึ้น error เพราะยังกดซ้ำไม่ได้ด้วย
+  // ⚠️ "ตัดเวลา" ไม่ได้แปลว่า "ไม่สำเร็จ" — GAS เขียนชีตเสร็จแล้วยังตอบไม่ทันได้ (บทเรียนข้อ 13)
+  //    ตัวเรียกที่เขียนข้อมูลต้องเช็คของจริงก่อนขึ้นแดงเสมอ เหมือนที่ทำกับ `action=order` (cid)
+  // ตั้งค่าเองได้ด้วย opts.dmjTimeoutMs · ตัวเรียกที่ส่ง signal มาเองถือว่าคุมเวลาเองแล้ว
+  if (opts && opts.signal) return fetch(url, opts);
+  if (typeof AbortController === "undefined") return fetch(url, opts);
+  const ms = (opts && opts.dmjTimeoutMs) || 60000;
+  const ctl = new AbortController();
+  const to = setTimeout(() => { try { ctl.abort(); } catch (e) {} }, ms);
+  return fetch(url, Object.assign({}, opts, { signal: ctl.signal }))
+    .finally(() => clearTimeout(to));
 }
 
 // ────────────── dmjJson / dmjErrText — อ่านคำตอบจาก GAS ให้ปลอดภัย ──────────────
@@ -325,6 +341,78 @@ function notiPing() {
 
 const NOTI_POLL_MS = 25000;
 
+// ── "พาไปที่ของชิ้นนั้นเลย" หลังกดแจ้งเตือน ───────────────────────────────────
+// กดแจ้งเตือน "ออเดอร์ใหม่" แล้วได้แค่หน้ารายการที่มีอยู่ 46 ใบ = ยังต้องไล่หาเองอยู่ดี
+// (หาไม่เจอแล้วเลื่อนผ่าน = ของไม่ถูกจัด ทั้งที่ระบบแจ้งไปเรียบร้อยแล้ว)
+//
+// ⚠️ เก็บเป็น "คำขอค้างไว้ใน window + CustomEvent" ไม่ใช่ prop/state ของ App เพราะ
+//    view ปลายทางส่วนใหญ่ยัง **ไม่ mount** ตอนกด (กดแจ้งเตือน = สลับแท็บ view เพิ่งเกิด
+//    หลังจากนั้น) ตัวที่เพิ่ง mount จึงต้องอ่านคำขอที่ค้างไว้เองได้ ไม่ใช่รอรับ event ที่ยิงผ่านไปแล้ว
+const DMJ_FOCUS_TTL_MS = 20000;   // เกินนี้ถือว่าเป็นคำสั่งเก่า (คนเดินไปทำอย่างอื่นแล้ว) — อย่าเด้ง
+
+// tab = แท็บปลายทางของคำขอ (กันแท็บอื่นแย่งกินคำขอที่ไม่ใช่ของตัวเอง) · sku ว่าง = ล้างคำขอค้าง
+function dmjRequestFocus(tab, sku) {
+  try {
+    const s = String(sku || "").trim();
+    // ไม่มีเป้าหมาย → ล้างของเก่าทิ้งด้วย ไม่งั้นคำขอจากแจ้งเตือนอันก่อนจะไปเด้งตอนสลับแท็บครั้งถัดไป
+    if (!s) { window._dmjFocusReq = null; return; }
+    window._dmjFocusReq = { tab: String(tab || ""), sku: s, ts: Date.now() };
+    window.dispatchEvent(new CustomEvent("dmj:focus"));
+  } catch (e) { /* เครื่องมือช่วยเหลือ — ล้มเหลวต้องไม่ลากอะไรพัง */ }
+}
+
+// view ที่รองรับการเด้ง เรียกตัวนี้: useSkuFocus("orders", sku => { ...พาไปหา... })
+function useSkuFocus(tab, onFocus) {
+  const cb = useRef(onFocus);
+  cb.current = onFocus;
+  useEffect(() => {
+    const run = () => {
+      let req = null;
+      try { req = window._dmjFocusReq; } catch (e) { return; }
+      if (!req || !req.sku) return;
+      if (req.tab && tab && req.tab !== tab) return;                     // คำขอของแท็บอื่น
+      if (Date.now() - (req.ts || 0) > DMJ_FOCUS_TTL_MS) { window._dmjFocusReq = null; return; }
+      window._dmjFocusReq = null;      // ใช้ครั้งเดียว — ไม่เคลียร์ = เด้งซ้ำทุกครั้งที่ re-render
+      try { cb.current(req.sku); } catch (e) {}
+    };
+    run();                             // เพิ่ง mount จากการสลับแท็บ = คำขอค้างอยู่ตั้งแต่ก่อน mount
+    window.addEventListener("dmj:focus", run);
+    return () => window.removeEventListener("dmj:focus", run);
+  }, [tab]);
+}
+
+// เลื่อนไปหาแถวที่ attribute ตรงกับ sku แล้วกะพริบให้เห็นว่า "อันนี้แหละ"
+// ⚠️ ไล่เทียบค่าเอง ไม่ประกอบ CSS selector จาก sku — sku มาจากชีต มีอักขระอะไรก็ได้
+//    ประกอบเป็น selector แล้ว querySelector โยน error ทั้งก้อน (เด้งไม่ได้แถมพาหน้าพัง)
+// ⚠️ ต้องลองซ้ำ ไม่ใช่ยิงครั้งเดียว — สลับแท็บมาแล้วข้อมูลอาจยังโหลดไม่เสร็จ แถวยังไม่มีในจอ
+function dmjScrollToSku(attr, sku, onResult) {
+  const want = String(sku || "").trim().toUpperCase();
+  if (!want) return;
+  let n = 0;
+  const tick = () => {
+    n++;
+    let el = null;
+    try {
+      const rows = document.querySelectorAll("[" + attr + "]");
+      for (let i = 0; i < rows.length; i++) {
+        if (String(rows[i].getAttribute(attr) || "").trim().toUpperCase() === want) { el = rows[i]; break; }
+      }
+    } catch (e) { return; }
+    if (el) {
+      try {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("dmj-focus-flash");
+        setTimeout(() => { try { el.classList.remove("dmj-focus-flash"); } catch (e) {} }, 2600);
+      } catch (e) {}
+      if (typeof onResult === "function") onResult(true);
+      return;
+    }
+    if (n < 10) { setTimeout(tick, 300); return; }        // ~3 วิ เผื่อ payload ยังมาไม่ถึง
+    if (typeof onResult === "function") onResult(false);  // หาไม่เจอ — ผู้เรียกต้องบอกผู้ใช้ ไม่ใช่เงียบ
+  };
+  setTimeout(tick, 120);
+}
+
 function NotiBell({ onNavigate }) {
   const [items, setItems] = useState([]);
   const [unread, setUnread] = useState(0);
@@ -405,7 +493,9 @@ function NotiBell({ onNavigate }) {
   const openItem = useCallback((it) => {
     if (!it.read) markRead([it.id], false);
     setOpen(false);
-    if (it.tab && typeof onNavigate === 'function') onNavigate(it.tab);
+    // ส่ง focus (SKU) ไปด้วย — แท็บอย่างเดียวยังไม่พอ ปลายทางมีเป็นสิบใบต้องไล่หาเอง
+    // แถวเก่าที่ยังไม่มีคอลัมน์นี้ → undefined → ปลายทางแค่สลับแท็บเหมือนเดิม
+    if (it.tab && typeof onNavigate === 'function') onNavigate(it.tab, it.focus);
   }, [markRead, onNavigate]);
 
   if (off) return null;
@@ -491,12 +581,88 @@ function NotiBell({ onNavigate }) {
   );
 }
 
+// ── ตารางเวลาเปิดแอปรอบล่าสุด ────────────────────────────────────────────────
+// เก็บไว้ใน localStorage เฉย ๆ ไม่พอ — เจ้าของเปิด DevTools บนมือถือไม่ได้
+// ต้องมีที่ให้ "ดูตัวเลขได้จากในแอปเอง" ไม่งั้นเครื่องมือวัดก็ไม่มีใครได้ใช้
+//
+// อ่านค่าที่ `dmjSaveTrace()` (ใน <head> ของ HTML) เขียนไว้ แล้วกางเป็นช่วง ๆ
+// ⚠️ โชว์ "ช่วงละกี่ ms" ไม่ใช่แค่เวลาสะสม — คนอ่านต้องตอบได้ทันทีว่า
+//    *ขั้นไหน* กินเวลา ซึ่งเวลาสะสมล้วน ๆ ต้องมานั่งลบเอง แล้วมักอ่านผิด
+function BootTrace() {
+  // ⚠️ ต้องเลือก "รอบนี้" ก่อน "รอบที่แล้ว" เสมอ — จุดที่ต้องใช้เครื่องมือนี้มากที่สุดคือ
+  // ตอนจอค้างอยู่ ซึ่งรอบนี้ยังไม่จบจึงยังไม่ถูกบันทึกลง localStorage เลย
+  // ถ้าอ่านแต่ของที่บันทึกไว้ จะได้เลขของ "รอบก่อนที่สำเร็จ" มาดูตอนกำลังพัง = หลงทาง
+  // ⚠️ ui.jsx ใช้ `useState`/`useEffect` ตรง ๆ — alias `uS`/`uE` ถูกประกาศใน views-main.jsx
+  // ซึ่งโหลด **หลัง** ไฟล์นี้ · เผอิญใช้ได้เพราะ const ระดับบนสุดอยู่ใน global lexical scope
+  // เดียวกันและ render เกิดหลังโหลดครบ — แต่เป็นการพึ่งลำดับโหลดโดยไม่จำเป็น
+  const [tick, setTick] = useState(0);
+  const [saved, setSaved] = useState(null);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('dmj_boot_trace');
+      if (raw) setSaved(JSON.parse(raw));
+    } catch (e) {}
+    const id = setInterval(() => setTick(x => x + 1), 1000);  // รอบที่ยังเดินอยู่ต้องขยับให้เห็น
+    return () => clearInterval(id);
+  }, []);
+
+  const live = (() => {
+    try { return (typeof window.dmjTrace === 'function') ? window.dmjTrace() : []; }
+    catch (e) { return []; }
+  })();
+  const useLive = live.length >= 2;
+  const marks = useLive ? live : (saved && saved.marks) || [];
+
+  if (!marks.length) {
+    return <div style={{fontSize:12,color:"var(--muted)"}}>ยังไม่มีข้อมูล — ปิดแอปแล้วเปิดใหม่ 1 ครั้ง</div>;
+  }
+  const rows = marks.map((m, i) => {
+    const prev = i > 0 ? marks[i - 1][1] : 0;
+    return { name: m[0], at: m[1], dur: m[1] - prev };
+  });
+  const total = marks[marks.length - 1][1];
+  const worst = rows.reduce((a, r) => Math.max(a, r.dur), 0);
+  return (
+    <div>
+      <div style={{fontSize:13,fontWeight:700,marginBottom:2}}>
+        {useLive ? "รอบนี้" : "รอบล่าสุด"} — ถึงตอนนี้ {(total / 1000).toFixed(1)} วินาที
+      </div>
+      <div style={{fontSize:11,color:"var(--muted)",marginBottom:8}}>
+        {useLive ? "กำลังเดินอยู่" : (saved && saved.at ? new Date(saved.at).toLocaleString('th-TH') : "")}
+      </div>
+      <div style={{display:"grid",gap:3}}>
+        {rows.map((r, i) => (
+          <div key={i} style={{display:"flex",alignItems:"center",gap:8,fontSize:12}}>
+            <span style={{flex:"0 0 42%",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.name}</span>
+            <span style={{flex:1,height:8,background:"var(--g-100)",borderRadius:4,overflow:"hidden"}}>
+              <span style={{
+                display:"block", height:"100%", borderRadius:4,
+                width: (worst > 0 ? Math.round(r.dur / worst * 100) : 0) + "%",
+                background: r.dur >= 3000 ? "var(--dang)" : r.dur >= 1000 ? "#f0a020" : "var(--g-500)",
+              }}></span>
+            </span>
+            <span style={{flex:"0 0 62px",textAlign:"right",fontVariantNumeric:"tabular-nums"}}>
+              {r.dur >= 1000 ? (r.dur / 1000).toFixed(1) + " วิ" : r.dur + " ms"}
+            </span>
+          </div>
+        ))}
+      </div>
+      <div style={{fontSize:10.5,color:"var(--muted)",marginTop:8,lineHeight:1.6}}>
+        แถบยาว = ขั้นนั้นกินเวลามากที่สุด · <b>cachehit</b> = ไม่ต้องแปลงโค้ดใหม่ ·
+        <b> compile</b> = ต้องแปลง JSX ใหม่ (เกิดหลัง deploy ทุกครั้ง) ·
+        <b> payload</b> = ก้อนข้อมูลสินค้า
+      </div>
+    </div>
+  );
+}
+
 // Make available everywhere
 Object.assign(window, {
   fmtN, fmtB, fmtBfull, fmtPct, monthLabel,
   CAT_COLORS, catColor, resetCatColorMap,
   I, Icon, KPI, Card, Seg, Sparkline, Empty,
-  dmjFetch, NotiBell, notiAgo, NOTI_TYPE_META,
+  dmjFetch, NotiBell, notiAgo, NOTI_TYPE_META, BootTrace,
+  dmjRequestFocus, useSkuFocus, dmjScrollToSku,
 });
 
 if (typeof module !== 'undefined') module.exports = { resetCatColorMap, catColor, CAT_COLORS, notiAgo };

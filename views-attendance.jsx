@@ -6,12 +6,18 @@
 async function attPost(body) {
   const base = (typeof SHEET_DEPLOY_URL !== 'undefined') ? SHEET_DEPLOY_URL : null;
   if (!base) throw new Error("ยังไม่ได้เชื่อมต่อ Sheet");
-  const res = await fetch(base, {
+  // ผ่าน dmjFetch เพื่อให้ได้ "เพดานเวลา" เหมือนทุกจุดที่ยิง GAS — การกดลงเวลาแนบรูปมาด้วย
+  // จึงหนักและช้ากว่า action อื่น ให้เวลามากหน่อย (90 วิ) แต่ **ต้องมีเพดาน**: ถ้าค้างตลอดกาล
+  // พนักงานจะเห็นปุ่มหมุนไม่จบ ไม่รู้ว่าลงเวลาสำเร็จหรือยัง และกดซ้ำก็ไม่ได้
+  // (sessionToken ใส่เองอยู่แล้ว dmjFetch จะไม่ทับให้)
+  const res = await (typeof dmjFetch === 'function' ? dmjFetch : fetch)(base, {
     method: "POST",
     headers: { "Content-Type": "text/plain;charset=utf-8" },
+    dmjTimeoutMs: 90000,
     body: JSON.stringify(Object.assign({ sessionToken: localStorage.getItem("dmj_session_token") }, body)),
   });
-  return res.json();
+  // ห้าม res.json() ตรง ๆ — GAS ตอบหน้า HTML ได้ (บทเรียนข้อ 13)
+  return (typeof dmjJson === 'function') ? dmjJson(res) : res.json();
 }
 
 // ข้อมูลกลางของทุกประเภทการลงเวลา — ใช้ทั้งไทม์ไลน์/AttFixModal/ปุ่มสลับสถานะ

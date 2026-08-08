@@ -4380,14 +4380,25 @@ function CategoryView({ data, role, onNav }) {
 
 // ────────────── Product Card ──────────────
 // ────────────── Order Modal ──────────────
-const QUICK_QTYS = [24, 36, 48, 60];
+// ปุ่มลัดจำนวนที่สั่งบ่อย — **ไม่ใช่ขั้นต่ำ** ของบางอย่างสั่งน้อยกว่านี้ได้ (เจ้าของยืนยัน ส.ค. 2026)
+// เดิมเริ่มที่ 24 และตั้ง 24 เป็นค่าเริ่มต้นไว้ให้เลย → พนักงานที่อยากสั่ง 6 ต้องไปแก้ในช่อง
+// "กรอกเอง" ที่มีเลข 24 ค้างอยู่ ซึ่งเป็นจุดที่เลขเพี้ยนบ่อยที่สุด (ดูคอมเมนต์ที่ช่องกรอกเอง)
+const QUICK_QTYS = [6, 12, 24, 36, 48, 60];
 // เช็คหน้าร้านล่าสุดใหม่กว่านี้ (นาที) = ถือว่ายังสด ไม่ต้องนับซ้ำตอนกดสั่ง
 const FS_CHECK_FRESH_MIN = 120;
 
 function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady, onOrderSuccess, defaultQty, role }) {
   useBackHandler(onClose); // Android back = ปิด modal สั่งของ
-  const [qty, setQty] = uS(defaultQty > 0 ? defaultQty : 24);
-  const [customMode, setCustomMode] = uS(false);
+  // qty = จำนวนที่จะสั่งจริง · 0 = ยังไม่เลือก (ปุ่มยืนยันจะยังกดไม่ได้)
+  // **ห้ามตั้งค่าเริ่มต้นเป็นตัวเลขลอย ๆ** — เดิม default 24 ทำให้พนักงานที่เผลอกดยืนยัน
+  // ได้ 24 ชิ้นทั้งที่ไม่ได้ตั้งใจเลือก และของหลายอย่างสั่งน้อยกว่า 24
+  const [qty, setQty] = uS(defaultQty > 0 ? defaultQty : 0);
+  // เปิดโหมดกรอกเองให้เลยถ้า defaultQty ("ควรสั่ง") ไม่ตรงปุ่มลัดอันไหน — ไม่งั้นตัวเลขนั้น
+  // จะโผล่แค่บนปุ่มยืนยัน มองไม่เห็นว่าแก้ได้ที่ไหน
+  const [customMode, setCustomMode] = uS(defaultQty > 0 && QUICK_QTYS.indexOf(defaultQty) < 0);
+  // ช่อง "กรอกเอง" ผูกกับ draft (ข้อความดิบ) ไม่ผูกกับ qty โดยตรง — หลักเดียวกับ prepQtyDraft
+  // ในหน้ารายการสั่งของ · ดูเหตุผลเต็มที่คอมเมนต์ตรง <input> ด้านล่าง
+  const [qtyDraft, setQtyDraft] = uS(() => (defaultQty > 0 ? String(defaultQty) : ""));
   const [orderType, setOrderType] = uS('รอขึ้นรถ');
   const [loading, setLoading] = uS(false);
   const [done, setDone] = uS(false);
@@ -4834,9 +4845,9 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
                 <div style={{fontSize:12, fontWeight:600, color:"var(--muted)", marginBottom:8}}>
                   {needFsCheck && !fsSkipped ? "② จำนวนที่สั่ง (ชิ้น)" : "จำนวนที่สั่ง (ชิ้น)"}
                 </div>
-                <div style={{display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:6, marginBottom:8}}>
+                <div style={{display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:6, marginBottom:8}}>
                   {QUICK_QTYS.map(q => (
-                    <button key={q} onClick={() => { setQty(q); setCustomMode(false); }}
+                    <button key={q} onClick={() => { setQty(q); setQtyDraft(String(q)); setCustomMode(false); }}
                             style={{...btnBase,
                               background: !customMode && qty===q ? "var(--g-700)" : "#fff",
                               color: !customMode && qty===q ? "#fff" : "var(--text)",
@@ -4852,9 +4863,21 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
                   ✏️ กรอกเอง
                 </button>
                 {customMode && (
-                  <input type="number" value={qty} min={1} autoFocus
+                  // ⚠️ ห้าม clamp ค่าระหว่างพิมพ์เด็ดขาด (เดิมเป็น Math.max(1, parseInt(v)||1))
+                  //    ลบเลขจนช่องว่าง → parseInt("")=NaN → เด้งเป็น "1" ทันทีในช่อง แล้วเลขที่
+                  //    พิมพ์ต่อไปจะไปต่อท้าย 1 นั้น: ตั้งใจสั่ง 6 ได้ 16 · ตั้งใจ 2 ได้ 12
+                  //    พนักงานเห็นว่าตัวเองกรอกถูก แต่ระบบบันทึกอีกเลข (เจ้าของแจ้งมาจริง ส.ค. 2026)
+                  //    → เก็บข้อความดิบไว้ใน draft ปล่อยให้ว่างได้ แล้วแปลงเป็นตัวเลขแยกต่างหาก
+                  //    ว่าง/ไม่ใช่ตัวเลข = qty 0 = ปุ่มยืนยันกดไม่ได้ (ปลอดภัยกว่าเดาแทนผู้ใช้)
+                  <input type="number" value={qtyDraft} min={1} max={9999} autoFocus
+                         inputMode="numeric"
                          onFocus={ev => ev.target.select()}
-                         onChange={ev => setQty(Math.max(1, parseInt(ev.target.value)||1))}
+                         onChange={ev => {
+                           const raw = ev.target.value;
+                           setQtyDraft(raw);
+                           const n = parseInt(raw, 10);
+                           setQty(n > 0 ? Math.min(n, 9999) : 0);
+                         }}
                          style={{marginTop:8, width:"100%", padding:"10px 12px",
                                  border:"1.5px solid var(--g-400)", borderRadius:8,
                                  fontSize:16, fontWeight:700, textAlign:"center",
@@ -4902,17 +4925,21 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
                 </div>
               )}
 
-              <button onClick={() => handleSubmit(false)} disabled={loading || fsBlocked}
+              {/* qty < 1 = ยังไม่ได้เลือกจำนวน (หรือลบช่องกรอกเองจนว่าง) — กันสั่งด้วยเลขที่
+                  ระบบเดาให้ ซึ่งเป็นสิ่งที่ทำให้สั่งผิดจำนวนมาก่อน */}
+              <button onClick={() => handleSubmit(false)} disabled={loading || fsBlocked || qty < 1}
                       style={{...btnBase, width:"100%", padding:"12px", fontSize:14,
-                              background: fsBlocked ? "var(--g-100)" : "var(--g-700)",
-                              color: fsBlocked ? "var(--muted)" : "#fff",
-                              borderColor: fsBlocked ? "var(--bdr)" : "var(--g-700)",
-                              cursor: fsBlocked ? "not-allowed" : "pointer"}}>
+                              background: (fsBlocked || qty < 1) ? "var(--g-100)" : "var(--g-700)",
+                              color: (fsBlocked || qty < 1) ? "var(--muted)" : "#fff",
+                              borderColor: (fsBlocked || qty < 1) ? "var(--bdr)" : "var(--g-700)",
+                              cursor: (fsBlocked || qty < 1) ? "not-allowed" : "pointer"}}>
                 {loading
                   ? <><span className="spin" style={{width:14,height:14,borderWidth:2,display:"inline-block",verticalAlign:"middle",marginRight:6}}/> กำลังบันทึก…</>
                   : fsBlocked
                     ? "① กรอกจำนวนหน้าร้านก่อน"
-                    : `✅ ยืนยันสั่ง ${fmtN(qty)} ชิ้น (${orderType})`}
+                    : qty < 1
+                      ? "👆 เลือกจำนวนที่จะสั่งก่อน"
+                      : `✅ ยืนยันสั่ง ${fmtN(qty)} ชิ้น (${orderType})`}
               </button>
 
               {/* บันทึกจำนวนหน้าร้านพัง (เน็ตหลุด) → ยังสั่งของได้ ไม่ให้งานสะดุด */}
@@ -6522,6 +6549,13 @@ function ConnectView({ sheetUrl, sheetViewUrl, syncing, lastSync, source, onSync
         </div>
       </div>
 
+      {/* เวลาเปิดแอปรอบล่าสุด — วางไว้ที่นี่เพราะเป็นแท็บเครื่องมือของเจ้าของอยู่แล้ว
+          และ "ช้าตรงไหน" มักถูกถามคู่กับ "sync ล่าสุดเมื่อไหร่" ที่อยู่ในหน้าเดียวกัน */}
+      <Card style={{marginBottom: 18}}>
+        <div style={{fontSize:12,fontWeight:700,color:"var(--muted)",marginBottom:10}}>⏱️ เวลาเปิดแอป</div>
+        <BootTrace/>
+      </Card>
+
       <Card style={{marginBottom: 18}}>
         <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:18,flexWrap:"wrap"}}>
           <div style={{width:42,height:42,borderRadius:10,background:"var(--g-100)",color:"var(--g-700)",
@@ -6681,6 +6715,19 @@ function ConnectView({ sheetUrl, sheetViewUrl, syncing, lastSync, source, onSync
 // ─────────────────────────────────────────────────────────────────────
 // STORAGE VIEW — Phase 2: Visual warehouse grid (A1–B10 × 15 locks each)
 // ─────────────────────────────────────────────────────────────────────
+// ─── ช่อง "ไม่ได้อยู่บนชั้น" (A0 / B0) ────────────────────────────────────────
+// ของที่วางพื้น/นอกชั้นวางในซอยนั้น — 1 ซอยมี 1 ช่อง เก็บได้หลาย SKU เหมือนล็อคปกติ
+// (ในชีต "ตำแหน่งจัดเก็บ" คอลัมน์ C เขียนว่า "A0" เฉย ๆ ไม่มี "/เลขล็อค")
+// ⚠️ ทุกที่ที่ประกอบคีย์จาก p.locations ต้องใช้ lockKeyOf — ต่อ string เองจะได้ "A0/0"
+//    ซึ่งไม่ตรงกับคีย์ในชีต แล้วของจะหายจากแผนผัง/หน้าตามหาของ โดยไม่มี error ให้เห็น
+const FLOOR_SIDES = ['A', 'B'];
+function floorLockKey(side) { return String(side).toUpperCase() + '0'; }
+function isFloorLock(key)   { return /^[AB]0$/i.test(String(key || '').trim()); }
+function lockKeyOf(loc) {
+  if (!loc) return null;
+  return (loc.floor || loc.shelf === 0) ? floorLockKey(loc.side) : `${loc.side}${loc.shelf}/${loc.lock}`;
+}
+
 function StorageView({ data }) {
   const storage = data.storage || {};
   const verifiedLockMap = storage.verifiedLockMap || {};
@@ -6746,7 +6793,8 @@ function StorageView({ data }) {
     return merged;
   }, [verifiedLockMap, productLockMap, lockOv]);
 
-  const totalLocks    = (shelves.A + shelves.B) * shelves.locksPerShelf;
+  // +FLOOR_SIDES.length = ช่อง A0/B0 (ไม่ได้อยู่บนชั้น) นับเป็นตำแหน่งเก็บของด้วย
+  const totalLocks    = (shelves.A + shelves.B) * shelves.locksPerShelf + FLOOR_SIDES.length;
   const usedCount     = Object.keys(lockData).length;
   const verifiedCount = Object.keys(verifiedLockMap).length;
   const mismatchCount = Object.values(lockData).filter(d => d.mismatch).length;
@@ -6898,11 +6946,11 @@ function StorageView({ data }) {
           {/* Step 2 — Lock */}
           <Card padding={true}>
             <div style={{fontSize:12,fontWeight:700,color:'var(--muted)',marginBottom:8}}>
-              ② ตำแหน่งล็อคที่วางของ (เช่น A3/7)
+              ② ตำแหน่งล็อคที่วางของ (เช่น A3/7 · ไม่ได้อยู่บนชั้นใส่ A0 หรือ B0)
             </div>
             <div style={{display:'flex',gap:8,alignItems:'center'}}>
               <input id="qa-lock-input" type="text"
-                placeholder="พิมพ์ตำแหน่ง เช่น A3/7..."
+                placeholder="พิมพ์ตำแหน่ง เช่น A3/7 หรือ A0..."
                 value={qaLockKey}
                 onChange={e => setQaLockKey(e.target.value.toUpperCase())}
                 onKeyDown={e => e.key === 'Enter' && canSave && handleQuickAssign()}
@@ -7082,7 +7130,7 @@ function StorageView({ data }) {
       </div>
 
       <Card title="📍 แผนผังคลังสินค้า"
-            sub={`ฝั่ง A: ${shelves.A} ชั้น · ฝั่ง B: ${shelves.B} ชั้น · ${shelves.locksPerShelf} ล็อค/ชั้น`}
+            sub={`ฝั่ง A: ${shelves.A} ชั้น · ฝั่ง B: ${shelves.B} ชั้น · ${shelves.locksPerShelf} ล็อค/ชั้น · + ช่อง A0/B0 (ไม่ได้อยู่บนชั้น)`}
             action={
               <Seg value={side} onChange={setSide} options={[
                 {value:'A',label:'🟩 ซอย A'},{value:'B',label:'🟦 ซอย B'},{value:'all',label:'🗂️ ทั้งหมด'},
@@ -7092,7 +7140,7 @@ function StorageView({ data }) {
           <div style={{marginBottom:12,padding:"8px 12px",background:"#fff8e1",
                        borderRadius:8,fontSize:12,border:"1px solid #ffe082"}}>
             {searchMatches.size > 0
-              ? <>ไฮไลต์ <b>{searchMatches.size}</b> ล็อคที่มี "{searchSku}" — กดล็อคสีส้มเพื่อดูรายละเอียด</>
+              ? <>ไฮไลต์ <b>{searchMatches.size}</b> ตำแหน่งที่มี "{searchSku}" — กดช่องสีส้มเพื่อดูรายละเอียด</>
               : <span style={{color:"var(--muted)"}}>ไม่พบ "{searchSku}" ในล็อคใดเลย</span>}
           </div>
         )}
@@ -7104,6 +7152,7 @@ function StorageView({ data }) {
           <span><i className="lock-legend lock-mismatch"/> ❌ ไม่ตรงระบบ</span>
           <span><i className="lock-legend lock-empty"/> ⬜ ว่าง</span>
           <span><i className="lock-legend lock-search"/> 🔍 ผลค้นหา</span>
+          <span>📥 A0/B0 = ไม่ได้อยู่บนชั้น</span>
         </div>
 
         <div className="shelf-wrap">
@@ -7124,6 +7173,8 @@ function StorageView({ data }) {
                     ← ลึกเข้าไป · ทางเข้า →
                   </span>
                 </div>
+                <FloorSlot side={s} lockData={lockData}
+                           searchMatches={searchMatches} onClick={setSelectedLock}/>
                 <div className="aisle-bays">
                   {bays.map(({right, left}) => (
                     <div key={right} className="aisle-bay">
@@ -7264,14 +7315,18 @@ function LockPicker({ shelves, value, onChange }) {
     return list;
   }, [shelves]);
 
+  // ช่อง "ไม่ได้อยู่บนชั้น" — เลือกแล้วจบเลย ไม่ต้องเลือกเลขล็อคต่อ (ไม่มีเลขล็อค)
+  const handleFloor = (s) => { setSelShelf(null); onChange(floorLockKey(s)); };
+
   const locksN = shelves.locksPerShelf || 15;
   const cols = 5, rows = Math.ceil(locksN / cols);
 
   const handleShelf = (s) => {
     setSelShelf(s);
-    // clear lock selection when shelf changes
+    // clear lock selection when shelf changes (รวมกรณีที่ค้างเป็นช่อง A0/B0 อยู่ —
+    // ไม่ล้างแล้วจะเห็นชั้นใหม่ถูกเลือกแต่ค่าจริงยังเป็น A0 โดยไม่มีอะไรบอก)
     const { lock } = parseVal(value);
-    if (lock) onChange(""); // reset
+    if (lock || isFloorLock(value)) onChange(""); // reset
   };
 
   const handleLock = (n) => {
@@ -7302,7 +7357,30 @@ function LockPicker({ shelves, value, onChange }) {
           </button>
         ))}
       </div>
+      {/* ช่องไม่ได้อยู่บนชั้น (A0/B0) — เลือกแล้วได้ตำแหน่งเลย */}
+      <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:10}}>
+        {FLOOR_SIDES.map(sd => {
+          const k = floorLockKey(sd);
+          const picked = value === k;
+          return (
+            <button key={k} onClick={() => handleFloor(sd)}
+                    style={{padding:"4px 8px",borderRadius:6,border:"1px dashed",fontSize:11,
+                            fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+                            background: picked ? "#b45309" : "#fffbeb",
+                            color: picked ? "#fff" : "#92400e",
+                            borderColor: picked ? "#b45309" : "#fcd34d"}}>
+              📥 {k} · ไม่อยู่บนชั้น (ซอย {sd})
+            </button>
+          );
+        })}
+      </div>
       {/* Step 2: lock grid */}
+      {isFloorLock(value) && (
+        <div style={{fontSize:11,color:"#92400e",fontWeight:700,textAlign:"center",
+                     padding:"4px 0",background:"#fffbeb",borderRadius:5}}>
+          เลือก: {value} — ไม่ต้องเลือกเลขล็อค
+        </div>
+      )}
       {selShelf && (
         <>
           <div style={{marginBottom:6,fontSize:11,color:"var(--muted)",fontWeight:600}}>
@@ -7593,6 +7671,44 @@ function UnassignedProductCards({ products, lockData, shelves, onAssigned }) {
   );
 }
 
+// ─── FloorSlot — ช่อง "ไม่ได้อยู่บนชั้น" ของซอยหนึ่ง (A0 / B0) ────────────────
+// ทำเป็นแถบกว้างเต็มซอย ไม่ใช่ช่องเล็กในตาราง เพราะไม่มีเลขล็อคให้ไล่หา
+// props: side · lockData · searchMatches (Set|null) · onClick (null = ดูอย่างเดียว) · highlightKey
+function FloorSlot({ side, lockData, searchMatches, onClick, highlightKey }) {
+  const key      = floorLockKey(side);
+  const d        = (lockData || {})[key];
+  const n        = d ? d.skus.length : 0;
+  const isSearch = searchMatches ? searchMatches.has(key) : false;
+  const isHL     = highlightKey === key;
+  const tone = isHL     ? { bg:'#4ade80', bd:'#16a34a', fg:'#14532d' }
+             : d && d.mismatch ? { bg:'#ef5350', bd:'#c62828', fg:'#fff' }
+             : d && d.verified ? { bg:'#66bb6a', bd:'#2e7d32', fg:'#fff' }
+             : d              ? { bg:'#c8e6c9', bd:'#81c784', fg:'#1b5e20' }
+             :                  { bg:'#fafafa', bd:'var(--bdr)', fg:'var(--muted)' };
+  return (
+    <div onClick={onClick ? () => onClick(key) : undefined}
+         data-hlkey={isHL ? key : undefined}
+         title={`${key} · ของที่ไม่ได้อยู่บนชั้นวางในซอย ${side}` + (n ? ` · ${n} SKU` : ' · ว่าง')}
+         style={{
+           display:'flex', alignItems:'center', gap:8, marginBottom:10,
+           padding:'8px 10px', borderRadius:8, cursor: onClick ? 'pointer' : 'default',
+           background: tone.bg, color: tone.fg,
+           border: '1.5px solid ' + tone.bd,
+           boxShadow: isSearch ? 'inset 0 0 0 2px #ff9800' : (isHL ? '0 0 0 3px #86efac' : 'none'),
+         }}>
+      <span style={{fontSize:15}}>📥</span>
+      <span style={{fontWeight:800, fontSize:12, fontFamily:'monospace'}}>{key}</span>
+      <span style={{fontSize:11, fontWeight:600, flex:1, minWidth:0,
+                    overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
+        ไม่ได้อยู่บนชั้น (วางพื้น/นอกชั้นวาง)
+      </span>
+      <span style={{fontSize:11, fontWeight:700, flexShrink:0}}>
+        {n > 0 ? `${n} SKU` : 'ว่าง'}
+      </span>
+    </div>
+  );
+}
+
 function ShelfBlock({ side, shelf, locks, lockData, searchMatches, onClick, allowEmpty, isRight }) {
   // ฝั่งซ้าย (isRight=false):   ฝั่งขวา (isRight=true):
   // 15 12  9  6  3              13 10  7  4  1
@@ -7733,6 +7849,7 @@ function WarehouseMapModal({ open, onClose, highlightKey, lockData, shelves, pro
               return (
                 <div key={s} className="shelf-side">
                   <div className="shelf-side-label">ซอย {s}</div>
+                  <FloorSlot side={s} lockData={lockData || {}} highlightKey={highlightKey}/>
                   <div className="aisle-bays">
                     {bays.map(({right, left}) => (
                       <div key={right} className="aisle-bay">

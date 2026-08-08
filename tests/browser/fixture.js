@@ -51,10 +51,14 @@
 
   const orders = [
     // orderedBy/preparedBy = ใครสั่ง/ใครจัด · R3 จงใจไม่มีชื่อผู้จัด (ยังไม่มีใครจัด)
-    { id: 'R3', type: 'รอขึ้นรถ', date: '01/06/2025', status: 'รอ', from: 'สาย5', to: 'หน้าร้าน',
+    // ⚠️ ต้องมี `carryMode` ด้วย ไม่ใช่ `type` อย่างเดียว — `type` คือค่าดิบในชีต (คอลัมน์ A)
+    //    ส่วนที่ frontend อ่านจริงคือ `carryMode` ที่ readOrders_ แปลงมาให้ ("หิ้ว"→carry)
+    //    ขาดไปเมื่อไหร่ = ทุกใบกลายเป็น "ขึ้นรถ" หมด แล้วเส้นทางของหิ้วไม่เคยถูกทดสอบเลย
+    //    ทั้งที่หน้าจอยังเรนเดอร์ครบทุกใบเหมือนปกติ · R3=ขึ้นรถ R4=หิ้ว (ต้องขึ้นก่อน R3)
+    { id: 'R3', type: 'รอขึ้นรถ', carryMode: 'truck', date: '01/06/2025', status: 'รอ', from: 'สาย5', to: 'หน้าร้าน',
       sku: 'VAS001', name: 'แจกันแก้วใส ทรงสูง', orderQty: 24, preparedQty: 0, printFlag: '',
       orderedBy: 'สมชาย ใจดี (หน้าร้าน)', preparedBy: '' },
-    { id: 'R4', type: 'หิ้ว', date: '01/06/2025', status: 'รอ', from: 'สาย5', to: 'หน้าร้าน',
+    { id: 'R4', type: 'หิ้ว', carryMode: 'carry', date: '01/06/2025', status: 'รอ', from: 'สาย5', to: 'หน้าร้าน',
       sku: 'FLW002', name: 'ดอกไม้ประดิษฐ์ สีแดง', orderQty: 12, preparedQty: 12, printFlag: 'print',
       orderedBy: 'สมชาย ใจดี (หน้าร้าน)', preparedBy: 'สมหญิง ขยัน (คลังสินค้า)' },
   ];
@@ -103,11 +107,18 @@
     mtoJobs,
     transfers,
     purchases,
+    // ⚠️ รูปร่างต้องตรงกับที่ buildFullData_ สร้างจริง:
+    //    productLockMap/verifiedLockMap = { lockKey: [...] } (คีย์คือ "ล็อค" ไม่ใช่ SKU) ·
+    //    shelves = { A, B, locksPerShelf } · unassigned = [sku, ...]
+    //    ก่อนหน้านี้ productLockMap กลับข้าง (คีย์เป็น SKU) → แผนผังคลังไม่มีล็อคไหนขึ้นเลย
+    //    แต่เทสต์ยังเขียวเพราะเช็คแบบ OR แล้วไปเจอ DEC003 ในรายการ "ยังไม่ระบุล็อค" แทน
+    // FLW002 อยู่ที่ "A0" = ช่องของที่ไม่ได้อยู่บนชั้นวางของซอย A (วางพื้น/นอกชั้น)
     storage: {
-      productLockMap: { VAS001: ['A1/05'], FLW002: ['A2/03'] },
-      verifiedLockMap: { 'A1/05': [{ sku: 'VAS001', qty: 25 }] },
-      shelves: [{ key: 'A1', locks: ['A1/01', 'A1/05'] }, { key: 'A2', locks: ['A2/03'] }],
-      unassigned: [{ sku: 'DEC003', qty: 20 }],
+      // เลขล็อคไม่เติมศูนย์นำหน้า — lockKeyOf_ สร้างจากตัวเลข ("A1/05" ในชีตกลายเป็นคีย์ "A1/5")
+      productLockMap:  { 'A1/5': ['VAS001'], 'A0': ['FLW002'] },
+      verifiedLockMap: { 'A1/5': [{ sku: 'VAS001', qty: 25, sysQty: 25 }] },
+      shelves: { A: 10, B: 10, locksPerShelf: 15 },
+      unassigned: ['DEC003'],
     },
     transferStats: { 'โอน': { count: 6, qty: 75 }, 'ปรับ': { count: 1, qty: 3 }, 'ยกมา': { count: 0, qty: 0 } },
     stockCheckRequests: [],
@@ -189,11 +200,77 @@
     ok: true,
     unread: 1,
     items: [
-      { id: 'n1', ts: Date.now() - 3 * 60000, type: 'order', tab: 'orders',
+      // focus = SKU ที่ต้องพาไปหยุดหลังกด · จงใจเลือก VAS001 ซึ่งเป็นใบ "ขึ้นรถ" = แถวที่ 2
+      // (แถวแรกคือ FLW002 ของหิ้ว) → พิสูจน์ว่าเด้งไป "ใบที่ถูก" ไม่ใช่ใบแรกที่เจอเฉย ๆ
+      { id: 'n1', ts: Date.now() - 3 * 60000, type: 'order', tab: 'orders', focus: 'VAS001',
         title: '📦 ออเดอร์ใหม่ 12 ชิ้น', body: 'แจกันแก้วใส · VAS001', by: '', read: false },
       { id: 'n2', ts: Date.now() - 2 * 3600000, type: 'shipment', tab: 'stock',
         title: '🚚 ของโอนมาหน้าร้าน 3 รายการ', body: 'ดอกกุหลาบแดง และอีก 2 รายการ · รอกดรับ',
         by: 'สมหญิง ขยัน (คลังสินค้า)', read: true },
     ],
   };
+
+  // ── 🏅 ผลงานพนักงาน (action=staffPerf) — 2 คน คนละตำแหน่ง + 1 ชื่อที่จับคู่ไม่ได้ ──
+  // ต้องมี 2 role ต่างกัน เพื่อยืนยันว่า UI **แยกกลุ่มตามตำแหน่ง** ไม่ใช่อันดับรวมทั้งร้าน
+  // และต้องมี unmatched เพื่อยืนยันว่าการ์ดเตือน "จับคู่ชื่อไม่ได้" ถูกเรนเดอร์จริง
+  window.__DMJ_STAFFPERF_FIXTURE = {
+    success: true,
+    data: {
+      month: '2026-08', isCurrentMonth: true, lastDate: '2026-08-05', auditRows: 260,
+      cats: [
+        { key: 'count',    emoji: '📊', label: 'นับสต็อกคลัง', ops: true,  unit: 'รายการ', skip: false },
+        { key: 'transfer', emoji: '🔄', label: 'โอนของ',       ops: true,  unit: 'รายการ', skip: false },
+        { key: 'fscheck',  emoji: '🏪', label: 'เช็คหน้าร้าน',  ops: true,  unit: 'รายการ', skip: false },
+        { key: 'punch',    emoji: '🕐', label: 'กดลงเวลา',     ops: false, unit: 'ครั้ง',  skip: true },
+      ],
+      staff: [
+        { staffId: 'STF002', name: 'สมหญิง ขยัน', role: 'warehouse', status: 'active', pictureUrl: '',
+          total: 148, opsTotal: 148, byCat: { count: 120, transfer: 28, punch: 42 },
+          byDay: { '2026-08-01': 60, '2026-08-04': 88 },
+          workedMin: 2400, daysWorked: 5, lateDays: 1, lateMin: 12, daysAbsent: 0, perHour: 3.7 },
+        { staffId: 'STF001', name: 'สมชาย ใจดี', role: 'frontstore', status: 'active', pictureUrl: '',
+          total: 63, opsTotal: 63, byCat: { fscheck: 63, punch: 38 },
+          byDay: { '2026-08-03': 63 },
+          workedMin: 1980, daysWorked: 4, lateDays: 0, lateMin: 0, daysAbsent: 1, perHour: 1.9 },
+      ],
+      unmatched: [{ actor: 'พนักงานเก่า (หน้าร้าน)', total: 9 }],
+    },
+  };
+
+  // ── 👥 ลูกค้า & ยอดซื้อ (action=getCustomerAnalytics) ──
+  // ครอบ 3 ปี (ข้อมูลเริ่มกลางปี 2024 เหมือนของจริง) เพื่อให้บล็อก "ลูกค้าใหม่ vs เก่า" มีอะไรให้เทียบ
+  // ลูกค้าแต่ละรายจงใจให้ตกคนละกลุ่ม: ใหม่ / ซื้อเพิ่ม / ซื้อลด / กลับมา / หายไป
+  // ไม่มี fixture นี้ = CustomerView ทั้งหน้าเรนเดอร์แค่ "ยังไม่มีข้อมูลลูกค้า" (เทสต์เขียวโดยไม่ได้ทดสอบอะไร)
+  (function () {
+    const months = [];
+    for (let y = 2024; y <= 2026; y++) {
+      for (let m = 1; m <= 12; m++) {
+        if (y === 2024 && m < 3) continue;
+        if (y === 2026 && m > 8) continue;
+        months.push(String(m).padStart(2, '0') + '/' + y);
+      }
+    }
+    const bm = (obj) => {
+      const o = {};
+      Object.keys(obj).forEach(k => { o[k] = { total: obj[k], count: 1 }; });
+      return o;
+    };
+    const raw = [
+      { key: 'C1', name: 'บริษัท กรีน เฮ้าส์ จำกัด',  byMonth: bm({ '05/2024': 90000, '03/2025': 120000, '03/2026': 190000 }) },
+      { key: 'C2', name: 'บริษัท สินแพทย์ จำกัด',     byMonth: bm({ '04/2025': 150000, '04/2026': 60000 }) },
+      { key: 'C3', name: 'บริษัท ใหม่ล่าสุด จำกัด',    byMonth: bm({ '02/2026': 80000, '06/2026': 45000 }) },
+      { key: 'C4', name: 'บริษัท กลับมาซื้อ จำกัด',    byMonth: bm({ '07/2024': 70000, '05/2026': 52000 }) },
+      { key: 'C5', name: 'บริษัท หายไปแล้ว จำกัด',     byMonth: bm({ '06/2025': 110000 }) },
+    ];
+    const customers = raw.map(c => {
+      let total = 0, orderCount = 0, lastMonth = null;
+      months.forEach(mk => { const e = c.byMonth[mk]; if (e && e.total > 0) { total += e.total; orderCount += e.count; lastMonth = mk; } });
+      return Object.assign({}, c, { total, orderCount, lastMonth, products: [{ sku: 'VAS001', name: 'แจกันแก้วใส', qty: 12, rev: 3600 }] });
+    }).sort((a, b) => b.total - a.total);
+    window.__DMJ_CUSTOMER_FIXTURE = {
+      months, customers,
+      grandTotal: customers.reduce((s, c) => s + c.total, 0),
+      generatedAt: new Date().toISOString(),
+    };
+  })();
 })();

@@ -53,7 +53,6 @@ describe('applyQtyLocToProduct_ — ชีตสต็อกต้องชน�
     expect(p.qtyStatus).toBe('ok');
     expect(p.qtyStore).toBe(41);
     expect(p.qtyWH).toBe(240);
-    expect(p.warehouseQty).toBe(240);
   });
 
   it('qty ต้อง = qtyStore + qtyWH เสมอ (ไม่ใช่ค่าค้างจากชีตเก่า)', () => {

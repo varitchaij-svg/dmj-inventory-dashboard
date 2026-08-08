@@ -100,7 +100,19 @@ describe('การจับเวลาในเส้นทาง payload ต�
   it('เส้นทาง cache hit เรียก perfLogDoGet_', () => {
     // เส้นทางนี้คือเส้นทางที่เกิดบ่อยที่สุด — เดิมไม่มีการวัดเลย ทำให้แยกไม่ออกว่า
     // request ที่ช้าเป็นเพราะ build ใหม่ หรือเพราะ cache เองก็ช้า
-    expect(doGetSrc).toMatch(/perfLogDoGet_\('HIT'/);
+    // (Phase 7.3 ย้ายการเสิร์ฟจาก cache ไปรวมที่ `serveCached` เพราะมี 2 เส้นทางแล้ว
+    //  คือ HIT ปกติ กับ WAIT-HIT ที่ได้ของจากคนที่ build เสร็จระหว่างเรารอคิว)
+    expect(doGetSrc).toMatch(/serveCached\(cached, 'HIT'\)/);
+    expect(doGetSrc).toMatch(/const serveCached = function[\s\S]{0,400}?perfLogDoGet_\(kind,/);
+  });
+
+  it('ทุกเส้นทางที่คืน payload ถูกวัดครบ (HIT · STALE · WAIT-HIT · MISS/FRESH)', () => {
+    // Phase 7.3 เพิ่มเส้นทางคืนค่าใหม่ 2 เส้น — ถ้าเส้นไหนไม่ถูกวัด เวลาไล่ปัญหาจะเห็น
+    // แค่ "request ช้า" โดยไม่รู้ว่ามาจากทางไหน แล้วสรุปผิดว่าตัวแก้ไม่ได้ผล
+    ['HIT', 'STALE', 'WAIT-HIT'].forEach((kind) => {
+      expect(doGetSrc, 'เส้นทาง ' + kind + ' ต้องถูกวัด').toContain("'" + kind + "'");
+    });
+    expect(doGetSrc).toMatch(/perfLogDoGet_\(wantFresh \? 'FRESH' : 'MISS'/);
   });
 
   it('เส้นทาง build ใหม่เรียก perfLogDoGet_ และแยกเวลา build ออกจาก shape+cache', () => {

@@ -483,9 +483,16 @@ function parseNum_(val) {
 
 function parseLocation_(loc) {
   if (!loc) return null;
+  const f = String(loc).trim().match(/^([AB])0$/i);
+  if (f) return { raw: String(loc).trim(), valid: true, side: f[1].toUpperCase(), shelf: 0, lock: 0, floor: true };
   const m = String(loc).trim().match(/^([AB])(\d+)\/(\d+)$/i);
   if (!m) return null;
   return { raw: String(loc).trim(), valid: true, side: m[1].toUpperCase(), shelf: +m[2], lock: +m[3] };
+}
+
+function lockKeyOf_(loc) {
+  if (!loc) return null;
+  return loc.floor ? loc.side + '0' : loc.side + loc.shelf + '/' + loc.lock;
 }
 
 // ── monthKey_ / dayKey_ จาก appsscript_complete.gs:2654–2672 ─────────────────
@@ -903,7 +910,7 @@ module.exports = {
   netOf, writeMtoItemsCore,
   enrichDataCore, expandMonthlyCompact,
   COLOR_MAP, COLOR_KEYS, detectColor,
-  parseQty_, parseNum_, parseLocation_,
+  parseQty_, parseNum_, parseLocation_, lockKeyOf_,
   transferBatchCore,
   cleanupOrdersStateCore, stableOrderId,
   buildYoYSeries, abcClassify, abcRevWindow_, ABC_WINDOW_MONTHS, sanitizeThresholds, THRESHOLDS_DEFAULT,

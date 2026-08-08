@@ -19,7 +19,7 @@ const { chromium } = require(path.join(CACHE, 'node_modules', 'playwright-core')
 // dev ไม่อยู่ในนี้โดยเจตนา — เป็น superset ของ owner (+margin +whhome ซึ่ง warehouse ครอบให้แล้ว)
 // การรันซ้ำอีก 27 tab กินเวลาโดยไม่ได้ coverage เพิ่ม
 const ROLE_TABS = {
-  owner:      ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog","staff","atttoday"],
+  owner:      ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog","staff","staffperf","atttoday"],
   employee:   ["attendance","categories","trends","stock","storage","frontstore","transfers","orders","tracking","ordersummary","mtojobs","labels"],
   warehouse:  ["attendance","whhome","orders","stock","stockcount","storage","categories","newproduct","ordersummary","tracking","mtojobs","labels"],
   frontstore: ["attendance","frontstore","categories","stock","orders","tracking","mtojobs","labels"],
@@ -33,7 +33,10 @@ const TAB_LABEL = {
   newproduct:"เพิ่มสินค้าใหม่", frontstore:"เช็คหน้าร้าน", transfers:"โอน/ปรับ/ยกมา",
   orders:"รายการสั่งของ", tracking:"ติดตามสถานะ", ordersummary:"สรุปสินค้าออกจากคลัง",
   mtojobs:"งานจัดพิเศษ", upload:"อัปโหลด Zort", connect:"Google Sheet", labels:"พิมพ์ Label",
-  auditlog:"Audit Log", staff:"พนักงาน", attendance:"ลงเวลา", atttoday:"ใครเข้างานวันนี้",
+  // ⚠️ staff ต้องใส่อิโมจินำหน้าด้วย — คลิกด้วย substring และ "พนักงาน" ไปตรงกับ
+  //    "🏅 ผลงานพนักงาน" ด้วย (จะกดผิดปุ่มเมื่อลำดับใน OWNER_GROUPS สลับ)
+  auditlog:"Audit Log", staff:"👥 พนักงาน", staffperf:"ผลงานพนักงาน",
+  attendance:"ลงเวลา", atttoday:"ใครเข้างานวันนี้",
   deadstock:"สินค้าจม", quotefollowup:"ใบเสนอราคา", pos:"ขาย/ออกบิล",
   customers:"ลูกค้า & ยอดซื้อ", season:"ช่วงขายดี",
 };
@@ -63,7 +66,10 @@ const ASSERT = {
   },
   whhome:     async (page) => hasText(page, ['งานของฉัน', 'มี 1 งานที่ยังไม่เสร็จ'], 'การ์ดงานของฉัน'),
   stock:      async (page) => hasText(page, ['FLW002'], 'low-stock SKU (FLW002 qty8<threshold)'),
-  storage:    async (page) => hasText(page, ['A1/05', 'A2/03', 'DEC003'], 'lock/สินค้าในคลัง'),
+  // ต้องเจอ "ครบทุกตัว": ช่อง A0/B0 (ของที่ไม่ได้อยู่บนชั้น) ต้องขึ้นทั้ง 2 ซอยเสมอแม้ซอยนั้นว่าง
+  // + รายการ "ยังไม่ระบุล็อค" ยังทำงาน — hasText (OR) เคยผ่านได้ด้วย token เดียว
+  storage:    async (page) => hasAllText(page,
+                ['A0', 'B0', 'ไม่ได้อยู่บนชั้น', 'DEC003'], 'ช่องไม่อยู่บนชั้น/สินค้าในคลัง'),
   // ชื่อผู้สั่ง/ผู้จัดต้องขึ้นจริงบนแถวออเดอร์ (ไม่ใช่แค่มีข้อมูลอยู่ใน payload)
   orders:     async (page) => {
     const base = await hasText(page, ['VAS001', 'FLW002'], 'order SKU');
@@ -73,10 +79,29 @@ const ASSERT = {
     return { ok: who.ok, detail: base.detail + ' | ' + who.detail };
   },
   mtojobs:    async (page) => hasText(page, ['จัดช่อพิเศษ', 'จัดกระเช้า'], 'MTO job name'),
+  // ติดตามสถานะ: ต้องขึ้น "ครบ" ทั้งเลขที่ใบโอน (จัดกลุ่มรายใบ), บล็อกสรุปเป็นชิ้น, และ
+  // ยอดชิ้นที่คิดจาก fixture จริง (ส่ง 24+10=34 · รับ 10 · รอรับ 24)
+  // — เดิม tab นี้เป็น smoke-only ไม่ assert อะไรเลย จึงไม่มีอะไรจับได้ถ้าหน้าพัง
+  // + หน่วยกำกับทั้งสองแถว ("รายการ" บนไทล์ · "ชิ้น" บนบล็อกสรุป) — คำว่า "รอรับ" โผล่
+  // สองที่ด้วยเลขคนละตัว ถ้าหน่วยหายไปข้างใดข้างหนึ่งผู้ใช้จะอ่านผิดโดยไม่มีอะไรเตือน
+  tracking:   async (page) => hasAllText(page,
+    ['TF-20250601-001', 'TF-20250601-002', 'รวมของที่ส่งไปหน้าร้าน',
+     'นับเป็น รายการ', 'นับเป็น ชิ้น', '34', 'รอรับ', 'รายใบโอน',
+     'รับแล้ว 0/1 รายการ', 'รับแล้ว 1/1 รายการ'], 'ใบโอน + หน่วยกำกับครบ'),
   frontstore: async (page) => hasText(page, ['VAS001', 'FLW002', 'DEC003'], 'product SKU'),
   pos:        async (page) => hasText(page, ['ขาย / ออกบิล', 'รายการในบิล', 'รับชำระ'], 'PosView UI'),
   attendance: async (page) => hasText(page, ['สมชาย ใจดี'], 'ชื่อ+ไทม์ไลน์จาก myToday'),
   atttoday:   async (page) => hasText(page, ['สมชาย ใจดี', 'สมหญิง ขยัน'], 'รายชื่อจาก attendanceToday'),
+  // ผลงานพนักงาน: ต้องขึ้น "ครบ" ทั้งชื่อคน ยอดงาน หัวข้อกลุ่มตามตำแหน่ง (ไม่ใช่อันดับรวม)
+  // และการ์ดเตือนชื่อที่จับคู่ไม่ได้ — hasText เป็น OR จึงต้องใช้ hasAllText ตรงนี้
+  staffperf:  async (page) => hasAllText(page,
+    ['สมหญิง ขยัน', 'สมชาย ใจดี', '🏭 คลังสินค้า', '🌸 หน้าร้าน', '148',
+     'ชื่อที่จับคู่กับพนักงานไม่ได้'], 'สรุปผลงานแยกตามตำแหน่ง'),
+  // ลูกค้า: ต้องขึ้น "ครบ" ทั้ง Top ลูกค้าสะสมเดิม และบล็อกใหม่ "ลูกค้าใหม่ vs ลูกค้าเก่า"
+  // (hasText เป็น OR — ใช้ตรงนี้แล้วบล็อกใหม่หายไปทั้งก้อนเทสต์ก็ยังเขียว)
+  customers:  async (page) => hasAllText(page,
+    ['Top ลูกค้าสะสม', 'ลูกค้าใหม่ vs ลูกค้าเก่า', 'บริษัท กรีน เฮ้าส์ จำกัด',
+     'ซื้อเพิ่ม', 'ซื้อลดลง', 'หายไป'], 'ลูกค้าใหม่/เก่า + Top สะสม'),
   // หมายเหตุ: ordersummary/labels เป็น smoke-only — เนื้อหาขึ้นกับ workflow state
   // (ordersummary โชว์เฉพาะ order สถานะ "สำเร็จ" พร้อมส่ง, labels โชว์คิวพิมพ์ที่ seed จาก view อื่น)
   // fixture แบบ static จึงไม่มีเนื้อหา deterministic ให้ assert — ตรวจแค่ "ไม่ crash"
@@ -259,17 +284,76 @@ function startServer() {
         await page.waitForTimeout(400);
         if (!(await page.locator(MODAL).count())) { status = 'MODAL_FAIL'; note = 'กดแล้ว modal ไม่เปิด'; }
         else {
+          // ── ช่อง "กรอกเอง" ต้องเก็บเลขที่พิมพ์ไว้ตรง ๆ ห้ามเด้งเป็นเลขอื่น ──
+          // บั๊กจริง ส.ค. 2026: onChange clamp ทุก keystroke → ลบจนว่างแล้วเด้งเป็น "1"
+          // ทันที เลขที่พิมพ์ต่อไปเลยไปต่อท้าย: ตั้งใจ 6 ได้ 16 · พนักงานเห็นว่ากรอกถูก
+          // แต่ระบบสั่งอีกจำนวน · ต้องทดสอบผ่าน UI จริง — unit test เห็นแค่ source ไม่เห็น
+          // พฤติกรรมของ controlled input ตอนผู้ใช้ลบแล้วพิมพ์ใหม่
+          const customBtn = page.locator(`${MODAL} button`, { hasText: 'กรอกเอง' }).first();
+          if (await customBtn.count()) {
+            await customBtn.click({ timeout: 2000 }).catch(() => {});
+            await page.waitForTimeout(200);
+            const box = page.locator(`${MODAL} input[type="number"]`).last();
+            if (await box.count()) {
+              await box.fill('');                       // ลบจนว่าง — จุดที่เคยเด้งเป็น "1"
+              await page.waitForTimeout(120);
+              const afterClear = await box.inputValue();
+              await box.type('6');                      // พิมพ์ทีละตัวเหมือนคนใช้จริง
+              await page.waitForTimeout(180);
+              const typed = await box.inputValue();
+              const confirm = (await page.locator(`${MODAL} button`, { hasText: 'ยืนยันสั่ง' })
+                                         .first().textContent().catch(() => '') || '').trim();
+              if (afterClear !== '') {
+                status = 'QTY_AUTOFILL'; note = `ลบจนว่างแล้วช่องเด้งเป็น "${afterClear}"`;
+              } else if (typed !== '6') {
+                status = 'QTY_MISMATCH'; note = `พิมพ์ "6" แต่ช่องเป็น "${typed}"`;
+              } else if (!/\b6\b/.test(confirm)) {
+                status = 'QTY_MISMATCH'; note = `ช่องเป็น 6 แต่ปุ่มยืนยันบอก "${confirm}"`;
+              } else {
+                note = 'กรอกเอง 6 ชิ้น → ช่องและปุ่มยืนยันตรงกัน';
+              }
+            }
+          }
           // ปิด modal — คลิก × ในหัว modal
           const closeBtn = page.locator(`${MODAL} button`, { hasText: '×' }).first();
           if (await closeBtn.count()) await closeBtn.click({ timeout: 2000 }).catch(() => {});
           await page.waitForTimeout(300);
-          note = (await page.locator(MODAL).count()) ? 'modal เปิดได้ แต่ปิดไม่หาย' : 'modal เปิด+ปิดสำเร็จ';
-          if (note.includes('ปิดไม่หาย')) status = 'MODAL_CLOSE_FAIL';
+          const stuck = !!(await page.locator(MODAL).count());
+          if (stuck) { status = 'MODAL_CLOSE_FAIL'; note = 'modal เปิดได้ แต่ปิดไม่หาย'; }
+          else if (status === 'ok') note = (note ? note + ' · ' : '') + 'modal เปิด+ปิดสำเร็จ';
         }
       }
     } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
     await page.screenshot({ path: path.join(SHOTS, `interaction__${it.tab}.png`) }).catch(()=>{});
     results.push({ role: 'interact', tab: it.name, status, note });
+    await page.close();
+  }
+
+  // ── (ค0) รายการสั่งของ: ของหิ้วต้องอยู่บนสุด + มีหัวข้อคั่นกลุ่ม ─────────────
+  // fixture: R4=FLW002 (หิ้ว) · R3=VAS001 (ขึ้นรถ) — ในชีตหิ้วอยู่แถวล่างกว่า
+  // ถ้าตัวจัดลำดับหลุด จอจะยังเรนเดอร์ครบทุกใบเหมือนเดิม แค่หิ้วจมอยู่ล่าง = ไม่มี error ให้เห็น
+  {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=warehouse&tab=orders`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      if (!(await navigateTo(page, 'warehouse', 'orders'))) { status = 'NAV_FAIL'; note = 'สลับ tab ไม่สำเร็จ'; }
+      else {
+        await page.waitForTimeout(500);
+        const order = await page.locator('[data-order-sku]')
+          .evaluateAll(els => els.map(e => e.getAttribute('data-order-sku'))).catch(() => []);
+        const body = await page.locator('body').innerText().catch(() => '');
+        if (order.length < 2) { status = 'NO_ROWS'; note = `เจอแถว ${order.length} แถว (คาด ≥2)`; }
+        else if (order[0] !== 'FLW002') {
+          status = 'CARRY_ORDER_FAIL'; note = `แถวบนสุดคือ ${order[0]} (คาด FLW002 ของหิ้ว)`;
+        } else if (!/หิ้วเอง/.test(body) || !/ขึ้นรถ/.test(body)) {
+          status = 'GROUP_HEAD_FAIL'; note = 'ไม่เห็นหัวข้อคั่นกลุ่ม หิ้ว/ขึ้นรถ';
+        } else note = `ของหิ้วอยู่บนสุด (${order.join(' → ')}) + มีหัวข้อคั่น`;
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'orders__carry-first.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'รายการสั่งของ — ของหิ้วอยู่บนสุด', status, note });
     await page.close();
   }
 
@@ -292,20 +376,59 @@ function startServer() {
         if (rows !== 2 || unreadRows !== 1) {
           status = 'PANEL_FAIL'; note = `รายการ=${rows} (คาด 2), ยังไม่อ่าน=${unreadRows} (คาด 1)`;
         } else {
-          // กดรายการที่ยังไม่อ่าน → ต้องปิด panel + พาไปแท็บ orders
+          // กดรายการที่ยังไม่อ่าน → ต้องปิด panel + พาไปแท็บ orders + **เด้งไปที่ของชิ้นนั้น**
           await page.locator('.noti-item.unread').first().click({ timeout: 2000 });
           await page.waitForTimeout(500);
           const stillOpen = await page.locator('.noti-panel').count();
           const onOrders = await page.locator('body').innerText()
             .then(t => /รายการสั่งของ|VAS001/.test(t)).catch(() => false);
+          // fixture ตั้ง focus:'VAS001' ไว้ ซึ่งเป็นใบ "ขึ้นรถ" = แถวที่ 2 (แถวแรกคือของหิ้ว FLW002)
+          // ต้องกะพริบที่ใบนั้นใบเดียว — ไปกะพริบใบแรกแทน = เด้งผิดใบแต่ดูเหมือนทำงาน
+          const flashed = await page.locator('.dmj-focus-flash[data-order-sku]')
+            .first().getAttribute('data-order-sku').catch(() => null);
           if (stillOpen) { status = 'PANEL_CLOSE_FAIL'; note = 'กดแล้ว panel ไม่ปิด'; }
           else if (!onOrders) { status = 'NAV_FAIL'; note = 'กดแล้วไม่พาไปแท็บปลายทาง'; }
-          else note = 'badge/panel/nav ครบ';
+          else if (flashed !== 'VAS001') {
+            status = 'FOCUS_FAIL'; note = `กะพริบที่ "${flashed}" (คาด VAS001) — ไม่ได้เด้งไปที่ของที่ต้องจัด`;
+          }
+          else note = 'badge/panel/nav/เด้งไปที่สินค้า ครบ';
         }
       }
     } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
     await page.screenshot({ path: path.join(SHOTS, `notibell__${bellRole}.png`) }).catch(() => {});
     results.push({ role: 'interact', tab: `กระดิ่งแจ้งเตือน (${bellRole})`, status, note });
+    await page.close();
+  }
+
+  // ── (ง) ทางด่วนลงเวลา: ข้อมูลก้อนใหญ่ยังไม่มา แต่ต้องลงเวลาได้แล้ว ──────────
+  // `?nodata=1` = ไม่ seed localStorage + คำขอ payload ค้างไม่ตอบ (เหมือนเน็ตร้านช้า)
+  // นี่คือสภาพจริงของพนักงานที่เปิดแอปบนเครื่องใหม่/หลังล้าง cache แล้วมาสแกนเข้างาน
+  // ⚠️ เทสต์ปกติทุกตัวเดินผ่านเส้นทาง "มีข้อมูลแล้ว" เท่านั้น เส้นนี้จึงไม่เคยถูกทดสอบเลย
+  for (const fpRole of ['frontstore', 'warehouse']) {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=${fpRole}&tab=attendance&nodata=1`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      await page.waitForTimeout(1200);
+      const txt = await page.locator('body').innerText();
+      const punchable = /เข้างาน|ลงเวลา/.test(txt);
+      const stuck     = /กำลังโหลดข้อมูล Dashboard/.test(txt);
+      const navCount  = await page.locator('.topnav, nav').count();
+      if (stuck)          { status = 'BLOCKED';  note = 'ยังติดจอโหลด — ทางด่วนไม่ทำงาน'; }
+      else if (!punchable){ status = 'NO_PUNCH'; note = 'ไม่เห็นปุ่มลงเวลา'; }
+      else if (!navCount) { status = 'NO_NAV';   note = 'ไม่มีแถบเมนู — ออกจากแท็บนี้แล้วกลับมาไม่ได้'; }
+      else {
+        // กดไปแท็บที่ต้องใช้ข้อมูล → ต้องเห็นจอโหลด **แต่แถบเมนูต้องยังอยู่**
+        await navigateTo(page, fpRole, 'stock').catch(() => {});
+        await page.waitForTimeout(600);
+        const navAfter = await page.locator('.topnav, nav').count();
+        if (!navAfter) { status = 'NAV_LOST'; note = 'กดแท็บอื่นแล้วแถบเมนูหาย = กลับมาลงเวลาไม่ได้'; }
+        else note = 'ลงเวลาได้ทั้งที่ยังไม่มีข้อมูล + เมนูอยู่ครบ';
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, `fastpath__${fpRole}.png`) }).catch(() => {});
+    results.push({ role: 'interact', tab: `ทางด่วนลงเวลา (${fpRole})`, status, note });
     await page.close();
   }
 

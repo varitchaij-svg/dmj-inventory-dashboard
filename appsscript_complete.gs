@@ -251,6 +251,32 @@ function writeAuditLog_(actor, action, resource, detail) {
   }
 }
 
+// เขียน Audit Log หลายแถวรวดเดียว — ผลลัพธ์ในชีตเหมือน writeAuditLog_ ทีละแถวเป๊ะ
+// (1 งาน = 1 แถว เท่าเดิม ตัวเลขในแท็บ "ผลงานพนักงาน" จึงไม่เปลี่ยน) แต่เขียนครั้งเดียว
+// มีไว้เพราะงานที่ทำทีละหลายสิบ SKU (โอนของขึ้นรถ) เสียเวลาไปกับ appendRow ทีละแถวมากจน
+// คำตอบกลับไม่ทันเพดานเวลาฝั่ง browser → ผู้ใช้เห็น "ส่งไม่สำเร็จ" ทั้งที่ของโอนไปแล้ว
+// ⚠️ ชื่อ action ที่ส่งเข้ามาต้องมีหมวดใน STAFF_PERF_CATEGORIES_ เหมือน writeAuditLog_ ทุกประการ
+//    (tests/staff-perf.test.js สแกน call site ของทั้งสองฟังก์ชัน)
+function writeAuditLogBatch_(actor, action, items) {
+  try {
+    if (!items || !items.length) return;
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    let sh = ss.getSheetByName(SHEET_AUDIT);
+    if (!sh) {
+      sh = ss.insertSheet(SHEET_AUDIT);
+      sh.appendRow(["วันที่เวลา", "ผู้ใช้", "Action", "Resource", "รายละเอียด"]);
+      sh.getRange(1, 1, 1, 5).setFontWeight("bold");
+    }
+    const now = new Date();
+    const rows = items.map(function (it) {
+      return [now, actor || "ไม่ระบุ", action || "", (it && it.resource) || "", (it && it.detail) || ""];
+    });
+    sh.getRange(sh.getLastRow() + 1, 1, rows.length, 5).setValues(rows);
+  } catch (e) {
+    Logger.log("writeAuditLogBatch_ error: " + e);
+  }
+}
+
 // สร้าง detail string แบบ JSON มาตรฐาน สำหรับ audit log ที่ต้องเก็บ before/after
 // รับ object อิสระ (ไม่ fix shape) เพื่อรองรับข้อมูลเพิ่มเติมในอนาคตโดยไม่ต้องแก้ signature
 // ตัวอย่าง: auditDetail_({ before: {status:"รอ"}, after: null, note: "ลบ order หลังส่งสำเร็จ" })
@@ -416,12 +442,33 @@ function isAutoOwnerLineName_(name) {
 }
 
 // ล็อกอินด้วย LINE — upsert แถวพนักงาน (คนแรกที่เคยล็อกอินในระบบ = owner อัตโนมัติ) + ออก session
+// cache key ของผลลัพธ์แลก code — code จาก LINE ยาวเกิน key limit ของ CacheService
+// ย่อด้วย MD5 ก่อน (ไม่ได้ใช้เชิงความปลอดภัย แค่ให้ key สั้นและไม่ชนกัน)
+function authCodeCacheKey_(code) {
+  const raw = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, String(code));
+  return "authline_" + raw.map(function (b) { return ((b & 0xFF) + 256).toString(16).slice(1); }).join("");
+}
+
 function authLine_(ss, data) {
   try {
     if (!LINE_LOGIN_CHANNEL_ID || !LINE_LOGIN_CHANNEL_SECRET) {
       return ContentService.createTextOutput(JSON.stringify({ ok: false, error: "ยังไม่ได้ตั้งค่า LINE Login ฝั่งเซิร์ฟเวอร์ (Script Properties)" }))
         .setMimeType(ContentService.MimeType.JSON);
     }
+
+    // ── idempotent ต่อ 1 code ──────────────────────────────────────────────
+    // code จาก LINE ใช้ได้ครั้งเดียว ยิงซ้ำได้ invalid_grant
+    // เคสจริงที่ทำให้พนักงานต้องกดล็อกอินซ้ำ 3-4 รอบ: ฝั่งนี้ทำสำเร็จไปแล้ว
+    // (ออก session + เขียนชีตครบ) แต่ response หายกลางทางเพราะเน็ตมือถือหลุด
+    // → พนักงานกดใหม่ เจอ invalid_grant → ต้องเริ่มจากแอป LINE ใหม่ทั้งรอบ
+    // → เก็บผลที่สำเร็จไว้ 10 นาที ยิง code เดิมซ้ำได้ session เดิมกลับไปเลย
+    const ck = authCodeCacheKey_(data.code);
+    const cache = CacheService.getScriptCache();
+    const cachedRes = cache.get(ck);
+    if (cachedRes) {
+      return ContentService.createTextOutput(cachedRes).setMimeType(ContentService.MimeType.JSON);
+    }
+
     const tokenRes = exchangeLineToken_(data.code, data.redirectUri);
     const claims = verifyLineIdToken_(tokenRes.id_token);
     const providerUserId = claims.sub;
@@ -474,9 +521,9 @@ function authLine_(ss, data) {
     // ฝากผลไว้ให้ context ที่ "เริ่ม" ล็อกอินมารับเอง (iOS PWA ที่ถูกเด้งไปจบใน Safari)
     // handoffId = ค่า state ที่ LINE ส่งกลับมา ซึ่งคือ SHA-256 ของ secret ที่อยู่กับ PWA เท่านั้น
     saveLoginHandoff_(data.handoffId, sessionToken, staffPayload);
-    return ContentService.createTextOutput(JSON.stringify({
-      ok: true, sessionToken: sessionToken, staff: staffPayload,
-    })).setMimeType(ContentService.MimeType.JSON);
+    const payload = JSON.stringify({ ok: true, sessionToken: sessionToken, staff: staffPayload });
+    try { cache.put(ck, payload, 600); } catch (e) { Logger.log("authLine_ cache put: " + e); }
+    return ContentService.createTextOutput(payload).setMimeType(ContentService.MimeType.JSON);
   } catch (e) {
     return ContentService.createTextOutput(JSON.stringify({ ok: false, error: e.toString() }))
       .setMimeType(ContentService.MimeType.JSON);
@@ -485,7 +532,11 @@ function authLine_(ss, data) {
 
 function meHandler_(ss, data) {
   const s = resolveSession_(ss, data.sessionToken);
-  if (!s) return ContentService.createTextOutput(JSON.stringify({ ok: false })).setMimeType(ContentService.MimeType.JSON);
+  // invalid:true = "session นี้ใช้ไม่ได้จริง ๆ" (หมดอายุ/ถูก revoke/ไม่มีในชีต) → client ลบ token ได้
+  // ต้องแยกออกจาก error ชั่วคราว เพราะ doPost catch ตอบ {success:false} ซึ่ง "ไม่มี ok" เหมือนกัน
+  // ถ้า client ลบ token ตามทุกกรณีที่ไม่ ok พนักงานจะโดนเตะออกทั้งที่ session ยังดี
+  // (ชีตชนกัน/quota/timeout ชั่วคราว) แล้วต้องล็อกอินใหม่โดยไม่มีเหตุผล
+  if (!s) return ContentService.createTextOutput(JSON.stringify({ ok: false, invalid: true })).setMimeType(ContentService.MimeType.JSON);
   return ContentService.createTextOutput(JSON.stringify({
     ok: true, staff: { staffId: s.staffId, name: s.displayName || s.lineDisplayName, role: s.role, status: s.status, pictureUrl: s.pictureUrl },
   })).setMimeType(ContentService.MimeType.JSON);
@@ -991,11 +1042,33 @@ function attMinOfDay_(d) {
 }
 
 // อ่านเหตุการณ์ลงเวลาของ "คนเดียว วันเดียว" — เรียงตามเวลา
+// ⚠️ อ่านชีตลงเวลา **ทั้งใบ** แล้วค่อยกรองใน JS เหลือคนเดียววันเดียว
+// ชีตโตขึ้น 1 แถวต่อการกดปุ่ม 1 ครั้ง (~2 หมื่นแถว/ปี) → ต้นทุนตรงนี้โตตามไปเรื่อย ๆ
+// โดยไม่มีอะไรเตือน และมันอยู่บนเส้นทาง "พนักงานกดลงเวลา" ซึ่งต้องเร็วที่สุด
+//
+// **ยังไม่แก้ในรอบนี้โดยตั้งใจ** — วิธีที่นึกออกทันทีคือ "ไล่จากล่างขึ้นบนแล้วหยุดเมื่อเจอวันเก่ากว่า"
+// ซึ่ง **ไม่ปลอดภัย** ด้วยเหตุผลที่ยืนยันจากโค้ดจริง 2 ข้อ:
+//   1. `fixAttendanceHandler_` op="add" ใช้ `appendRow` → แถว**ย้อนหลัง**ไปอยู่**ล่างสุด**
+//      (เจ้าของแก้เวลาให้พนักงานเมื่อวาน = แถววันเก่าโผล่ท้ายสุด) → ไล่จากล่างจะหยุดทันที
+//      แล้ว**ตกแถวของวันนี้ที่อยู่เหนือขึ้นไป** = ชั่วโมงทำงานหาย โดยไม่มี error ให้เห็น
+//   2. op="delete" ใช้ `deleteRow` → ลำดับมีช่องโหว่ ไม่ใช่ append-only ล้วน
+// ข้อมูลนี้ใช้คิดชั่วโมงทำงานจริง เดาผิดแล้วเงียบ = แย่กว่าช้า
+//
+// จึง**วัดก่อน**: log ขนาด+เวลาไว้ดูที่ Executions ว่าตอนนี้แพงจริงแค่ไหน
+// แล้วค่อยเลือกวิธี (index แยก / TextFinder / ชีตรายเดือน) ตามตัวเลขจริง
 function readAttEvents_(ss, staffId, dateStr) {
+  const _t0 = Date.now();
   const sh = attendanceSheet_(ss);
   const last = sh.getLastRow();
   if (last < 2) return [];
   const vals = sh.getRange(2, 1, last - 1, 17).getValues();
+  try {
+    // log เฉพาะตอนที่เริ่มแพงจริง — ไม่งั้นทุกการกดปุ่มเขียน log เปล่า ๆ กลบของสำคัญ
+    if (vals.length >= 3000 || (Date.now() - _t0) >= 1000) {
+      Logger.log('[perf] readAttEvents_ ' + vals.length + ' แถว · ' + (Date.now() - _t0) + 'ms'
+               + ' (กรองเหลือ staff=' + staffId + ' date=' + dateStr + ')');
+    }
+  } catch (e) {}
   const out = [];
   for (let i = 0; i < vals.length; i++) {
     const r = vals[i];
@@ -1524,6 +1597,272 @@ function attErr_(msg) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// 🏅 สรุปผลงานพนักงาน (action=staffPerf) — owner/dev เท่านั้น
+// ───────────────────────────────────────────────────────────
+// รวมยอด "ใครทำอะไรไปกี่รายการเดือนนี้" จากข้อมูลที่ระบบเก็บอยู่แล้ว 2 แหล่ง:
+//   1. ชีต "Audit Log"  → จำนวนงานแต่ละประเภท (นับสต็อก/เช็คหน้าร้าน/จัดออเดอร์/โอน/ขาย ...)
+//   2. ชีต "ลงเวลา"     → ชั่วโมงทำงานจริง → คิดเป็น "งาน/ชั่วโมง" ได้
+//
+// ⚠️ รวมยอด **ฝั่ง server** ไม่ส่งแถวดิบให้ client — ชีต Audit Log โตทุกครั้งที่มีคนแก้ข้อมูล
+//    (`getAuditLog` ส่งได้แค่ 200 แถวล่าสุด ซึ่งไม่พอสำหรับสรุปทั้งเดือนอยู่แล้ว) และการส่ง
+//    แถวดิบเป็นหมื่นแถวคือปัญหา "ขนาด payload" เดียวกับที่ Phase 7.4 เพิ่งแก้ไป
+//
+// ⚠️ **ตัวเลขนี้คือ "งานที่ระบบบันทึกได้" ไม่ใช่ "งานทั้งหมดที่ทำ"** — เดินหาของ/ยกของ/ตอบลูกค้า
+//    ไม่มีใน log · เอาไปเทียบข้ามตำแหน่งกันตรง ๆ ไม่ได้ (คนนับสต็อกได้ 1 แถว/SKU แต่คนขาย
+//    ได้ 1 แถว/บิล) UI จึงต้องเทียบ "คนตำแหน่งเดียวกัน" และติดหมายเหตุนี้ไว้เสมอ
+//
+// ⚠️ actor ในชีตเป็น **ชื่อ** ("สมชาย (คลังสินค้า)") ไม่ใช่ staffId — จับคู่กลับด้วยชื่อ
+//    ที่ตัดวงเล็บตำแหน่งออก · ชื่อที่จับคู่ไม่ได้ **ต้องรายงานออกไป (`unmatched`) ห้ามทิ้งเงียบ**
+//    ไม่งั้นเจ้าของเห็นยอดพนักงานคนหนึ่งเป็น 0 แล้วนึกว่าไม่ได้ทำงาน ทั้งที่แค่ชื่อไม่ตรงกัน
+//    (เช่น เปลี่ยนชื่อในชีตพนักงานทีหลัง — log เก่ายังเป็นชื่อเดิม)
+// ═══════════════════════════════════════════════════════════
+
+// หมวดงาน — จับจาก "ต้นข้อความ" ของ action ที่ writeAuditLog_ เขียน (prefix match)
+// เพราะบาง action ต่อท้ายด้วยข้อมูลเพิ่ม เช่น "แก้ไขการลงเวลา (" + op + ")"
+//   ops:true  = งานหน้างานจริง (หยิบ/นับ/โอน/ขาย) — เอาไปคิด "งาน/ชั่วโมง"
+//   ops:false = งานตั้งค่า/แก้ข้อมูล — นับรวมไว้ให้เห็น แต่ไม่ใช่ปริมาณงานหน้างาน
+//   skip:true = **ไม่นับเป็น "งาน" เลย** — โชว์ให้เห็นได้ แต่ไม่เข้ายอดรวม/ไม่เข้า งาน/ชม.
+//               (การกดลงเวลามี ~4-6 ครั้ง/วัน/คน ถ้านับรวมจะกลบงานจริงจนตัวเลขไม่มีความหมาย
+//                — ชั่วโมงทำงานที่ได้จากการกดพวกนี้ถูกนับแยกอยู่แล้วในคอลัมน์ "ชั่วโมง")
+// ⚠️ เพิ่ม action ใหม่ใน writeAuditLog_ แล้วต้องมาเติม prefix ที่นี่ด้วย ไม่งั้นตกไปอยู่ "อื่นๆ"
+//    (tests/staff-perf.test.js มี meta-test ไล่ทุก call site ให้แล้ว — ลืมแล้วเทสต์แดงทันที)
+const STAFF_PERF_CATEGORIES_ = [
+  { key: "count",      emoji: "📊", label: "นับสต็อกคลัง",      ops: true,  unit: "รายการ", prefixes: ["นับสต็อก"] },
+  { key: "fscheck",    emoji: "🏪", label: "เช็คหน้าร้าน",       ops: true,  unit: "รายการ", prefixes: ["ตรวจหน้าร้าน"] },
+  { key: "order",      emoji: "📋", label: "จัดออเดอร์",         ops: true,  unit: "ครั้ง",  prefixes: ["อัปเดต order"] },
+  { key: "transfer",   emoji: "🔄", label: "โอนของ",             ops: true,  unit: "รายการ", prefixes: ["โอนสต็อก"] },
+  { key: "receive",    emoji: "📥", label: "หน้าร้านรับของ",     ops: true,  unit: "รายการ", prefixes: ["รับสินค้า"] },
+  { key: "location",   emoji: "🗺️", label: "จัดตำแหน่งล็อค",     ops: true,  unit: "ครั้ง",  prefixes: ["updateLockData", "ลบตำแหน่งจัดเก็บ", "sweepEmptyShelf"] },
+  { key: "purchase",   emoji: "🛒", label: "รับของเข้าคลัง",     ops: true,  unit: "ครั้ง",  prefixes: ["ซื้อสินค้าเข้า"] },
+  { key: "newproduct", emoji: "➕", label: "เพิ่มสินค้าใหม่",     ops: true,  unit: "รายการ", prefixes: ["เพิ่มสินค้าใหม่"] },
+  { key: "mto",        emoji: "🎁", label: "งานจัดพิเศษ",        ops: true,  unit: "ครั้ง",  prefixes: ["สร้างงาน MTO", "มอบหมายงาน MTO", "ปิดงาน MTO", "ลบงาน MTO", "deductMaterials"] },
+  { key: "sale",       emoji: "🧾", label: "ออกบิลขาย",          ops: true,  unit: "ใบ",    prefixes: ["ออกบิลขาย", "ออกใบกำกับภาษีย้อนหลัง"] },
+  { key: "quote",      emoji: "📄", label: "ใบเสนอราคา",         ops: true,  unit: "ใบ",    prefixes: ["สร้างใบเสนอราคา", "แก้ไขใบเสนอราคา", "อนุมัติใบเสนอราคา", "ปิดใบเสนอราคา"] },
+  { key: "adjust",     emoji: "⚙️", label: "ปรับ/ลบข้อมูล",      ops: false, unit: "ครั้ง",  prefixes: ["ปรับสต็อก0", "resetNegativeStock", "ลบ order"] },
+  { key: "star",       emoji: "⭐", label: "ตั้งผู้ดูแลสินค้า",   ops: false, unit: "ครั้ง",  prefixes: ["setProductOwner", "clearProductOwner"] },
+  { key: "admin",      emoji: "🔧", label: "ตั้งค่าระบบ",        ops: false, unit: "ครั้ง",  prefixes: ["แก้ไขพนักงาน", "แก้ไขการลงเวลา", "saveThresholds", "ตั้งตำแหน่งพนักงาน"] },
+  { key: "punch",      emoji: "🕐", label: "กดลงเวลา",           ops: false, unit: "ครั้ง",  skip: true, prefixes: ["ลงเวลา"] },
+];
+const STAFF_PERF_OTHER_ = { key: "other", emoji: "➖", label: "อื่นๆ", ops: false, unit: "ครั้ง" };
+
+// actor ที่ไม่ใช่คน — ไม่ต้องเอาไปรายงานว่า "จับคู่ชื่อไม่ได้" (ไม่ใช่พนักงานตั้งแต่แรก)
+const STAFF_PERF_SYSTEM_ACTORS_ = ["ระบบ", "ระบบ (อัตโนมัติ)", "GAS editor", "ไม่ระบุ", "owner", ""];
+
+const STAFF_PERF_CACHE_TTL_SEC_ = 300;   // 5 นาที — เป็นรายงานย้อนหลัง ไม่ใช่ตัวเลขที่ต้องสด
+
+function staffPerfCategoryOf_(action) {
+  const a = String(action == null ? "" : action).trim();
+  if (!a) return STAFF_PERF_OTHER_.key;
+  for (let i = 0; i < STAFF_PERF_CATEGORIES_.length; i++) {
+    const c = STAFF_PERF_CATEGORIES_[i];
+    for (let j = 0; j < c.prefixes.length; j++) {
+      if (a.indexOf(c.prefixes[j]) === 0) return c.key;
+    }
+  }
+  return STAFF_PERF_OTHER_.key;
+}
+
+// "สมชาย (คลังสินค้า)" → "สมชาย" · ตัดเฉพาะวงเล็บ "ท้ายสุด" ชุดเดียว
+function staffPerfNormalizeActor_(actor) {
+  return String(actor == null ? "" : actor).trim().replace(/\s*\([^()]*\)\s*$/, "").trim();
+}
+
+// วันที่ในชีต Audit Log — appendRow เขียนเป็น Date object จริง แต่รับ string เผื่อแถวที่แก้มือ
+// ⚠️ ปี พ.ศ. (บทเรียนข้อ 11): "5/8/2569" ถ้าปล่อยให้ new Date() ตีความจะได้อนาคต 543 ปี
+function staffPerfDayKey_(v) {
+  if (v === null || v === undefined || v === "") return "";
+  if (Object.prototype.toString.call(v) === "[object Date]") {
+    return isNaN(v.getTime()) ? "" : Utilities.formatDate(v, "Asia/Bangkok", "yyyy-MM-dd");
+  }
+  const s = String(v).trim();
+  const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (iso) return iso[1] + "-" + iso[2] + "-" + iso[3];
+  const th = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(s);   // d/M/yyyy — toLocaleString("th-TH")
+  if (th) {
+    let y = Number(th[3]);
+    if (y >= 2400) y -= 543;
+    return y + "-" + String(Number(th[2])).padStart(2, "0") + "-" + String(Number(th[1])).padStart(2, "0");
+  }
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? "" : Utilities.formatDate(d, "Asia/Bangkok", "yyyy-MM-dd");
+}
+
+// รวมยอดจาก Audit Log — คืน { byActor: {ชื่อดิบ: {display, total, byCat, byDay}}, rows }
+// แยกออกมาเป็นฟังก์ชัน pure (รับ array ไม่ใช่ชีต) เพื่อเทสต์ได้โดยไม่ต้องมี Spreadsheet
+function staffPerfAggregateAudit_(rows, monthKey) {
+  const byActor = {};
+  let counted = 0;
+  (rows || []).forEach(function (r) {
+    const day = staffPerfDayKey_(r[0]);
+    if (!day || day.slice(0, 7) !== monthKey) return;
+    const raw = String(r[1] == null ? "" : r[1]).trim();
+    const cat = staffPerfCategoryOf_(r[2]);
+    counted++;
+    let b = byActor[raw];
+    if (!b) b = byActor[raw] = { display: raw, total: 0, opsTotal: 0, byCat: {}, byDay: {} };
+    b.byCat[cat] = (b.byCat[cat] || 0) + 1;
+    // skip:true (กดลงเวลา) — เก็บให้เห็นใน byCat ได้ แต่ห้ามเข้ายอดรวม/กราฟรายวัน
+    if (staffPerfCatDef_(cat).skip) return;
+    b.total++;
+    if (staffPerfCatDef_(cat).ops) b.opsTotal++;
+    b.byDay[day] = (b.byDay[day] || 0) + 1;
+  });
+  return { byActor: byActor, rows: counted };
+}
+
+function staffPerfCatDef_(key) {
+  for (let i = 0; i < STAFF_PERF_CATEGORIES_.length; i++) {
+    if (STAFF_PERF_CATEGORIES_[i].key === key) return STAFF_PERF_CATEGORIES_[i];
+  }
+  return STAFF_PERF_OTHER_;
+}
+
+function staffPerfBuild_(ss, monthStr) {
+  const range = attMonthRange_(monthStr);   // ตัดวันอนาคตให้แล้ว (เดือนปัจจุบัน = ถึงวันนี้)
+  const monthKey = range.month;
+
+  // ── 1) Audit Log — อ่านคอลัมน์วันที่ก่อน (คอลัมน์เดียว) เพื่อหาช่วงแถวของเดือนนี้
+  //      แล้วค่อยอ่าน 5 คอลัมน์เฉพาะช่วงนั้น · ชีตนี้ append อย่างเดียวจึงเรียงตามเวลาอยู่แล้ว
+  //      (แถวนอกช่วงที่หลุดเข้ามาถูกกรองซ้ำใน staffPerfAggregateAudit_ อีกชั้น)
+  let audit = { byActor: {}, rows: 0 };
+  const shA = ss.getSheetByName(SHEET_AUDIT);
+  if (shA) {
+    const lastA = shA.getLastRow();
+    if (lastA >= 2) {
+      const dcol = shA.getRange(2, 1, lastA - 1, 1).getValues();
+      let startIdx = -1, endIdx = -1;
+      for (let i = 0; i < dcol.length; i++) {
+        const dk = staffPerfDayKey_(dcol[i][0]);
+        if (!dk || dk.slice(0, 7) !== monthKey) continue;
+        if (startIdx < 0) startIdx = i;
+        endIdx = i;
+      }
+      if (startIdx >= 0) {
+        audit = staffPerfAggregateAudit_(
+          shA.getRange(2 + startIdx, 1, endIdx - startIdx + 1, 5).getValues(), monthKey);
+      }
+    }
+  }
+
+  // ── 2) ลงเวลา → ชั่วโมงทำงานจริง (อ่านแค่ col B..H ที่ใช้จริง ไม่ใช่ทั้ง 17 คอลัมน์) ──
+  const shifts = readAttShifts_(ss);
+  const shAtt = attendanceSheet_(ss);
+  const lastAtt = shAtt.getLastRow();
+  const attByStaff = {};
+  if (lastAtt >= 2) {
+    // idx: 0=staffId 1=ชื่อ 2=วันที่ 3=เวลา 4=serverTs 5=clientTs 6=ประเภท
+    shAtt.getRange(2, 2, lastAtt - 1, 7).getValues().forEach(function (r) {
+      const d = attRowDateStr_(r[2]);
+      if (!d || d.slice(0, 7) !== monthKey) return;
+      const sid = String(r[0]);
+      if (!sid) return;
+      const per = attByStaff[sid] || (attByStaff[sid] = {});
+      (per[d] = per[d] || []).push({ type: r[6], time: r[3], serverTs: Number(r[4]) || 0 });
+    });
+  }
+
+  // ── 3) จับคู่ actor (ชื่อ) กลับเป็นพนักงาน ──
+  const staffAll = readStaffAll_(ss);
+  const nameToId = {};
+  staffAll.forEach(function (st) {
+    [st.displayName, st.lineDisplayName].forEach(function (n) {
+      const k = String(n || "").trim().toLowerCase();
+      if (k && !nameToId[k]) nameToId[k] = st.staffId;
+    });
+  });
+
+  const perStaff = {};          // staffId -> รวมยอดจาก audit
+  const unmatched = [];         // ชื่อใน log ที่หาพนักงานไม่เจอ — ต้องโชว์ ห้ามทิ้งเงียบ
+  Object.keys(audit.byActor).forEach(function (raw) {
+    const b = audit.byActor[raw];
+    const sid = nameToId[raw.toLowerCase()] ||
+                nameToId[staffPerfNormalizeActor_(raw).toLowerCase()] || null;
+    if (!sid) {
+      if (STAFF_PERF_SYSTEM_ACTORS_.indexOf(raw) < 0) unmatched.push({ actor: raw, total: b.total });
+      return;
+    }
+    const cur = perStaff[sid];
+    if (!cur) { perStaff[sid] = b; return; }
+    // พนักงานคนเดียวมีได้หลายชื่อใน log (เปลี่ยนตำแหน่งแล้ววงเล็บเปลี่ยน) → รวมเข้าด้วยกัน
+    cur.total += b.total;
+    cur.opsTotal += b.opsTotal;
+    Object.keys(b.byCat).forEach(function (k) { cur.byCat[k] = (cur.byCat[k] || 0) + b.byCat[k]; });
+    Object.keys(b.byDay).forEach(function (k) { cur.byDay[k] = (cur.byDay[k] || 0) + b.byDay[k]; });
+  });
+  unmatched.sort(function (a, b) { return b.total - a.total; });
+
+  // ── 4) ประกอบเป็นแถวต่อคน ──
+  const todayStr = attDateKey_(new Date());
+  const staff = staffAll.map(function (st) {
+    const a = perStaff[st.staffId] || { total: 0, opsTotal: 0, byCat: {}, byDay: {} };
+    const perDate = attByStaff[st.staffId] || {};
+
+    let workedMin = 0, daysWorked = 0, lateDays = 0, lateMin = 0, daysAbsent = 0;
+    range.dates.forEach(function (dateStr) {
+      const shift = attShiftFor_(shifts, st.role, attDowOfDateStr_(dateStr));
+      const evs = (perDate[dateStr] || []).sort(function (x, y) { return x.serverTs - y.serverTs; });
+      const sum = attSummarize_(evs, shift);
+      if (sum.workedMin != null) { workedMin += sum.workedMin; daysWorked++; }
+      if (sum.lateMin) { lateDays++; lateMin += sum.lateMin; }
+      if (dateStr < todayStr && shift && !sum.inTime) daysAbsent++;
+    });
+
+    // งาน/ชั่วโมง — ไม่โชว์เมื่อชั่วโมงน้อยเกินไป (ฐานเล็ก = ตัวเลขเว่อร์ หลักเดียวกับ MoM
+    //   ที่ไม่โชว์ delta ในวันที่ 1–2 ของเดือน) · ต้องมีทั้งชั่วโมงและงานถึงจะมีความหมาย
+    const perHour = (workedMin >= 60 && a.total > 0)
+      ? Math.round((a.total / (workedMin / 60)) * 10) / 10 : null;
+
+    return {
+      staffId: st.staffId, name: st.displayName || st.lineDisplayName || st.staffId,
+      role: st.role, status: st.status, pictureUrl: st.pictureUrl || "",
+      total: a.total, opsTotal: a.opsTotal, byCat: a.byCat, byDay: a.byDay,
+      workedMin: workedMin, daysWorked: daysWorked,
+      lateDays: lateDays, lateMin: lateMin, daysAbsent: daysAbsent,
+      perHour: perHour,
+    };
+  }).filter(function (row) {
+    // คนที่ลาออกแล้วและไม่มีความเคลื่อนไหวในเดือนนั้น — ไม่ต้องรกหน้าจอ
+    return row.status === "active" || row.total > 0 || row.workedMin > 0;
+  }).sort(function (a, b) { return b.total - a.total || b.workedMin - a.workedMin; });
+
+  return {
+    month: monthKey,
+    isCurrentMonth: range.isCurrentMonth,
+    lastDate: range.dates.length ? range.dates[range.dates.length - 1] : monthKey + "-01",
+    cats: STAFF_PERF_CATEGORIES_.map(function (c) {
+      return { key: c.key, emoji: c.emoji, label: c.label, ops: c.ops, unit: c.unit, skip: !!c.skip };
+    }).concat([{ key: STAFF_PERF_OTHER_.key, emoji: STAFF_PERF_OTHER_.emoji,
+                 label: STAFF_PERF_OTHER_.label, ops: false, unit: STAFF_PERF_OTHER_.unit, skip: false }]),
+    staff: staff,
+    unmatched: unmatched,
+    auditRows: audit.rows,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+function staffPerfHandler_(e) {
+  const p = (e && e.parameter) || {};
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const sess = resolveSession_(ss, p.sessionToken);
+  // ข้อมูลผลงานรายคนเป็นเรื่องอ่อนไหว — owner/dev เท่านั้น (เหมือน getAuditLog)
+  if (!sess || !isAdminRole_(sess.role) || sess.status !== 'active') return unauthorized_();
+
+  const month = /^\d{4}-\d{2}$/.test(String(p.month || "")) ? String(p.month) : "";
+  const cacheKey = "dmj_staffperf_" + (month || attDateKey_(new Date()).slice(0, 7));
+  const cache = CacheService.getScriptCache();
+  if (p.fresh !== "1") {
+    try {
+      const hit = cache.get(cacheKey);
+      if (hit) return ContentService.createTextOutput(hit).setMimeType(ContentService.MimeType.JSON);
+    } catch (err) { /* cache อ่านไม่ได้ก็แค่คำนวณใหม่ */ }
+  }
+
+  const body = JSON.stringify({ success: true, data: staffPerfBuild_(ss, month) });
+  try { cache.put(cacheKey, body, STAFF_PERF_CACHE_TTL_SEC_); } catch (err) { /* ใหญ่เกิน/เต็ม = ข้าม */ }
+  return ContentService.createTextOutput(body).setMimeType(ContentService.MimeType.JSON);
+}
+
+// ═══════════════════════════════════════════════════════════
 // งานดูแลข้อมูลลงเวลา — trigger รายวัน (ตั้งด้วย setupAttendanceMaintenance)
 // ───────────────────────────────────────────────────────────
 // รวม 3 งานที่ต้องทำสม่ำเสมอไว้ใน trigger เดียว (ประหยัดโควตา trigger ของ GAS):
@@ -1803,7 +2142,7 @@ function doPost(e) {
 
     // ─── Stock Transfer (Batch): คลัง → หน้าร้าน หลาย SKU ในครั้งเดียว ───
     if (data.transferStockBatch) {
-      return transferStockBatch(ss, data.list || [], actor, data.clientLoadedAt);
+      return transferStockBatch(ss, data.list || [], actor, data.clientLoadedAt, data.tid);
     }
 
     // ─── Zero Stock: ตั้ง WH qty=0 ใน Sheets + ZORT (สินค้าหมด ไม่ได้จัด) ───
@@ -1858,7 +2197,8 @@ function doPost(e) {
 
     // ─── Confirm Shipment Receive (sale/FS ยืนยันรับของจากชีตรายการโอนสินค้า) ───
     if (data.confirmShipmentReceive) {
-      return confirmShipmentReceive(ss, data.rowId, data.sku, Number(data.receivedQty) || 0, actor);
+      // refNum = ใบโอน (TF-...) ใช้หาแถวที่ถูกต้องเมื่อเลขแถวที่เครื่องผู้ใช้ถืออยู่เลื่อนไปแล้ว
+      return confirmShipmentReceive(ss, data.rowId, data.sku, Number(data.receivedQty) || 0, actor, data.refNum);
     }
 
     // ─── Lock Data ───
@@ -1934,10 +2274,10 @@ function doPost(e) {
 
     // ─── Order Management ───
     if (data.deleteOrder) {
-      return deleteOrderRow(ss, data.orderId, actor);
+      return deleteOrderRow(ss, data.orderId, actor, data.sku);
     }
     if (data.deleteOrders) {
-      return deleteOrderRows(ss, data.orderIds || [], actor);
+      return deleteOrderRows(ss, data.orderIds || [], actor, data.orderSkus || []);
     }
 
     // ─── Manual ZORT Sync ───
@@ -1990,6 +2330,29 @@ function doPost(e) {
 function doGet(e) {
   try {
     if (!checkToken_(e && e.parameter && e.parameter.token)) return unauthorized_();
+    // ตัวแยกสาเหตุ: เส้นทางเดียวกันเป๊ะกับ payload แต่คำตอบจิ๋วและไม่แตะชีตเลย
+    // ยิงพร้อมกัน 15 แล้วได้ JSON ครบ = คอขวดอยู่ที่ "ขนาดคำตอบตอนส่งกลับ" ไม่ใช่ "จำนวนคนพร้อมกัน"
+    // (5 ส.ค. 2026: Executions บอกว่า doGet เสร็จใน 2-5 วิ ทุกอัน แต่ browser ได้ HTML ที่ 23-49 วิ
+    //  → เวลาที่หายไปอยู่นอก execution ต้องพิสูจน์ว่าอยู่ช่วงส่งคำตอบจริงไหม)
+    if (e && e.parameter && e.parameter.action === 'ping') {
+      return ContentService.createTextOutput(JSON.stringify({ ok: true, t: Date.now() }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    // ── Phase 7.4: "ข้อมูลเปลี่ยนหรือยัง" — คำตอบจิ๋ว ไม่แตะชีตเลย (อ่าน Script Property ตัวเดียว) ──
+    // วัดจริง 5 ส.ค. 2026: ก้อน payload = 4.2MB · 15 เครื่องเปิดพร้อมกัน = 63MB ไหลผ่านท่อเดียว
+    // ที่ ~2.3MB/วิ → 27 วินาที ซึ่งนานกว่าอายุลิงก์ดาวน์โหลดของ Google → **HTTP 404 กลางคัน**
+    // (ยืนยันด้วย action=ping ที่ตอบ 0KB แล้วผ่านครบ 15/15 ทั้งที่ยิงพร้อมกันเท่ากัน)
+    // → ตัวนี้ให้ client เทียบก่อนว่าก้อนที่ถืออยู่ยังตรงกับของบน server ไหม ตรง = ไม่ต้องโหลดซ้ำเลย
+    // ⚠️ `dmj_last_write_ts` ขยับเฉพาะเมื่อแก้ข้อมูล **ผ่านแอป** — แก้ชีตด้วยมือใน Google Sheets
+    // ไม่ขยับ (ข้อจำกัดเดิมของระบบ ไม่ใช่ของใหม่) client จึงต้องมีเพดานอายุกำกับเสมอ ห้ามเชื่อยาว
+    if (e && e.parameter && e.parameter.action === 'ver') {
+      return ContentService.createTextOutput(JSON.stringify({ ok: true, ts: getSheetLastModified_() }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    // ── Phase 7.4: ก้อนเบาสำหรับ poll ทุก 30 วิ (แท็บนับสต็อก / เช็คหน้าร้าน) ──
+    if (e && e.parameter && e.parameter.action === 'stocklite') {
+      return stockLiteHandler_();
+    }
     if (e && e.parameter && e.parameter.action === 'order') {
       return handleOrder_(e.parameter);
     }
@@ -2002,6 +2365,39 @@ function doGet(e) {
       return ContentService
         .createTextOutput(JSON.stringify({ ok: true, found: _rowQ > 0, orderId: _rowQ > 0 ? _rowQ - 2 : null }))
         .setMimeType(ContentService.MimeType.JSON);
+    }
+    // "ชุดที่กดส่งขึ้นรถนี้ ลงระบบไปแล้วหรือยัง" — ใช้ตอนคำตอบของ transferStockBatch หายกลางทาง
+    // โอนทีละหลายสิบ SKU ใช้เวลานานกว่าเพดานเวลาฝั่ง browser → browser ตัดสายทั้งที่ GAS
+    // ยังเขียนชีต + สร้างเอกสารโอนใน ZORT ต่อจนจบ · ถ้าไม่ถามก่อน frontend จะขึ้น "ส่งไม่สำเร็จ"
+    // ทั้งที่ของโอนไปแล้ว แล้วผู้ใช้กดซ้ำ = โอนสองเด้ง (หลักเดียวกับ action=orderCheck)
+    if (e && e.parameter && e.parameter.action === 'transferCheck') {
+      return transferCheckHandler_(String(e.parameter.tid || '').trim());
+    }
+    // "มีอะไรถูกโอนคลัง→หน้าร้านไปแล้วบ้างช่วงนี้" — ประวัติจริงจากชีต "รายการโอนสินค้า"
+    // ใช้ตอบคำถาม "ตกลงของอันไหนส่งไปแล้วกันแน่" หลังกดส่งแล้วคำตอบหายกลางทาง
+    // ⚠️ ต้องอ่านสด **ไม่ผ่าน cache** — คนถามตอนนี้คือคนที่ไม่แน่ใจว่าของไปหรือยัง
+    //    ตอบด้วยของเก่าค้าง cache = เขาจะเคลียร์ผิดตัว · ก้อนเล็ก (ไม่กี่ร้อยแถว) จึงไม่ต้อง cache
+    if (e && e.parameter && e.parameter.action === 'recentTransfers') {
+      return recentTransfersHandler_(Number(e.parameter.days) || 3);
+    }
+    // ค้นเอกสารโอนจาก "เลขที่ ZORT" — ใช้ตอน ZORT มีของฝ่ายเดียว ชีตเราไม่มีบันทึก
+    if (e && e.parameter && e.parameter.action === 'zortTransfer') {
+      return zortTransferHandler_(String(e.parameter.number || '').trim());
+    }
+    // เติมแถวชีตโอนที่ขาดหาย (ไม่แตะสต็อก ไม่ยิง ZORT) ผ่าน URL — สำรองไว้เมื่อ GAS editor
+    // ของเจ้าของมีปัญหาแคช/เปิดผิดโปรเจกต์แล้วรัน repairZortTransferLog() ตรง ๆ ไม่ได้
+    // (เจอจริง ส.ค. 2026 — TF-202608035) ปลอดภัยเพราะ repairZortTransferLog เทียบราย SKU
+    // ก่อนเขียนเสมอ (ดูฟังก์ชันนั้น) เรียกซ้ำกี่ครั้งก็ไม่ซ้ำ
+    if (e && e.parameter && e.parameter.action === 'repairTransferLog') {
+      return repairTransferLogHandler_(String(e.parameter.number || '').trim());
+    }
+    // กู้สถานะ "รับของแล้ว" จาก Audit Log ผ่าน URL (ดู previewTransferReceiptsFromAudit /
+    // applyTransferReceiptsFromAudit — ตัวนี้แค่ห่อให้เรียกได้เมื่อ GAS editor ใช้ไม่ได้)
+    if (e && e.parameter && e.parameter.action === 'previewTransferReceipts') {
+      return previewTransferReceiptsHandler_(String(e.parameter.number || '').trim());
+    }
+    if (e && e.parameter && e.parameter.action === 'applyTransferReceipts') {
+      return applyTransferReceiptsHandler_(String(e.parameter.number || '').trim());
     }
     // ตรวจ PIN เจ้าของฝั่ง server (PIN ไม่อยู่ใน source โค้ด frontend)
     // ตั้งค่าใน Script Property ชื่อ OWNER_PIN; ถ้าไม่ตั้ง ใช้ค่า default 'DMJ' (backward compatible)
@@ -2079,6 +2475,12 @@ function doGet(e) {
       });
       return ContentService.createTextOutput(JSON.stringify({ rows: rows }))
         .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 🏅 สรุปผลงานพนักงานรายเดือน — รวมยอดฝั่ง server จาก Audit Log + ชีตลงเวลา
+    // (ตรวจ session จริงข้างในเหมือน getAuditLog — owner/dev เท่านั้น)
+    if (e && e.parameter && e.parameter.action === 'staffPerf') {
+      return staffPerfHandler_(e);
     }
 
     // สินค้าจม: ดึงสินค้าที่มีในหน้าร้านแต่ไม่ได้รับโอนมานานกว่า 3 เดือน
@@ -2200,49 +2602,111 @@ function doGet(e) {
     const variant = payloadVariantForRole_(e && e.parameter && e.parameter.role);
     const enc     = payloadEncodingForRequest_(e);
     const cacheVariant = payloadCacheVariant_(variant, enc);
+    // แทรก lastModified สด ๆ ลงใน cached payload ก่อน return
+    // แทนที่ค่าใน JSON string ตรง ๆ เพื่อความเร็ว (ไม่ parse ทั้งก้อน)
+    const serveCached = function (str, kind) {
+      const patched = str.replace(/"lastModified"\s*:\s*\d+/, '"lastModified":' + getSheetLastModified_());
+      perfLogDoGet_(kind, cacheVariant, _tReq, patched.length);
+      return ContentService.createTextOutput(patched).setMimeType(ContentService.MimeType.JSON);
+    };
     if (!wantFresh) {
       const cached = getCachedPayload_(cacheVariant);
-      if (cached) {
-        // แทรก lastModified สด ๆ ลงใน cached payload ก่อน return
-        // แทนที่ค่าใน JSON string ตรง ๆ เพื่อความเร็ว (ไม่ parse ทั้งก้อน)
-        const freshMod = getSheetLastModified_();
-        const patched = cached.replace(
-          /"lastModified"\s*:\s*\d+/,
-          '"lastModified":' + freshMod
-        );
-        perfLogDoGet_('HIT', cacheVariant, _tReq, patched.length);
-        return ContentService.createTextOutput(patched).setMimeType(ContentService.MimeType.JSON);
+      if (cached) return serveCached(cached, 'HIT');
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Phase 7.3 — single-flight + stale-while-rebuild
+    // ─────────────────────────────────────────────────────────────────────
+    // เดิม: cache miss → `buildFullData_()` เลย โดยไม่มีอะไรกันไม่ให้หลายคนทำพร้อมกัน
+    // พอมีใครบันทึกอะไร (`invalidateCache_`) หรือ TTL หมด → ทุกเครื่องที่ poll ในวินาทีถัดไป
+    // miss พร้อมกันแล้วสั่ง build พร้อมกันทั้งหมด · วัดจริง 5 ส.ค. 2026 (docs/PHASE0-RESULTS.md):
+    // 15 request พร้อมกัน → **87-93% ได้หน้า HTML แทน JSON, มัธยฐาน 41-52 วิ, ช้าสุด 115 วิ**
+    // นี่คือสิ่งที่พนักงานเจอทุกเช้าที่เปิดแอปพร้อมกัน ไม่ใช่กรณีขอบ
+    //
+    // ตอนนี้: คนแรกที่คว้าล็อกได้ build คนเดียว · คนที่เหลือได้ "ของสำรอง" (ชุดก่อนหน้า
+    // ที่ยังไม่ถูกล้าง) กลับไปทันทีในหลักร้อย ms แทนที่จะไปต่อคิว build ทีละ 10 วินาที
+    let buildLock = acquireBuildLock_(0);
+
+    // ผู้ที่คว้าล็อกไม่ได้ = มีคนกำลัง build อยู่ → เสิร์ฟของสำรองไปก่อน
+    // ⚠️ **ห้ามปั๊ม `lastModified` สดลงในก้อนนี้** (ต่างจากเส้นทาง HIT) — ของสำรองคือข้อมูล
+    // ก่อนการบันทึกล่าสุด ถ้าปั๊มเป็นเวลาปัจจุบัน client จะเข้าใจว่าถืออยู่คือข้อมูลล่าสุด
+    // → conflict detection ปล่อยผ่าน → **เขียนทับงานคนอื่นเงียบ ๆ** ซึ่งแย่กว่าเห็นข้อมูลช้า
+    // ปล่อยให้ `lastModified` เป็นค่าเดิมที่ติดมากับก้อน = server ปฏิเสธการเขียนที่อิงของเก่าถูกต้อง
+    if (!buildLock && !wantFresh) {
+      const stale = readStalePayload_(cacheVariant);
+      if (stale.str) {
+        const outStale = markStalePayload_(stale.str, stale.ts);
+        perfLogDoGet_('STALE', cacheVariant, _tReq, outStale.length,
+          ' อายุ=' + Math.round((Date.now() - (stale.ts || Date.now())) / 1000) + 'วิ');
+        return ContentService.createTextOutput(outStale).setMimeType(ContentService.MimeType.JSON);
       }
     }
 
-    // build ครั้งเดียว (แพงสุดในเส้นทาง) แล้วแตกเป็นทุก variant เก็บ cache ให้ครบในรอบเดียว
-    // ถ้าเก็บเฉพาะ variant ที่ขอ role อื่นที่มาทีหลังจะ miss แล้ว build ใหม่ทั้งก้อนอีกรอบ
-    const data = buildFullData_();
-    const _tBuilt = Date.now();
-    let out = null;
-    PAYLOAD_VARIANTS_.forEach(function (v) {
-      const s = JSON.stringify(shapePayloadForVariant_(data, v));
-      putCachedPayload_(s, payloadCacheVariant_(v, 2));
-      if (v === variant && enc === 2) out = s;
-    });
-    // client เวอร์ชันเก่า (ไม่ส่ง pv) — กางกลับเป็นรูปแบบเดิมแล้ว cache แยกคีย์
-    // ทำเฉพาะ variant ที่ถูกขอจริง ไม่ทำเผื่อทุกตัว เพราะเป็นทางผ่านชั่วคราวช่วง deploy เท่านั้น
-    if (out == null) {
-      out = JSON.stringify(shapePayloadForVariant_(expandMonthlyForLegacy_(data), variant));
-      putCachedPayload_(out, cacheVariant);
+    // มาถึงตรงนี้ได้ 2 กรณี: (1) ไม่มีของสำรองเลย (เพิ่ง deploy / cache เย็นสนิท)
+    // (2) ผู้ใช้กดปุ่ม Sync เอง (`fresh=1`) ซึ่งขอข้อมูลใหม่จริง ๆ จะเอาของสำรองให้ไม่ได้
+    // → รอคิว build ของคนแรกแทนการ build ซ้อน (15 คนกด "ลองใหม่" พร้อมกันตอนเจอ error
+    //   คือจังหวะที่ระบบกำลังแย่อยู่แล้ว ยิ่ง build ซ้อนยิ่งพังหนัก)
+    if (!buildLock) {
+      buildLock = acquireBuildLock_(_BUILD_LOCK_WAIT_MS);
+      const after = readFreshPayload_(cacheVariant);
+      // สำหรับคนกด Sync: รับของที่คนอื่น build ไว้ **เฉพาะที่ build หลังคำขอเราเริ่ม**
+      // ไม่งั้นจะได้ก้อนที่ build ก่อนหน้าไปแล้ว ซึ่งอาจยังไม่มีสิ่งที่เขากด Sync มาหา
+      if (after.str && (!wantFresh || after.ts >= _tReq)) {
+        releaseBuildLock_(buildLock);
+        return serveCached(after.str, 'WAIT-HIT');
+      }
+      // รอจนหมดเวลาแล้วยังไม่มีของ → build เองแม้ไม่ได้ล็อก
+      // ยอมให้ build ซ้อนในกรณีนี้ ดีกว่าปล่อยให้ผู้ใช้ได้หน้าเปล่าโดยไม่มีอะไรเลย
     }
-    // แยก "เวลา build" ออกจาก "เวลา stringify+เขียน cache ทุก variant" — ก้อนหลังเดิมมองไม่เห็นเลย
-    // ถ้าก้อนหลังหนัก การไปเร่ง buildFullData_ อย่างเดียวจะไม่ช่วยอะไร (ดู perfMeasureBuild)
-    //
-    // ⚠️ **ต้องเรียกก่อน `logPayloadSizes_` เสมอ** — ตัวนั้น JSON.stringify ทุกคีย์ + `mo`
-    // ของสินค้าทุกตัวเพื่อวัดขนาด ซึ่งเป็นต้นทุนของ "เครื่องมือวัด" ไม่ใช่ของเส้นทางจริง
-    // สลับลำดับเมื่อไหร่ `shape+cache=` จะโป่งด้วยเวลาของตัววัดเอง แล้วสรุปผิดว่า payload หนัก
-    // (เครื่องมือวัดที่วัดตัวเองรวมไปด้วย = ตัวเลขที่ทำให้จูนผิดจุดอย่างมั่นใจ)
-    perfLogDoGet_(wantFresh ? 'FRESH' : 'MISS', cacheVariant, _tReq, out.length,
-      ' build=' + (_tBuilt - _tReq) + 'ms shape+cache=' + (Date.now() - _tBuilt) + 'ms');
-    logPayloadSizes_(data, cacheVariant, out.length);
-    return ContentService.createTextOutput(out)
-      .setMimeType(ContentService.MimeType.JSON);
+
+    try {
+      // จำไว้ก่อนว่ารอบนี้ถือล็อกมาหรือเปล่า — ด้านล่างมีการ set `buildLock = null`
+      // ถ้าไปอ่าน `buildLock` ทีหลังจะได้ null เสมอ แล้ว log จะรายงานว่า "build ซ้อน" ทุกครั้ง
+      // ทั้งที่ single-flight ทำงานปกติ = ตัวเลขที่ทำให้สรุปผิดว่าตัวแก้ไม่ได้ผล
+      const hadLock = !!buildLock;
+      // build ครั้งเดียว (แพงสุดในเส้นทาง) แล้วแตกเป็นทุก variant เก็บ cache ให้ครบในรอบเดียว
+      // ถ้าเก็บเฉพาะ variant ที่ขอ role อื่นที่มาทีหลังจะ miss แล้ว build ใหม่ทั้งก้อนอีกรอบ
+      const data = buildFullData_();
+      const _tBuilt = Date.now();
+      let out = null;
+      PAYLOAD_VARIANTS_.forEach(function (v) {
+        const s = JSON.stringify(shapePayloadForVariant_(data, v));
+        const cv = payloadCacheVariant_(v, 2);
+        putCachedPayload_(s, cv);
+        putStalePayload_(s, cv);   // Phase 7.3: เขียนชั้นสำรองคู่กันเสมอ
+        if (v === variant && enc === 2) out = s;
+      });
+      // client เวอร์ชันเก่า (ไม่ส่ง pv) — กางกลับเป็นรูปแบบเดิมแล้ว cache แยกคีย์
+      // ทำเฉพาะ variant ที่ถูกขอจริง ไม่ทำเผื่อทุกตัว เพราะเป็นทางผ่านชั่วคราวช่วง deploy เท่านั้น
+      if (out == null) {
+        out = JSON.stringify(shapePayloadForVariant_(expandMonthlyForLegacy_(data), variant));
+        putCachedPayload_(out, cacheVariant);
+        putStalePayload_(out, cacheVariant);
+      }
+      // ปล่อยล็อกทันทีที่ cache พร้อมให้คนอื่นอ่านแล้ว — ที่เหลือด้านล่างเป็น "การวัดผล" ล้วน
+      // `logPayloadSizes_` stringify ทุกคีย์ + `mo` ของสินค้าทุกตัวเพื่อวัดขนาด (หลายร้อย ms)
+      // ถือล็อกคร่อมมันไว้ = คนที่รอคิวอยู่ต้องรอ "ต้นทุนของเครื่องมือวัด" ไม่ใช่ต้นทุนของงานจริง
+      // (finally ด้านล่างยังทำงานปกติ — `releaseBuildLock_` กัน error ให้แล้วถ้าปล่อยซ้ำ)
+      releaseBuildLock_(buildLock);
+      buildLock = null;
+      // แยก "เวลา build" ออกจาก "เวลา stringify+เขียน cache ทุก variant" — ก้อนหลังเดิมมองไม่เห็นเลย
+      // ถ้าก้อนหลังหนัก การไปเร่ง buildFullData_ อย่างเดียวจะไม่ช่วยอะไร (ดู perfMeasureBuild)
+      //
+      // ⚠️ **ต้องเรียกก่อน `logPayloadSizes_` เสมอ** — ตัวนั้น JSON.stringify ทุกคีย์ + `mo`
+      // ของสินค้าทุกตัวเพื่อวัดขนาด ซึ่งเป็นต้นทุนของ "เครื่องมือวัด" ไม่ใช่ของเส้นทางจริง
+      // สลับลำดับเมื่อไหร่ `shape+cache=` จะโป่งด้วยเวลาของตัววัดเอง แล้วสรุปผิดว่า payload หนัก
+      // (เครื่องมือวัดที่วัดตัวเองรวมไปด้วย = ตัวเลขที่ทำให้จูนผิดจุดอย่างมั่นใจ)
+      perfLogDoGet_(wantFresh ? 'FRESH' : 'MISS', cacheVariant, _tReq, out.length,
+        ' build=' + (_tBuilt - _tReq) + 'ms shape+cache=' + (Date.now() - _tBuilt) + 'ms'
+        + (hadLock ? '' : ' (build ซ้อน — รอคิวไม่ทัน)'));
+      logPayloadSizes_(data, cacheVariant, out.length);
+      return ContentService.createTextOutput(out)
+        .setMimeType(ContentService.MimeType.JSON);
+    } finally {
+      // ปล่อยล็อก **หลังเขียน cache เสร็จแล้วเท่านั้น** — ปล่อยก่อนหน้านั้นคนที่รออยู่จะตื่นมา
+      // เจอ cache ว่างแล้ว build ซ้ำ ซึ่งคือปัญหาเดิมที่กำลังแก้อยู่พอดี
+      releaseBuildLock_(buildLock);
+    }
   } catch (error) {
     console.error("doGet Error:", error);
     return ContentService.createTextOutput(JSON.stringify({
@@ -2407,7 +2871,7 @@ function buildFullData_() {
     products.forEach(p => {
       if (!p.locations || p.locations.length === 0) { unassigned.push(p.sku); return; }
       p.locations.forEach(loc => {
-        const key = `${loc.side}${loc.shelf}/${loc.lock}`;
+        const key = lockKeyOf_(loc);
         productLockMap[key] = productLockMap[key] || [];
         productLockMap[key].push(p.sku);
       });
@@ -2456,7 +2920,7 @@ function buildFullData_() {
         totalSoldRev:    products.reduce((s, p) => s + (p.soldRev || 0), 0),
         totalSoldQty:    products.reduce((s, p) => s + (p.soldQty || 0), 0),
         totalProfit:     products.reduce((s, p) => s + (p.profit || 0), 0),
-        // จำนวน SKU ที่เคยมียอดขาย (ตลอดกาล) — frontend คำนวณเองรายช่วงเวลาอีกที
+        // จำนวน SKU ที่เคยมียอดขาย (ตลวดกาล) — frontend คำนวณเองรายช่วงเวลาอีกที
         // แต่ต้องมีคีย์นี้ไว้ ไม่งั้น fmtN(undefined) โชว์ 0 เงียบ ๆ
         nSold:           products.filter(p => (p.soldQty || 0) > 0).length,
         // ราคาขายส่ง = ปลีก × อัตรานี้ (มูลค่าสต๊อกด้านบนคูณไว้แล้ว) — ส่งมาให้ frontend ติดป้ายได้ถูก
@@ -2665,7 +3129,7 @@ function resetNegativeStock_(ss, actor) {
   }
 }
 
-const SHIP_HEADERS = ["หมายเลขรายการ","วันที่ทำรายการ","สถานะ(รอ,สำเร็จ)","จากคลัง/สาขา","ไปคลัง/สาขา","รหัสสินค้า","ชื่อสินค้า","จำนวน","จำนวนที่จัด","รูปภาพ","จำนวนที่รับ","สถานะรับ","รับเมื่อ","ผู้รับ","ผู้จัด"];
+const SHIP_HEADERS = ["หมายเลขรายการ","วันที่ทำรายการ","สถานะ(รอ,สำเร็จ)","จากคลัง/สาขา","ไปคลัง/สาขา","รหัสสินค้า","ชื่อสินค้า","จำนวน","จำนวนที่จัด","รูปภาพ","จำนวนที่รับ","สถานะรับ","รับเมื่อ","ผู้รับ","ผู้จัด","รหัสชุดที่ส่ง"];
 
 function logTransfer_(ss, sku, productName, qty, actor) {
   let logSheet = ss.getSheetByName(SHEET_TRANSFERS);
@@ -2704,14 +3168,560 @@ function createZortTransfer_(sku, productname, qty) {
   return json;
 }
 
+// ── ตัวกันโอนซ้ำระดับ "ทั้งชุด" (tid) ────────────────────────────────────────
+// tid = รหัสที่ client สร้าง 1 ค่าต่อการกด "ส่งทั้งหมด" 1 ครั้ง และ **คงค่าเดิมตอนลองใหม่**
+// ทำไมต้องมี: โอนทีละหลายสิบ SKU ใช้เวลานานกว่าเพดานเวลาฝั่ง browser → browser ตัดสาย
+//   ทั้งที่ GAS ยังเขียนชีต + สร้างเอกสารโอนใน ZORT ต่อจนจบ · ผู้ใช้เห็น "ส่งไม่สำเร็จ" แล้วกดซ้ำ
+//   = **โอนสองเด้ง** (ตัวกันซ้ำรายชิ้น `shp2_` อายุแค่ 90 วิ ไม่ครอบคลุมกรณีนี้)
+// หลักเดียวกับ `cid` ของ action=order — เห็น tid เดิม = คืนผลเดิม ไม่เขียนอะไรใหม่
+const TFB_REPLAY_TTL_SEC = 21600;  // 6 ชม. (เพดานของ CacheService)
+const COL_SHIP_TID       = 16;     // P รหัสชุดที่กดส่ง — ต่อท้าย ห้ามแทรกกลาง (บทเรียนข้อ 5)
+const TFB_TID_SCAN_ROWS  = 600;    // แถวท้ายสุดที่ไล่หา tid ในชีตโอน (เผื่อ cache หลุด)
+
+// หา tid ในชีตโอน (ของจริงที่ถาวร — ใช้เมื่อ cache หมดอายุ/ถูกเขี่ยทิ้ง)
+// คืน { refNum, items:[{sku,qty}] } หรือ null · อ่านเฉพาะช่วงท้ายชีต ไม่ getDataRange ทั้งก้อน
+function findTidInShipments_(ss, tid) {
+  if (!tid) return null;
+  const sh = ss.getSheetByName(SHEET_TRANSFERS);
+  if (!sh) return null;
+  const last = sh.getLastRow();
+  if (last < 2) return null;
+  const from = Math.max(2, last - TFB_TID_SCAN_ROWS + 1);
+  const n = last - from + 1;
+  const rows = sh.getRange(from, 1, n, COL_SHIP_TID).getValues();
+  const items = [];
+  let refNum = '';
+  for (let i = 0; i < rows.length; i++) {
+    if (String(rows[i][COL_SHIP_TID - 1] || '').trim() !== tid) continue;
+    refNum = String(rows[i][COL_SHIP_REF - 1] || '').trim();
+    items.push({ sku: String(rows[i][COL_SHIP_SKU - 1] || '').trim(), qty: Number(rows[i][COL_SHIP_QTY - 1]) || 0 });
+  }
+  return items.length ? { refNum, items } : null;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// "ZORT โอนไปแล้ว แต่ระบบเราไม่มี/ไม่หัก" — เครื่องมือตรวจสองฝั่งแล้วซ่อม
+// ────────────────────────────────────────────────────────────────────────────
+// ลำดับการทำงานจริงของ transferStockBatch คือ  หักสต็อกในชีต → flush → ยิง ZORT →
+// เขียนชีตโอน → audit → noti  · แปลว่าถ้า **ZORT มีเอกสารแต่ชีตเราไม่มี** ต้องเป็นอย่างใด
+// อย่างหนึ่งใน 3 ข้อนี้ ซึ่งแยกจากกันไม่ได้ถ้าไม่เปิดดูข้อมูลจริงทั้งสองฝั่ง:
+//   (1) สคริปต์ถูกตัดกลางคัน (เพดาน 6 นาทีของ GAS) หลังยิง ZORT สำเร็จ
+//   (2) เอกสารใน ZORT ยังไม่ได้ย้ายสต็อกจริง → syncZortBoth (ทุก 2 ชม.) เขียนยอดเดิมทับกลับมา
+//   (3) มีคนสร้างรายการโอนใน ZORT เองโดยไม่ผ่านแอป
+// → `checkZortTransfer` อ่านอย่างเดียว บอกว่าเป็นข้อไหน · แล้วค่อยเลือกตัวซ่อมให้ตรงเหตุ
+// ⚠️ ชื่อฟังก์ชันห้ามลงท้าย `_` ไม่งั้นไม่โผล่ใน dropdown ของ GAS editor (บทเรียนข้อ 1)
+// ════════════════════════════════════════════════════════════════════════════
+const ZORT_TF_LOOKUP_DAYS = 14;
+
+// หาเอกสารโอนใน ZORT จาก "เลขที่" · คืน null ถ้าไม่เจอ
+function zortFindTransfer_(number, days) {
+  const want = String(number || '').trim().toUpperCase();
+  if (!want) return null;
+  const tz = 'Asia/Bangkok';
+  const now = new Date();
+  const fromStr = Utilities.formatDate(new Date(now.getTime() - (days || ZORT_TF_LOOKUP_DAYS) * 86400000), tz, 'yyyy-MM-dd');
+  const toStr   = Utilities.formatDate(new Date(now.getTime() + 86400000), tz, 'yyyy-MM-dd'); // เผื่อ timezone คลาด
+  const limit = 200;
+  for (let page = 1; page <= 30; page++) {
+    const url = ZORT_BASE + '/Transfer/GetTransfers?page=' + page + '&limit=' + limit +
+                '&fromdate=' + fromStr + '&todate=' + toStr;
+    const res = UrlFetchApp.fetch(url, { method: 'get', headers: zortHeaders_(), muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) {
+      Logger.log('zortFindTransfer_ HTTP ' + res.getResponseCode() + ': ' + res.getContentText().substring(0, 200));
+      return null;
+    }
+    const list = JSON.parse(res.getContentText()).list || [];
+    for (const t of list) {
+      const num = String(t.number || t.id || '').trim().toUpperCase();
+      // ผู้ใช้มักพิมพ์เลขโดยไม่ใส่ขีด → เทียบแบบตัดอักขระที่ไม่ใช่ตัวเลข/ตัวอักษรออกด้วย
+      if (num === want || num.replace(/[^A-Z0-9]/g, '') === want.replace(/[^A-Z0-9]/g, '')) {
+        return {
+          number: String(t.number || t.id || ''),
+          status: String(t.status || ''),
+          date: t.transferdateString || (t.transferdate ? String(t.transferdate).substring(0, 10) : ''),
+          fromWarehouse: String(t.fromwarehousecode || ''),
+          toWarehouse: String(t.towarehousecode || ''),
+          // ⚠️ ใน ZORT `list[].number` = **จำนวน** ไม่ใช่เลขที่เอกสาร (เลขที่เอกสารคือ t.number)
+          items: (Array.isArray(t.list) ? t.list : []).map(function (it) {
+            return { sku: String(it.sku || '').trim().toUpperCase(), name: String(it.name || ''), qty: Number(it.number) || 0 };
+          }).filter(function (it) { return it.sku; }),
+        };
+      }
+    }
+    if (list.length < limit) break;
+    Utilities.sleep(200);
+  }
+  return null;
+}
+
+// นับแถวในชีตโอนที่อ้างเลขที่นี้ (ยืนยันว่า "ระบบเราบันทึกไว้แล้วหรือยัง")
+function countTransferLogRows_(ss, refNum) {
+  const sh = ss.getSheetByName(SHEET_TRANSFERS);
+  if (!sh) return { rows: 0, skus: [] };
+  const last = sh.getLastRow();
+  if (last < 2) return { rows: 0, skus: [] };
+  const from = Math.max(2, last - RECENT_TF_SCAN_ROWS + 1);
+  const vals = sh.getRange(from, 1, last - from + 1, COL_SHIP_QTY).getDisplayValues();
+  const want = String(refNum || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const skus = [];
+  vals.forEach(function (r) {
+    const ref = String(r[COL_SHIP_REF - 1] || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (ref && ref === want) skus.push({ sku: String(r[COL_SHIP_SKU - 1] || '').trim().toUpperCase(), qty: Number(r[COL_SHIP_QTY - 1]) || 0 });
+  });
+  return { rows: skus.length, skus };
+}
+
+// หา audit log "โอนสต็อก" ของ SKU ชุดนี้ ในวันที่กำหนด — หลักฐานว่า **แอปเราหักสต็อกไปแล้วจริง**
+// (คนละเรื่องกับชีตโอน: audit ถูกเขียนหลังหักสต็อกเสมอ ทั้งเส้นทาง batch)
+function auditTransferSkusOnDate_(ss, skuList, dateStr) {
+  const sh = ss.getSheetByName(SHEET_AUDIT);
+  const out = {};
+  if (!sh) return out;
+  const last = sh.getLastRow();
+  if (last < 2) return out;
+  const from = Math.max(2, last - 4000 + 1);
+  const vals = sh.getRange(from, 1, last - from + 1, 4).getValues();
+  const want = {};
+  skuList.forEach(function (s) { want[String(s).toUpperCase()] = true; });
+  vals.forEach(function (r) {
+    if (String(r[2] || '') !== 'โอนสต็อก') return;
+    const sku = String(r[3] || '').trim().toUpperCase();
+    if (!want[sku]) return;
+    let d = '';
+    try { d = Utilities.formatDate(new Date(r[0]), Session.getScriptTimeZone(), 'yyyy-MM-dd'); } catch (e) {}
+    if (dateStr && d !== dateStr) return;
+    out[sku] = (out[sku] || 0) + 1;
+  });
+  return out;
+}
+
+// ── รันเองใน GAS editor: checkZortTransfer("TF-20260803-005") ────────────────
+// อ่านอย่างเดียว ไม่แก้ข้อมูลใด ๆ · พิมพ์รายงานเทียบ ZORT ↔ ชีตของเรา ลง Logger
+function checkZortTransfer(number) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const t = zortFindTransfer_(number);
+  if (!t) {
+    Logger.log('❌ ไม่พบเอกสารโอนเลขที่ "' + number + '" ใน ZORT (ค้นย้อนหลัง ' + ZORT_TF_LOOKUP_DAYS + ' วัน)');
+    return { found: false };
+  }
+  Logger.log('📄 ZORT: ' + t.number + ' · สถานะ ' + t.status + ' · ' + t.date +
+             ' · ' + t.fromWarehouse + ' → ' + t.toWarehouse + ' · ' + t.items.length + ' รายการ');
+
+  const log = countTransferLogRows_(ss, t.number);
+  Logger.log(log.rows
+    ? '✅ ชีต "' + SHEET_TRANSFERS + '" มีแถวของเลขที่นี้ ' + log.rows + ' แถว'
+    : '⚠️ ชีต "' + SHEET_TRANSFERS + '" **ไม่มีแถว** ของเลขที่นี้เลย → ระบบเราไม่ได้บันทึกการโอนนี้');
+
+  const audit = auditTransferSkusOnDate_(ss, t.items.map(function (i) { return i.sku; }), t.date);
+  const nAudit = Object.keys(audit).length;
+  Logger.log(nAudit
+    ? '✅ Audit Log พบ "โอนสต็อก" ของ ' + nAudit + '/' + t.items.length + ' SKU ในวันเดียวกัน → แอปเราหักสต็อกไปแล้ว'
+    : '⚠️ Audit Log **ไม่มี** "โอนสต็อก" ของ SKU ชุดนี้ในวันนั้น → แอปเราน่าจะไม่ได้หักสต็อกให้');
+
+  // ยอดคงเหลือปัจจุบันในชีต เทียบให้ดูด้วยตา
+  const sheet = ss.getSheetByName(SHEET_PRODUCTS);
+  const data = sheet ? sheet.getDataRange().getValues() : [];
+  const idx = {};
+  for (let i = 1; i < data.length; i++) {
+    const s = String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase();
+    if (s && !(s in idx)) idx[s] = i;
+  }
+  t.items.forEach(function (it) {
+    const i = idx[it.sku];
+    const inLog = log.skus.filter(function (x) { return x.sku === it.sku; }).length;
+    Logger.log('  · ' + it.sku + ' โอน ' + it.qty + ' ชิ้น | ชีตโอน ' + (inLog ? 'มี' : 'ไม่มี') +
+               ' | audit ' + (audit[it.sku] ? 'มี' : 'ไม่มี') +
+               (i === undefined ? ' | ❗ไม่พบ SKU ในชีตสินค้า'
+                 : ' | ตอนนี้ คลัง=' + (Number(data[i][COL_PROD_QTYWH - 1]) || 0) +
+                   ' หน้าร้าน=' + (Number(data[i][COL_PROD_QTYFS - 1]) || 0)));
+  });
+
+  Logger.log('── สรุปว่าควรทำอะไรต่อ ──');
+  if (!log.rows && nAudit) Logger.log('→ สต็อกหักไปแล้ว ขาดแค่บันทึกในชีตโอน: รัน repairZortTransferLog("' + t.number + '")');
+  else if (!log.rows && !nAudit) Logger.log('→ ระบบเราไม่ได้ทำอะไรเลยกับการโอนนี้: รัน applyZortTransferStock("' + t.number + '") เพื่อหักสต็อก + บันทึกให้ตรง ZORT');
+  else if (log.rows < t.items.length) Logger.log('→ บันทึกไว้ไม่ครบ (มี ' + log.rows + '/' + t.items.length +
+    ' รายการ — สคริปต์อาจถูกตัดกลางคันตอนเขียนชุดใหญ่): รัน repairZortTransferLog("' + t.number + '") จะเติมเฉพาะ SKU ที่ขาด ไม่แตะสต็อก');
+  else Logger.log('→ ระบบเราบันทึกครบแล้ว ปัญหาน่าจะอยู่ที่รายการค้างบนหน้าจอเท่านั้น (ใช้ปุ่ม "🧾 เช็คของที่ส่งไปแล้ว")');
+  return { found: true, transfer: t, logRows: log.rows, auditSkus: nAudit };
+}
+
+// ── ซ่อมเฉพาะ "บันทึกในชีตโอน" ที่ขาดหาย (ไม่แตะสต็อก ไม่ยิง ZORT) ──────────
+// ⚠️ เทียบเป็นราย SKU ไม่ใช่ "มีแถวไหนอยู่แล้วก็ข้ามทั้งชุด" — ชุดใหญ่ (77 SKU) ที่โดน
+// สคริปต์ตัดกลางคัน (เพดาน 6 นาที) มักเขียนไปได้บางส่วนแล้วหยุด (เช่น 23/75) เดิมฟังก์ชันนี้
+// เจอแถวไหนของเลขที่นี้ก็ข้ามทั้งหมด = ส่วนที่ขาดไม่มีวันถูกเติม ต้องกรองเหลือเฉพาะ SKU ที่
+// ยังไม่มีในชีตโอนแล้วเขียนเพิ่มเฉพาะนั้น
+function repairZortTransferLog(number) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const t = zortFindTransfer_(number);
+  if (!t) { Logger.log('❌ ไม่พบเลขที่นี้ใน ZORT'); return { ok: false }; }
+  const log = countTransferLogRows_(ss, t.number);
+  const loggedSkus = {};
+  log.skus.forEach(function (s) { loggedSkus[s.sku] = true; });
+  const missing = t.items.filter(function (i) { return !loggedSkus[i.sku]; });
+  if (!missing.length) {
+    Logger.log('⏭️ ชีตโอนมีครบทุก SKU ของเลขที่นี้แล้ว (' + log.rows + ' แถว) — ไม่เขียนซ้ำ');
+    return { ok: true, skipped: true };
+  }
+  logTransferBatch_(ss, missing.map(function (i) { return { sku: i.sku, name: i.name, qty: i.qty }; }),
+                    t.number, 'ซ่อมจาก ZORT ' + t.number, '');
+  invalidateCache_();
+  Logger.log('✅ เขียนชีตโอนเพิ่ม ' + missing.length + ' แถวที่ขาดหาย (มีอยู่แล้ว ' + log.rows +
+             ' แถว, รวมเป็น ' + t.items.length + ' — ไม่ได้แตะสต็อก)');
+  return { ok: true, rows: missing.length, alreadyHad: log.rows };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ── กู้สถานะ "รับของแล้ว" จาก Audit Log ──────────────────────────────────────
+// ที่มา (ส.ค. 2026): TF-202608035 มี 52/75 แถวหายจากชีตโอน แล้วถูกเติมกลับด้วย
+// repairZortTransferLog() จาก ZORT — แต่ตัวนั้นเติมเป็น "รอรับ" เสมอ (ไม่รู้ว่าใครเคยกดรับ
+// ไปแล้วบ้างก่อนที่แถวจะหาย) confirmShipmentReceive เขียน Audit Log ทุกครั้งที่กดรับจริง
+// (action="รับสินค้า" resource=sku detail="รับครบ N/M"/"รับไม่ครบ N/M") → ใช้ร่องรอยนี้กู้
+// สถานะกลับได้โดยไม่ต้องเดา ตราบใดที่จับคู่ SKU+จำนวนที่ส่งชัดเจนไม่ชนกัน
+// ⚠️ แก้เฉพาะแถวที่ยังเป็น "รอรับ" (คอลัมน์ M ว่าง) เท่านั้น — แถวที่มีสถานะอยู่แล้วไม่แตะ
+//    กันทับของจริงที่พนักงานเพิ่งกดรับหลัง repair
+// ════════════════════════════════════════════════════════════════════════════
+const AUDIT_RECEIPT_SCAN_ROWS = 6000;
+
+// หา entry "รับสินค้า" ใน Audit Log ของ SKU ชุดนี้ ตั้งแต่เวลา sinceMs เป็นต้นไป
+function auditReceiptEntriesForSkus_(ss, skuSet, sinceMs) {
+  const sh = ss.getSheetByName(SHEET_AUDIT);
+  const out = {};
+  if (!sh) return out;
+  const last = sh.getLastRow();
+  if (last < 2) return out;
+  const from = Math.max(2, last - AUDIT_RECEIPT_SCAN_ROWS + 1);
+  const vals = sh.getRange(from, 1, last - from + 1, 5).getValues();
+  vals.forEach(function (r) {
+    if (String(r[2] || '') !== 'รับสินค้า') return;
+    const sku = String(r[3] || '').trim().toUpperCase();
+    if (!skuSet[sku]) return;
+    const when = r[0] instanceof Date ? r[0].getTime() : null;
+    if (when == null || when < sinceMs) return;
+    const m = String(r[4] || '').match(/^(รับครบ|รับไม่ครบ)\s+(\d+)\/(\d+)$/);
+    if (!m) return;
+    (out[sku] = out[sku] || []).push({
+      when: when, status: m[1], recv: Number(m[2]), sentQty: Number(m[3]), actor: String(r[1] || ''),
+    });
+  });
+  return out;
+}
+
+// จับคู่ต่อ SKU: { matched:true, rowNum, entry } หรือ { matched:false, reason, rowNum? }
+// reason: 'no_row' (ยังไม่มีแถวในชีตโอน — รัน repairZortTransferLog ก่อน) ·
+//         'already_set' (มีสถานะอยู่แล้ว ไม่แตะ) · 'no_audit' (ไม่มีร่องรอยกดรับ) ·
+//         'ambiguous' (audit จับคู่จำนวนได้มากกว่า 1 รายการ ไม่เดา)
+function matchTransferReceiptsFromAudit_(ss, t) {
+  const skuSet = {};
+  t.items.forEach(function (it) { skuSet[it.sku] = it.qty; });
+  const sinceMs = parseShipDayMs_(t.date) || 0;
+  const found = auditReceiptEntriesForSkus_(ss, skuSet, sinceMs);
+
+  const sheet = ss.getSheetByName(SHEET_TRANSFERS);
+  const data = sheet ? sheet.getDataRange().getValues() : [];
+  const want = String(t.number).trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const rowBySku = {};
+  for (let i = 2; i < data.length; i++) {
+    const ref = String(data[i][COL_SHIP_REF - 1] || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (ref !== want) continue;
+    const sku = String(data[i][COL_SHIP_SKU - 1] || '').trim().toUpperCase();
+    if (sku) rowBySku[sku] = { rowNum: i + 1, recvAt: String(data[i][COL_SHIP_RECVAT - 1] || '').trim() };
+  }
+
+  const out = {};
+  Object.keys(skuSet).forEach(function (sku) {
+    const rowInfo = rowBySku[sku];
+    if (!rowInfo) { out[sku] = { matched: false, reason: 'no_row' }; return; }
+    if (rowInfo.recvAt) { out[sku] = { matched: false, reason: 'already_set', rowNum: rowInfo.rowNum }; return; }
+    const entries = (found[sku] || []).filter(function (e) { return e.sentQty === skuSet[sku]; });
+    if (!entries.length) { out[sku] = { matched: false, reason: 'no_audit', rowNum: rowInfo.rowNum }; return; }
+    if (entries.length > 1) { out[sku] = { matched: false, reason: 'ambiguous', rowNum: rowInfo.rowNum, count: entries.length }; return; }
+    out[sku] = { matched: true, rowNum: rowInfo.rowNum, entry: entries[0] };
+  });
+  return out;
+}
+
+// อ่านอย่างเดียว — ดูก่อนว่าจะเติมอะไรบ้างโดยไม่เขียนอะไรเลย
+function previewTransferReceiptsFromAudit(number) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const t = zortFindTransfer_(number);
+  if (!t) { Logger.log('❌ ไม่พบเลขที่นี้ใน ZORT'); return { ok: false }; }
+  const m = matchTransferReceiptsFromAudit_(ss, t);
+  const toApply = [], ambiguousSkus = [], noRowSkus = [];
+  let already = 0, none = 0;
+  Object.keys(m).forEach(function (sku) {
+    const r = m[sku];
+    if (r.matched) {
+      toApply.push({ sku: sku, status: r.entry.status, recv: r.entry.recv, sentQty: r.entry.sentQty,
+                      actor: r.entry.actor, when: new Date(r.entry.when).toLocaleString('th-TH') });
+    } else if (r.reason === 'already_set') { already++; }
+    else if (r.reason === 'no_audit') { none++; }
+    else if (r.reason === 'ambiguous') { ambiguousSkus.push(sku); }
+    else if (r.reason === 'no_row') { noRowSkus.push(sku); }
+  });
+  toApply.forEach(function (x) {
+    Logger.log('  ✅ ' + x.sku + ' → ' + x.status + ' ' + x.recv + '/' + x.sentQty + ' โดย ' + x.actor + ' (' + x.when + ')');
+  });
+  ambiguousSkus.forEach(function (s) { Logger.log('  ❓ ' + s + ' — audit จับคู่จำนวนได้มากกว่า 1 รายการ ต้องเช็คเอง'); });
+  noRowSkus.forEach(function (s) { Logger.log('  ⚠️ ' + s + ' — ไม่มีแถวในชีตโอน (รัน repairZortTransferLog ก่อน)'); });
+  Logger.log('── สรุป: จะเติมสถานะรับของ ' + toApply.length + ' SKU · มีสถานะอยู่แล้ว ' + already +
+             ' · ยังไม่มีร่องรอยรับของ ' + none + ' · ไม่ชัดเจน ' + ambiguousSkus.length +
+             ' · ไม่มีแถว ' + noRowSkus.length + ' ──');
+  if (toApply.length) Logger.log('รัน applyTransferReceiptsFromAudit("' + number + '") เพื่อเขียนจริง');
+  return { ok: true, apply: toApply.length, already: already, none: none,
+           ambiguous: ambiguousSkus.length, noRow: noRowSkus.length,
+           toApply: toApply, ambiguousSkus: ambiguousSkus, noRowSkus: noRowSkus };
+}
+
+// เขียนจริง — เฉพาะ SKU ที่จับคู่ได้ชัดเจนเท่านั้น (ดู matchTransferReceiptsFromAudit_)
+function applyTransferReceiptsFromAudit(number) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const t = zortFindTransfer_(number);
+  if (!t) { Logger.log('❌ ไม่พบเลขที่นี้ใน ZORT'); return { ok: false }; }
+  const m = matchTransferReceiptsFromAudit_(ss, t);
+  const toApply = Object.keys(m).filter(function (sku) { return m[sku].matched; });
+  if (!toApply.length) {
+    Logger.log('⏭️ ไม่มีอะไรต้องเติม (รัน previewTransferReceiptsFromAudit ก่อนเพื่อดูสาเหตุ)');
+    return { ok: true, applied: 0 };
+  }
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) { Logger.log('🛑 ระบบกำลังบันทึกข้อมูลอื่นอยู่ ลองใหม่'); return { ok: false }; }
+  try {
+    const sheet = ss.getSheetByName(SHEET_TRANSFERS);
+    toApply.forEach(function (sku) {
+      const r = m[sku];
+      const nowStr = Utilities.formatDate(new Date(r.entry.when), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm');
+      sheet.getRange(r.rowNum, COL_SHIP_RECVQTY).setValue(r.entry.recv);
+      sheet.getRange(r.rowNum, COL_SHIP_RECVSTATUS).setValue(r.entry.status);
+      sheet.getRange(r.rowNum, COL_SHIP_RECVAT).setValue(nowStr);
+      sheet.getRange(r.rowNum, COL_SHIP_RECVBY).setValue(r.entry.actor || '');
+    });
+    Logger.log('✅ เติมสถานะรับของกลับ ' + toApply.length + ' SKU จาก Audit Log: ' + toApply.join(', '));
+    return { ok: true, applied: toApply.length, skus: toApply };
+  } finally {
+    try { invalidateCache_(); } catch (e) {}
+    lock.releaseLock();
+  }
+}
+
+// ── ซ่อม "สต็อกไม่ถูกหัก" ตามเอกสารโอนใน ZORT (ไม่ยิง ZORT ซ้ำเด็ดขาด) ────────
+// ⚠️ ใช้เมื่อ checkZortTransfer บอกว่าไม่มีทั้งชีตโอนและ audit เท่านั้น
+//    ถ้ามี audit อยู่แล้ว = หักไปแล้ว รันซ้ำจะหักสองเด้ง → ฟังก์ชันนี้จะปฏิเสธเอง
+function applyZortTransferStock(number) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const t = zortFindTransfer_(number);
+  if (!t) { Logger.log('❌ ไม่พบเลขที่นี้ใน ZORT'); return { ok: false }; }
+  const audit = auditTransferSkusOnDate_(ss, t.items.map(function (i) { return i.sku; }), t.date);
+  if (Object.keys(audit).length) {
+    Logger.log('🛑 หยุด — Audit Log บอกว่าแอปหักสต็อกของการโอนนี้ไปแล้ว (' +
+               Object.keys(audit).length + ' SKU) รันต่อจะหักสองเด้ง');
+    return { ok: false, reason: 'already_deducted' };
+  }
+  if (countTransferLogRows_(ss, t.number).rows) {
+    Logger.log('🛑 หยุด — ชีตโอนมีแถวของเลขที่นี้แล้ว (น่าจะหักไปแล้ว) ตรวจด้วย checkZortTransfer ก่อน');
+    return { ok: false, reason: 'already_logged' };
+  }
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) { Logger.log('🛑 ระบบกำลังบันทึกข้อมูลอื่นอยู่ ลองใหม่'); return { ok: false }; }
+  try {
+    const sheet = ss.getSheetByName(SHEET_PRODUCTS);
+    const data = sheet.getDataRange().getValues();
+    const idx = {};
+    for (let i = 1; i < data.length; i++) {
+      const s = String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase();
+      if (s && !(s in idx)) idx[s] = i;
+    }
+    const done = [];
+    t.items.forEach(function (it) {
+      const i = idx[it.sku];
+      if (i === undefined) { Logger.log('  ❗ ข้าม ' + it.sku + ' — ไม่พบในชีตสินค้า'); return; }
+      const wh = Number(data[i][COL_PROD_QTYWH - 1]) || 0;
+      const fs = Number(data[i][COL_PROD_QTYFS - 1]) || 0;
+      const actual = Math.min(it.qty, wh);          // ไม่ปล่อยติดลบ เหมือน transferStockBatch
+      if (actual <= 0) { Logger.log('  ❗ ข้าม ' + it.sku + ' — คลังเหลือ 0'); return; }
+      sheet.getRange(i + 1, COL_PROD_QTYFS, 1, 2).setValues([[fs + actual, wh - actual]]);
+      data[i][COL_PROD_QTYWH - 1] = wh - actual;
+      data[i][COL_PROD_QTYFS - 1] = fs + actual;
+      done.push({ sku: it.sku, name: it.name, qty: actual });
+      if (actual < it.qty) Logger.log('  ⚠️ ' + it.sku + ' คลังพอแค่ ' + actual + '/' + it.qty);
+    });
+    SpreadsheetApp.flush();
+    if (done.length) {
+      logTransferBatch_(ss, done, t.number, 'ซ่อมจาก ZORT ' + t.number, '');
+      writeAuditLogBatch_('ซ่อมจาก ZORT ' + t.number, 'โอนสต็อก', done.map(function (d) {
+        return { resource: d.sku, detail: 'qty ' + d.qty + ': W0002→W0001 (ซ่อมตามเอกสาร ZORT ' + t.number + ')' };
+      }));
+    }
+    Logger.log('✅ หักสต็อกตามเอกสาร ZORT แล้ว ' + done.length + '/' + t.items.length + ' รายการ (ไม่ได้ยิง ZORT ซ้ำ)');
+    return { ok: true, applied: done.length };
+  } finally {
+    try { invalidateCache_(); } catch (e) {}
+    lock.releaseLock();
+  }
+}
+
+// doGet action=zortTransfer — ให้หน้าเว็บค้นเอกสารโอนจากเลขที่ ZORT ได้เอง
+// ใช้ตอนชีตของเราไม่มีบันทึก (ZORT มีอยู่ฝ่ายเดียว) → ยังเคลียร์รายการที่ค้างได้
+function zortTransferHandler_(number) {
+  try {
+    const t = zortFindTransfer_(number);
+    if (!t) return ContentService.createTextOutput(JSON.stringify({ ok: true, found: false }))
+      .setMimeType(ContentService.MimeType.JSON);
+    const ss = SpreadsheetApp.openById(SHEET_ID);
+    const log = countTransferLogRows_(ss, t.number);
+    const logged = {};
+    log.skus.forEach(function (s) { logged[s.sku] = true; });
+    return ContentService.createTextOutput(JSON.stringify({
+      ok: true, found: true, transfer: {
+        number: t.number, status: t.status, date: t.date,
+        fromWarehouse: t.fromWarehouse, toWarehouse: t.toWarehouse,
+      },
+      sheetLogged: log.rows > 0,
+      list: t.items.map(function (it) {
+        return { refNum: t.number, date: t.date, sku: it.sku, name: it.name, qty: it.qty,
+                 receivedAt: '', preparedBy: '', fromZort: true, sheetLogged: !!logged[it.sku] };
+      }),
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    Logger.log('zortTransferHandler_ error: ' + err);
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// doGet action=repairTransferLog — เวอร์ชัน URL ของ repairZortTransferLog() (ดูฟังก์ชันนั้น
+// สำหรับตรรกะจริง — ตัวนี้แค่ห่อให้เรียกผ่าน URL ได้เมื่อ GAS editor ใช้ไม่ได้)
+function repairTransferLogHandler_(number) {
+  try {
+    const r = repairZortTransferLog(number);
+    return ContentService.createTextOutput(JSON.stringify(r)).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    Logger.log('repairTransferLogHandler_ error: ' + err);
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function previewTransferReceiptsHandler_(number) {
+  try {
+    const r = previewTransferReceiptsFromAudit(number);
+    return ContentService.createTextOutput(JSON.stringify(r)).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    Logger.log('previewTransferReceiptsHandler_ error: ' + err);
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function applyTransferReceiptsHandler_(number) {
+  try {
+    const r = applyTransferReceiptsFromAudit(number);
+    return ContentService.createTextOutput(JSON.stringify(r)).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    Logger.log('applyTransferReceiptsHandler_ error: ' + err);
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// doGet action=recentTransfers — ประวัติการโอนคลัง→หน้าร้าน N วันล่าสุด (ของจริงจากชีต)
+// ครอบคลุมทั้งการกด "ส่งทั้งหมด" (logTransferBatch_) และกดส่งทีละใบ (logTransfer_)
+// เพราะทั้งสองทางเขียนลงชีตเดียวกัน — ตัวนี้จึงเป็น "ประวัติ" ที่เชื่อได้ว่าอะไรโอนไปแล้วจริง
+const RECENT_TF_SCAN_ROWS = 1500;   // แถวท้ายสุดที่ไล่อ่าน (ชีตโอนโตทุกวัน ห้าม getDataRange)
+function recentTransfersHandler_(days) {
+  try {
+    const ss = SpreadsheetApp.openById(SHEET_ID);
+    const sh = ss.getSheetByName(SHEET_TRANSFERS);
+    if (!sh) return ContentService.createTextOutput(JSON.stringify({ ok: true, list: [] }))
+      .setMimeType(ContentService.MimeType.JSON);
+    const last = sh.getLastRow();
+    if (last < 2) return ContentService.createTextOutput(JSON.stringify({ ok: true, list: [] }))
+      .setMimeType(ContentService.MimeType.JSON);
+    const from = Math.max(2, last - RECENT_TF_SCAN_ROWS + 1);
+    // getDisplayValues เพื่อให้วันที่ออกมาเป็นข้อความอย่างที่เห็นในชีต (เหมือน readShipments_)
+    const rows = sh.getRange(from, 1, last - from + 1, COL_SHIP_TID).getDisplayValues();
+    const cutoff = new Date(Date.now() - Math.max(1, days) * 24 * 60 * 60 * 1000);
+    const list = [];
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const sku = String(r[COL_SHIP_SKU - 1] || '').trim();
+      if (!sku) continue;
+      const dateStr = String(r[COL_SHIP_DATE - 1] || '').trim();
+      const d = parseShipDayStr_(dateStr);
+      if (d && d < cutoff) continue;      // เก่าเกินช่วงที่ถาม · อ่านวันที่ไม่ออก = เก็บไว้ให้ client ตัดสิน
+      list.push({
+        row: from + i,
+        refNum: String(r[COL_SHIP_REF - 1] || '').trim(),
+        date: dateStr,
+        sku,
+        name: String(r[COL_SHIP_NAME - 1] || '').trim(),
+        qty: Number(r[COL_SHIP_QTY - 1]) || 0,
+        receivedAt: String(r[COL_SHIP_RECVAT - 1] || '').trim(),
+        preparedBy: String(r[COL_SHIP_PREPAREDBY - 1] || '').trim(),
+        tid: String(r[COL_SHIP_TID - 1] || '').trim(),
+      });
+    }
+    return ContentService.createTextOutput(JSON.stringify({ ok: true, days, list }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    Logger.log('recentTransfersHandler_ error: ' + err);
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// "dd/MM/yyyy" (ค่าที่ logTransfer_/logTransferBatch_ เขียน) → Date · อ่านไม่ออกคืน null
+// เผื่อแถวเก่าที่เป็นปี พ.ศ. → ลบ 543 เมื่อปี ≥ 2400 (บทเรียนข้อ 11)
+function parseShipDayStr_(s) {
+  const m = String(s || '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (!m) return null;
+  let y = parseInt(m[3], 10);
+  if (y >= 2400) y -= 543;
+  return new Date(y, parseInt(m[2], 10) - 1, parseInt(m[1], 10));
+}
+
+// doGet action=transferCheck — "ชุด tid นี้โอนไปแล้วหรือยัง"
+// คืน found=false เมื่อ **ยืนยันได้ว่ายังไม่ลง** เท่านั้น (frontend ใช้ตัดสินใจว่ายิงซ้ำได้ไหม)
+// ตอบไม่ได้/ผิดรูปแบบ → frontend ต้องถือว่า "ไม่รู้" และห้ามยิงซ้ำ
+function transferCheckHandler_(tid) {
+  const out = { ok: true, found: false };
+  try {
+    if (tid) {
+      const cached = CacheService.getScriptCache().get('tfb_' + tid);
+      if (cached) {
+        const o = JSON.parse(cached);
+        out.found   = true;
+        out.results = o.results || [];
+        out.refNum  = o.refNum || null;
+        out.count   = o.count || 0;
+        out.zortNumber = o.zortNumber || null;
+      } else {
+        const hit = findTidInShipments_(SpreadsheetApp.openById(SHEET_ID), tid);
+        if (hit) {
+          // cache หมดอายุ/หลุด — ยืนยันจากชีตได้ว่าลงแล้ว แต่ไม่มีผลรายตัว (ไม่มี orderId ในชีต)
+          out.found = true; out.fromSheet = true;
+          out.refNum = hit.refNum; out.items = hit.items; out.count = hit.items.length;
+        }
+      }
+    }
+  } catch (err) {
+    Logger.log('transferCheckHandler_ error: ' + err);
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);
+}
+
 // Batch: หักสต็อกหลาย SKU ในครั้งเดียว → สร้าง ZORT Transfer เอกสารเดียว (เลขที่ auto)
 // list = [{ sku, qty, name, orderId }, ...]
 // clientLoadedAt = epoch ms ที่ client โหลดข้อมูล (ใช้ตรวจ conflict ก่อนทำ batch)
+// tid = รหัสชุด (ดูหัวข้อด้านบน) — ไม่ส่งมาก็ทำงานได้เหมือนเดิม แค่ไม่มีตัวกันโอนซ้ำ
 // หมายเหตุ: AddTransfer ย้ายสต็อกใน ZORT ให้อยู่แล้ว จึงไม่ต้อง push absolute ทับ
-function transferStockBatch(ss, list, actor, clientLoadedAt) {
+function transferStockBatch(ss, list, actor, clientLoadedAt, tid) {
   if (!Array.isArray(list) || !list.length) return error("list ว่างเปล่า");
   const sheet = ss.getSheetByName(SHEET_PRODUCTS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_PRODUCTS);
+  tid = String(tid || '').trim();
 
   // หมายเหตุ: เลิกใช้ global conflict detection (dmj_last_write_ts) ที่นี่แล้ว
   // เหตุผล: การโอนอ่าน whQty สดจาก sheet "ใน lock" แล้ว clamp ด้วย Math.min(qty, whQty)
@@ -2724,6 +3734,26 @@ function transferStockBatch(ss, list, actor, clientLoadedAt) {
 
   const cache = CacheService.getScriptCache();
   try {
+    // ── กดส่งชุดนี้ไปแล้ว? → คืนผลเดิม ไม่เขียนอะไรซ้ำ ──────────────────────
+    // เช็ค **ในล็อก** เพื่อให้สองคำขอที่ tid เดียวกันมาพร้อมกันได้ผลเดียวกันแน่นอน
+    if (tid) {
+      const prevRaw = cache.get('tfb_' + tid);
+      if (prevRaw) {
+        try {
+          const prev = JSON.parse(prevRaw);
+          prev.replay = true;
+          return ok(prev);
+        } catch (e) { /* cache เพี้ยน → ตกไปเช็คจากชีตแทน */ }
+      }
+      const onSheet = findTidInShipments_(ss, tid);
+      if (onSheet) {
+        // cache หมดอายุแล้วแต่ของจริงอยู่ในชีต — ไม่มีผลรายตัวให้ (results ว่าง)
+        // frontend ต้องไปเคลียร์ผ่าน "เช็คของที่ส่งไปแล้ว" แทนการเดาว่าอันไหนสำเร็จ
+        return ok({ count: onSheet.items.length, replay: true, fromSheet: true,
+                    refNum: onSheet.refNum, items: onSheet.items, results: [] });
+      }
+    }
+
     const data = sheet.getDataRange().getValues();
     const transferred = [];   // { sku, name, qty } ที่หักได้จริง
     const results = [];
@@ -2763,8 +3793,10 @@ function transferStockBatch(ss, list, actor, clientLoadedAt) {
       const newWH  = whQty - actual;
       const newFS  = fsQty + actual;
 
-      sheet.getRange(row, COL_PROD_QTYWH).setValue(newWH);
-      sheet.getRange(row, COL_PROD_QTYFS).setValue(newFS);
+      // G กับ H ติดกัน → เขียนครั้งเดียวต่อแถว (เดิม 2 ครั้ง) — โอน 77 SKU ลดจาก 154 เหลือ 77 call
+      // ⚠️ ยังเขียน "เฉพาะแถวที่เปลี่ยน" เหมือนเดิม ห้ามเปลี่ยนเป็นเขียนทั้งบล็อกรวด
+      //    เพราะ syncZortToColumn_ เขียนทับทั้งคอลัมน์โดยไม่จับล็อก → บล็อกใหญ่จะย้อนงานมันทิ้ง
+      sheet.getRange(row, COL_PROD_QTYFS, 1, 2).setValues([[newFS, newWH]]);
       data[i][COL_PROD_QTYWH - 1] = newWH;
       data[i][COL_PROD_QTYFS - 1] = newFS;
 
@@ -2778,7 +3810,7 @@ function transferStockBatch(ss, list, actor, clientLoadedAt) {
 
     SpreadsheetApp.flush();
 
-    let zortNumber = null, zortError = null;
+    let zortNumber = null, zortError = null, refNum = null;
     if (transferred.length) {
       try {
         const zr = createZortTransferBatch_(transferred);
@@ -2791,11 +3823,13 @@ function transferStockBatch(ss, list, actor, clientLoadedAt) {
           zortError + " | SKU: " + transferred.map(t => t.sku + "x" + t.qty).join(","));
       }
 
-      try { logTransferBatch_(ss, transferred, zortNumber, actor); } catch (e) { Logger.log("logTransferBatch_ error: " + e); }
-      // Audit log: บันทึกทุก SKU ที่โอนจริง
-      transferred.forEach(function(t) {
-        writeAuditLog_(actor, "โอนสต็อก", t.sku, "qty " + t.qty + ": W0002→W0001");
-      });
+      try { refNum = logTransferBatch_(ss, transferred, zortNumber, actor, tid); } catch (e) { Logger.log("logTransferBatch_ error: " + e); }
+      // Audit log: บันทึกทุก SKU ที่โอนจริง (1 แถว/SKU เท่าเดิม — แต่เขียนรวดเดียว)
+      // เดิม appendRow ทีละแถว: โอน 77 SKU = 77 รอบเขียนชีต ซึ่งเป็นตัวกินเวลาหลักจน
+      // คำตอบกลับไม่ทันเพดานเวลาฝั่ง browser แล้วขึ้น "ส่งไม่สำเร็จ" ทั้งที่โอนไปแล้ว
+      writeAuditLogBatch_(actor, "โอนสต็อก", transferred.map(function (t) {
+        return { resource: t.sku, detail: "qty " + t.qty + ": W0002→W0001" };
+      }));
       // แจ้งหน้าร้านว่ามีของกำลังมา — เรื่องนี้ไม่เคยแจ้ง LINE เลย (ไม่คุ้ม quota)
       // รวมทั้งชุดเป็นแจ้งเตือนเดียว ไม่ยิงราย SKU (โอนทีนึงมีหลายสิบตัว)
       pushInappNoti_({
@@ -2809,7 +3843,15 @@ function transferStockBatch(ss, list, actor, clientLoadedAt) {
       });
     }
 
-    return ok({ count: transferred.length, zortNumber, zortError, shortfalls, results });
+    const payload = { count: transferred.length, zortNumber, zortError, shortfalls, results, refNum, tid: tid || null };
+    // เก็บผลไว้ตอบซ้ำ — คนกดส่งที่ browser ตัดสายไปแล้วจะได้ "ผลจริง" ตอนถาม action=transferCheck
+    // แทนที่จะต้องเดา หรือกดส่งซ้ำจนโอนสองเด้ง
+    if (tid) {
+      try { cache.put('tfb_' + tid, JSON.stringify(payload), TFB_REPLAY_TTL_SEC); } catch (e) {
+        Logger.log('tfb cache put error: ' + e);   // ผลใหญ่เกิน 100KB → ยังมีชีตเป็นตัวยืนยันสำรอง
+      }
+    }
+    return ok(payload);
   } finally {
     try { invalidateCache_(); } catch(e) {} // C5: ล้าง cache หลัง write เสมอ
     lock.releaseLock();
@@ -2849,8 +3891,8 @@ function createZortTransferBatch_(items) {
   return lastErr;
 }
 
-// log หลายรายการที่อ้าง ZORT number เดียวกัน
-function logTransferBatch_(ss, items, zortNumber, actor) {
+// log หลายรายการที่อ้าง ZORT number เดียวกัน · คืนเลขที่รายการ (refNum) ให้ผู้เรียกเก็บไว้ตอบซ้ำ
+function logTransferBatch_(ss, items, zortNumber, actor, tid) {
   let logSheet = ss.getSheetByName(SHEET_TRANSFERS);
   if (!logSheet) {
     logSheet = ss.insertSheet(SHEET_TRANSFERS);
@@ -2865,10 +3907,12 @@ function logTransferBatch_(ss, items, zortNumber, actor) {
     : "TF-" + Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyyMMdd") + "-" + String(baseRow).padStart(3, "0");
   const rows = items.map(it => {
     const img = imgMap[(it.sku || "").toUpperCase()] || "";
-    // คอลัมน์ O (preparedBy) เพิ่มใหม่ Sprint 2 — ต่อท้าย ไม่แทรกกลาง กัน column-index เพี้ยน
-    return [refNum, dateStr, "สำเร็จ", WH_NAME_SAI5, WH_NAME_FS, it.sku, it.name, it.qty, it.qty, img, "", "รอรับ", "", "", actor || ""];
+    // คอลัมน์ O (preparedBy) เพิ่มใหม่ Sprint 2, P (tid) เพิ่ม ส.ค. 2026 — ต่อท้ายทั้งคู่
+    // ไม่แทรกกลาง กัน column-index เพี้ยน (บทเรียนข้อ 5)
+    return [refNum, dateStr, "สำเร็จ", WH_NAME_SAI5, WH_NAME_FS, it.sku, it.name, it.qty, it.qty, img, "", "รอรับ", "", "", actor || "", tid || ""];
   });
-  logSheet.getRange(baseRow + 1, 1, rows.length, 15).setValues(rows);
+  logSheet.getRange(baseRow + 1, 1, rows.length, COL_SHIP_TID).setValues(rows);
+  return refNum;
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -3092,6 +4136,22 @@ function deductMaterials(ss, items, actor) {
   }
 }
 
+// แถวที่ orderId ชี้ไป ยังเป็นสินค้าตัวเดิมอยู่ไหม
+//
+// ⚠️ `order.id` = `R<เลขแถวในชีต>` (readOrders_) ซึ่งเป็น **ตำแหน่ง ไม่ใช่รหัสถาวร** —
+// พอมีคนกด ❌ ยกเลิก order (deleteRow) แถวทั้งหมดที่อยู่ล่างกว่านั้น **เลื่อนขึ้น 1**
+// เครื่องที่ยังถือรายการชุดก่อนหน้าจะส่ง orderId เก่ามา = ชี้ไปคนละใบ
+// เขียนทับโดยไม่ตรวจ = จำนวนที่จัดไปลงสินค้าตัวอื่นเงียบ ๆ (ทั้งของเราหายและของเขาเพี้ยน)
+//
+// sku ว่าง → คืน false ตั้งใจ: ยอมให้ตกไปเส้นทาง match by sku+date ดีกว่าเขียนมั่ว
+function orderRowMatchesSku_(sheet, rowNum, sku) {
+  const want = String(sku || "").trim().toUpperCase();
+  if (!want) return false;
+  if (!(rowNum >= 1) || rowNum > sheet.getLastRow()) return false;
+  const rowSku = String(sheet.getRange(rowNum, COL_ORD_SKU).getDisplayValue()).trim().toUpperCase();
+  return rowSku === want;
+}
+
 function updateOrderState(ss, body) {
   const sheet = ss.getSheetByName(SHEET_ORDERS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_ORDERS);
@@ -3104,7 +4164,7 @@ function updateOrderState(ss, body) {
     // Try direct row match via orderId ("R3" = sheet row 3, readOrders_ uses id:`R${i+1}` where i is 0-indexed)
     if (body.orderId) {
       const rowNum = parseInt(String(body.orderId).replace(/[^0-9]/g, ""));
-      if (rowNum >= 1) {
+      if (rowNum >= 1 && orderRowMatchesSku_(sheet, rowNum, body.sku)) {
         const sheetRow = rowNum; // id already encodes 1-indexed sheet row
         // 1) อ่าน before-state ก่อนเขียน (เฉพาะ field ที่จะถูกแก้)
         const before = {
@@ -3144,14 +4204,28 @@ function updateOrderState(ss, body) {
       }
     }
 
-    // Fallback: match by sku + date
+    // Fallback: match by sku + date — ใช้เมื่อ orderId ชี้ไปแถวที่ SKU ไม่ตรงแล้ว
+    // (แถวเลื่อนขึ้นเพราะมีคนลบ order อื่นทิ้ง ระหว่างที่เครื่องนี้ถือข้อมูลชุดเก่าอยู่)
+    // ⚠️ เลือกแถวที่ "ใกล้เลขแถวเดิมที่สุด" ไม่ใช่แถวแรกที่เจอ — สินค้าตัวเดียวกันสั่งซ้ำ
+    //    วันเดียวกันได้ (2 แถว sku+date เหมือนกันเป๊ะ) การหยิบแถวแรกเสมอจะแก้ผิดใบเงียบ ๆ
+    //    ส่วนการเลื่อนแถวจากการลบมักห่างจากเดิมไม่กี่แถว ระยะห่างจึงเป็นตัวชี้ที่แม่นที่สุดที่มี
     const data = sheet.getDataRange().getValues();
-    for (let i = 1; i < data.length; i++) {
-      const rowSku  = String(data[i][COL_ORD_SKU - 1]).trim().toUpperCase();
-      const rowDate = String(data[i][COL_ORD_DATE - 1]).trim();
-      const matchSku  = body.sku && rowSku === body.sku.trim().toUpperCase();
-      const matchDate = !body.date || rowDate.includes(String(body.date).trim());
-      if (matchSku && matchDate) {
+    const wantSku = String(body.sku || "").trim().toUpperCase();
+    const expectRow = parseInt(String(body.orderId || "").replace(/[^0-9]/g, "")) || 0;
+    let bestI = -1, bestDist = Infinity;
+    if (wantSku) {
+      for (let i = 1; i < data.length; i++) {
+        const rowSku  = String(data[i][COL_ORD_SKU - 1]).trim().toUpperCase();
+        const rowDate = String(data[i][COL_ORD_DATE - 1]).trim();
+        if (rowSku !== wantSku) continue;
+        if (body.date && !rowDate.includes(String(body.date).trim())) continue;
+        const dist = expectRow ? Math.abs((i + 1) - expectRow) : i;
+        if (dist < bestDist) { bestDist = dist; bestI = i; }
+      }
+    }
+    {
+      const i = bestI;
+      if (i >= 1) {
         const row = i + 1;
         // 1) อ่าน before-state จาก data ที่โหลดไว้แล้ว (ไม่ต้องอ่านซ้ำ)
         const before = {
@@ -3183,9 +4257,11 @@ function updateOrderState(ss, body) {
         writeAuditLog_(actor, "อัปเดต order", body.sku, auditDetail_({
           before: before,
           after: { status: body.status, preparedQty: body.preparedQty, printFlag: body.printFlag, carryMode: body.carryMode },
-          note: "อัปเดต order (match by sku+date, row " + row + ")",
+          note: "อัปเดต order (กู้แถวเลื่อน: orderId=" + (body.orderId || "-") +
+                " → row " + row + ", match by sku+date)",
         }));
-        return ok({ updated: body.sku, row });
+        // shifted → บอก client ว่าแถวเลื่อน (ไม่ใช่ error — เขียนถูกใบแล้ว) เผื่อเอาไปเตือน/รีเฟรช
+        return ok({ updated: body.sku, row, shifted: expectRow > 0 && expectRow !== row });
       }
     }
     return ok({ notFound: body.orderId || body.sku });
@@ -3197,7 +4273,50 @@ function updateOrderState(ss, body) {
 
 // sale/FS ยืนยันรับสินค้าจากชีต "รายการโอนสินค้า"
 // rowId = 'S<sheetRow>' (อ้าง 1-indexed). เช็ค sku กัน row เลื่อนก่อนเขียน
-function confirmShipmentReceive(ss, rowId, sku, receivedQty, actor) {
+// หาแถวของรายการโอนให้เจอ แม้ "เลขแถว" ที่เครื่องผู้ใช้ถืออยู่จะเก่าไปแล้ว
+// ─────────────────────────────────────────────────────────────────────
+// ทำไมต้องมี: id ของ shipment คือ **เลขแถวในชีต** (`readShipments_` → 'S'+(i+1)) ซึ่ง
+// เลื่อนทุกครั้งที่มีการลบแถวออก — archiveReceivedShipments (ตี 3), cleanupOldPendingShipments,
+// หรือเจ้าของแก้ชีตด้วยมือ · เครื่องที่ยังถือข้อมูลเก่า (localStorage / payload cache / ของสำรอง
+// จาก stale-while-rebuild) จะส่งเลขแถวที่ชี้ผิดแถวมา แล้วเดิมระบบตอบ
+// "ข้อมูลไม่ตรง (แถวอาจเลื่อน) — โปรดรีเฟรชแล้วลองใหม่" ทั้งที่พนักงานทำถูกทุกอย่าง
+// → ต้องกดซ้ำ 2-3 รอบกว่าจะติด (พนักงานแจ้งจริง ส.ค. 2026) และยิ่งหลายเครื่องยิ่งเจอบ่อย
+//
+// ตอนนี้: เลขแถวใช้ไม่ได้ → ไล่หาแถวที่ refNum+SKU ตรงกันแทน แล้วบันทึกได้ในรอบเดียว
+// ยังคงความปลอดภัยไว้: ถ้าเจอหลายแถวที่ตรงกันจนเลือกไม่ได้ **ไม่เดา** — ตอบ error ตามเดิม
+// (เขียนผิดแถวแย่กว่าให้กดใหม่ เพราะของหายไปจากบัญชีเงียบ ๆ)
+function findShipmentRow_(sheet, rowNum, refNum, sku) {
+  const want    = String(sku || '').trim().toUpperCase();
+  const wantRef = String(refNum || '').trim();
+  if (!want) return { row: 0, reason: 'ไม่มีรหัสสินค้าในคำขอ' };
+
+  // 1) เชื่อเลขแถวก่อน (เส้นทางปกติ — เร็วสุด อ่านแถวเดียว)
+  if (rowNum >= 3 && rowNum <= sheet.getLastRow()) {
+    const r = sheet.getRange(rowNum, 1, 1, Math.max(sheet.getLastColumn(), SHIP_HEADERS.length)).getDisplayValues()[0];
+    const rowSku = String(r[COL_SHIP_SKU - 1] || '').trim().toUpperCase();
+    const rowRef = String(r[COL_SHIP_REF - 1] || '').trim();
+    if (rowSku === want && (!wantRef || rowRef === wantRef)) return { row: rowNum, healed: false };
+  }
+
+  // 2) เลขแถวชี้ผิด → ไล่หาจากใบโอน (refNum) + SKU
+  const vals = sheet.getDataRange().getDisplayValues();
+  const hits = [];
+  for (let i = 2; i < vals.length; i++) {
+    if (String(vals[i][COL_SHIP_SKU - 1] || '').trim().toUpperCase() !== want) continue;
+    if (wantRef && String(vals[i][COL_SHIP_REF - 1] || '').trim() !== wantRef) continue;
+    hits.push({ row: i + 1, received: !!String(vals[i][COL_SHIP_RECVAT - 1] || '').trim() });
+  }
+  if (!hits.length) {
+    return { row: 0, reason: 'ไม่พบรายการนี้แล้ว (อาจถูกย้ายเข้าประวัติ) — กด Sync แล้วลองใหม่' };
+  }
+  // ยังไม่ถูกรับ เหลือแถวเดียว = ชัดเจนที่สุด
+  const pending = hits.filter(function (h) { return !h.received; });
+  if (pending.length === 1) return { row: pending[0].row, healed: true };
+  if (pending.length === 0 && hits.length === 1) return { row: hits[0].row, healed: true }; // แก้จำนวนที่รับซ้ำ
+  return { row: 0, reason: 'เจอหลายรายการที่ตรงกัน เลือกให้อัตโนมัติไม่ได้ — กด Sync แล้วลองใหม่' };
+}
+
+function confirmShipmentReceive(ss, rowId, sku, receivedQty, actor, refNum) {
   const sheet = ss.getSheetByName(SHEET_TRANSFERS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_TRANSFERS);
 
@@ -3205,13 +4324,11 @@ function confirmShipmentReceive(ss, rowId, sku, receivedQty, actor) {
   if (!lock.tryLock(8000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
 
   try {
-    const rowNum = parseInt(String(rowId).replace(/[^0-9]/g, ""));
-    if (!(rowNum >= 3)) return error("rowId ไม่ถูกต้อง");
-
-    // กัน row เลื่อน: เทียบ SKU ของแถวกับที่ client ส่งมา
+    const askedRow = parseInt(String(rowId).replace(/[^0-9]/g, ""));
+    const found = findShipmentRow_(sheet, askedRow, refNum, sku);
+    if (!found.row) return error(found.reason || "ไม่พบรายการนี้");
+    const rowNum = found.row;
     const rowSku = String(sheet.getRange(rowNum, COL_SHIP_SKU).getDisplayValue()).trim().toUpperCase();
-    if (sku && rowSku !== String(sku).trim().toUpperCase())
-      return error("ข้อมูลไม่ตรง (แถวอาจเลื่อน) — โปรดรีเฟรชแล้วลองใหม่");
 
     const sentQty = parseInt(sheet.getRange(rowNum, COL_SHIP_QTY).getDisplayValue()) || 0;
     const recv    = Math.max(0, receivedQty || 0);
@@ -3233,9 +4350,11 @@ function confirmShipmentReceive(ss, rowId, sku, receivedQty, actor) {
         body: rowSku + ' · รับ ' + recv + '/' + sentQty + ' ชิ้น' + (actor ? ' · ' + actor : ''),
         by: actor,
         image: String(sheet.getRange(rowNum, COL_SHIP_IMAGE).getDisplayValue() || ''),   // แถวนี้ SKU เดียว — ดึงรูปจากคอลัมน์ J ได้ตรง ๆ
+        focus: rowSku || '',   // กดแล้วพาไปหยุดที่สินค้าตัวที่รับไม่ครบเลย
       });
     }
-    return ok({ row: rowNum, receivedQty: recv, status });
+    // healed = เลขแถวที่เครื่องผู้ใช้ส่งมาชี้ผิด แต่เราหาแถวที่ถูกเจอเองแล้ว (ไม่ต้องให้กดซ้ำ)
+    return ok({ row: rowNum, receivedQty: recv, status, healed: !!found.healed, askedRow: askedRow });
   } finally {
     lock.releaseLock();
     try { invalidateCache_(); } catch(e) {}
@@ -3488,7 +4607,7 @@ function confirmStockCount(ss, entries, clientLoadedAt, actor) {
   }
 }
 
-function deleteOrderRow(ss, orderId, actor) {
+function deleteOrderRow(ss, orderId, actor, expectSku) {
   const sheet = ss.getSheetByName(SHEET_ORDERS);
   if (!sheet) return error("ไม่พบชีต ลำดับที่สั่งสินค้า");
   const rowNum = parseInt(String(orderId).replace(/[^0-9]/g, ""));
@@ -3496,7 +4615,6 @@ function deleteOrderRow(ss, orderId, actor) {
 
   // orderId encode row number ณ เวลาที่โหลดข้อมูล — LockService ป้องกัน concurrent delete
   // แต่ถ้าเวลาผ่านไปนานและมี delete อื่นเกิดขึ้น row อาจเลื่อน
-  // ตรวจ sanity: row ต้องมีข้อมูล SKU (col F, index 5) ก่อนลบ
   const lock = LockService.getScriptLock();
   if (!lock.waitLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
   try {
@@ -3504,6 +4622,11 @@ function deleteOrderRow(ss, orderId, actor) {
     const rowData = sheet.getRange(rowNum, 1, 1, 9).getValues()[0];
     const sku = String(rowData[5] || '').trim();
     if (!sku) return error("แถวที่ " + rowNum + " ไม่มีข้อมูล SKU — อาจเลื่อนแถวแล้ว");
+    // ⚠️ "มี SKU" ยังไม่พอ ต้องเป็น SKU **ตัวที่ผู้ใช้กดลบ** ด้วย — แถวเลื่อนขึ้นเพราะมีคน
+    //    ลบใบอื่นไปก่อน แล้วเราลบตามเลขแถวเดิม = ลบออเดอร์ของคนอื่นทิ้งโดยไม่มีใครรู้
+    //    (ลบแล้วกู้ไม่ได้ จึงปฏิเสธให้รีเฟรช ไม่ไล่หาแถวใกล้เคียงเองเหมือนตอนแก้จำนวน)
+    if (expectSku && String(expectSku).trim().toUpperCase() !== sku.toUpperCase())
+      return error("รายการเลื่อนแถว (แถวนี้เป็น " + sku + ") — กดซิงค์แล้วลองใหม่");
     const before = {
       status: rowData[2] || "", sku: sku, name: rowData[6] || "",
       orderQty: rowData[7] || "", preparedQty: rowData[8] || "",
@@ -3520,24 +4643,34 @@ function deleteOrderRow(ss, orderId, actor) {
 }
 
 // ลบหลาย order rows ในครั้งเดียว — เรียงจากแถวล่างขึ้นบนกัน index เลื่อน
-function deleteOrderRows(ss, orderIds, actor) {
+// orderSkus = SKU ที่ client คาดว่าอยู่ในแต่ละแถว (index ตรงกับ orderIds) — ใช้กันลบผิดใบ
+function deleteOrderRows(ss, orderIds, actor, orderSkus) {
   if (!Array.isArray(orderIds) || !orderIds.length) return error("orderIds ว่างเปล่า");
   const sheet = ss.getSheetByName(SHEET_ORDERS);
   if (!sheet) return error("ไม่พบชีต ลำดับที่สั่งสินค้า");
+  const skus = Array.isArray(orderSkus) ? orderSkus : [];
 
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
   try {
     const items = orderIds
-      .map(id => ({ id: id, rowNum: parseInt(String(id).replace(/[^0-9]/g, "")) }))
+      .map((id, i) => ({ id: id, sku: skus[i] || "", rowNum: parseInt(String(id).replace(/[^0-9]/g, "")) }))
       .filter(x => x.rowNum >= 3)
       .sort((a, b) => b.rowNum - a.rowNum);   // มาก→น้อย กัน index เลื่อนตอนลบ
     let deleted = 0;
+    const mismatched = [];
     for (const item of items) {
       // 1) อ่าน before-state ก่อนลบ (A..I: mode,date,status,from,to,sku,name,orderQty,preparedQty)
       const rowData = sheet.getRange(item.rowNum, 1, 1, 9).getValues()[0];
+      const rowSku = String(rowData[5] || "").trim();
+      // ⚠️ แถวเลื่อน (มีคนลบใบอื่นไปก่อน) → ข้ามใบนี้ ห้ามลบ · ลบแล้วกู้ไม่ได้
+      //    เก็บใส่ mismatched แล้วรายงานกลับ ไม่เงียบ — ผู้ใช้ต้องรู้ว่าใบไหนยังไม่ถูกลบ
+      if (item.sku && rowSku.toUpperCase() !== String(item.sku).trim().toUpperCase()) {
+        mismatched.push(item.sku);
+        continue;
+      }
       const before = {
-        status: rowData[2] || "", sku: rowData[5] || "", name: rowData[6] || "",
+        status: rowData[2] || "", sku: rowSku, name: rowData[6] || "",
         orderQty: rowData[7] || "", preparedQty: rowData[8] || "",
       };
       // 2) ลบจริง — GAS deleteRow() เป็น synchronous, throw ถ้าล้มเหลว
@@ -3547,7 +4680,9 @@ function deleteOrderRows(ss, orderIds, actor) {
       writeAuditLog_(actor, "ลบ order (batch)", item.id, auditDetail_({ before: before, after: null, note: "ลบ order แบบ batch" }));
     }
     if (deleted > 0) invalidateCache_(); // P0-4: bump dmj_last_write_ts ครั้งเดียวหลัง batch เสร็จ
-    return ok({ deleted });
+    if (mismatched.length && !deleted)
+      return error("รายการเลื่อนแถว (" + mismatched.join(", ") + ") — กดซิงค์แล้วลองใหม่");
+    return ok({ deleted, mismatched });
   } finally {
     lock.releaseLock();
   }
@@ -7524,11 +8659,23 @@ function parseNum_(val) {
   return isNaN(n) ? 0 : n;
 }
 
+// ตำแหน่งจัดเก็บมี 2 แบบ:
+//   "A3/7" = ชั้น A3 ล็อคที่ 7 (แบบเดิม)
+//   "A0"   = ของที่ "ไม่ได้อยู่บนชั้น" ในซอย A (วางพื้น/นอกชั้นวาง) — 1 ซอยมีช่องเดียว ไม่มีเลขล็อค
+// ⚠️ ห้ามประกอบคีย์ด้วย `${side}${shelf}/${lock}` เองอีก — ช่อง A0/B0 จะกลายเป็น "A0/0"
+//    ที่ไม่ตรงกับสิ่งที่เขียนอยู่ในชีตแล้วของหายจากแผนผังเงียบ ๆ → ใช้ lockKeyOf_ เสมอ
 function parseLocation_(loc) {
   if (!loc) return null;
+  const f = String(loc).trim().match(/^([AB])0$/i);
+  if (f) return { raw: String(loc).trim(), valid: true, side: f[1].toUpperCase(), shelf: 0, lock: 0, floor: true };
   const m = String(loc).trim().match(/^([AB])(\d+)\/(\d+)$/i);
   if (!m) return null;
   return { raw: String(loc).trim(), valid: true, side: m[1].toUpperCase(), shelf: +m[2], lock: +m[3] };
+}
+
+function lockKeyOf_(loc) {
+  if (!loc) return null;
+  return loc.floor ? loc.side + '0' : loc.side + loc.shelf + '/' + loc.lock;
 }
 
 function monthKey_(val) {
@@ -7646,7 +8793,8 @@ function readProducts_(stockRowsOpt, metaRowsOpt) {
     out.push({
       sku, name,
       imageUrl:    imageMap[sku.toUpperCase()] || (r[3] || '').toString().trim(),
-      locationRaw: (r[4] || '').toString().trim(),
+      // ไม่ส่ง `locationRaw` — ไม่มีฝั่งไหนอ่านเลย (ข้อมูลเดียวกันถูกแปลงเป็น `locations` แล้ว)
+      // ค่านี้ติดไปกับสินค้า **ทุกตัว** จึงเป็นไบต์เปล่าที่คูณด้วยจำนวน SKU
       locations:   locParsed ? [locParsed] : [],
       category:    (r[5] || '').toString().trim(),
       tag:         (r[6] || '').toString().trim(),
@@ -7687,7 +8835,6 @@ function readProducts_(stockRowsOpt, metaRowsOpt) {
           sku,
           name:        (r[2] || '').toString().trim(),                  // C = ชื่อ
           imageUrl:    imageMap[sku.toUpperCase()] || '',
-          locationRaw: '',
           locations:   [],
           category:    cat,
           tag:         (r[5] || '').toString().trim(),                  // F = TAG
@@ -7873,18 +9020,59 @@ function readShipments_(rowsOpt) {
   return list;
 }
 
-// ย้ายรายการที่ "รับครบ" แล้ว ออกจากชีต "รายการโอนสินค้า" → เก็บในชีตประวัติ
-// เพื่อไม่ให้ชีตหลัก/แท็บส่งแล้วบวม ส่วนที่ "รับไม่ครบ" ค้างเกิน SHIP_PARTIAL_ARCHIVE_DAYS วัน
-// (นับจากเวลายืนยันรับครั้งล่าสุด) ก็จะถูกย้ายออกด้วยเช่นกัน ถือว่าปิดเคสแล้ว
-// ส่วนที่ยังไม่เคยยืนยันรับเลย (receivedAt ว่าง) จะคาไว้เสมอ เพราะยังรอ action จริง
+// ย้ายรายการที่ "ปิดเคสแล้ว" (รับครบ/รับไม่ครบ) ออกจากชีต "รายการโอนสินค้า" → เก็บในชีตประวัติ
+// เพื่อไม่ให้ชีตหลัก/แท็บส่งแล้วบวม ส่วนที่ยังไม่เคยยืนยันรับเลย (receivedAt ว่าง) จะคาไว้เสมอ
+// เพราะยังรอ action จริงจากหน้าร้าน
 // ⚠️ ตั้ง trigger รายวัน (เช่น ตี 3) + รันเองครั้งแรกได้ (ชื่อไม่มี _ ต่อท้าย → โผล่ใน dropdown)
-const SHIP_PARTIAL_ARCHIVE_DAYS = 7;
+//
+// ⚠️⚠️ เดิม "รับครบ" ถูกย้ายออก **ทันทีในรอบ trigger ถัดไป ไม่รอเลย** — ของที่หน้าร้านกดรับ
+// ตอนเย็น พอเช้ามาก็หายจากหน้าจอแล้ว ทำให้ "เช็คซ้ำว่าได้ของครบจริงไหม" ทำไม่ได้เลย ทั้งที่
+// การเช็คซ้ำเป็นขั้นตอนปกติของหน้าร้าน (เจอจริง ส.ค. 2026 — หาใบ TF ที่เพิ่งรับเมื่อวานไม่เจอ
+// แล้วเข้าใจกันว่า "ข้อมูลหาย" ทั้งที่ยังอยู่ครบในชีตประวัติที่ไม่มีหน้าไหนอ่าน)
+// ตอนนี้ทุกสถานะเก็บไว้ในชีตหลัก SHIP_ARCHIVE_KEEP_DAYS วันก่อนเสมอ นับจากเวลายืนยันรับ
+// → หน้าร้านย้อนดูของทั้งเดือนได้
+const SHIP_ARCHIVE_KEEP_DAYS = 30;
+
+// "ของเก่าที่ยังไม่มีใครกดรับเลย" เก็บไว้กี่วันก่อนย้ายเข้าประวัติ (ใช้กับ cleanupOldPendingShipments)
+// 1 = เหลือของเมื่อวาน + วันนี้ ที่เก่ากว่านั้นถือว่าเลยรอบเช็คไปแล้ว
+const PENDING_CLEANUP_KEEP_DAYS = 1;
+
+// แปลง "dd/MM/yyyy" หรือ "dd/MM/yyyy HH:mm" ในชีตโอน → epoch ms (null ถ้าอ่านไม่ออก)
+// รองรับปี พ.ศ. ด้วย เผื่อแถวเก่าที่เคยเขียนมาจากฝั่ง client (บทเรียนข้อ 11 ใน CLAUDE.md)
+function parseShipDayMs_(s) {
+  const m = String(s || '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2}))?/);
+  if (!m) return null;
+  let y = +m[3];
+  if (y >= 2400) y -= 543;
+  return new Date(y, +m[2] - 1, +m[1], +(m[4] || 0), +(m[5] || 0)).getTime();
+}
 
 // แปลง "dd/MM/yyyy HH:mm" (ค่าที่ confirmShipmentReceive เขียนลง COL_SHIP_RECVAT) เป็น Date
 function parseShipRecvAt_(s) {
-  const m = String(s || '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})/);
-  if (!m) return null;
-  return new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5]);
+  const ms = parseShipDayMs_(s);
+  return ms == null ? null : new Date(ms);
+}
+
+// เวลาที่ถือว่าแถวนี้ "ปิดเคส" — ใช้เวลายืนยันรับเป็นหลัก อ่านไม่ออกก็ถอยไปใช้วันที่ทำรายการ
+function shipCloseMs_(row) {
+  const a = parseShipDayMs_(row[COL_SHIP_RECVAT - 1]);
+  if (a != null) return a;
+  return parseShipDayMs_(row[COL_SHIP_DATE - 1]);
+}
+
+// คีย์กันซ้ำ เวลาย้ายแถวไป-กลับระหว่างชีตหลักกับชีตประวัติ
+function shipDedupKey_(row) {
+  const sku = String(row[COL_SHIP_SKU - 1] || '').trim().toUpperCase();
+  if (!sku) return '';
+  return String(row[COL_SHIP_REF - 1] || '').trim() + '|' + sku + '|'
+       + String(row[COL_SHIP_QTY - 1] || '').trim();
+}
+
+// ปรับความกว้างแถวให้เท่าชีตปลายทาง (setValues บังคับให้ทุกแถวกว้างเท่ากันเป๊ะ)
+function normalizeShipRow_(row, width) {
+  const out = [];
+  for (let i = 0; i < width; i++) out.push(i < row.length ? row[i] : '');
+  return out;
 }
 
 function archiveReceivedShipments() {
@@ -7899,24 +9087,20 @@ function archiveReceivedShipments() {
     const data = sheet.getDataRange().getValues();
     if (data.length < 3) return;  // มีแค่หัวตาราง 2 แถว
 
-    // หาแถวที่ปิดเคสแล้ว (ข้อมูลเริ่ม index 2 = sheet row 3):
-    //  - "รับครบ" → archive ทันที
-    //  - "รับไม่ครบ" ที่ค้างเกิน SHIP_PARTIAL_ARCHIVE_DAYS วันนับจากยืนยันรับครั้งล่าสุด → archive เช่นกัน
-    const partialCutoffMs = SHIP_PARTIAL_ARCHIVE_DAYS * 24 * 60 * 60 * 1000;
+    // หาแถวที่ "ปิดเคสแล้ว **และ** เลยรอบเช็คของหน้าร้านไปแล้ว" (ข้อมูลเริ่ม index 2 = sheet row 3)
+    // ทั้ง "รับครบ" และ "รับไม่ครบ" ใช้เกณฑ์เดียวกัน = ครบ SHIP_ARCHIVE_KEEP_DAYS วันนับจาก
+    // เวลายืนยันรับ · อ่านวันที่ไม่ออกเลย (แถวเก่า/รูปแบบเพี้ยน) → ย้ายได้ ถือว่าเก่าจริง
+    const keepMs = SHIP_ARCHIVE_KEEP_DAYS * 24 * 60 * 60 * 1000;
     const now = Date.now();
     const toArchive = [];  // { rowNum, values }
     for (let i = 2; i < data.length; i++) {
       const sku    = String(data[i][COL_SHIP_SKU - 1] || "").trim();
       if (!sku) continue;
       const status = String(data[i][COL_SHIP_RECVSTATUS - 1] || "").trim();
-      if (status === "รับครบ") {
-        toArchive.push({ rowNum: i + 1, values: data[i] });
-      } else if (status === "รับไม่ครบ") {
-        const recvAt = parseShipRecvAt_(data[i][COL_SHIP_RECVAT - 1]);
-        if (recvAt && (now - recvAt.getTime()) >= partialCutoffMs) {
-          toArchive.push({ rowNum: i + 1, values: data[i] });
-        }
-      }
+      if (status !== "รับครบ" && status !== "รับไม่ครบ") continue;  // ยังไม่มีใครกดรับ → คาไว้
+      const closeMs = shipCloseMs_(data[i]);
+      if (closeMs != null && (now - closeMs) < keepMs) continue;    // ยังอยู่ในช่วงให้เช็คซ้ำ
+      toArchive.push({ rowNum: i + 1, values: data[i] });
     }
     if (!toArchive.length) { Logger.log("archiveReceivedShipments: ไม่มีรายการที่ต้อง archive"); return; }
 
@@ -7949,6 +9133,179 @@ function setupShipmentArchiveTrigger() {
   Logger.log("✅ ตั้ง trigger: archiveReceivedShipments ทุกวัน 03:00");
   // เก็บกวาดของที่ค้างสะสมอยู่ตอนนี้ให้เลย ไม่ต้องรอถึงตี 3
   archiveReceivedShipments();
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// กู้ / เคลียร์ รายการโอน — เครื่องมือให้เจ้าของรันเองใน GAS editor
+// ─────────────────────────────────────────────────────────────────────
+// ทั้งสองตัวเป็นการ **ย้ายแถวระหว่าง 2 ชีต** ไม่มีการลบข้อมูลทิ้งเลย → กลับทางได้เสมอ
+// (restore ↔ cleanup เป็นคู่กัน) · ชีตหลัก "รายการโอนสินค้า" = สิ่งที่หน้าเว็บอ่าน,
+// ชีต "ประวัติรับสินค้า" = คลังเก็บที่ยังไม่มีหน้าไหนอ่าน (ดู PLAN ต่อยอดท้ายไฟล์นี้)
+
+// กู้รายการที่ถูกย้ายเข้าประวัติ "เร็วเกินไป" กลับเข้าชีตหลัก
+// เกณฑ์ = อะไรที่ยังไม่ครบ SHIP_ARCHIVE_KEEP_DAYS วัน ควรอยู่ในชีตหลักตามนโยบายใหม่
+// ข้ามแถวที่มีอยู่ในชีตหลักแล้ว (เทียบด้วย shipDedupKey_) → รันซ้ำกี่รอบก็ไม่เกิดของซ้ำ
+function restoreArchivedShipments() {
+  const ss   = SpreadsheetApp.openById(SHEET_ID);
+  const main = ss.getSheetByName(SHEET_TRANSFERS);
+  const arch = ss.getSheetByName(SHEET_SHIP_ARCHIVE);
+  if (!main) { Logger.log("restoreArchivedShipments: ไม่พบชีต " + SHEET_TRANSFERS); return; }
+  if (!arch) { Logger.log("restoreArchivedShipments: ยังไม่มีชีต " + SHEET_SHIP_ARCHIVE + " — ไม่มีอะไรให้กู้"); return; }
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) { Logger.log("restoreArchivedShipments: lock ไม่ได้"); return; }
+  try {
+    const aVals = arch.getDataRange().getValues();
+    if (aVals.length < 2) { Logger.log("restoreArchivedShipments: ชีตประวัติว่าง"); return; }
+
+    const mainWidth = Math.max(main.getLastColumn(), SHIP_HEADERS.length);
+    const archWidth = Math.max(aVals[0].length, SHIP_HEADERS.length);
+
+    // แถวที่มีในชีตหลักอยู่แล้ว — กันกู้ซ้ำ
+    const mVals = main.getDataRange().getValues();
+    const seen = {};
+    for (let i = 2; i < mVals.length; i++) {
+      const k = shipDedupKey_(mVals[i]);
+      if (k) seen[k] = true;
+    }
+
+    const cutoff = Date.now() - SHIP_ARCHIVE_KEEP_DAYS * 24 * 60 * 60 * 1000;
+    const bring = [], keep = [];
+    for (let i = 1; i < aVals.length; i++) {     // ชีตประวัติมีหัวตารางแถวเดียว
+      const r   = aVals[i];
+      const sku = String(r[COL_SHIP_SKU - 1] || "").trim();
+      if (!sku) continue;                        // แถวว่าง → ทิ้งไปเลย ไม่ต้องเก็บต่อ
+      const closeMs = shipCloseMs_(r);
+      const k = shipDedupKey_(r);
+      // อ่านวันที่ไม่ออก → ไม่กู้ (ปล่อยไว้ในประวัติ ดีกว่าเดาแล้วดันของเก่ากลับขึ้นหน้าจอ)
+      if (closeMs != null && closeMs >= cutoff && k && !seen[k]) {
+        bring.push(normalizeShipRow_(r, mainWidth));
+        seen[k] = true;
+      } else {
+        keep.push(normalizeShipRow_(r, archWidth));
+      }
+    }
+
+    if (!bring.length) {
+      Logger.log("restoreArchivedShipments: ไม่มีรายการที่ต้องกู้ (ในประวัติมี " + (aVals.length - 1) + " แถว)");
+      return;
+    }
+
+    main.getRange(main.getLastRow() + 1, 1, bring.length, mainWidth).setValues(bring);
+    // ลบออกจากประวัติ = "ย้าย" ไม่ใช่ "ก็อป" — ไม่งั้น archive รอบหน้าจะเจอทั้งสองที่แล้วซ้ำ
+    if (arch.getLastRow() > 1) arch.getRange(2, 1, arch.getLastRow() - 1, archWidth).clearContent();
+    if (keep.length)           arch.getRange(2, 1, keep.length, archWidth).setValues(keep);
+
+    SpreadsheetApp.flush();
+    invalidateCache_();
+    Logger.log("✅ restoreArchivedShipments: กู้กลับ " + bring.length + " แถว (เหลือในประวัติ " + keep.length + " แถว)");
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ย้าย "ของที่ส่งออกจากคลังแล้วแต่ไม่เคยมีใครกดรับเลย" ที่เก่ากว่า PENDING_CLEANUP_KEEP_DAYS วัน
+// เข้าชีตประวัติ — ล้างแท็บ "🚚 ส่งแล้ว" ให้เหลือเฉพาะรอบที่ยังต้องเช็คจริง
+// ⚠️ ย้าย ไม่ใช่ลบ — ข้อมูลอยู่ครบใน "ประวัติรับสินค้า" · เอากลับได้ด้วย restoreArchivedShipments()
+//    (ตัวนั้นกู้เฉพาะที่ปิดเคสแล้ว ถ้าอยากได้ค้างรับเก่ากลับต้องก็อปจากชีตประวัติเอง)
+function cleanupOldPendingShipments() {
+  const ss   = SpreadsheetApp.openById(SHEET_ID);
+  const main = ss.getSheetByName(SHEET_TRANSFERS);
+  if (!main) { Logger.log("cleanupOldPendingShipments: ไม่พบชีต " + SHEET_TRANSFERS); return; }
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) { Logger.log("cleanupOldPendingShipments: lock ไม่ได้"); return; }
+  try {
+    const data = main.getDataRange().getValues();
+    if (data.length < 3) { Logger.log("cleanupOldPendingShipments: ไม่มีข้อมูล"); return; }
+
+    const t = new Date();
+    const startToday = new Date(t.getFullYear(), t.getMonth(), t.getDate()).getTime();
+    const cutoff = startToday - PENDING_CLEANUP_KEEP_DAYS * 24 * 60 * 60 * 1000;
+
+    const toMove = [];   // { rowNum, values }
+    for (let i = 2; i < data.length; i++) {
+      const sku = String(data[i][COL_SHIP_SKU - 1] || "").trim();
+      if (!sku) continue;
+      const recvAt = String(data[i][COL_SHIP_RECVAT - 1] || "").trim();
+      if (recvAt) continue;                       // เคยกดรับแล้ว → ให้ archiveReceivedShipments จัดการตามอายุ
+      const dayMs = parseShipDayMs_(data[i][COL_SHIP_DATE - 1]);
+      if (dayMs == null) continue;                // อ่านวันที่ไม่ออก → ไม่แตะ (ไม่เดา)
+      if (dayMs >= cutoff) continue;              // ของเมื่อวาน/วันนี้ → เก็บไว้ให้เช็ค
+      toMove.push({ rowNum: i + 1, values: data[i] });
+    }
+    if (!toMove.length) { Logger.log("cleanupOldPendingShipments: ไม่มีของค้างเก่าที่ต้องเคลียร์"); return; }
+
+    let arch = ss.getSheetByName(SHEET_SHIP_ARCHIVE);
+    if (!arch) { arch = ss.insertSheet(SHEET_SHIP_ARCHIVE); arch.appendRow(SHIP_HEADERS); }
+    const archWidth = Math.max(arch.getLastColumn(), SHIP_HEADERS.length);
+    const rows = toMove.map(function (x) { return normalizeShipRow_(x.values, archWidth); });
+    arch.getRange(arch.getLastRow() + 1, 1, rows.length, archWidth).setValues(rows);
+
+    // ลบจากแถวล่างขึ้นบน กัน index เลื่อน (แพทเทิร์นเดียวกับ archiveReceivedShipments)
+    toMove.sort(function (a, b) { return b.rowNum - a.rowNum; });
+    toMove.forEach(function (x) { main.deleteRow(x.rowNum); });
+
+    SpreadsheetApp.flush();
+    invalidateCache_();
+    Logger.log("✅ cleanupOldPendingShipments: ย้ายของค้างเก่า " + toMove.length + " แถวเข้า " + SHEET_SHIP_ARCHIVE);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ดูก่อนว่า 2 ตัวข้างบนจะทำอะไรบ้าง — **อ่านอย่างเดียว ไม่แก้ข้อมูล** รันดูก่อนได้เสมอ
+function previewShipmentCleanup() {
+  const ss   = SpreadsheetApp.openById(SHEET_ID);
+  const main = ss.getSheetByName(SHEET_TRANSFERS);
+  const arch = ss.getSheetByName(SHEET_SHIP_ARCHIVE);
+  const now = Date.now();
+  const restoreCutoff = now - SHIP_ARCHIVE_KEEP_DAYS * 24 * 60 * 60 * 1000;
+  const t = new Date();
+  const startToday = new Date(t.getFullYear(), t.getMonth(), t.getDate()).getTime();
+  const pendCutoff = startToday - PENDING_CLEANUP_KEEP_DAYS * 24 * 60 * 60 * 1000;
+
+  let willRestore = 0, staysArchived = 0;
+  if (arch) {
+    const aVals = arch.getDataRange().getValues();
+    for (let i = 1; i < aVals.length; i++) {
+      if (!String(aVals[i][COL_SHIP_SKU - 1] || "").trim()) continue;
+      const closeMs = shipCloseMs_(aVals[i]);
+      if (closeMs != null && closeMs >= restoreCutoff) {
+        willRestore++;
+        if (willRestore <= 20) {
+          Logger.log("  กู้กลับ: " + String(aVals[i][COL_SHIP_REF - 1] || "") + " · "
+            + String(aVals[i][COL_SHIP_SKU - 1] || "") + " · รับเมื่อ "
+            + String(aVals[i][COL_SHIP_RECVAT - 1] || "-"));
+        }
+      } else staysArchived++;
+    }
+  }
+
+  let willClear = 0, pendKept = 0, closedKept = 0;
+  if (main) {
+    const mVals = main.getDataRange().getValues();
+    for (let i = 2; i < mVals.length; i++) {
+      if (!String(mVals[i][COL_SHIP_SKU - 1] || "").trim()) continue;
+      const recvAt = String(mVals[i][COL_SHIP_RECVAT - 1] || "").trim();
+      if (recvAt) { closedKept++; continue; }
+      const dayMs = parseShipDayMs_(mVals[i][COL_SHIP_DATE - 1]);
+      if (dayMs != null && dayMs < pendCutoff) {
+        willClear++;
+        if (willClear <= 20) {
+          Logger.log("  เคลียร์ค้างเก่า: " + String(mVals[i][COL_SHIP_REF - 1] || "") + " · "
+            + String(mVals[i][COL_SHIP_SKU - 1] || "") + " · ส่งวันที่ "
+            + String(mVals[i][COL_SHIP_DATE - 1] || "-"));
+        }
+      } else pendKept++;
+    }
+  }
+
+  Logger.log("── สรุป (ยังไม่ได้แก้อะไร) ──");
+  Logger.log("restoreArchivedShipments() จะกู้กลับ " + willRestore + " แถว (ค้างในประวัติต่อ " + staysArchived + ")");
+  Logger.log("cleanupOldPendingShipments() จะย้ายของค้างเก่า " + willClear + " แถว (เหลือค้างรับ " + pendKept + ")");
+  Logger.log("ในชีตหลักมีของที่กดรับแล้ว " + closedKept + " แถว (เก็บไว้ " + SHIP_ARCHIVE_KEEP_DAYS + " วันตามนโยบายใหม่)");
+  return { willRestore: willRestore, staysArchived: staysArchived, willClear: willClear, pendKept: pendKept, closedKept: closedKept };
 }
 
 function readPurchases_() {
@@ -8023,10 +9380,11 @@ function readStorage_(rowsOpt) {
       side:    parsed ? parsed.side  : null,
       shelf:   parsed ? parsed.shelf : null,
       lockNum: parsed ? parsed.lock  : null,
+      floor:   parsed ? !!parsed.floor : false,   // A0/B0 = ไม่ได้อยู่บนชั้นวาง
     };
     entries.push(e);
     if (parsed) {
-      const key = `${parsed.side}${parsed.shelf}/${parsed.lock}`;
+      const key = lockKeyOf_(parsed);
       lockMap[key] = lockMap[key] || [];
       lockMap[key].push({ sku: e.sku, qty: e.qty, sysQty: e.sysQty, status: e.status, lastCheck: e.lastCheck });
     }
@@ -8129,6 +9487,39 @@ function readQtyByLocation_() {
   return map;
 }
 
+// ── Phase 7.4: ก้อนเบาสำหรับ poll เลขสต็อก (แท็บนับสต็อก / เช็คหน้าร้าน) ─────────────
+// เดิมสองแท็บนี้ดึง **payload ทั้งก้อน (~4.2MB) ทุก 30 วินาที** ทั้งที่ต้องการแค่ "เลขสต็อกอ้างอิง"
+// ให้หลายเครื่องเห็นงานของกันและกัน → เครื่องที่จอดหน้าร้านทั้งวันกินราว **500MB/ชม./เครื่อง**
+// และเป็นตัวเดียวกับที่ทำให้ 15 เครื่องพร้อมกันได้ HTTP 404 (ดูคำอธิบายที่ `action=ver`)
+//
+// ก้อนนี้อ่านแค่ 2 ชีต (สต็อก + จำนวนหน้าร้าน) แทน 9 ชีต และส่งเฉพาะตัวเลขที่แท็บพวกนั้นใช้จริง
+// **ส่งเป็น array ไม่ใช่ object โดยตั้งใจ** — เมื่อมีสินค้าหลักพันตัว ชื่อคีย์ที่ซ้ำทุกแถว
+// คือส่วนที่ใหญ่ที่สุดของก้อน (`{"sku":...,"qtyStore":...}` ยาวกว่า `[...]` เกิน 2 เท่า)
+// ลำดับคอลัมน์: [sku, หน้าร้าน, คลัง, จำนวนที่เช็คไว้, วันที่เช็คล่าสุด]
+// ⚠️ **ห้ามสลับ/แทรกคอลัมน์กลางแถว** — ฝั่ง client อ่านตามตำแหน่ง สลับแล้วเลขสต็อกจะเพี้ยน
+// แบบไม่มี error ให้เห็น (บทเรียนเดียวกับ column index ในชีต) ถ้าต้องเพิ่มให้ต่อท้ายเท่านั้น
+function stockLiteHandler_() {
+  const cached = _readChunked_(_STOCKLITE_KEY_COUNT, _STOCKLITE_KEY_PART);
+  if (cached.str) return ContentService.createTextOutput(cached.str)
+    .setMimeType(ContentService.MimeType.JSON);
+
+  const locMap = readQtyByLocation_();          // ชีตสต็อก = แหล่งที่ ZORT sync เขียน (สดที่สุด)
+  const fsMap  = readFrontStoreCheckedQty_();
+  const items = [];
+  Object.keys(locMap).forEach(function (skuU) {
+    const loc = locMap[skuU];
+    const fs  = fsMap[skuU];
+    items.push([
+      skuU, loc.qtyStore, loc.qtyWH,
+      fs ? fs.qty : null,                       // null = ยังไม่เคยเช็ค (ต่างจากเช็คแล้วได้ 0)
+      (fs && fs.at) ? fs.at : ''
+    ]);
+  });
+  const out = JSON.stringify({ ok: true, ts: getSheetLastModified_(), items: items });
+  _writeChunked_(out, _STOCKLITE_KEY_COUNT, _STOCKLITE_KEY_PART, _STOCKLITE_TTL_SEC);
+  return ContentService.createTextOutput(out).setMimeType(ContentService.MimeType.JSON);
+}
+
 // ── รวมจำนวนจริงจากชีต "อัพเดทจำนวนสินค้า" (loc) เข้ากับสินค้า 1 ตัว ──
 // loc = 1 entry จาก readQtyByLocation_ ({qtyStore, qtyWH, price}) · แก้ p ในที่ (mutate)
 // ไม่มี loc (สินค้าไม่มีแถวในชีตสต็อก) → ไม่แตะอะไรเลย ปล่อยค่าจาก readProducts_ ตามเดิม
@@ -8143,7 +9534,6 @@ function applyQtyLocToProduct_(p, loc) {
   if (!p || !loc) return p;
   p.qtyStore     = loc.qtyStore;
   p.qtyWH        = loc.qtyWH;
-  p.warehouseQty = loc.qtyWH;
   if (loc.price > 0) p.price = loc.price;
 
   const locTotal = loc.qtyStore + loc.qtyWH;
@@ -8291,13 +9681,15 @@ function handleOrder_(params) {
 //   เปิดจริงเมื่อเจ้าของรัน setupInappNoti() 1 ครั้งใน GAS editor · ปิดด้วย disableInappNoti()
 // ══════════════════════════════════════════════════════════════════════════
 
-// คอลัมน์ชีตแจ้งเตือนในแอป (1-indexed): A..L
-// ⚠️ IMAGE ต่อท้ายเป็นคอลัมน์ L (ไม่แทรกกลาง) — ชีตจริงมีแถวเก่าที่เขียนด้วย layout 11
+// คอลัมน์ชีตแจ้งเตือนในแอป (1-indexed): A..M
+// ⚠️ IMAGE/FOCUS ต่อท้าย (ไม่แทรกกลาง) — ชีตจริงมีแถวเก่าที่เขียนด้วย layout 11/12
 // คอลัมน์อยู่แล้ว แทรกกลางจะทำให้ตำแหน่งคอลัมน์เดิม (READBY/EXPIRES) เพี้ยนย้อนหลังทั้งชีต
+// FOCUS = SKU ที่ต้องพาไปดูต่อหลังกดแจ้งเตือน (ว่าง = พาไปแค่แท็บเหมือนเดิม — แถวเก่าทุกแถว
+// เป็นแบบนี้ จึงต้องทนค่าว่างได้เสมอ ห้ามถือว่า "ต้องมี")
 var INAPP_COL = { ID:1, CREATED:2, AUDIENCE:3, TYPE:4, TITLE:5, BODY:6,
-                  TAB:7, BY:8, DEDUP:9, READBY:10, EXPIRES:11, IMAGE:12 };
+                  TAB:7, BY:8, DEDUP:9, READBY:10, EXPIRES:11, IMAGE:12, FOCUS:13 };
 var INAPP_HEADERS = ["id","createdAt","audience","type","title","body",
-                     "tab","createdBy","dedupKey","readBy","expiresAt","image"];
+                     "tab","createdBy","dedupKey","readBy","expiresAt","image","focusSku"];
 
 var INAPP_KEEP_DAYS_DEFAULT = 14;   // ปรับได้ที่ Script Property INAPP_NOTI_KEEP_DAYS
 var INAPP_MAX_RETURN        = 30;   // จำนวนแถวที่ส่งกลับให้ frontend ต่อรอบ poll
@@ -8342,7 +9734,10 @@ function inappIsRead_(readBy, staffId) {
 }
 
 // ── เขียนแจ้งเตือน 1 เรื่องเข้าชีต ────────────────────────────────────────
-// opts: {audience, type, title, body, tab, by, dedupKey, ttlDays}
+// opts: {audience, type, title, body, tab, by, dedupKey, ttlDays, image, focus}
+// focus = SKU เดียวที่ผู้ใช้ต้องไปทำต่อ — ใส่ได้เฉพาะแจ้งเตือนที่ผูกกับสินค้าตัวเดียวจริง ๆ
+//   (ออเดอร์ใหม่ / รับของไม่ครบ) · เรื่องที่รวมหลาย SKU (โอนทั้งชุด, สต็อกใกล้หมด) **ห้ามใส่**
+//   เพราะเลือกตัวใดตัวหนึ่งมาเด้ง = พาไปผิดตัวโดยที่ผู้ใช้ไม่รู้ว่ายังมีตัวอื่นอีก
 // ⚠️ ห้าม throw เด็ดขาด — ตัวเรียกคือเส้นทางสั่งของ/โอนของจริง แจ้งเตือนพลาด
 //    ต้องไม่ทำให้งานหลักล้ม (หลักเดียวกับ appendSaleBillRow_)
 function pushInappNoti_(opts) {
@@ -8389,6 +9784,7 @@ function pushInappNoti_(opts) {
       '',
       new Date(now.getTime() + ttlDays * 86400000),
       String(opts.image || ''),   // รูปสินค้า — ใส่เฉพาะแจ้งเตือนที่ผูกกับ SKU เดียว (ดูหมายเหตุ IMAGE ด้านบน)
+      String(opts.focus || ''),   // SKU ที่ต้องพาไปดูต่อ (ว่าง = พาไปแค่แท็บ)
     ]);
   } catch (e) {
     Logger.log('pushInappNoti_ error (ข้ามไป ไม่กระทบงานหลัก): ' + e);
@@ -8440,6 +9836,7 @@ function listInappNotiHandler_(e) {
         tab:   String(r[INAPP_COL.TAB - 1] || ''),
         by:    String(r[INAPP_COL.BY - 1] || ''),
         image: String(r[INAPP_COL.IMAGE - 1] || ''),
+        focus: String(r[INAPP_COL.FOCUS - 1] || ''),   // แถวเก่าไม่มีคอลัมน์นี้ → '' = ไม่เด้งไปไหนต่อ
         read:  isRead,
       });
     }
@@ -9144,6 +10541,7 @@ function sendLineGroupOrderCard_(name, sku, date, imageUrl, qty) {
     title: '📦 ออเดอร์ใหม่ ' + (Number(qty) || 0) + ' ชิ้น',
     body: (name || sku || '-') + (sku ? ' · ' + sku : ''),
     image: imageUrl || '',   // ออเดอร์เดียวมี SKU เดียว — มีรูปให้ใส่ตรง ๆ
+    focus: sku || '',        // กดแล้วพาไปหยุดที่ใบนี้เลย ไม่ต้องไล่หาเองในลิสต์เป็นสิบใบ
   });
 }
 
@@ -9984,6 +11382,28 @@ const _CACHE_TTL_SEC   = 180;     // 3 นาที (เพิ่มเป็น
 const _CACHE_CHUNK_LEN = 30000;   // อักขระต่อ chunk (Thai 3 ไบต์ → ~90KB ปลอดภัย)
 const _CACHE_KEY_COUNT = 'dmj_payload_n';
 const _CACHE_KEY_PART  = 'dmj_payload_';
+const _CACHE_TS_SUFFIX = '_ts';   // เก็บ "เขียน cache ก้อนนี้เมื่อไหร่" คู่กับคีย์นับ chunk
+
+// ── Phase 7.3: ชั้น "ของสำรอง" (stale) สำหรับ stale-while-rebuild ──
+// คีย์แยกคนละชุดกับชั้นสด **โดยตั้งใจ** — `invalidateCache_` ไล่ลบเฉพาะคีย์ชั้นสด
+// ของสำรองจึงรอดจากการล้าง cache ทุกครั้งที่มีคนบันทึกข้อมูล ซึ่งเป็นทั้งหมดที่เราต้องการ:
+// คนที่มาถึงระหว่างคนแรกกำลัง build ได้ข้อมูลเก่าไม่กี่วินาทีทันที แทนที่จะไปต่อคิว build
+// TTL 30 นาที (ไม่ยาวกว่านี้) — ถ้า build พังติดกันนานกว่านี้ ปล่อยให้ผู้ใช้เห็น error
+// ดีกว่าเสิร์ฟตัวเลขสต็อกอายุครึ่งวันโดยที่เขาไม่รู้ตัว
+const _STALE_TTL_SEC   = 1800;
+const _STALE_KEY_COUNT = 'dmj_stale_n_';
+const _STALE_KEY_PART  = 'dmj_stale_';
+// รอคิว build ของคนแรกนานสุดเท่าไหร่ ก่อนยอม build เอง (build จริงวัดได้ ~10 วิ)
+const _BUILD_LOCK_WAIT_MS = 25000;
+
+// ── Phase 7.4: cache ของก้อนเบา `action=stocklite` ──
+// TTL สั้นมากโดยตั้งใจ — ก้อนนี้ถูก poll ทุก 30 วิ จากทุกเครื่องที่เปิดแท็บนับสต็อก/เช็คหน้าร้าน
+// 15 วิ = อ่านชีตอย่างมาก 4 ครั้ง/นาที ไม่ว่าจะมีกี่เครื่อง (เดิมคือ "กี่เครื่อง × 2 ครั้ง/นาที")
+// และ `invalidateCache_` ล้างคีย์นี้ด้วย → เครื่องอื่นบันทึกแล้วเห็นทันที ไม่ต้องรอ TTL หมด
+// (ต่างจากชั้นสำรอง `dmj_stale_*` ที่ห้ามล้าง — ตัวนี้ไม่ใช่ของสำรอง ล้างได้ปลอดภัย)
+const _STOCKLITE_TTL_SEC   = 15;
+const _STOCKLITE_KEY_COUNT = 'dmj_stocklite_n';
+const _STOCKLITE_KEY_PART  = 'dmj_stocklite_';
 // PERF: payload แยกตาม role แล้ว → cache ต้องแยกคีย์ต่อ variant ด้วย
 // ไม่งั้น warehouse ที่มาก่อนจะ cache ก้อนที่ตัดแล้วทับ แล้ว owner ที่มาทีหลังได้ข้อมูลขาด
 // (variant 'full' คงคีย์เดิมไว้ — ของที่ cache ไว้ก่อน deploy ยังใช้ได้ ไม่ต้องรอ cache อุ่นใหม่)
@@ -10090,42 +11510,89 @@ function shapePayloadForVariant_(data, variant) {
   return out;
 }
 
-function getCachedPayload_(variant) {
+// อ่านก้อนที่ถูกหั่นเป็น chunk กลับมาต่อกัน — คืน { str, ts } เสมอ (str=null คือใช้ไม่ได้)
+// `ts` = เวลาที่เขียน cache ก้อนนี้ ใช้ 2 ที่: (1) ตัดสินว่าของที่ build เสร็จระหว่างเรารอคิว
+// ใหม่พอสำหรับคนที่กดปุ่ม Sync ไหม (2) บอกอายุของ "ของสำรอง" ให้ผู้ใช้เห็น
+function _readChunked_(kCount, kPart) {
   try {
     const c = CacheService.getScriptCache();
-    const _CACHE_KEY_COUNT = _cacheKeyCount_(variant);
-    const _CACHE_KEY_PART  = _cacheKeyPart_(variant);
-    const nStr = c.get(_CACHE_KEY_COUNT);
-    if (!nStr) return null;
+    const head = c.getAll([kCount, kCount + _CACHE_TS_SUFFIX]);
+    const nStr = head[kCount];
+    if (!nStr) return { str: null, ts: 0 };
     const n = parseInt(nStr, 10);
-    if (!n) return null;
+    if (!n) return { str: null, ts: 0 };
+    const ts = parseInt(head[kCount + _CACHE_TS_SUFFIX], 10) || 0;
     const keys = [];
-    for (let i = 0; i < n; i++) keys.push(_CACHE_KEY_PART + i);
+    for (let i = 0; i < n; i++) keys.push(kPart + i);
     const map = c.getAll(keys);
     let out = '';
     for (let i = 0; i < n; i++) {
-      const part = map[_CACHE_KEY_PART + i];
-      if (part == null) return null; // chunk หาย → ถือว่า cache ใช้ไม่ได้
+      const part = map[kPart + i];
+      if (part == null) return { str: null, ts: 0 }; // chunk หาย → ถือว่า cache ใช้ไม่ได้
       out += part;
     }
-    return out;
-  } catch (err) { return null; }
+    return { str: out, ts: ts };
+  } catch (err) { return { str: null, ts: 0 }; }
 }
 
-function putCachedPayload_(str, variant) {
+function _writeChunked_(str, kCount, kPart, ttlSec) {
   try {
     const c = CacheService.getScriptCache();
-    const _CACHE_KEY_COUNT = _cacheKeyCount_(variant);
-    const _CACHE_KEY_PART  = _cacheKeyPart_(variant);
     const entries = {};
     let n = 0;
     for (let i = 0; i < str.length; i += _CACHE_CHUNK_LEN) {
-      entries[_CACHE_KEY_PART + n] = str.substring(i, i + _CACHE_CHUNK_LEN);
+      entries[kPart + n] = str.substring(i, i + _CACHE_CHUNK_LEN);
       n++;
     }
-    entries[_CACHE_KEY_COUNT] = String(n);
-    c.putAll(entries, _CACHE_TTL_SEC);
+    entries[kCount] = String(n);
+    entries[kCount + _CACHE_TS_SUFFIX] = String(Date.now());
+    c.putAll(entries, ttlSec);
   } catch (err) { /* cache ล้มเหลวไม่เป็นไร — แค่ช้าลง */ }
+}
+
+// ชั้นสด (TTL 3 นาที) — ถูกล้างทุกครั้งที่มีคนบันทึกข้อมูล
+function readFreshPayload_(variant) {
+  return _readChunked_(_cacheKeyCount_(variant), _cacheKeyPart_(variant));
+}
+function getCachedPayload_(variant) { return readFreshPayload_(variant).str; }
+function putCachedPayload_(str, variant) {
+  _writeChunked_(str, _cacheKeyCount_(variant), _cacheKeyPart_(variant), _CACHE_TTL_SEC);
+}
+
+// ชั้นสำรอง (TTL 30 นาที) — `invalidateCache_` ไม่แตะ จึงยังอยู่ระหว่างที่คนแรกกำลัง build ใหม่
+function _staleKeyCount_(variant) { return _STALE_KEY_COUNT + (variant || 'full'); }
+function _staleKeyPart_(variant)  { return _STALE_KEY_PART  + (variant || 'full') + '_'; }
+function readStalePayload_(variant) {
+  return _readChunked_(_staleKeyCount_(variant), _staleKeyPart_(variant));
+}
+function putStalePayload_(str, variant) {
+  _writeChunked_(str, _staleKeyCount_(variant), _staleKeyPart_(variant), _STALE_TTL_SEC);
+}
+
+// ── Phase 7.3: single-flight — ให้ "คนเดียว" สร้าง payload ต่อหนึ่งรอบ ──
+// ใช้ `getUserLock()` ไม่ใช่ `getScriptLock()` **โดยตั้งใจ**:
+//   · web app deploy แบบ `executeAs: USER_DEPLOYING` (ดู appsscript.json) → ทุก doGet
+//     รันในฐานะเจ้าของคนเดียวกัน → user lock จึงเป็นล็อกร่วมของทุก request จริง
+//   · แต่เป็น **คนละตัว** กับ `getScriptLock()` ที่เส้นทางเขียนข้อมูลใช้ (สั่งของ/โอน/รับของ)
+//     → การ build ที่กิน ~10 วิ จะไม่ไปขวางคนกดสั่งของให้รอตาม
+//   · ถ้าวันหนึ่งเปลี่ยนเป็น `USER_ACCESSING` ล็อกจะแยกตามคน → single-flight ทำงานได้น้อยลง
+//     (build บ่อยขึ้น) **แต่ข้อมูลไม่ผิด** — ความถูกต้องไม่ได้ผูกกับล็อกตัวนี้เลย เป็นแค่ตัวลดงานซ้ำ
+//   · ล็อกค้างไม่ได้: ทุกเส้นทางปล่อยใน `finally` และ GAS ปล่อยล็อกให้เองเมื่อ execution จบ
+function acquireBuildLock_(waitMs) {
+  try {
+    const lock = LockService.getUserLock();
+    return lock.tryLock(waitMs || 0) ? lock : null;
+  } catch (err) { return null; }   // ล็อกใช้ไม่ได้ → ถือว่าคว้าไม่ได้ แล้วไปทางสำรอง/build เอง
+}
+function releaseBuildLock_(lock) {
+  if (lock) { try { lock.releaseLock(); } catch (err) { /* ปล่อยไม่ได้ก็หมดอายุเองตอน execution จบ */ } }
+}
+
+// แทรกธง "นี่คือของสำรอง" เข้าไปใน JSON string ตรง ๆ โดยไม่ parse ทั้งก้อน (payload ~4.5MB)
+// frontend ใช้ `stale` ขึ้นป้ายเตือน และ `staleAt` บอกว่าข้อมูล ณ เวลาไหน
+function markStalePayload_(s, ts) {
+  if (!s || s.charAt(0) !== '{' || s.charAt(1) === '}') return s;
+  return '{"stale":1,"staleAt":' + (ts || 0) + ',' + s.slice(1);
 }
 
 function invalidateCache_(skipTsUpdate) {
@@ -10142,9 +11609,23 @@ function invalidateCache_(skipTsUpdate) {
       const kCount = _cacheKeyCount_(v), kPart = _cacheKeyPart_(v);
       const nStr = c.get(kCount);
       const n = nStr ? parseInt(nStr, 10) : 0;
-      keys.push(kCount);
+      keys.push(kCount, kCount + _CACHE_TS_SUFFIX);
       for (let i = 0; i < n; i++) keys.push(kPart + i);
     });
+    // Phase 7.4: ก้อนเบา `stocklite` ล้างด้วย — TTL มันสั้น (15 วิ) แต่ถ้าไม่ล้าง คนที่เปิดแท็บ
+    // นับสต็อก/เช็คหน้าร้านค้างไว้จะเห็นเลขเก่าได้อีกถึง 15 วิหลังเพื่อนบันทึก ทั้งที่ปลายทาง
+    // ของแท็บพวกนี้คือ "เห็นงานของกันและกันแบบสด" · ไม่ใช่ของสำรอง จึงล้างได้ปลอดภัย
+    (function () {
+      const nStr = c.get(_STOCKLITE_KEY_COUNT);
+      const n = nStr ? parseInt(nStr, 10) : 0;
+      keys.push(_STOCKLITE_KEY_COUNT, _STOCKLITE_KEY_COUNT + _CACHE_TS_SUFFIX);
+      for (let i = 0; i < n; i++) keys.push(_STOCKLITE_KEY_PART + i);
+    })();
+    // ⚠️ Phase 7.3: **ล้างเฉพาะชั้นสด ห้ามแตะชั้นสำรอง (`dmj_stale_*`)**
+    // ของสำรองคือสิ่งเดียวที่คนอื่นมีให้อ่านระหว่างคนแรกกำลัง build ใหม่ (~10 วิ)
+    // ถ้าล้างด้วย = กลับไปเป็น stampede เหมือนเดิมทันที (ทุกคน miss พร้อมกัน → build พร้อมกัน)
+    // ของสำรองไม่ทำให้ข้อมูลผิด เพราะถูกติดธง `stale` + คง `lastModified` เดิมไว้เสมอ
+    // → conflict detection ฝั่ง server ยังปฏิเสธการเขียนทับที่อิงข้อมูลเก่าได้ตามปกติ
     if (keys.length) c.removeAll(keys);
   } catch (err) { /* ignore */ }
   if (!skipTsUpdate) {
