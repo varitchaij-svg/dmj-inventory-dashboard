@@ -154,7 +154,19 @@
     padding: 14px 28px;
     display: flex; align-items: center; gap: 24px;
   }
-  .brand { display: flex; align-items: center; gap: 12px; }
+  /* โลโก้เป็นปุ่มไปหน้าหลัก (เมนูทั้งหมด) — reset สไตล์ปุ่มให้เหมือนเดิมทุกประการ
+     แล้วเพิ่มพื้นหลังตอน hover/กด เพื่อให้เห็นว่ากดได้ (ก่อนหน้านี้เป็น div เฉย ๆ) */
+  .brand {
+    display: flex; align-items: center; gap: 12px;
+    background: none; border: none; padding: 4px 8px; margin-left: -8px;
+    border-radius: 12px; cursor: pointer; text-align: left;
+    font-family: inherit; color: inherit; min-height: 44px;
+    transition: background .12s ease, transform .08s ease;
+    flex-shrink: 0;
+  }
+  .brand:hover { background: var(--g-50); }
+  .brand:active { transform: scale(.97); background: var(--g-100); }
+  .brand.active { background: var(--g-50); box-shadow: inset 0 0 0 1.5px var(--g-300); }
   .brand-mark {
     width: 38px; height: 38px; border-radius: 10px;
     background: linear-gradient(135deg, var(--g-500), var(--g-700));
@@ -270,6 +282,62 @@
   .page-title { font-size: 24px; font-weight: 700; letter-spacing: -.02em; line-height: 1.2; }
   .page-sub { font-size: 13px; color: var(--muted); margin-top: 4px; }
   .page-actions { display: flex; gap: 10px; align-items: center; }
+
+  /* ── หน้าหลัก / เมนูทั้งหมด (HomeMenuView) ───────────────────────────────────
+       เข้าจากการแตะโลโก้ · การ์ด 1 ใบ = 1 เมนู พร้อมคำอธิบายว่าข้างในทำอะไรได้
+       grid ใช้ minmax(0,…) เสมอ (บทเรียนข้อ 3: 1fr = minmax(auto,1fr) → ล้นจอ)
+       auto-fill + 240px ทำให้มือถือได้ 1 คอลัมน์เต็มความกว้างเอง ไม่ต้องเขียน media query */
+  .home-quick { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+  .home-quick-chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 10px 14px; min-height: 44px;
+    border: 1.5px solid var(--warn); border-radius: 99px;
+    background: var(--warn-t); color: #7a3a06;
+    font-family: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+  }
+  .home-quick-chip:active { transform: scale(.97); }
+  .home-quick-n {
+    background: var(--warn); color: #fff; border-radius: 99px;
+    min-width: 22px; padding: 1px 7px; text-align: center; font-size: 12px;
+  }
+  .home-grp { margin-bottom: 22px; }
+  .home-grp-head {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 14px; font-weight: 700; color: var(--text);
+    padding-bottom: 8px; margin-bottom: 10px;
+    border-bottom: 1px solid var(--bdr);
+  }
+  .home-grp-n { margin-left: auto; font-size: 11px; font-weight: 500; color: var(--light); }
+  .home-grid {
+    display: grid; gap: 10px;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
+  }
+  .home-card {
+    position: relative;
+    display: flex; align-items: flex-start; gap: 12px;
+    padding: 14px; min-height: 72px;
+    background: var(--paper); border: 1.5px solid var(--bdr); border-radius: var(--r);
+    box-shadow: var(--sh-1);
+    font-family: inherit; text-align: left; cursor: pointer;
+    transition: border-color .12s ease, box-shadow .12s ease, transform .08s ease;
+  }
+  .home-card:hover { border-color: var(--g-300); box-shadow: var(--sh-2); }
+  .home-card:active { transform: scale(.98); background: var(--g-50); }
+  .home-card-emoji {
+    font-size: 24px; line-height: 1.1; flex-shrink: 0;
+    width: 40px; height: 40px; border-radius: 10px;
+    background: var(--g-50);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .home-card-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+  .home-card-name { font-size: 14px; font-weight: 700; color: var(--text); line-height: 1.3; }
+  .home-card-desc { font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+  .home-card-badge {
+    position: absolute; top: 10px; right: 10px;
+    background: var(--dang); color: #fff; border-radius: 99px;
+    min-width: 20px; padding: 1px 6px; text-align: center;
+    font-size: 11px; font-weight: 700;
+  }
 
   /* ── OverviewView: ปุ่มลอย (FAB) + modal ตัวกรอง/ไปที่หัวข้อ ─────────────────────
        เคยลองทั้ง sticky bar เต็มความกว้าง และการ์ดลอยชิดขอบซ้ายมาก่อน — ทั้งคู่ยังต้อง
@@ -468,7 +536,9 @@
     .topnav-inner { padding: 8px 12px; }
     .navtab { padding: 7px 10px; font-size: 12.5px; }
     .nav-status { display: none; }
-    .brand-sub { display: none; }
+    /* บรรทัดใต้ชื่อร้าน = คำใบ้ว่าโลโก้กดได้ ("🏠 แตะเพื่อดูเมนูทั้งหมด") — เดิมซ่อนบนมือถือ
+       ซึ่งเป็นจอหลักของร้าน ถ้าซ่อนไว้ก็ไม่มีอะไรบอกเลยว่ากดได้ · ย่อขนาดแทนการซ่อน */
+    .brand-sub { font-size: 10px; }
     .page-title { font-size: 20px; }
     .page-head { margin-bottom: 14px; }
     .kpi-value { font-size: 24px; }

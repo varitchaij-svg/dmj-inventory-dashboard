@@ -26,28 +26,31 @@ const HARNESS = readFileSync(join(ROOT, 'tests/browser/harness.html'), 'utf8');
 // ── 1. รายชื่อแท็บทางด่วน ────────────────────────────────────────────────────
 describe('ทางด่วนลงเวลา — รายชื่อแท็บต้องตรงกับ view ที่ไม่ใช้ data จริง', () => {
   const fastTabs = (() => {
-    const m = APP.match(/const ATT_FAST_TABS = \[([^\]]*)\]/);
-    if (!m) throw new Error('หา ATT_FAST_TABS ไม่เจอ — ทางด่วนถูกถอดออกแล้ว?');
-    return m[1].split(',').map(s => s.trim().replace(/["']/g, '')).filter(Boolean);
+    const m = APP.match(/const NO_DATA_TABS = \[([^\]]*)\]/);
+    if (!m) throw new Error('หา NO_DATA_TABS ไม่เจอ — ทางด่วนถูกถอดออกแล้ว?');
+    // "home" เขียนเป็นค่าคงที่ HOME_TAB (ไม่ใช่ string ตรง ๆ) → แปลงกลับให้ตรงกับ id จริง
+    return m[1].split(',').map(s => s.trim().replace(/["']/g, ''))
+      .map(s => (s === 'HOME_TAB' ? 'home' : s)).filter(Boolean);
   })();
 
-  it('มีแค่ attendance กับ atttoday', () => {
-    expect(fastTabs.slice().sort()).toEqual(['attendance', 'atttoday']);
+  it('มีแค่ attendance / atttoday / home', () => {
+    expect(fastTabs.slice().sort()).toEqual(['attendance', 'atttoday', 'home']);
   });
 
-  // นี่คือข้อที่กันจอขาว: ถ้ามีคนเพิ่มแท็บเข้า ATT_FAST_TABS โดยไม่ดู view จริง
+  // นี่คือข้อที่กันจอขาว: ถ้ามีคนเพิ่มแท็บเข้า NO_DATA_TABS โดยไม่ดู view จริง
   // view นั้นจะได้ data=null แล้วพังทันทีตอนอ่าน data.products
   it.each([
-    ['attendance', /function AttendanceView\(\{([^}]*)\}/],
-    ['atttoday',   /function AttendanceTodayView\(\{([^}]*)\}/],
-  ])('view ของแท็บ %s ต้องไม่รับ prop ชื่อ data', (_tab, re) => {
-    const m = ATT.match(re);
+    ['attendance', /function AttendanceView\(\{([^}]*)\}/,        () => ATT],
+    ['atttoday',   /function AttendanceTodayView\(\{([^}]*)\}/,   () => ATT],
+    ['home',       /function HomeMenuView\(\{([^}]*)\}/,          () => APP],
+  ])('view ของแท็บ %s ต้องไม่รับ prop ชื่อ data', (_tab, re, src) => {
+    const m = src().match(re);
     expect(m).toBeTruthy();
     expect(m[1]).not.toMatch(/\bdata\b/);
   });
 
-  it('จุดเรียก view ทั้งสองใน app.jsx ต้องไม่ส่ง data= เข้าไป', () => {
-    for (const name of ['AttendanceView', 'AttendanceTodayView']) {
+  it('จุดเรียก view เหล่านี้ใน app.jsx ต้องไม่ส่ง data= เข้าไป', () => {
+    for (const name of ['AttendanceView', 'AttendanceTodayView', 'HomeMenuView']) {
       const call = APP.match(new RegExp(`<${name}[^>]*>`));
       expect(call, `หาจุดเรียก ${name} ไม่เจอ`).toBeTruthy();
       expect(call[0]).not.toMatch(/\bdata=/);
@@ -64,7 +67,7 @@ describe('ด่านกั้น data ต้องยังอยู่ แต
   });
 
   it('<main> มีด่านที่กัน view ที่ต้องใช้ data', () => {
-    expect(APP).toMatch(/\{!data && !ATT_FAST_TABS\.includes\(activeTab\) \? dataPane : \(<>/);
+    expect(APP).toMatch(/\{!data && !NO_DATA_TABS\.includes\(activeTab\) \? dataPane : \(<>/);
   });
 
   it('ด่านใน <main> ปิดวงเล็บครบ (fragment ที่หุ้ม dispatch ทั้งชุด)', () => {
