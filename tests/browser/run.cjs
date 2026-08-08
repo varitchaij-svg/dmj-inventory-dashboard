@@ -89,7 +89,10 @@ const ASSERT = {
      'นับเป็น รายการ', 'นับเป็น ชิ้น', '34', 'รอรับ', 'รายใบโอน',
      'รับแล้ว 0/1 รายการ', 'รับแล้ว 1/1 รายการ'], 'ใบโอน + หน่วยกำกับครบ'),
   frontstore: async (page) => hasText(page, ['VAS001', 'FLW002', 'DEC003'], 'product SKU'),
-  pos:        async (page) => hasText(page, ['ขาย / ออกบิล', 'รายการในบิล', 'รับชำระ'], 'PosView UI'),
+  // ขาย/ออกบิล: ต้องมี "ครบ" ทั้งปุ่มสลับโหมด (ออนไลน์/หน้าร้าน) และตะกร้า — hasText เป็น OR
+  // ถ้าใช้ OR แล้วโหมดออนไลน์หายไปทั้งดุ้น เทสต์ยังเขียวเพราะ 'ขาย / ออกบิล' ยังอยู่
+  pos:        async (page) => hasAllText(page,
+    ['ขาย / ออกบิล', 'ขายออนไลน์', 'ขายหน้าร้าน', 'รายการในบิล'], 'PosView UI + สลับโหมดขาย'),
   attendance: async (page) => hasText(page, ['สมชาย ใจดี'], 'ชื่อ+ไทม์ไลน์จาก myToday'),
   atttoday:   async (page) => hasText(page, ['สมชาย ใจดี', 'สมหญิง ขยัน'], 'รายชื่อจาก attendanceToday'),
   // ผลงานพนักงาน: ต้องขึ้น "ครบ" ทั้งชื่อคน ยอดงาน หัวข้อกลุ่มตามตำแหน่ง (ไม่ใช่อันดับรวม)
@@ -499,6 +502,64 @@ function startServer() {
     } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
     await page.screenshot({ path: path.join(SHOTS, `homechip__${chipRole}.png`) }).catch(() => {});
     results.push({ role: 'interact', tab: `ชิปของรอรับ (${chipRole})`, status, note });
+    await page.close();
+  }
+
+  // ── (จ3) ขายออนไลน์: กรอกครบ → บันทึก → ได้ "สรุปคำสั่งซื้อ" ไม่ใช่ใบเสร็จปริ้น ──
+  // ต้องรันบนเบราว์เซอร์จริงเพราะสิ่งที่ทดสอบคือ **ตัวเลขบนจอที่ลูกค้าจะเห็น** — ค่าส่งบวกเข้า
+  // ยอดจริงไหม, เลขบัญชีขึ้นให้ลูกค้าโอนไหม, ที่อยู่ตามไปบนสรุปไหม · unit test เห็นแค่ source
+  {
+    const page = await browser.newPage({ viewport: { width: 480, height: 1000 } });   // จอมือถือ = จอหลักของร้าน
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=saler&tab=pos`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      if (!(await navigateTo(page, 'saler', 'pos'))) { status = 'NAV_FAIL'; note = 'สลับ tab ไม่สำเร็จ'; }
+      else {
+        await page.waitForTimeout(400);
+        // 1) เพิ่มสินค้า: ค้นแล้วกดผลลัพธ์แรก (VAS001 ราคา 1,000 ใน fixture)
+        const search = page.locator('main input[placeholder*="พิมพ์ชื่อ/รหัส"]').first();
+        await search.fill('VAS001');
+        await page.waitForTimeout(350);
+        await page.locator('main div', { hasText: 'VAS001' }).last().click({ timeout: 3000 }).catch(() => {});
+        await page.waitForTimeout(300);
+        // 2) ลูกค้า + จัดส่ง + ค่าส่ง + วิธีชำระ
+        await page.locator('main input[placeholder*="คุณเอ"]').first().fill('คุณทดสอบ').catch(() => {});
+        await page.locator('main button', { hasText: 'Flash' }).first().click({ timeout: 3000 }).catch(() => {});
+        await page.locator('main textarea').first().fill('99 ถ.พัฒนาการ กทม 10250').catch(() => {});
+        await page.locator('main input[placeholder="0"]').first().fill('50').catch(() => {});
+        await page.locator('main button', { hasText: 'โอนเงิน' }).first().click({ timeout: 3000 }).catch(() => {});
+        await page.waitForTimeout(300);
+
+        // fixture: VAS001 ราคา 250 + ค่าส่ง 50 = 300 (fmtBfull ปัดเป็นจำนวนเต็ม "฿300")
+        const submit = page.locator('main button', { hasText: 'บันทึกการขาย' }).first();
+        const label = ((await submit.textContent().catch(() => '')) || '').trim();
+        // ยอดบนปุ่มต้องรวมค่าส่งแล้ว — ถ้าเป็นยอดสินค้าเปล่า ๆ แปลว่าค่าส่งหลุดจากการคิดเงิน
+        if (label.indexOf('฿300') < 0) {
+          status = 'SHIPFEE_NOT_IN_TOTAL';
+          note = `ปุ่มบันทึกบอก "${label}" (คาด ฿300 = สินค้า 250 + ค่าส่ง 50)`;
+        } else {
+          await submit.click({ timeout: 3000 });
+          await page.waitForTimeout(900);
+          const body = await page.locator('body').innerText().catch(() => '');
+          // แยกบรรทัดค่าสินค้า/ค่าจัดส่ง/ยอดที่ต้องชำระ ให้ครบ — เช็คแต่ยอดรวมอย่างเดียว
+          // ไม่รู้ว่าค่าส่งถูกเอาไปบวกจริงหรือแค่ราคาสินค้าบังเอิญตรง
+          const missing = ['สรุปคำสั่งซื้อ', 'RC-3-2026080099',
+                           '฿250', '฿50', 'ยอดที่ต้องชำระ', '฿300',
+                           '802-4-64123-4', '99 ถ.พัฒนาการ', 'Flash', 'คุณทดสอบ',
+                           'บันทึกรูป', 'แชร์ให้ลูกค้า', 'คัดลอกเป็นข้อความ']
+            .filter(t => body.indexOf(t) < 0);
+          if (missing.length) {
+            status = 'SUMMARY_MISSING'; note = 'สรุปขาด: ' + missing.join(', ');
+          } else if (/ใบเสร็จรับเงิน\/ใบกำกับภาษีอย่างย่อ|ใบเสร็จ 80mm/.test(body)) {
+            // เจอของใบเสร็จปริ้นในเส้นทางออนไลน์ = สองโหมดปนกัน (สิ่งที่เจ้าของขอให้เลิก)
+            status = 'PRINT_RECEIPT_LEAKED'; note = 'ยังมีใบเสร็จปริ้นโผล่ในเส้นทางขายออนไลน์';
+          } else note = 'ค่าส่งเข้ายอด (250+50=300) + สรุปมีเลขบัญชี/ที่อยู่/ปุ่มส่งให้ลูกค้าครบ';
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'pos__online-summary.png'), fullPage: true }).catch(() => {});
+    results.push({ role: 'interact', tab: 'ขายออนไลน์ — สรุปส่งลูกค้า', status, note });
     await page.close();
   }
 

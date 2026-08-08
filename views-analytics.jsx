@@ -9787,6 +9787,93 @@ const POS_TRANSFER_INFO = { bank: "กรุงศรีอยุธยา", acc
 // ช่องทางขาย (ส่งเข้า ZORT order) — แก้/เพิ่มได้ที่นี่
 const POS_SALES_CHANNELS = ["หน้าร้าน", "Line OA", "Facebook", "Shopee", "Lazada", "โทรศัพท์"];
 
+// ═══ โหมด "ขายออนไลน์" (เซลรับออเดอร์ทางแชท) ═══════════════════════════════
+// ต่างจาก POS หน้าร้านตรงที่ "ลูกค้าไม่ได้ยืนอยู่ตรงหน้า" — ไม่มีเงินสด/เงินทอน ไม่มีบาร์โค้ด
+// แต่ต้องมี "ส่งไปที่ไหน ใครรับ ค่าส่งเท่าไหร่ เลขพัสดุอะไร" และต้องส่งสรุปให้ลูกค้าดูในแชทได้
+// โหมดหน้าร้านเดิมยังอยู่ครบ (ปุ่มสลับด้านบน) — เครื่องกลางที่ร้านยังใช้ได้เหมือนเดิมทุกอย่าง
+const POS_ONLINE_CHANNELS = ["Line OA", "Facebook", "Shopee", "Lazada", "TikTok", "Instagram", "โทรศัพท์"];
+const POS_SHIP_METHODS = ["Flash", "J&T", "Kerry", "ไปรษณีย์ไทย", "ขนส่งอื่น", "รถร้านส่งเอง", "ลูกค้ามารับเอง"];
+// วิธีชำระของออนไลน์ · `paid:false` = เงินยังไม่เข้า (ฝั่ง GAS จะ **ไม่** บันทึกรับชำระใน ZORT)
+// ⚠️ ค่า id ต้องตรงกับที่ฝั่ง .gs เช็ค (`POS_UNPAID_METHODS_`) — ไม่ตรง = COD ถูกบันทึกว่าจ่ายแล้ว
+const POS_ONLINE_PAY = [
+  { id: "โอน",                 label: "🏦 โอนเงิน",          paid: true  },
+  { id: "เก็บเงินปลายทาง",      label: "📦 เก็บปลายทาง (COD)", paid: false },
+  { id: "ชำระผ่านแพลตฟอร์ม",    label: "🛒 แพลตฟอร์มเก็บให้",   paid: true  },
+];
+// ขนส่งที่ "ไม่ต้องมีที่อยู่" — ลูกค้ามารับเอง/ร้านส่งเอง ไม่ควรบังคับกรอกที่อยู่
+const POS_SHIP_NO_ADDRESS = ["ลูกค้ามารับเอง"];
+
+// โหมดตั้งต้นของเครื่องนี้ — จำที่ผู้ใช้เลือกไว้ ไม่งั้นเซลออนไลน์ต้องกดสลับทุกครั้งที่เปิดแอป
+// เครื่องกลางประจำร้าน (storedevice) ตั้งต้นเป็นหน้าร้าน — เป็นเครื่องที่ลูกค้ายืนอยู่ตรงหน้าจริง
+function initialSaleMode(role) {
+  try {
+    const s = localStorage.getItem("dmj_sale_mode");
+    if (s === "online" || s === "store") return s;
+  } catch (e) { /* localStorage ปิดอยู่ (private mode) → ใช้ค่าตามตำแหน่ง */ }
+  return role === "storedevice" ? "store" : "online";
+}
+
+// ยอดที่ลูกค้าต้องจ่ายจริง = ยอดสินค้า (คิดส่วนลดแล้ว) + ค่าจัดส่ง
+// ⚠️ **ค่าจัดส่งบวกทีหลังเสมอ ห้ามยัดเข้า computeBillTotals** — กฎส่วนลดขายส่ง 20%/ขั้นบาท
+//    และการถอด VAT ผูกกับ "มูลค่าสินค้า" ล้วน ถ้าเอาค่าส่งไปรวมตั้งแต่ต้น ค่าส่งจะถูกลดราคา
+//    ไปด้วยและ VAT จะถูกถอดจากค่าส่ง → ยอดเพี้ยนทั้งบิลโดยไม่มี error ให้เห็น
+//    (ฝั่ง .gs คิดด้วยสูตรเดียวกันใน createSaleBill — สองฝั่งต้องตรงกันเสมอ)
+function onlineOrderTotal(totals, shipFee) {
+  const fee = Math.max(0, Number(shipFee) || 0);
+  const goods = Math.max(0, Number(totals && totals.grandTotal) || 0);
+  return { shipFee: fee, goodsTotal: goods, payTotal: goods + fee };
+}
+
+// ข้อความสรุปคำสั่งซื้อ (ไว้คัดลอกวางในแชท) — ใช้เป็นทางถอยเมื่อเครื่องแชร์รูปไม่ได้
+// เก็บเป็นฟังก์ชันบริสุทธิ์ (ไม่แตะ DOM) เพื่อให้เทสต์เรียกตรงได้
+function onlineOrderText(o) {
+  const money = (n) => "฿" + (Math.round((Number(n) || 0) * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const L = [];
+  L.push("🧾 สรุปคำสั่งซื้อ " + (o.orderNumber || ""));
+  L.push(POS_SELLER.name);
+  if (o.dateStr) L.push("วันที่ " + o.dateStr);
+  L.push("");
+  (o.cart || []).forEach((it) => {
+    const qty = Number(it.qty) || 0, price = Number(it.price) || 0;
+    L.push("• " + it.name + " x" + qty + "  " + money(qty * price));
+  });
+  L.push("");
+  L.push("ค่าสินค้า " + money(o.goodsTotal));
+  if (Number(o.shipFee) > 0) L.push("ค่าจัดส่ง " + money(o.shipFee));
+  L.push("ยอดที่ต้องชำระ " + money(o.payTotal));
+  if (o.payMethod) L.push("ชำระโดย: " + o.payMethod);
+  // บัญชีโอนต้องอยู่ในข้อความด้วย — ลูกค้าที่ได้แต่ข้อความ (แชร์รูปไม่ได้) ต้องโอนเงินได้เลย
+  if (o.payMethod === "โอน") {
+    L.push("โอนเข้า: " + POS_TRANSFER_INFO.bank + " " + POS_TRANSFER_INFO.acctNo + " (" + POS_TRANSFER_INFO.acctName + ")");
+  }
+  const ship = o.ship || {};
+  if (ship.recipient || ship.address || ship.method || ship.tracking) {
+    L.push("");
+    L.push("🚚 จัดส่ง");
+    if (ship.recipient) L.push("ผู้รับ: " + ship.recipient + (ship.phone ? " " + ship.phone : ""));
+    if (ship.address)   L.push("ที่อยู่: " + ship.address);
+    if (ship.method)    L.push("ขนส่ง: " + ship.method);
+    if (ship.tracking)  L.push("เลขพัสดุ: " + ship.tracking);
+  }
+  if (ship.note) L.push("หมายเหตุ: " + ship.note);
+  L.push("");
+  L.push("สอบถามเพิ่มเติม Line " + POS_CONTACT.line + " · โทร " + POS_CONTACT.phone);
+  return L.join("\n");
+}
+
+// จับภาพ DOM node เป็น PNG blob (ใช้ html2canvas ตัวเดียวกับที่พิมพ์ใบเสร็จ Bluetooth ใช้)
+// node ตัวนี้ **แสดงอยู่บนจอจริง** ต่างจาก captureReceipt80Canvas ที่ต้อง render นอกจอก่อน
+// เพราะใบเสร็จ 80mm ถูก CSS ซ่อนไว้ตลอดเวลานอกโหมดพิมพ์
+async function captureNodePng(node) {
+  await waitForGlobal("html2canvas", 12000);
+  const imgs = Array.from(node.querySelectorAll("img"));
+  await Promise.all(imgs.map(img => img.complete ? Promise.resolve() : new Promise(res => { img.onload = img.onerror = res; })));
+  const canvas = await window.html2canvas(node, { backgroundColor: "#ffffff", scale: 2, useCORS: true });
+  return await new Promise((resolve, reject) => {
+    canvas.toBlob(b => b ? resolve(b) : reject(new Error("แปลงรูปไม่สำเร็จ")), "image/png");
+  });
+}
+
 // ตั้งขนาดหน้ากระดาษพิมพ์แบบ dynamic ก่อนเรียก window.print()
 // จำเป็นเพราะ named @page (page: rc80) ไม่ทำงานเชื่อถือได้บน Chrome/Android print
 // pipeline — เนื้อหาเลยไปฝังอยู่ในหน้า A4 (@page เริ่มต้นของไฟล์) แล้วถูกย่อเล็กจิ๋ว
@@ -10019,9 +10106,15 @@ function PosView({ data, role }) {
   const [search, setSearch] = uS("");
   const [manualDiscount, setManualDiscount] = uS("");
   const [taxInvoice, setTaxInvoice] = uS(false);
-  const [payMethod, setPayMethod] = uS("");       // "เงินสด" | "โอน"
-  const [cashReceived, setCashReceived] = uS(""); // จำนวนเงินสดที่รับมา (คิดเงินทอน)
-  const [channel, setChannel] = uS("หน้าร้าน");    // ช่องทางขาย
+  const [payMethod, setPayMethod] = uS("");       // หน้าร้าน: "เงินสด"|"โอน" · ออนไลน์: POS_ONLINE_PAY[].id
+  const [cashReceived, setCashReceived] = uS(""); // จำนวนเงินสดที่รับมา (คิดเงินทอน — หน้าร้านเท่านั้น)
+  // โหมดขาย: "online" (เซลรับออเดอร์ทางแชท — ค่าตั้งต้น) | "store" (POS หน้าร้านเดิม)
+  const [saleMode, setSaleMode] = uS(() => initialSaleMode(role));
+  const online = saleMode === "online";
+  const [channel, setChannel] = uS(() => initialSaleMode(role) === "store" ? "หน้าร้าน" : POS_ONLINE_CHANNELS[0]);
+  // ข้อมูลจัดส่ง (โหมดออนไลน์) — fee เก็บเป็น string เพื่อให้ลบจนว่างได้ระหว่างพิมพ์
+  // (draft pattern — ห้าม clamp ทุก keystroke ไม่งั้นเลขเด้งเอง ดูบทเรียน "กรอกถูก บันทึกผิด")
+  const [ship, setShip] = uS({ recipient: "", phone: "", address: "", method: "", fee: "", tracking: "", note: "" });
   const [cust, setCust] = uS({ name: "", taxId: "", branch: "", branchNo: "", address: "", phone: "", email: "" });
   const [custQuery, setCustQuery] = uS("");
   const [custResults, setCustResults] = uS(null); // null=ยังไม่ค้น · []=ไม่เจอ
@@ -10058,8 +10151,23 @@ function PosView({ data, role }) {
 
   const md = Math.max(0, parseFloat(manualDiscount) || 0);
   const totals = uM(() => computeBillTotals(cart, { manualDiscount: md }), [cart, md]);
+  // ค่าจัดส่งมีผลเฉพาะโหมดออนไลน์ — สลับกลับหน้าร้านแล้วค่าที่ค้างอยู่ในช่องต้องไม่ตามไปบวกยอด
+  const shipFeeNum = online ? Math.max(0, parseFloat(ship.fee) || 0) : 0;
+  const pay = onlineOrderTotal(totals, shipFeeNum);
+  const payTotal = pay.payTotal;                            // ยอดที่ลูกค้าต้องจ่ายจริง (รวมค่าส่ง)
   const cashReceivedNum = Math.max(0, parseFloat(cashReceived) || 0);
   const cashChange = cashReceivedNum - totals.grandTotal;   // เงินทอน (ลบ = รับมาไม่พอ)
+  const shipNeedsAddress = !!ship.method && POS_SHIP_NO_ADDRESS.indexOf(ship.method) < 0;
+
+  function pickSaleMode(m) {
+    if (m === saleMode) return;
+    setSaleMode(m);
+    try { localStorage.setItem("dmj_sale_mode", m); } catch (e) { /* private mode */ }
+    // ช่องทาง/วิธีชำระของสองโหมดใช้ค่าคนละชุด — ไม่รีเซ็ตจะค้างค่าที่อีกโหมดไม่รู้จัก
+    // (เช่น "เงินสด" ค้างมาในโหมดออนไลน์ → ฝั่ง GAS บันทึกรับชำระทั้งที่เงินยังไม่เข้า)
+    setChannel(m === "store" ? "หน้าร้าน" : POS_ONLINE_CHANNELS[0]);
+    setPayMethod(""); setCashReceived("");
+  }
 
   // รายชื่อหมวด (เรียงตามจำนวนสินค้ามาก→น้อย) สำหรับชิปเลือกหมวด
   const cats = uM(() => {
@@ -10148,25 +10256,49 @@ function PosView({ data, role }) {
     }
   }
 
+  // ข้อมูลจัดส่งที่จะส่งขึ้น server / โชว์บนสรุป — ผู้รับ/เบอร์ว่างไว้ = ใช้ของลูกค้า
+  // (เซลส่วนใหญ่พิมพ์ชื่อลูกค้าไปแล้วครั้งหนึ่ง ไม่ควรบังคับพิมพ์ซ้ำในช่องผู้รับ)
+  const shipOut = uM(() => ({
+    fee: shipFeeNum,
+    method: ship.method || "",
+    recipient: (ship.recipient || cust.name || "").trim(),
+    phone: (ship.phone || cust.phone || "").trim(),
+    address: (ship.address || "").trim(),
+    tracking: (ship.tracking || "").trim(),
+    note: (ship.note || "").trim(),
+  }), [ship, cust.name, cust.phone, shipFeeNum]);
+
   async function submitBill() {
     if (!cart.length) { showToast("warn", "ยังไม่มีสินค้าในบิล", "🛒"); return; }
     if (cart.some(it => (Number(it.qty) || 0) <= 0)) { showToast("warn", "จำนวนต้องมากกว่า 0", "✏️"); return; }
     if (taxInvoice && !cust.taxId && !cust.name) { showToast("warn", "ใบกำกับภาษีต้องมีชื่อ/เลขผู้เสียภาษี", "🧾"); return; }
-    if (payMethod === "เงินสด" && cashReceivedNum < totals.grandTotal) { showToast("warn", "รับเงินสดไม่พอยอด — กรอกจำนวนที่รับมาให้ครบก่อน", "💵"); return; }
+    if (online) {
+      // ขายออนไลน์ = ของต้องเดินทางไปหาใครสักคน — ไม่มีชื่อ/ไม่มีวิธีชำระ = ตามงานต่อไม่ได้
+      if (!shipOut.recipient) { showToast("warn", "ใส่ชื่อลูกค้า หรือ ชื่อผู้รับ ก่อน", "👤"); return; }
+      if (!payMethod) { showToast("warn", "เลือกวิธีชำระเงินก่อน", "💳"); return; }
+      if (!ship.method) { showToast("warn", "เลือกวิธีจัดส่งก่อน", "🚚"); return; }
+      if (shipNeedsAddress && !shipOut.address) { showToast("warn", "ใส่ที่อยู่จัดส่งก่อน (หรือเลือก \"ลูกค้ามารับเอง\")", "📍"); return; }
+    } else if (payMethod === "เงินสด" && cashReceivedNum < totals.grandTotal) {
+      showToast("warn", "รับเงินสดไม่พอยอด — กรอกจำนวนที่รับมาให้ครบก่อน", "💵"); return;
+    }
     setSaving(true);
     const r = await syncCreateSaleBill({
       items: cart.map(it => ({ sku: it.sku, name: it.name, category: it.category, qty: Number(it.qty) || 0, price: Number(it.price) || 0 })),
       customer: cust, manualDiscount: md, taxInvoice, paymentMethod: payMethod || "", channel,
-      cashReceived: payMethod === "เงินสด" ? cashReceivedNum : undefined,
+      cashReceived: (!online && payMethod === "เงินสด") ? cashReceivedNum : undefined,
+      saleMode: saleMode,
+      shipping: online ? shipOut : undefined,
     });
     setSaving(false);
-    if (!r.success) { showToast("error", "ออกบิลไม่สำเร็จ: " + (r.error || ""), "❌"); return; }
+    if (!r.success) { showToast("error", (online ? "บันทึกการขายไม่สำเร็จ: " : "ออกบิลไม่สำเร็จ: ") + (r.error || ""), "❌"); return; }
     setResult(r.data || {});
-    showToast("success", "ออกบิลสำเร็จ", "🎉");
+    showToast("success", online ? "บันทึกการขายสำเร็จ" : "ออกบิลสำเร็จ", "🎉");
   }
 
   function resetAll() {
-    setCart([]); setManualDiscount(""); setTaxInvoice(false); setPayMethod(""); setCashReceived(""); setChannel("หน้าร้าน");
+    setCart([]); setManualDiscount(""); setTaxInvoice(false); setPayMethod(""); setCashReceived("");
+    setChannel(online ? POS_ONLINE_CHANNELS[0] : "หน้าร้าน");
+    setShip({ recipient: "", phone: "", address: "", method: "", fee: "", tracking: "", note: "" });
     setCust({ name: "", taxId: "", branch: "", branchNo: "", address: "", phone: "", email: "" });
     setCustQuery(""); setCustResults(null); setResult(null);
   }
@@ -10176,7 +10308,24 @@ function PosView({ data, role }) {
   // ── โหมดใบกำกับภาษีย้อนหลัง (component แยก state ของตัวเอง) ──
   if (retroMode) return <RetroTaxInvoiceView onBack={() => setRetroMode(false)}/>;
 
-  // ── หน้าผลลัพธ์ + ใบเสร็จสำหรับพิมพ์ ──
+  // ── หน้าผลลัพธ์ (ขายออนไลน์) — สรุปคำสั่งซื้อสำหรับส่งให้ลูกค้าในแชท ไม่ใช่ใบเสร็จปริ้น ──
+  // ยอดที่โชว์ยึด result.totals (ที่ server คิด) เป็นหลักเสมอ — ถ้าฝั่ง server คิดต่างจากเรา
+  // ตัวเลขที่ลูกค้าเห็นต้องเป็นตัวเดียวกับที่บันทึกไว้จริง ไม่ใช่ตัวที่หน้าจอคำนวณเอง
+  if (result && online) {
+    const srvTotals = result.totals || totals;
+    const srvFee = result.shipFee != null ? Number(result.shipFee) : shipFeeNum;
+    const srvPay = result.payTotal != null ? Number(result.payTotal) : onlineOrderTotal(srvTotals, srvFee).payTotal;
+    return (
+      <OnlineSaleResult
+        cart={cart} totals={srvTotals} shipFee={srvFee} payTotal={srvPay}
+        cust={cust} ship={shipOut} channel={channel} payMethod={payMethod}
+        orderNumber={result.orderNumber} documentNumber={result.documentNumber}
+        taxInvoice={taxInvoice} onNew={resetAll}
+      />
+    );
+  }
+
+  // ── หน้าผลลัพธ์ + ใบเสร็จสำหรับพิมพ์ (ขายหน้าร้าน) ──
   if (result) {
     return (
       <div>
@@ -10227,7 +10376,11 @@ function PosView({ data, role }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
         <div>
           <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>🧾 ขาย / ออกบิล</div>
-          <div style={{ fontSize: 12, color: "var(--muted)" }}>ค้นสินค้า → ตะกร้า → คิดส่วนลดอัตโนมัติ → ลูกค้า → ออกบิล/ใบกำกับ</div>
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>
+            {online
+              ? "ค้นสินค้า → ตะกร้า → ลูกค้า+ที่อยู่จัดส่ง → บันทึกขาย → ส่งสรุปให้ลูกค้าในแชท"
+              : "ค้นสินค้า → ตะกร้า → คิดส่วนลดอัตโนมัติ → ลูกค้า → ออกบิล/ใบกำกับ"}
+          </div>
         </div>
         <button onClick={() => setRetroMode(true)}
           style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid var(--g-600,#1f7f44)", background: "#fff", color: "var(--g-700,#166534)", fontWeight: 700, fontSize: 13, whiteSpace: "nowrap", flexShrink: 0 }}>
@@ -10235,11 +10388,28 @@ function PosView({ data, role }) {
         </button>
       </div>
 
+      {/* ── สลับโหมดขาย — ออนไลน์ (ค่าตั้งต้น) / หน้าร้าน (POS เดิม) ──
+           จำไว้ที่เครื่อง (localStorage) เซลออนไลน์จะได้ไม่ต้องกดสลับทุกครั้งที่เปิดแอป */}
+      <div style={{ display: "flex", gap: 8 }}>
+        {[
+          { id: "online", label: "🛒 ขายออนไลน์", sub: "ส่งของให้ลูกค้า" },
+          { id: "store",  label: "🏪 ขายหน้าร้าน", sub: "ลูกค้ายืนอยู่ตรงหน้า" },
+        ].map(m => (
+          <button key={m.id} onClick={() => pickSaleMode(m.id)}
+            style={{ flex: 1, padding: "10px 8px", borderRadius: 12, cursor: "pointer", textAlign: "center", lineHeight: 1.3,
+              border: saleMode === m.id ? "2px solid var(--g-600,#1f7f44)" : "1px solid #d1d5db",
+              background: saleMode === m.id ? "#f0fdf4" : "#fff", color: saleMode === m.id ? "var(--g-700,#166534)" : "#374151" }}>
+            <div style={{ fontSize: 15, fontWeight: 800 }}>{m.label}</div>
+            <div style={{ fontSize: 11, color: saleMode === m.id ? "var(--g-700,#166534)" : "var(--muted)", opacity: .85 }}>{m.sub}</div>
+          </button>
+        ))}
+      </div>
+
       {/* ── ค้นสินค้า ── */}
       <Card padding={true} title="🔎 เพิ่มสินค้า">
         <input value={search} onChange={e => setSearch(e.target.value)} onKeyDown={handleScanEnter}
-          placeholder="พิมพ์ชื่อ/รหัส หรือ ยิงบาร์โค้ด" style={inp} autoFocus/>
-        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>💡 เครื่องสแกนบาร์โค้ด: ยิงแล้วเพิ่มลงบิลอัตโนมัติ (ยิงซ้ำ = บวกจำนวน)</div>
+          placeholder={online ? "พิมพ์ชื่อ/รหัสสินค้า" : "พิมพ์ชื่อ/รหัส หรือ ยิงบาร์โค้ด"} style={inp} autoFocus/>
+        {!online && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>💡 เครื่องสแกนบาร์โค้ด: ยิงแล้วเพิ่มลงบิลอัตโนมัติ (ยิงซ้ำ = บวกจำนวน)</div>}
         {matches.length > 0 && (
           <div style={{ marginTop: 8, border: "1px solid #eee", borderRadius: 8, maxHeight: 300, overflowY: "auto" }}>
             {matches.map(p => (
@@ -10356,8 +10526,22 @@ function PosView({ data, role }) {
         )}
       </Card>
 
-      {/* ── ลูกค้า / ใบกำกับ ── */}
+      {/* ── ลูกค้า / ใบกำกับ ──
+           โหมดออนไลน์: ชื่อ+เบอร์โผล่เสมอ (ไม่ได้ซ่อนไว้หลังติ๊กใบกำกับเหมือนหน้าร้าน) —
+           ขายออนไลน์ไม่รู้ว่าใครซื้อ = ตามงานต่อไม่ได้เลย ทั้งตอนแพ็คและตอนลูกค้าทัก */}
       <Card padding={true} title="👤 ลูกค้า / ใบกำกับภาษี">
+        {online && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <FieldLabel_>ชื่อลูกค้า / ชื่อในแชท *</FieldLabel_>
+              <input value={cust.name} onChange={e => setCust({ ...cust, name: e.target.value })} placeholder="เช่น คุณเอ (Line: aaa)" style={inp}/>
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <FieldLabel_>เบอร์โทรลูกค้า</FieldLabel_>
+              <input value={cust.phone} onChange={e => setCust({ ...cust, phone: e.target.value })} inputMode="tel" placeholder="08x-xxx-xxxx" style={inp}/>
+            </div>
+          </div>
+        )}
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600, cursor: "pointer" }}>
           <input type="checkbox" checked={taxInvoice} onChange={e => setTaxInvoice(e.target.checked)} style={{ width: 18, height: 18 }}/>
           ลูกค้าขอใบกำกับภาษี
@@ -10394,10 +10578,62 @@ function PosView({ data, role }) {
         )}
       </Card>
 
+      {/* ── จัดส่ง (โหมดออนไลน์เท่านั้น) ── */}
+      {online && (
+        <Card padding={true} title="🚚 จัดส่ง">
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+            {POS_SHIP_METHODS.map(m => (
+              <button key={m} onClick={() => setShip(s => ({ ...s, method: s.method === m ? "" : m }))}
+                style={{ padding: "8px 14px", borderRadius: 999, fontSize: 13, fontWeight: 600, cursor: "pointer",
+                  border: ship.method === m ? "2px solid var(--g-600,#1f7f44)" : "1px solid #d1d5db",
+                  background: ship.method === m ? "#f0fdf4" : "#fff", color: ship.method === m ? "var(--g-700,#166534)" : "#374151" }}>
+                {m}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <div>
+              <FieldLabel_>ชื่อผู้รับ</FieldLabel_>
+              <input value={ship.recipient} onChange={e => setShip(s => ({ ...s, recipient: e.target.value }))}
+                placeholder={cust.name || "ตามชื่อลูกค้า"} style={inp}/>
+            </div>
+            <div>
+              <FieldLabel_>เบอร์ผู้รับ</FieldLabel_>
+              <input value={ship.phone} onChange={e => setShip(s => ({ ...s, phone: e.target.value }))} inputMode="tel"
+                placeholder={cust.phone || "ตามเบอร์ลูกค้า"} style={inp}/>
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <FieldLabel_>ที่อยู่จัดส่ง {shipNeedsAddress ? "*" : ""}</FieldLabel_>
+              <textarea value={ship.address} onChange={e => setShip(s => ({ ...s, address: e.target.value }))}
+                rows={3} placeholder="บ้านเลขที่ ถนน แขวง/ตำบล เขต/อำเภอ จังหวัด รหัสไปรษณีย์"
+                style={{ ...inp, resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }}/>
+            </div>
+            <div>
+              <FieldLabel_>ค่าจัดส่ง (บาท)</FieldLabel_>
+              {/* draft pattern: เก็บข้อความดิบ ปล่อยว่างได้ — ห้าม clamp ทุก keystroke
+                  · onFocus select ทั้งช่อง กันพิมพ์ทับไม่หมดแล้วได้ "5050" (บทเรียนข้อ 14) */}
+              <input type="number" min="0" inputMode="decimal" value={ship.fee}
+                onFocus={ev => ev.target.select()}
+                onChange={e => setShip(s => ({ ...s, fee: e.target.value }))} placeholder="0" style={inp}/>
+            </div>
+            <div>
+              <FieldLabel_>เลขพัสดุ (ถ้ามีแล้ว)</FieldLabel_>
+              <input value={ship.tracking} onChange={e => setShip(s => ({ ...s, tracking: e.target.value }))}
+                placeholder="กรอกทีหลังก็ได้" style={inp}/>
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <FieldLabel_>หมายเหตุถึงลูกค้า / ทีมแพ็ค</FieldLabel_>
+              <input value={ship.note} onChange={e => setShip(s => ({ ...s, note: e.target.value }))}
+                placeholder="เช่น ห่อกันกระแทกพิเศษ / ส่งวันจันทร์" style={inp}/>
+            </div>
+          </div>
+        </Card>
+      )}
+
       {/* ── ช่องทางขาย ── */}
       <Card padding={true} title="🛍️ ช่องทางขาย">
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {POS_SALES_CHANNELS.map(ch => (
+          {(online ? POS_ONLINE_CHANNELS : POS_SALES_CHANNELS).map(ch => (
             <button key={ch} onClick={() => setChannel(ch)} style={{ padding: "8px 14px", borderRadius: 999, fontSize: 13, fontWeight: 600, cursor: "pointer",
               border: channel === ch ? "2px solid var(--g-600,#1f7f44)" : "1px solid #d1d5db",
               background: channel === ch ? "#f0fdf4" : "#fff", color: channel === ch ? "var(--g-700,#166534)" : "#374151" }}>
@@ -10407,15 +10643,17 @@ function PosView({ data, role }) {
         </div>
       </Card>
 
-      {/* ── ชำระเงิน ── */}
-      <Card padding={true} title="💳 รับชำระ">
-        <div style={{ display: "flex", gap: 8 }}>
-          {["เงินสด", "โอน"].map(m => (
-            <button key={m} onClick={() => { setPayMethod(payMethod === m ? "" : m); setCashReceived(""); }}
-              style={{ flex: 1, padding: "12px", borderRadius: 10, fontWeight: 700, fontSize: 15, cursor: "pointer",
-                border: payMethod === m ? "2px solid var(--g-600,#1f7f44)" : "1px solid #d1d5db",
-                background: payMethod === m ? "#f0fdf4" : "#fff", color: payMethod === m ? "var(--g-700,#166534)" : "#374151" }}>
-              {m === "เงินสด" ? "💵 เงินสด" : "🏦 โอน"}
+      {/* ── ชำระเงิน ──
+           ออนไลน์มี "เก็บปลายทาง" ซึ่ง **เงินยังไม่เข้า** → ฝั่ง GAS จะไม่บันทึกรับชำระใน ZORT
+           (บันทึกไปเลย = ยอดค้างรับหายจากระบบทั้งที่ยังไม่ได้เงิน) */}
+      <Card padding={true} title={online ? "💳 การชำระเงิน" : "💳 รับชำระ"}>
+        <div style={{ display: "flex", gap: 8, flexWrap: online ? "wrap" : "nowrap" }}>
+          {(online ? POS_ONLINE_PAY : [{ id: "เงินสด", label: "💵 เงินสด" }, { id: "โอน", label: "🏦 โอน" }]).map(m => (
+            <button key={m.id} onClick={() => { setPayMethod(payMethod === m.id ? "" : m.id); setCashReceived(""); }}
+              style={{ flex: online ? "1 1 30%" : 1, padding: "12px 8px", borderRadius: 10, fontWeight: 700, fontSize: online ? 14 : 15, cursor: "pointer",
+                border: payMethod === m.id ? "2px solid var(--g-600,#1f7f44)" : "1px solid #d1d5db",
+                background: payMethod === m.id ? "#f0fdf4" : "#fff", color: payMethod === m.id ? "var(--g-700,#166534)" : "#374151" }}>
+              {m.label}
             </button>
           ))}
         </div>
@@ -10425,9 +10663,15 @@ function PosView({ data, role }) {
             <div>{POS_TRANSFER_INFO.bank}</div>
             <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: 1 }}>{POS_TRANSFER_INFO.acctNo}</div>
             <div style={{ color: "var(--muted)" }}>{POS_TRANSFER_INFO.acctName}</div>
+            {online && <div style={{ marginTop: 6, fontSize: 12, color: "var(--muted)" }}>เลขบัญชีนี้จะติดไปกับสรุปที่ส่งให้ลูกค้าอัตโนมัติ</div>}
           </div>
         )}
-        {payMethod === "เงินสด" && (
+        {online && payMethod === "เก็บเงินปลายทาง" && (
+          <div style={{ marginTop: 10, padding: 12, background: "#fffbeb", border: "1px solid #f59e0b", borderRadius: 8, fontSize: 13 }}>
+            ⚠️ เงินยังไม่เข้า — ระบบจะบันทึกเป็น <b>ยังไม่ชำระ</b> ใน ZORT (ค่อยไปบันทึกรับเงินตอนขนส่งโอนยอดกลับมา)
+          </div>
+        )}
+        {!online && payMethod === "เงินสด" && (
           <div style={{ marginTop: 10, padding: 12, background: "#f9fafb", borderRadius: 8 }}>
             <FieldLabel_>รับเงินมา (บาท)</FieldLabel_>
             <input type="number" min="0" inputMode="decimal" value={cashReceived}
@@ -10458,21 +10702,233 @@ function PosView({ data, role }) {
         <SummaryRow_ label="มูลค่าก่อน VAT" value={fmtBfull(totals.preVat)} muted/>
         <SummaryRow_ label="VAT 7%" value={fmtBfull(totals.vat)} muted/>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
-          <span style={{ fontSize: 16, fontWeight: 800 }}>ยอดสุทธิ</span>
-          <span style={{ fontSize: 24, fontWeight: 800, color: "var(--g-700,#166534)" }}>{fmtBfull(totals.grandTotal)}</span>
+          <span style={{ fontSize: online ? 15 : 16, fontWeight: 800 }}>{online ? "ค่าสินค้า" : "ยอดสุทธิ"}</span>
+          <span style={{ fontSize: online ? 18 : 24, fontWeight: 800, color: "var(--g-700,#166534)" }}>{fmtBfull(totals.grandTotal)}</span>
         </div>
+        {/* ค่าจัดส่งบวกท้ายสุด ไม่เข้ากฎส่วนลด/ไม่ถูกถอด VAT — ดูคอมเมนต์ที่ onlineOrderTotal */}
+        {online && (
+          <>
+            <SummaryRow_ label="ค่าจัดส่ง" value={shipFeeNum > 0 ? "+" + fmtBfull(shipFeeNum) : "—"}/>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, paddingTop: 8, borderTop: "2px solid var(--g-600,#1f7f44)" }}>
+              <span style={{ fontSize: 16, fontWeight: 800 }}>ยอดที่ลูกค้าต้องจ่าย</span>
+              <span style={{ fontSize: 24, fontWeight: 800, color: "var(--g-700,#166534)" }}>{fmtBfull(payTotal)}</span>
+            </div>
+          </>
+        )}
         {totals.savings > 0 && <div style={{ textAlign: "right", fontSize: 12, color: "#16a34a", marginTop: 2 }}>ประหยัด {fmtBfull(totals.savings)}</div>}
-        {overStock.length > 0 && <div style={{ marginTop: 8, fontSize: 12, color: "#dc2626" }}>⚠️ มี {overStock.length} รายการจำนวนเกินสต๊อกหน้าร้าน — ตรวจก่อนออกบิล</div>}
+        {overStock.length > 0 && <div style={{ marginTop: 8, fontSize: 12, color: "#dc2626" }}>⚠️ มี {overStock.length} รายการจำนวนเกินสต๊อกหน้าร้าน — ตรวจก่อน{online ? "บันทึก" : "ออกบิล"}</div>}
       </Card>
 
       <button onClick={submitBill} disabled={saving || !cart.length}
         style={{ padding: "16px", borderRadius: 12, border: "none", fontWeight: 800, fontSize: 17,
           background: (saving || !cart.length) ? "#9ca3af" : "var(--g-600,#1f7f44)", color: "#fff",
           position: "sticky", bottom: 12, boxShadow: "0 4px 14px rgba(0,0,0,.15)" }}>
-        {saving ? "กำลังออกบิล..." : `ออกบิล ${taxInvoice ? "+ ใบกำกับภาษี " : ""}· ${fmtBfull(totals.grandTotal)}`}
+        {online
+          ? (saving ? "กำลังบันทึก..." : `บันทึกการขาย · ${fmtBfull(payTotal)}`)
+          : (saving ? "กำลังออกบิล..." : `ออกบิล ${taxInvoice ? "+ ใบกำกับภาษี " : ""}· ${fmtBfull(totals.grandTotal)}`)}
       </button>
 
       {detailProduct && <ProductModal p={detailProduct} onClose={() => setDetailSku(null)}/>}
+
+      <Toast toast={toast} onClose={hideToast}/>
+    </div>
+  );
+}
+
+// ═══ ผลลัพธ์หลังบันทึกการขายออนไลน์ ═══════════════════════════════════════════
+// แทนที่ "ใบเสร็จปริ้น 80mm" ของ POS หน้าร้าน — ปลายทางคือ **แชทของลูกค้า** ไม่ใช่เครื่องพิมพ์
+//  · บันทึกเป็นรูป (html2canvas) → ส่งใน LINE/Facebook ได้เลย
+//  · แชร์ตรงผ่านเมนูแชร์ของมือถือ (Web Share API แบบไฟล์)
+//  · เครื่องที่แชร์ไฟล์ไม่ได้ (เดสก์ท็อป/บาง browser) → ถอยไปคัดลอกเป็นข้อความอัตโนมัติ
+//    ⚠️ ทางถอยนี้ห้ามถอด — navigator.canShare({files}) เป็น false บนเครื่องจำนวนมาก
+//       ถ้าไม่มีทางถอย เซลจะกดปุ่มแล้วไม่มีอะไรเกิดขึ้นเลย (แยกไม่ออกจากแอปค้าง)
+// ⚠️ สไตล์ทั้งหมดเป็น inline โดยตั้งใจ — ไม่พึ่ง CSS ใน Doomuenjing Dashboard.html
+//    (บทเรียนข้อ 15: HTML เก่าคู่กับ .jsx ใหม่ = การ์ดไม่มีสไตล์เลยบนมือถือ) และ html2canvas
+//    จับภาพ inline style ได้ตรงกับที่ตาเห็นเสมอ
+function OnlineSaleResult({ cart, totals, shipFee, payTotal, cust, ship, channel, payMethod, orderNumber, documentNumber, taxInvoice, onNew }) {
+  const [toast, showToast, hideToast] = useToast();
+  const [busy, setBusy] = uS("");            // "" | "save" | "share"
+  const cardRef = React.useRef(null);
+  const seller = (typeof window !== "undefined" && window._currentUser) ? window._currentUser : "";
+  const dateStr = new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok", dateStyle: "long", timeStyle: "short" });
+  const goodsTotal = Math.max(0, Number(totals && totals.grandTotal) || 0);
+  const fileBase = "คำสั่งซื้อ-" + (orderNumber || "ใหม่");
+
+  const textOf = () => onlineOrderText({
+    orderNumber, dateStr, cart, goodsTotal, shipFee, payTotal, payMethod, ship,
+  });
+
+  async function copyText() {
+    const t = textOf();
+    try {
+      await navigator.clipboard.writeText(t);
+      showToast("success", "คัดลอกข้อความแล้ว — วางในแชทได้เลย", "📋");
+    } catch (e) {
+      // clipboard API ต้อง https + user gesture · บาง in-app browser ปิดไว้ → ยังต้องได้ข้อความ
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = t; ta.style.cssText = "position:fixed;left:-9999px";
+        document.body.appendChild(ta); ta.select(); document.execCommand("copy");
+        document.body.removeChild(ta);
+        showToast("success", "คัดลอกข้อความแล้ว", "📋");
+      } catch (e2) { showToast("error", "คัดลอกไม่สำเร็จ — กดค้างที่ข้อความด้านล่างเพื่อคัดลอกเอง", "❌"); }
+    }
+  }
+
+  async function saveImage() {
+    if (!cardRef.current) return;
+    setBusy("save");
+    try {
+      const blob = await captureNodePng(cardRef.current);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = fileBase + ".png";
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      showToast("success", "บันทึกรูปแล้ว — ส่งให้ลูกค้าได้เลย", "💾");
+    } catch (e) {
+      showToast("error", "บันทึกรูปไม่สำเร็จ: " + (e.message || e), "❌");
+    }
+    setBusy("");
+  }
+
+  async function shareSummary() {
+    setBusy("share");
+    try {
+      let file = null;
+      if (cardRef.current && navigator.share) {
+        try {
+          const blob = await captureNodePng(cardRef.current);
+          file = new File([blob], fileBase + ".png", { type: "image/png" });
+        } catch (e) { file = null; }   // จับภาพไม่ได้ → ยังแชร์เป็นข้อความต่อได้
+      }
+      if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: fileBase, text: "สรุปคำสั่งซื้อ " + (orderNumber || "") });
+      } else if (navigator.share) {
+        await navigator.share({ title: fileBase, text: textOf() });
+      } else {
+        await copyText();
+      }
+    } catch (e) {
+      // ผู้ใช้กดยกเลิกแผงแชร์ = AbortError ไม่ใช่ความผิดพลาด ห้ามขึ้นแดง
+      if (!e || e.name !== "AbortError") showToast("error", "แชร์ไม่สำเร็จ: " + ((e && e.message) || e), "❌");
+    }
+    setBusy("");
+  }
+
+  const btn = { flex: "1 1 45%", padding: "13px 10px", borderRadius: 10, fontWeight: 800, fontSize: 15, cursor: "pointer" };
+  const rowSty = { display: "flex", justifyContent: "space-between", gap: 10, fontSize: 13, padding: "2px 0" };
+
+  return (
+    <div className="no-print" style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12 }}>
+      <Card padding={true}>
+        <div style={{ textAlign: "center", padding: "6px 0" }}>
+          <div style={{ fontSize: 36 }}>🎉</div>
+          <div style={{ fontSize: 19, fontWeight: 800, color: "var(--g-700)" }}>บันทึกการขายแล้ว</div>
+          <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 4 }}>
+            เลขที่: <b>{orderNumber || "—"}</b>
+            {documentNumber ? <> · ใบกำกับภาษี: <b>{documentNumber}</b></> : null}
+          </div>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+          <button onClick={saveImage} disabled={!!busy}
+            style={{ ...btn, border: "none", background: busy ? "#9ca3af" : "var(--g-600,#1f7f44)", color: "#fff" }}>
+            {busy === "save" ? "กำลังสร้างรูป..." : "💾 บันทึกรูป"}
+          </button>
+          <button onClick={shareSummary} disabled={!!busy}
+            style={{ ...btn, border: "1px solid var(--g-600,#1f7f44)", background: "#fff", color: "var(--g-700,#166534)", opacity: busy ? 0.6 : 1 }}>
+            {busy === "share" ? "กำลังเตรียม..." : "📤 แชร์ให้ลูกค้า"}
+          </button>
+          <button onClick={copyText} style={{ ...btn, flex: "1 1 100%", border: "1px dashed #9ca3af", background: "#f9fafb", color: "#374151", fontWeight: 700, fontSize: 14 }}>
+            📋 คัดลอกเป็นข้อความ
+          </button>
+          <button onClick={onNew} style={{ ...btn, flex: "1 1 100%", border: "1px solid #d1d5db", background: "#fff", color: "#374151" }}>
+            + ขายรายการใหม่
+          </button>
+        </div>
+      </Card>
+
+      <div style={{ fontSize: 12, color: "var(--muted)", textAlign: "center" }}>ตัวอย่างที่ลูกค้าจะได้รับ ↓</div>
+
+      {/* ── การ์ดสรุปคำสั่งซื้อ (ตัวที่ถูกจับเป็นรูป) ── */}
+      <div ref={cardRef} style={{ background: "#fff", color: "#111", borderRadius: 14, border: "1px solid #e5e7eb", overflow: "hidden" }}>
+        <div style={{ background: "#166534", color: "#fff", padding: "14px 16px" }}>
+          <div style={{ fontSize: 17, fontWeight: 800 }}>🧾 สรุปคำสั่งซื้อ</div>
+          <div style={{ fontSize: 12, opacity: .9, marginTop: 2 }}>{POS_SELLER.name}</div>
+        </div>
+
+        <div style={{ padding: "12px 16px" }}>
+          <div style={{ ...rowSty, color: "#6b7280" }}><span>เลขที่</span><span style={{ fontWeight: 700, color: "#111" }}>{orderNumber || "—"}</span></div>
+          <div style={{ ...rowSty, color: "#6b7280" }}><span>วันที่</span><span style={{ color: "#111" }}>{dateStr}</span></div>
+          {channel ? <div style={{ ...rowSty, color: "#6b7280" }}><span>ช่องทาง</span><span style={{ color: "#111" }}>{channel}</span></div> : null}
+          {cust && cust.name ? <div style={{ ...rowSty, color: "#6b7280" }}><span>ลูกค้า</span><span style={{ color: "#111" }}>{cust.name}</span></div> : null}
+
+          <div style={{ borderTop: "1px dashed #d1d5db", margin: "10px 0" }}/>
+
+          {/* รายการสินค้า — ไม่ใส่รูปสินค้าโดยตั้งใจ: รูปมาจาก URL ภายนอก (ZORT) ถ้า CORS ไม่ผ่าน
+              html2canvas จะได้ช่องว่างเปล่า = ลูกค้าได้รูปเอกสารที่ดูเหมือนพัง ซึ่งแย่กว่าไม่มีรูป
+              (ในแอปยังกดดูรูป/รายละเอียดได้ครบที่ตะกร้าตามกติกา UI) */}
+          {(cart || []).map((it, i) => {
+            const qty = Number(it.qty) || 0, price = Number(it.price) || 0;
+            return (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "5px 0", fontSize: 13.5 }}>
+                <span style={{ flex: 1, minWidth: 0 }}>{it.name} <span style={{ color: "#6b7280" }}>× {qty}</span></span>
+                <span style={{ fontWeight: 600, whiteSpace: "nowrap" }}>{fmtBfull(qty * price)}</span>
+              </div>
+            );
+          })}
+
+          <div style={{ borderTop: "1px dashed #d1d5db", margin: "10px 0" }}/>
+
+          <div style={rowSty}><span>ค่าสินค้า</span><span style={{ fontWeight: 600 }}>{fmtBfull(goodsTotal)}</span></div>
+          {Number(shipFee) > 0 ? <div style={rowSty}><span>ค่าจัดส่ง</span><span style={{ fontWeight: 600 }}>{fmtBfull(shipFee)}</span></div> : null}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, paddingTop: 8, borderTop: "2px solid #166534" }}>
+            <span style={{ fontSize: 15, fontWeight: 800 }}>ยอดที่ต้องชำระ</span>
+            <span style={{ fontSize: 22, fontWeight: 800, color: "#166534" }}>{fmtBfull(payTotal)}</span>
+          </div>
+          <div style={{ fontSize: 10.5, color: "#6b7280", textAlign: "right", marginTop: 2 }}>* ราคาสินค้ารวม VAT 7% แล้ว</div>
+
+          {/* ── วิธีชำระ + บัญชีโอน (ตัวที่ลูกค้าต้องใช้จริง ต้องอ่านง่ายที่สุดในหน้า) ── */}
+          <div style={{ marginTop: 12, padding: 12, background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 10 }}>
+            <div style={{ fontSize: 12, color: "#166534", fontWeight: 700 }}>วิธีชำระเงิน</div>
+            <div style={{ fontSize: 15, fontWeight: 800, marginTop: 2 }}>{payMethod || "—"}</div>
+            {payMethod === "โอน" && (
+              <div style={{ marginTop: 6, fontSize: 13, lineHeight: 1.6 }}>
+                <div>{POS_TRANSFER_INFO.bank}</div>
+                <div style={{ fontSize: 19, fontWeight: 800, letterSpacing: 1 }}>{POS_TRANSFER_INFO.acctNo}</div>
+                <div style={{ color: "#4b5563" }}>{POS_TRANSFER_INFO.acctName}</div>
+                <div style={{ marginTop: 4, fontSize: 12, color: "#166534" }}>โอนแล้วส่งสลิปกลับมาในแชทได้เลยค่ะ</div>
+              </div>
+            )}
+            {payMethod === "เก็บเงินปลายทาง" && (
+              <div style={{ marginTop: 4, fontSize: 12.5, color: "#4b5563" }}>ชำระกับพนักงานขนส่งตอนรับพัสดุ</div>
+            )}
+          </div>
+
+          {/* ── จัดส่ง ── */}
+          {(ship && (ship.recipient || ship.address || ship.method || ship.tracking)) && (
+            <div style={{ marginTop: 10, padding: 12, background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 10, fontSize: 13, lineHeight: 1.65 }}>
+              <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 700, marginBottom: 2 }}>🚚 จัดส่ง</div>
+              {ship.recipient ? <div><b>{ship.recipient}</b>{ship.phone ? " · " + ship.phone : ""}</div> : null}
+              {ship.address ? <div style={{ color: "#374151" }}>{ship.address}</div> : null}
+              {ship.method ? <div style={{ color: "#374151" }}>ขนส่ง: {ship.method}</div> : null}
+              {ship.tracking ? <div style={{ fontWeight: 700 }}>เลขพัสดุ: {ship.tracking}</div> : null}
+              {!ship.tracking && ship.method && POS_SHIP_NO_ADDRESS.indexOf(ship.method) < 0
+                ? <div style={{ color: "#6b7280", fontSize: 12 }}>จะแจ้งเลขพัสดุให้ทราบอีกครั้งหลังส่งของค่ะ</div> : null}
+            </div>
+          )}
+          {ship && ship.note ? <div style={{ marginTop: 8, fontSize: 12.5, color: "#4b5563" }}>📝 {ship.note}</div> : null}
+
+          {taxInvoice ? <div style={{ marginTop: 8, fontSize: 12, color: "#4b5563" }}>🧾 ออกใบกำกับภาษีเต็มรูปแบบแล้ว{documentNumber ? " (เลขที่ " + documentNumber + ")" : ""}</div> : null}
+
+          <div style={{ borderTop: "1px dashed #d1d5db", margin: "12px 0 8px" }}/>
+          <div style={{ textAlign: "center", fontSize: 12, color: "#4b5563", lineHeight: 1.7 }}>
+            <div style={{ fontWeight: 700, color: "#166534" }}>ขอบคุณที่อุดหนุนค่ะ 🌸</div>
+            <div>Line {POS_CONTACT.line} · โทร {POS_CONTACT.phone}</div>
+            {seller ? <div style={{ fontSize: 11, color: "#9ca3af" }}>ผู้ดูแลคำสั่งซื้อ: {seller}</div> : null}
+          </div>
+        </div>
+      </div>
 
       <Toast toast={toast} onClose={hideToast}/>
     </div>
