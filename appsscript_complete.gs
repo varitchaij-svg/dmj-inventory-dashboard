@@ -10172,8 +10172,54 @@ function productOwnerPlanKeyOf_(entry) {
 //   แต่ยังอยู่ในลิสต์ปกติของทุกคนครบถ้วน) · ถ้าวันหนึ่งอยากให้ขึ้นลิสต์ "ของฉัน" ของใครสักคน
 //   ให้ลบชื่อหมวดนั้นออกจากลิสต์ของคนที่เหลือ เหลือชื่อเดียว แล้วรัน preview ใหม่
 
+// ── กฎย่อย "ในหมวดเดียวกันแต่คนละคนดูแล" ─────────────────────────────────
+// ที่มา: เจ้าของแจ้งว่าหมวด "ดอกไม้" ทั้ง ST0005 และ ST0013 ดูแลอยู่ **แต่คนละสินค้ากัน**
+//   → แบ่งที่ระดับ "หมวด" ไม่พอ ต้องลงไปถึงตัวสินค้า
+// วิธีแบ่ง: **รหัสนำหน้า SKU (Product Prefix)** ซึ่งตามกติกาของบริษัทคือ "ประเภทสินค้า"
+//   (R=กุหลาบ, OL=มะกอก ฯลฯ — ดูหัวข้อ Business Rule เรื่อง SKU) จึงเป็นตัวแบ่ง
+//   "คนละแบบสินค้า" ที่มีอยู่แล้วในข้อมูล ไม่ต้องไปไล่ระบุทีละ SKU เป็นพัน
+// ดูว่าหมวดหนึ่ง ๆ มี prefix อะไรบ้างกี่ตัว → รัน listCategoryBreakdown()
+//
+// กติกา: กฎย่อยตัดสินก่อนตารางหมวดเสมอ · ยังไม่ใส่กฎ = ทำงานเหมือนเดิมทุกประการ
+// ⚠️ prefix เดียวกันในหมวดเดียวกันมีชื่อเกิน 1 คน → ข้ามเหมือนหมวดซ้อน (ไม่เลือกให้)
+// ⚠️ สินค้าในหมวดที่มีกฎย่อย แต่ prefix ไม่เข้ากฎไหนเลย → **ถอยไปใช้ตารางหมวด**
+//    และถูกรายงานเป็น "ยังไม่มีกฎครอบคลุม" เพื่อให้เจ้าของเห็นว่าตกหล่นอะไรบ้าง
+var PRODUCT_OWNER_ASSIGN_RULES_ = [
+  // ตัวอย่างรูปแบบ (ลบคอมเมนต์ออกแล้วใส่ prefix จริงจาก listCategoryBreakdown()):
+  // { staffId: 'ST0005', category: 'ดอกไม้', prefixes: ['R', 'PH'] },
+  // { staffId: 'ST0013', category: 'ดอกไม้', prefixes: ['DH'] },
+];
+
 // true = ทับดาวที่มีคนดูแลอยู่แล้วด้วย (ค่าปกติ false — งานที่พนักงานกดเองสำคัญกว่าตารางตั้งต้น)
 var PRODUCT_OWNER_ASSIGN_OVERWRITE_ = false;
+
+// รหัสนำหน้า SKU = ตัวอักษรอังกฤษที่นำหน้าตัวเลข ("R01025"→"R", "OL19001"→"OL")
+// ไม่เข้ารูปแบบ (ไม่มีตัวอักษรนำ/ไม่มีตัวเลขตาม) → คืน '' แล้วถูกจัดเป็น "ไม่เข้ารูปแบบ"
+// **ไม่ใช้ suggestNextSku/parseSkuParts ฝั่งเว็บ** — คนละไฟล์ คนละ runtime
+function productOwnerSkuPrefix_(sku) {
+  var m = String(sku == null ? '' : sku).trim().toUpperCase().match(/^([A-Z]+)[0-9]/);
+  return m ? m[1] : '';
+}
+
+// ตารางกฎย่อย → ดัชนี {หมวด → {prefix → [คน]}} · โครงเดียวกับ productOwnerPlanIndex_
+function productOwnerRuleIndex_(rules) {
+  var byCat = {};
+  for (var i = 0; i < (rules || []).length; i++) {
+    var r = rules[i] || {};
+    var who = productOwnerPlanKeyOf_(r);
+    var ck = productOwnerNormKey_(r.category);
+    var pfs = r.prefixes || [];
+    if (!who || !ck) continue;
+    if (!byCat[ck]) byCat[ck] = { label: String(r.category || '').trim(), byPrefix: {} };
+    for (var j = 0; j < pfs.length; j++) {
+      var pk = String(pfs[j] || '').trim().toUpperCase();
+      if (!pk) continue;
+      if (!byCat[ck].byPrefix[pk]) byCat[ck].byPrefix[pk] = [];
+      if (byCat[ck].byPrefix[pk].indexOf(who) < 0) byCat[ck].byPrefix[pk].push(who);
+    }
+  }
+  return { byCat: byCat };
+}
 
 // คีย์เทียบชื่อ (หมวด/คน) — ตัดช่องว่างทั้งหมด + ตัวพิมพ์ + zero-width ที่ติดมาจากการ copy
 // "กระถาง PS" = "กระถางPS" · "Ya Ya" = "YaYa" — ชื่อไทยในชีตเว้นวรรคไม่คงที่ ถ้าเทียบตรง ๆ
@@ -10322,14 +10368,16 @@ function productOwnerResolveStaffCore_(staffAll, labels) {
 
 // ตัวคิดจริงทั้งหมด — pure ไม่แตะชีตเลย เพื่อให้ preview กับ apply เดินเส้นทางเดียวกันเป๊ะ
 // (ถ้า preview คิดคนละทางกับ apply ตัวเลขที่เจ้าของเห็นตอน preview จะไม่ใช่สิ่งที่เกิดขึ้นจริง)
-function productOwnerAssignPlanCore_(planIndex, products, owners, overwrite) {
+function productOwnerAssignPlanCore_(planIndex, products, owners, overwrite, ruleIndex) {
   var ownUp = {};
   var keys = Object.keys(owners || {});
   for (var a = 0; a < keys.length; a++) ownUp[String(keys[a]).trim().toUpperCase()] = owners[keys[a]];
+  var rules = (ruleIndex && ruleIndex.byCat) || {};
 
   var res = {
     assign: [], sharedSkip: [], takenSkip: [],
     perStaff: {}, catHit: {}, unplanned: {}, missingCats: [], caseWarn: [],
+    ruleGap: {}, byRule: 0,
   };
   for (var i = 0; i < (products || []).length; i++) {
     var p = products[i] || {};
@@ -10337,12 +10385,33 @@ function productOwnerAssignPlanCore_(planIndex, products, owners, overwrite) {
     if (!sku) continue;
     var k = productOwnerNormKey_(p.category);
     var slot = k ? planIndex.byCat[k] : null;
+    var rule = k ? rules[k] : null;
+    var viaRule = false;
+
+    // กฎย่อยระดับ prefix ตัดสินก่อนตารางหมวดเสมอ (ละเอียดกว่า = เจตนาชัดกว่า)
+    if (rule) {
+      var pf = productOwnerSkuPrefix_(sku);
+      var claim = (pf && rule.byPrefix[pf]) || null;
+      if (claim && claim.length === 1) {
+        slot = { label: rule.label + ' · ' + pf, staff: claim.slice() };
+        viaRule = true;
+      } else if (claim && claim.length > 1) {
+        res.sharedSkip.push({ sku: sku, category: rule.label + ' · ' + pf, staff: claim.slice() });
+        continue;
+      } else {
+        // prefix นี้ยังไม่มีกฎครอบคลุม → ถอยไปใช้ตารางหมวด แต่ต้องรายงานให้เห็น
+        // (ไม่งั้นสินค้าที่ตกหล่นจะหายไปในกอง "หมวดซ้อนกัน" โดยไม่มีใครรู้ว่าลืมเขียนกฎ)
+        var gk = rule.label + ' · ' + (pf || '(ไม่เข้ารูปแบบ SKU)');
+        res.ruleGap[gk] = (res.ruleGap[gk] || 0) + 1;
+      }
+    }
+
     if (!slot) {
       var lbl = String(p.category || '').trim() || '(ไม่ระบุหมวด)';
       res.unplanned[lbl] = (res.unplanned[lbl] || 0) + 1;
       continue;
     }
-    res.catHit[k] = (res.catHit[k] || 0) + 1;
+    if (k) res.catHit[k] = (res.catHit[k] || 0) + 1;
     if (slot.staff.length > 1) {
       res.sharedSkip.push({ sku: sku, category: slot.label, staff: slot.staff.slice() });
       continue;
@@ -10355,6 +10424,7 @@ function productOwnerAssignPlanCore_(planIndex, products, owners, overwrite) {
     // เขียนลงชีตเป็นตัวพิมพ์ใหญ่ให้ตรงกับ setProductOwnerHandler_ · ฝั่งเว็บอ่านดาวด้วย
     // owners[p.sku] แบบตรงตัว → SKU ที่ในชีตเป็นตัวพิมพ์เล็กจะโชว์ดาวไม่ขึ้น ต้องบอกไว้
     if (sku !== sku.toUpperCase()) res.caseWarn.push(sku);
+    if (viaRule) res.byRule++;
     res.assign.push({ sku: sku.toUpperCase(), name: String(p.name || ''), category: slot.label, staff: slot.staff[0] });
     res.perStaff[slot.staff[0]] = (res.perStaff[slot.staff[0]] || 0) + 1;
   }
@@ -10449,6 +10519,66 @@ function checkProductOwnerStaffNames() {
   return { staff: all, match: who };
 }
 
+// ── ส่องข้างในหมวด: "หมวดเดียวกันแต่คนละสินค้า" แบ่งยังไงดี ────────────────
+// ไม่ใส่ชื่อหมวด = ส่องให้อัตโนมัติทุกหมวดที่มีคนอ้างสิทธิ์เกิน 1 คน (ตัวที่ต้องตัดสินใจพอดี)
+// ⚠️ GAS editor รันฟังก์ชันโดยส่ง argument ไม่ได้ — จึงต้องทำงานได้เมื่อไม่มี argument
+// อ่านอย่างเดียว ไม่แก้อะไร
+function listCategoryBreakdown(catName) {
+  var products = readProducts_();
+  var idx = productOwnerPlanIndex_(PRODUCT_OWNER_ASSIGN_PLAN_);
+
+  var targets = [];
+  if (catName) {
+    targets.push({ key: productOwnerNormKey_(catName), label: String(catName).trim(), staff: [] });
+  } else {
+    for (var o = 0; o < idx.order.length; o++) {
+      var slot = idx.byCat[idx.order[o]];
+      if (slot.staff.length > 1) targets.push({ key: idx.order[o], label: slot.label, staff: slot.staff });
+    }
+  }
+  if (!targets.length) {
+    Logger.log('ไม่มีหมวดที่ถูกอ้างสิทธิ์เกิน 1 คน — ใส่ชื่อหมวดเป็น argument ถ้าอยากดูหมวดใดหมวดหนึ่ง');
+    return [];
+  }
+
+  var out = [];
+  for (var t = 0; t < targets.length; t++) {
+    var tg = targets[t];
+    var inCat = [];
+    for (var i = 0; i < products.length; i++) {
+      if (productOwnerNormKey_(products[i].category) === tg.key) inCat.push(products[i]);
+    }
+    Logger.log('══ "' + tg.label + '" ' + inCat.length + ' SKU'
+      + (tg.staff.length ? ' · อ้างสิทธิ์โดย ' + tg.staff.join(', ') : '') + ' ══');
+    if (!inCat.length) { Logger.log('  (ไม่พบสินค้าในหมวดนี้ — ชื่อหมวดพิมพ์ตรงกับชีตหรือยัง?)'); continue; }
+
+    var byPf = {}, bySup = {};
+    for (var j = 0; j < inCat.length; j++) {
+      var pf = productOwnerSkuPrefix_(inCat[j].sku) || '(ไม่เข้ารูปแบบ SKU)';
+      if (!byPf[pf]) byPf[pf] = { n: 0, eg: [] };
+      byPf[pf].n++;
+      if (byPf[pf].eg.length < 3) byPf[pf].eg.push(inCat[j].sku + ' ' + String(inCat[j].name || '').slice(0, 22));
+      var sup = String(inCat[j].tag || inCat[j].vendor || '').trim() || '(ไม่ระบุ)';
+      bySup[sup] = (bySup[sup] || 0) + 1;
+    }
+    Logger.log('  แบ่งตามรหัสนำหน้า SKU (= ประเภทสินค้า ตามกติกา SKU ของบริษัท):');
+    Object.keys(byPf).sort(function (x, y) { return byPf[y].n - byPf[x].n; }).slice(0, 30)
+      .forEach(function (pf) {
+        Logger.log('    ' + pf + '  ' + byPf[pf].n + ' SKU   เช่น ' + byPf[pf].eg.join(' / '));
+      });
+    var supKeys = Object.keys(bySup).sort(function (x, y) { return bySup[y] - bySup[x]; });
+    if (supKeys.length > 1) {
+      Logger.log('  แบ่งตามซัพพลายเออร์/TAG (ทางเลือกอีกแบบ ถ้าไม่ได้แบ่งตามประเภทสินค้า):');
+      supKeys.slice(0, 15).forEach(function (s) { Logger.log('    ' + s + '  ' + bySup[s] + ' SKU'); });
+    }
+    Logger.log('  💡 เลือก prefix ให้แต่ละคนแล้วเติมใน PRODUCT_OWNER_ASSIGN_RULES_ เช่น');
+    Logger.log("     { staffId: 'ST0005', category: '" + tg.label + "', prefixes: ['"
+      + Object.keys(byPf).slice(0, 2).join("', '") + "'] },");
+    out.push({ category: tg.label, total: inCat.length, byPrefix: byPf });
+  }
+  return out;
+}
+
 // ขั้นที่ 1 — ดูชื่อหมวดจริงในชีตก่อนแก้ตาราง (อ่านอย่างเดียว)
 function listProductCategories() {
   var products = readProducts_();
@@ -10497,16 +10627,24 @@ function productOwnerAssignRun_(doWrite) {
     var nm = productOwnerPlanKeyOf_(plan[i]);
     if (nm && labels.indexOf(nm) < 0) labels.push(nm);
   }
+  // กฎย่อยอ้างคนได้เหมือนตารางหมวด → ต้องเอาชื่อ/รหัสจากทั้งสองที่มาหาให้ครบ
+  // (ลืมข้อนี้ = กฎย่อยชี้ไปที่คนที่ไม่ได้ถูก resolve แล้วพังตอนเขียนจริง)
+  for (var g = 0; g < PRODUCT_OWNER_ASSIGN_RULES_.length; g++) {
+    var rn = productOwnerPlanKeyOf_(PRODUCT_OWNER_ASSIGN_RULES_[g]);
+    if (rn && labels.indexOf(rn) < 0) labels.push(rn);
+  }
   var who = productOwnerResolveStaffCore_(readStaffAll_(ss), labels);
   var products = readProducts_();
   var owners = productOwnerReadMap_(ss);
-  var res = productOwnerAssignPlanCore_(idx, products, owners, PRODUCT_OWNER_ASSIGN_OVERWRITE_ === true);
+  var rules = productOwnerRuleIndex_(PRODUCT_OWNER_ASSIGN_RULES_);
+  var res = productOwnerAssignPlanCore_(idx, products, owners, PRODUCT_OWNER_ASSIGN_OVERWRITE_ === true, rules);
 
   Logger.log(doWrite ? '── มอบหมายผู้ดูแลสินค้า (เขียนจริง) ──' : '── ทดลองมอบหมาย (ยังไม่เขียนอะไรเลย) ──');
   Logger.log('สินค้าทั้งหมด ' + products.length + ' SKU · มีคนดูแลอยู่แล้ว ' + Object.keys(owners).length + ' SKU');
 
   var staffNames = Object.keys(res.perStaff).sort(function (a, b) { return res.perStaff[b] - res.perStaff[a]; });
-  Logger.log('จะมอบหมายรวม ' + res.assign.length + ' SKU:');
+  Logger.log('จะมอบหมายรวม ' + res.assign.length + ' SKU'
+    + (res.byRule ? ' (มาจากกฎย่อยระดับ prefix ' + res.byRule + ' SKU)' : '') + ':');
   for (var s = 0; s < staffNames.length; s++) {
     var st = who.resolved[staffNames[s]];
     // โชว์ทั้งรหัสและชื่อจริงจากชีต — ตารางอาจอ้างด้วย staffId ล้วน ('ST0001' เฉย ๆ อ่านไม่ออกว่าใคร)
@@ -10521,8 +10659,22 @@ function productOwnerAssignRun_(doWrite) {
       + '(1 สินค้า = 1 คนดูแล ต้องเลือกให้ชัดก่อน):');
     Object.keys(sharedCats).forEach(function (c) {
       var slot = idx.byCat[productOwnerNormKey_(c)];
-      Logger.log('   · "' + c + '" ' + sharedCats[c] + ' SKU — ' + slot.staff.join(', '));
+      Logger.log('   · "' + c + '" ' + sharedCats[c] + ' SKU'
+        + (slot ? ' — ' + slot.staff.join(', ') : ' (จากกฎย่อยที่ prefix เดียวกันมีเกิน 1 คน)'));
     });
+    if (!PRODUCT_OWNER_ASSIGN_RULES_.length) {
+      Logger.log('   💡 ถ้าหมวดเดียวกันแบ่งกันดูคนละสินค้า → ใช้กฎย่อยระดับ prefix ได้'
+        + ' (รัน listCategoryBreakdown() เพื่อดูว่าหมวดนั้นมี prefix อะไรบ้าง)');
+    }
+  }
+  var gapKeys = Object.keys(res.ruleGap);
+  if (gapKeys.length) {
+    var gapTotal = 0;
+    for (var gg = 0; gg < gapKeys.length; gg++) gapTotal += res.ruleGap[gapKeys[gg]];
+    Logger.log('⚠️ ในหมวดที่มีกฎย่อย มี ' + gapTotal + ' SKU ที่ prefix ยังไม่มีกฎครอบคลุม '
+      + '(ตกไปใช้ตารางหมวดแทน) — เติมกฎให้ครบถ้าอยากให้มีคนดูแล:');
+    gapKeys.sort(function (x, y) { return res.ruleGap[y] - res.ruleGap[x]; })
+      .slice(0, 20).forEach(function (gk) { Logger.log('   · ' + gk + ' ' + res.ruleGap[gk] + ' SKU'); });
   }
   if (res.takenSkip.length) Logger.log('ข้าม ' + res.takenSkip.length + ' SKU ที่มีคนดูแลอยู่แล้ว (ไม่ทับงานที่พนักงานกดเอง)');
   if (res.missingCats.length) Logger.log('⚠️ หมวดในตารางที่ไม่เจอสินค้าเลยสักตัว (พิมพ์ไม่ตรงชีต?): ' + res.missingCats.join(' · '));

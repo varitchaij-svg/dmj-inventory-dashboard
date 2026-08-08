@@ -30,15 +30,18 @@ const M = new Function([
   grab(/function productOwnerStaffKey_\(s\) \{[\s\S]*?\n\}/),
   grab(/function productOwnerThaiBaseKey_\(s\) \{[\s\S]*?\n\}/),
   grab(/function productOwnerPlanKeyOf_\(entry\) \{[\s\S]*?\n\}/),
+  grab(/function productOwnerSkuPrefix_\(sku\) \{[\s\S]*?\n\}/),
+  grab(/function productOwnerRuleIndex_\(rules\) \{[\s\S]*?\n\}/),
   grab(/function productOwnerPlanIndex_\(plan\) \{[\s\S]*?\n\}/),
   grab(/function productOwnerResolveStaffCore_\(staffAll, labels\) \{[\s\S]*?\n\}/),
-  grab(/function productOwnerAssignPlanCore_\(planIndex, products, owners, overwrite\) \{[\s\S]*?\n\}/),
+  grab(/function productOwnerAssignPlanCore_\(planIndex, products, owners, overwrite, ruleIndex\) \{[\s\S]*?\n\}/),
   grab(/function productOwnerDescribeName_\(s\) \{[\s\S]*?\n\}/),
-  'return { productOwnerNormKey_, productOwnerStaffKey_, productOwnerThaiBaseKey_, productOwnerPlanKeyOf_, productOwnerPlanIndex_, productOwnerResolveStaffCore_, productOwnerAssignPlanCore_, productOwnerDescribeName_ };',
+  'return { productOwnerNormKey_, productOwnerStaffKey_, productOwnerThaiBaseKey_, productOwnerPlanKeyOf_, productOwnerSkuPrefix_, productOwnerRuleIndex_, productOwnerPlanIndex_, productOwnerResolveStaffCore_, productOwnerAssignPlanCore_, productOwnerDescribeName_ };',
 ].join('\n'))();
 
 const { productOwnerNormKey_: normKey, productOwnerStaffKey_: staffKey,
-  productOwnerPlanKeyOf_: planKeyOf, productOwnerPlanIndex_: planIndex,
+  productOwnerPlanKeyOf_: planKeyOf, productOwnerSkuPrefix_: skuPrefix,
+  productOwnerRuleIndex_: ruleIndex, productOwnerPlanIndex_: planIndex,
   productOwnerResolveStaffCore_: resolveStaff, productOwnerAssignPlanCore_: assignCore,
   productOwnerDescribeName_: describeName } = M;
 
@@ -430,6 +433,88 @@ describe('productOwnerAssignPlanCore_ — ใครได้ SKU ไหนบ้
   });
 });
 
+describe('กฎย่อย prefix — "หมวดเดียวกันแต่คนละสินค้า"', () => {
+  const idx = planIndex([
+    { staffId: 'ST0005', staff: 'ประสิทธิ์', categories: ['ดอกไม้'] },
+    { staffId: 'ST0013', staff: 'KYAW', categories: ['ดอกไม้'] },
+  ]);
+  const rules = ruleIndex([
+    { staffId: 'ST0005', category: 'ดอกไม้', prefixes: ['R', 'PH'] },
+    { staffId: 'ST0013', category: 'ดอกไม้', prefixes: ['DH'] },
+  ]);
+
+  it('productOwnerSkuPrefix_ ดึงรหัสนำหน้าตามกติกา SKU ของบริษัท', () => {
+    expect(skuPrefix('R01025')).toBe('R');
+    expect(skuPrefix('OL19001')).toBe('OL');
+    expect(skuPrefix('ol19001')).toBe('OL');
+    expect(skuPrefix(' PH04123 ')).toBe('PH');
+  });
+
+  it('SKU ที่ไม่เข้ารูปแบบ → คืนค่าว่าง ไม่เดา', () => {
+    expect(skuPrefix('12345')).toBe('');
+    expect(skuPrefix('ABCDEF')).toBe('');   // ไม่มีตัวเลขตาม = ไม่ใช่รูปแบบ SKU
+    expect(skuPrefix('')).toBe('');
+    expect(skuPrefix(null)).toBe('');
+  });
+
+  it('หมวดที่เดิม "ซ้อนกันจนถูกข้าม" → มีกฎย่อยแล้วแจกได้ตาม prefix', () => {
+    const r = assignCore(idx, [prod('R01025', 'ดอกไม้'), prod('DH00012', 'ดอกไม้')], {}, false, rules);
+    expect(r.assign.map(a => a.staff)).toEqual(['ST0005', 'ST0013']);
+    expect(r.sharedSkip).toEqual([]);
+    expect(r.byRule).toBe(2);
+  });
+
+  it('prefix ที่ไม่มีกฎครอบคลุม → ถอยไปใช้ตารางหมวด (ซ้อนกัน = ข้าม) และต้องรายงาน', () => {
+    const r = assignCore(idx, [prod('XX00001', 'ดอกไม้')], {}, false, rules);
+    expect(r.assign).toEqual([]);
+    expect(r.sharedSkip).toHaveLength(1);
+    expect(r.ruleGap['ดอกไม้ · XX']).toBe(1);
+  });
+
+  it('prefix เดียวกันมีเกิน 1 คนอ้าง → ข้าม ไม่เลือกให้ (หลักเดียวกับหมวดซ้อน)', () => {
+    const dup = ruleIndex([
+      { staffId: 'ST0005', category: 'ดอกไม้', prefixes: ['R'] },
+      { staffId: 'ST0013', category: 'ดอกไม้', prefixes: ['R'] },
+    ]);
+    const r = assignCore(idx, [prod('R01025', 'ดอกไม้')], {}, false, dup);
+    expect(r.assign).toEqual([]);
+    expect(r.sharedSkip[0].staff).toEqual(['ST0005', 'ST0013']);
+  });
+
+  it('กฎย่อยชนะตารางหมวดเสมอ แม้หมวดนั้นมีเจ้าของชัดเจนอยู่แล้ว', () => {
+    const solo = planIndex([{ staffId: 'ST0005', staff: 'ประสิทธิ์', categories: ['ดอกไม้'] }]);
+    const give13 = ruleIndex([{ staffId: 'ST0013', category: 'ดอกไม้', prefixes: ['DH'] }]);
+    const r = assignCore(solo, [prod('DH00012', 'ดอกไม้'), prod('R01025', 'ดอกไม้')], {}, false, give13);
+    expect(r.assign.find(a => a.sku === 'DH00012').staff).toBe('ST0013');
+    expect(r.assign.find(a => a.sku === 'R01025').staff).toBe('ST0005');   // ไม่มีกฎ → ตกตามหมวด
+  });
+
+  it('กฎย่อยไม่กระทบหมวดอื่นเลย', () => {
+    const mixed = planIndex([{ staffId: 'ST0004', staff: 'TunTun', categories: ['ใบ'] }]);
+    const r = assignCore(mixed, [prod('L01001', 'ใบ')], {}, false, rules);
+    expect(r.assign[0].staff).toBe('ST0004');
+    expect(r.ruleGap).toEqual({});
+  });
+
+  it('ไม่ส่ง ruleIndex มาเลย → ทำงานเหมือนเดิมทุกประการ (ของเดิมต้องไม่พัง)', () => {
+    const solo = planIndex([{ staffId: 'ST0004', staff: 'TunTun', categories: ['ใบ'] }]);
+    const r = assignCore(solo, [prod('L01001', 'ใบ')], {}, false);
+    expect(r.assign).toHaveLength(1);
+    expect(r.byRule).toBe(0);
+  });
+
+  it('SKU ที่ถูกแจกด้วยกฎย่อย ยังเคารพ "มีคนดูแลอยู่แล้ว" เหมือนเดิม', () => {
+    const r = assignCore(idx, [prod('R01025', 'ดอกไม้')], { R01025: { staffId: 'ST0009', name: 'ส้ม' } }, false, rules);
+    expect(r.assign).toEqual([]);
+    expect(r.takenSkip).toHaveLength(1);
+  });
+
+  it('ตารางกฎย่อยว่าง → ดัชนีว่าง ไม่ระเบิด', () => {
+    expect(ruleIndex([]).byCat).toEqual({});
+    expect(ruleIndex(null).byCat).toEqual({});
+  });
+});
+
 describe('การเชื่อมต่อ (meta) — จุดที่ลืมแล้วเครื่องมือทำงานผิดแบบเงียบ ๆ', () => {
   const RUN = grab(/function productOwnerAssignRun_\(doWrite\) \{[\s\S]*?\n^\}/m);
 
@@ -546,7 +631,7 @@ describe('การเชื่อมต่อ (meta) — จุดที่ล�
     const resolver = grab(/function productOwnerResolveStaffCore_\(staffAll, labels\) \{[\s\S]*?\n^\}/m);
     expect(resolver).toContain('productOwnerStaffKey_');
     expect(resolver).not.toContain('productOwnerNormKey_');
-    const core = grab(/function productOwnerAssignPlanCore_\(planIndex, products, owners, overwrite\) \{[\s\S]*?\n^\}/m);
+    const core = grab(/function productOwnerAssignPlanCore_\(planIndex, products, owners, overwrite, ruleIndex\) \{[\s\S]*?\n^\}/m);
     expect(core).toContain('productOwnerNormKey_');
     expect(core).not.toContain('productOwnerStaffKey_');
   });
