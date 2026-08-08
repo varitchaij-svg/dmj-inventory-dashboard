@@ -357,8 +357,19 @@ describe('meta — frontend ส่งข้อมูลครบและโห�
   it('เงินสด/เงินทอนถูกส่งขึ้น server เฉพาะโหมดหน้าร้าน', () => {
     expect(posView).toMatch(/cashReceived: \(!online && payMethod === "เงินสด"\)/);
   });
-  it('บังคับที่อยู่เฉพาะขนส่งที่ต้องส่งจริง (ลูกค้ามารับเองต้องไม่ถูกบังคับ)', () => {
-    expect(posView).toMatch(/shipNeedsAddress && !shipOut\.address/);
+  // เจ้าของสั่ง (ส.ค. 2026): "จัดส่งมีให้กรอกแต่ไม่จำเป็นต้องกรอก" — ห้ามบล็อกปุ่มบันทึกด้วย
+  // ship.method/address เด็ดขาด แม้เลือกขนส่งที่ต้องมีที่อยู่จริงก็ตาม (ต่างจาก recipient/payMethod
+  // ที่ยังบังคับ เพราะจำเป็นต่อการตามงาน/บัญชี) — ป้าย shipAddressHint เป็นแค่ข้อความชวนกรอก
+  // ไม่ใช่เงื่อนไข block
+  it('ปุ่มบันทึกไม่ถูกบล็อกด้วยขนส่ง/ที่อยู่ (จัดส่งเป็นข้อมูลเสริม ไม่บังคับ)', () => {
+    expect(posView).not.toMatch(/if \(!ship\.method\)/);
+    expect(posView).not.toMatch(/!shipOut\.address\) \{ showToast/);
+  });
+  it('ยังบังคับผู้รับ/ชื่อลูกค้า + วิธีชำระ (จำเป็นต่อการตามงาน/บัญชี)', () => {
+    expect(posView).toMatch(/if \(!shipOut\.recipient\)/);
+    expect(posView).toMatch(/if \(!payMethod\)/);
+  });
+  it('POS_SHIP_NO_ADDRESS ทุกตัวยังอยู่ใน POS_SHIP_METHODS (ใช้เป็นป้ายบอก ไม่ใช่ตัวบล็อก)', () => {
     expect(feDefault.POS_SHIP_NO_ADDRESS).toContain('ลูกค้ามารับเอง');
     feDefault.POS_SHIP_NO_ADDRESS.forEach(m => expect(feDefault.POS_SHIP_METHODS).toContain(m));
   });

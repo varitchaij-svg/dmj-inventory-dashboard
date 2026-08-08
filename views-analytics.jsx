@@ -10157,7 +10157,9 @@ function PosView({ data, role }) {
   const payTotal = pay.payTotal;                            // ยอดที่ลูกค้าต้องจ่ายจริง (รวมค่าส่ง)
   const cashReceivedNum = Math.max(0, parseFloat(cashReceived) || 0);
   const cashChange = cashReceivedNum - totals.grandTotal;   // เงินทอน (ลบ = รับมาไม่พอ)
-  const shipNeedsAddress = !!ship.method && POS_SHIP_NO_ADDRESS.indexOf(ship.method) < 0;
+  // ป้ายบอกเฉย ๆ ว่า "ขนส่งที่เลือกต้องมีที่อยู่จริง" — **ไม่บล็อกการบันทึก** (เจ้าของสั่งไว้ว่า
+  // จัดส่งเป็นข้อมูลเสริม กรอกได้แต่ไม่บังคับ) ต่างจาก shipOut.recipient/payMethod ที่ยังบังคับ
+  const shipAddressHint = !!ship.method && POS_SHIP_NO_ADDRESS.indexOf(ship.method) < 0;
 
   function pickSaleMode(m) {
     if (m === saleMode) return;
@@ -10273,11 +10275,12 @@ function PosView({ data, role }) {
     if (cart.some(it => (Number(it.qty) || 0) <= 0)) { showToast("warn", "จำนวนต้องมากกว่า 0", "✏️"); return; }
     if (taxInvoice && !cust.taxId && !cust.name) { showToast("warn", "ใบกำกับภาษีต้องมีชื่อ/เลขผู้เสียภาษี", "🧾"); return; }
     if (online) {
-      // ขายออนไลน์ = ของต้องเดินทางไปหาใครสักคน — ไม่มีชื่อ/ไม่มีวิธีชำระ = ตามงานต่อไม่ได้
+      // ⚠️ จัดส่ง (ขนส่ง/ที่อยู่/เลขพัสดุ) เป็นข้อมูล**เสริม** — เจ้าของสั่งไว้ (ส.ค. 2026) ว่า
+      //    "มีให้กรอกแต่ไม่จำเป็นต้องกรอก" (บางบิลนัดส่งเองทีหลัง/ยังไม่รู้ขนส่งตอนปิดการขาย)
+      //    → ห้ามบล็อกปุ่มบันทึกด้วย ship.method/address เด็ดขาด แค่ต้องรู้ว่า "ขายให้ใคร"
+      //    กับ "รับเงินยังไง" ซึ่งจำเป็นต่อการตามงาน/บัญชีจริง ๆ
       if (!shipOut.recipient) { showToast("warn", "ใส่ชื่อลูกค้า หรือ ชื่อผู้รับ ก่อน", "👤"); return; }
       if (!payMethod) { showToast("warn", "เลือกวิธีชำระเงินก่อน", "💳"); return; }
-      if (!ship.method) { showToast("warn", "เลือกวิธีจัดส่งก่อน", "🚚"); return; }
-      if (shipNeedsAddress && !shipOut.address) { showToast("warn", "ใส่ที่อยู่จัดส่งก่อน (หรือเลือก \"ลูกค้ามารับเอง\")", "📍"); return; }
     } else if (payMethod === "เงินสด" && cashReceivedNum < totals.grandTotal) {
       showToast("warn", "รับเงินสดไม่พอยอด — กรอกจำนวนที่รับมาให้ครบก่อน", "💵"); return;
     }
@@ -10603,7 +10606,7 @@ function PosView({ data, role }) {
                 placeholder={cust.phone || "ตามเบอร์ลูกค้า"} style={inp}/>
             </div>
             <div style={{ gridColumn: "1 / -1" }}>
-              <FieldLabel_>ที่อยู่จัดส่ง {shipNeedsAddress ? "*" : ""}</FieldLabel_>
+              <FieldLabel_>ที่อยู่จัดส่ง {shipAddressHint ? "(กรอกถ้าต้องส่งจริง — ไม่บังคับ)" : ""}</FieldLabel_>
               <textarea value={ship.address} onChange={e => setShip(s => ({ ...s, address: e.target.value }))}
                 rows={3} placeholder="บ้านเลขที่ ถนน แขวง/ตำบล เขต/อำเภอ จังหวัด รหัสไปรษณีย์"
                 style={{ ...inp, resize: "vertical", fontFamily: "inherit", lineHeight: 1.5 }}/>

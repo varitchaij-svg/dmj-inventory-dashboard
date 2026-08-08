@@ -563,6 +563,51 @@ function startServer() {
     await page.close();
   }
 
+  // ── (จ4) ขายออนไลน์: ไม่กรอกจัดส่งเลยก็ต้องบันทึกได้ ──
+  // เจ้าของสั่ง (ส.ค. 2026): "จัดส่งมีให้กรอกแต่ไม่จำเป็นต้องกรอก" — ต่างจาก (จ3) ที่กรอกครบ
+  // เคสนี้จงใจ **ไม่แตะ** การ์ดจัดส่งเลย (ไม่เลือกขนส่ง ไม่กรอกที่อยู่) แล้วเช็คว่าปุ่มบันทึก
+  // ยังกดได้และไม่มี toast เตือนให้กรอกจัดส่งโผล่มาขวาง — unit test เห็นแค่ source ว่า guard
+  // ถูกลบ แต่ไม่เห็นว่า UI จริงยังปล่อยให้กดผ่านได้ (เช่น ปุ่มอาจถูก disabled ไว้อีกจุดที่ไม่เกี่ยวกัน)
+  {
+    const page = await browser.newPage({ viewport: { width: 480, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=saler&tab=pos`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      if (!(await navigateTo(page, 'saler', 'pos'))) { status = 'NAV_FAIL'; note = 'สลับ tab ไม่สำเร็จ'; }
+      else {
+        await page.waitForTimeout(400);
+        const search = page.locator('main input[placeholder*="พิมพ์ชื่อ/รหัส"]').first();
+        await search.fill('VAS001');
+        await page.waitForTimeout(350);
+        await page.locator('main div', { hasText: 'VAS001' }).last().click({ timeout: 3000 }).catch(() => {});
+        await page.waitForTimeout(300);
+        // เฉพาะชื่อลูกค้า + วิธีชำระ — ไม่แตะการ์ด "จัดส่ง" เลยสักช่อง
+        await page.locator('main input[placeholder*="คุณเอ"]').first().fill('คุณไม่ระบุขนส่ง').catch(() => {});
+        await page.locator('main button', { hasText: 'โอนเงิน' }).first().click({ timeout: 3000 }).catch(() => {});
+        await page.waitForTimeout(300);
+
+        const submit = page.locator('main button', { hasText: 'บันทึกการขาย' }).first();
+        const disabled = await submit.isDisabled().catch(() => true);
+        if (disabled) {
+          status = 'BLOCKED_BY_SHIPPING'; note = 'ปุ่มบันทึกถูกปิดทั้งที่ไม่ได้บังคับจัดส่งแล้ว';
+        } else {
+          await submit.click({ timeout: 3000 });
+          await page.waitForTimeout(900);
+          const body = await page.locator('body').innerText().catch(() => '');
+          if (/เลือกวิธีจัดส่งก่อน|ใส่ที่อยู่จัดส่งก่อน/.test(body)) {
+            status = 'SHIP_TOAST_BLOCKED'; note = 'ยังมี toast เตือนให้กรอกจัดส่งอยู่';
+          } else if (body.indexOf('สรุปคำสั่งซื้อ') < 0) {
+            status = 'NOT_SAVED'; note = 'กดบันทึกแล้วไม่เข้าหน้าสรุป (อาจยังถูกบล็อกอยู่)';
+          } else note = 'บันทึกสำเร็จโดยไม่กรอกจัดส่งเลย (ผู้รับ+วิธีชำระยังบังคับตามเดิม)';
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'pos__online-no-shipping.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'ขายออนไลน์ — ไม่กรอกจัดส่งก็บันทึกได้', status, note });
+    await page.close();
+  }
+
   // หน้าหลักต้องเปิดได้ทั้งที่ข้อมูลก้อนใหญ่ยังไม่มา — ถ้าติดจอโหลด ทางด่วนลงเวลาก็เสียครึ่งหนึ่ง
   // (กดโลโก้ตอนเปิดแอปใหม่แล้วเจอสปินเนอร์ = ไปไหนต่อไม่ได้เลย)
   {
