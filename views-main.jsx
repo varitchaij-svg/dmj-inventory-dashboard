@@ -2858,6 +2858,18 @@ const CAT_EMOJI = {
   "Made to Order จัดแบบพิเศษ":"🎁",
 };
 
+// ⭐ หมวดที่ "ใช้ร่วมกันทั้งร้าน" — ไม่มีใครเป็นเจ้าภาพคนเดียว
+// เครื่องมือมอบหมายดาวฝั่ง GAS ข้ามหมวดที่มีคนอ้างสิทธิ์เกิน 1 คนทั้งหมวด (1 สินค้า = 1 คนดูแล)
+// → หมวดพวกนี้จะไม่มี SKU ไหนถูกกดดาวเลย ทั้งที่ทุกคนต้องหยิบ/สั่งของพวกนี้อยู่ทุกวัน
+// ⚠️ ถ้าไม่ยกเว้นไว้ โหมด "⭐ ของฉัน" จะกลืนหมวดพวกนี้หายไปทั้งดุ้น = พนักงานที่เปิดโหมดนี้ค้างไว้
+//    เข้าไม่ถึงของใช้ร่วมกันเลยโดยไม่มีอะไรบอกว่าทำไมหาไม่เจอ
+// ⚠️ เทียบแบบตัดช่องว่าง/ตัวพิมพ์/zero-width ก่อนเสมอ (หลักเดียวกับ productOwnerNormKey_ ฝั่ง .gs)
+//    ชื่อหมวดในชีตเว้นวรรคไม่คงที่ — เทียบตรงตัวแล้วพลาดคือหมวดหายจากเมนูเงียบ ๆ ไม่มี error ให้เห็น
+const SHARED_CATS = ["อุปกรณ์สำนักงาน", "ของตกแต่ง"];
+const sharedCatKey_ = (c) => String(c == null ? "" : c).replace(/[\s\u200B-\u200D\uFEFF]/g, "").toLowerCase();
+const SHARED_CAT_KEYS = SHARED_CATS.map(sharedCatKey_);
+const isSharedCat = (c) => SHARED_CAT_KEYS.indexOf(sharedCatKey_(c)) >= 0;
+
 const COLOR_MAP = {
   // ── base ──────────────────────────────────────────────────────────────────
   "บานเย็น":     { name:"บานเย็น",    hex:"#a82a6a", en:"Magenta" },
@@ -3114,6 +3126,21 @@ function CategoryView({ data, role, onNav }) {
     return s;
   }, [prodOwner.owners, prodOwner.me]);
   const showMineUI = !prodOwner.off && mySkus.size > 0;   // ยังไม่กดดาวเลย = ไม่ต้องมีให้งง
+  // รายชื่อหมวดที่โชว์ใน "เมนูหมวด" (dropdown มือถือ + sidebar จอใหญ่)
+  // โหมด ⭐ ของฉัน → เหลือเฉพาะหมวดที่มีของที่เราดูแล + หมวดที่ใช้ร่วมกัน
+  // ⚠️ ห้ามไปตัด `allCats` แทน — `catColor()` แจกสีตาม "ตำแหน่งใน allCats"
+  //    ตัดรายการทิ้งเมื่อไหร่ สีของทุกหมวดทั้งหน้าจะสลับกันตอนเปิด/ปิดโหมดนี้
+  const navCats = uM(() => {
+    if (!mineOnly) return allCats;
+    const mine = new Set();
+    products.forEach(p => { if (p.cat && mySkus.has(p.sku)) mine.add(p.cat); });
+    return allCats.filter(c => mine.has(c) || isSharedCat(c));
+  }, [allCats, products, mineOnly, mySkus]);
+  // จำนวนที่โชว์ท้ายชื่อหมวดต้องเป็นจำนวนที่ "กดเข้าไปแล้วเห็นจริง" ไม่งั้นเมนูบอก 250
+  // แต่กดเข้าไปเจอ 3 (หมวดที่ใช้ร่วมกันเห็นครบทุกตัว จึงไม่ถูกหักตาม mySkus)
+  const catCount = uC((c) => products.filter(p =>
+    p.cat === c && (!mineOnly || isSharedCat(c) || mySkus.has(p.sku))
+  ).length, [products, mineOnly, mySkus]);
   const [sendingCheck, setSendingCheck] = uS(false);
   const [checkSendOpen, setCheckSendOpen] = uS(false);       // floating button → modal
   const [checkSuppliers, setCheckSuppliers] = uS(new Set()); // ชื่อ supplier ที่ owner เลือก
@@ -3265,7 +3292,8 @@ function CategoryView({ data, role, onNav }) {
       });
       if (reorderFilter) f = f.filter(needsReorder);
       // ⭐ ของฉัน — อยู่ใน applyCommon จึงมีผลทุกโหมด (ค้นหาทั้งระบบ/เลือกร้าน/เลือกหมวด)
-      if (mineOnly) f = f.filter(p => mySkus.has(p.sku));
+      // หมวดที่ใช้ร่วมกัน (อุปกรณ์สำนักงาน/ของตกแต่ง) ผ่านเสมอ — ดูเหตุผลที่ SHARED_CATS
+      if (mineOnly) f = f.filter(p => mySkus.has(p.sku) || isSharedCat(p.cat));
       return f;
     };
     const purchaseSort = (a, b) => (a.qtyStore||0) - (b.qtyStore||0);
@@ -3301,6 +3329,12 @@ function CategoryView({ data, role, onNav }) {
 
   // reset page เมื่อ filter/category/search เปลี่ยน
   uE(() => { setPage(1); }, [active, globalSearch, globalVendor, colorFilter, supplierFilter, deadFilter, newStockFilter, reorderFilter, sortBy, purchasePlanMode, mineOnly]);
+
+  // เปิดโหมด ⭐ ของฉัน ขณะที่ค้างอยู่ในหมวดที่ไม่ใช่ของเรา → เด้งกลับ "ทั้งหมด"
+  // ไม่ทำ = ค้างอยู่ในหมวดที่หายไปจากเมนูแล้ว เห็นรายการว่างเปล่าโดยกดเปลี่ยนหมวดกลับไม่ได้
+  uE(() => {
+    if (mineOnly && active && navCats.indexOf(active) < 0) setActive("");
+  }, [mineOnly, active, navCats]);
 
   // pagination — 20 รายการต่อหน้า
   const PAGE_SIZE = 20;
@@ -3519,7 +3553,9 @@ function CategoryView({ data, role, onNav }) {
               สินค้าที่ฉันดูแล — {fmtN(mySkus.size)} รายการ
             </div>
             <div style={{fontSize:12, color:"var(--muted)", marginTop:2}}>
-              {mineOnly ? "กำลังดูเฉพาะของฉัน · แตะเพื่อดูทั้งหมด" : "แตะเพื่อดูเฉพาะของฉัน"}
+              {mineOnly
+                ? "กำลังดูของฉัน + ของใช้ร่วมกัน (อุปกรณ์สำนักงาน/ของตกแต่ง) · แตะเพื่อดูทั้งหมด"
+                : "แตะเพื่อดูเฉพาะของฉัน"}
             </div>
           </div>
           <span style={{fontSize:18, color:"var(--g-600)", flexShrink:0}}>{mineOnly ? "✕" : "›"}</span>
@@ -3565,6 +3601,7 @@ function CategoryView({ data, role, onNav }) {
           }}>
             <span style={{width:8,height:8,borderRadius:"50%",background:"var(--g-500)",display:"inline-block"}}/>
             พบ {filtered.length} รายการ {active ? `ในหมวด: ${active}` : (mineOnly ? "จากสินค้าที่ฉันดูแล" : "จากทุกหมวดหมู่")}
+            {mineOnly && active && !isSharedCat(active) && <span style={{color:"#a07417"}}>· เฉพาะของฉัน</span>}
             {filtered.length === 0 && <span style={{color:"var(--muted)",fontWeight:400}}>— ลองค้นหาด้วยคำอื่น</span>}
           </div>
         )}
@@ -3612,12 +3649,16 @@ function CategoryView({ data, role, onNav }) {
       {!isGlobalVendor && (
         <div style={{marginBottom:14}}>
           <select
-            value={mineOnly ? "__MINE__" : active}
+            value={mineOnly && !active ? "__MINE__" : active}
             onChange={e => {
               const v = e.target.value;
               // "__MINE__" ไม่ใช่หมวดจริง — แปลงเป็น filter เสริม + active="" (ดูคอมเมนต์ที่ state)
-              setMineOnly(v === "__MINE__");
-              setActive(v === "__MINE__" ? "" : v);
+              // เลือก "หมวด" ระหว่างอยู่ในโหมดของฉัน = เจาะดูหมวดนั้นเฉพาะของฉัน (คงโหมดไว้)
+              // ทางออกจากโหมดคือ "📋 ทั้งหมด" กับการ์ดเหลืองด้านบน — ไม่งั้นเมนูที่เพิ่งกรองให้
+              // จะไร้ความหมาย เพราะกดอันไหนก็เด้งกลับไปเห็นของทุกคน
+              if (v === "__MINE__") { setMineOnly(true); setActive(""); }
+              else if (v === "")    { setMineOnly(false); setActive(""); }
+              else                  { setActive(v); }
               setColorFilter(null); setSupplierFilter(null); setDeadFilter(null); setNewStockFilter(false); setPage(1);
             }}
             style={{
@@ -3629,10 +3670,11 @@ function CategoryView({ data, role, onNav }) {
             }}>
             {showMineUI && <option value="__MINE__">⭐ ของฉัน ({mySkus.size})</option>}
             <option value="">📋 ทั้งหมด ({products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า").length})</option>
-            {allCats.map(c => {
-              const n = products.filter(p => p.cat === c).length;
-              return <option key={c} value={c}>{CAT_EMOJI[c] || "📁"} {c} ({n})</option>;
-            })}
+            {navCats.map(c => (
+              <option key={c} value={c}>
+                {CAT_EMOJI[c] || "📁"} {c} ({catCount(c)}){mineOnly && isSharedCat(c) ? " · ใช้ร่วมกัน" : ""}
+              </option>
+            ))}
           </select>
         </div>
       )}
@@ -3645,11 +3687,11 @@ function CategoryView({ data, role, onNav }) {
                       display: (isGlobalVendor || isGlobalSearch) ? "none" : undefined}}>
           <div style={{fontSize:10,fontWeight:700,color:"var(--muted)",textTransform:"uppercase",
                        letterSpacing:".08em",padding:"6px 12px"}}>
-            หมวดหมู่ ({allCats.length})
+            หมวดหมู่ ({navCats.length}){mineOnly ? " · ของฉัน" : ""}
           </div>
           <div className="cat-list" style={{maxHeight:"calc(100vh - 200px)",overflowY:"auto"}}>
-            {allCats.map(c => {
-              const n = products.filter(p => p.cat === c).length;
+            {navCats.map(c => {
+              const n = catCount(c);
               const cc = catColor(c, allCats);
               const isMto = c === "Made to Order จัดแบบพิเศษ";
               return (
@@ -3851,9 +3893,16 @@ function CategoryView({ data, role, onNav }) {
             <div className="sec-head" style={{margin:"4px 0 14px"}}>
               <div>
                 <div className="sec-title" style={{display:"flex",alignItems:"center",gap:8}}>
-                  <span style={{fontSize:20,lineHeight:1}}>{mineOnly ? "⭐" : active === "" ? "📋" : (CAT_EMOJI[active] || "📁")}</span>
+                  <span style={{fontSize:20,lineHeight:1}}>{mineOnly && !active ? "⭐" : active === "" ? "📋" : (CAT_EMOJI[active] || "📁")}</span>
                   <span style={{width:10,height:10,borderRadius:"50%",background:color,flexShrink:0}}/>
-                  {mineOnly ? "สินค้าที่ฉันดูแล" : active === "" ? "ทั้งหมด" : (isMtoCat ? "งานจัดพิเศษ (MTO)" : active)}
+                  {mineOnly && !active ? "สินค้าที่ฉันดูแล" : active === "" ? "ทั้งหมด" : (isMtoCat ? "งานจัดพิเศษ (MTO)" : active)}
+                  {/* อยู่ในหมวดระหว่างเปิดโหมดของฉัน — ต้องบอกว่ากำลังกรองอยู่ ไม่งั้นเห็นเลขน้อย
+                      กว่าที่ควรแล้วนึกว่าของหาย (หมวดที่ใช้ร่วมกันไม่ได้ถูกกรอง จึงไม่ติดป้าย) */}
+                  {mineOnly && active && !isSharedCat(active) && (
+                    <span style={{fontSize:11, fontWeight:700, color:"#a07417",
+                                  background:"#fef3c7", border:"1px solid #f59e0b",
+                                  borderRadius:999, padding:"1px 8px"}}>⭐ ของฉัน</span>
+                  )}
                   <span style={{fontSize:12, fontWeight:500, color:"var(--muted)"}}>
                     · {filtered.length} รายการ
                   </span>
