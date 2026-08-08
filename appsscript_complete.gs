@@ -9943,7 +9943,12 @@ function disableInappNoti() {
 // คอลัมน์ชีตผู้ดูแลสินค้า (1-indexed): A..F
 var POWN_COL = { SKU:1, STAFF:2, NAME:3, UPDATED:4, STATUS:5, NOTE:6 };
 var POWN_HEADERS = ["sku","staffId","ชื่อผู้ดูแล","updatedAt","status","หมายเหตุ"];
-var POWN_MAX_ROWS = 5000;   // เพดานอ่าน/สแกน — SKU จริงหลักพัน เผื่อไว้ไม่ให้ getRange โตไม่มีเพดาน
+// เพดานอ่าน/สแกน — กัน getRange โตไม่มีเพดาน · จำนวนแถวจริง = จำนวน SKU ที่มีคนดูแล
+// (1 SKU = 1 แถว เขียนทับ) การอ่านจึงถูกจำกัดด้วย getLastRow() อยู่แล้ว ค่านี้เป็นแค่ฝาครอบ
+// ⚠️ เผื่อไว้เยอะกว่าจำนวน SKU มาก ๆ โดยตั้งใจ — ตัน = แถวที่เกินถูก "อ่านข้าม" เงียบ ๆ
+//   (ดาวหายจากเว็บโดยไม่มี error ให้เห็น) ซึ่งเจ็บกว่าการอ่านเผื่อไว้หลายเท่า
+//   ยิ่งหลังใช้ applyProductOwnerAssign() ที่เขียนทีเดียวเป็นพันแถวตามจำนวน SKU
+var POWN_MAX_ROWS = 20000;
 
 // ชื่อที่โชว์บนป้ายดาว — ใช้ชื่อสั้น ไม่ใช่ "ชื่อ (ตำแหน่ง)" แบบ actor
 // (ป้ายอยู่บนแถวสินค้าที่แคบมาก ชื่อเต็มล้นแน่นอน)
@@ -10107,6 +10112,659 @@ function setupProductOwner() {
 function disableProductOwner() {
   PropertiesService.getScriptProperties().setProperty('PRODUCT_OWNER_ENABLED', 'false');
   Logger.log('ปิดระบบผู้ดูแลสินค้าแล้ว — ดาวจะซ่อนหมด ข้อมูลในชีตยังอยู่ครบ');
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ⭐ มอบหมายผู้ดูแลสินค้า "เป็นชุดตามหมวด" (เจ้าของรันเองใน GAS editor)
+// ──────────────────────────────────────────────────────────────────────────
+// ทำไมต้องมี: สินค้าหลักพัน SKU — ให้พนักงานไล่กดดาวทีละตัวบนมือถือไม่ไหว
+//   เจ้าของอยาก "ตั้งต้นไว้ให้ก่อนคร่าว ๆ" ตามหมวดที่แต่ละคนดูแลอยู่จริง
+//   แล้วค่อยให้พนักงานกดปรับเองทีหลัง (ถอด/เปลี่ยนมือได้ตามปกติทุกอย่าง)
+// ⚠️ ยังเป็น "ป้ายบอก" ไม่ใช่สิทธิ์เหมือนเดิม — ไม่มีอะไรถูก gate ด้วยดาวทั้งสิ้น
+//
+// ลำดับที่ตั้งใจให้ทำ (ห้ามข้ามขั้น 1-2 เพราะชื่อหมวดต้องตรงกับ "ชีตจริง" ตัวอักษรต่ออักษร):
+//   1) listProductCategories()     — ดูชื่อหมวดจริง + จำนวน SKU ต่อหมวด
+//   2) แก้ PRODUCT_OWNER_ASSIGN_PLAN_ ข้างล่างให้ชื่อตรงกับที่เห็นในขั้น 1
+//   3) previewProductOwnerAssign() — อ่านอย่างเดียว ไม่เขียนอะไรเลย บอกว่าจะแจกใครกี่ตัว
+//   4) applyProductOwnerAssign()   — เขียนจริง
+//
+// กติกาที่ตั้งใจให้ "ไม่เดาแทนเจ้าของ" (ทุกข้อคือเคสที่พลาดแล้วไม่มี error ให้เห็น):
+//   · หมวดที่มีมากกว่า 1 คนในตาราง → **ข้ามทั้งหมวด** ไม่ยกให้คนที่อยู่บรรทัดบนสุด
+//     (1 สินค้า = 1 คนดูแล · ยกให้คนแรกเงียบ ๆ = อีกหลายคนไม่รู้ว่าทำไมไม่ได้ของ)
+//   · SKU ที่มีคนดูแลอยู่แล้ว → ข้ามเสมอ ไม่ทับดาวที่พนักงานกดเอง
+//     (จะทับจริง ๆ ต้องแก้ PRODUCT_OWNER_ASSIGN_OVERWRITE_ เป็น true ด้วยมือ)
+//   · ชื่อพนักงานในตารางที่หาในชีต "พนักงาน" ไม่เจอ/เจอซ้ำ → **ไม่เขียนอะไรเลยทั้งรอบ**
+//     (เขียนเฉพาะคนที่หาเจอ = ได้ผลลัพธ์ครึ่ง ๆ กลาง ๆ ที่แยกไม่ออกจากผลลัพธ์ที่ถูกต้อง)
+//   · หมวดในตารางที่หา SKU ไม่เจอเลยสักตัว → รายงานออกมาดัง ๆ (= พิมพ์ชื่อไม่ตรงชีต)
+// ══════════════════════════════════════════════════════════════════════════
+
+// ── ตารางมอบหมาย — แก้ตรงนี้ได้เลย ────────────────────────────────────────
+// staffId = รหัสพนักงาน ("ST0001") — **ใส่อันนี้เป็นหลัก** เพราะไม่เปลี่ยนตามที่พนักงาน
+//           เปลี่ยนชื่อ LINE และไม่มีปัญหาอักขระพิเศษ (ตัวเอียง/รูปสระซ้อน) ให้ต้องมาไล่จับคู่
+//           · ดูรหัสของแต่ละคนได้จาก checkProductOwnerStaffNames() ซึ่งพิมพ์บรรทัดพร้อมลอกให้เลย
+// staff   = ชื่อคน — ใช้ 2 กรณี: (ก) ยังไม่ได้ใส่ staffId → ใช้ชื่อจับคู่แทน (แบบเดิม)
+//           (ข) ใส่ staffId แล้ว → เป็นแค่ "ป้ายกำกับให้คนอ่านโค้ดรู้ว่าใคร" ไม่ถูกใช้จับคู่
+// ⚠️ ชื่อที่โชว์บนเว็บไม่ได้มาจากตารางนี้ — มาจากชีต "พนักงาน" เสมอ (คอลัมน์ ชื่อผู้ดูแล ของชีตดาว)
+//    เปลี่ยนตารางมาใช้ staffId จึงไม่กระทบสิ่งที่ผู้ใช้เห็นแม้แต่นิดเดียว
+// categories = ชื่อหมวดตามชีต "ข้อมูลสินค้า" คอลัมน์ F (ดูของจริงด้วย listProductCategories())
+// รหัสมาจากเจ้าของโดยตรง (ส.ค. 2026) · ชื่อที่เขียนคู่ไว้เป็น "ป้ายให้คนอ่านโค้ด" เท่านั้น
+// ไม่ถูกใช้จับคู่ — ยืนยันว่ารหัสตรงกับคนไหนได้ที่ checkProductOwnerStaffNames()
+var PRODUCT_OWNER_ASSIGN_PLAN_ = [
+  { staffId: 'ST0004', staff: 'TunTun',    categories: ['ใบ', 'ใบบูช', 'ใบไม้แขวน', 'กิ่งไม้', 'ต้นไม้', 'อุปกรณ์สำนักงาน'] },
+  { staffId: 'ST0005', staff: 'ประสิทธิ์',  categories: ['Realtouch', 'ดอกไม้', 'บูช', 'อุปกรณ์สำนักงาน', 'ของตกแต่ง'] },
+  { staffId: 'ST0014', staff: 'Ya Ya',     categories: ['แจกันแก้ว', 'กระถางPS', 'เรซิ่นและอื่นๆ', 'อุปกรณ์สำนักงาน', 'ของตกแต่ง'] },
+  // "KYAW แอ KHALANE" = ชื่อคนคนเดียว (เจ้าของยืนยัน ส.ค. 2026) ไม่ใช่ 3 คน
+  { staffId: 'ST0013', staff: 'KYAW แอ KHALANE', categories: ['ดอกไม้', 'ดอกหญ้า', 'กุหลาบหิน', 'ผลไม้ ผัก กิ่งผลไม้', 'ไม้แซมไม้ประดับ', 'สายเลื้อย', 'อุปกรณ์สำนักงาน'] },
+];
+
+// แถวในตาราง → ค่าที่ใช้จับคู่กับชีตพนักงาน · staffId มาก่อนชื่อเสมอ
+// (ใส่ staffId แล้วต่อให้ชื่อในตารางสะกดผิด/ล้าสมัย ก็ยังจับคู่ถูกคน)
+function productOwnerPlanKeyOf_(entry) {
+  var e = entry || {};
+  return String(e.staffId || '').trim() || String(e.staff || '').trim();
+}
+
+// ── หมายเหตุเรื่องหมวดที่ซ้อนกัน (เจ้าของตัดสินใจแล้ว ส.ค. 2026) ──────────
+// "อุปกรณ์สำนักงาน" (ทั้ง 4 คน) · "ของตกแต่ง" (ประสิทธิ์+Ya Ya) · "ดอกไม้" (ประสิทธิ์+KYAW แอ KHALANE)
+// → เจตนาของเจ้าของคือ "ทุกคนต้องดูได้" ซึ่งเป็นจริงอยู่แล้วโดยไม่ต้องทำอะไร:
+//   ดาวเป็นป้ายบอก ไม่ใช่สิทธิ์ ทุกคนเช็ค/สั่ง/โอนสินค้าทุกตัวได้เหมือนเดิมไม่ว่าดาวเป็นของใคร
+// → จึงคง 3 หมวดนี้ไว้ใน "ไม่มอบหมายให้ใคร" ตามกติกาหมวดซ้อน (ไม่โผล่ในชิป "⭐ ของฉัน" ของใคร
+//   แต่ยังอยู่ในลิสต์ปกติของทุกคนครบถ้วน) · ถ้าวันหนึ่งอยากให้ขึ้นลิสต์ "ของฉัน" ของใครสักคน
+//   ให้ลบชื่อหมวดนั้นออกจากลิสต์ของคนที่เหลือ เหลือชื่อเดียว แล้วรัน preview ใหม่
+
+// ── กฎย่อย "ในหมวดเดียวกันแต่คนละคนดูแล" ─────────────────────────────────
+// ที่มา: เจ้าของแจ้งว่าหมวด "ดอกไม้" ทั้ง ST0005 และ ST0013 ดูแลอยู่ **แต่คนละสินค้ากัน**
+//   → แบ่งที่ระดับ "หมวด" ไม่พอ ต้องลงไปถึงตัวสินค้า
+// วิธีแบ่ง: **รหัสนำหน้า SKU (Product Prefix)** ซึ่งตามกติกาของบริษัทคือ "ประเภทสินค้า"
+//   (R=กุหลาบ, OL=มะกอก ฯลฯ — ดูหัวข้อ Business Rule เรื่อง SKU) จึงเป็นตัวแบ่ง
+//   "คนละแบบสินค้า" ที่มีอยู่แล้วในข้อมูล ไม่ต้องไปไล่ระบุทีละ SKU เป็นพัน
+// ดูว่าหมวดหนึ่ง ๆ มี prefix อะไรบ้างกี่ตัว → รัน listCategoryBreakdown()
+//
+// กติกา: กฎย่อยตัดสินก่อนตารางหมวดเสมอ · ยังไม่ใส่กฎ = ทำงานเหมือนเดิมทุกประการ
+// ⚠️ prefix เดียวกันในหมวดเดียวกันมีชื่อเกิน 1 คน → ข้ามเหมือนหมวดซ้อน (ไม่เลือกให้)
+// ⚠️ สินค้าในหมวดที่มีกฎย่อย แต่ prefix ไม่เข้ากฎไหนเลย → **ถอยไปใช้ตารางหมวด**
+//    และถูกรายงานเป็น "ยังไม่มีกฎครอบคลุม" เพื่อให้เจ้าของเห็นว่าตกหล่นอะไรบ้าง
+var PRODUCT_OWNER_ASSIGN_RULES_ = [
+  // ตัวอย่างรูปแบบ (ลบคอมเมนต์ออกแล้วใส่ prefix จริงจาก listCategoryBreakdown()):
+  // { staffId: 'ST0005', category: 'ดอกไม้', prefixes: ['R', 'PH'] },
+  // { staffId: 'ST0013', category: 'ดอกไม้', prefixes: ['DH'] },
+];
+
+// true = ทับดาวที่มีคนดูแลอยู่แล้วด้วย (ค่าปกติ false — งานที่พนักงานกดเองสำคัญกว่าตารางตั้งต้น)
+var PRODUCT_OWNER_ASSIGN_OVERWRITE_ = false;
+
+// รหัสนำหน้า SKU = ตัวอักษรอังกฤษที่นำหน้าตัวเลข ("R01025"→"R", "OL19001"→"OL")
+// ไม่เข้ารูปแบบ (ไม่มีตัวอักษรนำ/ไม่มีตัวเลขตาม) → คืน '' แล้วถูกจัดเป็น "ไม่เข้ารูปแบบ"
+// **ไม่ใช้ suggestNextSku/parseSkuParts ฝั่งเว็บ** — คนละไฟล์ คนละ runtime
+function productOwnerSkuPrefix_(sku) {
+  var m = String(sku == null ? '' : sku).trim().toUpperCase().match(/^([A-Z]+)[0-9]/);
+  return m ? m[1] : '';
+}
+
+// ตารางกฎย่อย → ดัชนี {หมวด → {prefix → [คน]}} · โครงเดียวกับ productOwnerPlanIndex_
+function productOwnerRuleIndex_(rules) {
+  var byCat = {};
+  for (var i = 0; i < (rules || []).length; i++) {
+    var r = rules[i] || {};
+    var who = productOwnerPlanKeyOf_(r);
+    var ck = productOwnerNormKey_(r.category);
+    var pfs = r.prefixes || [];
+    if (!who || !ck) continue;
+    if (!byCat[ck]) byCat[ck] = { label: String(r.category || '').trim(), byPrefix: {} };
+    for (var j = 0; j < pfs.length; j++) {
+      var pk = String(pfs[j] || '').trim().toUpperCase();
+      if (!pk) continue;
+      if (!byCat[ck].byPrefix[pk]) byCat[ck].byPrefix[pk] = [];
+      if (byCat[ck].byPrefix[pk].indexOf(who) < 0) byCat[ck].byPrefix[pk].push(who);
+    }
+  }
+  return { byCat: byCat };
+}
+
+// คีย์เทียบชื่อ (หมวด/คน) — ตัดช่องว่างทั้งหมด + ตัวพิมพ์ + zero-width ที่ติดมาจากการ copy
+// "กระถาง PS" = "กระถางPS" · "Ya Ya" = "YaYa" — ชื่อไทยในชีตเว้นวรรคไม่คงที่ ถ้าเทียบตรง ๆ
+// จะได้ "หาหมวดไม่เจอ" ทั้งที่ตาเห็นว่าเหมือนกัน
+// pure function — เทสต์ eval จากไฟล์นี้ตรง ๆ (tests/product-owner-assign.test.js) ไม่มีสำเนา
+function productOwnerNormKey_(s) {
+  return String(s == null ? '' : s)
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\s+/g, '')
+    .toLowerCase();
+}
+
+// ตารางมอบหมาย → ดัชนี {หมวด → คนที่อ้างสิทธิ์} · หมวดที่มีชื่อเกิน 1 คน = "ซ้อนกัน"
+function productOwnerPlanIndex_(plan) {
+  var byCat = {}, order = [];
+  for (var i = 0; i < (plan || []).length; i++) {
+    var p = plan[i] || {};
+    var staff = productOwnerPlanKeyOf_(p);
+    var cats = p.categories || [];
+    for (var j = 0; j < cats.length; j++) {
+      var label = String(cats[j] || '').trim();
+      var k = productOwnerNormKey_(label);
+      if (!k || !staff) continue;
+      if (!byCat[k]) { byCat[k] = { label: label, staff: [] }; order.push(k); }
+      if (byCat[k].staff.indexOf(staff) < 0) byCat[k].staff.push(staff);
+    }
+  }
+  return { byCat: byCat, order: order };
+}
+
+// คีย์เทียบ "ชื่อคน" — ถอดเครื่องประดับออกก่อนเทียบ
+// ชื่อที่พนักงานตั้งใน LINE มักมีอีโมจิ/ตัวอักษรตกแต่ง/สัญลักษณ์ ("𝓨𝓪 𝓨𝓪 ♡", "แอ 🌸", "・KYAW・")
+// ซึ่งไม่มีทางพิมพ์ให้ตรงด้วยมือได้ → เทียบตรง ๆ = "หาพนักงานไม่เจอ" ทั้งที่เป็นคนเดียวกัน
+// ⚠️ ตั้งใจแยกจาก productOwnerNormKey_ (ที่ใช้กับชื่อหมวด) ไม่ใช้ตัวเดียวกัน:
+//   ชื่อคนเทียบกับ "ชุดปิด" คือรายชื่อในชีตพนักงาน ตัดอักขระแรง ๆ ได้ เดาชนกันก็ยังถูกรายงาน
+//   ว่ากำกวมแล้วหยุด · ส่วนชื่อหมวดเป็นข้อความอิสระที่คนพิมพ์เอง ตัดแรงไปหมวดคนละอันจะยุบมาชนกัน
+// ⚠️ ห้ามใช้ \p{...} (Unicode property escape) — ถ้า runtime ไหนไม่รองรับ จะเป็น syntax error
+//   ทั้งไฟล์ = ทั้งระบบล่ม ไม่ใช่แค่ฟีเจอร์นี้พัง · ใช้ช่วงรหัสอักขระตรง ๆ แทน
+//   และเป็นการ "ตัดของที่ไม่ใช่ตัวอักษร" ไม่ใช่ "เก็บเฉพาะไทย/อังกฤษ" เพราะพนักงานบางคน
+//   ตั้งชื่อด้วยอักษรพม่า/ลาว ซึ่งถ้าใช้ whitelist จะถูกลบจนเหลือค่าว่าง
+function productOwnerStaffKey_(s) {
+  var t = String(s == null ? '' : s);
+  try { t = t.normalize('NFKC'); } catch (e) {}   // 𝓨𝓪𝓨𝓪 → YaYa · ตัวเต็มความกว้าง → ASCII
+  return t
+    .replace(/[\uD800-\uDFFF]/g, '')                                   // อีโมจิ/อักษรตกแต่ง (surrogate pair)
+    .replace(/[\u00A0-\u00BF\u00D7\u00F7\u2000-\u27BF\u2B00-\u2BFF\u2E00-\u2E7F\u3000-\u303F\u30FB\uFE00-\uFE0F\uFEFF\u200B-\u200D]/g, '')  // สัญลักษณ์/ดาว/หัวใจ/zero-width
+    .replace(/[!-\/:-@\[-`{-~]/g, '')                                  // วรรคตอน ASCII
+    .replace(/\s+/g, '')
+    .toLowerCase();
+}
+
+// คีย์ "ถอดรูปสระ/วรรณยุกต์ไทย" — ใช้เป็นชั้นสุดท้ายของการจับคู่ชื่อคนเท่านั้น
+// ที่มา: ชื่อในชีตจริงมีสระ/วรรณยุกต์ซ้อนเกินมาจากการพิมพ์ (เห็นเป็นรูปเกาะซ้อนกันบนตัวอักษร)
+// ซึ่งพิมพ์ตามให้ตรงด้วยมือไม่ได้ และไม่ใช่ "ส่วนต่อท้าย" ชั้นที่ 2 จึงจับไม่ได้
+// ⚠️ ห้ามเอาไปใช้เป็นคีย์หลัก — "ประสิทธิ์"/"ประสิทธิ" จะกลายเป็นคีย์เดียวกัน
+function productOwnerThaiBaseKey_(s) {
+  return productOwnerStaffKey_(s).replace(/[\u0E31\u0E34-\u0E3A\u0E47-\u0E4E]/g, '');
+}
+
+// ชื่อในตาราง → พนักงานจริงในชีต · เทียบได้ทั้ง staffId / displayName / lineDisplayName
+// เอาเฉพาะ status='active' (เหมือนทุกที่ในไฟล์นี้) — คนที่ถูกปิดบัญชีไม่ควรได้ดาวใหม่
+// จับคู่ 2 ชั้น: (1) ตรงเป๊ะหลังถอดเครื่องประดับ (2) ชื่อหนึ่งเป็นส่วนหนึ่งของอีกชื่อ และ
+// เหลือผู้เข้าข่าย "คนเดียว" เท่านั้น — ชั้นที่ 2 ถูกรายงานใน out.loose เสมอเพื่อให้เจ้าของ
+// เห็นว่าจับคู่ให้แบบไหน (เจอมากกว่า 1 คน = กำกวม → หยุด ไม่เดา)
+function productOwnerResolveStaffCore_(staffAll, labels) {
+  var active = [], idx = {};
+  for (var i = 0; i < (staffAll || []).length; i++) {
+    var s = staffAll[i] || {};
+    if (String(s.status || '').trim() !== 'active') continue;
+    active.push(s);
+    var names = [s.staffId, s.displayName, s.lineDisplayName];
+    for (var j = 0; j < names.length; j++) {
+      var k = productOwnerStaffKey_(names[j]);
+      if (!k) continue;
+      if (!idx[k]) idx[k] = [];
+      var dup = false;
+      for (var d = 0; d < idx[k].length; d++) if (String(idx[k][d].staffId) === String(s.staffId)) dup = true;
+      if (!dup) idx[k].push(s);
+    }
+  }
+  var out = { resolved: {}, missing: [], ambiguous: [], loose: [] };
+  for (var n = 0; n < (labels || []).length; n++) {
+    var label = String(labels[n] || '').trim();
+    if (!label) continue;
+    var lk = productOwnerStaffKey_(label);
+    var hit = idx[lk] || [];
+    if (!hit.length && lk) {
+      // ชั้นที่ 2 — ชื่อในชีตมีส่วนเกินที่พิมพ์ตามไม่ได้ ("KYAW แอ KHALANE (คลัง)") หรือกลับกัน
+      var cand = [];
+      for (var a = 0; a < active.length; a++) {
+        var ns = [active[a].staffId, active[a].displayName, active[a].lineDisplayName];
+        var ok = false;
+        for (var b = 0; b < ns.length; b++) {
+          var nk = productOwnerStaffKey_(ns[b]);
+          if (nk && (nk.indexOf(lk) >= 0 || lk.indexOf(nk) >= 0)) ok = true;
+        }
+        if (!ok) continue;
+        var seen = false;
+        for (var c = 0; c < cand.length; c++) if (String(cand[c].staffId) === String(active[a].staffId)) seen = true;
+        if (!seen) cand.push(active[a]);
+      }
+      if (!cand.length) {
+        // ชั้นที่ 3 — ชื่อไทยที่มีสระ/วรรณยุกต์ "เกินมา" กลางชื่อ (เจอจริง: "ประสิทธิ์" ในชีต
+        // มีรูปสระซ้อนเกิน) · ชั้นที่ 2 จับไม่ได้เพราะไม่ใช่ส่วนต่อท้าย ต้องถอดรูปสระออกก่อนเทียบ
+        // ⚠️ ทำเป็นชั้นสุดท้ายเท่านั้น — "ประสิทธิ์" กับ "ประสิทธิ" กลายเป็นคีย์เดียวกัน
+        //   ถ้ามีทั้งคู่ในชีตจะเข้าเส้นทาง ambiguous แล้วหยุด ซึ่งเป็นผลลัพธ์ที่ถูกต้อง
+        var lb = productOwnerThaiBaseKey_(label);
+        for (var a3 = 0; a3 < active.length && lb; a3++) {
+          var ns3 = [active[a3].staffId, active[a3].displayName, active[a3].lineDisplayName];
+          var ok3 = false;
+          for (var b3 = 0; b3 < ns3.length; b3++) {
+            var nb = productOwnerThaiBaseKey_(ns3[b3]);
+            if (nb && nb === lb) ok3 = true;
+          }
+          if (!ok3) continue;
+          var seen3 = false;
+          for (var c3 = 0; c3 < cand.length; c3++) if (String(cand[c3].staffId) === String(active[a3].staffId)) seen3 = true;
+          if (!seen3) cand.push(active[a3]);
+        }
+      }
+      if (cand.length === 1) {
+        hit = cand;
+        out.loose.push({
+          label: label,
+          matchedName: String(cand[0].displayName || cand[0].lineDisplayName || '').trim(),
+          staffId: String(cand[0].staffId || ''),
+        });
+      } else if (cand.length > 1) {
+        hit = cand;   // ตกไปเข้าเส้นทาง ambiguous ข้างล่าง
+      }
+    }
+    if (hit.length === 1) {
+      out.resolved[label] = {
+        staffId: String(hit[0].staffId || ''),
+        name: String(hit[0].displayName || hit[0].lineDisplayName || '').trim(),
+        role: String(hit[0].role || ''),
+      };
+    } else if (hit.length > 1) {
+      out.ambiguous.push({ label: label, staffIds: hit.map(function (x) { return String(x.staffId || ''); }) });
+    } else {
+      out.missing.push(label);
+    }
+  }
+  return out;
+}
+
+// ตัวคิดจริงทั้งหมด — pure ไม่แตะชีตเลย เพื่อให้ preview กับ apply เดินเส้นทางเดียวกันเป๊ะ
+// (ถ้า preview คิดคนละทางกับ apply ตัวเลขที่เจ้าของเห็นตอน preview จะไม่ใช่สิ่งที่เกิดขึ้นจริง)
+function productOwnerAssignPlanCore_(planIndex, products, owners, overwrite, ruleIndex) {
+  var ownUp = {};
+  var keys = Object.keys(owners || {});
+  for (var a = 0; a < keys.length; a++) ownUp[String(keys[a]).trim().toUpperCase()] = owners[keys[a]];
+  var rules = (ruleIndex && ruleIndex.byCat) || {};
+
+  var res = {
+    assign: [], sharedSkip: [], takenSkip: [],
+    perStaff: {}, catHit: {}, unplanned: {}, missingCats: [], caseWarn: [],
+    ruleGap: {}, byRule: 0,
+  };
+  for (var i = 0; i < (products || []).length; i++) {
+    var p = products[i] || {};
+    var sku = String(p.sku || '').trim();
+    if (!sku) continue;
+    var k = productOwnerNormKey_(p.category);
+    var slot = k ? planIndex.byCat[k] : null;
+    var rule = k ? rules[k] : null;
+    var viaRule = false;
+
+    // กฎย่อยระดับ prefix ตัดสินก่อนตารางหมวดเสมอ (ละเอียดกว่า = เจตนาชัดกว่า)
+    if (rule) {
+      var pf = productOwnerSkuPrefix_(sku);
+      var claim = (pf && rule.byPrefix[pf]) || null;
+      if (claim && claim.length === 1) {
+        slot = { label: rule.label + ' · ' + pf, staff: claim.slice() };
+        viaRule = true;
+      } else if (claim && claim.length > 1) {
+        res.sharedSkip.push({ sku: sku, category: rule.label + ' · ' + pf, staff: claim.slice() });
+        continue;
+      } else {
+        // prefix นี้ยังไม่มีกฎครอบคลุม → ถอยไปใช้ตารางหมวด แต่ต้องรายงานให้เห็น
+        // (ไม่งั้นสินค้าที่ตกหล่นจะหายไปในกอง "หมวดซ้อนกัน" โดยไม่มีใครรู้ว่าลืมเขียนกฎ)
+        var gk = rule.label + ' · ' + (pf || '(ไม่เข้ารูปแบบ SKU)');
+        res.ruleGap[gk] = (res.ruleGap[gk] || 0) + 1;
+      }
+    }
+
+    if (!slot) {
+      var lbl = String(p.category || '').trim() || '(ไม่ระบุหมวด)';
+      res.unplanned[lbl] = (res.unplanned[lbl] || 0) + 1;
+      continue;
+    }
+    if (k) res.catHit[k] = (res.catHit[k] || 0) + 1;
+    if (slot.staff.length > 1) {
+      res.sharedSkip.push({ sku: sku, category: slot.label, staff: slot.staff.slice() });
+      continue;
+    }
+    var cur = ownUp[sku.toUpperCase()];
+    if (cur && cur.staffId && !overwrite) {
+      res.takenSkip.push({ sku: sku, category: slot.label, staff: slot.staff[0], current: cur.name || cur.staffId });
+      continue;
+    }
+    // เขียนลงชีตเป็นตัวพิมพ์ใหญ่ให้ตรงกับ setProductOwnerHandler_ · ฝั่งเว็บอ่านดาวด้วย
+    // owners[p.sku] แบบตรงตัว → SKU ที่ในชีตเป็นตัวพิมพ์เล็กจะโชว์ดาวไม่ขึ้น ต้องบอกไว้
+    if (sku !== sku.toUpperCase()) res.caseWarn.push(sku);
+    if (viaRule) res.byRule++;
+    res.assign.push({ sku: sku.toUpperCase(), name: String(p.name || ''), category: slot.label, staff: slot.staff[0] });
+    res.perStaff[slot.staff[0]] = (res.perStaff[slot.staff[0]] || 0) + 1;
+  }
+  for (var n = 0; n < planIndex.order.length; n++) {
+    var key = planIndex.order[n];
+    if (!res.catHit[key]) res.missingCats.push(planIndex.byCat[key].label);
+  }
+  return res;
+}
+
+// อ่านดาวที่มีอยู่ตอนนี้ (ไม่สร้างชีตถ้ายังไม่มี — preview ต้องไม่ทิ้งร่องรอยอะไรเลย)
+function productOwnerReadMap_(ss) {
+  var sh = ss.getSheetByName(SHEET_PRODUCT_OWNER);
+  if (!sh) return {};
+  var last = Math.min(sh.getLastRow(), POWN_MAX_ROWS + 1);
+  if (last < 2) return {};
+  return productOwnerMapFromRows_(sh.getRange(2, 1, last - 1, POWN_HEADERS.length).getValues());
+}
+
+// กางอักขระที่ "มองไม่เห็นด้วยตา" ออกมาเป็นรหัส — อีโมจิ/zero-width/ช่องว่างแปลก ๆ
+// เป็นต้นเหตุที่ชื่อดูเหมือนตรงแต่เทียบไม่ตรง และไล่หาสาเหตุด้วยตาเปล่าไม่ได้เลย
+function productOwnerDescribeName_(s) {
+  var t = String(s == null ? '' : s);
+  var odd = [];
+  for (var i = 0; i < t.length; i++) {
+    var c = t.charCodeAt(i);
+    // ปล่อยผ่าน: ASCII ที่พิมพ์ได้ + ช่วงภาษาไทย · นอกนั้นกางรหัสให้ดู
+    if ((c >= 32 && c <= 126) || (c >= 0x0E00 && c <= 0x0E7F)) continue;
+    odd.push('\\u' + ('0000' + c.toString(16).toUpperCase()).slice(-4));
+  }
+  return odd.length ? t + '   [อักขระพิเศษ: ' + odd.join(' ') + ']' : t;
+}
+
+// ⚠️ ชื่อฟังก์ชันห้ามลงท้าย _ ไม่งั้นไม่โผล่ใน dropdown ของ GAS editor (บทเรียนข้อ 1)
+// ตัวตรวจ "ชื่อในตารางตรงกับชีตพนักงานไหม" — อ่านอย่างเดียว รันได้ตลอดเวลา
+// มีไว้เพราะชื่อ LINE ของพนักงานมักมีอีโมจิ/อักขระพิเศษที่พิมพ์ตามด้วยมือไม่ได้
+function checkProductOwnerStaffNames() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var all = readStaffAll_(ss);
+  var actives = all.filter(function (s) { return String(s.status || '').trim() === 'active'; });
+
+  Logger.log('── รายชื่อพนักงานในชีต "พนักงาน" (ใช้งานอยู่ ' + actives.length + ' คน จากทั้งหมด ' + all.length + ') ──');
+  for (var i = 0; i < all.length; i++) {
+    var s = all[i];
+    var act = String(s.status || '').trim() === 'active';
+    Logger.log('  ' + (act ? '✅' : '⛔ [' + (s.status || 'ไม่ระบุสถานะ') + ']') + ' ' + s.staffId
+      + ' · ชื่อ: ' + productOwnerDescribeName_(s.displayName)
+      + (String(s.lineDisplayName || '') !== String(s.displayName || '')
+        ? ' · ชื่อ LINE: ' + productOwnerDescribeName_(s.lineDisplayName) : '')
+      + ' · ตำแหน่ง: ' + (s.role || '-'));
+  }
+
+  var labels = [];
+  for (var p = 0; p < PRODUCT_OWNER_ASSIGN_PLAN_.length; p++) {
+    var nm = productOwnerPlanKeyOf_(PRODUCT_OWNER_ASSIGN_PLAN_[p]);
+    if (nm && labels.indexOf(nm) < 0) labels.push(nm);
+  }
+  var who = productOwnerResolveStaffCore_(all, labels);
+
+  Logger.log('── ชื่อในตารางมอบหมาย (' + labels.length + ' ชื่อ) ──');
+  for (var n = 0; n < labels.length; n++) {
+    var label = labels[n];
+    var got = who.resolved[label];
+    if (!got) continue;
+    var how = '';
+    for (var l = 0; l < who.loose.length; l++) if (who.loose[l].label === label) how = ' (จับคู่แบบไม่ตรงเป๊ะ — ตรวจว่าถูกคนไหม)';
+    Logger.log('  ✅ "' + label + '" → ' + got.staffId + ' · ' + productOwnerDescribeName_(got.name) + how);
+  }
+  for (var m = 0; m < who.ambiguous.length; m++) {
+    Logger.log('  ⛔ "' + who.ambiguous[m].label + '" ตรงกับหลายคน: ' + who.ambiguous[m].staffIds.join(', ')
+      + ' — ใส่ staffId แทนชื่อในตาราง');
+  }
+  for (var k = 0; k < who.missing.length; k++) {
+    Logger.log('  ⛔ "' + who.missing[k] + '" หาไม่เจอ — ลอกชื่อจากรายการข้างบนมาใส่ในตาราง หรือใส่ staffId แทน');
+  }
+  if (!who.missing.length && !who.ambiguous.length) {
+    Logger.log('✅ ชื่อในตารางตรงกับชีตครบทุกคน' + (who.loose.length ? ' (มี ' + who.loose.length + ' ชื่อที่จับคู่แบบไม่ตรงเป๊ะ — ดูข้างบน)' : ''));
+  } else {
+    Logger.log('⛔ ยังมีชื่อที่ใช้ไม่ได้ — applyProductOwnerAssign() จะไม่เขียนอะไรเลยจนกว่าจะแก้ครบ');
+  }
+
+  // บรรทัดพร้อมลอก — เติม staffId ให้เสร็จ ไม่ต้องพิมพ์ชื่อที่มีอักขระพิเศษเองอีก
+  // (จุดประสงค์ทั้งหมดของการย้ายมาใช้ staffId คือ "เลิกพึ่งการพิมพ์ชื่อให้ตรง")
+  Logger.log('── ลอกบรรทัดข้างล่างไปวางแทนใน PRODUCT_OWNER_ASSIGN_PLAN_ (เติม staffId ให้แล้ว) ──');
+  for (var q = 0; q < PRODUCT_OWNER_ASSIGN_PLAN_.length; q++) {
+    var ent = PRODUCT_OWNER_ASSIGN_PLAN_[q] || {};
+    var hit = who.resolved[productOwnerPlanKeyOf_(ent)];
+    var cats = (ent.categories || []).map(function (c) { return "'" + c + "'"; }).join(', ');
+    Logger.log("  { staffId: '" + (hit ? hit.staffId : '??') + "', staff: '" + (ent.staff || '')
+      + "', categories: [" + cats + '] },' + (hit ? '' : '   // ⛔ ยังหาคนนี้ไม่เจอ'));
+  }
+  return { staff: all, match: who };
+}
+
+// ── ส่องข้างในหมวด: "หมวดเดียวกันแต่คนละสินค้า" แบ่งยังไงดี ────────────────
+// ไม่ใส่ชื่อหมวด = ส่องให้อัตโนมัติทุกหมวดที่มีคนอ้างสิทธิ์เกิน 1 คน (ตัวที่ต้องตัดสินใจพอดี)
+// ⚠️ GAS editor รันฟังก์ชันโดยส่ง argument ไม่ได้ — จึงต้องทำงานได้เมื่อไม่มี argument
+// อ่านอย่างเดียว ไม่แก้อะไร
+function listCategoryBreakdown(catName) {
+  var products = readProducts_();
+  var idx = productOwnerPlanIndex_(PRODUCT_OWNER_ASSIGN_PLAN_);
+
+  var targets = [];
+  if (catName) {
+    targets.push({ key: productOwnerNormKey_(catName), label: String(catName).trim(), staff: [] });
+  } else {
+    for (var o = 0; o < idx.order.length; o++) {
+      var slot = idx.byCat[idx.order[o]];
+      if (slot.staff.length > 1) targets.push({ key: idx.order[o], label: slot.label, staff: slot.staff });
+    }
+  }
+  if (!targets.length) {
+    Logger.log('ไม่มีหมวดที่ถูกอ้างสิทธิ์เกิน 1 คน — ใส่ชื่อหมวดเป็น argument ถ้าอยากดูหมวดใดหมวดหนึ่ง');
+    return [];
+  }
+
+  var out = [];
+  for (var t = 0; t < targets.length; t++) {
+    var tg = targets[t];
+    var inCat = [];
+    for (var i = 0; i < products.length; i++) {
+      if (productOwnerNormKey_(products[i].category) === tg.key) inCat.push(products[i]);
+    }
+    Logger.log('══ "' + tg.label + '" ' + inCat.length + ' SKU'
+      + (tg.staff.length ? ' · อ้างสิทธิ์โดย ' + tg.staff.join(', ') : '') + ' ══');
+    if (!inCat.length) { Logger.log('  (ไม่พบสินค้าในหมวดนี้ — ชื่อหมวดพิมพ์ตรงกับชีตหรือยัง?)'); continue; }
+
+    var byPf = {}, bySup = {};
+    for (var j = 0; j < inCat.length; j++) {
+      var pf = productOwnerSkuPrefix_(inCat[j].sku) || '(ไม่เข้ารูปแบบ SKU)';
+      if (!byPf[pf]) byPf[pf] = { n: 0, eg: [] };
+      byPf[pf].n++;
+      if (byPf[pf].eg.length < 3) byPf[pf].eg.push(inCat[j].sku + ' ' + String(inCat[j].name || '').slice(0, 22));
+      var sup = String(inCat[j].tag || inCat[j].vendor || '').trim() || '(ไม่ระบุ)';
+      bySup[sup] = (bySup[sup] || 0) + 1;
+    }
+    Logger.log('  แบ่งตามรหัสนำหน้า SKU (= ประเภทสินค้า ตามกติกา SKU ของบริษัท):');
+    Object.keys(byPf).sort(function (x, y) { return byPf[y].n - byPf[x].n; }).slice(0, 30)
+      .forEach(function (pf) {
+        Logger.log('    ' + pf + '  ' + byPf[pf].n + ' SKU   เช่น ' + byPf[pf].eg.join(' / '));
+      });
+    var supKeys = Object.keys(bySup).sort(function (x, y) { return bySup[y] - bySup[x]; });
+    if (supKeys.length > 1) {
+      Logger.log('  แบ่งตามซัพพลายเออร์/TAG (ทางเลือกอีกแบบ ถ้าไม่ได้แบ่งตามประเภทสินค้า):');
+      supKeys.slice(0, 15).forEach(function (s) { Logger.log('    ' + s + '  ' + bySup[s] + ' SKU'); });
+    }
+    Logger.log('  💡 เลือก prefix ให้แต่ละคนแล้วเติมใน PRODUCT_OWNER_ASSIGN_RULES_ เช่น');
+    Logger.log("     { staffId: 'ST0005', category: '" + tg.label + "', prefixes: ['"
+      + Object.keys(byPf).slice(0, 2).join("', '") + "'] },");
+    out.push({ category: tg.label, total: inCat.length, byPrefix: byPf });
+  }
+  return out;
+}
+
+// ขั้นที่ 1 — ดูชื่อหมวดจริงในชีตก่อนแก้ตาราง (อ่านอย่างเดียว)
+function listProductCategories() {
+  var products = readProducts_();
+  var counts = {};
+  for (var i = 0; i < products.length; i++) {
+    var lbl = String(products[i].category || '').trim() || '(ไม่ระบุหมวด)';
+    counts[lbl] = (counts[lbl] || 0) + 1;
+  }
+  var idx = productOwnerPlanIndex_(PRODUCT_OWNER_ASSIGN_PLAN_);
+  var rows = Object.keys(counts).map(function (k) { return { label: k, n: counts[k] }; })
+    .sort(function (x, y) { return y.n - x.n; });
+
+  Logger.log('── หมวดสินค้าจริงในชีต: ' + rows.length + ' หมวด · ' + products.length + ' SKU ──');
+  for (var r = 0; r < rows.length; r++) {
+    var slot = idx.byCat[productOwnerNormKey_(rows[r].label)];
+    var who = !slot ? '— ยังไม่มีในตาราง (จะไม่มีคนดูแล)'
+      : slot.staff.length > 1 ? '⚠️ ซ้อนกัน ' + slot.staff.length + ' คน: ' + slot.staff.join(', ')
+      : '→ ' + slot.staff[0];
+    Logger.log('  ' + rows[r].n + ' SKU · "' + rows[r].label + '" ' + who);
+  }
+  var seenKeys = {};
+  Object.keys(counts).forEach(function (c) { seenKeys[productOwnerNormKey_(c)] = true; });
+  var missing = [];
+  for (var m = 0; m < idx.order.length; m++) {
+    if (!seenKeys[idx.order[m]]) missing.push(idx.byCat[idx.order[m]].label);
+  }
+  if (missing.length) {
+    Logger.log('⚠️ หมวดในตารางที่ "ไม่มีในชีตเลย" (พิมพ์ไม่ตรง?): ' + missing.join(' · '));
+  }
+  return rows;
+}
+
+// ขั้นที่ 3 — อ่านอย่างเดียว บอกว่าถ้ากด apply แล้วจะเกิดอะไรขึ้นบ้าง
+function previewProductOwnerAssign() { return productOwnerAssignRun_(false); }
+
+// ขั้นที่ 4 — เขียนจริง
+function applyProductOwnerAssign() { return productOwnerAssignRun_(true); }
+
+function productOwnerAssignRun_(doWrite) {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var plan = PRODUCT_OWNER_ASSIGN_PLAN_;
+  var idx = productOwnerPlanIndex_(plan);
+
+  var labels = [];
+  for (var i = 0; i < plan.length; i++) {
+    var nm = productOwnerPlanKeyOf_(plan[i]);
+    if (nm && labels.indexOf(nm) < 0) labels.push(nm);
+  }
+  // กฎย่อยอ้างคนได้เหมือนตารางหมวด → ต้องเอาชื่อ/รหัสจากทั้งสองที่มาหาให้ครบ
+  // (ลืมข้อนี้ = กฎย่อยชี้ไปที่คนที่ไม่ได้ถูก resolve แล้วพังตอนเขียนจริง)
+  for (var g = 0; g < PRODUCT_OWNER_ASSIGN_RULES_.length; g++) {
+    var rn = productOwnerPlanKeyOf_(PRODUCT_OWNER_ASSIGN_RULES_[g]);
+    if (rn && labels.indexOf(rn) < 0) labels.push(rn);
+  }
+  var who = productOwnerResolveStaffCore_(readStaffAll_(ss), labels);
+  var products = readProducts_();
+  var owners = productOwnerReadMap_(ss);
+  var rules = productOwnerRuleIndex_(PRODUCT_OWNER_ASSIGN_RULES_);
+  var res = productOwnerAssignPlanCore_(idx, products, owners, PRODUCT_OWNER_ASSIGN_OVERWRITE_ === true, rules);
+
+  Logger.log(doWrite ? '── มอบหมายผู้ดูแลสินค้า (เขียนจริง) ──' : '── ทดลองมอบหมาย (ยังไม่เขียนอะไรเลย) ──');
+  Logger.log('สินค้าทั้งหมด ' + products.length + ' SKU · มีคนดูแลอยู่แล้ว ' + Object.keys(owners).length + ' SKU');
+
+  var staffNames = Object.keys(res.perStaff).sort(function (a, b) { return res.perStaff[b] - res.perStaff[a]; });
+  Logger.log('จะมอบหมายรวม ' + res.assign.length + ' SKU'
+    + (res.byRule ? ' (มาจากกฎย่อยระดับ prefix ' + res.byRule + ' SKU)' : '') + ':');
+  for (var s = 0; s < staffNames.length; s++) {
+    var st = who.resolved[staffNames[s]];
+    // โชว์ทั้งรหัสและชื่อจริงจากชีต — ตารางอาจอ้างด้วย staffId ล้วน ('ST0001' เฉย ๆ อ่านไม่ออกว่าใคร)
+    Logger.log('  ' + (st ? st.staffId + ' · ' + st.name : staffNames[s] + ' ⚠️ หาในชีตพนักงานไม่เจอ')
+      + ' → ' + res.perStaff[staffNames[s]] + ' SKU');
+  }
+
+  if (res.sharedSkip.length) {
+    var sharedCats = {};
+    for (var v = 0; v < res.sharedSkip.length; v++) sharedCats[res.sharedSkip[v].category] = (sharedCats[res.sharedSkip[v].category] || 0) + 1;
+    Logger.log('⚠️ ข้าม ' + res.sharedSkip.length + ' SKU เพราะหมวดถูกอ้างสิทธิ์มากกว่า 1 คน '
+      + '(1 สินค้า = 1 คนดูแล ต้องเลือกให้ชัดก่อน):');
+    Object.keys(sharedCats).forEach(function (c) {
+      var slot = idx.byCat[productOwnerNormKey_(c)];
+      Logger.log('   · "' + c + '" ' + sharedCats[c] + ' SKU'
+        + (slot ? ' — ' + slot.staff.join(', ') : ' (จากกฎย่อยที่ prefix เดียวกันมีเกิน 1 คน)'));
+    });
+    if (!PRODUCT_OWNER_ASSIGN_RULES_.length) {
+      Logger.log('   💡 ถ้าหมวดเดียวกันแบ่งกันดูคนละสินค้า → ใช้กฎย่อยระดับ prefix ได้'
+        + ' (รัน listCategoryBreakdown() เพื่อดูว่าหมวดนั้นมี prefix อะไรบ้าง)');
+    }
+  }
+  var gapKeys = Object.keys(res.ruleGap);
+  if (gapKeys.length) {
+    var gapTotal = 0;
+    for (var gg = 0; gg < gapKeys.length; gg++) gapTotal += res.ruleGap[gapKeys[gg]];
+    Logger.log('⚠️ ในหมวดที่มีกฎย่อย มี ' + gapTotal + ' SKU ที่ prefix ยังไม่มีกฎครอบคลุม '
+      + '(ตกไปใช้ตารางหมวดแทน) — เติมกฎให้ครบถ้าอยากให้มีคนดูแล:');
+    gapKeys.sort(function (x, y) { return res.ruleGap[y] - res.ruleGap[x]; })
+      .slice(0, 20).forEach(function (gk) { Logger.log('   · ' + gk + ' ' + res.ruleGap[gk] + ' SKU'); });
+  }
+  if (res.takenSkip.length) Logger.log('ข้าม ' + res.takenSkip.length + ' SKU ที่มีคนดูแลอยู่แล้ว (ไม่ทับงานที่พนักงานกดเอง)');
+  if (res.missingCats.length) Logger.log('⚠️ หมวดในตารางที่ไม่เจอสินค้าเลยสักตัว (พิมพ์ไม่ตรงชีต?): ' + res.missingCats.join(' · '));
+  if (res.caseWarn.length) Logger.log('⚠️ SKU ที่ในชีตไม่ใช่ตัวพิมพ์ใหญ่ ' + res.caseWarn.length + ' ตัว — ดาวอาจไม่ขึ้นบนเว็บ: ' + res.caseWarn.slice(0, 10).join(', '));
+
+  var unplannedKeys = Object.keys(res.unplanned).sort(function (a, b) { return res.unplanned[b] - res.unplanned[a]; });
+  var unplannedTotal = 0;
+  for (var u = 0; u < unplannedKeys.length; u++) unplannedTotal += res.unplanned[unplannedKeys[u]];
+  if (unplannedTotal) {
+    Logger.log('หมวดที่ยังไม่มีใครดูแล ' + unplannedTotal + ' SKU (' + unplannedKeys.length + ' หมวด): '
+      + unplannedKeys.slice(0, 15).map(function (k) { return k + ' ' + res.unplanned[k]; }).join(' · '));
+  }
+
+  if (who.loose.length) {
+    Logger.log('ℹ️ จับคู่ชื่อแบบ "ไม่ตรงเป๊ะ" (ชื่อในชีตมีอักขระพิเศษ/ส่วนเกิน) — ตรวจว่าถูกคนไหม:');
+    who.loose.forEach(function (x) {
+      Logger.log('   · ตาราง "' + x.label + '" → ชีต "' + x.matchedName + '" (' + x.staffId + ')');
+    });
+  }
+  if (who.missing.length || who.ambiguous.length) {
+    if (who.missing.length) Logger.log('⛔ ชื่อพนักงานที่หาในชีต "พนักงาน" ไม่เจอ (หรือ status ไม่ใช่ active): ' + who.missing.join(' · '));
+    who.ambiguous.forEach(function (x) { Logger.log('⛔ ชื่อ "' + x.label + '" ตรงกับพนักงานหลายคน: ' + x.staffIds.join(', ') + ' — ใส่ staffId แทนชื่อในตาราง'); });
+    Logger.log('⛔ ยังไม่เขียนอะไรทั้งสิ้น — แก้ชื่อในตารางให้ครบก่อนแล้วรันใหม่');
+    return { ok: false, blocked: 'staff', preview: res, staff: who };
+  }
+  if (!doWrite) {
+    var projected = Object.keys(owners).length + res.assign.length;
+    if (projected > POWN_MAX_ROWS) {
+      Logger.log('⛔ หลังมอบหมายชีตจะมีราว ' + projected + ' แถว เกินเพดาน POWN_MAX_ROWS='
+        + POWN_MAX_ROWS + ' → ต้องเพิ่มค่าคงที่นั้นก่อน ไม่งั้นดาวส่วนที่เกินจะไม่ขึ้นเว็บ');
+    }
+    Logger.log('── จบการทดลอง (ไม่ได้เขียนอะไร) · พอใจแล้วรัน applyProductOwnerAssign() ──');
+    return { ok: true, preview: res, staff: who };
+  }
+  if (!res.assign.length) {
+    Logger.log('ไม่มีอะไรต้องเขียน');
+    return { ok: true, written: 0, preview: res, staff: who };
+  }
+
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); } catch (e) {
+    Logger.log('⛔ ระบบกำลังยุ่ง (มีคนกดดาวอยู่?) — ลองใหม่อีกครั้ง');
+    return { ok: false, blocked: 'lock' };
+  }
+  try {
+    var sh = productOwnerSheet_(ss);
+    var last = sh.getLastRow();
+    var rowBySku = {};
+    if (last >= 2) {
+      var vals = sh.getRange(2, 1, last - 1, POWN_HEADERS.length).getValues();
+      for (var q = 0; q < vals.length; q++) {
+        var key = String(vals[q][POWN_COL.SKU - 1] || '').trim().toUpperCase();
+        if (key) rowBySku[key] = q + 2;   // แถวล่างสุดชนะ — ตรงกับ productOwnerMapFromRows_
+      }
+    }
+    var now = new Date();
+    var appends = [], updates = [];
+    for (var w = 0; w < res.assign.length; w++) {
+      var it = res.assign[w];
+      var stf = who.resolved[it.staff];
+      var row = [it.sku, stf.staffId, stf.name, now, 'active', 'มอบหมายตามหมวด "' + it.category + '"'];
+      var at = rowBySku[it.sku];
+      if (at) updates.push({ row: at, values: row });
+      else appends.push(row);
+    }
+    for (var x = 0; x < updates.length; x++) {
+      sh.getRange(updates[x].row, 1, 1, POWN_HEADERS.length).setValues([updates[x].values]);
+    }
+    if (appends.length) {
+      sh.getRange(sh.getLastRow() + 1, 1, appends.length, POWN_HEADERS.length).setValues(appends);
+    }
+
+    // 1 แถวสรุปต่อการรัน 1 ครั้ง — ไม่ใช่ 1 แถวต่อ SKU (Audit Log เป็นแหล่งของแท็บ
+    // "ผลงานพนักงาน" ซึ่งอ่านทั้งเดือน · เพิ่มทีเป็นพันแถวจากการตั้งค่าครั้งเดียวไม่คุ้ม)
+    writeAuditLog_('เจ้าของ (GAS editor)', 'setProductOwner', 'bulk',
+      auditDetail_({ วิธี: 'มอบหมายตามหมวด', เขียนใหม่: appends.length, ทับแถวเดิม: updates.length, ต่อคน: res.perStaff }));
+
+    Logger.log('✅ เขียนแล้ว ' + res.assign.length + ' SKU (เพิ่มแถวใหม่ ' + appends.length + ' · อัปเดตแถวเดิม ' + updates.length + ')');
+    var rowsAfter = sh.getLastRow() - 1;
+    if (rowsAfter > POWN_MAX_ROWS) {
+      Logger.log('⛔ ชีตมี ' + rowsAfter + ' แถว เกินเพดาน POWN_MAX_ROWS=' + POWN_MAX_ROWS
+        + ' → ดาวของแถวที่เกินจะไม่ถูกอ่านขึ้นเว็บเลย ต้องเพิ่มค่าคงที่นี้ก่อน');
+    }
+    if (!productOwnerEnabled_()) {
+      Logger.log('⚠️ ระบบผู้ดูแลสินค้ายังปิดอยู่ — ดาวจะยังไม่โผล่จนกว่าจะรัน setupProductOwner()');
+    }
+    return { ok: true, written: res.assign.length, appended: appends.length, updated: updates.length, preview: res, staff: who };
+  } finally {
+    try { lock.releaseLock(); } catch (e) {}
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════
