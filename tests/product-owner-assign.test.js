@@ -28,11 +28,12 @@ function grab(re) {
 const M = new Function([
   grab(/function productOwnerNormKey_\(s\) \{[\s\S]*?\n\}/),
   grab(/function productOwnerStaffKey_\(s\) \{[\s\S]*?\n\}/),
+  grab(/function productOwnerThaiBaseKey_\(s\) \{[\s\S]*?\n\}/),
   grab(/function productOwnerPlanIndex_\(plan\) \{[\s\S]*?\n\}/),
   grab(/function productOwnerResolveStaffCore_\(staffAll, labels\) \{[\s\S]*?\n\}/),
   grab(/function productOwnerAssignPlanCore_\(planIndex, products, owners, overwrite\) \{[\s\S]*?\n\}/),
   grab(/function productOwnerDescribeName_\(s\) \{[\s\S]*?\n\}/),
-  'return { productOwnerNormKey_, productOwnerStaffKey_, productOwnerPlanIndex_, productOwnerResolveStaffCore_, productOwnerAssignPlanCore_, productOwnerDescribeName_ };',
+  'return { productOwnerNormKey_, productOwnerStaffKey_, productOwnerThaiBaseKey_, productOwnerPlanIndex_, productOwnerResolveStaffCore_, productOwnerAssignPlanCore_, productOwnerDescribeName_ };',
 ].join('\n'))();
 
 const { productOwnerNormKey_: normKey, productOwnerStaffKey_: staffKey, productOwnerPlanIndex_: planIndex,
@@ -220,6 +221,56 @@ describe('productOwnerResolveStaffCore_ — ชื่อในตาราง �
     const r = resolveStaff(both, ['TunTun']);
     expect(r.resolved['TunTun'].staffId).toBe('ST0001');
     expect(r.loose).toEqual([]);
+  });
+
+  // ── ชื่อจริงของร้าน (จากหน้า "ผลงานพนักงาน" ส.ค. 2026) ────────────────
+  // "KYAW แอ KHALANE" เป็นตัวอักษร Mathematical Italic · "ประสิทธิ์" มีรูปสระซ้อนเกิน
+  const ITALIC = '\u{1D43E}\u{1D44C}\u{1D434}\u{1D44A} แอ \u{1D43E}\u{1D43B}\u{1D434}\u{1D43F}\u{1D434}\u{1D441}\u{1D438}';
+  const PLAN_NAMES = ['TunTun', 'ประสิทธิ์', 'Ya Ya', 'KYAW แอ KHALANE'];
+  const shopSheet = (prasit) => [
+    staff('ST0001', 'TunTun'), staff('ST0002', prasit), staff('ST0003', ITALIC), staff('ST0004', 'Ya Ya'),
+  ];
+
+  it('ชื่อ Mathematical Italic ("𝐾𝑌𝐴𝑊 แอ 𝐾𝐻𝐴𝐿𝐴𝑁𝐸") ตรงเป๊ะกับที่พิมพ์ธรรมดา — ไม่ต้องเตือน', () => {
+    const r = resolveStaff([staff('ST0003', ITALIC)], ['KYAW แอ KHALANE']);
+    expect(r.resolved['KYAW แอ KHALANE'].staffId).toBe('ST0003');
+    expect(r.loose).toEqual([]);
+  });
+
+  it('รูปสระ/วรรณยุกต์เกิน "ท้ายชื่อ" → จับคู่ได้ (ชั้นที่ 2)', () => {
+    const r = resolveStaff(shopSheet('ประสิทธิ์ี้'), PLAN_NAMES);
+    expect(Object.keys(r.resolved)).toHaveLength(4);
+    expect(r.loose.map(x => x.label)).toEqual(['ประสิทธิ์']);
+  });
+
+  it('รูปสระ/วรรณยุกต์เกิน "กลางชื่อ" → ต้องยังจับคู่ได้ (ชั้นที่ 3 ถอดรูปสระ)', () => {
+    const r = resolveStaff(shopSheet('ประสี้ทธิ์'), PLAN_NAMES);
+    expect(r.missing).toEqual([]);
+    expect(r.resolved['ประสิทธิ์'].staffId).toBe('ST0002');
+    expect(r.loose.map(x => x.label)).toEqual(['ประสิทธิ์']);
+  });
+
+  it('ชื่อในชีตสะกดตรงอยู่แล้ว → ครบ 4 คนโดยไม่มีการเตือนเลย', () => {
+    const r = resolveStaff(shopSheet('ประสิทธิ์'), PLAN_NAMES);
+    expect(Object.keys(r.resolved)).toHaveLength(4);
+    expect(r.loose).toEqual([]);
+    expect(r.missing).toEqual([]);
+  });
+
+  it('⚠️ ชั้นที่ 3 ต้องไม่กลืน "ประสิทธิ์" กับ "ประสิทธิ" ให้เป็นคนเดียวกัน — มี 2 คนต้องหยุด', () => {
+    const r = resolveStaff([staff('ST0002', 'ประสิทธิ์'), staff('ST0008', 'ประสิทธิ')], ['ประสิทธี']);
+    expect(r.resolved['ประสิทธี']).toBeUndefined();
+    expect(r.ambiguous[0].staffIds.sort()).toEqual(['ST0002', 'ST0008']);
+  });
+
+  it('ตารางมอบหมายจริงในโค้ดใช้ชื่อที่จับคู่กับชีตของร้านได้ครบทุกคน', () => {
+    const names = [...GS.matchAll(/\{ staff: '([^']+)',\s*categories:/g)].map(m => m[1]);
+    expect(names).toHaveLength(4);
+    const r = resolveStaff(shopSheet('ประสิทธิ์ี้'), names);
+    expect(r.missing, 'ชื่อในตารางที่จับคู่กับชีตไม่ได้: ' + r.missing.join(', ')).toEqual([]);
+    expect(r.ambiguous).toEqual([]);
+    // ต้องเป็นคนละคนครบ 4 — ชื่อ 2 อันไปตกที่คนเดียวกันคือดาวหายไปทั้งกอง
+    expect(new Set(names.map(n => r.resolved[n].staffId)).size).toBe(4);
   });
 });
 
@@ -428,8 +479,23 @@ describe('การเชื่อมต่อ (meta) — จุดที่ล�
     expect(core).not.toContain('productOwnerStaffKey_');
   });
 
-  it('ห้ามใช้ \\p{...} ใน productOwnerStaffKey_ — runtime ที่ไม่รองรับ = syntax error ทั้งไฟล์', () => {
-    const fn = grab(/function productOwnerStaffKey_\(s\) \{[\s\S]*?\n^\}/m);
-    expect(fn).not.toContain('\\p{');
+  it('ห้ามใช้ \\p{...} ในตัวเทียบชื่อ — runtime ที่ไม่รองรับ = syntax error ทั้งไฟล์', () => {
+    [/function productOwnerStaffKey_\(s\) \{[\s\S]*?\n^\}/m,
+      /function productOwnerThaiBaseKey_\(s\) \{[\s\S]*?\n^\}/m].forEach((re) => {
+      expect(grab(re)).not.toContain('\\p{');
+    });
+  });
+
+  it('ถอดรูปสระไทยเป็น "ชั้นสุดท้าย" เท่านั้น — ใช้เป็นคีย์หลักเมื่อไหร่ชื่อคล้ายกันจะกลืนกัน', () => {
+    const resolver = grab(/function productOwnerResolveStaffCore_\(staffAll, labels\) \{[\s\S]*?\n^\}/m);
+    const iIndex = resolver.indexOf('idx[k].push');            // สร้างดัชนีหลัก
+    const iBase = resolver.indexOf('productOwnerThaiBaseKey_');
+    expect(iIndex).toBeGreaterThan(0);
+    expect(iBase).toBeGreaterThan(iIndex);
+    // ดัชนีหลักต้องสร้างจาก staffKey ไม่ใช่ตัวถอดรูปสระ
+    expect(resolver.slice(0, iIndex)).toContain('productOwnerStaffKey_');
+    expect(resolver.slice(0, iIndex)).not.toContain('productOwnerThaiBaseKey_');
+    // และผลจากชั้นนี้ต้องถูกรายงานว่า loose เหมือนชั้นที่ 2 (มีทางเดียวคือ cand → loose)
+    expect(resolver.indexOf('out.loose.push')).toBeGreaterThan(iBase);
   });
 });

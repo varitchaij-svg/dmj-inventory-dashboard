@@ -10211,6 +10211,14 @@ function productOwnerStaffKey_(s) {
     .toLowerCase();
 }
 
+// คีย์ "ถอดรูปสระ/วรรณยุกต์ไทย" — ใช้เป็นชั้นสุดท้ายของการจับคู่ชื่อคนเท่านั้น
+// ที่มา: ชื่อในชีตจริงมีสระ/วรรณยุกต์ซ้อนเกินมาจากการพิมพ์ (เห็นเป็นรูปเกาะซ้อนกันบนตัวอักษร)
+// ซึ่งพิมพ์ตามให้ตรงด้วยมือไม่ได้ และไม่ใช่ "ส่วนต่อท้าย" ชั้นที่ 2 จึงจับไม่ได้
+// ⚠️ ห้ามเอาไปใช้เป็นคีย์หลัก — "ประสิทธิ์"/"ประสิทธิ" จะกลายเป็นคีย์เดียวกัน
+function productOwnerThaiBaseKey_(s) {
+  return productOwnerStaffKey_(s).replace(/[\u0E31\u0E34-\u0E3A\u0E47-\u0E4E]/g, '');
+}
+
 // ชื่อในตาราง → พนักงานจริงในชีต · เทียบได้ทั้ง staffId / displayName / lineDisplayName
 // เอาเฉพาะ status='active' (เหมือนทุกที่ในไฟล์นี้) — คนที่ถูกปิดบัญชีไม่ควรได้ดาวใหม่
 // จับคู่ 2 ชั้น: (1) ตรงเป๊ะหลังถอดเครื่องประดับ (2) ชื่อหนึ่งเป็นส่วนหนึ่งของอีกชื่อ และ
@@ -10252,6 +10260,25 @@ function productOwnerResolveStaffCore_(staffAll, labels) {
         var seen = false;
         for (var c = 0; c < cand.length; c++) if (String(cand[c].staffId) === String(active[a].staffId)) seen = true;
         if (!seen) cand.push(active[a]);
+      }
+      if (!cand.length) {
+        // ชั้นที่ 3 — ชื่อไทยที่มีสระ/วรรณยุกต์ "เกินมา" กลางชื่อ (เจอจริง: "ประสิทธิ์" ในชีต
+        // มีรูปสระซ้อนเกิน) · ชั้นที่ 2 จับไม่ได้เพราะไม่ใช่ส่วนต่อท้าย ต้องถอดรูปสระออกก่อนเทียบ
+        // ⚠️ ทำเป็นชั้นสุดท้ายเท่านั้น — "ประสิทธิ์" กับ "ประสิทธิ" กลายเป็นคีย์เดียวกัน
+        //   ถ้ามีทั้งคู่ในชีตจะเข้าเส้นทาง ambiguous แล้วหยุด ซึ่งเป็นผลลัพธ์ที่ถูกต้อง
+        var lb = productOwnerThaiBaseKey_(label);
+        for (var a3 = 0; a3 < active.length && lb; a3++) {
+          var ns3 = [active[a3].staffId, active[a3].displayName, active[a3].lineDisplayName];
+          var ok3 = false;
+          for (var b3 = 0; b3 < ns3.length; b3++) {
+            var nb = productOwnerThaiBaseKey_(ns3[b3]);
+            if (nb && nb === lb) ok3 = true;
+          }
+          if (!ok3) continue;
+          var seen3 = false;
+          for (var c3 = 0; c3 < cand.length; c3++) if (String(cand[c3].staffId) === String(active[a3].staffId)) seen3 = true;
+          if (!seen3) cand.push(active[a3]);
+        }
       }
       if (cand.length === 1) {
         hit = cand;
