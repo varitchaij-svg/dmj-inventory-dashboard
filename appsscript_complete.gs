@@ -10190,16 +10190,41 @@ function productOwnerPlanIndex_(plan) {
   return { byCat: byCat, order: order };
 }
 
+// คีย์เทียบ "ชื่อคน" — ถอดเครื่องประดับออกก่อนเทียบ
+// ชื่อที่พนักงานตั้งใน LINE มักมีอีโมจิ/ตัวอักษรตกแต่ง/สัญลักษณ์ ("𝓨𝓪 𝓨𝓪 ♡", "แอ 🌸", "・KYAW・")
+// ซึ่งไม่มีทางพิมพ์ให้ตรงด้วยมือได้ → เทียบตรง ๆ = "หาพนักงานไม่เจอ" ทั้งที่เป็นคนเดียวกัน
+// ⚠️ ตั้งใจแยกจาก productOwnerNormKey_ (ที่ใช้กับชื่อหมวด) ไม่ใช้ตัวเดียวกัน:
+//   ชื่อคนเทียบกับ "ชุดปิด" คือรายชื่อในชีตพนักงาน ตัดอักขระแรง ๆ ได้ เดาชนกันก็ยังถูกรายงาน
+//   ว่ากำกวมแล้วหยุด · ส่วนชื่อหมวดเป็นข้อความอิสระที่คนพิมพ์เอง ตัดแรงไปหมวดคนละอันจะยุบมาชนกัน
+// ⚠️ ห้ามใช้ \p{...} (Unicode property escape) — ถ้า runtime ไหนไม่รองรับ จะเป็น syntax error
+//   ทั้งไฟล์ = ทั้งระบบล่ม ไม่ใช่แค่ฟีเจอร์นี้พัง · ใช้ช่วงรหัสอักขระตรง ๆ แทน
+//   และเป็นการ "ตัดของที่ไม่ใช่ตัวอักษร" ไม่ใช่ "เก็บเฉพาะไทย/อังกฤษ" เพราะพนักงานบางคน
+//   ตั้งชื่อด้วยอักษรพม่า/ลาว ซึ่งถ้าใช้ whitelist จะถูกลบจนเหลือค่าว่าง
+function productOwnerStaffKey_(s) {
+  var t = String(s == null ? '' : s);
+  try { t = t.normalize('NFKC'); } catch (e) {}   // 𝓨𝓪𝓨𝓪 → YaYa · ตัวเต็มความกว้าง → ASCII
+  return t
+    .replace(/[\uD800-\uDFFF]/g, '')                                   // อีโมจิ/อักษรตกแต่ง (surrogate pair)
+    .replace(/[\u00A0-\u00BF\u00D7\u00F7\u2000-\u27BF\u2B00-\u2BFF\u2E00-\u2E7F\u3000-\u303F\u30FB\uFE00-\uFE0F\uFEFF\u200B-\u200D]/g, '')  // สัญลักษณ์/ดาว/หัวใจ/zero-width
+    .replace(/[!-\/:-@\[-`{-~]/g, '')                                  // วรรคตอน ASCII
+    .replace(/\s+/g, '')
+    .toLowerCase();
+}
+
 // ชื่อในตาราง → พนักงานจริงในชีต · เทียบได้ทั้ง staffId / displayName / lineDisplayName
 // เอาเฉพาะ status='active' (เหมือนทุกที่ในไฟล์นี้) — คนที่ถูกปิดบัญชีไม่ควรได้ดาวใหม่
+// จับคู่ 2 ชั้น: (1) ตรงเป๊ะหลังถอดเครื่องประดับ (2) ชื่อหนึ่งเป็นส่วนหนึ่งของอีกชื่อ และ
+// เหลือผู้เข้าข่าย "คนเดียว" เท่านั้น — ชั้นที่ 2 ถูกรายงานใน out.loose เสมอเพื่อให้เจ้าของ
+// เห็นว่าจับคู่ให้แบบไหน (เจอมากกว่า 1 คน = กำกวม → หยุด ไม่เดา)
 function productOwnerResolveStaffCore_(staffAll, labels) {
-  var idx = {};
+  var active = [], idx = {};
   for (var i = 0; i < (staffAll || []).length; i++) {
     var s = staffAll[i] || {};
     if (String(s.status || '').trim() !== 'active') continue;
+    active.push(s);
     var names = [s.staffId, s.displayName, s.lineDisplayName];
     for (var j = 0; j < names.length; j++) {
-      var k = productOwnerNormKey_(names[j]);
+      var k = productOwnerStaffKey_(names[j]);
       if (!k) continue;
       if (!idx[k]) idx[k] = [];
       var dup = false;
@@ -10207,11 +10232,38 @@ function productOwnerResolveStaffCore_(staffAll, labels) {
       if (!dup) idx[k].push(s);
     }
   }
-  var out = { resolved: {}, missing: [], ambiguous: [] };
+  var out = { resolved: {}, missing: [], ambiguous: [], loose: [] };
   for (var n = 0; n < (labels || []).length; n++) {
     var label = String(labels[n] || '').trim();
     if (!label) continue;
-    var hit = idx[productOwnerNormKey_(label)] || [];
+    var lk = productOwnerStaffKey_(label);
+    var hit = idx[lk] || [];
+    if (!hit.length && lk) {
+      // ชั้นที่ 2 — ชื่อในชีตมีส่วนเกินที่พิมพ์ตามไม่ได้ ("KYAW แอ KHALANE (คลัง)") หรือกลับกัน
+      var cand = [];
+      for (var a = 0; a < active.length; a++) {
+        var ns = [active[a].staffId, active[a].displayName, active[a].lineDisplayName];
+        var ok = false;
+        for (var b = 0; b < ns.length; b++) {
+          var nk = productOwnerStaffKey_(ns[b]);
+          if (nk && (nk.indexOf(lk) >= 0 || lk.indexOf(nk) >= 0)) ok = true;
+        }
+        if (!ok) continue;
+        var seen = false;
+        for (var c = 0; c < cand.length; c++) if (String(cand[c].staffId) === String(active[a].staffId)) seen = true;
+        if (!seen) cand.push(active[a]);
+      }
+      if (cand.length === 1) {
+        hit = cand;
+        out.loose.push({
+          label: label,
+          matchedName: String(cand[0].displayName || cand[0].lineDisplayName || '').trim(),
+          staffId: String(cand[0].staffId || ''),
+        });
+      } else if (cand.length > 1) {
+        hit = cand;   // ตกไปเข้าเส้นทาง ambiguous ข้างล่าง
+      }
+    }
     if (hit.length === 1) {
       out.resolved[label] = {
         staffId: String(hit[0].staffId || ''),
@@ -10281,7 +10333,70 @@ function productOwnerReadMap_(ss) {
   return productOwnerMapFromRows_(sh.getRange(2, 1, last - 1, POWN_HEADERS.length).getValues());
 }
 
+// กางอักขระที่ "มองไม่เห็นด้วยตา" ออกมาเป็นรหัส — อีโมจิ/zero-width/ช่องว่างแปลก ๆ
+// เป็นต้นเหตุที่ชื่อดูเหมือนตรงแต่เทียบไม่ตรง และไล่หาสาเหตุด้วยตาเปล่าไม่ได้เลย
+function productOwnerDescribeName_(s) {
+  var t = String(s == null ? '' : s);
+  var odd = [];
+  for (var i = 0; i < t.length; i++) {
+    var c = t.charCodeAt(i);
+    // ปล่อยผ่าน: ASCII ที่พิมพ์ได้ + ช่วงภาษาไทย · นอกนั้นกางรหัสให้ดู
+    if ((c >= 32 && c <= 126) || (c >= 0x0E00 && c <= 0x0E7F)) continue;
+    odd.push('\\u' + ('0000' + c.toString(16).toUpperCase()).slice(-4));
+  }
+  return odd.length ? t + '   [อักขระพิเศษ: ' + odd.join(' ') + ']' : t;
+}
+
 // ⚠️ ชื่อฟังก์ชันห้ามลงท้าย _ ไม่งั้นไม่โผล่ใน dropdown ของ GAS editor (บทเรียนข้อ 1)
+// ตัวตรวจ "ชื่อในตารางตรงกับชีตพนักงานไหม" — อ่านอย่างเดียว รันได้ตลอดเวลา
+// มีไว้เพราะชื่อ LINE ของพนักงานมักมีอีโมจิ/อักขระพิเศษที่พิมพ์ตามด้วยมือไม่ได้
+function checkProductOwnerStaffNames() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var all = readStaffAll_(ss);
+  var actives = all.filter(function (s) { return String(s.status || '').trim() === 'active'; });
+
+  Logger.log('── รายชื่อพนักงานในชีต "พนักงาน" (ใช้งานอยู่ ' + actives.length + ' คน จากทั้งหมด ' + all.length + ') ──');
+  for (var i = 0; i < all.length; i++) {
+    var s = all[i];
+    var act = String(s.status || '').trim() === 'active';
+    Logger.log('  ' + (act ? '✅' : '⛔ [' + (s.status || 'ไม่ระบุสถานะ') + ']') + ' ' + s.staffId
+      + ' · ชื่อ: ' + productOwnerDescribeName_(s.displayName)
+      + (String(s.lineDisplayName || '') !== String(s.displayName || '')
+        ? ' · ชื่อ LINE: ' + productOwnerDescribeName_(s.lineDisplayName) : '')
+      + ' · ตำแหน่ง: ' + (s.role || '-'));
+  }
+
+  var labels = [];
+  for (var p = 0; p < PRODUCT_OWNER_ASSIGN_PLAN_.length; p++) {
+    var nm = String((PRODUCT_OWNER_ASSIGN_PLAN_[p] || {}).staff || '').trim();
+    if (nm && labels.indexOf(nm) < 0) labels.push(nm);
+  }
+  var who = productOwnerResolveStaffCore_(all, labels);
+
+  Logger.log('── ชื่อในตารางมอบหมาย (' + labels.length + ' ชื่อ) ──');
+  for (var n = 0; n < labels.length; n++) {
+    var label = labels[n];
+    var got = who.resolved[label];
+    if (!got) continue;
+    var how = '';
+    for (var l = 0; l < who.loose.length; l++) if (who.loose[l].label === label) how = ' (จับคู่แบบไม่ตรงเป๊ะ — ตรวจว่าถูกคนไหม)';
+    Logger.log('  ✅ "' + label + '" → ' + got.staffId + ' · ' + productOwnerDescribeName_(got.name) + how);
+  }
+  for (var m = 0; m < who.ambiguous.length; m++) {
+    Logger.log('  ⛔ "' + who.ambiguous[m].label + '" ตรงกับหลายคน: ' + who.ambiguous[m].staffIds.join(', ')
+      + ' — ใส่ staffId แทนชื่อในตาราง');
+  }
+  for (var k = 0; k < who.missing.length; k++) {
+    Logger.log('  ⛔ "' + who.missing[k] + '" หาไม่เจอ — ลอกชื่อจากรายการข้างบนมาใส่ในตาราง หรือใส่ staffId แทน');
+  }
+  if (!who.missing.length && !who.ambiguous.length) {
+    Logger.log('✅ ชื่อในตารางตรงกับชีตครบทุกคน' + (who.loose.length ? ' (มี ' + who.loose.length + ' ชื่อที่จับคู่แบบไม่ตรงเป๊ะ — ดูข้างบน)' : ''));
+  } else {
+    Logger.log('⛔ ยังมีชื่อที่ใช้ไม่ได้ — applyProductOwnerAssign() จะไม่เขียนอะไรเลยจนกว่าจะแก้ครบ');
+  }
+  return { staff: all, match: who };
+}
+
 // ขั้นที่ 1 — ดูชื่อหมวดจริงในชีตก่อนแก้ตาราง (อ่านอย่างเดียว)
 function listProductCategories() {
   var products = readProducts_();
@@ -10368,6 +10483,12 @@ function productOwnerAssignRun_(doWrite) {
       + unplannedKeys.slice(0, 15).map(function (k) { return k + ' ' + res.unplanned[k]; }).join(' · '));
   }
 
+  if (who.loose.length) {
+    Logger.log('ℹ️ จับคู่ชื่อแบบ "ไม่ตรงเป๊ะ" (ชื่อในชีตมีอักขระพิเศษ/ส่วนเกิน) — ตรวจว่าถูกคนไหม:');
+    who.loose.forEach(function (x) {
+      Logger.log('   · ตาราง "' + x.label + '" → ชีต "' + x.matchedName + '" (' + x.staffId + ')');
+    });
+  }
   if (who.missing.length || who.ambiguous.length) {
     if (who.missing.length) Logger.log('⛔ ชื่อพนักงานที่หาในชีต "พนักงาน" ไม่เจอ (หรือ status ไม่ใช่ active): ' + who.missing.join(' · '));
     who.ambiguous.forEach(function (x) { Logger.log('⛔ ชื่อ "' + x.label + '" ตรงกับพนักงานหลายคน: ' + x.staffIds.join(', ') + ' — ใส่ staffId แทนชื่อในตาราง'); });
