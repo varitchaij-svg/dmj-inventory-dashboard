@@ -127,7 +127,9 @@ describe('หน้าหลักต้องเปิดได้ทั้ง�
   });
 
   it('HomeMenuView ไม่อ่าน data.* เลยแม้แต่ที่เดียว', () => {
-    const view = APP.match(/function HomeMenuView\([\s\S]*?\n\}/)[0];
+    // ตัดคอมเมนต์ก่อนตรวจ — คอมเมนต์อธิบายที่มาของตัวเลขย่อมอ้างชื่อ data.xxx ได้ตามปกติ
+    // สิ่งที่ต้องกันคือ "โค้ดจริงไปอ่าน data" (= จอขาวตอน payload ยังไม่มา) ไม่ใช่คำในคำอธิบาย
+    const view = APP.match(/function HomeMenuView\([\s\S]*?\n\}/)[0].replace(/\/\/[^\n]*/g, '');
     expect(view).not.toMatch(/\bdata\./);
   });
 });
@@ -144,8 +146,81 @@ describe('เลขเตือนบนการ์ด — ต้องเป�
   });
 
   it('ชิปงานค้างด้านบนโชว์เฉพาะเมนูที่ role นั้นเปิดได้จริง', () => {
-    // กดแล้วต้องไปถึงเสมอ — role ที่ไม่มีแท็บ transfers ต้องไม่เห็นชิป "ของรอรับ"
+    // กดแล้วต้องไปถึงเสมอ → ต้องเช็คที่ "ปลายทาง" (q.to) ไม่ใช่ที่มาของเลข (q.badge)
+    // เช็คผิดฝั่ง = ชิปโผล่ให้ role ที่กดแล้วไปไม่ถึง / หายจาก role ที่ไปถึงได้จริง
     const view = APP.match(/function HomeMenuView\([\s\S]*?\n\}/)[0];
-    expect(view).toMatch(/allIds\.has\(q\.id\)/);
+    expect(view).toMatch(/allIds\.has\(q\.to\)/);
+    expect(view).not.toMatch(/allIds\.has\(q\.badge\)/);
+  });
+});
+
+describe('ชิปงานค้าง — กดตามเลขแล้วต้องเจอสิ่งที่เลขนั้นพูดถึง', () => {
+  // eval รายการชิปจริงจาก HomeMenuView (ไม่ copy — ไม่งั้น drift แล้วเทสต์ยังเขียว)
+  const quick = (() => {
+    const view = APP.match(/function HomeMenuView\([\s\S]*?\n\}/)[0];
+    const m = view.match(/const quick = \[([\s\S]*?)\]\s*\.filter/);
+    if (!m) throw new Error('หารายการชิปใน HomeMenuView ไม่เจอ');
+    // eslint-disable-next-line no-new-func
+    return new Function(`return [${m[1]}];`)();
+  })();
+
+  it('ทุกชิปมีทั้ง "เลขมาจากไหน" (badge) และ "กดแล้วไปไหน" (to)', () => {
+    for (const q of quick) {
+      expect(q.badge, JSON.stringify(q)).toBeTruthy();
+      expect(q.to, JSON.stringify(q)).toBeTruthy();
+    }
+  });
+
+  it('ปลายทางของทุกชิปเป็นแท็บที่มีอยู่จริงใน TABS', () => {
+    const ids = new Set(TABS.map((t) => t.id));
+    const ghosts = quick.filter((q) => !ids.has(q.to)).map((q) => q.to);
+    expect(ghosts).toEqual([]);
+  });
+
+  it('"ของรอรับ" พาไปแท็บรายการสั่งของ ตัวกรอง "ส่งแล้ว" — ไม่ใช่แท็บโอน/ปรับ/ยกมา', () => {
+    // เลขนับจาก data.shipments ที่ยังไม่มีใครกดรับ · หน้าที่ทำงานกับของกองนั้นคือ
+    // orders + filter "shipped" เท่านั้น · พาไป transfers = กดตามเลขแล้วไม่เจออะไร
+    const q = quick.find((x) => x.badge === 'transfers');
+    expect(q, 'ไม่มีชิป "ของรอรับ" แล้ว').toBeTruthy();
+    expect(q.to).toBe('orders');
+    expect(q.view).toBe('shipped');
+  });
+
+  it('ชิปส่ง view ปลายทางไปด้วยตอนกด (ไม่ใช่ nav เปล่า ๆ)', () => {
+    const view = APP.match(/function HomeMenuView\([\s\S]*?\n\}/)[0];
+    expect(view).toMatch(/onNav\(q\.to,\s*q\.view\)/);
+  });
+});
+
+describe('คำขอ "เปิดแท็บนี้ในมุมมองไหน" — ต้องต่อกันครบสาย', () => {
+  const UI = readFileSync(join(ROOT, 'ui.jsx'), 'utf8');
+  const ANALYTICS = readFileSync(join(ROOT, 'views-analytics.jsx'), 'utf8');
+
+  it('ตั้งคำขอก่อนสลับแท็บเสมอ (สลับก่อน = view ปลายทาง mount ไปแล้วตอนที่ยังไม่มีคำขอ)', () => {
+    const call = APP.match(/<HomeMenuView[\s\S]*?\/>/)[0];
+    expect(call).toMatch(/dmjRequestView\(t, view\);\s*handleSetTab\(t\)/);
+  });
+
+  it('ใช้คีย์คนละก้อนกับคำขอ focus (ก้อนเดียวกัน = ตัวที่หยิบก่อนล้างทิ้ง อีกตัวไม่เคยเห็น)', () => {
+    expect(UI).toMatch(/window\._dmjViewReq/);
+    expect(UI).toMatch(/window\._dmjFocusReq/);
+    // useViewIntent ต้องไม่ไปอ่าน/ล้างก้อนของ focus — ตัดคอมเมนต์ก่อนตรวจ
+    // (ไม่งั้นไปจับคำในคอมเมนต์ที่อ้างถึงกันตามปกติ แล้วแดงทั้งที่โค้ดถูก)
+    const hook = UI.match(/function useViewIntent\([\s\S]*?\n\}/)[0].replace(/\/\/[^\n]*/g, '');
+    expect(hook).not.toMatch(/_dmjFocusReq/);
+  });
+
+  it('คำขอถูกใช้ครั้งเดียวแล้วเคลียร์ (ไม่เคลียร์ = ตัวกรองถูกตั้งใหม่ทุกครั้งที่ re-render)', () => {
+    const hook = UI.match(/function useViewIntent\([\s\S]*?\n\}/)[0];
+    expect(hook).toMatch(/window\._dmjViewReq = null;/);
+  });
+
+  it('แท็บ orders รับคำขอนี้จริง (ไม่มีตัวรับ = ตั้งคำขอไปแล้วไม่มีใครอ่าน)', () => {
+    expect(ANALYTICS).toMatch(/useViewIntent\("orders",/);
+    expect(ANALYTICS).toMatch(/if \(v === "shipped"\) setFilter\("shipped"\)/);
+  });
+
+  it('useViewIntent ถูก export ออกจาก ui.jsx (ไม่งั้น view อื่นเรียกไม่ได้)', () => {
+    expect(UI).toMatch(/dmjRequestView, useViewIntent,/);
   });
 });

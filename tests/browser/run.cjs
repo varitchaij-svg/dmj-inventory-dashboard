@@ -465,6 +465,43 @@ function startServer() {
     await page.close();
   }
 
+  // ── (จ2) ชิป "🚚 ของรอรับ" ต้องพาไปถึง "สิ่งที่เลขนั้นพูดถึง" ──
+  // เลขบนชิปนับของที่ส่งแล้วยังไม่มีใครกดรับ ซึ่งเห็นได้ที่แท็บ "รายการสั่งของ" ตัวกรอง
+  // "🚚 ส่งแล้ว" เท่านั้น · เดิมพาไปแท็บ "โอน/ปรับ/ยกมา" = กดตามเลขแล้วไม่เจออะไร
+  // ⚠️ unit test เห็นได้แค่ว่า "โค้ดตั้งคำขอ" — ว่าคำขอนั้นถูกอ่านทันก่อน view mount จริงไหม
+  //    ต้องรันบนเบราว์เซอร์เท่านั้น (นี่คือจุดที่ลำดับ dmjRequestView→handleSetTab สำคัญ)
+  // frontstore อยู่ในลิสต์ด้วยเพราะเดิมไม่เห็นชิปนี้เลย (ไม่มีแท็บ transfers) ทั้งที่การรับของ
+  // คืองานหลักของเขา — การเช็คสิทธิ์ย้ายมาดูที่ "ปลายทาง" แล้ว
+  for (const chipRole of ['owner', 'frontstore']) {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=${chipRole}&tab=stock`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      await page.locator('.brand').first().click({ timeout: 2000 });
+      await page.waitForTimeout(400);
+      const chip = page.locator('.home-quick-chip', { hasText: 'ของรอรับ' });
+      if (!(await chip.count())) {
+        status = 'NO_CHIP'; note = 'ไม่มีชิป "ของรอรับ" บนหน้าหลัก';
+      } else {
+        await chip.first().click({ timeout: 2000 });
+        await page.waitForTimeout(600);
+        if (!(await page.locator('main[data-screen-label="orders"]').count())) {
+          status = 'CHIP_NAV_FAIL'; note = 'กดชิปแล้วไม่เข้าแท็บรายการสั่งของ';
+        } else {
+          const act = (await page.locator('.seg-btn.active').first().innerText().catch(() => '')) || '';
+          if (!/ส่งแล้ว/.test(act)) {
+            status = 'CHIP_FILTER_FAIL';
+            note = `เข้าแท็บถูกแต่ตัวกรองเป็น "${act.trim()}" (ต้องเป็น "ส่งแล้ว")`;
+          } else note = 'กดชิปแล้วเข้ารายการสั่งของ + ตัวกรอง "ส่งแล้ว" ถูกตั้งให้เอง';
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, `homechip__${chipRole}.png`) }).catch(() => {});
+    results.push({ role: 'interact', tab: `ชิปของรอรับ (${chipRole})`, status, note });
+    await page.close();
+  }
+
   // หน้าหลักต้องเปิดได้ทั้งที่ข้อมูลก้อนใหญ่ยังไม่มา — ถ้าติดจอโหลด ทางด่วนลงเวลาก็เสียครึ่งหนึ่ง
   // (กดโลโก้ตอนเปิดแอปใหม่แล้วเจอสปินเนอร์ = ไปไหนต่อไม่ได้เลย)
   {

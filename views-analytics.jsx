@@ -4566,6 +4566,11 @@ function OrderListView({ data, role }) {
     dmjScrollToSku("data-order-sku", sku, (found) => { if (!found) setFocusMiss(sku); });
   });
 
+  // ชิป "🚚 ของรอรับ" บนหน้าหลัก → เปิดแท็บนี้แล้วตั้งตัวกรองเป็น "ส่งแล้ว" ให้เลย
+  // (เลขบนชิปนับของที่ส่งแล้วยังไม่มีใครกดรับ ซึ่งเห็นได้ที่ตัวกรองนี้ตัวเดียว)
+  // ⚠️ ต้องอยู่เหนือ early-return ด้านล่าง — hook ห้ามอยู่หลังทางออกของ component
+  useViewIntent("orders", (v) => { if (v === "shipped") setFilter("shipped"); });
+
   // orders ว่าง แต่มี shipments → ดึง tab "ส่งแล้ว" มาไว้หน้าแรก ให้ saler/FS ยืนยันรับได้
   if (!orders.length && !hasShipments) return (
     <div style={{padding:"60px 20px",textAlign:"center"}}>

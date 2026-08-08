@@ -115,10 +115,18 @@ function splitTabLabel(label) {
 function HomeMenuView({ groups, roleLabel, staffName, tabBadge, onNav }) {
   const allIds = new Set(groups.flatMap(g => g.items.map(t => t.id)));
   // ชิปงานค้างด้านบน — โชว์เฉพาะเมนูที่ role นี้เปิดได้จริง (กดแล้วต้องไปถึงเสมอ)
+  //
+  // ⚠️ **"เลขมาจากไหน" (`badge`) กับ "กดแล้วไปไหน" (`to`) เป็นคนละอย่าง ห้ามยุบเป็นคีย์เดียว**
+  //    "ของรอรับ" นับจาก data.shipments ที่ยังไม่มีใครกดรับ (สูตรเดียวกับ badge ของแท็บ
+  //    transfers) แต่ **หน้าที่ทำงานกับของกองนั้นจริง ๆ คือแท็บ "รายการสั่งของ" ตัวกรอง
+  //    "🚚 ส่งแล้ว"** — เดิมพาไปแท็บ transfers ซึ่งกดตามเลขไปแล้วไม่เจอสิ่งที่เลขนั้นพูดถึง
+  // ⚠️ เงื่อนไข `allIds.has` ต้องเช็คที่ **ปลายทาง (`to`)** ไม่ใช่ที่มาของเลข —
+  //    เช็คผิดฝั่ง = ชิปโผล่ให้ role ที่กดแล้วไปไม่ถึง (หรือซ่อนจาก role ที่ไปถึงได้จริง
+  //    อย่างหน้าร้าน ซึ่งการรับของคืองานหลักของเขาเลย)
   const quick = [
-    { id: "orders",    emoji: "📋", label: "ออเดอร์ต้องจัด" },
-    { id: "transfers", emoji: "🚚", label: "ของรอรับ" },
-  ].filter(q => allIds.has(q.id) && tabBadge(q.id) > 0);
+    { badge: "orders",    to: "orders", emoji: "📋", label: "ออเดอร์ต้องจัด" },
+    { badge: "transfers", to: "orders", view: "shipped", emoji: "🚚", label: "ของรอรับ" },
+  ].filter(q => allIds.has(q.to) && tabBadge(q.badge) > 0);
 
   return (
     <div>
@@ -134,10 +142,10 @@ function HomeMenuView({ groups, roleLabel, staffName, tabBadge, onNav }) {
       {quick.length > 0 && (
         <div className="home-quick">
           {quick.map(q => (
-            <button key={q.id} className="home-quick-chip" onClick={() => onNav(q.id)}>
+            <button key={q.badge} className="home-quick-chip" onClick={() => onNav(q.to, q.view)}>
               <span style={{fontSize:18,lineHeight:1}}>{q.emoji}</span>
               <span>{q.label}</span>
-              <span className="home-quick-n">{tabBadge(q.id)}</span>
+              <span className="home-quick-n">{tabBadge(q.badge)}</span>
             </button>
           ))}
         </div>
@@ -2282,7 +2290,12 @@ function App() {
                                             roleLabel={ROLE_LABELS[role] || role}
                                             staffName={staff ? staff.name : ""}
                                             tabBadge={tabBadge}
-                                            onNav={handleSetTab}/></ErrorBoundary>}
+                                            /* ⚠️ ตั้งคำขอ "เปิดมุมมองไหน" **ก่อน** สลับแท็บเสมอ —
+                                               สลับก่อน = view ปลายทาง mount ไปแล้วตอนที่ยังไม่มี
+                                               คำขอให้อ่าน แล้วไม่มีใครยิงซ้ำให้อีก (หลักเดียวกับ
+                                               dmjRequestFocus ของกระดิ่งแจ้งเตือน)
+                                               การ์ดธรรมดาส่ง view = undefined → ล้างคำขอค้างทิ้ง */
+                                            onNav={(t, view) => { dmjRequestView(t, view); handleSetTab(t); }}/></ErrorBoundary>}
         {activeTab === "overview"     && <ErrorBoundary key="overview"><OverviewView data={data} range={range} setRange={setRange} role={viewRole}/></ErrorBoundary>}
         {activeTab === "whhome"       && <ErrorBoundary key="whhome"><WarehouseHomeView data={data} onNav={handleSetTab}/></ErrorBoundary>}
         {activeTab === "categories"   && <ErrorBoundary key="categories"><CategoryView data={data} role={viewRole} onNav={handleSetTab}/></ErrorBoundary>}
