@@ -153,11 +153,53 @@ describe('การเชื่อมต่อ (meta)', () => {
   it('"ของฉัน" เป็น filter เสริม ไม่ใช่หมวด — ไม่ไปทับ logic ของ active', () => {
     // ถ้าเผลอเก็บเป็นค่าใน active ("__MINE__") จะไปโผล่เป็นชื่อหมวดในป้าย/สถิติ/ตัวกรอง
     // อีกหลายสิบจุดที่อ่าน active อยู่ → ต้องแปลงเป็น mineOnly + active="" เสมอ
-    expect(VM).toContain('setMineOnly(v === "__MINE__");');
-    expect(VM).toContain('setActive(v === "__MINE__" ? "" : v);');
+    expect(VM).toContain('if (v === "__MINE__") { setMineOnly(true); setActive(""); }');
+    // "__MINE__" ต้องไม่มีทางถูก setActive — ไม่งั้นชื่อหมวดปลอมจะไหลไปทุกจุดที่อ่าน active
+    expect(VM).not.toMatch(/setActive\(\s*(v|"__MINE__")\s*\)\s*;[^\n]*\/\/\s*MINE/);
+    expect(VM).toContain('value={mineOnly && !active ? "__MINE__" : active}');
     // กรองใน applyCommon จุดเดียว → มีผลทุกโหมด (ค้นหาทั้งระบบ / เลือกร้าน / เลือกหมวด)
     const applyCommon = VM.match(/const applyCommon = \(arr\) => \{[\s\S]*?\n    \};/)[0];
-    expect(applyCommon).toContain('if (mineOnly) f = f.filter(p => mySkus.has(p.sku));');
+    expect(applyCommon).toContain('if (mineOnly) f = f.filter(p => mySkus.has(p.sku) || isSharedCat(p.cat));');
+  });
+
+  it('โหมด "ของฉัน" เหลือเฉพาะหมวดของตัวเอง + หมวดที่ใช้ร่วมกัน (อุปกรณ์สำนักงาน/ของตกแต่ง)', () => {
+    // เจ้าของสั่ง ส.ค. 2026: กด "ของฉัน" แล้วเมนูหมวดต้องสั้นลงเหลือของที่เกี่ยวกับตัวเองจริง ๆ
+    expect(VM).toContain('const SHARED_CATS = ["อุปกรณ์สำนักงาน", "ของตกแต่ง"];');
+
+    // ⚠️ หมวดที่ใช้ร่วมกันต้อง "ผ่านตัวกรอง" ด้วย ไม่ใช่แค่โผล่ในเมนู — ไม่งั้นกดเข้าไปเจอหน้าว่าง
+    //    (ไม่มีใครถูกกดดาวในหมวดพวกนี้ เพราะตัวมอบหมายฝั่ง .gs ข้ามหมวดที่มีคนอ้างสิทธิ์เกิน 1 คน)
+    const gasPlan = GS.match(/var PRODUCT_OWNER_ASSIGN_PLAN_ = \[[\s\S]*?\n\];/)[0];
+    for (const cat of ['อุปกรณ์สำนักงาน', 'ของตกแต่ง']) {
+      const claimants = gasPlan.split('\n').filter(l => l.includes(cat)).length;
+      expect(claimants, `${cat} ต้องเป็นหมวดที่มีคนอ้างสิทธิ์เกิน 1 คน (จึงถูกข้าม = ไม่มีดาว)`)
+        .toBeGreaterThan(1);
+    }
+
+    // เทียบชื่อหมวดแบบตัดช่องว่าง — ชื่อในชีตเว้นวรรคไม่คงที่ (บทเรียนเดียวกับ productOwnerNormKey_)
+    const isShared = new Function(
+      VM.match(/const SHARED_CATS = \[[\s\S]*?const isSharedCat = [^\n]*\n/)[0] + '; return isSharedCat;'
+    )();
+    expect(isShared('อุปกรณ์สำนักงาน')).toBe(true);
+    expect(isShared('ของ ตกแต่ง')).toBe(true);      // เว้นวรรคเกิน
+    expect(isShared('ของตกแต่ง ')).toBe(true);      // ช่องว่างท้าย
+    expect(isShared('ดอกไม้')).toBe(false);
+    expect(isShared(null)).toBe(false);
+
+    // เมนูหมวดทั้ง 2 ที่ (dropdown มือถือ + sidebar จอใหญ่) ต้องใช้ navCats ไม่ใช่ allCats
+    const catView = VM.match(/function CategoryView[\s\S]*?\n\}\n/)[0];
+    expect(catView.match(/\{navCats\.map\(/g) || [], 'เมนูหมวดยังใช้ allCats อยู่')
+      .toHaveLength(2);
+    // ⚠️ allCats ห้ามถูกตัด — catColor() แจกสีตามตำแหน่งใน allCats
+    expect(catView).toContain('const cc = catColor(c, allCats);');
+    // ค้างอยู่ในหมวดที่ไม่ใช่ของเราแล้วเปิดโหมด → ต้องเด้งกลับ ไม่ปล่อยให้จอว่างโดยกดกลับไม่ได้
+    expect(catView).toContain('if (mineOnly && active && navCats.indexOf(active) < 0) setActive("");');
+  });
+
+  it('เช็คหน้าร้าน: โหมด "⭐ ของฉัน" กรองชิปหมวดแบบเดียวกับหน้า "สินค้า & สั่ง"', () => {
+    // 2 หน้านี้ toggle ดาวตัวเดียวกัน — พฤติกรรมต่างกันเมื่อไหร่ผู้ใช้จะเชื่อหน้าไหนไม่ถูก
+    expect(VA).toContain('return baseFiltered.filter(function(p) { return mySkus.has(p.sku) || isSharedCat(p.cat); });');
+    expect(VA).toContain('{navCats.map(c => {');
+    expect(VA).toContain('if (showMode === "mine" && activeCat !== "ALL" && navCats.indexOf(activeCat) < 0) setActiveCat("ALL");');
   });
 
   it('ดาวเป็นป้ายบอก ไม่ใช่สิทธิ์ — ปุ่มเช็ค/สั่ง/โอนไม่ถูก disable ตามเจ้าของ', () => {

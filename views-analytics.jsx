@@ -336,9 +336,26 @@ function FrontStoreView({ data, role, checkRequest }) {
         return parseInt(v) !== (p.qtyStore ?? 0);
       });
     if (showMode === "reorder") return baseFiltered.filter(function(p) { return (p.qtyStore||0) <= 12 && (p.qtyWH||0) > 0; });
-    if (showMode === "mine") return baseFiltered.filter(function(p) { return mySkus.has(p.sku); });
+    // หมวดที่ใช้ร่วมกัน (อุปกรณ์สำนักงาน/ของตกแต่ง) ผ่านเสมอ — ดูเหตุผลที่ SHARED_CATS (views-main.jsx)
+    if (showMode === "mine")
+      return baseFiltered.filter(function(p) { return mySkus.has(p.sku) || isSharedCat(p.cat); });
     return baseFiltered;
   }, [baseFiltered, showMode, checkedQtys, mySkus]);
+
+  // ชิปหมวดในโหมด "⭐ ของฉัน" — เหลือเฉพาะหมวดที่มีของที่เราดูแล + หมวดที่ใช้ร่วมกัน
+  // (คนเช็คหน้าร้านเลื่อนหาหมวดของตัวเองในแถบชิปยาว ๆ ไม่ไหว)
+  const navCats = uM(function () {
+    if (showMode !== "mine") return allCats;
+    var mine = new Set();
+    products.forEach(function (p) { if (p.cat && mySkus.has(p.sku)) mine.add(p.cat); });
+    return allCats.filter(function (c) { return mine.has(c) || isSharedCat(c); });
+  }, [allCats, products, showMode, mySkus]);
+  // จำนวนบนชิปต้องเป็นจำนวนที่กดเข้าไปแล้วเห็นจริง ไม่งั้นชิปบอก 250 แต่ในลิสต์มี 3
+  const catCount = uC(function (c) {
+    return products.filter(function (p) {
+      return p.cat === c && (showMode !== "mine" || isSharedCat(c) || mySkus.has(p.sku));
+    }).length;
+  }, [products, showMode, mySkus]);
 
   const counts = uM(() => {
     let unchecked = 0, mismatch = 0;
@@ -480,6 +497,11 @@ function FrontStoreView({ data, role, checkRequest }) {
   const PAGE_SIZE = 20;
   const [page, setPage] = uS(0);
   uE(() => { setPage(0); }, [activeCat, supplierFilter, search, showMode]);
+  // สลับมาโหมด ⭐ ของฉัน ขณะค้างอยู่ในหมวดที่ไม่ใช่ของเรา → เด้งกลับ "ทั้งหมด"
+  // ไม่ทำ = ชิปหมวดที่เลือกไว้หายไปจากแถบแล้ว แต่ตัวกรองยังทำงานอยู่ → จอว่างโดยกดกลับไม่ได้
+  uE(() => {
+    if (showMode === "mine" && activeCat !== "ALL" && navCats.indexOf(activeCat) < 0) setActiveCat("ALL");
+  }, [showMode, activeCat, navCats]);
   // ปิด purchase mode เมื่อ role ไม่ใช่ owner
   uE(() => { if (role !== "owner") setPurchaseMode(false); }, [role]);
 
@@ -587,8 +609,8 @@ function FrontStoreView({ data, role, checkRequest }) {
             style={{flexShrink:0}}>
             🗂️ ทั้งหมด ({products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า").length})
           </button>
-          {allCats.map(c => {
-            const cnt = products.filter(p => p.cat === c).length;
+          {navCats.map(c => {
+            const cnt = catCount(c);
             const uncheckedInCat = counts.perCat[c] || 0;
             const emoji = CAT_EMOJI[c] || "";
             return (
