@@ -5985,6 +5985,10 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
     return m;
   }, [products]);
 
+  // สินค้าที่กำลังเปิดดูรายละเอียด — เก็บเป็น sku ไม่ใช่ object (กันค้างค่าเก่าเมื่อ products อัปเดต)
+  const [detailSku, setDetailSku] = uS(null);
+  const detailProduct = uM(() => (detailSku ? (productMap[detailSku] || null) : null), [detailSku, productMap]);
+
   // Generate QR codes using qrcodejs (synchronous DOM-based)
   const doGenerate = uC((skus) => {
     if (!skus.length) return;
@@ -6264,12 +6268,32 @@ ${labelsHTML}
               return (
                 <div key={item.sku} style={{display:"flex",alignItems:"center",gap:10,
                      padding:"7px 0",borderBottom:"1px solid var(--bdr)"}}>
-                  <span className="skucode" style={{fontSize:11,minWidth:80}}>{item.sku}</span>
-                  <span style={{flex:1,fontSize:12,color:"var(--text)"}}>{p?.name || "—"}</span>
+                  {/* รูป + กดดูรายละเอียด — กติกา UI: ห้ามมีแถวที่โชว์แต่ SKU+ชื่อ
+                      (คนพิมพ์ป้ายต้องเห็นว่ากำลังจะพิมพ์ป้ายของอะไร ไม่ใช่เดาจากรหัส) */}
+                  <div onClick={() => p && setDetailSku(item.sku)} title={p ? "ดูรายละเอียดสินค้า" : ""}
+                    style={{width:38,height:38,borderRadius:6,flexShrink:0,background:"var(--g-50)",
+                            border:"1px solid var(--bdr)",position:"relative",overflow:"hidden",
+                            cursor:p?"pointer":"default"}}>
+                    {p?.imageUrl
+                      ? <img src={p.imageUrl} loading="lazy" alt="" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}
+                             onError={e => { e.target.style.display="none"; }}/>
+                      : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",
+                                     justifyContent:"center",fontSize:16,color:"var(--muted)"}}>📦</div>}
+                    {p && <div style={{position:"absolute",bottom:0,right:0,background:"rgba(0,0,0,.45)",
+                                       borderRadius:"4px 0 0 0",padding:"0 3px",fontSize:8,color:"#fff",lineHeight:1.5}}>🔍</div>}
+                  </div>
+                  <div onClick={() => p && setDetailSku(item.sku)}
+                    style={{flex:1,minWidth:0,cursor:p?"pointer":"default"}}>
+                    <div style={{fontSize:12,color:"var(--text)",overflow:"hidden",
+                                 textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p?.name || "—"}</div>
+                    <span className="skucode" style={{fontSize:11}}>{item.sku}</span>
+                  </div>
                   <span style={{fontSize:12,color:"var(--g-700)",fontWeight:700,minWidth:60,textAlign:"right"}}>
                     {p?.price && ["owner","dev"].indexOf(sessionStorage.getItem("dmj_role")) >= 0 ? `${p.price} ฿` : ""}
                   </span>
+                  {/* พรีฟิลค่าไว้ → ต้อง select ตอนแตะ ไม่งั้นพิมพ์ทับกลายเป็นต่อท้าย (บทเรียนข้อ 14) */}
                   <input type="number" value={item.qty} min={1} max={700}
+                    onFocus={e => e.target.select()}
                     onChange={e => updateQty(item.sku, parseInt(e.target.value) || 1)}
                     style={{width:70,padding:"4px 8px",borderRadius:6,border:"1.5px solid var(--bdr)",
                             fontFamily:"inherit",fontSize:12,textAlign:"center"}}/>
@@ -6387,6 +6411,8 @@ ${labelsHTML}
           })}
         </div>
       )}
+
+      {detailProduct && <ProductModal p={detailProduct} onClose={() => setDetailSku(null)}/>}
     </div>
   );
 }
@@ -10018,6 +10044,18 @@ function PosView({ data, role }) {
   const [catFilter, setCatFilter] = uS("ทั้งหมด");   // เลือกหมวดในกริดเลือกสินค้า
   const [catPage, setCatPage] = uS(0);                // หน้าของกริด (9 ชิ้น/หน้า)
 
+  // สินค้าที่กำลังเปิดดูรายละเอียด — เก็บเป็น sku ไม่ใช่ object (กันค้างค่าเก่าถ้า products อัปเดต)
+  const [detailSku, setDetailSku] = uS(null);
+  // ⚠️ ProductModal อ่านหมวดจาก `p.cat` (app.jsx มิเรอร์มาจาก p.category) ไม่ใช่ `p.category`
+  const detailProduct = uM(() => {
+    if (!detailSku) return null;
+    const key = String(detailSku).trim().toUpperCase();
+    const p = products.find(x => String(x.sku || "").trim().toUpperCase() === key);
+    if (p) return p;
+    const it = cart.find(x => String(x.sku || "").trim().toUpperCase() === key);
+    return it ? { sku: it.sku, name: it.name, imageUrl: it.imageUrl || "", cat: it.category || "", price: Number(it.price) || 0, qtyStore: it.qtyStore || 0 } : null;
+  }, [detailSku, products, cart]);
+
   const md = Math.max(0, parseFloat(manualDiscount) || 0);
   const totals = uM(() => computeBillTotals(cart, { manualDiscount: md }), [cart, md]);
   const cashReceivedNum = Math.max(0, parseFloat(cashReceived) || 0);
@@ -10280,10 +10318,15 @@ function PosView({ data, role }) {
                   return (
                     <tr key={it.sku} style={{ borderTop: "1px solid #f3f4f6" }}>
                       <td style={{ padding: "8px 6px" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          {it.imageUrl
-                            ? <img src={it.imageUrl} loading="lazy" style={{ width: 36, height: 36, objectFit: "cover", borderRadius: 5, flexShrink: 0, background: "#f3f4f6" }} onError={e => { e.target.style.display = "none"; }}/>
-                            : <div style={{ width: 36, height: 36, borderRadius: 5, background: "#f3f4f6", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>🌸</div>}
+                        {/* แตะรูป/ชื่อ = เปิดรายละเอียด + รูปใหญ่ (กติกา UI: ทุกที่ที่โชว์ SKU+ชื่อ ต้องกดดูได้) */}
+                        <div onClick={() => setDetailSku(it.sku)} title="ดูรายละเอียดสินค้า"
+                          style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                          <div style={{ width: 36, height: 36, borderRadius: 5, flexShrink: 0, background: "#f3f4f6", position: "relative", overflow: "hidden" }}>
+                            {it.imageUrl
+                              ? <img src={it.imageUrl} loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} onError={e => { e.target.style.display = "none"; }}/>
+                              : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>🌸</div>}
+                            <div style={{ position: "absolute", bottom: 0, right: 0, background: "rgba(0,0,0,.45)", borderRadius: "4px 0 0 0", padding: "0 3px", fontSize: 8, color: "#fff", lineHeight: 1.5 }}>🔍</div>
+                          </div>
                           <div style={{ minWidth: 0 }}>
                             <div style={{ fontWeight: 600 }}>{it.name}</div>
                             <div style={{ fontSize: 11, color: over ? "#dc2626" : "var(--muted)" }}>
@@ -10428,6 +10471,8 @@ function PosView({ data, role }) {
           position: "sticky", bottom: 12, boxShadow: "0 4px 14px rgba(0,0,0,.15)" }}>
         {saving ? "กำลังออกบิล..." : `ออกบิล ${taxInvoice ? "+ ใบกำกับภาษี " : ""}· ${fmtBfull(totals.grandTotal)}`}
       </button>
+
+      {detailProduct && <ProductModal p={detailProduct} onClose={() => setDetailSku(null)}/>}
 
       <Toast toast={toast} onClose={hideToast}/>
     </div>
