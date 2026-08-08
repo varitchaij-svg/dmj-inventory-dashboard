@@ -29,14 +29,16 @@ const M = new Function([
   grab(/function productOwnerNormKey_\(s\) \{[\s\S]*?\n\}/),
   grab(/function productOwnerStaffKey_\(s\) \{[\s\S]*?\n\}/),
   grab(/function productOwnerThaiBaseKey_\(s\) \{[\s\S]*?\n\}/),
+  grab(/function productOwnerPlanKeyOf_\(entry\) \{[\s\S]*?\n\}/),
   grab(/function productOwnerPlanIndex_\(plan\) \{[\s\S]*?\n\}/),
   grab(/function productOwnerResolveStaffCore_\(staffAll, labels\) \{[\s\S]*?\n\}/),
   grab(/function productOwnerAssignPlanCore_\(planIndex, products, owners, overwrite\) \{[\s\S]*?\n\}/),
   grab(/function productOwnerDescribeName_\(s\) \{[\s\S]*?\n\}/),
-  'return { productOwnerNormKey_, productOwnerStaffKey_, productOwnerThaiBaseKey_, productOwnerPlanIndex_, productOwnerResolveStaffCore_, productOwnerAssignPlanCore_, productOwnerDescribeName_ };',
+  'return { productOwnerNormKey_, productOwnerStaffKey_, productOwnerThaiBaseKey_, productOwnerPlanKeyOf_, productOwnerPlanIndex_, productOwnerResolveStaffCore_, productOwnerAssignPlanCore_, productOwnerDescribeName_ };',
 ].join('\n'))();
 
-const { productOwnerNormKey_: normKey, productOwnerStaffKey_: staffKey, productOwnerPlanIndex_: planIndex,
+const { productOwnerNormKey_: normKey, productOwnerStaffKey_: staffKey,
+  productOwnerPlanKeyOf_: planKeyOf, productOwnerPlanIndex_: planIndex,
   productOwnerResolveStaffCore_: resolveStaff, productOwnerAssignPlanCore_: assignCore,
   productOwnerDescribeName_: describeName } = M;
 
@@ -76,7 +78,41 @@ describe('productOwnerNormKey_ — เทียบชื่อหมวด/ช�
   });
 });
 
+describe('productOwnerPlanKeyOf_ — ตารางอ้างคนด้วยอะไร (staffId มาก่อนชื่อ)', () => {
+  it('ใส่ staffId → ใช้ staffId (ชื่อในตารางเป็นแค่ป้ายให้คนอ่านโค้ด)', () => {
+    expect(planKeyOf({ staffId: 'ST0002', staff: 'ประสิทธิ์' })).toBe('ST0002');
+  });
+
+  it('staffId ว่าง → ถอยไปใช้ชื่อ (ของเดิมยังทำงานระหว่างที่ยังไม่ได้เติมรหัส)', () => {
+    expect(planKeyOf({ staffId: '', staff: 'TunTun' })).toBe('TunTun');
+    expect(planKeyOf({ staff: 'TunTun' })).toBe('TunTun');
+  });
+
+  it('ใส่ staffId แล้วชื่อในตารางสะกดผิด → ยังจับคู่ถูกคน (เหตุผลหลักที่ย้ายมาใช้รหัส)', () => {
+    expect(planKeyOf({ staffId: 'ST0004', staff: 'สะกดผิดยับ' })).toBe('ST0004');
+  });
+
+  it('ว่างทั้งคู่/ส่ง null → คืนค่าว่าง ไม่ระเบิด (planIndex จะข้ามแถวนี้ไป)', () => {
+    expect(planKeyOf({ staffId: '  ', staff: '' })).toBe('');
+    expect(planKeyOf(null)).toBe('');
+  });
+});
+
 describe('productOwnerPlanIndex_ — ตาราง → ใครอ้างหมวดไหน', () => {
+  it('ตารางที่อ้างด้วย staffId → ดัชนีเก็บ staffId (ไม่ใช่ชื่อ)', () => {
+    const idx = planIndex([{ staffId: 'ST0001', staff: 'TunTun', categories: ['ใบ'] }]);
+    expect(idx.byCat[normKey('ใบ')].staff).toEqual(['ST0001']);
+  });
+
+  it('คนเดียวกันเขียนคนละแบบ (รหัส vs ชื่อ) 2 แถว → ถือเป็นคนละคน = หมวดซ้อน จึงถูกข้าม', () => {
+    // ไม่ใช่บั๊ก แต่เป็นผลที่ต้องรู้: ต้องเลือกอ้างแบบเดียวทั้งตาราง ห้ามผสม
+    const idx = planIndex([
+      { staffId: 'ST0001', staff: 'TunTun', categories: ['ใบ'] },
+      { staffId: '', staff: 'TunTun', categories: ['ใบ'] },
+    ]);
+    expect(idx.byCat[normKey('ใบ')].staff).toHaveLength(2);
+  });
+
   it('หมวดของคนเดียว → staff 1 คน', () => {
     const idx = planIndex(PLAN);
     expect(idx.byCat[normKey('ใบ')].staff).toEqual(['TunTun']);
@@ -263,14 +299,33 @@ describe('productOwnerResolveStaffCore_ — ชื่อในตาราง �
     expect(r.ambiguous[0].staffIds.sort()).toEqual(['ST0002', 'ST0008']);
   });
 
-  it('ตารางมอบหมายจริงในโค้ดใช้ชื่อที่จับคู่กับชีตของร้านได้ครบทุกคน', () => {
-    const names = [...GS.matchAll(/\{ staff: '([^']+)',\s*categories:/g)].map(m => m[1]);
-    expect(names).toHaveLength(4);
-    const r = resolveStaff(shopSheet('ประสิทธิ์ี้'), names);
-    expect(r.missing, 'ชื่อในตารางที่จับคู่กับชีตไม่ได้: ' + r.missing.join(', ')).toEqual([]);
+  it('ตารางจริงในโค้ดอ้างด้วย staffId ครบทุกแถว และเป็นคนละคนครบ 4', () => {
+    const ids = [...GS.matchAll(/\{ staffId: '([^']*)',\s*staff: '([^']+)',\s*categories:/g)];
+    expect(ids, 'ตารางไม่ได้อยู่ในรูป { staffId, staff, categories }').toHaveLength(4);
+    ids.forEach(([, id, name]) => {
+      expect(id, 'แถว "' + name + '" ยังไม่ได้ใส่ staffId').toMatch(/^ST\d{4}$/);
+    });
+    // ซ้ำกัน = 2 กองหมวดตกที่คนเดียว อีกคนไม่ได้อะไรเลย โดยไม่มี error ให้เห็น
+    expect(new Set(ids.map((m) => m[1])).size).toBe(4);
+  });
+
+  it('อ้างด้วย staffId แล้ว → ชื่อในชีตจะสะกดยังไงก็ไม่กระทบการจับคู่', () => {
+    const plan = [...GS.matchAll(/\{ staffId: '([^']*)',/g)].map((m) => ({ staffId: m[1] }));
+    const key = (e) => planKeyOf(e);
+    // ชีตจำลองที่ชื่อ "เพี้ยน" ทุกคน แต่ staffId ตรง — ต้องจับคู่ได้ครบและไม่มีคำเตือน
+    const sheet = plan.map((e, i) => staff(e.staffId, '‼️ชื่อเปลี่ยนไปแล้ว' + i));
+    const r = resolveStaff(sheet, plan.map(key));
+    expect(r.missing).toEqual([]);
     expect(r.ambiguous).toEqual([]);
-    // ต้องเป็นคนละคนครบ 4 — ชื่อ 2 อันไปตกที่คนเดียวกันคือดาวหายไปทั้งกอง
-    expect(new Set(names.map(n => r.resolved[n].staffId)).size).toBe(4);
+    expect(r.loose).toEqual([]);
+  });
+
+  it('ถ้าวันหนึ่งถอด staffId ออก ต้องยังจับคู่ด้วยชื่อกับชีตจริงของร้านได้ (ทางถอยยังใช้ได้)', () => {
+    const names = [...GS.matchAll(/staffId: '[^']*',\s*staff: '([^']+)',/g)].map((m) => m[1]);
+    const r = resolveStaff(shopSheet('ประสิทธิ์ี้'), names);
+    expect(r.missing, 'ชื่อที่จับคู่กับชีตไม่ได้: ' + r.missing.join(', ')).toEqual([]);
+    expect(r.ambiguous).toEqual([]);
+    expect(new Set(names.map((n) => r.resolved[n].staffId)).size).toBe(4);
   });
 });
 
@@ -442,6 +497,23 @@ describe('การเชื่อมต่อ (meta) — จุดที่ล�
     expect(GS).toMatch(/var PRODUCT_OWNER_ASSIGN_PLAN_ = \[/);
     expect(RUN).toContain('PRODUCT_OWNER_ASSIGN_PLAN_');
     expect(GS.match(/PRODUCT_OWNER_ASSIGN_PLAN_/g).length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('ทุกที่ที่อ่าน "ใครคือเจ้าของแถว" ต้องผ่าน productOwnerPlanKeyOf_ ตัวเดียว', () => {
+    // อ่านตรง ๆ ด้วย .staff ที่ไหนสักแห่ง = ที่นั่นจะยังจับคู่ด้วยชื่อทั้งที่ตารางใส่ staffId แล้ว
+    // → คนละที่ใช้คีย์คนละแบบ แล้ว "หมวดซ้อนกัน" จะเกิดขึ้นเองโดยไม่มีใครแก้อะไรเลย
+    const uses = GS.match(/productOwnerPlanKeyOf_\(/g) || [];
+    expect(uses.length, 'ต้องถูกเรียกทั้งใน planIndex, ตัวรวมรายชื่อ 2 จุด และตอนพิมพ์บรรทัดพร้อมลอก')
+      .toBeGreaterThanOrEqual(4);
+    const idx = grab(/function productOwnerPlanIndex_\(plan\) \{[\s\S]*?\n^\}/m);
+    expect(idx).toContain('productOwnerPlanKeyOf_');
+    expect(idx).not.toMatch(/p\.staff\b/);
+  });
+
+  it('ตัวตรวจชื่อพิมพ์บรรทัดพร้อมลอก (staffId เติมให้แล้ว) — จุดประสงค์ทั้งหมดของการใช้รหัส', () => {
+    const fn = grab(/function checkProductOwnerStaffNames\(\) \{[\s\S]*?\n^\}/m);
+    expect(fn).toContain("{ staffId: '");
+    expect(fn).toContain('categories: [');
   });
 
   it('เตือนเมื่อระบบดาวยังไม่เปิด — เขียนแล้วแต่ไม่โผล่บนเว็บคือเคสที่งงที่สุด', () => {

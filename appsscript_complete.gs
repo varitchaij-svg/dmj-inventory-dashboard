@@ -10139,16 +10139,30 @@ function disableProductOwner() {
 // ══════════════════════════════════════════════════════════════════════════
 
 // ── ตารางมอบหมาย — แก้ตรงนี้ได้เลย ────────────────────────────────────────
-// staff = ชื่อในชีต "พนักงาน" (displayName หรือ lineDisplayName) หรือใส่ staffId ตรง ๆ ก็ได้
+// staffId = รหัสพนักงาน ("ST0001") — **ใส่อันนี้เป็นหลัก** เพราะไม่เปลี่ยนตามที่พนักงาน
+//           เปลี่ยนชื่อ LINE และไม่มีปัญหาอักขระพิเศษ (ตัวเอียง/รูปสระซ้อน) ให้ต้องมาไล่จับคู่
+//           · ดูรหัสของแต่ละคนได้จาก checkProductOwnerStaffNames() ซึ่งพิมพ์บรรทัดพร้อมลอกให้เลย
+// staff   = ชื่อคน — ใช้ 2 กรณี: (ก) ยังไม่ได้ใส่ staffId → ใช้ชื่อจับคู่แทน (แบบเดิม)
+//           (ข) ใส่ staffId แล้ว → เป็นแค่ "ป้ายกำกับให้คนอ่านโค้ดรู้ว่าใคร" ไม่ถูกใช้จับคู่
+// ⚠️ ชื่อที่โชว์บนเว็บไม่ได้มาจากตารางนี้ — มาจากชีต "พนักงาน" เสมอ (คอลัมน์ ชื่อผู้ดูแล ของชีตดาว)
+//    เปลี่ยนตารางมาใช้ staffId จึงไม่กระทบสิ่งที่ผู้ใช้เห็นแม้แต่นิดเดียว
 // categories = ชื่อหมวดตามชีต "ข้อมูลสินค้า" คอลัมน์ F (ดูของจริงด้วย listProductCategories())
+// รหัสมาจากเจ้าของโดยตรง (ส.ค. 2026) · ชื่อที่เขียนคู่ไว้เป็น "ป้ายให้คนอ่านโค้ด" เท่านั้น
+// ไม่ถูกใช้จับคู่ — ยืนยันว่ารหัสตรงกับคนไหนได้ที่ checkProductOwnerStaffNames()
 var PRODUCT_OWNER_ASSIGN_PLAN_ = [
-  { staff: 'TunTun',    categories: ['ใบ', 'ใบบูช', 'ใบไม้แขวน', 'กิ่งไม้', 'ต้นไม้', 'อุปกรณ์สำนักงาน'] },
-  { staff: 'ประสิทธิ์',  categories: ['Realtouch', 'ดอกไม้', 'บูช', 'อุปกรณ์สำนักงาน', 'ของตกแต่ง'] },
-  { staff: 'Ya Ya',     categories: ['แจกันแก้ว', 'กระถางPS', 'เรซิ่นและอื่นๆ', 'อุปกรณ์สำนักงาน', 'ของตกแต่ง'] },
+  { staffId: 'ST0004', staff: 'TunTun',    categories: ['ใบ', 'ใบบูช', 'ใบไม้แขวน', 'กิ่งไม้', 'ต้นไม้', 'อุปกรณ์สำนักงาน'] },
+  { staffId: 'ST0005', staff: 'ประสิทธิ์',  categories: ['Realtouch', 'ดอกไม้', 'บูช', 'อุปกรณ์สำนักงาน', 'ของตกแต่ง'] },
+  { staffId: 'ST0014', staff: 'Ya Ya',     categories: ['แจกันแก้ว', 'กระถางPS', 'เรซิ่นและอื่นๆ', 'อุปกรณ์สำนักงาน', 'ของตกแต่ง'] },
   // "KYAW แอ KHALANE" = ชื่อคนคนเดียว (เจ้าของยืนยัน ส.ค. 2026) ไม่ใช่ 3 คน
-  // ชื่อนี้ต้องตรงกับชีต "พนักงาน" — หาไม่เจอ preview จะบอกแล้วไม่เขียนอะไรเลย ใส่ staffId แทนได้
-  { staff: 'KYAW แอ KHALANE', categories: ['ดอกไม้', 'ดอกหญ้า', 'กุหลาบหิน', 'ผลไม้ ผัก กิ่งผลไม้', 'ไม้แซมไม้ประดับ', 'สายเลื้อย', 'อุปกรณ์สำนักงาน'] },
+  { staffId: 'ST0013', staff: 'KYAW แอ KHALANE', categories: ['ดอกไม้', 'ดอกหญ้า', 'กุหลาบหิน', 'ผลไม้ ผัก กิ่งผลไม้', 'ไม้แซมไม้ประดับ', 'สายเลื้อย', 'อุปกรณ์สำนักงาน'] },
 ];
+
+// แถวในตาราง → ค่าที่ใช้จับคู่กับชีตพนักงาน · staffId มาก่อนชื่อเสมอ
+// (ใส่ staffId แล้วต่อให้ชื่อในตารางสะกดผิด/ล้าสมัย ก็ยังจับคู่ถูกคน)
+function productOwnerPlanKeyOf_(entry) {
+  var e = entry || {};
+  return String(e.staffId || '').trim() || String(e.staff || '').trim();
+}
 
 // ── หมายเหตุเรื่องหมวดที่ซ้อนกัน (เจ้าของตัดสินใจแล้ว ส.ค. 2026) ──────────
 // "อุปกรณ์สำนักงาน" (ทั้ง 4 คน) · "ของตกแต่ง" (ประสิทธิ์+Ya Ya) · "ดอกไม้" (ประสิทธิ์+KYAW แอ KHALANE)
@@ -10177,7 +10191,7 @@ function productOwnerPlanIndex_(plan) {
   var byCat = {}, order = [];
   for (var i = 0; i < (plan || []).length; i++) {
     var p = plan[i] || {};
-    var staff = String(p.staff || '').trim();
+    var staff = productOwnerPlanKeyOf_(p);
     var cats = p.categories || [];
     for (var j = 0; j < cats.length; j++) {
       var label = String(cats[j] || '').trim();
@@ -10395,7 +10409,7 @@ function checkProductOwnerStaffNames() {
 
   var labels = [];
   for (var p = 0; p < PRODUCT_OWNER_ASSIGN_PLAN_.length; p++) {
-    var nm = String((PRODUCT_OWNER_ASSIGN_PLAN_[p] || {}).staff || '').trim();
+    var nm = productOwnerPlanKeyOf_(PRODUCT_OWNER_ASSIGN_PLAN_[p]);
     if (nm && labels.indexOf(nm) < 0) labels.push(nm);
   }
   var who = productOwnerResolveStaffCore_(all, labels);
@@ -10420,6 +10434,17 @@ function checkProductOwnerStaffNames() {
     Logger.log('✅ ชื่อในตารางตรงกับชีตครบทุกคน' + (who.loose.length ? ' (มี ' + who.loose.length + ' ชื่อที่จับคู่แบบไม่ตรงเป๊ะ — ดูข้างบน)' : ''));
   } else {
     Logger.log('⛔ ยังมีชื่อที่ใช้ไม่ได้ — applyProductOwnerAssign() จะไม่เขียนอะไรเลยจนกว่าจะแก้ครบ');
+  }
+
+  // บรรทัดพร้อมลอก — เติม staffId ให้เสร็จ ไม่ต้องพิมพ์ชื่อที่มีอักขระพิเศษเองอีก
+  // (จุดประสงค์ทั้งหมดของการย้ายมาใช้ staffId คือ "เลิกพึ่งการพิมพ์ชื่อให้ตรง")
+  Logger.log('── ลอกบรรทัดข้างล่างไปวางแทนใน PRODUCT_OWNER_ASSIGN_PLAN_ (เติม staffId ให้แล้ว) ──');
+  for (var q = 0; q < PRODUCT_OWNER_ASSIGN_PLAN_.length; q++) {
+    var ent = PRODUCT_OWNER_ASSIGN_PLAN_[q] || {};
+    var hit = who.resolved[productOwnerPlanKeyOf_(ent)];
+    var cats = (ent.categories || []).map(function (c) { return "'" + c + "'"; }).join(', ');
+    Logger.log("  { staffId: '" + (hit ? hit.staffId : '??') + "', staff: '" + (ent.staff || '')
+      + "', categories: [" + cats + '] },' + (hit ? '' : '   // ⛔ ยังหาคนนี้ไม่เจอ'));
   }
   return { staff: all, match: who };
 }
@@ -10469,7 +10494,7 @@ function productOwnerAssignRun_(doWrite) {
 
   var labels = [];
   for (var i = 0; i < plan.length; i++) {
-    var nm = String((plan[i] || {}).staff || '').trim();
+    var nm = productOwnerPlanKeyOf_(plan[i]);
     if (nm && labels.indexOf(nm) < 0) labels.push(nm);
   }
   var who = productOwnerResolveStaffCore_(readStaffAll_(ss), labels);
@@ -10484,7 +10509,8 @@ function productOwnerAssignRun_(doWrite) {
   Logger.log('จะมอบหมายรวม ' + res.assign.length + ' SKU:');
   for (var s = 0; s < staffNames.length; s++) {
     var st = who.resolved[staffNames[s]];
-    Logger.log('  ' + staffNames[s] + (st ? ' (' + st.staffId + ')' : ' ⚠️ หาในชีตพนักงานไม่เจอ')
+    // โชว์ทั้งรหัสและชื่อจริงจากชีต — ตารางอาจอ้างด้วย staffId ล้วน ('ST0001' เฉย ๆ อ่านไม่ออกว่าใคร)
+    Logger.log('  ' + (st ? st.staffId + ' · ' + st.name : staffNames[s] + ' ⚠️ หาในชีตพนักงานไม่เจอ')
       + ' → ' + res.perStaff[staffNames[s]] + ' SKU');
   }
 
