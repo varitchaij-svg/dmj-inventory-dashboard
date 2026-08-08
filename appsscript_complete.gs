@@ -12938,6 +12938,46 @@ function shippingRemark_(shipping, shipInZort) {
   return parts.join(" | ");
 }
 
+// ═══ line items ที่ยิงเข้า ZORT — ปัดเศษสะสม (cumulative rounding) ═══════════════
+// เจ้าของทักไว้ (ส.ค. 2026): "ในระบบ ZORT ต้องหักเงินตามที่เราคิดนะ" — ยอดที่ ZORT บันทึก
+// (= ยอดที่ถูกหัก/เรียกเก็บจริง) ต้องตรงกับยอดที่แอปคิดให้ผู้ขาย/ลูกค้าเห็นเป๊ะ ไม่ใช่แค่ใกล้เคียง
+//
+// ⚠️ ของเดิมปัดเศษ **2 ชั้นแยกกัน**: ปัด unit price ก่อน (`Math.round(price*factor*100)/100`)
+//    แล้วค่อยปัด `totalprice = unitPrice*qty` อีกที — ปัด 2 ชั้นแบบนี้สะสมความคลาดเคลื่อนได้
+//    หลายสตางค์เมื่อบิลมีหลายรายการ/จำนวนต่อชิ้นเยอะ (ยิ่งบิลใหญ่ยิ่งเพี้ยนมาก) → ยอดที่ ZORT
+//    เก็บจริงต่างจาก `totals.grandTotal` ที่แอปโชว์ **โดยไม่มี error ให้เห็นเลย**
+// ✅ ตอนนี้ปัดแบบ "สะสม" (cumulative rounding — เทคนิคมาตรฐานของระบบบิล/บัญชี): เดินสะสม
+//    ยอดดิบ (ไม่ปัด) ทีละแถว แล้วปัดที่ยอดสะสม ณ จุดนั้นครั้งเดียว → ผลต่างระหว่างยอดสะสมที่ปัด
+//    รอบนี้กับรอบก่อนคือยอดของแถวนี้ · คุณสมบัติ telescoping sum รับประกันว่า
+//    **sum(totalprice ทุกแถว) == round(grandTotal*100)/100 เป๊ะเสมอ** ไม่ว่าจะกี่แถว/ราคาเท่าไหร่
+// ⚠️ **`pricepernumber` ห้ามปัดซ้ำเป็น 2 ตำแหน่งทศนิยมอีกชั้น** — ต้องคง
+//    `pricepernumber × qty === totalprice` เป๊ะเสมอ เพราะยืนยันจากหน้า ZORT แล้วว่า
+//    `pricepernumber × number` คือตัวที่ ZORT ใช้คิดยอดจริง (ไม่ใช่ field `totalprice`
+//    — ดูคอมเมนต์ที่ `AddOrder` ด้านล่าง) ปัดซ้ำจะดึงความคลาดเคลื่อนที่เพิ่งกำจัดกลับมา
+function buildZortLineItems_(items, factor) {
+  var cumIdealCents = 0, cumAssignedCents = 0;
+  var list = [];
+  (items || []).forEach(function (it) {
+    var qty = Number(it.qty) || 0;
+    if (qty <= 0) return;
+    cumIdealCents += (Number(it.price) || 0) * qty * factor * 100;
+    var cumRoundedCents = Math.round(cumIdealCents);
+    var lineCents = cumRoundedCents - cumAssignedCents;
+    cumAssignedCents = cumRoundedCents;
+    var totalPrice = lineCents / 100;
+    var unitPrice = totalPrice / qty;
+    list.push({
+      sku: String(it.sku || "").trim(),
+      name: String(it.name || "").trim(),
+      number: qty,
+      pricepernumber: unitPrice,
+      price: unitPrice,
+      totalprice: totalPrice,
+    });
+  });
+  return list;
+}
+
 function createSaleBill(ss, data, actor) {
   var items = Array.isArray(data.items) ? data.items : [];
   if (!items.length) return error("ไม่มีรายการสินค้าในบิล");
@@ -12950,22 +12990,13 @@ function createSaleBill(ss, data, actor) {
   // line items สำหรับ ZORT — เฉลี่ยส่วนลดลงราคาต่อชิ้นตามสัดส่วน (ให้ยอดรวม = grandTotal)
   var gross = totals.retailEligible + totals.retailExcluded;
   var factor = gross > 0 ? (totals.grandTotal / gross) : 1;   // อัตราส่วนหลังส่วนลดทั้งบิล
-  // line items — ยืนยันจากหน้า ZORT: "มูลค่าต่อหน่วย" มาจาก field pricepernumber (ไม่ใช่ price)
+  // ยืนยันจากหน้า ZORT: "มูลค่าต่อหน่วย" มาจาก field pricepernumber (ไม่ใช่ price)
   // ถ้าไม่ส่ง pricepernumber → หน่วย=0 → ยอดรวมสุทธิ=0 · ต้องส่ง pricepernumber = ราคาต่อหน่วยจริง
   // ไม่ใส่ warehousecode (ทั้ง order + line) — mirror createZortSaleOrder_ ที่เวิร์ก · warehousecode
   // ทำให้ ZORT สร้างงานโอนค้าง "รอโอนสินค้า" (ให้ ZORT หักจากคลัง default เหมือน MTO)
-  var productList = items.map(function (it) {
-    var qty = Number(it.qty) || 0;
-    var netUnit = Math.round((Number(it.price) || 0) * factor * 100) / 100;  // ราคาต่อชิ้นสุทธิ (หลังเฉลี่ยส่วนลด, รวม VAT)
-    return {
-      sku: String(it.sku || "").trim(),
-      name: String(it.name || "").trim(),
-      number: qty,
-      pricepernumber: netUnit,                         // ← field ที่ ZORT ใช้เป็น "มูลค่าต่อหน่วย" จริง
-      price: netUnit,
-      totalprice: Math.round(netUnit * qty * 100) / 100,
-    };
-  }).filter(function (it) { return it.number > 0; });
+  // ⚠️ ปัดเศษแบบ "สะสม" ผ่าน buildZortLineItems_ — ไม่ปัดแยกทีละชิ้นแล้ว (ดูคอมเมนต์ที่ฟังก์ชัน)
+  //    รับประกันว่า sum(totalprice) = grandTotal เป๊ะ = ยอดที่ ZORT หักตรงกับที่เราคิดเป๊ะสตางค์
+  var productList = buildZortLineItems_(items, factor);
 
   // ── ค่าจัดส่ง (โหมดขายออนไลน์) ──────────────────────────────────────────────
   // ⚠️ **บวกท้ายสุด ไม่เข้า computeBillTotalsGs_** — กฎส่วนลดขายส่ง 20%/ขั้นบาท และการถอด

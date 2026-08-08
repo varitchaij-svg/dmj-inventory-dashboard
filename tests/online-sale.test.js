@@ -51,10 +51,13 @@ const fe = (store) => FE({ getItem: (k) => (store && k in store ? store[k] : nul
 const feDefault = fe({});
 
 // ── ฟังก์ชันจริงจาก appsscript_complete.gs ───────────────────────────────────
-const { POS_UNPAID_METHODS_, shippingRemark_, SALE_BILL_HEADERS_, appendSaleBillRow_ } = (() => {
+const { POS_UNPAID_METHODS_, shippingRemark_, SALE_BILL_HEADERS_, appendSaleBillRow_,
+        buildZortLineItems_, computeBillTotalsGs_ } = (() => {
   const parts = [
     grab(GS, /var POS_UNPAID_METHODS_ = \[[^\]]*\];/, 'POS_UNPAID_METHODS_'),
     grab(GS, /function shippingRemark_\(shipping, shipInZort\) \{[\s\S]*?\n\}/, 'shippingRemark_'),
+    grab(GS, /function buildZortLineItems_\(items, factor\) \{[\s\S]*?\n\}/, 'buildZortLineItems_'),
+    grab(GS, /function computeBillTotalsGs_\(items, opts\) \{[\s\S]*?\n\}/, 'computeBillTotalsGs_'),
     grab(GS, /var SALE_BILL_HEADERS_ = \[[\s\S]*?\n\];/, 'SALE_BILL_HEADERS_'),
     grab(GS, /function saleBillsSheet_\(ss\) \{[\s\S]*?\n\}/, 'saleBillsSheet_'),
     grab(GS, /function saleBillNextId_\(sh, dateStr\) \{[\s\S]*?\n\}/, 'saleBillNextId_'),
@@ -63,7 +66,8 @@ const { POS_UNPAID_METHODS_, shippingRemark_, SALE_BILL_HEADERS_, appendSaleBill
   // eslint-disable-next-line no-new-func
   return new Function('getOrCreateSheet_', 'Utilities', 'Logger', 'SHEET_SALE_BILLS',
     parts.join('\n') +
-    '\nreturn { POS_UNPAID_METHODS_, shippingRemark_, SALE_BILL_HEADERS_, appendSaleBillRow_ };'
+    '\nreturn { POS_UNPAID_METHODS_, shippingRemark_, SALE_BILL_HEADERS_, appendSaleBillRow_,' +
+    ' buildZortLineItems_, computeBillTotalsGs_ };'
   )(
     (ss) => ss.__sheet,
     { formatDate: (d, tz, fmt) => (fmt === 'yyyy-MM-dd' ? '2026-08-08' : '12:00:00'), getUuid: () => 'abcd1234' },
@@ -214,6 +218,80 @@ describe('COD — วิธีชำระที่เงินยังไม�
   });
 });
 
+// เจ้าของทักไว้ (ส.ค. 2026): "ในระบบ ZORT ต้องหักเงินตามที่เราคิดนะ" — ยอดที่ ZORT บันทึก
+// (= ยอดที่ถูกหัก/เรียกเก็บจริงจากบิลนั้น) ต้องตรงกับ totals.grandTotal ที่แอปคิดให้เห็นเป๊ะ
+// ถึงสตางค์สุดท้าย ไม่ใช่แค่ "ใกล้เคียง" — ของเดิมปัดเศษราคาต่อหน่วยก่อนคูณจำนวนแยกทีละชิ้น
+// (Math.round(price*factor*100)/100 แล้วค่อยคูณ qty) ซึ่งสะสมความคลาดเคลื่อนได้หลายสตางค์
+// เมื่อบิลมีหลายรายการ — พิสูจน์ได้จริงด้วย factor=1/3 (ดูเทสต์ตัวแรกข้างล่าง)
+describe('buildZortLineItems_ — ปัดเศษสะสม กัน ZORT หักเงินเพี้ยนจากที่คิด', () => {
+  const sumTotal = (list) => Math.round(list.reduce((s, it) => s + it.totalprice, 0) * 100) / 100;
+
+  it('เคสที่ของเดิมพัง: 3 รายการ ราคา 10 จำนวน 1 factor=1/3 → ต้องได้ยอดรวม 10.00 เป๊ะ', () => {
+    // ของเดิม: แต่ละชิ้น netUnit=round(10×0.3333...×100)/100=3.33 → รวม 9.99 (ขาดไป 1 สตางค์)
+    const items = [
+      { sku: 'A', name: 'A', qty: 1, price: 10 },
+      { sku: 'B', name: 'B', qty: 1, price: 10 },
+      { sku: 'C', name: 'C', qty: 1, price: 10 },
+    ];
+    const list = buildZortLineItems_(items, 1 / 3);
+    expect(sumTotal(list)).toBe(10);
+    expect(list.map(it => it.totalprice)).toEqual([3.33, 3.34, 3.33]);
+  });
+
+  it('pricepernumber × qty ต้องเท่ากับ totalprice เป๊ะทุกแถว (ZORT คิดยอดจาก pricepernumber×number)', () => {
+    const items = [
+      { sku: 'A', qty: 7, price: 99 }, { sku: 'B', qty: 13, price: 149 }, { sku: 'C', qty: 3, price: 33.5 },
+    ];
+    buildZortLineItems_(items, 0.876543).forEach(it => {
+      expect(it.pricepernumber * it.number).toBeCloseTo(it.totalprice, 9);
+    });
+  });
+
+  it('ยอดรวมทุกแถว = round(factor × ยอดตั้งต้น × 100)/100 เป๊ะ — หลายเคส/หลายจำนวนต่อชิ้น', () => {
+    const cases = [
+      { items: [{ qty: 1, price: 250 }], factor: 1 },
+      { items: [{ qty: 24, price: 41 }, { qty: 12, price: 17 }], factor: 0.88 },      // ขายส่ง 12%
+      { items: [{ qty: 6, price: 99 }, { qty: 6, price: 199 }, { qty: 1, price: 500 }], factor: 0.941 },
+      { items: [{ qty: 100, price: 12.5 }], factor: 0.95 },
+      { items: Array.from({ length: 17 }, (_, i) => ({ qty: (i % 5) + 1, price: 37 + i * 3 })), factor: 0.8234567 },
+    ];
+    cases.forEach(({ items, factor }) => {
+      const expected = Math.round(items.reduce((s, it) => s + it.qty * it.price, 0) * factor * 100) / 100;
+      expect(sumTotal(buildZortLineItems_(items, factor))).toBe(expected);
+    });
+  });
+
+  it('qty ≤ 0 ถูกตัดทิ้ง ไม่กินโควตาการปัดเศษของแถวอื่น', () => {
+    const items = [{ sku: 'A', qty: 0, price: 999 }, { sku: 'B', qty: 1, price: 10 }, { sku: 'C', qty: -1, price: 5 }];
+    const list = buildZortLineItems_(items, 1);
+    expect(list.length).toBe(1);
+    expect(list[0].sku).toBe('B');
+    expect(list[0].totalprice).toBe(10);
+  });
+
+  it('array ว่าง → คืน array ว่าง ไม่พัง', () => {
+    expect(buildZortLineItems_([], 1)).toEqual([]);
+    expect(buildZortLineItems_(null, 1)).toEqual([]);
+  });
+
+  it('ต่อเนื่องกับ computeBillTotalsGs_ จริง (เส้นทางที่ createSaleBill ใช้จริง) — รวมส่วนลดขายส่ง+ขั้นบาท', () => {
+    // มัดจำเดียวกับที่ createSaleBill ทำ: totals จาก computeBillTotalsGs_ → factor = grandTotal/gross
+    // → buildZortLineItems_(items, factor) ต้องได้ sum(totalprice) === grandTotal เป๊ะ แม้ผ่านสูตร
+    // ส่วนลดขายส่ง 20% + ขั้นบาทมาก่อนแล้ว (ตัวเลขไม่ "นิ่ง" เหมือนเทสต์ข้างบนที่ตั้ง factor เอง)
+    const items = [
+      { sku: 'R01', category: 'ดอกไม้', qty: 24, price: 41 },
+      { sku: 'R02', category: 'ดอกไม้', qty: 17, price: 133 },
+      { sku: 'OL1', category: 'ใบไม้', qty: 9, price: 67.5 },
+      { sku: 'MTO', category: 'Made to Order', qty: 3, price: 250 },   // ยกเว้นส่วนลด — ยังต้องรวมยอดตรง
+    ];
+    const totals = computeBillTotalsGs_(items, { manualDiscount: 37 });
+    const gross = totals.retailEligible + totals.retailExcluded;
+    const factor = gross > 0 ? totals.grandTotal / gross : 1;
+    const list = buildZortLineItems_(items, factor);
+    expect(sumTotal(list)).toBe(Math.round(totals.grandTotal * 100) / 100);
+  });
+});
+
 describe('shippingRemark_ — หมายเหตุจัดส่งที่ติดไปกับ order ใน ZORT', () => {
   const s = { recipient: 'คุณเอ', phone: '0812345678', address: '99 ถ.พัฒนาการ', method: 'Flash', tracking: 'TH1', fee: 50, note: 'ห่อกันกระแทก' };
 
@@ -325,6 +403,12 @@ describe('meta — createSaleBill ต่อสายถูกจุด', () => {
   it('นับจำนวนรายการ/ชิ้นจาก productList (ไม่นับบรรทัดค่าจัดส่งเป็นสินค้าที่ขายได้)', () => {
     expect(fn).toMatch(/lineCount: productList\.length/);
     expect(fn).toMatch(/unitCount: productList\.reduce/);
+  });
+  it('สร้าง line items ด้วย buildZortLineItems_ (ปัดเศษสะสม) ไม่ใช่ปัดแยกทีละชิ้นแบบเดิม', () => {
+    // กันถอยกลับไปปัด unit price ทีละชิ้นก่อนคูณ qty — ของเดิมสะสมความคลาดเคลื่อนได้หลายสตางค์
+    // (ดู "เคสที่ของเดิมพัง" ใน describe('buildZortLineItems_' ข้างบน)
+    expect(fn).toMatch(/productList\s*=\s*buildZortLineItems_\(items, factor\)/);
+    expect(fn).not.toMatch(/Math\.round\(\(Number\(it\.price\)/);
   });
 });
 
