@@ -6623,6 +6623,83 @@ function exploreZortPurchases() {
 }
 
 // ═══════════════════════════════════════════════════════════
+// วินิจฉัย "สแกนแล้วไม่ขึ้น / สินค้าหายจากตาราง"
+// ═══════════════════════════════════════════════════════════
+// อาการ: สแกนสินค้าแล้วตารางว่าง ไม่มี error อะไรเลย (โดยเฉพาะสินค้าบาง prefix)
+//
+// สาเหตุที่เป็นไปได้สูงสุด: **หมวดสินค้าว่าง** — View หลักทุกตัวกรองสินค้าด้วยเงื่อนไข
+//   `p.cat && p.cat !== "ไม่มีรหัสสินค้า"` ก่อนแสดงผล:
+//     · CategoryView  (สินค้า & สั่ง)     views-main.jsx
+//     · StockView     (สต๊อก & แจ้งเตือน) views-main.jsx
+//     · FrontStoreView(เช็คหน้าร้าน)      views-analytics.jsx
+//   สินค้าที่หมวดว่างจึง **หายไปเงียบ ๆ ทั้งที่มีของในคลังจริง** — สแกนก็เจอ (ค้นจาก products
+//   ตัวเต็ม) แต่พอ set ค่าค้นหาแล้วตารางกรองทิ้ง → ผู้ใช้เห็นแค่ตารางว่าง ไม่มีคำอธิบาย
+//   ที่มาของหมวดว่าง: syncNewProductsFromZort เขียน `p.category || ""` ลงคอลัมน์ D —
+//   สินค้าที่ยังไม่ได้ตั้งหมวดใน ZORT จึงได้ค่าว่างมาทั้งชุด
+//
+// ตัวนี้พิมพ์รายชื่อ SKU ที่ "มีของแต่มองไม่เห็นบนเว็บ" ออกมาให้ดูของจริงก่อนตัดสินใจแก้
+// (แยกนับตามตัวอักษรขึ้นต้นให้ด้วย — จะได้เห็นทันทีว่ากระจุกที่ prefix ไหน)
+//
+// ⚠️ อ่านอย่างเดียว ไม่แก้ชีต ไม่แตะ ZORT · ⚠️ ชื่อไม่มี "_" ต่อท้าย (บทเรียนข้อ 1)
+function debugHiddenProducts() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  Logger.log("════════ ตรวจสินค้าที่ 'มีของ แต่ไม่ขึ้นบนเว็บ' ════════");
+
+  // อ่านผ่าน readProducts_ ตัวจริง = เห็นสิ่งที่ frontend เห็นเป๊ะ (รวม self-heal)
+  // ห้าม re-implement การอ่านเอง ไม่งั้นวินิจฉัยคนละชุดกับของจริง
+  const products = readProducts_();
+  Logger.log("สินค้าทั้งหมดที่ส่งขึ้นเว็บ: " + products.length + " รายการ");
+
+  const hidden = products.filter(function (p) {
+    const cat = String(p.category || "").trim();
+    return !cat || cat === "ไม่มีรหัสสินค้า";
+  });
+
+  const withStock = hidden.filter(function (p) {
+    return (Number(p.qtyStore) || 0) > 0 || (Number(p.qtyWH) || 0) > 0;
+  });
+
+  Logger.log("");
+  Logger.log("🔻 หมวดว่าง/ไม่มีรหัสสินค้า → ถูกกรองทิ้งจากทุก View: " + hidden.length + " รายการ");
+  Logger.log("   ในนั้นเป็นของที่ **ยังมีสต็อกจริง** (ควรเห็นแต่ไม่เห็น): " + withStock.length + " รายการ");
+
+  if (!hidden.length) {
+    Logger.log("");
+    Logger.log("✅ ไม่พบสินค้าหมวดว่างเลย — อาการที่เจอมาจากสาเหตุอื่น");
+    Logger.log("   ลองเช็คต่อ: SKU ที่สแกนได้ตรงกับในชีตไหม (บาร์โค้ดอาจมีเลขนำหน้า/ต่อท้ายเกิน)");
+    return;
+  }
+
+  // แยกตามตัวอักษรขึ้นต้น — เห็นทันทีว่ากระจุกที่ prefix ไหน
+  const byPrefix = {};
+  hidden.forEach(function (p) {
+    const k = String(p.sku || "?").trim().charAt(0).toUpperCase() || "?";
+    byPrefix[k] = (byPrefix[k] || 0) + 1;
+  });
+  Logger.log("");
+  Logger.log("──── แยกตามตัวอักษรขึ้นต้น ────");
+  Object.keys(byPrefix).sort(function (a, b) { return byPrefix[b] - byPrefix[a]; })
+    .forEach(function (k) { Logger.log("  " + k + " : " + byPrefix[k] + " รายการ"); });
+
+  Logger.log("");
+  Logger.log("──── ตัวอย่างที่มีของจริง (สูงสุด 40 รายการ) ────");
+  withStock.slice(0, 40).forEach(function (p) {
+    Logger.log("  " + (p.sku || "(ไม่มี SKU)") +
+               " | หน้าร้าน " + (p.qtyStore || 0) + " · คลัง " + (p.qtyWH || 0) +
+               " | หมวด: " + (String(p.category || "").trim() || "(ว่าง)") +
+               " | " + String(p.name || "").slice(0, 40));
+  });
+
+  Logger.log("");
+  Logger.log("──── วิธีแก้ ────");
+  Logger.log("เติม 'หมวด' ให้ SKU ข้างบน แล้วสินค้าจะกลับมาขึ้นเองทันที (กดปุ่ม Sync ในแอป):");
+  Logger.log("  · ชีต \"" + SHEET_PRODUCT_META + "\" คอลัมน์ F");
+  Logger.log("  · ชีต \"" + SHEET_PRODUCTS + "\" คอลัมน์ D (สำหรับตัวที่ยังไม่มีใน \"" + SHEET_PRODUCT_META + "\")");
+  Logger.log("  · หรือตั้งหมวดใน ZORT แล้วรอ sync รอบถัดไปเขียนกลับมาให้");
+  Logger.log("════ เสร็จ ════");
+}
+
+// ═══════════════════════════════════════════════════════════
 // PHASE 0 — วินิจฉัย "มูลค่าซื้อรวม ฿1" ในการ์ด "ของเข้าใหม่ 30 วัน"
 // ═══════════════════════════════════════════════════════════
 // อาการ: การ์ดโชว์ 38 SKU / 11,848 ชิ้น แต่มูลค่าซื้อรวม ฿1

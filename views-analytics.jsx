@@ -340,6 +340,21 @@ function FrontStoreView({ data, role, checkRequest }) {
     return baseFiltered;
   }, [baseFiltered, showMode, checkedQtys, mySkus]);
 
+  // สินค้าที่ "ตรงกับคำค้น แต่ถูกกรองทิ้งเพราะหมวดว่าง" — ใช้อธิบายในหน้าจอว่าง
+  // ไม่งั้นผู้ใช้เห็นแค่ "ไม่พบสินค้า" ทั้งที่ของมีอยู่จริงในคลัง แล้วเดาสาเหตุไม่ถูก
+  // (คิดเฉพาะตอน filtered ว่างจริง — ปกติ list ไม่ว่าง จะได้ไม่เสียแรงวนทุกครั้งที่พิมพ์)
+  const hiddenByCat = uM(() => {
+    const q = search.trim().toLowerCase();
+    if (!q || filtered.length > 0) return [];
+    const tokens = q.split(/\s+/).filter(Boolean);
+    return products.filter(p => {
+      const cat = p.cat || p.category;
+      if (cat && cat !== "ไม่มีรหัสสินค้า") return false;
+      const hay = ((p.sku || "") + " " + (p.name || "")).toLowerCase();
+      return tokens.every(t => hay.includes(t));
+    });
+  }, [products, search, filtered]);
+
   const counts = uM(() => {
     let unchecked = 0, mismatch = 0;
     const perCat = {};
@@ -400,6 +415,15 @@ function FrontStoreView({ data, role, checkRequest }) {
     const p = products.find(x => x.sku === clean);
     if (!p) {
       showToast("error", `ไม่พบ ${clean}`, "🔍");
+      return;
+    }
+    // ⚠️ เจอสินค้าแล้วก็จริง แต่ baseFiltered ตัดสินค้าที่ "หมวดว่าง" ทิ้งก่อนแสดงผล
+    // ถ้าปล่อยให้ setSearch ต่อ ผู้ใช้จะเห็นแค่ตารางว่าง ๆ โดยไม่มีอะไรบอกว่าทำไม
+    // (อาการ "สแกนแล้วไม่ขึ้น" ที่หาสาเหตุยากสุด เพราะไม่มี error ให้เห็นเลย)
+    // → บอกสาเหตุตรง ๆ แล้วไม่ต้อง set ค่าค้นหา จะได้ไม่ทิ้งตารางว่างไว้ให้งง
+    const cat = p.cat || p.category;
+    if (!cat || cat === "ไม่มีรหัสสินค้า") {
+      showToast("warn", `${clean} ยังไม่ได้ตั้งหมวดสินค้า จึงไม่ขึ้นในตาราง — แจ้งเจ้าของให้เติมหมวดให้`, "🏷️", 7000);
       return;
     }
     setActiveCat("ALL");
@@ -661,7 +685,13 @@ function FrontStoreView({ data, role, checkRequest }) {
         </div>
       ) : filtered.length === 0 ? (
         <Card padding={true}>
-          <Empty title="ไม่พบสินค้า" sub="ลองเปลี่ยน filter หรือค้นหาใหม่"/>
+          {hiddenByCat.length > 0 ? (
+            <Empty title="🏷️ สินค้ายังไม่ได้ตั้งหมวด"
+              sub={`พบ ${hiddenByCat.length} รายการที่ตรงกับที่ค้นหา (${hiddenByCat.slice(0,3).map(p => p.sku).join(", ")}${hiddenByCat.length > 3 ? " …" : ""}) `
+                 + "แต่ยังไม่ได้ตั้งหมวดสินค้า จึงไม่ขึ้นในตาราง — แจ้งเจ้าของให้เติมหมวดให้ก่อน"}/>
+          ) : (
+            <Empty title="ไม่พบสินค้า" sub="ลองเปลี่ยน filter หรือค้นหาใหม่"/>
+          )}
         </Card>
       ) : (
         <div className="front-grid">
