@@ -376,8 +376,8 @@ function startServer() {
         await page.waitForTimeout(300);
         const rows = await page.locator('.noti-item').count();
         const unreadRows = await page.locator('.noti-item.unread').count();
-        if (rows !== 2 || unreadRows !== 1) {
-          status = 'PANEL_FAIL'; note = `รายการ=${rows} (คาด 2), ยังไม่อ่าน=${unreadRows} (คาด 1)`;
+        if (rows !== 3 || unreadRows !== 1) {
+          status = 'PANEL_FAIL'; note = `รายการ=${rows} (คาด 3), ยังไม่อ่าน=${unreadRows} (คาด 1)`;
         } else {
           // กดรายการที่ยังไม่อ่าน → ต้องปิด panel + พาไปแท็บ orders + **เด้งไปที่ของชิ้นนั้น**
           await page.locator('.noti-item.unread').first().click({ timeout: 2000 });
@@ -413,7 +413,28 @@ function startServer() {
               note = `กดแจ้งเตือนของโอนแล้วตัวกรองเป็น "${activeSeg}" (คาด "🚚 ส่งแล้ว")`;
             } else if (!/รายการส่งออก/.test(body) || !/TF-20250601-001/.test(body)) {
               status = 'VIEW_FAIL'; note = 'ตัวกรองถูกแต่รายการของที่รอรับไม่ขึ้นบนจอ';
-            } else note = 'badge/panel/nav/เด้งไปที่สินค้า/ของโอน→หน้ากดรับของ ครบ';
+            } else {
+              // ── แจ้งเตือน "ของหมดหน้าร้าน" → "สินค้า & สั่ง" + เปิดตัวกรอง 🛒 ควรสั่ง ──
+              // ต้องเช็คว่า **ตัวกรองเปิดจริง** ไม่ใช่แค่มาถึงแท็บ — มาถึงแล้วตัวกรองไม่ติด
+              // = เห็นสินค้าทั้งหมดเหมือนเดิม ซึ่งหน้าจอดูปกติทุกประการ ไม่มีอะไรบอกว่าพลาด
+              await page.locator('.noti-btn').first().click({ timeout: 2000 });
+              await page.waitForTimeout(300);
+              await page.locator('.noti-item').nth(2).click({ timeout: 2000 });
+              await page.waitForTimeout(700);
+              const onCats = await page.locator('main[data-screen-label="categories"]').count();
+              const reorderOn = await page.locator('button[data-reorder="on"]').count();
+              const cardSkus = await page.evaluate(() => {
+                const els = [...document.querySelectorAll('main [data-sku]')];
+                return [...new Set(els.map((e) => e.getAttribute('data-sku')))];
+              });
+              if (!onCats) { status = 'VIEW_FAIL'; note = 'กดแจ้งเตือนของหมดหน้าร้านแล้วไม่ไปแท็บสินค้า & สั่ง'; }
+              else if (!reorderOn) { status = 'VIEW_FAIL'; note = 'ถึงแท็บแล้วแต่ตัวกรอง "🛒 ควรสั่ง" ไม่ถูกเปิด'; }
+              // FLW002 = ตัวเดียวใน fixture ที่หน้าร้านเหลือน้อย+คลังมีของ · VAS001 ต้องถูกกรองออก
+              else if (!cardSkus.includes('FLW002') || cardSkus.includes('VAS001')) {
+                status = 'VIEW_FAIL';
+                note = `ตัวกรองเปิดแต่รายการไม่ถูกกรอง (เห็น: ${cardSkus.join(',') || 'ไม่มี'})`;
+              } else note = 'badge/panel/nav/เด้งไปที่สินค้า/ของโอน→หน้ากดรับ/หมดหน้าร้าน→ตัวกรองควรสั่ง ครบ';
+            }
           }
         }
       }

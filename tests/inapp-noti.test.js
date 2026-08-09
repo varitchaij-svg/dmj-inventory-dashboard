@@ -18,6 +18,8 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const GS = readFileSync(join(ROOT, 'appsscript_complete.gs'), 'utf8');
 const UI = readFileSync(join(ROOT, 'ui.jsx'), 'utf8');
 const APP = readFileSync(join(ROOT, 'app.jsx'), 'utf8');
+const VMAIN = readFileSync(join(ROOT, 'views-main.jsx'), 'utf8');
+const VANA = readFileSync(join(ROOT, 'views-analytics.jsx'), 'utf8');
 
 // inappNotiRoute_ — eval ฟังก์ชันจริงจาก .gs (ไม่ copy เข้า helpers.js เหมือน auth.test.js)
 // เพราะเป็นตัวตัดสิน "กดแจ้งเตือนแล้วไปไหน" ซึ่งสำเนาที่ drift แล้วจะพาไปผิดหน้าโดยเงียบสนิท
@@ -264,16 +266,33 @@ describe('การเชื่อมต่อ (meta)', () => {
   });
 
   it('ทุก view ที่แจ้งเตือนสั่งมา มีตัวรับจริงที่ปลายทาง (ตั้งคำขอแล้วไม่มีใครอ่าน = ตายเงียบ)', () => {
-    const VANA = readFileSync(join(ROOT, 'views-analytics.jsx'), 'utf8');
+    // ค้นทั้ง 2 ไฟล์ view — ตัวรับอยู่คนละไฟล์กัน (orders อยู่ analytics · categories อยู่ main)
+    // ดูไฟล์เดียว = view ที่รับในอีกไฟล์จะถูกรายงานว่า "ไม่มีตัวรับ" ทั้งที่มี
+    const VIEWS = VANA + '\n' + VMAIN;
     const routes = [...GS.matchAll(/pushInappNoti_\(\{[\s\S]*?tab:\s*'([a-z]+)',\s*view:\s*'([a-z]+)'/g)]
       .map(m => ({ tab: m[1], view: m[2] }));
     // + ปลายทางที่ inappNotiRoute_ กู้ให้แถวเก่า (ไม่มีใน call site ไหนเลย ต้องนับด้วย)
     const healed = inappNotiRoute_('shipment', 'stock', '');
     routes.push(healed);
+    expect(routes.length, 'ไม่เจอ call site ที่ส่ง view เลย').toBeGreaterThanOrEqual(3);
     routes.forEach(({ tab, view }) => {
-      const hook = VANA.match(new RegExp(`useViewIntent\\("${tab}",[\\s\\S]*?\\n`));
+      // ต้องกินทั้งบล็อก callback — ตัวรับบางตัวเขียนหลายบรรทัด (หยุดที่ \n จะได้แค่บรรทัดแรก
+      // แล้วรายงานว่า "ไม่รู้จัก view" ทั้งที่รับอยู่จริง)
+      const hook = VIEWS.match(new RegExp(`useViewIntent\\("${tab}",[\\s\\S]*?\\}\\);`));
       expect(hook, `แท็บ ${tab} ไม่มี useViewIntent รับ`).not.toBeNull();
       expect(hook[0], `${tab} ไม่รู้จัก view "${view}"`).toContain(`"${view}"`);
+    });
+  });
+
+  it('ทุกแจ้งเตือนที่ยิงเป็นชุด (หลาย SKU) ต้องผูก dedupKey — ไม่งั้นรัวซ้ำเรื่องเดิม', () => {
+    // ตัวสแกนตามเวลา (syncZortBoth ทุก 2 ชม. · archive ตี 3) รันซ้ำได้ในวันเดียวกัน
+    // ไม่มี dedupKey = กระดิ่งเด้งเรื่องเดิมวันละหลายรอบจนไม่มีใครอ่าน
+    const blocks = [...GS.matchAll(/pushInappNoti_\(\{[\s\S]*?\n\s*\}\);/g)].map(m => m[0]);
+    const scans = blocks.filter(b => /lowStockItems|fsRestockItems|pend\.length/.test(b));
+    expect(scans.length, 'ไม่เจอแจ้งเตือนแบบสแกนเป็นชุดเลย').toBeGreaterThanOrEqual(4);
+    scans.forEach(b => {
+      expect(b, 'แจ้งเตือนแบบสแกนเป็นชุดไม่มี dedupKey').toMatch(/dedupKey:/);
+      expect(b, 'dedupKey ต้องผูกกับวันที่ (ไม่งั้นเตือนได้ครั้งเดียวตลอดกาล)').toMatch(/dayKey|DayKey/i);
     });
   });
 

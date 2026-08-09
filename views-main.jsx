@@ -3336,6 +3336,19 @@ function CategoryView({ data, role, onNav }) {
     if (mineOnly && active && navCats.indexOf(active) < 0) setActive("");
   }, [mineOnly, active, navCats]);
 
+  // กดแจ้งเตือน "ของหมดหน้าร้าน — คลังยังมี" → เปิดหน้านี้ในตัวกรอง "🛒 ควรสั่ง" ให้เลย
+  // ⚠️ ต้องล้างตัวกรองอื่นที่ "ซ่อนของ" ออกให้หมดก่อน — คนที่ค้างไว้ที่หมวดใดหมวดหนึ่ง /
+  //    โหมด ⭐ ของฉัน / คำค้น / ตัวกรองสี-ร้าน จะเห็นรายการว่างเปล่าทั้งที่ของอยู่ครบ
+  //    แล้วแยกไม่ออกจาก "แอปพัง" (หลักเดียวกับที่ useSkuFocus ของแท็บ orders ดึง filter
+  //    กลับเป็น "ทั้งหมด" ก่อนเสมอ) · ตัวกรองปลายทางคุมด้วย needsReorder ตัวเดียวพอ
+  useViewIntent("categories", (v) => {
+    if (v !== "reorder") return;
+    setActive(""); setMineOnly(false); setGlobalSearch("");
+    setGlobalVendor(null); setColorFilter(null); setSupplierFilter(null);
+    setDeadFilter(null); setNewStockFilter(false);
+    setReorderFilter(true);
+  });
+
   // pagination — 20 รายการต่อหน้า
   const PAGE_SIZE = 20;
   const visible = filtered.slice((page-1)*PAGE_SIZE, page*PAGE_SIZE);
@@ -3739,6 +3752,10 @@ function CategoryView({ data, role, onNav }) {
                 return (
                   <button
                     onClick={() => setReorderFilter(v => !v)}
+                    /* สถานะเปิด/ปิดของตัวกรองนี้อ่านได้จากสีเท่านั้น (inline style ล้วน) —
+                       เทสต์เบราว์เซอร์ต้องยืนยันว่ากดแจ้งเตือนแล้ว "ตัวกรองถูกเปิดจริง"
+                       ไม่ใช่แค่สลับแท็บมาถึง จึงต้องมีที่ยึดที่ไม่ผูกกับค่าสี */
+                    data-reorder={reorderFilter ? "on" : "off"}
                     style={{
                       flex:"1 1 200px", minWidth:0, minHeight:44,
                       display:"flex", alignItems:"center", justifyContent:"center", gap:8,
@@ -5042,7 +5059,11 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
 
   return (
     <>
-    <div className="card hover" style={{padding:0, overflow:"hidden", display:"flex", flexDirection:"column"}}>
+    {/* data-sku = ที่ยึดให้เทสต์ตรวจได้ว่า "ลิสต์ถูกกรองจริง" ไม่ใช่แค่มาถึงแท็บ —
+        เทียบด้วยข้อความบนจอไม่ได้ เพราะรหัสสินค้าโผล่ในแบนเนอร์ของค้างสั่งด้านบนด้วย
+        (คอนเวนชันเดียวกับ data-order-sku ที่แถวออเดอร์ใช้อยู่) */}
+    <div className="card hover" data-sku={p.sku}
+         style={{padding:0, overflow:"hidden", display:"flex", flexDirection:"column"}}>
       {/* Image */}
       <div className="pcard-img" onClick={hasImg ? () => setLightbox(true) : null}
            style={{position:"relative", padding:8, background: "linear-gradient(180deg, var(--g-50), #fff)",
