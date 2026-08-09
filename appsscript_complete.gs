@@ -12659,7 +12659,15 @@ var POS_ZORT_FIELDS = {
   orderCustomerAddress: "customeraddress",
   orderCustomerPhone:   "customerphone",
   orderCustomerEmail:   "customeremail",
-  orderChannel:         "channel",   // ช่องทางขาย (หน้าร้าน/Line OA/...)
+  // ⚠️ ช่องทางขาย: ใช้ "saleschannel" ให้ตรงกับ createQuotation ที่ยืนยันแล้วว่าเวิร์ก
+  //    เดิมเป็น "channel" ซึ่ง ZORT ไม่รู้จัก → หน้ารายการขายขึ้นช่องทางเป็น "–" ทุกบิล
+  //    (เห็นจากหน้า ZORT จริง ส.ค. 2026 — บิล RC-202608007 ช่องทางว่างทั้งที่ POS ส่ง "หน้าร้าน")
+  orderChannel:         "saleschannel",
+  // ยอดรวมหัวเอกสาร — ZORT **ไม่คำนวณให้เองจาก list[].totalprice** (เหมือน AddQuotation เป๊ะ)
+  // ไม่ส่ง = หน้ารายการขายขึ้น "มูลค่า 0" ทั้งที่ line item ถูกต้องครบ · ดูหัวข้อใน CLAUDE.md
+  orderAmount:          "amount",
+  orderAmountPreVat:    "amount_pretax",
+  orderVatAmount:       "vatamount",
   // line item: ZORT v4 ใช้ pricepernumber เป็นราคาต่อหน่วย (ไม่ใช่ price) — ส่งครบทั้ง 3 กันพลาด
   orderStatusField:     "status",    // field สถานะใน AddOrder / UpdateOrderStatus
   orderStatusDone:      "Success",   // ค่าสถานะ "สำเร็จ" (แก้ที่นี่ถ้า ZORT ใช้ค่าอื่น)
@@ -12761,17 +12769,112 @@ function searchContact(query) {
   return error("ค้นลูกค้าไม่สำเร็จ: " + lastErr);
 }
 
+// ── 🔎 ตรวจบิลขายใน ZORT (READ-ONLY) — "ทำไมมูลค่าขึ้น 0" ────────────────────
+// เจ้าของรันเองใน GAS editor: checkSaleBillInZort("RC-202608007")
+// ชื่อไม่มี `_` ต่อท้ายจึงโผล่ใน dropdown (บทเรียนข้อ 1) · **อ่านอย่างเดียว ไม่แก้/ไม่สร้างอะไร**
+//
+// ที่มา (ส.ค. 2026): บิล ฿476 ออกสำเร็จ แต่หน้ารายการขายของ ZORT ขึ้น "มูลค่า 0"
+// ตัวนี้บอกให้เห็นกับตาว่า ZORT เก็บอะไรไว้จริง — แยกให้ขาดระหว่าง
+//   (ก) line item ผิด/หาย  vs  (ข) line item ถูกแต่ "ยอดหัวเอกสาร" เป็น 0
+// ซึ่งแก้คนละทางกันสิ้นเชิง · เทียบกับชีต "บิลขาย" ฝั่งเราให้ด้วยว่ายอดตรงกันไหม
+function checkSaleBillInZort(number) {
+  var num = String(number || "").trim();
+  if (!num) { Logger.log('❌ ใส่เลขบิลด้วย เช่น checkSaleBillInZort("RC-202608007")'); return { ok: false }; }
+
+  var found = findZortOrderByNumber_(num);
+  if (!found) { Logger.log('❌ ไม่พบบิล "' + num + '" ใน ZORT (ค้นย้อนหลัง 180 วัน)'); return { ok: false }; }
+  var d = found.detail || {};
+
+  Logger.log('📄 ZORT order ' + (d.number || num) + ' (id=' + found.id + ')');
+  Logger.log('   สถานะ: ' + (d.status || '—') + ' · ชำระ: ' + (d.paymentstatus || d.paymentstatustext || '—') +
+             ' · ช่องทาง: ' + (d.saleschannel || d.channel || '(ว่าง)'));
+
+  // (ก) ยอดหัวเอกสาร — ไล่ทุกชื่อ field ที่ ZORT อาจใช้ ไม่เดาชื่อเดียว
+  var amtKeys = ["amount", "amount_pretax", "vatamount", "totalamount", "grandtotal", "netamount", "paymentamount"];
+  var head = [];
+  amtKeys.forEach(function (k) { if (d[k] != null) head.push(k + "=" + d[k]); });
+  Logger.log('   ยอดหัวเอกสาร: ' + (head.length ? head.join(" · ") : "(ไม่มี field ยอดเลย)"));
+
+  // (ข) line items — ผลรวมจริงของบรรทัด
+  var list = d.list || d.items || [];
+  var sumTotal = 0, sumUnitxQty = 0;
+  Logger.log('   รายการ ' + list.length + ' บรรทัด:');
+  list.forEach(function (it, i) {
+    var qty = Number(it.number) || 0;
+    var ppn = Number(it.pricepernumber) || 0;
+    var tp = Number(it.totalprice) || 0;
+    sumTotal += tp; sumUnitxQty += ppn * qty;
+    if (i < 20) Logger.log('     ' + (i + 1) + '. ' + it.sku + ' x' + qty +
+                           ' · pricepernumber=' + ppn + ' · price=' + (it.price != null ? it.price : "—") +
+                           ' · totalprice=' + tp);
+  });
+  Logger.log('   ผลรวมบรรทัด: totalprice=' + (Math.round(sumTotal * 100) / 100) +
+             ' · pricepernumber×number=' + (Math.round(sumUnitxQty * 100) / 100));
+
+  // (ค) เทียบกับยอดที่ "เราคิด" (ชีตบิลขายฝั่งเรา) — ตัวชี้ขาดว่าเพี้ยนตรงไหน
+  var mine = null;
+  try {
+    var sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_SALE_BILLS);
+    if (sh && sh.getLastRow() >= 2) {
+      var rows = sh.getRange(2, 1, sh.getLastRow() - 1, Math.max(24, sh.getLastColumn())).getValues();
+      for (var i = rows.length - 1; i >= 0; i--) {
+        if (String(rows[i][3]).trim() === num) {   // D = เลขบิล
+          mine = { grandTotal: rows[i][8], preVat: rows[i][9], vat: rows[i][10], shipFee: rows[i][22], payTotal: rows[i][23] };
+          break;
+        }
+      }
+    }
+  } catch (e) { Logger.log('   (อ่านชีตบิลขายไม่ได้: ' + e + ')'); }
+  if (mine) {
+    Logger.log('   ฝั่งเรา (ชีตบิลขาย): ยอดสุทธิ=' + mine.grandTotal + ' · ก่อน VAT=' + mine.preVat +
+               ' · VAT=' + mine.vat + ' · ค่าส่ง=' + mine.shipFee + ' · ยอดเก็บลูกค้า=' + mine.payTotal);
+  } else {
+    Logger.log('   ⚠️ ไม่เจอบิลนี้ในชีต "' + SHEET_SALE_BILLS + '" (บิลเก่ากว่าที่เริ่มเก็บ log?)');
+  }
+
+  // (ง) สรุปให้ชัดว่าควรแก้ทางไหน — ไม่ให้เจ้าของต้องตีความเลขเอง
+  var headAmount = Number(d.amount) || 0;
+  if (sumTotal > 0 && headAmount === 0) {
+    Logger.log('🔴 สรุป: line item ถูกต้อง แต่ "ยอดหัวเอกสาร" เป็น 0 → ZORT ไม่คำนวณยอดรวมให้เอง');
+    Logger.log('   แก้: AddOrder ต้องส่ง amount/amount_pretax/vatamount เอง (เหมือน AddQuotation)');
+  } else if (sumTotal === 0) {
+    Logger.log('🔴 สรุป: line item ไม่มีราคาเลย → ปัญหาอยู่ที่ field ราคาในบรรทัด ไม่ใช่ยอดหัวเอกสาร');
+  } else if (mine && Math.abs(headAmount - Number(mine.payTotal || mine.grandTotal)) > 0.01) {
+    Logger.log('🟠 สรุป: ZORT มียอด แต่ไม่ตรงกับที่เราคิด (ต่าง ' +
+               (Math.round((headAmount - Number(mine.payTotal || mine.grandTotal)) * 100) / 100) + ')');
+  } else {
+    Logger.log('🟢 สรุป: ยอดใน ZORT ตรงกับที่เราคิด');
+  }
+  return { ok: true, headAmount: headAmount, lineSum: Math.round(sumTotal * 100) / 100, mine: mine };
+}
+
 // ── ชีต "บิลขาย" — log บิล POS ฝั่งเราเอง (1 แถว = 1 บิล) ────────────────────
 // ทำไมต้องมี: createSaleBill ยิงเข้า ZORT อย่างเดียว ไม่เหลือร่องรอยฝั่งเรา (เหลือแค่ audit log)
 // → ดู "ยอดขายวันนี้"/ปิดยอดเงินสด/แยกตามเซล ไม่ได้เลย จนกว่า syncZortSales จะรอบถัดไป (ทุก 2 ชม.)
 // เก็บระดับ "บิล" ไม่ใช่ระดับรายการ — รายละเอียดสินค้าในบิลดึงจาก ZORT ได้ด้วย lookupSaleBill(เลขบิล)
+// ⚠️ **ต่อท้ายอย่างเดียว ห้ามแทรก/สลับคอลัมน์กลางตาราง** — appendSaleBillRow_ เขียนตามตำแหน่ง
+//    และแถวเก่าหลายพันแถวในชีตจริงอ่านตามตำแหน่งเดิม (บทเรียนข้อ 5 เรื่อง column index)
+var SALE_BILL_HEADERS_ = [
+  "id", "วันที่", "เวลา", "เลขบิล", "เลขใบกำกับ", "ผู้ขาย", "ช่องทาง", "วิธีชำระ",
+  "ยอดสุทธิ", "ก่อน VAT", "VAT", "ส่วนลดรวม", "จำนวนรายการ", "จำนวนชิ้น",
+  "ลูกค้า", "เลขผู้เสียภาษี", "ใบกำกับภาษี", "รับเงินสด", "เงินทอน",
+  "zortOrderId", "สถานะ", "หมายเหตุ",
+  // ── เพิ่มตอนทำโหมด "ขายออนไลน์" (ส.ค. 2026) — W..AC ──
+  "ค่าจัดส่ง", "ยอดเก็บลูกค้า", "ขนส่ง", "เลขพัสดุ", "ผู้รับ", "ที่อยู่จัดส่ง", "โหมดขาย",
+];
 function saleBillsSheet_(ss) {
-  return getOrCreateSheet_(ss, SHEET_SALE_BILLS, [
-    "id", "วันที่", "เวลา", "เลขบิล", "เลขใบกำกับ", "ผู้ขาย", "ช่องทาง", "วิธีชำระ",
-    "ยอดสุทธิ", "ก่อน VAT", "VAT", "ส่วนลดรวม", "จำนวนรายการ", "จำนวนชิ้น",
-    "ลูกค้า", "เลขผู้เสียภาษี", "ใบกำกับภาษี", "รับเงินสด", "เงินทอน",
-    "zortOrderId", "สถานะ", "หมายเหตุ",
-  ]);
+  var sh = getOrCreateSheet_(ss, SHEET_SALE_BILLS, SALE_BILL_HEADERS_);
+  // getOrCreateSheet_ เขียนหัวคอลัมน์เฉพาะตอน "สร้างชีตใหม่" — ชีตที่มีอยู่แล้ว (22 คอลัมน์เดิม)
+  // จะไม่มีหัวของคอลัมน์ใหม่ ทั้งที่ appendRow เขียนค่าลงไปแล้ว → เจ้าของเปิดชีตเจอคอลัมน์
+  // ไม่มีชื่อแล้วเดาไม่ออกว่าเลขอะไร · เติมให้เองแบบต่อท้าย ไม่แตะของเดิม
+  try {
+    var have = sh.getLastColumn();
+    if (have < SALE_BILL_HEADERS_.length) {
+      var add = SALE_BILL_HEADERS_.slice(have);
+      sh.getRange(1, have + 1, 1, add.length).setValues([add]).setFontWeight("bold");
+    }
+  } catch (e) { Logger.log("saleBillsSheet_ header migrate: " + e); }
+  return sh;
 }
 
 // id กันชนกันแม้มีการลบแถว (บทเรียนเดียวกับ attNextId_ — ห้ามใช้ getLastRow() เฉย ๆ)
@@ -12813,6 +12916,12 @@ function appendSaleBillRow_(ss, rec) {
       rec.cashChange == null ? "" : Number(rec.cashChange),
       String(rec.zortOrderId == null ? "" : rec.zortOrderId),
       "สำเร็จ", "",
+      // W..AC — ขายออนไลน์ (หน้าร้านจะว่างทั้งแถบ ไม่ต้องแยกชีต)
+      Number(rec.shipFee) || 0,
+      Number(rec.payTotal) || (Number(rec.grandTotal) || 0),
+      String(rec.shipMethod || ""), String(rec.shipTracking || ""),
+      String(rec.shipRecipient || ""), String(rec.shipAddress || ""),
+      String(rec.saleMode || ""),
     ];
     sh.appendRow(row);
     // วันที่/เวลา/เลขบิล เป็น text — กัน Sheets แปลง "2026-07-29" เป็น Date และเลขบิลยาวเป็น
@@ -12821,6 +12930,7 @@ function appendSaleBillRow_(ss, rec) {
     sh.getRange(r, 2, 1, 3).setNumberFormat("@");   // B วันที่, C เวลา, D เลขบิล
     sh.getRange(r, 5, 1, 1).setNumberFormat("@");   // E เลขใบกำกับ
     sh.getRange(r, 20, 1, 1).setNumberFormat("@");  // T zortOrderId
+    sh.getRange(r, 26, 1, 1).setNumberFormat("@");  // Z เลขพัสดุ (เลขล้วนยาว → กันกลายเป็น 1.2E+12)
     return { ok: true, id: id };
   } catch (e) {
     Logger.log("appendSaleBillRow_ error: " + e);
@@ -12882,6 +12992,99 @@ function deductFrontStoreForSale_(ss, list) {
 //   manualDiscount, paymentMethod, taxInvoice(bool), dryRun(bool), remark
 // }
 // หมายเหตุ: คิดยอดฝั่ง server ซ้ำด้วย computeBillTotalsGs_ (ไม่เชื่อยอดจาก client) กันตัวเลขถูกแก้
+// วิธีชำระที่ "เงินยังไม่เข้า" — ห้ามบันทึกรับชำระใน ZORT ไม่งั้นยอดค้างรับหายจากระบบ
+// ทั้งที่ยังไม่ได้เงินจริง (COD ได้เงินตอนขนส่งโอนกลับมา ไม่ใช่ตอนกดขาย)
+// ⚠️ ค่าต้องตรงกับ POS_ONLINE_PAY ฝั่ง views-analytics.jsx เป๊ะ ๆ
+var POS_UNPAID_METHODS_ = ["เก็บเงินปลายทาง"];
+
+// SKU สินค้า/บริการ "ค่าจัดส่ง" ใน ZORT — เจ้าของสร้างเองใน ZORT แล้วมาตั้งค่าที่
+// Script Property `SHIPPING_FEE_SKU` (เช่น "SHIPPING")
+// ⚠️ **ไม่ตั้ง = ไม่ส่งค่าจัดส่งเข้า ZORT เลย** (ยอด order ใน ZORT = ค่าสินค้าล้วน) —
+//    เป็นค่าตั้งต้นโดยตั้งใจ เพราะการยัด line item ที่ไม่มี SKU จริงเข้า AddOrder เป็นการ
+//    "เดา field" ที่ถ้า ZORT ปฏิเสธ = ออกบิลไม่ได้ทั้งใบ (บิลพังทั้งที่แค่ค่าส่ง 50 บาท)
+//    ทั้งสองทางค่าจัดส่งยังถูกบันทึกในชีต "บิลขาย" + remark ของ order + สรุปที่ส่งลูกค้าเสมอ
+function readShippingFeeSku_() {
+  try { return String(PropertiesService.getScriptProperties().getProperty("SHIPPING_FEE_SKU") || "").trim(); }
+  catch (e) { return ""; }
+}
+
+// ข้อความจัดส่งที่ต่อท้าย remark ของ order — ต้องมีเสมอแม้ค่าส่งไม่ได้เข้า ZORT เป็น line item
+// (คนแพ็คของเปิดดูใน ZORT ต้องเห็นว่าส่งไปที่ไหน ใครรับ ขนส่งอะไร)
+function shippingRemark_(shipping, shipInZort) {
+  var s = shipping || {};
+  var parts = [];
+  if (s.recipient) parts.push("ผู้รับ: " + String(s.recipient));
+  if (s.phone)     parts.push("โทร: " + String(s.phone));
+  if (s.address)   parts.push("ที่อยู่: " + String(s.address));
+  if (s.method)    parts.push("ขนส่ง: " + String(s.method));
+  if (s.tracking)  parts.push("เลขพัสดุ: " + String(s.tracking));
+  var fee = Math.max(0, Number(s.fee) || 0);
+  // บอกให้ชัดว่าค่าส่งอยู่ในยอด order นี้แล้วหรือเก็บนอกยอด — คนกระทบยอดเงินต้องไม่ต้องเดา
+  if (fee > 0) parts.push("ค่าจัดส่ง: " + fee + (shipInZort ? " (รวมในยอดแล้ว)" : " (เก็บลูกค้าเพิ่ม ไม่รวมในยอดนี้)"));
+  if (s.note)      parts.push("หมายเหตุ: " + String(s.note));
+  return parts.join(" | ");
+}
+
+// ═══ line items ที่ยิงเข้า ZORT — ปัดเศษสะสม (cumulative rounding) ═══════════════
+// เจ้าของทักไว้ (ส.ค. 2026): "ในระบบ ZORT ต้องหักเงินตามที่เราคิดนะ" — ยอดที่ ZORT บันทึก
+// (= ยอดที่ถูกหัก/เรียกเก็บจริง) ต้องตรงกับยอดที่แอปคิดให้ผู้ขาย/ลูกค้าเห็นเป๊ะ ไม่ใช่แค่ใกล้เคียง
+//
+// ⚠️ ของเดิมปัดเศษ **2 ชั้นแยกกัน**: ปัด unit price ก่อน (`Math.round(price*factor*100)/100`)
+//    แล้วค่อยปัด `totalprice = unitPrice*qty` อีกที — ปัด 2 ชั้นแบบนี้สะสมความคลาดเคลื่อนได้
+//    หลายสตางค์เมื่อบิลมีหลายรายการ/จำนวนต่อชิ้นเยอะ (ยิ่งบิลใหญ่ยิ่งเพี้ยนมาก) → ยอดที่ ZORT
+//    เก็บจริงต่างจาก `totals.grandTotal` ที่แอปโชว์ **โดยไม่มี error ให้เห็นเลย**
+// ✅ ตอนนี้ปัดแบบ "สะสม" (cumulative rounding — เทคนิคมาตรฐานของระบบบิล/บัญชี): เดินสะสม
+//    ยอดดิบ (ไม่ปัด) ทีละแถว แล้วปัดที่ยอดสะสม ณ จุดนั้นครั้งเดียว → ผลต่างระหว่างยอดสะสมที่ปัด
+//    รอบนี้กับรอบก่อนคือยอดของแถวนี้ · คุณสมบัติ telescoping sum รับประกันว่า
+//    **sum(totalprice ทุกแถว) == round(grandTotal*100)/100 เป๊ะเสมอ** ไม่ว่าจะกี่แถว/ราคาเท่าไหร่
+// ⚠️ **`pricepernumber` ห้ามปัดซ้ำเป็น 2 ตำแหน่งทศนิยมอีกชั้น** — ต้องคง
+//    `pricepernumber × qty === totalprice` เป๊ะเสมอ เพราะยืนยันจากหน้า ZORT แล้วว่า
+//    `pricepernumber × number` คือตัวที่ ZORT ใช้คิดยอดจริง (ไม่ใช่ field `totalprice`
+//    — ดูคอมเมนต์ที่ `AddOrder` ด้านล่าง) ปัดซ้ำจะดึงความคลาดเคลื่อนที่เพิ่งกำจัดกลับมา
+function buildZortLineItems_(items, factor) {
+  var cumIdealCents = 0, cumAssignedCents = 0;
+  var list = [];
+  (items || []).forEach(function (it) {
+    var qty = Number(it.qty) || 0;
+    if (qty <= 0) return;
+    cumIdealCents += (Number(it.price) || 0) * qty * factor * 100;
+    var cumRoundedCents = Math.round(cumIdealCents);
+    var lineCents = cumRoundedCents - cumAssignedCents;
+    cumAssignedCents = cumRoundedCents;
+    var totalPrice = lineCents / 100;
+    var unitPrice = totalPrice / qty;
+    list.push({
+      sku: String(it.sku || "").trim(),
+      name: String(it.name || "").trim(),
+      number: qty,
+      pricepernumber: unitPrice,
+      price: unitPrice,
+      totalprice: totalPrice,
+    });
+  });
+  return list;
+}
+
+// ═══ ยอดรวมหัวเอกสารที่ต้องส่งให้ AddOrder ═══════════════════════════════════════
+// ⚠️ **ZORT ไม่คำนวณยอดรวมหัวเอกสารจาก list[].totalprice ให้เอง** — พฤติกรรมเดียวกับ
+//    AddQuotation เป๊ะ (ยืนยันแล้วด้วย exploreZortQuotationAmountFix() แบบ test-then-void)
+//    ไม่ส่ง = หน้ารายการขายของ ZORT ขึ้น **"มูลค่า 0"** ทั้งที่ line item ถูกต้องครบทุกบรรทัด
+//    → ยอดขายไม่เข้าระบบ ZORT เลย (เจอจริง ส.ค. 2026: บิล RC-202608007 ยอด ฿476 ขึ้น 0)
+// ⚠️ **ห้ามส่ง vattype/vatpercent/discount ปนไปด้วย** — ลองกับ AddQuotation แล้วทำให้ ZORT
+//    recompute amount_pretax/vatamount ทับกลายเป็นค่าผิดแทน (แย่กว่าไม่ส่ง)
+//
+// ราคาทุกบรรทัด **รวม VAT แล้ว** (computeBillTotalsGs_ ถอดกลับด้วย 7/107) ค่าจัดส่งที่ส่งเป็น
+// line item เข้า ZORT ก็เป็นราคารวม VAT เหมือนกัน → ถอด VAT ของยอดทั้งก้อนด้วยอัตราเดียวกัน
+// จึงตรงกับผลรวม line item เสมอ · ค่าส่งที่ **ไม่ได้** เข้า ZORT ต้องไม่นับที่นี่ (ไม่งั้นหัวเอกสาร
+// ไม่ตรงกับผลรวมบรรทัด = ZORT ขึ้นยอดที่ไม่มีที่มา)
+function zortOrderAmounts_(goodsTotal, shipFeeInZort, vatRate) {
+  vatRate = vatRate != null ? vatRate : 0.07;
+  var r2 = function (n) { return Math.round(n * 100) / 100; };
+  var amount = r2((Number(goodsTotal) || 0) + (Number(shipFeeInZort) || 0));
+  var vat = r2(amount * vatRate / (1 + vatRate));
+  return { amount: amount, preVat: r2(amount - vat), vat: vat };
+}
+
 function createSaleBill(ss, data, actor) {
   var items = Array.isArray(data.items) ? data.items : [];
   if (!items.length) return error("ไม่มีรายการสินค้าในบิล");
@@ -12894,32 +13097,48 @@ function createSaleBill(ss, data, actor) {
   // line items สำหรับ ZORT — เฉลี่ยส่วนลดลงราคาต่อชิ้นตามสัดส่วน (ให้ยอดรวม = grandTotal)
   var gross = totals.retailEligible + totals.retailExcluded;
   var factor = gross > 0 ? (totals.grandTotal / gross) : 1;   // อัตราส่วนหลังส่วนลดทั้งบิล
-  // line items — ยืนยันจากหน้า ZORT: "มูลค่าต่อหน่วย" มาจาก field pricepernumber (ไม่ใช่ price)
+  // ยืนยันจากหน้า ZORT: "มูลค่าต่อหน่วย" มาจาก field pricepernumber (ไม่ใช่ price)
   // ถ้าไม่ส่ง pricepernumber → หน่วย=0 → ยอดรวมสุทธิ=0 · ต้องส่ง pricepernumber = ราคาต่อหน่วยจริง
   // ไม่ใส่ warehousecode (ทั้ง order + line) — mirror createZortSaleOrder_ ที่เวิร์ก · warehousecode
   // ทำให้ ZORT สร้างงานโอนค้าง "รอโอนสินค้า" (ให้ ZORT หักจากคลัง default เหมือน MTO)
-  var list = items.map(function (it) {
-    var qty = Number(it.qty) || 0;
-    var netUnit = Math.round((Number(it.price) || 0) * factor * 100) / 100;  // ราคาต่อชิ้นสุทธิ (หลังเฉลี่ยส่วนลด, รวม VAT)
-    return {
-      sku: String(it.sku || "").trim(),
-      name: String(it.name || "").trim(),
-      number: qty,
-      pricepernumber: netUnit,                         // ← field ที่ ZORT ใช้เป็น "มูลค่าต่อหน่วย" จริง
-      price: netUnit,
-      totalprice: Math.round(netUnit * qty * 100) / 100,
-    };
-  }).filter(function (it) { return it.number > 0; });
+  // ⚠️ ปัดเศษแบบ "สะสม" ผ่าน buildZortLineItems_ — ไม่ปัดแยกทีละชิ้นแล้ว (ดูคอมเมนต์ที่ฟังก์ชัน)
+  //    รับประกันว่า sum(totalprice) = grandTotal เป๊ะ = ยอดที่ ZORT หักตรงกับที่เราคิดเป๊ะสตางค์
+  var productList = buildZortLineItems_(items, factor);
+
+  // ── ค่าจัดส่ง (โหมดขายออนไลน์) ──────────────────────────────────────────────
+  // ⚠️ **บวกท้ายสุด ไม่เข้า computeBillTotalsGs_** — กฎส่วนลดขายส่ง 20%/ขั้นบาท และการถอด
+  //    VAT ผูกกับ "มูลค่าสินค้า" ล้วน · เอาค่าส่งไปรวมตั้งแต่ต้น = ค่าส่งถูกลดราคาและถูกถอด VAT
+  //    → ยอดเพี้ยนทั้งบิลโดยไม่มี error ให้เห็น (ฝั่ง frontend ใช้สูตรเดียวกันที่ onlineOrderTotal)
+  var shipping = data.shipping || {};
+  var shipFee = Math.max(0, Number(shipping.fee) || 0);
+  var shipSku = readShippingFeeSku_();
+  var shipInZort = !!(shipSku && shipFee > 0);
+  var payTotal = Math.round((totals.grandTotal + shipFee) * 100) / 100;   // ยอดที่เก็บลูกค้าจริง
+
+  // list ที่ยิงเข้า ZORT = สินค้า + (ค่าจัดส่งถ้าตั้ง SKU ไว้)
+  // ⚠️ **ห้ามเอา list ตัวนี้ไปให้ deductFrontStoreForSale_** — SKU ค่าจัดส่งจะถูกหักสต็อกด้วย
+  var list = productList.slice();
+  if (shipInZort) {
+    list.push({ sku: shipSku, name: "ค่าจัดส่ง", number: 1,
+      pricepernumber: shipFee, price: shipFee, totalprice: shipFee });
+  }
 
   // ประกอบ payload AddOrder — mirror createZortSaleOrder_ (minimal ที่เวิร์ก) + field ลูกค้า
   // ไม่ใส่ warehousecode/status ระดับ order (เดิมใส่แล้วราคากลายเป็น 0) — status ตั้งทีหลังผ่าน UpdateOrderStatus
   var F = POS_ZORT_FIELDS;
   var cust = data.customer || {};
+  var shipNote = shippingRemark_(shipping, shipInZort);
+  var remarkText = [String(data.remark || "").trim(), shipNote].filter(function (s) { return s; }).join(" | ");
+  // ยอดหัวเอกสาร — ต้องส่งเอง ไม่งั้น ZORT ขึ้น "มูลค่า 0" (ดูคอมเมนต์ที่ zortOrderAmounts_)
+  var zAmt = zortOrderAmounts_(totals.grandTotal, shipInZort ? shipFee : 0);
   var payload = {
     date: Utilities.formatDate(new Date(), "Asia/Bangkok", "dd/MM/yyyy"),
-    remark: String(data.remark || ""),
+    remark: remarkText,
     list: list,
   };
+  payload[F.orderAmount]       = zAmt.amount;
+  payload[F.orderAmountPreVat] = zAmt.preVat;
+  payload[F.orderVatAmount]    = zAmt.vat;
   if (data.channel)  payload[F.orderChannel]          = String(data.channel);
   if (cust.name)     payload[F.orderCustomerName]     = String(cust.name);
   if (cust.taxId)    payload[F.orderCustomerTaxId]    = String(cust.taxId);
@@ -12930,7 +13149,8 @@ function createSaleBill(ss, data, actor) {
   if (cust.email)    payload[F.orderCustomerEmail]    = String(cust.email);
 
   // dryRun = คืน payload + ยอดที่คิดได้ ไม่ยิง ZORT (ให้ตรวจก่อนใช้จริง)
-  if (data.dryRun) return ok({ dryRun: true, totals: totals, payload: payload });
+  if (data.dryRun) return ok({ dryRun: true, totals: totals, payload: payload,
+    shipFee: shipFee, payTotal: payTotal, shipInZort: shipInZort });
 
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่ ลองใหม่อีกครั้ง");
@@ -12968,10 +13188,16 @@ function createSaleBill(ss, data, actor) {
         muteHttpExceptions: true, payload: JSON.stringify({ id: orderId, orderid: orderId, documenttype: 2 }) });
       kinds.push("doc");
     }
-    if (data.paymentMethod && orderId != null) {
+    // ⚠️ เก็บเงินปลายทาง (COD) = เงินยังไม่เข้า → **ไม่บันทึกรับชำระ** ปล่อยให้ ZORT ขึ้นค้างชำระ
+    //    (บันทึกไปเลย = ยอดค้างรับหายจากระบบทั้งที่ยังไม่ได้เงิน แล้วไม่มีอะไรเตือนเลย)
+    var unpaidMethod = POS_UNPAID_METHODS_.indexOf(String(data.paymentMethod || "")) >= 0;
+    if (data.paymentMethod && !unpaidMethod && orderId != null) {
+      // ยอดรับชำระต้องเท่ากับ "ยอดที่ ZORT คิดว่า order นี้เป็นเงินเท่าไหร่" — ค่าส่งที่ไม่ได้
+      // ส่งเป็น line item เข้า ZORT ต้องไม่นับ ไม่งั้น ZORT ขึ้นว่ารับเงินเกินยอด
+      var zortOrderTotal = zAmt.amount;   // ตัวเดียวกับที่ส่งเป็นยอดหัวเอกสาร (แหล่งเดียว ไม่คิดซ้ำ)
       reqs.push({ url: ZORT_BASE + "/Order/UpdateOrderPayment", method: "post", headers: headers,
         muteHttpExceptions: true, payload: JSON.stringify({ id: orderId, orderid: orderId,
-          paymentmethod: String(data.paymentMethod), paymentamount: totals.grandTotal,
+          paymentmethod: String(data.paymentMethod), paymentamount: zortOrderTotal,
           paymentdate: Utilities.formatDate(new Date(), "Asia/Bangkok", "dd/MM/yyyy") }) });
       kinds.push("pay");
     }
@@ -13004,17 +13230,26 @@ function createSaleBill(ss, data, actor) {
 
     // ── หักสต็อกหน้าร้านในชีตทันที (ไม่ต้องรอ sync ZORT ทุก 2 ชม.) ──
     // กันขายเกิน: คนถัดไปที่เปิด POS จะเห็นเลขที่หักแล้ว ไม่ใช่เลขค้างของเมื่อ 2 ชม.ก่อน
-    var stockRes = deductFrontStoreForSale_(ss, list);
+    // ⚠️ ส่ง productList (ไม่ใช่ list) — list มีบรรทัด "ค่าจัดส่ง" ปนอยู่ตอนตั้ง SHIPPING_FEE_SKU
+    //    ส่งทั้ง list = สต็อกของ SKU ค่าจัดส่งถูกหักทุกบิลจนติดลบ/เป็น 0 โดยไม่มีใครสังเกต
+    var stockRes = deductFrontStoreForSale_(ss, productList);
     if (!stockRes.ok) {
       logZortFailure_("หักสต็อกหน้าร้านหลังออกบิล " + (orderNumber || ""), stockRes.error);
     }
 
     writeAuditLog_(actor || "ไม่ระบุ", "ออกบิลขาย", orderNumber || "(ไม่ทราบเลข)",
-      auditDetail_({ after: { total: totals.grandTotal, items: list.length,
+      auditDetail_({ after: { total: totals.grandTotal, items: productList.length,
         customer: (data.customer && data.customer.name) || "", taxInvoice: !!data.taxInvoice,
         payment: data.paymentMethod || "",
+        unpaid: unpaidMethod ? true : undefined,
         cashReceived: data.cashReceived != null ? Number(data.cashReceived) : undefined,
         channel: data.channel || "",
+        saleMode: data.saleMode || "",
+        shipFee: shipFee > 0 ? shipFee : undefined,
+        payTotal: shipFee > 0 ? payTotal : undefined,
+        shipInZort: shipFee > 0 ? shipInZort : undefined,
+        shipMethod: shipping.method || undefined,
+        shipTracking: shipping.tracking || undefined,
         // ร่องรอยการหักสต็อก — ไว้ไล่ย้อนตอนตัวเลขไม่ตรง
         stockDeducted: stockRes.ok ? stockRes.applied.length : "FAILED",
         stockShortfall: (stockRes.ok && stockRes.shortfall.length) ? stockRes.shortfall : undefined,
@@ -13034,19 +13269,27 @@ function createSaleBill(ss, data, actor) {
       // (computeBillTotalsGs_ ไม่ได้คืน wholesaleDiscount/tierDiscount แยกแบบฝั่ง frontend
       //  — คำนวณจากผลต่างแทน ได้ค่าเดียวกันและไม่ผูกกับ field ที่ไม่มีจริง)
       discount: Math.max(0, gross - totals.grandTotal),
-      lineCount: list.length,
-      unitCount: list.reduce(function (s, it) { return s + (Number(it.number) || 0); }, 0),
+      // นับเฉพาะสินค้าจริง — บรรทัด "ค่าจัดส่ง" ไม่ใช่ของที่ขาย ถ้านับด้วยรายงาน
+      // "จำนวนชิ้นที่ขายได้" จะเฟ้อขึ้น 1 ทุกบิลออนไลน์
+      lineCount: productList.length,
+      unitCount: productList.reduce(function (s, it) { return s + (Number(it.number) || 0); }, 0),
       customerName: (data.customer && data.customer.name) || "",
       customerTaxId: (data.customer && data.customer.taxId) || "",
       taxInvoice: !!data.taxInvoice,
       cashReceived: cashRecv,
       cashChange: cashRecv == null ? null : (cashRecv - totals.grandTotal),
+      shipFee: shipFee, payTotal: payTotal, saleMode: data.saleMode || "",
+      shipMethod: shipping.method || "", shipTracking: shipping.tracking || "",
+      shipRecipient: shipping.recipient || "", shipAddress: shipping.address || "",
     });
     if (!billLog.ok) logZortFailure_("บันทึกชีตบิลขาย " + (orderNumber || ""), billLog.error);
 
     invalidateCache_();
+    // ส่ง shipFee/payTotal กลับไปด้วย — สรุปที่ลูกค้าเห็นต้องใช้ยอดที่ server บันทึกไว้จริง
+    // ไม่ใช่ยอดที่หน้าจอคำนวณเอง (สองฝั่งคิดต่างกันเมื่อไหร่ ลูกค้าจะได้ยอดที่ไม่ตรงกับระบบ)
     return ok({ orderId: orderId, orderNumber: orderNumber, documentNumber: docNumber,
-                totals: totals, billLogId: billLog.ok ? billLog.id : null });
+                totals: totals, shipFee: shipFee, payTotal: payTotal, shipInZort: shipInZort,
+                unpaid: unpaidMethod, billLogId: billLog.ok ? billLog.id : null });
   } finally {
     lock.releaseLock();
   }

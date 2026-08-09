@@ -29,7 +29,7 @@ const TABS = [
   { id: "atttoday",      label: "🕐 ใครเข้างานวันนี้",       icon: I.layers,    desc: "ใครเข้างาน/พัก/ออกแล้ว ตอนนี้" },
   { id: "deadstock",     label: "📦 สินค้าจม",              icon: I.alert,     desc: "ของค้างคลังไม่ขยับ · เงินจมอยู่เท่าไหร่" },
   { id: "quotefollowup", label: "📄 ใบเสนอราคา",             icon: I.cart,      desc: "สร้าง/ตามใบเสนอราคาของลูกค้า" },
-  { id: "pos",           label: "🧾 ขาย/ออกบิล",             icon: I.cart,      desc: "ขายหน้าร้าน ออกบิล/ใบกำกับภาษี" },
+  { id: "pos",           label: "🧾 ขาย/ออกบิล",             icon: I.cart,      desc: "ขายออนไลน์/หน้าร้าน ออกบิล+ใบกำกับภาษี" },
   { id: "customers",     label: "👥 ลูกค้า & ยอดซื้อ",        icon: I.store,     desc: "ลูกค้าแต่ละเจ้าซื้อเท่าไหร่ · ใหม่/เก่า" },
   { id: "margin",        label: "💰 กำไรขั้นต้น",             icon: I.flame,     desc: "กำไรรายสินค้าจากราคาป้าย" },
   { id: "season",        label: "🌸 ช่วงขายดี",              icon: I.flame,     desc: "ช่วงไหนของปีที่ของแต่ละแบบขายดี" },

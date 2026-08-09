@@ -12,7 +12,7 @@
 // และไม่มี error ให้เห็น** (เจอจริง ส.ค. 2026: หน้าหลักบนมือถือการ์ดไม่มีกรอบ
 // ทั้งที่บนคอมปกติ — ตอนเพิ่ม .home-* แล้วลืม bump)
 // การ bump ทำให้ activate ลบ cache ก้อนเก่าทิ้งทั้งก้อน สำเนาสำรองที่ค้างจึงหายไปด้วย
-const CACHE_NAME = "dmj-v25";
+const CACHE_NAME = "dmj-v26";
 
 const PRECACHE_ASSETS = [
   "/manifest.json",
