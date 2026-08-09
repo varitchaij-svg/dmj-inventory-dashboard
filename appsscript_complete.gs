@@ -7276,6 +7276,38 @@ function debugFindMissingSkusByPrefix(prefix) {
   }
 }
 
+// ── "ของหมดหน้าร้าน แต่คลังยังมี" ─────────────────────────────────────────
+// ตัวสแกนสต็อกใกล้หมดเดิมอ่านแค่คอลัมน์ H (คลัง) ไม่เคยแตะคอลัมน์ G (หน้าร้าน) เลย →
+// คนที่ยืนขายอยู่หน้าร้านรู้ตอนเดินไปหยิบแล้วไม่เจอเท่านั้น ทั้งที่เป็นเรื่องที่**แก้ได้เดี๋ยวนั้น**
+// ด้วยการกดสั่ง (ต่างจากคลังหมดที่ต้องรอ PO ซึ่งแจ้ง owner/warehouse อยู่แล้ว)
+//
+// ⚠️ เกณฑ์ต้องอยู่ในกรอบของตัวกรอง "🛒 ควรสั่ง" ปลายทาง (views-main.jsx `needsReorder` =
+//    qtyStore <= 12 && qtyWH > 0 && !isMTO) เพราะแจ้งเตือนพาไปหยุดที่ตัวกรองนั้น —
+//    แจ้งของที่ตัวกรองปลายทางไม่โชว์ = กดตามไปแล้วไม่เจอสิ่งที่แจ้งเตือนพูดถึง เงียบสนิท
+//    (มีเทสต์เทียบเลข 12 กับ .jsx ให้ — แก้ข้างเดียวเมื่อไหร่เทสต์แดง)
+var FS_REORDER_MAX = 12;
+// ⚠️ default 0 = แจ้งเฉพาะที่ "หมดเกลี้ยง" จริง ๆ โดยตั้งใจ — ตัวกรอง "ควรสั่ง" มีเป็นสิบ-ร้อย
+//    รายการแทบทุกวันและเลขแทบไม่ขยับ ยิงทั้งกองทุกวัน = กระดิ่งกลายเป็นวอลเปเปอร์ที่ไม่มีใครอ่าน
+//    เจ้าของปรับขึ้นได้ที่ Script Property FRONTSTORE_OOS_ALERT_MAX (clamp ที่ FS_REORDER_MAX)
+var FS_OOS_ALERT_MAX_DEFAULT = 0;
+
+// pure — เทสต์ eval ตรงจากไฟล์นี้ (ไม่ copy เข้า helpers.js)
+function fsNeedsRestock_(cat, qtyStore, qtyWH, maxStore) {
+  var c = String(cat || '');
+  if (c.indexOf('Made to Order') >= 0) return false;   // สินค้าสั่งทำ ไม่ได้วางขายหน้าร้าน
+  if (c === 'ไม่มีรหัสสินค้า') return false;            // ไม่ใช่สินค้าจริง — สั่งไม่ได้
+  if (!(Number(qtyWH) > 0)) return false;              // คลังไม่มีของ = สั่งไม่ได้ ไม่ใช่เรื่องของหน้าร้าน
+  var lim = Math.min(Number(maxStore) || 0, FS_REORDER_MAX);
+  return Number(qtyStore) <= lim;
+}
+
+function fsOosAlertMax_() {
+  var raw = PropertiesService.getScriptProperties().getProperty('FRONTSTORE_OOS_ALERT_MAX');
+  var n = parseInt(raw || '', 10);
+  if (isNaN(n) || n < 0) n = FS_OOS_ALERT_MAX_DEFAULT;
+  return Math.min(n, FS_REORDER_MAX);
+}
+
 function syncZortBoth() {
   // PERF: fetch แต่ละ warehouse ครั้งเดียว แล้วส่ง cached products ให้ sub-functions
   // เพื่อลดจำนวน ZORT API calls จาก 4+ ครั้ง → 2 ครั้ง (WH_SAI5 + WH_FRONTSTORE)
@@ -7293,6 +7325,7 @@ function syncZortBoth() {
   // ── 2A: Low-stock alert ──────────────────────────────────────────────────
   // สแกนสต็อกคลัง (col H) เทียบ threshold → ส่ง LINE ถ้าพบสินค้าใกล้หมด
   var lowStockItems = [];
+  var fsRestockItems = [];
   try {
     var props = PropertiesService.getScriptProperties();
     var threshold = parseInt(props.getProperty('LOW_STOCK_THRESHOLD') || '5');
@@ -7301,8 +7334,10 @@ function syncZortBoth() {
     if (prodSh) {
       var prodRows = prodSh.getDataRange().getDisplayValues();
       // header row อยู่ที่ index 0 (แถว 1) — เริ่มอ่านข้อมูลจาก index 1
-      // layout: B(1)=SKU, C(2)=ชื่อ, G(6)=หน้าร้าน, H(7)=คลัง  (0-indexed)
+      // layout: B(1)=SKU, C(2)=ชื่อ, D(3)=หมวด, G(6)=หน้าร้าน, H(7)=คลัง  (0-indexed)
       var scanned = 0;
+      // ของหมดหน้าร้านทั้งที่คลังมี — เกาะไปกับการอ่านชีตรอบเดียวกัน ไม่อ่านชีตเพิ่ม
+      var fsMax = fsOosAlertMax_();
       for (var i = 1; i < prodRows.length; i++) {
         var r = prodRows[i];
         var sku  = (r[1] || '').toString().trim();
@@ -7312,6 +7347,10 @@ function syncZortBoth() {
         var qtyWH = parseInt(r[7]) || 0;
         if (qtyWH < threshold) {
           lowStockItems.push({ sku: sku, name: name, qty: qtyWH });
+        }
+        var qtyStore = parseInt(r[6]) || 0;
+        if (fsNeedsRestock_(r[3], qtyStore, qtyWH, fsMax)) {
+          fsRestockItems.push({ sku: sku, name: name, qtyStore: qtyStore, qtyWH: qtyWH });
         }
       }
 
@@ -7347,6 +7386,29 @@ function syncZortBoth() {
         });
       } else {
         Logger.log('Low-stock check: ไม่พบสินค้าต่ำกว่าเกณฑ์ (threshold=' + threshold + ', สแกน ' + scanned + ')');
+      }
+
+      // ── ของหมดหน้าร้าน แต่คลังยังมี → คนหน้าร้าน/เซลกดสั่งได้เดี๋ยวนั้น ──
+      // ⚠️ ไม่ยิง LINE โดยตั้งใจ — quota มีจำกัดและเรื่องนี้ไม่ด่วนเท่างานจัดของ
+      //    กระดิ่งในแอปแจ้งกี่เรื่องก็ได้ (dedupKey ผูกวันที่ = 1 ครั้ง/วันเหมือนตัวข้างบน)
+      // ⚠️ audience ไม่มี warehouse — คนคลังไม่ได้กดสั่งแทนหน้าร้าน และจะได้แจ้งเตือน
+      //    "ออเดอร์ใหม่" อยู่แล้วเมื่อหน้าร้านกดสั่งจริง แจ้งซ้ำ 2 เด้งคือการเพิ่มเสียงรบกวนเปล่า ๆ
+      if (fsRestockItems.length > 0) {
+        var fsDayKey = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyyMMdd');
+        pushInappNoti_({
+          audience: 'role:frontstore,saler,storedevice,employee,owner',
+          type: 'stock', tab: 'categories', view: 'reorder',
+          dedupKey: 'fsrestock-' + fsDayKey,
+          title: '🛒 ของหมดหน้าร้าน ' + fsRestockItems.length + ' รายการ — คลังยังมี สั่งได้เลย',
+          // บอกด้วยว่าปลายทางคือตัวกรองไหน — เลขบนปุ่ม "🛒 ควรสั่ง" นับกว้างกว่านี้
+          // (หน้าร้าน ≤12 ไม่ใช่แค่ที่หมดเกลี้ยง) ไม่บอก = เห็นสองเลขไม่ตรงกันแล้วงง
+          body: fsRestockItems.slice(0, 3).map(function (it) {
+                  return (it.name || it.sku) + ' (คลังมี ' + it.qtyWH + ')';
+                }).join(', ')
+                + (fsRestockItems.length > 3 ? ' และอีก ' + (fsRestockItems.length - 3) + ' รายการ' : '')
+                + ' · เปิดในตัวกรอง "🛒 ควรสั่ง"',
+        });
+        Logger.log('Front-store restock: ' + fsRestockItems.length + ' รายการ (เกณฑ์หน้าร้าน ≤' + fsMax + ')');
       }
     }
   } catch (e) {
@@ -9072,6 +9134,78 @@ function shipDedupKey_(row) {
        + String(row[COL_SHIP_QTY - 1] || '').trim();
 }
 
+// ── ของที่ส่งไปแล้วยังไม่มีใครกดรับ — ค้างมากี่วันแล้ว ────────────────────
+// หน้าติดตามมีป้าย "⏳ ค้าง N วัน" อยู่แล้ว แต่ต้องเปิดหน้าไปดูเองถึงเห็น — ของที่ค้าง 5 วัน
+// หน้าตาเหมือนของที่เพิ่งส่งเมื่อเช้าเป๊ะถ้าไม่ได้เปิดดู (เคส TF-202608035 ที่หายไปโดยไม่มี
+// ใครทันสังเกต) · ตัวนี้ทำให้ "ต้องเปิดไปดูถึงจะรู้" กลายเป็น "มันมาบอกเอง"
+//
+// ⚠️ เกณฑ์ 3 วันต้องตรงกับป้ายแดงในหน้าติดตาม (views-analytics.jsx: `age >= 3`) เป๊ะ ๆ —
+//    สองที่พูดคนละเลข = คนอ่านไม่รู้ว่าอันไหนคือเกณฑ์จริง (มีเทสต์เทียบสองไฟล์ให้)
+var SHIP_PENDING_ALERT_DAYS = 3;
+
+// pure — rows = แถวดิบทั้งชีตโอน (หัวตาราง 2 แถว ข้อมูลเริ่ม index 2 เหมือน archiveReceivedShipments)
+// เทสต์ eval ตรงจากไฟล์นี้ (ไม่ copy เข้า helpers.js)
+function shipPendingAging_(rows, nowMs, minDays) {
+  var out = [];
+  for (var i = 2; i < rows.length; i++) {
+    var r = rows[i];
+    var sku = String(r[COL_SHIP_SKU - 1] || '').trim();
+    if (!sku) continue;
+    // มีเวลายืนยันรับ = ปิดเคสแล้ว (เกณฑ์เดียวกับที่ frontend ใช้แยก "รอรับ" — receivedAt ว่าง)
+    if (String(r[COL_SHIP_RECVAT - 1] || '').trim()) continue;
+    var ms = parseShipDayMs_(r[COL_SHIP_DATE - 1]);
+    if (ms == null) continue;                      // อ่านวันที่ไม่ออก → ไม่เดาอายุ
+    var age = Math.floor((nowMs - ms) / 86400000);
+    // อนาคต/เก่าเกินจริง = วันที่เพี้ยน — หลักเดียวกับ trackAgeDays ฝั่งเว็บ (ไม่โชว์เลขมั่ว)
+    if (age < 0 || age > 400) continue;
+    if (age < minDays) continue;
+    out.push({
+      sku: sku,
+      name: String(r[COL_SHIP_NAME - 1] || '').trim(),
+      qty: Number(r[COL_SHIP_QTY - 1]) || 0,
+      refNum: String(r[COL_SHIP_REF - 1] || '').trim(),
+      ageDays: age,
+    });
+  }
+  out.sort(function (a, b) { return b.ageDays - a.ageDays; });   // ค้างนานสุดขึ้นก่อน
+  return out;
+}
+
+// ⚠️ ยิง 2 แถวแยกกันโดยตั้งใจ ไม่ใช่แถวเดียวส่งทุก role — ปลายทางคนละหน้าจริง ๆ:
+//    หน้าร้าน/employee = คน "กดรับ" ได้ → พาไปหน้าที่กดรับได้ (orders + ตัวกรองส่งแล้ว)
+//    คลัง/เจ้าของ = กดรับแทนไม่ได้ ต้อง "ตามของ" → พาไปหน้าติดตาม
+//    ยุบเป็นแถวเดียว = อีกฝั่งได้ปลายทางที่ตัวเองทำอะไรไม่ได้ (ปัญหาเดียวกับที่เพิ่งแก้ไป)
+// ⚠️ ห้าม throw — ตัวเรียกคือ trigger ที่ต้องไป archive ต่อ (หลักเดียวกับ pushInappNoti_)
+function notifyPendingReceives_(rows, nowMs) {
+  var pend = shipPendingAging_(rows, nowMs, SHIP_PENDING_ALERT_DAYS);
+  if (!pend.length) return 0;
+  var dayKey = Utilities.formatDate(new Date(nowMs), 'Asia/Bangkok', 'yyyyMMdd');
+  var oldest = pend[0].ageDays;
+  var refs = {};
+  pend.forEach(function (p) { if (p.refNum) refs[p.refNum] = true; });
+  var nRefs = Object.keys(refs).length;
+  var body = pend.slice(0, 3).map(function (p) {
+    return (p.name || p.sku) + ' ' + p.qty + ' ชิ้น (ค้าง ' + p.ageDays + ' วัน)';
+  }).join(', ') + (pend.length > 3 ? ' และอีก ' + (pend.length - 3) + ' รายการ' : '')
+    + (nRefs ? ' · ' + nRefs + ' ใบโอน' : '');
+
+  pushInappNoti_({
+    audience: 'role:frontstore,employee',
+    type: 'shipment', tab: 'orders', view: 'shipped',
+    dedupKey: 'shippend-fs-' + dayKey,
+    title: '⏳ ของค้างรับ ' + pend.length + ' รายการ (นานสุด ' + oldest + ' วัน)',
+    body: body + ' · กดรับให้ครบด้วย',
+  });
+  pushInappNoti_({
+    audience: 'role:warehouse,owner',
+    type: 'shipment', tab: 'tracking',
+    dedupKey: 'shippend-wh-' + dayKey,
+    title: '⏳ ส่งไปแล้วยังไม่มีใครกดรับ ' + pend.length + ' รายการ',
+    body: body,
+  });
+  return pend.length;
+}
+
 // ปรับความกว้างแถวให้เท่าชีตปลายทาง (setValues บังคับให้ทุกแถวกว้างเท่ากันเป๊ะ)
 function normalizeShipRow_(row, width) {
   const out = [];
@@ -9090,6 +9224,14 @@ function archiveReceivedShipments() {
   try {
     const data = sheet.getDataRange().getValues();
     if (data.length < 3) return;  // มีแค่หัวตาราง 2 แถว
+
+    // ⚠️ เตือน "ของค้างรับ" ตรงนี้ **ก่อน** ทางออกลัดด้านล่างเสมอ — วันที่ไม่มีอะไรต้อง archive
+    // ฟังก์ชันนี้ return ทิ้งกลางคัน ถ้าไปวางไว้ท้ายสุดจะไม่เตือนเลยในวันที่ของค้างเยอะที่สุด
+    // (ไม่มีอะไรถูกกดรับ = ไม่มีอะไรให้ archive = ทางออกลัดทำงานพอดี) · เกาะแถวที่อ่านมาแล้ว
+    // ไม่อ่านชีตเพิ่ม และห้ามให้พังลามไปขวางงาน archive
+    // (ใช้ Date.now() ตรง ๆ — `now` ด้านล่างเป็น const ที่ยังไม่ถูกประกาศ ณ จุดนี้)
+    try { notifyPendingReceives_(data, Date.now()); }
+    catch (e) { Logger.log('notifyPendingReceives_ error (ข้ามไป): ' + e); }
 
     // หาแถวที่ "ปิดเคสแล้ว **และ** เลยรอบเช็คของหน้าร้านไปแล้ว" (ข้อมูลเริ่ม index 2 = sheet row 3)
     // ทั้ง "รับครบ" และ "รับไม่ครบ" ใช้เกณฑ์เดียวกัน = ครบ SHIP_ARCHIVE_KEEP_DAYS วันนับจาก
