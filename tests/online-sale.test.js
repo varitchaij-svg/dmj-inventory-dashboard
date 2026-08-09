@@ -52,11 +52,12 @@ const feDefault = fe({});
 
 // ── ฟังก์ชันจริงจาก appsscript_complete.gs ───────────────────────────────────
 const { POS_UNPAID_METHODS_, shippingRemark_, SALE_BILL_HEADERS_, appendSaleBillRow_,
-        buildZortLineItems_, computeBillTotalsGs_ } = (() => {
+        buildZortLineItems_, computeBillTotalsGs_, zortOrderAmounts_ } = (() => {
   const parts = [
     grab(GS, /var POS_UNPAID_METHODS_ = \[[^\]]*\];/, 'POS_UNPAID_METHODS_'),
     grab(GS, /function shippingRemark_\(shipping, shipInZort\) \{[\s\S]*?\n\}/, 'shippingRemark_'),
     grab(GS, /function buildZortLineItems_\(items, factor\) \{[\s\S]*?\n\}/, 'buildZortLineItems_'),
+    grab(GS, /function zortOrderAmounts_\(goodsTotal, shipFeeInZort, vatRate\) \{[\s\S]*?\n\}/, 'zortOrderAmounts_'),
     grab(GS, /function computeBillTotalsGs_\(items, opts\) \{[\s\S]*?\n\}/, 'computeBillTotalsGs_'),
     grab(GS, /var SALE_BILL_HEADERS_ = \[[\s\S]*?\n\];/, 'SALE_BILL_HEADERS_'),
     grab(GS, /function saleBillsSheet_\(ss\) \{[\s\S]*?\n\}/, 'saleBillsSheet_'),
@@ -67,7 +68,7 @@ const { POS_UNPAID_METHODS_, shippingRemark_, SALE_BILL_HEADERS_, appendSaleBill
   return new Function('getOrCreateSheet_', 'Utilities', 'Logger', 'SHEET_SALE_BILLS',
     parts.join('\n') +
     '\nreturn { POS_UNPAID_METHODS_, shippingRemark_, SALE_BILL_HEADERS_, appendSaleBillRow_,' +
-    ' buildZortLineItems_, computeBillTotalsGs_ };'
+    ' buildZortLineItems_, computeBillTotalsGs_, zortOrderAmounts_ };'
   )(
     (ss) => ss.__sheet,
     { formatDate: (d, tz, fmt) => (fmt === 'yyyy-MM-dd' ? '2026-08-08' : '12:00:00'), getUuid: () => 'abcd1234' },
@@ -292,6 +293,47 @@ describe('buildZortLineItems_ — ปัดเศษสะสม กัน ZORT 
   });
 });
 
+// เจอจริงจากหน้า ZORT (ส.ค. 2026): บิล RC-202608007 ยอด ฿476 ออกสำเร็จ แต่หน้ารายการขาย
+// ขึ้น **"มูลค่า 0"** → ยอดขายไม่เข้าระบบ ZORT เลย · ต้นเหตุเดียวกับที่เคยเจอกับ AddQuotation
+// (ยืนยันแล้วด้วย exploreZortQuotationAmountFix): ZORT ไม่คำนวณยอดรวมหัวเอกสารจาก
+// list[].totalprice ให้เอง ต้องส่ง amount/amount_pretax/vatamount เอง
+describe('zortOrderAmounts_ — ยอดหัวเอกสารที่ต้องส่งให้ AddOrder (กัน "มูลค่า 0")', () => {
+  it('ไม่มีค่าส่ง → amount = ยอดสินค้า · แตกฐานภาษีด้วย 7/107', () => {
+    const a = zortOrderAmounts_(476, 0);
+    expect(a.amount).toBe(476);
+    expect(a.vat).toBe(31.14);        // 476 × 7/107
+    expect(a.preVat).toBe(444.86);
+  });
+  it('preVat + vat = amount เป๊ะเสมอ (ไม่งั้นเอกสารการเงินขัดกันเอง)', () => {
+    [0, 1, 9.99, 476, 1250, 33333.33, 1000000].forEach(v => {
+      const a = zortOrderAmounts_(v, 0);
+      expect(Math.round((a.preVat + a.vat) * 100) / 100).toBe(a.amount);
+    });
+  });
+  it('ค่าส่งที่เข้า ZORT ต้องรวมในยอดหัวเอกสาร (ไม่งั้นหัวไม่ตรงผลรวมบรรทัด)', () => {
+    expect(zortOrderAmounts_(250, 50).amount).toBe(300);
+  });
+  it('ค่าส่งที่ไม่ได้เข้า ZORT ต้องไม่ถูกนับ (ผู้เรียกส่ง 0 มา)', () => {
+    expect(zortOrderAmounts_(250, 0).amount).toBe(250);
+  });
+  it('ค่าว่าง/ไม่ใช่ตัวเลข → 0 ไม่ใช่ NaN (NaN ไปถึง ZORT = บิลพังทั้งใบ)', () => {
+    expect(zortOrderAmounts_(null, undefined).amount).toBe(0);
+    expect(zortOrderAmounts_('ฟรี', 'x').amount).toBe(0);
+  });
+  it('ยอดหัวเอกสารตรงกับผลรวม line item ที่ buildZortLineItems_ สร้าง (จุดที่ ZORT เอาไปเทียบ)', () => {
+    const items = [
+      { sku: 'R01', category: 'ดอกไม้', qty: 24, price: 41 },
+      { sku: 'R02', category: 'ดอกไม้', qty: 17, price: 133 },
+      { sku: 'MTO', category: 'Made to Order', qty: 3, price: 250 },
+    ];
+    const totals = computeBillTotalsGs_(items, { manualDiscount: 37 });
+    const gross = totals.retailEligible + totals.retailExcluded;
+    const list = buildZortLineItems_(items, gross > 0 ? totals.grandTotal / gross : 1);
+    const lineSum = Math.round(list.reduce((s, it) => s + it.totalprice, 0) * 100) / 100;
+    expect(zortOrderAmounts_(totals.grandTotal, 0).amount).toBe(lineSum);
+  });
+});
+
 describe('shippingRemark_ — หมายเหตุจัดส่งที่ติดไปกับ order ใน ZORT', () => {
   const s = { recipient: 'คุณเอ', phone: '0812345678', address: '99 ถ.พัฒนาการ', method: 'Flash', tracking: 'TH1', fee: 50, note: 'ห่อกันกระแทก' };
 
@@ -394,8 +436,12 @@ describe('meta — createSaleBill ต่อสายถูกจุด', () => {
     expect(fn).toMatch(/if \(data\.paymentMethod && !unpaidMethod && orderId != null\)/);
   });
   it('ยอดรับชำระที่ส่ง ZORT ต้องเป็นยอดที่ ZORT รู้จัก (ไม่บวกค่าส่งที่ไม่ได้ส่งเข้าไป)', () => {
-    expect(fn).toMatch(/zortOrderTotal[\s\S]{0,120}shipInZort \? shipFee : 0/);
+    // ค่าส่งจะถูกนับก็ต่อเมื่อ shipInZort — ตรรกะนี้อยู่ที่จุดเรียก zortOrderAmounts_ จุดเดียว
+    // แล้ว paymentamount ใช้ผลตัวเดียวกัน (zAmt.amount) ไม่คิดซ้ำ
+    expect(fn).toMatch(/zortOrderAmounts_\(totals\.grandTotal, shipInZort \? shipFee : 0\)/);
     expect(fn).toMatch(/paymentamount: zortOrderTotal/);
+    expect(zortOrderAmounts_(1000, 0).amount).toBe(1000);      // ค่าส่งไม่เข้า ZORT → ไม่นับ
+    expect(zortOrderAmounts_(1000, 50).amount).toBe(1050);     // เข้า ZORT → นับ
   });
   it('คืน shipFee/payTotal กลับไปให้ frontend ใช้โชว์บนสรุปของลูกค้า', () => {
     expect(fn).toMatch(/shipFee: shipFee, payTotal: payTotal/);
@@ -403,6 +449,30 @@ describe('meta — createSaleBill ต่อสายถูกจุด', () => {
   it('นับจำนวนรายการ/ชิ้นจาก productList (ไม่นับบรรทัดค่าจัดส่งเป็นสินค้าที่ขายได้)', () => {
     expect(fn).toMatch(/lineCount: productList\.length/);
     expect(fn).toMatch(/unitCount: productList\.reduce/);
+  });
+  // 🔴 บั๊กจริง ส.ค. 2026: บิล ฿476 ขึ้น "มูลค่า 0" ในหน้ารายการขายของ ZORT
+  it('ส่งยอดหัวเอกสาร amount/amount_pretax/vatamount ไปกับ AddOrder (ไม่ส่ง = ZORT ขึ้นมูลค่า 0)', () => {
+    expect(fn).toMatch(/zAmt\s*=\s*zortOrderAmounts_\(totals\.grandTotal, shipInZort \? shipFee : 0\)/);
+    expect(fn).toMatch(/payload\[F\.orderAmount\]\s*=\s*zAmt\.amount/);
+    expect(fn).toMatch(/payload\[F\.orderAmountPreVat\]\s*=\s*zAmt\.preVat/);
+    expect(fn).toMatch(/payload\[F\.orderVatAmount\]\s*=\s*zAmt\.vat/);
+    expect(GS).toMatch(/orderAmount:\s*"amount"/);
+    expect(GS).toMatch(/orderAmountPreVat:\s*"amount_pretax"/);
+    expect(GS).toMatch(/orderVatAmount:\s*"vatamount"/);
+  });
+  it('ห้ามส่ง vattype/vatpercent/discount ที่ header — ZORT จะ recompute ยอดทับเป็นค่าผิด', () => {
+    // บทเรียนที่ยืนยันแล้วกับ AddQuotation — ส่งปนไปแล้วแย่กว่าไม่ส่งเลย
+    const payloadBlock = grab(fn, /var payload = \{[\s\S]*?payload\[F\.orderVatAmount\][^\n]*\n/, 'AddOrder payload');
+    expect(payloadBlock).not.toMatch(/vattype|vatpercent/);
+    expect(payloadBlock).not.toMatch(/\bdiscount\b/);
+  });
+  it('ยอดรับชำระใช้ตัวเดียวกับยอดหัวเอกสาร (คิดซ้ำ 2 ที่ = ZORT ขึ้นรับเงินเกิน/ขาด)', () => {
+    expect(fn).toMatch(/zortOrderTotal = zAmt\.amount/);
+  });
+  it('ช่องทางขายใช้ field เดียวกับ createQuotation ที่เวิร์กจริง (saleschannel ไม่ใช่ channel)', () => {
+    // หน้า ZORT จริงขึ้นช่องทางเป็น "–" ทุกบิล เพราะส่งชื่อ field ที่ ZORT ไม่รู้จัก
+    expect(GS).toMatch(/orderChannel:\s*"saleschannel"/);
+    expect(GS).toMatch(/payload\.saleschannel\s*=\s*String\(data\.channel\)/);   // createQuotation ต้นแบบ
   });
   it('สร้าง line items ด้วย buildZortLineItems_ (ปัดเศษสะสม) ไม่ใช่ปัดแยกทีละชิ้นแบบเดิม', () => {
     // กันถอยกลับไปปัด unit price ทีละชิ้นก่อนคูณ qty — ของเดิมสะสมความคลาดเคลื่อนได้หลายสตางค์
