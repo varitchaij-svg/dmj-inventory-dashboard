@@ -89,7 +89,10 @@ const ASSERT = {
      'นับเป็น รายการ', 'นับเป็น ชิ้น', '34', 'รอรับ', 'รายใบโอน',
      'รับแล้ว 0/1 รายการ', 'รับแล้ว 1/1 รายการ'], 'ใบโอน + หน่วยกำกับครบ'),
   frontstore: async (page) => hasText(page, ['VAS001', 'FLW002', 'DEC003'], 'product SKU'),
-  pos:        async (page) => hasText(page, ['ขาย / ออกบิล', 'รายการในบิล', 'รับชำระ'], 'PosView UI'),
+  // ขาย/ออกบิล: ต้องมี "ครบ" ทั้งปุ่มสลับโหมด (ออนไลน์/หน้าร้าน) และตะกร้า — hasText เป็น OR
+  // ถ้าใช้ OR แล้วโหมดออนไลน์หายไปทั้งดุ้น เทสต์ยังเขียวเพราะ 'ขาย / ออกบิล' ยังอยู่
+  pos:        async (page) => hasAllText(page,
+    ['ขาย / ออกบิล', 'ขายออนไลน์', 'ขายหน้าร้าน', 'รายการในบิล'], 'PosView UI + สลับโหมดขาย'),
   attendance: async (page) => hasText(page, ['สมชาย ใจดี'], 'ชื่อ+ไทม์ไลน์จาก myToday'),
   atttoday:   async (page) => hasText(page, ['สมชาย ใจดี', 'สมหญิง ขยัน'], 'รายชื่อจาก attendanceToday'),
   // ผลงานพนักงาน: ต้องขึ้น "ครบ" ทั้งชื่อคน ยอดงาน หัวข้อกลุ่มตามตำแหน่ง (ไม่ใช่อันดับรวม)
@@ -429,6 +432,209 @@ function startServer() {
     } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
     await page.screenshot({ path: path.join(SHOTS, `fastpath__${fpRole}.png`) }).catch(() => {});
     results.push({ role: 'interact', tab: `ทางด่วนลงเวลา (${fpRole})`, status, note });
+    await page.close();
+  }
+
+  // ── (จ) หน้าหลัก: แตะโลโก้ → เมนูทั้งหมดของตำแหน่งนั้น → กดการ์ดแล้วเข้าเมนูจริง ──
+  // "home" ไม่อยู่ใน ROLE_TABS โดยเจตนา (เข้าจากโลโก้ทางเดียว) → ลูปหลักข้างบนไม่แตะเส้นนี้เลย
+  // นับจำนวนการ์ดเทียบกับ ROLE_TABS ตรง ๆ เพราะ "เมนูหายไป 1 อัน" คือความพังที่หน้าจอยัง
+  // ดูปกติทุกประการ — พนักงานแค่หาเมนูนั้นไม่เจอแล้วเลิกใช้ ไม่มีใครรายงานว่าเป็นบั๊ก
+  for (const hmRole of ['owner', 'warehouse', 'frontstore']) {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=${hmRole}&tab=stock`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      await page.locator('.brand').first().click({ timeout: 2000 });
+      await page.waitForTimeout(400);
+      if (!(await page.locator('main[data-screen-label="home"]').count())) {
+        status = 'HOME_FAIL'; note = 'กดโลโก้แล้วไม่เข้าหน้าหลัก';
+      } else {
+        const cards = await page.locator('.home-card').count();
+        const expected = ROLE_TABS[hmRole].length;
+        if (cards !== expected) {
+          status = 'MENU_COUNT'; note = `การ์ด ${cards} ใบ (คาด ${expected} ตาม ROLE_TABS)`;
+        } else {
+          await page.locator('.home-card', { hasText: TAB_LABEL.orders }).first().click({ timeout: 2000 });
+          await page.waitForTimeout(500);
+          if (!(await page.locator('main[data-screen-label="orders"]').count())) {
+            status = 'CARD_NAV_FAIL'; note = 'กดการ์ดแล้วไม่เข้าเมนูปลายทาง';
+          } else note = `เมนูครบ ${cards} ใบ + กดการ์ดเข้าเมนูได้`;
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, `home__${hmRole}.png`) }).catch(() => {});
+    results.push({ role: 'interact', tab: `หน้าหลัก (${hmRole})`, status, note });
+    await page.close();
+  }
+
+  // ── (จ2) ชิป "🚚 ของรอรับ" ต้องพาไปถึง "สิ่งที่เลขนั้นพูดถึง" ──
+  // เลขบนชิปนับของที่ส่งแล้วยังไม่มีใครกดรับ ซึ่งเห็นได้ที่แท็บ "รายการสั่งของ" ตัวกรอง
+  // "🚚 ส่งแล้ว" เท่านั้น · เดิมพาไปแท็บ "โอน/ปรับ/ยกมา" = กดตามเลขแล้วไม่เจออะไร
+  // ⚠️ unit test เห็นได้แค่ว่า "โค้ดตั้งคำขอ" — ว่าคำขอนั้นถูกอ่านทันก่อน view mount จริงไหม
+  //    ต้องรันบนเบราว์เซอร์เท่านั้น (นี่คือจุดที่ลำดับ dmjRequestView→handleSetTab สำคัญ)
+  // frontstore อยู่ในลิสต์ด้วยเพราะเดิมไม่เห็นชิปนี้เลย (ไม่มีแท็บ transfers) ทั้งที่การรับของ
+  // คืองานหลักของเขา — การเช็คสิทธิ์ย้ายมาดูที่ "ปลายทาง" แล้ว
+  for (const chipRole of ['owner', 'frontstore']) {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=${chipRole}&tab=stock`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      await page.locator('.brand').first().click({ timeout: 2000 });
+      await page.waitForTimeout(400);
+      const chip = page.locator('.home-quick-chip', { hasText: 'ของรอรับ' });
+      if (!(await chip.count())) {
+        status = 'NO_CHIP'; note = 'ไม่มีชิป "ของรอรับ" บนหน้าหลัก';
+      } else {
+        await chip.first().click({ timeout: 2000 });
+        await page.waitForTimeout(600);
+        if (!(await page.locator('main[data-screen-label="orders"]').count())) {
+          status = 'CHIP_NAV_FAIL'; note = 'กดชิปแล้วไม่เข้าแท็บรายการสั่งของ';
+        } else {
+          const act = (await page.locator('.seg-btn.active').first().innerText().catch(() => '')) || '';
+          if (!/ส่งแล้ว/.test(act)) {
+            status = 'CHIP_FILTER_FAIL';
+            note = `เข้าแท็บถูกแต่ตัวกรองเป็น "${act.trim()}" (ต้องเป็น "ส่งแล้ว")`;
+          } else note = 'กดชิปแล้วเข้ารายการสั่งของ + ตัวกรอง "ส่งแล้ว" ถูกตั้งให้เอง';
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, `homechip__${chipRole}.png`) }).catch(() => {});
+    results.push({ role: 'interact', tab: `ชิปของรอรับ (${chipRole})`, status, note });
+    await page.close();
+  }
+
+  // ── (จ3) ขายออนไลน์: กรอกครบ → บันทึก → ได้ "สรุปคำสั่งซื้อ" ไม่ใช่ใบเสร็จปริ้น ──
+  // ต้องรันบนเบราว์เซอร์จริงเพราะสิ่งที่ทดสอบคือ **ตัวเลขบนจอที่ลูกค้าจะเห็น** — ค่าส่งบวกเข้า
+  // ยอดจริงไหม, เลขบัญชีขึ้นให้ลูกค้าโอนไหม, ที่อยู่ตามไปบนสรุปไหม · unit test เห็นแค่ source
+  {
+    const page = await browser.newPage({ viewport: { width: 480, height: 1000 } });   // จอมือถือ = จอหลักของร้าน
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=saler&tab=pos`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      if (!(await navigateTo(page, 'saler', 'pos'))) { status = 'NAV_FAIL'; note = 'สลับ tab ไม่สำเร็จ'; }
+      else {
+        await page.waitForTimeout(400);
+        // 1) เพิ่มสินค้า: ค้นแล้วกดผลลัพธ์แรก (VAS001 ราคา 1,000 ใน fixture)
+        const search = page.locator('main input[placeholder*="พิมพ์ชื่อ/รหัส"]').first();
+        await search.fill('VAS001');
+        await page.waitForTimeout(350);
+        await page.locator('main div', { hasText: 'VAS001' }).last().click({ timeout: 3000 }).catch(() => {});
+        await page.waitForTimeout(300);
+        // 2) ลูกค้า + จัดส่ง + ค่าส่ง + วิธีชำระ
+        await page.locator('main input[placeholder*="คุณเอ"]').first().fill('คุณทดสอบ').catch(() => {});
+        await page.locator('main button', { hasText: 'Flash' }).first().click({ timeout: 3000 }).catch(() => {});
+        await page.locator('main textarea').first().fill('99 ถ.พัฒนาการ กทม 10250').catch(() => {});
+        await page.locator('main input[placeholder="0"]').first().fill('50').catch(() => {});
+        await page.locator('main button', { hasText: 'โอนเงิน' }).first().click({ timeout: 3000 }).catch(() => {});
+        await page.waitForTimeout(300);
+
+        // fixture: VAS001 ราคา 250 + ค่าส่ง 50 = 300 (fmtBfull ปัดเป็นจำนวนเต็ม "฿300")
+        const submit = page.locator('main button', { hasText: 'บันทึกการขาย' }).first();
+        const label = ((await submit.textContent().catch(() => '')) || '').trim();
+        // ยอดบนปุ่มต้องรวมค่าส่งแล้ว — ถ้าเป็นยอดสินค้าเปล่า ๆ แปลว่าค่าส่งหลุดจากการคิดเงิน
+        if (label.indexOf('฿300') < 0) {
+          status = 'SHIPFEE_NOT_IN_TOTAL';
+          note = `ปุ่มบันทึกบอก "${label}" (คาด ฿300 = สินค้า 250 + ค่าส่ง 50)`;
+        } else {
+          await submit.click({ timeout: 3000 });
+          await page.waitForTimeout(900);
+          const body = await page.locator('body').innerText().catch(() => '');
+          // แยกบรรทัดค่าสินค้า/ค่าจัดส่ง/ยอดที่ต้องชำระ ให้ครบ — เช็คแต่ยอดรวมอย่างเดียว
+          // ไม่รู้ว่าค่าส่งถูกเอาไปบวกจริงหรือแค่ราคาสินค้าบังเอิญตรง
+          const missing = ['สรุปคำสั่งซื้อ', 'RC-3-2026080099',
+                           '฿250', '฿50', 'ยอดที่ต้องชำระ', '฿300',
+                           '802-4-64123-4', '99 ถ.พัฒนาการ', 'Flash', 'คุณทดสอบ',
+                           'บันทึกรูป', 'แชร์ให้ลูกค้า', 'คัดลอกเป็นข้อความ']
+            .filter(t => body.indexOf(t) < 0);
+          if (missing.length) {
+            status = 'SUMMARY_MISSING'; note = 'สรุปขาด: ' + missing.join(', ');
+          } else if (/ใบเสร็จรับเงิน\/ใบกำกับภาษีอย่างย่อ|ใบเสร็จ 80mm/.test(body)) {
+            // เจอของใบเสร็จปริ้นในเส้นทางออนไลน์ = สองโหมดปนกัน (สิ่งที่เจ้าของขอให้เลิก)
+            status = 'PRINT_RECEIPT_LEAKED'; note = 'ยังมีใบเสร็จปริ้นโผล่ในเส้นทางขายออนไลน์';
+          } else note = 'ค่าส่งเข้ายอด (250+50=300) + สรุปมีเลขบัญชี/ที่อยู่/ปุ่มส่งให้ลูกค้าครบ';
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'pos__online-summary.png'), fullPage: true }).catch(() => {});
+    results.push({ role: 'interact', tab: 'ขายออนไลน์ — สรุปส่งลูกค้า', status, note });
+    await page.close();
+  }
+
+  // ── (จ4) ขายออนไลน์: ไม่กรอกจัดส่งเลยก็ต้องบันทึกได้ ──
+  // เจ้าของสั่ง (ส.ค. 2026): "จัดส่งมีให้กรอกแต่ไม่จำเป็นต้องกรอก" — ต่างจาก (จ3) ที่กรอกครบ
+  // เคสนี้จงใจ **ไม่แตะ** การ์ดจัดส่งเลย (ไม่เลือกขนส่ง ไม่กรอกที่อยู่) แล้วเช็คว่าปุ่มบันทึก
+  // ยังกดได้และไม่มี toast เตือนให้กรอกจัดส่งโผล่มาขวาง — unit test เห็นแค่ source ว่า guard
+  // ถูกลบ แต่ไม่เห็นว่า UI จริงยังปล่อยให้กดผ่านได้ (เช่น ปุ่มอาจถูก disabled ไว้อีกจุดที่ไม่เกี่ยวกัน)
+  {
+    const page = await browser.newPage({ viewport: { width: 480, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=saler&tab=pos`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      if (!(await navigateTo(page, 'saler', 'pos'))) { status = 'NAV_FAIL'; note = 'สลับ tab ไม่สำเร็จ'; }
+      else {
+        await page.waitForTimeout(400);
+        const search = page.locator('main input[placeholder*="พิมพ์ชื่อ/รหัส"]').first();
+        await search.fill('VAS001');
+        await page.waitForTimeout(350);
+        await page.locator('main div', { hasText: 'VAS001' }).last().click({ timeout: 3000 }).catch(() => {});
+        await page.waitForTimeout(300);
+        // เฉพาะชื่อลูกค้า + วิธีชำระ — ไม่แตะการ์ด "จัดส่ง" เลยสักช่อง
+        await page.locator('main input[placeholder*="คุณเอ"]').first().fill('คุณไม่ระบุขนส่ง').catch(() => {});
+        await page.locator('main button', { hasText: 'โอนเงิน' }).first().click({ timeout: 3000 }).catch(() => {});
+        await page.waitForTimeout(300);
+
+        const submit = page.locator('main button', { hasText: 'บันทึกการขาย' }).first();
+        const disabled = await submit.isDisabled().catch(() => true);
+        if (disabled) {
+          status = 'BLOCKED_BY_SHIPPING'; note = 'ปุ่มบันทึกถูกปิดทั้งที่ไม่ได้บังคับจัดส่งแล้ว';
+        } else {
+          await submit.click({ timeout: 3000 });
+          await page.waitForTimeout(900);
+          const body = await page.locator('body').innerText().catch(() => '');
+          if (/เลือกวิธีจัดส่งก่อน|ใส่ที่อยู่จัดส่งก่อน/.test(body)) {
+            status = 'SHIP_TOAST_BLOCKED'; note = 'ยังมี toast เตือนให้กรอกจัดส่งอยู่';
+          } else if (body.indexOf('สรุปคำสั่งซื้อ') < 0) {
+            status = 'NOT_SAVED'; note = 'กดบันทึกแล้วไม่เข้าหน้าสรุป (อาจยังถูกบล็อกอยู่)';
+          } else note = 'บันทึกสำเร็จโดยไม่กรอกจัดส่งเลย (ผู้รับ+วิธีชำระยังบังคับตามเดิม)';
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'pos__online-no-shipping.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'ขายออนไลน์ — ไม่กรอกจัดส่งก็บันทึกได้', status, note });
+    await page.close();
+  }
+
+  // หน้าหลักต้องเปิดได้ทั้งที่ข้อมูลก้อนใหญ่ยังไม่มา — ถ้าติดจอโหลด ทางด่วนลงเวลาก็เสียครึ่งหนึ่ง
+  // (กดโลโก้ตอนเปิดแอปใหม่แล้วเจอสปินเนอร์ = ไปไหนต่อไม่ได้เลย)
+  {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=warehouse&tab=attendance&nodata=1`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      await page.waitForTimeout(800);
+      await page.locator('.brand').first().click({ timeout: 2000 });
+      await page.waitForTimeout(500);
+      const txt = await page.locator('body').innerText();
+      const onHome = await page.locator('main[data-screen-label="home"]').count();
+      const cards  = await page.locator('.home-card').count();
+      if (!onHome)                                     { status = 'HOME_FAIL'; note = 'กดโลโก้แล้วไม่เข้าหน้าหลัก'; }
+      else if (/กำลังโหลดข้อมูล Dashboard/.test(txt))  { status = 'BLOCKED';   note = 'หน้าหลักติดจอโหลด'; }
+      else if (!cards)                                 { status = 'NO_CARDS';  note = 'เข้าหน้าหลักได้แต่ไม่มีการ์ดเมนู'; }
+      else {
+        await page.locator('.home-card', { hasText: TAB_LABEL.attendance }).first().click({ timeout: 2000 });
+        await page.waitForTimeout(500);
+        if (!(await page.locator('main[data-screen-label="attendance"]').count())) {
+          status = 'CARD_NAV_FAIL'; note = 'กดการ์ด "ลงเวลา" แล้วไม่กลับไปหน้าลงเวลา';
+        } else note = `เข้าหน้าหลักได้ทั้งที่ยังไม่มีข้อมูล (${cards} เมนู) + กดเข้าลงเวลาได้`;
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'home__nodata.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'หน้าหลัก (ยังไม่มีข้อมูล)', status, note });
     await page.close();
   }
 

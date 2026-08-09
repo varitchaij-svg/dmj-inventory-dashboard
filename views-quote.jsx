@@ -309,6 +309,29 @@ function InvoiceOptionsModal({ grandTotal, onCancel, onConfirm }) {
   );
 }
 
+// เติม "รูป + หมวด" จาก catalog ให้รายการที่โหลดกลับมาจากที่จัดเก็บ (ร่างที่บันทึกไว้)
+// ─────────────────────────────────────────────────────────────────────────────
+// `buildQuotePayload` เก็บลงร่างแค่ sku/ชื่อ/หมวด/จำนวน/ราคา — **ไม่เก็บ imageUrl โดยตั้งใจ**
+// (URL ยาวทำให้ร่างบวม + รูปเปลี่ยนทีหลังได้ ฝังไว้จะค้างรูปเก่า) → ต้องหาใหม่จาก `products`
+// ทุกครั้งที่โหลด ไม่งั้น **ทุกแถวกลายเป็นกล่อง 📦 ทั้งที่สินค้ามีรูป** ซึ่งผิดกติกา UI ของโปรเจกต์นี้
+// (พนักงานจำสินค้าจากรูป ไม่ใช่รหัส) — เจอจริง ส.ค. 2026 ตอนเจ้าของกดโหลดร่างแล้วรูปหายทั้งใบ
+// ⚠️ **ห้ามแตะ price/qty/name ที่นี่** — ร่างเก็บค่าที่ผู้ใช้ตั้ง/แก้เอง ทับเมื่อไหร่ = งานที่ทำไว้หาย
+//    (ต่างจากเส้นทาง `editQuote` ที่ **ต้อง** คืนราคาตั้งจาก catalog เพราะราคาที่ ZORT คืนมา
+//     เป็นราคาหลังเฉลี่ยส่วนลดแล้ว — คนละเจตนากัน อย่าเอามารวมเป็นฟังก์ชันเดียว)
+function quoteHydrateItems_(items, products) {
+  if (!Array.isArray(items)) return [];
+  const bySku = {};
+  (products || []).forEach(p => { bySku[String(p.sku || "").trim().toUpperCase()] = p; });
+  return items.map(it => {
+    const p = bySku[String(it.sku || "").trim().toUpperCase()];
+    if (!p) return it;   // SKU ไม่มีใน catalog แล้ว — คงรายการไว้ตามเดิม ไม่ทิ้งของที่ผู้ใช้ใส่มา
+    return Object.assign({}, it, {
+      imageUrl: it.imageUrl || p.imageUrl || "",
+      category: it.category || p.category || "",
+    });
+  });
+}
+
 // editQuote (ไม่บังคับ) = ใบเสนอราคาเดิมที่จะแก้ไข — ได้จาก getQuotationForPrint + id/number
 //   { quotationId, quotationNumber, customer, items, remarks, totals }
 // ⚠️ items[].price ที่ได้จาก ZORT เป็น "ราคาหลังเฉลี่ยส่วนลดแล้ว" (createQuotation ส่ง netUnit
@@ -356,6 +379,10 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
       ? editQuote.remarks.slice() : QUOTE_DEFAULT_REMARKS.slice());
   const [manualDiscount, setManualDiscount] = uS("");
 
+  // สินค้าที่กำลังเปิดดูรายละเอียด — เก็บเป็น sku ไม่ใช่ object
+  // (เก็บ object ตรง ๆ จะค้างค่าเก่าถ้า products อัปเดตระหว่างเปิดโมดัลอยู่)
+  const [detailSku, setDetailSku] = uS(null);
+
   const [draftId, setDraftId] = uS(null);
   const [drafts, setDrafts] = uS([]);
   const [showDrafts, setShowDrafts] = uS(false);
@@ -370,7 +397,6 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
   const [invoiceNumber, setInvoiceNumber] = uS(null);       // เลขที่ใบแจ้งหนี้ของเราเอง (IVB-yyyyMM###) จาก syncGetInvoiceNumber
   const [invoiceNumberBusy, setInvoiceNumberBusy] = uS(false);
   const [printFileName, setPrintFileName] = uS("");          // ชื่อไฟล์ตอนเลือก "บันทึกเป็น PDF"
-  const [modalP, setModalP] = uS(null);                      // สินค้าที่กดดูรายละเอียด (ProductModal จาก views-main.jsx)
 
   // ⚠️ พิมพ์ผ่าน effect (ไม่พิมพ์ทันทีในตัว handler) เพราะเลขที่ใบแจ้งหนี้/หมายเหตุ/ชนิดเอกสาร
   // เพิ่งถูก setState ไป — DOM ยังเป็นของ render รอบก่อน · effect ทำงานหลัง React commit
@@ -422,6 +448,18 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
       return m[b] - m[a];
     });
   }, [products]);
+
+  // ของจริงจาก catalog ก่อนเสมอ (ได้สต๊อก/ราคา/ร้านที่ซื้อครบ) — ไม่เจอค่อยประกอบจากรายการในใบ
+  // เพื่อให้ยังกดดูรูปใหญ่+ชื่อได้ ดีกว่ากดแล้วไม่มีอะไรเกิดขึ้น (SKU อาจถูกลบไปแล้ว)
+  // ⚠️ ProductModal อ่านหมวดจาก `p.cat` (app.jsx มิเรอร์มาจาก p.category) ไม่ใช่ `p.category`
+  const detailProduct = uM(() => {
+    if (!detailSku) return null;
+    const key = String(detailSku).trim().toUpperCase();
+    const p = products.find(x => String(x.sku || "").trim().toUpperCase() === key);
+    if (p) return p;
+    const it = cart.find(x => String(x.sku || "").trim().toUpperCase() === key);
+    return it ? { sku: it.sku, name: it.name, imageUrl: it.imageUrl || "", cat: it.category || "", price: Number(it.price) || 0 } : null;
+  }, [detailSku, products, cart]);
 
   const POS_GRID_PER = 9;
   const gridAll = uM(() => (catFilter === "ทั้งหมด" ? products : products.filter(p => (p.category || "อื่นๆ").trim() === catFilter)), [products, catFilter]);
@@ -521,34 +559,6 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
   function removeRemark(i) { setRemarks(r => r.filter((_, idx) => idx !== i)); }
   function addRemark() { setRemarks(r => [...r, ""]); }
 
-  // รูปสินค้า/หมวด เป็นข้อมูลของ "แคตตาล็อก" ไม่ใช่ข้อมูลของเอกสาร — ร่างที่บันทึกไว้จึงไม่ได้เก็บ
-  // (buildQuotePayload ส่งแค่ sku/name/category/qty/price) · ตอนโหลดร่างกลับมาต้องหยิบจาก
-  // `products` ตาม SKU ใหม่ทุกครั้ง ไม่งั้นทุกแถวกลายเป็นกล่องเทา 📦 ทั้งที่สินค้ามีรูป
-  // (พนักงานจำสินค้าจากรูป ไม่ใช่รหัส — ดู UI Convention ใน CLAUDE.md)
-  // ⚠️ เติมเฉพาะ "รูป/หมวด" เท่านั้น — **ห้ามแตะ qty/price/name** เพราะนั่นคือสิ่งที่ผู้ใช้
-  // กรอกไว้ในร่าง (ต่างจากโหมดแก้ไขใบเดิมที่ตั้งใจดึงราคาตั้งจาก catalog กลับมากันส่วนลดซ้อน)
-  function attachCatalogInfo(items) {
-    const bySku = {};
-    products.forEach(p => { bySku[String(p.sku || "").trim().toUpperCase()] = p; });
-    return (Array.isArray(items) ? items : []).map(it => {
-      const p = bySku[String(it.sku || "").trim().toUpperCase()];
-      if (!p) return Object.assign({}, it);
-      return Object.assign({}, it, {
-        imageUrl: it.imageUrl || p.imageUrl || "",
-        category: it.category || p.category || p.cat || "",
-      });
-    });
-  }
-
-  // เปิดรายละเอียด + รูปใหญ่ของสินค้าในรายการ — หยิบตัวเต็มจาก catalog ตาม SKU (ได้สต็อก/ราคา/
-  // ตำแหน่งล็อคครบ) · บรรทัดที่ไม่มีใน catalog (เช่นงานจัดพิเศษที่ตั้งชื่อเอง) ยังกดดูได้
-  // ด้วยข้อมูลเท่าที่มี — ดีกว่าปุ่มกดแล้วไม่มีอะไรเกิดขึ้น
-  function openItemDetail(it) {
-    const key = String(it.sku || "").trim().toUpperCase();
-    const p = products.find(x => String(x.sku || "").trim().toUpperCase() === key);
-    setModalP(p || { sku: it.sku, name: it.name, imageUrl: it.imageUrl || "", cat: it.category || "", category: it.category || "" });
-  }
-
   function buildQuotePayload() {
     return {
       draftId: draftId || undefined,
@@ -577,7 +587,8 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
     if (next) loadDrafts();
   }
   function loadDraft(d) {
-    setCart(attachCatalogInfo(d.items));
+    // ผ่าน quoteHydrateItems_ เสมอ — ร่างไม่ได้เก็บ imageUrl ไว้ ถ้าเซ็ตตรง ๆ รูปหายทั้งใบ
+    setCart(quoteHydrateItems_(d.items, products));
     setCust(d.customer || { name: "", taxId: "", branch: "", branchNo: "", address: "", phone: "", email: "" });
     // salesRep ไม่โหลดจากร่างเก่า — ยึดชื่อคนที่ล็อกอินอยู่ตอนนี้เสมอ (ใครหยิบร่างมาทำต่อ = คนนั้นเป็นผู้ทำ)
     setChannel(d.channel || "หน้าร้าน");
@@ -792,17 +803,22 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
                     <tr key={it.sku} style={{ borderTop: "1px solid #f3f4f6" }}>
                       <td style={{ padding: "8px 6px" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          {/* รูป = ปุ่มเปิดรายละเอียด (ช่องชื่อข้าง ๆ เป็น input แก้ชื่อได้ กดตรงนั้นไม่ได้) */}
-                          <button type="button" onClick={() => openItemDetail(it)} title="ดูรายละเอียดสินค้า"
-                            style={{ padding: 0, border: "none", background: "none", cursor: "pointer", flexShrink: 0, lineHeight: 0, borderRadius: 5 }}>
+                          {/* แตะรูป/รหัส = เปิดรายละเอียด + รูปใหญ่ (กติกา UI: ทุกที่ที่โชว์ SKU+ชื่อ ต้องกดดูได้)
+                              ชื่อเป็น input แก้ได้ จึงกดที่ชื่อไม่ได้ — ต้องมีทางเข้าอื่นที่ชัดเจนแทน */}
+                          <div onClick={() => setDetailSku(it.sku)} title="ดูรายละเอียดสินค้า"
+                            style={{ width: 36, height: 36, borderRadius: 5, flexShrink: 0, background: "#f3f4f6", cursor: "pointer", position: "relative", overflow: "hidden" }}>
                             {it.imageUrl
-                              ? <img src={it.imageUrl} loading="lazy" style={{ width: 36, height: 36, objectFit: "cover", borderRadius: 5, display: "block", background: "#f3f4f6" }} onError={e => { e.target.style.display = "none"; }}/>
-                              : <div style={{ width: 36, height: 36, borderRadius: 5, background: "#f3f4f6", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>📦</div>}
-                          </button>
+                              ? <img src={it.imageUrl} loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} onError={e => { e.target.style.display = "none"; }}/>
+                              : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>📦</div>}
+                            <div style={{ position: "absolute", bottom: 0, right: 0, background: "rgba(0,0,0,.45)", borderRadius: "4px 0 0 0", padding: "0 3px", fontSize: 8, color: "#fff", lineHeight: 1.5 }}>🔍</div>
+                          </div>
                           <div style={{ minWidth: 0, flex: 1 }}>
                             <input value={it.name} onChange={e => patchItem(i, { name: e.target.value })}
                               style={{ width: "100%", fontWeight: 600, border: "1px solid transparent", borderBottom: "1px dashed #d1d5db", padding: "2px 0", fontSize: 14, background: "transparent", minWidth: 0 }}/>
-                            <div style={{ fontSize: 11, color: "var(--muted)" }}>{it.sku}{excl ? " · ยกเว้นส่วนลด" : ""}</div>
+                            <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                              <span onClick={() => setDetailSku(it.sku)} style={{ cursor: "pointer", textDecoration: "underline dotted" }}>{it.sku}</span>
+                              {excl ? " · ยกเว้นส่วนลด" : ""}
+                            </div>
                           </div>
                         </div>
                       </td>
@@ -928,8 +944,9 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
         </button>
       </div>
 
+      {detailProduct && <ProductModal p={detailProduct} onClose={() => setDetailSku(null)}/>}
+
       <Toast toast={toast} onClose={hideToast}/>
-      {modalP && <ProductModal p={modalP} onClose={() => setModalP(null)}/>}
     </div>
   );
 }

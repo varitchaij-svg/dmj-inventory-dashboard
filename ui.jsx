@@ -381,6 +381,46 @@ function useSkuFocus(tab, onFocus) {
   }, [tab]);
 }
 
+// ── "เปิดแท็บนี้ในมุมมองไหน" ──────────────────────────────────────────────────
+// ต่างจาก useSkuFocus (พาไปหา "ของชิ้นไหน") — อันนี้บอกว่า "เปิดมาแล้วให้ตั้งตัวกรองอะไร"
+// ที่มา: ชิป "🚚 ของรอรับ" บนหน้าหลัก — เลขที่โชว์คือของที่ส่งแล้วยังไม่มีใครกดรับ ซึ่งดูได้ที่
+// แท็บ "รายการสั่งของ" **ตัวกรอง "🚚 ส่งแล้ว"** เท่านั้น · พาไปแค่แท็บแล้วปล่อยค้างที่ตัวกรองเดิม
+// (ปกติคือ "ทั้งหมด") = กดตามเลขไปแล้วไม่เจอสิ่งที่เลขนั้นพูดถึง **เงียบสนิท ไม่มีอะไรบอกว่าทำไม**
+//
+// ⚠️ **ต้องใช้คีย์คนละตัวกับ `_dmjFocusReq` เสมอ ห้ามยัดรวมก้อนเดียว** — คำขอถูกออกแบบให้
+//    "ใช้ครั้งเดียวแล้วเคลียร์ทิ้ง" ถ้าสองเรื่องใช้ก้อนเดียวกัน ตัวที่หยิบก่อนจะล้างทิ้ง
+//    แล้วอีกตัวไม่มีวันได้เห็นคำขอเลย โดยไม่มี error ให้เห็น
+function dmjRequestView(tab, view) {
+  try {
+    const v = String(view || "").trim();
+    // ไม่ระบุมุมมอง → ล้างของเก่าทิ้งด้วย ไม่งั้นคำขอจากการกดครั้งก่อนจะไปตั้งตัวกรองให้
+    // ตอนสลับแท็บครั้งถัดไป (ผู้ใช้กดการ์ดธรรมดาแล้วเจอตัวกรองเปลี่ยนเองโดยไม่ได้สั่ง)
+    if (!v) { window._dmjViewReq = null; return; }
+    window._dmjViewReq = { tab: String(tab || ""), view: v, ts: Date.now() };
+    window.dispatchEvent(new CustomEvent("dmj:view"));
+  } catch (e) { /* เครื่องมือช่วยเหลือ — ล้มเหลวต้องไม่ลากอะไรพัง */ }
+}
+
+// view ปลายทางเรียก: useViewIntent("orders", v => { if (v === "shipped") setFilter("shipped"); })
+function useViewIntent(tab, onView) {
+  const cb = useRef(onView);
+  cb.current = onView;
+  useEffect(() => {
+    const run = () => {
+      let req = null;
+      try { req = window._dmjViewReq; } catch (e) { return; }
+      if (!req || !req.view) return;
+      if (req.tab && tab && req.tab !== tab) return;                     // คำขอของแท็บอื่น
+      if (Date.now() - (req.ts || 0) > DMJ_FOCUS_TTL_MS) { window._dmjViewReq = null; return; }
+      window._dmjViewReq = null;      // ใช้ครั้งเดียว — หลักเดียวกับ _dmjFocusReq
+      try { cb.current(req.view); } catch (e) {}
+    };
+    run();                             // เพิ่ง mount จากการสลับแท็บ = คำขอค้างอยู่ตั้งแต่ก่อน mount
+    window.addEventListener("dmj:view", run);
+    return () => window.removeEventListener("dmj:view", run);
+  }, [tab]);
+}
+
 // เลื่อนไปหาแถวที่ attribute ตรงกับ sku แล้วกะพริบให้เห็นว่า "อันนี้แหละ"
 // ⚠️ ไล่เทียบค่าเอง ไม่ประกอบ CSS selector จาก sku — sku มาจากชีต มีอักขระอะไรก็ได้
 //    ประกอบเป็น selector แล้ว querySelector โยน error ทั้งก้อน (เด้งไม่ได้แถมพาหน้าพัง)
@@ -663,6 +703,7 @@ Object.assign(window, {
   I, Icon, KPI, Card, Seg, Sparkline, Empty,
   dmjFetch, NotiBell, notiAgo, NOTI_TYPE_META, BootTrace,
   dmjRequestFocus, useSkuFocus, dmjScrollToSku,
+  dmjRequestView, useViewIntent,
 });
 
 if (typeof module !== 'undefined') module.exports = { resetCatColorMap, catColor, CAT_COLORS, notiAgo };

@@ -114,6 +114,23 @@
           staff: { staffId: 'STF001', name: 'ทดสอบ ระบบ', role: role, status: 'active', pictureUrl: '' },
         }), { headers: { 'Content-Type': 'application/json' } }));
       }
+      // ออกบิล/บันทึกขาย (POS + ขายออนไลน์) — dispatch ด้วยธง createSaleBill ไม่ใช่ data.action
+      // ต้องตอบ orderNumber/totals/payTotal ให้ครบเหมือนของจริง ไม่งั้นหน้าสรุปที่ส่งลูกค้า
+      // ได้แต่ "—" กับยอด 0 = เทสต์เขียวโดยไม่ได้ทดสอบตัวเลขที่ลูกค้าจะเห็นจริงเลย
+      let posted = {};
+      try { posted = JSON.parse(body) || {}; } catch (e) {}
+      if (posted.createSaleBill) {
+        const shipFee = Math.max(0, Number((posted.shipping || {}).fee) || 0);
+        const goods = (posted.items || []).reduce(function (s, it) {
+          return s + (Number(it.qty) || 0) * (Number(it.price) || 0);
+        }, 0);
+        const t = { retailEligible: goods, retailExcluded: 0, grandTotal: goods,
+                    vat: goods * 7 / 107, preVat: goods - goods * 7 / 107, savings: 0 };
+        return Promise.resolve(new Response(JSON.stringify({ success: true, data: {
+          orderId: 9001, orderNumber: 'RC-3-2026080099', documentNumber: null,
+          totals: t, shipFee: shipFee, payTotal: goods + shipFee, shipInZort: false,
+        } }), { headers: { 'Content-Type': 'application/json' } }));
+      }
       const att = window.__DMJ_ATT_FIXTURE || {};
       const data = Object.prototype.hasOwnProperty.call(att, action) ? att[action] : {};
       return Promise.resolve(new Response(JSON.stringify({ success: true, data: data }), { headers: { 'Content-Type': 'application/json' } }));

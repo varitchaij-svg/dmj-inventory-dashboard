@@ -9943,7 +9943,12 @@ function disableInappNoti() {
 // คอลัมน์ชีตผู้ดูแลสินค้า (1-indexed): A..F
 var POWN_COL = { SKU:1, STAFF:2, NAME:3, UPDATED:4, STATUS:5, NOTE:6 };
 var POWN_HEADERS = ["sku","staffId","ชื่อผู้ดูแล","updatedAt","status","หมายเหตุ"];
-var POWN_MAX_ROWS = 5000;   // เพดานอ่าน/สแกน — SKU จริงหลักพัน เผื่อไว้ไม่ให้ getRange โตไม่มีเพดาน
+// เพดานอ่าน/สแกน — กัน getRange โตไม่มีเพดาน · จำนวนแถวจริง = จำนวน SKU ที่มีคนดูแล
+// (1 SKU = 1 แถว เขียนทับ) การอ่านจึงถูกจำกัดด้วย getLastRow() อยู่แล้ว ค่านี้เป็นแค่ฝาครอบ
+// ⚠️ เผื่อไว้เยอะกว่าจำนวน SKU มาก ๆ โดยตั้งใจ — ตัน = แถวที่เกินถูก "อ่านข้าม" เงียบ ๆ
+//   (ดาวหายจากเว็บโดยไม่มี error ให้เห็น) ซึ่งเจ็บกว่าการอ่านเผื่อไว้หลายเท่า
+//   ยิ่งหลังใช้ applyProductOwnerAssign() ที่เขียนทีเดียวเป็นพันแถวตามจำนวน SKU
+var POWN_MAX_ROWS = 20000;
 
 // ชื่อที่โชว์บนป้ายดาว — ใช้ชื่อสั้น ไม่ใช่ "ชื่อ (ตำแหน่ง)" แบบ actor
 // (ป้ายอยู่บนแถวสินค้าที่แคบมาก ชื่อเต็มล้นแน่นอน)
@@ -10107,6 +10112,659 @@ function setupProductOwner() {
 function disableProductOwner() {
   PropertiesService.getScriptProperties().setProperty('PRODUCT_OWNER_ENABLED', 'false');
   Logger.log('ปิดระบบผู้ดูแลสินค้าแล้ว — ดาวจะซ่อนหมด ข้อมูลในชีตยังอยู่ครบ');
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ⭐ มอบหมายผู้ดูแลสินค้า "เป็นชุดตามหมวด" (เจ้าของรันเองใน GAS editor)
+// ──────────────────────────────────────────────────────────────────────────
+// ทำไมต้องมี: สินค้าหลักพัน SKU — ให้พนักงานไล่กดดาวทีละตัวบนมือถือไม่ไหว
+//   เจ้าของอยาก "ตั้งต้นไว้ให้ก่อนคร่าว ๆ" ตามหมวดที่แต่ละคนดูแลอยู่จริง
+//   แล้วค่อยให้พนักงานกดปรับเองทีหลัง (ถอด/เปลี่ยนมือได้ตามปกติทุกอย่าง)
+// ⚠️ ยังเป็น "ป้ายบอก" ไม่ใช่สิทธิ์เหมือนเดิม — ไม่มีอะไรถูก gate ด้วยดาวทั้งสิ้น
+//
+// ลำดับที่ตั้งใจให้ทำ (ห้ามข้ามขั้น 1-2 เพราะชื่อหมวดต้องตรงกับ "ชีตจริง" ตัวอักษรต่ออักษร):
+//   1) listProductCategories()     — ดูชื่อหมวดจริง + จำนวน SKU ต่อหมวด
+//   2) แก้ PRODUCT_OWNER_ASSIGN_PLAN_ ข้างล่างให้ชื่อตรงกับที่เห็นในขั้น 1
+//   3) previewProductOwnerAssign() — อ่านอย่างเดียว ไม่เขียนอะไรเลย บอกว่าจะแจกใครกี่ตัว
+//   4) applyProductOwnerAssign()   — เขียนจริง
+//
+// กติกาที่ตั้งใจให้ "ไม่เดาแทนเจ้าของ" (ทุกข้อคือเคสที่พลาดแล้วไม่มี error ให้เห็น):
+//   · หมวดที่มีมากกว่า 1 คนในตาราง → **ข้ามทั้งหมวด** ไม่ยกให้คนที่อยู่บรรทัดบนสุด
+//     (1 สินค้า = 1 คนดูแล · ยกให้คนแรกเงียบ ๆ = อีกหลายคนไม่รู้ว่าทำไมไม่ได้ของ)
+//   · SKU ที่มีคนดูแลอยู่แล้ว → ข้ามเสมอ ไม่ทับดาวที่พนักงานกดเอง
+//     (จะทับจริง ๆ ต้องแก้ PRODUCT_OWNER_ASSIGN_OVERWRITE_ เป็น true ด้วยมือ)
+//   · ชื่อพนักงานในตารางที่หาในชีต "พนักงาน" ไม่เจอ/เจอซ้ำ → **ไม่เขียนอะไรเลยทั้งรอบ**
+//     (เขียนเฉพาะคนที่หาเจอ = ได้ผลลัพธ์ครึ่ง ๆ กลาง ๆ ที่แยกไม่ออกจากผลลัพธ์ที่ถูกต้อง)
+//   · หมวดในตารางที่หา SKU ไม่เจอเลยสักตัว → รายงานออกมาดัง ๆ (= พิมพ์ชื่อไม่ตรงชีต)
+// ══════════════════════════════════════════════════════════════════════════
+
+// ── ตารางมอบหมาย — แก้ตรงนี้ได้เลย ────────────────────────────────────────
+// staffId = รหัสพนักงาน ("ST0001") — **ใส่อันนี้เป็นหลัก** เพราะไม่เปลี่ยนตามที่พนักงาน
+//           เปลี่ยนชื่อ LINE และไม่มีปัญหาอักขระพิเศษ (ตัวเอียง/รูปสระซ้อน) ให้ต้องมาไล่จับคู่
+//           · ดูรหัสของแต่ละคนได้จาก checkProductOwnerStaffNames() ซึ่งพิมพ์บรรทัดพร้อมลอกให้เลย
+// staff   = ชื่อคน — ใช้ 2 กรณี: (ก) ยังไม่ได้ใส่ staffId → ใช้ชื่อจับคู่แทน (แบบเดิม)
+//           (ข) ใส่ staffId แล้ว → เป็นแค่ "ป้ายกำกับให้คนอ่านโค้ดรู้ว่าใคร" ไม่ถูกใช้จับคู่
+// ⚠️ ชื่อที่โชว์บนเว็บไม่ได้มาจากตารางนี้ — มาจากชีต "พนักงาน" เสมอ (คอลัมน์ ชื่อผู้ดูแล ของชีตดาว)
+//    เปลี่ยนตารางมาใช้ staffId จึงไม่กระทบสิ่งที่ผู้ใช้เห็นแม้แต่นิดเดียว
+// categories = ชื่อหมวดตามชีต "ข้อมูลสินค้า" คอลัมน์ F (ดูของจริงด้วย listProductCategories())
+// รหัสมาจากเจ้าของโดยตรง (ส.ค. 2026) · ชื่อที่เขียนคู่ไว้เป็น "ป้ายให้คนอ่านโค้ด" เท่านั้น
+// ไม่ถูกใช้จับคู่ — ยืนยันว่ารหัสตรงกับคนไหนได้ที่ checkProductOwnerStaffNames()
+var PRODUCT_OWNER_ASSIGN_PLAN_ = [
+  { staffId: 'ST0004', staff: 'TunTun',    categories: ['ใบ', 'ใบบูช', 'ใบไม้แขวน', 'กิ่งไม้', 'ต้นไม้', 'อุปกรณ์สำนักงาน'] },
+  { staffId: 'ST0005', staff: 'ประสิทธิ์',  categories: ['Realtouch', 'ดอกไม้', 'บูช', 'อุปกรณ์สำนักงาน', 'ของตกแต่ง'] },
+  { staffId: 'ST0014', staff: 'Ya Ya',     categories: ['แจกันแก้ว', 'กระถางPS', 'เรซิ่นและอื่นๆ', 'อุปกรณ์สำนักงาน', 'ของตกแต่ง'] },
+  // "KYAW แอ KHALANE" = ชื่อคนคนเดียว (เจ้าของยืนยัน ส.ค. 2026) ไม่ใช่ 3 คน
+  { staffId: 'ST0013', staff: 'KYAW แอ KHALANE', categories: ['ดอกไม้', 'ดอกหญ้า', 'กุหลาบหิน', 'ผลไม้ ผัก กิ่งผลไม้', 'ไม้แซมไม้ประดับ', 'สายเลื้อย', 'อุปกรณ์สำนักงาน'] },
+];
+
+// แถวในตาราง → ค่าที่ใช้จับคู่กับชีตพนักงาน · staffId มาก่อนชื่อเสมอ
+// (ใส่ staffId แล้วต่อให้ชื่อในตารางสะกดผิด/ล้าสมัย ก็ยังจับคู่ถูกคน)
+function productOwnerPlanKeyOf_(entry) {
+  var e = entry || {};
+  return String(e.staffId || '').trim() || String(e.staff || '').trim();
+}
+
+// ── หมายเหตุเรื่องหมวดที่ซ้อนกัน (เจ้าของตัดสินใจแล้ว ส.ค. 2026) ──────────
+// "อุปกรณ์สำนักงาน" (ทั้ง 4 คน) · "ของตกแต่ง" (ประสิทธิ์+Ya Ya) · "ดอกไม้" (ประสิทธิ์+KYAW แอ KHALANE)
+// → เจตนาของเจ้าของคือ "ทุกคนต้องดูได้" ซึ่งเป็นจริงอยู่แล้วโดยไม่ต้องทำอะไร:
+//   ดาวเป็นป้ายบอก ไม่ใช่สิทธิ์ ทุกคนเช็ค/สั่ง/โอนสินค้าทุกตัวได้เหมือนเดิมไม่ว่าดาวเป็นของใคร
+// → จึงคง 3 หมวดนี้ไว้ใน "ไม่มอบหมายให้ใคร" ตามกติกาหมวดซ้อน (ไม่โผล่ในชิป "⭐ ของฉัน" ของใคร
+//   แต่ยังอยู่ในลิสต์ปกติของทุกคนครบถ้วน) · ถ้าวันหนึ่งอยากให้ขึ้นลิสต์ "ของฉัน" ของใครสักคน
+//   ให้ลบชื่อหมวดนั้นออกจากลิสต์ของคนที่เหลือ เหลือชื่อเดียว แล้วรัน preview ใหม่
+
+// ── กฎย่อย "ในหมวดเดียวกันแต่คนละคนดูแล" ─────────────────────────────────
+// ที่มา: เจ้าของแจ้งว่าหมวด "ดอกไม้" ทั้ง ST0005 และ ST0013 ดูแลอยู่ **แต่คนละสินค้ากัน**
+//   → แบ่งที่ระดับ "หมวด" ไม่พอ ต้องลงไปถึงตัวสินค้า
+// วิธีแบ่ง: **รหัสนำหน้า SKU (Product Prefix)** ซึ่งตามกติกาของบริษัทคือ "ประเภทสินค้า"
+//   (R=กุหลาบ, OL=มะกอก ฯลฯ — ดูหัวข้อ Business Rule เรื่อง SKU) จึงเป็นตัวแบ่ง
+//   "คนละแบบสินค้า" ที่มีอยู่แล้วในข้อมูล ไม่ต้องไปไล่ระบุทีละ SKU เป็นพัน
+// ดูว่าหมวดหนึ่ง ๆ มี prefix อะไรบ้างกี่ตัว → รัน listCategoryBreakdown()
+//
+// กติกา: กฎย่อยตัดสินก่อนตารางหมวดเสมอ · ยังไม่ใส่กฎ = ทำงานเหมือนเดิมทุกประการ
+// ⚠️ prefix เดียวกันในหมวดเดียวกันมีชื่อเกิน 1 คน → ข้ามเหมือนหมวดซ้อน (ไม่เลือกให้)
+// ⚠️ สินค้าในหมวดที่มีกฎย่อย แต่ prefix ไม่เข้ากฎไหนเลย → **ถอยไปใช้ตารางหมวด**
+//    และถูกรายงานเป็น "ยังไม่มีกฎครอบคลุม" เพื่อให้เจ้าของเห็นว่าตกหล่นอะไรบ้าง
+var PRODUCT_OWNER_ASSIGN_RULES_ = [
+  // ตัวอย่างรูปแบบ (ลบคอมเมนต์ออกแล้วใส่ prefix จริงจาก listCategoryBreakdown()):
+  // { staffId: 'ST0005', category: 'ดอกไม้', prefixes: ['R', 'PH'] },
+  // { staffId: 'ST0013', category: 'ดอกไม้', prefixes: ['DH'] },
+];
+
+// true = ทับดาวที่มีคนดูแลอยู่แล้วด้วย (ค่าปกติ false — งานที่พนักงานกดเองสำคัญกว่าตารางตั้งต้น)
+var PRODUCT_OWNER_ASSIGN_OVERWRITE_ = false;
+
+// รหัสนำหน้า SKU = ตัวอักษรอังกฤษที่นำหน้าตัวเลข ("R01025"→"R", "OL19001"→"OL")
+// ไม่เข้ารูปแบบ (ไม่มีตัวอักษรนำ/ไม่มีตัวเลขตาม) → คืน '' แล้วถูกจัดเป็น "ไม่เข้ารูปแบบ"
+// **ไม่ใช้ suggestNextSku/parseSkuParts ฝั่งเว็บ** — คนละไฟล์ คนละ runtime
+function productOwnerSkuPrefix_(sku) {
+  var m = String(sku == null ? '' : sku).trim().toUpperCase().match(/^([A-Z]+)[0-9]/);
+  return m ? m[1] : '';
+}
+
+// ตารางกฎย่อย → ดัชนี {หมวด → {prefix → [คน]}} · โครงเดียวกับ productOwnerPlanIndex_
+function productOwnerRuleIndex_(rules) {
+  var byCat = {};
+  for (var i = 0; i < (rules || []).length; i++) {
+    var r = rules[i] || {};
+    var who = productOwnerPlanKeyOf_(r);
+    var ck = productOwnerNormKey_(r.category);
+    var pfs = r.prefixes || [];
+    if (!who || !ck) continue;
+    if (!byCat[ck]) byCat[ck] = { label: String(r.category || '').trim(), byPrefix: {} };
+    for (var j = 0; j < pfs.length; j++) {
+      var pk = String(pfs[j] || '').trim().toUpperCase();
+      if (!pk) continue;
+      if (!byCat[ck].byPrefix[pk]) byCat[ck].byPrefix[pk] = [];
+      if (byCat[ck].byPrefix[pk].indexOf(who) < 0) byCat[ck].byPrefix[pk].push(who);
+    }
+  }
+  return { byCat: byCat };
+}
+
+// คีย์เทียบชื่อ (หมวด/คน) — ตัดช่องว่างทั้งหมด + ตัวพิมพ์ + zero-width ที่ติดมาจากการ copy
+// "กระถาง PS" = "กระถางPS" · "Ya Ya" = "YaYa" — ชื่อไทยในชีตเว้นวรรคไม่คงที่ ถ้าเทียบตรง ๆ
+// จะได้ "หาหมวดไม่เจอ" ทั้งที่ตาเห็นว่าเหมือนกัน
+// pure function — เทสต์ eval จากไฟล์นี้ตรง ๆ (tests/product-owner-assign.test.js) ไม่มีสำเนา
+function productOwnerNormKey_(s) {
+  return String(s == null ? '' : s)
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\s+/g, '')
+    .toLowerCase();
+}
+
+// ตารางมอบหมาย → ดัชนี {หมวด → คนที่อ้างสิทธิ์} · หมวดที่มีชื่อเกิน 1 คน = "ซ้อนกัน"
+function productOwnerPlanIndex_(plan) {
+  var byCat = {}, order = [];
+  for (var i = 0; i < (plan || []).length; i++) {
+    var p = plan[i] || {};
+    var staff = productOwnerPlanKeyOf_(p);
+    var cats = p.categories || [];
+    for (var j = 0; j < cats.length; j++) {
+      var label = String(cats[j] || '').trim();
+      var k = productOwnerNormKey_(label);
+      if (!k || !staff) continue;
+      if (!byCat[k]) { byCat[k] = { label: label, staff: [] }; order.push(k); }
+      if (byCat[k].staff.indexOf(staff) < 0) byCat[k].staff.push(staff);
+    }
+  }
+  return { byCat: byCat, order: order };
+}
+
+// คีย์เทียบ "ชื่อคน" — ถอดเครื่องประดับออกก่อนเทียบ
+// ชื่อที่พนักงานตั้งใน LINE มักมีอีโมจิ/ตัวอักษรตกแต่ง/สัญลักษณ์ ("𝓨𝓪 𝓨𝓪 ♡", "แอ 🌸", "・KYAW・")
+// ซึ่งไม่มีทางพิมพ์ให้ตรงด้วยมือได้ → เทียบตรง ๆ = "หาพนักงานไม่เจอ" ทั้งที่เป็นคนเดียวกัน
+// ⚠️ ตั้งใจแยกจาก productOwnerNormKey_ (ที่ใช้กับชื่อหมวด) ไม่ใช้ตัวเดียวกัน:
+//   ชื่อคนเทียบกับ "ชุดปิด" คือรายชื่อในชีตพนักงาน ตัดอักขระแรง ๆ ได้ เดาชนกันก็ยังถูกรายงาน
+//   ว่ากำกวมแล้วหยุด · ส่วนชื่อหมวดเป็นข้อความอิสระที่คนพิมพ์เอง ตัดแรงไปหมวดคนละอันจะยุบมาชนกัน
+// ⚠️ ห้ามใช้ \p{...} (Unicode property escape) — ถ้า runtime ไหนไม่รองรับ จะเป็น syntax error
+//   ทั้งไฟล์ = ทั้งระบบล่ม ไม่ใช่แค่ฟีเจอร์นี้พัง · ใช้ช่วงรหัสอักขระตรง ๆ แทน
+//   และเป็นการ "ตัดของที่ไม่ใช่ตัวอักษร" ไม่ใช่ "เก็บเฉพาะไทย/อังกฤษ" เพราะพนักงานบางคน
+//   ตั้งชื่อด้วยอักษรพม่า/ลาว ซึ่งถ้าใช้ whitelist จะถูกลบจนเหลือค่าว่าง
+function productOwnerStaffKey_(s) {
+  var t = String(s == null ? '' : s);
+  try { t = t.normalize('NFKC'); } catch (e) {}   // 𝓨𝓪𝓨𝓪 → YaYa · ตัวเต็มความกว้าง → ASCII
+  return t
+    .replace(/[\uD800-\uDFFF]/g, '')                                   // อีโมจิ/อักษรตกแต่ง (surrogate pair)
+    .replace(/[\u00A0-\u00BF\u00D7\u00F7\u2000-\u27BF\u2B00-\u2BFF\u2E00-\u2E7F\u3000-\u303F\u30FB\uFE00-\uFE0F\uFEFF\u200B-\u200D]/g, '')  // สัญลักษณ์/ดาว/หัวใจ/zero-width
+    .replace(/[!-\/:-@\[-`{-~]/g, '')                                  // วรรคตอน ASCII
+    .replace(/\s+/g, '')
+    .toLowerCase();
+}
+
+// คีย์ "ถอดรูปสระ/วรรณยุกต์ไทย" — ใช้เป็นชั้นสุดท้ายของการจับคู่ชื่อคนเท่านั้น
+// ที่มา: ชื่อในชีตจริงมีสระ/วรรณยุกต์ซ้อนเกินมาจากการพิมพ์ (เห็นเป็นรูปเกาะซ้อนกันบนตัวอักษร)
+// ซึ่งพิมพ์ตามให้ตรงด้วยมือไม่ได้ และไม่ใช่ "ส่วนต่อท้าย" ชั้นที่ 2 จึงจับไม่ได้
+// ⚠️ ห้ามเอาไปใช้เป็นคีย์หลัก — "ประสิทธิ์"/"ประสิทธิ" จะกลายเป็นคีย์เดียวกัน
+function productOwnerThaiBaseKey_(s) {
+  return productOwnerStaffKey_(s).replace(/[\u0E31\u0E34-\u0E3A\u0E47-\u0E4E]/g, '');
+}
+
+// ชื่อในตาราง → พนักงานจริงในชีต · เทียบได้ทั้ง staffId / displayName / lineDisplayName
+// เอาเฉพาะ status='active' (เหมือนทุกที่ในไฟล์นี้) — คนที่ถูกปิดบัญชีไม่ควรได้ดาวใหม่
+// จับคู่ 2 ชั้น: (1) ตรงเป๊ะหลังถอดเครื่องประดับ (2) ชื่อหนึ่งเป็นส่วนหนึ่งของอีกชื่อ และ
+// เหลือผู้เข้าข่าย "คนเดียว" เท่านั้น — ชั้นที่ 2 ถูกรายงานใน out.loose เสมอเพื่อให้เจ้าของ
+// เห็นว่าจับคู่ให้แบบไหน (เจอมากกว่า 1 คน = กำกวม → หยุด ไม่เดา)
+function productOwnerResolveStaffCore_(staffAll, labels) {
+  var active = [], idx = {};
+  for (var i = 0; i < (staffAll || []).length; i++) {
+    var s = staffAll[i] || {};
+    if (String(s.status || '').trim() !== 'active') continue;
+    active.push(s);
+    var names = [s.staffId, s.displayName, s.lineDisplayName];
+    for (var j = 0; j < names.length; j++) {
+      var k = productOwnerStaffKey_(names[j]);
+      if (!k) continue;
+      if (!idx[k]) idx[k] = [];
+      var dup = false;
+      for (var d = 0; d < idx[k].length; d++) if (String(idx[k][d].staffId) === String(s.staffId)) dup = true;
+      if (!dup) idx[k].push(s);
+    }
+  }
+  var out = { resolved: {}, missing: [], ambiguous: [], loose: [] };
+  for (var n = 0; n < (labels || []).length; n++) {
+    var label = String(labels[n] || '').trim();
+    if (!label) continue;
+    var lk = productOwnerStaffKey_(label);
+    var hit = idx[lk] || [];
+    if (!hit.length && lk) {
+      // ชั้นที่ 2 — ชื่อในชีตมีส่วนเกินที่พิมพ์ตามไม่ได้ ("KYAW แอ KHALANE (คลัง)") หรือกลับกัน
+      var cand = [];
+      for (var a = 0; a < active.length; a++) {
+        var ns = [active[a].staffId, active[a].displayName, active[a].lineDisplayName];
+        var ok = false;
+        for (var b = 0; b < ns.length; b++) {
+          var nk = productOwnerStaffKey_(ns[b]);
+          if (nk && (nk.indexOf(lk) >= 0 || lk.indexOf(nk) >= 0)) ok = true;
+        }
+        if (!ok) continue;
+        var seen = false;
+        for (var c = 0; c < cand.length; c++) if (String(cand[c].staffId) === String(active[a].staffId)) seen = true;
+        if (!seen) cand.push(active[a]);
+      }
+      if (!cand.length) {
+        // ชั้นที่ 3 — ชื่อไทยที่มีสระ/วรรณยุกต์ "เกินมา" กลางชื่อ (เจอจริง: "ประสิทธิ์" ในชีต
+        // มีรูปสระซ้อนเกิน) · ชั้นที่ 2 จับไม่ได้เพราะไม่ใช่ส่วนต่อท้าย ต้องถอดรูปสระออกก่อนเทียบ
+        // ⚠️ ทำเป็นชั้นสุดท้ายเท่านั้น — "ประสิทธิ์" กับ "ประสิทธิ" กลายเป็นคีย์เดียวกัน
+        //   ถ้ามีทั้งคู่ในชีตจะเข้าเส้นทาง ambiguous แล้วหยุด ซึ่งเป็นผลลัพธ์ที่ถูกต้อง
+        var lb = productOwnerThaiBaseKey_(label);
+        for (var a3 = 0; a3 < active.length && lb; a3++) {
+          var ns3 = [active[a3].staffId, active[a3].displayName, active[a3].lineDisplayName];
+          var ok3 = false;
+          for (var b3 = 0; b3 < ns3.length; b3++) {
+            var nb = productOwnerThaiBaseKey_(ns3[b3]);
+            if (nb && nb === lb) ok3 = true;
+          }
+          if (!ok3) continue;
+          var seen3 = false;
+          for (var c3 = 0; c3 < cand.length; c3++) if (String(cand[c3].staffId) === String(active[a3].staffId)) seen3 = true;
+          if (!seen3) cand.push(active[a3]);
+        }
+      }
+      if (cand.length === 1) {
+        hit = cand;
+        out.loose.push({
+          label: label,
+          matchedName: String(cand[0].displayName || cand[0].lineDisplayName || '').trim(),
+          staffId: String(cand[0].staffId || ''),
+        });
+      } else if (cand.length > 1) {
+        hit = cand;   // ตกไปเข้าเส้นทาง ambiguous ข้างล่าง
+      }
+    }
+    if (hit.length === 1) {
+      out.resolved[label] = {
+        staffId: String(hit[0].staffId || ''),
+        name: String(hit[0].displayName || hit[0].lineDisplayName || '').trim(),
+        role: String(hit[0].role || ''),
+      };
+    } else if (hit.length > 1) {
+      out.ambiguous.push({ label: label, staffIds: hit.map(function (x) { return String(x.staffId || ''); }) });
+    } else {
+      out.missing.push(label);
+    }
+  }
+  return out;
+}
+
+// ตัวคิดจริงทั้งหมด — pure ไม่แตะชีตเลย เพื่อให้ preview กับ apply เดินเส้นทางเดียวกันเป๊ะ
+// (ถ้า preview คิดคนละทางกับ apply ตัวเลขที่เจ้าของเห็นตอน preview จะไม่ใช่สิ่งที่เกิดขึ้นจริง)
+function productOwnerAssignPlanCore_(planIndex, products, owners, overwrite, ruleIndex) {
+  var ownUp = {};
+  var keys = Object.keys(owners || {});
+  for (var a = 0; a < keys.length; a++) ownUp[String(keys[a]).trim().toUpperCase()] = owners[keys[a]];
+  var rules = (ruleIndex && ruleIndex.byCat) || {};
+
+  var res = {
+    assign: [], sharedSkip: [], takenSkip: [],
+    perStaff: {}, catHit: {}, unplanned: {}, missingCats: [], caseWarn: [],
+    ruleGap: {}, byRule: 0,
+  };
+  for (var i = 0; i < (products || []).length; i++) {
+    var p = products[i] || {};
+    var sku = String(p.sku || '').trim();
+    if (!sku) continue;
+    var k = productOwnerNormKey_(p.category);
+    var slot = k ? planIndex.byCat[k] : null;
+    var rule = k ? rules[k] : null;
+    var viaRule = false;
+
+    // กฎย่อยระดับ prefix ตัดสินก่อนตารางหมวดเสมอ (ละเอียดกว่า = เจตนาชัดกว่า)
+    if (rule) {
+      var pf = productOwnerSkuPrefix_(sku);
+      var claim = (pf && rule.byPrefix[pf]) || null;
+      if (claim && claim.length === 1) {
+        slot = { label: rule.label + ' · ' + pf, staff: claim.slice() };
+        viaRule = true;
+      } else if (claim && claim.length > 1) {
+        res.sharedSkip.push({ sku: sku, category: rule.label + ' · ' + pf, staff: claim.slice() });
+        continue;
+      } else {
+        // prefix นี้ยังไม่มีกฎครอบคลุม → ถอยไปใช้ตารางหมวด แต่ต้องรายงานให้เห็น
+        // (ไม่งั้นสินค้าที่ตกหล่นจะหายไปในกอง "หมวดซ้อนกัน" โดยไม่มีใครรู้ว่าลืมเขียนกฎ)
+        var gk = rule.label + ' · ' + (pf || '(ไม่เข้ารูปแบบ SKU)');
+        res.ruleGap[gk] = (res.ruleGap[gk] || 0) + 1;
+      }
+    }
+
+    if (!slot) {
+      var lbl = String(p.category || '').trim() || '(ไม่ระบุหมวด)';
+      res.unplanned[lbl] = (res.unplanned[lbl] || 0) + 1;
+      continue;
+    }
+    if (k) res.catHit[k] = (res.catHit[k] || 0) + 1;
+    if (slot.staff.length > 1) {
+      res.sharedSkip.push({ sku: sku, category: slot.label, staff: slot.staff.slice() });
+      continue;
+    }
+    var cur = ownUp[sku.toUpperCase()];
+    if (cur && cur.staffId && !overwrite) {
+      res.takenSkip.push({ sku: sku, category: slot.label, staff: slot.staff[0], current: cur.name || cur.staffId });
+      continue;
+    }
+    // เขียนลงชีตเป็นตัวพิมพ์ใหญ่ให้ตรงกับ setProductOwnerHandler_ · ฝั่งเว็บอ่านดาวด้วย
+    // owners[p.sku] แบบตรงตัว → SKU ที่ในชีตเป็นตัวพิมพ์เล็กจะโชว์ดาวไม่ขึ้น ต้องบอกไว้
+    if (sku !== sku.toUpperCase()) res.caseWarn.push(sku);
+    if (viaRule) res.byRule++;
+    res.assign.push({ sku: sku.toUpperCase(), name: String(p.name || ''), category: slot.label, staff: slot.staff[0] });
+    res.perStaff[slot.staff[0]] = (res.perStaff[slot.staff[0]] || 0) + 1;
+  }
+  for (var n = 0; n < planIndex.order.length; n++) {
+    var key = planIndex.order[n];
+    if (!res.catHit[key]) res.missingCats.push(planIndex.byCat[key].label);
+  }
+  return res;
+}
+
+// อ่านดาวที่มีอยู่ตอนนี้ (ไม่สร้างชีตถ้ายังไม่มี — preview ต้องไม่ทิ้งร่องรอยอะไรเลย)
+function productOwnerReadMap_(ss) {
+  var sh = ss.getSheetByName(SHEET_PRODUCT_OWNER);
+  if (!sh) return {};
+  var last = Math.min(sh.getLastRow(), POWN_MAX_ROWS + 1);
+  if (last < 2) return {};
+  return productOwnerMapFromRows_(sh.getRange(2, 1, last - 1, POWN_HEADERS.length).getValues());
+}
+
+// กางอักขระที่ "มองไม่เห็นด้วยตา" ออกมาเป็นรหัส — อีโมจิ/zero-width/ช่องว่างแปลก ๆ
+// เป็นต้นเหตุที่ชื่อดูเหมือนตรงแต่เทียบไม่ตรง และไล่หาสาเหตุด้วยตาเปล่าไม่ได้เลย
+function productOwnerDescribeName_(s) {
+  var t = String(s == null ? '' : s);
+  var odd = [];
+  for (var i = 0; i < t.length; i++) {
+    var c = t.charCodeAt(i);
+    // ปล่อยผ่าน: ASCII ที่พิมพ์ได้ + ช่วงภาษาไทย · นอกนั้นกางรหัสให้ดู
+    if ((c >= 32 && c <= 126) || (c >= 0x0E00 && c <= 0x0E7F)) continue;
+    odd.push('\\u' + ('0000' + c.toString(16).toUpperCase()).slice(-4));
+  }
+  return odd.length ? t + '   [อักขระพิเศษ: ' + odd.join(' ') + ']' : t;
+}
+
+// ⚠️ ชื่อฟังก์ชันห้ามลงท้าย _ ไม่งั้นไม่โผล่ใน dropdown ของ GAS editor (บทเรียนข้อ 1)
+// ตัวตรวจ "ชื่อในตารางตรงกับชีตพนักงานไหม" — อ่านอย่างเดียว รันได้ตลอดเวลา
+// มีไว้เพราะชื่อ LINE ของพนักงานมักมีอีโมจิ/อักขระพิเศษที่พิมพ์ตามด้วยมือไม่ได้
+function checkProductOwnerStaffNames() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var all = readStaffAll_(ss);
+  var actives = all.filter(function (s) { return String(s.status || '').trim() === 'active'; });
+
+  Logger.log('── รายชื่อพนักงานในชีต "พนักงาน" (ใช้งานอยู่ ' + actives.length + ' คน จากทั้งหมด ' + all.length + ') ──');
+  for (var i = 0; i < all.length; i++) {
+    var s = all[i];
+    var act = String(s.status || '').trim() === 'active';
+    Logger.log('  ' + (act ? '✅' : '⛔ [' + (s.status || 'ไม่ระบุสถานะ') + ']') + ' ' + s.staffId
+      + ' · ชื่อ: ' + productOwnerDescribeName_(s.displayName)
+      + (String(s.lineDisplayName || '') !== String(s.displayName || '')
+        ? ' · ชื่อ LINE: ' + productOwnerDescribeName_(s.lineDisplayName) : '')
+      + ' · ตำแหน่ง: ' + (s.role || '-'));
+  }
+
+  var labels = [];
+  for (var p = 0; p < PRODUCT_OWNER_ASSIGN_PLAN_.length; p++) {
+    var nm = productOwnerPlanKeyOf_(PRODUCT_OWNER_ASSIGN_PLAN_[p]);
+    if (nm && labels.indexOf(nm) < 0) labels.push(nm);
+  }
+  var who = productOwnerResolveStaffCore_(all, labels);
+
+  Logger.log('── ชื่อในตารางมอบหมาย (' + labels.length + ' ชื่อ) ──');
+  for (var n = 0; n < labels.length; n++) {
+    var label = labels[n];
+    var got = who.resolved[label];
+    if (!got) continue;
+    var how = '';
+    for (var l = 0; l < who.loose.length; l++) if (who.loose[l].label === label) how = ' (จับคู่แบบไม่ตรงเป๊ะ — ตรวจว่าถูกคนไหม)';
+    Logger.log('  ✅ "' + label + '" → ' + got.staffId + ' · ' + productOwnerDescribeName_(got.name) + how);
+  }
+  for (var m = 0; m < who.ambiguous.length; m++) {
+    Logger.log('  ⛔ "' + who.ambiguous[m].label + '" ตรงกับหลายคน: ' + who.ambiguous[m].staffIds.join(', ')
+      + ' — ใส่ staffId แทนชื่อในตาราง');
+  }
+  for (var k = 0; k < who.missing.length; k++) {
+    Logger.log('  ⛔ "' + who.missing[k] + '" หาไม่เจอ — ลอกชื่อจากรายการข้างบนมาใส่ในตาราง หรือใส่ staffId แทน');
+  }
+  if (!who.missing.length && !who.ambiguous.length) {
+    Logger.log('✅ ชื่อในตารางตรงกับชีตครบทุกคน' + (who.loose.length ? ' (มี ' + who.loose.length + ' ชื่อที่จับคู่แบบไม่ตรงเป๊ะ — ดูข้างบน)' : ''));
+  } else {
+    Logger.log('⛔ ยังมีชื่อที่ใช้ไม่ได้ — applyProductOwnerAssign() จะไม่เขียนอะไรเลยจนกว่าจะแก้ครบ');
+  }
+
+  // บรรทัดพร้อมลอก — เติม staffId ให้เสร็จ ไม่ต้องพิมพ์ชื่อที่มีอักขระพิเศษเองอีก
+  // (จุดประสงค์ทั้งหมดของการย้ายมาใช้ staffId คือ "เลิกพึ่งการพิมพ์ชื่อให้ตรง")
+  Logger.log('── ลอกบรรทัดข้างล่างไปวางแทนใน PRODUCT_OWNER_ASSIGN_PLAN_ (เติม staffId ให้แล้ว) ──');
+  for (var q = 0; q < PRODUCT_OWNER_ASSIGN_PLAN_.length; q++) {
+    var ent = PRODUCT_OWNER_ASSIGN_PLAN_[q] || {};
+    var hit = who.resolved[productOwnerPlanKeyOf_(ent)];
+    var cats = (ent.categories || []).map(function (c) { return "'" + c + "'"; }).join(', ');
+    Logger.log("  { staffId: '" + (hit ? hit.staffId : '??') + "', staff: '" + (ent.staff || '')
+      + "', categories: [" + cats + '] },' + (hit ? '' : '   // ⛔ ยังหาคนนี้ไม่เจอ'));
+  }
+  return { staff: all, match: who };
+}
+
+// ── ส่องข้างในหมวด: "หมวดเดียวกันแต่คนละสินค้า" แบ่งยังไงดี ────────────────
+// ไม่ใส่ชื่อหมวด = ส่องให้อัตโนมัติทุกหมวดที่มีคนอ้างสิทธิ์เกิน 1 คน (ตัวที่ต้องตัดสินใจพอดี)
+// ⚠️ GAS editor รันฟังก์ชันโดยส่ง argument ไม่ได้ — จึงต้องทำงานได้เมื่อไม่มี argument
+// อ่านอย่างเดียว ไม่แก้อะไร
+function listCategoryBreakdown(catName) {
+  var products = readProducts_();
+  var idx = productOwnerPlanIndex_(PRODUCT_OWNER_ASSIGN_PLAN_);
+
+  var targets = [];
+  if (catName) {
+    targets.push({ key: productOwnerNormKey_(catName), label: String(catName).trim(), staff: [] });
+  } else {
+    for (var o = 0; o < idx.order.length; o++) {
+      var slot = idx.byCat[idx.order[o]];
+      if (slot.staff.length > 1) targets.push({ key: idx.order[o], label: slot.label, staff: slot.staff });
+    }
+  }
+  if (!targets.length) {
+    Logger.log('ไม่มีหมวดที่ถูกอ้างสิทธิ์เกิน 1 คน — ใส่ชื่อหมวดเป็น argument ถ้าอยากดูหมวดใดหมวดหนึ่ง');
+    return [];
+  }
+
+  var out = [];
+  for (var t = 0; t < targets.length; t++) {
+    var tg = targets[t];
+    var inCat = [];
+    for (var i = 0; i < products.length; i++) {
+      if (productOwnerNormKey_(products[i].category) === tg.key) inCat.push(products[i]);
+    }
+    Logger.log('══ "' + tg.label + '" ' + inCat.length + ' SKU'
+      + (tg.staff.length ? ' · อ้างสิทธิ์โดย ' + tg.staff.join(', ') : '') + ' ══');
+    if (!inCat.length) { Logger.log('  (ไม่พบสินค้าในหมวดนี้ — ชื่อหมวดพิมพ์ตรงกับชีตหรือยัง?)'); continue; }
+
+    var byPf = {}, bySup = {};
+    for (var j = 0; j < inCat.length; j++) {
+      var pf = productOwnerSkuPrefix_(inCat[j].sku) || '(ไม่เข้ารูปแบบ SKU)';
+      if (!byPf[pf]) byPf[pf] = { n: 0, eg: [] };
+      byPf[pf].n++;
+      if (byPf[pf].eg.length < 3) byPf[pf].eg.push(inCat[j].sku + ' ' + String(inCat[j].name || '').slice(0, 22));
+      var sup = String(inCat[j].tag || inCat[j].vendor || '').trim() || '(ไม่ระบุ)';
+      bySup[sup] = (bySup[sup] || 0) + 1;
+    }
+    Logger.log('  แบ่งตามรหัสนำหน้า SKU (= ประเภทสินค้า ตามกติกา SKU ของบริษัท):');
+    Object.keys(byPf).sort(function (x, y) { return byPf[y].n - byPf[x].n; }).slice(0, 30)
+      .forEach(function (pf) {
+        Logger.log('    ' + pf + '  ' + byPf[pf].n + ' SKU   เช่น ' + byPf[pf].eg.join(' / '));
+      });
+    var supKeys = Object.keys(bySup).sort(function (x, y) { return bySup[y] - bySup[x]; });
+    if (supKeys.length > 1) {
+      Logger.log('  แบ่งตามซัพพลายเออร์/TAG (ทางเลือกอีกแบบ ถ้าไม่ได้แบ่งตามประเภทสินค้า):');
+      supKeys.slice(0, 15).forEach(function (s) { Logger.log('    ' + s + '  ' + bySup[s] + ' SKU'); });
+    }
+    Logger.log('  💡 เลือก prefix ให้แต่ละคนแล้วเติมใน PRODUCT_OWNER_ASSIGN_RULES_ เช่น');
+    Logger.log("     { staffId: 'ST0005', category: '" + tg.label + "', prefixes: ['"
+      + Object.keys(byPf).slice(0, 2).join("', '") + "'] },");
+    out.push({ category: tg.label, total: inCat.length, byPrefix: byPf });
+  }
+  return out;
+}
+
+// ขั้นที่ 1 — ดูชื่อหมวดจริงในชีตก่อนแก้ตาราง (อ่านอย่างเดียว)
+function listProductCategories() {
+  var products = readProducts_();
+  var counts = {};
+  for (var i = 0; i < products.length; i++) {
+    var lbl = String(products[i].category || '').trim() || '(ไม่ระบุหมวด)';
+    counts[lbl] = (counts[lbl] || 0) + 1;
+  }
+  var idx = productOwnerPlanIndex_(PRODUCT_OWNER_ASSIGN_PLAN_);
+  var rows = Object.keys(counts).map(function (k) { return { label: k, n: counts[k] }; })
+    .sort(function (x, y) { return y.n - x.n; });
+
+  Logger.log('── หมวดสินค้าจริงในชีต: ' + rows.length + ' หมวด · ' + products.length + ' SKU ──');
+  for (var r = 0; r < rows.length; r++) {
+    var slot = idx.byCat[productOwnerNormKey_(rows[r].label)];
+    var who = !slot ? '— ยังไม่มีในตาราง (จะไม่มีคนดูแล)'
+      : slot.staff.length > 1 ? '⚠️ ซ้อนกัน ' + slot.staff.length + ' คน: ' + slot.staff.join(', ')
+      : '→ ' + slot.staff[0];
+    Logger.log('  ' + rows[r].n + ' SKU · "' + rows[r].label + '" ' + who);
+  }
+  var seenKeys = {};
+  Object.keys(counts).forEach(function (c) { seenKeys[productOwnerNormKey_(c)] = true; });
+  var missing = [];
+  for (var m = 0; m < idx.order.length; m++) {
+    if (!seenKeys[idx.order[m]]) missing.push(idx.byCat[idx.order[m]].label);
+  }
+  if (missing.length) {
+    Logger.log('⚠️ หมวดในตารางที่ "ไม่มีในชีตเลย" (พิมพ์ไม่ตรง?): ' + missing.join(' · '));
+  }
+  return rows;
+}
+
+// ขั้นที่ 3 — อ่านอย่างเดียว บอกว่าถ้ากด apply แล้วจะเกิดอะไรขึ้นบ้าง
+function previewProductOwnerAssign() { return productOwnerAssignRun_(false); }
+
+// ขั้นที่ 4 — เขียนจริง
+function applyProductOwnerAssign() { return productOwnerAssignRun_(true); }
+
+function productOwnerAssignRun_(doWrite) {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var plan = PRODUCT_OWNER_ASSIGN_PLAN_;
+  var idx = productOwnerPlanIndex_(plan);
+
+  var labels = [];
+  for (var i = 0; i < plan.length; i++) {
+    var nm = productOwnerPlanKeyOf_(plan[i]);
+    if (nm && labels.indexOf(nm) < 0) labels.push(nm);
+  }
+  // กฎย่อยอ้างคนได้เหมือนตารางหมวด → ต้องเอาชื่อ/รหัสจากทั้งสองที่มาหาให้ครบ
+  // (ลืมข้อนี้ = กฎย่อยชี้ไปที่คนที่ไม่ได้ถูก resolve แล้วพังตอนเขียนจริง)
+  for (var g = 0; g < PRODUCT_OWNER_ASSIGN_RULES_.length; g++) {
+    var rn = productOwnerPlanKeyOf_(PRODUCT_OWNER_ASSIGN_RULES_[g]);
+    if (rn && labels.indexOf(rn) < 0) labels.push(rn);
+  }
+  var who = productOwnerResolveStaffCore_(readStaffAll_(ss), labels);
+  var products = readProducts_();
+  var owners = productOwnerReadMap_(ss);
+  var rules = productOwnerRuleIndex_(PRODUCT_OWNER_ASSIGN_RULES_);
+  var res = productOwnerAssignPlanCore_(idx, products, owners, PRODUCT_OWNER_ASSIGN_OVERWRITE_ === true, rules);
+
+  Logger.log(doWrite ? '── มอบหมายผู้ดูแลสินค้า (เขียนจริง) ──' : '── ทดลองมอบหมาย (ยังไม่เขียนอะไรเลย) ──');
+  Logger.log('สินค้าทั้งหมด ' + products.length + ' SKU · มีคนดูแลอยู่แล้ว ' + Object.keys(owners).length + ' SKU');
+
+  var staffNames = Object.keys(res.perStaff).sort(function (a, b) { return res.perStaff[b] - res.perStaff[a]; });
+  Logger.log('จะมอบหมายรวม ' + res.assign.length + ' SKU'
+    + (res.byRule ? ' (มาจากกฎย่อยระดับ prefix ' + res.byRule + ' SKU)' : '') + ':');
+  for (var s = 0; s < staffNames.length; s++) {
+    var st = who.resolved[staffNames[s]];
+    // โชว์ทั้งรหัสและชื่อจริงจากชีต — ตารางอาจอ้างด้วย staffId ล้วน ('ST0001' เฉย ๆ อ่านไม่ออกว่าใคร)
+    Logger.log('  ' + (st ? st.staffId + ' · ' + st.name : staffNames[s] + ' ⚠️ หาในชีตพนักงานไม่เจอ')
+      + ' → ' + res.perStaff[staffNames[s]] + ' SKU');
+  }
+
+  if (res.sharedSkip.length) {
+    var sharedCats = {};
+    for (var v = 0; v < res.sharedSkip.length; v++) sharedCats[res.sharedSkip[v].category] = (sharedCats[res.sharedSkip[v].category] || 0) + 1;
+    Logger.log('⚠️ ข้าม ' + res.sharedSkip.length + ' SKU เพราะหมวดถูกอ้างสิทธิ์มากกว่า 1 คน '
+      + '(1 สินค้า = 1 คนดูแล ต้องเลือกให้ชัดก่อน):');
+    Object.keys(sharedCats).forEach(function (c) {
+      var slot = idx.byCat[productOwnerNormKey_(c)];
+      Logger.log('   · "' + c + '" ' + sharedCats[c] + ' SKU'
+        + (slot ? ' — ' + slot.staff.join(', ') : ' (จากกฎย่อยที่ prefix เดียวกันมีเกิน 1 คน)'));
+    });
+    if (!PRODUCT_OWNER_ASSIGN_RULES_.length) {
+      Logger.log('   💡 ถ้าหมวดเดียวกันแบ่งกันดูคนละสินค้า → ใช้กฎย่อยระดับ prefix ได้'
+        + ' (รัน listCategoryBreakdown() เพื่อดูว่าหมวดนั้นมี prefix อะไรบ้าง)');
+    }
+  }
+  var gapKeys = Object.keys(res.ruleGap);
+  if (gapKeys.length) {
+    var gapTotal = 0;
+    for (var gg = 0; gg < gapKeys.length; gg++) gapTotal += res.ruleGap[gapKeys[gg]];
+    Logger.log('⚠️ ในหมวดที่มีกฎย่อย มี ' + gapTotal + ' SKU ที่ prefix ยังไม่มีกฎครอบคลุม '
+      + '(ตกไปใช้ตารางหมวดแทน) — เติมกฎให้ครบถ้าอยากให้มีคนดูแล:');
+    gapKeys.sort(function (x, y) { return res.ruleGap[y] - res.ruleGap[x]; })
+      .slice(0, 20).forEach(function (gk) { Logger.log('   · ' + gk + ' ' + res.ruleGap[gk] + ' SKU'); });
+  }
+  if (res.takenSkip.length) Logger.log('ข้าม ' + res.takenSkip.length + ' SKU ที่มีคนดูแลอยู่แล้ว (ไม่ทับงานที่พนักงานกดเอง)');
+  if (res.missingCats.length) Logger.log('⚠️ หมวดในตารางที่ไม่เจอสินค้าเลยสักตัว (พิมพ์ไม่ตรงชีต?): ' + res.missingCats.join(' · '));
+  if (res.caseWarn.length) Logger.log('⚠️ SKU ที่ในชีตไม่ใช่ตัวพิมพ์ใหญ่ ' + res.caseWarn.length + ' ตัว — ดาวอาจไม่ขึ้นบนเว็บ: ' + res.caseWarn.slice(0, 10).join(', '));
+
+  var unplannedKeys = Object.keys(res.unplanned).sort(function (a, b) { return res.unplanned[b] - res.unplanned[a]; });
+  var unplannedTotal = 0;
+  for (var u = 0; u < unplannedKeys.length; u++) unplannedTotal += res.unplanned[unplannedKeys[u]];
+  if (unplannedTotal) {
+    Logger.log('หมวดที่ยังไม่มีใครดูแล ' + unplannedTotal + ' SKU (' + unplannedKeys.length + ' หมวด): '
+      + unplannedKeys.slice(0, 15).map(function (k) { return k + ' ' + res.unplanned[k]; }).join(' · '));
+  }
+
+  if (who.loose.length) {
+    Logger.log('ℹ️ จับคู่ชื่อแบบ "ไม่ตรงเป๊ะ" (ชื่อในชีตมีอักขระพิเศษ/ส่วนเกิน) — ตรวจว่าถูกคนไหม:');
+    who.loose.forEach(function (x) {
+      Logger.log('   · ตาราง "' + x.label + '" → ชีต "' + x.matchedName + '" (' + x.staffId + ')');
+    });
+  }
+  if (who.missing.length || who.ambiguous.length) {
+    if (who.missing.length) Logger.log('⛔ ชื่อพนักงานที่หาในชีต "พนักงาน" ไม่เจอ (หรือ status ไม่ใช่ active): ' + who.missing.join(' · '));
+    who.ambiguous.forEach(function (x) { Logger.log('⛔ ชื่อ "' + x.label + '" ตรงกับพนักงานหลายคน: ' + x.staffIds.join(', ') + ' — ใส่ staffId แทนชื่อในตาราง'); });
+    Logger.log('⛔ ยังไม่เขียนอะไรทั้งสิ้น — แก้ชื่อในตารางให้ครบก่อนแล้วรันใหม่');
+    return { ok: false, blocked: 'staff', preview: res, staff: who };
+  }
+  if (!doWrite) {
+    var projected = Object.keys(owners).length + res.assign.length;
+    if (projected > POWN_MAX_ROWS) {
+      Logger.log('⛔ หลังมอบหมายชีตจะมีราว ' + projected + ' แถว เกินเพดาน POWN_MAX_ROWS='
+        + POWN_MAX_ROWS + ' → ต้องเพิ่มค่าคงที่นั้นก่อน ไม่งั้นดาวส่วนที่เกินจะไม่ขึ้นเว็บ');
+    }
+    Logger.log('── จบการทดลอง (ไม่ได้เขียนอะไร) · พอใจแล้วรัน applyProductOwnerAssign() ──');
+    return { ok: true, preview: res, staff: who };
+  }
+  if (!res.assign.length) {
+    Logger.log('ไม่มีอะไรต้องเขียน');
+    return { ok: true, written: 0, preview: res, staff: who };
+  }
+
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); } catch (e) {
+    Logger.log('⛔ ระบบกำลังยุ่ง (มีคนกดดาวอยู่?) — ลองใหม่อีกครั้ง');
+    return { ok: false, blocked: 'lock' };
+  }
+  try {
+    var sh = productOwnerSheet_(ss);
+    var last = sh.getLastRow();
+    var rowBySku = {};
+    if (last >= 2) {
+      var vals = sh.getRange(2, 1, last - 1, POWN_HEADERS.length).getValues();
+      for (var q = 0; q < vals.length; q++) {
+        var key = String(vals[q][POWN_COL.SKU - 1] || '').trim().toUpperCase();
+        if (key) rowBySku[key] = q + 2;   // แถวล่างสุดชนะ — ตรงกับ productOwnerMapFromRows_
+      }
+    }
+    var now = new Date();
+    var appends = [], updates = [];
+    for (var w = 0; w < res.assign.length; w++) {
+      var it = res.assign[w];
+      var stf = who.resolved[it.staff];
+      var row = [it.sku, stf.staffId, stf.name, now, 'active', 'มอบหมายตามหมวด "' + it.category + '"'];
+      var at = rowBySku[it.sku];
+      if (at) updates.push({ row: at, values: row });
+      else appends.push(row);
+    }
+    for (var x = 0; x < updates.length; x++) {
+      sh.getRange(updates[x].row, 1, 1, POWN_HEADERS.length).setValues([updates[x].values]);
+    }
+    if (appends.length) {
+      sh.getRange(sh.getLastRow() + 1, 1, appends.length, POWN_HEADERS.length).setValues(appends);
+    }
+
+    // 1 แถวสรุปต่อการรัน 1 ครั้ง — ไม่ใช่ 1 แถวต่อ SKU (Audit Log เป็นแหล่งของแท็บ
+    // "ผลงานพนักงาน" ซึ่งอ่านทั้งเดือน · เพิ่มทีเป็นพันแถวจากการตั้งค่าครั้งเดียวไม่คุ้ม)
+    writeAuditLog_('เจ้าของ (GAS editor)', 'setProductOwner', 'bulk',
+      auditDetail_({ วิธี: 'มอบหมายตามหมวด', เขียนใหม่: appends.length, ทับแถวเดิม: updates.length, ต่อคน: res.perStaff }));
+
+    Logger.log('✅ เขียนแล้ว ' + res.assign.length + ' SKU (เพิ่มแถวใหม่ ' + appends.length + ' · อัปเดตแถวเดิม ' + updates.length + ')');
+    var rowsAfter = sh.getLastRow() - 1;
+    if (rowsAfter > POWN_MAX_ROWS) {
+      Logger.log('⛔ ชีตมี ' + rowsAfter + ' แถว เกินเพดาน POWN_MAX_ROWS=' + POWN_MAX_ROWS
+        + ' → ดาวของแถวที่เกินจะไม่ถูกอ่านขึ้นเว็บเลย ต้องเพิ่มค่าคงที่นี้ก่อน');
+    }
+    if (!productOwnerEnabled_()) {
+      Logger.log('⚠️ ระบบผู้ดูแลสินค้ายังปิดอยู่ — ดาวจะยังไม่โผล่จนกว่าจะรัน setupProductOwner()');
+    }
+    return { ok: true, written: res.assign.length, appended: appends.length, updated: updates.length, preview: res, staff: who };
+  } finally {
+    try { lock.releaseLock(); } catch (e) {}
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -12001,7 +12659,15 @@ var POS_ZORT_FIELDS = {
   orderCustomerAddress: "customeraddress",
   orderCustomerPhone:   "customerphone",
   orderCustomerEmail:   "customeremail",
-  orderChannel:         "channel",   // ช่องทางขาย (หน้าร้าน/Line OA/...)
+  // ⚠️ ช่องทางขาย: ใช้ "saleschannel" ให้ตรงกับ createQuotation ที่ยืนยันแล้วว่าเวิร์ก
+  //    เดิมเป็น "channel" ซึ่ง ZORT ไม่รู้จัก → หน้ารายการขายขึ้นช่องทางเป็น "–" ทุกบิล
+  //    (เห็นจากหน้า ZORT จริง ส.ค. 2026 — บิล RC-202608007 ช่องทางว่างทั้งที่ POS ส่ง "หน้าร้าน")
+  orderChannel:         "saleschannel",
+  // ยอดรวมหัวเอกสาร — ZORT **ไม่คำนวณให้เองจาก list[].totalprice** (เหมือน AddQuotation เป๊ะ)
+  // ไม่ส่ง = หน้ารายการขายขึ้น "มูลค่า 0" ทั้งที่ line item ถูกต้องครบ · ดูหัวข้อใน CLAUDE.md
+  orderAmount:          "amount",
+  orderAmountPreVat:    "amount_pretax",
+  orderVatAmount:       "vatamount",
   // line item: ZORT v4 ใช้ pricepernumber เป็นราคาต่อหน่วย (ไม่ใช่ price) — ส่งครบทั้ง 3 กันพลาด
   orderStatusField:     "status",    // field สถานะใน AddOrder / UpdateOrderStatus
   orderStatusDone:      "Success",   // ค่าสถานะ "สำเร็จ" (แก้ที่นี่ถ้า ZORT ใช้ค่าอื่น)
@@ -12103,17 +12769,112 @@ function searchContact(query) {
   return error("ค้นลูกค้าไม่สำเร็จ: " + lastErr);
 }
 
+// ── 🔎 ตรวจบิลขายใน ZORT (READ-ONLY) — "ทำไมมูลค่าขึ้น 0" ────────────────────
+// เจ้าของรันเองใน GAS editor: checkSaleBillInZort("RC-202608007")
+// ชื่อไม่มี `_` ต่อท้ายจึงโผล่ใน dropdown (บทเรียนข้อ 1) · **อ่านอย่างเดียว ไม่แก้/ไม่สร้างอะไร**
+//
+// ที่มา (ส.ค. 2026): บิล ฿476 ออกสำเร็จ แต่หน้ารายการขายของ ZORT ขึ้น "มูลค่า 0"
+// ตัวนี้บอกให้เห็นกับตาว่า ZORT เก็บอะไรไว้จริง — แยกให้ขาดระหว่าง
+//   (ก) line item ผิด/หาย  vs  (ข) line item ถูกแต่ "ยอดหัวเอกสาร" เป็น 0
+// ซึ่งแก้คนละทางกันสิ้นเชิง · เทียบกับชีต "บิลขาย" ฝั่งเราให้ด้วยว่ายอดตรงกันไหม
+function checkSaleBillInZort(number) {
+  var num = String(number || "").trim();
+  if (!num) { Logger.log('❌ ใส่เลขบิลด้วย เช่น checkSaleBillInZort("RC-202608007")'); return { ok: false }; }
+
+  var found = findZortOrderByNumber_(num);
+  if (!found) { Logger.log('❌ ไม่พบบิล "' + num + '" ใน ZORT (ค้นย้อนหลัง 180 วัน)'); return { ok: false }; }
+  var d = found.detail || {};
+
+  Logger.log('📄 ZORT order ' + (d.number || num) + ' (id=' + found.id + ')');
+  Logger.log('   สถานะ: ' + (d.status || '—') + ' · ชำระ: ' + (d.paymentstatus || d.paymentstatustext || '—') +
+             ' · ช่องทาง: ' + (d.saleschannel || d.channel || '(ว่าง)'));
+
+  // (ก) ยอดหัวเอกสาร — ไล่ทุกชื่อ field ที่ ZORT อาจใช้ ไม่เดาชื่อเดียว
+  var amtKeys = ["amount", "amount_pretax", "vatamount", "totalamount", "grandtotal", "netamount", "paymentamount"];
+  var head = [];
+  amtKeys.forEach(function (k) { if (d[k] != null) head.push(k + "=" + d[k]); });
+  Logger.log('   ยอดหัวเอกสาร: ' + (head.length ? head.join(" · ") : "(ไม่มี field ยอดเลย)"));
+
+  // (ข) line items — ผลรวมจริงของบรรทัด
+  var list = d.list || d.items || [];
+  var sumTotal = 0, sumUnitxQty = 0;
+  Logger.log('   รายการ ' + list.length + ' บรรทัด:');
+  list.forEach(function (it, i) {
+    var qty = Number(it.number) || 0;
+    var ppn = Number(it.pricepernumber) || 0;
+    var tp = Number(it.totalprice) || 0;
+    sumTotal += tp; sumUnitxQty += ppn * qty;
+    if (i < 20) Logger.log('     ' + (i + 1) + '. ' + it.sku + ' x' + qty +
+                           ' · pricepernumber=' + ppn + ' · price=' + (it.price != null ? it.price : "—") +
+                           ' · totalprice=' + tp);
+  });
+  Logger.log('   ผลรวมบรรทัด: totalprice=' + (Math.round(sumTotal * 100) / 100) +
+             ' · pricepernumber×number=' + (Math.round(sumUnitxQty * 100) / 100));
+
+  // (ค) เทียบกับยอดที่ "เราคิด" (ชีตบิลขายฝั่งเรา) — ตัวชี้ขาดว่าเพี้ยนตรงไหน
+  var mine = null;
+  try {
+    var sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_SALE_BILLS);
+    if (sh && sh.getLastRow() >= 2) {
+      var rows = sh.getRange(2, 1, sh.getLastRow() - 1, Math.max(24, sh.getLastColumn())).getValues();
+      for (var i = rows.length - 1; i >= 0; i--) {
+        if (String(rows[i][3]).trim() === num) {   // D = เลขบิล
+          mine = { grandTotal: rows[i][8], preVat: rows[i][9], vat: rows[i][10], shipFee: rows[i][22], payTotal: rows[i][23] };
+          break;
+        }
+      }
+    }
+  } catch (e) { Logger.log('   (อ่านชีตบิลขายไม่ได้: ' + e + ')'); }
+  if (mine) {
+    Logger.log('   ฝั่งเรา (ชีตบิลขาย): ยอดสุทธิ=' + mine.grandTotal + ' · ก่อน VAT=' + mine.preVat +
+               ' · VAT=' + mine.vat + ' · ค่าส่ง=' + mine.shipFee + ' · ยอดเก็บลูกค้า=' + mine.payTotal);
+  } else {
+    Logger.log('   ⚠️ ไม่เจอบิลนี้ในชีต "' + SHEET_SALE_BILLS + '" (บิลเก่ากว่าที่เริ่มเก็บ log?)');
+  }
+
+  // (ง) สรุปให้ชัดว่าควรแก้ทางไหน — ไม่ให้เจ้าของต้องตีความเลขเอง
+  var headAmount = Number(d.amount) || 0;
+  if (sumTotal > 0 && headAmount === 0) {
+    Logger.log('🔴 สรุป: line item ถูกต้อง แต่ "ยอดหัวเอกสาร" เป็น 0 → ZORT ไม่คำนวณยอดรวมให้เอง');
+    Logger.log('   แก้: AddOrder ต้องส่ง amount/amount_pretax/vatamount เอง (เหมือน AddQuotation)');
+  } else if (sumTotal === 0) {
+    Logger.log('🔴 สรุป: line item ไม่มีราคาเลย → ปัญหาอยู่ที่ field ราคาในบรรทัด ไม่ใช่ยอดหัวเอกสาร');
+  } else if (mine && Math.abs(headAmount - Number(mine.payTotal || mine.grandTotal)) > 0.01) {
+    Logger.log('🟠 สรุป: ZORT มียอด แต่ไม่ตรงกับที่เราคิด (ต่าง ' +
+               (Math.round((headAmount - Number(mine.payTotal || mine.grandTotal)) * 100) / 100) + ')');
+  } else {
+    Logger.log('🟢 สรุป: ยอดใน ZORT ตรงกับที่เราคิด');
+  }
+  return { ok: true, headAmount: headAmount, lineSum: Math.round(sumTotal * 100) / 100, mine: mine };
+}
+
 // ── ชีต "บิลขาย" — log บิล POS ฝั่งเราเอง (1 แถว = 1 บิล) ────────────────────
 // ทำไมต้องมี: createSaleBill ยิงเข้า ZORT อย่างเดียว ไม่เหลือร่องรอยฝั่งเรา (เหลือแค่ audit log)
 // → ดู "ยอดขายวันนี้"/ปิดยอดเงินสด/แยกตามเซล ไม่ได้เลย จนกว่า syncZortSales จะรอบถัดไป (ทุก 2 ชม.)
 // เก็บระดับ "บิล" ไม่ใช่ระดับรายการ — รายละเอียดสินค้าในบิลดึงจาก ZORT ได้ด้วย lookupSaleBill(เลขบิล)
+// ⚠️ **ต่อท้ายอย่างเดียว ห้ามแทรก/สลับคอลัมน์กลางตาราง** — appendSaleBillRow_ เขียนตามตำแหน่ง
+//    และแถวเก่าหลายพันแถวในชีตจริงอ่านตามตำแหน่งเดิม (บทเรียนข้อ 5 เรื่อง column index)
+var SALE_BILL_HEADERS_ = [
+  "id", "วันที่", "เวลา", "เลขบิล", "เลขใบกำกับ", "ผู้ขาย", "ช่องทาง", "วิธีชำระ",
+  "ยอดสุทธิ", "ก่อน VAT", "VAT", "ส่วนลดรวม", "จำนวนรายการ", "จำนวนชิ้น",
+  "ลูกค้า", "เลขผู้เสียภาษี", "ใบกำกับภาษี", "รับเงินสด", "เงินทอน",
+  "zortOrderId", "สถานะ", "หมายเหตุ",
+  // ── เพิ่มตอนทำโหมด "ขายออนไลน์" (ส.ค. 2026) — W..AC ──
+  "ค่าจัดส่ง", "ยอดเก็บลูกค้า", "ขนส่ง", "เลขพัสดุ", "ผู้รับ", "ที่อยู่จัดส่ง", "โหมดขาย",
+];
 function saleBillsSheet_(ss) {
-  return getOrCreateSheet_(ss, SHEET_SALE_BILLS, [
-    "id", "วันที่", "เวลา", "เลขบิล", "เลขใบกำกับ", "ผู้ขาย", "ช่องทาง", "วิธีชำระ",
-    "ยอดสุทธิ", "ก่อน VAT", "VAT", "ส่วนลดรวม", "จำนวนรายการ", "จำนวนชิ้น",
-    "ลูกค้า", "เลขผู้เสียภาษี", "ใบกำกับภาษี", "รับเงินสด", "เงินทอน",
-    "zortOrderId", "สถานะ", "หมายเหตุ",
-  ]);
+  var sh = getOrCreateSheet_(ss, SHEET_SALE_BILLS, SALE_BILL_HEADERS_);
+  // getOrCreateSheet_ เขียนหัวคอลัมน์เฉพาะตอน "สร้างชีตใหม่" — ชีตที่มีอยู่แล้ว (22 คอลัมน์เดิม)
+  // จะไม่มีหัวของคอลัมน์ใหม่ ทั้งที่ appendRow เขียนค่าลงไปแล้ว → เจ้าของเปิดชีตเจอคอลัมน์
+  // ไม่มีชื่อแล้วเดาไม่ออกว่าเลขอะไร · เติมให้เองแบบต่อท้าย ไม่แตะของเดิม
+  try {
+    var have = sh.getLastColumn();
+    if (have < SALE_BILL_HEADERS_.length) {
+      var add = SALE_BILL_HEADERS_.slice(have);
+      sh.getRange(1, have + 1, 1, add.length).setValues([add]).setFontWeight("bold");
+    }
+  } catch (e) { Logger.log("saleBillsSheet_ header migrate: " + e); }
+  return sh;
 }
 
 // id กันชนกันแม้มีการลบแถว (บทเรียนเดียวกับ attNextId_ — ห้ามใช้ getLastRow() เฉย ๆ)
@@ -12155,6 +12916,12 @@ function appendSaleBillRow_(ss, rec) {
       rec.cashChange == null ? "" : Number(rec.cashChange),
       String(rec.zortOrderId == null ? "" : rec.zortOrderId),
       "สำเร็จ", "",
+      // W..AC — ขายออนไลน์ (หน้าร้านจะว่างทั้งแถบ ไม่ต้องแยกชีต)
+      Number(rec.shipFee) || 0,
+      Number(rec.payTotal) || (Number(rec.grandTotal) || 0),
+      String(rec.shipMethod || ""), String(rec.shipTracking || ""),
+      String(rec.shipRecipient || ""), String(rec.shipAddress || ""),
+      String(rec.saleMode || ""),
     ];
     sh.appendRow(row);
     // วันที่/เวลา/เลขบิล เป็น text — กัน Sheets แปลง "2026-07-29" เป็น Date และเลขบิลยาวเป็น
@@ -12163,6 +12930,7 @@ function appendSaleBillRow_(ss, rec) {
     sh.getRange(r, 2, 1, 3).setNumberFormat("@");   // B วันที่, C เวลา, D เลขบิล
     sh.getRange(r, 5, 1, 1).setNumberFormat("@");   // E เลขใบกำกับ
     sh.getRange(r, 20, 1, 1).setNumberFormat("@");  // T zortOrderId
+    sh.getRange(r, 26, 1, 1).setNumberFormat("@");  // Z เลขพัสดุ (เลขล้วนยาว → กันกลายเป็น 1.2E+12)
     return { ok: true, id: id };
   } catch (e) {
     Logger.log("appendSaleBillRow_ error: " + e);
@@ -12224,6 +12992,99 @@ function deductFrontStoreForSale_(ss, list) {
 //   manualDiscount, paymentMethod, taxInvoice(bool), dryRun(bool), remark
 // }
 // หมายเหตุ: คิดยอดฝั่ง server ซ้ำด้วย computeBillTotalsGs_ (ไม่เชื่อยอดจาก client) กันตัวเลขถูกแก้
+// วิธีชำระที่ "เงินยังไม่เข้า" — ห้ามบันทึกรับชำระใน ZORT ไม่งั้นยอดค้างรับหายจากระบบ
+// ทั้งที่ยังไม่ได้เงินจริง (COD ได้เงินตอนขนส่งโอนกลับมา ไม่ใช่ตอนกดขาย)
+// ⚠️ ค่าต้องตรงกับ POS_ONLINE_PAY ฝั่ง views-analytics.jsx เป๊ะ ๆ
+var POS_UNPAID_METHODS_ = ["เก็บเงินปลายทาง"];
+
+// SKU สินค้า/บริการ "ค่าจัดส่ง" ใน ZORT — เจ้าของสร้างเองใน ZORT แล้วมาตั้งค่าที่
+// Script Property `SHIPPING_FEE_SKU` (เช่น "SHIPPING")
+// ⚠️ **ไม่ตั้ง = ไม่ส่งค่าจัดส่งเข้า ZORT เลย** (ยอด order ใน ZORT = ค่าสินค้าล้วน) —
+//    เป็นค่าตั้งต้นโดยตั้งใจ เพราะการยัด line item ที่ไม่มี SKU จริงเข้า AddOrder เป็นการ
+//    "เดา field" ที่ถ้า ZORT ปฏิเสธ = ออกบิลไม่ได้ทั้งใบ (บิลพังทั้งที่แค่ค่าส่ง 50 บาท)
+//    ทั้งสองทางค่าจัดส่งยังถูกบันทึกในชีต "บิลขาย" + remark ของ order + สรุปที่ส่งลูกค้าเสมอ
+function readShippingFeeSku_() {
+  try { return String(PropertiesService.getScriptProperties().getProperty("SHIPPING_FEE_SKU") || "").trim(); }
+  catch (e) { return ""; }
+}
+
+// ข้อความจัดส่งที่ต่อท้าย remark ของ order — ต้องมีเสมอแม้ค่าส่งไม่ได้เข้า ZORT เป็น line item
+// (คนแพ็คของเปิดดูใน ZORT ต้องเห็นว่าส่งไปที่ไหน ใครรับ ขนส่งอะไร)
+function shippingRemark_(shipping, shipInZort) {
+  var s = shipping || {};
+  var parts = [];
+  if (s.recipient) parts.push("ผู้รับ: " + String(s.recipient));
+  if (s.phone)     parts.push("โทร: " + String(s.phone));
+  if (s.address)   parts.push("ที่อยู่: " + String(s.address));
+  if (s.method)    parts.push("ขนส่ง: " + String(s.method));
+  if (s.tracking)  parts.push("เลขพัสดุ: " + String(s.tracking));
+  var fee = Math.max(0, Number(s.fee) || 0);
+  // บอกให้ชัดว่าค่าส่งอยู่ในยอด order นี้แล้วหรือเก็บนอกยอด — คนกระทบยอดเงินต้องไม่ต้องเดา
+  if (fee > 0) parts.push("ค่าจัดส่ง: " + fee + (shipInZort ? " (รวมในยอดแล้ว)" : " (เก็บลูกค้าเพิ่ม ไม่รวมในยอดนี้)"));
+  if (s.note)      parts.push("หมายเหตุ: " + String(s.note));
+  return parts.join(" | ");
+}
+
+// ═══ line items ที่ยิงเข้า ZORT — ปัดเศษสะสม (cumulative rounding) ═══════════════
+// เจ้าของทักไว้ (ส.ค. 2026): "ในระบบ ZORT ต้องหักเงินตามที่เราคิดนะ" — ยอดที่ ZORT บันทึก
+// (= ยอดที่ถูกหัก/เรียกเก็บจริง) ต้องตรงกับยอดที่แอปคิดให้ผู้ขาย/ลูกค้าเห็นเป๊ะ ไม่ใช่แค่ใกล้เคียง
+//
+// ⚠️ ของเดิมปัดเศษ **2 ชั้นแยกกัน**: ปัด unit price ก่อน (`Math.round(price*factor*100)/100`)
+//    แล้วค่อยปัด `totalprice = unitPrice*qty` อีกที — ปัด 2 ชั้นแบบนี้สะสมความคลาดเคลื่อนได้
+//    หลายสตางค์เมื่อบิลมีหลายรายการ/จำนวนต่อชิ้นเยอะ (ยิ่งบิลใหญ่ยิ่งเพี้ยนมาก) → ยอดที่ ZORT
+//    เก็บจริงต่างจาก `totals.grandTotal` ที่แอปโชว์ **โดยไม่มี error ให้เห็นเลย**
+// ✅ ตอนนี้ปัดแบบ "สะสม" (cumulative rounding — เทคนิคมาตรฐานของระบบบิล/บัญชี): เดินสะสม
+//    ยอดดิบ (ไม่ปัด) ทีละแถว แล้วปัดที่ยอดสะสม ณ จุดนั้นครั้งเดียว → ผลต่างระหว่างยอดสะสมที่ปัด
+//    รอบนี้กับรอบก่อนคือยอดของแถวนี้ · คุณสมบัติ telescoping sum รับประกันว่า
+//    **sum(totalprice ทุกแถว) == round(grandTotal*100)/100 เป๊ะเสมอ** ไม่ว่าจะกี่แถว/ราคาเท่าไหร่
+// ⚠️ **`pricepernumber` ห้ามปัดซ้ำเป็น 2 ตำแหน่งทศนิยมอีกชั้น** — ต้องคง
+//    `pricepernumber × qty === totalprice` เป๊ะเสมอ เพราะยืนยันจากหน้า ZORT แล้วว่า
+//    `pricepernumber × number` คือตัวที่ ZORT ใช้คิดยอดจริง (ไม่ใช่ field `totalprice`
+//    — ดูคอมเมนต์ที่ `AddOrder` ด้านล่าง) ปัดซ้ำจะดึงความคลาดเคลื่อนที่เพิ่งกำจัดกลับมา
+function buildZortLineItems_(items, factor) {
+  var cumIdealCents = 0, cumAssignedCents = 0;
+  var list = [];
+  (items || []).forEach(function (it) {
+    var qty = Number(it.qty) || 0;
+    if (qty <= 0) return;
+    cumIdealCents += (Number(it.price) || 0) * qty * factor * 100;
+    var cumRoundedCents = Math.round(cumIdealCents);
+    var lineCents = cumRoundedCents - cumAssignedCents;
+    cumAssignedCents = cumRoundedCents;
+    var totalPrice = lineCents / 100;
+    var unitPrice = totalPrice / qty;
+    list.push({
+      sku: String(it.sku || "").trim(),
+      name: String(it.name || "").trim(),
+      number: qty,
+      pricepernumber: unitPrice,
+      price: unitPrice,
+      totalprice: totalPrice,
+    });
+  });
+  return list;
+}
+
+// ═══ ยอดรวมหัวเอกสารที่ต้องส่งให้ AddOrder ═══════════════════════════════════════
+// ⚠️ **ZORT ไม่คำนวณยอดรวมหัวเอกสารจาก list[].totalprice ให้เอง** — พฤติกรรมเดียวกับ
+//    AddQuotation เป๊ะ (ยืนยันแล้วด้วย exploreZortQuotationAmountFix() แบบ test-then-void)
+//    ไม่ส่ง = หน้ารายการขายของ ZORT ขึ้น **"มูลค่า 0"** ทั้งที่ line item ถูกต้องครบทุกบรรทัด
+//    → ยอดขายไม่เข้าระบบ ZORT เลย (เจอจริง ส.ค. 2026: บิล RC-202608007 ยอด ฿476 ขึ้น 0)
+// ⚠️ **ห้ามส่ง vattype/vatpercent/discount ปนไปด้วย** — ลองกับ AddQuotation แล้วทำให้ ZORT
+//    recompute amount_pretax/vatamount ทับกลายเป็นค่าผิดแทน (แย่กว่าไม่ส่ง)
+//
+// ราคาทุกบรรทัด **รวม VAT แล้ว** (computeBillTotalsGs_ ถอดกลับด้วย 7/107) ค่าจัดส่งที่ส่งเป็น
+// line item เข้า ZORT ก็เป็นราคารวม VAT เหมือนกัน → ถอด VAT ของยอดทั้งก้อนด้วยอัตราเดียวกัน
+// จึงตรงกับผลรวม line item เสมอ · ค่าส่งที่ **ไม่ได้** เข้า ZORT ต้องไม่นับที่นี่ (ไม่งั้นหัวเอกสาร
+// ไม่ตรงกับผลรวมบรรทัด = ZORT ขึ้นยอดที่ไม่มีที่มา)
+function zortOrderAmounts_(goodsTotal, shipFeeInZort, vatRate) {
+  vatRate = vatRate != null ? vatRate : 0.07;
+  var r2 = function (n) { return Math.round(n * 100) / 100; };
+  var amount = r2((Number(goodsTotal) || 0) + (Number(shipFeeInZort) || 0));
+  var vat = r2(amount * vatRate / (1 + vatRate));
+  return { amount: amount, preVat: r2(amount - vat), vat: vat };
+}
+
 function createSaleBill(ss, data, actor) {
   var items = Array.isArray(data.items) ? data.items : [];
   if (!items.length) return error("ไม่มีรายการสินค้าในบิล");
@@ -12236,32 +13097,48 @@ function createSaleBill(ss, data, actor) {
   // line items สำหรับ ZORT — เฉลี่ยส่วนลดลงราคาต่อชิ้นตามสัดส่วน (ให้ยอดรวม = grandTotal)
   var gross = totals.retailEligible + totals.retailExcluded;
   var factor = gross > 0 ? (totals.grandTotal / gross) : 1;   // อัตราส่วนหลังส่วนลดทั้งบิล
-  // line items — ยืนยันจากหน้า ZORT: "มูลค่าต่อหน่วย" มาจาก field pricepernumber (ไม่ใช่ price)
+  // ยืนยันจากหน้า ZORT: "มูลค่าต่อหน่วย" มาจาก field pricepernumber (ไม่ใช่ price)
   // ถ้าไม่ส่ง pricepernumber → หน่วย=0 → ยอดรวมสุทธิ=0 · ต้องส่ง pricepernumber = ราคาต่อหน่วยจริง
   // ไม่ใส่ warehousecode (ทั้ง order + line) — mirror createZortSaleOrder_ ที่เวิร์ก · warehousecode
   // ทำให้ ZORT สร้างงานโอนค้าง "รอโอนสินค้า" (ให้ ZORT หักจากคลัง default เหมือน MTO)
-  var list = items.map(function (it) {
-    var qty = Number(it.qty) || 0;
-    var netUnit = Math.round((Number(it.price) || 0) * factor * 100) / 100;  // ราคาต่อชิ้นสุทธิ (หลังเฉลี่ยส่วนลด, รวม VAT)
-    return {
-      sku: String(it.sku || "").trim(),
-      name: String(it.name || "").trim(),
-      number: qty,
-      pricepernumber: netUnit,                         // ← field ที่ ZORT ใช้เป็น "มูลค่าต่อหน่วย" จริง
-      price: netUnit,
-      totalprice: Math.round(netUnit * qty * 100) / 100,
-    };
-  }).filter(function (it) { return it.number > 0; });
+  // ⚠️ ปัดเศษแบบ "สะสม" ผ่าน buildZortLineItems_ — ไม่ปัดแยกทีละชิ้นแล้ว (ดูคอมเมนต์ที่ฟังก์ชัน)
+  //    รับประกันว่า sum(totalprice) = grandTotal เป๊ะ = ยอดที่ ZORT หักตรงกับที่เราคิดเป๊ะสตางค์
+  var productList = buildZortLineItems_(items, factor);
+
+  // ── ค่าจัดส่ง (โหมดขายออนไลน์) ──────────────────────────────────────────────
+  // ⚠️ **บวกท้ายสุด ไม่เข้า computeBillTotalsGs_** — กฎส่วนลดขายส่ง 20%/ขั้นบาท และการถอด
+  //    VAT ผูกกับ "มูลค่าสินค้า" ล้วน · เอาค่าส่งไปรวมตั้งแต่ต้น = ค่าส่งถูกลดราคาและถูกถอด VAT
+  //    → ยอดเพี้ยนทั้งบิลโดยไม่มี error ให้เห็น (ฝั่ง frontend ใช้สูตรเดียวกันที่ onlineOrderTotal)
+  var shipping = data.shipping || {};
+  var shipFee = Math.max(0, Number(shipping.fee) || 0);
+  var shipSku = readShippingFeeSku_();
+  var shipInZort = !!(shipSku && shipFee > 0);
+  var payTotal = Math.round((totals.grandTotal + shipFee) * 100) / 100;   // ยอดที่เก็บลูกค้าจริง
+
+  // list ที่ยิงเข้า ZORT = สินค้า + (ค่าจัดส่งถ้าตั้ง SKU ไว้)
+  // ⚠️ **ห้ามเอา list ตัวนี้ไปให้ deductFrontStoreForSale_** — SKU ค่าจัดส่งจะถูกหักสต็อกด้วย
+  var list = productList.slice();
+  if (shipInZort) {
+    list.push({ sku: shipSku, name: "ค่าจัดส่ง", number: 1,
+      pricepernumber: shipFee, price: shipFee, totalprice: shipFee });
+  }
 
   // ประกอบ payload AddOrder — mirror createZortSaleOrder_ (minimal ที่เวิร์ก) + field ลูกค้า
   // ไม่ใส่ warehousecode/status ระดับ order (เดิมใส่แล้วราคากลายเป็น 0) — status ตั้งทีหลังผ่าน UpdateOrderStatus
   var F = POS_ZORT_FIELDS;
   var cust = data.customer || {};
+  var shipNote = shippingRemark_(shipping, shipInZort);
+  var remarkText = [String(data.remark || "").trim(), shipNote].filter(function (s) { return s; }).join(" | ");
+  // ยอดหัวเอกสาร — ต้องส่งเอง ไม่งั้น ZORT ขึ้น "มูลค่า 0" (ดูคอมเมนต์ที่ zortOrderAmounts_)
+  var zAmt = zortOrderAmounts_(totals.grandTotal, shipInZort ? shipFee : 0);
   var payload = {
     date: Utilities.formatDate(new Date(), "Asia/Bangkok", "dd/MM/yyyy"),
-    remark: String(data.remark || ""),
+    remark: remarkText,
     list: list,
   };
+  payload[F.orderAmount]       = zAmt.amount;
+  payload[F.orderAmountPreVat] = zAmt.preVat;
+  payload[F.orderVatAmount]    = zAmt.vat;
   if (data.channel)  payload[F.orderChannel]          = String(data.channel);
   if (cust.name)     payload[F.orderCustomerName]     = String(cust.name);
   if (cust.taxId)    payload[F.orderCustomerTaxId]    = String(cust.taxId);
@@ -12272,7 +13149,8 @@ function createSaleBill(ss, data, actor) {
   if (cust.email)    payload[F.orderCustomerEmail]    = String(cust.email);
 
   // dryRun = คืน payload + ยอดที่คิดได้ ไม่ยิง ZORT (ให้ตรวจก่อนใช้จริง)
-  if (data.dryRun) return ok({ dryRun: true, totals: totals, payload: payload });
+  if (data.dryRun) return ok({ dryRun: true, totals: totals, payload: payload,
+    shipFee: shipFee, payTotal: payTotal, shipInZort: shipInZort });
 
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่ ลองใหม่อีกครั้ง");
@@ -12310,10 +13188,16 @@ function createSaleBill(ss, data, actor) {
         muteHttpExceptions: true, payload: JSON.stringify({ id: orderId, orderid: orderId, documenttype: 2 }) });
       kinds.push("doc");
     }
-    if (data.paymentMethod && orderId != null) {
+    // ⚠️ เก็บเงินปลายทาง (COD) = เงินยังไม่เข้า → **ไม่บันทึกรับชำระ** ปล่อยให้ ZORT ขึ้นค้างชำระ
+    //    (บันทึกไปเลย = ยอดค้างรับหายจากระบบทั้งที่ยังไม่ได้เงิน แล้วไม่มีอะไรเตือนเลย)
+    var unpaidMethod = POS_UNPAID_METHODS_.indexOf(String(data.paymentMethod || "")) >= 0;
+    if (data.paymentMethod && !unpaidMethod && orderId != null) {
+      // ยอดรับชำระต้องเท่ากับ "ยอดที่ ZORT คิดว่า order นี้เป็นเงินเท่าไหร่" — ค่าส่งที่ไม่ได้
+      // ส่งเป็น line item เข้า ZORT ต้องไม่นับ ไม่งั้น ZORT ขึ้นว่ารับเงินเกินยอด
+      var zortOrderTotal = zAmt.amount;   // ตัวเดียวกับที่ส่งเป็นยอดหัวเอกสาร (แหล่งเดียว ไม่คิดซ้ำ)
       reqs.push({ url: ZORT_BASE + "/Order/UpdateOrderPayment", method: "post", headers: headers,
         muteHttpExceptions: true, payload: JSON.stringify({ id: orderId, orderid: orderId,
-          paymentmethod: String(data.paymentMethod), paymentamount: totals.grandTotal,
+          paymentmethod: String(data.paymentMethod), paymentamount: zortOrderTotal,
           paymentdate: Utilities.formatDate(new Date(), "Asia/Bangkok", "dd/MM/yyyy") }) });
       kinds.push("pay");
     }
@@ -12346,17 +13230,26 @@ function createSaleBill(ss, data, actor) {
 
     // ── หักสต็อกหน้าร้านในชีตทันที (ไม่ต้องรอ sync ZORT ทุก 2 ชม.) ──
     // กันขายเกิน: คนถัดไปที่เปิด POS จะเห็นเลขที่หักแล้ว ไม่ใช่เลขค้างของเมื่อ 2 ชม.ก่อน
-    var stockRes = deductFrontStoreForSale_(ss, list);
+    // ⚠️ ส่ง productList (ไม่ใช่ list) — list มีบรรทัด "ค่าจัดส่ง" ปนอยู่ตอนตั้ง SHIPPING_FEE_SKU
+    //    ส่งทั้ง list = สต็อกของ SKU ค่าจัดส่งถูกหักทุกบิลจนติดลบ/เป็น 0 โดยไม่มีใครสังเกต
+    var stockRes = deductFrontStoreForSale_(ss, productList);
     if (!stockRes.ok) {
       logZortFailure_("หักสต็อกหน้าร้านหลังออกบิล " + (orderNumber || ""), stockRes.error);
     }
 
     writeAuditLog_(actor || "ไม่ระบุ", "ออกบิลขาย", orderNumber || "(ไม่ทราบเลข)",
-      auditDetail_({ after: { total: totals.grandTotal, items: list.length,
+      auditDetail_({ after: { total: totals.grandTotal, items: productList.length,
         customer: (data.customer && data.customer.name) || "", taxInvoice: !!data.taxInvoice,
         payment: data.paymentMethod || "",
+        unpaid: unpaidMethod ? true : undefined,
         cashReceived: data.cashReceived != null ? Number(data.cashReceived) : undefined,
         channel: data.channel || "",
+        saleMode: data.saleMode || "",
+        shipFee: shipFee > 0 ? shipFee : undefined,
+        payTotal: shipFee > 0 ? payTotal : undefined,
+        shipInZort: shipFee > 0 ? shipInZort : undefined,
+        shipMethod: shipping.method || undefined,
+        shipTracking: shipping.tracking || undefined,
         // ร่องรอยการหักสต็อก — ไว้ไล่ย้อนตอนตัวเลขไม่ตรง
         stockDeducted: stockRes.ok ? stockRes.applied.length : "FAILED",
         stockShortfall: (stockRes.ok && stockRes.shortfall.length) ? stockRes.shortfall : undefined,
@@ -12376,19 +13269,27 @@ function createSaleBill(ss, data, actor) {
       // (computeBillTotalsGs_ ไม่ได้คืน wholesaleDiscount/tierDiscount แยกแบบฝั่ง frontend
       //  — คำนวณจากผลต่างแทน ได้ค่าเดียวกันและไม่ผูกกับ field ที่ไม่มีจริง)
       discount: Math.max(0, gross - totals.grandTotal),
-      lineCount: list.length,
-      unitCount: list.reduce(function (s, it) { return s + (Number(it.number) || 0); }, 0),
+      // นับเฉพาะสินค้าจริง — บรรทัด "ค่าจัดส่ง" ไม่ใช่ของที่ขาย ถ้านับด้วยรายงาน
+      // "จำนวนชิ้นที่ขายได้" จะเฟ้อขึ้น 1 ทุกบิลออนไลน์
+      lineCount: productList.length,
+      unitCount: productList.reduce(function (s, it) { return s + (Number(it.number) || 0); }, 0),
       customerName: (data.customer && data.customer.name) || "",
       customerTaxId: (data.customer && data.customer.taxId) || "",
       taxInvoice: !!data.taxInvoice,
       cashReceived: cashRecv,
       cashChange: cashRecv == null ? null : (cashRecv - totals.grandTotal),
+      shipFee: shipFee, payTotal: payTotal, saleMode: data.saleMode || "",
+      shipMethod: shipping.method || "", shipTracking: shipping.tracking || "",
+      shipRecipient: shipping.recipient || "", shipAddress: shipping.address || "",
     });
     if (!billLog.ok) logZortFailure_("บันทึกชีตบิลขาย " + (orderNumber || ""), billLog.error);
 
     invalidateCache_();
+    // ส่ง shipFee/payTotal กลับไปด้วย — สรุปที่ลูกค้าเห็นต้องใช้ยอดที่ server บันทึกไว้จริง
+    // ไม่ใช่ยอดที่หน้าจอคำนวณเอง (สองฝั่งคิดต่างกันเมื่อไหร่ ลูกค้าจะได้ยอดที่ไม่ตรงกับระบบ)
     return ok({ orderId: orderId, orderNumber: orderNumber, documentNumber: docNumber,
-                totals: totals, billLogId: billLog.ok ? billLog.id : null });
+                totals: totals, shipFee: shipFee, payTotal: payTotal, shipInZort: shipInZort,
+                unpaid: unpaidMethod, billLogId: billLog.ok ? billLog.id : null });
   } finally {
     lock.releaseLock();
   }
