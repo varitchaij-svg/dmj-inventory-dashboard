@@ -8573,11 +8573,22 @@ function QuoteFollowupView({ data, role }) {
                               color: overdue ? "#fff" : "var(--muted)", borderRadius: 8, padding: "10px 8px", fontSize: 13, fontWeight: 700,
                               cursor: anyBusy ? "default" : "pointer", opacity: anyBusy && !busy ? .5 : 1,
                             }}>{busy ? "กำลังปิด…" : "ปิดใบ"}</button>
-                            <button onClick={() => handlePrint(q)} disabled={anyBusy} style={{
-                              border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
-                              borderRadius: 8, padding: "10px 12px", fontSize: 13, fontWeight: 700,
+                          </div>
+                          {/* ⚠️ ปุ่มพิมพ์ต้องมีครบ 2 ชนิดเหมือนตารางบนจอกว้าง — เดิมมือถือมีปุ่มเดียว
+                              (ใบเสนอราคา) ทำให้ "พิมพ์ใบแจ้งหนี้" หายไปทั้งที่แนวนอนยังกดได้
+                              · แยกเป็นแถวของตัวเอง + มีป้ายชื่อเอกสาร ไม่ใช้ไอคอนเปล่า
+                              (🖨️ กับ 🧾 บนจอเล็กแยกไม่ออกว่าอันไหนคืออะไร) */}
+                          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                            <button onClick={() => handlePrint(q, "quotation")} disabled={anyBusy} style={{
+                              flex: 1, border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
+                              borderRadius: 8, padding: "10px 8px", fontSize: 13, fontWeight: 700,
                               cursor: anyBusy ? "default" : "pointer", opacity: anyBusy && !printing ? .5 : 1,
-                            }}>{printing ? "…" : "🖨️"}</button>
+                            }}>{printing ? "…" : "🖨️ ใบเสนอราคา"}</button>
+                            <button onClick={() => handlePrint(q, "invoice")} disabled={anyBusy} style={{
+                              flex: 1, border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
+                              borderRadius: 8, padding: "10px 8px", fontSize: 13, fontWeight: 700,
+                              cursor: anyBusy ? "default" : "pointer", opacity: anyBusy && !printing ? .5 : 1,
+                            }}>{invoiceNumberBusy ? "⏳ ออกเลข…" : (printing ? "…" : "🧾 ใบแจ้งหนี้")}</button>
                           </div>
                         </div>
                       );
@@ -8686,18 +8697,26 @@ function QuoteFollowupView({ data, role }) {
                             <div style={{ fontWeight: 800, color: "#16a34a", whiteSpace: "nowrap", fontSize: 15 }}>{baht(q.amount)}</div>
                           </div>
                           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>{q.quotationDate || "—"}</div>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 8 }}>
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ fontFamily: "monospace", fontSize: 12, color: "var(--muted)" }}>{q.number || "—"}</div>
-                              <input list="dmjQuoteSales" defaultValue={q.sale || ""} placeholder="+ ชื่อเซล"
-                                onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} onBlur={(e) => saveSale(q, e.target.value)}
-                                style={{ marginTop: 3, width: 130, minWidth: 0, padding: "5px 8px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/>
-                            </div>
-                            <button onClick={() => handlePrint(q)} disabled={!!printingId || invoiceNumberBusy} style={{
-                              border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
-                              borderRadius: 8, padding: "10px 14px", fontSize: 13, fontWeight: 700,
+                          <div style={{ marginTop: 8 }}>
+                            <div style={{ fontFamily: "monospace", fontSize: 12, color: "var(--muted)" }}>{q.number || "—"}</div>
+                            <input list="dmjQuoteSales" defaultValue={q.sale || ""} placeholder="+ ชื่อเซล"
+                              onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} onBlur={(e) => saveSale(q, e.target.value)}
+                              style={{ marginTop: 3, width: 130, minWidth: 0, padding: "5px 8px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/>
+                          </div>
+                          {/* ⚠️ ปุ่มพิมพ์ต้องมีครบ 2 ชนิดเหมือนตารางบนจอกว้าง — เดิมมือถือมีปุ่ม "🖨️ พิมพ์"
+                              ปุ่มเดียวซึ่งพิมพ์ได้แค่ใบเสนอราคา ทำให้ใบแจ้งหนี้พิมพ์จากมือถือไม่ได้เลย
+                              (ต้องหมุนจอเป็นแนวนอนให้กลายเป็นตารางก่อน) */}
+                          <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+                            <button onClick={() => handlePrint(q, "quotation")} disabled={!!printingId || invoiceNumberBusy} style={{
+                              flex: 1, border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
+                              borderRadius: 8, padding: "10px 8px", fontSize: 13, fontWeight: 700,
                               cursor: (printingId || invoiceNumberBusy) ? "default" : "pointer", opacity: (printingId || invoiceNumberBusy) && !printing ? .5 : 1,
-                            }}>{printing ? "…" : "🖨️ พิมพ์"}</button>
+                            }}>{printing ? "…" : "🖨️ ใบเสนอราคา"}</button>
+                            <button onClick={() => handlePrint(q, "invoice")} disabled={!!printingId || invoiceNumberBusy} style={{
+                              flex: 1, border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
+                              borderRadius: 8, padding: "10px 8px", fontSize: 13, fontWeight: 700,
+                              cursor: (printingId || invoiceNumberBusy) ? "default" : "pointer", opacity: (printingId || invoiceNumberBusy) && !printing ? .5 : 1,
+                            }}>{invoiceNumberBusy ? "⏳ ออกเลข…" : (printing ? "…" : "🧾 ใบแจ้งหนี้")}</button>
                           </div>
                         </div>
                       );
