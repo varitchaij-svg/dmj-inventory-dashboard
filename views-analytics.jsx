@@ -8486,8 +8486,9 @@ function QuoteFollowupView({ data, role }) {
                       const overdue = q.ageDays !== null && q.ageDays > OVERDUE_DAYS;
                       const busy = voidingId === (q.id || q.number);
                       const approving = approvingId === (q.id || q.number);
-                      const anyBusy = !!voidingId || !!approvingId || !!printingId || invoiceNumberBusy;
+                      const anyBusy = !!voidingId || !!approvingId || !!printingId || invoiceNumberBusy || !!editingId;
                       const printing = printingId === (q.id || q.number);
+                      const editingThis = editingId === (q.id || q.number);
                       return (
                         <div key={q.number || idx} style={{ border: "1px solid var(--bdr)", borderRadius: 12, padding: 12, background: overdue ? "#fff5f5" : "var(--paper)" }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
@@ -8509,6 +8510,10 @@ function QuoteFollowupView({ data, role }) {
                               onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} onBlur={(e) => saveSale(q, e.target.value)}
                               style={{ width: 130, minWidth: 0, padding: "5px 8px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/>
                           </div>
+                          {/* ⚠️ ปุ่มต้องครบเท่าจอแนวนอน (ตาราง) — เดิมแนวตั้งขาด "แก้ไข" กับ "ใบแจ้งหนี้"
+                              ทำให้คนใช้มือถือ (ผู้ใช้หลักของระบบ) ทำงาน 2 อย่างนี้ไม่ได้เลย โดยไม่มี
+                              อะไรบอกว่าปุ่มหายไป · แยกเป็น 2 แถว: ตัดสินใจ (อนุมัติ/ปิด) แล้วค่อยเอกสาร
+                              · ใส่ป้ายกำกับด้วยเพราะไอคอนล้วน 🖨️ กับ 🧾 แยกไม่ออกว่าอันไหนใบอะไร */}
                           <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
                             <button onClick={() => handleApprove(q)} disabled={anyBusy} style={{
                               flex: 1, border: "1px solid var(--g-600)", background: "var(--g-600)",
@@ -8520,11 +8525,24 @@ function QuoteFollowupView({ data, role }) {
                               color: overdue ? "#fff" : "var(--muted)", borderRadius: 8, padding: "10px 8px", fontSize: 13, fontWeight: 700,
                               cursor: anyBusy ? "default" : "pointer", opacity: anyBusy && !busy ? .5 : 1,
                             }}>{busy ? "กำลังปิด…" : "ปิดใบ"}</button>
-                            <button onClick={() => handlePrint(q)} disabled={anyBusy} style={{
-                              border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
-                              borderRadius: 8, padding: "10px 12px", fontSize: 13, fontWeight: 700,
+                          </div>
+                          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                            {/* แก้ไขได้เฉพาะใบที่ยังรออนุมัติ — เหมือนฝั่งตาราง */}
+                            <button onClick={() => handleEdit(q)} disabled={anyBusy} title="แก้ไขใบเสนอราคา" style={{
+                              flex: 1, border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
+                              borderRadius: 8, padding: "10px 6px", fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap",
+                              cursor: anyBusy ? "default" : "pointer", opacity: anyBusy && !editingThis ? .5 : 1,
+                            }}>{editingThis ? "…" : "✏️ แก้ไข"}</button>
+                            <button onClick={() => handlePrint(q, "quotation")} disabled={anyBusy} title="พิมพ์ใบเสนอราคา" style={{
+                              flex: 1, border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
+                              borderRadius: 8, padding: "10px 6px", fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap",
                               cursor: anyBusy ? "default" : "pointer", opacity: anyBusy && !printing ? .5 : 1,
-                            }}>{printing ? "…" : "🖨️"}</button>
+                            }}>{printing ? "…" : "🖨️ เสนอราคา"}</button>
+                            <button onClick={() => handlePrint(q, "invoice")} disabled={anyBusy} title="พิมพ์ใบแจ้งหนี้" style={{
+                              flex: 1, border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
+                              borderRadius: 8, padding: "10px 6px", fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap",
+                              cursor: anyBusy ? "default" : "pointer", opacity: anyBusy && !printing ? .5 : 1,
+                            }}>{invoiceNumberBusy ? "⏳" : (printing ? "…" : "🧾 แจ้งหนี้")}</button>
                           </div>
                         </div>
                       );
@@ -8633,18 +8651,25 @@ function QuoteFollowupView({ data, role }) {
                             <div style={{ fontWeight: 800, color: "#16a34a", whiteSpace: "nowrap", fontSize: 15 }}>{baht(q.amount)}</div>
                           </div>
                           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>{q.quotationDate || "—"}</div>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 8 }}>
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ fontFamily: "monospace", fontSize: 12, color: "var(--muted)" }}>{q.number || "—"}</div>
-                              <input list="dmjQuoteSales" defaultValue={q.sale || ""} placeholder="+ ชื่อเซล"
-                                onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} onBlur={(e) => saveSale(q, e.target.value)}
-                                style={{ marginTop: 3, width: 130, minWidth: 0, padding: "5px 8px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/>
-                            </div>
-                            <button onClick={() => handlePrint(q)} disabled={!!printingId || invoiceNumberBusy} style={{
-                              border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
-                              borderRadius: 8, padding: "10px 14px", fontSize: 13, fontWeight: 700,
+                          <div style={{ marginTop: 8 }}>
+                            <div style={{ fontFamily: "monospace", fontSize: 12, color: "var(--muted)" }}>{q.number || "—"}</div>
+                            <input list="dmjQuoteSales" defaultValue={q.sale || ""} placeholder="+ ชื่อเซล"
+                              onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} onBlur={(e) => saveSale(q, e.target.value)}
+                              style={{ marginTop: 3, width: 130, minWidth: 0, padding: "5px 8px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/>
+                          </div>
+                          {/* ⚠️ ต้องมีทั้งใบเสนอราคาและใบแจ้งหนี้เท่าจอแนวนอน — เดิมแนวตั้งมีปุ่มเดียว
+                              ("🖨️ พิมพ์") คนใช้มือถือจึงออกใบแจ้งหนี้ไม่ได้เลยทั้งที่ตารางทำได้ */}
+                          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                            <button onClick={() => handlePrint(q, "quotation")} disabled={!!printingId || invoiceNumberBusy} title="พิมพ์ใบเสนอราคา" style={{
+                              flex: 1, border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
+                              borderRadius: 8, padding: "10px 8px", fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap",
                               cursor: (printingId || invoiceNumberBusy) ? "default" : "pointer", opacity: (printingId || invoiceNumberBusy) && !printing ? .5 : 1,
-                            }}>{printing ? "…" : "🖨️ พิมพ์"}</button>
+                            }}>{printing ? "…" : "🖨️ ใบเสนอราคา"}</button>
+                            <button onClick={() => handlePrint(q, "invoice")} disabled={!!printingId || invoiceNumberBusy} title="พิมพ์ใบแจ้งหนี้" style={{
+                              flex: 1, border: "1px solid var(--bdr)", background: "var(--paper)", color: "var(--muted)",
+                              borderRadius: 8, padding: "10px 8px", fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap",
+                              cursor: (printingId || invoiceNumberBusy) ? "default" : "pointer", opacity: (printingId || invoiceNumberBusy) && !printing ? .5 : 1,
+                            }}>{invoiceNumberBusy ? "⏳" : (printing ? "…" : "🧾 ใบแจ้งหนี้")}</button>
                           </div>
                         </div>
                       );
@@ -9976,6 +10001,7 @@ function PosView({ data, role }) {
   const [saving, setSaving] = uS(false);
   const [result, setResult] = uS(null);           // ผลลัพธ์หลังออกบิล
   const [retroMode, setRetroMode] = uS(false);     // โหมดใบกำกับภาษีย้อนหลัง
+  const [modalP, setModalP] = uS(null);            // สินค้าที่กดดูรายละเอียด (ProductModal จาก views-main.jsx)
   const [printKind, setPrintKind] = uS("80");      // "a4" (ใบกำกับ) | "80" (ใบเสร็จ 80mm)
   const [printReq, setPrintReq] = uS(0);
   uE(() => {
@@ -10034,6 +10060,13 @@ function PosView({ data, role }) {
       }];
     });
     setSearch("");
+  }
+  // เปิดรายละเอียด + รูปใหญ่ของสินค้าในบิล — หยิบตัวเต็มจาก catalog ตาม SKU (ได้สต็อก/ราคา/
+  // ตำแหน่งล็อคครบ) · บรรทัดที่ไม่มีใน catalog ยังกดดูได้ด้วยข้อมูลเท่าที่มี
+  function openItemDetail(it) {
+    const key = String(it.sku || "").trim().toUpperCase();
+    const p = products.find(x => String(x.sku || "").trim().toUpperCase() === key);
+    setModalP(p || { sku: it.sku, name: it.name, imageUrl: it.imageUrl || "", cat: it.category || "", category: it.category || "" });
   }
   function patchItem(i, patch) { setCart(c => c.map((it, idx) => idx === i ? Object.assign({}, it, patch) : it)); }
   function removeItem(i) { setCart(c => c.filter((_, idx) => idx !== i)); }
@@ -10253,7 +10286,9 @@ function PosView({ data, role }) {
                   return (
                     <tr key={it.sku} style={{ borderTop: "1px solid #f3f4f6" }}>
                       <td style={{ padding: "8px 6px" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        {/* รูป+ชื่อ กดดูรายละเอียดสินค้าได้ (ช่องจำนวน/ราคาข้าง ๆ ยังแก้ได้ตามเดิม) */}
+                        <div onClick={() => openItemDetail(it)} title="ดูรายละเอียดสินค้า"
+                          style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
                           {it.imageUrl
                             ? <img src={it.imageUrl} loading="lazy" style={{ width: 36, height: 36, objectFit: "cover", borderRadius: 5, flexShrink: 0, background: "#f3f4f6" }} onError={e => { e.target.style.display = "none"; }}/>
                             : <div style={{ width: 36, height: 36, borderRadius: 5, background: "#f3f4f6", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>🌸</div>}
@@ -10403,6 +10438,7 @@ function PosView({ data, role }) {
       </button>
 
       <Toast toast={toast} onClose={hideToast}/>
+      {modalP && <ProductModal p={modalP} onClose={() => setModalP(null)}/>}
     </div>
   );
 }

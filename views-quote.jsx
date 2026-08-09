@@ -370,6 +370,7 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
   const [invoiceNumber, setInvoiceNumber] = uS(null);       // เลขที่ใบแจ้งหนี้ของเราเอง (IVB-yyyyMM###) จาก syncGetInvoiceNumber
   const [invoiceNumberBusy, setInvoiceNumberBusy] = uS(false);
   const [printFileName, setPrintFileName] = uS("");          // ชื่อไฟล์ตอนเลือก "บันทึกเป็น PDF"
+  const [modalP, setModalP] = uS(null);                      // สินค้าที่กดดูรายละเอียด (ProductModal จาก views-main.jsx)
 
   // ⚠️ พิมพ์ผ่าน effect (ไม่พิมพ์ทันทีในตัว handler) เพราะเลขที่ใบแจ้งหนี้/หมายเหตุ/ชนิดเอกสาร
   // เพิ่งถูก setState ไป — DOM ยังเป็นของ render รอบก่อน · effect ทำงานหลัง React commit
@@ -520,6 +521,34 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
   function removeRemark(i) { setRemarks(r => r.filter((_, idx) => idx !== i)); }
   function addRemark() { setRemarks(r => [...r, ""]); }
 
+  // รูปสินค้า/หมวด เป็นข้อมูลของ "แคตตาล็อก" ไม่ใช่ข้อมูลของเอกสาร — ร่างที่บันทึกไว้จึงไม่ได้เก็บ
+  // (buildQuotePayload ส่งแค่ sku/name/category/qty/price) · ตอนโหลดร่างกลับมาต้องหยิบจาก
+  // `products` ตาม SKU ใหม่ทุกครั้ง ไม่งั้นทุกแถวกลายเป็นกล่องเทา 📦 ทั้งที่สินค้ามีรูป
+  // (พนักงานจำสินค้าจากรูป ไม่ใช่รหัส — ดู UI Convention ใน CLAUDE.md)
+  // ⚠️ เติมเฉพาะ "รูป/หมวด" เท่านั้น — **ห้ามแตะ qty/price/name** เพราะนั่นคือสิ่งที่ผู้ใช้
+  // กรอกไว้ในร่าง (ต่างจากโหมดแก้ไขใบเดิมที่ตั้งใจดึงราคาตั้งจาก catalog กลับมากันส่วนลดซ้อน)
+  function attachCatalogInfo(items) {
+    const bySku = {};
+    products.forEach(p => { bySku[String(p.sku || "").trim().toUpperCase()] = p; });
+    return (Array.isArray(items) ? items : []).map(it => {
+      const p = bySku[String(it.sku || "").trim().toUpperCase()];
+      if (!p) return Object.assign({}, it);
+      return Object.assign({}, it, {
+        imageUrl: it.imageUrl || p.imageUrl || "",
+        category: it.category || p.category || p.cat || "",
+      });
+    });
+  }
+
+  // เปิดรายละเอียด + รูปใหญ่ของสินค้าในรายการ — หยิบตัวเต็มจาก catalog ตาม SKU (ได้สต็อก/ราคา/
+  // ตำแหน่งล็อคครบ) · บรรทัดที่ไม่มีใน catalog (เช่นงานจัดพิเศษที่ตั้งชื่อเอง) ยังกดดูได้
+  // ด้วยข้อมูลเท่าที่มี — ดีกว่าปุ่มกดแล้วไม่มีอะไรเกิดขึ้น
+  function openItemDetail(it) {
+    const key = String(it.sku || "").trim().toUpperCase();
+    const p = products.find(x => String(x.sku || "").trim().toUpperCase() === key);
+    setModalP(p || { sku: it.sku, name: it.name, imageUrl: it.imageUrl || "", cat: it.category || "", category: it.category || "" });
+  }
+
   function buildQuotePayload() {
     return {
       draftId: draftId || undefined,
@@ -548,7 +577,7 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
     if (next) loadDrafts();
   }
   function loadDraft(d) {
-    setCart(Array.isArray(d.items) ? d.items : []);
+    setCart(attachCatalogInfo(d.items));
     setCust(d.customer || { name: "", taxId: "", branch: "", branchNo: "", address: "", phone: "", email: "" });
     // salesRep ไม่โหลดจากร่างเก่า — ยึดชื่อคนที่ล็อกอินอยู่ตอนนี้เสมอ (ใครหยิบร่างมาทำต่อ = คนนั้นเป็นผู้ทำ)
     setChannel(d.channel || "หน้าร้าน");
@@ -763,9 +792,13 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
                     <tr key={it.sku} style={{ borderTop: "1px solid #f3f4f6" }}>
                       <td style={{ padding: "8px 6px" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          {it.imageUrl
-                            ? <img src={it.imageUrl} loading="lazy" style={{ width: 36, height: 36, objectFit: "cover", borderRadius: 5, flexShrink: 0, background: "#f3f4f6" }} onError={e => { e.target.style.display = "none"; }}/>
-                            : <div style={{ width: 36, height: 36, borderRadius: 5, background: "#f3f4f6", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>📦</div>}
+                          {/* รูป = ปุ่มเปิดรายละเอียด (ช่องชื่อข้าง ๆ เป็น input แก้ชื่อได้ กดตรงนั้นไม่ได้) */}
+                          <button type="button" onClick={() => openItemDetail(it)} title="ดูรายละเอียดสินค้า"
+                            style={{ padding: 0, border: "none", background: "none", cursor: "pointer", flexShrink: 0, lineHeight: 0, borderRadius: 5 }}>
+                            {it.imageUrl
+                              ? <img src={it.imageUrl} loading="lazy" style={{ width: 36, height: 36, objectFit: "cover", borderRadius: 5, display: "block", background: "#f3f4f6" }} onError={e => { e.target.style.display = "none"; }}/>
+                              : <div style={{ width: 36, height: 36, borderRadius: 5, background: "#f3f4f6", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>📦</div>}
+                          </button>
                           <div style={{ minWidth: 0, flex: 1 }}>
                             <input value={it.name} onChange={e => patchItem(i, { name: e.target.value })}
                               style={{ width: "100%", fontWeight: 600, border: "1px solid transparent", borderBottom: "1px dashed #d1d5db", padding: "2px 0", fontSize: 14, background: "transparent", minWidth: 0 }}/>
@@ -896,6 +929,7 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
       </div>
 
       <Toast toast={toast} onClose={hideToast}/>
+      {modalP && <ProductModal p={modalP} onClose={() => setModalP(null)}/>}
     </div>
   );
 }
