@@ -314,7 +314,9 @@ const TRACKED = [
   // เฟส 4 ล็อกอิน (canDoOrNull_/ROLE_ACTIONS_/IMMEDIATE_GATE_*) ไม่ copy เข้า helpers.js —
   // ดู tests/auth.test.js (eval ฟังก์ชันจริงจาก .gs ตรง ๆ กันสำเนา drift ของโค้ดด้านความปลอดภัย)
   { names: ['attSummarize'], sourceFile: 'appsscript_complete.gs', landmarks: [
-    `let breakMin = 0, openBreak = null, forgotBreakEnd = false;`,
+    `let breakMin = 0, openBreak = null, forgotBreakEnd = false, breakCount = 0;`,
+    // นับ "ครั้ง" ที่ Start ไม่ใช่ที่คู่ที่จับได้ — วันที่ลืมกดกลับต้องยังนับเป็น 1 ครั้ง
+    `if (e.type === "bathroomStart") { openBathroom = e; bathroomCount++; }`,
     `else if (e.type === "breakEnd" && openBreak) { breakMin += Math.round((e.serverTs - openBreak.serverTs) / 60000); openBreak = null; }`,
     `if (lastOut) breakMin += Math.round((lastOut.serverTs - openBreak.serverTs) / 60000);`,
     `const workedMin = (firstIn && lastOut) ? Math.max(0, Math.round((lastOut.serverTs - firstIn.serverTs) / 60000) - breakMin) : null;`,

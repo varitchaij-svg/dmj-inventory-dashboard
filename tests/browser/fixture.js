@@ -184,13 +184,62 @@
           shift: null, events: [], summary: { inTime: '', outTime: '', workedMin: null, lateMin: 0 } },
       ],
     },
-    attendanceMonthlySummary: {
-      month: today.slice(0, 7),
-      rows: [
-        { staffId: 'S001', name: 'สมชาย ใจดี', role: 'frontstore', daysWorked: 6, daysAbsent: 0, lateDays: 1, lateMin: 5, workedMin: 2480, bathroomMin: 25 },
-        { staffId: 'S002', name: 'สมหญิง ขยัน', role: 'warehouse', daysWorked: 7, daysAbsent: 1, lateDays: 0, lateMin: 0, workedMin: 2900, bathroomMin: 10 },
-      ],
-    },
+    // สรุปทั้งเดือน — ก้อนเดียวกับที่แท็บ "📅 รายงานการเข้างาน" (AttendanceReportView) ใช้
+    // ⚠️ **ต้องมี `days[]` จริง** ไม่ใช่แค่ยอดรวม — ทั้งตารางรายวัน ค่าเฉลี่ยเวลาเข้า-ออก และ
+    //    กราฟรายสัปดาห์ คำนวณจาก days ทั้งหมด · ถ้า fixture มีแต่ยอดรวม หน้าจะเรนเดอร์ผ่าน
+    //    (ไม่ crash) แต่ค่าเฉลี่ยทุกช่องเป็น "—" = เทสต์เขียวโดยไม่ได้ทดสอบส่วนที่ทำใหม่เลย
+    attendanceMonthlySummary: (function () {
+      const ym = today.slice(0, 7);
+      const lastDay = Number(today.slice(8, 10));
+      // สร้างรายวันแบบเดียวกับที่ attendanceMonthlySummaryHandler_ ส่งมา (ตัดที่วันนี้เหมือน attMonthRange_)
+      const mk = (staff, cfg) => {
+        const days = [];
+        let daysScheduled = 0, daysPresent = 0, daysWorked = 0, daysAbsent = 0,
+            lateDays = 0, lateMin = 0, workedMin = 0, breakMin = 0, breakCount = 0,
+            bathroomMin = 0, bathroomCount = 0;
+        for (let i = 1; i <= lastDay; i++) {
+          const date = ym + '-' + String(i).padStart(2, '0');
+          const dow = new Date(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)) - 1, i).getDay();
+          const isToday = i === lastDay;
+          const off = dow === 0;                       // อาทิตย์ = ไม่มีกะ (วันหยุด)
+          const absent = !off && !isToday && i % 9 === 0;  // จงใจให้มีวันขาดอย่างน้อย 1 วัน
+          const shift = off ? null : { name: 'กะปกติ', start: '08:00', end: '17:00' };
+          const late = (!off && !absent && i % 5 === 0) ? cfg.late : 0;
+          const came = !off && !absent;
+          const d = {
+            date: date, dow: dow, isToday: isToday, isPast: !isToday, absent: absent, shift: shift,
+            inTime: came ? cfg.inBase.replace('MM', String(late).padStart(2, '0')) : null,
+            outTime: came && !isToday ? cfg.outTime : null,
+            workedMin: came && !isToday ? cfg.worked : null,
+            lateMin: came ? late : null,
+            breakMin: came ? cfg.brk : 0, breakCount: came ? 1 : 0,
+            bathroomMin: came ? cfg.bath : 0, bathroomCount: came ? cfg.bathN : 0,
+            forgotBreakEnd: false, forgotBathroomEnd: false,
+          };
+          if (shift) daysScheduled++;
+          if (d.inTime) daysPresent++;
+          if (d.workedMin != null) { workedMin += d.workedMin; daysWorked++; }
+          if (d.lateMin) { lateDays++; lateMin += d.lateMin; }
+          if (absent) daysAbsent++;
+          breakMin += d.breakMin; breakCount += d.breakCount;
+          bathroomMin += d.bathroomMin; bathroomCount += d.bathroomCount;
+          days.push(d);
+        }
+        return Object.assign({}, staff, {
+          daysScheduled, daysPresent, daysWorked, daysAbsent, lateDays, lateMin,
+          workedMin, breakMin, breakCount, bathroomMin, bathroomCount, days,
+        });
+      };
+      return {
+        month: ym, isCurrentMonth: true, lastDate: today,
+        rows: [
+          mk({ staffId: 'S001', name: 'สมชาย ใจดี', role: 'frontstore' },
+             { inBase: '08:MM:00', outTime: '17:05:00', worked: 480, late: 6, brk: 60, bath: 65, bathN: 6 }),
+          mk({ staffId: 'S002', name: 'สมหญิง ขยัน', role: 'warehouse' },
+             { inBase: '07:MM:00', outTime: '17:20:00', worked: 505, late: 0, brk: 45, bath: 30, bathN: 3 }),
+        ],
+      };
+    })(),
     listActiveStaffNames: { staff: [{ staffId: 'S001', name: 'สมชาย ใจดี' }, { staffId: 'S002', name: 'สมหญิง ขยัน' }] },
   };
 

@@ -19,7 +19,7 @@ const { chromium } = require(path.join(CACHE, 'node_modules', 'playwright-core')
 // dev ไม่อยู่ในนี้โดยเจตนา — เป็น superset ของ owner (+margin +whhome ซึ่ง warehouse ครอบให้แล้ว)
 // การรันซ้ำอีก 27 tab กินเวลาโดยไม่ได้ coverage เพิ่ม
 const ROLE_TABS = {
-  owner:      ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog","staff","staffperf","atttoday"],
+  owner:      ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog","staff","staffperf","atttoday","attreport"],
   employee:   ["attendance","categories","trends","stock","storage","frontstore","transfers","orders","tracking","ordersummary","mtojobs","labels"],
   warehouse:  ["attendance","whhome","orders","stock","stockcount","storage","categories","newproduct","ordersummary","tracking","mtojobs","labels"],
   frontstore: ["attendance","frontstore","categories","stock","orders","tracking","mtojobs","labels"],
@@ -36,7 +36,7 @@ const TAB_LABEL = {
   // ⚠️ staff ต้องใส่อิโมจินำหน้าด้วย — คลิกด้วย substring และ "พนักงาน" ไปตรงกับ
   //    "🏅 ผลงานพนักงาน" ด้วย (จะกดผิดปุ่มเมื่อลำดับใน OWNER_GROUPS สลับ)
   auditlog:"Audit Log", staff:"👥 พนักงาน", staffperf:"ผลงานพนักงาน",
-  attendance:"ลงเวลา", atttoday:"ใครเข้างานวันนี้",
+  attendance:"ลงเวลา", atttoday:"ใครเข้างานวันนี้", attreport:"รายงานการเข้างาน",
   deadstock:"สินค้าจม", quotefollowup:"ใบเสนอราคา", pos:"ขาย/ออกบิล",
   customers:"ลูกค้า & ยอดซื้อ", season:"ช่วงขายดี",
 };
@@ -95,6 +95,13 @@ const ASSERT = {
     ['ขาย / ออกบิล', 'ขายออนไลน์', 'ขายหน้าร้าน', 'รายการในบิล'], 'PosView UI + สลับโหมดขาย'),
   attendance: async (page) => hasText(page, ['สมชาย ใจดี'], 'ชื่อ+ไทม์ไลน์จาก myToday'),
   atttoday:   async (page) => hasText(page, ['สมชาย ใจดี', 'สมหญิง ขยัน'], 'รายชื่อจาก attendanceToday'),
+  // รายงานการเข้างาน: ต้องขึ้น "ครบ" ทั้งไทล์ตัวเลข ตารางรายคน กราฟ และบล็อกสรุปเดือน
+  // — hasText เป็น OR ถ้าใช้ OR แล้วบล็อกไหนหายไปทั้งดุ้นเทสต์ยังเขียวเพราะหัวเรื่องยังอยู่
+  attreport:  async (page) => hasAllText(page,
+    ['รายงานการเข้างาน', 'วันมาทำงาน', 'เวลาเข้างานเฉลี่ย', 'พักเฉลี่ย/วัน',
+     'สรุปรายคน', 'สมชาย ใจดี', 'สมหญิง ขยัน',
+     'เวลาเข้างานเฉลี่ย (เทียบตามสัปดาห์)', 'สัปดาห์ 1', 'สรุปภาพรวมประจำเดือน', 'เวลาทำงานรวม'],
+    'ไทล์ตัวเลข + ตารางรายคน + กราฟรายสัปดาห์ + สรุปเดือน'),
   // ผลงานพนักงาน: ต้องขึ้น "ครบ" ทั้งชื่อคน ยอดงาน หัวข้อกลุ่มตามตำแหน่ง (ไม่ใช่อันดับรวม)
   // และการ์ดเตือนชื่อที่จับคู่ไม่ได้ — hasText เป็น OR จึงต้องใช้ hasAllText ตรงนี้
   staffperf:  async (page) => hasAllText(page,
@@ -635,6 +642,51 @@ function startServer() {
     } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
     await page.screenshot({ path: path.join(SHOTS, 'home__nodata.png') }).catch(() => {});
     results.push({ role: 'interact', tab: 'หน้าหลัก (ยังไม่มีข้อมูล)', status, note });
+    await page.close();
+  }
+
+  // ── รายงานการเข้างาน: เลือกคน → ต้องได้ "รายวัน" จริง และอ่านได้บนจอมือถือ ──
+  // ⚠️ ต้องรันบนเบราว์เซอร์จริง 2 เหตุผลที่ unit test แทนไม่ได้:
+  //   1. ตารางรายวัน 9 คอลัมน์ถูกสลับเป็นการ์ดที่ ≤700px (useIsMobile) — เห็นได้เฉพาะตอน
+  //      เรนเดอร์จริงตามความกว้างจอ · พังแล้วหน้าจอ "ยังมีข้อมูลครบ" แค่ล้นออกนอกจอ
+  //   2. ค่าเฉลี่ยเวลาเข้างาน/กราฟ คิดจาก days[] ของคนที่เลือก — เลือกคนแล้วยังเห็นของทุกคน
+  //      คือความพังที่ตัวเลขยังดูสมเหตุสมผลทุกช่อง
+  for (const vp of [{ w: 390, h: 900, name: 'มือถือ' }, { w: 1024, h: 1200, name: 'iPad' }]) {
+    const page = await browser.newPage({ viewport: { width: vp.w, height: vp.h } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=owner&tab=attreport`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      if (!(await navigateTo(page, 'owner', 'attreport'))) { status = 'NAV_FAIL'; note = 'สลับ tab ไม่สำเร็จ'; }
+      else {
+        await page.waitForTimeout(600);
+        // เลือกพนักงาน 1 คนจาก dropdown → ต้องสลับจาก "สรุปรายคน" เป็น "สรุปการเข้างานรายวัน"
+        await page.locator('main select').first().selectOption({ label: 'สมชาย ใจดี' });
+        await page.waitForTimeout(500);
+        // ⚠️ ต้องตัด <select> ออกก่อนอ่านข้อความ — innerText ของ select รวมชื่อทุก option
+        //    (= ชื่อพนักงานทุกคน) ถ้าไม่ตัด การเช็ค "ไม่เหลือข้อมูลคนอื่น" จะแดงตลอดกาล
+        //    ทั้งที่ตัวกรองทำงานถูก (เจอจริงตอนเขียนเทสต์นี้)
+        const body = await page.evaluate(() => {
+          const m = document.querySelector('main');
+          if (!m) return '';
+          const c = m.cloneNode(true);
+          c.querySelectorAll('select').forEach(el => el.remove());
+          return c.innerText;
+        });
+        const missing = ['สรุปการเข้างานรายวัน', 'สมชาย ใจดี', 'เวลาเข้างานเฉลี่ย', 'สรุปภาพรวมประจำเดือน']
+          .filter(t => body.indexOf(t) < 0);
+        // เลือกคนแล้วต้องไม่เหลือของอีกคน (ตารางรายคนหายไปแล้ว)
+        const leaked = body.indexOf('สมหญิง ขยัน') >= 0;
+        // จอต้องไม่ล้นแนวนอน — ตารางกว้าง ๆ ต้องเลื่อนในกล่องตัวเอง ไม่ใช่ดันทั้งหน้า
+        const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 2);
+        if (missing.length)   { status = 'DAILY_MISSING'; note = 'ขาด: ' + missing.join(', '); }
+        else if (leaked)      { status = 'FILTER_LEAK';   note = 'เลือกคนเดียวแต่ยังเห็นข้อมูลของคนอื่น'; }
+        else if (overflow)    { status = 'H_OVERFLOW';    note = `หน้าล้นแนวนอนบนจอ ${vp.w}px`; }
+        else note = `เลือกคน → รายวัน + ไม่ล้นจอ (${vp.name} ${vp.w}px)`;
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, `attreport__${vp.w}.png`), fullPage: true }).catch(() => {});
+    results.push({ role: 'interact', tab: `รายงานการเข้างาน (${vp.name})`, status, note });
     await page.close();
   }
 

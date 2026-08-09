@@ -1107,12 +1107,15 @@ function attSummarize_(events, shift) {
   for (let i = events.length - 1; i >= 0; i--) { if (events[i].type === "out") { lastOut = events[i]; break; } }
 
   // พัก: จับคู่ breakStart→breakEnd · ถ้าลืมกดกลับจากพักแล้วกดออกงานเลย นับถึงเวลาออกงาน + ตั้งธง
-  let breakMin = 0, openBreak = null, forgotBreakEnd = false;
-  let bathroomMin = 0, openBathroom = null, forgotBathroomEnd = false;
+  // ⚠️ breakCount/bathroomCount นับที่ "Start" ไม่ใช่คู่ที่จับได้ — 1 ครั้งที่ลุกไปคือ 1 ครั้ง
+  //    ถึงจะลืมกดกลับ (ไม่งั้นวันที่ลืมกดกลับจะกลายเป็น "ไม่เคยเข้าห้องน้ำเลย" ซึ่งผิดชัด ๆ
+  //    และทำให้ค่าเฉลี่ย "กี่ครั้ง/วัน" ในรายงานต่ำกว่าจริงโดยไม่มีอะไรเตือน)
+  let breakMin = 0, openBreak = null, forgotBreakEnd = false, breakCount = 0;
+  let bathroomMin = 0, openBathroom = null, forgotBathroomEnd = false, bathroomCount = 0;
   events.forEach(function (e) {
-    if (e.type === "breakStart") openBreak = e;
+    if (e.type === "breakStart") { openBreak = e; breakCount++; }
     else if (e.type === "breakEnd" && openBreak) { breakMin += Math.round((e.serverTs - openBreak.serverTs) / 60000); openBreak = null; }
-    else if (e.type === "bathroomStart") openBathroom = e;
+    else if (e.type === "bathroomStart") { openBathroom = e; bathroomCount++; }
     else if (e.type === "bathroomEnd" && openBathroom) { bathroomMin += Math.round((e.serverTs - openBathroom.serverTs) / 60000); openBathroom = null; }
   });
   if (openBreak) {
@@ -1137,7 +1140,9 @@ function attSummarize_(events, shift) {
     inTime: firstIn ? firstIn.time : null,
     outTime: lastOut ? lastOut.time : null,
     breakMin: breakMin,
+    breakCount: breakCount,
     bathroomMin: bathroomMin,
+    bathroomCount: bathroomCount,
     workedMin: workedMin,
     lateMin: lateMin,
     onBreak: !!(openBreak && !lastOut),
@@ -1389,6 +1394,13 @@ function attendanceTodayHandler_(ss, data) {
 // เฟส C1: ให้เจ้าของเห็นภาพรวมทั้งเดือนทีเดียว ("เดือน × คน") ไม่ต้องไล่ดูทีละคนทีละวัน
 // เหมือน myAttendanceSummaryHandler_ แต่รวมทุกคนแทนที่จะกรองแค่ staffId เดียว
 // ไม่เปิดให้ storedevice เห็น (ต่างจาก attendanceToday) — ตัวเลขรวมทั้งเดือนใกล้เคียงข้อมูลเงินเดือน
+//
+// ส.ค. 2026 — คืน `rows[].days` (รายวันของแต่ละคน) เพิ่มด้วย เพื่อให้แท็บ "📅 รายงานการเข้างาน"
+// (AttendanceReportView) วาดตารางรายวัน + กราฟรายสัปดาห์ได้จากคำขอเดียว
+// ⚠️ **ต้องคิดรายวันฝั่งนี้ที่เดียว ห้ามให้ frontend คำนวณชั่วโมง/สายเองซ้ำ** — ตัวเลขเดียวกัน
+//    ที่คิดคนละที่จะเพี้ยนคนละทางแล้วไม่มีใครรู้ว่าอันไหนถูก (หลักเดียวกับ staffPerfHandler_
+//    ที่บังคับให้ใช้ attSummarize_/attShiftFor_ ตัวเดียวกับหน้า "เวลาของฉัน")
+// ⚠️ ก้อนที่โตคือ "คน × วัน" (~10 คน × 31 วัน) ไม่ใช่ "แถวในชีต" — ยังอ่านชีตรอบเดียวเหมือนเดิม
 function attendanceMonthlySummaryHandler_(ss, data) {
   const s = resolveSession_(ss, data.sessionToken);
   if (!s || !isAdminRole_(s.role) || s.status !== 'active') return unauthorized_();
@@ -1413,26 +1425,56 @@ function attendanceMonthlySummaryHandler_(ss, data) {
   const staffAll = readStaffAll_(ss).filter(function (x) { return x.status === 'active'; });
   const rows = staffAll.map(function (st) {
     const byDate = byStaffDate[st.staffId] || {};
-    let workedMin = 0, daysWorked = 0, lateDays = 0, lateMin = 0, daysAbsent = 0, breakMin = 0, bathroomMin = 0;
-    range.dates.forEach(function (dateStr) {
-      const shift = attShiftFor_(shifts, st.role, attDowOfDateStr_(dateStr));
+    let workedMin = 0, daysWorked = 0, daysPresent = 0, daysScheduled = 0,
+        lateDays = 0, lateMin = 0, daysAbsent = 0,
+        breakMin = 0, breakCount = 0, bathroomMin = 0, bathroomCount = 0;
+    const days = range.dates.map(function (dateStr) {
+      const dow = attDowOfDateStr_(dateStr);
+      const shift = attShiftFor_(shifts, st.role, dow);
       const evs = (byDate[dateStr] || []).sort(function (a, b) { return a.serverTs - b.serverTs; });
       const sum = attSummarize_(evs, shift);
       const isPast = dateStr < todayStr;
+      // ขาด = มีกะแต่ไม่ได้ลงเวลา และเป็นวันที่ผ่านไปแล้วจริง (วันนี้ยังไม่ถึงกะ ไม่ใช่ขาด)
+      const absent = !!(isPast && shift && !sum.inTime);
+
+      if (shift) daysScheduled++;
+      if (sum.inTime) daysPresent++;
+      // daysWorked นับเฉพาะวันที่ "คิดชั่วโมงได้" (มีทั้งเข้าและออก) — คนละตัวกับ daysPresent
+      // ที่นับ "มาทำงาน" · ลืมกดออกงาน = มาแต่คิดชั่วโมงไม่ได้ ต้องแยกให้เห็น ไม่ใช่ยุบเป็นตัวเดียว
       if (sum.workedMin != null) { workedMin += sum.workedMin; daysWorked++; }
       if (sum.lateMin) { lateDays++; lateMin += sum.lateMin; }
-      if (isPast && shift && !sum.inTime) daysAbsent++;
+      if (absent) daysAbsent++;
       breakMin += sum.breakMin;
+      breakCount += sum.breakCount;
       bathroomMin += sum.bathroomMin;
+      bathroomCount += sum.bathroomCount;
+
+      return {
+        date: dateStr, dow: dow, isToday: dateStr === todayStr, isPast: isPast, absent: absent,
+        shift: shift ? { name: shift.name, start: attFmtHm_(shift.start), end: attFmtHm_(shift.end) } : null,
+        inTime: sum.inTime, outTime: sum.outTime,
+        workedMin: sum.workedMin, lateMin: sum.lateMin,
+        breakMin: sum.breakMin, breakCount: sum.breakCount,
+        bathroomMin: sum.bathroomMin, bathroomCount: sum.bathroomCount,
+        forgotBreakEnd: sum.forgotBreakEnd, forgotBathroomEnd: sum.forgotBathroomEnd,
+      };
     });
     return {
       staffId: st.staffId, name: st.displayName || st.lineDisplayName, role: st.role,
+      pictureUrl: st.pictureUrl,
+      daysScheduled: daysScheduled, daysPresent: daysPresent,
       daysWorked: daysWorked, daysAbsent: daysAbsent, lateDays: lateDays, lateMin: lateMin,
-      workedMin: workedMin, breakMin: breakMin, bathroomMin: bathroomMin,
+      workedMin: workedMin, breakMin: breakMin, breakCount: breakCount,
+      bathroomMin: bathroomMin, bathroomCount: bathroomCount,
+      days: days,
     };
   });
 
-  return ok({ month: range.month, isCurrentMonth: range.isCurrentMonth, rows: rows });
+  return ok({
+    month: range.month, isCurrentMonth: range.isCurrentMonth,
+    lastDate: range.dates[range.dates.length - 1] || '',
+    rows: rows,
+  });
 }
 
 // ═══════════════════════════════════════════════════════════

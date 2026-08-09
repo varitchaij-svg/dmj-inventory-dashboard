@@ -15,9 +15,10 @@
     (syncCreateQuotation/syncSaveQuotationDraft/syncGetQuotationDrafts/syncDeleteQuotationDraft)
     ใช้ computeBillTotals/POS_SALES_CHANNELS/POS_TRANSFER_INFO/syncSearchContact จาก
     views-analytics.jsx (global scope เดียวกัน) — เรียกจาก `QuoteFollowupView` โหมด `mode==="create"`
-  - `views-attendance.jsx` (~750 บรรทัด) — ลงเวลาเข้า-ออกงาน: `AttendanceView` (พนักงาน — `Seg`
+  - `views-attendance.jsx` (~1,300 บรรทัด) — ลงเวลาเข้า-ออกงาน: `AttendanceView` (พนักงาน — `Seg`
     สลับ "⏱️ วันนี้"/"📅 เวลาของฉัน", ปุ่มสลับสถานะ 3 กลุ่ม), `MyAttendanceMonth` (สรุปเดือนของ
-    ตัวเอง ทุก role), `AttendanceTodayView` (owner ดูใครเข้างาน + แก้ย้อนหลัง), `AttFixModal` ·
+    ตัวเอง ทุก role), `AttendanceTodayView` (owner ดูใครเข้างาน + แก้ย้อนหลัง), `AttFixModal`,
+    `AttendanceReportView` (รายงานทั้งเดือน owner/dev — ดูหัวข้อ "📅 รายงานการเข้างาน") ·
     helper `attPost` แนบ `sessionToken` จาก localStorage ให้ทุก request เอง (ไม่ใช้ syncXxx ของไฟล์อื่น)
   - **`Doomuenjing Dashboard.html` โหลดจริงแค่: ui.jsx → views-main.jsx → views-analytics.jsx → views-quote.jsx → views-attendance.jsx → app.jsx**
     (การแยกไฟล์ตั้งใจทำเพื่อลด Babel compile time — ห้ามกลับไปรวมเป็นไฟล์เดียว
@@ -236,7 +237,7 @@ ROLE_TABS = {
               stock, orders, tracking, frontstore, ordersummary, transfers,
               storage, stockcount, newproduct, deadstock, trends, season,
               mtojobs, labels, upload, connect, auditlog, staff, staffperf,
-              atttoday
+              atttoday, attreport
   employee:   attendance, categories, trends, stock, storage, frontstore,
               transfers, orders, tracking, ordersummary, mtojobs, labels
   warehouse:  attendance, whhome, orders, stock, stockcount, storage,
@@ -313,7 +314,7 @@ role `storedevice` = บัญชี LINE กลาง ("เครื่อง�
 ### หมวด "📊 ภาพรวม" ของ owner — แบ่งตาม "คนดู" ไม่ใช่ "ประเภทงาน" (ส.ค. 2026)
 
 เจ้าของสั่งให้รวมทุกอย่างที่เปิดดูเพื่อ**ตัดสินใจ** ไว้หมวดเดียว จะได้ไม่ต้องไล่เปิดข้ามหมวด:
-`overview` · `whhome` · `customers` · `tracking` · `quotefollowup` · `trends` · `season`
+`overview` · `whhome` · `attreport` · `customers` · `tracking` · `quotefollowup` · `trends` · `season`
 - ⚠️ **ต่างจากหมวดอื่นที่แบ่งตามประเภทงานโดยตั้งใจ** — `tracking`/`quotefollowup`/`customers`
   ย้ายออกจาก "การขาย" และ `trends`/`season` ย้ายออกจาก "วิเคราะห์" · จะย้ายกลับต้องถามเจ้าของก่อน
 - ผลข้างเคียง: **`g_insight` เหลือแค่ `margin` ซึ่ง owner ไม่มีสิทธิ์ → หมวดหายไปเองสำหรับ owner**
@@ -1126,6 +1127,49 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
   วันนี้เสมอ (ไม่โชว์วันอนาคต) · ยังไม่นับ "ขาด" ถ้าเป็นวันนี้ (อาจยังไม่ถึงเวลากะ)
   · `attDowOfDateStr_` = helper กลาง หา day-of-week จาก `"yyyy-MM-dd"` ตรง ๆ (ใช้แทน
   `attDowBkk_` เมื่อไม่มี `Date` object เช่นตอนดูวันในอดีต/เดือนอื่น)
+
+### 📅 รายงานการเข้างาน (แท็บ `attreport`, ส.ค. 2026)
+
+เจ้าของสั่ง: "เพิ่มภาพรวมอีก 1 เมนู · **ยุบจากหัวข้อสรุปเดือนของพนักงานมาเป็นอันนี้เลย**" พร้อมส่ง
+ตัวอย่างเลย์เอาต์มา (ไทล์ตัวเลข → ตารางรายวัน → กราฟรายสัปดาห์ → สรุปเดือน)
+
+- **"📊 สรุปเดือน" ที่เคยเป็น `Seg` ในแท็บ "🕐 ใครเข้างานวันนี้" ถูกยุบมาที่นี่ทั้งหมด**
+  (`AttendanceMonthlySummaryView` **ถูกลบแล้ว** — เนื้อหาไปอยู่ในโหมด "👥 ทั้งหมด" ของรายงาน)
+  · ⚠️ **ห้ามเอา Seg กลับไปที่ `AttendanceTodayView`** — สรุปทั้งเดือนจะมี 2 ที่ที่คิดคนละรอบ
+  แล้วไม่มีอะไรบอกว่าต้องเชื่ออันไหน · หน้า atttoday เหลือปุ่ม "📅 ดูรายงานทั้งเดือน ▸"
+  เป็นทางเข้าแทน (รับ prop `onNav` จาก app.jsx) ไม่งั้นคนที่คุ้นกับปุ่มเดิมหาไม่เจอ
+- **อยู่หมวด "ภาพรวม" ไม่ใช่ "พนักงาน"** — เป็นของที่เปิดดูเพื่อ*ตัดสินใจ* ต่างจากลงเวลา/
+  ใครเข้างานวันนี้ที่เป็นการลงมือทำ (หลักการแบ่งหมวดของ owner ดูหัวข้อ "📊 ภาพรวม" ข้างบน)
+- **ใช้ `action=attendanceMonthlySummary` ตัวเดิม** (owner/dev เท่านั้น ผ่าน `isAdminRole_`)
+  แต่ตอนนี้คืน **`rows[].days`** = รายวันของแต่ละคน + `daysScheduled`/`daysPresent`/
+  `breakCount`/`bathroomCount` เพิ่ม · ไม่ต้องเพิ่ม action ใหม่ = ไม่ต้องแตะ `ROLE_ACTIONS_`
+  · ฟิลด์ที่เพิ่มเป็นแบบต่อท้าย → เครื่องที่ยังรัน `.jsx` เก่าไม่พัง
+- ⚠️ **`attSummarize_` เพิ่ม `breakCount`/`bathroomCount` — นับที่ "Start" ไม่ใช่คู่ที่จับได้**
+  วันที่ลืมกดกลับต้องยังนับเป็น 1 ครั้ง ไม่งั้นค่าเฉลี่ย "กี่ครั้ง/วัน" ต่ำกว่าจริงเงียบ ๆ
+  · มีสำเนาใน `tests/helpers.js` + landmark ใน `drift-guard.test.js` (แก้ที่หนึ่งต้องแก้ทั้ง 3 ที่)
+- ⚠️ **frontend ห้ามคิดชั่วโมง/สาย/ขาดเองซ้ำ** — `attReportAgg` ทำได้แค่รวม/เฉลี่ยจากรายวันที่
+  GAS ส่งมา (ซึ่งมาจาก `attSummarize_`/`attShiftFor_` ตัวเดียวกับ "เวลาของฉัน" และ "ผลงานพนักงาน")
+- ⚠️ **ค่าเฉลี่ยเวลาเข้า/ออก นับเฉพาะวันที่กดจริง** — `attTimeToMin` คืน `null` (ไม่ใช่ 0) เมื่อว่าง
+  · เอาวันหยุด/วันขาดมาหารด้วย = เวลาเข้างานเฉลี่ยเร็วกว่าความจริงทุกเดือนโดยไม่มีอะไรเตือน
+- ⚠️ **`daysPresent` (มาทำงาน) ≠ `daysWorked` (คิดชั่วโมงได้)** — วันที่ลืมกดออกงานคือ "มาแต่
+  ไม่มีชั่วโมง" ยุบเป็นตัวเดียวเมื่อไหร่ % การมางานจะต่ำกว่าจริง · แถบเหลือง "อ่านตัวเลขนี้ยังไง"
+  อธิบายข้อนี้ไว้ **ห้ามถอด** (หลักเดียวกับแท็บผลงานพนักงาน)
+- ⚠️ **แกนตั้งของกราฟเวลาเข้างานถูกบังคับให้กว้างอย่างน้อย 40 นาทีเสมอ** (`AttWeekLine`) —
+  ปล่อยให้ scale ตามข้อมูลล้วน ความต่าง 2 นาทีจะวาดเป็นภูเขา = เห็น "แนวโน้มแย่ลง" ที่ไม่มีจริง
+  · เส้นประ = เวลาเข้างานตามกะ ต้องอยู่ในกรอบเสมอ ไม่งั้นไม่มีอะไรให้เทียบว่า "สาย" คือเท่าไหร่
+- ⚠️ **สัปดาห์ = วันที่ 1-7, 8-14, … ไม่ใช่สัปดาห์ปฏิทิน** (จงใจ — ทุกเดือนได้ 5 ช่องเท่ากัน
+  เทียบเดือนต่อเดือนได้) · เปลี่ยนเป็นสัปดาห์ปฏิทินเมื่อไหร่ต้องแก้ป้ายกำกับด้วย
+- **มือถือ/iPad**: `useIsMobile(700)` สลับตาราง 9 คอลัมน์ → การ์ดต่อวัน · ไทล์ตัวเลขใช้
+  `auto-fit minmax(158px,1fr)` (iPad แนวนอน 6 ช่อง · แนวตั้ง 3 · มือถือ 2) · ตารางบนจอกว้าง
+  เลื่อนแนวนอน**ในกล่องตัวเอง** (`overflowX:auto`) ไม่ดันทั้งหน้า
+- **"🖨️ บันทึก PDF" ใช้ `runQuoteDocPrint` + คลาส `.no-print` ที่มีอยู่แล้ว** — ไม่ได้เพิ่ม CSS
+  ใน `Doomuenjing Dashboard.html` เลย จึง**ไม่ต้อง bump `CACHE_NAME`** (บทเรียนข้อ 15)
+  · ⚠️ **ตารางรายวันโชว์ครบทุกวันเสมอ ห้ามใส่ "ดูเพิ่มเติม"** — แถวที่ซ่อนจะหายจาก PDF ด้วย
+  ซึ่งเป็นเอกสารที่เจ้าของเอาไปคุยเรื่องเงินเดือน
+- เทสต์: `tests/attendance-report.test.js` (eval ฟังก์ชันจริงจาก `.jsx`/`.gs` ไม่ copy) +
+  browser test 2 เคส (จอ 390px และ 1024px — เลือกคนแล้วต้องได้รายวันของคนนั้นจริง, ไม่เหลือ
+  ข้อมูลคนอื่น, และ**หน้าไม่ล้นแนวนอน**) · fixture ของ browser test **ต้องมี `days[]` จริง**
+  ไม่งั้นค่าเฉลี่ยทุกช่องเป็น "—" แล้วเทสต์เขียวโดยไม่ได้ทดสอบส่วนที่ทำใหม่เลย
 
 ## 🧾 ใบแจ้งหนี้ 3 แบบ + เลขที่เอกสารของเราเอง (ส.ค. 2026)
 

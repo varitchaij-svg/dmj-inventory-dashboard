@@ -27,6 +27,7 @@ const TABS = [
   { id: "staffperf",     label: "🏅 ผลงานพนักงาน",           icon: I.flame,     desc: "สรุปงานที่แต่ละคนทำในเดือนนี้" },
   { id: "attendance",    label: "⏱️ ลงเวลา",                icon: I.layers,    desc: "กดเข้า-ออกงาน/พัก · ดูเวลาของฉัน" },
   { id: "atttoday",      label: "🕐 ใครเข้างานวันนี้",       icon: I.layers,    desc: "ใครเข้างาน/พัก/ออกแล้ว ตอนนี้" },
+  { id: "attreport",     label: "📅 รายงานการเข้างาน",       icon: I.dashboard, desc: "สรุปเข้า-ออกงานทั้งเดือน รายคน/รายวัน" },
   { id: "deadstock",     label: "📦 สินค้าจม",              icon: I.alert,     desc: "ของค้างคลังไม่ขยับ · เงินจมอยู่เท่าไหร่" },
   { id: "quotefollowup", label: "📄 ใบเสนอราคา",             icon: I.cart,      desc: "สร้าง/ตามใบเสนอราคาของลูกค้า" },
   { id: "pos",           label: "🧾 ขาย/ออกบิล",             icon: I.cart,      desc: "ขายออนไลน์/หน้าร้าน ออกบิล+ใบกำกับภาษี" },
@@ -44,10 +45,10 @@ const ROLE_TABS = {
   // dev = ตำแหน่งสำหรับผู้ดูแลระบบ/คนพัฒนา — เห็นทุกแท็บที่มีในระบบ รวมแท็บที่ยังซ่อนจาก owner
   // ("margin" ยังไม่มีต้นทุนซื้อจริง จึงไม่โชว์ให้ owner แต่ dev ต้องเข้าไปดู/ทดสอบได้)
   // สิทธิ์ฝั่ง GAS เทียบเท่า owner (ดู isAdminRole_ ใน appsscript_complete.gs)
-  dev:        ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","margin","mtojobs","labels","upload","connect","auditlog","staff","staffperf","atttoday","whhome"],
+  dev:        ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","margin","mtojobs","labels","upload","connect","auditlog","staff","staffperf","atttoday","attreport","whhome"],
   // เรียงตามที่ owner ใช้บ่อย: ภาพรวม/ลูกค้า → งานประจำวัน (สั่ง/สต๊อก/ออเดอร์/หน้าร้าน) → คลัง → วิเคราะห์ → เครื่องมือ/ตั้งค่าท้ายสุด
   // ("margin" ซ่อนไว้ก่อน — ยังไม่มีต้นทุนซื้อจริง · โค้ด MarginView คงไว้ ค่อยเพิ่ม id กลับเมื่อพร้อม)
-  owner:      ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog","staff","staffperf","atttoday"],
+  owner:      ["attendance","overview","customers","pos","quotefollowup","categories","stock","orders","tracking","frontstore","ordersummary","transfers","storage","stockcount","newproduct","deadstock","trends","season","mtojobs","labels","upload","connect","auditlog","staff","staffperf","atttoday","attreport"],
   employee:   ["attendance","categories","trends","stock","storage","frontstore","transfers","orders","tracking","ordersummary","mtojobs","labels"],
   // role อื่น (employee/warehouse/frontstore/saler) ไม่มี "เพิ่มเติม" — โชว์ทุกแท็บบนแถบเลื่อนแนวนอน
   // (ต่างจาก owner/dev) ดังนั้นลำดับที่นี่แค่กำหนดว่าอันไหนอยู่ซ้ายสุด/เจอก่อนโดยไม่ต้องเลื่อน
@@ -73,7 +74,10 @@ const ROLE_TABS = {
 //   ผลข้างเคียง: g_insight เหลือแค่ margin ซึ่ง owner ไม่มีสิทธิ์ → หมวดหายไปเองสำหรับ owner
 //   (ตัวกรอง .filter(g => g.items.length > 0) ด้านล่างจัดการให้) แต่ dev ยังเห็น
 const OWNER_GROUPS = [
-  { id: "g_overview", gi: "📊", name: "ภาพรวม",       tabs: ["overview", "whhome", "customers", "tracking", "quotefollowup", "trends", "season"] },
+  // "attreport" (รายงานการเข้างาน) อยู่หมวดนี้ ไม่ใช่ "พนักงาน" — เจ้าของสั่งเอง ส.ค. 2026
+  // เพราะเป็นของที่เปิดดูเพื่อ **ตัดสินใจ** (ใครต้องคุยด้วย/คิดชั่วโมง) ไม่ใช่งานประจำวันแบบ
+  // ลงเวลา/ใครเข้างานวันนี้ ซึ่งเป็นการลงมือทำจริงและยังอยู่หมวด "พนักงาน" ตามเดิม
+  { id: "g_overview", gi: "📊", name: "ภาพรวม",       tabs: ["overview", "whhome", "attreport", "customers", "tracking", "quotefollowup", "trends", "season"] },
   { id: "g_sales",    gi: "💰", name: "การขาย",       tabs: ["pos", "orders", "frontstore", "mtojobs"] },
   { id: "g_stock",    gi: "📦", name: "สต็อก & คลัง",  tabs: ["stock", "categories", "storage", "stockcount", "transfers", "ordersummary", "newproduct", "deadstock", "labels"] },
   { id: "g_insight",  gi: "📈", name: "วิเคราะห์",      tabs: ["margin"] },
@@ -2328,7 +2332,8 @@ function App() {
         {activeTab === "staff"        && <ErrorBoundary key="staff"><StaffView/></ErrorBoundary>}
         {activeTab === "staffperf"    && <ErrorBoundary key="staffperf"><StaffPerformanceView/></ErrorBoundary>}
         {activeTab === "attendance"   && <ErrorBoundary key="attendance"><AttendanceView role={viewRole}/></ErrorBoundary>}
-        {activeTab === "atttoday"     && <ErrorBoundary key="atttoday"><AttendanceTodayView canEdit={isAdminRole(role)}/></ErrorBoundary>}
+        {activeTab === "atttoday"     && <ErrorBoundary key="atttoday"><AttendanceTodayView canEdit={isAdminRole(role)} onNav={handleSetTab}/></ErrorBoundary>}
+        {activeTab === "attreport"    && <ErrorBoundary key="attreport"><AttendanceReportView/></ErrorBoundary>}
         {activeTab === "deadstock"    && <ErrorBoundary key="deadstock"><DeadStockView/></ErrorBoundary>}
         {activeTab === "quotefollowup" && <ErrorBoundary key="quotefollowup"><QuoteFollowupView data={data} role={viewRole}/></ErrorBoundary>}
         {activeTab === "pos"          && <ErrorBoundary key="pos"><PosView data={data} role={viewRole}/></ErrorBoundary>}

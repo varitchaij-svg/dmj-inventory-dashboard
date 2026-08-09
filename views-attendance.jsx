@@ -353,6 +353,7 @@ function AttendanceView({ role }) {
 }
 
 const ATT_MONTH_NAMES = ["มกราคม","กุมภาพันธ์","มีนาคม","เมษายน","พฤษภาคม","มิถุนายน","กรกฎาคม","สิงหาคม","กันยายน","ตุลาคม","พฤศจิกายน","ธันวาคม"];
+const ATT_MONTH_SHORT = ["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
 const ATT_DOW_TH = ["อา","จ","อ","พ","พฤ","ศ","ส"];
 function attMonthLabel(ym) {
   const p = String(ym || "").split("-");
@@ -469,76 +470,622 @@ function MyAttendanceMonth() {
   );
 }
 
-// ═══════════════════════════════════════════════
-// AttendanceMonthlySummaryView — สรุปลงเวลาทั้งเดือน "เดือน × คน" (owner/dev เท่านั้น) — เฟส C1
-// ───────────────────────────────────────────────
-// ต่างจาก MyAttendanceMonth (รายวันของคนเดียว) — อันนี้รวมทุกคนไว้ในหน้าเดียว ให้เจ้าของเห็นภาพรวม
-// เดือนทีเดียวโดยไม่ต้องไล่เปิดทีละคน · เรียงคนที่สายบ่อยสุดขึ้นก่อน ช่วยให้เห็นจุดที่ต้องคุยก่อน
-// ═══════════════════════════════════════════════
-function AttendanceMonthlySummaryView() {
+// ═══════════════════════════════════════════════════════════════════════════
+// 📅 รายงานการเข้างาน (รายเดือน) — owner/dev เท่านั้น
+// ───────────────────────────────────────────────────────────────────────────
+// **ยุบมาจาก "📊 สรุปเดือน" ที่เคยซ่อนอยู่ใน Seg ของแท็บ "ใครเข้างานวันนี้"** (ส.ค. 2026 —
+// เจ้าของสั่งเอง) · ของเดิมเป็นแค่รายชื่อ + ชั่วโมงรวม ซ่อนอยู่หลังปุ่มสลับที่ไม่มีอะไรบอกว่ามีอยู่
+// ตอนนี้เป็นเมนูของตัวเองในหมวด "ภาพรวม" และดูได้ 2 ระดับจากคำขอเดียว:
+//   ทั้งหมด  → เทียบคนต่อคนทั้งเดือน (ของเดิมที่ยุบมา)
+//   รายคน   → ตารางรายวัน + กราฟรายสัปดาห์ (ของใหม่ตามแบบที่เจ้าของส่งมา)
+//
+// ⚠️ **ตัวเลขทุกตัวคิดมาจาก GAS แล้ว (attSummarize_) ห้ามคิดชั่วโมง/สาย/ขาดเองที่นี่ซ้ำ** —
+//    หน้านี้ทำได้แค่ "รวม/เฉลี่ย" จากรายวันที่ server ส่งมา ไม่งั้นเลขในหน้านี้กับหน้า
+//    "เวลาของฉัน"/"ผลงานพนักงาน" จะเพี้ยนคนละทางแล้วไม่มีใครรู้ว่าอันไหนถูก
+// ═══════════════════════════════════════════════════════════════════════════
+
+const ATT_DOW_DOT_TH = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
+
+// "08:01:23" → 481 นาทีจากเที่ยงคืน · คืน null เมื่อว่าง/รูปแบบไม่ตรง (ห้ามคืน 0 — 0 คือเที่ยงคืนจริง
+// ซึ่งจะถูกเอาไปเฉลี่ยแล้วดึงค่าเฉลี่ยลงเหลือครึ่งเดียวโดยไม่มีอะไรเตือน)
+function attTimeToMin(t) {
+  const m = /^(\d{1,2}):(\d{2})/.exec(String(t || ""));
+  if (!m) return null;
+  const h = Number(m[1]), mi = Number(m[2]);
+  if (h > 23 || mi > 59) return null;
+  return h * 60 + mi;
+}
+function attMinToClock(min) {
+  if (min == null || !isFinite(min)) return "—";
+  const x = Math.max(0, Math.round(min));
+  return String(Math.floor(x / 60)).padStart(2, "0") + ":" + String(x % 60).padStart(2, "0");
+}
+// "234 ชั่วโมง 15 นาที" — ใช้เฉพาะบล็อกสรุปเดือน (ตัวเลขใหญ่ อ่านเต็มคำ)
+// ที่อื่นยังใช้ attMinLabel ("3 ชม. 20 นาที") เหมือนเดิม
+function attHoursLabel(min) {
+  const x = Math.max(0, Math.round(Number(min) || 0));
+  const h = Math.floor(x / 60), m = x % 60;
+  return h > 0 ? `${h.toLocaleString("th-TH")} ชั่วโมง ${m} นาที` : `${m} นาที`;
+}
+
+// รวมรายวันของ "คนที่เลือกอยู่" (1 คน หรือทุกคน) ให้เป็นก้อนเดียวที่ทุกส่วนของหน้าใช้ร่วมกัน
+// ⚠️ ค่าเฉลี่ยเวลาเข้า/ออก นับเฉพาะวันที่ "กดจริง" — เอาวันหยุด/วันขาดมาหารด้วยจะได้เวลาเข้างาน
+//    เฉลี่ยที่เร็วกว่าความจริงเสมอ (วันที่ไม่มีค่า = ไม่ใช่ค่า 0)
+function attReportAgg(rows) {
+  const days = [];
+  (rows || []).forEach(r => (r.days || []).forEach(d => days.push(d)));
+  const t = {
+    people: (rows || []).length,
+    daysScheduled: 0, daysPresent: 0, daysWorked: 0, daysAbsent: 0,
+    lateDays: 0, lateMin: 0, workedMin: 0,
+    breakMin: 0, breakCount: 0, bathroomMin: 0, bathroomCount: 0,
+    noOutDays: 0,
+  };
+  let inSum = 0, inN = 0, outSum = 0, outN = 0;
+  const startVotes = {}, endVotes = {};
+  days.forEach(d => {
+    if (d.shift) {
+      t.daysScheduled++;
+      startVotes[d.shift.start] = (startVotes[d.shift.start] || 0) + 1;
+      endVotes[d.shift.end] = (endVotes[d.shift.end] || 0) + 1;
+    }
+    if (d.absent) t.daysAbsent++;
+    if (d.lateMin > 0) { t.lateDays++; t.lateMin += d.lateMin; }
+    t.breakMin += d.breakMin || 0;
+    t.breakCount += d.breakCount || 0;
+    t.bathroomMin += d.bathroomMin || 0;
+    t.bathroomCount += d.bathroomCount || 0;
+    if (d.workedMin != null) { t.workedMin += d.workedMin; t.daysWorked++; }
+    if (d.inTime) {
+      t.daysPresent++;
+      const m = attTimeToMin(d.inTime);
+      if (m != null) { inSum += m; inN++; }
+      if (!d.outTime && !d.isToday) t.noOutDays++;
+    }
+    if (d.outTime) {
+      const m = attTimeToMin(d.outTime);
+      if (m != null) { outSum += m; outN++; }
+    }
+  });
+  const top = (votes) => Object.keys(votes).sort((a, b) => votes[b] - votes[a])[0] || null;
+  t.avgInMin = inN ? inSum / inN : null;
+  t.avgOutMin = outN ? outSum / outN : null;
+  t.shiftStart = top(startVotes);
+  t.shiftEnd = top(endVotes);
+  t.breakAvg = t.daysPresent ? t.breakMin / t.daysPresent : null;
+  t.bathroomAvgCount = t.daysPresent ? t.bathroomCount / t.daysPresent : null;
+  t.days = days;
+  return t;
+}
+
+// จัดรายวันเป็นสัปดาห์ที่ 1-5 ของเดือน (วันที่ 1-7 = สัปดาห์ 1) — ตรงกับแบบที่เจ้าของส่งมา
+// ⚠️ ไม่ใช่สัปดาห์ตามปฏิทินจริง (จ.-อา.) โดยตั้งใจ: เดือนหนึ่งจะได้ 5 ช่องเท่ากันทุกเดือน
+//    เทียบเดือนต่อเดือนได้ · ถ้าเปลี่ยนไปใช้สัปดาห์ปฏิทินต้องแก้ป้ายกำกับด้วย ไม่งั้นอ่านผิด
+function attWeekBuckets(days) {
+  const out = [];
+  (days || []).forEach(d => {
+    const dayNum = Number(String(d.date).slice(8, 10));
+    if (!dayNum) return;
+    const i = Math.min(4, Math.floor((dayNum - 1) / 7));
+    const b = out[i] || (out[i] = { key: i, label: "สัปดาห์ " + (i + 1), inSum: 0, inN: 0, bathMin: 0, presentN: 0 });
+    if (d.inTime) {
+      const m = attTimeToMin(d.inTime);
+      if (m != null) { b.inSum += m; b.inN++; }
+      b.bathMin += d.bathroomMin || 0;
+      b.presentN++;
+    }
+  });
+  return out.filter(Boolean).map(b => ({
+    ...b,
+    avgIn: b.inN ? b.inSum / b.inN : null,
+    avgBath: b.presentN ? b.bathMin / b.presentN : null,
+  }));
+}
+
+// หมายเหตุท้ายแถวรายวัน — เขียนเป็นคำ ไม่ใช่ไอคอนเปล่า (เจ้าของอ่านรายงานนี้เพื่อไปคุยกับพนักงาน)
+function attDayNote(d) {
+  if (!d.inTime) {
+    if (d.absent) return { text: "ขาด", tone: "bad" };
+    if (!d.shift) return { text: "วันหยุด", tone: "muted" };
+    return { text: d.isToday ? "ยังไม่ลงเวลา" : "ไม่ได้ลงเวลา", tone: "muted" };
+  }
+  const bits = [];
+  if (d.lateMin > 0) bits.push("สาย " + d.lateMin + " นาที");
+  if (!d.outTime) bits.push(d.isToday ? "ยังทำงานอยู่" : "ไม่ได้กดออกงาน");
+  if (d.forgotBreakEnd) bits.push("ลืมกดกลับจากพัก");
+  if (d.forgotBathroomEnd) bits.push("ลืมกดกลับจากห้องน้ำ");
+  if (!d.shift) bits.push("ไม่มีกะกำหนด");
+  if (!bits.length) return { text: "-", tone: "muted" };
+  return { text: bits.join(" · "), tone: d.lateMin > 0 || !d.outTime ? "warn" : "muted" };
+}
+
+const ATT_NOTE_COLOR = { bad: "var(--dang)", warn: "#a07417", muted: "var(--muted)" };
+
+// ── ไทล์ตัวเลขบนสุด — ไอคอนสีอ่อน + ป้าย + ค่า + บรรทัดอธิบาย ──
+function AttStat({ emoji, label, value, sub, color }) {
+  const c = color || "#1f7f44";
+  return (
+    <div style={{
+      background: "var(--paper)", border: "1.5px solid var(--bdr)", borderRadius: 14,
+      padding: "12px 13px", display: "flex", gap: 11, alignItems: "flex-start", minWidth: 0,
+    }}>
+      <div style={{
+        width: 38, height: 38, borderRadius: 11, flex: "0 0 auto", background: c + "1a",
+        display: "flex", alignItems: "center", justifyContent: "center", fontSize: 19,
+      }}>{emoji}</div>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: 11.5, color: "var(--muted)", fontWeight: 600, lineHeight: 1.35 }}>{label}</div>
+        <div style={{ fontSize: 20, fontWeight: 800, color: c, lineHeight: 1.25, marginTop: 1 }}>{value}</div>
+        {sub && <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 2, lineHeight: 1.4 }}>{sub}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ── กราฟเส้น "เวลาเข้างานเฉลี่ยตามสัปดาห์" ──
+// ⚠️ **แกนตั้งถูกบังคับให้กว้างอย่างน้อย 40 นาทีเสมอ** — ถ้าปล่อยให้ scale ตามข้อมูลล้วน
+//    ความต่าง 2 นาทีจะวาดออกมาเป็นภูเขา ทำให้เจ้าของเห็น "แนวโน้มแย่ลง" ที่ไม่มีอยู่จริง
+// ⚠️ เส้นประ = เวลาเข้างานตามกะ — ต้องอยู่ในกรอบเสมอ ไม่งั้นกราฟไม่มีอะไรให้เทียบว่า "สาย" คือเท่าไหร่
+function AttWeekLine({ weeks, refMin }) {
+  const pts = (weeks || []).filter(w => w.avgIn != null);
+  if (!pts.length) {
+    return <div style={{ fontSize: 12.5, color: "var(--muted)", padding: "18px 0", textAlign: "center" }}>ยังไม่มีการลงเวลาในเดือนนี้</div>;
+  }
+  const vals = pts.map(w => w.avgIn).concat(refMin != null ? [refMin] : []);
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  const mid = (lo + hi) / 2, span = Math.max(40, (hi - lo) * 1.6);
+  lo = Math.floor((mid - span / 2) / 5) * 5;
+  hi = Math.ceil((mid + span / 2) / 5) * 5;
+  const range = hi - lo || 1;
+  const y = v => (1 - (v - lo) / range) * 100;
+  const x = i => (weeks.length <= 1 ? 50 : (weeks.indexOf(pts[i]) / (weeks.length - 1)) * 100);
+  // ป้ายแกนตั้งปัดเป็นช่วง 5 นาที — "08:03" อ่านเหมือนเป็นค่าจริงของใครสักคน ทั้งที่เป็นแค่ขีดกลาง
+  const ticks = [hi, Math.round((hi + lo) / 10) * 5, lo];
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ width: 42, flex: "0 0 auto", height: 132, position: "relative" }}>
+          {ticks.map((t, i) => (
+            <div key={i} style={{
+              position: "absolute", right: 0, top: (i / (ticks.length - 1)) * 100 + "%",
+              transform: "translateY(-50%)", fontSize: 10.5, color: "var(--muted)", fontVariantNumeric: "tabular-nums",
+            }}>{attMinToClock(t)}</div>
+          ))}
+        </div>
+        <div style={{ flex: 1, minWidth: 0, height: 132, position: "relative" }}>
+          {/* เส้นกริดแนวนอน */}
+          {ticks.map((t, i) => (
+            <div key={i} style={{
+              position: "absolute", left: 0, right: 0, top: (i / (ticks.length - 1)) * 100 + "%",
+              borderTop: "1px dashed var(--bdr)",
+            }} />
+          ))}
+          {/* เส้นข้อมูล + เส้นอ้างอิงเวลากะ — SVG ยืดตามกล่อง (preserveAspectRatio=none)
+              แต่ความหนาเส้นไม่ยืดตาม (vectorEffect) ไม่งั้นบนจอกว้างเส้นจะหนาผิดสัดส่วน */}
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none"
+            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", overflow: "visible" }}>
+            {refMin != null && (
+              <line x1="0" y1={y(refMin)} x2="100" y2={y(refMin)} stroke="#d94a3d" strokeWidth="1.5"
+                strokeDasharray="5 4" vectorEffect="non-scaling-stroke" />
+            )}
+            <polyline points={pts.map((w, i) => `${x(i)},${y(w.avgIn)}`).join(" ")}
+              fill="none" stroke="#2a7fd4" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round"
+              vectorEffect="non-scaling-stroke" />
+          </svg>
+          {/* จุด + ตัวเลข วางด้วย HTML — ตัวหนังสือใน SVG ที่ยืดแบบ none จะบิดตามแกน */}
+          {pts.map((w, i) => (
+            <div key={w.key} style={{ position: "absolute", left: x(i) + "%", top: y(w.avgIn) + "%", transform: "translate(-50%,-50%)" }}>
+              <div style={{ width: 9, height: 9, borderRadius: "50%", background: "#2a7fd4", border: "2px solid var(--paper)", boxShadow: "0 0 0 1px #2a7fd4" }} />
+              <div style={{
+                position: "absolute", left: "50%", bottom: 14, transform: "translateX(-50%)",
+                fontSize: 10.5, fontWeight: 800, color: "#2a7fd4", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums",
+              }}>{attMinToClock(w.avgIn)}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+        <div style={{ width: 42, flex: "0 0 auto" }} />
+        <div style={{ flex: 1, minWidth: 0, display: "flex" }}>
+          {weeks.map(w => (
+            <div key={w.key} style={{ flex: 1, minWidth: 0, textAlign: "center", fontSize: 10.5, color: "var(--muted)" }}>{w.label}</div>
+          ))}
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 14, justifyContent: "center", marginTop: 8, fontSize: 10.5, color: "var(--muted)", flexWrap: "wrap" }}>
+        <span><span style={{ display: "inline-block", width: 14, height: 2.5, background: "#2a7fd4", verticalAlign: "middle", marginRight: 5 }} />เวลาเข้างานเฉลี่ย</span>
+        {refMin != null && (
+          <span><span style={{ display: "inline-block", width: 14, borderTop: "2px dashed #d94a3d", verticalAlign: "middle", marginRight: 5 }} />เวลาเข้างานตามกะ ({attMinToClock(refMin)} น.)</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── กราฟแท่ง "เข้าห้องน้ำเฉลี่ยต่อวัน (นาที)" รายสัปดาห์ — HTML ล้วน เลื่อน/ย่อตามจอเอง ──
+function AttWeekBars({ weeks }) {
+  const has = (weeks || []).some(w => w.avgBath != null);
+  if (!has) {
+    return <div style={{ fontSize: 12.5, color: "var(--muted)", padding: "18px 0", textAlign: "center" }}>ยังไม่มีข้อมูล</div>;
+  }
+  const max = Math.max(1, ...weeks.map(w => w.avgBath || 0));
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 8, height: 132 }}>
+        {weeks.map(w => (
+          <div key={w.key} style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
+            <div style={{ fontSize: 11, fontWeight: 800, color: "#2a7fd4" }}>{w.avgBath == null ? "—" : Math.round(w.avgBath)}</div>
+            <div style={{
+              width: "100%", maxWidth: 54, borderRadius: "6px 6px 0 0",
+              height: Math.max(3, Math.round(((w.avgBath || 0) / max) * 100)) + "%",
+              background: w.avgBath ? "#2a7fd4" : "var(--bdr)",
+            }} />
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+        {weeks.map(w => (
+          <div key={w.key} style={{ flex: 1, minWidth: 0, textAlign: "center", fontSize: 10.5, color: "var(--muted)" }}>{w.label}</div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── บล็อกสรุปภาพรวมประจำเดือน (ท้ายหน้า) ──
+function AttSummaryStrip({ t }) {
+  const items = [
+    { emoji: "🕐", label: "เวลาทำงานรวม", value: attHoursLabel(t.workedMin), color: "#2a7fd4" },
+    { emoji: "🍽️", label: "เวลาพักรวม", value: attHoursLabel(t.breakMin), color: "#a07417" },
+    { emoji: "🚻", label: "เข้าห้องน้ำรวม", value: t.bathroomCount.toLocaleString("th-TH") + " ครั้ง", color: "#1f7f44" },
+    { emoji: "⏳", label: "เวลาห้องน้ำรวม", value: attHoursLabel(t.bathroomMin), color: "#7a5cc8" },
+    { emoji: "⏰", label: "มาสาย", value: t.lateDays + " วัน", sub: t.lateMin > 0 ? "รวม " + attMinLabel(t.lateMin) : "", color: t.lateDays ? "#c2410c" : "var(--muted)" },
+    { emoji: "📅", label: "ไม่มาทำงาน", value: t.daysAbsent + " วัน", sub: "มีกะแต่ไม่ได้ลงเวลา", color: t.daysAbsent ? "var(--dang)" : "var(--muted)" },
+  ];
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(148px, 1fr))", gap: 10 }}>
+      {items.map(x => (
+        <div key={x.label} style={{ display: "flex", gap: 9, alignItems: "center", minWidth: 0 }}>
+          <span style={{ fontSize: 18, flex: "0 0 auto" }}>{x.emoji}</span>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>{x.label}</div>
+            <div style={{ fontSize: 13.5, fontWeight: 800, color: x.color }}>{x.value}</div>
+            {x.sub && <div style={{ fontSize: 10.5, color: "var(--muted)" }}>{x.sub}</div>}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AttendanceReportView() {
   const [month, setMonth] = uS(attTodayKey().slice(0, 7));
-  const [rows, setRows] = uS(null);
+  const [staffId, setStaffId] = uS("");     // "" = ทุกคน
+  const [data, setData] = uS(null);
   const [loading, setLoading] = uS(true);
   const [err, setErr] = uS(null);
+  const mobile = useIsMobile(700);           // ≤700px = มือถือ/iPad แนวตั้งแคบ → ใช้การ์ดแทนตาราง
+  // ⚠️ จำนวนช่องของไทล์ตัวเลขกำหนดเป็นขั้น ไม่ใช่ auto-fit — auto-fit ที่ความกว้าง iPad
+  //    ให้ 5 ช่อง + ตกบรรทัดใบเดียว ซึ่งดูเหมือน "มีอันหนึ่งหลุดมา" มากกว่าเป็นตาราง
+  const narrow = useIsMobile(1150);
+  const statCols = mobile ? 2 : narrow ? 3 : 6;
 
   const load = uC(async (m) => {
     setLoading(true); setErr(null);
     try {
-      const d = await attPost({ action: "attendanceMonthlySummary", month: m || month });
-      if (d && d.success) setRows(d.data.rows || []);
-      else setErr((d && d.error) || "โหลดไม่สำเร็จ");
+      const d = await attPost({ action: "attendanceMonthlySummary", month: m });
+      if (d && d.success) setData(d.data);
+      else { setErr((d && d.error) || "โหลดไม่สำเร็จ"); setData(null); }
     } catch (e) { setErr(e.message); }
     finally { setLoading(false); }
-  }, [month]);
+  }, []);
 
-  uE(() => { load(month); }, [month]);
+  uE(() => { load(month); }, [month, load]);
 
+  const rows = (data && data.rows) || [];
+  // คนที่เลือกอาจไม่มีในเดือนที่เพิ่งสลับไป (เข้าใหม่/ลาออก) → ถอยกลับเป็น "ทั้งหมด" เอง
+  // ไม่งั้นจอว่างเปล่าโดยไม่มีอะไรบอกว่าทำไม
+  const picked = staffId ? rows.filter(r => r.staffId === staffId) : rows;
+  const scope = picked.length ? picked : rows;
+  const one = staffId && picked.length === 1 ? picked[0] : null;
+
+  // สลับเดือนไปเจอเดือนที่คนนั้นยังไม่มีในระบบ (เข้าใหม่/ลาออก) → เด้งกลับ "ทั้งหมด" ให้เอง
+  // ไม่งั้นช่องเลือกจะว่างเปล่าแต่หน้าโชว์ของทุกคน = ผู้ใช้อ่านว่าเป็นข้อมูลของคนที่เลือกอยู่
+  uE(() => {
+    if (staffId && rows.length && !rows.some(r => r.staffId === staffId)) setStaffId("");
+  }, [rows, staffId]);
+
+  const t = uM(() => attReportAgg(scope), [scope]);
+  const weeks = uM(() => attWeekBuckets(t.days), [t]);
+  const refMin = attTimeToMin(t.shiftStart);
   const isCurrentMonth = month === attTodayKey().slice(0, 7);
-  const sorted = rows ? [...rows].sort((a, b) => b.lateDays - a.lateDays || b.workedMin - a.workedMin) : [];
+  const monthLabel = attMonthLabel(month);
+  const scopeLabel = one ? one.name : "พนักงานทุกคน";
+  const presentPct = t.daysScheduled ? Math.round((t.daysPresent / t.daysScheduled) * 100) : null;
+
+  const doPrint = () => {
+    const name = `รายงานการเข้างาน _ ${scopeLabel} _ ${monthLabel}`;
+    if (typeof runQuoteDocPrint === "function") runQuoteDocPrint(name, mobile);
+    else window.print();
+  };
 
   return (
-    <div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-        <button className="btn ghost" onClick={() => setMonth(m => attShiftMonth(m, -1))} style={{ padding: "8px 14px" }}>◀</button>
-        <div style={{ fontSize: 16, fontWeight: 800, color: "var(--g-700)" }}>{attMonthLabel(month)}</div>
-        <button className="btn ghost" onClick={() => setMonth(m => attShiftMonth(m, 1))} disabled={isCurrentMonth} style={{ padding: "8px 14px", opacity: isCurrentMonth ? .4 : 1 }}>▶</button>
+    <div style={{ padding: 16, maxWidth: 1180, margin: "0 auto" }}>
+      {/* ── หัวเรื่อง + ตัวเลือก ── */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>📅 รายงานการเข้างาน (รายเดือน)</div>
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>
+            {scopeLabel} · เดือน{monthLabel}
+            {isCurrentMonth && data ? ` · ข้อมูลถึงวันที่ ${String(data.lastDate || "").slice(8) || "วันนี้"}` : ""}
+          </div>
+        </div>
+        <div className="no-print" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 4, border: "1.5px solid var(--bdr)", borderRadius: 10, background: "var(--paper)", padding: 2 }}>
+            <button className="btn ghost" onClick={() => setMonth(m => attShiftMonth(m, -1))} style={{ padding: "6px 11px", border: "none" }}>◀</button>
+            <div style={{ fontSize: 13, fontWeight: 800, minWidth: 108, textAlign: "center" }}>{monthLabel}</div>
+            <button className="btn ghost" onClick={() => setMonth(m => attShiftMonth(m, 1))} disabled={isCurrentMonth}
+              style={{ padding: "6px 11px", border: "none", opacity: isCurrentMonth ? .35 : 1 }}>▶</button>
+          </div>
+          <select value={staffId} onChange={e => setStaffId(e.target.value)}
+            style={{ minHeight: 40, padding: "8px 10px", borderRadius: 10, border: "1.5px solid var(--bdr)", background: "var(--paper)", fontFamily: "inherit", fontSize: 13, fontWeight: 600, maxWidth: 190 }}>
+            <option value="">👥 ทั้งหมด</option>
+            {rows.map(r => <option key={r.staffId} value={r.staffId}>{r.name}</option>)}
+          </select>
+          <button className="btn ghost" onClick={() => load(month)} disabled={loading} title="โหลดใหม่"
+            style={{ minHeight: 40, display: "flex", alignItems: "center", gap: 6 }}>
+            {loading ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }} /> : "🔄"}
+          </button>
+          <button className="btn ghost" onClick={doPrint} disabled={!data}
+            style={{ minHeight: 40, display: "flex", alignItems: "center", gap: 6 }}>🖨️ <span>บันทึก PDF</span></button>
+        </div>
       </div>
 
       {err && (
-        <div style={{ background: "#fff0f0", border: "1px solid var(--dang)", borderRadius: 10, padding: "10px 14px", color: "var(--dang)", marginBottom: 12, fontSize: 13 }}>⚠️ {err}</div>
+        <div style={{ background: "#fff0f0", border: "1px solid var(--dang)", borderRadius: 10, padding: "10px 14px", color: "var(--dang)", marginBottom: 12, fontSize: 13 }}>
+          ⚠️ {err}
+        </div>
       )}
 
-      {loading && !rows ? (
-        <div style={{ textAlign: "center", padding: 40, color: "var(--muted)" }}>
+      {loading && !data ? (
+        <div style={{ textAlign: "center", padding: 48, color: "var(--muted)" }}>
           <span className="spin" style={{ width: 24, height: 24, borderWidth: 3, display: "inline-block" }} />
+          <div style={{ marginTop: 8, fontSize: 13 }}>กำลังรวมข้อมูลเดือน{monthLabel}…</div>
         </div>
-      ) : sorted.length === 0 ? (
+      ) : !data ? null : rows.length === 0 ? (
         <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>ยังไม่มีพนักงานในระบบ</div>
-      ) : (
-        <div style={{ background: "var(--paper)", border: "1.5px solid var(--bdr)", borderRadius: 12, overflow: "hidden" }}>
-          {sorted.map((r, i) => (
-            <div key={r.staffId} style={{
-              display: "flex", alignItems: "center", gap: 10, padding: "12px 14px",
-              borderTop: i ? "1px solid var(--bdr)" : "none",
-            }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 14, fontWeight: 700 }}>{r.name}</div>
-                <div style={{ fontSize: 11.5, color: "var(--muted)" }}>
-                  {ROLE_TH_ATT[r.role] || r.role} · มา {r.daysWorked} วัน
-                  {r.daysAbsent > 0 ? ` · ⚠️ ขาด ${r.daysAbsent} วัน` : ""}
-                  {r.bathroomMin > 0 ? ` · ห้องน้ำ ${attMinLabel(r.bathroomMin)}` : ""}
-                </div>
-              </div>
-              <div style={{ textAlign: "right", flexShrink: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "var(--g-700)" }}>{attMinLabel(r.workedMin)}</div>
-                {r.lateDays > 0 && (
-                  <div style={{ fontSize: 11, color: "#a07417", fontWeight: 700 }}>สาย {r.lateDays} วัน ({attMinLabel(r.lateMin)})</div>
+      ) : (<>
+
+        {/* ── ไทล์ตัวเลขหลัก — คอมกว้าง 6 ช่อง · iPad 3 · มือถือ 2 (statCols) ── */}
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(${statCols}, minmax(0, 1fr))`, gap: 10, marginBottom: 16 }}>
+          <AttStat emoji="🗓️" color="#2a7fd4" label="วันทำงานทั้งหมด"
+            value={t.daysScheduled + " วัน"}
+            sub={one ? "วันที่มีกะของเดือนนี้" : "รวม " + t.people + " คน"} />
+          <AttStat emoji="✅" color="#1f7f44" label="วันมาทำงาน"
+            value={t.daysPresent + " วัน"}
+            sub={presentPct != null ? presentPct + "% ของวันที่มีกะ" : "ยังไม่มีกะกำหนด"} />
+          <AttStat emoji="🕗" color="#a07417" label="เวลาเข้างานเฉลี่ย"
+            value={attMinToClock(t.avgInMin) + " น."}
+            sub={t.shiftStart ? "เวลาเข้างานตามกะ " + t.shiftStart + " น." : "ไม่ได้ตั้งกะไว้"} />
+          <AttStat emoji="🏁" color="#7a5cc8" label="เวลาออกงานเฉลี่ย"
+            value={attMinToClock(t.avgOutMin) + " น."}
+            sub={t.shiftEnd ? "เวลาเลิกงานตามกะ " + t.shiftEnd + " น." : "ไม่ได้ตั้งกะไว้"} />
+          <AttStat emoji="🍽️" color="#1f6f8b" label="พักเฉลี่ย/วัน"
+            value={t.breakAvg == null ? "—" : Math.round(t.breakAvg) + " นาที"}
+            sub={"รวม " + attMinLabel(t.breakMin)} />
+          <AttStat emoji="🚻" color="#c2410c" label="เข้าห้องน้ำเฉลี่ย/วัน"
+            value={t.bathroomAvgCount == null ? "—" : (Math.round(t.bathroomAvgCount * 10) / 10) + " ครั้ง"}
+            sub={"รวม " + attMinLabel(t.bathroomMin)} />
+        </div>
+
+        {/* ── บอกวิธีอ่านเลข — ห้ามถอด: ค่าเฉลี่ยพวกนี้ตีความผิดง่ายมาก ── */}
+        <div style={{ background: "#fff8e1", border: "1.5px solid #ffe082", borderRadius: 12, padding: "10px 13px", marginBottom: 16, fontSize: 11.5, lineHeight: 1.7, color: "#7a5c00" }}>
+          <b>อ่านตัวเลขนี้ยังไง</b> — ค่าเฉลี่ยทุกช่องนับเฉพาะ<b>วันที่กดลงเวลาจริง</b> (วันหยุด/วันขาดไม่ถูกเอามาหาร) ·
+          "วันมาทำงาน" นับวันที่กดเข้างาน ส่วน "เวลาทำงานรวม" นับเฉพาะวันที่กด<b>ครบทั้งเข้าและออก</b> —
+          วันที่ลืมกดออกงานจึงมาแต่ไม่มีชั่วโมง (แก้ย้อนหลังได้ที่เมนู 🕐 ใครเข้างานวันนี้)
+          {t.noOutDays > 0 && <> · เดือนนี้มี <b>{t.noOutDays} วัน</b>ที่ไม่ได้กดออกงาน</>}
+        </div>
+
+        {/* ── ตารางหลัก: เลือกคน = รายวัน · ทั้งหมด = รายคน ── */}
+        {one ? (
+          <Card padding={true} style={{ marginBottom: 16 }} title="สรุปการเข้างานรายวัน"
+            sub={one.name + " · " + monthLabel}>
+            {mobile ? <AttDayCards days={one.days} /> : <AttDayTable days={one.days} />}
+          </Card>
+        ) : (
+          <Card padding={true} style={{ marginBottom: 16 }} title="สรุปรายคน"
+            sub={"แตะชื่อเพื่อดูรายวันของคนนั้น · " + rows.length + " คน"}>
+            <AttStaffTable rows={rows} mobile={mobile} onPick={setStaffId} />
+          </Card>
+        )}
+
+        {/* ── กราฟ 2 อัน — iPad แนวนอนวางคู่กัน, จอแคบเรียงลงมา ── */}
+        <div style={{ display: "grid", gridTemplateColumns: mobile ? "minmax(0,1fr)" : "repeat(auto-fit, minmax(320px, 1fr))", gap: 16, marginBottom: 16 }}>
+          <Card padding={true} title="เวลาเข้างานเฉลี่ย (เทียบตามสัปดาห์)"
+            sub={one ? one.name : "เฉลี่ยรวมทุกคน"}>
+            <AttWeekLine weeks={weeks} refMin={refMin} />
+          </Card>
+          <Card padding={true} title="เข้าห้องน้ำเฉลี่ยต่อวัน (นาที)"
+            sub="เวลาห้องน้ำไม่ถูกหักออกจากชั่วโมงทำงาน">
+            <AttWeekBars weeks={weeks} />
+          </Card>
+        </div>
+
+        <Card padding={true} title="สรุปภาพรวมประจำเดือน" sub={scopeLabel + " · เดือน" + monthLabel}>
+          <AttSummaryStrip t={t} />
+        </Card>
+      </>)}
+    </div>
+  );
+}
+
+// ── ตารางรายวันของคนเดียว (จอกว้าง) ──
+// ⚠️ โชว์ครบทุกวันเสมอ ไม่มี "ดูเพิ่มเติม" — แถวที่ซ่อนไว้จะหายไปจาก PDF ที่พิมพ์ด้วย
+//    ซึ่งเป็นเอกสารที่เจ้าของเอาไปคุยเรื่องเงินเดือน ขาดวันไหนไปแล้วไม่มีอะไรบอก
+function AttDayTable({ days }) {
+  const th = { padding: "9px 8px", fontSize: 11.5, fontWeight: 700, color: "var(--muted)", textAlign: "center", whiteSpace: "nowrap", borderBottom: "1.5px solid var(--bdr)" };
+  const td = { padding: "9px 8px", fontSize: 12.5, textAlign: "center", borderBottom: "1px solid var(--bdr)", fontVariantNumeric: "tabular-nums" };
+  return (
+    <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+      <table style={{ width: "100%", minWidth: 620, borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={{ ...th, textAlign: "left" }}>วันที่</th>
+            <th style={th}>วัน</th>
+            <th style={th}>เข้างาน</th>
+            <th style={th}>ออกงาน</th>
+            <th style={th}>ทำงาน</th>
+            <th style={th}>พัก<br />(นาที)</th>
+            <th style={th}>ห้องน้ำ<br />(ครั้ง)</th>
+            <th style={th}>ห้องน้ำ<br />(นาที)</th>
+            <th style={{ ...th, textAlign: "left" }}>หมายเหตุ</th>
+          </tr>
+        </thead>
+        <tbody>
+          {days.map(d => {
+            const note = attDayNote(d);
+            const off = !d.inTime;
+            return (
+              <tr key={d.date} style={{ background: d.absent ? "#fff5f5" : d.isToday ? "var(--g-50)" : "transparent" }}>
+                <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>
+                  {Number(d.date.slice(8, 10))} {ATT_MONTH_SHORT[Number(d.date.slice(5, 7)) - 1]}
+                </td>
+                <td style={{ ...td, color: d.dow === 0 ? "#c2410c" : "var(--text)" }}>{ATT_DOW_DOT_TH[d.dow]}</td>
+                <td style={{ ...td, fontWeight: 700, color: d.lateMin > 0 ? "#c2410c" : "var(--text)" }}>{off ? "-" : String(d.inTime).slice(0, 5)}</td>
+                <td style={{ ...td, fontWeight: 700 }}>{d.outTime ? String(d.outTime).slice(0, 5) : "-"}</td>
+                <td style={td}>{d.workedMin != null ? attMinLabel(d.workedMin) : "-"}</td>
+                <td style={td}>{off ? "-" : (d.breakMin || 0)}</td>
+                <td style={td}>{off ? "-" : (d.bathroomCount || 0)}</td>
+                <td style={td}>{off ? "-" : (d.bathroomMin || 0)}</td>
+                <td style={{ ...td, textAlign: "left", color: ATT_NOTE_COLOR[note.tone], fontWeight: note.tone === "muted" ? 400 : 700 }}>{note.text}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── รายวันบนมือถือ — การ์ดต่อวัน (ตาราง 9 คอลัมน์บนจอ 360px อ่านไม่ได้) ──
+function AttDayCards({ days }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {days.map(d => {
+        const note = attDayNote(d);
+        const off = !d.inTime;
+        return (
+          <div key={d.date} style={{
+            border: "1.5px solid " + (d.absent ? "var(--dang)" : "var(--bdr)"), borderRadius: 12, padding: "10px 12px",
+            background: d.isToday ? "var(--g-50)" : "var(--paper)", display: "flex", gap: 11, alignItems: "flex-start",
+          }}>
+            <div style={{ width: 40, flex: "0 0 auto", textAlign: "center" }}>
+              <div style={{ fontSize: 17, fontWeight: 800, lineHeight: 1.1 }}>{Number(d.date.slice(8, 10))}</div>
+              <div style={{ fontSize: 10.5, color: d.dow === 0 ? "#c2410c" : "var(--muted)" }}>{ATT_DOW_DOT_TH[d.dow]}</div>
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 700 }}>
+                {off ? <span style={{ color: "var(--muted)" }}>—</span> : (
+                  <>
+                    <span style={{ color: d.lateMin > 0 ? "#c2410c" : "var(--text)" }}>{String(d.inTime).slice(0, 5)}</span>
+                    {" – "}
+                    {d.outTime ? String(d.outTime).slice(0, 5) : <span style={{ color: "var(--muted)", fontWeight: 600 }}>ยังไม่ออก</span>}
+                  </>
                 )}
+                {d.workedMin != null && <span style={{ fontSize: 11.5, color: "var(--muted)", fontWeight: 600 }}> · {attMinLabel(d.workedMin)}</span>}
+              </div>
+              {!off && (
+                <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>
+                  🍽️ พัก {d.breakMin || 0} นาที · 🚻 {d.bathroomCount || 0} ครั้ง ({d.bathroomMin || 0} นาที)
+                </div>
+              )}
+              <div style={{ fontSize: 11.5, marginTop: 3, color: ATT_NOTE_COLOR[note.tone], fontWeight: note.tone === "muted" ? 400 : 700 }}>
+                {note.text}
               </div>
             </div>
-          ))}
-        </div>
-      )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── ตารางรายคน (โหมด "ทั้งหมด") = ของเดิมจาก "📊 สรุปเดือน" ที่ยุบเข้ามา ──
+// เรียงคนที่ขาด/สายมากสุดขึ้นก่อน — เจ้าของเปิดรายงานนี้เพื่อหา "ใครต้องคุยด้วย" เป็นอันดับแรก
+function AttStaffTable({ rows, mobile, onPick }) {
+  const sorted = [...rows].sort((a, b) => b.daysAbsent - a.daysAbsent || b.lateDays - a.lateDays || b.workedMin - a.workedMin);
+  if (mobile) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {sorted.map(r => (
+          <button key={r.staffId} onClick={() => onPick(r.staffId)} style={{
+            textAlign: "left", fontFamily: "inherit", cursor: "pointer", width: "100%",
+            border: "1.5px solid var(--bdr)", borderRadius: 12, padding: "11px 12px", background: "var(--paper)",
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</div>
+                <div style={{ fontSize: 11, color: "var(--muted)" }}>{ROLE_TH_ATT[r.role] || r.role}</div>
+              </div>
+              <div style={{ textAlign: "right", flex: "0 0 auto" }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: "var(--g-700)" }}>{attMinLabel(r.workedMin)}</div>
+                <div style={{ fontSize: 11, color: "var(--muted)" }}>มา {r.daysPresent}/{r.daysScheduled} วัน</div>
+              </div>
+            </div>
+            <div style={{ fontSize: 11.5, marginTop: 5, display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ color: r.lateDays ? "#a07417" : "var(--muted)", fontWeight: r.lateDays ? 700 : 400 }}>⏰ สาย {r.lateDays} วัน</span>
+              <span style={{ color: r.daysAbsent ? "var(--dang)" : "var(--muted)", fontWeight: r.daysAbsent ? 700 : 400 }}>📅 ขาด {r.daysAbsent} วัน</span>
+              <span style={{ color: "var(--muted)" }}>🚻 {r.bathroomCount} ครั้ง</span>
+              <span style={{ color: "var(--g-700)", fontWeight: 700 }}>ดูรายวัน ▸</span>
+            </div>
+          </button>
+        ))}
+      </div>
+    );
+  }
+  const th = { padding: "9px 8px", fontSize: 11.5, fontWeight: 700, color: "var(--muted)", textAlign: "center", whiteSpace: "nowrap", borderBottom: "1.5px solid var(--bdr)" };
+  const td = { padding: "10px 8px", fontSize: 12.5, textAlign: "center", borderBottom: "1px solid var(--bdr)", fontVariantNumeric: "tabular-nums" };
+  return (
+    <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+      <table style={{ width: "100%", minWidth: 640, borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={{ ...th, textAlign: "left" }}>พนักงาน</th>
+            <th style={th}>มาทำงาน</th>
+            <th style={th}>ทำงานรวม</th>
+            <th style={th}>เข้าเฉลี่ย</th>
+            <th style={th}>สาย</th>
+            <th style={th}>ขาด</th>
+            <th style={th}>พักรวม</th>
+            <th style={th}>ห้องน้ำ</th>
+            <th style={th}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map(r => {
+            const a = attReportAgg([r]);
+            return (
+              <tr key={r.staffId} onClick={() => onPick(r.staffId)} style={{ cursor: "pointer" }}>
+                <td style={{ ...td, textAlign: "left" }}>
+                  <div style={{ fontWeight: 800 }}>{r.name}</div>
+                  <div style={{ fontSize: 11, color: "var(--muted)" }}>{ROLE_TH_ATT[r.role] || r.role}</div>
+                </td>
+                <td style={td}>{r.daysPresent}<span style={{ color: "var(--muted)" }}>/{r.daysScheduled}</span></td>
+                <td style={{ ...td, fontWeight: 700 }}>{attMinLabel(r.workedMin)}</td>
+                <td style={td}>{attMinToClock(a.avgInMin)}</td>
+                <td style={{ ...td, color: r.lateDays ? "#a07417" : "var(--muted)", fontWeight: r.lateDays ? 700 : 400 }}>
+                  {r.lateDays} วัน{r.lateMin > 0 ? <div style={{ fontSize: 10.5, fontWeight: 400 }}>{attMinLabel(r.lateMin)}</div> : null}
+                </td>
+                <td style={{ ...td, color: r.daysAbsent ? "var(--dang)" : "var(--muted)", fontWeight: r.daysAbsent ? 700 : 400 }}>{r.daysAbsent} วัน</td>
+                <td style={td}>{attMinLabel(r.breakMin)}</td>
+                <td style={td}>{r.bathroomCount} ครั้ง<div style={{ fontSize: 10.5, color: "var(--muted)" }}>{attMinLabel(r.bathroomMin)}</div></td>
+                <td style={{ ...td, color: "var(--g-700)", fontWeight: 700, whiteSpace: "nowrap" }}>รายวัน ▸</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -576,10 +1123,11 @@ function attSiteBucket(row) {
   return null;
 }
 
-function AttendanceTodayView({ canEdit = true } = {}) {
-  // สลับ "วันนี้"/"สรุปเดือน" — เฉพาะ owner/dev (canEdit) เท่านั้นที่เห็นตัวเลือกนี้
-  // storedevice (เครื่องร้าน) เห็นแค่ "วันนี้" เหมือนเดิม เพราะสรุปทั้งเดือนใกล้เคียงข้อมูลเงินเดือน
-  const [mode, setMode] = uS("today");
+// ⚠️ "📊 สรุปเดือน" ที่เคยเป็น Seg อยู่ตรงนี้ **ย้ายออกไปเป็นแท็บของตัวเองแล้ว**
+//    (📅 รายงานการเข้างาน — AttendanceReportView ในหมวด "ภาพรวม", ส.ค. 2026 ตามที่เจ้าของสั่ง)
+//    หน้านี้จึงเหลือหน้าที่เดียว = "ตอนนี้ใครอยู่ไหน + แก้เวลาย้อนหลัง"
+//    ห้ามเอา Seg กลับมา — สรุปทั้งเดือนจะมี 2 ที่ที่ไม่ตรงกันโดยไม่มีอะไรบอกว่าต้องเชื่ออันไหน
+function AttendanceTodayView({ canEdit = true, onNav } = {}) {
   const [rows, setRows] = uS([]);
   const [date, setDate] = uS(attTodayKey());
   const [loading, setLoading] = uS(true);
@@ -627,17 +1175,6 @@ function AttendanceTodayView({ canEdit = true } = {}) {
 
   return (
     <div style={{ padding: 16, maxWidth: 720, margin: "0 auto" }}>
-      {canEdit && (
-        <div style={{ marginBottom: 16 }}>
-          <Seg value={mode} onChange={setMode} options={[
-            { value: "today", label: "🕐 วันนี้" },
-            { value: "summary", label: "📊 สรุปเดือน" },
-          ]} />
-        </div>
-      )}
-
-      {mode === "summary" ? <AttendanceMonthlySummaryView /> : (
-      <>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, gap: 8, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-700)" }}>
@@ -782,7 +1319,14 @@ function AttendanceTodayView({ canEdit = true } = {}) {
           onSaved={(msg) => { setFix(null); setToast({ kind: "ok", text: msg }); load(); }}
         />
       )}
-      </>
+
+      {/* ทางไปรายงานทั้งเดือน — ของเดิมเคยเป็นปุ่มสลับบนสุดของหน้านี้ ย้ายไปเป็นแท็บของตัวเองแล้ว
+          ถ้าไม่ทิ้งทางเข้าไว้ตรงนี้ เจ้าของที่คุ้นกับปุ่มเดิมจะหาสรุปเดือนไม่เจอ (คนละหมวดกันแล้ว) */}
+      {canEdit && onNav && (
+        <button className="btn ghost" onClick={() => onNav("attreport")}
+          style={{ width: "100%", marginTop: 6, padding: "12px", fontSize: 13.5, fontWeight: 700 }}>
+          📅 ดูรายงานการเข้างานทั้งเดือน ▸
+        </button>
       )}
     </div>
   );

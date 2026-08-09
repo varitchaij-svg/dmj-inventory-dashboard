@@ -239,12 +239,12 @@ function attSummarize(events, shift) {
   let lastOut = null;
   for (let i = events.length - 1; i >= 0; i--) { if (events[i].type === "out") { lastOut = events[i]; break; } }
 
-  let breakMin = 0, openBreak = null, forgotBreakEnd = false;
-  let bathroomMin = 0, openBathroom = null, forgotBathroomEnd = false;
+  let breakMin = 0, openBreak = null, forgotBreakEnd = false, breakCount = 0;
+  let bathroomMin = 0, openBathroom = null, forgotBathroomEnd = false, bathroomCount = 0;
   events.forEach(function (e) {
-    if (e.type === "breakStart") openBreak = e;
+    if (e.type === "breakStart") { openBreak = e; breakCount++; }
     else if (e.type === "breakEnd" && openBreak) { breakMin += Math.round((e.serverTs - openBreak.serverTs) / 60000); openBreak = null; }
-    else if (e.type === "bathroomStart") openBathroom = e;
+    else if (e.type === "bathroomStart") { openBathroom = e; bathroomCount++; }
     else if (e.type === "bathroomEnd" && openBathroom) { bathroomMin += Math.round((e.serverTs - openBathroom.serverTs) / 60000); openBathroom = null; }
   });
   if (openBreak) {
@@ -268,7 +268,7 @@ function attSummarize(events, shift) {
   return {
     inTime: firstIn ? firstIn.time : null,
     outTime: lastOut ? lastOut.time : null,
-    breakMin, bathroomMin, workedMin, lateMin,
+    breakMin, breakCount, bathroomMin, bathroomCount, workedMin, lateMin,
     onBreak: !!(openBreak && !lastOut),
     onBathroom: !!(openBathroom && !lastOut),
     forgotBreakEnd,
