@@ -533,9 +533,11 @@ function NotiBell({ onNavigate }) {
   const openItem = useCallback((it) => {
     if (!it.read) markRead([it.id], false);
     setOpen(false);
-    // ส่ง focus (SKU) ไปด้วย — แท็บอย่างเดียวยังไม่พอ ปลายทางมีเป็นสิบใบต้องไล่หาเอง
-    // แถวเก่าที่ยังไม่มีคอลัมน์นี้ → undefined → ปลายทางแค่สลับแท็บเหมือนเดิม
-    if (it.tab && typeof onNavigate === 'function') onNavigate(it.tab, it.focus);
+    // ส่ง focus (SKU) + view (ตัวกรองปลายทาง) ไปด้วย — แท็บอย่างเดียวยังไม่พอ
+    //   focus = "พาไปหาของชิ้นไหน" (ออเดอร์ใหม่/รับไม่ครบ = SKU เดียว)
+    //   view  = "เปิดมาแล้วต้องเห็นมุมมองไหน" (ของโอนมาทั้งชุด → ตัวกรอง "ส่งแล้ว" ที่กดรับได้)
+    // แถวเก่าที่ยังไม่มีคอลัมน์เหล่านี้ → undefined → ปลายทางแค่สลับแท็บเหมือนเดิม
+    if (it.tab && typeof onNavigate === 'function') onNavigate(it.tab, it.focus, it.view);
   }, [markRead, onNavigate]);
 
   if (off) return null;

@@ -394,7 +394,27 @@ function startServer() {
           else if (flashed !== 'VAS001') {
             status = 'FOCUS_FAIL'; note = `กะพริบที่ "${flashed}" (คาด VAS001) — ไม่ได้เด้งไปที่ของที่ต้องจัด`;
           }
-          else note = 'badge/panel/nav/เด้งไปที่สินค้า ครบ';
+          else {
+            // ── แจ้งเตือน "ของโอนมาหน้าร้าน" → ต้องพาไปหน้า **ที่กดรับของได้** ──
+            // คือแท็บ "รายการสั่งของ" ตัวกรอง "🚚 ส่งแล้ว" ไม่ใช่แค่เปิดแท็บแล้วปล่อยค้าง
+            // ที่ตัวกรองเดิม (ตอนนี้คือ "ทั้งหมด" จากการเด้ง focus รอบก่อนหน้า) —
+            // เปิดผิดตัวกรอง = ของที่แจ้งเตือนพูดถึงไม่อยู่ในจอเลย เงียบสนิท
+            await page.locator('.noti-btn').first().click({ timeout: 2000 });
+            await page.waitForTimeout(300);
+            await page.locator('.noti-item').nth(1).click({ timeout: 2000 });
+            await page.waitForTimeout(600);
+            const activeSeg = (await page.locator('.page-head .seg-btn.active').first().textContent()
+              .catch(() => '') || '').trim();
+            // ยืนยันด้วยเนื้อหาจริงบนจอด้วย ไม่ใช่แค่ปุ่มที่ active — หัวข้อของโหมด "ส่งแล้ว"
+            // คือ "N รายการส่งออก" (โหมดอื่นขึ้น "รอดำเนินการ") + ต้องเห็นเลขที่ใบโอนจริง
+            const body = await page.locator('body').innerText().catch(() => '');
+            if (!/ส่งแล้ว/.test(activeSeg)) {
+              status = 'VIEW_FAIL';
+              note = `กดแจ้งเตือนของโอนแล้วตัวกรองเป็น "${activeSeg}" (คาด "🚚 ส่งแล้ว")`;
+            } else if (!/รายการส่งออก/.test(body) || !/TF-20250601-001/.test(body)) {
+              status = 'VIEW_FAIL'; note = 'ตัวกรองถูกแต่รายการของที่รอรับไม่ขึ้นบนจอ';
+            } else note = 'badge/panel/nav/เด้งไปที่สินค้า/ของโอน→หน้ากดรับของ ครบ';
+          }
         }
       }
     } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
