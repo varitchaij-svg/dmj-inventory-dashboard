@@ -3832,9 +3832,13 @@ function transferStockBatch(ss, list, actor, clientLoadedAt, tid) {
       }));
       // แจ้งหน้าร้านว่ามีของกำลังมา — เรื่องนี้ไม่เคยแจ้ง LINE เลย (ไม่คุ้ม quota)
       // รวมทั้งชุดเป็นแจ้งเตือนเดียว ไม่ยิงราย SKU (โอนทีนึงมีหลายสิบตัว)
+      // ⚠️ ปลายทางคือแท็บ "รายการสั่งของ" ตัวกรอง "🚚 ส่งแล้ว" — ที่เดียวที่ **กดรับของได้จริง**
+      //    (เดิมพาไปแท็บ "สต๊อก" ซึ่งดูจำนวนได้อย่างเดียว กดรับไม่ได้ = แจ้งไปแล้วก็ยังต้องไล่หาเอง)
+      //    ที่เดียวกับที่ชิป "🚚 ของรอรับ" บนหน้าหลักพาไป — สองทางเข้าต้องจบที่หน้าเดียวกัน
+      //    ไม่ใส่ focus โดยตั้งใจ: โอนทีนึงหลายสิบ SKU เลือกตัวเดียวมาเด้ง = พาไปผิดตัว
       pushInappNoti_({
         audience: 'role:frontstore,employee,owner',
-        type: 'shipment', tab: 'stock',
+        type: 'shipment', tab: 'orders', view: 'shipped',
         title: '🚚 ของโอนมาหน้าร้าน ' + transferred.length + ' รายการ',
         body: transferred.slice(0, 3).map(function (t) { return t.name || t.sku; }).join(', ')
               + (transferred.length > 3 ? ' และอีก ' + (transferred.length - 3) + ' รายการ' : '')
@@ -9681,15 +9685,19 @@ function handleOrder_(params) {
 //   เปิดจริงเมื่อเจ้าของรัน setupInappNoti() 1 ครั้งใน GAS editor · ปิดด้วย disableInappNoti()
 // ══════════════════════════════════════════════════════════════════════════
 
-// คอลัมน์ชีตแจ้งเตือนในแอป (1-indexed): A..M
-// ⚠️ IMAGE/FOCUS ต่อท้าย (ไม่แทรกกลาง) — ชีตจริงมีแถวเก่าที่เขียนด้วย layout 11/12
+// คอลัมน์ชีตแจ้งเตือนในแอป (1-indexed): A..N
+// ⚠️ IMAGE/FOCUS/VIEW ต่อท้าย (ไม่แทรกกลาง) — ชีตจริงมีแถวเก่าที่เขียนด้วย layout 11/12/13
 // คอลัมน์อยู่แล้ว แทรกกลางจะทำให้ตำแหน่งคอลัมน์เดิม (READBY/EXPIRES) เพี้ยนย้อนหลังทั้งชีต
 // FOCUS = SKU ที่ต้องพาไปดูต่อหลังกดแจ้งเตือน (ว่าง = พาไปแค่แท็บเหมือนเดิม — แถวเก่าทุกแถว
 // เป็นแบบนี้ จึงต้องทนค่าว่างได้เสมอ ห้ามถือว่า "ต้องมี")
+// VIEW  = "เปิดแท็บนั้นแล้วให้ตั้งตัวกรองอะไร" (ว่าง = ปล่อยตามตัวกรองเดิมของผู้ใช้)
+//   คนละเรื่องกับ FOCUS: FOCUS = "พาไปหาของชิ้นไหน" · VIEW = "เปิดมาแล้วต้องเห็นมุมมองไหน"
+//   จำเป็นกับเรื่องที่รวมหลาย SKU (เช่นของโอนมาทั้งชุด) ซึ่งใส่ FOCUS ไม่ได้ แต่ยังต้องพาไป
+//   ให้ตรงหน้าที่ทำงานนั้นได้จริง
 var INAPP_COL = { ID:1, CREATED:2, AUDIENCE:3, TYPE:4, TITLE:5, BODY:6,
-                  TAB:7, BY:8, DEDUP:9, READBY:10, EXPIRES:11, IMAGE:12, FOCUS:13 };
+                  TAB:7, BY:8, DEDUP:9, READBY:10, EXPIRES:11, IMAGE:12, FOCUS:13, VIEW:14 };
 var INAPP_HEADERS = ["id","createdAt","audience","type","title","body",
-                     "tab","createdBy","dedupKey","readBy","expiresAt","image","focusSku"];
+                     "tab","createdBy","dedupKey","readBy","expiresAt","image","focusSku","view"];
 
 var INAPP_KEEP_DAYS_DEFAULT = 14;   // ปรับได้ที่ Script Property INAPP_NOTI_KEEP_DAYS
 var INAPP_MAX_RETURN        = 30;   // จำนวนแถวที่ส่งกลับให้ frontend ต่อรอบ poll
@@ -9733,8 +9741,30 @@ function inappIsRead_(readBy, staffId) {
   return false;
 }
 
+// ── กดแจ้งเตือนแถวนี้แล้วต้องไปที่ไหน ────────────────────────────────────
+// ตัดสินตอน "อ่าน" ไม่ใช่ตอน "เขียน" เพราะแถวที่เขียนไปแล้วแก้ไม่ได้ — ของโอนมาหน้าร้าน
+// รอบก่อน ๆ ยังค้างอยู่ในชีต (อายุ 14 วัน) และเป็นแถวที่ผู้ใช้กำลังกดอยู่จริงตอนนี้
+//
+// ที่มา: แจ้งเตือน "🚚 ของโอนมาหน้าร้าน N รายการ · รอกดรับ" เดิมพาไปแท็บ "สต๊อก" ซึ่ง
+// **กดรับของไม่ได้** · หน้าที่กดรับได้จริงคือแท็บ "รายการสั่งของ" ตัวกรอง "🚚 ส่งแล้ว"
+// (ที่เดียวกับที่ชิป "🚚 ของรอรับ" บนหน้าหลักพาไป) → กดตามแจ้งเตือนไปแล้วไม่เจอสิ่งที่
+// แจ้งเตือนพูดถึง เงียบสนิท ไม่มีอะไรบอกว่าทำไม
+//
+// ⚠️ เงื่อนไขต้องแคบ: เฉพาะ type 'shipment' ที่ชี้ไป 'stock' และ **ยังไม่มี view ของตัวเอง**
+//    — 'shipment' ยังถูกใช้กับ "รับของไม่ครบ" (tab 'tracking') ซึ่งพาไปถูกอยู่แล้ว
+//    ห้ามเหมารวมทุกแถวที่ type ตรง ไม่งั้นแก้ที่หนึ่งพังอีกที่โดยไม่มี error ให้เห็น
+// pure function — ไม่แตะชีต ไม่แตะ Script Property (เทสต์ eval ตรงจากไฟล์นี้)
+function inappNotiRoute_(type, tab, view) {
+  var t = String(tab || '');
+  var v = String(view || '');
+  if (!v && String(type || '') === 'shipment' && t === 'stock') {
+    return { tab: 'orders', view: 'shipped' };
+  }
+  return { tab: t, view: v };
+}
+
 // ── เขียนแจ้งเตือน 1 เรื่องเข้าชีต ────────────────────────────────────────
-// opts: {audience, type, title, body, tab, by, dedupKey, ttlDays, image, focus}
+// opts: {audience, type, title, body, tab, view, by, dedupKey, ttlDays, image, focus}
 // focus = SKU เดียวที่ผู้ใช้ต้องไปทำต่อ — ใส่ได้เฉพาะแจ้งเตือนที่ผูกกับสินค้าตัวเดียวจริง ๆ
 //   (ออเดอร์ใหม่ / รับของไม่ครบ) · เรื่องที่รวมหลาย SKU (โอนทั้งชุด, สต็อกใกล้หมด) **ห้ามใส่**
 //   เพราะเลือกตัวใดตัวหนึ่งมาเด้ง = พาไปผิดตัวโดยที่ผู้ใช้ไม่รู้ว่ายังมีตัวอื่นอีก
@@ -9785,6 +9815,7 @@ function pushInappNoti_(opts) {
       new Date(now.getTime() + ttlDays * 86400000),
       String(opts.image || ''),   // รูปสินค้า — ใส่เฉพาะแจ้งเตือนที่ผูกกับ SKU เดียว (ดูหมายเหตุ IMAGE ด้านบน)
       String(opts.focus || ''),   // SKU ที่ต้องพาไปดูต่อ (ว่าง = พาไปแค่แท็บ)
+      String(opts.view  || ''),   // ตัวกรอง/มุมมองที่ต้องตั้งให้ตอนเปิดแท็บ (ว่าง = ตามที่ผู้ใช้ค้างไว้)
     ]);
   } catch (e) {
     Logger.log('pushInappNoti_ error (ข้ามไป ไม่กระทบงานหลัก): ' + e);
@@ -9827,13 +9858,16 @@ function listInappNotiHandler_(e) {
       if (!inappAudienceMatch_(r[INAPP_COL.AUDIENCE - 1], sess.staffId, sess.role)) continue;
       var isRead = inappIsRead_(r[INAPP_COL.READBY - 1], sess.staffId);
       if (!isRead) unread++;
+      // ปลายทางตัดสินตอนอ่าน — แถวที่เขียนไปแล้วยังพาไปหน้าที่ทำงานนั้นไม่ได้ (ดู inappNotiRoute_)
+      var route = inappNotiRoute_(r[INAPP_COL.TYPE - 1], r[INAPP_COL.TAB - 1], r[INAPP_COL.VIEW - 1]);
       items.push({
         id:    String(r[INAPP_COL.ID - 1] || ''),
         ts:    r[INAPP_COL.CREATED - 1] ? new Date(r[INAPP_COL.CREATED - 1]).getTime() : 0,
         type:  String(r[INAPP_COL.TYPE - 1] || 'system'),
         title: String(r[INAPP_COL.TITLE - 1] || ''),
         body:  String(r[INAPP_COL.BODY - 1] || ''),
-        tab:   String(r[INAPP_COL.TAB - 1] || ''),
+        tab:   route.tab,
+        view:  route.view,   // ตัวกรองที่ต้องตั้งให้ตอนเปิดแท็บ ('' = ปล่อยตามที่ผู้ใช้ค้างไว้)
         by:    String(r[INAPP_COL.BY - 1] || ''),
         image: String(r[INAPP_COL.IMAGE - 1] || ''),
         focus: String(r[INAPP_COL.FOCUS - 1] || ''),   // แถวเก่าไม่มีคอลัมน์นี้ → '' = ไม่เด้งไปไหนต่อ
