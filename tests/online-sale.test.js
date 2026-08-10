@@ -60,6 +60,7 @@ const { POS_UNPAID_METHODS_, shippingRemark_, SALE_BILL_HEADERS_, appendSaleBill
     grab(GS, /function zortOrderAmounts_\(goodsTotal, shipFeeInZort, vatRate\) \{[\s\S]*?\n\}/, 'zortOrderAmounts_'),
     grab(GS, /function computeBillTotalsGs_\(items, opts\) \{[\s\S]*?\n\}/, 'computeBillTotalsGs_'),
     grab(GS, /var SALE_BILL_HEADERS_ = \[[\s\S]*?\n\];/, 'SALE_BILL_HEADERS_'),
+    grab(GS, /var COL_SB_CID\s+= \d+;/, 'COL_SB_CID'),   // appendSaleBillRow_ ตั้ง numberFormat คอลัมน์นี้
     grab(GS, /function saleBillsSheet_\(ss\) \{[\s\S]*?\n\}/, 'saleBillsSheet_'),
     grab(GS, /function saleBillNextId_\(sh, dateStr\) \{[\s\S]*?\n\}/, 'saleBillNextId_'),
     grab(GS, /function appendSaleBillRow_\(ss, rec\) \{[\s\S]*?\n\}/, 'appendSaleBillRow_'),
@@ -372,9 +373,13 @@ describe('ชีต "บิลขาย" — ต่อคอลัมน์ท�
     ]);
   });
   it('คอลัมน์ใหม่ของขายออนไลน์ต่อท้าย W..AC', () => {
-    expect(SALE_BILL_HEADERS_.slice(22)).toEqual([
+    expect(SALE_BILL_HEADERS_.slice(22, 29)).toEqual([
       'ค่าจัดส่ง', 'ยอดเก็บลูกค้า', 'ขนส่ง', 'เลขพัสดุ', 'ผู้รับ', 'ที่อยู่จัดส่ง', 'โหมดขาย',
     ]);
+  });
+  it('billCid ต่อท้ายเป็นคอลัมน์ AD (ตัวกันออกบิลซ้ำ) — ต่อท้ายเท่านั้น', () => {
+    expect(SALE_BILL_HEADERS_[29]).toBe('billCid');
+    expect(SALE_BILL_HEADERS_.length).toBe(30);
   });
 
   it('appendSaleBillRow_ เขียนค่าครบเท่าจำนวนหัวคอลัมน์ (ขาด/เกิน = ทุกคอลัมน์หลังจากนั้นเลื่อน)', () => {
@@ -479,6 +484,68 @@ describe('meta — createSaleBill ต่อสายถูกจุด', () => {
     // (ดู "เคสที่ของเดิมพัง" ใน describe('buildZortLineItems_' ข้างบน)
     expect(fn).toMatch(/productList\s*=\s*buildZortLineItems_\(items, factor\)/);
     expect(fn).not.toMatch(/Math\.round\(\(Number\(it\.price\)/);
+  });
+
+  // 🔴 บั๊กจริง ส.ค. 2026: ออกบิลสำเร็จแล้วจอขึ้น "ไม่สำเร็จ" (GAS ตอบ HTML/browser ตัดสาย)
+  //    → ผู้ขายกดใหม่ = บิลซ้ำ + สต็อกหักซ้ำ + ใบกำกับซ้ำ (ไม่มีตัวกันซ้ำเหมือน order/transfer)
+  it('เช็ค billCid ซ้ำ "ในล็อก" ก่อนแตะ ZORT — เจอแล้วคืนผลเดิม ไม่ยิงใหม่', () => {
+    // การเช็คต้องอยู่ "หลัง" tryLock และ "ก่อน" การยิง AddOrder ตัวแรก
+    const lockIdx = fn.indexOf('lock.tryLock');
+    const dedupIdx = fn.indexOf('findBillCidRow_');
+    const addOrderIdx = fn.indexOf('/Order/AddOrder');
+    expect(lockIdx).toBeGreaterThan(-1);
+    expect(dedupIdx).toBeGreaterThan(lockIdx);      // เช็คในล็อก
+    expect(dedupIdx).toBeLessThan(addOrderIdx);     // เช็คก่อนแตะ ZORT
+    expect(fn).toMatch(/return ok\(Object\.assign\(\{\}, _replay, \{ dedup: true \}\)\)/);
+  });
+  it('เก็บผลไว้ตอบซ้ำ (cache) หลังออกบิลสำเร็จ — action=billCheck ใช้ตอบ', () => {
+    expect(fn).toMatch(/CacheService\.getScriptCache\(\)\.put\('sbill_' \+ billCid/);
+    expect(fn).toMatch(/billCid: billCid/);   // ส่ง billCid ลงชีตด้วย (ถาวรกว่า cache)
+  });
+  it('createSaleBill อยู่ใน IMMEDIATE_GATE_ACTIONS_ (action กระทบเงิน/สต็อกจริง)', () => {
+    const gate = grab(GS, /var IMMEDIATE_GATE_ACTIONS_ = \{[\s\S]*?\n\};/, 'IMMEDIATE_GATE_ACTIONS_');
+    expect(gate).toMatch(/createSaleBill:\s*\["saler", "storedevice"\]/);
+  });
+});
+
+// findBillCidRow_ + billCheckHandler_ — รันจริงกับชีตจำลอง
+describe('findBillCidRow_ / billCheckHandler_ — ยืนยันบิลจากชีตเมื่อ cache หลุด', () => {
+  // ประกอบสภาพแวดล้อม eval เฉพาะ findBillCidRow_ (pure พอที่จะรันกับ mock ได้)
+  const findBillCidRow_ = (() => {
+    const src = grab(GS, /function findBillCidRow_\(ss, cid\) \{[\s\S]*?\n\}/, 'findBillCidRow_') +
+                grab(GS, /var COL_SB_CID\s+= \d+;/, 'COL_SB_CID') +
+                grab(GS, /var SB_CID_SCAN_ROWS\s+= \d+;/, 'SB_CID_SCAN_ROWS');
+    // eslint-disable-next-line no-new-func
+    return new Function('SHEET_SALE_BILLS', src + '\nreturn findBillCidRow_;')('บิลขาย');
+  })();
+
+  // ชีตจำลอง: 1 แถวบิล ยอด 476 billCid=SB-x อยู่คอลัมน์ที่ 30 (index 29)
+  function sheetWith(cidVal) {
+    const row = new Array(30).fill('');
+    row[0] = 'SB-20260810-0001'; row[3] = 'RC-202608007'; row[4] = 'IV-1';
+    row[8] = 476; row[9] = 444.86; row[10] = 31.14;
+    row[22] = 0; row[23] = 476; row[29] = cidVal;
+    return {
+      getSheetByName: () => ({
+        getLastRow: () => 2,
+        getRange: (from, c, n, w) => ({ getValues: () => [row.slice(c - 1, c - 1 + w)] }),
+      }),
+    };
+  }
+
+  it('เจอ billCid → คืนเลขบิล/ยอด/ธง fromSheet', () => {
+    const hit = findBillCidRow_(sheetWith('SB-x'), 'SB-x');
+    expect(hit).toBeTruthy();
+    expect(hit.orderNumber).toBe('RC-202608007');
+    expect(hit.totals.grandTotal).toBe(476);
+    expect(hit.payTotal).toBe(476);
+    expect(hit.fromSheet).toBe(true);
+  });
+  it('ไม่เจอ billCid → null (frontend จะถือว่า "ยังไม่ออก")', () => {
+    expect(findBillCidRow_(sheetWith('SB-x'), 'SB-other')).toBe(null);
+  });
+  it('cid ว่าง → null (ไม่ไล่ทั้งชีตฟรี ๆ)', () => {
+    expect(findBillCidRow_(sheetWith('SB-x'), '')).toBe(null);
   });
 });
 

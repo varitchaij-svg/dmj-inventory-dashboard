@@ -186,6 +186,30 @@ describe('meta — จุดเชื่อมต่อในโค้ดจร�
     expect(sp).toMatch(/await syncOrderUpdate\(/);
     expect(sp).toMatch(/setSaveFailed/);
   });
+
+  // 🔴 บั๊กจริง ส.ค. 2026: syncCreateSaleBill ใช้ res.json() ดิบ → GAS ตอบ HTML =
+  //    ผู้ขายเห็น "Unexpected token '<'" แล้วกดใหม่ = บิลซ้ำ (เส้นทางที่รับเงินลูกค้าจริง)
+  const syncBill = grab(VIEWS_ANA,
+    /async function syncCreateSaleBill\(bill, billCid\) \{[\s\S]*?\n\}/, 'syncCreateSaleBill');
+
+  it('syncCreateSaleBill ต้องอ่านคำตอบด้วย dmjJson ไม่ใช่ res.json() ดิบ', () => {
+    expect(syncBill).toContain('dmjJson');
+    expect(syncBill).not.toMatch(/await res\.json\(\)/);
+  });
+  it('syncCreateSaleBill ต้องส่ง billCid และติดธง unreadable เมื่ออ่านคำตอบไม่ได้', () => {
+    expect(syncBill).toMatch(/billCid: billCid/);
+    expect(syncBill).toMatch(/unreadable: true/);
+  });
+  it('submitBill ต้องถาม billCheck ก่อนขึ้นแดง เมื่อ unreadable ("อ่านไม่ได้" ≠ "ไม่สำเร็จ")', () => {
+    const sb = grab(VIEWS_ANA, /async function submitBill\(\) \{[\s\S]*?\n  \}/, 'submitBill');
+    expect(sb).toMatch(/r\.unreadable/);
+    expect(sb).toMatch(/await syncBillCheck\(cid\)/);
+    // ต้องเช็คก่อน setSaving(false)/showToast error — ไม่งั้นจอขึ้นแดงไปแล้ว
+    const chkIdx = sb.indexOf('syncBillCheck');
+    const errIdx = sb.indexOf('ไม่สำเร็จ:');
+    expect(chkIdx).toBeGreaterThan(-1);
+    expect(chkIdx).toBeLessThan(errIdx);
+  });
 });
 
 // ── meta-test: ห้ามยิง updateFrontStore ซ้อนกัน ────────────────────────────────

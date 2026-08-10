@@ -736,6 +736,10 @@ var IMMEDIATE_GATE_ACTIONS_ = {
   approveQuotation:    ["saler", "storedevice"],
   editQuotation:       ["saler", "storedevice"],
   issueFullTaxInvoice: ["saler", "storedevice"],
+  // ออกบิลขาย = สร้าง order จริงใน ZORT + ตัดสต็อกหน้าร้าน + บันทึกรับชำระ — เป็น action ที่
+  // "กระทบเงิน/สต็อกจริง" มากที่สุดในระบบ แต่เดิมหลุดจากรายการนี้ (เพิ่ม ส.ค. 2026)
+  // migration-safe เหมือนตัวอื่นในตารางนี้: ไม่มี session → ยังผ่าน จึงไม่กระทบคนที่ยังไม่ล็อกอิน
+  createSaleBill:      ["saler", "storedevice"],
   deleteOrder:         ["employee", "warehouse"],
   deleteOrders:        ["employee", "warehouse"],
 };
@@ -2372,6 +2376,12 @@ function doGet(e) {
     // ทั้งที่ของโอนไปแล้ว แล้วผู้ใช้กดซ้ำ = โอนสองเด้ง (หลักเดียวกับ action=orderCheck)
     if (e && e.parameter && e.parameter.action === 'transferCheck') {
       return transferCheckHandler_(String(e.parameter.tid || '').trim());
+    }
+    // "บิลใบนี้ออกไปแล้วหรือยัง" — ใช้ตอนคำตอบของ createSaleBill หายกลางทาง
+    // บิล = เงินลูกค้าจริง ออกซ้ำ = ยอดขาย/สต็อก/ใบกำกับผิดทั้งชุด · ผู้ขายต้องรู้ความจริง
+    // ก่อนตัดสินใจกดใหม่ (หลักเดียวกับ action=orderCheck / action=transferCheck)
+    if (e && e.parameter && e.parameter.action === 'billCheck') {
+      return billCheckHandler_(String(e.parameter.cid || '').trim());
     }
     // "มีอะไรถูกโอนคลัง→หน้าร้านไปแล้วบ้างช่วงนี้" — ประวัติจริงจากชีต "รายการโอนสินค้า"
     // ใช้ตอบคำถาม "ตกลงของอันไหนส่งไปแล้วกันแน่" หลังกดส่งแล้วคำตอบหายกลางทาง
@@ -13037,7 +13047,51 @@ var SALE_BILL_HEADERS_ = [
   "zortOrderId", "สถานะ", "หมายเหตุ",
   // ── เพิ่มตอนทำโหมด "ขายออนไลน์" (ส.ค. 2026) — W..AC ──
   "ค่าจัดส่ง", "ยอดเก็บลูกค้า", "ขนส่ง", "เลขพัสดุ", "ผู้รับ", "ที่อยู่จัดส่ง", "โหมดขาย",
+  // ── AD — ตัวกันออกบิลซ้ำ (ส.ค. 2026) ดู COL_SB_CID ──
+  "billCid",
 ];
+
+// ── ตัวกันออกบิลซ้ำ (billCid) ────────────────────────────────────────────────
+// billCid = รหัสที่ client สร้าง 1 ค่าต่อการกด "บันทึกการขาย" 1 ครั้ง และ **คงค่าเดิมตอนลองใหม่**
+// ทำไมต้องมี: createSaleBill ยิง AddOrder → รับชำระ → หักสต็อก → เขียนชีต ซึ่งใช้เวลานาน
+//   พอ GAS ตอบเป็นหน้า HTML (execution ซ้อนกัน — ทุกคนรันในฐานะ user เดียวกันตาม
+//   executeAs: USER_DEPLOYING) หรือ browser ตัดสายที่ 60 วิ → ผู้ขายเห็น "ออกบิลไม่สำเร็จ"
+//   ทั้งที่บิลออกไปแล้ว แล้วกดใหม่ = **บิลซ้ำใน ZORT + สต็อกถูกหัก 2 รอบ + ใบกำกับซ้ำ**
+//   (เงินลูกค้าเกี่ยวข้องโดยตรง — เจ็บกว่าเคส order/transfer ที่แก้ไปแล้วด้วย cid/tid)
+// หลักเดียวกับ `cid` ของ action=order และ `tid` ของ transferStockBatch — เห็น cid เดิม
+//   = คืนผลเดิม ไม่ยิง ZORT ใหม่ ไม่หักสต็อกใหม่ ไม่เขียนชีตใหม่
+// ⚠️ ต้องเช็ค **ในล็อก** เพื่อให้สองคำขอ cid เดียวกันที่มาพร้อมกันได้ผลเดียวกันแน่นอน
+var SB_REPLAY_TTL_SEC = 21600;   // 6 ชม. (เพดานของ CacheService)
+var COL_SB_CID        = 30;      // AD — ต่อท้าย ห้ามแทรกกลาง (บทเรียนข้อ 5)
+var SB_CID_SCAN_ROWS  = 600;     // แถวท้ายสุดที่ไล่หา cid ในชีตบิลขาย (เผื่อ cache หลุด)
+
+// หา billCid ในชีตบิลขาย (ของจริงที่ถาวร — ใช้เมื่อ cache หมดอายุ/ถูกเขี่ยทิ้ง)
+// คืน object รูปแบบเดียวกับที่ createSaleBill คืนตอนสำเร็จ หรือ null ถ้าไม่เจอ
+// อ่านเฉพาะช่วงท้ายชีต ไม่ getDataRange ทั้งก้อน (ชีตนี้โต 1 แถวต่อ 1 บิล)
+function findBillCidRow_(ss, cid) {
+  if (!cid) return null;
+  var sh = ss.getSheetByName(SHEET_SALE_BILLS);
+  if (!sh) return null;
+  var last = sh.getLastRow();
+  if (last < 2) return null;
+  var from = Math.max(2, last - SB_CID_SCAN_ROWS + 1);
+  var rows = sh.getRange(from, 1, last - from + 1, COL_SB_CID).getValues();
+  for (var i = rows.length - 1; i >= 0; i--) {          // ใหม่สุดก่อน
+    if (String(rows[i][COL_SB_CID - 1] || '').trim() !== String(cid)) continue;
+    var r = rows[i];
+    var grand = Number(r[8]) || 0;
+    return {
+      orderNumber:    String(r[3] || '') || null,
+      documentNumber: String(r[4] || '') || null,
+      totals: { grandTotal: grand, preVat: Number(r[9]) || 0, vat: Number(r[10]) || 0 },
+      shipFee:  Number(r[22]) || 0,
+      payTotal: Number(r[23]) || grand,
+      billId:   String(r[0] || ''),
+      fromSheet: true,
+    };
+  }
+  return null;
+}
 function saleBillsSheet_(ss) {
   var sh = getOrCreateSheet_(ss, SHEET_SALE_BILLS, SALE_BILL_HEADERS_);
   // getOrCreateSheet_ เขียนหัวคอลัมน์เฉพาะตอน "สร้างชีตใหม่" — ชีตที่มีอยู่แล้ว (22 คอลัมน์เดิม)
@@ -13098,6 +13152,7 @@ function appendSaleBillRow_(ss, rec) {
       String(rec.shipMethod || ""), String(rec.shipTracking || ""),
       String(rec.shipRecipient || ""), String(rec.shipAddress || ""),
       String(rec.saleMode || ""),
+      String(rec.billCid || ""),   // AD — ตัวกันออกบิลซ้ำ (ว่างได้: บิลจาก client รุ่นเก่า)
     ];
     sh.appendRow(row);
     // วันที่/เวลา/เลขบิล เป็น text — กัน Sheets แปลง "2026-07-29" เป็น Date และเลขบิลยาวเป็น
@@ -13107,6 +13162,7 @@ function appendSaleBillRow_(ss, rec) {
     sh.getRange(r, 5, 1, 1).setNumberFormat("@");   // E เลขใบกำกับ
     sh.getRange(r, 20, 1, 1).setNumberFormat("@");  // T zortOrderId
     sh.getRange(r, 26, 1, 1).setNumberFormat("@");  // Z เลขพัสดุ (เลขล้วนยาว → กันกลายเป็น 1.2E+12)
+    sh.getRange(r, COL_SB_CID, 1, 1).setNumberFormat("@");  // AD billCid — ต้องเทียบ string ตรงตัว
     return { ok: true, id: id };
   } catch (e) {
     Logger.log("appendSaleBillRow_ error: " + e);
@@ -13328,9 +13384,27 @@ function createSaleBill(ss, data, actor) {
   if (data.dryRun) return ok({ dryRun: true, totals: totals, payload: payload,
     shipFee: shipFee, payTotal: payTotal, shipInZort: shipInZort });
 
+  var billCid = String(data.billCid || "").trim();
+
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่ ลองใหม่อีกครั้ง");
   try {
+    // ── กันออกบิลซ้ำ — ต้องเช็ค "ในล็อก" ก่อนแตะ ZORT ใด ๆ ทั้งสิ้น ────────────
+    // สองคำขอ cid เดียวกันที่มาพร้อมกัน (ผู้ขายกดรัว / ลองใหม่หลัง browser ตัดสาย) ตัวที่สอง
+    // ต้องเห็นผลของตัวแรกเสมอ · ดู cache ก่อน (มีผลครบ) แล้วค่อยถอยไปดูชีต (ถาวรกว่า)
+    if (billCid) {
+      var _replay = null;
+      try {
+        var _c = CacheService.getScriptCache().get('sbill_' + billCid);
+        if (_c) _replay = JSON.parse(_c);
+      } catch (e) { /* cache อ่านไม่ได้ → ไปดูชีตแทน */ }
+      if (!_replay) _replay = findBillCidRow_(ss, billCid);
+      if (_replay) {
+        Logger.log("createSaleBill: billCid ซ้ำ (" + billCid + ") → คืนผลเดิม ไม่ยิง ZORT ใหม่");
+        return ok(Object.assign({}, _replay, { dedup: true }));
+      }
+    }
+
     var headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
     // ── (1) AddOrder — สร้างบิล + ตัดสต็อก (ตัวหลักที่ต้องรอ) ──
     var _t0 = Date.now();
@@ -13457,18 +13531,59 @@ function createSaleBill(ss, data, actor) {
       shipFee: shipFee, payTotal: payTotal, saleMode: data.saleMode || "",
       shipMethod: shipping.method || "", shipTracking: shipping.tracking || "",
       shipRecipient: shipping.recipient || "", shipAddress: shipping.address || "",
+      billCid: billCid,
     });
     if (!billLog.ok) logZortFailure_("บันทึกชีตบิลขาย " + (orderNumber || ""), billLog.error);
 
     invalidateCache_();
     // ส่ง shipFee/payTotal กลับไปด้วย — สรุปที่ลูกค้าเห็นต้องใช้ยอดที่ server บันทึกไว้จริง
     // ไม่ใช่ยอดที่หน้าจอคำนวณเอง (สองฝั่งคิดต่างกันเมื่อไหร่ ลูกค้าจะได้ยอดที่ไม่ตรงกับระบบ)
-    return ok({ orderId: orderId, orderNumber: orderNumber, documentNumber: docNumber,
+    var out = { orderId: orderId, orderNumber: orderNumber, documentNumber: docNumber,
                 totals: totals, shipFee: shipFee, payTotal: payTotal, shipInZort: shipInZort,
-                unpaid: unpaidMethod, billLogId: billLog.ok ? billLog.id : null });
+                unpaid: unpaidMethod, billLogId: billLog.ok ? billLog.id : null };
+    // เก็บผลไว้ตอบซ้ำ — ผู้ขายที่ browser ตัดสายไปแล้วจะได้ "ผลจริง" ตอนถาม action=billCheck
+    // แทนที่จะเดาเอง · เขียนหลังทุกอย่างเสร็จ (ไม่ throw ออกไป — บิลออกไปแล้ว)
+    if (billCid) {
+      try { CacheService.getScriptCache().put('sbill_' + billCid, JSON.stringify(out), SB_REPLAY_TTL_SEC); }
+      catch (e) { Logger.log("createSaleBill: cache replay ไม่สำเร็จ (ไม่กระทบบิล): " + e); }
+    }
+    return ok(out);
   } finally {
     lock.releaseLock();
   }
+}
+
+// doGet action=billCheck — "บิลที่มี billCid นี้ ออกไปแล้วหรือยัง"
+// คืน found=false เมื่อ **ยืนยันได้ว่ายังไม่ออก** เท่านั้น (frontend ใช้ตัดสินใจว่ากดซ้ำได้ไหม)
+// ⚠️ ตอบไม่ได้/ผิดรูปแบบ → frontend ต้องถือว่า "ไม่รู้" และ **ห้ามชวนให้กดซ้ำ** เพราะ GAS
+//    รุ่นเก่าที่ยังไม่รู้จัก action นี้จะตอบ payload ก้อนอื่น/หน้า HTML มาแทน ซึ่งถ้าตีความว่า
+//    "ยังไม่ออก" แล้วกดซ้ำ = ออกบิลสองใบ (กับดักเดียวกับที่ orderCheck/transferCheck ระวังไว้)
+function billCheckHandler_(cid) {
+  var out = { ok: true, found: false };
+  try {
+    if (cid) {
+      var cached = null;
+      try {
+        var c = CacheService.getScriptCache().get('sbill_' + cid);
+        if (c) cached = JSON.parse(c);
+      } catch (e) { /* cache อ่านไม่ได้ → ไปดูชีตแทน */ }
+      var hit = cached || findBillCidRow_(SpreadsheetApp.openById(SHEET_ID), cid);
+      if (hit) {
+        out.found = true;
+        out.orderNumber    = hit.orderNumber || null;
+        out.documentNumber = hit.documentNumber || null;
+        out.totals   = hit.totals || null;
+        out.shipFee  = hit.shipFee != null ? hit.shipFee : null;
+        out.payTotal = hit.payTotal != null ? hit.payTotal : null;
+        if (hit.fromSheet) out.fromSheet = true;   // cache หลุด — ยืนยันจากชีตแทน
+      }
+    }
+  } catch (err) {
+    Logger.log('billCheckHandler_ error: ' + err);
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

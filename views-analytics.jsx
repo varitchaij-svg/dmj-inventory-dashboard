@@ -9774,17 +9774,39 @@ async function syncGetContactDetail(contactId) {
   } catch (err) { return { success: false, error: err.message }; }
 }
 // ── sync helper: ออกบิลขาย + (option) ใบกำกับ + รับชำระ ──
-async function syncCreateSaleBill(bill) {
+// ⚠️ ต้องอ่านคำตอบด้วย `dmjJson` เสมอ (บทเรียนข้อ 13) — GAS ตอบหน้า HTML ได้เมื่อ execution
+//    ซ้อนกัน แล้ว `res.json()` ดิบจะโยน "Unexpected token '<'" ไปโผล่บนจอผู้ขายเป็นภาษาอังกฤษ
+// ⚠️ **billCid ต้องคงค่าเดิมตลอดการลองใหม่ของบิลใบเดิม** — ตัวกันออกบิลซ้ำทั้งหมดขึ้นกับข้อนี้
+//    (ดู createSaleBill / findBillCidRow_ ฝั่ง .gs)
+async function syncCreateSaleBill(bill, billCid) {
   if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
   try {
     const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(Object.assign({ createSaleBill: true,
+      body: JSON.stringify(Object.assign({ createSaleBill: true, billCid: billCid || "",
         actor: window._currentUser || sessionStorage.getItem("dmj_role") || "saler" }, bill)),
     });
-    return await res.json(); // { success, data:{orderNumber, documentNumber, totals} }
-  } catch (err) { return { success: false, error: err.message }; }
+    return await dmjJson(res); // { success, data:{orderNumber, documentNumber, totals} }
+  } catch (err) { return { success: false, error: dmjErrText(err), unreadable: true }; }
+}
+
+// ── sync helper: "บิลใบนี้ออกไปแล้วหรือยัง" — ถามก่อนขึ้นแดงเสมอ ──
+// คืน { found:true, ... } = ออกไปแล้ว (ห้ามให้กดซ้ำ) · { found:false } = ยืนยันว่ายังไม่ออก
+// · { unknown:true } = ตอบไม่ได้ → **ห้ามชวนให้กดซ้ำ** (GAS รุ่นเก่ายังไม่รู้จัก action นี้
+//   จะตอบก้อนอื่นมาแทน ตีความว่า "ยังไม่ออก" แล้วกดซ้ำ = บิลสองใบ)
+async function syncBillCheck(billCid) {
+  if (!billCid || !GOOGLE_SHEET_URL) return { unknown: true };
+  try {
+    const sep = GOOGLE_SHEET_URL.includes("?") ? "&" : "?";
+    const res = await dmjFetch(
+      `${GOOGLE_SHEET_URL}${sep}action=billCheck&cid=${encodeURIComponent(billCid)}&_t=${Date.now()}`,
+      { cache: "no-store", dmjTimeoutMs: 20000 });
+    const d = await dmjJson(res);
+    // รูปแบบต้องตรงเป๊ะถึงจะเชื่อ — ขาด ok/found = ไม่ใช่คำตอบของ endpoint นี้
+    if (!d || d.ok !== true || typeof d.found !== "boolean") return { unknown: true };
+    return d;
+  } catch (e) { return { unknown: true, error: dmjErrText(e) }; }
 }
 // ── sync helper: ค้นบิลขายเดิมจาก ZORT ด้วยเลขบิล (ใบกำกับภาษีย้อนหลัง) ──
 async function syncLookupSaleBill(orderNumber) {
@@ -10170,6 +10192,19 @@ function PosView({ data, role }) {
 
   // สินค้าที่กำลังเปิดดูรายละเอียด — เก็บเป็น sku ไม่ใช่ object (กันค้างค่าเก่าถ้า products อัปเดต)
   const [detailSku, setDetailSku] = uS(null);
+
+  // ── ตัวกันออกบิลซ้ำ (billCid) — 1 ค่าต่อการกด "บันทึกการขาย" 1 ครั้ง ──────────
+  // คงค่าเดิมตลอดการลองใหม่ของบิลใบเดิม (browser ตัดสาย/GAS ตอบ HTML แล้วกดใหม่) เพื่อให้
+  // ฝั่ง GAS รู้ว่าเป็น "บิลเดิม" ไม่ใช่บิลใหม่ → หลักเดียวกับ orderCidRef ของ OrderModal
+  // reset เมื่อออกบิลสำเร็จ (resetAll) — บิลใบถัดไปต้องได้ cid ใหม่
+  const billCidRef = React.useRef("");
+  const billCid = () => {
+    if (!billCidRef.current) {
+      billCidRef.current = "SB-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+    }
+    return billCidRef.current;
+  };
+
   // ⚠️ ProductModal อ่านหมวดจาก `p.cat` (app.jsx มิเรอร์มาจาก p.category) ไม่ใช่ `p.category`
   const detailProduct = uM(() => {
     if (!detailSku) return null;
@@ -10316,13 +10351,32 @@ function PosView({ data, role }) {
       showToast("warn", "รับเงินสดไม่พอยอด — กรอกจำนวนที่รับมาให้ครบก่อน", "💵"); return;
     }
     setSaving(true);
-    const r = await syncCreateSaleBill({
+    const cid = billCid();
+    const payload = {
       items: cart.map(it => ({ sku: it.sku, name: it.name, category: it.category, qty: Number(it.qty) || 0, price: Number(it.price) || 0 })),
       customer: cust, manualDiscount: md, taxInvoice, paymentMethod: payMethod || "", channel,
       cashReceived: (!online && payMethod === "เงินสด") ? cashReceivedNum : undefined,
       saleMode: saleMode,
       shipping: online ? shipOut : undefined,
-    });
+    };
+    let r = await syncCreateSaleBill(payload, cid);
+
+    // ⚠️ "อ่านคำตอบไม่ได้" ≠ "ออกบิลไม่สำเร็จ" (บทเรียนข้อ 13) — GAS อาจเขียนชีต/ยิง ZORT
+    //    เสร็จแล้วแต่ตอบเป็นหน้า HTML/ถูกตัดสาย · ถามก่อนว่าบิลลงจริงหรือยัง แทนที่จะขึ้นแดงเลย
+    //    (ขึ้นแดงทั้งที่บิลออกแล้ว → ผู้ขายกดใหม่ = บิลซ้ำ + สต็อกหักซ้ำ + ใบกำกับซ้ำ)
+    if (!r.success && r.unreadable) {
+      const chk = await syncBillCheck(cid);
+      if (chk.found) {
+        // บิลออกไปแล้วจริง — คืน dedup ให้เดินเส้นทางสำเร็จตามปกติ (ไม่ต้องกดใหม่)
+        r = { success: true, data: {
+          orderNumber: chk.orderNumber, documentNumber: chk.documentNumber,
+          totals: chk.totals || undefined, shipFee: chk.shipFee, payTotal: chk.payTotal,
+        } };
+      }
+      // chk.found === false (ยืนยันว่ายังไม่ออก) หรือ chk.unknown (ตอบไม่ได้) → ตกไปเส้นทาง error
+      // ทั้งสองกรณีปล่อยให้ผู้ใช้ตัดสินใจกดเอง — billCid เดิมยังอยู่ กดใหม่จะ dedup ให้เองถ้าบิลลงแล้ว
+    }
+
     setSaving(false);
     if (!r.success) { showToast("error", (online ? "บันทึกการขายไม่สำเร็จ: " : "ออกบิลไม่สำเร็จ: ") + (r.error || ""), "❌"); return; }
     setResult(r.data || {});
@@ -10335,6 +10389,7 @@ function PosView({ data, role }) {
     setShip({ recipient: "", phone: "", address: "", method: "", fee: "", tracking: "", note: "" });
     setCust({ name: "", taxId: "", branch: "", branchNo: "", address: "", phone: "", email: "" });
     setCustQuery(""); setCustResults(null); setResult(null);
+    billCidRef.current = "";   // บิลใบถัดไปต้องได้ billCid ใหม่ (บิลนี้ปิดแล้ว)
   }
 
   const overStock = cart.filter(it => (Number(it.qty) || 0) > (it.qtyStore || 0));
