@@ -610,7 +610,7 @@ function AttendanceTodayView({ canEdit = true } = {}) {
       url.searchParams.set("id", id);
       url.searchParams.set("sessionToken", localStorage.getItem("dmj_session_token") || "");
       const r = await fetch(url.toString());
-      const d = await r.json();
+      const d = await dmjJson(r);
       if (d && d.d) setPhoto({ src: d.d });
       else setPhoto(null);
     } catch (e) { setPhoto(null); }

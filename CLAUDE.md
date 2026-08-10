@@ -740,7 +740,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 1606 tests, 48 test files, ทั้งหมด pass (+ browser 91/91)
+**มี Vitest test suite แล้ว** — 1677 tests, 50 test files, ทั้งหมด pass (+ browser 92/92)
 
 ```bash
 npm test              # run tests
@@ -1081,8 +1081,9 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
     action นั้นหลุดการตรวจสิทธิ์ (มี meta-test ใน `tests/auth.test.js` คอยจับให้แล้ว)
   · ⚠️ **`REQUIRE_LOGIN` ยัง default ปิด** → `ROLE_ACTIONS_`/`canDoOrNull_` ส่วนใหญ่เป็น no-op
     (ของเดิมไม่พัง) **ยกเว้น `IMMEDIATE_GATE_ACTIONS_`/`IMMEDIATE_GATE_STRICT_ACTIONS_`** (ใกล้
-    `canDoOrNull_`) — 7 action ที่กระทบเงิน/สต็อกจริง (`voidQuotation`/`approveQuotation`/
-    `issueFullTaxInvoice`→saler, `deleteOrder`/`deleteOrders`→employee/warehouse,
+    `canDoOrNull_`) — 9 action ที่กระทบเงิน/สต็อกจริง (`voidQuotation`/`approveQuotation`/
+    `editQuotation`/`issueFullTaxInvoice`/`createSaleBill`→saler+storedevice,
+    `deleteOrder`/`deleteOrders`→employee/warehouse,
     `zeroStock`→warehouse, `resetNegativeStock`→เฉพาะ owner/dev) **เช็คสิทธิ์ทันทีไม่รอ
     REQUIRE_LOGIN** เพราะเดิมไม่เคยเช็คอะไรเลย เสี่ยงเกินกว่าจะรอ rollout ของ role ที่เหลือ
     · `IMMEDIATE_GATE_ACTIONS_` = migration-safe (ไม่มี session → ปล่อยผ่าน) ใช้กับ action ที่มี
@@ -1296,6 +1297,36 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
 - ⚠️ **`สถานะ "รอโอน"` ที่เห็นในหน้าเดียวกันเป็นคนละเรื่อง ยังไม่ได้แก้** — แปลว่า ZORT ยังไม่ได้
   ตัดสต็อกจริง (ตั้งเป็นงานโอนค้างไว้) ทั้งที่ `deductFrontStoreForSale_` หักในชีตเราไปแล้ว →
   รอบ `syncZortBoth` ถัดไปจะเขียนยอดเดิมทับกลับมา · ต้องเก็บตัวเลขจริงก่อนค่อยแก้ อย่าเดา
+
+### 🔁 กันออกบิลซ้ำ (billCid) — "ออกบิลสำเร็จ แต่จอขึ้นไม่สำเร็จ" (ส.ค. 2026)
+
+`createSaleBill` คือเส้นทางเดียวที่รับเงินลูกค้าจริง แต่เดิม `syncCreateSaleBill` อ่านคำตอบด้วย
+`res.json()` ดิบ และฝั่ง GAS **ไม่มีตัวกันซ้ำเลย** → พอ GAS ตอบหน้า HTML (execution ซ้อนกันจาก
+`executeAs: USER_DEPLOYING` — ทุกคนรันในฐานะ user เดียวกัน) หรือ browser ตัดสายที่ 60 วิ ผู้ขายเห็น
+"ออกบิลไม่สำเร็จ" ทั้งที่บิลออกไปแล้ว แล้วกดใหม่ = **บิลซ้ำใน ZORT + สต็อกหักสองเด้ง + ใบกำกับซ้ำ**
+
+- **`billCid`** = client สร้าง 1 ค่าต่อการกด "บันทึกการขาย" 1 ครั้ง (คงค่าเดิมตลอดการลองใหม่ ·
+  reset ใน `resetAll`) — หลักเดียวกับ `cid` (order) / `tid` (transfer) เป๊ะ
+- **`createSaleBill` เช็ค billCid ซ้ำ "ในล็อก ก่อนแตะ ZORT"** — เจอแล้วคืนผลเดิม (`dedup:true`)
+  ไม่ยิง AddOrder ใหม่ · ดู cache `sbill_<cid>` (6 ชม.) ก่อน แล้วถอยไปดูชีตด้วย `findBillCidRow_`
+  (อ่าน 600 แถวท้าย ไม่ getDataRange)
+- **คอลัมน์ AD `billCid`** ในชีต "บิลขาย" (`COL_SB_CID=30`) — **ต่อท้าย ห้ามแทรกกลาง** (บทเรียนข้อ 5)
+  · ตั้ง `setNumberFormat("@")` เทียบ string ตรงตัว
+- **doGet `action=billCheck&cid=`** (`billCheckHandler_`) — frontend `syncBillCheck` ถามก่อนขึ้นแดง
+  เสมอเมื่ออ่านคำตอบไม่ได้ (`unreadable`) · **ตอบไม่ได้/รูปแบบไม่ตรง → `unknown` → ห้ามชวนกดซ้ำ**
+  (GAS รุ่นเก่าไม่รู้จัก action นี้ = กดซ้ำแล้วออกสองใบ — กับดักเดียวกับ orderCheck/transferCheck)
+- ⚠️ **ต้อง deploy `.gs` ก่อน** frontend เห็นผล — GAS เก่าถูกถาม `billCheck` จะได้ `unknown`
+  (ปลอดภัย: ไม่ชวนกดซ้ำ) จนกว่า `.gs` จะขึ้น · คอลัมน์ AD เติมเองผ่าน `saleBillsSheet_` (ไม่ต้อง migration)
+- เทสต์: `tests/online-sale.test.js` (รัน `findBillCidRow_` จริง + meta-test เช็ค cid ในล็อกก่อนแตะ
+  ZORT + อยู่ใน immediate gate) · `tests/gasjson.test.js` (บังคับ `dmjJson` + ถาม `billCheck` ก่อนแดง)
+  · browser test เคส "ออกบิล GAS ตอบ HTML" (ยิง POST ครั้งเดียว ไม่แดง เข้าหน้าสรุป)
+
+### ⚠️ res.json() ดิบ = "Unexpected token '<'" (บทเรียนข้อ 13) — มี SCAN gate แล้ว
+
+`tests/gasjson.test.js` มี **meta-test แบบ SCAN** (ไม่ใช่ allowlist รายฟังก์ชัน) สแกนทุกไฟล์ `.jsx`
+หา `.json()` ที่ไม่ผ่าน `dmjJson` — เพิ่มจุดใหม่ที่ไหน = เทสต์แดงทันที · ที่ยังยกเว้นไว้มีเฉพาะ
+5 จุดใน `app.jsx` (เส้น boot/auth ที่เป็นงาน Phase 7.6 quarantined — ดู ALLOW ในเทสต์) ·
+**เพิ่ม sync helper ใหม่ต้องใช้ `dmjJson(res)` เสมอ ไม่ใช่ `res.json()`**
 
 **COD — เงินยังไม่เข้า ห้ามบันทึกรับชำระ**
 - `POS_UNPAID_METHODS_` (.gs) ต้องตรงกับ `POS_ONLINE_PAY[].paid === false` (.jsx) **เป๊ะ ๆ**

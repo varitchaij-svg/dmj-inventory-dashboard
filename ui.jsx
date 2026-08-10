@@ -479,7 +479,7 @@ function NotiBell({ onNavigate }) {
     const sep = base.includes('?') ? '&' : '?';
     fetch(`${base}${sep}action=inappNoti&sessionToken=${encodeURIComponent(tok)}&_t=${Date.now()}`,
           { cache: 'no-store' })
-      .then(r => r.json())
+      .then(r => dmjJson(r))
       .then(d => {
         if (!d || d.ok === false) return;
         try { localStorage.setItem("dmj_noti_on", d.off ? "0" : "1"); } catch (e) {}

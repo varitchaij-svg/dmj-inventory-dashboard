@@ -649,6 +649,63 @@ function startServer() {
     await page.close();
   }
 
+  // ── (จ5) ออกบิลแล้ว GAS ตอบ HTML — ต้องถาม billCheck ไม่ใช่ขึ้นแดงแล้วให้กดซ้ำ ──
+  // 🔴 บั๊กจริง ส.ค. 2026: createSaleBill สำเร็จแต่ตอบหน้า HTML → res.json() ดิบโยน
+  //    "Unexpected token '<'" → ผู้ขายกดใหม่ = บิลซ้ำ (เส้นทางรับเงินลูกค้าจริง)
+  // สิ่งที่ทดสอบบนเบราว์เซอร์จริง: (1) ไม่มีแถบแดง/ข้อความ garbage (2) เข้าหน้าสรุปด้วยเลขบิล
+  // จาก billCheck (3) frontend ยิง createSaleBill POST **ครั้งเดียว** ไม่ยิงซ้ำอัตโนมัติ
+  {
+    const page = await browser.newPage({ viewport: { width: 480, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=saler&tab=pos`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      if (!(await navigateTo(page, 'saler', 'pos'))) { status = 'NAV_FAIL'; note = 'สลับ tab ไม่สำเร็จ'; }
+      else {
+        await page.waitForTimeout(400);
+        const search = page.locator('main input[placeholder*="พิมพ์ชื่อ/รหัส"]').first();
+        await search.fill('VAS001');
+        await page.waitForTimeout(350);
+        await page.locator('main div', { hasText: 'VAS001' }).last().click({ timeout: 3000 }).catch(() => {});
+        await page.waitForTimeout(300);
+        await page.locator('main input[placeholder*="คุณเอ"]').first().fill('คุณเอชทีเอ็มแอล').catch(() => {});
+        await page.locator('main button', { hasText: 'โอนเงิน' }).first().click({ timeout: 3000 }).catch(() => {});
+        await page.waitForTimeout(300);
+
+        // จำลอง: createSaleBill ตอบ HTML แต่บิล "ลงจริง" แล้ว → billCheck found:true
+        await page.evaluate(() => {
+          window.__DMJ_SALEBILL_HTML = true;
+          window.__DMJ_SALEBILL_POST_COUNT = 0;
+          window.__DMJ_BILLCHECK = { ok: true, found: true,
+            orderNumber: 'RC-3-2026080077', documentNumber: null,
+            totals: { grandTotal: 250, vat: 250 * 7 / 107, preVat: 250 - 250 * 7 / 107 },
+            shipFee: 0, payTotal: 250 };
+        });
+
+        const submit = page.locator('main button', { hasText: 'บันทึกการขาย' }).first();
+        await submit.click({ timeout: 3000 });
+        await page.waitForTimeout(1200);
+        const body = await page.locator('body').innerText().catch(() => '');
+        const postCount = await page.evaluate(() => window.__DMJ_SALEBILL_POST_COUNT || 0);
+
+        if (/Unexpected token|<!DOCTYPE|is not valid JSON/.test(body)) {
+          status = 'RAW_HTML_LEAKED'; note = 'มีข้อความ garbage จาก res.json() ดิบโผล่บนจอ';
+        } else if (/ออกบิลไม่สำเร็จ|บันทึกการขายไม่สำเร็จ/.test(body)) {
+          status = 'FALSE_RED'; note = 'ขึ้นแดงทั้งที่ billCheck ยืนยันว่าบิลลงแล้ว (จะทำให้ผู้ขายกดซ้ำ = บิลซ้ำ)';
+        } else if (body.indexOf('สรุปคำสั่งซื้อ') < 0 || body.indexOf('RC-3-2026080077') < 0) {
+          status = 'NO_SUCCESS'; note = 'ไม่เข้าหน้าสรุปด้วยเลขบิลจาก billCheck';
+        } else if (postCount !== 1) {
+          status = 'RETRIED_POST'; note = `frontend ยิง createSaleBill ${postCount} ครั้ง (ต้อง 1 — ห้ามยิงซ้ำอัตโนมัติ)`;
+        } else {
+          note = 'GAS ตอบ HTML แต่บิลลงจริง → ถาม billCheck แล้วขึ้นสำเร็จ (ไม่แดง ไม่ยิง POST ซ้ำ)';
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'pos__salebill-html.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'ออกบิล GAS ตอบ HTML — ถาม billCheck ไม่ยิงซ้ำ', status, note });
+    await page.close();
+  }
+
   // หน้าหลักต้องเปิดได้ทั้งที่ข้อมูลก้อนใหญ่ยังไม่มา — ถ้าติดจอโหลด ทางด่วนลงเวลาก็เสียครึ่งหนึ่ง
   // (กดโลโก้ตอนเปิดแอปใหม่แล้วเจอสปินเนอร์ = ไปไหนต่อไม่ได้เลย)
   {

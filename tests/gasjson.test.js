@@ -212,6 +212,60 @@ describe('meta — จุดเชื่อมต่อในโค้ดจร�
   });
 });
 
+// ═══ meta-test: SCAN ทั้งไฟล์ — ห้ามมี res.json() ดิบใหม่โผล่ ═══════════════════
+// เดิม meta-test ข้างบนเป็น "allowlist" ที่ระบุชื่อฟังก์ชันตายตัว → ฟังก์ชันที่เขียนใหม่
+// ทีหลัง (เช่นทั้งชุดขายออนไลน์) หลุดการตรวจ 100% โดยเทสต์ยังเขียว — นั่นคือเหตุผลตรง ๆ
+// ที่ syncCreateSaleBill shipped แบบใช้ res.json() ดิบได้ (บิลซ้ำ เส้นทางรับเงินลูกค้าจริง)
+//
+// ตัวนี้ **สแกนทุกไฟล์ .jsx** หา `.json()` ที่ไม่ได้ผ่าน dmjJson แล้วบังคับว่าต้องอยู่ใน
+// ALLOWLIST ที่ระบุเหตุผลเท่านั้น · เพิ่มจุดใหม่ที่ไหนก็ตาม = เทสต์แดงทันที (ต่างจาก allowlist
+// รายฟังก์ชันที่มองไม่เห็นของใหม่) · แนวเดียวกับ meta-test ที่สแกน call site ของ
+// writeAuditLog_ ใน staff-perf.test.js ที่เคยจับ action ตกหล่นได้จริง
+describe('meta — SCAN: ไม่มี res.json() ดิบนอก dmjJson (กันบั๊ก "Unexpected token \'<\'" กลับมา)', () => {
+  const FILES = ['app.jsx', 'ui.jsx', 'views-main.jsx', 'views-analytics.jsx',
+                 'views-quote.jsx', 'views-attendance.jsx'];
+
+  // เก็บ "บรรทัดดิบ" ที่ยังยอมให้มี .json() — คีย์ด้วยข้อความบรรทัด (ทนการเลื่อนบรรทัด)
+  // ⚠️ ทั้งหมดอยู่ใน app.jsx เท่านั้น และเป็นเส้นทาง boot/auth ที่ CLAUDE.md กันไว้ว่าเป็นงาน
+  //    Phase 7.6 (การเปลี่ยนมาใช้ dmjFetch/dmjJson ในเส้น auth ถูกถอยออกไป ยังไม่เอากลับ —
+  //    ดูคอมเมนต์ที่ postAuthAction ใน app.jsx) · แตะตอนนี้ = ปนกับ 7.6 แล้วแยกไม่ออกว่าอะไรพัง
+  const ALLOW = {
+    'app.jsx': [
+      'const d = await res.json();',                              // handlePin (verifyPin) + startLineLogin (lineLoginMeta)
+      '.then(r => r.json())',                                     // checkDataUnchanged (action=ver) — HTML → .catch → reload อยู่แล้ว
+      'return await res.json();',                                 // postAuthAction — 7.6-quarantined โดยตรง
+      'const d = await (await fetch(url.toString())).json();',    // lineLoginMeta prefetch (auth)
+    ],
+  };
+  const ALLOW_COUNT = { 'app.jsx': 5 };   // 'const d = await res.json();' มี 2 จุด (handlePin + startLineLogin)
+
+  function rawJsonLines(src) {
+    return src.split('\n').map(s => s.trim()).filter(t => {
+      if (t.startsWith('//') || t.startsWith('*')) return false;  // คอมเมนต์
+      if (/\bdmjJson\b/.test(t)) return false;                    // ผ่าน dmjJson แล้ว (รวม guarded fallback)
+      return /\.json\(\)/.test(t);
+    });
+  }
+
+  for (const f of FILES) {
+    it(`${f} — ทุก .json() ดิบต้องอยู่ใน ALLOWLIST ที่ระบุเหตุผล`, () => {
+      const src = readFileSync(join(ROOT, f), 'utf8');
+      const raw = rawJsonLines(src);
+      const allow = ALLOW[f] || [];
+      const stray = raw.filter(line => !allow.includes(line));
+      expect(stray, `พบ res.json() ดิบใหม่ใน ${f} — เปลี่ยนเป็น dmjJson(res) (บทเรียนข้อ 13) ` +
+        `หรือถ้าเป็นเส้น auth/boot ที่ตั้งใจเว้นไว้ ให้เพิ่มเข้า ALLOW พร้อมเหตุผล:\n` +
+        stray.join('\n')).toEqual([]);
+      // กันการ "เพิ่มบรรทัดซ้ำที่หน้าตาเหมือน allowlist" — เช่นแอบเพิ่ม const d = await res.json()
+      // อันใหม่ ซึ่ง includes() ปล่อยผ่าน · ล็อกจำนวนรวมไว้ด้วย
+      if (ALLOW_COUNT[f] != null) {
+        expect(raw.length, `จำนวน .json() ดิบใน ${f} เปลี่ยนไป (คาด ${ALLOW_COUNT[f]}) — ` +
+          `ถ้าเพิ่งแปลงจุดใดเป็น dmjJson ให้ลดเลขนี้ · ถ้าเพิ่มจุดใหม่ห้ามผ่าน`).toBe(ALLOW_COUNT[f]);
+      }
+    });
+  }
+});
+
 // ── meta-test: ห้ามยิง updateFrontStore ซ้อนกัน ────────────────────────────────
 // GAS ปฏิเสธ execution ที่ซ้อนกันด้วย "หน้า HTML" ไม่ใช่ JSON — ถ้า auto-save (debounce 2 วิ)
 // กับปุ่มยืนยันสั่งยิงพร้อมกันเมื่อไหร่ บั๊ก "Unexpected token '<'" จะกลับมาทันที

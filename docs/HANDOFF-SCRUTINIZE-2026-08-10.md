@@ -49,60 +49,59 @@ Baseline ที่รันยืนยัน: unit **1671/1671 ผ่าน** (
 
 ---
 
-## 🟠 ยังไม่ได้ทำ — งานที่ต้องสั่งต่อ (เรียงตามความสำคัญ)
+## ✅ แก้เพิ่มในรอบนี้ (handoff item 1 parser-swap + item 2/3/4 ครบ)
 
-### 1. `res.json()` ดิบยังเหลือ ~43 จุด (บทเรียนข้อ 13 ยังไม่ครบจริง)
+### item 2 — meta-test เป็น SCAN แล้ว (เสร็จ)
+`tests/gasjson.test.js` เพิ่ม `describe('meta — SCAN …')` ที่สแกนทุกไฟล์ `.jsx` หา `.json()`
+ที่ไม่ผ่าน `dmjJson` แล้วบังคับให้อยู่ใน ALLOW ที่ระบุเหตุผล + ล็อกจำนวนรวมของ `app.jsx` ·
+เพิ่มจุดใหม่ที่ไหน = แดงทันที (ต่างจาก allowlist รายฟังก์ชันเดิมที่มองไม่เห็นของใหม่)
 
-**ปัญหา**: CLAUDE.md บทเรียนข้อ 13 ประกาศว่าเรื่อง "GAS ตอบ HTML" แก้แล้ว แต่ยังเหลือ
-`res.json()` ดิบ ~43 จุดใน 5 ไฟล์ · จุดที่**เขียนข้อมูล/ออกเอกสาร**และเจ็บถ้าอ่านคำตอบไม่ได้
-แล้วผู้ใช้ทำซ้ำ:
+### item 1 (parser swap) — แปลง `res.json()` → `dmjJson` ครบทุกจุดนอก app.jsx (เสร็จ)
+แปลง **~40 จุด** ใน `views-quote.jsx` (7) · `views-analytics.jsx` (~20) · `views-main.jsx` (6) ·
+`ui.jsx` (NotiBell poll) · `views-attendance.jsx` (viewPhoto) — รวม `err.message` → `dmjErrText`
+· จุดที่เคยเป็น `.json().catch(()=>({}))` (false-success/wrong-reason) ถูกกำจัดหมด
+**เหลือ raw `.json()` แค่ 5 จุดใน `app.jsx`** — boot/auth ที่เป็น Phase 7.6 quarantined
+(`postAuthAction` มีคอมเมนต์ห้ามแตะโดยตรง) — อยู่ใน ALLOW ของ scan gate พร้อมเหตุผล
 
-| จุด | ไฟล์:บรรทัด (โดยประมาณ) | ผลถ้าทำซ้ำ |
+### item 3 — browser test เดินเส้นทางล้มเหลว (เสร็จ)
+`harness.html` เพิ่มโหมด `window.__DMJ_SALEBILL_HTML` (ตอบ HTML แทน JSON) + `action=billCheck`
+· `run.cjs` เคส "ออกบิล GAS ตอบ HTML" ยืนยันบนเบราว์เซอร์จริง: ไม่มี garbage/แดง + เข้าหน้าสรุป
+ด้วยเลขจาก billCheck + **ยิง createSaleBill POST ครั้งเดียว** (ไม่ยิงซ้ำอัตโนมัติ) → browser 92/92
+
+### item 4 — CLAUDE.md (เสร็จ)
+แก้ test count → 1677/50 + browser 92 · immediate gate → 9 action · เพิ่มหัวข้อ "กันออกบิลซ้ำ
+(billCid)" + "res.json() ดิบ = SCAN gate" ใต้หัวข้อขายออนไลน์
+
+---
+
+## 🟠 ยังไม่ได้ทำ — งานที่ต้องสั่งต่อ (idempotency ของ document-emitter)
+
+parser swap ทำให้ error **อ่านออก** ทุกจุดแล้ว และกำจัด false-success หมดแล้ว **แต่ยังไม่กัน
+"retry → เอกสารซ้ำ"** สำหรับ endpoint ที่ออกเอกสาร/สร้างของใน ZORT — พวกนี้ยังไม่มี idempotency
+key (ต่างจาก `createSaleBill` ที่ได้ `billCid` แล้วรอบนี้ · order=`cid` · transfer=`tid`)
+
+| endpoint (.gs) | frontend helper | ผลถ้า retry ตอน GAS ตอบ HTML |
 |---|---|---|
-| `syncIssueFullTaxInvoice` | `views-analytics.jsx:~9811` | ออกใบกำกับภาษีจริงซ้ำใบ |
-| `syncCreateQuotation` / `syncEditQuotation` | `views-quote.jsx:18,30` | ใบเสนอราคาซ้ำใน ZORT |
-| `confirmStockCount` | `views-analytics.jsx:~853` | งานนับสต็อกทั้งรอบส่งซ้ำ/หาย |
-| `syncAddProduct` / `syncPurchaseIn` | `views-main.jsx:8367,8385` | สินค้า/ใบซื้อซ้ำ |
-| MtoJobView fetch หลายจุด | `views-analytics.jsx:6607–6841` | งาน MTO เพี้ยน |
+| `createQuotation` | `syncCreateQuotation` | ใบเสนอราคาซ้ำใน ZORT |
+| `editQuotation` | `syncEditQuotation` | แก้ซ้ำ (เสี่ยงน้อยกว่า create) |
+| `issueFullTaxInvoice` | `syncIssueFullTaxInvoice` | **ออกใบกำกับภาษีจริงซ้ำใบ** (เจ็บสุด) |
+| `addNewProduct` | `syncAddProduct` | สินค้าซ้ำใน ZORT |
+| `addPurchaseIn` | `syncPurchaseIn` | ใบซื้อ (PO) ซ้ำ |
 
-**สั่งต่อยังไง**: ไล่เปลี่ยน `res.json()` → `dmjJson(res)` ทุกจุด · **แต่ลำดับความสำคัญคือ
-"จุดที่เขียนข้อมูลแล้วยังไม่ idempotent" ก่อน** — `syncIssueFullTaxInvoice` และ
-`syncCreateQuotation` เจ็บที่สุด (ออกเอกสารซ้ำ) ควรได้ตัวกันซ้ำแบบ `billCid` ด้วย ไม่ใช่แค่
-เปลี่ยน parser · จุดที่เป็น GET อ่านอย่างเดียว (`AuditLogView`/`DeadStockView`/`CustomerView`)
-เปลี่ยน parser พอ ไม่ต้องมีตัวกันซ้ำ
+**ทำไมไม่ทำรอบนี้**: แต่ละตัวคือการผ่าตัดแบบ `billCid` เต็ม ๆ (คอลัมน์ชีตใหม่ + check endpoint +
+frontend cid ref) บนเส้นทางที่ **เทสต์กับ ZORT จริงไม่ได้ในเซสชันนี้** · ทำ 5 ตัวรวดเดียว = surface
+ใหญ่เกินกว่าจะกล้าปล่อยบน production ที่รันอยู่ · billCid (money path) ทำไปแล้วเพราะความถี่/ผลกระทบ
+สูงสุด · ที่เหลือความถี่ต่ำกว่ามาก
 
-**⚠️ ห้ามยิงซ้ำอัตโนมัติกับ action ที่ยังไม่มี cid/tid/billCid** — ต้องให้ผู้ใช้กดเอง หรือถาม
-check-endpoint ก่อน (แพทเทิร์น `fsSaveFailed`) เหมือนที่ทำกับบิลขายรอบนี้
+**สั่งต่อยังไง** (เรียงตามความเจ็บ): `issueFullTaxInvoice` → `createQuotation` → `addNewProduct` →
+`addPurchaseIn` → `editQuotation` · **ทำทีละตัว copy แพทเทิร์น billCid ตรง ๆ**:
+1. GAS: คอลัมน์ `<x>Cid` ต่อท้ายชีตที่ log endpoint นั้น (ห้ามแทรกกลาง) + เช็คในล็อกก่อนแตะ ZORT
+   + cache ผล + doGet `action=<x>Check&cid=`
+2. frontend: cid ref (คงค่าตอน retry) + helper ติดธง `unreadable` + ถาม check ก่อนขึ้นแดง
+3. เทสต์: รัน `find<X>CidRow_` จริง + meta-test เช็ค cid ในล็อกก่อนแตะ ZORT (เหมือน online-sale.test.js)
+· ⚠️ **ห้ามยิงซ้ำอัตโนมัติจนกว่าจะมี cid** — จนกว่าจะทำ ให้ผู้ใช้กดเอง (แพทเทิร์น `fsSaveFailed`)
 
-### 2. meta-test ของ dmjJson เป็น allowlist ไม่ใช่ scan (นี่คือสาเหตุที่บั๊กบิลหลุดมาได้)
-
-**ปัญหา**: `tests/gasjson.test.js` (บล็อก `describe('meta …')`) ตรวจแค่ **5 ฟังก์ชันที่ระบุชื่อ
-ตายตัว** (`syncFrontStoreData`, `placeOrder`, `syncOrderUpdate`, `markComplete`, `savePrepQty`)
-ไม่ได้สแกนหา `res.json()` ทั้งไฟล์ → ฟังก์ชันใหม่ (ทั้งชุดขายออนไลน์) หลุด 100% โดยเทสต์เขียว
-— นี่คือเหตุผลตรง ๆ ที่ `syncCreateSaleBill` shipped แบบใช้ `res.json()` ดิบได้
-
-**สั่งต่อยังไง**: เปลี่ยนเป็น **scan** — `grep \.json\(\) ในไฟล์ .jsx ทุกไฟล์` แล้วบังคับให้ทุก
-match อยู่ใน allowlist ที่ระบุเหตุผล (เหมือน meta-test ของ `writeAuditLog_` ใน
-`staff-perf.test.js` ที่สแกน call site จริงและเคยจับของหลุดได้จริง) · ทำข้อนี้ **ก่อน** ข้อ 1
-จะได้รู้ว่ายังเหลือกี่จุดจริง ๆ และกันไม่ให้ถอยกลับ
-
-### 3. ไม่มีเทสต์เดินเส้นทางล้มเหลว (HTML response) ผ่าน sync helper ที่เขียนข้อมูล
-
-**ปัญหา**: เทสต์ที่จำลองคำตอบ HTML มีแค่ใน `gasjson.test.js` (ทดสอบ `dmjJson` เดี่ยว ๆ) ·
-harness ของ browser test ตอบ `createSaleBill` เป็น JSON เสมอ (`harness.html:122`) → เส้นทาง
-"ออกบิลแล้วเจอ HTML" **ไม่เคยถูกเดินเลย** — นั่นคือเหตุผลที่ 1671+91 เทสต์เขียวแต่บั๊กยังอยู่
-
-**สั่งต่อยังไง**: เพิ่มโหมดใน `harness.html` ให้ตอบ HTML ได้ (คู่กับ `?nodata=1` ที่มีอยู่แล้ว)
-แล้วเพิ่ม browser test 1 เคส: ออกบิล → เจอ HTML → ต้องขึ้นข้อความไทย **และปุ่มต้องไม่กดซ้ำ
-ได้ทันที** · ต่อยอดได้ถึงการทดสอบ dedup: กด 2 ครั้งด้วย billCid เดิม → ต้องได้บิลใบเดียว
-
-### 4. CLAUDE.md drift (เล็ก แต่เป็น interface หลักของทุกงานถัดไป)
-
-- บรรทัด ~743: เขียน "1606 tests, 48 test files" — ของจริง **1671 / 50** (browser 91/91 ถูก)
-- หัวข้อ immediate gate: เขียน "7 action" — ตอนนี้ **9** (เพิ่ม `editQuotation` ก่อนหน้า +
-  `createSaleBill` รอบนี้)
-- **ควรเพิ่มหัวข้อ "ตัวกันออกบิลซ้ำ (billCid)"** ใต้หัวข้อ POS/ขายออนไลน์ ให้ตรงกับที่ทำจริง
-  (ไม่งั้นรอบหน้าจะมีคนเขียนตัวกันซ้ำใหม่ซ้อน หรือลบทิ้งเพราะไม่รู้ว่าทำไมมี)
+**เครื่องมือมีให้แล้ว**: scan gate ใน `gasjson.test.js` จะแดงถ้ามีใครเผลอเพิ่ม `res.json()` ดิบใหม่
 
 ---
 
@@ -129,9 +128,14 @@ harness ของ browser test ตอบ `createSaleBill` เป็น JSON เ�
 
 ---
 
-## Verdict ตอนตรวจ
+## สถานะปัจจุบัน (หลังทำ handoff รอบนี้)
 
-**Fix-then-ship** — blocker (ออกบิลซ้ำ) แก้แล้วในรอบนี้ · ที่เหลือ (ข้อ 1–4) เป็นงานลด
-ความเสี่ยงประเภทเดียวกัน (เอกสาร/ข้อมูลซ้ำเมื่อ GAS ตอบ HTML) ที่ยังกระจายอยู่หลายจุด —
-ทำตามลำดับ **ข้อ 2 (scan test) → ข้อ 1 (ไล่แก้จุดที่เหลือ) → ข้อ 3 (เทสต์เส้นล้มเหลว)**
-เพื่อไม่ให้แก้แล้วถอยกลับเงียบ ๆ อีก
+- **Blocker (ออกบิลซ้ำ)**: แก้ครบ — billCid + billCheck + immediate gate + เทสต์เส้นล้มเหลว
+- **item 1 parser swap**: เสร็จทุกจุดนอก app.jsx (เหลือ 5 จุด boot/auth ที่ 7.6 quarantined)
+- **item 2 scan gate · item 3 failure browser test · item 4 CLAUDE.md**: เสร็จ
+- **เทสต์**: unit **1677/1677** · browser **92/92**
+- **เหลือ**: idempotency key ของ 5 document-emitter (ตารางด้านบน) — parser อ่านออกแล้ว แต่
+  retry ยังทำเอกสารซ้ำได้ · ทำทีละตัว copy แพทเทิร์น billCid · scan gate กัน `res.json()` ใหม่ให้แล้ว
+
+⚠️ **ต้อง deploy `.gs` (billCid + billCheck) ไปพร้อม frontend** — GAS เก่าถูกถาม `billCheck`
+จะได้ `unknown` (ปลอดภัย: ไม่ชวนกดซ้ำ) แต่ dedup ฝั่ง GAS จะยังไม่ทำงานจนกว่า `.gs` จะขึ้น

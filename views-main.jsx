@@ -121,7 +121,7 @@ async function loadImgForCard(imageUrl) {
       proxyUrl.searchParams.set('action', 'imgProxy');
       proxyUrl.searchParams.set('u', imageUrl);
       var resp = await fetch(proxyUrl.toString());
-      var data = await resp.json();
+      var data = await dmjJson(resp);
       if (data && data.d) {
         return await new Promise(function(resolve) {
           var img = new window.Image();
@@ -4400,7 +4400,7 @@ function CategoryView({ data, role, onNav }) {
                             skus: ps.map(function(p){ return p.sku; }),
                             names: ps.map(function(p){ return p.name||p.sku; })}),
                         });
-                        var json = await res.json();
+                        var json = await dmjJson(res);
                         if(json.success){
                           showCheckToast({type:"success",message:"ส่งคำขอเช็คสต็อก " + ps.length + " รายการแล้ว ✅"});
                           setCheckSendOpen(false);
@@ -5332,7 +5332,7 @@ function StockView({ data, role }) {
           actor: role,
         }),
       })
-        .then(r => r.json())
+        .then(r => dmjJson(r))
         .then(res => {
           if (res && res.success) { thrSavedSnapRef.current = snap; setThrStatus("saved"); }
           else setThrStatus("error");
@@ -8364,8 +8364,8 @@ async function syncAddProduct(product) {
         actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
       }),
     });
-    return await res.json(); // { success, data } | { success:false, error }
-  } catch (err) { return { success: false, error: err.message }; }
+    return await dmjJson(res); // { success, data } | { success:false, error }
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
 
 // ─── ซื้อสินค้าเข้า/เติมสต็อก → สร้าง PO จริงใน ZORT ───
@@ -8382,8 +8382,8 @@ async function syncPurchaseIn(purchase) {
         actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
       }),
     });
-    return await res.json();
-  } catch (err) { return { success: false, error: err.message }; }
+    return await dmjJson(res);
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
 
 // ดึงรูปเฉพาะ SKU เดียวจาก ZORT (หลังอัปรูปในแอป ZORT) → คืน { success, data:{imageUrl} }
@@ -8395,8 +8395,8 @@ async function syncFetchProductImage(sku) {
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ fetchProductImage: true, sku }),
     });
-    return await res.json();
-  } catch (err) { return { success: false, error: err.message }; }
+    return await dmjJson(res);
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
 
 // เช็ค SKU ซ้ำฝั่ง server (authoritative) ก่อนกดบันทึก
@@ -8408,8 +8408,8 @@ async function checkSkuExistsRemote(sku) {
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ checkSkuExists: true, sku }),
     });
-    return await res.json();
-  } catch (err) { return { success: false, error: err.message }; }
+    return await dmjJson(res);
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
 
 // ─── AddProductView — ฟอร์มเพิ่มสินค้าใหม่ (owner + warehouse) ───
