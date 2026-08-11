@@ -118,6 +118,83 @@ describe('dmjErrText — แปลง error เป็นข้อความท
   });
 });
 
+// ── dmjJsonProgress — วัดไบต์แรก/ดาวน์โหลด (Phase 7.6 เอากลับทีละก้อน เริ่มจากตัววัดนี้) ──
+// eval ฟังก์ชันจริงจาก ui.jsx (พึ่ง dmjJson + TextDecoder) — ไม่ copy โค้ด
+const dmjJsonProgress = (function () {
+  const code = [
+    grab(UI, /async function dmjJson\(res\) \{[\s\S]*?\n\}/, 'dmjJson'),
+    grab(UI, /async function dmjJsonProgress\(res, onBytes\) \{[\s\S]*?\n\}/, 'dmjJsonProgress'),
+    'return dmjJsonProgress;',
+  ].join('\n');
+  return new Function('console', 'TextDecoder', code)({ warn() {} }, TextDecoder);
+})();
+
+// Response ปลอมแบบ "สตรีม" — คืน body เป็น chunk ทีละ chunkSize ไบต์ (ของจริงคือก้อนหลาย MB)
+function streamRes(body, { status = 200, url = 'https://x/exec', chunkSize = 8 } = {}) {
+  const bytes = new TextEncoder().encode(body);
+  let pos = 0;
+  return {
+    status, url,
+    body: {
+      getReader() {
+        return {
+          read: async () => {
+            if (pos >= bytes.length) return { done: true };
+            const value = bytes.slice(pos, pos + chunkSize);
+            pos += chunkSize;
+            return { done: false, value };
+          },
+        };
+      },
+    },
+  };
+}
+
+describe('dmjJsonProgress — สตรีม + นับไบต์ (แยก "รอ GAS คิด" ออกจาก "ดาวน์โหลด")', () => {
+  it('เบราว์เซอร์ไม่รองรับสตรีม (ไม่มี body.getReader) → fallback ไป dmjJson เต็มดุ้น', async () => {
+    // ใช้ fakeRes ที่มีแต่ .text() ไม่มี .body → ต้องได้ผลเท่า dmjJson เป๊ะ
+    const d = await dmjJsonProgress(fakeRes('{"success":true,"n":3}'));
+    expect(d).toEqual({ success: true, n: 3 });
+  });
+
+  it('สตรีม JSON ปกติ → คืน object ที่ parse แล้ว เท่ากับ dmjJson', async () => {
+    const d = await dmjJsonProgress(streamRes('{"success":true,"data":{"updated":2}}'));
+    expect(d).toEqual({ success: true, data: { updated: 2 } });
+  });
+
+  it('onBytes ถูกเรียกด้วยยอดสะสม (เพิ่มขึ้นเรื่อย ๆ) และยอดสุดท้าย = จำนวนไบต์ทั้งก้อน', async () => {
+    const body = '{"a":1,"b":2,"c":3,"d":4}';
+    const total = new TextEncoder().encode(body).length;
+    const seen = [];
+    const d = await dmjJsonProgress(streamRes(body, { chunkSize: 5 }), (n) => seen.push(n));
+    expect(d).toEqual({ a: 1, b: 2, c: 3, d: 4 });
+    expect(seen.length).toBeGreaterThan(1);                 // ต้องรายงานหลายครั้ง ไม่ใช่ครั้งเดียวตอนจบ
+    for (let i = 1; i < seen.length; i++) expect(seen[i]).toBeGreaterThan(seen[i - 1]); // สะสมขึ้นจริง
+    expect(seen[seen.length - 1]).toBe(total);              // ยอดสุดท้าย = ขนาดจริง
+  });
+
+  it('ข้อความไทยหลายไบต์ที่ถูกหั่นคร่อมขอบ chunk → decode กลับมาครบ ไม่เพี้ยน', async () => {
+    // property ที่สำคัญสุด: ถ้า decode สตรีมผิด payload จะ corrupt เงียบ ๆ (ตัวอักษรกลายเป็น �)
+    // chunkSize=3 การันตีว่าตัวอักษรไทย (3 ไบต์/ตัว) ถูกหั่นกลางตัวแน่นอน
+    const body = JSON.stringify({ msg: 'สวัสดีร้านดอกไม้ ฿1,234', ok: true });
+    const d = await dmjJsonProgress(streamRes(body, { chunkSize: 3 }));
+    expect(d).toEqual({ msg: 'สวัสดีร้านดอกไม้ ฿1,234', ok: true });
+  });
+
+  it('สตรีมได้หน้า HTML (GAS ตัดกลางคัน) → throw badjson เหมือน dmjJson ทุกประการ', async () => {
+    const err = await dmjJsonProgress(streamRes('<!DOCTYPE html><html><body>x</body></html>', 404))
+      .catch((e) => e);
+    expect(err.dmjKind).toBe('badjson');
+    expect(err.message).toMatch(/ระบบหลังบ้าน/);
+    expect(err.message).not.toMatch(/Unexpected token/);
+  });
+
+  it('onBytes ที่โยน error เอง ต้องไม่ทำให้การอ่านทั้งก้อนล้ม', async () => {
+    const d = await dmjJsonProgress(streamRes('{"ok":true}'), () => { throw new Error('ui บึ้ม'); });
+    expect(d).toEqual({ ok: true });
+  });
+});
+
 // ── meta-test: กันโค้ดถอยกลับไปเป็นแบบที่ทำให้เกิดบั๊กนี้ ──────────────────────
 describe('meta — จุดเชื่อมต่อในโค้ดจริง', () => {
   const syncFs = grab(
@@ -351,5 +428,30 @@ describe('meta — ป้าย "สั่งแล้ว" ต้องมาจ
 
   it('onOrderSuccess ต้องประทับ ts ให้ optimistic entry (ไม่มี ts = ตัดไม่ได้)', () => {
     expect(VIEWS_MAIN).toMatch(/orderQty: qty, status:"รอ", ts: Date\.now\(\)/);
+  });
+});
+
+// ── meta-test: เส้นทางโหลด payload ต้องวัด "ไบต์แรก" ได้จริง (Phase 7.6 เอากลับทีละก้อน) ──
+// กันถอยกลับเงียบ ๆ: ถ้ามีแต่ helper ใน ui.jsx แต่ fetchFromSheet ไม่เรียก = วัดไม่ได้เหมือนเดิม
+describe('meta — dmjJsonProgress ต่อเข้าเส้นทางโหลด payload จริง', () => {
+  const APP = readFileSync(join(ROOT, 'app.jsx'), 'utf8');
+
+  it('ui.jsx มี dmjJsonProgress ที่ fallback ไป dmjJson (ไม่ทำครึ่ง ๆ กลาง ๆ)', () => {
+    const fn = grab(UI, /async function dmjJsonProgress\(res, onBytes\) \{[\s\S]*?\n\}/, 'dmjJsonProgress');
+    expect(fn).toContain('getReader');
+    expect(fn).toMatch(/if \(!canStream\) return dmjJson\(res\)/);   // เบราว์เซอร์เก่า → เส้นเดิมทั้งดุ้น
+    expect(fn).toContain('dmjJson({ text:');                          // error path = ตัวเดียวกับ dmjJson
+    expect(fn).not.toMatch(/\.json\(\)/);                             // ห้ามมี res.json() ดิบ (บทเรียนข้อ 13)
+  });
+
+  it('fetchFromSheet เรียก dmjJsonProgress ในเส้นทางโหลด payload', () => {
+    expect(APP).toMatch(/dmjJsonProgress\(r, onBytes\)/);
+  });
+
+  it('ปล่อย mark "payload:ไบต์แรก" ตอนได้ไบต์แรก (แยกจาก "payload:ครบ")', () => {
+    expect(APP).toContain("dmjMark('payload:ไบต์แรก')");
+    expect(APP).toContain("dmjMark('payload:ครบ'");
+    // ไบต์แรก mark ต้องอยู่ใน onBytes (ยิงครั้งเดียวตอนไบต์แรก ไม่ใช่ทุก chunk)
+    expect(APP).toMatch(/if \(!_firstByte\)[\s\S]{0,80}payload:ไบต์แรก/);
   });
 });

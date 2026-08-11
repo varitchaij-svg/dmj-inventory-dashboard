@@ -291,6 +291,33 @@ function dmjErrText(e) {
   return m || "เกิดข้อผิดพลาด กรุณาลองใหม่";
 }
 
+// ────────────── dmjJsonProgress — อ่านคำตอบพร้อมรายงานไบต์ที่ได้รับจริง ──────────────
+// ใช้กับก้อนใหญ่ (payload หลักหลายเมกะ) เพื่อวัดว่า "ไบต์แรกมาถึงเมื่อไหร่" — แยก
+// "รอ GAS คิด" (ยิงไปแล้วยังไม่ได้ไบต์แรก) ออกจาก "ดาวน์โหลดก้อน" (ไบต์แรก→ครบ)
+// ซึ่งเดิมรวมกันเป็นช่วงเดียวจนจูนผิดจุดมาแล้ว (Phase 7.4/7.7 · เอากลับทีละก้อน เริ่มจากตัววัดนี้)
+//
+// ⚠️ error path ต้องเป็น **ตัวเดียวกับ `dmjJson`** เป๊ะ ๆ ไม่ใช่เขียนใหม่ให้คล้าย ๆ
+// (ข้อความไทย + dmjKind='badjson' + การเก็บ dmj_last_backend_error ที่เจ้าของใช้ไล่เหตุ)
+// จึงห่อ text ที่อ่านมาแล้วส่งกลับเข้า dmjJson แทนการ parse เอง
+async function dmjJsonProgress(res, onBytes) {
+  const canStream = res && res.body && typeof res.body.getReader === "function"
+                 && typeof TextDecoder !== "undefined";
+  if (!canStream) return dmjJson(res);   // เบราว์เซอร์ไม่รองรับ → เส้นทางเดิมทั้งดุ้น ไม่ทำครึ่ง ๆ กลาง ๆ
+
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let txt = "", got = 0;
+  for (;;) {
+    const chunk = await reader.read();       // อ่านไม่จบ (เน็ตหลุด/abort) → โยนออกไปให้ตัวเรียกจัดการ
+    if (chunk.done) break;                    // เหมือน fetch ที่ล้มตามปกติ (AbortError คงเดิม)
+    got += (chunk.value && chunk.value.length) || 0;
+    txt += dec.decode(chunk.value, { stream: true });
+    if (onBytes) { try { onBytes(got); } catch (e) {} }
+  }
+  txt += dec.decode();
+  return dmjJson({ text: async () => txt, status: res.status, url: res.url });
+}
+
 // ────────────── กระดิ่งแจ้งเตือนในแอป 🔔 ──────────────
 // ทำไมอยู่ในไฟล์นี้: ui.jsx เป็นไฟล์เล็กสุด (โหลดก่อนใคร) — ยัดลง views-main/analytics ที่
 // ใหญ่อยู่แล้วจะยิ่งถ่วง Babel compile time (เหตุผลเดียวกับที่แยกไฟล์ view ไว้แต่แรก)
