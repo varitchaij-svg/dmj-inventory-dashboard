@@ -193,6 +193,17 @@ function nextModelForPrefix(prefix, products) {
   return String(max + 1).padStart(3, "0");
 }
 
+// ── splitComposedName: ถอด "ชื่อเต็ม" ที่ AddProductView ประกอบไว้ กลับเป็น { base, price } (จาก views-main.jsx) ──
+// composedName = base + [colorName] + [wholesale] · ใช้เติมชื่อ/ราคาให้อัตโนมัติเมื่อเพิ่มสีใหม่ของแบบเดิม
+function splitComposedName(fullName, colorName) {
+  const toks = String(fullName || "").trim().split(/\s+/).filter(Boolean);
+  let price = "";
+  if (toks.length > 1 && /^\d+(\.\d+)?$/.test(toks[toks.length - 1])) price = toks.pop();
+  const cn = String(colorName || "").trim();
+  if (cn && toks.length > 1 && toks[toks.length - 1] === cn) toks.pop();
+  return { base: toks.join(" ").trim(), price };
+}
+
 // ── attBuildTs: "yyyy-MM-dd" + "HH:mm(:ss)" → { ms, time } (จาก appsscript_complete.gs) ──
 // ใช้ตอนเจ้าของแก้เวลาลงเวลาย้อนหลัง — ms ที่ได้คือ serverTs ที่ทุกการคำนวณชั่วโมง/สาย/พัก
 // ใช้ต่อ ถ้าเพี้ยน ตัวเลขทั้งเดือนเพี้ยนตาม จึงต้องมี test คุมไว้
@@ -915,7 +926,7 @@ module.exports = {
   cleanupOrdersStateCore, stableOrderId,
   buildYoYSeries, abcClassify, abcRevWindow_, ABC_WINDOW_MONTHS, sanitizeThresholds, THRESHOLDS_DEFAULT,
   parseCheckDateMs, suggestNextSku,
-  parseSkuParts, nextModelForPrefix,
+  parseSkuParts, nextModelForPrefix, splitComposedName,
   attBuildTs, attSequenceWarning, attSummarize, attMonthRange, attAllowedNext,
   attLatestSiteName, attSiteBucket,
   computeBillTotals, wholesaleTierRate, isBillExcludedCat, BILL_EXCLUDE_CAT_KEYWORDS,

@@ -1645,6 +1645,21 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
     → ล็อก `{prefix,model}` ไว้หลังเซฟ ให้สีถัดไปคงเลข Model เดิม + โชว์แบนเนอร์ "🔒 กำลังเพิ่มสีของแบบใหม่"
     + ปุ่ม "ขึ้นแบบใหม่ ▸" (`setHeldDesign(null)`) · ล้าง lock เมื่อเปลี่ยน prefix/โหมด · `effTaken`
     disable สีที่แบบนี้ (prefix+model) มีแล้วทั้ง 2 โหมด
+  - **เพิ่มหลายสีของแบบเดียวกันไม่ต้องพิมพ์ชื่อ/ราคาซ้ำ** (ส.ค. 2026) — เดิม `resetItemFields`
+    ล้าง `name`+`price` ทุกครั้งที่กด "➕ เพิ่มอีก" ทำให้ heldDesign (ล็อก Model) ช่วยแค่ครึ่งเดียว
+    (สีของแบบเดียวกันชื่อ/ราคามักเท่ากัน) · ตอนนี้ `resetItemFields(keepNamePrice)` — `handleAddToQueue`
+    ส่ง `true` เมื่อยังอยู่บนแบบเดิม (new=ล็อก Model แล้ว · color=ยังคง `baseDesignSku`) → คงชื่อ/ราคาไว้
+    · ⚠️ `handleSaveAll` สำเร็จยังล้างเต็ม (จบ batch) · ปุ่ม "เปลี่ยน ✕"/"ขึ้นแบบใหม่ ▸" ล้างชื่อ/ราคาด้วย
+    (เริ่มแบบใหม่จริง → prefill รอบใหม่ได้)
+  - **โหมด "🎨 สีใหม่" เติมชื่อฐาน+ราคาส่งจากสีพี่น้องอัตโนมัติ** (ส.ค. 2026) — เลือกแบบเดิมแล้ว
+    effect (`[skuMode, baseDesignSku]`) ถอดชื่อ/ราคาจาก `designInfo.taken` ด้วย **`splitComposedName`**
+    (ถอด `composedName = base + [สี] + [ราคาส่ง]` กลับ · ต้องส่งชื่อสีของแถวนั้นมาถอด) · เติมเฉพาะตอน
+    ช่องว่าง ไม่ทับที่ผู้ใช้แก้ · ⚠️ ช่องชื่อ/ราคาต้องมี `onFocus={ev=>ev.target.select()}` (บทเรียนข้อ 14)
+    · pure function มี copy ใน `tests/helpers.js` + landmark ใน `drift-guard.test.js` · เทสต์ใน `tests/sku.test.js`
+  - **ช่องหมวดค้นหาหมวดเดิม (กันสร้างหมวดซ้ำ)** (ส.ค. 2026) — เดิมมีแค่ chip 12 อันแรก + ช่อง "พิมพ์
+    หมวดใหม่" ที่ไม่ match กับ `allCats` เลย → หมวดที่ 13+ ถูกพิมพ์ใหม่ = "กระถางPS" ซ้อน "กระถาง PS"
+    · ตอนนี้ `catMatches` (ตัดช่องว่าง/ตัวพิมพ์ก่อนเทียบ) โชว์หมวดเดิมที่ตรงให้กดใช้ซ้ำ + ป้าย "➕ จะสร้าง
+    หมวดใหม่ «X»" เมื่อไม่มี exact match
 - **เพิ่มสินค้าใหม่เข้า ZORT** — AddProductView (views-main.jsx, owner+warehouse): ฟอร์ม
   SKU(=barcode, จาก SKU builder ข้างบน)/ชื่อ/ราคา/หมวด/**ซัพพลายเออร์(TAG)**/จำนวน+คลัง
   หน่วย fix "ชิ้น" · เช็คซ้ำ 2 ชั้น (client `data.products` + server `checkSkuExists` 2 ชีต)

@@ -3056,6 +3056,20 @@ function nextModelForPrefix(prefix, products) {
   return String(max + 1).padStart(3, "0");
 }
 
+// ── splitComposedName: ถอด "ชื่อเต็ม" ที่ AddProductView ประกอบไว้ กลับเป็น { base, price } ──
+// composedName = base + [colorName] + [wholesale] (คั่นช่องว่าง · สองส่วนหลัง optional)
+// ใช้เติมชื่อ/ราคาให้อัตโนมัติเมื่อเพิ่ม "สีใหม่ของแบบเดิม" (สีพี่น้องชื่อ/ราคามักเท่ากัน)
+// ต้องส่ง colorName ของแถวนั้นมาด้วยเพื่อถอดคำสีออกให้ถูก (ชื่อฐานอาจลงท้ายด้วยคำที่ไม่ใช่สี)
+// pure function — มี copy ใน tests/helpers.js
+function splitComposedName(fullName, colorName) {
+  const toks = String(fullName || "").trim().split(/\s+/).filter(Boolean);
+  let price = "";
+  if (toks.length > 1 && /^\d+(\.\d+)?$/.test(toks[toks.length - 1])) price = toks.pop();
+  const cn = String(colorName || "").trim();
+  if (cn && toks.length > 1 && toks[toks.length - 1] === cn) toks.pop();
+  return { base: toks.join(" ").trim(), price };
+}
+
 // Strip "#1", "#10", trailing numbers, etc. from MTO product names
 // "แจกันชุด#1" → "แจกันชุด", "แจกันชุด 5 อะไร" → "แจกันชุด"
 function mtoBase(name) {
@@ -8486,6 +8500,17 @@ function AddProductView({ data, role, onAdded }) {
 
   const effectiveCat = catInput.trim() || category;
 
+  // พิมพ์ในช่องหมวด → หาหมวดเดิมที่ตรง (ตัดช่องว่าง/ตัวพิมพ์) กันสร้างหมวดซ้ำ เช่น "กระถางPS" ↔ "กระถาง PS"
+  const catMatches = uM(() => {
+    const q = catInput.trim();
+    if (!q) return { list: [], exact: false };
+    const norm = s => String(s).replace(/\s+/g, "").toLowerCase();
+    const nq = norm(q);
+    const list = allCats.filter(c => norm(c).includes(nq) && norm(c) !== nq).slice(0, 8);
+    const exact = allCats.some(c => norm(c) === nq);
+    return { list, exact };
+  }, [catInput, allCats]);
+
   // Prefix ที่เคยใช้ (แยกในหมวดที่เลือกก่อน) — ชิปเลือก Prefix โหมดแบบใหม่
   const prefixInfo = uM(() => {
     const cnt = {}, catCnt = {};
@@ -8599,6 +8624,18 @@ function AddProductView({ data, role, onAdded }) {
     return () => clearTimeout(t);
   }, [skuUp, dupLocal]);
 
+  // โหมด "สีใหม่ของแบบเดิม": เลือกแบบแล้ว → เติมชื่อฐาน + ราคาส่งจากสีพี่น้องให้อัตโนมัติ
+  //   (สีของแบบเดียวกันชื่อ/ราคามักเท่ากัน) · เติมเฉพาะตอนช่องยังว่าง ไม่ทับที่ผู้ใช้แก้เอง
+  uE(() => {
+    if (skuMode !== "color" || !designInfo) return;
+    if (name.trim() !== "" || String(price).trim() !== "") return;
+    for (const t of designInfo.taken) {
+      const cn = VARIANT_CODE_TO_NAME[t.variant] || "";
+      const { base, price: pr } = splitComposedName(t.name, cn);
+      if (base) { setName(base); if (pr) setPrice(pr); break; }
+    }
+  }, [skuMode, baseDesignSku]); // เฉพาะตอนเลือก/เปลี่ยนแบบ ไม่ใช่ทุก keystroke
+
   const dupRemote = serverCheck && !serverCheck.checking && serverCheck.exists;
   const isDup = dupLocal || dupRemote;
   const canSave = !saving && skuUp !== "" && name.trim() !== "" && effectiveCat !== "" && !isDup && !(serverCheck && serverCheck.checking);
@@ -8627,8 +8664,10 @@ function AddProductView({ data, role, onAdded }) {
   });
 
   // เคลียร์เฉพาะช่องที่เปลี่ยนต่อรายการ (คงหมวด/โหมด/Prefix/แบบเดิม/คลัง/ซัพพลายเออร์ไว้)
-  const resetItemFields = () => {
-    setName(""); setPrice(""); setQty(""); setServerCheck(null);
+  // keepNamePrice=true → ยังเพิ่มสีของแบบเดิม ชื่อ/ราคามักเท่ากันทุกสี ไม่ล้างให้พิมพ์ซ้ำ
+  const resetItemFields = (keepNamePrice) => {
+    if (!keepNamePrice) { setName(""); setPrice(""); }
+    setQty(""); setServerCheck(null);
     setVariantCode(""); setColorSearch("");
   };
 
@@ -8642,7 +8681,9 @@ function AddProductView({ data, role, onAdded }) {
     setQueue(qs => [...qs, product]);
     // โหมดแบบใหม่: ล็อกเลข Model → เพิ่มสีอื่นของแบบเดียวกันต่อได้ (เลขไม่รันหนี)
     if (skuMode === "new") setHeldDesign({ prefix: savedPrefix, model: savedModel });
-    resetItemFields();
+    // ยังอยู่บนแบบเดิม (แบบใหม่=ล็อก Model แล้ว · สีใหม่=ยังคง baseDesignSku) → คงชื่อ/ราคาไว้
+    const stayingOnDesign = skuMode === "new" || (skuMode === "color" && !!baseDesignSku);
+    resetItemFields(stayingOnDesign);
   };
 
   const removeFromQueue = (idx) => setQueue(qs => qs.filter((_, i) => i !== idx));
@@ -8734,10 +8775,30 @@ function AddProductView({ data, role, onAdded }) {
                     }}>{c}</button>
                 ))}
               </div>
-              <input type="text" placeholder="…หรือพิมพ์หมวดใหม่"
+              <input type="text" placeholder="🔍 พิมพ์เพื่อค้นหาหมวดเดิม หรือสร้างหมวดใหม่"
                 value={catInput}
                 onChange={e => { setCatInput(e.target.value); setCategory(""); }}
                 style={inputStyle} />
+              {/* หมวดเดิมที่ตรง — กดใช้ซ้ำแทนสร้างใหม่ (กันหมวดซ้ำ) */}
+              {catMatches.list.length > 0 && (
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+                  {catMatches.list.map(c => (
+                    <button key={c} type="button"
+                      onClick={() => { setCategory(c); setCatInput(""); }}
+                      style={{
+                        minHeight: 36, padding: "5px 11px", borderRadius: 999, cursor: "pointer",
+                        fontSize: 12.5, fontWeight: 600, fontFamily: "inherit",
+                        border: "1.5px solid var(--g-300)", background: "var(--g-50)", color: "var(--g-700)",
+                      }}>↩ {c}</button>
+                  ))}
+                </div>
+              )}
+              {catInput.trim() && !catMatches.exact && (
+                <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 8 }}>
+                  ➕ จะสร้างหมวดใหม่ «<b style={{ color: "var(--text)" }}>{catInput.trim()}</b>»
+                  {catMatches.list.length > 0 ? " — ถ้ามีหมวดเดิมด้านบน กดใช้ซ้ำจะดีกว่า" : ""}
+                </div>
+              )}
             </div>
 
             {/* SKU builder — ตาม business rule [Prefix][Variant 2 หลัก][Model 3 หลัก] */}
@@ -8829,7 +8890,7 @@ function AddProductView({ data, role, onAdded }) {
                         <span style={{ fontSize: 12, color: "#1d4ed8", fontWeight: 600 }}>
                           🔒 กำลังเพิ่มสีของแบบใหม่ <b style={{ fontFamily: "monospace" }}>{effPrefix}·{effModel}</b> — เลือกสีถัดไปได้เลย (เลขแบบเดิม)
                         </span>
-                        <button type="button" onClick={() => { setHeldDesign(null); setVariantCode(""); }}
+                        <button type="button" onClick={() => { setHeldDesign(null); setVariantCode(""); setName(""); setPrice(""); }}
                           style={{ flexShrink: 0, border: "1.5px solid #93c5fd", background: "#fff", borderRadius: 8, padding: "6px 10px",
                                    cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "inherit", color: "#1d4ed8" }}>ขึ้นแบบใหม่ ▸</button>
                       </div>
@@ -8852,7 +8913,7 @@ function AddProductView({ data, role, onAdded }) {
                           <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>แบบเดิมที่เลือก (Model {designInfo.model})</div>
                           <div style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 16, color: "var(--g-700)" }}>{baseDesignSku}</div>
                         </div>
-                        <button type="button" onClick={() => { setBaseDesignSku(""); setDesignSearch(""); setVariantCode(""); }}
+                        <button type="button" onClick={() => { setBaseDesignSku(""); setDesignSearch(""); setVariantCode(""); setName(""); setPrice(""); }}
                           style={{ flexShrink: 0, border: "none", background: "none", cursor: "pointer", color: "var(--muted)", fontSize: 13, fontFamily: "inherit", fontWeight: 600 }}>เปลี่ยน ✕</button>
                       </div>
                       {/* โครงรหัสใหม่: prefix + [ช่องรหัสสี] + model — ให้เห็นชัดว่าเปลี่ยนแค่ 2 หลักกลาง */}
@@ -8994,14 +9055,16 @@ function AddProductView({ data, role, onAdded }) {
                 ชื่อสินค้า * <span style={{ fontWeight: 400, color: "var(--muted)" }}>(ใส่แค่ชื่อ — สี/ราคาต่อท้ายให้อัตโนมัติ)</span>
               </label>
               <input type="text" placeholder="เช่น ป๊อปปี้B."
-                value={name} onChange={e => setName(e.target.value)} style={inputStyle} />
+                value={name} onChange={e => setName(e.target.value)}
+                onFocus={ev => ev.target.select()} style={inputStyle} />
             </div>
 
             {/* ราคาส่ง → ตั้งราคาปลีก ×1.25 อัตโนมัติ */}
             <div>
               <label style={labelStyle}>ราคาส่ง (บาท)</label>
               <input type="number" inputMode="decimal" min="0" placeholder="0"
-                value={price} onChange={e => setPrice(e.target.value)} style={inputStyle} />
+                value={price} onChange={e => setPrice(e.target.value)}
+                onFocus={ev => ev.target.select()} style={inputStyle} />
               <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>
                 {wholesale > 0
                   ? <>ราคาปลีกที่จะตั้ง (×1.25): <b style={{ color: "var(--g-700)" }}>฿{retailPrice.toLocaleString()}</b></>

@@ -183,6 +183,10 @@ const TRACKED = [
     `const parts = parseSkuParts(p && p.sku);`,
     `return String(max + 1).padStart(3, "0");`,
   ]},
+  { names: ['splitComposedName'], sourceFile: 'views-main.jsx', landmarks: [
+    `if (toks.length > 1 && /^\\d+(\\.\\d+)?$/.test(toks[toks.length - 1])) price = toks.pop();`,
+    `if (cn && toks.length > 1 && toks[toks.length - 1] === cn) toks.pop();`,
+  ]},
   { names: ['detectColor'], sourceFile: 'views-main.jsx', landmarks: [
     `for (const k of COLOR_KEYS) if (s.indexOf(k) >= 0) return COLOR_MAP[k];`,
   ]},

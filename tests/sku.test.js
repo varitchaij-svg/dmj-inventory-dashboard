@@ -1,6 +1,6 @@
 // tests/sku.test.js — ทดสอบ parseSkuParts, nextModelForPrefix (SKU builder ตาม business rule)
 import { describe, it, expect } from 'vitest';
-import { parseSkuParts, nextModelForPrefix } from './helpers.js';
+import { parseSkuParts, nextModelForPrefix, splitComposedName } from './helpers.js';
 
 const P = (sku, category) => ({ sku, category: category || 'ดอกไม้' });
 
@@ -127,5 +127,58 @@ describe('composeSku (AddProductView)', () => {
   it('ล็อกใช้เฉพาะ prefix ที่ตรงกัน — เปลี่ยน prefix แล้วล็อกไม่มีผล', () => {
     // heldDesign เป็นของ R แต่ตอนนี้ prefix = OL → ต้องใช้ nextModel ของ OL
     expect(composeSku({ skuMode: 'new', prefix: 'OL', variantCode: '19', products: base, heldDesign: { prefix: 'R', model: '026' } })).toBe('OL19002');
+  });
+});
+
+// splitComposedName — ถอด "ชื่อเต็ม" (ชื่อ + สี + ราคาส่ง) กลับเป็นชื่อฐาน + ราคา
+// ใช้เติมชื่อ/ราคาให้อัตโนมัติเมื่อเพิ่ม "สีใหม่ของแบบเดิม" — สีพี่น้องชื่อ/ราคามักเท่ากัน
+describe('splitComposedName', () => {
+  it('ถอดครบทั้งสีและราคา', () => {
+    expect(splitComposedName('ยิปโซแห้ง เขียว 68', 'เขียว')).toEqual({ base: 'ยิปโซแห้ง', price: '68' });
+  });
+
+  it('มีราคาแต่ไม่มีสี (โหมดพิมพ์รหัสเอง — ไม่มีชื่อสี)', () => {
+    expect(splitComposedName('ยิปโซแห้ง 68', '')).toEqual({ base: 'ยิปโซแห้ง', price: '68' });
+  });
+
+  it('มีสีแต่ไม่มีราคา', () => {
+    expect(splitComposedName('ป๊อปปี้B. แดง', 'แดง')).toEqual({ base: 'ป๊อปปี้B.', price: '' });
+  });
+
+  it('ชื่ออย่างเดียว (ไม่มีทั้งสีและราคา)', () => {
+    expect(splitComposedName('ป๊อปปี้B.', 'แดง')).toEqual({ base: 'ป๊อปปี้B.', price: '' });
+  });
+
+  it('ชื่อฐานมีช่องว่างในตัว — เก็บไว้ครบ', () => {
+    expect(splitComposedName('ยิปโซ แห้ง พิเศษ ชมพู 120', 'ชมพู')).toEqual({ base: 'ยิปโซ แห้ง พิเศษ', price: '120' });
+  });
+
+  it('ราคาทศนิยม', () => {
+    expect(splitComposedName('กุหลาบ แดง 12.5', 'แดง')).toEqual({ base: 'กุหลาบ', price: '12.5' });
+  });
+
+  it('ชื่อลงท้ายด้วยตัวเลขที่เป็นส่วนหนึ่งของชื่อ + ราคาต่อท้าย', () => {
+    // "ป๊อปปี้B.2" = ชื่อ · "68" = ราคา · ไม่มีสี → ถอดราคาออกเหลือชื่อพร้อมเลขในตัว
+    expect(splitComposedName('ป๊อปปี้B.2 68', '')).toEqual({ base: 'ป๊อปปี้B.2', price: '68' });
+  });
+
+  it('คำสุดท้ายตรงกับชื่อสีแต่ไม่ได้ส่ง colorName มา → ไม่ถอด (ไม่เดา)', () => {
+    expect(splitComposedName('ยิปโซแห้ง เขียว', '')).toEqual({ base: 'ยิปโซแห้ง เขียว', price: '' });
+  });
+
+  it('token เดียว (ไม่ตัดจนเหลือว่าง แม้เป็นตัวเลขล้วน)', () => {
+    expect(splitComposedName('68', '')).toEqual({ base: '68', price: '' });
+  });
+
+  it('ค่าว่าง/ช่องว่างล้วน', () => {
+    expect(splitComposedName('', 'แดง')).toEqual({ base: '', price: '' });
+    expect(splitComposedName('   ', '')).toEqual({ base: '', price: '' });
+    expect(splitComposedName(null, null)).toEqual({ base: '', price: '' });
+  });
+
+  it('round-trip: ประกอบชื่อแล้วถอดกลับได้ชื่อฐาน+ราคาเดิม', () => {
+    const base = 'ทานตะวัน', colorName = 'เหลือง', wholesale = 45;
+    const composed = [base, colorName, String(wholesale)].filter(Boolean).join(' ');
+    expect(splitComposedName(composed, colorName)).toEqual({ base, price: String(wholesale) });
   });
 });
