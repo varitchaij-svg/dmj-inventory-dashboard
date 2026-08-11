@@ -1796,6 +1796,33 @@ function staffPerfCatDef_(key) {
   return STAFF_PERF_OTHER_;
 }
 
+// รวม "ยอดขายเป็นเงิน" ต่อผู้ขาย จากชีต "บิลขาย" — staffperf เดิมนับ "ออกบิลขาย" เป็นจำนวน
+// ใบเท่านั้น (byCat.sale) แต่คำถามบริหารคนอันดับหนึ่งของธุรกิจขายคือ "เซลคนไหนทำเงินมากสุด"
+// ยอดบาทมีอยู่ในชีตบิลขายครบทุกแถวอยู่แล้ว (col I=ยอดสุทธิ) — อ่านจากชีตนี้โดยตรง (แหล่งเงินจริง)
+// ไม่แกะจาก audit detail ที่เป็น JSON string เปราะ
+// rows = แถวดิบจากชีต "บิลขาย" · idx1=วันที่ idx5=ผู้ขาย idx8=ยอดสุทธิ idx20=สถานะ (ถ้าอ่านมาถึง)
+// pure — เทสต์ eval ตรงจากไฟล์นี้ (เหมือน staffPerfAggregateAudit_) ไม่ต้องมี Spreadsheet
+function staffPerfAggregateSales_(rows, monthKey) {
+  var byActor = {};
+  var counted = 0;
+  (rows || []).forEach(function (r) {
+    var day = staffPerfDayKey_(r[1]);
+    if (!day || day.slice(0, 7) !== monthKey) return;
+    // เฉพาะบิลที่สถานะ "สำเร็จ" — appendSaleBillRow_ เขียนค่านี้เสมอ เช็คเผื่ออนาคตมีสถานะยกเลิก
+    // (อ่านมาไม่ถึง col สถานะ = r[20] undefined → ข้ามการเช็ค ถือว่านับ)
+    var status = r.length > 20 ? String(r[20] == null ? "" : r[20]).trim() : "";
+    if (status && status !== "สำเร็จ") return;
+    var raw = String(r[5] == null ? "" : r[5]).trim();
+    if (!raw) return;                            // บิลไม่มีชื่อผู้ขาย — ผูกกับใครไม่ได้
+    var amt = Number(r[8]) || 0;
+    var b = byActor[raw] || (byActor[raw] = { revenue: 0, bills: 0 });
+    b.revenue += amt;
+    b.bills++;
+    counted++;
+  });
+  return { byActor: byActor, rows: counted };
+}
+
 function staffPerfBuild_(ss, monthStr) {
   const range = attMonthRange_(monthStr);   // ตัดวันอนาคตให้แล้ว (เดือนปัจจุบัน = ถึงวันนี้)
   const monthKey = range.month;
@@ -1870,11 +1897,34 @@ function staffPerfBuild_(ss, monthStr) {
   });
   unmatched.sort(function (a, b) { return b.total - a.total; });
 
+  // ── 3.5) ยอดขายเป็นเงินต่อผู้ขาย — อ่านชีต "บิลขาย" แล้วผูก staffId ด้วย nameToId ชุดเดียว
+  //   กับ audit (ชื่อในชีตบิลขายเป็น "ชื่อ (ตำแหน่ง)" รูปแบบเดียวกับ actor) · ชีตนี้เล็ก
+  //   (1 แถว/บิล) อ่าน A..I พอ (ครอบ วันที่/ผู้ขาย/ยอดสุทธิ) ไม่ต้องอ่านทั้ง 30 คอลัมน์
+  const salesByStaff = {};
+  const shBill = ss.getSheetByName(SHEET_SALE_BILLS);
+  if (shBill) {
+    const lastBill = shBill.getLastRow();
+    if (lastBill >= 2) {
+      const salesByRaw = staffPerfAggregateSales_(
+        shBill.getRange(2, 1, lastBill - 1, 9).getValues(), monthKey).byActor;
+      Object.keys(salesByRaw).forEach(function (raw) {
+        const sid = nameToId[raw.toLowerCase()] ||
+                    nameToId[staffPerfNormalizeActor_(raw).toLowerCase()] || null;
+        if (!sid) return;   // ผู้ขายที่จับคู่ชื่อไม่ได้ — ยอดจะไปโผล่ใน unmatched ของ audit อยู่แล้ว
+                            //   ถ้าคนนั้นมีงานอื่นในเดือน (ออกบิลก็เขียน audit "ออกบิลขาย" คู่กันเสมอ)
+        const cur = salesByStaff[sid] || (salesByStaff[sid] = { revenue: 0, bills: 0 });
+        cur.revenue += salesByRaw[raw].revenue;
+        cur.bills   += salesByRaw[raw].bills;
+      });
+    }
+  }
+
   // ── 4) ประกอบเป็นแถวต่อคน ──
   const todayStr = attDateKey_(new Date());
   const staff = staffAll.map(function (st) {
     const a = perStaff[st.staffId] || { total: 0, opsTotal: 0, byCat: {}, byDay: {} };
     const perDate = attByStaff[st.staffId] || {};
+    const sales = salesByStaff[st.staffId] || { revenue: 0, bills: 0 };
 
     let workedMin = 0, daysWorked = 0, lateDays = 0, lateMin = 0, daysAbsent = 0;
     range.dates.forEach(function (dateStr) {
@@ -1898,10 +1948,11 @@ function staffPerfBuild_(ss, monthStr) {
       workedMin: workedMin, daysWorked: daysWorked,
       lateDays: lateDays, lateMin: lateMin, daysAbsent: daysAbsent,
       perHour: perHour,
+      saleRevenue: sales.revenue, saleBills: sales.bills,
     };
   }).filter(function (row) {
     // คนที่ลาออกแล้วและไม่มีความเคลื่อนไหวในเดือนนั้น — ไม่ต้องรกหน้าจอ
-    return row.status === "active" || row.total > 0 || row.workedMin > 0;
+    return row.status === "active" || row.total > 0 || row.workedMin > 0 || row.saleRevenue > 0;
   }).sort(function (a, b) { return b.total - a.total || b.workedMin - a.workedMin; });
 
   return {
