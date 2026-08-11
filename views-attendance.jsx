@@ -585,6 +585,7 @@ function attWeekBuckets(days) {
 // หมายเหตุท้ายแถวรายวัน — เขียนเป็นคำ ไม่ใช่ไอคอนเปล่า (เจ้าของอ่านรายงานนี้เพื่อไปคุยกับพนักงาน)
 function attDayNote(d) {
   if (!d.inTime) {
+    if (d.beforeHire) return { text: "ยังไม่เข้าทำงาน", tone: "muted" };
     if (d.absent) return { text: "ขาด", tone: "bad" };
     if (!d.shift) return { text: "วันหยุด", tone: "muted" };
     return { text: d.isToday ? "ยังไม่ลงเวลา" : "ไม่ได้ลงเวลา", tone: "muted" };
@@ -626,7 +627,7 @@ function AttStat({ emoji, label, value, sub, color }) {
 // ⚠️ **แกนตั้งถูกบังคับให้กว้างอย่างน้อย 40 นาทีเสมอ** — ถ้าปล่อยให้ scale ตามข้อมูลล้วน
 //    ความต่าง 2 นาทีจะวาดออกมาเป็นภูเขา ทำให้เจ้าของเห็น "แนวโน้มแย่ลง" ที่ไม่มีอยู่จริง
 // ⚠️ เส้นประ = เวลาเข้างานตามกะ — ต้องอยู่ในกรอบเสมอ ไม่งั้นกราฟไม่มีอะไรให้เทียบว่า "สาย" คือเท่าไหร่
-function AttWeekLine({ weeks, refMin }) {
+function AttWeekLine({ weeks, refMin, refLabel }) {
   const pts = (weeks || []).filter(w => w.avgIn != null);
   if (!pts.length) {
     return <div style={{ fontSize: 12.5, color: "var(--muted)", padding: "18px 0", textAlign: "center" }}>ยังไม่มีการลงเวลาในเดือนนี้</div>;
@@ -696,7 +697,7 @@ function AttWeekLine({ weeks, refMin }) {
       <div style={{ display: "flex", gap: 14, justifyContent: "center", marginTop: 8, fontSize: 10.5, color: "var(--muted)", flexWrap: "wrap" }}>
         <span><span style={{ display: "inline-block", width: 14, height: 2.5, background: "#2a7fd4", verticalAlign: "middle", marginRight: 5 }} />เวลาเข้างานเฉลี่ย</span>
         {refMin != null && (
-          <span><span style={{ display: "inline-block", width: 14, borderTop: "2px dashed #d94a3d", verticalAlign: "middle", marginRight: 5 }} />เวลาเข้างานตามกะ ({attMinToClock(refMin)} น.)</span>
+          <span><span style={{ display: "inline-block", width: 14, borderTop: "2px dashed #d94a3d", verticalAlign: "middle", marginRight: 5 }} />{refLabel || "เวลาเข้างานตามกะ"} ({attMinToClock(refMin)} น.)</span>
         )}
       </div>
     </div>
@@ -771,10 +772,11 @@ function AttendanceReportView() {
   const narrow = useIsMobile(1150);
   const statCols = mobile ? 2 : narrow ? 3 : 6;
 
-  const load = uC(async (m) => {
+  // fresh=true เฉพาะตอนกด 🔄 เอง (ข้าม cache 5 นาทีฝั่ง GAS) — สลับเดือน/เปิดหน้าใหม่ใช้ cache ปกติ
+  const load = uC(async (m, fresh) => {
     setLoading(true); setErr(null);
     try {
-      const d = await attPost({ action: "attendanceMonthlySummary", month: m });
+      const d = await attPost({ action: "attendanceMonthlySummary", month: m, fresh: !!fresh });
       if (d && d.success) setData(d.data);
       else { setErr((d && d.error) || "โหลดไม่สำเร็จ"); setData(null); }
     } catch (e) { setErr(e.message); }
@@ -833,7 +835,7 @@ function AttendanceReportView() {
             <option value="">👥 ทั้งหมด</option>
             {rows.map(r => <option key={r.staffId} value={r.staffId}>{r.name}</option>)}
           </select>
-          <button className="btn ghost" onClick={() => load(month)} disabled={loading} title="โหลดใหม่"
+          <button className="btn ghost" onClick={() => load(month, true)} disabled={loading} title="โหลดใหม่"
             style={{ minHeight: 40, display: "flex", alignItems: "center", gap: 6 }}>
             {loading ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }} /> : "🔄"}
           </button>
@@ -867,10 +869,10 @@ function AttendanceReportView() {
             sub={presentPct != null ? presentPct + "% ของวันที่มีกะ" : "ยังไม่มีกะกำหนด"} />
           <AttStat emoji="🕗" color="#a07417" label="เวลาเข้างานเฉลี่ย"
             value={attMinToClock(t.avgInMin) + " น."}
-            sub={t.shiftStart ? "เวลาเข้างานตามกะ " + t.shiftStart + " น." : "ไม่ได้ตั้งกะไว้"} />
+            sub={t.shiftStart ? "เวลาเข้างานตามกะ " + t.shiftStart + " น." + (one ? "" : " (ที่พบบ่อยสุด — คนละกะกันได้)") : "ไม่ได้ตั้งกะไว้"} />
           <AttStat emoji="🏁" color="#7a5cc8" label="เวลาออกงานเฉลี่ย"
             value={attMinToClock(t.avgOutMin) + " น."}
-            sub={t.shiftEnd ? "เวลาเลิกงานตามกะ " + t.shiftEnd + " น." : "ไม่ได้ตั้งกะไว้"} />
+            sub={t.shiftEnd ? "เวลาเลิกงานตามกะ " + t.shiftEnd + " น." + (one ? "" : " (ที่พบบ่อยสุด — คนละกะกันได้)") : "ไม่ได้ตั้งกะไว้"} />
           <AttStat emoji="🍽️" color="#1f6f8b" label="พักเฉลี่ย/วัน"
             value={t.breakAvg == null ? "—" : Math.round(t.breakAvg) + " นาที"}
             sub={"รวม " + attMinLabel(t.breakMin)} />
@@ -904,7 +906,7 @@ function AttendanceReportView() {
         <div style={{ display: "grid", gridTemplateColumns: mobile ? "minmax(0,1fr)" : "repeat(auto-fit, minmax(320px, 1fr))", gap: 16, marginBottom: 16 }}>
           <Card padding={true} title="เวลาเข้างานเฉลี่ย (เทียบตามสัปดาห์)"
             sub={one ? one.name : "เฉลี่ยรวมทุกคน"}>
-            <AttWeekLine weeks={weeks} refMin={refMin} />
+            <AttWeekLine weeks={weeks} refMin={refMin} refLabel={one ? "เวลาเข้างานตามกะ" : "เวลาเข้างานตามกะ (ที่พบบ่อยสุด)"} />
           </Card>
           <Card padding={true} title="เข้าห้องน้ำเฉลี่ยต่อวัน (นาที)"
             sub="เวลาห้องน้ำไม่ถูกหักออกจากชั่วโมงทำงาน">
@@ -1435,4 +1437,4 @@ function AttFixModal({ mode, staff, event, date, onClose, onSaved }) {
   );
 }
 
-const ROLE_TH_ATT = { owner: "เจ้าของ", saler: "Sale", warehouse: "คลังสินค้า", frontstore: "หน้าร้าน", employee: "พนักงาน" };
+const ROLE_TH_ATT = { owner: "เจ้าของ", saler: "Sale", warehouse: "คลังสินค้า", frontstore: "หน้าร้าน", employee: "พนักงาน", dev: "DEV", storedevice: "เครื่องร้าน" };

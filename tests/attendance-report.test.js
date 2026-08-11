@@ -52,9 +52,9 @@ const { attTimeToMin, attMinToClock, attHoursLabel, attReportAgg, attWeekBuckets
     return { attTimeToMin, attMinToClock, attHoursLabel, attReportAgg, attWeekBuckets, attDayNote };`)();
 })();
 
-// วันหนึ่งแบบที่ backend ส่งมา (attendanceMonthlySummaryHandler_)
+// วันหนึ่งแบบที่ backend ส่งมา (attendanceMonthlySummaryBuild_)
 const day = (o) => Object.assign({
-  date: '2026-07-01', dow: 3, isToday: false, isPast: true, absent: false,
+  date: '2026-07-01', dow: 3, isToday: false, isPast: true, absent: false, beforeHire: false,
   shift: { name: 'กะปกติ', start: '08:00', end: '17:00' },
   inTime: null, outTime: null, workedMin: null, lateMin: null,
   breakMin: 0, breakCount: 0, bathroomMin: 0, bathroomCount: 0,
@@ -234,6 +234,13 @@ describe('attDayNote — หมายเหตุรายวันต้อง�
   it('วันปกติครบถ้วน = "-" ไม่ใช่ข้อความเตือน', () => {
     expect(attDayNote(day({ inTime: '08:00:00', outTime: '17:00:00', lateMin: 0 })).text).toBe('-');
   });
+  it('วันก่อนเข้างานจริง (beforeHire) = "ยังไม่เข้าทำงาน" ไม่ใช่ "ขาด"/"วันหยุด"', () => {
+    // ถ้าเข้าไปทาง "วันหยุด"/"ขาด" แปลว่า backend ไม่ได้กันวันก่อนวันเข้างานออกจาก absent
+    // ให้ (มีคีย์ shift อยู่ + absent=false) แล้วยังต้องอ่านจาก beforeHire โดยตรง ไม่ใช่เดาจาก field อื่น
+    const n = attDayNote(day({ beforeHire: true, shift: null, absent: false }));
+    expect(n.text).toBe('ยังไม่เข้าทำงาน');
+    expect(n.tone).toBe('muted');
+  });
 });
 
 // ── meta: จุดเชื่อมต่อที่พังแล้วไม่มี error ให้เห็น ──────────────────────────
@@ -283,16 +290,28 @@ describe('meta — แท็บใหม่ต่อครบสาย', () => {
 
 describe('meta — ตัวเลขต้องมาจาก GAS ที่เดียว', () => {
   it('backend ส่ง days[] ต่อคน (ไม่งั้นตารางรายวัน/กราฟไม่มีข้อมูล)', () => {
-    const h = grab(GS, /function attendanceMonthlySummaryHandler_[\s\S]*?\n\}/);
+    const h = grab(GS, /function attendanceMonthlySummaryBuild_[\s\S]*?\n\}/);
     expect(h).toMatch(/days: days/);
     expect(h).toMatch(/daysPresent/);
     expect(h).toMatch(/bathroomCount/);
   });
 
   it('backend ยังใช้ attSummarize_/attShiftFor_ ตัวเดียวกับหน้า "เวลาของฉัน"', () => {
-    const h = grab(GS, /function attendanceMonthlySummaryHandler_[\s\S]*?\n\}/);
+    const h = grab(GS, /function attendanceMonthlySummaryBuild_[\s\S]*?\n\}/);
     expect(h).toMatch(/attSummarize_\(evs, shift\)/);
     expect(h).toMatch(/attShiftFor_\(shifts, st\.role/);
+  });
+
+  it('handler cache ผล 5 นาที ต่อเดือน แต่ fresh=1 ต้องข้าม cache เสมอ (กด 🔄 ต้องได้ของสด)', () => {
+    const h = grab(GS, /function attendanceMonthlySummaryHandler_[\s\S]*?\n\}/);
+    expect(h).toMatch(/cache\.get\(cacheKey\)/);
+    expect(h).toMatch(/if \(!data\.fresh\)/);
+    expect(h).toMatch(/attendanceMonthlySummaryBuild_\(ss, month\)/);
+  });
+
+  it('แก้เวลาย้อนหลัง (fixAttendance) ต้องล้าง cache ของรายงานเดือนนั้น ไม่งั้นเจ้าของแก้แล้วยังเห็นเลขเก่า', () => {
+    const h = grab(GS, /function fixAttendanceHandler_[\s\S]*?\n\}/);
+    expect(h).toMatch(/dmj_attmonthly_.*dateStr\.slice\(0, 7\)/);
   });
 
   it('นับ "ครั้ง" ที่ Start — วันที่ลืมกดกลับต้องยังนับเป็น 1 ครั้ง', () => {
@@ -317,6 +336,38 @@ describe('meta — ตัวเลขต้องมาจาก GAS ที่�
   });
 });
 
+// ── วันก่อนเข้างานจริง (hire-floor) ห้ามถูกนับเป็น "ขาด"/"มีกะ" ────────────────
+// พังจริงที่พบ: คนเข้าใหม่กลางเดือน โดนนับขาดทุกวันก่อนหน้าที่ยังไม่ได้เป็นพนักงานเลย
+// เพราะ absent เดิมเช็คแค่ isPast+shift+!inTime โดยไม่มีพื้นวันเข้างานกันไว้เลย
+describe('meta — วันก่อนเข้างานจริง (createdAt) ต้องไม่นับขาด/มีกะ', () => {
+  it('hireFloor คำนวณจาก st.createdAt แล้วกันทั้ง shift และ absent ของวันก่อนหน้านั้น', () => {
+    const build = grab(GS, /function attendanceMonthlySummaryBuild_[\s\S]*?\n\}/);
+    expect(build).toMatch(/hireFloor = st\.createdAt \? attDateKey_\(new Date\(st\.createdAt\)\) : ''/);
+    expect(build).toMatch(/beforeHire = !!\(hireFloor && dateStr < hireFloor\)/);
+    // shift ต้องเป็น null ก่อนวันเข้างาน — ถ้ายังเรียก attShiftFor_ ตรง ๆ แปลว่า guard หลุด
+    expect(build).toMatch(/shift = beforeHire \? null : attShiftFor_\(/);
+    // absent ต้องยังพึ่ง shift (ซึ่งเป็น null ไปแล้วเมื่อ beforeHire) ไม่ใช่เช็ค beforeHire ซ้ำคนละที่
+    expect(build).toMatch(/absent = !!\(isPast && shift && !sum\.inTime\)/);
+  });
+
+  it('ส่ง beforeHire ออกไปในแต่ละวัน ไม่งั้น frontend แยกไม่ออกจาก "วันหยุด" ธรรมดา', () => {
+    const build = grab(GS, /function attendanceMonthlySummaryBuild_[\s\S]*?\n\}/);
+    expect(build).toMatch(/beforeHire: beforeHire,/);
+  });
+
+  it('createdAt ว่าง/parse ไม่ออก → hireFloor เป็นค่าว่าง (ไม่จำกัดวัน) ไม่ใช่เดาวันเข้างาน', () => {
+    // st.createdAt falsy → เงื่อนไข ternary สั้นวงจรไปที่ '' โดยไม่เรียก attDateKey_/new Date เลย
+    const hireFloorOf = (createdAt) => {
+      const attDateKey_ = () => { throw new Error('ไม่ควรถูกเรียกเมื่อ createdAt ว่าง'); };
+      const st = { createdAt };
+      return st.createdAt ? attDateKey_(new Date(st.createdAt)) : '';
+    };
+    expect(hireFloorOf('')).toBe('');
+    expect(hireFloorOf(null)).toBe('');
+    expect(hireFloorOf(undefined)).toBe('');
+  });
+});
+
 describe('meta — อ่านรายงานผิดไม่ได้', () => {
   it('แถบ "อ่านตัวเลขนี้ยังไง" ยังอยู่ (ค่าเฉลี่ยพวกนี้ตีความผิดง่ายมาก)', () => {
     const view = grab(ATT, /function AttendanceReportView\(\)[\s\S]*?\n\}\n/);
@@ -330,9 +381,15 @@ describe('meta — อ่านรายงานผิดไม่ได้', (
   });
 
   it('แกนตั้งของกราฟเวลาเข้างานถูกบังคับความกว้างขั้นต่ำ + มีเส้นกะให้เทียบ', () => {
-    const chart = grab(ATT, /function AttWeekLine\(\{ weeks, refMin \}\) \{[\s\S]*?\n\}\n/);
+    const chart = grab(ATT, /function AttWeekLine\(\{ weeks, refMin, refLabel \}\) \{[\s\S]*?\n\}\n/);
     expect(chart).toMatch(/Math\.max\(40,/);
     expect(chart).toMatch(/refMin/);
+  });
+
+  it('โหมด "ทั้งหมด" (คนละกะกันได้) ต้องบอกว่าเส้นอ้างอิงเป็นค่าที่พบบ่อยสุด ไม่ใช่กะจริงของทุกคน', () => {
+    const view = grab(ATT, /function AttendanceReportView\(\)[\s\S]*?\n\}\n/);
+    expect(view).toMatch(/refLabel=\{one \?/);
+    expect(view).toMatch(/ที่พบบ่อยสุด/);
   });
 
   it('ปุ่ม/ตัวเลือกมี .no-print — ไม่งั้นปุ่มติดไปใน PDF ที่ส่งให้คนอื่นดู', () => {
@@ -344,5 +401,12 @@ describe('meta — อ่านรายงานผิดไม่ได้', (
     const view = grab(ATT, /function AttendanceReportView\(\)[\s\S]*?\n\}\n/);
     expect(view).toMatch(/useIsMobile\(/);
     expect(view).toMatch(/mobile \? <AttDayCards[\s\S]*?: <AttDayTable/);
+  });
+
+  it('ROLE_TH_ATT ครบทุก role ที่ readStaffAll_ กรอง active ให้ (ไม่งั้น dev/storedevice ขึ้นเป็นภาษาอังกฤษดิบ)', () => {
+    const rolesTh = grab(GS, /const STAFF_ROLE_TH_ = \{[^}]*\}/);
+    const roleKeys = [...rolesTh.matchAll(/(\w+):\s*"/g)].map(m => m[1]);
+    const attTable = grab(ATT, /const ROLE_TH_ATT = \{[^}]*\}/);
+    roleKeys.forEach(role => expect(attTable).toMatch(new RegExp('\\b' + role + ':')));
   });
 });

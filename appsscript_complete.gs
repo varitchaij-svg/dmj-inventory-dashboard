@@ -1279,7 +1279,7 @@ function myTodayHandler_(ss, data) {
 // เฟส B: ให้พนักงานเช็คชั่วโมง/สาย/ขาดของตัวเองได้เอง ก่อนที่เจ้าของจะเอาไปใช้ที่ไหน
 // (เรื่องความไว้ใจ — เห็นตัวเลขเดียวกับที่เจ้าของเห็น ไม่ใช่รู้ทีหลังว่าโดนนับว่าสาย)
 //
-// range = วันที่ 1 ถึง "วันสุดท้ายของเดือน" หรือ "เมื่อวาน" ถ้าเป็นเดือนปัจจุบัน (ไม่โชว์วันอนาคต)
+// range = วันที่ 1 ถึง "วันสุดท้ายของเดือน" หรือ "วันนี้" ถ้าเป็นเดือนปัจจุบัน (ไม่โชว์วันอนาคต)
 function attMonthRange_(monthStr) {
   const now = new Date();
   const curMonth = attDateKey_(now).slice(0, 7);
@@ -1405,11 +1405,34 @@ function attendanceTodayHandler_(ss, data) {
 //    ที่คิดคนละที่จะเพี้ยนคนละทางแล้วไม่มีใครรู้ว่าอันไหนถูก (หลักเดียวกับ staffPerfHandler_
 //    ที่บังคับให้ใช้ attSummarize_/attShiftFor_ ตัวเดียวกับหน้า "เวลาของฉัน")
 // ⚠️ ก้อนที่โตคือ "คน × วัน" (~10 คน × 31 วัน) ไม่ใช่ "แถวในชีต" — ยังอ่านชีตรอบเดียวเหมือนเดิม
+// 5 นาที — รายงานย้อนหลัง ไม่ใช่ตัวเลขที่ต้องสดวินาทีต่อวินาที (เหมือน STAFF_PERF_CACHE_TTL_SEC_)
+// ⚠️ อ่านชีตลงเวลาทั้งใบ (getRange กว้าง 17 คอลัมน์) แล้วรัน attSummarize_ ต่อคน×วัน ทุกครั้งที่ไม่ hit
+//    cache — ชีตนี้โตไม่หยุด (บทเรียน Phase 7.7) ไม่ cache = ทุกกดลูกศรเปลี่ยนเดือน/รีเฟรชอ่านทั้งใบใหม่
+const ATT_MONTHLY_CACHE_TTL_SEC_ = 300;
+
 function attendanceMonthlySummaryHandler_(ss, data) {
   const s = resolveSession_(ss, data.sessionToken);
   if (!s || !isAdminRole_(s.role) || s.status !== 'active') return unauthorized_();
 
-  const range = attMonthRange_(String(data.month || ''));
+  const month = attMonthRange_(String(data.month || '')).month;
+  const cacheKey = 'dmj_attmonthly_' + month;
+  const cache = CacheService.getScriptCache();
+  if (!data.fresh) {
+    try {
+      const hit = cache.get(cacheKey);
+      if (hit) return ContentService.createTextOutput(hit).setMimeType(ContentService.MimeType.JSON);
+    } catch (err) { /* cache อ่านไม่ได้ก็แค่คำนวณใหม่ */ }
+  }
+
+  const body = JSON.stringify({ success: true, data: attendanceMonthlySummaryBuild_(ss, month) });
+  try { cache.put(cacheKey, body, ATT_MONTHLY_CACHE_TTL_SEC_); } catch (err) { /* ใหญ่เกิน/เต็ม = ข้าม */ }
+  return ContentService.createTextOutput(body).setMimeType(ContentService.MimeType.JSON);
+}
+
+// แยกจาก handler ล้วน ๆ เพื่อให้ผลลัพธ์ดิบ (object) ถูก cache เป็น JSON string ได้ตรง ๆ
+// โดยไม่ต้องยุ่งกับ session/cache — handler ด้านบนเป็นคนตัดสินใจว่าจะเรียกฟังก์ชันนี้เมื่อไหร่
+function attendanceMonthlySummaryBuild_(ss, monthStr) {
+  const range = attMonthRange_(monthStr);
   const shifts = readAttShifts_(ss);
   const todayStr = attDateKey_(new Date());
 
@@ -1429,12 +1452,17 @@ function attendanceMonthlySummaryHandler_(ss, data) {
   const staffAll = readStaffAll_(ss).filter(function (x) { return x.status === 'active'; });
   const rows = staffAll.map(function (st) {
     const byDate = byStaffDate[st.staffId] || {};
+    // ⚠️ วันก่อนวันเข้างานจริง (createdAt) ห้ามนับเป็น "ขาด"/"มีกะ" — ไม่งั้นคนเข้าใหม่กลางเดือน
+    // จะโดนนับขาดทุกวันก่อนหน้าที่ยังไม่ได้เป็นพนักงานเลย (ตัวเลขนี้เจ้าของเอาไปคุยเรื่องเงินเดือน)
+    // createdAt ไม่มี/parse ไม่ออก → ไม่จำกัดวัน (ปลอดภัยกว่าเดาวันเข้างานผิด)
+    const hireFloor = st.createdAt ? attDateKey_(new Date(st.createdAt)) : '';
     let workedMin = 0, daysWorked = 0, daysPresent = 0, daysScheduled = 0,
         lateDays = 0, lateMin = 0, daysAbsent = 0,
         breakMin = 0, breakCount = 0, bathroomMin = 0, bathroomCount = 0;
     const days = range.dates.map(function (dateStr) {
       const dow = attDowOfDateStr_(dateStr);
-      const shift = attShiftFor_(shifts, st.role, dow);
+      const beforeHire = !!(hireFloor && dateStr < hireFloor);
+      const shift = beforeHire ? null : attShiftFor_(shifts, st.role, dow);
       const evs = (byDate[dateStr] || []).sort(function (a, b) { return a.serverTs - b.serverTs; });
       const sum = attSummarize_(evs, shift);
       const isPast = dateStr < todayStr;
@@ -1455,6 +1483,7 @@ function attendanceMonthlySummaryHandler_(ss, data) {
 
       return {
         date: dateStr, dow: dow, isToday: dateStr === todayStr, isPast: isPast, absent: absent,
+        beforeHire: beforeHire,
         shift: shift ? { name: shift.name, start: attFmtHm_(shift.start), end: attFmtHm_(shift.end) } : null,
         inTime: sum.inTime, outTime: sum.outTime,
         workedMin: sum.workedMin, lateMin: sum.lateMin,
@@ -1474,11 +1503,11 @@ function attendanceMonthlySummaryHandler_(ss, data) {
     };
   });
 
-  return ok({
+  return {
     month: range.month, isCurrentMonth: range.isCurrentMonth,
     lastDate: range.dates[range.dates.length - 1] || '',
     rows: rows,
-  });
+  };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1619,6 +1648,10 @@ function fixAttendanceHandler_(ss, data) {
 
     writeAuditLog_(who, "แก้ไขการลงเวลา (" + op + ")", staffId + " " + dateStr,
       auditDetail_({ before: before, after: after, note: reason }));
+
+    // แก้ย้อนหลังเปลี่ยนตัวเลขของเดือนนั้น — cache ของ "รายงานการเข้างาน" (5 นาที) ต้องล้าง
+    // ทันที ไม่งั้นเจ้าของกดแก้แล้วเปิดรายงานไปดูยังเห็นเลขเก่าค้างอยู่จนกว่า cache จะหมดอายุเอง
+    try { CacheService.getScriptCache().remove('dmj_attmonthly_' + dateStr.slice(0, 7)); } catch (e) {}
 
     // คำนวณสถานะของวันนั้นใหม่ ส่งกลับให้ UI โชว์ผลทันที + เตือนถ้าลำดับยังเพี้ยน
     const events = readAttEvents_(ss, staffId, dateStr);
