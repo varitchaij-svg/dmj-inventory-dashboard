@@ -13089,8 +13089,32 @@ function searchContact(query) {
 // ตัวนี้บอกให้เห็นกับตาว่า ZORT เก็บอะไรไว้จริง — แยกให้ขาดระหว่าง
 //   (ก) line item ผิด/หาย  vs  (ข) line item ถูกแต่ "ยอดหัวเอกสาร" เป็น 0
 // ซึ่งแก้คนละทางกันสิ้นเชิง · เทียบกับชีต "บิลขาย" ฝั่งเราให้ด้วยว่ายอดตรงกันไหม
+// หาเลขบิลล่าสุดจากชีต "บิลขาย" — ใช้ตอนเจ้าของกดรันจาก dropdown โดยไม่ใส่ argument
+// ⚠️ อ่านเฉพาะ ~200 แถวท้าย ไม่ getDataRange ทั้งใบ (ชีตโตขึ้น 1 แถวต่อ 1 บิล ไม่มีเพดาน)
+function latestSaleBillNumber_() {
+  try {
+    var sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_SALE_BILLS);
+    if (!sh || sh.getLastRow() < 2) return "";
+    var last = sh.getLastRow();
+    var startRow = Math.max(2, last - 199);
+    var rows = sh.getRange(startRow, 4, last - startRow + 1, 1).getValues();   // D = เลขบิล
+    for (var i = rows.length - 1; i >= 0; i--) {
+      var v = String(rows[i][0] || "").trim();
+      if (v) return v;
+    }
+  } catch (e) { Logger.log('   (อ่านเลขบิลล่าสุดไม่ได้: ' + e + ')'); }
+  return "";
+}
+
 function checkSaleBillInZort(number) {
   var num = String(number || "").trim();
+  // ⚠️ GAS editor **ส่ง argument ไม่ได้** — กดรันจาก dropdown จะได้ number = undefined เสมอ
+  //    ซึ่งเป็นทางเดียวที่เจ้าของรันตัวนี้จริง ๆ → ไม่ใส่เลข = ตรวจ "บิลล่าสุด" ให้เลย
+  //    (หลักเดียวกับ listCategoryBreakdown() ที่ต้องทำงานได้เมื่อไม่มี argument)
+  if (!num) {
+    num = latestSaleBillNumber_();
+    if (num) Logger.log('ℹ️ ไม่ได้ระบุเลขบิล → ตรวจบิลล่าสุดในชีต "' + SHEET_SALE_BILLS + '": ' + num);
+  }
   if (!num) { Logger.log('❌ ใส่เลขบิลด้วย เช่น checkSaleBillInZort("RC-202608007")'); return { ok: false }; }
 
   var found = findZortOrderByNumber_(num);

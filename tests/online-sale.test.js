@@ -626,3 +626,83 @@ describe('meta — OnlineSaleResult (สรุปที่ส่งให้ล�
     expect(cmp).not.toMatch(/className="(?!no-print)/);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 🔎 checkSaleBillInZort — เครื่องมือตรวจ "ทำไม ZORT ขึ้นมูลค่า 0"
+// ⚠️ GAS editor **ส่ง argument ไม่ได้** → กดรันจาก dropdown จะได้ number = undefined เสมอ
+//    ซึ่งเป็นทางเดียวที่เจ้าของรันตัวนี้จริง ๆ · ถ้าไม่รองรับเคสไม่มี argument = เครื่องมือ
+//    ที่มองเห็นใน dropdown แต่กดแล้วได้แต่ข้อความบอกให้ใส่เลขที่ใส่ไม่ได้ (หลักเดียวกับ
+//    listCategoryBreakdown() ที่บังคับไว้แล้วว่าต้องทำงานได้เมื่อไม่มี argument)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('checkSaleBillInZort — เจ้าของกดรันจาก dropdown ได้จริง (ไม่ต้องใส่ argument)', () => {
+  const SRC_LATEST = grab(GS, /function latestSaleBillNumber_\(\) \{[\s\S]*?\n\}/, 'latestSaleBillNumber_');
+
+  function runLatest(rows) {
+    const calls = [];
+    const logs = [];
+    const sheet = {
+      getLastRow: () => rows.length + 1,                    // +1 = แถวหัวคอลัมน์
+      getRange: (r, c, nr, nc) => {
+        calls.push({ r, c, nr, nc });
+        const out = [];
+        for (let i = 0; i < nr; i++) out.push([rows[r - 2 + i]]);
+        return { getValues: () => out };
+      },
+      getDataRange: () => { throw new Error('ห้ามอ่านทั้งใบ — ชีตบิลขายโต 1 แถวต่อ 1 บิล'); },
+    };
+    const SpreadsheetApp = { openById: () => ({ getSheetByName: () => sheet }) };
+    const Logger = { log: (m) => logs.push(String(m)) };
+    // eslint-disable-next-line no-new-func
+    const fn = new Function('SpreadsheetApp', 'Logger', 'SHEET_ID', 'SHEET_SALE_BILLS',
+      SRC_LATEST + '\nreturn latestSaleBillNumber_();');
+    return { val: fn(SpreadsheetApp, Logger, 'sid', 'บิลขาย'), calls, logs };
+  }
+
+  it('คืนเลขบิลล่าสุด (แถวท้ายสุดของชีต)', () => {
+    expect(runLatest(['RC-202608001', 'RC-202608007']).val).toBe('RC-202608007');
+  });
+
+  it('แถวท้ายเลขบิลว่าง → ไล่ขึ้นไปหาตัวที่มีจริง ไม่คืนค่าว่าง', () => {
+    expect(runLatest(['RC-202608001', 'RC-202608007', '', '  ']).val).toBe('RC-202608007');
+  });
+
+  it('ชีตว่าง/มีแต่หัวคอลัมน์ → คืน "" เฉย ๆ ไม่ throw', () => {
+    expect(runLatest([]).val).toBe('');
+  });
+
+  it('อ่าน "คอลัมน์ D คอลัมน์เดียว" ไม่ใช่ทั้งแถว (เลขบิลอยู่ D)', () => {
+    const { calls } = runLatest(['RC-1', 'RC-2']);
+    expect(calls.length).toBe(1);
+    expect(calls[0].c).toBe(4);
+    expect(calls[0].nc).toBe(1);
+  });
+
+  it('ชีตใหญ่ → อ่านแค่ ~200 แถวท้าย ไม่ getDataRange ทั้งใบ', () => {
+    const rows = Array.from({ length: 500 }, (_, i) => 'RC-' + i);
+    const { val, calls } = runLatest(rows);
+    expect(val).toBe('RC-499');
+    expect(calls[0].nr).toBe(200);          // ไม่ใช่ 500
+    expect(calls[0].r).toBe(302);           // เริ่มที่แถวท้าย ๆ ไม่ใช่แถว 2
+  });
+
+  it('meta — ไม่มี argument แล้วต้องไปหาบิลล่าสุด "ก่อน" ขึ้นข้อความให้ใส่เลข', () => {
+    const fn = grab(GS, /function checkSaleBillInZort\(number\) \{[\s\S]*?\n\}\n/, 'checkSaleBillInZort');
+    const iLatest = fn.indexOf('latestSaleBillNumber_()');
+    const iErr = fn.indexOf('❌ ใส่เลขบิลด้วย');
+    expect(iLatest).toBeGreaterThan(-1);
+    expect(iErr).toBeGreaterThan(-1);
+    // หาบิลล่าสุดต้องมาก่อน — สลับลำดับ = กดจาก dropdown แล้วได้แต่ข้อความที่ทำตามไม่ได้
+    expect(iLatest).toBeLessThan(iErr);
+  });
+
+  it('meta — ยังเป็น READ-ONLY (ห้ามเขียน/สร้างชีตในเครื่องมือวินิจฉัย)', () => {
+    const fn = grab(GS, /function checkSaleBillInZort\(number\) \{[\s\S]*?\n\}\n/, 'checkSaleBillInZort');
+    expect(fn).not.toMatch(/setValue|appendRow|insertSheet|deleteRow|getOrCreateSheet_/);
+    expect(SRC_LATEST).not.toMatch(/setValue|appendRow|insertSheet|deleteRow|getOrCreateSheet_/);
+  });
+
+  it('meta — ชื่อไม่มี "_" ต่อท้าย จึงโผล่ใน dropdown (บทเรียนข้อ 1)', () => {
+    expect(GS).toMatch(/^function checkSaleBillInZort\(/m);
+    expect(GS).not.toMatch(/^function checkSaleBillInZort_\(/m);
+  });
+});
