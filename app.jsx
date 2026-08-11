@@ -1193,17 +1193,28 @@ function App() {
       }
       // ห้าม `r.json()` ตรง ๆ — GAS ตอบหน้า HTML ได้ (ลิงก์หมดอายุ/กำลัง deploy/quota เต็ม)
       // แล้วผู้ใช้จะเห็น `SyntaxError: Unexpected token '<'` ซึ่งอ่านไม่รู้เรื่อง (บทเรียนข้อ 13)
-      // ⚠️ `payload:ไบต์แรก` ต้องมาจากไบต์จริง ไม่ใช่เดา — การนับไบต์ระหว่างสตรีม
-      // (`dmjJsonProgress`) เป็นงาน Phase 7.6 ที่ยังไม่เอากลับเข้ามารอบนี้ · ที่นี่จึงวัดได้แค่
-      // "เริ่มยิง" กับ "ได้ก้อนครบ" ซึ่งยังแยก **รอ GAS คิด+ดาวน์โหลด** ออกจากขั้นอื่นได้อยู่
-      // (จะแยกสองอันนั้นออกจากกันต้องรอ 7.6 กลับมา — บันทึกไว้ใน CLAUDE.md แล้ว)
-      const getJson = r => (typeof dmjJson === 'function' ? dmjJson(r) : r.json());
+      // ✅ `payload:ไบต์แรก` มาจากไบต์จริงแล้ว — `dmjJsonProgress` (ก้อนแรกของ Phase 7.6
+      //    ที่เอากลับมา เฉพาะส่วนวัดผล) อ่านคำตอบแบบสตรีมแล้ว mark ตอนได้ไบต์แรก →
+      //    แยก "รอ GAS คิด" (เริ่ม→ไบต์แรก) ออกจาก "ดาวน์โหลด" (ไบต์แรก→ครบ) ได้จริง
+      // Phase 7.6 (เอากลับทีละก้อน — เริ่มจาก "การวัด" ก่อน ไม่แตะ logic อื่น):
+      // อ่านคำตอบแบบสตรีมเพื่อ mark `payload:ไบต์แรก` = จังหวะที่ GAS เริ่มตอบจริง
+      // → BootTrace แยกได้ว่า "รอ GAS คิด" (เริ่ม→ไบต์แรก) กับ "ดาวน์โหลด" (ไบต์แรก→ครบ)
+      // อันไหนคือคอขวด · เบราว์เซอร์ไม่รองรับสตรีม → dmjJsonProgress fallback ไป dmjJson เอง
+      let _firstByte = false, _gotBytes = 0;
+      const onBytes = n => {
+        _gotBytes = n;
+        if (!_firstByte) { _firstByte = true; try { window.dmjMark('payload:ไบต์แรก'); } catch (e) {} }
+      };
+      const getJson = r => (typeof dmjJsonProgress === 'function' ? dmjJsonProgress(r, onBytes)
+                          : typeof dmjJson === 'function' ? dmjJson(r) : r.json());
       window.dmjMark(prefetched ? 'payload:เริ่ม(prefetch)' : 'payload:เริ่ม');
       return (prefetched
       ? prefetched.then(d => d || fetch(bustUrl, { signal: controller.signal }).then(getJson))
       : fetch(bustUrl, { signal: controller.signal }).then(getJson))
       .then(d => {
-        window.dmjMark('payload:ครบ');
+        // แนบขนาดที่ดาวน์โหลดจริง (หลังคลาย gzip) ให้เห็นในไทม์ไลน์ด้วย — ช่วยดูแนวโน้มว่า
+        // ก้อนโตขึ้นไหม · หมายเหตุ: นี่คือไบต์หลังคลายบีบอัด ไม่ใช่ไบต์บนสาย (ดู Finding 3)
+        window.dmjMark('payload:ครบ' + (_gotBytes ? ' (' + Math.round(_gotBytes / 1024) + 'KB)' : ''));
         if (d && d.lastModified) window._dataLoadedAt = d.lastModified;
         if (typeof resetCatColorMap === 'function') resetCatColorMap();
         // Phase 7.3: server ติดธง `stale` มาเมื่อมีคนอื่นกำลังสร้างข้อมูลชุดใหม่อยู่
