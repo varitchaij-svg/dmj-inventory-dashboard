@@ -7669,7 +7669,8 @@ function StaffPerformanceView() {
     });
     // ตำแหน่งที่มีคนทำงานเยอะสุดขึ้นก่อน
     return Object.keys(g)
-      .map(k => ({ role: k, rows: g[k], total: g[k].reduce((a, s) => a + s.total, 0) }))
+      .map(k => ({ role: k, rows: g[k], total: g[k].reduce((a, s) => a + s.total, 0),
+                   revenue: g[k].reduce((a, s) => a + (s.saleRevenue || 0), 0) }))
       .sort((a, b) => b.total - a.total);
   }, [d]);
 
@@ -7714,7 +7715,9 @@ function StaffPerformanceView() {
         <b>อ่านตัวเลขนี้ยังไง</b> — นับเฉพาะ<b>งานที่ทำผ่านแอป</b> (นับสต็อก · เช็คหน้าร้าน · จัดออเดอร์ ·
         โอนของ · ออกบิล ฯลฯ) งานที่ไม่ได้กดในแอป เช่น เดินหาของ ยกของ ตอบลูกค้า <b>ไม่ถูกนับ</b> ·
         แต่ละตำแหน่งนับคนละหน่วย (นับสต็อก = 1 ต่อสินค้า 1 ตัว · ขาย = 1 ต่อบิล 1 ใบ)
-        จึง<b>เทียบข้ามตำแหน่งไม่ได้</b> — ใช้ดูแนวโน้มของคนคนเดียวข้ามเดือน กับเทียบคนตำแหน่งเดียวกัน
+        จึง<b>เทียบข้ามตำแหน่งไม่ได้</b> — ใช้ดูแนวโน้มของคนคนเดียวข้ามเดือน กับเทียบคนตำแหน่งเดียวกัน ·
+        เลข <b>งาน/ชม.</b> เอียงไปทางคนที่ทำงานชนิดนับเป็นชิ้นเยอะ ๆ (เช่นนับสต็อก) แม้อยู่ตำแหน่งเดียวกัน —
+        ดูควบกับ 💰 ยอดขาย/งานแยกประเภทข้างล่าง อย่าตัดสินจากเลขเดียว
       </div>
 
       {err && (
@@ -7757,7 +7760,8 @@ function StaffPerformanceView() {
           return (
             <Card key={g.role} padding={true} style={{ marginBottom: 16 }}
                   title={STAFF_PERF_ROLE_LABEL[g.role] || g.role}
-                  sub={g.rows.length + " คน · รวม " + fmtN(g.total) + " งาน"}>
+                  sub={g.rows.length + " คน · รวม " + fmtN(g.total) + " งาน"
+                       + (g.revenue > 0 ? " · 💰 ขายรวม " + fmtBfull(g.revenue) : "")}>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {g.rows.map((s, i) => {
                   const color = STAFF_PERF_COLORS[i % STAFF_PERF_COLORS.length];
@@ -7790,6 +7794,12 @@ function StaffPerformanceView() {
                             ⏱️ {staffPerfHm(s.workedMin)} · {fmtN(s.daysWorked)} วัน
                             {s.perHour != null && <> · <b style={{ color: color }}>{s.perHour} งาน/ชม.</b></>}
                           </div>
+                          {/* ยอดขายเป็นเงิน — โชว์เฉพาะคนที่มีบิล (เซล) · "40 ใบ" อย่างเดียวบอกไม่ได้ว่าใครทำเงิน */}
+                          {s.saleRevenue > 0 && (
+                            <div style={{ fontSize: 12, fontWeight: 800, color: "#1f7f44", marginTop: 3 }}>
+                              💰 {fmtBfull(s.saleRevenue)} <span style={{ fontSize: 10.5, fontWeight: 600, color: "var(--muted)" }}>· {fmtN(s.saleBills)} ใบ</span>
+                            </div>
+                          )}
                           {/* แถบสัดส่วนเทียบกับคนที่ทำมากสุดในตำแหน่งเดียวกัน */}
                           <div style={{ height: 6, borderRadius: 99, background: "var(--bdr)",
                                         marginTop: 7, overflow: "hidden" }}>
@@ -7807,6 +7817,23 @@ function StaffPerformanceView() {
 
                       {open && (
                         <div style={{ padding: "0 14px 14px", borderTop: "1px solid var(--bdr)" }}>
+                          {/* ยอดขาย — โชว์ก่อนเวลาทำงานเมื่อเป็นเซล (เป็นตัวเลขที่เจ้าของอยากเห็นสุด) */}
+                          {s.saleRevenue > 0 && (
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, margin: "12px 0 0" }}>
+                              {[
+                                { l: "ยอดขายรวม", v: fmtBfull(s.saleRevenue), c: "#1f7f44" },
+                                { l: "จำนวนบิล",  v: fmtN(s.saleBills) + " ใบ", c: "var(--text)" },
+                                { l: "เฉลี่ย/บิล", v: fmtBfull(Math.round(s.saleRevenue / s.saleBills)), c: "var(--text)" },
+                              ].map(x => (
+                                <div key={x.l} style={{ flex: "1 1 110px", minWidth: 0, background: "#f0f9f2",
+                                                        border: "1px solid #bfe3ca", borderRadius: 10, padding: "8px 10px" }}>
+                                  <div style={{ fontSize: 10, color: "var(--muted)", fontWeight: 600 }}>{x.l}</div>
+                                  <div style={{ fontSize: 13, fontWeight: 800, color: x.c, marginTop: 2 }}>{x.v}</div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
                           {/* เวลาทำงาน */}
                           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, margin: "12px 0" }}>
                             {[

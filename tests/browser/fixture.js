@@ -290,6 +290,12 @@
           total: 63, opsTotal: 63, byCat: { fscheck: 63, punch: 38 },
           byDay: { '2026-08-03': 63 },
           workedMin: 1980, daysWorked: 4, lateDays: 0, lateMin: 0, daysAbsent: 1, perHour: 1.9 },
+        // เซล — ต้องมี saleRevenue/saleBills เพื่อยืนยันว่า UI โชว์ "ยอดขายเป็นเงิน" ไม่ใช่แค่จำนวนใบ
+        { staffId: 'STF003', name: 'มาลี ขายเก่ง', role: 'saler', status: 'active', pictureUrl: '',
+          total: 40, opsTotal: 40, byCat: { sale: 40, punch: 30 },
+          byDay: { '2026-08-02': 40 },
+          workedMin: 2100, daysWorked: 5, lateDays: 0, lateMin: 0, daysAbsent: 0, perHour: 1.1,
+          saleRevenue: 87500, saleBills: 40 },
       ],
       unmatched: [{ actor: 'พนักงานเก่า (หน้าร้าน)', total: 9 }],
     },

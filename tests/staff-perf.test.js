@@ -47,10 +47,11 @@ function load() {
     grab(/function staffPerfNormalizeActor_\(actor\) \{[\s\S]*?\n\}/),
     grab(/function staffPerfDayKey_\(v\) \{[\s\S]*?\n\}/),
     grab(/function staffPerfAggregateAudit_\(rows, monthKey\) \{[\s\S]*?\n\}/),
+    grab(/function staffPerfAggregateSales_\(rows, monthKey\) \{[\s\S]*?\n\}/),
     grab(/function staffPerfCatDef_\(key\) \{[\s\S]*?\n\}/),
     'return { STAFF_PERF_CATEGORIES_, STAFF_PERF_OTHER_, STAFF_PERF_SYSTEM_ACTORS_,' +
     ' staffPerfCategoryOf_, staffPerfNormalizeActor_, staffPerfDayKey_,' +
-    ' staffPerfAggregateAudit_, staffPerfCatDef_ };',
+    ' staffPerfAggregateAudit_, staffPerfAggregateSales_, staffPerfCatDef_ };',
   ].join('\n');
   // eslint-disable-next-line no-new-func
   return new Function(...Object.keys(ctx), code)(...Object.values(ctx));
@@ -295,6 +296,100 @@ describe('staffPerfAggregateAudit_ — รวมยอดจาก Audit Log', (
   it('input ว่าง/ไม่ใช่ array → ไม่ throw', () => {
     expect(M.staffPerfAggregateAudit_([], '2026-08').rows).toBe(0);
     expect(M.staffPerfAggregateAudit_(null, '2026-08').rows).toBe(0);
+  });
+});
+
+describe('staffPerfAggregateSales_ — ยอดขายเป็นเงินต่อผู้ขาย (จากชีต "บิลขาย")', () => {
+  // แถวบิลขาย: idx1=วันที่ idx5=ผู้ขาย idx8=ยอดสุทธิ (อ่านแค่ A..I = 9 คอลัมน์)
+  const bill = (date, seller, total, status) =>
+    ['SB-x', date, '10:00', 'RC-1', '', seller, 'หน้าร้าน', 'เงินสด', total, 0];
+  const billWithStatus = (date, seller, total, status) => {
+    const r = bill(date, seller, total); r[20] = status; return r;
+  };
+
+  it('รวมยอดบาท + นับใบ ต่อผู้ขาย ในเดือนที่ขอ', () => {
+    const r = M.staffPerfAggregateSales_([
+      bill('2026-08-01', 'สมหญิง (เซล)', 1000),
+      bill('2026-08-02', 'สมหญิง (เซล)', 500),
+      bill('2026-08-02', 'ป้าแดง (เซล)', 250),
+    ], '2026-08');
+    expect(r.byActor['สมหญิง (เซล)']).toEqual({ revenue: 1500, bills: 2 });
+    expect(r.byActor['ป้าแดง (เซล)']).toEqual({ revenue: 250, bills: 1 });
+    expect(r.rows).toBe(3);
+  });
+
+  it('ตัดบิลนอกเดือนทิ้ง', () => {
+    const r = M.staffPerfAggregateSales_([
+      bill('2026-07-31', 'ก (เซล)', 999),
+      bill('2026-08-15', 'ก (เซล)', 100),
+      bill('2026-09-01', 'ก (เซล)', 999),
+    ], '2026-08');
+    expect(r.byActor['ก (เซล)']).toEqual({ revenue: 100, bills: 1 });
+  });
+
+  it('บิลไม่มีชื่อผู้ขาย → ข้าม (ผูกกับใครไม่ได้)', () => {
+    const r = M.staffPerfAggregateSales_([
+      bill('2026-08-01', '', 500),
+      bill('2026-08-01', '   ', 500),
+      bill('2026-08-01', 'ก (เซล)', 100),
+    ], '2026-08');
+    expect(Object.keys(r.byActor)).toEqual(['ก (เซล)']);
+    expect(r.rows).toBe(1);
+  });
+
+  it('บิลสถานะไม่ใช่ "สำเร็จ" ถูกตัด (เผื่ออนาคตมีบิลยกเลิก) — แต่ไม่มีคอลัมน์สถานะก็ยังนับ', () => {
+    const r = M.staffPerfAggregateSales_([
+      billWithStatus('2026-08-01', 'ก (เซล)', 1000, 'สำเร็จ'),
+      billWithStatus('2026-08-01', 'ก (เซล)', 9999, 'ยกเลิก'),
+      bill('2026-08-01', 'ก (เซล)', 200),   // อ่านมาแค่ A..I → r[20] undefined → นับ
+    ], '2026-08');
+    expect(r.byActor['ก (เซล)']).toEqual({ revenue: 1200, bills: 2 });
+  });
+
+  it('วันที่ปี พ.ศ. (ชีตเขียนเป็น text) อ่านออก', () => {
+    const r = M.staffPerfAggregateSales_([
+      bill('15/8/2569', 'ก (เซล)', 300),   // 2569 - 543 = 2026
+    ], '2026-08');
+    expect(r.byActor['ก (เซล)']).toEqual({ revenue: 300, bills: 1 });
+  });
+
+  it('ยอดสุทธิที่อ่านไม่ออก = 0 (ไม่ทำให้ทั้งก้อน NaN)', () => {
+    const r = M.staffPerfAggregateSales_([
+      bill('2026-08-01', 'ก (เซล)', 'ขยะ'),
+      bill('2026-08-01', 'ก (เซล)', 100),
+    ], '2026-08');
+    expect(r.byActor['ก (เซล)']).toEqual({ revenue: 100, bills: 2 });
+  });
+
+  it('input ว่าง/ไม่ใช่ array → ไม่ throw', () => {
+    expect(M.staffPerfAggregateSales_([], '2026-08').rows).toBe(0);
+    expect(M.staffPerfAggregateSales_(null, '2026-08').rows).toBe(0);
+  });
+});
+
+describe('meta: ยอดขายต่อเซล ต่อสายครบ', () => {
+  const b = grab(/function staffPerfBuild_\(ss, monthStr\) \{[\s\S]*?\n\}/);
+
+  it('staffPerfBuild_ อ่านชีตบิลขายแล้วผูก staffId ด้วย nameToId ชุดเดียวกับ audit', () => {
+    expect(b).toMatch(/getSheetByName\(SHEET_SALE_BILLS\)/);
+    expect(b).toMatch(/staffPerfAggregateSales_/);
+    // ต้องผูกด้วย nameToId (แหล่งเดียวกับ audit) ไม่ใช่ map ใหม่ที่ drift ได้
+    expect(b).toMatch(/salesByRaw[\s\S]*?nameToId\[raw\.toLowerCase\(\)\]/);
+  });
+
+  it('อ่านชีตบิลขายแค่ A..I (9 คอลัมน์) — ไม่ getDataRange ทั้งชีต', () => {
+    expect(b).toMatch(/getRange\(2, 1, lastBill - 1, 9\)/);
+    // เฉพาะบล็อกบิลขาย — getDataRange ทั้งชีตยังห้ามเหมือนเดิม (เช็คซ้ำจาก describe อื่นแล้ว)
+  });
+
+  it('แถวต่อคนมี saleRevenue/saleBills + คนที่ขายได้อย่างเดียวไม่ถูก filter ทิ้ง', () => {
+    expect(b).toMatch(/saleRevenue: sales\.revenue, saleBills: sales\.bills/);
+    expect(b).toMatch(/row\.saleRevenue > 0/);   // อยู่ในเงื่อนไข filter
+  });
+
+  it('UI โชว์ยอดขายเป็นเงิน ไม่ใช่แค่จำนวนใบ (views-analytics)', () => {
+    expect(VA).toMatch(/s\.saleRevenue > 0/);
+    expect(VA).toMatch(/fmtBfull\(s\.saleRevenue\)/);
   });
 });
 
