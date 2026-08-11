@@ -177,6 +177,13 @@
         { customers: [], months: [], grandTotal: 0 }),
         { headers: { 'Content-Type': 'application/json' } }));
     }
+    // 📄 ใบเสนอราคา (action=getQuotationSummary) — ต้องมาก่อน branch payload รวม
+    // (ตอบ payload สินค้าแทนจะได้ items=undefined → หน้า "ไม่มีใบเสนอราคา" = เทสต์เขียวลวง)
+    if (/action=getQuotationSummary/.test(url)) {
+      return Promise.resolve(new Response(JSON.stringify(window.__DMJ_QUOTE_FIXTURE ||
+        { items: [], salesList: [], statusBreakdown: {}, generatedAt: new Date().toISOString() }),
+        { headers: { 'Content-Type': 'application/json' } }));
+    }
     // GET payload
     if (/script\.google|exec|action=orders|action=getAuditLog|action=getDeadStock/.test(url) || url.indexOf('http') === 0) {
       // โหมด nodata: ค้างไว้ไม่ตอบเลย (เหมือนเน็ตร้านช้า/ก้อนใหญ่ยังไหลไม่จบ)

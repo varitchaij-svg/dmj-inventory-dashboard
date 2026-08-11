@@ -369,6 +369,68 @@ function startServer() {
     await page.close();
   }
 
+  // ── (ค0.5) ใบเสนอราคา: หน้าเจ้าของ (แดชบอร์ด) ≠ หน้าพนักงานขาย (ทำงาน "ของฉัน") ──
+  // แยกหน้าแล้วเงียบได้ — จอเรนเดอร์ครบทั้งคู่ ต่างแค่ "โชว์อะไร/ซ่อนอะไร" → ต้องตรวจทั้งสองฝั่ง
+  // owner: แดชบอร์ด + เทียบเซล + อัตราอนุมัติ (เครื่องมือผู้บริหาร)
+  // saler: ปุ่มสร้างใหญ่ + ชิปของฉัน + เห็นเฉพาะใบตัวเอง (กด "ทั้งหมด" ถึงเห็นของคนอื่น) + ไม่มีเครื่องมือผู้บริหาร
+  {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=owner&tab=quotefollowup`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      if (!(await navigateTo(page, 'owner', 'quotefollowup'))) { status = 'NAV_FAIL'; note = 'สลับ tab ไม่สำเร็จ'; }
+      else {
+        await page.waitForTimeout(500);
+        const t = (await page.locator('body').innerText().catch(() => '')) || '';
+        const has = (s) => t.includes(s);
+        if (!has('สรุปสถานะใบเสนอราคา')) { status = 'OWNER_VIEW_FAIL'; note = 'ไม่เห็นหัวแดชบอร์ดเจ้าของ'; }
+        else if (!has('ตามเซล') || !has('อัตราอนุมัติ')) { status = 'OWNER_VIEW_FAIL'; note = 'ไม่เห็นเครื่องมือผู้บริหาร (ตามเซล/อัตราอนุมัติ)'; }
+        else if (has('สร้างใบเสนอราคาใหม่') || has('ของฉัน')) { status = 'OWNER_VIEW_FAIL'; note = 'เจ้าของเห็นของฝั่งพนักงาน (ปุ่มใหญ่/ชิปของฉัน)'; }
+        else note = 'เจ้าของเห็นแดชบอร์ด + เทียบเซล + อัตราอนุมัติ · ไม่มีของฝั่งพนักงาน';
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'quote__owner.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'ใบเสนอราคา — หน้าเจ้าของ (แดชบอร์ด)', status, note });
+    await page.close();
+  }
+  {
+    const page = await browser.newPage({ viewport: { width: 420, height: 1200 } });  // จอมือถือ — จอหลักของเซล
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=saler&tab=quotefollowup`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      if (!(await navigateTo(page, 'saler', 'quotefollowup'))) { status = 'NAV_FAIL'; note = 'สลับ tab ไม่สำเร็จ'; }
+      else {
+        await page.waitForTimeout(500);
+        const read = async () => (await page.locator('body').innerText().catch(() => '')) || '';
+        let t = await read();
+        const has = (s) => t.includes(s);
+        if (!has('สร้างใบเสนอราคาใหม่') || !has('ของฉัน')) { status = 'EMP_VIEW_FAIL'; note = 'ไม่เห็นปุ่มสร้างใหญ่/ชิปของฉัน'; }
+        else if (has('ตามเซล') || has('อัตราอนุมัติ')) { status = 'EMP_VIEW_FAIL'; note = 'พนักงานเห็นเครื่องมือผู้บริหาร (ตามเซล/อัตราอนุมัติ)'; }
+        else if (!has('ร้านดอกไม้สวย')) { status = 'EMP_VIEW_FAIL'; note = 'ไม่เห็นใบของตัวเอง (ร้านดอกไม้สวย)'; }
+        else if (has('บริษัท ของเซลอื่น')) { status = 'MINE_FILTER_FAIL'; note = 'ตัวกรอง "ของฉัน" ไม่ทำงาน — เห็นใบของเซลอื่น'; }
+        else {
+          // กด "📋 ทั้งหมด" → ใบของเซลอื่นต้องโผล่ (พิสูจน์ว่ากรองจริง ไม่ใช่บังเอิญ fixture ไม่มี)
+          // ⚠️ ต้องเจาะจงชิป (emoji 📋 นำ) — hasText:'ทั้งหมด' เฉย ๆ ไปโดนปุ่มโลโก้ "🏠 แตะเพื่อดูเมนูทั้งหมด"
+          //    แล้วเด้งไปหน้าหลักแทน (เจอตอนทำ — จอไปอยู่ HomeMenuView)
+          const allChip = page.locator('button', { hasText: '📋 ทั้งหมด' }).first();
+          if (await allChip.count()) {
+            await allChip.scrollIntoViewIfNeeded().catch(() => {});
+            await allChip.click({ timeout: 3000, force: true }).catch(() => {});
+            await page.waitForTimeout(600);
+          }
+          t = await read();
+          if (!t.includes('บริษัท ของเซลอื่น')) { status = 'ALL_TOGGLE_FAIL'; note = 'กด "ทั้งหมด" แล้วยังไม่เห็นใบของเซลอื่น'; }
+          else note = 'หน้าทำงาน + "ของฉัน" กรองจริง (กดทั้งหมดเห็นของเซลอื่น) + ไม่มีเครื่องมือผู้บริหาร';
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'quote__saler.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'ใบเสนอราคา — หน้าพนักงานขาย (ของฉัน)', status, note });
+    await page.close();
+  }
+
   // ── (ค) กระดิ่งแจ้งเตือนในแอป: badge → เปิด panel → กดแล้วพาไป tab ปลายทาง ──
   // รันข้าม role เพราะกระดิ่งอยู่บน topnav ของทุก role (คนละ nav layout กัน owner vs อื่น ๆ)
   for (const bellRole of ['owner', 'warehouse']) {
