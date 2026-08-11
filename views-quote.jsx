@@ -15,8 +15,8 @@ async function syncCreateQuotation(quote) {
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ createQuotation: true, quote, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "saler" }),
     });
-    return await res.json(); // { success, data:{quotationId, quotationNumber, totals} }
-  } catch (err) { return { success: false, error: err.message }; }
+    return await dmjJson(res); // { success, data:{quotationId, quotationNumber, totals} }
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
 // ── sync helper: แก้ไขใบเสนอราคาเดิมใน ZORT (ใบที่ลูกค้ายังไม่อนุมัติ) ──
 async function syncEditQuotation(quote) {
@@ -27,8 +27,8 @@ async function syncEditQuotation(quote) {
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ editQuotation: true, quote, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "saler" }),
     });
-    return await res.json(); // { success, data:{quotationId, quotationNumber, totals, infoWarning} }
-  } catch (err) { return { success: false, error: err.message }; }
+    return await dmjJson(res); // { success, data:{quotationId, quotationNumber, totals, infoWarning} }
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
 // ── sync helper: บันทึกร่างใบเสนอราคา (ยังไม่ส่งเข้า ZORT) ──
 async function syncSaveQuotationDraft(quote) {
@@ -39,26 +39,26 @@ async function syncSaveQuotationDraft(quote) {
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ saveQuotationDraft: true, quote, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "saler" }),
     });
-    return await res.json(); // { success, data:{draftId} }
-  } catch (err) { return { success: false, error: err.message }; }
+    return await dmjJson(res); // { success, data:{draftId} }
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
 // ── sync helper: ดึงร่างใบเสนอราคาทั้งหมด ──
 async function syncGetQuotationDrafts() {
   if (!SHEET_DEPLOY_URL) return { success: false, error: "ยังไม่ได้เชื่อมต่อ Sheet" };
   try {
     const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
-    const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getQuotationDrafts&_t=${Date.now()}`, { cache: "no-store" });
-    return await res.json(); // { success, data:{drafts:[]} }
-  } catch (err) { return { success: false, error: err.message }; }
+    const res = await dmjFetch(`${SHEET_DEPLOY_URL}${sep}action=getQuotationDrafts&_t=${Date.now()}`, { cache: "no-store" });
+    return await dmjJson(res); // { success, data:{drafts:[]} }
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
 // ── sync helper: ดึงรายละเอียดใบเสนอราคาเดิม (สำหรับพิมพ์ A4 ย้อนหลัง) ──
 async function syncGetQuotationForPrint(idOrNumber) {
   if (!SHEET_DEPLOY_URL) return { success: false, error: "ยังไม่ได้เชื่อมต่อ Sheet" };
   try {
     const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
-    const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getQuotationForPrint&id=${encodeURIComponent(idOrNumber)}&_t=${Date.now()}`, { cache: "no-store" });
-    return await res.json(); // { success, data:{quotationNumber,customer,items,remarks,salesRep,totals} }
-  } catch (err) { return { success: false, error: err.message }; }
+    const res = await dmjFetch(`${SHEET_DEPLOY_URL}${sep}action=getQuotationForPrint&id=${encodeURIComponent(idOrNumber)}&_t=${Date.now()}`, { cache: "no-store" });
+    return await dmjJson(res); // { success, data:{quotationNumber,customer,items,remarks,salesRep,totals} }
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
 // ── sync helper: ออกเลขที่ใบแจ้งหนี้ของเราเอง (IVB-yyyyMM###) ผูกกับเลขที่ใบเสนอราคาต้นทาง —
 // พิมพ์ซ้ำใบเดิมได้เลขเดิมเสมอ (idempotent ฝั่ง backend)
@@ -70,8 +70,8 @@ async function syncGetInvoiceNumber(quotationNumber) {
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ getInvoiceNumber: true, quotationNumber, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "saler" }),
     });
-    return await res.json().catch(() => ({ ok: false, error: "อ่านผลลัพธ์ไม่ได้" })); // { ok, invoiceNumber, reused }
-  } catch (err) { return { ok: false, error: err.message }; }
+    return await dmjJson(res); // { ok, invoiceNumber, reused }
+  } catch (err) { return { ok: false, error: dmjErrText(err) }; }
 }
 // ── sync helper: ลบร่างทิ้ง ──
 async function syncDeleteQuotationDraft(draftId) {
@@ -82,8 +82,8 @@ async function syncDeleteQuotationDraft(draftId) {
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ deleteQuotationDraft: true, draftId, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "saler" }),
     });
-    return await res.json();
-  } catch (err) { return { success: false, error: err.message }; }
+    return await dmjJson(res);
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
 
 // หมายเหตุ default 3 บรรทัด (แก้ไข/ลบ/เพิ่มได้ในฟอร์ม) — ข้อความจริงตามที่เจ้าของยืนยัน

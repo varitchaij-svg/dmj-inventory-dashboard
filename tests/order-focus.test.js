@@ -248,7 +248,8 @@ describe('สายส่งของ focus (meta)', () => {
     expect(m).toMatch(/EXPIRES:11/);
     expect(m).toMatch(/IMAGE:12/);
     const h = GS.match(/var INAPP_HEADERS = \[[\s\S]*?\];/)[0];
-    expect(h).toMatch(/"focusSku"\]/);   // ต้องเป็นตัวท้ายสุดของหัวตาราง
+    // FOCUS ต้องอยู่หลัง IMAGE เสมอ — คอลัมน์ที่เพิ่มทีหลัง (view) ต่อท้ายได้ แต่ห้ามแทรกก่อนหน้านี้
+    expect(h.indexOf('"focusSku"')).toBeGreaterThan(h.indexOf('"image"'));
   });
 
   it('GAS: pushInappNoti_ เขียนคอลัมน์ focus จริง', () => {
@@ -274,7 +275,8 @@ describe('สายส่งของ focus (meta)', () => {
   });
 
   it('กระดิ่ง: ส่ง focus ต่อไปให้ onNavigate ไม่ใช่ส่งแค่ tab', () => {
-    expect(UI).toMatch(/onNavigate\(it\.tab, it\.focus\)/);
+    // (view ต่อท้ายมาทีหลัง — ดู inapp-noti.test.js · ตรงนี้คุมแค่ว่า focus ยังถูกส่งต่ออยู่)
+    expect(UI).toMatch(/onNavigate\(it\.tab,\s*it\.focus\b/);
   });
 
   it('app.jsx: ตั้งคำขอ "ก่อน" สลับแท็บ (view ปลายทางเพิ่ง mount ทีหลัง)', () => {

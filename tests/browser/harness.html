@@ -120,6 +120,15 @@
       let posted = {};
       try { posted = JSON.parse(body) || {}; } catch (e) {}
       if (posted.createSaleBill) {
+        // โหมดจำลอง "GAS เขียนบิลเสร็จแล้วแต่ตอบเป็นหน้า HTML" (execution ซ้อนกัน / ลิงก์ตัดสาย)
+        // — เส้นทางที่ res.json() ดิบเคยโยน "Unexpected token '<'" แล้วผู้ขายกดซ้ำ = บิลซ้ำ
+        // เปิดด้วย window.__DMJ_SALEBILL_HTML · frontend ต้องถาม action=billCheck ก่อนขึ้นแดง
+        if (window.__DMJ_SALEBILL_HTML) {
+          window.__DMJ_SALEBILL_POST_COUNT = (window.__DMJ_SALEBILL_POST_COUNT || 0) + 1;
+          return Promise.resolve(new Response(
+            '<!DOCTYPE html><html><head><title>Error</title></head><body>Service invoked too many times</body></html>',
+            { status: 200, headers: { 'Content-Type': 'text/html' } }));
+        }
         const shipFee = Math.max(0, Number((posted.shipping || {}).fee) || 0);
         const goods = (posted.items || []).reduce(function (s, it) {
           return s + (Number(it.qty) || 0) * (Number(it.price) || 0);
@@ -134,6 +143,13 @@
       const att = window.__DMJ_ATT_FIXTURE || {};
       const data = Object.prototype.hasOwnProperty.call(att, action) ? att[action] : {};
       return Promise.resolve(new Response(JSON.stringify({ success: true, data: data }), { headers: { 'Content-Type': 'application/json' } }));
+    }
+    // "บิลใบนี้ออกไปแล้วหรือยัง" (action=billCheck) — ต้องมาก่อน branch payload รวม
+    // frontend ถามหลัง createSaleBill ตอบ HTML · ค่าจาก window.__DMJ_BILLCHECK
+    // (found:true = บิลลงแล้ว → หน้าจอต้องขึ้นสำเร็จ ไม่ใช่แดง · found:false = ยังไม่ลง)
+    if (/action=billCheck/.test(url)) {
+      return Promise.resolve(new Response(JSON.stringify(window.__DMJ_BILLCHECK ||
+        { ok: true, found: false }), { headers: { 'Content-Type': 'application/json' } }));
     }
     // แจ้งเตือนในแอป (กระดิ่ง) — ต้องมาก่อน branch payload รวม ไม่งั้นจะได้ payload สินค้าแทน
     if (/action=inappNoti/.test(url)) {

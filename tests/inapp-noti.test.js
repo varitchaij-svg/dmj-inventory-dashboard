@@ -18,6 +18,42 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const GS = readFileSync(join(ROOT, 'appsscript_complete.gs'), 'utf8');
 const UI = readFileSync(join(ROOT, 'ui.jsx'), 'utf8');
 const APP = readFileSync(join(ROOT, 'app.jsx'), 'utf8');
+const VMAIN = readFileSync(join(ROOT, 'views-main.jsx'), 'utf8');
+const VANA = readFileSync(join(ROOT, 'views-analytics.jsx'), 'utf8');
+
+// inappNotiRoute_ — eval ฟังก์ชันจริงจาก .gs (ไม่ copy เข้า helpers.js เหมือน auth.test.js)
+// เพราะเป็นตัวตัดสิน "กดแจ้งเตือนแล้วไปไหน" ซึ่งสำเนาที่ drift แล้วจะพาไปผิดหน้าโดยเงียบสนิท
+const inappNotiRoute_ = new Function(
+  `${GS.match(/function inappNotiRoute_\([\s\S]*?\n\}/)[0]}\nreturn inappNotiRoute_;`
+)();
+
+describe('inappNotiRoute_ — กดแจ้งเตือนแล้วต้องไปหน้าไหน', () => {
+  it('ของโอนมาหน้าร้านแถวเก่า (tab=stock, ไม่มี view) → พาไปหน้าที่กดรับของได้', () => {
+    // แถวที่เขียนไปแล้วแก้ไม่ได้ และมีอายุ 14 วัน — ต้องกู้ตอนอ่าน ไม่งั้นของที่ค้างอยู่ตอนนี้
+    // ยังพาไปแท็บสต๊อกที่กดรับไม่ได้ต่อไปอีกสองสัปดาห์
+    expect(inappNotiRoute_('shipment', 'stock', '')).toEqual({ tab: 'orders', view: 'shipped' });
+    expect(inappNotiRoute_('shipment', 'stock', undefined)).toEqual({ tab: 'orders', view: 'shipped' });
+  });
+
+  it('แถวใหม่ที่ระบุ view มาเองแล้ว → ใช้ตามที่ระบุ ไม่แก้ทับ', () => {
+    expect(inappNotiRoute_('shipment', 'orders', 'shipped')).toEqual({ tab: 'orders', view: 'shipped' });
+  });
+
+  it('"รับของไม่ครบ" (shipment → tracking) ต้องไม่ถูกลากมาด้วย', () => {
+    // type เดียวกันแต่คนละเรื่อง — พาไปถูกอยู่แล้ว เหมารวมเมื่อไหร่คือแก้ที่หนึ่งพังอีกที่
+    expect(inappNotiRoute_('shipment', 'tracking', '')).toEqual({ tab: 'tracking', view: '' });
+  });
+
+  it('ประเภทอื่นที่ชี้ไป stock (สต็อกใกล้หมด) ไม่ถูกเปลี่ยนปลายทาง', () => {
+    expect(inappNotiRoute_('stock', 'stock', '')).toEqual({ tab: 'stock', view: '' });
+    expect(inappNotiRoute_('order', 'orders', '')).toEqual({ tab: 'orders', view: '' });
+  });
+
+  it('ค่าว่าง/ไม่มีข้อมูล ไม่โยน error และไม่เดาปลายทางให้', () => {
+    expect(inappNotiRoute_('', '', '')).toEqual({ tab: '', view: '' });
+    expect(inappNotiRoute_(undefined, undefined, undefined)).toEqual({ tab: '', view: '' });
+  });
+});
 
 describe('inappAudienceMatch — ใครเห็นแจ้งเตือนแถวไหน', () => {
   it('"all" / ค่าว่าง = เห็นทุกคน', () => {
@@ -185,6 +221,79 @@ describe('การเชื่อมต่อ (meta)', () => {
   it('app.jsx วางกระดิ่งไว้และกัน nav ไปแท็บที่ role นั้นไม่มีสิทธิ์', () => {
     expect(APP).toContain('<NotiBell');
     expect(APP).toMatch(/allowedTabIds\.includes\(t\)/);
+  });
+
+  it('VIEW เป็นคอลัมน์ต่อท้าย (แทรกกลาง = READBY/EXPIRES เพี้ยนย้อนหลังทั้งชีต)', () => {
+    const cols = GS.match(/var INAPP_COL = \{[\s\S]*?\};/)[0];
+    expect(cols).toMatch(/FOCUS:13,\s*VIEW:14/);
+    const heads = GS.match(/var INAPP_HEADERS = \[[\s\S]*?\];/)[0];
+    // หัวคอลัมน์ต้องยาวเท่า INAPP_COL — สั้นกว่า = getRange อ่านไม่ถึงคอลัมน์สุดท้าย
+    expect(heads.match(/"/g).length / 2).toBe(14);
+    expect(heads).toMatch(/"focusSku","view"\]/);
+  });
+
+  it('pushInappNoti_ เขียน view ลงคอลัมน์สุดท้าย (ต่อจาก focus)', () => {
+    const fn = GS.match(/function pushInappNoti_\([\s\S]*?\n\}/)[0];
+    const row = fn.match(/sh\.appendRow\(\[[\s\S]*?\]\);/)[0];
+    expect(row.indexOf('opts.focus')).toBeGreaterThan(0);
+    expect(row.indexOf('opts.view')).toBeGreaterThan(row.indexOf('opts.focus'));
+  });
+
+  it('listInappNotiHandler_ ส่งปลายทางผ่าน inappNotiRoute_ ไม่ใช่อ่านคอลัมน์ตรง ๆ', () => {
+    // อ่าน TAB ตรง ๆ = แถวเก่าที่ต้องกู้จะหลุดการกู้ไปเงียบ ๆ (จอยังดูปกติทุกประการ)
+    const fn = GS.match(/function listInappNotiHandler_\([\s\S]*?\n\}\n/)[0];
+    expect(fn).toMatch(/inappNotiRoute_\(/);
+    expect(fn).toMatch(/tab:\s*route\.tab/);
+    expect(fn).toMatch(/view:\s*route\.view/);
+  });
+
+  it('ของโอนมาหน้าร้านชี้ไปหน้าที่กดรับของได้จริง (orders + ตัวกรอง shipped)', () => {
+    const push = GS.match(/pushInappNoti_\(\{[^}]*ของโอนมาหน้าร้าน[\s\S]*?\}\);/)[0];
+    expect(push).toMatch(/tab:\s*'orders'/);
+    expect(push).toMatch(/view:\s*'shipped'/);
+    // หลาย SKU ในชุดเดียว — ใส่ focus = เลือกตัวเดียวมาเด้งแล้วพาไปผิดตัว
+    expect(push).not.toMatch(/focus:/);
+  });
+
+  it('สายส่ง view ครบ: ui.jsx ส่งต่อ → app.jsx ตั้งคำขอก่อนสลับแท็บ', () => {
+    expect(UI).toMatch(/onNavigate\(it\.tab,\s*it\.focus,\s*it\.view\)/);
+    const call = APP.match(/<NotiBell onNavigate=\{[\s\S]*?\}\}\/>/)[0];
+    expect(call).toMatch(/dmjRequestView\(t,\s*view\)/);
+    // ⚠️ ต้องอยู่ก่อน handleSetTab — สลับแท็บก่อน = view ปลายทาง mount ไปแล้วตอนที่ยัง
+    //    ไม่มีคำขอให้อ่าน แล้วไม่มีใครยิงซ้ำให้อีก
+    expect(call.indexOf('dmjRequestView')).toBeLessThan(call.indexOf('handleSetTab'));
+    expect(call.indexOf('dmjRequestFocus')).toBeLessThan(call.indexOf('handleSetTab'));
+  });
+
+  it('ทุก view ที่แจ้งเตือนสั่งมา มีตัวรับจริงที่ปลายทาง (ตั้งคำขอแล้วไม่มีใครอ่าน = ตายเงียบ)', () => {
+    // ค้นทั้ง 2 ไฟล์ view — ตัวรับอยู่คนละไฟล์กัน (orders อยู่ analytics · categories อยู่ main)
+    // ดูไฟล์เดียว = view ที่รับในอีกไฟล์จะถูกรายงานว่า "ไม่มีตัวรับ" ทั้งที่มี
+    const VIEWS = VANA + '\n' + VMAIN;
+    const routes = [...GS.matchAll(/pushInappNoti_\(\{[\s\S]*?tab:\s*'([a-z]+)',\s*view:\s*'([a-z]+)'/g)]
+      .map(m => ({ tab: m[1], view: m[2] }));
+    // + ปลายทางที่ inappNotiRoute_ กู้ให้แถวเก่า (ไม่มีใน call site ไหนเลย ต้องนับด้วย)
+    const healed = inappNotiRoute_('shipment', 'stock', '');
+    routes.push(healed);
+    expect(routes.length, 'ไม่เจอ call site ที่ส่ง view เลย').toBeGreaterThanOrEqual(3);
+    routes.forEach(({ tab, view }) => {
+      // ต้องกินทั้งบล็อก callback — ตัวรับบางตัวเขียนหลายบรรทัด (หยุดที่ \n จะได้แค่บรรทัดแรก
+      // แล้วรายงานว่า "ไม่รู้จัก view" ทั้งที่รับอยู่จริง)
+      const hook = VIEWS.match(new RegExp(`useViewIntent\\("${tab}",[\\s\\S]*?\\}\\);`));
+      expect(hook, `แท็บ ${tab} ไม่มี useViewIntent รับ`).not.toBeNull();
+      expect(hook[0], `${tab} ไม่รู้จัก view "${view}"`).toContain(`"${view}"`);
+    });
+  });
+
+  it('ทุกแจ้งเตือนที่ยิงเป็นชุด (หลาย SKU) ต้องผูก dedupKey — ไม่งั้นรัวซ้ำเรื่องเดิม', () => {
+    // ตัวสแกนตามเวลา (syncZortBoth ทุก 2 ชม. · archive ตี 3) รันซ้ำได้ในวันเดียวกัน
+    // ไม่มี dedupKey = กระดิ่งเด้งเรื่องเดิมวันละหลายรอบจนไม่มีใครอ่าน
+    const blocks = [...GS.matchAll(/pushInappNoti_\(\{[\s\S]*?\n\s*\}\);/g)].map(m => m[0]);
+    const scans = blocks.filter(b => /lowStockItems|fsRestockItems|pend\.length/.test(b));
+    expect(scans.length, 'ไม่เจอแจ้งเตือนแบบสแกนเป็นชุดเลย').toBeGreaterThanOrEqual(4);
+    scans.forEach(b => {
+      expect(b, 'แจ้งเตือนแบบสแกนเป็นชุดไม่มี dedupKey').toMatch(/dedupKey:/);
+      expect(b, 'dedupKey ต้องผูกกับวันที่ (ไม่งั้นเตือนได้ครั้งเดียวตลอดกาล)').toMatch(/dayKey|DayKey/i);
+    });
   });
 
   it('ทุก tab ที่แจ้งเตือนชี้ไป มีอยู่จริงใน TABS', () => {

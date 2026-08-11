@@ -136,15 +136,15 @@ async function syncGetProductOwners() {
   if (!tok) return { ok: false, noSession: true };   // ยังไม่ล็อกอิน → ไม่มี "ของฉัน" ให้ดู
   try {
     var sep = GOOGLE_SHEET_URL.indexOf("?") >= 0 ? "&" : "?";
-    var r = await fetch(GOOGLE_SHEET_URL + sep + "action=productOwners&sessionToken="
+    var r = await dmjFetch(GOOGLE_SHEET_URL + sep + "action=productOwners&sessionToken="
                         + encodeURIComponent(tok) + "&_t=" + Date.now(), { cache: "no-store" });
-    var d = await r.json();
+    var d = await dmjJson(r);
     // ต้องเป็น ok:true เท่านั้น — unauthorized_() คืน {success:false} ที่ไม่มีคีย์ ok เลย
     // ถ้าเช็คแค่ `d.ok === false` จะหลุดเป็น "สำเร็จ" แล้ว off กลายเป็น false → ดาวโผล่ทั้งที่
     // session หมดอายุ (กดแล้วพังทุกครั้ง)
     if (!d || d.ok !== true) return { ok: false };
     return d;
-  } catch (e) { return { ok: false, error: e.message }; }
+  } catch (e) { return { ok: false, error: dmjErrText(e) }; }
 }
 
 // on=false → ถอดดาว · takeover=true → ยืนยันรับช่วงต่อจากคนอื่น (server บังคับถามก่อนเสมอ)
@@ -161,8 +161,8 @@ async function syncSetProductOwner(sku, on, opts) {
         targetStaffId: opts.targetStaffId || "",
       }),
     });
-    return await r.json();
-  } catch (e) { return { success: false, error: e.message }; }
+    return await dmjJson(r);
+  } catch (e) { return { success: false, error: dmjErrText(e) }; }
 }
 
 // คืน { owners, me, off, toggle } — ใช้ใน FrontStoreView (แยกออกมาเพื่อให้ view อื่นหยิบไปใช้ต่อได้)
@@ -850,9 +850,9 @@ async function confirmStockCount(entries) {
         entries,
       }),
     });
-    const json = await res.json();
+    const json = await dmjJson(res);
     return json; // คืน object ดิบ (success, conflict, error)
-  } catch (err) { return { success: false, error: err.message }; }
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
 
 // บันทึก "ขายไม่สแกน" — นับสต็อกแล้วของหาย = ขายออก (บวก soldQty ไม่แตะยอดเงิน) · qty=0 = ยกเลิก
@@ -865,8 +865,8 @@ async function syncRecordUnscanned(sku, qty) {
       body: JSON.stringify({ recordUnscannedSale: true, sku, qty,
         actor: window._currentUser || sessionStorage.getItem("dmj_role") || "owner" }),
     });
-    return await res.json().catch(() => ({ ok: false }));
-  } catch (e) { return { ok: false, error: e.message }; }
+    return await dmjJson(res);
+  } catch (e) { return { ok: false, error: dmjErrText(e) }; }
 }
 
 // ─── sync lock data to "ตำแหน่งจัดเก็บ" sheet ───
@@ -4742,9 +4742,8 @@ async function syncZeroStock(sku) {
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ zeroStock: true, sku, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "warehouse" }),
     });
-    const json = await res.json().catch(() => ({}));
-    return json;
-  } catch(e) { return { success: false, error: e.message }; }
+    return await dmjJson(res);
+  } catch(e) { return { success: false, error: dmjErrText(e) }; }
 }
 
 // ลบหลาย order rows ในครั้งเดียว
@@ -4763,8 +4762,8 @@ async function syncDeleteOrders(orders) {
     });
     // เดิม return {success:true} เสมอไม่สนผลจริงจาก server — ทำให้ caller เห็น "สำเร็จ" ผิดๆ
     // แม้ server จะปฏิเสธ (เช่นไม่มีสิทธิ์) ต้อง forward ผลจริงกลับไปให้ caller ตัดสินใจถูก
-    return await res.json().catch(() => ({ success: false, error: "อ่านผลลัพธ์ไม่ได้" }));
-  } catch(e) { console.warn("syncDeleteOrders error:", e.message); return { success: false, error: e.message }; }
+    return await dmjJson(res);
+  } catch(e) { console.warn("syncDeleteOrders error:", e.message); return { success: false, error: dmjErrText(e) }; }
 }
 
 // สั่ง sync สต็อกจาก ZORT เดี๋ยวนี้ (ใช้เวลาสักครู่)
@@ -4780,8 +4779,8 @@ async function syncZortNow() {
       signal: controller.signal,
     });
     clearTimeout(timeout);
-    return await res.json().catch(() => ({}));
-  } catch(e) { console.warn("syncZortNow error:", e.message); return { success: false, error: e.message }; }
+    return await dmjJson(res);
+  } catch(e) { console.warn("syncZortNow error:", e.message); return { success: false, error: dmjErrText(e) }; }
 }
 
 async function syncZortSalesNow() {
@@ -4796,8 +4795,8 @@ async function syncZortSalesNow() {
       signal: controller.signal,
     });
     clearTimeout(timeout);
-    return await res.json().catch(() => ({}));
-  } catch(e) { console.warn("syncZortSalesNow error:", e.message); return { success: false, error: e.message }; }
+    return await dmjJson(res);
+  } catch(e) { console.warn("syncZortSalesNow error:", e.message); return { success: false, error: dmjErrText(e) }; }
 }
 
 // ─── เบิกวัตถุดิบ MTO — หักคลังหลายรายการ ───
@@ -6604,7 +6603,7 @@ function MtoJobView({ data }) {
         headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({ action: "listActiveStaffNames" }),
       });
-      const json = await res.json();
+      const json = await dmjJson(res);
       setStaffRoster(json.success ? (json.data || []) : []);
     } catch (e) {
       setStaffRoster([]);
@@ -6622,7 +6621,7 @@ function MtoJobView({ data }) {
         headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({ assignMtoJob: true, jobId: activeJob.jobId, staffId: staffId || "" }),
       });
-      const json = await res.json();
+      const json = await dmjJson(res);
       if (json.success) {
         const updatedJob = { ...activeJob, assigneeId: staffId || "", assigneeName: staffId ? name : "" };
         setJobs(prev => prev.map(j => j.jobId === activeJob.jobId ? updatedJob : j));
@@ -6679,7 +6678,7 @@ function MtoJobView({ data }) {
           actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
         }),
       });
-      const json = await res.json();
+      const json = await dmjJson(res);
       if (json.success) {
         const created = {
           jobId: json.jobId,
@@ -6773,7 +6772,7 @@ function MtoJobView({ data }) {
           items: materials,
         }),
       });
-      const json = await res.json();
+      const json = await dmjJson(res);
       if (json.success) {
         // อัปเดต local job ให้เก็บ draft items ไว้ (เปิดงานใหม่ไม่หาย)
         const updatedJob = { ...activeJob, items: materials };
@@ -6809,7 +6808,7 @@ function MtoJobView({ data }) {
           actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
         }),
       });
-      const json = await res.json();
+      const json = await dmjJson(res);
       if (json.conflict) {
         showToast("error", "ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด");
         // ไม่ reset input — ผู้ใช้ยังคงเห็นรายการวัตถุดิบที่กรอกไว้
@@ -6838,7 +6837,7 @@ function MtoJobView({ data }) {
         headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({ deleteMtoJob: true, jobId: job.jobId, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน" }),
       });
-      const json = await res.json();
+      const json = await dmjJson(res);
       if (json.success) {
         setJobs(prev => prev.filter(j => j.jobId !== job.jobId));
         if (activeJob && activeJob.jobId === job.jobId) { setActiveJob(null); setView("list"); }
@@ -7342,7 +7341,7 @@ function StaffView() {
         method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({ action: "listStaff", sessionToken: tok }),
       });
-      const d = await res.json();
+      const d = await dmjJson(res);
       if (d && d.success) setRows(Array.isArray(d.data) ? d.data : []);
       else setErr((d && d.error) || "โหลดไม่สำเร็จ — เข้าสู่ระบบด้วย LINE ก่อน");
     } catch (e) {
@@ -7362,7 +7361,7 @@ function StaffView() {
         method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify(Object.assign({ action: "saveStaff", sessionToken: tok, staffId }, patch)),
       });
-      const d = await res.json();
+      const d = await dmjJson(res);
       if (d && d.success) await load();
       else alert("บันทึกไม่สำเร็จ: " + ((d && d.error) || ""));
     } catch (e) {
@@ -7441,7 +7440,7 @@ function AuditLogView() {
       const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
       const tok = encodeURIComponent(localStorage.getItem("dmj_session_token") || "");
       const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getAuditLog&sessionToken=${tok}&_t=${Date.now()}`, { cache: "no-store" });
-      const d = await res.json();
+      const d = await dmjJson(res);
       if (d && d.success === false) { setErr(d.error || "โหลดไม่สำเร็จ"); setRows([]); return; }
       setRows(Array.isArray(d.rows) ? d.rows : []);
     } catch (e) {
@@ -7937,7 +7936,7 @@ function DeadStockView() {
     try {
       const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
       const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getDeadStock&_t=${Date.now()}`, { cache: "no-store" });
-      const d = await res.json();
+      const d = await dmjJson(res);
       if (d.error) throw new Error(d.error);
       setItems(Array.isArray(d.items) ? d.items : []);
     } catch (e) {
@@ -8060,8 +8059,8 @@ async function syncVoidQuotation(id, number) {
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ voidQuotation: true, quotationId: id, quotationNumber: number, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "owner" }),
     });
-    return await res.json().catch(() => ({ ok: false, error: "อ่านผลลัพธ์ไม่ได้" }));
-  } catch (e) { return { ok: false, error: e.message }; }
+    return await dmjJson(res);
+  } catch (e) { return { ok: false, error: dmjErrText(e) }; }
 }
 
 // อนุมัติใบเสนอราคา → แปลงเป็นออเดอร์ขายจริงใน ZORT (ตัดสต็อก) แล้วปิดใบเสนอราคาเดิม
@@ -8073,8 +8072,8 @@ async function syncApproveQuotation(id, number) {
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ approveQuotation: true, quotationId: id, quotationNumber: number, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "owner" }),
     });
-    return await res.json().catch(() => ({ ok: false, error: "อ่านผลลัพธ์ไม่ได้" }));
-  } catch (e) { return { ok: false, error: e.message }; }
+    return await dmjJson(res);
+  } catch (e) { return { ok: false, error: dmjErrText(e) }; }
 }
 
 // บันทึกชื่อเซลที่ทำใบเสนอราคา (เก็บในชีตเรา ไม่แตะ ZORT)
@@ -8086,8 +8085,8 @@ async function syncSetQuoteSale(number, sale) {
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ setQuoteSale: true, quoteNumber: number, sale, actor: window._currentUser || sessionStorage.getItem("dmj_role") || "owner" }),
     });
-    return await res.json().catch(() => ({ ok: false, error: "อ่านผลลัพธ์ไม่ได้" }));
-  } catch (e) { return { ok: false, error: e.message }; }
+    return await dmjJson(res);
+  } catch (e) { return { ok: false, error: dmjErrText(e) }; }
 }
 
 // ────────────── 📄 ใบเสนอราคา — สรุปสถานะ + ตามปิด (QuoteFollowupView) ──────────────
@@ -8196,7 +8195,7 @@ function QuoteFollowupView({ data, role }) {
     try {
       const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
       const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getQuotationSummary&_t=${Date.now()}`, { cache: "no-store" });
-      const d = await res.json();
+      const d = await dmjJson(res);
       if (d.error && (!d.items || !d.items.length)) throw new Error(d.error);
       setItems(Array.isArray(d.items) ? d.items : []);
       setSalesList(Array.isArray(d.salesList) ? d.salesList : []);
@@ -8840,7 +8839,7 @@ function CustomerView({ data }) {
     try {
       const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
       const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getCustomerAnalytics&_t=${Date.now()}`, { cache: "no-store" });
-      const d = await res.json();
+      const d = await dmjJson(res);
       if (d.error && (!d.customers || !d.customers.length)) throw new Error(d.error);
       const ms = Array.isArray(d.months) ? d.months : [];
       setMonths(ms);
@@ -9758,8 +9757,8 @@ async function syncSearchContact(query) {
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ searchContact: true, query }),
     });
-    return await res.json(); // { success, data:{contacts:[]} }
-  } catch (err) { return { success: false, error: err.message }; }
+    return await dmjJson(res); // { success, data:{contacts:[]} }
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
 // ── sync helper: ดึงรายละเอียดลูกค้าเต็ม (taxid/สาขา/ที่อยู่) ──
 async function syncGetContactDetail(contactId) {
@@ -9770,21 +9769,43 @@ async function syncGetContactDetail(contactId) {
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ getContactDetail: true, contactId }),
     });
-    return await res.json(); // { success, data:{contact} }
-  } catch (err) { return { success: false, error: err.message }; }
+    return await dmjJson(res); // { success, data:{contact} }
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
 // ── sync helper: ออกบิลขาย + (option) ใบกำกับ + รับชำระ ──
-async function syncCreateSaleBill(bill) {
+// ⚠️ ต้องอ่านคำตอบด้วย `dmjJson` เสมอ (บทเรียนข้อ 13) — GAS ตอบหน้า HTML ได้เมื่อ execution
+//    ซ้อนกัน แล้ว `res.json()` ดิบจะโยน "Unexpected token '<'" ไปโผล่บนจอผู้ขายเป็นภาษาอังกฤษ
+// ⚠️ **billCid ต้องคงค่าเดิมตลอดการลองใหม่ของบิลใบเดิม** — ตัวกันออกบิลซ้ำทั้งหมดขึ้นกับข้อนี้
+//    (ดู createSaleBill / findBillCidRow_ ฝั่ง .gs)
+async function syncCreateSaleBill(bill, billCid) {
   if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
   try {
     const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(Object.assign({ createSaleBill: true,
+      body: JSON.stringify(Object.assign({ createSaleBill: true, billCid: billCid || "",
         actor: window._currentUser || sessionStorage.getItem("dmj_role") || "saler" }, bill)),
     });
-    return await res.json(); // { success, data:{orderNumber, documentNumber, totals} }
-  } catch (err) { return { success: false, error: err.message }; }
+    return await dmjJson(res); // { success, data:{orderNumber, documentNumber, totals} }
+  } catch (err) { return { success: false, error: dmjErrText(err), unreadable: true }; }
+}
+
+// ── sync helper: "บิลใบนี้ออกไปแล้วหรือยัง" — ถามก่อนขึ้นแดงเสมอ ──
+// คืน { found:true, ... } = ออกไปแล้ว (ห้ามให้กดซ้ำ) · { found:false } = ยืนยันว่ายังไม่ออก
+// · { unknown:true } = ตอบไม่ได้ → **ห้ามชวนให้กดซ้ำ** (GAS รุ่นเก่ายังไม่รู้จัก action นี้
+//   จะตอบก้อนอื่นมาแทน ตีความว่า "ยังไม่ออก" แล้วกดซ้ำ = บิลสองใบ)
+async function syncBillCheck(billCid) {
+  if (!billCid || !GOOGLE_SHEET_URL) return { unknown: true };
+  try {
+    const sep = GOOGLE_SHEET_URL.includes("?") ? "&" : "?";
+    const res = await dmjFetch(
+      `${GOOGLE_SHEET_URL}${sep}action=billCheck&cid=${encodeURIComponent(billCid)}&_t=${Date.now()}`,
+      { cache: "no-store", dmjTimeoutMs: 20000 });
+    const d = await dmjJson(res);
+    // รูปแบบต้องตรงเป๊ะถึงจะเชื่อ — ขาด ok/found = ไม่ใช่คำตอบของ endpoint นี้
+    if (!d || d.ok !== true || typeof d.found !== "boolean") return { unknown: true };
+    return d;
+  } catch (e) { return { unknown: true, error: dmjErrText(e) }; }
 }
 // ── sync helper: ค้นบิลขายเดิมจาก ZORT ด้วยเลขบิล (ใบกำกับภาษีย้อนหลัง) ──
 async function syncLookupSaleBill(orderNumber) {
@@ -9795,8 +9816,8 @@ async function syncLookupSaleBill(orderNumber) {
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ lookupSaleBill: true, orderNumber }),
     });
-    return await res.json(); // { success, data:{orderId,orderNumber,items,totals,customer,existingTaxInvoice} }
-  } catch (err) { return { success: false, error: err.message }; }
+    return await dmjJson(res); // { success, data:{orderId,orderNumber,items,totals,customer,existingTaxInvoice} }
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
 // ── sync helper: ออกใบกำกับภาษีเต็มรูปแบบจริงใน ZORT (ย้อนหลัง) ──
 async function syncIssueFullTaxInvoice(orderNumber, customer, orderId) {
@@ -9808,8 +9829,8 @@ async function syncIssueFullTaxInvoice(orderNumber, customer, orderId) {
       body: JSON.stringify({ issueFullTaxInvoice: true, orderNumber, orderId, customer,
         actor: window._currentUser || sessionStorage.getItem("dmj_role") || "saler" }),
     });
-    return await res.json(); // { success, data:{orderNumber, documentNumber} }
-  } catch (err) { return { success: false, error: err.message }; }
+    return await dmjJson(res); // { success, data:{orderNumber, documentNumber} }
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
 
 // ข้อมูลบัญชีรับโอน (แสดงตอนเลือก "โอน") — แก้ที่นี่ถ้าเปลี่ยนบัญชี
@@ -10170,6 +10191,19 @@ function PosView({ data, role }) {
 
   // สินค้าที่กำลังเปิดดูรายละเอียด — เก็บเป็น sku ไม่ใช่ object (กันค้างค่าเก่าถ้า products อัปเดต)
   const [detailSku, setDetailSku] = uS(null);
+
+  // ── ตัวกันออกบิลซ้ำ (billCid) — 1 ค่าต่อการกด "บันทึกการขาย" 1 ครั้ง ──────────
+  // คงค่าเดิมตลอดการลองใหม่ของบิลใบเดิม (browser ตัดสาย/GAS ตอบ HTML แล้วกดใหม่) เพื่อให้
+  // ฝั่ง GAS รู้ว่าเป็น "บิลเดิม" ไม่ใช่บิลใหม่ → หลักเดียวกับ orderCidRef ของ OrderModal
+  // reset เมื่อออกบิลสำเร็จ (resetAll) — บิลใบถัดไปต้องได้ cid ใหม่
+  const billCidRef = React.useRef("");
+  const billCid = () => {
+    if (!billCidRef.current) {
+      billCidRef.current = "SB-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+    }
+    return billCidRef.current;
+  };
+
   // ⚠️ ProductModal อ่านหมวดจาก `p.cat` (app.jsx มิเรอร์มาจาก p.category) ไม่ใช่ `p.category`
   const detailProduct = uM(() => {
     if (!detailSku) return null;
@@ -10316,13 +10350,32 @@ function PosView({ data, role }) {
       showToast("warn", "รับเงินสดไม่พอยอด — กรอกจำนวนที่รับมาให้ครบก่อน", "💵"); return;
     }
     setSaving(true);
-    const r = await syncCreateSaleBill({
+    const cid = billCid();
+    const payload = {
       items: cart.map(it => ({ sku: it.sku, name: it.name, category: it.category, qty: Number(it.qty) || 0, price: Number(it.price) || 0 })),
       customer: cust, manualDiscount: md, taxInvoice, paymentMethod: payMethod || "", channel,
       cashReceived: (!online && payMethod === "เงินสด") ? cashReceivedNum : undefined,
       saleMode: saleMode,
       shipping: online ? shipOut : undefined,
-    });
+    };
+    let r = await syncCreateSaleBill(payload, cid);
+
+    // ⚠️ "อ่านคำตอบไม่ได้" ≠ "ออกบิลไม่สำเร็จ" (บทเรียนข้อ 13) — GAS อาจเขียนชีต/ยิง ZORT
+    //    เสร็จแล้วแต่ตอบเป็นหน้า HTML/ถูกตัดสาย · ถามก่อนว่าบิลลงจริงหรือยัง แทนที่จะขึ้นแดงเลย
+    //    (ขึ้นแดงทั้งที่บิลออกแล้ว → ผู้ขายกดใหม่ = บิลซ้ำ + สต็อกหักซ้ำ + ใบกำกับซ้ำ)
+    if (!r.success && r.unreadable) {
+      const chk = await syncBillCheck(cid);
+      if (chk.found) {
+        // บิลออกไปแล้วจริง — คืน dedup ให้เดินเส้นทางสำเร็จตามปกติ (ไม่ต้องกดใหม่)
+        r = { success: true, data: {
+          orderNumber: chk.orderNumber, documentNumber: chk.documentNumber,
+          totals: chk.totals || undefined, shipFee: chk.shipFee, payTotal: chk.payTotal,
+        } };
+      }
+      // chk.found === false (ยืนยันว่ายังไม่ออก) หรือ chk.unknown (ตอบไม่ได้) → ตกไปเส้นทาง error
+      // ทั้งสองกรณีปล่อยให้ผู้ใช้ตัดสินใจกดเอง — billCid เดิมยังอยู่ กดใหม่จะ dedup ให้เองถ้าบิลลงแล้ว
+    }
+
     setSaving(false);
     if (!r.success) { showToast("error", (online ? "บันทึกการขายไม่สำเร็จ: " : "ออกบิลไม่สำเร็จ: ") + (r.error || ""), "❌"); return; }
     setResult(r.data || {});
@@ -10335,6 +10388,7 @@ function PosView({ data, role }) {
     setShip({ recipient: "", phone: "", address: "", method: "", fee: "", tracking: "", note: "" });
     setCust({ name: "", taxId: "", branch: "", branchNo: "", address: "", phone: "", email: "" });
     setCustQuery(""); setCustResults(null); setResult(null);
+    billCidRef.current = "";   // บิลใบถัดไปต้องได้ billCid ใหม่ (บิลนี้ปิดแล้ว)
   }
 
   const overStock = cart.filter(it => (Number(it.qty) || 0) > (it.qtyStore || 0));

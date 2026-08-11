@@ -383,8 +383,8 @@ function startServer() {
         await page.waitForTimeout(300);
         const rows = await page.locator('.noti-item').count();
         const unreadRows = await page.locator('.noti-item.unread').count();
-        if (rows !== 2 || unreadRows !== 1) {
-          status = 'PANEL_FAIL'; note = `รายการ=${rows} (คาด 2), ยังไม่อ่าน=${unreadRows} (คาด 1)`;
+        if (rows !== 3 || unreadRows !== 1) {
+          status = 'PANEL_FAIL'; note = `รายการ=${rows} (คาด 3), ยังไม่อ่าน=${unreadRows} (คาด 1)`;
         } else {
           // กดรายการที่ยังไม่อ่าน → ต้องปิด panel + พาไปแท็บ orders + **เด้งไปที่ของชิ้นนั้น**
           await page.locator('.noti-item.unread').first().click({ timeout: 2000 });
@@ -401,7 +401,48 @@ function startServer() {
           else if (flashed !== 'VAS001') {
             status = 'FOCUS_FAIL'; note = `กะพริบที่ "${flashed}" (คาด VAS001) — ไม่ได้เด้งไปที่ของที่ต้องจัด`;
           }
-          else note = 'badge/panel/nav/เด้งไปที่สินค้า ครบ';
+          else {
+            // ── แจ้งเตือน "ของโอนมาหน้าร้าน" → ต้องพาไปหน้า **ที่กดรับของได้** ──
+            // คือแท็บ "รายการสั่งของ" ตัวกรอง "🚚 ส่งแล้ว" ไม่ใช่แค่เปิดแท็บแล้วปล่อยค้าง
+            // ที่ตัวกรองเดิม (ตอนนี้คือ "ทั้งหมด" จากการเด้ง focus รอบก่อนหน้า) —
+            // เปิดผิดตัวกรอง = ของที่แจ้งเตือนพูดถึงไม่อยู่ในจอเลย เงียบสนิท
+            await page.locator('.noti-btn').first().click({ timeout: 2000 });
+            await page.waitForTimeout(300);
+            await page.locator('.noti-item').nth(1).click({ timeout: 2000 });
+            await page.waitForTimeout(600);
+            const activeSeg = (await page.locator('.page-head .seg-btn.active').first().textContent()
+              .catch(() => '') || '').trim();
+            // ยืนยันด้วยเนื้อหาจริงบนจอด้วย ไม่ใช่แค่ปุ่มที่ active — หัวข้อของโหมด "ส่งแล้ว"
+            // คือ "N รายการส่งออก" (โหมดอื่นขึ้น "รอดำเนินการ") + ต้องเห็นเลขที่ใบโอนจริง
+            const body = await page.locator('body').innerText().catch(() => '');
+            if (!/ส่งแล้ว/.test(activeSeg)) {
+              status = 'VIEW_FAIL';
+              note = `กดแจ้งเตือนของโอนแล้วตัวกรองเป็น "${activeSeg}" (คาด "🚚 ส่งแล้ว")`;
+            } else if (!/รายการส่งออก/.test(body) || !/TF-20250601-001/.test(body)) {
+              status = 'VIEW_FAIL'; note = 'ตัวกรองถูกแต่รายการของที่รอรับไม่ขึ้นบนจอ';
+            } else {
+              // ── แจ้งเตือน "ของหมดหน้าร้าน" → "สินค้า & สั่ง" + เปิดตัวกรอง 🛒 ควรสั่ง ──
+              // ต้องเช็คว่า **ตัวกรองเปิดจริง** ไม่ใช่แค่มาถึงแท็บ — มาถึงแล้วตัวกรองไม่ติด
+              // = เห็นสินค้าทั้งหมดเหมือนเดิม ซึ่งหน้าจอดูปกติทุกประการ ไม่มีอะไรบอกว่าพลาด
+              await page.locator('.noti-btn').first().click({ timeout: 2000 });
+              await page.waitForTimeout(300);
+              await page.locator('.noti-item').nth(2).click({ timeout: 2000 });
+              await page.waitForTimeout(700);
+              const onCats = await page.locator('main[data-screen-label="categories"]').count();
+              const reorderOn = await page.locator('button[data-reorder="on"]').count();
+              const cardSkus = await page.evaluate(() => {
+                const els = [...document.querySelectorAll('main [data-sku]')];
+                return [...new Set(els.map((e) => e.getAttribute('data-sku')))];
+              });
+              if (!onCats) { status = 'VIEW_FAIL'; note = 'กดแจ้งเตือนของหมดหน้าร้านแล้วไม่ไปแท็บสินค้า & สั่ง'; }
+              else if (!reorderOn) { status = 'VIEW_FAIL'; note = 'ถึงแท็บแล้วแต่ตัวกรอง "🛒 ควรสั่ง" ไม่ถูกเปิด'; }
+              // FLW002 = ตัวเดียวใน fixture ที่หน้าร้านเหลือน้อย+คลังมีของ · VAS001 ต้องถูกกรองออก
+              else if (!cardSkus.includes('FLW002') || cardSkus.includes('VAS001')) {
+                status = 'VIEW_FAIL';
+                note = `ตัวกรองเปิดแต่รายการไม่ถูกกรอง (เห็น: ${cardSkus.join(',') || 'ไม่มี'})`;
+              } else note = 'badge/panel/nav/เด้งไปที่สินค้า/ของโอน→หน้ากดรับ/หมดหน้าร้าน→ตัวกรองควรสั่ง ครบ';
+            }
+          }
         }
       }
     } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
@@ -612,6 +653,63 @@ function startServer() {
     } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
     await page.screenshot({ path: path.join(SHOTS, 'pos__online-no-shipping.png') }).catch(() => {});
     results.push({ role: 'interact', tab: 'ขายออนไลน์ — ไม่กรอกจัดส่งก็บันทึกได้', status, note });
+    await page.close();
+  }
+
+  // ── (จ5) ออกบิลแล้ว GAS ตอบ HTML — ต้องถาม billCheck ไม่ใช่ขึ้นแดงแล้วให้กดซ้ำ ──
+  // 🔴 บั๊กจริง ส.ค. 2026: createSaleBill สำเร็จแต่ตอบหน้า HTML → res.json() ดิบโยน
+  //    "Unexpected token '<'" → ผู้ขายกดใหม่ = บิลซ้ำ (เส้นทางรับเงินลูกค้าจริง)
+  // สิ่งที่ทดสอบบนเบราว์เซอร์จริง: (1) ไม่มีแถบแดง/ข้อความ garbage (2) เข้าหน้าสรุปด้วยเลขบิล
+  // จาก billCheck (3) frontend ยิง createSaleBill POST **ครั้งเดียว** ไม่ยิงซ้ำอัตโนมัติ
+  {
+    const page = await browser.newPage({ viewport: { width: 480, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=saler&tab=pos`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      if (!(await navigateTo(page, 'saler', 'pos'))) { status = 'NAV_FAIL'; note = 'สลับ tab ไม่สำเร็จ'; }
+      else {
+        await page.waitForTimeout(400);
+        const search = page.locator('main input[placeholder*="พิมพ์ชื่อ/รหัส"]').first();
+        await search.fill('VAS001');
+        await page.waitForTimeout(350);
+        await page.locator('main div', { hasText: 'VAS001' }).last().click({ timeout: 3000 }).catch(() => {});
+        await page.waitForTimeout(300);
+        await page.locator('main input[placeholder*="คุณเอ"]').first().fill('คุณเอชทีเอ็มแอล').catch(() => {});
+        await page.locator('main button', { hasText: 'โอนเงิน' }).first().click({ timeout: 3000 }).catch(() => {});
+        await page.waitForTimeout(300);
+
+        // จำลอง: createSaleBill ตอบ HTML แต่บิล "ลงจริง" แล้ว → billCheck found:true
+        await page.evaluate(() => {
+          window.__DMJ_SALEBILL_HTML = true;
+          window.__DMJ_SALEBILL_POST_COUNT = 0;
+          window.__DMJ_BILLCHECK = { ok: true, found: true,
+            orderNumber: 'RC-3-2026080077', documentNumber: null,
+            totals: { grandTotal: 250, vat: 250 * 7 / 107, preVat: 250 - 250 * 7 / 107 },
+            shipFee: 0, payTotal: 250 };
+        });
+
+        const submit = page.locator('main button', { hasText: 'บันทึกการขาย' }).first();
+        await submit.click({ timeout: 3000 });
+        await page.waitForTimeout(1200);
+        const body = await page.locator('body').innerText().catch(() => '');
+        const postCount = await page.evaluate(() => window.__DMJ_SALEBILL_POST_COUNT || 0);
+
+        if (/Unexpected token|<!DOCTYPE|is not valid JSON/.test(body)) {
+          status = 'RAW_HTML_LEAKED'; note = 'มีข้อความ garbage จาก res.json() ดิบโผล่บนจอ';
+        } else if (/ออกบิลไม่สำเร็จ|บันทึกการขายไม่สำเร็จ/.test(body)) {
+          status = 'FALSE_RED'; note = 'ขึ้นแดงทั้งที่ billCheck ยืนยันว่าบิลลงแล้ว (จะทำให้ผู้ขายกดซ้ำ = บิลซ้ำ)';
+        } else if (body.indexOf('สรุปคำสั่งซื้อ') < 0 || body.indexOf('RC-3-2026080077') < 0) {
+          status = 'NO_SUCCESS'; note = 'ไม่เข้าหน้าสรุปด้วยเลขบิลจาก billCheck';
+        } else if (postCount !== 1) {
+          status = 'RETRIED_POST'; note = `frontend ยิง createSaleBill ${postCount} ครั้ง (ต้อง 1 — ห้ามยิงซ้ำอัตโนมัติ)`;
+        } else {
+          note = 'GAS ตอบ HTML แต่บิลลงจริง → ถาม billCheck แล้วขึ้นสำเร็จ (ไม่แดง ไม่ยิง POST ซ้ำ)';
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'pos__salebill-html.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'ออกบิล GAS ตอบ HTML — ถาม billCheck ไม่ยิงซ้ำ', status, note });
     await page.close();
   }
 

@@ -736,6 +736,10 @@ var IMMEDIATE_GATE_ACTIONS_ = {
   approveQuotation:    ["saler", "storedevice"],
   editQuotation:       ["saler", "storedevice"],
   issueFullTaxInvoice: ["saler", "storedevice"],
+  // ออกบิลขาย = สร้าง order จริงใน ZORT + ตัดสต็อกหน้าร้าน + บันทึกรับชำระ — เป็น action ที่
+  // "กระทบเงิน/สต็อกจริง" มากที่สุดในระบบ แต่เดิมหลุดจากรายการนี้ (เพิ่ม ส.ค. 2026)
+  // migration-safe เหมือนตัวอื่นในตารางนี้: ไม่มี session → ยังผ่าน จึงไม่กระทบคนที่ยังไม่ล็อกอิน
+  createSaleBill:      ["saler", "storedevice"],
   deleteOrder:         ["employee", "warehouse"],
   deleteOrders:        ["employee", "warehouse"],
 };
@@ -2415,6 +2419,12 @@ function doGet(e) {
     if (e && e.parameter && e.parameter.action === 'transferCheck') {
       return transferCheckHandler_(String(e.parameter.tid || '').trim());
     }
+    // "บิลใบนี้ออกไปแล้วหรือยัง" — ใช้ตอนคำตอบของ createSaleBill หายกลางทาง
+    // บิล = เงินลูกค้าจริง ออกซ้ำ = ยอดขาย/สต็อก/ใบกำกับผิดทั้งชุด · ผู้ขายต้องรู้ความจริง
+    // ก่อนตัดสินใจกดใหม่ (หลักเดียวกับ action=orderCheck / action=transferCheck)
+    if (e && e.parameter && e.parameter.action === 'billCheck') {
+      return billCheckHandler_(String(e.parameter.cid || '').trim());
+    }
     // "มีอะไรถูกโอนคลัง→หน้าร้านไปแล้วบ้างช่วงนี้" — ประวัติจริงจากชีต "รายการโอนสินค้า"
     // ใช้ตอบคำถาม "ตกลงของอันไหนส่งไปแล้วกันแน่" หลังกดส่งแล้วคำตอบหายกลางทาง
     // ⚠️ ต้องอ่านสด **ไม่ผ่าน cache** — คนถามตอนนี้คือคนที่ไม่แน่ใจว่าของไปหรือยัง
@@ -3874,9 +3884,13 @@ function transferStockBatch(ss, list, actor, clientLoadedAt, tid) {
       }));
       // แจ้งหน้าร้านว่ามีของกำลังมา — เรื่องนี้ไม่เคยแจ้ง LINE เลย (ไม่คุ้ม quota)
       // รวมทั้งชุดเป็นแจ้งเตือนเดียว ไม่ยิงราย SKU (โอนทีนึงมีหลายสิบตัว)
+      // ⚠️ ปลายทางคือแท็บ "รายการสั่งของ" ตัวกรอง "🚚 ส่งแล้ว" — ที่เดียวที่ **กดรับของได้จริง**
+      //    (เดิมพาไปแท็บ "สต๊อก" ซึ่งดูจำนวนได้อย่างเดียว กดรับไม่ได้ = แจ้งไปแล้วก็ยังต้องไล่หาเอง)
+      //    ที่เดียวกับที่ชิป "🚚 ของรอรับ" บนหน้าหลักพาไป — สองทางเข้าต้องจบที่หน้าเดียวกัน
+      //    ไม่ใส่ focus โดยตั้งใจ: โอนทีนึงหลายสิบ SKU เลือกตัวเดียวมาเด้ง = พาไปผิดตัว
       pushInappNoti_({
         audience: 'role:frontstore,employee,owner',
-        type: 'shipment', tab: 'stock',
+        type: 'shipment', tab: 'orders', view: 'shipped',
         title: '🚚 ของโอนมาหน้าร้าน ' + transferred.length + ' รายการ',
         body: transferred.slice(0, 3).map(function (t) { return t.name || t.sku; }).join(', ')
               + (transferred.length > 3 ? ' และอีก ' + (transferred.length - 3) + ' รายการ' : '')
@@ -7314,6 +7328,38 @@ function debugFindMissingSkusByPrefix(prefix) {
   }
 }
 
+// ── "ของหมดหน้าร้าน แต่คลังยังมี" ─────────────────────────────────────────
+// ตัวสแกนสต็อกใกล้หมดเดิมอ่านแค่คอลัมน์ H (คลัง) ไม่เคยแตะคอลัมน์ G (หน้าร้าน) เลย →
+// คนที่ยืนขายอยู่หน้าร้านรู้ตอนเดินไปหยิบแล้วไม่เจอเท่านั้น ทั้งที่เป็นเรื่องที่**แก้ได้เดี๋ยวนั้น**
+// ด้วยการกดสั่ง (ต่างจากคลังหมดที่ต้องรอ PO ซึ่งแจ้ง owner/warehouse อยู่แล้ว)
+//
+// ⚠️ เกณฑ์ต้องอยู่ในกรอบของตัวกรอง "🛒 ควรสั่ง" ปลายทาง (views-main.jsx `needsReorder` =
+//    qtyStore <= 12 && qtyWH > 0 && !isMTO) เพราะแจ้งเตือนพาไปหยุดที่ตัวกรองนั้น —
+//    แจ้งของที่ตัวกรองปลายทางไม่โชว์ = กดตามไปแล้วไม่เจอสิ่งที่แจ้งเตือนพูดถึง เงียบสนิท
+//    (มีเทสต์เทียบเลข 12 กับ .jsx ให้ — แก้ข้างเดียวเมื่อไหร่เทสต์แดง)
+var FS_REORDER_MAX = 12;
+// ⚠️ default 0 = แจ้งเฉพาะที่ "หมดเกลี้ยง" จริง ๆ โดยตั้งใจ — ตัวกรอง "ควรสั่ง" มีเป็นสิบ-ร้อย
+//    รายการแทบทุกวันและเลขแทบไม่ขยับ ยิงทั้งกองทุกวัน = กระดิ่งกลายเป็นวอลเปเปอร์ที่ไม่มีใครอ่าน
+//    เจ้าของปรับขึ้นได้ที่ Script Property FRONTSTORE_OOS_ALERT_MAX (clamp ที่ FS_REORDER_MAX)
+var FS_OOS_ALERT_MAX_DEFAULT = 0;
+
+// pure — เทสต์ eval ตรงจากไฟล์นี้ (ไม่ copy เข้า helpers.js)
+function fsNeedsRestock_(cat, qtyStore, qtyWH, maxStore) {
+  var c = String(cat || '');
+  if (c.indexOf('Made to Order') >= 0) return false;   // สินค้าสั่งทำ ไม่ได้วางขายหน้าร้าน
+  if (c === 'ไม่มีรหัสสินค้า') return false;            // ไม่ใช่สินค้าจริง — สั่งไม่ได้
+  if (!(Number(qtyWH) > 0)) return false;              // คลังไม่มีของ = สั่งไม่ได้ ไม่ใช่เรื่องของหน้าร้าน
+  var lim = Math.min(Number(maxStore) || 0, FS_REORDER_MAX);
+  return Number(qtyStore) <= lim;
+}
+
+function fsOosAlertMax_() {
+  var raw = PropertiesService.getScriptProperties().getProperty('FRONTSTORE_OOS_ALERT_MAX');
+  var n = parseInt(raw || '', 10);
+  if (isNaN(n) || n < 0) n = FS_OOS_ALERT_MAX_DEFAULT;
+  return Math.min(n, FS_REORDER_MAX);
+}
+
 function syncZortBoth() {
   // PERF: fetch แต่ละ warehouse ครั้งเดียว แล้วส่ง cached products ให้ sub-functions
   // เพื่อลดจำนวน ZORT API calls จาก 4+ ครั้ง → 2 ครั้ง (WH_SAI5 + WH_FRONTSTORE)
@@ -7331,6 +7377,7 @@ function syncZortBoth() {
   // ── 2A: Low-stock alert ──────────────────────────────────────────────────
   // สแกนสต็อกคลัง (col H) เทียบ threshold → ส่ง LINE ถ้าพบสินค้าใกล้หมด
   var lowStockItems = [];
+  var fsRestockItems = [];
   try {
     var props = PropertiesService.getScriptProperties();
     var threshold = parseInt(props.getProperty('LOW_STOCK_THRESHOLD') || '5');
@@ -7339,8 +7386,10 @@ function syncZortBoth() {
     if (prodSh) {
       var prodRows = prodSh.getDataRange().getDisplayValues();
       // header row อยู่ที่ index 0 (แถว 1) — เริ่มอ่านข้อมูลจาก index 1
-      // layout: B(1)=SKU, C(2)=ชื่อ, G(6)=หน้าร้าน, H(7)=คลัง  (0-indexed)
+      // layout: B(1)=SKU, C(2)=ชื่อ, D(3)=หมวด, G(6)=หน้าร้าน, H(7)=คลัง  (0-indexed)
       var scanned = 0;
+      // ของหมดหน้าร้านทั้งที่คลังมี — เกาะไปกับการอ่านชีตรอบเดียวกัน ไม่อ่านชีตเพิ่ม
+      var fsMax = fsOosAlertMax_();
       for (var i = 1; i < prodRows.length; i++) {
         var r = prodRows[i];
         var sku  = (r[1] || '').toString().trim();
@@ -7350,6 +7399,10 @@ function syncZortBoth() {
         var qtyWH = parseInt(r[7]) || 0;
         if (qtyWH < threshold) {
           lowStockItems.push({ sku: sku, name: name, qty: qtyWH });
+        }
+        var qtyStore = parseInt(r[6]) || 0;
+        if (fsNeedsRestock_(r[3], qtyStore, qtyWH, fsMax)) {
+          fsRestockItems.push({ sku: sku, name: name, qtyStore: qtyStore, qtyWH: qtyWH });
         }
       }
 
@@ -7385,6 +7438,29 @@ function syncZortBoth() {
         });
       } else {
         Logger.log('Low-stock check: ไม่พบสินค้าต่ำกว่าเกณฑ์ (threshold=' + threshold + ', สแกน ' + scanned + ')');
+      }
+
+      // ── ของหมดหน้าร้าน แต่คลังยังมี → คนหน้าร้าน/เซลกดสั่งได้เดี๋ยวนั้น ──
+      // ⚠️ ไม่ยิง LINE โดยตั้งใจ — quota มีจำกัดและเรื่องนี้ไม่ด่วนเท่างานจัดของ
+      //    กระดิ่งในแอปแจ้งกี่เรื่องก็ได้ (dedupKey ผูกวันที่ = 1 ครั้ง/วันเหมือนตัวข้างบน)
+      // ⚠️ audience ไม่มี warehouse — คนคลังไม่ได้กดสั่งแทนหน้าร้าน และจะได้แจ้งเตือน
+      //    "ออเดอร์ใหม่" อยู่แล้วเมื่อหน้าร้านกดสั่งจริง แจ้งซ้ำ 2 เด้งคือการเพิ่มเสียงรบกวนเปล่า ๆ
+      if (fsRestockItems.length > 0) {
+        var fsDayKey = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyyMMdd');
+        pushInappNoti_({
+          audience: 'role:frontstore,saler,storedevice,employee,owner',
+          type: 'stock', tab: 'categories', view: 'reorder',
+          dedupKey: 'fsrestock-' + fsDayKey,
+          title: '🛒 ของหมดหน้าร้าน ' + fsRestockItems.length + ' รายการ — คลังยังมี สั่งได้เลย',
+          // บอกด้วยว่าปลายทางคือตัวกรองไหน — เลขบนปุ่ม "🛒 ควรสั่ง" นับกว้างกว่านี้
+          // (หน้าร้าน ≤12 ไม่ใช่แค่ที่หมดเกลี้ยง) ไม่บอก = เห็นสองเลขไม่ตรงกันแล้วงง
+          body: fsRestockItems.slice(0, 3).map(function (it) {
+                  return (it.name || it.sku) + ' (คลังมี ' + it.qtyWH + ')';
+                }).join(', ')
+                + (fsRestockItems.length > 3 ? ' และอีก ' + (fsRestockItems.length - 3) + ' รายการ' : '')
+                + ' · เปิดในตัวกรอง "🛒 ควรสั่ง"',
+        });
+        Logger.log('Front-store restock: ' + fsRestockItems.length + ' รายการ (เกณฑ์หน้าร้าน ≤' + fsMax + ')');
       }
     }
   } catch (e) {
@@ -9110,6 +9186,78 @@ function shipDedupKey_(row) {
        + String(row[COL_SHIP_QTY - 1] || '').trim();
 }
 
+// ── ของที่ส่งไปแล้วยังไม่มีใครกดรับ — ค้างมากี่วันแล้ว ────────────────────
+// หน้าติดตามมีป้าย "⏳ ค้าง N วัน" อยู่แล้ว แต่ต้องเปิดหน้าไปดูเองถึงเห็น — ของที่ค้าง 5 วัน
+// หน้าตาเหมือนของที่เพิ่งส่งเมื่อเช้าเป๊ะถ้าไม่ได้เปิดดู (เคส TF-202608035 ที่หายไปโดยไม่มี
+// ใครทันสังเกต) · ตัวนี้ทำให้ "ต้องเปิดไปดูถึงจะรู้" กลายเป็น "มันมาบอกเอง"
+//
+// ⚠️ เกณฑ์ 3 วันต้องตรงกับป้ายแดงในหน้าติดตาม (views-analytics.jsx: `age >= 3`) เป๊ะ ๆ —
+//    สองที่พูดคนละเลข = คนอ่านไม่รู้ว่าอันไหนคือเกณฑ์จริง (มีเทสต์เทียบสองไฟล์ให้)
+var SHIP_PENDING_ALERT_DAYS = 3;
+
+// pure — rows = แถวดิบทั้งชีตโอน (หัวตาราง 2 แถว ข้อมูลเริ่ม index 2 เหมือน archiveReceivedShipments)
+// เทสต์ eval ตรงจากไฟล์นี้ (ไม่ copy เข้า helpers.js)
+function shipPendingAging_(rows, nowMs, minDays) {
+  var out = [];
+  for (var i = 2; i < rows.length; i++) {
+    var r = rows[i];
+    var sku = String(r[COL_SHIP_SKU - 1] || '').trim();
+    if (!sku) continue;
+    // มีเวลายืนยันรับ = ปิดเคสแล้ว (เกณฑ์เดียวกับที่ frontend ใช้แยก "รอรับ" — receivedAt ว่าง)
+    if (String(r[COL_SHIP_RECVAT - 1] || '').trim()) continue;
+    var ms = parseShipDayMs_(r[COL_SHIP_DATE - 1]);
+    if (ms == null) continue;                      // อ่านวันที่ไม่ออก → ไม่เดาอายุ
+    var age = Math.floor((nowMs - ms) / 86400000);
+    // อนาคต/เก่าเกินจริง = วันที่เพี้ยน — หลักเดียวกับ trackAgeDays ฝั่งเว็บ (ไม่โชว์เลขมั่ว)
+    if (age < 0 || age > 400) continue;
+    if (age < minDays) continue;
+    out.push({
+      sku: sku,
+      name: String(r[COL_SHIP_NAME - 1] || '').trim(),
+      qty: Number(r[COL_SHIP_QTY - 1]) || 0,
+      refNum: String(r[COL_SHIP_REF - 1] || '').trim(),
+      ageDays: age,
+    });
+  }
+  out.sort(function (a, b) { return b.ageDays - a.ageDays; });   // ค้างนานสุดขึ้นก่อน
+  return out;
+}
+
+// ⚠️ ยิง 2 แถวแยกกันโดยตั้งใจ ไม่ใช่แถวเดียวส่งทุก role — ปลายทางคนละหน้าจริง ๆ:
+//    หน้าร้าน/employee = คน "กดรับ" ได้ → พาไปหน้าที่กดรับได้ (orders + ตัวกรองส่งแล้ว)
+//    คลัง/เจ้าของ = กดรับแทนไม่ได้ ต้อง "ตามของ" → พาไปหน้าติดตาม
+//    ยุบเป็นแถวเดียว = อีกฝั่งได้ปลายทางที่ตัวเองทำอะไรไม่ได้ (ปัญหาเดียวกับที่เพิ่งแก้ไป)
+// ⚠️ ห้าม throw — ตัวเรียกคือ trigger ที่ต้องไป archive ต่อ (หลักเดียวกับ pushInappNoti_)
+function notifyPendingReceives_(rows, nowMs) {
+  var pend = shipPendingAging_(rows, nowMs, SHIP_PENDING_ALERT_DAYS);
+  if (!pend.length) return 0;
+  var dayKey = Utilities.formatDate(new Date(nowMs), 'Asia/Bangkok', 'yyyyMMdd');
+  var oldest = pend[0].ageDays;
+  var refs = {};
+  pend.forEach(function (p) { if (p.refNum) refs[p.refNum] = true; });
+  var nRefs = Object.keys(refs).length;
+  var body = pend.slice(0, 3).map(function (p) {
+    return (p.name || p.sku) + ' ' + p.qty + ' ชิ้น (ค้าง ' + p.ageDays + ' วัน)';
+  }).join(', ') + (pend.length > 3 ? ' และอีก ' + (pend.length - 3) + ' รายการ' : '')
+    + (nRefs ? ' · ' + nRefs + ' ใบโอน' : '');
+
+  pushInappNoti_({
+    audience: 'role:frontstore,employee',
+    type: 'shipment', tab: 'orders', view: 'shipped',
+    dedupKey: 'shippend-fs-' + dayKey,
+    title: '⏳ ของค้างรับ ' + pend.length + ' รายการ (นานสุด ' + oldest + ' วัน)',
+    body: body + ' · กดรับให้ครบด้วย',
+  });
+  pushInappNoti_({
+    audience: 'role:warehouse,owner',
+    type: 'shipment', tab: 'tracking',
+    dedupKey: 'shippend-wh-' + dayKey,
+    title: '⏳ ส่งไปแล้วยังไม่มีใครกดรับ ' + pend.length + ' รายการ',
+    body: body,
+  });
+  return pend.length;
+}
+
 // ปรับความกว้างแถวให้เท่าชีตปลายทาง (setValues บังคับให้ทุกแถวกว้างเท่ากันเป๊ะ)
 function normalizeShipRow_(row, width) {
   const out = [];
@@ -9128,6 +9276,14 @@ function archiveReceivedShipments() {
   try {
     const data = sheet.getDataRange().getValues();
     if (data.length < 3) return;  // มีแค่หัวตาราง 2 แถว
+
+    // ⚠️ เตือน "ของค้างรับ" ตรงนี้ **ก่อน** ทางออกลัดด้านล่างเสมอ — วันที่ไม่มีอะไรต้อง archive
+    // ฟังก์ชันนี้ return ทิ้งกลางคัน ถ้าไปวางไว้ท้ายสุดจะไม่เตือนเลยในวันที่ของค้างเยอะที่สุด
+    // (ไม่มีอะไรถูกกดรับ = ไม่มีอะไรให้ archive = ทางออกลัดทำงานพอดี) · เกาะแถวที่อ่านมาแล้ว
+    // ไม่อ่านชีตเพิ่ม และห้ามให้พังลามไปขวางงาน archive
+    // (ใช้ Date.now() ตรง ๆ — `now` ด้านล่างเป็น const ที่ยังไม่ถูกประกาศ ณ จุดนี้)
+    try { notifyPendingReceives_(data, Date.now()); }
+    catch (e) { Logger.log('notifyPendingReceives_ error (ข้ามไป): ' + e); }
 
     // หาแถวที่ "ปิดเคสแล้ว **และ** เลยรอบเช็คของหน้าร้านไปแล้ว" (ข้อมูลเริ่ม index 2 = sheet row 3)
     // ทั้ง "รับครบ" และ "รับไม่ครบ" ใช้เกณฑ์เดียวกัน = ครบ SHIP_ARCHIVE_KEEP_DAYS วันนับจาก
@@ -9723,15 +9879,19 @@ function handleOrder_(params) {
 //   เปิดจริงเมื่อเจ้าของรัน setupInappNoti() 1 ครั้งใน GAS editor · ปิดด้วย disableInappNoti()
 // ══════════════════════════════════════════════════════════════════════════
 
-// คอลัมน์ชีตแจ้งเตือนในแอป (1-indexed): A..M
-// ⚠️ IMAGE/FOCUS ต่อท้าย (ไม่แทรกกลาง) — ชีตจริงมีแถวเก่าที่เขียนด้วย layout 11/12
+// คอลัมน์ชีตแจ้งเตือนในแอป (1-indexed): A..N
+// ⚠️ IMAGE/FOCUS/VIEW ต่อท้าย (ไม่แทรกกลาง) — ชีตจริงมีแถวเก่าที่เขียนด้วย layout 11/12/13
 // คอลัมน์อยู่แล้ว แทรกกลางจะทำให้ตำแหน่งคอลัมน์เดิม (READBY/EXPIRES) เพี้ยนย้อนหลังทั้งชีต
 // FOCUS = SKU ที่ต้องพาไปดูต่อหลังกดแจ้งเตือน (ว่าง = พาไปแค่แท็บเหมือนเดิม — แถวเก่าทุกแถว
 // เป็นแบบนี้ จึงต้องทนค่าว่างได้เสมอ ห้ามถือว่า "ต้องมี")
+// VIEW  = "เปิดแท็บนั้นแล้วให้ตั้งตัวกรองอะไร" (ว่าง = ปล่อยตามตัวกรองเดิมของผู้ใช้)
+//   คนละเรื่องกับ FOCUS: FOCUS = "พาไปหาของชิ้นไหน" · VIEW = "เปิดมาแล้วต้องเห็นมุมมองไหน"
+//   จำเป็นกับเรื่องที่รวมหลาย SKU (เช่นของโอนมาทั้งชุด) ซึ่งใส่ FOCUS ไม่ได้ แต่ยังต้องพาไป
+//   ให้ตรงหน้าที่ทำงานนั้นได้จริง
 var INAPP_COL = { ID:1, CREATED:2, AUDIENCE:3, TYPE:4, TITLE:5, BODY:6,
-                  TAB:7, BY:8, DEDUP:9, READBY:10, EXPIRES:11, IMAGE:12, FOCUS:13 };
+                  TAB:7, BY:8, DEDUP:9, READBY:10, EXPIRES:11, IMAGE:12, FOCUS:13, VIEW:14 };
 var INAPP_HEADERS = ["id","createdAt","audience","type","title","body",
-                     "tab","createdBy","dedupKey","readBy","expiresAt","image","focusSku"];
+                     "tab","createdBy","dedupKey","readBy","expiresAt","image","focusSku","view"];
 
 var INAPP_KEEP_DAYS_DEFAULT = 14;   // ปรับได้ที่ Script Property INAPP_NOTI_KEEP_DAYS
 var INAPP_MAX_RETURN        = 30;   // จำนวนแถวที่ส่งกลับให้ frontend ต่อรอบ poll
@@ -9775,8 +9935,30 @@ function inappIsRead_(readBy, staffId) {
   return false;
 }
 
+// ── กดแจ้งเตือนแถวนี้แล้วต้องไปที่ไหน ────────────────────────────────────
+// ตัดสินตอน "อ่าน" ไม่ใช่ตอน "เขียน" เพราะแถวที่เขียนไปแล้วแก้ไม่ได้ — ของโอนมาหน้าร้าน
+// รอบก่อน ๆ ยังค้างอยู่ในชีต (อายุ 14 วัน) และเป็นแถวที่ผู้ใช้กำลังกดอยู่จริงตอนนี้
+//
+// ที่มา: แจ้งเตือน "🚚 ของโอนมาหน้าร้าน N รายการ · รอกดรับ" เดิมพาไปแท็บ "สต๊อก" ซึ่ง
+// **กดรับของไม่ได้** · หน้าที่กดรับได้จริงคือแท็บ "รายการสั่งของ" ตัวกรอง "🚚 ส่งแล้ว"
+// (ที่เดียวกับที่ชิป "🚚 ของรอรับ" บนหน้าหลักพาไป) → กดตามแจ้งเตือนไปแล้วไม่เจอสิ่งที่
+// แจ้งเตือนพูดถึง เงียบสนิท ไม่มีอะไรบอกว่าทำไม
+//
+// ⚠️ เงื่อนไขต้องแคบ: เฉพาะ type 'shipment' ที่ชี้ไป 'stock' และ **ยังไม่มี view ของตัวเอง**
+//    — 'shipment' ยังถูกใช้กับ "รับของไม่ครบ" (tab 'tracking') ซึ่งพาไปถูกอยู่แล้ว
+//    ห้ามเหมารวมทุกแถวที่ type ตรง ไม่งั้นแก้ที่หนึ่งพังอีกที่โดยไม่มี error ให้เห็น
+// pure function — ไม่แตะชีต ไม่แตะ Script Property (เทสต์ eval ตรงจากไฟล์นี้)
+function inappNotiRoute_(type, tab, view) {
+  var t = String(tab || '');
+  var v = String(view || '');
+  if (!v && String(type || '') === 'shipment' && t === 'stock') {
+    return { tab: 'orders', view: 'shipped' };
+  }
+  return { tab: t, view: v };
+}
+
 // ── เขียนแจ้งเตือน 1 เรื่องเข้าชีต ────────────────────────────────────────
-// opts: {audience, type, title, body, tab, by, dedupKey, ttlDays, image, focus}
+// opts: {audience, type, title, body, tab, view, by, dedupKey, ttlDays, image, focus}
 // focus = SKU เดียวที่ผู้ใช้ต้องไปทำต่อ — ใส่ได้เฉพาะแจ้งเตือนที่ผูกกับสินค้าตัวเดียวจริง ๆ
 //   (ออเดอร์ใหม่ / รับของไม่ครบ) · เรื่องที่รวมหลาย SKU (โอนทั้งชุด, สต็อกใกล้หมด) **ห้ามใส่**
 //   เพราะเลือกตัวใดตัวหนึ่งมาเด้ง = พาไปผิดตัวโดยที่ผู้ใช้ไม่รู้ว่ายังมีตัวอื่นอีก
@@ -9827,6 +10009,7 @@ function pushInappNoti_(opts) {
       new Date(now.getTime() + ttlDays * 86400000),
       String(opts.image || ''),   // รูปสินค้า — ใส่เฉพาะแจ้งเตือนที่ผูกกับ SKU เดียว (ดูหมายเหตุ IMAGE ด้านบน)
       String(opts.focus || ''),   // SKU ที่ต้องพาไปดูต่อ (ว่าง = พาไปแค่แท็บ)
+      String(opts.view  || ''),   // ตัวกรอง/มุมมองที่ต้องตั้งให้ตอนเปิดแท็บ (ว่าง = ตามที่ผู้ใช้ค้างไว้)
     ]);
   } catch (e) {
     Logger.log('pushInappNoti_ error (ข้ามไป ไม่กระทบงานหลัก): ' + e);
@@ -9869,13 +10052,16 @@ function listInappNotiHandler_(e) {
       if (!inappAudienceMatch_(r[INAPP_COL.AUDIENCE - 1], sess.staffId, sess.role)) continue;
       var isRead = inappIsRead_(r[INAPP_COL.READBY - 1], sess.staffId);
       if (!isRead) unread++;
+      // ปลายทางตัดสินตอนอ่าน — แถวที่เขียนไปแล้วยังพาไปหน้าที่ทำงานนั้นไม่ได้ (ดู inappNotiRoute_)
+      var route = inappNotiRoute_(r[INAPP_COL.TYPE - 1], r[INAPP_COL.TAB - 1], r[INAPP_COL.VIEW - 1]);
       items.push({
         id:    String(r[INAPP_COL.ID - 1] || ''),
         ts:    r[INAPP_COL.CREATED - 1] ? new Date(r[INAPP_COL.CREATED - 1]).getTime() : 0,
         type:  String(r[INAPP_COL.TYPE - 1] || 'system'),
         title: String(r[INAPP_COL.TITLE - 1] || ''),
         body:  String(r[INAPP_COL.BODY - 1] || ''),
-        tab:   String(r[INAPP_COL.TAB - 1] || ''),
+        tab:   route.tab,
+        view:  route.view,   // ตัวกรองที่ต้องตั้งให้ตอนเปิดแท็บ ('' = ปล่อยตามที่ผู้ใช้ค้างไว้)
         by:    String(r[INAPP_COL.BY - 1] || ''),
         image: String(r[INAPP_COL.IMAGE - 1] || ''),
         focus: String(r[INAPP_COL.FOCUS - 1] || ''),   // แถวเก่าไม่มีคอลัมน์นี้ → '' = ไม่เด้งไปไหนต่อ
@@ -12903,7 +13089,51 @@ var SALE_BILL_HEADERS_ = [
   "zortOrderId", "สถานะ", "หมายเหตุ",
   // ── เพิ่มตอนทำโหมด "ขายออนไลน์" (ส.ค. 2026) — W..AC ──
   "ค่าจัดส่ง", "ยอดเก็บลูกค้า", "ขนส่ง", "เลขพัสดุ", "ผู้รับ", "ที่อยู่จัดส่ง", "โหมดขาย",
+  // ── AD — ตัวกันออกบิลซ้ำ (ส.ค. 2026) ดู COL_SB_CID ──
+  "billCid",
 ];
+
+// ── ตัวกันออกบิลซ้ำ (billCid) ────────────────────────────────────────────────
+// billCid = รหัสที่ client สร้าง 1 ค่าต่อการกด "บันทึกการขาย" 1 ครั้ง และ **คงค่าเดิมตอนลองใหม่**
+// ทำไมต้องมี: createSaleBill ยิง AddOrder → รับชำระ → หักสต็อก → เขียนชีต ซึ่งใช้เวลานาน
+//   พอ GAS ตอบเป็นหน้า HTML (execution ซ้อนกัน — ทุกคนรันในฐานะ user เดียวกันตาม
+//   executeAs: USER_DEPLOYING) หรือ browser ตัดสายที่ 60 วิ → ผู้ขายเห็น "ออกบิลไม่สำเร็จ"
+//   ทั้งที่บิลออกไปแล้ว แล้วกดใหม่ = **บิลซ้ำใน ZORT + สต็อกถูกหัก 2 รอบ + ใบกำกับซ้ำ**
+//   (เงินลูกค้าเกี่ยวข้องโดยตรง — เจ็บกว่าเคส order/transfer ที่แก้ไปแล้วด้วย cid/tid)
+// หลักเดียวกับ `cid` ของ action=order และ `tid` ของ transferStockBatch — เห็น cid เดิม
+//   = คืนผลเดิม ไม่ยิง ZORT ใหม่ ไม่หักสต็อกใหม่ ไม่เขียนชีตใหม่
+// ⚠️ ต้องเช็ค **ในล็อก** เพื่อให้สองคำขอ cid เดียวกันที่มาพร้อมกันได้ผลเดียวกันแน่นอน
+var SB_REPLAY_TTL_SEC = 21600;   // 6 ชม. (เพดานของ CacheService)
+var COL_SB_CID        = 30;      // AD — ต่อท้าย ห้ามแทรกกลาง (บทเรียนข้อ 5)
+var SB_CID_SCAN_ROWS  = 600;     // แถวท้ายสุดที่ไล่หา cid ในชีตบิลขาย (เผื่อ cache หลุด)
+
+// หา billCid ในชีตบิลขาย (ของจริงที่ถาวร — ใช้เมื่อ cache หมดอายุ/ถูกเขี่ยทิ้ง)
+// คืน object รูปแบบเดียวกับที่ createSaleBill คืนตอนสำเร็จ หรือ null ถ้าไม่เจอ
+// อ่านเฉพาะช่วงท้ายชีต ไม่ getDataRange ทั้งก้อน (ชีตนี้โต 1 แถวต่อ 1 บิล)
+function findBillCidRow_(ss, cid) {
+  if (!cid) return null;
+  var sh = ss.getSheetByName(SHEET_SALE_BILLS);
+  if (!sh) return null;
+  var last = sh.getLastRow();
+  if (last < 2) return null;
+  var from = Math.max(2, last - SB_CID_SCAN_ROWS + 1);
+  var rows = sh.getRange(from, 1, last - from + 1, COL_SB_CID).getValues();
+  for (var i = rows.length - 1; i >= 0; i--) {          // ใหม่สุดก่อน
+    if (String(rows[i][COL_SB_CID - 1] || '').trim() !== String(cid)) continue;
+    var r = rows[i];
+    var grand = Number(r[8]) || 0;
+    return {
+      orderNumber:    String(r[3] || '') || null,
+      documentNumber: String(r[4] || '') || null,
+      totals: { grandTotal: grand, preVat: Number(r[9]) || 0, vat: Number(r[10]) || 0 },
+      shipFee:  Number(r[22]) || 0,
+      payTotal: Number(r[23]) || grand,
+      billId:   String(r[0] || ''),
+      fromSheet: true,
+    };
+  }
+  return null;
+}
 function saleBillsSheet_(ss) {
   var sh = getOrCreateSheet_(ss, SHEET_SALE_BILLS, SALE_BILL_HEADERS_);
   // getOrCreateSheet_ เขียนหัวคอลัมน์เฉพาะตอน "สร้างชีตใหม่" — ชีตที่มีอยู่แล้ว (22 คอลัมน์เดิม)
@@ -12964,6 +13194,7 @@ function appendSaleBillRow_(ss, rec) {
       String(rec.shipMethod || ""), String(rec.shipTracking || ""),
       String(rec.shipRecipient || ""), String(rec.shipAddress || ""),
       String(rec.saleMode || ""),
+      String(rec.billCid || ""),   // AD — ตัวกันออกบิลซ้ำ (ว่างได้: บิลจาก client รุ่นเก่า)
     ];
     sh.appendRow(row);
     // วันที่/เวลา/เลขบิล เป็น text — กัน Sheets แปลง "2026-07-29" เป็น Date และเลขบิลยาวเป็น
@@ -12973,6 +13204,7 @@ function appendSaleBillRow_(ss, rec) {
     sh.getRange(r, 5, 1, 1).setNumberFormat("@");   // E เลขใบกำกับ
     sh.getRange(r, 20, 1, 1).setNumberFormat("@");  // T zortOrderId
     sh.getRange(r, 26, 1, 1).setNumberFormat("@");  // Z เลขพัสดุ (เลขล้วนยาว → กันกลายเป็น 1.2E+12)
+    sh.getRange(r, COL_SB_CID, 1, 1).setNumberFormat("@");  // AD billCid — ต้องเทียบ string ตรงตัว
     return { ok: true, id: id };
   } catch (e) {
     Logger.log("appendSaleBillRow_ error: " + e);
@@ -13194,9 +13426,27 @@ function createSaleBill(ss, data, actor) {
   if (data.dryRun) return ok({ dryRun: true, totals: totals, payload: payload,
     shipFee: shipFee, payTotal: payTotal, shipInZort: shipInZort });
 
+  var billCid = String(data.billCid || "").trim();
+
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่ ลองใหม่อีกครั้ง");
   try {
+    // ── กันออกบิลซ้ำ — ต้องเช็ค "ในล็อก" ก่อนแตะ ZORT ใด ๆ ทั้งสิ้น ────────────
+    // สองคำขอ cid เดียวกันที่มาพร้อมกัน (ผู้ขายกดรัว / ลองใหม่หลัง browser ตัดสาย) ตัวที่สอง
+    // ต้องเห็นผลของตัวแรกเสมอ · ดู cache ก่อน (มีผลครบ) แล้วค่อยถอยไปดูชีต (ถาวรกว่า)
+    if (billCid) {
+      var _replay = null;
+      try {
+        var _c = CacheService.getScriptCache().get('sbill_' + billCid);
+        if (_c) _replay = JSON.parse(_c);
+      } catch (e) { /* cache อ่านไม่ได้ → ไปดูชีตแทน */ }
+      if (!_replay) _replay = findBillCidRow_(ss, billCid);
+      if (_replay) {
+        Logger.log("createSaleBill: billCid ซ้ำ (" + billCid + ") → คืนผลเดิม ไม่ยิง ZORT ใหม่");
+        return ok(Object.assign({}, _replay, { dedup: true }));
+      }
+    }
+
     var headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
     // ── (1) AddOrder — สร้างบิล + ตัดสต็อก (ตัวหลักที่ต้องรอ) ──
     var _t0 = Date.now();
@@ -13323,18 +13573,59 @@ function createSaleBill(ss, data, actor) {
       shipFee: shipFee, payTotal: payTotal, saleMode: data.saleMode || "",
       shipMethod: shipping.method || "", shipTracking: shipping.tracking || "",
       shipRecipient: shipping.recipient || "", shipAddress: shipping.address || "",
+      billCid: billCid,
     });
     if (!billLog.ok) logZortFailure_("บันทึกชีตบิลขาย " + (orderNumber || ""), billLog.error);
 
     invalidateCache_();
     // ส่ง shipFee/payTotal กลับไปด้วย — สรุปที่ลูกค้าเห็นต้องใช้ยอดที่ server บันทึกไว้จริง
     // ไม่ใช่ยอดที่หน้าจอคำนวณเอง (สองฝั่งคิดต่างกันเมื่อไหร่ ลูกค้าจะได้ยอดที่ไม่ตรงกับระบบ)
-    return ok({ orderId: orderId, orderNumber: orderNumber, documentNumber: docNumber,
+    var out = { orderId: orderId, orderNumber: orderNumber, documentNumber: docNumber,
                 totals: totals, shipFee: shipFee, payTotal: payTotal, shipInZort: shipInZort,
-                unpaid: unpaidMethod, billLogId: billLog.ok ? billLog.id : null });
+                unpaid: unpaidMethod, billLogId: billLog.ok ? billLog.id : null };
+    // เก็บผลไว้ตอบซ้ำ — ผู้ขายที่ browser ตัดสายไปแล้วจะได้ "ผลจริง" ตอนถาม action=billCheck
+    // แทนที่จะเดาเอง · เขียนหลังทุกอย่างเสร็จ (ไม่ throw ออกไป — บิลออกไปแล้ว)
+    if (billCid) {
+      try { CacheService.getScriptCache().put('sbill_' + billCid, JSON.stringify(out), SB_REPLAY_TTL_SEC); }
+      catch (e) { Logger.log("createSaleBill: cache replay ไม่สำเร็จ (ไม่กระทบบิล): " + e); }
+    }
+    return ok(out);
   } finally {
     lock.releaseLock();
   }
+}
+
+// doGet action=billCheck — "บิลที่มี billCid นี้ ออกไปแล้วหรือยัง"
+// คืน found=false เมื่อ **ยืนยันได้ว่ายังไม่ออก** เท่านั้น (frontend ใช้ตัดสินใจว่ากดซ้ำได้ไหม)
+// ⚠️ ตอบไม่ได้/ผิดรูปแบบ → frontend ต้องถือว่า "ไม่รู้" และ **ห้ามชวนให้กดซ้ำ** เพราะ GAS
+//    รุ่นเก่าที่ยังไม่รู้จัก action นี้จะตอบ payload ก้อนอื่น/หน้า HTML มาแทน ซึ่งถ้าตีความว่า
+//    "ยังไม่ออก" แล้วกดซ้ำ = ออกบิลสองใบ (กับดักเดียวกับที่ orderCheck/transferCheck ระวังไว้)
+function billCheckHandler_(cid) {
+  var out = { ok: true, found: false };
+  try {
+    if (cid) {
+      var cached = null;
+      try {
+        var c = CacheService.getScriptCache().get('sbill_' + cid);
+        if (c) cached = JSON.parse(c);
+      } catch (e) { /* cache อ่านไม่ได้ → ไปดูชีตแทน */ }
+      var hit = cached || findBillCidRow_(SpreadsheetApp.openById(SHEET_ID), cid);
+      if (hit) {
+        out.found = true;
+        out.orderNumber    = hit.orderNumber || null;
+        out.documentNumber = hit.documentNumber || null;
+        out.totals   = hit.totals || null;
+        out.shipFee  = hit.shipFee != null ? hit.shipFee : null;
+        out.payTotal = hit.payTotal != null ? hit.payTotal : null;
+        if (hit.fromSheet) out.fromSheet = true;   // cache หลุด — ยืนยันจากชีตแทน
+      }
+    }
+  } catch (err) {
+    Logger.log('billCheckHandler_ error: ' + err);
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
