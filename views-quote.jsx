@@ -51,14 +51,31 @@ async function syncGetQuotationDrafts() {
     return await dmjJson(res); // { success, data:{drafts:[]} }
   } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
-// ── sync helper: ดึงรายละเอียดใบเสนอราคาเดิม (สำหรับพิมพ์ A4 ย้อนหลัง) ──
+// ── sync helper: ดึงรายละเอียดใบเสนอราคาเดิม (สำหรับพิมพ์ A4 ย้อนหลัง / เปิดฟอร์มแก้ไข) ──
+// เป็น "การอ่านล้วน" (idempotent — GAS แค่ดึง detail จาก ZORT ไม่แก้ข้อมูลอะไร) → **ลองซ้ำได้
+// ปลอดภัย** เมื่อ GAS ตอบ HTML/404 ชั่วคราว: ตอน deploy ใหม่ (`clasp push --force`) endpoint
+// `/exec` 404 แวบเดียว · ลิงก์ googleusercontent หมดอายุ · หรือ ZORT ตอบช้าจน doGet ยาว
+// เดิมไม่มี retry → เจอ blip ทีเดียวก็ขึ้น "ดึงรายละเอียดไม่สำเร็จ [รหัส 404]" ทั้งที่กดใหม่ก็ผ่าน
 async function syncGetQuotationForPrint(idOrNumber) {
   if (!SHEET_DEPLOY_URL) return { success: false, error: "ยังไม่ได้เชื่อมต่อ Sheet" };
-  try {
-    const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
-    const res = await dmjFetch(`${SHEET_DEPLOY_URL}${sep}action=getQuotationForPrint&id=${encodeURIComponent(idOrNumber)}&_t=${Date.now()}`, { cache: "no-store" });
-    return await dmjJson(res); // { success, data:{quotationNumber,customer,items,remarks,salesRep,totals} }
-  } catch (err) { return { success: false, error: dmjErrText(err) }; }
+  const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
+  let lastErr = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, 700 * attempt));   // 0 · 0.7 · 1.4 วิ
+    try {
+      const res = await dmjFetch(`${SHEET_DEPLOY_URL}${sep}action=getQuotationForPrint&id=${encodeURIComponent(idOrNumber)}&_t=${Date.now()}`,
+        { cache: "no-store", dmjTimeoutMs: 25000 });
+      return await dmjJson(res); // { success, data:{quotationNumber,customer,items,remarks,salesRep,totals} }
+    } catch (err) {
+      lastErr = err;
+      // ลองซ้ำเฉพาะ "อ่านคำตอบไม่ได้" (HTML/404 = badjson) หรือเน็ต/timeout สะดุด — error อื่น
+      // (เช่น ZORT ปฏิเสธจริงที่ GAS คืน JSON 200 มา) ไม่ throw จึงไม่มาถึงตรงนี้อยู่แล้ว
+      const retryable = err && (err.dmjKind === "badjson" || err.name === "AbortError"
+        || err instanceof TypeError || /Failed to fetch|Load failed|NetworkError/i.test(String(err.message || "")));
+      if (!retryable) break;
+    }
+  }
+  return { success: false, error: dmjErrText(lastErr) };
 }
 // ── sync helper: ออกเลขที่ใบแจ้งหนี้ของเราเอง (IVB-yyyyMM###) ผูกกับเลขที่ใบเสนอราคาต้นทาง —
 // พิมพ์ซ้ำใบเดิมได้เลขเดิมเสมอ (idempotent ฝั่ง backend)

@@ -97,3 +97,30 @@ describe('meta — เส้นทาง editQuote ต้องใช้รา�
     expect(fn[0]).not.toMatch(/pricesFinal/);
   });
 });
+
+// ── กด "แก้ไข" แล้วขึ้น "ดึงรายละเอียดไม่สำเร็จ [รหัส 404]" (ส.ค. 2026) ──
+// getQuotationForPrint ยิง ZORT ในตัว doGet → doGet ยาวจน googleusercontent 404 ชั่วคราวได้
+// เป็นการอ่านล้วน (idempotent) → ต้องลองซ้ำเองก่อนขึ้น error ไม่งั้นเจอ blip ทีเดียวก็พังทั้งที่กดใหม่ผ่าน
+describe('meta — syncGetQuotationForPrint ต้องลองซ้ำเมื่ออ่านคำตอบไม่ได้ (idempotent read)', () => {
+  const fn = QUOTE.match(/async function syncGetQuotationForPrint\(idOrNumber\) \{[\s\S]*?\n\}/);
+
+  it('มีลูป retry (ลองซ้ำหลายครั้ง)', () => {
+    expect(fn).toBeTruthy();
+    expect(fn[0]).toMatch(/for \(let attempt = 0; attempt < 3; attempt\+\+\)/);
+  });
+
+  it('ยังอ่านคำตอบผ่าน dmjJson (บทเรียนข้อ 13) ไม่ใช่ res.json()', () => {
+    expect(fn[0]).toMatch(/dmjJson\(res\)/);
+    expect(fn[0]).not.toMatch(/res\.json\(\)/);
+  });
+
+  it('ลองซ้ำเฉพาะ badjson (HTML/404) หรือเน็ต/timeout — ไม่ retry มั่ว', () => {
+    expect(fn[0]).toMatch(/badjson/);
+    expect(fn[0]).toMatch(/AbortError/);
+    expect(fn[0]).toMatch(/if \(!retryable\) break/);
+  });
+
+  it('มีหน่วงเวลาระหว่างครั้ง (backoff) ไม่ยิงรัว', () => {
+    expect(fn[0]).toMatch(/setTimeout\(r, 700 \* attempt\)/);
+  });
+});
