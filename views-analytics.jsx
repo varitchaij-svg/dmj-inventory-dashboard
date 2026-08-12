@@ -8125,6 +8125,22 @@ async function syncSetQuoteSale(number, sale) {
 // ───────────────────────────────────────────────────────────
 const QUOTE_MONTHS_TH = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
 
+// เทียบชื่อเซลของ "⭐ ของฉัน" ให้ทน — ชื่อ LINE มักมีอิโมจิ/ตัวประดับ (เช่น "นิยม💫") และชีต
+// overlay (readQuoteSaleMap_) อาจเก็บชื่อคนละรูปแบบ (ไม่มีอิโมจิ/เว้นวรรคต่าง) → เทียบตรง ๆ
+// `it.sale === myName` จะ "ไม่ตรง" ทั้งที่คนเดียวกัน แล้วพนักงานหาใบของตัวเองไม่เจอ (เจอจริง ส.ค. 2026)
+// บทเรียนเดียวกับ productOwnerStaffKey_ ฝั่ง .gs → NFKC + ตัดอิโมจิ/zero-width/ช่องว่าง/วงเล็บท้าย
+// ⚠️ ห้ามใช้ \p{...} (บาง runtime = syntax error ทั้งไฟล์) — ใช้ช่วงรหัสอักขระตรง ๆ (blacklist ไม่ใช่ whitelist
+//    ไทย/อังกฤษ ไม่งั้นชื่อพม่า/ลาวเหลือค่าว่าง) · NFKC ก่อนตัด surrogate: 𝐾𝑌𝐴𝑊→KYAW จึงรอด อิโมจิถูกตัด
+function quoteSaleKey(s) {
+  let t = String(s == null ? "" : s);
+  try { t = t.normalize("NFKC"); } catch (e) { /* runtime ไม่รองรับ → ใช้ค่าดิบต่อ */ }
+  t = t.replace(/\s*\([^)]*\)\s*$/, "");            // ตัด "(ตำแหน่ง)" ท้ายถ้าเผลอติดมา
+  t = t.replace(/[\uD800-\uDFFF]/g, "")             // อักขระนอก BMP (หลัง NFKC เหลือแต่ของประดับ เช่น อิโมจิ)
+       .replace(/[\u200B-\u200D\uFEFF]/g, "")     // zero-width joiner/non-joiner/space + BOM
+       .replace(/\s+/g, "");                         // ช่องว่างทั้งหมด
+  return t.toLowerCase();
+}
+
 function QuoteFollowupView({ data, role }) {
   const mobile = useIsMobile();
   // viewRole ยุบ dev→owner มาแล้ว → owner+dev = หน้าติดตามผล (แดชบอร์ด/เทียบเซล)
@@ -8331,11 +8347,27 @@ function QuoteFollowupView({ data, role }) {
   // window._currentUserName (ชื่อล้วน ไม่มี "(ตำแหน่ง)") ที่ประทับมาจากที่เดียวกัน · myName ว่าง →
   // "ของฉัน" ว่าง แต่กด "ทั้งหมด" ได้เสมอ (ห้าม hard-restrict — บางทีต้องพิมพ์ซ้ำใบเพื่อน/ใบเก่าที่ไม่ติดชื่อ)
   const myName = ((typeof window !== "undefined" && window._currentUserName) || "").trim();
-  const scopeMine = (arr) => (isOwner || !mineOnly) ? arr : arr.filter(it => myName && (it.sale || "").trim() === myName);
+  // เทียบด้วย quoteSaleKey (ทนอิโมจิ/เว้นวรรค/overlay ต่างรูปแบบ) ไม่ใช่ === ตรง ๆ — ดูเหตุผลที่ helper
+  const myKey = quoteSaleKey(myName);
+  const scopeMine = (arr) => (isOwner || !mineOnly) ? arr : arr.filter(it => myKey && quoteSaleKey(it.sale) === myKey);
   const empPending = uM(() => scopeMine(items.filter(it => isPending(it.status)).sort((a, b) => (b.ageDays || 0) - (a.ageDays || 0))), [items, isOwner, mineOnly, myName]);   // เก่า/ค้างนานอยู่บน = ตามก่อน
   const empApproved = uM(() => scopeMine(items.filter(it => isApproved(it.status)).sort((a, b) => (a.ageDays || 0) - (b.ageDays || 0))), [items, isOwner, mineOnly, myName]); // เพิ่งอนุมัติอยู่บน
   const pendingRender = isOwner ? pendingList : empPending;
   const approvedRender = isOwner ? approvedList : empApproved;
+
+  // จำนวน "ทั้งหมด" (ไม่กรองของฉัน) — ใช้ตอน "ของฉัน" ว่างเพื่อบอกว่ามีใบอยู่ แค่ไม่ติดชื่อ
+  // (ใบเก่า/ใบสร้างใน ZORT ไม่ติด tag → หายจากของฉันโดยดีไซน์ ต้องบอกไม่งั้นดูเหมือนแอปพัง)
+  const allPendingCount  = uM(() => items.filter(it => isPending(it.status)).length,  [items]);
+  const allApprovedCount = uM(() => items.filter(it => isApproved(it.status)).length, [items]);
+  // แถบชวนกด "ทั้งหมด" — โผล่เฉพาะตอนอยู่โหมดของฉัน + ลิสต์ที่กรองแล้วว่าง + แต่จริง ๆ มีใบอยู่
+  const mineEmptyHint = (unscoped) => (
+    <div style={{ textAlign: "center", padding: "28px 20px", color: "var(--muted)", fontSize: 14, border: "1px dashed var(--bdr)", borderRadius: 12, lineHeight: 1.7 }}>
+      ยังไม่พบใบที่ติดชื่อคุณในหมวดนี้
+      <div style={{ fontSize: 12.5, marginTop: 4 }}>ใบเก่า/ใบที่สร้างในระบบ ZORT อาจไม่ได้ติดชื่อผู้ทำ · ใบที่สร้างใหม่หลังล็อกอินจะขึ้นที่นี่เอง</div>
+      <button className="btn" style={{ marginTop: 12, minHeight: 42, padding: "0 22px" }}
+              onClick={() => setMineOnly(false)}>📋 ดูทั้งหมด ({unscoped})</button>
+    </div>
+  );
 
   // สรุปตามเซล: เสนอกี่ใบ/มูลค่า · ปิดได้ (อนุมัติ) กี่ใบ/มูลค่า · %ปิดตามใบ + ตามมูลค่า · ค้าง/ยกเลิก
   const salesAgg = uM(() => {
@@ -8610,7 +8642,9 @@ function QuoteFollowupView({ data, role }) {
           {/* ── โหมด รออนุมัติ (ปิดใบ) ── */}
           {mode === "pending" && (
             pendingRender.length === 0 ? (
-              <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>ไม่มีใบรออนุมัติในช่วงนี้ 🎉</div>
+              (!isOwner && mineOnly && allPendingCount > 0)
+                ? mineEmptyHint(allPendingCount)
+                : <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>ไม่มีใบรออนุมัติในช่วงนี้ 🎉</div>
             ) : (
               <>
                 <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>เกิน {OVERDUE_DAYS} วัน = ควรปิด (Void) · แถวแดง = ควรปิด</div>
@@ -8775,7 +8809,9 @@ function QuoteFollowupView({ data, role }) {
           {/* ── โหมด อนุมัติแล้ว ── */}
           {mode === "approved" && (
             approvedRender.length === 0 ? (
-              <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>ไม่มีใบอนุมัติในช่วงนี้</div>
+              (!isOwner && mineOnly && allApprovedCount > 0)
+                ? mineEmptyHint(allApprovedCount)
+                : <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>ไม่มีใบอนุมัติในช่วงนี้</div>
             ) : (
               <>
                 <div ref={listRef}/>

@@ -373,9 +373,12 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
   const [custResults, setCustResults] = uS(null);
   const [searching, setSearching] = uS(false);
 
-  // ผู้ทำใบเสนอราคา — มาจากบัญชีที่ล็อกอินเสมอ ไม่ให้พิมพ์เอง (กันพิมพ์ชื่อคนอื่นผิดคน)
+  // ผู้ทำใบเสนอราคา — ต้องเป็น **ชื่อคนจริง** จากบัญชีที่ล็อกอินเท่านั้น (กันพิมพ์ชื่อคนอื่นผิดคน)
   // server จะทับด้วยชื่อจาก session อีกชั้นตอนบันทึกจริงอยู่แล้ว อันนี้แค่โชว์ผลให้ตรงกันตั้งแต่จอ
-  const salesRep = window._currentUserName || sessionStorage.getItem("dmj_role") || "";
+  // ⚠️ **ห้าม fallback เป็น dmj_role** ("saler") — ค่านี้ถูกประทับเป็น tag ของ ZORT แล้วใช้เป็น
+  //    "ของฉัน" ต่อ · ถ้าเป็น role string ใบจะติดชื่อ "saler" ปนกันทุกคน แล้ว match ใครไม่ได้เลย
+  //    · ยังไม่มีชื่อ = ยังไม่ได้ล็อกอิน → guard ด้านล่าง (!salesRep.trim()) บล็อกแล้วบอกให้ล็อกอินใหม่
+  const salesRep = (window._currentUserName || "").trim();
   const [channel, setChannel] = uS("หน้าร้าน");
   const [remarks, setRemarks] = uS(() =>
     (editQuote && Array.isArray(editQuote.remarks) && editQuote.remarks.length)
