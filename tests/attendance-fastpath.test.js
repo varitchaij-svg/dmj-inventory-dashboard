@@ -215,3 +215,37 @@ describe('harness ของ browser test', () => {
     expect(HARNESS.indexOf('window.dmjMark')).toBeLessThan(HARNESS.indexOf('/tests/browser/fixture.js'));
   });
 });
+
+// ── หน้าลงเวลาต้องกู้ตัวเองได้เมื่อ myToday ตอบ 404/หน้า HTML (เจอจริง ส.ค. 2026) ──
+// อาการ: พนักงานเปิดหน้าลงเวลา → myToday ตอบ [รหัส 404] (GAS cold start/ยิงพร้อมกัน) →
+// today เป็น null → ปุ่มลงเวลาไม่ขึ้นเลย + ไม่มีปุ่มลองใหม่ = กดเข้างานไม่ได้ ต้องปิดแอปเปิดใหม่
+describe('AttendanceView — กู้ตัวเองเมื่อโหลดสถานะวันนี้พลาด', () => {
+  const load = (() => {
+    const m = ATT.match(/const load = uC\(async \(retryLeft\) => \{[\s\S]*?\n  \}, \[\]\);/);
+    if (!m) throw new Error('หา load() ของ AttendanceView ไม่เจอ — ถูกแก้โครงสร้าง?');
+    return m[0];
+  })();
+
+  it('load() รับ retryLeft และยิงซ้ำเองเมื่อ attPost throw (transient)', () => {
+    expect(load).toMatch(/catch \(e\)/);
+    expect(load).toMatch(/setTimeout\(\(\) => load\(tries - 1\)/);
+  });
+
+  it('ห้าม retry เมื่อ d.success===false (คำตอบจริงของ server เช่น ยังไม่ล็อกอิน)', () => {
+    // setErr ในสาขา else ของ d.success ต้องไม่พ่วง setTimeout(load...) — retry เฉพาะใน catch เท่านั้น
+    const retryCount = (load.match(/setTimeout\(\(\) => load\(/g) || []).length;
+    expect(retryCount).toBe(1);
+  });
+
+  it('รอบสุดท้ายแปลง error เป็นข้อความไทยด้วย dmjErrText (ไม่โชว์ e.message ดิบ)', () => {
+    expect(load).toMatch(/dmjErrText/);
+  });
+
+  it('แถบ error ของหน้าลงเวลามีปุ่ม "ลองใหม่" ที่เรียก load()', () => {
+    // ปุ่มต้องอยู่คู่กับ err banner ใน AttendanceView (today=null → ปุ่มลงเวลาไม่ขึ้น ต้องมีทางกู้)
+    const av = ATT.match(/function AttendanceView\([\s\S]*?\n(?=function )/);
+    expect(av).toBeTruthy();
+    expect(av[0]).toMatch(/onClick=\{\(\) => load\(\)\}/);
+    expect(av[0]).toMatch(/ลองใหม่/);
+  });
+});

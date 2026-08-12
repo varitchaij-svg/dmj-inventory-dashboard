@@ -139,14 +139,30 @@ function AttendanceView({ role }) {
   // นาฬิกาเดินจริง — พนักงานเห็นเวลาตรงกับที่ระบบจะบันทึก
   uE(() => { const t = setInterval(() => setClock(new Date()), 1000); return () => clearInterval(t); }, []);
 
-  const load = uC(async () => {
-    setLoading(true); setErr(null);
+  // โหลดสถานะวันนี้ — เป็น read-only จึง **auto-retry ได้ปลอดภัย** (ต่างจาก punch ที่เขียน
+  // ข้อมูลจริง ห้ามยิงซ้ำ) · GAS ตอบ 404/หน้า HTML ได้ตอน cold start หรือมีคนใช้พร้อมกัน
+  // (บทเรียนข้อ 13) — ยิงครั้งเดียวแล้วเจอ = พนักงานติดจอ error กดเข้างานไม่ได้เลยทั้งที่
+  // แค่ลองใหม่ก็ผ่าน (เจอจริง ส.ค. 2026: [รหัส 404] บนหน้าลงเวลา) → ลองเองให้อีก 2 ครั้ง
+  const load = uC(async (retryLeft) => {
+    const tries = (typeof retryLeft === "number") ? retryLeft : 2;
+    setLoading(true);
+    if (tries === 2) setErr(null);   // ล้าง error เฉพาะรอบแรก/กดลองใหม่เอง ไม่งั้นกะพริบระหว่าง retry
     try {
       const d = await attPost({ action: "myToday" });
-      if (d && d.success) setToday(d.data);
+      if (d && d.success) { setToday(d.data); setErr(null); }
+      // d.success===false = คำตอบจริงของ server (เช่น ยังไม่ล็อกอิน LINE) — **ไม่ retry** โชว์เลย
       else setErr((d && d.error) || "โหลดไม่สำเร็จ — ต้องเข้าสู่ระบบด้วย LINE ก่อน");
-    } catch (e) { setErr(e.message); }
-    finally { setLoading(false); }
+      setLoading(false);
+    } catch (e) {
+      // throw = ต่อไม่ติด/ตอบไม่ครบ (transient) ต่างจาก d.success===false ข้างบน → ลองใหม่เองได้
+      if (tries > 0) {
+        const delay = 1200 + Math.random() * 1200;   // สุ่มกระจาย กันทุกเครื่องยิงพร้อมกันซ้ำ (หลักเดียวกับ fetchFromSheet)
+        setTimeout(() => load(tries - 1), delay);
+        return;   // ยังไม่ setLoading(false) — คงสปินเนอร์ไว้ระหว่างรอ retry (อย่าให้เห็น error วูบ ๆ)
+      }
+      setErr(typeof dmjErrText === "function" ? dmjErrText(e) : e.message);
+      setLoading(false);
+    }
   }, []);
 
   uE(() => { load(); }, [load]);
@@ -235,7 +251,13 @@ function AttendanceView({ role }) {
 
       {err && (
         <div style={{ background: "#fff0f0", border: "1px solid var(--dang)", borderRadius: 10, padding: "10px 14px", color: "var(--dang)", marginBottom: 12, fontSize: 13 }}>
-          ⚠️ {err}
+          <div>⚠️ {err}</div>
+          {/* ต้องมีปุ่มลองใหม่ตรงนี้ — โหลดพลาดแล้ว today เป็น null ปุ่มลงเวลาจึงไม่ขึ้นเลย
+              ถ้าไม่มีปุ่มนี้ พนักงานต้องปิดแอปเปิดใหม่ทั้งที่แค่ลองใหม่ก็ผ่าน (เจอจริง ส.ค. 2026) */}
+          <button className="btn" style={{ marginTop: 10, minHeight: 42, padding: "0 22px" }}
+                  disabled={loading} onClick={() => load()}>
+            {loading ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }} /> : "🔄 ลองใหม่"}
+          </button>
         </div>
       )}
 
