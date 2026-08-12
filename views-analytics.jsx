@@ -41,7 +41,9 @@ function computeBillTotals(items, opts) {
     else { eligiblePieces += qty; retailEligible += line; }
   });
 
-  var isWholesale = eligiblePieces >= 6;
+  // pricesFinal=true → ราคาที่ส่งมาเป็น "ราคาสุทธิ" (หักส่วนลดแล้ว) เช่นตอนแก้ไขใบเสนอราคาที่
+  // โหลดราคากลับมาจาก ZORT — ห้ามหักส่วนลดขายส่ง/ขั้นบาทซ้ำ ไม่งั้นยอดเพี้ยนจากใบเดิม (หักสองเด้ง)
+  var isWholesale = !opts.pricesFinal && eligiblePieces >= 6;
   var wholesaleSubtotal = isWholesale ? retailEligible * 0.80 : retailEligible;
   var tierRate = isWholesale ? wholesaleTierRate(wholesaleSubtotal) : 0;
   var eligibleFinal = wholesaleSubtotal * (1 - tierRate);

@@ -351,10 +351,13 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
       return {
         sku: it.sku, name: it.name,
         qty: Number(it.qty) || 0,
-        price: p && Number(p.price) > 0 ? Number(p.price) : (Number(it.price) || 0),
+        // ⚠️ ใช้ "ราคาสุทธิ" ที่ ZORT เก็บไว้ (it.price) — ไม่ใช่ราคาปัจจุบันจาก catalog
+        // เพราะราคานี้คือราคาหลังหักส่วนลดในใบเดิม ถ้าเอาราคา catalog มาแล้วหักส่วนลดใหม่
+        // ยอดจะไม่เท่าใบเดิม (เจ้าของแจ้ง ส.ค. 2026) · โหมดแก้ไขจึง "ไม่หักส่วนลดซ้ำ"
+        // (computeBillTotals pricesFinal) → ยอดรวมเท่าใบเดิมเป๊ะ · หารูป/หมวดจาก catalog เท่านั้น
+        price: Number(it.price) || 0,
         category: (p && p.category) || it.category || "",
         imageUrl: (p && p.imageUrl) || "",
-        _priceFromCatalog: !!(p && Number(p.price) > 0),
       };
     });
   });
@@ -430,7 +433,8 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
   }
 
   const md = Math.max(0, parseFloat(manualDiscount) || 0);
-  const totals = uM(() => computeBillTotals(cart, { manualDiscount: md }), [cart, md]);
+  // โหมดแก้ไข: ราคาต่อชิ้นเป็นราคาสุทธิจากใบเดิม (หักส่วนลดแล้ว) → pricesFinal กันหักซ้ำ ยอดจึงเท่าใบเดิม
+  const totals = uM(() => computeBillTotals(cart, { manualDiscount: md, pricesFinal: !!editQuote }), [cart, md, editQuote]);
 
   // หมวด Made to Order/จัดแบบพิเศษ — ขึ้นชิปแรกสุดเสมอ (เจ้าของขอ: หามุ่งงานพิเศษบ่อย
   // สินค้าชื่อคล้ายกันเยอะ อยากเห็นหมวดนี้ก่อนหมวดอื่นไม่ต้องไล่หา) ไม่รวม "อุปกรณ์สำนักงาน"
@@ -565,6 +569,8 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
       // โหมดแก้ไข: ส่ง id/number ของใบเดิมไปด้วย — server ใช้ id ยิง EditQuotation ที่ใบนั้นตรงๆ
       quotationId: editQuote ? editQuote.quotationId : undefined,
       quotationNumber: editQuote ? editQuote.quotationNumber : undefined,
+      // โหมดแก้ไข: ราคาที่ส่งเป็นราคาสุทธิ (หักส่วนลดแล้ว) → backend ต้องไม่หักส่วนลดขายส่งซ้ำ
+      pricesFinal: editQuote ? true : undefined,
       items: cart.map(it => ({ sku: it.sku, name: it.name, category: it.category, qty: Number(it.qty) || 0, price: Number(it.price) || 0 })),
       customer: cust,
       salesRep: salesRep.trim(),
@@ -693,14 +699,13 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
         {onBack && <button onClick={onBack} style={{ border: "none", background: "none", color: "var(--muted)", fontWeight: 600, cursor: "pointer" }}>✕ ปิด</button>}
       </div>
 
-      {/* โหมดแก้ไข: เตือนเรื่องราคา — ราคาที่ ZORT เก็บไว้เป็นราคาหลังเฉลี่ยส่วนลดแล้ว โหลดกลับมา
-          ตรงๆ ไม่ได้ (จะโดนหักซ้ำ) จึงคืนราคาตั้งจาก catalog ปัจจุบันให้แทน — ถ้าตอนออกใบเดิม
-          ใช้ราคาพิเศษที่ไม่ตรง catalog ต้องพิมพ์แก้เอง ระบบเดาแทนไม่ได้ */}
+      {/* โหมดแก้ไข: ราคาต่อชิ้นที่โหลดมาเป็น "ราคาสุทธิจากใบเดิม" (หักส่วนลดแล้ว) → ยอดรวมเท่าใบเดิม
+          เป๊ะ · ระบบจะไม่หักส่วนลดขายส่งซ้ำในโหมดนี้ (กันยอดเพี้ยน) ถ้าจะเปลี่ยนราคาให้พิมพ์แก้เป็น
+          ราคาสุทธิที่ต้องการได้เลย */}
       {editQuote && (
         <div style={{ background: "#fff8e1", border: "1px solid #ffe082", borderRadius: 10, padding: "10px 14px", fontSize: 12.5, color: "#7a5a00", lineHeight: 1.7 }}>
-          ⚠️ <b>ตรวจราคาก่อนบันทึก</b> — ราคาต่อชิ้นดึงจาก<b>ราคาขายปัจจุบัน</b>ของสินค้าแต่ละตัว
-          ไม่ใช่ราคาที่พิมพ์ในใบเดิม (ระบบย้อนราคาเดิมกลับไม่ได้เพราะใบเก่าเก็บเป็นราคาหลังหักส่วนลดแล้ว)
-          ถ้าใบเดิมใช้ราคาพิเศษ กรุณาพิมพ์แก้ในช่องราคาให้ตรงก่อนกดบันทึก
+          ⚠️ <b>ราคาต่อชิ้นคือราคาสุทธิจากใบเดิม</b> (หักส่วนลดแล้ว) — ยอดรวมจึงเท่ากับใบเดิม
+          ระบบจะไม่หักส่วนลดขายส่งซ้ำในโหมดแก้ไข ถ้าจะปรับราคา ให้พิมพ์แก้เป็น<b>ราคาสุทธิ</b>ที่ต้องการ
           <div style={{ marginTop: 4 }}>บันทึกแล้วจะ<b>อัปเดตใบเดิม</b>ใน ZORT (เลขที่เอกสารเท่าเดิม ไม่ได้สร้างใบใหม่)</div>
         </div>
       )}

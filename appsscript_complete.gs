@@ -13982,13 +13982,17 @@ function editQuotation(ss, data, actor) {
   var items = Array.isArray(data.items) ? data.items : [];
   if (!items.length) return error("ไม่มีรายการสินค้าในใบเสนอราคา");
 
+  // pricesFinal (frontend ส่งมาในโหมดแก้ไข): ราคาที่โหลดกลับมาจาก ZORT เป็น "ราคาสุทธิ" อยู่แล้ว
+  // (หักส่วนลดในใบเดิมไปแล้ว) → ห้ามหักส่วนลดขายส่งซ้ำ ไม่งั้นยอดไม่เท่าใบเดิม (หักสองเด้ง)
   var totals = computeBillTotalsGs_(items, {
     excludeKeywords: readBillExcludeCats_(),
     manualDiscount: data.manualDiscount,
+    pricesFinal: !!data.pricesFinal,
   });
 
   // เฉลี่ยส่วนลดลงราคาต่อหน่วย — ตรรกะเดียวกับ createQuotation เป๊ะ (ห้ามให้ 2 ที่คิดคนละแบบ
-  // ไม่งั้นแก้ใบแล้วยอดเปลี่ยนทั้งที่ไม่ได้แตะราคา)
+  // ไม่งั้นแก้ใบแล้วยอดเปลี่ยนทั้งที่ไม่ได้แตะราคา) · โหมด pricesFinal: factor≈1 (ไม่มีส่วนลดใหม่)
+  // → netUnit = ราคาสุทธิที่ส่งมาตรงๆ ยอดรวมจึงเท่าใบเดิม
   var gross = totals.retailEligible + totals.retailExcluded;
   var factor = gross > 0 ? (totals.grandTotal / gross) : 1;
   var list = items.map(function (it) {
@@ -14234,7 +14238,9 @@ function computeBillTotalsGs_(items, opts) {
     if (excluded(it.category)) retEx += line;
     else { pcs += (Number(it.qty) || 0); retEl += line; }
   });
-  var isWs = pcs >= 6;
+  // pricesFinal=true → ราคาที่ส่งมาเป็นราคาสุทธิ (หักส่วนลดแล้ว) เช่นตอนแก้ไขใบเสนอราคา —
+  // ห้ามหักส่วนลดขายส่ง/ขั้นบาทซ้ำ ไม่งั้นยอดเพี้ยนจากใบเดิม (ต้องตรงกับ computeBillTotals ฝั่ง .jsx)
+  var isWs = !opts.pricesFinal && pcs >= 6;
   var wsSub = isWs ? retEl * 0.80 : retEl;
   var tRate = isWs ? tier(wsSub) : 0;
   var elFinal = wsSub * (1 - tRate);
