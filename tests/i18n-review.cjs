@@ -74,13 +74,10 @@ for (const sec of SECTIONS) {
   rowsHtml += `</div>`;
 }
 
-const html = `<!doctype html>
-<html lang="th">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=3">
-<title>ตรวจคำแปลภาษาพม่า — Doomuenjing</title>
-<style>
+// ── CSS + เนื้อหา แยกกัน เพื่อ output 2 แบบ: ไฟล์เดี่ยว (มี <html>) + inner สำหรับ Artifact ──
+// หน้านี้เป็น "เอกสารตรวจทาน" จงใจใช้ธีมเดียว (สว่าง คล้ายกระดาษ) — ทาสีพื้น/สีทุกจุดชัดเจน
+// จึงคงหน้าตาเดิมไม่ว่าเครื่องผู้อ่านจะตั้งธีมสว่างหรือมืด (ตามแนวทาง artifact single-theme)
+const CSS = `
   :root { --bg:#f6f7f5; --paper:#fff; --bdr:#e3e6e1; --text:#20241f; --muted:#6b7280;
           --g50:#eef6ef; --g500:#3f9d5a; --g700:#256b3a; --warn:#b7791f; --warnbg:#fdf6e3; }
   * { box-sizing:border-box; }
@@ -123,9 +120,9 @@ const html = `<!doctype html>
            background:#20241f; color:#fff; padding:10px 16px; border-radius:10px; font-size:14px;
            opacity:0; transition:opacity .2s; pointer-events:none; z-index:20; }
   .toast.show { opacity:1; }
-</style>
-</head>
-<body>
+`;
+
+const BODY = `
 <header><div class="h">
   <h1>🇲🇲 ตรวจคำแปลภาษาพม่า</h1>
   <p>Doomuenjing — ระบบจัดการสต็อก · စာရင်း စီမံခန့်ခွဲမှု စနစ်</p>
@@ -192,10 +189,25 @@ const html = `<!doctype html>
     ta.focus(); ta.select(); try { document.execCommand('copy'); } catch(e){} document.body.removeChild(ta);
   }
 })();
-</script>
-</body>
+</script>`;
+
+// (1) ไฟล์เดี่ยว — ดาวน์โหลด/เปิดตรง ๆ ได้
+const full = `<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=3">
+<title>ตรวจคำแปลภาษาพม่า — Doomuenjing</title>
+<style>${CSS}</style>
+</head>
+<body>${BODY}</body>
 </html>`;
 
+// (2) inner สำหรับ Artifact — ไม่มี doctype/html/head/body (Artifact ห่อให้เอง) · title ส่งผ่าน param
+const inner = `<style>${CSS}</style>${BODY}`;
+
 const OUT = path.join(ROOT, 'docs', 'i18n-review.html');
-fs.writeFileSync(OUT, html, 'utf8');
-console.log('เขียน ' + OUT + ' (' + total + ' คำ, ' + SECTIONS.length + ' หมวด)');
+fs.writeFileSync(OUT, full, 'utf8');
+const OUT2 = path.join(ROOT, 'docs', 'i18n-review.artifact.html');
+fs.writeFileSync(OUT2, inner, 'utf8');
+console.log('เขียน ' + OUT + ' + ' + OUT2 + ' (' + total + ' คำ, ' + SECTIONS.length + ' หมวด)');
