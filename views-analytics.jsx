@@ -8343,7 +8343,8 @@ function QuoteFollowupView({ data, role }) {
   const pendingList = uM(() => items.filter(it => isPending(it.status) && yearOf(it) === selYear && (!selMonth || monthOf(it) === selMonth)).sort((a, b) => b.amount - a.amount), [items, selYear, selMonth]);
   const approvedList = uM(() => items.filter(it => isApproved(it.status) && yearOf(it) === selYear && (!selMonth || monthOf(it) === selMonth)).sort((a, b) => b.amount - a.amount), [items, selYear, selMonth]);
 
-  // ── รายการฝั่งพนักงานขาย: "ของฉัน" เป็นค่าเริ่มต้น + ไม่ผูกปี/เดือน (ตามงานของตัวเองทั้งหมด) ──
+  // ── รายการฝั่งพนักงานขาย: "ของฉัน" เป็นค่าเริ่มต้น + กรองตามปี/เดือนได้เหมือนเจ้าของ (เจ้าของขอ
+  // ส.ค. 2026 — พนักงานก็ต้องเลือกดูเป็นเดือนได้) · ค่าเริ่มต้น = ปีล่าสุด + ทุกเดือน (ตามงานทั้งปี)
   // it.sale มาจาก tag ของ ZORT ซึ่ง createQuotation ประทับด้วยชื่อ session ตอนสร้าง → เทียบกับ
   // window._currentUserName (ชื่อล้วน ไม่มี "(ตำแหน่ง)") ที่ประทับมาจากที่เดียวกัน · myName ว่าง →
   // "ของฉัน" ว่าง แต่กด "ทั้งหมด" ได้เสมอ (ห้าม hard-restrict — บางทีต้องพิมพ์ซ้ำใบเพื่อน/ใบเก่าที่ไม่ติดชื่อ)
@@ -8351,8 +8352,9 @@ function QuoteFollowupView({ data, role }) {
   // เทียบด้วย quoteSaleKey (ทนอิโมจิ/เว้นวรรค/overlay ต่างรูปแบบ) ไม่ใช่ === ตรง ๆ — ดูเหตุผลที่ helper
   const myKey = quoteSaleKey(myName);
   const scopeMine = (arr) => (isOwner || !mineOnly) ? arr : arr.filter(it => myKey && quoteSaleKey(it.sale) === myKey);
-  const empPending = uM(() => scopeMine(items.filter(it => isPending(it.status)).sort((a, b) => (b.ageDays || 0) - (a.ageDays || 0))), [items, isOwner, mineOnly, myName]);   // เก่า/ค้างนานอยู่บน = ตามก่อน
-  const empApproved = uM(() => scopeMine(items.filter(it => isApproved(it.status)).sort((a, b) => (a.ageDays || 0) - (b.ageDays || 0))), [items, isOwner, mineOnly, myName]); // เพิ่งอนุมัติอยู่บน
+  const inPeriod = (it) => yearOf(it) === selYear && (!selMonth || monthOf(it) === selMonth);
+  const empPending = uM(() => scopeMine(items.filter(it => isPending(it.status) && inPeriod(it)).sort((a, b) => (b.ageDays || 0) - (a.ageDays || 0))), [items, isOwner, mineOnly, myName, selYear, selMonth]);   // เก่า/ค้างนานอยู่บน = ตามก่อน
+  const empApproved = uM(() => scopeMine(items.filter(it => isApproved(it.status) && inPeriod(it)).sort((a, b) => (a.ageDays || 0) - (b.ageDays || 0))), [items, isOwner, mineOnly, myName, selYear, selMonth]); // เพิ่งอนุมัติอยู่บน
   const pendingRender = isOwner ? pendingList : empPending;
   const approvedRender = isOwner ? approvedList : empApproved;
 
@@ -8367,10 +8369,11 @@ function QuoteFollowupView({ data, role }) {
   const pendingSearched = uM(() => pendingRender.filter(matchQSearch), [pendingRender, qSearch]);
   const approvedSearched = uM(() => approvedRender.filter(matchQSearch), [approvedRender, qSearch]);
 
-  // จำนวน "ทั้งหมด" (ไม่กรองของฉัน) — ใช้ตอน "ของฉัน" ว่างเพื่อบอกว่ามีใบอยู่ แค่ไม่ติดชื่อ
-  // (ใบเก่า/ใบสร้างใน ZORT ไม่ติด tag → หายจากของฉันโดยดีไซน์ ต้องบอกไม่งั้นดูเหมือนแอปพัง)
-  const allPendingCount  = uM(() => items.filter(it => isPending(it.status)).length,  [items]);
-  const allApprovedCount = uM(() => items.filter(it => isApproved(it.status)).length, [items]);
+  // จำนวน "ทั้งหมด" (ไม่กรองของฉัน แต่ยังผูกปี/เดือนตามที่เลือก) — ใช้ตอน "ของฉัน" ว่างเพื่อบอกว่ามีใบอยู่
+  // แค่ไม่ติดชื่อ (ใบเก่า/ใบสร้างใน ZORT ไม่ติด tag → หายจากของฉันโดยดีไซน์ ต้องบอกไม่งั้นดูเหมือนแอปพัง)
+  // ⚠️ ผูกปี/เดือนด้วย ไม่งั้นเลขบนปุ่ม "ดูทั้งหมด (N)" ไม่ตรงกับที่เห็นจริงหลังกด (คนละช่วงเวลา)
+  const allPendingCount  = uM(() => items.filter(it => isPending(it.status) && inPeriod(it)).length,  [items, selYear, selMonth]);
+  const allApprovedCount = uM(() => items.filter(it => isApproved(it.status) && inPeriod(it)).length, [items, selYear, selMonth]);
   // แถบชวนกด "ทั้งหมด" — โผล่เฉพาะตอนอยู่โหมดของฉัน + ลิสต์ที่กรองแล้วว่าง + แต่จริง ๆ มีใบอยู่
   const mineEmptyHint = (unscoped) => (
     <div style={{ textAlign: "center", padding: "28px 20px", color: "var(--muted)", fontSize: 14, border: "1px dashed var(--bdr)", borderRadius: 12, lineHeight: 1.7 }}>
@@ -8434,6 +8437,15 @@ function QuoteFollowupView({ data, role }) {
   });
 
   const rateColor = (r) => r >= 0.7 ? "#16a34a" : r >= 0.4 ? "#d97706" : "#dc2626";
+
+  // ป้ายเจ้าของใบแบบอ่านอย่างเดียว (สำหรับพนักงานขาย) — เจ้าของใช้ช่อง input แก้/มอบหมายชื่อได้
+  // แต่พนักงานเห็นเป็นป้ายเฉย ๆ · โผล่ตอนดู "ทั้งหมด" เพื่อให้รู้ว่าใบไหนของใคร (โหมด "ของฉัน"
+  // ทุกใบเป็นของตัวเองอยู่แล้ว ไม่ต้องมีป้าย) — ตอบโจทย์ "แยกชัดเจนว่าอันไหนของใคร"
+  const ownerChip = (q) => (
+    <span title={"เจ้าของใบ: " + (q.sale || "ยังไม่ระบุ")} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 700, color: q.sale ? "var(--g-700)" : "var(--muted)", background: q.sale ? "var(--g-50)" : "transparent", border: "1px solid " + (q.sale ? "var(--g-500)" : "var(--bdr)"), padding: "3px 8px", borderRadius: 6, maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+      👤 {q.sale || "ยังไม่ระบุเซล"}
+    </span>
+  );
 
   if (mode === "create") {
     return <QuotationFormView data={data} role={role} onBack={() => { setEditQuote(null); setMode(isOwner ? "summary" : "pending"); }} onSubmitted={load} editQuote={editQuote}/>;
@@ -8513,11 +8525,25 @@ function QuoteFollowupView({ data, role }) {
             )}
           </>)}
 
-          {/* ── พนักงานขาย: ชิป ของฉัน/ทั้งหมด + ไทล์ 3 ช่อง (ตามสโคปที่เลือก) ── */}
+          {/* ── พนักงานขาย: ชิป ของฉัน/ทั้งหมด + ตัวกรองปี/เดือน + ไทล์ 3 ช่อง (ตามสโคปที่เลือก) ── */}
           {!isOwner && (<>
             <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
               <button onClick={() => setMineOnly(true)} style={chipStyle(mineOnly)}>⭐ ของฉัน</button>
               <button onClick={() => setMineOnly(false)} style={chipStyle(!mineOnly)}>📋 ทั้งหมด</button>
+            </div>
+            {/* ตัวกรองปี/เดือน — เจ้าของขอให้พนักงานเลือกดูเป็นเดือนได้เหมือนหน้าเจ้าของ */}
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+              <label style={{ fontSize: 12, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}>ปี:
+                <select value={selYear} onChange={e => setSelYear(e.target.value)} style={{ padding: "7px 10px", borderRadius: 8, border: "1px solid var(--bdr)", fontSize: 14, background: "var(--paper)", color: "var(--text)" }}>
+                  {years.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </label>
+              <label style={{ fontSize: 12, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}>เดือน:
+                <select value={selMonth} onChange={e => setSelMonth(e.target.value)} style={{ padding: "7px 10px", borderRadius: 8, border: "1px solid var(--bdr)", fontSize: 14, background: "var(--paper)", color: "var(--text)" }}>
+                  <option value="">ทุกเดือน</option>
+                  {QUOTE_MONTHS_TH.map((mn, i) => <option key={i} value={String(i + 1)}>{mn}</option>)}
+                </select>
+              </label>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10, marginBottom: 16 }}>
               {empTile("⏳", "รออนุมัติ", empPending.length, "#d97706")}
@@ -8708,9 +8734,9 @@ function QuoteFollowupView({ data, role }) {
                           </div>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 8 }}>
                             <div style={{ fontFamily: "monospace", fontSize: 12, color: "var(--muted)" }}>{q.number || "—"}</div>
-                            {isOwner && <input list="dmjQuoteSales" defaultValue={q.sale || ""} placeholder="+ ชื่อเซล"
+                            {isOwner ? <input list="dmjQuoteSales" defaultValue={q.sale || ""} placeholder="+ ชื่อเซล"
                               onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} onBlur={(e) => saveSale(q, e.target.value)}
-                              style={{ width: 130, minWidth: 0, padding: "5px 8px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/>}
+                              style={{ width: 130, minWidth: 0, padding: "5px 8px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/> : (!mineOnly && ownerChip(q))}
                           </div>
                           {/* ⚠️ ปุ่มต้องครบเท่าจอแนวนอน (ตาราง) — เดิมแนวตั้งขาด "แก้ไข" กับ "ใบแจ้งหนี้"
                               ทำให้คนใช้มือถือ (ผู้ใช้หลักของระบบ) ทำงาน 2 อย่างนี้ไม่ได้เลย โดยไม่มี
@@ -8791,9 +8817,9 @@ function QuoteFollowupView({ data, role }) {
                             </td>
                             <td style={{ padding: "8px 12px", fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>
                               <div style={{ fontFamily: "monospace" }}>{q.number || "—"}</div>
-                              {isOwner && <input list="dmjQuoteSales" defaultValue={q.sale || ""} placeholder="+ ชื่อเซล"
+                              {isOwner ? <input list="dmjQuoteSales" defaultValue={q.sale || ""} placeholder="+ ชื่อเซล"
                                 onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} onBlur={(e) => saveSale(q, e.target.value)}
-                                style={{ marginTop: 3, width: 110, minWidth: 0, padding: "3px 6px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/>}
+                                style={{ marginTop: 3, width: 110, minWidth: 0, padding: "3px 6px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/> : <div style={{ marginTop: 3 }}>{!mineOnly && ownerChip(q)}</div>}
                             </td>
                             <td style={{ padding: "8px 12px", textAlign: "center", whiteSpace: "nowrap" }}>
                               <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
@@ -8867,9 +8893,9 @@ function QuoteFollowupView({ data, role }) {
                           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>{q.quotationDate || "—"}</div>
                           <div style={{ marginTop: 8 }}>
                             <div style={{ fontFamily: "monospace", fontSize: 12, color: "var(--muted)" }}>{q.number || "—"}</div>
-                            {isOwner && <input list="dmjQuoteSales" defaultValue={q.sale || ""} placeholder="+ ชื่อเซล"
+                            {isOwner ? <input list="dmjQuoteSales" defaultValue={q.sale || ""} placeholder="+ ชื่อเซล"
                               onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} onBlur={(e) => saveSale(q, e.target.value)}
-                              style={{ marginTop: 3, width: 130, minWidth: 0, padding: "5px 8px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/>}
+                              style={{ marginTop: 3, width: 130, minWidth: 0, padding: "5px 8px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/> : <div style={{ marginTop: 3 }}>{!mineOnly && ownerChip(q)}</div>}
                           </div>
                           {/* ⚠️ ปุ่มพิมพ์ต้องมีครบ 2 ชนิดเหมือนตารางบนจอกว้าง — เดิมมือถือมีปุ่ม "🖨️ พิมพ์"
                               ปุ่มเดียวซึ่งพิมพ์ได้แค่ใบเสนอราคา ทำให้ใบแจ้งหนี้พิมพ์จากมือถือไม่ได้เลย
@@ -8913,9 +8939,9 @@ function QuoteFollowupView({ data, role }) {
                           <td style={{ padding: "8px 12px", textAlign: "center", fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>{q.quotationDate || "—"}</td>
                           <td style={{ padding: "8px 12px", fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>
                             <div style={{ fontFamily: "monospace" }}>{q.number || "—"}</div>
-                            <input list="dmjQuoteSales" defaultValue={q.sale || ""} placeholder="+ ชื่อเซล"
+                            {isOwner ? <input list="dmjQuoteSales" defaultValue={q.sale || ""} placeholder="+ ชื่อเซล"
                               onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} onBlur={(e) => saveSale(q, e.target.value)}
-                              style={{ marginTop: 3, width: 110, minWidth: 0, padding: "3px 6px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/>
+                              style={{ marginTop: 3, width: 110, minWidth: 0, padding: "3px 6px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/> : <div style={{ marginTop: 3 }}>{!mineOnly && ownerChip(q)}</div>}
                           </td>
                           <td style={{ padding: "8px 12px", textAlign: "center", whiteSpace: "nowrap" }}>
                             <button onClick={() => handlePrint(q, "quotation")} disabled={!!printingId || invoiceNumberBusy} title="พิมพ์ใบเสนอราคา" style={{
