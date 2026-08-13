@@ -107,6 +107,10 @@ function splitTabLabel(label) {
   const i = s.indexOf(" ");
   return i > 0 ? { emoji: s.slice(0, i), name: s.slice(i + 1) } : { emoji: "📄", name: s };
 }
+// แปลชื่อเมนู (i18n) — รับ tab object เข้ามา จึงเรียก t() ข้างในได้โดยไม่ชนตัวแปรลูป `t` (=แท็บ)
+// tabName = เฉพาะชื่อ (ใช้ในหน้าหลักที่โชว์อีโมจิแยก) · tabText = อีโมจิ + ชื่อ (ใช้บนแถบ nav)
+function tabName(tab) { return t(splitTabLabel(tab.label).name); }
+function tabText(tab) { const { emoji, name } = splitTabLabel(tab.label); return emoji + " " + t(name); }
 
 // ── หน้าหลัก / เมนูทั้งหมด ─────────────────────────────────────────────────────
 // เข้าได้จากการแตะโลโก้มุมซ้ายบน · โชว์ทุกเมนูที่ "ตำแหน่งนี้" มีสิทธิ์เปิด จัดกลุ่มเหมือน nav
@@ -170,7 +174,7 @@ function HomeMenuView({ groups, roleLabel, staffName, tabBadge, onNav }) {
                 <button key={t.id} className="home-card" onClick={() => onNav(t.id)}>
                   <span className="home-card-emoji">{emoji}</span>
                   <span className="home-card-body">
-                    <span className="home-card-name">{name}</span>
+                    <span className="home-card-name">{tabName(t)}</span>
                     <span className="home-card-desc">{t.desc || ""}</span>
                   </span>
                   {badge > 0 && <span className="home-card-badge">{badge}</span>}
@@ -2018,7 +2022,7 @@ function App() {
                                   aria-selected={activeTab === t.id}
                                   className={`owner-sub${activeTab === t.id ? " active" : ""}`}
                                   onClick={() => handleSetTab(t.id)}>
-                            {t.icon}<span>{t.label}</span>
+                            {t.icon}<span>{tabText(t)}</span>
                             {sb > 0 && <span className="sb">{sb}</span>}
                           </button>
                         );
@@ -2037,7 +2041,7 @@ function App() {
                       <button key={t.id} role="tab"
                               className={`navtab${activeTab===t.id?' active':''}`}
                               onClick={() => { handleSetTab(t.id); setMoreOpen(false); }}>
-                        {t.icon}<span>{t.label}</span>
+                        {t.icon}<span>{tabText(t)}</span>
                       </button>
                     ))}
                     <div style={{position:"relative"}}>
@@ -2089,7 +2093,7 @@ function App() {
                                           fontWeight: activeTab===t.id ? 700 : 500,
                                         }}>
                                   <span style={{fontSize:24,lineHeight:1}}>{t.icon}</span>
-                                  <span style={{lineHeight:1.3}}>{t.label}</span>
+                                  <span style={{lineHeight:1.3}}>{tabText(t)}</span>
                                 </button>
                               ))}
                             </div>
@@ -2105,7 +2109,7 @@ function App() {
                 <button key={t.id} role="tab"
                         className={`navtab${activeTab===t.id?' active':''}`}
                         onClick={() => handleSetTab(t.id)}>
-                  {t.icon}<span>{t.label}</span>
+                  {t.icon}<span>{tabText(t)}</span>
                 </button>
               ));
             })()}

@@ -40,6 +40,12 @@ const SECTIONS = [
     'เวลาของฉัน', 'ทั้งหมด', 'ภาพรวม', 'สรุปรายคน', 'รวม/เฉลี่ย', 'เปิดกล้อง', 'ถ่ายใหม่', 'มีรูป', 'ไม่ได้เปิด GPS'] },
   { title: 'ปุ่ม / คำสั่งทั่วไป', keys: ['บันทึก', 'ยกเลิก', 'ปิด', 'ลองใหม่', 'ค้นหา', 'สั่ง', 'ยืนยัน', 'รับของ', 'โอน'] },
   { title: 'ป้ายตำแหน่งงาน', keys: ['เจ้าของ', 'หน้าร้าน', 'คลังสินค้า', 'พนักงาน'] },
+  { title: 'ลงเวลา — คำเพิ่มเติม', isNew: true, keys: [
+    'ไม่มีกะวันนี้', 'กะ {start}-{end}', 'กำลังโหลด…', 'ถ่ายรูปยืนยันก่อนเข้างาน', 'ลงเวลาออกงานครบแล้ววันนี้',
+    'กำลังหา…', 'พร้อม (±{acc} ม.)', 'กำลังทำงาน', 'ยังไม่ได้ลงเวลาวันนี้', 'เข้างานสาย {n} นาที',
+    'พักรวม {t}', 'ห้องน้ำรวม {t}', 'ลืมกด "กลับจากพัก" — แจ้งเจ้าของให้แก้ให้',
+    'ลืมกด "กลับจากห้องน้ำ" — แจ้งเจ้าของให้แก้ให้', 'ยังลงเวลาได้ตามปกติ แต่ระบบจะบันทึกว่าไม่มีพิกัด',
+    'นาที', 'ชม.'] },
 ];
 
 // เก็บตก: key ใน dict ที่ยังไม่ถูกจัดกลุ่ม → ไม่ให้หาย
@@ -55,15 +61,19 @@ let idx = 0;
 for (const sec of SECTIONS) {
   const keys = sec.keys.filter(k => DMJ_I18N[k]);
   if (!keys.length) continue;
-  rowsHtml += `<h2>${esc(sec.title)}</h2><div class="rows">`;
+  const badge = sec.isNew ? ` <span class="newtag">🆕 ตรวจใหม่</span>` : '';
+  rowsHtml += `<h2>${esc(sec.title)}${badge}</h2><div class="rows${sec.isNew ? ' new' : ''}">`;
   for (const k of keys) {
     const e = DMJ_I18N[k];
     idx++;
+    const hasVar = /\{\w+\}/.test(k);
+    const varHint = hasVar ? `<div class="cell varhint">⚠️ เก็บเครื่องหมาย { } ไว้เหมือนเดิม (เป็นตัวเลข/เวลาที่ระบบเติมให้)</div>` : '';
     rowsHtml += `
     <div class="row" data-th="${esc(k)}">
       <div class="cell th"><span class="lbl">ไทย</span><span class="val">${esc(k)}</span></div>
       <div class="cell en"><span class="lbl">English</span><span class="val">${esc(e.en)}</span></div>
       <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">${esc(e.my)}</span></div>
+      ${varHint}
       <div class="cell act">
         <label class="ok"><input type="radio" name="s${idx}" value="ok"><span>✅ ถูก / မှန်</span></label>
         <label class="no"><input type="radio" name="s${idx}" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
@@ -94,6 +104,10 @@ const CSS = `
   .note b { color:#7a5a10; }
   h2 { font-size:15px; color:var(--g700); margin:22px 0 8px; padding-bottom:6px;
        border-bottom:2px solid var(--g50); }
+  .newtag { font-size:12px; font-weight:700; color:#fff; background:var(--warn);
+            border-radius:20px; padding:2px 10px; vertical-align:middle; }
+  .rows.new .row { border-left:4px solid var(--warn); }
+  .varhint { font-size:12px; color:var(--warn); padding:4px 0 0; }
   .rows { display:flex; flex-direction:column; gap:10px; }
   .row { background:var(--paper); border:1px solid var(--bdr); border-radius:14px; padding:12px 14px; }
   .row.marked-ok { border-color:var(--g500); background:var(--g50); }

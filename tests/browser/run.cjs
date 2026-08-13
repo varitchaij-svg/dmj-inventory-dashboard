@@ -879,11 +879,18 @@ function startServer() {
       const syncTitle = await page.locator('.nav-right button.ghost[title]').first().getAttribute('title');
       const anyEnTitle = await page.evaluate(() =>
         Array.from(document.querySelectorAll('.nav-right button[title]')).map(b => b.getAttribute('title')).join('|'));
+      // (3) หน้าลงเวลา (views-attendance.jsx) ต้องแปลด้วย — ไปแท็บลงเวลาแล้วเช็คคำ EN
+      //     "My time" (t("เวลาของฉัน")) + ปุ่มเมนู "Time clock" (tabText ของแท็บ attendance)
+      await navigateTo(page, 'frontstore', 'attendance').catch(() => {});
+      await page.waitForTimeout(500);
+      const attBody = await page.locator('body').innerText();
+      const attEN = /My time|Today/.test(attBody);   // Seg แปลแล้ว
       if (optCount < 3)                         { status = 'NO_MENU';    note = `เมนูภาษามี ${optCount} ตัวเลือก (คาด 3)`; }
       else if (!/ไทย/.test(beforeLang))         { status = 'NO_INIT_TH'; note = `เริ่มต้นไม่ใช่ไทย: "${beforeLang}"`; }
       else if (!/EN/.test(afterLang))           { status = 'NO_SWITCH';  note = `กด English แล้วปุ่มยังเป็น "${afterLang}"`; }
       else if (!/Sync/.test(anyEnTitle))        { status = 'NO_RERENDER';note = `re-render ไม่ลามไป Sync (titles: ${anyEnTitle})`; }
-      else note = `ไทย→EN + re-render ทั้งต้นไม้ (Sync title = "${syncTitle}")`;
+      else if (!attEN)                          { status = 'ATT_NO_I18N';note = 'หน้าลงเวลาไม่แปลเป็น EN (Seg ยังเป็นไทย)'; }
+      else note = `ไทย→EN + re-render ทั้งต้นไม้ + หน้าลงเวลาแปล (Sync="${syncTitle}")`;
     } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
     await page.screenshot({ path: path.join(SHOTS, `lang-switch.png`) }).catch(() => {});
     results.push({ role: 'interact', tab: 'เปลี่ยนภาษา 🌐 (EN)', status, note });

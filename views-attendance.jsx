@@ -51,7 +51,7 @@ function attHm(d) {
 function attMinLabel(min) {
   if (min == null) return "—";
   const h = Math.floor(min / 60), m = min % 60;
-  return h > 0 ? `${h} ชม. ${m} นาที` : `${m} นาที`;
+  return h > 0 ? `${h} ${t("ชม.")} ${m} ${t("นาที")}` : `${m} ${t("นาที")}`;
 }
 
 // ── ขอพิกัด GPS · คืน null ถ้าไม่ได้/ปฏิเสธ (ไม่บล็อกการลงเวลา ตามนโยบายที่เจ้าของเลือก) ──
@@ -116,7 +116,7 @@ function AttToggleButton({ group, allowed, busy, onPunch, big }) {
       }}>
       {isBusy ? <span className="spin" style={{ width: big ? 22 : 20, height: big ? 22 : 20, borderWidth: 3 }} />
               : <span style={{ fontSize: big ? 26 : 24 }}>{meta.emoji}</span>}
-      <span>{meta.label}</span>
+      <span>{t(meta.label)}</span>
     </button>
   );
 }
@@ -229,8 +229,8 @@ function AttendanceView({ role }) {
     <div style={{ padding: 16, maxWidth: 480, margin: "0 auto" }}>
       <div style={{ marginBottom: 16 }}>
         <Seg value={mode} onChange={setMode} options={[
-          { value: "today", label: "⏱️ วันนี้" },
-          { value: "month", label: "📅 เวลาของฉัน" },
+          { value: "today", label: `⏱️ ${t("วันนี้")}` },
+          { value: "month", label: `📅 ${t("เวลาของฉัน")}` },
         ]} />
       </div>
 
@@ -242,7 +242,7 @@ function AttendanceView({ role }) {
         </div>
         <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>
           {clock.toLocaleDateString("th-TH", { weekday: "long", day: "numeric", month: "long" })}
-          {today && today.shift ? ` · กะ ${today.shift.start}-${today.shift.end}` : " · ไม่มีกะวันนี้"}
+          {today && today.shift ? ` · ${t("กะ {start}-{end}", { start: today.shift.start, end: today.shift.end })}` : ` · ${t("ไม่มีกะวันนี้")}`}
         </div>
         {today && today.staffName && (
           <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text)", marginTop: 6 }}>{today.staffName}</div>
@@ -256,7 +256,7 @@ function AttendanceView({ role }) {
               ถ้าไม่มีปุ่มนี้ พนักงานต้องปิดแอปเปิดใหม่ทั้งที่แค่ลองใหม่ก็ผ่าน (เจอจริง ส.ค. 2026) */}
           <button className="btn" style={{ marginTop: 10, minHeight: 42, padding: "0 22px" }}
                   disabled={loading} onClick={() => load()}>
-            {loading ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }} /> : "🔄 ลองใหม่"}
+            {loading ? <span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }} /> : `🔄 ${t("ลองใหม่")}`}
           </button>
         </div>
       )}
@@ -264,7 +264,7 @@ function AttendanceView({ role }) {
       {loading && !today ? (
         <div style={{ textAlign: "center", padding: 40, color: "var(--muted)" }}>
           <span className="spin" style={{ width: 24, height: 24, borderWidth: 3, display: "inline-block" }} />
-          <div style={{ marginTop: 8, fontSize: 13 }}>กำลังโหลด…</div>
+          <div style={{ marginTop: 8, fontSize: 13 }}>{t("กำลังโหลด…")}</div>
         </div>
       ) : today && (
         <>
@@ -275,7 +275,7 @@ function AttendanceView({ role }) {
               borderRadius: 14, padding: 14, marginBottom: 12,
             }}>
               <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, color: "var(--text)" }}>
-                📷 ถ่ายรูปยืนยันก่อนเข้างาน {photo ? "✅" : ""}
+                📷 {t("ถ่ายรูปยืนยันก่อนเข้างาน")} {photo ? "✅" : ""}
               </div>
               <input ref={fileRef} type="file" accept="image/*" capture="user" onChange={pickPhoto}
                 style={{ display: "none" }} id="attphoto" />
@@ -285,7 +285,7 @@ function AttendanceView({ role }) {
                   flex: 1, textAlign: "center", padding: "12px", borderRadius: 10, cursor: "pointer",
                   background: photo ? "var(--g-50)" : "var(--g-600)", color: photo ? "var(--g-700)" : "#fff",
                   fontWeight: 700, fontSize: 14, border: photo ? "1.5px solid var(--g-500)" : "none",
-                }}>{photo ? "ถ่ายใหม่" : "เปิดกล้อง"}</label>
+                }}>{photo ? t("ถ่ายใหม่") : t("เปิดกล้อง")}</label>
               </div>
             </div>
           )}
@@ -300,7 +300,7 @@ function AttendanceView({ role }) {
 
           {allowed.length === 0 && (
             <div style={{ textAlign: "center", fontSize: 13, color: "var(--muted)", marginBottom: 14 }}>
-              ✅ ลงเวลาออกงานครบแล้ววันนี้
+              ✅ {t("ลงเวลาออกงานครบแล้ววันนี้")}
             </div>
           )}
 
@@ -316,30 +316,30 @@ function AttendanceView({ role }) {
           {/* ── ③ สถานะ GPS / รูป ── */}
           <div style={{ background: "var(--paper)", border: "1.5px solid var(--bdr)", borderRadius: 12, overflow: "hidden", marginBottom: 14 }}>
             <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 14px", fontSize: 13, borderBottom: "1px solid var(--bdr)" }}>
-              <span style={{ color: "var(--muted)" }}>📍 ตำแหน่ง</span>
+              <span style={{ color: "var(--muted)" }}>📍 {t("ตำแหน่ง")}</span>
               <span style={{ fontWeight: 700, color: gps.state === "ok" ? "var(--g-700)" : "#a07417" }}>
-                {gps.state === "loading" ? "กำลังหา…" : gps.state === "ok" ? `พร้อม (±${Math.round(gps.accuracy)} ม.)` : "ไม่ได้เปิด GPS"}
+                {gps.state === "loading" ? t("กำลังหา…") : gps.state === "ok" ? t("พร้อม (±{acc} ม.)", { acc: Math.round(gps.accuracy) }) : t("ไม่ได้เปิด GPS")}
               </span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 14px", fontSize: 13 }}>
-              <span style={{ color: "var(--muted)" }}>⏱ ทำงานวันนี้</span>
+              <span style={{ color: "var(--muted)" }}>⏱ {t("ทำงานวันนี้")}</span>
               <span style={{ fontWeight: 700 }}>
-                {sum && sum.workedMin != null ? attMinLabel(sum.workedMin) : (sum && sum.inTime ? "กำลังทำงาน" : "—")}
+                {sum && sum.workedMin != null ? attMinLabel(sum.workedMin) : (sum && sum.inTime ? t("กำลังทำงาน") : "—")}
               </span>
             </div>
           </div>
 
           {gps.state === "denied" && (
             <div style={{ background: "#fff8e1", border: "1px solid #ffe082", borderRadius: 10, padding: "10px 14px", fontSize: 12.5, color: "#7a5a00", marginBottom: 14 }}>
-              ยังลงเวลาได้ตามปกติ แต่ระบบจะบันทึกว่า "ไม่มีพิกัด" — ถ้าอยากเปิด ให้ไปที่
+              {t("ยังลงเวลาได้ตามปกติ แต่ระบบจะบันทึกว่าไม่มีพิกัด")} — ถ้าอยากเปิด ให้ไปที่
               ตั้งค่ามือถือ → เบราว์เซอร์ → ตำแหน่ง → อนุญาต แล้วเปิดหน้านี้ใหม่
             </div>
           )}
 
           {/* ── ④ ไทม์ไลน์วันนี้ ── */}
-          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--muted)", marginBottom: 8 }}>วันนี้</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--muted)", marginBottom: 8 }}>{t("วันนี้")}</div>
           {events.length === 0 ? (
-            <div style={{ textAlign: "center", padding: 24, color: "var(--muted)", fontSize: 13 }}>ยังไม่ได้ลงเวลาวันนี้</div>
+            <div style={{ textAlign: "center", padding: 24, color: "var(--muted)", fontSize: 13 }}>{t("ยังไม่ได้ลงเวลาวันนี้")}</div>
           ) : (
             <div style={{ background: "var(--paper)", border: "1.5px solid var(--bdr)", borderRadius: 12, overflow: "hidden" }}>
               {events.map((e, i) => (
@@ -348,9 +348,9 @@ function AttendanceView({ role }) {
                   borderTop: i ? "1px solid var(--bdr)" : "none",
                 }}>
                   <span style={{ fontSize: 16 }}>{(ATT_TYPE_META[e.type] || {}).emoji}</span>
-                  <span style={{ flex: 1, fontSize: 14, fontWeight: 600 }}>{e.typeTh}</span>
+                  <span style={{ flex: 1, fontSize: 14, fontWeight: 600 }}>{ATT_TYPE_META[e.type] ? t(ATT_TYPE_META[e.type].label) : e.typeTh}</span>
                   {e.inArea === false && <span title="อยู่นอกพื้นที่ร้าน" style={{ fontSize: 12 }}>⚠️</span>}
-                  {e.hasPhoto && <span title="มีรูป" style={{ fontSize: 12 }}>📷</span>}
+                  {e.hasPhoto && <span title={t("มีรูป")} style={{ fontSize: 12 }}>📷</span>}
                   <span style={{ fontSize: 14, fontWeight: 700, color: "var(--g-700)" }}>{String(e.time).slice(0, 5)}</span>
                 </div>
               ))}
@@ -359,11 +359,11 @@ function AttendanceView({ role }) {
 
           {sum && (sum.lateMin > 0 || sum.breakMin > 0 || sum.bathroomMin > 0 || sum.forgotBreakEnd || sum.forgotBathroomEnd) && (
             <div style={{ marginTop: 10, fontSize: 12.5, color: "var(--muted)", lineHeight: 1.7 }}>
-              {sum.lateMin > 0 && <div>⏰ เข้างานสาย {sum.lateMin} นาที</div>}
-              {sum.breakMin > 0 && <div>🍽️ พักรวม {attMinLabel(sum.breakMin)}</div>}
-              {sum.bathroomMin > 0 && <div>🚻 ห้องน้ำรวม {attMinLabel(sum.bathroomMin)}</div>}
-              {sum.forgotBreakEnd && <div style={{ color: "#a07417" }}>⚠️ ลืมกด "กลับจากพัก" — แจ้งเจ้าของให้แก้ให้</div>}
-              {sum.forgotBathroomEnd && <div style={{ color: "#a07417" }}>⚠️ ลืมกด "กลับจากห้องน้ำ" — แจ้งเจ้าของให้แก้ให้</div>}
+              {sum.lateMin > 0 && <div>⏰ {t("เข้างานสาย {n} นาที", { n: sum.lateMin })}</div>}
+              {sum.breakMin > 0 && <div>🍽️ {t("พักรวม {t}", { t: attMinLabel(sum.breakMin) })}</div>}
+              {sum.bathroomMin > 0 && <div>🚻 {t("ห้องน้ำรวม {t}", { t: attMinLabel(sum.bathroomMin) })}</div>}
+              {sum.forgotBreakEnd && <div style={{ color: "#a07417" }}>⚠️ {t("ลืมกด \"กลับจากพัก\" — แจ้งเจ้าของให้แก้ให้")}</div>}
+              {sum.forgotBathroomEnd && <div style={{ color: "#a07417" }}>⚠️ {t("ลืมกด \"กลับจากห้องน้ำ\" — แจ้งเจ้าของให้แก้ให้")}</div>}
             </div>
           )}
         </>
