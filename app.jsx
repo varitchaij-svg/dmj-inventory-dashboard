@@ -277,8 +277,12 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError, lineChannelId,
     <div style={{
       minHeight:"100vh", display:"flex", flexDirection:"column",
       alignItems:"center", justifyContent:"center",
-      background:"var(--bg)", padding:"24px 16px",
+      background:"var(--bg)", padding:"24px 16px", position:"relative",
     }}>
+      {/* เปลี่ยนภาษาได้ตั้งแต่หน้าล็อกอิน — คนพม่าต้องอ่านหน้านี้ออกก่อนถึงจะเข้าได้ */}
+      <div style={{position:"absolute", top:12, right:12}}>
+        <LangSwitcher/>
+      </div>
       <div style={{marginBottom:8}}>
         <img src="logo.png" alt="Doomuenjing"
              style={{height:56, objectFit:"contain"}}
@@ -287,7 +291,7 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError, lineChannelId,
       <div style={{fontSize:22, fontWeight:700, color:"var(--g-700)",
                    marginBottom:4, letterSpacing:"-.01em"}}>Doomuenjing</div>
       <div style={{fontSize:13, color:"var(--muted)", marginBottom:36}}>
-        เข้าสู่ระบบเพื่อใช้งาน
+        {t("เข้าสู่ระบบเพื่อใช้งาน")}
       </div>
 
       {/* เปิดลิงก์นี้มาจากในแชท/ประกาศ LINE โดยตรง = ติดอยู่ในเว็บวิวของ LINE เอง —
@@ -318,7 +322,7 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError, lineChannelId,
              textDecoration:"none",
              boxShadow:"0 6px 18px rgba(6,199,85,.3)",
            }}>
-          <span style={{fontSize:20}}>💬</span> เข้าสู่ระบบด้วย LINE
+          <span style={{fontSize:20}}>💬</span> {t("เข้าสู่ระบบด้วย LINE")}
         </a>
       ) : (
         // ยังดึง channelId ไม่เสร็จ (เข้าครั้งแรก/เน็ตช้า) — ใช้ทางเดิมไปก่อน
@@ -330,7 +334,7 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError, lineChannelId,
           fontSize:16, fontWeight:700, cursor:"pointer", fontFamily:"inherit", opacity:.75,
           boxShadow:"0 6px 18px rgba(6,199,85,.3)",
         }}>
-          <span style={{fontSize:20}}>💬</span> เข้าสู่ระบบด้วย LINE
+          <span style={{fontSize:20}}>💬</span> {t("เข้าสู่ระบบด้วย LINE")}
         </button>
       )}
 
@@ -350,7 +354,7 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError, lineChannelId,
         }}>
           <div style={{display:"flex", alignItems:"center", gap:8, fontWeight:700, color:"var(--g-700)"}}>
             <span className="spin" style={{width:13, height:13, borderWidth:2}}/>
-            กำลังรอผลการเข้าสู่ระบบ…
+            {t("กำลังรอผลการเข้าสู่ระบบ…")}
           </div>
           <div style={{marginTop:6, color:"var(--muted)"}}>
             ถ้าเครื่องเด้งไปล็อกอินในเบราว์เซอร์อื่นแล้ว ให้ทำจนเสร็จ แล้ว
@@ -393,13 +397,13 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError, lineChannelId,
              boxSizing:"border-box", textAlign:"center", textDecoration:"none",
              background:"var(--paper)", color:"var(--g-700)", border:"1.5px solid var(--g-300)",
              borderRadius:12, fontSize:13.5, fontWeight:600, cursor:"pointer", fontFamily:"inherit",
-           }}>🌐 เข้าสู่ระบบโดยไม่เปิดแอป LINE</a>
+           }}>🌐 {t("เข้าสู่ระบบโดยไม่เปิดแอป LINE")}</a>
       ) : (
         <button onClick={() => onLineLogin(true)} style={{
           marginTop:14, width:"100%", maxWidth:320, padding:"11px 16px",
           background:"var(--paper)", color:"var(--g-700)", border:"1.5px solid var(--g-300)",
           borderRadius:12, fontSize:13.5, fontWeight:600, cursor:"pointer", fontFamily:"inherit",
-        }}>🌐 เข้าสู่ระบบโดยไม่เปิดแอป LINE</button>
+        }}>🌐 {t("เข้าสู่ระบบโดยไม่เปิดแอป LINE")}</button>
       )}
       <div style={{fontSize:11, color:"var(--light)", marginTop:6, textAlign:"center", maxWidth:300}}>
         ใช้ปุ่มนี้ถ้ากดปุ่มเขียวแล้วเด้งออกไปแอป LINE แล้วเข้าไม่ได้
@@ -1065,6 +1069,9 @@ async function postAuthAction(body) {
 
 function App() {
   // ── ALL hooks first (no early returns before this block) ──
+  // ภาษาปัจจุบัน — subscribe ที่ App ตัวเดียว เปลี่ยนภาษาแล้ว re-render ทั้งต้นไม้
+  // → ทุก t() ทั้งแอปอ่านค่าใหม่ (ไม่ต้องเพิ่ม useLang ในทุก component)
+  const _lang = useLang();
   const [role, setRole] = usS(() => ssGet("dmj_role") || null);
   const [staff, setStaff] = usS(null);       // {staffId,name,role,status,pictureUrl} — เมื่อล็อกอินผ่าน LINE
   // checking | needLogin | pending | disabled | ready
@@ -2043,7 +2050,7 @@ function App() {
                                 setMoreOpen(v => !v);
                               }}>
                         <span style={{fontSize:18,lineHeight:1}}>⋯</span>
-                        <span>เพิ่มเติม</span>
+                        <span>{t("เพิ่มเติม")}</span>
                       </button>
                     </div>
                     {moreOpen && (
@@ -2063,7 +2070,7 @@ function App() {
                           {/* handle + title */}
                           <div style={{textAlign:"center",padding:"10px 20px 4px",flexShrink:0}}>
                             <div style={{width:40,height:4,borderRadius:2,background:"var(--bdr)",margin:"0 auto 10px"}}/>
-                            <div style={{fontSize:13,fontWeight:700,color:"var(--muted)"}}>เมนูเพิ่มเติม</div>
+                            <div style={{fontSize:13,fontWeight:700,color:"var(--muted)"}}>{t("เมนูเพิ่มเติม")}</div>
                           </div>
                           {/* tab list */}
                           <div style={{overflowY:"auto",padding:"4px 12px 16px"}}>
@@ -2109,7 +2116,7 @@ function App() {
               <span className="nav-dot" style={{background: source==="upload" ? "#a07417" : "var(--g-500)"}}></span>
               {source==="upload" ? "ไฟล์อัปโหลด" : "Sheet"} · {syncLabel}
             </span>
-            <button className="btn ghost" title={syncing ? "กำลัง sync..." : "Sync ใหม่"}
+            <button className="btn ghost" title={syncing ? t("กำลัง sync...") : t("Sync ใหม่")}
                     disabled={syncing}
                     onClick={()=>fetchFromSheet(3,true)}>
               {syncing ? <span className="spin" style={{width:14,height:14,borderWidth:2}}/> : I.refresh}
@@ -2135,6 +2142,8 @@ function App() {
                 ⚠️ ตั้งคำขอทั้งสองก่อน handleSetTab เสมอ — view ปลายทางเพิ่งเกิดหลังสลับแท็บ
                 จึงต้องอ่านคำขอที่ค้างไว้เอง ไม่ใช่รอรับ event ที่ยิงผ่านไปแล้ว
                 ส่งค่าว่างมาก็ต้องเรียก — ตัวช่วยทั้งคู่ล้างคำขอค้างของการกดครั้งก่อนให้ด้วย */}
+            {/* ปุ่มเปลี่ยนภาษา — ซ้ายมือกระดิ่ง · อยู่ทุกแท็บ (แรงงานพม่ากดเปลี่ยนได้จากทุกหน้า) */}
+            <LangSwitcher/>
             <NotiBell onNavigate={(t, focus, view) => {
               if (!allowedTabIds.includes(t)) return;
               dmjRequestFocus(t, focus);
