@@ -12565,6 +12565,56 @@ function markStalePayload_(s, ts) {
   return '{"stale":1,"staleAt":' + (ts || 0) + ',' + s.slice(1);
 }
 
+// ── Keep-warm: กัน "เปิดแอปตอนไม่มีใครใช้" เจอ GAS เย็น ──────────────────────
+// วัดจากเครื่องจริง (BootTrace ส.ค. 2026): เปิดแอปนอกเวลาเร่งด่วน → `me`/payload ตอบ
+// **ไบต์แรก 20-24 วิ** เพราะ (1) GAS container เย็น (ไม่มี execution มาสักพัก → spin-up ช้า)
+// (2) ไม่มีใคร build มาก่อน → cache สด (TTL 180 วิ) และชั้นสำรอง (TTL 30 นาที) หมดเกลี้ยง
+// → คนเปิดคนแรกต้อง build เอง (~10 วิ) ต่อจาก cold start · แถม payload 4.8MB ดาวน์โหลดนาน
+// เกินอายุลิงก์ googleusercontent → ตอบไม่ครบ → retry วน (เห็นจริง: payload ล้มเหลว 3 รอบ)
+//
+// keepWarm_ ทำ 2 อย่าง: (ก) execution ทุก 5 นาที = container ไม่เย็น (ข) ถ้า cache สดหาย
+// (นอกเวลาที่มีคนใช้) → build เติมให้ทั้ง fresh + stale ทุก variant → คนเปิดคนถัดไปได้ HIT ทันที
+// ⚠️ ฉลาดพอที่จะ **ไม่ build ถ้า cache ยังอุ่น** (มีคนใช้อยู่) — execution เปล่า ๆ ก็ warm
+//    container แล้ว ไม่เปลือง quota build ช่วงเวลาเร่งด่วนที่ user เติม cache ให้เองอยู่แล้ว
+// ⚠️ คว้า build lock ก่อน build (เหมือนเส้นทาง doGet) — กัน build ซ้อนกับ user จริง ·
+//    คว้าไม่ได้ = มีคนกำลัง build → เขาเติม cache ให้เอง ข้ามได้ปลอดภัย
+// ⚠️ ห้าม throw — เป็น trigger เบื้องหลัง พังต้องเงียบ ไม่กระทบเส้นทาง user
+function keepWarm_() {
+  try {
+    var cvFull = payloadCacheVariant_('full', 2);
+    if (getCachedPayload_(cvFull)) return;   // cache ยังอุ่น (มีคนใช้อยู่) — แค่ execution นี้ก็พอ
+    var lock = acquireBuildLock_(0);
+    if (!lock) return;                        // มีคนกำลัง build → เขาเติม cache ให้เอง
+    try {
+      var data = buildFullData_();
+      PAYLOAD_VARIANTS_.forEach(function (v) {
+        var s = JSON.stringify(shapePayloadForVariant_(data, v));
+        var cv = payloadCacheVariant_(v, 2);
+        putCachedPayload_(s, cv);
+        putStalePayload_(s, cv);
+      });
+    } finally { releaseBuildLock_(lock); }
+  } catch (e) { Logger.log('keepWarm_ error (ข้ามไป ไม่กระทบ user): ' + e); }
+}
+
+// เจ้าของรัน 1 ครั้งใน GAS editor (ชื่อไม่มี _ ต่อท้าย → โผล่ใน dropdown)
+// ตั้ง trigger ทุก 5 นาที · idempotent (ลบตัวเดิมก่อน) · อุ่นทันที 1 รอบ
+function setupKeepWarm() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'keepWarm_') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('keepWarm_').timeBased().everyMinutes(5).create();
+  keepWarm_();
+  return 'keep-warm เปิดแล้ว — ping ทุก 5 นาที (container อุ่น + cache ไม่หมดนอกเวลาใช้งาน)';
+}
+function disableKeepWarm() {
+  var n = 0;
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'keepWarm_') { ScriptApp.deleteTrigger(t); n++; }
+  });
+  return 'keep-warm ปิดแล้ว (ลบ trigger ' + n + ' ตัว)';
+}
+
 function invalidateCache_(skipTsUpdate) {
   try {
     const c = CacheService.getScriptCache();
@@ -14742,6 +14792,7 @@ function perfLogDoGet_(kind, variant, tStart, bytes, extra) {
 const PERF_TRIGGER_SCHEDULE_ = {
   drainNotiQueue:          { every: 'ทุก 1 นาที',        perDay: 1440, setup: 'setupNotiSystem()' },
   backfillZortOrders:      { every: 'ทุก 5 นาที',        perDay: 288,  setup: 'startBackfill()' },
+  keepWarm_:               { every: 'ทุก 5 นาที',        perDay: 288,  setup: 'setupKeepWarm()' },
   syncZortBoth:            { every: 'ทุก 2 ชม.',          perDay: 12,   setup: 'setupZortStockTrigger()' },
   syncZortSales:           { every: 'ทุก 2 ชม.',          perDay: 12,   setup: 'setupZortSalesTrigger()' },
   sendPendingTruckOrders:  { every: 'วันละ 2 รอบ 08/13น.', perDay: 1,   setup: 'setupOrderReminders()' },
