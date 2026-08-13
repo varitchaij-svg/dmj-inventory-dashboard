@@ -19,3 +19,7 @@ desktop.ini
 *.swp
 node_modules/
 coverage/
+
+# precompile output — สร้างตอน build (Cloudflare Pages build command / npm run build)
+# ไม่ commit: ให้ build จาก source ของ commit นั้น ๆ เสมอ (กัน dist ค้างไม่ตรง .jsx)
+dist/

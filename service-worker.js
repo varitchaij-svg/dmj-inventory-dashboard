@@ -14,6 +14,13 @@
 // การ bump ทำให้ activate ลบ cache ก้อนเก่าทิ้งทั้งก้อน สำเนาสำรองที่ค้างจึงหายไปด้วย
 const CACHE_NAME = "dmj-v29";
 
+// ⚠️ CDN libs (React/ReactDOM/Babel 3MB/Recharts/…) เก็บ cache แยกก้อนนี้ **โดยเจตนา** —
+// ไฟล์พวกนี้ผูกกับ "เวอร์ชันใน URL" (unpkg@18.3.1 …) ไม่มีวันเปลี่ยนเนื้อในโดยไม่เปลี่ยน URL
+// เดิมเก็บรวมใน CACHE_NAME → ทุกครั้งที่ bump CACHE_NAME (lesson 15 บังคับ bump แม้แก้แค่ CSS)
+// activate ลบทั้งก้อน → เปิดแอปครั้งถัดไปต้องโหลด Babel 3MB + React ใหม่ (เสียฟรีทุก deploy)
+// ก้อนนี้ activate **ไม่แตะ** (เหมือน dmj-babel*) → โหลดครั้งเดียวจริง ๆ ต่อเวอร์ชัน lib
+const VENDOR_CACHE = "dmj-vendor-v1";
+
 const PRECACHE_ASSETS = [
   "/manifest.json",
   "/logo.png",
@@ -33,7 +40,11 @@ self.addEventListener("install", (e) => {
 self.addEventListener("activate", (e) => {
   e.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME && !k.startsWith("dmj-babel")).map((k) => caches.delete(k)))
+      // เก็บไว้: CACHE_NAME ปัจจุบัน · dmj-babel* (ผล compile) · VENDOR_CACHE (lib ภายนอก)
+      // ที่เหลือลบทิ้ง — สามก้อนนี้ผูกกับ "เวอร์ชัน/ETag" ในตัวเองแล้ว bust เองเมื่อจำเป็น
+      Promise.all(keys.filter((k) =>
+        k !== CACHE_NAME && k !== VENDOR_CACHE && !k.startsWith("dmj-babel")
+      ).map((k) => caches.delete(k)))
     )
   );
   self.clients.claim();
@@ -98,7 +109,10 @@ self.addEventListener("fetch", (e) => {
   const isAppFile =
     url.hostname === self.location.hostname &&
     (url.pathname.endsWith(".jsx") ||
-     url.pathname.endsWith(".js"));
+     url.pathname.endsWith(".js") ||
+     // dist/manifest.json — ให้ stale-while-revalidate เหมือน dist/*.js (สดใน background +
+     // ใช้ได้ออฟไลน์) · ถ้าปล่อยตกไป cache-first ④ จะค้างเวอร์ชันเก่าตลอดหลัง rebuild/disable
+     url.pathname.indexOf("/dist/manifest.json") >= 0);
 
   if (isAppFile) {
     // stale-while-revalidate — iOS-safe: e.waitUntil + e.respondWith ต้องเรียก synchronously
@@ -117,7 +131,8 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
-  // ③ CDN libs — cache first (ไฟล์ใหญ่ version เดิม ไม่ต้องโหลดซ้ำ)
+  // ③ CDN libs — cache first, เก็บใน VENDOR_CACHE (ไม่ถูกลบตอน bump CACHE_NAME)
+  //    ไฟล์ผูกเวอร์ชันใน URL อยู่แล้ว → cache-first ปลอดภัย และไม่ต้องโหลดซ้ำข้าม deploy
   if (
     url.hostname.includes("fonts.googleapis.com") ||
     url.hostname.includes("fonts.gstatic.com") ||
@@ -130,7 +145,7 @@ self.addEventListener("fetch", (e) => {
         return fetch(e.request).then((res) => {
           if (res.ok) {
             const clone = res.clone();
-            caches.open(CACHE_NAME).then((c) => c.put(e.request, clone));
+            caches.open(VENDOR_CACHE).then((c) => c.put(e.request, clone));
           }
           return res;
         });
