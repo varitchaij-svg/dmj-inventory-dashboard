@@ -14537,15 +14537,35 @@ function createStockCheckRequest_(skus, names, actor) {
   // มิฉะนั้น client ที่โหลดข้อมูลไว้ก่อนจะถูกมองว่า conflict → กดส่งของไม่ได้
   invalidateCache_(true);
   // แจ้งเตือน LINE group — wrap try-catch เพื่อไม่ให้ LINE error พัง endpoint
+  var nameList = names || [];
+  var preview = nameList.slice(0, 3).join(", ");
+  if (nameList.length > 3) preview += " และอีก " + (nameList.length - 3) + " รายการ";
   try {
-    var nameList = names || [];
-    var preview = nameList.slice(0, 3).join(", ");
-    if (nameList.length > 3) preview += " และอีก " + (nameList.length - 3) + " รายการ";
     var lineMsg = "📋 มีคำขอเช็คสต็อก " + nameList.length + " รายการ\nรายการ: " + preview;
     sendLineGroup_(lineMsg);
   } catch(e) {
     // LINE notification ล้มเหลว — ไม่ block response
   }
+  // 🔔 แจ้งเตือนในแอป (กระดิ่ง) — กดแล้วเด้งไป "หน้านับของ" ของแต่ละตำแหน่งได้เลย
+  //   ไม่กิน quota LINE · เห็นจากทุกแท็บ · ต่างจากแถบเตือนบนสุดที่ต้องรอ payload โหลดมาก่อน
+  // ⚠️ ยิง 2 แถวแยกตามตำแหน่ง เพราะ "หน้านับของ" ของหน้าร้านกับคลังคนละแท็บกัน —
+  //    หน้าร้านนับที่ frontstore (เช็คหน้าร้าน) · คลังนับที่ stockcount (นับ stock คลัง)
+  //    ยุบเป็นแถวเดียวส่งทั้ง 2 role = ฝั่งหนึ่งได้ปลายทางที่ตัวเองไม่มีสิทธิ์เปิด → กดไม่ติดเงียบ ๆ
+  //    (หลักเดียวกับแถบเตือน fs/wh ใน app.jsx ที่พา frontstore→frontstore, warehouse→stockcount)
+  // ⚠️ dedupKey คนละคีย์ต่อ role — ผูก reqId ให้ยิงครั้งเดียวต่อคำขอ · ยุบคีย์เดียว = ตัวที่ยิง
+  //    ทีหลังถูก dedup ทิ้ง = อีกฝั่งไม่ได้รับเลย · ไม่ใส่ focus (หลาย SKU เลือกตัวเดียวมาเด้ง = ผิดตัว)
+  var notiTitle = "📋 มีคำขอเช็คสต็อก " + nameList.length + " รายการ";
+  var notiBody = (preview || reqId) + " · แตะเพื่อไปหน้านับของ";
+  pushInappNoti_({
+    audience: 'role:frontstore', type: 'stockcheck', tab: 'frontstore',
+    title: notiTitle, body: notiBody, by: actor || 'owner',
+    dedupKey: 'stockcheck-fs-' + reqId,
+  });
+  pushInappNoti_({
+    audience: 'role:warehouse', type: 'stockcheck', tab: 'stockcount',
+    title: notiTitle, body: notiBody, by: actor || 'owner',
+    dedupKey: 'stockcheck-wh-' + reqId,
+  });
   return ContentService.createTextOutput(JSON.stringify({ success: true, reqId: reqId }))
     .setMimeType(ContentService.MimeType.JSON);
 }
