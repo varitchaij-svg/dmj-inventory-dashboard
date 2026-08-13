@@ -5063,6 +5063,10 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const [materialDraw, setMaterialDraw]  = uS(null); // { order, afterConfirm: fn }
   const [resetConfirm, setResetConfirm]  = uS(false); // ยืนยันรีเซ็ตสถานะการส่ง
   const [bulkBusy, setBulkBusy] = uS(false);          // กำลังส่งทั้งชุด — ล็อกปุ่มกันกดซ้ำระหว่างรอ
+  // กันโอนซ้ำทีละใบแบบ synchronous — transferStock (ทีละใบ) ยังไม่มี tid กันซ้ำฝั่ง GAS
+  // ตัวนี้กัน finalizeShip ยิงซ้ำสำหรับ order เดียวกันในจังหวะเดียว (setSending เป็น state = async
+  // ไม่ทันตัดการกดครั้งที่ 2 · ref ตัดได้ทันที) เก็บ id ของ order ที่กำลังโอนอยู่
+  const shipInflightRef = React.useRef(new Set());
   const [reconcile, setReconcile] = uS(null);         // ผลการเทียบกับประวัติการโอนจริง
   const [reconciling, setReconciling] = uS(false);
   const [zortNumInput, setZortNumInput] = uS("");     // เลขที่เอกสารโอนใน ZORT ที่ผู้ใช้พิมพ์
@@ -5178,6 +5182,10 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
   // ทำการส่งสินค้าจริง (หลังผ่าน confirm และ material draw แล้ว)
   const finalizeShip = async (order, matItems) => {
+    // ⚠️ กันยิงซ้ำสำหรับ order เดียวกัน — ตัดทันทีถ้ากำลังโอนอยู่ (ref = synchronous)
+    //    ถ้าปล่อยผ่าน = transferStock ถูกเรียก 2 ครั้ง → TF ซ้ำ + สต็อกหักซ้ำ (ไม่มี tid กันฝั่ง GAS)
+    if (shipInflightRef.current.has(order.id)) return;
+    shipInflightRef.current.add(order.id);
     const qty = order.preparedQty || order.orderQty || 0;
     setSending(order.id);
 
@@ -5201,12 +5209,14 @@ function OrderSummaryView({ data, onPrintRequest }) {
     // ยังตอบไม่ทันได้ (บทเรียนข้อ 13) · เส้นทางนี้ยังไม่มีตัวกันโอนซ้ำ (ไม่มี tid เหมือน "ส่งทั้งหมด")
     // → **ห้ามชวนให้กดส่งซ้ำเด็ดขาด** ต้องให้ไปเช็คประวัติจริงก่อน ไม่งั้นของโอนสองเด้ง
     if (unreadable) {
+      shipInflightRef.current.delete(order.id);
       showToast("warn", "ไม่แน่ใจว่าส่งสำเร็จหรือไม่ (ระบบตอบกลับไม่ครบ) — กดปุ่ม \"🧾 เช็คของที่ส่งไปแล้ว\" ด้านบนก่อน อย่ากดส่งซ้ำ", "❓", 10000);
       return;
     }
 
     // คลังไม่พอ/ไม่พบสินค้า → ไม่ลบ order, ไม่มาร์คส่งแล้ว, คงไว้ให้ส่งใหม่ภายหลัง
     if (!transferOk) {
+      shipInflightRef.current.delete(order.id);
       showToast("warn", `ส่งไม่สำเร็จ — คลังไม่พอ/ไม่พบสินค้า${errMsg ? ` (${errMsg})` : ""} · คงรายการไว้`, "⚠️", 7000);
       return;
     }
@@ -5225,6 +5235,9 @@ function OrderSummaryView({ data, onPrintRequest }) {
     setSt(patchOrderState(order.id, { status: "ส่งแล้ว" }, orderSig(order)));
     const shortMsg = transferred < qty ? ` (คลังพอแค่ ${transferred}/${qty})` : "";
     showToast(transferred < qty ? "warn" : "success", `ส่ง ${transferred} ชิ้นแล้ว${shortMsg}`, "📦");
+    // ปล่อยล็อกหลังจบจริง — order ถูกลบ/มาร์คส่งแล้ว การส่งซ้ำในอนาคตจึงไม่เกิดอยู่แล้ว
+    // แต่ปล่อยไว้เผื่อ order เดิมกลับมา (คลังพอแค่บางส่วน) ให้ยังกดส่งรอบใหม่ได้
+    shipInflightRef.current.delete(order.id);
   };
 
   const doShip = async () => {
@@ -8157,6 +8170,7 @@ function QuoteFollowupView({ data, role }) {
   const [selYear, setSelYear] = uS("");
   const [selMonth, setSelMonth] = uS("");       // "" = ทุกเดือน, "1".."12"
   const [qPage, setQPage] = uS(1);
+  const [qSearch, setQSearch] = uS("");  // ค้นหาเลขที่เอกสาร/ชื่อลูกค้า/เบอร์โทร ก่อนพิมพ์
   const [voidingId, setVoidingId] = uS(null);
   const [approvingId, setApprovingId] = uS(null);
   const [printingId, setPrintingId] = uS(null);
@@ -8241,16 +8255,35 @@ function QuoteFollowupView({ data, role }) {
   const load = async () => {
     if (!SHEET_DEPLOY_URL) { setErr("ยังไม่ได้เชื่อมต่อ Sheet"); setLoading(false); return; }
     setLoading(true); setErr(null);
-    try {
-      const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
-      const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getQuotationSummary&_t=${Date.now()}`, { cache: "no-store" });
-      const d = await dmjJson(res);
-      if (d.error && (!d.items || !d.items.length)) throw new Error(d.error);
-      setItems(Array.isArray(d.items) ? d.items : []);
-      setSalesList(Array.isArray(d.salesList) ? d.salesList : []);
-      setStatusBk(d.statusBreakdown || {});
-      setGenAt(d.generatedAt || null);
-    } catch (e) { setErr(e.message); } finally { setLoading(false); }
+    const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
+    // อ่านล้วน (idempotent — แค่ดึงสรุปจาก ZORT ไม่แก้ข้อมูล) → **ลองซ้ำได้ปลอดภัย** เมื่อ GAS
+    // ตอบ HTML/404 ชั่วคราว · getQuotationSummary เป็น doGet ยาว (ยิง ZORT ได้ถึง 30 หน้า) จึงเจอ
+    // googleusercontent 404/ลิงก์หมดอายุ ได้บ่อยกว่า getQuotationForPrint ด้วยซ้ำ (บทเรียน Phase 7.4)
+    // เดิมใช้ `fetch` ดิบ ไม่มี timeout/retry เลย → blip เดียว = ทั้งแท็บขึ้นแดง "[รหัส 404]" โหลดอะไร
+    // ไม่ได้ · dmjFetch = แนบ sessionToken + เพดานเวลา · retry แบบเดียวกับ syncGetQuotationForPrint
+    let lastErr = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) await new Promise(r => setTimeout(r, 700 * attempt));   // 0 · 0.7 · 1.4 วิ
+      try {
+        const res = await dmjFetch(`${SHEET_DEPLOY_URL}${sep}action=getQuotationSummary&_t=${Date.now()}`,
+          { cache: "no-store", dmjTimeoutMs: 25000 });
+        const d = await dmjJson(res);
+        if (d.error && (!d.items || !d.items.length)) throw new Error(d.error);
+        setItems(Array.isArray(d.items) ? d.items : []);
+        setSalesList(Array.isArray(d.salesList) ? d.salesList : []);
+        setStatusBk(d.statusBreakdown || {});
+        setGenAt(d.generatedAt || null);
+        setErr(null); setLoading(false); return;
+      } catch (e) {
+        lastErr = e;
+        // ลองซ้ำเฉพาะ "อ่านคำตอบไม่ได้" (HTML/404 = badjson) หรือเน็ต/timeout สะดุด — error จริง
+        // ที่ backend คืน JSON มา (d.error → new Error) ไม่เข้าเงื่อนไขนี้ จึงไม่ retry ให้เสียเวลา
+        const retryable = e && (e.dmjKind === "badjson" || e.name === "AbortError"
+          || e instanceof TypeError || /Failed to fetch|Load failed|NetworkError/i.test(String(e.message || "")));
+        if (!retryable) break;
+      }
+    }
+    setErr(dmjErrText(lastErr)); setLoading(false);
   };
   uE(() => { load(); }, []);
 
@@ -8355,6 +8388,17 @@ function QuoteFollowupView({ data, role }) {
   const pendingRender = isOwner ? pendingList : empPending;
   const approvedRender = isOwner ? approvedList : empApproved;
 
+  // ── ค้นหาเลขที่เอกสาร/ชื่อลูกค้า/เบอร์โทร ก่อนพิมพ์ ── ซ้อนบนสุดเสมอ ไม่ผูกกับ "ของฉัน"/ปี-เดือน
+  // multi-token AND-match (บทเรียนข้อ 10 ทั้งระบบ) — พิมพ์ "สมชาย 081" ต้องเจอทั้งชื่อและเบอร์คู่กัน
+  const matchQSearch = (it) => {
+    const tokens = qSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!tokens.length) return true;
+    const hay = [it.number, it.customer, it.phone].filter(Boolean).join(" ").toLowerCase();
+    return tokens.every(t => hay.includes(t));
+  };
+  const pendingSearched = uM(() => pendingRender.filter(matchQSearch), [pendingRender, qSearch]);
+  const approvedSearched = uM(() => approvedRender.filter(matchQSearch), [approvedRender, qSearch]);
+
   // จำนวน "ทั้งหมด" (ไม่กรองของฉัน) — ใช้ตอน "ของฉัน" ว่างเพื่อบอกว่ามีใบอยู่ แค่ไม่ติดชื่อ
   // (ใบเก่า/ใบสร้างใน ZORT ไม่ติด tag → หายจากของฉันโดยดีไซน์ ต้องบอกไม่งั้นดูเหมือนแอปพัง)
   const allPendingCount  = uM(() => items.filter(it => isPending(it.status)).length,  [items]);
@@ -8398,7 +8442,7 @@ function QuoteFollowupView({ data, role }) {
     if (d > 45) return { bg: "#fff3e0", fg: "#e65100" };
     return { bg: "#e8f5e9", fg: "#2e7d32" };
   };
-  uE(() => { setQPage(1); }, [mode, selYear, selMonth, mineOnly]);
+  uE(() => { setQPage(1); }, [mode, selYear, selMonth, mineOnly, qSearch]);
 
   const kpi = (label, value, sub, color, bg) => (
     <div style={{ flex: "1 1 150px", minWidth: 0, background: bg || "var(--paper)", border: "1px solid var(--bdr)", borderRadius: 12, padding: "12px 14px", borderLeft: "4px solid " + (color || "var(--bdr)") }}>
@@ -8639,19 +8683,38 @@ function QuoteFollowupView({ data, role }) {
             )
           )}
 
+          {/* ── ค้นหาเลขที่เอกสาร/ชื่อลูกค้า/เบอร์โทร — ใช้ตอนต้องหาใบเพื่อพิมพ์ซ้ำ ── */}
+          {(mode === "pending" || mode === "approved") && (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+              <input type="text" placeholder="🔍 ค้นหาเลขที่เอกสาร / ชื่อลูกค้า / เบอร์โทร..."
+                value={qSearch} onChange={e => setQSearch(e.target.value)}
+                style={{ flex: 1, minWidth: 160, padding: "8px 12px", borderRadius: 10,
+                         border: "1.5px solid var(--bdr)", fontSize: 13, fontFamily: "inherit" }}/>
+              {qSearch && (
+                <button className="btn ghost" style={{ padding: "6px 10px", fontSize: 12 }}
+                        onClick={() => setQSearch("")}>✕ ล้าง</button>
+              )}
+            </div>
+          )}
+
           {/* ── โหมด รออนุมัติ (ปิดใบ) ── */}
           {mode === "pending" && (
             pendingRender.length === 0 ? (
               (!isOwner && mineOnly && allPendingCount > 0)
                 ? mineEmptyHint(allPendingCount)
                 : <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>ไม่มีใบรออนุมัติในช่วงนี้ 🎉</div>
+            ) : pendingSearched.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>
+                🔍 ไม่พบใบที่ตรงกับคำค้นหา
+                <div style={{ marginTop: 10 }}><button className="btn ghost" onClick={() => setQSearch("")}>✕ ล้างคำค้นหา</button></div>
+              </div>
             ) : (
               <>
                 <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>เกิน {OVERDUE_DAYS} วัน = ควรปิด (Void) · แถวแดง = ควรปิด</div>
                 <div ref={listRef}/>
                 {mobile ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                    {pendingRender.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => {
+                    {pendingSearched.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => {
                       const c = ageColor(q.ageDays);
                       const expSoon = q.expireInDays !== null && q.expireInDays !== undefined && q.expireInDays <= 14;
                       const overdue = q.ageDays !== null && q.ageDays > OVERDUE_DAYS;
@@ -8736,7 +8799,7 @@ function QuoteFollowupView({ data, role }) {
                       <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, whiteSpace: "nowrap" }}>จัดการ</th>
                     </tr></thead>
                     <tbody>
-                      {pendingRender.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => {
+                      {pendingSearched.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => {
                         const c = ageColor(q.ageDays);
                         const expSoon = q.expireInDays !== null && q.expireInDays !== undefined && q.expireInDays <= 14;
                         const overdue = q.ageDays !== null && q.ageDays > OVERDUE_DAYS;
@@ -8801,7 +8864,7 @@ function QuoteFollowupView({ data, role }) {
                   </table>
                 </div>
                 )}
-                <Pagination page={qPage} total={pendingRender.length} pageSize={PAGE_SIZE} onChange={setQPage} listRef={listRef}/>
+                <Pagination page={qPage} total={pendingSearched.length} pageSize={PAGE_SIZE} onChange={setQPage} listRef={listRef}/>
               </>
             )
           )}
@@ -8812,12 +8875,17 @@ function QuoteFollowupView({ data, role }) {
               (!isOwner && mineOnly && allApprovedCount > 0)
                 ? mineEmptyHint(allApprovedCount)
                 : <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>ไม่มีใบอนุมัติในช่วงนี้</div>
+            ) : approvedSearched.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>
+                🔍 ไม่พบใบที่ตรงกับคำค้นหา
+                <div style={{ marginTop: 10 }}><button className="btn ghost" onClick={() => setQSearch("")}>✕ ล้างคำค้นหา</button></div>
+              </div>
             ) : (
               <>
                 <div ref={listRef}/>
                 {mobile ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                    {approvedRender.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => {
+                    {approvedSearched.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => {
                       const printing = printingId === (q.id || q.number);
                       return (
                         <div key={q.number || idx} style={{ border: "1px solid var(--bdr)", borderRadius: 12, padding: 12, background: "var(--paper)" }}>
@@ -8865,7 +8933,7 @@ function QuoteFollowupView({ data, role }) {
                       <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, whiteSpace: "nowrap" }}>พิมพ์</th>
                     </tr></thead>
                     <tbody>
-                      {approvedRender.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => {
+                      {approvedSearched.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => {
                         const printing = printingId === (q.id || q.number);
                         return (
                         <tr key={q.number || idx} style={{ borderBottom: "1px solid var(--bdr)", background: idx % 2 === 0 ? "var(--paper)" : "var(--g-50)" }}>
@@ -8901,7 +8969,7 @@ function QuoteFollowupView({ data, role }) {
                   </table>
                 </div>
                 )}
-                <Pagination page={qPage} total={approvedRender.length} pageSize={PAGE_SIZE} onChange={setQPage} listRef={listRef}/>
+                <Pagination page={qPage} total={approvedSearched.length} pageSize={PAGE_SIZE} onChange={setQPage} listRef={listRef}/>
               </>
             )
           )}

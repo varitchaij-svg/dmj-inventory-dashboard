@@ -410,3 +410,32 @@ describe('meta — อ่านรายงานผิดไม่ได้', (
     roleKeys.forEach(role => expect(attTable).toMatch(new RegExp('\\b' + role + ':')));
   });
 });
+
+// ── read ของหน้าลงเวลาต้อง retry เอง เมื่อเจอ [รหัส 404] transient ─────────────
+// ที่มา (ส.ค. 2026): 8c2ad9b เพิ่ม retry ให้ myToday (หน้าลงเวลาหลัก) แต่ **หลุด** อีก 3 read
+// → เจ้าของแจ้ง: แท็บ "ใครเข้างานวันนี้" ขึ้น [รหัส 404] · 2 เครื่องค้าง กด refresh ก็ไม่หาย
+// (ยิงครั้งเดียวไม่ลองซ้ำ · เครื่องที่เส้นทางไป GAS สะดุดจะค้าง ส่วนเครื่องอื่นปกติ)
+// read พวกนี้เป็น idempotent → ลองใหม่เองได้ปลอดภัย (ต่างจาก punch ที่เขียนข้อมูล ห้าม retry)
+describe('meta — read หน้าลงเวลา (idempotent) ต้อง retry เอง กัน [รหัส 404] transient', () => {
+  const loadFor = (action) => {
+    const re = new RegExp(
+      'const load = uC\\(async \\([^)]*\\) => \\{(?:(?!const load = uC)[\\s\\S])*?' +
+      action + '(?:(?!const load = uC)[\\s\\S])*?\\n  \\}, \\[[^\\]]*\\]\\);');
+    return codeOnly(grab(ATT, re));
+  };
+  ['attendanceToday', 'myAttendanceSummary', 'attendanceMonthlySummary'].forEach((action) => {
+    it(action + ' — มีลูป retry (tries + gate tries>0 + setTimeout(load))', () => {
+      const fn = loadFor(action);
+      expect(fn).toMatch(/const tries = \(typeof retryLeft === "number"\)/);
+      expect(fn).toMatch(/if \(tries > 0\)/);
+      expect(fn).toMatch(/setTimeout\(\(\) => load\(/);
+    });
+    it(action + ' — retry เฉพาะตอน throw (catch) ไม่ retry คำตอบจริง d.success===false', () => {
+      const fn = loadFor(action);
+      const catchIdx = fn.indexOf('catch (e)');
+      const retryIdx = fn.indexOf('setTimeout(() => load(');
+      expect(catchIdx).toBeGreaterThan(-1);
+      expect(retryIdx).toBeGreaterThan(catchIdx);   // setTimeout อยู่ในบล็อก catch ไม่ใช่เส้น else
+    });
+  });
+});

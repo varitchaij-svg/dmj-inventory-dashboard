@@ -400,14 +400,21 @@ function MyAttendanceMonth() {
   const [loading, setLoading] = uS(true);
   const [err, setErr] = uS(null);
 
-  const load = uC(async (m) => {
-    setLoading(true); setErr(null);
+  // อ่านล้วน (idempotent) → retry เอง 2 ครั้งเมื่อเจอ [รหัส 404] transient เหมือน myToday/attendanceToday
+  const load = uC(async (m, retryLeft) => {
+    const tries = (typeof retryLeft === "number") ? retryLeft : 2;
+    setLoading(true);
+    if (tries === 2) setErr(null);
     try {
       const d = await attPost({ action: "myAttendanceSummary", month: m || month });
-      if (d && d.success) setData(d.data);
+      if (d && d.success) { setData(d.data); setErr(null); }
       else setErr((d && d.error) || "โหลดไม่สำเร็จ");
-    } catch (e) { setErr(e.message); }
-    finally { setLoading(false); }
+      setLoading(false);
+    } catch (e) {
+      if (tries > 0) { setTimeout(() => load(m, tries - 1), 1200 + Math.random() * 1200); return; }
+      setErr(typeof dmjErrText === "function" ? dmjErrText(e) : e.message);
+      setLoading(false);
+    }
   }, [month]);
 
   uE(() => { load(month); }, [month]);
@@ -795,14 +802,21 @@ function AttendanceReportView() {
   const statCols = mobile ? 2 : narrow ? 3 : 6;
 
   // fresh=true เฉพาะตอนกด 🔄 เอง (ข้าม cache 5 นาทีฝั่ง GAS) — สลับเดือน/เปิดหน้าใหม่ใช้ cache ปกติ
-  const load = uC(async (m, fresh) => {
-    setLoading(true); setErr(null);
+  const load = uC(async (m, fresh, retryLeft) => {
+    const tries = (typeof retryLeft === "number") ? retryLeft : 2;
+    setLoading(true);
+    if (tries === 2) setErr(null);
     try {
       const d = await attPost({ action: "attendanceMonthlySummary", month: m, fresh: !!fresh });
-      if (d && d.success) setData(d.data);
+      if (d && d.success) { setData(d.data); setErr(null); }
       else { setErr((d && d.error) || "โหลดไม่สำเร็จ"); setData(null); }
-    } catch (e) { setErr(e.message); }
-    finally { setLoading(false); }
+      setLoading(false);
+    } catch (e) {
+      // อ่านล้วน (idempotent) → retry เอง 2 ครั้งเมื่อเจอ [รหัส 404] transient (คง m/fresh เดิม)
+      if (tries > 0) { setTimeout(() => load(m, fresh, tries - 1), 1200 + Math.random() * 1200); return; }
+      setErr(typeof dmjErrText === "function" ? dmjErrText(e) : e.message);
+      setLoading(false);
+    }
   }, []);
 
   uE(() => { load(month); }, [month, load]);
@@ -1161,14 +1175,30 @@ function AttendanceTodayView({ canEdit = true, onNav } = {}) {
   const [fix, setFix] = uS(null);     // {mode:"add"|"edit", staff, event}
   const [toast, setToast] = uS(null);
 
-  const load = uC(async (d0) => {
-    setLoading(true); setErr(null);
+  // ⚠️ [รหัส 404] transient (googleusercontent/GAS สะดุด — บทเรียน Phase 7.4/7.5) หน้า myToday
+  // แก้ด้วย retry ไปแล้ว (8c2ad9b) แต่ตัวนี้หลุด → "ใครเข้างานวันนี้" ขึ้นแดงแล้วกด refresh ก็ยัง
+  // ค้าง เพราะยิงครั้งเดียวไม่ลองซ้ำ (เครื่องที่เส้นทางไป GAS สะดุดจะค้างต่อ ส่วนเครื่องอื่นปกติ)
+  // attendanceToday เป็นการอ่านล้วน (idempotent) → ลองใหม่เองได้ปลอดภัยเหมือน myToday เป๊ะ
+  const load = uC(async (d0, retryLeft) => {
+    const tries = (typeof retryLeft === "number") ? retryLeft : 2;
+    setLoading(true);
+    if (tries === 2) setErr(null);   // ล้าง error เฉพาะรอบแรก/กดลองใหม่เอง ไม่งั้นกะพริบระหว่าง retry
     try {
       const d = await attPost({ action: "attendanceToday", date: d0 || date });
-      if (d && d.success) { setRows(d.data.rows || []); setDate(d.data.date || ""); }
+      if (d && d.success) { setRows(d.data.rows || []); setDate(d.data.date || ""); setErr(null); }
+      // d.success===false = คำตอบจริงของ server (เช่น ไม่มีสิทธิ์) → **ไม่ retry** โชว์เลย
       else setErr((d && d.error) || "โหลดไม่สำเร็จ");
-    } catch (e) { setErr(e.message); }
-    finally { setLoading(false); }
+      setLoading(false);
+    } catch (e) {
+      // throw = ต่อไม่ติด/ตอบ HTML/404 (transient) ต่างจาก d.success===false → ลองใหม่เองได้
+      if (tries > 0) {
+        const delay = 1200 + Math.random() * 1200;   // สุ่มกระจาย กันทุกเครื่องยิงพร้อมกันซ้ำ
+        setTimeout(() => load(d0, tries - 1), delay);
+        return;   // ยังไม่ setLoading(false) — คงสปินเนอร์ไว้ระหว่างรอ retry
+      }
+      setErr(typeof dmjErrText === "function" ? dmjErrText(e) : e.message);
+      setLoading(false);
+    }
   }, [date]);
 
   uE(() => { load(); }, [load]);
