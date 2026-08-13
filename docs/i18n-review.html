@@ -1,0 +1,791 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=3">
+<title>ตรวจคำแปลภาษาพม่า — Doomuenjing</title>
+<style>
+  :root { --bg:#f6f7f5; --paper:#fff; --bdr:#e3e6e1; --text:#20241f; --muted:#6b7280;
+          --g50:#eef6ef; --g500:#3f9d5a; --g700:#256b3a; --warn:#b7791f; --warnbg:#fdf6e3; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font-family:"IBM Plex Sans Thai","Noto Sans Myanmar","Padauk","Myanmar Text","Inter",system-ui,sans-serif;
+         font-size:16px; line-height:1.6; padding:0 0 96px; -webkit-text-size-adjust:100%; }
+  .wrap { max-width:820px; margin:0 auto; padding:16px; }
+  header { background:var(--g700); color:#fff; padding:20px 16px; }
+  header .h { max-width:820px; margin:0 auto; }
+  header h1 { margin:0 0 6px; font-size:20px; }
+  header p { margin:4px 0; font-size:14px; opacity:.95; }
+  .note { background:var(--warnbg); border:1px solid var(--warn); border-radius:12px;
+          padding:12px 14px; margin:16px 0; font-size:14px; color:#5a4a1a; }
+  .note b { color:#7a5a10; }
+  h2 { font-size:15px; color:var(--g700); margin:22px 0 8px; padding-bottom:6px;
+       border-bottom:2px solid var(--g50); }
+  .rows { display:flex; flex-direction:column; gap:10px; }
+  .row { background:var(--paper); border:1px solid var(--bdr); border-radius:14px; padding:12px 14px; }
+  .row.marked-ok { border-color:var(--g500); background:var(--g50); }
+  .row.marked-no { border-color:var(--warn); background:var(--warnbg); }
+  .cell { display:flex; align-items:baseline; gap:8px; padding:3px 0; }
+  .cell .lbl { flex:0 0 96px; font-size:12px; color:var(--muted); }
+  .cell .val { font-weight:600; }
+  .cell.my .val { font-size:20px; font-weight:700; color:var(--g700); }
+  .my-text { font-family:"Noto Sans Myanmar","Padauk","Myanmar Text",sans-serif; }
+  .act { display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center; margin-top:8px;
+         padding-top:10px; border-top:1px dashed var(--bdr); }
+  .act label { display:inline-flex; align-items:center; gap:5px; font-size:14px; cursor:pointer;
+               padding:4px 8px; border-radius:8px; }
+  .act .fix { flex:1 1 100%; min-width:0; margin-top:6px; padding:10px 12px; border:1px solid var(--bdr);
+              border-radius:10px; font-family:inherit; font-size:16px; display:none; }
+  .row.marked-no .fix { display:block; }
+  .bar { position:fixed; left:0; right:0; bottom:0; background:var(--paper);
+         border-top:1px solid var(--bdr); padding:10px 14px env(safe-area-inset-bottom,10px);
+         display:flex; align-items:center; gap:12px; justify-content:space-between; z-index:10; }
+  .bar .prog { font-size:13px; color:var(--muted); }
+  .bar button { background:var(--g700); color:#fff; border:none; border-radius:12px;
+                padding:12px 18px; font-size:15px; font-weight:700; font-family:inherit; cursor:pointer; }
+  .toast { position:fixed; left:50%; bottom:80px; transform:translateX(-50%);
+           background:#20241f; color:#fff; padding:10px 16px; border-radius:10px; font-size:14px;
+           opacity:0; transition:opacity .2s; pointer-events:none; z-index:20; }
+  .toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<header><div class="h">
+  <h1>🇲🇲 ตรวจคำแปลภาษาพม่า</h1>
+  <p>Doomuenjing — ระบบจัดการสต็อก · စာရင်း စီမံခန့်ခွဲမှု စနစ်</p>
+  <p>ဘာသာပြန် စစ်ဆေးရန် (67 စကားလုံး)</p>
+</div></header>
+<div class="wrap">
+  <div class="note">
+    <b>วิธีตรวจ:</b> อ่านช่อง <b>"ภาษาพม่า (ร่าง)"</b> ของแต่ละคำ — ถ้าถูกกด <b>✅ ถูก</b> ·
+    ถ้าผิดกด <b>✏️ ต้องแก้</b> แล้วพิมพ์คำที่ถูกลงในช่อง · เสร็จแล้วกดปุ่ม
+    <b>"📋 คัดลอกคำที่ต้องแก้"</b> ด้านล่าง แล้วส่งกลับมาให้เจ้าของ<br>
+    <span style="font-size:13px">အောက်ပါ မြန်မာဘာသာပြန်များကို စစ်ဆေးပါ — မှန်လျှင် ✅ ၊ မှားလျှင် ✏️ နှိပ်ပြီး
+    မှန်သောစကားလုံးကို ရေးပါ ။ ပြီးလျှင် "📋 ကူးယူရန်" ကိုနှိပ်၍ ပိုင်ရှင်ထံ ပြန်ပို့ပါ ။</span>
+  </div>
+  <h2>เลือกภาษา</h2><div class="rows">
+    <div class="row" data-th="ภาษา">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ภาษา</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Language</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ဘာသာစကား</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s1" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s1" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="เลือกภาษา">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">เลือกภาษา</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Select language</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ဘာသာစကား ရွေးပါ</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s2" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s2" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div></div><h2>หน้าล็อกอิน (เข้าสู่ระบบ)</h2><div class="rows">
+    <div class="row" data-th="เข้าสู่ระบบเพื่อใช้งาน">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">เข้าสู่ระบบเพื่อใช้งาน</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Sign in to continue</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">အသုံးပြုရန် အကောင့်ဝင်ပါ</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s3" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s3" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="เข้าสู่ระบบด้วย LINE">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">เข้าสู่ระบบด้วย LINE</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Sign in with LINE</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">LINE ဖြင့် ဝင်ရန်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s4" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s4" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="เข้าสู่ระบบโดยไม่เปิดแอป LINE">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">เข้าสู่ระบบโดยไม่เปิดแอป LINE</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Sign in without the LINE app</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">LINE app မဖွင့်ဘဲ ဝင်ရန်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s5" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s5" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="กำลังรอผลการเข้าสู่ระบบ…">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">กำลังรอผลการเข้าสู่ระบบ…</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Waiting for sign-in…</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">အကောင့်ဝင်ခြင်း စောင့်နေသည်…</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s6" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s6" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div></div><h2>แถบเมนู / ปุ่มบนสุด</h2><div class="rows">
+    <div class="row" data-th="เพิ่มเติม">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">เพิ่มเติม</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">More</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">နောက်ထပ်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s7" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s7" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="เมนูเพิ่มเติม">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">เมนูเพิ่มเติม</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">More menu</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">နောက်ထပ် မီနူး</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s8" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s8" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="ออกจากระบบ">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ออกจากระบบ</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Log out</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ထွက်ရန်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s9" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s9" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="Sync ใหม่">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">Sync ใหม่</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Sync</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ပြန်လည် စင့်ခ်လုပ်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s10" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s10" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="กำลัง sync...">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">กำลัง sync...</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Syncing…</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">စင့်ခ်လုပ်နေသည်…</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s11" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s11" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="โหลดใหม่">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">โหลดใหม่</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Reload</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ပြန်တင်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s12" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s12" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div></div><h2>ชื่อเมนู (แท็บ)</h2><div class="rows">
+    <div class="row" data-th="ลงเวลา">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ลงเวลา</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Time clock</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">အချိန်မှတ်တမ်း</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s13" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s13" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="ใครเข้างานวันนี้">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ใครเข้างานวันนี้</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Who's in today</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ဒီနေ့ ဘယ်သူလာ</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s14" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s14" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="สินค้า &amp; สั่ง">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">สินค้า &amp; สั่ง</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Products &amp; order</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ကုန်ပစ္စည်း &amp; မှာယူ</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s15" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s15" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="สต๊อก &amp; แจ้งเตือน">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">สต๊อก &amp; แจ้งเตือน</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Stock &amp; alerts</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ပစ္စည်းလက်ကျန် &amp; သတိပေးချက်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s16" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s16" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="เช็คหน้าร้าน">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">เช็คหน้าร้าน</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Check storefront</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ဆိုင်ရှေ့ စစ်ဆေး</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s17" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s17" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="ตำแหน่งคลัง">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ตำแหน่งคลัง</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Storage locations</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">သိုလှောင်နေရာ</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s18" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s18" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="นับ stock คลัง">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">นับ stock คลัง</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Count warehouse stock</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ဂိုဒေါင် စာရင်းရေတွက်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s19" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s19" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="เพิ่มสินค้าใหม่">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">เพิ่มสินค้าใหม่</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Add new product</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ကုန်ပစ္စည်းအသစ် ထည့်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s20" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s20" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="โอน/ปรับ/ยกมา">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">โอน/ปรับ/ยกมา</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Transfer / adjust</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">လွှဲပြောင်း / ချိန်ညှိ</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s21" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s21" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="รายการสั่งของ">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">รายการสั่งของ</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Order list</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">မှာယူစာရင်း</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s22" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s22" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="ติดตามสถานะ">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ติดตามสถานะ</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Track status</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">အခြေအနေ ခြေရာခံ</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s23" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s23" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="สรุปสินค้าออกจากคลัง">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">สรุปสินค้าออกจากคลัง</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Goods-out summary</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ဂိုဒေါင်ထွက်ကုန် အနှစ်ချုပ်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s24" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s24" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="งานจัดพิเศษ">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">งานจัดพิเศษ</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Special jobs</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">အထူးအလုပ်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s25" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s25" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="พิมพ์ Label">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">พิมพ์ Label</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Print label</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">တံဆိပ် ပရင့်ထုတ်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s26" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s26" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="งานคลัง">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">งานคลัง</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Warehouse tasks</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ဂိုဒေါင်အလုပ်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s27" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s27" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="เทรนด์">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">เทรนด์</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Trends</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ရောင်းအားလားရာ</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s28" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s28" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div></div><h2>ลงเวลาเข้า-ออกงาน</h2><div class="rows">
+    <div class="row" data-th="เข้างาน">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">เข้างาน</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Clock in</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">အလုပ်ဝင်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s29" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s29" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="ออกงาน">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ออกงาน</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Clock out</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">အလုပ်ဆင်း</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s30" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s30" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="เริ่มพัก">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">เริ่มพัก</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Start break</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">နားချိန် စ</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s31" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s31" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="กลับจากพัก">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">กลับจากพัก</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Back from break</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">နားပြီး ပြန်ဝင်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s32" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s32" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="ไปห้องน้ำ">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ไปห้องน้ำ</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Restroom</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">အိမ်သာ သွား</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s33" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s33" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="กลับจากห้องน้ำ">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">กลับจากห้องน้ำ</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Back from restroom</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">အိမ်သာမှ ပြန်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s34" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s34" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="ทำงานอยู่">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ทำงานอยู่</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Working</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">အလုပ်လုပ်နေ</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s35" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s35" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="พักอยู่">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">พักอยู่</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">On break</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">နားနေ</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s36" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s36" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="ยังไม่มา">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ยังไม่มา</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Not in yet</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">မရောက်သေး</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s37" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s37" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="สาย">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">สาย</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Late</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">နောက်ကျ</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s38" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s38" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="มาสาย">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">มาสาย</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Came late</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">နောက်ကျ ရောက်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s39" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s39" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="ขาด">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ขาด</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Absent</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ပျက်ကွက်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s40" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s40" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="วันหยุด">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">วันหยุด</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Day off</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ပိတ်ရက်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s41" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s41" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="ไม่มีกะ">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ไม่มีกะ</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">No shift</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">အလှည့် မရှိ</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s42" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s42" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="ตำแหน่ง">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ตำแหน่ง</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Location</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">တည်နေရာ</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s43" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s43" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="ทำงานวันนี้">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ทำงานวันนี้</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Worked today</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ဒီနေ့ အလုပ်ချိန်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s44" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s44" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="วันนี้">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">วันนี้</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Today</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ဒီနေ့</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s45" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s45" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="เวลาของฉัน">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">เวลาของฉัน</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">My time</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ကျွန်ုပ်၏ အချိန်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s46" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s46" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="ทั้งหมด">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ทั้งหมด</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">All</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">အားလုံး</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s47" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s47" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="ภาพรวม">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ภาพรวม</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Overview</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ခြုံငုံသုံးသပ်ချက်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s48" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s48" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="สรุปรายคน">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">สรุปรายคน</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Per-person summary</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">တစ်ဦးချင်း အနှစ်ချုပ်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s49" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s49" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="รวม/เฉลี่ย">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">รวม/เฉลี่ย</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Total / average</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">စုစုပေါင်း / ပျမ်းမျှ</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s50" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s50" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="เปิดกล้อง">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">เปิดกล้อง</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Open camera</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ကင်မရာ ဖွင့်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s51" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s51" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="ถ่ายใหม่">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ถ่ายใหม่</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Retake</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ပြန်ရိုက်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s52" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s52" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="มีรูป">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">มีรูป</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Has photo</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ဓာတ်ပုံ ရှိ</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s53" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s53" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="ไม่ได้เปิด GPS">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ไม่ได้เปิด GPS</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">GPS not enabled</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">GPS မဖွင့်ထား</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s54" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s54" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div></div><h2>ปุ่ม / คำสั่งทั่วไป</h2><div class="rows">
+    <div class="row" data-th="บันทึก">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">บันทึก</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Save</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">သိမ်း</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s55" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s55" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="ยกเลิก">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ยกเลิก</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Cancel</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ပယ်ဖျက်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s56" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s56" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="ปิด">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ปิด</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Close</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ပိတ်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s57" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s57" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="ลองใหม่">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ลองใหม่</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Try again</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ထပ်စမ်း</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s58" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s58" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="ค้นหา">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ค้นหา</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Search</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ရှာ</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s59" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s59" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="สั่ง">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">สั่ง</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Order</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">မှာ</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s60" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s60" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="ยืนยัน">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">ยืนยัน</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Confirm</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">အတည်ပြု</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s61" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s61" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="รับของ">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">รับของ</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Receive goods</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ပစ္စည်း လက်ခံ</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s62" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s62" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="โอน">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">โอน</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Transfer</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">လွှဲပြောင်း</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s63" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s63" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div></div><h2>ป้ายตำแหน่งงาน</h2><div class="rows">
+    <div class="row" data-th="เจ้าของ">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">เจ้าของ</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Owner</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ပိုင်ရှင်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s64" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s64" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="หน้าร้าน">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">หน้าร้าน</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Storefront</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ဆိုင်ရှေ့</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s65" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s65" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="คลังสินค้า">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">คลังสินค้า</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Warehouse</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ဂိုဒေါင်</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s66" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s66" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div>
+    <div class="row" data-th="พนักงาน">
+      <div class="cell th"><span class="lbl">ไทย</span><span class="val">พนักงาน</span></div>
+      <div class="cell en"><span class="lbl">English</span><span class="val">Staff</span></div>
+      <div class="cell my"><span class="lbl">ภาษาพม่า (ร่าง)</span><span class="val my-text">ဝန်ထမ်း</span></div>
+      <div class="cell act">
+        <label class="ok"><input type="radio" name="s67" value="ok"><span>✅ ถูก / မှန်</span></label>
+        <label class="no"><input type="radio" name="s67" value="no"><span>✏️ ต้องแก้ / ပြင်ရန်</span></label>
+        <input class="fix" type="text" placeholder="พิมพ์คำแปลที่ถูก / မှန်ကန်သောစကားလုံး ရေးပါ">
+      </div>
+    </div></div>
+</div>
+<div class="bar">
+  <span class="prog" id="prog">ตรวจแล้ว 0 / 67</span>
+  <button id="copyBtn">📋 คัดลอกคำที่ต้องแก้</button>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+(function(){
+  var rows = Array.prototype.slice.call(document.querySelectorAll('.row'));
+  var prog = document.getElementById('prog');
+  function refresh(){
+    var done = 0;
+    rows.forEach(function(r){
+      var ok = r.querySelector('input[value=ok]').checked;
+      var no = r.querySelector('input[value=no]').checked;
+      r.classList.toggle('marked-ok', ok);
+      r.classList.toggle('marked-no', no);
+      if (ok || no) done++;
+    });
+    prog.textContent = 'ตรวจแล้ว ' + done + ' / ' + 67;
+  }
+  rows.forEach(function(r){
+    r.querySelectorAll('input[type=radio]').forEach(function(inp){ inp.addEventListener('change', refresh); });
+  });
+  function toast(msg){
+    var t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show');
+    setTimeout(function(){ t.classList.remove('show'); }, 2200);
+  }
+  document.getElementById('copyBtn').addEventListener('click', function(){
+    var lines = [];
+    rows.forEach(function(r){
+      var no = r.querySelector('input[value=no]').checked;
+      if (!no) return;
+      var th = r.getAttribute('data-th');
+      var my = r.querySelector('.my-text').textContent;
+      var fix = r.querySelector('.fix').value.trim();
+      lines.push('• ' + th + '\n   ร่าง: ' + my + '\n   แก้เป็น: ' + (fix || '(ยังไม่ได้พิมพ์)'));
+    });
+    var text = lines.length
+      ? ('คำแปลพม่าที่ต้องแก้ (' + lines.length + ' คำ):\n\n' + lines.join('\n\n'))
+      : 'ตรวจครบแล้ว — ไม่มีคำที่ต้องแก้ ✅';
+    function done(){ toast(lines.length ? ('คัดลอกแล้ว ' + lines.length + ' คำ — ส่งให้เจ้าของได้เลย') : 'คัดลอกแล้ว'); }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function(){ fallback(text); done(); });
+    } else { fallback(text); done(); }
+  });
+  function fallback(text){
+    var ta = document.createElement('textarea'); ta.value = text;
+    ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta);
+    ta.focus(); ta.select(); try { document.execCommand('copy'); } catch(e){} document.body.removeChild(ta);
+  }
+})();
+</script>
+</body>
+</html>
