@@ -253,7 +253,8 @@ describe('meta — จุดเชื่อมต่อในโค้ดจร�
     expect(mc).toMatch(/await syncOrderUpdate\(/);
     // ต้องเช็คผลก่อนโชว์ success — ไม่งั้นก็เท่าเดิม
     expect(mc).toMatch(/success === false/);
-    const okIdx = mc.indexOf('"success", "บันทึกแล้ว"');
+    // i18n: ข้อความ toast ถูกครอบด้วย t("บันทึกแล้ว") แล้ว (แต่พฤติกรรม "รอผลก่อนโชว์" ต้องคงเดิม)
+    const okIdx = mc.indexOf('"success", t("บันทึกแล้ว")');
     const badIdx = mc.indexOf('success === false');
     expect(okIdx).toBeGreaterThan(badIdx);   // ทางล้มเหลวต้องถูกตรวจก่อน
   });

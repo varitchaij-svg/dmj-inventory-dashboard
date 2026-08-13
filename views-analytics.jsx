@@ -3856,7 +3856,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
       return;
     }
     setSaveFailed(false);
-    showToast("success", "บันทึกแล้ว", "✅", 2500);
+    showToast("success", t("บันทึกแล้ว"), "✅", 2500);
   };
 
   // ย้อนกลับ order ที่กด Done ผิด → กลับเป็น "รอ" (เขียนกลับลง Sheet จริงด้วย ไม่ใช่แค่ localStorage)
@@ -4010,7 +4010,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
             {/* จัด — พิมพ์เลขตรงๆ (ตัดปุ่ม +/- ออก กันพนักงานกดผิด) */}
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5}}>
               <div style={{fontSize:10,color: saveFailed ? "var(--dang)" : "var(--muted)"}}>
-                {saveFailed ? "⚠️ ยังไม่บันทึก" : "📦 จัด"}
+                {saveFailed ? `⚠️ ${t("ยังไม่บันทึก")}` : `📦 ${t("จัด")}`}
               </div>
               <input type="number" value={prepQtyDraft} min={0} max={9999}
                 onFocus={e => e.target.select()}
@@ -4277,7 +4277,7 @@ function ShipmentRow({ s, role, productMap, onConfirm }) {
             <span style={{fontSize:20}}>{full ? "✅" : "⚠️"}</span>
             <div style={{flex:1}}>
               <div style={{fontSize:13,fontWeight:700}}>
-                {full ? "รับครบ" : "รับไม่ครบ"}
+                {full ? t("รับครบ") : t("รับไม่ครบ")}
               </div>
               <div style={{fontSize:11,color:"var(--muted)"}}>
                 รับ {rq} / ส่ง {s.qty} pcs
@@ -4298,7 +4298,7 @@ function ShipmentRow({ s, role, productMap, onConfirm }) {
           // ── sale/FS ยืนยันรับ / แก้ไขภายหลัง ──
           <>
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
-              <div style={{fontSize:10,color:"var(--muted)"}}>📥 {editing ? "แก้ไข" : "รับจริง"}</div>
+              <div style={{fontSize:10,color:"var(--muted)"}}>📥 {editing ? t("แก้ไข") : t("รับจริง")}</div>
               <input type="number" value={recvQty} min={0} max={9999}
                 onFocus={e => e.target.select()}
                 onChange={e => setRecvQty(Math.max(0,parseInt(e.target.value)||0))}
@@ -4324,7 +4324,7 @@ function ShipmentRow({ s, role, productMap, onConfirm }) {
               minWidth:64,minHeight:44,
             }}>
               <span style={{fontSize:18}}>📦</span>
-              <span style={{fontSize:10,letterSpacing:.3}}>{editing ? "บันทึก" : "ยืนยันรับ"}</span>
+              <span style={{fontSize:10,letterSpacing:.3}}>{editing ? t("บันทึก") : t("ยืนยันรับ")}</span>
             </button>
           </>
         ) : (
@@ -4420,7 +4420,7 @@ function ShipmentReceiveList({ data, role, productMap }) {
     setConfirmed(prev => ({ ...prev, [s.id]: { receivedQty:n, receivedStatus:status, receivedAt:new Date().toISOString() } }));
     const r = await syncShipmentReceive(s.id, s.sku, n, s.refNum);
     if (r && r.success) {
-      showToast("success", status==="รับครบ" ? "รับครบ ✅" : `รับ ${n}/${s.qty} pcs ⚠️`, "📦", 3000);
+      showToast("success", status==="รับครบ" ? `${t("รับครบ")} ✅` : `รับ ${n}/${s.qty} pcs ⚠️`, "📦", 3000);
       return;
     }
     // ถอนภาพ "รับแล้ว" ออก ไม่ให้หน้าจอโกหกว่าบันทึกสำเร็จ แล้วบอกสาเหตุจริงเป็นภาษาไทย
@@ -4430,7 +4430,7 @@ function ShipmentReceiveList({ data, role, productMap }) {
 
   if (!shipments.length) return (
     <div style={{padding:"40px 20px"}}>
-      <Empty title="ยังไม่มีของที่ส่งออกจากคลัง" sub="เมื่อ warehouse กดส่งของ รายการจะมาแสดงที่นี่"/>
+      <Empty title={t("ยังไม่มีของที่ส่งออกจากคลัง")} sub={t("เมื่อ warehouse กดส่งของ รายการจะมาแสดงที่นี่")}/>
     </div>
   );
 
@@ -4482,9 +4482,9 @@ function OrderGroupHead({ carry, n }) {
     }}>
       <span style={{fontSize:16}}>{carry ? "🚶" : "🚛"}</span>
       <span style={{fontWeight:700, fontSize:13.5, color: carry ? "var(--g-700)" : "#1d4ed8"}}>
-        {carry ? "หิ้วเอง — จัดก่อน" : "ขึ้นรถ"}
+        {carry ? t("หิ้วเอง — จัดก่อน") : t("ขึ้นรถ")}
       </span>
-      <span style={{fontSize:12, color:"var(--muted)"}}>{n} รายการ</span>
+      <span style={{fontSize:12, color:"var(--muted)"}}>{t("{n} รายการ", { n })}</span>
     </div>
   );
 }
@@ -4576,7 +4576,7 @@ function OrderListView({ data, role }) {
   // orders ว่าง แต่มี shipments → ดึง tab "ส่งแล้ว" มาไว้หน้าแรก ให้ saler/FS ยืนยันรับได้
   if (!orders.length && !hasShipments) return (
     <div style={{padding:"60px 20px",textAlign:"center"}}>
-      <Empty icon={I.cart} title="ยังไม่มีรายการสั่งของ"
+      <Empty icon={I.cart} title={t("ยังไม่มีรายการสั่งของ")}
         sub="เพิ่มข้อมูลใน Google Sheet 'ลำดับที่สั่งซื้อ' แล้วกด Sync"/>
     </div>
   );
@@ -4596,10 +4596,10 @@ function OrderListView({ data, role }) {
           </div>
         </div>
         <Seg value={effectiveFilter} onChange={setFilter} options={[
-          {value:"all",      label:"🗂️ ทั้งหมด"},
-          {value:"pending",  label:"🟡 รอ"},
-          {value:"completed",label:"✅ สำเร็จ"},
-          {value:"shipped",  label:"🚚 ส่งแล้ว"},
+          {value:"all",      label:`🗂️ ${t("ทั้งหมด")}`},
+          {value:"pending",  label:`🟡 ${t("รอ")}`},
+          {value:"completed",label:`✅ ${t("สำเร็จ")}`},
+          {value:"shipped",  label:`🚚 ${t("ส่งแล้ว")}`},
         ]}/>
       </div>
 
@@ -4622,7 +4622,7 @@ function OrderListView({ data, role }) {
         <ShipmentReceiveList data={data} role={role} productMap={productMap}/>
       ) : filtered.length === 0 ? (
         <div style={{padding:"40px 20px"}}>
-          <Empty title="ไม่มีรายการใน filter นี้" sub="ลองเลือก filter อื่น"/>
+          <Empty title={t("ไม่มีรายการใน filter นี้")} sub={t("ลองเลือก filter อื่น")}/>
         </div>
       ) : (() => {
         // หัวข้อคั่น "หิ้ว / ขึ้นรถ" — โผล่เฉพาะเมื่อมีทั้ง 2 แบบในจอ (มีแบบเดียวก็ไม่มีอะไรให้แยก)

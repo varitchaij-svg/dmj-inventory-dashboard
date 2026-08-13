@@ -167,6 +167,32 @@ const DMJ_I18N = {
   "เลือกจำนวนที่จะสั่งก่อน": { en: "Choose a quantity first", my: "အရေအတွက် အရင်ရွေးပါ" },
   "ยืนยันสั่ง {n} ชิ้น ({type})": { en: "Confirm order {n} pcs ({type})", my: "မှာယူ အတည်ပြု {n} ခု ({type})" },
   "บันทึกหน้าร้าน {n} ชิ้น แล้วปิด": { en: "Save storefront {n} pcs and close", my: "ဆိုင်ရှေ့ {n} ခု သိမ်းပြီး ပိတ်" },
+
+  // ── รายการสั่งของ + รับของ (OrderListView / OrderItemRow / ShipmentRow) — ชุดตรวจใหม่ ──
+  "รอ":                 { en: "Pending",            my: "စောင့်ဆိုင်း" },
+  "สำเร็จ":             { en: "Done",               my: "ပြီးစီး" },
+  "ส่งแล้ว":            { en: "Shipped",            my: "ပို့ပြီး" },
+  "รอดำเนินการ":        { en: "Pending",            my: "ဆောင်ရွက်ရန် ကျန်" },
+  "จัด":                { en: "Prepare",            my: "ပြင်ဆင်" },
+  "{n} รายการ":         { en: "{n} items",          my: "{n} ခု" },
+  "บันทึกแล้ว":         { en: "Saved",              my: "သိမ်းပြီး" },
+  "ยังไม่บันทึก":       { en: "Not saved yet",      my: "မသိမ်းရသေး" },
+  "ออเดอร์ใหม่":        { en: "New orders",         my: "မှာယူ အသစ်" },
+  "หิ้วเอง — จัดก่อน":   { en: "Carry — prepare first", my: "ကိုယ်တိုင်ယူ — အရင်ပြင်" },
+  "ขึ้นรถ":             { en: "By truck",           my: "ကားတင်" },
+  "ยังไม่มีรายการสั่งของ": { en: "No orders yet",      my: "မှာယူစာရင်း မရှိသေး" },
+  "ไม่มีรายการใน filter นี้": { en: "No items in this filter", my: "ဤ filter တွင် စာရင်းမရှိ" },
+  "ลองเลือก filter อื่น": { en: "Try another filter", my: "အခြား filter ရွေးကြည့်ပါ" },
+  // — รับของ —
+  "รับจริง":            { en: "Actual received",    my: "အမှန် လက်ခံ" },
+  "รับแล้ว":            { en: "Received",           my: "လက်ခံပြီး" },
+  "ยังไม่รับ":          { en: "Not received",       my: "မလက်ခံရသေး" },
+  "รับครบ":             { en: "Fully received",     my: "အပြည့် လက်ခံ" },
+  "รับไม่ครบ":          { en: "Partially received", my: "မပြည့် လက်ခံ" },
+  "ยืนยันรับ":          { en: "Confirm receipt",    my: "လက်ခံ အတည်ပြု" },
+  "แก้ไข":              { en: "Edit",               my: "တည်းဖြတ်" },
+  "ยังไม่มีของที่ส่งออกจากคลัง": { en: "No goods shipped from the warehouse yet", my: "ဂိုဒေါင်မှ ပို့သည့် ပစ္စည်း မရှိသေး" },
+  "เมื่อ warehouse กดส่งของ รายการจะมาแสดงที่นี่": { en: "Items appear here when the warehouse ships them", my: "ဂိုဒေါင်က ပစ္စည်းပို့သောအခါ ဤနေရာတွင် ပေါ်လာမည်" },
 };
 
 // ── ค่าภาษาปัจจุบัน: อ่านจาก localStorage ตอนโหลด (ก่อน React จะ render ครั้งแรก) ──
