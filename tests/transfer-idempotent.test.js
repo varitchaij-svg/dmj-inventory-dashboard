@@ -26,6 +26,7 @@ import { dirname, join } from 'node:path';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = readFileSync(join(ROOT, 'appsscript_complete.gs'), 'utf8');
 const VA = readFileSync(join(ROOT, 'views-analytics.jsx'), 'utf8');
+const VM = readFileSync(join(ROOT, 'views-main.jsx'), 'utf8');
 
 function grab(src, re) {
   const m = src.match(re);
@@ -317,6 +318,48 @@ describe('meta — กดส่งทีละใบก็ต้องไม่�
     expect(branch).not.toMatch(/คลังไม่พอ/);
     // ต้องตัดจบก่อนถึงเส้นทาง "คลังไม่พอ/ไม่พบสินค้า" เดิม
     expect(finalize.indexOf('if (unreadable)')).toBeLessThan(finalize.indexOf('if (!transferOk)'));
+  });
+});
+
+// ── กดส่งครั้งเดียวแต่ได้ TF ซ้ำ + สต็อกหักซ้ำ (ส.ค. 2026) ──────────────────
+// อาการ: กดส่งของทีละใบครั้งเดียว แต่ขึ้นรายการโอนซ้ำ (OE002 qty 1 แล้ว qty 0 = order เดียว
+//   ถูกส่ง 2 ครั้งซ้อน · ครั้งแรกหักหน่วยสุดท้าย ครั้งที่ 2 เจอคลัง 0 → โอน 0 ชิ้น)
+// ต้นเหตุ: ปุ่ม ✅ ใน ConfirmModal ไม่มีตัวกันดับเบิลแท็บ → onConfirm ยิง 2 ครั้งใน tick เดียว
+//   → doShip อ่าน order จาก closure เดิมทั้งคู่ (setShipConfirm(null) เป็น async) → finalizeShip ×2
+//   → transferStock ×2 (ทีละใบไม่มี tid กันซ้ำฝั่ง GAS) = TF ซ้ำ + สต็อกหักซ้ำ
+describe('meta — กันส่งของ/ลบ "สองเด้ง" จากดับเบิลแท็บ ConfirmModal', () => {
+  const modal = grab(VM, /function ConfirmModal\(\{[\s\S]*?\n\}/);
+
+  it('ConfirmModal กันการกด ✅ ซ้ำด้วย ref (synchronous) ไม่ใช่ state', () => {
+    // ต้องเป็น ref — state อัปเดต async การกดครั้งที่ 2 ใน tick เดียวจะยังเห็น false แล้วยิงซ้ำ
+    expect(modal).toMatch(/React\.useRef\(false\)/);
+    // handler ต้องเช็ค ref แล้ว return ก่อนเรียก onConfirm
+    const handler = grab(modal, /const handleConfirm = \(\) => \{[\s\S]*?\n  \};/);
+    expect(handler).toMatch(/if \(confirmedRef\.current\) return/);
+    expect(handler.indexOf('confirmedRef.current = true'))
+      .toBeLessThan(handler.indexOf('onConfirm'));
+  });
+
+  it('ปุ่ม ✅ เรียก handleConfirm (ตัวกัน) ไม่ใช่ onConfirm ตรง ๆ', () => {
+    // เรียก onConfirm ตรง = ตัวกันถูกข้าม (บั๊กกลับมาเงียบ ๆ)
+    expect(modal).toMatch(/onClick=\{handleConfirm\}/);
+    expect(modal).not.toMatch(/onClick=\{onConfirm\}/);
+  });
+
+  it('รีเซ็ตตัวกันทุกครั้งที่เปิดโมดัลใหม่ (ไม่งั้นครั้งที่ 2 กดไม่ได้เลย)', () => {
+    expect(modal).toMatch(/if \(open\) \{ confirmedRef\.current = false/);
+  });
+
+  it('finalizeShip มี re-entry guard แยกอีกชั้น (เผื่อ caller อื่น) และปล่อยล็อกทุกทางออก', () => {
+    const finalize = grab(VA, /const finalizeShip = async \(order, matItems\) => \{[\s\S]*?\n  \};/);
+    // ตัดทันทีถ้ากำลังโอน order เดียวกันอยู่ (ref = synchronous, ต้องอยู่ก่อน setSending)
+    expect(finalize).toMatch(/if \(shipInflightRef\.current\.has\(order\.id\)\) return/);
+    expect(finalize.indexOf('shipInflightRef.current.add'))
+      .toBeLessThan(finalize.indexOf('setSending(order.id)'));
+    // ปล่อยล็อกครบทุกทางออก: unreadable, !transferOk, และจบสำเร็จ (นับ delete = 3)
+    const deletes = (finalize.match(/shipInflightRef\.current\.delete\(order\.id\)/g) || []).length;
+    expect(deletes, 'ต้องปล่อยล็อกทุกทางออก (unreadable/ไม่พอ/สำเร็จ) ไม่งั้นกดส่งซ้ำไม่ได้ตลอดไป')
+      .toBe(3);
   });
 });
 

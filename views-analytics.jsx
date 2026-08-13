@@ -5063,6 +5063,10 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const [materialDraw, setMaterialDraw]  = uS(null); // { order, afterConfirm: fn }
   const [resetConfirm, setResetConfirm]  = uS(false); // ยืนยันรีเซ็ตสถานะการส่ง
   const [bulkBusy, setBulkBusy] = uS(false);          // กำลังส่งทั้งชุด — ล็อกปุ่มกันกดซ้ำระหว่างรอ
+  // กันโอนซ้ำทีละใบแบบ synchronous — transferStock (ทีละใบ) ยังไม่มี tid กันซ้ำฝั่ง GAS
+  // ตัวนี้กัน finalizeShip ยิงซ้ำสำหรับ order เดียวกันในจังหวะเดียว (setSending เป็น state = async
+  // ไม่ทันตัดการกดครั้งที่ 2 · ref ตัดได้ทันที) เก็บ id ของ order ที่กำลังโอนอยู่
+  const shipInflightRef = React.useRef(new Set());
   const [reconcile, setReconcile] = uS(null);         // ผลการเทียบกับประวัติการโอนจริง
   const [reconciling, setReconciling] = uS(false);
   const [zortNumInput, setZortNumInput] = uS("");     // เลขที่เอกสารโอนใน ZORT ที่ผู้ใช้พิมพ์
@@ -5178,6 +5182,10 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
   // ทำการส่งสินค้าจริง (หลังผ่าน confirm และ material draw แล้ว)
   const finalizeShip = async (order, matItems) => {
+    // ⚠️ กันยิงซ้ำสำหรับ order เดียวกัน — ตัดทันทีถ้ากำลังโอนอยู่ (ref = synchronous)
+    //    ถ้าปล่อยผ่าน = transferStock ถูกเรียก 2 ครั้ง → TF ซ้ำ + สต็อกหักซ้ำ (ไม่มี tid กันฝั่ง GAS)
+    if (shipInflightRef.current.has(order.id)) return;
+    shipInflightRef.current.add(order.id);
     const qty = order.preparedQty || order.orderQty || 0;
     setSending(order.id);
 
@@ -5201,12 +5209,14 @@ function OrderSummaryView({ data, onPrintRequest }) {
     // ยังตอบไม่ทันได้ (บทเรียนข้อ 13) · เส้นทางนี้ยังไม่มีตัวกันโอนซ้ำ (ไม่มี tid เหมือน "ส่งทั้งหมด")
     // → **ห้ามชวนให้กดส่งซ้ำเด็ดขาด** ต้องให้ไปเช็คประวัติจริงก่อน ไม่งั้นของโอนสองเด้ง
     if (unreadable) {
+      shipInflightRef.current.delete(order.id);
       showToast("warn", "ไม่แน่ใจว่าส่งสำเร็จหรือไม่ (ระบบตอบกลับไม่ครบ) — กดปุ่ม \"🧾 เช็คของที่ส่งไปแล้ว\" ด้านบนก่อน อย่ากดส่งซ้ำ", "❓", 10000);
       return;
     }
 
     // คลังไม่พอ/ไม่พบสินค้า → ไม่ลบ order, ไม่มาร์คส่งแล้ว, คงไว้ให้ส่งใหม่ภายหลัง
     if (!transferOk) {
+      shipInflightRef.current.delete(order.id);
       showToast("warn", `ส่งไม่สำเร็จ — คลังไม่พอ/ไม่พบสินค้า${errMsg ? ` (${errMsg})` : ""} · คงรายการไว้`, "⚠️", 7000);
       return;
     }
@@ -5225,6 +5235,9 @@ function OrderSummaryView({ data, onPrintRequest }) {
     setSt(patchOrderState(order.id, { status: "ส่งแล้ว" }, orderSig(order)));
     const shortMsg = transferred < qty ? ` (คลังพอแค่ ${transferred}/${qty})` : "";
     showToast(transferred < qty ? "warn" : "success", `ส่ง ${transferred} ชิ้นแล้ว${shortMsg}`, "📦");
+    // ปล่อยล็อกหลังจบจริง — order ถูกลบ/มาร์คส่งแล้ว การส่งซ้ำในอนาคตจึงไม่เกิดอยู่แล้ว
+    // แต่ปล่อยไว้เผื่อ order เดิมกลับมา (คลังพอแค่บางส่วน) ให้ยังกดส่งรอบใหม่ได้
+    shipInflightRef.current.delete(order.id);
   };
 
   const doShip = async () => {

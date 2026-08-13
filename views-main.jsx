@@ -685,7 +685,23 @@ function useOnlineStatus() {
 // ─────────────────────────────────────────────────────────────────────
 function ConfirmModal({ open, type="warn", emoji, title, detail, confirmLabel="ยืนยัน", cancelLabel="ยกเลิก", onConfirm, onCancel }) {
   useBackHandler(open ? onCancel : null); // Android back = ยกเลิก
+  // ⚠️ กันดับเบิลแท็บบนมือถือ — ปุ่ม ✅ ที่ถูกแตะซ้ำเร็ว ๆ (ghost-tap) ยิง onConfirm 2 ครั้งใน
+  //    tick เดียว · handler ปลายทาง (doShip/doShipAll/ลบ order) อ่าน state จาก closure แล้ว
+  //    setState(null) แบบ async — การกดครั้งที่ 2 จึงเห็นค่าเดิมทั้งคู่ → ส่ง/ลบ "สองเด้ง"
+  //    (เจอจริง ส.ค. 2026: กดส่งของครั้งเดียวได้ TF ซ้ำ + สต็อกถูกหักซ้ำ · transferStock ทีละใบ
+  //     ยังไม่มี tid กันซ้ำฝั่ง GAS จึงต้องกันที่ต้นทางนี้)
+  // ⚠️ ต้องเป็น ref ไม่ใช่ state — state อัปเดต async การกดครั้งที่ 2 ใน tick เดียวจะยังเห็น false
+  //    ref อัปเดตทันที การกดครั้งที่ 2 จึงถูกตัดทิ้งได้จริง (state ไว้แค่ปิดปุ่มให้เห็นด้วยตา)
+  const confirmedRef = React.useRef(false);
+  const [busy, setBusy] = uS(false);
+  uE(() => { if (open) { confirmedRef.current = false; setBusy(false); } }, [open]);
   if (!open) return null;
+  const handleConfirm = () => {
+    if (confirmedRef.current) return;   // ยิงมาแล้วในการเปิดครั้งนี้ — ตัดทิ้ง
+    confirmedRef.current = true;
+    setBusy(true);
+    if (onConfirm) onConfirm();
+  };
   const colors = {
     warn:    { bg:"#fff8e1", accent:"#a07417", btn:"#f59e0b", emoji:emoji || "⚠️" },
     danger:  { bg:"#ffebee", accent:"#c62828", btn:"#c62828", emoji:emoji || "🗑️" },
@@ -720,17 +736,17 @@ function ConfirmModal({ open, type="warn", emoji, title, detail, confirmLabel="�
         )}
         {/* Buttons — large, full-width */}
         <div style={{display:"flex", gap:8, padding:"0 16px 16px"}}>
-          <button onClick={onCancel} style={{
+          <button onClick={onCancel} disabled={busy} style={{
             flex:1, padding:"16px", borderRadius:12, border:"none",
             background:"var(--g-100)", color:"var(--g-700)",
-            fontSize:15, fontWeight:700, cursor:"pointer", fontFamily:"inherit",
-            minHeight:56,
+            fontSize:15, fontWeight:700, cursor:busy?"default":"pointer", fontFamily:"inherit",
+            minHeight:56, opacity:busy?.5:1,
           }}>❌ {cancelLabel}</button>
-          <button onClick={onConfirm} style={{
+          <button onClick={handleConfirm} disabled={busy} style={{
             flex:1, padding:"16px", borderRadius:12, border:"none",
             background:c.btn, color:"#fff",
-            fontSize:15, fontWeight:700, cursor:"pointer", fontFamily:"inherit",
-            minHeight:56,
+            fontSize:15, fontWeight:700, cursor:busy?"default":"pointer", fontFamily:"inherit",
+            minHeight:56, opacity:busy?.7:1,
           }}>✅ {confirmLabel}</button>
         </div>
       </div>
