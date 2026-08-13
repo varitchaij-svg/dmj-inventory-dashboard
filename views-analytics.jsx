@@ -8157,6 +8157,7 @@ function QuoteFollowupView({ data, role }) {
   const [selYear, setSelYear] = uS("");
   const [selMonth, setSelMonth] = uS("");       // "" = ทุกเดือน, "1".."12"
   const [qPage, setQPage] = uS(1);
+  const [qSearch, setQSearch] = uS("");  // ค้นหาเลขที่เอกสาร/ชื่อลูกค้า/เบอร์โทร ก่อนพิมพ์
   const [voidingId, setVoidingId] = uS(null);
   const [approvingId, setApprovingId] = uS(null);
   const [printingId, setPrintingId] = uS(null);
@@ -8355,6 +8356,17 @@ function QuoteFollowupView({ data, role }) {
   const pendingRender = isOwner ? pendingList : empPending;
   const approvedRender = isOwner ? approvedList : empApproved;
 
+  // ── ค้นหาเลขที่เอกสาร/ชื่อลูกค้า/เบอร์โทร ก่อนพิมพ์ ── ซ้อนบนสุดเสมอ ไม่ผูกกับ "ของฉัน"/ปี-เดือน
+  // multi-token AND-match (บทเรียนข้อ 10 ทั้งระบบ) — พิมพ์ "สมชาย 081" ต้องเจอทั้งชื่อและเบอร์คู่กัน
+  const matchQSearch = (it) => {
+    const tokens = qSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!tokens.length) return true;
+    const hay = [it.number, it.customer, it.phone].filter(Boolean).join(" ").toLowerCase();
+    return tokens.every(t => hay.includes(t));
+  };
+  const pendingSearched = uM(() => pendingRender.filter(matchQSearch), [pendingRender, qSearch]);
+  const approvedSearched = uM(() => approvedRender.filter(matchQSearch), [approvedRender, qSearch]);
+
   // จำนวน "ทั้งหมด" (ไม่กรองของฉัน) — ใช้ตอน "ของฉัน" ว่างเพื่อบอกว่ามีใบอยู่ แค่ไม่ติดชื่อ
   // (ใบเก่า/ใบสร้างใน ZORT ไม่ติด tag → หายจากของฉันโดยดีไซน์ ต้องบอกไม่งั้นดูเหมือนแอปพัง)
   const allPendingCount  = uM(() => items.filter(it => isPending(it.status)).length,  [items]);
@@ -8398,7 +8410,7 @@ function QuoteFollowupView({ data, role }) {
     if (d > 45) return { bg: "#fff3e0", fg: "#e65100" };
     return { bg: "#e8f5e9", fg: "#2e7d32" };
   };
-  uE(() => { setQPage(1); }, [mode, selYear, selMonth, mineOnly]);
+  uE(() => { setQPage(1); }, [mode, selYear, selMonth, mineOnly, qSearch]);
 
   const kpi = (label, value, sub, color, bg) => (
     <div style={{ flex: "1 1 150px", minWidth: 0, background: bg || "var(--paper)", border: "1px solid var(--bdr)", borderRadius: 12, padding: "12px 14px", borderLeft: "4px solid " + (color || "var(--bdr)") }}>
@@ -8639,19 +8651,38 @@ function QuoteFollowupView({ data, role }) {
             )
           )}
 
+          {/* ── ค้นหาเลขที่เอกสาร/ชื่อลูกค้า/เบอร์โทร — ใช้ตอนต้องหาใบเพื่อพิมพ์ซ้ำ ── */}
+          {(mode === "pending" || mode === "approved") && (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+              <input type="text" placeholder="🔍 ค้นหาเลขที่เอกสาร / ชื่อลูกค้า / เบอร์โทร..."
+                value={qSearch} onChange={e => setQSearch(e.target.value)}
+                style={{ flex: 1, minWidth: 160, padding: "8px 12px", borderRadius: 10,
+                         border: "1.5px solid var(--bdr)", fontSize: 13, fontFamily: "inherit" }}/>
+              {qSearch && (
+                <button className="btn ghost" style={{ padding: "6px 10px", fontSize: 12 }}
+                        onClick={() => setQSearch("")}>✕ ล้าง</button>
+              )}
+            </div>
+          )}
+
           {/* ── โหมด รออนุมัติ (ปิดใบ) ── */}
           {mode === "pending" && (
             pendingRender.length === 0 ? (
               (!isOwner && mineOnly && allPendingCount > 0)
                 ? mineEmptyHint(allPendingCount)
                 : <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>ไม่มีใบรออนุมัติในช่วงนี้ 🎉</div>
+            ) : pendingSearched.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>
+                🔍 ไม่พบใบที่ตรงกับคำค้นหา
+                <div style={{ marginTop: 10 }}><button className="btn ghost" onClick={() => setQSearch("")}>✕ ล้างคำค้นหา</button></div>
+              </div>
             ) : (
               <>
                 <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>เกิน {OVERDUE_DAYS} วัน = ควรปิด (Void) · แถวแดง = ควรปิด</div>
                 <div ref={listRef}/>
                 {mobile ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                    {pendingRender.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => {
+                    {pendingSearched.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => {
                       const c = ageColor(q.ageDays);
                       const expSoon = q.expireInDays !== null && q.expireInDays !== undefined && q.expireInDays <= 14;
                       const overdue = q.ageDays !== null && q.ageDays > OVERDUE_DAYS;
@@ -8736,7 +8767,7 @@ function QuoteFollowupView({ data, role }) {
                       <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, whiteSpace: "nowrap" }}>จัดการ</th>
                     </tr></thead>
                     <tbody>
-                      {pendingRender.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => {
+                      {pendingSearched.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => {
                         const c = ageColor(q.ageDays);
                         const expSoon = q.expireInDays !== null && q.expireInDays !== undefined && q.expireInDays <= 14;
                         const overdue = q.ageDays !== null && q.ageDays > OVERDUE_DAYS;
@@ -8801,7 +8832,7 @@ function QuoteFollowupView({ data, role }) {
                   </table>
                 </div>
                 )}
-                <Pagination page={qPage} total={pendingRender.length} pageSize={PAGE_SIZE} onChange={setQPage} listRef={listRef}/>
+                <Pagination page={qPage} total={pendingSearched.length} pageSize={PAGE_SIZE} onChange={setQPage} listRef={listRef}/>
               </>
             )
           )}
@@ -8812,12 +8843,17 @@ function QuoteFollowupView({ data, role }) {
               (!isOwner && mineOnly && allApprovedCount > 0)
                 ? mineEmptyHint(allApprovedCount)
                 : <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>ไม่มีใบอนุมัติในช่วงนี้</div>
+            ) : approvedSearched.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>
+                🔍 ไม่พบใบที่ตรงกับคำค้นหา
+                <div style={{ marginTop: 10 }}><button className="btn ghost" onClick={() => setQSearch("")}>✕ ล้างคำค้นหา</button></div>
+              </div>
             ) : (
               <>
                 <div ref={listRef}/>
                 {mobile ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                    {approvedRender.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => {
+                    {approvedSearched.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => {
                       const printing = printingId === (q.id || q.number);
                       return (
                         <div key={q.number || idx} style={{ border: "1px solid var(--bdr)", borderRadius: 12, padding: 12, background: "var(--paper)" }}>
@@ -8865,7 +8901,7 @@ function QuoteFollowupView({ data, role }) {
                       <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, whiteSpace: "nowrap" }}>พิมพ์</th>
                     </tr></thead>
                     <tbody>
-                      {approvedRender.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => {
+                      {approvedSearched.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => {
                         const printing = printingId === (q.id || q.number);
                         return (
                         <tr key={q.number || idx} style={{ borderBottom: "1px solid var(--bdr)", background: idx % 2 === 0 ? "var(--paper)" : "var(--g-50)" }}>
@@ -8901,7 +8937,7 @@ function QuoteFollowupView({ data, role }) {
                   </table>
                 </div>
                 )}
-                <Pagination page={qPage} total={approvedRender.length} pageSize={PAGE_SIZE} onChange={setQPage} listRef={listRef}/>
+                <Pagination page={qPage} total={approvedSearched.length} pageSize={PAGE_SIZE} onChange={setQPage} listRef={listRef}/>
               </>
             )
           )}
