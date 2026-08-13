@@ -4840,7 +4840,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
                   </div>
                   <button onClick={() => setFsRecount(true)}
                           style={{...btnBase, padding:"8px 10px", fontSize:12, flexShrink:0}}>
-                    ✏️ นับใหม่
+                    ✏️ {t("นับใหม่")}
                   </button>
                 </div>
               )}
@@ -4853,7 +4853,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
                   background: fsQtyNum == null ? "#fffbeb" : "var(--g-50)",
                 }}>
                   <div style={{fontSize:13, fontWeight:800, color: fsQtyNum == null ? "#92400e" : "var(--g-700)"}}>
-                    {outOfStock ? "📋 หน้าร้านเหลือกี่ชิ้น?" : "① นับก่อนสั่ง — หน้าร้านเหลือกี่ชิ้น?"}
+                    {outOfStock ? `📋 ${t("หน้าร้านเหลือกี่ชิ้น?")}` : `① ${t("นับก่อนสั่ง — หน้าร้านเหลือกี่ชิ้น?")}`}
                   </div>
                   <div style={{fontSize:11, color:"var(--muted)", marginTop:3}}>
                     ระบบบันทึกไว้ <b>{fmtN(product.qtyStore || 0)}</b> ชิ้น
@@ -4919,13 +4919,13 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
                               borderColor: fsDirty ? "var(--g-700)" : "var(--bdr)"}}>
                 {loading
                   ? <><span className="spin" style={{width:14,height:14,borderWidth:2,display:"inline-block",verticalAlign:"middle",marginRight:6}}/> กำลังบันทึก…</>
-                  : fsDirty ? `💾 บันทึกหน้าร้าน ${fmtN(fsQtyNum)} ชิ้น แล้วปิด` : "ปิด"}
+                  : fsDirty ? `💾 ${t("บันทึกหน้าร้าน {n} ชิ้น แล้วปิด", { n: fmtN(fsQtyNum) })}` : t("ปิด")}
               </button>
             </>) : (<>
               {/* Quick qty */}
               <div style={{marginBottom:14}}>
                 <div style={{fontSize:12, fontWeight:600, color:"var(--muted)", marginBottom:8}}>
-                  {needFsCheck && !fsSkipped ? "② จำนวนที่สั่ง (ชิ้น)" : "จำนวนที่สั่ง (ชิ้น)"}
+                  {needFsCheck && !fsSkipped ? `② ${t("จำนวนที่สั่ง (ชิ้น)")}` : t("จำนวนที่สั่ง (ชิ้น)")}
                 </div>
                 <div style={{display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:6, marginBottom:8}}>
                   {QUICK_QTYS.map(q => (
@@ -4942,7 +4942,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
                         style={{...btnBase, width:"100%",
                           background: customMode ? "var(--g-50)" : "#fff",
                           color: "var(--muted)", borderStyle:"dashed"}}>
-                  ✏️ กรอกเอง
+                  ✏️ {t("กรอกเอง")}
                 </button>
                 {customMode && (
                   // ⚠️ ห้าม clamp ค่าระหว่างพิมพ์เด็ดขาด (เดิมเป็น Math.max(1, parseInt(v)||1))
@@ -4969,17 +4969,17 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
 
               {/* Order type */}
               <div style={{marginBottom:16}}>
-                <div style={{fontSize:12, fontWeight:600, color:"var(--muted)", marginBottom:8}}>ประเภทการรับ</div>
+                <div style={{fontSize:12, fontWeight:600, color:"var(--muted)", marginBottom:8}}>{t("ประเภทการรับ")}</div>
                 <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8}}>
-                  {[{v:'หิ้ว',icon:'🚶',sub:'รับที่ร้าน/หิ้วไปเลย'},{v:'รอขึ้นรถ',icon:'🚛',sub:'รอจัดส่งทีหลัง'}].map(t => (
-                    <button key={t.v} onClick={() => setOrderType(t.v)}
+                  {[{v:'หิ้ว',icon:'🚶',sub:'รับที่ร้าน/หิ้วไปเลย'},{v:'รอขึ้นรถ',icon:'🚛',sub:'รอจัดส่งทีหลัง'}].map(opt => (
+                    <button key={opt.v} onClick={() => setOrderType(opt.v)}
                             style={{...btnBase, padding:"10px 8px", textAlign:"center",
-                              background: orderType===t.v ? "var(--g-700)" : "#fff",
-                              color: orderType===t.v ? "#fff" : "var(--text)",
-                              borderColor: orderType===t.v ? "var(--g-700)" : "var(--bdr)"}}>
-                      <div style={{fontSize:20, marginBottom:3}}>{t.icon}</div>
-                      <div style={{fontWeight:700, fontSize:13}}>{t.v}</div>
-                      <div style={{fontSize:10, opacity:.75, marginTop:2}}>{t.sub}</div>
+                              background: orderType===opt.v ? "var(--g-700)" : "#fff",
+                              color: orderType===opt.v ? "#fff" : "var(--text)",
+                              borderColor: orderType===opt.v ? "var(--g-700)" : "var(--bdr)"}}>
+                      <div style={{fontSize:20, marginBottom:3}}>{opt.icon}</div>
+                      <div style={{fontWeight:700, fontSize:13}}>{t(opt.v)}</div>
+                      <div style={{fontSize:10, opacity:.75, marginTop:2}}>{t(opt.sub)}</div>
                     </button>
                   ))}
                 </div>
@@ -5020,8 +5020,8 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
                   : fsBlocked
                     ? "① กรอกจำนวนหน้าร้านก่อน"
                     : qty < 1
-                      ? "👆 เลือกจำนวนที่จะสั่งก่อน"
-                      : `✅ ยืนยันสั่ง ${fmtN(qty)} ชิ้น (${orderType})`}
+                      ? `👆 ${t("เลือกจำนวนที่จะสั่งก่อน")}`
+                      : `✅ ${t("ยืนยันสั่ง {n} ชิ้น ({type})", { n: fmtN(qty), type: t(orderType) })}`}
               </button>
 
               {/* บันทึกจำนวนหน้าร้านพัง (เน็ตหลุด) → ยังสั่งของได้ ไม่ให้งานสะดุด */}
@@ -5160,7 +5160,7 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
             zIndex:2,
             lineHeight:1.2,
             boxShadow:"0 1px 3px rgba(0,0,0,.15)",
-          }}>สั่งแล้ว {pendingOrderQty}</div>
+          }}>{t("สั่งแล้ว {n}", { n: pendingOrderQty })}</div>
         )}
 
         {/* WH จัดของแล้ว badge — เตรียมของเสร็จ รอขึ้นรถ (status "สำเร็จ" ยังไม่กลายเป็น shipment) */}
@@ -5178,13 +5178,13 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
             zIndex:2,
             lineHeight:1.2,
             boxShadow:"0 1px 3px rgba(0,0,0,.15)",
-          }}>📦 จัดของแล้ว {whReadyQty}</div>
+          }}>{`📦 ${t("จัดของแล้ว {n}", { n: whReadyQty })}`}</div>
         )}
 
         {/* Stock badge */}
-        {outOfStock && <div className="chip dang" style={{position:"absolute",top:6,right:6}}>หมด</div>}
+        {outOfStock && <div className="chip dang" style={{position:"absolute",top:6,right:6}}>{t("หมด")}</div>}
         {lowStock && !outOfStock && (
-          <div className="chip warn" style={{position:"absolute",top:6,right:6}}>เหลือ {totalQty}</div>
+          <div className="chip warn" style={{position:"absolute",top:6,right:6}}>{t("เหลือ {n}", { n: totalQty })}</div>
         )}
         {p.isMTO && (
           <div className="chip" style={{position:"absolute",top:6,right:6, background:"#f3eef9", color:"#705d96", borderColor:"#d8c8e8"}}>MTO</div>
@@ -5241,11 +5241,11 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
                      paddingTop:6, borderTop:"1px dashed var(--bdr)"}}>
           <div>
             <div style={{fontSize:9.5, color:"var(--muted)", fontWeight:600,textTransform:"uppercase",letterSpacing:".05em"}}>
-              {p.isMTO ? "ขายแล้ว" : "คงเหลือ"}
+              {p.isMTO ? t("ขายแล้ว") : t("คงเหลือ")}
             </div>
             <div style={{fontSize:14, fontWeight:700, lineHeight:1.2, color:lowStock||outOfStock?"var(--dang)":"var(--text)"}}>
               {p.isMTO ? fmtN(p.soldQty) : fmtN(totalQty)}
-              <span style={{fontSize:9.5, color:"var(--muted)", fontWeight:500, marginLeft:3}}>ชิ้น</span>
+              <span style={{fontSize:9.5, color:"var(--muted)", fontWeight:500, marginLeft:3}}>{t("ชิ้น")}</span>
             </div>
             {!p.isMTO && (p.qtyStore > 0 || p.qtyWH > 0) && (
               <div style={{fontSize:9.5, color:"var(--muted)", marginTop:2, lineHeight:1.3}}>
@@ -5255,7 +5255,7 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
           </div>
           {role === 'owner' && (
             <div style={{textAlign:"right"}}>
-              <div style={{fontSize:9.5, color:"var(--muted)", fontWeight:600,textTransform:"uppercase",letterSpacing:".05em"}}>ราคา</div>
+              <div style={{fontSize:9.5, color:"var(--muted)", fontWeight:600,textTransform:"uppercase",letterSpacing:".05em"}}>{t("ราคา")}</div>
               <div style={{fontSize:14, fontWeight:800, color:accent, lineHeight:1.2}}>{fmtB(p.price)}</div>
             </div>
           )}
@@ -5277,7 +5277,7 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
                           justifyContent:"center", gap:6, transition:"background .15s"}}
                   onMouseEnter={e => { if (!outOfStock) e.currentTarget.style.background="var(--g-800)"; }}
                   onMouseLeave={e => { if (!outOfStock) e.currentTarget.style.background="var(--g-700)"; }}>
-            {outOfStock ? (canCountFs ? "📋 หมด — นับหน้าร้าน" : "⚫ หมดสต๊อก") : "🛒 สั่งไปขาย"}
+            {outOfStock ? (canCountFs ? `📋 ${t("หมด — นับหน้าร้าน")}` : `⚫ ${t("หมดสต๊อก")}`) : `🛒 ${t("สั่งไปขาย")}`}
           </button>
         </div>
       )}
@@ -5293,10 +5293,10 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
 const STOCK_PAGE = 20;
 
 function StatusBadge({ p, filter }) {
-  if (filter === "out")  return React.createElement("span", {className:"chip dang"}, "หมด!");
+  if (filter === "out")  return React.createElement("span", {className:"chip dang"}, t("หมด!"));
   if (filter === "low") {
     if (p.qty < 12)  return React.createElement("span", {className:"chip dang"}, "🚨 ด่วน (" + p.qty + ")");
-    if (p.qty < 24)  return React.createElement("span", {className:"chip warn"}, "⚠️ ใกล้หมด (" + p.qty + ")");
+    if (p.qty < 24)  return React.createElement("span", {className:"chip warn"}, "⚠️ " + t("ใกล้หมด ({n})", { n: p.qty }));
     return React.createElement("span", {className:"chip warn"}, "เหลือ " + p.qty + "/" + p.threshold);
   }
   if (filter === "drop") return React.createElement("span", {className:"chip", style:{background:"#f5e7f5",color:"#8a3a8a",borderColor:"#e6cde6"}}, "ลด " + p.dropPct.toFixed(0) + "%");

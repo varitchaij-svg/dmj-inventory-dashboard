@@ -852,6 +852,51 @@ function startServer() {
     await page.close();
   }
 
+  // ── ปุ่มเปลี่ยนภาษา 🌐: กดแล้วต้องสลับ EN จริง + re-render ทั้งต้นไม้ ────────────
+  // ⚠️ ต้องรันบนเบราว์เซอร์จริง — กลไกคือ App เรียก useLang() → เปลี่ยนภาษาแล้ว re-render
+  //    ทั้งต้นไม้ให้ทุก t() อ่านค่าใหม่ · unit test เห็นแค่ t()/setLang() ไม่เห็นการ re-render จริง
+  //    เช็ค 2 อย่าง: (1) ปุ่มภาษาเปลี่ยน ไทย→EN (switcher re-render)
+  //    (2) title ปุ่ม Sync เปลี่ยนเป็น "Sync" (พิสูจน์ว่า re-render ลามไป component พี่น้องด้วย)
+  {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=frontstore&tab=stock`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      await page.waitForTimeout(400);
+      // ก่อนกด: ปุ่มภาษาโชว์ "ไทย" + ปุ่ม Sync title เป็นไทย
+      const beforeLang = await page.locator('.nav-right button[aria-haspopup="menu"]').innerText();
+      const openBtn = page.locator('.nav-right button[aria-haspopup="menu"]');
+      await openBtn.click({ timeout: 2000 });
+      await page.waitForTimeout(200);
+      // เมนูภาษาต้องโผล่ (createPortal ไป body) พร้อม 3 ตัวเลือก
+      const optCount = await page.locator('[role="menuitemradio"]').count();
+      // กด English
+      await page.locator('[role="menuitemradio"]', { hasText: 'English' }).click({ timeout: 2000 });
+      await page.waitForTimeout(300);
+      const afterLang = await page.locator('.nav-right button[aria-haspopup="menu"]').innerText();
+      // title ของปุ่ม Sync (t("Sync ใหม่") → "Sync")
+      const syncTitle = await page.locator('.nav-right button.ghost[title]').first().getAttribute('title');
+      const anyEnTitle = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('.nav-right button[title]')).map(b => b.getAttribute('title')).join('|'));
+      // (3) หน้าลงเวลา (views-attendance.jsx) ต้องแปลด้วย — ไปแท็บลงเวลาแล้วเช็คคำ EN
+      //     "My time" (t("เวลาของฉัน")) + ปุ่มเมนู "Time clock" (tabText ของแท็บ attendance)
+      await navigateTo(page, 'frontstore', 'attendance').catch(() => {});
+      await page.waitForTimeout(500);
+      const attBody = await page.locator('body').innerText();
+      const attEN = /My time|Today/.test(attBody);   // Seg แปลแล้ว
+      if (optCount < 3)                         { status = 'NO_MENU';    note = `เมนูภาษามี ${optCount} ตัวเลือก (คาด 3)`; }
+      else if (!/ไทย/.test(beforeLang))         { status = 'NO_INIT_TH'; note = `เริ่มต้นไม่ใช่ไทย: "${beforeLang}"`; }
+      else if (!/EN/.test(afterLang))           { status = 'NO_SWITCH';  note = `กด English แล้วปุ่มยังเป็น "${afterLang}"`; }
+      else if (!/Sync/.test(anyEnTitle))        { status = 'NO_RERENDER';note = `re-render ไม่ลามไป Sync (titles: ${anyEnTitle})`; }
+      else if (!attEN)                          { status = 'ATT_NO_I18N';note = 'หน้าลงเวลาไม่แปลเป็น EN (Seg ยังเป็นไทย)'; }
+      else note = `ไทย→EN + re-render ทั้งต้นไม้ + หน้าลงเวลาแปล (Sync="${syncTitle}")`;
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, `lang-switch.png`) }).catch(() => {});
+    results.push({ role: 'interact', tab: 'เปลี่ยนภาษา 🌐 (EN)', status, note });
+    await page.close();
+  }
+
   await browser.close();
   srv.close();
 

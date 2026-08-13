@@ -725,12 +725,82 @@ function BootTrace() {
   );
 }
 
+// ── ปุ่มเปลี่ยนภาษา 🌐 (ไทย / English / မြန်မာ) ──
+// ใช้ 2 ที่: แถบบน (.nav-right ซ้ายกระดิ่ง) + หน้าล็อกอิน (คนพม่าต้องอ่านหน้าล็อกอินออกก่อนเข้าได้)
+// ⚠️ popover ต้อง createPortal ไป document.body — .topnav มี overflow-x:hidden ที่ตัด dropdown
+//    ทิ้ง (บทเรียนเดียวกับ NotiBell) · ใช้ getBoundingClientRect วางตำแหน่งเพราะ nav ของ owner
+//    สูง 2 ชั้น จะใช้ top ตายตัวไม่ได้
+// ⚠️ อ้าง useLang/setLang/t/DMJ_LANGS จาก i18n.jsx ซึ่งโหลด "ก่อน" ไฟล์นี้ (ดูลำดับ <script>)
+function LangSwitcher({ style }) {
+  const lang = useLang();                 // subscribe → เปลี่ยนภาษาแล้วปุ่มนี้ re-render เอง
+  const [open, setOpen] = useState(false);
+  const [rect, setRect] = useState(null);
+  const btnRef = useRef(null);
+  const cur = DMJ_LANGS.find(l => l.code === lang) || DMJ_LANGS[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpen(false);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    return () => { window.removeEventListener("resize", close); window.removeEventListener("scroll", close, true); };
+  }, [open]);
+
+  const openMenu = () => {
+    if (btnRef.current) setRect(btnRef.current.getBoundingClientRect());
+    setOpen(v => !v);
+  };
+
+  const menu = (
+    <>
+      <div onClick={() => setOpen(false)} style={{position:"fixed",inset:0,zIndex:499}}/>
+      <div role="menu" aria-label={t("เลือกภาษา")} style={{
+        position:"fixed", zIndex:500,
+        top: rect ? rect.bottom + 6 : 60,
+        right: rect ? Math.max(8, window.innerWidth - rect.right) : 8,
+        background:"var(--paper)", border:"1px solid var(--bdr)", borderRadius:12,
+        boxShadow:"0 8px 30px rgba(0,0,0,.18)", padding:6, minWidth:156,
+      }}>
+        {DMJ_LANGS.map(l => (
+          <button key={l.code} role="menuitemradio" aria-checked={l.code===lang}
+                  onClick={() => { setLang(l.code); setOpen(false); }}
+                  style={{
+                    display:"flex", alignItems:"center", gap:10, width:"100%",
+                    padding:"11px 12px", border:"none", borderRadius:8, cursor:"pointer",
+                    fontFamily:"inherit", fontSize:15, textAlign:"left",
+                    background: l.code===lang ? "var(--g-50)" : "transparent",
+                    color: l.code===lang ? "var(--g-700)" : "var(--text)",
+                    fontWeight: l.code===lang ? 700 : 500,
+                  }}>
+            <span style={{fontSize:18,lineHeight:1}}>{l.flag}</span>
+            <span style={{flex:1}}>{l.native}</span>
+            {l.code===lang && <span style={{color:"var(--g-500)"}}>✓</span>}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+
+  return (
+    <div style={{position:"relative", ...(style||{})}}>
+      <button ref={btnRef} className="btn ghost" onClick={openMenu}
+              aria-label={t("เลือกภาษา")} aria-haspopup="menu" aria-expanded={open}
+              title={t("ภาษา")}
+              style={{display:"flex",alignItems:"center",gap:5,minHeight:40}}>
+        <span style={{fontSize:18,lineHeight:1}}>🌐</span>
+        <span style={{fontSize:13,fontWeight:700}}>{cur.code === "th" ? "ไทย" : cur.code.toUpperCase()}</span>
+      </button>
+      {open && ReactDOM.createPortal(menu, document.body)}
+    </div>
+  );
+}
+
 // Make available everywhere
 Object.assign(window, {
   fmtN, fmtB, fmtBfull, fmtPct, monthLabel,
   CAT_COLORS, catColor, resetCatColorMap,
   I, Icon, KPI, Card, Seg, Sparkline, Empty,
-  dmjFetch, NotiBell, notiAgo, NOTI_TYPE_META, BootTrace,
+  dmjFetch, NotiBell, notiAgo, NOTI_TYPE_META, BootTrace, LangSwitcher,
   dmjRequestFocus, useSkuFocus, dmjScrollToSku,
   dmjRequestView, useViewIntent,
 });
