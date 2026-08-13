@@ -1443,12 +1443,21 @@
     if (sessionStorage.getItem('dmj_role')) window._prefetchData();
   } catch (_) {}
 
-  /* (2) ไฟล์ JSX ทั้ง 4 — เดิมโหลดต่อกันทีละไฟล์ (ui → views → app)
-         ยิงพร้อมกันตั้งแต่ตอนนี้ พอ Babel พร้อมก็ compile ได้เลยไม่ต้องรอ network */
+  /* (2) โค้ดแอป — ยิงพร้อมกันตั้งแต่ต้นหน้า พอพร้อมก็ inject ได้เลยไม่ต้องรอ network
+         · ปกติ (มี precompile): โหลด dist/*.js ตรง ๆ ไม่ต้อง Babel เลย
+         · fallback (ยังไม่ตั้ง build): โหลด .jsx แล้ว compile ในเบราว์เซอร์เหมือนเดิม
+         ใช้ hint localStorage 'dmj_use_dist' (ตั้งจาก boot หลังอ่าน manifest สำเร็จรอบก่อน)
+         เพื่อ prefetch ให้ตรงเส้นทางตั้งแต่ต้น — รอบแรกสุดเดาพลาดได้ boot จะแก้ให้เอง */
+  window._jsxSrcList = ['i18n.jsx', 'ui.jsx', 'views-main.jsx', 'views-analytics.jsx', 'views-quote.jsx', 'views-attendance.jsx', 'app.jsx'];
   try {
-    window._jsxPre = {};
-    ['i18n.jsx', 'ui.jsx', 'views-main.jsx', 'views-analytics.jsx', 'views-quote.jsx', 'views-attendance.jsx', 'app.jsx'].forEach(function (s) {
-      try { window._jsxPre[s] = fetch(s); } catch (_) {}
+    /* manifest เล็ก — ยิงคู่ไปด้วยเสมอ ให้ boot ตัดสินว่า dist ใช้ได้จริงไหม */
+    try { window._distManifestPre = fetch('dist/manifest.json'); } catch (_) { window._distManifestPre = null; }
+    var _useDistHint = false;
+    try { _useDistHint = localStorage.getItem('dmj_use_dist') === '1'; } catch (_) {}
+    window._jsxPre = {}; window._jsxPreUrl = {};
+    window._jsxSrcList.forEach(function (s) {
+      var url = _useDistHint ? ('dist/' + s.replace(/\.jsx$/, '.js')) : s;
+      try { window._jsxPre[s] = fetch(url); window._jsxPreUrl[s] = url; } catch (_) {}
     });
   } catch (_) {}
 }());
@@ -1493,18 +1502,42 @@
 
   var BC = 'dmj-babel-v2'; // bump เมื่อ format เปลี่ยน
 
+  function distUrl(src) { return 'dist/' + src.replace(/\.jsx$/, '.js'); }
+
+  /* หยิบ prefetch ของ src — **เฉพาะเมื่อมันถูก prefetch ด้วย URL ที่เราต้องการจริง**
+     head เดา dist/jsx จาก hint · ถ้าเดาคนละทางกับที่ manifest บอก ต้อง fetch ใหม่
+     ไม่ใช้ของเดา (ป้อน dist ให้ Babel = compile ซ้ำ · ป้อน jsx ให้ dist path = ผิด)
+     body อ่านได้ครั้งเดียว จึงเคลียร์ทิ้งเสมอหลังตัดสิน (ใช้/ไม่ใช้ก็ตาม) */
+  function takePrefetch(src, wantUrl) {
+    var p = null;
+    try {
+      if (window._jsxPre && window._jsxPre[src] &&
+          window._jsxPreUrl && window._jsxPreUrl[src] === wantUrl) {
+        p = window._jsxPre[src];
+      }
+      if (window._jsxPre) window._jsxPre[src] = null;
+    } catch (_) {}
+    return p;
+  }
+
+  /* dist path: fetch dist/<name>.js ตรง ๆ — ไม่ต้อง Babel เลย
+     ล้มเหลว (ไฟล์หาย/partial deploy) → คืน null ให้ตกไป compile .jsx เองเฉพาะไฟล์นี้ */
+  async function loadDistCode(src) {
+    var want = distUrl(src);
+    var pre = takePrefetch(src, want);
+    try {
+      var resp = await (pre || fetch(want));
+      if (resp && resp.ok) { window.dmjMark('dist:' + src); return await resp.text(); }
+    } catch (_) {}
+    return null;
+  }
+
   /* fetch + cache check + compile → คืน code string (ไม่ inject)
      แยกออกมาเพื่อให้ views-main + views-analytics compile พร้อมกันได้ */
   async function compileJsx(src) {
     /* ใช้ response ที่เริ่มโหลดไว้ตั้งแต่ต้นหน้า (ดู script ใน <head>) ถ้ามี
-       เคลียร์ทิ้งหลังหยิบ เพราะ body ของ Response อ่านได้ครั้งเดียว */
-    var pre = null;
-    try {
-      if (window._jsxPre && window._jsxPre[src]) {
-        pre = window._jsxPre[src];
-        window._jsxPre[src] = null;
-      }
-    } catch (_) {}
+       (เฉพาะที่ prefetch เป็น .jsx จริง — ดู takePrefetch) */
+    var pre = takePrefetch(src, src);
     var resp = await (pre || fetch(src));
     /* ETag หรือ Last-Modified จาก Cloudflare — อ่านได้โดยไม่ต้องอ่าน body */
     var etag = resp.headers.get('etag') || resp.headers.get('last-modified') || '';
@@ -1548,17 +1581,49 @@
     return compiled;
   }
 
-  function loadJsx(src) {
-    return compileJsx(src).then(function (code) { injectCode(code); });
+  /* คืน compiled code ของ src: dist ก่อน (ถ้า precompile เปิด) ไม่งั้น/ล้มเหลว → compile .jsx เอง */
+  async function getCode(src) {
+    if (window._USE_DIST) {
+      var c = await loadDistCode(src);
+      if (c != null) return c;   /* dist ไฟล์นี้หาย → ตกไป compile .jsx เองเฉพาะไฟล์นี้ */
+    }
+    return compileJsx(src);
   }
 
-  /* โหลด ui ก่อน จากนั้น compile views-main + views-analytics + views-quote พร้อมกัน
+  function loadJsx(src) {
+    return getCode(src).then(function (code) { injectCode(code); });
+  }
+
+  /* อ่าน dist/manifest.json — คืน true เฉพาะเมื่อ precompile "เปิดใช้จริง" (มี build มา)
+     ไม่มี/อ่านไม่ได้/enabled:false → false → เดินเส้นทางเดิม compile .jsx ในเบราว์เซอร์
+     (= deploy โค้ดนี้โดยยังไม่ตั้ง build ก็ไม่มีอะไรเปลี่ยน — ปลอดภัย) */
+  async function loadDistManifest() {
+    try {
+      var p = window._distManifestPre || fetch('dist/manifest.json');
+      window._distManifestPre = null;
+      var r = await p;
+      if (!r || !r.ok) return false;
+      var m = await r.json();
+      return !!(m && m.enabled && m.files);
+    } catch (_) { return false; }
+  }
+
+  /* โหลด ui ก่อน จากนั้นเตรียม views-main/analytics/quote/attendance พร้อมกัน
      แล้ว inject ตามลำดับ (views-main ก่อนเสมอ, views-quote ใช้ component จากทั้งคู่) */
   // i18n.jsx ต้องโหลด "ก่อน" ui.jsx — ui.jsx ใช้ t()/useLang()/DMJ_LANGS จากไฟล์นี้
-  window._appBoot = loadJsx('i18n.jsx')
+  window._appBoot = loadDistManifest()
+    .then(function (useDist) {
+      window._USE_DIST = useDist;
+      /* จำ hint ให้ head รอบหน้า prefetch ตรงเส้นทางตั้งแต่ต้น (dist ↔ jsx) */
+      try {
+        if (useDist) localStorage.setItem('dmj_use_dist', '1');
+        else localStorage.removeItem('dmj_use_dist');
+      } catch (_) {}
+      return loadJsx('i18n.jsx');
+    })
     .then(function () { return loadJsx('ui.jsx'); })
     .then(function () {
-      return Promise.all([compileJsx('views-main.jsx'), compileJsx('views-analytics.jsx'), compileJsx('views-quote.jsx'), compileJsx('views-attendance.jsx')]);
+      return Promise.all([getCode('views-main.jsx'), getCode('views-analytics.jsx'), getCode('views-quote.jsx'), getCode('views-attendance.jsx')]);
     })
     .then(function (codes) {
       injectCode(codes[0]); /* views-main ก่อน */

@@ -1,6 +1,17 @@
 {
   "name": "dmj-inventory-dashboard",
   "private": true,
-  "scripts": { "test": "vitest run", "test:watch": "vitest", "test:coverage": "vitest run --coverage", "test:browser": "bash tests/browser/setup.sh && node tests/browser/run.cjs" },
-  "devDependencies": { "vitest": "^2.0.0", "@vitest/coverage-v8": "^2.0.0" }
+  "scripts": {
+    "build": "node scripts/build-jsx.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:browser": "bash tests/browser/setup.sh && node tests/browser/run.cjs"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.0",
+    "@babel/preset-react": "^7.24.0",
+    "@vitest/coverage-v8": "^2.0.0",
+    "vitest": "^2.0.0"
+  }
 }
