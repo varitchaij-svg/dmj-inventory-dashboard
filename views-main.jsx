@@ -117,27 +117,37 @@ async function loadImgSafe(url) {
 // ── loadImgForCard: โหลดรูปผ่าน GAS proxy เพื่อหลีกเลี่ยง CORS tainted canvas ──
 // ใช้กับ downloadSupplierCardsPdf เพื่อให้ canvas.toDataURL() ทำงานได้จริง
 // fallback คืน null (canvas จะใช้ gradient placeholder แทน)
-async function loadImgForCard(imageUrl) {
+// ⚠️ proxy 1 คำขอ = 1 GAS execution + UrlFetchApp (ช้า) — เดิมยิงพร้อมกัน 59 ใบ (Promise.all)
+// GAS รับ execution พร้อมกันได้จำกัด (executeAs USER_DEPLOYING = user เดียวกันทั้งหมด) →
+// หลายใบ timeout/ถูกปฏิเสธ → รูปหายเป็นกระดาน · แก้: (1) จำกัด concurrency (downloadSupplierCardsPdf)
+// (2) มี timeout จริงที่ fetch เอง (fetch ไม่มี timeout ในตัว — ค้างได้ตลอดกาล) (3) retry 1 ครั้ง
+async function loadImgForCard(imageUrl, attempt) {
   if (!imageUrl) return null;
   var base = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null;
-  if (base) {
-    try {
-      var proxyUrl = new URL(base);
-      proxyUrl.searchParams.set('action', 'imgProxy');
-      proxyUrl.searchParams.set('u', imageUrl);
-      var resp = await fetch(proxyUrl.toString());
-      var data = await dmjJson(resp);
-      if (data && data.d) {
-        return await new Promise(function(resolve) {
-          var img = new window.Image();
-          var t = setTimeout(function() { resolve(null); }, 8000);
-          img.onload = function() { clearTimeout(t); resolve(img); };
-          img.onerror = function() { clearTimeout(t); resolve(null); };
-          img.src = data.d;
-        });
-      }
-    } catch(e) { /* proxy failed → ใช้ gradient placeholder */ }
-  }
+  if (!base) return null;
+  try {
+    var proxyUrl = new URL(base);
+    proxyUrl.searchParams.set('action', 'imgProxy');
+    proxyUrl.searchParams.set('u', imageUrl);
+    // AbortController: ตัดคำขอที่ค้างเกิน 20 วิ (proxy ดึงรูปจาก ZORT + base64 encode อาจนาน)
+    var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var to = ctrl ? setTimeout(function() { ctrl.abort(); }, 20000) : null;
+    var resp = await fetch(proxyUrl.toString(), ctrl ? { signal: ctrl.signal } : {});
+    if (to) clearTimeout(to);
+    var data = await dmjJson(resp);
+    if (data && data.d) {
+      var img = await new Promise(function(resolve) {
+        var im = new window.Image();
+        var t = setTimeout(function() { resolve(null); }, 10000);
+        im.onload = function() { clearTimeout(t); resolve(im); };
+        im.onerror = function() { clearTimeout(t); resolve(null); };
+        im.src = data.d;
+      });
+      if (img) return img;
+    }
+  } catch(e) { /* proxy/เน็ตพลาด → ลองใหม่/placeholder */ }
+  // retry 1 ครั้ง (ส่วนใหญ่ที่พลาดคือ timeout ตอน GAS แน่น — รอบสองมักผ่าน)
+  if (!attempt) return loadImgForCard(imageUrl, 1);
   return null;
 }
 
@@ -185,10 +195,18 @@ function clampTextWidth(ctx, text, maxW) {
   return s + '…';
 }
 
-// ── drawSupplierPdfCard: การ์ดสินค้า 1 ใบ สำหรับตาราง PDF A4 (12 การ์ด/หน้า 3×4) ──
-// สัดส่วน/ระยะห่างวัดมาจาก mockup ที่เจ้าของอนุมัติแล้ว (ดู session ที่ทำ artifact preview) —
-// การ์ดนี้เกือบจัตุรัส (ไม่ใช่การ์ดสูงแบบในแอป) เพราะต้องพอดีกับตาราง A4 12 ช่อง
+// ── drawSupplierPdfCard: การ์ดสินค้า 1 ใบ สำหรับตาราง PDF A4 (9 การ์ด/หน้า 3×3) ──
 // เรียกจาก downloadSupplierCardsPdf เท่านั้น — Wc/Hc คือขนาดช่องในตาราง (px ที่ resolution พิมพ์)
+//
+// ⚠️ เลย์เอาต์ "ยึดข้อความไว้ก้อนล่าง สูงคงที่ตาม W · รูปกินพื้นที่ที่เหลือ" โดยตั้งใจ:
+//   1. ขนาดตัวอักษรอิงความ "กว้าง" การ์ด (W) ล้วน — ทุก density ใช้ 3 คอลัมน์ การ์ดจึงกว้างเท่ากัน
+//      → ตัวอักษรขนาดเท่ากันเป๊ะไม่ว่าจะ 9 หรือ 12 การ์ด/หน้า · เปลี่ยนจำนวน/หน้าได้โดยไม่พังสัดส่วน
+//   2. การ์ดสูงขึ้น (9/หน้า) → "รูปใหญ่ขึ้นเอง" (imgBandH = H − ก้อนข้อความ) ตรงกับที่เจ้าของขอ
+//      "รูปใหญ่/ชัดสุด" · ก้อนข้อความล่างสูงเท่าเดิมทุก density
+//   3. ⚠️ **clamp ข้อความทุกชิ้น** (SKU/ชื่อสี/ชื่อสินค้า/วันที่/คงเหลือ/ราคา/แยกคลัง) เทียบความกว้าง
+//      ที่วัดด้วย measureText — เพราะ measure กับ draw ใช้ฟอนต์ตัวเดียวกันบนเครื่องเดียวกัน จึงกัน
+//      "ตัวหนังสือตกขอบ" ได้ทุกเครื่องแม้ฟอนต์กว้างต่างกัน (iOS ตกไปใช้ฟอนต์ไทยที่กว้างกว่า
+//      → ของเดิมที่ไม่ clamp บรรทัด "แยกคลัง"/"ชื่อสี" ล้นขอบขวาบนมือถือจริง ทั้งที่บนเทสต์ไม่ล้น)
 function drawSupplierPdfCard(p, img, accentColor, Wc, Hc) {
   var FONT = '\'Sarabun\',\'Noto Sans Thai\',\'Segoe UI\',Arial,sans-serif';
   var acc = accentColor || '#16a34a';
@@ -207,8 +225,31 @@ function drawSupplierPdfCard(p, img, accentColor, Wc, Hc) {
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   var W = Wc, H = Hc;
+  var PAD = W * 0.04;
 
-  var CR = W * 0.045; // border-radius ของการ์ด
+  // ── ขนาดตัวอักษร (อิง W ล้วน) ──
+  var fSku = W * 0.058, fColor = W * 0.041, fName = W * 0.05, fDate = W * 0.038,
+      fLab = W * 0.045, fVal = W * 0.07, fBrk = W * 0.04;
+  var nameLineH = fName * 1.3;
+  var rowGap = W * 0.02;
+  var padTop = W * 0.03, padBot = W * 0.035;
+  var chipH = fDate + W * 0.028;
+
+  // ── ก้อนข้อความสูง "คงที่" (จองพื้นที่สูงสุด: ชื่อ 2 บรรทัด + วันที่ + แยกคลัง) ──
+  // เพื่อให้ imgBandH เท่ากันทุกใบ → รูปในตารางเรียงตรงกันสวยงาม (การ์ดที่ข้อมูลน้อยกว่าจะมี
+  // ช่องว่างท้ายเล็กน้อย ยอมแลกกับตารางที่รูปเรียงระดับเดียวกัน — catalog อ่านง่ายกว่า)
+  ctx.textBaseline = 'alphabetic';
+  ctx.font = 'bold ' + fName + 'px ' + FONT;
+  var nameLines = wrapTextLines(ctx, p.name || '', W - PAD * 2, 2);
+  var reserveTextBlockH = padTop + fSku * 1.05 + rowGap + 2 * nameLineH
+                        + (chipH + rowGap)                 // จองที่ชิปวันที่เสมอ
+                        + rowGap * 0.6 + 1 + rowGap * 0.9 + fVal * 1.05
+                        + (rowGap * 0.35 + fBrk * 1.2)     // จองที่แยกคลังเสมอ
+                        + padBot;
+  var imgBandH = Math.max(H * 0.30, H - reserveTextBlockH);
+
+  // ── การ์ด (พื้นขาว + มุมโค้ง) ──
+  var CR = W * 0.04;
   function cardPath() {
     ctx.beginPath();
     ctx.moveTo(CR, 0);
@@ -222,9 +263,8 @@ function drawSupplierPdfCard(p, img, accentColor, Wc, Hc) {
   ctx.fillStyle = '#fff';
   ctx.fill();
 
-  // ── โซนรูป (44% ของความสูงการ์ด) — รูปแบบ fit เต็มกรอบ ไม่ครอปสินค้า ──
-  var imgBandH = H * 0.436;
-  var IPAD = W * 0.022;
+  // ── โซนรูป (บนสุด สูง imgBandH) — รูปแบบ fit เต็มกรอบ ไม่ครอปสินค้า ──
+  var IPAD = W * 0.02;
   ctx.save();
   cardPath(); ctx.clip(); // กันเนื้อรูปล้นออกนอกมุมโค้งของการ์ด
   var gBg = ctx.createLinearGradient(0, 0, 0, imgBandH);
@@ -251,7 +291,7 @@ function drawSupplierPdfCard(p, img, accentColor, Wc, Hc) {
     if (p.color && p.color.hex) {
       ctx.fillStyle = p.color.hex;
       ctx.beginPath();
-      ctx.arc(ix + iw / 2, iy + ih / 2, Math.min(iw, ih) * 0.16, 0, Math.PI * 2);
+      ctx.arc(ix + iw / 2, iy + ih / 2, Math.min(iw, ih) * 0.14, 0, Math.PI * 2);
       ctx.fill();
       ctx.strokeStyle = '#fff';
       ctx.lineWidth = W * 0.008;
@@ -273,11 +313,11 @@ function drawSupplierPdfCard(p, img, accentColor, Wc, Hc) {
   if (outOfStock || lowStock) {
     var badgeLabel = outOfStock ? 'หมด' : ('เหลือ ' + total);
     var badgeColor = outOfStock ? '#ef4444' : '#f97316';
-    var badgeFont = W * 0.046;
+    var badgeFont = W * 0.044;
     ctx.font = 'bold ' + badgeFont + 'px ' + FONT;
     ctx.textBaseline = 'middle';
-    var bw = ctx.measureText(badgeLabel).width + W * 0.028, bh = H * 0.058;
-    var bx = W - IPAD - bw, by = IPAD * 0.6;
+    var bw = ctx.measureText(badgeLabel).width + W * 0.028, bh = badgeFont * 1.5;
+    var bx = W - IPAD * 1.4 - bw, by = IPAD * 1.4;
     rrectFill(ctx, bx, by, bw, bh, bh * 0.28, badgeColor);
     ctx.fillStyle = '#fff';
     ctx.textAlign = 'center';
@@ -285,29 +325,26 @@ function drawSupplierPdfCard(p, img, accentColor, Wc, Hc) {
     ctx.textBaseline = 'alphabetic';
   }
 
-  // ── body ──────────────────────────────────────────────────────────
-  var PAD = W * 0.0383;
-  var y = imgBandH + H * 0.034;
+  // ── ก้อนข้อความล่าง (ไล่จาก imgBandH ลงมา — จองพื้นที่คงที่ รูปเรียงระดับเดียวกันทุกใบ) ──
+  var y = imgBandH + padTop;
   ctx.textAlign = 'left';
-  ctx.textBaseline = 'alphabetic';
 
-  // SKU (ซ้าย) + จุดสี/ชื่อสี (ขวา) — กันล้นด้วย clampTextWidth เผื่อ SKU ผิดปกติ/ยาวเกินรูปแบบ
-  var skuFont = W * 0.062;
-  ctx.font = 'bold ' + skuFont + 'px monospace';
+  // SKU (ซ้าย, clamp ≤54%) + จุดสี/ชื่อสี (ขวา, clamp ≤42%) — จองคนละครึ่ง ไม่ชน/ไม่ล้น
+  ctx.font = 'bold ' + fSku + 'px monospace';
   ctx.fillStyle = '#374151';
-  var skuBaseline = y + skuFont * 0.82;
-  ctx.fillText(clampTextWidth(ctx, p.sku || '', (W - PAD * 2) * 0.55), PAD, skuBaseline);
+  var skuBase = y + fSku * 0.82;
+  ctx.fillText(clampTextWidth(ctx, p.sku || '', (W - PAD * 2) * 0.54), PAD, skuBase);
 
   if (p.color && p.color.hex) {
-    var cname = p.color.name || '';
-    var colorFont = W * 0.043;
-    ctx.font = colorFont + 'px ' + FONT;
+    ctx.font = fColor + 'px ' + FONT;
+    var cname = p.color.name ? clampTextWidth(ctx, p.color.name, (W - PAD * 2) * 0.42) : '';
     var cnameW = cname ? ctx.measureText(cname).width : 0;
-    var dotR = W * 0.023;
-    var dotCx = W - PAD - (cname ? cnameW + W * 0.018 : dotR) - dotR;
+    var dotR = W * 0.022;
+    var nameRight = W - PAD;
+    var dotCx = nameRight - cnameW - (cname ? W * 0.016 : 0) - dotR;
     ctx.fillStyle = p.color.hex;
     ctx.beginPath();
-    ctx.arc(dotCx, skuBaseline - skuFont * 0.32, dotR, 0, Math.PI * 2);
+    ctx.arc(dotCx, skuBase - fColor * 0.35, dotR, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = 'rgba(0,0,0,0.12)';
     ctx.lineWidth = 1;
@@ -315,74 +352,71 @@ function drawSupplierPdfCard(p, img, accentColor, Wc, Hc) {
     if (cname) {
       ctx.fillStyle = '#6b7280';
       ctx.textAlign = 'right';
-      ctx.fillText(cname, W - PAD, skuBaseline);
+      ctx.fillText(cname, nameRight, skuBase);
       ctx.textAlign = 'left';
     }
   }
-  y += H * 0.078;
+  y += fSku * 1.05 + rowGap;
 
-  // ชื่อสินค้า (ตัวหนา สูงสุด 2 บรรทัด) — wrapTextLines ตัดที่ขอบคำ (ช่องว่าง) เท่านั้น
-  // ผ่าน clampTextWidth ทับอีกชั้นกันชื่อที่พิมพ์ติดกันไม่มีวรรคเลยล้นขอบการ์ด (ดูคอมเมนต์
-  // ของ clampTextWidth) — ข้อความปกติที่มีวรรคอยู่แล้วจะพอดีจน clamp ไม่ต้องตัดอะไรเพิ่ม
-  var nameFont = W * 0.052;
-  ctx.font = 'bold ' + nameFont + 'px ' + FONT;
+  // ชื่อสินค้า (ตัวหนา สูงสุด 2 บรรทัด · clamp ทุกบรรทัด กันชื่อไม่มีวรรคล้นขอบ)
+  ctx.font = 'bold ' + fName + 'px ' + FONT;
   ctx.fillStyle = '#111827';
-  var nameLineH = H * 0.0715;
-  var nameMaxW = W - PAD * 2;
-  var nameLines = wrapTextLines(ctx, p.name || '', nameMaxW, 2);
   nameLines.forEach(function(line) {
-    ctx.fillText(clampTextWidth(ctx, line, nameMaxW), PAD, y + nameFont * 0.82);
+    ctx.fillText(clampTextWidth(ctx, line, W - PAD * 2), PAD, y + fName * 0.82);
     y += nameLineH;
   });
-  y += H * 0.01;
 
-  // ชิปวันที่เข้าล่าสุด + จำนวนที่เข้า (สีเขียวอ่อน — ตามที่เจ้าของขอให้เห็นชัด)
+  // ชิปวันที่เข้าล่าสุด + จำนวนที่เข้า (สีเขียวอ่อน เห็นชัด — ตามที่เจ้าของขอ)
   if (p.lastStockInDate) {
-    var dateFont = W * 0.04;
+    ctx.font = '600 ' + fDate + 'px ' + FONT;
     var dateLabel = '📅 เข้าล่าสุด ' + p.lastStockInDate + (p.lastStockInQty ? (' · ' + p.lastStockInQty + ' ชิ้น') : '');
-    ctx.font = '600 ' + dateFont + 'px ' + FONT;
     dateLabel = clampTextWidth(ctx, dateLabel, W - PAD * 2);
-    var chipTw = ctx.measureText(dateLabel).width;
-    var chipPadX = W * 0.016, chipH = H * 0.046;
-    rrectFill(ctx, PAD, y, chipTw + chipPadX * 2, chipH, chipH * 0.32, '#eef7ee');
+    var dTw = ctx.measureText(dateLabel).width;
+    var chipPadX = W * 0.015;
+    rrectFill(ctx, PAD, y, dTw + chipPadX * 2, chipH, chipH * 0.32, '#eef7ee');
     ctx.fillStyle = '#2c6a39';
-    ctx.fillText(dateLabel, PAD + chipPadX, y + chipH / 2 + dateFont * 0.32);
+    ctx.fillText(dateLabel, PAD + chipPadX, y + chipH / 2 + fDate * 0.34);
+    y += chipH + rowGap;
   }
 
-  // ── ท้ายการ์ด: ยึดตำแหน่งจากขอบล่างเสมอ ไม่ชนส่วนบนไม่ว่าชื่อจะกี่บรรทัด ──
-  var dividerY = H * 0.7553;
+  // ── ท้ายการ์ด: เส้นประ + คงเหลือ/ราคา + แยกคลัง ──
+  y += rowGap * 0.6;
   ctx.strokeStyle = '#e5e7eb';
   ctx.lineWidth = 1;
   ctx.setLineDash([W * 0.01, W * 0.0075]);
-  ctx.beginPath(); ctx.moveTo(PAD, dividerY); ctx.lineTo(W - PAD, dividerY); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(PAD, y); ctx.lineTo(W - PAD, y); ctx.stroke();
   ctx.setLineDash([]);
+  y += 1 + rowGap * 0.9;
 
-  var footBaseline = H * 0.883;
-  var labFont = W * 0.048, valFont = W * 0.074;
+  var footBase = y + fVal * 0.82;
   ctx.textAlign = 'left';
-  ctx.font = '600 ' + labFont + 'px ' + FONT;
+  ctx.font = '600 ' + fLab + 'px ' + FONT;
   ctx.fillStyle = '#9ca3af';
-  ctx.fillText('คงเหลือ', PAD, footBaseline);
+  ctx.fillText('คงเหลือ', PAD, footBase);
   var labW = ctx.measureText('คงเหลือ').width;
   var qtyStr = String(total <= 0 ? 0 : total);
-  ctx.font = '800 ' + valFont + 'px ' + FONT;
+  ctx.font = '800 ' + fVal + 'px ' + FONT;
   ctx.fillStyle = outOfStock ? '#ef4444' : lowStock ? '#f97316' : '#111827';
-  ctx.fillText(qtyStr, PAD + labW + W * 0.014, footBaseline);
+  // จอง budget: คงเหลือ (ซ้าย ≤50%) · ราคา (ขวา ≤46%) — clamp กันชนกลางการ์ด
+  qtyStr = clampTextWidth(ctx, qtyStr, (W - PAD * 2) * 0.5 - labW - W * 0.02);
+  ctx.fillText(qtyStr, PAD + labW + W * 0.016, footBase);
 
   if (price) {
     ctx.textAlign = 'right';
-    ctx.font = '800 ' + valFont + 'px ' + FONT;
+    ctx.font = '800 ' + fVal + 'px ' + FONT;
     ctx.fillStyle = acc;
-    ctx.fillText('฿' + price, W - PAD, footBaseline);
+    ctx.fillText(clampTextWidth(ctx, '฿' + price, (W - PAD * 2) * 0.46), W - PAD, footBase);
     ctx.textAlign = 'left';
   }
+  y += fVal * 1.05;
 
-  // แยกคลัง/หน้าร้าน
+  // แยกคลัง/หน้าร้าน (clamp กันล้นขอบขวาบนฟอนต์กว้าง)
   if (hasBreakdown) {
-    var brkFont = W * 0.045;
-    ctx.font = brkFont + 'px ' + FONT;
+    y += rowGap * 0.35;
+    ctx.font = fBrk + 'px ' + FONT;
     ctx.fillStyle = '#9ca3af';
-    ctx.fillText('🏪 หน้าร้าน ' + (p.qtyStore || 0) + ' · 🏭 คลัง ' + (p.qtyWH || 0), PAD, H * 0.9614);
+    var brk = '🏪 หน้าร้าน ' + (p.qtyStore || 0) + ' · 🏭 คลัง ' + (p.qtyWH || 0);
+    ctx.fillText(clampTextWidth(ctx, brk, W - PAD * 2), PAD, y + fBrk * 0.85);
   }
 
   return c;
@@ -609,28 +643,38 @@ function drawTop10CatCanvas(g, imgMap, cc, role, periodLabel) {
   return c;
 }
 
-// ── downloadSupplierCardsPdf: PDF แคตตาล็อกสินค้า A4 (12 การ์ด/หน้า 3×4) ──
+// ── downloadSupplierCardsPdf: PDF แคตตาล็อกสินค้า A4 (9 การ์ด/หน้า 3×3) ──
 // แทนที่ downloadSupplierCardsZip เดิม (ZIP รูปแยกไฟล์) ตามที่เจ้าของขอ (ส.ค. 2569)
-// ดีไซน์ผ่านการอนุมัติจากเจ้าของแล้ว: 12 การ์ด/หน้า · รูปแบบ fit (ไม่ครอปสินค้า) ·
-// ชิปวันที่เข้าล่าสุดสีเขียวเห็นชัด · ราคา/คงเหลือ/แยกคลัง-หน้าร้าน/สี ครบทุกใบ
-// ⚠️ ปรับจำนวนการ์ดต่อหน้า/สัดส่วนใหม่ ต้องคำนวณเรขาคณิต (คอมเมนต์ด้านล่าง) ใหม่ทั้งชุด
-// ไม่ใช่แค่เปลี่ยน COLS/ROWS เฉย ๆ — cellW/cellH ผูกกับสัดส่วนการ์ดที่ hard-code ไว้ใน
-// drawSupplierPdfCard (เช่น imgBandH = H*0.436) ถ้าอัตราส่วนช่องเปลี่ยนมากจะล้น/บีบ
+// 9 การ์ด/หน้า (เจ้าของขอ "รูปใหญ่ขึ้น" หลังเห็น 12/หน้าจริง) · รูปแบบ fit (ไม่ครอปสินค้า) ·
+// ชิปวันที่เข้าล่าสุดเห็นชัด · ราคา/คงเหลือ/แยกคลัง-หน้าร้าน/สี ครบทุกใบ
+// ⚠️ drawSupplierPdfCard คำนวณสัดส่วนเองจาก Wc/Hc (ก้อนข้อความสูงคงที่ตาม W · รูปกินที่เหลือ)
+// จึงเปลี่ยน COLS/ROWS ได้โดยไม่ต้องแก้ฟังก์ชันวาด — การ์ดสูงขึ้น = รูปใหญ่ขึ้นเอง
 async function downloadSupplierCardsPdf(groupName, items, accentColor, onProgress) {
   await ensureJsPDF();
   var acc = accentColor || '#16a34a';
 
-  // load images in parallel ผ่าน GAS proxy (หลีก CORS tainted canvas) — เหมือนเดิม
+  // ── โหลดรูปผ่าน GAS proxy แบบจำกัด concurrency ──
+  // ⚠️ เดิม Promise.all ยิงทุกใบพร้อมกัน (59 คำขอ) → GAS แน่น → รูปหายเป็นกระดาน (เจอจริง)
+  // จำกัดทีละ POOL ใบ + retry (ใน loadImgForCard) → รูปโหลดครบขึ้นมาก แลกกับช้าลงนิด
   var imgMap = {};
-  await Promise.all(items.map(async function(p) {
-    if (p.imageUrl) imgMap[p.sku] = await loadImgForCard(p.imageUrl);
-    if (onProgress) onProgress('load', p.sku);
-  }));
+  var withImg = items.filter(function(p) { return p.imageUrl; });
+  var loaded = 0, cursor = 0, POOL = 4;
+  async function imgWorker() {
+    while (cursor < withImg.length) {
+      var p = withImg[cursor++];
+      imgMap[p.sku] = await loadImgForCard(p.imageUrl);
+      loaded++;
+      if (onProgress) onProgress('load', loaded, withImg.length);
+    }
+  }
+  var workers = [];
+  for (var w = 0; w < Math.min(POOL, withImg.length); w++) workers.push(imgWorker());
+  await Promise.all(workers);
 
-  // ── เรขาคณิตหน้า A4 (มม.) — 12 การ์ด/หน้า (3 คอลัมน์ × 4 แถว) ──
+  // ── เรขาคณิตหน้า A4 (มม.) — 9 การ์ด/หน้า (3 คอลัมน์ × 3 แถว) ──
   var PAGE_W = 210, PAGE_H = 297;
   var MARGIN = 9, HEADER_H = 14, HEADER_GAP = 3, FOOTER_H = 8, FOOTER_GAP = 3, GAP = 3.5;
-  var COLS = 3, ROWS = 4;
+  var COLS = 3, ROWS = 3;
   var PER_PAGE = COLS * ROWS;
   var usableW = PAGE_W - MARGIN * 2;
   var cellW = (usableW - GAP * (COLS - 1)) / COLS;
@@ -682,15 +726,15 @@ async function downloadSupplierCardsPdf(groupName, items, accentColor, onProgres
     var dataUrl;
     try {
       var canvas = drawSupplierPdfCard(p, imgForCard, acc, cardWpx, cardHpx);
-      dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+      dataUrl = canvas.toDataURL('image/jpeg', 0.94);
       if (!dataUrl || dataUrl === 'data:,') throw new Error('tainted');
     } catch (e) {
       // canvas tainted (CORS) → วาดใหม่โดยไม่ใส่รูป (เหมือนพฤติกรรมเดิมของ ZIP)
       var c2 = drawSupplierPdfCard(p, null, acc, cardWpx, cardHpx);
-      dataUrl = c2.toDataURL('image/jpeg', 0.92);
+      dataUrl = c2.toDataURL('image/jpeg', 0.94);
     }
     doc.addImage(dataUrl, 'JPEG', x, y, cellW, cellH);
-    if (onProgress) onProgress('draw', p.sku);
+    if (onProgress) onProgress('draw', i + 1, items.length);
   }
 
   if (items.length === 0) drawPageChrome(0); // เผื่อ group ว่าง (กันเคสขอบ)
@@ -3271,7 +3315,8 @@ function CategoryView({ data, role, onNav }) {
   // Android back: ถ้ากำลังดู supplier view → กด back = ล้าง supplier filter
   useBackHandler(globalVendor ? () => { setGlobalVendor(null); setPage(1); } : null);
   const [viewMode, setViewMode] = uS('grid');
-  const [dlGroup, setDlGroup] = uS(null); // ชื่อ group ที่กำลัง download ZIP (null = ไม่มี)
+  const [dlGroup, setDlGroup] = uS(null); // ชื่อ group ที่กำลังสร้าง PDF (null = ไม่มี)
+  const [dlProg, setDlProg]   = uS('');   // ข้อความคืบหน้า เช่น "โหลดรูป 20/59" (โหลดรูป 59 ใบผ่าน proxy ช้า ต้องบอกผู้ใช้)
   // ── floating button drag refs ──
   const floatRef = React.useRef(null);
   const dragRef  = React.useRef({ active: false, sx: 0, sy: 0, ox: 0, oy: 0, moved: false });
@@ -4069,10 +4114,14 @@ function CategoryView({ data, role, onNav }) {
                 <button
                   disabled={dlGroup === globalVendor}
                   onClick={async () => {
-                    setDlGroup(globalVendor);
-                    try { await downloadSupplierCardsPdf(globalVendor, filtered, '#16a34a'); }
+                    setDlGroup(globalVendor); setDlProg('');
+                    try {
+                      await downloadSupplierCardsPdf(globalVendor, filtered, '#16a34a', (phase, n, tot) => {
+                        setDlProg(phase === 'load' ? `โหลดรูป ${n}/${tot}` : `จัดหน้า ${n}/${tot}`);
+                      });
+                    }
                     catch(e) { alert('สร้าง PDF ไม่สำเร็จ: ' + (e.message || e)); }
-                    finally { setDlGroup(null); }
+                    finally { setDlGroup(null); setDlProg(''); }
                   }}
                   style={{
                     padding:'8px 14px', borderRadius:20, border:'1.5px solid var(--g-500)',
@@ -4083,7 +4132,7 @@ function CategoryView({ data, role, onNav }) {
                     display:'flex', alignItems:'center', gap:6,
                     fontFamily:'inherit',
                   }}>
-                  {dlGroup === globalVendor ? '⏳ กำลังสร้าง…' : '⬇️ ดาวน์โหลด PDF'}
+                  {dlGroup === globalVendor ? ('⏳ ' + (dlProg || 'กำลังสร้าง…')) : '⬇️ ดาวน์โหลด PDF'}
                 </button>
               )}
             </div>
@@ -4318,17 +4367,19 @@ function CategoryView({ data, role, onNav }) {
                         🟡 {g.low} ใกล้หมด
                       </span>
                     )}
-                    {/* ปุ่มดาวน์โหลดการ์ดสินค้าทุกตัวใน group เป็น PDF (ตาราง A4 12 การ์ด/หน้า) */}
+                    {/* ปุ่มดาวน์โหลดการ์ดสินค้าทุกตัวใน group เป็น PDF (ตาราง A4 9 การ์ด/หน้า) */}
                     <button
                       disabled={dlGroup === g.name}
                       onClick={async () => {
-                        setDlGroup(g.name);
+                        setDlGroup(g.name); setDlProg('');
                         try {
-                          await downloadSupplierCardsPdf(g.name, g.items, '#16a34a');
+                          await downloadSupplierCardsPdf(g.name, g.items, '#16a34a', (phase, n, tot) => {
+                            setDlProg(phase === 'load' ? `โหลดรูป ${n}/${tot}` : `จัดหน้า ${n}/${tot}`);
+                          });
                         } catch(e) {
                           alert('สร้าง PDF ไม่สำเร็จ: ' + (e.message || e));
                         } finally {
-                          setDlGroup(null);
+                          setDlGroup(null); setDlProg('');
                         }
                       }}
                       style={{
@@ -4339,7 +4390,7 @@ function CategoryView({ data, role, onNav }) {
                         fontSize:11, fontWeight:600, flexShrink:0,
                         display:'flex', alignItems:'center', gap:4,
                       }}>
-                      {dlGroup === g.name ? '⏳ กำลังสร้าง…' : '⬇️ PDF'}
+                      {dlGroup === g.name ? ('⏳ ' + (dlProg || 'กำลังสร้าง…')) : '⬇️ PDF'}
                     </button>
                   </div>
                   <div className="product-grid" style={{width:"100%",boxSizing:"border-box",minWidth:0}}>
