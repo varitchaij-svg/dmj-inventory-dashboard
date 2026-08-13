@@ -1670,10 +1670,18 @@ function App() {
   usE(() => {
     if (authPhase !== "needLogin" || !handoffWaiting) return;
     let stop = false;
+    // ⚠️ กันยิงซ้อน: claimLoginHandoff แต่ละครั้งเป็น GAS call (1-4 วิบน cold start) แต่ interval
+    // 4 วิ + onWake (visibilitychange/focus) ยิงตามเวลาไม่รอผลตัวก่อน → มี claim ค้างพร้อมกัน
+    // หลายตัว · GAS deploy แบบ executeAs USER_DEPLOYING จัดคิว execution ของ user เดียวกัน
+    // → 14 claim ต่อคิวกัน + เบียด me/payload ให้ช้าลงไปอีก (เห็นจริงใน BootTrace: claim รัว ~15 ครั้ง
+    // ระหว่างล็อกอิน) · มี claim ค้างอยู่ = ข้ามรอบนี้ไป รอผลตัวเดิมก่อน (ไม่เสียการตอบสนอง —
+    // claim ที่ค้างอาจสำเร็จเองอยู่แล้ว)
+    let inFlight = false;
     const tick = async () => {
-      if (stop) return;
+      if (stop || inFlight) return;
       if (!readPendingHandoff()) { setHandoffWaiting(false); return; } // หมดอายุแล้ว
-      await claimHandoff();
+      inFlight = true;
+      try { await claimHandoff(); } finally { inFlight = false; }
     };
     const id = setInterval(tick, 4000);
     const onWake = () => { if (!document.hidden) tick(); };
