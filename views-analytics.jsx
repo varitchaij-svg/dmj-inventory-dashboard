@@ -8242,16 +8242,35 @@ function QuoteFollowupView({ data, role }) {
   const load = async () => {
     if (!SHEET_DEPLOY_URL) { setErr("ยังไม่ได้เชื่อมต่อ Sheet"); setLoading(false); return; }
     setLoading(true); setErr(null);
-    try {
-      const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
-      const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getQuotationSummary&_t=${Date.now()}`, { cache: "no-store" });
-      const d = await dmjJson(res);
-      if (d.error && (!d.items || !d.items.length)) throw new Error(d.error);
-      setItems(Array.isArray(d.items) ? d.items : []);
-      setSalesList(Array.isArray(d.salesList) ? d.salesList : []);
-      setStatusBk(d.statusBreakdown || {});
-      setGenAt(d.generatedAt || null);
-    } catch (e) { setErr(e.message); } finally { setLoading(false); }
+    const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
+    // อ่านล้วน (idempotent — แค่ดึงสรุปจาก ZORT ไม่แก้ข้อมูล) → **ลองซ้ำได้ปลอดภัย** เมื่อ GAS
+    // ตอบ HTML/404 ชั่วคราว · getQuotationSummary เป็น doGet ยาว (ยิง ZORT ได้ถึง 30 หน้า) จึงเจอ
+    // googleusercontent 404/ลิงก์หมดอายุ ได้บ่อยกว่า getQuotationForPrint ด้วยซ้ำ (บทเรียน Phase 7.4)
+    // เดิมใช้ `fetch` ดิบ ไม่มี timeout/retry เลย → blip เดียว = ทั้งแท็บขึ้นแดง "[รหัส 404]" โหลดอะไร
+    // ไม่ได้ · dmjFetch = แนบ sessionToken + เพดานเวลา · retry แบบเดียวกับ syncGetQuotationForPrint
+    let lastErr = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) await new Promise(r => setTimeout(r, 700 * attempt));   // 0 · 0.7 · 1.4 วิ
+      try {
+        const res = await dmjFetch(`${SHEET_DEPLOY_URL}${sep}action=getQuotationSummary&_t=${Date.now()}`,
+          { cache: "no-store", dmjTimeoutMs: 25000 });
+        const d = await dmjJson(res);
+        if (d.error && (!d.items || !d.items.length)) throw new Error(d.error);
+        setItems(Array.isArray(d.items) ? d.items : []);
+        setSalesList(Array.isArray(d.salesList) ? d.salesList : []);
+        setStatusBk(d.statusBreakdown || {});
+        setGenAt(d.generatedAt || null);
+        setErr(null); setLoading(false); return;
+      } catch (e) {
+        lastErr = e;
+        // ลองซ้ำเฉพาะ "อ่านคำตอบไม่ได้" (HTML/404 = badjson) หรือเน็ต/timeout สะดุด — error จริง
+        // ที่ backend คืน JSON มา (d.error → new Error) ไม่เข้าเงื่อนไขนี้ จึงไม่ retry ให้เสียเวลา
+        const retryable = e && (e.dmjKind === "badjson" || e.name === "AbortError"
+          || e instanceof TypeError || /Failed to fetch|Load failed|NetworkError/i.test(String(e.message || "")));
+        if (!retryable) break;
+      }
+    }
+    setErr(dmjErrText(lastErr)); setLoading(false);
   };
   uE(() => { load(); }, []);
 

@@ -124,3 +124,40 @@ describe('meta — syncGetQuotationForPrint ต้องลองซ้ำเม
     expect(fn[0]).toMatch(/setTimeout\(r, 700 \* attempt\)/);
   });
 });
+
+// ── QuoteFollowupView.load() — โหลดสรุปทั้งแท็บ ก็ต้องทนต่อ 404/HTML ชั่วคราวเหมือนกัน ──
+// ที่มา (ส.ค. 2026): เซลเปิดแท็บ "ใบเสนอราคา" แล้ว "ใช้ไม่ได้" — ทั้งแท็บขึ้นแดง "[รหัส 404]"
+// getQuotationSummary เป็น doGet ยาว (ยิง ZORT ได้ถึง 30 หน้า) → เจอ googleusercontent 404
+// ชั่วคราวได้บ่อยกว่า getQuotationForPrint ด้วยซ้ำ · แต่ load() เดิมใช้ `fetch` ดิบ ไม่มี timeout/
+// retry เลย (cd27de5 แก้ getQuotationForPrint แต่หลุด load ตัวนี้ไป) → blip เดียว = ทั้งแท็บพัง
+// อ่านล้วน idempotent → ลองซ้ำได้ปลอดภัย เหมือน syncGetQuotationForPrint เป๊ะ
+describe('meta — QuoteFollowupView.load() ต้องทนต่อ GAS ตอบ HTML/404 ชั่วคราว', () => {
+  // มี const load หลายตัวในไฟล์ (หลาย view) — ผูกเฉพาะตัวที่ยิง getQuotationSummary
+  // ด้วย tempered-greedy กันข้ามไป load ของ view อื่น
+  const fn = VANA.match(/const load = async \(\) => \{(?:(?!const load = async)[\s\S])*?getQuotationSummary(?:(?!const load = async)[\s\S])*?\n  \};/);
+
+  it('เจอฟังก์ชัน load', () => { expect(fn).toBeTruthy(); });
+
+  it('ใช้ dmjFetch (แนบ sessionToken + เพดานเวลา) ไม่ใช่ fetch ดิบ', () => {
+    expect(fn[0]).toMatch(/dmjFetch\(/);
+    // ห้ามกลับไปใช้ `fetch(` ดิบ (ค้างไม่มี timeout = ปุ่มหมุนไม่จบ)
+    expect(fn[0]).not.toMatch(/[^j]fetch\(`/);
+    expect(fn[0]).toMatch(/dmjTimeoutMs/);
+  });
+
+  it('มีลูป retry 3 ครั้ง + backoff', () => {
+    expect(fn[0]).toMatch(/for \(let attempt = 0; attempt < 3; attempt\+\+\)/);
+    expect(fn[0]).toMatch(/setTimeout\(r, 700 \* attempt\)/);
+  });
+
+  it('ยังอ่านคำตอบผ่าน dmjJson (บทเรียนข้อ 13) ไม่ใช่ res.json()', () => {
+    expect(fn[0]).toMatch(/dmjJson\(res\)/);
+    expect(fn[0]).not.toMatch(/res\.json\(\)/);
+  });
+
+  it('ลองซ้ำเฉพาะ badjson/เน็ต/timeout — error จริงจาก backend (d.error) ไม่ retry', () => {
+    expect(fn[0]).toMatch(/badjson/);
+    expect(fn[0]).toMatch(/AbortError/);
+    expect(fn[0]).toMatch(/if \(!retryable\) break/);
+  });
+});
