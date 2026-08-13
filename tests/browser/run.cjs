@@ -625,8 +625,9 @@ function startServer() {
   // ⚠️ ต้องรันบนเบราว์เซอร์จริง — unit test เห็นแค่ค่าธง ไม่เห็นว่า **ปุ่มบนจอกดได้จริงไหม**
   // ทดสอบคู่กัน 2 role โดยตั้งใจ: ปลดกั้นให้ saler โดยเผลอปลดของหน้าร้านไปด้วย = เงียบสนิท
   for (const fsCase of [
-    { role: 'saler',      mustCount: false, title: 'นับหน้าร้าน' },
-    { role: 'frontstore', mustCount: true,  title: 'นับก่อนสั่ง' },
+    { role: 'saler',       mustCount: false, title: 'นับหน้าร้าน' },
+    { role: 'storedevice', mustCount: false, title: 'นับหน้าร้าน' },
+    { role: 'frontstore',  mustCount: true,  title: 'นับก่อนสั่ง' },
   ]) {
     const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
     let status = 'ok', note = '';

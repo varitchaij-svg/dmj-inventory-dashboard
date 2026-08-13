@@ -1,9 +1,9 @@
-// tests/saler-fs-count.test.js — saler กด "นับหน้าร้าน" ได้ แต่ไม่ถูกบังคับให้นับก่อนสั่ง
+// tests/saler-fs-count.test.js — saler/storedevice กด "นับหน้าร้าน" ได้ แต่ไม่ถูกบังคับให้นับก่อนสั่ง
 // ─────────────────────────────────────────────────────────────────────────────
-// เจ้าของสั่ง (ส.ค. 2026): "เพิ่มปุ่มกดเช็คสินค้าให้ตำแหน่ง saler"
+// เจ้าของสั่ง (ส.ค. 2026): "เพิ่มปุ่มกดเช็คสินค้าให้ตำแหน่ง saler" แล้วตามด้วย "เปิดเครื่องกลางด้วย"
 //
-// saler ยืนอยู่หน้าร้านเห็นชั้นวางจริง → ควรนับ/บันทึกยอดหน้าร้านได้เหมือน frontstore/employee
-// **แต่ห้ามบังคับ** เพราะงานหลักของ saler คือปิดการขายให้ทันลูกค้าที่ยืนรออยู่ตรงหน้า —
+// saler/storedevice ยืนอยู่หน้าร้านเห็นชั้นวางจริง → ควรนับ/บันทึกยอดหน้าร้านได้เหมือน
+// frontstore/employee **แต่ห้ามบังคับ** เพราะงานหลักคือปิดการขายให้ทันลูกค้าที่ยืนรออยู่ตรงหน้า —
 // บังคับนับก่อนสั่งเมื่อไหร่ = เอางานคนอื่นไปขวางการขาย
 //
 // เดิมมีธงตัวเดียว (`needFsCheck`) ทำหน้าที่ทั้ง "โชว์การ์ดนับ" และ "กั้นปุ่มยืนยัน" พร้อมกัน
@@ -49,12 +49,10 @@ const canCountFs = rolePredicate(PRODUCT_CARD, 'canCountFs', 'role');
 const ALL_ROLES = ['owner', 'dev', 'employee', 'warehouse', 'frontstore', 'saler', 'storedevice'];
 
 describe('ใครนับหน้าร้านได้ (canFsCheck)', () => {
-  for (const r of ['frontstore', 'employee', 'saler']) {
+  for (const r of ['frontstore', 'employee', 'saler', 'storedevice']) {
     it(`${r} → นับได้`, () => expect(canFsCheck(r)).toBe(true));
   }
-  // storedevice = เครื่องกลางที่ใช้ร่วมกันหลายคน — เจ้าของยังไม่ได้สั่งให้เปิด (ขอมาเฉพาะ saler)
-  // ถ้าวันหนึ่งอยากเปิดด้วย ต้องแก้ **ทั้ง canFsCheck และ canCountFs** แล้วอัปเดตเทสต์นี้
-  for (const r of ['owner', 'dev', 'warehouse', 'storedevice']) {
+  for (const r of ['owner', 'dev', 'warehouse']) {
     it(`${r} → ไม่มีการ์ดนับ`, () => expect(canFsCheck(r)).toBe(false));
   }
   it('role ว่าง/ไม่รู้จัก → ไม่โชว์การ์ดนับ (ไม่เดา)', () => {
@@ -67,11 +65,13 @@ describe('ใครถูกบังคับให้นับก่อนส�
   for (const r of ['frontstore', 'employee']) {
     it(`${r} → ยังบังคับเหมือนเดิม`, () => expect(mustFsCheck(r)).toBe(true));
   }
-  // ⭐ ข้อที่สำคัญที่สุดของไฟล์นี้ — saler นับได้ แต่ต้องไม่ถูกกั้นปุ่มยืนยันสั่ง
-  it('saler → นับได้ แต่ไม่ถูกบังคับ (ห้ามยุบ 2 ธงเป็นตัวเดียว)', () => {
-    expect(canFsCheck('saler')).toBe(true);
-    expect(mustFsCheck('saler')).toBe(false);
-  });
+  // ⭐ ข้อที่สำคัญที่สุดของไฟล์นี้ — saler/storedevice นับได้ แต่ต้องไม่ถูกกั้นปุ่มยืนยันสั่ง
+  for (const r of ['saler', 'storedevice']) {
+    it(`${r} → นับได้ แต่ไม่ถูกบังคับ (ห้ามยุบ 2 ธงเป็นตัวเดียว)`, () => {
+      expect(canFsCheck(r)).toBe(true);
+      expect(mustFsCheck(r)).toBe(false);
+    });
+  }
   it('ไม่มี role ไหนที่ "ถูกบังคับ" แต่ "นับไม่ได้" (เป็นไปไม่ได้เชิงตรรกะ)', () => {
     for (const r of ALL_ROLES) {
       if (mustFsCheck(r)) expect(canFsCheck(r)).toBe(true);

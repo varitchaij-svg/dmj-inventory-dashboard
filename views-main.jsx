@@ -4489,12 +4489,14 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
   // ── ใครนับหน้าร้านได้ / ใครต้องนับก่อนถึงจะสั่งได้ ──
   // ⚠️ แยกเป็น 2 ตัวโดยตั้งใจ — "นับได้" (การ์ดนับโผล่ + บันทึกยอดเข้าระบบได้) กับ
   //    "ต้องนับก่อนถึงจะสั่งได้" (กั้นปุ่มยืนยัน) ไม่ใช่เรื่องเดียวกัน
-  //    · saler ยืนอยู่หน้าร้านเห็นชั้นวางจริง → ให้กดนับ/บันทึกได้ (เจ้าของสั่ง ส.ค. 2026)
-  //    · แต่ **ไม่บังคับ** เพราะงานหลักของ saler คือปิดการขายให้ทันลูกค้าที่ยืนรออยู่
+  //    · saler/storedevice ยืนอยู่หน้าร้านเห็นชั้นวางจริง → ให้กดนับ/บันทึกได้ (เจ้าของสั่ง
+  //      ส.ค. 2026 — storedevice เพิ่มทีหลังตามคำขอเดียวกัน เพราะเป็นเครื่องที่วางหน้าร้านจริง)
+  //    · แต่ **ไม่บังคับ** เพราะงานหลักคือปิดการขายให้ทันลูกค้าที่ยืนรออยู่
   //      บังคับนับก่อนสั่งเมื่อไหร่ = ขวางการขายด้วยงานที่ไม่ใช่ของเขา
-  //    ยุบกลับเป็นตัวเดียวเมื่อไหร่ saler จะโดนกั้นปุ่มยืนยันทันที **โดยไม่มีอะไรเตือน**
+  //    ยุบกลับเป็นตัวเดียวเมื่อไหร่ 2 role นี้จะโดนกั้นปุ่มยืนยันทันที **โดยไม่มีอะไรเตือน**
   const effRole = role || sessionStorage.getItem("dmj_role") || "";
-  const canFsCheck  = effRole === "frontstore" || effRole === "employee" || effRole === "saler";
+  const canFsCheck  = effRole === "frontstore" || effRole === "employee"
+                      || effRole === "saler" || effRole === "storedevice";
   const mustFsCheck = effRole === "frontstore" || effRole === "employee";
   const [fsQty, setFsQty] = uS("");          // "" = ยังไม่กรอก
   const [fsSaveFailed, setFsSaveFailed] = uS(false);
@@ -4511,7 +4513,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
   }, [canFsCheck, product.frontStoreCheckedAt]);
   const [fsRecount, setFsRecount] = uS(false);      // true = ผู้ใช้ขอนับใหม่ทั้งที่ยังสด
   const fsSkipped = fsFreshMin != null && !fsRecount;
-  // กั้นปุ่มยืนยัน = เฉพาะ role ที่ "ต้อง" นับ (saler นับได้แต่ไม่ถูกกั้น)
+  // กั้นปุ่มยืนยัน = เฉพาะ role ที่ "ต้อง" นับ (saler/storedevice นับได้แต่ไม่ถูกกั้น)
   const fsBlocked = mustFsCheck && !fsSkipped && fsQtyNum == null;
 
   // ── auto-save จำนวนที่นับได้ (debounce 2 วิ) → ชีต "จำนวนหน้าร้าน" + push ZORT ทันที ──
@@ -4853,12 +4855,12 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
                 </div>
               )}
 
-              {/* ① เช็คของหน้าร้าน — บังคับสำหรับหน้าร้าน/พนักงาน · saler นับได้แต่ไม่บังคับ */}
+              {/* ① เช็คของหน้าร้าน — บังคับสำหรับหน้าร้าน/พนักงาน · saler/storedevice นับได้แต่ไม่บังคับ */}
               {canFsCheck && !fsSkipped && (
                 <div style={{
                   marginBottom:16, borderRadius:12, padding:14,
                   // สีเตือน (ส้ม) = "ยังกดสั่งไม่ได้จนกว่าจะกรอก" เท่านั้น — ผูกกับ fsBlocked ไม่ใช่
-                  // "ยังไม่กรอก" เฉย ๆ ไม่งั้น saler ที่ไม่ได้ถูกบังคับจะเห็นกรอบส้มเตือนทั้งที่กดสั่งได้ปกติ
+                  // "ยังไม่กรอก" เฉย ๆ ไม่งั้น role ที่ไม่ได้ถูกบังคับจะเห็นกรอบส้มเตือนทั้งที่กดสั่งได้ปกติ
                   border: fsBlocked ? "2px solid #f59e0b" : "2px solid var(--g-600)",
                   background: fsBlocked ? "#fffbeb" : "var(--g-50)",
                 }}>
@@ -4872,7 +4874,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
                   <div style={{fontSize:11, color:"var(--muted)", marginTop:3}}>
                     ระบบบันทึกไว้ <b>{fmtN(product.qtyStore || 0)}</b> ชิ้น
                     {product.frontStoreCheckedAt ? <> · เช็คล่าสุด {product.frontStoreCheckedAt}</> : <> · ยังไม่เคยเช็ค</>}
-                    {/* saler ไม่ถูกบังคับ — บอกให้ชัด ไม่งั้นจะนึกว่าต้องกรอกก่อนถึงสั่งได้ */}
+                    {/* saler/storedevice ไม่ถูกบังคับ — บอกให้ชัด ไม่งั้นจะนึกว่าต้องกรอกก่อนถึงสั่งได้ */}
                     {!mustFsCheck && !outOfStock && <> · <b>{t("ไม่บังคับ — นับแล้วระบบบันทึกให้เลย")}</b></>}
                   </div>
                   <div style={{display:"flex", gap:8, alignItems:"center", marginTop:10}}>
@@ -4941,7 +4943,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
               {/* Quick qty */}
               <div style={{marginBottom:14}}>
                 <div style={{fontSize:12, fontWeight:600, color:"var(--muted)", marginBottom:8}}>
-                  {/* เลข ② มีความหมายเฉพาะตอนมีขั้น ① บังคับอยู่จริง — saler ไม่มีขั้นบังคับ
+                  {/* เลข ② มีความหมายเฉพาะตอนมีขั้น ① บังคับอยู่จริง — saler/storedevice ไม่มีขั้นบังคับ
                       ถ้าโชว์ ② ให้ด้วยจะกลายเป็นลำดับที่ขาดขั้นแรกไป อ่านแล้วงงว่าตกอะไรไป */}
                   {mustFsCheck && !fsSkipped ? `② ${t("จำนวนที่สั่ง (ชิ้น)")}` : t("จำนวนที่สั่ง (ชิ้น)")}
                 </div>
@@ -5074,7 +5076,8 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
   // ⚠️ ต้องตรงกับ canFsCheck ใน OrderModal เสมอ — ที่นี่ตัดสินว่า "ปุ่มกดได้ไหม"
   //    ส่วนโน่นตัดสินว่า "เปิดมาแล้วมีการ์ดนับให้ไหม" · ไม่ตรงกัน = กดปุ่มเข้าไปแล้วเจอ
   //    modal ที่บอกว่าสั่งไม่ได้ แต่ไม่มีอะไรให้ทำต่อเลย (ทางตัน ไม่มี error ให้เห็น)
-  const canCountFs = role === "frontstore" || role === "employee" || role === "saler";
+  const canCountFs = role === "frontstore" || role === "employee"
+                     || role === "saler" || role === "storedevice";
   const orderBtnDisabled = outOfStock && !canCountFs;
 
   // Image (real or placeholder) — imgOverride = รูปที่เพิ่งดึงจาก ZORT แบบ on-demand
