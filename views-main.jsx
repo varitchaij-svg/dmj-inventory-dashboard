@@ -4641,31 +4641,41 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
   const [done, setDone] = uS(false);
   const [err, setErr] = uS(null);
 
-  // ── role หน้าร้าน/พนักงาน: ต้องนับของที่เหลือหน้าร้านก่อน ถึงจะสั่งได้ ──
+  // ── ใครนับหน้าร้านได้ / ใครต้องนับก่อนถึงจะสั่งได้ ──
+  // ⚠️ แยกเป็น 2 ตัวโดยตั้งใจ — "นับได้" (การ์ดนับโผล่ + บันทึกยอดเข้าระบบได้) กับ
+  //    "ต้องนับก่อนถึงจะสั่งได้" (กั้นปุ่มยืนยัน) ไม่ใช่เรื่องเดียวกัน
+  //    · saler/storedevice ยืนอยู่หน้าร้านเห็นชั้นวางจริง → ให้กดนับ/บันทึกได้ (เจ้าของสั่ง
+  //      ส.ค. 2026 — storedevice เพิ่มทีหลังตามคำขอเดียวกัน เพราะเป็นเครื่องที่วางหน้าร้านจริง)
+  //    · แต่ **ไม่บังคับ** เพราะงานหลักคือปิดการขายให้ทันลูกค้าที่ยืนรออยู่
+  //      บังคับนับก่อนสั่งเมื่อไหร่ = ขวางการขายด้วยงานที่ไม่ใช่ของเขา
+  //    ยุบกลับเป็นตัวเดียวเมื่อไหร่ 2 role นี้จะโดนกั้นปุ่มยืนยันทันที **โดยไม่มีอะไรเตือน**
   const effRole = role || sessionStorage.getItem("dmj_role") || "";
-  const needFsCheck = effRole === "frontstore" || effRole === "employee";
+  const canFsCheck  = effRole === "frontstore" || effRole === "employee"
+                      || effRole === "saler" || effRole === "storedevice";
+  const mustFsCheck = effRole === "frontstore" || effRole === "employee";
   const [fsQty, setFsQty] = uS("");          // "" = ยังไม่กรอก
   const [fsSaveFailed, setFsSaveFailed] = uS(false);
   const fsQtyNum = fsQty === "" ? null : Math.max(0, parseInt(fsQty) || 0);
 
   // เพิ่งเช็คไปไม่เกิน 2 ชม. → ข้ามการนับได้ (กันนับซ้ำตอนสั่งของรัว ๆ) แต่กด "นับใหม่" ได้เสมอ
   const fsFreshMin = uM(() => {
-    if (!needFsCheck || !product.frontStoreCheckedAt) return null;
+    if (!canFsCheck || !product.frontStoreCheckedAt) return null;
     if (typeof parseCheckDateMs !== "function") return null;
     const t = parseCheckDateMs(product.frontStoreCheckedAt);
     if (isNaN(t)) return null;
     const mins = Math.floor((Date.now() - t) / 60000);
     return (mins >= 0 && mins < FS_CHECK_FRESH_MIN) ? mins : null;
-  }, [needFsCheck, product.frontStoreCheckedAt]);
+  }, [canFsCheck, product.frontStoreCheckedAt]);
   const [fsRecount, setFsRecount] = uS(false);      // true = ผู้ใช้ขอนับใหม่ทั้งที่ยังสด
   const fsSkipped = fsFreshMin != null && !fsRecount;
-  const fsBlocked = needFsCheck && !fsSkipped && fsQtyNum == null;
+  // กั้นปุ่มยืนยัน = เฉพาะ role ที่ "ต้อง" นับ (saler/storedevice นับได้แต่ไม่ถูกกั้น)
+  const fsBlocked = mustFsCheck && !fsSkipped && fsQtyNum == null;
 
   // ── auto-save จำนวนที่นับได้ (debounce 2 วิ) → ชีต "จำนวนหน้าร้าน" + push ZORT ทันที ──
   //  นับแล้วถึงไม่สั่งต่อ (ปิด modal ทิ้ง) ยอดที่นับก็เข้าระบบแล้ว — ไม่เสียของที่นับมา
   const [fsSavedQty, setFsSavedQty] = uS(null);     // ค่าที่บันทึกเข้าระบบไปแล้ว
   const [fsSaving, setFsSaving] = uS(false);
-  const fsDirty = needFsCheck && !fsSkipped && fsQtyNum != null && fsQtyNum !== fsSavedQty;
+  const fsDirty = canFsCheck && !fsSkipped && fsQtyNum != null && fsQtyNum !== fsSavedQty;
 
   const fsErrRef = React.useRef("");   // เหตุผลจริงที่บันทึกไม่ผ่าน (เอาไปโชว์ตอนกดสั่ง)
   const fsSavedRef = React.useRef(null);   // ค่าที่บันทึกแล้ว (ref — closure ของ timer เห็นค่าล่าสุดเสมอ)
@@ -4978,7 +4988,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
             )}
 
               {/* เพิ่งเช็คไปไม่นาน → ข้ามการนับ แต่ยังกด "นับใหม่" ได้ */}
-              {needFsCheck && fsSkipped && (
+              {canFsCheck && fsSkipped && (
                 <div style={{
                   marginBottom:16, borderRadius:12, padding:"12px 14px",
                   border:"1.5px solid var(--g-400)", background:"var(--g-50)",
@@ -5000,19 +5010,27 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
                 </div>
               )}
 
-              {/* ① เช็คของหน้าร้านก่อนสั่ง (role หน้าร้าน/พนักงาน) */}
-              {needFsCheck && !fsSkipped && (
+              {/* ① เช็คของหน้าร้าน — บังคับสำหรับหน้าร้าน/พนักงาน · saler/storedevice นับได้แต่ไม่บังคับ */}
+              {canFsCheck && !fsSkipped && (
                 <div style={{
                   marginBottom:16, borderRadius:12, padding:14,
-                  border: fsQtyNum == null ? "2px solid #f59e0b" : "2px solid var(--g-600)",
-                  background: fsQtyNum == null ? "#fffbeb" : "var(--g-50)",
+                  // สีเตือน (ส้ม) = "ยังกดสั่งไม่ได้จนกว่าจะกรอก" เท่านั้น — ผูกกับ fsBlocked ไม่ใช่
+                  // "ยังไม่กรอก" เฉย ๆ ไม่งั้น role ที่ไม่ได้ถูกบังคับจะเห็นกรอบส้มเตือนทั้งที่กดสั่งได้ปกติ
+                  border: fsBlocked ? "2px solid #f59e0b" : "2px solid var(--g-600)",
+                  background: fsBlocked ? "#fffbeb" : "var(--g-50)",
                 }}>
-                  <div style={{fontSize:13, fontWeight:800, color: fsQtyNum == null ? "#92400e" : "var(--g-700)"}}>
-                    {outOfStock ? `📋 ${t("หน้าร้านเหลือกี่ชิ้น?")}` : `① ${t("นับก่อนสั่ง — หน้าร้านเหลือกี่ชิ้น?")}`}
+                  <div style={{fontSize:13, fontWeight:800, color: fsBlocked ? "#92400e" : "var(--g-700)"}}>
+                    {outOfStock
+                      ? `📋 ${t("หน้าร้านเหลือกี่ชิ้น?")}`
+                      : mustFsCheck
+                        ? `① ${t("นับก่อนสั่ง — หน้าร้านเหลือกี่ชิ้น?")}`
+                        : `📋 ${t("นับหน้าร้าน — เหลือกี่ชิ้น?")}`}
                   </div>
                   <div style={{fontSize:11, color:"var(--muted)", marginTop:3}}>
                     ระบบบันทึกไว้ <b>{fmtN(product.qtyStore || 0)}</b> ชิ้น
                     {product.frontStoreCheckedAt ? <> · เช็คล่าสุด {product.frontStoreCheckedAt}</> : <> · ยังไม่เคยเช็ค</>}
+                    {/* saler/storedevice ไม่ถูกบังคับ — บอกให้ชัด ไม่งั้นจะนึกว่าต้องกรอกก่อนถึงสั่งได้ */}
+                    {!mustFsCheck && !outOfStock && <> · <b>{t("ไม่บังคับ — นับแล้วระบบบันทึกให้เลย")}</b></>}
                   </div>
                   <div style={{display:"flex", gap:8, alignItems:"center", marginTop:10}}>
                     <button onClick={() => { setFsQty(String(Math.max(0, (fsQtyNum || 0) - 1))); setFsSaveFailed(false); }}
@@ -5061,7 +5079,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
               <div style={{background:"#fff0f0", border:"1px solid #fcc", borderRadius:10,
                            padding:16, textAlign:"center", fontSize:13, color:"var(--dang)", fontWeight:600}}>
                 ⚠️ คลังหมดสต๊อก — สั่งไม่ได้ตอนนี้
-                {needFsCheck && (
+                {canFsCheck && (
                   <div style={{fontSize:11, fontWeight:500, color:"var(--muted)", marginTop:5}}>
                     แต่บันทึกยอดหน้าร้านไว้ได้ เจ้าของจะเห็นว่าของหมดทั้งคลังและหน้าร้าน
                   </div>
@@ -5080,7 +5098,9 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
               {/* Quick qty */}
               <div style={{marginBottom:14}}>
                 <div style={{fontSize:12, fontWeight:600, color:"var(--muted)", marginBottom:8}}>
-                  {needFsCheck && !fsSkipped ? `② ${t("จำนวนที่สั่ง (ชิ้น)")}` : t("จำนวนที่สั่ง (ชิ้น)")}
+                  {/* เลข ② มีความหมายเฉพาะตอนมีขั้น ① บังคับอยู่จริง — saler/storedevice ไม่มีขั้นบังคับ
+                      ถ้าโชว์ ② ให้ด้วยจะกลายเป็นลำดับที่ขาดขั้นแรกไป อ่านแล้วงงว่าตกอะไรไป */}
+                  {mustFsCheck && !fsSkipped ? `② ${t("จำนวนที่สั่ง (ชิ้น)")}` : t("จำนวนที่สั่ง (ชิ้น)")}
                 </div>
                 <div style={{display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:6, marginBottom:8}}>
                   {QUICK_QTYS.map(q => (
@@ -5207,8 +5227,12 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
   const outOfStock = !p.isMTO && totalQty === 0;
   const hashHue = (p.sku || "").split("").reduce((a,c) => a + c.charCodeAt(0), 0) % 360;
   const [lightbox, setLightbox] = uS(false);
-  // role หน้าร้าน/พนักงาน: ของหมดทั้งคลัง+หน้าร้าน ก็ยังเปิด modal เพื่อ "นับหน้าร้าน" ได้
-  const canCountFs = role === "frontstore" || role === "employee";
+  // ของหมดทั้งคลัง+หน้าร้าน ก็ยังเปิด modal เพื่อ "นับหน้าร้าน" ได้ (ไม่ disable ปุ่ม)
+  // ⚠️ ต้องตรงกับ canFsCheck ใน OrderModal เสมอ — ที่นี่ตัดสินว่า "ปุ่มกดได้ไหม"
+  //    ส่วนโน่นตัดสินว่า "เปิดมาแล้วมีการ์ดนับให้ไหม" · ไม่ตรงกัน = กดปุ่มเข้าไปแล้วเจอ
+  //    modal ที่บอกว่าสั่งไม่ได้ แต่ไม่มีอะไรให้ทำต่อเลย (ทางตัน ไม่มี error ให้เห็น)
+  const canCountFs = role === "frontstore" || role === "employee"
+                     || role === "saler" || role === "storedevice";
   const orderBtnDisabled = outOfStock && !canCountFs;
 
   // Image (real or placeholder) — imgOverride = รูปที่เพิ่งดึงจาก ZORT แบบ on-demand
