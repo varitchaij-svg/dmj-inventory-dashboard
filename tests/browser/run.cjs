@@ -676,6 +676,48 @@ function startServer() {
     await page.close();
   }
 
+  // ── (จ2.6) ปุ่มลอย 📤 "ส่งคำขอเช็คสต็อก" ต้องโผล่ให้ saler ด้วย (เหมือน owner) ──
+  // เจ้าของชี้ว่า "ปุ่มที่ว่าคือปุ่มนี้ ที่เหมือน dev กับ owner" — FAB ในแท็บ "สินค้า & สั่ง"
+  // เดิมมีเฉพาะ owner/dev · ต้องรันบนเบราว์เซอร์จริงเพราะ unit test เห็นแค่ค่าธง ไม่เห็นว่า
+  // ปุ่มลอยเรนเดอร์บนจอจริงไหม (และกดแล้วเปิด modal ส่งคำขอได้ไหม)
+  for (const fabCase of [
+    { role: 'saler',       expect: true  },
+    { role: 'storedevice', expect: true  },
+    { role: 'owner',       expect: true  },
+    { role: 'warehouse',   expect: false },  // ไม่เคยมี — ยืนยันว่าไม่เผลอเปิดให้เกิน
+  ]) {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=${fabCase.role}&tab=categories`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, fabCase.role, 'categories');
+      await page.waitForTimeout(400);
+      // FAB = div ลอยที่มีอิโมจิ 📤 (ไม่ใช่ปุ่มในโมดัลส่งคำขอ) — จับด้วยข้อความ 📤 ที่ fixed pos
+      const fab = page.locator('div', { hasText: /^📤$/ }).first();
+      const seen = (await fab.count()) > 0 && (await fab.isVisible().catch(() => false));
+      if (!navOk) {
+        status = 'NAV_FAIL'; note = 'สลับไปแท็บสินค้า & สั่งไม่สำเร็จ';
+      } else if (seen !== fabCase.expect) {
+        status = fabCase.expect ? 'FAB_MISSING' : 'FAB_LEAKED';
+        note = fabCase.expect
+          ? `${fabCase.role} ควรเห็นปุ่มลอย 📤 แต่ไม่เห็น`
+          : `${fabCase.role} ไม่ควรเห็นปุ่มลอย 📤 แต่เห็น`;
+      } else if (fabCase.expect) {
+        await fab.click({ timeout: 2000 }).catch(() => {});
+        await page.waitForTimeout(400);
+        const opened = await page.locator('div', { hasText: 'ส่งคำขอเช็คสต็อก' }).count();
+        if (!opened) { status = 'MODAL_FAIL'; note = 'กดปุ่มลอยแล้ว modal ส่งคำขอไม่เปิด'; }
+        else note = 'เห็นปุ่มลอย 📤 + กดแล้วเปิด modal ส่งคำขอเช็คสต็อกได้';
+      } else {
+        note = 'ไม่เห็นปุ่มลอย ตามที่คาดไว้ (คงสิทธิ์เดิม)';
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, `fab__${fabCase.role}.png`) }).catch(() => {});
+    results.push({ role: 'interact', tab: `ปุ่มลอยส่งคำขอเช็ค (${fabCase.role})`, status, note });
+    await page.close();
+  }
+
   // ── (จ3) ขายออนไลน์: กรอกครบ → บันทึก → ได้ "สรุปคำสั่งซื้อ" ไม่ใช่ใบเสร็จปริ้น ──
   // ต้องรันบนเบราว์เซอร์จริงเพราะสิ่งที่ทดสอบคือ **ตัวเลขบนจอที่ลูกค้าจะเห็น** — ค่าส่งบวกเข้า
   // ยอดจริงไหม, เลขบัญชีขึ้นให้ลูกค้าโอนไหม, ที่อยู่ตามไปบนสรุปไหม · unit test เห็นแค่ source

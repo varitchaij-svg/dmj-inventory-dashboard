@@ -9,7 +9,7 @@
 // เดิมมีธงตัวเดียว (`needFsCheck`) ทำหน้าที่ทั้ง "โชว์การ์ดนับ" และ "กั้นปุ่มยืนยัน" พร้อมกัน
 // จึงต้องแยกเป็น `canFsCheck` (นับได้) กับ `mustFsCheck` (ต้องนับก่อน) · เทสต์ชุดนี้กัน 3 อย่าง
 // ที่พังแล้ว **ไม่มี error ให้เห็น**:
-//   1. ยุบ 2 ธงกลับเป็นตัวเดียว → saler โดนกั้นปุ่มยืนยันทันที กดสั่งของไม่ได้ทั้งตำแหน่ง
+//   1. ยุบ 2 ธงกลับเป็นตัวเดียว → saler/storedevice โดนกั้นปุ่มยืนยันทันที กดสั่งของไม่ได้ทั้งตำแหน่ง
 //   2. `canCountFs` (ProductCard — ปุ่มกดได้ไหม) กับ `canFsCheck` (OrderModal — มีการ์ดนับไหม)
 //      หลุดจากกัน → กดปุ่มเข้าไปเจอ modal ที่บอกว่าสั่งไม่ได้ แต่ไม่มีอะไรให้ทำต่อ = ทางตัน
 //   3. `fsBlocked` เผลอกลับไปผูกกับ `canFsCheck` → ข้อ 1 ซ้ำอีกรอบ
@@ -45,6 +45,7 @@ function rolePredicate(block, name, argName) {
 const canFsCheck = rolePredicate(ORDER_MODAL, 'canFsCheck', 'effRole');
 const mustFsCheck = rolePredicate(ORDER_MODAL, 'mustFsCheck', 'effRole');
 const canCountFs = rolePredicate(PRODUCT_CARD, 'canCountFs', 'role');
+const canSendCheck = rolePredicate(grabFn(VMAIN, 'CategoryView'), 'canSendCheck', 'role');
 
 const ALL_ROLES = ['owner', 'dev', 'employee', 'warehouse', 'frontstore', 'saler', 'storedevice'];
 
@@ -86,6 +87,25 @@ describe('ปุ่มบนการ์ดสินค้า ต้องตร
     for (const r of ALL_ROLES) {
       expect([r, canCountFs(r)]).toEqual([r, canFsCheck(r)]);
     }
+  });
+});
+
+// ⭐ ปุ่มลอย 📤 "ส่งคำขอเช็คสต็อก" (FAB) ใน CategoryView — ปุ่มที่เจ้าของชี้ว่า "เหมือน owner/dev"
+// เดิมมีเฉพาะ owner/dev (viewRole ยุบ dev→owner ก่อนส่งเข้า CategoryView → เช็ค role==="owner"
+// ครอบทั้งคู่) · เจ้าของสั่งให้ saler มีด้วย (ส.ค. 2026) → เพิ่ม saler/storedevice
+describe('ปุ่มลอย 📤 ส่งคำขอเช็คสต็อก (canSendCheck)', () => {
+  // viewRole ยุบ dev→"owner" มาก่อนแล้ว จึงเทียบกับ "owner" (ครอบ dev) + saler + storedevice
+  for (const r of ['owner', 'saler', 'storedevice']) {
+    it(`${r} → เห็นปุ่มลอยส่งคำขอเช็คสต็อก`, () => expect(canSendCheck(r)).toBe(true));
+  }
+  // warehouse/frontstore/employee ไม่เคยมีปุ่มนี้ — คงเดิม (ไม่เปิดเกินที่เจ้าของสั่ง)
+  for (const r of ['warehouse', 'frontstore', 'employee']) {
+    it(`${r} → ไม่เห็นปุ่มลอย (คงเดิม)`, () => expect(canSendCheck(r)).toBe(false));
+  }
+  it('render gate ของ FAB ผูกกับ canSendCheck ไม่ใช่ role==="owner" ตรง ๆ', () => {
+    // ถ้ากลับไป hard-code role==="owner" ที่ gate = saler หายปุ่มอีกโดยไม่มี error ให้เห็น
+    const VIEW = grabFn(VMAIN, 'CategoryView');
+    expect(VIEW).toContain('{canSendCheck && (');
   });
 });
 

@@ -701,15 +701,17 @@ var COMMON_ACTIONS_ = ["order", "updateOrderState", "transferStock", "transferSt
                         "setProductOwner"];
 
 var ROLE_ACTIONS_ = {
+  // createStockCheck = ปุ่มลอย 📤 "ส่งคำขอเช็คสต็อก" ในแท็บ "สินค้า & สั่ง" (ดู canSendCheck
+  // ใน CategoryView) — saler/storedevice ยืนหน้าร้าน สั่งเช็คสต็อกร้านที่ตัวเองดูแลได้ (ส.ค. 2026)
   saler:      ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
                "getContactDetail", "createQuotation", "editQuotation", "saveQuotationDraft", "deleteQuotationDraft",
-               "voidQuotation", "approveQuotation", "setQuoteSale", "getInvoiceNumber",
+               "voidQuotation", "approveQuotation", "setQuoteSale", "getInvoiceNumber", "createStockCheck",
                ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   // storedevice = บัญชี LINE กลางประจำเครื่อง/แท็บเล็ตร้าน — สิทธิ์ API เท่า saler ทุกอย่าง
   // + attendanceToday (ดู "ใครเข้างานวันนี้" — เหตุผลที่มี role นี้อยู่เลย ต้องเปิดให้)
   storedevice: ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
                "getContactDetail", "createQuotation", "editQuotation", "saveQuotationDraft", "deleteQuotationDraft",
-               "voidQuotation", "approveQuotation", "setQuoteSale", "getInvoiceNumber", "attendanceToday",
+               "voidQuotation", "approveQuotation", "setQuoteSale", "getInvoiceNumber", "attendanceToday", "createStockCheck",
                ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   frontstore: ["recordUnscannedSale"].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   warehouse:  ["deductStock", "confirmStockCount", "deleteLockEntry", "addNewProduct",

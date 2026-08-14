@@ -1675,12 +1675,31 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
 - **ไม่ต้องแตะ `.gs` เลย** — `updateFrontStore` อยู่ใน `COMMON_ACTIONS_` อยู่แล้ว saler/storedevice
   จึงมีสิทธิ์ฝั่ง server มาตั้งแต่ต้น (เป็นแค่การ *เปิดให้เห็น* ไม่ใช่การให้สิทธิ์ใหม่) → **ไม่ต้อง
   deploy GAS**
-- เทสต์: `tests/saler-fs-count.test.js` (22 เคส — **eval นิพจน์ role จริงจาก `.jsx` ไม่ copy**
+- เทสต์: `tests/saler-fs-count.test.js` (**eval นิพจน์ role จริงจาก `.jsx` ไม่ copy**
   เหมือน auth.test.js · คุมทั้ง drift ของ 2 จุด และ `fsBlocked`/`fsDirty` ผูกกับธงถูกตัว)
   + browser test 3 เคส (`นับหน้าร้าน (saler)` / `(storedevice)` / `(frontstore)`) ที่ยืนยันบน
   เบราว์เซอร์จริงว่า **saler/storedevice เห็นการ์ดนับแล้วยังกดยืนยันสั่งได้เลย และหน้าร้านยังถูก
   บังคับเหมือนเดิม** — ทดสอบคู่กันโดยตั้งใจ เพราะปลดกั้นให้ role หนึ่งแล้วเผลอปลดของหน้าร้าน
   ไปด้วยเป็นความพังที่เงียบสนิท
+
+#### ⭐ ปุ่มลอย 📤 "ส่งคำขอเช็คสต็อก" เปิดให้ saler/storedevice ด้วย (ส.ค. 2026)
+
+เจ้าของทักกลับหลัง deploy รอบแรก: "saler ยังไม่มีปุ่มให้กดเลย" พร้อมภาพ — ที่จริงต้องการ **ปุ่มลอย
+สีเขียว 📤 มุมล่างขวา** ("ส่งคำขอเช็คสต็อก") ที่เดิมมีเฉพาะ owner/dev ในแท็บ "สินค้า & สั่ง"
+(คนละปุ่มกับการ์ดนับใน `OrderModal` ข้างบน) · ปุ่มนี้เลือกซัพพลายเออร์แล้วส่ง `createStockCheck`
+ให้คิว "ควรเช็คก่อน" ของหน้าร้าน/คลัง
+
+- **`canSendCheck`** (`CategoryView`) = `role === "owner" || "saler" || "storedevice"` — `viewRole`
+  ยุบ dev→owner มาก่อนแล้ว จึง `"owner"` ครอบทั้ง owner+dev · gate ของ FAB ใช้ `{canSendCheck && (`
+  แทน `role === "owner"` เดิม
+- ⚠️ **`.gs`: เพิ่ม `createStockCheck` ใน `ROLE_ACTIONS_` ของ saler/storedevice** — แต่ **ทำงานได้
+  ทันทีไม่ต้องรอ deploy** เพราะ `createStockCheck` ไม่อยู่ใน `IMMEDIATE_GATE_*` และ `REQUIRE_LOGIN`
+  ยังปิด → `canDoOrNull_` เป็น no-op · ที่เติมไว้เพื่อให้ตารางถูกต้องเผื่อวันเปิด gate (auto-deploy
+  ผ่าน Actions ตอน merge เข้า master อยู่แล้ว)
+- เทสต์: `tests/saler-fs-count.test.js` (describe "ปุ่มลอย 📤 ..." — eval `canSendCheck` จริง +
+  บังคับว่า gate ใช้ `{canSendCheck && (` ไม่ hard-code role) + browser test 4 เคส
+  (`ปุ่มลอยส่งคำขอเช็ค (saler/storedevice/owner/warehouse)`) ยืนยันบนจอจริงว่า saler เห็นปุ่ม +
+  กดแล้วเปิด modal ได้ และ warehouse ไม่เห็น (ไม่เผลอเปิดเกิน)
 - **ป้าย "สั่งแล้ว N" บนการ์ดสินค้า** — `pendingOrderQtyMap` (CategoryView) รวม `data.orders`
   กับ `localPendingOrders` (optimistic หลังสั่งสำเร็จ) · หลังสั่งสำเร็จเรียก
   `window._dmjRefetchOrders()` (= `fetchOrdersOnly`, `action=orders` อ่านชีตตรงไม่ผ่าน cache)
