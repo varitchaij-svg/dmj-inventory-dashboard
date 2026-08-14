@@ -715,7 +715,7 @@ var ROLE_ACTIONS_ = {
                "voidQuotation", "approveQuotation", "setQuoteSale", "getInvoiceNumber", "attendanceToday", "createStockCheck",
                ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   frontstore: ["recordUnscannedSale"].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
-  warehouse:  ["deductStock", "confirmStockCount", "deleteLockEntry", "addNewProduct",
+  warehouse:  ["deductStock", "confirmStockCount", "deleteLockEntry", "addNewProduct", "uploadProductPhoto",
                "addPurchaseIn", "zeroStock", "createStockCheck", "completeStockCheck",
                "deleteOrder", "deleteOrders",
                ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
@@ -799,7 +799,7 @@ var POST_FLAG_ACTIONS_ = [
   "fetchProductImage", "getContactDetail", "getInvoiceNumber", "issueFullTaxInvoice", "lookupSaleBill",
   "recordUnscannedSale", "resetNegativeStock", "saveMtoJobItems", "saveQuotationDraft",
   "saveThresholds", "searchContact", "setQuoteSale", "syncZortNow", "syncZortPurchasesNow",
-  "syncZortSalesNow", "transferStock", "transferStockBatch", "updateFrontStore",
+  "syncZortSalesNow", "transferStock", "transferStockBatch", "updateFrontStore", "uploadProductPhoto",
   "updateLockData", "updateOrderState", "voidQuotation", "zeroStock",
 ];
 
@@ -1716,7 +1716,7 @@ const STAFF_PERF_CATEGORIES_ = [
   { key: "receive",    emoji: "📥", label: "หน้าร้านรับของ",     ops: true,  unit: "รายการ", prefixes: ["รับสินค้า"] },
   { key: "location",   emoji: "🗺️", label: "จัดตำแหน่งล็อค",     ops: true,  unit: "ครั้ง",  prefixes: ["updateLockData", "ลบตำแหน่งจัดเก็บ", "sweepEmptyShelf"] },
   { key: "purchase",   emoji: "🛒", label: "รับของเข้าคลัง",     ops: true,  unit: "ครั้ง",  prefixes: ["ซื้อสินค้าเข้า"] },
-  { key: "newproduct", emoji: "➕", label: "เพิ่มสินค้าใหม่",     ops: true,  unit: "รายการ", prefixes: ["เพิ่มสินค้าใหม่"] },
+  { key: "newproduct", emoji: "➕", label: "เพิ่มสินค้าใหม่",     ops: true,  unit: "รายการ", prefixes: ["เพิ่มสินค้าใหม่", "เพิ่มรูปสินค้า"] },
   { key: "mto",        emoji: "🎁", label: "งานจัดพิเศษ",        ops: true,  unit: "ครั้ง",  prefixes: ["สร้างงาน MTO", "มอบหมายงาน MTO", "ปิดงาน MTO", "ลบงาน MTO", "deductMaterials"] },
   { key: "sale",       emoji: "🧾", label: "ออกบิลขาย",          ops: true,  unit: "ใบ",    prefixes: ["ออกบิลขาย", "ออกใบกำกับภาษีย้อนหลัง"] },
   { key: "quote",      emoji: "📄", label: "ใบเสนอราคา",         ops: true,  unit: "ใบ",    prefixes: ["สร้างใบเสนอราคา", "แก้ไขใบเสนอราคา", "อนุมัติใบเสนอราคา", "ปิดใบเสนอราคา"] },
@@ -2366,6 +2366,9 @@ function doPost(e) {
     }
     if (data.fetchProductImage) {
       return fetchProductImage(ss, data.sku);
+    }
+    if (data.uploadProductPhoto) {
+      return uploadProductPhoto(ss, data, actor);
     }
 
     // ─── POS: ออกบิล/ใบกำกับภาษี + ค้นลูกค้า (saler) ───
@@ -4976,6 +4979,7 @@ function syncZortImages() {
     existing[sku] = i + 1; // row number
     if (zortImg[sku] && zortImg[sku] !== String(rows[i][4] || '').trim()) {
       sh.getRange(i + 1, 5).setValue(zortImg[sku]);
+      cleanupTempProductPhoto_(sh, i + 1); // ZORT มีรูปแล้ว → ลบรูปชั่วคราวที่อัปจากเว็บทิ้ง
       updated++;
     }
   }
@@ -7084,11 +7088,23 @@ function addNewProduct(ss, product, actor) {
       SpreadsheetApp.flush();
     }
 
+    // 5) รูปที่ถ่าย/เลือกจากเว็บ (ชั่วคราว) → เก็บ Drive + เขียน col D ชีต imageUrl
+    //    ZORT ยังไม่มีรูปตอนเพิ่ง AddProduct → รูปนี้โชว์ไปก่อน · เมื่อ syncZortImages/fetchProductImage
+    //    เขียน col E (รูป ZORT) แล้ว cleanupTempProductPhoto_ จะลบรูปชั่วคราวนี้ทิ้งอัตโนมัติ
+    //    ไม่ throw — รูปพลาดต้องไม่ทำให้เพิ่มสินค้าไม่สำเร็จ (สินค้าเข้า ZORT/ชีตไปแล้ว)
+    let photoUrl = "";
+    if (product.photoBase64) {
+      try {
+        const saved = saveProductPhoto_(product.photoBase64, sku);
+        if (saved && saved.url) { writeManualProductImage_(ss, sku, saved.url, saved.fileId); photoUrl = saved.url; }
+      } catch (e) { Logger.log("addNewProduct photo error: " + e); }
+    }
+
     writeAuditLog_(actor || "ไม่ระบุ", "เพิ่มสินค้าใหม่", sku,
       auditDetail_({ after: { name: name, price: price, cat: cat, tag: tag, qty: qty, wh: wh }, note: "เพิ่มสินค้าใหม่เข้า ZORT + ชีต" }));
 
     invalidateCache_(); // bump dmj_last_write_ts ให้เครื่องอื่นเห็นสินค้าใหม่
-    return ok({ sku: sku, name: name, qty: qty, warehousecode: wh });
+    return ok({ sku: sku, name: name, qty: qty, warehousecode: wh, imageUrl: photoUrl });
   } finally {
     lock.releaseLock();
   }
@@ -7367,6 +7383,90 @@ function fetchZortStockForSku_(sku, wh) {
   return 0;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// รูปสินค้า "ชั่วคราว" ที่ถ่าย/อัปจากเว็บ (สำหรับสินค้าใหม่ที่ ZORT ยังไม่มีรูป)
+// ── เก็บลง Drive (แชร์ลิงก์สาธารณะ) → เขียน col D (manual) ของชีต imageUrl
+// ── col F เก็บ Drive fileId ไว้ลบทิ้งอัตโนมัติ เมื่อ ZORT มีรูปจริงแล้ว (col E ได้ค่า)
+// readImageMap_ ให้ col E (ZORT) ชนะ D อยู่แล้ว → พอ ZORT มีรูป รูปชั่วคราวถูกแทนที่ทันที
+//   แล้ว cleanupTempProductPhoto_ ลบไฟล์ Drive + เคลียร์ D/F ทิ้ง
+// ═══════════════════════════════════════════════════════════════════════════
+
+// เก็บรูปลง Drive (โฟลเดอร์ "รูปสินค้า DMJ") + แชร์ลิงก์สาธารณะ → คืน { fileId, url }
+// ไม่ throw — รูปพลาดต้องไม่ทำให้เพิ่มสินค้าไม่สำเร็จ (หลักเดียวกับ saveAttPhoto_/appendSaleBillRow_)
+function saveProductPhoto_(base64, sku) {
+  if (!base64) return null;
+  try {
+    const props = PropertiesService.getScriptProperties();
+    let folderId = props.getProperty("PRODUCT_PHOTO_FOLDER_ID");
+    let folder = null;
+    if (folderId) { try { folder = DriveApp.getFolderById(folderId); } catch (e) { folder = null; } }
+    if (!folder) { folder = DriveApp.createFolder("รูปสินค้า DMJ"); props.setProperty("PRODUCT_PHOTO_FOLDER_ID", folder.getId()); }
+    const clean = String(base64).replace(/^data:image\/\w+;base64,/, "");
+    const blob = Utilities.newBlob(Utilities.base64Decode(clean), "image/jpeg",
+      String(sku || "product").replace(/[^A-Za-z0-9_-]/g, "") + "_" + Date.now() + ".jpg");
+    const file = folder.createFile(blob);
+    // แชร์แบบ "ใครมีลิงก์ก็ดูได้" — รูปสินค้าโชว์ทุก role เหมือนรูปจาก ZORT (ต่างจากรูปลงเวลา)
+    try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+    const id = file.getId();
+    // ใช้ endpoint thumbnail ของ Drive — โหลดใน <img>/background-image ได้ตรง ๆ เสถียรกว่า uc?export=view
+    return { fileId: id, url: "https://drive.google.com/thumbnail?id=" + id + "&sz=w1000" };
+  } catch (e) {
+    Logger.log("saveProductPhoto_ error: " + e);
+    return null;
+  }
+}
+
+// เขียนรูปชั่วคราวลง col D (manual) + col F (fileId) ของชีต imageUrl — upsert ตาม SKU
+// แทนที่รูปชั่วคราวเดิม (ถ้ามี) → ลบไฟล์ Drive เก่าทิ้งกันไฟล์กำพร้า
+function writeManualProductImage_(ss, sku, url, fileId) {
+  const clean = String(sku || "").trim().toUpperCase();
+  if (!clean || !url) return;
+  const sh = ss.getSheetByName(SHEET_IMAGE_URL);
+  if (!sh) return;
+  if (!String(sh.getRange(1, 6).getValue() || "").trim()) sh.getRange(1, 6).setValue("ไฟล์รูปชั่วคราว (Drive ID)");
+  const rows = sh.getDataRange().getValues();
+  let rowNum = 0;
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][1] || "").trim().toUpperCase() === clean) { rowNum = i + 1; break; }
+  }
+  if (rowNum) {
+    const oldId = String(sh.getRange(rowNum, 6).getValue() || "").trim();
+    if (oldId && oldId !== (fileId || "")) { try { DriveApp.getFileById(oldId).setTrashed(true); } catch (e) {} }
+    sh.getRange(rowNum, 4).setValue(url);          // D = รูป (ใส่เอง/สำรอง)
+    sh.getRange(rowNum, 6).setValue(fileId || ""); // F = fileId ชั่วคราว
+  } else {
+    sh.appendRow(["", clean, "", url, "", fileId || ""]);
+  }
+  SpreadsheetApp.flush();
+}
+
+// ลบรูปชั่วคราว (ที่อัปจากเว็บ) เมื่อ ZORT มีรูปจริงแล้ว — เรียกหลังเขียน col E สำเร็จ
+// ปลอดภัย: ลบเฉพาะแถวที่มี fileId ใน col F (= รูปที่ระบบสร้างเอง) ไม่แตะ URL ที่คนพิมพ์ใส่ col D เอง
+function cleanupTempProductPhoto_(sh, rowNum) {
+  try {
+    const fileId = String(sh.getRange(rowNum, 6).getValue() || "").trim();
+    if (!fileId) return;
+    try { DriveApp.getFileById(fileId).setTrashed(true); } catch (e) {}
+    sh.getRange(rowNum, 4).setValue(""); // เคลียร์รูปชั่วคราว (D)
+    sh.getRange(rowNum, 6).setValue(""); // เคลียร์ fileId (F)
+  } catch (e) { Logger.log("cleanupTempProductPhoto_ error: " + e); }
+}
+
+// ── action=uploadProductPhoto : อัปรูปชั่วคราวให้สินค้า (ใหม่/ที่ยังไม่มีรูป) จากเว็บ ──
+// data = { sku, photoBase64 } · เขียน col D ชีต imageUrl · ZORT มีรูปเมื่อไหร่จะแทนที่เอง
+function uploadProductPhoto(ss, data, actor) {
+  const sku = String((data && data.sku) || "").trim().toUpperCase();
+  if (!sku) return error("ไม่มี SKU");
+  if (!data || !data.photoBase64) return error("ไม่มีรูป");
+  const saved = saveProductPhoto_(data.photoBase64, sku);
+  if (!saved || !saved.url) return error("บันทึกรูปไม่สำเร็จ ลองใหม่อีกครั้ง");
+  writeManualProductImage_(ss, sku, saved.url, saved.fileId);
+  writeAuditLog_(actor || "ไม่ระบุ", "เพิ่มรูปสินค้า", sku,
+    auditDetail_({ note: "อัปรูปจากเว็บ (ชั่วคราว จนกว่า ZORT จะมีรูป)" }));
+  invalidateCache_();
+  return ok({ sku: sku, imageUrl: saved.url });
+}
+
 // ── ดึงรูปเฉพาะ SKU เดียวจาก ZORT (on-demand หลังอัปรูปในแอป ZORT) ──
 // targeted fetch ด้วย keyword — ไม่ต้อง fetch ทั้งคลังเหมือน syncZortImages
 // เขียนลง col E (ZORT auto) ของชีต imageUrl → readImageMap_ ให้ col E ชนะ manual(D)
@@ -7397,7 +7497,7 @@ function fetchProductImage(ss, sku) {
       for (let i = 1; i < rows.length; i++) {
         if (String(rows[i][1] || "").trim().toUpperCase() === clean) { rowNum = i + 1; break; }
       }
-      if (rowNum) sh.getRange(rowNum, 5).setValue(img);
+      if (rowNum) { sh.getRange(rowNum, 5).setValue(img); cleanupTempProductPhoto_(sh, rowNum); }
       else sh.appendRow(["", clean, String(found.name || ""), "", img]);
       SpreadsheetApp.flush();
     }

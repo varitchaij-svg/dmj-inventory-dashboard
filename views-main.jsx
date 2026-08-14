@@ -5244,7 +5244,9 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
   // Image (real or placeholder) — imgOverride = รูปที่เพิ่งดึงจาก ZORT แบบ on-demand
   const [imgOverride, setImgOverride] = uS(null);
   const [fetchingImg, setFetchingImg] = uS(false);
+  const [uploadingImg, setUploadingImg] = uS(false);
   const [imgErr, setImgErr]           = uS("");
+  const cardPhotoRef = React.useRef(null);
   const effImg = imgOverride || p.imageUrl;
   const hasImg = !!effImg;
 
@@ -5256,6 +5258,22 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
     setFetchingImg(false);
     if (r && r.success && r.data && r.data.imageUrl) setImgOverride(r.data.imageUrl);
     else setImgErr((r && r.error) || "ดึงรูปไม่สำเร็จ");
+  };
+
+  // ถ่าย/เลือกรูปให้สินค้าที่ยังไม่มีรูป → ย่อ → อัปเป็นรูปชั่วคราว (Drive) โชว์ทันที
+  const pickCardPhoto = async (e) => {
+    if (e) e.stopPropagation();
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file || uploadingImg) return;
+    setUploadingImg(true); setImgErr("");
+    try {
+      const dataUrl = await productShrinkImage(file, 800);
+      const r = await syncUploadProductPhoto(p.sku, dataUrl);
+      if (r && r.success && r.data && r.data.imageUrl) setImgOverride(r.data.imageUrl);
+      else setImgErr((r && r.error) || "อัปรูปไม่สำเร็จ");
+    } catch (err) { setImgErr("เปิดรูปไม่สำเร็จ"); }
+    setUploadingImg(false);
   };
 
   return (
@@ -5308,6 +5326,22 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
                 {fetchingImg
                   ? <><span className="spin" style={{width:11,height:11,borderWidth:2}}/> กำลังดึง…</>
                   : "🔄 ดึงรูปจาก ZORT"}
+              </button>
+              {/* ถ่ายรูปเอง (ชั่วคราว) — สำหรับสินค้าใหม่ที่ ZORT ยังไม่มีรูป */}
+              <input ref={cardPhotoRef} type="file" accept="image/*" capture="environment"
+                onChange={pickCardPhoto} style={{display:"none"}} />
+              <button type="button"
+                onClick={e => { e.stopPropagation(); if (!uploadingImg && cardPhotoRef.current) cardPhotoRef.current.click(); }}
+                disabled={uploadingImg}
+                style={{
+                  marginTop:6, padding:"5px 10px", borderRadius:999, cursor: uploadingImg ? "default" : "pointer",
+                  fontSize:11, fontWeight:700, fontFamily:"inherit",
+                  border:"1.5px solid var(--bdr)", background:"#fff", color:"var(--text)",
+                  display:"inline-flex", alignItems:"center", gap:5, opacity: uploadingImg ? 0.6 : 1,
+                }}>
+                {uploadingImg
+                  ? <><span className="spin" style={{width:11,height:11,borderWidth:2}}/> กำลังอัป…</>
+                  : "📷 ถ่ายรูป"}
               </button>
               {imgErr && (
                 <div style={{marginTop:5, fontSize:9.5, color:"var(--dang)", maxWidth:150, lineHeight:1.3}}>{imgErr}</div>
@@ -8632,6 +8666,47 @@ async function checkSkuExistsRemote(sku) {
   } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
 
+// ── ย่อรูปก่อนส่ง — กัน payload ใหญ่จน GAS timeout (ตั้งใจให้ ~60-120KB) ──
+//    self-contained ในไฟล์นี้ (ไม่พึ่ง attShrinkImage ของ views-attendance.jsx ที่โหลดทีหลัง)
+function productShrinkImage(file, maxW) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("อ่านไฟล์รูปไม่สำเร็จ"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("เปิดรูปไม่สำเร็จ"));
+      img.onload = () => {
+        try {
+          const w = Math.min(maxW || 800, img.width || (maxW || 800));
+          const h = Math.round((img.height || w) * (w / (img.width || w)));
+          const c = document.createElement("canvas");
+          c.width = w; c.height = h;
+          c.getContext("2d").drawImage(img, 0, 0, w, h);
+          resolve(c.toDataURL("image/jpeg", 0.72));
+        } catch (e) { reject(e); }
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// อัปรูปชั่วคราวให้สินค้า (ใหม่/ที่ยังไม่มีรูป) → เก็บ Drive ฝั่ง GAS · คืน { success, data:{imageUrl} }
+async function syncUploadProductPhoto(sku, photoBase64) {
+  if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
+  try {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        uploadProductPhoto: true, sku, photoBase64,
+        actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
+      }),
+    });
+    return await dmjJson(res);
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
+}
+
 // ─── AddProductView — ฟอร์มเพิ่มสินค้าใหม่ (owner + warehouse) ───
 function AddProductView({ data, role, onAdded }) {
   const products = data.products || [];
@@ -8703,6 +8778,9 @@ function AddProductView({ data, role, onAdded }) {
   const [wh, setWh]               = uS("W0002"); // default คลังสาย5
   const [saving, setSaving]       = uS(false);
   const [serverCheck, setServerCheck] = uS(null); // { checking, exists }
+  const [photo, setPhoto]         = uS("");       // dataURL รูปที่ถ่าย/เลือก (ชั่วคราว) — ไม่บังคับ
+  const [photoBusy, setPhotoBusy] = uS(false);
+  const photoInputRef = React.useRef(null);
 
   const effectiveCat = catInput.trim() || category;
 
@@ -8844,12 +8922,24 @@ function AddProductView({ data, role, onAdded }) {
     qty: Math.max(0, Math.floor(Number(qty) || 0)),
     warehousecode: wh,
     supplier: supplier.trim(),
+    photoBase64: photo || "",   // รูปชั่วคราว (ไม่บังคับ) — GAS เก็บ Drive → col D ชีต imageUrl
   });
 
   // เคลียร์เฉพาะช่องที่เปลี่ยนต่อรายการ (คงหมวด/โหมด/Prefix/แบบเดิม/คลัง/ซัพพลายเออร์ไว้)
   const resetItemFields = () => {
     setName(""); setPrice(""); setQty(""); setServerCheck(null);
-    setVariantCode(""); setColorSearch("");
+    setVariantCode(""); setColorSearch(""); setPhoto("");
+  };
+
+  // ถ่าย/เลือกรูป → ย่อขนาดก่อนเก็บเป็น dataURL (ส่งไปกับ product ตอนบันทึก)
+  const pickPhoto = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";   // ให้เลือกไฟล์เดิมซ้ำได้
+    if (!file) return;
+    setPhotoBusy(true);
+    try { setPhoto(await productShrinkImage(file, 800)); }
+    catch (err) { showToast("error", "เปิดรูปไม่สำเร็จ ลองใหม่อีกครั้ง", "❌", 4000); }
+    setPhotoBusy(false);
   };
 
   const canQueue = canSave && queue.length < MAX_BATCH;
@@ -9261,6 +9351,47 @@ function AddProductView({ data, role, onAdded }) {
                 value={supplier} onChange={e => setSupplier(e.target.value)} style={inputStyle} />
             </div>
 
+            {/* รูปสินค้า (ถ่าย/เลือก) — ชั่วคราว จนกว่า ZORT จะมีรูป · ไม่บังคับ */}
+            <div>
+              <label style={labelStyle}>
+                รูปสินค้า <span style={{ fontWeight: 400, color: "var(--muted)" }}>· ถ่ายรูปสินค้าใหม่ · ไม่บังคับ</span>
+              </label>
+              <input ref={photoInputRef} type="file" accept="image/*" capture="environment"
+                onChange={pickPhoto} style={{ display: "none" }} />
+              {photo ? (
+                <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                  <div style={{ width: 88, height: 88, borderRadius: 12, flexShrink: 0, border: "1.5px solid var(--g-500)",
+                                backgroundImage: `url("${photo}")`, backgroundSize: "cover", backgroundPosition: "center" }} />
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, color: "var(--g-700)", fontWeight: 700 }}>✓ พร้อมใช้เป็นรูปสินค้า</div>
+                    <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                      พอมีรูปใน ZORT แล้ว ระบบจะเปลี่ยนไปใช้รูป ZORT ให้อัตโนมัติ
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button type="button" onClick={() => photoInputRef.current && photoInputRef.current.click()} disabled={photoBusy}
+                        style={{ minHeight: 40, padding: "6px 12px", borderRadius: 999, cursor: "pointer",
+                                 fontSize: 12.5, fontWeight: 700, fontFamily: "inherit",
+                                 border: "1.5px solid var(--bdr)", background: "#fff", color: "var(--text)" }}>🔄 เปลี่ยนรูป</button>
+                      <button type="button" onClick={() => setPhoto("")}
+                        style={{ minHeight: 40, padding: "6px 12px", borderRadius: 999, cursor: "pointer",
+                                 fontSize: 12.5, fontWeight: 700, fontFamily: "inherit",
+                                 border: "1.5px solid var(--bdr)", background: "#fff", color: "var(--dang)" }}>🗑️ เอาออก</button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <button type="button" onClick={() => photoInputRef.current && photoInputRef.current.click()} disabled={photoBusy}
+                  style={{ width: "100%", minHeight: 88, borderRadius: 12, cursor: photoBusy ? "default" : "pointer",
+                           border: "1.5px dashed var(--g-500)", background: "var(--g-50)", color: "var(--g-700)",
+                           fontSize: 14, fontWeight: 700, fontFamily: "inherit", display: "flex",
+                           alignItems: "center", justifyContent: "center", gap: 8 }}>
+                  {photoBusy
+                    ? <><span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }} /> กำลังเปิดรูป…</>
+                    : "📷 ถ่ายรูป / เลือกรูปสินค้า"}
+                </button>
+              )}
+            </div>
+
             {/* จำนวนเริ่มต้น + คลัง */}
             <div>
               <label style={labelStyle}>จำนวนเริ่มต้น + คลังที่เก็บ</label>
@@ -9303,7 +9434,7 @@ function AddProductView({ data, role, onAdded }) {
                         </div>
                         <div style={{ fontSize: 11, color: "var(--muted)" }}>
                           {q.category} · {q.qty} ชิ้น · {q.warehousecode === "W0001" ? "🏪 หน้าร้าน" : "🏭 คลังสาย5"}
-                          {q.sellprice ? ` · ฿${q.sellprice}` : ""}{q.supplier ? ` · ${q.supplier}` : ""}
+                          {q.sellprice ? ` · ฿${q.sellprice}` : ""}{q.supplier ? ` · ${q.supplier}` : ""}{q.photoBase64 ? " · 📷" : ""}
                         </div>
                       </div>
                       <button type="button" onClick={() => removeFromQueue(i)} disabled={saving}
