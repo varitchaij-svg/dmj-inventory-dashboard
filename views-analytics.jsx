@@ -218,8 +218,20 @@ function useProductOwners(showToast) {
   return { owners: owners, me: me, off: off, toggle: toggle, reload: reload };
 }
 
-function FrontStoreView({ data, role, checkRequest }) {
-  const products = data.products || [];
+function FrontStoreView({ data, role, checkRequest, onCheckComplete }) {
+  // ถ้ามี checkRequest (เจ้าของกด "ส่งคำขอเช็คสต็อก") → กรองสินค้าเฉพาะ SKU ที่ขอมา
+  // เหมือน StockCountView เป๊ะ — ไม่งั้นกด "ดูรายการ" แล้วสลับแท็บมาเฉย ๆ ไม่มีอะไรบอกว่า
+  // ต้องเช็คตัวไหน (เดิมแค่ตั้ง supplierFilter เมื่อ SKU มาจาก supplier เดียว → คำขอที่มี
+  // หลาย supplier กดแล้วเงียบสนิท ผู้ใช้ต้องไล่หาเองในสินค้าหลักพันตัว)
+  const allProducts = data.products || [];
+  const checkSkuSet = uM(function() {
+    if (!checkRequest || !checkRequest.skus) return null;
+    return new Set(checkRequest.skus);
+  }, [checkRequest]);
+  const products = uM(function() {
+    if (!checkSkuSet) return allProducts;
+    return allProducts.filter(function(p){ return checkSkuSet.has(p.sku); });
+  }, [allProducts, checkSkuSet]);
   const [toast, showToast, hideToast] = useToast();
   const CAT_ORDER = ["Realtouch","ดอกไม้","บูช","ไม้แซม","ดอกหญ้า","ใบ","ใบบูช","ใบไม้แขวน","กิ่งไม้","กุหลาบหิน","ต้นไม้","แจกันแก้ว","เรซิ่น"];
 
@@ -261,20 +273,6 @@ function FrontStoreView({ data, role, checkRequest }) {
   const [purchaseMode, setPurchaseMode] = uS(false);
   const [mounted, setMounted] = uS(false);
   uE(() => { const t = setTimeout(() => setMounted(true), 350); return () => clearTimeout(t); }, []);
-
-  // ถ้า checkRequest ส่งมา → auto-set supplier filter ถ้า SKU ทั้งหมดมาจาก supplier เดียว
-  uE(function() {
-    if (!checkRequest || !products.length) return;
-    var checkSkus = new Set(checkRequest.skus || []);
-    var sups = new Set();
-    products.forEach(function(p) {
-      if (checkSkus.has(p.sku)) {
-        var s = p.lastSupplier || p.vendor;
-        if (s) sups.add(s);
-      }
-    });
-    if (sups.size === 1) setSupplierFilter([...sups][0]);
-  }, [checkRequest, products]);
 
   const [checkedQtys, setCheckedQtys] = uS(() => {
     const init = {};
@@ -378,6 +376,38 @@ function FrontStoreView({ data, role, checkRequest }) {
 
   const uncheckedCount = counts.unchecked;
   const mismatchCount  = counts.mismatch;
+
+  // ── ล้างค่านับเก่าที่ไม่ตรงกับระบบ (ขายไปแล้วยอดเลื่อน) → กลับเป็น "รอเช็ค" นับใหม่ ──
+  // ไม่แตะ qtyStore/ZORT · เอาเฉพาะ SKU ที่ "เช็คแล้วและไม่ตรง" ในขอบเขตที่เห็นอยู่ (WYSIWYG)
+  const [clearingChecks, setClearingChecks] = uS(false);
+  const [confirmClearChecks, setConfirmClearChecks] = uS(false);
+  const mismatchSkus = uM(() => {
+    const out = [];
+    products.forEach(p => {
+      if (!p.cat || p.cat === "ไม่มีรหัสสินค้า") return;
+      const v = checkedQtys[p.sku];
+      if (v == null || v === "") return;
+      if (parseInt(v) !== (p.qtyStore ?? 0)) out.push(p.sku);
+    });
+    return out;
+  }, [products, checkedQtys]);
+  const handleClearMismatch = async () => {
+    if (!mismatchSkus.length) { setConfirmClearChecks(false); return; }
+    setClearingChecks(true);
+    const result = await syncClearFrontStoreChecks(mismatchSkus);
+    setClearingChecks(false);
+    setConfirmClearChecks(false);
+    if (result.success !== false) {
+      const gone = new Set(mismatchSkus);
+      // ล้าง state ในเครื่องทันที + ใส่ลง touched กัน sync-merge ดึงค่าเก่ากลับมาก่อน refetch เสร็จ
+      setCheckedQtys(prev => { const n = { ...prev }; gone.forEach(s => { delete n[s]; }); return n; });
+      setTouched(prev => { const n = new Set(prev); gone.forEach(s => n.add(s)); return n; });
+      showToast("success", `ล้างค่านับเก่า ${result.cleared ?? mismatchSkus.length} รายการ — เริ่มนับใหม่ได้เลย`, "🧹");
+      if (typeof window._dmjRefetch === "function") window._dmjRefetch();
+    } else {
+      showToast("error", result.error || "ล้างไม่สำเร็จ", "⚠️");
+    }
+  };
 
   // ── คิว "ควรเช็คก่อน" — ABC + เช็คหน้าร้านล่าสุดนานสุด ──
   // หน้าร้านของเคลื่อน/หายง่ายกว่าคลัง → รอบเช็คถี่กว่า: A ทุก 7 วัน, B ทุก 14 วัน, C ทุก 30 วัน
@@ -531,6 +561,26 @@ function FrontStoreView({ data, role, checkRequest }) {
       onClose={function(){ setFsCalcPad(null); }}
     />
     <div style={{display:"flex", flexDirection:"column", gap:12}}>
+      {/* ── Check Request banner — โชว์เฉพาะ SKU ที่เจ้าของขอให้เช็ค + ปุ่มปิดคำขอ ── */}
+      {checkRequest && (
+        <div style={{background:"#fffbeb",border:"1px solid #fcd34d",borderRadius:12,
+                     padding:"12px 16px",display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:18}}>📋</span>
+          <div style={{flex:1,fontSize:14,minWidth:0}}>
+            <b>กำลังเช็คตามคำขอ</b> · {(checkRequest.skus || []).length} รายการ
+            <div style={{fontSize:11,color:"#92400e",marginTop:2}}>
+              โชว์เฉพาะสินค้าที่ขอให้เช็ค — กรอกจำนวนแล้วกดบันทึก
+            </div>
+          </div>
+          {onCheckComplete && (
+            <button onClick={function(){ onCheckComplete(checkRequest.reqId); }}
+              style={{background:"#1f7f44",color:"#fff",border:"none",borderRadius:8,
+                      padding:"8px 14px",fontWeight:600,fontSize:13,cursor:"pointer",flexShrink:0}}>
+              ✅ เสร็จแล้ว
+            </button>
+          )}
+        </div>
+      )}
       <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
         <div style={{flex:1, minWidth:160}}>
           <div style={{fontSize:15, fontWeight:700}}>🛒 เช็คจำนวนหน้าร้าน</div>
@@ -574,6 +624,41 @@ function FrontStoreView({ data, role, checkRequest }) {
           )}
         </div>
       </div>
+
+      {/* ── ล้างค่านับเก่าที่ไม่ตรงกับระบบ (ขายไปแล้วยอดเลื่อน) → เริ่มนับใหม่ ── */}
+      {mismatchSkus.length > 0 && (
+        <div style={{background:"#fff7ed",border:"1px solid #fdba74",borderRadius:12,
+                     padding:"11px 14px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <span style={{fontSize:18}}>🧹</span>
+          <div style={{flex:1,minWidth:160,fontSize:12.5,color:"#7c2d12",lineHeight:1.4}}>
+            มีค่านับเก่า <b>{mismatchSkus.length}</b> รายการที่ไม่ตรงกับระบบ (ส่วนใหญ่เพราะขายไปหลังนับ)
+            <div style={{fontSize:11,color:"#9a3412"}}>ล้างเพื่อเริ่มนับใหม่ — ไม่กระทบจำนวนสต็อกจริง/ZORT</div>
+          </div>
+          {confirmClearChecks ? (
+            <div style={{display:"flex",gap:6,flexShrink:0}}>
+              <button onClick={handleClearMismatch} disabled={clearingChecks}
+                style={{background:"#ea580c",color:"#fff",border:"none",borderRadius:8,
+                        padding:"8px 12px",fontWeight:700,fontSize:12.5,cursor:"pointer",
+                        opacity:clearingChecks?0.5:1,fontFamily:"inherit"}}>
+                {clearingChecks
+                  ? <><span className="spin" style={{width:12,height:12,borderWidth:2,marginRight:5}}/> กำลังล้าง...</>
+                  : `⚠️ ยืนยันล้าง ${mismatchSkus.length}`}
+              </button>
+              <button onClick={() => setConfirmClearChecks(false)} disabled={clearingChecks}
+                style={{background:"#fff",color:"#7c2d12",border:"1px solid #fdba74",borderRadius:8,
+                        padding:"8px 12px",fontWeight:600,fontSize:12.5,cursor:"pointer",fontFamily:"inherit"}}>
+                ยกเลิก
+              </button>
+            </div>
+          ) : (
+            <button onClick={() => setConfirmClearChecks(true)}
+              style={{background:"#fff",color:"#c2410c",border:"1.5px solid #fdba74",borderRadius:8,
+                      padding:"8px 12px",fontWeight:700,fontSize:12.5,cursor:"pointer",flexShrink:0,fontFamily:"inherit"}}>
+              🧹 ล้างค่านับเก่า ({mismatchSkus.length})
+            </button>
+          )}
+        </div>
+      )}
 
       <Card padding={true} style={{paddingTop:12,paddingBottom:12}}>
         <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>

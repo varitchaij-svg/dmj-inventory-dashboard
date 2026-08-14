@@ -515,6 +515,80 @@ function startServer() {
     await page.close();
   }
 
+  // ── (ง0) คำขอเช็คสต็อก (frontstore) → กด "ดูรายการ" ต้องเหลือแค่ SKU ที่ขอ ──
+  // เจ้าของแจ้ง: กด "ดูรายการ" แล้วยังเห็นสินค้าทั้งหมด ไม่ใช่แค่ตัวที่ขอให้เช็ค
+  // เดิม FrontStoreView แค่ตั้ง supplierFilter เมื่อ SKU มาจาก supplier เดียว → คำขอหลาย
+  // supplier กดแล้วเงียบ · ตอนนี้กรอง products เฉพาะ SKU ที่ขอ (เหมือน StockCountView)
+  // ⚠️ เช็คแค่ "มาถึงแท็บ" ไม่พอ — ต้องนับ data-sku จริงบนจอว่าเหลือแค่ VAS001
+  {
+    const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
+    let status = 'ok', note = '';
+    const readSkus = () => page.evaluate(() => [...new Set(
+      [...document.querySelectorAll('main [data-sku]')].map((e) => e.getAttribute('data-sku')))]);
+    try {
+      await page.goto(`${base}?role=frontstore&checkreq=1`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      // ไปแท็บ "เช็คหน้าร้าน" ก่อน (จอเดียวกับที่เจ้าของอยู่ตอนกด "ดูรายการ")
+      const nav = await navigateTo(page, 'frontstore', 'frontstore');
+      await page.waitForTimeout(700); // รอ mounted (skeleton 350ms)
+      const beforeSkus = await readSkus();
+      // กด "ดูรายการ" ในแถบเหลือง "มีคำขอเช็คสต็อก" (แถบระดับ app โผล่ทุกแท็บ)
+      await page.locator('button:has-text("ดูรายการ")').first().click({ timeout: 3000 });
+      await page.waitForTimeout(600);
+      const afterSkus = await readSkus();
+      const body = await page.locator('body').innerText().catch(() => '');
+      const bannerShown = /กำลังเช็คตามคำขอ/.test(body);
+      if (!nav || !beforeSkus.includes('FLW002')) {
+        // ก่อนกดควรเห็นหลายตัว (รวม FLW002) — ไม่เห็น = ทดสอบไม่ได้จริง (nav/หน้าเพี้ยน)
+        status = 'SETUP_FAIL'; note = `ก่อนกดไม่เห็นสินค้าอื่น (nav=${nav}, ${beforeSkus.join(',') || 'ว่าง'})`;
+      } else if (!afterSkus.includes('VAS001')) {
+        status = 'FILTER_FAIL'; note = `กด "ดูรายการ" แล้วไม่เห็น VAS001 (เห็น: ${afterSkus.join(',') || 'ว่าง'})`;
+      } else if (afterSkus.includes('FLW002') || afterSkus.includes('DEC003')) {
+        status = 'FILTER_FAIL';
+        note = `กดแล้วยังเห็นสินค้าที่ไม่ได้ขอ (เห็น: ${afterSkus.join(',')}) — ควรเหลือแค่ VAS001`;
+      } else if (!bannerShown) {
+        status = 'FILTER_FAIL'; note = 'กรองถูกแต่ไม่มีแถบ "กำลังเช็คตามคำขอ" บอกผู้ใช้';
+      } else {
+        note = `เห็นทั้งหมด (${beforeSkus.join(',')}) → กด "ดูรายการ" → เหลือ ${afterSkus.join(',')} + แถบกำลังเช็คตามคำขอ`;
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'checkreq__frontstore.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'คำขอเช็คสต็อก (frontstore)', status, note });
+    await page.close();
+  }
+
+  // ── (ง0.1) ล้างค่านับหน้าร้านเก่าที่ไม่ตรงระบบ → บาร์ "🧹 ล้างค่านับเก่า (N)" ──
+  // เจ้าของแจ้ง: หน้าเช็คหน้าร้านขึ้น "ไม่ตรง 3852" เพราะขายไปแล้วยอดเลื่อน อยากล้างเริ่มนับใหม่
+  // ⚠️ เช็คว่าบาร์โผล่จริง + กดยืนยันแล้วบาร์หาย (mismatch ถูกล้าง) ไม่ใช่แค่มี element
+  {
+    const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=frontstore&fsmismatch=1`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const nav = await navigateTo(page, 'frontstore', 'frontstore');
+      await page.waitForTimeout(700);
+      const barBefore = await page.locator('button:has-text("ล้างค่านับเก่า")').count();
+      // กดปุ่มล้าง → เข้าโหมดยืนยัน → กดยืนยัน
+      await page.locator('button:has-text("ล้างค่านับเก่า")').first().click({ timeout: 3000 });
+      await page.waitForTimeout(200);
+      await page.locator('button:has-text("ยืนยันล้าง")').first().click({ timeout: 3000 });
+      await page.waitForTimeout(800);
+      const barAfter = await page.locator('button:has-text("ล้างค่านับเก่า")').count();
+      const stillMismatch = await page.locator('button:has-text("ยืนยันล้าง")').count();
+      if (!nav || !barBefore) {
+        status = 'SETUP_FAIL'; note = `ไม่เห็นปุ่มล้างค่านับเก่า (nav=${nav}, bar=${barBefore})`;
+      } else if (barAfter > 0 || stillMismatch > 0) {
+        status = 'CLEAR_FAIL'; note = 'กดยืนยันแล้วบาร์ยังอยู่ — ค่านับเก่าไม่ถูกล้าง';
+      } else {
+        note = 'เห็นบาร์ "ล้างค่านับเก่า (1)" → กดยืนยัน → บาร์หาย (ล้าง mismatch สำเร็จ)';
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'fsclear__frontstore.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'ล้างค่านับเก่าหน้าร้าน (frontstore)', status, note });
+    await page.close();
+  }
+
   // ── (ง) ทางด่วนลงเวลา: ข้อมูลก้อนใหญ่ยังไม่มา แต่ต้องลงเวลาได้แล้ว ──────────
   // `?nodata=1` = ไม่ seed localStorage + คำขอ payload ค้างไม่ตอบ (เหมือนเน็ตร้านช้า)
   // นี่คือสภาพจริงของพนักงานที่เปิดแอปบนเครื่องใหม่/หลังล้าง cache แล้วมาสแกนเข้างาน
