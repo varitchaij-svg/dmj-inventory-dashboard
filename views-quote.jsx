@@ -349,6 +349,38 @@ function quoteHydrateItems_(items, products) {
   });
 }
 
+// ── จับกลุ่มสินค้า Made to Order ตาม "ตัวอักษรอังกฤษนำหน้ารหัส" ─────────────────────
+// เจ้าของขอ: หมวด MTO มีรหัสเป็นชุด (BK001-BK020, PACKAGE001-…) หลายร้อยตัว เลื่อนหาไม่ไหว
+// → ยุบเป็น "การ์ดกลุ่ม" เดียวต่อชุด กดแล้วเพิ่มรหัสถัดไปที่ยังว่าง (BK001→002→003) เป็นบรรทัดแยก
+// ทำเฉพาะหมวด MTO เท่านั้น หมวดอื่นยังโชว์รายตัวเหมือนเดิม
+// prefix = ตัวอักษรอังกฤษล้วนที่นำหน้า "ตัวเลข" (BK001→BK · PACKAGE001→PACKAGE)
+//   ไม่เข้ารูปแบบ (รหัสไม่มีเลขต่อท้าย/เป็นชื่อล้วน) → คืน '' = ให้เป็นกลุ่มเดี่ยวของตัวเอง ไม่ยุบมั่ว
+function mtoSkuPrefix_(sku) {
+  const m = String(sku == null ? "" : sku).trim().toUpperCase().match(/^([A-Z]+)(?=\d)/);
+  return m ? m[1] : "";
+}
+// จัดกลุ่ม array สินค้า → [{ key, prefix, items(เรียงตามรหัสแบบ numeric: BK002 มาก่อน BK010) }]
+// รหัสไม่มี prefix ตัวเลข = กลุ่มเดี่ยว (key='#'+sku) จะได้ยังกดเพิ่มได้เหมือนเดิม ไม่หายจากจอ
+function mtoGroupProducts_(list) {
+  const map = {}; const order = [];
+  (Array.isArray(list) ? list : []).forEach(p => {
+    if (!p) return;
+    const pre = mtoSkuPrefix_(p.sku);
+    const key = pre || ("#" + String(p.sku || ""));
+    if (!map[key]) { map[key] = { key, prefix: pre || String(p.sku || ""), items: [] }; order.push(key); }
+    map[key].items.push(p);
+  });
+  order.forEach(k => map[k].items.sort((a, b) =>
+    String(a.sku || "").localeCompare(String(b.sku || ""), undefined, { numeric: true })));
+  return order.map(k => map[k]);
+}
+// ชื่อกลุ่มสำหรับโชว์บนการ์ด — ตัดเลขลำดับท้ายชื่อออก ("กระเช้า#1"→"กระเช้า") ไม่มีก็ใช้ prefix
+function mtoGroupLabel_(g) {
+  if (!g || !g.items || !g.items.length) return (g && g.prefix) || "";
+  const n = String(g.items[0].name || "").replace(/[#\s]*\d+\s*$/, "").trim();
+  return n || g.prefix || "";
+}
+
 // editQuote (ไม่บังคับ) = ใบเสนอราคาเดิมที่จะแก้ไข — ได้จาก getQuotationForPrint + id/number
 //   { quotationId, quotationNumber, customer, items, remarks, totals }
 // ⚠️ items[].price ที่ได้จาก ZORT เป็น "ราคาหลังเฉลี่ยส่วนลดแล้ว" (createQuotation ส่ง netUnit
@@ -381,6 +413,7 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
   const [search, setSearch] = uS("");
   const [catFilter, setCatFilter] = uS("ทั้งหมด");
   const [catPage, setCatPage] = uS(0);
+  const [expandGroup, setExpandGroup] = uS(null);   // กลุ่ม MTO ที่กาง "เลือกแบบเอง" อยู่ (key)
 
   const [cust, setCust] = uS(() => Object.assign(
     { name: "", taxId: "", branch: "", branchNo: "", address: "", phone: "", email: "" },
@@ -487,10 +520,21 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
 
   const POS_GRID_PER = 9;
   const gridAll = uM(() => (catFilter === "ทั้งหมด" ? products : products.filter(p => (p.category || "อื่นๆ").trim() === catFilter)), [products, catFilter]);
-  const gridPages = Math.max(1, Math.ceil(gridAll.length / POS_GRID_PER));
+  // หมวด MTO → โชว์ "การ์ดกลุ่ม" (ยุบ BK001-020 เป็นชุด) · หมวดอื่น → รายตัวเหมือนเดิม
+  const mtoActive = isMtoCat(catFilter);
+  const mtoGroups = uM(() => (mtoActive ? mtoGroupProducts_(gridAll) : []), [mtoActive, gridAll]);
+  const gridUnits = mtoActive ? mtoGroups : gridAll;
+  const gridPages = Math.max(1, Math.ceil(gridUnits.length / POS_GRID_PER));
   const gridPageSafe = Math.min(catPage, gridPages - 1);
-  const gridItems = gridAll.slice(gridPageSafe * POS_GRID_PER, gridPageSafe * POS_GRID_PER + POS_GRID_PER);
-  function pickCat(c) { setCatFilter(c); setCatPage(0); }
+  const pageUnits = gridUnits.slice(gridPageSafe * POS_GRID_PER, gridPageSafe * POS_GRID_PER + POS_GRID_PER);
+  function pickCat(c) { setCatFilter(c); setCatPage(0); setExpandGroup(null); }
+  // กดการ์ดกลุ่ม = เพิ่มรหัสถัดไปที่ยังไม่อยู่ในใบ (BK001→002→003) เป็นบรรทัดแยก
+  function addNextInGroup(g) {
+    const inCart = new Set(cart.map(c => c.sku));
+    const next = (g.items || []).find(p => !inCart.has(p.sku));
+    if (!next) { showToast("warn", `เพิ่มครบทุกแบบของ ${mtoGroupLabel_(g)} แล้ว`, "✅"); return; }
+    addToCart(next);
+  }
 
   const matches = uM(() => {
     const q = search.trim().toLowerCase();
@@ -788,17 +832,67 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
                   border: catFilter === c ? "2px solid var(--g-600,#1f7f44)" : "1px solid #d1d5db", background: catFilter === c ? "#f0fdf4" : "#fff" }}>{c}</button>
               ))}
             </div>
+            {mtoActive && (
+              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 8, lineHeight: 1.5 }}>
+                💡 กดการ์ดกลุ่ม = เพิ่มรหัสถัดไปให้เอง (กด 3 ครั้ง ได้ 3 บรรทัด) · อยากได้รหัสเจาะจงกด "เลือกแบบเอง"
+              </div>
+            )}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 8, marginTop: 10 }}>
-              {gridItems.map(p => (
-                <div key={p.sku} onClick={() => addToCart(p)} style={{ border: "1px solid #eee", borderRadius: 8, padding: 8, cursor: "pointer", textAlign: "center" }}>
-                  {p.imageUrl
-                    ? <img src={p.imageUrl} loading="lazy" style={{ width: "100%", aspectRatio: "1 / 1", objectFit: "contain", borderRadius: 5, background: "#f3f4f6" }} onError={e => { e.target.style.display = "none"; }}/>
-                    : <div style={{ width: "100%", aspectRatio: "1 / 1", borderRadius: 5, background: "#f3f4f6", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>📦</div>}
-                  <div style={{ fontSize: 12, fontWeight: 600, marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</div>
-                  <div style={{ fontSize: 10, color: "var(--muted)" }}>{p.sku}</div>
-                </div>
-              ))}
+              {mtoActive
+                ? pageUnits.map(g => {
+                    const inCart = new Set(cart.map(c => c.sku));
+                    const added = g.items.filter(p => inCart.has(p.sku)).length;
+                    const rep = g.items.find(p => p.imageUrl) || g.items[0];
+                    const label = mtoGroupLabel_(g);
+                    return (
+                      <div key={g.key} style={{ border: "1px solid #eee", borderRadius: 8, padding: 8, textAlign: "center" }}>
+                        <div onClick={() => addNextInGroup(g)} style={{ cursor: "pointer" }}>
+                          {rep && rep.imageUrl
+                            ? <img src={rep.imageUrl} loading="lazy" style={{ width: "100%", aspectRatio: "1 / 1", objectFit: "contain", borderRadius: 5, background: "#f3f4f6" }} onError={e => { e.target.style.display = "none"; }}/>
+                            : <div style={{ width: "100%", aspectRatio: "1 / 1", borderRadius: 5, background: "#f3f4f6", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>📦</div>}
+                          <div style={{ fontSize: 12, fontWeight: 700, marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</div>
+                          <div style={{ fontSize: 10, color: "var(--muted)" }}>{g.prefix} · {g.items.length} แบบ{added ? ` · เพิ่มแล้ว ${added}` : ""}</div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--g-600,#1f7f44)", marginTop: 3 }}>➕ เพิ่มแบบถัดไป</div>
+                        </div>
+                        {g.items.length > 1 && (
+                          <button onClick={() => setExpandGroup(expandGroup === g.key ? null : g.key)}
+                            style={{ marginTop: 4, border: "none", background: "none", color: "var(--muted)", fontSize: 11, cursor: "pointer", textDecoration: "underline" }}>
+                            {expandGroup === g.key ? "ซ่อน" : "เลือกแบบเอง"}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })
+                : pageUnits.map(p => (
+                    <div key={p.sku} onClick={() => addToCart(p)} style={{ border: "1px solid #eee", borderRadius: 8, padding: 8, cursor: "pointer", textAlign: "center" }}>
+                      {p.imageUrl
+                        ? <img src={p.imageUrl} loading="lazy" style={{ width: "100%", aspectRatio: "1 / 1", objectFit: "contain", borderRadius: 5, background: "#f3f4f6" }} onError={e => { e.target.style.display = "none"; }}/>
+                        : <div style={{ width: "100%", aspectRatio: "1 / 1", borderRadius: 5, background: "#f3f4f6", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>📦</div>}
+                      <div style={{ fontSize: 12, fontWeight: 600, marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</div>
+                      <div style={{ fontSize: 10, color: "var(--muted)" }}>{p.sku}</div>
+                    </div>
+                  ))}
             </div>
+            {mtoActive && expandGroup && (() => {
+              const g = mtoGroups.find(x => x.key === expandGroup);
+              if (!g) return null;
+              const inCart = new Set(cart.map(c => c.sku));
+              return (
+                <div style={{ marginTop: 8, border: "1px dashed #d1d5db", borderRadius: 8, padding: 8 }}>
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>เลือกรหัสเจาะจงของ {mtoGroupLabel_(g)}:</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {g.items.map(p => (
+                      <button key={p.sku} onClick={() => addToCart(p)} disabled={inCart.has(p.sku)}
+                        style={{ padding: "4px 10px", borderRadius: 999, fontSize: 12, fontWeight: 600,
+                          border: "1px solid #d1d5db", background: inCart.has(p.sku) ? "#f3f4f6" : "#fff",
+                          color: inCart.has(p.sku) ? "#9ca3af" : "#111", cursor: inCart.has(p.sku) ? "default" : "pointer" }}>
+                        {p.sku}{inCart.has(p.sku) ? " ✓" : ""}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
             {gridPages > 1 && (
               <div style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 8, alignItems: "center" }}>
                 <button onClick={() => setCatPage(Math.max(0, gridPageSafe - 1))} disabled={gridPageSafe === 0}
@@ -1282,4 +1376,4 @@ function QuotationPrintDoc({ quotationNumber, invoiceNumber, items, customer, re
   );
 }
 
-if (typeof module !== 'undefined') module.exports = { QUOTE_DEFAULT_REMARKS };
+if (typeof module !== 'undefined') module.exports = { QUOTE_DEFAULT_REMARKS, mtoSkuPrefix_, mtoGroupProducts_, mtoGroupLabel_ };
