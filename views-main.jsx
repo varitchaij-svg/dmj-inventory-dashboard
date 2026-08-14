@@ -3307,7 +3307,13 @@ function CategoryView({ data, role, onNav }) {
   ).length, [products, mineOnly, mySkus]);
   const [sendingCheck, setSendingCheck] = uS(false);
   const [checkSendOpen, setCheckSendOpen] = uS(false);       // floating button → modal
-  const [checkSuppliers, setCheckSuppliers] = uS(new Set()); // ชื่อ supplier ที่ owner เลือก
+  // ⭐ ปุ่มลอย 📤 "ส่งคำขอเช็คสต็อก" — เดิมมีเฉพาะ owner/dev (viewRole ยุบ dev→owner มาแล้ว)
+  // เจ้าของสั่ง (ส.ค. 2026): "saler ยังไม่มีปุ่มให้กดเลย" ชี้ไปที่ปุ่มนี้ที่เหมือน owner/dev
+  // → เปิดให้ saler/storedevice ด้วย (ทั้งคู่ยืนหน้าร้าน สั่งเช็คสต็อกร้านที่ตัวเองดูแลได้)
+  // ⚠️ backend: `createStockCheck` ยังไม่อยู่ใน IMMEDIATE_GATE + REQUIRE_LOGIN ปิดอยู่ → ทำงานได้
+  //    ทันทีไม่ต้องรอ deploy · แต่เติมใน ROLE_ACTIONS_ ของ saler ไว้ให้ตารางถูกต้องเผื่อเปิด gate
+  const canSendCheck = role === "owner" || role === "saler" || role === "storedevice";
+  const [checkSuppliers, setCheckSuppliers] = uS(new Set()); // ชื่อ supplier ที่เลือก
   const [checkSearch, setCheckSearch] = uS("");              // ช่องค้นหา supplier ใน modal
   const [orderProduct, setOrderProduct] = uS(null);
   const [localPendingOrders, setLocalPendingOrders] = uS([]); // optimistic update หลังสั่งสำเร็จ
@@ -4592,8 +4598,8 @@ function CategoryView({ data, role, onNav }) {
         </div>
       )}
 
-      {/* ── Floating button (owner) — ลากได้ ── */}
-      {role === "owner" && (
+      {/* ── Floating button (owner/dev + saler/storedevice) — ลากได้ ── */}
+      {canSendCheck && (
         <div ref={floatRef}
           onMouseDown={function(e){ startDrag(e.clientX, e.clientY); }}
           onMouseMove={function(e){ moveDrag(e.clientX, e.clientY); }}
