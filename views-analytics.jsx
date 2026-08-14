@@ -218,8 +218,20 @@ function useProductOwners(showToast) {
   return { owners: owners, me: me, off: off, toggle: toggle, reload: reload };
 }
 
-function FrontStoreView({ data, role, checkRequest }) {
-  const products = data.products || [];
+function FrontStoreView({ data, role, checkRequest, onCheckComplete }) {
+  // ถ้ามี checkRequest (เจ้าของกด "ส่งคำขอเช็คสต็อก") → กรองสินค้าเฉพาะ SKU ที่ขอมา
+  // เหมือน StockCountView เป๊ะ — ไม่งั้นกด "ดูรายการ" แล้วสลับแท็บมาเฉย ๆ ไม่มีอะไรบอกว่า
+  // ต้องเช็คตัวไหน (เดิมแค่ตั้ง supplierFilter เมื่อ SKU มาจาก supplier เดียว → คำขอที่มี
+  // หลาย supplier กดแล้วเงียบสนิท ผู้ใช้ต้องไล่หาเองในสินค้าหลักพันตัว)
+  const allProducts = data.products || [];
+  const checkSkuSet = uM(function() {
+    if (!checkRequest || !checkRequest.skus) return null;
+    return new Set(checkRequest.skus);
+  }, [checkRequest]);
+  const products = uM(function() {
+    if (!checkSkuSet) return allProducts;
+    return allProducts.filter(function(p){ return checkSkuSet.has(p.sku); });
+  }, [allProducts, checkSkuSet]);
   const [toast, showToast, hideToast] = useToast();
   const CAT_ORDER = ["Realtouch","ดอกไม้","บูช","ไม้แซม","ดอกหญ้า","ใบ","ใบบูช","ใบไม้แขวน","กิ่งไม้","กุหลาบหิน","ต้นไม้","แจกันแก้ว","เรซิ่น"];
 
@@ -261,20 +273,6 @@ function FrontStoreView({ data, role, checkRequest }) {
   const [purchaseMode, setPurchaseMode] = uS(false);
   const [mounted, setMounted] = uS(false);
   uE(() => { const t = setTimeout(() => setMounted(true), 350); return () => clearTimeout(t); }, []);
-
-  // ถ้า checkRequest ส่งมา → auto-set supplier filter ถ้า SKU ทั้งหมดมาจาก supplier เดียว
-  uE(function() {
-    if (!checkRequest || !products.length) return;
-    var checkSkus = new Set(checkRequest.skus || []);
-    var sups = new Set();
-    products.forEach(function(p) {
-      if (checkSkus.has(p.sku)) {
-        var s = p.lastSupplier || p.vendor;
-        if (s) sups.add(s);
-      }
-    });
-    if (sups.size === 1) setSupplierFilter([...sups][0]);
-  }, [checkRequest, products]);
 
   const [checkedQtys, setCheckedQtys] = uS(() => {
     const init = {};
@@ -531,6 +529,26 @@ function FrontStoreView({ data, role, checkRequest }) {
       onClose={function(){ setFsCalcPad(null); }}
     />
     <div style={{display:"flex", flexDirection:"column", gap:12}}>
+      {/* ── Check Request banner — โชว์เฉพาะ SKU ที่เจ้าของขอให้เช็ค + ปุ่มปิดคำขอ ── */}
+      {checkRequest && (
+        <div style={{background:"#fffbeb",border:"1px solid #fcd34d",borderRadius:12,
+                     padding:"12px 16px",display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:18}}>📋</span>
+          <div style={{flex:1,fontSize:14,minWidth:0}}>
+            <b>กำลังเช็คตามคำขอ</b> · {(checkRequest.skus || []).length} รายการ
+            <div style={{fontSize:11,color:"#92400e",marginTop:2}}>
+              โชว์เฉพาะสินค้าที่ขอให้เช็ค — กรอกจำนวนแล้วกดบันทึก
+            </div>
+          </div>
+          {onCheckComplete && (
+            <button onClick={function(){ onCheckComplete(checkRequest.reqId); }}
+              style={{background:"#1f7f44",color:"#fff",border:"none",borderRadius:8,
+                      padding:"8px 14px",fontWeight:600,fontSize:13,cursor:"pointer",flexShrink:0}}>
+              ✅ เสร็จแล้ว
+            </button>
+          )}
+        </div>
+      )}
       <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
         <div style={{flex:1, minWidth:160}}>
           <div style={{fontSize:15, fontWeight:700}}>🛒 เช็คจำนวนหน้าร้าน</div>

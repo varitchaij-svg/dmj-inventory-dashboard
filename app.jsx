@@ -2362,7 +2362,17 @@ function App() {
                                                 fetchFromSheet();
                                               } catch(e){ console.error("completeStockCheck:", e); }
                                             }}/></ErrorBoundary>}
-        {activeTab === "frontstore"   && <ErrorBoundary key="frontstore"><FrontStoreView data={data} role={viewRole} checkRequest={activeCheckRequest}/></ErrorBoundary>}
+        {activeTab === "frontstore"   && <ErrorBoundary key="frontstore"><FrontStoreView data={data} role={viewRole}
+                                            checkRequest={activeCheckRequest}
+                                            onCheckComplete={async function(reqId){
+                                              try {
+                                                await dmjFetch(SHEET_DEPLOY_URL, {method:"POST",
+                                                  headers:{"Content-Type":"text/plain;charset=utf-8"},
+                                                  body: JSON.stringify({completeStockCheck:true, reqId:reqId, actor:role})});
+                                                setActiveCheckRequest(null);
+                                                fetchFromSheet();
+                                              } catch(e){ console.error("completeStockCheck:", e); }
+                                            }}/></ErrorBoundary>}
         {activeTab === "transfers"    && <ErrorBoundary key="transfers"><TransferView data={data}/></ErrorBoundary>}
         {activeTab === "orders"       && <ErrorBoundary key="orders"><OrderListView data={data} role={viewRole}/></ErrorBoundary>}
         {activeTab === "tracking"     && <ErrorBoundary key="tracking"><TrackingView data={data} role={viewRole}/></ErrorBoundary>}
