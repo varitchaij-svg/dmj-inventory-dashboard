@@ -9879,7 +9879,7 @@ const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty
   };
 
   return (
-    <div id={`fs-row-${p.sku}`}
+    <div id={`fs-row-${p.sku}`} data-sku={p.sku}
          style={{
            background:cardBg,
            border:`2px solid ${borderColor}`,

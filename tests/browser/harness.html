@@ -70,6 +70,15 @@
     Object.keys(payload).forEach(function (k) { if (drops.indexOf(k) < 0) out[k] = payload[k]; });
     return out;
   }
+  // ── ?checkreq=1 : จำลอง "เจ้าของส่งคำขอเช็คสต็อก" (ทดสอบแยกเคส ไม่รบกวนเทสต์อื่น) ──
+  // ใส่คำขอที่มี SKU เดียว (VAS001) จากทั้งหมดหลายตัว → กด "ดูรายการ" แล้วต้องเหลือแค่ VAS001
+  if (q.get('checkreq') === '1') {
+    window.__DMJ_FIXTURE.stockCheckRequests = [{
+      reqId: 'CHK-001', timestamp: '2026-08-14 10:00', requester: 'เจ้าของ',
+      skus: ['VAS001'], names: ['แจกันแก้วใส ทรงสูง'], status: 'pending',
+      completedBy: '', completedAt: '',
+    }];
+  }
   window.__DMJ_PAYLOAD = shapeForRole(window.__DMJ_FIXTURE, role);
 
   // ── โหมด ?nodata=1 : จำลอง "ข้อมูลก้อนใหญ่ยังไม่มา" ──────────────────────
