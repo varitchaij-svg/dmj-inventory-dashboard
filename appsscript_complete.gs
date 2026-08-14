@@ -690,7 +690,7 @@ var MTO_JOB_ACTIONS_ = ["createMtoJob", "closeMtoJob", "saveMtoJobItems", "delet
 // ROLE_ACTIONS_ เดิมเขียนจาก "เดาว่า role นี้น่าจะทำอะไร" ไม่ได้ไล่จาก ROLE_TABS + view จริง
 // เวลาเพิ่ม role หรือแท็บใหม่ ให้ไล่จาก ROLE_TABS → view → action ที่ view นั้นเรียกจริงเสมอ
 var COMMON_ACTIONS_ = ["order", "updateOrderState", "transferStock", "transferStockBatch",
-                        "confirmShipmentReceive", "updateFrontStore", "fetchProductImage",
+                        "confirmShipmentReceive", "updateFrontStore", "clearFrontStoreChecks", "fetchProductImage",
                         "checkSkuExists", "updateLockData",
                         "punch", "myToday", "myAttendanceSummary",
                         // กระดิ่งแจ้งเตือนอยู่บนหัวจอทุกแท็บทุก role → ต้องอยู่ใน COMMON เสมอ
@@ -791,7 +791,7 @@ function forbidden_(msg) {
 // รวมให้เหลือ "ชื่อ action" เดียวเพื่อเอาไปเช็คสิทธิ์ · ต้องอัปเดตลิสต์นี้เมื่อเพิ่ม dispatch ใหม่
 // (ชื่อที่ไม่รู้จัก → คืน null = ไม่ถูกเช็คสิทธิ์ ไม่ใช่ block — กันของเดิมพังโดยไม่ตั้งใจ)
 var POST_FLAG_ACTIONS_ = [
-  "addNewProduct", "addPurchaseIn", "approveQuotation", "assignMtoJob", "checkSkuExists", "closeMtoJob",
+  "addNewProduct", "addPurchaseIn", "approveQuotation", "assignMtoJob", "checkSkuExists", "clearFrontStoreChecks", "closeMtoJob",
   "completeStockCheck", "confirmShipmentReceive", "confirmStockCount", "createMtoJob",
   "createQuotation", "createSaleBill", "createStockCheck", "deductMaterials", "deductStock",
   "deleteLockEntry", "deleteMtoJob", "deleteOrder", "deleteOrders", "deleteQuotationDraft", "editQuotation",
@@ -1719,7 +1719,7 @@ const STAFF_PERF_CATEGORIES_ = [
   { key: "mto",        emoji: "🎁", label: "งานจัดพิเศษ",        ops: true,  unit: "ครั้ง",  prefixes: ["สร้างงาน MTO", "มอบหมายงาน MTO", "ปิดงาน MTO", "ลบงาน MTO", "deductMaterials"] },
   { key: "sale",       emoji: "🧾", label: "ออกบิลขาย",          ops: true,  unit: "ใบ",    prefixes: ["ออกบิลขาย", "ออกใบกำกับภาษีย้อนหลัง"] },
   { key: "quote",      emoji: "📄", label: "ใบเสนอราคา",         ops: true,  unit: "ใบ",    prefixes: ["สร้างใบเสนอราคา", "แก้ไขใบเสนอราคา", "อนุมัติใบเสนอราคา", "ปิดใบเสนอราคา"] },
-  { key: "adjust",     emoji: "⚙️", label: "ปรับ/ลบข้อมูล",      ops: false, unit: "ครั้ง",  prefixes: ["ปรับสต็อก0", "resetNegativeStock", "ลบ order"] },
+  { key: "adjust",     emoji: "⚙️", label: "ปรับ/ลบข้อมูล",      ops: false, unit: "ครั้ง",  prefixes: ["ปรับสต็อก0", "resetNegativeStock", "ลบ order", "ล้างค่าเช็คหน้าร้าน"] },
   { key: "star",       emoji: "⭐", label: "ตั้งผู้ดูแลสินค้า",   ops: false, unit: "ครั้ง",  prefixes: ["setProductOwner", "clearProductOwner"] },
   { key: "admin",      emoji: "🔧", label: "ตั้งค่าระบบ",        ops: false, unit: "ครั้ง",  prefixes: ["แก้ไขพนักงาน", "แก้ไขการลงเวลา", "saveThresholds", "ตั้งตำแหน่งพนักงาน"] },
   { key: "punch",      emoji: "🕐", label: "กดลงเวลา",           ops: false, unit: "ครั้ง",  skip: true, prefixes: ["ลงเวลา"] },
@@ -2345,6 +2345,9 @@ function doPost(e) {
     // ─── Front Store Count ───
     if (data.updateFrontStore) {
       return updateFrontStore(ss, data.entries, data.datetime, actor);
+    }
+    if (data.clearFrontStoreChecks) {
+      return clearFrontStoreChecks(ss, data.skus, actor);
     }
     if (data.confirmStockCount) {
       return confirmStockCount(ss, data.entries, data.clientLoadedAt, actor);
@@ -4621,6 +4624,54 @@ function updateFrontStore(ss, entries, datetime, actor) {
     });
     invalidateCache_(); // P0-4: bump dmj_last_write_ts ให้ conflict detection มองเห็น write นี้
     return ok({ updated: entries.length });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ล้างค่า "จำนวนที่เช็คหน้าร้าน" (col D) + วันที่เช็ค (col I) ของ SKU ที่ส่งมา
+// ใช้ตอนเจ้าของอยากล้างค่านับเก่าที่ค้างไม่ตรงกับระบบ (ขายไปแล้วยอดเลื่อน) ให้เริ่มนับใหม่
+// ⚠️ **ห้ามใช้ updateFrontStore แทน** — updateFrontStore push จำนวนเข้า ZORT (Number("")||0 = 0)
+//    = จะ set สต็อกหน้าร้านจริงเป็น 0 ทั้ง 3 พันตัว · ตัวนี้แตะ **แค่ค่านับ ไม่แตะสต็อก/ZORT**
+// เขียนกลับทั้งคอลัมน์ครั้งเดียว (setValues) ไม่ใช่ทีละ cell — 3 พันแถวไม่ให้ชน 6 นาที (บทเรียนโอนของ)
+function clearFrontStoreChecks(ss, skus, actor) {
+  const sheet = ss.getSheetByName(SHEET_FRONTSTORE_QTY);
+  if (!sheet) return error("ไม่พบชีต จำนวนหน้าร้าน");
+  if (!skus || !skus.length) return ok({ cleared: 0 });
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(8000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
+  try {
+    const want = {};
+    for (let s = 0; s < skus.length; s++) {
+      const k = String(skus[s] || "").trim().toUpperCase();
+      if (k) want[k] = true;
+    }
+    const rows = sheet.getDataRange().getValues();
+    if (rows.length < 2) return ok({ cleared: 0 });
+
+    // อ่านค่าเดิมของ col D (index 3) และ I (index 8) ทั้งก้อน แก้เฉพาะแถวที่ตรง SKU แล้วเขียนกลับรวดเดียว
+    const colD = [], colI = [];
+    let cleared = 0;
+    for (let i = 1; i < rows.length; i++) {
+      const sku = String(rows[i][1] || "").trim().toUpperCase();
+      const hasVal = rows[i][3] !== "" && rows[i][3] != null;
+      if (sku && want[sku] && hasVal) {
+        colD.push([""]); colI.push([""]); cleared++;
+      } else {
+        colD.push([rows[i][3]]); colI.push([rows[i][8]]);
+      }
+    }
+    if (cleared > 0) {
+      sheet.getRange(2, 4, colD.length, 1).setValues(colD);
+      sheet.getRange(2, 9, colI.length, 1).setValues(colI);
+      SpreadsheetApp.flush();
+      // audit 1 แถวสรุปต่อการล้าง ไม่ใช่ 1 แถวต่อ SKU (Audit Log เป็นฐานของแท็บผลงานพนักงาน)
+      writeAuditLog_(actor || "ไม่ระบุ", "ล้างค่าเช็คหน้าร้าน", "",
+        auditDetail_({ note: "ล้างค่านับหน้าร้านเก่าที่ไม่ตรงกับระบบ " + cleared + " รายการ" }));
+      invalidateCache_(); // bump dmj_last_write_ts + ล้าง cache (รวม stocklite) ให้เห็นค่าที่ล้างทันที
+    }
+    return ok({ cleared: cleared });
   } finally {
     lock.releaseLock();
   }

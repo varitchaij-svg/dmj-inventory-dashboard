@@ -557,6 +557,38 @@ function startServer() {
     await page.close();
   }
 
+  // ── (ง0.1) ล้างค่านับหน้าร้านเก่าที่ไม่ตรงระบบ → บาร์ "🧹 ล้างค่านับเก่า (N)" ──
+  // เจ้าของแจ้ง: หน้าเช็คหน้าร้านขึ้น "ไม่ตรง 3852" เพราะขายไปแล้วยอดเลื่อน อยากล้างเริ่มนับใหม่
+  // ⚠️ เช็คว่าบาร์โผล่จริง + กดยืนยันแล้วบาร์หาย (mismatch ถูกล้าง) ไม่ใช่แค่มี element
+  {
+    const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=frontstore&fsmismatch=1`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const nav = await navigateTo(page, 'frontstore', 'frontstore');
+      await page.waitForTimeout(700);
+      const barBefore = await page.locator('button:has-text("ล้างค่านับเก่า")').count();
+      // กดปุ่มล้าง → เข้าโหมดยืนยัน → กดยืนยัน
+      await page.locator('button:has-text("ล้างค่านับเก่า")').first().click({ timeout: 3000 });
+      await page.waitForTimeout(200);
+      await page.locator('button:has-text("ยืนยันล้าง")').first().click({ timeout: 3000 });
+      await page.waitForTimeout(800);
+      const barAfter = await page.locator('button:has-text("ล้างค่านับเก่า")').count();
+      const stillMismatch = await page.locator('button:has-text("ยืนยันล้าง")').count();
+      if (!nav || !barBefore) {
+        status = 'SETUP_FAIL'; note = `ไม่เห็นปุ่มล้างค่านับเก่า (nav=${nav}, bar=${barBefore})`;
+      } else if (barAfter > 0 || stillMismatch > 0) {
+        status = 'CLEAR_FAIL'; note = 'กดยืนยันแล้วบาร์ยังอยู่ — ค่านับเก่าไม่ถูกล้าง';
+      } else {
+        note = 'เห็นบาร์ "ล้างค่านับเก่า (1)" → กดยืนยัน → บาร์หาย (ล้าง mismatch สำเร็จ)';
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'fsclear__frontstore.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'ล้างค่านับเก่าหน้าร้าน (frontstore)', status, note });
+    await page.close();
+  }
+
   // ── (ง) ทางด่วนลงเวลา: ข้อมูลก้อนใหญ่ยังไม่มา แต่ต้องลงเวลาได้แล้ว ──────────
   // `?nodata=1` = ไม่ seed localStorage + คำขอ payload ค้างไม่ตอบ (เหมือนเน็ตร้านช้า)
   // นี่คือสภาพจริงของพนักงานที่เปิดแอปบนเครื่องใหม่/หลังล้าง cache แล้วมาสแกนเข้างาน

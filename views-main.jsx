@@ -8552,6 +8552,25 @@ async function syncFrontStoreData(entries) {
   } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
 
+// ─── ล้างค่านับหน้าร้านเก่าที่ไม่ตรงกับระบบ (ไม่แตะสต็อก/ZORT) ───
+async function syncClearFrontStoreChecks(skus) {
+  if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false, error: "ไม่พบ URL" }; }
+  try {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        clearFrontStoreChecks: true,
+        skus,
+        actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
+      }),
+    });
+    const d = await dmjJson(res);
+    if (d && d.success === false) return { success: false, error: d.error || "ล้างไม่สำเร็จ" };
+    return { success: true, cleared: d && d.data ? d.data.cleared : undefined };
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
+}
+
 // ─── เพิ่มสินค้าใหม่เข้า ZORT ───
 async function syncAddProduct(product) {
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false, error: "ไม่พบ URL" }; }
