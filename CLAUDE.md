@@ -1178,9 +1178,15 @@ audit → noti** · ลำดับนี้เป็นฐานของกา
   `getOrCreateStockCheckSheet_` เติมหัวคอลัมน์ที่ขาดให้ชีตเดิมด้วย
 - **migration-safe**: `readStockCheckRequests_` อนุมาน fs/wh จาก `status` เดิมเมื่อคอลัมน์ใหม่ว่าง
   (done เดิม = ทั้ง 2 ฝั่ง done · pending เดิม = ทั้ง 2 ฝั่ง pending)
-- **`completeStockCheckRequest_(reqId, actor, side)`** — `side='fs'/'wh'` ปิดเฉพาะฝั่งตัวเอง ·
-  สถานะรวม (col 6) เป็น done **ต่อเมื่อทั้ง 2 ฝั่งเสร็จ** · `side` ว่าง (client เก่า) = ปิดทั้งใบ
-  (backward-compat) · payload filter เปลี่ยนเป็น `fsStatus !== "done" || whStatus !== "done"`
+- **`completeStockCheckRequest_(reqId, actor, side, roleHint)`** — `side='fs'/'wh'` ปิดเฉพาะฝั่งตัวเอง ·
+  สถานะรวม (col 6) เป็น done **ต่อเมื่อทั้ง 2 ฝั่งเสร็จ** · payload filter = `fsStatus !== "done" || whStatus !== "done"`
+- ⚠️ **`side` ว่าง = client เก่าที่ cache `.jsx` ก่อน split (ไม่ส่ง `side`)** — เดิมเส้นทางนี้ **"ปิดทั้งใบ"**
+  ทำให้ฝั่งที่ยังไม่เสร็จหายเงียบ ๆ (เจ้าของแจ้ง ส.ค. 2026: "หน้าร้านกดเสร็จแล้วรหัสฝั่งคลังหาย" —
+  ต้นเหตุจริงคือ 731de76 ปล่อย `.jsx` ใหม่ **แต่ไม่ bump `CACHE_NAME`** เครื่องหน้าร้านจึงยังรัน
+  โค้ดเก่า) · **แก้แล้ว**: side ว่าง → เดาจาก `roleHint` (`_sess.role` ที่ server ยืนยัน หรือ
+  `data.actor="frontstore"/"warehouse"` ของ client เก่าที่ยังไม่ล็อกอิน) `frontstore→fs · warehouse→wh`
+  · เดา**ไม่ได้** (owner/ชื่อ session/ไม่รู้) → **ตอบ error ให้รีเฟรช ไม่ปิดทั้งใบ** (fail-safe —
+  ปิดทั้งใบ = ลบงานฝั่งที่ยังไม่เสร็จ แย่กว่าให้กดใหม่) · **ห้ามเอาเส้นทาง "ปิดทั้งใบ" กลับมา**
 - **frontend** (app.jsx): `myPendingChecks` กรองตาม role (หน้าร้านดู `fsStatus` · คลังดู `whStatus`)
   · แบนเนอร์/`setActiveCheckRequest` ใช้ `myPendingChecks` · `onCheckComplete` ส่ง
   `side:'wh'` (แท็บ stockcount) / `side:'fs'` (แท็บ frontstore)
