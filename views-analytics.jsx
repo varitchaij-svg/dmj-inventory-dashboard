@@ -1731,6 +1731,10 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
   const [selLockKey, setSelLockKey]         = uS(null);
   const [checkedQtys, setCheckedQtys]       = uS({});
   const [savedSkus, setSavedSkus]           = uS(new Set());
+  // sku → "จำนวนที่บันทึกเข้าคลังไปแล้ว" (ค่าจริง ไม่ใช่แค่ว่าเคยบันทึกไหม) — ใช้บอกผู้ใช้ว่า
+  // "ที่นับไปบันทึกแล้ว = N" ต่อการ์ด · แก้เลขใหม่หลังบันทึก = savedQtys ไม่ตรง num → ขึ้น "รอบันทึก"
+  // จนกว่า auto-save/ปุ่มจะเซฟรอบใหม่ · ตอบคำถามเจ้าของ "นับต่างจากระบบแล้วมันแก้จำนวนจริงไหม" (แก้จริง)
+  const [savedQtys, setSavedQtys]           = uS({});
   const [unscanRec, setUnscanRec]           = uS({}); // { sku: จำนวนที่บันทึกว่า "ขายไม่สแกน" }
   const [unscanBusy, setUnscanBusy]         = uS(null); // sku ที่กำลังบันทึก
   // saveStatus: "idle" | "pending" | "saving" | "saved" | "error"
@@ -1762,7 +1766,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     const saved = (key && countsCacheRef.current[key]) ? { ...countsCacheRef.current[key] } : {};
     setCheckedQtys(saved);
     localEditsRef.current = new Set(Object.keys(saved));
-    setSavedSkus(new Set()); setLastSavedTime(null);
+    setSavedSkus(new Set()); setSavedQtys({}); setLastSavedTime(null);
     setLastSavedSnap(JSON.stringify(saved)); // กัน auto-save เด้งทันทีหลัง restore
     setStockSearch(''); setSaveStatus("idle"); setCountFilter('all');
     setFoundSkus([]); setFoundAddOpen(false); setFoundSearch('');
@@ -2038,6 +2042,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
       showToast('error', 'ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด', '⚠️');
     } else if (result.success !== false) {
       setSavedSkus(new Set(entries.map(e => e.sku)));
+      setSavedQtys(prev => { const n = { ...prev }; entries.forEach(e => { n[e.sku] = e.qty; }); return n; });
       setLastSavedTime(new Date());
       setLastSavedSnap(snap); // กัน auto-save วนซ้ำ
       setSaveStatus("saved");
@@ -2085,6 +2090,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
       showToast('error', 'ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด', '⚠️');
     } else if (result.success !== false) {
       setSavedSkus(new Set(entries.map(e => e.sku)));
+      setSavedQtys(prev => { const n = { ...prev }; entries.forEach(e => { n[e.sku] = e.qty; }); return n; });
       setLastSavedTime(new Date());
       setLastSavedSnap(snap); // กัน auto-save commit ซ้ำหลังกดยืนยันเอง
       setSaveStatus("saved");
@@ -2270,6 +2276,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
       showToast('error', 'ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด', '⚠️');
     } else if (result.success !== false) {
       setSavedSkus(new Set(entries.map(e => e.sku)));
+      setSavedQtys(prev => { const n = { ...prev }; entries.forEach(e => { n[e.sku] = e.qty; }); return n; });
       setLastSavedTime(new Date());
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 3000);
@@ -2470,6 +2477,10 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
   // ── SUPPLIER MODE — นับตามซัพพลายเออร์ ──────────────────────────
   if (supplierMode) {
     const suppFilledCount = Object.values(checkedQtys).filter(v => v !== '' && v != null).length;
+    // จำนวนที่ "นับแล้วแต่ยังไม่ได้เซฟ" (ค่าไม่ตรง savedQtys) — ปุ่มบันทึกโชว์เลขนี้ ไม่ใช่เลขรวม
+    // ไม่งั้นเซฟครบแล้วปุ่มยังขึ้น "บันทึก (3)" ทำให้เข้าใจผิดว่ายังไม่ได้เซฟ (เจ้าของงงตรงนี้)
+    const suppUnsavedCount = Object.entries(checkedQtys)
+      .filter(([sku, v]) => v !== '' && v != null && savedQtys[sku] !== (parseInt(v) || 0)).length;
     return (
       <>
         <Toast toast={toast} onClose={hideToast}/>
@@ -2512,18 +2523,20 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
             </div>
             {selSupplier && (
               <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}}>
-                <button onClick={() => handleSave()} disabled={saving||suppFilledCount===0}
+                <button onClick={() => handleSave()} disabled={saving||suppUnsavedCount===0}
                   className="btn primary"
                   style={{padding:'10px 20px',fontWeight:700,fontSize:14,
-                          opacity:(saving||suppFilledCount===0)?0.4:1}}>
-                  {saveStatus === "saving" ? '↻ กำลังบันทึก...' : suppFilledCount>0 ? `💾 บันทึก (${suppFilledCount})` : '💾 บันทึก'}
+                          opacity:(saving||suppUnsavedCount===0)?0.55:1}}>
+                  {saveStatus === "saving" ? '↻ กำลังบันทึก...'
+                    : suppUnsavedCount>0 ? `💾 บันทึก (${suppUnsavedCount})`
+                    : suppFilledCount>0 ? '✓ บันทึกครบแล้ว' : '💾 บันทึก'}
                 </button>
-                {/* สถานะ auto-save 3 state */}
+                {/* สถานะ auto-save — โชว์ "รอบันทึกอัตโนมัติ" ให้ชัดว่าไม่ต้องกดปุ่มเองก็ได้ */}
                 {saveStatus === "pending" && (
-                  <span style={{fontSize:11,color:'#888',fontWeight:600}}>● รอบันทึก...</span>
+                  <span style={{fontSize:11,color:'#b45309',fontWeight:600}}>⏳ จะบันทึกอัตโนมัติใน 3 วิ…</span>
                 )}
                 {saveStatus === "saved" && (
-                  <span style={{fontSize:11,color:'#22c55e',fontWeight:600}}>✓ บันทึกแล้ว</span>
+                  <span style={{fontSize:11,color:'#22c55e',fontWeight:600}}>✓ บันทึกเข้าคลัง + ZORT แล้ว</span>
                 )}
                 {saveStatus === "error" && (
                   <span style={{fontSize:11,color:'#ef4444',fontWeight:700}}>⚠️ {t("บันทึกไม่สำเร็จ กด 🔄 Reload")}</span>
@@ -2641,9 +2654,14 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                     const num  = has ? (parseInt(val)||0) : 0;
                     const matched = has && num === sys;
                     const diff = has ? num - sys : null;
-                    const saved = savedSkus.has(p.sku);
-                    const bdr   = !has ? 'var(--bdr)' : matched ? 'var(--g-500)' : 'var(--dang)';
-                    const bgCard = saved ? '#f0fdf4' : !has ? '#fff' : matched ? '#f0fdf4' : '#fff5f5';
+                    // ⭐ "บันทึกเข้าคลังแล้ว" = ค่าที่นับตอนนี้ตรงกับค่าที่เพิ่งเซฟไป (savedQtys) —
+                    //    นี่คือสิ่งที่เจ้าของถามหา: นับต่างจากระบบ (mismatch) ก็ "แก้จำนวนจริง" แล้ว
+                    //    ตราบใดที่บันทึกเข้าคลังสำเร็จ · แก้เลขใหม่หลังเซฟ = ไม่ตรง → กลับเป็น "รอบันทึก"
+                    const saved = has && savedQtys[p.sku] === num;
+                    // การ์ดที่นับแล้วแต่ยังไม่ได้เซฟ (auto-save กำลังจะยิงใน 3 วิ) — ไม่ใช่ error
+                    const pendingSave = has && !saved;
+                    const bdr   = !has ? 'var(--bdr)' : saved ? 'var(--g-500)' : '#f59e0b';
+                    const bgCard = saved ? '#f0fdf4' : !has ? '#fff' : '#fffbeb';
 
                     return (
                       <div key={p.sku} style={{
@@ -2695,18 +2713,20 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                               boxShadow:'0 1px 3px rgba(0,0,0,.3)',
                             }}/>
                           )}
-                          {/* นับแล้ว → ติ๊กถูกมุมขวาบน ให้เห็นชัดว่าเช็คแล้ว ไม่ต้องนับซ้ำ */}
+                          {/* มุมขวาบน: บันทึกแล้ว = ✓ เขียว · นับแล้วรอเซฟ = ⏳ ส้ม (ไม่ใช่ error!)
+                              ⚠️ เดิมโชว์ ! แดงตอนนับต่างจากระบบ ทำให้เข้าใจผิดว่า "เซฟไม่ได้/ผิดพลาด"
+                              ทั้งที่การนับต่างจากระบบคือหน้าที่ของการนับสต็อก (แก้คลังให้ตรงของจริง) */}
                           {has && (
                             <div style={{
                               position:'absolute',top:6,right:6,
-                              width:26,height:26,borderRadius:'50%',
-                              background: matched ? 'var(--g-500)' : 'var(--dang)',
-                              color:'#fff',fontSize:15,fontWeight:900,
-                              display:'flex',alignItems:'center',justifyContent:'center',
+                              minWidth:26,height:26,borderRadius:13,padding:'0 6px',
+                              background: saved ? 'var(--g-500)' : '#f59e0b',
+                              color:'#fff',fontSize:saved?15:13,fontWeight:900,
+                              display:'flex',alignItems:'center',justifyContent:'center',gap:3,
                               border:'2px solid rgba(255,255,255,.95)',
                               boxShadow:'0 1px 4px rgba(0,0,0,.35)',
                             }}>
-                              {matched ? '✓' : '!'}
+                              {saved ? '✓' : '⏳'}
                             </div>
                           )}
                         </div>
@@ -2727,11 +2747,16 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                             {p.name || '—'}
                           </div>
 
-                          {/* Count result */}
+                          {/* Count result — บอกชัดว่า "บันทึกเข้าคลังแล้วหรือยัง" ไม่ใช่แค่ ตรง/ไม่ตรง
+                              · saved → เขียว "บันทึกแล้ว · คลัง = N" (นับต่างจากเดิมก็แก้คลังจริงแล้ว)
+                              · pending → ส้ม "นับได้ N · กำลังบันทึก…" (auto-save ยิงใน 3 วิ) */}
                           {has && (
                             <div style={{fontSize:11,fontWeight:700,textAlign:'center',borderRadius:8,padding:'4px 6px',
-                                          background:matched?'#dcfce7':'#fee2e2',color:matched?'#166534':'#991b1b'}}>
-                              {matched ? `✅ นับได้ ${num} ตรง` : `⚠️ นับได้ ${num} (${diff>0?'+':''}${diff} จากระบบ)`}
+                                          background: saved ? '#dcfce7' : '#fef3c7',
+                                          color: saved ? '#166534' : '#92400e'}}>
+                              {saved
+                                ? (diff === 0 ? `✅ บันทึกแล้ว · คลัง = ${num}` : `✅ บันทึกแล้ว · แก้คลังเป็น ${num} (เดิม ${sys})`)
+                                : `นับได้ ${num}${diff !== 0 ? ` (เดิม ${sys})` : ''} · ⏳ กำลังบันทึก…`}
                             </div>
                           )}
 

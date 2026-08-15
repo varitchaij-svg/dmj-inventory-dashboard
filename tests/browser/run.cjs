@@ -792,6 +792,53 @@ function startServer() {
     await page.close();
   }
 
+  // ── (จ2.7) นับ stock คลัง "ตามซัพพลายเออร์" → auto-save → การ์ดขึ้น "บันทึกแล้ว" ──
+  // เจ้าของแจ้งซ้ำ: warehouse ไม่ auto-save / นับต่างจากระบบแล้วไม่รู้ว่าแก้จำนวนจริงไหม
+  // ต้องรันบนเบราว์เซอร์จริง — พิสูจน์ว่า นับ (+5) แล้วรอ 3 วิ การ์ดเปลี่ยนเป็น "บันทึกแล้ว"
+  // (harness mock POST = success → confirmStockCount สำเร็จ → savedQtys อัปเดต → การ์ด saved)
+  {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=warehouse&tab=stockcount`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, 'warehouse', 'stockcount');
+      await page.waitForTimeout(400);
+      const supBtn = page.locator('button', { hasText: 'ตามซัพพลายเออร์' }).first();
+      if (!navOk) { status = 'NAV_FAIL'; note = 'ไปแท็บนับ stock คลังไม่สำเร็จ'; }
+      else if (!(await supBtn.count())) { status = 'NO_MODE_BTN'; note = 'ไม่พบปุ่ม "ตามซัพพลายเออร์"'; }
+      else {
+        await supBtn.click({ timeout: 2000 }).catch(() => {});
+        await page.waitForTimeout(300);
+        // เลือกซัพพลายเออร์ตัวแรก (ACME/BLOOM/CRAFT จาก fixture) — คลิกที่ชื่อ (event bubble ขึ้น row)
+        const sup = page.getByText('ACME', { exact: false }).first();
+        if (!(await sup.count())) { status = 'NO_SUPPLIER'; note = 'ไม่พบซัพพลายเออร์ ACME ในรายการ'; }
+        else {
+          await sup.click({ timeout: 2000 }).catch(() => {});
+          await page.waitForTimeout(400);
+          // นับเพิ่ม: กดปุ่ม +5 บนการ์ดแรก
+          const plus = page.locator('button', { hasText: /^\+5$/ }).first();
+          if (!(await plus.count())) { status = 'NO_COUNT_BTN'; note = 'ไม่พบปุ่ม +5 ในการ์ดนับ'; }
+          else {
+            await plus.click({ timeout: 2000 }).catch(() => {});
+            // รอ auto-save (debounce 3 วิ) + เผื่อ POST
+            await page.waitForTimeout(4200);
+            const savedShown = await page.getByText('บันทึกแล้ว', { exact: false }).count();
+            if (savedShown === 0) {
+              status = 'NO_AUTOSAVE';
+              note = 'นับแล้วรอ >3 วิ แต่การ์ดไม่ขึ้น "บันทึกแล้ว" — auto-save ไม่ทำงาน';
+            } else {
+              note = 'นับ +5 → auto-save 3 วิ → การ์ดขึ้น "บันทึกแล้ว" (คอมมิตเข้าคลังจริง)';
+            }
+          }
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'stockcount-autosave.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'นับ stock คลัง auto-save (warehouse)', status, note });
+    await page.close();
+  }
+
   // ── (จ3) ขายออนไลน์: กรอกครบ → บันทึก → ได้ "สรุปคำสั่งซื้อ" ไม่ใช่ใบเสร็จปริ้น ──
   // ต้องรันบนเบราว์เซอร์จริงเพราะสิ่งที่ทดสอบคือ **ตัวเลขบนจอที่ลูกค้าจะเห็น** — ค่าส่งบวกเข้า
   // ยอดจริงไหม, เลขบัญชีขึ้นให้ลูกค้าโอนไหม, ที่อยู่ตามไปบนสรุปไหม · unit test เห็นแค่ source

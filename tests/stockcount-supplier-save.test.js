@@ -64,8 +64,8 @@ describe('handleSave ของ StockCountView commit เข้าคลัง + 
 
 describe('ปุ่ม "บันทึก" โหมดซัพพลายเออร์ ต้องเรียก handleSave ไม่ใช่ตัวที่ตำแหน่งอย่างเดียว', () => {
   it('ปุ่มโหมดซัพพลายเออร์เรียก handleSave', () => {
-    // ปุ่มนี้อยู่ในเฮดเดอร์โหมดซัพพลายเออร์ คู่กับ suppFilledCount
-    const m = STOCKCOUNT.match(/onClick=\{\(\) => handleSave\(\)\}\s+disabled=\{saving\|\|suppFilledCount===0\}/);
+    // ปุ่มนี้อยู่ในเฮดเดอร์โหมดซัพพลายเออร์ · disabled ผูกกับ suppUnsavedCount (จำนวนที่ยังไม่เซฟ)
+    const m = STOCKCOUNT.match(/onClick=\{\(\) => handleSave\(\)\}\s+disabled=\{saving\|\|suppUnsavedCount===0\}/);
     expect(m, 'ปุ่มบันทึกโหมดซัพพลายเออร์ไม่ได้เรียก handleSave (อาจถอยกลับไป handleSaveSupplier)').toBeTruthy();
   });
 
@@ -90,6 +90,27 @@ describe('auto-save ของ StockCountView ครอบคลุมทุก�
   it('scSavableCount คิดจาก localEditsRef (เฉพาะที่เครื่องนี้นับ) ไม่ใช่ค่าที่ merge มา', () => {
     const m = STOCKCOUNT.match(/const scSavableCount\s*=\s*[\s\S]*?localEditsRef\.current\.has\(sku\)[\s\S]*?\.length;/);
     expect(m, 'scSavableCount ต้องกรองด้วย localEditsRef').toBeTruthy();
+  });
+});
+
+describe('การ์ดนับ ต้องบอกชัดว่า "บันทึกเข้าคลังแล้ว" (ตอบ "นับต่างจากระบบแล้วแก้จำนวนจริงไหม")', () => {
+  it('การ์ดคิด saved จาก savedQtys[sku] === num (ค่าจริงที่เซฟ) ไม่ใช่แค่ savedSkus.has', () => {
+    // เจ้าของถาม "มันบันทึกแค่ที่นับตรง แต่แก้จำนวนจริงไม่ได้หรอ" → ต้องโชว์ให้เห็นว่านับต่างจาก
+    // ระบบ (mismatch) ก็ถูกบันทึกเข้าคลังจริง · saved ผูกกับ savedQtys (ค่าที่เซฟ) ไม่ใช่ match/mismatch
+    expect(STOCKCOUNT).toContain('const saved = has && savedQtys[p.sku] === num;');
+  });
+  it('badge มุมขวาบนไม่ใช้ "!" แดงตอน mismatch อีก (เข้าใจผิดว่าเซฟไม่ได้)', () => {
+    // การ์ดต้องไม่ตัดสิน badge/สีจาก matched แบบ error — ใช้ saved/pending แทน
+    const m = STOCKCOUNT.match(/\{saved \? '✓' : '⏳'\}/);
+    expect(m, 'badge ต้องเป็น ✓ (saved) / ⏳ (รอเซฟ) ไม่ใช่ !/แดง').toBeTruthy();
+  });
+  it('savedQtys ถูกอัปเดตในทุก handler ที่เซฟสำเร็จ (handleSave/handleConfirm/handleSavePreShelf)', () => {
+    const count = (STOCKCOUNT.match(/setSavedQtys\(prev => \{ const n = \{ \.\.\.prev \};/g) || []).length;
+    expect(count, 'ต้องมี setSavedQtys อย่างน้อย 3 จุด (3 handler)').toBeGreaterThanOrEqual(3);
+  });
+  it('ปุ่มบันทึกโชว์จำนวน "ที่ยังไม่เซฟ" (suppUnsavedCount) ไม่ใช่จำนวนรวม', () => {
+    expect(STOCKCOUNT).toContain('suppUnsavedCount');
+    expect(STOCKCOUNT).toContain('✓ บันทึกครบแล้ว');
   });
 });
 
