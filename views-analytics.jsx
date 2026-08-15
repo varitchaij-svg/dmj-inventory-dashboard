@@ -876,7 +876,7 @@ async function syncLockData(lockKey, entries) {
   // entries = [{ sku, qty, isNew }]
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
   try {
-    await dmjFetch(SHEET_DEPLOY_URL, {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
@@ -887,8 +887,13 @@ async function syncLockData(lockKey, entries) {
         actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
       }),
     });
-    return { success: true };
-  } catch (err) { return { success: false, error: err.message }; }
+    // ⚠️ ต้องอ่านคำตอบจริง — เดิม `await dmjFetch(...)` แล้ว return {success:true} ทิ้ง (บทเรียนข้อ 13)
+    // = "สำเร็จปลอม" ตอน GAS ตอบหน้า HTML (execution ซ้อนกัน) → ตำแหน่งไม่ถูกบันทึกแต่จอขึ้น ✓
+    const json = await dmjJson(res);
+    return (json && json.success !== false)
+      ? { success: true }
+      : { success: false, error: (json && json.error) || "บันทึกตำแหน่งไม่สำเร็จ" };
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
 
 async function syncDeleteLockEntry(lockKey, sku) {
@@ -1922,9 +1927,20 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     if (!entries.length) { if (!isAuto) showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return; }
     setSaveStatus("saving");
     const snap = JSON.stringify(checkedQtys);
-    // ถ้านับตามล็อค → บันทึกตำแหน่งจัดเก็บด้วย; แล้ว commit ผลนับ → อัปเดตคลังจริง + push ZORT
+    // บันทึกตำแหน่งจัดเก็บ + commit ผลนับ → อัปเดตคลังจริง + push ZORT
+    // ⚠️ โหมด "ตามซัพพลายเออร์" (selSupplier) ก็ต้อง commit เข้าคลัง/ZORT เหมือนโหมดตามล็อค —
+    //    เดิมปุ่ม "บันทึก" ของโหมดนี้ (handleSaveSupplier) บันทึก "ตำแหน่งอย่างเดียว" ไม่เคยเรียก
+    //    confirmStockCount เลย → จำนวนที่นับไม่เคยเข้าคลัง/ZORT (เจ้าของแจ้ง ส.ค. 2026) ·
+    //    ตอนนี้รวมทั้ง 2 โหมดมาที่ handleSave ตัวเดียว: ตำแหน่ง (ตามล็อค หรือจัดกลุ่มตาม skuToLock
+    //    ของแต่ละ SKU ในโหมดซัพพลายเออร์) + confirmStockCount เสมอ
     const { lockEntries, confirmEntries } = splitFoundEntries(entries);
-    if (selLockKey) await syncLockData(selLockKey, lockEntries);
+    if (selLockKey) {
+      await syncLockData(selLockKey, lockEntries);
+    } else if (selSupplier) {
+      const byLock = {};
+      entries.forEach(e => { const lk = skuToLock[e.sku]; if (lk) (byLock[lk] = byLock[lk] || []).push(e); });
+      for (const [lk, es] of Object.entries(byLock)) await syncLockData(lk, es);
+    }
     const result = confirmEntries.length ? await confirmStockCount(confirmEntries) : { success: true };
     if (result.conflict) {
       setSaveStatus("error");
@@ -2084,41 +2100,9 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     return { waiting, matched, mismatched };
   }, [supplierProducts, checkedQtys]);
 
-  const handleSaveSupplier = async () => {
-    // group checked entries by lockKey
-    const byLock = {};
-    let noLockCount = 0;
-    supplierProducts.forEach(p => {
-      const qty = checkedQtys[p.sku];
-      if (qty === '' || qty == null) return;
-      const lk = skuToLock[p.sku];
-      if (!lk) { noLockCount++; return; }
-      if (!byLock[lk]) byLock[lk] = [];
-      byLock[lk].push({ sku: p.sku, qty: parseInt(qty)||0 });
-    });
-    const lockEntries = Object.entries(byLock);
-    if (lockEntries.length === 0) {
-      showToast('warn', noLockCount > 0 ? 'สินค้าที่กรอกยังไม่มีตำแหน่งล็อค' : 'ยังไม่ได้กรอกจำนวน', '✏️');
-      return;
-    }
-    setSaveStatus("saving");
-    let anyError = false;
-    for (const [lk, entries] of lockEntries) {
-      const result = await syncLockData(lk, entries);
-      if (result.success === false) anyError = true;
-    }
-    const totalSaved = lockEntries.reduce((s, [, e]) => s + e.length, 0);
-    if (!anyError) {
-      setSavedSkus(new Set(lockEntries.flatMap(([, e]) => e.map(x => x.sku))));
-      setLastSavedTime(new Date());
-      setSaveStatus("saved");
-      setTimeout(() => setSaveStatus("idle"), 3000);
-      showToast('success', `บันทึก ${totalSaved} รายการ ใน ${lockEntries.length} ล็อค`, '💾');
-    } else {
-      setSaveStatus("error");
-      showToast('error', 'บันทึกบางรายการไม่สำเร็จ', '❌');
-    }
-  };
+  // หมายเหตุ: โหมด "ตามซัพพลายเออร์" ใช้ `handleSave` ตัวเดียวกับโหมดตามล็อคแล้ว (บันทึกตำแหน่ง
+  // จัดกลุ่มตาม skuToLock + confirmStockCount เข้าคลัง/ZORT) — เดิมมี `handleSaveSupplier` แยกที่
+  // บันทึกตำแหน่งอย่างเดียว ไม่เคย commit เข้าคลัง/ZORT (ลบทิ้งแล้ว ส.ค. 2026)
 
   // ── step 1 global search — must be declared before any early return (Rules of Hooks) ──
   const step1SearchResults = uM(() => {
@@ -2434,7 +2418,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
             </div>
             {selSupplier && (
               <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}}>
-                <button onClick={handleSaveSupplier} disabled={saving||suppFilledCount===0}
+                <button onClick={() => handleSave()} disabled={saving||suppFilledCount===0}
                   className="btn primary"
                   style={{padding:'10px 20px',fontWeight:700,fontSize:14,
                           opacity:(saving||suppFilledCount===0)?0.4:1}}>

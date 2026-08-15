@@ -1108,6 +1108,30 @@ audit → noti** · ลำดับนี้เป็นฐานของกา
 เทสต์: `tests/transfer-idempotent.test.js` (46 เคส — eval ฟังก์ชันจริงจาก `.gs` + `.jsx` ไม่ copy
 เหมือน `order-idempotent.test.js`) คุมทั้งตรรกะและ **จุดเชื่อมต่อที่พังแล้วไม่มี error ให้เห็น**
 
+### นับ stock คลัง "ตามซัพพลายเออร์" แล้วจำนวนไม่เข้าคลัง/ZORT (แก้แล้ว ส.ค. 2026)
+
+เจ้าของแจ้ง (พร้อมภาพ): เลือกซัพพลายเออร์ (🏭 GX2312) ในแท็บ "นับ stock คลัง" แล้วนับ → กด
+"บันทึก" ขึ้น "✓ บันทึกแล้ว" **แต่จำนวนไม่เข้าคลัง ไม่ถูกส่งไป ZORT** · `StockCountView`
+(views-analytics.jsx) มี 2 โหมด แล้ว**ทำกันคนละครึ่งจนไม่มีเส้นทางไหนครบ**:
+- โหมด **ตามล็อค** (`selLockKey`): `handleSave` → `syncLockData` (ตำแหน่ง) + `confirmStockCount`
+  (คลัง+ZORT) ✓
+- โหมด **ตามซัพพลายเออร์** (`selSupplier`) **เดิม**: ปุ่มเรียก `handleSaveSupplier` ที่บันทึก
+  **ตำแหน่งอย่างเดียว ไม่เคยเรียก `confirmStockCount` เลย** → คลัง/ZORT ไม่ขยับ · ส่วน auto-save
+  เรียก `handleSave` (commit ZORT ได้ แต่ไม่บันทึกตำแหน่ง) → ผู้ใช้กดปุ่มเห็น "บันทึกแล้ว" แล้ว
+  ออกจากหน้าไปก่อน auto-save 3 วิยิง = จำนวนไม่ถึง ZORT **โดยจอขึ้น ✓ ทุกอย่างดูปกติ**
+- **แก้**: รวมทั้ง 2 โหมดมาที่ `handleSave` ตัวเดียว — บันทึกตำแหน่ง (ตามล็อค หรือจัดกลุ่มตาม
+  `skuToLock` ของแต่ละ SKU ในโหมดซัพพลายเออร์) **แล้ว `confirmStockCount` เสมอ** · ลบ
+  `handleSaveSupplier` ทิ้ง · ปุ่มโหมดซัพพลายเออร์เรียก `handleSave` · auto-save (เรียก `handleSave`
+  อยู่แล้ว) จึงครบทั้งตำแหน่งและ ZORT ทั้ง 2 โหมด
+- ⚠️ **`syncLockData` เดิมเป็น "สำเร็จปลอม"** (บทเรียนข้อ 13) — `await dmjFetch(...)` แล้ว
+  `return {success:true}` โดยไม่อ่านคำตอบ → GAS ตอบหน้า HTML (execution ซ้อนกัน) ก็ยังขึ้นสำเร็จ ·
+  ตอนนี้อ่านผ่าน `dmjJson` แล้วคืน success ตามจริง (`LockModal` เช็ค `success!==false` อยู่แล้ว
+  จึงได้ประโยชน์ทันที)
+- เทสต์: `tests/stockcount-supplier-save.test.js` (meta-test สแกนต้นทางจริง — ปุ่มซัพพลายเออร์
+  เรียก `handleSave`, `handleSave` มี `confirmStockCount` + สาขา `selSupplier`+`skuToLock`,
+  `handleSaveSupplier` ถูกลบ, `syncLockData` อ่าน `dmjJson`) · **ไม่ทำ browser test เพราะการ
+  ขับ flow เลือกโหมด→เลือกซัพพลายเออร์→นับ→บันทึก เปราะและยาว** — meta-test คุม regression พอ
+
 ## ระบบล็อกอินพนักงาน + ลงเวลาเข้า-ออกงาน (Sprint 5)
 
 แผนเต็ม: `docs/PLAN-EMPLOYEE-LOGIN.md` · `docs/PLAN-ATTENDANCE.md` · งานต่อ: `docs/PLAN-NEXT-STAFF-DATA.md`
