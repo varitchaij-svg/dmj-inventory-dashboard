@@ -2485,7 +2485,13 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
           name={calcPad ? (calcPad.name || calcPad.sku) : ''}
           initialVal={calcPad ? calcPad.expr : ''}
           onConfirm={function(qty){
-            if (calcPad) setCheckedQtys(function(prev){ const o=Object.assign({},prev); o[calcPad.sku]=qty; return o; });
+            // ⚠️ ต้อง add localEditsRef ก่อนเสมอ (เหมือนโหมดล็อค/นับก่อนขึ้นชั้น) —
+            // autosave (handleSave) กรองด้วย localEditsRef ถ้าไม่ add จำนวนที่กรอกผ่าน
+            // เครื่องคิดเลขจะไม่ถูก autosave (ค้างที่ "รอบันทึก..." ตลอด ไม่มี error ให้เห็น)
+            if (calcPad) {
+              localEditsRef.current.add(calcPad.sku);
+              setCheckedQtys(function(prev){ const o=Object.assign({},prev); o[calcPad.sku]=qty; return o; });
+            }
             setCalcPad(null);
           }}
           onClose={function(){ setCalcPad(null); }}
