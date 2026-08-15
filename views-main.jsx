@@ -80,16 +80,21 @@ async function ensureXlsx() {
   });
 }
 
-// ── JSZip loader + Canvas card helpers ──────────────────────────────────────
-async function ensureJsZip() {
-  if (window.JSZip) return;
+// ── jsPDF loader + Canvas card helpers ───────────────────────────────────────
+// โหลด on-demand ผ่าน CDN — ไม่ใส่ <script> ไว้ใน Doomuenjing Dashboard.html เพราะปุ่ม
+// ดาวน์โหลดการ์ดใช้ไม่บ่อย ไม่ต้องจ่ายค่าโหลดทุกครั้งที่เปิดแอป (ต่างจาก html2canvas ที่
+// self-host เพราะใช้บ่อยกว่า — พิมพ์ใบเสร็จ POS) · คนละสถานการณ์กับกติกาในเอกสาร
+// "ห้าม html2canvas/jsPDF" ซึ่งพูดถึงเฉพาะใบเสนอราคา/ใบแจ้งหนี้ที่ต้องได้เลย์เอาต์ A4 จริง
+// จาก window.print() เท่านั้น
+async function ensureJsPDF() {
+  if (window.jspdf && window.jspdf.jsPDF) return;
   await new Promise(function(res, rej) {
     var s = document.createElement('script');
-    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
     s.onload = res;
     s.onerror = function() {
       var s2 = document.createElement('script');
-      s2.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
+      s2.src = 'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js';
       s2.onload = res; s2.onerror = rej;
       document.head.appendChild(s2);
     };
@@ -110,29 +115,39 @@ async function loadImgSafe(url) {
 }
 
 // ── loadImgForCard: โหลดรูปผ่าน GAS proxy เพื่อหลีกเลี่ยง CORS tainted canvas ──
-// ใช้กับ downloadSupplierCardsZip เพื่อให้ canvas.toBlob() ทำงานได้จริง
+// ใช้กับ downloadSupplierCardsPdf เพื่อให้ canvas.toDataURL() ทำงานได้จริง
 // fallback คืน null (canvas จะใช้ gradient placeholder แทน)
-async function loadImgForCard(imageUrl) {
+// ⚠️ proxy 1 คำขอ = 1 GAS execution + UrlFetchApp (ช้า) — เดิมยิงพร้อมกัน 59 ใบ (Promise.all)
+// GAS รับ execution พร้อมกันได้จำกัด (executeAs USER_DEPLOYING = user เดียวกันทั้งหมด) →
+// หลายใบ timeout/ถูกปฏิเสธ → รูปหายเป็นกระดาน · แก้: (1) จำกัด concurrency (downloadSupplierCardsPdf)
+// (2) มี timeout จริงที่ fetch เอง (fetch ไม่มี timeout ในตัว — ค้างได้ตลอดกาล) (3) retry 1 ครั้ง
+async function loadImgForCard(imageUrl, attempt) {
   if (!imageUrl) return null;
   var base = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null;
-  if (base) {
-    try {
-      var proxyUrl = new URL(base);
-      proxyUrl.searchParams.set('action', 'imgProxy');
-      proxyUrl.searchParams.set('u', imageUrl);
-      var resp = await fetch(proxyUrl.toString());
-      var data = await dmjJson(resp);
-      if (data && data.d) {
-        return await new Promise(function(resolve) {
-          var img = new window.Image();
-          var t = setTimeout(function() { resolve(null); }, 8000);
-          img.onload = function() { clearTimeout(t); resolve(img); };
-          img.onerror = function() { clearTimeout(t); resolve(null); };
-          img.src = data.d;
-        });
-      }
-    } catch(e) { /* proxy failed → ใช้ gradient placeholder */ }
-  }
+  if (!base) return null;
+  try {
+    var proxyUrl = new URL(base);
+    proxyUrl.searchParams.set('action', 'imgProxy');
+    proxyUrl.searchParams.set('u', imageUrl);
+    // AbortController: ตัดคำขอที่ค้างเกิน 20 วิ (proxy ดึงรูปจาก ZORT + base64 encode อาจนาน)
+    var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var to = ctrl ? setTimeout(function() { ctrl.abort(); }, 20000) : null;
+    var resp = await fetch(proxyUrl.toString(), ctrl ? { signal: ctrl.signal } : {});
+    if (to) clearTimeout(to);
+    var data = await dmjJson(resp);
+    if (data && data.d) {
+      var img = await new Promise(function(resolve) {
+        var im = new window.Image();
+        var t = setTimeout(function() { resolve(null); }, 10000);
+        im.onload = function() { clearTimeout(t); resolve(im); };
+        im.onerror = function() { clearTimeout(t); resolve(null); };
+        im.src = data.d;
+      });
+      if (img) return img;
+    }
+  } catch(e) { /* proxy/เน็ตพลาด → ลองใหม่/placeholder */ }
+  // retry 1 ครั้ง (ส่วนใหญ่ที่พลาดคือ timeout ตอน GAS แน่น — รอบสองมักผ่าน)
+  if (!attempt) return loadImgForCard(imageUrl, 1);
   return null;
 }
 
@@ -168,246 +183,324 @@ function wrapTextLines(ctx, text, maxW, maxLines) {
   return lines;
 }
 
-function drawProductCardCanvas(p, img, accentColor) {
-  var W = 400;
+// ตัดข้อความทีละตัวอักษรจนพอดีความกว้าง (เหมือน pattern ใน drawTop10CatCanvas) —
+// ⚠️ ใช้เป็นตาข่ายกันเหนียวคู่กับ wrapTextLines เสมอ ไม่ใช่ตัวแทน — wrapTextLines ตัดที่
+// ขอบคำ (แบ่งด้วยช่องว่าง) เท่านั้น ข้อความไทยที่พิมพ์ติดกันไม่มีช่องว่างเลย (SKU พิมพ์ผิด/
+// ไม่ตรง business rule, หรือชื่อสินค้าที่กรอกไม่มีวรรค) จะไม่ถูกตัดบรรทัดเลยและวิ่งล้นขอบการ์ด
+// ซึ่งเป็นเอกสารพิมพ์ — ล้นแล้วไม่มีใครเห็นจนกว่าจะพิมพ์ออกมาแจกไปแล้ว
+function clampTextWidth(ctx, text, maxW) {
+  var s = text || '';
+  if (ctx.measureText(s).width <= maxW) return s;
+  while (s.length > 1 && ctx.measureText(s + '…').width > maxW) s = s.slice(0, -1);
+  return s + '…';
+}
+
+// ── drawSupplierPdfCard: การ์ดสินค้า 1 ใบ สำหรับตาราง PDF A4 (9 การ์ด/หน้า 3×3) ──
+// เรียกจาก downloadSupplierCardsPdf เท่านั้น — Wc/Hc คือขนาดช่องในตาราง (px ที่ resolution พิมพ์)
+//
+// ⚠️ เลย์เอาต์ "ยึดข้อความไว้ก้อนล่าง สูงคงที่ตาม W · รูปกินพื้นที่ที่เหลือ" โดยตั้งใจ:
+//   1. ขนาดตัวอักษรอิงความ "กว้าง" การ์ด (W) ล้วน — ทุก density ใช้ 3 คอลัมน์ การ์ดจึงกว้างเท่ากัน
+//      → ตัวอักษรขนาดเท่ากันเป๊ะไม่ว่าจะ 9 หรือ 12 การ์ด/หน้า · เปลี่ยนจำนวน/หน้าได้โดยไม่พังสัดส่วน
+//   2. การ์ดสูงขึ้น (9/หน้า) → "รูปใหญ่ขึ้นเอง" (imgBandH = H − ก้อนข้อความ) ตรงกับที่เจ้าของขอ
+//      "รูปใหญ่/ชัดสุด" · ก้อนข้อความล่างสูงเท่าเดิมทุก density
+//   3. ⚠️ **clamp ข้อความทุกชิ้น** (SKU/ชื่อสี/ชื่อสินค้า/วันที่/คงเหลือ/ราคา/แยกคลัง) เทียบความกว้าง
+//      ที่วัดด้วย measureText — เพราะ measure กับ draw ใช้ฟอนต์ตัวเดียวกันบนเครื่องเดียวกัน จึงกัน
+//      "ตัวหนังสือตกขอบ" ได้ทุกเครื่องแม้ฟอนต์กว้างต่างกัน (iOS ตกไปใช้ฟอนต์ไทยที่กว้างกว่า
+//      → ของเดิมที่ไม่ clamp บรรทัด "แยกคลัง"/"ชื่อสี" ล้นขอบขวาบนมือถือจริง ทั้งที่บนเทสต์ไม่ล้น)
+function drawSupplierPdfCard(p, img, accentColor, Wc, Hc) {
   var FONT = '\'Sarabun\',\'Noto Sans Thai\',\'Segoe UI\',Arial,sans-serif';
-  var BPAD = 12; // body left/right padding
-  var IPAD = 8;  // image zone padding around inner container
   var acc = accentColor || '#16a34a';
   var total = (p.qtyWH || 0) + (p.qtyStore || 0);
   var outOfStock = !p.isMTO && total === 0;
   var lowStock   = !p.isMTO && total > 0 && total <= 36;
   var hasImg = img && img.naturalWidth > 0;
-  var vendorStr = p.lastSupplier || p.vendor || '';
   var price = p.price || p.stdPrice || '';
   var hasBreakdown = !p.isMTO && ((p.qtyStore || 0) > 0 || (p.qtyWH || 0) > 0);
 
-  // Image zone: square (W × W), inner container = (W - IPAD*2)²
-  var imgZoneH = W; // 400 — true 1:1 ratio matching the app
-  var iw = W - IPAD * 2, ih = iw; // 384 × 384
-  var ir = 10; // border-radius
-
-  // Pre-estimate body height so we can size the canvas once
-  var bodyH = 8           // top pad
-    + 16                  // SKU row
-    + 19 * 2 + 2          // name (worst-case 2 lines) + gap
-    + (vendorStr ? 16 : 0)
-    + (p.lastStockInDate ? 16 : 0)
-    + 6 + 1 + 10          // dashed divider gap + line + gap
-    + 14 + 20             // label + value rows
-    + (hasBreakdown ? 14 : 0)
-    + 12;                 // bottom pad
-  var H = imgZoneH + bodyH;
-
+  var SCALE = 2; // backing-store scale เพื่อความคมของเส้น/ตัวอักษร (Wc/Hc คือ px เป้าหมายตอนพิมพ์แล้ว)
   var c = document.createElement('canvas');
-  // render ที่ความละเอียดสูง (SCALE เท่า) ให้ภาพคมขึ้น — ทุกพิกัดด้านล่างยังเป็น logical px
-  // เพราะ ctx.scale() ขยายให้อัตโนมัติ (400px → 1200px) ตัวอักษร/รูปจึงไม่แตก
-  var SCALE = 3;
-  c.width = W * SCALE; c.height = H * SCALE;
+  c.width = Wc * SCALE; c.height = Hc * SCALE;
   var ctx = c.getContext('2d');
   ctx.scale(SCALE, SCALE);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
+  var W = Wc, H = Hc;
+  var PAD = W * 0.04;
 
-  // ── white base ────────────────────────────────────────────────────
+  // ── ขนาดตัวอักษร (อิง W ล้วน) ──
+  var fSku = W * 0.058, fColor = W * 0.041, fName = W * 0.05, fDate = W * 0.038,
+      fLab = W * 0.045, fVal = W * 0.07, fBrk = W * 0.04;
+  var nameLineH = fName * 1.3;
+  var rowGap = W * 0.02;
+  var padTop = W * 0.03, padBot = W * 0.035;
+  var chipH = fDate + W * 0.028;
+
+  // ── ก้อนข้อความสูง "คงที่" (จองพื้นที่สูงสุด: ชื่อ 2 บรรทัด + วันที่ + แยกคลัง) ──
+  // เพื่อให้ imgBandH เท่ากันทุกใบ → รูปในตารางเรียงตรงกันสวยงาม (การ์ดที่ข้อมูลน้อยกว่าจะมี
+  // ช่องว่างท้ายเล็กน้อย ยอมแลกกับตารางที่รูปเรียงระดับเดียวกัน — catalog อ่านง่ายกว่า)
+  ctx.textBaseline = 'alphabetic';
+  ctx.font = 'bold ' + fName + 'px ' + FONT;
+  var nameLines = wrapTextLines(ctx, p.name || '', W - PAD * 2, 2);
+  var reserveTextBlockH = padTop + fSku * 1.05 + rowGap + 2 * nameLineH
+                        + (chipH + rowGap)                 // จองที่ชิปวันที่เสมอ
+                        + rowGap * 0.6 + 1 + rowGap * 0.9 + fVal * 1.05
+                        + (rowGap * 0.35 + fBrk * 1.2)     // จองที่แยกคลังเสมอ
+                        + padBot;
+  var imgBandH = Math.max(H * 0.30, H - reserveTextBlockH);
+
+  // ── การ์ด (พื้นขาว + มุมโค้ง) ──
+  var CR = W * 0.04;
+  function cardPath() {
+    ctx.beginPath();
+    ctx.moveTo(CR, 0);
+    ctx.lineTo(W - CR, 0); ctx.arcTo(W, 0, W, CR, CR);
+    ctx.lineTo(W, H - CR); ctx.arcTo(W, H, W - CR, H, CR);
+    ctx.lineTo(CR, H); ctx.arcTo(0, H, 0, H - CR, CR);
+    ctx.lineTo(0, CR); ctx.arcTo(0, 0, CR, 0, CR);
+    ctx.closePath();
+  }
+  cardPath();
   ctx.fillStyle = '#fff';
-  ctx.fillRect(0, 0, W, H);
+  ctx.fill();
 
-  // ── image zone background (gradient f9fafb → #fff) ────────────────
-  var gBg = ctx.createLinearGradient(0, 0, 0, imgZoneH);
-  gBg.addColorStop(0, '#f9fafb');
+  // ── โซนรูป (บนสุด สูง imgBandH) — รูปแบบ fit เต็มกรอบ ไม่ครอปสินค้า ──
+  var IPAD = W * 0.02;
+  ctx.save();
+  cardPath(); ctx.clip(); // กันเนื้อรูปล้นออกนอกมุมโค้งของการ์ด
+  var gBg = ctx.createLinearGradient(0, 0, 0, imgBandH);
+  gBg.addColorStop(0, '#f6f8f4');
   gBg.addColorStop(1, '#ffffff');
   ctx.fillStyle = gBg;
-  ctx.fillRect(0, 0, W, imgZoneH);
+  ctx.fillRect(0, 0, W, imgBandH);
 
-  // inner image container (white bg)
-  rrectFill(ctx, IPAD, IPAD, iw, ih, ir, '#ffffff');
-
-  // clip to inner container for image/placeholder rendering
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(IPAD + ir, IPAD);
-  ctx.lineTo(IPAD + iw - ir, IPAD);
-  ctx.arcTo(IPAD + iw, IPAD, IPAD + iw, IPAD + ir, ir);
-  ctx.lineTo(IPAD + iw, IPAD + ih - ir);
-  ctx.arcTo(IPAD + iw, IPAD + ih, IPAD + iw - ir, IPAD + ih, ir);
-  ctx.lineTo(IPAD + ir, IPAD + ih);
-  ctx.arcTo(IPAD, IPAD + ih, IPAD, IPAD + ih - ir, ir);
-  ctx.lineTo(IPAD, IPAD + ir);
-  ctx.arcTo(IPAD, IPAD, IPAD + ir, IPAD, ir);
-  ctx.closePath();
-  ctx.clip();
-
+  var ix = IPAD, iy = IPAD, iw = W - IPAD * 2, ih = imgBandH - IPAD * 2;
   if (hasImg) {
-    // object-fit: contain — center, no crop
+    // object-fit: contain — เต็มกรอบพอดี ไม่ครอปสินค้า
     var scale = Math.min(iw / img.naturalWidth, ih / img.naturalHeight);
     var dw = img.naturalWidth * scale, dh = img.naturalHeight * scale;
-    ctx.drawImage(img, IPAD + (iw - dw) / 2, IPAD + (ih - dh) / 2, dw, dh);
+    ctx.drawImage(img, ix + (iw - dw) / 2, iy + (ih - dh) / 2, dw, dh);
   } else {
-    // placeholder: subtle gradient + color circle (matches app's no-image placeholder)
+    // placeholder: gradient + จุดสี (เหมือน placeholder เดิมของแอป)
     var baseColor = (p.color && p.color.hex) ? p.color.hex : acc;
-    var rgb = hexToRgb(baseColor) || { r:22, g:101, b:52 };
-    var gPh = ctx.createLinearGradient(IPAD, IPAD, IPAD + iw, IPAD + ih);
+    var rgb = hexToRgb(baseColor) || { r: 22, g: 101, b: 52 };
+    var gPh = ctx.createLinearGradient(ix, iy, ix + iw, iy + ih);
     gPh.addColorStop(0, 'rgba(' + Math.min(rgb.r+80,255) + ',' + Math.min(rgb.g+80,255) + ',' + Math.min(rgb.b+80,255) + ',0.25)');
     gPh.addColorStop(1, 'rgba(' + Math.min(rgb.r+40,255) + ',' + Math.min(rgb.g+40,255) + ',' + Math.min(rgb.b+40,255) + ',0.12)');
     ctx.fillStyle = gPh;
-    ctx.fillRect(IPAD, IPAD, iw, ih);
+    ctx.fillRect(ix, iy, iw, ih);
     if (p.color && p.color.hex) {
       ctx.fillStyle = p.color.hex;
       ctx.beginPath();
-      ctx.arc(IPAD + iw / 2, IPAD + ih / 2, 52, 0, Math.PI * 2);
+      ctx.arc(ix + iw / 2, iy + ih / 2, Math.min(iw, ih) * 0.14, 0, Math.PI * 2);
       ctx.fill();
       ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 4;
+      ctx.lineWidth = W * 0.008;
       ctx.stroke();
     }
   }
   ctx.restore();
 
-  // inner container border (1px solid var(--bdr) ≈ #e5e7eb)
+  // เส้นแบ่งรูป/เนื้อหา + ขอบการ์ด
+  ctx.strokeStyle = '#eef1ec';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, imgBandH); ctx.lineTo(W, imgBandH); ctx.stroke();
+  cardPath();
   ctx.strokeStyle = '#e5e7eb';
   ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(IPAD + ir, IPAD);
-  ctx.lineTo(IPAD + iw - ir, IPAD);
-  ctx.arcTo(IPAD + iw, IPAD, IPAD + iw, IPAD + ir, ir);
-  ctx.lineTo(IPAD + iw, IPAD + ih - ir);
-  ctx.arcTo(IPAD + iw, IPAD + ih, IPAD + iw - ir, IPAD + ih, ir);
-  ctx.lineTo(IPAD + ir, IPAD + ih);
-  ctx.arcTo(IPAD, IPAD + ih, IPAD, IPAD + ih - ir, ir);
-  ctx.lineTo(IPAD, IPAD + ir);
-  ctx.arcTo(IPAD, IPAD, IPAD + ir, IPAD, ir);
-  ctx.closePath();
   ctx.stroke();
 
-  // stock badge (chip dang/warn) — top-right of image zone
+  // ป้าย "หมด"/"เหลือ N" — มุมขวาบนของโซนรูป
   if (outOfStock || lowStock) {
     var badgeLabel = outOfStock ? 'หมด' : ('เหลือ ' + total);
     var badgeColor = outOfStock ? '#ef4444' : '#f97316';
-    ctx.font = 'bold 11px ' + FONT;
+    var badgeFont = W * 0.044;
+    ctx.font = 'bold ' + badgeFont + 'px ' + FONT;
     ctx.textBaseline = 'middle';
-    var bw = ctx.measureText(badgeLabel).width + 16, bh = 22;
-    var bx = IPAD + iw - bw - 4, by = IPAD + 4;
-    rrectFill(ctx, bx, by, bw, bh, 6, badgeColor);
+    var bw = ctx.measureText(badgeLabel).width + W * 0.028, bh = badgeFont * 1.5;
+    var bx = W - IPAD * 1.4 - bw, by = IPAD * 1.4;
+    rrectFill(ctx, bx, by, bw, bh, bh * 0.28, badgeColor);
     ctx.fillStyle = '#fff';
     ctx.textAlign = 'center';
     ctx.fillText(badgeLabel, bx + bw / 2, by + bh / 2);
     ctx.textBaseline = 'alphabetic';
   }
 
-  // ── body ──────────────────────────────────────────────────────────
-  var y = imgZoneH + 8;
+  // ── ก้อนข้อความล่าง (ไล่จาก imgBandH ลงมา — จองพื้นที่คงที่ รูปเรียงระดับเดียวกันทุกใบ) ──
+  var y = imgBandH + padTop;
   ctx.textAlign = 'left';
-  ctx.textBaseline = 'alphabetic';
 
-  // SKU (left) + color dot + color name (right)
+  // SKU (ซ้าย, clamp ≤54%) + จุดสี/ชื่อสี (ขวา, clamp ≤42%) — จองคนละครึ่ง ไม่ชน/ไม่ล้น
+  ctx.font = 'bold ' + fSku + 'px monospace';
   ctx.fillStyle = '#374151';
-  ctx.font = 'bold 11px monospace';
-  ctx.fillText(p.sku || '', BPAD, y);
+  var skuBase = y + fSku * 0.82;
+  ctx.fillText(clampTextWidth(ctx, p.sku || '', (W - PAD * 2) * 0.54), PAD, skuBase);
 
   if (p.color && p.color.hex) {
-    var cname = p.color.name || '';
-    ctx.font = '10px ' + FONT;
+    ctx.font = fColor + 'px ' + FONT;
+    var cname = p.color.name ? clampTextWidth(ctx, p.color.name, (W - PAD * 2) * 0.42) : '';
     var cnameW = cname ? ctx.measureText(cname).width : 0;
-    var dotCx = W - BPAD - (cname ? cnameW + 8 : 5) - 5;
+    var dotR = W * 0.022;
+    var nameRight = W - PAD;
+    var dotCx = nameRight - cnameW - (cname ? W * 0.016 : 0) - dotR;
     ctx.fillStyle = p.color.hex;
     ctx.beginPath();
-    ctx.arc(dotCx, y - 4, 4.5, 0, Math.PI * 2);
+    ctx.arc(dotCx, skuBase - fColor * 0.35, dotR, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.12)';
     ctx.lineWidth = 1;
     ctx.stroke();
     if (cname) {
       ctx.fillStyle = '#6b7280';
       ctx.textAlign = 'right';
-      ctx.fillText(cname, W - BPAD, y);
+      ctx.fillText(cname, nameRight, skuBase);
+      ctx.textAlign = 'left';
     }
   }
+  y += fSku * 1.05 + rowGap;
 
-  y += 16;
-  ctx.textAlign = 'left';
-
-  // product name bold (12.5px → 13px for canvas, 2 lines)
+  // ชื่อสินค้า (ตัวหนา สูงสุด 2 บรรทัด · clamp ทุกบรรทัด กันชื่อไม่มีวรรคล้นขอบ)
+  ctx.font = 'bold ' + fName + 'px ' + FONT;
   ctx.fillStyle = '#111827';
-  ctx.font = 'bold 13px ' + FONT;
-  var nameLines = wrapTextLines(ctx, p.name || '', W - BPAD * 2, 2);
-  nameLines.forEach(function(line) { ctx.fillText(line, BPAD, y); y += 19; });
+  nameLines.forEach(function(line) {
+    ctx.fillText(clampTextWidth(ctx, line, W - PAD * 2), PAD, y + fName * 0.82);
+    y += nameLineH;
+  });
 
-  y += 2;
-
-  // vendor line: 🏪 vendor
-  if (vendorStr) {
-    ctx.fillStyle = '#9ca3af';
-    ctx.font = '10.5px ' + FONT;
-    ctx.fillText('🏪 ' + vendorStr, BPAD, y);
-    y += 16;
-  }
-
-  // last stock date line: 📅 เข้าล่าสุด date · qty ชิ้น
+  // ชิปวันที่เข้าล่าสุด + จำนวนที่เข้า (สีเขียวอ่อน เห็นชัด — ตามที่เจ้าของขอ)
   if (p.lastStockInDate) {
-    var dateStr = '📅 เข้าล่าสุด ' + p.lastStockInDate;
-    if (p.lastStockInQty) dateStr += ' · ' + p.lastStockInQty + ' ชิ้น';
-    ctx.fillStyle = '#374151';
-    ctx.font = '10px ' + FONT;
-    ctx.fillText(dateStr, BPAD, y);
-    y += 16;
+    ctx.font = '600 ' + fDate + 'px ' + FONT;
+    var dateLabel = '📅 เข้าล่าสุด ' + p.lastStockInDate + (p.lastStockInQty ? (' · ' + p.lastStockInQty + ' ชิ้น') : '');
+    dateLabel = clampTextWidth(ctx, dateLabel, W - PAD * 2);
+    var dTw = ctx.measureText(dateLabel).width;
+    var chipPadX = W * 0.015;
+    rrectFill(ctx, PAD, y, dTw + chipPadX * 2, chipH, chipH * 0.32, '#eef7ee');
+    ctx.fillStyle = '#2c6a39';
+    ctx.fillText(dateLabel, PAD + chipPadX, y + chipH / 2 + fDate * 0.34);
+    y += chipH + rowGap;
   }
 
-  y += 6;
-
-  // dashed divider (border-top: 1px dashed var(--bdr))
+  // ── ท้ายการ์ด: เส้นประ + คงเหลือ/ราคา + แยกคลัง ──
+  y += rowGap * 0.6;
   ctx.strokeStyle = '#e5e7eb';
   ctx.lineWidth = 1;
-  ctx.setLineDash([4, 3]);
-  ctx.beginPath();
-  ctx.moveTo(BPAD, y);
-  ctx.lineTo(W - BPAD, y);
-  ctx.stroke();
+  ctx.setLineDash([W * 0.01, W * 0.0075]);
+  ctx.beginPath(); ctx.moveTo(PAD, y); ctx.lineTo(W - PAD, y); ctx.stroke();
   ctx.setLineDash([]);
-  y += 10;
+  y += 1 + rowGap * 0.9;
 
-  // bottom: คงเหลือ (left) | ราคา (right) — labels
-  ctx.font = '9.5px ' + FONT;
-  ctx.fillStyle = '#9ca3af';
+  var footBase = y + fVal * 0.82;
   ctx.textAlign = 'left';
-  ctx.fillText('คงเหลือ', BPAD, y);
-  ctx.textAlign = 'right';
-  ctx.fillText('ราคา', W - BPAD, y);
-  y += 14;
-
-  // qty value (color: red if out/low, else text)
-  var qtyStr = String(total);
-  ctx.fillStyle = (outOfStock || lowStock) ? '#ef4444' : '#111827';
-  ctx.font = 'bold 14px ' + FONT;
-  ctx.textAlign = 'left';
-  ctx.fillText(qtyStr, BPAD, y);
-  var qw = ctx.measureText(qtyStr).width;
+  ctx.font = '600 ' + fLab + 'px ' + FONT;
   ctx.fillStyle = '#9ca3af';
-  ctx.font = '9.5px ' + FONT;
-  ctx.fillText(' ชิ้น', BPAD + qw + 2, y);
+  ctx.fillText('คงเหลือ', PAD, footBase);
+  var labW = ctx.measureText('คงเหลือ').width;
+  var qtyStr = String(total <= 0 ? 0 : total);
+  ctx.font = '800 ' + fVal + 'px ' + FONT;
+  ctx.fillStyle = outOfStock ? '#ef4444' : lowStock ? '#f97316' : '#111827';
+  // จอง budget: คงเหลือ (ซ้าย ≤50%) · ราคา (ขวา ≤46%) — clamp กันชนกลางการ์ด
+  qtyStr = clampTextWidth(ctx, qtyStr, (W - PAD * 2) * 0.5 - labW - W * 0.02);
+  ctx.fillText(qtyStr, PAD + labW + W * 0.016, footBase);
 
-  // price value (accent color)
   if (price) {
-    ctx.fillStyle = acc;
-    ctx.font = 'bold 14px ' + FONT;
     ctx.textAlign = 'right';
-    ctx.fillText('฿' + price, W - BPAD, y);
-  }
-  y += 18;
-
-  // WH/store breakdown: 🏪 N · 🏭 N
-  if (hasBreakdown) {
-    ctx.fillStyle = '#9ca3af';
-    ctx.font = '9.5px ' + FONT;
+    ctx.font = '800 ' + fVal + 'px ' + FONT;
+    ctx.fillStyle = acc;
+    ctx.fillText(clampTextWidth(ctx, '฿' + price, (W - PAD * 2) * 0.46), W - PAD, footBase);
     ctx.textAlign = 'left';
-    ctx.fillText('🏪 ' + (p.qtyStore || 0) + ' · 🏭 ' + (p.qtyWH || 0), BPAD, y);
+  }
+  y += fVal * 1.05;
+
+  // แยกคลัง/หน้าร้าน (clamp กันล้นขอบขวาบนฟอนต์กว้าง)
+  if (hasBreakdown) {
+    y += rowGap * 0.35;
+    ctx.font = fBrk + 'px ' + FONT;
+    ctx.fillStyle = '#9ca3af';
+    var brk = '🏪 หน้าร้าน ' + (p.qtyStore || 0) + ' · 🏭 คลัง ' + (p.qtyWH || 0);
+    ctx.fillText(clampTextWidth(ctx, brk, W - PAD * 2), PAD, y + fBrk * 0.85);
   }
 
   return c;
 }
 
+// ── drawPdfHeaderCanvas / drawPdfFooterCanvas: หัว-ท้ายกระดาษ A4 เป็นรูป ──
+// ⚠️ วาดผ่าน canvas ไม่ใช่ jsPDF doc.text() โดยตั้งใจ — ฟอนต์มาตรฐาน 14 ตัวของ jsPDF
+// (helvetica/times/courier) ไม่มีตัวอักษรไทย ใช้ doc.text() กับข้อความไทยจะได้กล่องว่าง/เพี้ยน
+// ต้อง embed ฟอนต์ไทยเองถึงจะใช้ text API ได้ — ทางที่ง่ายและชัวร์กว่าคือ rasterize เป็นรูป
+// เหมือนการ์ดสินค้า แล้วฝังด้วย doc.addImage() ทั้งหมด (เบราว์เซอร์ render ฟอนต์ไทยให้เองผ่าน canvas)
+function drawPdfHeaderCanvas(title, subtitle, pageLabel, dateStr, accentColor, Wpx, Hpx) {
+  var FONT = '\'Sarabun\',\'Noto Sans Thai\',\'Segoe UI\',Arial,sans-serif';
+  var SCALE = 2;
+  var c = document.createElement('canvas');
+  c.width = Wpx * SCALE; c.height = Hpx * SCALE;
+  var ctx = c.getContext('2d');
+  ctx.scale(SCALE, SCALE);
+  var W = Wpx, H = Hpx;
+  ctx.textBaseline = 'alphabetic';
+
+  ctx.font = (H * 0.62) + 'px ' + FONT;
+  ctx.fillStyle = '#14251a';
+  ctx.textAlign = 'left';
+  ctx.fillText('🏭', 0, H * 0.72);
+  var iconW = ctx.measureText('🏭').width + W * 0.012;
+
+  ctx.font = 'bold ' + (H * 0.34) + 'px ' + FONT;
+  ctx.fillStyle = '#14251a';
+  ctx.fillText(title, iconW, H * 0.42);
+
+  ctx.font = (H * 0.2) + 'px ' + FONT;
+  ctx.fillStyle = '#5f6b60';
+  ctx.fillText(subtitle, iconW, H * 0.72);
+
+  ctx.textAlign = 'right';
+  ctx.font = 'bold ' + (H * 0.27) + 'px ' + FONT;
+  ctx.fillStyle = accentColor || '#1b5e20';
+  ctx.fillText(pageLabel, W, H * 0.42);
+
+  ctx.font = (H * 0.19) + 'px ' + FONT;
+  ctx.fillStyle = '#5f6b60';
+  ctx.fillText(dateStr, W, H * 0.72);
+
+  ctx.strokeStyle = accentColor || '#1b5e20';
+  ctx.lineWidth = H * 0.045;
+  ctx.beginPath(); ctx.moveTo(0, H); ctx.lineTo(W, H); ctx.stroke();
+
+  return c;
+}
+
+function drawPdfFooterCanvas(brandLabel, totalLabel, pageNum, Wpx, Hpx) {
+  var FONT = '\'Sarabun\',\'Noto Sans Thai\',\'Segoe UI\',Arial,sans-serif';
+  var SCALE = 2;
+  var c = document.createElement('canvas');
+  c.width = Wpx * SCALE; c.height = Hpx * SCALE;
+  var ctx = c.getContext('2d');
+  ctx.scale(SCALE, SCALE);
+  var W = Wpx, H = Hpx;
+
+  ctx.strokeStyle = '#eef1ec';
+  ctx.lineWidth = H * 0.05;
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(W, 0); ctx.stroke();
+
+  ctx.textBaseline = 'middle';
+  ctx.font = (H * 0.34) + 'px ' + FONT;
+  ctx.fillStyle = '#8a948a';
+  ctx.textAlign = 'left';
+  ctx.fillText(brandLabel, 0, H * 0.58);
+
+  ctx.font = 'bold ' + (H * 0.36) + 'px ' + FONT;
+  ctx.fillStyle = '#5f6b60';
+  ctx.textAlign = 'center';
+  ctx.fillText(totalLabel, W / 2, H * 0.58);
+
+  ctx.font = (H * 0.34) + 'px ' + FONT;
+  ctx.fillStyle = '#8a948a';
+  ctx.textAlign = 'right';
+  ctx.fillText(String(pageNum), W, H * 0.58);
+
+  return c;
+}
+
 // ── drawTop10CatCanvas: วาด card Top 10 ขายดีต่อหมวด เป็น canvas ──
-// ใช้ loadImgForCard (GAS proxy) เพื่อไม่ติด CORS — pattern เดียวกับ drawProductCardCanvas
+// ใช้ loadImgForCard (GAS proxy) เพื่อไม่ติด CORS — pattern เดียวกับ drawSupplierPdfCard
 function drawTop10CatCanvas(g, imgMap, cc, role, periodLabel) {
   var W = 440; // กว้างขึ้น + เผื่อ margin ขวา กันคอลัมน์ยอดเงินตกขอบ
   var FONT = "'Sarabun','Noto Sans Thai','Segoe UI',Arial,sans-serif";
@@ -550,48 +643,103 @@ function drawTop10CatCanvas(g, imgMap, cc, role, periodLabel) {
   return c;
 }
 
-async function downloadSupplierCardsZip(groupName, items, accentColor, onProgress) {
-  await ensureJsZip();
-  var zip = new window.JSZip();
-  var safeName = (groupName || 'supplier').replace(/[\/\\:*?"<>|]/g, '_');
-  var folder = zip.folder(safeName);
+// ── downloadSupplierCardsPdf: PDF แคตตาล็อกสินค้า A4 (9 การ์ด/หน้า 3×3) ──
+// แทนที่ downloadSupplierCardsZip เดิม (ZIP รูปแยกไฟล์) ตามที่เจ้าของขอ (ส.ค. 2569)
+// 9 การ์ด/หน้า (เจ้าของขอ "รูปใหญ่ขึ้น" หลังเห็น 12/หน้าจริง) · รูปแบบ fit (ไม่ครอปสินค้า) ·
+// ชิปวันที่เข้าล่าสุดเห็นชัด · ราคา/คงเหลือ/แยกคลัง-หน้าร้าน/สี ครบทุกใบ
+// ⚠️ drawSupplierPdfCard คำนวณสัดส่วนเองจาก Wc/Hc (ก้อนข้อความสูงคงที่ตาม W · รูปกินที่เหลือ)
+// จึงเปลี่ยน COLS/ROWS ได้โดยไม่ต้องแก้ฟังก์ชันวาด — การ์ดสูงขึ้น = รูปใหญ่ขึ้นเอง
+async function downloadSupplierCardsPdf(groupName, items, accentColor, onProgress) {
+  await ensureJsPDF();
+  var acc = accentColor || '#16a34a';
 
-  // load images in parallel ผ่าน GAS proxy (หลีก CORS tainted canvas)
+  // ── โหลดรูปผ่าน GAS proxy แบบจำกัด concurrency ──
+  // ⚠️ เดิม Promise.all ยิงทุกใบพร้อมกัน (59 คำขอ) → GAS แน่น → รูปหายเป็นกระดาน (เจอจริง)
+  // จำกัดทีละ POOL ใบ + retry (ใน loadImgForCard) → รูปโหลดครบขึ้นมาก แลกกับช้าลงนิด
   var imgMap = {};
-  await Promise.all(items.map(async function(p) {
-    if (p.imageUrl) imgMap[p.sku] = await loadImgForCard(p.imageUrl);
-    if (onProgress) onProgress('load', p.sku);
-  }));
-
-  // draw & add to zip
-  for (var i = 0; i < items.length; i++) {
-    var p = items[i];
-    var imgForCard = imgMap[p.sku] || null;
-    var canvas = drawProductCardCanvas(p, imgForCard, accentColor);
-    var blob = null;
-    try {
-      blob = await new Promise(function(res, rej) {
-        try {
-          canvas.toBlob(function(b) { b ? res(b) : rej(new Error('tainted')); }, 'image/jpeg', 0.95);
-        } catch(e) { rej(e); }
-      });
-    } catch(e) {
-      // canvas tainted (CORS) → วาดใหม่โดยไม่ใส่รูป
-      var c2 = drawProductCardCanvas(p, null, accentColor);
-      blob = await new Promise(function(res) { c2.toBlob(res, 'image/jpeg', 0.95); });
+  var withImg = items.filter(function(p) { return p.imageUrl; });
+  var loaded = 0, cursor = 0, POOL = 4;
+  async function imgWorker() {
+    while (cursor < withImg.length) {
+      var p = withImg[cursor++];
+      imgMap[p.sku] = await loadImgForCard(p.imageUrl);
+      loaded++;
+      if (onProgress) onProgress('load', loaded, withImg.length);
     }
-    if (blob) folder.file((p.sku || ('item' + i)) + '.jpg', blob);
-    if (onProgress) onProgress('draw', p.sku);
+  }
+  var workers = [];
+  for (var w = 0; w < Math.min(POOL, withImg.length); w++) workers.push(imgWorker());
+  await Promise.all(workers);
+
+  // ── เรขาคณิตหน้า A4 (มม.) — 9 การ์ด/หน้า (3 คอลัมน์ × 3 แถว) ──
+  var PAGE_W = 210, PAGE_H = 297;
+  var MARGIN = 9, HEADER_H = 14, HEADER_GAP = 3, FOOTER_H = 8, FOOTER_GAP = 3, GAP = 3.5;
+  var COLS = 3, ROWS = 3;
+  var PER_PAGE = COLS * ROWS;
+  var usableW = PAGE_W - MARGIN * 2;
+  var cellW = (usableW - GAP * (COLS - 1)) / COLS;
+  var gridTop = MARGIN + HEADER_H + HEADER_GAP;
+  var gridBottom = PAGE_H - MARGIN - FOOTER_H - FOOTER_GAP;
+  var cellH = (gridBottom - gridTop - GAP * (ROWS - 1)) / ROWS;
+
+  var PXPMM = 6; // ความละเอียด canvas ก่อนฝัง PDF (×SCALE 2 ในฟังก์ชันวาด ≈ 305dpi ตอนพิมพ์จริง)
+  var cardWpx = Math.round(cellW * PXPMM);
+  var cardHpx = Math.round(cellH * PXPMM);
+  var headerWpx = Math.round(usableW * PXPMM), headerHpx = Math.round(HEADER_H * PXPMM);
+  var footerWpx = headerWpx, footerHpx = Math.round(FOOTER_H * PXPMM);
+
+  var jsPDFCtor = window.jspdf.jsPDF;
+  var doc = new jsPDFCtor({ unit: 'mm', format: 'a4', compress: true });
+  var pages = Math.max(1, Math.ceil(items.length / PER_PAGE));
+  var todayStr = new Date().toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' });
+  var safeName = (groupName || 'supplier').replace(/[\/\\:*?"<>|]/g, '_');
+
+  function drawPageChrome(pageIdx) {
+    var hc = drawPdfHeaderCanvas(
+      (groupName || 'สินค้า') + ' · แคตตาล็อกสินค้า',
+      'ราคาส่ง · เรียงตามรหัสสินค้า (SKU)',
+      'หน้า ' + (pageIdx + 1) + ' / ' + pages,
+      todayStr, acc, headerWpx, headerHpx
+    );
+    doc.addImage(hc.toDataURL('image/png'), 'PNG', MARGIN, MARGIN, usableW, HEADER_H);
+
+    var fc = drawPdfFooterCanvas(
+      'Doomuenjing · ระบบจัดการสต็อก', 'รวม ' + items.length + ' รายการ', pageIdx + 1,
+      footerWpx, footerHpx
+    );
+    doc.addImage(fc.toDataURL('image/png'), 'PNG', MARGIN, PAGE_H - MARGIN - FOOTER_H, usableW, FOOTER_H);
   }
 
-  var content = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(content);
-  a.download = safeName + '_การ์ดสินค้า.zip';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(function() { URL.revokeObjectURL(a.href); }, 1000);
+  for (var i = 0; i < items.length; i++) {
+    var pageIdx = Math.floor(i / PER_PAGE);
+    var posInPage = i % PER_PAGE;
+    if (posInPage === 0) {
+      if (i > 0) doc.addPage();
+      drawPageChrome(pageIdx);
+    }
+    var col = posInPage % COLS, row = Math.floor(posInPage / COLS);
+    var x = MARGIN + col * (cellW + GAP);
+    var y = gridTop + row * (cellH + GAP);
+
+    var p = items[i];
+    var imgForCard = imgMap[p.sku] || null;
+    var dataUrl;
+    try {
+      var canvas = drawSupplierPdfCard(p, imgForCard, acc, cardWpx, cardHpx);
+      dataUrl = canvas.toDataURL('image/jpeg', 0.94);
+      if (!dataUrl || dataUrl === 'data:,') throw new Error('tainted');
+    } catch (e) {
+      // canvas tainted (CORS) → วาดใหม่โดยไม่ใส่รูป (เหมือนพฤติกรรมเดิมของ ZIP)
+      var c2 = drawSupplierPdfCard(p, null, acc, cardWpx, cardHpx);
+      dataUrl = c2.toDataURL('image/jpeg', 0.94);
+    }
+    doc.addImage(dataUrl, 'JPEG', x, y, cellW, cellH);
+    if (onProgress) onProgress('draw', i + 1, items.length);
+  }
+
+  if (items.length === 0) drawPageChrome(0); // เผื่อ group ว่าง (กันเคสขอบ)
+
+  doc.save(safeName + '_แคตตาล็อกสินค้า.pdf');
 }
 
 // ── Android back-button handler ──────────────────────────────────────────────
@@ -3159,7 +3307,13 @@ function CategoryView({ data, role, onNav }) {
   ).length, [products, mineOnly, mySkus]);
   const [sendingCheck, setSendingCheck] = uS(false);
   const [checkSendOpen, setCheckSendOpen] = uS(false);       // floating button → modal
-  const [checkSuppliers, setCheckSuppliers] = uS(new Set()); // ชื่อ supplier ที่ owner เลือก
+  // ⭐ ปุ่มลอย 📤 "ส่งคำขอเช็คสต็อก" — เดิมมีเฉพาะ owner/dev (viewRole ยุบ dev→owner มาแล้ว)
+  // เจ้าของสั่ง (ส.ค. 2026): "saler ยังไม่มีปุ่มให้กดเลย" ชี้ไปที่ปุ่มนี้ที่เหมือน owner/dev
+  // → เปิดให้ saler/storedevice ด้วย (ทั้งคู่ยืนหน้าร้าน สั่งเช็คสต็อกร้านที่ตัวเองดูแลได้)
+  // ⚠️ backend: `createStockCheck` ยังไม่อยู่ใน IMMEDIATE_GATE + REQUIRE_LOGIN ปิดอยู่ → ทำงานได้
+  //    ทันทีไม่ต้องรอ deploy · แต่เติมใน ROLE_ACTIONS_ ของ saler ไว้ให้ตารางถูกต้องเผื่อเปิด gate
+  const canSendCheck = role === "owner" || role === "saler" || role === "storedevice";
+  const [checkSuppliers, setCheckSuppliers] = uS(new Set()); // ชื่อ supplier ที่เลือก
   const [checkSearch, setCheckSearch] = uS("");              // ช่องค้นหา supplier ใน modal
   const [orderProduct, setOrderProduct] = uS(null);
   const [localPendingOrders, setLocalPendingOrders] = uS([]); // optimistic update หลังสั่งสำเร็จ
@@ -3167,7 +3321,8 @@ function CategoryView({ data, role, onNav }) {
   // Android back: ถ้ากำลังดู supplier view → กด back = ล้าง supplier filter
   useBackHandler(globalVendor ? () => { setGlobalVendor(null); setPage(1); } : null);
   const [viewMode, setViewMode] = uS('grid');
-  const [dlGroup, setDlGroup] = uS(null); // ชื่อ group ที่กำลัง download ZIP (null = ไม่มี)
+  const [dlGroup, setDlGroup] = uS(null); // ชื่อ group ที่กำลังสร้าง PDF (null = ไม่มี)
+  const [dlProg, setDlProg]   = uS('');   // ข้อความคืบหน้า เช่น "โหลดรูป 20/59" (โหลดรูป 59 ใบผ่าน proxy ช้า ต้องบอกผู้ใช้)
   // ── floating button drag refs ──
   const floatRef = React.useRef(null);
   const dragRef  = React.useRef({ active: false, sx: 0, sy: 0, ox: 0, oy: 0, moved: false });
@@ -3965,10 +4120,14 @@ function CategoryView({ data, role, onNav }) {
                 <button
                   disabled={dlGroup === globalVendor}
                   onClick={async () => {
-                    setDlGroup(globalVendor);
-                    try { await downloadSupplierCardsZip(globalVendor, filtered, '#16a34a'); }
-                    catch(e) { alert('ดาวน์โหลดไม่สำเร็จ: ' + (e.message || e)); }
-                    finally { setDlGroup(null); }
+                    setDlGroup(globalVendor); setDlProg('');
+                    try {
+                      await downloadSupplierCardsPdf(globalVendor, filtered, '#16a34a', (phase, n, tot) => {
+                        setDlProg(phase === 'load' ? `โหลดรูป ${n}/${tot}` : `จัดหน้า ${n}/${tot}`);
+                      });
+                    }
+                    catch(e) { alert('สร้าง PDF ไม่สำเร็จ: ' + (e.message || e)); }
+                    finally { setDlGroup(null); setDlProg(''); }
                   }}
                   style={{
                     padding:'8px 14px', borderRadius:20, border:'1.5px solid var(--g-500)',
@@ -3979,7 +4138,7 @@ function CategoryView({ data, role, onNav }) {
                     display:'flex', alignItems:'center', gap:6,
                     fontFamily:'inherit',
                   }}>
-                  {dlGroup === globalVendor ? '⏳ กำลังสร้าง…' : '⬇️ ดาวน์โหลดการ์ด'}
+                  {dlGroup === globalVendor ? ('⏳ ' + (dlProg || 'กำลังสร้าง…')) : '⬇️ ดาวน์โหลด PDF'}
                 </button>
               )}
             </div>
@@ -4214,17 +4373,19 @@ function CategoryView({ data, role, onNav }) {
                         🟡 {g.low} ใกล้หมด
                       </span>
                     )}
-                    {/* ปุ่มดาวน์โหลดการ์ดสินค้าทุกตัวใน group เป็น ZIP */}
+                    {/* ปุ่มดาวน์โหลดการ์ดสินค้าทุกตัวใน group เป็น PDF (ตาราง A4 9 การ์ด/หน้า) */}
                     <button
                       disabled={dlGroup === g.name}
                       onClick={async () => {
-                        setDlGroup(g.name);
+                        setDlGroup(g.name); setDlProg('');
                         try {
-                          await downloadSupplierCardsZip(g.name, g.items, '#16a34a');
+                          await downloadSupplierCardsPdf(g.name, g.items, '#16a34a', (phase, n, tot) => {
+                            setDlProg(phase === 'load' ? `โหลดรูป ${n}/${tot}` : `จัดหน้า ${n}/${tot}`);
+                          });
                         } catch(e) {
-                          alert('ดาวน์โหลดไม่สำเร็จ: ' + (e.message || e));
+                          alert('สร้าง PDF ไม่สำเร็จ: ' + (e.message || e));
                         } finally {
-                          setDlGroup(null);
+                          setDlGroup(null); setDlProg('');
                         }
                       }}
                       style={{
@@ -4235,7 +4396,7 @@ function CategoryView({ data, role, onNav }) {
                         fontSize:11, fontWeight:600, flexShrink:0,
                         display:'flex', alignItems:'center', gap:4,
                       }}>
-                      {dlGroup === g.name ? '⏳ กำลังสร้าง…' : '⬇️ ZIP'}
+                      {dlGroup === g.name ? ('⏳ ' + (dlProg || 'กำลังสร้าง…')) : '⬇️ PDF'}
                     </button>
                   </div>
                   <div className="product-grid" style={{width:"100%",boxSizing:"border-box",minWidth:0}}>
@@ -4437,8 +4598,8 @@ function CategoryView({ data, role, onNav }) {
         </div>
       )}
 
-      {/* ── Floating button (owner) — ลากได้ ── */}
-      {role === "owner" && (
+      {/* ── Floating button (owner/dev + saler/storedevice) — ลากได้ ── */}
+      {canSendCheck && (
         <div ref={floatRef}
           onMouseDown={function(e){ startDrag(e.clientX, e.clientY); }}
           onMouseMove={function(e){ moveDrag(e.clientX, e.clientY); }}
@@ -4486,31 +4647,41 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
   const [done, setDone] = uS(false);
   const [err, setErr] = uS(null);
 
-  // ── role หน้าร้าน/พนักงาน: ต้องนับของที่เหลือหน้าร้านก่อน ถึงจะสั่งได้ ──
+  // ── ใครนับหน้าร้านได้ / ใครต้องนับก่อนถึงจะสั่งได้ ──
+  // ⚠️ แยกเป็น 2 ตัวโดยตั้งใจ — "นับได้" (การ์ดนับโผล่ + บันทึกยอดเข้าระบบได้) กับ
+  //    "ต้องนับก่อนถึงจะสั่งได้" (กั้นปุ่มยืนยัน) ไม่ใช่เรื่องเดียวกัน
+  //    · saler/storedevice ยืนอยู่หน้าร้านเห็นชั้นวางจริง → ให้กดนับ/บันทึกได้ (เจ้าของสั่ง
+  //      ส.ค. 2026 — storedevice เพิ่มทีหลังตามคำขอเดียวกัน เพราะเป็นเครื่องที่วางหน้าร้านจริง)
+  //    · แต่ **ไม่บังคับ** เพราะงานหลักคือปิดการขายให้ทันลูกค้าที่ยืนรออยู่
+  //      บังคับนับก่อนสั่งเมื่อไหร่ = ขวางการขายด้วยงานที่ไม่ใช่ของเขา
+  //    ยุบกลับเป็นตัวเดียวเมื่อไหร่ 2 role นี้จะโดนกั้นปุ่มยืนยันทันที **โดยไม่มีอะไรเตือน**
   const effRole = role || sessionStorage.getItem("dmj_role") || "";
-  const needFsCheck = effRole === "frontstore" || effRole === "employee";
+  const canFsCheck  = effRole === "frontstore" || effRole === "employee"
+                      || effRole === "saler" || effRole === "storedevice";
+  const mustFsCheck = effRole === "frontstore" || effRole === "employee";
   const [fsQty, setFsQty] = uS("");          // "" = ยังไม่กรอก
   const [fsSaveFailed, setFsSaveFailed] = uS(false);
   const fsQtyNum = fsQty === "" ? null : Math.max(0, parseInt(fsQty) || 0);
 
   // เพิ่งเช็คไปไม่เกิน 2 ชม. → ข้ามการนับได้ (กันนับซ้ำตอนสั่งของรัว ๆ) แต่กด "นับใหม่" ได้เสมอ
   const fsFreshMin = uM(() => {
-    if (!needFsCheck || !product.frontStoreCheckedAt) return null;
+    if (!canFsCheck || !product.frontStoreCheckedAt) return null;
     if (typeof parseCheckDateMs !== "function") return null;
     const t = parseCheckDateMs(product.frontStoreCheckedAt);
     if (isNaN(t)) return null;
     const mins = Math.floor((Date.now() - t) / 60000);
     return (mins >= 0 && mins < FS_CHECK_FRESH_MIN) ? mins : null;
-  }, [needFsCheck, product.frontStoreCheckedAt]);
+  }, [canFsCheck, product.frontStoreCheckedAt]);
   const [fsRecount, setFsRecount] = uS(false);      // true = ผู้ใช้ขอนับใหม่ทั้งที่ยังสด
   const fsSkipped = fsFreshMin != null && !fsRecount;
-  const fsBlocked = needFsCheck && !fsSkipped && fsQtyNum == null;
+  // กั้นปุ่มยืนยัน = เฉพาะ role ที่ "ต้อง" นับ (saler/storedevice นับได้แต่ไม่ถูกกั้น)
+  const fsBlocked = mustFsCheck && !fsSkipped && fsQtyNum == null;
 
   // ── auto-save จำนวนที่นับได้ (debounce 2 วิ) → ชีต "จำนวนหน้าร้าน" + push ZORT ทันที ──
   //  นับแล้วถึงไม่สั่งต่อ (ปิด modal ทิ้ง) ยอดที่นับก็เข้าระบบแล้ว — ไม่เสียของที่นับมา
   const [fsSavedQty, setFsSavedQty] = uS(null);     // ค่าที่บันทึกเข้าระบบไปแล้ว
   const [fsSaving, setFsSaving] = uS(false);
-  const fsDirty = needFsCheck && !fsSkipped && fsQtyNum != null && fsQtyNum !== fsSavedQty;
+  const fsDirty = canFsCheck && !fsSkipped && fsQtyNum != null && fsQtyNum !== fsSavedQty;
 
   const fsErrRef = React.useRef("");   // เหตุผลจริงที่บันทึกไม่ผ่าน (เอาไปโชว์ตอนกดสั่ง)
   const fsSavedRef = React.useRef(null);   // ค่าที่บันทึกแล้ว (ref — closure ของ timer เห็นค่าล่าสุดเสมอ)
@@ -4823,7 +4994,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
             )}
 
               {/* เพิ่งเช็คไปไม่นาน → ข้ามการนับ แต่ยังกด "นับใหม่" ได้ */}
-              {needFsCheck && fsSkipped && (
+              {canFsCheck && fsSkipped && (
                 <div style={{
                   marginBottom:16, borderRadius:12, padding:"12px 14px",
                   border:"1.5px solid var(--g-400)", background:"var(--g-50)",
@@ -4845,19 +5016,27 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
                 </div>
               )}
 
-              {/* ① เช็คของหน้าร้านก่อนสั่ง (role หน้าร้าน/พนักงาน) */}
-              {needFsCheck && !fsSkipped && (
+              {/* ① เช็คของหน้าร้าน — บังคับสำหรับหน้าร้าน/พนักงาน · saler/storedevice นับได้แต่ไม่บังคับ */}
+              {canFsCheck && !fsSkipped && (
                 <div style={{
                   marginBottom:16, borderRadius:12, padding:14,
-                  border: fsQtyNum == null ? "2px solid #f59e0b" : "2px solid var(--g-600)",
-                  background: fsQtyNum == null ? "#fffbeb" : "var(--g-50)",
+                  // สีเตือน (ส้ม) = "ยังกดสั่งไม่ได้จนกว่าจะกรอก" เท่านั้น — ผูกกับ fsBlocked ไม่ใช่
+                  // "ยังไม่กรอก" เฉย ๆ ไม่งั้น role ที่ไม่ได้ถูกบังคับจะเห็นกรอบส้มเตือนทั้งที่กดสั่งได้ปกติ
+                  border: fsBlocked ? "2px solid #f59e0b" : "2px solid var(--g-600)",
+                  background: fsBlocked ? "#fffbeb" : "var(--g-50)",
                 }}>
-                  <div style={{fontSize:13, fontWeight:800, color: fsQtyNum == null ? "#92400e" : "var(--g-700)"}}>
-                    {outOfStock ? `📋 ${t("หน้าร้านเหลือกี่ชิ้น?")}` : `① ${t("นับก่อนสั่ง — หน้าร้านเหลือกี่ชิ้น?")}`}
+                  <div style={{fontSize:13, fontWeight:800, color: fsBlocked ? "#92400e" : "var(--g-700)"}}>
+                    {outOfStock
+                      ? `📋 ${t("หน้าร้านเหลือกี่ชิ้น?")}`
+                      : mustFsCheck
+                        ? `① ${t("นับก่อนสั่ง — หน้าร้านเหลือกี่ชิ้น?")}`
+                        : `📋 ${t("นับหน้าร้าน — เหลือกี่ชิ้น?")}`}
                   </div>
                   <div style={{fontSize:11, color:"var(--muted)", marginTop:3}}>
                     ระบบบันทึกไว้ <b>{fmtN(product.qtyStore || 0)}</b> ชิ้น
                     {product.frontStoreCheckedAt ? <> · เช็คล่าสุด {product.frontStoreCheckedAt}</> : <> · ยังไม่เคยเช็ค</>}
+                    {/* saler/storedevice ไม่ถูกบังคับ — บอกให้ชัด ไม่งั้นจะนึกว่าต้องกรอกก่อนถึงสั่งได้ */}
+                    {!mustFsCheck && !outOfStock && <> · <b>{t("ไม่บังคับ — นับแล้วระบบบันทึกให้เลย")}</b></>}
                   </div>
                   <div style={{display:"flex", gap:8, alignItems:"center", marginTop:10}}>
                     <button onClick={() => { setFsQty(String(Math.max(0, (fsQtyNum || 0) - 1))); setFsSaveFailed(false); }}
@@ -4906,7 +5085,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
               <div style={{background:"#fff0f0", border:"1px solid #fcc", borderRadius:10,
                            padding:16, textAlign:"center", fontSize:13, color:"var(--dang)", fontWeight:600}}>
                 ⚠️ คลังหมดสต๊อก — สั่งไม่ได้ตอนนี้
-                {needFsCheck && (
+                {canFsCheck && (
                   <div style={{fontSize:11, fontWeight:500, color:"var(--muted)", marginTop:5}}>
                     แต่บันทึกยอดหน้าร้านไว้ได้ เจ้าของจะเห็นว่าของหมดทั้งคลังและหน้าร้าน
                   </div>
@@ -4925,7 +5104,9 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
               {/* Quick qty */}
               <div style={{marginBottom:14}}>
                 <div style={{fontSize:12, fontWeight:600, color:"var(--muted)", marginBottom:8}}>
-                  {needFsCheck && !fsSkipped ? `② ${t("จำนวนที่สั่ง (ชิ้น)")}` : t("จำนวนที่สั่ง (ชิ้น)")}
+                  {/* เลข ② มีความหมายเฉพาะตอนมีขั้น ① บังคับอยู่จริง — saler/storedevice ไม่มีขั้นบังคับ
+                      ถ้าโชว์ ② ให้ด้วยจะกลายเป็นลำดับที่ขาดขั้นแรกไป อ่านแล้วงงว่าตกอะไรไป */}
+                  {mustFsCheck && !fsSkipped ? `② ${t("จำนวนที่สั่ง (ชิ้น)")}` : t("จำนวนที่สั่ง (ชิ้น)")}
                 </div>
                 <div style={{display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:6, marginBottom:8}}>
                   {QUICK_QTYS.map(q => (
@@ -5052,14 +5233,20 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
   const outOfStock = !p.isMTO && totalQty === 0;
   const hashHue = (p.sku || "").split("").reduce((a,c) => a + c.charCodeAt(0), 0) % 360;
   const [lightbox, setLightbox] = uS(false);
-  // role หน้าร้าน/พนักงาน: ของหมดทั้งคลัง+หน้าร้าน ก็ยังเปิด modal เพื่อ "นับหน้าร้าน" ได้
-  const canCountFs = role === "frontstore" || role === "employee";
+  // ของหมดทั้งคลัง+หน้าร้าน ก็ยังเปิด modal เพื่อ "นับหน้าร้าน" ได้ (ไม่ disable ปุ่ม)
+  // ⚠️ ต้องตรงกับ canFsCheck ใน OrderModal เสมอ — ที่นี่ตัดสินว่า "ปุ่มกดได้ไหม"
+  //    ส่วนโน่นตัดสินว่า "เปิดมาแล้วมีการ์ดนับให้ไหม" · ไม่ตรงกัน = กดปุ่มเข้าไปแล้วเจอ
+  //    modal ที่บอกว่าสั่งไม่ได้ แต่ไม่มีอะไรให้ทำต่อเลย (ทางตัน ไม่มี error ให้เห็น)
+  const canCountFs = role === "frontstore" || role === "employee"
+                     || role === "saler" || role === "storedevice";
   const orderBtnDisabled = outOfStock && !canCountFs;
 
   // Image (real or placeholder) — imgOverride = รูปที่เพิ่งดึงจาก ZORT แบบ on-demand
   const [imgOverride, setImgOverride] = uS(null);
   const [fetchingImg, setFetchingImg] = uS(false);
+  const [uploadingImg, setUploadingImg] = uS(false);
   const [imgErr, setImgErr]           = uS("");
+  const cardPhotoRef = React.useRef(null);
   const effImg = imgOverride || p.imageUrl;
   const hasImg = !!effImg;
 
@@ -5071,6 +5258,22 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
     setFetchingImg(false);
     if (r && r.success && r.data && r.data.imageUrl) setImgOverride(r.data.imageUrl);
     else setImgErr((r && r.error) || "ดึงรูปไม่สำเร็จ");
+  };
+
+  // ถ่าย/เลือกรูปให้สินค้าที่ยังไม่มีรูป → ย่อ → อัปเป็นรูปชั่วคราว (Drive) โชว์ทันที
+  const pickCardPhoto = async (e) => {
+    if (e) e.stopPropagation();
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file || uploadingImg) return;
+    setUploadingImg(true); setImgErr("");
+    try {
+      const dataUrl = await productShrinkImage(file, 800);
+      const r = await syncUploadProductPhoto(p.sku, dataUrl);
+      if (r && r.success && r.data && r.data.imageUrl) setImgOverride(r.data.imageUrl);
+      else setImgErr((r && r.error) || "อัปรูปไม่สำเร็จ");
+    } catch (err) { setImgErr("เปิดรูปไม่สำเร็จ"); }
+    setUploadingImg(false);
   };
 
   return (
@@ -5123,6 +5326,22 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
                 {fetchingImg
                   ? <><span className="spin" style={{width:11,height:11,borderWidth:2}}/> กำลังดึง…</>
                   : "🔄 ดึงรูปจาก ZORT"}
+              </button>
+              {/* ถ่ายรูปเอง (ชั่วคราว) — สำหรับสินค้าใหม่ที่ ZORT ยังไม่มีรูป */}
+              <input ref={cardPhotoRef} type="file" accept="image/*" capture="environment"
+                onChange={pickCardPhoto} style={{display:"none"}} />
+              <button type="button"
+                onClick={e => { e.stopPropagation(); if (!uploadingImg && cardPhotoRef.current) cardPhotoRef.current.click(); }}
+                disabled={uploadingImg}
+                style={{
+                  marginTop:6, padding:"5px 10px", borderRadius:999, cursor: uploadingImg ? "default" : "pointer",
+                  fontSize:11, fontWeight:700, fontFamily:"inherit",
+                  border:"1.5px solid var(--bdr)", background:"#fff", color:"var(--text)",
+                  display:"inline-flex", alignItems:"center", gap:5, opacity: uploadingImg ? 0.6 : 1,
+                }}>
+                {uploadingImg
+                  ? <><span className="spin" style={{width:11,height:11,borderWidth:2}}/> กำลังอัป…</>
+                  : "📷 ถ่ายรูป"}
               </button>
               {imgErr && (
                 <div style={{marginTop:5, fontSize:9.5, color:"var(--dang)", maxWidth:150, lineHeight:1.3}}>{imgErr}</div>
@@ -8367,6 +8586,25 @@ async function syncFrontStoreData(entries) {
   } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
 
+// ─── ล้างค่านับหน้าร้านเก่าที่ไม่ตรงกับระบบ (ไม่แตะสต็อก/ZORT) ───
+async function syncClearFrontStoreChecks(skus) {
+  if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false, error: "ไม่พบ URL" }; }
+  try {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        clearFrontStoreChecks: true,
+        skus,
+        actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
+      }),
+    });
+    const d = await dmjJson(res);
+    if (d && d.success === false) return { success: false, error: d.error || "ล้างไม่สำเร็จ" };
+    return { success: true, cleared: d && d.data ? d.data.cleared : undefined };
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
+}
+
 // ─── เพิ่มสินค้าใหม่เข้า ZORT ───
 async function syncAddProduct(product) {
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false, error: "ไม่พบ URL" }; }
@@ -8423,6 +8661,47 @@ async function checkSkuExistsRemote(sku) {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ checkSkuExists: true, sku }),
+    });
+    return await dmjJson(res);
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
+}
+
+// ── ย่อรูปก่อนส่ง — กัน payload ใหญ่จน GAS timeout (ตั้งใจให้ ~60-120KB) ──
+//    self-contained ในไฟล์นี้ (ไม่พึ่ง attShrinkImage ของ views-attendance.jsx ที่โหลดทีหลัง)
+function productShrinkImage(file, maxW) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("อ่านไฟล์รูปไม่สำเร็จ"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("เปิดรูปไม่สำเร็จ"));
+      img.onload = () => {
+        try {
+          const w = Math.min(maxW || 800, img.width || (maxW || 800));
+          const h = Math.round((img.height || w) * (w / (img.width || w)));
+          const c = document.createElement("canvas");
+          c.width = w; c.height = h;
+          c.getContext("2d").drawImage(img, 0, 0, w, h);
+          resolve(c.toDataURL("image/jpeg", 0.72));
+        } catch (e) { reject(e); }
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// อัปรูปชั่วคราวให้สินค้า (ใหม่/ที่ยังไม่มีรูป) → เก็บ Drive ฝั่ง GAS · คืน { success, data:{imageUrl} }
+async function syncUploadProductPhoto(sku, photoBase64) {
+  if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
+  try {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        uploadProductPhoto: true, sku, photoBase64,
+        actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
+      }),
     });
     return await dmjJson(res);
   } catch (err) { return { success: false, error: dmjErrText(err) }; }
@@ -8499,6 +8778,9 @@ function AddProductView({ data, role, onAdded }) {
   const [wh, setWh]               = uS("W0002"); // default คลังสาย5
   const [saving, setSaving]       = uS(false);
   const [serverCheck, setServerCheck] = uS(null); // { checking, exists }
+  const [photo, setPhoto]         = uS("");       // dataURL รูปที่ถ่าย/เลือก (ชั่วคราว) — ไม่บังคับ
+  const [photoBusy, setPhotoBusy] = uS(false);
+  const photoInputRef = React.useRef(null);
 
   const effectiveCat = catInput.trim() || category;
 
@@ -8640,12 +8922,24 @@ function AddProductView({ data, role, onAdded }) {
     qty: Math.max(0, Math.floor(Number(qty) || 0)),
     warehousecode: wh,
     supplier: supplier.trim(),
+    photoBase64: photo || "",   // รูปชั่วคราว (ไม่บังคับ) — GAS เก็บ Drive → col D ชีต imageUrl
   });
 
   // เคลียร์เฉพาะช่องที่เปลี่ยนต่อรายการ (คงหมวด/โหมด/Prefix/แบบเดิม/คลัง/ซัพพลายเออร์ไว้)
   const resetItemFields = () => {
     setName(""); setPrice(""); setQty(""); setServerCheck(null);
-    setVariantCode(""); setColorSearch("");
+    setVariantCode(""); setColorSearch(""); setPhoto("");
+  };
+
+  // ถ่าย/เลือกรูป → ย่อขนาดก่อนเก็บเป็น dataURL (ส่งไปกับ product ตอนบันทึก)
+  const pickPhoto = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";   // ให้เลือกไฟล์เดิมซ้ำได้
+    if (!file) return;
+    setPhotoBusy(true);
+    try { setPhoto(await productShrinkImage(file, 800)); }
+    catch (err) { showToast("error", "เปิดรูปไม่สำเร็จ ลองใหม่อีกครั้ง", "❌", 4000); }
+    setPhotoBusy(false);
   };
 
   const canQueue = canSave && queue.length < MAX_BATCH;
@@ -9057,6 +9351,47 @@ function AddProductView({ data, role, onAdded }) {
                 value={supplier} onChange={e => setSupplier(e.target.value)} style={inputStyle} />
             </div>
 
+            {/* รูปสินค้า (ถ่าย/เลือก) — ชั่วคราว จนกว่า ZORT จะมีรูป · ไม่บังคับ */}
+            <div>
+              <label style={labelStyle}>
+                รูปสินค้า <span style={{ fontWeight: 400, color: "var(--muted)" }}>· ถ่ายรูปสินค้าใหม่ · ไม่บังคับ</span>
+              </label>
+              <input ref={photoInputRef} type="file" accept="image/*" capture="environment"
+                onChange={pickPhoto} style={{ display: "none" }} />
+              {photo ? (
+                <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                  <div style={{ width: 88, height: 88, borderRadius: 12, flexShrink: 0, border: "1.5px solid var(--g-500)",
+                                backgroundImage: `url("${photo}")`, backgroundSize: "cover", backgroundPosition: "center" }} />
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, color: "var(--g-700)", fontWeight: 700 }}>✓ พร้อมใช้เป็นรูปสินค้า</div>
+                    <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                      พอมีรูปใน ZORT แล้ว ระบบจะเปลี่ยนไปใช้รูป ZORT ให้อัตโนมัติ
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button type="button" onClick={() => photoInputRef.current && photoInputRef.current.click()} disabled={photoBusy}
+                        style={{ minHeight: 40, padding: "6px 12px", borderRadius: 999, cursor: "pointer",
+                                 fontSize: 12.5, fontWeight: 700, fontFamily: "inherit",
+                                 border: "1.5px solid var(--bdr)", background: "#fff", color: "var(--text)" }}>🔄 เปลี่ยนรูป</button>
+                      <button type="button" onClick={() => setPhoto("")}
+                        style={{ minHeight: 40, padding: "6px 12px", borderRadius: 999, cursor: "pointer",
+                                 fontSize: 12.5, fontWeight: 700, fontFamily: "inherit",
+                                 border: "1.5px solid var(--bdr)", background: "#fff", color: "var(--dang)" }}>🗑️ เอาออก</button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <button type="button" onClick={() => photoInputRef.current && photoInputRef.current.click()} disabled={photoBusy}
+                  style={{ width: "100%", minHeight: 88, borderRadius: 12, cursor: photoBusy ? "default" : "pointer",
+                           border: "1.5px dashed var(--g-500)", background: "var(--g-50)", color: "var(--g-700)",
+                           fontSize: 14, fontWeight: 700, fontFamily: "inherit", display: "flex",
+                           alignItems: "center", justifyContent: "center", gap: 8 }}>
+                  {photoBusy
+                    ? <><span className="spin" style={{ width: 14, height: 14, borderWidth: 2 }} /> กำลังเปิดรูป…</>
+                    : "📷 ถ่ายรูป / เลือกรูปสินค้า"}
+                </button>
+              )}
+            </div>
+
             {/* จำนวนเริ่มต้น + คลัง */}
             <div>
               <label style={labelStyle}>{t("จำนวนเริ่มต้น + คลังที่เก็บ")}</label>
@@ -9099,7 +9434,7 @@ function AddProductView({ data, role, onAdded }) {
                         </div>
                         <div style={{ fontSize: 11, color: "var(--muted)" }}>
                           {q.category} · {q.qty} ชิ้น · {q.warehousecode === "W0001" ? "🏪 หน้าร้าน" : "🏭 คลังสาย5"}
-                          {q.sellprice ? ` · ฿${q.sellprice}` : ""}{q.supplier ? ` · ${q.supplier}` : ""}
+                          {q.sellprice ? ` · ฿${q.sellprice}` : ""}{q.supplier ? ` · ${q.supplier}` : ""}{q.photoBase64 ? " · 📷" : ""}
                         </div>
                       </div>
                       <button type="button" onClick={() => removeFromQueue(i)} disabled={saving}
@@ -9694,7 +10029,7 @@ const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty
   };
 
   return (
-    <div id={`fs-row-${p.sku}`}
+    <div id={`fs-row-${p.sku}`} data-sku={p.sku}
          style={{
            background:cardBg,
            border:`2px solid ${borderColor}`,

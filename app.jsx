@@ -1105,6 +1105,14 @@ function App() {
   // "ตอนนี้เราถือ *ของสำรอง* (Phase 7.3) อยู่หรือเปล่า" — ต้องเป็น ref ด้วยเหตุผลเดียวกับ hasDataRef
   const staleRef = React.useRef(0);
   const [data, setData] = usS(null);
+  // แอป mount สำเร็จแล้ว (React commit รอบแรก) → ยกเลิก boot watchdog + ซ่อนแถบกู้จอขาว
+  // (ดู __dmjBootRecover ใน "Doomuenjing Dashboard.html") · effect นี้ยิงเฉพาะเมื่อ render ผ่าน
+  // ถ้า App โยน error ตอน render แรก effect จะไม่ยิง → watchdog โผล่แถบกู้ให้เอง
+  usE(() => {
+    try { window.__dmjAppMounted = true; } catch (e) {}
+    try { clearTimeout(window.__dmjBootWatchdog); } catch (e) {}
+    try { var el = document.getElementById("dmj-boot-recover"); if (el) el.style.display = "none"; } catch (e) {}
+  }, []);
   usE(() => { hasDataRef.current = !!(data && Array.isArray(data.products) && data.products.length); }, [data]);
   const [error, setError] = usS(null);
   const [navLogoOk, setNavLogoOk] = usS(true);
@@ -1670,10 +1678,18 @@ function App() {
   usE(() => {
     if (authPhase !== "needLogin" || !handoffWaiting) return;
     let stop = false;
+    // ⚠️ กันยิงซ้อน: claimLoginHandoff แต่ละครั้งเป็น GAS call (1-4 วิบน cold start) แต่ interval
+    // 4 วิ + onWake (visibilitychange/focus) ยิงตามเวลาไม่รอผลตัวก่อน → มี claim ค้างพร้อมกัน
+    // หลายตัว · GAS deploy แบบ executeAs USER_DEPLOYING จัดคิว execution ของ user เดียวกัน
+    // → 14 claim ต่อคิวกัน + เบียด me/payload ให้ช้าลงไปอีก (เห็นจริงใน BootTrace: claim รัว ~15 ครั้ง
+    // ระหว่างล็อกอิน) · มี claim ค้างอยู่ = ข้ามรอบนี้ไป รอผลตัวเดิมก่อน (ไม่เสียการตอบสนอง —
+    // claim ที่ค้างอาจสำเร็จเองอยู่แล้ว)
+    let inFlight = false;
     const tick = async () => {
-      if (stop) return;
+      if (stop || inFlight) return;
       if (!readPendingHandoff()) { setHandoffWaiting(false); return; } // หมดอายุแล้ว
-      await claimHandoff();
+      inFlight = true;
+      try { await claimHandoff(); } finally { inFlight = false; }
     };
     const id = setInterval(tick, 4000);
     const onWake = () => { if (!document.hidden) tick(); };
@@ -2346,7 +2362,17 @@ function App() {
                                                 fetchFromSheet();
                                               } catch(e){ console.error("completeStockCheck:", e); }
                                             }}/></ErrorBoundary>}
-        {activeTab === "frontstore"   && <ErrorBoundary key="frontstore"><FrontStoreView data={data} role={viewRole} checkRequest={activeCheckRequest}/></ErrorBoundary>}
+        {activeTab === "frontstore"   && <ErrorBoundary key="frontstore"><FrontStoreView data={data} role={viewRole}
+                                            checkRequest={activeCheckRequest}
+                                            onCheckComplete={async function(reqId){
+                                              try {
+                                                await dmjFetch(SHEET_DEPLOY_URL, {method:"POST",
+                                                  headers:{"Content-Type":"text/plain;charset=utf-8"},
+                                                  body: JSON.stringify({completeStockCheck:true, reqId:reqId, actor:role})});
+                                                setActiveCheckRequest(null);
+                                                fetchFromSheet();
+                                              } catch(e){ console.error("completeStockCheck:", e); }
+                                            }}/></ErrorBoundary>}
         {activeTab === "transfers"    && <ErrorBoundary key="transfers"><TransferView data={data}/></ErrorBoundary>}
         {activeTab === "orders"       && <ErrorBoundary key="orders"><OrderListView data={data} role={viewRole}/></ErrorBoundary>}
         {activeTab === "tracking"     && <ErrorBoundary key="tracking"><TrackingView data={data} role={viewRole}/></ErrorBoundary>}
@@ -2392,4 +2418,42 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+// ── กันจอขาวตอน App โยน error ตอน render (หลัง mount แล้ว) ──
+// ErrorBoundary รายแท็บอยู่ "ข้างใน" App — ถ้าตัว App เอง (หรือหน้า login) พังตอน render
+// React จะ unmount ทั้งต้นไม้ = จอขาว · ตัวนี้ครอบไว้ชั้นนอกสุดให้เห็นข้อความ + ปุ่มกู้เสมอ
+// "🔄 ล้างแคชแล้วเข้าใหม่" เรียก __dmjHardReset (จาก HTML) — ปุ่ม "โหลดใหม่" เฉย ๆ ไม่พอถ้า
+// โค้ดที่ cache ไว้เสีย (โหลดใหม่ก็ได้โค้ดเสียเดิมมา render พังซ้ำ)
+class RootBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(err) { return { error: err }; }
+  componentDidCatch(err, info) {
+    try { console.error("[RootBoundary]", err, info && info.componentStack); } catch (e) {}
+    try { window.dmjSaveTrace && window.dmjSaveTrace(); } catch (e) {}
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{padding:"40px 20px",textAlign:"center",fontFamily:"inherit",maxWidth:340,margin:"0 auto"}}>
+          <div style={{fontSize:48,marginBottom:12}}>😵</div>
+          <div style={{fontSize:18,fontWeight:700,color:"#dc2626",marginBottom:8}}>เปิดแอปไม่สำเร็จ</div>
+          <div style={{fontSize:13,color:"#6b7280",lineHeight:1.6,marginBottom:22}}>
+            ข้อมูลแอปที่เก็บไว้ในเครื่องอาจเสียหาย<br/>กดปุ่มด้านล่างเพื่อล้างแล้วเข้าใหม่
+          </div>
+          <button
+            onClick={() => { try { window.__dmjHardReset ? window.__dmjHardReset() : window.location.reload(); } catch (e) { window.location.reload(); } }}
+            style={{display:"block",width:"100%",padding:"13px 18px",marginBottom:10,background:"#1f7f44",color:"#fff",border:"none",borderRadius:10,fontSize:16,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+            🔄 ล้างแคชแล้วเข้าใหม่
+          </button>
+          <button
+            onClick={() => window.location.reload()}
+            style={{display:"block",width:"100%",padding:"11px 18px",background:"transparent",color:"#6b7280",border:"1px solid #d1d5db",borderRadius:10,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>
+            ลองโหลดใหม่เฉย ๆ
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<RootBoundary><App/></RootBoundary>);

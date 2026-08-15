@@ -127,6 +127,7 @@ const SHEET_MTO_JOBS       = "งาน MTO";          // งานจัดพ�
 const SHEET_NOTI_QUEUE     = "คิวแจ้งเตือน LINE"; // คิวข้อความ LINE (throttle/กันชนลิมิต/กันส่งซ้ำ)
 const SHEET_INAPP_NOTI     = "แจ้งเตือนในแอป";   // กระดิ่งบนหัวจอ (ไม่ยิง LINE = ไม่กิน quota)
 const SHEET_PRODUCT_OWNER  = "ผู้ดูแลสินค้า";     // ⭐ ใครดูแลสินค้าตัวไหน (1 สินค้า = 1 คน) — ป้ายบอก ไม่ใช่สิทธิ์
+const SHEET_HIDDEN_PRODUCTS = "สินค้าที่ซ่อน";    // สินค้าที่ลบจาก ZORT แล้ว → ซ่อนจากเว็บ (soft-delete กู้ได้)
 const SHEET_MTO_ITEMS      = "วัตถุดิบ MTO";    // วัตถุดิบสำหรับงาน MTO
 const SHEET_CUST_MONTHLY   = "สรุปลูกค้า-เดือน";  // ยอดซื้อลูกค้า แยกตามเดือน (customer×month)
 const SHEET_CUST_PRODUCTS  = "สรุปลูกค้า-สินค้า"; // สินค้าที่ลูกค้าแต่ละรายซื้อบ่อย (top-N/ลูกค้า)
@@ -690,7 +691,7 @@ var MTO_JOB_ACTIONS_ = ["createMtoJob", "closeMtoJob", "saveMtoJobItems", "delet
 // ROLE_ACTIONS_ เดิมเขียนจาก "เดาว่า role นี้น่าจะทำอะไร" ไม่ได้ไล่จาก ROLE_TABS + view จริง
 // เวลาเพิ่ม role หรือแท็บใหม่ ให้ไล่จาก ROLE_TABS → view → action ที่ view นั้นเรียกจริงเสมอ
 var COMMON_ACTIONS_ = ["order", "updateOrderState", "transferStock", "transferStockBatch",
-                        "confirmShipmentReceive", "updateFrontStore", "fetchProductImage",
+                        "confirmShipmentReceive", "updateFrontStore", "clearFrontStoreChecks", "fetchProductImage",
                         "checkSkuExists", "updateLockData",
                         "punch", "myToday", "myAttendanceSummary",
                         // กระดิ่งแจ้งเตือนอยู่บนหัวจอทุกแท็บทุก role → ต้องอยู่ใน COMMON เสมอ
@@ -701,18 +702,20 @@ var COMMON_ACTIONS_ = ["order", "updateOrderState", "transferStock", "transferSt
                         "setProductOwner"];
 
 var ROLE_ACTIONS_ = {
+  // createStockCheck = ปุ่มลอย 📤 "ส่งคำขอเช็คสต็อก" ในแท็บ "สินค้า & สั่ง" (ดู canSendCheck
+  // ใน CategoryView) — saler/storedevice ยืนหน้าร้าน สั่งเช็คสต็อกร้านที่ตัวเองดูแลได้ (ส.ค. 2026)
   saler:      ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
                "getContactDetail", "createQuotation", "editQuotation", "saveQuotationDraft", "deleteQuotationDraft",
-               "voidQuotation", "approveQuotation", "setQuoteSale", "getInvoiceNumber",
+               "voidQuotation", "approveQuotation", "setQuoteSale", "getInvoiceNumber", "createStockCheck",
                ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   // storedevice = บัญชี LINE กลางประจำเครื่อง/แท็บเล็ตร้าน — สิทธิ์ API เท่า saler ทุกอย่าง
   // + attendanceToday (ดู "ใครเข้างานวันนี้" — เหตุผลที่มี role นี้อยู่เลย ต้องเปิดให้)
   storedevice: ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
                "getContactDetail", "createQuotation", "editQuotation", "saveQuotationDraft", "deleteQuotationDraft",
-               "voidQuotation", "approveQuotation", "setQuoteSale", "getInvoiceNumber", "attendanceToday",
+               "voidQuotation", "approveQuotation", "setQuoteSale", "getInvoiceNumber", "attendanceToday", "createStockCheck",
                ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   frontstore: ["recordUnscannedSale"].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
-  warehouse:  ["deductStock", "confirmStockCount", "deleteLockEntry", "addNewProduct",
+  warehouse:  ["deductStock", "confirmStockCount", "deleteLockEntry", "addNewProduct", "uploadProductPhoto",
                "addPurchaseIn", "zeroStock", "createStockCheck", "completeStockCheck",
                "deleteOrder", "deleteOrders",
                ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
@@ -789,14 +792,14 @@ function forbidden_(msg) {
 // รวมให้เหลือ "ชื่อ action" เดียวเพื่อเอาไปเช็คสิทธิ์ · ต้องอัปเดตลิสต์นี้เมื่อเพิ่ม dispatch ใหม่
 // (ชื่อที่ไม่รู้จัก → คืน null = ไม่ถูกเช็คสิทธิ์ ไม่ใช่ block — กันของเดิมพังโดยไม่ตั้งใจ)
 var POST_FLAG_ACTIONS_ = [
-  "addNewProduct", "addPurchaseIn", "approveQuotation", "assignMtoJob", "checkSkuExists", "closeMtoJob",
+  "addNewProduct", "addPurchaseIn", "approveQuotation", "assignMtoJob", "checkSkuExists", "clearFrontStoreChecks", "closeMtoJob",
   "completeStockCheck", "confirmShipmentReceive", "confirmStockCount", "createMtoJob",
   "createQuotation", "createSaleBill", "createStockCheck", "deductMaterials", "deductStock",
   "deleteLockEntry", "deleteMtoJob", "deleteOrder", "deleteOrders", "deleteQuotationDraft", "editQuotation",
   "fetchProductImage", "getContactDetail", "getInvoiceNumber", "issueFullTaxInvoice", "lookupSaleBill",
   "recordUnscannedSale", "resetNegativeStock", "saveMtoJobItems", "saveQuotationDraft",
   "saveThresholds", "searchContact", "setQuoteSale", "syncZortNow", "syncZortPurchasesNow",
-  "syncZortSalesNow", "transferStock", "transferStockBatch", "updateFrontStore",
+  "syncZortSalesNow", "transferStock", "transferStockBatch", "updateFrontStore", "uploadProductPhoto",
   "updateLockData", "updateOrderState", "voidQuotation", "zeroStock",
 ];
 
@@ -1713,11 +1716,11 @@ const STAFF_PERF_CATEGORIES_ = [
   { key: "receive",    emoji: "📥", label: "หน้าร้านรับของ",     ops: true,  unit: "รายการ", prefixes: ["รับสินค้า"] },
   { key: "location",   emoji: "🗺️", label: "จัดตำแหน่งล็อค",     ops: true,  unit: "ครั้ง",  prefixes: ["updateLockData", "ลบตำแหน่งจัดเก็บ", "sweepEmptyShelf"] },
   { key: "purchase",   emoji: "🛒", label: "รับของเข้าคลัง",     ops: true,  unit: "ครั้ง",  prefixes: ["ซื้อสินค้าเข้า"] },
-  { key: "newproduct", emoji: "➕", label: "เพิ่มสินค้าใหม่",     ops: true,  unit: "รายการ", prefixes: ["เพิ่มสินค้าใหม่"] },
+  { key: "newproduct", emoji: "➕", label: "เพิ่มสินค้าใหม่",     ops: true,  unit: "รายการ", prefixes: ["เพิ่มสินค้าใหม่", "เพิ่มรูปสินค้า"] },
   { key: "mto",        emoji: "🎁", label: "งานจัดพิเศษ",        ops: true,  unit: "ครั้ง",  prefixes: ["สร้างงาน MTO", "มอบหมายงาน MTO", "ปิดงาน MTO", "ลบงาน MTO", "deductMaterials"] },
   { key: "sale",       emoji: "🧾", label: "ออกบิลขาย",          ops: true,  unit: "ใบ",    prefixes: ["ออกบิลขาย", "ออกใบกำกับภาษีย้อนหลัง"] },
   { key: "quote",      emoji: "📄", label: "ใบเสนอราคา",         ops: true,  unit: "ใบ",    prefixes: ["สร้างใบเสนอราคา", "แก้ไขใบเสนอราคา", "อนุมัติใบเสนอราคา", "ปิดใบเสนอราคา"] },
-  { key: "adjust",     emoji: "⚙️", label: "ปรับ/ลบข้อมูล",      ops: false, unit: "ครั้ง",  prefixes: ["ปรับสต็อก0", "resetNegativeStock", "ลบ order"] },
+  { key: "adjust",     emoji: "⚙️", label: "ปรับ/ลบข้อมูล",      ops: false, unit: "ครั้ง",  prefixes: ["ปรับสต็อก0", "resetNegativeStock", "ลบ order", "ล้างค่าเช็คหน้าร้าน"] },
   { key: "star",       emoji: "⭐", label: "ตั้งผู้ดูแลสินค้า",   ops: false, unit: "ครั้ง",  prefixes: ["setProductOwner", "clearProductOwner"] },
   { key: "admin",      emoji: "🔧", label: "ตั้งค่าระบบ",        ops: false, unit: "ครั้ง",  prefixes: ["แก้ไขพนักงาน", "แก้ไขการลงเวลา", "saveThresholds", "ตั้งตำแหน่งพนักงาน"] },
   { key: "punch",      emoji: "🕐", label: "กดลงเวลา",           ops: false, unit: "ครั้ง",  skip: true, prefixes: ["ลงเวลา"] },
@@ -2344,6 +2347,9 @@ function doPost(e) {
     if (data.updateFrontStore) {
       return updateFrontStore(ss, data.entries, data.datetime, actor);
     }
+    if (data.clearFrontStoreChecks) {
+      return clearFrontStoreChecks(ss, data.skus, actor);
+    }
     if (data.confirmStockCount) {
       return confirmStockCount(ss, data.entries, data.clientLoadedAt, actor);
     }
@@ -2360,6 +2366,9 @@ function doPost(e) {
     }
     if (data.fetchProductImage) {
       return fetchProductImage(ss, data.sku);
+    }
+    if (data.uploadProductPhoto) {
+      return uploadProductPhoto(ss, data, actor);
     }
 
     // ─── POS: ออกบิล/ใบกำกับภาษี + ค้นลูกค้า (saler) ───
@@ -4624,6 +4633,54 @@ function updateFrontStore(ss, entries, datetime, actor) {
   }
 }
 
+// ล้างค่า "จำนวนที่เช็คหน้าร้าน" (col D) + วันที่เช็ค (col I) ของ SKU ที่ส่งมา
+// ใช้ตอนเจ้าของอยากล้างค่านับเก่าที่ค้างไม่ตรงกับระบบ (ขายไปแล้วยอดเลื่อน) ให้เริ่มนับใหม่
+// ⚠️ **ห้ามใช้ updateFrontStore แทน** — updateFrontStore push จำนวนเข้า ZORT (Number("")||0 = 0)
+//    = จะ set สต็อกหน้าร้านจริงเป็น 0 ทั้ง 3 พันตัว · ตัวนี้แตะ **แค่ค่านับ ไม่แตะสต็อก/ZORT**
+// เขียนกลับทั้งคอลัมน์ครั้งเดียว (setValues) ไม่ใช่ทีละ cell — 3 พันแถวไม่ให้ชน 6 นาที (บทเรียนโอนของ)
+function clearFrontStoreChecks(ss, skus, actor) {
+  const sheet = ss.getSheetByName(SHEET_FRONTSTORE_QTY);
+  if (!sheet) return error("ไม่พบชีต จำนวนหน้าร้าน");
+  if (!skus || !skus.length) return ok({ cleared: 0 });
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(8000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
+  try {
+    const want = {};
+    for (let s = 0; s < skus.length; s++) {
+      const k = String(skus[s] || "").trim().toUpperCase();
+      if (k) want[k] = true;
+    }
+    const rows = sheet.getDataRange().getValues();
+    if (rows.length < 2) return ok({ cleared: 0 });
+
+    // อ่านค่าเดิมของ col D (index 3) และ I (index 8) ทั้งก้อน แก้เฉพาะแถวที่ตรง SKU แล้วเขียนกลับรวดเดียว
+    const colD = [], colI = [];
+    let cleared = 0;
+    for (let i = 1; i < rows.length; i++) {
+      const sku = String(rows[i][1] || "").trim().toUpperCase();
+      const hasVal = rows[i][3] !== "" && rows[i][3] != null;
+      if (sku && want[sku] && hasVal) {
+        colD.push([""]); colI.push([""]); cleared++;
+      } else {
+        colD.push([rows[i][3]]); colI.push([rows[i][8]]);
+      }
+    }
+    if (cleared > 0) {
+      sheet.getRange(2, 4, colD.length, 1).setValues(colD);
+      sheet.getRange(2, 9, colI.length, 1).setValues(colI);
+      SpreadsheetApp.flush();
+      // audit 1 แถวสรุปต่อการล้าง ไม่ใช่ 1 แถวต่อ SKU (Audit Log เป็นฐานของแท็บผลงานพนักงาน)
+      writeAuditLog_(actor || "ไม่ระบุ", "ล้างค่าเช็คหน้าร้าน", "",
+        auditDetail_({ note: "ล้างค่านับหน้าร้านเก่าที่ไม่ตรงกับระบบ " + cleared + " รายการ" }));
+      invalidateCache_(); // bump dmj_last_write_ts + ล้าง cache (รวม stocklite) ให้เห็นค่าที่ล้างทันที
+    }
+    return ok({ cleared: cleared });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 // อ่านชีต "ขายไม่สแกน" → { skuUpper: จำนวนรวมทุกวัน }
 function readUnscannedSalesMap_() {
   const map = {};
@@ -4922,6 +4979,7 @@ function syncZortImages() {
     existing[sku] = i + 1; // row number
     if (zortImg[sku] && zortImg[sku] !== String(rows[i][4] || '').trim()) {
       sh.getRange(i + 1, 5).setValue(zortImg[sku]);
+      cleanupTempProductPhoto_(sh, i + 1); // ZORT มีรูปแล้ว → ลบรูปชั่วคราวที่อัปจากเว็บทิ้ง
       updated++;
     }
   }
@@ -6581,6 +6639,205 @@ function fetchAllZortProducts_(warehousecode) {
   return all;
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// เคลียร์สินค้าที่ "ลบจาก ZORT แล้ว" ออกจากเว็บ — soft-delete (ซ่อน กู้ได้)
+// ════════════════════════════════════════════════════════════════════════════
+// เว็บอ่านสินค้าจากชีต ไม่ได้อ่านสด ZORT · syncZortBoth แค่ทับ "ตัวเลข" ตาม SKU ไม่เคยลบแถว
+// → สินค้าที่ลบใน ZORT ค้างโชว์ตลอดไป · ตัวนี้เทียบ SKU ในชีตเรากับ ZORT แล้ว "ซ่อน" ตัวที่
+// ZORT ไม่มีแล้ว (ไม่ลบแถวจริง — กู้กลับได้ด้วย unhideProduct/clearHiddenProducts)
+//
+// ⚠️ กับดักร้ายแรง: ถ้าดึง ZORT ไม่ครบ (เน็ตพัง/quota) แล้วเหมาว่า "ไม่เจอ = ถูกลบ"
+//    = ซ่อนสินค้าทั้งร้านเงียบ ๆ · จึงมี 2 ด่าน: (1) ดึงต้อง "ครบทุกหน้า" จริง ไม่งั้น abort
+//    (2) จำนวนที่จะซ่อนต้องไม่เกิน HIDE_SAFETY_FRACTION ของทั้งหมด ไม่งั้น abort ให้ตรวจก่อน
+// ฟังก์ชันที่ไม่มี `_` ต่อท้าย = โผล่ใน dropdown ของ GAS editor ให้เจ้าของรันเอง (บทเรียนข้อ 1)
+
+const HIDE_SAFETY_FRACTION = 0.4;   // ซ่อนเกิน 40% ของสินค้า = ผิดปกติ (น่าจะดึง ZORT พลาด)
+
+function hiddenProductsSheet_(ss) {
+  return getOrCreateSheet_(ss || SpreadsheetApp.openById(SHEET_ID), SHEET_HIDDEN_PRODUCTS,
+    ["sku", "reason", "hiddenAt", "source"]);
+}
+
+// อ่านชุด SKU ที่ถูกซ่อน (uppercased) — ใช้ใน readProducts_ (hot path) จึงห่อ try ไม่ให้ลากทั้ง payload ล่ม
+function getHiddenSkuSet_() {
+  const set = {};
+  try {
+    const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_HIDDEN_PRODUCTS);
+    if (!sh || sh.getLastRow() < 2) return set;
+    const vals = sh.getRange(2, 1, sh.getLastRow() - 1, 1).getDisplayValues();
+    for (let i = 0; i < vals.length; i++) {
+      const s = String(vals[i][0] || '').trim().toUpperCase();
+      if (s) set[s] = true;
+    }
+  } catch (e) { Logger.log('getHiddenSkuSet_ error: ' + e); }
+  return set;
+}
+
+// ดึง SKU ทั้งหมดจาก ZORT แบบ "ครบทุกหน้าเท่านั้น" — หน้าใดพังหลัง retry = ok:false (ไม่คืน partial)
+// ต่างจาก fetchAllZortProducts_ ที่คืน partial เงียบ ๆ ซึ่งอันตรายกับการตัดสินว่า "ถูกลบ"
+function zortAllSkusComplete_() {
+  const LIMIT = 500, MAX_RETRIES = 3;
+  const skus = {};
+  let page = 1, count = 0;
+  while (true) {
+    const url = `${ZORT_BASE}/Product/GetProducts?page=${page}&limit=${LIMIT}`;
+    let json = null, lastErr = '';
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const res = UrlFetchApp.fetch(url, { method: 'get', headers: zortHeaders_(), muteHttpExceptions: true });
+        const code = res.getResponseCode();
+        const text = res.getContentText();
+        if (code !== 200) { lastErr = 'HTTP ' + code; throw new Error(lastErr); }
+        json = JSON.parse(text);
+        break;
+      } catch (e) {
+        lastErr = String((e && e.message) || e);
+        if (attempt < MAX_RETRIES) Utilities.sleep(1000 * attempt);
+      }
+    }
+    if (!json || !json.list) {
+      return { ok: false, error: 'ดึง ZORT หน้า ' + page + ' ไม่สำเร็จ: ' + lastErr, skus: {}, count: 0 };
+    }
+    json.list.forEach(p => {
+      [p && p.sku, p && p.barcode].forEach(v => {
+        const s = String(v || '').trim().toUpperCase();
+        if (s) { if (!skus[s]) count++; skus[s] = true; }
+      });
+    });
+    if (json.list.length < LIMIT) break;   // ถึงหน้าสุดท้ายจริง
+    page++;
+    Utilities.sleep(400);
+  }
+  return { ok: true, skus, count, pages: page };
+}
+
+// รวม SKU ทั้งหมดในชีตเรา (ข้อมูลสินค้า + อัพเดทจำนวนสินค้า) → { SKU_UPPER: ชื่อ }
+function ourProductSkus_() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const out = {};
+  const metaSh = ss.getSheetByName(SHEET_PRODUCT_META);
+  if (metaSh && metaSh.getLastRow() > 1) {
+    const rows = metaSh.getRange(2, 1, metaSh.getLastRow() - 1, 3).getDisplayValues(); // A..C
+    rows.forEach(r => {
+      const s = String(r[1] || '').trim().toUpperCase();          // B = SKU
+      if (s && !(s in out)) out[s] = String(r[2] || '').trim();   // C = ชื่อ
+    });
+  }
+  const stockSh = ss.getSheetByName(SHEET_PRODUCTS);
+  if (stockSh && stockSh.getLastRow() > 1) {
+    const rows = stockSh.getRange(2, 1, stockSh.getLastRow() - 1, 3).getDisplayValues(); // A..C
+    rows.forEach(r => {
+      const s = String(r[COL_PROD_SKU - 1] || '').trim().toUpperCase();  // B = SKU
+      if (s && !(s in out)) out[s] = String(r[2] || '').trim();          // C = ชื่อ
+    });
+  }
+  return out;
+}
+
+// core (pure, เทสต์ได้): SKU ที่อยู่ในชีตเราแต่ ZORT ไม่มี และยังไม่ถูกซ่อน
+function zortDeletedSkusCore_(ourSkuMap, zortSet, hiddenSet) {
+  const del = [];
+  Object.keys(ourSkuMap || {}).forEach(sku => {
+    const u = String(sku || '').trim().toUpperCase();
+    if (!u) return;
+    if (zortSet && zortSet[u]) return;       // ZORT ยังมี → ไม่ลบ
+    if (hiddenSet && hiddenSet[u]) return;   // ซ่อนไปแล้ว → ไม่นับซ้ำ
+    del.push({ sku: u, name: ourSkuMap[sku] });
+  });
+  return del;
+}
+
+// อ่านอย่างเดียว — บอกว่าจะซ่อนตัวไหนบ้าง (รันดูก่อนเสมอ)
+function previewZortDeletedProducts() {
+  const z = zortAllSkusComplete_();
+  if (!z.ok) { Logger.log('❌ ' + z.error + '\n→ ยังไม่ทำอะไร (ดึง ZORT ไม่ครบ ห้ามเดาว่าถูกลบ)'); return; }
+  const our = ourProductSkus_();
+  const hidden = getHiddenSkuSet_();
+  const del = zortDeletedSkusCore_(our, z.skus, hidden);
+  const totalOur = Object.keys(our).length;
+  Logger.log('ZORT มีสินค้า ' + z.count + ' SKU (ดึงครบ ' + z.pages + ' หน้า)');
+  Logger.log('ชีตเรามี ' + totalOur + ' SKU · ซ่อนอยู่แล้ว ' + Object.keys(hidden).length);
+  Logger.log('พบที่ ZORT ลบแล้วแต่เรายังโชว์: ' + del.length + ' รายการ');
+  const frac = totalOur ? (del.length / totalOur) : 0;
+  if (frac > HIDE_SAFETY_FRACTION) {
+    Logger.log('⚠️ เกิน ' + Math.round(HIDE_SAFETY_FRACTION * 100) + '% ของสินค้าทั้งหมด — ผิดปกติ');
+    Logger.log('   ถ้ากด hideDeletedFromZort() จะถูกปฏิเสธ · ตรวจว่า ZORT ดึงครบจริงก่อน');
+  }
+  del.slice(0, 100).forEach(d => Logger.log('  • ' + d.sku + '  ' + (d.name || '')));
+  if (del.length > 100) Logger.log('  … อีก ' + (del.length - 100) + ' รายการ');
+  Logger.log('\nถ้าถูกต้อง → รัน hideDeletedFromZort() (กู้กลับได้ด้วย unhideProduct/clearHiddenProducts)');
+}
+
+// เขียนจริง — ซ่อนสินค้าที่ ZORT ลบแล้ว (soft-delete)
+function hideDeletedFromZort() {
+  const z = zortAllSkusComplete_();
+  if (!z.ok) { Logger.log('❌ ' + z.error + '\n→ ยกเลิก (ดึง ZORT ไม่ครบ)'); return; }
+  const our = ourProductSkus_();
+  const hidden = getHiddenSkuSet_();
+  const del = zortDeletedSkusCore_(our, z.skus, hidden);
+  const totalOur = Object.keys(our).length;
+  if (!del.length) { Logger.log('✅ ไม่มีสินค้าที่ต้องซ่อน (ทุก SKU ยังมีใน ZORT)'); return; }
+  const frac = totalOur ? (del.length / totalOur) : 0;
+  if (frac > HIDE_SAFETY_FRACTION) {
+    Logger.log('⚠️ จะซ่อน ' + del.length + '/' + totalOur + ' (' + Math.round(frac * 100) + '%) — เกินเพดาน '
+      + Math.round(HIDE_SAFETY_FRACTION * 100) + '% → ยกเลิกเพื่อความปลอดภัย');
+    Logger.log('   น่าจะดึง ZORT พลาด · ตรวจ previewZortDeletedProducts() ก่อน');
+    return;
+  }
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(20000); } catch (e) { Logger.log('❌ จับล็อกไม่ได้'); return; }
+  try {
+    const sh = hiddenProductsSheet_(ss);
+    const now = new Date().toLocaleString('th-TH');
+    const rows = del.map(d => [d.sku, 'ลบจาก ZORT', now, 'hideDeletedFromZort']);
+    sh.getRange(sh.getLastRow() + 1, 1, rows.length, 4).setValues(rows);
+    sh.getRange(2, 1, sh.getLastRow() - 1, 1).setNumberFormat('@');   // SKU เป็น text (บทเรียนข้อ 2)
+    invalidateCache_();
+    Logger.log('✅ ซ่อนแล้ว ' + del.length + ' รายการ (กู้กลับ: clearHiddenProducts / unhideProduct)');
+  } finally { lock.releaseLock(); }
+}
+
+// อ่านอย่างเดียว — ดูว่าซ่อนอะไรอยู่บ้าง
+function listHiddenProducts() {
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_HIDDEN_PRODUCTS);
+  if (!sh || sh.getLastRow() < 2) { Logger.log('ไม่มีสินค้าที่ซ่อนอยู่'); return; }
+  const rows = sh.getRange(2, 1, sh.getLastRow() - 1, 4).getDisplayValues();
+  Logger.log('สินค้าที่ซ่อนอยู่ ' + rows.length + ' รายการ:');
+  rows.forEach(r => Logger.log('  • ' + r[0] + '  (' + r[1] + ', ' + r[2] + ')'));
+}
+
+// กู้สินค้าตัวเดียวกลับ (เอาออกจากชีตซ่อน)
+function unhideProduct(sku) {
+  const target = String(sku || '').trim().toUpperCase();
+  if (!target) { Logger.log('ใส่ SKU ที่จะกู้: unhideProduct("BK001")'); return; }
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const sh = ss.getSheetByName(SHEET_HIDDEN_PRODUCTS);
+  if (!sh || sh.getLastRow() < 2) { Logger.log('ไม่มีสินค้าที่ซ่อนอยู่'); return; }
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(20000); } catch (e) { Logger.log('❌ จับล็อกไม่ได้'); return; }
+  try {
+    const n = sh.getLastRow() - 1;
+    const vals = sh.getRange(2, 1, n, 1).getDisplayValues();
+    let removed = 0;
+    for (let i = n - 1; i >= 0; i--) {   // ลบจากล่างขึ้นบน
+      if (String(vals[i][0] || '').trim().toUpperCase() === target) { sh.deleteRow(i + 2); removed++; }
+    }
+    if (removed) { invalidateCache_(); Logger.log('✅ กู้ ' + target + ' กลับแล้ว (' + removed + ' แถว)'); }
+    else Logger.log('ไม่พบ ' + target + ' ในชีตซ่อน');
+  } finally { lock.releaseLock(); }
+}
+
+// กู้ทั้งหมดกลับ (ล้างชีตซ่อน)
+function clearHiddenProducts() {
+  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_HIDDEN_PRODUCTS);
+  if (!sh || sh.getLastRow() < 2) { Logger.log('ไม่มีสินค้าที่ซ่อนอยู่'); return; }
+  const n = sh.getLastRow() - 1;
+  sh.deleteRows(2, n);
+  invalidateCache_();
+  Logger.log('✅ กู้สินค้าทั้งหมด ' + n + ' รายการกลับแล้ว');
+}
+
 // cachedProducts: optional — ถ้ามีให้ใช้เลย ถ้าไม่มีจะ fetch เอง (backward compatible)
 function syncZortToColumn_(warehousecode, colIndex, cachedProducts) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -6831,11 +7088,23 @@ function addNewProduct(ss, product, actor) {
       SpreadsheetApp.flush();
     }
 
+    // 5) รูปที่ถ่าย/เลือกจากเว็บ (ชั่วคราว) → เก็บ Drive + เขียน col D ชีต imageUrl
+    //    ZORT ยังไม่มีรูปตอนเพิ่ง AddProduct → รูปนี้โชว์ไปก่อน · เมื่อ syncZortImages/fetchProductImage
+    //    เขียน col E (รูป ZORT) แล้ว cleanupTempProductPhoto_ จะลบรูปชั่วคราวนี้ทิ้งอัตโนมัติ
+    //    ไม่ throw — รูปพลาดต้องไม่ทำให้เพิ่มสินค้าไม่สำเร็จ (สินค้าเข้า ZORT/ชีตไปแล้ว)
+    let photoUrl = "";
+    if (product.photoBase64) {
+      try {
+        const saved = saveProductPhoto_(product.photoBase64, sku);
+        if (saved && saved.url) { writeManualProductImage_(ss, sku, saved.url, saved.fileId); photoUrl = saved.url; }
+      } catch (e) { Logger.log("addNewProduct photo error: " + e); }
+    }
+
     writeAuditLog_(actor || "ไม่ระบุ", "เพิ่มสินค้าใหม่", sku,
       auditDetail_({ after: { name: name, price: price, cat: cat, tag: tag, qty: qty, wh: wh }, note: "เพิ่มสินค้าใหม่เข้า ZORT + ชีต" }));
 
     invalidateCache_(); // bump dmj_last_write_ts ให้เครื่องอื่นเห็นสินค้าใหม่
-    return ok({ sku: sku, name: name, qty: qty, warehousecode: wh });
+    return ok({ sku: sku, name: name, qty: qty, warehousecode: wh, imageUrl: photoUrl });
   } finally {
     lock.releaseLock();
   }
@@ -7114,6 +7383,90 @@ function fetchZortStockForSku_(sku, wh) {
   return 0;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// รูปสินค้า "ชั่วคราว" ที่ถ่าย/อัปจากเว็บ (สำหรับสินค้าใหม่ที่ ZORT ยังไม่มีรูป)
+// ── เก็บลง Drive (แชร์ลิงก์สาธารณะ) → เขียน col D (manual) ของชีต imageUrl
+// ── col F เก็บ Drive fileId ไว้ลบทิ้งอัตโนมัติ เมื่อ ZORT มีรูปจริงแล้ว (col E ได้ค่า)
+// readImageMap_ ให้ col E (ZORT) ชนะ D อยู่แล้ว → พอ ZORT มีรูป รูปชั่วคราวถูกแทนที่ทันที
+//   แล้ว cleanupTempProductPhoto_ ลบไฟล์ Drive + เคลียร์ D/F ทิ้ง
+// ═══════════════════════════════════════════════════════════════════════════
+
+// เก็บรูปลง Drive (โฟลเดอร์ "รูปสินค้า DMJ") + แชร์ลิงก์สาธารณะ → คืน { fileId, url }
+// ไม่ throw — รูปพลาดต้องไม่ทำให้เพิ่มสินค้าไม่สำเร็จ (หลักเดียวกับ saveAttPhoto_/appendSaleBillRow_)
+function saveProductPhoto_(base64, sku) {
+  if (!base64) return null;
+  try {
+    const props = PropertiesService.getScriptProperties();
+    let folderId = props.getProperty("PRODUCT_PHOTO_FOLDER_ID");
+    let folder = null;
+    if (folderId) { try { folder = DriveApp.getFolderById(folderId); } catch (e) { folder = null; } }
+    if (!folder) { folder = DriveApp.createFolder("รูปสินค้า DMJ"); props.setProperty("PRODUCT_PHOTO_FOLDER_ID", folder.getId()); }
+    const clean = String(base64).replace(/^data:image\/\w+;base64,/, "");
+    const blob = Utilities.newBlob(Utilities.base64Decode(clean), "image/jpeg",
+      String(sku || "product").replace(/[^A-Za-z0-9_-]/g, "") + "_" + Date.now() + ".jpg");
+    const file = folder.createFile(blob);
+    // แชร์แบบ "ใครมีลิงก์ก็ดูได้" — รูปสินค้าโชว์ทุก role เหมือนรูปจาก ZORT (ต่างจากรูปลงเวลา)
+    try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+    const id = file.getId();
+    // ใช้ endpoint thumbnail ของ Drive — โหลดใน <img>/background-image ได้ตรง ๆ เสถียรกว่า uc?export=view
+    return { fileId: id, url: "https://drive.google.com/thumbnail?id=" + id + "&sz=w1000" };
+  } catch (e) {
+    Logger.log("saveProductPhoto_ error: " + e);
+    return null;
+  }
+}
+
+// เขียนรูปชั่วคราวลง col D (manual) + col F (fileId) ของชีต imageUrl — upsert ตาม SKU
+// แทนที่รูปชั่วคราวเดิม (ถ้ามี) → ลบไฟล์ Drive เก่าทิ้งกันไฟล์กำพร้า
+function writeManualProductImage_(ss, sku, url, fileId) {
+  const clean = String(sku || "").trim().toUpperCase();
+  if (!clean || !url) return;
+  const sh = ss.getSheetByName(SHEET_IMAGE_URL);
+  if (!sh) return;
+  if (!String(sh.getRange(1, 6).getValue() || "").trim()) sh.getRange(1, 6).setValue("ไฟล์รูปชั่วคราว (Drive ID)");
+  const rows = sh.getDataRange().getValues();
+  let rowNum = 0;
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][1] || "").trim().toUpperCase() === clean) { rowNum = i + 1; break; }
+  }
+  if (rowNum) {
+    const oldId = String(sh.getRange(rowNum, 6).getValue() || "").trim();
+    if (oldId && oldId !== (fileId || "")) { try { DriveApp.getFileById(oldId).setTrashed(true); } catch (e) {} }
+    sh.getRange(rowNum, 4).setValue(url);          // D = รูป (ใส่เอง/สำรอง)
+    sh.getRange(rowNum, 6).setValue(fileId || ""); // F = fileId ชั่วคราว
+  } else {
+    sh.appendRow(["", clean, "", url, "", fileId || ""]);
+  }
+  SpreadsheetApp.flush();
+}
+
+// ลบรูปชั่วคราว (ที่อัปจากเว็บ) เมื่อ ZORT มีรูปจริงแล้ว — เรียกหลังเขียน col E สำเร็จ
+// ปลอดภัย: ลบเฉพาะแถวที่มี fileId ใน col F (= รูปที่ระบบสร้างเอง) ไม่แตะ URL ที่คนพิมพ์ใส่ col D เอง
+function cleanupTempProductPhoto_(sh, rowNum) {
+  try {
+    const fileId = String(sh.getRange(rowNum, 6).getValue() || "").trim();
+    if (!fileId) return;
+    try { DriveApp.getFileById(fileId).setTrashed(true); } catch (e) {}
+    sh.getRange(rowNum, 4).setValue(""); // เคลียร์รูปชั่วคราว (D)
+    sh.getRange(rowNum, 6).setValue(""); // เคลียร์ fileId (F)
+  } catch (e) { Logger.log("cleanupTempProductPhoto_ error: " + e); }
+}
+
+// ── action=uploadProductPhoto : อัปรูปชั่วคราวให้สินค้า (ใหม่/ที่ยังไม่มีรูป) จากเว็บ ──
+// data = { sku, photoBase64 } · เขียน col D ชีต imageUrl · ZORT มีรูปเมื่อไหร่จะแทนที่เอง
+function uploadProductPhoto(ss, data, actor) {
+  const sku = String((data && data.sku) || "").trim().toUpperCase();
+  if (!sku) return error("ไม่มี SKU");
+  if (!data || !data.photoBase64) return error("ไม่มีรูป");
+  const saved = saveProductPhoto_(data.photoBase64, sku);
+  if (!saved || !saved.url) return error("บันทึกรูปไม่สำเร็จ ลองใหม่อีกครั้ง");
+  writeManualProductImage_(ss, sku, saved.url, saved.fileId);
+  writeAuditLog_(actor || "ไม่ระบุ", "เพิ่มรูปสินค้า", sku,
+    auditDetail_({ note: "อัปรูปจากเว็บ (ชั่วคราว จนกว่า ZORT จะมีรูป)" }));
+  invalidateCache_();
+  return ok({ sku: sku, imageUrl: saved.url });
+}
+
 // ── ดึงรูปเฉพาะ SKU เดียวจาก ZORT (on-demand หลังอัปรูปในแอป ZORT) ──
 // targeted fetch ด้วย keyword — ไม่ต้อง fetch ทั้งคลังเหมือน syncZortImages
 // เขียนลง col E (ZORT auto) ของชีต imageUrl → readImageMap_ ให้ col E ชนะ manual(D)
@@ -7144,7 +7497,7 @@ function fetchProductImage(ss, sku) {
       for (let i = 1; i < rows.length; i++) {
         if (String(rows[i][1] || "").trim().toUpperCase() === clean) { rowNum = i + 1; break; }
       }
-      if (rowNum) sh.getRange(rowNum, 5).setValue(img);
+      if (rowNum) { sh.getRange(rowNum, 5).setValue(img); cleanupTempProductPhoto_(sh, rowNum); }
       else sh.appendRow(["", clean, String(found.name || ""), "", img]);
       SpreadsheetApp.flush();
     }
@@ -8982,12 +9335,14 @@ function readProducts_(stockRowsOpt, metaRowsOpt) {
     rows = sh.getDataRange().getDisplayValues();
   }
   const imageMap = readImageMap_();
+  const hidden = getHiddenSkuSet_();   // สินค้าที่ลบจาก ZORT แล้ว (soft-delete) → ไม่ขึ้นเว็บ
   const out = [];
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
     const sku  = (r[1] || '').toString().trim();
     const name = (r[2] || '').toString().trim();
     if (!sku && !name) continue;
+    if (sku && hidden[sku.toUpperCase()]) continue;
     const qStore = parseQty_(r[8]);
     const qWH    = parseQty_(r[9]);
     const qTotal = parseQty_(r[10]);
@@ -9028,6 +9383,7 @@ function readProducts_(stockRowsOpt, metaRowsOpt) {
         const r = srows[i];
         const sku = (r[COL_PROD_SKU - 1] || '').toString().trim();      // B
         if (!sku || seen[sku.toUpperCase()]) continue;
+        if (hidden[sku.toUpperCase()]) continue;   // ซ่อน (ลบจาก ZORT) → ข้ามใน SELF-HEAL ด้วย
         seen[sku.toUpperCase()] = true;
         const qStore = parseQty_(r[COL_PROD_QTYFS - 1]);                // G
         const qWH    = parseQty_(r[COL_PROD_QTYWH - 1]);               // H
@@ -12565,6 +12921,56 @@ function markStalePayload_(s, ts) {
   return '{"stale":1,"staleAt":' + (ts || 0) + ',' + s.slice(1);
 }
 
+// ── Keep-warm: กัน "เปิดแอปตอนไม่มีใครใช้" เจอ GAS เย็น ──────────────────────
+// วัดจากเครื่องจริง (BootTrace ส.ค. 2026): เปิดแอปนอกเวลาเร่งด่วน → `me`/payload ตอบ
+// **ไบต์แรก 20-24 วิ** เพราะ (1) GAS container เย็น (ไม่มี execution มาสักพัก → spin-up ช้า)
+// (2) ไม่มีใคร build มาก่อน → cache สด (TTL 180 วิ) และชั้นสำรอง (TTL 30 นาที) หมดเกลี้ยง
+// → คนเปิดคนแรกต้อง build เอง (~10 วิ) ต่อจาก cold start · แถม payload 4.8MB ดาวน์โหลดนาน
+// เกินอายุลิงก์ googleusercontent → ตอบไม่ครบ → retry วน (เห็นจริง: payload ล้มเหลว 3 รอบ)
+//
+// keepWarm_ ทำ 2 อย่าง: (ก) execution ทุก 5 นาที = container ไม่เย็น (ข) ถ้า cache สดหาย
+// (นอกเวลาที่มีคนใช้) → build เติมให้ทั้ง fresh + stale ทุก variant → คนเปิดคนถัดไปได้ HIT ทันที
+// ⚠️ ฉลาดพอที่จะ **ไม่ build ถ้า cache ยังอุ่น** (มีคนใช้อยู่) — execution เปล่า ๆ ก็ warm
+//    container แล้ว ไม่เปลือง quota build ช่วงเวลาเร่งด่วนที่ user เติม cache ให้เองอยู่แล้ว
+// ⚠️ คว้า build lock ก่อน build (เหมือนเส้นทาง doGet) — กัน build ซ้อนกับ user จริง ·
+//    คว้าไม่ได้ = มีคนกำลัง build → เขาเติม cache ให้เอง ข้ามได้ปลอดภัย
+// ⚠️ ห้าม throw — เป็น trigger เบื้องหลัง พังต้องเงียบ ไม่กระทบเส้นทาง user
+function keepWarm_() {
+  try {
+    var cvFull = payloadCacheVariant_('full', 2);
+    if (getCachedPayload_(cvFull)) return;   // cache ยังอุ่น (มีคนใช้อยู่) — แค่ execution นี้ก็พอ
+    var lock = acquireBuildLock_(0);
+    if (!lock) return;                        // มีคนกำลัง build → เขาเติม cache ให้เอง
+    try {
+      var data = buildFullData_();
+      PAYLOAD_VARIANTS_.forEach(function (v) {
+        var s = JSON.stringify(shapePayloadForVariant_(data, v));
+        var cv = payloadCacheVariant_(v, 2);
+        putCachedPayload_(s, cv);
+        putStalePayload_(s, cv);
+      });
+    } finally { releaseBuildLock_(lock); }
+  } catch (e) { Logger.log('keepWarm_ error (ข้ามไป ไม่กระทบ user): ' + e); }
+}
+
+// เจ้าของรัน 1 ครั้งใน GAS editor (ชื่อไม่มี _ ต่อท้าย → โผล่ใน dropdown)
+// ตั้ง trigger ทุก 5 นาที · idempotent (ลบตัวเดิมก่อน) · อุ่นทันที 1 รอบ
+function setupKeepWarm() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'keepWarm_') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('keepWarm_').timeBased().everyMinutes(5).create();
+  keepWarm_();
+  return 'keep-warm เปิดแล้ว — ping ทุก 5 นาที (container อุ่น + cache ไม่หมดนอกเวลาใช้งาน)';
+}
+function disableKeepWarm() {
+  var n = 0;
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'keepWarm_') { ScriptApp.deleteTrigger(t); n++; }
+  });
+  return 'keep-warm ปิดแล้ว (ลบ trigger ' + n + ' ตัว)';
+}
+
 function invalidateCache_(skipTsUpdate) {
   try {
     const c = CacheService.getScriptCache();
@@ -14537,15 +14943,35 @@ function createStockCheckRequest_(skus, names, actor) {
   // มิฉะนั้น client ที่โหลดข้อมูลไว้ก่อนจะถูกมองว่า conflict → กดส่งของไม่ได้
   invalidateCache_(true);
   // แจ้งเตือน LINE group — wrap try-catch เพื่อไม่ให้ LINE error พัง endpoint
+  var nameList = names || [];
+  var preview = nameList.slice(0, 3).join(", ");
+  if (nameList.length > 3) preview += " และอีก " + (nameList.length - 3) + " รายการ";
   try {
-    var nameList = names || [];
-    var preview = nameList.slice(0, 3).join(", ");
-    if (nameList.length > 3) preview += " และอีก " + (nameList.length - 3) + " รายการ";
     var lineMsg = "📋 มีคำขอเช็คสต็อก " + nameList.length + " รายการ\nรายการ: " + preview;
     sendLineGroup_(lineMsg);
   } catch(e) {
     // LINE notification ล้มเหลว — ไม่ block response
   }
+  // 🔔 แจ้งเตือนในแอป (กระดิ่ง) — กดแล้วเด้งไป "หน้านับของ" ของแต่ละตำแหน่งได้เลย
+  //   ไม่กิน quota LINE · เห็นจากทุกแท็บ · ต่างจากแถบเตือนบนสุดที่ต้องรอ payload โหลดมาก่อน
+  // ⚠️ ยิง 2 แถวแยกตามตำแหน่ง เพราะ "หน้านับของ" ของหน้าร้านกับคลังคนละแท็บกัน —
+  //    หน้าร้านนับที่ frontstore (เช็คหน้าร้าน) · คลังนับที่ stockcount (นับ stock คลัง)
+  //    ยุบเป็นแถวเดียวส่งทั้ง 2 role = ฝั่งหนึ่งได้ปลายทางที่ตัวเองไม่มีสิทธิ์เปิด → กดไม่ติดเงียบ ๆ
+  //    (หลักเดียวกับแถบเตือน fs/wh ใน app.jsx ที่พา frontstore→frontstore, warehouse→stockcount)
+  // ⚠️ dedupKey คนละคีย์ต่อ role — ผูก reqId ให้ยิงครั้งเดียวต่อคำขอ · ยุบคีย์เดียว = ตัวที่ยิง
+  //    ทีหลังถูก dedup ทิ้ง = อีกฝั่งไม่ได้รับเลย · ไม่ใส่ focus (หลาย SKU เลือกตัวเดียวมาเด้ง = ผิดตัว)
+  var notiTitle = "📋 มีคำขอเช็คสต็อก " + nameList.length + " รายการ";
+  var notiBody = (preview || reqId) + " · แตะเพื่อไปหน้านับของ";
+  pushInappNoti_({
+    audience: 'role:frontstore', type: 'stockcheck', tab: 'frontstore',
+    title: notiTitle, body: notiBody, by: actor || 'owner',
+    dedupKey: 'stockcheck-fs-' + reqId,
+  });
+  pushInappNoti_({
+    audience: 'role:warehouse', type: 'stockcheck', tab: 'stockcount',
+    title: notiTitle, body: notiBody, by: actor || 'owner',
+    dedupKey: 'stockcheck-wh-' + reqId,
+  });
   return ContentService.createTextOutput(JSON.stringify({ success: true, reqId: reqId }))
     .setMimeType(ContentService.MimeType.JSON);
 }
@@ -14722,6 +15148,7 @@ function perfLogDoGet_(kind, variant, tStart, bytes, extra) {
 const PERF_TRIGGER_SCHEDULE_ = {
   drainNotiQueue:          { every: 'ทุก 1 นาที',        perDay: 1440, setup: 'setupNotiSystem()' },
   backfillZortOrders:      { every: 'ทุก 5 นาที',        perDay: 288,  setup: 'startBackfill()' },
+  keepWarm_:               { every: 'ทุก 5 นาที',        perDay: 288,  setup: 'setupKeepWarm()' },
   syncZortBoth:            { every: 'ทุก 2 ชม.',          perDay: 12,   setup: 'setupZortStockTrigger()' },
   syncZortSales:           { every: 'ทุก 2 ชม.',          perDay: 12,   setup: 'setupZortSalesTrigger()' },
   sendPendingTruckOrders:  { every: 'วันละ 2 รอบ 08/13น.', perDay: 1,   setup: 'setupOrderReminders()' },

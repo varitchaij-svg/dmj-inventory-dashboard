@@ -515,6 +515,80 @@ function startServer() {
     await page.close();
   }
 
+  // ── (ง0) คำขอเช็คสต็อก (frontstore) → กด "ดูรายการ" ต้องเหลือแค่ SKU ที่ขอ ──
+  // เจ้าของแจ้ง: กด "ดูรายการ" แล้วยังเห็นสินค้าทั้งหมด ไม่ใช่แค่ตัวที่ขอให้เช็ค
+  // เดิม FrontStoreView แค่ตั้ง supplierFilter เมื่อ SKU มาจาก supplier เดียว → คำขอหลาย
+  // supplier กดแล้วเงียบ · ตอนนี้กรอง products เฉพาะ SKU ที่ขอ (เหมือน StockCountView)
+  // ⚠️ เช็คแค่ "มาถึงแท็บ" ไม่พอ — ต้องนับ data-sku จริงบนจอว่าเหลือแค่ VAS001
+  {
+    const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
+    let status = 'ok', note = '';
+    const readSkus = () => page.evaluate(() => [...new Set(
+      [...document.querySelectorAll('main [data-sku]')].map((e) => e.getAttribute('data-sku')))]);
+    try {
+      await page.goto(`${base}?role=frontstore&checkreq=1`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      // ไปแท็บ "เช็คหน้าร้าน" ก่อน (จอเดียวกับที่เจ้าของอยู่ตอนกด "ดูรายการ")
+      const nav = await navigateTo(page, 'frontstore', 'frontstore');
+      await page.waitForTimeout(700); // รอ mounted (skeleton 350ms)
+      const beforeSkus = await readSkus();
+      // กด "ดูรายการ" ในแถบเหลือง "มีคำขอเช็คสต็อก" (แถบระดับ app โผล่ทุกแท็บ)
+      await page.locator('button:has-text("ดูรายการ")').first().click({ timeout: 3000 });
+      await page.waitForTimeout(600);
+      const afterSkus = await readSkus();
+      const body = await page.locator('body').innerText().catch(() => '');
+      const bannerShown = /กำลังเช็คตามคำขอ/.test(body);
+      if (!nav || !beforeSkus.includes('FLW002')) {
+        // ก่อนกดควรเห็นหลายตัว (รวม FLW002) — ไม่เห็น = ทดสอบไม่ได้จริง (nav/หน้าเพี้ยน)
+        status = 'SETUP_FAIL'; note = `ก่อนกดไม่เห็นสินค้าอื่น (nav=${nav}, ${beforeSkus.join(',') || 'ว่าง'})`;
+      } else if (!afterSkus.includes('VAS001')) {
+        status = 'FILTER_FAIL'; note = `กด "ดูรายการ" แล้วไม่เห็น VAS001 (เห็น: ${afterSkus.join(',') || 'ว่าง'})`;
+      } else if (afterSkus.includes('FLW002') || afterSkus.includes('DEC003')) {
+        status = 'FILTER_FAIL';
+        note = `กดแล้วยังเห็นสินค้าที่ไม่ได้ขอ (เห็น: ${afterSkus.join(',')}) — ควรเหลือแค่ VAS001`;
+      } else if (!bannerShown) {
+        status = 'FILTER_FAIL'; note = 'กรองถูกแต่ไม่มีแถบ "กำลังเช็คตามคำขอ" บอกผู้ใช้';
+      } else {
+        note = `เห็นทั้งหมด (${beforeSkus.join(',')}) → กด "ดูรายการ" → เหลือ ${afterSkus.join(',')} + แถบกำลังเช็คตามคำขอ`;
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'checkreq__frontstore.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'คำขอเช็คสต็อก (frontstore)', status, note });
+    await page.close();
+  }
+
+  // ── (ง0.1) ล้างค่านับหน้าร้านเก่าที่ไม่ตรงระบบ → บาร์ "🧹 ล้างค่านับเก่า (N)" ──
+  // เจ้าของแจ้ง: หน้าเช็คหน้าร้านขึ้น "ไม่ตรง 3852" เพราะขายไปแล้วยอดเลื่อน อยากล้างเริ่มนับใหม่
+  // ⚠️ เช็คว่าบาร์โผล่จริง + กดยืนยันแล้วบาร์หาย (mismatch ถูกล้าง) ไม่ใช่แค่มี element
+  {
+    const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=frontstore&fsmismatch=1`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const nav = await navigateTo(page, 'frontstore', 'frontstore');
+      await page.waitForTimeout(700);
+      const barBefore = await page.locator('button:has-text("ล้างค่านับเก่า")').count();
+      // กดปุ่มล้าง → เข้าโหมดยืนยัน → กดยืนยัน
+      await page.locator('button:has-text("ล้างค่านับเก่า")').first().click({ timeout: 3000 });
+      await page.waitForTimeout(200);
+      await page.locator('button:has-text("ยืนยันล้าง")').first().click({ timeout: 3000 });
+      await page.waitForTimeout(800);
+      const barAfter = await page.locator('button:has-text("ล้างค่านับเก่า")').count();
+      const stillMismatch = await page.locator('button:has-text("ยืนยันล้าง")').count();
+      if (!nav || !barBefore) {
+        status = 'SETUP_FAIL'; note = `ไม่เห็นปุ่มล้างค่านับเก่า (nav=${nav}, bar=${barBefore})`;
+      } else if (barAfter > 0 || stillMismatch > 0) {
+        status = 'CLEAR_FAIL'; note = 'กดยืนยันแล้วบาร์ยังอยู่ — ค่านับเก่าไม่ถูกล้าง';
+      } else {
+        note = 'เห็นบาร์ "ล้างค่านับเก่า (1)" → กดยืนยัน → บาร์หาย (ล้าง mismatch สำเร็จ)';
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'fsclear__frontstore.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'ล้างค่านับเก่าหน้าร้าน (frontstore)', status, note });
+    await page.close();
+  }
+
   // ── (ง) ทางด่วนลงเวลา: ข้อมูลก้อนใหญ่ยังไม่มา แต่ต้องลงเวลาได้แล้ว ──────────
   // `?nodata=1` = ไม่ seed localStorage + คำขอ payload ค้างไม่ตอบ (เหมือนเน็ตร้านช้า)
   // นี่คือสภาพจริงของพนักงานที่เปิดแอปบนเครื่องใหม่/หลังล้าง cache แล้วมาสแกนเข้างาน
@@ -614,6 +688,107 @@ function startServer() {
     } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
     await page.screenshot({ path: path.join(SHOTS, `homechip__${chipRole}.png`) }).catch(() => {});
     results.push({ role: 'interact', tab: `ชิปของรอรับ (${chipRole})`, status, note });
+    await page.close();
+  }
+
+  // ── (จ2.5) saler นับหน้าร้านได้ แต่ต้องไม่ถูกกั้นปุ่มยืนยันสั่ง ──
+  // เจ้าของสั่ง (ส.ค. 2026): "เพิ่มปุ่มกดเช็คสินค้าให้ตำแหน่ง saler"
+  // saler ยืนหน้าร้านเห็นชั้นวางจริง → ให้นับ/บันทึกยอดได้ **แต่ห้ามบังคับ** เพราะงานหลักคือ
+  // ปิดการขายให้ทันลูกค้าที่ยืนรออยู่ · เดิมธง `needFsCheck` ตัวเดียวคุมทั้ง "โชว์การ์ดนับ" และ
+  // "กั้นปุ่มยืนยัน" → เปิดให้ saler เมื่อไหร่ก็โดนกั้นไปด้วยทันที
+  // ⚠️ ต้องรันบนเบราว์เซอร์จริง — unit test เห็นแค่ค่าธง ไม่เห็นว่า **ปุ่มบนจอกดได้จริงไหม**
+  // ทดสอบคู่กัน 2 role โดยตั้งใจ: ปลดกั้นให้ saler โดยเผลอปลดของหน้าร้านไปด้วย = เงียบสนิท
+  for (const fsCase of [
+    { role: 'saler',       mustCount: false, title: 'นับหน้าร้าน' },
+    { role: 'storedevice', mustCount: false, title: 'นับหน้าร้าน' },
+    { role: 'frontstore',  mustCount: true,  title: 'นับก่อนสั่ง' },
+  ]) {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=${fsCase.role}&tab=stock`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, fsCase.role, 'stock');
+      await page.waitForTimeout(400);
+      const trig = page.locator('button', { hasText: 'ควรสั่ง' }).first();
+      if (!navOk) {
+        status = 'NAV_FAIL'; note = 'สลับไปแท็บสต๊อกไม่สำเร็จ';
+      } else if (!(await trig.count())) {
+        status = 'NO_TRIGGER'; note = 'ไม่พบปุ่ม "ควรสั่ง" ในแท็บสต๊อก';
+      } else {
+        await trig.click({ timeout: 2000 }).catch(() => {});
+        await page.waitForTimeout(500);
+        const modal = page.locator('[data-modal="order"]');
+        if (!(await modal.count())) {
+          status = 'MODAL_FAIL'; note = 'กดแล้ว modal ไม่เปิด';
+        } else {
+          const body = (await modal.first().innerText().catch(() => '')) || '';
+          // ① การ์ดนับต้องโผล่ให้ทั้ง 2 role (นี่คือ "ปุ่มเช็คสินค้า" ที่เจ้าของขอ)
+          const hasCard = body.includes(fsCase.title) && /เหลือกี่ชิ้น/.test(body);
+          // ② ปุ่มยืนยัน — saler ต้องกดได้เลย · หน้าร้านต้องยังถูกกั้นเหมือนเดิม
+          const confirm = modal.locator('button', { hasText: /ยืนยันสั่ง|กรอกจำนวนหน้าร้านก่อน/ }).first();
+          const cText = (await confirm.textContent().catch(() => '') || '').trim();
+          const blocked = /กรอกจำนวนหน้าร้านก่อน/.test(cText) || (await confirm.isDisabled().catch(() => false));
+          if (!hasCard) {
+            status = 'NO_COUNT_CARD';
+            note = `${fsCase.role} ไม่เห็นการ์ดนับหน้าร้าน (หา "${fsCase.title}" ไม่เจอ)`;
+          } else if (blocked !== fsCase.mustCount) {
+            status = fsCase.mustCount ? 'GATE_LOST' : 'SALER_BLOCKED';
+            note = fsCase.mustCount
+              ? `หน้าร้านหลุดการบังคับนับก่อนสั่ง (ปุ่ม: "${cText}")`
+              : `saler ถูกกั้นปุ่มยืนยันทั้งที่ไม่ควรบังคับ (ปุ่ม: "${cText}")`;
+          } else {
+            note = fsCase.mustCount
+              ? 'เห็นการ์ดนับ + ยังบังคับนับก่อนสั่งเหมือนเดิม'
+              : 'เห็นการ์ดนับ + กดยืนยันสั่งได้เลย (ไม่บังคับ)';
+          }
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, `fscount__${fsCase.role}.png`) }).catch(() => {});
+    results.push({ role: 'interact', tab: `นับหน้าร้าน (${fsCase.role})`, status, note });
+    await page.close();
+  }
+
+  // ── (จ2.6) ปุ่มลอย 📤 "ส่งคำขอเช็คสต็อก" ต้องโผล่ให้ saler ด้วย (เหมือน owner) ──
+  // เจ้าของชี้ว่า "ปุ่มที่ว่าคือปุ่มนี้ ที่เหมือน dev กับ owner" — FAB ในแท็บ "สินค้า & สั่ง"
+  // เดิมมีเฉพาะ owner/dev · ต้องรันบนเบราว์เซอร์จริงเพราะ unit test เห็นแค่ค่าธง ไม่เห็นว่า
+  // ปุ่มลอยเรนเดอร์บนจอจริงไหม (และกดแล้วเปิด modal ส่งคำขอได้ไหม)
+  for (const fabCase of [
+    { role: 'saler',       expect: true  },
+    { role: 'storedevice', expect: true  },
+    { role: 'owner',       expect: true  },
+    { role: 'warehouse',   expect: false },  // ไม่เคยมี — ยืนยันว่าไม่เผลอเปิดให้เกิน
+  ]) {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=${fabCase.role}&tab=categories`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, fabCase.role, 'categories');
+      await page.waitForTimeout(400);
+      // FAB = div ลอยที่มีอิโมจิ 📤 (ไม่ใช่ปุ่มในโมดัลส่งคำขอ) — จับด้วยข้อความ 📤 ที่ fixed pos
+      const fab = page.locator('div', { hasText: /^📤$/ }).first();
+      const seen = (await fab.count()) > 0 && (await fab.isVisible().catch(() => false));
+      if (!navOk) {
+        status = 'NAV_FAIL'; note = 'สลับไปแท็บสินค้า & สั่งไม่สำเร็จ';
+      } else if (seen !== fabCase.expect) {
+        status = fabCase.expect ? 'FAB_MISSING' : 'FAB_LEAKED';
+        note = fabCase.expect
+          ? `${fabCase.role} ควรเห็นปุ่มลอย 📤 แต่ไม่เห็น`
+          : `${fabCase.role} ไม่ควรเห็นปุ่มลอย 📤 แต่เห็น`;
+      } else if (fabCase.expect) {
+        await fab.click({ timeout: 2000 }).catch(() => {});
+        await page.waitForTimeout(400);
+        const opened = await page.locator('div', { hasText: 'ส่งคำขอเช็คสต็อก' }).count();
+        if (!opened) { status = 'MODAL_FAIL'; note = 'กดปุ่มลอยแล้ว modal ส่งคำขอไม่เปิด'; }
+        else note = 'เห็นปุ่มลอย 📤 + กดแล้วเปิด modal ส่งคำขอเช็คสต็อกได้';
+      } else {
+        note = 'ไม่เห็นปุ่มลอย ตามที่คาดไว้ (คงสิทธิ์เดิม)';
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, `fab__${fabCase.role}.png`) }).catch(() => {});
+    results.push({ role: 'interact', tab: `ปุ่มลอยส่งคำขอเช็ค (${fabCase.role})`, status, note });
     await page.close();
   }
 
