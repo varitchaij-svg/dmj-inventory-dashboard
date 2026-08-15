@@ -2450,7 +2450,7 @@ function doPost(e) {
 
     // ─── Stock Check Requests ───
     if (data.createStockCheck) return createStockCheckRequest_(data.skus, data.names, actor);
-    if (data.completeStockCheck) return completeStockCheckRequest_(data.reqId, actor);
+    if (data.completeStockCheck) return completeStockCheckRequest_(data.reqId, actor, data.side);
 
     // ─── เกณฑ์แจ้งเตือนสต็อก (บันทึกถาวร ใช้ร่วมกันทุกเครื่อง) ───
     if (data.saveThresholds) return saveThresholds_(data, actor);
@@ -3072,7 +3072,9 @@ function buildFullData_() {
         wholesaleRatio:  whRatio,
       },
       mtoGroups: Object.values(mtoMap),
-      stockCheckRequests: readStockCheckRequests_().filter(function(r){ return r.status === "pending"; }),
+      // ส่งคำขอที่ "ยังมีฝั่งใดฝั่งหนึ่งค้าง" (fs หรือ wh) — client กรองต่อตาม role ของตัวเอง
+      // (หน้าร้านเห็นเฉพาะที่ fsStatus!=done · คลังเห็นเฉพาะที่ whStatus!=done) · ปิดครบ 2 ฝั่ง = หลุดไป
+      stockCheckRequests: readStockCheckRequests_().filter(function(r){ return r.fsStatus !== "done" || r.whStatus !== "done"; }),
       // SKU ที่เพิ่งถูกนับ (30 นาที) sku→qty — ให้ทุกเครื่องเห็นว่าใครนับอะไรไปแล้ว (นับพร้อมกันหลายเครื่อง)
       recentCountedSkus: (function(){
         try { var j = CacheService.getScriptCache().get('recentCountedSkus'); return j ? JSON.parse(j) : {}; }
@@ -14902,11 +14904,25 @@ function manualClearCache() {
 
 const SHEET_STOCK_CHECK = "คำขอเช็คสินค้า";
 
+// คอลัมน์ (1-indexed) — ⚠️ ต่อท้ายอย่างเดียว ห้ามแทรก/สลับ (บทเรียนข้อ 5)
+//  1 reqId · 2 timestamp · 3 requester · 4 skuList · 5 nameList · 6 status · 7 completedBy · 8 completedAt
+//  9 fsStatus · 10 fsBy · 11 fsAt · 12 whStatus · 13 whBy · 14 whAt   ← เพิ่ม ส.ค. 2026 (แยก 2 ฝั่ง)
+var STOCK_CHECK_HEADERS_ = ["reqId","timestamp","requester","skuList","nameList","status",
+  "completedBy","completedAt","fsStatus","fsBy","fsAt","whStatus","whBy","whAt"];
+var COL_CHK_FS_STATUS = 9, COL_CHK_FS_BY = 10, COL_CHK_FS_AT = 11;
+var COL_CHK_WH_STATUS = 12, COL_CHK_WH_BY = 13, COL_CHK_WH_AT = 14;
+
 function getOrCreateStockCheckSheet_(ss) {
   var sh = ss.getSheetByName(SHEET_STOCK_CHECK);
   if (!sh) {
     sh = ss.insertSheet(SHEET_STOCK_CHECK);
-    sh.appendRow(["reqId","timestamp","requester","skuList","nameList","status","completedBy","completedAt"]);
+    sh.appendRow(STOCK_CHECK_HEADERS_.slice());
+    return sh;
+  }
+  // ชีตเดิมมี 8 คอลัมน์ → เติมหัวคอลัมน์ที่ขาดแบบต่อท้าย (ไม่แตะข้อมูลเดิม) เพื่อให้เจ้าของเปิด
+  // ชีตแล้วเห็นชื่อคอลัมน์ครบ · การอ่านใช้ index อยู่แล้วจึงไม่ผูกกับหัวคอลัมน์
+  if (sh.getLastColumn() < STOCK_CHECK_HEADERS_.length) {
+    sh.getRange(1, 1, 1, STOCK_CHECK_HEADERS_.length).setValues([STOCK_CHECK_HEADERS_]);
   }
   return sh;
 }
@@ -14918,15 +14934,27 @@ function readStockCheckRequests_() {
   var rows = sh.getDataRange().getValues();
   if (rows.length < 2) return [];
   return rows.slice(1).map(function(r) {
+    var overall = String(r[5] || "pending");
+    // ⚠️ migration-safe: แถวเก่าไม่มีคอลัมน์ fs/wh (คอลัมน์ 9-14 ว่าง) → อนุมานจากสถานะรวมเดิม
+    //    (แถวที่ done มาก่อน = ทั้ง 2 ฝั่ง done · แถว pending เก่า = ทั้ง 2 ฝั่ง pending)
+    var fsStatus = String(r[COL_CHK_FS_STATUS - 1] || "") || (overall === "done" ? "done" : "pending");
+    var whStatus = String(r[COL_CHK_WH_STATUS - 1] || "") || (overall === "done" ? "done" : "pending");
     return {
       reqId:       String(r[0] || ""),
       timestamp:   String(r[1] || ""),
       requester:   String(r[2] || ""),
       skus:        JSON.parse(r[3] || "[]"),
       names:       JSON.parse(r[4] || "[]"),
-      status:      String(r[5] || "pending"),
+      status:      overall,
       completedBy: String(r[6] || ""),
       completedAt: String(r[7] || ""),
+      // แยกความคืบหน้า 2 ฝั่ง — หน้าร้าน (fs) กับ คลัง (wh) ปิดคำขอของตัวเองอิสระจากกัน
+      fsStatus:    fsStatus,
+      fsBy:        String(r[COL_CHK_FS_BY - 1] || ""),
+      fsAt:        String(r[COL_CHK_FS_AT - 1] || ""),
+      whStatus:    whStatus,
+      whBy:        String(r[COL_CHK_WH_BY - 1] || ""),
+      whAt:        String(r[COL_CHK_WH_AT - 1] || ""),
     };
   }).filter(function(r){ return r.reqId; });
 }
@@ -14938,7 +14966,9 @@ function createStockCheckRequest_(skus, names, actor) {
   var seq = rows.length; // row 1 = header, seq = # of data rows after append
   var reqId = "CHK-" + String(seq).padStart(3, "0");
   var ts = Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyy-MM-dd HH:mm");
-  sh.appendRow([reqId, ts, actor || "owner", JSON.stringify(skus || []), JSON.stringify(names || []), "pending", "", ""]);
+  // คอลัมน์ 9-14 = fsStatus/fsBy/fsAt/whStatus/whBy/whAt — เริ่มต้นทั้ง 2 ฝั่ง "pending"
+  sh.appendRow([reqId, ts, actor || "owner", JSON.stringify(skus || []), JSON.stringify(names || []),
+    "pending", "", "", "pending", "", "", "pending", "", ""]);
   // skipTsUpdate=true — คำขอเช็คสต็อกไม่เปลี่ยน "จำนวนสินค้า" จึงห้าม bump dmj_last_write_ts
   // มิฉะนั้น client ที่โหลดข้อมูลไว้ก่อนจะถูกมองว่า conflict → กดส่งของไม่ได้
   invalidateCache_(true);
@@ -14976,23 +15006,76 @@ function createStockCheckRequest_(skus, names, actor) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-function completeStockCheckRequest_(reqId, actor) {
+// side = 'fs' (หน้าร้าน) หรือ 'wh' (คลัง) — ปิดคำขอเช็คเฉพาะ "ฝั่งของตัวเอง" อิสระจากกัน
+// ⚠️ เดิมมีสถานะเดียว → หน้าร้านกดเสร็จ คำขอทั้งใบกลายเป็น done แล้ว "หน้านับของคลังที่ยังไม่เสร็จ
+//    หายไปทันที" (เจ้าของแจ้ง ส.ค. 2026) · ตอนนี้แต่ละฝั่งมี fsStatus/whStatus แยก ปิดของตัวเอง
+//    ไม่กระทบอีกฝั่ง · สถานะรวม (col 6) เป็น done ต่อเมื่อ "ทั้ง 2 ฝั่ง" เสร็จ
+// side ว่าง (client เก่าไม่ส่งมา) → ปิดทั้งใบแบบเดิม (backward-compat)
+function completeStockCheckRequest_(reqId, actor, side) {
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var sh = ss.getSheetByName(SHEET_STOCK_CHECK);
   if (!sh) return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Sheet not found" }))
     .setMimeType(ContentService.MimeType.JSON);
   var rows = sh.getDataRange().getValues();
+  var ts = Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyy-MM-dd HH:mm");
+  side = (side === 'fs' || side === 'wh') ? side : '';
   for (var i = 1; i < rows.length; i++) {
-    if (String(rows[i][0]) === String(reqId)) {
-      var ts = Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyy-MM-dd HH:mm");
+    if (String(rows[i][0]) !== String(reqId)) continue;
+    var r = rows[i];
+    // อ่านสถานะปัจจุบันของแต่ละฝั่ง (migration-safe เหมือน readStockCheckRequests_)
+    var overall = String(r[5] || "pending");
+    var fsDone = (String(r[COL_CHK_FS_STATUS - 1] || "") || (overall === "done" ? "done" : "pending")) === "done";
+    var whDone = (String(r[COL_CHK_WH_STATUS - 1] || "") || (overall === "done" ? "done" : "pending")) === "done";
+
+    if (side === 'fs') {
+      sh.getRange(i + 1, COL_CHK_FS_STATUS).setValue("done");
+      sh.getRange(i + 1, COL_CHK_FS_BY).setValue(actor || "");
+      sh.getRange(i + 1, COL_CHK_FS_AT).setValue(ts);
+      fsDone = true;
+    } else if (side === 'wh') {
+      sh.getRange(i + 1, COL_CHK_WH_STATUS).setValue("done");
+      sh.getRange(i + 1, COL_CHK_WH_BY).setValue(actor || "");
+      sh.getRange(i + 1, COL_CHK_WH_AT).setValue(ts);
+      whDone = true;
+    } else {
+      // ไม่ระบุฝั่ง → ปิดทั้งใบ (client เก่า) — ตั้งทั้ง 2 ฝั่ง done
+      sh.getRange(i + 1, COL_CHK_FS_STATUS).setValue("done"); sh.getRange(i + 1, COL_CHK_FS_BY).setValue(actor || ""); sh.getRange(i + 1, COL_CHK_FS_AT).setValue(ts);
+      sh.getRange(i + 1, COL_CHK_WH_STATUS).setValue("done"); sh.getRange(i + 1, COL_CHK_WH_BY).setValue(actor || ""); sh.getRange(i + 1, COL_CHK_WH_AT).setValue(ts);
+      fsDone = whDone = true;
+    }
+
+    // สถานะรวม (col 6) = done ต่อเมื่อทั้ง 2 ฝั่งเสร็จ · เก็บ completedBy/At ของคนปิดครบใบ
+    if (fsDone && whDone) {
       sh.getRange(i + 1, 6).setValue("done");
       sh.getRange(i + 1, 7).setValue(actor || "");
       sh.getRange(i + 1, 8).setValue(ts);
-      // skipTsUpdate=true — ปิดคำขอเช็คไม่เปลี่ยนจำนวนสินค้า จึงไม่ poison conflict timestamp
-      invalidateCache_(true);
-      return ContentService.createTextOutput(JSON.stringify({ success: true }))
-        .setMimeType(ContentService.MimeType.JSON);
     }
+    // skipTsUpdate=true — ปิดคำขอเช็คไม่เปลี่ยนจำนวนสินค้า จึงไม่ poison conflict timestamp
+    invalidateCache_(true);
+
+    // 🔔 แจ้งเตือน "ฝั่งไหนเช็คเสร็จ" ให้เจ้าของ + saler (เจ้าของสั่ง ส.ค. 2026) — ไม่กิน quota LINE
+    //    dev นับเป็น owner ใน audience อยู่แล้ว · ไม่ใส่ frontstore/warehouse (เขาเป็นคนกดเอง รู้อยู่แล้ว)
+    try {
+      var names = [];
+      try { names = JSON.parse(r[4] || "[]"); } catch (e) {}
+      var preview = names.slice(0, 3).join(", ");
+      if (names.length > 3) preview += " และอีก " + (names.length - 3) + " รายการ";
+      if (side === 'fs' || side === 'wh') {
+        var sideLabel = side === 'fs' ? "หน้าร้าน" : "คลัง";
+        var bothLabel = (fsDone && whDone) ? " · ครบทั้ง 2 ฝั่งแล้ว" : (side === 'fs' ? " · รอคลังเช็ค" : " · รอหน้าร้านเช็ค");
+        pushInappNoti_({
+          audience: 'role:owner,saler,storedevice',
+          type: 'stockcheck-done', tab: 'categories',
+          title: "✅ " + sideLabel + "เช็คสต็อกเสร็จแล้ว (" + reqId + ")",
+          body: (preview || reqId) + " · โดย " + (actor || "-") + bothLabel,
+          by: actor || "",
+          dedupKey: 'stockcheck-done-' + side + '-' + reqId,
+        });
+      }
+    } catch (e) { /* แจ้งเตือนพลาดห้ามทำให้ปิดคำขอไม่สำเร็จ */ }
+
+    return ContentService.createTextOutput(JSON.stringify({ success: true, fsDone: fsDone, whDone: whDone }))
+      .setMimeType(ContentService.MimeType.JSON);
   }
   return ContentService.createTextOutput(JSON.stringify({ success: false, error: "reqId not found" }))
     .setMimeType(ContentService.MimeType.JSON);

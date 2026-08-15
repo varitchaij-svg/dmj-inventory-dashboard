@@ -49,10 +49,11 @@ describe('handleSave ของ StockCountView commit เข้าคลัง + 
     expect(handleSave).toMatch(/confirmStockCount\(/);
   });
 
-  it('บันทึกตำแหน่งได้ทั้งโหมดตามล็อค (selLockKey) และตามซัพพลายเออร์ (selSupplier)', () => {
+  it('บันทึกตำแหน่งได้ทุกโหมด — ตามล็อค (selLockKey) หรือจัดกลุ่มตาม skuToLock ในโหมดอื่น', () => {
     expect(handleSave).toContain('if (selLockKey)');
-    expect(handleSave).toContain('else if (selSupplier)');
-    // โหมดซัพพลายเออร์จัดกลุ่มตำแหน่งตาม skuToLock ของแต่ละ SKU
+    // สาขา else = ทุกโหมดที่ไม่ได้อยู่ในล็อคเดียว (ซัพพลายเออร์ / คำขอเช็คหลายซัพ / นับก่อนขึ้นชั้น)
+    expect(handleSave).toMatch(/\}\s*else\s*\{/);
+    // จัดกลุ่มตำแหน่งตาม skuToLock ของแต่ละ SKU
     expect(handleSave).toContain('skuToLock');
   });
 
@@ -74,14 +75,21 @@ describe('ปุ่ม "บันทึก" โหมดซัพพลายเ
   });
 });
 
-describe('auto-save ของ StockCountView ครอบคลุมทั้ง 2 โหมด', () => {
-  it('auto-save ทำงานเมื่อเลือกล็อคหรือซัพพลายเออร์ แล้วยิง handleSave (ซึ่ง commit ZORT)', () => {
-    // เงื่อนไข gate ของ effect: ทำงานเมื่อมี selLockKey หรือ selSupplier
-    expect(STOCKCOUNT).toContain('if (!selLockKey && !selSupplier) return;');
-    // ตัว effect ยิง handleSave(true)
-    const effIdx = STOCKCOUNT.indexOf('if (!selLockKey && !selSupplier) return;');
+describe('auto-save ของ StockCountView ครอบคลุมทุกโหมด (ไม่ผูกกับ selLockKey/selSupplier)', () => {
+  it('gate ด้วย scSavableCount (ของที่เครื่องนี้นับเอง) ไม่ใช่โหมด — ยิง handleSave(true)', () => {
+    // เดิมกั้นด้วย `if (!selLockKey && !selSupplier) return;` ทำให้โหมดนับตามคำขอหลายซัพ /
+    // นับก่อนขึ้นชั้น ไม่ auto-save เลย · ตอนนี้กั้นด้วย scSavableCount → มีของนับก็ save ทุกโหมด
+    expect(STOCKCOUNT).toContain('if (scSavableCount === 0 || saving) return;');
+    // ต้องไม่กลับไปกั้นด้วยโหมดอีก (regression)
+    expect(STOCKCOUNT).not.toContain('if (!selLockKey && !selSupplier) return;');
+    const effIdx = STOCKCOUNT.indexOf('if (scSavableCount === 0 || saving) return;');
     const eff = STOCKCOUNT.slice(effIdx, effIdx + 500);
     expect(eff).toContain('handleSave(true)');
+  });
+
+  it('scSavableCount คิดจาก localEditsRef (เฉพาะที่เครื่องนี้นับ) ไม่ใช่ค่าที่ merge มา', () => {
+    const m = STOCKCOUNT.match(/const scSavableCount\s*=\s*[\s\S]*?localEditsRef\.current\.has\(sku\)[\s\S]*?\.length;/);
+    expect(m, 'scSavableCount ต้องกรองด้วย localEditsRef').toBeTruthy();
   });
 });
 

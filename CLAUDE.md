@@ -1128,9 +1128,51 @@ audit → noti** · ลำดับนี้เป็นฐานของกา
   ตอนนี้อ่านผ่าน `dmjJson` แล้วคืน success ตามจริง (`LockModal` เช็ค `success!==false` อยู่แล้ว
   จึงได้ประโยชน์ทันที)
 - เทสต์: `tests/stockcount-supplier-save.test.js` (meta-test สแกนต้นทางจริง — ปุ่มซัพพลายเออร์
-  เรียก `handleSave`, `handleSave` มี `confirmStockCount` + สาขา `selSupplier`+`skuToLock`,
+  เรียก `handleSave`, `handleSave` มี `confirmStockCount` + สาขา non-lock (`else`)+`skuToLock`,
   `handleSaveSupplier` ถูกลบ, `syncLockData` อ่าน `dmjJson`) · **ไม่ทำ browser test เพราะการ
   ขับ flow เลือกโหมด→เลือกซัพพลายเออร์→นับ→บันทึก เปราะและยาว** — meta-test คุม regression พอ
+
+### auto-save ของ StockCountView ต้องยิงทุกโหมด ไม่ผูกกับ selLockKey/selSupplier (แก้แล้ว ส.ค. 2026)
+
+เจ้าของแจ้ง: "ฝั่ง warehouse ยังไม่ auto-save เลย" — auto-save เดิมกั้นด้วย
+`if (!selLockKey && !selSupplier) return;` → โหมดที่ **ไม่มี supplier เดียว** ไม่ auto-save เลย:
+- นับตาม **คำขอเช็คที่ครอบหลายซัพพลายเออร์** — `checkRequest` effect ตั้ง `setSupplierMode(true)`
+  แต่ **ไม่ตั้ง `selSupplier`** (เพราะมีหลายซัพ) → ทั้ง `selLockKey` และ `selSupplier` ว่าง → กั้นตก
+- โหมด "นับก่อนขึ้นชั้น" (pre-shelf) ก็เข้าเงื่อนไขเดียวกัน
+- **แก้**: gate auto-save ด้วย **`scSavableCount`** (จำนวนที่ "เครื่องนี้นับเอง" จาก `localEditsRef`)
+  แทนการเช็คโหมด — มีของให้ save เมื่อไหร่ก็ save ได้ทุกโหมด (handleSave commit ได้ทุกโหมดอยู่แล้ว
+  หลังเปลี่ยนสาขาตำแหน่งเป็น `else` ครอบทุกโหมด non-lock) · `handleSave` ก็ยัง early-return เมื่อ
+  ไม่มี localEdits จึงไม่บันทึกค่าที่ merge มาจากเครื่องอื่นซ้ำ
+- ⚠️ **ผลพลอยได้ที่ตั้งใจ**: `scSavableCount` (localEdits) ต่างจาก `scTouchedCount` (นับค่าที่ merge
+  มาด้วย) — เดิม auto-save ตั้ง "รอบันทึก..." แล้ว handleSave early-return เพราะ localEdits ว่าง →
+  ค้าง "รอบันทึก..." ตลอด · ตอนนี้ไม่ตั้ง pending ถ้าไม่มีอะไรจะ save จริง
+- เทสต์: `tests/stockcount-supplier-save.test.js` (gate เป็น `scSavableCount === 0`, ไม่มี
+  `if (!selLockKey && !selSupplier) return;` แล้ว, `scSavableCount` กรองด้วย `localEditsRef`)
+
+### คำขอเช็คสต็อก แยกฝั่งหน้าร้าน/คลัง + แจ้งเตือนเจ้าของ/saler ว่าฝั่งไหนเสร็จ (ส.ค. 2026)
+
+เจ้าของแจ้ง: หน้าร้านนับเสร็จแล้วติ๊ก "เช็คเสร็จ" → คำขอ**ฝั่งคลังที่ยังไม่เสร็จหายไปทันที** ·
+ต้นเหตุ: ชีต `SHEET_STOCK_CHECK` เดิมมี **สถานะเดียว** (`status`) ปิดใบเดียวจบทั้ง 2 ฝั่ง
+
+- **แยกสถานะ 2 ฝั่ง** — เพิ่มคอลัมน์ **9-14 = `fsStatus`/`fsBy`/`fsAt`/`whStatus`/`whBy`/`whAt`**
+  (`STOCK_CHECK_HEADERS_` + `COL_CHK_*`) · ⚠️ **ต่อท้ายอย่างเดียว** (บทเรียนข้อ 5) ·
+  `getOrCreateStockCheckSheet_` เติมหัวคอลัมน์ที่ขาดให้ชีตเดิมด้วย
+- **migration-safe**: `readStockCheckRequests_` อนุมาน fs/wh จาก `status` เดิมเมื่อคอลัมน์ใหม่ว่าง
+  (done เดิม = ทั้ง 2 ฝั่ง done · pending เดิม = ทั้ง 2 ฝั่ง pending)
+- **`completeStockCheckRequest_(reqId, actor, side)`** — `side='fs'/'wh'` ปิดเฉพาะฝั่งตัวเอง ·
+  สถานะรวม (col 6) เป็น done **ต่อเมื่อทั้ง 2 ฝั่งเสร็จ** · `side` ว่าง (client เก่า) = ปิดทั้งใบ
+  (backward-compat) · payload filter เปลี่ยนเป็น `fsStatus !== "done" || whStatus !== "done"`
+- **frontend** (app.jsx): `myPendingChecks` กรองตาม role (หน้าร้านดู `fsStatus` · คลังดู `whStatus`)
+  · แบนเนอร์/`setActiveCheckRequest` ใช้ `myPendingChecks` · `onCheckComplete` ส่ง
+  `side:'wh'` (แท็บ stockcount) / `side:'fs'` (แท็บ frontstore)
+- **🔔 แจ้งเตือนเจ้าของ+saler**: ปิดฝั่งไหน → `pushInappNoti_({audience:'role:owner,saler,storedevice',
+  type:'stockcheck-done', tab:'categories'})` บอก "หน้าร้าน/คลังเช็คเสร็จ · รออีกฝั่ง / ครบทั้ง 2 ฝั่ง"
+  · dedupKey ต่อ side+reqId · ไม่แจ้ง frontstore/warehouse (เขากดเอง รู้อยู่แล้ว)
+- ⚠️ **ต้อง deploy `.gs` ให้ครบก่อนผลเต็ม** — ก่อน deploy: client ส่ง `side` แต่ backend เก่าไม่รู้จัก
+  → ปิดทั้งใบเหมือนเดิม (ไม่แย่ลง) · ทั้ง 2 ทาง deploy ก่อน/หลังปลอดภัย (migration-safe ทั้งคู่)
+- เทสต์: `tests/stockcheck-split.test.js` (eval `readStockCheckRequests_`/`completeStockCheckRequest_`
+  จริงจาก `.gs` กับชีตจำลอง — ปิดฝั่งเดียวอีกฝั่งค้าง, ครบ 2 ฝั่ง=รวม done, กระดิ่ง audience/ข้อความ,
+  migration แถวเก่า + meta-test สายส่ง frontend)
 
 ## ระบบล็อกอินพนักงาน + ลงเวลาเข้า-ออกงาน (Sprint 5)
 

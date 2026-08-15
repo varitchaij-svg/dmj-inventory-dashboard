@@ -1516,6 +1516,14 @@ function App() {
   }, []);
 
   const pendingChecks = (data && data.stockCheckRequests) ? data.stockCheckRequests : [];
+  // แต่ละ role เห็นเฉพาะคำขอที่ "ฝั่งของตัวเอง" ยังไม่เสร็จ — หน้าร้านดู fsStatus · คลังดู whStatus
+  // ⚠️ ปิดฝั่งหนึ่งแล้วอีกฝั่งต้องยังเห็นของตัวเอง (เจ้าของแจ้ง: หน้าร้านเสร็จแล้วหน้าคลังหายไป)
+  // backend เก่าที่ยังไม่มี fsStatus/whStatus → undefined !== "done" = true → เห็นเหมือนเดิม (migration-safe)
+  const myPendingChecks = pendingChecks.filter(function (r) {
+    if (role === "frontstore") return r.fsStatus !== "done";
+    if (role === "warehouse")  return r.whStatus !== "done";
+    return false;
+  });
 
   // Tab navigation with Android back-button support
   const handleSetTab = usC((newId) => {
@@ -2267,18 +2275,18 @@ function App() {
       )}
 
       {/* ─── Stock check request banner (fs/wh) ─── */}
-      {(role === "frontstore" || role === "warehouse") && pendingChecks.length > 0 && (
+      {(role === "frontstore" || role === "warehouse") && myPendingChecks.length > 0 && (
         <div className="no-print" style={{background:"#fffbeb",borderBottom:"1px solid #fcd34d",
                      padding:"10px 16px",display:"flex",alignItems:"center",gap:10}}>
           <span style={{fontSize:20}}>📋</span>
           <div style={{flex:1}}>
-            <div style={{fontWeight:600,fontSize:14}}>มีคำขอเช็คสต็อก · {pendingChecks[0].skus.length} รายการ</div>
+            <div style={{fontWeight:600,fontSize:14}}>มีคำขอเช็คสต็อก · {myPendingChecks[0].skus.length} รายการ</div>
             <div style={{fontSize:12,color:"#92400e"}}>
-              {pendingChecks[0].names.slice(0,3).join(", ")}{pendingChecks[0].names.length > 3 ? "..." : ""}
+              {myPendingChecks[0].names.slice(0,3).join(", ")}{myPendingChecks[0].names.length > 3 ? "..." : ""}
             </div>
           </div>
           <button onClick={function() {
-            setActiveCheckRequest(pendingChecks[0]);
+            setActiveCheckRequest(myPendingChecks[0]);
             handleSetTab(role === "frontstore" ? "frontstore" : "stockcount");
           }}
             style={{background:"#f59e0b",color:"#fff",border:"none",borderRadius:8,
@@ -2355,9 +2363,10 @@ function App() {
                                             checkRequest={activeCheckRequest}
                                             onCheckComplete={async function(reqId){
                                               try {
+                                                // side:'wh' → ปิดเฉพาะฝั่งคลัง ไม่กระทบคำขอฝั่งหน้าร้าน
                                                 await dmjFetch(SHEET_DEPLOY_URL, {method:"POST",
                                                   headers:{"Content-Type":"text/plain;charset=utf-8"},
-                                                  body: JSON.stringify({completeStockCheck:true, reqId:reqId, actor:role})});
+                                                  body: JSON.stringify({completeStockCheck:true, reqId:reqId, side:'wh', actor:role})});
                                                 setActiveCheckRequest(null);
                                                 fetchFromSheet();
                                               } catch(e){ console.error("completeStockCheck:", e); }
@@ -2366,9 +2375,10 @@ function App() {
                                             checkRequest={activeCheckRequest}
                                             onCheckComplete={async function(reqId){
                                               try {
+                                                // side:'fs' → ปิดเฉพาะฝั่งหน้าร้าน ไม่กระทบคำขอฝั่งคลัง
                                                 await dmjFetch(SHEET_DEPLOY_URL, {method:"POST",
                                                   headers:{"Content-Type":"text/plain;charset=utf-8"},
-                                                  body: JSON.stringify({completeStockCheck:true, reqId:reqId, actor:role})});
+                                                  body: JSON.stringify({completeStockCheck:true, reqId:reqId, side:'fs', actor:role})});
                                                 setActiveCheckRequest(null);
                                                 fetchFromSheet();
                                               } catch(e){ console.error("completeStockCheck:", e); }

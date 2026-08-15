@@ -2000,6 +2000,10 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
   };
 
   const scTouchedCount = Object.values(checkedQtys).filter(v => v !== '' && v != null).length;
+  // จำนวนที่ "เครื่องนี้นับเอง" และยังไม่บันทึก — ใช้เป็นสัญญาณ auto-save (แม่นกว่า scTouchedCount
+  // ที่นับค่าที่ merge จากเครื่องอื่นด้วย) · ถ้ามีค่านี้ = มีของให้ save จริง ไม่ว่าจะอยู่โหมดไหน
+  const scSavableCount = Object.entries(checkedQtys)
+    .filter(([sku, v]) => v !== '' && v != null && localEditsRef.current.has(sku)).length;
 
   // derived: true ขณะ POST อยู่ (ใช้ disable ปุ่ม)
   const saving = saveStatus === "saving";
@@ -2021,7 +2025,9 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     const { lockEntries, confirmEntries } = splitFoundEntries(entries);
     if (selLockKey) {
       await syncLockData(selLockKey, lockEntries);
-    } else if (selSupplier) {
+    } else {
+      // ทุกโหมดที่ไม่ได้อยู่ในล็อคเดียว (ตามซัพพลายเออร์ / ตามคำขอเช็คหลายซัพ / นับก่อนขึ้นชั้น) →
+      // จัดกลุ่มตำแหน่งตาม skuToLock ของแต่ละ SKU (ตัวไหนไม่มีล็อคก็ข้ามตำแหน่งไป แต่ยังเข้าคลัง)
       const byLock = {};
       entries.forEach(e => { const lk = skuToLock[e.sku]; if (lk) (byLock[lk] = byLock[lk] || []).push(e); });
       for (const [lk, es] of Object.entries(byLock)) await syncLockData(lk, es);
@@ -2046,10 +2052,13 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
   };
 
   // Auto-save with 3-second debounce — save เฉพาะเมื่อค่าต่างจากที่ save ล่าสุด (กัน loop)
-  // ทำงานทั้งโหมดเลือกตามล็อค (selLockKey) และตามซัพพลายเออร์ (selSupplier)
+  // ⚠️ gate ด้วย scSavableCount (ของที่เครื่องนี้นับเอง) ไม่ใช่ "มี selLockKey/selSupplier" —
+  //    เดิมกั้นด้วยโหมด ทำให้ "นับตามคำขอเช็คที่ครอบหลายซัพพลายเออร์" (selSupplier ยังว่าง)
+  //    หรือโหมดนับก่อนขึ้นชั้น **ไม่ auto-save เลย** (เจ้าของแจ้ง: warehouse ไม่ autosave) ·
+  //    handleSave commit ได้ทุกโหมดอยู่แล้ว → มีของให้ save เมื่อไหร่ก็ save ได้ทันที
+  //    ผลพลอยได้: ไม่เผลอตั้ง "รอบันทึก..." ค้างตอนมีแต่ค่าที่ merge มาจากเครื่องอื่น (scSavableCount=0)
   uE(() => {
-    if (scTouchedCount === 0 || saving) return;
-    if (!selLockKey && !selSupplier) return;
+    if (scSavableCount === 0 || saving) return;
     const snap = JSON.stringify(checkedQtys);
     if (snap === lastSavedSnap) return;
     // บอก user ว่ามีข้อมูลรอ save
@@ -2058,7 +2067,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
       handleSave(true);
     }, 3000);
     return () => clearTimeout(timer);
-  }, [checkedQtys, saving, scTouchedCount, selLockKey, selSupplier, lastSavedSnap]);
+  }, [checkedQtys, saving, scSavableCount, selLockKey, selSupplier, lastSavedSnap]);
 
   const handleConfirm = async () => {
     const entries = Object.entries(checkedQtys)
