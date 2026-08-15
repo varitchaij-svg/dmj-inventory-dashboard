@@ -62,7 +62,7 @@ const SECTIONS = [
 // เก็บตก: key ใน dict ที่ยังไม่ถูกจัดกลุ่ม → ไม่ให้หาย
 const grouped = new Set(SECTIONS.flatMap(s => s.keys));
 const leftover = Object.keys(DMJ_I18N).filter(k => !grouped.has(k));
-if (leftover.length) SECTIONS.push({ title: 'เพิ่มเติม', keys: leftover });
+if (leftover.length) SECTIONS.push({ title: 'frontstore + warehouse (สต๊อก/หน้าร้าน/คลัง/นับ/สั่ง/ป้าย)', isNew: true, keys: leftover });
 
 const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const total = Object.keys(DMJ_I18N).length;

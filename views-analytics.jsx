@@ -218,8 +218,20 @@ function useProductOwners(showToast) {
   return { owners: owners, me: me, off: off, toggle: toggle, reload: reload };
 }
 
-function FrontStoreView({ data, role, checkRequest }) {
-  const products = data.products || [];
+function FrontStoreView({ data, role, checkRequest, onCheckComplete }) {
+  // ถ้ามี checkRequest (เจ้าของกด "ส่งคำขอเช็คสต็อก") → กรองสินค้าเฉพาะ SKU ที่ขอมา
+  // เหมือน StockCountView เป๊ะ — ไม่งั้นกด "ดูรายการ" แล้วสลับแท็บมาเฉย ๆ ไม่มีอะไรบอกว่า
+  // ต้องเช็คตัวไหน (เดิมแค่ตั้ง supplierFilter เมื่อ SKU มาจาก supplier เดียว → คำขอที่มี
+  // หลาย supplier กดแล้วเงียบสนิท ผู้ใช้ต้องไล่หาเองในสินค้าหลักพันตัว)
+  const allProducts = data.products || [];
+  const checkSkuSet = uM(function() {
+    if (!checkRequest || !checkRequest.skus) return null;
+    return new Set(checkRequest.skus);
+  }, [checkRequest]);
+  const products = uM(function() {
+    if (!checkSkuSet) return allProducts;
+    return allProducts.filter(function(p){ return checkSkuSet.has(p.sku); });
+  }, [allProducts, checkSkuSet]);
   const [toast, showToast, hideToast] = useToast();
   const CAT_ORDER = ["Realtouch","ดอกไม้","บูช","ไม้แซม","ดอกหญ้า","ใบ","ใบบูช","ใบไม้แขวน","กิ่งไม้","กุหลาบหิน","ต้นไม้","แจกันแก้ว","เรซิ่น"];
 
@@ -261,20 +273,6 @@ function FrontStoreView({ data, role, checkRequest }) {
   const [purchaseMode, setPurchaseMode] = uS(false);
   const [mounted, setMounted] = uS(false);
   uE(() => { const t = setTimeout(() => setMounted(true), 350); return () => clearTimeout(t); }, []);
-
-  // ถ้า checkRequest ส่งมา → auto-set supplier filter ถ้า SKU ทั้งหมดมาจาก supplier เดียว
-  uE(function() {
-    if (!checkRequest || !products.length) return;
-    var checkSkus = new Set(checkRequest.skus || []);
-    var sups = new Set();
-    products.forEach(function(p) {
-      if (checkSkus.has(p.sku)) {
-        var s = p.lastSupplier || p.vendor;
-        if (s) sups.add(s);
-      }
-    });
-    if (sups.size === 1) setSupplierFilter([...sups][0]);
-  }, [checkRequest, products]);
 
   const [checkedQtys, setCheckedQtys] = uS(() => {
     const init = {};
@@ -379,6 +377,38 @@ function FrontStoreView({ data, role, checkRequest }) {
   const uncheckedCount = counts.unchecked;
   const mismatchCount  = counts.mismatch;
 
+  // ── ล้างค่านับเก่าที่ไม่ตรงกับระบบ (ขายไปแล้วยอดเลื่อน) → กลับเป็น "รอเช็ค" นับใหม่ ──
+  // ไม่แตะ qtyStore/ZORT · เอาเฉพาะ SKU ที่ "เช็คแล้วและไม่ตรง" ในขอบเขตที่เห็นอยู่ (WYSIWYG)
+  const [clearingChecks, setClearingChecks] = uS(false);
+  const [confirmClearChecks, setConfirmClearChecks] = uS(false);
+  const mismatchSkus = uM(() => {
+    const out = [];
+    products.forEach(p => {
+      if (!p.cat || p.cat === "ไม่มีรหัสสินค้า") return;
+      const v = checkedQtys[p.sku];
+      if (v == null || v === "") return;
+      if (parseInt(v) !== (p.qtyStore ?? 0)) out.push(p.sku);
+    });
+    return out;
+  }, [products, checkedQtys]);
+  const handleClearMismatch = async () => {
+    if (!mismatchSkus.length) { setConfirmClearChecks(false); return; }
+    setClearingChecks(true);
+    const result = await syncClearFrontStoreChecks(mismatchSkus);
+    setClearingChecks(false);
+    setConfirmClearChecks(false);
+    if (result.success !== false) {
+      const gone = new Set(mismatchSkus);
+      // ล้าง state ในเครื่องทันที + ใส่ลง touched กัน sync-merge ดึงค่าเก่ากลับมาก่อน refetch เสร็จ
+      setCheckedQtys(prev => { const n = { ...prev }; gone.forEach(s => { delete n[s]; }); return n; });
+      setTouched(prev => { const n = new Set(prev); gone.forEach(s => n.add(s)); return n; });
+      showToast("success", `ล้างค่านับเก่า ${result.cleared ?? mismatchSkus.length} รายการ — เริ่มนับใหม่ได้เลย`, "🧹");
+      if (typeof window._dmjRefetch === "function") window._dmjRefetch();
+    } else {
+      showToast("error", result.error || "ล้างไม่สำเร็จ", "⚠️");
+    }
+  };
+
   // ── คิว "ควรเช็คก่อน" — ABC + เช็คหน้าร้านล่าสุดนานสุด ──
   // หน้าร้านของเคลื่อน/หายง่ายกว่าคลัง → รอบเช็คถี่กว่า: A ทุก 7 วัน, B ทุก 14 วัน, C ทุก 30 วัน
   // (ยังไม่เคยเช็ค = ครบกำหนดเสมอ) ใช้ p.frontStoreCheckedAt จากชีต "จำนวนหน้าร้าน" col I
@@ -445,7 +475,7 @@ function FrontStoreView({ data, role, checkRequest }) {
       .filter(sku => checkedQtys[sku] !== "" && checkedQtys[sku] != null)
       .map(sku => ({ sku, qty: parseInt(checkedQtys[sku]) || 0 }));
     if (entries.length === 0) {
-      if (!isAuto) showToast("warn", "ยังไม่ได้กรอกจำนวน", "✏️");
+      if (!isAuto) showToast("warn", t("ยังไม่ได้กรอกจำนวน"), "✏️");
       return;
     }
     setSaving(true);
@@ -531,14 +561,34 @@ function FrontStoreView({ data, role, checkRequest }) {
       onClose={function(){ setFsCalcPad(null); }}
     />
     <div style={{display:"flex", flexDirection:"column", gap:12}}>
+      {/* ── Check Request banner — โชว์เฉพาะ SKU ที่เจ้าของขอให้เช็ค + ปุ่มปิดคำขอ ── */}
+      {checkRequest && (
+        <div style={{background:"#fffbeb",border:"1px solid #fcd34d",borderRadius:12,
+                     padding:"12px 16px",display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:18}}>📋</span>
+          <div style={{flex:1,fontSize:14,minWidth:0}}>
+            <b>กำลังเช็คตามคำขอ</b> · {(checkRequest.skus || []).length} รายการ
+            <div style={{fontSize:11,color:"#92400e",marginTop:2}}>
+              โชว์เฉพาะสินค้าที่ขอให้เช็ค — กรอกจำนวนแล้วกดบันทึก
+            </div>
+          </div>
+          {onCheckComplete && (
+            <button onClick={function(){ onCheckComplete(checkRequest.reqId); }}
+              style={{background:"#1f7f44",color:"#fff",border:"none",borderRadius:8,
+                      padding:"8px 14px",fontWeight:600,fontSize:13,cursor:"pointer",flexShrink:0}}>
+              ✅ เสร็จแล้ว
+            </button>
+          )}
+        </div>
+      )}
       <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
         <div style={{flex:1, minWidth:160}}>
-          <div style={{fontSize:15, fontWeight:700}}>🛒 เช็คจำนวนหน้าร้าน</div>
+          <div style={{fontSize:15, fontWeight:700}}>🛒 {t("เช็คจำนวนหน้าร้าน")}</div>
           <div style={{fontSize:11, color:"var(--muted)", marginTop:2}}>
             {uncheckedCount > 0
-              ? <span>รอเช็ค <b style={{color:"var(--warn)"}}>{uncheckedCount}</b> รายการ</span>
+              ? <span>{t("รอเช็ค")} <b style={{color:"var(--warn)"}}>{uncheckedCount}</b> {t("รายการ")}</span>
               : <span style={{color:"var(--g-600)"}}>✓ เช็คครบแล้ว</span>}
-            {mismatchCount > 0 && <span style={{marginLeft:8, color:"var(--dang)"}}>· ไม่ตรง {mismatchCount} รายการ</span>}
+            {mismatchCount > 0 && <span style={{marginLeft:8, color:"var(--dang)"}}>· {t("ไม่ตรง")} {mismatchCount} {t("รายการ")}</span>}
           </div>
         </div>
         <ScanButton size={40} onScan={handleScanDetected}
@@ -575,9 +625,44 @@ function FrontStoreView({ data, role, checkRequest }) {
         </div>
       </div>
 
+      {/* ── ล้างค่านับเก่าที่ไม่ตรงกับระบบ (ขายไปแล้วยอดเลื่อน) → เริ่มนับใหม่ ── */}
+      {mismatchSkus.length > 0 && (
+        <div style={{background:"#fff7ed",border:"1px solid #fdba74",borderRadius:12,
+                     padding:"11px 14px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <span style={{fontSize:18}}>🧹</span>
+          <div style={{flex:1,minWidth:160,fontSize:12.5,color:"#7c2d12",lineHeight:1.4}}>
+            มีค่านับเก่า <b>{mismatchSkus.length}</b> รายการที่ไม่ตรงกับระบบ (ส่วนใหญ่เพราะขายไปหลังนับ)
+            <div style={{fontSize:11,color:"#9a3412"}}>ล้างเพื่อเริ่มนับใหม่ — ไม่กระทบจำนวนสต็อกจริง/ZORT</div>
+          </div>
+          {confirmClearChecks ? (
+            <div style={{display:"flex",gap:6,flexShrink:0}}>
+              <button onClick={handleClearMismatch} disabled={clearingChecks}
+                style={{background:"#ea580c",color:"#fff",border:"none",borderRadius:8,
+                        padding:"8px 12px",fontWeight:700,fontSize:12.5,cursor:"pointer",
+                        opacity:clearingChecks?0.5:1,fontFamily:"inherit"}}>
+                {clearingChecks
+                  ? <><span className="spin" style={{width:12,height:12,borderWidth:2,marginRight:5}}/> กำลังล้าง...</>
+                  : `⚠️ ยืนยันล้าง ${mismatchSkus.length}`}
+              </button>
+              <button onClick={() => setConfirmClearChecks(false)} disabled={clearingChecks}
+                style={{background:"#fff",color:"#7c2d12",border:"1px solid #fdba74",borderRadius:8,
+                        padding:"8px 12px",fontWeight:600,fontSize:12.5,cursor:"pointer",fontFamily:"inherit"}}>
+                ยกเลิก
+              </button>
+            </div>
+          ) : (
+            <button onClick={() => setConfirmClearChecks(true)}
+              style={{background:"#fff",color:"#c2410c",border:"1.5px solid #fdba74",borderRadius:8,
+                      padding:"8px 12px",fontWeight:700,fontSize:12.5,cursor:"pointer",flexShrink:0,fontFamily:"inherit"}}>
+              🧹 ล้างค่านับเก่า ({mismatchSkus.length})
+            </button>
+          )}
+        </div>
+      )}
+
       <Card padding={true} style={{paddingTop:12,paddingBottom:12}}>
         <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-          <input type="text" placeholder="🔍 ค้นหา SKU หรือชื่อสินค้า..."
+          <input type="text" placeholder={`🔍 ${t("ค้นหา SKU หรือชื่อสินค้า...")}`}
             value={search} onChange={e => setSearch(e.target.value)}
             style={{flex:1, minWidth:160, padding:"8px 12px", borderRadius:10,
                     border:"1.5px solid var(--bdr)", fontSize:13, fontFamily:"inherit"}}/>
@@ -586,13 +671,13 @@ function FrontStoreView({ data, role, checkRequest }) {
         <div style={{display:"flex",gap:8,marginTop:8,alignItems:"center",flexWrap:"wrap"}}>
           <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch",maxWidth:"100%"}}>
             <Seg value={showMode} onChange={setShowMode} options={[
-              {value:"all",       label:"🗂️ ทั้งหมด"},
-              {value:"unchecked", label:`⬜ รอเช็ค${uncheckedCount>0?` (${uncheckedCount})`:""}`},
-              {value:"mismatch",  label:`❌ ไม่ตรง${mismatchCount>0?` (${mismatchCount})`:""}`},
-              {value:"reorder",   label:"🔄 ควรสั่ง"},
+              {value:"all",       label:`🗂️ ${t("ทั้งหมด")}`},
+              {value:"unchecked", label:`⬜ ${t("รอเช็ค")}${uncheckedCount>0?` (${uncheckedCount})`:""}`},
+              {value:"mismatch",  label:`❌ ${t("ไม่ตรง")}${mismatchCount>0?` (${mismatchCount})`:""}`},
+              {value:"reorder",   label:`🔄 ${t("ควรสั่ง")}`},
             ].concat(prodOwner.off ? [] : [
               // ⭐ โชว์เฉพาะตอนเปิดระบบผู้ดูแลสินค้าแล้ว (ไม่งั้นเป็นชิปที่กดแล้วว่างเปล่า)
-              {value:"mine", label:`⭐ ของฉัน${mySkus.size>0?` (${mySkus.size})`:""}`},
+              {value:"mine", label:`⭐ ${t("ของฉัน")}${mySkus.size>0?` (${mySkus.size})`:""}`},
             ])}/>
           </div>
           {supplierFilter && (
@@ -639,7 +724,7 @@ function FrontStoreView({ data, role, checkRequest }) {
           <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
             <span style={{fontSize:20}}>🎯</span>
             <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:14,fontWeight:800}}>ควรเช็คก่อน · {checkQueue.length} รายการ</div>
+              <div style={{fontSize:14,fontWeight:800}}>{t("ควรเช็คก่อน")} · {checkQueue.length} {t("รายการ")}</div>
               <div style={{fontSize:11,color:'var(--muted)'}}>
                 สินค้าขายดี (A) หรือไม่ได้เช็คนาน — แตะเพื่อไปเช็คตัวนั้นเลย
               </div>
@@ -694,7 +779,7 @@ function FrontStoreView({ data, role, checkRequest }) {
         </div>
       ) : filtered.length === 0 ? (
         <Card padding={true}>
-          <Empty title="ไม่พบสินค้า" sub="ลองเปลี่ยน filter หรือค้นหาใหม่"/>
+          <Empty title={t("ไม่พบสินค้า")} sub={t("ลองเปลี่ยน filter หรือค้นหาใหม่")}/>
         </Card>
       ) : (
         <div className="front-grid">
@@ -781,7 +866,7 @@ function FrontStoreView({ data, role, checkRequest }) {
           boxShadow: "0 4px 12px rgba(0,0,0,.15)",
           transition: "background .2s"
         }}>
-          {saving ? <>⏳ กำลังบันทึก {touchedWithValue}...</> : <>✏️ รอบันทึก {touchedWithValue}</> }
+          {saving ? <>⏳ {t("กำลังบันทึก {n}", { n: touchedWithValue })}...</> : <>✏️ {t("รอบันทึก {n}", { n: touchedWithValue })}</> }
         </div>
         {lastSavedTime && (
           <div style={{
@@ -826,7 +911,7 @@ function FrontStoreView({ data, role, checkRequest }) {
                       background:transferring?"#93c5fd":"#2563eb",color:"#fff",
                       cursor:transferring?"not-allowed":"pointer",fontSize:14,fontWeight:600,
                       fontFamily:"inherit"}}>
-              {transferring ? "กำลังโอน..." : "✅ ยืนยันโอน"}
+              {transferring ? t("กำลังโอน...") : `✅ ${t("ยืนยันโอน")}`}
             </button>
           </div>
         </div>
@@ -984,7 +1069,7 @@ function LockModal({ lockKey, data, productMap, products, lockOv, onUpdateLock, 
       .filter(([, v]) => v !== "" && v !== null && v !== undefined)
       .map(([sku, qty]) => ({ sku, qty: parseInt(qty) || 0, isNew: newSkus.has(sku) }));
     if (entries.length === 0) {
-      if (!isAuto) showToast("warn", "ยังไม่ได้กรอกจำนวน", "✏️");
+      if (!isAuto) showToast("warn", t("ยังไม่ได้กรอกจำนวน"), "✏️");
       return;
     }
     setSaving(true);
@@ -1421,15 +1506,15 @@ function WarehouseHomeView({ data, onNav }) {
       <div style={{ fontSize: 20 }}>{emoji}</div>
       <div style={{ fontSize: 26, fontWeight: 800, lineHeight: 1, color: n > 0 ? color : "var(--muted)" }}>{fmtN(n)}</div>
       <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>{label}</div>
-      {tab && n > 0 && <div style={{ fontSize: 11, color, fontWeight: 700, marginTop: 2 }}>แตะเพื่อจัดการ ›</div>}
+      {tab && n > 0 && <div style={{ fontSize: 11, color, fontWeight: 700, marginTop: 2 }}>{t("แตะเพื่อจัดการ ›")}</div>}
     </button>
   );
 
   return (
     <div style={{ width: "100%", minWidth: 0, boxSizing: "border-box" }}>
       <div style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 20, fontWeight: 800, color: "var(--text)" }}>🏭 งานคลังวันนี้</div>
-        <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>รวมงานค้าง + ลำดับหยิบของ ให้จบในหน้าเดียว</div>
+        <div style={{ fontSize: 20, fontWeight: 800, color: "var(--text)" }}>🏭 {t("งานคลังวันนี้")}</div>
+        <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 2 }}>{t("รวมงานค้าง + ลำดับหยิบของ ให้จบในหน้าเดียว")}</div>
       </div>
 
       {/* งานที่มอบหมายให้คนที่ล็อกอินอยู่โดยเฉพาะ — โชว์ก่อนงานรวมของทั้งคลัง */}
@@ -1439,29 +1524,29 @@ function WarehouseHomeView({ data, onNav }) {
         <div style={{ background: "#f0f9f2", border: "1.5px solid #a8d9b4", borderRadius: 14, padding: "18px 20px", marginBottom: 18, display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontSize: 28 }}>🎉</span>
           <div>
-            <div style={{ fontWeight: 800, color: "var(--g-700)" }}>ไม่มีงานค้าง</div>
-            <div style={{ fontSize: 12, color: "var(--muted)" }}>ออเดอร์เตรียมครบ · ของหิ้วกดส่งครบ · ของจัดเก็บครบ · หน้าร้านรับครบแล้ว</div>
+            <div style={{ fontWeight: 800, color: "var(--g-700)" }}>{t("ไม่มีงานค้าง")}</div>
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>{t("ออเดอร์เตรียมครบ · ของหิ้วกดส่งครบ · ของจัดเก็บครบ · หน้าร้านรับครบแล้ว")}</div>
           </div>
         </div>
       )}
 
       {/* ── ไทล์งานค้าง ── */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 22 }}>
-        <Tile emoji="📋" n={pendingOrders.length} label="ออเดอร์ต้องเตรียม" color="#1f7f44" tab="orders" />
+        <Tile emoji="📋" n={pendingOrders.length} label={t("ออเดอร์ต้องเตรียม")} color="#1f7f44" tab="orders" />
         {/* หิ้วไปแล้วแต่ลืมกดส่ง → สต็อกยังไม่ถูกโอนเข้าหน้าร้าน แตะไปหน้า "สรุปสินค้าออกจากคลัง" กดส่งได้เลย */}
-        <Tile emoji="🚶" n={carryToShip.length}   label="ของหิ้วรอกดส่ง"   color="#c2410c" tab="ordersummary" />
-        <Tile emoji="📥" n={putawayItems.length}  label="ของยังไม่จัดเก็บ"  color="#a07417" tab="storage" />
-        <Tile emoji="📊" n={neverCounted}          label="ล็อคยังไม่เคยนับ"  color="#1f6f8b" tab="stockcount" />
-        <Tile emoji="🚚" n={shipPending.length}    label="ของโอนรอหน้าร้านรับ" color="#7a5cc8" />
-        <Tile emoji="⚠️" n={shipShort.length}      label="หน้าร้านรับไม่ครบ" color="#dc2626" danger />
+        <Tile emoji="🚶" n={carryToShip.length}   label={t("ของหิ้วรอกดส่ง")}   color="#c2410c" tab="ordersummary" />
+        <Tile emoji="📥" n={putawayItems.length}  label={t("ของยังไม่จัดเก็บ")}  color="#a07417" tab="storage" />
+        <Tile emoji="📊" n={neverCounted}          label={t("ล็อคยังไม่เคยนับ")}  color="#1f6f8b" tab="stockcount" />
+        <Tile emoji="🚚" n={shipPending.length}    label={t("ของโอนรอหน้าร้านรับ")} color="#7a5cc8" />
+        <Tile emoji="⚠️" n={shipShort.length}      label={t("หน้าร้านรับไม่ครบ")} color="#dc2626" danger />
       </div>
 
       {/* ── หยิบของตามตำแหน่ง ── */}
       {pickPath.length > 0 && (
         <div style={{ marginBottom: 22 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 15, fontWeight: 800, color: "var(--g-700)" }}>🧭 หยิบของตามตำแหน่ง</span>
-            <span style={{ fontSize: 11, color: "var(--muted)" }}>เรียงตามล็อค เดินหยิบรอบเดียวจบ · แตะรูป/ชื่อดูรายละเอียด</span>
+            <span style={{ fontSize: 15, fontWeight: 800, color: "var(--g-700)" }}>🧭 {t("หยิบของตามตำแหน่ง")}</span>
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>{t("เรียงตามล็อค เดินหยิบรอบเดียวจบ · แตะรูป/ชื่อดูรายละเอียด")}</span>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {pickPath.map(grp => (
@@ -1470,9 +1555,9 @@ function WarehouseHomeView({ data, onNav }) {
                               background: grp.loc ? "#f2f9fd" : "#fff7ed", borderBottom: "1px solid var(--bdr)" }}>
                   <span style={{ fontSize: 14 }}>{grp.loc ? "📍" : "❓"}</span>
                   <span style={{ fontWeight: 800, fontSize: 14, color: grp.loc ? "#1f6f8b" : "#b45309" }}>
-                    {grp.loc || "ยังไม่มีตำแหน่งล็อค"}
+                    {grp.loc || t("ยังไม่มีตำแหน่งล็อค")}
                   </span>
-                  <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>{grp.items.length} รายการ</span>
+                  <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--muted)", fontWeight: 600 }}>{grp.items.length} {t("รายการ")}</span>
                 </div>
                 {grp.items.map(it => {
                   const img = it.p && it.p.imageUrl;
@@ -1497,7 +1582,7 @@ function WarehouseHomeView({ data, onNav }) {
                             ➕ เพิ่มตำแหน่ง
                           </span>
                         : <div style={{ textAlign: "right", flexShrink: 0 }}>
-                            <div style={{ fontSize: 14, fontWeight: 800, color: "var(--text)" }}>หยิบ {fmtN(it.qty)}</div>
+                            <div style={{ fontSize: 14, fontWeight: 800, color: "var(--text)" }}>{t("หยิบ {n}", { n: fmtN(it.qty) })}</div>
                             <div style={{ fontSize: 10, color: "var(--muted)" }}>คลังมี {fmtN((it.p && it.p.qtyWH) || 0)}</div>
                           </div>}
                     </button>
@@ -1518,16 +1603,16 @@ function WarehouseHomeView({ data, onNav }) {
       {shipView.length > 0 && (
         <div style={{ marginBottom: 12 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 15, fontWeight: 800, color: "var(--g-700)" }}>🚚 ของที่โอนไปหน้าร้าน</span>
-            <span style={{ fontSize: 11, color: "var(--muted)" }}>ติดตามว่าหน้าร้านรับครบหรือยัง</span>
+            <span style={{ fontSize: 15, fontWeight: 800, color: "var(--g-700)" }}>🚚 {t("ของที่โอนไปหน้าร้าน")}</span>
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>{t("ติดตามว่าหน้าร้านรับครบหรือยัง")}</span>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {shipView.map(s => {
               const short = s.receivedAt && s.receivedQty != null && s.receivedQty < s.qty;
               const waiting = !s.receivedAt;
               const chip = short ? { t: `รับ ${fmtN(s.receivedQty)}/${fmtN(s.qty)}`, bg: "#fef2f2", c: "#dc2626", b: "#fecaca" }
-                         : waiting ? { t: "รอรับ", bg: "#fffbeb", c: "#b45309", b: "#fde68a" }
-                         : { t: "รับครบ ✓", bg: "#f0f9f2", c: "#4fb472", b: "#bbe6c9" };
+                         : waiting ? { t: t("รอรับ"), bg: "#fffbeb", c: "#b45309", b: "#fde68a" }
+                         : { t: `${t("รับครบ")} ✓`, bg: "#f0f9f2", c: "#4fb472", b: "#bbe6c9" };
               const sp  = prodBySku[s.sku];
               const img = sp && sp.imageUrl;
               return (
@@ -2214,7 +2299,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
               ←
             </button>
             <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:15,fontWeight:800}}>📥 นับก่อนขึ้นชั้น</div>
+              <div style={{fontSize:15,fontWeight:800}}>📥 {t("นับก่อนขึ้นชั้น")}</div>
               <div style={{fontSize:11,color:'var(--muted)'}}>
                 นับสินค้าที่ยังไม่ได้เอาขึ้นชั้น — บันทึกยอดคลังได้เลย
               </div>
@@ -2230,7 +2315,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                 <span style={{fontSize:11,color:'#22c55e',fontWeight:600}}>✓ บันทึกแล้ว</span>
               )}
               {saveStatus === "error" && (
-                <span style={{fontSize:11,color:'#ef4444',fontWeight:700}}>⚠️ ไม่สำเร็จ กด 🔄 Reload</span>
+                <span style={{fontSize:11,color:'#ef4444',fontWeight:700}}>⚠️ {t("ไม่สำเร็จ กด 🔄 Reload")}</span>
               )}
             </div>
           </div>
@@ -2238,13 +2323,13 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
           {/* Info banner */}
           <div style={{background:'#eff6ff',border:'1.5px solid #bfdbfe',borderRadius:12,
                        padding:'10px 14px',fontSize:12,color:'#1e40af',lineHeight:1.5}}>
-            💡 ค้นหาหรือสแกนสินค้า แล้วกรอกจำนวนที่นับได้ — ระบบจะ<b>ตั้งยอดคลัง</b>ตามที่กรอก
+            💡 {t("ค้นหาหรือสแกนสินค้า แล้วกรอกจำนวนที่นับได้ — ระบบจะตั้งยอดคลังตามที่กรอก")}
             โดยไม่ต้องกำหนดตำแหน่งชั้น (ค่อยเอาขึ้นชั้นทีหลังได้)
           </div>
 
           {/* Search + Scan */}
           <div style={{display:'flex',gap:8,alignItems:'center'}}>
-            <input type="text" placeholder="🔍 ค้นหา SKU หรือชื่อสินค้า..."
+            <input type="text" placeholder={`🔍 ${t("ค้นหา SKU หรือชื่อสินค้า...")}`}
               value={stockSearch}
               onChange={e => setStockSearch(e.target.value.toUpperCase())}
               style={{flex:1,padding:'11px 14px',borderRadius:10,border:'1.5px solid var(--bdr)',
@@ -2305,7 +2390,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
           {/* รายการที่หยิบเข้ามานับ */}
           {!stockSearch.trim() && (
             preShelfList.length === 0 ? (
-              <Empty title="ยังไม่มีรายการนับ"
+              <Empty title={t("ยังไม่มีรายการนับ")}
                 sub="ค้นหาหรือสแกนสินค้าด้านบน แล้วแตะเพื่อเพิ่มเข้ามานับ"/>
             ) : (
               <div style={{display:'flex',flexDirection:'column',gap:10}}>
@@ -2432,7 +2517,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                   <span style={{fontSize:11,color:'#22c55e',fontWeight:600}}>✓ บันทึกแล้ว</span>
                 )}
                 {saveStatus === "error" && (
-                  <span style={{fontSize:11,color:'#ef4444',fontWeight:700}}>⚠️ บันทึกไม่สำเร็จ กด 🔄 Reload</span>
+                  <span style={{fontSize:11,color:'#ef4444',fontWeight:700}}>⚠️ {t("บันทึกไม่สำเร็จ กด 🔄 Reload")}</span>
                 )}
               </div>
             )}
@@ -2441,13 +2526,13 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
           {/* ── ยังไม่ได้เลือก supplier → แสดง list ── */}
           {!selSupplier && (
             <>
-              <input type="text" placeholder="🔍 ค้นหาซัพพลายเออร์..."
+              <input type="text" placeholder={`🔍 ${t("ค้นหาซัพพลายเออร์...")}`}
                 value={suppSearch} onChange={e => setSuppSearch(e.target.value)}
                 style={{padding:'10px 14px',borderRadius:10,border:'1.5px solid var(--bdr)',
                         fontSize:13,fontFamily:'inherit',background:'#fff'}}/>
               <div style={{display:'flex',flexDirection:'column',gap:8}}>
                 {filteredSuppliers.length === 0 && (
-                  <Empty title="ไม่พบซัพพลายเออร์" sub="ลองค้นหาด้วยคำอื่น"/>
+                  <Empty title={t("ไม่พบซัพพลายเออร์")} sub={t("ลองค้นหาด้วยคำอื่น")}/>
                 )}
                 {filteredSuppliers.map(sup => {
                   const prods = products.filter(p =>
@@ -2517,7 +2602,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
 
               {/* Search */}
               <div style={{display:'flex',gap:8,alignItems:'center'}}>
-                <input type="text" placeholder="🔍 ค้นหา SKU หรือชื่อสินค้า..."
+                <input type="text" placeholder={`🔍 ${t("ค้นหา SKU หรือชื่อสินค้า...")}`}
                   value={stockSearch}
                   onChange={e => setStockSearch(e.target.value.toUpperCase())}
                   style={{flex:1,padding:'9px 12px',borderRadius:10,border:'1.5px solid var(--bdr)',
@@ -2533,7 +2618,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
 
               {/* Product cards */}
               {supplierProducts.length === 0 ? (
-                <Empty title="ไม่มีสินค้าในคลัง" sub="ซัพพลายเออร์นี้ไม่มีสินค้าในคลังขณะนี้"/>
+                <Empty title={t("ไม่มีสินค้าในคลัง")} sub={t("ซัพพลายเออร์นี้ไม่มีสินค้าในคลังขณะนี้")}/>
               ) : supplierVisible.length === 0 ? (
                 <Empty title={countFilter === 'pending' ? '🎉 นับครบทุกรายการแล้ว' : 'ไม่พบรายการ'}
                   sub={countFilter === 'pending' ? 'ไม่มีรายการที่ค้างนับ' : 'ลองเปลี่ยนตัวกรองหรือคำค้นหา'}/>
@@ -2702,12 +2787,12 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
       <div style={{display:'flex',flexDirection:'column',gap:16,width:"100%",minWidth:0,boxSizing:"border-box"}}>
         <div>
           <div style={{fontSize:16,fontWeight:800}}>📊 นับ stock คลัง</div>
-          <div style={{fontSize:12,color:'var(--muted)',marginTop:2}}>ขั้น 1 — เลือกชั้น หรือค้นหาสินค้า</div>
+          <div style={{fontSize:12,color:'var(--muted)',marginTop:2}}>{t("ขั้น 1 — เลือกชั้น หรือค้นหาสินค้า")}</div>
         </div>
 
         {/* ── Search + Scan (global) ── */}
         <div style={{display:'flex',gap:8,alignItems:'center'}}>
-          <input type="text" placeholder="🔍 ค้นหา SKU หรือชื่อสินค้า..."
+          <input type="text" placeholder={`🔍 ${t("ค้นหา SKU หรือชื่อสินค้า...")}`}
             value={stockSearch}
             onChange={e => setStockSearch(e.target.value.toUpperCase())}
             style={{flex:1,padding:'11px 14px',borderRadius:10,border:'1.5px solid var(--bdr)',
@@ -2794,7 +2879,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                           </div>
                         )}
                         {lockKey && (
-                          <div style={{fontSize:11,color:'var(--muted)',marginTop:2}}>แตะเพื่อนับ ›</div>
+                          <div style={{fontSize:11,color:'var(--muted)',marginTop:2}}>{t("แตะเพื่อนับ ›")}</div>
                         )}
                       </div>
                     </div>
@@ -2825,7 +2910,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
             style={{padding:'11px 0',borderRadius:10,border:'2px dashed #2563eb',
                     background:'#eff6ff',color:'#1e40af',fontWeight:700,fontSize:13,
                     cursor:'pointer',fontFamily:'inherit'}}>
-            📥 นับก่อนขึ้นชั้น (ยังไม่มีตำแหน่ง)
+            📥 {t("นับก่อนขึ้นชั้น (ยังไม่มีตำแหน่ง)")}
           </button>
         </div>
         )}
@@ -2837,9 +2922,9 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
             <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
               <span style={{fontSize:20}}>🎯</span>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:14,fontWeight:800}}>ควรนับก่อน · {countQueue.length} รายการ</div>
+                <div style={{fontSize:14,fontWeight:800}}>{t("ควรนับก่อน")} · {countQueue.length} {t("รายการ")}</div>
                 <div style={{fontSize:11,color:'var(--muted)'}}>
-                  สินค้าขายดี (A) หรือไม่ได้นับนาน — แตะเพื่อไปนับเลย (ยังไม่มีตำแหน่ง = นับก่อนขึ้นชั้น)
+                  {t("สินค้าขายดี (A) หรือไม่ได้นับนาน — แตะเพื่อไปนับเลย (ยังไม่มีตำแหน่ง = นับก่อนขึ้นชั้น)")}
                 </div>
               </div>
             </div>
@@ -3101,7 +3186,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
             <div style={{fontSize:15,fontWeight:800}}>
               {isFloorLock(selLockKey) ? `📥 ${selLockKey} · ไม่ได้อยู่บนชั้น` : `ล็อค ${selLockKey}`}
             </div>
-            <div style={{fontSize:11,color:'var(--muted)'}}>ขั้น 3 — กรอกจำนวนที่นับได้จริง</div>
+            <div style={{fontSize:11,color:'var(--muted)'}}>{t("ขั้น 3 — กรอกจำนวนที่นับได้จริง")}</div>
           </div>
           <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}}>
             <div style={{display:'flex',gap:6}}>
@@ -3183,17 +3268,17 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                     background:'transparent',cursor:'pointer',fontFamily:'inherit',
                     fontSize:13,fontWeight:700,color: foundAddOpen ? '#1d4ed8' : 'var(--g-700)',
                     display:'flex',alignItems:'center',justifyContent:'center',gap:6}}>
-            {foundAddOpen ? '▲ ปิดค้นหา' : '🆕 เจอสินค้าอื่นในล็อคนี้? แตะเพื่อเพิ่ม'}
+            {foundAddOpen ? `▲ ${t("ปิดค้นหา")}` : `🆕 ${t("เจอสินค้าอื่นในล็อคนี้? แตะเพื่อเพิ่ม")}`}
           </button>
           {foundAddOpen && (
             <div style={{display:'flex',flexDirection:'column',gap:8,marginTop:4}}>
               <div style={{fontSize:11,color:'var(--muted)',lineHeight:1.5}}>
                 ของที่วางอยู่ในล็อคนี้จริงแต่ระบบไม่รู้ — เพิ่มแล้วกรอกจำนวนที่เจอ
-                ระบบจะบันทึก<b>ตำแหน่ง+จำนวนในล็อคนี้</b> (ไม่แก้ยอดคลังรวม)
+                {t("ระบบจะบันทึกตำแหน่ง+จำนวนในล็อคนี้ (ไม่แก้ยอดคลังรวม)")}
               </div>
               <div style={{display:'flex',gap:8,alignItems:'center'}}>
                 <input type="text" autoFocus
-                  placeholder="🔍 พิมพ์ชื่อหรือ SKU สินค้าที่เจอ..."
+                  placeholder={`🔍 ${t("พิมพ์ชื่อหรือ SKU สินค้าที่เจอ...")}`}
                   value={foundSearch}
                   onChange={function(e){ setFoundSearch(e.target.value); }}
                   style={{flex:1,minWidth:0,padding:'9px 12px',borderRadius:10,
@@ -3240,7 +3325,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
 
         {lockSkus.length === 0 ? (
           <Card padding={true}>
-            <Empty title="ล็อคนี้ยังไม่มีสินค้าในระบบ" sub="ถ้ามีของวางอยู่จริง แตะ '🆕 เจอสินค้าอื่นในล็อคนี้' ด้านบนเพื่อเพิ่มและนับ"/>
+            <Empty title={t("ล็อคนี้ยังไม่มีสินค้าในระบบ")} sub="ถ้ามีของวางอยู่จริง แตะ '🆕 เจอสินค้าอื่นในล็อคนี้' ด้านบนเพื่อเพิ่มและนับ"/>
           </Card>
         ) : (
           <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10,width:"100%",minWidth:0,boxSizing:"border-box"}}>
@@ -3296,7 +3381,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                                  fontSize:10,fontWeight:800,borderRadius:10,padding:'3px 8px',
                                  background:isFound?'rgba(219,234,254,.95)':!has?'rgba(241,245,249,.9)':matched?'rgba(220,252,231,.95)':'rgba(254,226,226,.95)',
                                  color:isFound?'#1d4ed8':!has?'var(--muted)':matched?'#166534':'var(--dang)'}}>
-                      {isFound ? '🆕 เจอในล็อค' : !has ? '⬜ รอนับ' : matched ? '✅ ตรง' : (diff>0?'⚠️ +'+diff:'⚠️ '+diff)}
+                      {isFound ? `🆕 ${t("เจอในล็อค")}` : !has ? `⬜ ${t("รอนับ")}` : matched ? `✅ ${t("ตรง")}` : (diff>0?'⚠️ +'+diff:'⚠️ '+diff)}
                     </div>
                   </div>
 
@@ -3385,7 +3470,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                               fontFamily:'inherit',color:'var(--muted)',
                               display:'flex',alignItems:'center',justifyContent:'center',gap:6}}>
                       <span style={{fontSize:16}}>🧮</span>
-                      <span>เครื่องคิดเลข</span>
+                      <span>{t("เครื่องคิดเลข")}</span>
                     </button>
                     {isFound && (
                       <div style={{display:'flex',alignItems:'center',gap:6,marginTop:2}}>
@@ -3467,7 +3552,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
             {saveStatus === "pending" && <><span style={{color:"#ccc"}}>●</span> รอบันทึก... ({scTouchedCount})</>}
             {saveStatus === "saving"  && <>↻ กำลังบันทึก...</>}
             {saveStatus === "saved"   && <>✓ บันทึกแล้ว</>}
-            {saveStatus === "error"   && <span style={{fontWeight:700}}>⚠️ บันทึกไม่สำเร็จ กด 🔄 Reload</span>}
+            {saveStatus === "error"   && <span style={{fontWeight:700}}>⚠️ {t("บันทึกไม่สำเร็จ กด 🔄 Reload")}</span>}
             {saveStatus === "idle"    && <>✏️ รอบันทึก {scTouchedCount}</>}
           </div>
         </div>
@@ -6174,7 +6259,7 @@ ${labelsHTML}
       <div className="no-print">
         <div className="page-head">
           <div>
-            <div className="page-title">พิมพ์ Label สินค้า</div>
+            <div className="page-title">{t("พิมพ์ Label สินค้า")}</div>
             <div className="page-sub">
               {printMode === "a4"
                 ? "A4 · 5 คอลัมน์ · 70 ใบ/หน้า"
@@ -6221,11 +6306,11 @@ ${labelsHTML}
         {/* Add product row */}
         <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14,alignItems:"flex-end"}}>
           <div style={{flex:1,minWidth:220}}>
-            <div style={{fontSize:11,color:"var(--muted)",marginBottom:4,fontWeight:600}}>ค้นหาสินค้า / พิมพ์ SKU โดยตรง</div>
+            <div style={{fontSize:11,color:"var(--muted)",marginBottom:4,fontWeight:600}}>{t("ค้นหาสินค้า / พิมพ์ SKU โดยตรง")}</div>
             <input list="lbl-sku-list" value={searchVal}
               onChange={e => setSearchVal(e.target.value)}
               onKeyDown={e => e.key === "Enter" && addItem()}
-              placeholder="เช่น HL00170 หรือ ชื่อสินค้า..."
+              placeholder={t("เช่น HL00170 หรือ ชื่อสินค้า...")}
               style={{width:"100%",padding:"9px 12px",borderRadius:8,border:"1.5px solid var(--bdr)",
                       fontFamily:"inherit",fontSize:13,boxSizing:"border-box"}}/>
             <datalist id="lbl-sku-list">
@@ -6233,7 +6318,7 @@ ${labelsHTML}
             </datalist>
           </div>
           <div>
-            <div style={{fontSize:11,color:"var(--muted)",marginBottom:4,fontWeight:600}}>จำนวนใบ</div>
+            <div style={{fontSize:11,color:"var(--muted)",marginBottom:4,fontWeight:600}}>{t("จำนวนใบ")}</div>
             <input type="number" value={qtyVal} min={1} max={700}
               onChange={e => setQtyVal(e.target.value)}
               onKeyDown={e => e.key === "Enter" && addItem()}
@@ -6318,7 +6403,7 @@ ${labelsHTML}
                        background:"var(--g-50)",borderRadius:12,border:"1.5px dashed var(--bdr)",marginBottom:14}}>
             <div style={{fontSize:28,marginBottom:8}}>🏷️</div>
             <div style={{fontWeight:700,marginBottom:4}}>ยังไม่มีสินค้า</div>
-            <div style={{fontSize:12}}>ค้นหาสินค้าหรือพิมพ์ SKU ด้านบน แล้วกด Enter หรือ "+ เพิ่ม"</div>
+            <div style={{fontSize:12}}>{t('ค้นหาสินค้าหรือพิมพ์ SKU ด้านบน แล้วกด Enter หรือ "+ เพิ่ม"')}</div>
           </div>
         )}
 
@@ -6872,9 +6957,9 @@ function MtoJobView({ data }) {
     <div style={{ padding: "16px", maxWidth: 700, margin: "0 auto" }}>
       <Toast toast={toast} onClose={hideToast} />
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-        <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-800)" }}>🎁 งานจัดพิเศษ (MTO)</div>
+        <div style={{ fontSize: 20, fontWeight: 800, color: "var(--g-800)" }}>🎁 {t("งานจัดพิเศษ (MTO)")}</div>
         <button className="btn primary" onClick={() => setView("create")} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          ➕ สร้างงานใหม่
+          ➕ {t("สร้างงานใหม่")}
         </button>
       </div>
 
@@ -6894,7 +6979,7 @@ function MtoJobView({ data }) {
         <div style={{ textAlign: "center", padding: "60px 20px", color: "var(--muted)" }}>
           <div style={{ fontSize: 48, marginBottom: 12 }}>🎁</div>
           <div style={{ fontSize: 15, fontWeight: 600 }}>{showMineOnly ? "ยังไม่มีงานที่มอบหมายให้คุณ" : "ยังไม่มีงานจัดพิเศษ"}</div>
-          <div style={{ fontSize: 13, marginTop: 4 }}>{showMineOnly ? "" : 'กดปุ่ม "สร้างงานใหม่" เพื่อเริ่มต้น'}</div>
+          <div style={{ fontSize: 13, marginTop: 4 }}>{showMineOnly ? "" : t('กดปุ่ม "สร้างงานใหม่" เพื่อเริ่มต้น')}</div>
         </div>
         ); return (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -6945,28 +7030,28 @@ function MtoJobView({ data }) {
   if (view === "create") return (
     <div style={{ padding: "16px", maxWidth: 500, margin: "0 auto" }}>
       <Toast toast={toast} onClose={hideToast} />
-      <div style={{ fontSize: 18, fontWeight: 800, color: "var(--g-800)", marginBottom: 20 }}>➕ สร้างงานใหม่</div>
+      <div style={{ fontSize: 18, fontWeight: 800, color: "var(--g-800)", marginBottom: 20 }}>➕ {t("สร้างงานใหม่")}</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         <label>
-          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", marginBottom: 4 }}>ชื่องาน *</div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", marginBottom: 4 }}>{t("ชื่องาน *")}</div>
           <input
             value={newJob.jobName}
             onChange={e => setNewJob(p => ({ ...p, jobName: e.target.value }))}
-            placeholder="เช่น ชุดของขวัญวันเกิดลูกค้า A"
+            placeholder={t("เช่น ชุดของขวัญวันเกิดลูกค้า A")}
             style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 14, boxSizing: "border-box" }}
           />
         </label>
         <label>
-          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", marginBottom: 4 }}>ลูกค้า (ไม่จำเป็น)</div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", marginBottom: 4 }}>{t("ลูกค้า (ไม่จำเป็น)")}</div>
           <input
             value={newJob.customer}
             onChange={e => setNewJob(p => ({ ...p, customer: e.target.value }))}
-            placeholder="ชื่อลูกค้า"
+            placeholder={t("ชื่อลูกค้า")}
             style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 14, boxSizing: "border-box" }}
           />
         </label>
         <label>
-          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", marginBottom: 4 }}>ราคา (ไม่จำเป็น)</div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", marginBottom: 4 }}>{t("ราคา (ไม่จำเป็น)")}</div>
           <input
             type="number" value={newJob.price}
             onChange={e => setNewJob(p => ({ ...p, price: e.target.value }))}
@@ -6975,7 +7060,7 @@ function MtoJobView({ data }) {
           />
         </label>
         <label>
-          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", marginBottom: 4 }}>URL รูป (ไม่จำเป็น)</div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", marginBottom: 4 }}>{t("URL รูป (ไม่จำเป็น)")}</div>
           <input
             value={newJob.imageUrl}
             onChange={e => setNewJob(p => ({ ...p, imageUrl: e.target.value }))}
@@ -7052,13 +7137,13 @@ function MtoJobView({ data }) {
               👤 ผู้รับผิดชอบ: <b style={{ color: activeJob.assigneeName ? "var(--text)" : "var(--muted)" }}>{activeJob.assigneeName || "ยังไม่มอบหมาย"}</b>
             </span>
             <button className="btn ghost" style={{ marginLeft: "auto", fontSize: 12, padding: "5px 10px" }}
-              onClick={() => { setShowAssignPicker(true); loadStaffRoster(); }}>เปลี่ยน</button>
+              onClick={() => { setShowAssignPicker(true); loadStaffRoster(); }}>{t("เปลี่ยน")}</button>
           </div>
 
           {showAssignPicker && (
             <div style={{ marginTop: 10, background: "var(--g-50)", border: "1px solid var(--g-500)", borderRadius: 10, padding: 10 }}>
               {loadingRoster ? (
-                <div style={{ fontSize: 12.5, color: "var(--muted)", textAlign: "center", padding: 8 }}>กำลังโหลดรายชื่อ…</div>
+                <div style={{ fontSize: 12.5, color: "var(--muted)", textAlign: "center", padding: 8 }}>{t("กำลังโหลดรายชื่อ…")}</div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {(staffRoster || []).map(st => (
@@ -7085,14 +7170,14 @@ function MtoJobView({ data }) {
         {/* Add materials (open jobs only) */}
         {isOpen && (
           <div style={{ background: "#fff", border: "1.5px solid var(--bdr)", borderRadius: 12, padding: "16px", marginBottom: 16 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "var(--g-800)", marginBottom: 12 }}>เพิ่มวัตถุดิบที่ใช้</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "var(--g-800)", marginBottom: 12 }}>{t("เพิ่มวัตถุดิบที่ใช้")}</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
                 <div style={{ position: "relative", flex: 1 }}>
                   <input
                     value={search}
                     onChange={e => setSearch(e.target.value)}
-                    placeholder="ค้นหาสินค้า (SKU หรือชื่อ)"
+                    placeholder={t("ค้นหาสินค้า (SKU หรือชื่อ)")}
                     style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 14, boxSizing: "border-box" }}
                   />
                   {searchResults.length > 0 && (
@@ -7139,7 +7224,7 @@ function MtoJobView({ data }) {
             วัตถุดิบ {materials.length > 0 ? `(${materials.length} รายการ)` : ""}
           </div>
           {materials.length === 0 ? (
-            <div style={{ color: "var(--muted)", fontSize: 13, textAlign: "center", padding: "20px 0" }}>ยังไม่มีวัตถุดิบ</div>
+            <div style={{ color: "var(--muted)", fontSize: 13, textAlign: "center", padding: "20px 0" }}>{t("ยังไม่มีวัตถุดิบ")}</div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {materials.map((m, idx) => {
@@ -7156,7 +7241,7 @@ function MtoJobView({ data }) {
                   {imgSrc ? (
                     <img src={imgSrc} alt={m.sku} loading="lazy"
                       onClick={() => setMatLightbox({ url: imgSrc, name: m.name || m.sku })}
-                      title="แตะดูรูปใหญ่"
+                      title={t("แตะดูรูปใหญ่")}
                       style={{ width: 44, height: 44, borderRadius: 8, objectFit: "cover", flexShrink: 0, border: "1px solid var(--bdr)", background: "#fff", cursor: "zoom-in" }}
                       onError={e => { e.currentTarget.style.display = "none"; }} />
                   ) : (
@@ -7225,7 +7310,7 @@ function MtoJobView({ data }) {
                 textAlign:"center",fontSize:12,color:"#b45309",
                 background:"#fffbeb",border:"1px solid #fde68a",
                 borderRadius:8,padding:"6px 12px",marginBottom:6,fontWeight:600,
-              }}>⚠️ ไม่มีอินเทอร์เน็ต — ไม่สามารถบันทึก/ปิดงานได้</div>
+              }}>⚠️ {t("ไม่มีอินเทอร์เน็ต — ไม่สามารถบันทึก/ปิดงานได้")}</div>
             )}
             {/* ปุ่มบันทึก — เก็บวัตถุดิบไว้โดยยังไม่ปิดงาน (ยังไม่ตัดสต็อก) */}
             <button className="btn" onClick={handleSaveDraft}
