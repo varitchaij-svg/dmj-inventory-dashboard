@@ -100,9 +100,10 @@ describe('การ์ดนับ ต้องบอกชัดว่า "บ�
     expect(STOCKCOUNT).toContain('const saved = has && savedQtys[p.sku] === num;');
   });
   it('badge มุมขวาบนไม่ใช้ "!" แดงตอน mismatch อีก (เข้าใจผิดว่าเซฟไม่ได้)', () => {
-    // การ์ดต้องไม่ตัดสิน badge/สีจาก matched แบบ error — ใช้ saved/pending แทน
-    const m = STOCKCOUNT.match(/\{saved \? '✓' : '⏳'\}/);
-    expect(m, 'badge ต้องเป็น ✓ (saved) / ⏳ (รอเซฟ) ไม่ใช่ !/แดง').toBeTruthy();
+    // การ์ดต้องไม่ตัดสิน badge/สีจาก matched แบบ error — ใช้ saved/failed/pending แทน
+    // ✓ = บันทึกเข้าคลังแล้ว · ⚠️ = พยายามเซฟแต่ล้มเหลว (ยังไม่เข้า ZORT) · ⏳ = รอ auto-save
+    const m = STOCKCOUNT.match(/\{saved \? '✓' : failed \? '⚠️' : '⏳'\}/);
+    expect(m, "badge ต้องเป็น ✓ (saved) / ⚠️ (failed) / ⏳ (รอเซฟ) — mismatch ไม่ใช่ error").toBeTruthy();
   });
   it('savedQtys ถูกอัปเดตในทุก handler ที่เซฟสำเร็จ (handleSave/handleConfirm/handleSavePreShelf)', () => {
     const count = (STOCKCOUNT.match(/setSavedQtys\(prev => \{ const n = \{ \.\.\.prev \};/g) || []).length;
@@ -111,6 +112,46 @@ describe('การ์ดนับ ต้องบอกชัดว่า "บ�
   it('ปุ่มบันทึกโชว์จำนวน "ที่ยังไม่เซฟ" (suppUnsavedCount) ไม่ใช่จำนวนรวม', () => {
     expect(STOCKCOUNT).toContain('suppUnsavedCount');
     expect(STOCKCOUNT).toContain('✓ บันทึกครบแล้ว');
+  });
+});
+
+describe('save ล้มเหลวต้องเห็นชัด ไม่ค้าง "⏳ กำลังบันทึก…" เงียบ ๆ (จอโกหก)', () => {
+  const handleSave = grabHandler(STOCKCOUNT, 'handleSave');
+
+  it('มี state failedSkus + saveErr (ติดตามการ์ดที่เซฟพลาด + เหตุผลจริง)', () => {
+    expect(STOCKCOUNT).toMatch(/const \[failedSkus, setFailedSkus\]\s*=\s*uS\(new Set\(\)\)/);
+    expect(STOCKCOUNT).toMatch(/const \[saveErr, setSaveErr\]\s*=\s*uS\(''\)/);
+  });
+
+  it('handleSave: save พลาด (success===false) → set failedSkus + saveErr จากเหตุผลจริง', () => {
+    expect(handleSave).toContain('result.success === false');
+    expect(handleSave).toContain('setFailedSkus(');
+    expect(handleSave).toMatch(/setSaveErr\(result\.error/);
+  });
+
+  it('handleSave: สำเร็จ → เคลียร์ failedSkus ของ SKU นั้น + เคลียร์ saveErr', () => {
+    // ต้องมีทั้ง add (ตอนพลาด) และ delete (ตอนสำเร็จ)
+    expect(handleSave).toMatch(/n\.delete\(e\.sku\)/);
+    expect(handleSave).toContain("setSaveErr('')");
+  });
+
+  it('confirmStockCount (เข้าคลัง+ZORT) รันก่อน syncLockData (ตำแหน่ง) — ของสำคัญไม่ถูก POST ตำแหน่งบัง/หน่วง', () => {
+    const iConfirm = handleSave.indexOf('confirmStockCount(');
+    const iLock    = handleSave.indexOf('syncLockData(');
+    expect(iConfirm).toBeGreaterThan(-1);
+    expect(iLock).toBeGreaterThan(-1);
+    expect(iConfirm, 'confirmStockCount ต้องอยู่ก่อน syncLockData ใน handleSave').toBeLessThan(iLock);
+  });
+
+  it('การ์ดคิด failed = has && !saved && failedSkus.has(sku) และโชว์ "ยังไม่บันทึก"', () => {
+    expect(STOCKCOUNT).toContain('const failed = has && !saved && failedSkus.has(p.sku);');
+    expect(STOCKCOUNT).toContain('ยังไม่บันทึก');
+  });
+
+  it('แถบสถานะโชว์เหตุผลจริง (saveErr) แบบค้าง ไม่ผูกกับ saveStatus ที่ cycle กลับ pending', () => {
+    // เดิมโชว์เฉพาะตอน saveStatus === "error" ซึ่ง cycle หายไปตอน auto-save ลองใหม่
+    const m = STOCKCOUNT.match(/\{saveErr && \(/);
+    expect(m, 'ต้องโชว์ saveErr เมื่อมีค่า (ไม่ผูกกับ saveStatus)').toBeTruthy();
   });
 });
 

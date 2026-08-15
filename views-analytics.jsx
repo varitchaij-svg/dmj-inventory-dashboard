@@ -1735,6 +1735,10 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
   // "ที่นับไปบันทึกแล้ว = N" ต่อการ์ด · แก้เลขใหม่หลังบันทึก = savedQtys ไม่ตรง num → ขึ้น "รอบันทึก"
   // จนกว่า auto-save/ปุ่มจะเซฟรอบใหม่ · ตอบคำถามเจ้าของ "นับต่างจากระบบแล้วมันแก้จำนวนจริงไหม" (แก้จริง)
   const [savedQtys, setSavedQtys]           = uS({});
+  // sku ที่ "พยายามบันทึกแล้วล้มเหลว" — ต้องโชว์บนการ์ดให้เห็นชัด (ไม่ปล่อยค้าง "⏳ กำลังบันทึก…"
+  // ตลอดไปทั้งที่จริง ๆ save พลาด = จอโกหก · เจ้าของแจ้ง ส.ค. 2026: "ขึ้นกำลังบันทึกแต่ไม่เซฟ/ไม่เข้า ZORT")
+  const [failedSkus, setFailedSkus]         = uS(new Set());
+  const [saveErr, setSaveErr]               = uS(''); // เหตุผลจริงจาก GAS (โชว์ให้เห็น + ไล่สาเหตุได้)
   const [unscanRec, setUnscanRec]           = uS({}); // { sku: จำนวนที่บันทึกว่า "ขายไม่สแกน" }
   const [unscanBusy, setUnscanBusy]         = uS(null); // sku ที่กำลังบันทึก
   // saveStatus: "idle" | "pending" | "saving" | "saved" | "error"
@@ -1767,6 +1771,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     setCheckedQtys(saved);
     localEditsRef.current = new Set(Object.keys(saved));
     setSavedSkus(new Set()); setSavedQtys({}); setLastSavedTime(null);
+    setFailedSkus(new Set()); setSaveErr('');
     setLastSavedSnap(JSON.stringify(saved)); // กัน auto-save เด้งทันทีหลัง restore
     setStockSearch(''); setSaveStatus("idle"); setCountFilter('all');
     setFoundSkus([]); setFoundAddOpen(false); setFoundSearch('');
@@ -2027,33 +2032,51 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     //    ตอนนี้รวมทั้ง 2 โหมดมาที่ handleSave ตัวเดียว: ตำแหน่ง (ตามล็อค หรือจัดกลุ่มตาม skuToLock
     //    ของแต่ละ SKU ในโหมดซัพพลายเออร์) + confirmStockCount เสมอ
     const { lockEntries, confirmEntries } = splitFoundEntries(entries);
-    if (selLockKey) {
-      await syncLockData(selLockKey, lockEntries);
-    } else {
-      // ทุกโหมดที่ไม่ได้อยู่ในล็อคเดียว (ตามซัพพลายเออร์ / ตามคำขอเช็คหลายซัพ / นับก่อนขึ้นชั้น) →
-      // จัดกลุ่มตำแหน่งตาม skuToLock ของแต่ละ SKU (ตัวไหนไม่มีล็อคก็ข้ามตำแหน่งไป แต่ยังเข้าคลัง)
-      const byLock = {};
-      entries.forEach(e => { const lk = skuToLock[e.sku]; if (lk) (byLock[lk] = byLock[lk] || []).push(e); });
-      for (const [lk, es] of Object.entries(byLock)) await syncLockData(lk, es);
-    }
+    // ⭐ commit "ยอดคลัง + ZORT" ก่อน (ส่วนสำคัญที่สุดที่ผู้ใช้รอเห็นเข้า ZORT) — การบันทึก "ตำแหน่ง"
+    //    (syncLockData) เป็น bookkeeping รอง · ทำตำแหน่งก่อนแล้ว POST ตำแหน่งค้าง/ล้ม (GAS ตอบ HTML
+    //    ตอน execution ซ้อนกัน) จะ **หน่วง/บัง** confirmStockCount ที่เป็นตัวเข้า ZORT จริง → จอค้าง
+    //    "⏳ กำลังบันทึก…" นาน ทั้งที่ยอดยังไม่ถึง ZORT · ถ้า confirm สำเร็จแล้วตำแหน่งพลาด ของก็เข้า
+    //    ZORT แล้ว (สถานะ saved ไม่ถูกบล็อกด้วยเรื่องรอง)
     const result = confirmEntries.length ? await confirmStockCount(confirmEntries) : { success: true };
     if (result.conflict) {
       setSaveStatus("error");
+      setSaveErr('ข้อมูลถูกแก้ไขโดยคนอื่น — กด 🔄 Reload');
+      setFailedSkus(prev => { const n = new Set(prev); entries.forEach(e => n.add(e.sku)); return n; });
       showToast('error', 'ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด', '⚠️');
-    } else if (result.success !== false) {
-      setSavedSkus(new Set(entries.map(e => e.sku)));
-      setSavedQtys(prev => { const n = { ...prev }; entries.forEach(e => { n[e.sku] = e.qty; }); return n; });
-      setLastSavedTime(new Date());
-      setLastSavedSnap(snap); // กัน auto-save วนซ้ำ
-      setSaveStatus("saved");
-      setTimeout(() => setSaveStatus("idle"), 3000);
-      const nFound = entries.length - confirmEntries.length;
-      showToast('success', 'บันทึก ' + entries.length + ' รายการ' +
-        (nFound > 0 ? ' (🆕 ' + nFound + ' บันทึกตำแหน่งอย่างเดียว)' : ' — อัปเดตคลัง + ZORT'), '✅');
-    } else {
-      setSaveStatus("error");
-      if (!isAuto) showToast('error', 'บันทึกไม่สำเร็จ', '❌');
+      return;
     }
+    if (result.success === false) {
+      // ⚠️ save ล้มเหลว — ห้ามค้าง "⏳ กำลังบันทึก…" เงียบ ๆ (จอโกหก) · โชว์เหตุผลจริงจาก GAS ให้เห็น
+      //    ทั้งบนการ์ด (failedSkus) และแถบสถานะ (saveErr) เพื่อให้ผู้ใช้/เจ้าของเห็นสาเหตุและกดลองใหม่ได้
+      setSaveStatus("error");
+      setSaveErr(result.error || 'บันทึกไม่สำเร็จ');
+      setFailedSkus(prev => { const n = new Set(prev); entries.forEach(e => n.add(e.sku)); return n; });
+      if (!isAuto) showToast('error', result.error || 'บันทึกไม่สำเร็จ', '❌');
+      return;
+    }
+    // สำเร็จ — บันทึกตำแหน่งตามหลัง (ไม่บล็อกสถานะ saved · ตำแหน่งพลาด = ของยังเข้า ZORT แล้ว)
+    try {
+      if (selLockKey) {
+        await syncLockData(selLockKey, lockEntries);
+      } else {
+        // ทุกโหมดที่ไม่ได้อยู่ในล็อคเดียว (ตามซัพพลายเออร์ / ตามคำขอเช็คหลายซัพ / นับก่อนขึ้นชั้น) →
+        // จัดกลุ่มตำแหน่งตาม skuToLock ของแต่ละ SKU (ตัวไหนไม่มีล็อคก็ข้ามตำแหน่งไป แต่ยังเข้าคลังแล้ว)
+        const byLock = {};
+        entries.forEach(e => { const lk = skuToLock[e.sku]; if (lk) (byLock[lk] = byLock[lk] || []).push(e); });
+        for (const [lk, es] of Object.entries(byLock)) await syncLockData(lk, es);
+      }
+    } catch (_) { /* ตำแหน่งเป็นเรื่องรอง — ของเข้า ZORT แล้ว ไม่ถือว่าล้มเหลว */ }
+    setSavedSkus(new Set(entries.map(e => e.sku)));
+    setSavedQtys(prev => { const n = { ...prev }; entries.forEach(e => { n[e.sku] = e.qty; }); return n; });
+    setFailedSkus(prev => { const n = new Set(prev); entries.forEach(e => n.delete(e.sku)); return n; });
+    setSaveErr('');
+    setLastSavedTime(new Date());
+    setLastSavedSnap(snap); // กัน auto-save วนซ้ำ
+    setSaveStatus("saved");
+    setTimeout(() => setSaveStatus("idle"), 3000);
+    const nFound = entries.length - confirmEntries.length;
+    showToast('success', 'บันทึก ' + entries.length + ' รายการ' +
+      (nFound > 0 ? ' (🆕 ' + nFound + ' บันทึกตำแหน่งอย่างเดียว)' : ' — อัปเดตคลัง + ZORT'), '✅');
   };
 
   // Auto-save with 3-second debounce — save เฉพาะเมื่อค่าต่างจากที่ save ล่าสุด (กัน loop)
@@ -2087,10 +2110,14 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     setConfirming(false);
     if (result.conflict) {
       setSaveStatus("error");
+      setSaveErr('ข้อมูลถูกแก้ไขโดยคนอื่น — กด 🔄 Reload');
+      setFailedSkus(prev => { const n = new Set(prev); entries.forEach(e => n.add(e.sku)); return n; });
       showToast('error', 'ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด', '⚠️');
     } else if (result.success !== false) {
       setSavedSkus(new Set(entries.map(e => e.sku)));
       setSavedQtys(prev => { const n = { ...prev }; entries.forEach(e => { n[e.sku] = e.qty; }); return n; });
+      setFailedSkus(prev => { const n = new Set(prev); entries.forEach(e => n.delete(e.sku)); return n; });
+      setSaveErr('');
       setLastSavedTime(new Date());
       setLastSavedSnap(snap); // กัน auto-save commit ซ้ำหลังกดยืนยันเอง
       setSaveStatus("saved");
@@ -2100,7 +2127,9 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
         (nFound > 0 ? ' (🆕 ' + nFound + ' บันทึกตำแหน่งอย่างเดียว)' : ' — อัปเดตคลัง + ZORT'), '✅');
     } else {
       setSaveStatus("error");
-      showToast('error', 'ยืนยันไม่สำเร็จ', '❌');
+      setSaveErr(result.error || 'ยืนยันไม่สำเร็จ');
+      setFailedSkus(prev => { const n = new Set(prev); entries.forEach(e => n.add(e.sku)); return n; });
+      showToast('error', result.error || 'ยืนยันไม่สำเร็จ', '❌');
     }
   };
 
@@ -2535,11 +2564,15 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                 {saveStatus === "pending" && (
                   <span style={{fontSize:11,color:'#b45309',fontWeight:600}}>⏳ จะบันทึกอัตโนมัติใน 3 วิ…</span>
                 )}
-                {saveStatus === "saved" && (
+                {saveStatus === "saved" && !saveErr && (
                   <span style={{fontSize:11,color:'#22c55e',fontWeight:600}}>✓ บันทึกเข้าคลัง + ZORT แล้ว</span>
                 )}
-                {saveStatus === "error" && (
-                  <span style={{fontSize:11,color:'#ef4444',fontWeight:700}}>⚠️ {t("บันทึกไม่สำเร็จ กด 🔄 Reload")}</span>
+                {/* ⚠️ แสดงเหตุผลจริงจาก GAS แบบค้าง (ไม่ผูกกับ saveStatus ที่ cycle กลับเป็น pending
+                    ตอน auto-save ลองใหม่) — เจ้าของ/พนักงานต้องเห็นว่าทำไมของไม่เข้า ZORT แล้วกด 💾 ลองใหม่ */}
+                {saveErr && (
+                  <span style={{fontSize:11,color:'#ef4444',fontWeight:700,maxWidth:220,textAlign:'right',lineHeight:1.3}}>
+                    ⚠️ ยังไม่เข้าระบบ: {saveErr} — แตะ 💾 บันทึก
+                  </span>
                 )}
               </div>
             )}
@@ -2658,10 +2691,12 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                     //    นี่คือสิ่งที่เจ้าของถามหา: นับต่างจากระบบ (mismatch) ก็ "แก้จำนวนจริง" แล้ว
                     //    ตราบใดที่บันทึกเข้าคลังสำเร็จ · แก้เลขใหม่หลังเซฟ = ไม่ตรง → กลับเป็น "รอบันทึก"
                     const saved = has && savedQtys[p.sku] === num;
+                    // ⚠️ นับแล้ว "พยายามเซฟแต่ล้มเหลว" — ต้องเห็นชัดว่ายังไม่เข้า ZORT (ไม่ค้าง ⏳ เงียบ ๆ)
+                    const failed = has && !saved && failedSkus.has(p.sku);
                     // การ์ดที่นับแล้วแต่ยังไม่ได้เซฟ (auto-save กำลังจะยิงใน 3 วิ) — ไม่ใช่ error
-                    const pendingSave = has && !saved;
-                    const bdr   = !has ? 'var(--bdr)' : saved ? 'var(--g-500)' : '#f59e0b';
-                    const bgCard = saved ? '#f0fdf4' : !has ? '#fff' : '#fffbeb';
+                    const pendingSave = has && !saved && !failed;
+                    const bdr   = !has ? 'var(--bdr)' : saved ? 'var(--g-500)' : failed ? '#ef4444' : '#f59e0b';
+                    const bgCard = saved ? '#f0fdf4' : !has ? '#fff' : failed ? '#fef2f2' : '#fffbeb';
 
                     return (
                       <div key={p.sku} style={{
@@ -2720,13 +2755,13 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
                             <div style={{
                               position:'absolute',top:6,right:6,
                               minWidth:26,height:26,borderRadius:13,padding:'0 6px',
-                              background: saved ? 'var(--g-500)' : '#f59e0b',
+                              background: saved ? 'var(--g-500)' : failed ? '#ef4444' : '#f59e0b',
                               color:'#fff',fontSize:saved?15:13,fontWeight:900,
                               display:'flex',alignItems:'center',justifyContent:'center',gap:3,
                               border:'2px solid rgba(255,255,255,.95)',
                               boxShadow:'0 1px 4px rgba(0,0,0,.35)',
                             }}>
-                              {saved ? '✓' : '⏳'}
+                              {saved ? '✓' : failed ? '⚠️' : '⏳'}
                             </div>
                           )}
                         </div>
@@ -2749,13 +2784,16 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
 
                           {/* Count result — บอกชัดว่า "บันทึกเข้าคลังแล้วหรือยัง" ไม่ใช่แค่ ตรง/ไม่ตรง
                               · saved → เขียว "บันทึกแล้ว · คลัง = N" (นับต่างจากเดิมก็แก้คลังจริงแล้ว)
+                              · failed → แดง "ยังไม่บันทึก — แตะ 💾 ลองใหม่" (ห้ามค้าง ⏳ เงียบทั้งที่ save พลาด)
                               · pending → ส้ม "นับได้ N · กำลังบันทึก…" (auto-save ยิงใน 3 วิ) */}
                           {has && (
                             <div style={{fontSize:11,fontWeight:700,textAlign:'center',borderRadius:8,padding:'4px 6px',
-                                          background: saved ? '#dcfce7' : '#fef3c7',
-                                          color: saved ? '#166534' : '#92400e'}}>
+                                          background: saved ? '#dcfce7' : failed ? '#fee2e2' : '#fef3c7',
+                                          color: saved ? '#166534' : failed ? '#b91c1c' : '#92400e'}}>
                               {saved
                                 ? (diff === 0 ? `✅ บันทึกแล้ว · คลัง = ${num}` : `✅ บันทึกแล้ว · แก้คลังเป็น ${num} (เดิม ${sys})`)
+                                : failed
+                                ? `⚠️ ยังไม่บันทึก (นับได้ ${num}) — แตะ 💾 บันทึก`
                                 : `นับได้ ${num}${diff !== 0 ? ` (เดิม ${sys})` : ''} · ⏳ กำลังบันทึก…`}
                             </div>
                           )}
