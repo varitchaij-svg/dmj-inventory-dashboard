@@ -2097,6 +2097,28 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     return () => clearTimeout(timer);
   }, [checkedQtys, saving, scSavableCount, selLockKey, selSupplier, lastSavedSnap]);
 
+  // ⚠️ iOS/Android แช่แข็ง setTimeout ตอนพับแอป/ล็อกจอ/สลับแอป → debounce 3 วิข้างบน**อาจไม่ยิง**
+  //    บนมือถือ (เจ้าของแจ้ง ส.ค. 2026: "คอม autosave ได้ แต่ android/ios ไม่ได้") · บนคอมแท็บ
+  //    active ตลอด timer จึงยิงเสมอ — บทเรียนเดียวกับ NotiBell/login handoff ที่ห้ามพึ่ง timer อย่างเดียว
+  //    → flush ยอดที่ค้างทันทีตอนแอปกำลังถูกพับ (visibilitychange=hidden / pagehide) ก่อน timer ถูกแช่แข็ง
+  //    flushRef อัปเดตทุก render ให้ closure เห็นค่าล่าสุดเสมอ (listener ผูกครั้งเดียวใน effect ว่าง)
+  const flushSaveRef = React.useRef(null);
+  flushSaveRef.current = () => {
+    if (saving || scSavableCount === 0) return;
+    if (JSON.stringify(checkedQtys) === lastSavedSnap) return;
+    try { handleSave(true); } catch (_) {}
+  };
+  uE(() => {
+    var onHide = function(){ if (document.visibilityState === 'hidden' && flushSaveRef.current) flushSaveRef.current(); };
+    var onPageHide = function(){ if (flushSaveRef.current) flushSaveRef.current(); };
+    document.addEventListener('visibilitychange', onHide);
+    window.addEventListener('pagehide', onPageHide);
+    return function(){
+      document.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('pagehide', onPageHide);
+    };
+  }, []);
+
   const handleConfirm = async () => {
     const entries = Object.entries(checkedQtys)
       .filter(([sku, v]) => v !== '' && v != null && localEditsRef.current.has(sku))

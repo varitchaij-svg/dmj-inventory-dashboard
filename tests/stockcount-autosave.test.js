@@ -65,4 +65,19 @@ describe('StockCountView — ทุกวิธีกรอกจำนวนต
     // ถ้าวันหนึ่งเลิกกรองด้วย localEditsRef เทสต์ข้างบนจะไม่จำเป็น — เตือนให้ทบทวนคู่กัน
     expect(SCV).toMatch(/localEditsRef\.current\.has\(sku\)/);
   });
+
+  // ⚠️ iOS/Android แช่แข็ง setTimeout ตอน background → debounce 3 วิไม่ยิงบนมือถือ
+  //    ต้อง flush ตอน visibilitychange(hidden)/pagehide ก่อน timer ถูกแช่แข็ง (บทเรียน NotiBell/login handoff)
+  it('flush ยอดที่ค้างตอนแอปถูกพับ — visibilitychange + pagehide (กันมือถือไม่ autosave)', () => {
+    expect(SCV).toContain("addEventListener('visibilitychange'");
+    expect(SCV).toContain("addEventListener('pagehide'");
+    // flush ต้องเรียก handleSave จริง ไม่ใช่แค่ผูก listener เปล่า
+    expect(SCV).toMatch(/flushSaveRef[\s\S]*?handleSave\(true\)/);
+  });
+  it('flush guard ครบ (ไม่ยิงตอนไม่มีอะไรค้าง/กำลังบันทึก/ค่าตรง snap เดิม)', () => {
+    const m = SCV.slice(SCV.indexOf('flushSaveRef.current ='), SCV.indexOf('flushSaveRef.current =') + 300);
+    expect(m).toContain('saving');
+    expect(m).toContain('scSavableCount === 0');
+    expect(m).toContain('lastSavedSnap');
+  });
 });
