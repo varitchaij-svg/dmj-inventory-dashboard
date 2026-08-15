@@ -3688,7 +3688,7 @@ function CategoryView({ data, role, onNav }) {
     <div style={{width:"100%",minWidth:0,boxSizing:"border-box",overflowX:"hidden"}}>
       <div className="page-head">
         <div>
-          <div className="page-title">หมวดหมู่สินค้า</div>
+          <div className="page-title">{t("หมวดหมู่สินค้า")}</div>
           <div className="page-sub">{purchasePlanMode ? `เรียงจากสต็อกหน้าร้านน้อยสุด · ${filtered.length} รายการ` : "ดูสินค้าทุกตัวในแต่ละหมวด · เรียงตามขายดี / ราคา / Supplier / สี"}</div>
         </div>
         {role === "owner" && (
@@ -3738,8 +3738,8 @@ function CategoryView({ data, role, onNav }) {
             </div>
             <div style={{fontSize:12, color:"var(--muted)", marginTop:2}}>
               {mineOnly
-                ? "กำลังดูของฉัน + ของใช้ร่วมกัน (อุปกรณ์สำนักงาน/ของตกแต่ง) · แตะเพื่อดูทั้งหมด"
-                : "แตะเพื่อดูเฉพาะของฉัน"}
+                ? t("กำลังดูของฉัน + ของใช้ร่วมกัน (อุปกรณ์สำนักงาน/ของตกแต่ง) · แตะเพื่อดูทั้งหมด")
+                : t("แตะเพื่อดูเฉพาะของฉัน")}
             </div>
           </div>
           <span style={{fontSize:18, color:"var(--g-600)", flexShrink:0}}>{mineOnly ? "✕" : "›"}</span>
@@ -3757,7 +3757,7 @@ function CategoryView({ data, role, onNav }) {
           <input
             value={globalSearch}
             onChange={e => setGlobalSearch(e.target.value)}
-            placeholder="ค้นหาสินค้าทั้งหมด (SKU / ชื่อ)..."
+            placeholder={t("ค้นหาสินค้าทั้งหมด (SKU / ชื่อ)...")}
             style={{
               width:"100%", padding:"11px 40px 11px 38px",
               borderRadius:12, fontSize:15, fontFamily:"inherit",
@@ -3785,8 +3785,8 @@ function CategoryView({ data, role, onNav }) {
           }}>
             <span style={{width:8,height:8,borderRadius:"50%",background:"var(--g-500)",display:"inline-block"}}/>
             พบ {filtered.length} รายการ {active ? `ในหมวด: ${active}` : (mineOnly ? "จากสินค้าที่ฉันดูแล" : "จากทุกหมวดหมู่")}
-            {mineOnly && active && !isSharedCat(active) && <span style={{color:"#a07417"}}>· เฉพาะของฉัน</span>}
-            {filtered.length === 0 && <span style={{color:"var(--muted)",fontWeight:400}}>— ลองค้นหาด้วยคำอื่น</span>}
+            {mineOnly && active && !isSharedCat(active) && <span style={{color:"#a07417"}}>· {t("เฉพาะของฉัน")}</span>}
+            {filtered.length === 0 && <span style={{color:"var(--muted)",fontWeight:400}}>— {t("ลองค้นหาด้วยคำอื่น")}</span>}
           </div>
         )}
 
@@ -3798,7 +3798,7 @@ function CategoryView({ data, role, onNav }) {
             </datalist>
             <input
               list="vendor-list"
-              placeholder="🏭 พิมพ์ชื่อ Supplier..."
+              placeholder={`🏭 ${t("พิมพ์ชื่อ Supplier...")}`}
               value={globalVendor || ""}
               onChange={e => {
                 const val = e.target.value.trim();
@@ -3852,8 +3852,8 @@ function CategoryView({ data, role, onNav }) {
               cursor:"pointer", boxSizing:"border-box",
               color:"var(--text)", outline:"none",
             }}>
-            {showMineUI && <option value="__MINE__">⭐ ของฉัน ({mySkus.size})</option>}
-            <option value="">📋 ทั้งหมด ({products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า").length})</option>
+            {showMineUI && <option value="__MINE__">⭐ {t("ของฉัน")} ({mySkus.size})</option>}
+            <option value="">📋 {t("ทั้งหมด")} ({products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า").length})</option>
             {navCats.map(c => (
               <option key={c} value={c}>
                 {CAT_EMOJI[c] || "📁"} {c} ({catCount(c)}){mineOnly && isSharedCat(c) ? " · ใช้ร่วมกัน" : ""}
@@ -3937,7 +3937,7 @@ function CategoryView({ data, role, onNav }) {
                       color: reorderFilter ? "#fff" : "#b45309",
                       transition:"all .15s",
                     }}>
-                    🛒 ควรสั่ง
+                    🛒 {t("ควรสั่ง")}
                     <span style={{
                       fontSize:12, fontWeight:800, padding:"1px 8px", borderRadius:99,
                       background: reorderFilter ? "rgba(255,255,255,.25)" : "#fbbf24",
@@ -5701,38 +5701,38 @@ function StockView({ data, role }) {
 
       <div className="row row-5" style={{marginBottom: 20}}>
         <div style={{cursor:"pointer"}} onClick={() => { setFilter("low"); setPage(0); setStockSearch(""); setSupplierFilter(null); setActiveCat("ALL"); }}>
-          <KPI label="⚠️ ใกล้หมด — สั่งด่วน" accent="#c2570a" icon={I.warning}
+          <KPI label={`⚠️ ${t("ใกล้หมด — สั่งด่วน")}`} accent="#c2570a" icon={I.warning}
                value={fmtN(nearOut.length)} sub={`≤ ${defaultThr} ชิ้น (ปรับได้)`}/>
         </div>
         <div style={{cursor:"pointer"}} onClick={() => { setFilter("out"); setPage(0); setStockSearch(""); setSupplierFilter(null); setActiveCat("ALL"); }}>
-          <KPI label="🚫 หมดสต๊อกแล้ว" accent="#b8341c" icon={I.alert}
-               value={fmtN(outOfStock.length)} sub="แต่ยังมียอดขาย"/>
+          <KPI label={`🚫 ${t("หมดสต๊อกแล้ว")}`} accent="#b8341c" icon={I.alert}
+               value={fmtN(outOfStock.length)} sub={t("แต่ยังมียอดขาย")}/>
         </div>
         <div style={{cursor:"pointer"}} onClick={() => { setFilter("drop"); setPage(0); setStockSearch(""); setSupplierFilter(null); setActiveCat("ALL"); }}>
-          <KPI label="📉 ยอดขายตก" accent="#8a3a8a" icon={I.alert}
-               value={fmtN(declining.length)} sub="ขายลดลง > 60%"/>
+          <KPI label={`📉 ${t("ยอดขายตก")}`} accent="#8a3a8a" icon={I.alert}
+               value={fmtN(declining.length)} sub={t("ขายลดลง > 60%")}/>
         </div>
         <div style={{cursor:"pointer"}} onClick={() => { setFilter("slow"); setPage(0); setStockSearch(""); setSupplierFilter(null); setActiveCat("ALL"); }}>
-          <KPI label="🐌 สินค้าจมนาน" accent="#a07417" icon={I.package}
-               value={fmtN(slowMovers.length)} sub="ขาย < 10% ของสต๊อก"/>
+          <KPI label={`🐌 ${t("สินค้าจมนาน")}`} accent="#a07417" icon={I.package}
+               value={fmtN(slowMovers.length)} sub={t("ขาย < 10% ของสต๊อก")}/>
         </div>
         <div style={{cursor:"pointer"}} onClick={() => { setFilter("over"); setPage(0); setStockSearch(""); setSupplierFilter(null); setActiveCat("ALL"); }}>
-          <KPI label="📈 สต๊อกเกินจำเป็น" accent="#1f6f8b" icon={I.layers}
-               value={fmtN(overstocked.length)} sub="พอขาย > 12 เดือน"/>
+          <KPI label={`📈 ${t("สต๊อกเกินจำเป็น")}`} accent="#1f6f8b" icon={I.layers}
+               value={fmtN(overstocked.length)} sub={t("พอขาย > 12 เดือน")}/>
         </div>
       </div>
 
       {/* Threshold editor */}
-      <Card title="⚙️ เกณฑ์แจ้งเตือน" sub="เมื่อสต๊อกเหลือถึงจำนวนนี้ ระบบจะแจ้งให้สั่งเพิ่ม — แก้แล้วบันทึกให้อัตโนมัติ"
+      <Card title={`⚙️ ${t("เกณฑ์แจ้งเตือน")}`} sub={t("เมื่อสต๊อกเหลือถึงจำนวนนี้ ระบบจะแจ้งให้สั่งเพิ่ม — แก้แล้วบันทึกให้อัตโนมัติ")}
             style={{marginBottom:16}}>
         {thrStatus !== "idle" && (
           <div style={{
             fontSize:12, fontWeight:700, marginBottom:10, display:"flex", alignItems:"center", gap:6,
             color: thrStatus==="saved" ? "var(--g-600)" : thrStatus==="error" ? "var(--dang)" : "var(--muted)",
           }}>
-            {thrStatus==="saving" && <><span className="spin" style={{width:12,height:12,borderWidth:2}}/> กำลังบันทึกเกณฑ์…</>}
-            {thrStatus==="saved"  && "✅ บันทึกเกณฑ์แล้ว — ทุกเครื่องเห็นค่าใหม่หลัง Sync"}
-            {thrStatus==="error"  && "⚠️ บันทึกเกณฑ์ไม่สำเร็จ — เช็คอินเทอร์เน็ตแล้วลองแก้ตัวเลขอีกครั้ง"}
+            {thrStatus==="saving" && <><span className="spin" style={{width:12,height:12,borderWidth:2}}/> {t("กำลังบันทึกเกณฑ์…")}</>}
+            {thrStatus==="saved"  && `✅ ${t("บันทึกเกณฑ์แล้ว — ทุกเครื่องเห็นค่าใหม่หลัง Sync")}`}
+            {thrStatus==="error"  && `⚠️ ${t("บันทึกเกณฑ์ไม่สำเร็จ — เช็คอินเทอร์เน็ตแล้วลองแก้ตัวเลขอีกครั้ง")}`}
           </div>
         )}
         <div style={{display:"flex",gap:18,alignItems:"center",flexWrap:"wrap"}}>
@@ -5797,11 +5797,11 @@ function StockView({ data, role }) {
         <span className="filter-bar-label">ดูตาม</span>
         <div className="filter-chips">
           {[
-            {id:"low",  label:`⚠️ ใกล้หมด`,  count:nearOut.length,    color:"#c2570a"},
-            {id:"out",  label:`🚫 หมดสต๊อก`, count:outOfStock.length,  color:"#b8341c"},
-            {id:"drop", label:`📉 ยอดขายตก`, count:declining.length,   color:"#8a3a8a"},
-            {id:"slow", label:`📦 จมนาน`,    count:slowMovers.length,  color:"#a07417"},
-            {id:"over", label:`🗂️ สต๊อกเกิน`,count:overstocked.length, color:"#1f6f8b"},
+            {id:"low",  label:`⚠️ ${t("ใกล้หมด")}`,  count:nearOut.length,    color:"#c2570a"},
+            {id:"out",  label:`🚫 ${t("หมดสต๊อก")}`, count:outOfStock.length,  color:"#b8341c"},
+            {id:"drop", label:`📉 ${t("ยอดขายตก")}`, count:declining.length,   color:"#8a3a8a"},
+            {id:"slow", label:`📦 ${t("จมนาน")}`,    count:slowMovers.length,  color:"#a07417"},
+            {id:"over", label:`🗂️ ${t("สต๊อกเกิน")}`,count:overstocked.length, color:"#1f6f8b"},
           ].map(t => (
             <button key={t.id} className={`fchip${filter===t.id?' active':''}`}
                     style={filter===t.id?{background:t.color,borderColor:t.color,color:"#fff",boxShadow:`0 2px 6px ${t.color}55`}:{}}
@@ -5842,7 +5842,7 @@ function StockView({ data, role }) {
                      setSupplierFilter(allSuppliers.includes(v) ? v : null);
                      setPage(0);
                    }}
-                   placeholder="ค้นหาหรือเลือกร้าน..."
+                   placeholder={t("ค้นหาหรือเลือกร้าน...")}
                    style={{
                      padding:"7px 12px", borderRadius:9, fontSize:13,
                      border: supplierFilter ? "1.5px solid var(--g-600)" : "1px solid var(--bdr)",
@@ -5873,7 +5873,7 @@ function StockView({ data, role }) {
         <div style={{display:"flex",gap:8,flex:"1 1 240px",minWidth:200,alignItems:"center"}}>
           <div style={{position:"relative",flex:1}}>
             <input value={stockSearch} onChange={e=>{setStockSearch(e.target.value);setPage(0);}}
-                   placeholder="ค้นหา SKU / ชื่อ / หมวด..."
+                   placeholder={t("ค้นหา SKU / ชื่อ / หมวด...")}
                    style={{width:"100%",padding:"7px 12px 7px 32px",borderRadius:9,
                            border:"1px solid var(--bdr)",fontSize:12.5,fontFamily:"inherit",
                            background:"#fafcf7",boxSizing:"border-box"}}/>
@@ -5983,7 +5983,7 @@ function StockView({ data, role }) {
                       <span style={{fontSize:11.5,fontWeight:600,
                                     color: p.daysLeft <= 14 ? "#b8341c" : p.daysLeft <= 30 ? "#c2570a" : "#6b7280",
                                     whiteSpace:"nowrap"}}>
-                        {p.qty === 0 ? "หมดแล้ว" :
+                        {p.qty === 0 ? t("หมดแล้ว") :
                           `จะหมด ~${p.stockoutAt.getDate()}/${p.stockoutAt.getMonth()+1} (อีก ${fmtN(Math.round(p.daysLeft))} วัน)`}
                       </span>
                     )}
@@ -5994,7 +5994,7 @@ function StockView({ data, role }) {
           );
         })}
       </div>
-      {list.length === 0 && <Empty icon={I.check} title="ยอดเยี่ยม!" sub="ไม่มีรายการในกลุ่มนี้"/>}
+      {list.length === 0 && <Empty icon={I.check} title={t("ยอดเยี่ยม!")} sub={t("ไม่มีรายการในกลุ่มนี้")}/>}
 
       {/* Pagination */}
       {totalPages > 1 && (
@@ -7189,7 +7189,7 @@ function StorageView({ data }) {
               ←
             </button>
             <div>
-              <div style={{fontSize:16,fontWeight:800}}>📥 บันทึกตำแหน่งด่วน</div>
+              <div style={{fontSize:16,fontWeight:800}}>📥 {t("บันทึกตำแหน่งด่วน")}</div>
               <div style={{fontSize:12,color:'var(--muted)',marginTop:1}}>
                 สแกน/พิมพ์ SKU แล้วระบุล็อค — บันทึกทันที
               </div>
@@ -7203,7 +7203,7 @@ function StorageView({ data }) {
             </div>
             <div style={{display:'flex',gap:8,alignItems:'center'}}>
               <input autoFocus type="text"
-                placeholder="พิมพ์หรือสแกน SKU..."
+                placeholder={t("พิมพ์หรือสแกน SKU...")}
                 value={qaSku}
                 onChange={e => setQaSku(e.target.value.toUpperCase())}
                 onKeyDown={e => e.key === 'Enter' && document.getElementById('qa-lock-input')?.focus()}
@@ -7255,7 +7255,7 @@ function StorageView({ data }) {
             </div>
             <div style={{display:'flex',gap:8,alignItems:'center'}}>
               <input id="qa-lock-input" type="text"
-                placeholder="พิมพ์ตำแหน่ง เช่น A3/7 หรือ A0..."
+                placeholder={t("พิมพ์ตำแหน่ง เช่น A3/7 หรือ A0...")}
                 value={qaLockKey}
                 onChange={e => setQaLockKey(e.target.value.toUpperCase())}
                 onKeyDown={e => e.key === 'Enter' && canSave && handleQuickAssign()}
@@ -7286,7 +7286,7 @@ function StorageView({ data }) {
 
           {/* Log of recent assignments */}
           {qaLog.length > 0 && (
-            <Card title="✅ บันทึกล่าสุด" padding={true}>
+            <Card title={`✅ ${t("บันทึกล่าสุด")}`} padding={true}>
               <div style={{display:'flex',flexDirection:'column',gap:6}}>
                 {qaLog.map((entry, i) => (
                   <div key={i} style={{display:'flex',alignItems:'center',gap:10,
@@ -7409,7 +7409,7 @@ function StorageView({ data }) {
                       </button>
                     )}
                     {locks.length > 0 && (
-                      <div style={{fontSize:11,color:'var(--muted)',marginTop:2}}>แตะเพื่อดูล็อค</div>
+                      <div style={{fontSize:11,color:'var(--muted)',marginTop:2}}>{t("แตะเพื่อดูล็อค")}</div>
                     )}
                   </div>
                 </div>
@@ -7420,25 +7420,25 @@ function StorageView({ data }) {
       )}
 
       <div className="row row-4" style={{marginBottom:16}}>
-        <KPI label="📦 ล็อคที่ใช้แล้ว" value={`${fmtN(usedCount)}/${fmtN(totalLocks)}`}
-             sub={`${(usedCount/totalLocks*100).toFixed(1)}% ของคลัง`}
+        <KPI label={`📦 ${t("ล็อคที่ใช้แล้ว")}`} value={`${fmtN(usedCount)}/${fmtN(totalLocks)}`}
+             sub={t("{p}% ของคลัง", { p: (usedCount/totalLocks*100).toFixed(1) })}
              accent="#1f7f44" icon={I.package}/>
-        <KPI label="✅ เช็คแล้ว" value={fmtN(verifiedCount)}
-             sub={`${usedCount > 0 ? (verifiedCount/usedCount*100).toFixed(0) : 0}% ของที่ใช้`}
+        <KPI label={`✅ ${t("เช็คแล้ว")}`} value={fmtN(verifiedCount)}
+             sub={t("{p}% ของที่ใช้", { p: usedCount > 0 ? (verifiedCount/usedCount*100).toFixed(0) : 0 })}
              accent="#4fb472" icon={I.check}/>
-        <KPI label="❌ ไม่ตรงระบบ" value={fmtN(mismatchCount)}
-             sub={mismatchCount > 0 ? "⚠️ ต้องตรวจสอบ" : "✓ ปกติ"}
+        <KPI label={`❌ ${t("ไม่ตรงระบบ")}`} value={fmtN(mismatchCount)}
+             sub={mismatchCount > 0 ? `⚠️ ${t("ต้องตรวจสอบ")}` : `✓ ${t("ปกติ")}`}
              accent={mismatchCount > 0 ? "#b8341c" : "#5c8a3c"} icon={I.warning}/>
-        <KPI label="🔍 ยังไม่ระบุล็อค" value={fmtN(unassigned.length)}
-             sub="ต้องไปเดินเช็ค"
+        <KPI label={`🔍 ${t("ยังไม่ระบุล็อค")}`} value={fmtN(unassigned.length)}
+             sub={t("ต้องไปเดินเช็ค")}
              accent="#a07417" icon={I.alert}/>
       </div>
 
-      <Card title="📍 แผนผังคลังสินค้า"
+      <Card title={`📍 ${t("แผนผังคลังสินค้า")}`}
             sub={`ฝั่ง A: ${shelves.A} ชั้น · ฝั่ง B: ${shelves.B} ชั้น · ${shelves.locksPerShelf} ล็อค/ชั้น · + ช่อง A0/B0 (ไม่ได้อยู่บนชั้น)`}
             action={
               <Seg value={side} onChange={setSide} options={[
-                {value:'A',label:'🟩 ซอย A'},{value:'B',label:'🟦 ซอย B'},{value:'all',label:'🗂️ ทั้งหมด'},
+                {value:'A',label:`🟩 ${t("ซอย A")}`},{value:'B',label:`🟦 ${t("ซอย B")}`},{value:'all',label:`🗂️ ${t("ทั้งหมด")}`},
               ]}/>
             }>
         {searchSku && (
@@ -9030,7 +9030,7 @@ function AddProductView({ data, role, onAdded }) {
 
             {/* หมวดหมู่ */}
             <div>
-              <label style={labelStyle}>หมวดหมู่ *</label>
+              <label style={labelStyle}>{t("หมวดหมู่ *")}</label>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
                 {allCats.slice(0, 12).map(c => (
                   <button key={c} type="button"
@@ -9044,7 +9044,7 @@ function AddProductView({ data, role, onAdded }) {
                     }}>{c}</button>
                 ))}
               </div>
-              <input type="text" placeholder="…หรือพิมพ์หมวดใหม่"
+              <input type="text" placeholder={t("…หรือพิมพ์หมวดใหม่")}
                 value={catInput}
                 onChange={e => { setCatInput(e.target.value); setCategory(""); }}
                 style={inputStyle} />
@@ -9078,7 +9078,7 @@ function AddProductView({ data, role, onAdded }) {
                   </div>
 
                   {/* พิมพ์ชื่อสินค้า → หา Prefix จากของเดิมที่ชื่อคล้ายกัน */}
-                  <input type="text" placeholder="🔍 พิมพ์ชื่อสินค้าเพื่อหารหัส (เช่น มะกอก → OL)"
+                  <input type="text" placeholder={`🔍 ${t("พิมพ์ชื่อสินค้าเพื่อหารหัส (เช่น มะกอก → OL)")}`}
                     value={prefixNameSearch} onChange={e => setPrefixNameSearch(e.target.value)}
                     style={{ ...inputStyle, marginBottom: 8 }} />
                   {prefixByName.length > 0 && (
@@ -9128,7 +9128,7 @@ function AddProductView({ data, role, onAdded }) {
                       ))}
                     </div>
                   )}
-                  <input type="text" placeholder="พิมพ์ Prefix เช่น OL"
+                  <input type="text" placeholder={t("พิมพ์ Prefix เช่น OL")}
                     value={prefix}
                     onChange={e => { setPrefix(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 3)); setHeldDesign(null); }}
                     style={{ ...inputStyle, fontFamily: "monospace", fontWeight: 700, maxWidth: 200 }} />
@@ -9141,7 +9141,7 @@ function AddProductView({ data, role, onAdded }) {
                         </span>
                         <button type="button" onClick={() => { setHeldDesign(null); setVariantCode(""); }}
                           style={{ flexShrink: 0, border: "1.5px solid #93c5fd", background: "#fff", borderRadius: 8, padding: "6px 10px",
-                                   cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "inherit", color: "#1d4ed8" }}>ขึ้นแบบใหม่ ▸</button>
+                                   cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "inherit", color: "#1d4ed8" }}>{t("ขึ้นแบบใหม่ ▸")}</button>
                       </div>
                     ) : (
                       <div style={{ fontSize: 12, marginTop: 6, color: "var(--muted)" }}>
@@ -9163,7 +9163,7 @@ function AddProductView({ data, role, onAdded }) {
                           <div style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 16, color: "var(--g-700)" }}>{baseDesignSku}</div>
                         </div>
                         <button type="button" onClick={() => { setBaseDesignSku(""); setDesignSearch(""); setVariantCode(""); }}
-                          style={{ flexShrink: 0, border: "none", background: "none", cursor: "pointer", color: "var(--muted)", fontSize: 13, fontFamily: "inherit", fontWeight: 600 }}>เปลี่ยน ✕</button>
+                          style={{ flexShrink: 0, border: "none", background: "none", cursor: "pointer", color: "var(--muted)", fontSize: 13, fontFamily: "inherit", fontWeight: 600 }}>{t("เปลี่ยน ✕")}</button>
                       </div>
                       {/* โครงรหัสใหม่: prefix + [ช่องรหัสสี] + model — ให้เห็นชัดว่าเปลี่ยนแค่ 2 หลักกลาง */}
                       <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 4, fontFamily: "monospace", fontWeight: 800, fontSize: 18 }}>
@@ -9182,7 +9182,7 @@ function AddProductView({ data, role, onAdded }) {
                     </div>
                   ) : (
                     <>
-                      <input type="text" placeholder="🔍 ค้นหาแบบเดิม (รหัส/ชื่อ)"
+                      <input type="text" placeholder={`🔍 ${t("ค้นหาแบบเดิม (รหัส/ชื่อ)")}`}
                         value={designSearch} onChange={e => setDesignSearch(e.target.value)} style={inputStyle} />
                       {designMatches.length > 0 && (
                         <div style={{ marginTop: 6, border: "1.5px solid var(--bdr)", borderRadius: 10, overflow: "hidden", maxHeight: 240, overflowY: "auto" }}>
@@ -9229,7 +9229,7 @@ function AddProductView({ data, role, onAdded }) {
                   </div>
                   {variantSrc === "manual" ? (
                     <div>
-                      <input type="text" inputMode="numeric" placeholder="เช่น 01"
+                      <input type="text" inputMode="numeric" placeholder={t("เช่น 01")}
                         value={variantCode}
                         onChange={e => setVariantCode(e.target.value.replace(/\D/g, "").slice(0, 2))}
                         onBlur={() => { if (variantCode.length === 1) setVariantCode(variantCode.padStart(2, "0")); }}
@@ -9245,7 +9245,7 @@ function AddProductView({ data, role, onAdded }) {
                           เลือกสี: <span style={{ fontFamily: "monospace" }}>{variantCode}</span> · {VARIANT_CODE_TO_NAME[variantCode]}
                         </div>
                       )}
-                      <input type="text" placeholder="🔍 ค้นหาสี (เช่น แดง, ชมพู) หรือพิมพ์รหัส"
+                      <input type="text" placeholder={`🔍 ${t("ค้นหาสี (เช่น แดง, ชมพู) หรือพิมพ์รหัส")}`}
                         value={colorSearch} onChange={e => setColorSearch(e.target.value)} style={inputStyle} />
                       <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 190, overflowY: "auto" }}>
                         {colorMatches.slice(0, 80).map(c => {
@@ -9284,16 +9284,16 @@ function AddProductView({ data, role, onAdded }) {
                 border: "1.5px solid " + (isDup ? "var(--dang)" : (skuUp ? "var(--g-500)" : "var(--bdr)")),
                 background: skuUp ? (isDup ? "#fff5f5" : "var(--g-50)") : "#fafafa",
               }}>
-                <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>รหัส SKU ที่จะสร้าง</div>
+                <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 600 }}>{t("รหัส SKU ที่จะสร้าง")}</div>
                 <div style={{ fontFamily: "monospace", fontSize: 22, fontWeight: 800, letterSpacing: ".04em", color: skuUp ? (isDup ? "var(--dang)" : "var(--g-700)") : "var(--muted)" }}>
                   {skuUp || "———"}
                 </div>
                 <div style={{ fontSize: 12, marginTop: 4, minHeight: 18, fontWeight: 600 }}>
-                  {dupLocal ? <span style={{ color: "var(--dang)" }}>⚠️ SKU นี้มีอยู่แล้วในระบบ</span>
-                    : serverCheck && serverCheck.checking ? <span style={{ color: "var(--muted)" }}>⏳ กำลังตรวจรหัสซ้ำ…</span>
-                    : dupRemote ? <span style={{ color: "var(--dang)" }}>⚠️ SKU นี้มีใน ZORT แล้ว (ยังไม่ sync)</span>
-                    : skuUp ? <span style={{ color: "var(--g-600)" }}>✓ รหัสนี้ใช้ได้</span>
-                    : <span style={{ color: "var(--muted)" }}>เลือก Prefix/แบบ + Variant ให้ครบ</span>}
+                  {dupLocal ? <span style={{ color: "var(--dang)" }}>⚠️ {t("SKU นี้มีอยู่แล้วในระบบ")}</span>
+                    : serverCheck && serverCheck.checking ? <span style={{ color: "var(--muted)" }}>⏳ {t("กำลังตรวจรหัสซ้ำ…")}</span>
+                    : dupRemote ? <span style={{ color: "var(--dang)" }}>⚠️ {t("SKU นี้มีใน ZORT แล้ว (ยังไม่ sync)")}</span>
+                    : skuUp ? <span style={{ color: "var(--g-600)" }}>✓ {t("รหัสนี้ใช้ได้")}</span>
+                    : <span style={{ color: "var(--muted)" }}>{t("เลือก Prefix/แบบ + Variant ให้ครบ")}</span>}
                 </div>
               </div>
             </div>
@@ -9303,13 +9303,13 @@ function AddProductView({ data, role, onAdded }) {
               <label style={labelStyle}>
                 ชื่อสินค้า * <span style={{ fontWeight: 400, color: "var(--muted)" }}>(ใส่แค่ชื่อ — สี/ราคาต่อท้ายให้อัตโนมัติ)</span>
               </label>
-              <input type="text" placeholder="เช่น ป๊อปปี้B."
+              <input type="text" placeholder={t("เช่น ป๊อปปี้B.")}
                 value={name} onChange={e => setName(e.target.value)} style={inputStyle} />
             </div>
 
             {/* ราคาส่ง → ตั้งราคาปลีก ×1.25 อัตโนมัติ */}
             <div>
-              <label style={labelStyle}>ราคาส่ง (บาท)</label>
+              <label style={labelStyle}>{t("ราคาส่ง (บาท)")}</label>
               <input type="number" inputMode="decimal" min="0" placeholder="0"
                 value={price} onChange={e => setPrice(e.target.value)} style={inputStyle} />
               <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>
@@ -9347,7 +9347,7 @@ function AddProductView({ data, role, onAdded }) {
                   ))}
                 </div>
               )}
-              <input type="text" placeholder="🏪 พิมพ์ชื่อร้าน/ซัพพลายเออร์ (ถ้ามี)"
+              <input type="text" placeholder={`🏪 ${t("พิมพ์ชื่อร้าน/ซัพพลายเออร์ (ถ้ามี)")}`}
                 value={supplier} onChange={e => setSupplier(e.target.value)} style={inputStyle} />
             </div>
 
@@ -9394,7 +9394,7 @@ function AddProductView({ data, role, onAdded }) {
 
             {/* จำนวนเริ่มต้น + คลัง */}
             <div>
-              <label style={labelStyle}>จำนวนเริ่มต้น + คลังที่เก็บ</label>
+              <label style={labelStyle}>{t("จำนวนเริ่มต้น + คลังที่เก็บ")}</label>
               <div style={{ display: "flex", gap: 8 }}>
                 <input type="number" inputMode="numeric" min="0" placeholder="0"
                   value={qty} onChange={e => setQty(e.target.value)}
@@ -9453,12 +9453,12 @@ function AddProductView({ data, role, onAdded }) {
                          border: "1.5px solid var(--g-500)", background: "#fff", color: "var(--g-700)",
                          cursor: canQueue ? "pointer" : "default", opacity: canQueue ? 1 : 0.4, fontFamily: "inherit" }}
                 title={queue.length >= MAX_BATCH ? `เพิ่มได้สูงสุด ${MAX_BATCH} รายการ` : "พักไว้ แล้วกรอกตัวถัดไป"}>
-                ➕ เพิ่มอีก
+                ➕ {t("เพิ่มอีก")}
               </button>
               <button onClick={handleSaveAll} disabled={saving || totalToSave === 0} className="btn primary"
                 style={{ flex: 1, padding: "14px 0", fontSize: 16, fontWeight: 800, opacity: (saving || totalToSave === 0) ? 0.45 : 1 }}>
                 {saving
-                  ? <><span className="spin" style={{ width: 15, height: 15, borderWidth: 2, marginRight: 8 }} /> กำลังบันทึก…</>
+                  ? <><span className="spin" style={{ width: 15, height: 15, borderWidth: 2, marginRight: 8 }} /> {t("กำลังบันทึก…")}</>
                   : (queue.length > 0 ? `💾 บันทึกทั้งหมด (${totalToSave})` : "➕ เพิ่มสินค้าเข้า ZORT")}
               </button>
             </div>
@@ -9757,7 +9757,7 @@ function PurchaseInPanel({ data, showToast, onDone }) {
               )}
             </div>
           )}
-          <input type="text" placeholder="🏪 พิมพ์ชื่อร้าน/ซัพพลายเออร์ (มีชื่อเดิมให้เลือก)"
+          <input type="text" placeholder={`🏪 ${t("พิมพ์ชื่อร้าน/ซัพพลายเออร์ (มีชื่อเดิมให้เลือก)")}`}
             list="dmjSupplierList"
             value={supplier} onChange={e => setSupplier(e.target.value)} style={inputStyle} />
           <datalist id="dmjSupplierList">
@@ -9861,7 +9861,7 @@ function PurchaseInPanel({ data, showToast, onDone }) {
         <button onClick={handleSave} disabled={!canSave} className="btn primary"
           style={{ padding: "14px 0", fontSize: 16, fontWeight: 800, opacity: canSave ? 1 : 0.45 }}>
           {saving
-            ? <><span className="spin" style={{ width: 15, height: 15, borderWidth: 2, marginRight: 8 }} /> กำลังบันทึก…</>
+            ? <><span className="spin" style={{ width: 15, height: 15, borderWidth: 2, marginRight: 8 }} /> {t("กำลังบันทึก…")}</>
             : (cart.length > 0 ? `📥 รับเข้าคลัง (${cart.length})` : "📥 เลือกสินค้าก่อน")}
         </button>
         <div style={{ fontSize: 11, color: "var(--muted)", marginTop: -6, textAlign: "center" }}>

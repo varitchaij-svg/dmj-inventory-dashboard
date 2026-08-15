@@ -144,8 +144,9 @@ describe('การเชื่อมต่อ (meta)', () => {
     // 2 จุดนี้คือทางที่พนักงานใช้จริง — หายไปจุดใดจุดหนึ่ง = คนที่จำอีกทางไม่ได้หาไม่เจอเลย
     expect(VM, 'ไม่มีการ์ด "สินค้าที่ฉันดูแล" บนสุดของ CategoryView')
       .toMatch(/สินค้าที่ฉันดูแล — \{fmtN\(mySkus\.size\)\}/);
+    // i18n: ป้าย "ของฉัน" ถูกครอบด้วย t() แล้ว (ตัวเลือก __MINE__ ยังต้องมีอยู่)
     expect(VM, 'ไม่มีตัวเลือก "⭐ ของฉัน" ใน dropdown หมวด')
-      .toContain('<option value="__MINE__">⭐ ของฉัน ({mySkus.size})</option>');
+      .toContain('<option value="__MINE__">⭐ {t("ของฉัน")} ({mySkus.size})</option>');
     // ทั้งคู่ต้องซ่อนเมื่อระบบปิด/ยังไม่เคยกดดาว — ไม่งั้นกดแล้วได้หน้าว่างเปล่า
     expect(VM).toContain('const showMineUI = !prodOwner.off && mySkus.size > 0;');
   });
