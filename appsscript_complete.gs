@@ -2450,7 +2450,10 @@ function doPost(e) {
 
     // ─── Stock Check Requests ───
     if (data.createStockCheck) return createStockCheckRequest_(data.skus, data.names, actor);
-    if (data.completeStockCheck) return completeStockCheckRequest_(data.reqId, actor, data.side);
+    // ⚠️ data.side อาจไม่มา = client เก่าที่ cache .jsx ก่อนฟีเจอร์แยกฝั่ง (fs/wh) → ส่ง roleHint
+    //    ที่ server ยืนยันเอง (`_sess.role`) หรือ `data.actor`="frontstore"/"warehouse" ของ client เก่า
+    //    ที่ยังไม่ล็อกอิน เพื่อให้ backend เดา side ได้เอง แทนการ "ปิดทั้งใบ" ที่ทำฝั่งที่ยังไม่เสร็จหายเงียบ ๆ
+    if (data.completeStockCheck) return completeStockCheckRequest_(data.reqId, actor, data.side, (_sess && _sess.role) || data.actor);
 
     // ─── เกณฑ์แจ้งเตือนสต็อก (บันทึกถาวร ใช้ร่วมกันทุกเครื่อง) ───
     if (data.saveThresholds) return saveThresholds_(data, actor);
@@ -15011,7 +15014,7 @@ function createStockCheckRequest_(skus, names, actor) {
 //    หายไปทันที" (เจ้าของแจ้ง ส.ค. 2026) · ตอนนี้แต่ละฝั่งมี fsStatus/whStatus แยก ปิดของตัวเอง
 //    ไม่กระทบอีกฝั่ง · สถานะรวม (col 6) เป็น done ต่อเมื่อ "ทั้ง 2 ฝั่ง" เสร็จ
 // side ว่าง (client เก่าไม่ส่งมา) → ปิดทั้งใบแบบเดิม (backward-compat)
-function completeStockCheckRequest_(reqId, actor, side) {
+function completeStockCheckRequest_(reqId, actor, side, roleHint) {
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var sh = ss.getSheetByName(SHEET_STOCK_CHECK);
   if (!sh) return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Sheet not found" }))
@@ -15019,6 +15022,22 @@ function completeStockCheckRequest_(reqId, actor, side) {
   var rows = sh.getDataRange().getValues();
   var ts = Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyy-MM-dd HH:mm");
   side = (side === 'fs' || side === 'wh') ? side : '';
+  // ⚠️ side ไม่มา (client เก่าก่อน split) → เดาจาก roleHint (frontstore→fs, warehouse→wh)
+  //    ก่อนตกไปเส้นทาง "ปิดทั้งใบ" ที่ทำให้ฝั่งที่ยังไม่เสร็จหายเงียบ ๆ (เจ้าของแจ้ง ส.ค. 2026:
+  //    "หน้าร้านกดเสร็จแล้วรหัสฝั่งคลังหาย") · roleHint มาจาก session ที่ server ยืนยัน หรือ
+  //    data.actor="frontstore"/"warehouse" ของ client เก่าที่ยังไม่ล็อกอิน
+  if (!side && roleHint) {
+    if (roleHint === 'frontstore') side = 'fs';
+    else if (roleHint === 'warehouse') side = 'wh';
+  }
+  // ยังเดา side ไม่ได้ (role อื่น/ชื่อ session/ไม่รู้) → **ห้ามปิดทั้งใบ** เพราะจะลบงานฝั่งที่ยังไม่เสร็จ
+  //    ตอบให้ client รีเฟรชแล้วลองใหม่ (ปลอดภัยกว่าเดาผิดฝั่งหรือปิดทั้งคู่) · ผู้กดที่ถูกต้องคือ
+  //    frontstore/warehouse ซึ่ง .jsx ปัจจุบันส่ง side มาเสมอ จึงไม่กระทบการใช้งานจริง
+  if (!side) {
+    return ContentService.createTextOutput(JSON.stringify({ success: false,
+      error: "ไม่ทราบว่าปิดฝั่งไหน (หน้าร้าน/คลัง) — กรุณารีเฟรชแอปแล้วลองใหม่" }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
   for (var i = 1; i < rows.length; i++) {
     if (String(rows[i][0]) !== String(reqId)) continue;
     var r = rows[i];
@@ -15027,21 +15046,18 @@ function completeStockCheckRequest_(reqId, actor, side) {
     var fsDone = (String(r[COL_CHK_FS_STATUS - 1] || "") || (overall === "done" ? "done" : "pending")) === "done";
     var whDone = (String(r[COL_CHK_WH_STATUS - 1] || "") || (overall === "done" ? "done" : "pending")) === "done";
 
+    // side เป็น 'fs'/'wh' เสมอ ณ จุดนี้ (เดาจาก roleHint แล้ว · เดาไม่ได้ = return ไปก่อนหน้า)
+    // ปิดเฉพาะฝั่งตัวเอง ไม่แตะอีกฝั่ง
     if (side === 'fs') {
       sh.getRange(i + 1, COL_CHK_FS_STATUS).setValue("done");
       sh.getRange(i + 1, COL_CHK_FS_BY).setValue(actor || "");
       sh.getRange(i + 1, COL_CHK_FS_AT).setValue(ts);
       fsDone = true;
-    } else if (side === 'wh') {
+    } else {
       sh.getRange(i + 1, COL_CHK_WH_STATUS).setValue("done");
       sh.getRange(i + 1, COL_CHK_WH_BY).setValue(actor || "");
       sh.getRange(i + 1, COL_CHK_WH_AT).setValue(ts);
       whDone = true;
-    } else {
-      // ไม่ระบุฝั่ง → ปิดทั้งใบ (client เก่า) — ตั้งทั้ง 2 ฝั่ง done
-      sh.getRange(i + 1, COL_CHK_FS_STATUS).setValue("done"); sh.getRange(i + 1, COL_CHK_FS_BY).setValue(actor || ""); sh.getRange(i + 1, COL_CHK_FS_AT).setValue(ts);
-      sh.getRange(i + 1, COL_CHK_WH_STATUS).setValue("done"); sh.getRange(i + 1, COL_CHK_WH_BY).setValue(actor || ""); sh.getRange(i + 1, COL_CHK_WH_AT).setValue(ts);
-      fsDone = whDone = true;
     }
 
     // สถานะรวม (col 6) = done ต่อเมื่อทั้ง 2 ฝั่งเสร็จ · เก็บ completedBy/At ของคนปิดครบใบ

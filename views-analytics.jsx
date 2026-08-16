@@ -2116,6 +2116,28 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     return () => clearTimeout(timer);
   }, [checkedQtys, saving, scSavableCount, selLockKey, selSupplier, lastSavedSnap]);
 
+  // ⚠️ iOS/Android แช่แข็ง setTimeout ตอนพับแอป/ล็อกจอ/สลับแอป → debounce 3 วิข้างบน**อาจไม่ยิง**
+  //    บนมือถือ (เจ้าของแจ้ง ส.ค. 2026: "คอม autosave ได้ แต่ android/ios ไม่ได้") · บนคอมแท็บ
+  //    active ตลอด timer จึงยิงเสมอ — บทเรียนเดียวกับ NotiBell/login handoff ที่ห้ามพึ่ง timer อย่างเดียว
+  //    → flush ยอดที่ค้างทันทีตอนแอปกำลังถูกพับ (visibilitychange=hidden / pagehide) ก่อน timer ถูกแช่แข็ง
+  //    flushRef อัปเดตทุก render ให้ closure เห็นค่าล่าสุดเสมอ (listener ผูกครั้งเดียวใน effect ว่าง)
+  const flushSaveRef = React.useRef(null);
+  flushSaveRef.current = () => {
+    if (saving || scSavableCount === 0) return;
+    if (JSON.stringify(checkedQtys) === lastSavedSnap) return;
+    try { handleSave(true); } catch (_) {}
+  };
+  uE(() => {
+    var onHide = function(){ if (document.visibilityState === 'hidden' && flushSaveRef.current) flushSaveRef.current(); };
+    var onPageHide = function(){ if (flushSaveRef.current) flushSaveRef.current(); };
+    document.addEventListener('visibilitychange', onHide);
+    window.addEventListener('pagehide', onPageHide);
+    return function(){
+      document.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('pagehide', onPageHide);
+    };
+  }, []);
+
   const handleConfirm = async () => {
     const entries = Object.entries(checkedQtys)
       .filter(([sku, v]) => v !== '' && v != null && localEditsRef.current.has(sku))
@@ -2537,7 +2559,14 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
           name={calcPad ? (calcPad.name || calcPad.sku) : ''}
           initialVal={calcPad ? calcPad.expr : ''}
           onConfirm={function(qty){
-            if (calcPad) setCheckedQtys(function(prev){ const o=Object.assign({},prev); o[calcPad.sku]=qty; return o; });
+            // ⚠️ ต้อง add localEditsRef ก่อนเสมอ (เหมือนโหมดล็อค/นับก่อนขึ้นชั้น) — handleSave
+            // (ทั้ง autosave และปุ่มบันทึก) กรองด้วย localEditsRef ถ้าไม่ add จำนวนที่กรอกผ่าน
+            // เครื่องคิดเลขในโหมดซัพพลายเออร์จะถูกกรองทิ้ง = ไม่ autosave และปุ่มบันทึกก็ตกหล่น
+            // (ค้าง "รอบันทึก..." ไม่มี error ให้เห็น)
+            if (calcPad) {
+              localEditsRef.current.add(calcPad.sku);
+              setCheckedQtys(function(prev){ const o=Object.assign({},prev); o[calcPad.sku]=qty; return o; });
+            }
             setCalcPad(null);
           }}
           onClose={function(){ setCalcPad(null); }}
@@ -5726,6 +5755,13 @@ function OrderSummaryView({ data, onPrintRequest }) {
           </div>
         </div>
 
+        {!isTruck && readyCount > 0 && (
+          <div style={{fontSize:11,color:"var(--muted)",margin:"-4px 2px 12px",lineHeight:1.5}}>
+            💡 ของหิ้วส่งรวมเป็น <b>ชุดเดียว</b> — กด <b>“✅ ส่งทั้งหมด”</b> ด้านบน (สร้างใบโอน 1 ใบ ไม่ซ้ำเลข)
+            {" · "}ตัวไหนยังไม่พร้อมส่ง กด <b>“ไม่ส่งรอบนี้”</b> บนการ์ดเพื่อตัดออกจากชุด
+          </div>
+        )}
+
         <div style={{
           display:"grid",
           gridTemplateColumns:"repeat(auto-fill, minmax(185px, 1fr))",
@@ -5770,8 +5806,8 @@ function OrderSummaryView({ data, onPrintRequest }) {
                   )}
                   {isMissed && !isShipped && (
                     <div style={{position:"absolute",top:4,right:4,
-                      background:"#ef4444",color:"#fff",borderRadius:20,
-                      fontSize:9,fontWeight:700,padding:"2px 6px"}}>🚫 ไม่ขึ้น</div>
+                      background: isTruck ? "#ef4444" : "#f59e0b",color:"#fff",borderRadius:20,
+                      fontSize:9,fontWeight:700,padding:"2px 6px"}}>{isTruck ? "🚫 ไม่ขึ้น" : "⏸️ ยังไม่ส่ง"}</div>
                   )}
                 </div>
 
@@ -5828,37 +5864,54 @@ function OrderSummaryView({ data, onPrintRequest }) {
                       <div style={{textAlign:"center",fontSize:10,color:"var(--g-700)",fontWeight:700}}>✓ Printed</div>
                     )}
 
-                    {/* Ship + Missed row */}
-                    {!isOnline && (
-                      <div style={{fontSize:10,color:"#b45309",textAlign:"center",
-                                   fontWeight:600,marginBottom:2}}>⚠️ ไม่มีอินเทอร์เน็ต</div>
-                    )}
-                    <div style={{display:"flex",gap:5}}>
-                      <button onClick={() => handleShip(order)} disabled={isSending || isMissed || !isOnline}
+                    {/* ขึ้นรถ: ปุ่มส่งทีละใบ + 🚫 เหมือนเดิม (ห้ามแตะ)
+                        หิ้วเอง: ส่งรวมเป็นชุดเดียวผ่าน "ส่งทั้งหมด" (1 รายการโอน + tid กันซ้ำ) —
+                          ไม่มีปุ่มส่งทีละใบแล้ว (เดิมกดทีละใบ → transferStock ทีละครั้ง = แยกใบโอน/เลข
+                          ZORT คนละเลข + ไม่มี tid ตอบช้าแล้วค้างหน้าจอ) · ปุ่มบนการ์ดไว้เลือก/ตัดออกจากชุด */}
+                    {isTruck ? (
+                      <>
+                        {!isOnline && (
+                          <div style={{fontSize:10,color:"#b45309",textAlign:"center",
+                                       fontWeight:600,marginBottom:2}}>⚠️ ไม่มีอินเทอร์เน็ต</div>
+                        )}
+                        <div style={{display:"flex",gap:5}}>
+                          <button onClick={() => handleShip(order)} disabled={isSending || isMissed || !isOnline}
+                            style={{
+                              flex:1,padding:"10px 4px",minHeight:44,borderRadius:7,border:"none",
+                              background: (isMissed||!isOnline)?"var(--g-100)":"var(--g-700)",
+                              color: (isMissed||!isOnline)?"var(--muted)":"#fff",
+                              fontSize:11,fontWeight:700,
+                              cursor:(isMissed||!isOnline)?"not-allowed":"pointer",
+                              fontFamily:"inherit",opacity:isSending?0.6:1,
+                            }}>
+                            {isSending ? "⏳..." : "✅ ส่งแล้ว"}
+                          </button>
+                          <button onClick={() => toggleMissed(order)}
+                            title={isMissed?"ยกเลิก - ใส่คืนในรถ":"รถเต็ม - ไม่ได้ขึ้น"}
+                            style={{
+                              width:44,minHeight:44,borderRadius:7,
+                              border:`1.5px solid ${isMissed?"#ef4444":"var(--bdr)"}`,
+                              background:isMissed?"#fee2e2":"#fff",
+                              color:isMissed?"#ef4444":"var(--muted)",
+                              cursor:"pointer",fontSize:14,fontFamily:"inherit",
+                            }}>
+                            🚫
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <button onClick={() => toggleMissed(order)}
+                        title={isMissed?"แตะเพื่อใส่กลับในชุดส่ง":"แตะเพื่อตัดออกจากชุดส่ง (ยังไม่ส่งรอบนี้)"}
                         style={{
-                          flex:1,padding:"10px 4px",minHeight:44,borderRadius:7,border:"none",
-                          background: (isMissed||!isOnline)?"var(--g-100)":"var(--g-700)",
-                          color: (isMissed||!isOnline)?"var(--muted)":"#fff",
-                          fontSize:11,fontWeight:700,
-                          cursor:(isMissed||!isOnline)?"not-allowed":"pointer",
-                          fontFamily:"inherit",opacity:isSending?0.6:1,
+                          padding:"10px 4px",minHeight:44,borderRadius:7,
+                          border:`1.5px solid ${isMissed?"#fca5a5":"#86efac"}`,
+                          background:isMissed?"#fef2f2":"#f0fdf4",
+                          color:isMissed?"#b91c1c":"#166534",
+                          cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit",
                         }}>
-                        {isSending ? "⏳..." : "✅ ส่งแล้ว"}
+                        {isMissed ? "⏸️ ไม่ส่งรอบนี้ — แตะเพื่อใส่กลับ" : "☑️ จะส่งในชุดนี้"}
                       </button>
-                      {isTruck && (
-                        <button onClick={() => toggleMissed(order)}
-                          title={isMissed?"ยกเลิก - ใส่คืนในรถ":"รถเต็ม - ไม่ได้ขึ้น"}
-                          style={{
-                            width:44,minHeight:44,borderRadius:7,
-                            border:`1.5px solid ${isMissed?"#ef4444":"var(--bdr)"}`,
-                            background:isMissed?"#fee2e2":"#fff",
-                            color:isMissed?"#ef4444":"var(--muted)",
-                            cursor:"pointer",fontSize:14,fontFamily:"inherit",
-                          }}>
-                          🚫
-                        </button>
-                      )}
-                    </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -5866,14 +5919,14 @@ function OrderSummaryView({ data, onPrintRequest }) {
           })}
         </div>
 
-        {/* "Missed truck" sub-section summary */}
-        {isTruck && orders.some(o => missed[o.id] && !shipped[o.id]) && (
+        {/* สรุปตัวที่ถูกตัดออกจากชุด — ขึ้นรถ: "ไม่ได้ขึ้นรถ" · หิ้ว: "ไม่รวมในชุดส่ง" */}
+        {orders.some(o => missed[o.id] && !shipped[o.id]) && (
           <div style={{
             marginTop:14,padding:"10px 14px",background:"#fef2f2",
             borderRadius:8,border:"1px solid #fca5a5",fontSize:12,
           }}>
-            <b style={{color:"#ef4444"}}>🚫 ไม่ได้ขึ้นรถ ({orders.filter(o=>missed[o.id]&&!shipped[o.id]).length} รายการ)</b>
-            <span style={{color:"var(--muted)",marginLeft:8}}>— กด 🚫 อีกครั้งเพื่อยกเลิกและส่งได้</span>
+            <b style={{color:"#ef4444"}}>{isTruck ? "🚫 ไม่ได้ขึ้นรถ" : "⏸️ ไม่รวมในชุดส่ง"} ({orders.filter(o=>missed[o.id]&&!shipped[o.id]).length} รายการ)</b>
+            <span style={{color:"var(--muted)",marginLeft:8}}>{isTruck ? "— กด 🚫 อีกครั้งเพื่อยกเลิกและส่งได้" : "— แตะปุ่มบนการ์ดเพื่อใส่กลับในชุดส่ง"}</span>
           </div>
         )}
       </div>

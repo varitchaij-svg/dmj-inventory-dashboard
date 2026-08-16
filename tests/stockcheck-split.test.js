@@ -24,7 +24,7 @@ const COLS     = grab(/const SHEET_STOCK_CHECK = "[^"]*";/) + '\n'
                + grab(/var STOCK_CHECK_HEADERS_ = \[[\s\S]*?\];/) + '\n'
                + grab(/var COL_CHK_FS_STATUS = 9[\s\S]*?COL_CHK_WH_AT = 14;/);
 const F_READ   = grab(/function readStockCheckRequests_\(\) \{[\s\S]*?\n\}/);
-const F_DONE   = grab(/function completeStockCheckRequest_\(reqId, actor, side\) \{[\s\S]*?\n\}/);
+const F_DONE   = grab(/function completeStockCheckRequest_\(reqId, actor, side, roleHint\) \{[\s\S]*?\n\}/);
 
 // ชีตจำลอง — rows[0] = header, ข้อมูลเริ่ม rows[1] · เก็บ setValue เพื่อตรวจว่าเขียนคอลัมน์ไหน
 function makeSheet(rows) {
@@ -158,12 +158,36 @@ describe('แจ้งเตือนเจ้าของ + saler ว่าฝ�
     expect(last.body).toContain('ครบทั้ง 2 ฝั่ง');
   });
 
-  it('side ว่าง (client เก่า) → ปิดทั้งใบ ไม่ยิงกระดิ่ง (ไม่รู้ฝั่ง)', () => {
+  it('side ว่าง + roleHint=frontstore (client เก่า/ยังไม่ล็อกอิน) → ปิดเฉพาะ fs ไม่แตะ wh', () => {
     const env = buildEnv();
-    const res = env.completeStockCheckRequest_('CHK-001', 'x', '');
+    const res = env.completeStockCheckRequest_('CHK-001', 'x', '', 'frontstore');
+    expect(res.success).toBe(true);
+    expect(res.fsDone).toBe(true);
+    expect(res.whDone).toBe(false);
+    const r = env.readStockCheckRequests_()[0];
+    expect(r.fsStatus).toBe('done');
+    expect(r.whStatus).toBe('pending');  // ⭐ คลังต้องยังค้าง — บั๊กที่เจ้าของแจ้ง
+    // เดา side ได้แล้ว → ยิงกระดิ่งบอก "หน้าร้าน" ตามปกติ
+    expect(notis.length).toBe(1);
+    expect(notis[0].title).toContain('หน้าร้าน');
+  });
+
+  it('side ว่าง + roleHint=warehouse → ปิดเฉพาะ wh ไม่แตะ fs', () => {
+    const env = buildEnv();
+    const res = env.completeStockCheckRequest_('CHK-001', 'x', '', 'warehouse');
     expect(res.success).toBe(true);
     const r = env.readStockCheckRequests_()[0];
-    expect(r.status).toBe('done');       // ทั้งใบ done (backward-compat)
+    expect(r.whStatus).toBe('done');
+    expect(r.fsStatus).toBe('pending');
+  });
+
+  it('side ว่าง + เดา role ไม่ได้ (owner/ชื่อ session) → fail-safe: ไม่ปิดทั้งใบ ไม่ทำข้อมูลหาย', () => {
+    const env = buildEnv();
+    const res = env.completeStockCheckRequest_('CHK-001', 'สมชาย (เจ้าของร้าน)', '', 'owner');
+    expect(res.success).toBe(false);     // ตอบให้รีเฟรชแทนการเดา
+    const r = env.readStockCheckRequests_()[0];
+    expect(r.fsStatus).toBe('pending');  // ⭐ ทั้ง 2 ฝั่งต้องยังค้าง — ห้ามปิดทั้งใบ
+    expect(r.whStatus).toBe('pending');
     expect(notis.length).toBe(0);
   });
 });
@@ -172,8 +196,13 @@ describe('จุดเชื่อมต่อในโค้ดจริง (�
   it('payload filter ส่งคำขอที่ยังมีฝั่งใดค้าง (ไม่ใช่ status==="pending" เดิม)', () => {
     expect(SRC).toContain('r.fsStatus !== "done" || r.whStatus !== "done"');
   });
-  it('dispatch ส่ง data.side เข้า completeStockCheckRequest_', () => {
-    expect(SRC).toContain('completeStockCheckRequest_(data.reqId, actor, data.side)');
+  it('dispatch ส่ง data.side + roleHint (เดา side เมื่อ client เก่าไม่ส่ง side)', () => {
+    expect(SRC).toContain('completeStockCheckRequest_(data.reqId, actor, data.side, (_sess && _sess.role) || data.actor)');
+  });
+  it('completeStockCheckRequest_ ไม่มีเส้นทาง "ปิดทั้งใบ" เมื่อ side ว่างอีกต่อไป (fail-safe)', () => {
+    // เดา side ไม่ได้ → return error ไม่เขียนอะไร · กัน regression กลับไปปิดทั้งใบ
+    expect(F_DONE).toMatch(/if \(!side\) \{[\s\S]*?success: false/);
+    expect(F_DONE).not.toContain('ปิดทั้งใบ (client เก่า)');
   });
   it('frontend กรอง myPendingChecks ตาม role (fs/wh) แยกกัน', () => {
     expect(APP).toContain('r.fsStatus !== "done"');
