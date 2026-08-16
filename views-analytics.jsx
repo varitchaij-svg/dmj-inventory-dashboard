@@ -4926,6 +4926,19 @@ async function syncRecentTransfers(days) {
   } catch(e) { console.warn("syncRecentTransfers error:", e.message); return null; }
 }
 
+// ของเข้าใหม่ (รายการซื้อ PO) N วันล่าสุด — สำหรับ warehouse/saler ที่ payload ไม่มี purchases
+// คืน purchases[] (ไม่มีต้นทุน — backend ตัด unitPrice ออก) หรือ null เมื่อถามไม่ได้ (เน็ต/GAS เก่า)
+async function syncRecentIntake(days) {
+  if (!SHEET_DEPLOY_URL) return null;
+  const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
+  try {
+    const d = await dmjJson(await fetch(
+      `${SHEET_DEPLOY_URL}${sep}action=recentIntake&days=${days || 90}&_t=${Date.now()}`,
+      { cache: "no-store" }));
+    return (d && d.ok === true && Array.isArray(d.purchases)) ? d.purchases : null;
+  } catch(e) { console.warn("syncRecentIntake error:", e.message); return null; }
+}
+
 // ค้นเอกสารโอนจาก "เลขที่ ZORT" ที่ผู้ใช้พิมพ์เอง
 // จำเป็นเพราะมีกรณีที่ **ZORT มีเอกสารโอนอยู่ฝ่ายเดียว แต่ชีตเราไม่มีบันทึก** (สคริปต์ถูกตัด
 // กลางคันหลังยิง ZORT สำเร็จ / มีคนสร้างรายการโอนใน ZORT เอง) → หาในชีตยังไงก็ไม่เจอ
@@ -6223,12 +6236,44 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
   const [qtyVal, setQtyVal] = uS("1");
   const [qrMap, setQrMap] = uS({});
   const [logoSrc, setLogoSrc] = uS("logo.png");
+  const [storeCodes, setStoreCodes] = uS({});   // โหมดการ์ด: รหัสร้านต่อ SKU (กรอกเอง)
+  const [intakePdfOpen, setIntakePdfOpen] = uS(false);  // โมดัลบันทึก PDF ของเข้าใหม่ (แยกซัพพลายเออร์)
 
   const productMap = uM(() => {
     const m = {};
     products.forEach(p => { m[p.sku] = p; });
     return m;
   }, [products]);
+  const prodBySkuMap = uM(() => new Map(products.map(p => [p.sku, p])), [products]);
+
+  // ── ของเข้าใหม่ (PO N วันล่าสุด) — owner มีใน payload อยู่แล้ว · warehouse/saler ดึงผ่าน endpoint
+  //    ใช้ 2 อย่าง: (1) โชว์ "เพิ่งเข้าคลัง" ให้เลือกก่อน (2) เติม "จำนวนเข้า" อัตโนมัติในการ์ด
+  //    + ป้อนให้ IntakePdfModal (บันทึก PDF แยกซัพพลายเออร์) ที่ทั้ง 3 role กดได้
+  const [intakePurchases, setIntakePurchases] = uS(() => (data && Array.isArray(data.purchases)) ? data.purchases : null);
+  uE(() => {
+    if (Array.isArray(intakePurchases)) return;      // มีจาก payload (owner/dev) แล้ว
+    let alive = true;
+    (async () => {
+      const list = await syncRecentIntake(90);
+      if (alive) setIntakePurchases(Array.isArray(list) ? list : []);
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // จำนวนเข้าล่าสุดต่อ SKU (รวมทุก PO ในช่วง) + วันล่าสุด — เรียงใหม่สุดก่อนสำหรับ "เพิ่งเข้าคลัง"
+  const intakeInfo = uM(() => {
+    const bySku = new Map();
+    for (const pu of (intakePurchases || [])) {
+      if (!pu || !pu.sku) continue;
+      const g = bySku.get(pu.sku) || { sku: pu.sku, qty: 0, date: pu.date || "" };
+      g.qty += pu.qty || 0;
+      if ((pu.date || "") > g.date) g.date = pu.date || g.date;
+      bySku.set(pu.sku, g);
+    }
+    const recent = [...bySku.values()].sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : 0);
+    const qtyMap = {}; recent.forEach(g => { qtyMap[g.sku] = g.qty; });
+    return { recent, qtyMap };
+  }, [intakePurchases]);
 
   // สินค้าที่กำลังเปิดดูรายละเอียด — เก็บเป็น sku ไม่ใช่ object (กันค้างค่าเก่าเมื่อ products อัปเดต)
   const [detailSku, setDetailSku] = uS(null);
@@ -6292,6 +6337,15 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
   }, [labelList]);
 
   const totalQty = items.reduce((s, i) => s + i.qty, 0);
+
+  // โหมดการ์ด: 1 การ์ด/SKU (ไม่ขยายตามจำนวนใบ) · 9 การ์ด/หน้า (3×3) เหมือนดีไซน์ต้นแบบ
+  const cardList = uM(() => items.map(it => productMap[it.sku]).filter(Boolean), [items, productMap]);
+  const CARDS_PER_PAGE = 9;
+  const cardPages = uM(() => {
+    const ps = [];
+    for (let i = 0; i < cardList.length; i += CARDS_PER_PAGE) ps.push(cardList.slice(i, i + CARDS_PER_PAGE));
+    return ps;
+  }, [cardList]);
 
   // Safely escape HTML entities to prevent XSS in popup
   const escHtml = (s) => String(s || "")
@@ -6414,6 +6468,11 @@ ${labelsHTML}
 
   const removeItem = sku => setItems(prev => prev.filter(i => i.sku !== sku));
   const updateQty  = (sku, qty) => setItems(prev => prev.map(i => i.sku === sku ? { ...i, qty: Math.min(700, Math.max(1, qty || 1)) } : i));
+  // เพิ่ม SKU ตรง ๆ (โหมดการ์ด/ชิปเพิ่งเข้าคลัง) — 1 การ์ด/SKU, ไม่เพิ่มซ้ำ
+  const addSkuDirect = sku => {
+    if (!productMap[sku]) return;
+    setItems(prev => prev.some(i => i.sku === sku) ? prev : [...prev, { sku, qty: 1 }]);
+  };
 
   return (
     <div>
@@ -6425,15 +6484,22 @@ ${labelsHTML}
             <div className="page-sub">
               {printMode === "a4"
                 ? "A4 · 5 คอลัมน์ · 70 ใบ/หน้า"
+                : printMode === "card"
+                ? "การ์ดสินค้า · A4 · 3×3 = 9 การ์ด/หน้า · มี QR + จำนวนเข้า"
                 : "สติ๊กเกอร์ · 50×25mm · gap 3mm · แถวเดียว"}
             </div>
           </div>
-          {labelList.length > 0 && (
+          {(printMode === "card" ? cardList.length : labelList.length) > 0 && (
             <div className="page-actions">
               {printMode === "a4" ? (
                 <button className="btn primary" onClick={() => window.print()}
                         style={{padding:"10px 20px",fontWeight:700,fontSize:14}}>
                   🖨️ พิมพ์ {labelList.length} ใบ ({pages.length} หน้า A4)
+                </button>
+              ) : printMode === "card" ? (
+                <button className="btn primary" onClick={() => window.print()}
+                        style={{padding:"10px 20px",fontWeight:700,fontSize:14}}>
+                  🖨️ พิมพ์ {cardList.length} การ์ด ({cardPages.length} หน้า A4)
                 </button>
               ) : (
                 <button className="btn primary" onClick={printVaseLabels}
@@ -6446,9 +6512,10 @@ ${labelsHTML}
         </div>
 
         {/* ── Print mode toggle ── */}
-        <div style={{display:"flex",gap:8,marginBottom:14}}>
+        <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
           {[
             {id:"a4",      label:"📄 A4",       sub:"42×21mm · 70/หน้า"},
+            {id:"card",    label:"📇 การ์ดสินค้า", sub:"QR + จำนวนเข้า · 9/หน้า"},
             {id:"sticker", label:"🏷️ สติ๊กเกอร์", sub:"50×25mm · แถวเดียว"},
           ].map(m => (
             <button key={m.id} onClick={() => setPrintMode(m.id)} style={{
@@ -6465,6 +6532,47 @@ ${labelsHTML}
           ))}
         </div>
 
+        {/* ── โหมดการ์ด: ของเข้าใหม่ (บันทึก PDF ให้เจ้าของ + เพิ่งเข้าคลังให้เลือกก่อน) ── */}
+        {printMode === "card" && (
+          <div style={{border:"1.5px solid #cfe0d6",borderRadius:12,background:"#f6faf7",padding:"12px 14px",marginBottom:14}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:10}}>
+              <span style={{fontSize:14,fontWeight:800,color:"#1f7a34"}}>📥 ของเข้าใหม่</span>
+              <span style={{fontSize:11.5,color:"var(--muted)"}}>
+                {intakePurchases == null ? "กำลังโหลด…" : `${intakeInfo.recent.length} รายการ (PO 90 วันล่าสุด)`}
+              </span>
+              <button className="btn ghost" onClick={() => setIntakePdfOpen(true)}
+                      disabled={!intakePurchases || !intakePurchases.length}
+                      style={{marginLeft:"auto",padding:"7px 13px",fontSize:12.5,fontWeight:700}}>
+                📄 บันทึก PDF (แยกซัพพลายเออร์)
+              </button>
+            </div>
+            {intakeInfo.recent.length > 0 && (
+              <>
+                <div style={{fontSize:11,color:"var(--muted)",marginBottom:6,fontWeight:600}}>
+                  🆕 เพิ่งเข้าคลัง — แตะเพื่อเพิ่มการ์ด (ใหม่สุดก่อน):
+                </div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",maxHeight:132,overflowY:"auto"}}>
+                  {intakeInfo.recent.filter(g => productMap[g.sku]).slice(0, 60).map(g => {
+                    const inList = items.some(i => i.sku === g.sku);
+                    return (
+                      <button key={g.sku} onClick={() => addSkuDirect(g.sku)} disabled={inList}
+                        style={{padding:"5px 10px",borderRadius:16,fontFamily:"inherit",fontSize:11.5,cursor:inList?"default":"pointer",
+                                border:`1px solid ${inList?"var(--g-500,#3a9d5d)":"var(--bdr)"}`,
+                                background:inList?"var(--g-50,#eef7f0)":"var(--paper)",color:inList?"var(--g-700)":"var(--text)"}}>
+                        {inList ? "✓ " : "+ "}<b>{g.sku}</b> <span style={{color:"var(--muted)"}}>+{fmtN(g.qty)}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <button className="btn ghost" onClick={() => intakeInfo.recent.forEach(g => productMap[g.sku] && addSkuDirect(g.sku))}
+                        style={{marginTop:8,padding:"6px 12px",fontSize:12,fontWeight:700}}>
+                  + เพิ่มของเข้าใหม่ทั้งหมด
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
         {/* Add product row */}
         <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14,alignItems:"flex-end"}}>
           <div style={{flex:1,minWidth:220}}>
@@ -6479,6 +6587,8 @@ ${labelsHTML}
               {products.map(p => <option key={p.sku} value={`${p.sku} — ${p.name}`}/>)}
             </datalist>
           </div>
+          {/* จำนวนใบ ไม่ใช้ในโหมดการ์ด (1 การ์ด/SKU) — ซ่อนกันสับสน */}
+          {printMode !== "card" && (
           <div>
             <div style={{fontSize:11,color:"var(--muted)",marginBottom:4,fontWeight:600}}>{t("จำนวนใบ")}</div>
             <input type="number" value={qtyVal} min={1} max={700}
@@ -6487,6 +6597,7 @@ ${labelsHTML}
               style={{width:90,padding:"9px 12px",borderRadius:8,border:"1.5px solid var(--bdr)",
                       fontFamily:"inherit",fontSize:13}}/>
           </div>
+          )}
           <button className="btn primary" onClick={addItem}
                   style={{padding:"9px 18px",fontWeight:700}}>+ เพิ่ม</button>
           <ScanButton size={40}
@@ -6536,13 +6647,28 @@ ${labelsHTML}
                   <span style={{fontSize:12,color:"var(--g-700)",fontWeight:700,minWidth:60,textAlign:"right"}}>
                     {p?.price && ["owner","dev"].indexOf(sessionStorage.getItem("dmj_role")) >= 0 ? `${p.price} ฿` : ""}
                   </span>
-                  {/* พรีฟิลค่าไว้ → ต้อง select ตอนแตะ ไม่งั้นพิมพ์ทับกลายเป็นต่อท้าย (บทเรียนข้อ 14) */}
-                  <input type="number" value={item.qty} min={1} max={700}
-                    onFocus={e => e.target.select()}
-                    onChange={e => updateQty(item.sku, parseInt(e.target.value) || 1)}
-                    style={{width:70,padding:"4px 8px",borderRadius:6,border:"1.5px solid var(--bdr)",
-                            fontFamily:"inherit",fontSize:12,textAlign:"center"}}/>
-                  <span style={{fontSize:11,color:"var(--muted)",minWidth:28}}>ใบ</span>
+                  {printMode === "card" ? (
+                    /* โหมดการ์ด: กรอก "รหัสร้าน" เอง + โชว์ "จำนวนเข้า" อัตโนมัติ (อ่านอย่างเดียว) */
+                    <>
+                      <span style={{fontSize:11,color:"var(--muted)",textAlign:"right",minWidth:52}}>
+                        เข้า<br/><b style={{color:"var(--text)",fontSize:12}}>{intakeInfo.qtyMap[item.sku] != null ? fmtN(intakeInfo.qtyMap[item.sku]) : "—"}</b>
+                      </span>
+                      <input value={storeCodes[item.sku] || ""} placeholder="รหัสร้าน"
+                        onChange={e => setStoreCodes(prev => ({ ...prev, [item.sku]: e.target.value }))}
+                        style={{width:96,padding:"6px 8px",borderRadius:6,border:"1.5px solid var(--bdr)",
+                                fontFamily:"inherit",fontSize:12}}/>
+                    </>
+                  ) : (
+                    <>
+                      {/* พรีฟิลค่าไว้ → ต้อง select ตอนแตะ ไม่งั้นพิมพ์ทับกลายเป็นต่อท้าย (บทเรียนข้อ 14) */}
+                      <input type="number" value={item.qty} min={1} max={700}
+                        onFocus={e => e.target.select()}
+                        onChange={e => updateQty(item.sku, parseInt(e.target.value) || 1)}
+                        style={{width:70,padding:"4px 8px",borderRadius:6,border:"1.5px solid var(--bdr)",
+                                fontFamily:"inherit",fontSize:12,textAlign:"center"}}/>
+                      <span style={{fontSize:11,color:"var(--muted)",minWidth:28}}>ใบ</span>
+                    </>
+                  )}
                   <button onClick={() => removeItem(item.sku)}
                     style={{background:"none",border:"none",cursor:"pointer",color:"var(--dang)",
                             fontSize:18,padding:"4px 8px",fontWeight:700,
@@ -6551,7 +6677,9 @@ ${labelsHTML}
               );
             })}
             <div style={{marginTop:10,display:"flex",gap:16,fontSize:12,color:"var(--muted)",flexWrap:"wrap"}}>
-              <span>รวม <b style={{color:"var(--g-700)"}}>{totalQty}</b> ใบ</span>
+              {printMode === "card"
+                ? <span>รวม <b style={{color:"var(--g-700)"}}>{cardList.length}</b> การ์ด = <b style={{color:"var(--g-700)"}}>{cardPages.length}</b> หน้า A4</span>
+                : <span>รวม <b style={{color:"var(--g-700)"}}>{totalQty}</b> ใบ</span>}
               {printMode === "a4" && <>
                 <span>= <b style={{color:"var(--g-700)"}}>{pages.length}</b> หน้า A4</span>
                 {totalQty % 70 !== 0 && pages.length > 0 && (
@@ -6569,7 +6697,7 @@ ${labelsHTML}
           </div>
         )}
 
-        {labelList.length > 0 && (
+        {(printMode === "card" ? cardList.length : labelList.length) > 0 && (
           <div style={{fontSize:12,color:"var(--muted)",marginBottom:12,padding:"8px 12px",
                        background:"#fff8e1",borderRadius:8,border:"1px solid #f59e0b"}}>
             💡 ตัวอย่างด้านล่างคือ preview · กด <b>🖨️ พิมพ์</b> เพื่อส่งไปปริ้นเตอร์
@@ -6605,6 +6733,58 @@ ${labelsHTML}
                   </div>
                   <div className="label-sku-text">{p.sku}</div>
                 </div>
+                );
+              })}
+            </div>
+          </div>
+        ))
+      ) : printMode === "card" ? (
+        /* Card label pages (A4, 3×3) — visible on print too (ไม่ใส่ .no-print) */
+        cardPages.map((page, pi) => (
+          <div key={pi} className="card-label-page">
+            <div className="card-label-grid">
+              {page.map((p, i) => {
+                const idx = pi * CARDS_PER_PAGE + i + 1;
+                const qtyIn = intakeInfo.qtyMap[p.sku];
+                const store = (storeCodes[p.sku] || "").trim();
+                return (
+                  <div key={p.sku} className="card-label-cell">
+                    {/* รูปสินค้า (ซ้าย) + เลขลำดับ */}
+                    <div style={{position:"relative",width:"46%",flexShrink:0,background:"#f3f6f2",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden"}}>
+                      <div style={{position:"absolute",top:"2mm",left:"2mm",background:"#1f7a34",color:"#fff",fontSize:"9pt",fontWeight:800,borderRadius:5,padding:"0.5mm 2mm"}}>{String(idx).padStart(2,"0")}</div>
+                      {p.imageUrl
+                        ? <img src={p.imageUrl} alt="" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} onError={e => { e.currentTarget.style.display="none"; }}/>
+                        : <div style={{fontSize:"20pt",color:"#b7c7bd"}}>📦</div>}
+                    </div>
+                    {/* รายละเอียด (ขวา) */}
+                    <div style={{flex:1,minWidth:0,padding:"3mm 3.5mm",display:"flex",flexDirection:"column"}}>
+                      <div style={{fontSize:"10pt",fontWeight:800,color:"#111",lineHeight:1.2,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{p.name || p.sku}</div>
+                      <div style={{borderTop:"1px dashed #cbd5cf",margin:"2mm 0"}}/>
+                      <div style={{display:"flex",justifyContent:"space-between",gap:"2mm",fontSize:"7.5pt",marginBottom:"1mm"}}>
+                        <span style={{color:"#888"}}>SKU</span>
+                        <span style={{fontFamily:"monospace",fontWeight:700,color:"#111"}}>{p.sku}</span>
+                      </div>
+                      <div style={{display:"flex",justifyContent:"space-between",gap:"2mm",fontSize:"7.5pt",marginBottom:"1mm"}}>
+                        <span style={{color:"#888"}}>ราคา/หน่วย</span>
+                        <span style={{fontWeight:800,color:"#1f7a34"}}>{p.price != null && p.price > 0 ? `${p.price} บาท` : "—"}</span>
+                      </div>
+                      <div style={{fontSize:"7.5pt",marginBottom:"1mm"}}>
+                        <span style={{color:"#888"}}>จำนวนเข้า</span>{" "}
+                        <b style={{color:"#111",fontSize:"9pt"}}>{qtyIn != null ? `${fmtN(qtyIn)} ชิ้น` : "—"}</b>
+                      </div>
+                      <div style={{marginTop:"auto",display:"flex",alignItems:"flex-end",justifyContent:"space-between",gap:"2mm"}}>
+                        <div style={{minWidth:0}}>
+                          <div style={{fontSize:"7pt",color:"#888"}}>รหัสร้าน</div>
+                          <div style={{fontSize:"9pt",fontWeight:700,color:"#111",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{store || "—"}</div>
+                        </div>
+                        <div style={{width:"16mm",height:"16mm",flexShrink:0}}>
+                          {qrMap[p.sku]
+                            ? <img src={qrMap[p.sku]} alt={p.sku} style={{width:"100%",height:"100%",objectFit:"contain"}}/>
+                            : <div style={{width:"100%",height:"100%",background:"#f0f0f0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"6pt",color:"#aaa"}}>QR</div>}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 );
               })}
             </div>
@@ -6658,6 +6838,9 @@ ${labelsHTML}
       )}
 
       {detailProduct && <ProductModal p={detailProduct} onClose={() => setDetailSku(null)}/>}
+      {/* บันทึก PDF ของเข้าใหม่ แยกซัพพลายเออร์ — IntakePdfModal เป็น global จาก views-main.jsx */}
+      {intakePdfOpen && typeof IntakePdfModal === "function" &&
+        <IntakePdfModal purchases={intakePurchases || []} prodBySku={prodBySkuMap} onClose={() => setIntakePdfOpen(false)}/>}
     </div>
   );
 }
