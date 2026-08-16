@@ -1289,10 +1289,14 @@ function buildIntakePages(purchases, selectedDates) {
 function runIntakePrint(fileName) {
   const prevTitle = document.title;
   if (fileName) document.title = fileName;
+  // ตั้ง class ทั้ง <html> และ <body> — CSS ปลด overflow-x:hidden/max-width:100vw ตอนพิมพ์
+  // (ไม่งั้น iOS ตัดขอบเอกสาร 210mm ที่ความกว้างจอ — เหลือ 2 จาก 3 คอลัมน์)
+  document.documentElement.classList.add("intake-printing");
   document.body.classList.add("intake-printing");
   try { if (typeof setPosPrintPageSize === "function") setPosPrintPageSize("a4"); } catch (e) {}
   const onAfter = () => {
     document.title = prevTitle;
+    document.documentElement.classList.remove("intake-printing");
     document.body.classList.remove("intake-printing");
     window.removeEventListener("afterprint", onAfter);
   };
@@ -1301,7 +1305,7 @@ function runIntakePrint(fileName) {
 }
 
 // การ์ดสินค้า 1 ใบในเอกสาร PDF — รูป/ราคา/สีดึงจาก catalog ตาม SKU (ตามกติกา UI: มีรูปเสมอ)
-function IntakePdfCard({ item, index, prod }) {
+function IntakePdfCard({ item, index, prod, qr }) {
   const img = prod && prod.imageUrl;
   const price = prod && prod.price;
   const color = prod && prod.color;
@@ -1331,6 +1335,12 @@ function IntakePdfCard({ item, index, prod }) {
             <div style={{fontSize:9,color:"#888"}}>จำนวนรับ (ชิ้น)</div>
             <div style={{fontSize:16,fontWeight:900,color:"#111"}}>{fmtN(item.qty)}</div>
           </div>
+          {/* QR (รหัสสินค้า) สำหรับสแกน — สร้างจาก qrcodejs ในตัวเรียก */}
+          <div style={{width:"14mm",height:"14mm",flexShrink:0}}>
+            {qr
+              ? <img src={qr} alt={item.sku} style={{width:"100%",height:"100%",objectFit:"contain"}}/>
+              : <div style={{width:"100%",height:"100%",background:"#f0f0f0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,color:"#aaa"}}>QR</div>}
+          </div>
         </div>
       </div>
     </div>
@@ -1339,7 +1349,7 @@ function IntakePdfCard({ item, index, prod }) {
 
 // เอกสาร PDF ทั้งชุด — แตกแต่ละกลุ่ม (ซัพพลายเออร์/วัน) เป็นแผ่นละ INTAKE_PDF_PER_PAGE ใบ
 // display:none บนจอ (คลาส .intake-print-area) → โผล่เฉพาะตอนพิมพ์ · portal ไป body จากตัวเรียก
-function IntakePdfDoc({ pages, prodBySku }) {
+function IntakePdfDoc({ pages, prodBySku, qrMap }) {
   if (!pages || !pages.length) return null;
   const printedAt = new Date().toLocaleString("th-TH", { day:"numeric", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
   const sheets = [];
@@ -1384,7 +1394,7 @@ function IntakePdfDoc({ pages, prodBySku }) {
           {/* ── ตารางการ์ดสินค้า ── */}
           <div style={{display:"grid",gridTemplateColumns:"repeat(3, minmax(0,1fr))",gap:10}}>
             {s.items.map((it, i) => (
-              <IntakePdfCard key={it.sku} item={it} index={s.startIdx + i + 1} prod={prodBySku.get(it.sku)}/>
+              <IntakePdfCard key={it.sku} item={it} index={s.startIdx + i + 1} prod={prodBySku.get(it.sku)} qr={qrMap && qrMap[it.sku]}/>
             ))}
           </div>
           {/* ── ท้ายเอกสาร (marginTop:auto ดันลงล่างสุด — .intake-print-page เป็น flex column) ── */}
@@ -1407,6 +1417,34 @@ function IntakePdfModal({ purchases, prodBySku, onClose }) {
   const [sel, setSel] = uS(() => new Set(opts.length ? [opts[0].date] : []));  // ตั้งต้น: วันล่าสุด
   const pages = uM(() => buildIntakePages(purchases, sel), [purchases, sel]);
   const sheetCount = uM(() => pages.reduce((s, g) => s + Math.max(1, Math.ceil(g.nSku / INTAKE_PDF_PER_PAGE)), 0), [pages]);
+
+  // QR รหัสสินค้าต่อ SKU (สแกนตอนรับของ) — ใช้ qrcodejs (window.QRCode) เหมือน LabelPrintView
+  // ไม่มี lib → qrMap ว่าง → การ์ดโชว์กล่อง "QR" แทน (ไม่พัง)
+  const [qrMap, setQrMap] = uS({});
+  uE(() => {
+    const QR = window.QRCode;
+    if (!QR) return;
+    const need = [];
+    pages.forEach(g => g.items.forEach(it => { if (!qrMap[it.sku]) need.push(it.sku); }));
+    if (!need.length) return;
+    const t = setTimeout(() => {
+      const wrap = document.createElement("div");
+      wrap.style.cssText = "position:fixed;left:-9999px;top:-9999px;visibility:hidden;pointer-events:none";
+      document.body.appendChild(wrap);
+      const out = {};
+      need.forEach(sku => {
+        const el = document.createElement("div"); wrap.appendChild(el);
+        try {
+          new QR(el, { text: sku, width: 80, height: 80, colorDark: "#000000", colorLight: "#ffffff", correctLevel: QR.CorrectLevel.M });
+          const c = el.querySelector("canvas");
+          if (c) out[sku] = c.toDataURL("image/png");
+        } catch (e) { /* ข้าม sku ที่สร้างไม่ได้ */ }
+      });
+      document.body.removeChild(wrap);
+      if (Object.keys(out).length) setQrMap(prev => ({ ...prev, ...out }));
+    }, 60);
+    return () => clearTimeout(t);
+  }, [pages]);
   const toggle = (d) => setSel(s => { const n = new Set(s); n.has(d) ? n.delete(d) : n.add(d); return n; });
   const doPrint = () => {
     if (!pages.length) return;
@@ -1461,7 +1499,7 @@ function IntakePdfModal({ purchases, prodBySku, onClose }) {
           </div>
         </div>
       </div>
-      {ReactDOM.createPortal(<IntakePdfDoc pages={pages} prodBySku={prodBySku}/>, document.body)}
+      {ReactDOM.createPortal(<IntakePdfDoc pages={pages} prodBySku={prodBySku} qrMap={qrMap}/>, document.body)}
     </>
   );
 }

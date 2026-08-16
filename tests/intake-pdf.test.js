@@ -150,6 +150,22 @@ describe('meta — CSS การพิมพ์ + cache', () => {
   it('CACHE_NAME ถูก bump (เพิ่ม CSS ใน HTML — บทเรียนข้อ 15)', () => {
     const m = SW.match(/CACHE_NAME\s*=\s*"dmj-v(\d+)"/);
     expect(m).toBeTruthy();
-    expect(Number(m[1])).toBeGreaterThanOrEqual(35);
+    expect(Number(m[1])).toBeGreaterThanOrEqual(37);
+  });
+});
+
+describe('meta — iOS ตัดขอบ + QR (แก้ ส.ค. 2026)', () => {
+  it('runIntakePrint ตั้ง class intake-printing ทั้ง html และ body (ปลด overflow/max-width)', () => {
+    const fn = grab(MAIN, /function runIntakePrint\(fileName\) \{[\s\S]*?\n\}/, 'runIntakePrint');
+    expect(fn).toMatch(/documentElement\.classList\.add\("intake-printing"\)/);
+    expect(fn).toMatch(/documentElement\.classList\.remove\("intake-printing"\)/);
+  });
+  it('CSS ปลด overflow/max-width ของ html+body ตอนพิมพ์ (ไม่งั้น iOS ตัดขอบ 210mm)', () => {
+    expect(HTML).toMatch(/html\.intake-printing,\s*body\.intake-printing\s*\{[\s\S]*?overflow:\s*visible[\s\S]*?max-width:\s*none/);
+  });
+  it('การ์ดมีช่อง QR + IntakePdfModal สร้าง QR ด้วย window.QRCode ส่ง qrMap', () => {
+    expect(MAIN).toMatch(/function IntakePdfCard\(\{ item, index, prod, qr \}\)/);
+    expect(MAIN).toMatch(/const QR = window\.QRCode/);
+    expect(MAIN).toMatch(/<IntakePdfDoc pages=\{pages\} prodBySku=\{prodBySku\} qrMap=\{qrMap\}/);
   });
 });
