@@ -1444,6 +1444,42 @@ function App() {
     return () => clearTimeout(id);
   }, [staleAt, fetchFromSheet]);
 
+  // Patch จำนวนสต็อกของ "เฉพาะ SKU ที่เพิ่งนับ" เข้า data.products ทันที (optimistic) — ไม่ต้องรอ
+  // reload ทั้งก้อน 4.2MB · ใช้ตอนพนักงานกด "ยืนยันเช็คเสร็จ" ให้ตัวเลขบนเว็บอัปเดตทันที
+  // patchMap = { SKU(ตัวใหญ่): { qtyWH?, qtyStore? } } — ใส่คีย์ไหนก็แก้เฉพาะคอลัมน์นั้น
+  // ⚠️ ต้องคำนวณ qty/isOOS/qtyStatus/stockValue ใหม่ให้ตรงกับ applyQtyLocToProduct_ ฝั่ง GAS
+  //    (สูตรเดียวกับ poll stocklite ด้านบน) ไม่งั้นซ้ำรอยบั๊ก WL (มีของจริงแต่โชว์ "หมด")
+  const patchProductQtys = usC((patchMap) => {
+    if (!patchMap || typeof patchMap !== 'object') return;
+    setData(prev => {
+      if (!prev || !Array.isArray(prev.products)) return prev;
+      const whR = (prev.totals && prev.totals.wholesaleRatio) || 0.8;
+      let changed = false;
+      const products = prev.products.map(p => {
+        const patch = patchMap[String(p.sku || '').toUpperCase()];
+        if (!patch) return p;
+        const qtyStore = patch.qtyStore != null ? (Number(patch.qtyStore) || 0) : p.qtyStore;
+        const qtyWH    = patch.qtyWH    != null ? (Number(patch.qtyWH)    || 0) : p.qtyWH;
+        if (p.qtyStore === qtyStore && p.qtyWH === qtyWH) return p;
+        changed = true;
+        const total = qtyStore + qtyWH;
+        const price = p.price || 0;
+        return Object.assign({}, p, {
+          qtyStore, qtyWH, warehouseQty: qtyWH,
+          qty:        total,
+          qtyStatus:  total < 0 ? 'negative' : 'ok',
+          isOversold: total < 0,
+          isOOS:      total <= 0,
+          stockValue:      total    * price * whR,
+          stockValueWH:    qtyWH    * price * whR,
+          stockValueStore: qtyStore * price * whR,
+        });
+      });
+      if (!changed) return prev;
+      return Object.assign({}, prev, { products });
+    });
+  }, []);
+
   // expose refetch ให้ child component เรียกได้เมื่อเจอ conflict (จะอัปเดต window._dataLoadedAt ให้สด)
   usE(() => { window._dmjRefetch = fetchFromSheet; return () => { delete window._dmjRefetch; }; }, [fetchFromSheet]);
   // ตัวเบา: ดึงเฉพาะรายการสั่งของ (action=orders อ่านชีตตรง ไม่ผ่าน cache) — ใช้หลังสั่งของสำเร็จ
@@ -2361,26 +2397,30 @@ function App() {
         {activeTab === "storage"      && <ErrorBoundary key="storage"><StorageView data={data}/></ErrorBoundary>}
         {activeTab === "stockcount"   && <ErrorBoundary key="stockcount"><StockCountView data={data}
                                             checkRequest={activeCheckRequest}
-                                            onCheckComplete={async function(reqId){
+                                            onCheckComplete={async function(reqId, counts){
+                                              // อัปเดตจำนวนสต็อกของ SKU ที่เพิ่งนับเข้าเว็บทันที (ไม่ต้องรอ reload ทั้งก้อน)
+                                              patchProductQtys(counts);
                                               try {
                                                 // side:'wh' → ปิดเฉพาะฝั่งคลัง ไม่กระทบคำขอฝั่งหน้าร้าน
                                                 await dmjFetch(SHEET_DEPLOY_URL, {method:"POST",
                                                   headers:{"Content-Type":"text/plain;charset=utf-8"},
                                                   body: JSON.stringify({completeStockCheck:true, reqId:reqId, side:'wh', actor:role})});
                                                 setActiveCheckRequest(null);
-                                                fetchFromSheet();
+                                                fetchFromSheet(); // reconcile เบื้องหลัง (รีเฟรช pendingChecks + ค่าจริง)
                                               } catch(e){ console.error("completeStockCheck:", e); }
                                             }}/></ErrorBoundary>}
         {activeTab === "frontstore"   && <ErrorBoundary key="frontstore"><FrontStoreView data={data} role={viewRole}
                                             checkRequest={activeCheckRequest}
-                                            onCheckComplete={async function(reqId){
+                                            onCheckComplete={async function(reqId, counts){
+                                              // อัปเดตจำนวนหน้าร้านของ SKU ที่เพิ่งนับเข้าเว็บทันที (ไม่ต้องรอ reload ทั้งก้อน)
+                                              patchProductQtys(counts);
                                               try {
                                                 // side:'fs' → ปิดเฉพาะฝั่งหน้าร้าน ไม่กระทบคำขอฝั่งคลัง
                                                 await dmjFetch(SHEET_DEPLOY_URL, {method:"POST",
                                                   headers:{"Content-Type":"text/plain;charset=utf-8"},
                                                   body: JSON.stringify({completeStockCheck:true, reqId:reqId, side:'fs', actor:role})});
                                                 setActiveCheckRequest(null);
-                                                fetchFromSheet();
+                                                fetchFromSheet(); // reconcile เบื้องหลัง (รีเฟรช pendingChecks + ค่าจริง)
                                               } catch(e){ console.error("completeStockCheck:", e); }
                                             }}/></ErrorBoundary>}
         {activeTab === "transfers"    && <ErrorBoundary key="transfers"><TransferView data={data}/></ErrorBoundary>}
