@@ -826,6 +826,45 @@ function startServer() {
     await page.close();
   }
 
+  // ── (จ2.6c) พิมพ์ label โหมด "การ์ดสินค้า" (warehouse) — แผ่นแปะ QR + จำนวนเข้า + PDF ──
+  // เจ้าของสั่ง: เพิ่มหัวข้อพิมพ์แผ่นแปะสินค้า (การ์ด) · ของเพิ่งเข้าคลังขึ้นก่อน ·
+  // และ warehouse/saler ต้องกดดาวน์โหลดเอกสารของเข้าใหม่ได้ · ยืนยันบนเบราว์เซอร์จริงกับ warehouse
+  {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=warehouse&tab=labels`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, 'warehouse', 'labels');
+      await page.waitForTimeout(400);
+      const cardModeBtn = page.locator('button', { hasText: 'การ์ดสินค้า' }).first();
+      if (!navOk) {
+        status = 'NAV_FAIL'; note = 'สลับไปแท็บพิมพ์ label ไม่สำเร็จ';
+      } else if (!(await cardModeBtn.count())) {
+        status = 'MODE_MISSING'; note = 'ไม่พบปุ่มโหมด "การ์ดสินค้า"';
+      } else {
+        await cardModeBtn.click({ timeout: 2000 }).catch(() => {});
+        await page.waitForTimeout(400);
+        // เพิ่มการ์ดผ่านชิป "เพิ่งเข้าคลัง" (fixture มี VAS001 วันนี้) หรือพิมพ์ SKU
+        const chip = page.locator('button', { hasText: /VAS001/ }).first();
+        if (await chip.count()) { await chip.click({ timeout: 2000 }).catch(() => {}); }
+        else {
+          const inp = page.locator('input[list="lbl-sku-list"]').first();
+          await inp.fill('VAS001'); await inp.press('Enter');
+        }
+        await page.waitForTimeout(700);   // รอ QR generate + render
+        const cells = await page.locator('.card-label-cell').count();
+        const pdfBtn = await page.locator('button', { hasText: 'บันทึก PDF (แยกซัพพลายเออร์)' }).count();
+        if (cells < 1) { status = 'NO_CARD'; note = 'เพิ่มสินค้าแล้วไม่มี .card-label-cell'; }
+        else if (!pdfBtn) { status = 'NO_PDF_BTN'; note = 'ไม่พบปุ่มบันทึก PDF ของเข้าใหม่'; }
+        else note = `โหมดการ์ด: เพิ่ม 1 สินค้า → ${cells} การ์ด + มีปุ่มบันทึก PDF ให้เจ้าของ`;
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'label_card__warehouse.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'พิมพ์ label การ์ดสินค้า (warehouse)', status, note });
+    await page.close();
+  }
+
   // ── (จ2.7) นับ stock คลัง "ตามซัพพลายเออร์" → auto-save → การ์ดขึ้น "บันทึกแล้ว" ──
   // เจ้าของแจ้งซ้ำ: warehouse ไม่ auto-save / นับต่างจากระบบแล้วไม่รู้ว่าแก้จำนวนจริงไหม
   // ต้องรันบนเบราว์เซอร์จริง — พิสูจน์ว่า นับ (+5) แล้วรอ 3 วิ การ์ดเปลี่ยนเป็น "บันทึกแล้ว"

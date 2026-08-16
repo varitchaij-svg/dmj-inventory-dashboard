@@ -2528,6 +2528,10 @@ function doGet(e) {
     if (e && e.parameter && e.parameter.action === 'recentTransfers') {
       return recentTransfersHandler_(Number(e.parameter.days) || 3);
     }
+    // ของเข้าใหม่ (PO) N วันล่าสุด — เปิดให้ warehouse/saler ทำเอกสาร/พิมพ์ป้าย (ตัดต้นทุนออก)
+    if (e && e.parameter && e.parameter.action === 'recentIntake') {
+      return recentIntakeHandler_(e.parameter.days);
+    }
     // ค้นเอกสารโอนจาก "เลขที่ ZORT" — ใช้ตอน ZORT มีของฝ่ายเดียว ชีตเราไม่มีบันทึก
     if (e && e.parameter && e.parameter.action === 'zortTransfer') {
       return zortTransferHandler_(String(e.parameter.number || '').trim());
@@ -3815,6 +3819,33 @@ function recentTransfersHandler_(days) {
       .setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
     Logger.log('recentTransfersHandler_ error: ' + err);
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// doGet action=recentIntake — ของเข้าใหม่ (รายการซื้อ PO) N วันล่าสุด
+// เปิดให้ warehouse/saler ใช้ทำเอกสารส่งเจ้าของ + พิมพ์ป้ายสินค้าใหม่ (data.purchases เต็มก้อน
+// เป็น owner/dev เท่านั้นเพราะมีต้นทุน — ตัวนี้ **ตัด unitPrice (ต้นทุน) ออก** จึงเปิดให้ role อื่นได้)
+// อ่านสด ไม่ผ่าน cache · date เป็น ISO yyyy-MM-dd จาก readPurchases_ (เทียบ string ได้)
+function recentIntakeHandler_(daysRaw) {
+  try {
+    const days = Math.min(180, Math.max(1, Number(daysRaw) || 90));
+    const cut = new Date(); cut.setDate(cut.getDate() - days);
+    const cutStr = Utilities.formatDate(cut, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    const all = readPurchases_();
+    const list = [];
+    for (let i = 0; i < all.length; i++) {
+      const pu = all[i];
+      if (!pu.sku || !pu.date || pu.date < cutStr) continue;
+      // ⚠️ ห้ามส่ง unitPrice — ต้นทุนเป็นข้อมูล owner/dev เท่านั้น (เหตุผลที่ purchases ถูกตัดจาก payload role อื่น)
+      list.push({ sku: pu.sku, name: pu.name, qty: pu.qty, supplier: pu.supplier,
+                  poNum: pu.poNum, date: pu.date, warehouse: pu.warehouse });
+    }
+    return ContentService.createTextOutput(JSON.stringify({ ok: true, days, purchases: list }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    Logger.log('recentIntakeHandler_ error: ' + err);
     return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
       .setMimeType(ContentService.MimeType.JSON);
   }

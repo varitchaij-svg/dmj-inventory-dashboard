@@ -1437,6 +1437,35 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
   · ⚠️ fixture browser ใช้ date **ISO** (เหมือน `readPurchases_`) + มีแถววันนี้ ไม่งั้น `recentIntake`
     เป็น null → ทั้งการ์ดของเข้าใหม่และปุ่มพิมพ์ไม่โผล่ = เทสต์เขียวโดยไม่ได้ทดสอบอะไร
 
+### 📇 พิมพ์ "แผ่นแปะสินค้า" (โหมดการ์ด) + ของเข้าใหม่ให้ warehouse/saler (ส.ค. 2026)
+
+เจ้าของสั่ง 2 อย่าง: (1) เพิ่มโหมดพิมพ์ **การ์ดสินค้า** (แผ่นแปะ QR + จำนวนเข้า + รหัสร้าน) ในแท็บ
+พิมพ์ label · ใส่ SKU เอง · **ของเพิ่งเข้าคลังขึ้นก่อน** · (2) ให้ **warehouse + saler** ดาวน์โหลด
+เอกสารของเข้าใหม่ (แยกซัพพลายเออร์) ให้เจ้าของได้
+
+- **endpoint ใหม่ `action=recentIntake&days=N`** (`recentIntakeHandler_`, appsscript_complete.gs)
+  คืน purchases N วันล่าสุด · ⚠️ **ตัด `unitPrice` (ต้นทุน) ออกเสมอ** — เหตุผลที่ `data.purchases`
+  เต็มก้อนเป็น owner/dev เท่านั้นคือมีต้นทุน · endpoint นี้จึงเปิดให้ warehouse/saler ได้ (อ่านสด
+  ไม่ผ่าน cache, เปิดแบบ read เหมือน `recentTransfers` ไม่ gate session) · date เป็น ISO
+- **`LabelPrintView` (views-analytics.jsx) โหมดที่ 3 = `card`** (นอกจาก `a4`/`sticker`)
+  · owner ใช้ `data.purchases` จาก payload · **warehouse/saler ดึงผ่าน `syncRecentIntake(90)`**
+    (payload ไม่มี purchases) → `intakePurchases` state
+  · **1 การ์ด/SKU** (`cardList` ไม่ขยายตามจำนวนใบ) · 9 การ์ด/หน้า (`CARDS_PER_PAGE`) · **จำนวนเข้า
+    เติมอัตโนมัติ** จาก `intakeInfo.qtyMap` (อ่านอย่างเดียว) · **รหัสร้านกรอกเอง** ต่อ SKU (`storeCodes` state)
+  · ชิป "🆕 เพิ่งเข้าคลัง" (ใหม่สุดก่อน — `intakeInfo.recent` sort date desc) แตะเพิ่มการ์ด (`addSkuDirect`)
+  · QR ใช้ `qrMap` ตัวเดิม (qrcodejs self-host) เข้ารหัส SKU
+- **ปุ่ม "📄 บันทึก PDF (แยกซัพพลายเออร์)"** ในโหมดการ์ด เปิด **`IntakePdfModal`** (global จาก
+  views-main.jsx — โหลดก่อน) ป้อน `intakePurchases` + `prodBySkuMap` → warehouse/saler จึงดาวน์โหลด
+  เอกสารของเข้าใหม่ตัวเดียวกับที่ owner มีใน overview ได้ (คนละที่มาข้อมูล แต่ modal/เอกสารตัวเดียวกัน)
+- **พิมพ์ผ่าน `.card-label-page`/`.card-label-cell`** (A4, 3×3) — คลาสใหม่ใน HTML, โชว์ตอน print
+  (ไม่ `.no-print`) เหมือน `.label-page` เดิม (ไม่ต้อง portal/#root-hide เพราะ LabelPrintView ห่อ
+  controls ด้วย `.no-print` อยู่แล้ว) · **bump `CACHE_NAME`** (บทเรียนข้อ 15)
+- ⚠️ `IntakePdfDoc`/การ์ด **ไม่โชว์ต้นทุนที่ไหนเลย** — โชว์ราคาขาย (`p.price`) จาก catalog เท่านั้น
+  จึงปลอดภัยที่ warehouse/saler เห็น
+- เทสต์: `tests/label-card.test.js` (16 เคส — meta สแกนต้นทาง: endpoint ตัด unitPrice, syncRecentIntake
+  ผ่าน dmjJson, cardList 1/SKU, storeCodes, ชิปเรียง date desc, ปุ่ม PDF เปิด IntakePdfModal, CSS/CACHE)
+  · browser test 1 เคส (warehouse: labels → โหมดการ์ด → เพิ่ม SKU → มี `.card-label-cell` + ปุ่มบันทึก PDF)
+
 ### ⚠️ ปุ่มพิมพ์ในแท็บ "ใบเสนอราคา" ต้องมีครบทั้ง 2 ชนิด **ทั้งการ์ดมือถือและตาราง** (ส.ค. 2026)
 
 `QuoteFollowupView` เรนเดอร์คนละอย่างตามความกว้างจอ (`useIsMobile()` = ≤600px): จอกว้าง/มือถือ
