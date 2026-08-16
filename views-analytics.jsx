@@ -476,7 +476,7 @@ function FrontStoreView({ data, role, checkRequest, onCheckComplete }) {
       .map(sku => ({ sku, qty: parseInt(checkedQtys[sku]) || 0 }));
     if (entries.length === 0) {
       if (!isAuto) showToast("warn", t("ยังไม่ได้กรอกจำนวน"), "✏️");
-      return;
+      return { success: true, saved: [] };
     }
     setSaving(true);
     const result = await syncFrontStoreData(entries);
@@ -486,10 +486,11 @@ function FrontStoreView({ data, role, checkRequest, onCheckComplete }) {
       setTouched(new Set());
       setLastSavedTime(new Date());
       showToast("success", `บันทึก ${entries.length} รายการ`, "💾");
-    } else if (!isAuto) {
-      // auto-save ที่ fail จะเงียบ + retry เอง (FAB ยังแสดง "รอบันทึก") กัน toast เด้งซ้ำทุก 3 วิ
-      showToast("error", "บันทึกไม่สำเร็จ", "❌");
+      return { success: true, saved: entries };
     }
+    // auto-save ที่ fail จะเงียบ + retry เอง (FAB ยังแสดง "รอบันทึก") กัน toast เด้งซ้ำทุก 3 วิ
+    if (!isAuto) showToast("error", "บันทึกไม่สำเร็จ", "❌");
+    return { success: false, saved: [] };
   };
 
   // Auto-save with 3-second debounce
@@ -501,15 +502,22 @@ function FrontStoreView({ data, role, checkRequest, onCheckComplete }) {
     return () => clearTimeout(timer);
   }, [checkedQtys, touched, saving, touchedWithValue]);
 
-  // จำนวนหน้าร้านที่ "นับแล้วบันทึกจริง" (savedSkus ที่มีค่าใน checkedQtys) → ส่งให้ app.jsx patch เข้า
-  // data.products ทันทีตอนกด "เสร็จแล้ว" ให้ตัวเลขบนเว็บอัปเดตเลย ไม่ต้องรอ reload · ฝั่งหน้าร้าน = qtyStore
-  const buildCheckCountsFS = () => {
-    const m = {};
+  // กด "เสร็จแล้ว" (ฝั่งหน้าร้าน): flush ค่าที่เพิ่งกรอกแต่ยังไม่ทัน auto-save 3 วิ ให้เข้าระบบก่อน
+  // แล้วค่อยปิดคำขอ + ส่งจำนวนหน้าร้านล่าสุด (savedSkus + ที่เพิ่ง flush) ให้เว็บ patch ทันที · = qtyStore
+  // ⚠️ flush ล้มเหลว = ไม่ปิดคำขอ (ยอดยังไม่เข้าระบบ)
+  const finishCheckFS = async () => {
+    const res = await handleSave(true);
+    if (res && res.success === false) {
+      showToast("error", "ยังบันทึกไม่สำเร็จ — แตะบันทึกให้ครบก่อนกดเสร็จ", "⚠️");
+      return;
+    }
+    const counts = {};
     savedSkus.forEach(sku => {
       const v = checkedQtys[sku];
-      if (v !== "" && v != null) m[String(sku).toUpperCase()] = { qtyStore: parseInt(v) || 0 };
+      if (v !== "" && v != null) counts[String(sku).toUpperCase()] = { qtyStore: parseInt(v) || 0 };
     });
-    return m;
+    ((res && res.saved) || []).forEach(e => { counts[String(e.sku).toUpperCase()] = { qtyStore: e.qty }; });
+    if (onCheckComplete && checkRequest) onCheckComplete(checkRequest.reqId, counts);
   };
 
   // โอนสินค้าจากคลัง → หน้าร้าน (ใช้ reorder mode)
@@ -584,7 +592,7 @@ function FrontStoreView({ data, role, checkRequest, onCheckComplete }) {
             </div>
           </div>
           {onCheckComplete && (
-            <button onClick={function(){ onCheckComplete(checkRequest.reqId, buildCheckCountsFS()); }}
+            <button onClick={function(){ finishCheckFS(); }}
               style={{background:"#1f7f44",color:"#fff",border:"none",borderRadius:8,
                       padding:"8px 14px",fontWeight:600,fontSize:13,cursor:"pointer",flexShrink:0}}>
               ✅ เสร็จแล้ว
@@ -2028,12 +2036,21 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
   // derived: true ขณะ POST อยู่ (ใช้ disable ปุ่ม)
   const saving = saveStatus === "saving";
 
-  // จำนวนที่ "นับแล้วบันทึกเข้าคลังจริง" (จาก savedQtys) → ส่งให้ app.jsx patch เข้า data.products
-  // ทันทีตอนกด "ยืนยันเช็คเสร็จ" ให้ตัวเลขบนเว็บอัปเดตเลย ไม่ต้องรอ reload ทั้งก้อน · ฝั่งคลัง = qtyWH
-  const buildCheckCountsWH = () => {
-    const m = {};
-    Object.keys(savedQtys).forEach(sku => { m[String(sku).toUpperCase()] = { qtyWH: savedQtys[sku] }; });
-    return m;
+  // กด "ยืนยันเช็คเสร็จ" (ฝั่งคลัง): flush ค่าที่ "เพิ่งปรับแต่ยังไม่ทัน auto-save 3 วิ" ให้เข้าคลัง+ZORT
+  // ก่อนเสมอ แล้วค่อยปิดคำขอ + ส่งจำนวนล่าสุด (savedQtys + ที่เพิ่ง flush) ให้เว็บ patch ทันที
+  // ⚠️ เดิมส่งแค่ savedQtys โดยไม่ flush → กดเสร็จเร็วกว่า 3 วิ = ยอดที่เพิ่งปรับไม่ถึง ZORT และเว็บไม่อัปเดต
+  //    (เจ้าของถาม ส.ค. 2026: "จำนวนสต็อกที่เพิ่งปรับเว็บอัปเดตทันทีหรือยัง")
+  // ⚠️ flush ล้มเหลว = ไม่ปิดคำขอ (ห้ามปิดทั้งที่ยอดยังไม่เข้า ZORT) — UI failed แสดงเหตุแล้ว
+  const finishCheck = async () => {
+    const res = await handleSave(true);
+    if (res && res.success === false) {
+      showToast('error', 'ยังบันทึกไม่สำเร็จ — แตะ 💾 บันทึก ให้ครบก่อนกดเสร็จ', '⚠️');
+      return;
+    }
+    const counts = {};
+    Object.keys(savedQtys).forEach(sku => { counts[String(sku).toUpperCase()] = { qtyWH: savedQtys[sku] }; });
+    ((res && res.saved) || []).forEach(e => { counts[String(e.sku).toUpperCase()] = { qtyWH: e.qty }; });
+    if (onCheckComplete && checkRequest) onCheckComplete(checkRequest.reqId, counts);
   };
 
   const handleSave = async (isAuto = false) => {
@@ -2041,7 +2058,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     const entries = Object.entries(checkedQtys)
       .filter(([sku, v]) => v !== '' && v != null && localEditsRef.current.has(sku))
       .map(([sku, qty]) => ({ sku, qty: parseInt(qty)||0 }));
-    if (!entries.length) { if (!isAuto) showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return; }
+    if (!entries.length) { if (!isAuto) showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return { success: true, saved: [] }; }
     setSaveStatus("saving");
     const snap = JSON.stringify(checkedQtys);
     // บันทึกตำแหน่งจัดเก็บ + commit ผลนับ → อัปเดตคลังจริง + push ZORT
@@ -2062,7 +2079,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
       setSaveErr('ข้อมูลถูกแก้ไขโดยคนอื่น — กด 🔄 Reload');
       setFailedSkus(prev => { const n = new Set(prev); entries.forEach(e => n.add(e.sku)); return n; });
       showToast('error', 'ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด', '⚠️');
-      return;
+      return { success: false, saved: [] };
     }
     if (result.success === false) {
       // ⚠️ save ล้มเหลว — ห้ามค้าง "⏳ กำลังบันทึก…" เงียบ ๆ (จอโกหก) · โชว์เหตุผลจริงจาก GAS ให้เห็น
@@ -2071,7 +2088,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
       setSaveErr(result.error || 'บันทึกไม่สำเร็จ');
       setFailedSkus(prev => { const n = new Set(prev); entries.forEach(e => n.add(e.sku)); return n; });
       if (!isAuto) showToast('error', result.error || 'บันทึกไม่สำเร็จ', '❌');
-      return;
+      return { success: false, saved: [] };
     }
     // สำเร็จ — บันทึกตำแหน่งตามหลัง (ไม่บล็อกสถานะ saved · ตำแหน่งพลาด = ของยังเข้า ZORT แล้ว)
     try {
@@ -2096,6 +2113,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     const nFound = entries.length - confirmEntries.length;
     showToast('success', 'บันทึก ' + entries.length + ' รายการ' +
       (nFound > 0 ? ' (🆕 ' + nFound + ' บันทึกตำแหน่งอย่างเดียว)' : ' — อัปเดตคลัง + ZORT'), '✅');
+    return { success: true, saved: entries };
   };
 
   // Auto-save with 3-second debounce — save เฉพาะเมื่อค่าต่างจากที่ save ล่าสุด (กัน loop)
@@ -2897,7 +2915,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
           <div style={{flex:1,fontSize:14}}>
             <b>กำลังเช็คตามคำขอ</b> · {checkRequest.skus.length} รายการ
           </div>
-          <button onClick={function(){ onCheckComplete && onCheckComplete(checkRequest.reqId, buildCheckCountsWH()); }}
+          <button onClick={function(){ finishCheck(); }}
             style={{background:"#1f7f44",color:"#fff",border:"none",borderRadius:8,
                     padding:"8px 14px",fontWeight:600,fontSize:13,cursor:"pointer"}}>
             ✅ เสร็จแล้ว
@@ -3194,7 +3212,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
           <div style={{flex:1,fontSize:14}}>
             <b>กำลังเช็คตามคำขอ</b> · {checkRequest.skus.length} รายการ
           </div>
-          <button onClick={function(){ onCheckComplete && onCheckComplete(checkRequest.reqId, buildCheckCountsWH()); }}
+          <button onClick={function(){ finishCheck(); }}
             style={{background:"#1f7f44",color:"#fff",border:"none",borderRadius:8,
                     padding:"8px 14px",fontWeight:600,fontSize:13,cursor:"pointer"}}>
             ✅ เสร็จแล้ว
@@ -3268,7 +3286,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
           <div style={{flex:1,fontSize:14}}>
             <b>กำลังเช็คตามคำขอ</b> · {checkRequest.skus.length} รายการ
           </div>
-          <button onClick={function(){ onCheckComplete && onCheckComplete(checkRequest.reqId, buildCheckCountsWH()); }}
+          <button onClick={function(){ finishCheck(); }}
             style={{background:"#1f7f44",color:"#fff",border:"none",borderRadius:8,
                     padding:"8px 14px",fontWeight:600,fontSize:13,cursor:"pointer"}}>
             ✅ เสร็จแล้ว

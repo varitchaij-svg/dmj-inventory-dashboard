@@ -97,35 +97,66 @@ describe('app.jsx: markCheckSideDone — ปิดคำขอฝั่งตั
   });
 });
 
-describe('StockCountView (คลัง): ส่ง counts จาก savedQtys เป็น qtyWH', () => {
-  it('มี buildCheckCountsWH ที่ map savedQtys → { qtyWH }', () => {
-    expect(STOCKCOUNT).toContain('const buildCheckCountsWH = ()');
-    const m = STOCKCOUNT.match(/const buildCheckCountsWH = \(\) => \{[\s\S]*?\n  \};/);
-    expect(m).toBeTruthy();
-    expect(m[0]).toContain('savedQtys');
-    expect(m[0]).toMatch(/qtyWH:\s*savedQtys\[sku\]/);
-    expect(m[0]).toContain('.toUpperCase()');
+describe('StockCountView (คลัง): กดเสร็จ → flush ก่อน แล้ว patch qtyWH (รวมค่าที่เพิ่งปรับ)', () => {
+  const m = STOCKCOUNT.match(/const finishCheck = async \(\) => \{[\s\S]*?\n  \};/);
+  const fn = m ? m[0] : '';
+
+  it('มี finishCheck ที่ await handleSave(true) ก่อน (flush ค่าที่ยังไม่ auto-save)', () => {
+    expect(fn, 'ต้องมี finishCheck ใน StockCountView').toBeTruthy();
+    expect(fn).toContain('await handleSave(true)');
   });
 
-  it('ทุกปุ่ม "ยืนยันเช็คเสร็จ" ของ StockCountView ส่ง buildCheckCountsWH()', () => {
-    const calls = STOCKCOUNT.match(/onCheckComplete\(checkRequest\.reqId, buildCheckCountsWH\(\)\)/g) || [];
-    expect(calls.length, 'ต้องส่ง counts ครบทุกปุ่มยืนยัน (3 render branch)').toBe(3);
-    // ต้องไม่มีปุ่มไหนเรียกแบบไม่ส่ง counts หลงเหลือ
-    expect(STOCKCOUNT).not.toMatch(/onCheckComplete\(checkRequest\.reqId\)(?!,)/);
+  it('flush ล้มเหลว → ไม่ปิดคำขอ (return ก่อน onCheckComplete)', () => {
+    expect(fn).toContain('res.success === false');
+    const iGuard = fn.indexOf('res.success === false');
+    const iComplete = fn.indexOf('onCheckComplete(');
+    expect(iGuard).toBeGreaterThan(-1);
+    expect(iComplete).toBeGreaterThan(-1);
+    expect(iGuard, 'guard ต้องอยู่ก่อน onCheckComplete').toBeLessThan(iComplete);
+  });
+
+  it('counts รวม savedQtys + res.saved (ค่าที่เพิ่ง flush) เป็น qtyWH', () => {
+    expect(fn).toMatch(/qtyWH:\s*savedQtys\[sku\]/);
+    expect(fn).toMatch(/qtyWH:\s*e\.qty/);
+    expect(fn).toContain('res && res.saved');
+  });
+
+  it('handleSave คืน { success, saved } (ให้ finishCheck ได้ค่าที่เพิ่งเซฟทันที ไม่ต้องรอ state)', () => {
+    expect(STOCKCOUNT).toContain('return { success: true, saved: entries };');
+    expect(STOCKCOUNT).toContain('return { success: false, saved: [] };');
+  });
+
+  it('ทุกปุ่ม "ยืนยันเช็คเสร็จ" (3 render branch) เรียก finishCheck()', () => {
+    const calls = STOCKCOUNT.match(/onClick=\{function\(\)\{ finishCheck\(\); \}\}/g) || [];
+    expect(calls.length, 'ต้องเรียก finishCheck ครบทุกปุ่มยืนยัน (3 branch)').toBe(3);
+    // ต้องไม่มีปุ่มไหนส่งไปโดยไม่ flush หลงเหลือ (buildCheckCountsWH ถูกลบแล้ว)
+    expect(STOCKCOUNT).not.toContain('buildCheckCountsWH');
   });
 });
 
-describe('FrontStoreView (หน้าร้าน): ส่ง counts จาก savedSkus/checkedQtys เป็น qtyStore', () => {
-  it('มี buildCheckCountsFS ที่ map savedSkus → { qtyStore }', () => {
-    expect(FRONTSTORE).toContain('const buildCheckCountsFS = ()');
-    const m = FRONTSTORE.match(/const buildCheckCountsFS = \(\) => \{[\s\S]*?\n  \};/);
-    expect(m).toBeTruthy();
-    expect(m[0]).toContain('savedSkus');
-    expect(m[0]).toContain('checkedQtys[sku]');
-    expect(m[0]).toMatch(/qtyStore:\s*parseInt\(v\)/);
+describe('FrontStoreView (หน้าร้าน): กดเสร็จ → flush ก่อน แล้ว patch qtyStore', () => {
+  const m = FRONTSTORE.match(/const finishCheckFS = async \(\) => \{[\s\S]*?\n  \};/);
+  const fn = m ? m[0] : '';
+
+  it('มี finishCheckFS ที่ await handleSave(true) ก่อน + guard ล้มเหลว', () => {
+    expect(fn, 'ต้องมี finishCheckFS ใน FrontStoreView').toBeTruthy();
+    expect(fn).toContain('await handleSave(true)');
+    expect(fn).toContain('res.success === false');
   });
 
-  it('ปุ่ม "เสร็จแล้ว" ส่ง buildCheckCountsFS()', () => {
-    expect(FRONTSTORE).toContain('onCheckComplete(checkRequest.reqId, buildCheckCountsFS())');
+  it('counts รวม savedSkus/checkedQtys + res.saved เป็น qtyStore', () => {
+    expect(fn).toContain('savedSkus');
+    expect(fn).toMatch(/qtyStore:\s*parseInt\(v\)/);
+    expect(fn).toMatch(/qtyStore:\s*e\.qty/);
+  });
+
+  it('handleSave ของ FrontStoreView คืน { success, saved }', () => {
+    expect(FRONTSTORE).toContain('return { success: true, saved: entries };');
+    expect(FRONTSTORE).toContain('return { success: false, saved: [] };');
+  });
+
+  it('ปุ่ม "เสร็จแล้ว" เรียก finishCheckFS() (buildCheckCountsFS ถูกลบแล้ว)', () => {
+    expect(FRONTSTORE).toContain('onClick={function(){ finishCheckFS(); }}');
+    expect(FRONTSTORE).not.toContain('buildCheckCountsFS');
   });
 });
