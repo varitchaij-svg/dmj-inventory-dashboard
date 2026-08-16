@@ -363,6 +363,38 @@ describe('meta — กันส่งของ/ลบ "สองเด้ง" �
   });
 });
 
+// ── ของหิ้วเอง "ไปพร้อมกัน" ต้องส่งรวมเป็นชุดเดียว ไม่ใช่ทีละใบ (ส.ค. 2026) ──────
+// อาการที่เจ้าของแจ้ง (พร้อมภาพ): กดส่งของหิ้วทีละใบ → แต่ละใบสร้างรายการโอนแยก เลข ZORT
+//   คนละเลข (TF-202608382/381/380…) + ตอบช้าแล้วค้างหน้าจอ (เส้น transferStock ทีละใบ ไม่มี tid)
+// แก้: หิ้วส่งรวมเป็นชุดเดียวผ่าน "ส่งทั้งหมด" (transferStockBatch = 1 ใบโอน + tid กันซ้ำ) —
+//   ตัดปุ่มส่งทีละใบของหิ้วออก เหลือปุ่มเลือก/ตัดออกจากชุด (toggleMissed) · ขึ้นรถห้ามแตะ
+describe('meta — หิ้วเองส่งรวมเป็นชุดเดียว (ไม่มีปุ่มส่งทีละใบที่สร้างใบโอนแยก)', () => {
+  const section = grab(VA, /const renderSection = \(label, emoji, orders, isTruck\) => \{[\s\S]*?\n  \};/);
+  const ternary = grab(section, /\{isTruck \? \([\s\S]*?\n {20}\)\}/);
+  const divider = ternary.indexOf(') : (');
+  const truckBranch = ternary.slice(0, divider);
+  const carryBranch = ternary.slice(divider);
+
+  it('ปุ่มส่งทีละใบ (handleShip) อยู่เฉพาะฝั่งขึ้นรถ — ห้ามอยู่ฝั่งหิ้ว', () => {
+    // handleShip(order) = เส้น transferStock ทีละใบ (ไม่มี tid) — ต้องไม่โผล่ในสาขาหิ้ว
+    expect(truckBranch).toMatch(/handleShip\(order\)/);
+    expect(carryBranch).not.toMatch(/handleShip\(order\)/);
+    // ทั้งบล็อกต้องมี handleShip แค่ครั้งเดียว (ของขึ้นรถ) — เผลอ copy กลับมาฝั่งหิ้ว = แดง
+    expect((ternary.match(/handleShip\(order\)/g) || []).length).toBe(1);
+  });
+
+  it('ฝั่งหิ้วมีปุ่มเลือก/ตัดออกจากชุด (toggleMissed) แทนปุ่มส่ง', () => {
+    expect(carryBranch).toMatch(/toggleMissed\(order\)/);
+    expect(carryBranch).toMatch(/จะส่งในชุดนี้/);      // ป้ายตอน "รวมในชุด"
+    expect(carryBranch).toMatch(/ไม่ส่งรอบนี้/);        // ป้ายตอน "ตัดออก"
+  });
+
+  it('ปุ่ม "ส่งทั้งหมด" (batch) ยังมีอยู่ครบทั้ง 2 กลุ่ม — เป็นทางส่งเดียวของหิ้ว', () => {
+    // handleShipAll = เส้น transferStockBatch (tid กันซ้ำ, 1 ใบโอน) เรียกโดยไม่ผูก isTruck
+    expect(section).toMatch(/onClick=\{\(\) => handleShipAll\(orders\)\}/);
+  });
+});
+
 // ── "ZORT โอนไปแล้ว แต่ระบบเราไม่มี/ไม่หัก" ──────────────────────────────────
 // ลำดับจริงของ transferStockBatch: หักสต็อก → flush → ยิง ZORT → เขียนชีตโอน → audit
 // ⚠️ ลำดับนี้คือฐานของเครื่องมือซ่อมทั้งหมด — สลับเมื่อไหร่ การวินิจฉัยจะผิดทันที
