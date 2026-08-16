@@ -88,9 +88,14 @@
     refNum: 'TF-' + i, date: '01/' + m, type: 'โอน', sku: 'VAS001', name: 'แจกันแก้วใส ทรงสูง', qty: 10 + i,
   }));
 
+  // ⚠️ readPurchases_ (backend) คืน date เป็น ISO "yyyy-MM-dd" — fixture ต้องใช้รูปแบบเดียวกัน
+  // แถวล่าสุด (วันนี้) ทำให้ "ของเข้าใหม่ 30 วัน" + ปุ่ม "บันทึก PDF" โผล่ในเทสต์ (recentIntake)
+  const _isoToday = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; })();
   const purchases = [
-    { poNum: 'PO-001', supplier: 'ACME', date: '01/05/2025', status: 'รับแล้ว', warehouse: 'สาย5',
+    { poNum: 'PO-001', supplier: 'ACME', date: '2025-05-01', status: 'รับแล้ว', warehouse: 'สาย5',
       sku: 'VAS001', name: 'แจกันแก้วใส ทรงสูง', qty: 100, unitPrice: 150 },
+    { poNum: 'PO-777', supplier: 'GX2312', date: _isoToday, status: 'รับแล้ว', warehouse: 'สาย5',
+      sku: 'VAS001', name: 'แจกันแก้วใส ทรงสูง', qty: 60, unitPrice: 150 },
   ];
 
   const monthlyByCat = {};
