@@ -1480,6 +1480,26 @@ function App() {
     });
   }, []);
 
+  // ปิดคำขอเช็คของ "ฝั่งตัวเอง" ในมือทันที (optimistic) — แบนเนอร์คำขอจะหายเลยไม่ต้องรอ reload
+  // ⚠️ จำเป็นเพราะ completeStockCheckRequest_ ฝั่ง GAS ใช้ invalidateCache_(true) (skipTsUpdate)
+  //    โดยตั้งใจ (ปิดคำขอไม่เปลี่ยนจำนวนสินค้า จึงไม่ bump ts กัน conflict) → fetchFromSheet เห็น ts
+  //    เท่าเดิม → ข้ามการโหลด → data.stockCheckRequests ค้างของเก่า → แบนเนอร์ไม่หาย (เจ้าของแจ้ง ส.ค. 2026)
+  const markCheckSideDone = usC((reqId, side) => {
+    if (!reqId || (side !== 'fs' && side !== 'wh')) return;
+    const key = side === 'fs' ? 'fsStatus' : 'whStatus';
+    setData(prev => {
+      if (!prev || !Array.isArray(prev.stockCheckRequests)) return prev;
+      let changed = false;
+      const stockCheckRequests = prev.stockCheckRequests.map(r => {
+        if (String(r.reqId) !== String(reqId) || r[key] === 'done') return r;
+        changed = true;
+        return Object.assign({}, r, { [key]: 'done' });
+      });
+      if (!changed) return prev;
+      return Object.assign({}, prev, { stockCheckRequests });
+    });
+  }, []);
+
   // expose refetch ให้ child component เรียกได้เมื่อเจอ conflict (จะอัปเดต window._dataLoadedAt ให้สด)
   usE(() => { window._dmjRefetch = fetchFromSheet; return () => { delete window._dmjRefetch; }; }, [fetchFromSheet]);
   // ตัวเบา: ดึงเฉพาะรายการสั่งของ (action=orders อ่านชีตตรง ไม่ผ่าน cache) — ใช้หลังสั่งของสำเร็จ
@@ -2400,12 +2420,13 @@ function App() {
                                             onCheckComplete={async function(reqId, counts){
                                               // อัปเดตจำนวนสต็อกของ SKU ที่เพิ่งนับเข้าเว็บทันที (ไม่ต้องรอ reload ทั้งก้อน)
                                               patchProductQtys(counts);
+                                              markCheckSideDone(reqId, 'wh'); // ปิดคำขอฝั่งคลังในมือทันที → แบนเนอร์หายเลย
+                                              setActiveCheckRequest(null);
                                               try {
                                                 // side:'wh' → ปิดเฉพาะฝั่งคลัง ไม่กระทบคำขอฝั่งหน้าร้าน
                                                 await dmjFetch(SHEET_DEPLOY_URL, {method:"POST",
                                                   headers:{"Content-Type":"text/plain;charset=utf-8"},
                                                   body: JSON.stringify({completeStockCheck:true, reqId:reqId, side:'wh', actor:role})});
-                                                setActiveCheckRequest(null);
                                                 fetchFromSheet(); // reconcile เบื้องหลัง (รีเฟรช pendingChecks + ค่าจริง)
                                               } catch(e){ console.error("completeStockCheck:", e); }
                                             }}/></ErrorBoundary>}
@@ -2414,12 +2435,13 @@ function App() {
                                             onCheckComplete={async function(reqId, counts){
                                               // อัปเดตจำนวนหน้าร้านของ SKU ที่เพิ่งนับเข้าเว็บทันที (ไม่ต้องรอ reload ทั้งก้อน)
                                               patchProductQtys(counts);
+                                              markCheckSideDone(reqId, 'fs'); // ปิดคำขอฝั่งหน้าร้านในมือทันที → แบนเนอร์หายเลย
+                                              setActiveCheckRequest(null);
                                               try {
                                                 // side:'fs' → ปิดเฉพาะฝั่งหน้าร้าน ไม่กระทบคำขอฝั่งคลัง
                                                 await dmjFetch(SHEET_DEPLOY_URL, {method:"POST",
                                                   headers:{"Content-Type":"text/plain;charset=utf-8"},
                                                   body: JSON.stringify({completeStockCheck:true, reqId:reqId, side:'fs', actor:role})});
-                                                setActiveCheckRequest(null);
                                                 fetchFromSheet(); // reconcile เบื้องหลัง (รีเฟรช pendingChecks + ค่าจริง)
                                               } catch(e){ console.error("completeStockCheck:", e); }
                                             }}/></ErrorBoundary>}

@@ -69,6 +69,34 @@ describe('app.jsx: onCheckComplete รับ counts + patch ทันทีก�
   });
 });
 
+describe('app.jsx: markCheckSideDone — ปิดคำขอฝั่งตัวเองในมือทันที (แบนเนอร์หายเลย)', () => {
+  const m = APP.match(/const markCheckSideDone = usC\(\(reqId, side\)[\s\S]*?\n  \}, \[\]\);/);
+  const fn = m ? m[0] : '';
+
+  it('มีฟังก์ชัน markCheckSideDone', () => {
+    expect(fn, 'ต้องมี markCheckSideDone ใน app.jsx').toBeTruthy();
+  });
+
+  it('อัปเดตเฉพาะฝั่งที่ปิด (fsStatus/whStatus) ของ reqId นั้น เป็น "done"', () => {
+    expect(fn).toMatch(/side === 'fs' \? 'fsStatus' : 'whStatus'/);
+    expect(fn).toContain('stockCheckRequests');
+    expect(fn).toContain("r[key] === 'done'");
+    // จับคู่ด้วย reqId (ไม่แตะคำขออื่น)
+    expect(fn).toMatch(/String\(r\.reqId\) !== String\(reqId\)/);
+  });
+
+  it('ทั้ง 2 handler เรียก markCheckSideDone ด้วย side ที่ถูก (wh / fs) + เคลียร์ activeCheckRequest ทันที', () => {
+    expect(APP).toContain("markCheckSideDone(reqId, 'wh')");
+    expect(APP).toContain("markCheckSideDone(reqId, 'fs')");
+    // setActiveCheckRequest(null) ต้องอยู่ก่อน await POST (แบนเนอร์ในหน้าไม่รอเน็ต)
+    const whIdx = APP.indexOf("markCheckSideDone(reqId, 'wh')");
+    const seg = APP.slice(whIdx, whIdx + 800);
+    expect(seg).toContain('setActiveCheckRequest(null)');
+    expect(seg).toContain('await dmjFetch');
+    expect(seg.indexOf('setActiveCheckRequest(null)')).toBeLessThan(seg.indexOf('await dmjFetch'));
+  });
+});
+
 describe('StockCountView (คลัง): ส่ง counts จาก savedQtys เป็น qtyWH', () => {
   it('มี buildCheckCountsWH ที่ map savedQtys → { qtyWH }', () => {
     expect(STOCKCOUNT).toContain('const buildCheckCountsWH = ()');
