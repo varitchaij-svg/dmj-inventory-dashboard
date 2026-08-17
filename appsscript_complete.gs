@@ -15078,12 +15078,19 @@ function completeStockCheckRequest_(reqId, actor, side, roleHint) {
       if (names.length > 3) preview += " และอีก " + (names.length - 3) + " รายการ";
       if (side === 'fs' || side === 'wh') {
         var sideLabel = side === 'fs' ? "หน้าร้าน" : "คลัง";
-        var bothLabel = (fsDone && whDone) ? " · ครบทั้ง 2 ฝั่งแล้ว" : (side === 'fs' ? " · รอคลังเช็ค" : " · รอหน้าร้านเช็ค");
+        var bothDone = fsDone && whDone;
+        var bothLabel = bothDone ? " · ครบทั้ง 2 ฝั่งแล้ว" : (side === 'fs' ? " · รอคลังเช็ค" : " · รอหน้าร้านเช็ค");
+        // ครบ 2 ฝั่งแล้ว → แนบ "จำนวนที่นับได้จริง" (ร้าน/คลัง) ต่อ SKU ให้เจ้าของ+saler เห็นในกระดิ่งเลย
+        // (เจ้าของสั่ง ส.ค. 2026: พอ 2 ฝั่งเสร็จ ส่งเลขจำนวนจริงให้เจ้าของเห็น) · best-effort — พลาดก็ยังส่ง noti
+        // typeof guard: กัน env เทสต์ที่ eval เฉพาะฟังก์ชันนี้โดยไม่มี helper (noti ยังทำงานได้)
+        var countSummary = (bothDone && typeof stockCheckCountSummary_ === 'function')
+          ? stockCheckCountSummary_(ss, r) : "";
         pushInappNoti_({
           audience: 'role:owner,saler,storedevice',
           type: 'stockcheck-done', tab: 'categories',
           title: "✅ " + sideLabel + "เช็คสต็อกเสร็จแล้ว (" + reqId + ")",
-          body: (preview || reqId) + " · โดย " + (actor || "-") + bothLabel,
+          body: (preview || reqId) + " · โดย " + (actor || "-") + bothLabel
+                + (countSummary ? " · 📊 นับได้: " + countSummary : ""),
           by: actor || "",
           dedupKey: 'stockcheck-done-' + side + '-' + reqId,
         });
@@ -15095,6 +15102,38 @@ function completeStockCheckRequest_(reqId, actor, side, roleHint) {
   }
   return ContentService.createTextOutput(JSON.stringify({ success: false, error: "reqId not found" }))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// สรุป "จำนวนที่นับได้จริง" (หน้าร้าน/คลัง) ต่อ SKU ในคำขอเช็ค — ใช้แนบในกระดิ่งตอนครบ 2 ฝั่ง
+// อ่านจาก SHEET_PRODUCTS (ทั้ง 2 ฝั่งเขียนยอดที่นับลงชีตนี้แล้ว) → เจ้าของเห็นเลขจริงโดยไม่ต้องรอ reload
+// best-effort: error ใด ๆ คืน "" (แจ้งเตือนหลักยังส่งได้) · โชว์สูงสุด 6 SKU แล้วสรุป "และอีก N รายการ"
+// row = แถวคำขอ (r) · r[3] = JSON ของ skuList · COL_PROD_SKU=B · หน้าร้าน=G(idx6) · คลัง=H(COL_PROD_QTYWH)
+function stockCheckCountSummary_(ss, row) {
+  try {
+    var skuList = [];
+    try { skuList = JSON.parse(row[3] || "[]"); } catch (e) { skuList = []; }
+    if (!skuList.length) return "";
+    var want = {};
+    skuList.forEach(function (s) { want[String(s).trim().toUpperCase()] = true; });
+    var psh = ss.getSheetByName(SHEET_PRODUCTS);
+    if (!psh) return "";
+    var pdata = psh.getDataRange().getValues();
+    var qmap = {};
+    for (var i = 1; i < pdata.length; i++) {
+      var sku = String(pdata[i][COL_PROD_SKU - 1] || "").trim().toUpperCase();
+      if (sku && want[sku] && !(sku in qmap)) {
+        qmap[sku] = { store: Number(pdata[i][6]) || 0, wh: Number(pdata[i][COL_PROD_QTYWH - 1]) || 0 };
+      }
+    }
+    var parts = [];
+    var shown = 0;
+    for (var j = 0; j < skuList.length && shown < 6; j++) {
+      var s = String(skuList[j]).trim().toUpperCase();
+      if (qmap[s]) { parts.push(s + " ร้าน" + qmap[s].store + "/คลัง" + qmap[s].wh); shown++; }
+    }
+    if (skuList.length > shown) parts.push("และอีก " + (skuList.length - shown) + " รายการ");
+    return parts.join(" · ");
+  } catch (e) { return ""; }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

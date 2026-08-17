@@ -25,6 +25,10 @@ const COLS     = grab(/const SHEET_STOCK_CHECK = "[^"]*";/) + '\n'
                + grab(/var COL_CHK_FS_STATUS = 9[\s\S]*?COL_CHK_WH_AT = 14;/);
 const F_READ   = grab(/function readStockCheckRequests_\(\) \{[\s\S]*?\n\}/);
 const F_DONE   = grab(/function completeStockCheckRequest_\(reqId, actor, side, roleHint\) \{[\s\S]*?\n\}/);
+const F_SUM    = grab(/function stockCheckCountSummary_\(ss, row\) \{[\s\S]*?\n\}/);
+const C_PROD   = grab(/const SHEET_PRODUCTS  = "[^"]*";/) + '\n'
+               + grab(/const COL_PROD_SKU    = 2;/) + '\n'
+               + grab(/const COL_PROD_QTYWH  = 8;/);
 
 // ชีตจำลอง — rows[0] = header, ข้อมูลเริ่ม rows[1] · เก็บ setValue เพื่อตรวจว่าเขียนคอลัมน์ไหน
 function makeSheet(rows) {
@@ -215,5 +219,76 @@ describe('จุดเชื่อมต่อในโค้ดจริง (�
   it('แบนเนอร์ใช้ myPendingChecks ไม่ใช่ pendingChecks ตรง ๆ', () => {
     expect(APP).toContain('myPendingChecks.length > 0');
     expect(APP).toContain('setActiveCheckRequest(myPendingChecks[0])');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// พอครบ 2 ฝั่ง → ส่ง "จำนวนที่นับได้จริง" (ร้าน/คลัง ต่อ SKU) ให้เจ้าของเห็นในกระดิ่ง
+// (เจ้าของสั่ง ส.ค. 2026: "พอ 2 ฝั่งกดเสร็จ ส่งเลขจำนวนจริงให้เจ้าของเห็น")
+// ─────────────────────────────────────────────────────────────────────────────
+describe('stockCheckCountSummary_ — สรุปเลขที่นับได้จริง (ร้าน/คลัง)', () => {
+  // product sheet จำลอง: idx1=SKU (COL_PROD_SKU=2) · idx6=หน้าร้าน(G) · idx7=คลัง(H, COL_PROD_QTYWH=8)
+  function prodSheet(rows) {
+    return { getDataRange: () => ({ getValues: () => rows.map((r) => r.slice()) }) };
+  }
+  // แถวสินค้า: [A, SKU, C, D, E, F, store(G), wh(H)]
+  function prow(sku, store, wh) { return ['', sku, '', '', '', '', store, wh]; }
+
+  function buildSumEnv(productRows) {
+    const psheet = prodSheet([['id','sku','name','d','e','f','store','wh'], ...productRows]);
+    // ss.getSheetByName(SHEET_PRODUCTS) → product sheet จำลอง
+    const ss = { getSheetByName: () => psheet };
+    // C_PROD ประกาศ SHEET_PRODUCTS/COL_PROD_SKU/COL_PROD_QTYWH เอง — ห้ามส่งเป็น param ซ้ำ
+    // eslint-disable-next-line no-new-func
+    const factory = new Function(C_PROD + '\n' + F_SUM + '\nreturn { stockCheckCountSummary_ };');
+    const mod = factory();
+    return { fn: mod.stockCheckCountSummary_, ss };
+  }
+  it('คืน "SKU ร้านX/คลังY" ต่อ SKU ตามลำดับในคำขอ', () => {
+    const { fn, ss } = buildSumEnv([prow('A1', 12, 130), prow('A2', 8, 63)]);
+    const row = ['CHK-1', 't', 'owner', JSON.stringify(['A1', 'A2']), '[]'];
+    const out = fn(ss, row);
+    expect(out).toContain('A1 ร้าน12/คลัง130');
+    expect(out).toContain('A2 ร้าน8/คลัง63');
+    expect(out).toContain(' · ');
+  });
+
+  it('เทียบ SKU แบบ uppercase/trim (ชีตสินค้าเก็บตัวเล็ก/มีช่องว่างได้)', () => {
+    const { fn, ss } = buildSumEnv([prow('a1', 5, 7)]);
+    const out = fn(ss, ['CHK-1', 't', 'o', JSON.stringify([' A1 ']), '[]']);
+    expect(out).toContain('A1 ร้าน5/คลัง7');
+  });
+
+  it('เกิน 6 SKU → โชว์ 6 ตัวแรก + "และอีก N รายการ"', () => {
+    const rows = [];
+    const skus = [];
+    for (let i = 1; i <= 9; i++) { rows.push(prow('S' + i, i, i * 10)); skus.push('S' + i); }
+    const { fn, ss } = buildSumEnv(rows);
+    const out = fn(ss, ['CHK-1', 't', 'o', JSON.stringify(skus), '[]']);
+    expect(out).toContain('S1 ร้าน1/คลัง10');
+    expect(out).toContain('S6 ร้าน6/คลัง60');
+    expect(out).not.toContain('S7 ร้าน');   // ตัวที่ 7 เป็นต้นไปถูกยุบ
+    expect(out).toContain('และอีก 3 รายการ');
+  });
+
+  it('SKU ในคำขอที่ไม่มีในชีตสินค้า → ข้าม ไม่พัง', () => {
+    const { fn, ss } = buildSumEnv([prow('A1', 1, 2)]);
+    const out = fn(ss, ['CHK-1', 't', 'o', JSON.stringify(['A1', 'GHOST']), '[]']);
+    expect(out).toContain('A1 ร้าน1/คลัง2');
+    expect(out).not.toContain('GHOST');
+  });
+
+  it('skuList ว่าง/พังพาร์ส → คืน "" (best-effort ไม่ throw)', () => {
+    const { fn, ss } = buildSumEnv([prow('A1', 1, 2)]);
+    expect(fn(ss, ['CHK-1', 't', 'o', '[]', '[]'])).toBe('');
+    expect(fn(ss, ['CHK-1', 't', 'o', 'not-json', '[]'])).toBe('');
+  });
+});
+
+describe('จุดเชื่อมต่อ: noti ครบ 2 ฝั่งแนบเลขที่นับได้', () => {
+  it('completeStockCheckRequest_ เรียก stockCheckCountSummary_ เฉพาะตอนครบ 2 ฝั่ง แล้วแนบใน body', () => {
+    expect(F_DONE).toContain('stockCheckCountSummary_(ss, r)');
+    expect(F_DONE).toContain('bothDone && typeof stockCheckCountSummary_');
+    expect(F_DONE).toContain('📊 นับได้: ');
   });
 });
