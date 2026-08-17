@@ -1035,6 +1035,32 @@
     flex-direction: column;
     overflow: hidden;
   }
+  /* ── Card Label (แผ่นแปะสินค้า — QR + จำนวนเข้า + รหัสร้าน) 3×3/หน้า ── */
+  .card-label-page {
+    width: 210mm;
+    min-height: 297mm;
+    box-sizing: border-box;
+    padding: 10mm;
+    background: #fff;
+  }
+  .card-label-page:not(:last-child) { page-break-after: always; break-after: page; }
+  .card-label-page:last-child { page-break-after: avoid; break-after: avoid; }
+  .card-label-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-auto-rows: 88mm;
+    gap: 4mm;
+  }
+  .card-label-cell {
+    border: 0.5pt solid #d7e4dc;
+    border-radius: 3mm;
+    overflow: hidden;
+    display: flex;
+    background: #fff;
+    box-sizing: border-box;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
   .label-top-row {
     display: flex;
     justify-content: space-between;
@@ -1150,6 +1176,10 @@
   .quote-print-area { display: none; }
   .quote-print-page { padding: 12mm 10mm; box-sizing: border-box; }
 
+  /* ของเข้าใหม่ → PDF (IntakePdfDoc) — คลาสแยกจาก quote/pos โดยตั้งใจ · portal ไป body
+     แล้วซ่อน #root ด้วย body.intake-printing ตอนพิมพ์ (ดู runIntakePrint ใน views-main.jsx) */
+  .intake-print-area { display: none; }
+
   @media print {
     .no-print, .topnav, nav { display: none !important; }
     .pos-print-area, .pos-print80-area { display: block !important; }
@@ -1187,6 +1217,31 @@
        หน้าแบบเดิม) */
     .quote-print-mobile .quote-print-page { min-height: 0 !important; }
     .quote-print-mobile .quote-items-fill { flex: none !important; }
+    /* ── ของเข้าใหม่ PDF ── ซ่อนทั้งแอป (#root) แล้วโชว์เฉพาะเอกสารที่ portal ไป body
+       (ต่างจาก quote/pos ที่ห่อ .no-print — Overview ไม่ได้ห่อ จึงตัดที่ #root แทน) */
+    /* ⚠️ iOS: html/body มี overflow-x:hidden + max-width:100vw (คุมจอ) — ถ้าไม่ปลดตอนพิมพ์
+       เอกสาร 210mm จะถูก "ตัดขอบ" ที่ความกว้างจอ (เหลือ 2 จาก 3 คอลัมน์) แทนที่จะย่อพอดี A4
+       ปลดที่ html+body (ตั้ง class ทั้งคู่ใน runIntakePrint) ให้เนื้อหากว้างเต็ม 210mm ได้ */
+    html.intake-printing, body.intake-printing {
+      overflow: visible !important;
+      max-width: none !important;
+      width: auto !important;
+    }
+    body.intake-printing #root { display: none !important; }
+    body.intake-printing .intake-print-area { display: block !important; }
+    .intake-print-page {
+      width: 210mm !important;
+      min-height: 297mm !important;
+      padding: 12mm 10mm !important;
+      box-sizing: border-box !important;
+      display: flex !important;
+      flex-direction: column !important;
+      background: #fff !important;
+      color: #111 !important;
+      page-break-after: always;
+      break-after: page;
+    }
+    .intake-print-page:last-child { page-break-after: avoid; break-after: avoid; }
     /* ใบเสร็จ 80mm — ขนาดหน้ากระดาษจริงคุมด้วย JS (setPosPrintPageSize) เพราะ
        named @page (page: rc80) ไม่ทำงานเชื่อถือได้บน Chrome/Android print pipeline
        (เนื้อหาเลยไปฝังในหน้า A4 แล้วถูกเครื่องพิมพ์ย่อลงมาเล็กจิ๋วมุมกระดาษ) */

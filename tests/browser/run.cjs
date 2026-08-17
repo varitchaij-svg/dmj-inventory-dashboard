@@ -792,6 +792,79 @@ function startServer() {
     await page.close();
   }
 
+  // ── (จ2.6b) ของเข้าใหม่ → บันทึก PDF: กดปุ่ม → โมดัลติ๊กวัน → เอกสาร portal ถูกสร้าง ──
+  // เจ้าของสั่ง: การ์ดของเข้าใหม่ต้องพิมพ์ PDF ได้ แยกตามซัพพลายเออร์ + วันที่
+  // ยืนยันบนเบราว์เซอร์จริง: ปุ่มโผล่ (owner) → เปิดโมดัล → มีวันให้ติ๊ก → เอกสาร .intake-print-page
+  // ถูกสร้างใน DOM (portal ไป body) · ไม่กด window.print() จริง (headless เปิด dialog ไม่ได้)
+  {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=owner&tab=overview`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, 'owner', 'overview');
+      await page.waitForTimeout(500);
+      const pdfBtn = page.locator('button', { hasText: 'บันทึก PDF' }).first();
+      if (!navOk) {
+        status = 'NAV_FAIL'; note = 'สลับไปแท็บภาพรวมไม่สำเร็จ';
+      } else if (!(await pdfBtn.count())) {
+        status = 'BTN_MISSING'; note = 'ไม่พบปุ่ม "บันทึก PDF" ในหัวข้อของเข้าใหม่';
+      } else {
+        await pdfBtn.click({ timeout: 2000 }).catch(() => {});
+        await page.waitForTimeout(400);
+        const modalOpen = await page.locator('div', { hasText: 'บันทึก PDF ของเข้าใหม่' }).count();
+        const dateRow = await page.locator('input[type="checkbox"]:checked').count();     // วันล่าสุดถูกติ๊กให้
+        const sheets = await page.locator('.intake-print-area .intake-print-page').count();
+        if (!modalOpen) { status = 'MODAL_FAIL'; note = 'กดแล้วโมดัลไม่เปิด'; }
+        else if (dateRow < 1) { status = 'NO_DATE'; note = 'โมดัลไม่มีวันให้ติ๊ก (ตั้งต้นควรติ๊กวันล่าสุด)'; }
+        else if (sheets < 1) { status = 'NO_DOC'; note = 'เอกสาร PDF (.intake-print-page) ไม่ถูกสร้างใน DOM'; }
+        else note = `เปิดโมดัล → มีวันติ๊ก (${dateRow}) → เอกสาร ${sheets} แผ่นถูกสร้าง (portal)`;
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'intake_pdf__owner.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'ของเข้าใหม่ บันทึก PDF (owner)', status, note });
+    await page.close();
+  }
+
+  // ── (จ2.6c) พิมพ์ label โหมด "การ์ดสินค้า" (warehouse) — แผ่นแปะ QR + จำนวนเข้า + PDF ──
+  // เจ้าของสั่ง: เพิ่มหัวข้อพิมพ์แผ่นแปะสินค้า (การ์ด) · ของเพิ่งเข้าคลังขึ้นก่อน ·
+  // และ warehouse/saler ต้องกดดาวน์โหลดเอกสารของเข้าใหม่ได้ · ยืนยันบนเบราว์เซอร์จริงกับ warehouse
+  {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=warehouse&tab=labels`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, 'warehouse', 'labels');
+      await page.waitForTimeout(400);
+      const cardModeBtn = page.locator('button', { hasText: 'การ์ดสินค้า' }).first();
+      if (!navOk) {
+        status = 'NAV_FAIL'; note = 'สลับไปแท็บพิมพ์ label ไม่สำเร็จ';
+      } else if (!(await cardModeBtn.count())) {
+        status = 'MODE_MISSING'; note = 'ไม่พบปุ่มโหมด "การ์ดสินค้า"';
+      } else {
+        await cardModeBtn.click({ timeout: 2000 }).catch(() => {});
+        await page.waitForTimeout(400);
+        // เพิ่มการ์ดผ่านชิป "เพิ่งเข้าคลัง" (fixture มี VAS001 วันนี้) หรือพิมพ์ SKU
+        const chip = page.locator('button', { hasText: /VAS001/ }).first();
+        if (await chip.count()) { await chip.click({ timeout: 2000 }).catch(() => {}); }
+        else {
+          const inp = page.locator('input[list="lbl-sku-list"]').first();
+          await inp.fill('VAS001'); await inp.press('Enter');
+        }
+        await page.waitForTimeout(700);   // รอ QR generate + render
+        const cells = await page.locator('.card-label-cell').count();
+        const pdfBtn = await page.locator('button', { hasText: 'บันทึก PDF (แยกซัพพลายเออร์)' }).count();
+        if (cells < 1) { status = 'NO_CARD'; note = 'เพิ่มสินค้าแล้วไม่มี .card-label-cell'; }
+        else if (!pdfBtn) { status = 'NO_PDF_BTN'; note = 'ไม่พบปุ่มบันทึก PDF ของเข้าใหม่'; }
+        else note = `โหมดการ์ด: เพิ่ม 1 สินค้า → ${cells} การ์ด + มีปุ่มบันทึก PDF ให้เจ้าของ`;
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'label_card__warehouse.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'พิมพ์ label การ์ดสินค้า (warehouse)', status, note });
+    await page.close();
+  }
+
   // ── (จ2.7) นับ stock คลัง "ตามซัพพลายเออร์" → auto-save → การ์ดขึ้น "บันทึกแล้ว" ──
   // เจ้าของแจ้งซ้ำ: warehouse ไม่ auto-save / นับต่างจากระบบแล้วไม่รู้ว่าแก้จำนวนจริงไหม
   // ต้องรันบนเบราว์เซอร์จริง — พิสูจน์ว่า นับ (+5) แล้วรอ 3 วิ การ์ดเปลี่ยนเป็น "บันทึกแล้ว"
