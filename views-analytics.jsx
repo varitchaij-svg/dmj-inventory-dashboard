@@ -7869,7 +7869,8 @@ function StaffPerformanceView() {
                   // หมวดที่ทำจริง เรียงมากไปน้อย · หมวด skip (กดลงเวลา) ดันไปท้ายสุดเสมอ
                   // — ไม่ได้นับรวมในยอด "งาน" ถ้าเอาไปปนบนสุดจะอ่านเหมือนเป็นงานด้วย
                   const cats = Object.keys(s.byCat || {})
-                    .map(k => ({ ...(catMap[k] || { key: k, emoji: "➖", label: k, unit: "ครั้ง" }), n: s.byCat[k] }))
+                    .map(k => ({ ...(catMap[k] || { key: k, emoji: "➖", label: k, unit: "ครั้ง" }),
+                                 n: s.byCat[k], units: (s.byCatUnits || {})[k] || 0 }))
                     .sort((a, b) => (a.skip ? 1 : 0) - (b.skip ? 1 : 0) || b.n - a.n);
                   return (
                     <div key={s.staffId} style={{ border: "1.5px solid var(--bdr)", borderRadius: 12,
@@ -7968,6 +7969,10 @@ function StaffPerformanceView() {
                                   <span style={{ flex: "0 0 auto", fontSize: 13, fontWeight: 800,
                                                  color: c.skip ? "var(--muted)" : color }}>
                                     {fmtN(c.n)} <span style={{ fontSize: 10, fontWeight: 600, color: "var(--muted)" }}>{c.unit}</span>
+                                    {/* หมวดนับสต็อก/เช็คหน้าร้าน: 1 แถว = 1 รอบ แต่รอบหนึ่งนับหลายตัว → โชว์ยอดรวมตัวด้วย */}
+                                    {c.sumUnits && c.units > c.n && (
+                                      <span style={{ fontSize: 10, fontWeight: 600, color: "var(--muted)" }}> · รวม {fmtN(c.units)} ตัว</span>
+                                    )}
                                   </span>
                                 </div>
                               ))}

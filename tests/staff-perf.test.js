@@ -46,11 +46,14 @@ function load() {
     grab(/function staffPerfCategoryOf_\(action\) \{[\s\S]*?\n\}/),
     grab(/function staffPerfNormalizeActor_\(actor\) \{[\s\S]*?\n\}/),
     grab(/function staffPerfDayKey_\(v\) \{[\s\S]*?\n\}/),
+    grab(/function staffPerfRowUnits_\(resource\) \{[\s\S]*?\n\}/),
+    grab(/function staffPerfCountDetail_\(total, changed\) \{[\s\S]*?\n\}/),
     grab(/function staffPerfAggregateAudit_\(rows, monthKey\) \{[\s\S]*?\n\}/),
     grab(/function staffPerfAggregateSales_\(rows, monthKey\) \{[\s\S]*?\n\}/),
     grab(/function staffPerfCatDef_\(key\) \{[\s\S]*?\n\}/),
     'return { STAFF_PERF_CATEGORIES_, STAFF_PERF_OTHER_, STAFF_PERF_SYSTEM_ACTORS_,' +
     ' staffPerfCategoryOf_, staffPerfNormalizeActor_, staffPerfDayKey_,' +
+    ' staffPerfRowUnits_, staffPerfCountDetail_,' +
     ' staffPerfAggregateAudit_, staffPerfAggregateSales_, staffPerfCatDef_ };',
   ].join('\n');
   // eslint-disable-next-line no-new-func
@@ -489,5 +492,80 @@ describe('meta: จุดเชื่อมต่อ endpoint + UI', () => {
     expect(VA).toMatch(/d\.unmatched/);
     const b = grab(/function staffPerfBuild_\(ss, monthStr\) \{[\s\S]*?\n\}/);
     expect(b).toMatch(/unmatched\.push/);
+  });
+});
+
+// ── นับสต็อก/เช็คหน้าร้าน = "รอบการนับ" ไม่ใช่ราย SKU (เจ้าของเลือก ส.ค. 2026) ──
+// เดิมบันทึก audit เฉพาะ SKU ที่ค่าเปลี่ยน → นับ 100 ตรง 85 ได้เครดิตแค่ 15 (งานนับหาย)
+// ตอนนี้ 1 รอบนับ = 1 แถว · resource "รอบนับ:N" ให้รู้ว่ารอบนั้นนับกี่ตัว
+describe('staffPerfRowUnits_ — ดึง "กี่ตัว" จาก resource ของรอบนับ', () => {
+  it('"รอบนับ:30" → 30', () => { expect(M.staffPerfRowUnits_('รอบนับ:30')).toBe(30); });
+  it('resource เป็น SKU ปกติ → 1 (backward compat แถวเก่า/งานอื่น)', () => {
+    expect(M.staffPerfRowUnits_('OL00008')).toBe(1);   // ห้ามไปดึง "00008" มาเป็น 8
+    expect(M.staffPerfRowUnits_('R01025')).toBe(1);
+  });
+  it('ว่าง / null / ไม่มีเลข → 1', () => {
+    expect(M.staffPerfRowUnits_('')).toBe(1);
+    expect(M.staffPerfRowUnits_(null)).toBe(1);
+    expect(M.staffPerfRowUnits_('รอบนับ:')).toBe(1);
+  });
+});
+
+describe('staffPerfCountDetail_ — สรุปรอบนับ', () => {
+  it('ไม่มีที่เปลี่ยน → หัวเรื่องอย่างเดียว', () => {
+    expect(M.staffPerfCountDetail_(30, [])).toBe('นับ 30 ตัว · เปลี่ยน 0 ตัว');
+  });
+  it('มีที่เปลี่ยน → แนบรายการ (oldQty null = ของใหม่ โชว์ "-")', () => {
+    const d = M.staffPerfCountDetail_(3, [{ sku: 'A1', oldQty: 40, newQty: 35 }, { sku: 'B2', oldQty: null, newQty: 5 }]);
+    expect(d).toMatch(/นับ 3 ตัว · เปลี่ยน 2 ตัว/);
+    expect(d).toMatch(/A1 40→35/);
+    expect(d).toMatch(/B2 -→5/);
+  });
+  it('เปลี่ยนเกิน 40 ตัว → cap ไว้ 40 แรก', () => {
+    const many = Array.from({ length: 60 }, (_, i) => ({ sku: 'S' + i, oldQty: 1, newQty: 2 }));
+    const d = M.staffPerfCountDetail_(60, many);
+    expect(d).toMatch(/40 แรก/);
+    expect(d).not.toMatch(/S45/);
+  });
+});
+
+describe('staffPerfAggregateAudit_ — รอบนับนับเป็น 1 แถว แต่ byCatUnits รวมจำนวนตัว', () => {
+  it('2 รอบนับ (30 + 20 ตัว) → count byCat=2 รอบ · byCatUnits=50 ตัว', () => {
+    const r = M.staffPerfAggregateAudit_([
+      ['2026-08-01', 'สมชาย (คลังสินค้า)', 'นับสต็อก', 'รอบนับ:30', 'x'],
+      ['2026-08-02', 'สมชาย (คลังสินค้า)', 'นับสต็อก', 'รอบนับ:20', 'x'],
+    ], '2026-08');
+    const a = r.byActor['สมชาย (คลังสินค้า)'];
+    expect(a.byCat.count).toBe(2);         // 2 รอบ
+    expect(a.byCatUnits.count).toBe(50);   // รวม 50 ตัว
+    expect(a.total).toBe(2);               // total นับเป็นรอบ (1 แถว = 1 งาน)
+  });
+  it('เช็คหน้าร้าน "รอบนับ:12" → fscheck 1 รอบ · 12 ตัว', () => {
+    const r = M.staffPerfAggregateAudit_([
+      ['2026-08-01', 'สมหญิง (หน้าร้าน)', 'ตรวจหน้าร้าน', 'รอบนับ:12', 'x'],
+    ], '2026-08');
+    const a = r.byActor['สมหญิง (หน้าร้าน)'];
+    expect(a.byCat.fscheck).toBe(1);
+    expect(a.byCatUnits.fscheck).toBe(12);
+  });
+});
+
+// meta: ทั้ง 2 เส้นทางนับ ต้องเขียน 1 แถว/รอบ + resource "รอบนับ:" (ไม่งั้นกลับไปนับราย SKU เงียบ ๆ)
+describe('meta: confirmStockCount / updateFrontStore เขียนแบบ "รอบนับ"', () => {
+  const GS = readFileSync(join(ROOT, 'appsscript_complete.gs'), 'utf8');
+  it('confirmStockCount เขียน "นับสต็อก" resource "รอบนับ:" + updated', () => {
+    const fn = GS.match(/function confirmStockCount\([\s\S]*?\n\}/)[0];
+    expect(fn).toMatch(/writeAuditLog_\(actor, "นับสต็อก", "รอบนับ:" \+ updated/);
+    // ต้องไม่กลับไป log ราย SKU เฉพาะที่เปลี่ยนแบบเดิม
+    expect(fn).not.toMatch(/writeAuditLog_\(actor, "นับสต็อก", r\.sku/);
+  });
+  it('updateFrontStore เขียน "ตรวจหน้าร้าน" resource "รอบนับ:"', () => {
+    const fn = GS.match(/function updateFrontStore\([\s\S]*?\n\}/)[0];
+    expect(fn).toMatch(/writeAuditLog_\([\s\S]*?"ตรวจหน้าร้าน", "รอบนับ:"/);
+  });
+  it('count/fscheck ใช้ unit "รอบ" + sumUnits:true', () => {
+    const tbl = GS.match(/const STAFF_PERF_CATEGORIES_ = \[[\s\S]*?\n\];/)[0];
+    expect(tbl).toMatch(/key: "count",[\s\S]*?unit: "รอบ",[\s\S]*?sumUnits: true/);
+    expect(tbl).toMatch(/key: "fscheck",[\s\S]*?unit: "รอบ",[\s\S]*?sumUnits: true/);
   });
 });

@@ -1709,8 +1709,8 @@ function attErr_(msg) {
 // ⚠️ เพิ่ม action ใหม่ใน writeAuditLog_ แล้วต้องมาเติม prefix ที่นี่ด้วย ไม่งั้นตกไปอยู่ "อื่นๆ"
 //    (tests/staff-perf.test.js มี meta-test ไล่ทุก call site ให้แล้ว — ลืมแล้วเทสต์แดงทันที)
 const STAFF_PERF_CATEGORIES_ = [
-  { key: "count",      emoji: "📊", label: "นับสต็อกคลัง",      ops: true,  unit: "รายการ", prefixes: ["นับสต็อก"] },
-  { key: "fscheck",    emoji: "🏪", label: "เช็คหน้าร้าน",       ops: true,  unit: "รายการ", prefixes: ["ตรวจหน้าร้าน"] },
+  { key: "count",      emoji: "📊", label: "นับสต็อกคลัง",      ops: true,  unit: "รอบ",    sumUnits: true, prefixes: ["นับสต็อก"] },
+  { key: "fscheck",    emoji: "🏪", label: "เช็คหน้าร้าน",       ops: true,  unit: "รอบ",    sumUnits: true, prefixes: ["ตรวจหน้าร้าน"] },
   { key: "order",      emoji: "📋", label: "จัดออเดอร์",         ops: true,  unit: "ครั้ง",  prefixes: ["อัปเดต order"] },
   { key: "transfer",   emoji: "🔄", label: "โอนของ",             ops: true,  unit: "รายการ", prefixes: ["โอนสต็อก"] },
   { key: "receive",    emoji: "📥", label: "หน้าร้านรับของ",     ops: true,  unit: "รายการ", prefixes: ["รับสินค้า"] },
@@ -1771,6 +1771,27 @@ function staffPerfDayKey_(v) {
 
 // รวมยอดจาก Audit Log — คืน { byActor: {ชื่อดิบ: {display, total, byCat, byDay}}, rows }
 // แยกออกมาเป็นฟังก์ชัน pure (รับ array ไม่ใช่ชีต) เพื่อเทสต์ได้โดยไม่ต้องมี Spreadsheet
+// จำนวน "ตัว" ที่แถวหนึ่งครอบคลุม — รอบการนับสต็อก/เช็คหน้าร้านเก็บจำนวนไว้ที่ resource
+// ("รอบนับ:30") เพื่อให้ 1 แถว = 1 "รอบ" แต่ยังรู้ว่ารอบนั้นนับกี่ตัว (เจ้าของเลือก ส.ค. 2026)
+// แถวเก่า (ราย SKU) / งานอื่น → ไม่ match = 1 ต่อแถว (backward compat เดือนเก่าไม่พัง)
+function staffPerfRowUnits_(resource) {
+  const m = /^รอบนับ:(\d+)/.exec(String(resource == null ? "" : resource).trim());
+  return m ? (parseInt(m[1], 10) || 1) : 1;
+}
+
+// สร้าง detail ของ "รอบนับ" — หัวเรื่องบอกนับกี่ตัว/เปลี่ยนกี่ตัว + รายการที่เปลี่ยนจริง (จำกัด)
+// เก็บ "ที่เปลี่ยน" ไว้ในแถวเดียว → ยังตามรอยได้ว่าใครแก้อะไร โดยไม่บวม Audit Log ราย SKU
+function staffPerfCountDetail_(total, changed) {
+  const arr = changed || [];
+  const head = "นับ " + total + " ตัว · เปลี่ยน " + arr.length + " ตัว";
+  if (!arr.length) return head;
+  const CAP = 40;
+  const list = arr.slice(0, CAP).map(function (r) {
+    return r.sku + " " + (r.oldQty == null ? "-" : r.oldQty) + "→" + r.newQty;
+  }).join(", ");
+  return head + (arr.length > CAP ? " (" + CAP + " แรก): " : ": ") + list;
+}
+
 function staffPerfAggregateAudit_(rows, monthKey) {
   const byActor = {};
   let counted = 0;
@@ -1781,8 +1802,10 @@ function staffPerfAggregateAudit_(rows, monthKey) {
     const cat = staffPerfCategoryOf_(r[2]);
     counted++;
     let b = byActor[raw];
-    if (!b) b = byActor[raw] = { display: raw, total: 0, opsTotal: 0, byCat: {}, byDay: {} };
+    if (!b) b = byActor[raw] = { display: raw, total: 0, opsTotal: 0, byCat: {}, byCatUnits: {}, byDay: {} };
     b.byCat[cat] = (b.byCat[cat] || 0) + 1;
+    // "รวมกี่ตัว" ต่อหมวด — รอบนับ 1 แถว = N ตัว (จาก resource) · แถวอื่น = 1 ตัว
+    b.byCatUnits[cat] = (b.byCatUnits[cat] || 0) + staffPerfRowUnits_(r[3]);
     // skip:true (กดลงเวลา) — เก็บให้เห็นใน byCat ได้ แต่ห้ามเข้ายอดรวม/กราฟรายวัน
     if (staffPerfCatDef_(cat).skip) return;
     b.total++;
@@ -1895,7 +1918,9 @@ function staffPerfBuild_(ss, monthStr) {
     // พนักงานคนเดียวมีได้หลายชื่อใน log (เปลี่ยนตำแหน่งแล้ววงเล็บเปลี่ยน) → รวมเข้าด้วยกัน
     cur.total += b.total;
     cur.opsTotal += b.opsTotal;
+    cur.byCatUnits = cur.byCatUnits || {};
     Object.keys(b.byCat).forEach(function (k) { cur.byCat[k] = (cur.byCat[k] || 0) + b.byCat[k]; });
+    Object.keys(b.byCatUnits || {}).forEach(function (k) { cur.byCatUnits[k] = (cur.byCatUnits[k] || 0) + b.byCatUnits[k]; });
     Object.keys(b.byDay).forEach(function (k) { cur.byDay[k] = (cur.byDay[k] || 0) + b.byDay[k]; });
   });
   unmatched.sort(function (a, b) { return b.total - a.total; });
@@ -1925,7 +1950,7 @@ function staffPerfBuild_(ss, monthStr) {
   // ── 4) ประกอบเป็นแถวต่อคน ──
   const todayStr = attDateKey_(new Date());
   const staff = staffAll.map(function (st) {
-    const a = perStaff[st.staffId] || { total: 0, opsTotal: 0, byCat: {}, byDay: {} };
+    const a = perStaff[st.staffId] || { total: 0, opsTotal: 0, byCat: {}, byCatUnits: {}, byDay: {} };
     const perDate = attByStaff[st.staffId] || {};
     const sales = salesByStaff[st.staffId] || { revenue: 0, bills: 0 };
 
@@ -1947,7 +1972,7 @@ function staffPerfBuild_(ss, monthStr) {
     return {
       staffId: st.staffId, name: st.displayName || st.lineDisplayName || st.staffId,
       role: st.role, status: st.status, pictureUrl: st.pictureUrl || "",
-      total: a.total, opsTotal: a.opsTotal, byCat: a.byCat, byDay: a.byDay,
+      total: a.total, opsTotal: a.opsTotal, byCat: a.byCat, byCatUnits: a.byCatUnits || {}, byDay: a.byDay,
       workedMin: workedMin, daysWorked: daysWorked,
       lateDays: lateDays, lateMin: lateMin, daysAbsent: daysAbsent,
       perHour: perHour,
@@ -1963,9 +1988,9 @@ function staffPerfBuild_(ss, monthStr) {
     isCurrentMonth: range.isCurrentMonth,
     lastDate: range.dates.length ? range.dates[range.dates.length - 1] : monthKey + "-01",
     cats: STAFF_PERF_CATEGORIES_.map(function (c) {
-      return { key: c.key, emoji: c.emoji, label: c.label, ops: c.ops, unit: c.unit, skip: !!c.skip };
+      return { key: c.key, emoji: c.emoji, label: c.label, ops: c.ops, unit: c.unit, skip: !!c.skip, sumUnits: !!c.sumUnits };
     }).concat([{ key: STAFF_PERF_OTHER_.key, emoji: STAFF_PERF_OTHER_.emoji,
-                 label: STAFF_PERF_OTHER_.label, ops: false, unit: STAFF_PERF_OTHER_.unit, skip: false }]),
+                 label: STAFF_PERF_OTHER_.label, ops: false, unit: STAFF_PERF_OTHER_.unit, skip: false, sumUnits: false }]),
     staff: staff,
     unmatched: unmatched,
     auditRows: audit.rows,
@@ -4618,11 +4643,12 @@ function updateFrontStore(ss, entries, datetime, actor) {
         .map(e => ({ sku: String(e.sku).trim().toUpperCase(), qty: Number(e.qty), warehousecode: WH_FRONTSTORE }));
       if (zortItems.length) pushStockToZort_(zortItems);
     } catch (e) { Logger.log("updateFrontStore ZORT push error: " + e); }
-    // Audit log: บันทึกเฉพาะ SKU ที่ค่าเปลี่ยน (pattern เดียวกับ confirmStockCount)
-    auditRows.forEach(function(r) {
-      writeAuditLog_(actor || "ไม่ระบุ", "ตรวจหน้าร้าน", r.sku,
-        auditDetail_({ before: { qty: r.oldQty }, after: { qty: r.newQty }, note: "ตรวจจำนวนหน้าร้าน" }));
-    });
+    // Audit log: 1 รอบเช็ค = 1 แถว (นับเป็น "รอบ" เหมือน confirmStockCount — resource "รอบนับ:N")
+    // เดิมบันทึกเฉพาะ SKU ที่ค่าเปลี่ยน → คนเช็คหน้าร้านเยอะแต่ค่าตรงระบบ ได้เครดิตน้อยกว่าที่ทำจริง
+    const fsCounted = entries.filter(function (e) { return String(e.sku || "").trim(); }).length;
+    if (fsCounted > 0) {
+      writeAuditLog_(actor || "ไม่ระบุ", "ตรวจหน้าร้าน", "รอบนับ:" + fsCounted, staffPerfCountDetail_(fsCounted, auditRows));
+    }
     invalidateCache_(); // P0-4: bump dmj_last_write_ts ให้ conflict detection มองเห็น write นี้
     return ok({ updated: entries.length });
   } finally {
@@ -4786,12 +4812,14 @@ function confirmStockCount(ss, entries, clientLoadedAt, actor) {
       Logger.log("confirmStockCount ZORT push error: " + e);
     }
 
-    // Audit log: บันทึกเฉพาะ SKU ที่ค่าเปลี่ยน
-    auditRows.forEach(function(r) {
-      if (r.oldQty !== r.newQty) {
-        writeAuditLog_(actor, "นับสต็อก", r.sku, "qty: " + r.oldQty + "→" + r.newQty);
-      }
-    });
+    // Audit log: 1 รอบนับ = 1 แถว (หน้าผลงานพนักงานนับเป็น "รอบ" ไม่ใช่ราย SKU — เจ้าของเลือก ส.ค. 2026)
+    // resource "รอบนับ:N" = นับทั้งรอบกี่ตัว (staffPerfRowUnits_ ดึงไปโชว์ "รวม N ตัว") ·
+    // detail เก็บ "ที่เปลี่ยนจริง" (capped) → ตามรอยได้ว่าใครแก้อะไร โดยไม่บวม Audit Log ราย SKU
+    // เดิมบันทึกเฉพาะ SKU ที่ค่าเปลี่ยน → พนักงานนับ 100 ตรง 85 ได้เครดิตแค่ 15 (งานนับหาย)
+    if (updated > 0) {
+      const changed = auditRows.filter(function (r) { return r.oldQty !== r.newQty; });
+      writeAuditLog_(actor, "นับสต็อก", "รอบนับ:" + updated, staffPerfCountDetail_(updated, changed));
+    }
 
     return ok({ confirmed: updated, zortSynced: zortSynced,
       warning: zortSynced ? null : "บันทึกใน Sheets แล้ว แต่ sync ไป ZORT ไม่สำเร็จ ระบบจะซิงค์ใหม่อัตโนมัติ" });
