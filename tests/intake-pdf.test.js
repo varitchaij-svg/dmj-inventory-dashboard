@@ -136,7 +136,7 @@ describe('meta — สายส่งการพิมพ์ต้องคร�
     expect(fn).toMatch(/addEventListener\("afterprint"[\s\S]*?window\.print\(\)/); // ผูก listener ก่อน print
   });
   it('doPrint สั่งพิมพ์ผ่าน runIntakePrint (ไม่เรียก window.print ตรง)', () => {
-    expect(MAIN).toMatch(/runIntakePrint\(`สินค้าเข้าใหม่/);
+    expect(MAIN).toMatch(/runIntakePrint\(`\$\{labelMode \? "แผ่นแปะสินค้า" : "สินค้าเข้าใหม่"\}/);
   });
 });
 
@@ -164,8 +164,32 @@ describe('meta — iOS ตัดขอบ + QR (แก้ ส.ค. 2026)', () =>
     expect(HTML).toMatch(/html\.intake-printing,\s*body\.intake-printing\s*\{[\s\S]*?overflow:\s*visible[\s\S]*?max-width:\s*none/);
   });
   it('การ์ดมีช่อง QR + IntakePdfModal สร้าง QR ด้วย window.QRCode ส่ง qrMap', () => {
-    expect(MAIN).toMatch(/function IntakePdfCard\(\{ item, index, prod, qr \}\)/);
+    expect(MAIN).toMatch(/function IntakePdfCard\(\{ item, index, prod, qr, labelMode, supplier \}\)/);
     expect(MAIN).toMatch(/const QR = window\.QRCode/);
-    expect(MAIN).toMatch(/<IntakePdfDoc pages=\{pages\} prodBySku=\{prodBySku\} qrMap=\{qrMap\}/);
+    expect(MAIN).toMatch(/<IntakePdfDoc pages=\{pages\} prodBySku=\{prodBySku\} qrMap=\{qrMap\} labelMode=\{labelMode\}/);
+  });
+});
+
+describe('meta — labelMode "แผ่นแปะสินค้า" (พิมพ์ label) ไม่แตะหน้าภาพรวม (ส.ค. 2026)', () => {
+  it('IntakePdfDoc/Card/Modal รับ labelMode', () => {
+    expect(MAIN).toMatch(/function IntakePdfDoc\(\{ pages, prodBySku, qrMap, labelMode \}\)/);
+    expect(MAIN).toMatch(/function IntakePdfModal\(\{ purchases, prodBySku, onClose, labelMode \}\)/);
+  });
+  it('labelMode: ซ่อนหัวเอกสาร+สรุป(เลข PO)+ท้ายเอกสาร (การ์ดเต็มหน้า)', () => {
+    const doc = grab(MAIN, /function IntakePdfDoc[\s\S]*?\n\}\n/, 'IntakePdfDoc');
+    // หัวเอกสาร/สรุป/ท้าย ห่อด้วย !labelMode
+    expect(doc).toMatch(/\{!labelMode && \(/);
+    // เลขที่ PO อยู่ในบล็อกที่ถูกซ่อนตอน labelMode
+    expect(doc).toMatch(/เลขที่ PO/);
+  });
+  it('labelMode: การ์ดมีเส้นประตัด + รหัสซัพในการ์ด + ซ่อนป้าย NEW', () => {
+    const card = grab(MAIN, /function IntakePdfCard[\s\S]*?\n\}\n/, 'IntakePdfCard');
+    expect(card).toMatch(/labelMode \? "1\.4px dashed/);            // เส้นประตัด
+    expect(card).toMatch(/labelMode && supplier \?/);               // รหัสซัพในการ์ด
+    expect(card).toMatch(/\{!labelMode && <div[\s\S]*?NEW<\/div>\}/); // ป้าย NEW ซ่อนตอน labelMode
+  });
+  it('หน้าภาพรวม (OverviewView) เปิด IntakePdfModal โดย "ไม่" ส่ง labelMode (ยังเป็นเอกสารเดิม)', () => {
+    // views-main OverviewView เรียกแบบไม่มี labelMode
+    expect(MAIN).toMatch(/<IntakePdfModal purchases=\{\(data && data\.purchases\) \|\| \[\]\} prodBySku=\{prodBySku\} onClose=/);
   });
 });

@@ -1305,20 +1305,28 @@ function runIntakePrint(fileName) {
 }
 
 // การ์ดสินค้า 1 ใบในเอกสาร PDF — รูป/ราคา/สีดึงจาก catalog ตาม SKU (ตามกติกา UI: มีรูปเสมอ)
-function IntakePdfCard({ item, index, prod, qr }) {
+// labelMode = โหมด "แผ่นแปะสินค้า" ในพิมพ์ label: เส้นประตัด · ไม่มีป้าย NEW · รูปใหญ่ · มีรหัสซัพพลายเออร์ในการ์ด
+// (โหมดปกติ = เอกสารของเข้าใหม่ในหน้าภาพรวม — ไม่แตะ)
+function IntakePdfCard({ item, index, prod, qr, labelMode, supplier }) {
   const img = prod && prod.imageUrl;
   const price = prod && prod.price;
   const color = prod && prod.color;
   return (
-    <div style={{border:"1px solid #d7e4dc",borderRadius:12,overflow:"hidden",background:"#fff",display:"flex",flexDirection:"column",breakInside:"avoid",pageBreakInside:"avoid"}}>
-      <div style={{position:"relative",height:"34mm",background:"#f3f6f2",display:"flex",alignItems:"center",justifyContent:"center"}}>
+    <div style={{
+      border: labelMode ? "1.4px dashed #999" : "1px solid #d7e4dc",
+      borderRadius: labelMode ? 4 : 12, overflow:"hidden", background:"#fff",
+      display:"flex", flexDirection:"column", height: labelMode ? "100%" : "auto",
+      breakInside:"avoid", pageBreakInside:"avoid",
+    }}>
+      <div style={{position:"relative",flex: labelMode ? "1 1 auto" : "0 0 34mm",minHeight: labelMode ? "38mm" : "34mm",background:"#f3f6f2",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden"}}>
         <div style={{position:"absolute",top:6,left:6,background:"#1f7a34",color:"#fff",fontSize:11,fontWeight:800,borderRadius:6,padding:"2px 7px"}}>{String(index).padStart(2,"0")}</div>
-        <div style={{position:"absolute",top:6,right:6,background:"#1f7a34",color:"#fff",fontSize:9,fontWeight:800,borderRadius:5,padding:"2px 6px",letterSpacing:".04em"}}>NEW</div>
+        {/* ป้าย NEW = "สินค้าเพิ่งเข้า" — ซ่อนในโหมดแผ่นแปะ (เจ้าของสั่ง ไม่ต้องเขียนว่าเพิ่งเข้า) */}
+        {!labelMode && <div style={{position:"absolute",top:6,right:6,background:"#1f7a34",color:"#fff",fontSize:9,fontWeight:800,borderRadius:5,padding:"2px 6px",letterSpacing:".04em"}}>NEW</div>}
         {img
           ? <img src={img} alt="" style={{maxWidth:"100%",maxHeight:"100%",objectFit:"contain"}}/>
           : <div style={{fontSize:30,color:"#b7c7bd"}}>📦</div>}
       </div>
-      <div style={{padding:"7px 9px",display:"flex",flexDirection:"column",gap:2,flex:1}}>
+      <div style={{padding:"7px 9px",display:"flex",flexDirection:"column",gap:2,flexShrink:0}}>
         <div style={{fontFamily:"monospace",fontSize:12,fontWeight:800,color:"#111"}}>{item.sku}</div>
         <div style={{fontSize:11.5,color:"#333",lineHeight:1.25,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{item.name || "—"}</div>
         {color && color.name ? (
@@ -1326,7 +1334,11 @@ function IntakePdfCard({ item, index, prod, qr }) {
             <span style={{width:10,height:10,borderRadius:"50%",background:color.hex||"#ccc",border:"1px solid rgba(0,0,0,.15)",flexShrink:0}}/>{color.name}
           </div>
         ) : null}
-        <div style={{marginTop:"auto",display:"flex",alignItems:"flex-end",justifyContent:"space-between",gap:6,paddingTop:6,borderTop:"1px solid #eef2ee"}}>
+        {/* รหัสซัพพลายเออร์ในการ์ด (เฉพาะโหมดแผ่นแปะ) */}
+        {labelMode && supplier ? (
+          <div style={{fontSize:10.5,color:"#555"}}>ซัพพลายเออร์: <b style={{color:"#1f7a34",fontFamily:"monospace"}}>{supplier}</b></div>
+        ) : null}
+        <div style={{marginTop:6,display:"flex",alignItems:"flex-end",justifyContent:"space-between",gap:6,paddingTop:6,borderTop:"1px solid #eef2ee"}}>
           <div>
             <div style={{fontSize:9,color:"#888"}}>ราคา/หน่วย</div>
             <div style={{fontSize:13,fontWeight:800,color:"#1f7a34"}}>{price ? "฿"+fmtN(price) : "—"}</div>
@@ -1349,7 +1361,9 @@ function IntakePdfCard({ item, index, prod, qr }) {
 
 // เอกสาร PDF ทั้งชุด — แตกแต่ละกลุ่ม (ซัพพลายเออร์/วัน) เป็นแผ่นละ INTAKE_PDF_PER_PAGE ใบ
 // display:none บนจอ (คลาส .intake-print-area) → โผล่เฉพาะตอนพิมพ์ · portal ไป body จากตัวเรียก
-function IntakePdfDoc({ pages, prodBySku, qrMap }) {
+// labelMode = โหมด "แผ่นแปะสินค้า" (พิมพ์ label): ไม่มีหัวเอกสาร/สรุป/PO · การ์ดเต็มหน้า + เส้นประตัด
+//             + รหัสซัพพลายเออร์ย้ายเข้าไปในการ์ด · ใช้เฉพาะฝั่งพิมพ์ label — หน้าภาพรวมยังเป็นโหมดปกติ
+function IntakePdfDoc({ pages, prodBySku, qrMap, labelMode }) {
   if (!pages || !pages.length) return null;
   const printedAt = new Date().toLocaleString("th-TH", { day:"numeric", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
   const sheets = [];
@@ -1363,45 +1377,54 @@ function IntakePdfDoc({ pages, prodBySku, qrMap }) {
     <div className="intake-print-area">
       {sheets.map((s, si) => (
         <div key={si} className="intake-print-page">
-          {/* ── หัวเอกสาร ── */}
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,borderBottom:"3px solid #1f7a34",paddingBottom:10,marginBottom:12}}>
-            <div style={{display:"flex",gap:12,alignItems:"flex-start"}}>
-              <div style={{background:"#1f7a34",color:"#fff",borderRadius:8,padding:"7px 11px",textAlign:"center",lineHeight:1.05}}>
-                <div style={{fontSize:16,fontWeight:900}}>NEW</div>
-                <div style={{fontSize:8.5,fontWeight:700,letterSpacing:".1em"}}>ARRIVAL</div>
+          {!labelMode && (
+            <>
+              {/* ── หัวเอกสาร (เฉพาะโหมดปกติ/หน้าภาพรวม) ── */}
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,borderBottom:"3px solid #1f7a34",paddingBottom:10,marginBottom:12}}>
+                <div style={{display:"flex",gap:12,alignItems:"flex-start"}}>
+                  <div style={{background:"#1f7a34",color:"#fff",borderRadius:8,padding:"7px 11px",textAlign:"center",lineHeight:1.05}}>
+                    <div style={{fontSize:16,fontWeight:900}}>NEW</div>
+                    <div style={{fontSize:8.5,fontWeight:700,letterSpacing:".1em"}}>ARRIVAL</div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:22,fontWeight:900,color:"#111"}}>สินค้าเพิ่งเข้าคลัง</div>
+                    <div style={{fontSize:12,color:"#666",marginTop:2}}>ประจำวันที่ {intakeDateLong(s.g.date)}</div>
+                  </div>
+                </div>
+                <div style={{border:"1px solid #cfe0d6",borderRadius:10,padding:"7px 12px",minWidth:"48mm",background:"#f6faf7"}}>
+                  <div style={{fontSize:10,color:"#888"}}>รหัสซัพพลายเออร์</div>
+                  <div style={{fontSize:15,fontWeight:900,color:"#1f7a34",fontFamily:"monospace"}}>{s.g.supplier}</div>
+                  <div style={{fontSize:10,color:"#888",marginTop:5}}>วันที่เข้า</div>
+                  <div style={{fontSize:12,fontWeight:700,color:"#333"}}>{intakeDateLong(s.g.date)}</div>
+                </div>
               </div>
-              <div>
-                <div style={{fontSize:22,fontWeight:900,color:"#111"}}>สินค้าเพิ่งเข้าคลัง</div>
-                <div style={{fontSize:12,color:"#666",marginTop:2}}>ประจำวันที่ {intakeDateLong(s.g.date)}</div>
+              {/* ── สรุปตัวเลข ── */}
+              <div style={{display:"flex",gap:10,marginBottom:12}}>
+                {[["รายการ (SKU)",fmtN(s.g.nSku)],["จำนวนรวม (ชิ้น)",fmtN(s.g.totQty)],["เลขที่ PO",s.g.pos.length?s.g.pos.join(", "):"—"]].map(([lbl,val],i)=>(
+                  <div key={i} style={{flex:1,border:"1px solid #e2ebe5",borderRadius:10,padding:"8px 12px",background:"#fbfdfb",minWidth:0}}>
+                    <div style={{fontSize:i===2?13:18,fontWeight:900,color:"#1f7a34",lineHeight:1.15,wordBreak:"break-word"}}>{val}</div>
+                    <div style={{fontSize:10,color:"#888",marginTop:2}}>{lbl}</div>
+                  </div>
+                ))}
               </div>
-            </div>
-            <div style={{border:"1px solid #cfe0d6",borderRadius:10,padding:"7px 12px",minWidth:"48mm",background:"#f6faf7"}}>
-              <div style={{fontSize:10,color:"#888"}}>รหัสซัพพลายเออร์</div>
-              <div style={{fontSize:15,fontWeight:900,color:"#1f7a34",fontFamily:"monospace"}}>{s.g.supplier}</div>
-              <div style={{fontSize:10,color:"#888",marginTop:5}}>วันที่เข้า</div>
-              <div style={{fontSize:12,fontWeight:700,color:"#333"}}>{intakeDateLong(s.g.date)}</div>
-            </div>
-          </div>
-          {/* ── สรุปตัวเลข ── */}
-          <div style={{display:"flex",gap:10,marginBottom:12}}>
-            {[["รายการ (SKU)",fmtN(s.g.nSku)],["จำนวนรวม (ชิ้น)",fmtN(s.g.totQty)],["เลขที่ PO",s.g.pos.length?s.g.pos.join(", "):"—"]].map(([lbl,val],i)=>(
-              <div key={i} style={{flex:1,border:"1px solid #e2ebe5",borderRadius:10,padding:"8px 12px",background:"#fbfdfb",minWidth:0}}>
-                <div style={{fontSize:i===2?13:18,fontWeight:900,color:"#1f7a34",lineHeight:1.15,wordBreak:"break-word"}}>{val}</div>
-                <div style={{fontSize:10,color:"#888",marginTop:2}}>{lbl}</div>
-              </div>
-            ))}
-          </div>
-          {/* ── ตารางการ์ดสินค้า ── */}
-          <div style={{display:"grid",gridTemplateColumns:"repeat(3, minmax(0,1fr))",gap:10}}>
+            </>
+          )}
+          {/* ── ตารางการ์ดสินค้า — โหมดแผ่นแปะยืดเต็มหน้า (flex:1 + แถวเท่ากัน) ── */}
+          <div style={labelMode
+            ? {display:"grid",gridTemplateColumns:"repeat(3, minmax(0,1fr))",gridAutoRows:"minmax(0, 1fr)",gap:"6mm",flex:1}
+            : {display:"grid",gridTemplateColumns:"repeat(3, minmax(0,1fr))",gap:10}}>
             {s.items.map((it, i) => (
-              <IntakePdfCard key={it.sku} item={it} index={s.startIdx + i + 1} prod={prodBySku.get(it.sku)} qr={qrMap && qrMap[it.sku]}/>
+              <IntakePdfCard key={it.sku} item={it} index={s.startIdx + i + 1} prod={prodBySku.get(it.sku)}
+                             qr={qrMap && qrMap[it.sku]} labelMode={labelMode} supplier={s.g.supplier}/>
             ))}
           </div>
-          {/* ── ท้ายเอกสาร (marginTop:auto ดันลงล่างสุด — .intake-print-page เป็น flex column) ── */}
-          <div style={{marginTop:"auto",paddingTop:10,borderTop:"1px solid #e2ebe5",display:"flex",justifyContent:"space-between",fontSize:10,color:"#999"}}>
-            <span>หมายเหตุ: ตรวจสอบคุณภาพสินค้า ก่อนจัดเก็บเข้าคลัง</span>
-            <span>พิมพ์ {printedAt} · หน้า {s.page}/{s.total}</span>
-          </div>
+          {/* ── ท้ายเอกสาร (โหมดปกติเท่านั้น — แผ่นแปะเอาการ์ดเต็มหน้า) ── */}
+          {!labelMode && (
+            <div style={{marginTop:"auto",paddingTop:10,borderTop:"1px solid #e2ebe5",display:"flex",justifyContent:"space-between",fontSize:10,color:"#999"}}>
+              <span>หมายเหตุ: ตรวจสอบคุณภาพสินค้า ก่อนจัดเก็บเข้าคลัง</span>
+              <span>พิมพ์ {printedAt} · หน้า {s.page}/{s.total}</span>
+            </div>
+          )}
         </div>
       ))}
     </div>
@@ -1409,7 +1432,8 @@ function IntakePdfDoc({ pages, prodBySku, qrMap }) {
 }
 
 // โมดัลติ๊กเลือกวันที่จะพิมพ์ + ปุ่มบันทึก PDF — โชว์ตัวอย่างจำนวนแผ่น/ซัพพลายเออร์แบบสด
-function IntakePdfModal({ purchases, prodBySku, onClose }) {
+// labelMode = เปิดจากพิมพ์ label → เอกสารเป็น "แผ่นแปะสินค้า" (เส้นประตัด/ไม่มีหัวเอกสาร/รหัสซัพในการ์ด)
+function IntakePdfModal({ purchases, prodBySku, onClose, labelMode }) {
   const opts = uM(() => {
     const cut = new Date(); cut.setDate(cut.getDate() - 90);           // ให้เลือกได้ 90 วันล่าสุด
     return intakeDateOptions(purchases, cut.toISOString().slice(0, 10));
@@ -1449,7 +1473,7 @@ function IntakePdfModal({ purchases, prodBySku, onClose }) {
   const doPrint = () => {
     if (!pages.length) return;
     const newest = [...sel].sort().reverse()[0] || "";
-    runIntakePrint(`สินค้าเข้าใหม่ _ ${newest}`);
+    runIntakePrint(`${labelMode ? "แผ่นแปะสินค้า" : "สินค้าเข้าใหม่"} _ ${newest}`);
   };
   return (
     <>
@@ -1458,8 +1482,12 @@ function IntakePdfModal({ purchases, prodBySku, onClose }) {
         <div onClick={e=>e.stopPropagation()}
              style={{background:"var(--paper)",borderRadius:16,width:"100%",maxWidth:460,maxHeight:"92vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
           <div style={{padding:"16px 18px 12px",borderBottom:"1px solid var(--bdr)"}}>
-            <div style={{fontSize:16,fontWeight:800,color:"var(--g-700)"}}>🖨️ บันทึก PDF ของเข้าใหม่</div>
-            <div style={{fontSize:12,color:"var(--muted)",marginTop:3}}>ติ๊กเลือกวันที่จะพิมพ์ · แยกหน้า <b>ตามรหัสซัพพลายเออร์ + วันที่</b></div>
+            <div style={{fontSize:16,fontWeight:800,color:"var(--g-700)"}}>{labelMode ? "🖨️ พิมพ์แผ่นแปะสินค้า" : "🖨️ บันทึก PDF ของเข้าใหม่"}</div>
+            <div style={{fontSize:12,color:"var(--muted)",marginTop:3}}>
+              {labelMode
+                ? <>ติ๊กเลือกวันที่จะพิมพ์ · การ์ดเต็มหน้า + <b>เส้นประสำหรับตัด</b> · แยกหน้าตามซัพพลายเออร์</>
+                : <>ติ๊กเลือกวันที่จะพิมพ์ · แยกหน้า <b>ตามรหัสซัพพลายเออร์ + วันที่</b></>}
+            </div>
           </div>
           {opts.length === 0 ? (
             <div style={{padding:24,textAlign:"center",color:"var(--muted)",fontSize:13}}>ไม่มีของเข้าใหม่ใน 90 วันล่าสุด</div>
@@ -1499,7 +1527,7 @@ function IntakePdfModal({ purchases, prodBySku, onClose }) {
           </div>
         </div>
       </div>
-      {ReactDOM.createPortal(<IntakePdfDoc pages={pages} prodBySku={prodBySku} qrMap={qrMap}/>, document.body)}
+      {ReactDOM.createPortal(<IntakePdfDoc pages={pages} prodBySku={prodBySku} qrMap={qrMap} labelMode={labelMode}/>, document.body)}
     </>
   );
 }
