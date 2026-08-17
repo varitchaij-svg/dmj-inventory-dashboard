@@ -6543,7 +6543,7 @@ ${labelsHTML}
               <button className="btn ghost" onClick={() => setIntakePdfOpen(true)}
                       disabled={!intakePurchases || !intakePurchases.length}
                       style={{marginLeft:"auto",padding:"7px 13px",fontSize:12.5,fontWeight:700}}>
-                📄 บันทึก PDF (แยกซัพพลายเออร์)
+                📄 พิมพ์การ์ดเต็มหน้า (เส้นประตัด)
               </button>
             </div>
             {intakeInfo.recent.length > 0 && (
@@ -6840,7 +6840,7 @@ ${labelsHTML}
       {detailProduct && <ProductModal p={detailProduct} onClose={() => setDetailSku(null)}/>}
       {/* บันทึก PDF ของเข้าใหม่ แยกซัพพลายเออร์ — IntakePdfModal เป็น global จาก views-main.jsx */}
       {intakePdfOpen && typeof IntakePdfModal === "function" &&
-        <IntakePdfModal purchases={intakePurchases || []} prodBySku={prodBySkuMap} onClose={() => setIntakePdfOpen(false)}/>}
+        <IntakePdfModal purchases={intakePurchases || []} prodBySku={prodBySkuMap} labelMode onClose={() => setIntakePdfOpen(false)}/>}
     </div>
   );
 }

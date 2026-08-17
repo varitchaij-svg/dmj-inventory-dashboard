@@ -1466,6 +1466,23 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
   ผ่าน dmjJson, cardList 1/SKU, storeCodes, ชิปเรียง date desc, ปุ่ม PDF เปิด IntakePdfModal, CSS/CACHE)
   · browser test 1 เคส (warehouse: labels → โหมดการ์ด → เพิ่ม SKU → มี `.card-label-cell` + ปุ่มบันทึก PDF)
 
+#### `labelMode` — เอกสารการ์ดฝั่งพิมพ์ label ต่างจากหน้าภาพรวม (ส.ค. 2026)
+
+เจ้าของสั่ง: การ์ดที่พิมพ์จากแท็บพิมพ์ label ต้องเป็น **แผ่นแปะสินค้า** — มี **เส้นประสำหรับตัด** ·
+**ไม่มีหัวเอกสาร "สินค้าเพิ่งเข้าคลัง"/NEW** · **การ์ดเต็มหน้า** · **รหัสซัพพลายเออร์อยู่ในการ์ด** ·
+**ไม่มีเลขที่ PO** · **แก้แค่ฝั่งพิมพ์ label หน้าภาพรวม (ของเข้าใหม่) เหมือนเดิม**
+
+- **`IntakePdfDoc`/`IntakePdfCard`/`IntakePdfModal` รับ prop `labelMode`** — ฝั่งพิมพ์ label
+  (`LabelPrintView`) ส่ง `labelMode` · **`OverviewView` ไม่ส่ง** → ยังเป็นเอกสารเดิมทุกอย่าง
+  (component เดียวกัน 2 หน้าตา — เหมือน `isInvoice`)
+- `labelMode` เปลี่ยน: ซ่อนหัวเอกสาร+กล่องสรุป(รวมเลข PO)+ท้ายเอกสาร → grid `flex:1` + `gridAutoRows:1fr`
+  เต็มหน้า · การ์ด `border: dashed` (เส้นตัด) · ซ่อนป้าย NEW · เพิ่มบรรทัด "ซัพพลายเออร์: <code>"
+  (รับ `supplier` = `s.g.supplier` ของกลุ่ม)
+- ⚠️ **ทำด้วย inline style ล้วน ไม่แตะ CSS ใน HTML** — จึงไม่ผูกกับ `.card-label-page`/`.intake-print-page`
+  เดิม (bump CACHE เพราะ jsx เปลี่ยน + กัน PWA cache เหนียว ไม่ใช่เพราะแก้ CSS)
+- ⚠️ **`OverviewView` ยังเรียก `<IntakePdfModal ... onClose>` โดยไม่มี `labelMode`** — มีเทสต์บังคับ
+  ว่าฝั่งภาพรวมต้องไม่ติด labelMode (เผลอใส่ = หน้าเอกสารเจ้าของเปลี่ยนตามโดยไม่ได้ตั้งใจ)
+
 ### ⚠️ ปุ่มพิมพ์ในแท็บ "ใบเสนอราคา" ต้องมีครบทั้ง 2 ชนิด **ทั้งการ์ดมือถือและตาราง** (ส.ค. 2026)
 
 `QuoteFollowupView` เรนเดอร์คนละอย่างตามความกว้างจอ (`useIsMobile()` = ≤600px): จอกว้าง/มือถือ

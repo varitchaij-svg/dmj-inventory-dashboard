@@ -91,10 +91,11 @@ describe('LabelPrintView — ของเพิ่งเข้าคลังข
     expect(ANA).toMatch(/const addSkuDirect = sku =>/);
     expect(ANA).toMatch(/onClick=\{\(\) => addSkuDirect\(g\.sku\)\}/);
   });
-  it('ปุ่ม "บันทึก PDF (แยกซัพพลายเออร์)" เปิด IntakePdfModal (global จาก views-main)', () => {
+  it('ปุ่มพิมพ์การ์ดเต็มหน้า เปิด IntakePdfModal แบบ labelMode (global จาก views-main)', () => {
     expect(ANA).toMatch(/setIntakePdfOpen\(true\)/);
     expect(ANA).toMatch(/intakePdfOpen && typeof IntakePdfModal === "function"/);
-    expect(ANA).toMatch(/<IntakePdfModal purchases=\{intakePurchases \|\| \[\]\} prodBySku=\{prodBySkuMap\}/);
+    // ฝั่งพิมพ์ label ส่ง labelMode → เอกสารเป็นแผ่นแปะ (เส้นประตัด/ไม่มีหัวเอกสาร)
+    expect(ANA).toMatch(/<IntakePdfModal purchases=\{intakePurchases \|\| \[\]\} prodBySku=\{prodBySkuMap\} labelMode/);
     // IntakePdfModal ต้องมีจริงใน views-main (โหลดก่อน views-analytics)
     expect(MAIN).toMatch(/function IntakePdfModal\(/);
   });

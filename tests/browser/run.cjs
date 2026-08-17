@@ -854,7 +854,7 @@ function startServer() {
         }
         await page.waitForTimeout(700);   // รอ QR generate + render
         const cells = await page.locator('.card-label-cell').count();
-        const pdfBtn = await page.locator('button', { hasText: 'บันทึก PDF (แยกซัพพลายเออร์)' }).count();
+        const pdfBtn = await page.locator('button', { hasText: 'เส้นประตัด' }).count();
         if (cells < 1) { status = 'NO_CARD'; note = 'เพิ่มสินค้าแล้วไม่มี .card-label-cell'; }
         else if (!pdfBtn) { status = 'NO_PDF_BTN'; note = 'ไม่พบปุ่มบันทึก PDF ของเข้าใหม่'; }
         else note = `โหมดการ์ด: เพิ่ม 1 สินค้า → ${cells} การ์ด + มีปุ่มบันทึก PDF ให้เจ้าของ`;
