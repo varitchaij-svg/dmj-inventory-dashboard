@@ -1242,6 +1242,8 @@
       break-after: page;
     }
     .intake-print-page:last-child { page-break-after: avoid; break-after: avoid; }
+    /* โหมดแผ่นแปะ — ขอบแคบลง (6mm) ให้การ์ดเต็มหน้ากระดาษมากที่สุด */
+    .intake-print-page.label { padding: 6mm !important; }
     /* ใบเสร็จ 80mm — ขนาดหน้ากระดาษจริงคุมด้วย JS (setPosPrintPageSize) เพราะ
        named @page (page: rc80) ไม่ทำงานเชื่อถือได้บน Chrome/Android print pipeline
        (เนื้อหาเลยไปฝังในหน้า A4 แล้วถูกเครื่องพิมพ์ย่อลงมาเล็กจิ๋วมุมกระดาษ) */
