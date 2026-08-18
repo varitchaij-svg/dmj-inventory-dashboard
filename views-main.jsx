@@ -1349,25 +1349,26 @@ function IntakePdfCard({ item, index, prod, qr, labelMode, supplier }) {
             ? <img src={img} alt="" style={{maxWidth:"100%",maxHeight:"100%",objectFit:"contain"}}/>
             : <div style={{fontSize:28,color:"#b7c7bd"}}>📦</div>}
         </div>
-        {/* รายละเอียดขวา — SKU ตัวใหญ่เด่น */}
+        {/* รายละเอียดขวา — ข้อมูลด้านบน · QR อยู่ตรงกลาง + SKU ใต้ QR */}
         <div style={{flex:1,minWidth:0,padding:"2.5mm 3mm",display:"flex",flexDirection:"column"}}>
-          <div style={{fontSize:"12pt",fontWeight:900,fontFamily:"monospace",color:"#111",lineHeight:1.05,wordBreak:"break-all"}}>{item.sku}</div>
-          <div style={{fontSize:"7.5pt",color:"#333",lineHeight:1.15,marginTop:1.5,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{item.name || ""}</div>
-          <div style={{borderTop:"1px dashed #cbd5cf",margin:"2mm 0"}}/>
-          <div style={{fontSize:"8pt",marginBottom:"1.2mm",display:"flex",justifyContent:"space-between",gap:5}}>
+          <div style={{fontSize:"8pt",fontWeight:700,color:"#111",lineHeight:1.15,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{item.name || item.sku}</div>
+          <div style={{borderTop:"1px dashed #cbd5cf",margin:"1.5mm 0"}}/>
+          <div style={{fontSize:"8pt",marginBottom:"1mm",display:"flex",justifyContent:"space-between",gap:5}}>
             <span style={{color:"#888"}}>ราคา</span><b style={{color:"#1f7a34"}}>{price ? "฿"+fmtN(price) : "—"}</b></div>
-          <div style={{fontSize:"8pt",marginBottom:"1.2mm",display:"flex",justifyContent:"space-between",gap:5}}>
+          <div style={{fontSize:"8pt",marginBottom:"1mm",display:"flex",justifyContent:"space-between",gap:5}}>
             <span style={{color:"#888"}}>รับ</span><b style={{color:"#111"}}>{fmtN(item.qty)} ชิ้น</b></div>
           {supplier ? (
-            <div style={{fontSize:"8pt",marginBottom:"1.2mm",display:"flex",justifyContent:"space-between",gap:5}}>
+            <div style={{fontSize:"8pt",marginBottom:"1mm",display:"flex",justifyContent:"space-between",gap:5}}>
               <span style={{color:"#888"}}>รหัสร้าน</span><b style={{fontFamily:"monospace",color:"#1f7a34"}}>{supplier}</b></div>
           ) : null}
-          <div style={{marginTop:"auto",display:"flex",justifyContent:"flex-end"}}>
-            <div style={{width:"13mm",height:"13mm",flexShrink:0}}>
+          {/* QR ตรงกลาง + SKU ใต้ QR */}
+          <div style={{marginTop:"auto",display:"flex",flexDirection:"column",alignItems:"center",gap:"0.8mm"}}>
+            <div style={{width:"15mm",height:"15mm",flexShrink:0}}>
               {qr
                 ? <img src={qr} alt={item.sku} style={{width:"100%",height:"100%",objectFit:"contain"}}/>
                 : <div style={{width:"100%",height:"100%",background:"#f0f0f0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"6pt",color:"#aaa"}}>QR</div>}
             </div>
+            <div style={{fontSize:"11pt",fontWeight:900,fontFamily:"monospace",color:"#111",lineHeight:1,textAlign:"center",wordBreak:"break-all"}}>{item.sku}</div>
           </div>
         </div>
       </div>
