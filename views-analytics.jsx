@@ -6236,7 +6236,6 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
   const [qtyVal, setQtyVal] = uS("1");
   const [qrMap, setQrMap] = uS({});
   const [logoSrc, setLogoSrc] = uS("logo.png");
-  const [storeCodes, setStoreCodes] = uS({});   // โหมดการ์ด: รหัสร้านต่อ SKU (กรอกเอง)
   const [intakePdfOpen, setIntakePdfOpen] = uS(false);  // โมดัลบันทึก PDF ของเข้าใหม่ (แยกซัพพลายเออร์)
 
   const productMap = uM(() => {
@@ -6260,19 +6259,20 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
     return () => { alive = false; };
   }, []);
 
-  // จำนวนเข้าล่าสุดต่อ SKU (รวมทุก PO ในช่วง) + วันล่าสุด — เรียงใหม่สุดก่อนสำหรับ "เพิ่งเข้าคลัง"
+  // จำนวนเข้าล่าสุดต่อ SKU (รวมทุก PO ในช่วง) + วันล่าสุด + รหัสร้าน(ซัพ)ล่าสุด — ใหม่สุดก่อน
   const intakeInfo = uM(() => {
     const bySku = new Map();
     for (const pu of (intakePurchases || [])) {
       if (!pu || !pu.sku) continue;
-      const g = bySku.get(pu.sku) || { sku: pu.sku, qty: 0, date: pu.date || "" };
+      const g = bySku.get(pu.sku) || { sku: pu.sku, qty: 0, date: pu.date || "", supplier: "" };
       g.qty += pu.qty || 0;
-      if ((pu.date || "") > g.date) g.date = pu.date || g.date;
+      if ((pu.date || "") >= g.date) { g.date = pu.date || g.date; if (pu.supplier) g.supplier = pu.supplier; }  // ซัพจาก PO ล่าสุด
       bySku.set(pu.sku, g);
     }
     const recent = [...bySku.values()].sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : 0);
-    const qtyMap = {}; recent.forEach(g => { qtyMap[g.sku] = g.qty; });
-    return { recent, qtyMap };
+    const qtyMap = {}, supMap = {};
+    recent.forEach(g => { qtyMap[g.sku] = g.qty; if (g.supplier) supMap[g.sku] = g.supplier; });
+    return { recent, qtyMap, supMap };
   }, [intakePurchases]);
 
   // สินค้าที่กำลังเปิดดูรายละเอียด — เก็บเป็น sku ไม่ใช่ object (กันค้างค่าเก่าเมื่อ products อัปเดต)
@@ -6338,14 +6338,15 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
 
   const totalQty = items.reduce((s, i) => s + i.qty, 0);
 
-  // โหมดการ์ด: 1 การ์ด/SKU (ไม่ขยายตามจำนวนใบ) · 9 การ์ด/หน้า (3×3) เหมือนดีไซน์ต้นแบบ
+  // โหมดการ์ด: 1 การ์ด/SKU · ใช้กริดคำนวณเอง (intakeCardGrid) เต็มหน้า เหมือน "พิมพ์การ์ดเต็มหน้า"
+  //   → พิมพ์ออกมาหน้าตาเดียวกันทั้ง 2 ปุ่ม (ใช้ IntakePdfCard labelMode ตัวเดียวกัน)
+  const cardGrid = uM(() => (typeof intakeCardGrid === "function" ? intakeCardGrid() : { cols: 3, rows: 5, perPage: 15 }), []);
   const cardList = uM(() => items.map(it => productMap[it.sku]).filter(Boolean), [items, productMap]);
-  const CARDS_PER_PAGE = 9;
   const cardPages = uM(() => {
     const ps = [];
-    for (let i = 0; i < cardList.length; i += CARDS_PER_PAGE) ps.push(cardList.slice(i, i + CARDS_PER_PAGE));
+    for (let i = 0; i < cardList.length; i += cardGrid.perPage) ps.push(cardList.slice(i, i + cardGrid.perPage));
     return ps;
-  }, [cardList]);
+  }, [cardList, cardGrid]);
 
   // Safely escape HTML entities to prevent XSS in popup
   const escHtml = (s) => String(s || "")
@@ -6658,15 +6659,14 @@ ${labelsHTML}
                     {p?.price && ["owner","dev"].indexOf(sessionStorage.getItem("dmj_role")) >= 0 ? `${p.price} ฿` : ""}
                   </span>
                   {printMode === "card" ? (
-                    /* โหมดการ์ด: กรอก "รหัสร้าน" เอง + โชว์ "จำนวนเข้า" อัตโนมัติ (อ่านอย่างเดียว) */
+                    /* โหมดการ์ด: จำนวนเข้า + รหัสร้าน(ซัพ) ดึงอัตโนมัติจาก intake — ไม่ต้องกรอก */
                     <>
-                      <span style={{fontSize:11,color:"var(--muted)",textAlign:"right",minWidth:52}}>
+                      <span style={{fontSize:11,color:"var(--muted)",textAlign:"right",minWidth:48}}>
                         เข้า<br/><b style={{color:"var(--text)",fontSize:12}}>{intakeInfo.qtyMap[item.sku] != null ? fmtN(intakeInfo.qtyMap[item.sku]) : "—"}</b>
                       </span>
-                      <input value={storeCodes[item.sku] || ""} placeholder="รหัสร้าน"
-                        onChange={e => setStoreCodes(prev => ({ ...prev, [item.sku]: e.target.value }))}
-                        style={{width:96,padding:"6px 8px",borderRadius:6,border:"1.5px solid var(--bdr)",
-                                fontFamily:"inherit",fontSize:12}}/>
+                      <span style={{fontSize:11,color:"var(--muted)",textAlign:"right",minWidth:66}}>
+                        รหัสร้าน<br/><b style={{color:"var(--g-700)",fontSize:12,fontFamily:"monospace"}}>{intakeInfo.supMap[item.sku] || "—"}</b>
+                      </span>
                     </>
                   ) : (
                     <>
@@ -6749,54 +6749,18 @@ ${labelsHTML}
           </div>
         ))
       ) : printMode === "card" ? (
-        /* Card label pages (A4, 3×3) — visible on print too (ไม่ใส่ .no-print) */
+        /* Card label pages — ใช้ IntakePdfCard (labelMode) ตัวเดียวกับ "พิมพ์การ์ดเต็มหน้า"
+           → พิมพ์ออกมาหน้าตาเหมือนกันเป๊ะ · รหัสร้าน/จำนวนเข้าดึงอัตโนมัติจาก intake (ไม่ต้องกรอก) */
         cardPages.map((page, pi) => (
           <div key={pi} className="card-label-page">
-            <div className="card-label-grid">
-              {page.map((p, i) => {
-                const idx = pi * CARDS_PER_PAGE + i + 1;
-                const qtyIn = intakeInfo.qtyMap[p.sku];
-                const store = (storeCodes[p.sku] || "").trim();
-                return (
-                  <div key={p.sku} className="card-label-cell">
-                    {/* รูปสินค้า (ซ้าย) + เลขลำดับ */}
-                    <div style={{position:"relative",width:"46%",flexShrink:0,background:"#f3f6f2",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",padding:"2mm"}}>
-                      <div style={{position:"absolute",top:"2mm",left:"2mm",background:"#1f7a34",color:"#fff",fontSize:"9pt",fontWeight:800,borderRadius:5,padding:"0.5mm 2mm"}}>{String(idx).padStart(2,"0")}</div>
-                      {p.imageUrl
-                        ? <img src={p.imageUrl} alt="" style={{maxWidth:"100%",maxHeight:"100%",objectFit:"contain",display:"block"}} onError={e => { e.currentTarget.style.display="none"; }}/>
-                        : <div style={{fontSize:"20pt",color:"#b7c7bd"}}>📦</div>}
-                    </div>
-                    {/* รายละเอียด (ขวา) */}
-                    <div style={{flex:1,minWidth:0,padding:"3mm 3.5mm",display:"flex",flexDirection:"column"}}>
-                      <div style={{fontSize:"10pt",fontWeight:800,color:"#111",lineHeight:1.2,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{p.name || p.sku}</div>
-                      <div style={{borderTop:"1px dashed #cbd5cf",margin:"2mm 0"}}/>
-                      <div style={{display:"flex",justifyContent:"space-between",gap:"2mm",fontSize:"7.5pt",marginBottom:"1mm"}}>
-                        <span style={{color:"#888"}}>SKU</span>
-                        <span style={{fontFamily:"monospace",fontWeight:700,color:"#111"}}>{p.sku}</span>
-                      </div>
-                      <div style={{display:"flex",justifyContent:"space-between",gap:"2mm",fontSize:"7.5pt",marginBottom:"1mm"}}>
-                        <span style={{color:"#888"}}>ราคา/หน่วย</span>
-                        <span style={{fontWeight:800,color:"#1f7a34"}}>{p.price != null && p.price > 0 ? `${p.price} บาท` : "—"}</span>
-                      </div>
-                      <div style={{fontSize:"7.5pt",marginBottom:"1mm"}}>
-                        <span style={{color:"#888"}}>จำนวนเข้า</span>{" "}
-                        <b style={{color:"#111",fontSize:"9pt"}}>{qtyIn != null ? `${fmtN(qtyIn)} ชิ้น` : "—"}</b>
-                      </div>
-                      <div style={{marginTop:"auto",display:"flex",alignItems:"flex-end",justifyContent:"space-between",gap:"2mm"}}>
-                        <div style={{minWidth:0}}>
-                          <div style={{fontSize:"7pt",color:"#888"}}>รหัสร้าน</div>
-                          <div style={{fontSize:"9pt",fontWeight:700,color:"#111",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{store || "—"}</div>
-                        </div>
-                        <div style={{width:"16mm",height:"16mm",flexShrink:0}}>
-                          {qrMap[p.sku]
-                            ? <img src={qrMap[p.sku]} alt={p.sku} style={{width:"100%",height:"100%",objectFit:"contain"}}/>
-                            : <div style={{width:"100%",height:"100%",background:"#f0f0f0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"6pt",color:"#aaa"}}>QR</div>}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="card-label-grid-fill"
+                 style={{gridTemplateColumns:`repeat(${cardGrid.cols}, minmax(0,1fr))`,gridTemplateRows:`repeat(${cardGrid.rows}, minmax(0,1fr))`}}>
+              {page.map((p, i) => (
+                <IntakePdfCard key={p.sku}
+                  item={{ sku: p.sku, name: p.name, qty: intakeInfo.qtyMap[p.sku] || 0 }}
+                  index={pi * cardGrid.perPage + i + 1}
+                  prod={p} qr={qrMap[p.sku]} labelMode supplier={intakeInfo.supMap[p.sku]}/>
+              ))}
             </div>
           </div>
         ))
