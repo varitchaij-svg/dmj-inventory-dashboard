@@ -6549,17 +6549,27 @@ ${labelsHTML}
             {intakeInfo.recent.length > 0 && (
               <>
                 <div style={{fontSize:11,color:"var(--muted)",marginBottom:6,fontWeight:600}}>
-                  🆕 เพิ่งเข้าคลัง — แตะเพื่อเพิ่มการ์ด (ใหม่สุดก่อน):
+                  🆕 เพิ่งเข้าคลัง — แตะรูปเพื่อเพิ่มการ์ด (ใหม่สุดก่อน):
                 </div>
-                <div style={{display:"flex",gap:6,flexWrap:"wrap",maxHeight:132,overflowY:"auto"}}>
+                {/* การ์ดรูปเล็ก — เห็นรูปสินค้าตอนเลือก (กติกา UI: มีรูปเสมอ) */}
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",maxHeight:230,overflowY:"auto"}}>
                   {intakeInfo.recent.filter(g => productMap[g.sku]).slice(0, 60).map(g => {
                     const inList = items.some(i => i.sku === g.sku);
+                    const p = productMap[g.sku];
                     return (
-                      <button key={g.sku} onClick={() => addSkuDirect(g.sku)} disabled={inList}
-                        style={{padding:"5px 10px",borderRadius:16,fontFamily:"inherit",fontSize:11.5,cursor:inList?"default":"pointer",
-                                border:`1px solid ${inList?"var(--g-500,#3a9d5d)":"var(--bdr)"}`,
-                                background:inList?"var(--g-50,#eef7f0)":"var(--paper)",color:inList?"var(--g-700)":"var(--text)"}}>
-                        {inList ? "✓ " : "+ "}<b>{g.sku}</b> <span style={{color:"var(--muted)"}}>+{fmtN(g.qty)}</span>
+                      <button key={g.sku} onClick={() => addSkuDirect(g.sku)} disabled={inList} title={p.name || g.sku}
+                        style={{width:80,padding:5,borderRadius:11,fontFamily:"inherit",cursor:inList?"default":"pointer",
+                                display:"flex",flexDirection:"column",alignItems:"center",gap:3,
+                                border:`1.5px solid ${inList?"var(--g-500,#3a9d5d)":"var(--bdr)"}`,
+                                background:inList?"var(--g-50,#eef7f0)":"var(--paper)"}}>
+                        <div style={{position:"relative",width:68,height:68,borderRadius:8,overflow:"hidden",background:"var(--g-50)",border:"1px solid var(--bdr)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                          {p.imageUrl
+                            ? <img src={p.imageUrl} loading="lazy" alt="" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} onError={e=>{e.target.style.display="none";}}/>
+                            : <span style={{fontSize:22,color:"var(--muted)"}}>📦</span>}
+                          {inList && <span style={{position:"absolute",top:2,right:2,background:"var(--g-500,#3a9d5d)",color:"#fff",borderRadius:"50%",width:16,height:16,fontSize:11,display:"flex",alignItems:"center",justifyContent:"center"}}>✓</span>}
+                        </div>
+                        <div style={{fontSize:10,fontWeight:800,fontFamily:"monospace",color:inList?"var(--g-700)":"var(--text)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:"100%"}}>{g.sku}</div>
+                        <div style={{fontSize:9.5,color:"var(--muted)"}}>+{fmtN(g.qty)}</div>
                       </button>
                     );
                   })}
