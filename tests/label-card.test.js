@@ -54,27 +54,27 @@ describe('LabelPrintView — โหมดการ์ด', () => {
   it('ปุ่มสลับโหมดมี id "card" (📇 การ์ดสินค้า)', () => {
     expect(ANA).toMatch(/\{id:"card",\s*label:"📇 การ์ดสินค้า"/);
   });
-  it('cardList = 1 การ์ด/SKU (ไม่ขยายตามจำนวนใบ) · 9 การ์ด/หน้า', () => {
+  it('cardList = 1 การ์ด/SKU · กริดคำนวณเอง (intakeCardGrid) ไม่ hard-code 9', () => {
     expect(ANA).toMatch(/const cardList = uM\(\(\) => items\.map\(it => productMap\[it\.sku\]\)\.filter\(Boolean\)/);
-    expect(ANA).toMatch(/const CARDS_PER_PAGE = 9/);
+    expect(ANA).toMatch(/const cardGrid = uM\(\(\) => \(typeof intakeCardGrid === "function"/);
+    expect(ANA).toMatch(/i \+= cardGrid\.perPage/);
+    expect(ANA).not.toMatch(/const CARDS_PER_PAGE/);        // เลิก hard-code
   });
-  it('พรีวิว/พิมพ์ใช้ .card-label-page + .card-label-cell (โชว์ตอน print ด้วย ไม่ .no-print)', () => {
+  it('พิมพ์ทั้ง 2 ปุ่มใช้ IntakePdfCard(labelMode) ตัวเดียวกัน → หน้าตาเหมือนกัน', () => {
     expect(ANA).toMatch(/printMode === "card" \? \(/);
     expect(ANA).toMatch(/className="card-label-page"/);
-    expect(ANA).toMatch(/className="card-label-cell"/);
+    // ใช้ IntakePdfCard (global จาก views-main) ไม่ใช่ .card-label-cell JSX ของตัวเอง
+    expect(ANA).toMatch(/<IntakePdfCard key=\{p\.sku\}[\s\S]*?labelMode supplier=\{intakeInfo\.supMap\[p\.sku\]\}/);
+    expect(ANA).not.toMatch(/className="card-label-cell"/);
+    expect(MAIN).toMatch(/function IntakePdfCard\(/);
   });
-  it('การ์ดโชว์ครบ: รูป/SKU/ราคาต่อหน่วย/จำนวนเข้า/รหัสร้าน/QR', () => {
-    expect(ANA).toMatch(/ราคา\/หน่วย/);
-    expect(ANA).toMatch(/จำนวนเข้า/);
-    expect(ANA).toMatch(/รหัสร้าน/);
-    expect(ANA).toMatch(/qrMap\[p\.sku\]/);
-  });
-  it('รหัสร้านกรอกเองต่อ SKU (state storeCodes)', () => {
-    expect(ANA).toMatch(/const \[storeCodes, setStoreCodes\] = uS/);
-    expect(ANA).toMatch(/setStoreCodes\(prev => \(\{ \.\.\.prev, \[item\.sku\]: e\.target\.value \}\)\)/);
-  });
-  it('จำนวนเข้าเติมอัตโนมัติจาก intakeInfo.qtyMap (ไม่ให้กรอก)', () => {
-    expect(ANA).toMatch(/intakeInfo\.qtyMap\[item\.sku\]/);
+  it('รหัสร้าน + จำนวนเข้า ดึงอัตโนมัติจาก intake (ไม่ต้องกรอก — เลิก storeCodes)', () => {
+    expect(ANA).not.toMatch(/const \[storeCodes/);           // เลิก state กรอกเอง
+    expect(ANA).not.toMatch(/placeholder="รหัสร้าน"/);         // เลิกช่องกรอก
+    expect(ANA).toMatch(/intakeInfo\.supMap\[item\.sku\]/);    // รหัสร้านอัตโนมัติ (แถวรายการ)
+    expect(ANA).toMatch(/intakeInfo\.qtyMap\[item\.sku\]/);    // จำนวนเข้าอัตโนมัติ
+    // การ์ดรับ supplier(รหัสร้าน)+qty(จำนวนเข้า) จาก intake
+    expect(ANA).toMatch(/qty: intakeInfo\.qtyMap\[p\.sku\] \|\| 0/);
   });
 });
 

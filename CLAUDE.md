@@ -1485,8 +1485,14 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
 - **การ์ดแผ่นแปะ = แนวนอน (รูปซ้าย ~54% เด่นสุด · objectFit contain) + SKU ตัวใหญ่ + เส้นประชิดกัน**
   (gap 0 → การ์ดติดกัน เส้นประเป็นเส้นตัดร่วม) · `.card-label-cell` (โหมด "เลือกเอง") ก็เป็นเส้นประเช่นกัน
 - **`intakeCardGrid({targetWmm,aspect,marginMm})`** = คำนวณ cols×rows ให้ **เต็มหน้า A4 ประหยัดกระดาษที่สุด**
-  อัตโนมัติ (default การ์ดกว้าง ~48mm → 4 คอลัมน์) · IntakePdfDoc (labelMode) ใช้ `grid.perPage`/`grid.cols`/`grid.rows`
+  อัตโนมัติ (default การ์ดกว้าง ~60mm → 3 คอลัมน์) · IntakePdfDoc (labelMode) ใช้ `grid.perPage`/`grid.cols`/`grid.rows`
   · ⚠️ **การ์ดยืด `1fr` เต็มหน้า** — ปรับ `targetWmm` เพื่อเปลี่ยนขนาด/จำนวนต่อหน้า ไม่ต้อง hard-code
+- ⚠️ **ทั้ง 2 ปุ่มในโหมด card ต้องพิมพ์หน้าตาเหมือนกัน** — "🖨️ พิมพ์ N การ์ด" (`.card-label-page`,
+  โชว์บนจอ) และ "📄 พิมพ์การ์ดเต็มหน้า" (`IntakePdfModal` labelMode, portal) **ใช้ `IntakePdfCard`
+  labelMode ตัวเดียวกัน** + `intakeCardGrid` เดียวกัน → เปลี่ยนดีไซน์การ์ดที่ `IntakePdfCard` ที่เดียว
+  มีผลทั้งคู่ · **ห้ามเขียน JSX การ์ดซ้ำใน `LabelPrintView`** (เดิม `.card-label-cell` ทำแยก → หน้าตาต่างกัน)
+- **รหัสร้าน + จำนวนเข้าในการ์ด = ดึงอัตโนมัติจาก intake** (`intakeInfo.supMap`/`qtyMap` ต่อ SKU —
+  ซัพจาก PO ล่าสุด) **ไม่ให้กรอกเอง** (เดิมมีช่อง `storeCodes` กรอกเอง — ถอดออกแล้ว)
 
 ### ⚠️ ปุ่มพิมพ์ในแท็บ "ใบเสนอราคา" ต้องมีครบทั้ง 2 ชนิด **ทั้งการ์ดมือถือและตาราง** (ส.ค. 2026)
 

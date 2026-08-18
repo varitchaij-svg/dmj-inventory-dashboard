@@ -1040,9 +1040,12 @@
     width: 210mm;
     min-height: 297mm;
     box-sizing: border-box;
-    padding: 10mm;
+    padding: 6mm;
     background: #fff;
+    display: flex;
+    flex-direction: column;
   }
+  .card-label-grid-fill { flex: 1; display: grid; gap: 0; }
   .card-label-page:not(:last-child) { page-break-after: always; break-after: page; }
   .card-label-page:last-child { page-break-after: avoid; break-after: avoid; }
   .card-label-grid {

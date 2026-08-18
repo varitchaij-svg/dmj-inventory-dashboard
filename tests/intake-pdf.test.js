@@ -32,15 +32,15 @@ const { intakeDateLong, intakeDateOptions, buildIntakePages, intakeCardGrid } = 
 )();
 
 describe('intakeCardGrid — คำนวณกริดเต็มหน้า A4 ประหยัดกระดาษ', () => {
-  it('default: 4 คอลัมน์ (การ์ดกว้าง ~48mm) + หลายแถว เต็มหน้า', () => {
+  it('default: 3 คอลัมน์ (การ์ดกว้าง ~60mm) + หลายแถว เต็มหน้า', () => {
     const g = intakeCardGrid();
-    expect(g.cols).toBe(4);                 // 198mm / 48mm → 4
-    expect(g.rows).toBeGreaterThanOrEqual(6);
+    expect(g.cols).toBe(3);                 // 198mm / 60mm → 3
+    expect(g.rows).toBeGreaterThanOrEqual(4);
     expect(g.perPage).toBe(g.cols * g.rows);
   });
-  it('การ์ดกว้างขึ้น → คอลัมน์น้อยลง (คำนวณตาม targetWmm จริง)', () => {
-    expect(intakeCardGrid({ targetWmm: 99 }).cols).toBe(2);   // ของเดิม
-    expect(intakeCardGrid({ targetWmm: 63 }).cols).toBe(3);
+  it('การ์ดกว้างขึ้น/แคบลง → คอลัมน์เปลี่ยนตาม targetWmm จริง', () => {
+    expect(intakeCardGrid({ targetWmm: 99 }).cols).toBe(2);   // การ์ดใหญ่
+    expect(intakeCardGrid({ targetWmm: 48 }).cols).toBe(4);   // การ์ดเล็ก
   });
   it('อย่างน้อย 1×1 เสมอ (กันหารเป็น 0)', () => {
     const g = intakeCardGrid({ targetWmm: 9999 });
@@ -206,7 +206,7 @@ describe('meta — labelMode "แผ่นแปะสินค้า" (พิ�
     expect(card).toMatch(/flexDirection:"row"/);           // แนวนอน (รูปซ้าย/รายละเอียดขวา)
     expect(card).toMatch(/width:"54%"/);                   // รูปเด่นสุด (>50%)
     expect(card).toMatch(/1px dashed/);                    // เส้นประสำหรับตัด
-    expect(card).toMatch(/fontSize:"10.5pt",fontWeight:900,fontFamily:"monospace"/); // SKU ตัวใหญ่เด่น
+    expect(card).toMatch(/fontSize:"12pt",fontWeight:900,fontFamily:"monospace"/); // SKU ตัวใหญ่เด่น
     expect(card).toMatch(/supplier \?/);                   // รหัสซัพในการ์ด
     expect(card).toMatch(/objectFit:"contain"/);           // รูป fit (ไม่ครอป)
     // ป้าย NEW อยู่เฉพาะโหมดปกติ (return ท้าย) — โหมดแผ่นแปะไม่มี
