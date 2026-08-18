@@ -1311,22 +1311,57 @@ function IntakePdfCard({ item, index, prod, qr, labelMode, supplier }) {
   const img = prod && prod.imageUrl;
   const price = prod && prod.price;
   const color = prod && prod.color;
+  const qrBox = (
+    <div style={{width:"15mm",height:"15mm",flexShrink:0}}>
+      {qr
+        ? <img src={qr} alt={item.sku} style={{width:"100%",height:"100%",objectFit:"contain"}}/>
+        : <div style={{width:"100%",height:"100%",background:"#f0f0f0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,color:"#aaa"}}>QR</div>}
+    </div>
+  );
+
+  // ── โหมดแผ่นแปะ: การ์ดแนวนอน (รูปซ้าย · รายละเอียดขวา) ตามไฟล์ต้นแบบที่เจ้าของส่ง ──
+  // รูป objectFit:contain (fit — เห็นสินค้าเต็มใบไม่ถูกครอป) · เส้นประรอบการ์ดไว้ตัด
+  if (labelMode) {
+    return (
+      <div style={{border:"1.4px dashed #999",borderRadius:4,overflow:"hidden",background:"#fff",display:"flex",flexDirection:"row",height:"100%",breakInside:"avoid",pageBreakInside:"avoid"}}>
+        {/* รูปซ้าย */}
+        <div style={{position:"relative",width:"43%",flexShrink:0,background:"#f3f6f2",display:"flex",alignItems:"center",justifyContent:"center",padding:"2mm",overflow:"hidden"}}>
+          <div style={{position:"absolute",top:5,left:5,background:"#1f7a34",color:"#fff",fontSize:11,fontWeight:800,borderRadius:6,padding:"2px 7px"}}>{String(index).padStart(2,"0")}</div>
+          {img
+            ? <img src={img} alt="" style={{maxWidth:"100%",maxHeight:"100%",objectFit:"contain"}}/>
+            : <div style={{fontSize:34,color:"#b7c7bd"}}>📦</div>}
+        </div>
+        {/* รายละเอียดขวา */}
+        <div style={{flex:1,minWidth:0,padding:"8px 10px",display:"flex",flexDirection:"column"}}>
+          <div style={{fontSize:12.5,fontWeight:800,color:"#111",lineHeight:1.25,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{item.name || item.sku}</div>
+          <div style={{borderTop:"1px dashed #cbd5cf",margin:"5px 0"}}/>
+          <div style={{fontSize:10.5,marginBottom:3,display:"flex",justifyContent:"space-between",gap:6}}>
+            <span style={{color:"#888"}}>SKU</span><b style={{fontFamily:"monospace",color:"#111"}}>{item.sku}</b></div>
+          <div style={{fontSize:10.5,marginBottom:3,display:"flex",justifyContent:"space-between",gap:6}}>
+            <span style={{color:"#888"}}>ราคา/หน่วย</span><b style={{color:"#1f7a34"}}>{price ? "฿"+fmtN(price) : "—"}</b></div>
+          <div style={{fontSize:10.5,marginBottom:3,display:"flex",justifyContent:"space-between",gap:6}}>
+            <span style={{color:"#888"}}>จำนวนรับ</span><b style={{color:"#111"}}>{fmtN(item.qty)} ชิ้น</b></div>
+          {supplier ? (
+            <div style={{fontSize:10.5,marginBottom:3,display:"flex",justifyContent:"space-between",gap:6}}>
+              <span style={{color:"#888"}}>ซัพพลายเออร์</span><b style={{fontFamily:"monospace",color:"#1f7a34"}}>{supplier}</b></div>
+          ) : null}
+          <div style={{marginTop:"auto",display:"flex",justifyContent:"flex-end"}}>{qrBox}</div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── โหมดปกติ (หน้าภาพรวม/ของเข้าใหม่): การ์ดแนวตั้ง รูปบน — ไม่แตะ ──
   return (
-    <div style={{
-      border: labelMode ? "1.4px dashed #999" : "1px solid #d7e4dc",
-      borderRadius: labelMode ? 4 : 12, overflow:"hidden", background:"#fff",
-      display:"flex", flexDirection:"column", height: labelMode ? "100%" : "auto",
-      breakInside:"avoid", pageBreakInside:"avoid",
-    }}>
-      <div style={{position:"relative",flex: labelMode ? "1 1 auto" : "0 0 34mm",minHeight: labelMode ? "38mm" : "34mm",background:"#f3f6f2",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden"}}>
+    <div style={{border:"1px solid #d7e4dc",borderRadius:12,overflow:"hidden",background:"#fff",display:"flex",flexDirection:"column",breakInside:"avoid",pageBreakInside:"avoid"}}>
+      <div style={{position:"relative",height:"34mm",background:"#f3f6f2",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden"}}>
         <div style={{position:"absolute",top:6,left:6,background:"#1f7a34",color:"#fff",fontSize:11,fontWeight:800,borderRadius:6,padding:"2px 7px"}}>{String(index).padStart(2,"0")}</div>
-        {/* ป้าย NEW = "สินค้าเพิ่งเข้า" — ซ่อนในโหมดแผ่นแปะ (เจ้าของสั่ง ไม่ต้องเขียนว่าเพิ่งเข้า) */}
-        {!labelMode && <div style={{position:"absolute",top:6,right:6,background:"#1f7a34",color:"#fff",fontSize:9,fontWeight:800,borderRadius:5,padding:"2px 6px",letterSpacing:".04em"}}>NEW</div>}
+        <div style={{position:"absolute",top:6,right:6,background:"#1f7a34",color:"#fff",fontSize:9,fontWeight:800,borderRadius:5,padding:"2px 6px",letterSpacing:".04em"}}>NEW</div>
         {img
           ? <img src={img} alt="" style={{maxWidth:"100%",maxHeight:"100%",objectFit:"contain"}}/>
           : <div style={{fontSize:30,color:"#b7c7bd"}}>📦</div>}
       </div>
-      <div style={{padding:"7px 9px",display:"flex",flexDirection:"column",gap:2,flexShrink:0}}>
+      <div style={{padding:"7px 9px",display:"flex",flexDirection:"column",gap:2,flex:1}}>
         <div style={{fontFamily:"monospace",fontSize:12,fontWeight:800,color:"#111"}}>{item.sku}</div>
         <div style={{fontSize:11.5,color:"#333",lineHeight:1.25,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{item.name || "—"}</div>
         {color && color.name ? (
@@ -1334,11 +1369,7 @@ function IntakePdfCard({ item, index, prod, qr, labelMode, supplier }) {
             <span style={{width:10,height:10,borderRadius:"50%",background:color.hex||"#ccc",border:"1px solid rgba(0,0,0,.15)",flexShrink:0}}/>{color.name}
           </div>
         ) : null}
-        {/* รหัสซัพพลายเออร์ในการ์ด (เฉพาะโหมดแผ่นแปะ) */}
-        {labelMode && supplier ? (
-          <div style={{fontSize:10.5,color:"#555"}}>ซัพพลายเออร์: <b style={{color:"#1f7a34",fontFamily:"monospace"}}>{supplier}</b></div>
-        ) : null}
-        <div style={{marginTop:6,display:"flex",alignItems:"flex-end",justifyContent:"space-between",gap:6,paddingTop:6,borderTop:"1px solid #eef2ee"}}>
+        <div style={{marginTop:"auto",display:"flex",alignItems:"flex-end",justifyContent:"space-between",gap:6,paddingTop:6,borderTop:"1px solid #eef2ee"}}>
           <div>
             <div style={{fontSize:9,color:"#888"}}>ราคา/หน่วย</div>
             <div style={{fontSize:13,fontWeight:800,color:"#1f7a34"}}>{price ? "฿"+fmtN(price) : "—"}</div>
@@ -1347,12 +1378,7 @@ function IntakePdfCard({ item, index, prod, qr, labelMode, supplier }) {
             <div style={{fontSize:9,color:"#888"}}>จำนวนรับ (ชิ้น)</div>
             <div style={{fontSize:16,fontWeight:900,color:"#111"}}>{fmtN(item.qty)}</div>
           </div>
-          {/* QR (รหัสสินค้า) สำหรับสแกน — สร้างจาก qrcodejs ในตัวเรียก */}
-          <div style={{width:"14mm",height:"14mm",flexShrink:0}}>
-            {qr
-              ? <img src={qr} alt={item.sku} style={{width:"100%",height:"100%",objectFit:"contain"}}/>
-              : <div style={{width:"100%",height:"100%",background:"#f0f0f0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,color:"#aaa"}}>QR</div>}
-          </div>
+          {qrBox}
         </div>
       </div>
     </div>
