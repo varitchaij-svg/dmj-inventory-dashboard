@@ -1361,6 +1361,13 @@ function IntakePdfCard({ item, index, prod, qr, labelMode, supplier }) {
             <div style={{fontSize:"8pt",marginBottom:"1mm",display:"flex",justifyContent:"space-between",gap:5}}>
               <span style={{color:"#888"}}>รหัสร้าน</span><b style={{fontFamily:"monospace",color:"#1f7a34"}}>{supplier}</b></div>
           ) : null}
+          {color && color.name ? (
+            <div style={{fontSize:"8pt",marginBottom:"1mm",display:"flex",justifyContent:"space-between",alignItems:"center",gap:5}}>
+              <span style={{color:"#888"}}>สี</span>
+              <span style={{display:"flex",alignItems:"center",gap:4,minWidth:0}}>
+                <span style={{width:"3mm",height:"3mm",borderRadius:"50%",background:color.hex||"#ccc",border:"1px solid rgba(0,0,0,.2)",flexShrink:0}}/>
+                <b style={{color:"#111",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{color.name}</b></span></div>
+          ) : null}
           {/* QR ตรงกลาง + SKU ใต้ QR */}
           <div style={{marginTop:"auto",display:"flex",flexDirection:"column",alignItems:"center",gap:"0.8mm"}}>
             <div style={{width:"15mm",height:"15mm",flexShrink:0}}>
