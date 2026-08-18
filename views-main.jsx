@@ -1223,6 +1223,23 @@ function intakeDateLong(iso) {
   return `${parseInt(m[3])} ${mon[parseInt(m[2]) - 1] || ""} ${parseInt(m[1]) + 543}`;
 }
 
+// คำนวณกริดการ์ดแผ่นแปะให้ "เต็มหน้า A4 + ประหยัดกระดาษที่สุด" อัตโนมัติ
+// จากความกว้างเป้าหมายต่อการ์ด (targetWmm) + สัดส่วนแนวนอน (aspect กว้าง:สูง)
+//   cols = จำนวนคอลัมน์มากสุดที่การ์ดยังกว้าง ≥ เป้าหมาย · rows = แถวมากสุดที่สูงพอ
+// คืน {cols, rows, perPage} · การ์ดจริงยืด 1fr เต็มหน้า (ขอบ marginMm)
+// ค่า default: การ์ดกว้าง ~48mm (เล็กลงจากเดิม 2 คอลัมน์ ~5ซม.) → บน A4 ได้ 4 คอลัมน์
+function intakeCardGrid(opt) {
+  const o = opt || {};
+  const m = o.marginMm == null ? 6 : o.marginMm;
+  const targetW = o.targetWmm || 48;      // มม./การ์ด (กว้างเป้าหมาย)
+  const aspect = o.aspect || 1.22;        // กว้าง:สูง (>1 = แนวนอน)
+  const usableW = 210 - 2 * m, usableH = 297 - 2 * m;
+  const cols = Math.max(1, Math.floor(usableW / targetW));
+  const cardH = (usableW / cols) / aspect;
+  const rows = Math.max(1, Math.floor(usableH / cardH));
+  return { cols, rows, perPage: cols * rows };
+}
+
 // รายวันที่มีของเข้า (สำหรับติ๊กเลือกในโมดัล) — ใหม่สุดก่อน · sinceStr ตัดวันเก่ากว่าทิ้ง ('' = ไม่ตัด)
 function intakeDateOptions(purchases, sinceStr) {
   const byDate = new Map();
@@ -1326,26 +1343,32 @@ function IntakePdfCard({ item, index, prod, qr, labelMode, supplier }) {
     return (
       <div style={{border:"1px dashed #888",background:"#fff",display:"flex",flexDirection:"row",height:"100%",overflow:"hidden",breakInside:"avoid",pageBreakInside:"avoid"}}>
         {/* รูปซ้าย — เด่นสุดในการ์ด */}
-        <div style={{position:"relative",width:"58%",flexShrink:0,background:"#f5f7f4",display:"flex",alignItems:"center",justifyContent:"center",padding:"3mm",overflow:"hidden"}}>
-          <div style={{position:"absolute",top:5,left:5,background:"#1f7a34",color:"#fff",fontSize:11,fontWeight:800,borderRadius:6,padding:"2px 7px"}}>{String(index).padStart(2,"0")}</div>
+        <div style={{position:"relative",width:"54%",flexShrink:0,background:"#f5f7f4",display:"flex",alignItems:"center",justifyContent:"center",padding:"1.5mm",overflow:"hidden"}}>
+          <div style={{position:"absolute",top:3,left:3,background:"#1f7a34",color:"#fff",fontSize:"7pt",fontWeight:800,borderRadius:4,padding:"1px 5px"}}>{String(index).padStart(2,"0")}</div>
           {img
             ? <img src={img} alt="" style={{maxWidth:"100%",maxHeight:"100%",objectFit:"contain"}}/>
-            : <div style={{fontSize:40,color:"#b7c7bd"}}>📦</div>}
+            : <div style={{fontSize:28,color:"#b7c7bd"}}>📦</div>}
         </div>
         {/* รายละเอียดขวา — SKU ตัวใหญ่เด่น */}
-        <div style={{flex:1,minWidth:0,padding:"3mm 3.5mm",display:"flex",flexDirection:"column"}}>
-          <div style={{fontSize:"14pt",fontWeight:900,fontFamily:"monospace",color:"#111",lineHeight:1.1,wordBreak:"break-all"}}>{item.sku}</div>
-          <div style={{fontSize:"9pt",color:"#333",lineHeight:1.2,marginTop:2,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{item.name || ""}</div>
-          <div style={{borderTop:"1px dashed #cbd5cf",margin:"3mm 0"}}/>
-          <div style={{fontSize:"8.5pt",marginBottom:"1.5mm",display:"flex",justifyContent:"space-between",gap:6}}>
-            <span style={{color:"#888"}}>ราคา/หน่วย</span><b style={{color:"#1f7a34"}}>{price ? "฿"+fmtN(price) : "—"}</b></div>
-          <div style={{fontSize:"8.5pt",marginBottom:"1.5mm",display:"flex",justifyContent:"space-between",gap:6}}>
-            <span style={{color:"#888"}}>จำนวนรับ</span><b style={{color:"#111"}}>{fmtN(item.qty)} ชิ้น</b></div>
+        <div style={{flex:1,minWidth:0,padding:"2mm 2.2mm",display:"flex",flexDirection:"column"}}>
+          <div style={{fontSize:"10.5pt",fontWeight:900,fontFamily:"monospace",color:"#111",lineHeight:1.05,wordBreak:"break-all"}}>{item.sku}</div>
+          <div style={{fontSize:"6.5pt",color:"#333",lineHeight:1.15,marginTop:1,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:1,WebkitBoxOrient:"vertical"}}>{item.name || ""}</div>
+          <div style={{borderTop:"1px dashed #cbd5cf",margin:"1.5mm 0"}}/>
+          <div style={{fontSize:"7pt",marginBottom:"0.8mm",display:"flex",justifyContent:"space-between",gap:4}}>
+            <span style={{color:"#888"}}>ราคา</span><b style={{color:"#1f7a34"}}>{price ? "฿"+fmtN(price) : "—"}</b></div>
+          <div style={{fontSize:"7pt",marginBottom:"0.8mm",display:"flex",justifyContent:"space-between",gap:4}}>
+            <span style={{color:"#888"}}>รับ</span><b style={{color:"#111"}}>{fmtN(item.qty)} ชิ้น</b></div>
           {supplier ? (
-            <div style={{fontSize:"8.5pt",marginBottom:"1.5mm",display:"flex",justifyContent:"space-between",gap:6}}>
+            <div style={{fontSize:"7pt",marginBottom:"0.8mm",display:"flex",justifyContent:"space-between",gap:4}}>
               <span style={{color:"#888"}}>ซัพ</span><b style={{fontFamily:"monospace",color:"#1f7a34"}}>{supplier}</b></div>
           ) : null}
-          <div style={{marginTop:"auto",display:"flex",justifyContent:"flex-end"}}>{qrBox}</div>
+          <div style={{marginTop:"auto",display:"flex",justifyContent:"flex-end"}}>
+            <div style={{width:"11mm",height:"11mm",flexShrink:0}}>
+              {qr
+                ? <img src={qr} alt={item.sku} style={{width:"100%",height:"100%",objectFit:"contain"}}/>
+                : <div style={{width:"100%",height:"100%",background:"#f0f0f0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"6pt",color:"#aaa"}}>QR</div>}
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -1392,8 +1415,9 @@ function IntakePdfCard({ item, index, prod, qr, labelMode, supplier }) {
 function IntakePdfDoc({ pages, prodBySku, qrMap, labelMode }) {
   if (!pages || !pages.length) return null;
   const printedAt = new Date().toLocaleString("th-TH", { day:"numeric", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
-  // แผ่นแปะ: 2 คอลัมน์ × 4 แถว = 8 การ์ดแนวนอน/หน้า (เต็มหน้า) · โหมดปกติ 3×3 = 9
-  const perPage = labelMode ? 8 : INTAKE_PDF_PER_PAGE;
+  // แผ่นแปะ: คำนวณกริดอัตโนมัติให้เต็มหน้า+ประหยัดกระดาษ (เดิม fix 2×4) · โหมดปกติ 3×3 = 9
+  const grid = intakeCardGrid();
+  const perPage = labelMode ? grid.perPage : INTAKE_PDF_PER_PAGE;
   const sheets = [];
   pages.forEach(g => {
     const chunks = [];
@@ -1437,9 +1461,9 @@ function IntakePdfDoc({ pages, prodBySku, qrMap, labelMode }) {
               </div>
             </>
           )}
-          {/* ── ตารางการ์ดสินค้า — โหมดแผ่นแปะ: 2×4 แนวนอน เต็มหน้า เส้นประชิดกัน (gap 0) ── */}
+          {/* ── ตารางการ์ดสินค้า — โหมดแผ่นแปะ: กริดคำนวณเอง แนวนอน เต็มหน้า เส้นประชิดกัน (gap 0) ── */}
           <div style={labelMode
-            ? {display:"grid",gridTemplateColumns:"repeat(2, minmax(0,1fr))",gridTemplateRows:"repeat(4, minmax(0,1fr))",gap:0,flex:1}
+            ? {display:"grid",gridTemplateColumns:`repeat(${grid.cols}, minmax(0,1fr))`,gridTemplateRows:`repeat(${grid.rows}, minmax(0,1fr))`,gap:0,flex:1}
             : {display:"grid",gridTemplateColumns:"repeat(3, minmax(0,1fr))",gap:10}}>
             {s.items.map((it, i) => (
               <IntakePdfCard key={it.sku} item={it} index={s.startIdx + i + 1} prod={prodBySku.get(it.sku)}

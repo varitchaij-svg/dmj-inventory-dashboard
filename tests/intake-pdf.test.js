@@ -24,11 +24,29 @@ function grab(src, re, label) {
 const F_LONG = grab(MAIN, /function intakeDateLong\(iso\) \{[\s\S]*?\n\}/, 'intakeDateLong');
 const F_OPTS = grab(MAIN, /function intakeDateOptions\(purchases, sinceStr\) \{[\s\S]*?\n\}/, 'intakeDateOptions');
 const F_PAGE = grab(MAIN, /function buildIntakePages\(purchases, selectedDates\) \{[\s\S]*?\n\}/, 'buildIntakePages');
+const F_GRID = grab(MAIN, /function intakeCardGrid\(opt\) \{[\s\S]*?\n\}/, 'intakeCardGrid');
 // eslint-disable-next-line no-new-func
-const { intakeDateLong, intakeDateOptions, buildIntakePages } = new Function(
-  F_LONG + '\n' + F_OPTS + '\n' + F_PAGE +
-  '\nreturn { intakeDateLong, intakeDateOptions, buildIntakePages };'
+const { intakeDateLong, intakeDateOptions, buildIntakePages, intakeCardGrid } = new Function(
+  F_LONG + '\n' + F_OPTS + '\n' + F_PAGE + '\n' + F_GRID +
+  '\nreturn { intakeDateLong, intakeDateOptions, buildIntakePages, intakeCardGrid };'
 )();
+
+describe('intakeCardGrid — คำนวณกริดเต็มหน้า A4 ประหยัดกระดาษ', () => {
+  it('default: 4 คอลัมน์ (การ์ดกว้าง ~48mm) + หลายแถว เต็มหน้า', () => {
+    const g = intakeCardGrid();
+    expect(g.cols).toBe(4);                 // 198mm / 48mm → 4
+    expect(g.rows).toBeGreaterThanOrEqual(6);
+    expect(g.perPage).toBe(g.cols * g.rows);
+  });
+  it('การ์ดกว้างขึ้น → คอลัมน์น้อยลง (คำนวณตาม targetWmm จริง)', () => {
+    expect(intakeCardGrid({ targetWmm: 99 }).cols).toBe(2);   // ของเดิม
+    expect(intakeCardGrid({ targetWmm: 63 }).cols).toBe(3);
+  });
+  it('อย่างน้อย 1×1 เสมอ (กันหารเป็น 0)', () => {
+    const g = intakeCardGrid({ targetWmm: 9999 });
+    expect(g.cols).toBe(1); expect(g.rows).toBeGreaterThanOrEqual(1);
+  });
+});
 
 // ── ตัวอย่างรายการซื้อ (รูปแบบเดียวกับ readPurchases_) ──
 const PURCHASES = [
@@ -186,22 +204,28 @@ describe('meta — labelMode "แผ่นแปะสินค้า" (พิ�
     const card = grab(MAIN, /function IntakePdfCard[\s\S]*?\n\}\n/, 'IntakePdfCard');
     expect(card).toMatch(/if \(labelMode\) \{/);           // แยกโหมดชัดเจน
     expect(card).toMatch(/flexDirection:"row"/);           // แนวนอน (รูปซ้าย/รายละเอียดขวา)
-    expect(card).toMatch(/width:"58%"/);                   // รูปเด่นสุด (~58%)
+    expect(card).toMatch(/width:"54%"/);                   // รูปเด่นสุด (>50%)
     expect(card).toMatch(/1px dashed/);                    // เส้นประสำหรับตัด
-    expect(card).toMatch(/fontSize:"14pt",fontWeight:900,fontFamily:"monospace"/); // SKU ตัวใหญ่เด่น
+    expect(card).toMatch(/fontSize:"10.5pt",fontWeight:900,fontFamily:"monospace"/); // SKU ตัวใหญ่เด่น
     expect(card).toMatch(/supplier \?/);                   // รหัสซัพในการ์ด
     expect(card).toMatch(/objectFit:"contain"/);           // รูป fit (ไม่ครอป)
     // ป้าย NEW อยู่เฉพาะโหมดปกติ (return ท้าย) — โหมดแผ่นแปะไม่มี
     const labelBranch = card.slice(card.indexOf('if (labelMode)'), card.indexOf('// ── โหมดปกติ'));
     expect(labelBranch).not.toMatch(/>NEW</);
   });
-  it('labelMode: กริด 2 คอลัมน์ × 4 แถว, gap 0 (เส้นประชิด), 8 การ์ด/หน้า, เต็มหน้า', () => {
+  it('labelMode: กริดคำนวณเอง (intakeCardGrid), gap 0 (เส้นประชิด), เต็มหน้า', () => {
     const doc = grab(MAIN, /function IntakePdfDoc[\s\S]*?\n\}\n/, 'IntakePdfDoc');
-    expect(doc).toMatch(/const perPage = labelMode \? 8 : INTAKE_PDF_PER_PAGE/);
-    expect(doc).toMatch(/gridTemplateColumns:"repeat\(2, minmax\(0,1fr\)\)",gridTemplateRows:"repeat\(4, minmax\(0,1fr\)\)",gap:0,flex:1/);
+    expect(doc).toMatch(/const grid = intakeCardGrid\(\)/);
+    expect(doc).toMatch(/const perPage = labelMode \? grid\.perPage : INTAKE_PDF_PER_PAGE/);
+    expect(doc).toMatch(/gridTemplateColumns:`repeat\(\$\{grid\.cols\}/);
+    expect(doc).toMatch(/gridTemplateRows:`repeat\(\$\{grid\.rows\}/);
+    expect(doc).toMatch(/gap:0,flex:1/);
     // เอกสารแผ่นแปะใช้ class "label" (ขอบแคบ เต็มหน้า)
     expect(doc).toMatch(/labelMode \? "intake-print-page label" : "intake-print-page"/);
     expect(HTML).toMatch(/\.intake-print-page\.label\s*\{\s*padding:\s*6mm/);
+  });
+  it('.card-label-cell (เลือกเอง) เป็นเส้นประเหมือนโหมดพิมพ์การ์ดเต็มหน้า', () => {
+    expect(HTML).toMatch(/\.card-label-cell\s*\{[\s\S]*?border:\s*[^;]*dashed/);
   });
   it('หน้าภาพรวม (OverviewView) เปิด IntakePdfModal โดย "ไม่" ส่ง labelMode (ยังเป็นเอกสารเดิม)', () => {
     // views-main OverviewView เรียกแบบไม่มี labelMode
