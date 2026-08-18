@@ -182,11 +182,16 @@ describe('meta — labelMode "แผ่นแปะสินค้า" (พิ�
     // เลขที่ PO อยู่ในบล็อกที่ถูกซ่อนตอน labelMode
     expect(doc).toMatch(/เลขที่ PO/);
   });
-  it('labelMode: การ์ดมีเส้นประตัด + รหัสซัพในการ์ด + ซ่อนป้าย NEW', () => {
+  it('labelMode: การ์ดแนวนอน(รูปซ้าย) + เส้นประตัด + รหัสซัพในการ์ด + รูป fit(contain) + ไม่มี NEW', () => {
     const card = grab(MAIN, /function IntakePdfCard[\s\S]*?\n\}\n/, 'IntakePdfCard');
-    expect(card).toMatch(/labelMode \? "1\.4px dashed/);            // เส้นประตัด
-    expect(card).toMatch(/labelMode && supplier \?/);               // รหัสซัพในการ์ด
-    expect(card).toMatch(/\{!labelMode && <div[\s\S]*?NEW<\/div>\}/); // ป้าย NEW ซ่อนตอน labelMode
+    expect(card).toMatch(/if \(labelMode\) \{/);           // แยกโหมดชัดเจน
+    expect(card).toMatch(/flexDirection:"row"/);           // แนวนอน (รูปซ้าย/รายละเอียดขวา) ตามต้นแบบ
+    expect(card).toMatch(/1\.4px dashed/);                 // เส้นประสำหรับตัด
+    expect(card).toMatch(/ซัพพลายเออร์/);                    // รหัสซัพในการ์ด
+    expect(card).toMatch(/objectFit:"contain"/);           // รูป fit (ไม่ครอป)
+    // ป้าย NEW อยู่เฉพาะโหมดปกติ (return ท้าย) — โหมดแผ่นแปะไม่มี
+    const labelBranch = card.slice(card.indexOf('if (labelMode)'), card.indexOf('// ── โหมดปกติ'));
+    expect(labelBranch).not.toMatch(/>NEW</);
   });
   it('หน้าภาพรวม (OverviewView) เปิด IntakePdfModal โดย "ไม่" ส่ง labelMode (ยังเป็นเอกสารเดิม)', () => {
     // views-main OverviewView เรียกแบบไม่มี labelMode

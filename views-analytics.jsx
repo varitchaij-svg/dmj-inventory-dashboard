@@ -6760,10 +6760,10 @@ ${labelsHTML}
                 return (
                   <div key={p.sku} className="card-label-cell">
                     {/* รูปสินค้า (ซ้าย) + เลขลำดับ */}
-                    <div style={{position:"relative",width:"46%",flexShrink:0,background:"#f3f6f2",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden"}}>
+                    <div style={{position:"relative",width:"46%",flexShrink:0,background:"#f3f6f2",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",padding:"2mm"}}>
                       <div style={{position:"absolute",top:"2mm",left:"2mm",background:"#1f7a34",color:"#fff",fontSize:"9pt",fontWeight:800,borderRadius:5,padding:"0.5mm 2mm"}}>{String(idx).padStart(2,"0")}</div>
                       {p.imageUrl
-                        ? <img src={p.imageUrl} alt="" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} onError={e => { e.currentTarget.style.display="none"; }}/>
+                        ? <img src={p.imageUrl} alt="" style={{maxWidth:"100%",maxHeight:"100%",objectFit:"contain",display:"block"}} onError={e => { e.currentTarget.style.display="none"; }}/>
                         : <div style={{fontSize:"20pt",color:"#b7c7bd"}}>📦</div>}
                     </div>
                     {/* รายละเอียด (ขวา) */}
