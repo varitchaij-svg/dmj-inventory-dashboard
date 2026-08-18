@@ -206,7 +206,9 @@ describe('meta — labelMode "แผ่นแปะสินค้า" (พิ�
     expect(card).toMatch(/flexDirection:"row"/);           // แนวนอน (รูปซ้าย/รายละเอียดขวา)
     expect(card).toMatch(/width:"54%"/);                   // รูปเด่นสุด (>50%)
     expect(card).toMatch(/1px dashed/);                    // เส้นประสำหรับตัด
-    expect(card).toMatch(/fontSize:"12pt",fontWeight:900,fontFamily:"monospace"/); // SKU ตัวใหญ่เด่น
+    expect(card).toMatch(/fontSize:"11pt",fontWeight:900,fontFamily:"monospace"/); // SKU ตัวใหญ่ (ใต้ QR)
+    expect(card).toMatch(/QR ตรงกลาง \+ SKU ใต้ QR/);      // QR อยู่กลาง + SKU ใต้ QR
+    expect(card).toMatch(/flexDirection:"column",alignItems:"center"/); // QR/SKU จัดกลาง
     expect(card).toMatch(/supplier \?/);                   // รหัสซัพในการ์ด
     expect(card).toMatch(/objectFit:"contain"/);           // รูป fit (ไม่ครอป)
     // ป้าย NEW อยู่เฉพาะโหมดปกติ (return ท้าย) — โหมดแผ่นแปะไม่มี
