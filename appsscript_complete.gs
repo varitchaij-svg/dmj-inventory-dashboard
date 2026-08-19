@@ -2914,13 +2914,18 @@ function buildFullData_() {
     // = O(สินค้า × รายการ) ซึ่งกับสินค้า 5,600+ ตัวคือหลายสิบล้านรอบต่อการ build payload 1 ครั้ง
     // เปลี่ยนเป็น O(สินค้า + รายการ) — ผลลัพธ์เหมือนเดิมทุกประการ
     // (ใช้ Object.create(null) กัน SKU ที่บังเอิญชนชื่อ property ของ Object.prototype)
+    // ⚠️ จับกลุ่มด้วย SKU ตัวพิมพ์ใหญ่ให้ตรงกับ p.sku (สินค้าเป็นตัวพิมพ์ใหญ่เสมอ) —
+    //    ของเดิมจับด้วย pu.sku ดิบ แถวที่พิมพ์เอง (เช่น "ol00013") จะตกไปคนละคีย์ → หายจากการจับคู่
+    //    เหลือแต่แถวทดสอบที่บังเอิญ case ตรง โผล่เป็น "เข้าล่าสุด" (บทเรียนข้อ 5 — normalize ก่อนจับคู่)
     const purchasesBySku = Object.create(null);
     purchases.forEach(pu => {
-      (purchasesBySku[pu.sku] || (purchasesBySku[pu.sku] = [])).push(pu);
+      const key = String(pu.sku || '').trim().toUpperCase();
+      if (!key) return;
+      (purchasesBySku[key] || (purchasesBySku[key] = [])).push(pu);
     });
-    // เรียงใหม่→เก่า ครั้งเดียวต่อ SKU (comparator เดิม) แทนที่จะ sort ซ้ำทุกสินค้า
+    // เรียงใหม่→เก่า ครั้งเดียวต่อ SKU (comparator ที่ถูกต้อง + วันว่างจมท้าย)
     Object.keys(purchasesBySku).forEach(k => {
-      purchasesBySku[k].sort((a, b) => (a.date < b.date ? 1 : -1));
+      purchasesBySku[k] = sortPurchasesLatestFirst_(purchasesBySku[k]);
     });
 
     // รวมยอด "ปรับ" ต่อ SKU ครั้งเดียว (เดิม filter transfers ใหม่ทุกสินค้า)
@@ -2989,7 +2994,7 @@ function buildFullData_() {
       p.frontStoreCheckedQty = fsChecked != null ? fsChecked.qty : null;
       p.frontStoreCheckedAt  = fsChecked != null && fsChecked.at ? fsChecked.at : null;
 
-      const my = purchasesBySku[p.sku] || [];
+      const my = purchasesBySku[String(p.sku || '').trim().toUpperCase()] || [];
       if (my.length > 0) {
         p.lastSupplier    = my[0].supplier;
         p.lastStockInDate = my[0].date ? my[0].date.split('-').reverse().join('/') : '';
@@ -10003,13 +10008,19 @@ function readPurchases_() {
     } else {
       // fallback: text DD/MM/YYYY → แปลงเป็น ISO
       const s = String(rawDate || '').trim();
-      const p = s.split('/');
-      if (p.length === 3) {
-        const d = new Date(parseInt(p[2]), parseInt(p[1]) - 1, parseInt(p[0]));
-        if (!isNaN(d)) dateStr = Utilities.formatDate(d, tz, 'yyyy-MM-dd');
-        else dateStr = s;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+        dateStr = s;                       // ISO อยู่แล้ว (เทียบ string ได้ตรง)
       } else {
-        dateStr = s;
+        const p = s.split('/');
+        if (p.length === 3) {
+          let yy = parseInt(p[2], 10);
+          if (yy >= 2400) yy -= 543;       // ปี พ.ศ. → ค.ศ. (บทเรียนข้อ 11 — คนพิมพ์เองมักใส่ พ.ศ.)
+          const d = new Date(yy, parseInt(p[1], 10) - 1, parseInt(p[0], 10));
+          if (!isNaN(d)) dateStr = Utilities.formatDate(d, tz, 'yyyy-MM-dd');
+          else dateStr = '';               // parse ไม่ได้ → ว่าง (จะจมท้าย ไม่แย่งเป็น "เข้าล่าสุด")
+        } else {
+          dateStr = '';                    // ไม่ใช่รูปวันที่ที่รู้จัก → ว่าง แทนคืน string ดิบที่ sort เพี้ยน
+        }
       }
     }
     list.push({
@@ -10026,6 +10037,23 @@ function readPurchases_() {
     });
   }
   return list;
+}
+
+// เรียงรายการซื้อของ SKU เดียว "ใหม่สุด → เก่าสุด" เพื่อหยิบ [0] เป็น "เข้าล่าสุด"
+// ⚠️ ต้องเป็น comparator ที่ถูกต้อง (คืน 0 เมื่อเท่ากัน) — ของเดิม `a.date < b.date ? 1 : -1`
+//    ไม่เคยคืน 0 → วันที่เท่ากัน ลำดับไม่แน่นอน (V8 หยิบแถวไหนก็ได้) = แถวทดสอบ qty 1 เบียดแถวจริงขึ้นมา
+// กติกา:
+//   • วันที่ (yyyy-MM-dd) มากก่อน
+//   • วันที่เท่ากัน → คงลำดับเดิมในชีต (stable sort · แถวบนสุด/ที่ซิงค์จาก ZORT จริงมาก่อนแถวที่พิมพ์เพิ่มท้าย)
+//   • ไม่มีวันที่/parse ไม่ได้ ('') → จมท้ายสุดเสมอ (ไม่ให้แถวไม่มีวันที่แย่งเป็น "เข้าล่าสุด")
+function sortPurchasesLatestFirst_(rows) {
+  return rows.slice().sort(function (a, b) {
+    var da = (a && a.date) || '', db = (b && b.date) || '';
+    if (da === db) return 0;
+    if (!da) return 1;
+    if (!db) return -1;
+    return da < db ? 1 : -1;
+  });
 }
 
 function readStorage_(rowsOpt) {
