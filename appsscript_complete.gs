@@ -14394,6 +14394,7 @@ function createQuotation(ss, data, actor) {
     if (data.draftId) { try { deleteQuotationDraft_(ss, data.draftId); } catch (e) { Logger.log("ลบร่างหลังส่งไม่สำเร็จ (ไม่ critical): " + e); } }
 
     invalidateCache_();
+    CacheService.getScriptCache().remove('quote_summary_v1'); // ใบใหม่ต้องโผล่ในแท็บใบเสนอราคาทันที ไม่รอ cache 5 นาที
     return ok({ quotationId: qId, quotationNumber: qNumber, totals: totals });
   } finally {
     lock.releaseLock();
@@ -14502,6 +14503,7 @@ function editQuotation(ss, data, actor) {
         note: "แก้ไขผ่านเว็บแอป" + (infoErr ? " (ข้อมูลลูกค้าอัปเดตไม่สำเร็จ: " + infoErr + ")" : "") }));
 
     invalidateCache_();
+    CacheService.getScriptCache().remove('quote_summary_v1'); // ยอด/รายการที่แก้ต้องอัปเดตในแท็บใบเสนอราคาทันที
     return ok({ quotationId: qId, quotationNumber: data.quotationNumber || null, totals: totals,
       infoWarning: infoErr || null });
   } finally {

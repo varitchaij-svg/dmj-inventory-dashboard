@@ -8678,6 +8678,13 @@ function QuoteFollowupView({ data, role }) {
   const baht = (n) => (Number(n) || 0).toLocaleString("th-TH", { maximumFractionDigits: 0 });
   const yearOf = (it) => (it.quotationDate && it.quotationDate.length >= 4) ? it.quotationDate.substring(0, 4) : null;
   const monthOf = (it) => (it.quotationDate && it.quotationDate.length >= 7) ? String(Number(it.quotationDate.substring(5, 7))) : null;
+  // ตัวกรองช่วงเวลาของฝั่งพนักงานขาย (selYear/selMonth ว่าง = ไม่กรอง) — owner ใช้ pendingList/
+  // approvedList ที่ผูก selYear อยู่แล้ว จึงไม่ต้องผ่าน inPeriod
+  const inPeriod = (it) => {
+    if (selYear && yearOf(it) !== selYear) return false;
+    if (selMonth && monthOf(it) !== selMonth) return false;
+    return true;
+  };
 
   const saveSale = async (q, value) => {
     const v = String(value || "").trim();
@@ -8722,7 +8729,9 @@ function QuoteFollowupView({ data, role }) {
     items.forEach(it => { const y = yearOf(it); if (y) s[y] = true; });
     return Object.keys(s).sort();
   }, [items]);
-  uE(() => { if (years.length && !selYear) setSelYear(years[years.length - 1]); }, [years]);
+  // ⚠️ auto-เลือกปีล่าสุดเฉพาะ owner — saler ต้องเริ่มที่ "ทุกปี" (selYear="") ไม่งั้น pending เก่า
+  // ที่ยังไม่ปิดจะถูกซ่อนโดยที่พนักงานไม่รู้ว่ามีงานค้างอยู่ (ตัวกรองวันเป็นตัวเลือก ไม่ใช่ค่าบังคับ)
+  uE(() => { if (isOwner && years.length && !selYear) setSelYear(years[years.length - 1]); }, [years, isOwner]);
 
   // จับสถานะแบบยืดหยุ่น (ZORT อาจใช้ Approved/Approve/Success ฯลฯ) — กันพลาดถ้าคำไม่ตรงเป๊ะ
   const isApproved = (s) => /approv|success|complet|อนุมัติ/i.test(s || "");
@@ -8762,6 +8771,7 @@ function QuoteFollowupView({ data, role }) {
   // รายการ pending/approved (ตามปีที่เลือก) สำหรับโหมดอื่น — เจ้าของใช้ (มีตัวกรองปี/เดือน)
   const pendingList = uM(() => items.filter(it => isPending(it.status) && yearOf(it) === selYear && (!selMonth || monthOf(it) === selMonth)).sort((a, b) => b.amount - a.amount), [items, selYear, selMonth]);
   const approvedList = uM(() => items.filter(it => isApproved(it.status) && yearOf(it) === selYear && (!selMonth || monthOf(it) === selMonth)).sort((a, b) => b.amount - a.amount), [items, selYear, selMonth]);
+  const voidedList  = uM(() => items.filter(it => isVoided(it.status)  && yearOf(it) === selYear && (!selMonth || monthOf(it) === selMonth)).sort((a, b) => b.amount - a.amount), [items, selYear, selMonth]);
 
   // ── รายการฝั่งพนักงานขาย: "ของฉัน" เป็นค่าเริ่มต้น + ไม่ผูกปี/เดือน (ตามงานของตัวเองทั้งหมด) ──
   // it.sale มาจาก tag ของ ZORT ซึ่ง createQuotation ประทับด้วยชื่อ session ตอนสร้าง → เทียบกับ
@@ -8771,10 +8781,16 @@ function QuoteFollowupView({ data, role }) {
   // เทียบด้วย quoteSaleKey (ทนอิโมจิ/เว้นวรรค/overlay ต่างรูปแบบ) ไม่ใช่ === ตรง ๆ — ดูเหตุผลที่ helper
   const myKey = quoteSaleKey(myName);
   const scopeMine = (arr) => (isOwner || !mineOnly) ? arr : arr.filter(it => myKey && quoteSaleKey(it.sale) === myKey);
-  const empPending = uM(() => scopeMine(items.filter(it => isPending(it.status)).sort((a, b) => (b.ageDays || 0) - (a.ageDays || 0))), [items, isOwner, mineOnly, myName]);   // เก่า/ค้างนานอยู่บน = ตามก่อน
-  const empApproved = uM(() => scopeMine(items.filter(it => isApproved(it.status)).sort((a, b) => (a.ageDays || 0) - (b.ageDays || 0))), [items, isOwner, mineOnly, myName]); // เพิ่งอนุมัติอยู่บน
+  const empPending = uM(() => scopeMine(items.filter(it => isPending(it.status) && inPeriod(it)).sort((a, b) => (b.ageDays || 0) - (a.ageDays || 0))), [items, isOwner, mineOnly, myName, selYear, selMonth]);   // เก่า/ค้างนานอยู่บน = ตามก่อน
+  const empApproved = uM(() => scopeMine(items.filter(it => isApproved(it.status) && inPeriod(it)).sort((a, b) => (a.ageDays || 0) - (b.ageDays || 0))), [items, isOwner, mineOnly, myName, selYear, selMonth]); // เพิ่งอนุมัติอยู่บน
+  const empVoided  = uM(() => scopeMine(items.filter(it => isVoided(it.status)  && inPeriod(it)).sort((a, b) => (b.ageDays || 0) - (a.ageDays || 0))), [items, isOwner, mineOnly, myName, selYear, selMonth]); // ปิด/ยกเลิก — ประวัติงานที่จบแล้ว
+  // ยอดเป็นบาทของฝั่งพนักงานขาย (ตามสโคปของฉัน/ทั้งหมด + ช่วงเวลาที่เลือก) — พนักงานต้องเห็น
+  // "ผลงานตัวเองเป็นเงิน" ไม่ใช่แค่จำนวนใบ · owner เห็นยอดใน KPI/ตามเซลอยู่แล้ว
+  const empPendingV  = uM(() => empPending.reduce((s, it) => s + (Number(it.amount) || 0), 0),  [empPending]);
+  const empApprovedV = uM(() => empApproved.reduce((s, it) => s + (Number(it.amount) || 0), 0), [empApproved]);
   const pendingRender = isOwner ? pendingList : empPending;
   const approvedRender = isOwner ? approvedList : empApproved;
+  const voidedRender  = isOwner ? voidedList  : empVoided;
 
   // ── ค้นหาเลขที่เอกสาร/ชื่อลูกค้า/เบอร์โทร ก่อนพิมพ์ ── ซ้อนบนสุดเสมอ ไม่ผูกกับ "ของฉัน"/ปี-เดือน
   // multi-token AND-match (บทเรียนข้อ 10 ทั้งระบบ) — พิมพ์ "สมชาย 081" ต้องเจอทั้งชื่อและเบอร์คู่กัน
@@ -8786,11 +8802,13 @@ function QuoteFollowupView({ data, role }) {
   };
   const pendingSearched = uM(() => pendingRender.filter(matchQSearch), [pendingRender, qSearch]);
   const approvedSearched = uM(() => approvedRender.filter(matchQSearch), [approvedRender, qSearch]);
+  const voidedSearched = uM(() => voidedRender.filter(matchQSearch), [voidedRender, qSearch]);
 
   // จำนวน "ทั้งหมด" (ไม่กรองของฉัน) — ใช้ตอน "ของฉัน" ว่างเพื่อบอกว่ามีใบอยู่ แค่ไม่ติดชื่อ
   // (ใบเก่า/ใบสร้างใน ZORT ไม่ติด tag → หายจากของฉันโดยดีไซน์ ต้องบอกไม่งั้นดูเหมือนแอปพัง)
   const allPendingCount  = uM(() => items.filter(it => isPending(it.status)).length,  [items]);
   const allApprovedCount = uM(() => items.filter(it => isApproved(it.status)).length, [items]);
+  const allVoidedCount   = uM(() => items.filter(it => isVoided(it.status)).length,   [items]);
   // แถบชวนกด "ทั้งหมด" — โผล่เฉพาะตอนอยู่โหมดของฉัน + ลิสต์ที่กรองแล้วว่าง + แต่จริง ๆ มีใบอยู่
   const mineEmptyHint = (unscoped) => (
     <div style={{ textAlign: "center", padding: "28px 20px", color: "var(--muted)", fontSize: 14, border: "1px dashed var(--bdr)", borderRadius: 12, lineHeight: 1.7 }}>
@@ -8840,11 +8858,12 @@ function QuoteFollowupView({ data, role }) {
     </div>
   );
 
-  // ไทล์ตัวเลขแบบเบาสำหรับพนักงานขาย (icon + ป้าย + จำนวน "ใบ") — 3 ช่องเท่ากันทุกจอ
-  const empTile = (emoji, label, value, color) => (
+  // ไทล์ตัวเลขแบบเบาสำหรับพนักงานขาย (icon + ป้าย + จำนวน "ใบ" + ยอดบาท) — 3 ช่องเท่ากันทุกจอ
+  const empTile = (emoji, label, value, color, sub) => (
     <div style={{ background: "var(--paper)", border: "1px solid var(--bdr)", borderRadius: 14, padding: "12px 10px", textAlign: "center", minWidth: 0 }}>
       <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{emoji} {label}</div>
       <div style={{ fontSize: 22, fontWeight: 800, color, marginTop: 3 }}>{value}<span style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)" }}> ใบ</span></div>
+      {sub != null && <div style={{ fontSize: 12, fontWeight: 800, color, marginTop: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>฿{sub}</div>}
     </div>
   );
   const chipStyle = (on) => ({
@@ -8933,24 +8952,41 @@ function QuoteFollowupView({ data, role }) {
             )}
           </>)}
 
-          {/* ── พนักงานขาย: ชิป ของฉัน/ทั้งหมด + ไทล์ 3 ช่อง (ตามสโคปที่เลือก) ── */}
+          {/* ── พนักงานขาย: ชิป ของฉัน/ทั้งหมด + ตัวกรองช่วงเวลา + ไทล์ 3 ช่อง (ตามสโคปที่เลือก) ── */}
           {!isOwner && (<>
-            <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
               <button onClick={() => setMineOnly(true)} style={chipStyle(mineOnly)}>⭐ ของฉัน</button>
               <button onClick={() => setMineOnly(false)} style={chipStyle(!mineOnly)}>📋 ทั้งหมด</button>
+              {/* ตัวกรองช่วงเวลา — ค่าเริ่มต้น "ทุกปี/ทุกเดือน" (pending เก่าที่ยังไม่ปิดต้องไม่ถูกซ่อน)
+                  · เลือกเดือนเพื่อดู "งานเดือนนี้ของฉัน" หรือดูยอดที่ปิดได้ต่อเดือน */}
+              <div style={{ flex: "1 1 8px", minWidth: 8 }}/>
+              <select value={selYear} onChange={e => setSelYear(e.target.value)} title="กรองตามปี"
+                style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid var(--bdr)", fontSize: 13, background: "var(--paper)", color: "var(--text)", fontFamily: "inherit" }}>
+                <option value="">ทุกปี</option>
+                {years.map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+              <select value={selMonth} onChange={e => setSelMonth(e.target.value)} title="กรองตามเดือน"
+                style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid var(--bdr)", fontSize: 13, background: "var(--paper)", color: "var(--text)", fontFamily: "inherit" }}>
+                <option value="">ทุกเดือน</option>
+                {QUOTE_MONTHS_TH.map((mn, i) => <option key={i} value={String(i + 1)}>{mn}</option>)}
+              </select>
+              {(selYear || selMonth) && (
+                <button className="btn ghost" style={{ padding: "6px 10px", fontSize: 12 }}
+                        onClick={() => { setSelYear(""); setSelMonth(""); }}>✕ ล้างช่วง</button>
+              )}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10, marginBottom: 16 }}>
-              {empTile("⏳", "รออนุมัติ", empPending.length, "#d97706")}
-              {empTile("✅", "อนุมัติแล้ว", empApproved.length, "#16a34a")}
-              {empTile("📄", "ทั้งหมด", empPending.length + empApproved.length, "var(--g-700)")}
+              {empTile("⏳", "รออนุมัติ", empPending.length, "#d97706", baht(empPendingV))}
+              {empTile("✅", "ปิดได้ (อนุมัติ)", empApproved.length, "#16a34a", baht(empApprovedV))}
+              {empTile("📄", "รวม", empPending.length + empApproved.length, "var(--g-700)", baht(empPendingV + empApprovedV))}
             </div>
           </>)}
 
-          {/* mode switcher — เจ้าของ 4 โหมด · พนักงานขาย 2 โหมด (ทำงาน) */}
+          {/* mode switcher — เจ้าของ 5 โหมด · พนักงานขาย 3 โหมด (ทำงาน + ประวัติที่ปิด/ยกเลิก) */}
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
             {(isOwner
-              ? [["summary", "📊 สรุปสถานะ"], ["sales", "👤 ตามเซล"], ["pending", "⏳ รออนุมัติ (" + pendingRender.length + ")"], ["approved", "✅ อนุมัติแล้ว (" + approvedRender.length + ")"]]
-              : [["pending", "⏳ รออนุมัติ (" + pendingRender.length + ")"], ["approved", "✅ อนุมัติแล้ว (" + approvedRender.length + ")"]]
+              ? [["summary", "📊 สรุปสถานะ"], ["sales", "👤 ตามเซล"], ["pending", "⏳ รออนุมัติ (" + pendingRender.length + ")"], ["approved", "✅ อนุมัติแล้ว (" + approvedRender.length + ")"], ["voided", "❌ ปิด/ยกเลิก (" + voidedRender.length + ")"]]
+              : [["pending", "⏳ รออนุมัติ (" + pendingRender.length + ")"], ["approved", "✅ อนุมัติแล้ว (" + approvedRender.length + ")"], ["voided", "❌ ปิด/ยกเลิก (" + voidedRender.length + ")"]]
             ).map(([k, lbl]) => (
               <button key={k} onClick={() => setMode(k)} style={{
                 padding: "7px 14px", borderRadius: 20, cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 700,
@@ -9072,7 +9108,7 @@ function QuoteFollowupView({ data, role }) {
           )}
 
           {/* ── ค้นหาเลขที่เอกสาร/ชื่อลูกค้า/เบอร์โทร — ใช้ตอนต้องหาใบเพื่อพิมพ์ซ้ำ ── */}
-          {(mode === "pending" || mode === "approved") && (
+          {(mode === "pending" || mode === "approved" || mode === "voided") && (
             <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
               <input type="text" placeholder="🔍 ค้นหาเลขที่เอกสาร / ชื่อลูกค้า / เบอร์โทร..."
                 value={qSearch} onChange={e => setQSearch(e.target.value)}
@@ -9358,6 +9394,48 @@ function QuoteFollowupView({ data, role }) {
                 </div>
                 )}
                 <Pagination page={qPage} total={approvedSearched.length} pageSize={PAGE_SIZE} onChange={setQPage} listRef={listRef}/>
+              </>
+            )
+          )}
+
+          {/* ── โหมด ปิด/ยกเลิก: ประวัติงานที่จบแล้ว (อ่านอย่างเดียว) ──
+              เดิม saler มองไม่เห็นใบที่ถูกปิด/หมดอายุเลย → แยกไม่ออกว่า "จบแล้ว" หรือ "หายไปไหน"
+              การ์ดเดียวใช้ได้ทั้งมือถือ/จอกว้าง (ไม่แยกเรนเดอร์ตามความกว้างจอ เพราะเทสต์ล็อกไว้ว่ามีแค่ 2 ที่)
+              · ไม่มีปุ่มพิมพ์/แก้ไข (ใบถูกยกเลิกแล้ว) — ต้องการเสนอใหม่ให้กด "สร้างใบเสนอราคาใหม่" */}
+          {mode === "voided" && (
+            voidedRender.length === 0 ? (
+              (!isOwner && mineOnly && allVoidedCount > 0)
+                ? mineEmptyHint(allVoidedCount)
+                : <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>ไม่มีใบที่ปิด/ยกเลิกในช่วงนี้</div>
+            ) : voidedSearched.length === 0 ? (
+              <div style={{ textAlign: "center", padding: 40, color: "var(--muted)", fontSize: 14 }}>
+                🔍 ไม่พบใบที่ตรงกับคำค้นหา
+                <div style={{ marginTop: 10 }}><button className="btn ghost" onClick={() => setQSearch("")}>✕ ล้างคำค้นหา</button></div>
+              </div>
+            ) : (
+              <>
+                <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>ใบที่ปิด (ไม่อนุมัติ) หรือหมดอายุแล้ว · ต้องการเสนอใหม่ให้กด “สร้างใบเสนอราคาใหม่”</div>
+                <div ref={listRef}/>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {voidedSearched.slice((qPage - 1) * PAGE_SIZE, qPage * PAGE_SIZE).map((q, idx) => (
+                    <div key={q.number || idx} style={{ border: "1px solid var(--bdr)", borderRadius: 12, padding: 12, background: "var(--paper)", opacity: .92 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 700, color: "var(--text)" }}>{q.customer}</div>
+                          {q.phone && <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{q.phone}</div>}
+                        </div>
+                        <div style={{ fontWeight: 800, color: "var(--muted)", whiteSpace: "nowrap", fontSize: 15, textDecoration: "line-through" }}>{baht(q.amount)}</div>
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8, alignItems: "center" }}>
+                        <span style={{ display: "inline-block", padding: "2px 10px", borderRadius: 20, fontWeight: 700, fontSize: 12, background: "#f3f4f6", color: "#6b7280" }}>❌ ปิด/ยกเลิกแล้ว</span>
+                        <span style={{ fontFamily: "monospace", fontSize: 12, color: "var(--muted)" }}>{q.number || "—"}</span>
+                        {q.quotationDate && <span style={{ fontSize: 12, color: "var(--muted)" }}>· {q.quotationDate}</span>}
+                        {isOwner && q.sale && <span style={{ fontSize: 12, color: "var(--muted)" }}>· 👤 {q.sale}</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <Pagination page={qPage} total={voidedSearched.length} pageSize={PAGE_SIZE} onChange={setQPage} listRef={listRef}/>
               </>
             )
           )}
