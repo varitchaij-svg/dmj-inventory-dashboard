@@ -15,6 +15,7 @@ import { dirname, join } from 'node:path';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const VANA = readFileSync(join(ROOT, 'views-analytics.jsx'), 'utf8');
+const VQ   = readFileSync(join(ROOT, 'views-quote.jsx'), 'utf8');
 const GS   = readFileSync(join(ROOT, 'appsscript_complete.gs'), 'utf8');
 
 function grabView(src, name) {
@@ -39,8 +40,13 @@ describe('ตัวกรองช่วงเวลาของพนักง�
     });
   });
 
-  it('⚠️ auto-เลือกปีล่าสุดเฉพาะ owner (saler เริ่มที่ "ทุกปี" ไม่งั้น pending เก่าถูกซ่อนเงียบ ๆ)', () => {
+  it('⚠️ auto-เลือกปีล่าสุดเฉพาะ owner (saler มี default ของตัวเอง ไม่ผ่าน effect นี้)', () => {
     expect(VIEW).toMatch(/if \(isOwner && years\.length && !selYear\) setSelYear/);
+  });
+
+  it('default ของ saler = เดือน/ปีปัจจุบัน · owner = "" (เจ้าของสั่ง: เปิดมาเห็นงานเดือนนี้ก่อน)', () => {
+    expect(VIEW).toMatch(/const \[selYear, setSelYear\] = uS\(role === "owner" \? "" : String\(new Date\(\)\.getFullYear\(\)\)\)/);
+    expect(VIEW).toMatch(/const \[selMonth, setSelMonth\] = uS\(role === "owner" \? "" : String\(new Date\(\)\.getMonth\(\) \+ 1\)\)/);
   });
 
   it('มี <select> ปี/เดือน ฝั่งพนักงานขาย ค่าเริ่มต้น "ทุกปี"/"ทุกเดือน"', () => {
@@ -103,5 +109,104 @@ describe('backend: สร้าง/แก้ใบเสนอราคาแล
   });
   it('editQuotation ล้าง quote_summary_v1', () => {
     expect(grabGs('editQuotation')).toContain("CacheService.getScriptCache().remove('quote_summary_v1')");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ③ ทำใบใหม่จากใบเดิม (duplicate → create) — ได้ใบใหม่ ราคาปัจจุบัน ไม่แตะใบเก่า
+// ─────────────────────────────────────────────────────────────────────────────
+describe('③ ทำใบใหม่จากใบเดิม', () => {
+  it('handleDuplicate ตั้ง dupSeed (sku+qty) + เคลียร์ editQuote → เข้าโหมด create', () => {
+    expect(VIEW).toMatch(/async function handleDuplicate\(q\)/);
+    const i = VIEW.indexOf('async function handleDuplicate(q)');
+    const block = VIEW.slice(i, i + 900);
+    expect(block).toContain('setEditQuote(null)');            // ต้องไม่ใช่โหมดแก้ไข (จะไปแก้ใบเก่า)
+    expect(block).toMatch(/setDupSeed\(\{/);
+    expect(block).toMatch(/items:\s*\(d\.items \|\| \[\]\)\.map\(it => \(\{ sku: it\.sku, qty:/); // ส่งแค่ sku+qty
+    expect(block).toContain('setMode("create")');
+  });
+
+  it('ส่ง dupSeed เข้า QuotationFormView + เคลียร์ตอน onBack', () => {
+    expect(VIEW).toContain('dupSeed={dupSeed}');
+    expect(VIEW).toMatch(/onBack=\{\(\) => \{ setEditQuote\(null\); setDupSeed\(null\);/);
+  });
+
+  it('มีปุ่ม "ทำใบใหม่" ทั้งใบอนุมัติแล้วและใบที่ปิด (handleDuplicate)', () => {
+    const calls = VIEW.match(/handleDuplicate\(q\)/g) || [];
+    expect(calls.length, 'อย่างน้อย 3 จุด: การ์ดอนุมัติ + ตารางอนุมัติ + ใบที่ปิด').toBeGreaterThanOrEqual(3);
+  });
+
+  it('QuotationFormView รับ dupSeed + hydrate ราคาจาก catalog (ไม่ใช่ราคาสุทธิใบเก่า)', () => {
+    expect(VQ).toMatch(/function QuotationFormView\(\{ data, role, onBack, onSubmitted, editQuote, dupSeed \}\)/);
+    // dup ใช้ราคาตั้งจาก catalog (p.price) + ข้าม SKU ที่ถูกลบ (return null → filter)
+    const i = VQ.indexOf('return (dupSeed.items || []).map');
+    expect(i, 'ต้อง hydrate cart จาก dupSeed').toBeGreaterThan(-1);
+    const block = VQ.slice(i, i + 400);
+    expect(block).toMatch(/if \(!p\) return null;/);
+    expect(block).toMatch(/price:\s*Number\(p\.price\)/);
+  });
+
+  it('⚠️ dup เป็นใบใหม่ — totals ไม่ pricesFinal (หักส่วนลดจริง) + ไม่ส่ง quotationId', () => {
+    // pricesFinal ผูกกับ editQuote เท่านั้น (dup=false) · quotationId undefined เมื่อไม่มี editQuote
+    expect(VQ).toMatch(/computeBillTotals\(cart, \{ manualDiscount: md, pricesFinal: !!editQuote \}\)/);
+    expect(VQ).toMatch(/quotationId: editQuote \? [^\n]*: undefined/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ④ โน้ตติดตามใบเสนอราคา (ตามลูกค้าไปถึงไหน)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('④ โน้ตติดตามใบเสนอราคา', () => {
+  it('sync helper อ่าน/เขียนผ่าน dmjJson (บทเรียนข้อ 13)', () => {
+    expect(VANA).toMatch(/async function syncGetQuoteFollowups\(\)/);
+    expect(VANA).toMatch(/async function syncSaveQuoteFollowup\(number, note\)/);
+    const i = VANA.indexOf('async function syncSaveQuoteFollowup');
+    expect(VANA.slice(i, i + 500)).toContain('dmjJson(res)');
+  });
+
+  it('โหลดโน้ตตอนเปิด + FollowupLine โผล่ในลิสต์', () => {
+    expect(VIEW).toMatch(/uE\(\(\) => \{ loadFollowups\(\); \}, \[\]\)/);
+    expect(VIEW).toMatch(/const FollowupLine = \(q\) =>/);
+    const calls = VIEW.match(/\{FollowupLine\(q\)\}/g) || [];
+    expect(calls.length, 'FollowupLine ต้องโผล่หลายจุด (รออนุมัติ/อนุมัติ/ปิด · การ์ด+ตาราง)').toBeGreaterThanOrEqual(4);
+  });
+
+  it('editFollowup บันทึกผ่าน syncSaveQuoteFollowup + อัปเดต state', () => {
+    const i = VIEW.indexOf('async function editFollowup(q)');
+    expect(i).toBeGreaterThan(-1);
+    const block = VIEW.slice(i, i + 700);
+    expect(block).toContain('syncSaveQuoteFollowup(num, note)');
+    expect(block).toContain('setFollowups(prev =>');
+  });
+
+  it('backend: handler + dispatch + สิทธิ์ saler/storedevice', () => {
+    expect(GS).toMatch(/function listQuoteFollowupsHandler_\(e\)/);
+    expect(GS).toMatch(/function saveQuoteFollowupHandler_\(ss, data\)/);
+    expect(GS).toMatch(/action === 'quoteFollowups'\)\s*\{\s*\n\s*return listQuoteFollowupsHandler_/);
+    expect(GS).toMatch(/data\.action === 'saveQuoteFollowup'\) return saveQuoteFollowupHandler_/);
+    // อยู่เหนือ invalidateCache_(true) — ไม่ล้าง payload cache ทั้งก้อน
+    const iSave = GS.indexOf("data.action === 'saveQuoteFollowup'");
+    const iInval = GS.indexOf('invalidateCache_(true); // clear payload cache');
+    expect(iSave).toBeGreaterThan(-1);
+    expect(iSave, 'dispatch ต้องอยู่เหนือ invalidateCache_').toBeLessThan(iInval);
+    // actor จาก session (staffActorName_) ไม่รับจาก client
+    expect(GS.slice(GS.indexOf('function saveQuoteFollowupHandler_'), GS.indexOf('function saveQuoteFollowupHandler_') + 1400)).toContain('staffActorName_(sess)');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ⑤ เรียง "อนุมัติแล้ว" ตามวันอนุมัติ/แก้ล่าสุด (movedAt) fallback วันที่ออกใบ
+// ─────────────────────────────────────────────────────────────────────────────
+describe('⑤ เรียงอนุมัติแล้วตามวันอนุมัติ (best-effort)', () => {
+  it('มี approvedKey = movedAt || quotationDate + empApproved เรียงด้วยมัน (desc)', () => {
+    expect(VIEW).toMatch(/const approvedKey = \(it\) => String\(\(it && \(it\.movedAt \|\| it\.quotationDate\)\)/);
+    expect(VIEW).toMatch(/empApproved = uM\([^\n]*approvedKey\(b\)\.localeCompare\(approvedKey\(a\)\)/);
+  });
+
+  it('backend ส่ง movedAt (best-effort, fallback "") — quoteMovedDate_ ไม่เดา field ที่พังเงียบ', () => {
+    expect(GS).toMatch(/function quoteMovedDate_\(q\)/);
+    expect(GS).toMatch(/movedAt: quoteMovedDate_\(q\)/);
+    // หาไม่เจอ = "" (ไม่ใช่ค่ามั่ว) → frontend fallback วันที่ออกใบ = พฤติกรรมเดิม
+    expect(GS.slice(GS.indexOf('function quoteMovedDate_'), GS.indexOf('function quoteMovedDate_') + 500)).toContain('return "";');
   });
 });

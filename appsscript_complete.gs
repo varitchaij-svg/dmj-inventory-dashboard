@@ -132,6 +132,7 @@ const SHEET_MTO_ITEMS      = "วัตถุดิบ MTO";    // วัตถ�
 const SHEET_CUST_MONTHLY   = "สรุปลูกค้า-เดือน";  // ยอดซื้อลูกค้า แยกตามเดือน (customer×month)
 const SHEET_CUST_PRODUCTS  = "สรุปลูกค้า-สินค้า"; // สินค้าที่ลูกค้าแต่ละรายซื้อบ่อย (top-N/ลูกค้า)
 const SHEET_QUOTE_SALE     = "เซลใบเสนอราคา";    // mapping เลขที่ QT → ชื่อเซลที่ทำใบ (assign ใน dashboard)
+const SHEET_QUOTE_FOLLOWUP = "ติดตามใบเสนอราคา"; // โน้ตติดตามลูกค้าต่อใบ (1 เลขที่ = 1 แถว เขียนทับ)
 const SHEET_UNSCANNED_SALE = "ขายไม่สแกน";        // นับสต็อกแล้วของหาย=ขายออก (บวก soldQty ไม่แตะยอดเงิน) col: date,SKU,qty,actor,time
 const SHEET_ORDERS_RAW     = "ZORT ออเดอร์ดิบ";   // ออเดอร์ดิบทั้งระบบ (per-line) สำหรับ backfill+วิเคราะห์ย้อนหลัง
 const SHEET_QUOTE_DRAFTS   = "ร่างใบเสนอราคา";    // ร่างใบเสนอราคาที่ยังไม่ส่งเข้า ZORT
@@ -707,12 +708,14 @@ var ROLE_ACTIONS_ = {
   saler:      ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
                "getContactDetail", "createQuotation", "editQuotation", "saveQuotationDraft", "deleteQuotationDraft",
                "voidQuotation", "approveQuotation", "setQuoteSale", "getInvoiceNumber", "createStockCheck",
+               "saveQuoteFollowup",
                ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   // storedevice = บัญชี LINE กลางประจำเครื่อง/แท็บเล็ตร้าน — สิทธิ์ API เท่า saler ทุกอย่าง
   // + attendanceToday (ดู "ใครเข้างานวันนี้" — เหตุผลที่มี role นี้อยู่เลย ต้องเปิดให้)
   storedevice: ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
                "getContactDetail", "createQuotation", "editQuotation", "saveQuotationDraft", "deleteQuotationDraft",
                "voidQuotation", "approveQuotation", "setQuoteSale", "getInvoiceNumber", "attendanceToday", "createStockCheck",
+               "saveQuoteFollowup",
                ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   frontstore: ["recordUnscannedSale"].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   warehouse:  ["deductStock", "confirmStockCount", "deleteLockEntry", "addNewProduct", "uploadProductPhoto",
@@ -2270,6 +2273,10 @@ function doPost(e) {
     // payload cache ทั้งก้อนจนทั้งร้านต้องโหลดใหม่
     if (data.action === 'setProductOwner') return setProductOwnerHandler_(ss, data);
 
+    // 📝 บันทึกโน้ตติดตามใบเสนอราคา — เขียนชีตของตัวเอง ไม่แตะสต็อก/ออเดอร์
+    // อยู่เหนือ invalidateCache_ ด้วยเหตุผลเดียวกับ markNotiRead/setProductOwner
+    if (data.action === 'saveQuoteFollowup') return saveQuoteFollowupHandler_(ss, data);
+
     // มีการแก้ข้อมูล → ล้าง cache ให้ doGet ครั้งถัดไปคำนวณใหม่ (ข้อมูลไม่ค้าง)
     invalidateCache_(true); // clear payload cache เท่านั้น — ห้าม bump dmj_last_write_ts ก่อน conflict check
 
@@ -2682,6 +2689,11 @@ function doGet(e) {
     // (payload cache แยกตาม role ไม่ใช่ตามคน → ยัดลงไปจะเห็นดาวของคนอื่น)
     if (e && e.parameter && e.parameter.action === 'productOwners') {
       return listProductOwnersHandler_(e);
+    }
+
+    // 📝 โน้ตติดตามใบเสนอราคา (ตามลูกค้าไปถึงไหน) — session-verified เหมือน productOwners
+    if (e && e.parameter && e.parameter.action === 'quoteFollowups') {
+      return listQuoteFollowupsHandler_(e);
     }
 
     // Lightweight endpoint: ดึงเฉพาะรายการสั่งของ (เบา/เร็ว) สำหรับ polling หน้า orders
@@ -10753,6 +10765,86 @@ function listProductOwnersHandler_(e) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// 📝 ติดตามใบเสนอราคา (follow-up note ต่อใบ) — ให้พนักงานขายจดว่า "ตามลูกค้าไปถึงไหน"
+// 1 เลขที่เอกสาร = 1 แถว (เขียนทับ) → ชีตไม่โตตามจำนวนครั้งที่แก้ · แยกจาก ZORT โดยสิ้นเชิง
+// (ZORT ไม่มีที่ให้จดโน้ตติดตาม) · เป็นข้อมูลภายในร้าน ไม่กระทบเอกสาร/ยอด/สต็อกอะไรเลย
+// ═══════════════════════════════════════════════════════════════════════════
+var QUOTE_FOLLOWUP_HEADERS_ = ["number", "note", "updatedAt", "updatedBy"];
+function quoteFollowupSheet_(ss) {
+  return getOrCreateSheet_(ss, SHEET_QUOTE_FOLLOWUP, QUOTE_FOLLOWUP_HEADERS_);
+}
+
+// doGet action=quoteFollowups → { ok, map: { "QT-...": {note, at, by} } }
+// ตรวจ session จริง (เหมือน productOwners/inappNoti) — ไม่เชื่อ role จาก query param
+function listQuoteFollowupsHandler_(e) {
+  try {
+    var ss = SpreadsheetApp.openById(SHEET_ID);
+    var sess = resolveSession_(ss, (e && e.parameter && e.parameter.sessionToken) || '');
+    if (!sess || sess.status !== 'active') return unauthorized_();
+    var sh = ss.getSheetByName(SHEET_QUOTE_FOLLOWUP);
+    var map = {};
+    if (sh && sh.getLastRow() >= 2) {
+      var rows = sh.getRange(2, 1, sh.getLastRow() - 1, QUOTE_FOLLOWUP_HEADERS_.length).getValues();
+      for (var i = 0; i < rows.length; i++) {
+        var num = String(rows[i][0] || '').trim();
+        if (!num) continue;
+        map[num] = { note: String(rows[i][1] || ''), at: String(rows[i][2] || ''), by: String(rows[i][3] || '') };
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({ ok: true, map: map, serverTs: Date.now() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// doPost action=saveQuoteFollowup { number, note } → upsert 1 แถวต่อเลขที่ · actor จาก session เสมอ
+// note ว่าง = ลบโน้ต (คืนแถวเปล่า) · เขียนทับ ไม่ append
+function saveQuoteFollowupHandler_(ss, data) {
+  try {
+    var sess = resolveSession_(ss, data.sessionToken);
+    if (!sess || sess.status !== 'active') return unauthorized_();
+    var number = String(data.number || '').trim();
+    if (!number) return ContentService.createTextOutput(JSON.stringify({ success: false, error: 'ไม่ได้ระบุเลขที่เอกสาร' }))
+      .setMimeType(ContentService.MimeType.JSON);
+    var note = String(data.note || '').trim().substring(0, 500); // กันโน้ตยาวเกิน
+    var by = staffActorName_(sess);
+    var at = Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyy-MM-dd HH:mm");
+
+    var lock = LockService.getScriptLock();
+    try { lock.waitLock(10000); } catch (e) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: 'ระบบกำลังยุ่ง ลองใหม่อีกครั้ง' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    try {
+      var sh = quoteFollowupSheet_(ss);
+      var rowIdx = -1;
+      if (sh.getLastRow() >= 2) {
+        var nums = sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues();
+        for (var i = 0; i < nums.length; i++) {
+          if (String(nums[i][0] || '').trim() === number) { rowIdx = i + 2; break; }
+        }
+      }
+      if (rowIdx < 0) {
+        sh.appendRow([number, note, at, by]);
+        // เลขที่เอกสารเป็น text — กัน Sheets ตีความ (บทเรียนข้อ 2)
+        sh.getRange(sh.getLastRow(), 1).setNumberFormat("@");
+      } else {
+        sh.getRange(rowIdx, 1, 1, 4).setValues([[number, note, at, by]]);
+      }
+      return ContentService.createTextOutput(JSON.stringify({ success: true, number: number, note: note, at: at, by: by }))
+        .setMimeType(ContentService.MimeType.JSON);
+    } finally {
+      lock.releaseLock();
+    }
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ success: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
 // ── doPost action=setProductOwner {sku, on, takeover, targetStaffId} ──────
 // on=true  → ตั้งคนดูแล (ปกติ = ตัวเอง · owner/dev ส่ง targetStaffId มอบหมายแทนคนอื่นได้)
 // on=false → ถอดออก (เหลือ "ยังไม่มีคนดูแล")
@@ -12355,6 +12447,18 @@ function nextInvoiceNumber_(quotationNumber, actor) {
 // handler สำหรับ action=getQuotationSummary — คืนใบเสนอราคา "ทุกสถานะ" (Approved/Pending/Voided)
 // quotation ทั้งระบบมีไม่มาก (~ร้อยกว่าใบ) → ดึงทุกหน้าแล้วส่ง raw ให้ frontend รวมเอง (ยืดหยุ่นกับตัวเลือกปี/เดือน)
 // cache 5 นาที · overlay ชื่อเซลจากชีต mapping
+// วันที่ "แก้/อนุมัติล่าสุด" ของใบเสนอราคา จาก ZORT (best-effort) → คืน "yyyy-MM-dd" หรือ ""
+// ZORT ไม่มี field วันอนุมัติที่ยืนยันแล้ว จึงลองหลายชื่อ · ค่าที่หาไม่เจอ = "" (frontend fallback
+// ไปใช้วันที่ออกใบ → ไม่เปลี่ยนพฤติกรรมเดิมถ้า ZORT ไม่ส่งมา — ไม่ใช่การเดา field ที่พังเงียบ)
+function quoteMovedDate_(q) {
+  var cand = q.updateddatetimeString || q.updateddatetime || q.updateddate
+          || q.modifieddatetimeString || q.modifieddatetime || q.modifieddate
+          || q.approveddate || "";
+  cand = String(cand || "").trim();
+  if (cand.length >= 10 && /^\d{4}-\d{2}-\d{2}/.test(cand)) return cand.substring(0, 10);
+  return "";
+}
+
 function handleGetQuotationSummary_() {
   try {
     const cache = CacheService.getScriptCache();
@@ -12402,6 +12506,10 @@ function handleGetQuotationSummary_() {
           ageDays: ageDays,
           expireInDays: expireInDays,
           sale: String(q[SALE_FIELD] || "").trim(),
+          // best-effort: วันที่ ZORT แก้/อนุมัติล่าสุด — ใช้เรียง "อนุมัติแล้ว" ให้ใบที่เพิ่งปิดขึ้นบน
+          // ZORT ไม่ได้ให้ "วันอนุมัติ" แยกชัด → ลองหลาย field · หาไม่เจอ = "" แล้ว frontend fallback
+          // ไปใช้ quotationDate (พฤติกรรมเดิม ไม่พัง)
+          movedAt: quoteMovedDate_(q),
         });
       }
       if (list.length < limit) break;

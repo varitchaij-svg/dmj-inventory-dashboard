@@ -8519,6 +8519,28 @@ async function syncSetQuoteSale(number, sale) {
   } catch (e) { return { ok: false, error: dmjErrText(e) }; }
 }
 
+// 📝 โน้ตติดตามใบเสนอราคา (ตามลูกค้าไปถึงไหน) — อ่านทั้งแมพครั้งเดียว
+async function syncGetQuoteFollowups() {
+  if (!SHEET_DEPLOY_URL) return { ok: false, error: "ยังไม่ได้เชื่อมต่อ Sheet", map: {} };
+  try {
+    const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
+    const tok = (typeof localStorage !== "undefined" && localStorage.getItem("dmj_session_token")) || "";
+    const res = await dmjFetch(`${SHEET_DEPLOY_URL}${sep}action=quoteFollowups&sessionToken=${encodeURIComponent(tok)}&_t=${Date.now()}`, { cache: "no-store" });
+    return await dmjJson(res);
+  } catch (e) { return { ok: false, error: dmjErrText(e), map: {} }; }
+}
+async function syncSaveQuoteFollowup(number, note) {
+  if (!SHEET_DEPLOY_URL) return { success: false, error: "ยังไม่ได้เชื่อมต่อ Sheet" };
+  try {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "saveQuoteFollowup", number, note }),
+    });
+    return await dmjJson(res);
+  } catch (e) { return { success: false, error: dmjErrText(e) }; }
+}
+
 // ────────────── 📄 ใบเสนอราคา — สรุปสถานะ + ตามปิด (QuoteFollowupView) ──────────────
 // ดึง action=getQuotationSummary: ใบเสนอราคา "ทุกสถานะ" (Approved/Pending/Voided)
 // 3 โหมด: 📊 สรุปสถานะ (KPI + ตารางต่อเดือน) · ⏳ รออนุมัติ (ปิดใบ→Void) · ✅ อนุมัติแล้ว
@@ -8555,8 +8577,10 @@ function QuoteFollowupView({ data, role }) {
   const [statusBk, setStatusBk] = uS({});       // สถานะดิบทั้งหมดที่เจอ (debug/เตือน)
   const [mode, setMode] = uS(isOwner ? "summary" : "pending"); // owner: แดชบอร์ด · พนักงานขาย: เข้าหน้าตามงานเลย
   const [mineOnly, setMineOnly] = uS(role === "saler");        // saler เห็น "ของฉัน" ก่อน · storedevice (เครื่องกลางใช้ร่วมกัน) เห็นทั้งหมด
-  const [selYear, setSelYear] = uS("");
-  const [selMonth, setSelMonth] = uS("");       // "" = ทุกเดือน, "1".."12"
+  // พนักงานขาย: default = เดือน/ปีปัจจุบัน (เจ้าของสั่ง ส.ค. 2026 — เปิดมาเห็น "งานเดือนนี้" ก่อน
+  //   กด "✕ ล้างช่วง" เพื่อดูทุกเดือน/ทุกใบที่ค้าง) · owner ยังเริ่ม "" (effect ตั้งปีล่าสุดให้)
+  const [selYear, setSelYear] = uS(role === "owner" ? "" : String(new Date().getFullYear()));
+  const [selMonth, setSelMonth] = uS(role === "owner" ? "" : String(new Date().getMonth() + 1)); // "" = ทุกเดือน, "1".."12"
   const [qPage, setQPage] = uS(1);
   const [qSearch, setQSearch] = uS("");  // ค้นหาเลขที่เอกสาร/ชื่อลูกค้า/เบอร์โทร ก่อนพิมพ์
   const [voidingId, setVoidingId] = uS(null);
@@ -8571,7 +8595,10 @@ function QuoteFollowupView({ data, role }) {
   const [invoiceNumberBusy, setInvoiceNumberBusy] = uS(false);
   const [printFileName, setPrintFileName] = uS("");         // ชื่อไฟล์ตอนเลือก "บันทึกเป็น PDF"
   const [editQuote, setEditQuote] = uS(null);               // ใบที่กำลังแก้ไข → ส่งเข้า QuotationFormView
-  const [editingId, setEditingId] = uS(null);               // ปุ่มแก้ไขที่กำลังโหลดรายละเอียดอยู่
+  const [dupSeed, setDupSeed] = uS(null);                    // "ทำใบใหม่จากใบเดิม" → seed ฟอร์มสร้าง (ใบใหม่ ไม่แก้ใบเดิม)
+  const [editingId, setEditingId] = uS(null);               // ปุ่มแก้ไข/ทำใหม่ที่กำลังโหลดรายละเอียดอยู่
+  const [followups, setFollowups] = uS({});                 // 📝 โน้ตติดตามต่อใบ { "QT-...": {note, at, by} }
+  const [savingFu, setSavingFu] = uS(null);                 // เลขที่ใบที่กำลังบันทึกโน้ต
   const [toast, showToast, hideToast] = useToast();
   const listRef = React.useRef(null);
   const PAGE_SIZE = 20;
@@ -8601,6 +8628,50 @@ function QuoteFollowupView({ data, role }) {
       customer: d.customer || {}, items: d.items || [], remarks: d.remarks || [], totals: d.totals || {},
     });
     setMode("create");
+  }
+
+  // 📋 "ทำใบใหม่จากใบเดิม" — ดึงรายละเอียดใบเก่า แล้วเปิดฟอร์ม "สร้างใบใหม่" พร้อมสินค้าเดิม
+  // ต่างจากแก้ไข: ได้ใบใหม่ (ไม่แตะใบเดิม) · ราคาคิดจาก catalog ปัจจุบัน + หักส่วนลดจริง (fresh quote)
+  // ใช้กับใบอนุมัติแล้ว (ลูกค้าเก่าสั่งซ้ำ) และใบที่ปิด/หมดอายุ (เสนอใหม่) — ส่งแค่ sku+qty ให้ฟอร์ม
+  async function handleDuplicate(q) {
+    if (editingId) return;
+    setEditingId(q.id || q.number);
+    const r = await syncGetQuotationForPrint(q.id || q.number);
+    setEditingId(null);
+    if (!r.success) { showToast("error", "ดึงรายละเอียดไม่สำเร็จ: " + (r.error || ""), "❌"); return; }
+    const d = r.data || {};
+    setEditQuote(null);
+    setDupSeed({
+      fromNumber: d.quotationNumber || q.number || "",
+      customer: d.customer || {},
+      items: (d.items || []).map(it => ({ sku: it.sku, qty: Number(it.qty) || 0 })),
+    });
+    setMode("create");
+  }
+
+  // 📝 บันทึกโน้ตติดตามลูกค้า (ตามไปถึงไหน) — โหลดทั้งแมพครั้งเดียวตอนเปิด, แก้ผ่าน prompt()
+  // (ประกาศเป็น function declaration ไม่ใช่ const arrow — กันไปตัดขอบเขต regex ของเทสต์ที่จับ
+  //  `const load = async` ของ view อื่นด้วย endpoint `\n  };` · function decl จบด้วย `}` เฉย ๆ)
+  async function loadFollowups() {
+    const r = await syncGetQuoteFollowups();
+    if (r && r.ok && r.map) setFollowups(r.map);
+  }
+  uE(() => { loadFollowups(); }, []);
+  async function editFollowup(q) {
+    const num = q.number;
+    if (!num || savingFu) return;
+    const cur = (followups[num] && followups[num].note) || "";
+    const next = window.prompt("📝 โน้ตติดตามลูกค้า (" + num + ")\nเช่น: โทรตามแล้ว รอลูกค้ายืนยัน / นัดส่งวันศุกร์", cur);
+    if (next === null) return;                 // กดยกเลิก
+    const note = String(next).trim();
+    if (note === cur.trim()) return;           // ไม่เปลี่ยน
+    setSavingFu(num);
+    const r = await syncSaveQuoteFollowup(num, note);
+    setSavingFu(null);
+    if (r && r.success) {
+      setFollowups(prev => Object.assign({}, prev, { [num]: { note: r.note, at: r.at, by: r.by } }));
+      showToast("success", note ? "บันทึกโน้ตแล้ว" : "ลบโน้ตแล้ว", "📝");
+    } else { showToast("error", "บันทึกโน้ตไม่สำเร็จ: " + ((r && r.error) || ""), "❌"); }
   }
 
   // docType: "quotation" (ค่าเริ่มต้น) → พิมพ์ทันที · "invoice" → เปิด InvoiceOptionsModal ก่อน
@@ -8737,6 +8808,10 @@ function QuoteFollowupView({ data, role }) {
   const isApproved = (s) => /approv|success|complet|อนุมัติ/i.test(s || "");
   const isVoided   = (s) => /void|cancel|reject|ยกเลิก/i.test(s || "");
   const isPending  = (s) => /pending|wait|รอ/i.test(s || "") || (!isApproved(s) && !isVoided(s));
+  // คีย์เรียง "อนุมัติแล้ว" — วันที่ ZORT แก้/อนุมัติล่าสุด (movedAt) ถ้ามี · ไม่มี = วันที่ออกใบ
+  // (yyyy-MM-dd → เทียบ string ได้ตรง) — เดิมเรียงตาม ageDays (= วันออกใบ) แล้วเขียนคอมเมนต์ว่า
+  // "เพิ่งอนุมัติ" ซึ่งไม่ตรง เพราะ ZORT ไม่ได้ให้วันอนุมัติแยก · ตอนนี้ใช้ movedAt ถ้า ZORT ส่งมา
+  const approvedKey = (it) => String((it && (it.movedAt || it.quotationDate)) || "");
   // สถานะที่ยังจับไม่เข้า 3 กลุ่ม (ไว้เตือน)
   const unknownStatuses = uM(() => Object.keys(statusBk).filter(s => !isApproved(s) && !isVoided(s) && !/pending|wait|รอ/i.test(s || "")), [statusBk]);
 
@@ -8782,7 +8857,7 @@ function QuoteFollowupView({ data, role }) {
   const myKey = quoteSaleKey(myName);
   const scopeMine = (arr) => (isOwner || !mineOnly) ? arr : arr.filter(it => myKey && quoteSaleKey(it.sale) === myKey);
   const empPending = uM(() => scopeMine(items.filter(it => isPending(it.status) && inPeriod(it)).sort((a, b) => (b.ageDays || 0) - (a.ageDays || 0))), [items, isOwner, mineOnly, myName, selYear, selMonth]);   // เก่า/ค้างนานอยู่บน = ตามก่อน
-  const empApproved = uM(() => scopeMine(items.filter(it => isApproved(it.status) && inPeriod(it)).sort((a, b) => (a.ageDays || 0) - (b.ageDays || 0))), [items, isOwner, mineOnly, myName, selYear, selMonth]); // เพิ่งอนุมัติอยู่บน
+  const empApproved = uM(() => scopeMine(items.filter(it => isApproved(it.status) && inPeriod(it)).sort((a, b) => approvedKey(b).localeCompare(approvedKey(a)))), [items, isOwner, mineOnly, myName, selYear, selMonth]); // เพิ่งอนุมัติ/แก้ล่าสุดอยู่บน
   const empVoided  = uM(() => scopeMine(items.filter(it => isVoided(it.status)  && inPeriod(it)).sort((a, b) => (b.ageDays || 0) - (a.ageDays || 0))), [items, isOwner, mineOnly, myName, selYear, selMonth]); // ปิด/ยกเลิก — ประวัติงานที่จบแล้ว
   // ยอดเป็นบาทของฝั่งพนักงานขาย (ตามสโคปของฉัน/ทั้งหมด + ช่วงเวลาที่เลือก) — พนักงานต้องเห็น
   // "ผลงานตัวเองเป็นเงิน" ไม่ใช่แค่จำนวนใบ · owner เห็นยอดใน KPI/ตามเซลอยู่แล้ว
@@ -8874,8 +8949,30 @@ function QuoteFollowupView({ data, role }) {
 
   const rateColor = (r) => r >= 0.7 ? "#16a34a" : r >= 0.4 ? "#d97706" : "#dc2626";
 
+  // 📝 แถวโน้ตติดตาม — โชว์โน้ตล่าสุด (ถ้ามี) + ปุ่มแก้ · ใช้ซ้ำทั้งการ์ดมือถือ/ตาราง/ใบที่ปิด
+  const FollowupLine = (q) => {
+    const fu = followups[q.number];
+    const busy = savingFu === q.number;
+    const has = fu && fu.note;
+    return (
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 6, marginTop: 6, fontSize: 12 }}>
+        <button onClick={() => editFollowup(q)} disabled={busy} title="โน้ตติดตามลูกค้า" style={{
+          flex: "0 0 auto", border: "1px solid " + (has ? "var(--g-500)" : "var(--bdr)"),
+          background: has ? "var(--g-50)" : "var(--paper)", color: has ? "var(--g-700)" : "var(--muted)",
+          borderRadius: 8, padding: "3px 8px", fontSize: 12, fontWeight: 700, cursor: busy ? "default" : "pointer", whiteSpace: "nowrap",
+        }}>{busy ? "…" : (has ? "📝 แก้โน้ต" : "📝 + โน้ต")}</button>
+        {has && (
+          <div style={{ minWidth: 0, color: "var(--text)", lineHeight: 1.4 }}>
+            {fu.note}
+            <span style={{ color: "var(--muted)", marginLeft: 4 }}>· {fu.at}{fu.by ? " · " + fu.by : ""}</span>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   if (mode === "create") {
-    return <QuotationFormView data={data} role={role} onBack={() => { setEditQuote(null); setMode(isOwner ? "summary" : "pending"); }} onSubmitted={load} editQuote={editQuote}/>;
+    return <QuotationFormView data={data} role={role} onBack={() => { setEditQuote(null); setDupSeed(null); setMode(isOwner ? "summary" : "pending"); }} onSubmitted={load} editQuote={editQuote} dupSeed={dupSeed}/>;
   }
 
   return (
@@ -8957,8 +9054,8 @@ function QuoteFollowupView({ data, role }) {
             <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
               <button onClick={() => setMineOnly(true)} style={chipStyle(mineOnly)}>⭐ ของฉัน</button>
               <button onClick={() => setMineOnly(false)} style={chipStyle(!mineOnly)}>📋 ทั้งหมด</button>
-              {/* ตัวกรองช่วงเวลา — ค่าเริ่มต้น "ทุกปี/ทุกเดือน" (pending เก่าที่ยังไม่ปิดต้องไม่ถูกซ่อน)
-                  · เลือกเดือนเพื่อดู "งานเดือนนี้ของฉัน" หรือดูยอดที่ปิดได้ต่อเดือน */}
+              {/* ตัวกรองช่วงเวลา — ค่าเริ่มต้น "เดือน/ปีปัจจุบัน" (เจ้าของสั่ง: เปิดมาเห็นงานเดือนนี้ก่อน)
+                  · เลือก "ทุกเดือน/ทุกปี" หรือกด "✕ ล้างช่วง" เพื่อดูใบที่ค้างจากเดือนก่อน ๆ ทั้งหมด */}
               <div style={{ flex: "1 1 8px", minWidth: 8 }}/>
               <select value={selYear} onChange={e => setSelYear(e.target.value)} title="กรองตามปี"
                 style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid var(--bdr)", fontSize: 13, background: "var(--paper)", color: "var(--text)", fontFamily: "inherit" }}>
@@ -9168,6 +9265,7 @@ function QuoteFollowupView({ data, role }) {
                               onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} onBlur={(e) => saveSale(q, e.target.value)}
                               style={{ width: 130, minWidth: 0, padding: "5px 8px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/>}
                           </div>
+                          {FollowupLine(q)}
                           {/* ⚠️ ปุ่มต้องครบเท่าจอแนวนอน (ตาราง) — เดิมแนวตั้งขาด "แก้ไข" กับ "ใบแจ้งหนี้"
                               ทำให้คนใช้มือถือ (ผู้ใช้หลักของระบบ) ทำงาน 2 อย่างนี้ไม่ได้เลย โดยไม่มี
                               อะไรบอกว่าปุ่มหายไป · แยกเป็น 2 แถว: ตัดสินใจ (อนุมัติ/ปิด) แล้วค่อยเอกสาร
@@ -9250,6 +9348,7 @@ function QuoteFollowupView({ data, role }) {
                               {isOwner && <input list="dmjQuoteSales" defaultValue={q.sale || ""} placeholder="+ ชื่อเซล"
                                 onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} onBlur={(e) => saveSale(q, e.target.value)}
                                 style={{ marginTop: 3, width: 110, minWidth: 0, padding: "3px 6px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/>}
+                              <div style={{ whiteSpace: "normal", maxWidth: 240 }}>{FollowupLine(q)}</div>
                             </td>
                             <td style={{ padding: "8px 12px", textAlign: "center", whiteSpace: "nowrap" }}>
                               <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
@@ -9342,6 +9441,12 @@ function QuoteFollowupView({ data, role }) {
                               cursor: (printingId || invoiceNumberBusy) ? "default" : "pointer", opacity: (printingId || invoiceNumberBusy) && !printing ? .5 : 1,
                             }}>{invoiceNumberBusy ? "⏳ ออกเลข…" : (printing ? "…" : "🧾 ใบแจ้งหนี้")}</button>
                           </div>
+                          {/* ลูกค้าเก่าสั่งซ้ำ → ทำใบใหม่จากใบเดิม (ได้ใบใหม่ ราคาปัจจุบัน ไม่แตะใบเก่า) */}
+                          <button onClick={() => handleDuplicate(q)} disabled={!!editingId} style={{
+                            width: "100%", marginTop: 6, border: "1px dashed var(--g-500)", background: "var(--paper)", color: "var(--g-700)",
+                            borderRadius: 8, padding: "9px 8px", fontSize: 13, fontWeight: 700, cursor: editingId ? "default" : "pointer",
+                          }}>{editingId === (q.id || q.number) ? "…" : "📋 ทำใบใหม่จากใบนี้"}</button>
+                          {FollowupLine(q)}
                         </div>
                       );
                     })}
@@ -9372,6 +9477,7 @@ function QuoteFollowupView({ data, role }) {
                             <input list="dmjQuoteSales" defaultValue={q.sale || ""} placeholder="+ ชื่อเซล"
                               onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }} onBlur={(e) => saveSale(q, e.target.value)}
                               style={{ marginTop: 3, width: 110, minWidth: 0, padding: "3px 6px", fontSize: 12, border: "1px solid var(--bdr)", borderRadius: 6, background: "var(--paper)", color: "var(--text)" }}/>
+                            <div style={{ whiteSpace: "normal", maxWidth: 240 }}>{FollowupLine(q)}</div>
                           </td>
                           <td style={{ padding: "8px 12px", textAlign: "center", whiteSpace: "nowrap" }}>
                             <button onClick={() => handlePrint(q, "quotation")} disabled={!!printingId || invoiceNumberBusy} title="พิมพ์ใบเสนอราคา" style={{
@@ -9385,6 +9491,11 @@ function QuoteFollowupView({ data, role }) {
                               borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 700,
                               cursor: (printingId || invoiceNumberBusy) ? "default" : "pointer", opacity: (printingId || invoiceNumberBusy) && !printing ? .5 : 1,
                             }}>{invoiceNumberBusy ? "⏳" : (printing ? "…" : "🧾")}</button>
+                            <button onClick={() => handleDuplicate(q)} disabled={!!editingId} title="ทำใบใหม่จากใบนี้" style={{
+                              marginLeft: 4, border: "1px dashed var(--g-500)", background: "var(--paper)", color: "var(--g-700)",
+                              borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 700,
+                              cursor: editingId ? "default" : "pointer", opacity: editingId && editingId !== (q.id || q.number) ? .5 : 1,
+                            }}>{editingId === (q.id || q.number) ? "…" : "📋"}</button>
                           </td>
                         </tr>
                         );
@@ -9432,6 +9543,12 @@ function QuoteFollowupView({ data, role }) {
                         {q.quotationDate && <span style={{ fontSize: 12, color: "var(--muted)" }}>· {q.quotationDate}</span>}
                         {isOwner && q.sale && <span style={{ fontSize: 12, color: "var(--muted)" }}>· 👤 {q.sale}</span>}
                       </div>
+                      {/* ใบหมดอายุ/ลูกค้ากลับมา → เสนอใหม่จากใบเดิม (ได้ใบใหม่ ราคาปัจจุบัน) */}
+                      <button onClick={() => handleDuplicate(q)} disabled={!!editingId} style={{
+                        marginTop: 8, border: "1px dashed var(--g-500)", background: "var(--paper)", color: "var(--g-700)",
+                        borderRadius: 8, padding: "8px 12px", fontSize: 13, fontWeight: 700, cursor: editingId ? "default" : "pointer",
+                      }}>{editingId === (q.id || q.number) ? "…" : "📋 ทำใบใหม่จากใบนี้"}</button>
+                      {FollowupLine(q)}
                     </div>
                   ))}
                 </div>

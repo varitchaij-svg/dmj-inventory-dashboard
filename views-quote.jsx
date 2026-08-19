@@ -387,28 +387,42 @@ function mtoGroupLabel_(g) {
 // เข้าไป ไม่ใช่ราคาตั้ง) ถ้าโหลดกลับมาตรงๆ แล้วให้ฟอร์มคิดส่วนลดซ้ำ = โดนหักสองเด้ง
 // → คืนราคาตั้งจาก catalog (products) ตาม SKU ก่อนเสมอ ถ้าไม่เจอ SKU ค่อย fallback ใช้ราคาจาก ZORT
 // (ผู้ใช้แก้ราคาต่อบรรทัดได้อยู่แล้ว + มีแบนเนอร์เตือนให้ตรวจราคาก่อนบันทึก)
-function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
+// dupSeed (ไม่บังคับ) = "ทำใบใหม่จากใบเดิม" → สร้างใบใหม่พร้อมสินค้าเดิม { fromNumber, customer, items:[{sku,qty}] }
+//   ต่างจาก editQuote: ได้ใบใหม่ (ไม่แตะใบเดิม) + ใช้ราคาปัจจุบันจาก catalog แล้วหักส่วนลดจริง (fresh quote)
+function QuotationFormView({ data, role, onBack, onSubmitted, editQuote, dupSeed }) {
   const products = (data && data.products) || [];
   const [toast, showToast, hideToast] = useToast();
 
   const [cart, setCart] = uS(() => {
-    if (!editQuote) return [];
+    if (!editQuote && !dupSeed) return [];
     const bySku = {};
     products.forEach(p => { bySku[String(p.sku || "").trim().toUpperCase()] = p; });
-    return (editQuote.items || []).map(it => {
+    if (editQuote) {
+      return (editQuote.items || []).map(it => {
+        const p = bySku[String(it.sku || "").trim().toUpperCase()];
+        return {
+          sku: it.sku, name: it.name,
+          qty: Number(it.qty) || 0,
+          // ⚠️ ใช้ "ราคาสุทธิ" ที่ ZORT เก็บไว้ (it.price) — ไม่ใช่ราคาปัจจุบันจาก catalog
+          // เพราะราคานี้คือราคาหลังหักส่วนลดในใบเดิม ถ้าเอาราคา catalog มาแล้วหักส่วนลดใหม่
+          // ยอดจะไม่เท่าใบเดิม (เจ้าของแจ้ง ส.ค. 2026) · โหมดแก้ไขจึง "ไม่หักส่วนลดซ้ำ"
+          // (computeBillTotals pricesFinal) → ยอดรวมเท่าใบเดิมเป๊ะ · หารูป/หมวดจาก catalog เท่านั้น
+          price: Number(it.price) || 0,
+          category: (p && p.category) || it.category || "",
+          imageUrl: (p && p.imageUrl) || "",
+        };
+      });
+    }
+    // dupSeed: ใบใหม่ → ใช้ "ราคาตั้งปัจจุบัน" จาก catalog ตาม SKU (ไม่ใช่ราคาสุทธิของใบเก่า)
+    // เพราะเป็น fresh quote ต้องหักส่วนลดจริง (pricesFinal=false) · SKU ที่ไม่มีใน catalog แล้ว = ข้าม
+    return (dupSeed.items || []).map(it => {
       const p = bySku[String(it.sku || "").trim().toUpperCase()];
+      if (!p) return null;
       return {
-        sku: it.sku, name: it.name,
-        qty: Number(it.qty) || 0,
-        // ⚠️ ใช้ "ราคาสุทธิ" ที่ ZORT เก็บไว้ (it.price) — ไม่ใช่ราคาปัจจุบันจาก catalog
-        // เพราะราคานี้คือราคาหลังหักส่วนลดในใบเดิม ถ้าเอาราคา catalog มาแล้วหักส่วนลดใหม่
-        // ยอดจะไม่เท่าใบเดิม (เจ้าของแจ้ง ส.ค. 2026) · โหมดแก้ไขจึง "ไม่หักส่วนลดซ้ำ"
-        // (computeBillTotals pricesFinal) → ยอดรวมเท่าใบเดิมเป๊ะ · หารูป/หมวดจาก catalog เท่านั้น
-        price: Number(it.price) || 0,
-        category: (p && p.category) || it.category || "",
-        imageUrl: (p && p.imageUrl) || "",
+        sku: p.sku, name: p.name, qty: Number(it.qty) || 0,
+        price: Number(p.price) || 0, category: p.category || "", imageUrl: p.imageUrl || "",
       };
-    });
+    }).filter(Boolean);
   });
   const [search, setSearch] = uS("");
   const [catFilter, setCatFilter] = uS("ทั้งหมด");
@@ -417,7 +431,7 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
 
   const [cust, setCust] = uS(() => Object.assign(
     { name: "", taxId: "", branch: "", branchNo: "", address: "", phone: "", email: "" },
-    (editQuote && editQuote.customer) || {}
+    (editQuote && editQuote.customer) || (dupSeed && dupSeed.customer) || {}
   ));
   const [custQuery, setCustQuery] = uS("");
   const [custResults, setCustResults] = uS(null);
@@ -758,7 +772,8 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
     <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12, maxWidth: 640, margin: "0 auto" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ fontSize: 18, fontWeight: 800 }}>
-          {editQuote ? `✏️ แก้ไขใบเสนอราคา ${editQuote.quotationNumber || ""}` : "📝 สร้างใบเสนอราคาใหม่"}
+          {editQuote ? `✏️ แก้ไขใบเสนอราคา ${editQuote.quotationNumber || ""}`
+            : (dupSeed ? `📝 สร้างใบเสนอราคาใหม่ (จาก ${dupSeed.fromNumber || "ใบเดิม"})` : "📝 สร้างใบเสนอราคาใหม่")}
         </div>
         {onBack && <button onClick={onBack} style={{ border: "none", background: "none", color: "var(--muted)", fontWeight: 600, cursor: "pointer" }}>✕ ปิด</button>}
       </div>
@@ -771,6 +786,14 @@ function QuotationFormView({ data, role, onBack, onSubmitted, editQuote }) {
           ⚠️ <b>ราคาต่อชิ้นคือราคาสุทธิจากใบเดิม</b> (หักส่วนลดแล้ว) — ยอดรวมจึงเท่ากับใบเดิม
           ระบบจะไม่หักส่วนลดขายส่งซ้ำในโหมดแก้ไข ถ้าจะปรับราคา ให้พิมพ์แก้เป็น<b>ราคาสุทธิ</b>ที่ต้องการ
           <div style={{ marginTop: 4 }}>บันทึกแล้วจะ<b>อัปเดตใบเดิม</b>ใน ZORT (เลขที่เอกสารเท่าเดิม ไม่ได้สร้างใบใหม่)</div>
+        </div>
+      )}
+
+      {/* ทำใบใหม่จากใบเดิม: เป็น "ใบใหม่" (ไม่แตะใบเก่า) ราคาเป็นราคาปัจจุบันจาก catalog — ตรวจก่อนส่ง */}
+      {!editQuote && dupSeed && (
+        <div style={{ background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 10, padding: "10px 14px", fontSize: 12.5, color: "#075985", lineHeight: 1.7 }}>
+          📋 <b>ทำใบใหม่จาก {dupSeed.fromNumber || "ใบเดิม"}</b> — คัดลอกสินค้า/ลูกค้ามาให้แล้ว เป็น<b>ใบใหม่</b> (ไม่กระทบใบเดิม)
+          <div style={{ marginTop: 4 }}>ราคาเป็น<b>ราคาปัจจุบัน</b>จากระบบ (ไม่ใช่ราคาในใบเก่า) — ตรวจจำนวน/ราคาก่อนกดส่ง · SKU ที่ถูกลบไปแล้วจะไม่ถูกคัดลอกมา</div>
         </div>
       )}
 

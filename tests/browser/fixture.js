@@ -347,13 +347,18 @@
   // แยกหน้าเจ้าของ (แดชบอร์ด/เทียบเซล) กับพนักงานขาย (หน้าทำงาน "ของฉัน")
   // sale ของ "ของฉัน" ต้องตรงกับชื่อที่ me คืน (harness: name='ทดสอบ ระบบ' → window._currentUserName)
   // ไม่งั้นตัวกรอง "⭐ ของฉัน" จะว่าง แล้วเทสต์เขียวโดยไม่ได้ทดสอบการกรองเลย
+  // ⚠️ วันที่ผูกกับ "เดือนปัจจุบัน" แบบไดนามิก — เพราะฝั่ง saler ตัวกรองช่วงเวลา default = เดือนนี้
+  //    (เจ้าของสั่ง ส.ค. 2026) · ถ้า hard-code เดือนไว้ พอข้ามเดือนจริง ใบจะถูกกรองหาย เทสต์แดงเอง
+  const _qNow = new Date();
+  const _qYM = (mb) => { const d = new Date(_qNow.getFullYear(), _qNow.getMonth() - mb, 1); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); };
+  const _cur = _qYM(0), _prev = _qYM(1);
   window.__DMJ_QUOTE_FIXTURE = {
     items: [
-      { id: 'Q1', number: 'QT-202608001', status: 'Pending', customer: 'ร้านดอกไม้สวย ๆ',       phone: '081-234-5678', amount: 12450, quotationDate: '2026-08-01', ageDays: 3,  expireInDays: 12, sale: 'ทดสอบ ระบบ' },
-      { id: 'Q2', number: 'QT-202607002', status: 'Pending', customer: 'บริษัท กรีนการ์เด้น จำกัด', phone: '092-345-6789', amount: 28900, quotationDate: '2026-07-20', ageDays: 20, expireInDays: 5,  sale: 'ทดสอบ ระบบ' },
-      { id: 'Q3', number: 'QT-202608003', status: 'Success', customer: 'ร้านใบไม้ใบหญ้า',        phone: '093-456-7890', amount: 7850,  quotationDate: '2026-08-02', ageDays: 2,  expireInDays: 20, sale: 'ทดสอบ ระบบ' },
-      { id: 'Q4', number: 'QT-202608004', status: 'Pending', customer: 'บริษัท ของเซลอื่น จำกัด',  phone: '084-567-8901', amount: 15600, quotationDate: '2026-08-03', ageDays: 1,  expireInDays: 14, sale: 'เซลคนอื่น' },
-      { id: 'Q5', number: 'QT-202607005', status: 'Success', customer: 'ลูกค้าของเซลอื่น',        phone: '085-678-9012', amount: 5000,  quotationDate: '2026-07-15', ageDays: 25, expireInDays: 0,  sale: 'เซลคนอื่น' },
+      { id: 'Q1', number: 'QT-' + _cur.replace('-', '') + '001',  status: 'Pending', customer: 'ร้านดอกไม้สวย ๆ',       phone: '081-234-5678', amount: 12450, quotationDate: _cur + '-01',  ageDays: 3,  expireInDays: 12, sale: 'ทดสอบ ระบบ' },
+      { id: 'Q2', number: 'QT-' + _prev.replace('-', '') + '002', status: 'Pending', customer: 'บริษัท กรีนการ์เด้น จำกัด', phone: '092-345-6789', amount: 28900, quotationDate: _prev + '-20', ageDays: 20, expireInDays: 5,  sale: 'ทดสอบ ระบบ' },
+      { id: 'Q3', number: 'QT-' + _cur.replace('-', '') + '003',  status: 'Success', customer: 'ร้านใบไม้ใบหญ้า',        phone: '093-456-7890', amount: 7850,  quotationDate: _cur + '-02',  ageDays: 2,  expireInDays: 20, sale: 'ทดสอบ ระบบ' },
+      { id: 'Q4', number: 'QT-' + _cur.replace('-', '') + '004',  status: 'Pending', customer: 'บริษัท ของเซลอื่น จำกัด',  phone: '084-567-8901', amount: 15600, quotationDate: _cur + '-03',  ageDays: 1,  expireInDays: 14, sale: 'เซลคนอื่น' },
+      { id: 'Q5', number: 'QT-' + _prev.replace('-', '') + '005', status: 'Success', customer: 'ลูกค้าของเซลอื่น',        phone: '085-678-9012', amount: 5000,  quotationDate: _prev + '-15', ageDays: 25, expireInDays: 0,  sale: 'เซลคนอื่น' },
     ],
     salesList: ['ทดสอบ ระบบ', 'เซลคนอื่น'],
     statusBreakdown: { Pending: 3, Success: 2 },
