@@ -70,6 +70,25 @@
     Object.keys(payload).forEach(function (k) { if (drops.indexOf(k) < 0) out[k] = payload[k]; });
     return out;
   }
+
+  // ── Phase A1: จำลอง pv=3 (products แบบคอลัมน์) แบบเดียวกับ GAS packProductsColumnar_ ──
+  // app.jsx ส่ง pv=3 เสมอ → เทสต์ browser ทุกเคสจึงเดินผ่าน expandProductsColumnar (ของจริง)
+  // ⚠️ mirror ตรรกะ .gs — drift เมื่อไหร่ = เทสต์รันด้วยรูปแบบผิดแล้วเคลมว่าผ่าน (เหมือน VARIANT_DROPS)
+  function packColumnar(products) {
+    products = products || [];
+    var cols = [], seen = Object.create(null);
+    for (var i = 0; i < products.length; i++) {
+      var p = products[i]; if (!p) continue;
+      for (var k in p) if (Object.prototype.hasOwnProperty.call(p, k) && !seen[k]) { seen[k] = true; cols.push(k); }
+    }
+    var rows = new Array(products.length);
+    for (var j = 0; j < products.length; j++) {
+      var q = products[j] || {}, row = new Array(cols.length);
+      for (var c = 0; c < cols.length; c++) { var v = q[cols[c]]; row[c] = (v === undefined) ? null : v; }
+      rows[j] = row;
+    }
+    return { cols: cols, rows: rows };
+  }
   // ── ?checkreq=1 : จำลอง "เจ้าของส่งคำขอเช็คสต็อก" (ทดสอบแยกเคส ไม่รบกวนเทสต์อื่น) ──
   // ใส่คำขอที่มี SKU เดียว (VAS001) จากทั้งหมดหลายตัว → กด "ดูรายการ" แล้วต้องเหลือแค่ VAS001
   if (q.get('checkreq') === '1') {
@@ -207,6 +226,10 @@
       // ซึ่งเป็นช่วงที่พนักงานต้องลงเวลาได้ ไม่ใช่ช่วงหลังจากมันล้มเหลวไปแล้ว
       if (NO_DATA) return new Promise(function () {});
       const payload = Object.assign({}, window.__DMJ_PAYLOAD, { lastModified: Date.now() });
+      // Phase A1: app.jsx ส่ง pv=3 เสมอ → ส่ง products แบบคอลัมน์ให้ expandProductsColumnar กางจริง
+      if (/[?&]pv=3(?:&|$)/.test(url) && Array.isArray(payload.products)) {
+        payload.products = packColumnar(payload.products);
+      }
       return Promise.resolve(new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } }));
     }
     return realFetch ? realFetch(input, init) : Promise.reject(new Error('fetch blocked in harness: ' + url));

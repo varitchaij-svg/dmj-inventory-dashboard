@@ -732,7 +732,46 @@ function expandMonthlyCompact(d) {
   return d;
 }
 
+// ── Phase A1: กาง products แบบคอลัมน์ (pv=3) กลับเป็น array-of-objects เดิม ──
+// GAS (pv=3) ส่ง d.products = { cols:[...], rows:[[...],...] } แทน [{...},...] เพื่อตัดชื่อคีย์
+// ที่ซ้ำทุกแถวออก · กางกลับที่นี่จุดเดียว (ก่อน enrichData ทำอย่างอื่น) → view/enrich ทั้งหมด
+// ได้ข้อมูลรูปแบบเดิมทุกประการ ไม่ต้องแก้ view สักจุด
+// ⚠️ เซลล์ null = คีย์นั้นไม่มีในสินค้าตัวนี้ → **ไม่ใส่คีย์** ให้เท่าของเดิม (pv=2 ก็ไม่มีคีย์นั้น)
+//    (frontStoreCheckedQty/At/color ที่ pv=2 ส่งเป็น null จริง ถูกอ่านด้วย ==null/!x ทุกจุด →
+//     "ไม่มีคีย์" กับ "คีย์=null" ให้ผลเท่ากัน · mo ที่เป็น [] ≠ null → คีย์คงอยู่ → monthly ครบ)
+// no-op ถ้า products เป็น array อยู่แล้ว (pv=2/pv=1 หรือข้อมูลจาก localStorage/ไฟล์อัปโหลด)
+function expandProductsColumnar(d) {
+  if (!d || !d.products || Array.isArray(d.products)) return d;
+  const packed = d.products;
+  if (!Array.isArray(packed.cols) || !Array.isArray(packed.rows)) return d;
+  const cols = packed.cols;
+  const out = new Array(packed.rows.length);
+  for (let i = 0; i < packed.rows.length; i++) {
+    const row = packed.rows[i] || [];
+    const obj = {};
+    for (let c = 0; c < cols.length; c++) {
+      const v = row[c];
+      if (v !== null && v !== undefined) obj[cols[c]] = v;  // null/undefined = คีย์ไม่มี (เท่าของเดิม)
+    }
+    out[i] = obj;
+  }
+  d.products = out;
+  return d;
+}
+
+// ── Phase A1: ประกาศ "capability" ให้ prefetch ใน <head> รู้ว่า app.jsx เวอร์ชันนี้อ่าน pv=3 ได้ ──
+// prefetch อยู่ใน HTML (network-first) แต่ app.jsx เป็น stale-while-revalidate → หลัง deploy
+// "โหลดแรก" อาจได้ HTML ใหม่ + app.jsx **เก่า** (จาก SW cache) พร้อมกัน · ถ้า prefetch ส่ง pv=3
+// ตรงนั้นเลย app.jsx เก่า (ไม่มี expandProductsColumnar) จะได้ products แบบคอลัมน์แล้วเรนเดอร์พัง
+// → ทางแก้: prefetch ส่ง pv=3 **เฉพาะเมื่อ** ธงนี้ถูกตั้งแล้ว (= เคยมี app.jsx ที่อ่าน pv=3 ได้
+//   รันสำเร็จมาก่อน) · โหลดแรกสุดหลัง deploy ยังไม่มีธง → prefetch ส่ง pv=2 (ปลอดภัยกับโค้ดเก่า)
+//   → พอ SW อัปเดต app.jsx เป็นตัวใหม่ (โหลดถัดไป) ตัวนี้รัน→ตั้งธง → prefetch เลื่อนเป็น pv=3 เอง
+// รันที่ module scope = ทันทีที่ไฟล์นี้ถูกโหลด (ก่อน React mount ด้วยซ้ำ) · rollback ปลอดภัย
+// เพราะ commit เดียวกันคืน HTML ที่ไม่อ่านธงนี้กลับไปด้วย
+try { localStorage.setItem('dmj_pv3ok', '1'); } catch (e) {}
+
 function enrichData(d) {
+  expandProductsColumnar(d);        // pv=3 → array-of-objects (no-op ถ้าเป็น array อยู่แล้ว)
   if (!d || !Array.isArray(d.products)) return d;
   expandMonthlyCompact(d);
   // Normalize field names from Google Sheets (category → cat, etc.)
@@ -805,8 +844,8 @@ function loadFromStorage() {
     if (!raw) return null;
     // ปกติของที่เซฟไว้ถูกกางแล้ว (saveToStorage เรียกหลัง enrichData) — กางซ้ำที่นี่เป็นตาข่ายกันพลาด
     // เผื่อมีเส้นทางไหนเซฟข้อมูลดิบลงไป จะได้ไม่กลายเป็น "กราฟว่างเงียบ ๆ" ที่ไล่หาสาเหตุยาก
-    // (ไม่มีคีย์ `mo` = ไม่ทำอะไรเลย จึงไม่มีต้นทุนกับข้อมูลที่กางแล้ว)
-    return expandMonthlyCompact(JSON.parse(raw));
+    // (products เป็น array/ไม่มีคีย์ `mo` = ไม่ทำอะไรเลย จึงไม่มีต้นทุนกับข้อมูลที่กางแล้ว)
+    return expandMonthlyCompact(expandProductsColumnar(JSON.parse(raw)));
   } catch (e) { return null; }
 }
 
@@ -1166,10 +1205,12 @@ function App() {
     const timeoutMs = retryLeft === 3 ? 35000 : 20000;
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     // role → GAS ตัดก้อนข้อมูลที่ role นี้ไม่มีแท็บให้เปิดดูออก (ประวัติซื้อ/โอน/กราฟยอดขาย)
-    // pv=2 → บอกว่าเว็บเวอร์ชันนี้อ่านยอดรายเดือนแบบย่อ (`mo`) เป็น · ไม่ส่ง = ได้รูปแบบเดิม
+    // pv=3 → products แบบคอลัมน์ (Phase A1) + ยอดรายเดือนย่อ (`mo`) · enrichData กางกลับให้ครบ
+    // ปลอดภัยเสมอที่นี่ เพราะ fetch นี้ถูก "อ่าน" โดย app.jsx เวอร์ชันเดียวกันนี้ (ที่มี
+    // expandProductsColumnar แล้ว) — ต่างจาก prefetch ใน HTML ที่ต้อง gate ด้วย dmj_pv3ok
     const bustUrl = sheetUrl + (sheetUrl.includes('?') ? '&' : '?') + '_t=' + Date.now()
                   + (force ? '&fresh=1' : '')
-                  + '&pv=2&role=' + encodeURIComponent(role || '');
+                  + '&pv=3&role=' + encodeURIComponent(role || '');
     // ใช้ผลที่เริ่มโหลดไว้ตั้งแต่ต้นหน้า (script ใน <head> ของ HTML) — ตัดเวลา GAS
     // ออกจากคิว เพราะมันเดินขนานไปกับการ compile JSX แล้ว · ใช้ได้ครั้งเดียว
     // (เฉพาะ attempt แรก) การ refetch/retry ทุกครั้งหลังจากนี้ยิงใหม่เสมอ = ได้ข้อมูลสด
