@@ -283,4 +283,119 @@ describe('Phase A1 — จุดเชื่อมต่อ (meta: สแกน�
     expect(m).toBeTruthy();
     expect(Number(m[1])).toBeGreaterThanOrEqual(46);
   });
+
+  it('loadtest.html default ยิง pv=3 (ไม่งั้น 15-concurrent วัดก้อนเก่า แล้วสรุปผิดทั้งรอบ)', () => {
+    const lt = readFileSync(join(ROOT, 'tests/loadtest.html'), 'utf8');
+    expect(lt).not.toMatch(/&pv=2'/);                       // ไม่เหลือ pv=2 hard-code
+    expect(lt).toMatch(/pv === '2' \? '2' : '3'/);          // default = 3 (เลือก 2 ได้เพื่อยิงเทียบ)
+    expect(lt).toMatch(/<option value="3" selected>/);      // dropdown ตั้งต้นที่ pv=3
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// invalidateCache_ ต้องล้าง fresh cache ของ "ทุก enc ที่ build เขียน" — รวม enc=3
+// ที่มา: A1 รอบแรกเพิ่ม enc=3 ในลูป build แต่ลืมเติมใน invalidateCache_ → เครื่อง pv=3
+// เห็นข้อมูลก่อนบันทึกค้างได้ 180 วิ + เส้น HIT ปั๊ม lastModified สด → ถือของเก่า+ts ใหม่
+// → conflict detection ปล่อยผ่าน → เขียนทับงานคนอื่นเงียบ ๆ (พังโดยไม่มี error ให้เห็น
+// และ "เทสต์ทั้ง suite เขียว" — เพราะไม่มีตัวไหนคุมจุดนี้เลย) · ชุดนี้อุดทั้งพฤติกรรมจริง
+// และกันเคสอนาคต (เพิ่ม enc=4 ในลูป build แล้วลืม invalidate = แดงทันที)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('Phase A1 — invalidateCache_ ครอบ enc=3 (behavioral: รันของจริงกับ cache ปลอม)', () => {
+  const INV_SRC = grab(GS, /function invalidateCache_\(skipTsUpdate\) \{[\s\S]*?\n\}/);
+
+  // ประกอบ context จริงจาก .gs (ค่าคงที่ + helper คีย์) แล้วรัน invalidateCache_ กับ store ปลอม
+  function runInvalidate(seedFn) {
+    const code = [
+      grab(GS, /const PAYLOAD_VARIANTS_ = \[[\s\S]*?\];/),
+      grab(GS, /const _CACHE_KEY_COUNT = '[^']*';/),
+      grab(GS, /const _CACHE_KEY_PART {2}= '[^']*';/),
+      grab(GS, /const _CACHE_TS_SUFFIX = '[^']*';[^\n]*/),
+      grab(GS, /const _STOCKLITE_KEY_COUNT = '[^']*';/),
+      grab(GS, /const _STOCKLITE_KEY_PART\s+= '[^']*';/),
+      grab(GS, /function _cacheKeyCount_\(variant\) \{[\s\S]*?\n\}/),
+      grab(GS, /function _cacheKeyPart_\(variant\) \{[\s\S]*?\n\}/),
+      grab(GS, /function payloadCacheVariant_\(variant, enc\) \{[\s\S]*?\n\}/),
+      INV_SRC,
+      'return { invalidateCache_, payloadCacheVariant_, _cacheKeyCount_, _cacheKeyPart_ };',
+    ].join('\n');
+    const store = {};       // คีย์ → ค่า (จำลอง CacheService)
+    const removed = [];     // คีย์ที่ถูก removeAll
+    const CacheService = {
+      getScriptCache: () => ({
+        get: (k) => (k in store ? store[k] : null),
+        removeAll: (keys) => { keys.forEach((k) => { removed.push(k); delete store[k]; }); },
+      }),
+    };
+    const PropertiesService = { getScriptProperties: () => ({ setProperty: () => {} }) };
+    const api = new Function('CacheService', 'PropertiesService', code)(CacheService, PropertiesService);
+    seedFn(store, api);
+    api.invalidateCache_(true);   // skipTsUpdate — โฟกัสเฉพาะการล้าง cache
+    return { store, removed, api };
+  }
+
+  // seed fresh (enc 1/2/3) + stale + stocklite ครบทุก variant เหมือนสภาพจริงหลัง build
+  function seedAll(store, api) {
+    ['full', 'ops', 'lite'].forEach((v) => {
+      [1, 2, 3].forEach((enc) => {
+        const cv = api.payloadCacheVariant_(v, enc);
+        const kCount = api._cacheKeyCount_(cv);
+        const kPart = api._cacheKeyPart_(cv);
+        store[kCount] = '2';
+        store[kCount + '_ts'] = '123';
+        store[kPart + '0'] = 'x';
+        store[kPart + '1'] = 'y';
+        // ชั้นสำรอง (ห้ามถูกล้าง — คีย์ตรงกับ _staleKeyCount_/_staleKeyPart_ ใน .gs)
+        store['dmj_stale_n_' + cv] = '1';
+        store['dmj_stale_' + cv + '_0'] = 'stale';
+      });
+    });
+    store['dmj_stocklite_n'] = '1';
+    store['dmj_stocklite_0'] = 'z';
+  }
+
+  it('ล้าง fresh cache ครบทุก variant × ทุก enc รวม enc=3 (`*_v3`)', () => {
+    const { removed, api } = runInvalidate(seedAll);
+    ['full', 'ops', 'lite'].forEach((v) => {
+      [1, 2, 3].forEach((enc) => {
+        const cv = api.payloadCacheVariant_(v, enc);
+        const kCount = api._cacheKeyCount_(cv);
+        const kPart = api._cacheKeyPart_(cv);
+        expect(removed, `ต้องล้างคีย์นับ chunk ของ ${cv}`).toContain(kCount);
+        expect(removed).toContain(kCount + '_ts');
+        expect(removed).toContain(kPart + '0');
+        expect(removed).toContain(kPart + '1');
+      });
+    });
+    // stocklite ล้างด้วย (พฤติกรรมเดิม Phase 7.4 — ต้องไม่หลุดไประหว่างแก้)
+    expect(removed).toContain('dmj_stocklite_n');
+    expect(removed).toContain('dmj_stocklite_0');
+  });
+
+  it('ชั้นสำรอง `dmj_stale_*` (รวม *_v3) ต้องไม่ถูกแตะเลย — ล้างเมื่อไหร่ = stampede กลับมา', () => {
+    const { store, removed } = runInvalidate(seedAll);
+    expect(removed.filter((k) => k.startsWith('dmj_stale_'))).toEqual([]);
+    // และยังอยู่ครบใน store ทั้ง 9 ชุด (3 variant × 3 enc)
+    const staleLeft = Object.keys(store).filter((k) => k.startsWith('dmj_stale_'));
+    expect(staleLeft.length).toBe(18);   // count + part ต่อชุด × 9
+  });
+
+  it('meta: ทุก enc ที่ถูกใช้เป็น literal นอก invalidateCache_ (ลูป build/keepWarm) ต้องอยู่ในรายการล้าง — กัน enc=4 หลุดซ้ำ', () => {
+    // enc ที่ "เขียน cache" = literal ตัวเลขใน payloadCacheVariant_(v, N) นอกตัว invalidateCache_
+    // (เส้นอ่านใช้ตัวแปร enc ไม่ใช่ literal จึงไม่ติดมา) · ต้องเป็น subset ของ enc ที่ invalidate ล้าง
+    const litRe = /payloadCacheVariant_\([^,()]+,\s*(\d+)\)/g;
+    const encsInInvalidate = new Set();
+    let m;
+    while ((m = litRe.exec(INV_SRC))) encsInInvalidate.add(m[1]);
+    const outside = GS.replace(INV_SRC, '');
+    litRe.lastIndex = 0;
+    const encsBuilt = new Set();
+    while ((m = litRe.exec(outside))) encsBuilt.add(m[1]);
+    expect(encsBuilt.size).toBeGreaterThan(0);   // กัน regex เสื่อมแล้วเทสต์เขียวลวง
+    encsBuilt.forEach((enc) => {
+      expect(encsInInvalidate.has(enc),
+        `enc=${enc} ถูกเขียนเข้า cache (build/keepWarm) แต่ invalidateCache_ ไม่ได้ล้าง — ` +
+        `role ที่ใช้ pv=${enc} จะเห็นข้อมูลเก่าค้างหลังมีคนบันทึก`).toBe(true);
+    });
+    expect(encsInInvalidate.has('3')).toBe(true);   // ยึดเคสที่เพิ่งพลาดไว้ตรง ๆ
+  });
 });

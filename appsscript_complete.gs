@@ -13219,8 +13219,13 @@ function invalidateCache_(skipTsUpdate) {
     // หลังมีคนแก้ข้อมูล (บั๊กแบบที่หาสาเหตุยากที่สุด เพราะเห็นไม่ตรงกันเฉพาะบางเครื่อง)
     const keys = [];
     const allCacheVariants = [];
+    // Phase A1: ครอบ enc=3 (pv=3, `*_v3`) ด้วย — ตอนเพิ่ม pv=3 รอบแรกเคยหลุดข้อนี้ไป
+    // = เครื่องที่ใช้ pv=3 (ทุกเครื่องบนเส้นทางหลัก) เห็นข้อมูลก่อนบันทึกค้างได้ถึง 180 วิ
+    // และเส้น HIT ปั๊ม lastModified สด → ถือของเก่า+ts ใหม่ → conflict detection ปล่อยผ่าน
+    // → เขียนทับงานคนอื่นเงียบ ๆ (timestamp poisoning) · เพิ่ม enc ใหม่เมื่อไหร่ต้องเติมที่นี่เสมอ
+    // (มี meta-test ใน tests/columnar-payload.test.js เทียบ enc ที่ build ใช้ กับ enc ที่ล้างที่นี่)
     PAYLOAD_VARIANTS_.forEach(function (v) {
-      allCacheVariants.push(payloadCacheVariant_(v, 2), payloadCacheVariant_(v, 1));
+      allCacheVariants.push(payloadCacheVariant_(v, 2), payloadCacheVariant_(v, 1), payloadCacheVariant_(v, 3));
     });
     allCacheVariants.forEach(function (v) {
       const kCount = _cacheKeyCount_(v), kPart = _cacheKeyPart_(v);
