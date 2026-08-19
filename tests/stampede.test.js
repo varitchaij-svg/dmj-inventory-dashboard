@@ -301,7 +301,8 @@ describe('เส้นทาง build ต้องเติมชั้นสำ
   it('เขียนชั้นสำรองคู่กับชั้นสดครบทุก variant', () => {
     // ลืมข้อนี้ = ชั้นสำรองว่างตลอดกาล → ทุกคนไปกองรอคิว build = แก้แล้วเหมือนไม่ได้แก้
     const buildBlock = DOGET.slice(DOGET.indexOf('const data = buildFullData_()'));
-    expect(buildBlock).toMatch(/PAYLOAD_VARIANTS_\.forEach[\s\S]*?putStalePayload_\(s, cv\)/);
+    // enc=2 (ชั้นสด+สำรองต่อ variant) — Phase A1 เปลี่ยนชื่อตัวแปรเป็น s2/cv2 (เพิ่ม s3/cv3 สำหรับ pv=3)
+    expect(buildBlock).toMatch(/PAYLOAD_VARIANTS_\.forEach[\s\S]*?putStalePayload_\(s2, cv2\)/);
   });
 
   it('เส้นทาง client เก่า (ไม่ส่ง pv) ก็เติมชั้นสำรองด้วย', () => {

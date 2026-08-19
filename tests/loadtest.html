@@ -69,6 +69,14 @@
       <option value="ping">action=ping (มีหลัง Phase 2.1 เท่านั้น)</option>
     </select>
   </label>
+  <label>รูปแบบ payload (pv)
+    <!-- Phase A1: default = pv=3 (columnar — เส้นทางที่แอปจริงใช้ตอนนี้) · เลือก pv=2 ได้
+         เพื่อยิงเทียบ ก่อน/หลัง บนเครื่อง+เน็ตเดียวกันในวันเดียวกัน (ตัดตัวแปรเน็ตออก) -->
+    <select id="pv">
+      <option value="3" selected>pv=3 columnar (ที่แอปใช้จริง — Phase A1)</option>
+      <option value="2">pv=2 แบบเดิม (ไว้ยิงเทียบ)</option>
+    </select>
+  </label>
 </fieldset>
 
 <div class="row">
@@ -125,11 +133,12 @@ function rolesFor(n, mode) {
   return out;
 }
 
-function buildUrl(base, token, target, role) {
+function buildUrl(base, token, target, role, pv) {
   var u = base + '?token=' + encodeURIComponent(token);
   if (target === 'orders') u += '&action=orders';
   else if (target === 'ping') u += '&action=ping';
-  else u += '&role=' + encodeURIComponent(role) + '&pv=2';
+  // Phase A1: default pv=3 (columnar — เส้นทางที่แอปจริงใช้) · ยิงเทียบ pv=2 ได้จาก dropdown
+  else u += '&role=' + encodeURIComponent(role) + '&pv=' + (pv === '2' ? '2' : '3');
   // กัน browser cache ตอบแทน — ไม่กระทบ cache ฝั่ง GAS (แยกตาม variant เท่านั้น)
   return u + '&_t=' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
 }
@@ -173,7 +182,7 @@ async function fireOne(url) {
 
 async function runRound(cfg, roundNo) {
   var roles = rolesFor(cfg.n, cfg.role);
-  var urls = roles.map(function (r) { return buildUrl(cfg.url, cfg.token, cfg.target, r); });
+  var urls = roles.map(function (r) { return buildUrl(cfg.url, cfg.token, cfg.target, r, cfg.pv); });
   var wall0 = performance.now();
   var results = await Promise.all(urls.map(fireOne));
   var wall = Math.round(performance.now() - wall0);
@@ -234,7 +243,8 @@ $('go').onclick = async function () {
     n: Math.max(1, Math.min(30, parseInt($('n').value, 10) || 1)),
     rounds: Math.max(1, Math.min(5, parseInt($('rounds').value, 10) || 1)),
     role: $('role').value,
-    target: $('target').value
+    target: $('target').value,
+    pv: ($('pv') && $('pv').value === '2') ? '2' : '3'
   };
   if (!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(cfg.url)) {
     alert('URL ต้องเป็นลิงก์ /exec ของ GAS web app'); return;

@@ -1461,9 +1461,15 @@
       /* ไม่ส่ง fresh=1 → ใช้ cache ฝั่ง GAS ได้ (เร็วกว่ามาก ไม่ต้อง build ใหม่ทั้ง 11 ชีต)
          ปลอดภัยเพราะ doPost เรียก invalidateCache_ ทุกครั้งที่มีการแก้ข้อมูล — เครื่องอื่น
          บันทึกอะไรไว้เราก็ยังเห็นทันที · ผู้ใช้กดปุ่ม Sync เองเมื่อไหร่ค่อยบังคับ fresh=1 */
+      /* Phase A1: prefetch ส่ง pv=3 (products แบบคอลัมน์ — เล็กกว่ามาก) **เฉพาะเมื่อ** เคยมี
+         app.jsx ที่อ่าน pv=3 ได้รันมาก่อน (ตั้งธง dmj_pv3ok ไว้) · โหลดแรกสุดหลัง deploy ยัง
+         ไม่มีธง → ส่ง pv=2 ซึ่ง app.jsx เก่า (ที่ SW อาจยังเสิร์ฟอยู่) อ่านได้ → กันจอพังช่วง
+         เปลี่ยนผ่าน · โหลดถัดไป (SW อัปเดต app.jsx เป็นตัวใหม่แล้ว) จะได้ pv=3 อัตโนมัติ */
+      var pv = '2';
+      try { if (localStorage.getItem('dmj_pv3ok') === '1') pv = '3'; } catch (_) {}
       var u = _SHEET_URL + (_SHEET_URL.indexOf('?') >= 0 ? '&' : '?')
             + '_t=' + Date.now()
-            + '&pv=2&role=' + encodeURIComponent(role);
+            + '&pv=' + pv + '&role=' + encodeURIComponent(role);
       var ctl = ('AbortController' in window) ? new AbortController() : null;
       var to  = setTimeout(function () { try { ctl && ctl.abort(); } catch (_) {} }, 35000);
       /* จำ role ที่ใช้ยิงไว้ด้วย — payload ผูกกับ role แล้ว ถ้าสุดท้ายผู้ใช้ล็อกอินเป็น role อื่น

@@ -2834,11 +2834,19 @@ function doGet(e) {
       const _tBuilt = Date.now();
       let out = null;
       PAYLOAD_VARIANTS_.forEach(function (v) {
-        const s = JSON.stringify(shapePayloadForVariant_(data, v));
-        const cv = payloadCacheVariant_(v, 2);
-        putCachedPayload_(s, cv);
-        putStalePayload_(s, cv);   // Phase 7.3: เขียนชั้นสำรองคู่กันเสมอ
-        if (v === variant && enc === 2) out = s;
+        const shaped = shapePayloadForVariant_(data, v);
+        const s2 = JSON.stringify(shaped);
+        const cv2 = payloadCacheVariant_(v, 2);
+        putCachedPayload_(s2, cv2);
+        putStalePayload_(s2, cv2);   // Phase 7.3: เขียนชั้นสำรองคู่กันเสมอ
+        if (v === variant && enc === 2) out = s2;
+        // Phase A1: pv=3 (products แบบคอลัมน์) — cache คู่กัน (fresh+stale) ให้ได้ single-flight
+        // + stale-while-rebuild เท่า pv=2 · แพงเพิ่มแค่ pack+stringify (build ก้อนใหญ่ทำครั้งเดียว)
+        const s3 = JSON.stringify(shapeColumnarPayload_(shaped));
+        const cv3 = payloadCacheVariant_(v, 3);
+        putCachedPayload_(s3, cv3);
+        putStalePayload_(s3, cv3);
+        if (v === variant && enc === 3) out = s3;
       });
       // client เวอร์ชันเก่า (ไม่ส่ง pv) — กางกลับเป็นรูปแบบเดิมแล้ว cache แยกคีย์
       // ทำเฉพาะ variant ที่ถูกขอจริง ไม่ทำเผื่อทุกตัว เพราะเป็นทางผ่านชั่วคราวช่วง deploy เท่านั้น
@@ -12974,7 +12982,10 @@ function payloadVariantForRole_(role) {
 // จึงให้ client บอกเวอร์ชันที่ตัวเองอ่านได้มาเอง: ไม่ส่ง pv = ของเดิม (dense) เป๊ะทุกประการ
 // ลบทิ้งได้เมื่อมั่นใจว่าไม่มีเครื่องไหนค้างโค้ดเก่าแล้ว (ราว 1-2 สัปดาห์หลัง deploy)
 function payloadEncodingForRequest_(e) {
-  return (e && e.parameter && String(e.parameter.pv) === '2') ? 2 : 1;
+  const pv = (e && e.parameter) ? String(e.parameter.pv) : '';
+  if (pv === '3') return 3;   // Phase A1: products[] แบบคอลัมน์ (คง `mo` ย่อเหมือน pv=2 ทุกประการ)
+  if (pv === '2') return 2;   // ยอดรายเดือนแบบย่อ (`mo`) — products ยังเป็น array-of-objects
+  return 1;                    // ไม่ส่ง pv = client เก่า → รูปแบบเดิม (dense monthly)
 }
 // กาง `mo` (ย่อ) กลับเป็น `monthly` (เต็ม) ให้ client เวอร์ชันเก่า — ผลลัพธ์เท่าของเดิมเป๊ะ
 function expandMonthlyForLegacy_(data) {
@@ -12996,8 +13007,13 @@ function expandMonthlyForLegacy_(data) {
   return out;
 }
 // คีย์ cache ต้องแยกทั้งตาม role และตามเวอร์ชันการเข้ารหัส ไม่งั้นเสิร์ฟข้ามกันแล้วพัง
+// ⚠️ enc=3 ต้องมี suffix แยกจาก enc=1 (`_v1`) เด็ดขาด — ชนกันเมื่อไหร่ client pv=3 จะได้ก้อน
+//    dense ของ client เก่า (products เป็น array-of-objects) แล้ว expandProductsColumnar เจอ
+//    array → no-op → ข้อมูลถูกอยู่ แต่ไม่ได้ผลด้านขนาดเลย · หรือกลับกัน = จอพัง
 function payloadCacheVariant_(variant, enc) {
-  return enc === 2 ? variant : variant + '_v1';
+  if (enc === 2) return variant;
+  if (enc === 3) return variant + '_v3';
+  return variant + '_v1';
 }
 // คืน payload ที่ตัดคีย์ตาม variant แล้ว — ไม่แตะ object เดิม (ผู้เรียกยังเอา full ไปใช้ต่อได้)
 function shapePayloadForVariant_(data, variant) {
@@ -13005,6 +13021,52 @@ function shapePayloadForVariant_(data, variant) {
   if (!drops.length) return data;
   const out = {};
   Object.keys(data).forEach(function (k) { if (drops.indexOf(k) < 0) out[k] = data[k]; });
+  return out;
+}
+
+// ── Phase A1 (Phase 8): products[] แบบคอลัมน์ (pv=3) ───────────────────────────
+// ที่มา (docs/PLAN-PHASE8-PAYLOAD.md): ชื่อคีย์ ~39 ตัว/สินค้า ซ้ำ ~5,900 รอบ กินไบต์ราว 2 ใน 3
+// ของ payload · ส่ง `cols` (ชื่อคีย์) ครั้งเดียว แล้วแต่ละสินค้าเป็น "แถวค่า" เรียงตาม cols
+//   { cols:["sku","name",...], rows:[["OL00001","...",...], ...] }
+// ⚠️ ลำดับ cols มาจาก payload เท่านั้น (client อ่านจาก products.cols) — ห้าม hard-code ฝั่ง client
+// ⚠️ คีย์ที่สินค้าตัวนั้น "ไม่มี" → เก็บเป็น null ในเซลล์ · ฝั่ง client กางกลับ: null = ไม่ใส่คีย์นั้น
+//    = เท่าของเดิมเป๊ะ (pv=2 ก็ไม่มีคีย์นั้น) · ฟิลด์ที่ pv=2 ส่ง null จริง (frontStoreCheckedQty/
+//    At/color) ถูกอ่านด้วย ==null/!x ทุกจุด → "ไม่มีคีย์" กับ "คีย์=null" ให้ผลเท่ากัน
+// ⚠️ **ไม่แตะ `mo`** — คงรูปแบบย่อไว้เป็นค่าในเซลล์ · client กางต่อด้วย expandMonthlyCompact
+//    เหมือน pv=2 (สินค้าไม่มีแถวยอดขาย = ไม่มีคีย์ mo → เซลล์ null → กางแล้วคีย์หาย → ไม่สร้าง
+//    monthly · สินค้ามีแถวแต่ขาย 0 = mo:[] → เซลล์ [] ≠ null → คีย์คงอยู่ → สร้าง monthly ครบ)
+function packProductsColumnar_(products) {
+  products = products || [];
+  const cols = [];
+  const seen = Object.create(null);
+  for (let i = 0; i < products.length; i++) {
+    const p = products[i];
+    if (!p) continue;
+    for (const k in p) {
+      if (Object.prototype.hasOwnProperty.call(p, k) && !seen[k]) { seen[k] = true; cols.push(k); }
+    }
+  }
+  const rows = new Array(products.length);
+  for (let i = 0; i < products.length; i++) {
+    const p = products[i] || {};
+    const row = new Array(cols.length);
+    for (let c = 0; c < cols.length; c++) {
+      const v = p[cols[c]];
+      row[c] = (v === undefined) ? null : v;   // คีย์ไม่มี → null (client กาง = ไม่ใส่คีย์)
+    }
+    rows[i] = row;
+  }
+  return { cols: cols, rows: rows };
+}
+// แปลง payload (ที่ตัด variant แล้ว) → รูป pv=3: เฉพาะ `products` เป็นคอลัมน์ คีย์อื่นคงเดิม
+// คืน object ใหม่เสมอ — ไม่แตะ `shaped` เพราะ object เดิมยังถูกเอาไป stringify เป็น enc=2 ต่อในรอบเดียวกัน
+function shapeColumnarPayload_(shaped) {
+  const out = {};
+  const keys = Object.keys(shaped);
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    out[k] = (k === 'products') ? packProductsColumnar_(shaped.products) : shaped[k];
+  }
   return out;
 }
 
@@ -13116,10 +13178,17 @@ function keepWarm_() {
     try {
       var data = buildFullData_();
       PAYLOAD_VARIANTS_.forEach(function (v) {
-        var s = JSON.stringify(shapePayloadForVariant_(data, v));
+        var shaped = shapePayloadForVariant_(data, v);
         var cv = payloadCacheVariant_(v, 2);
+        var s = JSON.stringify(shaped);
         putCachedPayload_(s, cv);
         putStalePayload_(s, cv);
+        // Phase A1: อุ่น pv=3 คู่กันด้วย — ไม่งั้นนอกเวลาใช้งาน คนเปิดคนแรกที่ใช้ pv=3 ยังเจอ
+        // MISS แล้ว build เอง (เสียประโยชน์ keep-warm สำหรับเส้นทางหลักหลัง deploy)
+        var cv3 = payloadCacheVariant_(v, 3);
+        var s3 = JSON.stringify(shapeColumnarPayload_(shaped));
+        putCachedPayload_(s3, cv3);
+        putStalePayload_(s3, cv3);
       });
     } finally { releaseBuildLock_(lock); }
   } catch (e) { Logger.log('keepWarm_ error (ข้ามไป ไม่กระทบ user): ' + e); }
@@ -13150,8 +13219,13 @@ function invalidateCache_(skipTsUpdate) {
     // หลังมีคนแก้ข้อมูล (บั๊กแบบที่หาสาเหตุยากที่สุด เพราะเห็นไม่ตรงกันเฉพาะบางเครื่อง)
     const keys = [];
     const allCacheVariants = [];
+    // Phase A1: ครอบ enc=3 (pv=3, `*_v3`) ด้วย — ตอนเพิ่ม pv=3 รอบแรกเคยหลุดข้อนี้ไป
+    // = เครื่องที่ใช้ pv=3 (ทุกเครื่องบนเส้นทางหลัก) เห็นข้อมูลก่อนบันทึกค้างได้ถึง 180 วิ
+    // และเส้น HIT ปั๊ม lastModified สด → ถือของเก่า+ts ใหม่ → conflict detection ปล่อยผ่าน
+    // → เขียนทับงานคนอื่นเงียบ ๆ (timestamp poisoning) · เพิ่ม enc ใหม่เมื่อไหร่ต้องเติมที่นี่เสมอ
+    // (มี meta-test ใน tests/columnar-payload.test.js เทียบ enc ที่ build ใช้ กับ enc ที่ล้างที่นี่)
     PAYLOAD_VARIANTS_.forEach(function (v) {
-      allCacheVariants.push(payloadCacheVariant_(v, 2), payloadCacheVariant_(v, 1));
+      allCacheVariants.push(payloadCacheVariant_(v, 2), payloadCacheVariant_(v, 1), payloadCacheVariant_(v, 3));
     });
     allCacheVariants.forEach(function (v) {
       const kCount = _cacheKeyCount_(v), kPart = _cacheKeyPart_(v);
