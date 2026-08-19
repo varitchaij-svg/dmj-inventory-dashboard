@@ -1352,6 +1352,11 @@ function IntakePdfCard({ item, index, prod, qr, labelMode, supplier }) {
         {/* รายละเอียดขวา — ข้อมูลด้านบน · QR อยู่ตรงกลาง + SKU ใต้ QR */}
         <div style={{flex:1,minWidth:0,padding:"2.5mm 3mm",display:"flex",flexDirection:"column"}}>
           <div style={{fontSize:"8pt",fontWeight:700,color:"#111",lineHeight:1.15,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{item.name || item.sku}</div>
+          {color && color.name ? (
+            <div style={{display:"flex",alignItems:"center",gap:4,fontSize:"7pt",color:"#555",marginTop:1}}>
+              <span style={{width:8,height:8,borderRadius:"50%",background:color.hex||"#ccc",border:"1px solid rgba(0,0,0,.15)",flexShrink:0}}/>{color.name}
+            </div>
+          ) : null}
           <div style={{borderTop:"1px dashed #cbd5cf",margin:"1.5mm 0"}}/>
           <div style={{fontSize:"8pt",marginBottom:"1mm",display:"flex",justifyContent:"space-between",gap:5}}>
             <span style={{color:"#888"}}>ราคา</span><b style={{color:"#1f7a34"}}>{price ? "฿"+fmtN(price) : "—"}</b></div>
