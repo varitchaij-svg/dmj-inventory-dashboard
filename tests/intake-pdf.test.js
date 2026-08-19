@@ -214,6 +214,9 @@ describe('meta — labelMode "แผ่นแปะสินค้า" (พิ�
     // ป้าย NEW อยู่เฉพาะโหมดปกติ (return ท้าย) — โหมดแผ่นแปะไม่มี
     const labelBranch = card.slice(card.indexOf('if (labelMode)'), card.indexOf('// ── โหมดปกติ'));
     expect(labelBranch).not.toMatch(/>NEW</);
+    // สี (color) ต้องโชว์ในโหมดแผ่นแปะด้วย — ไม่ใช่แค่ชื่อสินค้าเฉย ๆ (เจอบั๊กจริง ส.ค. 2026)
+    expect(labelBranch).toMatch(/color && color\.name \?/);
+    expect(labelBranch).toMatch(/background:color\.hex/);
   });
   it('labelMode: กริดคำนวณเอง (intakeCardGrid), gap 0 (เส้นประชิด), เต็มหน้า', () => {
     const doc = grab(MAIN, /function IntakePdfDoc[\s\S]*?\n\}\n/, 'IntakePdfDoc');
