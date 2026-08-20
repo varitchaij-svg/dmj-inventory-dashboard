@@ -12310,7 +12310,10 @@ function parseStockCheckTsMs(s) {
 // ให้ตรงตามนี้ ห้ามพูดเหมือนรู้แน่ชัดว่า "กำลังเช็ค" ตัวนั้นอยู่จริง
 function stockCheckSideProgress(skusSorted, reqTsMs, checkedAtMap, done) {
   const total = skusSorted.length;
-  if (done) return { checked: total, total, next: null };
+  // ⚠️ ต้องคืน done กลับไปด้วย — UI แยก "ปิดฝั่งแล้วจริง (✅ เสร็จแล้ว)" ออกจาก "เช็คครบทุก SKU
+  // แล้วแต่ยังไม่กดปิด" (checked===total ก็เกิดได้ทั้ง 2 กรณี) ถ้าไม่ส่ง done มาด้วย ฝั่ง UI
+  // จะแยกไม่ออกเลยว่าอันไหนคืออันไหน
+  if (done) return { checked: total, total, next: null, done: true };
   let checked = 0, next = null;
   skusSorted.forEach(sku => {
     const at = checkedAtMap[sku];
@@ -12318,7 +12321,7 @@ function stockCheckSideProgress(skusSorted, reqTsMs, checkedAtMap, done) {
     if (isChecked) checked++;
     else if (next == null) next = sku;
   });
-  return { checked, total, next };
+  return { checked, total, next, done: false };
 }
 
 // การ์ด "1 ใบโอน" — หัวหน้าเปิดมาต้องตอบได้ทันทีว่า ใบนี้รับไปกี่/กี่ กี่ชิ้น ขาดไหม ค้างกี่วัน

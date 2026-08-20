@@ -454,9 +454,9 @@ describe('stockCheckSideProgress — นับเช็คแล้ว/ทั้
   const { parseStockCheckTsMs, stockCheckSideProgress } = loadTrackHelpers();
   const reqTs = parseStockCheckTsMs('2026-08-14 10:00');
 
-  it('done=true → checked เท่า total เสมอ ไม่สนใจ checkedAtMap (ปิดฝั่งแล้วถือว่าครบ)', () => {
+  it('done=true → checked เท่า total เสมอ ไม่สนใจ checkedAtMap (ปิดฝั่งแล้วถือว่าครบ) + คืน done:true', () => {
     const r = stockCheckSideProgress(['A1', 'A2'], reqTs, {}, true);
-    expect(r).toEqual({ checked: 2, total: 2, next: null });
+    expect(r).toEqual({ checked: 2, total: 2, next: null, done: true });
   });
 
   it('SKU ที่เช็คหลังยิงคำขอ (at >= reqTs) → นับว่าเช็คแล้ว', () => {
@@ -464,6 +464,7 @@ describe('stockCheckSideProgress — นับเช็คแล้ว/ทั้
     const r = stockCheckSideProgress(['A1', 'A2'], reqTs, { A1: after }, false);
     expect(r.checked).toBe(1);
     expect(r.next).toBe('A2'); // ตัวถัดไปตามลำดับที่ยังไม่เช็ค
+    expect(r.done).toBe(false);
   });
 
   it('SKU ที่เช็คก่อนยิงคำขอ (ของเก่า) → ไม่นับว่าเช็คแล้วสำหรับคำขอนี้', () => {
@@ -479,11 +480,14 @@ describe('stockCheckSideProgress — นับเช็คแล้ว/ทั้
     expect(r.next).toBe('B1');
   });
 
-  it('เช็คครบทุกตัวแล้วแต่ยังไม่กดปิดฝั่ง (done=false) → next เป็น null', () => {
+  it('⚠️ เช็คครบทุกตัวแล้วแต่ยังไม่กดปิดฝั่ง (done=false) → next เป็น null แต่ done ต้องยังเป็น false', () => {
+    // กรณีนี้คือจุดที่บั๊กจริงเกิด (พบจากเทสต์ browser): checked===total เกิดได้ทั้ง "ปิดฝั่งแล้ว"
+    // และ "เช็คครบแต่ยังไม่กดปิด" — ถ้าไม่คืน done กลับไปด้วย 2 กรณีนี้จะแยกไม่ออกฝั่ง UI เลย
     const after = parseStockCheckTsMs('2026-08-14 11:00');
     const r = stockCheckSideProgress(['A1', 'A2'], reqTs, { A1: after, A2: after }, false);
     expect(r.checked).toBe(2);
     expect(r.next).toBeNull();
+    expect(r.done).toBe(false); // ⭐ ต้องไม่ใช่ true — ยังไม่ได้กดปิดฝั่งจริง
   });
 });
 
@@ -523,5 +527,10 @@ describe('จุดเชื่อมต่อ TrackingView (พังแล้�
   });
   it('⚠️ ป้าย "ถัดไป" ต้องกำกับว่าเป็นการประมาณ ไม่ใช่ตำแหน่งจริงของคนนับ (ห้ามพูดเหมือนรู้แน่ชัด)', () => {
     expect(TRACKING_VIEW).toMatch(/ถัดไป.*ไม่ใช่ตำแหน่งจริงของคนนับ|ประมาณ/);
+  });
+  it('⚠️ stockCheckSideProgress ต้องคืน done: กลับไปด้วยทั้ง 2 branch (เจอบั๊กจริงจาก browser test — ' +
+     'ไม่คืน done ทำให้ "ปิดฝั่งแล้ว" กับ "เช็คครบแต่ยังไม่ปิด" แยกไม่ออกฝั่ง UI เลย)', () => {
+    expect(F_SIDEPROG).toContain('next: null, done: true');
+    expect(F_SIDEPROG).toContain('next, done: false');
   });
 });
