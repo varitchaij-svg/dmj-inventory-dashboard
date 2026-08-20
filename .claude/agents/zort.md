@@ -22,7 +22,11 @@ GET  /PurchaseOrder/GetPurchaseOrders   number, customername, purchaseorderdateS
 POST /Transfer/AddTransfer
 POST /Order/AddOrder            payload: {date:"dd/MM/yyyy", remark, list:[{sku,name,number,price,totalprice}]}
                                 response: {number, ordernumber, ...}
-                                ใช้สำหรับ: งานจัดพิเศษ MTO (ราคา 0) — ดู createZortSaleOrder_()
+                                ใช้สำหรับ: ขายผ่าน POS (createSaleBill) — งาน MTO ขึ้นเป็น 1 บรรทัด
+                                bundle SKU เดียว (MTO_BUNDLE_SKU) ราคาเดียว ไม่ใช่ order ราคา 0 อีกต่อไป
+                                (MTO fulfillment ตัดสต็อกผ่าน decreaseMtoStockInZort_() แทน — ดู
+                                POST /Product/DecreaseProductStockList ด้านบน · ห้ามใช้ AddOrder
+                                กับ fulfillment เด็ดขาด จะเจือปนรายงานยอดขาย/soldQty — ADR-MTO-SELLABLE)
 /PurchaseReceive/GetPurchaseReceives → 404 ไม่มี endpoint นี้
 WH: W0002=คลังสาย5→col H, W0001=หน้าร้าน→col G
 ```
