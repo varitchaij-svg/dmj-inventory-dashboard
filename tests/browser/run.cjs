@@ -560,13 +560,16 @@ function startServer() {
   // ── (ง0.1) ล้างค่านับหน้าร้านเก่าที่ไม่ตรงระบบ → บาร์ "🧹 ล้างค่านับเก่า (N)" ──
   // เจ้าของแจ้ง: หน้าเช็คหน้าร้านขึ้น "ไม่ตรง 3852" เพราะขายไปแล้วยอดเลื่อน อยากล้างเริ่มนับใหม่
   // ⚠️ เช็คว่าบาร์โผล่จริง + กดยืนยันแล้วบาร์หาย (mismatch ถูกล้าง) ไม่ใช่แค่มี element
+  // ⚠️ owner/dev เท่านั้น (เจ้าของสั่ง ส.ค. 2026) — "ไม่ตรง" อาจเป็นของจริงที่ต้องรายงานก่อน
+  //   ไม่ใช่แค่กดทิ้งแล้วนับใหม่ · frontstore/saler ต้องไม่เห็นปุ่มนี้เลย (ทดสอบคู่กันโดยตั้งใจ —
+  //   ปลดล็อกให้ owner แล้วเผลอไม่กันตำแหน่งอื่นเป็นความพังที่เงียบสนิท)
   {
     const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
     let status = 'ok', note = '';
     try {
-      await page.goto(`${base}?role=frontstore&fsmismatch=1`, { timeout: 15000 });
+      await page.goto(`${base}?role=owner&fsmismatch=1`, { timeout: 15000 });
       await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
-      const nav = await navigateTo(page, 'frontstore', 'frontstore');
+      const nav = await navigateTo(page, 'owner', 'frontstore');
       await page.waitForTimeout(700);
       const barBefore = await page.locator('button:has-text("ล้างค่านับเก่า")').count();
       // กดปุ่มล้าง → เข้าโหมดยืนยัน → กดยืนยัน
@@ -584,8 +587,25 @@ function startServer() {
         note = 'เห็นบาร์ "ล้างค่านับเก่า (1)" → กดยืนยัน → บาร์หาย (ล้าง mismatch สำเร็จ)';
       }
     } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'fsclear__owner.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'ล้างค่านับเก่าหน้าร้าน (owner)', status, note });
+    await page.close();
+  }
+  {
+    const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=frontstore&fsmismatch=1`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const nav = await navigateTo(page, 'frontstore', 'frontstore');
+      await page.waitForTimeout(700);
+      const bar = await page.locator('button:has-text("ล้างค่านับเก่า")').count();
+      if (!nav) { status = 'NAV_FAIL'; note = 'สลับ tab ไม่สำเร็จ'; }
+      else if (bar > 0) { status = 'GATE_FAIL'; note = 'frontstore เห็นปุ่ม "ล้างค่านับเก่า" ทั้งที่ต้องเห็นเฉพาะ owner/dev'; }
+      else { note = 'ไม่เห็นปุ่ม "ล้างค่านับเก่า" ตามที่คาดไว้ (มีค่าไม่ตรงอยู่จริงแต่ถูกกันไว้)'; }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
     await page.screenshot({ path: path.join(SHOTS, 'fsclear__frontstore.png') }).catch(() => {});
-    results.push({ role: 'interact', tab: 'ล้างค่านับเก่าหน้าร้าน (frontstore)', status, note });
+    results.push({ role: 'interact', tab: 'ล้างค่านับเก่าหน้าร้าน (frontstore ไม่เห็น)', status, note });
     await page.close();
   }
 

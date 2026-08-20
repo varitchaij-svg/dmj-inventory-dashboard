@@ -233,7 +233,9 @@ function FrontStoreView({ data, role, checkRequest, onCheckComplete }) {
     return allProducts.filter(function(p){ return checkSkuSet.has(p.sku); });
   }, [allProducts, checkSkuSet]);
   const [toast, showToast, hideToast] = useToast();
-  const CAT_ORDER = ["Realtouch","ดอกไม้","บูช","ไม้แซม","ดอกหญ้า","ใบ","ใบบูช","ใบไม้แขวน","กิ่งไม้","กุหลาบหิน","ต้นไม้","แจกันแก้ว","เรซิ่น"];
+  // "อุปกรณ์สำนักงาน" อยู่หัวสุดเสมอ (เจ้าของสั่ง ส.ค. 2026) — ของใช้ร่วมกันทั้งร้าน (SHARED_CATS)
+  // หยิบบ่อยกว่าหมวดดอกไม้เฉพาะทาง จึงไม่ต้องเลื่อนหา
+  const CAT_ORDER = ["อุปกรณ์สำนักงาน","Realtouch","ดอกไม้","บูช","ไม้แซม","ดอกหญ้า","ใบ","ใบบูช","ใบไม้แขวน","กิ่งไม้","กุหลาบหิน","ต้นไม้","แจกันแก้ว","เรซิ่น"];
 
   const allCats = uM(() => {
     const s = new Set();
@@ -644,8 +646,10 @@ function FrontStoreView({ data, role, checkRequest, onCheckComplete }) {
         </div>
       </div>
 
-      {/* ── ล้างค่านับเก่าที่ไม่ตรงกับระบบ (ขายไปแล้วยอดเลื่อน) → เริ่มนับใหม่ ── */}
-      {mismatchSkus.length > 0 && (
+      {/* ── ล้างค่านับเก่าที่ไม่ตรงกับระบบ (ขายไปแล้วยอดเลื่อน) → เริ่มนับใหม่ ──
+          owner/dev เท่านั้น (เจ้าของสั่ง ส.ค. 2026) — พนักงานหน้าร้าน/saler เห็นแล้วกดล้างเองได้
+          ทั้งที่ "ไม่ตรง" อาจเป็นของจริงที่ต้องรายงานเจ้าของก่อน ไม่ใช่แค่กดทิ้งแล้วนับใหม่ */}
+      {role === "owner" && mismatchSkus.length > 0 && (
         <div style={{background:"#fff7ed",border:"1px solid #fdba74",borderRadius:12,
                      padding:"11px 14px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
           <span style={{fontSize:18}}>🧹</span>
