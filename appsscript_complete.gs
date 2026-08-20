@@ -13469,52 +13469,22 @@ function assignMtoJob(ss, data, actor) {
   return error("ไม่พบงานนี้");
 }
 
-function closeMtoJob(ss, data, actor) {
-  const jobId = String(data.jobId || "").trim();
-  const items = data.items || [];
-  const closedAt = data.closedAt || "";
-  if (!jobId) return error("ไม่มี jobId");
-
-  // Lock กันเขียนชนกัน (เหมือน transferStockBatch)
-  const lock = LockService.getScriptLock();
-  if (!lock.tryLock(15000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่ ลองใหม่อีกครั้ง");
-
-  const cache = CacheService.getScriptCache();
-  try {
-    // Idempotency: กันกดปิดงานซ้ำ (รีเฟรช/เน็ตช้า/เครื่องอื่น) → หักสต็อกซ้ำ
-    if (cache.get("mto_closed_" + jobId)) {
-      return ok({ jobId, duplicate: true, deducted: 0 });
-    }
-
-  // ─── Conflict detection: ถ้า sheet ถูกแก้หลังจาก client โหลด → reject ───
-  if (data.clientLoadedAt) {
-    const lastMod = getSheetLastModified_();
-    if (lastMod > Number(data.clientLoadedAt) + 5000) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false, conflict: true,
-        message: "ข้อมูลถูกแก้ไขหลังจากที่คุณโหลด กรุณา Reload ก่อนบันทึก"
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-  }
-
+// ─── ตัดสต็อก + บันทึกวัตถุดิบ MTO + ปิดสถานะงาน เมื่อ "จบการจัด" (Fulfillment) ───
+// helper ของโดเมน MTO ล้วน ๆ — รู้จักแค่ "งาน MTO/วัตถุดิบ/สต็อก" เท่านั้น
+// ⚠️ ห้ามให้รู้จัก POS/Cart/Bundle/Bill/การขาย เด็ดขาด (ดู CLAUDE.md — Feature 1)
+//    ความสัมพันธ์ MTO↔POS ผูกกันที่ฝั่ง caller ไม่ใช่ในนี้
+// แยกออกจาก closeMtoJob เพื่อให้จุดอื่นที่ต้อง "จบการจัด" เรียกตรรกะเดียวกันได้
+//    ไม่ต้องเขียนการหักสต็อกซ้ำอีกชุด
+// ⚠️ ไม่จับ LockService เอง — caller ต้องถือ lock ครอบอยู่แล้วก่อนเรียก (กันเขียนชนกัน)
+// ⚠️ ไม่ทำ idempotency check เอง — caller ต้องเช็ค cache/สถานะ "เสร็จแล้ว" ก่อนเรียกเสมอ
+//    (เรียกซ้ำ = หักสต็อกซ้ำ/บันทึกวัตถุดิบซ้ำ)
+function applyMtoFulfillment_(ss, jobId, items, closedAt) {
   // net = เบิก − คืน (รองรับคืนบางส่วน เช่น เบิก 24 คืน 4 → ตัดจริง 20)
   const netOf = (item) => {
     const qty = Number(item.qty) || 0;
     const ret = Math.max(0, Math.min(Number(item.returnedQty) || 0, qty));
     return qty - ret;
   };
-
-  // Idempotency เพิ่มเติม: ถ้างานนี้ปิดไปแล้วในชีต ("เสร็จแล้ว") → ไม่หักซ้ำ
-  const jobShChk = getOrCreateMtoJobSheet_(ss);
-  if (jobShChk) {
-    const jd = jobShChk.getDataRange().getValues();
-    for (let i = 1; i < jd.length; i++) {
-      if (String(jd[i][0]).trim() === jobId && String(jd[i][6]).trim() === "เสร็จแล้ว") {
-        cache.put("mto_closed_" + jobId, "1", 21600);
-        return ok({ jobId, duplicate: true, deducted: 0 });
-      }
-    }
-  }
 
   // Deduct stock (รองรับทั้ง split format: qtyWH/qtyFS และ legacy: warehouse)
   const prodSh = ss.getSheetByName(SHEET_PRODUCTS);
@@ -13577,6 +13547,50 @@ function closeMtoJob(ss, data, actor) {
       }
     }
   }
+}
+
+function closeMtoJob(ss, data, actor) {
+  const jobId = String(data.jobId || "").trim();
+  const items = data.items || [];
+  const closedAt = data.closedAt || "";
+  if (!jobId) return error("ไม่มี jobId");
+
+  // Lock กันเขียนชนกัน (เหมือน transferStockBatch)
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่ ลองใหม่อีกครั้ง");
+
+  const cache = CacheService.getScriptCache();
+  try {
+    // Idempotency: กันกดปิดงานซ้ำ (รีเฟรช/เน็ตช้า/เครื่องอื่น) → หักสต็อกซ้ำ
+    if (cache.get("mto_closed_" + jobId)) {
+      return ok({ jobId, duplicate: true, deducted: 0 });
+    }
+
+  // ─── Conflict detection: ถ้า sheet ถูกแก้หลังจาก client โหลด → reject ───
+  if (data.clientLoadedAt) {
+    const lastMod = getSheetLastModified_();
+    if (lastMod > Number(data.clientLoadedAt) + 5000) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false, conflict: true,
+        message: "ข้อมูลถูกแก้ไขหลังจากที่คุณโหลด กรุณา Reload ก่อนบันทึก"
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+  }
+
+  // Idempotency เพิ่มเติม: ถ้างานนี้ปิดไปแล้วในชีต ("เสร็จแล้ว") → ไม่หักซ้ำ
+  const jobShChk = getOrCreateMtoJobSheet_(ss);
+  if (jobShChk) {
+    const jd = jobShChk.getDataRange().getValues();
+    for (let i = 1; i < jd.length; i++) {
+      if (String(jd[i][0]).trim() === jobId && String(jd[i][6]).trim() === "เสร็จแล้ว") {
+        cache.put("mto_closed_" + jobId, "1", 21600);
+        return ok({ jobId, duplicate: true, deducted: 0 });
+      }
+    }
+  }
+
+  // ตัดสต็อก + บันทึกวัตถุดิบ + ปิดสถานะงาน (fulfillment core — reuse ได้จากจุดอื่นที่ "จบการจัด")
+  applyMtoFulfillment_(ss, jobId, items, closedAt);
 
   // Decrease stock in ZORT per warehouse group
   let zortResult = null;
