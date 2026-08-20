@@ -3623,6 +3623,56 @@ function nextModelForPrefix(prefix, products) {
   return String(max + 1).padStart(3, "0");
 }
 
+// ── Feature 2 (Add Product Assistant) — map หมวด → Prefix สำหรับหมวดที่ "ยังไม่มีสินค้าเลย" ──
+// ⚠️ กฎเหล็ก: ห้ามเดา Prefix — เติมเฉพาะค่าที่เจ้าของยืนยัน · ตอนนี้เป็นโหมด data-driven ล้วน
+// จึงว่างไว้ (existing prefix wins คิดจากของจริงในหมวด · หมวดใหม่จริง ๆ → ให้พิมพ์เอง ไม่เดา)
+const CATEGORY_SKU_PREFIX = {};
+
+// ── resolveCategoryPrefix: หา Prefix ตั้งต้นของหมวด ตามกฎ "Existing Prefix Wins" ──
+// ① prefix เด่นที่สุดที่ของจริงในหมวดนี้ใช้อยู่ (existing wins)
+// ② ถ้าหมวดยังไม่มีของ → CATEGORY_SKU_PREFIX (map ที่เจ้าของกำหนด · ว่างในโหมด data-driven)
+// ③ ไม่รู้ → ห้ามเดา คืน source:"none" ให้ UI ขอให้ผู้ใช้พิมพ์เอง
+// คืน { prefix, source:"existing"|"map"|"none", count } · pure — มี copy ใน tests/helpers.js
+function resolveCategoryPrefix(category, skuForCode, catMap) {
+  const cat = String(category || "").trim();
+  if (!cat) return { prefix: "", source: "none", count: 0 };
+  const cnt = {};
+  (skuForCode || []).forEach(p => {
+    const c = String((p && (p.category || p.cat)) || "").trim();
+    if (c !== cat) return;
+    const m = String((p && p.sku) || "").trim().toUpperCase().match(/^([A-Z]{1,3})\d/);
+    if (m) cnt[m[1]] = (cnt[m[1]] || 0) + 1;
+  });
+  const keys = Object.keys(cnt);
+  if (keys.length) {
+    keys.sort((a, b) => cnt[b] - cnt[a] || a.localeCompare(b));
+    return { prefix: keys[0], source: "existing", count: cnt[keys[0]] };
+  }
+  const mapped = catMap && catMap[cat];
+  if (mapped && /^[A-Z]{1,3}$/.test(mapped)) return { prefix: mapped, source: "map", count: 0 };
+  return { prefix: "", source: "none", count: 0 };
+}
+
+// ── findNameDuplicates: ชื่อคล้ายของเดิม (soft warning เท่านั้น — ห้ามบล็อกการบันทึก) ──
+// multi-token AND-match บนชื่อ (split /\s+/ แล้ว tokens.every) — หลักเดียวกับช่องค้นหาสินค้าทุกหน้า
+// ต้องพิมพ์อย่างน้อย 2 ตัวอักษรถึงเริ่มเทียบ (กันเตือนพร่ำเพรื่อ) · pure — มี copy ใน tests/helpers.js
+function findNameDuplicates(name, products, limit) {
+  const q = String(name || "").trim().toLowerCase();
+  if (q.length < 2) return [];
+  const toks = q.split(/\s+/).filter(Boolean);
+  const cap = limit || 6;
+  const out = [];
+  for (const p of (products || [])) {
+    const nm = String((p && p.name) || "").toLowerCase();
+    if (!nm) continue;
+    if (toks.every(t => nm.includes(t))) {
+      out.push({ sku: String((p && p.sku) || "").toUpperCase(), name: (p && p.name) || "" });
+      if (out.length >= cap) break;
+    }
+  }
+  return out;
+}
+
 // Strip "#1", "#10", trailing numbers, etc. from MTO product names
 // "แจกันชุด#1" → "แจกันชุด", "แจกันชุด 5 อะไร" → "แจกันชุด"
 function mtoBase(name) {
@@ -9190,6 +9240,18 @@ function AddProductView({ data, role, onAdded }) {
 
   const effectiveCat = catInput.trim() || category;
 
+  // Feature 2 (Add Product Assistant): Prefix ตั้งต้นของหมวดตามกฎ "Existing Prefix Wins"
+  const catPrefix = uM(() => resolveCategoryPrefix(effectiveCat, skuForCode, CATEGORY_SKU_PREFIX), [effectiveCat, skuForCode]);
+  const lastCatForPrefixRef = React.useRef("");
+  // เลือกหมวดที่มีของเดิม → เติม Prefix ให้อัตโนมัติ (เฉพาะตอนเปลี่ยนหมวด + ช่อง Prefix ว่าง —
+  //   ไม่ทับค่าที่ผู้ใช้พิมพ์/เลือกเอง · หมวดใหม่ที่ไม่รู้ Prefix ปล่อยว่างไว้ให้ผู้ใช้กรอก ไม่เดา)
+  uE(() => {
+    if (skuMode !== "new") return;
+    if (effectiveCat === lastCatForPrefixRef.current) return;
+    lastCatForPrefixRef.current = effectiveCat;
+    if (!prefix && catPrefix.prefix) { setPrefix(catPrefix.prefix); setHeldDesign(null); }
+  }, [effectiveCat, skuMode, catPrefix.prefix, prefix]);
+
   // Prefix ที่เคยใช้ (แยกในหมวดที่เลือกก่อน) — ชิปเลือก Prefix โหมดแบบใหม่
   const prefixInfo = uM(() => {
     const cnt = {}, catCnt = {};
@@ -9318,6 +9380,15 @@ function AddProductView({ data, role, onAdded }) {
   //   ⚠️ ตัวเลขในชื่อ = ราคาส่ง (ไม่ใช่ปลีก) · sellprice ที่บันทึกจริง = ปลีก (×1.25)
   const composedName = [name.trim(), colorName, wholesale > 0 ? String(wholesale) : ""]
     .filter(Boolean).join(" ");
+
+  // Feature 2 (Add Product Assistant): ชื่อคล้ายของเดิม — เตือนแบบ soft (ไม่บล็อกการบันทึก)
+  //   เฉพาะโหมด "แบบใหม่" (โหมดสีใหม่เจตนาเพิ่มของแบบเดิมอยู่แล้ว เตือนซ้ำไม่มีประโยชน์)
+  const nameDups = uM(() => (skuMode === "new" ? findNameDuplicates(name, products, 6) : []), [skuMode, name, products]);
+  // แบบเดิมตัวแรกที่ SKU เข้ารูปแบบมาตรฐาน → เสนอทางลัด "เพิ่มเป็นสีใหม่ของแบบเดิม"
+  const nameDupDesign = uM(() => {
+    for (const d of nameDups) { if (parseSkuParts(d.sku)) return d; }
+    return null;
+  }, [nameDups]);
 
   // สร้าง object สินค้าจากค่าในฟอร์มปัจจุบัน (name = ชื่อเต็มประกอบ, sellprice = ราคาปลีก)
   const buildCurrentProduct = () => ({
@@ -9482,6 +9553,26 @@ function AddProductView({ data, role, onAdded }) {
                   <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 6 }}>
                     1) ตัวอักษรนำ (Prefix) — ประเภทสินค้า เช่น OL=มะกอก, R=กุหลาบ
                   </div>
+
+                  {/* Feature 2: บอกที่มาของ Prefix ตามกฎ "Existing Prefix Wins" (ช่วยเลือก ไม่บังคับ) */}
+                  {effectiveCat && catPrefix.source === "existing" && (
+                    <div style={{ marginBottom: 8, padding: "8px 12px", borderRadius: 10, background: "var(--g-50)", border: "1.5px solid var(--g-300)",
+                                  display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 12, color: "var(--g-700)" }}>
+                        หมวด “{effectiveCat}” ใช้รหัสนำ <b style={{ fontFamily: "monospace" }}>{catPrefix.prefix}</b> อยู่แล้ว ({catPrefix.count} รายการ)
+                      </span>
+                      {prefix !== catPrefix.prefix && (
+                        <button type="button" onClick={() => { setPrefix(catPrefix.prefix); setHeldDesign(null); }}
+                          style={{ flexShrink: 0, border: "1.5px solid var(--g-500)", background: "#fff", borderRadius: 8, padding: "6px 10px",
+                                   cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "monospace", color: "var(--g-700)" }}>{t("ใช้")} {catPrefix.prefix}</button>
+                      )}
+                    </div>
+                  )}
+                  {effectiveCat && catPrefix.source === "none" && !prefix && (
+                    <div style={{ marginBottom: 8, padding: "8px 12px", borderRadius: 10, background: "#fffbeb", border: "1.5px solid #fcd34d", fontSize: 12, color: "#92400e" }}>
+                      🆕 หมวด “{effectiveCat}” ยังไม่มีสินค้า — พิมพ์ Prefix เอง ({t("ถ้าไม่แน่ใจ อย่าเดา — ถามเจ้าของก่อน")})
+                    </div>
+                  )}
 
                   {/* พิมพ์ชื่อสินค้า → หา Prefix จากของเดิมที่ชื่อคล้ายกัน */}
                   <input type="text" placeholder={`🔍 ${t("พิมพ์ชื่อสินค้าเพื่อหารหัส (เช่น มะกอก → OL)")}`}
@@ -9711,6 +9802,28 @@ function AddProductView({ data, role, onAdded }) {
               </label>
               <input type="text" placeholder={t("เช่น ป๊อปปี้B.")}
                 value={name} onChange={e => setName(e.target.value)} style={inputStyle} />
+              {/* Feature 2: ชื่อคล้ายของเดิม — เตือน soft เท่านั้น ไม่บล็อกการบันทึก */}
+              {nameDups.length > 0 && (
+                <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 10, background: "#fffbeb", border: "1.5px solid #fcd34d" }}>
+                  <div style={{ fontSize: 12, color: "#92400e", fontWeight: 700 }}>
+                    ⚠️ มีสินค้าชื่อคล้ายนี้อยู่แล้ว {nameDups.length}{nameDups.length >= 6 ? "+" : ""} รายการ
+                  </div>
+                  <div style={{ fontSize: 11.5, color: "#92400e", marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {nameDups.slice(0, 3).map(d => d.sku + " " + d.name).join(" · ")}
+                  </div>
+                  {nameDupDesign && skuMode === "new" && (
+                    <button type="button"
+                      onClick={() => { setSkuMode("color"); setBaseDesignSku(nameDupDesign.sku); setVariantCode(""); setHeldDesign(null); }}
+                      style={{ marginTop: 8, border: "1.5px solid var(--g-500)", background: "#fff", borderRadius: 8, padding: "7px 12px",
+                               cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "inherit", color: "var(--g-700)", minHeight: 40 }}>
+                      🎨 {t("เป็นตัวเดียวกัน — เพิ่มเป็นสีใหม่ของ")} {nameDupDesign.sku}
+                    </button>
+                  )}
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>
+                    {t("ถ้าเป็นคนละสินค้าจริง กรอกต่อได้เลย (คำเตือนนี้ไม่บล็อกการบันทึก)")}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* ราคาส่ง → ตั้งราคาปลีก ×1.25 อัตโนมัติ */}
