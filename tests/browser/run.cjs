@@ -609,6 +609,47 @@ function startServer() {
     await page.close();
   }
 
+  // ── (ง0.2) ความคืบหน้าคำขอเช็คสต็อก ใน "ติดตามสถานะ" — owner/dev/saler เท่านั้น ──
+  // เจ้าของสั่ง (ส.ค. 2026): แจ้งเตือนต้องบอกรหัสร้านแทนรายชื่อสินค้า + owner/dev/saler ต้องเห็น
+  // ว่าคำขอที่ส่งไปเช็คถึงไหนแล้ว · fixture: fsStatus=done (เสร็จแล้ว) · whStatus=pending
+  // (VAS001 นับไปแล้ว 1/2 · FLW002 ยังไม่นับ → ต้องขึ้น "ถัดไป: FLW002")
+  {
+    const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=owner&checkprogress=1`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const nav = await navigateTo(page, 'owner', 'tracking');
+      await page.waitForTimeout(500);
+      const chk = await hasAllText(page,
+        ['คำขอเช็คสต็อกที่กำลังดำเนินการ', 'GX2312', 'เสร็จแล้ว', 'เช็คแล้ว 1/2', 'ถัดไป', 'FLW002'],
+        'ความคืบหน้าคำขอเช็คสต็อก');
+      if (!nav) { status = 'NAV_FAIL'; note = 'สลับ tab ไม่สำเร็จ'; }
+      else if (!chk.ok) { status = 'CONTENT_FAIL'; note = chk.detail; }
+      else note = 'เห็นรหัสร้าน GX2312 + หน้าร้านเสร็จแล้ว + คลังเช็คแล้ว 1/2 · ถัดไป FLW002';
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'checkprogress__owner.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'ความคืบหน้าคำขอเช็คสต็อก (owner)', status, note });
+    await page.close();
+  }
+  {
+    const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=warehouse&checkprogress=1`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const nav = await navigateTo(page, 'warehouse', 'tracking');
+      await page.waitForTimeout(500);
+      const seen = await page.locator('text=คำขอเช็คสต็อกที่กำลังดำเนินการ').count();
+      if (!nav) { status = 'NAV_FAIL'; note = 'สลับ tab ไม่สำเร็จ'; }
+      else if (seen > 0) { status = 'GATE_FAIL'; note = 'warehouse เห็นส่วนติดตามคำขอเช็ค ทั้งที่ต้องเห็นเฉพาะ owner/dev/saler'; }
+      else note = 'ไม่เห็นส่วนติดตามคำขอเช็คตามที่คาดไว้ (คำขอมีอยู่จริงแต่ถูกกันไว้เฉพาะ owner/dev/saler)';
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'checkprogress__warehouse.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'ความคืบหน้าคำขอเช็คสต็อก (warehouse ไม่เห็น)', status, note });
+    await page.close();
+  }
+
   // ── (ง) ทางด่วนลงเวลา: ข้อมูลก้อนใหญ่ยังไม่มา แต่ต้องลงเวลาได้แล้ว ──────────
   // `?nodata=1` = ไม่ seed localStorage + คำขอ payload ค้างไม่ตอบ (เหมือนเน็ตร้านช้า)
   // นี่คือสภาพจริงของพนักงานที่เปิดแอปบนเครื่องใหม่/หลังล้าง cache แล้วมาสแกนเข้างาน

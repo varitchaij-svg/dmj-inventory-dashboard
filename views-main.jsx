@@ -4976,9 +4976,12 @@ function CategoryView({ data, role, onNav }) {
                       try {
                         var res = await dmjFetch(SHEET_DEPLOY_URL, {
                           method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"},
+                          // suppliers = รหัสร้านที่เลือก (ไม่ใช่ SKU) — backend ใช้แทนรายชื่อสินค้า
+                          // ในแจ้งเตือน (อ่านง่ายกว่ารายชื่อสินค้าเป็นสิบ-ร้อยตัว)
                           body: JSON.stringify({createStockCheck:true, actor: role,
                             skus: ps.map(function(p){ return p.sku; }),
-                            names: ps.map(function(p){ return p.name||p.sku; })}),
+                            names: ps.map(function(p){ return p.name||p.sku; }),
+                            suppliers: Array.from(checkSuppliers)}),
                         });
                         var json = await dmjJson(res);
                         if(json.success){

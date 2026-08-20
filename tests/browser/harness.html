@@ -105,6 +105,22 @@
     const p = (window.__DMJ_FIXTURE.products || []).find((x) => x.sku === 'VAS001');
     if (p) { p.frontStoreCheckedQty = (p.qtyStore || 0) + 84; p.frontStoreCheckedAt = '01/08/2026 10:00'; }
   }
+  // ── ?checkprogress=1 : จำลอง "คำขอเช็คสต็อกที่กำลังดำเนินการ" (ติดตามสถานะ owner/dev/saler) ──
+  // คำขอ 1 ใบ 2 SKU รหัสร้าน GX2312 · fsStatus=done (ปิดแล้ว) · whStatus=pending (ยังไม่ปิด) +
+  // VAS001 มี lastCheck ในตำแหน่งจัดเก็บ "หลัง" เวลาที่ยิงคำขอ → ฝั่งคลังต้องขึ้น "เช็คแล้ว 1/2"
+  // + "ถัดไป: FLW002" (FLW002 มาก่อน VAS001 ตามลำดับ compareSku — F ก่อน V)
+  if (q.get('checkprogress') === '1') {
+    window.__DMJ_FIXTURE.stockCheckRequests = [{
+      reqId: 'CHK-010', timestamp: '2026-08-14 10:00', requester: 'เจ้าของ',
+      skus: ['VAS001', 'FLW002'], names: ['แจกันแก้วใส ทรงสูง', 'ดอกไม้ประดิษฐ์ สีแดง'],
+      suppliers: ['GX2312'], status: 'pending',
+      fsStatus: 'done', fsBy: 'เจ้าของ', fsAt: '2026-08-14 10:30',
+      whStatus: 'pending', whBy: '', whAt: '',
+      completedBy: '', completedAt: '',
+    }];
+    const lm = window.__DMJ_FIXTURE.storage && window.__DMJ_FIXTURE.storage.verifiedLockMap;
+    if (lm && lm['A1/5'] && lm['A1/5'][0]) lm['A1/5'][0].lastCheck = '14/08/2026 11:00:00';
+  }
   window.__DMJ_PAYLOAD = shapeForRole(window.__DMJ_FIXTURE, role);
 
   // ── โหมด ?nodata=1 : จำลอง "ข้อมูลก้อนใหญ่ยังไม่มา" ──────────────────────

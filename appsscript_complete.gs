@@ -2547,7 +2547,7 @@ function doPost(e) {
     if (data.assignMtoJob)    return assignMtoJob(ss, data, actor);
 
     // ─── Stock Check Requests ───
-    if (data.createStockCheck) return createStockCheckRequest_(data.skus, data.names, actor);
+    if (data.createStockCheck) return createStockCheckRequest_(data.skus, data.names, actor, data.suppliers);
     // ⚠️ data.side อาจไม่มา = client เก่าที่ cache .jsx ก่อนฟีเจอร์แยกฝั่ง (fs/wh) → ส่ง roleHint
     //    ที่ server ยืนยันเอง (`_sess.role`) หรือ `data.actor`="frontstore"/"warehouse" ของ client เก่า
     //    ที่ยังไม่ล็อกอิน เพื่อให้ backend เดา side ได้เอง แทนการ "ปิดทั้งใบ" ที่ทำฝั่งที่ยังไม่เสร็จหายเงียบ ๆ
@@ -15264,10 +15264,12 @@ const SHEET_STOCK_CHECK = "คำขอเช็คสินค้า";
 // คอลัมน์ (1-indexed) — ⚠️ ต่อท้ายอย่างเดียว ห้ามแทรก/สลับ (บทเรียนข้อ 5)
 //  1 reqId · 2 timestamp · 3 requester · 4 skuList · 5 nameList · 6 status · 7 completedBy · 8 completedAt
 //  9 fsStatus · 10 fsBy · 11 fsAt · 12 whStatus · 13 whBy · 14 whAt   ← เพิ่ม ส.ค. 2026 (แยก 2 ฝั่ง)
+//  15 supplierList ← เพิ่ม ส.ค. 2026 (รหัสร้านที่เลือกตอนส่งคำขอ — ใช้แทนรายชื่อสินค้าในแจ้งเตือน)
 var STOCK_CHECK_HEADERS_ = ["reqId","timestamp","requester","skuList","nameList","status",
-  "completedBy","completedAt","fsStatus","fsBy","fsAt","whStatus","whBy","whAt"];
+  "completedBy","completedAt","fsStatus","fsBy","fsAt","whStatus","whBy","whAt","supplierList"];
 var COL_CHK_FS_STATUS = 9, COL_CHK_FS_BY = 10, COL_CHK_FS_AT = 11;
 var COL_CHK_WH_STATUS = 12, COL_CHK_WH_BY = 13, COL_CHK_WH_AT = 14;
+var COL_CHK_SUPPLIERS = 15;
 
 function getOrCreateStockCheckSheet_(ss) {
   var sh = ss.getSheetByName(SHEET_STOCK_CHECK);
@@ -15312,29 +15314,47 @@ function readStockCheckRequests_() {
       whStatus:    whStatus,
       whBy:        String(r[COL_CHK_WH_BY - 1] || ""),
       whAt:        String(r[COL_CHK_WH_AT - 1] || ""),
+      // รหัสร้านที่ขอเช็ค — แถวเก่าก่อนมีคอลัมน์นี้ (ก่อน ส.ค. 2026) ไม่มีข้อมูล → [] (migration-safe)
+      suppliers: (function () { try { return JSON.parse(r[COL_CHK_SUPPLIERS - 1] || "[]"); } catch (e) { return []; } })(),
     };
   }).filter(function(r){ return r.reqId; });
 }
 
-function createStockCheckRequest_(skus, names, actor) {
+// ข้อความ preview สำหรับแจ้งเตือนคำขอเช็คสต็อก — โชว์ "รหัสร้าน" แทนรายชื่อสินค้าทีละตัว (เจ้าของสั่ง
+// ส.ค. 2026: รายชื่อสินค้าเป็นสิบ-ร้อยตัวอ่านไม่มีความหมาย รหัสร้านสื่อความหมายกว่าว่าให้ไปเช็คของใคร)
+// ⚠️ migration-safe: คำขอเก่าก่อนมีคอลัมน์ supplierList (ว่าง) → ถอยไปใช้รายชื่อสินค้าแบบเดิม
+function stockCheckPreviewText_(suppliers, names) {
+  var sup = suppliers || [];
+  if (sup.length) {
+    var sp = sup.slice(0, 3).join(", ");
+    if (sup.length > 3) sp += " และอีก " + (sup.length - 3) + " ร้าน";
+    return "🏭 " + sp;
+  }
+  var nm = names || [];
+  var np = nm.slice(0, 3).join(", ");
+  if (nm.length > 3) np += " และอีก " + (nm.length - 3) + " รายการ";
+  return np;
+}
+
+function createStockCheckRequest_(skus, names, actor, suppliers) {
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var sh = getOrCreateStockCheckSheet_(ss);
   var rows = sh.getDataRange().getValues();
   var seq = rows.length; // row 1 = header, seq = # of data rows after append
   var reqId = "CHK-" + String(seq).padStart(3, "0");
   var ts = Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyy-MM-dd HH:mm");
-  // คอลัมน์ 9-14 = fsStatus/fsBy/fsAt/whStatus/whBy/whAt — เริ่มต้นทั้ง 2 ฝั่ง "pending"
+  var supplierList = Array.isArray(suppliers) ? suppliers.filter(function (s) { return s; }) : [];
+  // คอลัมน์ 9-15 = fsStatus/fsBy/fsAt/whStatus/whBy/whAt/supplierList — เริ่มต้นทั้ง 2 ฝั่ง "pending"
   sh.appendRow([reqId, ts, actor || "owner", JSON.stringify(skus || []), JSON.stringify(names || []),
-    "pending", "", "", "pending", "", "", "pending", "", ""]);
+    "pending", "", "", "pending", "", "", "pending", "", "", JSON.stringify(supplierList)]);
   // skipTsUpdate=true — คำขอเช็คสต็อกไม่เปลี่ยน "จำนวนสินค้า" จึงห้าม bump dmj_last_write_ts
   // มิฉะนั้น client ที่โหลดข้อมูลไว้ก่อนจะถูกมองว่า conflict → กดส่งของไม่ได้
   invalidateCache_(true);
   // แจ้งเตือน LINE group — wrap try-catch เพื่อไม่ให้ LINE error พัง endpoint
   var nameList = names || [];
-  var preview = nameList.slice(0, 3).join(", ");
-  if (nameList.length > 3) preview += " และอีก " + (nameList.length - 3) + " รายการ";
+  var preview = stockCheckPreviewText_(supplierList, nameList);
   try {
-    var lineMsg = "📋 มีคำขอเช็คสต็อก " + nameList.length + " รายการ\nรายการ: " + preview;
+    var lineMsg = "📋 มีคำขอเช็คสต็อก " + nameList.length + " รายการ\n" + preview;
     sendLineGroup_(lineMsg);
   } catch(e) {
     // LINE notification ล้มเหลว — ไม่ block response
@@ -15428,8 +15448,12 @@ function completeStockCheckRequest_(reqId, actor, side, roleHint) {
     try {
       var names = [];
       try { names = JSON.parse(r[4] || "[]"); } catch (e) {}
-      var preview = names.slice(0, 3).join(", ");
-      if (names.length > 3) preview += " และอีก " + (names.length - 3) + " รายการ";
+      var suppliersRow = [];
+      try { suppliersRow = JSON.parse(r[COL_CHK_SUPPLIERS - 1] || "[]"); } catch (e) {}
+      // typeof guard: กัน env เทสต์ที่ eval เฉพาะฟังก์ชันนี้โดยไม่มี stockCheckPreviewText_ ให้ (ยังส่ง noti ได้)
+      var preview = (typeof stockCheckPreviewText_ === 'function')
+        ? stockCheckPreviewText_(suppliersRow, names)
+        : names.slice(0, 3).join(", ");
       if (side === 'fs' || side === 'wh') {
         var sideLabel = side === 'fs' ? "หน้าร้าน" : "คลัง";
         var bothDone = fsDone && whDone;

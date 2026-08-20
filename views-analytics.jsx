@@ -12292,6 +12292,35 @@ function trackShipTotals(items) {
   return { sentPcs, recvPcs, shortPcs, waitPcs, recvRows, rows, pending: rows - recvRows };
 }
 
+// ── ความคืบหน้าคำขอเช็คสต็อก (ส.ค. 2026) ──────────────────────────────────────
+// เจ้าของสั่ง: กดส่งคำขอเช็คสต็อกแล้ว owner/dev/saler ต้องติดตามได้ว่า "เช็คไปถึงไหนแล้ว"
+// req.timestamp เป็น "yyyy-MM-dd HH:mm" เสมอ (Utilities.formatDate เขตเวลา Asia/Bangkok ฝั่ง .gs)
+// ⚠️ แยกเลขเองแทน new Date(string) — รูปแบบมีช่องว่างแทน "T" ตีความ local/UTC ไม่แน่นอนข้าม browser
+// (คนละรูปแบบกับ parseCheckDateMs ที่รองรับ d/m/yyyy พ.ศ. จาก toLocaleString("th-TH"))
+function parseStockCheckTsMs(s) {
+  const m = String(s || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+  if (!m) return NaN;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5])).getTime();
+}
+
+// ความคืบหน้าฝั่งเดียว (หน้าร้าน/คลัง) ของคำขอ 1 ใบ — เทียบ "เช็คล่าสุดเมื่อไหร่" ของแต่ละ SKU
+// กับตอนที่ยิงคำขอ (reqTsMs) · checkedAtMap: sku -> ms (จาก frontStoreCheckedAt หรือ lock lastCheck)
+// ⚠️ "next" คือ SKU แรกที่ยังไม่เช็คตามลำดับที่ส่งมา (เรียง compareSku ไว้ก่อนแล้ว) — เป็นการประมาณ
+// ว่า "น่าจะเช็คถึงไหน" ไม่ใช่ตำแหน่งจริงของคนนับ (ระบบไม่มีกลไกส่งตำแหน่งเรียลไทม์) — UI ต้องเขียน
+// ให้ตรงตามนี้ ห้ามพูดเหมือนรู้แน่ชัดว่า "กำลังเช็ค" ตัวนั้นอยู่จริง
+function stockCheckSideProgress(skusSorted, reqTsMs, checkedAtMap, done) {
+  const total = skusSorted.length;
+  if (done) return { checked: total, total, next: null };
+  let checked = 0, next = null;
+  skusSorted.forEach(sku => {
+    const at = checkedAtMap[sku];
+    const isChecked = at != null && !isNaN(reqTsMs) && at >= reqTsMs;
+    if (isChecked) checked++;
+    else if (next == null) next = sku;
+  });
+  return { checked, total, next };
+}
+
 // การ์ด "1 ใบโอน" — หัวหน้าเปิดมาต้องตอบได้ทันทีว่า ใบนี้รับไปกี่/กี่ กี่ชิ้น ขาดไหม ค้างกี่วัน
 // โดยไม่ต้องนับการ์ดรายตัวเอง (เดิมส่ง 75 ตัว = 75 การ์ดเรียงกัน ตรวจไม่ไหว)
 function TrackBatchCard({ batch, productMap, defaultOpen }) {
@@ -12428,6 +12457,45 @@ function TrackingView({ data, role }) {
     return m;
   }, [products]);
 
+  // 📋 ความคืบหน้าคำขอเช็คสต็อก — owner/dev/saler เท่านั้น (เจ้าของสั่ง ส.ค. 2026)
+  // data.stockCheckRequests คือคำขอที่ "ยังไม่ครบ 2 ฝั่ง" (backend กรองมาให้แล้ว — ก้อนเดียวกับที่
+  // ใช้ทำแบนเนอร์ของหน้าร้าน/คลัง ใน app.jsx) พอครบ 2 ฝั่งจะหลุดออกจากลิสต์นี้เอง = ส่วนนี้หายเอง
+  const isCheckTracker = role === "owner" || role === "saler";
+  const fsCheckedAtMs = uM(() => {
+    const m = {};
+    products.forEach(p => { if (p.sku && p.frontStoreCheckedAt) m[p.sku] = parseCheckDateMs(p.frontStoreCheckedAt); });
+    return m;
+  }, [products]);
+  const whCheckedAtMs = uM(() => {
+    const m = {};
+    const lockMap = (data.storage && data.storage.verifiedLockMap) || {};
+    Object.keys(lockMap).forEach(key => {
+      (lockMap[key] || []).forEach(e => {
+        if (!e || !e.sku || !e.lastCheck) return;
+        const ms = parseCheckDateMs(e.lastCheck);
+        if (isNaN(ms)) return;
+        if (m[e.sku] == null || ms > m[e.sku]) m[e.sku] = ms;
+      });
+    });
+    return m;
+  }, [data.storage]);
+  const checkProgress = uM(() => {
+    if (!isCheckTracker) return [];
+    return (data.stockCheckRequests || []).map(req => {
+      const reqTsMs = parseStockCheckTsMs(req.timestamp);
+      // ⚠️ compareSku(a, b) รับ "object ที่มี .sku" (a.sku/b.sku) ไม่ใช่ string ดิบ — req.skus เป็น
+      // string[] ล้วน ส่งตรง ๆ จะได้ a.sku === undefined ทั้งคู่ → เทียบเท่ากันหมด = ไม่ได้เรียงจริง
+      // (เงียบสนิท ไม่ throw) ต้องห่อเป็น {sku} ก่อนเทียบเสมอ
+      const skusSorted = (req.skus || []).slice().sort((a, b) => compareSku({ sku: a }, { sku: b }));
+      return {
+        reqId: req.reqId, timestamp: req.timestamp, requester: req.requester,
+        suppliers: req.suppliers || [],
+        fs: stockCheckSideProgress(skusSorted, reqTsMs, fsCheckedAtMs, req.fsStatus === "done"),
+        wh: stockCheckSideProgress(skusSorted, reqTsMs, whCheckedAtMs, req.whStatus === "done"),
+      };
+    });
+  }, [isCheckTracker, data.stockCheckRequests, fsCheckedAtMs, whCheckedAtMs]);
+
   // รวม orders (ก่อนส่ง) + shipments (หลังส่ง) เป็น event เดียวกัน
   const items = uM(() => {
     const list = [];
@@ -12533,6 +12601,47 @@ function TrackingView({ data, role }) {
         <h2 style={{margin:"0 0 2px", fontSize:19}}>📡 ติดตามสถานะสินค้า</h2>
         <div style={{fontSize:12, color:"var(--muted)"}}>สั่ง → จัด → ส่งไปหน้าร้าน → รับ (เช็คตรงกับที่ส่ง) · อัปเดตอัตโนมัติ</div>
       </div>
+
+      {/* 📋 ความคืบหน้าคำขอเช็คสต็อก — owner/dev/saler เท่านั้น (เจ้าของสั่ง ส.ค. 2026)
+          "ถัดไป" เป็นการประมาณจากลำดับ SKU ไม่ใช่ตำแหน่งจริงของคนนับ — ต้องเขียนบอกตรง ๆ */}
+      {isCheckTracker && checkProgress.length > 0 && (
+        <div style={{background:"#fff", border:"1.5px solid var(--bdr)", borderRadius:14, padding:"12px 14px", marginBottom:12}}>
+          <div style={{fontSize:14, fontWeight:800, marginBottom:2}}>📋 คำขอเช็คสต็อกที่กำลังดำเนินการ ({checkProgress.length})</div>
+          <div style={{fontSize:10.5, color:"var(--muted)", marginBottom:8}}>"ถัดไป" = SKU ถัดไปตามลำดับ ไม่ใช่ตำแหน่งจริงของคนนับ</div>
+          <div style={{display:"flex", flexDirection:"column", gap:10}}>
+            {checkProgress.map(cp => (
+              <div key={cp.reqId} style={{border:"1px solid var(--bdr)", borderRadius:10, padding:"10px 12px"}}>
+                <div style={{display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:8, flexWrap:"wrap"}}>
+                  <div style={{fontWeight:700, fontSize:13}}>
+                    {cp.suppliers.length ? "🏭 " + cp.suppliers.join(", ") : (cp.requester ? "โดย " + cp.requester : cp.reqId)}
+                  </div>
+                  <div style={{fontSize:11, color:"var(--muted)", whiteSpace:"nowrap"}}>{cp.reqId} · {cp.timestamp}</div>
+                </div>
+                <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(140px, 1fr))", gap:8, marginTop:8}}>
+                  {[["🏬 หน้าร้าน", cp.fs], ["📦 คลัง", cp.wh]].map(([label, s]) => (
+                    <div key={label} style={{
+                      background: s.done ? "#f0fdf4" : "#fffbeb",
+                      border: "1px solid " + (s.done ? "#bbf7d0" : "#fde68a"),
+                      borderRadius:8, padding:"7px 9px",
+                    }}>
+                      <div style={{fontSize:11.5, fontWeight:700, color: s.done ? "#166534" : "#92400e"}}>
+                        {label} {s.done ? "· ✅ เสร็จแล้ว" : `· เช็คแล้ว ${s.checked}/${s.total}`}
+                      </div>
+                      {!s.done && (
+                        <div style={{fontSize:11, color:"var(--muted)", marginTop:2}}>
+                          {s.next
+                            ? <>ถัดไป: <b style={{color:"var(--text)"}}>{s.next}</b></>
+                            : (s.checked > 0 ? "เช็คครบแล้ว — รอกดยืนยันเสร็จ" : "ยังไม่เริ่มเช็ค")}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* แถบเตือนถ้ามีรับไม่ครบ */}
       {alertCount > 0 && (
