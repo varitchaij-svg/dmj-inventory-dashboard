@@ -46,6 +46,79 @@ function getSheetLastModified_() {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase B — Backend observability (log-only, fail-safe, NO behavior change)
+// ───────────────────────────────────────────────────────────────────────────
+// เป้าหมาย: พิสูจน์ root cause ของ incident (ดู Backend Stability Audit v1) ด้วยตัวเลขจริง
+// โดย **ไม่เปลี่ยนพฤติกรรมระบบเลย** — ทุกฟังก์ชันในบล็อกนี้:
+//   · ห่อ try/catch ทั้งหมด ไม่มีทาง throw (เครื่องมือวัดต้องไม่ลาก request ล่ม)
+//   · ใช้ Logger.log อย่างเดียว — ไม่เขียนชีต ไม่เขียน Script Property/Cache บน hot path
+//     (บทเรียน PHASE0: อ่าน/เขียน Property ทุก request แพงกว่าตัว log เอง)
+//   · _PERF_REQ เป็น state ต่อ 1 execution — GAS สร้าง V8 context ใหม่ทุก request
+//     จึงไม่รั่วข้าม request · concurrency ประกอบกลับ offline จาก START/END timestamps
+//     (scripts/perf-report.mjs) → ไม่มี shared counter ที่ต้องเขียนบน hot path
+// prefix `[perfB]` ใช้ค้นใน Executions/Cloud Logging และให้ parser จับ
+// ═══════════════════════════════════════════════════════════════════════════
+var _PERF_REQ = null;
+
+function perfReqBegin_(kind, action) {
+  try {
+    var t0 = Date.now();
+    _PERF_REQ = { id: t0.toString(36) + Math.floor(Math.random() * 1e6).toString(36),
+                  kind: kind, action: action || '', t0: t0, sess: 0, sessMs: 0, lock: [] };
+    Logger.log('[perfB] START kind=' + kind + ' id=' + _PERF_REQ.id
+             + ' action=' + _PERF_REQ.action + ' t=' + t0);
+  } catch (e) {}
+  return _PERF_REQ;
+}
+function perfReqAction_(action) {
+  try { if (_PERF_REQ && action) _PERF_REQ.action = String(action); } catch (e) {}
+}
+function perfReqEnd_(extra) {
+  try {
+    if (!_PERF_REQ) return;
+    var r = _PERF_REQ;
+    var dur = Date.now() - r.t0;
+    Logger.log('[perfB] END kind=' + r.kind + ' id=' + r.id + ' action=' + r.action
+             + ' durMs=' + dur + ' sessN=' + r.sess + ' sessMs=' + r.sessMs
+             + (r.lock.length ? ' lock=' + r.lock.join(',') : '')
+             + (extra ? ' ' + extra : ''));
+  } catch (e) {} finally { _PERF_REQ = null; }
+}
+// นับ + สะสมเวลา resolveSession_ ต่อ request · sess===2 = double-resolve (บันทึกไว้ที่ผลตรวจ)
+function perfSess_(ms) {
+  try {
+    if (!_PERF_REQ) return;
+    _PERF_REQ.sess++;
+    _PERF_REQ.sessMs += ms;
+    if (_PERF_REQ.sess === 2) {
+      Logger.log('[perfB] DOUBLE-RESOLVE id=' + _PERF_REQ.id + ' action=' + _PERF_REQ.action);
+    }
+  } catch (e) {}
+}
+// ล็อกเขียน: waitMs (รอคว้าล็อก) + holdMs (ถือล็อก) · got=false = คว้าไม่ได้/หมดเวลา
+function perfLock_(tag, waitMs, holdMs, got) {
+  try {
+    Logger.log('[perfB] LOCK tag=' + tag + ' got=' + got + ' waitMs=' + waitMs + ' holdMs=' + holdMs
+             + (_PERF_REQ ? ' id=' + _PERF_REQ.id : ''));
+    if (_PERF_REQ) _PERF_REQ.lock.push(tag + ':w' + waitMs + ':h' + holdMs + (got ? '' : ':FAIL'));
+  } catch (e) {}
+}
+// ZORT UrlFetch: latency ต่อครั้ง + จำนวน attempt (retry)
+function perfZort_(tag, ms, attempt, ok) {
+  try {
+    Logger.log('[perfB] ZORT tag=' + tag + ' ms=' + ms + ' attempt=' + attempt + ' ok=' + ok
+             + (_PERF_REQ ? ' id=' + _PERF_REQ.id : ''));
+  } catch (e) {}
+}
+// Drive: latency การอัปโหลดรูปลงเวลา (อยู่ในล็อก punch)
+function perfDrive_(tag, ms, ok) {
+  try {
+    Logger.log('[perfB] DRIVE tag=' + tag + ' ms=' + ms + ' ok=' + ok
+             + (_PERF_REQ ? ' id=' + _PERF_REQ.id : ''));
+  } catch (e) {}
+}
+
 /**
  * Pure helper: ตัดสินว่าควร reject conflict หรือไม่
  * @param {number|string|null} clientLoadedAt  - epoch ms ที่ client โหลดข้อมูล
@@ -401,24 +474,31 @@ function createSession_(ss, staffId) {
 
 // คืน staff object (ถ้า session valid: ไม่ถูก revoke และยังไม่หมดอายุ) หรือ null
 function resolveSession_(ss, token) {
-  if (!token) return null;
-  const sh = sessionsSheet_(ss);
-  const last = sh.getLastRow();
-  if (last < 2) return null;
-  const vals = sh.getRange(2, 1, last - 1, 6).getValues();
-  for (let i = 0; i < vals.length; i++) {
-    const r = vals[i];
-    if (String(r[0]) !== String(token)) continue;
-    const revoked = r[5] === true || r[5] === 'TRUE';
-    const expiresAt = r[3] ? new Date(r[3]).getTime() : 0;
-    if (revoked || !expiresAt || expiresAt < Date.now()) return null;
-    try { sh.getRange(i + 2, 5).setValue(new Date()); } catch (e) {}
-    const staffSh = staffSheet_(ss);
-    const staffRow = findStaffRowById_(staffSh, r[1]);
-    if (staffRow < 0) return null;
-    return staffRowToObj_(staffSh.getRange(staffRow, 1, 1, 11).getValues()[0]);
+  // Phase B: จับ count + duration ต่อ request (double-resolve ที่ me/punch/... เรียกซ้ำ)
+  // try/finally ห่อเพื่อวัดทุกทางออก — ไม่เปลี่ยน logic เดิมเลย
+  var _pt0 = Date.now();
+  try {
+    if (!token) return null;
+    const sh = sessionsSheet_(ss);
+    const last = sh.getLastRow();
+    if (last < 2) return null;
+    const vals = sh.getRange(2, 1, last - 1, 6).getValues();
+    for (let i = 0; i < vals.length; i++) {
+      const r = vals[i];
+      if (String(r[0]) !== String(token)) continue;
+      const revoked = r[5] === true || r[5] === 'TRUE';
+      const expiresAt = r[3] ? new Date(r[3]).getTime() : 0;
+      if (revoked || !expiresAt || expiresAt < Date.now()) return null;
+      try { sh.getRange(i + 2, 5).setValue(new Date()); } catch (e) {}
+      const staffSh = staffSheet_(ss);
+      const staffRow = findStaffRowById_(staffSh, r[1]);
+      if (staffRow < 0) return null;
+      return staffRowToObj_(staffSh.getRange(staffRow, 1, 1, 11).getValues()[0]);
+    }
+    return null;
+  } finally {
+    try { perfSess_(Date.now() - _pt0); } catch (e) {}
   }
-  return null;
 }
 
 function revokeSession_(ss, token) {
@@ -1179,9 +1259,13 @@ function saveAttPhoto_(base64, staffName, dateStr, typeTh) {
     const clean = String(base64).replace(/^data:image\/\w+;base64,/, "");
     const blob = Utilities.newBlob(Utilities.base64Decode(clean), "image/jpeg",
       dateStr + "_" + (staffName || "staff") + "_" + typeTh + ".jpg");
-    return folder.createFile(blob).getId();
+    var _dt = Date.now();                              // Phase B: วัด latency อัปโหลด Drive (RC-2)
+    var _fid = folder.createFile(blob).getId();
+    try { perfDrive_('attPhoto', Date.now() - _dt, true); } catch (e2) {}
+    return _fid;
   } catch (e) {
     Logger.log("saveAttPhoto_ error: " + e);
+    try { perfDrive_('attPhoto', 0, false); } catch (e2) {}
     return ""; // รูปพังไม่ควรทำให้ลงเวลาไม่ได้
   }
 }
@@ -1198,9 +1282,11 @@ function punchHandler_(ss, data) {
   }
 
   const lock = LockService.getScriptLock();
+  var _lkT = Date.now(), _lkGot = 0, _lkOk = false;   // Phase B: วัด wait/hold ล็อกเขียน (RC-2)
   try {
     // กันกดรัว/กดพร้อมกัน 2 เครื่องแล้วได้ 2 แถว
-    try { lock.waitLock(10000); } catch (e) {}
+    try { lock.waitLock(10000); _lkOk = true; } catch (e) {}
+    _lkGot = Date.now();
 
     const now = new Date();
     const dateStr = attDateKey_(now);
@@ -1255,6 +1341,7 @@ function punchHandler_(ss, data) {
       .setMimeType(ContentService.MimeType.JSON);
   } finally {
     try { lock.releaseLock(); } catch (e) {}
+    try { perfLock_('punch', _lkGot ? (_lkGot - _lkT) : (Date.now() - _lkT), _lkGot ? (Date.now() - _lkGot) : 0, _lkOk); } catch (e) {}
   }
 }
 
@@ -2179,12 +2266,14 @@ function saveThresholds_(data, actor) {
 // ───────────────────────────────────────────────────────────
 
 function doPost(e) {
+  perfReqBegin_('doPost');   // Phase B: START/END + action + duration (log-only, fail-safe)
   try {
     const data = JSON.parse(e.postData.contents);
     const ss = SpreadsheetApp.getActiveSpreadsheet();
 
     // ─── LINE Webhook ───
     if (data.events) {
+      perfReqAction_('linebot');
       const event = data.events[0];
       if (!event) return ContentService.createTextOutput("OK");
       // บันทึก Group ID เมื่อ Bot ถูกเพิ่มเข้า Group
@@ -2234,7 +2323,9 @@ function doPost(e) {
 
     // ตรวจสิทธิ์ฝั่ง server (frontend ซ่อนแท็บ ≠ กันคนยิง API ตรง)
     // ยังเป็น no-op จนกว่า Script Property REQUIRE_LOGIN='true'
-    var _denied = canDoOrNull_(_sess, resolvePostAction_(data));
+    var _postAction = resolvePostAction_(data);
+    perfReqAction_(_postAction);   // Phase B: ระบุ action ให้ END log (metric 3)
+    var _denied = canDoOrNull_(_sess, _postAction);
     if (_denied) return _denied;
 
     // ─── Verify PIN (POST path) ───
@@ -2473,10 +2564,13 @@ function doPost(e) {
     return ContentService.createTextOutput(
       JSON.stringify({ success: false, error: error.toString() })
     ).setMimeType(ContentService.MimeType.JSON);
+  } finally {
+    perfReqEnd_();   // Phase B: ปิด trace ทุกทางออก (รวม early-return/error)
   }
 }
 
 function doGet(e) {
+  perfReqBegin_('doGet', (e && e.parameter && e.parameter.action) || 'payload');
   try {
     if (!checkToken_(e && e.parameter && e.parameter.token)) return unauthorized_();
     // ตัวแยกสาเหตุ: เส้นทางเดียวกันเป๊ะกับ payload แต่คำตอบจิ๋วและไม่แตะชีตเลย
@@ -2884,6 +2978,8 @@ function doGet(e) {
     return ContentService.createTextOutput(JSON.stringify({
       error: error.message, stack: error.stack
     })).setMimeType(ContentService.MimeType.JSON);
+  } finally {
+    perfReqEnd_();   // Phase B: ปิด trace ทุกทางออก (HIT/STALE/MISS/error)
   }
 }
 
@@ -3154,7 +3250,9 @@ function transferStock(ss, sku, qty, productName, actor) {
   if (!sheet) return error("ไม่พบชีต: " + SHEET_PRODUCTS);
 
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(8000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
+  var _lkT = Date.now();   // Phase B: วัด wait/hold ล็อกเขียน (RC-4 — คร่อม ZORT createZortTransfer_)
+  if (!lock.tryLock(8000)) { try { perfLock_('transferStock', Date.now() - _lkT, 0, false); } catch (e) {} return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่"); }
+  var _lkGot = Date.now();
 
   try {
     const data = sheet.getDataRange().getValues();
@@ -3179,6 +3277,7 @@ function transferStock(ss, sku, qty, productName, actor) {
   } finally {
     lock.releaseLock();
     invalidateCache_();
+    try { perfLock_('transferStock', _lkGot - _lkT, Date.now() - _lkGot, true); } catch (e) {}
   }
 }
 
@@ -3936,7 +4035,9 @@ function transferStockBatch(ss, list, actor, clientLoadedAt, tid) {
   //   ไป block การส่งของที่ไม่เกี่ยวกันเลย → false conflict ตอนใช้หลายคนพร้อมกัน
 
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(15000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
+  var _lkT = Date.now();   // Phase B: วัด wait/hold ล็อกเขียน (RC-4 — คร่อม ZORT AddTransfer + retry)
+  if (!lock.tryLock(15000)) { try { perfLock_('transferBatch', Date.now() - _lkT, 0, false); } catch (e) {} return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่"); }
+  var _lkGot = Date.now();
 
   const cache = CacheService.getScriptCache();
   try {
@@ -4065,6 +4166,7 @@ function transferStockBatch(ss, list, actor, clientLoadedAt, tid) {
   } finally {
     try { invalidateCache_(); } catch(e) {} // C5: ล้าง cache หลัง write เสมอ
     lock.releaseLock();
+    try { perfLock_('transferBatch', _lkGot - _lkT, Date.now() - _lkGot, true); } catch (e) {}
   }
 }
 
@@ -4082,6 +4184,7 @@ function createZortTransferBatch_(items) {
   };
   let lastErr = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
+    var _zt = Date.now();   // Phase B: วัด latency + attempt ของ ZORT (RC-4/RC-5)
     try {
       const res = UrlFetchApp.fetch(ZORT_BASE + "/Transfer/AddTransfer", {
         method: "post", headers,
@@ -4089,10 +4192,12 @@ function createZortTransferBatch_(items) {
         muteHttpExceptions: true
       });
       const json = JSON.parse(res.getContentText());
+      try { perfZort_('AddTransfer', Date.now() - _zt, attempt, !!(json && json.detail && json.detail.id)); } catch (e2) {}
       Logger.log("createZortTransferBatch_ attempt " + attempt + ": " + JSON.stringify(json));
       if (json && json.detail && json.detail.id) return json;
       lastErr = json;
     } catch (e) {
+      try { perfZort_('AddTransfer', Date.now() - _zt, attempt, false); } catch (e2) {}
       lastErr = e;
       Logger.log("createZortTransferBatch_ attempt " + attempt + " error: " + e);
     }
@@ -6674,12 +6779,15 @@ function fetchAllZortProducts_(warehousecode) {
 
     let json = null;
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      var _zt = Date.now();   // Phase B: วัด latency + attempt ต่อหน้า (RC-5 — syncZortBoth inline)
       try {
         const res = UrlFetchApp.fetch(url, { method: "get", headers: zortHeaders_(), muteHttpExceptions: true });
         const text = res.getContentText();
         json = JSON.parse(text);
+        try { perfZort_('GetProducts', Date.now() - _zt, attempt, true); } catch (e2) {}
         break;
       } catch (err) {
+        try { perfZort_('GetProducts', Date.now() - _zt, attempt, false); } catch (e2) {}
         Logger.log(`Page ${page} attempt ${attempt} failed: ${err.message}`);
         if (attempt < MAX_RETRIES) {
           Utilities.sleep(1000 * attempt);
@@ -14165,7 +14273,9 @@ function createSaleBill(ss, data, actor) {
   var billCid = String(data.billCid || "").trim();
 
   var lock = LockService.getScriptLock();
-  if (!lock.tryLock(10000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่ ลองใหม่อีกครั้ง");
+  var _lkT = Date.now();   // Phase B: วัด wait/hold ล็อกเขียน (RC-4 — คร่อม ZORT AddOrder)
+  if (!lock.tryLock(10000)) { try { perfLock_('saleBill', Date.now() - _lkT, 0, false); } catch (e) {} return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่ ลองใหม่อีกครั้ง"); }
+  var _lkGot = Date.now();
   try {
     // ── กันออกบิลซ้ำ — ต้องเช็ค "ในล็อก" ก่อนแตะ ZORT ใด ๆ ทั้งสิ้น ────────────
     // สองคำขอ cid เดียวกันที่มาพร้อมกัน (ผู้ขายกดรัว / ลองใหม่หลัง browser ตัดสาย) ตัวที่สอง
@@ -14328,6 +14438,7 @@ function createSaleBill(ss, data, actor) {
     return ok(out);
   } finally {
     lock.releaseLock();
+    try { perfLock_('saleBill', _lkGot - _lkT, Date.now() - _lkGot, true); } catch (e) {}
   }
 }
 
