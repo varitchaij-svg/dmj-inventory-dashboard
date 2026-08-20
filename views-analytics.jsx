@@ -7225,7 +7225,9 @@ function MtoJobView({ data }) {
         setActiveJob(updatedJob);
         setMaterials([]);
         setView("detail");
-        showToast("success", "ปิดงานและสร้างรายการขาย ZORT เรียบร้อย");
+        // ⚠️ ห้ามพูดว่า "สร้างรายการขาย" — closeMtoJob ตัดสต็อกตรงผ่าน DecreaseProductStockList
+        // ไม่ได้สร้าง order/รายการขายใน ZORT อีกต่อไป (Phase 2 — ดู ADR-MTO-SELLABLE)
+        showToast("success", "ปิดงานและตัดสต็อกใน ZORT เรียบร้อย");
       } else {
         showToast("error", json.error || "เกิดข้อผิดพลาด");
       }

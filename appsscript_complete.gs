@@ -13661,16 +13661,18 @@ function closeMtoJob(ss, data, actor) {
     }
   }
 
-  // ตัดสต็อก + บันทึกวัตถุดิบ + ปิดสถานะงาน (fulfillment core — reuse ได้จากจุดอื่นที่ "จบการจัด")
+  // ตัดสต็อก + บันทึกวัตถุดิบ + ปิดสถานะงาน (fulfillment — reuse ได้จากจุดอื่นที่ "จบการจัด")
   applyMtoFulfillment_(ss, jobId, items, closedAt);
 
-  // Decrease stock in ZORT per warehouse group
+  // Decrease stock in ZORT per warehouse group — ตัดสต็อกตรง ไม่สร้าง order/รายได้ปลอม
+  // (Phase 2 ZORT policy: MTO ขายผ่าน POS เป็น bundle SKU เดียวตอน checkout เท่านั้น
+  // fulfillment ไม่ควรทิ้งร่องรอยเป็น "รายการขาย" ที่ระบบรายงานยอดขาย/ควรสั่งจะไปหยิบมานับซ้ำ)
   let zortResult = null;
   try {
-    zortResult = createZortSaleOrder_(items, jobId + (data.jobName ? " " + data.jobName : ""));
+    zortResult = decreaseMtoStockInZort_(items);
   } catch (e) {
-    Logger.log("ZORT Sale Order failed: " + e);
-    logZortFailure_("สร้าง Sale Order งานจัดพิเศษ: " + jobId, String(e) + " | SKU: " + items.map(it => it.sku).join(","));
+    Logger.log("ZORT DecreaseStock (MTO) failed: " + e);
+    logZortFailure_("ตัดสต็อก ZORT งานจัดพิเศษ: " + jobId, String(e) + " | SKU: " + items.map(it => it.sku).join(","));
   }
 
   // ปิดงานสำเร็จ → mark idempotency กันกดซ้ำใน 6 ชม.
@@ -13686,17 +13688,19 @@ function closeMtoJob(ss, data, actor) {
   try {
     var totalQty = items.reduce(function(s, i) { return s + (Number(i.qty) || 0); }, 0);
     var zortStatus;
-    if (zortResult && zortResult.success === true) {
-      zortStatus = 'สร้างแล้ว';
-    } else if (zortResult && zortResult.skipped === true) {
-      zortStatus = 'ข้ามแล้ว';
+    // zortResult มา จาก decreaseMtoStockInZort_ — {ok, skipped, results} ไม่ใช่ order อีกต่อไป
+    // (ห้ามเทียบ .success/.skipped แบบเดิม — นั่นคือ shape ของ createZortSaleOrder_ ที่ถูกลบแล้ว)
+    if (zortResult && zortResult.skipped === true) {
+      zortStatus = 'ข้ามแล้ว (ไม่มีของต้องตัด)';
+    } else if (zortResult && zortResult.ok === true) {
+      zortStatus = 'ตัดสต็อกแล้ว';
     } else {
-      zortStatus = 'ไม่สำเร็จ (แต่สต็อกตัดแล้ว)';
+      zortStatus = 'ตัดสต็อกไม่สำเร็จบางส่วน (แต่สต็อกในชีตตัดแล้ว)';
     }
     var closeMsg = '✅ ปิดงาน ' + jobId + ' แล้ว\n'
       + 'งาน: ' + (data.jobName || '-') + '\n'
       + 'ตัดสต็อก: ' + items.length + ' รายการ, ' + totalQty + ' ชิ้น\n'
-      + 'ZORT Order: ' + zortStatus;
+      + 'ZORT: ' + zortStatus;
     sendLineMessage_(closeMsg);
   } catch (lineErr) {
     Logger.log('LINE notify closeMtoJob error: ' + lineErr);
@@ -13709,6 +13713,13 @@ function closeMtoJob(ss, data, actor) {
   }
 }
 
+// ตัดสต็อกองค์ประกอบ MTO ใน ZORT ตรง ๆ ผ่าน DecreaseProductStockList — ไม่ผ่านรายการขาย/order
+// เด็ดขาด (เดิมมี createZortSaleOrder_ สร้าง Order ราคา 0 แทน ถูกลบไปแล้ว — ดู ADR-MTO-SELLABLE)
+// เหตุผล: Order (แม้ราคา 0) ยังถูก aggregateAndWriteSales_ ดึงไปนับเป็นยอดขาย/soldQty ของ SKU
+// องค์ประกอบ (เจือปนตัวเลข "ควรสั่ง"/velocity/ABC ทั้งระบบ) · DecreaseProductStockList ไม่สร้าง
+// record ประเภทที่ syncZortSales/rebuildSalesFromRaw จะไปดึงมาเลย = ไม่มีทางเจือปนรายงานได้
+// คืน { ok, skipped, results } — ok=false เมื่อมีอย่างน้อย 1 คลังที่ตัดไม่สำเร็จ (ดู logZortFailure_
+// เพื่อรายละเอียด) · skipped=true เมื่อไม่มีอะไรต้องตัดเลย (เช่น คืนของครบ 100%)
 function decreaseMtoStockInZort_(items) {
   // Group items by warehouse (รองรับ split format: qtyWH/qtyFS)
   const groups = {};
@@ -13731,7 +13742,11 @@ function decreaseMtoStockInZort_(items) {
     }
   }
 
+  const hasAny = Object.values(groups).some((g) => g.length > 0);
+  if (!hasAny) return { ok: true, skipped: true, results: {} };
+
   const results = {};
+  let ok = true;
   const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
 
   for (const [whCode, stocks] of Object.entries(groups)) {
@@ -13747,47 +13762,13 @@ function decreaseMtoStockInZort_(items) {
     Logger.log(`ZORT DecreaseStock [${whCode}]: ` + JSON.stringify(json));
     results[whCode] = json;
     const err = zortRespError_(res);
-    if (err) logZortFailure_("ตัดสต็อก MTO (" + whCode + ")", err + " | SKU: " + stocks.map(s => s.sku).join(","));
+    if (err) {
+      ok = false;
+      logZortFailure_("ตัดสต็อก MTO (" + whCode + ")", err + " | SKU: " + stocks.map(s => s.sku).join(","));
+    }
   }
 
-  return results;
-}
-
-// สร้าง ZORT Sale Order ราคา 0 (หักสต็อกผ่านรายการขาย ไม่ใช่ DecreaseStock โดยตรง)
-function createZortSaleOrder_(items, jobName) {
-  const headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
-  const dateStr = Utilities.formatDate(new Date(), "Asia/Bangkok", "dd/MM/yyyy");
-
-  const list = items
-    .map(function(it) {
-      const net = Number(it.qty) - Math.max(0, Math.min(Number(it.returnedQty) || 0, Number(it.qty)));
-      return { sku: String(it.sku || "").trim(), name: String(it.name || "").trim(), number: net, price: 0, totalprice: 0 };
-    })
-    .filter(function(it) { return it.number > 0; });
-
-  if (!list.length) return { skipped: true };
-
-  const payload = {
-    date: dateStr,
-    remark: jobName || "",
-    list: list,
-  };
-
-  const res = UrlFetchApp.fetch(ZORT_BASE + "/Order/AddOrder", {
-    method: "post",
-    headers: headers,
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true,
-  });
-
-  const err = zortRespError_(res);
-  if (err) {
-    logZortFailure_("สร้าง Sale Order งานจัดพิเศษ: " + jobName, err);
-    return { success: false, error: err };
-  }
-  const json = JSON.parse(res.getContentText() || "{}");
-  Logger.log("ZORT Sale Order created: " + JSON.stringify(json));
-  return { success: true, orderNumber: json.number || json.ordernumber || null };
+  return { ok, skipped: false, results };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -14373,8 +14354,10 @@ function createSaleBill(ss, data, actor) {
   var factor = gross > 0 ? (totals.grandTotal / gross) : 1;   // อัตราส่วนหลังส่วนลดทั้งบิล
   // ยืนยันจากหน้า ZORT: "มูลค่าต่อหน่วย" มาจาก field pricepernumber (ไม่ใช่ price)
   // ถ้าไม่ส่ง pricepernumber → หน่วย=0 → ยอดรวมสุทธิ=0 · ต้องส่ง pricepernumber = ราคาต่อหน่วยจริง
-  // ไม่ใส่ warehousecode (ทั้ง order + line) — mirror createZortSaleOrder_ ที่เวิร์ก · warehousecode
-  // ทำให้ ZORT สร้างงานโอนค้าง "รอโอนสินค้า" (ให้ ZORT หักจากคลัง default เหมือน MTO)
+  // ไม่ใส่ warehousecode (ทั้ง order + line) — รูปแบบที่ยืนยันแล้วว่าใช้ได้จริงกับ AddOrder ·
+  // ใส่ warehousecode ทำให้ ZORT สร้างงานโอนค้าง "รอโอนสินค้า" แทนที่จะหักจากคลัง default ตรง ๆ
+  // (ต่างจาก MTO ที่ตัดสต็อกผ่าน decreaseMtoStockInZort_/DecreaseProductStockList ซึ่งระบุ
+  // warehousecode ตรง ๆ ได้เพราะเป็นคนละ endpoint ไม่ใช่การสร้าง order)
   // ⚠️ ปัดเศษแบบ "สะสม" ผ่าน buildZortLineItems_ — ไม่ปัดแยกทีละชิ้นแล้ว (ดูคอมเมนต์ที่ฟังก์ชัน)
   //    รับประกันว่า sum(totalprice) = grandTotal เป๊ะ = ยอดที่ ZORT หักตรงกับที่เราคิดเป๊ะสตางค์
   // ⚠️ ใช้ mtoSplit.zortItems — บรรทัด MTO ถูกแทน sku เป็น MTO_BUNDLE_SKU แล้ว (ราคาไม่เปลี่ยน)
@@ -14398,7 +14381,7 @@ function createSaleBill(ss, data, actor) {
       pricepernumber: shipFee, price: shipFee, totalprice: shipFee });
   }
 
-  // ประกอบ payload AddOrder — mirror createZortSaleOrder_ (minimal ที่เวิร์ก) + field ลูกค้า
+  // ประกอบ payload AddOrder — รูปแบบ minimal ที่ยืนยันแล้วว่าใช้ได้จริง + field ลูกค้า
   // ไม่ใส่ warehousecode/status ระดับ order (เดิมใส่แล้วราคากลายเป็น 0) — status ตั้งทีหลังผ่าน UpdateOrderStatus
   var F = POS_ZORT_FIELDS;
   var cust = data.customer || {};

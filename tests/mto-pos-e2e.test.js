@@ -145,9 +145,62 @@ function loadModule(env) {
   const globalVals = globalNames.map((n) => env[n]);
   // eslint-disable-next-line no-new-func
   return new Function(...globalNames,
-    SRC + '\nreturn { createMtoJob, closeMtoJob, createSaleBill, applyMtoFulfillment_, readMtoJobs_, canSellMtoJob_ };'
+    SRC + '\nreturn { createMtoJob, closeMtoJob, createSaleBill, applyMtoFulfillment_, readMtoJobs_, canSellMtoJob_, decreaseMtoStockInZort_ };'
   )(...globalVals);
 }
+
+// ─── Step 4: decreaseMtoStockInZort_ แยกทดสอบตรง ๆ ({ok,skipped,results}) — ไม่เคยมีเทสต์มา
+// ก่อนเพราะเป็น dead code (ไม่มีใครเรียก) จนกระทั่ง closeMtoJob เปลี่ยนมาเรียกจริงใน Step 4 ───
+describe('decreaseMtoStockInZort_ — ตัดสต็อก ZORT ตรง ๆ ไม่ผ่าน order', () => {
+  it('ตัดสำเร็จทั้งสองคลัง → ok:true, skipped:false, แยก payload ตาม warehousecode', () => {
+    const env = makeGasEnv();
+    const mod = loadModule(env);
+    const res = mod.decreaseMtoStockInZort_([
+      { sku: 'R01025', qtyWH: 5, qtyFS: 3 },
+      { sku: 'OL00001', qtyWH: 2, qtyFS: 0 },
+    ]);
+    expect(res.ok).toBe(true);
+    expect(res.skipped).toBe(false);
+    expect(Object.keys(res.results).sort()).toEqual(['W0001', 'W0002']);
+    const calls = env.zortCalls.filter((c) => String(c.url).indexOf('/Product/DecreaseProductStockList') >= 0);
+    expect(calls).toHaveLength(2);
+    expect(calls.every((c) => String(c.url).indexOf('/Order/AddOrder') < 0)).toBe(true);
+  });
+
+  it('ไม่มีอะไรต้องตัด (คืนของครบ 100%) → skipped:true, ไม่ยิง ZORT เลย', () => {
+    const env = makeGasEnv();
+    const mod = loadModule(env);
+    const res = mod.decreaseMtoStockInZort_([
+      { sku: 'R01025', qty: 5, returnedQty: 5 },
+    ]);
+    expect(res).toEqual({ ok: true, skipped: true, results: {} });
+    expect(env.zortCalls).toHaveLength(0);
+  });
+
+  it('คลังหนึ่งตัดไม่สำเร็จ (ZORT ตอบ error) → ok:false แต่ยังบันทึกผลของคลังที่สำเร็จไว้ + log failure', () => {
+    const env = makeGasEnv();
+    // ปลอมให้ warehousecode=W0001 ตอบ error, W0002 ตอบสำเร็จ
+    env.UrlFetchApp.fetch = (url, opts) => {
+      env.zortCalls.push({ url, payload: opts && opts.payload });
+      if (String(url).indexOf('warehousecode=W0001') >= 0) {
+        return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ resCode: '100', resDesc: 'สต็อกไม่พอ' }) };
+      }
+      return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ resCode: '200' }) };
+    };
+    const mod = loadModule(env);
+    const res = mod.decreaseMtoStockInZort_([
+      { sku: 'R01025', qtyWH: 5, qtyFS: 3 },
+    ]);
+    expect(res.ok).toBe(false);
+    expect(res.results.W0002.resCode).toBe('200');   // คลังที่สำเร็จยังเห็นผลอยู่
+    expect(res.results.W0001.resCode).toBe('100');   // คลังที่พลาดก็ยังเห็นผล (ไม่ทิ้ง)
+    // logZortFailure_ ต้องบันทึกลงชีต SHEET_ZORT_FAILED ("ZORT_sync_failed") ให้เจ้าของตามได้
+    const failRows = env.sheets['ZORT_sync_failed'];
+    expect(failRows).toBeTruthy();
+    expect(failRows.length).toBeGreaterThan(1);   // header + อย่างน้อย 1 แถว
+    expect(failRows[failRows.length - 1][1]).toMatch(/ตัดสต็อก MTO/);
+  });
+});
 
 describe('MTO → POS → Checkout — dry run แบบ end-to-end (eval appsscript_complete.gs ทั้งไฟล์จริง)', () => {
   let env, mod, jobId;
@@ -203,10 +256,21 @@ describe('MTO → POS → Checkout — dry run แบบ end-to-end (eval appssc
     expect(jobRow[6]).toBe('เสร็จแล้ว');   // fulfillment เสร็จ
     expect(jobRow[10]).toBeFalsy();        // sale status ยังว่าง (ยังไม่ขาย) — appendRow ไม่ pad คอลัมน์ที่ไม่ได้เขียน
 
-    // ⚠️ ข้อสังเกตจาก dry run: closeMtoJob ยังเรียก createZortSaleOrder_ (Step 4 ที่ยังไม่ทำ
-    // ตามคำสั่ง) → ยิง /Order/AddOrder ด้วยราคา 0 สำหรับ "วัตถุดิบ" ไปแล้วตอนนี้ · เคลียร์
-    // zortCalls ก่อนเข้า STAGE 4 กันไปปนกับ AddOrder ของการขายจริงที่ POS
-    expect(env.zortCalls.some((c) => String(c.url).indexOf('/Order/AddOrder') >= 0)).toBe(true);
+    // Step 4: closeMtoJob ตัดสต็อกผ่าน decreaseMtoStockInZort_ (DecreaseProductStockList) ตรง ๆ
+    // ⚠️ ต้อง "ไม่มี" /Order/AddOrder ระหว่าง fulfillment เด็ดขาด — เคยมี (createZortSaleOrder_,
+    // ลบไปแล้ว) สร้าง order ราคา 0 ที่ syncZortSales/aggregateAndWriteSales_ ดึงไปนับเป็นยอดขาย/
+    // soldQty ของ SKU องค์ประกอบ เจือปน "ควรสั่ง"/velocity/ABC ทั้งระบบ (ดู ADR-MTO-SELLABLE)
+    expect(env.zortCalls.some((c) => String(c.url).indexOf('/Order/AddOrder') >= 0)).toBe(false);
+    const decreaseCalls = env.zortCalls.filter((c) => String(c.url).indexOf('/Product/DecreaseProductStockList') >= 0);
+    expect(decreaseCalls.length).toBeGreaterThan(0);
+    // แยกตามคลังจริง — R01025 หัก 20 จากคลังสาย5 (WH_SAI5=W0002), OL00001 หัก 8 จากคลังเดียวกัน
+    const decreasePayloads = decreaseCalls.map((c) => JSON.parse(c.payload));
+    const wh = decreasePayloads.find((p) => p.warehousecode === 'W0002');
+    expect(wh).toBeTruthy();
+    expect(wh.stocks).toEqual(expect.arrayContaining([
+      { sku: 'R01025', stock: 20 },
+      { sku: 'OL00001', stock: 8 },
+    ]));
     env.zortCalls.length = 0;
   });
 
