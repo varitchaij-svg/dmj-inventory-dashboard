@@ -183,6 +183,14 @@ const TRACKED = [
     `const parts = parseSkuParts(p && p.sku);`,
     `return String(max + 1).padStart(3, "0");`,
   ]},
+  { names: ['resolveCategoryPrefix'], sourceFile: 'views-main.jsx', landmarks: [
+    `return { prefix: keys[0], source: "existing", count: cnt[keys[0]] };`,
+    `if (mapped && /^[A-Z]{1,3}$/.test(mapped)) return { prefix: mapped, source: "map", count: 0 };`,
+  ]},
+  { names: ['findNameDuplicates'], sourceFile: 'views-main.jsx', landmarks: [
+    `if (toks.every(t => nm.includes(t))) {`,
+    `if (out.length >= cap) break;`,
+  ]},
   { names: ['detectColor'], sourceFile: 'views-main.jsx', landmarks: [
     `for (const k of COLOR_KEYS) if (s.indexOf(k) >= 0) return COLOR_MAP[k];`,
   ]},

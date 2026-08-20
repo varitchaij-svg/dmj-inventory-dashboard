@@ -1956,6 +1956,27 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
     → ล็อก `{prefix,model}` ไว้หลังเซฟ ให้สีถัดไปคงเลข Model เดิม + โชว์แบนเนอร์ "🔒 กำลังเพิ่มสีของแบบใหม่"
     + ปุ่ม "ขึ้นแบบใหม่ ▸" (`setHeldDesign(null)`) · ล้าง lock เมื่อเปลี่ยน prefix/โหมด · `effTaken`
     disable สีที่แบบนี้ (prefix+model) มีแล้วทั้ง 2 โหมด
+
+#### 🧭 Add Product Assistant — "Existing Prefix Wins" + soft dup-name (Feature 2, ส.ค. 2026)
+
+ต่อยอด `AddProductView` เดิม (ไม่สร้าง page/API/sheet ใหม่ · frontend ล้วน ไม่แตะ `.gs`) —
+เติมส่วนที่เป็น "ผู้ช่วย" ให้ครบตาม business flow: ค้นชื่อ → เจอของเดิมเสนอเพิ่มสีใหม่ · หมวดที่มีของ
+เดิมเดา Prefix ให้ · หมวดใหม่ห้ามเดา · ชื่อซ้ำเตือนแต่ไม่บล็อก
+
+- **`resolveCategoryPrefix(category, skuForCode, catMap)`** (pure, มี copy ใน `tests/helpers.js` +
+  drift-guard) คืน `{prefix, source, count}` ตามลำดับ **① existing prefix wins** (prefix เด่นสุดของ
+  ของจริงในหมวด) → **② `CATEGORY_SKU_PREFIX`** (map ที่เจ้าของกำหนดเอง) → **③ `source:"none"`**
+  · ⚠️ **`CATEGORY_SKU_PREFIX` = `{}` ว่างโดยตั้งใจ (โหมด data-driven ล้วน)** — กฎเหล็ก "ห้ามเดา Prefix"
+  เติมได้เฉพาะค่าที่เจ้าของยืนยัน · หมวดใหม่ที่ไม่มีทั้งของและ map → UI ขอให้พิมพ์เอง **ไม่เดาให้**
+- **auto-fill prefix ตอนเปลี่ยนหมวด** (effect + `lastCatForPrefixRef`) — เติมเฉพาะตอนช่อง prefix **ว่าง**
+  ไม่ทับค่าที่ผู้ใช้พิมพ์/เลือกเอง · แบนเนอร์เขียว "หมวดนี้ใช้รหัสนำ X (N รายการ)" + ปุ่ม "ใช้ X" (source
+  existing) · แบนเนอร์เหลือง "หมวดยังไม่มีสินค้า — พิมพ์เอง อย่าเดา" (source none)
+- **`findNameDuplicates(name, products, limit)`** (pure, copy+drift-guard) — ชื่อคล้ายของเดิม
+  (multi-token AND-match) → แถบเตือน soft **ไม่แตะ `canSave`** (business rule: Duplicate Name = soft
+  warning only, never block) · ถ้าตัวที่ซ้ำมี SKU มาตรฐาน → ปุ่มลัด "🎨 เพิ่มเป็นสีใหม่ของ X"
+  (`setSkuMode("color")` + `setBaseDesignSku`) = reuse เส้นทาง `heldDesign`/`designMatches` เดิม
+- เทสต์: `tests/sku.test.js` (describe `resolveCategoryPrefix`/`findNameDuplicates` — existing ชนะ map,
+  map รูปแบบผิดไม่ใช้, tie เลือกคงที่, soft-warn ไม่บล็อก)
 - **เพิ่มสินค้าใหม่เข้า ZORT** — AddProductView (views-main.jsx, owner+warehouse): ฟอร์ม
   SKU(=barcode, จาก SKU builder ข้างบน)/ชื่อ/ราคา/หมวด/**ซัพพลายเออร์(TAG)**/จำนวน+คลัง
   หน่วย fix "ชิ้น" · เช็คซ้ำ 2 ชั้น (client `data.products` + server `checkSkuExists` 2 ชีต)
