@@ -10929,6 +10929,8 @@ function RetroTaxInvoiceView({ onBack }) {
 
 function PosView({ data, role }) {
   const products = (data && data.products) || [];
+  // งาน MTO (จัดพิเศษ) ที่อาจขายผ่าน POS ได้ — Phase 2 "Make existing MTO sellable"
+  const mtoJobs = (data && data.mtoJobs) || [];
   const [toast, showToast, hideToast] = useToast();
   const [cart, setCart] = uS([]);                 // [{sku,name,category,qty,price,qtyStore}]
   const [search, setSearch] = uS("");
@@ -11054,6 +11056,50 @@ function PosView({ data, role }) {
   function patchItem(i, patch) { setCart(c => c.map((it, idx) => idx === i ? Object.assign({}, it, patch) : it)); }
   function removeItem(i) { setCart(c => c.filter((_, idx) => idx !== i)); }
 
+  // ── งาน MTO ในตะกร้า — 1 งาน = 1 บรรทัด ราคาเดียว (Decision: "ZORT ได้ SKU เดียว ราคาเดียว
+  //   ต่องาน") · จำนวนล็อกที่ 1 เสมอ (ห้ามแก้เป็นอื่น — งานคือของจริงชิ้นเดียว ขายซ้ำไม่ได้)
+  //   category ตั้งเป็น "Made to Order จัดแบบพิเศษ" ให้เข้าเกณฑ์ยกเว้นส่วนลดขายส่งอัตโนมัติ
+  //   (isBillExcludedCat ใช้คีย์เวิร์ดเดียวกันทั้ง frontend/backend — ไม่ต้องเขียนเงื่อนไขซ้ำ)
+  //   sku ใช้ jobId เอง (ไม่ใช่ SKU สินค้าจริง) — ฝั่งเซิร์ฟเวอร์ (splitMtoSaleItems_) แทนที่ด้วย
+  //   MTO_BUNDLE_SKU ก่อนยิง ZORT อยู่แล้ว โดยดูจาก it.mtoJobId ไม่ใช่ it.sku
+  function addMtoJobToCart(job) {
+    if (cart.some(it => it.mtoJobId === job.jobId)) return;   // กันเพิ่มซ้ำ
+    setCart(c => [...c, {
+      sku: job.jobId, name: job.jobName || job.jobId, category: "Made to Order จัดแบบพิเศษ",
+      imageUrl: job.imageUrl || "", qty: 1, price: Number(job.price) || 0, qtyStore: 1,
+      mtoJobId: job.jobId, mtoCustomer: job.customer || "",
+    }]);
+    setMtoSearch("");
+    showToast("success", "+ " + (job.jobName || job.jobId), "🎁");
+  }
+
+  // ── รายการงาน MTO ที่ "ขายได้" — ใช้ค่า job.sellable จาก backend ตรง ๆ เท่านั้น ──────
+  // ⚠️ ห้ามคำนวณกฎ Fulfillment/Sale status ซ้ำในนี้ (เช่นเทียบ job.status === "เสร็จแล้ว" เอง)
+  //    canSellMtoJob_ (appsscript_complete.gs) เป็นกฎเดียวของทั้งระบบ — readMtoJobs_ คำนวณ
+  //    job.sellable ให้แล้วทุกแถว เปลี่ยนกฎในอนาคตแก้ที่ backend จุดเดียว ไม่ต้องแตะที่นี่
+  const [mtoSearch, setMtoSearch] = uS("");
+  // optimistic hide หลังขายสำเร็จ — กัน picker โชว์งานเดิมซ้ำก่อนรอบ sync ถัดไปจะเห็น sellable:false
+  // จริงจาก server (เหมือน pattern pendingOrderQtyMap/localPendingOrders ที่อื่นในระบบ)
+  const [locallySoldMto, setLocallySoldMto] = uS(() => new Set());
+  uE(() => { setLocallySoldMto(new Set()); }, [data.mtoJobs]);   // ข้อมูลจริงมาแล้ว → เชื่อของจริง
+
+  const mtoSellableAll = uM(
+    () => mtoJobs.filter(j => j && j.sellable && !locallySoldMto.has(j.jobId) && !cart.some(it => it.mtoJobId === j.jobId)),
+    [mtoJobs, locallySoldMto, cart]
+  );
+  const mtoAnySellable = uM(() => mtoJobs.some(j => j && j.sellable), [mtoJobs]);
+  const mtoFiltered = uM(() => {
+    const q = mtoSearch.trim().toLowerCase();
+    const base = q
+      ? mtoSellableAll.filter(j => {
+          const toks = q.split(/\s+/).filter(Boolean);
+          const hay = ((j.jobId || "") + " " + (j.jobName || "") + " " + (j.customer || "")).toLowerCase();
+          return toks.every(t => hay.includes(t));
+        })
+      : mtoSellableAll;
+    return base.slice(0, 30);
+  }, [mtoSellableAll, mtoSearch]);
+
   // เครื่องสแกนบาร์โค้ด (USB/มือถือ) ทำงานเหมือนคีย์บอร์ด: พิมพ์รหัส+Enter
   // Enter → ถ้าตรง SKU/บาร์โค้ดพอดี (หรือเหลือผลเดียว) เพิ่มลงตะกร้าเลย · ซ้ำ = บวกจำนวน
   function handleScanEnter(e) {
@@ -11128,7 +11174,12 @@ function PosView({ data, role }) {
     setSaving(true);
     const cid = billCid();
     const payload = {
-      items: cart.map(it => ({ sku: it.sku, name: it.name, category: it.category, qty: Number(it.qty) || 0, price: Number(it.price) || 0 })),
+      // mtoJobId ส่งเฉพาะบรรทัดงาน MTO — ฝั่งเซิร์ฟเวอร์ (splitMtoSaleItems_) ใช้คีย์นี้แยก
+      // บรรทัด MTO ออกจากสินค้าปกติ ไม่ใช่ดูจาก sku/category
+      items: cart.map(it => ({
+        sku: it.sku, name: it.name, category: it.category, qty: Number(it.qty) || 0, price: Number(it.price) || 0,
+        mtoJobId: it.mtoJobId || undefined,
+      })),
       customer: cust, manualDiscount: md, taxInvoice, paymentMethod: payMethod || "", channel,
       cashReceived: (!online && payMethod === "เงินสด") ? cashReceivedNum : undefined,
       saleMode: saleMode,
@@ -11154,6 +11205,11 @@ function PosView({ data, role }) {
 
     setSaving(false);
     if (!r.success) { showToast("error", (online ? "บันทึกการขายไม่สำเร็จ: " : "ออกบิลไม่สำเร็จ: ") + (r.error || ""), "❌"); return; }
+    // งาน MTO ที่ขายไปในบิลนี้ — ซ่อนออกจาก picker ทันที (ก่อนรอบ sync ถัดไปจะเห็น sellable:false
+    // จริงจาก server) กัน saler คนถัดไป/แท็บอื่นเผลอเลือกซ้ำ (backend กันซ้ำอยู่แล้วแต่ UX ควรตรงกัน)
+    if (r.data && Array.isArray(r.data.mtoSold) && r.data.mtoSold.length) {
+      setLocallySoldMto(prev => new Set([...prev, ...r.data.mtoSold]));
+    }
     setResult(r.data || {});
     showToast("success", online ? "บันทึกการขายสำเร็จ" : "ออกบิลสำเร็จ", "🎉");
   }
@@ -11297,6 +11353,47 @@ function PosView({ data, role }) {
         )}
       </Card>
 
+      {/* ── งาน MTO ที่จัดเสร็จแล้ว พร้อมขาย (Phase 2) ──
+           แสดงเฉพาะเมื่อมีงานที่ sellable จริงจาก backend อย่างน้อย 1 งาน — ไม่มีเลยไม่โชว์การ์ด
+           กันรก UI ของ role ที่ไม่เคยใช้ MTO เลย */}
+      {mtoAnySellable && (
+        <Card padding={true} title={`🎁 งาน MTO พร้อมขาย (${mtoSellableAll.length})`}>
+          <input value={mtoSearch} onChange={e => setMtoSearch(e.target.value)}
+            placeholder="ค้นชื่องาน / ลูกค้า / เลขงาน" style={inp}/>
+          {mtoFiltered.length === 0 ? (
+            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 8, textAlign: "center", padding: "8px 0" }}>
+              {mtoSearch ? "ไม่พบงานที่ตรงกับคำค้น" : "งาน MTO ที่จัดเสร็จแล้วอยู่ในตะกร้าครบแล้ว"}
+            </div>
+          ) : (
+            <div style={{ marginTop: 8, border: "1px solid #eee", borderRadius: 8, maxHeight: 320, overflowY: "auto" }}>
+              {mtoFiltered.map(job => (
+                <div key={job.jobId} onClick={() => addMtoJobToCart(job)}
+                  style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderBottom: "1px solid #f3f4f6", cursor: "pointer", gap: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                    {job.imageUrl
+                      ? <img src={job.imageUrl} loading="lazy" style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 6, flexShrink: 0, background: "#f3f4f6" }} onError={e => { e.target.style.display = "none"; }}/>
+                      : <div style={{ width: 44, height: 44, borderRadius: 6, background: "#f3f4f6", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>🎁</div>}
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{job.jobName || job.jobId}</div>
+                      <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                        {job.date}{job.customer ? ` · ${job.customer}` : ""}
+                      </div>
+                      <div style={{ fontSize: 11.5, color: job.assigneeName ? "var(--g-700)" : "var(--muted)", marginTop: 1 }}>
+                        👤 {job.assigneeName || "ยังไม่มอบหมาย"}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                    <span style={{ fontWeight: 700 }}>{fmtBfull(job.price)}</span>
+                    <span style={{ fontSize: 20, color: "var(--g-600,#1f7f44)" }}>＋</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
+
       {/* ── เลือกจากหมวดหมู่ (กริดรูป) ── */}
       <Card padding={true} title="🗂️ เลือกจากหมวดหมู่">
         <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 6, marginBottom: 10 }}>
@@ -11347,10 +11444,11 @@ function PosView({ data, role }) {
               </tr></thead>
               <tbody>
                 {cart.map((it, i) => {
-                  const over = (Number(it.qty) || 0) > (it.qtyStore || 0);
+                  const isMto = !!it.mtoJobId;   // บรรทัดงาน MTO — 1 งาน = 1 บรรทัดเสมอ ไม่มีสต็อกให้เทียบ
+                  const over = !isMto && (Number(it.qty) || 0) > (it.qtyStore || 0);
                   const excl = isBillExcludedCat(it.category);
                   return (
-                    <tr key={it.sku} style={{ borderTop: "1px solid #f3f4f6" }}>
+                    <tr key={it.mtoJobId || it.sku} style={{ borderTop: "1px solid #f3f4f6" }}>
                       <td style={{ padding: "8px 6px" }}>
                         {/* แตะรูป/ชื่อ = เปิดรายละเอียด + รูปใหญ่ (กติกา UI: ทุกที่ที่โชว์ SKU+ชื่อ ต้องกดดูได้) */}
                         <div onClick={() => setDetailSku(it.sku)} title="ดูรายละเอียดสินค้า"
@@ -11358,20 +11456,25 @@ function PosView({ data, role }) {
                           <div style={{ width: 36, height: 36, borderRadius: 5, flexShrink: 0, background: "#f3f4f6", position: "relative", overflow: "hidden" }}>
                             {it.imageUrl
                               ? <img src={it.imageUrl} loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} onError={e => { e.target.style.display = "none"; }}/>
-                              : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>🌸</div>}
+                              : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>{isMto ? "🎁" : "🌸"}</div>}
                             <div style={{ position: "absolute", bottom: 0, right: 0, background: "rgba(0,0,0,.45)", borderRadius: "4px 0 0 0", padding: "0 3px", fontSize: 8, color: "#fff", lineHeight: 1.5 }}>🔍</div>
                           </div>
                           <div style={{ minWidth: 0 }}>
                             <div style={{ fontWeight: 600 }}>{it.name}</div>
                             <div style={{ fontSize: 11, color: over ? "#dc2626" : "var(--muted)" }}>
-                              {it.sku}{excl ? " · ยกเว้นส่วนลด" : ""}{over ? ` · เกินสต๊อกหน้าร้าน (${fmtN(it.qtyStore)})` : ""}
+                              {isMto
+                                ? `🎁 งาน MTO${it.mtoCustomer ? " · ลูกค้า " + it.mtoCustomer : ""}`
+                                : `${it.sku}${excl ? " · ยกเว้นส่วนลด" : ""}${over ? ` · เกินสต๊อกหน้าร้าน (${fmtN(it.qtyStore)})` : ""}`}
                             </div>
                           </div>
                         </div>
                       </td>
                       <td style={{ padding: "8px 6px", textAlign: "center" }}>
-                        <input type="number" min="0" value={it.qty} onChange={e => patchItem(i, { qty: e.target.value === "" ? "" : Math.max(0, parseInt(e.target.value, 10) || 0) })}
-                          style={{ width: 60, padding: "6px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "center", minWidth: 0 }}/>
+                        {isMto
+                          // งาน MTO = ของจริงชิ้นเดียวต่องาน ห้ามแก้จำนวน (ขายซ้ำ/ขายเกิน 1 ไม่ได้)
+                          ? <span style={{ fontWeight: 700, color: "var(--muted)" }} title="งาน MTO ขายได้ 1 ต่อ 1 งานเสมอ">1</span>
+                          : <input type="number" min="0" value={it.qty} onChange={e => patchItem(i, { qty: e.target.value === "" ? "" : Math.max(0, parseInt(e.target.value, 10) || 0) })}
+                              style={{ width: 60, padding: "6px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "center", minWidth: 0 }}/>}
                       </td>
                       <td style={{ padding: "8px 6px", textAlign: "right" }}>
                         <input type="number" min="0" value={it.price} onChange={e => patchItem(i, { price: e.target.value === "" ? "" : Math.max(0, parseFloat(e.target.value) || 0) })}

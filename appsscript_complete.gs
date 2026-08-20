@@ -14212,6 +14212,64 @@ function readShippingFeeSku_() {
   catch (e) { return ""; }
 }
 
+// SKU "bundle" เดียวที่ ZORT รับรู้ตอนขายงาน MTO — เจ้าของสร้างสินค้า/บริการ bundle ใน ZORT
+// เองแล้วตั้งค่าที่ Script Property `MTO_BUNDLE_SKU` · นโยบาย: ZORT ได้ SKU เดียว ราคาเดียวต่อ
+// งาน MTO (ไม่ส่งองค์ประกอบ) — กัน double deduction / รายได้องค์ประกอบปลอม / รายงานเพี้ยน
+// ⚠️ ไม่ตั้ง = ขายงาน MTO ผ่าน POS ไม่ได้ (createSaleBill ปฏิเสธทั้งใบ) — เพราะไม่มี SKU ให้บันทึกรายได้
+function readMtoBundleSku_() {
+  try { return String(PropertiesService.getScriptProperties().getProperty("MTO_BUNDLE_SKU") || "").trim(); }
+  catch (e) { return ""; }
+}
+
+// แยกบรรทัดขาย เมื่ออาจมี "งาน MTO (bundle)" ปนกับสินค้าปกติ — บรรทัด MTO ระบุด้วย it.mtoJobId
+//  - zortItems  : บรรทัด MTO ถูกแทน sku ด้วย bundleSku (ZORT ได้ SKU เดียว/ราคาเดียวต่อ bundle)
+//                 บรรทัดปกติคงเดิม — ราคาไม่เปลี่ยน (แทนแค่ sku) → ยอดรวมเท่าเดิม
+//  - deductItems: เฉพาะบรรทัดสินค้าปกติ — องค์ประกอบ MTO ถูกหักสต็อกตอน fulfillment แล้ว
+//                 (Decision #2) ห้ามหักซ้ำ · bundle SKU ก็ไม่ใช่แถวสต็อกจริงในชีตสินค้า
+//  - mtoJobIds  : jobId ที่ต้องมาร์ค "ขายแล้ว" หลัง ZORT สำเร็จ
+// pure — ไม่แตะชีต/ZORT (เทสต์ได้ตรง ๆ)
+function splitMtoSaleItems_(items, bundleSku) {
+  var mtoJobIds = [], zortItems = [], deductItems = [];
+  (items || []).forEach(function (it) {
+    var jobId = String((it && it.mtoJobId) || "").trim();
+    if (jobId) {
+      mtoJobIds.push(jobId);
+      zortItems.push(Object.assign({}, it, { sku: bundleSku }));
+    } else {
+      zortItems.push(it);
+      deductItems.push(it);
+    }
+  });
+  return { hasMto: mtoJobIds.length > 0, mtoJobIds: mtoJobIds, zortItems: zortItems, deductItems: deductItems };
+}
+
+// ตรวจก่อนออกบิลว่า งาน MTO ทุกใบในตะกร้า "ขายได้" (canSellMtoJob_) — ต้องผ่านครบก่อนแตะ ZORT
+// (ถ้าปล่อยให้ AddOrder สำเร็จก่อนแล้วค่อยพบว่าขายไม่ได้ = มีบิลแต่ไม่ได้มาร์คงาน = ข้อมูลขัดกัน)
+// อ่านชีตงานครั้งเดียว · caller ต้องถือ scriptLock อยู่ (กันงานถูกมาร์คขายคั่นระหว่างตรวจกับเขียน)
+function validateMtoJobsSellable_(ss, jobIds) {
+  var sh = getOrCreateMtoJobSheet_(ss);
+  var rows = sh.getDataRange().getValues();
+  var byId = {};
+  for (var i = 1; i < rows.length; i++) {
+    byId[String(rows[i][0]).trim()] = {
+      status: String(rows[i][6] || "").trim(),
+      saleStatus: String(rows[i][COL_MTO_SALE_STATUS - 1] || "").trim(),
+    };
+  }
+  for (var j = 0; j < (jobIds || []).length; j++) {
+    var id = String(jobIds[j] || "").trim();
+    var job = byId[id];
+    if (!job) return { ok: false, jobId: id, message: "ไม่พบงาน " + id };
+    if (!canSellMtoJob_(job)) {
+      var why = job.saleStatus === MTO_SALE_SOLD ? "ขายไปแล้ว"
+              : job.saleStatus === MTO_SALE_CANCELLED ? "ถูกยกเลิก"
+              : "ยังจัดไม่เสร็จ";
+      return { ok: false, jobId: id, message: "งาน " + id + " " + why };
+    }
+  }
+  return { ok: true };
+}
+
 // ข้อความจัดส่งที่ต่อท้าย remark ของ order — ต้องมีเสมอแม้ค่าส่งไม่ได้เข้า ZORT เป็น line item
 // (คนแพ็คของเปิดดูใน ZORT ต้องเห็นว่าส่งไปที่ไหน ใครรับ ขนส่งอะไร)
 function shippingRemark_(shipping, shipInZort) {
@@ -14293,6 +14351,18 @@ function createSaleBill(ss, data, actor) {
   var items = Array.isArray(data.items) ? data.items : [];
   if (!items.length) return error("ไม่มีรายการสินค้าในบิล");
 
+  // ── งาน MTO ที่ขายผ่าน POS (บรรทัดที่มี it.mtoJobId) ────────────────────────────
+  // นโยบาย Phase 2 (Decision #1/#2 + ZORT policy): ขายงาน MTO ที่ "จัดเสร็จ + ยังไม่ขาย"
+  //   · ZORT ได้ SKU เดียว (MTO_BUNDLE_SKU) ราคาเดียวต่อ bundle — ไม่ส่งองค์ประกอบ
+  //   · ไม่หักสต็อกองค์ประกอบซ้ำ (หักตอน fulfillment แล้ว) → ตัดบรรทัด MTO ออกจากการหักสต็อก
+  //   · มาร์คงาน "ขายแล้ว" หลัง ZORT สำเร็จ (markMtoJobSold_ ผูก billRef+billCid)
+  // ไม่มีบรรทัด MTO เลย = บิลปกติทุกประการ (โค้ดนี้ inert — ไม่เปลี่ยนพฤติกรรมเดิม)
+  var mtoBundleSku = readMtoBundleSku_();
+  var mtoSplit = splitMtoSaleItems_(items, mtoBundleSku);
+  if (mtoSplit.hasMto && !mtoBundleSku) {
+    return error("ยังไม่ได้ตั้งค่า MTO_BUNDLE_SKU — สร้างสินค้า bundle ใน ZORT แล้วตั้ง Script Property ก่อนขายงาน MTO");
+  }
+
   var totals = computeBillTotalsGs_(items, {
     excludeKeywords: readBillExcludeCats_(),
     manualDiscount: data.manualDiscount,
@@ -14307,7 +14377,8 @@ function createSaleBill(ss, data, actor) {
   // ทำให้ ZORT สร้างงานโอนค้าง "รอโอนสินค้า" (ให้ ZORT หักจากคลัง default เหมือน MTO)
   // ⚠️ ปัดเศษแบบ "สะสม" ผ่าน buildZortLineItems_ — ไม่ปัดแยกทีละชิ้นแล้ว (ดูคอมเมนต์ที่ฟังก์ชัน)
   //    รับประกันว่า sum(totalprice) = grandTotal เป๊ะ = ยอดที่ ZORT หักตรงกับที่เราคิดเป๊ะสตางค์
-  var productList = buildZortLineItems_(items, factor);
+  // ⚠️ ใช้ mtoSplit.zortItems — บรรทัด MTO ถูกแทน sku เป็น MTO_BUNDLE_SKU แล้ว (ราคาไม่เปลี่ยน)
+  var productList = buildZortLineItems_(mtoSplit.zortItems, factor);
 
   // ── ค่าจัดส่ง (โหมดขายออนไลน์) ──────────────────────────────────────────────
   // ⚠️ **บวกท้ายสุด ไม่เข้า computeBillTotalsGs_** — กฎส่วนลดขายส่ง 20%/ขั้นบาท และการถอด
@@ -14377,6 +14448,13 @@ function createSaleBill(ss, data, actor) {
         Logger.log("createSaleBill: billCid ซ้ำ (" + billCid + ") → คืนผลเดิม ไม่ยิง ZORT ใหม่");
         return ok(Object.assign({}, _replay, { dedup: true }));
       }
+    }
+
+    // ── ตรวจงาน MTO ต้อง "ขายได้" ครบทุกใบ ก่อนแตะ ZORT (ในล็อก — กันถูกมาร์คขายคั่นกลาง) ──
+    // ถ้าปล่อยให้ AddOrder สำเร็จก่อนแล้วพบว่าขายไม่ได้ = มีบิลแต่ไม่ได้มาร์คงาน = ข้อมูลขัดกัน
+    if (mtoSplit.hasMto) {
+      var mtoValid = validateMtoJobsSellable_(ss, mtoSplit.mtoJobIds);
+      if (!mtoValid.ok) return error("ขายงาน MTO ไม่ได้: " + mtoValid.message);
     }
 
     var headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
@@ -14456,7 +14534,10 @@ function createSaleBill(ss, data, actor) {
     // กันขายเกิน: คนถัดไปที่เปิด POS จะเห็นเลขที่หักแล้ว ไม่ใช่เลขค้างของเมื่อ 2 ชม.ก่อน
     // ⚠️ ส่ง productList (ไม่ใช่ list) — list มีบรรทัด "ค่าจัดส่ง" ปนอยู่ตอนตั้ง SHIPPING_FEE_SKU
     //    ส่งทั้ง list = สต็อกของ SKU ค่าจัดส่งถูกหักทุกบิลจนติดลบ/เป็น 0 โดยไม่มีใครสังเกต
-    var stockRes = deductFrontStoreForSale_(ss, productList);
+    // ⚠️ ตัดบรรทัดงาน MTO ออก — องค์ประกอบถูกหักตอน fulfillment แล้ว (Decision #2) ห้ามหักซ้ำ
+    //    และ MTO_BUNDLE_SKU ก็ไม่ใช่แถวสต็อกจริงในชีตสินค้า · ไม่มี MTO = deductList === productList
+    var deductList = buildZortLineItems_(mtoSplit.deductItems, factor);
+    var stockRes = deductFrontStoreForSale_(ss, deductList);
     if (!stockRes.ok) {
       logZortFailure_("หักสต็อกหน้าร้านหลังออกบิล " + (orderNumber || ""), stockRes.error);
     }
@@ -14509,12 +14590,26 @@ function createSaleBill(ss, data, actor) {
     });
     if (!billLog.ok) logZortFailure_("บันทึกชีตบิลขาย " + (orderNumber || ""), billLog.error);
 
+    // ── มาร์คงาน MTO "ขายแล้ว" (state machine การขาย) — หลัง ZORT/บิลสำเร็จ ยังอยู่ในล็อก ──
+    // ตรวจ sellable ไปแล้วด้านบน + ถือล็อกตลอด → ที่นี่ควรสำเร็จเสมอ · พลาด (ยกเว้น alreadySold
+    // ที่ billCid dedup กันไว้แล้ว) = log ไว้ ไม่ทำให้บิลล้ม (บิลออกไปแล้ว — หลักเดียวกับ billLog)
+    var mtoSold = [];
+    if (mtoSplit.hasMto) {
+      var mtoSoldAt = Utilities.formatDate(new Date(), "Asia/Bangkok", "dd/MM/yyyy HH:mm:ss");
+      mtoSplit.mtoJobIds.forEach(function (jid) {
+        var mr = markMtoJobSold_(ss, jid, orderNumber || "", mtoSoldAt, billCid);
+        if (mr.ok || mr.reason === "alreadySold") { mtoSold.push(jid); }
+        else { logZortFailure_("มาร์คขายงาน MTO " + jid + " (บิล " + (orderNumber || "") + ")", mr.reason); }
+      });
+    }
+
     invalidateCache_();
     // ส่ง shipFee/payTotal กลับไปด้วย — สรุปที่ลูกค้าเห็นต้องใช้ยอดที่ server บันทึกไว้จริง
     // ไม่ใช่ยอดที่หน้าจอคำนวณเอง (สองฝั่งคิดต่างกันเมื่อไหร่ ลูกค้าจะได้ยอดที่ไม่ตรงกับระบบ)
     var out = { orderId: orderId, orderNumber: orderNumber, documentNumber: docNumber,
                 totals: totals, shipFee: shipFee, payTotal: payTotal, shipInZort: shipInZort,
-                unpaid: unpaidMethod, billLogId: billLog.ok ? billLog.id : null };
+                unpaid: unpaidMethod, billLogId: billLog.ok ? billLog.id : null,
+                mtoSold: mtoSold.length ? mtoSold : undefined };
     // เก็บผลไว้ตอบซ้ำ — ผู้ขายที่ browser ตัดสายไปแล้วจะได้ "ผลจริง" ตอนถาม action=billCheck
     // แทนที่จะเดาเอง · เขียนหลังทุกอย่างเสร็จ (ไม่ throw ออกไป — บิลออกไปแล้ว)
     if (billCid) {
