@@ -13379,16 +13379,88 @@ function error(msg) {
 // SECTION 8: MTO Jobs
 // ───────────────────────────────────────────────────────────
 
+// สถานะ fulfillment (state machine ที่ 1) — ค่าที่ applyMtoFulfillment_ เขียนตอน "จบการจัด"
+const MTO_FULFILL_DONE = "เสร็จแล้ว";
+// คอลัมน์ "สถานะขาย" (state machine ที่ 2 — แยกจาก "สถานะ" ที่เป็น fulfillment)
+// ⚠️ ต่อท้ายเท่านั้น ห้ามแทรก/สลับ (บทเรียนข้อ 5) — K/L/M/N หลังคอลัมน์เดิม J
+const COL_MTO_SALE_STATUS = 11;  // K = สถานะขาย (ว่าง/ยังไม่ขาย · ขายแล้ว · ยกเลิก)
+const COL_MTO_SALE_REF    = 12;  // L = อ้างอิงบิลขาย (เลขบิล/ออเดอร์ ZORT)
+const COL_MTO_SALE_AT     = 13;  // M = ขายเมื่อ
+const COL_MTO_SALE_CID    = 14;  // N = billCid ของบิลที่ขาย (ไว้ trace/debug idempotency)
+const MTO_SALE_UNSOLD = "ยังไม่ขาย";
+const MTO_SALE_SOLD   = "ขายแล้ว";
+const MTO_SALE_CANCELLED = "ยกเลิก";
+
+// ─── กฎธุรกิจเดียวว่า "งาน MTO ขายได้หรือยัง" — ทั้งระบบต้องผ่านตัวนี้ตัวเดียว ───
+// Decision #1/#2: fulfillment (จัดเสร็จ) กับ sale (ขาย) เป็นคนละ state machine
+//   ปัจจุบัน: ขายได้เมื่อ fulfillment = "เสร็จแล้ว" **และ** sale = ยังไม่ขาย (ว่าง = ยังไม่ขาย)
+// ⚠️ ห้ามให้ POS/createSaleBill เทียบ status/saleStatus ตรง ๆ — เปลี่ยนกฎในอนาคตต้องแก้ที่นี่จุดเดียว
+// รับ object ที่มี { status (fulfillment), saleStatus } — ตรงกับที่ readMtoJobs_ คืน
+function canSellMtoJob_(job) {
+  if (!job) return false;
+  const fulfilled = String(job.status || "").trim() === MTO_FULFILL_DONE;
+  const sale = String(job.saleStatus || "").trim();
+  const unsold = (sale === "" || sale === MTO_SALE_UNSOLD);
+  return fulfilled && unsold;
+}
+
 function getOrCreateMtoJobSheet_(ss) {
   let sh = ss.getSheetByName(SHEET_MTO_JOBS);
   if (!sh) {
     sh = ss.insertSheet("งาน MTO");
-    sh.appendRow(["JobID","วันที่","ชื่องาน","ลูกค้า","ราคา","รูป","สถานะ","ปิดงานเมื่อ","ผู้รับผิดชอบ(staffId)","ชื่อผู้รับผิดชอบ"]);
-  } else if (!sh.getRange(1, 9).getValue()) {
-    // self-heal: ชีตเก่าที่สร้างไว้ก่อนมีคอลัมน์ผู้รับผิดชอบ — เติม header ให้ ไม่กระทบแถวข้อมูลเดิม
-    sh.getRange(1, 9, 1, 2).setValues([["ผู้รับผิดชอบ(staffId)", "ชื่อผู้รับผิดชอบ"]]);
+    sh.appendRow(["JobID","วันที่","ชื่องาน","ลูกค้า","ราคา","รูป","สถานะ","ปิดงานเมื่อ","ผู้รับผิดชอบ(staffId)","ชื่อผู้รับผิดชอบ","สถานะขาย","อ้างอิงบิลขาย","ขายเมื่อ","billCid ขาย"]);
+  } else {
+    // self-heal: เติม header ที่ขาดให้ชีตเก่า ไม่กระทบแถวข้อมูลเดิม (append-only)
+    if (!sh.getRange(1, 9).getValue()) {
+      // ชีตเก่าที่สร้างไว้ก่อนมีคอลัมน์ผู้รับผิดชอบ
+      sh.getRange(1, 9, 1, 2).setValues([["ผู้รับผิดชอบ(staffId)", "ชื่อผู้รับผิดชอบ"]]);
+    }
+    if (!sh.getRange(1, COL_MTO_SALE_STATUS).getValue()) {
+      // ชีตเก่าที่ยังไม่มีคอลัมน์สถานะขายเลย — เติมครบ K..N
+      sh.getRange(1, COL_MTO_SALE_STATUS, 1, 4).setValues([["สถานะขาย", "อ้างอิงบิลขาย", "ขายเมื่อ", "billCid ขาย"]]);
+    } else if (!sh.getRange(1, COL_MTO_SALE_CID).getValue()) {
+      // ชีตที่มี K/L/M แล้วแต่ยังไม่มี N (billCid) — เติมเฉพาะ N
+      sh.getRange(1, COL_MTO_SALE_CID).setValue("billCid ขาย");
+    }
   }
   return sh;
+}
+
+// ─── ทำเครื่องหมาย "ขายแล้ว" ให้งาน MTO (state machine การขาย — แยกจาก fulfillment) ───
+// helper ของโดเมน MTO ล้วน ๆ — รับ billRef เป็น "ข้อความอ้างอิง" เท่านั้น ไม่รู้จัก POS/Cart/Bill
+//   ฝั่ง caller (createSaleBill) เป็นผู้ผูกความสัมพันธ์ MTO↔POS ไม่ใช่ในนี้
+// ⚠️ ไม่แตะสต็อก/วัตถุดิบ/สถานะ fulfillment เลย — การขายกับการจัดเป็นคนละ state machine
+//    (Decision #2: หักสต็อกตอน "จบการจัด" ไม่ใช่ตอนลูกค้าจ่าย)
+// ⚠️ ไม่จับ LockService เอง — caller ต้องถือ lock ครอบอยู่แล้ว (createSaleBill ถือ scriptLock อยู่)
+// ⚠️ "ขายได้หรือยัง" ตัดสินด้วย canSellMtoJob_ ตัวเดียว (กฎธุรกิจเดียว) — ไม่เทียบ status เอง
+//    reason ที่คืนกลับเป็นแค่การ "แจกแจงสาเหตุ" ให้ caller/UX ไม่ใช่กฎการตัดสิน
+// เก็บ billCid ไว้ในสถานะขายด้วย (col N) เพื่อไล่ trace idempotency ย้อนหลัง
+// คืน { ok, reason } — reason: notFound / cancelled / alreadySold(+ref) / notFulfilled / sold
+function markMtoJobSold_(ss, jobId, billRef, soldAt, billCid) {
+  const id = String(jobId || "").trim();
+  if (!id) return { ok: false, reason: "notFound" };
+  const sh = getOrCreateMtoJobSheet_(ss);
+  const rows = sh.getDataRange().getValues();
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]).trim() !== id) continue;
+    const job = {
+      status: String(rows[i][6] || "").trim(),
+      saleStatus: String(rows[i][COL_MTO_SALE_STATUS - 1] || "").trim(),
+    };
+    if (!canSellMtoJob_(job)) {
+      // แจกแจงสาเหตุที่ขายไม่ได้ (กฎจริงอยู่ที่ canSellMtoJob_ แล้ว — ตรงนี้แค่บอกว่าทำไม)
+      if (job.saleStatus === MTO_SALE_CANCELLED) return { ok: false, reason: "cancelled" };
+      if (job.saleStatus === MTO_SALE_SOLD) {
+        // idempotent: ขายไปแล้ว → ไม่เขียนซ้ำ คืน ref เดิมไว้ให้ caller ตรวจ
+        return { ok: false, reason: "alreadySold", ref: String(rows[i][COL_MTO_SALE_REF - 1] || "").trim() };
+      }
+      return { ok: false, reason: "notFulfilled" };   // ยังจัดไม่เสร็จ → ยังขายไม่ได้
+    }
+    sh.getRange(i + 1, COL_MTO_SALE_STATUS, 1, 4)
+      .setValues([[MTO_SALE_SOLD, String(billRef || ""), soldAt || "", String(billCid || "")]]);
+    return { ok: true, reason: "sold" };
+  }
+  return { ok: false, reason: "notFound" };
 }
 
 function getOrCreateMtoItemSheet_(ss) {
@@ -15237,7 +15309,7 @@ function readMtoJobs_() {
     const r = jobRows[i];
     const jobId = String(r[0]||"").trim();
     if (!jobId || (!jobId.startsWith("MTO_") && !jobId.startsWith("MTO-"))) continue; // ข้าม header/แถวว่าง
-    jobs.push({
+    const job = {
       jobId,
       date: String(r[1]||"").trim(),
       jobName: String(r[2]||"").trim(),
@@ -15248,8 +15320,17 @@ function readMtoJobs_() {
       closedAt: String(r[7]||"").trim(),
       assigneeId: String(r[8]||"").trim(),
       assigneeName: String(r[9]||"").trim(),
+      // สถานะขาย (state machine ที่ 2) — ว่างในแถวเก่า = ยังไม่ขาย
+      saleStatus: String(r[COL_MTO_SALE_STATUS-1]||"").trim() || MTO_SALE_UNSOLD,
+      saleRef: String(r[COL_MTO_SALE_REF-1]||"").trim(),
+      soldAt: String(r[COL_MTO_SALE_AT-1]||"").trim(),
+      saleBillCid: String(r[COL_MTO_SALE_CID-1]||"").trim(),
       items: itemsMap[jobId] || [],
-    });
+    };
+    // sellable = ผลของกฎธุรกิจเดียว (canSellMtoJob_) — ส่งมาให้ frontend ใช้ตรง ๆ
+    // ไม่ต้องเขียนกฎซ้ำฝั่ง .jsx (กัน drift ข้ามภาษา) · เปลี่ยนกฎที่ canSellMtoJob_ ที่เดียว
+    job.sellable = canSellMtoJob_(job);
+    jobs.push(job);
   }
   return jobs.reverse(); // newest first
 }
