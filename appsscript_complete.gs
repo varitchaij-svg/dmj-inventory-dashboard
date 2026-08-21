@@ -473,12 +473,53 @@ function createSession_(ss, staffId) {
 }
 
 // คืน staff object (ถ้า session valid: ไม่ถูก revoke และยังไม่หมดอายุ) หรือ null
+// ── cache ผล resolveSession_ ต่อ token (Phase 7.6 ก้อน D) ──────────────────────
+// hot path: ทุก request ที่มี sessionToken เรียก resolveSession_ · เดิมอ่าน+สแกนชีตเซสชัน
+// ทั้งใบ + เขียน lastSeenAt "ทุก request" → ยิ่งชีตโต ยิ่งช้าทุกการกดปุ่มทั้งร้าน
+// ⚠️ ต้องล้าง cache ตอน revoke (logout) + เปลี่ยน role/status (saveStaff / ตั้ง role จาก editor)
+//    ไม่งั้น logout แล้วยังใช้ได้ต่อ / เปลี่ยนตำแหน่งแล้วยังถือสิทธิ์เก่า = ช่องโหว่เชิงความปลอดภัย
+const SESSION_CACHE_TTL_SEC = 300;                    // 5 นาที — สั้นพอให้เปลี่ยนสิทธิ์เห็นผลไว
+const SESSION_LASTSEEN_THROTTLE_MS = 10 * 60 * 1000;  // เขียน lastSeenAt เฉพาะเมื่อเก่ากว่า 10 นาที
+
+function sessionCacheKey_(token) {
+  const raw = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, String(token));  // token ไม่เก็บดิบใน key
+  return 'dmj_sess_' + raw.map(function (b) { return ((b & 0xFF) + 256).toString(16).slice(1); }).join('');
+}
+function sessionCacheClear_(token) {
+  if (!token) return;
+  try { CacheService.getScriptCache().remove(sessionCacheKey_(token)); } catch (e) {}
+}
+// ล้าง cache ของทุก session token ที่เป็นของ staffId นี้ (ตอนเปลี่ยน role/status) — saveStaff เกิดไม่บ่อย
+// สแกนชีตครั้งเดียวจึงคุ้ม · ไม่ล้าง = คนที่ถูกเปลี่ยนตำแหน่งยังถือสิทธิ์เก่าได้ถึง 5 นาที
+function sessionCacheClearForStaff_(ss, staffId) {
+  if (!staffId) return;
+  try {
+    const sh = sessionsSheet_(ss);
+    const last = sh.getLastRow();
+    if (last < 2) return;
+    const vals = sh.getRange(2, 1, last - 1, 2).getValues();  // [token, staffId]
+    const cache = CacheService.getScriptCache();
+    for (let i = 0; i < vals.length; i++) {
+      if (String(vals[i][1]) === String(staffId)) {
+        try { cache.remove(sessionCacheKey_(String(vals[i][0]))); } catch (e) {}
+      }
+    }
+  } catch (e) {}
+}
+
 function resolveSession_(ss, token) {
   // Phase B: จับ count + duration ต่อ request (double-resolve ที่ me/punch/... เรียกซ้ำ)
-  // try/finally ห่อเพื่อวัดทุกทางออก — ไม่เปลี่ยน logic เดิมเลย
+  // try/finally ห่อเพื่อวัดทุกทางออก
   var _pt0 = Date.now();
   try {
     if (!token) return null;
+    // ── cache hit: คืน object ที่เก็บไว้เลย ไม่แตะชีต (revoke/saveStaff ล้าง cache ให้แล้ว) ──
+    var _cache = null, _ck = null;
+    try { _cache = CacheService.getScriptCache(); _ck = sessionCacheKey_(token); } catch (e) {}
+    if (_cache && _ck) {
+      var _hit = _cache.get(_ck);
+      if (_hit) { try { return JSON.parse(_hit); } catch (e) {} }
+    }
     const sh = sessionsSheet_(ss);
     const last = sh.getLastRow();
     if (last < 2) return null;
@@ -489,11 +530,19 @@ function resolveSession_(ss, token) {
       const revoked = r[5] === true || r[5] === 'TRUE';
       const expiresAt = r[3] ? new Date(r[3]).getTime() : 0;
       if (revoked || !expiresAt || expiresAt < Date.now()) return null;
-      try { sh.getRange(i + 2, 5).setValue(new Date()); } catch (e) {}
+      // เขียน lastSeenAt เฉพาะเมื่อเก่ากว่า throttle — เดิมเขียนทุก request คือคอขวดหลัก
+      try {
+        const seen = r[4] ? new Date(r[4]).getTime() : 0;
+        if (!seen || (Date.now() - seen) >= SESSION_LASTSEEN_THROTTLE_MS) {
+          sh.getRange(i + 2, 5).setValue(new Date());
+        }
+      } catch (e) {}
       const staffSh = staffSheet_(ss);
       const staffRow = findStaffRowById_(staffSh, r[1]);
       if (staffRow < 0) return null;
-      return staffRowToObj_(staffSh.getRange(staffRow, 1, 1, 11).getValues()[0]);
+      const obj = staffRowToObj_(staffSh.getRange(staffRow, 1, 1, 11).getValues()[0]);
+      if (_cache && _ck && obj) { try { _cache.put(_ck, JSON.stringify(obj), SESSION_CACHE_TTL_SEC); } catch (e) {} }
+      return obj;
     }
     return null;
   } finally {
@@ -503,6 +552,7 @@ function resolveSession_(ss, token) {
 
 function revokeSession_(ss, token) {
   if (!token) return;
+  sessionCacheClear_(token);   // ⚠️ ล้าง cache ก่อน ไม่งั้น logout แล้ว resolveSession_ ยังคืน session เดิม
   const sh = sessionsSheet_(ss);
   const last = sh.getLastRow();
   if (last < 2) return;
@@ -949,6 +999,7 @@ function setStaffRoleDirect_(staffIdOrLineName, role) {
   const rowIdx = hit + 2;                     // +1 ข้าม header, +1 เพราะ getRange เป็น 1-indexed
   sh.getRange(rowIdx, 6).setValue(role);      // col F = role
   sh.getRange(rowIdx, 7).setValue("active");  // col G = status
+  try { sessionCacheClearForStaff_(ss, all[hit].staffId); } catch (e) {}  // ล้าง cache สิทธิ์เก่า (ก้อน D)
   try { writeAuditLog_("GAS editor", "ตั้งตำแหน่งพนักงาน (จาก script)", all[hit].staffId, role); } catch (e) {}
   return "✅ ตั้ง " + (all[hit].displayName || all[hit].lineDisplayName || all[hit].staffId) +
          " เป็น \"" + role + "\" + เปิดใช้งานแล้ว — กลับไปที่เว็บแล้วกดรีเฟรช/เข้าใหม่";
@@ -1008,6 +1059,9 @@ function saveStaffHandler_(ss, data, actor) {
   if (VALID_ROLES.indexOf(data.role) >= 0) sh.getRange(rowIdx, 6).setValue(data.role);
   if (VALID_STATUS.indexOf(data.status) >= 0) sh.getRange(rowIdx, 7).setValue(data.status);
   if (typeof data.note === 'string') sh.getRange(rowIdx, 11).setValue(data.note.slice(0, 300));
+  // ⚠️ ล้าง session cache ของพนักงานคนนี้ (Phase 7.6 ก้อน D) — เปลี่ยน role/status แล้วต้องเห็นผล
+  //    ทันที ไม่งั้นเขายังถือสิทธิ์เก่าได้ถึง 5 นาที (โดยเฉพาะตอนระงับบัญชี)
+  sessionCacheClearForStaff_(ss, data.staffId);
   // actor มาจาก data.actor ที่ StaffView ไม่ได้ส่ง → ใช้ชื่อจาก session ที่ตรวจแล้วแทน (เชื่อถือได้กว่า)
   const who = (s.displayName || s.lineDisplayName || actor || "ไม่ระบุ") + " (เจ้าของ)";
   writeAuditLog_(who, "แก้ไขพนักงาน", data.staffId, auditDetail_({ before: beforeObj, after: data }));

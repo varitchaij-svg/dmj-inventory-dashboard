@@ -181,3 +181,134 @@ describe('Phase 7.6 ก้อน C — poll backoff + TTL', () => {
     expect(ms * 60).toBeLessThanOrEqual(sec); // client ต้องไม่เกิน server (ไม่งั้น claim หมดอายุก่อน)
   });
 });
+
+// ── ก้อน D (ข้อ 5): resolveSession_ cache + throttle + ล้าง cache ตอน revoke/เปลี่ยน role ──
+function fakeSheet(rows) {  // rows = data rows (0-indexed) — header อยู่แถว 1 โดยปริยาย
+  return {
+    _rows: rows,
+    getLastRow: () => rows.length + 1,
+    getRange: (r, c, nR, nC) => {
+      if (nR === undefined) {  // single cell
+        return { setValue: (v) => { rows[r - 2][c - 1] = v; } };
+      }
+      return {
+        getValues: () => {
+          const out = [];
+          for (let i = 0; i < nR; i++) {
+            const src = rows[(r - 2) + i] || [];
+            out.push(src.slice(c - 1, c - 1 + nC));
+          }
+          return out;
+        },
+      };
+    },
+  };
+}
+
+function loadSession() {
+  const store = {};
+  const cache = {
+    get: (k) => (k in store ? store[k] : null),
+    put: (k, v) => { store[k] = v; },
+    remove: (k) => { delete store[k]; },
+  };
+  const ctx = {
+    store,
+    CacheService: { getScriptCache: () => cache },
+    Utilities: {
+      DigestAlgorithm: { MD5: 1 },
+      // แฮชปลอมแบบ deterministic ต่อ string (คีย์ต่าง token ต้องไม่ชนกัน)
+      computeDigest: (_a, s) => String(s).split('').map(c => c.charCodeAt(0) & 0xFF),
+    },
+    perfSess_: () => {},
+  };
+  const code = [
+    grab(GS, /const SESSION_CACHE_TTL_SEC = \d+;/),
+    grab(GS, /const SESSION_LASTSEEN_THROTTLE_MS = [^\n;]*;/),
+    grab(GS, /function sessionCacheKey_\(token\) \{[\s\S]*?\n\}/),
+    grab(GS, /function sessionCacheClear_\(token\) \{[\s\S]*?\n\}/),
+    grab(GS, /function sessionCacheClearForStaff_\(ss, staffId\) \{[\s\S]*?\n\}/),
+    grab(GS, /function staffRowToObj_\(row\) \{[\s\S]*?\n\}/),
+    grab(GS, /function findStaffRowById_\(sh, staffId\) \{[\s\S]*?\n\}/),
+    grab(GS, /function resolveSession_\(ss, token\) \{[\s\S]*?\n {2}} catch[\s\S]*?\n\}/),
+    grab(GS, /function revokeSession_\(ss, token\) \{[\s\S]*?\n\}/),
+    // sessionsSheet_/staffSheet_ ถูก stub ให้คืน fake sheet ที่แนบมากับ ss
+    'function sessionsSheet_(ss){ return ss.sessions; }',
+    'function staffSheet_(ss){ return ss.staff; }',
+    'return { resolveSession_, revokeSession_, sessionCacheClearForStaff_, sessionCacheKey_, store };',
+  ].join('\n');
+  // eslint-disable-next-line no-new-func
+  return new Function(...Object.keys(ctx), code)(...Object.values(ctx));
+}
+
+describe('Phase 7.6 ก้อน D — resolveSession_ cache + ล้างตอน revoke/เปลี่ยน role', () => {
+  const DAY = 86400000;
+  function mkSS(sessionRows, staffRows) {
+    return { sessions: fakeSheet(sessionRows), staff: fakeSheet(staffRows) };
+  }
+  // staff cols: staffId,provider,providerUserId,displayName,lineDisplayName,role,status,...
+  const staff = (id, role, status) => [id, 'line', 'uid'+id, 'ชื่อ'+id, 'L'+id, role, status || 'active', '', Date.now(), Date.now(), ''];
+  // session cols: token,staffId,createdAt,expiresAt,lastSeenAt,revoked
+  const sess = (tok, id, opts) => [tok, id, Date.now()-DAY, (opts&&opts.exp)||Date.now()+30*DAY, (opts&&opts.seen)||'', (opts&&opts.rev)||false];
+
+  it('token ถูกต้อง → คืน staff obj (role/staffId ตรง)', () => {
+    const S = loadSession();
+    const ss = mkSS([sess('TOK1','ST1')], [staff('ST1','saler')]);
+    const out = S.resolveSession_(ss, 'TOK1');
+    expect(out.staffId).toBe('ST1');
+    expect(out.role).toBe('saler');
+  });
+
+  it('เรียกครั้งที่ 2 อ่านจาก cache — ไม่แตะชีตซ้ำ (พิสูจน์: แก้ชีตแล้วยังได้ค่าเดิม)', () => {
+    const S = loadSession();
+    const ss = mkSS([sess('TOK1','ST1')], [staff('ST1','saler')]);
+    expect(S.resolveSession_(ss, 'TOK1').role).toBe('saler');
+    ss.staff._rows[0][5] = 'owner';                 // แอบแก้ role ในชีตหลัง cache แล้ว
+    expect(S.resolveSession_(ss, 'TOK1').role).toBe('saler'); // ยังได้ค่าเดิมจาก cache
+  });
+
+  it('revoke ล้าง cache — logout แล้ว resolveSession_ คืน null ทันที', () => {
+    const S = loadSession();
+    const ss = mkSS([sess('TOK1','ST1')], [staff('ST1','saler')]);
+    expect(S.resolveSession_(ss, 'TOK1')).toBeTruthy();   // cache แล้ว
+    S.revokeSession_(ss, 'TOK1');                          // logout → ล้าง cache + mark revoked
+    expect(S.resolveSession_(ss, 'TOK1')).toBeNull();     // ต้องไม่คืน session เดิม
+  });
+
+  it('เปลี่ยน role/status → sessionCacheClearForStaff_ ล้างทุก token ของคนนั้น', () => {
+    const S = loadSession();
+    const ss = mkSS([sess('TOK1','ST1'), sess('TOK2','ST1')], [staff('ST1','saler')]);
+    S.resolveSession_(ss, 'TOK1'); S.resolveSession_(ss, 'TOK2');
+    expect(S.store[S.sessionCacheKey_('TOK1')]).toBeTruthy();
+    expect(S.store[S.sessionCacheKey_('TOK2')]).toBeTruthy();
+    S.sessionCacheClearForStaff_(ss, 'ST1');
+    expect(S.store[S.sessionCacheKey_('TOK1')]).toBeUndefined();
+    expect(S.store[S.sessionCacheKey_('TOK2')]).toBeUndefined();
+  });
+
+  it('lastSeenAt: เพิ่งเห็น (<10 นาที) → ไม่เขียนซ้ำ · ว่าง → เขียน', () => {
+    const S = loadSession();
+    // เพิ่งเห็นเมื่อกี้ → ไม่ควรเขียน (token คนละตัว กัน cache hit ข้ามเคส)
+    const fresh = mkSS([sess('TA','ST1',{seen: Date.now()-1000})], [staff('ST1','saler')]);
+    S.resolveSession_(fresh, 'TA');
+    expect(fresh.sessions._rows[0][4]).not.toBeInstanceOf(Date);  // ไม่ถูกเขียนทับด้วย new Date()
+    // lastSeenAt ว่าง → ต้องเขียน
+    const stale = mkSS([sess('TB','ST1',{seen: ''})], [staff('ST1','saler')]);
+    S.resolveSession_(stale, 'TB');
+    expect(stale.sessions._rows[0][4]).toBeInstanceOf(Date);
+  });
+
+  it('session revoked/หมดอายุ → null (ไม่ cache)', () => {
+    const S = loadSession();
+    expect(S.resolveSession_(mkSS([sess('T','ST1',{rev:true})], [staff('ST1','saler')]), 'T')).toBeNull();
+    expect(S.resolveSession_(mkSS([sess('T','ST1',{exp:Date.now()-1000})], [staff('ST1','saler')]), 'T')).toBeNull();
+  });
+
+  it('meta: จุด invalidate ครบ 3 — revoke, saveStaff, ตั้ง role จาก editor', () => {
+    expect(grab(GS, /function revokeSession_\(ss, token\) \{[\s\S]*?\n\}/)).toMatch(/sessionCacheClear_/);
+    const save = grab(GS, /function saveStaffHandler_\(ss, data, actor\) \{[\s\S]*?\n\}/);
+    expect(save).toMatch(/sessionCacheClearForStaff_\(ss, data\.staffId\)/);
+    // ตั้ง role จาก GAS editor
+    expect(GS).toMatch(/sessionCacheClearForStaff_\(ss, all\[hit\]\.staffId\)/);
+  });
+});
