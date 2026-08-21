@@ -6269,6 +6269,17 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
   const [searchVal, setSearchVal] = uS("");
   const [qtyVal, setQtyVal] = uS("1");
   const [qrMap, setQrMap] = uS({});
+  // ชนิดโค้ด QR/Barcode — จำไว้ต่อเครื่องใน localStorage (เหมือน dmj_sale_mode) กันต้องสลับ
+  // ทุกครั้งที่เปิดหน้า · ค่าเริ่มต้นเป็น QR เสมอถ้ายังไม่เคยเลือก (เจ้าของขอ default เป็น QR)
+  const [codeType, setCodeTypeRaw] = uS(() => {
+    try { return localStorage.getItem("dmj_label_code_type") === "barcode" ? "barcode" : "qr"; }
+    catch (e) { return "qr"; }
+  });
+  const setCodeType = (v) => {
+    setCodeTypeRaw(v);
+    try { localStorage.setItem("dmj_label_code_type", v); } catch (e) {}
+  };
+  const [barcodeMap, setBarcodeMap] = uS({});
   const [logoSrc, setLogoSrc] = uS("logo.png");
   const [intakePdfOpen, setIntakePdfOpen] = uS(false);  // โมดัลบันทึก PDF ของเข้าใหม่ (แยกซัพพลายเออร์)
 
@@ -6352,6 +6363,39 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
     return () => clearTimeout(t);
   }, [items, doGenerate]);
 
+  // Generate Code128 barcodes using JsBarcode (canvas-based) — คนละ map กับ qrMap โดยตั้งใจ
+  // เก็บทั้งคู่ไว้พร้อมกัน สลับปุ่ม QR/Barcode ไปมาจึงไม่ต้อง generate ซ้ำ
+  const doGenerateBarcode = uC((skus) => {
+    if (!skus.length) return;
+    const JB = window.JsBarcode;
+    if (!JB) { console.warn("jsbarcode not loaded"); return; }
+    const results = {};
+    skus.forEach(sku => {
+      const canvas = document.createElement("canvas");
+      try {
+        JB(canvas, sku, {
+          format: "CODE128", displayValue: true,
+          font: "Kanit, sans-serif", fontSize: 15, textMargin: 2,
+          margin: 4, background: "#ffffff", lineColor: "#000000",
+          width: 2, height: 46,
+        });
+        results[sku] = canvas.toDataURL("image/png");
+      } catch (e) { console.warn("Barcode error:", sku, e); }
+    });
+    if (Object.keys(results).length) {
+      setBarcodeMap(prev => ({ ...prev, ...results }));
+    }
+  }, []);
+
+  uE(() => {
+    // สร้างเฉพาะตอนเลือกโหมด Barcode อยู่ — กันคำนวณทิ้งเปล่าสำหรับคนที่ไม่เคยสลับไปใช้เลย
+    if (codeType !== "barcode") return;
+    const pending = items.map(i => i.sku).filter(s => !barcodeMap[s]);
+    if (!pending.length) return;
+    const t = setTimeout(() => doGenerateBarcode(pending), 80);
+    return () => clearTimeout(t);
+  }, [items, codeType, doGenerateBarcode]);
+
   // Expand items to exact label list (no padding)
   const labelList = uM(() => {
     const flat = [];
@@ -6391,27 +6435,35 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
   const printVaseLabels = uC(() => {
     if (!labelList.length) return;
 
+    const isBc = codeType === "barcode";
     let prevSkuSep = null;
     const labelsHTML = labelList.map(p => {
       const cutSep = prevSkuSep !== null && p.sku !== prevSkuSep
         ? `<div class="cut-sep">✂ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─</div>`
         : "";
       prevSkuSep = p.sku;
-      const qrImg = qrMap[p.sku]
-        ? `<img src="${qrMap[p.sku]}" style="width:100%;height:100%;display:block;"/>`
-        : `<div style="width:100%;height:100%;background:#f0f0f0;display:flex;align-items:center;justify-content:center;font-size:5px;color:#aaa;">QR</div>`;
       const priceStr = p.price != null && p.price > 0 ? `${escHtml(String(p.price))} ฿` : "";
+      // ชนิดโค้ด: QR (เดิม, absolute logo มุมล่างขวา) หรือ Barcode (แถวเดียว บาร์โค้ด+โลโก้)
+      // — บาร์โค้ดมีเลข SKU แสดงในตัวอยู่แล้ว (displayValue) จึงไม่มีแถว .lsku ซ้ำ
+      const midHtml = isBc
+        ? `<div class="lbc-row"><div class="lbc">${
+            barcodeMap[p.sku]
+              ? `<img src="${barcodeMap[p.sku]}" style="width:100%;height:100%;display:block;"/>`
+              : `<div style="width:100%;height:100%;background:#f0f0f0;display:flex;align-items:center;justify-content:center;font-size:5px;color:#aaa;">|||</div>`
+          }</div><img src="${logoSrc}" class="llogo-inline" onerror="this.style.display='none'"/></div>`
+        : `<div class="lqr">${
+            qrMap[p.sku]
+              ? `<img src="${qrMap[p.sku]}" style="width:100%;height:100%;display:block;"/>`
+              : `<div style="width:100%;height:100%;background:#f0f0f0;display:flex;align-items:center;justify-content:center;font-size:5px;color:#aaa;">QR</div>`
+          }</div><img src="${logoSrc}" class="llogo" onerror="this.style.display='none'"/>`;
       return cutSep + `
       <div class="lbl">
         <div class="ltop">
           <span class="lname">${escHtml(p.name)}</span>
           ${priceStr ? `<span class="lprice">${priceStr}</span>` : ""}
         </div>
-        <div class="lmid">
-          <div class="lqr">${qrImg}</div>
-          <img src="${logoSrc}" class="llogo" onerror="this.style.display='none'"/>
-        </div>
-        <div class="lsku">${p.sku}</div>
+        <div class="lmid">${midHtml}</div>
+        ${isBc ? "" : `<div class="lsku">${p.sku}</div>`}
       </div>`;
     }).join("");
 
@@ -6443,6 +6495,10 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
   .lqr { width:78px; height:78px; }
   .llogo { position:absolute; bottom:0; right:0; width:36px; height:36px; object-fit:contain; opacity:.65; }
   .lsku { font-size:11px; font-family:"Kanit",sans-serif; font-weight:500; color:#333; text-align:center; letter-spacing:0.5px; flex-shrink:0; }
+  /* Barcode variant — แทนที่ .lqr/.llogo ด้วยแถวเดียว (บาร์โค้ดมีเลขในตัวแล้ว ไม่ต้อง .lsku) */
+  .lbc-row { width:100%; height:100%; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .lbc { flex:1; min-width:0; height:60px; }
+  .llogo-inline { flex-shrink:0; width:36px; height:36px; object-fit:contain; opacity:.65; }
   /* SKU-group separator (screen only in popup) */
   .cut-sep {
     text-align:center; font-size:12px; color:#aaa;
@@ -6468,6 +6524,8 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
     .lqr { width:13mm; height:13mm; }
     .llogo { width:8mm; height:8mm; }
     .lsku { font-size:5pt; }
+    .lbc { height:10mm; }
+    .llogo-inline { width:8mm; height:8mm; }
   }
 </style>
 </head><body>
@@ -6485,7 +6543,7 @@ ${labelsHTML}
     win.document.write(html);
     win.document.close();
     win.focus(); // bring popup to front
-  }, [labelList, qrMap, logoSrc]);
+  }, [labelList, qrMap, barcodeMap, codeType, logoSrc]);
 
   const addItem = () => {
     const raw = searchVal.trim();
@@ -6566,6 +6624,24 @@ ${labelsHTML}
             </button>
           ))}
         </div>
+
+        {/* ── ชนิดโค้ด: QR (ค่าเริ่มต้น) / Barcode — ใช้ได้เฉพาะโหมด A4/สติ๊กเกอร์ ที่พิมพ์
+             โค้ดเดี่ยวต่อป้าย (โหมดการ์ดยังเป็น QR อย่างเดียว ไม่อยู่ในสโคปนี้) ── */}
+        {printMode !== "card" && (
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+            <span style={{fontSize:11,color:"var(--muted)",fontWeight:600}}>ชนิดโค้ด:</span>
+            <div style={{display:"inline-flex",border:"1.5px solid var(--bdr)",borderRadius:10,padding:3,gap:3,background:"var(--paper)"}}>
+              {[{id:"qr",label:"🔲 QR"},{id:"barcode",label:"▤ Barcode"}].map(c => (
+                <button key={c.id} onClick={() => setCodeType(c.id)} style={{
+                  fontFamily:"inherit", fontWeight:700, fontSize:12.5, border:"none", borderRadius:7,
+                  padding:"7px 14px", cursor:"pointer",
+                  background: codeType===c.id ? "var(--accent)" : "transparent",
+                  color: codeType===c.id ? "#fff" : "var(--muted)",
+                }}>{c.label}</button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* ── โหมดการ์ด: ของเข้าใหม่ (บันทึก PDF ให้เจ้าของ + เพิ่งเข้าคลังให้เลือกก่อน) ── */}
         {printMode === "card" && (
@@ -6765,17 +6841,36 @@ ${labelsHTML}
                     <span className="label-price">{p.price != null && p.price > 0 ? `${p.price} ฿` : ""}</span>
                   </div>
                   <div className="label-mid-row">
-                    <div className="label-qr-center" style={{width:"10mm",height:"10mm"}}>
-                      {qrMap[p.sku]
-                        ? <img src={qrMap[p.sku]} alt={p.sku} style={{width:"100%",height:"100%",objectFit:"contain"}}/>
-                        : <div style={{width:"100%",height:"100%",background:"#f0f0f0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:5,color:"#aaa"}}>QR</div>
-                      }
-                    </div>
-                    <div className="label-logo-corner">
-                      <img src={logoSrc} alt="logo" onError={() => setLogoSrc(LOGO_FALLBACK_SVG)}/>
-                    </div>
+                    {/* รูเจาะร้อยเชือก — ติดอยู่เสมอไม่ว่าจะเป็นโค้ดชนิดไหน (ป้ายต้องแขวนได้เท่ากัน) */}
+                    <div className="label-hole" title="เจาะรูร้อยเชือก"></div>
+                    {codeType === "barcode" ? (
+                      <div className="label-barcode-row">
+                        <div className="label-barcode-box">
+                          {barcodeMap[p.sku]
+                            ? <img src={barcodeMap[p.sku]} alt={p.sku}/>
+                            : <div style={{width:"100%",height:"100%",background:"#f0f0f0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:5,color:"#aaa"}}>|||</div>
+                          }
+                        </div>
+                        <div className="label-logo-small">
+                          <img src={logoSrc} alt="logo" onError={() => setLogoSrc(LOGO_FALLBACK_SVG)}/>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="label-qr-center" style={{width:"10mm",height:"10mm"}}>
+                          {qrMap[p.sku]
+                            ? <img src={qrMap[p.sku]} alt={p.sku} style={{width:"100%",height:"100%",objectFit:"contain"}}/>
+                            : <div style={{width:"100%",height:"100%",background:"#f0f0f0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:5,color:"#aaa"}}>QR</div>
+                          }
+                        </div>
+                        <div className="label-logo-corner">
+                          <img src={logoSrc} alt="logo" onError={() => setLogoSrc(LOGO_FALLBACK_SVG)}/>
+                        </div>
+                      </>
+                    )}
                   </div>
-                  <div className="label-sku-text">{p.sku}</div>
+                  {/* บาร์โค้ดมีเลข SKU แสดงในตัวอยู่แล้ว (displayValue) — ไม่ต้องมีแถวซ้ำ */}
+                  {codeType !== "barcode" && <div className="label-sku-text">{p.sku}</div>}
                 </div>
                 );
               })}
