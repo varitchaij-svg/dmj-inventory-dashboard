@@ -148,20 +148,30 @@
 เทสต์: `tests/stampede.test.js` (54 เคส) — ข้อ 3 เป็น**เทสต์พฤติกรรมจริง** (eval `dmjFetch`
 จาก `ui.jsx` แล้วให้ `fetch` คืน promise ที่ไม่มีวัน settle ยืนยันว่า abort ทำงาน) ไม่ใช่แค่จับ string
 
-### Phase 7.6 — ล็อกอิน: **เขียนแล้วแต่ยังไม่ได้ deploy** (ส.ค. 2026)
+### Phase 7.6 — ล็อกอิน rollout: **A–D deployed แล้ว · เหลือ E (timeout) ที่รอเทสต์ iPhone** (ส.ค. 2026)
 
-⚠️ **อย่าเขียนใหม่ — โค้ดมีอยู่แล้วใน commit `be2c3aa`** (อยู่ในประวัติของ `master`)
-เคยขึ้น production แล้วถูกถอยออกด้วย `cc583ea` ตอนผู้ใช้เข้าแอปไม่ได้ทั้งร้าน · ตอนนั้น
-**ยังพิสูจน์ไม่ได้ว่า 7.6 เป็นต้นเหตุจริง** (ขึ้นพร้อมกัน 3 ก้อน แยกไม่ออก) จึงถอยทั้งชุดไว้ก่อน
+บริบท: 7.6 เดิมเขียนไว้ในคอมมิตที่ถูก revert เพราะขึ้น production แล้วผู้ใช้เข้าแอปไม่ได้ทั้งร้าน
+(ตอนนั้นขึ้นพร้อมกัน 3 ก้อนแยกไม่ออกว่าอะไรพัง) · รอบนี้เอากลับ **"ปลอดภัยก่อน → เสี่ยงท้าย"
+ทีละก้อนพร้อมเทสต์** ไม่ยกทั้งชุดซ้ำรอยเดิม · เทสต์อยู่ที่ `tests/login-resilience.test.js`
+(eval ฟังก์ชันจริงจาก `.jsx`/`.gs` ไม่ copy — เหมือน auth.test.js) · เดิม CLAUDE.md/handoff เขียนว่า
+"ยังไม่ deploy" ซึ่งผิด (state machine ล็อกอิน + handoff flow อยู่ใน master มาตลอด revert ถอดแค่
+ส่วน hardening) — ตรวจจากโค้ดจริงเสมอ อย่าเชื่อ SHA ที่อ้างในเอกสาร (squash merge ทำให้ SHA เปลี่ยน)
 
-สิ่งที่อยู่ในนั้น: `postAuthAction` ผ่าน `dmjFetch`+`dmjJson`
-พร้อมเพดานเวลาแยกตามงาน · จอ `checking` มีทางออกเสมอ · poll handoff กันยิงซ้อน+ถอยห่าง ·
-TTL 30 นาทีตรงกันทั้ง 3 ที่ · handoff ไม่หายถาวรเมื่อคำตอบไปไม่ถึง · `resolveSession_` cache ·
-`tests/login-resilience.test.js` 48 เคส
+| ก้อน | งาน | สถานะ |
+|---|---|---|
+| **A** (ข้อ 2) | จอ `checking` มีทางออก — `CheckingScreen` นับวินาที → เตือน 12 วิ → ปุ่มกลับล็อกอิน 30 วิ (onGiveUp ลบ `?code=` กัน effect ยิงซ้ำ · ไม่ตัดคำขอที่ค้าง) | ✅ deployed |
+| **B** (ข้อ 4) | handoff ไม่ถูกกินทิ้งถาวร — `claimLoginHandoffHandler_` เลิก `cache.remove` เขียนทับด้วย TTL สั้น `LOGIN_HANDOFF_CLAIM_GRACE_SEC=60` แทน (retry ที่คำตอบหาย แลกคืนได้) | ✅ deployed |
+| **C** (ข้อ 3) | poll handoff backoff 4วิ×3→8→15 (cap) + in-flight guard เดิม · TTL 15→30 นาที ทั้ง `LINE_HANDOFF_TTL_MS` (app.jsx) + `LOGIN_HANDOFF_TTL_SEC=1800` (.gs) — client ต้องไม่เกิน server | ✅ deployed |
+| **D** (ข้อ 5) | `resolveSession_` cache 300s ต่อ token + เขียน `lastSeenAt` เฉพาะเก่ากว่า 10 นาที · ⚠️ ล้าง cache ครบ 3 จุด: `revokeSession_` (logout) · `saveStaffHandler_` (เปลี่ยน role/status) · ตั้ง role จาก GAS editor — ไม่งั้น logout แล้วยังใช้ได้ต่อ/เปลี่ยนตำแหน่งยังถือสิทธิ์เก่า (ช่องโหว่) | ✅ deployed |
+| **E** (ข้อ 1) | `postAuthAction` → `dmjFetch`+`dmjJson`+timeout ต่อ action (authLine 25s/me 20s/logout 20s/claim 8s) + จุด fetch ดิบอื่น (handlePin, authLine exchange) | 🔴 **ยังไม่ทำ — เสี่ยงสุด รอเทสต์ iPhone จริงก่อน merge** |
 
-**เอากลับเข้ามาทีละก้อน** พร้อมดูตัวเลขจาก `BootTrace` (Phase 7.7) ระหว่างทาง — อย่ายกกลับทั้งชุด
-รอบเดียวซ้ำรอยเดิม · ⚠️ ถ้ายกกลับ ต้องลบหมายเหตุนี้ทิ้งแล้วเขียนหัวข้อจริงแทน ไม่งั้นเอกสาร
-จะบอกว่า "ยังไม่ deploy" ทั้งที่ deploy ไปแล้ว (กับดักเดียวกับที่เคยเขียนว่า `dmjJson` ครบแล้วทั้งที่ยังไม่ครบ)
+⚠️ **ก้อน E คือชิ้นที่หลักฐานชี้ว่าเคยทำร้านล่ม** — เน็ตร้าน/GAS cold start ช้าเกิน timeout → คำขอถูก
+abort → เข้าไม่ได้ทั้งร้าน · **แกนความปลอดภัยที่ต้องรักษา: timeout/abort ห้าม escalate เป็น
+logout/clear-session เด็ดขาด** ต้อง fallback เป็น "ทำงานต่อด้วย role เดิมที่ cache ไว้" (พฤติกรรม
+ปัจจุบันเมื่อ fetch reject ที่ `checkMe`/bootstrap ทำถูกอยู่แล้ว — ห้ามทำให้พังตอนใส่ timeout)
+· ทำเป็นก้อนแยก + ให้เจ้าของเทสต์ iPhone จริงทั้ง PWA (ไอคอนหน้าโฮม) และ Safari ก่อน merge
+เพราะรอบก่อนพังเฉพาะบนอุปกรณ์จริง เทสต์อัตโนมัติจับไม่ได้ · ⚠️ **ยกก้อน E เข้าแล้วต้องอัปเดต
+ตารางนี้ + ลบหมายเหตุ "รอเทสต์ iPhone"** ไม่งั้นเอกสารจะโกหกอีก
 
 **✅ ก้อนแรกที่เอากลับแล้ว (ส.ค. 2026): `dmjJsonProgress` — เฉพาะส่วน "วัดผล" ล้วน**
 `ui.jsx` มี `dmjJsonProgress(res, onBytes)` อ่านคำตอบแบบสตรีม นับไบต์ที่ได้รับจริง →
