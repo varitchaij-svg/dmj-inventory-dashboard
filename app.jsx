@@ -970,7 +970,7 @@ const LINE_STATE_TTL_MS = 30 * 60 * 1000; // ครึ่งชั่วโม�
 const LINE_HANDOFF_SECRET_KEY = "dmj_line_handoff_secret";
 const LINE_HANDOFF_STATE_KEY = "dmj_line_handoff_state";
 const LINE_HANDOFF_AT_KEY = "dmj_line_handoff_at";
-const LINE_HANDOFF_TTL_MS = 15 * 60 * 1000; // ต้องไม่เกิน LOGIN_HANDOFF_TTL_SEC ฝั่ง GAS
+const LINE_HANDOFF_TTL_MS = 30 * 60 * 1000; // ต้องไม่เกิน LOGIN_HANDOFF_TTL_SEC ฝั่ง GAS (1800s)
 
 // ── Safe storage ──────────────────────────────────────────────────────────
 // iOS Safari โยน exception ตอนแตะ localStorage/sessionStorage ได้จริงหลายกรณี
@@ -1816,26 +1816,32 @@ function App() {
   usE(() => {
     if (authPhase !== "needLogin" || !handoffWaiting) return;
     let stop = false;
-    // ⚠️ กันยิงซ้อน: claimLoginHandoff แต่ละครั้งเป็น GAS call (1-4 วิบน cold start) แต่ interval
-    // 4 วิ + onWake (visibilitychange/focus) ยิงตามเวลาไม่รอผลตัวก่อน → มี claim ค้างพร้อมกัน
-    // หลายตัว · GAS deploy แบบ executeAs USER_DEPLOYING จัดคิว execution ของ user เดียวกัน
-    // → 14 claim ต่อคิวกัน + เบียด me/payload ให้ช้าลงไปอีก (เห็นจริงใน BootTrace: claim รัว ~15 ครั้ง
-    // ระหว่างล็อกอิน) · มี claim ค้างอยู่ = ข้ามรอบนี้ไป รอผลตัวเดิมก่อน (ไม่เสียการตอบสนอง —
-    // claim ที่ค้างอาจสำเร็จเองอยู่แล้ว)
-    let inFlight = false;
-    const tick = async () => {
-      if (stop || inFlight) return;
+    // ⚠️ กันยิงซ้อน: claimLoginHandoff แต่ละครั้งเป็น GAS call (1-4 วิบน cold start) ถ้ายิงตาม
+    // เวลาไม่รอผลตัวก่อน → มี claim ค้างพร้อมกันหลายตัว · GAS deploy แบบ executeAs USER_DEPLOYING
+    // จัดคิว execution ของ user เดียวกัน → claim ต่อคิวกัน + เบียด me/payload ให้ช้าลง (เห็นจริงใน
+    // BootTrace: claim รัว ~15 ครั้งระหว่างล็อกอิน) · มี claim ค้างอยู่ = ข้ามรอบนี้ รอผลตัวเดิมก่อน
+    // (Phase 7.6 ก้อน C) ถอยห่างขึ้นเรื่อย ๆ แทน interval คงที่ 4 วิ: 4วิ×3 → 8วิ → 15วิ (cap) —
+    // คนที่ล็อกอินไม่จบใน 12 วิแรกส่วนใหญ่ติด cold start ยาว การยิงถี่ไม่ช่วยแต่เพิ่มคิว ·
+    // ยัง onWake (visibilitychange/focus) อยู่เพราะ iOS แช่แข็ง timer ตอน background — และ wake
+    // = ผู้ใช้กลับมารออยู่จริง จึงรีเซ็ตความถี่กลับมาไวสุด
+    let inFlight = false, attempt = 0, timer = null;
+    const delayFor = (n) => (n < 3 ? 4000 : n < 4 ? 8000 : 15000);
+    const clearT = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    const schedule = () => { clearT(); if (!stop) timer = setTimeout(run, delayFor(attempt)); };
+    const run = async () => {
+      clearT();
+      if (stop || inFlight) { if (!stop) schedule(); return; }
       if (!readPendingHandoff()) { setHandoffWaiting(false); return; } // หมดอายุแล้ว
-      inFlight = true;
+      inFlight = true; attempt++;
       try { await claimHandoff(); } finally { inFlight = false; }
+      schedule();
     };
-    const id = setInterval(tick, 4000);
-    const onWake = () => { if (!document.hidden) tick(); };
+    const onWake = () => { if (!document.hidden) { attempt = 0; run(); } };
     document.addEventListener("visibilitychange", onWake);
     window.addEventListener("focus", onWake);
-    tick();
+    run();
     return () => {
-      stop = true; clearInterval(id);
+      stop = true; clearT();
       document.removeEventListener("visibilitychange", onWake);
       window.removeEventListener("focus", onWake);
     };

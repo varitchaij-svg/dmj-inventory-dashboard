@@ -148,3 +148,36 @@ describe('Phase 7.6 ก้อน B — claimLoginHandoff ไม่กิน toke
     expect(fn).toMatch(/LOGIN_HANDOFF_CLAIM_GRACE_SEC/);
   });
 });
+
+// ── ก้อน C (ข้อ 3): poll handoff backoff + TTL 30 นาที ────────────────────────
+describe('Phase 7.6 ก้อน C — poll backoff + TTL', () => {
+  // eval delayFor จริงจากใน effect (pure one-liner) — ไม่ copy
+  const delayLine = grab(APP, /const delayFor = \(n\) => [^\n;]*;/);
+  // eslint-disable-next-line no-new-func
+  const delayFor = new Function('return ' + delayLine.replace(/^const delayFor = /, '').replace(/;$/, ''))();
+
+  it('ถอยห่าง 4วิ×3 → 8วิ → 15วิ (cap)', () => {
+    expect(delayFor(0)).toBe(4000);
+    expect(delayFor(1)).toBe(4000);
+    expect(delayFor(2)).toBe(4000);
+    expect(delayFor(3)).toBe(8000);
+    expect(delayFor(4)).toBe(15000);
+    expect(delayFor(50)).toBe(15000); // cap ไม่โตต่อ
+  });
+
+  it('meta: ยังมี in-flight guard + รีเซ็ต attempt ตอน wake (ผู้ใช้กลับมารอ)', () => {
+    const idx = APP.indexOf('const delayFor = (n) =>');
+    const block = APP.slice(idx - 400, idx + 900);
+    expect(block).toMatch(/inFlight/);                       // กันยิงซ้อน
+    expect(block).toMatch(/attempt = 0;\s*run\(\)/);         // wake รีเซ็ตความถี่
+    expect(block).not.toMatch(/setInterval/);                // เลิก interval คงที่แล้ว
+  });
+
+  it('meta: TTL client (app.jsx) = server (.gs) = 30 นาที และ client ≤ server', () => {
+    const ms = Number(grab(APP, /LINE_HANDOFF_TTL_MS = \d+ \* 60 \* 1000/).match(/= (\d+)/)[1]);
+    const sec = Number(grab(GS, /LOGIN_HANDOFF_TTL_SEC = \d+;/).match(/= (\d+)/)[1]);
+    expect(ms).toBe(30);            // นาที ฝั่ง client
+    expect(sec).toBe(1800);         // วินาที ฝั่ง server = 30 นาที
+    expect(ms * 60).toBeLessThanOrEqual(sec); // client ต้องไม่เกิน server (ไม่งั้น claim หมดอายุก่อน)
+  });
+});
