@@ -508,6 +508,39 @@ function DisabledScreen({ onSwitchAccount }) {
   );
 }
 
+// จอ "กำลังตรวจสอบสิทธิ์" (authPhase === "checking") — ต้องมีทางออกเสมอ (Phase 7.6 rollout, ข้อ 2)
+// เดิมเป็นสปินเนอร์เปล่า ไม่มี timeout ไม่มีปุ่ม → ถ้า GAS cold-start ช้า/เน็ตร้านหลุด พนักงานเจอ
+// จอค้างที่แยกไม่ออกจาก "แอปพัง" (เจอจริงบนเครื่องผู้ใช้ 7.7 mn ก็ยังค้าง) · ตอนนี้:
+// นับวินาที → เตือน "ช้ากว่าปกติ" ที่ 12 วิ → ปุ่ม "กลับไปหน้าล็อกอิน" ที่ 30 วิ
+// ⚠️ ปุ่มนี้ **ไม่ตัดคำขอที่ค้างอยู่** (ต่างจาก timeout ของ postAuthAction ซึ่งเป็นงานเสี่ยง
+//    ที่ทำร้านล่มตอน 7.6 — แยกก้อนไว้ทำท้ายสุด) · แค่ให้ผู้ใช้เลือกออกเองได้ ถ้าคำขอเบื้องหลัง
+//    สำเร็จทีหลังก็เด้งเข้าแอปตามปกติ (bootstrap effect ยัง set authPhase ต่อได้)
+function CheckingScreen({ onGiveUp }) {
+  const [secs, setSecs] = usS(0);
+  usE(() => {
+    const t0 = Date.now();
+    const id = setInterval(() => setSecs(Math.floor((Date.now() - t0) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <div className="loading-screen" style={{ padding: "0 24px", textAlign: "center" }}>
+      <span className="spin" style={{ width: 28, height: 28, borderWidth: 3 }} />
+      {secs >= 12 && (
+        <div style={{ fontSize: 13, color: "var(--muted)", maxWidth: 300 }}>
+          เชื่อมต่อช้ากว่าปกติ กำลังลองต่อ…{secs >= 20 ? ` (${secs} วินาที)` : ""}
+        </div>
+      )}
+      {secs >= 30 && (
+        <button onClick={onGiveUp} style={{
+          marginTop: 2, background: "transparent", border: "1px solid var(--bdr)",
+          borderRadius: 10, padding: "10px 20px", color: "var(--muted)", fontSize: 13,
+          cursor: "pointer", fontFamily: "inherit",
+        }}>↩︎ กลับไปหน้าล็อกอิน</button>
+      )}
+    </div>
+  );
+}
+
 // เดิม: หน้าเลือกตำแหน่ง + PIN — เก็บไว้เป็น "รหัสสำรอง" ระหว่างเปลี่ยนผ่านไปใช้ LINE Login
 function LegacyLoginScreen({ onLogin, onBack }) {
   const [pinTarget, setPinTarget] = usS(null);
@@ -1918,9 +1951,18 @@ function App() {
   // ── Conditional renders AFTER all hooks ──
   if (authPhase === "checking") {
     return (
-      <div className="loading-screen">
-        <span className="spin" style={{width:28,height:28,borderWidth:3}}/>
-      </div>
+      <CheckingScreen onGiveUp={() => {
+        // ลบ ?code=/state ออกจาก URL ก่อน กัน effect แลก code ยิงซ้ำตอน re-render
+        // (คำขอเบื้องหลังที่ค้างอยู่ไม่ถูกตัด — ถ้าสำเร็จทีหลัง applyStaffSession ยังเด้งเข้าแอปได้)
+        try {
+          const u = new URL(window.location.href);
+          if (u.searchParams.has("code") || u.searchParams.has("state")) {
+            u.searchParams.delete("code"); u.searchParams.delete("state");
+            window.history.replaceState({}, "", u.pathname + u.search + u.hash);
+          }
+        } catch (e) {}
+        setAuthPhase("needLogin");
+      }}/>
     );
   }
 
