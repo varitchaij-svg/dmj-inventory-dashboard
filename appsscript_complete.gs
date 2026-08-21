@@ -13387,6 +13387,12 @@ const COL_MTO_SALE_STATUS = 11;  // K = สถานะขาย (ว่าง/�
 const COL_MTO_SALE_REF    = 12;  // L = อ้างอิงบิลขาย (เลขบิล/ออเดอร์ ZORT)
 const COL_MTO_SALE_AT     = 13;  // M = ขายเมื่อ
 const COL_MTO_SALE_CID    = 14;  // N = billCid ของบิลที่ขาย (ไว้ trace/debug idempotency)
+// รหัสสินค้า "SKU กลุ่ม" ของงาน (BK001/VASE001/BQ001 ...) — เลือกตอนสร้างงาน MTO
+// ⚠️ ต่อท้ายเท่านั้น (บทเรียนข้อ 5) · เป็น service/non-stock SKU ใน ZORT → ส่งเข้า AddOrder
+//    ตอนขายได้เลย ZORT ไม่หักสต็อกของมัน (องค์ประกอบถูกหักตอน fulfillment แล้ว)
+// นี่คือ "ตัวเชื่อม" งาน MTO ↔ ยอดขาย/analytics — แทน MTO_BUNDLE_SKU ตัวเดียวเดิม
+//    (superseded ADR-MTO-SELLABLE Decision 3 — ดูหัวข้อในเอกสารนั้น)
+const COL_MTO_JOB_SKU = 15;      // O = รหัสสินค้า (SKU กลุ่ม) ของงาน
 const MTO_SALE_UNSOLD = "ยังไม่ขาย";
 const MTO_SALE_SOLD   = "ขายแล้ว";
 const MTO_SALE_CANCELLED = "ยกเลิก";
@@ -13408,7 +13414,7 @@ function getOrCreateMtoJobSheet_(ss) {
   let sh = ss.getSheetByName(SHEET_MTO_JOBS);
   if (!sh) {
     sh = ss.insertSheet("งาน MTO");
-    sh.appendRow(["JobID","วันที่","ชื่องาน","ลูกค้า","ราคา","รูป","สถานะ","ปิดงานเมื่อ","ผู้รับผิดชอบ(staffId)","ชื่อผู้รับผิดชอบ","สถานะขาย","อ้างอิงบิลขาย","ขายเมื่อ","billCid ขาย"]);
+    sh.appendRow(["JobID","วันที่","ชื่องาน","ลูกค้า","ราคา","รูป","สถานะ","ปิดงานเมื่อ","ผู้รับผิดชอบ(staffId)","ชื่อผู้รับผิดชอบ","สถานะขาย","อ้างอิงบิลขาย","ขายเมื่อ","billCid ขาย","รหัสสินค้า(SKU กลุ่ม)"]);
   } else {
     // self-heal: เติม header ที่ขาดให้ชีตเก่า ไม่กระทบแถวข้อมูลเดิม (append-only)
     if (!sh.getRange(1, 9).getValue()) {
@@ -13421,6 +13427,10 @@ function getOrCreateMtoJobSheet_(ss) {
     } else if (!sh.getRange(1, COL_MTO_SALE_CID).getValue()) {
       // ชีตที่มี K/L/M แล้วแต่ยังไม่มี N (billCid) — เติมเฉพาะ N
       sh.getRange(1, COL_MTO_SALE_CID).setValue("billCid ขาย");
+    }
+    if (!sh.getRange(1, COL_MTO_JOB_SKU).getValue()) {
+      // ชีตเก่าที่ยังไม่มีคอลัมน์ O (รหัสสินค้า SKU กลุ่ม) — เติมต่อท้าย
+      sh.getRange(1, COL_MTO_JOB_SKU).setValue("รหัสสินค้า(SKU กลุ่ม)");
     }
   }
   return sh;
@@ -13498,6 +13508,10 @@ function createMtoJob(ss, data, actor, staffId) {
 
     sh.appendRow([jobId, data.dateStr || "", data.jobName || "", data.customer || "", data.price || "", data.imageUrl || "", "กำลังจัด", "",
       staffId || "", staffId ? (actor || "") : ""]);
+    // รหัสสินค้า (SKU กลุ่ม) — เขียนคอลัมน์ O ของแถวที่เพิ่ง append (appendRow เขียนแค่ A..J)
+    //   เก็บเป็นตัวพิมพ์ใหญ่ให้ตรงกับการเทียบตอนขาย · ถือ scriptLock อยู่แล้ว getLastRow จึงปลอดภัย
+    var groupSku = String(data.groupSku || "").trim().toUpperCase();
+    if (groupSku) sh.getRange(sh.getLastRow(), COL_MTO_JOB_SKU).setValue(groupSku);
     // ถึงจุดนี้ = สร้างสำเร็จ → เขียน audit log (creation ไม่มี before-state)
     writeAuditLog_(actor || data.actor || "ไม่ระบุ", "สร้างงาน MTO", jobId, auditDetail_({
       before: null,
@@ -14193,29 +14207,45 @@ function readShippingFeeSku_() {
   catch (e) { return ""; }
 }
 
-// SKU "bundle" เดียวที่ ZORT รับรู้ตอนขายงาน MTO — เจ้าของสร้างสินค้า/บริการ bundle ใน ZORT
-// เองแล้วตั้งค่าที่ Script Property `MTO_BUNDLE_SKU` · นโยบาย: ZORT ได้ SKU เดียว ราคาเดียวต่อ
-// งาน MTO (ไม่ส่งองค์ประกอบ) — กัน double deduction / รายได้องค์ประกอบปลอม / รายงานเพี้ยน
-// ⚠️ ไม่ตั้ง = ขายงาน MTO ผ่าน POS ไม่ได้ (createSaleBill ปฏิเสธทั้งใบ) — เพราะไม่มี SKU ให้บันทึกรายได้
-function readMtoBundleSku_() {
-  try { return String(PropertiesService.getScriptProperties().getProperty("MTO_BUNDLE_SKU") || "").trim(); }
-  catch (e) { return ""; }
+// ── ตัวเชื่อมงาน MTO → ZORT: หา "SKU กลุ่ม" (Job SKU) ของแต่ละงานจากชีต (server-truth) ──────
+// แทน MTO_BUNDLE_SKU ตัวเดียวเดิม (superseded ADR Decision 3) — ตอนนี้แต่ละงานมี SKU ของตัวเอง
+// (BK001/VASE001/BQ001 = service/non-stock SKU ใน ZORT) เป็นตัวเชื่อมเข้ายอดขาย/analytics
+// ⚠️ อ่านจากชีตเสมอ — ไม่เชื่อ sku ที่ client ส่งมาบนบรรทัด MTO (frontend เก่าที่ยัง cache อยู่
+//    ส่ง sku=jobId มาได้) · re-stamp ด้วยค่านี้ก่อนยิง ZORT → เครื่องเก่าก็ขายถูกต้อง ไม่เพี้ยน
+// คืน { ok:true, skuByJob } หรือ { ok:false, jobId, message } ถ้างานใดยังไม่ได้ตั้ง SKU กลุ่ม
+function mtoGroupSkusForSale_(ss, jobIds) {
+  var want = {};
+  (jobIds || []).forEach(function (id) { var s = String(id || "").trim(); if (s) want[s] = true; });
+  var sh = getOrCreateMtoJobSheet_(ss);
+  var rows = sh.getDataRange().getValues();
+  var skuByJob = {};
+  for (var i = 1; i < rows.length; i++) {
+    var id = String(rows[i][0]).trim();
+    if (want[id]) skuByJob[id] = String(rows[i][COL_MTO_JOB_SKU - 1] || "").trim().toUpperCase();
+  }
+  for (var id2 in want) {
+    if (!skuByJob[id2]) {
+      return { ok: false, jobId: id2, message: "งาน " + id2 + " ยังไม่ได้ตั้งรหัสสินค้า (SKU กลุ่ม) — ตั้งที่หน้างาน MTO ก่อนขาย" };
+    }
+  }
+  return { ok: true, skuByJob: skuByJob };
 }
 
-// แยกบรรทัดขาย เมื่ออาจมี "งาน MTO (bundle)" ปนกับสินค้าปกติ — บรรทัด MTO ระบุด้วย it.mtoJobId
-//  - zortItems  : บรรทัด MTO ถูกแทน sku ด้วย bundleSku (ZORT ได้ SKU เดียว/ราคาเดียวต่อ bundle)
-//                 บรรทัดปกติคงเดิม — ราคาไม่เปลี่ยน (แทนแค่ sku) → ยอดรวมเท่าเดิม
+// แยกบรรทัดขาย เมื่ออาจมี "งาน MTO" ปนกับสินค้าปกติ — บรรทัด MTO ระบุด้วย it.mtoJobId
+//  - zortItems  : บรรทัด MTO ถูก re-stamp sku ด้วย Job SKU จากชีต (skuByJob) — server-truth
+//                 บรรทัดปกติคงเดิม · ราคาไม่เปลี่ยน (แทนแค่ sku) → ยอดรวมเท่าเดิม
 //  - deductItems: เฉพาะบรรทัดสินค้าปกติ — องค์ประกอบ MTO ถูกหักสต็อกตอน fulfillment แล้ว
-//                 (Decision #2) ห้ามหักซ้ำ · bundle SKU ก็ไม่ใช่แถวสต็อกจริงในชีตสินค้า
+//                 (Decision #2 ยังคงอยู่) ห้ามหักซ้ำ · Job SKU เป็น service SKU (ZORT ไม่หักสต็อก)
 //  - mtoJobIds  : jobId ที่ต้องมาร์ค "ขายแล้ว" หลัง ZORT สำเร็จ
-// pure — ไม่แตะชีต/ZORT (เทสต์ได้ตรง ๆ)
-function splitMtoSaleItems_(items, bundleSku) {
+// pure — ไม่แตะชีต/ZORT (เทสต์ได้ตรง ๆ) · skuByJob มาจาก mtoGroupSkusForSale_ (อ่านชีตแยกแล้ว)
+function splitMtoSaleItems_(items, skuByJob) {
+  var map = skuByJob || {};
   var mtoJobIds = [], zortItems = [], deductItems = [];
   (items || []).forEach(function (it) {
     var jobId = String((it && it.mtoJobId) || "").trim();
     if (jobId) {
       mtoJobIds.push(jobId);
-      zortItems.push(Object.assign({}, it, { sku: bundleSku }));
+      zortItems.push(Object.assign({}, it, { sku: map[jobId] || "" }));
     } else {
       zortItems.push(it);
       deductItems.push(it);
@@ -14334,15 +14364,23 @@ function createSaleBill(ss, data, actor) {
 
   // ── งาน MTO ที่ขายผ่าน POS (บรรทัดที่มี it.mtoJobId) ────────────────────────────
   // นโยบาย Phase 2 (Decision #1/#2 + ZORT policy): ขายงาน MTO ที่ "จัดเสร็จ + ยังไม่ขาย"
-  //   · ZORT ได้ SKU เดียว (MTO_BUNDLE_SKU) ราคาเดียวต่อ bundle — ไม่ส่งองค์ประกอบ
+  //   · ZORT ได้ Job SKU ของแต่ละงาน (BK001/VASE001/... = service/non-stock SKU) — ไม่ส่งองค์ประกอบ
+  //     (superseded ADR Decision 3: เดิมใช้ MTO_BUNDLE_SKU ตัวเดียว → เปลี่ยนเป็น SKU ต่องานเพื่อ analytics)
   //   · ไม่หักสต็อกองค์ประกอบซ้ำ (หักตอน fulfillment แล้ว) → ตัดบรรทัด MTO ออกจากการหักสต็อก
   //   · มาร์คงาน "ขายแล้ว" หลัง ZORT สำเร็จ (markMtoJobSold_ ผูก billRef+billCid)
   // ไม่มีบรรทัด MTO เลย = บิลปกติทุกประการ (โค้ดนี้ inert — ไม่เปลี่ยนพฤติกรรมเดิม)
-  var mtoBundleSku = readMtoBundleSku_();
-  var mtoSplit = splitMtoSaleItems_(items, mtoBundleSku);
-  if (mtoSplit.hasMto && !mtoBundleSku) {
-    return error("ยังไม่ได้ตั้งค่า MTO_BUNDLE_SKU — สร้างสินค้า bundle ใน ZORT แล้วตั้ง Script Property ก่อนขายงาน MTO");
+  //   หา Job SKU (SKU กลุ่ม) ของแต่ละงานจากชีต (server-truth) แล้ว re-stamp บรรทัด MTO ด้วยค่านั้น
+  //   — ไม่เชื่อ sku ที่ client ส่งมา (เครื่องเก่าที่ cache อยู่ส่ง jobId มาได้) · งานที่ยังไม่ตั้ง
+  //   SKU กลุ่ม → ปฏิเสธทั้งใบก่อนแตะ ZORT (มี Job SKU เท่านั้นถึงบันทึกยอดขาย/analytics ได้)
+  var mtoJobIdsInCart = items.filter(function (it) { return it && it.mtoJobId; })
+                             .map(function (it) { return it.mtoJobId; });
+  var mtoSkuByJob = {};
+  if (mtoJobIdsInCart.length) {
+    var mtoSkuRes = mtoGroupSkusForSale_(ss, mtoJobIdsInCart);
+    if (!mtoSkuRes.ok) return error("ขายงาน MTO ไม่ได้: " + mtoSkuRes.message);
+    mtoSkuByJob = mtoSkuRes.skuByJob;
   }
+  var mtoSplit = splitMtoSaleItems_(items, mtoSkuByJob);
 
   var totals = computeBillTotalsGs_(items, {
     excludeKeywords: readBillExcludeCats_(),
@@ -14360,7 +14398,7 @@ function createSaleBill(ss, data, actor) {
   // warehousecode ตรง ๆ ได้เพราะเป็นคนละ endpoint ไม่ใช่การสร้าง order)
   // ⚠️ ปัดเศษแบบ "สะสม" ผ่าน buildZortLineItems_ — ไม่ปัดแยกทีละชิ้นแล้ว (ดูคอมเมนต์ที่ฟังก์ชัน)
   //    รับประกันว่า sum(totalprice) = grandTotal เป๊ะ = ยอดที่ ZORT หักตรงกับที่เราคิดเป๊ะสตางค์
-  // ⚠️ ใช้ mtoSplit.zortItems — บรรทัด MTO ถูกแทน sku เป็น MTO_BUNDLE_SKU แล้ว (ราคาไม่เปลี่ยน)
+  // ⚠️ ใช้ mtoSplit.zortItems — บรรทัด MTO ถูก re-stamp sku เป็น Job SKU จากชีตแล้ว (ราคาไม่เปลี่ยน)
   var productList = buildZortLineItems_(mtoSplit.zortItems, factor);
 
   // ── ค่าจัดส่ง (โหมดขายออนไลน์) ──────────────────────────────────────────────
@@ -14518,7 +14556,7 @@ function createSaleBill(ss, data, actor) {
     // ⚠️ ส่ง productList (ไม่ใช่ list) — list มีบรรทัด "ค่าจัดส่ง" ปนอยู่ตอนตั้ง SHIPPING_FEE_SKU
     //    ส่งทั้ง list = สต็อกของ SKU ค่าจัดส่งถูกหักทุกบิลจนติดลบ/เป็น 0 โดยไม่มีใครสังเกต
     // ⚠️ ตัดบรรทัดงาน MTO ออก — องค์ประกอบถูกหักตอน fulfillment แล้ว (Decision #2) ห้ามหักซ้ำ
-    //    และ MTO_BUNDLE_SKU ก็ไม่ใช่แถวสต็อกจริงในชีตสินค้า · ไม่มี MTO = deductList === productList
+    //    และ Job SKU ก็เป็น service SKU (ไม่ใช่แถวสต็อกจริงในชีตสินค้า) · ไม่มี MTO = deductList === productList
     var deductList = buildZortLineItems_(mtoSplit.deductItems, factor);
     var stockRes = deductFrontStoreForSale_(ss, deductList);
     if (!stockRes.ok) {
@@ -15403,6 +15441,8 @@ function readMtoJobs_() {
       saleRef: String(r[COL_MTO_SALE_REF-1]||"").trim(),
       soldAt: String(r[COL_MTO_SALE_AT-1]||"").trim(),
       saleBillCid: String(r[COL_MTO_SALE_CID-1]||"").trim(),
+      // รหัสสินค้า (SKU กลุ่ม) — ตัวเชื่อมงาน↔ยอดขาย (ว่างในแถวเก่า = ยังไม่ตั้ง → ขายผ่าน POS ไม่ได้)
+      groupSku: String(r[COL_MTO_JOB_SKU-1]||"").trim(),
       items: itemsMap[jobId] || [],
     };
     // sellable = ผลของกฎธุรกิจเดียว (canSellMtoJob_) — ส่งมาให้ frontend ใช้ตรง ๆ

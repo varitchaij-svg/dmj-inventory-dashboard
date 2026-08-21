@@ -23,7 +23,9 @@ POST /Transfer/AddTransfer
 POST /Order/AddOrder            payload: {date:"dd/MM/yyyy", remark, list:[{sku,name,number,price,totalprice}]}
                                 response: {number, ordernumber, ...}
                                 ใช้สำหรับ: ขายผ่าน POS (createSaleBill) — งาน MTO ขึ้นเป็น 1 บรรทัด
-                                bundle SKU เดียว (MTO_BUNDLE_SKU) ราคาเดียว ไม่ใช่ order ราคา 0 อีกต่อไป
+                                Job SKU ของงานเอง (BK001/VASE001 = service/non-stock SKU · เลือกตอนสร้างงาน
+                                เก็บคอลัมน์ O ชีตงาน MTO · createSaleBill re-stamp จากชีต server-truth ก่อนยิง)
+                                ราคาเดียวต่องาน ไม่ใช่ order ราคา 0 · superseded MTO_BUNDLE_SKU ตัวเดียวเดิม
                                 (MTO fulfillment ตัดสต็อกผ่าน decreaseMtoStockInZort_() แทน — ดู
                                 POST /Product/DecreaseProductStockList ด้านบน · ห้ามใช้ AddOrder
                                 กับ fulfillment เด็ดขาด จะเจือปนรายงานยอดขาย/soldQty — ADR-MTO-SELLABLE)

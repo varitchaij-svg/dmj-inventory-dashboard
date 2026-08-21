@@ -1,6 +1,11 @@
 # ADR — ทำให้งาน MTO ขายผ่าน POS ได้ (Phase 2, ส.ค. 2026)
 
-สถานะ: **Accepted** — Step 1-4 implement แล้ว (ยังไม่ commit/deploy ณ เวลาที่เขียนเอกสารนี้)
+สถานะ: **Accepted** — Step 1-4 implement แล้ว
+> ⚠️ **UPDATE (ส.ค. 2026 — Job SKU migration): Decision 3 ถูก SUPERSEDED** (ดูหัวข้อ Decision 3
+> ด้านล่าง) · เปลี่ยนจาก "MTO_BUNDLE_SKU ตัวเดียวทุกงาน" → "แต่ละงานมี Job SKU ของตัวเอง
+> (BK001/VASE001/BQ001 = service/non-stock SKU ใน ZORT)" เพื่อให้ยอดขาย MTO แยกตามงานเข้า
+> analytics ได้ · **Decision 1/2/4/5/6 ยังคงอยู่ครบทุกข้อ** (2 state machine, หักสต็อกตอน
+> fulfillment, canSellMtoJob_ จุดเดียว, applyMtoFulfillment_ pure, billCid idempotency)
 
 เอกสารนี้บันทึก **เหตุผล** ของการตัดสินใจสถาปัตยกรรมที่ทำในฟีเจอร์นี้ ไม่ใช่ how-to — เป้าหมาย
 คือกันไม่ให้ใครในอนาคต (รวมถึง Claude ในเซสชันถัดไป) แก้โค้ดแล้วเผลอทำให้ **สต็อกถูกหักสองที่**
@@ -58,10 +63,29 @@
 
 ## Decision 3 — ZORT ได้ SKU เดียว ราคาเดียวต่องาน (ไม่ใช่ Order ราคา 0)
 
+> 🔴 **SUPERSEDED (ส.ค. 2026 — Job SKU migration).** "SKU เดียวทุกงาน" (`MTO_BUNDLE_SKU`) ถูกแทนด้วย
+> **"Job SKU ต่องาน"** — แต่ละงาน MTO มีรหัสสินค้าของตัวเอง (BK001/VASE001/BQ001) ที่เจ้าของ
+> เลือกตอนสร้างงาน (เก็บคอลัมน์ O ในชีต "งาน MTO" = `COL_MTO_JOB_SKU`) · ตอนขายผ่าน POS
+> `createSaleBill` หา Job SKU จากชีต (`mtoGroupSkusForSale_` — server-truth ไม่เชื่อ sku จาก
+> client) แล้ว re-stamp บรรทัด MTO ด้วยค่านั้นก่อนยิง ZORT · `readMtoBundleSku_` + Script Property
+> `MTO_BUNDLE_SKU` **ถูกลบทิ้งแล้ว** ·
+> **เหตุผล**: `MTO_BUNDLE_SKU` ตัวเดียวยุบยอดขายทุกงานเป็น SKU เดียว → แยกยอดต่อชนิดงานใน
+> analytics ไม่ได้ · Job SKU (per-job) กลายเป็น "ตัวเชื่อม" งาน MTO ↔ ยอดขาย/analytics และเป็น
+> ฐานของทิศ Template ต่อไป ·
+> **ความปลอดภัยที่ยังคง (เหมือน MTO_BUNDLE_SKU เดิม)**: Job SKU เป็น **service/non-stock SKU
+> ใน ZORT** → `AddOrder` ไม่หักสต็อกของมัน (องค์ประกอบถูกหักตอน fulfillment แล้ว — Decision 2
+> ยังอยู่ครบ) · งานที่ยังไม่ได้ตั้ง Job SKU → `createSaleBill` ปฏิเสธทั้งใบก่อนแตะ ZORT
+> (แทนที่การเช็ค `!MTO_BUNDLE_SKU` เดิม) ·
+> เทสต์ที่คุม: `tests/mto-sale-status.test.js` (`splitMtoSaleItems_(items, skuByJob)` re-stamp +
+> `mtoGroupSkusForSale_` reject-empty) · `tests/mto-pos-e2e.test.js` STAGE 1/4 (Job SKU เขียน
+> คอลัมน์ O + ZORT ได้ BK001 ไม่ใช่ jobId)
+>
+> เนื้อหาเดิมด้านล่างเก็บไว้เป็นบันทึกประวัติ (historical) — **ส่วน "MTO_BUNDLE_SKU" ไม่ใช้แล้ว**
+
 **Superseded**: ตัวเลือกก่อนหน้า (Option A — ให้ `closeMtoJob` สร้าง ZORT Order ราคา 0 ผ่าน
 `createZortSaleOrder_`) **ถูกยกเลิกและลบโค้ดทิ้งแล้ว** (Step 4, ส.ค. 2026)
 
-**Final**: เมื่อ POS ขายงาน MTO — ZORT ได้รับ **1 บรรทัด** สินค้าชื่อ `MTO_BUNDLE_SKU`
+**Final (historical — superseded by Job SKU)**: เมื่อ POS ขายงาน MTO — ZORT ได้รับ **1 บรรทัด** สินค้าชื่อ `MTO_BUNDLE_SKU`
 (Script Property, เจ้าของสร้างสินค้า placeholder นี้ใน ZORT เอง) ที่ **ราคาเดียวกับ `job.price`**
 ส่วนสต็อกองค์ประกอบถูกตัดไปแล้วตอน fulfillment ผ่าน `decreaseMtoStockInZort_`
 (`POST /Product/DecreaseProductStockList`) ซึ่ง **ไม่สร้าง order/เอกสารขายใน ZORT เลย**
@@ -151,13 +175,15 @@ tracing and debugging")
 | เหตุการณ์ | DMJ Sheet (col G/H) | ZORT | ฟังก์ชัน |
 |---|---|---|---|
 | ปิดงาน MTO (fulfillment) | ✅ หัก 1 ครั้ง | ✅ หัก 1 ครั้ง (`DecreaseProductStockList`) | `applyMtoFulfillment_` + `decreaseMtoStockInZort_` |
-| ขายงาน MTO ผ่าน POS (checkout) | ❌ ไม่แตะ (ตัดออกจาก `deductItems` แล้ว) | ❌ ไม่แตะ (ไม่มี order component — มีแต่ bundle SKU) | `createSaleBill` (แต่ `splitMtoSaleItems_` กันไว้) |
+| ขายงาน MTO ผ่าน POS (checkout) | ❌ ไม่แตะ (ตัดออกจาก `deductItems` แล้ว) | ❌ ไม่แตะ (Job SKU เป็น service/non-stock SKU — ไม่ส่ง component) | `createSaleBill` (แต่ `splitMtoSaleItems_` กันไว้) |
 | ขายสินค้าปกติ (ไม่ใช่ MTO) ผ่าน POS | ✅ หัก (col G เท่านั้น) | ✅ หัก (ผ่าน `AddOrder`) | `createSaleBill` (เหมือนเดิมทุกประการ ไม่เปลี่ยน) |
 
-**กติกาที่ห้ามผิด**: แถวไหนมี `it.mtoJobId` → **ห้ามปรากฏใน `deductItems`** และ **`sku` ใน
-`zortItems` ต้องถูกแทนด้วย `MTO_BUNDLE_SKU` เสมอ** — ทั้งสองอย่างนี้ทำโดย `splitMtoSaleItems_`
-ฟังก์ชันเดียว (ดู `tests/mto-sale-status.test.js` — มี test คุม "ไม่ mutate items เดิม" +
-"บรรทัด MTO ไม่เข้า deductItems" ไว้แล้ว)
+**กติกาที่ห้ามผิด** (updated — Job SKU migration): แถวไหนมี `it.mtoJobId` → **ห้ามปรากฏใน
+`deductItems`** และ **`sku` ใน `zortItems` ต้องถูก re-stamp ด้วย Job SKU จากชีต (server-truth) เสมอ**
+— ทั้งสองอย่างนี้ทำโดย `splitMtoSaleItems_(items, skuByJob)` ฟังก์ชันเดียว (skuByJob มาจาก
+`mtoGroupSkusForSale_` ที่อ่านคอลัมน์ O ของชีต "งาน MTO" — ไม่เชื่อ sku จาก client) · ดู
+`tests/mto-sale-status.test.js` — มี test คุม "re-stamp Job SKU", "ไม่ mutate items เดิม",
+"บรรทัด MTO ไม่เข้า deductItems", "ปฏิเสธงานที่ยังไม่ตั้ง Job SKU" ไว้แล้ว
 
 ---
 

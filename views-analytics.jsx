@@ -6973,7 +6973,7 @@ function MtoJobView({ data }) {
   uE(() => { setJobs(data.mtoJobs || []); }, [data.mtoJobs]);
   const [view, setView] = uS("list"); // "list" | "create" | "detail"
   const [activeJob, setActiveJob] = uS(null);
-  const [newJob, setNewJob] = uS({ jobName: "", customer: "", price: "", imageUrl: "" });
+  const [newJob, setNewJob] = uS({ jobName: "", customer: "", price: "", imageUrl: "", groupSku: "" });
   const [materials, setMaterials] = uS([]);
   const [matLightbox, setMatLightbox] = uS(null); // {url,name} — แตะรูปวัตถุดิบดูใหญ่
   const [search, setSearch] = uS("");
@@ -7081,6 +7081,7 @@ function MtoJobView({ data }) {
           customer: newJob.customer.trim(),
           price: newJob.price ? Number(newJob.price) : "",
           imageUrl: newJob.imageUrl.trim(),
+          groupSku: newJob.groupSku.trim().toUpperCase(),
           dateStr: todayStr(),
           actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
         }),
@@ -7094,6 +7095,7 @@ function MtoJobView({ data }) {
           customer: newJob.customer.trim(),
           price: newJob.price ? Number(newJob.price) : 0,
           imageUrl: newJob.imageUrl.trim(),
+          groupSku: newJob.groupSku.trim().toUpperCase(),
           status: "กำลังจัด",
           closedAt: "",
           // server ตั้งผู้รับผิดชอบ = คนสร้าง (จาก session) ให้เองแล้ว — สะท้อนผลไว้ก่อน refetch
@@ -7102,7 +7104,7 @@ function MtoJobView({ data }) {
           items: [],
         };
         setJobs(prev => [created, ...prev]);
-        setNewJob({ jobName: "", customer: "", price: "", imageUrl: "" });
+        setNewJob({ jobName: "", customer: "", price: "", imageUrl: "", groupSku: "" });
         setView("list");
         showToast("success", "สร้างงานเรียบร้อย");
       } else {
@@ -7383,6 +7385,25 @@ function MtoJobView({ data }) {
             placeholder="0"
             style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1.5px solid var(--bdr)", fontFamily: "inherit", fontSize: 14, boxSizing: "border-box" }}
           />
+        </label>
+        <label>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", marginBottom: 4 }}>{t("รหัสสินค้า (SKU กลุ่ม) — ต้องตั้งก่อนขายผ่าน POS")}</div>
+          <input
+            list="mto-group-sku-list"
+            value={newJob.groupSku}
+            onChange={e => setNewJob(p => ({ ...p, groupSku: e.target.value.toUpperCase() }))}
+            placeholder={t("เช่น BK001 · VASE001 · BQ001")}
+            style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1.5px solid var(--bdr)", fontFamily: "monospace", fontWeight: 700, fontSize: 14, boxSizing: "border-box" }}
+          />
+          <datalist id="mto-group-sku-list">
+            {(products || [])
+              .filter(p => String(p.category || p.cat || "").includes("Made to Order"))
+              .slice(0, 200)
+              .map(p => <option key={p.sku} value={String(p.sku || "").toUpperCase()}>{p.name || ""}</option>)}
+          </datalist>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+            {t("เป็นสินค้า service/ไม่นับสต็อกใน ZORT — ใช้เชื่อมยอดขายงาน MTO เข้ารายงาน (ปล่อยว่างได้ แต่จะยังขายผ่าน POS ไม่ได้จนกว่าจะตั้ง)")}
+          </div>
         </label>
         <label>
           <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", marginBottom: 4 }}>{t("URL รูป (ไม่จำเป็น)")}</div>
@@ -11062,12 +11083,13 @@ function PosView({ data, role }) {
   //   ต่องาน") · จำนวนล็อกที่ 1 เสมอ (ห้ามแก้เป็นอื่น — งานคือของจริงชิ้นเดียว ขายซ้ำไม่ได้)
   //   category ตั้งเป็น "Made to Order จัดแบบพิเศษ" ให้เข้าเกณฑ์ยกเว้นส่วนลดขายส่งอัตโนมัติ
   //   (isBillExcludedCat ใช้คีย์เวิร์ดเดียวกันทั้ง frontend/backend — ไม่ต้องเขียนเงื่อนไขซ้ำ)
-  //   sku ใช้ jobId เอง (ไม่ใช่ SKU สินค้าจริง) — ฝั่งเซิร์ฟเวอร์ (splitMtoSaleItems_) แทนที่ด้วย
-  //   MTO_BUNDLE_SKU ก่อนยิง ZORT อยู่แล้ว โดยดูจาก it.mtoJobId ไม่ใช่ it.sku
+  //   sku ใช้ Job SKU (SKU กลุ่ม) ของงานเพื่อ "แสดงผล/ใบเสร็จ" — ฝั่งเซิร์ฟเวอร์ (createSaleBill)
+  //   ไม่เชื่อ sku นี้ · re-stamp ด้วย Job SKU จากชีตเองก่อนยิง ZORT โดยดูจาก it.mtoJobId
+  //   (superseded MTO_BUNDLE_SKU เดิม — ตอนนี้แต่ละงานมี Job SKU ของตัวเองเป็นตัวเชื่อม analytics)
   function addMtoJobToCart(job) {
     if (cart.some(it => it.mtoJobId === job.jobId)) return;   // กันเพิ่มซ้ำ
     setCart(c => [...c, {
-      sku: job.jobId, name: job.jobName || job.jobId, category: "Made to Order จัดแบบพิเศษ",
+      sku: job.groupSku || job.jobId, name: job.jobName || job.jobId, category: "Made to Order จัดแบบพิเศษ",
       imageUrl: job.imageUrl || "", qty: 1, price: Number(job.price) || 0, qtyStore: 1,
       mtoJobId: job.jobId, mtoCustomer: job.customer || "",
     }]);

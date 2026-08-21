@@ -87,7 +87,8 @@ function makeGasEnv() {
       removeAll: (ks) => { (ks || []).forEach((k) => delete cacheStore[k]); },
     }),
   };
-  const props = { MTO_BUNDLE_SKU: 'MTO-BUNDLE-01' };
+  // Job SKU มาจากงานเอง (คอลัมน์ O ในชีตงาน MTO) — ไม่ใช้ MTO_BUNDLE_SKU ตัวเดียวแล้ว (superseded)
+  const props = {};
   const PropertiesService = {
     getScriptProperties: () => ({
       getProperty: (k) => (Object.prototype.hasOwnProperty.call(props, k) ? props[k] : null),
@@ -218,7 +219,7 @@ describe('MTO → POS → Checkout — dry run แบบ end-to-end (eval appssc
   it('STAGE 1 — สร้างงาน MTO (createMtoJob)', () => {
     const res = parseAction(mod.createMtoJob(env.ss, {
       dateStr: '20/08/2026', jobName: 'ช่อดอกไม้พิเศษ งานแต่ง คุณเอ', customer: 'คุณเอ (แต่งงาน)',
-      price: 3500, imageUrl: '',
+      price: 3500, imageUrl: '', groupSku: 'bk001',   // Job SKU (พิมพ์เล็ก → ต้อง uppercase ตอนเก็บ)
     }, 'พนักงาน ก (เซล)', 'ST0099'));
     expect(res.success).toBe(true);
     jobId = res.jobId;
@@ -226,6 +227,7 @@ describe('MTO → POS → Checkout — dry run แบบ end-to-end (eval appssc
     const row = env.sheets['งาน MTO'][1];
     expect(row[0]).toBe(jobId);
     expect(row[6]).toBe('กำลังจัด');   // fulfillment ยังไม่เสร็จ
+    expect(row[14]).toBe('BK001');     // O = Job SKU (uppercase) — ตัวเชื่อมเข้ายอดขาย/analytics
   });
 
   it('STAGE 2 — Fulfill: closeMtoJob (เรียก applyMtoFulfillment_ ภายใน) หักสต็อกจริง', () => {
@@ -301,13 +303,15 @@ describe('MTO → POS → Checkout — dry run แบบ end-to-end (eval appssc
     expect(res.data.totals.retailEligible).toBe(90);
     expect(res.data.mtoSold).toEqual([jobId]);
 
-    // ── ZORT payload — ต้องมี "SKU เดียว ราคาเดียว" ต่องาน (Decision: ONE SKU ONE PRICE) ──
+    // ── ZORT payload — บรรทัด MTO ใช้ "Job SKU ต่องาน" (BK001) re-stamp จากชีต server-truth ──
+    // client ส่ง sku=jobId มา (บรรทัด 288) แต่เซิร์ฟเวอร์ต้องแทนด้วย Job SKU จริงจากชีต
     const addOrderCall = env.zortCalls.find((c) => String(c.url).indexOf('/Order/AddOrder') >= 0);
     expect(addOrderCall).toBeTruthy();
     const sentPayload = JSON.parse(addOrderCall.payload);
     expect(sentPayload.list).toHaveLength(2);
-    const mtoLine = sentPayload.list.find((l) => l.sku === 'MTO-BUNDLE-01');
+    const mtoLine = sentPayload.list.find((l) => l.sku === 'BK001');
     expect(mtoLine).toBeTruthy();
+    expect(sentPayload.list.some((l) => l.sku === jobId)).toBe(false);   // jobId ห้ามหลุดไป ZORT
     expect(mtoLine.number).toBe(1);
     expect(mtoLine.pricepernumber).toBe(3500);
     expect(mtoLine.totalprice).toBe(3500);

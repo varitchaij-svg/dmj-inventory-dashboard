@@ -1561,10 +1561,34 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
   ไม่เปลี่ยน) · ⚠️ ยุบกลุ่มแล้ว pagination นับเป็น "กลุ่ม" (`gridUnits`) ไม่ใช่ราย SKU
 - เทสต์: `tests/mto-group.test.js` (17 เคส — eval `mtoSkuPrefix_`/`mtoGroupProducts_`/`mtoGroupLabel_`
   จริงจาก `.jsx` ไม่ copy + meta-test ว่า `addNextInGroup` ยังหยิบตัวถัดไป และหมวด MTO เรนเดอร์การ์ดกลุ่ม)
-- **งานต่อ (#3 ที่เจ้าของสั่งคิดไว้ ยังไม่ทำ)**: MTO เป็น bundle — กด BK001 → เลือกของประกอบเพื่อ
-  **คิดราคา** → สรุปบรรทัดเดียว "BK001 1,000฿" (ไม่แจงของ) · เจ้าของเลือกไว้แล้วว่า **สูตรเลือกใหม่
-  ทุกใบ** (composition ผูกกับบรรทัด ไม่ใช่ต่อ SKU) และ **หักสต็อกแค่ "บันทึกไว้ให้คนคลังจัด/หักเอง"
-  ไม่ auto-หักผ่าน ZORT** (เส้นทางขาย+ZORT เสี่ยงหักสองเด้ง/สต็อกเพี้ยน — ทำเฟสท้ายสุด)
+- **งานต่อ (#3 — Bundle composition ในใบเสนอราคา ยังไม่ทำ · ดีไซน์ถูกเลื่อนออกไปโดยเจตนา)**: MTO
+  เป็น bundle — กด BK001 → เลือกของประกอบเพื่อ **คิดราคา** → สรุปบรรทัดเดียว "BK001 1,000฿"
+  (ไม่แจงของ) · เจ้าของเลือกไว้แล้วว่า **สูตรเลือกใหม่ทุกใบ** (composition ผูกกับบรรทัด ไม่ใช่ต่อ SKU)
+  และ **หักสต็อกแค่ "บันทึกไว้ให้คนคลังจัด/หักเอง" ไม่ auto-หักผ่าน ZORT** ·
+  ⚠️ **ยังไม่เริ่มโค้ด — และห้ามสร้าง Bundle เป็น domain ใหม่โดยไม่ถามเจ้าของก่อน** (เคยคุยดีไซน์
+  Bundle-entity เต็มรูปแล้วเจ้าของสั่งเลื่อน — ให้เดินตาม MTO roadmap เดิมก่อน ไม่ใช่รื้อ domain)
+
+### 🏷️ Job SKU — ขายงาน MTO ด้วยรหัสสินค้าต่องาน (superseded MTO_BUNDLE_SKU, ส.ค. 2026)
+
+ต่อยอด Feature 1 (ADR-MTO-SELLABLE) — เดิม POS ขายงาน MTO ยิง ZORT ด้วย `MTO_BUNDLE_SKU`
+**ตัวเดียวทุกงาน** ทำให้แยกยอดขายต่อชนิดงานใน analytics ไม่ได้ · ตอนนี้ **แต่ละงานมี Job SKU
+ของตัวเอง** (BK001/VASE001/BQ001) = ตัวเชื่อมงาน MTO ↔ ยอดขาย/analytics
+
+- **เลือก Job SKU ตอนสร้างงาน MTO** (`MtoJobView` create form — ช่อง "รหัสสินค้า (SKU กลุ่ม)"
+  พร้อม datalist จากสินค้าหมวด MTO) → เก็บ **คอลัมน์ O ชีต "งาน MTO"** (`COL_MTO_JOB_SKU=15`,
+  **ต่อท้าย ห้ามแทรก** บทเรียนข้อ 5) · เก็บเป็นตัวพิมพ์ใหญ่ · `readMtoJobs_` คืน `job.groupSku`
+- **Job SKU = service/non-stock SKU ใน ZORT** (เจ้าของตั้งใน ZORT เอง) → `AddOrder` ไม่หักสต็อก
+  ของมัน · องค์ประกอบยังหักตอน fulfillment เท่านั้น (Decision 2 ของ ADR ยังอยู่ครบ — ห้ามหักซ้ำ)
+- ⚠️ **`createSaleBill` re-stamp Job SKU จากชีต (server-truth) ไม่เชื่อ sku ที่ client ส่ง** —
+  `mtoGroupSkusForSale_(ss, jobIds)` อ่านคอลัมน์ O · `splitMtoSaleItems_(items, skuByJob)` แทน sku
+  บรรทัด MTO ด้วยค่านั้น · **เครื่องเก่าที่ยัง cache `.jsx` ส่ง sku=jobId มาก็ขายถูก** (server แทนให้)
+- ⚠️ **งานที่ยังไม่ได้ตั้ง Job SKU → `createSaleBill` ปฏิเสธทั้งใบก่อนแตะ ZORT** (แทนการเช็ค
+  `!MTO_BUNDLE_SKU` เดิม) · แถวงานเก่าก่อน migration = groupSku ว่าง → ต้องตั้งก่อนถึงขายผ่าน POS ได้
+- **`readMtoBundleSku_` + Script Property `MTO_BUNDLE_SKU` ถูกลบทิ้งแล้ว** — ห้ามเอากลับมา
+- ต้อง **deploy `.gs` ก่อน** (คอลัมน์ O self-heal ใน `getOrCreateMtoJobSheet_` เติมหัวให้เอง —
+  ไม่ต้อง migration ชีตด้วยมือ) · frontend เก่าปลอดภัย (server re-stamp)
+- เทสต์: `tests/mto-sale-status.test.js` (`splitMtoSaleItems_` re-stamp + `mtoGroupSkusForSale_`
+  reject-empty) · `tests/mto-pos-e2e.test.js` STAGE 1/4 (เขียนคอลัมน์ O + ZORT ได้ BK001 ไม่ใช่ jobId)
 
 ### 🗑️ เคลียร์สินค้าที่ "ลบจาก ZORT แล้ว" ออกจากเว็บ — soft-delete (ส.ค. 2026)
 
