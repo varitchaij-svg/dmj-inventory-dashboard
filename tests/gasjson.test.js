@@ -311,11 +311,11 @@ describe('meta — SCAN: ไม่มี res.json() ดิบนอก dmjJson (
     'app.jsx': [
       'const d = await res.json();',                              // handlePin (verifyPin) + startLineLogin (lineLoginMeta)
       '.then(r => r.json())',                                     // checkDataUnchanged (action=ver) — HTML → .catch → reload อยู่แล้ว
-      'return await res.json();',                                 // postAuthAction — 7.6-quarantined โดยตรง
       'const d = await (await fetch(url.toString())).json();',    // lineLoginMeta prefetch (auth)
     ],
   };
-  const ALLOW_COUNT = { 'app.jsx': 5 };   // 'const d = await res.json();' มี 2 จุด (handlePin + startLineLogin)
+  // postAuthAction แปลงเป็น dmjJson แล้ว (Phase 7.6 ก้อน E) — เหลือ 4 จุด auth/boot ที่ยังเว้นไว้
+  const ALLOW_COUNT = { 'app.jsx': 4 };   // 'const d = await res.json();' มี 2 จุด (handlePin + startLineLogin)
 
   function rawJsonLines(src) {
     return src.split('\n').map(s => s.trim()).filter(t => {

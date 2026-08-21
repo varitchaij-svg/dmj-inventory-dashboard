@@ -1117,19 +1117,30 @@ async function postAuthAction(body) {
   //    เป็นงาน Phase 7.6 ที่ถูกถอยออกไป ยังไม่เอากลับเข้ามาปนกับรอบนี้ (จะได้แยกออกว่าอะไรพัง)
   const _act = (body && body.action) || 'auth';
   window.dmjMark('auth:' + _act);
+  // ── เพดานเวลาต่อ action (Phase 7.6 ก้อน E) ─────────────────────────────────
+  // `fetch` ไม่มี timeout ในตัว → คำขอที่ไปถึง Google แล้วแต่ไม่มีคำตอบ (ลิงก์ตาย/เน็ตหลุด/
+  // GAS ค้าง) ค้าง pending ข้ามนาที = ปุ่มหมุนไม่จบ · ใส่เพดานผ่าน dmjFetch แบบ **ใจกว้าง**
+  // (cold start GAS บนเน็ตร้านกินได้ 10-20 วิ) แยกตาม action — me อยู่บนเส้นเปิดแอปทุกครั้ง
+  // ⚠️⚠️ กติกาที่ทำร้านล่มตอน 7.6 ถ้าพลาด: **timeout/abort ที่นี่ต้อง "throw" เสมอ** เพื่อให้
+  //   ตัวเรียก (checkMe/bootstrap) ตกลง catch แล้ว fallback เป็น role เดิมที่ cache ไว้ (ทำงานต่อได้)
+  //   — ห้าม escalate เป็น logout/clear-session เด็ดขาด (logout เกิดเฉพาะ d.invalid===true เท่านั้น)
+  //   dmjFetch abort → reject → ตก catch ด้านล่าง · dmjJson throw บน HTML → ตก catch เช่นกัน
+  //   (เทียบเท่า res.json() เดิมที่ throw "Unexpected token '<'") ทั้งคู่จบที่ fallback role เดิม
+  const _TIMEOUTS = { authLine: 25000, me: 20000, logout: 20000, claimLoginHandoff: 8000 };
+  const _ms = _TIMEOUTS[_act] || 20000;
   try {
-    const res = await fetch(base, {
+    const _opts = {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify(body),
-    });
-    return await res.json();
+      dmjTimeoutMs: _ms,
+    };
+    const res = (typeof dmjFetch === 'function') ? await dmjFetch(base, _opts) : await fetch(base, _opts);
+    return (typeof dmjJson === 'function') ? await dmjJson(res) : await res.json();
   } catch (e) {
-    // เน็ตมือถือในร้าน/คลังหลุดเป็นช่วง ๆ — คำขอที่ reject กลางทางคือสาเหตุหนึ่ง
-    // ที่พนักงานต้องกดล็อกอินซ้ำหลายรอบ · ลองใหม่ให้เอง 2 ครั้ง (เว้น 1.5 / 3 วิ)
-    // ⚠️ จงใจ "ไม่ใส่ timeout/เพดานเวลา" — Phase 7.6 ที่ตัดคำขอช้าทิ้งถูก revert
-    //    ไปแล้วเพราะทำให้เข้าแอปไม่ได้ · ตรงนี้ retry เฉพาะตอน fetch reject จริงเท่านั้น
-    //    ยิง authLine ซ้ำปลอดภัย เพราะ GAS cache ผลต่อ code ไว้ 10 นาที (authCodeCacheKey_)
+    // เน็ตมือถือในร้าน/คลังหลุดเป็นช่วง ๆ + timeout ข้างบน — ลองใหม่ให้เอง 2 ครั้ง (เว้น 1.5 / 3 วิ)
+    // ยิง authLine ซ้ำปลอดภัย เพราะ GAS cache ผลต่อ code ไว้ 10 นาที (authCodeCacheKey_)
+    // · me/claim ก็ idempotent · ⚠️ ห้ามแปลง throw นี้เป็นค่า invalid — จะกลายเป็น logout (ดูข้างบน)
     const tries = (arguments.length > 1 && arguments[1]) || 0;
     if (tries < 2) {
       await new Promise(r => setTimeout(r, 1500 * (tries + 1)));

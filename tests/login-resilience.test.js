@@ -312,3 +312,69 @@ describe('Phase 7.6 ก้อน D — resolveSession_ cache + ล้างต�
     expect(GS).toMatch(/sessionCacheClearForStaff_\(ss, all\[hit\]\.staffId\)/);
   });
 });
+
+// ── ก้อน E (ข้อ 1): postAuthAction timeout — เสี่ยงสุด (ยังไม่ merge จนกว่าจะเทสต์ iPhone) ──
+// ⚠️ แกนความปลอดภัยที่ทำร้านล่มตอน 7.6 ถ้าพลาด: timeout/abort ต้อง **throw** เพื่อให้ตัวเรียก
+//    (checkMe/bootstrap) fallback เป็น role เดิม — ห้ามกลายเป็นค่า invalid (= logout)
+function loadPostAuth(opts) {
+  const calls = { fetch: [] };
+  const dmjFetch = (url, o) => { calls.fetch.push(o); return opts.fetchImpl(o); };
+  const dmjJson = (res) => opts.jsonImpl(res);
+  const ctx = {
+    GOOGLE_SHEET_URL: 'http://gas',
+    window: { dmjMark: () => {} },
+    dmjFetch, dmjJson,
+    fetch: () => { throw new Error('ต้องไม่ใช้ raw fetch เมื่อมี dmjFetch'); },
+    setTimeout: (fn) => { fn(); return 0; },   // retry backoff ทันที (กันเทสต์ช้า)
+    calls,
+  };
+  const code = grab(APP, /async function postAuthAction\(body\) \{[\s\S]*?\n\}/) +
+    '\nreturn { postAuthAction, calls };';
+  // eslint-disable-next-line no-new-func
+  return new Function(...Object.keys(ctx), code)(...Object.values(ctx));
+}
+
+describe('Phase 7.6 ก้อน E — postAuthAction timeout + throw-not-logout', () => {
+  it('สำเร็จ → คืนค่า JSON ที่ dmjJson แปลงมา', async () => {
+    const P = loadPostAuth({ fetchImpl: () => Promise.resolve({}), jsonImpl: () => Promise.resolve({ ok: true, staff: { staffId: 'S1' } }) });
+    const out = await P.postAuthAction({ action: 'me', sessionToken: 'T' });
+    expect(out.ok).toBe(true);
+    expect(out.staff.staffId).toBe('S1');
+  });
+
+  it('🔴 abort/reject → THROW (ไม่ใช่คืน invalid) หลัง retry 2 ครั้ง = ยิงรวม 3', async () => {
+    const P = loadPostAuth({ fetchImpl: () => Promise.reject(new Error('AbortError')), jsonImpl: () => {} });
+    await expect(P.postAuthAction({ action: 'me', sessionToken: 'T' })).rejects.toThrow();
+    expect(P.calls.fetch.length).toBe(3);   // 1 + 2 retries → ตัวเรียก catch แล้ว fallback role เดิม
+  });
+
+  it('🔴 dmjJson throw (GAS ตอบ HTML) → THROW เช่นกัน ไม่กลืนเป็นค่า', async () => {
+    const P = loadPostAuth({ fetchImpl: () => Promise.resolve({}), jsonImpl: () => Promise.reject(new Error('badjson: <!DOCTYPE')) });
+    await expect(P.postAuthAction({ action: 'me' })).rejects.toThrow();
+    expect(P.calls.fetch.length).toBe(3);
+  });
+
+  it('เพดานเวลาแยกตาม action (ใจกว้าง): me=20s authLine=25s claim=8s unknown=20s', async () => {
+    for (const [action, want] of [['me', 20000], ['authLine', 25000], ['logout', 20000], ['claimLoginHandoff', 8000], ['weird', 20000]]) {
+      const P = loadPostAuth({ fetchImpl: () => Promise.resolve({}), jsonImpl: () => Promise.resolve({ ok: true }) });
+      await P.postAuthAction({ action });
+      expect(P.calls.fetch[0].dmjTimeoutMs).toBe(want);
+    }
+  });
+
+  it('ส่ง dmjTimeoutMs ผ่าน dmjFetch จริง (ไม่ใช่ raw fetch ไร้เพดาน)', async () => {
+    const P = loadPostAuth({ fetchImpl: () => Promise.resolve({}), jsonImpl: () => Promise.resolve({ ok: true }) });
+    await P.postAuthAction({ action: 'me' });
+    expect(P.calls.fetch[0]).toHaveProperty('dmjTimeoutMs');
+    expect(P.calls.fetch[0].method).toBe('POST');
+  });
+
+  it('meta: source ยัง re-throw หลัง retry (กัน logout) + มีเพดานเวลา', () => {
+    // การไม่แปลง error เป็น invalid พิสูจน์ด้วย behavioral test "abort → THROW" ข้างบนแล้ว
+    // (rejects ไม่ resolve เป็นค่าใด ๆ) ที่นี่ล็อกโครงสร้าง source เสริม
+    const src = grab(APP, /async function postAuthAction\(body\) \{[\s\S]*?\n\}/);
+    expect(src).toMatch(/throw e;/);            // re-throw หลัง retry
+    expect(src).toMatch(/dmjTimeoutMs/);        // มีเพดานเวลา
+    expect(src).toMatch(/typeof dmjFetch === 'function'/);  // ใช้ dmjFetch เมื่อมี
+  });
+});
