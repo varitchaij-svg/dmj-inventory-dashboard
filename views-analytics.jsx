@@ -3955,6 +3955,7 @@ async function syncOrderUpdate(order, updates) {
         preparedQty: updates.preparedQty,
         printFlag:   updates.printFlag,
         carryMode:   updates.carryMode,
+        toCentral:   updates.toCentral,
         actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
       }),
     });
@@ -4045,6 +4046,12 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
     onPatch(order.id, {carryMode: m});
     syncOrderUpdate(order, {carryMode: m});
   };
+  // ป้ายเสริม "ส่ง Central" — คนละตัวกับ carryMode (หิ้ว/รอขึ้นรถ) ข้างบน ใบเดียวกันติดได้ทั้งคู่
+  // (คลัง/หน้าร้าน/เซล กดเองนาน ๆ ครั้ง จึงไม่ยัดเป็นตัวเลือกที่หน้าสร้างออเดอร์ซึ่งใช้บ่อยสุด)
+  const setToCentral = v => {
+    onPatch(order.id, {toCentral: v});
+    syncOrderUpdate(order, {toCentral: v});
+  };
   const markComplete = async () => {
     if (!order.printFlag) {
       showToast("warn", "เลือก PRINT หรือ SKIP ก่อน", "🖨️");
@@ -4095,6 +4102,9 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
   const pf = order.printFlag;
   // carryMode: ใช้จาก localStorage ก่อน ถ้าไม่มีดูจากข้อมูลใน sheet ถ้าไม่มีก็ default "truck"
   const cm = order.carryMode || "truck";
+  // ป้ายเสริม "ส่ง Central" — เจ้าของขอเฉพาะ คลัง/หน้าร้าน/เซล กดได้ (owner/dev เห็นทุกอย่างอยู่แล้ว
+  // ตามธรรมเนียมเดิมของแอป) · role ที่นี่คือ viewRole (dev ถูกยุบเป็น "owner" มาก่อนแล้วจาก app.jsx)
+  const canToggleCentral = ["warehouse", "frontstore", "saler", "owner"].indexOf(role) >= 0;
   const product = productMap ? productMap[order.sku] : null;
   const locs = product?.locations || [];
   const locStr = locs.length
@@ -4162,6 +4172,9 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
             <div style={{fontSize:14,fontWeight:600,lineHeight:1.3,marginBottom:2,
               overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
               {order.name}{cm === "carry" ? <span style={{fontSize:11,fontWeight:700,color:"#1565c0",marginLeft:5,background:"#e3f2fd",borderRadius:4,padding:"1px 6px"}}>order</span> : null}
+              {/* ป้าย "ส่ง Central" — โชว์ให้ทุกคนเห็นเสมอ (ไม่ผูกกับ canToggleCentral) เพราะเป็น
+                  ข้อมูลที่บันทึกลงชีตจริง ทุกเครื่องต้องเห็นตรงกัน ต่างจากปุ่มกดที่จำกัด role */}
+              {order.toCentral ? <span style={{fontSize:11,fontWeight:700,color:"#7c2d12",marginLeft:5,background:"#ffedd5",borderRadius:4,padding:"1px 6px"}}>🏢 {t("Central")}</span> : null}
             </div>
             <div style={{fontSize:11,color:"var(--muted)"}}>
               {order.date}{order.from ? ` · ${order.from}` : ""}{order.to ? ` → ${order.to}` : ""}
@@ -4277,6 +4290,23 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
               }}>
               {cm==="truck"?"🚛":"🚶"}
             </button>
+
+            {/* ส่ง Central — ป้ายเสริม กดสลับได้เหมือนปุ่ม 🚶/🚛 ข้างบน แต่ไม่แตะ carryMode */}
+            {canToggleCentral && (
+              <button className="order-action-btn" onClick={() => setToCentral(!order.toCentral)}
+                title={order.toCentral ? t("แตะเพื่อถอดป้าย Central") : t("แตะเพื่อติดป้าย ส่ง Central")}
+                style={{
+                  width:44,height:44,borderRadius:10,cursor:"pointer",
+                  border:`1.5px solid ${order.toCentral ? "#f97316" : "var(--bdr)"}`,fontSize:20,
+                  background:order.toCentral?"#ffedd5":"#fff",
+                  display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:1,
+                }}>
+                <span>🏢</span>
+                <span style={{fontSize:8,fontWeight:700,color:order.toCentral?"#9a3412":"#9ca3af"}}>
+                  {t("Central")}
+                </span>
+              </button>
+            )}
 
             {/* Done */}
             {isPending && role !== "frontstore" && role !== "saler" && (

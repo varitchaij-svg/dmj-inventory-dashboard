@@ -4549,6 +4549,7 @@ function updateOrderState(ss, body) {
           preparedQty: sheet.getRange(sheetRow, COL_ORD_PREPQTY).getValue() || "",
           printFlag: sheet.getRange(sheetRow, COL_ORD_PRINTFLAG).getValue() || "",
           carryMode: sheet.getRange(sheetRow, COL_ORD_TYPE).getValue() || "",
+          toCentral: sheet.getRange(sheetRow, COL_ORD_CENTRAL).getValue() || "",
         };
         // 2) เขียนจริง
         if (body.status)              sheet.getRange(sheetRow, COL_ORD_STATUS).setValue(body.status);
@@ -4570,11 +4571,13 @@ function updateOrderState(ss, body) {
             } catch(e) {}
           }
         }
+        // ป้ายเสริม "ส่ง Central" — คนละตัวกับ carryMode ข้างบน ไม่แตะ COL_ORD_TYPE
+        if (body.toCentral != null) sheet.getRange(sheetRow, COL_ORD_CENTRAL).setValue(body.toCentral ? 1 : "");
         SpreadsheetApp.flush();
         // 3) ถึงจุดนี้ = เขียนสำเร็จ → 4) เขียน audit log เฉพาะตอนสำเร็จเท่านั้น
         writeAuditLog_(actor, "อัปเดต order", body.orderId, auditDetail_({
           before: before,
-          after: { status: body.status, preparedQty: body.preparedQty, printFlag: body.printFlag, carryMode: body.carryMode },
+          after: { status: body.status, preparedQty: body.preparedQty, printFlag: body.printFlag, carryMode: body.carryMode, toCentral: body.toCentral },
           note: "อัปเดต order (" + (body.sku || "") + ")",
         }));
         return ok({ updated: body.orderId, row: sheetRow });
@@ -4610,6 +4613,7 @@ function updateOrderState(ss, body) {
           preparedQty: data[i][COL_ORD_PREPQTY - 1] || "",
           printFlag: data[i][COL_ORD_PRINTFLAG - 1] || "",
           carryMode: data[i][COL_ORD_TYPE - 1] || "",
+          toCentral: data[i][COL_ORD_CENTRAL - 1] || "",
         };
         // 2) เขียนจริง
         if (body.status)              sheet.getRange(row, COL_ORD_STATUS).setValue(body.status);
@@ -4629,11 +4633,13 @@ function updateOrderState(ss, body) {
             } catch(e) {}
           }
         }
+        // ป้ายเสริม "ส่ง Central" — เส้นทางกู้แถวเลื่อนก็ต้องรองรับ ไม่งั้นหลังแถวเลื่อนกดติดป้ายไม่ได้
+        if (body.toCentral != null) sheet.getRange(row, COL_ORD_CENTRAL).setValue(body.toCentral ? 1 : "");
         SpreadsheetApp.flush();
         // 3) ถึงจุดนี้ = เขียนสำเร็จ → 4) เขียน audit log เฉพาะตอนสำเร็จเท่านั้น
         writeAuditLog_(actor, "อัปเดต order", body.sku, auditDetail_({
           before: before,
-          after: { status: body.status, preparedQty: body.preparedQty, printFlag: body.printFlag, carryMode: body.carryMode },
+          after: { status: body.status, preparedQty: body.preparedQty, printFlag: body.printFlag, carryMode: body.carryMode, toCentral: body.toCentral },
           note: "อัปเดต order (กู้แถวเลื่อน: orderId=" + (body.orderId || "-") +
                 " → row " + row + ", match by sku+date)",
         }));
@@ -10335,6 +10341,8 @@ function readOrders_(rowsOpt) {
       orderedBy:   String(r[11] || "").trim(),
       preparedBy:  String(r[12] || "").trim(),
       printFlag:   r[13] || null,
+      // P (index 15) — ป้ายเสริม "ส่ง Central" (คนละตัวกับ carryMode คอลัมน์ A) · แถวเก่าว่าง = false
+      toCentral:   String(r[15] || "").trim() === "1",
     });
   }
   Logger.log("[readOrders_] result=" + result.length + " skippedBlank=" + skippedBlank + " skippedHeader=" + skippedHeader + " skippedNoSku=" + skippedNoSku);
@@ -10456,6 +10464,14 @@ function ensureOrderPeopleHeaders_(sheet) {
 // ⚠️ คอลัมน์ O — L/M เป็นผู้สั่ง/ผู้จัด และ N เป็น printFlag แล้ว ห้ามทับ
 var COL_ORD_CID       = 15;   // O — cid (ว่างไว้สำหรับแถวเก่า/แถวที่สร้างจากที่อื่น)
 var ORD_CID_SCAN_ROWS = 500;  // ค้นย้อนหลังไม่เกินกี่แถว (กัน getRange โตไม่มีเพดาน)
+
+// ── ป้ายเสริม "ส่ง Central" ──────────────────────────────────────────────────
+// เจ้าของสั่ง (ส.ค. 2026): บางครั้งของที่สั่งไปขึ้นรถ/หิ้วอยู่แล้วจะถูกส่งไปขายที่ "Central"
+// ต่อ — เกิดนาน ๆ ครั้ง จึงตั้งใจ **ไม่เพิ่มเป็นตัวเลือกที่หน้าสร้างออเดอร์ (OrderModal)** ที่ใช้
+// บ่อยที่สุด แต่ให้กดติด/ถอดป้ายนี้ทีหลังจากหน้ารายการสั่งของแทน (เหมือนปุ่ม 🚶/🚛 ที่มีอยู่แล้ว)
+// ⚠️ เป็นแค่ "ป้ายเสริม" คนละตัวกับ COL_ORD_TYPE (ประเภทการรับ หิ้ว/รอขึ้นรถ คอลัมน์ A) —
+//    ใบเดียวกันยังเป็นหิ้ว/รถได้ตามเดิม แค่ติดป้ายเสริมว่าจะขายที่ Central ด้วย ห้ามไปแทนที่ col A
+var COL_ORD_CENTRAL   = 16;   // P — ต่อท้าย cid (O) ห้ามแทรกกลาง (บทเรียนข้อ 5)
 
 // หาแถวที่เคยบันทึกด้วย cid นี้แล้ว — คืนเลขแถว (1-indexed) หรือ -1 ถ้าไม่เจอ
 function findOrderRowByCid_(sh, cid) {
