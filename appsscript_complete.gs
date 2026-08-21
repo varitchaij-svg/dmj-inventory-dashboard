@@ -646,6 +646,11 @@ function logoutHandler_(ss, data) {
 //  ย้อนกลับไปหา secret ไม่ได้ · แลกได้ครั้งเดียว (รับแล้วลบทิ้ง) · หมดอายุใน 15 นาที
 // ═══════════════════════════════════════════════════════════════════════════
 const LOGIN_HANDOFF_TTL_SEC = 900; // 15 นาที — เผื่อคนสลับแอปไปมา/เน็ตช้า แต่ไม่ค้างข้ามวัน
+// ⚠️ ช่วงผ่อนผันหลัง claim สำเร็จ (Phase 7.6 ก้อน B) — ดู claimLoginHandoffHandler_
+// เดิม cache.remove ทันทีที่อ่านเจอ → ถ้าคำตอบหายกลางทาง (GAS ตอบ HTML/เน็ตร้านหลุด)
+// token หายถาวร PWA แลกคืนไม่ได้ = วนล็อกอินไม่จบ · ตอนนี้เขียนทับด้วย TTL สั้นแทน:
+// retry ที่หลุดยังแลกได้ในช่วงนี้ (idempotent — secret อยู่เฉพาะเครื่อง PWA เดียว) แต่ไม่ค้างยาว
+const LOGIN_HANDOFF_CLAIM_GRACE_SEC = 60;
 
 function loginHandoffKey_(id) { return 'dmj_login_handoff_' + String(id).slice(0, 120); }
 
@@ -683,7 +688,9 @@ function claimLoginHandoffHandler_(data) {
     const cache = CacheService.getScriptCache();
     const key = loginHandoffKey_(sha256Hex_(secret));
     raw = cache.get(key);
-    if (raw) cache.remove(key); // ใช้ได้ครั้งเดียว
+    // ⚠️ ไม่ลบทันที (Phase 7.6 ก้อน B) — เขียนทับด้วย TTL สั้น (60s) แทน ถ้าคำตอบนี้หายกลางทาง
+    //    (GAS ตอบ HTML/เน็ตหลุด) retry ยังแลกคืนได้ในช่วงผ่อนผัน · ลบทันทีเคยทำ token หายถาวร
+    if (raw) { try { cache.put(key, raw, LOGIN_HANDOFF_CLAIM_GRACE_SEC); } catch (e2) {} }
   } catch (e) { Logger.log('claimLoginHandoff error: ' + e); }
 
   if (!raw) {
