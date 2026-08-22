@@ -219,6 +219,9 @@ const SHEET_ATT_SHIFTS     = "ตั้งค่ากะ";          // เว�
 const BACKFILL_START_YM    = "2024-01";           // เดือนแรกที่เริ่มใช้ ZORT — backfill ดึงตั้งแต่เดือนนี้
 const WH_NAME_SAI5    = "คลังสินค้าสาย5";
 const WH_NAME_FS      = "ดูเหมือนจริง";
+// ปลายทาง "ส่ง Central" — ยังไม่มีรหัสคลังใน ZORT (เจ้าของยืนยัน ส.ค. 2026) ต่างจาก WH_NAME_FS
+// ตรงที่ **ไม่ยิง ZORT AddTransfer เลย** (ดู transferStockBatchCentral) แค่ log ไว้ในชีตเราเอง
+const WH_NAME_CENTRAL = "Central";
 
 // ── Column Mapping (1-based) ──
 const COL_PROD_SKU    = 2;   // B
@@ -829,7 +832,7 @@ var MTO_JOB_ACTIONS_ = ["createMtoJob", "closeMtoJob", "saveMtoJobItems", "delet
 // ⚠️ บทเรียน 2026-07-30: เปิด REQUIRE_LOGIN='true' ครั้งแรกแล้วทั้งร้านใช้งานไม่ได้ เพราะ
 // ROLE_ACTIONS_ เดิมเขียนจาก "เดาว่า role นี้น่าจะทำอะไร" ไม่ได้ไล่จาก ROLE_TABS + view จริง
 // เวลาเพิ่ม role หรือแท็บใหม่ ให้ไล่จาก ROLE_TABS → view → action ที่ view นั้นเรียกจริงเสมอ
-var COMMON_ACTIONS_ = ["order", "updateOrderState", "transferStock", "transferStockBatch",
+var COMMON_ACTIONS_ = ["order", "updateOrderState", "transferStock", "transferStockBatch", "transferStockBatchCentral",
                         "confirmShipmentReceive", "updateFrontStore", "clearFrontStoreChecks", "fetchProductImage",
                         "checkSkuExists", "updateLockData",
                         "punch", "myToday", "myAttendanceSummary",
@@ -940,7 +943,7 @@ var POST_FLAG_ACTIONS_ = [
   "fetchProductImage", "getContactDetail", "getInvoiceNumber", "issueFullTaxInvoice", "lookupSaleBill",
   "recordUnscannedSale", "resetNegativeStock", "saveMtoJobItems", "saveQuotationDraft",
   "saveThresholds", "searchContact", "setQuoteSale", "syncZortNow", "syncZortPurchasesNow",
-  "syncZortSalesNow", "transferStock", "transferStockBatch", "updateFrontStore", "uploadProductPhoto",
+  "syncZortSalesNow", "transferStock", "transferStockBatch", "transferStockBatchCentral", "updateFrontStore", "uploadProductPhoto",
   "updateLockData", "updateOrderState", "voidQuotation", "zeroStock",
 ];
 
@@ -2436,6 +2439,11 @@ function doPost(e) {
     // ─── Stock Transfer (Batch): คลัง → หน้าร้าน หลาย SKU ในครั้งเดียว ───
     if (data.transferStockBatch) {
       return transferStockBatch(ss, data.list || [], actor, data.clientLoadedAt, data.tid);
+    }
+
+    // ─── Stock Transfer (Batch) → Central: หักคลังอย่างเดียว ไม่ยิง ZORT ไม่แตะหน้าร้าน ───
+    if (data.transferStockBatchCentral) {
+      return transferStockBatchCentral(ss, data.list || [], actor, data.tid);
     }
 
     // ─── Zero Stock: ตั้ง WH qty=0 ใน Sheets + ZORT (สินค้าหมด ไม่ได้จัด) ───
@@ -4230,6 +4238,136 @@ function transferStockBatch(ss, list, actor, clientLoadedAt, tid) {
     lock.releaseLock();
     try { perfLock_('transferBatch', _lkGot - _lkT, Date.now() - _lkGot, true); } catch (e) {}
   }
+}
+
+// ── ส่ง Central: หักคลังอย่างเดียว ไม่ยิง ZORT ไม่เพิ่มหน้าร้าน ไม่มีขั้น "กดรับ" ──
+// เจ้าของยืนยัน ส.ค. 2026 (3 ข้อ ระหว่างทำ "แยกออกเป็น Central" ในหน้าสรุปสินค้าออกจากคลัง):
+//   1) ZORT ยังไม่มีรหัสคลัง Central ลงทะเบียน → ห้ามยิง AddTransfer เด็ดขาด (ยิงไปก็ error เปล่า ๆ)
+//   2) หน้าร้าน (qtyStore) ต้องไม่ขยับ — ของไม่ได้ไปหน้าร้านจริง ขยับแล้ว "เช็คหน้าร้าน" จะไม่ตรง
+//      ของจริงทันที (ต่างจาก transferStockBatch ที่ตั้งใจเพิ่ม qtyStore เพราะปลายทางคือหน้าร้าน)
+//   3) ถือว่า "ส่งเสร็จแล้ว" ทันทีที่กด ไม่มีขั้นกดรับเหมือนของโอนไปหน้าร้านปกติ (ไม่มีคนที่ Central
+//      มากดรับในระบบนี้) → เขียน receivedQty/receivedStatus/receivedAt/receivedBy ไว้ล่วงหน้าเลย
+// ⚠️ แยกฟังก์ชันจาก transferStockBatch โดยตั้งใจ ไม่ยัดเป็น if แตกสาขากลางฟังก์ชันเดิม —
+//    ฟังก์ชันเดิมกระทบเงิน/สต็อกจริงและผ่านการใช้งานมานาน แก้แทรกกลางเสี่ยงพังจุดที่ไม่เกี่ยวเงียบ ๆ
+function transferStockBatchCentral(ss, list, actor, tid) {
+  if (!Array.isArray(list) || !list.length) return error("list ว่างเปล่า");
+  const sheet = ss.getSheetByName(SHEET_PRODUCTS);
+  if (!sheet) return error("ไม่พบชีต: " + SHEET_PRODUCTS);
+  tid = String(tid || '').trim();
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
+
+  const cache = CacheService.getScriptCache();
+  try {
+    // กดส่งชุดนี้ไปแล้ว? — คีย์ cache แยกจาก transferStockBatch ('tfb_') กันชนกัน
+    if (tid) {
+      const prevRaw = cache.get('tfbc_' + tid);
+      if (prevRaw) {
+        try {
+          const prev = JSON.parse(prevRaw);
+          prev.replay = true;
+          return ok(prev);
+        } catch (e) { /* cache เพี้ยน → ตกไปเช็คจากชีตแทน */ }
+      }
+      const onSheet = findTidInShipments_(ss, tid);
+      if (onSheet) {
+        return ok({ count: onSheet.items.length, replay: true, fromSheet: true,
+                    refNum: onSheet.refNum, items: onSheet.items, results: [] });
+      }
+    }
+
+    const data = sheet.getDataRange().getValues();
+    const transferred = [];
+    const results = [];
+    const shortfalls = [];
+
+    const skuToIndex = {};
+    for (let i = 1; i < data.length; i++) {
+      const s = String(data[i][COL_PROD_SKU - 1]).trim().toUpperCase();
+      if (s && !(s in skuToIndex)) skuToIndex[s] = i;
+    }
+
+    for (const item of list) {
+      const sku = String(item.sku || "").trim().toUpperCase();
+      const qty = Number(item.qty) || 0;
+      const orderId = String(item.orderId || "");
+      if (!sku || qty <= 0) { results.push({ sku, orderId, skipped: true }); continue; }
+
+      // Idempotency กันดับเบิลคลิก — คีย์แยกจาก transferStockBatch ('shp2_')
+      if (orderId && cache.get("shpc_" + orderId)) {
+        results.push({ sku, orderId, duplicate: true });
+        continue;
+      }
+
+      const i = skuToIndex[sku];
+      if (i === undefined) { results.push({ sku, orderId, notFound: true }); continue; }
+      const row    = i + 1;
+      const whQty  = Number(data[i][COL_PROD_QTYWH - 1]) || 0;
+      const actual = Math.min(qty, whQty);
+      const name   = item.name || String(data[i][2] || "").trim();
+      const newWH  = whQty - actual;
+
+      // ⚠️ หักเฉพาะคอลัมน์ H (คลัง) — ห้ามแตะ G (หน้าร้าน) ต่างจาก transferStockBatch เด็ดขาด
+      sheet.getRange(row, COL_PROD_QTYWH).setValue(newWH);
+      data[i][COL_PROD_QTYWH - 1] = newWH;
+
+      if (actual > 0) {
+        transferred.push({ sku, name, qty: actual });
+        if (orderId) cache.put("shpc_" + orderId, "1", 90);
+      }
+      if (actual < qty) shortfalls.push({ sku, name, requested: qty, transferred: actual });
+      results.push({ sku, orderId, requested: qty, transferred: actual, newWH });
+    }
+
+    SpreadsheetApp.flush();
+
+    let refNum = null;
+    if (transferred.length) {
+      try { refNum = logTransferBatchCentral_(ss, transferred, actor, tid); } catch (e) { Logger.log("logTransferBatchCentral_ error: " + e); }
+      // หมวด audit "โอนสต็อก" ตัวเดียวกับ transferStockBatch (staff-perf จับด้วย prefix อยู่แล้ว)
+      writeAuditLogBatch_(actor, "โอนสต็อก", transferred.map(function (t) {
+        return { resource: t.sku, detail: "qty " + t.qty + ": W0002→Central" };
+      }));
+    }
+
+    const payload = { count: transferred.length, zortNumber: null, zortError: null, shortfalls, results, refNum, tid: tid || null };
+    if (tid) {
+      try { cache.put('tfbc_' + tid, JSON.stringify(payload), TFB_REPLAY_TTL_SEC); } catch (e) {
+        Logger.log('tfbc cache put error: ' + e);
+      }
+    }
+    return ok(payload);
+  } finally {
+    try { invalidateCache_(); } catch(e) {}
+    lock.releaseLock();
+  }
+}
+
+// log การส่งไป Central — คนละฟังก์ชันกับ logTransferBatch_ เพราะ "ถือว่ารับแล้วทันที"
+// (ไม่มีขั้นกดรับแยกต่างหาก) receivedQty/receivedStatus/receivedAt/receivedBy จึงเติมไว้ล่วงหน้า
+// เหมือนมีคนกดรับให้เองทันที — รูปแบบวันที่ตรงกับ confirmShipmentReceive (dd/MM/yyyy HH:mm)
+function logTransferBatchCentral_(ss, items, actor, tid) {
+  let logSheet = ss.getSheetByName(SHEET_TRANSFERS);
+  if (!logSheet) {
+    logSheet = ss.insertSheet(SHEET_TRANSFERS);
+    logSheet.appendRow(SHIP_HEADERS);
+  }
+  const imgMap  = readImageMap_();
+  const now     = new Date();
+  const dateStr = Utilities.formatDate(now, Session.getScriptTimeZone(), "dd/MM/yyyy");
+  const nowStr  = Utilities.formatDate(now, Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm");
+  const baseRow = logSheet.getLastRow();
+  const refNum  = "TFC-" + Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyyMMdd") + "-" + String(baseRow).padStart(3, "0");
+  const rows = items.map(it => {
+    const img = imgMap[(it.sku || "").toUpperCase()] || "";
+    // คอลัมน์เหมือน logTransferBatch_ ทุกประการ (ต่อท้าย ไม่แทรกกลาง — บทเรียนข้อ 5) ต่างกันแค่
+    // to=Central และ receivedQty/receivedStatus/receivedAt/receivedBy เติมไว้ล่วงหน้า (ข้อ 3 ข้างบน)
+    return [refNum, dateStr, "สำเร็จ", WH_NAME_SAI5, WH_NAME_CENTRAL, it.sku, it.name, it.qty, it.qty, img,
+            it.qty, "รับครบ", nowStr, actor || "", actor || "", tid || ""];
+  });
+  logSheet.getRange(baseRow + 1, 1, rows.length, COL_SHIP_TID).setValues(rows);
+  return refNum;
 }
 
 // สร้าง ZORT Transfer เอกสารเดียวที่มีหลายรายการ (เลขที่ auto)

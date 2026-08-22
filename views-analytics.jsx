@@ -4931,6 +4931,27 @@ async function syncStockTransferBatch(items, tid) {
   }
 }
 
+// เหมือน syncStockTransferBatch ทุกประการ แต่ยิง action `transferStockBatchCentral`
+// (ส่ง Central) — หักคลังอย่างเดียว ไม่แตะหน้าร้าน ไม่ยิง ZORT ถือว่าส่งเสร็จทันที (ยืนยันจาก
+// เจ้าของ ส.ค. 2026) ⚠️ ต้องเป็นคนละ action เพราะ transferStockBatch ปกติ hardcode ปลายทาง
+// เป็นหน้าร้านของเราเอง (บวก qtyStore + ยิง ZORT AddTransfer ไปหน้าร้าน) ซึ่งผิดสำหรับของที่ส่ง
+// ไป Central จริง ๆ — ใช้ tid ตัวเดียวกับที่ doShipAll สร้างไว้ (กันซ้ำหลักเดียวกัน)
+async function syncStockTransferBatchCentral(items, tid) {
+  if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
+  try {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ transferStockBatchCentral: true, list: items, tid: tid || "", actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน", clientLoadedAt: window._dataLoadedAt || 0 }),
+      dmjTimeoutMs: 240000,
+    });
+    return await dmjJson(res);
+  } catch(e) {
+    console.warn("syncStockTransferBatchCentral error:", e.message);
+    return { success: false, error: dmjErrText(e), unreadable: true };
+  }
+}
+
 // ถาม GAS ว่า "ชุด tid นี้โอนลงระบบไปแล้วหรือยัง" — ใช้ตอนอ่านคำตอบของการส่งไม่ได้
 //  { found:true, ... } = ลงแล้ว (ห้ามยิงซ้ำ) · { found:false } = ยังไม่ลง (ยิงซ้ำได้ปลอดภัย)
 //  null = ตอบไม่ได้/รูปแบบไม่ตรง (เน็ตพัง หรือ GAS ยังเป็นโค้ดเก่าที่ไม่รู้จัก transferCheck)
@@ -5387,9 +5408,13 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const isDone = o => o.status === "สำเร็จ" || o.status === "completed" || o.status === "done";
   const doneOrders = uM(() => enriched.filter(isDone), [enriched]);
 
-  // แยกกลุ่ม: หิ้วก่อน, รถหลัง — ซ่อน shipped ที่ไม่ใช่ missed
-  const carryOrders = uM(() => doneOrders.filter(o => o.carryMode === "carry").filter(o => !shipped[o.id] || missed[o.id]), [doneOrders, shipped, missed]);
-  const truckOrders = uM(() => doneOrders.filter(o => o.carryMode !== "carry").filter(o => !shipped[o.id] || missed[o.id]), [doneOrders, shipped, missed]);
+  // แยกกลุ่ม: Central ก่อน (ปลายทางคนละที่ ต้องไม่ปนกับใบโอนหน้าร้านปกติ) → หิ้ว → รถ
+  // ⚠️ toCentral ตัดสินก่อน carryMode เสมอ — ใบเดียวกันเป็นได้ทั้ง "หิ้ว"+"Central" พร้อมกัน
+  // (ป้ายเสริม คนละมิติกับประเภทการรับ) แต่ต้อง "ส่งทั้งหมด" ได้แค่ชุดเดียว ไม่งั้นใบโอนปนปลายทาง
+  // กันซ้ำด้วยเงื่อนไข !o.toCentral ในอีก 2 กลุ่ม — ซ่อน shipped ที่ไม่ใช่ missed เหมือนเดิม
+  const centralOrders = uM(() => doneOrders.filter(o => o.toCentral).filter(o => !shipped[o.id] || missed[o.id]), [doneOrders, shipped, missed]);
+  const carryOrders = uM(() => doneOrders.filter(o => !o.toCentral && o.carryMode === "carry").filter(o => !shipped[o.id] || missed[o.id]), [doneOrders, shipped, missed]);
+  const truckOrders = uM(() => doneOrders.filter(o => !o.toCentral && o.carryMode !== "carry").filter(o => !shipped[o.id] || missed[o.id]), [doneOrders, shipped, missed]);
 
   // ล้าง printed entries ที่ sheet ยังไม่ยืนยัน (กัน stale cache แสดง "✓ Printed" ผิด)
   // เชื่อ sheet เป็น source of truth: ถ้า sheet บอก "print" = ยังไม่ได้ปริ้น ล้างออก
@@ -5538,12 +5563,19 @@ function OrderSummaryView({ data, onPrintRequest }) {
       .map(o => ({ orderId: o.id, sku: o.sku, qty: o.preparedQty || o.orderQty || 0, name: o.name }))
       .filter(it => it.sku && it.qty > 0);
 
+    // Central = ปลายทางไม่ใช่หน้าร้านเรา — ใช้ action คนละตัว (หักคลังอย่างเดียว ไม่ยิง ZORT)
+    // renderSection แยกกลุ่มมาแล้วตาม toCentral (ดู centralOrders/carryOrders/truckOrders)
+    // จึง ready ทั้งชุดเป็นกลุ่มเดียวกันเสมอ — เช็คตัวแรกพอ
+    const isCentralBatch = !!(ready[0] && ready[0].toCentral);
+
     let batchRes = { success: true };
     let tid = "";
     if (transferItems.length) {
       tid = getShipTid(ready);
       setBulkBusy(true);
-      batchRes = await syncStockTransferBatch(transferItems, tid);
+      batchRes = isCentralBatch
+        ? await syncStockTransferBatchCentral(transferItems, tid)
+        : await syncStockTransferBatch(transferItems, tid);
 
       // ⚠️ "อ่านคำตอบไม่ได้" ≠ "โอนไม่สำเร็จ" — ชุดใหญ่ (70-80 SKU) ใช้เวลานานกว่าที่ browser
       // ยอมรอ แล้วตัดสายทั้งที่ GAS เขียนชีต + สร้างเอกสารโอนใน ZORT เสร็จไปแล้ว
@@ -5666,7 +5698,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
       .filter(s => !s.receivedAt)                       // หน้าร้านยังไม่กดรับ = เพิ่งโอนมา
       .filter(s => { const t = parseShipDateMs(s.date); return t == null || t >= cutoff; })
       .map(s => ({ ...s, used: false }));
-    const pending = [...carryOrders, ...truckOrders]
+    const pending = [...centralOrders, ...carryOrders, ...truckOrders]
       .filter(o => !shipped[o.id] && !o.product?.isMTO && o.sku);
     const matches = [], unmatched = [];
     pending.forEach(o => {
@@ -5765,9 +5797,18 @@ function OrderSummaryView({ data, onPrintRequest }) {
     </div>
   );
 
+  // ── สีต่อกลุ่ม — แยกจาก isTruck (พฤติกรรม: ส่งทีละใบ vs รวมชุดเดียว) โดยตั้งใจ ──
+  // Central ต้องมีสีของตัวเอง (ไม่ใช่เขียว/ฟ้าที่ใช้แล้ว) แต่ "พฤติกรรม" ยังเป็นแบบ "รวมชุดเดียว"
+  // เหมือนหิ้วเอง (isTruck=false) เพราะเป็นการส่งไปที่เดียวกันคราวเดียว ไม่ใช่ทยอยส่งทีละใบแบบรถ
+  const SECTION_COLORS = {
+    carry:   { bg:"#f0fdf4", border:"#bbf7d0", label:"var(--g-700)", btn:"var(--g-700)" },
+    truck:   { bg:"#eff6ff", border:"#bfdbfe", label:"#1d4ed8",      btn:"#1d4ed8" },
+    central: { bg:"#fff7ed", border:"#fed7aa", label:"#9a3412",      btn:"#c2410c" },
+  };
   // render group section
-  const renderSection = (label, emoji, orders, isTruck) => {
+  const renderSection = (label, emoji, orders, isTruck, colorVariant) => {
     if (!orders.length) return null;
+    const theme = SECTION_COLORS[colorVariant || (isTruck ? "truck" : "carry")];
     const readyCount = orders.filter(o => !shipped[o.id] && !missed[o.id]).length;
     const printableOrders = orders.filter(o => {
       const ap = printed[o.id] || o.printFlag === "printed";
@@ -5784,13 +5825,13 @@ function OrderSummaryView({ data, onPrintRequest }) {
         {/* Section header */}
         <div style={{
           display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8,
-          padding:"8px 14px",background: isTruck ? "#eff6ff" : "#f0fdf4",
+          padding:"8px 14px",background: theme.bg,
           borderRadius:10,marginBottom:12,
-          border:`1.5px solid ${isTruck?"#bfdbfe":"#bbf7d0"}`,
+          border:`1.5px solid ${theme.border}`,
         }}>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
             <span style={{fontSize:18}}>{emoji}</span>
-            <span style={{fontWeight:700,fontSize:14,color: isTruck?"#1d4ed8":"var(--g-700)"}}>
+            <span style={{fontWeight:700,fontSize:14,color: theme.label}}>
               {label}
             </span>
             <span style={{fontSize:12,color:"var(--muted)"}}>
@@ -5811,7 +5852,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
               <button onClick={() => handleShipAll(orders)} disabled={bulkBusy} style={{
                 padding:"6px 14px",borderRadius:8,border:"none",
                 cursor: bulkBusy ? "wait" : "pointer",
-                background: bulkBusy ? "#9ca3af" : (isTruck?"#1d4ed8":"var(--g-700)"),color:"#fff",
+                background: bulkBusy ? "#9ca3af" : theme.btn,color:"#fff",
                 fontSize:12,fontWeight:700,fontFamily:"inherit",
               }}>
                 {bulkBusy ? "⏳ กำลังส่ง…" : `✅ ส่งทั้งหมด (${readyCount})`}
@@ -5822,7 +5863,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
         {!isTruck && readyCount > 0 && (
           <div style={{fontSize:11,color:"var(--muted)",margin:"-4px 2px 12px",lineHeight:1.5}}>
-            💡 ของหิ้วส่งรวมเป็น <b>ชุดเดียว</b> — กด <b>“✅ ส่งทั้งหมด”</b> ด้านบน (สร้างใบโอน 1 ใบ ไม่ซ้ำเลข)
+            💡 {colorVariant === "central" ? "ของที่ส่ง Central" : "ของหิ้ว"}ส่งรวมเป็น <b>ชุดเดียว</b> — กด <b>“✅ ส่งทั้งหมด”</b> ด้านบน (สร้างใบโอน 1 ใบ ไม่ซ้ำเลข)
             {" · "}ตัวไหนยังไม่พร้อมส่ง กด <b>“ไม่ส่งรอบนี้”</b> บนการ์ดเพื่อตัดออกจากชุด
           </div>
         )}
@@ -6033,8 +6074,10 @@ function OrderSummaryView({ data, onPrintRequest }) {
         </div>
       )}
 
-      {renderSection("หิ้วเอง", "🚶", carryOrders, false)}
-      {renderSection("ขึ้นรถ",  "🚛", truckOrders, true)}
+      {/* ลำดับ: หิ้วเอง (ลูกค้ารออยู่ — ด่วนสุด) → ขึ้นรถ (ปกติ) → Central (คนละปลายทาง ไม่เร่งเท่า) */}
+      {renderSection("หิ้วเอง", "🚶", carryOrders, false, "carry")}
+      {renderSection("ขึ้นรถ",  "🚛", truckOrders, true, "truck")}
+      {renderSection("ส่ง Central", "🏢", centralOrders, false, "central")}
 
       {/* Expanded image modal */}
       {bigImg && (
