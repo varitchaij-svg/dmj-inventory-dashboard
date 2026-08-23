@@ -973,6 +973,85 @@ function startServer() {
     await page.close();
   }
 
+  // ── (จ2.7b) Realtime Stock Count — นับสต็อกแล้วเลขต้องเปลี่ยนทันทีบนแท็บ "สินค้า & สั่ง"
+  //     โดยไม่ reload ทั้งหน้า (patchProductQtys) ──
+  // เจ้าของสั่ง (ส.ค. 2026): กด "ยืนยัน" นับสต็อกแล้วตัวเลข stock บนเว็บต้องเปลี่ยนทันที
+  // ต่างจากเทสต์ (จ2.7) ด้านบนที่เช็คแค่ว่าการ์ดในหน้านับขึ้น "บันทึกแล้ว" — เทสต์นี้พิสูจน์ว่า
+  // แท็บอื่นที่แยกออกไปคนละหน้าจอเห็นเลขใหม่ **ทันทีหลัง auto-save โดยไม่ต้องรอ poll 30 วิ**
+  // เพราะ harness mock (fetch stub) เป็น static fixture ไม่ track การเขียนจริง — ถ้าเห็นเลขใหม่
+  // ต้องมาจาก patchProductQtys (optimistic local patch) เท่านั้น ไม่ใช่บังเอิญ reload ได้ค่าใหม่
+  {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=warehouse&tab=stockcount`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, 'warehouse', 'stockcount');
+      await page.waitForTimeout(400);
+      const supBtn = page.locator('button', { hasText: 'ตามซัพพลายเออร์' }).first();
+      if (!navOk) { status = 'NAV_FAIL'; note = 'ไปแท็บนับ stock คลังไม่สำเร็จ'; }
+      else if (!(await supBtn.count())) { status = 'NO_MODE_BTN'; note = 'ไม่พบปุ่ม "ตามซัพพลายเออร์"'; }
+      else {
+        await supBtn.click({ timeout: 2000 }).catch(() => {});
+        await page.waitForTimeout(300);
+        // ACME มีสินค้าเดียวในระบบ (VAS001, fixture qtyStore=15/qtyWH=25 → รวม 40 ชิ้น) —
+        // เลือกแล้วในลิสต์นี้จึงมีการ์ดเดียว ปุ่ม "+5" ตัวแรกคือของ VAS001 แน่นอน
+        const sup = page.getByText('ACME', { exact: false }).first();
+        if (!(await sup.count())) { status = 'NO_SUPPLIER'; note = 'ไม่พบซัพพลายเออร์ ACME ในรายการ'; }
+        else {
+          await sup.click({ timeout: 2000 }).catch(() => {});
+          await page.waitForTimeout(400);
+          // การ์ดนับใช้ปุ่ม -5/-1/+1/+5 ล้วน (ไม่มี <input> ในโหมดนี้ — คนละ layout กับโหมดล็อค)
+          // ⚠️ คลิก "+5" สองครั้งติดกันแบบไม่รอ ต้องเว้นจังหวะให้ React re-render ก่อน ไม่งั้น
+          // adjustQty ทั้งสองคลิกอ่าน checkedQtys[sku] จาก closure เดิม (ยังเป็นค่าก่อนคลิกแรก)
+          // แล้วคำนวณ 0+5 ซ้ำสองครั้งแทนที่จะสะสมเป็น 5+5=10 (จังหวะสคริปต์เร็วกว่าคนกดจริง)
+          const plus5 = page.locator('button', { hasText: /^\+5$/ }).first();
+          if (!(await plus5.count())) { status = 'NO_COUNT_BTN'; note = 'ไม่พบปุ่ม +5 ในการ์ดนับ'; }
+          else {
+            // นับใหม่ = 10 (คลิก +5 สองครั้ง เว้นจังหวะ) → รวมใหม่ = qtyStore(15) + 10 = 25 ชิ้น
+            // (เลือกเลขที่ไม่ชนกับสินค้าอื่นในระบบ กัน false-positive จากตัวเลขบังเอิญตรงกัน)
+            await plus5.click({ timeout: 2000 }).catch(() => {});
+            await page.waitForTimeout(300);
+            await plus5.click({ timeout: 2000 }).catch(() => {});
+            await page.waitForTimeout(4200); // auto-save debounce 3 วิ + POST
+            const savedShown = await page.getByText('บันทึกแล้ว', { exact: false }).count();
+            if (savedShown === 0) {
+              status = 'NO_AUTOSAVE'; note = 'auto-save ไม่ทำงาน (การ์ดไม่ขึ้น "บันทึกแล้ว")';
+            } else {
+              // สลับไปแท็บ "สินค้า & สั่ง" (CategoryView) — หน้าคนละหน้าจอ ไม่ได้แตะ StockCountView
+              // อีกแล้ว · ⚠️ ตั้งใจไม่ใช้แท็บ "สต๊อก & แจ้งเตือน" (StockView) — แท็บนั้นกรองเฉพาะ
+              // สินค้าที่ "ใกล้หมด/หมด/ขายตก/จมนาน/เกิน" ตามเกณฑ์ต่อหมวด (VAS001 อยู่หมวด "แจกันแก้ว"
+              // ที่มีเกณฑ์ยกเว้นของตัวเอง) จึงไม่การันตีว่า VAS001 จะโผล่ในแท็บนั้นไม่ว่าจำนวนจะเท่าไหร่
+              // — เจอจริงตอนพัฒนาเทสต์นี้ (debug แล้วพบว่า patch ทำงานถูกต้อง แค่แท็บที่เลือกเช็คผิด)
+              // CategoryView โชว์สินค้าทุกตัวไม่กรองตามสถานะสต็อก จึงเป็นแท็บที่พิสูจน์ตรงเป้ากว่า
+              const navCat = await navigateTo(page, 'warehouse', 'categories');
+              await page.waitForTimeout(600);
+              if (!navCat) { status = 'NAV_FAIL2'; note = 'สลับไปแท็บสินค้า & สั่งไม่สำเร็จ'; }
+              else {
+                const body = await page.evaluate(() => document.body.innerText);
+                // รูปแบบจริงใน CategoryView: "คงเหลือ\n25ชิ้น\n🏪 15 · 🏭 10" (ไม่มีช่องว่างก่อน "ชิ้น")
+                const hasNew = body.includes('25ชิ้น') && body.includes('🏪 15 · 🏭 10');
+                const hasOld = body.includes('40ชิ้น') || body.includes('🏭 25');
+                if (!hasNew) {
+                  status = 'NOT_PATCHED';
+                  note = 'แท็บสินค้า & สั่ง ยังไม่เห็นเลขใหม่ (25ชิ้น / 🏪15·🏭10) — patchProductQtys ไม่ทำงานข้ามหน้า';
+                } else if (hasOld) {
+                  status = 'STALE_STILL_SHOWN';
+                  note = 'เห็นเลขใหม่แล้ว แต่เลขเก่า (40ชิ้น / 🏭25) ยังค้างอยู่ด้วย — น่าจะมีการ์ดอื่นเพี้ยน';
+                } else {
+                  note = 'นับ (+10) → auto-save → สลับแท็บสินค้า & สั่ง → เห็น "25ชิ้น · 🏪15·🏭10" ทันที ไม่มีเลขเก่าค้าง (ไม่ reload)';
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'stockcount-realtime-patch.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'Realtime Stock Count — นับแล้วแท็บสินค้า & สั่ง เห็นทันที (warehouse)', status, note });
+    await page.close();
+  }
+
   // ── (จ3) ขายออนไลน์: กรอกครบ → บันทึก → ได้ "สรุปคำสั่งซื้อ" ไม่ใช่ใบเสร็จปริ้น ──
   // ต้องรันบนเบราว์เซอร์จริงเพราะสิ่งที่ทดสอบคือ **ตัวเลขบนจอที่ลูกค้าจะเห็น** — ค่าส่งบวกเข้า
   // ยอดจริงไหม, เลขบัญชีขึ้นให้ลูกค้าโอนไหม, ที่อยู่ตามไปบนสรุปไหม · unit test เห็นแค่ source

@@ -1621,13 +1621,17 @@ function App() {
     return () => clearInterval(id);
   }, [tab, role]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Auto-sync เมื่ออยู่หน้านับสต็อก/เช็คหน้าร้าน — ให้หลายเครื่องเห็นข้อมูลของกันและกัน ──
+  // ── Auto-sync เมื่ออยู่หน้าที่ตัดสินใจเกี่ยวกับสต็อก — ให้หลายเครื่องเห็นข้อมูลของกันและกัน ──
   // ดึงเฉพาะเลขสต็อกอ้างอิงทุก 30 วิ (Phase 7.4 — เดิมดึง payload ทั้งก้อน ~4.2MB ทุกรอบ)
   // จำนวนที่ผู้ใช้พิมพ์เก็บใน local state (checkedQtys) แยกต่างหาก จึงไม่ถูกทับ
   // ส่วน window._dataLoadedAt จะอัปเดตให้สด กัน false conflict ตอนบันทึกจากแท็บนี้
+  // ⚠️ "stock"/"categories" เพิ่มเข้ามา (แผนงาน Realtime Stock Count) — ตั้งใจ **ไม่ใส่** แท็บ
+  //    dashboard/report อื่น (overview/trends/staffperf ฯลฯ) เพราะไม่ใช่หน้าที่ตัดสินใจเรื่อง
+  //    สต็อกโดยตรง และ stocklite ยังคง narrow payload เดิม (ไม่ใช่ full reload) จึงขยายได้โดย
+  //    ไม่กระทบ Phase 7.4/7.5 ที่กังวลเรื่อง payload เต็มก้อน ~4.2MB — คนละขนาดกันมาก
   usE(() => {
     if (!role) return;
-    const LIVE_TABS = ["stockcount", "frontstore"];
+    const LIVE_TABS = ["stockcount", "frontstore", "stock", "categories"];
     if (!LIVE_TABS.includes(tab)) return;
     const id = setInterval(() => { if (navigator.onLine) fetchStockLite(); }, 30000);
     return () => clearInterval(id);
@@ -2517,6 +2521,7 @@ function App() {
         {activeTab === "storage"      && <ErrorBoundary key="storage"><StorageView data={data}/></ErrorBoundary>}
         {activeTab === "stockcount"   && <ErrorBoundary key="stockcount"><StockCountView data={data}
                                             checkRequest={activeCheckRequest}
+                                            patchProductQtys={patchProductQtys}
                                             onCheckComplete={async function(reqId, counts){
                                               // อัปเดตจำนวนสต็อกของ SKU ที่เพิ่งนับเข้าเว็บทันที (ไม่ต้องรอ reload ทั้งก้อน)
                                               patchProductQtys(counts);
