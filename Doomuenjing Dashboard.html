@@ -1139,6 +1139,53 @@
     display: block;
     transform: rotate(-90deg);
   }
+  /* ── รูเจาะร้อยเชือกแขวนป้าย (โหมด A4 เท่านั้น) — วงกลมประเป็น "แนวเจาะ" ให้พนักงานเอาที่
+     เจาะรูมาเจาะทีหลัง ไม่ใช่รูจริง (พิมพ์กระดาษธรรมดาตัดผ่านไม่ได้) ขนาดเท่าที่เจาะรูกระดาษมาตรฐาน
+     · ใช้ร่วมกันทั้งโหมด QR และ Barcode (ติดอยู่ตลอดไม่ผูกกับชนิดโค้ด) ── */
+  .label-hole {
+    position: absolute;
+    left: 0.5mm;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 4mm;
+    height: 4mm;
+    border-radius: 50%;
+    border: 0.5pt dashed #999;
+    background: rgba(0, 0, 0, .03);
+    box-sizing: border-box;
+    pointer-events: none;
+  }
+  /* ── โหมด Barcode (Code128) — คนละเลย์เอาต์กับ QR: hole + แท่งบาร์โค้ด + โลโก้ย่อ เรียงแถวเดียว
+     `padding-left` เผื่อที่ให้ .label-hole (ซึ่งวางเป็น absolute อีกตัว ไม่ใช่ลูกของแถวนี้)
+     · แถบกว้างเท่าไหร่ได้ `flex:1` คำนวณให้เองตามที่เหลือจริง ไม่ hardcode mm ไว้ตายตัว
+     (โหมด QR ยังใช้ label-qr-center/label-logo-corner เดิมทุกประการ ไม่แตะ) ── */
+  .label-barcode-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1mm;
+    width: 100%;
+    height: 100%;
+    padding-left: 5mm;
+    box-sizing: border-box;
+  }
+  .label-barcode-box { flex: 1; min-width: 0; height: 7.5mm; }
+  .label-barcode-box img { display: block; width: 100%; height: 100%; object-fit: fill; }
+  .label-logo-small {
+    flex-shrink: 0;
+    width: 6mm;
+    height: 6mm;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .label-logo-small img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    display: block;
+    transform: rotate(-90deg);
+  }
   .label-sku-text {
     font-size: 6pt;
     text-align: center;
@@ -1631,6 +1678,9 @@
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <!-- html5-qrcode: ใช้ scan ได้บนทุก browser/มือถือ (iOS Safari, Android, Desktop) -->
   <script defer src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <!-- jsbarcode: self-host (same-origin) — วาด Code128 ให้หน้าพิมพ์ label (โหลด local ก่อนเสมอ
+       หลักเดียวกับ html2canvas ข้างล่าง: CDN ไม่เสถียรบนเน็ตร้าน/iPad มาแล้ว) fallback CDN ถ้าไฟล์ local หาย -->
+  <script defer src="/jsbarcode.min.js" onerror="var s=document.createElement('script');s.defer=true;s.src='https://cdnjs.cloudflare.com/ajax/libs/JsBarcode/3.11.5/JsBarcode.all.min.js';document.head.appendChild(s);"></script>
   <!-- html2canvas: self-host (same-origin) — ใช้พิมพ์ใบเสร็จตรงผ่าน Bluetooth (rasterize DOM → ESC/POS)
        เดิมโหลดจาก CDN แต่ไม่เสถียรบน iPad/เน็ตร้าน (โหลดไม่ทัน → พิมพ์ Bluetooth พัง) → เก็บไฟล์เองใน repo
        fallback CDN ถ้าไฟล์ local หาย -->

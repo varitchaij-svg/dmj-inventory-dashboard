@@ -369,7 +369,7 @@ describe('meta — กันส่งของ/ลบ "สองเด้ง" �
 // แก้: หิ้วส่งรวมเป็นชุดเดียวผ่าน "ส่งทั้งหมด" (transferStockBatch = 1 ใบโอน + tid กันซ้ำ) —
 //   ตัดปุ่มส่งทีละใบของหิ้วออก เหลือปุ่มเลือก/ตัดออกจากชุด (toggleMissed) · ขึ้นรถห้ามแตะ
 describe('meta — หิ้วเองส่งรวมเป็นชุดเดียว (ไม่มีปุ่มส่งทีละใบที่สร้างใบโอนแยก)', () => {
-  const section = grab(VA, /const renderSection = \(label, emoji, orders, isTruck\) => \{[\s\S]*?\n  \};/);
+  const section = grab(VA, /const renderSection = \(label, emoji, orders, isTruck, colorVariant\) => \{[\s\S]*?\n  \};/);
   const ternary = grab(section, /\{isTruck \? \([\s\S]*?\n {20}\)\}/);
   const divider = ternary.indexOf(') : (');
   const truckBranch = ternary.slice(0, divider);

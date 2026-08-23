@@ -5036,6 +5036,43 @@ const QUICK_QTYS = [6, 12, 24, 36, 48, 60];
 // เช็คหน้าร้านล่าสุดใหม่กว่านี้ (นาที) = ถือว่ายังสด ไม่ต้องนับซ้ำตอนกดสั่ง
 const FS_CHECK_FRESH_MIN = 120;
 
+// ── cid ข้ามการปิด-เปิด OrderModal (localStorage) ──────────────────────────
+// เดิม cid อยู่ใน useRef ของ component เท่านั้น → ปิด modal (× หรือแตะพื้นหลัง) ระหว่างที่
+// คำสั่งเดิมยังค้างอยู่ (เช่นตอน "กำลังตรวจสอบ...") แล้วเปิดใหม่ = component คนละ instance
+// ได้ cid ใหม่ทันที ฝั่ง GAS จึงมองว่าเป็นคำสั่งคนละอันและเขียนแถวใหม่จริง ทั้งที่คำสั่งเดิม
+// อาจไปเขียนสำเร็จอยู่แล้วเบื้องหลัง (ปิด component ไม่ได้ยกเลิก fetch ที่ยิงไปแล้ว)
+// → เก็บ cid ลง localStorage ผูกกับ sku+qty+orderType (หลักเดียวกับ dmj_ship_tid_v1 ของ
+// การส่งของ) ให้เปิดใหม่ยังได้ cid เดิม ตราบใดที่ยังไม่เกิน ORDER_CID_MAX_AGE_MS
+const LS_ORDER_CID = "dmj_order_cid_v1";
+const ORDER_CID_MAX_AGE_MS = 30 * 60 * 1000; // นานพอให้รอด "ปิดแอป/รีโหลดแล้วกลับมา" สั้น ๆ
+                                              // สั้นพอไม่ให้ไปทับคำสั่งใหม่ที่ตั้งใจแยกกันจริง ๆ
+function readOrderCidStore_() {
+  try { return JSON.parse(localStorage.getItem(LS_ORDER_CID) || "{}") || {}; }
+  catch (e) { return {}; }
+}
+function pruneOrderCidStore_(store) {
+  const now = Date.now(), out = {};
+  Object.keys(store).forEach(k => {
+    const v = store[k];
+    if (v && v.cid && (now - (v.at || 0)) < ORDER_CID_MAX_AGE_MS) out[k] = v;
+  });
+  return out;
+}
+function getStoredOrderCid_(key) {
+  const store = pruneOrderCidStore_(readOrderCidStore_());
+  return (store[key] && store[key].cid) || null;
+}
+function saveOrderCid_(key, cid) {
+  const store = pruneOrderCidStore_(readOrderCidStore_());
+  store[key] = { cid, at: Date.now() };
+  try { localStorage.setItem(LS_ORDER_CID, JSON.stringify(store)); } catch (e) {}
+}
+function clearOrderCid_(key) {
+  if (!key) return;
+  const store = readOrderCidStore_();
+  if (store[key]) { delete store[key]; try { localStorage.setItem(LS_ORDER_CID, JSON.stringify(store)); } catch (e) {} }
+}
+
 function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady, onOrderSuccess, defaultQty, role }) {
   useBackHandler(onClose); // Android back = ปิด modal สั่งของ
   // qty = จำนวนที่จะสั่งจริง · 0 = ยังไม่เลือก (ปุ่มยืนยันจะยังกดไม่ได้)
@@ -5146,6 +5183,9 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
 
   const orderDone = () => {
     setDone(true);
+    // คำสั่งนี้จบสมบูรณ์แล้ว — เลิกจำ cid ไว้ (กันวันหลังสั่งจำนวนเดิมของสินค้าเดิมแล้วถูก
+    // dedup ทิ้งเงียบ ๆ ทั้งที่ตั้งใจสั่งเป็นครั้งใหม่จริง ๆ)
+    clearOrderCid_(orderCidRef.current.key);
     onOrderSuccess && onOrderSuccess(product.sku, qty);
     setTimeout(onClose, 2000);
   };
@@ -5154,14 +5194,17 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
   // GAS เก็บ cid ไว้กับแถวที่สั่ง (col O) → ยิงซ้ำด้วย cid เดิมจะไม่เกิดแถวใหม่
   // ต้องคงค่าเดิมไว้ตลอดที่ผู้ใช้ยัง "สั่งของชิ้นเดิม จำนวนเดิม ประเภทเดิม" อยู่
   // (ทั้งตอน retry เองและตอนผู้ใช้กดยืนยันซ้ำ) · เปลี่ยนจำนวน/ประเภท = คนละคำสั่ง → cid ใหม่
+  // ⚠️ เก็บสำรองไว้ใน localStorage ด้วย (ไม่ใช่แค่ ref) — ปิด modal (× หรือแตะพื้นหลัง) ระหว่าง
+  // ที่คำสั่งเดิมยังไม่ทราบผล แล้วเปิดใหม่ ต้องได้ cid เดิม ไม่งั้นกลายเป็นคำสั่งคนละอันจริง ๆ
+  // ในสายตา GAS (ดู "หน้าสั่งของ พอมันขึ้นกำลังตรวจสอบ ทำให้สั่งของซ้ำ")
   const orderCidRef = React.useRef({ key: "", cid: "" });
   const orderCid = () => {
     const key = `${product.sku}|${qty}|${orderType}`;
     if (orderCidRef.current.key !== key || !orderCidRef.current.cid) {
-      orderCidRef.current = {
-        key,
-        cid: `${product.sku}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-      };
+      const cid = getStoredOrderCid_(key)
+        || `${product.sku}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      orderCidRef.current = { key, cid };
+      saveOrderCid_(key, cid);
     }
     return orderCidRef.current.cid;
   };
@@ -5175,9 +5218,11 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
   const checkOrderByCid = async (cid) => {
     const _sep = sheetUrl.includes('?') ? '&' : '?';
     try {
-      const d = await dmjJson(await fetch(
+      // dmjFetch (มี timeout ในตัว) แทน fetch ดิบ — เดิมไม่มีเพดานเวลาเลย เน็ตไม่นิ่งแล้ว
+      // ค้างได้ไม่จบ ยิ่งทำให้ผู้ใช้ทนรอไม่ไหวจนไปปิด modal เอง (ต้นตอที่แท้จริงของสั่งซ้ำ)
+      const d = await dmjJson(await dmjFetch(
         `${sheetUrl}${_sep}action=orderCheck&cid=${encodeURIComponent(cid)}&_t=${Date.now()}`,
-        { cache: 'no-store' }));
+        { cache: 'no-store', dmjTimeoutMs: 20000 }));
       return (d && d.ok === true && typeof d.found === 'boolean') ? d.found : null;
     } catch (e) { return null; }
   };
@@ -5196,8 +5241,8 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
   const verifyOrderLanded = async (before) => {
     const _sep = sheetUrl.includes('?') ? '&' : '?';
     try {
-      const d = await dmjJson(await fetch(`${sheetUrl}${_sep}action=orders&_t=${Date.now()}`,
-                                          { cache: 'no-store' }));
+      const d = await dmjJson(await dmjFetch(`${sheetUrl}${_sep}action=orders&_t=${Date.now()}`,
+                                          { cache: 'no-store', dmjTimeoutMs: 20000 }));
       if (!d || !Array.isArray(d.orders)) return false;
       const key = String(product.sku || '').trim().toUpperCase();
       let total = 0;
@@ -5242,7 +5287,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
     for (let attempt = 1; attempt <= ORDER_ATTEMPTS; attempt++) {
       if (attempt > 1) setRetryNote(`เน็ตไม่นิ่ง — กำลังลองใหม่ครั้งที่ ${attempt - 1}…`);
       try {
-        const d = await dmjJson(await fetch(url + `&_t=${Date.now()}`, { cache: 'no-store' }));
+        const d = await dmjJson(await dmjFetch(url + `&_t=${Date.now()}`, { cache: 'no-store' }));
         if (d && d.ok) { setRetryNote(""); orderDone(); return true; }
         // ล็อกไม่ว่าง (retryable) → ลองใหม่ได้ · error อื่นคือของจริง ลองกี่ครั้งก็เหมือนเดิม
         if (!d || !d.retryable) {
@@ -5314,8 +5359,15 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
                    fontFamily:"inherit", fontWeight:700, fontSize:13, padding:"8px 0",
                    transition:"all .12s"};
 
+  // ⚠️ ปิด modal ไม่ได้ระหว่างกำลังยิง/ตรวจสอบคำสั่ง (loading) — เดิมปิดได้ตลอด ทำให้ผู้ใช้ที่
+  // ทนรอ "กำลังตรวจสอบว่าคำสั่งเข้าระบบหรือยัง…" ไม่ไหวกดปิดแล้วเปิดสั่งใหม่ คำขอเดิมที่ยังค้าง
+  // อยู่เบื้องหลัง (ปิด component ไม่ได้ยกเลิก fetch) อาจไปเขียนสำเร็จทีหลัง รวมกับคำขอใหม่ =
+  // สั่งซ้ำ 2 แถวจริง (cid เดิมถูกทิ้งไปตอน unmount ก่อนแก้ — ตอนนี้กันอีกชั้นด้วย localStorage
+  // ข้างบนแล้ว แต่ปิดไม่ได้เลยระหว่างรอผลชัดเจนกว่า/ปลอดภัยกว่า)
+  const closeBlocked = loading;
+  const guardedClose = () => { if (!closeBlocked) onClose(); };
   return (
-    <div onClick={onClose} data-modal="order" style={{
+    <div onClick={guardedClose} data-modal="order" style={{
       position:"fixed", inset:0, zIndex:1500,
       background:"rgba(10,20,10,.6)", backdropFilter:"blur(5px)",
       display:"flex", alignItems:"center", justifyContent:"center", padding:20
@@ -5328,7 +5380,10 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
         <div style={{padding:"16px 20px 14px", borderBottom:"1px solid var(--bdr)",
                      display:"flex", justifyContent:"space-between", alignItems:"center"}}>
           <div style={{fontWeight:700, fontSize:16}}>🛒 สั่งไปขาย</div>
-          <button onClick={onClose} style={{...btnBase, width:44, height:44, padding:0, fontSize:22, color:"var(--muted)"}}>×</button>
+          <button onClick={guardedClose} disabled={closeBlocked} title={closeBlocked ? "กำลังบันทึก — รอสักครู่" : ""}
+                  style={{...btnBase, width:44, height:44, padding:0, fontSize:22,
+                          color: closeBlocked ? "var(--bdr)" : "var(--muted)",
+                          cursor: closeBlocked ? "not-allowed" : "pointer"}}>×</button>
         </div>
 
         {done ? (

@@ -3955,6 +3955,7 @@ async function syncOrderUpdate(order, updates) {
         preparedQty: updates.preparedQty,
         printFlag:   updates.printFlag,
         carryMode:   updates.carryMode,
+        toCentral:   updates.toCentral,
         actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
       }),
     });
@@ -4045,6 +4046,12 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
     onPatch(order.id, {carryMode: m});
     syncOrderUpdate(order, {carryMode: m});
   };
+  // ป้ายเสริม "ส่ง Central" — คนละตัวกับ carryMode (หิ้ว/รอขึ้นรถ) ข้างบน ใบเดียวกันติดได้ทั้งคู่
+  // (คลัง/หน้าร้าน/เซล กดเองนาน ๆ ครั้ง จึงไม่ยัดเป็นตัวเลือกที่หน้าสร้างออเดอร์ซึ่งใช้บ่อยสุด)
+  const setToCentral = v => {
+    onPatch(order.id, {toCentral: v});
+    syncOrderUpdate(order, {toCentral: v});
+  };
   const markComplete = async () => {
     if (!order.printFlag) {
       showToast("warn", "เลือก PRINT หรือ SKIP ก่อน", "🖨️");
@@ -4095,6 +4102,9 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
   const pf = order.printFlag;
   // carryMode: ใช้จาก localStorage ก่อน ถ้าไม่มีดูจากข้อมูลใน sheet ถ้าไม่มีก็ default "truck"
   const cm = order.carryMode || "truck";
+  // ป้ายเสริม "ส่ง Central" — เจ้าของขอเฉพาะ คลัง/หน้าร้าน/เซล กดได้ (owner/dev เห็นทุกอย่างอยู่แล้ว
+  // ตามธรรมเนียมเดิมของแอป) · role ที่นี่คือ viewRole (dev ถูกยุบเป็น "owner" มาก่อนแล้วจาก app.jsx)
+  const canToggleCentral = ["warehouse", "frontstore", "saler", "owner"].indexOf(role) >= 0;
   const product = productMap ? productMap[order.sku] : null;
   const locs = product?.locations || [];
   const locStr = locs.length
@@ -4162,6 +4172,9 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
             <div style={{fontSize:14,fontWeight:600,lineHeight:1.3,marginBottom:2,
               overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
               {order.name}{cm === "carry" ? <span style={{fontSize:11,fontWeight:700,color:"#1565c0",marginLeft:5,background:"#e3f2fd",borderRadius:4,padding:"1px 6px"}}>order</span> : null}
+              {/* ป้าย "ส่ง Central" — โชว์ให้ทุกคนเห็นเสมอ (ไม่ผูกกับ canToggleCentral) เพราะเป็น
+                  ข้อมูลที่บันทึกลงชีตจริง ทุกเครื่องต้องเห็นตรงกัน ต่างจากปุ่มกดที่จำกัด role */}
+              {order.toCentral ? <span style={{fontSize:11,fontWeight:700,color:"#7c2d12",marginLeft:5,background:"#ffedd5",borderRadius:4,padding:"1px 6px"}}>🏢 {t("Central")}</span> : null}
             </div>
             <div style={{fontSize:11,color:"var(--muted)"}}>
               {order.date}{order.from ? ` · ${order.from}` : ""}{order.to ? ` → ${order.to}` : ""}
@@ -4277,6 +4290,23 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
               }}>
               {cm==="truck"?"🚛":"🚶"}
             </button>
+
+            {/* ส่ง Central — ป้ายเสริม กดสลับได้เหมือนปุ่ม 🚶/🚛 ข้างบน แต่ไม่แตะ carryMode */}
+            {canToggleCentral && (
+              <button className="order-action-btn" onClick={() => setToCentral(!order.toCentral)}
+                title={order.toCentral ? t("แตะเพื่อถอดป้าย Central") : t("แตะเพื่อติดป้าย ส่ง Central")}
+                style={{
+                  width:44,height:44,borderRadius:10,cursor:"pointer",
+                  border:`1.5px solid ${order.toCentral ? "#f97316" : "var(--bdr)"}`,fontSize:20,
+                  background:order.toCentral?"#ffedd5":"#fff",
+                  display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:1,
+                }}>
+                <span>🏢</span>
+                <span style={{fontSize:8,fontWeight:700,color:order.toCentral?"#9a3412":"#9ca3af"}}>
+                  {t("Central")}
+                </span>
+              </button>
+            )}
 
             {/* Done */}
             {isPending && role !== "frontstore" && role !== "saler" && (
@@ -4901,6 +4931,27 @@ async function syncStockTransferBatch(items, tid) {
   }
 }
 
+// เหมือน syncStockTransferBatch ทุกประการ แต่ยิง action `transferStockBatchCentral`
+// (ส่ง Central) — หักคลังอย่างเดียว ไม่แตะหน้าร้าน ไม่ยิง ZORT ถือว่าส่งเสร็จทันที (ยืนยันจาก
+// เจ้าของ ส.ค. 2026) ⚠️ ต้องเป็นคนละ action เพราะ transferStockBatch ปกติ hardcode ปลายทาง
+// เป็นหน้าร้านของเราเอง (บวก qtyStore + ยิง ZORT AddTransfer ไปหน้าร้าน) ซึ่งผิดสำหรับของที่ส่ง
+// ไป Central จริง ๆ — ใช้ tid ตัวเดียวกับที่ doShipAll สร้างไว้ (กันซ้ำหลักเดียวกัน)
+async function syncStockTransferBatchCentral(items, tid) {
+  if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
+  try {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ transferStockBatchCentral: true, list: items, tid: tid || "", actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน", clientLoadedAt: window._dataLoadedAt || 0 }),
+      dmjTimeoutMs: 240000,
+    });
+    return await dmjJson(res);
+  } catch(e) {
+    console.warn("syncStockTransferBatchCentral error:", e.message);
+    return { success: false, error: dmjErrText(e), unreadable: true };
+  }
+}
+
 // ถาม GAS ว่า "ชุด tid นี้โอนลงระบบไปแล้วหรือยัง" — ใช้ตอนอ่านคำตอบของการส่งไม่ได้
 //  { found:true, ... } = ลงแล้ว (ห้ามยิงซ้ำ) · { found:false } = ยังไม่ลง (ยิงซ้ำได้ปลอดภัย)
 //  null = ตอบไม่ได้/รูปแบบไม่ตรง (เน็ตพัง หรือ GAS ยังเป็นโค้ดเก่าที่ไม่รู้จัก transferCheck)
@@ -5357,9 +5408,13 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const isDone = o => o.status === "สำเร็จ" || o.status === "completed" || o.status === "done";
   const doneOrders = uM(() => enriched.filter(isDone), [enriched]);
 
-  // แยกกลุ่ม: หิ้วก่อน, รถหลัง — ซ่อน shipped ที่ไม่ใช่ missed
-  const carryOrders = uM(() => doneOrders.filter(o => o.carryMode === "carry").filter(o => !shipped[o.id] || missed[o.id]), [doneOrders, shipped, missed]);
-  const truckOrders = uM(() => doneOrders.filter(o => o.carryMode !== "carry").filter(o => !shipped[o.id] || missed[o.id]), [doneOrders, shipped, missed]);
+  // แยกกลุ่ม: Central ก่อน (ปลายทางคนละที่ ต้องไม่ปนกับใบโอนหน้าร้านปกติ) → หิ้ว → รถ
+  // ⚠️ toCentral ตัดสินก่อน carryMode เสมอ — ใบเดียวกันเป็นได้ทั้ง "หิ้ว"+"Central" พร้อมกัน
+  // (ป้ายเสริม คนละมิติกับประเภทการรับ) แต่ต้อง "ส่งทั้งหมด" ได้แค่ชุดเดียว ไม่งั้นใบโอนปนปลายทาง
+  // กันซ้ำด้วยเงื่อนไข !o.toCentral ในอีก 2 กลุ่ม — ซ่อน shipped ที่ไม่ใช่ missed เหมือนเดิม
+  const centralOrders = uM(() => doneOrders.filter(o => o.toCentral).filter(o => !shipped[o.id] || missed[o.id]), [doneOrders, shipped, missed]);
+  const carryOrders = uM(() => doneOrders.filter(o => !o.toCentral && o.carryMode === "carry").filter(o => !shipped[o.id] || missed[o.id]), [doneOrders, shipped, missed]);
+  const truckOrders = uM(() => doneOrders.filter(o => !o.toCentral && o.carryMode !== "carry").filter(o => !shipped[o.id] || missed[o.id]), [doneOrders, shipped, missed]);
 
   // ล้าง printed entries ที่ sheet ยังไม่ยืนยัน (กัน stale cache แสดง "✓ Printed" ผิด)
   // เชื่อ sheet เป็น source of truth: ถ้า sheet บอก "print" = ยังไม่ได้ปริ้น ล้างออก
@@ -5508,12 +5563,19 @@ function OrderSummaryView({ data, onPrintRequest }) {
       .map(o => ({ orderId: o.id, sku: o.sku, qty: o.preparedQty || o.orderQty || 0, name: o.name }))
       .filter(it => it.sku && it.qty > 0);
 
+    // Central = ปลายทางไม่ใช่หน้าร้านเรา — ใช้ action คนละตัว (หักคลังอย่างเดียว ไม่ยิง ZORT)
+    // renderSection แยกกลุ่มมาแล้วตาม toCentral (ดู centralOrders/carryOrders/truckOrders)
+    // จึง ready ทั้งชุดเป็นกลุ่มเดียวกันเสมอ — เช็คตัวแรกพอ
+    const isCentralBatch = !!(ready[0] && ready[0].toCentral);
+
     let batchRes = { success: true };
     let tid = "";
     if (transferItems.length) {
       tid = getShipTid(ready);
       setBulkBusy(true);
-      batchRes = await syncStockTransferBatch(transferItems, tid);
+      batchRes = isCentralBatch
+        ? await syncStockTransferBatchCentral(transferItems, tid)
+        : await syncStockTransferBatch(transferItems, tid);
 
       // ⚠️ "อ่านคำตอบไม่ได้" ≠ "โอนไม่สำเร็จ" — ชุดใหญ่ (70-80 SKU) ใช้เวลานานกว่าที่ browser
       // ยอมรอ แล้วตัดสายทั้งที่ GAS เขียนชีต + สร้างเอกสารโอนใน ZORT เสร็จไปแล้ว
@@ -5636,7 +5698,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
       .filter(s => !s.receivedAt)                       // หน้าร้านยังไม่กดรับ = เพิ่งโอนมา
       .filter(s => { const t = parseShipDateMs(s.date); return t == null || t >= cutoff; })
       .map(s => ({ ...s, used: false }));
-    const pending = [...carryOrders, ...truckOrders]
+    const pending = [...centralOrders, ...carryOrders, ...truckOrders]
       .filter(o => !shipped[o.id] && !o.product?.isMTO && o.sku);
     const matches = [], unmatched = [];
     pending.forEach(o => {
@@ -5735,9 +5797,18 @@ function OrderSummaryView({ data, onPrintRequest }) {
     </div>
   );
 
+  // ── สีต่อกลุ่ม — แยกจาก isTruck (พฤติกรรม: ส่งทีละใบ vs รวมชุดเดียว) โดยตั้งใจ ──
+  // Central ต้องมีสีของตัวเอง (ไม่ใช่เขียว/ฟ้าที่ใช้แล้ว) แต่ "พฤติกรรม" ยังเป็นแบบ "รวมชุดเดียว"
+  // เหมือนหิ้วเอง (isTruck=false) เพราะเป็นการส่งไปที่เดียวกันคราวเดียว ไม่ใช่ทยอยส่งทีละใบแบบรถ
+  const SECTION_COLORS = {
+    carry:   { bg:"#f0fdf4", border:"#bbf7d0", label:"var(--g-700)", btn:"var(--g-700)" },
+    truck:   { bg:"#eff6ff", border:"#bfdbfe", label:"#1d4ed8",      btn:"#1d4ed8" },
+    central: { bg:"#fff7ed", border:"#fed7aa", label:"#9a3412",      btn:"#c2410c" },
+  };
   // render group section
-  const renderSection = (label, emoji, orders, isTruck) => {
+  const renderSection = (label, emoji, orders, isTruck, colorVariant) => {
     if (!orders.length) return null;
+    const theme = SECTION_COLORS[colorVariant || (isTruck ? "truck" : "carry")];
     const readyCount = orders.filter(o => !shipped[o.id] && !missed[o.id]).length;
     const printableOrders = orders.filter(o => {
       const ap = printed[o.id] || o.printFlag === "printed";
@@ -5754,13 +5825,13 @@ function OrderSummaryView({ data, onPrintRequest }) {
         {/* Section header */}
         <div style={{
           display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8,
-          padding:"8px 14px",background: isTruck ? "#eff6ff" : "#f0fdf4",
+          padding:"8px 14px",background: theme.bg,
           borderRadius:10,marginBottom:12,
-          border:`1.5px solid ${isTruck?"#bfdbfe":"#bbf7d0"}`,
+          border:`1.5px solid ${theme.border}`,
         }}>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
             <span style={{fontSize:18}}>{emoji}</span>
-            <span style={{fontWeight:700,fontSize:14,color: isTruck?"#1d4ed8":"var(--g-700)"}}>
+            <span style={{fontWeight:700,fontSize:14,color: theme.label}}>
               {label}
             </span>
             <span style={{fontSize:12,color:"var(--muted)"}}>
@@ -5781,7 +5852,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
               <button onClick={() => handleShipAll(orders)} disabled={bulkBusy} style={{
                 padding:"6px 14px",borderRadius:8,border:"none",
                 cursor: bulkBusy ? "wait" : "pointer",
-                background: bulkBusy ? "#9ca3af" : (isTruck?"#1d4ed8":"var(--g-700)"),color:"#fff",
+                background: bulkBusy ? "#9ca3af" : theme.btn,color:"#fff",
                 fontSize:12,fontWeight:700,fontFamily:"inherit",
               }}>
                 {bulkBusy ? "⏳ กำลังส่ง…" : `✅ ส่งทั้งหมด (${readyCount})`}
@@ -5792,7 +5863,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
         {!isTruck && readyCount > 0 && (
           <div style={{fontSize:11,color:"var(--muted)",margin:"-4px 2px 12px",lineHeight:1.5}}>
-            💡 ของหิ้วส่งรวมเป็น <b>ชุดเดียว</b> — กด <b>“✅ ส่งทั้งหมด”</b> ด้านบน (สร้างใบโอน 1 ใบ ไม่ซ้ำเลข)
+            💡 {colorVariant === "central" ? "ของที่ส่ง Central" : "ของหิ้ว"}ส่งรวมเป็น <b>ชุดเดียว</b> — กด <b>“✅ ส่งทั้งหมด”</b> ด้านบน (สร้างใบโอน 1 ใบ ไม่ซ้ำเลข)
             {" · "}ตัวไหนยังไม่พร้อมส่ง กด <b>“ไม่ส่งรอบนี้”</b> บนการ์ดเพื่อตัดออกจากชุด
           </div>
         )}
@@ -6003,8 +6074,10 @@ function OrderSummaryView({ data, onPrintRequest }) {
         </div>
       )}
 
-      {renderSection("หิ้วเอง", "🚶", carryOrders, false)}
-      {renderSection("ขึ้นรถ",  "🚛", truckOrders, true)}
+      {/* ลำดับ: หิ้วเอง (ลูกค้ารออยู่ — ด่วนสุด) → ขึ้นรถ (ปกติ) → Central (คนละปลายทาง ไม่เร่งเท่า) */}
+      {renderSection("หิ้วเอง", "🚶", carryOrders, false, "carry")}
+      {renderSection("ขึ้นรถ",  "🚛", truckOrders, true, "truck")}
+      {renderSection("ส่ง Central", "🏢", centralOrders, false, "central")}
 
       {/* Expanded image modal */}
       {bigImg && (
@@ -6239,6 +6312,17 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
   const [searchVal, setSearchVal] = uS("");
   const [qtyVal, setQtyVal] = uS("1");
   const [qrMap, setQrMap] = uS({});
+  // ชนิดโค้ด QR/Barcode — จำไว้ต่อเครื่องใน localStorage (เหมือน dmj_sale_mode) กันต้องสลับ
+  // ทุกครั้งที่เปิดหน้า · ค่าเริ่มต้นเป็น QR เสมอถ้ายังไม่เคยเลือก (เจ้าของขอ default เป็น QR)
+  const [codeType, setCodeTypeRaw] = uS(() => {
+    try { return localStorage.getItem("dmj_label_code_type") === "barcode" ? "barcode" : "qr"; }
+    catch (e) { return "qr"; }
+  });
+  const setCodeType = (v) => {
+    setCodeTypeRaw(v);
+    try { localStorage.setItem("dmj_label_code_type", v); } catch (e) {}
+  };
+  const [barcodeMap, setBarcodeMap] = uS({});
   const [logoSrc, setLogoSrc] = uS("logo.png");
   const [intakePdfOpen, setIntakePdfOpen] = uS(false);  // โมดัลบันทึก PDF ของเข้าใหม่ (แยกซัพพลายเออร์)
 
@@ -6322,6 +6406,39 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
     return () => clearTimeout(t);
   }, [items, doGenerate]);
 
+  // Generate Code128 barcodes using JsBarcode (canvas-based) — คนละ map กับ qrMap โดยตั้งใจ
+  // เก็บทั้งคู่ไว้พร้อมกัน สลับปุ่ม QR/Barcode ไปมาจึงไม่ต้อง generate ซ้ำ
+  const doGenerateBarcode = uC((skus) => {
+    if (!skus.length) return;
+    const JB = window.JsBarcode;
+    if (!JB) { console.warn("jsbarcode not loaded"); return; }
+    const results = {};
+    skus.forEach(sku => {
+      const canvas = document.createElement("canvas");
+      try {
+        JB(canvas, sku, {
+          format: "CODE128", displayValue: true,
+          font: "Kanit, sans-serif", fontSize: 15, textMargin: 2,
+          margin: 4, background: "#ffffff", lineColor: "#000000",
+          width: 2, height: 46,
+        });
+        results[sku] = canvas.toDataURL("image/png");
+      } catch (e) { console.warn("Barcode error:", sku, e); }
+    });
+    if (Object.keys(results).length) {
+      setBarcodeMap(prev => ({ ...prev, ...results }));
+    }
+  }, []);
+
+  uE(() => {
+    // สร้างเฉพาะตอนเลือกโหมด Barcode อยู่ — กันคำนวณทิ้งเปล่าสำหรับคนที่ไม่เคยสลับไปใช้เลย
+    if (codeType !== "barcode") return;
+    const pending = items.map(i => i.sku).filter(s => !barcodeMap[s]);
+    if (!pending.length) return;
+    const t = setTimeout(() => doGenerateBarcode(pending), 80);
+    return () => clearTimeout(t);
+  }, [items, codeType, doGenerateBarcode]);
+
   // Expand items to exact label list (no padding)
   const labelList = uM(() => {
     const flat = [];
@@ -6361,27 +6478,35 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
   const printVaseLabels = uC(() => {
     if (!labelList.length) return;
 
+    const isBc = codeType === "barcode";
     let prevSkuSep = null;
     const labelsHTML = labelList.map(p => {
       const cutSep = prevSkuSep !== null && p.sku !== prevSkuSep
         ? `<div class="cut-sep">✂ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─</div>`
         : "";
       prevSkuSep = p.sku;
-      const qrImg = qrMap[p.sku]
-        ? `<img src="${qrMap[p.sku]}" style="width:100%;height:100%;display:block;"/>`
-        : `<div style="width:100%;height:100%;background:#f0f0f0;display:flex;align-items:center;justify-content:center;font-size:5px;color:#aaa;">QR</div>`;
       const priceStr = p.price != null && p.price > 0 ? `${escHtml(String(p.price))} ฿` : "";
+      // ชนิดโค้ด: QR (เดิม, absolute logo มุมล่างขวา) หรือ Barcode (แถวเดียว บาร์โค้ด+โลโก้)
+      // — บาร์โค้ดมีเลข SKU แสดงในตัวอยู่แล้ว (displayValue) จึงไม่มีแถว .lsku ซ้ำ
+      const midHtml = isBc
+        ? `<div class="lbc-row"><div class="lbc">${
+            barcodeMap[p.sku]
+              ? `<img src="${barcodeMap[p.sku]}" style="width:100%;height:100%;display:block;"/>`
+              : `<div style="width:100%;height:100%;background:#f0f0f0;display:flex;align-items:center;justify-content:center;font-size:5px;color:#aaa;">|||</div>`
+          }</div><img src="${logoSrc}" class="llogo-inline" onerror="this.style.display='none'"/></div>`
+        : `<div class="lqr">${
+            qrMap[p.sku]
+              ? `<img src="${qrMap[p.sku]}" style="width:100%;height:100%;display:block;"/>`
+              : `<div style="width:100%;height:100%;background:#f0f0f0;display:flex;align-items:center;justify-content:center;font-size:5px;color:#aaa;">QR</div>`
+          }</div><img src="${logoSrc}" class="llogo" onerror="this.style.display='none'"/>`;
       return cutSep + `
       <div class="lbl">
         <div class="ltop">
           <span class="lname">${escHtml(p.name)}</span>
           ${priceStr ? `<span class="lprice">${priceStr}</span>` : ""}
         </div>
-        <div class="lmid">
-          <div class="lqr">${qrImg}</div>
-          <img src="${logoSrc}" class="llogo" onerror="this.style.display='none'"/>
-        </div>
-        <div class="lsku">${p.sku}</div>
+        <div class="lmid">${midHtml}</div>
+        ${isBc ? "" : `<div class="lsku">${p.sku}</div>`}
       </div>`;
     }).join("");
 
@@ -6413,6 +6538,10 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
   .lqr { width:78px; height:78px; }
   .llogo { position:absolute; bottom:0; right:0; width:36px; height:36px; object-fit:contain; opacity:.65; }
   .lsku { font-size:11px; font-family:"Kanit",sans-serif; font-weight:500; color:#333; text-align:center; letter-spacing:0.5px; flex-shrink:0; }
+  /* Barcode variant — แทนที่ .lqr/.llogo ด้วยแถวเดียว (บาร์โค้ดมีเลขในตัวแล้ว ไม่ต้อง .lsku) */
+  .lbc-row { width:100%; height:100%; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .lbc { flex:1; min-width:0; height:60px; }
+  .llogo-inline { flex-shrink:0; width:36px; height:36px; object-fit:contain; opacity:.65; }
   /* SKU-group separator (screen only in popup) */
   .cut-sep {
     text-align:center; font-size:12px; color:#aaa;
@@ -6438,6 +6567,8 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
     .lqr { width:13mm; height:13mm; }
     .llogo { width:8mm; height:8mm; }
     .lsku { font-size:5pt; }
+    .lbc { height:10mm; }
+    .llogo-inline { width:8mm; height:8mm; }
   }
 </style>
 </head><body>
@@ -6455,7 +6586,7 @@ ${labelsHTML}
     win.document.write(html);
     win.document.close();
     win.focus(); // bring popup to front
-  }, [labelList, qrMap, logoSrc]);
+  }, [labelList, qrMap, barcodeMap, codeType, logoSrc]);
 
   const addItem = () => {
     const raw = searchVal.trim();
@@ -6536,6 +6667,24 @@ ${labelsHTML}
             </button>
           ))}
         </div>
+
+        {/* ── ชนิดโค้ด: QR (ค่าเริ่มต้น) / Barcode — ใช้ได้เฉพาะโหมด A4/สติ๊กเกอร์ ที่พิมพ์
+             โค้ดเดี่ยวต่อป้าย (โหมดการ์ดยังเป็น QR อย่างเดียว ไม่อยู่ในสโคปนี้) ── */}
+        {printMode !== "card" && (
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+            <span style={{fontSize:11,color:"var(--muted)",fontWeight:600}}>ชนิดโค้ด:</span>
+            <div style={{display:"inline-flex",border:"1.5px solid var(--bdr)",borderRadius:10,padding:3,gap:3,background:"var(--paper)"}}>
+              {[{id:"qr",label:"🔲 QR"},{id:"barcode",label:"▤ Barcode"}].map(c => (
+                <button key={c.id} onClick={() => setCodeType(c.id)} style={{
+                  fontFamily:"inherit", fontWeight:700, fontSize:12.5, border:"none", borderRadius:7,
+                  padding:"7px 14px", cursor:"pointer",
+                  background: codeType===c.id ? "var(--accent)" : "transparent",
+                  color: codeType===c.id ? "#fff" : "var(--muted)",
+                }}>{c.label}</button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* ── โหมดการ์ด: ของเข้าใหม่ (บันทึก PDF ให้เจ้าของ + เพิ่งเข้าคลังให้เลือกก่อน) ── */}
         {printMode === "card" && (
@@ -6735,17 +6884,36 @@ ${labelsHTML}
                     <span className="label-price">{p.price != null && p.price > 0 ? `${p.price} ฿` : ""}</span>
                   </div>
                   <div className="label-mid-row">
-                    <div className="label-qr-center" style={{width:"10mm",height:"10mm"}}>
-                      {qrMap[p.sku]
-                        ? <img src={qrMap[p.sku]} alt={p.sku} style={{width:"100%",height:"100%",objectFit:"contain"}}/>
-                        : <div style={{width:"100%",height:"100%",background:"#f0f0f0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:5,color:"#aaa"}}>QR</div>
-                      }
-                    </div>
-                    <div className="label-logo-corner">
-                      <img src={logoSrc} alt="logo" onError={() => setLogoSrc(LOGO_FALLBACK_SVG)}/>
-                    </div>
+                    {/* รูเจาะร้อยเชือก — ติดอยู่เสมอไม่ว่าจะเป็นโค้ดชนิดไหน (ป้ายต้องแขวนได้เท่ากัน) */}
+                    <div className="label-hole" title="เจาะรูร้อยเชือก"></div>
+                    {codeType === "barcode" ? (
+                      <div className="label-barcode-row">
+                        <div className="label-barcode-box">
+                          {barcodeMap[p.sku]
+                            ? <img src={barcodeMap[p.sku]} alt={p.sku}/>
+                            : <div style={{width:"100%",height:"100%",background:"#f0f0f0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:5,color:"#aaa"}}>|||</div>
+                          }
+                        </div>
+                        <div className="label-logo-small">
+                          <img src={logoSrc} alt="logo" onError={() => setLogoSrc(LOGO_FALLBACK_SVG)}/>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="label-qr-center" style={{width:"10mm",height:"10mm"}}>
+                          {qrMap[p.sku]
+                            ? <img src={qrMap[p.sku]} alt={p.sku} style={{width:"100%",height:"100%",objectFit:"contain"}}/>
+                            : <div style={{width:"100%",height:"100%",background:"#f0f0f0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:5,color:"#aaa"}}>QR</div>
+                          }
+                        </div>
+                        <div className="label-logo-corner">
+                          <img src={logoSrc} alt="logo" onError={() => setLogoSrc(LOGO_FALLBACK_SVG)}/>
+                        </div>
+                      </>
+                    )}
                   </div>
-                  <div className="label-sku-text">{p.sku}</div>
+                  {/* บาร์โค้ดมีเลข SKU แสดงในตัวอยู่แล้ว (displayValue) — ไม่ต้องมีแถวซ้ำ */}
+                  {codeType !== "barcode" && <div className="label-sku-text">{p.sku}</div>}
                 </div>
                 );
               })}
