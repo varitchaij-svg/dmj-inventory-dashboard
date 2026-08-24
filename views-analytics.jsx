@@ -945,7 +945,9 @@ function FrontStoreView({ data, role, checkRequest, onCheckComplete }) {
 }
 
 // ─── confirm stock count → write to SHEET_PRODUCTS col H + push ZORT ───
-async function confirmStockCount(entries) {
+// sessionId (ไม่บังคับ) — Counting Session tracking (ดู startStockCountSession/closeStockCountSession
+// ด้านล่าง) ผูกแถว audit "นับสต็อก" ของรอบนี้เข้ากับ session ที่กำลังนับอยู่
+async function confirmStockCount(entries, sessionId) {
   // entries = [{ sku, qty }]
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false }; }
   try {
@@ -958,11 +960,44 @@ async function confirmStockCount(entries) {
         clientLoadedAt: window._dataLoadedAt || 0, // สำหรับ conflict detection
         actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
         entries,
+        sessionId: sessionId || undefined,
       }),
     });
     const json = await dmjJson(res);
-    return json; // คืน object ดิบ (success, conflict, error)
+    return json; // คืน object ดิบ (success, conflict, error, data:{updated,...})
   } catch (err) { return { success: false, error: dmjErrText(err) }; }
+}
+
+// ─── Counting Session — วัดเวลาเริ่ม/จบการนับสต็อกต่อ context (ล็อค/ซัพพลายเออร์/นับก่อนขึ้นชั้น) ───
+// reuse Audit Log ทั้งหมด ไม่มีชีต/endpoint คู่ขนาน (ดู startStockCountSession_/closeStockCountSession_
+// ใน .gs) · session_id สุ่มฝั่ง client ล้วน (ไม่ใช่ security-critical แค่ tag รวมยอด) — คงค่าเดิม
+// ตลอด context เดียวกัน เปิด context ใหม่ = session ใหม่เสมอ (ห้ามเอา session เก่ามาต่อ)
+function newStockCountSessionId() {
+  return "SC-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+}
+// fire-and-forget ทั้งคู่ — เป็น analytics marker ล้วน พลาดแล้วแค่รายงานเวลาไม่ครบ ไม่กระทบสต็อกจริง
+// (หลักเดียวกับ pushInappNoti_ ฝั่ง .gs) จึงไม่ต้อง await/บล็อก UI ใด ๆ ที่จุดเรียก
+function startStockCountSession(sessionId, contextType, contextKey, contextLabel, expectedItemCount) {
+  if (!SHEET_DEPLOY_URL || !sessionId) return;
+  dmjFetch(SHEET_DEPLOY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({
+      startStockCount: true, sessionId, contextType, contextKey, contextLabel, expectedItemCount,
+      actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
+    }),
+  }).catch(() => {});
+}
+function closeStockCountSession(sessionId, itemCount) {
+  if (!SHEET_DEPLOY_URL || !sessionId) return;
+  dmjFetch(SHEET_DEPLOY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({
+      closeStockCount: true, sessionId, itemCount,
+      actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
+    }),
+  }).catch(() => {});
 }
 
 // บันทึก "ขายไม่สแกน" — นับสต็อกแล้วของหาย = ขายออก (บวก soldQty ไม่แตะยอดเงิน) · qty=0 = ยกเลิก
@@ -1666,7 +1701,7 @@ function WarehouseHomeView({ data, onNav }) {
   );
 }
 
-function StockCountView({ data, checkRequest, onCheckComplete }) {
+function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys }) {
   const storage    = data.storage  || {};
   const shelves    = storage.shelves || { A: 10, B: 10, locksPerShelf: 15 };
   const verifiedLockMap = storage.verifiedLockMap || {};
@@ -2063,6 +2098,10 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
       .filter(([sku, v]) => v !== '' && v != null && localEditsRef.current.has(sku))
       .map(([sku, qty]) => ({ sku, qty: parseInt(qty)||0 }));
     if (!entries.length) { if (!isAuto) showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return { success: true, saved: [] }; }
+    // กันดับเบิลแท็บ (UX เท่านั้น — ดู submitInFlightRef ด้านบน) · auto-save ที่ยิงซ้อนกับคนกดปุ่มเอง
+    // ก็ถูกกันด้วยเหตุผลเดียวกัน ไม่ต้องแยก branch isAuto
+    if (submitInFlightRef.current) return { success: true, saved: [] };
+    submitInFlightRef.current = true;
     setSaveStatus("saving");
     const snap = JSON.stringify(checkedQtys);
     // บันทึกตำแหน่งจัดเก็บ + commit ผลนับ → อัปเดตคลังจริง + push ZORT
@@ -2077,8 +2116,10 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     //    ตอน execution ซ้อนกัน) จะ **หน่วง/บัง** confirmStockCount ที่เป็นตัวเข้า ZORT จริง → จอค้าง
     //    "⏳ กำลังบันทึก…" นาน ทั้งที่ยอดยังไม่ถึง ZORT · ถ้า confirm สำเร็จแล้วตำแหน่งพลาด ของก็เข้า
     //    ZORT แล้ว (สถานะ saved ไม่ถูกบล็อกด้วยเรื่องรอง)
-    const result = confirmEntries.length ? await confirmStockCount(confirmEntries) : { success: true };
+    const result = confirmEntries.length
+      ? await confirmStockCount(confirmEntries, sessionIdRef.current) : { success: true };
     if (result.conflict) {
+      submitInFlightRef.current = false;
       setSaveStatus("error");
       setSaveErr('ข้อมูลถูกแก้ไขโดยคนอื่น — กด 🔄 Reload');
       setFailedSkus(prev => { const n = new Set(prev); entries.forEach(e => n.add(e.sku)); return n; });
@@ -2088,6 +2129,8 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     if (result.success === false) {
       // ⚠️ save ล้มเหลว — ห้ามค้าง "⏳ กำลังบันทึก…" เงียบ ๆ (จอโกหก) · โชว์เหตุผลจริงจาก GAS ให้เห็น
       //    ทั้งบนการ์ด (failedSkus) และแถบสถานะ (saveErr) เพื่อให้ผู้ใช้/เจ้าของเห็นสาเหตุและกดลองใหม่ได้
+      //    ⚠️ ไม่ patch data.products ในเคสนี้ — ห้าม patch ด้วยค่าที่ยังไม่ยืนยันว่าเขียนสำเร็จจริง
+      submitInFlightRef.current = false;
       setSaveStatus("error");
       setSaveErr(result.error || 'บันทึกไม่สำเร็จ');
       setFailedSkus(prev => { const n = new Set(prev); entries.forEach(e => n.add(e.sku)); return n; });
@@ -2106,6 +2149,9 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
         for (const [lk, es] of Object.entries(byLock)) await syncLockData(lk, es);
       }
     } catch (_) { /* ตำแหน่งเป็นเรื่องรอง — ของเข้า ZORT แล้ว ไม่ถือว่าล้มเหลว */ }
+    // patch data.products ให้เห็นเลขใหม่ทันที (requirement B) — ใช้ค่าที่ server ยืนยันแล้วเท่านั้น
+    applyServerPatch(result, confirmEntries);
+    confirmEntries.forEach(e => sessionSkuSetRef.current.add(String(e.sku).toUpperCase()));
     setSavedSkus(new Set(entries.map(e => e.sku)));
     setSavedQtys(prev => { const n = { ...prev }; entries.forEach(e => { n[e.sku] = e.qty; }); return n; });
     setFailedSkus(prev => { const n = new Set(prev); entries.forEach(e => n.delete(e.sku)); return n; });
@@ -2117,6 +2163,7 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     const nFound = entries.length - confirmEntries.length;
     showToast('success', 'บันทึก ' + entries.length + ' รายการ' +
       (nFound > 0 ? ' (🆕 ' + nFound + ' บันทึกตำแหน่งอย่างเดียว)' : ' — อัปเดตคลัง + ZORT'), '✅');
+    submitInFlightRef.current = false;
     return { success: true, saved: entries };
   };
 
@@ -2165,18 +2212,24 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
       .filter(([sku, v]) => v !== '' && v != null && localEditsRef.current.has(sku))
       .map(([sku, qty]) => ({ sku, qty: parseInt(qty)||0 }));
     if (!entries.length) { showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return; }
+    if (submitInFlightRef.current) return; // กันดับเบิลแท็บ (UX เท่านั้น)
+    submitInFlightRef.current = true;
     setConfirming(true);
     const snap = JSON.stringify(checkedQtys);
     const { lockEntries, confirmEntries } = splitFoundEntries(entries);
     if (selLockKey) await syncLockData(selLockKey, lockEntries);
-    const result = confirmEntries.length ? await confirmStockCount(confirmEntries) : { success: true };
+    const result = confirmEntries.length
+      ? await confirmStockCount(confirmEntries, sessionIdRef.current) : { success: true };
     setConfirming(false);
+    submitInFlightRef.current = false;
     if (result.conflict) {
       setSaveStatus("error");
       setSaveErr('ข้อมูลถูกแก้ไขโดยคนอื่น — กด 🔄 Reload');
       setFailedSkus(prev => { const n = new Set(prev); entries.forEach(e => n.add(e.sku)); return n; });
       showToast('error', 'ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด', '⚠️');
     } else if (result.success !== false) {
+      applyServerPatch(result, confirmEntries);
+      confirmEntries.forEach(e => sessionSkuSetRef.current.add(String(e.sku).toUpperCase()));
       setSavedSkus(new Set(entries.map(e => e.sku)));
       setSavedQtys(prev => { const n = { ...prev }; entries.forEach(e => { n[e.sku] = e.qty; }); return n; });
       setFailedSkus(prev => { const n = new Set(prev); entries.forEach(e => n.delete(e.sku)); return n; });
@@ -2292,6 +2345,72 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
     return { waiting, matched, mismatched };
   }, [supplierProducts, checkedQtys]);
 
+  // ── Counting Session — วัดเวลาเริ่ม/จบนับสต็อกต่อ context (requirement A) ──────────
+  // เก็บเป็น ref ไม่ใช่ state (ไม่ต้อง re-render ตาม) · เปิด context ใหม่ = session ใหม่เสมอ
+  // (ห้ามเอา session เก่ามาต่อ — เจ้าของกำชับ) · fire-and-forget ล้วน ไม่บล็อก UI
+  // ⚠️ preShelfMode มีค่าก่อน (ตรงกับลำดับ early-return จริงของ component: `if (preShelfMode)
+  //   return (...)` มาก่อน step 1/2 เสมอ) กัน 2 session เปิดพร้อมกันถ้า selLockKey ค้างจากรอบก่อน
+  const sessionIdRef = React.useRef(null);
+  // SKU ที่นับสำเร็จจริงใน session ปัจจุบัน (client-side) — ใช้แค่ตัดสินใจว่าจะปิด session ไหม
+  // (เปิดแล้วไม่ได้นับอะไรเลย = ไม่ต้องส่ง "จบการนับสต็อก" ให้เป็น noise) ตัวเลขทางการที่ใช้จริง
+  // ในรายงานคำนวณจากแถว "นับสต็อก" ฝั่ง server เสมอ (ดู stockCountSessionsBuild_)
+  const sessionSkuSetRef = React.useRef(new Set());
+
+  uE(() => {
+    if (preShelfMode || !selLockKey) return;
+    const id = newStockCountSessionId();
+    sessionIdRef.current = id;
+    sessionSkuSetRef.current = new Set();
+    const expected = (lockData[selLockKey] && lockData[selLockKey].skus.length) || 0;
+    startStockCountSession(id, 'lock', selLockKey, 'ล็อค ' + selLockKey, expected);
+    return () => {
+      if (sessionSkuSetRef.current.size > 0) closeStockCountSession(id, sessionSkuSetRef.current.size);
+    };
+  }, [selLockKey, preShelfMode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  uE(() => {
+    if (preShelfMode || !selSupplier) return;
+    const id = newStockCountSessionId();
+    sessionIdRef.current = id;
+    sessionSkuSetRef.current = new Set();
+    startStockCountSession(id, 'supplier', selSupplier, 'ซัพพลายเออร์ ' + selSupplier, supplierProducts.length);
+    return () => {
+      if (sessionSkuSetRef.current.size > 0) closeStockCountSession(id, sessionSkuSetRef.current.size);
+    };
+  }, [selSupplier, preShelfMode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  uE(() => {
+    if (!preShelfMode) return;
+    const id = newStockCountSessionId();
+    sessionIdRef.current = id;
+    sessionSkuSetRef.current = new Set();
+    // ไม่มี "รายการที่ต้องนับทั้งหมด" ตายตัว (หยิบเข้ามานับเองทีละตัว) → expectedItemCount = null
+    startStockCountSession(id, 'preshelf', 'preshelf', 'นับก่อนขึ้นชั้น', null);
+    return () => {
+      if (sessionSkuSetRef.current.size > 0) closeStockCountSession(id, sessionSkuSetRef.current.size);
+    };
+  }, [preShelfMode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── กันดับเบิลแท็บ (UX protection เท่านั้น — ไม่ใช่ data-integrity mechanism เพราะ
+  //    confirmStockCount เป็น absolute-set/idempotent อยู่แล้วฝั่ง server) ──
+  // ใช้ ref เดียวร่วมกันทั้ง handleSave/handleConfirm/handleSavePreShelf เพราะ UI โชว์ทีละโหมด
+  // เดียวเสมอ (ref อัปเดต synchronous ต่างจาก saveStatus/state ที่เห็นค่าเก่าได้ในดับเบิลแท็บเร็ว ๆ)
+  const submitInFlightRef = React.useRef(false);
+
+  // หลัง confirmStockCount สำเร็จ — patch data.products ให้เห็นเลขใหม่ทันที (ไม่ต้องรอ poll/reload)
+  // ⚠️ ใช้ค่าจาก server response (result.data.updated) เป็น source เสมอ ไม่ใช่ entries ที่ส่งไป —
+  //    ต้อง handle ทั้งกรณี GAS เก่ายังไม่รู้จัก field นี้ (fallback ไป entries เดิม ไม่ถือว่าผิด
+  //    เพราะพฤติกรรมเท่าของก่อนแก้) และกรณี patchProductQtys ไม่ได้ถูกส่ง prop มา (ปลอดภัย no-op)
+  const applyServerPatch = (result, fallbackEntries) => {
+    if (typeof patchProductQtys !== 'function') return;
+    const updated = (result && result.data && Array.isArray(result.data.updated))
+      ? result.data.updated : fallbackEntries;
+    if (!updated || !updated.length) return;
+    const patch = {};
+    updated.forEach(e => { if (e && e.sku) patch[String(e.sku).toUpperCase()] = { qtyWH: e.qty }; });
+    patchProductQtys(patch);
+  };
+
   // หมายเหตุ: โหมด "ตามซัพพลายเออร์" ใช้ `handleSave` ตัวเดียวกับโหมดตามล็อคแล้ว (บันทึกตำแหน่ง
   // จัดกลุ่มตาม skuToLock + confirmStockCount เข้าคลัง/ZORT) — เดิมมี `handleSaveSupplier` แยกที่
   // บันทึกตำแหน่งอย่างเดียว ไม่เคย commit เข้าคลัง/ZORT (ลบทิ้งแล้ว ส.ค. 2026)
@@ -2360,13 +2479,18 @@ function StockCountView({ data, checkRequest, onCheckComplete }) {
       .filter(sku => { const v = checkedQtys[sku]; return v !== '' && v != null; })
       .map(sku => ({ sku, qty: parseInt(checkedQtys[sku]) || 0 }));
     if (!entries.length) { showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return; }
+    if (submitInFlightRef.current) return; // กันดับเบิลแท็บ (UX เท่านั้น)
+    submitInFlightRef.current = true;
     setSaveStatus("saving");
     // บันทึกยอดคลังตรง ๆ (absolute set) + push ZORT — ไม่แตะตำแหน่งล็อค
-    const result = await confirmStockCount(entries);
+    const result = await confirmStockCount(entries, sessionIdRef.current);
+    submitInFlightRef.current = false;
     if (result.conflict) {
       setSaveStatus("error");
       showToast('error', 'ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด', '⚠️');
     } else if (result.success !== false) {
+      applyServerPatch(result, entries);
+      entries.forEach(e => sessionSkuSetRef.current.add(String(e.sku).toUpperCase()));
       setSavedSkus(new Set(entries.map(e => e.sku)));
       setSavedQtys(prev => { const n = { ...prev }; entries.forEach(e => { n[e.sku] = e.qty; }); return n; });
       setLastSavedTime(new Date());
@@ -8055,7 +8179,24 @@ function AuditLogView() {
     if (action === "นับสต็อก")  return { background: "#e8f5e9", color: "#1b5e20" };
     if (action === "โอนสต็อก")  return { background: "#e3f2fd", color: "#0d47a1" };
     if (action === "ปิดงาน MTO") return { background: "#fff3e0", color: "#e65100" };
+    if (action === "เริ่มนับสต็อก" || action === "จบการนับสต็อก")
+      return { background: "#ede9fe", color: "#5b21b6" }; // Counting Session marker
     return { background: "#f3e5f5", color: "#4a148c" };
+  };
+  // "เริ่มนับสต็อก"/"จบการนับสต็อก" เก็บ detail เป็น JSON (session_id/context ฯลฯ) — แปลงเป็นข้อความ
+  // อ่านง่ายให้แทนที่จะโชว์ raw JSON · session_id ยังอยู่ใน string ที่คืนมา ค้นหาผ่านช่องค้นหาได้เหมือนเดิม
+  const friendlyDetail = (r) => {
+    if (r.action !== "เริ่มนับสต็อก" && r.action !== "จบการนับสต็อก") return r.detail;
+    try {
+      const meta = JSON.parse(r.detail || "{}");
+      if (r.action === "เริ่มนับสต็อก") {
+        return "เริ่มนับที่ " + (meta.contextLabel || r.sku || "-") +
+          (meta.expectedItemCount != null ? " · คาด " + meta.expectedItemCount + " รายการ" : "") +
+          " · session:" + (meta.sessionId || "-");
+      }
+      return "จบการนับ · นับได้ " + (meta.itemCount != null ? meta.itemCount : "-") + " รายการ" +
+        " · session:" + (meta.sessionId || "-");
+    } catch (e) { return r.detail; }
   };
 
   return (
@@ -8145,7 +8286,7 @@ function AuditLogView() {
                       }}>{r.action}</span>
                     </td>
                     <td style={{ padding: "8px 12px", fontFamily: "monospace", fontSize: 12 }}>{r.sku}</td>
-                    <td style={{ padding: "8px 12px", color: "var(--text)" }}>{r.detail}</td>
+                    <td style={{ padding: "8px 12px", color: "var(--text)" }}>{friendlyDetail(r)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -8180,6 +8321,13 @@ function staffPerfHm(min) {
   const m = Math.max(0, Math.round(min || 0));
   const h = Math.floor(m / 60);
   return h > 0 ? h + " ชม. " + (m % 60) + " น." : m + " น.";
+}
+// เวลาต่อ Counting Session — เป็นวินาที (สั้นกว่าชั่วโมงทำงานทั้งกะมาก) ปัดเป็นนาที/วินาทีให้อ่านง่าย
+function staffPerfSec(sec) {
+  if (sec == null) return "—";
+  const s = Math.max(0, Math.round(sec));
+  const m = Math.floor(s / 60);
+  return m > 0 ? m + " น. " + (s % 60) + " วิ" : s + " วิ";
 }
 // 12 เดือนย้อนหลังนับจากเดือนปัจจุบัน — ใช้เป็นตัวเลือกในดรอปดาวน์
 function staffPerfMonthOptions() {
@@ -8448,6 +8596,32 @@ function StaffPerformanceView() {
                                   </span>
                                 </div>
                               ))}
+                            </div>
+                          )}
+
+                          {/* ⏱️ เวลานับสต็อก (Counting Session) — โผล่เฉพาะคนที่มี session ที่นับจริง
+                              อย่างน้อย 1 ครั้ง (durationSec != null ฝั่ง .gs กรองมาให้แล้ว) */}
+                          {s.countSessionsN > 0 && (
+                            <div style={{ margin: "12px 0 0" }}>
+                              <div style={{ fontSize: 11.5, fontWeight: 700, color: "var(--muted)", marginBottom: 6 }}>
+                                ⏱️ เวลานับสต็อกคลัง
+                              </div>
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                                {[
+                                  { l: "จำนวนครั้ง", v: fmtN(s.countSessionsN) + " ครั้ง" },
+                                  { l: "SKU ที่นับ", v: fmtN(s.countTotalItems) + " รายการ" },
+                                  { l: "เวลาเฉลี่ย/ครั้ง", v: staffPerfSec(s.countAvgDurationSec) },
+                                  { l: "เวลารวม", v: staffPerfHm(s.countTotalDurationSec / 60) },
+                                  ...(s.countAvgSecPerSku != null
+                                    ? [{ l: "เฉลี่ย/SKU", v: staffPerfSec(s.countAvgSecPerSku) }] : []),
+                                ].map(x => (
+                                  <div key={x.l} style={{ flex: "1 1 100px", minWidth: 0, background: "var(--bg)",
+                                                          border: "1px solid var(--bdr)", borderRadius: 10, padding: "8px 10px" }}>
+                                    <div style={{ fontSize: 10, color: "var(--muted)", fontWeight: 600 }}>{x.l}</div>
+                                    <div style={{ fontSize: 13, fontWeight: 800, color: "var(--text)", marginTop: 2 }}>{x.v}</div>
+                                  </div>
+                                ))}
+                              </div>
                             </div>
                           )}
 

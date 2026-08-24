@@ -859,12 +859,14 @@ var ROLE_ACTIONS_ = {
                "saveQuoteFollowup",
                ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   frontstore: ["recordUnscannedSale"].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
-  warehouse:  ["deductStock", "confirmStockCount", "deleteLockEntry", "addNewProduct", "uploadProductPhoto",
+  warehouse:  ["deductStock", "confirmStockCount", "startStockCount", "closeStockCount",
+               "deleteLockEntry", "addNewProduct", "uploadProductPhoto",
                "addPurchaseIn", "zeroStock", "createStockCheck", "completeStockCheck",
                "deleteOrder", "deleteOrders",
                ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   // employee มีแท็บ frontstore (FrontStoreView) ด้วย → ต้องมี recordUnscannedSale เหมือน frontstore
   employee:   ["deleteLockEntry", "deleteOrder", "deleteOrders", "confirmStockCount",
+               "startStockCount", "closeStockCount",
                "createStockCheck", "completeStockCheck", "recordUnscannedSale",
                ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
 };
@@ -937,6 +939,7 @@ function forbidden_(msg) {
 // (ชื่อที่ไม่รู้จัก → คืน null = ไม่ถูกเช็คสิทธิ์ ไม่ใช่ block — กันของเดิมพังโดยไม่ตั้งใจ)
 var POST_FLAG_ACTIONS_ = [
   "addNewProduct", "addPurchaseIn", "approveQuotation", "assignMtoJob", "checkSkuExists", "clearFrontStoreChecks", "closeMtoJob",
+  "closeStockCount", "startStockCount",
   "completeStockCheck", "confirmShipmentReceive", "confirmStockCount", "createMtoJob",
   "createQuotation", "createSaleBill", "createStockCheck", "deductMaterials", "deductStock",
   "deleteLockEntry", "deleteMtoJob", "deleteOrder", "deleteOrders", "deleteQuotationDraft", "editQuotation",
@@ -1879,6 +1882,10 @@ const STAFF_PERF_CATEGORIES_ = [
   { key: "star",       emoji: "⭐", label: "ตั้งผู้ดูแลสินค้า",   ops: false, unit: "ครั้ง",  prefixes: ["setProductOwner", "clearProductOwner"] },
   { key: "admin",      emoji: "🔧", label: "ตั้งค่าระบบ",        ops: false, unit: "ครั้ง",  prefixes: ["แก้ไขพนักงาน", "แก้ไขการลงเวลา", "saveThresholds", "ตั้งตำแหน่งพนักงาน"] },
   { key: "punch",      emoji: "🕐", label: "กดลงเวลา",           ops: false, unit: "ครั้ง",  skip: true, prefixes: ["ลงเวลา"] },
+  // marker ของ Counting Session (ดูหัวข้อ "Stock Count Session tracking") — ไม่ใช่ "งาน" ที่นับ
+  // เพิ่มจากยอด (ยอดงานจริงยังมาจาก key "count" ข้างบนเหมือนเดิม) แค่ทำให้ meta-test เจอหมวดรองรับ
+  { key: "countstart", emoji: "▶️", label: "เริ่มนับสต็อก",       ops: false, unit: "ครั้ง",  skip: true, prefixes: ["เริ่มนับสต็อก"] },
+  { key: "countend",   emoji: "⏹️", label: "จบการนับสต็อก",      ops: false, unit: "ครั้ง",  skip: true, prefixes: ["จบการนับสต็อก"] },
 ];
 const STAFF_PERF_OTHER_ = { key: "other", emoji: "➖", label: "อื่นๆ", ops: false, unit: "ครั้ง" };
 
@@ -1947,6 +1954,84 @@ function staffPerfAggregateAudit_(rows, monthKey) {
   return { byActor: byActor, rows: counted };
 }
 
+// ── รวมยอด Counting Session จาก Audit Log (ดูหัวข้อ "Stock Count Session tracking" เหนือ
+//    confirmStockCount) — group ด้วย session_id ตรง ๆ ไม่ใช่ time-window/gap heuristic เพราะ
+//    session_id ผูกกับ "เริ่มนับสต็อก" ทุกครั้งที่เปิด context ใหม่อยู่แล้ว → เปิด session เดิม
+//    ซ้ำไม่มีทางถูกปนกับของเก่า (เจ้าของกำชับข้อนี้ — เปิดใหม่ต้องเห็นเป็นคนละ session เสมอ)
+// rows = แถวดิบจาก Audit Log (เหมือน staffPerfAggregateAudit_ — 5 คอลัมน์: วันที่,ผู้ใช้,Action,
+//   Resource,รายละเอียด) · pure — เทสต์ eval ตรงจากไฟล์นี้เหมือนฟังก์ชันพี่น้อง
+// คืน { actorชื่อดิบ: session[] } โดย session = {
+//   sessionId, actor, contextType, contextKey, contextLabel, expectedItemCount,
+//   itemCount (จำนวน SKU ไม่ซ้ำที่ค่าเปลี่ยนจริงใน session นี้ — ไม่ใช่จำนวนแถว audit),
+//   startedAt(ms), submittedAt(ms|null), closedAt(ms|null), durationSec(number|null) }
+// ⚠️ submittedAt/durationSec เป็น null เมื่อ session เปิดแล้วไม่มีการนับสำเร็จเลยสักตัว —
+//    ตั้งใจไม่นับเป็น "เวลานับ" (เปิดหน้าทิ้งไว้เฉย ๆ ไม่ใช่กำลังทำงาน)
+function stockCountSessionsBuild_(rows, monthKey) {
+  const sessions = {}; // sessionId -> internal working object
+
+  (rows || []).forEach(function (r) {
+    const day = staffPerfDayKey_(r[0]);
+    if (monthKey && (!day || day.slice(0, 7) !== monthKey)) return;
+    const action = String(r[2] == null ? "" : r[2]);
+    const actor = String(r[1] == null ? "" : r[1]).trim();
+    const resource = String(r[3] == null ? "" : r[3]);
+    const detail = String(r[4] == null ? "" : r[4]);
+    const ts = (r[0] instanceof Date) ? r[0].getTime() : new Date(r[0]).getTime();
+    if (isNaN(ts)) return;
+
+    if (action === "เริ่มนับสต็อก") {
+      let meta = {};
+      try { meta = JSON.parse(detail) || {}; } catch (e) { meta = {}; }
+      if (!meta.sessionId) return;
+      sessions[meta.sessionId] = {
+        sessionId: String(meta.sessionId), actor: actor,
+        contextType: meta.contextType || "", contextKey: resource,
+        contextLabel: meta.contextLabel || resource,
+        expectedItemCount: (meta.expectedItemCount == null) ? null : Number(meta.expectedItemCount),
+        startedAt: ts, submittedAt: null, closedAt: null, skus: {},
+      };
+      return;
+    }
+
+    if (action === "จบการนับสต็อก") {
+      let meta = {};
+      try { meta = JSON.parse(detail) || {}; } catch (e) { meta = {}; }
+      const s = meta.sessionId && sessions[meta.sessionId];
+      if (s) s.closedAt = ts;
+      return;
+    }
+
+    if (action === "นับสต็อก") {
+      // detail = "qty: old→new" (+" · session:ID" ถ้ามี) — แถวเก่าก่อนมี session tracking
+      // หรือ session ที่ start-row หลุดช่วงที่อ่านมา (ข้ามเดือนพอดี) → ทิ้งอย่างปลอดภัย ไม่เดา
+      const m = detail.match(/session:(\S+)/);
+      if (!m) return;
+      const s = sessions[m[1]];
+      if (!s) return;
+      const sku = resource.toUpperCase();
+      if (sku) s.skus[sku] = true;
+      if (s.submittedAt == null || ts > s.submittedAt) s.submittedAt = ts;
+    }
+  });
+
+  const byActor = {};
+  Object.keys(sessions).forEach(function (sid) {
+    const s = sessions[sid];
+    const itemCount = Object.keys(s.skus).length;
+    const durationSec = (s.submittedAt != null)
+      ? Math.max(0, Math.round((s.submittedAt - s.startedAt) / 1000)) : null;
+    const row = {
+      sessionId: s.sessionId, actor: s.actor, contextType: s.contextType,
+      contextKey: s.contextKey, contextLabel: s.contextLabel,
+      expectedItemCount: s.expectedItemCount, itemCount: itemCount,
+      startedAt: s.startedAt, submittedAt: s.submittedAt, closedAt: s.closedAt,
+      durationSec: durationSec,
+    };
+    (byActor[s.actor] = byActor[s.actor] || []).push(row);
+  });
+  return byActor;
+}
+
 function staffPerfCatDef_(key) {
   for (let i = 0; i < STAFF_PERF_CATEGORIES_.length; i++) {
     if (STAFF_PERF_CATEGORIES_[i].key === key) return STAFF_PERF_CATEGORIES_[i];
@@ -1989,6 +2074,7 @@ function staffPerfBuild_(ss, monthStr) {
   //      แล้วค่อยอ่าน 5 คอลัมน์เฉพาะช่วงนั้น · ชีตนี้ append อย่างเดียวจึงเรียงตามเวลาอยู่แล้ว
   //      (แถวนอกช่วงที่หลุดเข้ามาถูกกรองซ้ำใน staffPerfAggregateAudit_ อีกชั้น)
   let audit = { byActor: {}, rows: 0 };
+  let countSessionsByActor = {}; // ── Counting Session (ดู stockCountSessionsBuild_) ──
   const shA = ss.getSheetByName(SHEET_AUDIT);
   if (shA) {
     const lastA = shA.getLastRow();
@@ -2002,8 +2088,10 @@ function staffPerfBuild_(ss, monthStr) {
         endIdx = i;
       }
       if (startIdx >= 0) {
-        audit = staffPerfAggregateAudit_(
-          shA.getRange(2 + startIdx, 1, endIdx - startIdx + 1, 5).getValues(), monthKey);
+        // อ่านครั้งเดียว ใช้ร่วมกันทั้งยอดงาน (ของเดิม) และ Counting Session (ใหม่)
+        const auditSheetRows5col = shA.getRange(2 + startIdx, 1, endIdx - startIdx + 1, 5).getValues();
+        audit = staffPerfAggregateAudit_(auditSheetRows5col, monthKey);
+        countSessionsByActor = stockCountSessionsBuild_(auditSheetRows5col, monthKey);
       }
     }
   }
@@ -2055,6 +2143,18 @@ function staffPerfBuild_(ss, monthStr) {
   });
   unmatched.sort(function (a, b) { return b.total - a.total; });
 
+  // ── Counting Session ต่อคน — ผูก staffId ด้วย nameToId ชุดเดียวกับ audit ข้างบน
+  //    (ห้ามสร้าง map จับคู่ชื่อชุดใหม่ — จะ drift กัน) · คนจับคู่ไม่ได้ทิ้งเงียบได้ (โผล่ใน
+  //    unmatched ของ audit อยู่แล้วเพราะทุก session มีแถว "นับสต็อก"/"เริ่มนับสต็อก" คู่กันเสมอ)
+  const countSessionsByStaff = {};
+  Object.keys(countSessionsByActor).forEach(function (raw) {
+    const sid = nameToId[raw.toLowerCase()] ||
+                nameToId[staffPerfNormalizeActor_(raw).toLowerCase()] || null;
+    if (!sid) return;
+    (countSessionsByStaff[sid] = countSessionsByStaff[sid] || []).push.apply(
+      countSessionsByStaff[sid], countSessionsByActor[raw]);
+  });
+
   // ── 3.5) ยอดขายเป็นเงินต่อผู้ขาย — อ่านชีต "บิลขาย" แล้วผูก staffId ด้วย nameToId ชุดเดียว
   //   กับ audit (ชื่อในชีตบิลขายเป็น "ชื่อ (ตำแหน่ง)" รูปแบบเดียวกับ actor) · ชีตนี้เล็ก
   //   (1 แถว/บิล) อ่าน A..I พอ (ครอบ วันที่/ผู้ขาย/ยอดสุทธิ) ไม่ต้องอ่านทั้ง 30 คอลัมน์
@@ -2099,6 +2199,15 @@ function staffPerfBuild_(ss, monthStr) {
     const perHour = (workedMin >= 60 && a.total > 0)
       ? Math.round((a.total / (workedMin / 60)) * 10) / 10 : null;
 
+    // Counting Session — เฉพาะ session ที่มีการนับจริงอย่างน้อย 1 SKU (durationSec != null)
+    // ถึงเข้ายอดรวม/ค่าเฉลี่ย — session ที่เปิดแล้วไม่ได้ทำอะไรไม่ใช่ "เวลานับ" (ข้อกำชับของเจ้าของ)
+    const mySessions = (countSessionsByStaff[st.staffId] || []).filter(function (s) { return s.durationSec != null; });
+    const countSessionsN = mySessions.length;
+    const countTotalDurationSec = mySessions.reduce(function (sum, s) { return sum + s.durationSec; }, 0);
+    const countTotalItems = mySessions.reduce(function (sum, s) { return sum + s.itemCount; }, 0);
+    const countAvgDurationSec = countSessionsN > 0 ? Math.round(countTotalDurationSec / countSessionsN) : null;
+    const countAvgSecPerSku = countTotalItems > 0 ? Math.round(countTotalDurationSec / countTotalItems) : null;
+
     return {
       staffId: st.staffId, name: st.displayName || st.lineDisplayName || st.staffId,
       role: st.role, status: st.status, pictureUrl: st.pictureUrl || "",
@@ -2107,6 +2216,9 @@ function staffPerfBuild_(ss, monthStr) {
       lateDays: lateDays, lateMin: lateMin, daysAbsent: daysAbsent,
       perHour: perHour,
       saleRevenue: sales.revenue, saleBills: sales.bills,
+      countSessionsN: countSessionsN, countTotalDurationSec: countTotalDurationSec,
+      countTotalItems: countTotalItems, countAvgDurationSec: countAvgDurationSec,
+      countAvgSecPerSku: countAvgSecPerSku,
     };
   }).filter(function (row) {
     // คนที่ลาออกแล้วและไม่มีความเคลื่อนไหวในเดือนนั้น — ไม่ต้องรกหน้าจอ
@@ -2519,7 +2631,16 @@ function doPost(e) {
       return clearFrontStoreChecks(ss, data.skus, actor);
     }
     if (data.confirmStockCount) {
-      return confirmStockCount(ss, data.entries, data.clientLoadedAt, actor);
+      return confirmStockCount(ss, data.entries, data.clientLoadedAt, actor, data.sessionId);
+    }
+
+    // ─── Stock Count Session — เฉพาะ marker เวลาเริ่ม/จบ (reuse Audit Log, ไม่มีชีตใหม่) ───
+    if (data.startStockCount) {
+      return startStockCountSession_(actor, data.sessionId, data.contextType, data.contextKey,
+        data.contextLabel, data.expectedItemCount);
+    }
+    if (data.closeStockCount) {
+      return closeStockCountSession_(actor, data.sessionId, data.itemCount);
     }
 
     // ─── เพิ่มสินค้าใหม่เข้า ZORT (owner/warehouse) ───
@@ -5102,7 +5223,42 @@ function recordUnscannedSale_(sku, qty, actor) {
   }
 }
 
-function confirmStockCount(ss, entries, clientLoadedAt, actor) {
+// ─── Stock Count Session tracking ───────────────────────────────────────────
+// ไม่มีชีตใหม่ — reuse Audit Log (SHEET_AUDIT) เดิม ผูก session ด้วย session_id ที่ client
+// สร้างเอง (สุ่ม ไม่ใช่ security-critical — แค่ tag สำหรับรวมยอด) แปะไว้ทั้งแถว "เริ่มนับสต็อก"
+// (detail เป็น JSON ผ่าน auditDetail_ — event ใหม่ ไม่มี format เดิมให้รักษา) และแถว "นับสต็อก"
+// ต่อ SKU (detail ต่อท้ายด้วย " · session:ID" — คงรูปแบบเดิม "qty: old→new" ไว้ อ่านง่ายเหมือนเดิม
+// ใน AuditLogView และยังค้นหา session_id เจอผ่านช่องค้นหาเดิมได้เลยเพราะเป็น substring ของ detail)
+// ⚠️ เป็น analytics marker ล้วน ไม่ผูกกับ correctness — พลาด/หายไปแค่รายงานเวลาไม่ครบ
+//    ไม่กระทบสต็อก/ZORT/audit ของจริง (fire-and-forget เหมือน pushInappNoti_)
+function startStockCountSession_(actor, sessionId, contextType, contextKey, contextLabel, expectedItemCount) {
+  if (!sessionId) return error("ไม่มี sessionId");
+  try {
+    writeAuditLog_(actor, "เริ่มนับสต็อก", String(contextKey || ""), auditDetail_({
+      sessionId: sessionId,
+      contextType: contextType || "",
+      contextLabel: contextLabel || String(contextKey || ""),
+      expectedItemCount: (expectedItemCount == null || expectedItemCount === "") ? null : (Number(expectedItemCount) || 0),
+    }));
+  } catch (e) { Logger.log("startStockCountSession_ error: " + e); }
+  return ok({});
+}
+
+// ปิด session — ยิงเฉพาะตอนมีของถูกนับจริงอย่างน้อย 1 ชิ้น (ฝั่ง client กรองให้ก่อนแล้ว)
+// itemCount ที่ส่งมาเป็นแค่ค่าให้ดูอ้างอิงในแถว log — ตัวเลขทางการที่ใช้จริงในรายงานคำนวณจาก
+// SKU ที่ต่างกันจริงในแถว "นับสต็อก" ที่แปะ session เดียวกัน (ดู stockCountSessionsBuild_)
+function closeStockCountSession_(actor, sessionId, itemCount) {
+  if (!sessionId) return error("ไม่มี sessionId");
+  try {
+    writeAuditLog_(actor, "จบการนับสต็อก", "", auditDetail_({
+      sessionId: sessionId,
+      itemCount: Number(itemCount) || 0,
+    }));
+  } catch (e) { Logger.log("closeStockCountSession_ error: " + e); }
+  return ok({});
+}
+
+function confirmStockCount(ss, entries, clientLoadedAt, actor, sessionId) {
   if (!Array.isArray(entries) || !entries.length) return error("entries ว่างเปล่า");
 
   // หมายเหตุ: ไม่ใช้ global conflict detection ที่นี่ — ต่างจาก transferStockBatch
@@ -5119,8 +5275,8 @@ function confirmStockCount(ss, entries, clientLoadedAt, actor) {
 
   try {
     const data = sheet.getDataRange().getValues();
-    let updated = 0;
-    const auditRows = []; // เก็บ { sku, oldQty, newQty } สำหรับ audit log
+    let updatedCount = 0;
+    const auditRows = []; // เก็บ { sku, oldQty, newQty } สำหรับ audit log + response.updated
 
     // สร้าง index SKU→แถว ครั้งเดียว (O(rows)) แทนการ scan ซ้ำทุก entry (เดิม O(entries×rows))
     // first occurrence wins — ตรงกับพฤติกรรมเดิมที่ inner loop break ที่ match แรก
@@ -5139,7 +5295,7 @@ function confirmStockCount(ss, entries, clientLoadedAt, actor) {
       sheet.getRange(i + 1, COL_PROD_QTYWH).setValue(qty);
       data[i][COL_PROD_QTYWH - 1] = qty;
       auditRows.push({ sku, oldQty, newQty: qty });
-      updated++;
+      updatedCount++;
     }
     SpreadsheetApp.flush();
 
@@ -5162,13 +5318,20 @@ function confirmStockCount(ss, entries, clientLoadedAt, actor) {
     }
 
     // Audit log: บันทึกเฉพาะ SKU ที่ค่าเปลี่ยน
+    // ⚠️ session:ID ต่อท้าย detail เป็น suffix ธรรมดา (ไม่ใช่ JSON) — คง "qty: old→new" ไว้
+    //    อ่านง่ายใน AuditLogView เหมือนเดิม + ยังค้นหา session_id เจอผ่านช่องค้นหา substring เดิม
+    const sessTag = sessionId ? (" · session:" + String(sessionId)) : "";
     auditRows.forEach(function(r) {
       if (r.oldQty !== r.newQty) {
-        writeAuditLog_(actor, "นับสต็อก", r.sku, "qty: " + r.oldQty + "→" + r.newQty);
+        writeAuditLog_(actor, "นับสต็อก", r.sku, "qty: " + r.oldQty + "→" + r.newQty + sessTag);
       }
     });
 
-    return ok({ confirmed: updated, zortSynced: zortSynced,
+    // updated[] = SKU ที่ถูกเขียนจริง (พบแถวในชีต) พร้อมค่าที่ server ยืนยันแล้ว — frontend ต้อง
+    // ใช้ค่านี้ patch UI ทันที (patchProductQtys) แทนการเชื่อว่า entries ที่ส่งไปคือค่าที่เขียนสำเร็จ
+    // เพิ่มเป็น field ใหม่ล้วน ไม่กระทบ consumer เดิมที่อ่านแค่ confirmed/zortSynced/warning
+    return ok({ confirmed: updatedCount, zortSynced: zortSynced,
+      updated: auditRows.map(function(r) { return { sku: r.sku, qty: r.newQty }; }),
       warning: zortSynced ? null : "บันทึกใน Sheets แล้ว แต่ sync ไป ZORT ไม่สำเร็จ ระบบจะซิงค์ใหม่อัตโนมัติ" });
   } finally {
     lock.releaseLock();
