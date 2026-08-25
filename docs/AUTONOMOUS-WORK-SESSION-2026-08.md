@@ -35,6 +35,18 @@ cross-branch anti-duplication map (topic → authoritative branch → status →
   false positive of the scan window — its tip is already on master with 0 checks in the analytics handlers).
 - **Only Track C (security) is unclaimed and READY.** F-08 safe now; F-07 needs one owner rollout decision.
 
+## 2c. Increment 3 — Track C security F-08 IMPLEMENTED (code, isolated branch)
+
+The reconciliation showed Track C is the only unclaimed/READY track. Implemented the **safe half (F-08)** on a
+fresh branch from `b7e5f1e` (isolated from docs per git rules):
+- **Branch `claude/security-debugorders-authz`** (commit `e1787d8`, pushed — no PR/merge/deploy).
+- **Change:** `doGet action=debugOrders` now uses `resolveSession_` + `isAdminRole_(session.role)` + `status==='active'`
+  instead of the client-forgeable `isAdminRole_(e.parameter.role)`. Mirrors `getAuditLog`.
+- **Safe:** `git grep debugOrders` across the tree = no client caller → zero functional regression.
+- **BEFORE:** forged `role=owner` → raw order rows. **AFTER:** forged role → Unauthorized.
+- **REGRESSION:** full suite **2317 pass** (80 files) + new `tests/security-debugorders.test.js` (3) locks the invariant.
+- **F-07 NOT implemented** — needs owner rollout decision (lockout risk); left as the gate in `BRANCH-RECONCILIATION §4`.
+
 ## 3. Documents created / changed
 
 - **Created:** `FULL-SYSTEM-SCRUTINY-DELTA-2026-08.md`, `BRANCH-RECONCILIATION-2026-08.md`,
@@ -44,7 +56,9 @@ cross-branch anti-duplication map (topic → authoritative branch → status →
 
 ## 4. Code changed
 
-**NONE.** No application code, config, schema, or deploy artifact was modified.
+**F-08 only** (Track C security), on isolated branch `claude/security-debugorders-authz` off `b7e5f1e`:
+`appsscript_complete.gs` debugOrders authz (+8/−3) + `tests/security-debugorders.test.js` (new). No config, schema,
+deploy artifact, lock/timeout/retry/ZORT behavior changed. Not merged, not deployed. Everything else this session = docs.
 
 ## 5. Tests run
 
@@ -102,11 +116,12 @@ MEASURED numbers (`PHASE0-RESULTS.md`) with explicit "historical, as-of `3dbc41d
 branches so work isn't duplicated, and (b) branch fresh from `b7e5f1e`.** Producing more design docs now would
 duplicate the branches above — explicitly out of scope per the request.
 
-## 12. Branches / commits created
+## 12. Branches / commits created (both PUSHED — no PR, no merge, no deploy)
 
-- Branch: `claude/full-system-scrutiny-2026-08` (audit + delta + this record). Docs-only. **Not pushed** (awaiting
-  permission). **Not merged.**
-- No new code branches (nothing implemented).
+- `claude/full-system-scrutiny-2026-08` — docs: `d04d95e` audit, `3a5f9f1` delta+banners, `72ba959` session,
+  `9466845` reconciliation, + this update. **Pushed.**
+- `claude/security-debugorders-authz` (off `b7e5f1e`) — `e1787d8` F-08 fix + test. **Pushed.**
+- Pushing feature branches does not deploy (`deploy-gas.yml` triggers on master push only).
 
 ## 13. Production-impacting actions
 
