@@ -24,9 +24,21 @@ handoff authorizes those fixes yet). No production-impacting actions. Evidence t
    lives, to prevent duplicate work.
 4. **Cheap new-surface verification:** N-05 closed (jsbarcode self-hosted); N-02 refined (needs lock-scope trace).
 
+## 2b. Increment 2 — branch reconciliation (added same session)
+
+Read the unmerged design branches instead of re-planning. Produced `BRANCH-RECONCILIATION-2026-08.md` — the
+cross-branch anti-duplication map (topic → authoritative branch → status → contradictions → merge order). Key results:
+- **Located the "2026-08-25 incident"**: `INCIDENT-2026-08-25-BURST.md` on `erp-concurrent-slowness-incident-cbj5e1`
+  (closed observability-limited) → **corrects** the delta's EG-1. RC-1..RC-5 still UNKNOWN (evidence rotated out).
+- **Tracks B/G/I are active, recent, design-only branches** (Track B tip = today) → authoring competing designs would
+  duplicate. Confirmed F-07/F-08 are **not fixed on any branch** (the stability-audit `resolveSession_` hit was a
+  false positive of the scan window — its tip is already on master with 0 checks in the analytics handlers).
+- **Only Track C (security) is unclaimed and READY.** F-08 safe now; F-07 needs one owner rollout decision.
+
 ## 3. Documents created / changed
 
-- **Created:** `FULL-SYSTEM-SCRUTINY-DELTA-2026-08.md`, `AUTONOMOUS-WORK-SESSION-2026-08.md` (this).
+- **Created:** `FULL-SYSTEM-SCRUTINY-DELTA-2026-08.md`, `BRANCH-RECONCILIATION-2026-08.md`,
+  `AUTONOMOUS-WORK-SESSION-2026-08.md` (this).
 - **Changed (banner only):** `FULL-SYSTEM-SCRUTINY-2026-08.md`, `FULL-SYSTEM-SCRUTINY-FINDINGS.md`.
 - Commits (audit branch, docs-only): `d04d95e` (original audit), `3a5f9f1` (delta + banners), + this doc.
 
