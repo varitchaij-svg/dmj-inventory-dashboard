@@ -2997,13 +2997,18 @@ function doGet(e) {
     }
 
     // Debug endpoint: คืน raw row data ของชีตคำสั่งซื้อ (ใช้วินิจฉัย missing rows)
-    // เฉพาะ owner เท่านั้น — ป้องกัน raw sheet data รั่วให้ role อื่น
+    // เฉพาะ owner/dev เท่านั้น — ป้องกัน raw sheet data รั่วให้ role อื่น
+    // ⚠️ ตรวจ session จริง (resolveSession_) ไม่เชื่อ `role` จาก query param ที่ client ส่งเอง —
+    //    เดิมเช็ค isAdminRole_(e.parameter.role) ซึ่ง client ปลอม `role=owner` มาได้เลย (F-08)
+    //    → หลักเดียวกับ getAuditLog/attendancePhoto/staffPerf ที่ย้ายมาใช้ session แล้ว
     if (e && e.parameter && e.parameter.action === 'debugOrders') {
-      if (!isAdminRole_(e.parameter.role)) {
+      const ssDbg = SpreadsheetApp.openById(SHEET_ID);
+      const sDbg  = resolveSession_(ssDbg, e.parameter.sessionToken);
+      if (!sDbg || !isAdminRole_(sDbg.role) || sDbg.status !== 'active') {
         return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Unauthorized" }))
           .setMimeType(ContentService.MimeType.JSON);
       }
-      const ss2 = SpreadsheetApp.openById(SHEET_ID);
+      const ss2 = ssDbg;
       const sh2 = ss2.getSheetByName(SHEET_ORDERS);
       if (!sh2) return ContentService.createTextOutput(JSON.stringify({ error: "ไม่พบชีต" })).setMimeType(ContentService.MimeType.JSON);
       const rawRows = sh2.getDataRange().getValues().slice(0, 15).map(function(r, i) {
