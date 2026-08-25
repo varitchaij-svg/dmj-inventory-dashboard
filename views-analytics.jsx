@@ -2110,7 +2110,13 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
     //    confirmStockCount เลย → จำนวนที่นับไม่เคยเข้าคลัง/ZORT (เจ้าของแจ้ง ส.ค. 2026) ·
     //    ตอนนี้รวมทั้ง 2 โหมดมาที่ handleSave ตัวเดียว: ตำแหน่ง (ตามล็อค หรือจัดกลุ่มตาม skuToLock
     //    ของแต่ละ SKU ในโหมดซัพพลายเออร์) + confirmStockCount เสมอ
-    const { lockEntries, confirmEntries } = splitFoundEntries(entries);
+    const { lockEntries, confirmEntries: confirmAll } = splitFoundEntries(entries);
+    // R1: ส่งเข้า confirmStockCount (เขียนคลัง+ZORT) เฉพาะ SKU ที่ค่าเปลี่ยนจากที่บันทึกไปแล้ว
+    // (qty !== savedQtys[sku]) — เลิก re-push ค่าเดิมสะสมทุก auto-save (รวมทั้ง session เป็น O(n²))
+    // · qty=0 ส่งได้ (0 !== undefined ครั้งแรก) · หลัง save ค่าเดิม → ไม่ส่งซ้ำ · แก้ค่าใหม่ → ส่งใหม่
+    // · save ล้มเหลว = savedQtys ไม่ถูกตั้ง → รอบถัดไปยังส่งซ้ำ (ไม่ทิ้งของที่ยังไม่เข้าจริง)
+    // ⚠️ ไม่แตะ localEditsRef (merge-guard ของ stocklite) · absolute-set semantics เหมือนเดิม
+    const confirmEntries = confirmAll.filter(e => e.qty !== savedQtys[e.sku]);
     // ⭐ commit "ยอดคลัง + ZORT" ก่อน (ส่วนสำคัญที่สุดที่ผู้ใช้รอเห็นเข้า ZORT) — การบันทึก "ตำแหน่ง"
     //    (syncLockData) เป็น bookkeeping รอง · ทำตำแหน่งก่อนแล้ว POST ตำแหน่งค้าง/ล้ม (GAS ตอบ HTML
     //    ตอน execution ซ้อนกัน) จะ **หน่วง/บัง** confirmStockCount ที่เป็นตัวเข้า ZORT จริง → จอค้าง
@@ -2151,7 +2157,8 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
     } catch (_) { /* ตำแหน่งเป็นเรื่องรอง — ของเข้า ZORT แล้ว ไม่ถือว่าล้มเหลว */ }
     // patch data.products ให้เห็นเลขใหม่ทันที (requirement B) — ใช้ค่าที่ server ยืนยันแล้วเท่านั้น
     applyServerPatch(result, confirmEntries);
-    confirmEntries.forEach(e => sessionSkuSetRef.current.add(String(e.sku).toUpperCase()));
+    // session tracking นับ SKU ที่นับในรอบนี้ (confirmAll) ไม่ใช่เฉพาะที่เปลี่ยน (confirmEntries)
+    confirmAll.forEach(e => sessionSkuSetRef.current.add(String(e.sku).toUpperCase()));
     setSavedSkus(new Set(entries.map(e => e.sku)));
     setSavedQtys(prev => { const n = { ...prev }; entries.forEach(e => { n[e.sku] = e.qty; }); return n; });
     setFailedSkus(prev => { const n = new Set(prev); entries.forEach(e => n.delete(e.sku)); return n; });
@@ -2160,7 +2167,8 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
     setLastSavedSnap(snap); // กัน auto-save วนซ้ำ
     setSaveStatus("saved");
     setTimeout(() => setSaveStatus("idle"), 3000);
-    const nFound = entries.length - confirmEntries.length;
+    // nFound = "เจอในล็อค" (บันทึกตำแหน่งอย่างเดียว) — อิง confirmAll ไม่ใช่ confirmEntries ที่ R1 กรองแล้ว
+    const nFound = entries.length - confirmAll.length;
     showToast('success', 'บันทึก ' + entries.length + ' รายการ' +
       (nFound > 0 ? ' (🆕 ' + nFound + ' บันทึกตำแหน่งอย่างเดียว)' : ' — อัปเดตคลัง + ZORT'), '✅');
     submitInFlightRef.current = false;
@@ -2216,7 +2224,9 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
     submitInFlightRef.current = true;
     setConfirming(true);
     const snap = JSON.stringify(checkedQtys);
-    const { lockEntries, confirmEntries } = splitFoundEntries(entries);
+    const { lockEntries, confirmEntries: confirmAll } = splitFoundEntries(entries);
+    // R1: ส่งเฉพาะ SKU ที่ค่าเปลี่ยน (qty !== savedQtys[sku]) — ดูคำอธิบายใน handleSave
+    const confirmEntries = confirmAll.filter(e => e.qty !== savedQtys[e.sku]);
     if (selLockKey) await syncLockData(selLockKey, lockEntries);
     const result = confirmEntries.length
       ? await confirmStockCount(confirmEntries, sessionIdRef.current) : { success: true };
@@ -2229,7 +2239,7 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
       showToast('error', 'ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด', '⚠️');
     } else if (result.success !== false) {
       applyServerPatch(result, confirmEntries);
-      confirmEntries.forEach(e => sessionSkuSetRef.current.add(String(e.sku).toUpperCase()));
+      confirmAll.forEach(e => sessionSkuSetRef.current.add(String(e.sku).toUpperCase()));
       setSavedSkus(new Set(entries.map(e => e.sku)));
       setSavedQtys(prev => { const n = { ...prev }; entries.forEach(e => { n[e.sku] = e.qty; }); return n; });
       setFailedSkus(prev => { const n = new Set(prev); entries.forEach(e => n.delete(e.sku)); return n; });
@@ -2238,7 +2248,7 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
       setLastSavedSnap(snap); // กัน auto-save commit ซ้ำหลังกดยืนยันเอง
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 3000);
-      const nFound = entries.length - confirmEntries.length;
+      const nFound = entries.length - confirmAll.length;
       showToast('success', 'ยืนยันผลนับแล้ว ' + entries.length + ' รายการ' +
         (nFound > 0 ? ' (🆕 ' + nFound + ' บันทึกตำแหน่งอย่างเดียว)' : ' — อัปเดตคลัง + ZORT'), '✅');
     } else {
@@ -2475,28 +2485,32 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
   }).length;
 
   const handleSavePreShelf = async () => {
-    const entries = preShelfList
+    const allEntries = preShelfList
       .filter(sku => { const v = checkedQtys[sku]; return v !== '' && v != null; })
       .map(sku => ({ sku, qty: parseInt(checkedQtys[sku]) || 0 }));
-    if (!entries.length) { showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return; }
+    if (!allEntries.length) { showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return; }
     if (submitInFlightRef.current) return; // กันดับเบิลแท็บ (UX เท่านั้น)
     submitInFlightRef.current = true;
     setSaveStatus("saving");
+    // R1: ส่งเฉพาะ SKU ที่ค่าเปลี่ยน (qty !== savedQtys[sku]) — ดูคำอธิบายใน handleSave
+    // bookkeeping (savedSkus/savedQtys/session/toast) ยังอิง allEntries (ทั้งรายการที่นับ) เสมอ
+    const entries = allEntries.filter(e => e.qty !== savedQtys[e.sku]);
     // บันทึกยอดคลังตรง ๆ (absolute set) + push ZORT — ไม่แตะตำแหน่งล็อค
-    const result = await confirmStockCount(entries, sessionIdRef.current);
+    const result = entries.length
+      ? await confirmStockCount(entries, sessionIdRef.current) : { success: true };
     submitInFlightRef.current = false;
     if (result.conflict) {
       setSaveStatus("error");
       showToast('error', 'ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด', '⚠️');
     } else if (result.success !== false) {
       applyServerPatch(result, entries);
-      entries.forEach(e => sessionSkuSetRef.current.add(String(e.sku).toUpperCase()));
-      setSavedSkus(new Set(entries.map(e => e.sku)));
-      setSavedQtys(prev => { const n = { ...prev }; entries.forEach(e => { n[e.sku] = e.qty; }); return n; });
+      allEntries.forEach(e => sessionSkuSetRef.current.add(String(e.sku).toUpperCase()));
+      setSavedSkus(new Set(allEntries.map(e => e.sku)));
+      setSavedQtys(prev => { const n = { ...prev }; allEntries.forEach(e => { n[e.sku] = e.qty; }); return n; });
       setLastSavedTime(new Date());
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 3000);
-      showToast('success', 'บันทึกยอดคลัง ' + entries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
+      showToast('success', 'บันทึกยอดคลัง ' + allEntries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
     } else {
       setSaveStatus("error");
       showToast('error', 'บันทึกไม่สำเร็จ', '❌');
