@@ -47,6 +47,23 @@ fresh branch from `b7e5f1e` (isolated from docs per git rules):
 - **REGRESSION:** full suite **2317 pass** (80 files) + new `tests/security-debugorders.test.js` (3) locks the invariant.
 - **F-07 NOT implemented** — needs owner rollout decision (lockout risk); left as the gate in `BRANCH-RECONCILIATION §4`.
 
+## 2d. Increment 4 — F-07 implemented (flag-gated) + Track J/K analysis
+
+- **F-07 IMPLEMENTED (flag-gated, default OFF)** on `claude/security-debugorders-authz` (`d2f28f3` code+test,
+  `578e096` doc). Full caller analysis first (CONFIRMED no F-07 caller sent a token → strict gate would 401 owners →
+  flag required). `f07Guard_` + `F07_PROTECTION_ENABLED` (default OFF = zero behavior change); 5 callers now send
+  `&sessionToken=`. Full suite **2327 pass** (+10). Not merged, not deployed, flag NOT flipped. Residual = owner
+  rollout decision. → `docs/F07-AUTHORIZATION-REVIEW-2026-08.md`.
+- **Track J (MTO custom sale):** `docs/MTO-CUSTOM-SALE-RECOMMENDATION-2026-08.md` — traced current master: the
+  component builder + component deduction + bundle-line sale **already exist** (MTO page + `applyMtoFulfillment_` +
+  Feature 1 `splitMtoSaleItems_`). A/B/C/D is already decided (≈C: MTO builds, Sale/Billing sells as bundle/Job SKU).
+  Genuine GAPs (auto-pricing, service-fee line, single-step-at-POS) are **owned by the MTO V2 branch** — routed there,
+  not duplicated.
+- **Track K (New Product/SKU):** `docs/NEW-PRODUCT-SKU-ANALYSIS-2026-08.md` — traced current SKU generator
+  (name-search→prefix already exists; per-product-type prefix + color-code variant + dual collision check). **Flagged
+  a CONFLICT**: Track K's fixed category→prefix table (F/RT/FB/…) contradicts the existing OL/R/color-code scheme
+  (CLAUDE.md "never guess prefix"). Owner must resolve (replace vs additive vs mismatch) before any implementation.
+
 ## 3. Documents created / changed
 
 - **Created:** `FULL-SYSTEM-SCRUTINY-DELTA-2026-08.md`, `BRANCH-RECONCILIATION-2026-08.md`,
