@@ -8713,7 +8713,7 @@ function DeadStockView() {
     setLoading(true); setErr(null);
     try {
       const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
-      const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getDeadStock&_t=${Date.now()}`, { cache: "no-store" });
+      const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getDeadStock&sessionToken=${encodeURIComponent(localStorage.getItem("dmj_session_token")||"")}&_t=${Date.now()}`, { cache: "no-store" });
       const d = await dmjJson(res);
       if (d.error) throw new Error(d.error);
       setItems(Array.isArray(d.items) ? d.items : []);
@@ -9072,7 +9072,7 @@ function QuoteFollowupView({ data, role }) {
     for (let attempt = 0; attempt < 3; attempt++) {
       if (attempt > 0) await new Promise(r => setTimeout(r, 700 * attempt));   // 0 · 0.7 · 1.4 วิ
       try {
-        const res = await dmjFetch(`${SHEET_DEPLOY_URL}${sep}action=getQuotationSummary&_t=${Date.now()}`,
+        const res = await dmjFetch(`${SHEET_DEPLOY_URL}${sep}action=getQuotationSummary&sessionToken=${encodeURIComponent(localStorage.getItem("dmj_session_token")||"")}&_t=${Date.now()}`,
           { cache: "no-store", dmjTimeoutMs: 25000 });
         const d = await dmjJson(res);
         if (d.error && (!d.items || !d.items.length)) throw new Error(d.error);
@@ -9958,7 +9958,7 @@ function CustomerView({ data }) {
     setLoading(true); setErr(null);
     try {
       const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
-      const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getCustomerAnalytics&_t=${Date.now()}`, { cache: "no-store" });
+      const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getCustomerAnalytics&sessionToken=${encodeURIComponent(localStorage.getItem("dmj_session_token")||"")}&_t=${Date.now()}`, { cache: "no-store" });
       const d = await dmjJson(res);
       if (d.error && (!d.customers || !d.customers.length)) throw new Error(d.error);
       const ms = Array.isArray(d.months) ? d.months : [];
