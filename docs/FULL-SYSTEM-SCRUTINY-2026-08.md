@@ -1,5 +1,12 @@
 # FULL SYSTEM SCRUTINY — DMJ Inventory Dashboard (2026-08-25)
 
+> ⚠️ **BASELINE: `3dbc41d` (2026-08-15) — OUTDATED.** This report was written against a local HEAD that
+> origin/master has since moved **67 commits / 8,021 line-insertions** past (current tip `b7e5f1e`, 2026-08-24).
+> Read every finding here as *"as-of `3dbc41d`"*. For what changed, what still holds, and what is new surface,
+> see **`FULL-SYSTEM-SCRUTINY-DELTA-2026-08.md`** (verdict: B — AUDIT VALID WITH DELTA). Findings below are
+> **not** rewritten; the delta reconciles them. EG-1 here ("RC vocabulary not in repo") was true at `3dbc41d`
+> but is superseded — the RC set exists on master via `f3e5956`; see the delta §7.
+
 Principal-auditor end-to-end review. **Audit only** — no production code changed, nothing deployed,
 nothing merged to master. Companion: `FULL-SYSTEM-SCRUTINY-FINDINGS.md` (compact register, IDs F-01…F-17).
 

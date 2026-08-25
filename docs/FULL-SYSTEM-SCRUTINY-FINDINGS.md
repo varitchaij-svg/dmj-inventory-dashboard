@@ -1,5 +1,10 @@
 # FULL SYSTEM SCRUTINY — Finding Register (2026-08-25)
 
+> ⚠️ **BASELINE `3dbc41d` (OUTDATED — 67 commits behind origin/master `b7e5f1e`).** Re-verified status of every
+> finding against current master is in **`FULL-SYSTEM-SCRUTINY-DELTA-2026-08.md`** §5–§9. Quick map: F-07/F-08/F-05/
+> F-03/F-04 **still valid on master**; F-01 **re-measure (pv=3 added)**; F-14 **re-characterize (Phase B added, still
+> log-only)**; new surface **N-01…N-06** + RC-1..RC-5 (UNKNOWN). Do not treat this register as current without the delta.
+
 Compact register. Full analysis + evidence traces in `FULL-SYSTEM-SCRUTINY-2026-08.md`.
 
 Confidence legend: **CONFIRMED** = traced in code / measured file; **STRONG** = strong code evidence,
