@@ -1,15 +1,37 @@
 # INCIDENT — Burst slowness (concurrent doGet + doPost failures)
 
 **วันที่เกิด**: 2026-08-25 ~14:38–14:39 (Asia/Bangkok)
-**สถานะเอกสาร**: FORENSIC INVESTIGATION เท่านั้น — **ยังไม่เสนอ / ยังไม่ทำ code fix, ไม่ deploy,
-ไม่แตะ lock/cache/retry/session/LINE, ไม่เริ่ม Phase C**
+**สถานะเอกสาร**: **ปิดเคสแล้ว — closed as OBSERVABILITY-LIMITED (2026-08-25)** ดู §0 ·
+เอกสารนี้ยังเป็น FORENSIC INVESTIGATION เท่านั้น — **ไม่มีการเสนอ/ทำ code fix, ไม่ deploy,
+ไม่แตะ lock/cache/retry/session/LINE, ไม่เริ่ม Phase C** ตลอดทั้งเอกสาร
 **ผู้รายงานอาการ**: พนักงานหลายคน — "ERP/Web App หมุนนานตอนใช้งานพร้อมกัน"
 **หลักฐานหลักที่มี**: 1 screenshot จาก Apps Script Executions (หน้า 2 จากหลายหน้า) + repo/git/Actions
-**หลักฐานที่ยังไม่มี**: log `[perfB]` จริงของ execution ในรอบ incident (ต้องเปิดจาก GAS Executions UI — ดู §7, §11)
+**หลักฐานที่ยังไม่มี**: log `[perfB]` จริงของ execution ในรอบ incident (ไม่ได้เก็บทันเวลา — ดู §0)
 
 > ⚠️ กติกาหลักของเอกสารนี้: **ห้ามยกระดับสิ่งที่ไม่มี log เป็น confirmed root cause** ·
 > ทุกข้อสรุปติดป้าย `CONFIRMED / STRONG EVIDENCE / HYPOTHESIS / UNKNOWN` ·
 > "เวลาที่ browser เห็น ≠ เวลาที่ script ใช้" (บทเรียน Phase 7.4) — แยกสองอย่างนี้เสมอ
+
+---
+
+## 0. Closure Statement (2026-08-25)
+
+**เคสนี้ปิดในสถานะ "observability-limited"** ไม่ใช่ "resolved" และไม่ใช่ "root cause confirmed"
+
+- หลักฐานที่มีอยู่ (§2–§6) **พอเห็นภาพ** ว่ามี burst จริงและ latency ไล่ระดับตรงกับลายเซ็น
+  queue/stampede ที่เคยพบมาก่อน (§9) แต่ **ไม่พอปิดคดี** — ไม่มีใครเปิด `[perfB]` ของ 6 execution
+  ที่ระบุไว้ใน §7.3 ทันเวลาก่อนหลักฐานหมดอายุใน Apps Script Executions UI (ความเสี่ยงที่เตือนไว้ใน §11
+  เกิดขึ้นจริง)
+- **RC-1..RC-5 (จาก Backend Stability Audit v1) และ HYPOTHESIS ทั้งหมดใน §10 ของเอกสารนี้
+  ยังคงเป็น HYPOTHESIS — ไม่มีข้อใดถูกยกระดับเป็น CONFIRMED** จากการปิดเคสนี้
+- เหตุผลที่ปิดแทนที่จะปล่อยค้าง: การไล่ล่า log ทีละ execution ผ่าน UI ด้วยมือ **เป็นคอขวดที่ทำให้
+  incident นี้เอง evidence หมดอายุก่อนจะสรุปได้** — นี่คือข้อจำกัดเชิงโครงสร้างของ observability
+  ชุดปัจจุบัน ไม่ใช่ปัญหาที่แก้ด้วยการพยายามซ้ำ (retry) แบบเดิม
+- **สิ่งที่ตามมาจากเคสนี้**: งานถัดไปคือปรับปรุง **observability layer เอง** (ไม่ใช่ performance fix)
+  เพื่อไม่ให้ incident ครั้งหน้าจบลงแบบเดียวกัน — ดู `docs/DURABLE-OBSERVABILITY-DESIGN-V1.md`
+  (Phase B.1, design-only, ยังไม่ implement)
+- **ยังไม่ตัดสินใจว่า RC ใดคือสาเหตุจริง** ของ burst 25/08 — ถ้า pattern เกิดซ้ำอีกและมี observability
+  ที่ดีขึ้นแล้ว ให้กลับมาอ้างอิงโครงเอกสารนี้ (§7.3 checklist, §9 comparison table) ในการสืบสวนรอบถัดไป
 
 ---
 
