@@ -5304,7 +5304,16 @@ function confirmStockCount(ss, entries, clientLoadedAt, actor, sessionId) {
     entries.filter(e => e.sku && Number(e.qty) >= 0).forEach(function(e) {
       countedSkuMap[String(e.sku).trim().toUpperCase()] = Number(e.qty);
     });
-    CacheService.getScriptCache().put('recentCountedSkus', JSON.stringify(countedSkuMap), 1800);
+    // ⚠️ read-merge-put (ไม่ overwrite) — หลายเครื่องนับพร้อมกัน แต่ละ call เขียนเฉพาะ SKU ของตัวเอง
+    //    ถ้า overwrite เครื่องหลังจะลบ guard ของเครื่องแรกทิ้ง → syncZortBoth เอา ZORT เก่าทับค่าที่เพิ่งนับ
+    //    ทั้งบล็อกนี้อยู่ใน ScriptLock เดิม (getScriptLock ที่ต้นฟังก์ชัน) → get→merge→put เป็น atomic
+    //    โดยไม่ต้องเพิ่ม lock ใหม่ (writer มีจุดเดียวคือที่นี่) · ค่านับล่าสุดต่อ SKU ชนะ · คง TTL 1800 เดิม
+    const _rcCache = CacheService.getScriptCache();
+    let _rcPrev = {};
+    try { const _rcJson = _rcCache.get('recentCountedSkus'); if (_rcJson) _rcPrev = JSON.parse(_rcJson) || {}; }
+    catch (e) { _rcPrev = {}; }
+    Object.keys(countedSkuMap).forEach(function(k) { _rcPrev[k] = countedSkuMap[k]; });
+    _rcCache.put('recentCountedSkus', JSON.stringify(_rcPrev), 1800);
 
     let zortSynced = true;
     try {
