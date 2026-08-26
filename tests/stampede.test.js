@@ -19,6 +19,7 @@ import { dirname, join } from 'node:path';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = readFileSync(join(ROOT, 'appsscript_complete.gs'), 'utf8');
+const SRC_APP = readFileSync(join(ROOT, 'app.jsx'), 'utf8');
 
 function grab(re) {
   const m = SRC.match(re);
@@ -524,18 +525,33 @@ describe('Phase 7.5 — ไม่ทำให้ท่อที่เต็ม�
   });
 
   it('จำนวนครั้งที่เหลือห้ามติดลบ (ติดลบ = ลองใหม่ไม่รู้จบ)', () => {
-    // `fetchFromSheet` ปกติค่าที่ไม่ใช่ตัวเลข>=0 กลับเป็น 3 → ส่ง -1 เข้าไปจะได้ 3 คืน
-    // = วนยิง payload หลายเมกะไม่มีวันหยุด ซึ่งจะทำให้ทั้งร้านใช้งานไม่ได้
-    expect(FETCH).toMatch(/retryLeft >= 0\) \? retryLeft : 3/);
+    // `fetchFromSheet` normalize ค่าที่ไม่ใช่ตัวเลข>=0 กลับเป็น PAYLOAD_MAX_RETRY
+    // → ส่ง -1 เข้าไปต้องไม่กลายเป็นลบ = วนยิง payload หลายเมกะไม่มีวันหยุด
+    // **clamp ด้วย Math.min** เพราะจุดเรียก "ลองใหม่" หลายที่ยังส่งเลขเดิม (3) มาตรง ๆ
+    expect(FETCH).toMatch(/Math\.min\(retryLeft, PAYLOAD_MAX_RETRY\) : PAYLOAD_MAX_RETRY/);
+    const MAX = Number(/const PAYLOAD_MAX_RETRY = (\d+)/.exec(SRC_APP)[1]);
     const nextLeft = (isBadJson, retryLeft) =>
       isBadJson ? Math.max(0, retryLeft - 2) : retryLeft - 1;
     for (const bad of [true, false]) {
-      for (let r = 3; r > 0; r--) expect(nextLeft(bad, r)).toBeGreaterThanOrEqual(0);
+      for (let r = MAX; r > 0; r--) expect(nextLeft(bad, r)).toBeGreaterThanOrEqual(0);
     }
-    // และต้องจบจริง: badjson ยิงรวม 3 ครั้ง (3→1→0), เน็ตพัง 4 ครั้ง (3→2→1→0)
-    const attempts = (bad) => { let n = 1, r = 3; while (r > 0) { r = nextLeft(bad, r); n++; } return n; };
-    expect(attempts(true)).toBe(3);
-    expect(attempts(false)).toBe(4);
+    // ต้องจบจริงและ **ยิงน้อยลงกว่าเดิม** (เดิม 4 ครั้ง) — แต่ละครั้งราคาเป็นเมกะไบต์
+    const attempts = (bad) => { let n = 1, r = MAX; while (r > 0) { r = nextLeft(bad, r); n++; } return n; };
+    expect(attempts(false)).toBe(3);
+    expect(attempts(false)).toBeLessThan(4);
+    expect(attempts(true)).toBeLessThanOrEqual(attempts(false));
+  });
+
+  it('เพดานเวลาของ retry ต้องยาวกว่าคิว build ฝั่ง server (ไม่งั้นลองใหม่ไม่มีวันสำเร็จ)', () => {
+    // หลักฐาน (docs/REVIEW-ARCHITECTURE-FINAL-2026-08-26.md §2.2): ของเดิม retry ตั้ง 20s
+    // แต่ `_BUILD_LOCK_WAIT_MS` ฝั่ง GAS = 25s → คำขอที่กำลังต่อคิวรอ build อยู่ถูกตัดทิ้ง
+    // "ก่อน" คิวจะปล่อยของเสมอ = ยิงกี่ครั้งก็ล้มเหลว และ GAS ไม่ยกเลิก execution ตาม
+    // client abort → คำขอที่ถูกตัดยังกินสล็อตจนจบ = ยิ่งลองยิ่งถ่วงระบบ
+    const retryMs = Number(/const PAYLOAD_TIMEOUT_RETRY_MS = (\d+)/.exec(SRC_APP)[1]);
+    const firstMs = Number(/const PAYLOAD_TIMEOUT_FIRST_MS = (\d+)/.exec(SRC_APP)[1]);
+    const waitMs  = Number(/const _BUILD_LOCK_WAIT_MS = (\d+)/.exec(SRC)[1]);
+    expect(retryMs).toBeGreaterThan(waitMs);
+    expect(firstMs).toBeGreaterThan(waitMs);
   });
 
   it('ไม่ส่ง locationRaw ที่ไม่มีใครอ่าน (ไบต์เปล่าคูณจำนวน SKU ทุกตัว)', () => {

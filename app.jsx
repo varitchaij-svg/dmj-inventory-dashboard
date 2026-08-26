@@ -893,6 +893,17 @@ const VER_KEY = "dmj_data_ver";
 // ซึ่งเป็นการ "ไม่เห็นข้อมูลใหม่โดยไม่มีอะไรบอก" — แย่กว่าโหลดช้าเสมอ
 const VER_MAX_SKIP_MS = 30 * 60 * 1000;
 
+// ── เพดานเวลา/จำนวนครั้งของการดึง payload ก้อนใหญ่ ──────────────────────────
+// ⚠️ **`PAYLOAD_TIMEOUT_RETRY_MS` ต้องมากกว่า `_BUILD_LOCK_WAIT_MS` (25s ฝั่ง GAS) เสมอ**
+// ของเดิมตั้งไว้ 20s ซึ่ง **สั้นกว่าคิวรอ build ของ server** → คำขอที่กำลังต่อคิวรออยู่
+// (เส้นทางปกติเมื่อ cache ทั้งสองชั้นพลาด) ถูกตัดทิ้ง "ก่อน" คิวจะปล่อยของเสมอ
+// = ลองใหม่กี่ครั้งก็ไม่มีวันสำเร็จ และแต่ละครั้งยังยิงงานหนักเพิ่มเข้าไปในระบบที่กำลังแย่อยู่
+// (GAS **ไม่ยกเลิก execution ตาม client abort** — คำขอที่ถูกตัดยังกินสล็อตจนจบ)
+// ลดจำนวนครั้งจาก 4 → 3 ด้วย เพราะแต่ละครั้งมีราคาเป็นเมกะไบต์จริง ๆ ไม่ใช่ ping เบา ๆ
+const PAYLOAD_TIMEOUT_FIRST_MS = 35000;   // ครั้งแรก: เผื่อ GAS cold start (25-30s)
+const PAYLOAD_TIMEOUT_RETRY_MS = 30000;   // ครั้งถัดไป: ต้อง > 25s (คิว build ฝั่ง server)
+const PAYLOAD_MAX_RETRY = 2;              // รวมยิงทั้งหมด 3 ครั้ง
+
 function readVerStamp() {
   try { return JSON.parse(localStorage.getItem(VER_KEY) || "null"); } catch (e) { return null; }
 }
@@ -946,13 +957,85 @@ function checkDataUnchanged(sheetUrl, role) {
     .finally(() => clearTimeout(timeout));
 }
 
-function saveToStorage(d, source) {
+// ── ตาข่ายออฟไลน์: เก็บ "ก้อนย่อ" ไม่ใช่ "ก้อนที่กางแล้ว" ────────────────────
+// วัดจริง 26 ส.ค. 2026 (รันฟังก์ชันจริงบน catalog 5,876 SKU): ของเดิมเก็บผลของ
+// `enrichData` ซึ่งกินถึง **11.90MB UTF-8 = 22.9MB ตามวิธีนับของ iOS (UTF-16)**
+// เทียบโควตา localStorage ของ Safari ~5MB → `setItem` โยน QuotaExceededError
+// **ทุกครั้ง** แล้วถูกกลืนด้วย `console.warn` เฉย ๆ = ไม่เคยมีข้อมูลถูกเก็บเลยบน iOS
+// ซึ่งเป็นจอหลักของร้าน (เดสก์ท็อป Chrome โควตาใหญ่กว่ามาก จึงรอด — อธิบายอาการ
+// "เครื่องเจ้าของใช้ได้ แต่มือถือทุกเครื่องเข้าไม่ได้")
+//
+// ผลต่อผู้ใช้: `loadFromStorage()` คืน null ทุกครั้ง → `data === null` → ติดจอโหลด
+// ที่บล็อกทั้งหน้า → เซิร์ฟเวอร์ช้าเมื่อไหร่กลายเป็น **"เข้าไม่ได้"** แทนที่จะเป็น
+// "เห็นข้อมูลเก่าแต่ทำงานต่อได้" ซึ่งคือทั้งหมดที่ตาข่ายนี้มีไว้ทำ
+//
+// ตอนนี้เก็บ **ก้อนย่อ (รูปเดียวกับที่รับมาจาก server ก่อน enrichData)** ~2.1MB chars
+// ≈ 4.1MB UTF-16 → อยู่ในโควตา · `loadFromStorage` เรียก `enrichData` ให้อยู่แล้ว
+// ผลลัพธ์ที่ view เห็นจึง **เท่าเดิมเป๊ะ ไม่มีอะไรหาย**
+// ⚠️ ห้ามกลับไปเก็บผลของ `enrichData` — มันกาง `mo` เป็น `monthly` เต็ม (วัดได้ 5.8MB)
+//    และสร้าง `mtoGroups` ที่ **ซ้ำ object สินค้าทั้งชุด** (1.7MB) ทั้งที่คำนวณใหม่ได้ฟรี
+const LS_NOTE_KEY = "dmj_storage_note_v1";   // เก็บไว้ให้เจ้าของเปิดดูย้อนหลังได้
+
+function noteStorage_(reason) {
   try {
-    localStorage.setItem(LS_KEY, JSON.stringify(d));
-    localStorage.setItem(LS_SRC_KEY, source || "upload");
-  } catch (e) {
-    console.warn("Could not persist data:", e.message);
+    if (reason) localStorage.setItem(LS_NOTE_KEY, JSON.stringify({ when: new Date().toISOString(), reason: reason }));
+    else localStorage.removeItem(LS_NOTE_KEY);
+  } catch (e) { /* โควตาเต็มจนเขียนโน้ตยังไม่ได้ → ข้าม ห้ามให้กระทบงานหลัก */ }
+}
+
+// ตัดของที่ "คำนวณใหม่ได้ฟรี" ออก — ใช้เฉพาะตอนโควตาไม่พอกับก้อนย่อจริง ๆ
+// (catalog โตขึ้นเรื่อย ๆ + `mo` งอกอีก 1 ช่องทุกเดือน) · ยอมให้ป้าย "ควรสั่ง/มาแรง"
+// ตกไปใช้เส้นทาง fallback เดิม (soldQty) ชั่วคราวจนกว่าก้อนจริงจะมาถึง
+// **ดีกว่าไม่มีข้อมูลเลยแล้วผู้ใช้ติดจอบล็อก** ซึ่งคือสภาพก่อนหน้านี้
+function trimForStorage_(o) {
+  if (!o || typeof o !== "object") return o;
+  const DROP_TOP = ["monthlyByCat", "dailyByCat", "purchases", "transfers", "mtoGroups"];
+  const out = {};
+  Object.keys(o).forEach(k => { if (DROP_TOP.indexOf(k) < 0) out[k] = o[k]; });
+  const p = out.products;
+  if (p && !Array.isArray(p) && Array.isArray(p.cols) && Array.isArray(p.rows)) {
+    const mi = p.cols.indexOf("mo");          // รูปคอลัมน์ (pv=3)
+    if (mi >= 0) out.products = {
+      cols: p.cols.filter((_, i) => i !== mi),
+      rows: p.rows.map(r => r.filter((_, i) => i !== mi)),
+    };
+  } else if (Array.isArray(p)) {              // รูปเดิม (array-of-objects)
+    out.products = p.map(x => {
+      const q = {};
+      Object.keys(x).forEach(k => { if (k !== "mo" && k !== "monthly") q[k] = x[k]; });
+      return q;
+    });
   }
+  out._trimmed = 1;
+  return out;
+}
+
+function trySetLS_(str, src) {
+  try {
+    localStorage.setItem(LS_KEY, str);
+    localStorage.setItem(LS_SRC_KEY, src);
+    return true;
+  } catch (e) { return false; }
+}
+
+// รับได้ทั้ง string (ก้อนย่อที่ serialize ไว้แล้ว) และ object (เส้นทางอัปโหลดไฟล์)
+// ⚠️ **ห้าม throw และห้ามลบของเก่าทิ้งเมื่อเก็บไม่สำเร็จ** — ของเก่าที่ยังอ่านได้
+//    คือสิ่งเดียวที่กันไม่ให้ผู้ใช้เจอจอบล็อกในรอบถัดไป
+function saveToStorage(d, source) {
+  const src = source || "upload";
+  let tier1 = null;
+  try { tier1 = (typeof d === "string") ? d : JSON.stringify(d); } catch (e) { tier1 = null; }
+  if (!tier1) { noteStorage_("serialize-failed"); return false; }
+  if (trySetLS_(tier1, src)) { noteStorage_(null); return true; }
+  let tier2 = null;
+  try {
+    const o = (typeof d === "string") ? JSON.parse(d) : d;
+    tier2 = JSON.stringify(trimForStorage_(o));
+  } catch (e) { tier2 = null; }
+  if (tier2 && trySetLS_(tier2, src)) { noteStorage_("trimmed"); return true; }
+  console.warn("Could not persist data: quota exceeded (keeping previous snapshot)");
+  noteStorage_("quota-exceeded");
+  return false;
 }
 
 // ROLE_LABELS มี emoji นำหน้า — ใช้ตัวนี้แทนตอนต้องการข้อความล้วน (เช่น window._currentUser ที่โชว์ใน Audit Log)
@@ -1240,13 +1323,13 @@ function App() {
   const fetchFromSheet = usC((retryLeft, force) => {
     if (fetchingRef.current) return;
     fetchingRef.current = true;
-    retryLeft = (typeof retryLeft === 'number' && retryLeft >= 0) ? retryLeft : 3;
+    // clamp ด้วย — จุดเรียก "ลองใหม่" หลายที่ส่งเลขเดิม (3) มาตรง ๆ
+    retryLeft = (typeof retryLeft === 'number' && retryLeft >= 0) ? Math.min(retryLeft, PAYLOAD_MAX_RETRY) : PAYLOAD_MAX_RETRY;
+    const isFirstAttempt = retryLeft === PAYLOAD_MAX_RETRY;
     setSyncing(true);
     setError(null);
     const controller = new AbortController();
-    // attempt แรก (retryLeft=3): 35s รอ GAS cold start (script ใหญ่ cold start ได้ถึง 25-30s)
-    // retry ถัดไป: 20s (GAS warm แล้ว ควรตอบ < 5s)
-    const timeoutMs = retryLeft === 3 ? 35000 : 20000;
+    const timeoutMs = isFirstAttempt ? PAYLOAD_TIMEOUT_FIRST_MS : PAYLOAD_TIMEOUT_RETRY_MS;
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     // role → GAS ตัดก้อนข้อมูลที่ role นี้ไม่มีแท็บให้เปิดดูออก (ประวัติซื้อ/โอน/กราฟยอดขาย)
     // pv=3 → products แบบคอลัมน์ (Phase A1) + ยอดรายเดือนย่อ (`mo`) · enrichData กางกลับให้ครบ
@@ -1259,7 +1342,7 @@ function App() {
     // ออกจากคิว เพราะมันเดินขนานไปกับการ compile JSX แล้ว · ใช้ได้ครั้งเดียว
     // (เฉพาะ attempt แรก) การ refetch/retry ทุกครั้งหลังจากนี้ยิงใหม่เสมอ = ได้ข้อมูลสด
     let prefetched = null;
-    if (retryLeft === 3 && typeof window !== 'undefined' && window._dataPrefetch) {
+    if (isFirstAttempt && typeof window !== 'undefined' && window._dataPrefetch) {
       // ใช้ผล prefetch ได้เฉพาะเมื่อยิงด้วย role เดียวกับที่ล็อกอินจริง — payload ผูกกับ role แล้ว
       // ถ้า role ไม่ตรง ก้อนที่ prefetch มาอาจขาดข้อมูลที่ role นี้ต้องใช้ (เช่น owner ได้ก้อนของ
       // saler มาแล้วหน้าภาพรวมไม่มีกราฟ) → ทิ้งแล้วยิงใหม่ ช้ากว่านิดเดียวแต่ข้อมูลไม่ขาด
@@ -1327,6 +1410,11 @@ function App() {
         // เก็บเป็น state แยก ไม่ยัดเข้า `data` เพราะ `data` ถูก save ลง localStorage —
         // ธงจะติดค้างข้ามการเปิดแอปครั้งถัดไปทั้งที่ตอนนั้นข้อมูลสดแล้ว
         setStaleAt((d && d.stale) ? (d.staleAt || Date.now()) : 0);
+        // ⚠️ ต้อง serialize **ก่อน** `enrichData` เพราะ enrichData แก้ `d` ในที่ (in place)
+        // — กาง`mo`→`monthly` เต็ม + เพิ่ม `mtoGroups` ที่ซ้ำ object สินค้าทั้งชุด
+        // เก็บก้อนย่อนี้ลงเครื่องแทน (ดูเหตุผลเต็มที่ `saveToStorage`)
+        let compactStr = null;
+        try { compactStr = JSON.stringify(d); } catch (e) { compactStr = null; }
         let enriched;
         try { enriched = enrichData(d); } catch (e) {
           console.warn("enrichData failed during fetchFromSheet:", e);
@@ -1337,7 +1425,7 @@ function App() {
         // optimistic entry ที่เพิ่งสั่งไป ถูกชุดจากชีตครอบคลุมแล้วหรือยัง (กันนับซ้ำ 2 เด้ง)
         enriched = Object.assign({}, enriched, { ordersFetchedAt: Date.now() });
         setData(enriched);
-        saveToStorage(enriched, "sheet");
+        saveToStorage(compactStr || enriched, "sheet");
         setSource("sheet");
         // Phase 7.4: จำไว้ว่า "ก้อนที่ถืออยู่ตอนนี้คือเวอร์ชันไหน ของ role ไหน ตอนกี่โมง"
         // ครั้งหน้าที่ต้อง refresh จะถาม `action=ver` เทียบกับค่านี้ก่อน แล้วข้ามการโหลดได้ถ้ายังตรง
@@ -1366,9 +1454,9 @@ function App() {
         window.dmjSaveTrace();
         const nextLeft  = isBadJson ? Math.max(0, retryLeft - 2) : retryLeft - 1;
         if (retryLeft > 0) {
-          const base  = isBadJson ? 3000 : (retryLeft === 3 ? 800 : retryLeft === 2 ? 2000 : 4000);
+          const base  = isBadJson ? 3000 : (isFirstAttempt ? 800 : 2500);
           const delay = base + Math.random() * base;   // สุ่มกระจาย 1–2 เท่าของฐาน
-          const attempt = 4 - retryLeft; // 1, 2, 3
+          const attempt = (PAYLOAD_MAX_RETRY + 1) - retryLeft; // 1, 2
           setRetryMsg(isBadJson
             ? `ระบบหลังบ้านตอบไม่ครบ (อาจมีคนใช้พร้อมกันเยอะ) กำลังลองใหม่ครั้งที่ ${attempt}…`
             : `เชื่อมต่อช้า กำลังลองใหม่ครั้งที่ ${attempt}…`);
