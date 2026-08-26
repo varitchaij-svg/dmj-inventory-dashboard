@@ -799,3 +799,86 @@ deploy; never bundle (the `be2c3aa` lesson).
 | 6. No code changed | ✅ only this document |
 
 **STOP — implementation not started. Next session begins at §19 (Q1–Q5), then Phase 1.**
+
+---
+---
+
+# PHASE 1 — IMPLEMENTED (2026-08-26, PR #106)
+
+Branch `claude/web-outage-forensic-investigation-lvhnym` · commit `25f7eb3` · **PR #106 open,
+NOT merged** (see “Blocker” below).
+
+## What shipped in the PR
+
+| # | Confirmed failure mechanism | Change | Files |
+|---|---|---|---|
+| ① | localStorage safety net dead (22.9 MB vs ~5 MB quota) → every boot blocks | persist the **compact** payload (pre-`enrichData`); 2-tier fallback (`trimForStorage_`); never throws; never deletes a usable older snapshot | `app.jsx` |
+| ② | retry budget 20 s **<** server queue 25 s → retries structurally futile, each stranding a server execution | `PAYLOAD_TIMEOUT_RETRY_MS` 30 s (**> 25 s**), attempts 4 → 3 | `app.jsx` |
+| ③ | stale build overwrites fresh cache → `lastModified` poisoned → **silent overwrite** (≤180 s) | compare-`ts`-before-write (no new lock; CacheService has no CAS); stamp `lastModified` with build-start ts; same guard in `keepWarm_` | `appsscript_complete.gs` |
+
+Also: `CACHE_NAME` v52 → **v53** (mandatory when `.jsx` changes — lesson 15); `CLAUDE.md`
+section “Phase 7.8”.
+
+## Measured before/after (local, real functions, calibrated corpus — MEASURED)
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| localStorage payload (chars) | 12,018,128 | 2,171,101 | **5.54× smaller** |
+| localStorage UTF-8 | 11.90 MB | 2.38 MB | |
+| **iOS UTF-16 quota basis** | **22.92 MB → EXCEEDS (net dead)** | **4.14 MB → fits** | **net restored** |
+| `JSON.stringify` per fetch (median) | 148 ms | 23 ms | **6.4× faster** |
+| Payload on the wire | unchanged (`pv=3`) | unchanged | 0 |
+
+Not changed: business rules, permissions/security, sheet schema, wire payload format.
+No migration — old-format localStorage blobs still load (covered by test).
+
+## Tests
+
+- **`tests/startup-resilience.test.js` — 21 new cases** (eval real `.gs`/`.jsx`, no copies),
+  including a case that **proves the race is real** by running T0–T5 *without* the guard and
+  observing pre-write data land in the fresh cache; plus single-chunk-eviction → whole-layer
+  MISS; quota exhaustion → no throw, previous snapshot preserved; concurrent writes; TTL expiry.
+- `tests/stampede.test.js` drift-guard updated to lock the **new** invariant
+  (*retry budget > build-queue wait*) while keeping “never negative / must terminate /
+  fewer attempts than before”.
+- **Unit 2471/2471 pass** (from 2449) · **Browser 121/121 pass** — both run locally in this
+  container with the exact commands CI runs (`npm test`, `node tests/browser/run.cjs`).
+
+## ⛔ Blocker — GitHub Actions is not executing for this repository
+
+- Last successful workflow run: **12:01Z**. My push-triggered run **#1050** was marked
+  `failure` after 24 s with **both jobs still in `queued`** (no job ever started, `failed_jobs: 0`).
+- PR #106 produced **no `Tests` run at all** — only Netlify/Cloudflare checks reported.
+- Consequence: **`deploy-gas.yml` cannot run either.** Merging now would deploy the
+  **frontend only** (Cloudflare Pages is healthy) and leave the `.gs` guard ③ un-deployed on
+  `master`, to auto-deploy unattended whenever Actions recovers.
+- The two halves are deliberately **independent** (no shared contract), so a frontend-only
+  deploy is safe — but it is a *partial* rollout that the owner should choose knowingly.
+
+**Therefore the PR was NOT merged.** The user's own gate (“tests green, CI green … do NOT
+merge until these gates pass”) cannot be satisfied, and production smoke tests are impossible
+from this environment. No production success is claimed.
+
+## Production verification checklist (run after merge + deploy)
+
+1. Confirm Actions recovered: `deploy-gas` run succeeds → GAS version updated.
+2. `/exec?action=ping` returns JSON (read-only).
+3. Open the app on a **store iPhone**, then in Web Inspector run the §19-Q5 snippet —
+   expect `stored: ~4 MB (UTF-16)` instead of `NULL`. **This is the single decisive check
+   that ① is live.**
+4. Force-quit and reopen the app → it must render from cache **without** waiting on the network.
+5. Smoke: login · stock · POS · attendance · MTO · orders · report/notification surfaces.
+6. Executions → confirm no `(มีคนบันทึกระหว่าง build …)` storm; `[perfB]` HIT/STALE/MISS mix sane.
+
+## Rollback
+
+`git revert 25f7eb3` → single commit. Frontend reverts via Cloudflare Pages; `.gs` reverts via
+`deploy-gas`. **`CACHE_NAME` must only ever move forward** — a rollback should bump to v54,
+never back to v52.
+
+## Still open (Phase 2+, deliberately not bundled)
+
+First boot on a *new* device still waits for the full payload — `bootstrap-lite` (`pv=4`)
+remains the fix, and its sizing still depends on the unmeasured §19 questions (gzip on the
+wire, current build ms, `[perfB]` burst, `keepWarm_` status). Bundling it with this urgent
+reliability fix would repeat the `be2c3aa` mistake that took the store down.
