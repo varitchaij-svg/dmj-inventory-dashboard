@@ -285,3 +285,39 @@ frontend telemetry คนละชั้น) ถ้าต้องการเ�
 ผลกระทบจริงของ 1-sheet-write-ต่อ-request ก่อนตัดสินใจ mode สุดท้าย, แล้วค่อย implement +
 เพิ่ม parser ใน `perf-report.mjs` (§5) เป็นก้อนแยกที่มี test คุมแบบเดียวกับ
 `tests/perf-observability.test.js` เดิม
+
+---
+
+## 8. IMPLEMENTATION STATUS (2026-08-26 — Option C implemented)
+
+**Status: IMPLEMENTED on branch `claude/durable-observability-impl` (commit `9fab351`). NOT merged, NOT deployed,
+gated OFF by default.** This section supersedes the "design-only" header for the parts now built; the design above
+is unchanged and remains the rationale of record.
+
+**What was built (matches §2 Option C + §3 corrId):**
+- `perfTelemetryCapture_(r,durMs)` — called from `perfReqEnd_`; buffers **1 summary row per request** into a
+  **lock-free sharded CacheService buffer** (`_PERF_TEL_SHARDS=8`). No Sheet I/O, no lock on the hot path.
+  Chose lock-free over a dedicated lock because `getDocumentLock()` returns null on standalone scripts and
+  `getScriptLock/getUserLock` would contend with business/build locks (self-referential risk, §2). Rare
+  same-shard collision loss is accepted (FAIL-OPEN; telemetry loss ≠ business loss).
+- `drainPerfTelemetry_` — time trigger every 1 min (mirrors `drainNotiQueue`); reads all shards, dedups by `id`,
+  batch-writes to sheet **`PERF_TELEMETRY`** via one `setValues` (mirrors `writeAuditLogBatch_`); retention cap
+  `_PERF_TEL_MAX_ROWS=20000` (trim oldest); on write failure drops the batch (no put-back → guarantees no dup).
+- Schema (§ "PERF_TEL_HEADERS_"): `id, ts, corrId, kind, action, durMs, cacheKind, sessN, sessMs, lockSummary,
+  zortMs, driveMs, deployVer, schemaVer(=1)`. All fields bounded length. **No PII.**
+- `corrId` (§3): `perfReqBegin_(kind,action,corrId)` reads `e.parameter.corrId` (and `cid/tid/billCid` on the
+  check endpoints) → cross-execution/retry correlation with **zero frontend change**. Appended after `t=` so the
+  existing `perf-report.mjs` parser stays backward-compatible; `parseStart/parseEnd` now optionally capture
+  `corrId`/`cacheKind`.
+- SAFE ROLLOUT: Script Property `PERF_TELEMETRY_ENABLED` (default OFF). `setupPerfTelemetry()` enables + installs
+  the trigger; `disablePerfTelemetry()` reverses it. Flag read via cache (no per-request Property read).
+
+**Tests:** `tests/durable-telemetry.test.js` (19, eval real `.gs`) + parser-compat cases; full suite **2468 pass**.
+**Overhead (Phase 10):** local CPU ~125 µs/req worst-case (full shard). GAS CacheService get/put I/O (~1–5 ms) is
+the real per-request cost when ENABLED — **not measurable in the CI sandbox** (no GAS runtime; egress to
+script.google.com blocked). It is bounded by design (cache ops only, no Sheet/lock on hot path) and OFF by default,
+so deploying is inert until the owner runs `setupPerfTelemetry()`.
+
+**Still cannot prove (unchanged from §3.4):** executions that die before `perfReqBegin_` (the 0s-FAILED class in
+INCIDENT-2026-08-25) leave no record — needs client-side telemetry, out of scope. RC-1..RC-5 remain UNKNOWN until a
+real burst is captured with this enabled.

@@ -80,3 +80,22 @@ node scripts/perf-report.mjs burst-2026-08-2X.log
   `appsscript.json`/`appsscript_complete.gs` ตามที่ audit อ้าง file:line ไว้
 - `docs/PHASE0-RESULTS.md` — loadtest 15 คนพร้อมกัน (ข้อมูลอ้างอิงเดียวที่มีตัวเลขจริงก่อนหน้านี้)
 - `tests/perf-observability.test.js` — parser tests + meta-tests กัน drift ของ behavior เดิม
+
+---
+
+## อัปเดต 2026-08-26 — Durable capture (Track B, Option C) เพิ่มแล้ว
+
+Phase B `[perfB]` (log-only) ยังอยู่ครบเหมือนเดิม · เพิ่มชั้น **durable** ทับไว้ (commit `9fab351`,
+branch `claude/durable-observability-impl`, **ยังไม่ merge/deploy, ปิดโดย default**).
+
+**เวิร์กโฟลว์เก็บ burst แบบใหม่ (ไม่ต้องนั่งเฝ้า Executions UI):**
+1. เจ้าของรัน **`setupPerfTelemetry()`** 1 ครั้งใน GAS editor (เปิด flag + ตั้ง trigger `drainPerfTelemetry_`)
+2. ระบบเก็บ **1 แถวสรุปต่อ 1 request** ลงชีต **`PERF_TELEMETRY`** อัตโนมัติ (drain ทุก 1 นาที) — คงอยู่ถาวร
+   ไม่หายเมื่อ Executions UI หมดอายุ (ซึ่งคือสาเหตุที่ incident 25/08 + 26/08 ปิดแบบ observability-limited)
+3. หลัง burst: export ชีต `PERF_TELEMETRY` เป็น CSV แล้ววิเคราะห์ (median/p95/lock/zort/cache/corrId) — หรือ
+   ใช้ `[perfB]` log เดิมกับ `scripts/perf-report.mjs` ควบคู่ได้ (parser เข้ากันได้ทั้งสองแบบ)
+4. เลิกใช้: **`disablePerfTelemetry()`** (ลบ trigger · ข้อมูลในชีตยังอยู่)
+
+**คอลัมน์:** id · ts · corrId · kind · action · durMs · cacheKind · sessN · sessMs · lockSummary · zortMs · driveMs ·
+deployVer · schemaVer · **ไม่มี PII** · `corrId` = cid/tid/billCid → ตาม retry ข้าม execution ได้
+**FAIL-OPEN:** telemetry พัง (cache/quota/ชีต) ไม่ทำให้ request พัง · ไม่แตะ lock/timeout/retry ของ business
