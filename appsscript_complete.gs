@@ -767,6 +767,31 @@ function claimLoginHandoffHandler_(data) {
 // ใช้ตัวนี้แทนการเทียบ role === 'owner' ตรง ๆ ทุกจุดที่เป็นการตรวจสิทธิ์
 function isAdminRole_(role) { return role === 'owner' || role === 'dev'; }
 
+// ── F-07: ปิดช่องอ่าน analytics/ใบเสนอราคาที่ปล่อย PII ลูกค้าออกด้วย token สาธารณะอย่างเดียว ──
+// endpoint กลุ่มนี้ (getCustomerAnalytics/getQuotationSummary/getPendingQuotations/
+// getQuotationForPrint/getQuotationDrafts/getDeadStock) เดิมตรวจแค่ APP_TOKEN ที่อยู่ใน
+// config.js (public) → ใครมี URL ก็ดึงเบอร์/อีเมลลูกค้า + ไปป์ไลน์ขายได้ (F-07, ยืนยันบน master)
+// ⚠️ ตัวเรียก frontend เป็น GET และ **ไม่เคยแนบ sessionToken** (dmjFetch แนบให้เฉพาะ POST body)
+//    → เปิดตรวจทันทีจะปฏิเสธทุกคนรวมเจ้าของที่ล็อกอินอยู่ = จอว่าง (failure class เดียวกับ 7.6 rollback)
+//    จึงคุมด้วยธง F07_PROTECTION_ENABLED (default ปิด = พฤติกรรมเดิมเป๊ะ) เปิดพร้อมกันกับที่
+//    frontend เริ่มส่ง &sessionToken= แล้ว · เจ้าของพลิกธงเองเมื่อพร้อม (ห้าม flip production ที่นี่)
+// คืน Response(Unauthorized) เมื่อกัน · คืน null เมื่อผ่าน (ให้ handler เดิมทำงานต่อ)
+// allowedRoles = role เพิ่มนอกจาก owner/dev (เช่น saler/storedevice สำหรับหน้าใบเสนอราคา)
+function f07Guard_(e, allowedRoles) {
+  try {
+    if (String(PropertiesService.getScriptProperties().getProperty('F07_PROTECTION_ENABLED') || '') !== 'true') return null;
+  } catch (err) { return null; }  // อ่าน property ไม่ได้ → คงพฤติกรรมเดิม ไม่ทำให้แย่ลง
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var s = resolveSession_(ss, e && e.parameter && e.parameter.sessionToken);
+  var okRole = s && s.status === 'active' &&
+    (isAdminRole_(s.role) || (allowedRoles && allowedRoles.indexOf(s.role) >= 0));
+  if (!okRole) {
+    return ContentService.createTextOutput(JSON.stringify({ success: false, error: 'Unauthorized' }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  return null;
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 //  เฟส 4 ของระบบล็อกอิน — ตัวตนที่ server ยืนยันเอง (ไม่เชื่อ actor จาก client)
 // ══════════════════════════════════════════════════════════════════════════
@@ -2929,31 +2954,37 @@ function doGet(e) {
 
     // สินค้าจม: ดึงสินค้าที่มีในหน้าร้านแต่ไม่ได้รับโอนมานานกว่า 3 เดือน
     if (e && e.parameter && e.parameter.action === 'getDeadStock') {
+      var _f7a = f07Guard_(e, null); if (_f7a) return _f7a;   // F-07: owner/dev เท่านั้น (แท็บ deadstock)
       return handleGetDeadStock_();
     }
 
     // ใบเสนอราคาค้าง (Pending): ดีลที่รอลูกค้าตัดสินใจ พร้อมข้อมูลติดต่อ — ไว้ตามปิดการขาย
     if (e && e.parameter && e.parameter.action === 'getPendingQuotations') {
+      var _f7b = f07Guard_(e, ['saler', 'storedevice']); if (_f7b) return _f7b;   // F-07: มี PII ลูกค้า
       return handleGetPendingQuotations_();
     }
 
     // ร่างใบเสนอราคาที่ยังไม่ส่งเข้า ZORT (บันทึกไว้ทำต่อทีหลัง)
     if (e && e.parameter && e.parameter.action === 'getQuotationDrafts') {
+      var _f7c = f07Guard_(e, ['saler', 'storedevice']); if (_f7c) return _f7c;   // F-07
       return getQuotationDrafts(SpreadsheetApp.openById(SHEET_ID));
     }
 
     // รายละเอียดใบเสนอราคาเดิม (สำหรับพิมพ์ A4 ย้อนหลัง จากหน้าติดตามสถานะ)
     if (e && e.parameter && e.parameter.action === 'getQuotationForPrint') {
+      var _f7d = f07Guard_(e, ['saler', 'storedevice']); if (_f7d) return _f7d;   // F-07
       return getQuotationForPrint(e.parameter.id || e.parameter.number);
     }
 
     // สรุปสถานะใบเสนอราคา (ทุกสถานะ อนุมัติ/รอ/ยกเลิก) — คืน raw ทั้งหมดให้ frontend รวมเอง
     if (e && e.parameter && e.parameter.action === 'getQuotationSummary') {
+      var _f7e = f07Guard_(e, ['saler', 'storedevice']); if (_f7e) return _f7e;   // F-07
       return handleGetQuotationSummary_();
     }
 
     // สรุปลูกค้า: ยอดซื้อต่อเดือน + Top ลูกค้า + สินค้าที่ซื้อบ่อย (อ่านจากชีตที่ syncZortSales เขียนไว้)
     if (e && e.parameter && e.parameter.action === 'getCustomerAnalytics') {
+      var _f7f = f07Guard_(e, null); if (_f7f) return _f7f;   // F-07: owner/dev เท่านั้น (แท็บ customers)
       return handleGetCustomerAnalytics_();
     }
 
@@ -2997,13 +3028,18 @@ function doGet(e) {
     }
 
     // Debug endpoint: คืน raw row data ของชีตคำสั่งซื้อ (ใช้วินิจฉัย missing rows)
-    // เฉพาะ owner เท่านั้น — ป้องกัน raw sheet data รั่วให้ role อื่น
+    // เฉพาะ owner/dev เท่านั้น — ป้องกัน raw sheet data รั่วให้ role อื่น
+    // ⚠️ ตรวจ session จริง (resolveSession_) ไม่เชื่อ `role` จาก query param ที่ client ส่งเอง —
+    //    เดิมเช็ค isAdminRole_(e.parameter.role) ซึ่ง client ปลอม `role=owner` มาได้เลย (F-08)
+    //    → หลักเดียวกับ getAuditLog/attendancePhoto/staffPerf ที่ย้ายมาใช้ session แล้ว
     if (e && e.parameter && e.parameter.action === 'debugOrders') {
-      if (!isAdminRole_(e.parameter.role)) {
+      const ssDbg = SpreadsheetApp.openById(SHEET_ID);
+      const sDbg  = resolveSession_(ssDbg, e.parameter.sessionToken);
+      if (!sDbg || !isAdminRole_(sDbg.role) || sDbg.status !== 'active') {
         return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Unauthorized" }))
           .setMimeType(ContentService.MimeType.JSON);
       }
-      const ss2 = SpreadsheetApp.openById(SHEET_ID);
+      const ss2 = ssDbg;
       const sh2 = ss2.getSheetByName(SHEET_ORDERS);
       if (!sh2) return ContentService.createTextOutput(JSON.stringify({ error: "ไม่พบชีต" })).setMimeType(ContentService.MimeType.JSON);
       const rawRows = sh2.getDataRange().getValues().slice(0, 15).map(function(r, i) {
