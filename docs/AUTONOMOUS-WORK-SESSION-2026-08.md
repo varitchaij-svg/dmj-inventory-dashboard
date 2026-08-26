@@ -177,6 +177,38 @@ duplicate the branches above — explicitly out of scope per the request.
 
 ---
 
+## 10. WEB PERFORMANCE INCIDENT (2026-08-26 — added at close-out)
+
+- **Status:** closed **OBSERVABILITY LIMITED** — `docs/INCIDENT-WEB-PERFORMANCE-2026-08-26.md`.
+- **Root-cause confidence:** amplifier **CONFIRMED** (client 20 s aborts on payload-retry/`me` vs server slow path
+  21.9 s → abort/retry churn; "Fetch is aborted" = frontend AbortController raw `e.message`, app.jsx:1933 — not LINE).
+  Churn mechanism **STRONG** (`invalidateCache_` on every concurrent stock-count write + `keepWarm_` 19.1 s proving a
+  cold fresh cache mid-incident; build under load ≈2× idle baseline). Same-day triple deploy = contributing condition.
+  Per-stage server decomposition **UNKNOWN** (no `[perfB]` capture — same gap as 2026-08-25 → Track B is prerequisite).
+- **User impact:** startup 68–117 s worst-case during concurrent-write windows; no data loss; login recoverable.
+- **Fix status:** 3 safe fixes documented **READY FOR IMPLEMENTATION, not implemented** (timeout budgets ≥30 s ·
+  `dmjErrText` at app.jsx:1933 · CACHE_NAME-bump discipline) — all touch the 7.6-rollback class → owner gate.
+- **Evidence required to close fully:** one burst window of `[perfB]` logs through `perf-report.mjs` (Track B).
+- **Production deployment blocked?** **No** (no correctness fault) — but performance merges should wait for the
+  timeout-budget decision + Track B.
+
+## 11. FINAL TRACK RECONCILIATION (close-out, 2026-08-26)
+
+| Track | Status | Branch · key commits | Next action | Blocker |
+|---|---|---|---|---|
+| Web perf incident 08-26 | **OBSERVABILITY LIMITED** (closed) | scrutiny branch · incident doc | capture next burst `[perfB]` | RUNTIME EVIDENCE |
+| Security **F-08** | **READY TO MERGE** | `claude/security-debugorders-authz` · `e1787d8` | open PR | — |
+| Security **F-07** (flag-gated, OFF) | **READY TO MERGE** (flip = separate) | same · `d2f28f3`/`578e096` · 2327 tests pass · **0 conflicts vs master `89b6ccb`** | open PR; flip later | flip: OWNER DECISION |
+| MTO Phase 2A (Job→Template) | **READY FOR IMPLEMENTATION** | `docs/mto-jobsku-migration-plan` (gate §11 READY) | implement smallest step when authorized | OWNER GO |
+| MTO custom sale / pricing (Track J) | **ARCHITECTURE READY** | same · `2b2335b` addendum (verdict D; pricing Option A) | owner confirms Option A + fee model | OWNER DECISION + Phase 2C cost wall |
+| SKU taxonomy (Track K) | **BLOCKED — OWNER DECISION** | scrutiny branch · `NEW-PRODUCT-SKU-ANALYSIS` (+deep trace) | owner picks additive/replace | OWNER DECISION |
+| Owner Business Dashboard | **ARCHITECTURE READY** | scrutiny branch · `BUSINESS-OWNER-DASHBOARD-REVIEW` | owner picks L1 tiles → compose | OWNER DECISION (+Track B for exception rows) |
+| Report/Notification Center | **ARCHITECTURE READY (owned elsewhere)** | `docs/report-notification-architecture-review` | merge/gate that branch | sequencing (after perf/observability) |
+| Durable Observability (Track B) | **ARCHITECTURE READY (owned elsewhere)** | `claude/durable-observability-design-v1` (Option C) | implement Option C — now the **top prerequisite** (2 incidents closed observability-limited) | OWNER GO |
+| Backend Stability / RC-1..5 | **BLOCKED — RUNTIME EVIDENCE** | audit branch + Phase B on master | burst capture via Track B | RUNTIME EVIDENCE |
+| LINE dead-letter (F-10) | **DEFERRED** (design noted in scrutiny + gate §9) | — | after Track B | sequencing |
+| Full-system scrutiny + delta + reconciliation | **DONE** | `claude/full-system-scrutiny-2026-08` | consume | — |
+
 ## Final summary
 
 The audit baseline was **outdated** (`3dbc41d`, 67 commits behind master `b7e5f1e`) — the validation gate was correct
