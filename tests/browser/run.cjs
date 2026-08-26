@@ -1052,6 +1052,167 @@ function startServer() {
     await page.close();
   }
 
+  // ── (จ2.8) Product-first Stock Count — นับตามสินค้า เป็น DEFAULT ─────────────────
+  // เปิดแท็บนับ stock คลัง → เห็น product list + search ทันที (ไม่ต้องกด ซอย→ชั้น)
+  // fixture: VAS001(ล็อค A1/5), FLW002(ล็อค A0), DEC003(ไม่มีตำแหน่ง), MTO900(MTO→ตัด)
+  {
+    const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=warehouse&tab=stockcount`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, 'warehouse', 'stockcount');
+      await page.waitForTimeout(500);
+      if (!navOk) { status = 'NAV_FAIL'; note = 'ไปแท็บนับ stock คลังไม่สำเร็จ'; }
+      else {
+        const body = await page.evaluate(() => document.body.innerText);
+        const hasHeader = body.includes('นับตามสินค้า');
+        const hasSearch = await page.locator('input[placeholder*="บาร์โค้ด"]').count();
+        const hasCards  = body.includes('DEC003') && body.includes('VAS001');
+        const noMto     = !body.includes('MTO900');
+        if (!hasHeader)      { status = 'NO_DEFAULT'; note = 'ไม่เข้า product-first เป็น default (ไม่พบหัวข้อ "นับตามสินค้า")'; }
+        else if (!hasSearch) { status = 'NO_SEARCH';  note = 'ไม่พบช่องค้นหา/สแกนใน product-first'; }
+        else if (!hasCards)  { status = 'NO_CARDS';   note = 'ไม่เห็นการ์ดสินค้าทันที (DEC003/VAS001)'; }
+        else if (!noMto)     { status = 'MTO_SHOWN';  note = 'MTO900 โผล่ใน physical stock count (ไม่ควรมี)'; }
+        else { note = 'เปิดแท็บ → product-first เป็น default: มี search + การ์ด (DEC003/VAS001) ทันที · MTO ถูกตัด'; }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'stockcount-product-default.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'Product-first เป็น default (warehouse)', status, note });
+    await page.close();
+  }
+
+  // ── (จ2.9) Product-first — SKU ไม่มีตำแหน่ง ต้องค้นเจอ + นับ + auto-save ──────────
+  // DEC003 = ไม่มีล็อค (visibility invariant): "ไม่มีตำแหน่ง" ≠ "นับไม่ได้"
+  {
+    const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=warehouse&tab=stockcount`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, 'warehouse', 'stockcount');
+      await page.waitForTimeout(400);
+      if (!navOk) { status = 'NAV_FAIL'; note = 'ไปแท็บนับ stock คลังไม่สำเร็จ'; }
+      else {
+        await page.fill('input[placeholder*="บาร์โค้ด"]', 'DEC003').catch(() => {});
+        await page.waitForTimeout(400);
+        const body = await page.evaluate(() => document.body.innerText);
+        const noLoc = body.includes('ไม่มีตำแหน่ง') && body.includes('DEC003');
+        const plus5 = page.locator('button', { hasText: /^\+5$/ }).first();
+        if (!noLoc) { status = 'NO_NOLOC'; note = 'ค้น DEC003 แล้วไม่เห็นการ์ด "ไม่มีตำแหน่ง"'; }
+        else if (!(await plus5.count())) { status = 'NO_COUNT_BTN'; note = 'ไม่พบปุ่ม +5 บนการ์ด'; }
+        else {
+          await plus5.click({ timeout: 2000 }).catch(() => {});
+          await page.waitForTimeout(4200); // auto-save debounce 3 วิ + POST
+          const saved = await page.getByText('บันทึกแล้ว', { exact: false }).count();
+          if (saved === 0) { status = 'NO_AUTOSAVE'; note = 'นับ DEC003 (ไม่มีตำแหน่ง) แล้ว auto-save ไม่ขึ้น "บันทึกแล้ว"'; }
+          else { note = 'ค้น DEC003 (ไม่มีตำแหน่ง) → +5 → auto-save → "บันทึกแล้ว" (นับได้จริงแม้ไม่มีตำแหน่ง)'; }
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'stockcount-product-noloc.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'Product-first — SKU ไม่มีตำแหน่ง นับ+auto-save (warehouse)', status, note });
+    await page.close();
+  }
+
+  // ── (จ2.10) Product-first — qty=0 ต้อง save ได้ (R1: 0 !== undefined) ────────────
+  {
+    const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=warehouse&tab=stockcount`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, 'warehouse', 'stockcount');
+      await page.waitForTimeout(400);
+      if (!navOk) { status = 'NAV_FAIL'; note = 'ไปแท็บนับ stock คลังไม่สำเร็จ'; }
+      else {
+        await page.fill('input[placeholder*="บาร์โค้ด"]', 'DEC003').catch(() => {});
+        await page.waitForTimeout(400);
+        // การ์ดยังไม่นับ (cur ว่าง) → กด -1 = max(0, 0-1) = 0 → checkedQtys='0' → auto-save qty 0
+        const minus1 = page.locator('button', { hasText: /^-1$/ }).first();
+        if (!(await minus1.count())) { status = 'NO_COUNT_BTN'; note = 'ไม่พบปุ่ม -1 บนการ์ด'; }
+        else {
+          await minus1.click({ timeout: 2000 }).catch(() => {});
+          await page.waitForTimeout(4200);
+          const saved = await page.getByText('บันทึกแล้ว', { exact: false }).count();
+          if (saved === 0) { status = 'NO_ZERO_SAVE'; note = 'ตั้งจำนวน 0 แล้ว auto-save ไม่ขึ้น "บันทึกแล้ว"'; }
+          else { note = 'ตั้ง DEC003 = 0 → auto-save → "บันทึกแล้ว" (qty=0 บันทึกได้)'; }
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'stockcount-product-zero.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'Product-first — qty=0 save ได้ (warehouse)', status, note });
+    await page.close();
+  }
+
+  // ── (จ2.11) Product-first — filter "ไม่มีตำแหน่ง" + "stock = 0" ─────────────────
+  {
+    const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=warehouse&tab=stockcount`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, 'warehouse', 'stockcount');
+      await page.waitForTimeout(400);
+      if (!navOk) { status = 'NAV_FAIL'; note = 'ไปแท็บนับ stock คลังไม่สำเร็จ'; }
+      else {
+        // filter "ไม่มีตำแหน่ง" → เห็น DEC003, ไม่เห็น VAS001
+        await page.locator('button', { hasText: 'ไม่มีตำแหน่ง' }).first().click({ timeout: 2000 }).catch(() => {});
+        await page.waitForTimeout(400);
+        let body = await page.evaluate(() => document.body.innerText);
+        const nolocOk = body.includes('DEC003') && !body.includes('VAS001');
+        // filter stock=0 → fixture ไม่มี qtyWH=0 (non-MTO) → ไม่เห็น VAS001 (empty/ไม่พบ)
+        await page.locator('button', { hasText: 'ไม่มีตำแหน่ง' }).first().click({ timeout: 2000 }).catch(() => {}); // reset off (กลับ 'all' ผ่านปุ่ม? — ใช้ "ทั้งหมด")
+        await page.locator('button', { hasText: /^ทั้งหมด$/ }).first().click({ timeout: 2000 }).catch(() => {});
+        await page.waitForTimeout(200);
+        await page.locator('button', { hasText: 'stock = 0' }).first().click({ timeout: 2000 }).catch(() => {});
+        await page.waitForTimeout(400);
+        body = await page.evaluate(() => document.body.innerText);
+        const stockZeroOk = !body.includes('VAS001'); // VAS001 qtyWH=25 → ถูกกรองออก
+        if (!nolocOk)          { status = 'NOLOC_FILTER_FAIL'; note = 'filter "ไม่มีตำแหน่ง" ผิด (DEC003 หาย หรือ VAS001 ยังโผล่)'; }
+        else if (!stockZeroOk) { status = 'STOCK0_FILTER_FAIL'; note = 'filter "stock=0" ไม่กรอง VAS001(qtyWH=25) ออก'; }
+        else { note = 'filter "ไม่มีตำแหน่ง" → เห็นเฉพาะ DEC003 · filter "stock=0" → VAS001 ถูกกรองออก'; }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'stockcount-product-filter.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'Product-first — filter ไม่มีตำแหน่ง/stock=0 (warehouse)', status, note });
+    await page.close();
+  }
+
+  // ── (จ2.12) Product-first ↔ Location-first สลับได้ (workflow เดิมไม่หาย) ─────────
+  {
+    const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=warehouse&tab=stockcount`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, 'warehouse', 'stockcount');
+      await page.waitForTimeout(400);
+      if (!navOk) { status = 'NAV_FAIL'; note = 'ไปแท็บนับ stock คลังไม่สำเร็จ'; }
+      else {
+        const toLoc = page.locator('button', { hasText: 'นับตามตำแหน่ง' }).first();
+        if (!(await toLoc.count())) { status = 'NO_TOGGLE'; note = 'ไม่พบปุ่มสลับ "นับตามตำแหน่ง"'; }
+        else {
+          await toLoc.click({ timeout: 2000 }).catch(() => {});
+          await page.waitForTimeout(400);
+          const backBtn = page.locator('button', { hasText: 'กลับไปนับตามสินค้า' }).first();
+          const inLocation = (await backBtn.count()) > 0; // ปุ่มนี้มีเฉพาะ location step 1
+          if (!inLocation) { status = 'NO_LOCATION'; note = 'สลับไป location-first แล้วไม่เจอ step 1 (ปุ่มกลับ)'; }
+          else {
+            await backBtn.click({ timeout: 2000 }).catch(() => {});
+            await page.waitForTimeout(400);
+            const backToProduct = await page.locator('button', { hasText: 'นับตามตำแหน่ง' }).first().count();
+            if (!backToProduct) { status = 'NO_BACK'; note = 'กลับไป product-first ไม่สำเร็จ'; }
+            else { note = 'สลับ product-first → location-first (step 1) → กลับ product-first ได้ครบ'; }
+          }
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'stockcount-product-switch.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'Product-first ↔ Location-first สลับได้ (warehouse)', status, note });
+    await page.close();
+  }
+
   // ── (จ3) ขายออนไลน์: กรอกครบ → บันทึก → ได้ "สรุปคำสั่งซื้อ" ไม่ใช่ใบเสร็จปริ้น ──
   // ต้องรันบนเบราว์เซอร์จริงเพราะสิ่งที่ทดสอบคือ **ตัวเลขบนจอที่ลูกค้าจะเห็น** — ค่าส่งบวกเข้า
   // ยอดจริงไหม, เลขบัญชีขึ้นให้ลูกค้าโอนไหม, ที่อยู่ตามไปบนสรุปไหม · unit test เห็นแค่ source
