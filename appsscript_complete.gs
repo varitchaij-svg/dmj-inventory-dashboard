@@ -841,7 +841,11 @@ var COMMON_ACTIONS_ = ["order", "updateOrderState", "transferStock", "transferSt
                         "markNotiRead",
                         // ⭐ ปุ่มดาว "สินค้าที่ฉันดูแล" — เป็นป้ายบอกว่าใครดูแล ไม่ใช่สิทธิ์ทำอะไร
                         // ทุกคนตั้ง/ถอดของตัวเองได้ (handler บังคับให้เขียนได้เฉพาะ staffId ของ session)
-                        "setProductOwner"];
+                        "setProductOwner",
+                        // 🗂️ อ่านทะเบียน Registry (D06–D09) — Add Product ต้องเลือก prefix/family/form/variant
+                        //    ที่ ACTIVE ได้ทุก role ที่มีแท็บเพิ่มสินค้า · write (save*) เป็น Owner/Admin เท่านั้น
+                        //    (ไม่อยู่ที่นี่ — ผ่าน isAdminRole_ ใน canDoOrNull_ + self-gate ในแต่ละ handler)
+                        "listPrefixRegistry", "listFamilyRegistry", "listFormRegistry", "listVariantRegistry"];
 
 var ROLE_ACTIONS_ = {
   // createStockCheck = ปุ่มลอย 📤 "ส่งคำขอเช็คสต็อก" ในแท็บ "สินค้า & สั่ง" (ดู canSendCheck
@@ -1877,7 +1881,7 @@ const STAFF_PERF_CATEGORIES_ = [
   { key: "quote",      emoji: "📄", label: "ใบเสนอราคา",         ops: true,  unit: "ใบ",    prefixes: ["สร้างใบเสนอราคา", "แก้ไขใบเสนอราคา", "อนุมัติใบเสนอราคา", "ปิดใบเสนอราคา"] },
   { key: "adjust",     emoji: "⚙️", label: "ปรับ/ลบข้อมูล",      ops: false, unit: "ครั้ง",  prefixes: ["ปรับสต็อก0", "resetNegativeStock", "ลบ order", "ล้างค่าเช็คหน้าร้าน"] },
   { key: "star",       emoji: "⭐", label: "ตั้งผู้ดูแลสินค้า",   ops: false, unit: "ครั้ง",  prefixes: ["setProductOwner", "clearProductOwner"] },
-  { key: "admin",      emoji: "🔧", label: "ตั้งค่าระบบ",        ops: false, unit: "ครั้ง",  prefixes: ["แก้ไขพนักงาน", "แก้ไขการลงเวลา", "saveThresholds", "ตั้งตำแหน่งพนักงาน"] },
+  { key: "admin",      emoji: "🔧", label: "ตั้งค่าระบบ",        ops: false, unit: "ครั้ง",  prefixes: ["แก้ไขพนักงาน", "แก้ไขการลงเวลา", "saveThresholds", "ตั้งตำแหน่งพนักงาน", "ทะเบียน Prefix", "ทะเบียน Family", "ทะเบียน Form", "ทะเบียน Variant"] },
   { key: "punch",      emoji: "🕐", label: "กดลงเวลา",           ops: false, unit: "ครั้ง",  skip: true, prefixes: ["ลงเวลา"] },
 ];
 const STAFF_PERF_OTHER_ = { key: "other", emoji: "➖", label: "อื่นๆ", ops: false, unit: "ครั้ง" };
@@ -2432,6 +2436,17 @@ function doPost(e) {
     // 📝 บันทึกโน้ตติดตามใบเสนอราคา — เขียนชีตของตัวเอง ไม่แตะสต็อก/ออเดอร์
     // อยู่เหนือ invalidateCache_ ด้วยเหตุผลเดียวกับ markNotiRead/setProductOwner
     if (data.action === 'saveQuoteFollowup') return saveQuoteFollowupHandler_(ss, data);
+
+    // ─── 🗂️ Product Registry (D06–D09) — อ่าน/เขียนทะเบียน ไม่แตะสต็อก/ออเดอร์ ───
+    // list = อ่าน (any session) · save = Owner/Admin เท่านั้น (self-gated ในแต่ละ handler)
+    // อยู่เหนือ invalidateCache_(true) เหมือน setProductOwner (save handler เรียก invalidateCache_ เอง)
+    if (data.action === 'listPrefixRegistry')  return listPrefixRegistryHandler_(ss, data);
+    if (data.action === 'savePrefixRegistry')  return savePrefixRegistryHandler_(ss, data, actor);
+    if (data.action === 'listFamilyRegistry')  return listFamilyRegistryHandler_(ss, data);
+    if (data.action === 'saveFamilyRegistry')  return saveFamilyRegistryHandler_(ss, data, actor);
+    if (data.action === 'listFormRegistry')    return listFormRegistryHandler_(ss, data);
+    if (data.action === 'listVariantRegistry') return listVariantRegistryHandler_(ss, data);
+    if (data.action === 'saveVariantRegistry') return saveVariantRegistryHandler_(ss, data, actor);
 
     // มีการแก้ข้อมูล → ล้าง cache ให้ doGet ครั้งถัดไปคำนวณใหม่ (ข้อมูลไม่ค้าง)
     invalidateCache_(true); // clear payload cache เท่านั้น — ห้าม bump dmj_last_write_ts ก่อน conflict check
@@ -16212,4 +16227,436 @@ function perfMeasureBuild() {
   const out = lines.join('\n');
   Logger.log(out);
   return out;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PHASE 3 — PRODUCT DOMAIN REGISTRY FOUNDATION (Work 8 · D06–D09)
+// ───────────────────────────────────────────────────────────────────────────
+// SAFE ROLLOUT: ทุก registry gate ด้วย Script Property *_ENABLED='true'
+//   ยังไม่เปิด → list endpoint คืน {off:true} · write endpoint คืน error สุภาพ
+//   (deploy แล้วไม่มีอะไรเปลี่ยนจนกว่าเจ้าของรัน setupProductRegistry() 1 ครั้ง)
+// Business hierarchy (D02): Business Family → Product Type/Form → Variant → SKU
+//   Prefix ≠ Family · Model ≠ Family · Variant rule ผูกกับ Form (D08)
+// Existing SKU/Barcode = immutable (D01/D02) — registry ไม่แตะของเดิมเลย (additive)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── D06 · Prefix Registry ──────────────────────────────────────────────────
+const SHEET_PREFIX_REGISTRY = "ทะเบียน Prefix";
+var PREFIX_REG_COL = { PREFIX:1, STATUS:2, LABEL:3, CREATED:4, CREATEDBY:5, UPDATED:6, UPDATEDBY:7, NOTE:8 };
+var PREFIX_REG_HEADERS = ["prefix","status","คำอธิบาย","createdAt","createdBy","updatedAt","updatedBy","หมายเหตุ"];
+var PREFIX_REG_STATUSES = ["ACTIVE","FROZEN"];
+var PREFIX_REG_MAX_ROWS = 5000;
+
+// pure — normalize/validate prefix (A-Z 1-3) · มีสำเนาใน tests/helpers.js (drift-guard)
+function prefixRegNormalize_(raw) { return String(raw||'').trim().toUpperCase().replace(/[^A-Z]/g,''); }
+function prefixRegValidate_(raw) {
+  var p = prefixRegNormalize_(raw);
+  if (!p) return { ok:false, error:'กรุณาระบุ Prefix' };
+  if (!/^[A-Z]{1,3}$/.test(p)) return { ok:false, error:'Prefix ต้องเป็นตัวอักษร A-Z 1-3 ตัว' };
+  return { ok:true, prefix:p };
+}
+function prefixRegStatusValid_(status) {
+  return PREFIX_REG_STATUSES.indexOf(String(status||'').trim().toUpperCase()) >= 0;
+}
+// D05/D06: "L" = FREEZE สำหรับสินค้าใหม่ → ห้ามตั้ง ACTIVE เด็ดขาด (L routing ยัง deferred)
+function prefixRegCanBeActive_(prefix) { return prefixRegNormalize_(prefix) !== 'L'; }
+// rows (ไม่รวม header) → array {prefix,status,label} · เก็บแถวล่าสุดต่อ prefix (เขียนทับ)
+function prefixRegListFromRows_(rows) {
+  var seen = {}, out = [];
+  for (var i = 0; i < (rows||[]).length; i++) {
+    var r = rows[i];
+    var pfx = prefixRegNormalize_(r[PREFIX_REG_COL.PREFIX - 1]);
+    if (!pfx) continue;
+    var status = String(r[PREFIX_REG_COL.STATUS - 1] || '').trim().toUpperCase();
+    if (PREFIX_REG_STATUSES.indexOf(status) < 0) status = 'FROZEN'; // ไม่รู้จัก = ปลอดภัยไว้ก่อน
+    var rec = { prefix:pfx, status:status, label:String(r[PREFIX_REG_COL.LABEL - 1]||'').trim() };
+    if (seen[pfx] !== undefined) out[seen[pfx]] = rec; else { seen[pfx] = out.length; out.push(rec); }
+  }
+  return out;
+}
+// หาแถว (0-based ในชุด rows ที่ไม่รวม header) ของ prefix นี้ — ไม่เจอคืน -1
+function prefixRegFindRow_(rows, prefix) {
+  var pfx = prefixRegNormalize_(prefix);
+  for (var i = 0; i < (rows||[]).length; i++) {
+    if (prefixRegNormalize_(rows[i][PREFIX_REG_COL.PREFIX - 1]) === pfx) return i;
+  }
+  return -1;
+}
+function prefixRegistryEnabled_() {
+  return PropertiesService.getScriptProperties().getProperty('PREFIX_REGISTRY_ENABLED') === 'true';
+}
+function prefixRegistrySheet_(ss) { return getOrCreateSheet_(ss, SHEET_PREFIX_REGISTRY, PREFIX_REG_HEADERS); }
+function readPrefixRegistryRows_(ss) {
+  var sh = ss.getSheetByName(SHEET_PREFIX_REGISTRY);
+  if (!sh) return [];
+  var last = Math.min(sh.getLastRow(), PREFIX_REG_MAX_ROWS + 1);
+  if (last < 2) return [];
+  return sh.getRange(2, 1, last - 1, PREFIX_REG_HEADERS.length).getValues();
+}
+// list — ใครล็อกอินอยู่ก็อ่านได้ (Add Product ต้องเลือก prefix ที่ ACTIVE)
+function listPrefixRegistryHandler_(ss, data) {
+  if (!prefixRegistryEnabled_()) return ok({ off:true, prefixes:[] });
+  var sess = resolveSession_(ss, data.sessionToken);
+  var list = prefixRegListFromRows_(readPrefixRegistryRows_(ss));
+  return ok({ off:false, prefixes:list,
+    me: sess ? { staffId:sess.staffId, admin:isAdminRole_(sess.role) } : null });
+}
+// save (create/update/status) — Owner/Admin เท่านั้น (D06 governance) · deny-by-default
+function savePrefixRegistryHandler_(ss, data, actor) {
+  if (!prefixRegistryEnabled_()) return error('ระบบทะเบียน Prefix ยังไม่เปิดใช้งาน');
+  var sess = resolveSession_(ss, data.sessionToken);
+  if (!sess || !isAdminRole_(sess.role) || sess.status !== 'active') return unauthorized_();
+  var v = prefixRegValidate_(data.prefix);
+  if (!v.ok) return error(v.error);
+  var status = String(data.status||'').trim().toUpperCase();
+  if (!prefixRegStatusValid_(status)) return error('สถานะต้องเป็น ACTIVE หรือ FROZEN');
+  if (status === 'ACTIVE' && !prefixRegCanBeActive_(v.prefix))
+    return error('Prefix "L" ถูกแช่แข็ง (FREEZE) สำหรับสินค้าใหม่ — ตั้ง ACTIVE ไม่ได้');
+  var label = String(data.label||'').trim().slice(0,120);
+  var note  = String(data.note||'').trim().slice(0,200);
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return error('ระบบไม่ว่าง ลองใหม่อีกครั้ง');
+  try {
+    var sh = prefixRegistrySheet_(ss);
+    var rows = readPrefixRegistryRows_(ss);
+    var idx = prefixRegFindRow_(rows, v.prefix);
+    var now = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd HH:mm');
+    if (idx >= 0) {
+      var rowNum = idx + 2;
+      sh.getRange(rowNum, PREFIX_REG_COL.STATUS).setValue(status);
+      sh.getRange(rowNum, PREFIX_REG_COL.LABEL).setValue(label);
+      sh.getRange(rowNum, PREFIX_REG_COL.UPDATED).setValue(now);
+      sh.getRange(rowNum, PREFIX_REG_COL.UPDATEDBY).setValue(actor||'');
+      sh.getRange(rowNum, PREFIX_REG_COL.NOTE).setValue(note);
+    } else {
+      sh.appendRow([v.prefix, status, label, now, actor||'', now, actor||'', note]);
+    }
+    SpreadsheetApp.flush();
+    writeAuditLog_(actor||'ไม่ระบุ', 'ทะเบียน Prefix', v.prefix,
+      auditDetail_({ after:{ status:status, label:label }, note:'บันทึกทะเบียน Prefix' }));
+    invalidateCache_();
+    return ok({ prefix:v.prefix, status:status });
+  } finally { lock.releaseLock(); }
+}
+
+// ── D07 · Business Family Registry ─────────────────────────────────────────
+const SHEET_FAMILY_REGISTRY = "ทะเบียน Family";
+var FAMILY_REG_COL = { ID:1, NAME:2, STATUS:3, CREATED:4, CREATEDBY:5, UPDATED:6, UPDATEDBY:7, NOTE:8 };
+var FAMILY_REG_HEADERS = ["family_id","name","status","createdAt","createdBy","updatedAt","updatedBy","หมายเหตุ"];
+var FAMILY_REG_MAX_ROWS = 20000;
+var FAMILY_ID_PREFIX = "FAM";
+
+// pure — normalize family name เพื่อตรวจซ้ำ (ตัด zero-width/ช่องว่าง/ตัวพิมพ์) — ญาติ productOwnerNormKey_
+function familyRegNormName_(raw) {
+  return String(raw||'').replace(/[​-‏﻿]/g,'').replace(/\s+/g,'').toLowerCase();
+}
+function familyRegValidate_(raw) {
+  var name = String(raw||'').trim();
+  if (!name) return { ok:false, error:'กรุณาระบุชื่อ Business Family' };
+  if (name.length > 120) return { ok:false, error:'ชื่อ Family ยาวเกินไป' };
+  return { ok:true, name:name };
+}
+// rows → array {familyId,name,status} เก็บล่าสุดต่อ family_id
+function familyRegListFromRows_(rows) {
+  var out = [];
+  for (var i = 0; i < (rows||[]).length; i++) {
+    var r = rows[i];
+    var id = String(r[FAMILY_REG_COL.ID - 1]||'').trim();
+    if (!id) continue;
+    var status = String(r[FAMILY_REG_COL.STATUS - 1]||'').trim().toUpperCase() || 'ACTIVE';
+    out.push({ familyId:id, name:String(r[FAMILY_REG_COL.NAME - 1]||'').trim(), status:status });
+  }
+  return out;
+}
+// หา family_id ที่ชื่อชนกัน (normalized) — กัน duplicate ก่อนสร้าง (D07 ค้นหา/ตรวจ duplicate)
+function familyRegFindByName_(rows, name) {
+  var key = familyRegNormName_(name);
+  if (!key) return null;
+  for (var i = 0; i < (rows||[]).length; i++) {
+    if (familyRegNormName_(rows[i][FAMILY_REG_COL.NAME - 1]) === key)
+      return String(rows[i][FAMILY_REG_COL.ID - 1]||'').trim();
+  }
+  return null;
+}
+// next family_id (FAM00001) — pure ต่อ rows ที่ส่งเข้ามา
+function familyRegNextId_(rows) {
+  var max = 0;
+  for (var i = 0; i < (rows||[]).length; i++) {
+    var id = String(rows[i][FAMILY_REG_COL.ID - 1]||'').trim();
+    var m = id.match(new RegExp('^' + FAMILY_ID_PREFIX + '(\\d+)$'));
+    if (m) { var n = parseInt(m[1],10); if (n > max) max = n; }
+  }
+  return FAMILY_ID_PREFIX + String(max + 1).padStart(5, '0');
+}
+function familyRegistryEnabled_() {
+  return PropertiesService.getScriptProperties().getProperty('FAMILY_REGISTRY_ENABLED') === 'true';
+}
+function familyRegistrySheet_(ss) { return getOrCreateSheet_(ss, SHEET_FAMILY_REGISTRY, FAMILY_REG_HEADERS); }
+function readFamilyRegistryRows_(ss) {
+  var sh = ss.getSheetByName(SHEET_FAMILY_REGISTRY);
+  if (!sh) return [];
+  var last = Math.min(sh.getLastRow(), FAMILY_REG_MAX_ROWS + 1);
+  if (last < 2) return [];
+  return sh.getRange(2, 1, last - 1, FAMILY_REG_HEADERS.length).getValues();
+}
+function listFamilyRegistryHandler_(ss, data) {
+  if (!familyRegistryEnabled_()) return ok({ off:true, families:[] });
+  var sess = resolveSession_(ss, data.sessionToken);
+  return ok({ off:false, families:familyRegListFromRows_(readFamilyRegistryRows_(ss)),
+    me: sess ? { staffId:sess.staffId, admin:isAdminRole_(sess.role) } : null });
+}
+// create/edit Family — Owner/Admin · กัน duplicate ชื่อ (คืนตัวเดิมถ้าชนโดยตั้งใจ)
+function saveFamilyRegistryHandler_(ss, data, actor) {
+  if (!familyRegistryEnabled_()) return error('ระบบทะเบียน Family ยังไม่เปิดใช้งาน');
+  var sess = resolveSession_(ss, data.sessionToken);
+  if (!sess || !isAdminRole_(sess.role) || sess.status !== 'active') return unauthorized_();
+  var v = familyRegValidate_(data.name);
+  if (!v.ok) return error(v.error);
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return error('ระบบไม่ว่าง ลองใหม่อีกครั้ง');
+  try {
+    var rows = readFamilyRegistryRows_(ss);
+    var editId = String(data.familyId||'').trim();
+    var now = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd HH:mm');
+    var sh = familyRegistrySheet_(ss);
+    if (editId) {
+      for (var i = 0; i < rows.length; i++) {
+        if (String(rows[i][FAMILY_REG_COL.ID - 1]||'').trim() === editId) {
+          var rowNum = i + 2;
+          sh.getRange(rowNum, FAMILY_REG_COL.NAME).setValue(v.name);
+          if (data.status) sh.getRange(rowNum, FAMILY_REG_COL.STATUS).setValue(String(data.status).trim().toUpperCase());
+          sh.getRange(rowNum, FAMILY_REG_COL.UPDATED).setValue(now);
+          sh.getRange(rowNum, FAMILY_REG_COL.UPDATEDBY).setValue(actor||'');
+          SpreadsheetApp.flush();
+          writeAuditLog_(actor||'ไม่ระบุ', 'ทะเบียน Family', editId, auditDetail_({ after:{ name:v.name }, note:'แก้ Family' }));
+          invalidateCache_();
+          return ok({ familyId:editId, name:v.name, updated:true });
+        }
+      }
+      return error('ไม่พบ Family ที่ต้องการแก้ (อาจถูกลบ) — โปรดรีเฟรช');
+    }
+    var dup = familyRegFindByName_(rows, v.name);
+    if (dup) return ok({ familyId:dup, name:v.name, duplicate:true });
+    var id = familyRegNextId_(rows);
+    sh.appendRow([id, v.name, 'ACTIVE', now, actor||'', now, actor||'', '']);
+    SpreadsheetApp.flush();
+    writeAuditLog_(actor||'ไม่ระบุ', 'ทะเบียน Family', id, auditDetail_({ after:{ name:v.name }, note:'สร้าง Family ใหม่' }));
+    invalidateCache_();
+    return ok({ familyId:id, name:v.name, created:true });
+  } finally { lock.releaseLock(); }
+}
+
+// ── D08 · Product Type/Form Registry ───────────────────────────────────────
+const SHEET_FORM_REGISTRY = "ทะเบียน Form";
+var FORM_REG_COL = { ID:1, BASENAME:2, CATEGORY:3, FAMILY:4, PREFIX:5, MODEL:6, AXIS:7,
+                     STATUS:8, CREATED:9, CREATEDBY:10, UPDATED:11, UPDATEDBY:12, NOTE:13 };
+var FORM_REG_HEADERS = ["form_id","baseName","category","family_id","prefix","model","variantAxis",
+                        "status","createdAt","createdBy","updatedAt","updatedBy","หมายเหตุ"];
+var FORM_REG_MAX_ROWS = 50000;
+var FORM_ID_PREFIX = "FRM";
+var FORM_VARIANT_AXES = ["COLOR","SIZE","MATERIAL","STYLE","NONE"];   // D03
+
+function formRegAxisValid_(axis) { return FORM_VARIANT_AXES.indexOf(String(axis||'').trim().toUpperCase()) >= 0; }
+function formRegListFromRows_(rows) {
+  var out = [];
+  for (var i = 0; i < (rows||[]).length; i++) {
+    var r = rows[i];
+    var id = String(r[FORM_REG_COL.ID - 1]||'').trim();
+    if (!id) continue;
+    out.push({
+      formId:id, baseName:String(r[FORM_REG_COL.BASENAME - 1]||'').trim(),
+      category:String(r[FORM_REG_COL.CATEGORY - 1]||'').trim(),
+      familyId:String(r[FORM_REG_COL.FAMILY - 1]||'').trim() || null,
+      prefix:prefixRegNormalize_(r[FORM_REG_COL.PREFIX - 1]),
+      model:String(r[FORM_REG_COL.MODEL - 1]||'').trim(),
+      axis:String(r[FORM_REG_COL.AXIS - 1]||'').trim().toUpperCase() || 'NONE',
+      status:String(r[FORM_REG_COL.STATUS - 1]||'').trim().toUpperCase() || 'ACTIVE'
+    });
+  }
+  return out;
+}
+function formRegNextId_(rows) {
+  var max = 0;
+  for (var i = 0; i < (rows||[]).length; i++) {
+    var id = String(rows[i][FORM_REG_COL.ID - 1]||'').trim();
+    var m = id.match(new RegExp('^' + FORM_ID_PREFIX + '(\\d+)$'));
+    if (m) { var n = parseInt(m[1],10); if (n > max) max = n; }
+  }
+  return FORM_ID_PREFIX + String(max + 1).padStart(5, '0');
+}
+// ตรวจ Form ซ้ำ (prefix+model ชนกัน = แบบเดียวกันถูกสร้างซ้ำ) — คืน form_id ที่ชนหรือ null
+function formRegFindByPrefixModel_(rows, prefix, model) {
+  var pfx = prefixRegNormalize_(prefix), mdl = String(model||'').trim();
+  if (!pfx || !mdl) return null;
+  for (var i = 0; i < (rows||[]).length; i++) {
+    if (prefixRegNormalize_(rows[i][FORM_REG_COL.PREFIX - 1]) === pfx &&
+        String(rows[i][FORM_REG_COL.MODEL - 1]||'').trim() === mdl)
+      return String(rows[i][FORM_REG_COL.ID - 1]||'').trim();
+  }
+  return null;
+}
+function formRegistryEnabled_() {
+  return PropertiesService.getScriptProperties().getProperty('FORM_REGISTRY_ENABLED') === 'true';
+}
+function formRegistrySheet_(ss) { return getOrCreateSheet_(ss, SHEET_FORM_REGISTRY, FORM_REG_HEADERS); }
+function readFormRegistryRows_(ss) {
+  var sh = ss.getSheetByName(SHEET_FORM_REGISTRY);
+  if (!sh) return [];
+  var last = Math.min(sh.getLastRow(), FORM_REG_MAX_ROWS + 1);
+  if (last < 2) return [];
+  return sh.getRange(2, 1, last - 1, FORM_REG_HEADERS.length).getValues();
+}
+function listFormRegistryHandler_(ss, data) {
+  if (!formRegistryEnabled_()) return ok({ off:true, forms:[] });
+  var sess = resolveSession_(ss, data.sessionToken);
+  return ok({ off:false, forms:formRegListFromRows_(readFormRegistryRows_(ss)),
+    me: sess ? { staffId:sess.staffId, admin:isAdminRole_(sess.role) } : null });
+}
+// NOTE: การ "สร้าง Form ใหม่ (จองโมเดล)" ผูกกับ SKU reservation (D05) — อยู่ Phase B
+//       (reserveFormAndModel_) · Phase A มีแค่ data layer + list + pure helpers
+
+// ── D09 · Variant Value Registry (per axis) ────────────────────────────────
+const SHEET_VARIANT_REGISTRY = "ทะเบียน Variant";
+var VARIANT_REG_COL = { AXIS:1, CODE:2, LABEL:3, STATUS:4, CREATED:5, CREATEDBY:6, NOTE:7 };
+var VARIANT_REG_HEADERS = ["axis","code","label","status","createdAt","createdBy","หมายเหตุ"];
+var VARIANT_REG_MAX_ROWS = 20000;
+
+function variantRegAxisValid_(axis) { return FORM_VARIANT_AXES.indexOf(String(axis||'').trim().toUpperCase()) >= 0; }
+// D09: variant code เป็น axis-scoped (code ซ้ำข้าม axis ได้ · ห้ามซ้ำใน axis เดียวกัน)
+function variantRegMapFromRows_(rows) {
+  var out = {};   // axis → [{code,label,status}]
+  var seen = {};  // axis|code → index
+  for (var i = 0; i < (rows||[]).length; i++) {
+    var r = rows[i];
+    var axis = String(r[VARIANT_REG_COL.AXIS - 1]||'').trim().toUpperCase();
+    var code = String(r[VARIANT_REG_COL.CODE - 1]||'').trim();
+    if (!axis || !code) continue;
+    var rec = { code:code, label:String(r[VARIANT_REG_COL.LABEL - 1]||'').trim(),
+                status:String(r[VARIANT_REG_COL.STATUS - 1]||'').trim().toUpperCase() || 'ACTIVE' };
+    var key = axis + '|' + code;
+    if (!out[axis]) out[axis] = [];
+    if (seen[key] !== undefined) out[axis][seen[key]] = rec;
+    else { seen[key] = out[axis].length; out[axis].push(rec); }
+  }
+  return out;
+}
+function variantRegValidate_(axis, code, label) {
+  if (!variantRegAxisValid_(axis)) return { ok:false, error:'axis ไม่ถูกต้อง (COLOR/SIZE/MATERIAL/STYLE/NONE)' };
+  var c = String(code||'').trim();
+  if (!/^\d{2}$/.test(c)) return { ok:false, error:'variant code ต้องเป็นเลข 2 หลัก' };
+  var lbl = String(label||'').trim();
+  if (!lbl) return { ok:false, error:'กรุณาระบุชื่อที่อ่านได้ (label)' };
+  return { ok:true, axis:String(axis).trim().toUpperCase(), code:c, label:lbl };
+}
+function variantRegistryEnabled_() {
+  return PropertiesService.getScriptProperties().getProperty('VARIANT_REGISTRY_ENABLED') === 'true';
+}
+function variantRegistrySheet_(ss) { return getOrCreateSheet_(ss, SHEET_VARIANT_REGISTRY, VARIANT_REG_HEADERS); }
+function readVariantRegistryRows_(ss) {
+  var sh = ss.getSheetByName(SHEET_VARIANT_REGISTRY);
+  if (!sh) return [];
+  var last = Math.min(sh.getLastRow(), VARIANT_REG_MAX_ROWS + 1);
+  if (last < 2) return [];
+  return sh.getRange(2, 1, last - 1, VARIANT_REG_HEADERS.length).getValues();
+}
+function listVariantRegistryHandler_(ss, data) {
+  if (!variantRegistryEnabled_()) return ok({ off:true, variants:{} });
+  var sess = resolveSession_(ss, data.sessionToken);
+  return ok({ off:false, variants:variantRegMapFromRows_(readVariantRegistryRows_(ss)),
+    me: sess ? { staffId:sess.staffId, admin:isAdminRole_(sess.role) } : null });
+}
+function saveVariantRegistryHandler_(ss, data, actor) {
+  if (!variantRegistryEnabled_()) return error('ระบบทะเบียน Variant ยังไม่เปิดใช้งาน');
+  var sess = resolveSession_(ss, data.sessionToken);
+  if (!sess || !isAdminRole_(sess.role) || sess.status !== 'active') return unauthorized_();
+  var v = variantRegValidate_(data.axis, data.code, data.label);
+  if (!v.ok) return error(v.error);
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return error('ระบบไม่ว่าง ลองใหม่อีกครั้ง');
+  try {
+    var sh = variantRegistrySheet_(ss);
+    var rows = readVariantRegistryRows_(ss);
+    var now = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd HH:mm');
+    for (var i = 0; i < rows.length; i++) {   // axis-scoped uniqueness → เขียนทับถ้าซ้ำ
+      if (String(rows[i][VARIANT_REG_COL.AXIS - 1]||'').trim().toUpperCase() === v.axis &&
+          String(rows[i][VARIANT_REG_COL.CODE - 1]||'').trim() === v.code) {
+        var rowNum = i + 2;
+        sh.getRange(rowNum, VARIANT_REG_COL.LABEL).setValue(v.label);
+        if (data.status) sh.getRange(rowNum, VARIANT_REG_COL.STATUS).setValue(String(data.status).trim().toUpperCase());
+        SpreadsheetApp.flush(); invalidateCache_();
+        return ok({ axis:v.axis, code:v.code, label:v.label, updated:true });
+      }
+    }
+    sh.appendRow([v.axis, v.code, v.label, 'ACTIVE', now, actor||'', '']);
+    SpreadsheetApp.flush();
+    writeAuditLog_(actor||'ไม่ระบุ', 'ทะเบียน Variant', v.axis + ':' + v.code, auditDetail_({ after:{ label:v.label }, note:'บันทึก Variant value' }));
+    invalidateCache_();
+    return ok({ axis:v.axis, code:v.code, label:v.label, created:true });
+  } finally { lock.releaseLock(); }
+}
+
+// ── Setup / Disable (เจ้าของรันใน GAS editor 1 ครั้ง) ──────────────────────
+// เปิดทั้ง 4 registry พร้อมกัน · seed Color axis จาก VARIANT_COLOR_CODES เดิม (D09)
+function setupProductRegistry() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  prefixRegistrySheet_(ss);
+  familyRegistrySheet_(ss);
+  formRegistrySheet_(ss);
+  var vsh = variantRegistrySheet_(ss);
+  var existing = variantRegMapFromRows_(readVariantRegistryRows_(ss));
+  var haveColor = {};
+  ((existing.COLOR)||[]).forEach(function(x){ haveColor[x.code] = true; });
+  var seeded = 0, now = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd HH:mm');
+  VARIANT_COLOR_CODES_SEED_().forEach(function(c) {
+    if (!haveColor[c.code]) { vsh.appendRow(['COLOR', c.code, c.name, 'ACTIVE', now, 'seed', '']); seeded++; }
+  });
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty('PREFIX_REGISTRY_ENABLED', 'true');
+  props.setProperty('FAMILY_REGISTRY_ENABLED', 'true');
+  props.setProperty('FORM_REGISTRY_ENABLED', 'true');
+  props.setProperty('VARIANT_REGISTRY_ENABLED', 'true');
+  invalidateCache_();
+  Logger.log('✅ เปิด Product Registry ครบ 4 ชีต · seed Color ' + seeded + ' รหัส');
+  Logger.log('   ชีต: "' + SHEET_PREFIX_REGISTRY + '" · "' + SHEET_FAMILY_REGISTRY + '" · "' + SHEET_FORM_REGISTRY + '" · "' + SHEET_VARIANT_REGISTRY + '"');
+  Logger.log('   ⚠️ L ยังไม่ถูกใส่เป็น ACTIVE โดยอัตโนมัติ (FREEZE ตาม D05/D06) — เพิ่ม prefix ที่ ACTIVE เองผ่าน UI');
+}
+function disableProductRegistry() {
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty('PREFIX_REGISTRY_ENABLED', 'false');
+  props.setProperty('FAMILY_REGISTRY_ENABLED', 'false');
+  props.setProperty('FORM_REGISTRY_ENABLED', 'false');
+  props.setProperty('VARIANT_REGISTRY_ENABLED', 'false');
+  invalidateCache_();
+  Logger.log('⏸️ ปิด Product Registry ทั้ง 4 ชีต (ข้อมูลในชีตยังอยู่ครบ)');
+}
+// สำเนา VARIANT_COLOR_CODES ฝั่ง .gs สำหรับ seed (frontend มีตัวจริงใน views-main.jsx)
+// ⚠️ ต้องตรงกับ VARIANT_COLOR_CODES ใน views-main.jsx (99 รหัส) — seed ครั้งเดียวตอน setup
+function VARIANT_COLOR_CODES_SEED_() {
+  return [
+    {code:"01",name:"แดง"},{code:"02",name:"แดงอมม่วง"},{code:"03",name:"ชมพูเข้ม"},{code:"04",name:"ชมพู"},
+    {code:"05",name:"ชมพูอ่อน"},{code:"06",name:"ชมพูขาว"},{code:"07",name:"กะปิ"},{code:"08",name:"โอลด์โรส"},
+    {code:"09",name:"ส้ม"},{code:"10",name:"เหลือง"},{code:"11",name:"เหลืองอ่อน"},{code:"12",name:"ฟ้า"},
+    {code:"13",name:"ม่วง"},{code:"14",name:"ม่วงอ่อน"},{code:"15",name:"ม่วงบานเย็น"},{code:"16",name:"ม่วงแซงเกรีย"},
+    {code:"17",name:"น้ำตาล"},{code:"18",name:"ดำ"},{code:"19",name:"ขาว"},{code:"20",name:"น้ำเงิน"},
+    {code:"21",name:"ครีม"},{code:"22",name:"ครีมชมพู"},{code:"23",name:"พีช"},{code:"24",name:"ชมพูเข้ม"},
+    {code:"25",name:"ชมพู"},{code:"26",name:"พีชชมพู"},{code:"27",name:"ชมพูเขียว"},{code:"28",name:"ม่วงแดง"},
+    {code:"29",name:"ชมพูพาสเทล"},{code:"30",name:"ชมพูแสด"},{code:"31",name:"เขียว"},{code:"32",name:"โอวัลติน"},
+    {code:"33",name:"ชมพูบานเย็น"},{code:"34",name:"ชมพูโรสวูด"},{code:"35",name:"ครีมส้ม"},{code:"36",name:"ขาวครีม"},
+    {code:"37",name:"แดงอ่อน"},{code:"38",name:"ขาวชมพู"},{code:"39",name:"เขียวชมพู"},{code:"40",name:"เขียวแก่"},
+    {code:"41",name:"แดงขาว"},{code:"42",name:"พีชแดง"},{code:"43",name:"ชมพูอมม่วง"},{code:"44",name:"ขาวหม่น"},
+    {code:"45",name:"แดงไวน์"},{code:"46",name:"แดงเข้ม"},{code:"47",name:"ขาวลินิน"},{code:"48",name:"เฮเซลนัท"},
+    {code:"49",name:"ชมพูเลโมเนด"},{code:"50",name:"หมอก"},{code:"51",name:"ฟ้าโทนเทาอมน้ำเงิน"},{code:"52",name:"เหลืองทอง"},
+    {code:"53",name:"ชมพูสตรอเบอร์รี่"},{code:"54",name:"ไม้เฮเซลนัท"},{code:"55",name:"ม่วงพลัม"},{code:"56",name:"ขาวไส้ชมพู"},
+    {code:"57",name:"ส้มแดง"},{code:"58",name:"ชมพูอ่อนแซมขาว"},{code:"59",name:"ชมพูอ่อนแซมชมพู"},{code:"60",name:"เขียวอ่อน"},
+    {code:"61",name:"ขาวไส้ม่วง"},{code:"62",name:"ขาวไส้เหลือง"},{code:"63",name:"ขาวไส้ส้ม"},{code:"64",name:"เหลืองไส้เหลือง"},
+    {code:"65",name:"เหลืองอ่อนไส้เหลือง"},{code:"66",name:"น้ำตาลเข้ม"},{code:"67",name:"เทา"},{code:"68",name:"เขียวฟ้า"},
+    {code:"69",name:"เบจ"},{code:"70",name:"ม่วงเขียวอ่อน"},{code:"71",name:"เหลืองไส้เข้ม"},{code:"72",name:"เขียวขุ่น"},
+    {code:"73",name:"เขียวขอบขาว"},{code:"74",name:"ขาวแซมเขียว"},{code:"75",name:"ขาวแซมเขียวแดง"},{code:"76",name:"เขียวแซมม่วง"},
+    {code:"77",name:"เขียวไล่สี"},{code:"78",name:"เขียวเข้มผสมอ่อน"},{code:"79",name:"เขียวเข้ม"},{code:"80",name:"ม่วงครีม"},
+    {code:"81",name:"ม่วงลายจุด"},{code:"82",name:"ขาวลายจุด"},{code:"83",name:"เขียวเหลือง"},{code:"84",name:"น้ำเงินม่วง"},
+    {code:"85",name:"เหลือง,ม่วง"},{code:"86",name:"น้ำตาลเหลือง"},{code:"87",name:"เขียวครีม"},{code:"88",name:"น้ำเงินเข้ม"},
+    {code:"89",name:"น้ำเงินอ่อน"},{code:"90",name:"ม่วงอมชมพู"},{code:"91",name:"ขาวอมเหลือง"},{code:"92",name:"เหลืองไส้ส้ม"},
+    {code:"93",name:"ขาวไส้ม่วงอ่อน"},{code:"94",name:"ชมพูม่วงอ่อน"},{code:"95",name:"ม่วงฟ้า"},{code:"96",name:"ไวโอเล็ต"},
+    {code:"97",name:"ม่วงขาว"},{code:"98",name:"ขาวอมเขียว"},{code:"99",name:"แดงชมพู"}
+  ];
 }
