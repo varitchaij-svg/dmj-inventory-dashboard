@@ -6,6 +6,13 @@
 fix direction is the right *final* architecture, before any further "fix → deploy →
 slow again" round.
 
+> **PHASE 0 UPDATE (2026-08-26, later same day):** measured evidence has been collected
+> and is recorded in **§15–§21 at the end of this document**. The verdict below is
+> **upheld (C)**, but three claims in this review were **corrected by measurement** —
+> the payload-size argument is weaker than written here, and the localStorage finding
+> is far stronger (now CONFIRMED, 22.9 MB vs a ~5 MB quota). Read §15 onward for the
+> authoritative numbers; treat §1–§14 as the reasoning that led to the measurements.
+
 **Verdict up front: C — the current architecture has a fundamental bottleneck.**
 The bootstrap design ("open the app" ⇒ "download the entire operational dataset,
 rebuilt from 14 sheet reads, cached only in a best-effort cache, served by a
@@ -395,3 +402,400 @@ only (per service-worker rule).
 Nothing was implemented, modified, tuned, repaired, cleared, deployed, or opened as a
 PR in this session. The only artifact is this review document. The next session must
 begin at **PHASE 0** — not at a fix.
+
+---
+---
+
+# PHASE 0 — MEASURED EVIDENCE & FINAL ARCHITECTURE GATE
+
+**Added 2026-08-26 (later same day). Review/measurement only — no code, config, cache,
+trigger, timeout, retry, or deployment change was made.**
+
+## 15. Method & its limits (read before using any number)
+
+This environment has **no production access** (no GAS Executions, no Cloud Logging, no
+store device). Rather than leave the key quantities UNKNOWN, the measurable ones were
+measured **locally by executing the real production functions** — `packProductsColumnar_`
+and `shapeColumnarPayload_` `eval`-ed out of `appsscript_complete.gs`, and
+`expandProductsColumnar` / `expandMonthlyCompact` / `enrichData` `eval`-ed out of
+`app.jsx` (plus the real `detectColor` / `mtoBase` from `tests/helpers.js`). This is the
+repo's own established test convention (`auth.test.js` et al.: eval real source, never
+copy).
+
+They were run against a **corpus calibrated to the single known measured anchor**:
+5,876 products × 30 month-columns, tuned until pv=2 output landed at **4,216 KB chars /
+4,537 KB UTF-8** against the Aug-05 production measurement of **4,576 KB** — i.e. within
+**~8 %** of the real payload.
+
+**What this makes each number worth:**
+
+| Kind | Trust |
+|---|---|
+| **Transformation ratios** (pv2→pv3, wire→localStorage, gzip) | **MEASURED** — real code, real algorithms; ratios are essentially independent of my synthetic values |
+| **Absolute byte counts** | **CALIBRATED ESTIMATE, ±~8 %** — anchored to the one real measurement |
+| **Chunk counts** | **MEASURED** — deterministic arithmetic on `_CACHE_CHUNK_LEN` |
+| **Whether Google actually gzips the wire** | **STILL UNKNOWN** — a compressibility measurement is not a transport measurement (§19) |
+| **Build ms, keepWarm status, burst telemetry** | **STILL UNKNOWN** — production-only (§19) |
+
+Reproduce: scripts in the session scratchpad (`measure.cjs` / `measure2.cjs` /
+`measure3.cjs`); they read the repo read-only.
+
+---
+
+## 16. Measurement results
+
+### 16.1 Payload size — request §1 (**answers the UNSUPPORTED claim 2.4**)
+
+| Form | Raw chars | UTF-8 | gzip (zlib-6) | CacheService chunks |
+|---|---|---|---|---|
+| pv=2 (pre-A1 format, still served to old clients) | 4,216 KB | 4,537 KB | **574 KB** | **144** |
+| **pv=3 (what every current client requests)** | **2,120 KB** | **2,442 KB** | **455 KB** | **73** |
+| pv3 ÷ pv2 | **0.503** | | | |
+
+- **CONFIRMED: pv=3 halves the payload (−49.7 %).** Phase A1 delivered real value that
+  had never been quantified.
+- **CORRECTION to the previous forensic report:** its "pv=3 ≈ 3.2 MB" was not merely
+  unsupported, it was **too high**. Today's payload is ≈ **2.1 MB raw / 0.45 MB gzipped**,
+  not 3.2 MB and not the 4.2 MB both earlier documents reasoned with.
+- **gzip compressibility is extreme (≈ 5.4×)** because columnar rows repeat structure.
+  Whether that saving is *realised on the wire* is §19-Q1 — the single highest-leverage
+  open question left.
+
+### 16.2 Build performance — request §2
+
+**NOT MEASURABLE HERE.** `buildFullData_` is Sheets-bound; no Sheets access exists in
+this environment. The only trustworthy figure remains **9,807 ms (Aug-05, production
+`perfMeasureBuild`)**, 70 % sheet I/O. Sheets have grown ~3 weeks since (audit log grows
+per action; attendance ~20 k rows/yr), so **the true current value is ≥ 9.8 s and
+UNKNOWN**. Re-running `perfMeasureBuild` is §19-Q3. **No build number was invented.**
+
+### 16.3 Cache reliability — request §3
+
+| Property | Value | Source |
+|---|---|---|
+| Chunk size | 30,000 chars (`_CACHE_CHUNK_LEN`) | code |
+| Chunks per pv=3 payload | **73** | measured |
+| Fresh TTL / stale TTL | **180 s** / **1800 s** | code |
+| Key structure | `dmj_payload_{variant}[_v1\|_v3]_{i}` + `_n`, `_n_ts`; stale `dmj_stale_{variant}_{i}` | code |
+| Entries written per full build | **≈ 1,300** chunk entries (3 variants × 2 encodings × fresh+stale) | measured |
+| Chunk independently evictable? | **YES** — each is its own CacheService key | code |
+| One missing chunk ⇒ whole payload MISS? | **YES** — `_readChunked_` returns `{str:null}` on any `part == null` | code (appsscript:13640) |
+
+> **Answer to the §3 question: NO. The system cannot guarantee the complete payload
+> remains available.** ~1,300 independently-evictable best-effort entries, where losing
+> any **one** of 73 silently invalidates an entire layer. This is a **structural
+> reliability limitation**, CONFIRMED from code — not a bug to patch. When the stale
+> layer dies this way, requests fall to the 25 s queue, where the 20 s client retry
+> budget (2.2) guarantees failure. *Not redesigned here, per instruction.*
+>
+> Whether eviction has actually been observed: **UNKNOWN** — needs `[perfB]` metric ⑦
+> (STALE/MISS mix), §19-Q4.
+
+### 16.4 keepWarm — request §4
+
+| Question | Answer | Class |
+|---|---|---|
+| Warms the same pv=3 keys clients request? | **YES** — `payloadCacheVariant_(v,3)` written for all variants (appsscript:13737–13740) | CONFIRMED (code) |
+| Guard key | fresh `full`/enc-2 — skips entirely when warm | CONFIRMED (code) |
+| Runs after invalidation? | **YES** — invalidation empties fresh, so the next 5-min tick rebuilds | CONFIRMED (code) |
+| Can it overlap invalidation? | **YES** — it takes the *build* lock; `invalidateCache_` takes **no lock**, so it carries the §17 race identically | CONFIRMED (code) |
+| Trigger exists / exactly one / firing / last success? | **UNKNOWN** — production only | UNKNOWN (§19-Q2) |
+
+> **Self-correction to §5 of this document:** §5 claimed keepWarm "only acts off-hours."
+> That is **wrong**. Because ~50 write paths empty the fresh cache during business hours,
+> the 5-minute tick frequently *does* find an empty cache and build. It is more active
+> than §5 stated. The §5 *conclusion* nevertheless stands — it still cannot pre-warm a
+> multi-instance pool, cannot guarantee cache retention (16.3), and does nothing about
+> egress — so it remains **an optimization, not a reliability mechanism**.
+
+### 16.5 localStorage safety net — request §5 ⚠️ **THE DECISIVE FINDING**
+
+Path: `fetchFromSheet` → `enrichData(d)` → `setData` → **`saveToStorage(enriched,"sheet")`**
+→ `localStorage.setItem("dmj_dashboard_data_v1", JSON.stringify(d))`, wrapped in
+`try/catch` whose entire failure handling is `console.warn("Could not persist data:")`
+(app.jsx:949–956).
+
+Measured by running the **real `enrichData`**:
+
+| Quantity | Value |
+|---|---|
+| pv=3 wire received | 2,120 KB chars |
+| **Actually written to localStorage** | **12,018,128 chars = 11.90 MB UTF-8** |
+| Expansion vs wire | **5.54×** |
+| — of which `products[].monthly` (dense re-expansion of compact `mo`) | **5,855 KB** |
+| — of which `mtoGroups` (**re-serialised duplicate product objects**, 415 groups) | **1,705 KB** |
+| **iOS/Safari quota accounting (UTF-16 ≈ 2 B/char)** | **22.92 MB** |
+| Safari per-origin quota | **≈ 5 MB** |
+| Verdict | **EXCEEDS BY ≈ 4.6×** |
+
+> **CONFIRMED (measured, real code): the offline safety net is dead on every iOS device
+> holding the real catalog.** `setItem` throws `QuotaExceededError`, the throw is
+> swallowed with a `console.warn`, and **no data is ever persisted**. Therefore
+> `loadFromStorage()` returns `null` on every boot, `data === null`, and the blocking
+> pane renders — so **any** server slowness becomes "cannot enter the app" rather than
+> "stale data, still usable."
+>
+> **This is the mechanism that converts server latency into an outage, and it explains
+> the reported symptom better than any cold-start/stampede story.** It also explains a
+> pattern worth confirming with the owner: desktop Chrome has a far larger per-origin
+> quota, so **the owner's computer would keep working while every phone fails** — the
+> classic signature of this bug.
+>
+> Note the compounding design smell: the wire format was deliberately compacted (`mo`,
+> columnar) and then **re-inflated before storage**, so the client stores 5.5× what it
+> received. `mtoGroups` is pure derived duplication that never needed persisting.
+
+Classification: **CONFIRMED as a mechanism** (arithmetic + real code). **Confirming it
+is live on the store's specific devices** needs the one-line check in §19-Q5.
+
+---
+
+## 17. Correctness gate — the invalidation race (request §6)
+
+Traced against current `master`:
+
+```
+T0  doGet MISS → acquireBuildLock_ (getUserLock) → buildFullData_ begins
+      └ reads sheets → in-memory snapshot S0
+T1  doPost write commits (getScriptLock — a DIFFERENT lock; no mutual exclusion)
+T2  invalidateCache_() → clears fresh chunks; sets dmj_last_write_ts = T2
+      └ takes NO lock, and does not signal in-flight builds
+T3  build (started T0, still holding S0) completes ~10 s later
+T4  putCachedPayload_(S0) — UNCONDITIONAL. No version check, no CAS, no re-read of
+      dmj_last_write_ts. (appsscript:3174–3195; verified: no guard exists)
+T5  next GET → HIT → serveCached() rewrites "lastModified" to a LIVE
+      getSheetLastModified_() = T2  (appsscript:3110)
+```
+
+Result: for up to **`_CACHE_TTL_SEC` = 180 s**, clients receive **pre-write data (S0)
+stamped with a post-write timestamp (T2)**. The client stores that as
+`window._dataLoadedAt = T2`; on its next write `shouldRejectConflict_(T2, T2)` sees
+client-time ≥ sheet-time and **permits the write** — conflict detection is bypassed and
+a colleague's committed change can be **silently overwritten**.
+
+| Aspect | Classification |
+|---|---|
+| Race is possible in current code (no guard exists on the fresh-cache write path) | **CONFIRMED** |
+| Existing version/`lastModified` logic prevents stale serving | **NO — it is the amplifier.** The stale path deliberately preserves the old `lastModified` (documented, correct); the **fresh** path deliberately overwrites it with a live value, which is safe for genuinely-fresh data and unsafe for this race |
+| `keepWarm_` carries the same race | **CONFIRMED** (16.4) |
+| Window size | build duration ≈ **10 s**, exposure ≈ **≤ 180 s** per occurrence |
+| Has it actually occurred in production? | **UNKNOWN** — would appear as unexplained "my edit disappeared" reports, not as an error |
+
+> **Gate result: this is a genuine silent-data-loss path, CONFIRMED as reachable.** It
+> is precisely the failure class this codebase treats as most serious ("แย่กว่าเห็นข้อมูลช้า").
+> It cannot be fully closed inside the current model because **CacheService offers no
+> compare-and-set**; the cheap 90 % mitigation (*re-read `dmj_last_write_ts` after the
+> build and decline to repopulate the fresh layer if it moved*) is specified in the
+> blueprint. **Not fixed here, per instruction.**
+
+---
+
+## 18. Concurrency model (request §7) — ⚠️ SIMULATION, NOT MEASUREMENT
+
+Inputs: measured payload 2.44 MB UTF-8 / 0.455 MB gzip (16.1); build 9.8 s (Aug-05,
+lower bound); `_BUILD_LOCK_WAIT_MS` 25 s; client budgets 35/20/20/20 s, ≤4 attempts;
+GAS ≈ 30 concurrent executions per identity (`executeAs: USER_DEPLOYING`); shared
+store-WiFi uplink ≈ 2.3 MB/s (Aug-05 figure — itself inferred, treat as worst case).
+
+**Egress alone** (the number that decides whether a cliff exists at all):
+
+| Users | gzip **ON** | gzip **OFF** | pv=2 (pre-A1, for reference) |
+|---|---|---|---|
+| 5 | 2.3 MB → **~1 s** | 12.2 MB → ~5 s | 22.7 MB → ~10 s |
+| 10 | 4.6 MB → **~2 s** | 24.4 MB → ~11 s | 45 MB → ~20 s |
+| **20** | **9.1 MB → ~4 s** | **48.8 MB → ~21 s** | 91 MB → ~39 s |
+
+**Scenario matrix** (users × cache state), worst-case user-visible latency:
+
+| Users | A · 100 % HIT | B · cold cache | C · stale chunk lost (16.3) | D · concurrent invalidation | E · + retry amplification |
+|---|---|---|---|---|---|
+| 1 | 1–3 s ✅ | cold parse + build ≈ 20–30 s ⚠️ (attempt-1 35 s marginal) | same as B | rebuild ≈ 12 s ✅ | n/a |
+| 5 | ~1–5 s ✅ | 1 builds (~12 s), 4 get STALE ~0.3 s ✅ | 4 × 25 s queue → **abort at 20 s** ❌ | churns rebuild each write ⚠️ | 5→~15 executions |
+| 10 | ~2–6 s ✅ | as above + multi-instance cold parse ⚠️ | 9 queued; slots pressured ❌ | near-continuous rebuild ⚠️ | 10→~30 executions — **slot ceiling reached** |
+| **20** | **gzip ON ~4–8 s ✅ / gzip OFF ~21 s+ ❌** | ❌ | ❌ | ❌ | 20→**up to 80 executions** vs ~30 slots → `me` queues (≈ the observed 9.6 s) → ❌ |
+
+**Where the cliff actually is — corrected:**
+
+1. **The egress cliff is CONDITIONAL ON GZIP.** With gzip on, 20 users cost ~4 s of
+   bandwidth and there is **no egress cliff at all**. This **overturns §10 of this
+   document**, which asserted a cliff "even with 100 % cache hits" using the stale
+   4.2 MB figure. That assertion is **withdrawn pending §19-Q1**.
+2. **The execution-slot cliff is unconditional and sits at ~10 users** once retries
+   engage: 4 heavy GETs per device against ~30 slots, with aborted clients leaving
+   server executions running (CONFIRMED, §8 of this document).
+3. **The availability cliff is unconditional and sits at 1 user**, because localStorage
+   is dead (16.5): with no client-side fallback, *any* server delay past 35 s is a
+   hard blocking failure for a single user, with no degraded mode.
+
+---
+
+## 19. Remaining UNKNOWNs — exactly 5 production checks
+
+**Q1 (highest leverage) — is the wire gzipped?** Open the app on any device →
+DevTools/Web Inspector → Network → the `/exec` payload row → compare **Transferred**
+vs **Size**. Transferred ≈ 455 KB ⇒ gzip ON (no egress cliff; Phase 2 is justified by
+storage + build + invalidation only). Transferred ≈ 2.4 MB ⇒ gzip OFF (egress cliff is
+real; Phase 2 gains a second independent justification).
+*Note: BootTrace's `payload:ครบ (KB)` cannot answer this — it counts decompressed bytes.*
+
+**Q2 — keepWarm status.** GAS editor → run `perfCheckTriggers` → is `keepWarm_` present,
+exactly once, and firing?
+
+**Q3 — current build cost.** GAS editor → run `perfMeasureBuild` → compare to 9,807 ms.
+
+**Q4 — burst telemetry.** Executions/Cloud Logging → filter `[perfB]` + `[perf] doGet`
+over a morning burst → `node scripts/perf-report.mjs <file>` → metric ① concurrency peak,
+metric ⑦ HIT/STALE/MISS mix (**directly tests the 16.3 eviction hypothesis**).
+
+**Q5 — the one browser command** (§5's "one exact instruction"; on a *store iPhone*,
+Safari → Advanced → Web Inspector, or any phone's browser console on the live site):
+
+```js
+(function(){var v=localStorage.getItem('dmj_dashboard_data_v1');
+console.log('stored:', v?((v.length*2/1048576).toFixed(2)+' MB (UTF-16)'):'*** NULL — safety net dead ***');
+try{localStorage.setItem('__dmj_probe','x'.repeat(1024*512));localStorage.removeItem('__dmj_probe');console.log('512KB probe: OK');}
+catch(e){console.log('512KB probe FAILED:',e.name);}
+console.log('last backend error:', localStorage.getItem('dmj_last_backend_error'));})()
+```
+
+Read-only apart from a 512 KB probe key it deletes immediately. **`stored: NULL`
+confirms 16.5 is live in production** — expected result given the arithmetic.
+
+---
+
+## 20. FINAL ARCHITECTURE GATE
+
+| Option | Performance | Reliability | Correctness | 20-user concurrency | Complexity | Migration risk | Rollback | Fixes root cause? |
+|---|---|---|---|---|---|---|---|---|
+| **A** keepWarm repair | off-hours only | ✗ (16.3/16.4) | ✗ | ✗ | trivial | none | trivial | ❌ |
+| **B** timeout/retry tuning | removes amplifier | partial | ✗ | partial (slot cliff) | trivial | low | trivial | ❌ |
+| **C** cache/invalidation redesign | ends rebuild churn | partial | **✅ closes §17** | partial | medium | medium-high (touches conflict semantics) | medium | half |
+| **D** bootstrap-lite | raw −41 %, gzip −61 %, **storage 22.9→2.0 MB** | **✅ restores offline net durably** | — | ✅ | high | medium (flag-gated like `pv`) | flag-off | **the other half** |
+| **E** domain APIs | per-view isolation | ✅ | — | ✅ | medium | low (pattern already proven ×8) | per-endpoint | with D |
+| **F** hybrid B→D/E→C | ✅ | ✅ | ✅ | ✅ | staged | bounded per phase | per phase | **✅** |
+
+### VERDICT: **C — architecture change** (delivered via option **F**, staged)
+
+**Upheld, but on substantially revised grounds.** Three corrections were forced by
+measurement, and I record them explicitly because they change *why* — not *whether* —
+the architecture must change:
+
+1. **The payload-size argument is weaker than §1–§14 claimed.** pv=3 already halved the
+   payload; bootstrap-lite adds ~1.7× raw / ~2.5× gzip, **not the "~10×" §13 asserted.**
+   That estimate is **withdrawn**.
+2. **The "cliff even at 100 % cache HIT" claim (§10) is withdrawn**, pending Q1 — with
+   gzip on, there is no egress cliff at 20 users.
+3. **The localStorage finding is far stronger than hypothesised** — not "plausibly
+   dead" but **22.92 MB against a ~5 MB quota, i.e. dead by a factor of 4.6**, measured
+   through the real `enrichData`.
+
+**Why C rather than B (targeted multi-fix), given #1 and #2:** the deciding factor is
+**unbounded growth**, exactly as `PLAN-PHASE8-PAYLOAD.md` warned on Aug 5
+("ยิ่งนานยิ่งแย่เอง"). Even the *compact* wire form is **4.14 MB in iOS UTF-16 accounting —
+already MARGINAL against a 5 MB quota today**, and it grows on two axes simultaneously
+(product count, and `mo` gaining a column every month). A targeted Phase-1 storage fix
+buys months, not years; **bootstrap-lite lands at 2.04 MB and stays there** because the
+history and analytics that drive the growth move off the boot path entirely. Add the
+CONFIRMED structural items — an availability layer on ~1,300 evictable best-effort keys
+(16.3) and a silent-overwrite race with no CAS available (§17) — and the conclusion is
+that the monolith, not any single constant, is the thing to retire.
+
+### Target architecture (as requested; NOT implemented)
+
+```
+APP SHELL                    renders on session alone (attendance/home already do this)
+   ↓
+BOOTSTRAP-LITE               catalog core + stock overlay + badge counts
+                             ~1.0 MB raw / ~145 KB gzip / 2.04 MB stored (fits iOS)
+   ↓
+DOMAIN DATA (on demand)      stock · orders · attendance · analytics · quotations · storage · MTO
+                             each an endpoint of the kind this repo already ships ×8
+```
+
+---
+
+## 21. IMPLEMENTATION BLUEPRINT (request §9) — **do not start in this task**
+
+Governing rule throughout: **extend the proven in-repo patterns** (`stocklite`, `orders`,
+`recentTransfers`, `recentIntake`, `getCustomerAnalytics`, `staffPerf`, attendance
+`NO_DATA_TABS`, and the `pv` version-gate) — invent no new framework. One phase per
+deploy; never bundle (the `be2c3aa` lesson).
+
+### Phase 1 — safe mitigation *(highest value per unit of risk; would likely have prevented today's outage)*
+- **Files/functions:** `app.jsx` — `saveToStorage` / `loadFromStorage` (949, 874);
+  optionally `fetchFromSheet` timeout constant (1249); `appsscript_complete.gs`
+  `_BUILD_LOCK_WAIT_MS` (13452).
+- **Change:** persist the **compact wire payload** (pre-`enrichData`) instead of the
+  enriched one, and **never persist `mtoGroups`** (pure derived duplication). Re-enrich
+  on load — `loadFromStorage` *already* calls `expandProductsColumnar` +
+  `expandMonthlyCompact` as a safety net, so the compact form is already a supported
+  input. Surface quota failure instead of swallowing it. Separately, align the
+  20 s/25 s mismatch and cap retries at 2.
+- **Data contract:** unchanged on the wire; only the local storage format changes.
+- **Migration:** on first load an old (enriched) blob still parses — expansion functions
+  are no-ops on already-expanded data. No key rename needed; if renamed, old key is
+  simply ignored and refetched once.
+- **Tests:** unit — round-trip compact→`loadFromStorage`→deep-equal vs today's enriched
+  object; a size guard asserting stored bytes < 3 MB for a 6 k-product corpus (the
+  measurement in 16.5 becomes a regression test). Browser — `?nodata=1` path still works.
+- **Rollback:** single-commit revert. **Verify:** Q5 command returns a non-null size on
+  a store iPhone; boot on a warm device no longer hits the network-blocking pane.
+- **Governance note:** the retry/lock constants are pinned by
+  `tests/perf-observability.test.js` **pending burst evidence (Q4)** — that gate must be
+  satisfied first, or ship only the storage half of Phase 1.
+
+### Phase 2 — bootstrap-lite
+- **Files/functions:** `.gs` — new `shapeBootstrapLite_` beside `shapeColumnarPayload_`,
+  new `payloadEncodingForRequest_` value (`pv=4`) and matching `payloadCacheVariant_`
+  suffix, plus `PAYLOAD_VARIANTS_` cache/invalidate coverage (13764 — **must** add the
+  new enc, per the existing meta-test in `tests/columnar-payload.test.js`).
+  `app.jsx` — request `pv=4`; views needing history/analytics fetch on demand.
+- **Data contract:** `{cols,rows}` over the shell key set (16.1/§F) + `monthLabels` +
+  `totals`; `mo`, `purchases`, `monthlyByCat`, `dailyByCat`, `transfers` **removed** from
+  boot.
+- **Migration/compat:** the **`pv` gate is the proven mechanism** — clients that do not
+  send `pv=4` keep receiving today's pv=3 byte-for-byte. Old cached `.jsx` is therefore
+  safe (the exact hazard `pv` was invented for).
+- **Tests:** deep-equal expansion tests (the pv=3 template); per-role browser suite;
+  meta-test that every new enc appears in `invalidateCache_`.
+- **Rollback:** clients stop sending `pv=4` → instant revert to current behaviour, no
+  redeploy. **Verify:** `[perf] doGet ส่งจริง=…KB` ≈ 1 MB; BootTrace first-byte→complete
+  shrinks; Q5 shows ~2 MB stored.
+
+### Phase 3 — domain reads
+- Move `mo`/history, purchases, analytics behind endpoints modelled on
+  `getCustomerAnalytics` / `staffPerf`; views fetch on mount with their own short cache.
+- **Rollback:** per-endpoint; views fall back to boot payload while both exist.
+- **Verify:** per-view latency; boot executions unchanged but cheap.
+
+### Phase 4 — cache/invalidation redesign *(closes §17)*
+- `invalidateCache_` becomes **granularity-aware**: stock writes invalidate only the
+  stock overlay (the `stocklite` precedent), not the catalog.
+- **Close the race:** re-read `dmj_last_write_ts` after `buildFullData_`; **decline** to
+  repopulate the *fresh* layer if it moved (stale layer may still be written — it keeps
+  its original `lastModified`, which is safe by design). This needs no CAS, only a
+  compare-and-skip.
+- **Tests:** simulated interleave (write during build) asserting the fresh layer is not
+  poisoned; existing conflict-detection suite must stay green.
+- **Rollback:** single constant/flag. **Verify:** `[perfB]` metric ⑦ MISS rate drops
+  during counting sessions; no "my edit vanished" reports.
+
+### Phase 5 — retire the monolith
+- Remove `pv=1`/`pv=2` paths and `expandMonthlyForLegacy_` once telemetry shows no client
+  requests them (the repo's own "1–2 weeks after deploy" convention).
+- **Verify:** payload-size regression test; full suite; one clean burst window.
+
+---
+
+## 22. Stop condition
+
+| Required | Status |
+|---|---|
+| 1. Five measurements collected | ✅ 3 measured locally (16.1/16.3/16.5) · 2 production-only, with exact commands (§19) |
+| 2. Correctness race classified | ✅ **CONFIRMED reachable**; occurrence UNKNOWN (§17) |
+| 3. Concurrency cliff quantified | ✅ three cliffs, separated; egress cliff explicitly conditional on Q1 (§18) |
+| 4. Architecture option selected | ✅ **C**, via staged **F** (§20) |
+| 5. Implementation blueprint | ✅ Phases 1–5 (§21) |
+| 6. No code changed | ✅ only this document |
+
+**STOP — implementation not started. Next session begins at §19 (Q1–Q5), then Phase 1.**
