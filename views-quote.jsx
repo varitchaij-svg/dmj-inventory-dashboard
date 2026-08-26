@@ -47,7 +47,7 @@ async function syncGetQuotationDrafts() {
   if (!SHEET_DEPLOY_URL) return { success: false, error: "ยังไม่ได้เชื่อมต่อ Sheet" };
   try {
     const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
-    const res = await dmjFetch(`${SHEET_DEPLOY_URL}${sep}action=getQuotationDrafts&_t=${Date.now()}`, { cache: "no-store" });
+    const res = await dmjFetch(`${SHEET_DEPLOY_URL}${sep}action=getQuotationDrafts&sessionToken=${encodeURIComponent(localStorage.getItem("dmj_session_token")||"")}&_t=${Date.now()}`, { cache: "no-store" });
     return await dmjJson(res); // { success, data:{drafts:[]} }
   } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
@@ -63,7 +63,7 @@ async function syncGetQuotationForPrint(idOrNumber) {
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) await new Promise(r => setTimeout(r, 700 * attempt));   // 0 · 0.7 · 1.4 วิ
     try {
-      const res = await dmjFetch(`${SHEET_DEPLOY_URL}${sep}action=getQuotationForPrint&id=${encodeURIComponent(idOrNumber)}&_t=${Date.now()}`,
+      const res = await dmjFetch(`${SHEET_DEPLOY_URL}${sep}action=getQuotationForPrint&id=${encodeURIComponent(idOrNumber)}&sessionToken=${encodeURIComponent(localStorage.getItem("dmj_session_token")||"")}&_t=${Date.now()}`,
         { cache: "no-store", dmjTimeoutMs: 25000 });
       return await dmjJson(res); // { success, data:{quotationNumber,customer,items,remarks,salesRep,totals} }
     } catch (err) {
