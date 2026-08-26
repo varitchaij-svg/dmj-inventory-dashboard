@@ -853,6 +853,101 @@ function startServer() {
     await page.close();
   }
 
+  // ── (จ2.6a-reg) Phase C — Add Product two-track (registry ON) ──
+  // เจ้าของสั่ง (D11): เปิดระบบทะเบียน → ฟอร์มเพิ่มสินค้าเปลี่ยนเป็น 2 track · พนักงานไม่พิมพ์
+  //   Prefix/Model/Variant ดิบ · ระบบจอง Model + เลือก variant ที่อ่านได้ → preview SKU → confirm
+  // ต้องรันบนเบราว์เซอร์จริง: unit test เห็นแค่ source · ไม่เห็นว่า reserve→variant→preview→create
+  //   ทำงานต่อกันจริงบนจอ และ prefix ที่ FROZEN (L) ไม่โผล่ให้เลือก
+  // fixture ฉีดก่อน boot ด้วย addInitScript → dispatcher เข้า registry mode (ไม่งั้น off:true = Legacy)
+  {
+    const page = await browser.newPage({ viewport: { width: 900, height: 1200 } });
+    let status = 'ok', note = '';
+    try {
+      await page.addInitScript(() => {
+        window.__DMJ_REGISTRY_FIXTURE = {
+          admin: true, reserveModel: '900',
+          prefixes: [{ prefix: 'OL', status: 'ACTIVE', label: 'มะกอก' },
+                     { prefix: 'L', status: 'FROZEN', label: 'เลิกใช้' }],
+          families: [{ familyId: 'FAM00001', name: 'ดอกไม้ประดิษฐ์', status: 'ACTIVE' }],
+          forms: [{ formId: 'FRM00050', baseName: 'กุหลาบเดิม', category: 'ดอกไม้',
+                    familyId: null, prefix: 'R', model: '025', axis: 'COLOR', status: 'ACTIVE' }],
+          variants: { COLOR: [{ code: '01', label: 'แดง', status: 'ACTIVE' },
+                              { code: '19', label: 'ขาว', status: 'ACTIVE' }] },
+        };
+      });
+      await page.goto(`${base}?role=owner&tab=newproduct`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, 'owner', 'newproduct');
+      await page.waitForTimeout(600);
+      const body0 = await page.locator('main').innerText().catch(() => '');
+      if (!navOk) { status = 'NAV_FAIL'; note = 'สลับไปแท็บเพิ่มสินค้าไม่สำเร็จ'; }
+      else if (!/ระบบทะเบียน/.test(body0)) { status = 'NOT_REGISTRY'; note = 'ไม่เข้าโหมดทะเบียน (ยังเป็น Legacy) ทั้งที่ fixture เปิด ON'; }
+      else {
+        // ① prefix ที่ FROZEN (L) ต้องไม่โผล่เป็นตัวเลือก
+        const lChip = await page.locator('[data-reg-prefix="L"]').count();
+        const olChip = await page.locator('[data-reg-prefix="OL"]').count();
+        if (lChip !== 0) { status = 'FROZEN_LEAK'; note = 'Prefix L (FROZEN) โผล่เป็นตัวเลือกสร้างของใหม่'; }
+        else if (olChip < 1) { status = 'NO_PREFIX'; note = 'ไม่เห็น Prefix OL (ACTIVE) ให้เลือก'; }
+        else {
+          // ② Track 1 — เลือก OL → ตั้งชื่อแบบ → จอง → เลือกสี → preview SKU
+          await page.locator('[data-reg-prefix="OL"]').first().click({ timeout: 2000 });
+          await page.locator('main input[placeholder*="กุหลาบก้านยาว"]').first().fill('มะกอกใหม่');
+          await page.locator('main input[placeholder*="พิมพ์หมวดใหม่"]').first().fill('ดอกไม้');   // ต้องมีหมวด (canCreate)
+          await page.locator('button', { hasText: 'จองแบบ + เลขรุ่น' }).first().click({ timeout: 2000 });
+          await page.waitForTimeout(500);
+          await page.locator('[data-reg-variant="01"]').first().click({ timeout: 2000 }).catch(() => {});
+          await page.waitForTimeout(200);
+          const sku1 = (await page.locator('[data-reg-preview-sku]').first().innerText().catch(() => '') || '').trim();
+          // ③ สร้าง → success + ยิง reserveForm ครั้งเดียว
+          await page.locator('button', { hasText: 'สร้างสินค้า' }).first().click({ timeout: 2000 });
+          await page.waitForTimeout(700);
+          const body1 = await page.locator('body').innerText().catch(() => '');
+          const rc = await page.evaluate(() => window.__DMJ_RESERVE_COUNT || 0);
+          // ④ Track 2 — หลังสร้างเสร็จ track="variant" + selForm = แบบที่เพิ่งจอง → กด "เปลี่ยนแบบ"
+          //    เพื่อกลับไปเลือกแบบเดิมอื่น (R…025) → เลือกขาว(19) → preview สืบทอด prefix+model
+          await page.locator('button', { hasText: 'เปลี่ยนแบบ' }).first().click({ timeout: 2000 }).catch(() => {});
+          await page.waitForTimeout(300);
+          await page.locator('[data-reg-form="FRM00050"]').first().click({ timeout: 2000 }).catch(() => {});
+          await page.waitForTimeout(300);
+          await page.locator('[data-reg-variant="19"]').first().click({ timeout: 2000 }).catch(() => {});
+          await page.waitForTimeout(200);
+          const sku2 = (await page.locator('[data-reg-preview-sku]').first().innerText().catch(() => '') || '').trim();
+
+          if (sku1 !== 'OL01900') { status = 'T1_SKU'; note = `Track1 preview SKU = "${sku1}" (ต้อง OL01900 = OL+01+model900 ที่ ERP จอง)`; }
+          else if (!/สำเร็จ|เพิ่มสินค้า OL01900/.test(body1)) { status = 'T1_CREATE'; note = 'Track1 สร้างสินค้าแล้วไม่ขึ้นสำเร็จ'; }
+          else if (rc !== 1) { status = 'RESERVE_COUNT'; note = `ยิง reserveForm ${rc} ครั้ง (ต้อง 1 — idempotent)`; }
+          else if (sku2 !== 'R19025') { status = 'T2_SKU'; note = `Track2 preview SKU = "${sku2}" (ต้อง R19025 = สืบทอด prefix+model จากแบบเดิม)`; }
+          else note = 'Track1 OL01900 (จอง model) + สร้างสำเร็จ · Track2 สืบทอดแบบเดิม → R19025 · L(FROZEN) ไม่โผล่';
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'addproduct__registry.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'เพิ่มสินค้า two-track (registry)', status, note });
+    await page.close();
+  }
+
+  // ── (จ2.6a-reg-off) SAFE ROLLOUT — registry OFF → ฟอร์มเดิม (Legacy) ไม่ regression ──
+  // ต้องพิสูจน์ว่าเมื่อ registry ปิด (default production) dispatcher เรนเดอร์ LegacyAddProductView
+  //   (มี "🆕 แบบใหม่" + "🎨 สีใหม่ของแบบเดิม" ของ SKU builder เดิม) ไม่ใช่โหมดทะเบียน
+  {
+    const page = await browser.newPage({ viewport: { width: 900, height: 1200 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=warehouse&tab=newproduct`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, 'warehouse', 'newproduct');
+      await page.waitForTimeout(500);
+      const body = await page.locator('main').innerText().catch(() => '');
+      if (!navOk) { status = 'NAV_FAIL'; note = 'สลับไปแท็บเพิ่มสินค้าไม่สำเร็จ'; }
+      else if (/ระบบทะเบียน/.test(body)) { status = 'REG_LEAK'; note = 'registry OFF แต่กลับเข้าโหมดทะเบียน (regression)'; }
+      else if (!/สีใหม่ของแบบเดิม/.test(body)) { status = 'NO_LEGACY'; note = 'ไม่เห็นฟอร์ม SKU builder เดิม (Legacy)'; }
+      else note = 'registry OFF → Legacy flow เดิมครบ (🆕 แบบใหม่ / 🎨 สีใหม่ของแบบเดิม)';
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'addproduct__legacy-off.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'เพิ่มสินค้า registry OFF → Legacy', status, note });
+    await page.close();
+  }
+
   // ── (จ2.6b) ของเข้าใหม่ → บันทึก PDF: กดปุ่ม → โมดัลติ๊กวัน → เอกสาร portal ถูกสร้าง ──
   // เจ้าของสั่ง: การ์ดของเข้าใหม่ต้องพิมพ์ PDF ได้ แยกตามซัพพลายเออร์ + วันที่
   // ยืนยันบนเบราว์เซอร์จริง: ปุ่มโผล่ (owner) → เปิดโมดัล → มีวันให้ติ๊ก → เอกสาร .intake-print-page
