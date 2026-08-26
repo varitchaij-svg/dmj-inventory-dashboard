@@ -865,7 +865,7 @@ var ROLE_ACTIONS_ = {
   frontstore: ["recordUnscannedSale"].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   warehouse:  ["deductStock", "confirmStockCount", "deleteLockEntry", "addNewProduct", "uploadProductPhoto",
                "addPurchaseIn", "zeroStock", "createStockCheck", "completeStockCheck",
-               "deleteOrder", "deleteOrders",
+               "deleteOrder", "deleteOrders", "reserveForm",
                ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   // employee มีแท็บ frontstore (FrontStoreView) ด้วย → ต้องมี recordUnscannedSale เหมือน frontstore
   employee:   ["deleteLockEntry", "deleteOrder", "deleteOrders", "confirmStockCount",
@@ -2447,6 +2447,8 @@ function doPost(e) {
     if (data.action === 'listFormRegistry')    return listFormRegistryHandler_(ss, data);
     if (data.action === 'listVariantRegistry') return listVariantRegistryHandler_(ss, data);
     if (data.action === 'saveVariantRegistry') return saveVariantRegistryHandler_(ss, data, actor);
+    // 🆕 สร้าง Form + จองเลขโมเดล (D05) — role ที่เพิ่มสินค้าได้ (warehouse) + owner/dev
+    if (data.action === 'reserveForm')         return reserveFormHandler_(ss, data, actor);
 
     // มีการแก้ข้อมูล → ล้าง cache ให้ doGet ครั้งถัดไปคำนวณใหม่ (ข้อมูลไม่ค้าง)
     invalidateCache_(true); // clear payload cache เท่านั้น — ห้าม bump dmj_last_write_ts ก่อน conflict check
@@ -16449,9 +16451,9 @@ function saveFamilyRegistryHandler_(ss, data, actor) {
 // ── D08 · Product Type/Form Registry ───────────────────────────────────────
 const SHEET_FORM_REGISTRY = "ทะเบียน Form";
 var FORM_REG_COL = { ID:1, BASENAME:2, CATEGORY:3, FAMILY:4, PREFIX:5, MODEL:6, AXIS:7,
-                     STATUS:8, CREATED:9, CREATEDBY:10, UPDATED:11, UPDATEDBY:12, NOTE:13 };
+                     STATUS:8, CREATED:9, CREATEDBY:10, UPDATED:11, UPDATEDBY:12, NOTE:13, REQID:14 };
 var FORM_REG_HEADERS = ["form_id","baseName","category","family_id","prefix","model","variantAxis",
-                        "status","createdAt","createdBy","updatedAt","updatedBy","หมายเหตุ"];
+                        "status","createdAt","createdBy","updatedAt","updatedBy","หมายเหตุ","formReqId"];
 var FORM_REG_MAX_ROWS = 50000;
 var FORM_ID_PREFIX = "FRM";
 var FORM_VARIANT_AXES = ["COLOR","SIZE","MATERIAL","STYLE","NONE"];   // D03
@@ -16659,4 +16661,123 @@ function VARIANT_COLOR_CODES_SEED_() {
     {code:"93",name:"ขาวไส้ม่วงอ่อน"},{code:"94",name:"ชมพูม่วงอ่อน"},{code:"95",name:"ม่วงฟ้า"},{code:"96",name:"ไวโอเล็ต"},
     {code:"97",name:"ม่วงขาว"},{code:"98",name:"ขาวอมเขียว"},{code:"99",name:"แดงชมพู"}
   ];
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PHASE 3 — SKU RESERVATION SERVICE (Work 8 · D05)
+// ───────────────────────────────────────────────────────────────────────────
+// ERP backend เป็นเจ้าของการจองเลข: ScriptLock → re-read authoritative → max+1 →
+// persist → idempotent (formReqId) · model allocation = per Prefix · grammar
+// [Prefix][Variant2][Model3] · L = FREEZE (ต้อง ACTIVE ในทะเบียน Prefix เท่านั้น)
+// reserve model "ครั้งเดียวตอนสร้าง Form" — Form record ถือ prefix+model ที่จองไว้
+// ⚠️ Existing SKU/Barcode immutable — reservation อ่าน legacy SKU เป็น "พื้น" ของเลข
+//    ไม่แก้ของเดิมเลย
+// ═══════════════════════════════════════════════════════════════════════════
+
+// pure — แยก SKU มาตรฐาน [Prefix 1-3][Variant 2][Model 3] · ไม่เข้ารูป → null
+// (สำเนาตรรกะ parseSkuParts ฝั่ง frontend · มีเทสต์คุมให้ตรงกัน)
+function skuPartsGs_(sku) {
+  var m = String(sku||'').trim().toUpperCase().match(/^([A-Z]{1,3})(\d{2})(\d{3})$/);
+  if (!m) return null;
+  return { prefix:m[1], variant:m[2], model:m[3] };
+}
+// pure — max model number (int) ของ prefix จาก 2 แหล่ง: legacy SKU + form registry rows
+// ⚠️ ต้องนับทั้งคู่ ไม่งั้นเลขใหม่ชนกับ SKU เดิม (บทเรียน L collision) — key = FULL parse
+function maxModelForPrefixCore_(prefix, skuList, formRows) {
+  var pfx = prefixRegNormalize_(prefix), max = 0;
+  (skuList||[]).forEach(function(sku){
+    var p = skuPartsGs_(sku);
+    if (p && p.prefix === pfx) { var n = parseInt(p.model,10); if (!isNaN(n) && n>max) max=n; }
+  });
+  (formRows||[]).forEach(function(r){
+    if (prefixRegNormalize_(r[FORM_REG_COL.PREFIX-1]) === pfx) {
+      var n = parseInt(String(r[FORM_REG_COL.MODEL-1]||'').trim(),10);
+      if (!isNaN(n) && n>max) max=n;
+    }
+  });
+  return max;
+}
+// pure — ประกอบ SKU จาก prefix + variantCode + model (grammar D05) · ไม่ครบ → ''
+function composeSku_(prefix, variantCode, model) {
+  var p = prefixRegNormalize_(prefix);
+  var v = String(variantCode||'').trim(); if (/^\d$/.test(v)) v = '0'+v;
+  var m = String(model||'').trim();
+  if (!/^[A-Z]{1,3}$/.test(p) || !/^\d{2}$/.test(v) || !/^\d{3}$/.test(m)) return '';
+  return p + v + m;
+}
+
+// reserveForm — สร้าง Form ใหม่ + จองเลข model ต่อ prefix (D05/D08 · Add Product Track 1)
+// idempotent ด้วย formReqId · L freeze บังคับผ่าน "prefix ต้อง ACTIVE ในทะเบียน"
+function reserveFormHandler_(ss, data, actor) {
+  if (!formRegistryEnabled_() || !prefixRegistryEnabled_())
+    return error('ระบบทะเบียนสินค้ายังไม่เปิดใช้งาน');
+  var sess = resolveSession_(ss, data.sessionToken);
+  if (!sess || sess.status !== 'active') return error('ต้องล็อกอินก่อนสร้างสินค้าใหม่');
+
+  var pfxV = prefixRegValidate_(data.prefix);
+  if (!pfxV.ok) return error(pfxV.error);
+  var prefix = pfxV.prefix;
+  var baseName = String(data.baseName||'').trim();
+  if (!baseName) return error('กรุณาระบุชื่อแบบสินค้า');
+  var category = String(data.category||'').trim();
+  var axis = String(data.axis||'NONE').trim().toUpperCase();
+  if (!formRegAxisValid_(axis)) return error('ชนิด Variant ไม่ถูกต้อง (COLOR/SIZE/MATERIAL/STYLE/NONE)');
+  var familyId = String(data.familyId||'').trim();
+  var reqId = String(data.formReqId||'').trim().slice(0,64);
+
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) return error('ระบบไม่ว่าง กรุณาลองใหม่');
+  try {
+    var formRows = readFormRegistryRows_(ss);
+    // idempotency: formReqId ซ้ำ → คืน Form เดิม (คำขอเดิมที่ response หายกลางทาง)
+    if (reqId) {
+      for (var i=0;i<formRows.length;i++){
+        if (String(formRows[i][FORM_REG_COL.REQID-1]||'').trim() === reqId) {
+          var ex = formRegListFromRows_([formRows[i]])[0];
+          return ok({ dedup:true, formId:ex.formId, prefix:ex.prefix, model:ex.model,
+                      axis:ex.axis, familyId:ex.familyId, baseName:ex.baseName });
+        }
+      }
+    }
+    // prefix ต้อง ACTIVE ในทะเบียน (บังคับ L freeze + no raw prefix — D06/D11)
+    var pmap = {};
+    prefixRegListFromRows_(readPrefixRegistryRows_(ss)).forEach(function(p){ pmap[p.prefix]=p.status; });
+    if (pmap[prefix] !== 'ACTIVE') {
+      return error('Prefix "'+prefix+'" ใช้สร้างสินค้าใหม่ไม่ได้ — ' +
+        (prefix==='L' ? 'L ถูกแช่แข็ง (FREEZE) สำหรับสินค้าใหม่' :
+         (pmap[prefix]==='FROZEN' ? 'ถูกแช่แข็งอยู่' : 'ยังไม่ได้เปิดใช้ในทะเบียน Prefix (ให้ผู้ดูแลเพิ่มก่อน)')));
+    }
+    // family ต้องมีจริงถ้าระบุ (D07 optional — ว่างได้)
+    if (familyId) {
+      var famOk = familyRegListFromRows_(readFamilyRegistryRows_(ss)).some(function(f){ return f.familyId===familyId; });
+      if (!famOk) return error('ไม่พบ Business Family ที่เลือก — โปรดรีเฟรช');
+    }
+    // reserve model = max(legacy SKU + form registry) + 1, per prefix
+    var skuList = Object.keys(collectExistingSkus_(ss));
+    var maxModel = maxModelForPrefixCore_(prefix, skuList, formRows);
+    if (maxModel + 1 > 999)
+      return error('Prefix "'+prefix+'" เต็มแล้ว (โมเดลถึง 999) — ต้องใช้ prefix ใหม่');
+    var model = String(maxModel + 1).padStart(3,'0');
+    var formId = formRegNextId_(formRows);
+    var now = Utilities.formatDate(new Date(),'Asia/Bangkok','yyyy-MM-dd HH:mm');
+    var sh = formRegistrySheet_(ss);
+    var row = new Array(FORM_REG_HEADERS.length).fill('');
+    row[FORM_REG_COL.ID-1]=formId;         row[FORM_REG_COL.BASENAME-1]=baseName;
+    row[FORM_REG_COL.CATEGORY-1]=category; row[FORM_REG_COL.FAMILY-1]=familyId;
+    row[FORM_REG_COL.PREFIX-1]=prefix;     row[FORM_REG_COL.MODEL-1]=model;
+    row[FORM_REG_COL.AXIS-1]=axis;         row[FORM_REG_COL.STATUS-1]='ACTIVE';
+    row[FORM_REG_COL.CREATED-1]=now;       row[FORM_REG_COL.CREATEDBY-1]=actor||'';
+    row[FORM_REG_COL.UPDATED-1]=now;       row[FORM_REG_COL.UPDATEDBY-1]=actor||'';
+    row[FORM_REG_COL.REQID-1]=reqId;
+    sh.appendRow(row);
+    // model เป็น text format กัน "025" → 25 (บทเรียนข้อ 2) — เขียนซ้ำหลัง append
+    sh.getRange(sh.getLastRow(), FORM_REG_COL.MODEL).setNumberFormat('@').setValue(model);
+    SpreadsheetApp.flush();
+    writeAuditLog_(actor||'ไม่ระบุ','ทะเบียน Form',formId,
+      auditDetail_({ after:{ prefix:prefix, model:model, baseName:baseName, axis:axis, familyId:familyId },
+                     note:'สร้าง Form + จองโมเดล (per-prefix reservation)' }));
+    invalidateCache_();
+    return ok({ created:true, formId:formId, prefix:prefix, model:model,
+                axis:axis, familyId:familyId||null, baseName:baseName });
+  } finally { lock.releaseLock(); }
 }
