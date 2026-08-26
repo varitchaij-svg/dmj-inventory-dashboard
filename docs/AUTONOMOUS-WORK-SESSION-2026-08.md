@@ -209,6 +209,18 @@ duplicate the branches above — explicitly out of scope per the request.
 | LINE dead-letter (F-10) | **DEFERRED** (design noted in scrutiny + gate §9) | — | after Track B | sequencing |
 | Full-system scrutiny + delta + reconciliation | **DONE** | `claude/full-system-scrutiny-2026-08` | consume | — |
 
+## 12. PRODUCTION CHANGES (close-out — what actually reached production)
+
+- **PR #105 merged to `master` (`7cc4a53`)** and **deployed** — security F-08 + F-07(flag OFF). GAS deploy verified
+  green (`deploy-gas.yml`: clasp push + clasp deploy to the same /exec URL). CI green (unit+browser); 2378 tests.
+- **F07_PROTECTION_ENABLED NOT set** → F-07 inert in production; only change in effect is F-08 hardening
+  (`debugOrders` now requires a real admin session) + the 5 read callers harmlessly appending `&sessionToken=`.
+- **Live HTTP smoke of prod endpoints: not performed** — sandbox network policy blocks `script.google.com` (proxy
+  403). Deploy success confirmed via Actions; owner should browser-verify (app opens, normal reads work,
+  `?action=debugOrders&role=owner` now returns Unauthorized). This is an environment limitation, not a failure.
+- **No other production change.** No flag flip, no schema/data change, no ZORT/LINE config change. Authoritative
+  per-track status: `docs/FINAL-WORK-STATE-2026-08.md`.
+
 ## Final summary
 
 The audit baseline was **outdated** (`3dbc41d`, 67 commits behind master `b7e5f1e`) — the validation gate was correct

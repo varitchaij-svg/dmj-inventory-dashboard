@@ -145,3 +145,30 @@ today's evidence alone.
   (magnitude) · underlying per-stage server decomposition UNKNOWN.
 - **Closure: OBSERVABILITY LIMITED.** Production deployment is **not blocked** by this incident (no correctness
   fault found; data intact), but performance-related merges should wait for the timeout-budget decision + Track B.
+
+---
+
+## POST-MERGE ADDENDUM (after security PR #105 merged + deployed, 2026-08-26 ~09:57 UTC)
+
+**STEP 4 — reconciliation after security merge.** The F-07/F-08 security merge does **not** touch the performance
+path (auth timeouts, payload build, cache invalidation, locks). Therefore **no root-cause classification changes**:
+- Fetch-is-aborted = frontend AbortController (app.jsx:1933) — **CONFIRMED**, unchanged.
+- 3.2 MB payload transferred <0.6 s — **CONFIRMED**, unchanged.
+- Frontend timeout/retry amplifier (20 s vs 21.9 s) — **CONFIRMED**, unchanged.
+- doGet ≈21.9 s / keepWarm_ ≈19.1 s — **CONFIRMED runtime observations**, unchanged.
+- Cache-invalidation rebuild storm — **STRONG EVIDENCE**, unchanged.
+- RC-1..RC-4 **UNKNOWN**; RC-5 **NOT REPRODUCED** — unchanged.
+- **No new production evidence obtainable this session** — live endpoint smoke is blocked by the sandbox network
+  policy (proxy 403 to `script.google.com`); the deploy itself is CONFIRMED green via GitHub Actions. So there is
+  nothing new to promote/demote. Conclusions stand as-is.
+
+**STEP 5 — performance fix gate outcome (NONE implemented — by design).**
+| Fix | Source (file:line) | Effect | Confidence of the *fix* | Test coverage | Decision |
+|---|---|---|---|---|---|
+| Raise client abort budgets 20 s→≥30 s | app.jsx:1249 (payload retry), app.jsx:1132 (`_TIMEOUTS.me`) | fewer aborts of near-complete requests | the *amplifier* is CONFIRMED, but the **specific value (30 vs 25 vs 45) is a guess** — no per-stage server evidence to size it (incident is observability-limited) | none proves a value is "right" (tuning constant) | **READY FOR IMPLEMENTATION** — do not guess a value; size it from Track B burst data or an explicit owner choice |
+| Show `dmjErrText(e)` not raw `e.message` | app.jsx:1933 | Thai guidance instead of "Fetch is aborted" | cosmetic, but sits on the **7.6-quarantined login-error surface** (the exact rollback area) | no focused test | **READY FOR IMPLEMENTATION** — needs the login-surface gate; not a drive-by edit |
+| CACHE_NAME-bump discipline / avoid peak-window deploys | process (service-worker.js) | fewer forced recompiles mid-day | process, not code | n/a | **PROCESS NOTE** — no code change |
+
+Rationale: the amplifier is CONFIRMED but the *fixes* are either a tuning guess (Fix 1) or on the quarantined login
+surface (Fix 2). Per the gate ("ถ้าเป็นแค่ STRONG EVIDENCE / เดา → ห้าม implement"), none is implemented here. All
+are READY, sized/gated by the owner + Track B durable observability (the proven prerequisite from two incidents).
