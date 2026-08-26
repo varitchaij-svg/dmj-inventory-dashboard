@@ -423,8 +423,11 @@ describe('ชีต "บิลขาย" — ต่อคอลัมน์ท�
 describe('meta — createSaleBill ต่อสายถูกจุด', () => {
   const fn = grab(GS, /function createSaleBill\(ss, data, actor\) \{[\s\S]*?\n\}\n/, 'createSaleBill');
 
-  it('หักสต็อกด้วย productList ไม่ใช่ list (list มีบรรทัดค่าจัดส่งปน)', () => {
-    expect(fn).toMatch(/deductFrontStoreForSale_\(ss,\s*productList\)/);
+  it('หักสต็อกด้วย deductList (ไม่ใช่ list ที่มีค่าจัดส่งปน / ไม่ใช่ productList ที่มี MTO bundle)', () => {
+    // deductList = buildZortLineItems_(mtoSplit.deductItems, factor) — ตัดทั้งบรรทัดค่าจัดส่ง
+    // (ไม่อยู่ใน items) และบรรทัดงาน MTO (องค์ประกอบหักตอน fulfillment แล้ว — ห้ามหักซ้ำ)
+    expect(fn).toMatch(/deductFrontStoreForSale_\(ss,\s*deductList\)/);
+    expect(fn).toMatch(/deductList\s*=\s*buildZortLineItems_\(mtoSplit\.deductItems, factor\)/);
     expect(fn).not.toMatch(/deductFrontStoreForSale_\(ss,\s*list\)/);
   });
   it('ค่าจัดส่งเข้า ZORT เป็น line item เฉพาะเมื่อตั้ง SHIPPING_FEE_SKU ไว้', () => {
@@ -482,7 +485,9 @@ describe('meta — createSaleBill ต่อสายถูกจุด', () => {
   it('สร้าง line items ด้วย buildZortLineItems_ (ปัดเศษสะสม) ไม่ใช่ปัดแยกทีละชิ้นแบบเดิม', () => {
     // กันถอยกลับไปปัด unit price ทีละชิ้นก่อนคูณ qty — ของเดิมสะสมความคลาดเคลื่อนได้หลายสตางค์
     // (ดู "เคสที่ของเดิมพัง" ใน describe('buildZortLineItems_' ข้างบน)
-    expect(fn).toMatch(/productList\s*=\s*buildZortLineItems_\(items, factor\)/);
+    // ⚠️ ส่ง mtoSplit.zortItems (บรรทัด MTO ถูกแทน sku เป็น bundle แล้ว) — ราคาไม่เปลี่ยน
+    //    ไม่มีบรรทัด MTO = zortItems === items เดิม (backward-compatible)
+    expect(fn).toMatch(/productList\s*=\s*buildZortLineItems_\(mtoSplit\.zortItems, factor\)/);
     expect(fn).not.toMatch(/Math\.round\(\(Number\(it\.price\)/);
   });
 

@@ -508,6 +508,39 @@ function DisabledScreen({ onSwitchAccount }) {
   );
 }
 
+// จอ "กำลังตรวจสอบสิทธิ์" (authPhase === "checking") — ต้องมีทางออกเสมอ (Phase 7.6 rollout, ข้อ 2)
+// เดิมเป็นสปินเนอร์เปล่า ไม่มี timeout ไม่มีปุ่ม → ถ้า GAS cold-start ช้า/เน็ตร้านหลุด พนักงานเจอ
+// จอค้างที่แยกไม่ออกจาก "แอปพัง" (เจอจริงบนเครื่องผู้ใช้ 7.7 mn ก็ยังค้าง) · ตอนนี้:
+// นับวินาที → เตือน "ช้ากว่าปกติ" ที่ 12 วิ → ปุ่ม "กลับไปหน้าล็อกอิน" ที่ 30 วิ
+// ⚠️ ปุ่มนี้ **ไม่ตัดคำขอที่ค้างอยู่** (ต่างจาก timeout ของ postAuthAction ซึ่งเป็นงานเสี่ยง
+//    ที่ทำร้านล่มตอน 7.6 — แยกก้อนไว้ทำท้ายสุด) · แค่ให้ผู้ใช้เลือกออกเองได้ ถ้าคำขอเบื้องหลัง
+//    สำเร็จทีหลังก็เด้งเข้าแอปตามปกติ (bootstrap effect ยัง set authPhase ต่อได้)
+function CheckingScreen({ onGiveUp }) {
+  const [secs, setSecs] = usS(0);
+  usE(() => {
+    const t0 = Date.now();
+    const id = setInterval(() => setSecs(Math.floor((Date.now() - t0) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <div className="loading-screen" style={{ padding: "0 24px", textAlign: "center" }}>
+      <span className="spin" style={{ width: 28, height: 28, borderWidth: 3 }} />
+      {secs >= 12 && (
+        <div style={{ fontSize: 13, color: "var(--muted)", maxWidth: 300 }}>
+          เชื่อมต่อช้ากว่าปกติ กำลังลองต่อ…{secs >= 20 ? ` (${secs} วินาที)` : ""}
+        </div>
+      )}
+      {secs >= 30 && (
+        <button onClick={onGiveUp} style={{
+          marginTop: 2, background: "transparent", border: "1px solid var(--bdr)",
+          borderRadius: 10, padding: "10px 20px", color: "var(--muted)", fontSize: 13,
+          cursor: "pointer", fontFamily: "inherit",
+        }}>↩︎ กลับไปหน้าล็อกอิน</button>
+      )}
+    </div>
+  );
+}
+
 // เดิม: หน้าเลือกตำแหน่ง + PIN — เก็บไว้เป็น "รหัสสำรอง" ระหว่างเปลี่ยนผ่านไปใช้ LINE Login
 function LegacyLoginScreen({ onLogin, onBack }) {
   const [pinTarget, setPinTarget] = usS(null);
@@ -732,7 +765,46 @@ function expandMonthlyCompact(d) {
   return d;
 }
 
+// ── Phase A1: กาง products แบบคอลัมน์ (pv=3) กลับเป็น array-of-objects เดิม ──
+// GAS (pv=3) ส่ง d.products = { cols:[...], rows:[[...],...] } แทน [{...},...] เพื่อตัดชื่อคีย์
+// ที่ซ้ำทุกแถวออก · กางกลับที่นี่จุดเดียว (ก่อน enrichData ทำอย่างอื่น) → view/enrich ทั้งหมด
+// ได้ข้อมูลรูปแบบเดิมทุกประการ ไม่ต้องแก้ view สักจุด
+// ⚠️ เซลล์ null = คีย์นั้นไม่มีในสินค้าตัวนี้ → **ไม่ใส่คีย์** ให้เท่าของเดิม (pv=2 ก็ไม่มีคีย์นั้น)
+//    (frontStoreCheckedQty/At/color ที่ pv=2 ส่งเป็น null จริง ถูกอ่านด้วย ==null/!x ทุกจุด →
+//     "ไม่มีคีย์" กับ "คีย์=null" ให้ผลเท่ากัน · mo ที่เป็น [] ≠ null → คีย์คงอยู่ → monthly ครบ)
+// no-op ถ้า products เป็น array อยู่แล้ว (pv=2/pv=1 หรือข้อมูลจาก localStorage/ไฟล์อัปโหลด)
+function expandProductsColumnar(d) {
+  if (!d || !d.products || Array.isArray(d.products)) return d;
+  const packed = d.products;
+  if (!Array.isArray(packed.cols) || !Array.isArray(packed.rows)) return d;
+  const cols = packed.cols;
+  const out = new Array(packed.rows.length);
+  for (let i = 0; i < packed.rows.length; i++) {
+    const row = packed.rows[i] || [];
+    const obj = {};
+    for (let c = 0; c < cols.length; c++) {
+      const v = row[c];
+      if (v !== null && v !== undefined) obj[cols[c]] = v;  // null/undefined = คีย์ไม่มี (เท่าของเดิม)
+    }
+    out[i] = obj;
+  }
+  d.products = out;
+  return d;
+}
+
+// ── Phase A1: ประกาศ "capability" ให้ prefetch ใน <head> รู้ว่า app.jsx เวอร์ชันนี้อ่าน pv=3 ได้ ──
+// prefetch อยู่ใน HTML (network-first) แต่ app.jsx เป็น stale-while-revalidate → หลัง deploy
+// "โหลดแรก" อาจได้ HTML ใหม่ + app.jsx **เก่า** (จาก SW cache) พร้อมกัน · ถ้า prefetch ส่ง pv=3
+// ตรงนั้นเลย app.jsx เก่า (ไม่มี expandProductsColumnar) จะได้ products แบบคอลัมน์แล้วเรนเดอร์พัง
+// → ทางแก้: prefetch ส่ง pv=3 **เฉพาะเมื่อ** ธงนี้ถูกตั้งแล้ว (= เคยมี app.jsx ที่อ่าน pv=3 ได้
+//   รันสำเร็จมาก่อน) · โหลดแรกสุดหลัง deploy ยังไม่มีธง → prefetch ส่ง pv=2 (ปลอดภัยกับโค้ดเก่า)
+//   → พอ SW อัปเดต app.jsx เป็นตัวใหม่ (โหลดถัดไป) ตัวนี้รัน→ตั้งธง → prefetch เลื่อนเป็น pv=3 เอง
+// รันที่ module scope = ทันทีที่ไฟล์นี้ถูกโหลด (ก่อน React mount ด้วยซ้ำ) · rollback ปลอดภัย
+// เพราะ commit เดียวกันคืน HTML ที่ไม่อ่านธงนี้กลับไปด้วย
+try { localStorage.setItem('dmj_pv3ok', '1'); } catch (e) {}
+
 function enrichData(d) {
+  expandProductsColumnar(d);        // pv=3 → array-of-objects (no-op ถ้าเป็น array อยู่แล้ว)
   if (!d || !Array.isArray(d.products)) return d;
   expandMonthlyCompact(d);
   // Normalize field names from Google Sheets (category → cat, etc.)
@@ -805,8 +877,8 @@ function loadFromStorage() {
     if (!raw) return null;
     // ปกติของที่เซฟไว้ถูกกางแล้ว (saveToStorage เรียกหลัง enrichData) — กางซ้ำที่นี่เป็นตาข่ายกันพลาด
     // เผื่อมีเส้นทางไหนเซฟข้อมูลดิบลงไป จะได้ไม่กลายเป็น "กราฟว่างเงียบ ๆ" ที่ไล่หาสาเหตุยาก
-    // (ไม่มีคีย์ `mo` = ไม่ทำอะไรเลย จึงไม่มีต้นทุนกับข้อมูลที่กางแล้ว)
-    return expandMonthlyCompact(JSON.parse(raw));
+    // (products เป็น array/ไม่มีคีย์ `mo` = ไม่ทำอะไรเลย จึงไม่มีต้นทุนกับข้อมูลที่กางแล้ว)
+    return expandMonthlyCompact(expandProductsColumnar(JSON.parse(raw)));
   } catch (e) { return null; }
 }
 
@@ -898,7 +970,7 @@ const LINE_STATE_TTL_MS = 30 * 60 * 1000; // ครึ่งชั่วโม�
 const LINE_HANDOFF_SECRET_KEY = "dmj_line_handoff_secret";
 const LINE_HANDOFF_STATE_KEY = "dmj_line_handoff_state";
 const LINE_HANDOFF_AT_KEY = "dmj_line_handoff_at";
-const LINE_HANDOFF_TTL_MS = 15 * 60 * 1000; // ต้องไม่เกิน LOGIN_HANDOFF_TTL_SEC ฝั่ง GAS
+const LINE_HANDOFF_TTL_MS = 30 * 60 * 1000; // ต้องไม่เกิน LOGIN_HANDOFF_TTL_SEC ฝั่ง GAS (1800s)
 
 // ── Safe storage ──────────────────────────────────────────────────────────
 // iOS Safari โยน exception ตอนแตะ localStorage/sessionStorage ได้จริงหลายกรณี
@@ -1045,19 +1117,30 @@ async function postAuthAction(body) {
   //    เป็นงาน Phase 7.6 ที่ถูกถอยออกไป ยังไม่เอากลับเข้ามาปนกับรอบนี้ (จะได้แยกออกว่าอะไรพัง)
   const _act = (body && body.action) || 'auth';
   window.dmjMark('auth:' + _act);
+  // ── เพดานเวลาต่อ action (Phase 7.6 ก้อน E) ─────────────────────────────────
+  // `fetch` ไม่มี timeout ในตัว → คำขอที่ไปถึง Google แล้วแต่ไม่มีคำตอบ (ลิงก์ตาย/เน็ตหลุด/
+  // GAS ค้าง) ค้าง pending ข้ามนาที = ปุ่มหมุนไม่จบ · ใส่เพดานผ่าน dmjFetch แบบ **ใจกว้าง**
+  // (cold start GAS บนเน็ตร้านกินได้ 10-20 วิ) แยกตาม action — me อยู่บนเส้นเปิดแอปทุกครั้ง
+  // ⚠️⚠️ กติกาที่ทำร้านล่มตอน 7.6 ถ้าพลาด: **timeout/abort ที่นี่ต้อง "throw" เสมอ** เพื่อให้
+  //   ตัวเรียก (checkMe/bootstrap) ตกลง catch แล้ว fallback เป็น role เดิมที่ cache ไว้ (ทำงานต่อได้)
+  //   — ห้าม escalate เป็น logout/clear-session เด็ดขาด (logout เกิดเฉพาะ d.invalid===true เท่านั้น)
+  //   dmjFetch abort → reject → ตก catch ด้านล่าง · dmjJson throw บน HTML → ตก catch เช่นกัน
+  //   (เทียบเท่า res.json() เดิมที่ throw "Unexpected token '<'") ทั้งคู่จบที่ fallback role เดิม
+  const _TIMEOUTS = { authLine: 25000, me: 20000, logout: 20000, claimLoginHandoff: 8000 };
+  const _ms = _TIMEOUTS[_act] || 20000;
   try {
-    const res = await fetch(base, {
+    const _opts = {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify(body),
-    });
-    return await res.json();
+      dmjTimeoutMs: _ms,
+    };
+    const res = (typeof dmjFetch === 'function') ? await dmjFetch(base, _opts) : await fetch(base, _opts);
+    return (typeof dmjJson === 'function') ? await dmjJson(res) : await res.json();
   } catch (e) {
-    // เน็ตมือถือในร้าน/คลังหลุดเป็นช่วง ๆ — คำขอที่ reject กลางทางคือสาเหตุหนึ่ง
-    // ที่พนักงานต้องกดล็อกอินซ้ำหลายรอบ · ลองใหม่ให้เอง 2 ครั้ง (เว้น 1.5 / 3 วิ)
-    // ⚠️ จงใจ "ไม่ใส่ timeout/เพดานเวลา" — Phase 7.6 ที่ตัดคำขอช้าทิ้งถูก revert
-    //    ไปแล้วเพราะทำให้เข้าแอปไม่ได้ · ตรงนี้ retry เฉพาะตอน fetch reject จริงเท่านั้น
-    //    ยิง authLine ซ้ำปลอดภัย เพราะ GAS cache ผลต่อ code ไว้ 10 นาที (authCodeCacheKey_)
+    // เน็ตมือถือในร้าน/คลังหลุดเป็นช่วง ๆ + timeout ข้างบน — ลองใหม่ให้เอง 2 ครั้ง (เว้น 1.5 / 3 วิ)
+    // ยิง authLine ซ้ำปลอดภัย เพราะ GAS cache ผลต่อ code ไว้ 10 นาที (authCodeCacheKey_)
+    // · me/claim ก็ idempotent · ⚠️ ห้ามแปลง throw นี้เป็นค่า invalid — จะกลายเป็น logout (ดูข้างบน)
     const tries = (arguments.length > 1 && arguments[1]) || 0;
     if (tries < 2) {
       await new Promise(r => setTimeout(r, 1500 * (tries + 1)));
@@ -1166,10 +1249,12 @@ function App() {
     const timeoutMs = retryLeft === 3 ? 35000 : 20000;
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     // role → GAS ตัดก้อนข้อมูลที่ role นี้ไม่มีแท็บให้เปิดดูออก (ประวัติซื้อ/โอน/กราฟยอดขาย)
-    // pv=2 → บอกว่าเว็บเวอร์ชันนี้อ่านยอดรายเดือนแบบย่อ (`mo`) เป็น · ไม่ส่ง = ได้รูปแบบเดิม
+    // pv=3 → products แบบคอลัมน์ (Phase A1) + ยอดรายเดือนย่อ (`mo`) · enrichData กางกลับให้ครบ
+    // ปลอดภัยเสมอที่นี่ เพราะ fetch นี้ถูก "อ่าน" โดย app.jsx เวอร์ชันเดียวกันนี้ (ที่มี
+    // expandProductsColumnar แล้ว) — ต่างจาก prefetch ใน HTML ที่ต้อง gate ด้วย dmj_pv3ok
     const bustUrl = sheetUrl + (sheetUrl.includes('?') ? '&' : '?') + '_t=' + Date.now()
                   + (force ? '&fresh=1' : '')
-                  + '&pv=2&role=' + encodeURIComponent(role || '');
+                  + '&pv=3&role=' + encodeURIComponent(role || '');
     // ใช้ผลที่เริ่มโหลดไว้ตั้งแต่ต้นหน้า (script ใน <head> ของ HTML) — ตัดเวลา GAS
     // ออกจากคิว เพราะมันเดินขนานไปกับการ compile JSX แล้ว · ใช้ได้ครั้งเดียว
     // (เฉพาะ attempt แรก) การ refetch/retry ทุกครั้งหลังจากนี้ยิงใหม่เสมอ = ได้ข้อมูลสด
@@ -1444,6 +1529,62 @@ function App() {
     return () => clearTimeout(id);
   }, [staleAt, fetchFromSheet]);
 
+  // Patch จำนวนสต็อกของ "เฉพาะ SKU ที่เพิ่งนับ" เข้า data.products ทันที (optimistic) — ไม่ต้องรอ
+  // reload ทั้งก้อน 4.2MB · ใช้ตอนพนักงานกด "ยืนยันเช็คเสร็จ" ให้ตัวเลขบนเว็บอัปเดตทันที
+  // patchMap = { SKU(ตัวใหญ่): { qtyWH?, qtyStore? } } — ใส่คีย์ไหนก็แก้เฉพาะคอลัมน์นั้น
+  // ⚠️ ต้องคำนวณ qty/isOOS/qtyStatus/stockValue ใหม่ให้ตรงกับ applyQtyLocToProduct_ ฝั่ง GAS
+  //    (สูตรเดียวกับ poll stocklite ด้านบน) ไม่งั้นซ้ำรอยบั๊ก WL (มีของจริงแต่โชว์ "หมด")
+  const patchProductQtys = usC((patchMap) => {
+    if (!patchMap || typeof patchMap !== 'object') return;
+    setData(prev => {
+      if (!prev || !Array.isArray(prev.products)) return prev;
+      const whR = (prev.totals && prev.totals.wholesaleRatio) || 0.8;
+      let changed = false;
+      const products = prev.products.map(p => {
+        const patch = patchMap[String(p.sku || '').toUpperCase()];
+        if (!patch) return p;
+        const qtyStore = patch.qtyStore != null ? (Number(patch.qtyStore) || 0) : p.qtyStore;
+        const qtyWH    = patch.qtyWH    != null ? (Number(patch.qtyWH)    || 0) : p.qtyWH;
+        if (p.qtyStore === qtyStore && p.qtyWH === qtyWH) return p;
+        changed = true;
+        const total = qtyStore + qtyWH;
+        const price = p.price || 0;
+        return Object.assign({}, p, {
+          qtyStore, qtyWH, warehouseQty: qtyWH,
+          qty:        total,
+          qtyStatus:  total < 0 ? 'negative' : 'ok',
+          isOversold: total < 0,
+          isOOS:      total <= 0,
+          stockValue:      total    * price * whR,
+          stockValueWH:    qtyWH    * price * whR,
+          stockValueStore: qtyStore * price * whR,
+        });
+      });
+      if (!changed) return prev;
+      return Object.assign({}, prev, { products });
+    });
+  }, []);
+
+  // ปิดคำขอเช็คของ "ฝั่งตัวเอง" ในมือทันที (optimistic) — แบนเนอร์คำขอจะหายเลยไม่ต้องรอ reload
+  // ⚠️ จำเป็นเพราะ completeStockCheckRequest_ ฝั่ง GAS ใช้ invalidateCache_(true) (skipTsUpdate)
+  //    โดยตั้งใจ (ปิดคำขอไม่เปลี่ยนจำนวนสินค้า จึงไม่ bump ts กัน conflict) → fetchFromSheet เห็น ts
+  //    เท่าเดิม → ข้ามการโหลด → data.stockCheckRequests ค้างของเก่า → แบนเนอร์ไม่หาย (เจ้าของแจ้ง ส.ค. 2026)
+  const markCheckSideDone = usC((reqId, side) => {
+    if (!reqId || (side !== 'fs' && side !== 'wh')) return;
+    const key = side === 'fs' ? 'fsStatus' : 'whStatus';
+    setData(prev => {
+      if (!prev || !Array.isArray(prev.stockCheckRequests)) return prev;
+      let changed = false;
+      const stockCheckRequests = prev.stockCheckRequests.map(r => {
+        if (String(r.reqId) !== String(reqId) || r[key] === 'done') return r;
+        changed = true;
+        return Object.assign({}, r, { [key]: 'done' });
+      });
+      if (!changed) return prev;
+      return Object.assign({}, prev, { stockCheckRequests });
+    });
+  }, []);
+
   // expose refetch ให้ child component เรียกได้เมื่อเจอ conflict (จะอัปเดต window._dataLoadedAt ให้สด)
   usE(() => { window._dmjRefetch = fetchFromSheet; return () => { delete window._dmjRefetch; }; }, [fetchFromSheet]);
   // ตัวเบา: ดึงเฉพาะรายการสั่งของ (action=orders อ่านชีตตรง ไม่ผ่าน cache) — ใช้หลังสั่งของสำเร็จ
@@ -1480,13 +1621,17 @@ function App() {
     return () => clearInterval(id);
   }, [tab, role]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Auto-sync เมื่ออยู่หน้านับสต็อก/เช็คหน้าร้าน — ให้หลายเครื่องเห็นข้อมูลของกันและกัน ──
+  // ── Auto-sync เมื่ออยู่หน้าที่ตัดสินใจเกี่ยวกับสต็อก — ให้หลายเครื่องเห็นข้อมูลของกันและกัน ──
   // ดึงเฉพาะเลขสต็อกอ้างอิงทุก 30 วิ (Phase 7.4 — เดิมดึง payload ทั้งก้อน ~4.2MB ทุกรอบ)
   // จำนวนที่ผู้ใช้พิมพ์เก็บใน local state (checkedQtys) แยกต่างหาก จึงไม่ถูกทับ
   // ส่วน window._dataLoadedAt จะอัปเดตให้สด กัน false conflict ตอนบันทึกจากแท็บนี้
+  // ⚠️ "stock"/"categories" เพิ่มเข้ามา (แผนงาน Realtime Stock Count) — ตั้งใจ **ไม่ใส่** แท็บ
+  //    dashboard/report อื่น (overview/trends/staffperf ฯลฯ) เพราะไม่ใช่หน้าที่ตัดสินใจเรื่อง
+  //    สต็อกโดยตรง และ stocklite ยังคง narrow payload เดิม (ไม่ใช่ full reload) จึงขยายได้โดย
+  //    ไม่กระทบ Phase 7.4/7.5 ที่กังวลเรื่อง payload เต็มก้อน ~4.2MB — คนละขนาดกันมาก
   usE(() => {
     if (!role) return;
-    const LIVE_TABS = ["stockcount", "frontstore"];
+    const LIVE_TABS = ["stockcount", "frontstore", "stock", "categories"];
     if (!LIVE_TABS.includes(tab)) return;
     const id = setInterval(() => { if (navigator.onLine) fetchStockLite(); }, 30000);
     return () => clearInterval(id);
@@ -1686,26 +1831,32 @@ function App() {
   usE(() => {
     if (authPhase !== "needLogin" || !handoffWaiting) return;
     let stop = false;
-    // ⚠️ กันยิงซ้อน: claimLoginHandoff แต่ละครั้งเป็น GAS call (1-4 วิบน cold start) แต่ interval
-    // 4 วิ + onWake (visibilitychange/focus) ยิงตามเวลาไม่รอผลตัวก่อน → มี claim ค้างพร้อมกัน
-    // หลายตัว · GAS deploy แบบ executeAs USER_DEPLOYING จัดคิว execution ของ user เดียวกัน
-    // → 14 claim ต่อคิวกัน + เบียด me/payload ให้ช้าลงไปอีก (เห็นจริงใน BootTrace: claim รัว ~15 ครั้ง
-    // ระหว่างล็อกอิน) · มี claim ค้างอยู่ = ข้ามรอบนี้ไป รอผลตัวเดิมก่อน (ไม่เสียการตอบสนอง —
-    // claim ที่ค้างอาจสำเร็จเองอยู่แล้ว)
-    let inFlight = false;
-    const tick = async () => {
-      if (stop || inFlight) return;
+    // ⚠️ กันยิงซ้อน: claimLoginHandoff แต่ละครั้งเป็น GAS call (1-4 วิบน cold start) ถ้ายิงตาม
+    // เวลาไม่รอผลตัวก่อน → มี claim ค้างพร้อมกันหลายตัว · GAS deploy แบบ executeAs USER_DEPLOYING
+    // จัดคิว execution ของ user เดียวกัน → claim ต่อคิวกัน + เบียด me/payload ให้ช้าลง (เห็นจริงใน
+    // BootTrace: claim รัว ~15 ครั้งระหว่างล็อกอิน) · มี claim ค้างอยู่ = ข้ามรอบนี้ รอผลตัวเดิมก่อน
+    // (Phase 7.6 ก้อน C) ถอยห่างขึ้นเรื่อย ๆ แทน interval คงที่ 4 วิ: 4วิ×3 → 8วิ → 15วิ (cap) —
+    // คนที่ล็อกอินไม่จบใน 12 วิแรกส่วนใหญ่ติด cold start ยาว การยิงถี่ไม่ช่วยแต่เพิ่มคิว ·
+    // ยัง onWake (visibilitychange/focus) อยู่เพราะ iOS แช่แข็ง timer ตอน background — และ wake
+    // = ผู้ใช้กลับมารออยู่จริง จึงรีเซ็ตความถี่กลับมาไวสุด
+    let inFlight = false, attempt = 0, timer = null;
+    const delayFor = (n) => (n < 3 ? 4000 : n < 4 ? 8000 : 15000);
+    const clearT = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    const schedule = () => { clearT(); if (!stop) timer = setTimeout(run, delayFor(attempt)); };
+    const run = async () => {
+      clearT();
+      if (stop || inFlight) { if (!stop) schedule(); return; }
       if (!readPendingHandoff()) { setHandoffWaiting(false); return; } // หมดอายุแล้ว
-      inFlight = true;
+      inFlight = true; attempt++;
       try { await claimHandoff(); } finally { inFlight = false; }
+      schedule();
     };
-    const id = setInterval(tick, 4000);
-    const onWake = () => { if (!document.hidden) tick(); };
+    const onWake = () => { if (!document.hidden) { attempt = 0; run(); } };
     document.addEventListener("visibilitychange", onWake);
     window.addEventListener("focus", onWake);
-    tick();
+    run();
     return () => {
-      stop = true; clearInterval(id);
+      stop = true; clearT();
       document.removeEventListener("visibilitychange", onWake);
       window.removeEventListener("focus", onWake);
     };
@@ -1821,9 +1972,18 @@ function App() {
   // ── Conditional renders AFTER all hooks ──
   if (authPhase === "checking") {
     return (
-      <div className="loading-screen">
-        <span className="spin" style={{width:28,height:28,borderWidth:3}}/>
-      </div>
+      <CheckingScreen onGiveUp={() => {
+        // ลบ ?code=/state ออกจาก URL ก่อน กัน effect แลก code ยิงซ้ำตอน re-render
+        // (คำขอเบื้องหลังที่ค้างอยู่ไม่ถูกตัด — ถ้าสำเร็จทีหลัง applyStaffSession ยังเด้งเข้าแอปได้)
+        try {
+          const u = new URL(window.location.href);
+          if (u.searchParams.has("code") || u.searchParams.has("state")) {
+            u.searchParams.delete("code"); u.searchParams.delete("state");
+            window.history.replaceState({}, "", u.pathname + u.search + u.hash);
+          }
+        } catch (e) {}
+        setAuthPhase("needLogin");
+      }}/>
     );
   }
 
@@ -2361,26 +2521,33 @@ function App() {
         {activeTab === "storage"      && <ErrorBoundary key="storage"><StorageView data={data}/></ErrorBoundary>}
         {activeTab === "stockcount"   && <ErrorBoundary key="stockcount"><StockCountView data={data}
                                             checkRequest={activeCheckRequest}
-                                            onCheckComplete={async function(reqId){
+                                            patchProductQtys={patchProductQtys}
+                                            onCheckComplete={async function(reqId, counts){
+                                              // อัปเดตจำนวนสต็อกของ SKU ที่เพิ่งนับเข้าเว็บทันที (ไม่ต้องรอ reload ทั้งก้อน)
+                                              patchProductQtys(counts);
+                                              markCheckSideDone(reqId, 'wh'); // ปิดคำขอฝั่งคลังในมือทันที → แบนเนอร์หายเลย
+                                              setActiveCheckRequest(null);
                                               try {
                                                 // side:'wh' → ปิดเฉพาะฝั่งคลัง ไม่กระทบคำขอฝั่งหน้าร้าน
                                                 await dmjFetch(SHEET_DEPLOY_URL, {method:"POST",
                                                   headers:{"Content-Type":"text/plain;charset=utf-8"},
                                                   body: JSON.stringify({completeStockCheck:true, reqId:reqId, side:'wh', actor:role})});
-                                                setActiveCheckRequest(null);
-                                                fetchFromSheet();
+                                                fetchFromSheet(); // reconcile เบื้องหลัง (รีเฟรช pendingChecks + ค่าจริง)
                                               } catch(e){ console.error("completeStockCheck:", e); }
                                             }}/></ErrorBoundary>}
         {activeTab === "frontstore"   && <ErrorBoundary key="frontstore"><FrontStoreView data={data} role={viewRole}
                                             checkRequest={activeCheckRequest}
-                                            onCheckComplete={async function(reqId){
+                                            onCheckComplete={async function(reqId, counts){
+                                              // อัปเดตจำนวนหน้าร้านของ SKU ที่เพิ่งนับเข้าเว็บทันที (ไม่ต้องรอ reload ทั้งก้อน)
+                                              patchProductQtys(counts);
+                                              markCheckSideDone(reqId, 'fs'); // ปิดคำขอฝั่งหน้าร้านในมือทันที → แบนเนอร์หายเลย
+                                              setActiveCheckRequest(null);
                                               try {
                                                 // side:'fs' → ปิดเฉพาะฝั่งหน้าร้าน ไม่กระทบคำขอฝั่งคลัง
                                                 await dmjFetch(SHEET_DEPLOY_URL, {method:"POST",
                                                   headers:{"Content-Type":"text/plain;charset=utf-8"},
                                                   body: JSON.stringify({completeStockCheck:true, reqId:reqId, side:'fs', actor:role})});
-                                                setActiveCheckRequest(null);
-                                                fetchFromSheet();
+                                                fetchFromSheet(); // reconcile เบื้องหลัง (รีเฟรช pendingChecks + ค่าจริง)
                                               } catch(e){ console.error("completeStockCheck:", e); }
                                             }}/></ErrorBoundary>}
         {activeTab === "transfers"    && <ErrorBoundary key="transfers"><TransferView data={data}/></ErrorBoundary>}

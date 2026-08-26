@@ -12,8 +12,13 @@
 เครื่องมือวัด) + Phase 8 step 1 (ตัดคีย์ตาย 3 ตัว) — อยู่บน `master` แล้ว (auto-deploy)
 เทสต์ 1150+ เคส + browser 82/82 ผ่านหมด
 
-**ยังไม่ได้ทำ**: ส่วนที่ 1–3 ของแผน `zesty-herding-puddle.md` (ล็อกอินไม่ค้าง/ไม่วน +
-แถบความคืบหน้า + Phase 8 ขั้นวัด) — **นี่คืองานที่ต้องสั่งต่อ**
+**อัปเดต ส.ค. 2026 (rollout รอบ opus)**: ส่วนที่ 1 ทำเป็นก้อน A–E "ปลอดภัยก่อน→เสี่ยงท้าย"
+- ✅ **A–D deployed เข้า master แล้ว** (จอ checking มีทางออก · handoff consume-once fix ·
+  poll backoff + TTL 30 นาที · resolveSession_ cache + ล้าง cache ตอน revoke/เปลี่ยน role) ·
+  เทสต์ `tests/login-resilience.test.js` 21 เคส + browser 113/113 · ดูตาราง A–E ใน `CLAUDE.md` หัวข้อ Phase 7.6
+- 🔴 **เหลือ E = ข้อ 1 (postAuthAction timeout)** — เสี่ยงสุด (เคยทำร้านล่ม) รอเทสต์ iPhone จริงก่อน merge
+
+**ยังไม่ได้ทำ**: ส่วนที่ 1 ข้อ 1 (E ข้างบน) · ส่วนที่ 2 (แถบความคืบหน้า) · ส่วนที่ 3 (Phase 8 ขั้นวัด)
 
 ---
 

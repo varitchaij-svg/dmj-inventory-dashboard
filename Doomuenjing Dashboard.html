@@ -1035,6 +1035,35 @@
     flex-direction: column;
     overflow: hidden;
   }
+  /* ── Card Label (แผ่นแปะสินค้า — QR + จำนวนเข้า + รหัสร้าน) 3×3/หน้า ── */
+  .card-label-page {
+    width: 210mm;
+    min-height: 297mm;
+    box-sizing: border-box;
+    padding: 6mm;
+    background: #fff;
+    display: flex;
+    flex-direction: column;
+  }
+  .card-label-grid-fill { flex: 1; display: grid; gap: 0; }
+  .card-label-page:not(:last-child) { page-break-after: always; break-after: page; }
+  .card-label-page:last-child { page-break-after: avoid; break-after: avoid; }
+  .card-label-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-auto-rows: 88mm;
+    gap: 4mm;
+  }
+  .card-label-cell {
+    border: 0.7pt dashed #888;   /* เส้นประสำหรับตัด (เหมือนโหมดพิมพ์การ์ดเต็มหน้า) */
+    border-radius: 3mm;
+    overflow: hidden;
+    display: flex;
+    background: #fff;
+    box-sizing: border-box;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
   .label-top-row {
     display: flex;
     justify-content: space-between;
@@ -1110,6 +1139,53 @@
     display: block;
     transform: rotate(-90deg);
   }
+  /* ── รูเจาะร้อยเชือกแขวนป้าย (โหมด A4 เท่านั้น) — วงกลมประเป็น "แนวเจาะ" ให้พนักงานเอาที่
+     เจาะรูมาเจาะทีหลัง ไม่ใช่รูจริง (พิมพ์กระดาษธรรมดาตัดผ่านไม่ได้) ขนาดเท่าที่เจาะรูกระดาษมาตรฐาน
+     · ใช้ร่วมกันทั้งโหมด QR และ Barcode (ติดอยู่ตลอดไม่ผูกกับชนิดโค้ด) ── */
+  .label-hole {
+    position: absolute;
+    left: 0.5mm;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 4mm;
+    height: 4mm;
+    border-radius: 50%;
+    border: 0.5pt dashed #999;
+    background: rgba(0, 0, 0, .03);
+    box-sizing: border-box;
+    pointer-events: none;
+  }
+  /* ── โหมด Barcode (Code128) — คนละเลย์เอาต์กับ QR: hole + แท่งบาร์โค้ด + โลโก้ย่อ เรียงแถวเดียว
+     `padding-left` เผื่อที่ให้ .label-hole (ซึ่งวางเป็น absolute อีกตัว ไม่ใช่ลูกของแถวนี้)
+     · แถบกว้างเท่าไหร่ได้ `flex:1` คำนวณให้เองตามที่เหลือจริง ไม่ hardcode mm ไว้ตายตัว
+     (โหมด QR ยังใช้ label-qr-center/label-logo-corner เดิมทุกประการ ไม่แตะ) ── */
+  .label-barcode-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1mm;
+    width: 100%;
+    height: 100%;
+    padding-left: 5mm;
+    box-sizing: border-box;
+  }
+  .label-barcode-box { flex: 1; min-width: 0; height: 7.5mm; }
+  .label-barcode-box img { display: block; width: 100%; height: 100%; object-fit: fill; }
+  .label-logo-small {
+    flex-shrink: 0;
+    width: 6mm;
+    height: 6mm;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .label-logo-small img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    display: block;
+    transform: rotate(-90deg);
+  }
   .label-sku-text {
     font-size: 6pt;
     text-align: center;
@@ -1150,6 +1226,10 @@
   .quote-print-area { display: none; }
   .quote-print-page { padding: 12mm 10mm; box-sizing: border-box; }
 
+  /* ของเข้าใหม่ → PDF (IntakePdfDoc) — คลาสแยกจาก quote/pos โดยตั้งใจ · portal ไป body
+     แล้วซ่อน #root ด้วย body.intake-printing ตอนพิมพ์ (ดู runIntakePrint ใน views-main.jsx) */
+  .intake-print-area { display: none; }
+
   @media print {
     .no-print, .topnav, nav { display: none !important; }
     .pos-print-area, .pos-print80-area { display: block !important; }
@@ -1187,6 +1267,33 @@
        หน้าแบบเดิม) */
     .quote-print-mobile .quote-print-page { min-height: 0 !important; }
     .quote-print-mobile .quote-items-fill { flex: none !important; }
+    /* ── ของเข้าใหม่ PDF ── ซ่อนทั้งแอป (#root) แล้วโชว์เฉพาะเอกสารที่ portal ไป body
+       (ต่างจาก quote/pos ที่ห่อ .no-print — Overview ไม่ได้ห่อ จึงตัดที่ #root แทน) */
+    /* ⚠️ iOS: html/body มี overflow-x:hidden + max-width:100vw (คุมจอ) — ถ้าไม่ปลดตอนพิมพ์
+       เอกสาร 210mm จะถูก "ตัดขอบ" ที่ความกว้างจอ (เหลือ 2 จาก 3 คอลัมน์) แทนที่จะย่อพอดี A4
+       ปลดที่ html+body (ตั้ง class ทั้งคู่ใน runIntakePrint) ให้เนื้อหากว้างเต็ม 210mm ได้ */
+    html.intake-printing, body.intake-printing {
+      overflow: visible !important;
+      max-width: none !important;
+      width: auto !important;
+    }
+    body.intake-printing #root { display: none !important; }
+    body.intake-printing .intake-print-area { display: block !important; }
+    .intake-print-page {
+      width: 210mm !important;
+      min-height: 297mm !important;
+      padding: 12mm 10mm !important;
+      box-sizing: border-box !important;
+      display: flex !important;
+      flex-direction: column !important;
+      background: #fff !important;
+      color: #111 !important;
+      page-break-after: always;
+      break-after: page;
+    }
+    .intake-print-page:last-child { page-break-after: avoid; break-after: avoid; }
+    /* โหมดแผ่นแปะ — ขอบแคบลง (6mm) ให้การ์ดเต็มหน้ากระดาษมากที่สุด */
+    .intake-print-page.label { padding: 6mm !important; }
     /* ใบเสร็จ 80mm — ขนาดหน้ากระดาษจริงคุมด้วย JS (setPosPrintPageSize) เพราะ
        named @page (page: rc80) ไม่ทำงานเชื่อถือได้บน Chrome/Android print pipeline
        (เนื้อหาเลยไปฝังในหน้า A4 แล้วถูกเครื่องพิมพ์ย่อลงมาเล็กจิ๋วมุมกระดาษ) */
@@ -1401,9 +1508,15 @@
       /* ไม่ส่ง fresh=1 → ใช้ cache ฝั่ง GAS ได้ (เร็วกว่ามาก ไม่ต้อง build ใหม่ทั้ง 11 ชีต)
          ปลอดภัยเพราะ doPost เรียก invalidateCache_ ทุกครั้งที่มีการแก้ข้อมูล — เครื่องอื่น
          บันทึกอะไรไว้เราก็ยังเห็นทันที · ผู้ใช้กดปุ่ม Sync เองเมื่อไหร่ค่อยบังคับ fresh=1 */
+      /* Phase A1: prefetch ส่ง pv=3 (products แบบคอลัมน์ — เล็กกว่ามาก) **เฉพาะเมื่อ** เคยมี
+         app.jsx ที่อ่าน pv=3 ได้รันมาก่อน (ตั้งธง dmj_pv3ok ไว้) · โหลดแรกสุดหลัง deploy ยัง
+         ไม่มีธง → ส่ง pv=2 ซึ่ง app.jsx เก่า (ที่ SW อาจยังเสิร์ฟอยู่) อ่านได้ → กันจอพังช่วง
+         เปลี่ยนผ่าน · โหลดถัดไป (SW อัปเดต app.jsx เป็นตัวใหม่แล้ว) จะได้ pv=3 อัตโนมัติ */
+      var pv = '2';
+      try { if (localStorage.getItem('dmj_pv3ok') === '1') pv = '3'; } catch (_) {}
       var u = _SHEET_URL + (_SHEET_URL.indexOf('?') >= 0 ? '&' : '?')
             + '_t=' + Date.now()
-            + '&pv=2&role=' + encodeURIComponent(role);
+            + '&pv=' + pv + '&role=' + encodeURIComponent(role);
       var ctl = ('AbortController' in window) ? new AbortController() : null;
       var to  = setTimeout(function () { try { ctl && ctl.abort(); } catch (_) {} }, 35000);
       /* จำ role ที่ใช้ยิงไว้ด้วย — payload ผูกกับ role แล้ว ถ้าสุดท้ายผู้ใช้ล็อกอินเป็น role อื่น
@@ -1565,6 +1678,9 @@
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <!-- html5-qrcode: ใช้ scan ได้บนทุก browser/มือถือ (iOS Safari, Android, Desktop) -->
   <script defer src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <!-- jsbarcode: self-host (same-origin) — วาด Code128 ให้หน้าพิมพ์ label (โหลด local ก่อนเสมอ
+       หลักเดียวกับ html2canvas ข้างล่าง: CDN ไม่เสถียรบนเน็ตร้าน/iPad มาแล้ว) fallback CDN ถ้าไฟล์ local หาย -->
+  <script defer src="/jsbarcode.min.js" onerror="var s=document.createElement('script');s.defer=true;s.src='https://cdnjs.cloudflare.com/ajax/libs/JsBarcode/3.11.5/JsBarcode.all.min.js';document.head.appendChild(s);"></script>
   <!-- html2canvas: self-host (same-origin) — ใช้พิมพ์ใบเสร็จตรงผ่าน Bluetooth (rasterize DOM → ESC/POS)
        เดิมโหลดจาก CDN แต่ไม่เสถียรบน iPad/เน็ตร้าน (โหลดไม่ทัน → พิมพ์ Bluetooth พัง) → เก็บไฟล์เองใน repo
        fallback CDN ถ้าไฟล์ local หาย -->

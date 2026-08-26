@@ -1201,6 +1201,402 @@ const OV_QUARTERS = [
 ];
 const OV_MONTH_ABBR = ["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
 
+// ═══════════════════════════════════════════════════════════════════════
+// ของเข้าใหม่ → บันทึก PDF แยกตามรหัสซัพพลายเออร์ + วันที่ (เจ้าของสั่ง ส.ค. 2026)
+// ───────────────────────────────────────────────────────────────────────
+// เจ้าของเลือกได้ว่าจะพิมพ์ของเข้าวันไหนบ้าง (ติ๊กถูก) → 1 หน้า = 1 ซัพพลายเออร์ ต่อ 1 วัน
+// ⚠️ พิมพ์ผ่าน `.intake-print-area` (display:none บนจอ → block ตอน print) + portal ไป
+//    document.body แล้วซ่อน #root ด้วย body.intake-printing ตอนพิมพ์ (ดู runIntakePrint)
+//    — เพิ่ม CSS ใน HTML ต้อง bump CACHE_NAME (บทเรียนข้อ 15)
+// ⚠️ พิมพ์ผ่าน window.print() + document.title (ไม่ rasterize DOM) — หลักเดียวกับ
+//    runQuoteDocPrint: เลย์เอาต์ A4 อยู่ใน @media print เท่านั้น จับภาพจากจอได้คนละหน้าตา
+// ═══════════════════════════════════════════════════════════════════════
+
+const INTAKE_PDF_PER_PAGE = 9;   // การ์ด 3×3 ต่อแผ่น (ตรงกับดีไซน์ต้นแบบที่เจ้าของส่งมา)
+
+// ISO yyyy-MM-dd → "16 สิงหาคม 2569" (ปี พ.ศ.)
+// ⚠️ แยกเลข y/m/d เองแทน new Date("yyyy-MM-dd") ที่ถูกตีเป็น UTC → เลื่อนวัน (บทเรียนข้อ 11)
+function intakeDateLong(iso) {
+  const m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(String(iso == null ? "" : iso).trim());
+  if (!m) return String(iso == null ? "" : iso);
+  const mon = ["มกราคม","กุมภาพันธ์","มีนาคม","เมษายน","พฤษภาคม","มิถุนายน","กรกฎาคม","สิงหาคม","กันยายน","ตุลาคม","พฤศจิกายน","ธันวาคม"];
+  return `${parseInt(m[3])} ${mon[parseInt(m[2]) - 1] || ""} ${parseInt(m[1]) + 543}`;
+}
+
+// คำนวณกริดการ์ดแผ่นแปะให้ "เต็มหน้า A4 + ประหยัดกระดาษที่สุด" อัตโนมัติ
+// จากความกว้างเป้าหมายต่อการ์ด (targetWmm) + สัดส่วนแนวนอน (aspect กว้าง:สูง)
+//   cols = จำนวนคอลัมน์มากสุดที่การ์ดยังกว้าง ≥ เป้าหมาย · rows = แถวมากสุดที่สูงพอ
+// คืน {cols, rows, perPage} · การ์ดจริงยืด 1fr เต็มหน้า (ขอบ marginMm)
+// ค่า default: การ์ดกว้าง ~48mm (เล็กลงจากเดิม 2 คอลัมน์ ~5ซม.) → บน A4 ได้ 4 คอลัมน์
+function intakeCardGrid(opt) {
+  const o = opt || {};
+  const m = o.marginMm == null ? 6 : o.marginMm;
+  const targetW = o.targetWmm || 60;      // มม./การ์ด (กว้างเป้าหมาย) → บน A4 ได้ 3 คอลัมน์
+  const aspect = o.aspect || 1.15;        // กว้าง:สูง (>1 = แนวนอน)
+  const usableW = 210 - 2 * m, usableH = 297 - 2 * m;
+  const cols = Math.max(1, Math.floor(usableW / targetW));
+  const cardH = (usableW / cols) / aspect;
+  const rows = Math.max(1, Math.floor(usableH / cardH));
+  return { cols, rows, perPage: cols * rows };
+}
+
+// รายวันที่มีของเข้า (สำหรับติ๊กเลือกในโมดัล) — ใหม่สุดก่อน · sinceStr ตัดวันเก่ากว่าทิ้ง ('' = ไม่ตัด)
+function intakeDateOptions(purchases, sinceStr) {
+  const byDate = new Map();
+  for (const pu of (purchases || [])) {
+    const d = pu && pu.date;
+    if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;   // เฉพาะ ISO ที่ sort เทียบ string ได้
+    if (sinceStr && d < sinceStr) continue;
+    if (!pu.sku) continue;
+    const g = byDate.get(d) || { date: d, sups: new Set(), skus: new Set(), totQty: 0 };
+    g.sups.add((pu.supplier || "").trim() || "—");
+    g.skus.add(pu.sku);
+    g.totQty += pu.qty || 0;
+    byDate.set(d, g);
+  }
+  return [...byDate.values()]
+    .map(g => ({ date: g.date, nSup: g.sups.size, nSku: g.skus.size, totQty: g.totQty }))
+    .sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : 0);
+}
+
+// สร้างกลุ่มหน้า — 1 กลุ่ม = 1 ซัพพลายเออร์ ต่อ 1 วัน · รวมจำนวนต่อ SKU (สั่งซ้ำวันเดียวกันบวกกัน)
+// selectedDates = array/Set ของ "yyyy-MM-dd" ที่ผู้ใช้ติ๊ก · เรียงวันใหม่สุดก่อน แล้ว supplier a→z
+function buildIntakePages(purchases, selectedDates) {
+  const sel = selectedDates instanceof Set ? selectedDates : new Set(selectedDates || []);
+  if (!sel.size) return [];
+  const byDate = new Map();                              // date → supplier → sku → item
+  for (const pu of (purchases || [])) {
+    const d = pu && pu.date;
+    if (!d || !sel.has(d)) continue;
+    const sku = (pu.sku || "").trim();
+    if (!sku) continue;
+    const sup = (pu.supplier || "").trim() || "ไม่ระบุซัพพลายเออร์";
+    if (!byDate.has(d)) byDate.set(d, new Map());
+    const bySup = byDate.get(d);
+    if (!bySup.has(sup)) bySup.set(sup, new Map());
+    const bySku = bySup.get(sup);
+    const g = bySku.get(sku) || { sku, name: pu.name || "", qty: 0, pos: new Set() };
+    g.qty += pu.qty || 0;
+    if (pu.name && !g.name) g.name = pu.name;
+    if (pu.poNum) g.pos.add(pu.poNum);
+    bySku.set(sku, g);
+  }
+  const pages = [];
+  const dates = [...byDate.keys()].sort((a, b) => a < b ? 1 : a > b ? -1 : 0);   // ใหม่สุดก่อน
+  for (const d of dates) {
+    const bySup = byDate.get(d);
+    const sups = [...bySup.keys()].sort((a, b) => a.localeCompare(b));
+    for (const sup of sups) {
+      const items = [...bySup.get(sup).values()]
+        .map(g => ({ sku: g.sku, name: g.name, qty: g.qty, pos: [...g.pos] }))
+        .sort((a, b) => a.sku.localeCompare(b.sku, undefined, { numeric: true }));
+      pages.push({
+        date: d, supplier: sup, items,
+        nSku: items.length,
+        totQty: items.reduce((s, it) => s + it.qty, 0),
+        pos: [...new Set(items.flatMap(it => it.pos))],
+      });
+    }
+  }
+  return pages;
+}
+
+// สั่งพิมพ์เอกสารของเข้าใหม่ (A4) — ซ่อน #root ด้วย body.intake-printing แล้วปล่อยให้
+// .intake-print-area (portal ไป body) โผล่แทน · คืน document.title เดิมตอน afterprint
+function runIntakePrint(fileName) {
+  const prevTitle = document.title;
+  if (fileName) document.title = fileName;
+  // ตั้ง class ทั้ง <html> และ <body> — CSS ปลด overflow-x:hidden/max-width:100vw ตอนพิมพ์
+  // (ไม่งั้น iOS ตัดขอบเอกสาร 210mm ที่ความกว้างจอ — เหลือ 2 จาก 3 คอลัมน์)
+  document.documentElement.classList.add("intake-printing");
+  document.body.classList.add("intake-printing");
+  try { if (typeof setPosPrintPageSize === "function") setPosPrintPageSize("a4"); } catch (e) {}
+  const onAfter = () => {
+    document.title = prevTitle;
+    document.documentElement.classList.remove("intake-printing");
+    document.body.classList.remove("intake-printing");
+    window.removeEventListener("afterprint", onAfter);
+  };
+  window.addEventListener("afterprint", onAfter);   // ผูกก่อน print() (บทเรียน runQuoteDocPrint)
+  window.print();
+}
+
+// การ์ดสินค้า 1 ใบในเอกสาร PDF — รูป/ราคา/สีดึงจาก catalog ตาม SKU (ตามกติกา UI: มีรูปเสมอ)
+// labelMode = โหมด "แผ่นแปะสินค้า" ในพิมพ์ label: เส้นประตัด · ไม่มีป้าย NEW · รูปใหญ่ · มีรหัสซัพพลายเออร์ในการ์ด
+// (โหมดปกติ = เอกสารของเข้าใหม่ในหน้าภาพรวม — ไม่แตะ)
+function IntakePdfCard({ item, index, prod, qr, labelMode, supplier }) {
+  const img = prod && prod.imageUrl;
+  const price = prod && prod.price;
+  const color = prod && prod.color;
+  const qrBox = (
+    <div style={{width:"15mm",height:"15mm",flexShrink:0}}>
+      {qr
+        ? <img src={qr} alt={item.sku} style={{width:"100%",height:"100%",objectFit:"contain"}}/>
+        : <div style={{width:"100%",height:"100%",background:"#f0f0f0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,color:"#aaa"}}>QR</div>}
+    </div>
+  );
+
+  // ── โหมดแผ่นแปะ: การ์ดแนวนอน · รูปเด่นสุด (ซ้าย ~58%) · เส้นประรอบการ์ด ไม่มีมุมโค้ง
+  //    (การ์ดชิดกัน gap 0 → เส้นประของการ์ดที่ติดกันกลายเป็นเส้นตัดร่วม) · SKU ตัวใหญ่เห็นชัด
+  //    รูป objectFit:contain (fit — เห็นสินค้าเต็มใบ ไม่ถูกครอป/เกินกล่อง)
+  if (labelMode) {
+    return (
+      <div style={{border:"1px dashed #888",background:"#fff",display:"flex",flexDirection:"row",height:"100%",overflow:"hidden",breakInside:"avoid",pageBreakInside:"avoid"}}>
+        {/* รูปซ้าย — เด่นสุดในการ์ด */}
+        <div style={{position:"relative",width:"54%",flexShrink:0,background:"#f5f7f4",display:"flex",alignItems:"center",justifyContent:"center",padding:"1.5mm",overflow:"hidden"}}>
+          <div style={{position:"absolute",top:3,left:3,background:"#1f7a34",color:"#fff",fontSize:"7pt",fontWeight:800,borderRadius:4,padding:"1px 5px"}}>{String(index).padStart(2,"0")}</div>
+          {img
+            ? <img src={img} alt="" style={{maxWidth:"100%",maxHeight:"100%",objectFit:"contain"}}/>
+            : <div style={{fontSize:28,color:"#b7c7bd"}}>📦</div>}
+        </div>
+        {/* รายละเอียดขวา — ข้อมูลด้านบน · QR อยู่ตรงกลาง + SKU ใต้ QR */}
+        <div style={{flex:1,minWidth:0,padding:"2.5mm 3mm",display:"flex",flexDirection:"column"}}>
+          <div style={{fontSize:"8pt",fontWeight:700,color:"#111",lineHeight:1.15,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{item.name || item.sku}</div>
+          {color && color.name ? (
+            <div style={{display:"flex",alignItems:"center",gap:4,fontSize:"7pt",color:"#555",marginTop:1}}>
+              <span style={{width:8,height:8,borderRadius:"50%",background:color.hex||"#ccc",border:"1px solid rgba(0,0,0,.15)",flexShrink:0}}/>{color.name}
+            </div>
+          ) : null}
+          <div style={{borderTop:"1px dashed #cbd5cf",margin:"1.5mm 0"}}/>
+          <div style={{fontSize:"8pt",marginBottom:"1mm",display:"flex",justifyContent:"space-between",gap:5}}>
+            <span style={{color:"#888"}}>ราคา</span><b style={{color:"#1f7a34"}}>{price ? "฿"+fmtN(price) : "—"}</b></div>
+          <div style={{fontSize:"8pt",marginBottom:"1mm",display:"flex",justifyContent:"space-between",gap:5}}>
+            <span style={{color:"#888"}}>รับ</span><b style={{color:"#111"}}>{fmtN(item.qty)} ชิ้น</b></div>
+          {supplier ? (
+            <div style={{fontSize:"8pt",marginBottom:"1mm",display:"flex",justifyContent:"space-between",gap:5}}>
+              <span style={{color:"#888"}}>รหัสร้าน</span><b style={{fontFamily:"monospace",color:"#1f7a34"}}>{supplier}</b></div>
+          ) : null}
+          {color && color.name ? (
+            <div style={{fontSize:"8pt",marginBottom:"1mm",display:"flex",justifyContent:"space-between",alignItems:"center",gap:5}}>
+              <span style={{color:"#888"}}>สี</span>
+              <span style={{display:"flex",alignItems:"center",gap:4,minWidth:0}}>
+                <span style={{width:"3mm",height:"3mm",borderRadius:"50%",background:color.hex||"#ccc",border:"1px solid rgba(0,0,0,.2)",flexShrink:0}}/>
+                <b style={{color:"#111",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{color.name}</b></span></div>
+          ) : null}
+          {/* QR ตรงกลาง + SKU ใต้ QR */}
+          <div style={{marginTop:"auto",display:"flex",flexDirection:"column",alignItems:"center",gap:"0.8mm"}}>
+            <div style={{width:"15mm",height:"15mm",flexShrink:0}}>
+              {qr
+                ? <img src={qr} alt={item.sku} style={{width:"100%",height:"100%",objectFit:"contain"}}/>
+                : <div style={{width:"100%",height:"100%",background:"#f0f0f0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"6pt",color:"#aaa"}}>QR</div>}
+            </div>
+            <div style={{fontSize:"11pt",fontWeight:900,fontFamily:"monospace",color:"#111",lineHeight:1,textAlign:"center",wordBreak:"break-all"}}>{item.sku}</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── โหมดปกติ (หน้าภาพรวม/ของเข้าใหม่): การ์ดแนวตั้ง รูปบน — ไม่แตะ ──
+  return (
+    <div style={{border:"1px solid #d7e4dc",borderRadius:12,overflow:"hidden",background:"#fff",display:"flex",flexDirection:"column",breakInside:"avoid",pageBreakInside:"avoid"}}>
+      <div style={{position:"relative",height:"34mm",background:"#f3f6f2",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden"}}>
+        <div style={{position:"absolute",top:6,left:6,background:"#1f7a34",color:"#fff",fontSize:11,fontWeight:800,borderRadius:6,padding:"2px 7px"}}>{String(index).padStart(2,"0")}</div>
+        <div style={{position:"absolute",top:6,right:6,background:"#1f7a34",color:"#fff",fontSize:9,fontWeight:800,borderRadius:5,padding:"2px 6px",letterSpacing:".04em"}}>NEW</div>
+        {img
+          ? <img src={img} alt="" style={{maxWidth:"100%",maxHeight:"100%",objectFit:"contain"}}/>
+          : <div style={{fontSize:30,color:"#b7c7bd"}}>📦</div>}
+      </div>
+      <div style={{padding:"7px 9px",display:"flex",flexDirection:"column",gap:2,flex:1}}>
+        <div style={{fontFamily:"monospace",fontSize:12,fontWeight:800,color:"#111"}}>{item.sku}</div>
+        <div style={{fontSize:11.5,color:"#333",lineHeight:1.25,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{item.name || "—"}</div>
+        {color && color.name ? (
+          <div style={{display:"flex",alignItems:"center",gap:5,fontSize:10.5,color:"#555"}}>
+            <span style={{width:10,height:10,borderRadius:"50%",background:color.hex||"#ccc",border:"1px solid rgba(0,0,0,.15)",flexShrink:0}}/>{color.name}
+          </div>
+        ) : null}
+        <div style={{marginTop:"auto",display:"flex",alignItems:"flex-end",justifyContent:"space-between",gap:6,paddingTop:6,borderTop:"1px solid #eef2ee"}}>
+          <div>
+            <div style={{fontSize:9,color:"#888"}}>ราคา/หน่วย</div>
+            <div style={{fontSize:13,fontWeight:800,color:"#1f7a34"}}>{price ? "฿"+fmtN(price) : "—"}</div>
+          </div>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontSize:9,color:"#888"}}>จำนวนรับ (ชิ้น)</div>
+            <div style={{fontSize:16,fontWeight:900,color:"#111"}}>{fmtN(item.qty)}</div>
+          </div>
+          {qrBox}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// เอกสาร PDF ทั้งชุด — แตกแต่ละกลุ่ม (ซัพพลายเออร์/วัน) เป็นแผ่นละ INTAKE_PDF_PER_PAGE ใบ
+// display:none บนจอ (คลาส .intake-print-area) → โผล่เฉพาะตอนพิมพ์ · portal ไป body จากตัวเรียก
+// labelMode = โหมด "แผ่นแปะสินค้า" (พิมพ์ label): ไม่มีหัวเอกสาร/สรุป/PO · การ์ดเต็มหน้า + เส้นประตัด
+//             + รหัสซัพพลายเออร์ย้ายเข้าไปในการ์ด · ใช้เฉพาะฝั่งพิมพ์ label — หน้าภาพรวมยังเป็นโหมดปกติ
+function IntakePdfDoc({ pages, prodBySku, qrMap, labelMode }) {
+  if (!pages || !pages.length) return null;
+  const printedAt = new Date().toLocaleString("th-TH", { day:"numeric", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
+  // แผ่นแปะ: คำนวณกริดอัตโนมัติให้เต็มหน้า+ประหยัดกระดาษ (เดิม fix 2×4) · โหมดปกติ 3×3 = 9
+  const grid = intakeCardGrid();
+  const perPage = labelMode ? grid.perPage : INTAKE_PDF_PER_PAGE;
+  const sheets = [];
+  pages.forEach(g => {
+    const chunks = [];
+    for (let i = 0; i < g.items.length; i += perPage) chunks.push(g.items.slice(i, i + perPage));
+    if (!chunks.length) chunks.push([]);
+    chunks.forEach((items, ci) => sheets.push({ g, items, page: ci + 1, total: chunks.length, startIdx: ci * perPage }));
+  });
+  return (
+    <div className="intake-print-area">
+      {sheets.map((s, si) => (
+        <div key={si} className={labelMode ? "intake-print-page label" : "intake-print-page"}>
+          {!labelMode && (
+            <>
+              {/* ── หัวเอกสาร (เฉพาะโหมดปกติ/หน้าภาพรวม) ── */}
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,borderBottom:"3px solid #1f7a34",paddingBottom:10,marginBottom:12}}>
+                <div style={{display:"flex",gap:12,alignItems:"flex-start"}}>
+                  <div style={{background:"#1f7a34",color:"#fff",borderRadius:8,padding:"7px 11px",textAlign:"center",lineHeight:1.05}}>
+                    <div style={{fontSize:16,fontWeight:900}}>NEW</div>
+                    <div style={{fontSize:8.5,fontWeight:700,letterSpacing:".1em"}}>ARRIVAL</div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:22,fontWeight:900,color:"#111"}}>สินค้าเพิ่งเข้าคลัง</div>
+                    <div style={{fontSize:12,color:"#666",marginTop:2}}>ประจำวันที่ {intakeDateLong(s.g.date)}</div>
+                  </div>
+                </div>
+                <div style={{border:"1px solid #cfe0d6",borderRadius:10,padding:"7px 12px",minWidth:"48mm",background:"#f6faf7"}}>
+                  <div style={{fontSize:10,color:"#888"}}>รหัสซัพพลายเออร์</div>
+                  <div style={{fontSize:15,fontWeight:900,color:"#1f7a34",fontFamily:"monospace"}}>{s.g.supplier}</div>
+                  <div style={{fontSize:10,color:"#888",marginTop:5}}>วันที่เข้า</div>
+                  <div style={{fontSize:12,fontWeight:700,color:"#333"}}>{intakeDateLong(s.g.date)}</div>
+                </div>
+              </div>
+              {/* ── สรุปตัวเลข ── */}
+              <div style={{display:"flex",gap:10,marginBottom:12}}>
+                {[["รายการ (SKU)",fmtN(s.g.nSku)],["จำนวนรวม (ชิ้น)",fmtN(s.g.totQty)],["เลขที่ PO",s.g.pos.length?s.g.pos.join(", "):"—"]].map(([lbl,val],i)=>(
+                  <div key={i} style={{flex:1,border:"1px solid #e2ebe5",borderRadius:10,padding:"8px 12px",background:"#fbfdfb",minWidth:0}}>
+                    <div style={{fontSize:i===2?13:18,fontWeight:900,color:"#1f7a34",lineHeight:1.15,wordBreak:"break-word"}}>{val}</div>
+                    <div style={{fontSize:10,color:"#888",marginTop:2}}>{lbl}</div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+          {/* ── ตารางการ์ดสินค้า — โหมดแผ่นแปะ: กริดคำนวณเอง แนวนอน เต็มหน้า เส้นประชิดกัน (gap 0) ── */}
+          <div style={labelMode
+            ? {display:"grid",gridTemplateColumns:`repeat(${grid.cols}, minmax(0,1fr))`,gridTemplateRows:`repeat(${grid.rows}, minmax(0,1fr))`,gap:0,flex:1}
+            : {display:"grid",gridTemplateColumns:"repeat(3, minmax(0,1fr))",gap:10}}>
+            {s.items.map((it, i) => (
+              <IntakePdfCard key={it.sku} item={it} index={s.startIdx + i + 1} prod={prodBySku.get(it.sku)}
+                             qr={qrMap && qrMap[it.sku]} labelMode={labelMode} supplier={s.g.supplier}/>
+            ))}
+          </div>
+          {/* ── ท้ายเอกสาร (โหมดปกติเท่านั้น — แผ่นแปะเอาการ์ดเต็มหน้า) ── */}
+          {!labelMode && (
+            <div style={{marginTop:"auto",paddingTop:10,borderTop:"1px solid #e2ebe5",display:"flex",justifyContent:"space-between",fontSize:10,color:"#999"}}>
+              <span>หมายเหตุ: ตรวจสอบคุณภาพสินค้า ก่อนจัดเก็บเข้าคลัง</span>
+              <span>พิมพ์ {printedAt} · หน้า {s.page}/{s.total}</span>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// โมดัลติ๊กเลือกวันที่จะพิมพ์ + ปุ่มบันทึก PDF — โชว์ตัวอย่างจำนวนแผ่น/ซัพพลายเออร์แบบสด
+// labelMode = เปิดจากพิมพ์ label → เอกสารเป็น "แผ่นแปะสินค้า" (เส้นประตัด/ไม่มีหัวเอกสาร/รหัสซัพในการ์ด)
+function IntakePdfModal({ purchases, prodBySku, onClose, labelMode }) {
+  const opts = uM(() => {
+    const cut = new Date(); cut.setDate(cut.getDate() - 90);           // ให้เลือกได้ 90 วันล่าสุด
+    return intakeDateOptions(purchases, cut.toISOString().slice(0, 10));
+  }, [purchases]);
+  const [sel, setSel] = uS(() => new Set(opts.length ? [opts[0].date] : []));  // ตั้งต้น: วันล่าสุด
+  const pages = uM(() => buildIntakePages(purchases, sel), [purchases, sel]);
+  const sheetCount = uM(() => pages.reduce((s, g) => s + Math.max(1, Math.ceil(g.nSku / INTAKE_PDF_PER_PAGE)), 0), [pages]);
+
+  // QR รหัสสินค้าต่อ SKU (สแกนตอนรับของ) — ใช้ qrcodejs (window.QRCode) เหมือน LabelPrintView
+  // ไม่มี lib → qrMap ว่าง → การ์ดโชว์กล่อง "QR" แทน (ไม่พัง)
+  const [qrMap, setQrMap] = uS({});
+  uE(() => {
+    const QR = window.QRCode;
+    if (!QR) return;
+    const need = [];
+    pages.forEach(g => g.items.forEach(it => { if (!qrMap[it.sku]) need.push(it.sku); }));
+    if (!need.length) return;
+    const t = setTimeout(() => {
+      const wrap = document.createElement("div");
+      wrap.style.cssText = "position:fixed;left:-9999px;top:-9999px;visibility:hidden;pointer-events:none";
+      document.body.appendChild(wrap);
+      const out = {};
+      need.forEach(sku => {
+        const el = document.createElement("div"); wrap.appendChild(el);
+        try {
+          new QR(el, { text: sku, width: 80, height: 80, colorDark: "#000000", colorLight: "#ffffff", correctLevel: QR.CorrectLevel.M });
+          const c = el.querySelector("canvas");
+          if (c) out[sku] = c.toDataURL("image/png");
+        } catch (e) { /* ข้าม sku ที่สร้างไม่ได้ */ }
+      });
+      document.body.removeChild(wrap);
+      if (Object.keys(out).length) setQrMap(prev => ({ ...prev, ...out }));
+    }, 60);
+    return () => clearTimeout(t);
+  }, [pages]);
+  const toggle = (d) => setSel(s => { const n = new Set(s); n.has(d) ? n.delete(d) : n.add(d); return n; });
+  const doPrint = () => {
+    if (!pages.length) return;
+    const newest = [...sel].sort().reverse()[0] || "";
+    runIntakePrint(`${labelMode ? "แผ่นแปะสินค้า" : "สินค้าเข้าใหม่"} _ ${newest}`);
+  };
+  return (
+    <>
+      <div className="no-print" onClick={onClose}
+           style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+        <div onClick={e=>e.stopPropagation()}
+             style={{background:"var(--paper)",borderRadius:16,width:"100%",maxWidth:460,maxHeight:"92vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+          <div style={{padding:"16px 18px 12px",borderBottom:"1px solid var(--bdr)"}}>
+            <div style={{fontSize:16,fontWeight:800,color:"var(--g-700)"}}>{labelMode ? "🖨️ พิมพ์แผ่นแปะสินค้า" : "🖨️ บันทึก PDF ของเข้าใหม่"}</div>
+            <div style={{fontSize:12,color:"var(--muted)",marginTop:3}}>
+              {labelMode
+                ? <>ติ๊กเลือกวันที่จะพิมพ์ · การ์ดเต็มหน้า + <b>เส้นประสำหรับตัด</b> · แยกหน้าตามซัพพลายเออร์</>
+                : <>ติ๊กเลือกวันที่จะพิมพ์ · แยกหน้า <b>ตามรหัสซัพพลายเออร์ + วันที่</b></>}
+            </div>
+          </div>
+          {opts.length === 0 ? (
+            <div style={{padding:24,textAlign:"center",color:"var(--muted)",fontSize:13}}>ไม่มีของเข้าใหม่ใน 90 วันล่าสุด</div>
+          ) : (
+            <>
+              <div style={{display:"flex",gap:8,padding:"10px 18px 0"}}>
+                <button className="btn ghost" style={{padding:"5px 11px",fontSize:12}}
+                        onClick={()=>setSel(new Set(opts.map(o=>o.date)))}>เลือกทั้งหมด</button>
+                <button className="btn ghost" style={{padding:"5px 11px",fontSize:12}}
+                        onClick={()=>setSel(new Set())}>ล้าง</button>
+              </div>
+              <div style={{overflowY:"auto",padding:"10px 18px",display:"flex",flexDirection:"column",gap:8,flex:1}}>
+                {opts.map(o => {
+                  const on = sel.has(o.date);
+                  return (
+                    <label key={o.date}
+                           style={{display:"flex",alignItems:"center",gap:11,padding:"10px 12px",borderRadius:11,cursor:"pointer",
+                                   border:`1.5px solid ${on?"var(--g-500,#3a9d5d)":"var(--bdr)"}`,background:on?"var(--g-50,#f0f9f2)":"var(--paper)"}}>
+                      <input type="checkbox" checked={on} onChange={()=>toggle(o.date)} style={{width:18,height:18,accentColor:"#1f7a34",flexShrink:0}}/>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:13.5,fontWeight:700,color:"var(--text)"}}>{intakeDateLong(o.date)}</div>
+                        <div style={{fontSize:11,color:"var(--muted)",marginTop:1}}>{fmtN(o.nSup)} ซัพพลายเออร์ · {fmtN(o.nSku)} SKU · {fmtN(o.totQty)} ชิ้น</div>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            </>
+          )}
+          <div style={{padding:"12px 18px",borderTop:"1px solid var(--bdr)",display:"flex",gap:10,alignItems:"center"}}>
+            <div style={{flex:1,fontSize:12,color:"var(--muted)"}}>
+              {pages.length ? <>จะพิมพ์ <b style={{color:"var(--text)"}}>{fmtN(sheetCount)}</b> แผ่น · <b style={{color:"var(--text)"}}>{fmtN(pages.length)}</b> ซัพพลายเออร์</> : "ยังไม่ได้เลือกวัน"}
+            </div>
+            <button onClick={onClose} style={{padding:"11px 16px",borderRadius:10,border:"1px solid var(--bdr)",background:"var(--paper)",color:"var(--muted)",fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>ปิด</button>
+            <button onClick={doPrint} disabled={!pages.length}
+                    style={{padding:"11px 18px",borderRadius:10,border:"none",background:pages.length?"#1f7a34":"var(--bdr)",color:"#fff",fontWeight:800,fontFamily:"inherit",fontSize:14,cursor:pages.length?"pointer":"default"}}>🖨️ บันทึก PDF</button>
+          </div>
+        </div>
+      </div>
+      {ReactDOM.createPortal(<IntakePdfDoc pages={pages} prodBySku={prodBySku} qrMap={qrMap} labelMode={labelMode}/>, document.body)}
+    </>
+  );
+}
+
 function OverviewView({ data, range, setRange, role }) {
   const rechartsReady = useRechartsReady(); // gate กราฟจนกว่า Recharts (defer) จะพร้อม
   const { products, monthLabels, monthlyByCat, totals, mtoGroups,
@@ -1749,6 +2145,7 @@ function OverviewView({ data, range, setRange, role }) {
   const [abcModalCls, setAbcModalCls] = uS(null);
 
   const [overviewModalP, setOverviewModalP] = uS(null);
+  const [intakePdfOpen, setIntakePdfOpen] = uS(false);  // โมดัลบันทึก PDF ของเข้าใหม่
   const [exportProgress, setExportProgress] = uS(null); // null=hidden, {current,total,done}
   const [exportReady, setExportReady] = uS(null);       // {url,file} รูปพร้อมเซฟ → เปิด modal
 
@@ -2182,6 +2579,11 @@ function OverviewView({ data, range, setRange, role }) {
               จากรายการซื้อ (PO) · <b>30 วันล่าสุดเสมอ ไม่ขึ้นกับเดือนที่เลือก</b>
               {selCat ? ` · หมวด ${selCat}` : ""}
             </span>
+            {/* บันทึก PDF — เลือกวันเอง แยกหน้าตามซัพพลายเออร์ (ใช้ purchases ทั้งชุด ไม่ผูก selCat) */}
+            <button className="no-print btn ghost" onClick={() => setIntakePdfOpen(true)}
+                    style={{marginLeft:"auto",padding:"6px 12px",fontSize:12.5,fontWeight:700,display:"flex",alignItems:"center",gap:5}}>
+              🖨️ <span>บันทึก PDF</span>
+            </button>
           </div>
           <div style={{borderRadius:14,border:"1.5px solid #cfe3f0",overflow:"hidden",background:"linear-gradient(135deg,#f2f9fd,#eef6fb)"}}>
             {/* สรุปรวม */}
@@ -2953,6 +3355,7 @@ function OverviewView({ data, range, setRange, role }) {
       )}
 
       {overviewModalP && <ProductModal p={overviewModalP} onClose={() => setOverviewModalP(null)} allCats={allCats}/>}
+      {intakePdfOpen && <IntakePdfModal purchases={(data && data.purchases) || []} prodBySku={prodBySku} onClose={() => setIntakePdfOpen(false)}/>}
       {exportProgress && <ExportProgressOverlay {...exportProgress}/>}
       {exportReady && (
         <div onClick={closeExport} style={{position:'fixed',inset:0,zIndex:9999,background:'rgba(0,0,0,0.6)',display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
@@ -4573,9 +4976,12 @@ function CategoryView({ data, role, onNav }) {
                       try {
                         var res = await dmjFetch(SHEET_DEPLOY_URL, {
                           method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"},
+                          // suppliers = รหัสร้านที่เลือก (ไม่ใช่ SKU) — backend ใช้แทนรายชื่อสินค้า
+                          // ในแจ้งเตือน (อ่านง่ายกว่ารายชื่อสินค้าเป็นสิบ-ร้อยตัว)
                           body: JSON.stringify({createStockCheck:true, actor: role,
                             skus: ps.map(function(p){ return p.sku; }),
-                            names: ps.map(function(p){ return p.name||p.sku; })}),
+                            names: ps.map(function(p){ return p.name||p.sku; }),
+                            suppliers: Array.from(checkSuppliers)}),
                         });
                         var json = await dmjJson(res);
                         if(json.success){
@@ -4629,6 +5035,43 @@ function CategoryView({ data, role, onNav }) {
 const QUICK_QTYS = [6, 12, 24, 36, 48, 60];
 // เช็คหน้าร้านล่าสุดใหม่กว่านี้ (นาที) = ถือว่ายังสด ไม่ต้องนับซ้ำตอนกดสั่ง
 const FS_CHECK_FRESH_MIN = 120;
+
+// ── cid ข้ามการปิด-เปิด OrderModal (localStorage) ──────────────────────────
+// เดิม cid อยู่ใน useRef ของ component เท่านั้น → ปิด modal (× หรือแตะพื้นหลัง) ระหว่างที่
+// คำสั่งเดิมยังค้างอยู่ (เช่นตอน "กำลังตรวจสอบ...") แล้วเปิดใหม่ = component คนละ instance
+// ได้ cid ใหม่ทันที ฝั่ง GAS จึงมองว่าเป็นคำสั่งคนละอันและเขียนแถวใหม่จริง ทั้งที่คำสั่งเดิม
+// อาจไปเขียนสำเร็จอยู่แล้วเบื้องหลัง (ปิด component ไม่ได้ยกเลิก fetch ที่ยิงไปแล้ว)
+// → เก็บ cid ลง localStorage ผูกกับ sku+qty+orderType (หลักเดียวกับ dmj_ship_tid_v1 ของ
+// การส่งของ) ให้เปิดใหม่ยังได้ cid เดิม ตราบใดที่ยังไม่เกิน ORDER_CID_MAX_AGE_MS
+const LS_ORDER_CID = "dmj_order_cid_v1";
+const ORDER_CID_MAX_AGE_MS = 30 * 60 * 1000; // นานพอให้รอด "ปิดแอป/รีโหลดแล้วกลับมา" สั้น ๆ
+                                              // สั้นพอไม่ให้ไปทับคำสั่งใหม่ที่ตั้งใจแยกกันจริง ๆ
+function readOrderCidStore_() {
+  try { return JSON.parse(localStorage.getItem(LS_ORDER_CID) || "{}") || {}; }
+  catch (e) { return {}; }
+}
+function pruneOrderCidStore_(store) {
+  const now = Date.now(), out = {};
+  Object.keys(store).forEach(k => {
+    const v = store[k];
+    if (v && v.cid && (now - (v.at || 0)) < ORDER_CID_MAX_AGE_MS) out[k] = v;
+  });
+  return out;
+}
+function getStoredOrderCid_(key) {
+  const store = pruneOrderCidStore_(readOrderCidStore_());
+  return (store[key] && store[key].cid) || null;
+}
+function saveOrderCid_(key, cid) {
+  const store = pruneOrderCidStore_(readOrderCidStore_());
+  store[key] = { cid, at: Date.now() };
+  try { localStorage.setItem(LS_ORDER_CID, JSON.stringify(store)); } catch (e) {}
+}
+function clearOrderCid_(key) {
+  if (!key) return;
+  const store = readOrderCidStore_();
+  if (store[key]) { delete store[key]; try { localStorage.setItem(LS_ORDER_CID, JSON.stringify(store)); } catch (e) {} }
+}
 
 function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady, onOrderSuccess, defaultQty, role }) {
   useBackHandler(onClose); // Android back = ปิด modal สั่งของ
@@ -4740,6 +5183,9 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
 
   const orderDone = () => {
     setDone(true);
+    // คำสั่งนี้จบสมบูรณ์แล้ว — เลิกจำ cid ไว้ (กันวันหลังสั่งจำนวนเดิมของสินค้าเดิมแล้วถูก
+    // dedup ทิ้งเงียบ ๆ ทั้งที่ตั้งใจสั่งเป็นครั้งใหม่จริง ๆ)
+    clearOrderCid_(orderCidRef.current.key);
     onOrderSuccess && onOrderSuccess(product.sku, qty);
     setTimeout(onClose, 2000);
   };
@@ -4748,14 +5194,17 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
   // GAS เก็บ cid ไว้กับแถวที่สั่ง (col O) → ยิงซ้ำด้วย cid เดิมจะไม่เกิดแถวใหม่
   // ต้องคงค่าเดิมไว้ตลอดที่ผู้ใช้ยัง "สั่งของชิ้นเดิม จำนวนเดิม ประเภทเดิม" อยู่
   // (ทั้งตอน retry เองและตอนผู้ใช้กดยืนยันซ้ำ) · เปลี่ยนจำนวน/ประเภท = คนละคำสั่ง → cid ใหม่
+  // ⚠️ เก็บสำรองไว้ใน localStorage ด้วย (ไม่ใช่แค่ ref) — ปิด modal (× หรือแตะพื้นหลัง) ระหว่าง
+  // ที่คำสั่งเดิมยังไม่ทราบผล แล้วเปิดใหม่ ต้องได้ cid เดิม ไม่งั้นกลายเป็นคำสั่งคนละอันจริง ๆ
+  // ในสายตา GAS (ดู "หน้าสั่งของ พอมันขึ้นกำลังตรวจสอบ ทำให้สั่งของซ้ำ")
   const orderCidRef = React.useRef({ key: "", cid: "" });
   const orderCid = () => {
     const key = `${product.sku}|${qty}|${orderType}`;
     if (orderCidRef.current.key !== key || !orderCidRef.current.cid) {
-      orderCidRef.current = {
-        key,
-        cid: `${product.sku}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-      };
+      const cid = getStoredOrderCid_(key)
+        || `${product.sku}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      orderCidRef.current = { key, cid };
+      saveOrderCid_(key, cid);
     }
     return orderCidRef.current.cid;
   };
@@ -4769,9 +5218,11 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
   const checkOrderByCid = async (cid) => {
     const _sep = sheetUrl.includes('?') ? '&' : '?';
     try {
-      const d = await dmjJson(await fetch(
+      // dmjFetch (มี timeout ในตัว) แทน fetch ดิบ — เดิมไม่มีเพดานเวลาเลย เน็ตไม่นิ่งแล้ว
+      // ค้างได้ไม่จบ ยิ่งทำให้ผู้ใช้ทนรอไม่ไหวจนไปปิด modal เอง (ต้นตอที่แท้จริงของสั่งซ้ำ)
+      const d = await dmjJson(await dmjFetch(
         `${sheetUrl}${_sep}action=orderCheck&cid=${encodeURIComponent(cid)}&_t=${Date.now()}`,
-        { cache: 'no-store' }));
+        { cache: 'no-store', dmjTimeoutMs: 20000 }));
       return (d && d.ok === true && typeof d.found === 'boolean') ? d.found : null;
     } catch (e) { return null; }
   };
@@ -4790,8 +5241,8 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
   const verifyOrderLanded = async (before) => {
     const _sep = sheetUrl.includes('?') ? '&' : '?';
     try {
-      const d = await dmjJson(await fetch(`${sheetUrl}${_sep}action=orders&_t=${Date.now()}`,
-                                          { cache: 'no-store' }));
+      const d = await dmjJson(await dmjFetch(`${sheetUrl}${_sep}action=orders&_t=${Date.now()}`,
+                                          { cache: 'no-store', dmjTimeoutMs: 20000 }));
       if (!d || !Array.isArray(d.orders)) return false;
       const key = String(product.sku || '').trim().toUpperCase();
       let total = 0;
@@ -4836,7 +5287,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
     for (let attempt = 1; attempt <= ORDER_ATTEMPTS; attempt++) {
       if (attempt > 1) setRetryNote(`เน็ตไม่นิ่ง — กำลังลองใหม่ครั้งที่ ${attempt - 1}…`);
       try {
-        const d = await dmjJson(await fetch(url + `&_t=${Date.now()}`, { cache: 'no-store' }));
+        const d = await dmjJson(await dmjFetch(url + `&_t=${Date.now()}`, { cache: 'no-store' }));
         if (d && d.ok) { setRetryNote(""); orderDone(); return true; }
         // ล็อกไม่ว่าง (retryable) → ลองใหม่ได้ · error อื่นคือของจริง ลองกี่ครั้งก็เหมือนเดิม
         if (!d || !d.retryable) {
@@ -4908,8 +5359,15 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
                    fontFamily:"inherit", fontWeight:700, fontSize:13, padding:"8px 0",
                    transition:"all .12s"};
 
+  // ⚠️ ปิด modal ไม่ได้ระหว่างกำลังยิง/ตรวจสอบคำสั่ง (loading) — เดิมปิดได้ตลอด ทำให้ผู้ใช้ที่
+  // ทนรอ "กำลังตรวจสอบว่าคำสั่งเข้าระบบหรือยัง…" ไม่ไหวกดปิดแล้วเปิดสั่งใหม่ คำขอเดิมที่ยังค้าง
+  // อยู่เบื้องหลัง (ปิด component ไม่ได้ยกเลิก fetch) อาจไปเขียนสำเร็จทีหลัง รวมกับคำขอใหม่ =
+  // สั่งซ้ำ 2 แถวจริง (cid เดิมถูกทิ้งไปตอน unmount ก่อนแก้ — ตอนนี้กันอีกชั้นด้วย localStorage
+  // ข้างบนแล้ว แต่ปิดไม่ได้เลยระหว่างรอผลชัดเจนกว่า/ปลอดภัยกว่า)
+  const closeBlocked = loading;
+  const guardedClose = () => { if (!closeBlocked) onClose(); };
   return (
-    <div onClick={onClose} data-modal="order" style={{
+    <div onClick={guardedClose} data-modal="order" style={{
       position:"fixed", inset:0, zIndex:1500,
       background:"rgba(10,20,10,.6)", backdropFilter:"blur(5px)",
       display:"flex", alignItems:"center", justifyContent:"center", padding:20
@@ -4922,7 +5380,10 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
         <div style={{padding:"16px 20px 14px", borderBottom:"1px solid var(--bdr)",
                      display:"flex", justifyContent:"space-between", alignItems:"center"}}>
           <div style={{fontWeight:700, fontSize:16}}>🛒 สั่งไปขาย</div>
-          <button onClick={onClose} style={{...btnBase, width:44, height:44, padding:0, fontSize:22, color:"var(--muted)"}}>×</button>
+          <button onClick={guardedClose} disabled={closeBlocked} title={closeBlocked ? "กำลังบันทึก — รอสักครู่" : ""}
+                  style={{...btnBase, width:44, height:44, padding:0, fontSize:22,
+                          color: closeBlocked ? "var(--bdr)" : "var(--muted)",
+                          cursor: closeBlocked ? "not-allowed" : "pointer"}}>×</button>
         </div>
 
         {done ? (

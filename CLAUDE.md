@@ -148,20 +148,29 @@
 เทสต์: `tests/stampede.test.js` (54 เคส) — ข้อ 3 เป็น**เทสต์พฤติกรรมจริง** (eval `dmjFetch`
 จาก `ui.jsx` แล้วให้ `fetch` คืน promise ที่ไม่มีวัน settle ยืนยันว่า abort ทำงาน) ไม่ใช่แค่จับ string
 
-### Phase 7.6 — ล็อกอิน: **เขียนแล้วแต่ยังไม่ได้ deploy** (ส.ค. 2026)
+### Phase 7.6 — ล็อกอิน rollout: **เสร็จครบ A–E deployed แล้ว** (ส.ค. 2026)
 
-⚠️ **อย่าเขียนใหม่ — โค้ดมีอยู่แล้วใน commit `be2c3aa`** (อยู่ในประวัติของ `master`)
-เคยขึ้น production แล้วถูกถอยออกด้วย `cc583ea` ตอนผู้ใช้เข้าแอปไม่ได้ทั้งร้าน · ตอนนั้น
-**ยังพิสูจน์ไม่ได้ว่า 7.6 เป็นต้นเหตุจริง** (ขึ้นพร้อมกัน 3 ก้อน แยกไม่ออก) จึงถอยทั้งชุดไว้ก่อน
+บริบท: 7.6 เดิมเขียนไว้ในคอมมิตที่ถูก revert เพราะขึ้น production แล้วผู้ใช้เข้าแอปไม่ได้ทั้งร้าน
+(ตอนนั้นขึ้นพร้อมกัน 3 ก้อนแยกไม่ออกว่าอะไรพัง) · รอบนี้เอากลับ **"ปลอดภัยก่อน → เสี่ยงท้าย"
+ทีละก้อนพร้อมเทสต์** ไม่ยกทั้งชุดซ้ำรอยเดิม · เทสต์อยู่ที่ `tests/login-resilience.test.js`
+(27 เคส — eval ฟังก์ชันจริงจาก `.jsx`/`.gs` ไม่ copy เหมือน auth.test.js) · เดิม CLAUDE.md/handoff
+เขียนว่า "ยังไม่ deploy" ซึ่งผิด (state machine ล็อกอิน + handoff flow อยู่ใน master มาตลอด revert
+ถอดแค่ส่วน hardening) — ตรวจจากโค้ดจริงเสมอ อย่าเชื่อ SHA ที่อ้างในเอกสาร (squash merge SHA เปลี่ยน)
+· สรุปปิดงานเต็ม: `docs/HANDOFF-PHASE7.6-COMPLETE.md`
 
-สิ่งที่อยู่ในนั้น: `postAuthAction` ผ่าน `dmjFetch`+`dmjJson`
-พร้อมเพดานเวลาแยกตามงาน · จอ `checking` มีทางออกเสมอ · poll handoff กันยิงซ้อน+ถอยห่าง ·
-TTL 30 นาทีตรงกันทั้ง 3 ที่ · handoff ไม่หายถาวรเมื่อคำตอบไปไม่ถึง · `resolveSession_` cache ·
-`tests/login-resilience.test.js` 48 เคส
+| ก้อน | งาน | สถานะ |
+|---|---|---|
+| **A** (ข้อ 2) | จอ `checking` มีทางออก — `CheckingScreen` นับวินาที → เตือน 12 วิ → ปุ่มกลับล็อกอิน 30 วิ (onGiveUp ลบ `?code=` กัน effect ยิงซ้ำ · ไม่ตัดคำขอที่ค้าง) | ✅ deployed |
+| **B** (ข้อ 4) | handoff ไม่ถูกกินทิ้งถาวร — `claimLoginHandoffHandler_` เลิก `cache.remove` เขียนทับด้วย TTL สั้น `LOGIN_HANDOFF_CLAIM_GRACE_SEC=60` แทน (retry ที่คำตอบหาย แลกคืนได้) | ✅ deployed |
+| **C** (ข้อ 3) | poll handoff backoff 4วิ×3→8→15 (cap) + in-flight guard เดิม · TTL 15→30 นาที ทั้ง `LINE_HANDOFF_TTL_MS` (app.jsx) + `LOGIN_HANDOFF_TTL_SEC=1800` (.gs) — client ต้องไม่เกิน server | ✅ deployed |
+| **D** (ข้อ 5) | `resolveSession_` cache 300s ต่อ token + เขียน `lastSeenAt` เฉพาะเก่ากว่า 10 นาที · ⚠️ ล้าง cache ครบ 3 จุด: `revokeSession_` (logout) · `saveStaffHandler_` (เปลี่ยน role/status) · ตั้ง role จาก GAS editor — ไม่งั้น logout แล้วยังใช้ได้ต่อ/เปลี่ยนตำแหน่งยังถือสิทธิ์เก่า (ช่องโหว่) | ✅ deployed |
+| **E** (ข้อ 1) | `postAuthAction` → `dmjFetch`+`dmjTimeoutMs`+`dmjJson` (authLine 25s/me 20s/logout 20s/claim 8s) — ✅ **ผ่านเทสต์ iPhone จริง (PWA+Safari) แล้ว merge** | ✅ deployed |
 
-**เอากลับเข้ามาทีละก้อน** พร้อมดูตัวเลขจาก `BootTrace` (Phase 7.7) ระหว่างทาง — อย่ายกกลับทั้งชุด
-รอบเดียวซ้ำรอยเดิม · ⚠️ ถ้ายกกลับ ต้องลบหมายเหตุนี้ทิ้งแล้วเขียนหัวข้อจริงแทน ไม่งั้นเอกสาร
-จะบอกว่า "ยังไม่ deploy" ทั้งที่ deploy ไปแล้ว (กับดักเดียวกับที่เคยเขียนว่า `dmjJson` ครบแล้วทั้งที่ยังไม่ครบ)
+⚠️ **ก้อน E คือชิ้นที่หลักฐานชี้ว่าเคยทำร้านล่ม** — เน็ตร้าน/GAS cold start ช้าเกิน timeout → คำขอถูก
+abort · **แกนความปลอดภัยที่ต้องรักษาถ้าจะแก้ postAuthAction ต่อ: timeout/abort ห้าม escalate เป็น
+logout/clear-session เด็ดขาด** — ต้อง throw ให้ `checkMe`/bootstrap ตก catch แล้ว fallback เป็น
+"ทำงานต่อด้วย role เดิมที่ cache ไว้" (logout เกิดเฉพาะ `d.invalid===true`) · มี behavioral test
+ใน `login-resilience.test.js` (ก้อน E) พิสูจน์ว่า abort/HTML → THROW ไม่ใช่คืน invalid — **ห้ามถอด**
 
 **✅ ก้อนแรกที่เอากลับแล้ว (ส.ค. 2026): `dmjJsonProgress` — เฉพาะส่วน "วัดผล" ล้วน**
 `ui.jsx` มี `dmjJsonProgress(res, onBytes)` อ่านคำตอบแบบสตรีม นับไบต์ที่ได้รับจริง →
@@ -780,7 +789,7 @@ GET  /PurchaseReceive/GetPurchaseReceives → 404 (ไม่มี endpoint น�
 
 ## Testing
 
-**มี Vitest test suite แล้ว** — 1688 tests, 50 test files, ทั้งหมด pass (+ browser 92/92)
+**มี Vitest test suite แล้ว** — 2285 tests, 78 test files, ทั้งหมด pass (+ browser 113/113)
 
 ```bash
 npm test              # run tests
@@ -1410,6 +1419,89 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
   `invalidateCache_(true)` = กดพิมพ์ทีล้าง payload cache ทั้งระบบทุก role
 - เทสต์: `tests/invoice-pdf.test.js` (25 เคส — eval `docFileName`/`docDateLabel` จากต้นทางจริง
   + meta-test คุมจุดเชื่อมต่อทั้งหมดข้างบน รวมทั้งกันการถอยกลับไป html2pdf/jsPDF)
+
+### 📥 ของเข้าใหม่ → บันทึก PDF แยกตามรหัสซัพพลายเออร์ + วันที่ (ส.ค. 2026)
+
+เจ้าของสั่ง: การ์ด "📥 ของเข้าใหม่ 30 วัน" (OverviewView, owner/dev) ต้องพิมพ์ PDF ได้ —
+**ติ๊กเลือกวันเอง** แล้วแยกหน้า **1 หน้า = 1 ซัพพลายเออร์ ต่อ 1 วัน** (การ์ดสินค้า 3×3/แผ่น)
+
+- ปุ่ม "🖨️ บันทึก PDF" เปิด **`IntakePdfModal`** (views-main.jsx) → ติ๊กวัน (90 วันล่าสุด, ตั้งต้น
+  วันล่าสุด) → `buildIntakePages(purchases, selectedDates)` จัดกลุ่ม (วันใหม่สุดก่อน → supplier a→z →
+  รวมจำนวนต่อ SKU) · `IntakePdfDoc` แตกแต่ละกลุ่มเป็นแผ่นละ `INTAKE_PDF_PER_PAGE` (9) ใบ
+- **ใช้ `data.purchases` ทั้งชุด ไม่ผูก `selCat`** (ต่างจากบล็อก 30 วันที่เคารพตัวกรองหมวด) —
+  เอกสารคลังต้องครบทุกหมวด · รูป/ราคา/สี ดึงจาก catalog ตาม SKU (`prodBySku`) ตามกติกา UI
+- ⚠️ **พิมพ์แบบซ่อน `#root` ไม่ใช่ห่อ `.no-print`** — OverviewView ไม่ได้ห่อ `.no-print` (ต่างจาก
+  PosView/QuotationPrintDoc) จึงพิมพ์ทั้งแดชบอร์ดปนมาไม่ได้ · วิธี: `IntakePdfDoc` **portal ไป
+  `document.body`** (คลาส `.intake-print-area` display:none บนจอ) แล้ว `runIntakePrint` เติม
+  `body.intake-printing` → `@media print` ซ่อน `#root` โชว์เฉพาะ `.intake-print-area`
+  · เพิ่ม CSS ใน HTML → **bump `CACHE_NAME`** (บทเรียนข้อ 15)
+- ⚠️ พิมพ์ผ่าน `window.print()` + `document.title` (ไม่ rasterize) — เลย์เอาต์ A4 อยู่ใน
+  `@media print` เท่านั้น (หลักเดียวกับ `runQuoteDocPrint`) · ผูก `afterprint` ก่อน `print()`
+  · **ใส่รูปสินค้าได้** (native print โหลด `<img>` จริง — ไม่ใช่ html2canvas ที่ CORS พังเป็นช่องว่าง)
+- ⚠️ `intakeDateLong` แยกเลข y/m/d เองแทน `new Date("yyyy-MM-dd")` (UTC เลื่อนวัน — บทเรียนข้อ 11)
+  · ซัพพลายเออร์ว่าง → "ไม่ระบุซัพพลายเออร์" (ไม่หายเงียบ) · วันที่ต้องเป็น ISO ถึงเข้ากลุ่ม
+- เทสต์: `tests/intake-pdf.test.js` (17 เคส — eval `intakeDateLong`/`intakeDateOptions`/
+  `buildIntakePages` จริงจาก `.jsx` + meta-test คุมสายส่ง portal/`body.intake-printing`/CSS/CACHE)
+  · browser test 1 เคส (owner เปิดโมดัล → มีวันติ๊ก → `.intake-print-page` ถูกสร้างใน DOM)
+  · ⚠️ fixture browser ใช้ date **ISO** (เหมือน `readPurchases_`) + มีแถววันนี้ ไม่งั้น `recentIntake`
+    เป็น null → ทั้งการ์ดของเข้าใหม่และปุ่มพิมพ์ไม่โผล่ = เทสต์เขียวโดยไม่ได้ทดสอบอะไร
+
+### 📇 พิมพ์ "แผ่นแปะสินค้า" (โหมดการ์ด) + ของเข้าใหม่ให้ warehouse/saler (ส.ค. 2026)
+
+เจ้าของสั่ง 2 อย่าง: (1) เพิ่มโหมดพิมพ์ **การ์ดสินค้า** (แผ่นแปะ QR + จำนวนเข้า + รหัสร้าน) ในแท็บ
+พิมพ์ label · ใส่ SKU เอง · **ของเพิ่งเข้าคลังขึ้นก่อน** · (2) ให้ **warehouse + saler** ดาวน์โหลด
+เอกสารของเข้าใหม่ (แยกซัพพลายเออร์) ให้เจ้าของได้
+
+- **endpoint ใหม่ `action=recentIntake&days=N`** (`recentIntakeHandler_`, appsscript_complete.gs)
+  คืน purchases N วันล่าสุด · ⚠️ **ตัด `unitPrice` (ต้นทุน) ออกเสมอ** — เหตุผลที่ `data.purchases`
+  เต็มก้อนเป็น owner/dev เท่านั้นคือมีต้นทุน · endpoint นี้จึงเปิดให้ warehouse/saler ได้ (อ่านสด
+  ไม่ผ่าน cache, เปิดแบบ read เหมือน `recentTransfers` ไม่ gate session) · date เป็น ISO
+- **`LabelPrintView` (views-analytics.jsx) โหมดที่ 3 = `card`** (นอกจาก `a4`/`sticker`)
+  · owner ใช้ `data.purchases` จาก payload · **warehouse/saler ดึงผ่าน `syncRecentIntake(90)`**
+    (payload ไม่มี purchases) → `intakePurchases` state
+  · **1 การ์ด/SKU** (`cardList` ไม่ขยายตามจำนวนใบ) · 9 การ์ด/หน้า (`CARDS_PER_PAGE`) · **จำนวนเข้า
+    เติมอัตโนมัติ** จาก `intakeInfo.qtyMap` (อ่านอย่างเดียว) · **รหัสร้านกรอกเอง** ต่อ SKU (`storeCodes` state)
+  · ชิป "🆕 เพิ่งเข้าคลัง" (ใหม่สุดก่อน — `intakeInfo.recent` sort date desc) แตะเพิ่มการ์ด (`addSkuDirect`)
+  · QR ใช้ `qrMap` ตัวเดิม (qrcodejs self-host) เข้ารหัส SKU
+- **ปุ่ม "📄 บันทึก PDF (แยกซัพพลายเออร์)"** ในโหมดการ์ด เปิด **`IntakePdfModal`** (global จาก
+  views-main.jsx — โหลดก่อน) ป้อน `intakePurchases` + `prodBySkuMap` → warehouse/saler จึงดาวน์โหลด
+  เอกสารของเข้าใหม่ตัวเดียวกับที่ owner มีใน overview ได้ (คนละที่มาข้อมูล แต่ modal/เอกสารตัวเดียวกัน)
+- **พิมพ์ผ่าน `.card-label-page`/`.card-label-cell`** (A4, 3×3) — คลาสใหม่ใน HTML, โชว์ตอน print
+  (ไม่ `.no-print`) เหมือน `.label-page` เดิม (ไม่ต้อง portal/#root-hide เพราะ LabelPrintView ห่อ
+  controls ด้วย `.no-print` อยู่แล้ว) · **bump `CACHE_NAME`** (บทเรียนข้อ 15)
+- ⚠️ `IntakePdfDoc`/การ์ด **ไม่โชว์ต้นทุนที่ไหนเลย** — โชว์ราคาขาย (`p.price`) จาก catalog เท่านั้น
+  จึงปลอดภัยที่ warehouse/saler เห็น
+- เทสต์: `tests/label-card.test.js` (16 เคส — meta สแกนต้นทาง: endpoint ตัด unitPrice, syncRecentIntake
+  ผ่าน dmjJson, cardList 1/SKU, storeCodes, ชิปเรียง date desc, ปุ่ม PDF เปิด IntakePdfModal, CSS/CACHE)
+  · browser test 1 เคส (warehouse: labels → โหมดการ์ด → เพิ่ม SKU → มี `.card-label-cell` + ปุ่มบันทึก PDF)
+
+#### `labelMode` — เอกสารการ์ดฝั่งพิมพ์ label ต่างจากหน้าภาพรวม (ส.ค. 2026)
+
+เจ้าของสั่ง: การ์ดที่พิมพ์จากแท็บพิมพ์ label ต้องเป็น **แผ่นแปะสินค้า** — มี **เส้นประสำหรับตัด** ·
+**ไม่มีหัวเอกสาร "สินค้าเพิ่งเข้าคลัง"/NEW** · **การ์ดเต็มหน้า** · **รหัสซัพพลายเออร์อยู่ในการ์ด** ·
+**ไม่มีเลขที่ PO** · **แก้แค่ฝั่งพิมพ์ label หน้าภาพรวม (ของเข้าใหม่) เหมือนเดิม**
+
+- **`IntakePdfDoc`/`IntakePdfCard`/`IntakePdfModal` รับ prop `labelMode`** — ฝั่งพิมพ์ label
+  (`LabelPrintView`) ส่ง `labelMode` · **`OverviewView` ไม่ส่ง** → ยังเป็นเอกสารเดิมทุกอย่าง
+  (component เดียวกัน 2 หน้าตา — เหมือน `isInvoice`)
+- `labelMode` เปลี่ยน: ซ่อนหัวเอกสาร+กล่องสรุป(รวมเลข PO)+ท้ายเอกสาร → grid `flex:1` + `gridAutoRows:1fr`
+  เต็มหน้า · การ์ด `border: dashed` (เส้นตัด) · ซ่อนป้าย NEW · เพิ่มบรรทัด "ซัพพลายเออร์: <code>"
+  (รับ `supplier` = `s.g.supplier` ของกลุ่ม)
+- ⚠️ **ทำด้วย inline style ล้วน ไม่แตะ CSS ใน HTML** — จึงไม่ผูกกับ `.card-label-page`/`.intake-print-page`
+  เดิม (bump CACHE เพราะ jsx เปลี่ยน + กัน PWA cache เหนียว ไม่ใช่เพราะแก้ CSS)
+- ⚠️ **`OverviewView` ยังเรียก `<IntakePdfModal ... onClose>` โดยไม่มี `labelMode`** — มีเทสต์บังคับ
+  ว่าฝั่งภาพรวมต้องไม่ติด labelMode (เผลอใส่ = หน้าเอกสารเจ้าของเปลี่ยนตามโดยไม่ได้ตั้งใจ)
+- **การ์ดแผ่นแปะ = แนวนอน (รูปซ้าย ~54% เด่นสุด · objectFit contain) + SKU ตัวใหญ่ + เส้นประชิดกัน**
+  (gap 0 → การ์ดติดกัน เส้นประเป็นเส้นตัดร่วม) · `.card-label-cell` (โหมด "เลือกเอง") ก็เป็นเส้นประเช่นกัน
+- **`intakeCardGrid({targetWmm,aspect,marginMm})`** = คำนวณ cols×rows ให้ **เต็มหน้า A4 ประหยัดกระดาษที่สุด**
+  อัตโนมัติ (default การ์ดกว้าง ~60mm → 3 คอลัมน์) · IntakePdfDoc (labelMode) ใช้ `grid.perPage`/`grid.cols`/`grid.rows`
+  · ⚠️ **การ์ดยืด `1fr` เต็มหน้า** — ปรับ `targetWmm` เพื่อเปลี่ยนขนาด/จำนวนต่อหน้า ไม่ต้อง hard-code
+- ⚠️ **ทั้ง 2 ปุ่มในโหมด card ต้องพิมพ์หน้าตาเหมือนกัน** — "🖨️ พิมพ์ N การ์ด" (`.card-label-page`,
+  โชว์บนจอ) และ "📄 พิมพ์การ์ดเต็มหน้า" (`IntakePdfModal` labelMode, portal) **ใช้ `IntakePdfCard`
+  labelMode ตัวเดียวกัน** + `intakeCardGrid` เดียวกัน → เปลี่ยนดีไซน์การ์ดที่ `IntakePdfCard` ที่เดียว
+  มีผลทั้งคู่ · **ห้ามเขียน JSX การ์ดซ้ำใน `LabelPrintView`** (เดิม `.card-label-cell` ทำแยก → หน้าตาต่างกัน)
+- **รหัสร้าน + จำนวนเข้าในการ์ด = ดึงอัตโนมัติจาก intake** (`intakeInfo.supMap`/`qtyMap` ต่อ SKU —
+  ซัพจาก PO ล่าสุด) **ไม่ให้กรอกเอง** (เดิมมีช่อง `storeCodes` กรอกเอง — ถอดออกแล้ว)
 
 ### ⚠️ ปุ่มพิมพ์ในแท็บ "ใบเสนอราคา" ต้องมีครบทั้ง 2 ชนิด **ทั้งการ์ดมือถือและตาราง** (ส.ค. 2026)
 
