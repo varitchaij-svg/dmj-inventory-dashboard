@@ -61,13 +61,20 @@ function getSheetLastModified_() {
 // ═══════════════════════════════════════════════════════════════════════════
 var _PERF_REQ = null;
 
-function perfReqBegin_(kind, action) {
+function perfReqBegin_(kind, action, corrId) {
   try {
     var t0 = Date.now();
     _PERF_REQ = { id: t0.toString(36) + Math.floor(Math.random() * 1e6).toString(36),
-                  kind: kind, action: action || '', t0: t0, sess: 0, sessMs: 0, lock: [] };
+                  kind: kind, action: action || '', t0: t0, sess: 0, sessMs: 0, lock: [],
+                  // Track B (durable observability): correlation + summary accumulators
+                  // corrId = client idempotency key (cid/tid/billCid) ที่ไหลข้าม execution ตอน retry
+                  // (bounded length กัน row ระเบิด) · cacheKind/zortMs/driveMs สะสมไว้ทำ durable summary
+                  corrId: corrId ? String(corrId).slice(0, 64) : '', cacheKind: '', zortMs: 0, driveMs: 0 };
+    // ⚠️ corrId ต่อท้าย "หลัง t=" เท่านั้น — parseStart เดิม (perf-report.mjs) anchor ช่องว่าง
+    //    `id=(\S+) action=` ถ้าแทรก corrId กลาง id↔action จะทำ regex เดิมพัง (backward-compat)
     Logger.log('[perfB] START kind=' + kind + ' id=' + _PERF_REQ.id
-             + ' action=' + _PERF_REQ.action + ' t=' + t0);
+             + ' action=' + _PERF_REQ.action + ' t=' + t0
+             + (_PERF_REQ.corrId ? ' corrId=' + _PERF_REQ.corrId : ''));
   } catch (e) {}
   return _PERF_REQ;
 }
@@ -82,7 +89,12 @@ function perfReqEnd_(extra) {
     Logger.log('[perfB] END kind=' + r.kind + ' id=' + r.id + ' action=' + r.action
              + ' durMs=' + dur + ' sessN=' + r.sess + ' sessMs=' + r.sessMs
              + (r.lock.length ? ' lock=' + r.lock.join(',') : '')
+             + (r.cacheKind ? ' cache=' + r.cacheKind : '')
+             + (r.corrId ? ' corrId=' + r.corrId : '')
              + (extra ? ' ' + extra : ''));
+    // Track B: persist a 1-row durable summary (fail-open; itself never throws — see fn).
+    // ครั้งเดียวต่อ request (END เท่านั้น) ไม่ใช่ต่อ sub-event · ไม่เขียนชีตบน hot path (buffer→drain)
+    perfTelemetryCapture_(r, dur);
   } catch (e) {} finally { _PERF_REQ = null; }
 }
 // นับ + สะสมเวลา resolveSession_ ต่อ request · sess===2 = double-resolve (บันทึกไว้ที่ผลตรวจ)
@@ -109,6 +121,7 @@ function perfZort_(tag, ms, attempt, ok) {
   try {
     Logger.log('[perfB] ZORT tag=' + tag + ' ms=' + ms + ' attempt=' + attempt + ' ok=' + ok
              + (_PERF_REQ ? ' id=' + _PERF_REQ.id : ''));
+    if (_PERF_REQ) _PERF_REQ.zortMs += (Number(ms) || 0);   // Track B: accumulate for durable summary
   } catch (e) {}
 }
 // Drive: latency การอัปโหลดรูปลงเวลา (อยู่ในล็อก punch)
@@ -116,7 +129,163 @@ function perfDrive_(tag, ms, ok) {
   try {
     Logger.log('[perfB] DRIVE tag=' + tag + ' ms=' + ms + ' ok=' + ok
              + (_PERF_REQ ? ' id=' + _PERF_REQ.id : ''));
+    if (_PERF_REQ) _PERF_REQ.driveMs += (Number(ms) || 0);   // Track B: accumulate for durable summary
   } catch (e) {}
+}
+// Track B: setter สำหรับ cache outcome (HIT/STALE/FRESH/MISS/WAIT-HIT) — เรียกจาก perfLogDoGet_
+// ไม่มี I/O ภายนอก (แค่แตะ state ใน memory ของ execution) → ปลอดภัยบน hot path
+function perfCache_(kind) {
+  try { if (_PERF_REQ && kind) _PERF_REQ.cacheKind = String(kind).slice(0, 16); } catch (e) {}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Track B — Durable Observability (Option C: Logger คงเดิม + durable summary แบบ batched)
+//  design: docs/DURABLE-OBSERVABILITY-DESIGN-V1.md
+//  หลักการ (ยึดตาม design + guardrail "telemetry ต้อง FAIL-OPEN, ห้ามเป็น root cause ใหม่"):
+//   · `[perfB]` Logger.log เดิม "ไม่แตะเลย" — ยังเป็น real-time tool ดู execution เดี่ยว
+//   · 1 request → 1 durable row (ตอน END เท่านั้น) ไม่ใช่ 1 row/sub-event (กัน write amplification)
+//   · hot path "ไม่เขียนชีต" — buffer ลง CacheService แบบ **lock-free + sharded** แล้ว trigger
+//     `drainPerfTelemetry_` (ทุก 1 นาที เหมือน drainNotiQueue) เขียนชีตรวดเดียว (batched เหมือน
+//     writeAuditLogBatch_) · ไม่ใช้ getScriptLock/getUserLock (จะไปแย่งกับ business/build lock =
+//     self-referential risk) และไม่ใช้ getDocumentLock (standalone script คืน null ได้ → เงียบ)
+//   · lock-free = อาจสูญ record หายากตอนชนกันเป๊ะใน shard เดียว = **ยอมรับได้ (fail-open, telemetry
+//     loss ≠ business loss)** · เรากัน 8 shard ลดโอกาสชน และ burst จริง (15-30 req/นาที) เก็บได้เกือบครบ
+//   · SAFE ROLLOUT: gate ด้วย Script Property `PERF_TELEMETRY_ENABLED` (default OFF) → deploy แล้ว
+//     ไม่มีอะไรเปลี่ยนจนกว่าเจ้าของรัน setupPerfTelemetry() · flag อ่านผ่าน cache กัน property read/req
+//   · ไม่เก็บ PII: id/corrId เป็นค่าสุ่ม (cid/tid/billCid), action เป็นชื่อ endpoint — ไม่มี phone/
+//     email/token/sessionToken/body · ทุก field bounded length กัน row ระเบิด
+// ═══════════════════════════════════════════════════════════════════════════
+var SHEET_PERF_TELEMETRY = 'PERF_TELEMETRY';
+var PERF_TEL_SCHEMA_VER  = 1;
+var PERF_TEL_HEADERS_ = ['id','ts','corrId','kind','action','durMs','cacheKind',
+                         'sessN','sessMs','lockSummary','zortMs','driveMs','deployVer','schemaVer'];
+var _PERF_TEL_ON_KEY      = 'perf_tel_on';        // cached enabled flag (กัน property read ต่อ request)
+var _PERF_TEL_BUF_PREFIX  = 'perf_tel_buf_v1_';   // + shard index (0..N-1)
+var _PERF_TEL_SHARDS      = 8;                     // ลด collision ของ lock-free read-modify-write
+var _PERF_TEL_SHARD_MAX   = 80;                    // cap ต่อ shard (8×80=640 max buffered < 100KB cache)
+var _PERF_TEL_MAX_ROWS    = 20000;                 // เพดานแถวในชีต (trim เก่าสุดตอน drain)
+
+// hash reqId → shard (กระจายโหลด + ลดโอกาสสอง request เขียน shard เดียวพร้อมกัน)
+function _perfTelShard_(id) {
+  var h = 0, s = String(id || '');
+  for (var i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; }
+  return Math.abs(h) % _PERF_TEL_SHARDS;
+}
+
+// อ่าน flag แบบเบา: cache ก่อน (setup/drain รีเฟรชให้) → miss ค่อยดู property ครั้งเดียวแล้ว warm cache
+function _perfTelOn_() {
+  try {
+    var c = CacheService.getScriptCache();
+    var v = c.get(_PERF_TEL_ON_KEY);
+    if (v === '1') return true;
+    if (v === '0') return false;
+    var on = String(PropertiesService.getScriptProperties().getProperty('PERF_TELEMETRY_ENABLED') || '') === 'true';
+    c.put(_PERF_TEL_ON_KEY, on ? '1' : '0', 3600);
+    return on;
+  } catch (e) { return false; }   // อ่านไม่ได้ = ถือว่าปิด (ปลอดภัยกว่าเสี่ยงเขียน)
+}
+
+// hot path (เรียกจาก perfReqEnd_): buffer 1 record ลง cache shard · **ไม่มีวัน throw · ไม่เขียนชีต**
+function perfTelemetryCapture_(r, durMs) {
+  try {
+    if (!r || !_perfTelOn_()) return;
+    var rec = {
+      id:          String(r.id || '').slice(0, 40),
+      ts:          Date.now(),
+      corrId:      String(r.corrId || '').slice(0, 64),
+      kind:        String(r.kind || '').slice(0, 16),
+      action:      String(r.action || '').slice(0, 48),
+      durMs:       Number(durMs) || 0,
+      cacheKind:   String(r.cacheKind || '').slice(0, 16),
+      sessN:       Number(r.sess) || 0,
+      sessMs:      Number(r.sessMs) || 0,
+      lockSummary: String(r.lock && r.lock.length ? r.lock.join(',') : '').slice(0, 200),
+      zortMs:      Number(r.zortMs) || 0,
+      driveMs:     Number(r.driveMs) || 0
+    };
+    var key = _PERF_TEL_BUF_PREFIX + _perfTelShard_(rec.id);
+    var c = CacheService.getScriptCache();
+    var raw = c.get(key);
+    var arr = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(arr)) arr = [];
+    arr.push(rec);
+    if (arr.length > _PERF_TEL_SHARD_MAX) arr = arr.slice(arr.length - _PERF_TEL_SHARD_MAX);  // drop เก่าสุด
+    c.put(key, JSON.stringify(arr), 900);   // 15 นาที > drain interval
+  } catch (e) { /* fail-open: telemetry พังห้ามกระทบ request */ }
+}
+
+function getPerfTelemetrySheet_() {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  return getOrCreateSheet_(ss, SHEET_PERF_TELEMETRY, PERF_TEL_HEADERS_);
+}
+
+// pure: แปลง records → แถวชีต + dedup by id ภายใน batch (คนละ execution = คนละ id = คนละแถว)
+// แยกออกมาเทสต์ได้โดยไม่ต้องมี GAS (เหมือน pure helper อื่นในไฟล์นี้)
+function perfTelemetryRowsFromRecords_(recs, deployVer) {
+  var seen = {}, rows = [];
+  if (!Array.isArray(recs)) return rows;
+  for (var i = 0; i < recs.length; i++) {
+    var x = recs[i];
+    if (!x || !x.id || seen[x.id]) continue;   // dedup by id (กัน record ซ้ำในรอบเดียว)
+    seen[x.id] = 1;
+    rows.push([x.id, new Date(x.ts || Date.now()), x.corrId || '', x.kind || '', x.action || '',
+               Number(x.durMs) || 0, x.cacheKind || '', Number(x.sessN) || 0, Number(x.sessMs) || 0,
+               x.lockSummary || '', Number(x.zortMs) || 0, Number(x.driveMs) || 0,
+               deployVer || '', PERF_TEL_SCHEMA_VER]);
+  }
+  return rows;
+}
+
+// trigger ทุก 1 นาที (เหมือน drainNotiQueue): ย้าย buffer ทุก shard → ชีต แบบ batched · fail-open
+function drainPerfTelemetry_() {
+  try {
+    if (!_perfTelOn_()) return;
+    try { CacheService.getScriptCache().put(_PERF_TEL_ON_KEY, '1', 3600); } catch (e) {}   // keep flag warm
+    var c = CacheService.getScriptCache();
+    var recs = [];
+    for (var s = 0; s < _PERF_TEL_SHARDS; s++) {
+      var key = _PERF_TEL_BUF_PREFIX + s;
+      var raw = c.get(key);
+      if (raw) {
+        c.remove(key);   // อ่านแล้วเคลียร์ · record ที่เขียนแทรกระหว่าง get→remove อาจหาย (fail-open, หายาก)
+        try { var a = JSON.parse(raw); if (Array.isArray(a)) recs = recs.concat(a); } catch (e) {}
+      }
+    }
+    if (!recs.length) return;
+    var deployVer = '';
+    try { deployVer = String(PropertiesService.getScriptProperties().getProperty('DEPLOY_SHA') || '').slice(0, 40); } catch (e) {}
+    var rows = perfTelemetryRowsFromRecords_(recs, deployVer);
+    if (!rows.length) return;
+    var sh = getPerfTelemetrySheet_();
+    // เขียนพลาด → **ทิ้ง batch นี้ (fail-open)** ไม่ put กลับ · กัน duplicate ตอน drain รอบหน้า
+    // (telemetry loss ยอมรับได้ · การรับประกัน "1 record = 1 แถว" สำคัญกว่าการไม่หายเลย)
+    sh.getRange(sh.getLastRow() + 1, 1, rows.length, PERF_TEL_HEADERS_.length).setValues(rows);
+    try {   // retention: ตัดแถวเก่าสุดถ้าเกินเพดาน (background เท่านั้น)
+      var last = sh.getLastRow();
+      if (last - 1 > _PERF_TEL_MAX_ROWS) sh.deleteRows(2, (last - 1) - _PERF_TEL_MAX_ROWS);
+    } catch (e) {}
+  } catch (e) { /* fail-open */ }
+}
+
+// เจ้าของรัน 1 ครั้งใน GAS editor (ชื่อไม่มี _ → โผล่ dropdown) — เปิดระบบ + ตั้ง trigger
+function setupPerfTelemetry() {
+  PropertiesService.getScriptProperties().setProperty('PERF_TELEMETRY_ENABLED', 'true');
+  try { CacheService.getScriptCache().put(_PERF_TEL_ON_KEY, '1', 3600); } catch (e) {}
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'drainPerfTelemetry_') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('drainPerfTelemetry_').timeBased().everyMinutes(1).create();
+  getPerfTelemetrySheet_();   // สร้างชีต + header ล่วงหน้า
+  return 'Perf telemetry เปิดแล้ว — durable summary 1 แถว/request · drain ทุก 1 นาที · ชีต "' + SHEET_PERF_TELEMETRY + '"';
+}
+function disablePerfTelemetry() {
+  PropertiesService.getScriptProperties().setProperty('PERF_TELEMETRY_ENABLED', 'false');
+  try { CacheService.getScriptCache().put(_PERF_TEL_ON_KEY, '0', 3600); } catch (e) {}
+  var n = 0;
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'drainPerfTelemetry_') { ScriptApp.deleteTrigger(t); n++; }
+  });
+  return 'Perf telemetry ปิดแล้ว (ลบ trigger ' + n + ' ตัว · ข้อมูลในชีตยังอยู่ครบ)';
 }
 
 /**
@@ -2472,7 +2641,8 @@ function saveThresholds_(data, actor) {
 // ───────────────────────────────────────────────────────────
 
 function doPost(e) {
-  perfReqBegin_('doPost');   // Phase B: START/END + action + duration (log-only, fail-safe)
+  // Track B: corrId จาก query param เสมอ (อ่านได้ก่อน JSON.parse body ที่อาจ throw)
+  perfReqBegin_('doPost', '', (e && e.parameter && e.parameter.corrId) || '');   // Phase B: START/END + action + duration (log-only, fail-safe)
   try {
     const data = JSON.parse(e.postData.contents);
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -2803,7 +2973,10 @@ function doPost(e) {
 }
 
 function doGet(e) {
-  perfReqBegin_('doGet', (e && e.parameter && e.parameter.action) || 'payload');
+  // Track B: corrId — ใช้ค่า corrId ที่ client ส่ง หรือ idempotency key เดิม (cid/tid/billCid) ที่มากับ
+  //   check endpoints อยู่แล้ว → correlate retry ข้าม execution ได้ฟรี โดยไม่ต้องแก้ frontend
+  perfReqBegin_('doGet', (e && e.parameter && e.parameter.action) || 'payload',
+    (e && e.parameter && (e.parameter.corrId || e.parameter.cid || e.parameter.tid || e.parameter.billCid)) || '');
   try {
     if (!checkToken_(e && e.parameter && e.parameter.token)) return unauthorized_();
     // ตัวแยกสาเหตุ: เส้นทางเดียวกันเป๊ะกับ payload แต่คำตอบจิ๋วและไม่แตะชีตเลย
@@ -16264,6 +16437,7 @@ function disableSupabaseBackup() {
 //  แพงกว่าตัว log ที่พยายามจะปิดเสียอีก) · เอาออกได้เมื่อจบ Phase 0 ถ้ารกเกินไป
 function perfLogDoGet_(kind, variant, tStart, bytes, extra) {
   try {
+    perfCache_(kind);   // Track B: บันทึก cache outcome (HIT/STALE/FRESH/MISS/WAIT-HIT) ลง durable summary
     Logger.log('[perf] doGet ' + kind + ' variant=' + variant
       + ' รวม=' + (Date.now() - tStart) + 'ms'
       + ' ส่ง=' + Math.round((bytes || 0) / 1024) + 'KB'
@@ -16291,6 +16465,7 @@ const PERF_TRIGGER_SCHEDULE_ = {
   syncZortPurchases:       { every: 'จันทร์ 06:00',       perDay: 0.14, setup: 'setupZortPurchasesTrigger()' },
   sweepEmptyShelfLocations:{ every: 'จันทร์ 05:00',       perDay: 0.14, setup: 'setupShelfSweepTrigger()' },
   rebuildSalesFromRaw:     { every: 'ครั้งเดียว (after)',  perDay: 0,    setup: 'ตั้งเองจาก backfillZortOrders' },
+  drainPerfTelemetry_:     { every: 'ทุก 1 นาที',        perDay: 1440, setup: 'setupPerfTelemetry()' },
 };
 
 // Script Property ที่ปลอดภัยจะพิมพ์ออก log — **allowlist เท่านั้น**

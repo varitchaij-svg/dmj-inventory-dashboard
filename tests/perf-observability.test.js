@@ -171,7 +171,8 @@ describe('perf helpers เป็น log-only + fail-safe', () => {
 describe('instrument points ถูก wire เข้าเส้นทางจริง', () => {
   it('doPost: begin + action + end (finally)', () => {
     const b = fnBody(GS, 'doPost');
-    expect(b).toContain("perfReqBegin_('doPost')");
+    // Track B: perfReqBegin_('doPost', '', corrId) — corrId param เพิ่มเข้ามา (ยังเริ่มด้วย 'doPost')
+    expect(b).toMatch(/perfReqBegin_\('doPost'/);
     expect(b).toContain('perfReqAction_(_postAction)');
     expect(b).toMatch(/finally\s*\{[\s\S]*perfReqEnd_\(\)/);
   });

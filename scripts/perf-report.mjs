@@ -14,18 +14,25 @@
 
 // ── parsers (pure — ทดสอบได้) ────────────────────────────────────────────────
 
-// START: [perfB] START kind=doPost id=abc action=punch t=1699999999999
+// START: [perfB] START kind=doPost id=abc action=punch t=1699999999999 [corrId=xxx]
+// Track B: corrId ต่อท้าย (optional) — จับเพิ่มได้แบบ backward-compatible (ไม่ใส่ key ถ้าไม่มี)
 export function parseStart(line) {
   const m = line.match(/\[perfB\] START kind=(\S+) id=(\S+) action=(\S*) t=(\d+)/);
   if (!m) return null;
-  return { kind: m[1], id: m[2], action: m[3] || '', t: Number(m[4]) };
+  const out = { kind: m[1], id: m[2], action: m[3] || '', t: Number(m[4]) };
+  const cm = line.match(/ corrId=(\S+)/);
+  if (cm) out.corrId = cm[1];
+  return out;
 }
-// END: [perfB] END kind=doPost id=abc action=punch durMs=123 sessN=2 sessMs=45 lock=punch:w0:h120 ...
+// END: [perfB] END kind=doPost id=abc action=punch durMs=123 sessN=2 sessMs=45 lock=... [cache=HIT] [corrId=xxx]
 export function parseEnd(line) {
   const m = line.match(/\[perfB\] END kind=(\S+) id=(\S+) action=(\S*) durMs=(\d+) sessN=(\d+) sessMs=(\d+)/);
   if (!m) return null;
-  return { kind: m[1], id: m[2], action: m[3] || '', durMs: Number(m[4]),
-           sessN: Number(m[5]), sessMs: Number(m[6]) };
+  const out = { kind: m[1], id: m[2], action: m[3] || '', durMs: Number(m[4]),
+                sessN: Number(m[5]), sessMs: Number(m[6]) };
+  const cache = line.match(/ cache=(\S+)/); if (cache) out.cacheKind = cache[1];
+  const corr = line.match(/ corrId=(\S+)/);  if (corr) out.corrId = corr[1];
+  return out;
 }
 // LOCK: [perfB] LOCK tag=punch got=true waitMs=0 holdMs=120 id=abc
 export function parseLock(line) {
