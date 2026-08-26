@@ -126,9 +126,9 @@ describe('StockCountView (คลัง): กดเสร็จ → flush ก่�
     expect(STOCKCOUNT).toContain('return { success: false, saved: [] };');
   });
 
-  it('ทุกปุ่ม "ยืนยันเช็คเสร็จ" (3 render branch) เรียก finishCheck()', () => {
+  it('ทุกปุ่ม "ยืนยันเช็คเสร็จ" (4 render branch: product/step1/step2/step3) เรียก finishCheck()', () => {
     const calls = STOCKCOUNT.match(/onClick=\{function\(\)\{ finishCheck\(\); \}\}/g) || [];
-    expect(calls.length, 'ต้องเรียก finishCheck ครบทุกปุ่มยืนยัน (3 branch)').toBe(3);
+    expect(calls.length, 'ต้องเรียก finishCheck ครบทุกปุ่มยืนยัน (4 branch — product-first เพิ่มมา)').toBe(4);
     // ต้องไม่มีปุ่มไหนส่งไปโดยไม่ flush หลงเหลือ (buildCheckCountsWH ถูกลบแล้ว)
     expect(STOCKCOUNT).not.toContain('buildCheckCountsWH');
   });
