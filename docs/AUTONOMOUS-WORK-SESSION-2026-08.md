@@ -64,6 +64,20 @@ fresh branch from `b7e5f1e` (isolated from docs per git rules):
   a CONFLICT**: Track K's fixed category→prefix table (F/RT/FB/…) contradicts the existing OL/R/color-code scheme
   (CLAUDE.md "never guess prefix"). Owner must resolve (replace vs additive vs mismatch) before any implementation.
 
+## 2e. Increment 5 — MTO custom-sale + pricing (P1/P2), SKU deep-trace (P3), owner dashboard (P4)
+
+- **P1/P2 (MTO custom arrangement + pricing):** read the full MTO V2 docs; wrote `MTO-CUSTOM-SALE-ADDENDUM-2026-08.md`
+  **on the MTO V2 branch** (`docs/mto-jobsku-migration-plan`, commit `2b2335b`, pushed) — extends, not competes.
+  Verdict A/B/C/D = **D**; answered all 12 questions vs the locked two-stage snapshot; pricing = **Option A** (component
+  selling price + fee; margin blocked by cost wall → Phase 2C). Track J = Phase 2B/2C, **not authorized**; Phase 2A
+  (Job→Template) is the READY prerequisite.
+- **P3 (SKU):** appended a deeper trace to `NEW-PRODUCT-SKU-ANALYSIS-2026-08.md` — SKU = barcode = ZORT key;
+  `parseSkuParts`/`compareSku`/prefix-grouping depend on the current structure → the requested `F/RT/…` table is safe
+  only as **additive (b)**; as a replacement it's a full migration. Still owner-decision-blocked.
+- **P4 (owner dashboard):** `BUSINESS-OWNER-DASHBOARD-REVIEW-2026-08.md` — decision matrix (metric → source → freshness
+  → reliable? → action) for TODAY/WEEK/MONTH/EXCEPTIONS; flags margin ❌ (cost wall) and failed-ZORT/LINE + backend-
+  slowness as real-but-unsurfaced (need Track B / F-10). Composition of existing signals, no invented KPI.
+
 ## 3. Documents created / changed
 
 - **Created:** `FULL-SYSTEM-SCRUTINY-DELTA-2026-08.md`, `BRANCH-RECONCILIATION-2026-08.md`,

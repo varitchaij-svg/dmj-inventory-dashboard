@@ -61,6 +61,27 @@ the SKU space.
   compatibility strategy for existing SKUs. Out of scope for an autonomous change.
 - Either way, keep: name-search-first (exists), dual collision check (exists), manual override (exists), audit (exists).
 
+## 3b. Deeper trace (Priority 3 request) — how far a structural change ripples (CONFIRMED)
+
+Traced the systems that depend on the **current** SKU structure `[prefix][2-digit variant][3-digit model]`:
+
+| Surface | Dependency on current SKU structure | Impact if taxonomy changes structure |
+|---|---|---|
+| **SKU = barcode = ZORT key** | `addNewProduct` sends `barcode: sku` (gs:7588); ZORT product keyed by SKU | New scheme → new ZORT products **or** changed barcodes → **label reprints** + ZORT re-mapping |
+| **Barcode label printing** | JsBarcode Code128 renders the SKU string directly (views-analytics ~6533) | Changed SKU → every printed label invalid |
+| **`parseSkuParts`** (views-main:3603) | regex captures `prefix` + 2-digit variant + 3-digit model | A scheme not matching this regex → `parseSkuParts` returns null → **model numbering / variant display break** |
+| **`compareSku`** natural sort (3395) | sorts by letters-prefix → numeric color → numeric seq | Non-conforming SKUs sort wrong across every product list |
+| **Prefix grouping** | `mtoSkuPrefix_`, `productOwnerSkuPrefix_` (letters-before-digits) | Product-owner-by-prefix + MTO grouping mis-bucket |
+| **Collision** | `collectExistingSkus_` / `checkSkuExists` (2 sheets) | Works regardless of scheme (string compare) — safe |
+| **Existing references / reporting** | thousands of live SKUs + monthly/daily sales keyed by SKU | Retroactive change = mass migration of historical records |
+| **Duplicate-name behavior** | name-search→prefix reuse (exists) | Compatible with an *additive* prefix default; incompatible with a *replacement* that renames types |
+
+**Conclusion of the deeper trace:** the requested `F/RT/FB/…` table is only safe as **option (b) additive** (a
+category default *consulted when name-search finds no existing prefix*, still producing a structure-conforming SKU with
+the color-code variant + `nextModelForPrefix`). As a **replacement (a)** it ripples into barcode/ZORT-key/`parseSkuParts`/
+sort/grouping/history = a full migration with owner sign-off (comparable in weight to the MTO Job-SKU migration). It is
+**not** a mere alias/display layer (3) — SKU is the ZORT/barcode identity, not a label.
+
 ## 4. Evidence gaps
 - Owner intent for the category→prefix table (a/b/c) — **UNKNOWN**, blocking.
 - Whether any of F/RT/FB/L/LB/TR/G/KB/PS/BR/GR already exist as live prefixes in production SKUs — needs a catalog
