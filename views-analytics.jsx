@@ -1816,6 +1816,17 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
   const [preShelfMode, setPreShelfMode]     = uS(false);
   const [preShelfList, setPreShelfList]     = uS([]); // ลำดับ SKU ที่หยิบเข้ามานับ (ล่าสุดอยู่บน)
   const [countFilter, setCountFilter]       = uS('all'); // all | pending | matched | mismatched — กรองตอนนับของเยอะ
+  // ── Product-first mode (นับตามสินค้า = DEFAULT) — UI/filter state ล้วน ไม่มี save engine ใหม่ ──
+  //    save เดินผ่าน handleSave เดิมทุกจุด (R1 คงอยู่) · location/category/stock เป็น "ตัวช่วยค้น"
+  //    ไม่ใช่ visibility gate — ทุก SKU non-hidden ต้องเข้าถึงได้ผ่าน bucket "ทั้งหมด/ไม่มีตำแหน่ง/ไม่มีหมวด"
+  const [viewMode, setViewMode]             = uS('product'); // 'product' (default) | 'location'
+  const [pfSearch, setPfSearch]             = uS('');
+  const [pfLoc, setPfLoc]                   = uS('all');     // 'all' | 'A' | 'B' | 'noloc'
+  const [pfShelf, setPfShelf]               = uS('');        // '' | 'A3' ... (เมื่อเลือกซอย A/B)
+  const [pfCat, setPfCat]                   = uS('__all__'); // '__all__' | '__none__' | หมวดจริง
+  const [pfStockZero, setPfStockZero]       = uS(false);
+  const [pfPage, setPfPage]                 = uS(1);
+  const pfTopRef = React.useRef(null);
   // SKU ที่ผู้ใช้เครื่องนี้แก้เอง — ไม่ให้ค่าจากเครื่องอื่น (recentCountedSkus) มาทับ + ใช้ตอน save
   const localEditsRef = React.useRef(new Set());
   // จำจำนวนที่นับไว้ในเครื่องนี้ แยกตาม context (ล็อค/ซัพพลายเออร์) — กดออกแล้วกลับเข้ามายังเห็นเลขเดิม
@@ -2110,7 +2121,13 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
     //    confirmStockCount เลย → จำนวนที่นับไม่เคยเข้าคลัง/ZORT (เจ้าของแจ้ง ส.ค. 2026) ·
     //    ตอนนี้รวมทั้ง 2 โหมดมาที่ handleSave ตัวเดียว: ตำแหน่ง (ตามล็อค หรือจัดกลุ่มตาม skuToLock
     //    ของแต่ละ SKU ในโหมดซัพพลายเออร์) + confirmStockCount เสมอ
-    const { lockEntries, confirmEntries } = splitFoundEntries(entries);
+    const { lockEntries, confirmEntries: confirmAll } = splitFoundEntries(entries);
+    // R1: ส่งเข้า confirmStockCount (เขียนคลัง+ZORT) เฉพาะ SKU ที่ค่าเปลี่ยนจากที่บันทึกไปแล้ว
+    // (qty !== savedQtys[sku]) — เลิก re-push ค่าเดิมสะสมทุก auto-save (รวมทั้ง session เป็น O(n²))
+    // · qty=0 ส่งได้ (0 !== undefined ครั้งแรก) · หลัง save ค่าเดิม → ไม่ส่งซ้ำ · แก้ค่าใหม่ → ส่งใหม่
+    // · save ล้มเหลว = savedQtys ไม่ถูกตั้ง → รอบถัดไปยังส่งซ้ำ (ไม่ทิ้งของที่ยังไม่เข้าจริง)
+    // ⚠️ ไม่แตะ localEditsRef (merge-guard ของ stocklite) · absolute-set semantics เหมือนเดิม
+    const confirmEntries = confirmAll.filter(e => e.qty !== savedQtys[e.sku]);
     // ⭐ commit "ยอดคลัง + ZORT" ก่อน (ส่วนสำคัญที่สุดที่ผู้ใช้รอเห็นเข้า ZORT) — การบันทึก "ตำแหน่ง"
     //    (syncLockData) เป็น bookkeeping รอง · ทำตำแหน่งก่อนแล้ว POST ตำแหน่งค้าง/ล้ม (GAS ตอบ HTML
     //    ตอน execution ซ้อนกัน) จะ **หน่วง/บัง** confirmStockCount ที่เป็นตัวเข้า ZORT จริง → จอค้าง
@@ -2151,7 +2168,8 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
     } catch (_) { /* ตำแหน่งเป็นเรื่องรอง — ของเข้า ZORT แล้ว ไม่ถือว่าล้มเหลว */ }
     // patch data.products ให้เห็นเลขใหม่ทันที (requirement B) — ใช้ค่าที่ server ยืนยันแล้วเท่านั้น
     applyServerPatch(result, confirmEntries);
-    confirmEntries.forEach(e => sessionSkuSetRef.current.add(String(e.sku).toUpperCase()));
+    // session tracking นับ SKU ที่นับในรอบนี้ (confirmAll) ไม่ใช่เฉพาะที่เปลี่ยน (confirmEntries)
+    confirmAll.forEach(e => sessionSkuSetRef.current.add(String(e.sku).toUpperCase()));
     setSavedSkus(new Set(entries.map(e => e.sku)));
     setSavedQtys(prev => { const n = { ...prev }; entries.forEach(e => { n[e.sku] = e.qty; }); return n; });
     setFailedSkus(prev => { const n = new Set(prev); entries.forEach(e => n.delete(e.sku)); return n; });
@@ -2160,7 +2178,8 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
     setLastSavedSnap(snap); // กัน auto-save วนซ้ำ
     setSaveStatus("saved");
     setTimeout(() => setSaveStatus("idle"), 3000);
-    const nFound = entries.length - confirmEntries.length;
+    // nFound = "เจอในล็อค" (บันทึกตำแหน่งอย่างเดียว) — อิง confirmAll ไม่ใช่ confirmEntries ที่ R1 กรองแล้ว
+    const nFound = entries.length - confirmAll.length;
     showToast('success', 'บันทึก ' + entries.length + ' รายการ' +
       (nFound > 0 ? ' (🆕 ' + nFound + ' บันทึกตำแหน่งอย่างเดียว)' : ' — อัปเดตคลัง + ZORT'), '✅');
     submitInFlightRef.current = false;
@@ -2216,7 +2235,9 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
     submitInFlightRef.current = true;
     setConfirming(true);
     const snap = JSON.stringify(checkedQtys);
-    const { lockEntries, confirmEntries } = splitFoundEntries(entries);
+    const { lockEntries, confirmEntries: confirmAll } = splitFoundEntries(entries);
+    // R1: ส่งเฉพาะ SKU ที่ค่าเปลี่ยน (qty !== savedQtys[sku]) — ดูคำอธิบายใน handleSave
+    const confirmEntries = confirmAll.filter(e => e.qty !== savedQtys[e.sku]);
     if (selLockKey) await syncLockData(selLockKey, lockEntries);
     const result = confirmEntries.length
       ? await confirmStockCount(confirmEntries, sessionIdRef.current) : { success: true };
@@ -2229,7 +2250,7 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
       showToast('error', 'ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด', '⚠️');
     } else if (result.success !== false) {
       applyServerPatch(result, confirmEntries);
-      confirmEntries.forEach(e => sessionSkuSetRef.current.add(String(e.sku).toUpperCase()));
+      confirmAll.forEach(e => sessionSkuSetRef.current.add(String(e.sku).toUpperCase()));
       setSavedSkus(new Set(entries.map(e => e.sku)));
       setSavedQtys(prev => { const n = { ...prev }; entries.forEach(e => { n[e.sku] = e.qty; }); return n; });
       setFailedSkus(prev => { const n = new Set(prev); entries.forEach(e => n.delete(e.sku)); return n; });
@@ -2238,7 +2259,7 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
       setLastSavedSnap(snap); // กัน auto-save commit ซ้ำหลังกดยืนยันเอง
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 3000);
-      const nFound = entries.length - confirmEntries.length;
+      const nFound = entries.length - confirmAll.length;
       showToast('success', 'ยืนยันผลนับแล้ว ' + entries.length + ' รายการ' +
         (nFound > 0 ? ' (🆕 ' + nFound + ' บันทึกตำแหน่งอย่างเดียว)' : ' — อัปเดตคลัง + ZORT'), '✅');
     } else {
@@ -2391,6 +2412,20 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
     };
   }, [preShelfMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Product-first session — เปิดเมื่ออยู่โหมด 'product' และไม่มีโหมด/บริบทอื่นครอบอยู่ (กัน 2 session ซ้อน:
+  // preshelf/supplier/lock มี session ของตัวเองอยู่แล้ว) · sku ที่นับผูกกับ session นี้ผ่าน handleSave
+  // (confirmAll.forEach(...sessionSkuSetRef)) เหมือนทุกโหมด · ปิดตอน unmount/ออกโหมดถ้ามีการนับจริง
+  uE(() => {
+    if (viewMode !== 'product' || preShelfMode || supplierMode || selLockKey || selSupplier) return;
+    const id = newStockCountSessionId();
+    sessionIdRef.current = id;
+    sessionSkuSetRef.current = new Set();
+    startStockCountSession(id, 'product', 'product', 'นับตามสินค้า', null);
+    return () => {
+      if (sessionSkuSetRef.current.size > 0) closeStockCountSession(id, sessionSkuSetRef.current.size);
+    };
+  }, [viewMode, preShelfMode, supplierMode, selLockKey, selSupplier]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── กันดับเบิลแท็บ (UX protection เท่านั้น — ไม่ใช่ data-integrity mechanism เพราะ
   //    confirmStockCount เป็น absolute-set/idempotent อยู่แล้วฝั่ง server) ──
   // ใช้ ref เดียวร่วมกันทั้ง handleSave/handleConfirm/handleSavePreShelf เพราะ UI โชว์ทีละโหมด
@@ -2411,9 +2446,94 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
     patchProductQtys(patch);
   };
 
+  // สลับโหมดหน้าจอ — product-first (ค้น/สแกน) ⟷ location-first (เดินตามซอย/ชั้น)
+  // ⚠️ ล้าง selLockKey/selSupplier ตอนกลับ product เพื่อให้ session ตรงกับหน้าจอ (กัน lock/supplier
+  //    session ค้างขณะแสดง product-first) · ถ้าเป็น null อยู่แล้ว = no-op (ไม่ trigger restoreCtx เปล่า ๆ)
+  const goProductMode = () => {
+    setSupplierMode(false); setPreShelfMode(false);
+    setSelSupplier(null); setSelLockKey(null); setSelShelf(null); setStep(1);
+    setStockSearch(''); setViewMode('product');
+  };
+  const goLocationMode = () => {
+    setSupplierMode(false); setPreShelfMode(false);
+    setStep(1); setStockSearch(''); setViewMode('location');
+  };
+
   // หมายเหตุ: โหมด "ตามซัพพลายเออร์" ใช้ `handleSave` ตัวเดียวกับโหมดตามล็อคแล้ว (บันทึกตำแหน่ง
   // จัดกลุ่มตาม skuToLock + confirmStockCount เข้าคลัง/ZORT) — เดิมมี `handleSaveSupplier` แยกที่
   // บันทึกตำแหน่งอย่างเดียว ไม่เคย commit เข้าคลัง/ZORT (ลบทิ้งแล้ว ส.ค. 2026)
+
+  // ── PRODUCT-FIRST memos — must be declared before any early return (Rules of Hooks) ──
+  // ตำแหน่งของ SKU: ใช้ storage lock map ก่อน (ตรงกับ badge step-3) · fallback ไป p.locations
+  // (col E) ผ่าน lockKeyOf · ไม่มีเลย → null = "ไม่มีตำแหน่ง" (ไม่ใช่ "นับไม่ได้")
+  const pfLockOf = (sku) => {
+    if (skuToLock[sku]) return skuToLock[sku];
+    const p = productMap[sku];
+    const loc = p && p.locations && p.locations[0];
+    return loc ? lockKeyOf(loc) : null;
+  };
+  // หมวดที่มีจริง (สำหรับ dropdown) + มีของ "ไม่มีหมวด" ไหม (ต้องมี bucket เข้าถึงได้)
+  const pfCategories = uM(() => {
+    const s = new Set();
+    products.forEach(p => { if (p && p.sku && !p.isMTO) { const c = (p.category || p.cat || '').trim(); if (c) s.add(c); } });
+    return [...s].sort();
+  }, [products]);
+  const pfHasNoCat = uM(() =>
+    products.some(p => p && p.sku && !p.isMTO && !((p.category || p.cat || '').trim())),
+    [products]);
+  // ชั้นที่มีของในซอยที่เลือก (สำหรับ dropdown ชั้น)
+  const pfShelves = uM(() => {
+    if (pfLoc !== 'A' && pfLoc !== 'B') return [];
+    const s = new Set();
+    products.forEach(p => {
+      if (!p || !p.sku || p.isMTO) return;
+      const lk = pfLockOf(p.sku);
+      if (lk && lk[0] === pfLoc) s.add(lk.split('/')[0]);
+    });
+    return [...s].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }, [products, pfLoc, skuToLock]); // eslint-disable-line react-hooks/exhaustive-deps
+  // รายการสินค้าที่ผ่านตัวกรอง (ก่อน pagination) — filter/search จาก products ทั้งชุด (ทุก SKU non-hidden)
+  // ⚠️ location/category/stock เป็นตัวช่วยค้น ไม่ใช่ visibility gate: bucket "ทั้งหมด" เห็นทุกตัว
+  //    · "ไม่มีตำแหน่ง"/"ไม่มีหมวด"/"stock=0" เป็นทางเข้าถึงของที่ไม่มี metadata (ไม่ทำให้หายถาวร)
+  const pfList = uM(() => {
+    const tokens = pfSearch.trim().toUpperCase().split(/\s+/).filter(Boolean);
+    return products
+      .filter(p => p && p.sku && !p.isMTO)   // MTO ไม่ใช่ physical stock (ตรงกับ pre-shelf)
+      .filter(p => {
+        // location bucket
+        if (pfLoc !== 'all') {
+          const lk = pfLockOf(p.sku);
+          if (pfLoc === 'noloc') { if (lk) return false; }
+          else {
+            if (!lk || lk[0] !== pfLoc) return false;
+            if (pfShelf && lk.split('/')[0] !== pfShelf) return false;
+          }
+        }
+        // stock = 0 (คลัง)
+        if (pfStockZero && whQty(p) !== 0) return false;
+        // category
+        const cat = (p.category || p.cat || '').trim();
+        if (pfCat === '__none__') { if (cat) return false; }
+        else if (pfCat !== '__all__') { if (cat !== pfCat) return false; }
+        // search (multi-token AND บน sku+ชื่อ · scan → setPfSearch(sku) เพราะ SKU = barcode)
+        if (tokens.length) {
+          const hay = (p.sku + ' ' + (p.name || '')).toUpperCase();
+          if (!tokens.every(t => hay.includes(t))) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        const la = pfLockOf(a.sku) || 'zzz';
+        const lb = pfLockOf(b.sku) || 'zzz';
+        return la.localeCompare(lb, undefined, { numeric: true }) || compareSku(a, b);
+      });
+  }, [products, pfSearch, pfLoc, pfShelf, pfCat, pfStockZero, skuToLock]); // eslint-disable-line react-hooks/exhaustive-deps
+  const PF_PAGE_SIZE = 24;
+  const pfVisible = uM(() => pfList.slice((pfPage - 1) * PF_PAGE_SIZE, pfPage * PF_PAGE_SIZE), [pfList, pfPage]);
+  // reset หน้าเมื่อ search/filter เปลี่ยน (ไม่ทำให้ SKU หายจาก source — แค่กลับหน้า 1)
+  uE(() => { setPfPage(1); }, [pfSearch, pfLoc, pfShelf, pfCat, pfStockZero]);
+  // ออกจากซอย A/B → ล้างตัวกรองชั้น (ไม่งั้นชั้นค้างแล้วกรองผิด)
+  uE(() => { if (pfLoc !== 'A' && pfLoc !== 'B') setPfShelf(''); }, [pfLoc]);
 
   // ── step 1 global search — must be declared before any early return (Rules of Hooks) ──
   const step1SearchResults = uM(() => {
@@ -2475,28 +2595,32 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
   }).length;
 
   const handleSavePreShelf = async () => {
-    const entries = preShelfList
+    const allEntries = preShelfList
       .filter(sku => { const v = checkedQtys[sku]; return v !== '' && v != null; })
       .map(sku => ({ sku, qty: parseInt(checkedQtys[sku]) || 0 }));
-    if (!entries.length) { showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return; }
+    if (!allEntries.length) { showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return; }
     if (submitInFlightRef.current) return; // กันดับเบิลแท็บ (UX เท่านั้น)
     submitInFlightRef.current = true;
     setSaveStatus("saving");
+    // R1: ส่งเฉพาะ SKU ที่ค่าเปลี่ยน (qty !== savedQtys[sku]) — ดูคำอธิบายใน handleSave
+    // bookkeeping (savedSkus/savedQtys/session/toast) ยังอิง allEntries (ทั้งรายการที่นับ) เสมอ
+    const entries = allEntries.filter(e => e.qty !== savedQtys[e.sku]);
     // บันทึกยอดคลังตรง ๆ (absolute set) + push ZORT — ไม่แตะตำแหน่งล็อค
-    const result = await confirmStockCount(entries, sessionIdRef.current);
+    const result = entries.length
+      ? await confirmStockCount(entries, sessionIdRef.current) : { success: true };
     submitInFlightRef.current = false;
     if (result.conflict) {
       setSaveStatus("error");
       showToast('error', 'ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด', '⚠️');
     } else if (result.success !== false) {
       applyServerPatch(result, entries);
-      entries.forEach(e => sessionSkuSetRef.current.add(String(e.sku).toUpperCase()));
-      setSavedSkus(new Set(entries.map(e => e.sku)));
-      setSavedQtys(prev => { const n = { ...prev }; entries.forEach(e => { n[e.sku] = e.qty; }); return n; });
+      allEntries.forEach(e => sessionSkuSetRef.current.add(String(e.sku).toUpperCase()));
+      setSavedSkus(new Set(allEntries.map(e => e.sku)));
+      setSavedQtys(prev => { const n = { ...prev }; allEntries.forEach(e => { n[e.sku] = e.qty; }); return n; });
       setLastSavedTime(new Date());
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 3000);
-      showToast('success', 'บันทึกยอดคลัง ' + entries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
+      showToast('success', 'บันทึกยอดคลัง ' + allEntries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
     } else {
       setSaveStatus("error");
       showToast('error', 'บันทึกไม่สำเร็จ', '❌');
@@ -3031,6 +3155,309 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
     );
   }
 
+  // ── PRODUCT-FIRST MODE — นับตามสินค้า (DEFAULT) ──────────────────
+  // ค้น/สแกน + filter + การ์ด (reuse การ์ด supplier-mode) · save เดินผ่าน handleSave เดิม (R1 คงอยู่)
+  if (viewMode === 'product') {
+    const pfFilled = Object.values(checkedQtys).filter(v => v !== '' && v != null).length;
+    // "นับแล้วแต่ยังไม่ได้เซฟ" (ค่าไม่ตรง savedQtys) — ปุ่มโชว์เลขนี้ (เหมือนโหมดซัพพลายเออร์)
+    const pfUnsaved = Object.entries(checkedQtys)
+      .filter(([sku, v]) => v !== '' && v != null && savedQtys[sku] !== (parseInt(v) || 0)).length;
+    return (
+      <>
+        <Toast toast={toast} onClose={hideToast}/>
+        <CalcPadModal
+          open={!!calcPad}
+          name={calcPad ? (calcPad.name || calcPad.sku) : ''}
+          initialVal={calcPad ? calcPad.expr : ''}
+          onConfirm={function(qty){
+            if (calcPad) {
+              localEditsRef.current.add(calcPad.sku);
+              setCheckedQtys(function(prev){ const o=Object.assign({},prev); o[calcPad.sku]=qty; return o; });
+            }
+            setCalcPad(null);
+          }}
+          onClose={function(){ setCalcPad(null); }}
+        />
+        {/* ── Check Request banner ── (product-first ยัง scope ตาม checkRequest ผ่าน products memo) */}
+        {checkRequest && (
+          <div style={{background:"#fffbeb",border:"1px solid #fcd34d",borderRadius:12,
+                       padding:"12px 16px",display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+            <span style={{fontSize:18}}>📋</span>
+            <div style={{flex:1,fontSize:14}}>
+              <b>กำลังเช็คตามคำขอ</b> · {checkRequest.skus.length} รายการ
+            </div>
+            <button onClick={function(){ finishCheck(); }}
+              style={{background:"#1f7f44",color:"#fff",border:"none",borderRadius:8,
+                      padding:"8px 14px",fontWeight:600,fontSize:13,cursor:"pointer",fontFamily:'inherit'}}>
+              ✅ เสร็จแล้ว
+            </button>
+          </div>
+        )}
+        <div style={{display:'flex',flexDirection:'column',gap:12,width:"100%",minWidth:0,boxSizing:"border-box"}}>
+
+          {/* Header + save */}
+          <div style={{display:'flex',alignItems:'flex-start',gap:10,flexWrap:'wrap'}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:16,fontWeight:800}}>📊 นับ stock คลัง · นับตามสินค้า</div>
+              <div style={{fontSize:12,color:'var(--muted)',marginTop:2}}>
+                ค้นหา / สแกน แล้วนับได้เลย — {pfList.length} รายการ{pfFilled>0?` · นับแล้ว ${pfFilled}`:''}
+              </div>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}}>
+              <button onClick={() => handleSave()} disabled={saving||pfUnsaved===0}
+                className="btn primary"
+                style={{padding:'10px 18px',fontWeight:700,fontSize:14,
+                        opacity:(saving||pfUnsaved===0)?0.55:1}}>
+                {saveStatus === "saving" ? '↻ กำลังบันทึก...'
+                  : pfUnsaved>0 ? `💾 บันทึก (${pfUnsaved})`
+                  : pfFilled>0 ? '✓ บันทึกครบแล้ว' : '💾 บันทึก'}
+              </button>
+              {saveStatus === "pending" && (
+                <span style={{fontSize:11,color:'#b45309',fontWeight:600}}>⏳ จะบันทึกอัตโนมัติใน 3 วิ…</span>
+              )}
+              {saveStatus === "saved" && !saveErr && (
+                <span style={{fontSize:11,color:'#22c55e',fontWeight:600}}>✓ บันทึกเข้าคลัง + ZORT แล้ว</span>
+              )}
+              {saveErr && (
+                <span style={{fontSize:11,color:'#ef4444',fontWeight:700,maxWidth:220,textAlign:'right',lineHeight:1.3}}>
+                  ⚠️ ยังไม่เข้าระบบ: {saveErr} — แตะ 💾 บันทึก
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Mode toggle — product-first ⟷ location-first + ทางเข้าโหมดเสริม */}
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            <div style={{display:'flex',gap:8}}>
+              <button style={{flex:1,padding:'10px 0',borderRadius:10,border:'2px solid #1b5e20',
+                              background:'#1b5e20',color:'#fff',fontWeight:700,fontSize:13,
+                              cursor:'pointer',fontFamily:'inherit'}}>
+                🔍 นับตามสินค้า
+              </button>
+              <button onClick={goLocationMode}
+                style={{flex:1,padding:'10px 0',borderRadius:10,border:'2px solid var(--bdr)',
+                        background:'#fff',color:'var(--g-700)',fontWeight:700,fontSize:13,
+                        cursor:'pointer',fontFamily:'inherit'}}>
+                🗺️ นับตามตำแหน่ง
+              </button>
+            </div>
+            <div style={{display:'flex',gap:8}}>
+              <button onClick={() => setSupplierMode(true)}
+                style={{flex:1,padding:'9px 0',borderRadius:10,border:'1.5px solid var(--bdr)',
+                        background:'#fff',color:'var(--g-700)',fontWeight:700,fontSize:12.5,
+                        cursor:'pointer',fontFamily:'inherit'}}>
+                🏭 ตามซัพพลายเออร์
+              </button>
+              <button onClick={() => { setPreShelfMode(true); setStockSearch(''); }}
+                style={{flex:1,padding:'9px 0',borderRadius:10,border:'1.5px dashed #2563eb',
+                        background:'#eff6ff',color:'#1e40af',fontWeight:700,fontSize:12.5,
+                        cursor:'pointer',fontFamily:'inherit'}}>
+                📥 นับก่อนขึ้นชั้น
+              </button>
+            </div>
+          </div>
+
+          {/* Search + Scan (primary) */}
+          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+            <input type="text" placeholder="🔍 ค้นหา SKU / ชื่อสินค้า / บาร์โค้ด..."
+              value={pfSearch}
+              onChange={e => setPfSearch(e.target.value.toUpperCase())}
+              style={{flex:1,padding:'11px 14px',borderRadius:10,border:'1.5px solid var(--bdr)',
+                      fontSize:13,fontFamily:'inherit',background:'#fff'}}/>
+            <ScanButton size={46} onScan={sku => setPfSearch(String(sku).toUpperCase())}/>
+            {pfSearch && (
+              <button onClick={() => setPfSearch('')}
+                style={{width:46,height:46,borderRadius:10,border:'1.5px solid var(--bdr)',
+                        background:'#fff',cursor:'pointer',fontSize:18,fontFamily:'inherit',
+                        color:'var(--muted)',flexShrink:0}}>✕</button>
+            )}
+          </div>
+
+          {/* Filter chips: location bucket + stock=0 */}
+          <div style={{display:'flex',gap:6,overflowX:'auto',paddingBottom:2,WebkitOverflowScrolling:'touch'}}>
+            {[
+              {key:'all',   label:'ทั้งหมด'},
+              {key:'A',     label:'ซอย A'},
+              {key:'B',     label:'ซอย B'},
+              {key:'noloc', label:'📥 ไม่มีตำแหน่ง'},
+            ].map(item => {
+              const active = pfLoc === item.key;
+              return (
+                <button key={item.key} onClick={() => setPfLoc(item.key)}
+                  style={{flexShrink:0,padding:'8px 14px',borderRadius:999,fontFamily:'inherit',
+                          fontSize:12.5,fontWeight:700,cursor:'pointer',
+                          border:'1.5px solid ' + (active ? '#1b5e20' : 'var(--bdr)'),
+                          background: active ? '#1b5e20' : '#fff',
+                          color: active ? '#fff' : 'var(--g-700)'}}>
+                  {item.label}
+                </button>
+              );
+            })}
+            <button onClick={() => setPfStockZero(v => !v)}
+              style={{flexShrink:0,padding:'8px 14px',borderRadius:999,fontFamily:'inherit',
+                      fontSize:12.5,fontWeight:700,cursor:'pointer',
+                      border:'1.5px solid ' + (pfStockZero ? '#b45309' : 'var(--bdr)'),
+                      background: pfStockZero ? '#fffbeb' : '#fff',
+                      color: pfStockZero ? '#b45309' : 'var(--g-700)'}}>
+              🈳 stock = 0
+            </button>
+          </div>
+
+          {/* Shelf dropdown (เมื่อเลือกซอย A/B) + Category dropdown */}
+          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+            {(pfLoc === 'A' || pfLoc === 'B') && pfShelves.length > 0 && (
+              <select value={pfShelf} onChange={e => setPfShelf(e.target.value)}
+                style={{flex:'1 1 140px',minWidth:0,padding:'9px 10px',borderRadius:10,
+                        border:'1.5px solid var(--bdr)',fontSize:13,fontFamily:'inherit',background:'#fff'}}>
+                <option value="">ทุกชั้นในซอย {pfLoc}</option>
+                {pfShelves.map(sh => <option key={sh} value={sh}>ชั้น {sh}</option>)}
+              </select>
+            )}
+            <select value={pfCat} onChange={e => setPfCat(e.target.value)}
+              style={{flex:'1 1 140px',minWidth:0,padding:'9px 10px',borderRadius:10,
+                      border:'1.5px solid var(--bdr)',fontSize:13,fontFamily:'inherit',background:'#fff'}}>
+              <option value="__all__">ทุกหมวด</option>
+              {pfHasNoCat && <option value="__none__">— ไม่มีหมวด —</option>}
+              {pfCategories.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+
+          <div ref={pfTopRef}/>
+
+          {/* Product cards */}
+          {pfList.length === 0 ? (
+            <Empty title="ไม่พบสินค้า" sub="ลองเปลี่ยนคำค้นหรือตัวกรอง (กด 'ทั้งหมด' เพื่อดูทุกตัว)"/>
+          ) : (
+            <>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10,width:"100%",minWidth:0,boxSizing:"border-box"}}>
+                {pfVisible.map(p => {
+                  const lockKey = pfLockOf(p.sku);
+                  const sys  = whQty(p);
+                  const val  = checkedQtys[p.sku];
+                  const has  = val !== '' && val != null;
+                  const num  = has ? (parseInt(val)||0) : 0;
+                  const matched = has && num === sys;
+                  const diff = has ? num - sys : null;
+                  const saved = has && savedQtys[p.sku] === num;
+                  const failed = has && !saved && failedSkus.has(p.sku);
+                  const bdr   = !has ? 'var(--bdr)' : saved ? 'var(--g-500)' : failed ? '#ef4444' : '#f59e0b';
+                  const bgCard = saved ? '#f0fdf4' : !has ? '#fff' : failed ? '#fef2f2' : '#fffbeb';
+
+                  return (
+                    <div key={p.sku} data-pf-sku={p.sku} style={{
+                      background:bgCard, border:'2px solid '+bdr, borderRadius:16, overflow:'hidden',
+                      display:'flex', flexDirection:'column', transition:'border-color .15s,background .15s',
+                      boxShadow:'0 2px 8px rgba(0,0,0,.06)',
+                    }}>
+                      {/* Image */}
+                      <div style={{position:'relative',paddingTop:'75%',background:'var(--g-50)',flexShrink:0}}>
+                        {p.imageUrl ? (
+                          <img src={p.imageUrl} alt={p.name} loading="lazy"
+                               style={{position:'absolute',inset:0,width:'100%',height:'100%',
+                                       objectFit:'contain',background:'var(--g-50)'}}/>
+                        ) : (
+                          <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',
+                                       justifyContent:'center',fontSize:32}}>
+                            {CAT_EMOJI[p.cat] || '📦'}
+                          </div>
+                        )}
+                        {lockKey ? (
+                          <div style={{position:'absolute',top:6,left:6,
+                            background:'rgba(27,94,32,.88)',color:'#fff',borderRadius:8,padding:'3px 8px',
+                            fontSize:11,fontWeight:800,fontFamily:'monospace',backdropFilter:'blur(4px)',
+                            display:'flex',alignItems:'center',gap:4}}>
+                            📍 {lockKey}
+                          </div>
+                        ) : (
+                          <div style={{position:'absolute',top:6,left:6,
+                            background:'rgba(180,83,9,.85)',color:'#fff',borderRadius:8,padding:'3px 8px',
+                            fontSize:10,fontWeight:700,backdropFilter:'blur(4px)'}}>
+                            ⚠️ ไม่มีตำแหน่ง
+                          </div>
+                        )}
+                        {p.color && (
+                          <span style={{position:'absolute',bottom:6,right:6,width:14,height:14,borderRadius:'50%',
+                            background:p.color.hex,border:'2px solid rgba(255,255,255,.9)',
+                            boxShadow:'0 1px 3px rgba(0,0,0,.3)'}}/>
+                        )}
+                        {has && (
+                          <div style={{position:'absolute',top:6,right:6,minWidth:26,height:26,borderRadius:13,padding:'0 6px',
+                            background: saved ? 'var(--g-500)' : failed ? '#ef4444' : '#f59e0b',
+                            color:'#fff',fontSize:saved?15:13,fontWeight:900,
+                            display:'flex',alignItems:'center',justifyContent:'center',gap:3,
+                            border:'2px solid rgba(255,255,255,.95)',boxShadow:'0 1px 4px rgba(0,0,0,.35)'}}>
+                            {saved ? '✓' : failed ? '⚠️' : '⏳'}
+                          </div>
+                        )}
+                      </div>
+
+                      <div style={{padding:'10px 12px',display:'flex',flexDirection:'column',gap:8,flex:1}}>
+                        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:6}}>
+                          <span style={{fontSize:10,fontWeight:700,color:'var(--g-500)',fontFamily:'monospace'}}>
+                            {p.sku}
+                          </span>
+                          <span style={{fontSize:11,fontWeight:700,color:'#1b5e20',
+                                        background:'#e8f5e9',padding:'1px 7px',borderRadius:10,flexShrink:0}}>
+                            คลัง {sys}
+                          </span>
+                        </div>
+                        <div style={{fontSize:12,fontWeight:600,color:'var(--g-800)',lineHeight:1.35,
+                                      overflow:'hidden',display:'-webkit-box',
+                                      WebkitLineClamp:2,WebkitBoxOrient:'vertical'}}>
+                          {p.name || '—'}
+                        </div>
+
+                        {has && (
+                          <div style={{fontSize:11,fontWeight:700,textAlign:'center',borderRadius:8,padding:'4px 6px',
+                                        background: saved ? '#dcfce7' : failed ? '#fee2e2' : '#fef3c7',
+                                        color: saved ? '#166534' : failed ? '#b91c1c' : '#92400e'}}>
+                            {saved
+                              ? (diff === 0 ? `✅ บันทึกแล้ว · คลัง = ${num}` : `✅ บันทึกแล้ว · แก้คลังเป็น ${num} (เดิม ${sys})`)
+                              : failed
+                              ? `⚠️ ยังไม่บันทึก (นับได้ ${num}) — แตะ 💾 บันทึก`
+                              : `นับได้ ${num}${diff !== 0 ? ` (เดิม ${sys})` : ''} · ⏳ กำลังบันทึก…`}
+                          </div>
+                        )}
+
+                        {/* ± controls (reuse pattern จากโหมดซัพพลายเออร์) */}
+                        <div style={{display:'flex',gap:5,alignItems:'center',marginTop:'auto'}}>
+                          {[-5,-1].map(d => (
+                            <button key={d} onClick={() => adjustQty(p.sku, d)}
+                              style={{flex:1,height:44,borderRadius:8,border:'1.5px solid var(--bdr)',
+                                      background:'#fff',cursor:'pointer',fontSize:13,fontWeight:700,
+                                      fontFamily:'inherit',color:'var(--g-700)'}}>
+                              {d}
+                            </button>
+                          ))}
+                          <button onClick={() => openCalc(p.sku, p.name)}
+                            style={{flex:2,height:44,borderRadius:8,border:'1.5px solid var(--g-400)',
+                                    background:has?'#f0fdf4':'#fff',cursor:'pointer',
+                                    fontSize:14,fontWeight:800,fontFamily:'monospace',
+                                    color:has?'var(--g-700)':'var(--muted)'}}>
+                            {has ? num : '—'}
+                          </button>
+                          {[1,5].map(d => (
+                            <button key={d} onClick={() => adjustQty(p.sku, d)}
+                              style={{flex:1,height:44,borderRadius:8,border:'1.5px solid var(--bdr)',
+                                      background:'#fff',cursor:'pointer',fontSize:13,fontWeight:700,
+                                      fontFamily:'inherit',color:'var(--g-700)'}}>
+                              +{d}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <Pagination page={pfPage} total={pfList.length} pageSize={PF_PAGE_SIZE} onChange={setPfPage} listRef={pfTopRef}/>
+            </>
+          )}
+        </div>
+      </>
+    );
+  }
+
   // ── STEP 1: เลือกชั้น ────────────────────────────────────────────
   if (step === 1) return (
     <>
@@ -3159,6 +3586,12 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
         {/* Mode toggle — ซ่อนเมื่อกำลังค้นหา */}
         {!stockSearch.trim() && (
         <div style={{display:'flex',flexDirection:'column',gap:8}}>
+          <button onClick={goProductMode}
+            style={{padding:'10px 0',borderRadius:10,border:'1.5px solid var(--bdr)',
+                    background:'#fff',color:'var(--g-700)',fontWeight:700,fontSize:13,
+                    cursor:'pointer',fontFamily:'inherit'}}>
+            🔍 กลับไปนับตามสินค้า (ค้นหา / สแกน)
+          </button>
           <div style={{display:'flex',gap:8}}>
             <button style={{flex:1,padding:'10px 0',borderRadius:10,border:'2px solid #1b5e20',
                             background:'#1b5e20',color:'#fff',fontWeight:700,fontSize:13,
@@ -8713,7 +9146,7 @@ function DeadStockView() {
     setLoading(true); setErr(null);
     try {
       const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
-      const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getDeadStock&_t=${Date.now()}`, { cache: "no-store" });
+      const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getDeadStock&sessionToken=${encodeURIComponent(localStorage.getItem("dmj_session_token")||"")}&_t=${Date.now()}`, { cache: "no-store" });
       const d = await dmjJson(res);
       if (d.error) throw new Error(d.error);
       setItems(Array.isArray(d.items) ? d.items : []);
@@ -9072,7 +9505,7 @@ function QuoteFollowupView({ data, role }) {
     for (let attempt = 0; attempt < 3; attempt++) {
       if (attempt > 0) await new Promise(r => setTimeout(r, 700 * attempt));   // 0 · 0.7 · 1.4 วิ
       try {
-        const res = await dmjFetch(`${SHEET_DEPLOY_URL}${sep}action=getQuotationSummary&_t=${Date.now()}`,
+        const res = await dmjFetch(`${SHEET_DEPLOY_URL}${sep}action=getQuotationSummary&sessionToken=${encodeURIComponent(localStorage.getItem("dmj_session_token")||"")}&_t=${Date.now()}`,
           { cache: "no-store", dmjTimeoutMs: 25000 });
         const d = await dmjJson(res);
         if (d.error && (!d.items || !d.items.length)) throw new Error(d.error);
@@ -9958,7 +10391,7 @@ function CustomerView({ data }) {
     setLoading(true); setErr(null);
     try {
       const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
-      const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getCustomerAnalytics&_t=${Date.now()}`, { cache: "no-store" });
+      const res = await fetch(`${SHEET_DEPLOY_URL}${sep}action=getCustomerAnalytics&sessionToken=${encodeURIComponent(localStorage.getItem("dmj_session_token")||"")}&_t=${Date.now()}`, { cache: "no-store" });
       const d = await dmjJson(res);
       if (d.error && (!d.customers || !d.customers.length)) throw new Error(d.error);
       const ms = Array.isArray(d.months) ? d.months : [];

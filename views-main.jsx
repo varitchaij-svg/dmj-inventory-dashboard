@@ -9168,8 +9168,684 @@ async function syncUploadProductPhoto(sku, photoBase64) {
   } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
 
-// ─── AddProductView — ฟอร์มเพิ่มสินค้าใหม่ (owner + warehouse) ───
+// ═══════════════════════════════════════════════════════════════════════════
+// PHASE C — ADD PRODUCT TWO-TRACK (Work 8 · D05/D07/D08/D09/D11)
+// ───────────────────────────────────────────────────────────────────────────
+// เส้นทางใหม่ที่ขับด้วย Product Registry — พนักงาน "ไม่พิมพ์ Prefix/Model/Variant
+// code ดิบ" อีกต่อไป · ระบบจอง Model ฝั่ง ERP (reserveForm · D05) · Variant เลือก
+// เป็น "ค่าที่อ่านได้" แล้ว map เป็นรหัส · SAFE ROLLOUT: ทั้งก้อนนี้จะเงียบสนิท
+// (dispatcher เรนเดอร์ LegacyAddProductView แทน) เมื่อ registry ยัง OFF
+// ⚠️ ไม่แตะ SKU/Barcode เดิม · สร้างสินค้าจริงผ่าน syncAddProduct (addNewProduct)
+//    เส้นทาง ZORT เดิมเป๊ะ (barcode=sku · D01) — Phase C แค่ "ประกอบ SKU ให้ถูกที่มา"
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── sync helpers (POST ผ่าน dmjFetch → อ่านด้วย dmjJson เสมอ · บทเรียนข้อ 13) ──
+async function syncListRegistry_(action) {
+  if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
+  try {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
+      method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action }),
+    });
+    return await dmjJson(res);
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
+}
+async function syncListPrefixRegistry()  { return syncListRegistry_("listPrefixRegistry"); }
+async function syncListFamilyRegistry()  { return syncListRegistry_("listFamilyRegistry"); }
+async function syncListFormRegistry()    { return syncListRegistry_("listFormRegistry"); }
+async function syncListVariantRegistry() { return syncListRegistry_("listVariantRegistry"); }
+
+async function syncPostRegistry_(payload) {
+  if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL" };
+  try {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
+      method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(Object.assign(
+        { actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน" }, payload)),
+    });
+    return await dmjJson(res);
+  } catch (err) { return { success: false, error: dmjErrText(err) }; }
+}
+async function syncSavePrefixRegistry(o)  { return syncPostRegistry_(Object.assign({ action: "savePrefixRegistry" }, o)); }
+async function syncSaveFamilyRegistry(o)  { return syncPostRegistry_(Object.assign({ action: "saveFamilyRegistry" }, o)); }
+async function syncSaveVariantRegistry(o) { return syncPostRegistry_(Object.assign({ action: "saveVariantRegistry" }, o)); }
+// reserveForm — จองแบบ+เลข Model (idempotent ด้วย formReqId) → { formId, prefix, model, axis, ... }
+async function syncReserveForm(o) { return syncPostRegistry_(Object.assign({ action: "reserveForm" }, o)); }
+
+// ── pure client helpers (เทสต์ eval จากไฟล์นี้ตรง ๆ · mirror .gs) ──
+// ประกอบ SKU จาก prefix + variantCode + model (grammar D05) — ไม่ครบ → ""  (mirror composeSku_)
+function registryComposeSku(prefix, variantCode, model) {
+  const p = String(prefix || "").trim().toUpperCase();
+  let v = String(variantCode || "").trim(); if (/^\d$/.test(v)) v = "0" + v;
+  const m = String(model || "").trim();
+  if (!/^[A-Z]{1,3}$/.test(p) || !/^\d{2}$/.test(v) || !/^\d{3}$/.test(m)) return "";
+  return p + v + m;
+}
+// variant code ที่แบบ (prefix+model) นี้ "มีสินค้าจริงอยู่แล้ว" — กันสร้างซ้ำใน Track 2
+function registryTakenVariants(products, prefix, model) {
+  const pfx = String(prefix || "").trim().toUpperCase();
+  const mdl = String(model || "").trim();
+  const s = new Set();
+  (products || []).forEach(p => {
+    const q = parseSkuParts(p && p.sku);
+    if (q && q.prefix === pfx && q.model === mdl) s.add(q.variant);
+  });
+  return s;
+}
+// ตัวเลือก Variant ที่ "อ่านได้" ต่อ axis — จากทะเบียน Variant (ACTIVE เท่านั้น) · axis NONE = ไม่มี
+function registryVariantOptions(variants, axis) {
+  const ax = String(axis || "NONE").trim().toUpperCase();
+  if (ax === "NONE") return [];
+  const list = (variants && variants[ax]) || [];
+  return list.filter(v => (v.status || "ACTIVE").toUpperCase() === "ACTIVE");
+}
+const REGISTRY_AXIS_LABEL = { COLOR: "สี", SIZE: "ขนาด", MATERIAL: "วัสดุ", STYLE: "ลาย/แบบ", NONE: "ไม่มี (สินค้าเดียว)" };
+const REGISTRY_NONE_VARIANT = "00";   // axis NONE → variant code คงที่ "00" (grammar ต้องมี 2 หลัก)
+
+// ── RegistryAdminPanel — จัดการทะเบียน (Owner/Admin เท่านั้น · D06 governance) ──
+function RegistryAdminPanel({ reg, onChanged, showToast, onClose }) {
+  const [tab, setTab] = uS("prefix");     // prefix | family | variant
+  const [busy, setBusy] = uS(false);
+  // Prefix form
+  const [pfx, setPfx] = uS(""); const [pfxStatus, setPfxStatus] = uS("ACTIVE"); const [pfxLabel, setPfxLabel] = uS("");
+  // Family form
+  const [famName, setFamName] = uS("");
+  // Variant form
+  const [vAxis, setVAxis] = uS("COLOR"); const [vCode, setVCode] = uS(""); const [vLabel, setVLabel] = uS("");
+
+  const inp = { width: "100%", padding: "10px 12px", borderRadius: 9, border: "1.5px solid var(--bdr)",
+                fontSize: 14, fontFamily: "inherit", background: "#fff", boxSizing: "border-box", minWidth: 0 };
+  const lbl = { fontSize: 12, fontWeight: 700, color: "var(--muted)", marginBottom: 4, display: "block" };
+
+  const savePrefix = async () => {
+    const p = pfx.trim().toUpperCase();
+    if (!/^[A-Z]{1,3}$/.test(p)) { showToast("error", "Prefix ต้องเป็นตัวอักษร A-Z 1-3 ตัว", "❌", 4000); return; }
+    if (p === "L" && pfxStatus === "ACTIVE") { showToast("error", "L ถูกแช่แข็ง (FREEZE) — ตั้ง ACTIVE ไม่ได้", "🔒", 5000); return; }
+    setBusy(true);
+    const r = await syncSavePrefixRegistry({ prefix: p, status: pfxStatus, label: pfxLabel.trim() });
+    setBusy(false);
+    if (r && r.success) { showToast("success", `บันทึก Prefix ${p} แล้ว`, "✅", 3500); setPfx(""); setPfxLabel(""); onChanged && onChanged(); }
+    else showToast("error", (r && r.error) || "บันทึกไม่สำเร็จ", "❌", 5000);
+  };
+  const saveFamily = async () => {
+    if (!famName.trim()) { showToast("error", "กรุณาระบุชื่อ Family", "❌", 3500); return; }
+    setBusy(true);
+    const r = await syncSaveFamilyRegistry({ name: famName.trim() });
+    setBusy(false);
+    if (r && r.success) { showToast("success", "บันทึก Family แล้ว", "✅", 3500); setFamName(""); onChanged && onChanged(); }
+    else showToast("error", (r && r.error) || "บันทึกไม่สำเร็จ", "❌", 5000);
+  };
+  const saveVariant = async () => {
+    const c = vCode.trim();
+    if (!/^\d{2}$/.test(c)) { showToast("error", "รหัส Variant ต้องเป็นเลข 2 หลัก", "❌", 3500); return; }
+    if (!vLabel.trim()) { showToast("error", "กรุณาระบุชื่อที่อ่านได้", "❌", 3500); return; }
+    setBusy(true);
+    const r = await syncSaveVariantRegistry({ axis: vAxis, code: c, label: vLabel.trim() });
+    setBusy(false);
+    if (r && r.success) { showToast("success", `บันทึก ${REGISTRY_AXIS_LABEL[vAxis] || vAxis} ${c} แล้ว`, "✅", 3500); setVCode(""); setVLabel(""); onChanged && onChanged(); }
+    else showToast("error", (r && r.error) || "บันทึกไม่สำเร็จ", "❌", 5000);
+  };
+
+  const prefixes = (reg.prefixes || []);
+  const families = (reg.families || []);
+  const vOpts = ((reg.variants || {})[vAxis] || []);
+
+  return (
+    <Card padding={true}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <div style={{ fontSize: 15, fontWeight: 800 }}>⚙️ จัดการทะเบียนสินค้า (ผู้ดูแล)</div>
+        <button type="button" onClick={onClose}
+          style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 14, fontWeight: 700, color: "var(--muted)", fontFamily: "inherit" }}>✕ ปิด</button>
+      </div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+        {[{ v: "prefix", l: "🔤 Prefix" }, { v: "family", l: "🏷️ Family" }, { v: "variant", l: "🎨 Variant" }].map(o => (
+          <button key={o.v} type="button" onClick={() => setTab(o.v)}
+            style={{ flex: 1, minHeight: 42, borderRadius: 9, cursor: "pointer", fontSize: 13, fontWeight: 700, fontFamily: "inherit",
+                     border: "1.5px solid " + (tab === o.v ? "var(--g-500)" : "var(--bdr)"),
+                     background: tab === o.v ? "var(--g-50)" : "#fff", color: tab === o.v ? "var(--g-700)" : "var(--text)" }}>{o.l}</button>
+        ))}
+      </div>
+
+      {tab === "prefix" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>Prefix = ประเภทสินค้า (OL=มะกอก, R=กุหลาบ) · ต้อง ACTIVE ถึงใช้สร้างของใหม่ได้ · L แช่แข็งถาวร</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {prefixes.map(p => (
+              <span key={p.prefix} style={{ fontSize: 12, fontWeight: 700, padding: "5px 10px", borderRadius: 999,
+                border: "1.5px solid " + (p.status === "ACTIVE" ? "var(--g-500)" : "#f59e0b"),
+                background: p.status === "ACTIVE" ? "var(--g-50)" : "#fffbeb",
+                color: p.status === "ACTIVE" ? "var(--g-700)" : "#b45309" }}>
+                {p.prefix} · {p.status === "ACTIVE" ? "ใช้ได้" : "แช่แข็ง"}{p.label ? " · " + p.label : ""}
+              </span>
+            ))}
+            {prefixes.length === 0 && <span style={{ fontSize: 12, color: "var(--muted)" }}>ยังไม่มี Prefix</span>}
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <div style={{ flex: "1 1 90px", minWidth: 0 }}><label style={lbl}>Prefix</label>
+              <input style={inp} value={pfx} onChange={e => setPfx(e.target.value.toUpperCase())} maxLength={3} placeholder="เช่น OL" /></div>
+            <div style={{ flex: "1 1 110px", minWidth: 0 }}><label style={lbl}>สถานะ</label>
+              <select style={inp} value={pfxStatus} onChange={e => setPfxStatus(e.target.value)}>
+                <option value="ACTIVE">ACTIVE (ใช้ได้)</option><option value="FROZEN">FROZEN (แช่แข็ง)</option></select></div>
+          </div>
+          <div><label style={lbl}>ชื่อกำกับ (ไม่บังคับ)</label>
+            <input style={inp} value={pfxLabel} onChange={e => setPfxLabel(e.target.value)} placeholder="เช่น มะกอก" /></div>
+          <button type="button" onClick={savePrefix} disabled={busy}
+            style={{ minHeight: 46, borderRadius: 10, border: "none", cursor: busy ? "default" : "pointer", fontSize: 14, fontWeight: 800,
+                     fontFamily: "inherit", background: "var(--g-600)", color: "#fff", opacity: busy ? 0.6 : 1 }}>💾 บันทึก Prefix</button>
+        </div>
+      )}
+
+      {tab === "family" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>Business Family = กลุ่มธุรกิจ/ตระกูลสินค้า (ไม่บังคับผูกกับสินค้า)</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {families.map(f => (
+              <span key={f.familyId} style={{ fontSize: 12, fontWeight: 700, padding: "5px 10px", borderRadius: 999,
+                border: "1.5px solid var(--bdr)", background: "#f8fafc", color: "var(--text)" }}>{f.name}</span>
+            ))}
+            {families.length === 0 && <span style={{ fontSize: 12, color: "var(--muted)" }}>ยังไม่มี Family</span>}
+          </div>
+          <div><label style={lbl}>ชื่อ Family ใหม่</label>
+            <input style={inp} value={famName} onChange={e => setFamName(e.target.value)} placeholder="เช่น ดอกไม้ประดิษฐ์" /></div>
+          <button type="button" onClick={saveFamily} disabled={busy}
+            style={{ minHeight: 46, borderRadius: 10, border: "none", cursor: busy ? "default" : "pointer", fontSize: 14, fontWeight: 800,
+                     fontFamily: "inherit", background: "var(--g-600)", color: "#fff", opacity: busy ? 0.6 : 1 }}>💾 บันทึก Family</button>
+        </div>
+      )}
+
+      {tab === "variant" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>ค่า Variant ที่ "อ่านได้" ต่อชนิด (สี/ขนาด/วัสดุ/ลาย) → map เป็นรหัส 2 หลัก · สี seed มาแล้ว 99 รหัส</div>
+          <div><label style={lbl}>ชนิด (axis)</label>
+            <select style={inp} value={vAxis} onChange={e => setVAxis(e.target.value)}>
+              {["COLOR", "SIZE", "MATERIAL", "STYLE"].map(a => <option key={a} value={a}>{REGISTRY_AXIS_LABEL[a]} ({a})</option>)}</select></div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 150, overflowY: "auto" }}>
+            {vOpts.map(v => (
+              <span key={v.code} style={{ fontSize: 11.5, fontWeight: 600, padding: "4px 8px", borderRadius: 8,
+                border: "1px solid var(--bdr)", background: "#f8fafc" }}>{v.code} {v.label}</span>
+            ))}
+            {vOpts.length === 0 && <span style={{ fontSize: 12, color: "var(--muted)" }}>ยังไม่มีค่าในชนิดนี้</span>}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ flex: "0 0 90px" }}><label style={lbl}>รหัส 2 หลัก</label>
+              <input style={inp} value={vCode} onChange={e => setVCode(e.target.value.replace(/\D/g, "").slice(0, 2))} placeholder="เช่น 01" /></div>
+            <div style={{ flex: 1, minWidth: 0 }}><label style={lbl}>ชื่อที่อ่านได้</label>
+              <input style={inp} value={vLabel} onChange={e => setVLabel(e.target.value)} placeholder="เช่น แดง / เล็ก" /></div>
+          </div>
+          <button type="button" onClick={saveVariant} disabled={busy}
+            style={{ minHeight: 46, borderRadius: 10, border: "none", cursor: busy ? "default" : "pointer", fontSize: 14, fontWeight: 800,
+                     fontFamily: "inherit", background: "var(--g-600)", color: "#fff", opacity: busy ? 0.6 : 1 }}>💾 บันทึก Variant</button>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ── RegistryAddProduct — ฟอร์มเพิ่มสินค้าใหม่ 2 เส้นทาง (Track 1 แบบใหม่ · Track 2 สีใหม่) ──
+function RegistryAddProduct({ data, reg, onAdded, showToast, reloadRegistries }) {
+  const products = data.products || [];
+  const isAdmin = !!(reg.me && reg.me.admin);
+  const [showAdmin, setShowAdmin] = uS(false);
+  const [topMode, setTopMode] = uS("add");      // "add"=เพิ่มสินค้าใหม่ · "buy"=ซื้อเข้า/เติมสต็อก (คงของเดิม)
+  const [track, setTrack] = uS("new");          // "new" = Track 1 · "variant" = Track 2
+
+  // ── Track 1 — ข้อมูลแบบ (Form) ──
+  const activePrefixes = uM(() => (reg.prefixes || []).filter(p => p.status === "ACTIVE"), [reg.prefixes]);
+  const [t1Prefix, setT1Prefix] = uS("");
+  const [t1BaseName, setT1BaseName] = uS("");
+  const [t1Category, setT1Category] = uS("");
+  const [t1Axis, setT1Axis] = uS("COLOR");
+  const [t1FamilyId, setT1FamilyId] = uS("");
+  const [reserved, setReserved] = uS(null);      // { formId, prefix, model, axis, familyId, baseName }
+  const [reserving, setReserving] = uS(false);
+  const reqIdRef = React.useRef("");             // idempotency — คงที่ตลอดการลองใหม่ครั้งเดียวกัน
+
+  // ── Track 2 — เลือกแบบเดิม ──
+  const [formSearch, setFormSearch] = uS("");
+  const [selForm, setSelForm] = uS(null);        // form object จากทะเบียน
+
+  // ── ช่องสินค้า (ใช้ร่วมทั้ง 2 track) ──
+  const [variantCode, setVariantCode] = uS("");  // "" = ยังไม่เลือก (axis NONE จะ set เป็น "00")
+  const [variantSearch, setVariantSearch] = uS("");
+  const [name, setName] = uS("");
+  const [price, setPrice] = uS("");
+  const [qty, setQty] = uS("");
+  const [supplier, setSupplier] = uS("");
+  const [wh, setWh] = uS("W0002");
+  const [photo, setPhoto] = uS(""); const [photoBusy, setPhotoBusy] = uS(false);
+  const photoInputRef = React.useRef(null);
+  const [saving, setSaving] = uS(false);
+
+  const allCats = uM(() => {
+    const cnt = {};
+    products.forEach(p => {
+      const c = (p.category || p.cat || "").trim();
+      if (c && c !== "ไม่มีรหัสสินค้า" && !c.includes("Made to Order")) cnt[c] = (cnt[c] || 0) + 1;
+    });
+    return Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a]);
+  }, [products]);
+  const allSuppliers = uM(() => {
+    const cnt = {};
+    products.forEach(p => { const v = (p.lastSupplier || p.vendor || "").trim(); if (v) cnt[v] = (cnt[v] || 0) + 1; });
+    return Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a]);
+  }, [products]);
+
+  // แบบที่กำลังใช้อยู่ (จองแล้ว หรือ เลือกจากทะเบียน) → prefix/model/axis/baseName/category/family
+  const activeForm = track === "new" ? reserved : selForm;
+  const axis = activeForm ? (activeForm.axis || "NONE") : t1Axis;
+  const variantOpts = uM(() => registryVariantOptions(reg.variants, axis), [reg.variants, axis]);
+  const variantOptsFiltered = uM(() => {
+    const q = variantSearch.trim().toLowerCase();
+    if (!q) return variantOpts;
+    return variantOpts.filter(v => v.label.toLowerCase().includes(q) || v.code.includes(q));
+  }, [variantOpts, variantSearch]);
+  const variantLabel = uM(() => {
+    const v = variantOpts.find(x => x.code === variantCode);
+    return v ? v.label : "";
+  }, [variantOpts, variantCode]);
+
+  // variant ที่แบบนี้มีสินค้าจริงอยู่แล้ว (กันซ้ำ)
+  const takenVariants = uM(() => activeForm ? registryTakenVariants(products, activeForm.prefix, activeForm.model) : new Set(),
+    [products, activeForm]);
+
+  // axis NONE → variant คงที่ "00" อัตโนมัติ
+  uE(() => {
+    if (axis === "NONE" && variantCode !== REGISTRY_NONE_VARIANT) setVariantCode(REGISTRY_NONE_VARIANT);
+    if (axis !== "NONE" && variantCode === REGISTRY_NONE_VARIANT) setVariantCode("");
+  }, [axis]); // eslint-disable-line
+
+  const effVariant = axis === "NONE" ? REGISTRY_NONE_VARIANT : variantCode;
+  const previewSku = activeForm ? registryComposeSku(activeForm.prefix, effVariant, activeForm.model) : "";
+  const skuTaken = previewSku && (takenVariants.has(effVariant) ||
+    products.some(p => String(p.sku || "").trim().toUpperCase() === previewSku));
+
+  const RETAIL_MULT = 1.25;
+  const wholesale = Number(price) || 0;
+  const retailPrice = wholesale > 0 ? Math.round(wholesale * RETAIL_MULT * 100) / 100 : 0;
+  const baseNm = activeForm ? (activeForm.baseName || "") : "";
+  const composedName = [name.trim() || baseNm, variantLabel, wholesale > 0 ? String(wholesale) : ""].filter(Boolean).join(" ");
+  const effCategory = (activeForm && activeForm.category) ? activeForm.category : t1Category;
+
+  const inputStyle = { width: "100%", padding: "11px 13px", borderRadius: 10, border: "1.5px solid var(--bdr)",
+                       fontSize: 15, fontFamily: "inherit", background: "#fff", boxSizing: "border-box", minWidth: 0 };
+  const labelStyle = { fontSize: 13, fontWeight: 700, color: "var(--text)", marginBottom: 6, display: "block" };
+
+  const canReserve = !reserving && /^[A-Z]{1,3}$/.test(t1Prefix) && t1BaseName.trim() !== "";
+  const doReserve = async () => {
+    if (!canReserve) return;
+    if (!reqIdRef.current) reqIdRef.current = "form-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+    setReserving(true);
+    const r = await syncReserveForm({
+      prefix: t1Prefix, baseName: t1BaseName.trim(), category: t1Category.trim(),
+      axis: t1Axis, familyId: t1FamilyId || "", formReqId: reqIdRef.current,
+    });
+    setReserving(false);
+    if (r && r.success && r.data) {
+      setReserved(r.data);
+      setVariantCode(""); setVariantSearch("");
+      showToast("success", `จองแบบสำเร็จ · รหัสรุ่น ${r.data.prefix}${r.data.model}`, "🔒", 4000);
+    } else showToast("error", (r && r.error) || "จองแบบไม่สำเร็จ", "❌", 6000);
+  };
+
+  const pickPhoto = async (e) => {
+    const file = e.target.files && e.target.files[0]; e.target.value = "";
+    if (!file) return;
+    setPhotoBusy(true);
+    try { setPhoto(await productShrinkImage(file, 800)); }
+    catch (err) { showToast("error", "เปิดรูปไม่สำเร็จ ลองใหม่", "❌", 4000); }
+    setPhotoBusy(false);
+  };
+
+  const canCreate = !saving && !!activeForm && previewSku !== "" && !skuTaken &&
+    composedName.trim() !== "" && effCategory.trim() !== "" && (axis === "NONE" || variantCode !== "");
+
+  const doCreate = async () => {
+    if (!canCreate) return;
+    setSaving(true);
+    const r = await syncAddProduct({
+      sku: previewSku, name: composedName, sellprice: retailPrice, category: effCategory,
+      qty: Math.max(0, Math.floor(Number(qty) || 0)), warehousecode: wh, supplier: supplier.trim(),
+      photoBase64: photo || "",
+    });
+    setSaving(false);
+    if (r && r.success) {
+      showToast("success", `เพิ่มสินค้า ${previewSku} สำเร็จ 🎉`, "✅", 5000);
+      // เคลียร์เฉพาะช่องสินค้า — คงแบบไว้ให้เพิ่ม variant ถัดไปต่อได้ทันที
+      setName(""); setPrice(""); setQty(""); setPhoto("");
+      if (axis !== "NONE") setVariantCode("");
+      if (track === "new") setTrack("variant");   // Track 1 เสร็จ → พร้อมเพิ่มสีอื่นของแบบเดียวกัน
+      if (track === "new" && reserved) setSelForm(reserved);
+      onAdded && onAdded();
+    } else showToast("error", (r && r.error) || "เพิ่มไม่สำเร็จ", "❌", 6000);
+  };
+
+  const startOverTrack1 = () => {
+    setReserved(null); reqIdRef.current = "";
+    setT1Prefix(""); setT1BaseName(""); setT1Category(""); setT1Axis("COLOR"); setT1FamilyId("");
+    setVariantCode(""); setName(""); setPrice(""); setQty(""); setPhoto("");
+  };
+
+  const forms = (reg.forms || []);
+  const formMatches = uM(() => {
+    const q = formSearch.trim().toLowerCase();
+    const toks = q ? q.split(/\s+/).filter(Boolean) : [];
+    const out = [];
+    for (const f of forms) {
+      const hay = (f.prefix + f.model + " " + (f.baseName || "") + " " + (f.category || "")).toLowerCase();
+      if (toks.length && !toks.every(tk => hay.includes(tk))) continue;
+      if (f.status && f.status !== "ACTIVE") continue;
+      out.push(f);
+      if (out.length >= 20) break;
+    }
+    return out;
+  }, [forms, formSearch]);
+
+  const familyName = (id) => { const f = (reg.families || []).find(x => x.familyId === id); return f ? f.name : ""; };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14, maxWidth: 560, margin: "0 auto", width: "100%" }}>
+      <div>
+        <div style={{ fontSize: 17, fontWeight: 800 }}>
+          {topMode === "add" ? "➕ เพิ่มสินค้าใหม่" : "📥 ซื้อสินค้าเข้า (เติมสต็อก)"}
+          {topMode === "add" && <span style={{ fontSize: 12, color: "var(--g-600)", fontWeight: 700 }}> · ระบบทะเบียน</span>}
+        </div>
+        <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+          {topMode === "add"
+            ? "ระบบจองรหัสรุ่นให้อัตโนมัติ · เลือกสี/ขนาดจากรายการ — ไม่ต้องพิมพ์รหัสเอง"
+            : "เติมของสินค้าเดิม — สร้างใบสั่งซื้อจริงใน ZORT + รับเข้าคลังทันที"}
+        </div>
+      </div>
+
+      {/* สลับโหมด: เพิ่มสินค้าใหม่ / ซื้อเข้า (คงพฤติกรรมเดิมของ Legacy) */}
+      <div style={{ display: "flex", border: "1.5px solid var(--bdr)", borderRadius: 12, overflow: "hidden" }}>
+        {[{ v: "add", l: "➕ เพิ่มสินค้าใหม่" }, { v: "buy", l: "📥 ซื้อเข้า/เติมสต็อก" }].map(o => (
+          <button key={o.v} type="button" onClick={() => setTopMode(o.v)}
+            style={{ flex: 1, minHeight: 48, border: "none", cursor: "pointer", fontSize: 14, fontWeight: 800, fontFamily: "inherit",
+                     background: topMode === o.v ? "var(--g-600)" : "#fff", color: topMode === o.v ? "#fff" : "var(--muted)" }}>{o.l}</button>
+        ))}
+      </div>
+
+      {topMode === "buy" && <PurchaseInPanel data={data} showToast={showToast} onDone={onAdded} />}
+
+      {topMode === "add" && isAdmin && (
+        <button type="button" onClick={() => setShowAdmin(s => !s)}
+          style={{ alignSelf: "flex-start", minHeight: 40, padding: "6px 14px", borderRadius: 999, cursor: "pointer",
+                   fontSize: 12.5, fontWeight: 700, fontFamily: "inherit", border: "1.5px solid var(--bdr)", background: "#fff", color: "var(--muted)" }}>
+          {showAdmin ? "▾ ซ่อนการจัดการทะเบียน" : "⚙️ จัดการทะเบียน (Prefix/Family/Variant)"}
+        </button>
+      )}
+      {topMode === "add" && isAdmin && showAdmin && (
+        <RegistryAdminPanel reg={reg} showToast={showToast} onClose={() => setShowAdmin(false)}
+          onChanged={() => reloadRegistries && reloadRegistries()} />
+      )}
+
+      {topMode === "add" && activePrefixes.length === 0 && (
+        <Card padding={true}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#b45309" }}>⚠️ ยังไม่มี Prefix ที่ใช้งานได้</div>
+          <div style={{ fontSize: 12.5, color: "var(--muted)", marginTop: 6 }}>
+            {isAdmin ? "กด \"⚙️ จัดการทะเบียน\" ด้านบน เพื่อเพิ่ม Prefix ที่ ACTIVE ก่อนสร้างสินค้า"
+                     : "ให้ผู้ดูแล (เจ้าของ/แอดมิน) ตั้งค่า Prefix ให้ก่อน จึงจะเพิ่มสินค้าใหม่ได้"}
+          </div>
+        </Card>
+      )}
+
+      {topMode === "add" && activePrefixes.length > 0 && (
+      <>
+      {/* สลับ Track */}
+      <div style={{ display: "flex", border: "1.5px solid var(--bdr)", borderRadius: 12, overflow: "hidden" }}>
+        {[{ v: "new", l: "🆕 แบบใหม่" }, { v: "variant", l: "🎨 สี/ขนาดใหม่ของแบบเดิม" }].map(o => (
+          <button key={o.v} type="button" onClick={() => setTrack(o.v)}
+            style={{ flex: 1, minHeight: 48, border: "none", cursor: "pointer", fontSize: 13.5, fontWeight: 800, fontFamily: "inherit",
+                     background: track === o.v ? "var(--g-600)" : "#fff", color: track === o.v ? "#fff" : "var(--muted)" }}>{o.l}</button>
+        ))}
+      </div>
+
+      <Card padding={true}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+
+          {/* ── Track 1: สร้างแบบ + จองรุ่น ── */}
+          {track === "new" && !reserved && (
+            <>
+              <div>
+                <label style={labelStyle}>ประเภทสินค้า (Prefix) *</label>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {activePrefixes.map(p => (
+                    <button key={p.prefix} type="button" onClick={() => setT1Prefix(p.prefix)}
+                      data-reg-prefix={p.prefix}
+                      style={{ minHeight: 42, padding: "6px 14px", borderRadius: 999, cursor: "pointer", fontSize: 13, fontWeight: 700, fontFamily: "inherit",
+                               border: "1.5px solid " + (t1Prefix === p.prefix ? "var(--g-500)" : "var(--bdr)"),
+                               background: t1Prefix === p.prefix ? "var(--g-50)" : "#fff", color: t1Prefix === p.prefix ? "var(--g-700)" : "var(--text)" }}>
+                      {p.prefix}{p.label ? " · " + p.label : ""}</button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label style={labelStyle}>ชื่อแบบสินค้า *</label>
+                <input style={inputStyle} value={t1BaseName} onChange={e => setT1BaseName(e.target.value)} placeholder="เช่น กุหลาบก้านยาว" />
+              </div>
+              <div>
+                <label style={labelStyle}>หมวดหมู่</label>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                  {allCats.slice(0, 10).map(c => (
+                    <button key={c} type="button" onClick={() => setT1Category(c)}
+                      style={{ minHeight: 38, padding: "5px 11px", borderRadius: 999, cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit",
+                               border: "1.5px solid " + (t1Category === c ? "var(--g-500)" : "var(--bdr)"),
+                               background: t1Category === c ? "var(--g-50)" : "#fff", color: t1Category === c ? "var(--g-700)" : "var(--text)" }}>{c}</button>
+                  ))}
+                </div>
+                <input style={inputStyle} value={t1Category} onChange={e => setT1Category(e.target.value)} placeholder="…หรือพิมพ์หมวดใหม่" />
+              </div>
+              <div>
+                <label style={labelStyle}>ชนิดของ Variant (แบบนี้แยกด้วยอะไร)</label>
+                <select style={inputStyle} value={t1Axis} onChange={e => setT1Axis(e.target.value)}>
+                  {["COLOR", "SIZE", "MATERIAL", "STYLE", "NONE"].map(a => <option key={a} value={a}>{REGISTRY_AXIS_LABEL[a]} ({a})</option>)}
+                </select>
+              </div>
+              {(reg.families || []).length > 0 && (
+                <div>
+                  <label style={labelStyle}>Business Family <span style={{ fontWeight: 400, color: "var(--muted)" }}>(ไม่บังคับ)</span></label>
+                  <select style={inputStyle} value={t1FamilyId} onChange={e => setT1FamilyId(e.target.value)}>
+                    <option value="">— ไม่ระบุ —</option>
+                    {(reg.families || []).map(f => <option key={f.familyId} value={f.familyId}>{f.name}</option>)}
+                  </select>
+                </div>
+              )}
+              <button type="button" onClick={doReserve} disabled={!canReserve}
+                style={{ minHeight: 52, borderRadius: 12, border: "none", cursor: canReserve ? "pointer" : "default", fontSize: 15, fontWeight: 800,
+                         fontFamily: "inherit", background: canReserve ? "var(--g-600)" : "#e5e7eb", color: canReserve ? "#fff" : "#9ca3af" }}>
+                {reserving ? "กำลังจอง…" : "🔒 จองแบบ + เลขรุ่น ▸"}
+              </button>
+            </>
+          )}
+
+          {/* ── Track 2: เลือกแบบเดิม ── */}
+          {track === "variant" && !selForm && (
+            <>
+              <div>
+                <label style={labelStyle}>ค้นหาแบบสินค้าเดิม</label>
+                <input style={inputStyle} value={formSearch} onChange={e => setFormSearch(e.target.value)} placeholder="🔍 ชื่อแบบ / รหัส / หมวด" />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
+                {formMatches.map(f => (
+                  <button key={f.formId} type="button" onClick={() => { setSelForm(f); setVariantCode(""); setVariantSearch(""); }}
+                    data-reg-form={f.formId}
+                    style={{ textAlign: "left", padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontFamily: "inherit",
+                             border: "1.5px solid var(--bdr)", background: "#fff" }}>
+                    <div style={{ fontSize: 14, fontWeight: 700 }}>{f.baseName || "(ไม่มีชื่อแบบ)"}</div>
+                    <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+                      รหัสรุ่น {f.prefix}{f.model} · {REGISTRY_AXIS_LABEL[f.axis] || f.axis}{f.category ? " · " + f.category : ""}{f.familyId ? " · " + familyName(f.familyId) : ""}
+                    </div>
+                  </button>
+                ))}
+                {formMatches.length === 0 && <div style={{ fontSize: 12.5, color: "var(--muted)", padding: 8 }}>
+                  {forms.length === 0 ? "ยังไม่มีแบบสินค้าในทะเบียน — สร้างที่ \"แบบใหม่\" ก่อน" : "ไม่พบแบบที่ค้นหา"}</div>}
+              </div>
+            </>
+          )}
+
+          {/* ── ขั้นเลือก Variant + กรอกข้อมูลสินค้า (ใช้ร่วม) ── */}
+          {activeForm && (
+            <>
+              <div style={{ background: "var(--g-50)", border: "1.5px solid var(--g-500)", borderRadius: 10, padding: "10px 12px" }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: "var(--g-700)" }}>
+                  {track === "new" ? "🔒 จองแบบแล้ว" : "🎨 แบบเดิม"}: {activeForm.baseName || activeForm.formId}
+                </div>
+                <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+                  รหัสรุ่น {activeForm.prefix}{activeForm.model} · variant = {REGISTRY_AXIS_LABEL[axis] || axis}
+                </div>
+                <button type="button" onClick={() => { if (track === "new") startOverTrack1(); else { setSelForm(null); setVariantCode(""); } }}
+                  style={{ marginTop: 8, border: "none", background: "transparent", cursor: "pointer", fontSize: 12, fontWeight: 700, color: "var(--muted)", fontFamily: "inherit", padding: 0 }}>
+                  ↺ เปลี่ยนแบบ
+                </button>
+              </div>
+
+              {axis !== "NONE" && (
+                <div>
+                  <label style={labelStyle}>เลือก{REGISTRY_AXIS_LABEL[axis] || "Variant"} *</label>
+                  <input style={{ ...inputStyle, marginBottom: 8 }} value={variantSearch} onChange={e => setVariantSearch(e.target.value)}
+                    placeholder={`🔍 ค้นหา${REGISTRY_AXIS_LABEL[axis] || ""}`} />
+                  {variantOpts.length === 0 ? (
+                    <div style={{ fontSize: 12.5, color: "#b45309" }}>
+                      ยังไม่มีค่า {REGISTRY_AXIS_LABEL[axis]} ในทะเบียน — {isAdmin ? "เพิ่มที่ \"จัดการทะเบียน\"" : "แจ้งผู้ดูแลเพิ่มก่อน"}
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 200, overflowY: "auto" }}>
+                      {variantOptsFiltered.map(v => {
+                        const taken = takenVariants.has(v.code);
+                        const sel = variantCode === v.code;
+                        return (
+                          <button key={v.code} type="button" disabled={taken}
+                            onClick={() => setVariantCode(v.code)} data-reg-variant={v.code}
+                            style={{ minHeight: 40, padding: "6px 12px", borderRadius: 999, cursor: taken ? "not-allowed" : "pointer",
+                                     fontSize: 12.5, fontWeight: 600, fontFamily: "inherit",
+                                     border: "1.5px solid " + (sel ? "var(--g-500)" : "var(--bdr)"),
+                                     background: taken ? "#f3f4f6" : (sel ? "var(--g-50)" : "#fff"),
+                                     color: taken ? "#9ca3af" : (sel ? "var(--g-700)" : "var(--text)"),
+                                     textDecoration: taken ? "line-through" : "none" }}>
+                            {v.label} <span style={{ opacity: 0.6 }}>({v.code})</span>{taken ? " ✓มีแล้ว" : ""}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div>
+                <label style={labelStyle}>ชื่อสินค้า <span style={{ fontWeight: 400, color: "var(--muted)" }}>(เว้นว่าง = ใช้ชื่อแบบ)</span></label>
+                <input style={inputStyle} value={name} onChange={e => setName(e.target.value)} placeholder={baseNm} />
+              </div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <label style={labelStyle}>ราคาส่ง (บาท)</label>
+                  <input style={inputStyle} type="number" inputMode="decimal" value={price}
+                    onFocus={ev => ev.target.select()} onChange={e => setPrice(e.target.value)} placeholder="0" />
+                  {retailPrice > 0 && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>ราคาขาย (ปลีก ×1.25) = {retailPrice}</div>}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <label style={labelStyle}>จำนวนเข้า</label>
+                  <input style={inputStyle} type="number" inputMode="numeric" value={qty}
+                    onFocus={ev => ev.target.select()} onChange={e => setQty(e.target.value)} placeholder="0" />
+                </div>
+              </div>
+              <div>
+                <label style={labelStyle}>คลังที่รับเข้า</label>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {[{ v: "W0002", l: "🏭 คลังสาย5" }, { v: "W0001", l: "🏪 หน้าร้าน" }].map(o => (
+                    <button key={o.v} type="button" onClick={() => setWh(o.v)}
+                      style={{ flex: 1, minHeight: 44, borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700, fontFamily: "inherit",
+                               border: "1.5px solid " + (wh === o.v ? "var(--g-500)" : "var(--bdr)"),
+                               background: wh === o.v ? "var(--g-50)" : "#fff", color: wh === o.v ? "var(--g-700)" : "var(--text)" }}>{o.l}</button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label style={labelStyle}>ซัพพลายเออร์ (TAG) <span style={{ fontWeight: 400, color: "var(--muted)" }}>(ไม่บังคับ)</span></label>
+                <input style={inputStyle} value={supplier} onChange={e => setSupplier(e.target.value)} placeholder="เช่น GX2312" />
+                {allSuppliers.length > 0 && (
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                    {allSuppliers.slice(0, 6).map(s => (
+                      <button key={s} type="button" onClick={() => setSupplier(s)}
+                        style={{ fontSize: 11.5, padding: "4px 10px", borderRadius: 999, cursor: "pointer", fontFamily: "inherit",
+                                 border: "1px solid var(--bdr)", background: "#f8fafc", color: "var(--muted)" }}>{s}</button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div>
+                <label style={labelStyle}>รูปสินค้า <span style={{ fontWeight: 400, color: "var(--muted)" }}>(ไม่บังคับ)</span></label>
+                <input ref={photoInputRef} type="file" accept="image/*" onChange={pickPhoto} style={{ display: "none" }} />
+                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <button type="button" onClick={() => photoInputRef.current && photoInputRef.current.click()} disabled={photoBusy}
+                    style={{ minHeight: 44, padding: "0 16px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700, fontFamily: "inherit",
+                             border: "1.5px solid var(--bdr)", background: "#fff", color: "var(--text)" }}>
+                    {photoBusy ? "กำลังเปิด…" : (photo ? "🔄 เปลี่ยนรูป" : "📷 ถ่าย/เลือกรูป")}</button>
+                  {photo && <img src={photo} alt="" style={{ width: 48, height: 48, borderRadius: 8, objectFit: "cover" }} />}
+                </div>
+              </div>
+
+              {/* Preview + Confirm (D11) */}
+              <div style={{ background: "#f8fafc", border: "1.5px dashed var(--bdr)", borderRadius: 10, padding: "12px 14px" }}>
+                <div style={{ fontSize: 12, color: "var(--muted)" }}>รหัส SKU ที่จะสร้าง (= บาร์โค้ด)</div>
+                <div data-reg-preview-sku style={{ fontSize: 22, fontWeight: 900, letterSpacing: 1, color: previewSku ? "var(--g-700)" : "#9ca3af" }}>
+                  {previewSku || "— เลือก" + (axis === "NONE" ? "ข้อมูลให้ครบ" : REGISTRY_AXIS_LABEL[axis] || "variant") + " —"}
+                </div>
+                {composedName && <div style={{ fontSize: 13, marginTop: 4 }}>ชื่อ: <b>{composedName}</b></div>}
+                {skuTaken && <div style={{ fontSize: 12.5, color: "#dc2626", fontWeight: 700, marginTop: 6 }}>⚠️ รหัสนี้มีสินค้าอยู่แล้ว — เลือก{REGISTRY_AXIS_LABEL[axis] || "variant"}อื่น</div>}
+              </div>
+              <button type="button" onClick={doCreate} disabled={!canCreate}
+                style={{ minHeight: 54, borderRadius: 12, border: "none", cursor: canCreate ? "pointer" : "default", fontSize: 16, fontWeight: 800,
+                         fontFamily: "inherit", background: canCreate ? "var(--g-600)" : "#e5e7eb", color: canCreate ? "#fff" : "#9ca3af" }}>
+                {saving ? "กำลังสร้าง…" : "✅ สร้างสินค้า"}
+              </button>
+            </>
+          )}
+        </div>
+      </Card>
+      </>
+      )}
+    </div>
+  );
+}
+
+// ─── AddProductView — dispatcher: เลือก Registry flow (ON) vs Legacy flow (OFF) ───
+// SAFE ROLLOUT — โหลดทะเบียน Prefix ก่อน · off/ผิดพลาด/กำลังโหลด → Legacy (เส้นทางเดิมทั้งดุ้น)
 function AddProductView({ data, role, onAdded }) {
+  const [reg, setReg] = uS(null);      // null=ยังไม่โหลด · {off:true}=ปิด · {off:false,...}=เปิด
+  const [toast, showToast, hideToast] = useToast();
+
+  const loadRegistries = uC(async () => {
+    // โหลด prefix ก่อนเป็นตัวชี้ขาด — off → ไม่ยิงที่เหลือ (เงียบสนิทเมื่อ OFF)
+    const rp = await syncListPrefixRegistry();
+    if (!rp || !rp.success || !rp.data || rp.data.off) { setReg({ off: true }); return; }
+    const [rf, rfm, rv] = await Promise.all([syncListFamilyRegistry(), syncListFormRegistry(), syncListVariantRegistry()]);
+    setReg({
+      off: false,
+      me: rp.data.me || null,
+      prefixes: rp.data.prefixes || [],
+      families: (rf && rf.success && rf.data) ? (rf.data.families || []) : [],
+      forms: (rfm && rfm.success && rfm.data) ? (rfm.data.forms || []) : [],
+      variants: (rv && rv.success && rv.data) ? (rv.data.variants || {}) : {},
+    });
+  }, []);
+
+  uE(() => { loadRegistries(); }, [loadRegistries]);
+
+  // กำลังโหลด หรือ OFF → Legacy flow เดิม (ไม่มี regression · ไม่พึ่ง registry เลย)
+  if (!reg || reg.off) return <LegacyAddProductView data={data} role={role} onAdded={onAdded} />;
+
+  return (
+    <>
+      <Toast toast={toast} onClose={hideToast} />
+      <RegistryAddProduct data={data} reg={reg} onAdded={onAdded} showToast={showToast} reloadRegistries={loadRegistries} />
+    </>
+  );
+}
+
+// ─── LegacyAddProductView — ฟอร์มเพิ่มสินค้าใหม่ (client-side SKU builder เดิม) ───
+// ⚠️ คงไว้ทั้งดุ้น เป็นเส้นทางที่ใช้จริงเมื่อ Product Registry ยัง OFF (SAFE ROLLOUT · Phase C)
+//    dispatcher `AddProductView` ด้านบนเลือกใช้ตัวนี้ vs `RegistryAddProduct`
+function LegacyAddProductView({ data, role, onAdded }) {
   const products = data.products || [];
   const [toast, showToast, hideToast] = useToast();
   const [topMode, setTopMode] = uS("add");   // "add"=เพิ่มสินค้าใหม่ · "buy"=ซื้อเข้า/เติมสต็อก

@@ -268,13 +268,14 @@ describe('StockCountView (frontend) — patch ทันที + session lifecycl
     expect(guards).toBeGreaterThanOrEqual(6); // เช็ค+set+reset อย่างน้อยคนละคู่ ×3 handler
   });
 
-  it('session lifecycle: เปิด context ใหม่ (lock/supplier/preShelf) = sessionId ใหม่เสมอ', () => {
+  it('session lifecycle: เปิด context ใหม่ (lock/supplier/preShelf/product) = sessionId ใหม่เสมอ', () => {
     const fn = grabFn(VANA, 'StockCountView');
     expect(fn).toContain("startStockCountSession(id, 'lock', selLockKey,");
     expect(fn).toContain("startStockCountSession(id, 'supplier', selSupplier,");
     expect(fn).toContain("startStockCountSession(id, 'preshelf', 'preshelf',");
-    // ปิด session ตอน cleanup effect (เปลี่ยน context/unmount) เฉพาะเมื่อมีของถูกนับจริง
-    expect((fn.match(/if \(sessionSkuSetRef\.current\.size > 0\) closeStockCountSession\(id,/g) || []).length).toBe(3);
+    expect(fn).toContain("startStockCountSession(id, 'product', 'product',"); // product-first (default)
+    // ปิด session ตอน cleanup effect (เปลี่ยน context/unmount) เฉพาะเมื่อมีของถูกนับจริง — ครบทั้ง 4 branch
+    expect((fn.match(/if \(sessionSkuSetRef\.current\.size > 0\) closeStockCountSession\(id,/g) || []).length).toBe(4);
   });
 
   it('preShelfMode มาก่อนเสมอ — กัน session ล็อค/ซัพพลายเออร์เปิดซ้อนตอน preShelfMode ค้างจากรอบก่อน', () => {

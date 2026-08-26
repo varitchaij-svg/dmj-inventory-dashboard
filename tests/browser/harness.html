@@ -191,6 +191,32 @@
           totals: t, shipFee: shipFee, payTotal: goods + shipFee, shipInZort: false,
         } }), { headers: { 'Content-Type': 'application/json' } }));
       }
+      // 📦 Product Registry (Phase C) — DEFAULT OFF (production default) → dispatcher
+      //   AddProductView เรนเดอร์ LegacyAddProductView (เส้นทางเดิม) · ต้องเป็น off:true
+      //   ไม่งั้น dispatcher หลุดเข้า registry mode ด้วย prefixes ว่าง = จอ "ยังไม่มี Prefix"
+      //   แทนฟอร์มเดิม (regression เงียบ) · เปิด two-track ด้วย window.__DMJ_REGISTRY_FIXTURE
+      if (action === 'listPrefixRegistry' || action === 'listFamilyRegistry' ||
+          action === 'listFormRegistry' || action === 'listVariantRegistry') {
+        const rf = window.__DMJ_REGISTRY_FIXTURE;
+        if (!rf) return Promise.resolve(new Response(JSON.stringify({ success: true, data: { off: true } }),
+          { headers: { 'Content-Type': 'application/json' } }));
+        const d = { off: false, me: { staffId: 'STF001', admin: rf.admin === true || role === 'owner' || role === 'dev' } };
+        if (action === 'listPrefixRegistry')  d.prefixes = rf.prefixes || [];
+        if (action === 'listFamilyRegistry')  d.families = rf.families || [];
+        if (action === 'listFormRegistry')    d.forms = rf.forms || [];
+        if (action === 'listVariantRegistry') d.variants = rf.variants || {};
+        return Promise.resolve(new Response(JSON.stringify({ success: true, data: d }),
+          { headers: { 'Content-Type': 'application/json' } }));
+      }
+      if (action === 'reserveForm') {
+        const rf = window.__DMJ_REGISTRY_FIXTURE || {};
+        window.__DMJ_RESERVE_COUNT = (window.__DMJ_RESERVE_COUNT || 0) + 1;
+        return Promise.resolve(new Response(JSON.stringify({ success: true, data: {
+          created: true, formId: 'FRM90001', prefix: String(posted.prefix || '').toUpperCase(),
+          model: rf.reserveModel || '900', axis: String(posted.axis || 'NONE').toUpperCase(),
+          familyId: posted.familyId || null, baseName: posted.baseName || '' } }),
+          { headers: { 'Content-Type': 'application/json' } }));
+      }
       const att = window.__DMJ_ATT_FIXTURE || {};
       const data = Object.prototype.hasOwnProperty.call(att, action) ? att[action] : {};
       return Promise.resolve(new Response(JSON.stringify({ success: true, data: data }), { headers: { 'Content-Type': 'application/json' } }));
