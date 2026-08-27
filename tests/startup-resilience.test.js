@@ -339,6 +339,21 @@ describe('D · meta — สายส่งต้องยังต่อกั�
     expect(KEEPWARM).toMatch(/if \(!_staleBuild\) putCachedPayload_/);
   });
 
+  it('logPayloadSizes_ (เครื่องมือวัดที่ stringify payload ซ้ำ) ถูกสุ่มออกจาก hot path — ไม่รันทุก build', () => {
+    // หลักฐาน: production trace 27 ส.ค. 2026 — time-to-first-byte 19.3s = doGet execution
+    // (ContentService buffer ไม่ stream) · logPayloadSizes_ re-stringify ทั้ง payload + ทุก mo
+    // ค้างบนเส้นทางของผู้ที่ trigger build เอง (cache miss = first-open ตอน cache เย็น)
+    expect(DOGET).toMatch(/if \(Math\.random\(\) < 0\.15\) logPayloadSizes_/);
+    // ต้องไม่มีการเรียกแบบไม่มีเงื่อนไข (ไม่งั้น sampling ไม่มีผล)
+    expect(DOGET).not.toMatch(/\n\s*logPayloadSizes_\(data, cacheVariant, out\.length\);/);
+  });
+
+  it('perfLogDoGet_ (ตัววัดราคาถูก ~0 ms) ยังรันทุก build เสมอ — observability หลักไม่หาย', () => {
+    // logPayloadSizes_ ถูกสุ่ม แต่ perfLogDoGet_ (บรรทัดเดียว มี build=/shape+cache= ms) ต้องคงอยู่
+    expect(DOGET).toMatch(/perfLogDoGet_\(wantFresh \? 'FRESH' : 'MISS'/);
+    expect(DOGET).toMatch(/build=' \+ \(_tBuilt - _tReq\)/);
+  });
+
   it('single-flight เดิมยังอยู่ (cache miss พร้อมกันต้องไม่ build ทุกคน)', () => {
     expect(DOGET).toMatch(/acquireBuildLock_\(0\)/);
     expect(DOGET).toMatch(/acquireBuildLock_\(_BUILD_LOCK_WAIT_MS\)/);
