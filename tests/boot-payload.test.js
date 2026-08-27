@@ -301,3 +301,150 @@ describe('C. จุดเชื่อมต่อ (meta) — สิ่งที�
     expect(DOGET).toMatch(/readStalePayload_/);
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// D. ฝั่งเครื่องผู้ใช้ — `mergeBootData` ต้อง "รวม ไม่ใช่ทับ"
+// ก้อน boot ไม่มีข้อมูลยอดขายเลย · ถ้าเอาไปทับ snapshot เดิม ตัวเลข "ควรสั่ง"/"กำลังมาแรง"
+// จะกลายเป็น 0 ทั้งร้านชั่วขณะ ซึ่งพนักงานใช้ตัดสินใจสั่งของจริง (ผิดแบบไม่มี error ให้เห็น)
+// ────────────────────────────────────────────────────────────────────────────
+const APP = readFileSync(join(ROOT, 'app.jsx'), 'utf8');
+
+const MERGE_SRC = [
+  grab(APP, /function expandProductsColumnar\(d\) \{[\s\S]*?\n\}/),
+  grab(APP, /function mergeBootData\(prev, boot\) \{[\s\S]*?\n\}/),
+].join('\n');
+// eslint-disable-next-line no-new-func
+const { mergeBootData } = new Function(MERGE_SRC + '\nreturn { mergeBootData };')();
+
+const prevSnapshot = () => ({
+  products: [
+    { sku: 'OL00001', name: 'มะกอก', qtyStore: 1, qtyWH: 2, qty: 3, isOOS: false,
+      soldQty: 120, soldRev: 4800, monthly: [{ month: '07/2026', qty: 10, sales: 400 }] },
+    { sku: 'R01025', name: 'กุหลาบ', qtyStore: 0, qtyWH: 0, qty: 0, isOOS: true,
+      soldQty: 7, soldRev: 350, monthly: [] },
+  ],
+  orders: [{ id: 'R9', sku: 'OL00001' }],
+  shipments: [],
+  monthLabels: ['07/2026'],
+  monthlyByCat: { '07/2026': { 'ดอกไม้': { qty: 10, sales: 400 } } },
+  purchases: [{ sku: 'OL00001' }],
+  totals: { nProducts: 2, totalSoldQty: 127, wholesaleRatio: 0.8 },
+  lastModified: 1000,
+});
+
+const bootPayload = () => ({
+  _boot: 1, bv: 1, lastModified: 2000,
+  products: [
+    { sku: 'OL00001', name: 'มะกอก', qtyStore: 5, qtyWH: 20, qty: 25, isOOS: false, price: 100 },
+    { sku: 'NEW001', name: 'ของใหม่', qtyStore: 3, qtyWH: 0, qty: 3, isOOS: false, price: 50 },
+  ],
+  orders: [{ id: 'R10', sku: 'R01025' }],
+  shipments: [{ id: 'S1' }],
+  storage: { verifiedLockMap: {}, productLockMap: {}, unassigned: [] },
+  stockCheckRequests: [],
+  thresholds: { default: 12 },
+  totals: { nProducts: 2, wholesaleRatio: 0.8 },
+});
+
+describe('D. mergeBootData — รวม ไม่ใช่ทับ', () => {
+  it('มี snapshot เดิม → ยอดขายเดิมต้องอยู่ครบ (ไม่ถูกลบทิ้ง)', () => {
+    const out = mergeBootData(prevSnapshot(), bootPayload());
+    const p = out.products.find(x => x.sku === 'OL00001');
+    expect(p.soldQty).toBe(120);
+    expect(p.soldRev).toBe(4800);
+    expect(p.monthly).toEqual([{ month: '07/2026', qty: 10, sales: 400 }]);
+  });
+
+  it('จำนวนสต็อกถูกอัปเดตเป็นของสด', () => {
+    const p = mergeBootData(prevSnapshot(), bootPayload()).products.find(x => x.sku === 'OL00001');
+    expect(p.qtyStore).toBe(5);
+    expect(p.qtyWH).toBe(20);
+    expect(p.qty).toBe(25);
+  });
+
+  it('ก้อนหนักที่ boot ไม่ได้ส่ง (monthlyByCat/purchases/monthLabels) ต้องคงอยู่', () => {
+    const out = mergeBootData(prevSnapshot(), bootPayload());
+    expect(out.monthlyByCat).toBeTruthy();
+    expect(out.purchases).toHaveLength(1);
+    expect(out.monthLabels).toEqual(['07/2026']);
+  });
+
+  it('สินค้าใหม่ที่เพิ่งเพิ่มโผล่ขึ้นมา · สินค้าเดิมที่ boot ไม่ได้ส่งไม่หายไป', () => {
+    const out = mergeBootData(prevSnapshot(), bootPayload());
+    const skus = out.products.map(p => p.sku);
+    expect(skus).toContain('NEW001');
+    expect(skus, 'สินค้าที่ไม่ได้อยู่ในก้อน boot ห้ามหาย').toContain('R01025');
+  });
+
+  it('orders/shipments/thresholds ถูกอัปเดต และ totals ถูกรวม (ไม่ทับทิ้งทั้งก้อน)', () => {
+    const out = mergeBootData(prevSnapshot(), bootPayload());
+    expect(out.orders[0].id).toBe('R10');
+    expect(out.shipments).toHaveLength(1);
+    expect(out.totals.totalSoldQty, 'ยอดรวมเดิมที่ boot ไม่ได้ส่งต้องคงอยู่').toBe(127);
+    expect(out.totals.nProducts).toBe(2);
+  });
+
+  it('มี snapshot เดิม → **ไม่ติดธง _boot** (ข้อมูลยอดขายมีอยู่แล้ว ไม่ใช่โหมดขาดข้อมูล)', () => {
+    expect(mergeBootData(prevSnapshot(), bootPayload())._boot).toBeUndefined();
+  });
+
+  it('ไม่มี snapshot เลย (เครื่องใหม่) → ใช้ก้อน boot เป็นฐาน + ติดธง _boot', () => {
+    const out = mergeBootData(null, bootPayload());
+    expect(out._boot).toBe(1);
+    expect(out.products).toHaveLength(2);
+    const p = out.products.find(x => x.sku === 'OL00001');
+    expect(p.soldQty, 'ยังไม่มียอดขาย — ต้องเป็น undefined ไม่ใช่ 0').toBeUndefined();
+  });
+
+  it('snapshot ว่าง (products = []) ก็ถือว่าไม่มีข้อมูล', () => {
+    expect(mergeBootData({ products: [] }, bootPayload())._boot).toBe(1);
+  });
+
+  it('รับ products แบบคอลัมน์ (pv=3) ได้ — กางก่อนรวมเสมอ', () => {
+    const packed = {
+      _boot: 1, lastModified: 2000,
+      products: { cols: ['sku', 'qtyStore', 'qtyWH', 'qty'], rows: [['OL00001', 9, 9, 18]] },
+    };
+    const p = mergeBootData(prevSnapshot(), packed).products.find(x => x.sku === 'OL00001');
+    expect(p.qty).toBe(18);
+    expect(p.soldQty, 'ยอดขายเดิมยังอยู่').toBe(120);
+  });
+});
+
+describe('E. จุดเชื่อมต่อฝั่ง app.jsx (meta)', () => {
+  it('fetchBoot เช็ค `d._boot` ก่อนใช้ (GAS เก่าคืนก้อนเต็มมาแทน)', () => {
+    const fb = grab(APP, /const fetchBoot = usC\(\(\) => \{[\s\S]*?\n  \}, \[sheetUrl\]\);/);
+    expect(fb).toMatch(/!d\._boot/);
+  });
+
+  it('fetchBoot อ่านคำตอบผ่าน dmjJson (บทเรียนข้อ 13 — GAS ตอบ HTML ได้)', () => {
+    const fb = grab(APP, /const fetchBoot = usC\(\(\) => \{[\s\S]*?\n  \}, \[sheetUrl\]\);/);
+    expect(fb).toMatch(/dmjJson/);
+    expect(fb).not.toMatch(/r\.json\(\)\s*\)\s*$/m);
+  });
+
+  it('ก้อน boot ที่มาช้าห้ามเขียนทับก้อนเต็ม (fullAppliedRef)', () => {
+    const fb = grab(APP, /const fetchBoot = usC\(\(\) => \{[\s\S]*?\n  \}, \[sheetUrl\]\);/);
+    expect(fb).toMatch(/fullAppliedRef\.current/);
+    // ต้องเช็คซ้ำ "ข้างใน setData" ด้วย — ระหว่าง then กับ setData ก้อนเต็มมาถึงได้
+    expect(fb).toMatch(/setData\(prev => \{[\s\S]*?fullAppliedRef\.current/);
+  });
+
+  it('fetchFromSheet ตั้ง fullAppliedRef **ก่อน** setData', () => {
+    const ff = grab(APP, /const fetchFromSheet = usC\([\s\S]*?\n  \}, \[sheetUrl, role\]\);/);
+    expect(ff.indexOf('fullAppliedRef.current = true'))
+      .toBeLessThan(ff.indexOf('setData(enriched)'));
+  });
+
+  it('startup ยิงทั้ง fetchBoot และ fetchFromSheet (ก้อนเต็มยังเป็น fallback เสมอ)', () => {
+    const eff = grab(APP, /usE\(\(\) => \{\n {4}if \(!role\) return;[\s\S]*?\}, \[role, fetchFromSheet, fetchBoot\]\);/);
+    expect(eff).toMatch(/fetchBoot\(\);/);
+    expect(eff).toMatch(/fetchFromSheet\(\);/);
+  });
+
+  it('fetchBoot **ไม่** เขียน localStorage — ก้อนที่ไม่มียอดขายห้ามทับ snapshot เต็ม', () => {
+    const fb = grab(APP, /const fetchBoot = usC\(\(\) => \{[\s\S]*?\n  \}, \[sheetUrl\]\);/);
+    expect(fb, 'ทับ snapshot เต็มด้วยก้อนที่ไม่มียอดขาย = เปิดแอปรอบหน้าข้อมูลด้อยลง')
+      .not.toMatch(/saveToStorage/);
+  });
+});

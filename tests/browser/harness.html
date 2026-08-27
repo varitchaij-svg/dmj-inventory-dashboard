@@ -128,9 +128,13 @@
   // harness seed ข้อมูลลง localStorage ไว้ให้ตั้งแต่ต้น (data ไม่เคยเป็น null เลย)
   // → ของจริงพนักงานเปิดแอปครั้งแรกบนเครื่องใหม่จะเจอ data=null เสมอ ซึ่งไม่เคยถูกทดสอบ
   const NO_DATA = q.get('nodata') === '1';
+  // Phase B: ก้อนเต็ม (buildFullData_) **ค้างไม่ตอบเลย** แต่ `action=boot` ตอบปกติ
+  // = สภาพจริงตอน GAS กำลัง build ก้อนใหญ่อยู่ (7.6-18 วิ) · เป็นโหมดเดียวที่พิสูจน์ได้ว่า
+  // "เปิดแอปแล้วใช้งานได้โดยไม่ต้องรอ buildFullData_" จริงหรือแค่บังเอิญเร็ว
+  const BOOT_ONLY = q.get('bootonly') === '1';
 
   // ── seed ข้อมูลลง localStorage เพื่อให้ loadFromStorage() render ทันที ──
-  if (!NO_DATA) {
+  if (!NO_DATA && !BOOT_ONLY) {
     localStorage.setItem('dmj_dashboard_data_v1', JSON.stringify(window.__DMJ_PAYLOAD));
     localStorage.setItem('dmj_dashboard_source_v1', 'sheet');
   } else {
@@ -261,12 +265,34 @@
         { items: [], salesList: [], statusBreakdown: {}, generatedAt: new Date().toISOString() }),
         { headers: { 'Content-Type': 'application/json' } }));
     }
+    // ── Phase B: ก้อนเปิดแอป (action=boot) — ต้องมาก่อน branch payload รวม ──
+    // ถ้าปล่อยให้ตกไป branch ล่าง จะได้ payload เต็มซึ่งไม่มีธง `_boot` → app.jsx ทิ้งทันที
+    // = เส้นทาง boot ไม่เคยถูกทดสอบเลยทั้งที่เทสต์ยังเขียว
+    // จำลองของจริง: ตัดคีย์หนัก (ยอดขาย/ซื้อ/โอน/MTO) + ตัด soldQty/soldRev/mo ของสินค้าทุกตัว
+    if (/action=boot/.test(url)) {
+      if (NO_DATA) return new Promise(function () {});
+      var full = window.__DMJ_PAYLOAD || {};
+      var DROP = ['monthlyByCat', 'dailyByCat', 'dayLabels', 'monthLabels', 'purchases',
+                  'transfers', 'transferStats', 'mtoJobs', 'mtoGroups'];
+      var boot = { _boot: 1, bv: 1, generatedAt: new Date().toISOString(), lastModified: Date.now() };
+      Object.keys(full).forEach(function (k) { if (DROP.indexOf(k) < 0) boot[k] = full[k]; });
+      boot.products = (full.products || []).map(function (p) {
+        var q = {};
+        Object.keys(p).forEach(function (k) {
+          if (['soldQty', 'soldRev', 'monthly', 'mo', 'cost', 'profit'].indexOf(k) < 0) q[k] = p[k];
+        });
+        return q;
+      });
+      boot.products = packColumnar(boot.products);
+      return Promise.resolve(new Response(JSON.stringify(boot),
+        { headers: { 'Content-Type': 'application/json' } }));
+    }
     // GET payload
     if (/script\.google|exec|action=orders|action=getAuditLog|action=getDeadStock/.test(url) || url.indexOf('http') === 0) {
       // โหมด nodata: ค้างไว้ไม่ตอบเลย (เหมือนเน็ตร้านช้า/ก้อนใหญ่ยังไหลไม่จบ)
       // ต้อง "ไม่ตอบ" ไม่ใช่ "ตอบ error" — เพราะสิ่งที่ทดสอบคือช่วง *ระหว่างรอ*
       // ซึ่งเป็นช่วงที่พนักงานต้องลงเวลาได้ ไม่ใช่ช่วงหลังจากมันล้มเหลวไปแล้ว
-      if (NO_DATA) return new Promise(function () {});
+      if (NO_DATA || BOOT_ONLY) return new Promise(function () {});
       const payload = Object.assign({}, window.__DMJ_PAYLOAD, { lastModified: Date.now() });
       // Phase A1: app.jsx ส่ง pv=3 เสมอ → ส่ง products แบบคอลัมน์ให้ expandProductsColumnar กางจริง
       if (/[?&]pv=3(?:&|$)/.test(url) && Array.isArray(payload.products)) {
