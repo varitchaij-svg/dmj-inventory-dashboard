@@ -57,6 +57,10 @@ const CACHE_SRC = [
   grab(GS, /const _STALE_TTL_SEC {3}= \d+;.*/),
   grab(GS, /const _STALE_KEY_COUNT = '[^']*';.*/),
   grab(GS, /const _STALE_KEY_PART {2}= '[^']*';.*/),
+  grab(GS, /var _BOOT_KEY_COUNT {2}= '[^']*';.*/),
+  grab(GS, /var _BOOT_KEY_PART {3}= '[^']*';.*/),
+  grab(GS, /var _BOOT_STALE_KEY_COUNT = '[^']*';.*/),
+  grab(GS, /var _BOOT_STALE_KEY_PART {2}= '[^']*';.*/),
   grab(GS, /const _STOCKLITE_KEY_COUNT = '[^']*';.*/),
   grab(GS, /const _STOCKLITE_KEY_PART {2}= '[^']*';.*/),
   grab(GS, /const PAYLOAD_VARIANTS_ = \[[^\]]*\];/),
@@ -90,6 +94,12 @@ function seedWarmCaches(api) {
       seed[api._staleKeyCount_(cv) + '_ts'] = '111';
     });
   });
+  seed['dmj_boot_n'] = '1';
+  seed['dmj_boot_n_ts'] = '111';
+  seed['dmj_boot_0'] = '{"_boot":1}';
+  seed['dmj_bootstale_n'] = '1';
+  seed['dmj_bootstale_n_ts'] = '111';
+  seed['dmj_bootstale_0'] = '{"_boot":1}';
   seed['dmj_stocklite_n'] = '1';
   seed['dmj_stocklite_0'] = '{"items":[]}';
   seed['pending_quotes_v1'] = 'X';
@@ -122,6 +132,38 @@ describe('A. invalidateCache_ — ขอบเขตเดิมต้องไ�
     api.invalidateCache_();
     expect(env.store.has('dmj_stocklite_n')).toBe(false);
     expect(env.store.has('dmj_stocklite_0')).toBe(false);
+  });
+
+  it('Phase B: ล้างชั้นสดของก้อน boot ด้วย (มันมีจำนวนสต็อกอยู่ข้างใน)', () => {
+    const { env, api } = warmEnv();
+    api.invalidateCache_();
+    expect(env.store.has('dmj_boot_n'), 'boot ชั้นสดต้องถูกล้าง').toBe(false);
+    expect(env.store.has('dmj_boot_0')).toBe(false);
+  });
+
+  it('Phase B: **ไม่แตะชั้นสำรองของ boot** (ไม่งั้นกลับไป stampede ตอนเปิดแอปพร้อมกัน)', () => {
+    const { env, api } = warmEnv();
+    api.invalidateCache_();
+    expect(env.store.has('dmj_bootstale_n'), 'boot ชั้นสำรองต้องยังอยู่').toBe(true);
+    expect(env.store.has('dmj_bootstale_0')).toBe(true);
+  });
+
+  it('บล็อก boot ล้มต้องไม่ทำให้ payload ไม่ถูกล้าง (fail-safe — cache ค้าง = ทับงานคนอื่น)', () => {
+    // จำลอง runtime ที่อ่านคีย์ boot ไม่ได้ (โยน) — payload ต้องยังถูกล้างครบ
+    const probe = loadCache(makeEnv({}));
+    const env = makeEnv(seedWarmCaches(probe));
+    const realGet = env.CacheService.getScriptCache;
+    env.CacheService.getScriptCache = () => {
+      const c = realGet();
+      return Object.assign({}, c, {
+        get: (k) => { if (k === 'dmj_boot_n') throw new Error('boom'); return c.get(k); },
+        remove: c.remove, removeAll: c.removeAll, getAll: c.getAll, put: c.put, putAll: c.putAll,
+      });
+    };
+    const api = loadCache(env);
+    api.invalidateCache_();
+    const cv = api.payloadCacheVariant_('full', 2);
+    expect(env.store.has(api._cacheKeyCount_(cv)), 'payload ต้องถูกล้างแม้บล็อก boot จะล้ม').toBe(false);
   });
 
   it('**ห้ามแตะชั้นสำรอง (stale)** — ล้างด้วยเมื่อไหร่ = กลับไป stampede ทันที', () => {

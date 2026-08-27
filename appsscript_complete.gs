@@ -2841,6 +2841,11 @@ function doGet(e) {
     if (e && e.parameter && e.parameter.action === 'stocklite') {
       return stockLiteHandler_();
     }
+    // ── Phase B: ก้อนเปิดแอป (catalog + สต็อกสด) — ไม่แตะ buildFullData_ ──
+    // เส้นทางนี้ต้องเบาและคาดเดาเวลาได้ ไม่ผูกกับการ build ก้อนใหญ่ (ดู bootHandler_)
+    if (e && e.parameter && e.parameter.action === 'boot') {
+      return bootHandler_();
+    }
     if (e && e.parameter && e.parameter.action === 'order') {
       return handleOrder_(e.parameter);
     }
@@ -13765,6 +13770,22 @@ function keepWarm_() {
     var lock = acquireBuildLock_(0);
     if (!lock) return;                        // มีคนกำลัง build → เขาเติม cache ให้เอง
     try {
+      // ── Phase B: อุ่นก้อน `boot` ก่อนเสมอ ────────────────────────────────────
+      // ทำก่อนก้อนใหญ่โดยตั้งใจ: มันเบากว่ามาก และเป็นก้อนที่ "คนเปิดแอป" รออยู่จริง
+      // ถ้าไปต่อท้าย ก้อนใหญ่ที่ใช้ 7.6-18 วิ จะกินเวลาไปก่อน แล้วคนที่เปิดแอประหว่างนั้น
+      // ยังเจอ boot MISS อยู่ดี · ห่อ try/catch แยก — boot พังต้องไม่ทำให้ก้อนใหญ่ไม่ถูกอุ่น
+      try {
+        if (!readBootPayload_().str) {
+          var _btsBefore = getSheetLastModified_();
+          var _bdata = buildBootData_();
+          var _bStale = !!(_btsBefore && getSheetLastModified_() > _btsBefore);
+          if (_btsBefore) _bdata.lastModified = _btsBefore;
+          var _bout = JSON.stringify(shapeColumnarPayload_(_bdata));
+          if (!_bStale) putBootPayload_(_bout);
+          putBootStalePayload_(_bout);
+        }
+      } catch (eb) { Logger.log('keepWarm_ boot error (ข้ามไป): ' + eb); }
+
       // ใช้กติกาเดียวกับเส้นทาง doGet — keepWarm_ มี race เดียวกันเป๊ะ (invalidateCache_
       // ไม่จับล็อกใด ๆ จึงเกิดระหว่างที่ตัวนี้กำลัง build ได้) ดูคำอธิบายเต็มใน doGet
       var _tsBefore = getSheetLastModified_();
@@ -13804,6 +13825,160 @@ function disableKeepWarm() {
     if (t.getHandlerFunction() === 'keepWarm_') { ScriptApp.deleteTrigger(t); n++; }
   });
   return 'keep-warm ปิดแล้ว (ลบ trigger ' + n + ' ตัว)';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase B — `action=boot`: ก้อนเปิดแอป (catalog + สต็อกสด) ที่ **ไม่แตะ buildFullData_**
+// ───────────────────────────────────────────────────────────────────────────
+// ที่มา (หลักฐานจริง ส.ค. 2026): `buildFullData_` ใช้เวลา 7.6 วิ (container อุ่น) ถึง
+// 18.0 วิ (container เย็น — วัดใน keepWarm_ 13:42 = 26.65 วิ ทั้งรอบ) เพราะอ่าน 9+ ชีต
+// แล้วประกอบทั้ง ERP · ทุกครั้งที่ cache พลาด **ผู้ใช้คนนั้นเป็นคนจ่ายเวลานั้นเอง**
+// (ContentService บัฟเฟอร์ → ไบต์แรกถึง browser ก็ต่อเมื่อ doGet คืนค่าแล้ว)
+//
+// ก้อนนี้อ่าน **เฉพาะชีตที่จำเป็นต่อการเปิดหน้าจอ** (BOOT_SOURCE_SHEETS_) แล้วตัด
+// ก้อนที่หนักที่สุดออกทั้งหมด: ยอดขายรายเดือน/รายวัน (`products[].mo` = ก้อนที่ใหญ่ที่สุด
+// และ **โตขึ้นเองทุกเดือนไม่มีเพดาน**), ประวัติซื้อ, ประวัติโอน, งาน MTO
+//
+// ⚠️ **ห้ามเรียก `buildFullData_` จากเส้นทางนี้เด็ดขาด** — ทั้งตอน HIT และตอน MISS
+//    เรียกเมื่อไหร่ = เส้นทางเปิดแอปกลับไปผูกกับ build ก้อนใหญ่เหมือนเดิมทั้งดุ้น
+//    (มีเทสต์ใน tests/boot-payload.test.js คุมไว้)
+// ⚠️ **ก้อนนี้ไม่มีข้อมูลยอดขายเลย** จึง **ไม่ใส่คีย์ `soldQty`/`soldRev`/`mo`** ลงไป
+//    (ไม่ใช่ใส่เป็น 0) — ส่ง 0 = ตัวเลขผิดที่ดูเหมือนข้อเท็จจริง · ฝั่ง client ดูธง `_boot`
+//    เพื่อรู้ว่ายังไม่ควรคิดเลขที่มาจากยอดขาย ("ควรสั่ง"/"กำลังมาแรง")
+// ⚠️ **ก้อนนี้ไม่แยกตาม role** — คีย์ที่ `PAYLOAD_VARIANT_DROPS_` ตัดตาม role
+//    (monthlyByCat/dailyByCat/purchases/transfers) ไม่มีอยู่ในนี้ตั้งแต่แรก → cache
+//    ก้อนเดียวเสิร์ฟได้ทุกตำแหน่ง = build ครั้งเดียวอุ่นให้ทั้งร้าน
+//    ถ้าวันหนึ่งเพิ่มคีย์ที่ role เห็นไม่เท่ากันเข้ามา **ต้องกลับไปแยก cache ตาม variant ก่อน**
+// ═══════════════════════════════════════════════════════════════════════════
+var BOOT_CONTRACT_VERSION_ = 1;      // ขึ้นเลขเมื่อ "รูปร่าง" ของก้อนเปลี่ยนจนของเก่าอ่านไม่ได้
+var _BOOT_KEY_COUNT  = 'dmj_boot_n';
+var _BOOT_KEY_PART   = 'dmj_boot_';
+var _BOOT_STALE_KEY_COUNT = 'dmj_bootstale_n';
+var _BOOT_STALE_KEY_PART  = 'dmj_bootstale_';
+var _BOOT_TTL_SEC    = 180;          // เท่าชั้นสดของ payload — ล้างพร้อมกันเสมอ
+var _BOOT_STALE_TTL_SEC = 1800;      // ชั้นสำรอง 30 นาที (หลักเดียวกับ payload)
+
+// ชีตที่ก้อน boot อ่านจริง — **เป็น subset ของ PAYLOAD_SOURCE_SHEETS_ เสมอ**
+// (มีเทสต์บังคับ · ถ้าหลุดออกนอก subset = การเขียนบางอย่างจะล้าง payload แต่ไม่ล้าง boot
+//  แล้วคนเปิดแอปเห็นของเก่าค้างโดยไม่มี error ให้เห็น)
+var BOOT_SOURCE_SHEETS_ = [
+  'SHEET_PRODUCTS', 'SHEET_PRODUCT_META', 'SHEET_IMAGE_URL', 'SHEET_HIDDEN_PRODUCTS',
+  'SHEET_ORDERS', 'SHEET_TRANSFERS', 'SHEET_LOCKS', 'SHEET_STOCK_CHECK',
+];
+
+// ตัวประกอบก้อน boot — **ไม่เรียก buildFullData_** และไม่แตะชีตยอดขาย/ซื้อ/โอนย้อนหลัง/MTO
+function buildBootData_() {
+  var _t0 = Date.now();
+  var B = batchReadFormatted_([
+    SHEET_PRODUCTS, SHEET_PRODUCT_META, SHEET_TRANSFERS, SHEET_LOCKS, SHEET_ORDERS,
+  ]);
+  var stockRows = B[SHEET_PRODUCTS] || readStockSheetRows_();
+  var products  = readProducts_(stockRows, B[SHEET_PRODUCT_META]);
+  var qtyLoc    = readQtyByLocation_();
+  var whRatio   = wholesaleRatio_();
+
+  // สินค้า: เอาเฉพาะ "รู้จักของ + รู้ว่ามีกี่ชิ้น + อยู่ตรงไหน" · ตัดคีย์ที่มาจากยอดขาย/ประวัติซื้อทิ้ง
+  for (var i = 0; i < products.length; i++) {
+    var p = products[i];
+    var skuU = (p.sku || '').toString().trim().toUpperCase();
+    applyQtyLocToProduct_(p, qtyLoc[skuU]);
+    p.stockValue      = p.qty              * p.price * whRatio;
+    p.stockValueWH    = (p.qtyWH    || 0)  * p.price * whRatio;
+    p.stockValueStore = (p.qtyStore || 0)  * p.price * whRatio;
+    // ⚠️ ลบทิ้งแทนการปล่อยเป็น 0 — "ขายไป 0 ชิ้น" คือตัวเลขผิดที่หน้าตาเหมือนข้อเท็จจริง
+    delete p.soldQty; delete p.soldRev; delete p.monthly; delete p.cost; delete p.profit;
+  }
+
+  var productLockMap = {}, unassigned = [];
+  products.forEach(function (p) {
+    if (!p.locations || p.locations.length === 0) { unassigned.push(p.sku); return; }
+    p.locations.forEach(function (loc) {
+      var key = lockKeyOf_(loc);
+      (productLockMap[key] || (productLockMap[key] = [])).push(p.sku);
+    });
+  });
+  var storage = readStorage_(B[SHEET_LOCKS]);
+
+  var data = {
+    _boot: 1,
+    bv: BOOT_CONTRACT_VERSION_,
+    generatedAt: new Date().toISOString(),
+    lastModified: getSheetLastModified_(),
+    products: products,
+    orders:     readOrders_(B[SHEET_ORDERS]),
+    shipments:  readShipments_(B[SHEET_TRANSFERS]),
+    storage: {
+      verifiedLockMap: storage.lockMap,
+      productLockMap: productLockMap,
+      unassigned: unassigned,
+      shelves: { A: 10, B: 10, locksPerShelf: 15 },
+    },
+    stockCheckRequests: readStockCheckRequests_().filter(function (r) {
+      return r.fsStatus !== 'done' || r.whStatus !== 'done';
+    }),
+    thresholds: readThresholds_(),
+    totals: {
+      nProducts:  products.length,
+      nWithStock: products.filter(function (p) { return p.qty > 0; }).length,
+      nOOS:       products.filter(function (p) { return p.isOOS; }).length,
+      nOversold:  products.filter(function (p) { return p.isOversold; }).length,
+      totalStockValue:      products.reduce(function (s2, p) { return s2 + (p.stockValue || 0); }, 0),
+      totalStockValueWH:    products.reduce(function (s2, p) { return s2 + (p.stockValueWH || 0); }, 0),
+      totalStockValueStore: products.reduce(function (s2, p) { return s2 + (p.stockValueStore || 0); }, 0),
+      wholesaleRatio: whRatio,
+    },
+  };
+  Logger.log('[perf] buildBootData_ ' + (Date.now() - _t0) + 'ms · สินค้า ' + products.length + ' ตัว');
+  return data;
+}
+
+function readBootPayload_()      { return _readChunked_(_BOOT_KEY_COUNT, _BOOT_KEY_PART); }
+function readBootStalePayload_() { return _readChunked_(_BOOT_STALE_KEY_COUNT, _BOOT_STALE_KEY_PART); }
+function putBootPayload_(str)    { _writeChunked_(str, _BOOT_KEY_COUNT, _BOOT_KEY_PART, _BOOT_TTL_SEC); }
+function putBootStalePayload_(s) { _writeChunked_(s, _BOOT_STALE_KEY_COUNT, _BOOT_STALE_KEY_PART, _BOOT_STALE_TTL_SEC); }
+
+// เส้นทาง `action=boot` · HIT → คืนเลย · MISS → build ก้อนเบา (ไม่ใช่ buildFullData_)
+// ⚠️ **ไม่เข้าคิวรอ build lock เด็ดขาด** (`tryLock(0)` เท่านั้น) — จุดประสงค์ทั้งหมดของก้อนนี้
+//    คือ "เปิดแอปได้โดยไม่ต้องรอ build ก้อนใหญ่" ถ้ามารอคิวเดียวกันก็เท่ากับไม่ได้แก้อะไรเลย
+//    คว้าล็อกไม่ได้ = มีคนกำลัง build อยู่ → ใช้ของสำรองถ้ามี ไม่มีก็ build เอง (ก้อนนี้เบาพอ)
+function bootHandler_() {
+  var _tReq = Date.now();
+  var hit = readBootPayload_();
+  if (hit.str) {
+    var patched = hit.str.replace(/"lastModified"\s*:\s*\d+/, '"lastModified":' + getSheetLastModified_());
+    perfLogDoGet_('BOOT-HIT', 'boot', _tReq, patched.length);
+    return ContentService.createTextOutput(patched).setMimeType(ContentService.MimeType.JSON);
+  }
+  var lock = acquireBuildLock_(0);
+  if (!lock) {
+    var stale = readBootStalePayload_();
+    if (stale.str) {
+      // ⚠️ ของสำรอง **ห้ามปั๊ม lastModified สด** — เหตุผลเดียวกับเส้นทาง STALE ของ payload
+      // (ปั๊มแล้ว client คิดว่าถือของล่าสุด → conflict detection ปล่อยผ่าน → ทับงานคนอื่นเงียบ ๆ)
+      var outStale = markStalePayload_(stale.str, stale.ts);
+      perfLogDoGet_('BOOT-STALE', 'boot', _tReq, outStale.length,
+        ' อายุ=' + Math.round((Date.now() - (stale.ts || Date.now())) / 1000) + 'วิ');
+      return ContentService.createTextOutput(outStale).setMimeType(ContentService.MimeType.JSON);
+    }
+  }
+  try {
+    var _tsBefore = getSheetLastModified_();
+    var data = buildBootData_();
+    var _tBuilt = Date.now();
+    // guard เดียวกับ Phase 1: มีคนบันทึกระหว่าง build → ห้ามเขียนทับชั้นสด
+    // (ใช้ `>` ไม่ใช่ `!==` — getSheetLastModified_ ถอยไป DriveApp ได้ซึ่งกระเพื่อมสองทาง)
+    var _staleBuild = !!(_tsBefore && getSheetLastModified_() > _tsBefore);
+    if (_tsBefore) data.lastModified = _tsBefore;
+    var out = JSON.stringify(shapeColumnarPayload_(data));
+    if (!_staleBuild) putBootPayload_(out);
+    putBootStalePayload_(out);   // ชั้นสำรองเขียนเสมอ (ไม่เคยถูกปั๊ม ts สด)
+    perfLogDoGet_('BOOT-MISS', 'boot', _tReq, out.length,
+      ' build=' + (_tBuilt - _tReq) + 'ms shape+cache=' + (Date.now() - _tBuilt) + 'ms'
+      + (_staleBuild ? ' (มีคนบันทึกระหว่าง build — ไม่เขียนทับ cache ชั้นสด)' : ''));
+    return ContentService.createTextOutput(out).setMimeType(ContentService.MimeType.JSON);
+  } finally {
+    releaseBuildLock_(lock);
+  }
 }
 
 // ── Phase A: "แก้อะไร ต้องล้างอะไร" — ขอบเขตของ payload cache ───────────────────
@@ -13856,6 +14031,19 @@ function invalidateCache_(skipTsUpdate) {
       keys.push(kCount, kCount + _CACHE_TS_SUFFIX);
       for (let i = 0; i < n; i++) keys.push(kPart + i);
     });
+    // Phase B: ก้อน `boot` (ชั้นสด) ล้างคู่กับ payload เสมอ — แหล่งข้อมูลของมันเป็น
+    // **subset** ของ payload ดังนั้นอะไรที่ทำให้ payload เก่า ก็ทำให้ boot เก่าได้เช่นกัน
+    // ⚠️ ล้าง **เฉพาะชั้นสด** เหมือน payload — ชั้นสำรอง `dmj_bootstale_*` ห้ามแตะ
+    //    (ไม่งั้นกลับไป stampede: ทุกเครื่องพลาดพร้อมกันแล้ว build พร้อมกัน)
+    // ⚠️ try/catch **ของตัวเอง** — `invalidateCache_` ทั้งก้อนอยู่ใน try เดียวที่จบด้วย
+    // `catch { /* ignore */ }` ถ้าบล็อกนี้ throw ขึ้นมา การล้าง payload/stocklite ด้านล่าง
+    // จะไม่ถูกรันเลยแบบเงียบ ๆ = cache ชั้นสดค้างของก่อนบันทึก ซึ่งคือคลาสบั๊ก
+    // "เขียนทับงานคนอื่นเงียบ ๆ" ที่ guard ของ Phase 1 มีไว้กัน · ล้มที่นี่ต้องล้มเฉพาะ boot
+    try {
+      const nB = parseInt(c.get(_BOOT_KEY_COUNT) || '0', 10) || 0;
+      keys.push(_BOOT_KEY_COUNT, _BOOT_KEY_COUNT + _CACHE_TS_SUFFIX);
+      for (let i = 0; i < nB; i++) keys.push(_BOOT_KEY_PART + i);
+    } catch (errBoot) { /* boot cache ล้างไม่ได้ก็ต้องไม่ขวางการล้าง payload */ }
     // Phase 7.4: ก้อนเบา `stocklite` ล้างด้วย — TTL มันสั้น (15 วิ) แต่ถ้าไม่ล้าง คนที่เปิดแท็บ
     // นับสต็อก/เช็คหน้าร้านค้างไว้จะเห็นเลขเก่าได้อีกถึง 15 วิหลังเพื่อนบันทึก ทั้งที่ปลายทาง
     // ของแท็บพวกนี้คือ "เห็นงานของกันและกันแบบสด" · ไม่ใช่ของสำรอง จึงล้างได้ปลอดภัย
