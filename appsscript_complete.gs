@@ -3166,23 +3166,45 @@ function doGet(e) {
       // ถ้าไปอ่าน `buildLock` ทีหลังจะได้ null เสมอ แล้ว log จะรายงานว่า "build ซ้อน" ทุกครั้ง
       // ทั้งที่ single-flight ทำงานปกติ = ตัวเลขที่ทำให้สรุปผิดว่าตัวแก้ไม่ได้ผล
       const hadLock = !!buildLock;
-      // build ครั้งเดียว (แพงสุดในเส้นทาง) แล้วแตกเป็นทุก variant เก็บ cache ให้ครบในรอบเดียว
-      // ถ้าเก็บเฉพาะ variant ที่ขอ role อื่นที่มาทีหลังจะ miss แล้ว build ใหม่ทั้งก้อนอีกรอบ
+      // ── กัน "ผล build ที่เก่ากว่าการบันทึกล่าสุด" ไปทับ cache ชั้นสด ────────────────
+      // build ใช้เวลา ~10 วิ · ระหว่างนั้นมีคนกดบันทึกได้ (doPost จับ `getScriptLock`
+      // ซึ่งเป็น **คนละล็อก** กับ build lock โดยเจตนา — build จะได้ไม่ขวางคนสั่งของ)
+      // ลำดับที่เป็นปัญหา: build เริ่ม → มีคนบันทึก → `invalidateCache_` ล้าง cache +
+      // ดัน `dmj_last_write_ts` → build (ที่อ่านชีตไปก่อนหน้านั้น) เสร็จแล้วเขียน cache ทับ
+      // → **cache ชั้นสดกลายเป็นข้อมูลก่อนบันทึก** และเส้นทาง HIT ยังปั๊ม `lastModified`
+      // สดทับให้อีก (`serveCached`) → client ถือข้อมูลเก่าพร้อม ts ใหม่ →
+      // `shouldRejectConflict_` ปล่อยผ่าน → **เขียนทับงานคนอื่นเงียบ ๆ** ได้นานถึง TTL (180 วิ)
+      // CacheService ไม่มี compare-and-set จึงกันด้วยการ **เทียบก่อนเขียน** แทน
+      // (ไม่เพิ่มล็อกใหม่ — ใช้กลไก version เดิมที่มีอยู่แล้ว)
+      const _tsBefore = getSheetLastModified_();
       const data = buildFullData_();
+      const _tsAfter = getSheetLastModified_();
+      // ใช้ `>` ไม่ใช่ `!==` โดยตั้งใจ — เมื่อ Script Property หาย `getSheetLastModified_`
+      // ถอยไปอ่าน `DriveApp.getLastUpdated()` ซึ่งกระเพื่อมได้ทั้งสองทาง · `!==` จะตีความ
+      // การกระเพื่อมถอยหลังว่า "มีคนบันทึก" แล้ว **ไม่เขียน cache เลยตลอดกาล** = build ทุกคำขอ
+      const _staleBuild = !!(_tsBefore && _tsAfter && _tsAfter > _tsBefore);
+      // ป้ายเวลาของก้อนนี้ต้องเป็น "ตอนเริ่มอ่านชีต" ไม่ใช่ตอนประกอบเสร็จ —
+      // `buildFullData_` ใส่ `lastModified` ตอนประกอบ (ท้ายสุด) ซึ่งถ้ามีคนบันทึกระหว่างทาง
+      // จะได้ ts **หลัง** บันทึกติดไปกับข้อมูล **ก่อน** บันทึก = พิษตัวเดียวกับข้างบน
+      // ตั้งเป็น _tsBefore เสมอ: ไม่มีใครบันทึก = ค่าเท่าเดิม (ไม่เปลี่ยนพฤติกรรม) ·
+      // มีคนบันทึก = client รู้ว่าของที่ถืออยู่เก่ากว่า → conflict detection ทำงานถูกต้อง
+      if (_tsBefore) data.lastModified = _tsBefore;
       const _tBuilt = Date.now();
       let out = null;
       PAYLOAD_VARIANTS_.forEach(function (v) {
         const shaped = shapePayloadForVariant_(data, v);
         const s2 = JSON.stringify(shaped);
         const cv2 = payloadCacheVariant_(v, 2);
-        putCachedPayload_(s2, cv2);
+        if (!_staleBuild) putCachedPayload_(s2, cv2);
         putStalePayload_(s2, cv2);   // Phase 7.3: เขียนชั้นสำรองคู่กันเสมอ
+        // ⚠️ ชั้นสำรองเขียนได้แม้ build จะเก่า — มันไม่เคยถูกปั๊ม `lastModified` สด
+        // (คง ts เดิมที่ติดมากับก้อน) จึงไม่ทำให้ conflict detection ปล่อยผ่าน
         if (v === variant && enc === 2) out = s2;
         // Phase A1: pv=3 (products แบบคอลัมน์) — cache คู่กัน (fresh+stale) ให้ได้ single-flight
         // + stale-while-rebuild เท่า pv=2 · แพงเพิ่มแค่ pack+stringify (build ก้อนใหญ่ทำครั้งเดียว)
         const s3 = JSON.stringify(shapeColumnarPayload_(shaped));
         const cv3 = payloadCacheVariant_(v, 3);
-        putCachedPayload_(s3, cv3);
+        if (!_staleBuild) putCachedPayload_(s3, cv3);
         putStalePayload_(s3, cv3);
         if (v === variant && enc === 3) out = s3;
       });
@@ -3190,7 +3212,7 @@ function doGet(e) {
       // ทำเฉพาะ variant ที่ถูกขอจริง ไม่ทำเผื่อทุกตัว เพราะเป็นทางผ่านชั่วคราวช่วง deploy เท่านั้น
       if (out == null) {
         out = JSON.stringify(shapePayloadForVariant_(expandMonthlyForLegacy_(data), variant));
-        putCachedPayload_(out, cacheVariant);
+        if (!_staleBuild) putCachedPayload_(out, cacheVariant);
         putStalePayload_(out, cacheVariant);
       }
       // ปล่อยล็อกทันทีที่ cache พร้อมให้คนอื่นอ่านแล้ว — ที่เหลือด้านล่างเป็น "การวัดผล" ล้วน
@@ -3208,7 +3230,8 @@ function doGet(e) {
       // (เครื่องมือวัดที่วัดตัวเองรวมไปด้วย = ตัวเลขที่ทำให้จูนผิดจุดอย่างมั่นใจ)
       perfLogDoGet_(wantFresh ? 'FRESH' : 'MISS', cacheVariant, _tReq, out.length,
         ' build=' + (_tBuilt - _tReq) + 'ms shape+cache=' + (Date.now() - _tBuilt) + 'ms'
-        + (hadLock ? '' : ' (build ซ้อน — รอคิวไม่ทัน)'));
+        + (hadLock ? '' : ' (build ซ้อน — รอคิวไม่ทัน)')
+        + (_staleBuild ? ' (มีคนบันทึกระหว่าง build — ไม่เขียนทับ cache ชั้นสด)' : ''));
       logPayloadSizes_(data, cacheVariant, out.length);
       return ContentService.createTextOutput(out)
         .setMimeType(ContentService.MimeType.JSON);
@@ -13725,18 +13748,23 @@ function keepWarm_() {
     var lock = acquireBuildLock_(0);
     if (!lock) return;                        // มีคนกำลัง build → เขาเติม cache ให้เอง
     try {
+      // ใช้กติกาเดียวกับเส้นทาง doGet — keepWarm_ มี race เดียวกันเป๊ะ (invalidateCache_
+      // ไม่จับล็อกใด ๆ จึงเกิดระหว่างที่ตัวนี้กำลัง build ได้) ดูคำอธิบายเต็มใน doGet
+      var _tsBefore = getSheetLastModified_();
       var data = buildFullData_();
+      var _staleBuild = !!(_tsBefore && getSheetLastModified_() > _tsBefore);
+      if (_tsBefore) data.lastModified = _tsBefore;
       PAYLOAD_VARIANTS_.forEach(function (v) {
         var shaped = shapePayloadForVariant_(data, v);
         var cv = payloadCacheVariant_(v, 2);
         var s = JSON.stringify(shaped);
-        putCachedPayload_(s, cv);
+        if (!_staleBuild) putCachedPayload_(s, cv);
         putStalePayload_(s, cv);
         // Phase A1: อุ่น pv=3 คู่กันด้วย — ไม่งั้นนอกเวลาใช้งาน คนเปิดคนแรกที่ใช้ pv=3 ยังเจอ
         // MISS แล้ว build เอง (เสียประโยชน์ keep-warm สำหรับเส้นทางหลักหลัง deploy)
         var cv3 = payloadCacheVariant_(v, 3);
         var s3 = JSON.stringify(shapeColumnarPayload_(shaped));
-        putCachedPayload_(s3, cv3);
+        if (!_staleBuild) putCachedPayload_(s3, cv3);
         putStalePayload_(s3, cv3);
       });
     } finally { releaseBuildLock_(lock); }
