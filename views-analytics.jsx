@@ -6855,6 +6855,15 @@ const LOGO_FALLBACK_SVG = `data:image/svg+xml;charset=utf-8,${encodeURIComponent
   <text x="50" y="76" font-family="sans-serif" font-size="5.5" fill="%231f7f44" text-anchor="middle">EST.2003</text>
 </svg>`)}`;
 
+// ── สติ๊กเกอร์ (Roll/Direct Thermal) — config ต่อรูปแบบ · หน่วยเป็น mm ตามขนาดจริงตอนพิมพ์
+//    cols>1 = พิมพ์หลายดวงต่อแถว (ม้วนหลายช่อง) · gap = ระยะห่างระหว่างดวง (แนวนอน)
+//    pageW คำนวณจาก w·cols + gap·(cols-1) — ต้องรวม gap ด้วย ห้ามลืม (32×3 + 3×2 = 102mm ไม่ใช่ 96)
+const STICKER_FORMATS = {
+  sticker:  { w: 50, h: 25, gap: 3, cols: 1 },   // เดิม — สติ๊กเกอร์ 50×25mm แถวเดียว
+  sticker3: { w: 32, h: 25, gap: 3, cols: 3 },   // ใหม่ — Direct Thermal 32×25mm ม้วน 3 ช่อง
+};
+const stickerPageW_ = (cfg) => cfg.w * cfg.cols + cfg.gap * (cfg.cols - 1);
+
 function LabelPrintView({ data, initItems, onInitConsumed }) {
   const { products } = data;
   const [items, setItems] = uS([]);
@@ -7016,6 +7025,10 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
 
   const totalQty = items.reduce((s, i) => s + i.qty, 0);
 
+  // config ของโหมดสติ๊กเกอร์ปัจจุบัน (sticker / sticker3) — ใช้ทั้ง preview และ printVaseLabels
+  const stickerCfg = STICKER_FORMATS[printMode] || STICKER_FORMATS.sticker;
+  const stickerPageW = stickerPageW_(stickerCfg);
+
   // โหมดการ์ด: 1 การ์ด/SKU · ใช้กริดคำนวณเอง (intakeCardGrid) เต็มหน้า เหมือน "พิมพ์การ์ดเต็มหน้า"
   //   → พิมพ์ออกมาหน้าตาเดียวกันทั้ง 2 ปุ่ม (ใช้ IntakePdfCard labelMode ตัวเดียวกัน)
   const cardGrid = uM(() => (typeof intakeCardGrid === "function" ? intakeCardGrid() : { cols: 3, rows: 5, perPage: 15 }), []);
@@ -7031,17 +7044,19 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
     .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
     .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
 
-  // Print sticker labels in a popup window (50mm thermal printer, single column, gap 3mm)
+  // Print sticker labels in a popup window (Direct Thermal roll printer, gap 3mm)
+  //   cols=1  → สติ๊กเกอร์ 50×25mm แถวเดียว (เดิม)
+  //   cols=3  → 32×25mm ม้วน 3 ช่อง · 1 แถว = 3 ดวง เรียงกันด้วย gap 3mm · หน้ากว้าง 102mm
+  //   ทุกดวงพิมพ์ขนาดจริง (mm) — @page ตั้งตามขนาดพื้นที่ label จริง ไม่ปล่อยให้ browser ย่อ/ขยาย
   const printVaseLabels = uC(() => {
     if (!labelList.length) return;
 
+    const cfg = STICKER_FORMATS[printMode] || STICKER_FORMATS.sticker;
+    const cols = cfg.cols;
+    const pageW = stickerPageW_(cfg);   // รวม gap แล้ว (32×3 + 3×2 = 102mm)
     const isBc = codeType === "barcode";
-    let prevSkuSep = null;
-    const labelsHTML = labelList.map(p => {
-      const cutSep = prevSkuSep !== null && p.sku !== prevSkuSep
-        ? `<div class="cut-sep">✂ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─</div>`
-        : "";
-      prevSkuSep = p.sku;
+
+    const oneLabel = (p) => {
       const priceStr = p.price != null && p.price > 0 ? `${escHtml(String(p.price))} ฿` : "";
       // ชนิดโค้ด: QR (เดิม, absolute logo มุมล่างขวา) หรือ Barcode (แถวเดียว บาร์โค้ด+โลโก้)
       // — บาร์โค้ดมีเลข SKU แสดงในตัวอยู่แล้ว (displayValue) จึงไม่มีแถว .lsku ซ้ำ
@@ -7056,7 +7071,7 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
               ? `<img src="${qrMap[p.sku]}" style="width:100%;height:100%;display:block;"/>`
               : `<div style="width:100%;height:100%;background:#f0f0f0;display:flex;align-items:center;justify-content:center;font-size:5px;color:#aaa;">QR</div>`
           }</div><img src="${logoSrc}" class="llogo" onerror="this.style.display='none'"/>`;
-      return cutSep + `
+      return `
       <div class="lbl">
         <div class="ltop">
           <span class="lname">${escHtml(p.name)}</span>
@@ -7065,7 +7080,15 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
         <div class="lmid">${midHtml}</div>
         ${isBc ? "" : `<div class="lsku">${p.sku}</div>`}
       </div>`;
-    }).join("");
+    };
+
+    // จัดดวงเป็นแถวละ cols ดวง — 1 แถว = 1 หน้า (page-break) บนม้วน
+    //   จำนวน = จำนวนดวง (ไม่ใช่แถว) → แถวสุดท้ายอาจไม่เต็ม เช่น 7 = 3+3+1
+    const rowsHTML = [];
+    for (let i = 0; i < labelList.length; i += cols) {
+      rowsHTML.push(`<div class="lrow">${labelList.slice(i, i + cols).map(oneLabel).join("")}</div>`);
+    }
+    const labelsHTML = rowsHTML.join("");
 
     const html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8">
@@ -7079,14 +7102,14 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
     font-size:16px; font-weight:700; cursor:pointer; font-family:inherit;
   }
   .print-btn:hover { background:#176035; }
-  /* Screen: readable card size */
+  /* Screen: readable card size — 1 แถว = flex ของ cols ดวง มี gap คั่น */
+  .lrow { display:flex; gap:${cfg.gap * 6}px; justify-content:center; margin:0 auto 9px; }
   .lbl {
-    width:300px; height:150px; box-sizing:border-box;
+    width:${cfg.w * 6}px; height:${cfg.h * 6}px; box-sizing:border-box;
     display:flex; flex-direction:column;
     padding:9px 12px; overflow:hidden;
     background:#fff; border-radius:6px;
     box-shadow:0 1px 4px rgba(0,0,0,.12);
-    margin:0 auto 9px;
   }
   .ltop { display:flex; justify-content:space-between; align-items:flex-start; gap:6px; flex-shrink:0; margin-bottom:4px; }
   .lname { font-size:13px; font-weight:700; color:#111; flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
@@ -7099,25 +7122,21 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
   .lbc-row { width:100%; height:100%; display:flex; align-items:center; justify-content:space-between; gap:8px; }
   .lbc { flex:1; min-width:0; height:60px; }
   .llogo-inline { flex-shrink:0; width:36px; height:36px; object-fit:contain; opacity:.65; }
-  /* SKU-group separator (screen only in popup) */
-  .cut-sep {
-    text-align:center; font-size:12px; color:#aaa;
-    letter-spacing:3px; padding:5px 0;
-    border-top:1px dashed #ddd; border-bottom:1px dashed #ddd;
-    width:300px; margin:2px auto;
-  }
-  /* Print: 50×25mm */
+  /* Print: ${cfg.w}×${cfg.h}mm ต่อดวง · หน้ากว้าง ${pageW}mm (= ${cfg.w}×${cols} + gap×${cols - 1}) */
   @media print {
-    @page { size: 50mm 25mm; margin: 0; }
+    @page { size: ${pageW}mm ${cfg.h}mm; margin: 0; }
     body { background:#fff; padding:0; }
     .print-btn { display:none; }
-    .cut-sep { display:none; }
-    .lbl {
-      width:50mm; height:25mm; border-radius:0;
-      padding:1.5mm 2mm; box-shadow:none; margin:0 0 3mm;
-      page-break-after:always;
+    .lrow {
+      width:${pageW}mm; height:${cfg.h}mm; gap:${cfg.gap}mm; margin:0;
+      page-break-after:always; justify-content:flex-start;
     }
-    .lbl:last-child { page-break-after:avoid; margin-bottom:0; }
+    .lrow:last-child { page-break-after:avoid; }
+    .lbl {
+      width:${cfg.w}mm; height:${cfg.h}mm; border-radius:0;
+      padding:1.5mm 2mm; box-shadow:none; margin:0;
+      flex-shrink:0;
+    }
     .ltop { margin-bottom:0; gap:1mm; }
     .lname { font-size:6.5pt; }
     .lprice { font-size:6.5pt; }
@@ -7133,7 +7152,7 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
 ${labelsHTML}
 </body></html>`;
 
-    const win = window.open("", "_blank", "width=520,height=700");
+    const win = window.open("", "_blank", "width=680,height=700");
     if (!win) {
       // Popup blocked — show toast instead of alert
       if (window.__dmjToast) window.__dmjToast({ type:"warn", message:"🔒 Browser บล็อก Pop-up — กด Allow ใน address bar แล้วลองใหม่" });
@@ -7143,7 +7162,7 @@ ${labelsHTML}
     win.document.write(html);
     win.document.close();
     win.focus(); // bring popup to front
-  }, [labelList, qrMap, barcodeMap, codeType, logoSrc]);
+  }, [labelList, qrMap, barcodeMap, codeType, logoSrc, printMode]);
 
   const addItem = () => {
     const raw = searchVal.trim();
@@ -7179,6 +7198,8 @@ ${labelsHTML}
                 ? "A4 · 5 คอลัมน์ · 70 ใบ/หน้า"
                 : printMode === "card"
                 ? "การ์ดสินค้า · A4 · 3×3 = 9 การ์ด/หน้า · มี QR + จำนวนเข้า"
+                : printMode === "sticker3"
+                ? "สติ๊กเกอร์ Direct Thermal · 32×25mm · Roll · gap 3mm · 3 ช่อง/แถว (หน้ากว้าง 102mm)"
                 : "สติ๊กเกอร์ · 50×25mm · gap 3mm · แถวเดียว"}
             </div>
           </div>
@@ -7207,9 +7228,10 @@ ${labelsHTML}
         {/* ── Print mode toggle ── */}
         <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
           {[
-            {id:"a4",      label:"📄 A4",       sub:"42×21mm · 70/หน้า"},
-            {id:"card",    label:"📇 การ์ดสินค้า", sub:"QR + จำนวนเข้า · 9/หน้า"},
-            {id:"sticker", label:"🏷️ สติ๊กเกอร์", sub:"50×25mm · แถวเดียว"},
+            {id:"a4",       label:"📄 A4",       sub:"42×21mm · 70/หน้า"},
+            {id:"card",     label:"📇 การ์ดสินค้า", sub:"QR + จำนวนเข้า · 9/หน้า"},
+            {id:"sticker",  label:"🏷️ สติ๊กเกอร์", sub:"50×25mm · แถวเดียว"},
+            {id:"sticker3", label:"🏷️ สติ๊กเกอร์ 32×25 — 3 ช่อง", sub:"32×25mm · Roll · Gap 3mm · 3 ช่อง"},
           ].map(m => (
             <button key={m.id} onClick={() => setPrintMode(m.id)} style={{
               padding:"8px 14px", borderRadius:10, cursor:"pointer", fontFamily:"inherit",
@@ -7493,6 +7515,48 @@ ${labelsHTML}
             </div>
           </div>
         ))
+      ) : stickerCfg.cols > 1 ? (
+        /* Sticker preview (Roll หลายช่อง) — วาง cols ดวงต่อแถวด้วย flex-wrap เท่าขนาดจริง (×6)
+           row กว้าง = stickerPageW·6 (รวม gap) → wrap เป็น cols ดวง/แถว อัตโนมัติ เหมือนตอนพิมพ์ */
+        (() => {
+          const SCALE = 6;
+          const boxW = stickerCfg.w * SCALE, boxH = stickerCfg.h * SCALE, gapPx = stickerCfg.gap * SCALE;
+          const qrSz = Math.round(boxH * 0.42);
+          return (
+            <div className="no-print" style={{padding:"4px 0"}}>
+              <div style={{display:"flex",flexWrap:"wrap",gap:gapPx,width:stickerPageW*SCALE,maxWidth:"100%"}}>
+                {labelList.map((p, i) => (
+                  <div key={i} style={{
+                    width:boxW, height:boxH, boxSizing:"border-box",
+                    background:"#fff", boxShadow:"0 1px 4px rgba(0,0,0,.12)",
+                    display:"flex", flexDirection:"column",
+                    padding:"6px 8px", overflow:"hidden", flexShrink:0,
+                  }}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:4,flexShrink:0,marginBottom:3}}>
+                      <span style={{fontSize:11,fontWeight:600,color:"#111",fontFamily:"Kanit,sans-serif",flex:1,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{p.name}</span>
+                      {p.price != null && p.price > 0 && (
+                        <span style={{fontSize:11,fontWeight:700,color:"#111",fontFamily:"Kanit,sans-serif",flexShrink:0,whiteSpace:"nowrap"}}>{p.price} ฿</span>
+                      )}
+                    </div>
+                    <div style={{flex:1,position:"relative",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                      <div style={{width:qrSz,height:qrSz}}>
+                        {qrMap[p.sku]
+                          ? <img src={qrMap[p.sku]} alt={p.sku} style={{width:"100%",height:"100%",objectFit:"contain"}}/>
+                          : <div style={{width:"100%",height:"100%",background:"#f0f0f0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:"#aaa"}}>QR</div>
+                        }
+                      </div>
+                      <div style={{position:"absolute",bottom:0,right:0,width:28,height:28,opacity:.65}}>
+                        <img src={logoSrc} alt="logo" style={{width:"100%",height:"100%",objectFit:"contain"}}
+                             onError={e => e.currentTarget.style.display="none"}/>
+                      </div>
+                    </div>
+                    <div style={{fontSize:10,fontFamily:"Kanit,sans-serif",fontWeight:500,color:"#333",textAlign:"center",letterSpacing:.5,flexShrink:0}}>{p.sku}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()
       ) : (
         /* Sticker preview — actual 50×25mm proportions (2:1), scaled up 3× for readability */
         <div className="no-print" style={{display:"flex",flexDirection:"column",gap:9,padding:"4px 0"}}>
