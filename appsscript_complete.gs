@@ -2587,24 +2587,18 @@ function doPost(e) {
     // 🆕 สร้าง Form + จองเลขโมเดล (D05) — role ที่เพิ่มสินค้าได้ (warehouse) + owner/dev
     if (data.action === 'reserveForm')         return reserveFormHandler_(ss, data, actor);
 
-    // มีการแก้ข้อมูล → ล้าง cache ให้ doGet ครั้งถัดไปคำนวณใหม่ (ข้อมูลไม่ค้าง)
-    invalidateCache_(true); // clear payload cache เท่านั้น — ห้าม bump dmj_last_write_ts ก่อน conflict check
-
-    // ─── Stock Transfer (Batch): คลัง → หน้าร้าน หลาย SKU ในครั้งเดียว ───
-    if (data.transferStockBatch) {
-      return transferStockBatch(ss, data.list || [], actor, data.clientLoadedAt, data.tid);
-    }
-
-    // ─── Stock Transfer (Batch) → Central: หักคลังอย่างเดียว ไม่ยิง ZORT ไม่แตะหน้าร้าน ───
-    if (data.transferStockBatchCentral) {
-      return transferStockBatchCentral(ss, data.list || [], actor, data.tid);
-    }
-
-    // ─── Zero Stock: ตั้ง WH qty=0 ใน Sheets + ZORT (สินค้าหมด ไม่ได้จัด) ───
-    if (data.zeroStock) {
-      return zeroStockItem_(ss, data.sku, actor);
-    }
-
+    // ─── 🧾 ใบเสนอราคา / ใบแจ้งหนี้ / ใบกำกับภาษี (Phase A) ─────────────────────
+    // **ย้ายมาอยู่เหนือ `invalidateCache_(true)`** — ทั้งกลุ่มนี้เขียนลง ZORT + Audit Log +
+    // ชีตของตัวเอง (`SHEET_QUOTE_SALE` / `SHEET_INVOICE_NUM` / `SHEET_QUOTE_DRAFTS`) ซึ่ง
+    // **ไม่มีชีตไหนอยู่ใน `PAYLOAD_SOURCE_SHEETS_`** → payload ที่ build ใหม่จะเหมือนเดิมทุกไบต์
+    // เดิมทุกใบเสนอราคา/ใบกำกับที่ออก = ล้าง payload cache ทั้ง 9 คีย์ (3 variant × 3 encoding)
+    // + ก้อน stocklite ทิ้ง แล้วคนเปิดแอปคนถัดไปต้องรอ `buildFullData_` (วัดจริง 7.6-18 วิ)
+    // ทั้งที่ไม่มีข้อมูลอะไรเปลี่ยนเลย · ร้านออกใบเสนอราคาทั้งวัน = cache ไม่มีวันอุ่น
+    // ⚠️ `approveQuotation` สั่งให้ ZORT สร้างออเดอร์ขาย (ตัดสต็อกฝั่ง ZORT) — **แต่ตัวเลข
+    //    สต็อกในชีตเราไม่ได้ผูกกับ ZORT แบบสด** มันมาจาก `syncZortBoth` (ทุก 2 ชม.) ซึ่ง
+    //    เรียก `invalidateCache_()` ของมันเอง → ไม่มีข้อมูลใน payload เปลี่ยน ณ จังหวะนี้
+    // ⚠️ `createSaleBill` **ห้ามย้ายมาที่นี่** — มันเรียก `deductFrontStoreForSale_` ซึ่งเขียน
+    //    `SHEET_PRODUCTS` (คอลัมน์ G) จริง = อยู่ใน payload ต้องล้าง cache ตามเดิม
     // ─── Void Quotation: ปิดใบเสนอราคาค้าง (ไม่อนุมัติ) ใน ZORT ───
     if (data.voidQuotation) {
       return voidZortQuotation_(data.quotationId, data.quotationNumber, actor);
@@ -2623,6 +2617,51 @@ function doPost(e) {
     // ─── ออกเลขที่ใบแจ้งหนี้ของเราเอง (ผูกกับเลขที่ใบเสนอราคาต้นทาง — ในชีตเรา ไม่แตะ ZORT) ───
     if (data.getInvoiceNumber) {
       return nextInvoiceNumber_(data.quotationNumber, actor);
+    }
+
+    if (data.issueFullTaxInvoice) {
+      return issueFullTaxInvoice(data.orderNumber, data.customer || {}, actor, data.orderId);
+    }
+
+    // ─── ใบเสนอราคาจากเว็บ (sales staff สร้างเองแทนเข้า ZORT UI) ───
+    // ผู้ทำใบเสนอราคา (salesRep) ทับด้วยชื่อจาก session เสมอถ้ามี — ห้ามให้พิมพ์เอง
+    // (เจ้าของขอ 2026-07-30: กันพิมพ์ชื่อคนอื่นผิดคนบนเอกสารที่ส่งลูกค้า)
+    if (data.createQuotation) {
+      var q1 = data.quote || {};
+      if (_sess) q1 = Object.assign({}, q1, { salesRep: _sess.displayName || _sess.lineDisplayName || q1.salesRep });
+      return createQuotation(ss, q1, actor);
+    }
+    if (data.saveQuotationDraft) {
+      var q2 = data.quote || {};
+      if (_sess) q2 = Object.assign({}, q2, { salesRep: _sess.displayName || _sess.lineDisplayName || q2.salesRep });
+      return saveQuotationDraft(ss, q2, actor);
+    }
+    // แก้ไขใบเสนอราคาเดิม (เฉพาะใบที่ลูกค้ายังไม่อนุมัติ — frontend โชว์ปุ่มเฉพาะตาราง "รออนุมัติ")
+    if (data.editQuotation) {
+      var q3 = data.quote || {};
+      if (_sess) q3 = Object.assign({}, q3, { salesRep: _sess.displayName || _sess.lineDisplayName || q3.salesRep });
+      return editQuotation(ss, q3, actor);
+    }
+    if (data.deleteQuotationDraft) {
+      return deleteQuotationDraft(ss, data.draftId, actor);
+    }
+
+    // มีการแก้ข้อมูล → ล้าง cache ให้ doGet ครั้งถัดไปคำนวณใหม่ (ข้อมูลไม่ค้าง)
+    invalidateCache_(true); // clear payload cache เท่านั้น — ห้าม bump dmj_last_write_ts ก่อน conflict check
+
+    // ─── Stock Transfer (Batch): คลัง → หน้าร้าน หลาย SKU ในครั้งเดียว ───
+    if (data.transferStockBatch) {
+      return transferStockBatch(ss, data.list || [], actor, data.clientLoadedAt, data.tid);
+    }
+
+    // ─── Stock Transfer (Batch) → Central: หักคลังอย่างเดียว ไม่ยิง ZORT ไม่แตะหน้าร้าน ───
+    if (data.transferStockBatchCentral) {
+      return transferStockBatchCentral(ss, data.list || [], actor, data.tid);
+    }
+
+    // ─── Zero Stock: ตั้ง WH qty=0 ใน Sheets + ZORT (สินค้าหมด ไม่ได้จัด) ───
+    if (data.zeroStock) {
+      return zeroStockItem_(ss, data.sku, actor);
     }
 
     // ─── Record Unscanned Sale: นับสต็อกแล้วของหาย = ขายออก (บวก soldQty ไม่แตะเงิน) ───
@@ -2715,33 +2754,6 @@ function doPost(e) {
     if (data.lookupSaleBill) {
       return lookupSaleBill(data.orderNumber);
     }
-    if (data.issueFullTaxInvoice) {
-      return issueFullTaxInvoice(data.orderNumber, data.customer || {}, actor, data.orderId);
-    }
-
-    // ─── ใบเสนอราคาจากเว็บ (sales staff สร้างเองแทนเข้า ZORT UI) ───
-    // ผู้ทำใบเสนอราคา (salesRep) ทับด้วยชื่อจาก session เสมอถ้ามี — ห้ามให้พิมพ์เอง
-    // (เจ้าของขอ 2026-07-30: กันพิมพ์ชื่อคนอื่นผิดคนบนเอกสารที่ส่งลูกค้า)
-    if (data.createQuotation) {
-      var q1 = data.quote || {};
-      if (_sess) q1 = Object.assign({}, q1, { salesRep: _sess.displayName || _sess.lineDisplayName || q1.salesRep });
-      return createQuotation(ss, q1, actor);
-    }
-    if (data.saveQuotationDraft) {
-      var q2 = data.quote || {};
-      if (_sess) q2 = Object.assign({}, q2, { salesRep: _sess.displayName || _sess.lineDisplayName || q2.salesRep });
-      return saveQuotationDraft(ss, q2, actor);
-    }
-    // แก้ไขใบเสนอราคาเดิม (เฉพาะใบที่ลูกค้ายังไม่อนุมัติ — frontend โชว์ปุ่มเฉพาะตาราง "รออนุมัติ")
-    if (data.editQuotation) {
-      var q3 = data.quote || {};
-      if (_sess) q3 = Object.assign({}, q3, { salesRep: _sess.displayName || _sess.lineDisplayName || q3.salesRep });
-      return editQuotation(ss, q3, actor);
-    }
-    if (data.deleteQuotationDraft) {
-      return deleteQuotationDraft(ss, data.draftId, actor);
-    }
-
     // ─── Order Management ───
     if (data.deleteOrder) {
       return deleteOrderRow(ss, data.orderId, actor, data.sku);
@@ -12855,8 +12867,7 @@ function setQuoteSale_(quoteNumber, sale, actor) {
     } else {
       sh.appendRow([num, saleName, actor || "owner", stamp]);
     }
-    CacheService.getScriptCache().remove('pending_quotes_v1'); // ให้ View ดึงใหม่เห็นชื่อเซล
-    CacheService.getScriptCache().remove('quote_summary_v1');
+    invalidateQuoteCaches_();   // ให้ View ดึงใหม่เห็นชื่อเซล
     return jsonOut({ ok: true });
   } catch (e) {
     return jsonOut({ ok: false, error: String(e) });
@@ -13223,8 +13234,7 @@ function voidZortQuotation_(quotationId, quotationNumber, actor) {
       const err = zortRespError_(res);
       Logger.log("VoidQuotation [" + t.label + "] HTTP " + code + " — " + text.substring(0, 200));
       if (code === 200 && !err) {
-        CacheService.getScriptCache().remove('pending_quotes_v1'); // ให้รายการค้างดึงใหม่
-        CacheService.getScriptCache().remove('quote_summary_v1');
+        invalidateQuoteCaches_();   // ให้รายการค้างดึงใหม่
         try { writeAuditLog_(actor || "owner", "ปิดใบเสนอราคา (ไม่อนุมัติ)", quotationNumber || quotationId, t.label); } catch (e) {}
         return jsonOut({ ok: true, shape: t.label });
       }
@@ -13274,9 +13284,9 @@ function approveQuotation(ss, quotationId, quotationNumber, actor) {
       auditDetail_({ after: { orderId: orderId, orderNumber: orderNumber, quotationNumber: qNum || qId },
         note: "ผ่าน /Quotation/ApproveQuotation (native)" }));
 
-    CacheService.getScriptCache().remove('pending_quotes_v1');
-    CacheService.getScriptCache().remove('quote_summary_v1');
-    invalidateCache_();
+    // Phase A: อนุมัติ = ZORT สร้างออเดอร์ขายให้ + Audit Log · ตัวเลขสต็อกในชีตเรามาจาก
+    // `syncZortBoth` (ทุก 2 ชม.) ซึ่งล้าง cache ของมันเอง → ณ จังหวะนี้ payload ไม่เปลี่ยน
+    invalidateQuoteCaches_();
     return ok({ orderId: orderId, orderNumber: orderNumber, approved: true });
   } finally {
     lock.releaseLock();
@@ -13794,6 +13804,34 @@ function disableKeepWarm() {
     if (t.getHandlerFunction() === 'keepWarm_') { ScriptApp.deleteTrigger(t); n++; }
   });
   return 'keep-warm ปิดแล้ว (ลบ trigger ' + n + ' ตัว)';
+}
+
+// ── Phase A: "แก้อะไร ต้องล้างอะไร" — ขอบเขตของ payload cache ───────────────────
+// `buildFullData_` ประกอบ payload จาก **ชีตชุดนี้เท่านั้น** (ไล่จากตัว read ทุกตัวที่มันเรียก)
+// + Script Property `STOCK_THRESHOLDS` (คีย์ `thresholds`) + cache `recentCountedSkus`
+// การเขียนที่ไม่แตะอะไรในชุดนี้เลย **ห้ามล้าง payload cache และห้าม bump `dmj_last_write_ts`**:
+//   · ล้าง cache = คนเปิดแอปคนถัดไปต้องรอ `buildFullData_` ใหม่ (วัดจริง 7.6-18 วิ)
+//   · bump ts   = ทุกเครื่องที่ถาม `action=ver` เห็นว่า "เปลี่ยนแล้ว" → โหลด payload ทั้งก้อนซ้ำ
+//     ทั้งที่ข้อมูลเหมือนเดิมทุกไบต์
+// ⚠️ **ตารางนี้ต้องตรงกับสิ่งที่ `buildFullData_` อ่านจริงเสมอ** — เพิ่มชีตใหม่เข้า payload
+//    แล้วลืมเติมที่นี่ = การเขียนชีตนั้นจะถูกจัดว่า "ไม่กระทบ payload" แล้วคนอื่นเห็นข้อมูลเก่า
+//    ค้างถึง 180 วิ โดยไม่มี error ให้เห็น (มีเทสต์ใน tests/cache-domains.test.js คุมให้แล้ว)
+var PAYLOAD_SOURCE_SHEETS_ = [
+  'SHEET_PRODUCTS', 'SHEET_PRODUCT_META', 'SHEET_MONTHLY_SALES', 'SHEET_DAILY_SALES',
+  'SHEET_TRANSFERS', 'SHEET_TRANSFERS_HIST', 'SHEET_TRANSFER_HIST', 'SHEET_PURCHASES',
+  'SHEET_LOCKS', 'SHEET_ORDERS', 'SHEET_MTO_JOBS', 'SHEET_MTO_ITEMS',
+  'SHEET_FRONTSTORE_QTY', 'SHEET_UNSCANNED_SALE', 'SHEET_STOCK_CHECK',
+  'SHEET_IMAGE_URL', 'SHEET_HIDDEN_PRODUCTS',
+];
+
+// ล้างเฉพาะ cache ของ "โดเมนใบเสนอราคา" — ไม่แตะ payload/stocklite
+// เดิม 5 จุดเขียน 2 บรรทัดนี้ซ้ำกันเอง (บางจุดลืมตัวใดตัวหนึ่ง) → รวมมาไว้ที่เดียว
+function invalidateQuoteCaches_() {
+  try {
+    var c = CacheService.getScriptCache();
+    c.remove('pending_quotes_v1');
+    c.remove('quote_summary_v1');
+  } catch (err) { /* cache ล้มเหลวไม่เป็นไร — แค่รอ TTL 5 นาที */ }
 }
 
 function invalidateCache_(skipTsUpdate) {
@@ -15256,7 +15294,8 @@ function issueFullTaxInvoice(orderNumber, customer, actor, orderId) {
     writeAuditLog_(actor || "ไม่ระบุ", "ออกใบกำกับภาษีย้อนหลัง", num,
       auditDetail_({ after: { documentNumber: documentNumber || "(ไม่ทราบเลข)", customer: c.name || "", taxId: c.taxId || "" },
         note: "ออกใบกำกับภาษีเต็มรูปแบบย้อนหลังผ่าน POS" }));
-    invalidateCache_();
+    // Phase A: ออกใบกำกับย้อนหลัง = เขียน ZORT (EditOrderInfo/AddDocumentOrder) + Audit Log
+    // ไม่แตะชีตไหนใน PAYLOAD_SOURCE_SHEETS_ เลย → payload ไม่เปลี่ยน จึงไม่ล้าง cache/ไม่ bump ts
     return ok({ orderNumber: num, documentNumber: documentNumber });
   } finally {
     lock.releaseLock();
@@ -15354,8 +15393,9 @@ function createQuotation(ss, data, actor) {
 
     if (data.draftId) { try { deleteQuotationDraft_(ss, data.draftId); } catch (e) { Logger.log("ลบร่างหลังส่งไม่สำเร็จ (ไม่ critical): " + e); } }
 
-    invalidateCache_();
-    CacheService.getScriptCache().remove('quote_summary_v1'); // ใบใหม่ต้องโผล่ในแท็บใบเสนอราคาทันที ไม่รอ cache 5 นาที
+    // Phase A: ใบเสนอราคาอยู่ใน ZORT + Audit Log — ไม่มีชีตไหนใน PAYLOAD_SOURCE_SHEETS_ ถูกแตะ
+    // จึงล้างเฉพาะ cache ของโดเมนตัวเอง (ใบใหม่ต้องโผล่ในแท็บใบเสนอราคาทันที ไม่รอ TTL 5 นาที)
+    invalidateQuoteCaches_();
     return ok({ quotationId: qId, quotationNumber: qNumber, totals: totals });
   } finally {
     lock.releaseLock();
@@ -15463,8 +15503,8 @@ function editQuotation(ss, data, actor) {
       auditDetail_({ after: { total: totals.grandTotal, items: list.length, customer: cust.name || "", salesRep: data.salesRep || "" },
         note: "แก้ไขผ่านเว็บแอป" + (infoErr ? " (ข้อมูลลูกค้าอัปเดตไม่สำเร็จ: " + infoErr + ")" : "") }));
 
-    invalidateCache_();
-    CacheService.getScriptCache().remove('quote_summary_v1'); // ยอด/รายการที่แก้ต้องอัปเดตในแท็บใบเสนอราคาทันที
+    // Phase A: แก้ใบเสนอราคา = เขียน ZORT + Audit Log เท่านั้น (ดู PAYLOAD_SOURCE_SHEETS_)
+    invalidateQuoteCaches_();   // ยอด/รายการที่แก้ต้องอัปเดตในแท็บใบเสนอราคาทันที
     return ok({ quotationId: qId, quotationNumber: data.quotationNumber || null, totals: totals,
       infoWarning: infoErr || null });
   } finally {
@@ -16579,7 +16619,7 @@ function savePrefixRegistryHandler_(ss, data, actor) {
     SpreadsheetApp.flush();
     writeAuditLog_(actor||'ไม่ระบุ', 'ทะเบียน Prefix', v.prefix,
       auditDetail_({ after:{ status:status, label:label }, note:'บันทึกทะเบียน Prefix' }));
-    invalidateCache_();
+    // Phase A: ทะเบียนสินค้าเป็นชีตของตัวเอง ไม่อยู่ใน PAYLOAD_SOURCE_SHEETS_ → ไม่ล้าง payload cache
     return ok({ prefix:v.prefix, status:status });
   } finally { lock.releaseLock(); }
 }
@@ -16674,7 +16714,7 @@ function saveFamilyRegistryHandler_(ss, data, actor) {
           sh.getRange(rowNum, FAMILY_REG_COL.UPDATEDBY).setValue(actor||'');
           SpreadsheetApp.flush();
           writeAuditLog_(actor||'ไม่ระบุ', 'ทะเบียน Family', editId, auditDetail_({ after:{ name:v.name }, note:'แก้ Family' }));
-          invalidateCache_();
+          // Phase A: ทะเบียนสินค้าเป็นชีตของตัวเอง ไม่อยู่ใน PAYLOAD_SOURCE_SHEETS_ → ไม่ล้าง payload cache
           return ok({ familyId:editId, name:v.name, updated:true });
         }
       }
@@ -16686,7 +16726,7 @@ function saveFamilyRegistryHandler_(ss, data, actor) {
     sh.appendRow([id, v.name, 'ACTIVE', now, actor||'', now, actor||'', '']);
     SpreadsheetApp.flush();
     writeAuditLog_(actor||'ไม่ระบุ', 'ทะเบียน Family', id, auditDetail_({ after:{ name:v.name }, note:'สร้าง Family ใหม่' }));
-    invalidateCache_();
+    // Phase A: ทะเบียนสินค้าเป็นชีตของตัวเอง ไม่อยู่ใน PAYLOAD_SOURCE_SHEETS_ → ไม่ล้าง payload cache
     return ok({ familyId:id, name:v.name, created:true });
   } finally { lock.releaseLock(); }
 }
@@ -16828,14 +16868,14 @@ function saveVariantRegistryHandler_(ss, data, actor) {
         var rowNum = i + 2;
         sh.getRange(rowNum, VARIANT_REG_COL.LABEL).setValue(v.label);
         if (data.status) sh.getRange(rowNum, VARIANT_REG_COL.STATUS).setValue(String(data.status).trim().toUpperCase());
-        SpreadsheetApp.flush(); invalidateCache_();
+        SpreadsheetApp.flush();   // Phase A: ทะเบียนสินค้าเป็นชีตของตัวเอง ไม่อยู่ใน PAYLOAD_SOURCE_SHEETS_ → ไม่ล้าง payload cache
         return ok({ axis:v.axis, code:v.code, label:v.label, updated:true });
       }
     }
     sh.appendRow([v.axis, v.code, v.label, 'ACTIVE', now, actor||'', '']);
     SpreadsheetApp.flush();
     writeAuditLog_(actor||'ไม่ระบุ', 'ทะเบียน Variant', v.axis + ':' + v.code, auditDetail_({ after:{ label:v.label }, note:'บันทึก Variant value' }));
-    invalidateCache_();
+    // Phase A: ทะเบียนสินค้าเป็นชีตของตัวเอง ไม่อยู่ใน PAYLOAD_SOURCE_SHEETS_ → ไม่ล้าง payload cache
     return ok({ axis:v.axis, code:v.code, label:v.label, created:true });
   } finally { lock.releaseLock(); }
 }
@@ -17019,7 +17059,7 @@ function reserveFormHandler_(ss, data, actor) {
     writeAuditLog_(actor||'ไม่ระบุ','ทะเบียน Form',formId,
       auditDetail_({ after:{ prefix:prefix, model:model, baseName:baseName, axis:axis, familyId:familyId },
                      note:'สร้าง Form + จองโมเดล (per-prefix reservation)' }));
-    invalidateCache_();
+    // Phase A: ทะเบียนสินค้าเป็นชีตของตัวเอง ไม่อยู่ใน PAYLOAD_SOURCE_SHEETS_ → ไม่ล้าง payload cache
     return ok({ created:true, formId:formId, prefix:prefix, model:model,
                 axis:axis, familyId:familyId||null, baseName:baseName });
   } finally { lock.releaseLock(); }
