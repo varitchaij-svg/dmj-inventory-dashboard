@@ -6867,7 +6867,12 @@ const stickerPageW_ = (cfg) => cfg.w * cfg.cols + cfg.gap * (cfg.cols - 1);
 function LabelPrintView({ data, initItems, onInitConsumed }) {
   const { products } = data;
   const [items, setItems] = uS([]);
-  const [printMode, setPrintMode] = uS("a4"); // "a4" | "sticker"
+  const [printMode, setPrintMode] = uS("a4"); // "a4" | "card" | "sticker" | "sticker3" | "greenery"
+  // "greenery" = Static A4 template (ไม่ผูกกับสินค้าเลย) — embed PDF ต้นฉบับตรง ๆ (Excel export
+  // จริง มี font/artwork/icon ครบ) แทนการ recreate ด้วย HTML/CSS ตามที่เจ้าของสั่ง (print fidelity
+  // สูงสุด) · asset: greenery-sticker-long-flag.pdf (root, เหมือน logo.png/jsbarcode.min.js)
+  const isStaticTemplate = printMode === "greenery";
+  const greeneryFrameRef = React.useRef(null);
 
   // Auto-populate from order summary "Print Label" button
   uE(() => {
@@ -7263,10 +7268,12 @@ ${labelsHTML}
                 ? "การ์ดสินค้า · A4 · 3×3 = 9 การ์ด/หน้า · มี QR + จำนวนเข้า"
                 : printMode === "sticker3"
                 ? "สติ๊กเกอร์ Direct Thermal · 32×25mm · Roll · gap 3mm · 3 ช่อง/แถว (หน้ากว้าง 102mm)"
+                : printMode === "greenery"
+                ? "Static Template · A4 · 3×17 = 51 ดวง/หน้า · ไม่ต้องเลือกสินค้า พิมพ์ได้ทันที"
                 : "สติ๊กเกอร์ · 50×25mm · gap 3mm · แถวเดียว"}
             </div>
           </div>
-          {(printMode === "card" ? cardList.length : labelList.length) > 0 && (
+          {(isStaticTemplate || (printMode === "card" ? cardList.length : labelList.length) > 0) && (
             <div className="page-actions">
               {printMode === "a4" ? (
                 <button className="btn primary" onClick={() => window.print()}
@@ -7277,6 +7284,15 @@ ${labelsHTML}
                 <button className="btn primary" onClick={() => window.print()}
                         style={{padding:"10px 20px",fontWeight:700,fontSize:14}}>
                   🖨️ พิมพ์ {cardList.length} การ์ด ({cardPages.length} หน้า A4)
+                </button>
+              ) : isStaticTemplate ? (
+                // พิมพ์ผ่าน contentWindow ของ iframe ที่ embed PDF ตรง ๆ — ขอบเขตการพิมพ์
+                // ถูกจำกัดอยู่แค่เอกสาร PDF นั้นเองโดย browser (ไม่ใช่ทั้งหน้าเว็บ) จึงไม่ต้องมี
+                // @media print/@page ของตัวเองเลย ไม่กระทบระบบพิมพ์อื่นทั้งหมด
+                <button className="btn primary"
+                        onClick={() => { try { greeneryFrameRef.current?.contentWindow?.print(); } catch (e) { window.open("greenery-sticker-long-flag.pdf", "_blank"); } }}
+                        style={{padding:"10px 20px",fontWeight:700,fontSize:14}}>
+                  🖨️ พิมพ์ A4 (Greenery Long Flag)
                 </button>
               ) : (
                 <button className="btn primary" onClick={printVaseLabels}
@@ -7295,6 +7311,7 @@ ${labelsHTML}
             {id:"card",     label:"📇 การ์ดสินค้า", sub:"QR + จำนวนเข้า · 9/หน้า"},
             {id:"sticker",  label:"🏷️ สติ๊กเกอร์", sub:"50×25mm · แถวเดียว"},
             {id:"sticker3", label:"🏷️ สติ๊กเกอร์ 32×25 — 3 ช่อง", sub:"32×25mm · Roll · Gap 3mm · 3 ช่อง"},
+            {id:"greenery", label:"📄 A4 — Greenery Sticker Long Flag", sub:"Static Template · พิมพ์ได้ทันที"},
           ].map(m => (
             <button key={m.id} onClick={() => setPrintMode(m.id)} style={{
               padding:"8px 14px", borderRadius:10, cursor:"pointer", fontFamily:"inherit",
@@ -7311,8 +7328,8 @@ ${labelsHTML}
         </div>
 
         {/* ── ชนิดโค้ด: QR (ค่าเริ่มต้น) / Barcode — ใช้ได้เฉพาะโหมด A4/สติ๊กเกอร์ ที่พิมพ์
-             โค้ดเดี่ยวต่อป้าย (โหมดการ์ดยังเป็น QR อย่างเดียว ไม่อยู่ในสโคปนี้) ── */}
-        {printMode !== "card" && (
+             โค้ดเดี่ยวต่อป้าย (โหมดการ์ด/Static Template ไม่มี QR/Barcode ให้เลือกเลย) ── */}
+        {printMode !== "card" && !isStaticTemplate && (
           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,flexWrap:"wrap"}}>
             <span style={{fontSize:11,color:"var(--muted)",fontWeight:600}}>ชนิดโค้ด:</span>
             <div style={{display:"inline-flex",border:"1.5px solid var(--bdr)",borderRadius:10,padding:3,gap:3,background:"var(--paper)"}}>
@@ -7379,7 +7396,9 @@ ${labelsHTML}
           </div>
         )}
 
-        {/* Add product row */}
+        {/* Add product row + Items list — Static Template (greenery) ไม่ต้องมีเลย
+            (ไม่เลือกสินค้า/ค้นหา SKU/กรอกจำนวน/QR/เพิ่มรายการ ตามที่เจ้าของสั่ง) */}
+        {!isStaticTemplate && (<>
         <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14,alignItems:"flex-end"}}>
           <div style={{flex:1,minWidth:220}}>
             <div style={{fontSize:11,color:"var(--muted)",marginBottom:4,fontWeight:600}}>{t("ค้นหาสินค้า / พิมพ์ SKU โดยตรง")}</div>
@@ -7501,8 +7520,9 @@ ${labelsHTML}
             <div style={{fontSize:12}}>{t('ค้นหาสินค้าหรือพิมพ์ SKU ด้านบน แล้วกด Enter หรือ "+ เพิ่ม"')}</div>
           </div>
         )}
+        </>)}
 
-        {(printMode === "card" ? cardList.length : labelList.length) > 0 && (
+        {(isStaticTemplate || (printMode === "card" ? cardList.length : labelList.length) > 0) && (
           <div style={{fontSize:12,color:"var(--muted)",marginBottom:12,padding:"8px 12px",
                        background:"#fff8e1",borderRadius:8,border:"1px solid #f59e0b"}}>
             💡 ตัวอย่างด้านล่างคือ preview · กด <b>🖨️ พิมพ์</b> เพื่อส่งไปปริ้นเตอร์
@@ -7511,7 +7531,23 @@ ${labelsHTML}
       </div>
 
       {/* ── Preview area — switches by printMode ── */}
-      {printMode === "a4" ? (
+      {isStaticTemplate ? (
+        /* Static A4 template — embed ไฟล์ PDF ต้นฉบับตรง ๆ (font/artwork/icon ครบตามต้นฉบับ
+           Excel export) ไม่ recreate ด้วย HTML/CSS ตามที่เจ้าของสั่ง (ต้องการ print fidelity สูงสุด)
+           · aspect-ratio 210:297 คุมสัดส่วนบนจอ ไม่ใช้ transform:scale() แตะขนาดจริงตอนพิมพ์
+           · พิมพ์ผ่าน greeneryFrameRef.contentWindow.print() (ปุ่มอยู่ด้านบน) — ขอบเขตการพิมพ์
+             ถูก scope อยู่แค่เอกสาร PDF นี้โดยตัว browser เอง ไม่ต้องมี @page/@media print ของตัวเอง
+             จึงไม่กระทบระบบพิมพ์ A4/การ์ด/สติ๊กเกอร์เดิมเลยแม้แต่น้อย
+           ⚠️ ห้ามห่อ .no-print — ถ้าซ่อนด้วย display:none (ผลของ .no-print ตอน @media print)
+           บาง browser จะไม่ render เนื้อหาให้พิมพ์ (เหมือน .label-page ของโหมด A4 เดิมที่ก็ไม่ห่อ
+           .no-print เช่นกัน ด้วยเหตุผลเดียวกัน) */
+        <div style={{maxWidth:600,margin:"0 auto"}}>
+          <iframe ref={greeneryFrameRef}
+            src="greenery-sticker-long-flag.pdf#toolbar=0"
+            title="Greenery Sticker Long Flag — A4 Preview"
+            style={{width:"100%",aspectRatio:"210 / 297",border:"1px solid var(--bdr)",borderRadius:8,background:"#fff"}}/>
+        </div>
+      ) : printMode === "a4" ? (
         /* A4 pages (visible on print too) */
         pages.map((page, pi) => (
           <div key={pi} className="label-page">

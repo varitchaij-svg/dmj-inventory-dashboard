@@ -116,9 +116,9 @@ describe('A4 preview — รูเจาะติดทุกโหมด, SKU t
   });
 });
 
-describe('ปุ่มสลับ QR/Barcode — เฉพาะโหมด A4/สติ๊กเกอร์ ไม่ใช่โหมดการ์ด', () => {
-  it('ห่อด้วย printMode !== "card"', () => {
-    expect(ANA).toMatch(/\{printMode !== "card" && \(\s*\n\s*<div style=\{\{display:"flex",alignItems:"center",gap:8,marginBottom:14/);
+describe('ปุ่มสลับ QR/Barcode — เฉพาะโหมด A4/สติ๊กเกอร์ ไม่ใช่โหมดการ์ด/Static Template', () => {
+  it('ห่อด้วย printMode !== "card" && !isStaticTemplate', () => {
+    expect(ANA).toMatch(/\{printMode !== "card" && !isStaticTemplate && \(\s*\n\s*<div style=\{\{display:"flex",alignItems:"center",gap:8,marginBottom:14/);
   });
   it('มีตัวเลือกครบ qr + barcode', () => {
     const seg = grab(ANA, /\[\{id:"qr",label:"🔲 QR"\},\{id:"barcode",label:"▤ Barcode"\}\]/, 'code type segmented control');
