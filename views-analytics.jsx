@@ -7055,8 +7055,12 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
     const cols = cfg.cols;
     const pageW = stickerPageW_(cfg);   // รวม gap แล้ว (32×3 + 3×2 = 102mm)
     const isBc = codeType === "barcode";
+    // sticker3 (32×25 3 ช่อง) มี layout ต่างจาก sticker เดิม (50×25 แถวเดียว) — โลโก้แนวนอน
+    // มุมบนซ้าย + ราคาบนขวา, QR/บาร์โค้ดกลาง, ชื่อ+SKU ล่าง (ดู oneLabelSticker3 ด้านล่าง)
+    // ⚠️ ต้องไม่แตะ template ของ sticker เดิม (oneLabelDefault) เด็ดขาด
+    const isS3 = printMode === "sticker3";
 
-    const oneLabel = (p) => {
+    const oneLabelDefault = (p) => {
       const priceStr = p.price != null && p.price > 0 ? `${escHtml(String(p.price))} ฿` : "";
       // ชนิดโค้ด: QR (เดิม, absolute logo มุมล่างขวา) หรือ Barcode (แถวเดียว บาร์โค้ด+โลโก้)
       // — บาร์โค้ดมีเลข SKU แสดงในตัวอยู่แล้ว (displayValue) จึงไม่มีแถว .lsku ซ้ำ
@@ -7081,6 +7085,35 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
         ${isBc ? "" : `<div class="lsku">${p.sku}</div>`}
       </div>`;
     };
+
+    // sticker3: โลโก้แนวนอน (สัดส่วนเดิม ไม่บีบ/ไม่หมุน — height คุม, width:auto) มุมบนซ้าย ·
+    // ราคามุมบนขวา · QR/บาร์โค้ดกึ่งกลาง · ชื่อสินค้า (สูงสุด 2 บรรทัด) + SKU ด้านล่าง
+    const oneLabelSticker3 = (p) => {
+      const priceStr = p.price != null && p.price > 0 ? `${escHtml(String(p.price))} ฿` : "";
+      const midHtml = isBc
+        ? `${barcodeMap[p.sku]
+            ? `<img src="${barcodeMap[p.sku]}" class="s3-bc" style="object-fit:contain;"/>`
+            : `<div class="s3-bc" style="background:#f0f0f0;display:flex;align-items:center;justify-content:center;font-size:5px;color:#aaa;">|||</div>`}`
+        : `<div class="s3-qr">${
+            qrMap[p.sku]
+              ? `<img src="${qrMap[p.sku]}" style="width:100%;height:100%;display:block;"/>`
+              : `<div style="width:100%;height:100%;background:#f0f0f0;display:flex;align-items:center;justify-content:center;font-size:5px;color:#aaa;">QR</div>`
+          }</div>`;
+      return `
+      <div class="lbl">
+        <div class="s3-top">
+          <img src="${logoSrc}" class="s3-logo" onerror="this.style.display='none'"/>
+          ${priceStr ? `<span class="s3-price">${priceStr}</span>` : ""}
+        </div>
+        <div class="s3-mid">${midHtml}</div>
+        <div class="s3-bottom">
+          <div class="s3-name">${escHtml(p.name)}</div>
+          ${isBc ? "" : `<div class="s3-sku">${p.sku}</div>`}
+        </div>
+      </div>`;
+    };
+
+    const oneLabel = isS3 ? oneLabelSticker3 : oneLabelDefault;
 
     // จัดดวงเป็นแถวละ cols ดวง — 1 แถว = 1 หน้า (page-break) บนม้วน
     //   จำนวน = จำนวนดวง (ไม่ใช่แถว) → แถวสุดท้ายอาจไม่เต็ม เช่น 7 = 3+3+1
@@ -7122,6 +7155,26 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
   .lbc-row { width:100%; height:100%; display:flex; align-items:center; justify-content:space-between; gap:8px; }
   .lbc { flex:1; min-width:0; height:60px; }
   .llogo-inline { flex-shrink:0; width:36px; height:36px; object-fit:contain; opacity:.65; }
+  ${isS3 ? `
+  /* sticker3 (32×25 · 3 ช่อง) — โลโก้แนวนอนมุมบนซ้าย + ราคาบนขวา, QR กลาง, ชื่อ+SKU ล่าง
+     ⚠️ scope เฉพาะ isS3 — ไม่มีผลกับ .lbl ของ sticker เดิม (คนละ class ทั้งหมด) */
+  /* justify-content:flex-start + margin-left:auto บนราคา (ไม่ใช้ space-between) — ถ้าโลโก้โหลด
+     ไม่สำเร็จ (onerror ซ่อนทิ้ง) เหลือแค่ราคาตัวเดียวใน flex, space-between จะดันราคาไปชิดซ้าย
+     แทนขวา · margin-left:auto ยังดันราคาไปขวาสุดเสมอไม่ว่าโลโก้จะโหลดสำเร็จหรือไม่ */
+  .s3-top { display:flex; justify-content:flex-start; align-items:flex-start; gap:8px; flex-shrink:0; margin-bottom:3px; }
+  .s3-logo { height:27px; width:auto; object-fit:contain; display:block; } /* height คุม + width:auto = ไม่บีบสัดส่วน */
+  .s3-price { font-size:13px; font-weight:700; color:#111; white-space:nowrap; flex-shrink:0; margin-left:auto; }
+  .s3-mid { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; }
+  .s3-qr { width:78px; height:78px; }
+  .s3-bc { width:100%; height:54px; }
+  .s3-bottom { flex-shrink:0; text-align:center; margin-top:3px; }
+  .s3-name {
+    font-size:12px; font-weight:600; color:#111; line-height:1.15; font-family:"Kanit",sans-serif;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+    overflow:hidden; word-break:break-word;
+  }
+  .s3-sku { font-size:11px; font-family:"Kanit",sans-serif; font-weight:500; color:#333; letter-spacing:0.4px; margin-top:2px; }
+  ` : ""}
   /* Print: ${cfg.w}×${cfg.h}mm ต่อดวง · หน้ากว้าง ${pageW}mm (= ${cfg.w}×${cols} + gap×${cols - 1}) */
   @media print {
     @page { size: ${pageW}mm ${cfg.h}mm; margin: 0; }
@@ -7145,6 +7198,16 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
     .lsku { font-size:5pt; }
     .lbc { height:10mm; }
     .llogo-inline { width:8mm; height:8mm; }
+    ${isS3 ? `
+    .s3-top { margin-bottom:0.6mm; gap:2mm; }
+    .s3-logo { height:4.5mm; }
+    .s3-price { font-size:6.5pt; }
+    .s3-qr { width:13mm; height:13mm; }
+    .s3-bc { height:9mm; }
+    .s3-bottom { margin-top:0.4mm; }
+    .s3-name { font-size:6pt; }
+    .s3-sku { font-size:5.5pt; margin-top:0.3mm; }
+    ` : ""}
   }
 </style>
 </head><body>
@@ -7516,12 +7579,14 @@ ${labelsHTML}
           </div>
         ))
       ) : stickerCfg.cols > 1 ? (
-        /* Sticker preview (Roll หลายช่อง) — วาง cols ดวงต่อแถวด้วย flex-wrap เท่าขนาดจริง (×6)
-           row กว้าง = stickerPageW·6 (รวม gap) → wrap เป็น cols ดวง/แถว อัตโนมัติ เหมือนตอนพิมพ์ */
+        /* Sticker preview (Roll หลายช่อง — sticker3) — วาง cols ดวงต่อแถวด้วย flex-wrap เท่าขนาดจริง (×6)
+           row กว้าง = stickerPageW·6 (รวม gap) → wrap เป็น cols ดวง/แถว อัตโนมัติ เหมือนตอนพิมพ์
+           Layout: โลโก้แนวนอนมุมบนซ้าย (height คุม + width:auto = ไม่บีบสัดส่วน) + ราคาบนขวา ·
+           QR กึ่งกลาง · ชื่อสินค้า (สูงสุด 2 บรรทัด) + SKU ด้านล่าง — ตรงกับ printVaseLabels (.s3-*) */
         (() => {
           const SCALE = 6;
           const boxW = stickerCfg.w * SCALE, boxH = stickerCfg.h * SCALE, gapPx = stickerCfg.gap * SCALE;
-          const qrSz = Math.round(boxH * 0.42);
+          const qrSz = Math.round(boxH * 0.5);
           return (
             <div className="no-print" style={{padding:"4px 0"}}>
               <div style={{display:"flex",flexWrap:"wrap",gap:gapPx,width:stickerPageW*SCALE,maxWidth:"100%"}}>
@@ -7532,25 +7597,33 @@ ${labelsHTML}
                     display:"flex", flexDirection:"column",
                     padding:"6px 8px", overflow:"hidden", flexShrink:0,
                   }}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:4,flexShrink:0,marginBottom:3}}>
-                      <span style={{fontSize:11,fontWeight:600,color:"#111",fontFamily:"Kanit,sans-serif",flex:1,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{p.name}</span>
+                    {/* แถวบน: โลโก้แนวนอน (ห้ามหมุน/บีบ — height คุมเท่านั้น width:auto ตามสัดส่วนจริง) + ราคา
+                        justifyContent:"flex-start" + marginLeft:"auto" บนราคา (ไม่ใช้ space-between) —
+                        ถ้าโลโก้โหลดไม่สำเร็จ (onError ซ่อนทิ้ง) ราคาต้องยังชิดขวาเสมอ ไม่ใช่เลื่อนมาชิดซ้าย */}
+                    <div style={{display:"flex",justifyContent:"flex-start",alignItems:"flex-start",gap:8,flexShrink:0,marginBottom:3}}>
+                      <img src={logoSrc} alt="logo" style={{height:27,width:"auto",objectFit:"contain",display:"block"}}
+                           onError={e => e.currentTarget.style.display="none"}/>
                       {p.price != null && p.price > 0 && (
-                        <span style={{fontSize:11,fontWeight:700,color:"#111",fontFamily:"Kanit,sans-serif",flexShrink:0,whiteSpace:"nowrap"}}>{p.price} ฿</span>
+                        <span style={{fontSize:13,fontWeight:700,color:"#111",fontFamily:"Kanit,sans-serif",flexShrink:0,whiteSpace:"nowrap",marginLeft:"auto"}}>{p.price} ฿</span>
                       )}
                     </div>
-                    <div style={{flex:1,position:"relative",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                    {/* กลาง: QR — ไม่ชนโลโก้/ราคา/ชื่อ/SKU เพราะแยกแถวกันแล้ว */}
+                    <div style={{flex:1,minHeight:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
                       <div style={{width:qrSz,height:qrSz}}>
                         {qrMap[p.sku]
                           ? <img src={qrMap[p.sku]} alt={p.sku} style={{width:"100%",height:"100%",objectFit:"contain"}}/>
                           : <div style={{width:"100%",height:"100%",background:"#f0f0f0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:"#aaa"}}>QR</div>
                         }
                       </div>
-                      <div style={{position:"absolute",bottom:0,right:0,width:28,height:28,opacity:.65}}>
-                        <img src={logoSrc} alt="logo" style={{width:"100%",height:"100%",objectFit:"contain"}}
-                             onError={e => e.currentTarget.style.display="none"}/>
-                      </div>
                     </div>
-                    <div style={{fontSize:10,fontFamily:"Kanit,sans-serif",fontWeight:500,color:"#333",textAlign:"center",letterSpacing:.5,flexShrink:0}}>{p.sku}</div>
+                    {/* ล่าง: ชื่อสินค้า (สูงสุด 2 บรรทัด แล้วตัด) + SKU */}
+                    <div style={{flexShrink:0,textAlign:"center",marginTop:3}}>
+                      <div style={{
+                        fontSize:12,fontWeight:600,color:"#111",fontFamily:"Kanit,sans-serif",lineHeight:1.15,
+                        display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",wordBreak:"break-word",
+                      }}>{p.name}</div>
+                      <div style={{fontSize:11,fontFamily:"Kanit,sans-serif",fontWeight:500,color:"#333",letterSpacing:.4,marginTop:2}}>{p.sku}</div>
+                    </div>
                   </div>
                 ))}
               </div>
