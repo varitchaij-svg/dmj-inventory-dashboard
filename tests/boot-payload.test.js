@@ -294,6 +294,19 @@ describe('C. จุดเชื่อมต่อ (meta) — สิ่งที�
       .toBeLessThan(kw.indexOf('buildFullData_()'));
   });
 
+  it('🔐 ก้อน boot ไม่เปิดข้อมูลใหม่ให้ role ไหนเลย — ทุกคีย์เป็นของที่ role ต่ำสุด (lite) ได้อยู่แล้ว', () => {
+    // boot ใช้ cache ก้อนเดียวทุก role โดยตั้งใจ (build ครั้งเดียวอุ่นทั้งร้าน) → **ต้องพิสูจน์
+    // ว่าไม่มีคีย์ไหนที่ `PAYLOAD_VARIANT_DROPS_.lite` ตัดทิ้งหลุดเข้ามา** ไม่งั้น warehouse/
+    // frontstore/saler จะเห็นข้อมูลที่เดิมไม่เคยเห็น (เช่นต้นทุนใน purchases) โดยไม่มีอะไรบอก
+    const drops = grab(GS, /const PAYLOAD_VARIANT_DROPS_ = \{[\s\S]*?\n\};/);
+    const lite = drops.match(/lite:\s*\[([\s\S]*?)\]/)[1]
+      .replace(/'/g, '').split(',').map(x => x.trim()).filter(Boolean);
+    const { api } = makeRig();
+    const bootKeys = Object.keys(api.buildBootData_());
+    const leaked = bootKeys.filter(k => lite.indexOf(k) >= 0);
+    expect(leaked, 'ก้อน boot มีคีย์ที่ role lite ไม่ควรได้').toEqual([]);
+  });
+
   it('เส้นทาง payload เต็มยังอยู่ครบ (fallback สำหรับ client เก่า)', () => {
     const DOGET = grab(GS, /function doGet\(e\) \{[\s\S]*?\n\}\n/);
     expect(DOGET).toMatch(/buildFullData_\(\)/);
