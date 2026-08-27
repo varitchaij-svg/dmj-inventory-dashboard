@@ -3232,7 +3232,14 @@ function doGet(e) {
         ' build=' + (_tBuilt - _tReq) + 'ms shape+cache=' + (Date.now() - _tBuilt) + 'ms'
         + (hadLock ? '' : ' (build ซ้อน — รอคิวไม่ทัน)')
         + (_staleBuild ? ' (มีคนบันทึกระหว่าง build — ไม่เขียนทับ cache ชั้นสด)' : ''));
-      logPayloadSizes_(data, cacheVariant, out.length);
+      // ⚠️ `logPayloadSizes_` เป็น **เครื่องมือวัด** ที่ JSON.stringify ทั้ง payload ซ้ำ (ทุกคีย์
+      // รวม `products` ~3MB) + `mo` ของสินค้าทุกตัว — วัดจริง ~0.3s บน GAS · มันรัน **หลังปล่อย
+      // build lock แล้วก็จริง** (ไม่ขวางคนที่รอคิว) แต่ยัง **ค้างอยู่บนเส้นทางของ "ผู้ที่ trigger
+      // build เอง"** ก่อน `return` → ผู้ใช้คนที่เจอ cache miss ต้องจ่ายค่าเครื่องมือวัดทุกครั้ง
+      // ที่ payload ถูก build (ซึ่งคือเส้นทางที่ช้าที่สุดอยู่แล้ว — first-open ตอน cache เย็น)
+      // สุ่มเก็บ ~15% ของ build → ยังเห็นแนวโน้มขนาดเป็นระยะ แต่ไม่เก็บภาษีทุก cold build
+      // (build เกิดเฉพาะ cache miss อยู่แล้ว จึงไม่บ่อย — 15% ยังได้ตัวอย่างสม่ำเสมอช่วงมีคนใช้)
+      if (Math.random() < 0.15) logPayloadSizes_(data, cacheVariant, out.length);
       return ContentService.createTextOutput(out)
         .setMimeType(ContentService.MimeType.JSON);
     } finally {
