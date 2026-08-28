@@ -871,6 +871,49 @@ function enrichData(d) {
   return d;
 }
 
+// ── Phase B: รวมก้อน `boot` (catalog + สต็อกสด) เข้ากับข้อมูลที่ถืออยู่ ────────────
+// ก้อน boot **ไม่มีข้อมูลยอดขายเลย** (ไม่มีคีย์ soldQty/soldRev/mo — ดู buildBootData_)
+// จึงต้อง **รวม ไม่ใช่ทับ**: ค่าที่ boot ไม่ได้ส่งมา ให้คงของเดิมไว้
+//   · มี snapshot เดิม (localStorage/โหลดก่อนหน้า) → เอาเฉพาะ "ของที่เปลี่ยนบ่อย" มาทับ
+//     (จำนวนสต็อก/ออเดอร์/ของรอรับ/ตำแหน่ง/คำขอเช็ค) ส่วนยอดขายคงของเดิม → **ไม่มีอะไรด้อยลง**
+//   · ไม่มี snapshot เลย (เปิดครั้งแรกบนเครื่องใหม่) → ใช้ก้อน boot เป็นฐาน แล้วติดธง `_boot`
+//     ให้ view รู้ว่า "ตัวเลขที่มาจากยอดขายยังไม่มา" — ห้ามเอา 0 ไปโชว์เป็นข้อเท็จจริง
+// ⚠️ ทับทั้งก้อนเมื่อไหร่ = "ควรสั่ง"/"กำลังมาแรง" กลายเป็น 0 ทั้งร้านชั่วขณะ ซึ่งเป็นตัวเลข
+//    ที่พนักงานใช้ตัดสินใจสั่งของจริง (ผิดแบบไม่มี error ให้เห็น)
+function mergeBootData(prev, boot) {
+  expandProductsColumnar(boot);
+  if (!prev || !Array.isArray(prev.products) || !prev.products.length) {
+    boot._boot = 1;
+    return boot;
+  }
+  const bySku = Object.create(null);
+  (boot.products || []).forEach(p => { if (p && p.sku) bySku[String(p.sku).toUpperCase()] = p; });
+  const seen = Object.create(null);
+  const products = prev.products.map(p => {
+    const b = bySku[String(p.sku || '').toUpperCase()];
+    if (!b) return p;
+    seen[String(p.sku).toUpperCase()] = 1;
+    // คีย์ที่ boot ไม่ได้ส่ง (soldQty/soldRev/monthly/mo) จะไม่ถูกเขียนทับ — Object.assign
+    // เขียนเฉพาะคีย์ที่มีจริงใน b
+    return Object.assign({}, p, b);
+  });
+  (boot.products || []).forEach(p => {
+    if (p && p.sku && !seen[String(p.sku).toUpperCase()]) products.push(p);   // สินค้าใหม่ที่เพิ่งเพิ่ม
+  });
+  const out = Object.assign({}, prev, {
+    products,
+    orders:             boot.orders             || prev.orders,
+    shipments:          boot.shipments          || prev.shipments,
+    storage:            boot.storage            || prev.storage,
+    stockCheckRequests: boot.stockCheckRequests || prev.stockCheckRequests,
+    thresholds:         boot.thresholds         || prev.thresholds,
+    totals:             Object.assign({}, prev.totals, boot.totals),
+    lastModified:       boot.lastModified || prev.lastModified,
+  });
+  delete out._boot;   // มีข้อมูลยอดขายจาก snapshot เดิมอยู่แล้ว ไม่ใช่โหมดขาดข้อมูล
+  return out;
+}
+
 function loadFromStorage() {
   try {
     const raw = localStorage.getItem(LS_KEY);
@@ -1308,6 +1351,9 @@ function App() {
   const [navToast, showNavToast, hideNavToast] = useToast(); // toast สำหรับ nav-level errors
   const tabHistoryRef = React.useRef([]); // track tab navigation for Android back
   const fetchingRef = React.useRef(false); // guard against concurrent fetchFromSheet calls
+  // Phase B: ก้อนเต็มมาถึงหรือยัง — ก้อน boot ที่มาทีหลังห้ามเขียนทับ (มันไม่มีข้อมูลยอดขาย)
+  const fullAppliedRef = React.useRef(false);
+  const bootAppliedRef = React.useRef(false);
   // เมื่อ tab เปลี่ยน (กด subtab / นำทางจากการ์ดภาพรวม) → ล้าง "แตะดู" ให้หมวดหลักวิ่งตาม tab
   uE(() => { setOwnerGroup(null); }, [tab]);
 
@@ -1423,6 +1469,9 @@ function App() {
         setRetryMsg("");
         // ordersFetchedAt = "ข้อมูลออเดอร์ชุดนี้ดึงมาเมื่อไหร่" — ฝั่ง view ใช้ตัดสินว่า
         // optimistic entry ที่เพิ่งสั่งไป ถูกชุดจากชีตครอบคลุมแล้วหรือยัง (กันนับซ้ำ 2 เด้ง)
+        // Phase B: ตั้ง **ก่อน** setData — ก้อน boot ที่กำลังเดินทางอยู่จะได้ไม่เขียนทับ
+        // ข้อมูลยอดขายที่เพิ่งมาถึง (boot ไม่มีคีย์พวกนั้น = ถอยหลังโดยไม่มี error ให้เห็น)
+        fullAppliedRef.current = true;
         enriched = Object.assign({}, enriched, { ordersFetchedAt: Date.now() });
         setData(enriched);
         saveToStorage(compactStr || enriched, "sheet");
@@ -1478,6 +1527,41 @@ function App() {
     // role อยู่ใน deps เพราะถูกใช้ประกอบ URL แล้ว — ถ้าไม่ใส่ จะค้าง role ตอน mount (null)
     // แล้วยิงขอ payload ผิด variant ตลอดทั้ง session หลังผู้ใช้ล็อกอิน
   }, [sheetUrl, role]);
+
+  // ── Phase B: ก้อนเปิดแอป (`action=boot`) — เส้นทางที่ไม่ผูกกับ buildFullData_ ────
+  // ฝั่ง server ก้อนนี้อ่านแค่ 8 ชีตแทน 9+ และตัดยอดขาย/ประวัติซื้อ/ประวัติโอน/MTO ออก
+  // (ดู buildBootData_) → ตอบเร็วและคาดเดาเวลาได้ · ยิงคู่ขนานไปกับก้อนเต็ม **ไม่ใช่แทนที่**
+  // ⚠️ ก้อนเต็มยังโหลดตามปกติเสมอ — ตัวนี้แค่ทำให้ "เห็นหน้าจอที่ใช้งานได้" ก่อน
+  // ⚠️ GAS รุ่นเก่าไม่รู้จัก `action=boot` → ตกเส้นทาง payload ปกติแล้วคืนก้อนเต็ม/HTML
+  //    ดังนั้น **ต้องเช็ค `d._boot` ก่อนใช้เสมอ** ไม่งั้นจะเอาก้อนเต็มมาวิ่งผ่าน mergeBootData
+  //    (ซึ่งไม่ผิดข้อมูล แต่เสียเวลาเปล่า และทำให้แยกไม่ออกว่า endpoint ใช้ได้จริงไหม)
+  const fetchBoot = usC(() => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20000);
+    const sep = sheetUrl.includes('?') ? '&' : '?';
+    const url = `${sheetUrl}${sep}action=boot&_t=${Date.now()}`;
+    try { window.dmjMark('boot:เริ่ม'); } catch (e) {}
+    return fetch(url, { signal: controller.signal, cache: 'no-store' })
+      .then(r => (typeof dmjJson === 'function' ? dmjJson(r) : r.json()))
+      .then(d => {
+        if (!d || !d._boot) return;              // GAS เก่า/ตอบไม่ตรงรูปแบบ → ไม่แตะอะไรเลย
+        if (fullAppliedRef.current) return;      // ก้อนเต็มมาถึงก่อนแล้ว — ห้ามถอยหลัง
+        try { window.dmjMark('boot:ครบ'); } catch (e) {}
+        // ของสำรอง (stale) ก็ใช้ได้ — แต่ `lastModified` ของมันเป็นค่าเก่าโดยเจตนา
+        // ตั้ง `_dataLoadedAt` ตามนั้น = conflict detection จะ "ปฏิเสธ" ไว้ก่อน ซึ่งเป็นทางที่ปลอดภัย
+        if (d.lastModified) window._dataLoadedAt = d.lastModified;
+        if (typeof resetCatColorMap === 'function') resetCatColorMap();
+        setData(prev => {
+          if (fullAppliedRef.current) return prev;
+          let merged;
+          try { merged = mergeBootData(prev, d); } catch (e) { console.warn('mergeBootData failed:', e); return prev; }
+          try { return enrichData(merged); } catch (e) { console.warn('enrichData failed on boot:', e); return merged; }
+        });
+        bootAppliedRef.current = true;
+      })
+      .catch(() => {})   // เงียบ — ก้อนเต็มยังเดินอยู่ ตัวนี้ล้มเหลวแค่ "ไม่ได้เร็วขึ้น"
+      .finally(() => clearTimeout(timeout));
+  }, [sheetUrl]);
 
   // ── Phase 7.4: ดึงเฉพาะ "เลขสต็อกอ้างอิง" สำหรับแท็บนับสต็อก/เช็คหน้าร้าน ──
   // เดิมสองแท็บนี้ poll payload **ทั้งก้อน (~4.2MB) ทุก 30 วิ** ทั้งที่ต้องการแค่ตัวเลขสต็อก
@@ -1605,8 +1689,11 @@ function App() {
         setData(cached);
       }
     }
+    // Phase B: ยิงก้อนเบาคู่ขนาน — ให้ "เห็นหน้าจอที่ใช้งานได้" โดยไม่ต้องรอ build ก้อนใหญ่
+    // (ฝั่ง server ก้อนนี้ไม่เรียก buildFullData_ เลย) · ก้อนเต็มยังโหลดตามปกติเสมอ
+    fetchBoot();
     fetchFromSheet(); // refresh ใน background เสมอ
-  }, [role, fetchFromSheet]);
+  }, [role, fetchFromSheet, fetchBoot]);
 
   // Phase 7.3: ได้ของสำรองมา → คนที่กำลัง build อยู่จะเสร็จในไม่กี่วินาที ดึงซ้ำอีกรอบให้เอง
   // ไม่ต้องรอผู้ใช้กด Sync หรือรอ poll 30 วิ (ซึ่งมีเฉพาะบางแท็บ) · ยิงครั้งเดียวต่อ 1 ครั้งที่ได้ของสำรอง

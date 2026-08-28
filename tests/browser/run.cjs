@@ -1468,6 +1468,35 @@ function startServer() {
     await page.close();
   }
 
+  // ── Phase B: เปิดแอปได้ด้วยก้อน boot ล้วน ทั้งที่ payload เต็มยังไม่ตอบเลย ──
+  // นี่คือเทสต์ที่พิสูจน์เป้าหมายของทั้งงาน: "เปิดแอปไม่ผูกกับ buildFullData_"
+  // เครื่องใหม่ (ไม่มี snapshot) + ก้อนเต็มค้างไม่ตอบ → ต้องเห็นสินค้า/สต็อกจริงจากก้อน boot
+  {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=warehouse&tab=stock&bootonly=1`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      await page.waitForTimeout(1200);
+      const navOk = await navigateTo(page, 'warehouse', 'stock');
+      await page.waitForTimeout(400);
+      const txt = await page.locator('body').innerText();
+      if (/กำลังโหลดข้อมูล Dashboard/.test(txt)) {
+        status = 'BLOCKED'; note = 'ยังติดจอโหลด — เส้นทาง boot ไม่ได้ทำงาน';
+      } else if (!navOk) {
+        status = 'NAV_FAIL'; note = 'สลับไปแท็บสต๊อกไม่สำเร็จทั้งที่ก้อน boot มาแล้ว';
+      } else if (!/FLW002/.test(txt)) {
+        // FLW002 = SKU ที่สต็อกต่ำกว่าเกณฑ์ (ตัวเดียวกับที่ smoke test ของแท็บ stock ใช้)
+        status = 'NO_PRODUCTS'; note = 'ไม่เห็นสินค้าจากก้อน boot';
+      } else {
+        note = 'เห็นสินค้า/สต็อกจริงในแท็บสต๊อก ทั้งที่ payload เต็มยังไม่ตอบเลย';
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'boot__only.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'เปิดแอปด้วยก้อน boot (payload เต็มค้าง)', status, note });
+    await page.close();
+  }
+
   // หน้าหลักต้องเปิดได้ทั้งที่ข้อมูลก้อนใหญ่ยังไม่มา — ถ้าติดจอโหลด ทางด่วนลงเวลาก็เสียครึ่งหนึ่ง
   // (กดโลโก้ตอนเปิดแอปใหม่แล้วเจอสปินเนอร์ = ไปไหนต่อไม่ได้เลย)
   {

@@ -104,11 +104,21 @@ describe('backend: สร้าง/แก้ใบเสนอราคาแล
     const j = GS.indexOf('\nfunction ', i + 1);
     return GS.slice(i, j < 0 ? GS.length : j);
   }
-  it('createQuotation ล้าง quote_summary_v1', () => {
-    expect(grabGs('createQuotation')).toContain("CacheService.getScriptCache().remove('quote_summary_v1')");
+  // Phase A: การลบคีย์ 2 บรรทัดที่เคยเขียนซ้ำ 5 จุด ถูกรวมมาไว้ที่ `invalidateQuoteCaches_()`
+  // (บางจุดเดิมลืมลบ `pending_quotes_v1` ไปด้วย) · คุณสมบัติที่ต้องรักษาเหมือนเดิมเป๊ะ:
+  // "สร้าง/แก้ใบเสนอราคาแล้ว `quote_summary_v1` ต้องถูกล้าง ใบใหม่จึงโผล่ทันทีไม่รอ TTL 5 นาที"
+  // → เช็คว่ายังเรียกตัวรวมอยู่ + ตัวรวมยังล้างคีย์นั้นจริง (พฤติกรรมถูกรันจริงใน
+  //   tests/cache-domains.test.js หัวข้อ B)
+  it('invalidateQuoteCaches_ ล้าง quote_summary_v1 + pending_quotes_v1', () => {
+    const helper = grabGs('invalidateQuoteCaches_');
+    expect(helper).toContain("remove('quote_summary_v1')");
+    expect(helper).toContain("remove('pending_quotes_v1')");
   });
-  it('editQuotation ล้าง quote_summary_v1', () => {
-    expect(grabGs('editQuotation')).toContain("CacheService.getScriptCache().remove('quote_summary_v1')");
+  it('createQuotation ล้าง quote_summary_v1 (ผ่าน invalidateQuoteCaches_)', () => {
+    expect(grabGs('createQuotation')).toContain('invalidateQuoteCaches_()');
+  });
+  it('editQuotation ล้าง quote_summary_v1 (ผ่าน invalidateQuoteCaches_)', () => {
+    expect(grabGs('editQuotation')).toContain('invalidateQuoteCaches_()');
   });
 });
 
