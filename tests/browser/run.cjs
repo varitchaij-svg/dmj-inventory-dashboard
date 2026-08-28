@@ -89,6 +89,19 @@ const ASSERT = {
      'นับเป็น รายการ', 'นับเป็น ชิ้น', '34', 'รอรับ', 'รายใบโอน',
      'รับแล้ว 0/1 รายการ', 'รับแล้ว 1/1 รายการ'], 'ใบโอน + หน่วยกำกับครบ'),
   frontstore: async (page) => hasText(page, ['VAS001', 'FLW002', 'DEC003'], 'product SKU'),
+  // สรุปสินค้าออกจากคลัง: เลือกสินค้าหลายรายการเพื่อพิมพ์ Label (checkbox แทนปุ่มพิมพ์ราย Card)
+  // fixture R5/R6 = จัดเสร็จ (สำเร็จ) → ต้องมี checkbox + ปุ่มด้านบน · ห้ามมีปุ่ม "Print Label" ราย Card
+  ordersummary: async (page) => {
+    const present = await hasAllText(page,
+      ['สรุปสินค้าออกจากคลัง', 'VAS001', 'FLW002', 'ปริ้นที่เลือก', 'เลือกทั้งหมด', 'ปริ้นทั้งหมด'],
+      'checkbox toolbar + สินค้า');
+    if (!present.ok) return present;
+    const scope = 'main[data-screen-label="ordersummary"]';
+    const cbCount = await page.locator(`${scope} input[type="checkbox"]`).count();
+    const legacyBtn = await page.locator(`${scope} button`, { hasText: 'Print Label' }).count();
+    const ok = cbCount >= 2 && legacyBtn === 0;
+    return { ok, detail: `checkbox=${cbCount} (ต้อง≥2) · ปุ่มพิมพ์ราย Card เดิม=${legacyBtn} (ต้อง0)` };
+  },
   // ขาย/ออกบิล: ต้องมี "ครบ" ทั้งปุ่มสลับโหมด (ออนไลน์/หน้าร้าน) และตะกร้า — hasText เป็น OR
   // ถ้าใช้ OR แล้วโหมดออนไลน์หายไปทั้งดุ้น เทสต์ยังเขียวเพราะ 'ขาย / ออกบิล' ยังอยู่
   pos:        async (page) => hasAllText(page,
@@ -647,6 +660,47 @@ function startServer() {
     } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
     await page.screenshot({ path: path.join(SHOTS, 'checkprogress__warehouse.png') }).catch(() => {});
     results.push({ role: 'interact', tab: 'ความคืบหน้าคำขอเช็คสต็อก (warehouse ไม่เห็น)', status, note });
+    await page.close();
+  }
+
+  // ── (ง0.3) สรุปสินค้าออกจากคลัง: เลือกหลายรายการ → "ปริ้นที่เลือก" → เลือก Format ให้เอง ──
+  // R5 แจกันแก้ว (sticker3) + R6 ดอกไม้ (A4) เลือกทั้งคู่ = คนละ Format → ต้องเด้งไปแท็บ labels
+  // แล้วโชว์แผง "จัดกลุ่มให้แล้ว" (พนักงานพิมพ์ทีละกลุ่มโดยไม่ต้องเลือก Sticker/A4 เอง)
+  {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=warehouse&tab=ordersummary`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const nav = await navigateTo(page, 'warehouse', 'ordersummary');
+      await page.waitForTimeout(500);
+      const scope = 'main[data-screen-label="ordersummary"]';
+      const boxes = page.locator(`${scope} input[type="checkbox"]`);
+      const nBox = await boxes.count();
+      if (!nav) { status = 'NAV_FAIL'; note = 'สลับ tab ไม่สำเร็จ'; }
+      else if (nBox < 2) { status = 'NO_CHECKBOX'; note = `checkbox=${nBox} (ต้อง≥2)`; }
+      else {
+        // เลือก "เลือกทั้งหมด" ให้ครอบทั้ง 2 หมวด แล้วกด "ปริ้นที่เลือก"
+        await page.locator(`${scope} button`, { hasText: 'เลือกทั้งหมด' }).first().click({ timeout: 2000 }).catch(() => {});
+        await page.waitForTimeout(200);
+        const printSel = page.locator(`${scope} button`, { hasText: 'ปริ้นที่เลือก' }).first();
+        await printSel.click({ timeout: 2000 }).catch(() => {});
+        await page.waitForTimeout(600);
+        const onLabels = await page.locator('main[data-screen-label="labels"]').count();
+        const panel = await page.locator('text=จัดกลุ่มให้แล้ว').count();
+        const stickerGrp = await page.locator('button', { hasText: 'สติ๊กเกอร์ 32×25' }).count();
+        const a4Grp = await page.locator('button:has-text("📄 A4")').count();
+        if (!onLabels) { status = 'NO_NAV_LABELS'; note = 'กด "ปริ้นที่เลือก" แล้วไม่ไปแท็บ labels'; }
+        else if (!panel || !stickerGrp || !a4Grp) {
+          status = 'NO_GROUP_PANEL';
+          note = `แผงจัดกลุ่ม=${panel} sticker=${stickerGrp} a4=${a4Grp} (ต้องมีครบ)`;
+        } else {
+          note = 'เลือกทั้งหมด → ปริ้นที่เลือก → ไปแท็บ labels + แผงจัดกลุ่ม Sticker/A4 ครบ';
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'labelselect__ordersummary.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'เลือกพิมพ์ Label → จัดกลุ่ม Format (ordersummary)', status, note });
     await page.close();
   }
 
