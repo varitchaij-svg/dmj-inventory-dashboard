@@ -61,6 +61,14 @@
     { id: 'R4', type: 'หิ้ว', carryMode: 'carry', date: '01/06/2025', status: 'รอ', from: 'สาย5', to: 'หน้าร้าน',
       sku: 'FLW002', name: 'ดอกไม้ประดิษฐ์ สีแดง', orderQty: 12, preparedQty: 12, printFlag: 'print',
       orderedBy: 'สมชาย ใจดี (หน้าร้าน)', preparedBy: 'สมหญิง ขยัน (คลังสินค้า)' },
+    // R5/R6 = จัดเสร็จแล้ว (status "สำเร็จ") → โผล่ในหน้า "สรุปสินค้าออกจากคลัง"
+    //   R5 แจกันแก้ว → sticker3 · R6 ดอกไม้ → A4 (เลือกทั้งคู่ = ทดสอบจัดกลุ่ม 2 Format)
+    { id: 'R5', type: 'หิ้ว', carryMode: 'carry', date: '02/06/2025', status: 'สำเร็จ', from: 'สาย5', to: 'หน้าร้าน',
+      sku: 'VAS001', name: 'แจกันแก้วใส ทรงสูง', orderQty: 6, preparedQty: 6, printFlag: 'print', remaining: 0,
+      orderedBy: 'สมชาย ใจดี (หน้าร้าน)', preparedBy: 'สมหญิง ขยัน (คลังสินค้า)' },
+    { id: 'R6', type: 'หิ้ว', carryMode: 'carry', date: '02/06/2025', status: 'สำเร็จ', from: 'สาย5', to: 'หน้าร้าน',
+      sku: 'FLW002', name: 'ดอกไม้ประดิษฐ์ สีแดง', orderQty: 12, preparedQty: 12, printFlag: 'print', remaining: 0,
+      orderedBy: 'สมชาย ใจดี (หน้าร้าน)', preparedBy: 'สมหญิง ขยัน (คลังสินค้า)' },
   ];
 
   const shipments = [

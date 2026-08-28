@@ -5889,6 +5889,8 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const [missed,  setMissed]  = uS(getMissedOrders);
   const [sending, setSending] = uS(null);
   const [bigImg, setBigImg]   = uS(null);
+  // ✅ เลือกสินค้าเพื่อพิมพ์ Label — id -> true (แทนปุ่มพิมพ์ราย Card เดิม)
+  const [selected, setSelected] = uS({});
   const [toast, showToast, hideToast] = useToast();
   const [shipConfirm, setShipConfirm]    = uS(null); // single order
   const [shipAllConfirm, setShipAllConfirm] = uS(null); // ready[] array
@@ -5991,19 +5993,13 @@ function OrderSummaryView({ data, onPrintRequest }) {
     }
   }, [doneOrders]);
 
-  const handlePrint = (order) => {
-    const qty = order.preparedQty || order.orderQty || 1;
-    onPrintRequest([{ sku: order.sku, qty }]);
-    const p2 = { ...printed, [order.id]: true };
-    setPrinted(p2);
-    localStorage.setItem(LS_PRINTED_ORDERS, JSON.stringify(p2));
-    setSt(patchOrderState(order.id, { printFlag: "printed" }, orderSig(order)));
-    syncOrderUpdate(order, { printFlag: "printed" });
-  };
-
-  const handlePrintAll = (ordersArr) => {
-    const items = ordersArr.map(o => ({ sku: o.sku, qty: o.preparedQty || o.orderQty || 1 }));
-    onPrintRequest(items);
+  // พิมพ์ Label ของชุด order ที่กำหนด — เลือก Format ให้เองตามหมวด (groupOrdersForLabel)
+  //   แล้วส่งเป็น "กลุ่มตาม Format" ให้ LabelPrintView (พนักงานไม่ต้องเลือก Sticker/A4 เอง)
+  const printOrders = (ordersArr) => {
+    if (!ordersArr || !ordersArr.length) return;
+    const groups = groupOrdersForLabel(ordersArr);
+    if (!groups.length) return;
+    onPrintRequest({ groups });
     const p2 = { ...printed };
     ordersArr.forEach(o => { p2[o.id] = true; });
     setPrinted(p2);
@@ -6013,6 +6009,17 @@ function OrderSummaryView({ data, onPrintRequest }) {
       syncOrderUpdate(o, { printFlag: "printed" });
     });
   };
+
+  // ── การเลือกสินค้า (checkbox) — ทำงานต่อ section (arr = รายการในกลุ่มที่กำลังแสดง) ──
+  const toggleSelect = (id) => setSelected(s => {
+    const n = { ...s }; if (n[id]) delete n[id]; else n[id] = true; return n;
+  });
+  const selectAllIn = (arr) => setSelected(s => {
+    const n = { ...s }; arr.forEach(o => { n[o.id] = true; }); return n;
+  });
+  const clearSelectIn = (arr) => setSelected(s => {
+    const n = { ...s }; arr.forEach(o => { delete n[o.id]; }); return n;
+  });
 
   const handleShip = (order) => setShipConfirm(order);
 
@@ -6371,6 +6378,10 @@ function OrderSummaryView({ data, onPrintRequest }) {
       const ap = printed[o.id] || o.printFlag === "printed";
       return o.printFlag === "print" && !ap && !shipped[o.id];
     });
+    // ✅ ที่เลือกได้ในกลุ่มนี้ = ที่ยังไม่ส่ง (พิมพ์ Label ก่อนส่ง) · นับที่ติ๊กไว้
+    const selectable  = orders.filter(o => !shipped[o.id]);
+    const selectedArr = selectable.filter(o => selected[o.id]);
+    const allSelected = selectable.length > 0 && selectedArr.length === selectable.length;
     // sort: not-shipped-not-missed first, missed to end, shipped to very end
     const sorted = [...orders].sort((a,b) => {
       const aS = shipped[a.id] ? 2 : missed[a.id] ? 1 : 0;
@@ -6395,14 +6406,42 @@ function OrderSummaryView({ data, onPrintRequest }) {
               {readyCount > 0 ? `${readyCount} รายการรอส่ง` : "ส่งหมดแล้ว"}
             </span>
           </div>
-          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+            {/* ── เลือกสินค้าเพื่อพิมพ์ Label (แทนปุ่มพิมพ์ราย Card) ── */}
+            {selectable.length > 0 && (
+              <>
+                <button onClick={() => (allSelected ? clearSelectIn(selectable) : selectAllIn(selectable))} style={{
+                  padding:"6px 12px",borderRadius:8,border:"1.5px solid var(--bdr)",cursor:"pointer",
+                  background:"#fff",color:"var(--text)",fontSize:12,fontWeight:600,fontFamily:"inherit",
+                }}>
+                  {allSelected ? "◻️ เอาออกทั้งหมด" : "☑️ เลือกทั้งหมด"}
+                </button>
+                {selectedArr.length > 0 && (
+                  <button onClick={() => clearSelectIn(selectable)} style={{
+                    padding:"6px 12px",borderRadius:8,border:"1.5px solid var(--bdr)",cursor:"pointer",
+                    background:"#fff",color:"var(--muted)",fontSize:12,fontWeight:600,fontFamily:"inherit",
+                  }}>
+                    ✕ ล้างการเลือก
+                  </button>
+                )}
+                <button onClick={() => printOrders(selectedArr)} disabled={selectedArr.length === 0} style={{
+                  padding:"6px 14px",borderRadius:8,border:"none",
+                  cursor: selectedArr.length === 0 ? "not-allowed" : "pointer",
+                  background: selectedArr.length === 0 ? "var(--g-100)" : "var(--g-700)",
+                  color: selectedArr.length === 0 ? "var(--muted)" : "#fff",
+                  fontSize:12,fontWeight:700,fontFamily:"inherit",
+                }}>
+                  🖨️ ปริ้นที่เลือก ({selectedArr.length})
+                </button>
+              </>
+            )}
             {printableOrders.length > 0 && (
-              <button onClick={() => handlePrintAll(printableOrders)} style={{
+              <button onClick={() => printOrders(printableOrders)} style={{
                 padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",
                 background:"#374151",color:"#fff",
                 fontSize:12,fontWeight:700,fontFamily:"inherit",
               }}>
-                🖨️ ปริ้น Label ({printableOrders.length})
+                🖨️ ปริ้นทั้งหมด ({printableOrders.length})
               </button>
             )}
             {readyCount > 0 && (
@@ -6436,18 +6475,34 @@ function OrderSummaryView({ data, onPrintRequest }) {
             const isSending = sending === order.id;
             const alreadyPrinted = printed[order.id] || order.printFlag === "printed";
             const prepQty = order.preparedQty || order.orderQty || 0;
+            const isSelected = !!selected[order.id];
 
             return (
               <div key={order.id} style={{
-                background: isShipped ? "#f0fdf4" : isMissed ? "#fef2f2" : "#fff",
+                background: isShipped ? "#f0fdf4" : isSelected ? "#eef7f0" : isMissed ? "#fef2f2" : "#fff",
                 borderRadius:12, padding:12,
-                border:`1.5px solid ${isShipped?"#4fb472":isMissed?"#fca5a5":"var(--bdr)"}`,
+                border:`1.5px solid ${isSelected?"var(--g-700)":isShipped?"#4fb472":isMissed?"#fca5a5":"var(--bdr)"}`,
+                boxShadow: isSelected ? "0 0 0 1.5px var(--g-700) inset" : "none",
                 display:"flex",flexDirection:"column",gap:8,
                 opacity: isShipped ? 0.7 : 1,
                 transition:"all .2s",
               }}>
                 {/* Image */}
                 <div style={{position:"relative"}}>
+                  {/* ✅ checkbox เลือกพิมพ์ Label — แตะง่ายมุมบนซ้าย (เฉพาะที่ยังไม่ส่ง) */}
+                  {!isShipped && (
+                    <label onClick={e => e.stopPropagation()} style={{
+                      position:"absolute",top:4,left:4,zIndex:2,
+                      display:"flex",alignItems:"center",justifyContent:"center",
+                      width:30,height:30,borderRadius:8,cursor:"pointer",
+                      background: isSelected ? "var(--g-700)" : "rgba(255,255,255,.92)",
+                      border:`1.5px solid ${isSelected?"var(--g-700)":"var(--bdr)"}`,
+                      boxShadow:"0 1px 3px rgba(0,0,0,.15)",
+                    }}>
+                      <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(order.id)}
+                        style={{width:18,height:18,margin:0,cursor:"pointer",accentColor:"var(--g-700)"}}/>
+                    </label>
+                  )}
                   {(order.image || order.product?.imageUrl) ? (
                     <img src={order.image || order.product?.imageUrl} alt=""
                       onClick={() => setBigImg(order)}
@@ -6516,15 +6571,10 @@ function OrderSummaryView({ data, onPrintRequest }) {
                 {/* Action buttons */}
                 {!isShipped && (
                   <div style={{display:"flex",flexDirection:"column",gap:6,marginTop:2}}>
-                    {/* Print Label */}
-                    {order.printFlag==="print" && !alreadyPrinted && (
-                      <button onClick={() => handlePrint(order)} style={{
-                        padding:"6px",borderRadius:7,border:"none",cursor:"pointer",
-                        background:"var(--g-700)",color:"#fff",fontSize:11,fontWeight:700,fontFamily:"inherit",
-                      }}>🖨️ Print Label</button>
-                    )}
+                    {/* พิมพ์ Label = ติ๊ก checkbox แล้วกด "ปริ้นที่เลือก" ด้านบน (ไม่มีปุ่มพิมพ์ราย Card แล้ว)
+                        เหลือแค่ป้ายบอกว่าพิมพ์ไปแล้วหรือยัง */}
                     {alreadyPrinted && (
-                      <div style={{textAlign:"center",fontSize:10,color:"var(--g-700)",fontWeight:700}}>✓ Printed</div>
+                      <div style={{textAlign:"center",fontSize:10,color:"var(--g-700)",fontWeight:700}}>✓ พิมพ์ Label แล้ว</div>
                     )}
 
                     {/* ขึ้นรถ: ปุ่มส่งทีละใบ + 🚫 เหมือนเดิม (ห้ามแตะ)
@@ -6871,6 +6921,40 @@ const stickerPageW_ = (cfg) => cfg.w * cfg.cols + cfg.gap * (cfg.cols - 1);
 //  skuBottomMm 2mm = ระยะ SKU จากขอบล่าง (SKU ชิดล่าง ใช้พื้นที่เต็ม)
 const S3_LAYOUT = { nameFontPt: 7, qrGapMm: 2, skuBottomMm: 2 };
 
+// ── เลือก Format ให้อัตโนมัติตามหมวดสินค้า (หน้า "สรุปสินค้าออกจากคลัง" → พิมพ์ Label) ──
+// เจ้าของสั่ง: พนักงานคิดแค่ "เลือกสินค้า → ปริ้น" ไม่ต้องจำว่าหมวดไหนใช้ Sticker / A4
+//   แจกันแก้ว · เรซิ่นและอื่นๆ → สติ๊กเกอร์ 32×25 (3 ช่อง, gap 3mm) = โหมด "sticker3"
+//   หมวดอื่นทั้งหมด → A4
+// ⚠️ ชื่อหมวดต้องตรงกับค่าจริงในชีต (ตัด whitespace ก่อนเทียบ) — เพี้ยนแล้วของหลุดไป A4 เงียบ ๆ
+const LABEL_STICKER_CATS = ["แจกันแก้ว", "เรซิ่นและอื่นๆ"];
+const labelFormatForCat = (cat) =>
+  LABEL_STICKER_CATS.indexOf(String(cat == null ? "" : cat).trim()) >= 0 ? "sticker3" : "a4";
+// จัดกลุ่ม order → [{mode, items:[{sku,qty}]}] · สติ๊กเกอร์ก่อน A4 · รวมจำนวนต่อ sku ในแต่ละกลุ่ม
+// (เลือกหลายหมวดพร้อมกัน = ได้หลายกลุ่ม พนักงานพิมพ์ทีละกลุ่มตาม Format โดยไม่ต้องเลือกเอง)
+function groupOrdersForLabel(ordersArr) {
+  const bucket = {}; // mode -> { sku -> qty }
+  (ordersArr || []).forEach(o => {
+    if (!o || !o.sku) return;
+    const cat = (o.product && o.product.cat) || o.cat || "";
+    const mode = labelFormatForCat(cat);
+    const qty = o.preparedQty || o.orderQty || 1;
+    bucket[mode] = bucket[mode] || {};
+    bucket[mode][o.sku] = (bucket[mode][o.sku] || 0) + qty;
+  });
+  const groups = [];
+  ["sticker3", "a4"].forEach(mode => {
+    if (!bucket[mode]) return;
+    const items = Object.keys(bucket[mode]).map(sku => ({ sku, qty: bucket[mode][sku] }));
+    if (items.length) groups.push({ mode, items });
+  });
+  return groups;
+}
+// ป้ายกำกับ Format ต่อโหมด (ใช้บนแผงจัดกลุ่มของ LabelPrintView)
+const LABEL_MODE_META = {
+  sticker3: { emoji: "🏷️", label: "สติ๊กเกอร์ 32×25", unit: "ดวง" },
+  a4:       { emoji: "📄", label: "A4",              unit: "ใบ" },
+};
+
 function LabelPrintView({ data, initItems, onInitConsumed }) {
   const { products } = data;
   const [items, setItems] = uS([]);
@@ -6880,11 +6964,34 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
   // สูงสุด) · asset: greenery-sticker-long-flag.pdf (root, เหมือน logo.png/jsbarcode.min.js)
   const isStaticTemplate = printMode === "greenery";
   const greeneryFrameRef = React.useRef(null);
+  // กลุ่ม Format ที่มาจากหน้า "สรุปสินค้าออกจากคลัง" (เลือกให้เองตามหมวด) — [{mode,items}]
+  //   มีมากกว่า 1 กลุ่ม = เลือกหลายหมวดพร้อมกัน → โชว์แผงให้กดพิมพ์ทีละกลุ่ม (ไม่ต้องเลือก Format เอง)
+  const [autoGroups, setAutoGroups] = uS(null);
+  const [autoGroupIdx, setAutoGroupIdx] = uS(0);
 
-  // Auto-populate from order summary "Print Label" button
+  // Auto-populate จากหน้าสรุปสินค้าออกจากคลัง — รับได้ 2 แบบ:
+  //   (ก) array เดิม [{sku,qty}]  (ข) {groups:[{mode,items}]} (เลือก Format ให้เองตามหมวด)
+  const applyAutoGroup = uC((groups, i, arr) => {
+    const g = (arr || groups)[i];
+    if (!g) return;
+    setAutoGroupIdx(i);
+    setPrintMode(g.mode);
+    setItems(g.items.map(it => ({ sku: it.sku, qty: it.qty })));
+  }, []);
   uE(() => {
-    if (!initItems || !initItems.length) return;
-    setItems(initItems.map(it => ({ sku: it.sku, qty: it.qty })));
+    if (!initItems) return;
+    if (Array.isArray(initItems)) {
+      // legacy: array of {sku,qty} — คงพฤติกรรมเดิมทุกอย่าง
+      if (!initItems.length) return;
+      setAutoGroups(null);
+      setItems(initItems.map(it => ({ sku: it.sku, qty: it.qty })));
+      if (onInitConsumed) onInitConsumed();
+      return;
+    }
+    const groups = (initItems.groups || []).filter(g => g && g.items && g.items.length);
+    if (!groups.length) { if (onInitConsumed) onInitConsumed(); return; }
+    setAutoGroups(groups.length > 1 ? groups : null); // กลุ่มเดียว = ไม่ต้องโชว์แผง
+    applyAutoGroup(groups, 0);
     if (onInitConsumed) onInitConsumed();
   }, [initItems]);
   const [searchVal, setSearchVal] = uS("");
@@ -7321,6 +7428,43 @@ ${labelsHTML}
             </div>
           )}
         </div>
+
+        {/* ── แผงจัดกลุ่ม Format อัตโนมัติ (มาจาก "สรุปสินค้าออกจากคลัง" เลือกหลายหมวดพร้อมกัน) ──
+            พนักงานพิมพ์ทีละกลุ่มตาม Format — กดกลุ่ม = โหลดสินค้ากลุ่มนั้น + ตั้ง Format ให้เอง
+            แล้วกดปุ่มพิมพ์ด้านบน · ไม่ต้องเลือก Sticker/A4 เอง */}
+        {autoGroups && autoGroups.length > 1 && (
+          <div style={{
+            border:"1.5px solid #cfe0d6",borderRadius:12,background:"#f6faf7",
+            padding:"12px 14px",marginBottom:14,
+          }}>
+            <div style={{fontSize:13,fontWeight:800,color:"#1f7a34",marginBottom:2}}>
+              🖨️ จัดกลุ่มให้แล้ว — เลือกกลุ่มที่จะพิมพ์
+            </div>
+            <div style={{fontSize:11.5,color:"var(--muted)",marginBottom:10}}>
+              เลือกสินค้าคนละหมวดกัน ระบบเลย Format ให้เอง · กดกลุ่มด้านล่างแล้วกด “พิมพ์” ด้านบน · เสร็จแล้วสลับไปพิมพ์อีกกลุ่มได้
+            </div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              {autoGroups.map((g, i) => {
+                const meta = LABEL_MODE_META[g.mode] || { emoji:"🖨️", label:g.mode, unit:"ใบ" };
+                const cnt = g.items.reduce((s, it) => s + (it.qty || 0), 0);
+                const active = i === autoGroupIdx;
+                return (
+                  <button key={g.mode} onClick={() => applyAutoGroup(autoGroups, i)} style={{
+                    padding:"9px 14px",borderRadius:10,cursor:"pointer",fontFamily:"inherit",
+                    border: active ? "2px solid var(--accent)" : "1.5px solid var(--bdr)",
+                    background: active ? "#e8f5e9" : "var(--paper)",
+                    color: active ? "var(--accent)" : "var(--text)",
+                    fontWeight: active ? 700 : 500, fontSize:13,
+                    display:"flex",flexDirection:"column",alignItems:"flex-start",gap:1,
+                  }}>
+                    <span>{meta.emoji} {meta.label} {active ? "✓" : ""}</span>
+                    <span style={{fontSize:10,color:"var(--muted)",fontWeight:400}}>{cnt} {meta.unit}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* ── Print mode toggle ── */}
         <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
