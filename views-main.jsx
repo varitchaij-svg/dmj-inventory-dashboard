@@ -1599,8 +1599,13 @@ function IntakePdfModal({ purchases, prodBySku, onClose, labelMode }) {
 
 function OverviewView({ data, range, setRange, role }) {
   const rechartsReady = useRechartsReady(); // gate กราฟจนกว่า Recharts (defer) จะพร้อม
-  const { products, monthLabels, monthlyByCat, totals, mtoGroups,
-          dayLabels, dailyByCat } = data;
+  // ⚠️ default `monthlyByCat`/`dailyByCat` เป็น {} — snapshot ที่ถูก trimForStorage_ ตัด (โควตา
+  // localStorage แน่นบนมือถือ) คง `monthLabels` ไว้แต่ตัดสองคีย์นี้ทิ้ง · ก้อน boot ก็ไม่มีทั้งคู่
+  // ไม่มี default = `months.map(m => monthlyByCat[m])` โยน "undefined is not an object" → ErrorBoundary
+  // จับ → แท็บภาพรวมกลายเป็นจอ error · {} ปลอดภัย: `{}[m]` = undefined → `|| {}` = {} (ตัวเลขเป็น 0
+  // ชั่วคราวจนก้อนเต็มมาถึง — ตรงกับ pattern ที่ analytics ฝั่งโน้นใช้ `(data && data.monthlyByCat) || {}`)
+  const { products, monthLabels, monthlyByCat = {}, totals, mtoGroups,
+          dayLabels, dailyByCat = {} } = data;
 
   const months = monthLabels || [];
   const days   = (dayLabels && dayLabels.length > 0) ? dayLabels : [];

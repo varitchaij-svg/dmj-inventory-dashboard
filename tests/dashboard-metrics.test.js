@@ -449,3 +449,48 @@ describe('ป้ายกำกับที่กันเข้าใจผิ�
     expect(VM).not.toContain('ขายไม่ได้ตลอด 5 เดือน');
   });
 });
+
+
+// ────────────────────────────────────────────────────────────────────────────
+// Regression (Phase B): OverviewView ต้องทน data ที่ไม่มี monthlyByCat/dailyByCat
+// ที่มา: trimForStorage_ (app.jsx) ตัด monthlyByCat/dailyByCat ทิ้งเมื่อโควตา localStorage
+// แน่น **แต่คง monthLabels** → OverviewView เดิม destructure `monthlyByCat` โดยไม่มี default
+// → `months.map(m => monthlyByCat[m])` โยน "undefined is not an object (evaluating monthlyByCat[m])"
+// → ErrorBoundary จับ → แท็บภาพรวมกลายเป็นจอ error · เทสต์เบราว์เซอร์
+// "ภาพรวมไม่พังเมื่อ snapshot ถูกตัด" reproduce ของจริง · อันนี้กัน default หลุดตอน refactor
+// ────────────────────────────────────────────────────────────────────────────
+describe('OverviewView — ทน monthlyByCat/dailyByCat หาย (trimmed snapshot / boot)', () => {
+  const OV = VM.slice(VM.indexOf('function OverviewView('), VM.indexOf('function OverviewView(') + 1200);
+
+  it('destructure monthlyByCat มี default = {} (กัน undefined[m] ตอน months ไม่ว่าง)', () => {
+    expect(OV).toMatch(/monthlyByCat\s*=\s*\{\}/);
+  });
+
+  it('destructure dailyByCat มี default = {} เช่นกัน (trimForStorage_ ตัดทั้งคู่)', () => {
+    expect(OV).toMatch(/dailyByCat\s*=\s*\{\}/);
+  });
+
+  // reproduce พฤติกรรมจริง: pattern `months.map(m => monthlyByCat[m] || {})` จะพังถ้า monthlyByCat
+  // เป็น undefined · จำลองเป๊ะ ๆ ด้วย monthlyByCat ที่ผ่าน default {} แล้ว → ต้องไม่โยน
+  it('เลียนแบบ monthlySeries loop: monthlyByCat={} (หลัง default) + months ไม่ว่าง → ไม่โยน', () => {
+    const months = ['06/2026', '07/2026', '08/2026'];
+    const monthlyByCat = {};   // ค่าที่ได้จาก default เมื่อ data.monthlyByCat undefined
+    expect(() => months.map(m => {
+      const cats = monthlyByCat[m] || {};
+      let qty = 0, rev = 0;
+      for (const c of Object.keys(cats)) { qty += cats[c].qty; rev += cats[c].sales; }
+      return { month: m, qty, rev };
+    })).not.toThrow();
+  });
+
+  it('พิสูจน์บั๊กเดิม: monthlyByCat=undefined + months ไม่ว่าง → โยนจริง (สิ่งที่ default กันไว้)', () => {
+    const months = ['06/2026'];
+    let monthlyByCat;   // undefined — สภาพก่อนใส่ default
+    expect(() => months.map(m => (monthlyByCat[m] || {}))).toThrow(/undefined/);
+  });
+
+  // ฝั่ง analytics (getAbcWindow ฯลฯ) guard อยู่แล้วด้วย (data && data.monthlyByCat) || {}
+  it('ฝั่ง views-analytics ยัง guard monthlyByCat ด้วย (ไม่ถอยหลัง)', () => {
+    expect(VA).toMatch(/\(data && data\.monthlyByCat\) \|\| \{\}/);
+  });
+});
