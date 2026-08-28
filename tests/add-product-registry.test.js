@@ -94,17 +94,26 @@ describe('registryVariantOptions — ค่า variant ที่อ่านไ�
 
 // ── META: จุดเชื่อมต่อที่พังแล้วไม่มี error ให้เห็น ──────────────────────────
 describe('META — SAFE ROLLOUT + wiring', () => {
-  it('dispatcher AddProductView เรนเดอร์ LegacyAddProductView เมื่อ !reg || reg.off', () => {
-    expect(/if \(!reg \|\| reg\.off\) return <LegacyAddProductView/.test(VIEWS)).toBe(true);
+  it('dispatcher AddProductView เรนเดอร์ LegacyAddProductView เสมอ (staff ใช้ฟอร์มเดิมทุกกรณี)', () => {
+    // แก้ ส.ค. 2026: ระบบทะเบียนเป็นโครงสร้างหลังบ้าน ไม่ใช่ workflow ของพนักงาน →
+    // dispatcher คืน Legacy ตรง ๆ ไม่มีการสลับเข้า RegistryAddProduct อีก
+    expect(/function AddProductView\(\{ data, role, onAdded \}\) \{\s*return <LegacyAddProductView data=\{data\} role=\{role\} onAdded=\{onAdded\}\s*\/>;\s*\}/.test(VIEWS)).toBe(true);
+  });
+  it('staff path ไม่เรนเดอร์ RegistryAddProduct (registry ไม่โผล่ให้พนักงานเลย)', () => {
+    // RegistryAddProduct/RegistryAdminPanel ยังอยู่ในซอร์ส (dormant infra) แต่ต้องไม่ถูกเรนเดอร์
+    expect(/<RegistryAddProduct /.test(VIEWS)).toBe(false);
   });
   it('LegacyAddProductView ยังคงอยู่ครบ (ไม่ถูกลบ) + PurchaseInPanel ในทั้ง 2 flow', () => {
     expect(/function LegacyAddProductView\(/.test(VIEWS)).toBe(true);
     // buy mode (PurchaseInPanel) ต้องมีทั้งใน Legacy และ Registry flow (ไม่ regression)
     expect((VIEWS.match(/<PurchaseInPanel /g) || []).length).toBeGreaterThanOrEqual(2);
   });
-  it('prefix registry off → ไม่ยิง list ที่เหลือ (โหลด prefix ก่อนเป็นตัวชี้ขาด)', () => {
-    expect(/const rp = await syncListPrefixRegistry\(\);/.test(VIEWS)).toBe(true);
-    expect(/if \(!rp \|\| !rp\.success \|\| !rp\.data \|\| rp\.data\.off\) \{ setReg\(\{ off: true \}\); return; \}/.test(VIEWS)).toBe(true);
+  it('registry infra คงไว้เป็น dormant (ไม่ถูกลบ) — reserveForm/variant master ฝั่งหลังบ้านยังใช้ได้', () => {
+    // เจ้าของสั่ง: เก็บ backend improvements ที่ "มองไม่เห็น" ไว้ (registry/reserveForm/variant master)
+    // component ยังอยู่ในซอร์ส แต่ dispatcher ไม่เรนเดอร์ให้พนักงาน (ดูเทสต์ด้านบน)
+    expect(/function RegistryAddProduct\(/.test(VIEWS)).toBe(true);
+    expect(/function RegistryAdminPanel\(/.test(VIEWS)).toBe(true);
+    expect(/async function syncReserveForm\(/.test(VIEWS)).toBe(true);
   });
   it('sync helpers อ่านคำตอบด้วย dmjJson เสมอ (บทเรียนข้อ 13) ไม่มี res.json ดิบ', () => {
     // ทุก syncXxxRegistry / reserveForm ผ่าน syncListRegistry_/syncPostRegistry_ ที่ใช้ dmjJson

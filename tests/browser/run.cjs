@@ -907,12 +907,11 @@ function startServer() {
     await page.close();
   }
 
-  // ── (จ2.6a-reg) Phase C — Add Product two-track (registry ON) ──
-  // เจ้าของสั่ง (D11): เปิดระบบทะเบียน → ฟอร์มเพิ่มสินค้าเปลี่ยนเป็น 2 track · พนักงานไม่พิมพ์
-  //   Prefix/Model/Variant ดิบ · ระบบจอง Model + เลือก variant ที่อ่านได้ → preview SKU → confirm
-  // ต้องรันบนเบราว์เซอร์จริง: unit test เห็นแค่ source · ไม่เห็นว่า reserve→variant→preview→create
-  //   ทำงานต่อกันจริงบนจอ และ prefix ที่ FROZEN (L) ไม่โผล่ให้เลือก
-  // fixture ฉีดก่อน boot ด้วย addInitScript → dispatcher เข้า registry mode (ไม่งั้น off:true = Legacy)
+  // ── (จ2.6a-reg) Add Product — staff ใช้ฟอร์มเดิม (Legacy) เสมอ แม้ registry เปิด ──
+  // เจ้าของแก้ทิศ (ส.ค. 2026): ระบบทะเบียนเป็นโครงสร้างหลังบ้าน/แอดมิน ไม่ใช่ workflow ของพนักงาน
+  //   → dispatcher เรนเดอร์ LegacyAddProductView เสมอ · พนักงานไม่ต้องเลือก/สร้าง Prefix/Family/
+  //   Axis, ไม่ต้องกดจองแบบ, ไม่เห็นหน้าจัดการทะเบียน · ต้องพิสูจน์ว่าแม้ฉีด registry fixture ON
+  //   หน้าจอก็ยังเป็นฟอร์มเดิม (ไม่หลุดเข้า two-track/หน้าทะเบียน)
   {
     const page = await browser.newPage({ viewport: { width: 900, height: 1200 } });
     let status = 'ok', note = '';
@@ -934,49 +933,17 @@ function startServer() {
       const navOk = await navigateTo(page, 'owner', 'newproduct');
       await page.waitForTimeout(600);
       const body0 = await page.locator('main').innerText().catch(() => '');
+      const rc = await page.evaluate(() => window.__DMJ_RESERVE_COUNT || 0);
+      const regChip = await page.locator('[data-reg-prefix], [data-reg-variant], [data-reg-form]').count();
       if (!navOk) { status = 'NAV_FAIL'; note = 'สลับไปแท็บเพิ่มสินค้าไม่สำเร็จ'; }
-      else if (!/ระบบทะเบียน/.test(body0)) { status = 'NOT_REGISTRY'; note = 'ไม่เข้าโหมดทะเบียน (ยังเป็น Legacy) ทั้งที่ fixture เปิด ON'; }
-      else {
-        // ① prefix ที่ FROZEN (L) ต้องไม่โผล่เป็นตัวเลือก
-        const lChip = await page.locator('[data-reg-prefix="L"]').count();
-        const olChip = await page.locator('[data-reg-prefix="OL"]').count();
-        if (lChip !== 0) { status = 'FROZEN_LEAK'; note = 'Prefix L (FROZEN) โผล่เป็นตัวเลือกสร้างของใหม่'; }
-        else if (olChip < 1) { status = 'NO_PREFIX'; note = 'ไม่เห็น Prefix OL (ACTIVE) ให้เลือก'; }
-        else {
-          // ② Track 1 — เลือก OL → ตั้งชื่อแบบ → จอง → เลือกสี → preview SKU
-          await page.locator('[data-reg-prefix="OL"]').first().click({ timeout: 2000 });
-          await page.locator('main input[placeholder*="กุหลาบก้านยาว"]').first().fill('มะกอกใหม่');
-          await page.locator('main input[placeholder*="พิมพ์หมวดใหม่"]').first().fill('ดอกไม้');   // ต้องมีหมวด (canCreate)
-          await page.locator('button', { hasText: 'จองแบบ + เลขรุ่น' }).first().click({ timeout: 2000 });
-          await page.waitForTimeout(500);
-          await page.locator('[data-reg-variant="01"]').first().click({ timeout: 2000 }).catch(() => {});
-          await page.waitForTimeout(200);
-          const sku1 = (await page.locator('[data-reg-preview-sku]').first().innerText().catch(() => '') || '').trim();
-          // ③ สร้าง → success + ยิง reserveForm ครั้งเดียว
-          await page.locator('button', { hasText: 'สร้างสินค้า' }).first().click({ timeout: 2000 });
-          await page.waitForTimeout(700);
-          const body1 = await page.locator('body').innerText().catch(() => '');
-          const rc = await page.evaluate(() => window.__DMJ_RESERVE_COUNT || 0);
-          // ④ Track 2 — หลังสร้างเสร็จ track="variant" + selForm = แบบที่เพิ่งจอง → กด "เปลี่ยนแบบ"
-          //    เพื่อกลับไปเลือกแบบเดิมอื่น (R…025) → เลือกขาว(19) → preview สืบทอด prefix+model
-          await page.locator('button', { hasText: 'เปลี่ยนแบบ' }).first().click({ timeout: 2000 }).catch(() => {});
-          await page.waitForTimeout(300);
-          await page.locator('[data-reg-form="FRM00050"]').first().click({ timeout: 2000 }).catch(() => {});
-          await page.waitForTimeout(300);
-          await page.locator('[data-reg-variant="19"]').first().click({ timeout: 2000 }).catch(() => {});
-          await page.waitForTimeout(200);
-          const sku2 = (await page.locator('[data-reg-preview-sku]').first().innerText().catch(() => '') || '').trim();
-
-          if (sku1 !== 'OL01900') { status = 'T1_SKU'; note = `Track1 preview SKU = "${sku1}" (ต้อง OL01900 = OL+01+model900 ที่ ERP จอง)`; }
-          else if (!/สำเร็จ|เพิ่มสินค้า OL01900/.test(body1)) { status = 'T1_CREATE'; note = 'Track1 สร้างสินค้าแล้วไม่ขึ้นสำเร็จ'; }
-          else if (rc !== 1) { status = 'RESERVE_COUNT'; note = `ยิง reserveForm ${rc} ครั้ง (ต้อง 1 — idempotent)`; }
-          else if (sku2 !== 'R19025') { status = 'T2_SKU'; note = `Track2 preview SKU = "${sku2}" (ต้อง R19025 = สืบทอด prefix+model จากแบบเดิม)`; }
-          else note = 'Track1 OL01900 (จอง model) + สร้างสำเร็จ · Track2 สืบทอดแบบเดิม → R19025 · L(FROZEN) ไม่โผล่';
-        }
-      }
+      // ต้องเป็น Legacy: มีโหมด "🎨 สีใหม่ของแบบเดิม" · ห้ามมี "ระบบทะเบียน"/"จองแบบ"/ปุ่ม data-reg-*
+      else if (!/สีใหม่ของแบบเดิม/.test(body0)) { status = 'NO_LEGACY'; note = 'ไม่เห็นฟอร์ม SKU builder เดิม (Legacy) แม้ registry ON'; }
+      else if (/ระบบทะเบียน|จองแบบ/.test(body0) || regChip > 0) { status = 'REG_LEAK'; note = 'หลุดเข้าหน้าทะเบียน/two-track ทั้งที่พนักงานต้องเห็นฟอร์มเดิม'; }
+      else if (rc !== 0) { status = 'RESERVE_LEAK'; note = `ยิง reserveForm ${rc} ครั้ง — staff path ไม่ควรจองแบบเลย`; }
+      else note = 'registry ON แต่ staff ยังเห็นฟอร์มเดิม (Legacy) ครบ · ไม่มี Prefix/Family/Axis/จองแบบ ให้พนักงานทำ';
     } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
     await page.screenshot({ path: path.join(SHOTS, 'addproduct__registry.png') }).catch(() => {});
-    results.push({ role: 'interact', tab: 'เพิ่มสินค้า two-track (registry)', status, note });
+    results.push({ role: 'interact', tab: 'เพิ่มสินค้า — staff ได้ Legacy แม้ registry ON', status, note });
     await page.close();
   }
 

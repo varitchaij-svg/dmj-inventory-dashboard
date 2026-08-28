@@ -9813,43 +9813,23 @@ function RegistryAddProduct({ data, reg, onAdded, showToast, reloadRegistries })
   );
 }
 
-// ─── AddProductView — dispatcher: เลือก Registry flow (ON) vs Legacy flow (OFF) ───
-// SAFE ROLLOUT — โหลดทะเบียน Prefix ก่อน · off/ผิดพลาด/กำลังโหลด → Legacy (เส้นทางเดิมทั้งดุ้น)
+// ─── AddProductView — dispatcher ───
+// พนักงานใช้ "ฟอร์มเพิ่มสินค้าเดิม" (Legacy) เสมอ — เวิร์กโฟลว์ที่เรียนรู้กันมาแล้ว:
+//   หา Prefix จากชื่อ/ชิปของสินค้าเดิม · จองเลข Model อัตโนมัติฝั่ง client · เลือกสีจากตาราง
+//   มาตรฐาน 99 รหัส · เพิ่มสีใหม่ของแบบเดิมจาก "สินค้าจริง" · คิว batch 10 ตัว · SKU=barcode
+// ── ระบบทะเบียน (Prefix/Family/Form/Variant Registry) + การจองรหัสฝั่ง ERP (reserveForm)
+//    เป็น "โครงสร้างพื้นฐานหลังบ้าน/แอดมิน" ไม่ใช่ขั้นตอนที่พนักงานต้องทำหรือเห็น —
+//    พนักงานไม่ต้องเลือก/สร้าง Prefix, ไม่ต้องสร้าง Family, ไม่ต้องเลือก Variant Axis,
+//    ไม่ต้องกดจองแบบ · handler/ชีต/variant master ฝั่ง .gs ยังอยู่ครบ ทำงานเงียบ ๆ ได้
+//    (RegistryAddProduct/RegistryAdminPanel คงไว้ในซอร์สแบบ dormant เผื่อทำหน้าแอดมินแยกภายหลัง —
+//     ห้ามนำกลับมาเป็นเส้นทางของพนักงานโดยไม่มีการตัดสินใจใหม่จากเจ้าของ)
 function AddProductView({ data, role, onAdded }) {
-  const [reg, setReg] = uS(null);      // null=ยังไม่โหลด · {off:true}=ปิด · {off:false,...}=เปิด
-  const [toast, showToast, hideToast] = useToast();
-
-  const loadRegistries = uC(async () => {
-    // โหลด prefix ก่อนเป็นตัวชี้ขาด — off → ไม่ยิงที่เหลือ (เงียบสนิทเมื่อ OFF)
-    const rp = await syncListPrefixRegistry();
-    if (!rp || !rp.success || !rp.data || rp.data.off) { setReg({ off: true }); return; }
-    const [rf, rfm, rv] = await Promise.all([syncListFamilyRegistry(), syncListFormRegistry(), syncListVariantRegistry()]);
-    setReg({
-      off: false,
-      me: rp.data.me || null,
-      prefixes: rp.data.prefixes || [],
-      families: (rf && rf.success && rf.data) ? (rf.data.families || []) : [],
-      forms: (rfm && rfm.success && rfm.data) ? (rfm.data.forms || []) : [],
-      variants: (rv && rv.success && rv.data) ? (rv.data.variants || {}) : {},
-    });
-  }, []);
-
-  uE(() => { loadRegistries(); }, [loadRegistries]);
-
-  // กำลังโหลด หรือ OFF → Legacy flow เดิม (ไม่มี regression · ไม่พึ่ง registry เลย)
-  if (!reg || reg.off) return <LegacyAddProductView data={data} role={role} onAdded={onAdded} />;
-
-  return (
-    <>
-      <Toast toast={toast} onClose={hideToast} />
-      <RegistryAddProduct data={data} reg={reg} onAdded={onAdded} showToast={showToast} reloadRegistries={loadRegistries} />
-    </>
-  );
+  return <LegacyAddProductView data={data} role={role} onAdded={onAdded} />;
 }
 
 // ─── LegacyAddProductView — ฟอร์มเพิ่มสินค้าใหม่ (client-side SKU builder เดิม) ───
-// ⚠️ คงไว้ทั้งดุ้น เป็นเส้นทางที่ใช้จริงเมื่อ Product Registry ยัง OFF (SAFE ROLLOUT · Phase C)
-//    dispatcher `AddProductView` ด้านบนเลือกใช้ตัวนี้ vs `RegistryAddProduct`
+// ✅ เส้นทางของพนักงานเสมอ — `AddProductView` ด้านบนเรนเดอร์ตัวนี้ทุกกรณี
+//    (ระบบทะเบียน/reserveForm เป็นโครงสร้างหลังบ้าน ไม่แทนที่ฟอร์มนี้)
 function LegacyAddProductView({ data, role, onAdded }) {
   const products = data.products || [];
   const [toast, showToast, hideToast] = useToast();
