@@ -6864,6 +6864,13 @@ const STICKER_FORMATS = {
 };
 const stickerPageW_ = (cfg) => cfg.w * cfg.cols + cfg.gap * (cfg.cols - 1);
 
+// ── เลย์เอาต์ภายในของ sticker3 (32×25 3 ช่อง) — ค่าคงที่ในโค้ด ไม่ให้ผู้ใช้ปรับเอง ──────────
+// ปรับที่นี่ทีเดียวถ้าต้องแก้ · ⚠️ ใช้กับ sticker3 เท่านั้น — ไม่แตะ sticker 50×25 / A4 / การ์ด / Greenery
+//  nameFontPt 7pt = ทดสอบพิมพ์จริงแล้ว QR ใหญ่พอสแกนได้ (9pt ทำ QR เหลือ ~5mm เล็กเกินสแกน)
+//  qrGapMm 2mm  = ระยะห่างชื่อสินค้าจาก QR (กันชื่อทับ QR)
+//  skuBottomMm 2mm = ระยะ SKU จากขอบล่าง (SKU ชิดล่าง ใช้พื้นที่เต็ม)
+const S3_LAYOUT = { nameFontPt: 7, qrGapMm: 2, skuBottomMm: 2 };
+
 function LabelPrintView({ data, initItems, onInitConsumed }) {
   const { products } = data;
   const [items, setItems] = uS([]);
@@ -6896,6 +6903,11 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
   const [barcodeMap, setBarcodeMap] = uS({});
   const [logoSrc, setLogoSrc] = uS("logo.png");
   const [intakePdfOpen, setIntakePdfOpen] = uS(false);  // โมดัลบันทึก PDF ของเข้าใหม่ (แยกซัพพลายเออร์)
+
+  // เลย์เอาต์ภายในของ sticker3 — ค่าคงที่ (ดู S3_LAYOUT) · หน่วย: pt / mm / mm
+  const s3NamePt = S3_LAYOUT.nameFontPt;
+  const s3QrGap  = S3_LAYOUT.qrGapMm;
+  const s3SkuBot = S3_LAYOUT.skuBottomMm;
 
   const productMap = uM(() => {
     const m = {};
@@ -7170,11 +7182,14 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
   .s3-logo { height:27px; width:auto; object-fit:contain; display:block; } /* height คุม + width:auto = ไม่บีบสัดส่วน */
   .s3-price { font-size:13px; font-weight:700; color:#111; white-space:nowrap; flex-shrink:0; margin-left:auto; }
   .s3-mid { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; }
-  .s3-qr { width:78px; height:78px; }
+  /* QR เต็มพื้นที่กลางแบบสี่เหลี่ยมจัตุรัส (height 100% ของ .s3-mid ซึ่ง flex:1) — โต/หดตามที่ว่างจริง
+     จึง **ไม่มีวันทับชื่อสินค้า** ไม่ว่าจะปรับ font/ระยะห่างเท่าไหร่ (เดิม fix 13mm ล้นทับชื่อได้) */
+  .s3-qr { height:100%; aspect-ratio:1/1; width:auto; max-width:100%; }
   .s3-bc { width:100%; height:54px; }
-  .s3-bottom { flex-shrink:0; text-align:center; margin-top:3px; }
+  .s3-bottom { flex-shrink:0; text-align:center; margin-top:${s3QrGap * 6}px; }  /* ระยะห่าง QR → ชื่อ (mm×6) */
+  .lbl { padding-bottom:${s3SkuBot * 6}px; }                                    /* ระยะ SKU → ขอบล่าง (mm×6) */
   .s3-name {
-    font-size:12px; font-weight:600; color:#111; line-height:1.15; font-family:"Kanit",sans-serif;
+    font-size:${(s3NamePt * 0.3528 * 6).toFixed(1)}px; font-weight:600; color:#111; line-height:1.15; font-family:"Kanit",sans-serif;
     display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
     overflow:hidden; word-break:break-word;
   }
@@ -7207,10 +7222,13 @@ function LabelPrintView({ data, initItems, onInitConsumed }) {
     .s3-top { margin-bottom:0.6mm; gap:2mm; }
     .s3-logo { height:4.5mm; }
     .s3-price { font-size:6.5pt; }
-    .s3-qr { width:13mm; height:13mm; }
+    /* QR เต็มพื้นที่กลาง (สี่เหลี่ยมจัตุรัส) แทน fix 13mm — โต/หดตามที่ว่าง ไม่ทับชื่อ */
+    .s3-qr { height:100%; aspect-ratio:1/1; width:auto; max-width:100%; }
     .s3-bc { height:9mm; }
-    .s3-bottom { margin-top:0.4mm; }
-    .s3-name { font-size:6pt; }
+    /* ── เลย์เอาต์ sticker3 (ค่าคงที่ S3_LAYOUT — ไม่ให้ผู้ใช้ปรับ) ── */
+    .s3-name { font-size:${s3NamePt}pt; }                /* ขนาดตัวอักษรชื่อสินค้า */
+    .s3-bottom { margin-top:${s3QrGap}mm; }              /* ระยะห่างชื่อสินค้าจาก QR */
+    .lbl { padding-bottom:${s3SkuBot}mm; }               /* ระยะ SKU จากขอบล่าง */
     .s3-sku { font-size:5.5pt; margin-top:0.3mm; }
     ` : ""}
   }
@@ -7620,9 +7638,12 @@ ${labelsHTML}
            Layout: โลโก้แนวนอนมุมบนซ้าย (height คุม + width:auto = ไม่บีบสัดส่วน) + ราคาบนขวา ·
            QR กึ่งกลาง · ชื่อสินค้า (สูงสุด 2 บรรทัด) + SKU ด้านล่าง — ตรงกับ printVaseLabels (.s3-*) */
         (() => {
-          const SCALE = 6;
+          const SCALE = 6;   // 1mm = 6px บนพรีวิว
           const boxW = stickerCfg.w * SCALE, boxH = stickerCfg.h * SCALE, gapPx = stickerCfg.gap * SCALE;
-          const qrSz = Math.round(boxH * 0.5);
+          // เลย์เอาต์ sticker3 (ค่าคงที่ S3_LAYOUT) แปลงเป็น px ให้พรีวิวตรงกับตอนพิมพ์
+          const namePx = +(s3NamePt * 0.3528 * SCALE).toFixed(1);  // pt → px
+          const qrGapPx = s3QrGap * SCALE;                          // mm → px
+          const skuBotPx = s3SkuBot * SCALE;                        // mm → px
           return (
             <div className="no-print" style={{padding:"4px 0"}}>
               <div style={{display:"flex",flexWrap:"wrap",gap:gapPx,width:stickerPageW*SCALE,maxWidth:"100%"}}>
@@ -7631,7 +7652,7 @@ ${labelsHTML}
                     width:boxW, height:boxH, boxSizing:"border-box",
                     background:"#fff", boxShadow:"0 1px 4px rgba(0,0,0,.12)",
                     display:"flex", flexDirection:"column",
-                    padding:"6px 8px", overflow:"hidden", flexShrink:0,
+                    padding:`6px 8px ${skuBotPx}px`, overflow:"hidden", flexShrink:0,
                   }}>
                     {/* แถวบน: โลโก้แนวนอน (ห้ามหมุน/บีบ — height คุมเท่านั้น width:auto ตามสัดส่วนจริง) + ราคา
                         justifyContent:"flex-start" + marginLeft:"auto" บนราคา (ไม่ใช้ space-between) —
@@ -7643,19 +7664,20 @@ ${labelsHTML}
                         <span style={{fontSize:13,fontWeight:700,color:"#111",fontFamily:"Kanit,sans-serif",flexShrink:0,whiteSpace:"nowrap",marginLeft:"auto"}}>{p.price} ฿</span>
                       )}
                     </div>
-                    {/* กลาง: QR — ไม่ชนโลโก้/ราคา/ชื่อ/SKU เพราะแยกแถวกันแล้ว */}
+                    {/* กลาง: QR เต็มพื้นที่กลางแบบสี่เหลี่ยมจัตุรัส (height 100% ของกล่อง flex:1) —
+                        โต/หดตามที่ว่างจริง จึงไม่มีวันทับชื่อสินค้าไม่ว่าจะปรับ font/ระยะห่างเท่าไหร่ */}
                     <div style={{flex:1,minHeight:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                      <div style={{width:qrSz,height:qrSz}}>
+                      <div style={{height:"100%",aspectRatio:"1 / 1",maxWidth:"100%"}}>
                         {qrMap[p.sku]
                           ? <img src={qrMap[p.sku]} alt={p.sku} style={{width:"100%",height:"100%",objectFit:"contain"}}/>
                           : <div style={{width:"100%",height:"100%",background:"#f0f0f0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:"#aaa"}}>QR</div>
                         }
                       </div>
                     </div>
-                    {/* ล่าง: ชื่อสินค้า (สูงสุด 2 บรรทัด แล้วตัด) + SKU */}
-                    <div style={{flexShrink:0,textAlign:"center",marginTop:3}}>
+                    {/* ล่าง: ชื่อสินค้า (สูงสุด 2 บรรทัด แล้วตัด) + SKU · ระยะห่าง/ขนาด font = ค่าคงที่ S3_LAYOUT */}
+                    <div style={{flexShrink:0,textAlign:"center",marginTop:qrGapPx}}>
                       <div style={{
-                        fontSize:12,fontWeight:600,color:"#111",fontFamily:"Kanit,sans-serif",lineHeight:1.15,
+                        fontSize:namePx,fontWeight:600,color:"#111",fontFamily:"Kanit,sans-serif",lineHeight:1.15,
                         display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",wordBreak:"break-word",
                       }}>{p.name}</div>
                       <div style={{fontSize:11,fontFamily:"Kanit,sans-serif",fontWeight:500,color:"#333",letterSpacing:.4,marginTop:2}}>{p.sku}</div>
