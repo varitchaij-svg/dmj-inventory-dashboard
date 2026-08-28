@@ -116,9 +116,9 @@ describe('A4 preview — รูเจาะติดทุกโหมด, SKU t
   });
 });
 
-describe('ปุ่มสลับ QR/Barcode — เฉพาะโหมด A4/สติ๊กเกอร์ ไม่ใช่โหมดการ์ด', () => {
-  it('ห่อด้วย printMode !== "card"', () => {
-    expect(ANA).toMatch(/\{printMode !== "card" && \(\s*\n\s*<div style=\{\{display:"flex",alignItems:"center",gap:8,marginBottom:14/);
+describe('ปุ่มสลับ QR/Barcode — เฉพาะโหมด A4/สติ๊กเกอร์ ไม่ใช่โหมดการ์ด/Static Template', () => {
+  it('ห่อด้วย printMode !== "card" && !isStaticTemplate', () => {
+    expect(ANA).toMatch(/\{printMode !== "card" && !isStaticTemplate && \(\s*\n\s*<div style=\{\{display:"flex",alignItems:"center",gap:8,marginBottom:14/);
   });
   it('มีตัวเลือกครบ qr + barcode', () => {
     const seg = grab(ANA, /\[\{id:"qr",label:"🔲 QR"\},\{id:"barcode",label:"▤ Barcode"\}\]/, 'code type segmented control');
@@ -127,7 +127,7 @@ describe('ปุ่มสลับ QR/Barcode — เฉพาะโหมด A4
 });
 
 describe('สติ๊กเกอร์ (printVaseLabels) — รองรับ barcode ด้วย ไม่มีรูเจาะ', () => {
-  const fn = grab(ANA, /const printVaseLabels = uC\(\(\) => \{[\s\S]*?\n  \}, \[labelList, qrMap, barcodeMap, codeType, logoSrc\]\);/, 'printVaseLabels');
+  const fn = grab(ANA, /const printVaseLabels = uC\(\(\) => \{[\s\S]*?\n  \}, \[labelList, qrMap, barcodeMap, codeType, logoSrc, printMode\]\);/, 'printVaseLabels');
 
   it('แตกสาขาตาม isBc แล้วใช้ barcodeMap แทน qrMap', () => {
     expect(fn).toMatch(/const isBc = codeType === "barcode";/);
@@ -139,7 +139,7 @@ describe('สติ๊กเกอร์ (printVaseLabels) — รองรั�
   it('ไม่มี .label-hole/รูเจาะใด ๆ ในเทมเพลตนี้ (สติ๊กเกอร์แปะติดตัว ไม่ได้ร้อยแขวน)', () => {
     expect(fn).not.toMatch(/lbl-hole|label-hole/);
   });
-  it('dependency array ของ useCallback มี barcodeMap + codeType (กัน closure ค้างของเก่าตอนกดพิมพ์หลังสลับโหมด)', () => {
-    expect(ANA).toMatch(/\}, \[labelList, qrMap, barcodeMap, codeType, logoSrc\]\);/);
+  it('dependency array ของ useCallback มี barcodeMap + codeType + printMode (กัน closure ค้างของเก่าตอนกดพิมพ์หลังสลับโหมด/รูปแบบสติ๊กเกอร์)', () => {
+    expect(ANA).toMatch(/\}, \[labelList, qrMap, barcodeMap, codeType, logoSrc, printMode\]\);/);
   });
 });
