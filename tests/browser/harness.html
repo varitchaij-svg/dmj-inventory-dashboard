@@ -132,9 +132,27 @@
   // = สภาพจริงตอน GAS กำลัง build ก้อนใหญ่อยู่ (7.6-18 วิ) · เป็นโหมดเดียวที่พิสูจน์ได้ว่า
   // "เปิดแอปแล้วใช้งานได้โดยไม่ต้องรอ buildFullData_" จริงหรือแค่บังเอิญเร็ว
   const BOOT_ONLY = q.get('bootonly') === '1';
+  // Regression (Phase B fix): จำลอง "snapshot ที่ถูกตัดด้วย trimForStorage_" — โควตา localStorage
+  // ไม่พอ → เก็บก้อนย่อที่ **ตัด monthlyByCat/dailyByCat ทิ้งแต่คง monthLabels** (ดู trimForStorage_)
+  // เป็นสภาพจริงบนมือถือที่โควตาแน่น · เปิดแอปแล้ว loadFromStorage คืนก้อนนี้ → OverviewView เห็น
+  // monthLabels (ไม่ว่าง) แต่ monthlyByCat = undefined → `monthlyByCat[m]` เคยพังทั้งหน้า
+  const TRIM_SNAP = q.get('trimsnap') === '1';
 
   // ── seed ข้อมูลลง localStorage เพื่อให้ loadFromStorage() render ทันที ──
-  if (!NO_DATA && !BOOT_ONLY) {
+  if (TRIM_SNAP) {
+    // เลียนแบบ trimForStorage_: ตัดคีย์หนักทิ้ง (monthlyByCat/dailyByCat/purchases/transfers/mtoGroups)
+    // + ตัด mo ของสินค้า **แต่คง monthLabels ไว้** → นี่คือสภาพที่ OverviewView เคยพัง
+    var __full = window.__DMJ_PAYLOAD || {};
+    var __drop = { monthlyByCat:1, dailyByCat:1, purchases:1, transfers:1, mtoGroups:1 };
+    var __trim = {};
+    Object.keys(__full).forEach(function(k){ if(!__drop[k]) __trim[k] = __full[k]; });
+    __trim.products = (__full.products || []).map(function(x){
+      var q2={}; Object.keys(x).forEach(function(k){ if(k!=='mo'&&k!=='monthly') q2[k]=x[k]; }); return q2;
+    });
+    __trim._trimmed = 1;
+    localStorage.setItem('dmj_dashboard_data_v1', JSON.stringify(__trim));
+    localStorage.setItem('dmj_dashboard_source_v1', 'sheet');
+  } else if (!NO_DATA && !BOOT_ONLY) {
     localStorage.setItem('dmj_dashboard_data_v1', JSON.stringify(window.__DMJ_PAYLOAD));
     localStorage.setItem('dmj_dashboard_source_v1', 'sheet');
   } else {
@@ -270,7 +288,7 @@
     // = เส้นทาง boot ไม่เคยถูกทดสอบเลยทั้งที่เทสต์ยังเขียว
     // จำลองของจริง: ตัดคีย์หนัก (ยอดขาย/ซื้อ/โอน/MTO) + ตัด soldQty/soldRev/mo ของสินค้าทุกตัว
     if (/action=boot/.test(url)) {
-      if (NO_DATA) return new Promise(function () {});
+      if (NO_DATA || TRIM_SNAP) return new Promise(function () {});
       var full = window.__DMJ_PAYLOAD || {};
       var DROP = ['monthlyByCat', 'dailyByCat', 'dayLabels', 'monthLabels', 'purchases',
                   'transfers', 'transferStats', 'mtoJobs', 'mtoGroups'];
@@ -292,7 +310,7 @@
       // โหมด nodata: ค้างไว้ไม่ตอบเลย (เหมือนเน็ตร้านช้า/ก้อนใหญ่ยังไหลไม่จบ)
       // ต้อง "ไม่ตอบ" ไม่ใช่ "ตอบ error" — เพราะสิ่งที่ทดสอบคือช่วง *ระหว่างรอ*
       // ซึ่งเป็นช่วงที่พนักงานต้องลงเวลาได้ ไม่ใช่ช่วงหลังจากมันล้มเหลวไปแล้ว
-      if (NO_DATA || BOOT_ONLY) return new Promise(function () {});
+      if (NO_DATA || BOOT_ONLY || TRIM_SNAP) return new Promise(function () {});
       const payload = Object.assign({}, window.__DMJ_PAYLOAD, { lastModified: Date.now() });
       // Phase A1: app.jsx ส่ง pv=3 เสมอ → ส่ง products แบบคอลัมน์ให้ expandProductsColumnar กางจริง
       if (/[?&]pv=3(?:&|$)/.test(url) && Array.isArray(payload.products)) {

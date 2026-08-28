@@ -1497,6 +1497,41 @@ function startServer() {
     await page.close();
   }
 
+  // ── Regression (Phase B fix): OverviewView ต้องไม่พังเมื่อ snapshot ถูกตัดด้วย trimForStorage_ ──
+  // trimForStorage_ (Phase 1) ตัด monthlyByCat/dailyByCat ทิ้งแต่ **คง monthLabels** เมื่อโควตา
+  // localStorage แน่น (มือถือ = จอหลักของร้าน) · เดิม OverviewView destructure monthlyByCat โดย
+  // ไม่มี default → `months.map(m => monthlyByCat[m])` โยน "Cannot read properties of undefined"
+  // → ErrorBoundary จับ → แท็บภาพรวมกลายเป็นจอ "😵 เกิดข้อผิดพลาด" · pure boot-only (monthLabels
+  // ว่าง) ไม่โดน แต่ boot ที่ merge ทับ trimmed snapshot ยังคง monthLabels ไว้ = โดน
+  {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    const bad = [];
+    page.on('pageerror', e => bad.push('pageerror: ' + String(e.message || e).slice(0, 120)));
+    page.on('console', m => { const t = m.text(); if (/monthlyByCat|Cannot read properties of undefined|is not an object/.test(t)) bad.push('console: ' + t.slice(0, 120)); });
+    try {
+      // dev = default tab "overview" · trimsnap=1 = snapshot มี monthLabels แต่ไม่มี monthlyByCat + network ค้าง
+      await page.goto(`${base}?role=dev&tab=overview&trimsnap=1`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      await page.waitForTimeout(2500);
+      const txt = await page.locator('body').innerText();
+      const boundaryShown = /เกิดข้อผิดพลาด/.test(txt) && /โหลดใหม่/.test(txt);
+      const overviewMounted = await page.locator('main[data-screen-label="overview"]').count();
+      if (boundaryShown) {
+        status = 'CRASH'; note = 'แท็บภาพรวมขึ้น ErrorBoundary (monthlyByCat undefined) — regression ยังอยู่';
+      } else if (bad.length) {
+        status = 'JS_ERROR'; note = bad.slice(0, 2).join(' · ');
+      } else if (!overviewMounted) {
+        status = 'NO_OVERVIEW'; note = 'ไม่ได้อยู่แท็บภาพรวม (dev ต้อง default overview)';
+      } else {
+        note = 'แท็บภาพรวมเรนเดอร์ปกติจาก trimmed snapshot (monthLabels มี · monthlyByCat ถูกตัด) ไม่พัง';
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'overview__trimsnap.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'ภาพรวมไม่พังเมื่อ snapshot ถูกตัด (monthlyByCat undefined)', status, note });
+    await page.close();
+  }
+
   // หน้าหลักต้องเปิดได้ทั้งที่ข้อมูลก้อนใหญ่ยังไม่มา — ถ้าติดจอโหลด ทางด่วนลงเวลาก็เสียครึ่งหนึ่ง
   // (กดโลโก้ตอนเปิดแอปใหม่แล้วเจอสปินเนอร์ = ไปไหนต่อไม่ได้เลย)
   {
