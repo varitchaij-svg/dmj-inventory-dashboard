@@ -3740,7 +3740,7 @@ function CategoryView({ data, role, onNav }) {
   // ⭐ วิธีเลือกสินค้าเพิ่มเติมนอกจากร้านค้า (Option B — Union, ดู docs/PLAN-STOCKCHECK-KEYWORD-SELECT.md §2)
   // แท็บ 🏭 ร้านค้า (checkSuppliers ด้านบน) กับตะกร้าด้านล่างนี้เป็นคนละแหล่งเด็ดขาด ไม่ผสมกัน
   // รวมกันแค่ตอนคำนวณ checkFinalSkus (union) ตอนจะส่งเท่านั้น
-  const [checkMode, setCheckMode] = uS("supplier");          // 'supplier' | 'keyword' — แท็บที่เปิดอยู่
+  const [checkMode, setCheckMode] = uS("supplier");          // 'supplier'|'keyword'|'category'|'color' — แท็บที่เปิดอยู่
   const [checkKeyword, setCheckKeyword] = uS("");             // ข้อความค้นชื่อสินค้า (แท็บ 🔍 — คนละช่องกับ checkSearch ที่กรองชิปร้านค้า)
   const [checkPicked, setCheckPicked] = uS(new Set());        // SKU ที่เพิ่มจากแท็บ 🔍 เท่านั้น (ห้ามมี SKU จากแท็บ 🏭 ปนมา)
   const [checkExcluded, setCheckExcluded] = uS(new Set());    // SKU ที่ผู้ใช้ติ๊กออกจากรายการที่จะส่ง — ตัดจาก union ไม่สนแหล่งที่มา
@@ -4123,17 +4123,50 @@ function CategoryView({ data, role, onNav }) {
 
   // ผลค้นชื่อสินค้าต่อเทอม (แท็บ 🔍) — แยกผลรายเทอมไว้ (ไม่รวมเป็นก้อนเดียว) เพื่อบอกได้ว่า
   // เทอมไหน "ไม่เจอ" — ห้ามเงียบ (เจ้าของพิมพ์ 5 คำแล้วเข้าระบบ 4 คำต้องรู้ตัว ไม่ใช่เดาว่าครบ)
-  // loose:false คงที่ใน Phase 1 — ชั้นผ่อนการสะกดเป็นงานของ Phase 2 (ยังไม่ทำในรอบนี้)
+  // ⚠️ ชั้นสำรอง (Phase 2) ทำงานเฉพาะเมื่อค้นตรง ๆ ได้ 0 ผลลัพธ์**ทั้งเทอม** — ไม่ใช่ทำเสมอ
+  // (เช่น "เบอร์รี่แดง" spelled ต่างจาก catalog แค่คำเดียว "แดง" ที่สะกดถูกอยู่แล้วยัง match ได้
+  // ตามปกติหลัง normalize ทั้งคู่ ไม่ต้องแยก logic ระดับ token — ดู Plan §3 Phase 2 ข้อ 2)
   const checkKeywordResult = uM(() => {
     return checkMatchTerms(checkKeyword).map(tokens => {
       const lowerTokens = tokens.map(t => t.toLowerCase());
-      const skus = checkBase.filter(p => {
+      const strictSkus = checkBase.filter(p => {
         const hay = ((p.sku||"") + " " + (p.name||"")).toLowerCase();
         return lowerTokens.every(t => hay.includes(t));
       }).map(p => p.sku);
-      return { term: tokens.join(" "), skus, loose: false };
+      if (strictSkus.length) return { term: tokens.join(" "), skus: strictSkus, loose: false };
+      // ⚠️ ต้อง normalize ทั้ง token และ hay ด้วย dmjThaiKey ตัวเดียวกันเสมอ — normalize ฝั่งเดียว
+      // ไม่มีวันแมตช์ (สตริงสองฝั่งอยู่คนละรูปแบบ) · token ที่ normalize แล้วสั้นกว่า 2 ตัวอักษร
+      // → ทั้งเทอมไม่เข้าชั้นสำรอง (กว้างเกินจนไร้ความหมาย)
+      const normTokens = lowerTokens.map(t => dmjThaiKey(t));
+      if (normTokens.some(t => t.length < 2)) return { term: tokens.join(" "), skus: [], loose: false };
+      const looseSkus = checkBase.filter(p => {
+        const hayNorm = dmjThaiKey((p.sku||"") + " " + (p.name||""));
+        return normTokens.every(t => hayNorm.includes(t));
+      }).map(p => p.sku);
+      return { term: tokens.join(" "), skus: looseSkus, loose: looseSkus.length > 0 };
     });
   }, [checkKeyword, checkBase]);
+
+  // ── แท็บ 🏷️ หมวด (Phase 3) — ใช้ allCats (รายชื่อ+ลำดับหมวดที่มีอยู่แล้วในไฟล์นี้) เก็บ SKU
+  // ต่อหมวดจาก checkBase ไว้ในตัวเลย (ทั้งคลังเสมอ เหมือน checkSupplierList) กันการ filter
+  // checkBase ซ้ำต่อชิปตอน render · ไม่ใช้ navCats เพราะนั่นถูกกรองด้วยโหมด ⭐ ของฉันแล้ว
+  const checkCategoryChips = uM(() => {
+    const m = {};
+    checkBase.forEach(p => { if (p.cat) (m[p.cat] || (m[p.cat] = [])).push(p.sku); });
+    return allCats.map(c => ({ name: c, skus: m[c] || [] }));
+  }, [allCats, checkBase]);
+
+  // ── แท็บ 🎨 สี (Phase 3) — pattern เดียวกับ colorChips ที่มีอยู่แล้ว แต่อิง checkBase
+  // (ทั้งคลัง) แทน refineBase (ผูกหมวด/คำค้นหน้าหลัก) ตามกฎเดียวกับ checkSupplierList
+  const checkColorChips = uM(() => {
+    const m = {};
+    checkBase.forEach(p => {
+      if (p.color) { if (!m[p.color.name]) m[p.color.name] = { skus: [], hex: p.color.hex }; m[p.color.name].skus.push(p.sku); }
+    });
+    return Object.entries(m).map(([name, v]) => ({ name, hex: v.hex, skus: v.skus }))
+      .sort((a,b) => (COLOR_ORDER.indexOf(a.name)===-1?99:COLOR_ORDER.indexOf(a.name)) -
+                     (COLOR_ORDER.indexOf(b.name)===-1?99:COLOR_ORDER.indexOf(b.name)));
+  }, [checkBase]);
 
   // SKU ที่ derive สดจากแท็บ 🏭 ร้านค้า (เหมือนของเดิมทุกประการ — ไม่แตะ checkSuppliers เลย)
   const checkSupplierSkus = uM(() =>
@@ -4156,6 +4189,31 @@ function CategoryView({ data, role, onNav }) {
     checkBase.forEach(p => { bySku[p.sku] = p; });
     return Array.from(checkFinalSkus).map(sku => bySku[sku]).filter(Boolean);
   }, [checkFinalSkus, checkBase]);
+
+  // ── sourceLabel (Phase 4) — ข้อความสรุป "เลือกด้วยวิธีไหน" ให้แจ้งเตือน/การ์ดติดตามคำขอ ──────
+  // ประกอบจาก "ทุกแท็บที่มีส่วนร่วมจริง" ไม่ใช่แค่แท็บที่เปิดอยู่ตอนกดส่ง — Option B สะสมข้ามแท็บ
+  // ได้ (เลือกร้าน DS ในแท็บ 🏭 แล้วสลับไปพิมพ์ค้น "โบตั๋น" ในแท็บ 🔍 ต้องเห็นทั้งคู่ในแจ้งเตือน
+  // ไม่ใช่แค่แท็บสุดท้าย — ดู docs/PLAN-STOCKCHECK-KEYWORD-SELECT.md Phase 4 ข้อ 6)
+  // ⚠️ ไม่ใช่ provenance tracking จริง — Option B ไม่เก็บว่า SKU ไหนมาจากแท็บไหน (กฎเหล็ก Plan §2
+  // ข้อ 5) ที่นี่ใช้วิธีเดียวกับที่ชิปโชว์ "✓ เพิ่มแล้ว" อยู่แล้ว: เทอม/หมวด/สีใดที่ "ทุก SKU ของมัน
+  // อยู่ใน checkPicked ครบ" ถือว่าเป็นแหล่งที่มีส่วนร่วม (สอดคล้องกับสิ่งที่ผู้ใช้เห็นบนจอ)
+  const checkSourceLabel = uM(() => {
+    const segments = [];
+    if (checkSuppliers.size) segments.push("🏭 " + Array.from(checkSuppliers).join(", "));
+    const terms = checkKeywordResult
+      .filter(r => r.skus.length > 0 && r.skus.every(sku => checkPicked.has(sku)))
+      .map(r => r.term);
+    if (terms.length) segments.push("🔍 " + terms.join(", "));
+    const cats = checkCategoryChips
+      .filter(c => c.skus.length > 0 && c.skus.every(sku => checkPicked.has(sku)))
+      .map(c => c.name);
+    if (cats.length) segments.push("🏷️ " + cats.join(", "));
+    const colors = checkColorChips
+      .filter(c => c.skus.length > 0 && c.skus.every(sku => checkPicked.has(sku)))
+      .map(c => c.name);
+    if (colors.length) segments.push("🎨 " + colors.join(", "));
+    return segments.join(" · ");
+  }, [checkSuppliers, checkKeywordResult, checkCategoryChips, checkColorChips, checkPicked]);
 
   // เพดาน render ของบล็อก "รายการที่จะส่ง" — เลือกทั้งหมวด/หลายร้านพร้อมกันอาจได้เป็นร้อย SKU
   // render การ์ดรูปทุกใบพร้อมกันเสี่ยงจอค้างบนมือถือเครื่องพนักงาน (ดู Plan §3 Phase 1 ข้อ 7)
@@ -4992,22 +5050,37 @@ function CategoryView({ data, role, onNav }) {
               <button onClick={function(){ setCheckSendOpen(false); setCheckSearch(""); resetCheckPicker(); }}
                 style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:"#6b7280"}}>✕</button>
             </div>
-            {/* แท็บวิธีเลือกสินค้า — 🏭 ร้านค้า (เดิม) / 🔍 ค้นชื่อ (ใหม่) เป็นคนละแหล่งกันเด็ดขาด
-                (Option B) รวมกันแค่ตอนคำนวณ checkFinalSkus ตอนกดส่ง ดู docs/PLAN-STOCKCHECK-KEYWORD-SELECT.md §2 */}
-            <div style={{padding:"10px 16px 0",display:"flex",gap:8}}>
+            {/* แท็บวิธีเลือกสินค้า — 🏭 ร้านค้า (เดิม) / 🔍 ค้นชื่อ / 🏷️ หมวด / 🎨 สี เป็นคนละแหล่ง
+                กันเด็ดขาด (Option B) รวมกันแค่ตอนคำนวณ checkFinalSkus ตอนกดส่ง — ดู
+                docs/PLAN-STOCKCHECK-KEYWORD-SELECT.md §2 · flexWrap ให้ห่อเป็น 2 แถวบนจอแคบ */}
+            <div style={{padding:"10px 16px 0",display:"flex",flexWrap:"wrap",gap:8}}>
               <button onClick={function(){ setCheckMode("supplier"); }}
-                style={{flex:1,padding:"8px 0",borderRadius:10,fontFamily:"inherit",cursor:"pointer",
+                style={{flex:"1 1 45%",padding:"8px 0",borderRadius:10,fontFamily:"inherit",cursor:"pointer",
                         border:checkMode==="supplier"?"2px solid #1f7f44":"1px solid #e5e7eb",
                         background:checkMode==="supplier"?"#dcf2e2":"#fff",
                         color:checkMode==="supplier"?"#1f7f44":"#6b7280",fontWeight:700,fontSize:13}}>
                 🏭 ร้านค้า{checkSuppliers.size > 0 ? " (" + checkSuppliers.size + ")" : ""}
               </button>
               <button onClick={function(){ setCheckMode("keyword"); }}
-                style={{flex:1,padding:"8px 0",borderRadius:10,fontFamily:"inherit",cursor:"pointer",
+                style={{flex:"1 1 45%",padding:"8px 0",borderRadius:10,fontFamily:"inherit",cursor:"pointer",
                         border:checkMode==="keyword"?"2px solid #1f7f44":"1px solid #e5e7eb",
                         background:checkMode==="keyword"?"#dcf2e2":"#fff",
                         color:checkMode==="keyword"?"#1f7f44":"#6b7280",fontWeight:700,fontSize:13}}>
                 🔍 ค้นชื่อ{checkPicked.size > 0 ? " (" + checkPicked.size + ")" : ""}
+              </button>
+              <button onClick={function(){ setCheckMode("category"); }}
+                style={{flex:"1 1 45%",padding:"8px 0",borderRadius:10,fontFamily:"inherit",cursor:"pointer",
+                        border:checkMode==="category"?"2px solid #1f7f44":"1px solid #e5e7eb",
+                        background:checkMode==="category"?"#dcf2e2":"#fff",
+                        color:checkMode==="category"?"#1f7f44":"#6b7280",fontWeight:700,fontSize:13}}>
+                🏷️ หมวด
+              </button>
+              <button onClick={function(){ setCheckMode("color"); }}
+                style={{flex:"1 1 45%",padding:"8px 0",borderRadius:10,fontFamily:"inherit",cursor:"pointer",
+                        border:checkMode==="color"?"2px solid #1f7f44":"1px solid #e5e7eb",
+                        background:checkMode==="color"?"#dcf2e2":"#fff",
+                        color:checkMode==="color"?"#1f7f44":"#6b7280",fontWeight:700,fontSize:13}}>
+                🎨 สี
               </button>
             </div>
             {checkMode === "supplier" && (
@@ -5101,6 +5174,13 @@ function CategoryView({ data, role, onNav }) {
                           <div style={{flex:1,minWidth:0}}>
                             <div style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                               {r.term}
+                              {r.loose && (
+                                <span style={{marginLeft:6,fontSize:10,fontWeight:700,color:"#b45309",
+                                              background:"#fffbeb",border:"1px solid #fcd34d",
+                                              borderRadius:8,padding:"1px 6px"}}>
+                                  ≈ ค้นแบบผ่อนการสะกด
+                                </span>
+                              )}
                             </div>
                             <div style={{fontSize:11,color:r.skus.length ? "#6b7280" : "#dc2626",fontWeight:r.skus.length?400:700}}>
                               {r.skus.length ? "พบ " + r.skus.length + " รายการ" : "⚠️ ไม่พบสินค้าที่ตรงกับคำนี้"}
@@ -5126,6 +5206,64 @@ function CategoryView({ data, role, onNav }) {
                     })}
                   </div>
                 )}
+              </div>
+            )}
+            {checkMode === "category" && (
+              <div style={{overflowY:"auto",flex:1,padding:"8px 16px 4px"}}>
+                <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                  {checkCategoryChips.map(function(c) {
+                    var already = c.skus.length > 0 && c.skus.every(function(sku){ return checkPicked.has(sku); });
+                    return (
+                      <button key={c.name} disabled={already || !c.skus.length}
+                        onClick={function(){
+                          setCheckPicked(function(prev){
+                            var n = new Set(prev);
+                            c.skus.forEach(function(sku){ n.add(sku); });
+                            return n;
+                          });
+                        }}
+                        style={{padding:"8px 14px",borderRadius:20,fontSize:13,fontWeight:already?600:400,
+                                cursor:(already || !c.skus.length)?"default":"pointer",fontFamily:"inherit",
+                                border: already?"2px solid #1f7f44":"1px solid #e5e7eb",
+                                background:already?"#dcf2e2":"#fff", color:already?"#1f7f44":"#374151",
+                                opacity:c.skus.length?1:.5}}>
+                        {already ? "✓ " : ""}{c.name} <span style={{fontSize:11,opacity:.7}}>({c.skus.length})</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {checkMode === "color" && (
+              <div style={{overflowY:"auto",flex:1,padding:"8px 16px 4px"}}>
+                <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                  {checkColorChips.length === 0 ? (
+                    <div style={{padding:"20px 0",width:"100%",textAlign:"center",color:"#9ca3af",fontSize:14}}>
+                      ไม่พบสีของสินค้า
+                    </div>
+                  ) : checkColorChips.map(function(c) {
+                    var already = c.skus.length > 0 && c.skus.every(function(sku){ return checkPicked.has(sku); });
+                    return (
+                      <button key={c.name} disabled={already}
+                        onClick={function(){
+                          setCheckPicked(function(prev){
+                            var n = new Set(prev);
+                            c.skus.forEach(function(sku){ n.add(sku); });
+                            return n;
+                          });
+                        }}
+                        style={{padding:"8px 14px",borderRadius:20,fontSize:13,fontWeight:already?600:400,
+                                cursor:already?"default":"pointer",fontFamily:"inherit",
+                                border: already?"2px solid #1f7f44":"1px solid #e5e7eb",
+                                background:already?"#dcf2e2":"#fff", color:already?"#1f7f44":"#374151"}}>
+                        <span style={{width:10,height:10,borderRadius:"50%",background:c.hex,
+                                      border:"1px solid rgba(0,0,0,.1)",display:"inline-block",
+                                      marginRight:4,verticalAlign:"middle"}}/>
+                        {already ? "✓ " : ""}{c.name} <span style={{fontSize:11,opacity:.7}}>({c.skus.length})</span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             )}
             {/* รายการที่จะส่ง — union ของทั้ง 2 แหล่ง (checkFinalSkus) ให้เห็นก่อนกดส่งเสมอ ไม่ว่า
@@ -5183,10 +5321,13 @@ function CategoryView({ data, role, onNav }) {
                       // สินค้าในแจ้งเตือน (อ่านง่ายกว่ารายชื่อสินค้าเป็นสิบ-ร้อยตัว) · ยังเป็น
                       // Array.from(checkSuppliers) เป๊ะเหมือนเดิม แม้บาง SKU ใน ps จะมาจากแท็บ 🔍
                       // ก็ตาม (Option B ไม่ผสม 2 แหล่ง ดู Plan §2 กฎเหล็กข้อ 5)
+                      // sourceLabel (Phase 4) = ข้อความสรุปทุกแท็บที่มีส่วนร่วมจริง — backend ให้
+                      // ตัวนี้ชนะ suppliers/names เวลาสร้างข้อความแจ้งเตือน (stockCheckPreviewText_)
                       body: JSON.stringify({createStockCheck:true, actor: role,
                         skus: ps.map(function(p){ return p.sku; }),
                         names: ps.map(function(p){ return p.name||p.sku; }),
-                        suppliers: Array.from(checkSuppliers)}),
+                        suppliers: Array.from(checkSuppliers),
+                        sourceLabel: checkSourceLabel}),
                     });
                     var json = await dmjJson(res);
                     if(json.success){

@@ -907,6 +907,76 @@ function startServer() {
     await page.close();
   }
 
+  // ── (จ2.7) ปุ่มลอย 📤 — โหมดหมวด/สี/ค้นชื่อ ผสมกันได้ (Option B union) + dedup + reset ──
+  // docs/PLAN-STOCKCHECK-KEYWORD-SELECT.md Phase 3 — unit test เห็นแค่ source/ผลลัพธ์คำนวณ
+  // ไม่เห็นว่าคลิกจริงบนจอแล้ว state เดินถูกไหม (โดยเฉพาะ dedup ข้ามแท็บ กับ reset ตอนปิด modal)
+  // fixture: FLW002 เป็นทั้งหมวด "ดอกไม้" ตัวเดียว และสี "แดง" ตัวเดียว (detectColor จับจากชื่อ
+  // "ดอกไม้ประดิษฐ์ สีแดง") — ใช้ทดสอบ dedup ข้ามแท็บได้พอดีโดยไม่ต้องแก้ fixture
+  {
+    const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=owner&tab=categories`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, 'owner', 'categories');
+      const fab = page.locator('div', { hasText: /^📤$/ }).first();
+      await fab.click({ timeout: 3000 });
+      await page.waitForTimeout(300);
+
+      // 1) แท็บ 🏷️ หมวด → เลือก "ดอกไม้" → ต้องได้ FLW002 เข้ารายการ
+      // ⚠️ harness.html ไม่โหลด CSS จาก "Doomuenjing Dashboard.html" (มีแค่ style เล็ก ๆ ใน head)
+      // → media query `.cat-sidebar { display:none }` ที่ซ่อน sidebar "หมวดหมู่" บนจอแคบไม่มีผล
+      // ที่นี่ → sidebar เดิมยังโผล่เป็น <button>ดอกไม้...</button> ปนอยู่ในหน้าเดียวกับ modal
+      // → ต้องใช้ .last() เพราะ modal (checkSendOpen block) ถูก render ทีหลัง sidebar เสมอใน
+      // JSX ของ CategoryView (sidebar อยู่ใน main content ด้านบน, modal เป็น sibling ท้ายสุด)
+      await page.locator('button', { hasText: '🏷️ หมวด' }).first().click({ timeout: 2000 });
+      await page.waitForTimeout(200);
+      await page.locator('button', { hasText: 'ดอกไม้' }).last().click({ timeout: 2000 });
+      await page.waitForTimeout(200);
+      const afterCat = await page.locator('body').innerText();
+      const catOk = /จะส่งไปนับ\s*1\s*รายการ/.test(afterCat) && afterCat.includes('FLW002');
+
+      // 2) แท็บ 🎨 สี → "แดง" คือ FLW002 ตัวเดียวกัน → ต้อง**ไม่**เพิ่มเป็น 2 (dedup ข้ามแท็บ)
+      await page.locator('button', { hasText: '🎨 สี' }).first().click({ timeout: 2000 });
+      await page.waitForTimeout(200);
+      const colorTabBody = await page.locator('body').innerText();
+      const colorChipAlreadyMarked = /✓\s*แดง/.test(colorTabBody);
+      const afterColor = await page.locator('body').innerText();
+      const dedupOk = /จะส่งไปนับ\s*1\s*รายการ/.test(afterColor); // ยังคง 1 ไม่ใช่ 2
+
+      // 3) แท็บ 🔍 ค้นชื่อ → ค้น "แจกัน" (VAS001) → กด "เพิ่มเข้ารายการ" → รวมเป็น 2
+      await page.locator('button', { hasText: '🔍 ค้นชื่อ' }).first().click({ timeout: 2000 });
+      await page.waitForTimeout(200);
+      await page.locator('textarea').first().fill('แจกัน');
+      await page.waitForTimeout(200);
+      await page.locator('button', { hasText: '➕ เพิ่มเข้ารายการ' }).first().click({ timeout: 2000 });
+      await page.waitForTimeout(200);
+      const afterKeyword = await page.locator('body').innerText();
+      const mixedOk = /จะส่งไปนับ\s*2\s*รายการ/.test(afterKeyword)
+        && afterKeyword.includes('VAS001') && afterKeyword.includes('FLW002')
+        && /ส่งขอเช็ค\s*2\s*รายการ/.test(afterKeyword);
+
+      // 4) ปิด modal ด้วยปุ่ม ✕ โดยไม่กดส่ง แล้วเปิดใหม่ — ต้อง reset หมด ไม่ทิ้ง state ข้ามการเปิด
+      await page.locator('button', { hasText: '✕' }).first().click({ timeout: 2000 }).catch(() => {});
+      await page.waitForTimeout(300);
+      await fab.click({ timeout: 3000 });
+      await page.waitForTimeout(300);
+      const reopened = await page.locator('body').innerText();
+      const resetOk = !/จะส่งไปนับ/.test(reopened) && /🏭 ร้านค้า/.test(reopened);
+
+      if (!navOk) { status = 'NAV_FAIL'; note = 'สลับไปแท็บสินค้า & สั่งไม่สำเร็จ'; }
+      else if (!catOk) { status = 'CATEGORY_FAIL'; note = `เลือกหมวด "ดอกไม้" แล้วไม่เห็น FLW002/1 รายการ (${afterCat.slice(0,120)})`; }
+      else if (!colorChipAlreadyMarked) { status = 'DEDUP_INDICATOR_FAIL'; note = 'ชิปสี "แดง" ควรขึ้น ✓ (เพิ่มแล้ว) เพราะ SKU เดียวกับหมวดที่เพิ่งเลือก'; }
+      else if (!dedupOk) { status = 'DEDUP_FAIL'; note = `เลือกซ้ำข้ามแท็บ (หมวด+สี = SKU เดียวกัน) แต่รายการไม่ใช่ 1 (${afterColor.slice(0,120)})`; }
+      else if (!mixedOk) { status = 'MIXED_FAIL'; note = `ผสมหมวด+สี+ค้นชื่อ ควรได้ 2 รายการ (VAS001,FLW002) (${afterKeyword.slice(0,160)})`; }
+      else if (!resetOk) { status = 'RESET_FAIL'; note = 'ปิด modal แล้วเปิดใหม่ยังเห็นรายการ/โหมดค้างจากรอบก่อน (state รั่วข้ามการเปิด)'; }
+      else note = 'หมวด→สี (dedup) →ค้นชื่อ (ผสม 2 รายการ) →ปิด/เปิดใหม่ (reset หมด) ครบทุกจุด';
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 160); }
+    await page.screenshot({ path: path.join(SHOTS, 'checksend__category-color-mix.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'ปุ่มลอยส่งคำขอเช็ค — หมวด/สี/ค้นชื่อผสมกัน + reset', status, note });
+    await page.close();
+  }
+
   // ── (จ2.6a-reg) Add Product — staff ใช้ฟอร์มเดิม (Legacy) เสมอ แม้ registry เปิด ──
   // เจ้าของแก้ทิศ (ส.ค. 2026): ระบบทะเบียนเป็นโครงสร้างหลังบ้าน/แอดมิน ไม่ใช่ workflow ของพนักงาน
   //   → dispatcher เรนเดอร์ LegacyAddProductView เสมอ · พนักงานไม่ต้องเลือก/สร้าง Prefix/Family/

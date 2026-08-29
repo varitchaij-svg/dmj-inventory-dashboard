@@ -795,6 +795,28 @@ function LangSwitcher({ style }) {
   );
 }
 
+// ── dmjThaiKey: คีย์เทียบคำไทยแบบ "ผ่อนการสะกด" — ใช้เป็นชั้นสำรองของการค้นหาเท่านั้น ──
+// (ปุ่มลอย 📤 ส่งคำขอเช็คสต็อก แท็บ 🔍 ค้นชื่อ, Phase 2 — docs/PLAN-STOCKCHECK-KEYWORD-SELECT.md)
+// เจ้าของพิมพ์ "เบอร์รี่" แต่ catalog สะกด "เบอรี่" (ไม่มี ร์) — includes() ตรง ๆ ไม่มีวันเจอ
+// ต้อง normalize ทั้ง query และ catalog ด้วยฟังก์ชันเดียวกันก่อนเทียบเสมอ (เทียบฝั่งเดียวไม่มีวันแมตช์)
+//   ตัดช่องว่าง + lowercase
+//   → ตัด "พยัญชนะ + (สระแทรก) + ์" เป็นคู่ (การันต์ = ตัวนั้นไม่ออกเสียง เช่น "ร์" ใน "เบอร์รี่")
+//   → ตัดสระบน/ล่าง + วรรณยุกต์ (โบตั๋น/โบตัน ต้องเป็นคีย์เดียวกัน)
+//   → ยุบตัวอักษรซ้ำติดกัน (ซากุระ/ซากูระ, เบอร์รี่/เบอร์รี ต้องเป็นคีย์เดียวกัน)
+// ⚠️ ห้ามใช้ \p{...} (Unicode property escape) — runtime ที่ไม่รองรับจะเป็น syntax error **ทั้งไฟล์**
+//   = ทั้งระบบล่ม ไม่ใช่แค่ฟีเจอร์นี้พัง (หลักเดียวกับ productOwnerStaffKey_ ใน appsscript_complete.gs)
+// ⚠️ ตั้งใจเป็น false positive ได้ (เช่น "ขาว" กับ "ข้าว" ยุบเป็นคีย์เดียวกัน, "สน" สั้นพอจะไปโดน
+//   "สนิม") — ยอมรับได้เพราะใช้เป็น**ชั้นสำรอง**เท่านั้น (ทำงานต่อเมื่อค้นตรง ๆ ได้ 0 ผลลัพธ์ทั้งเทอม)
+//   ไม่ใช่ตัวค้นหาหลัก — ราคานี้จ่ายเฉพาะตอนที่ทางปกติไม่มีคำตอบให้เลย
+function dmjThaiKey(s) {
+  return String(s == null ? '' : s)
+    .replace(/\s+/g, '')
+    .toLowerCase()
+    .replace(/[ก-ฮ][ะ-ู]?์/g, '')
+    .replace(/[ัิ-ฺ็-๎]/g, '')
+    .replace(/(.)\1+/g, '$1');
+}
+
 // Make available everywhere
 Object.assign(window, {
   fmtN, fmtB, fmtBfull, fmtPct, monthLabel,
@@ -803,6 +825,7 @@ Object.assign(window, {
   dmjFetch, NotiBell, notiAgo, NOTI_TYPE_META, BootTrace, LangSwitcher,
   dmjRequestFocus, useSkuFocus, dmjScrollToSku,
   dmjRequestView, useViewIntent,
+  dmjThaiKey,
 });
 
-if (typeof module !== 'undefined') module.exports = { resetCatColorMap, catColor, CAT_COLORS, notiAgo };
+if (typeof module !== 'undefined') module.exports = { resetCatColorMap, catColor, CAT_COLORS, notiAgo, dmjThaiKey };

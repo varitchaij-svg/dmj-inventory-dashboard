@@ -1310,6 +1310,52 @@ audit → noti** · ลำดับนี้เป็นฐานของกา
   จริงจาก `.gs` กับชีตจำลอง — ปิดฝั่งเดียวอีกฝั่งค้าง, ครบ 2 ฝั่ง=รวม done, กระดิ่ง audience/ข้อความ,
   migration แถวเก่า + meta-test สายส่ง frontend)
 
+### ปุ่มลอย 📤 "ส่งคำขอเช็คสต็อก" — เลือก SKU ด้วยคำค้น/หมวด/สี ไม่ใช่แค่ร้านค้า (ส.ค. 2026)
+
+เจ้าของถาม: "ช่วยนับ เบอร์รี่แดง / สน / คริสต์มาส / โบตั๋น / ซากุระ" — เดิมโมดัลนี้เลือก SKU ได้
+**เฉพาะทางร้านค้า (Supplier)** เท่านั้น ต้องรู้ว่าสินค้านั้นเป็นของ supplier ไหนก่อนถึงจะเลือกได้
+· แผนเต็ม: `docs/PLAN-STOCKCHECK-KEYWORD-SELECT.md`
+
+- **สถาปัตยกรรม Option B (Union, ล็อกแล้ว โดยเจ้าของ)** — `checkSuppliers` (🏭 ร้านค้า, live-toggle
+  ของเดิม) กับ `checkPicked` (SKU ที่สะสมจาก 🔍/🏷️/🎨) เป็น **คนละแหล่งเด็ดขาด ไม่ผสมกัน**
+  รวมกันแค่ตอนคำนวณ **`checkFinalSkus`** (memo เดียวของทั้งระบบ) ตอนกดส่งเท่านั้น
+  · ⚠️ **ห้ามมี provenance tracking ข้ามโหมด** (ไม่เก็บว่า SKU ไหนมาจากแท็บไหน) — ถ้าจะรู้ว่า
+  "แท็บไหนมีส่วนร่วม" ให้คำนวณสดจาก checkPicked ตอนนั้น (ดู `checkSourceLabel` ข้างล่าง) ไม่ใช่
+  เก็บ state แยกเพิ่ม
+- **4 แท็บ**: 🏭 ร้านค้า (เดิม) · 🔍 ค้นชื่อ · 🏷️ หมวด · 🎨 สี — ฐานสินค้าทั้ง 4 แท็บคือ
+  **`checkBase`** (`products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า")`) ตัวเดียว
+  ไม่ผูกกับ `refineBase`/`active`/`globalSearch` ของหน้าหลัก (คนละขอบเขตกันโดยตั้งใจ)
+- **🔍 ค้นชื่อ**: พิมพ์หลายรายการ คั่นด้วยขึ้นบรรทัดใหม่/`,`/`/` (OR ระหว่างเทอม) ช่องว่างในเทอม
+  เดียวกัน = AND ทุก token (`checkMatchTerms`) · จับตรง (`includes()`) ก่อนเสมอ **ได้ 0 ทั้งเทอม
+  เท่านั้น** ถึงถอยไปชั้นสำรอง — **`dmjThaiKey(s)`** (ui.jsx) ตัดวรรณยุกต์/การันต์/ตัวซ้ำติดกัน
+  ก่อนเทียบ (เผื่อพิมพ์ผิด/สะกดเพี้ยน) · ผลจากชั้นสำรองติดป้าย **"≈ ค้นแบบผ่อนการสะกด"** เสมอ
+  ไม่ให้ปนกับผลตรง · เทอมสั้นกว่า 2 ตัวอักษรหลัง normalize ไม่เข้าชั้นสำรอง (เสี่ยงจับผิดตัวเยอะ)
+  · ⚠️ **ห้ามใช้ `\p{...}` (Unicode property escape) ใน `dmjThaiKey`** — runtime ที่ไม่รองรับจะ
+  syntax error ทั้งไฟล์ (บทเรียนเดียวกับ `productOwnerStaffKey_`) · ยอมรับ false positive บางคำ
+  ที่สะกดต่างแต่เสียงพ้อง (เช่น `ขาว`/`ข้าว`) เพราะ **มีบล็อก "รายการที่จะส่ง" ให้ตรวจก่อนกดส่งจริง
+  เสมอ** ไม่ใช่ auto-select โดยไม่ให้เห็น
+- **🏷️ หมวด / 🎨 สี**: `checkCategoryChips`/`checkColorChips` จัดกลุ่ม SKU จาก `checkBase` ตาม
+  `p.cat`/`p.color` (pattern เดียวกับ `colorChips` ที่มีอยู่แล้วในหน้าเดิม) · กดชิปแล้วเติมทุก SKU
+  ในกลุ่มนั้นเข้า `checkPicked` ทันที (ไม่ต้องกดยืนยันซ้ำ) · ชิปที่ SKU ครบทุกตัวอยู่ใน `checkPicked`
+  แล้วขึ้น "✓" (ไม่ enable ซ้ำ) — ตัวเดียวกับที่ตัดสิน `checkSourceLabel` ด้านล่าง
+- **`checkSourceLabel`** — ข้อความสรุป "เลือกด้วยวิธีไหน" ส่งไปให้แจ้งเตือน/การ์ดติดตามคำขอ
+  (แทนรายชื่อสินค้ายาว ๆ ที่อ่านไม่รู้เรื่อง) · ประกอบจาก **ทุกแท็บที่มีส่วนร่วมจริง ไม่ใช่แค่แท็บ
+  ที่เปิดอยู่ตอนกดส่ง** เพราะ Option B สะสมข้ามแท็บได้ (เลือกร้าน DS ในแท็บ 🏭 แล้วสลับไปพิมพ์ค้น
+  "โบตั๋น" ในแท็บ 🔍 → ต้องเห็นทั้งคู่ เช่น `🏭 DS · 🔍 โบตั๋น`) · ตัดสินแต่ละ segment ด้วยกฎเดียวกับ
+  ป้าย "✓" ของชิป (เทอม/หมวด/สีที่ทุก SKU อยู่ใน `checkPicked` ครบ) — **ไม่ใช่ provenance จริง**
+  แค่คำนวณสดจากสถานะปัจจุบัน จึงไม่ขัดกับกฎเหล็ก Option B ข้างบน
+- **`.gs`**: คอลัมน์ **16 `sourceLabel`** (`COL_CHK_SOURCE = 16`) ต่อท้าย `supplierList` (15) —
+  `stockCheckPreviewText_(suppliers, names, sourceLabel)` เรียง **sourceLabel → suppliers → names**
+  · ⚠️ **แก้ทั้ง 2 จุดที่เรียก** `stockCheckPreviewText_` (`createStockCheckRequest_` ตอนสร้าง
+  **และ** `completeStockCheckRequest_` ตอนแจ้งเตือนปิดฝั่ง — อ่าน `r[COL_CHK_SOURCE - 1]` ตรง ๆ
+  จาก row array เพราะจุดนั้นไม่ผ่าน `readStockCheckRequests_`) · migration-safe ทั้ง 2 ทาง
+  (`.gs` เก่า+`.jsx` ใหม่ → ไม่รู้จัก field → พฤติกรรมเดิม · `.gs` ใหม่+`.jsx` เก่า → `sourceLabel`
+  ว่าง → ถอยไปใช้ `suppliers`)
+- เทสต์: `tests/stockcheck-keyword.test.js` (eval จาก `views-main.jsx`/`ui.jsx`/`appsscript_complete.gs`
+  จริง ไม่ copy — เหมือน `saler-fs-count.test.js`) ครอบ union/dedup ข้าม 4 แหล่ง, Thai normalize,
+  `checkSourceLabel`, ลำดับ `stockCheckPreviewText_` · browser test เพิ่มเคสกดหมวด→สี (dedup ข้าม
+  แท็บ)→ค้นชื่อ (ผสม)→ปิด/เปิดใหม่ (reset) ใน `tests/browser/run.cjs`
+
 ## ระบบล็อกอินพนักงาน + ลงเวลาเข้า-ออกงาน (Sprint 5)
 
 แผนเต็ม: `docs/PLAN-EMPLOYEE-LOGIN.md` · `docs/PLAN-ATTENDANCE.md` · งานต่อ: `docs/PLAN-NEXT-STAFF-DATA.md`

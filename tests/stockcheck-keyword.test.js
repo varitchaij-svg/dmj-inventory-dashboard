@@ -1,6 +1,6 @@
 // tests/stockcheck-keyword.test.js — เพิ่มวิธีเลือก SKU ด้วยการค้นชื่อสินค้า ในปุ่มลอย
-// 📤 "ส่งคำขอเช็คสต็อก" (CategoryView, views-main.jsx) — Phase 1 ของ
-// docs/PLAN-STOCKCHECK-KEYWORD-SELECT.md เท่านั้น (โครงตะกร้า + โหมดค้นชื่อ + union)
+// 📤 "ส่งคำขอเช็คสต็อก" (CategoryView, views-main.jsx) — Phase 1 + Phase 2 ของ
+// docs/PLAN-STOCKCHECK-KEYWORD-SELECT.md (โครงตะกร้า + โหมดค้นชื่อ + union + Thai normalize)
 // ─────────────────────────────────────────────────────────────────────────────
 // เจ้าของสั่ง: "ช่วยนับ เบอร์รี่แดง / สน / คริสต์มาส / โบตั๋น / ซากุระ" — ต้องเลือก SKU ที่จะ
 // ส่งไปนับได้โดยไม่ต้องรู้ Supplier · เดิมมีแค่โหมดเลือกร้านค้า (checkSuppliers)
@@ -9,12 +9,12 @@
 // กับ 🔍 ค้นชื่อ (checkPicked, ตะกร้าสะสม) เป็นคนละแหล่งเด็ดขาด ไม่ผสมกัน รวมกันแค่ตอนคำนวณ
 // checkFinalSkus (union) ตอนกดส่งเท่านั้น — ห้ามมี provenance tracking ข้ามโหมด
 //
-// eval ฟังก์ชันจริงจาก views-main.jsx (ไม่ copy) เหมือน tests/mto-group.test.js /
+// eval ฟังก์ชันจริงจาก views-main.jsx/ui.jsx (ไม่ copy) เหมือน tests/mto-group.test.js /
 // tests/saler-fs-count.test.js · ที่เหลือเป็น meta-test สแกนต้นทางจริง (จุดที่พังแล้วเงียบ
 // สำคัญกว่าตรรกะล้วน — เช่นลืม repoint dependency หรือลืม reset state)
 //
-// ⚠️ ไฟล์นี้ครอบเฉพาะ Phase 1 — ไม่ทดสอบ dmjThaiKey (Phase 2), หมวด/สี (Phase 3),
-// sourceLabel (Phase 4) เพราะยังไม่ได้ implement ในรอบนี้ตามขอบเขตที่ระบุไว้
+// ⚠️ ไฟล์นี้ครอบ Phase 1-4 ครบแล้ว — โครงตะกร้า/union (1), ค้นชื่อ+Thai normalize (2),
+// หมวด/สี (3), sourceLabel (4 — แตะ appsscript_complete.gs ด้วย ดู describe ท้ายไฟล์)
 // ─────────────────────────────────────────────────────────────────────────────
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -23,6 +23,8 @@ import { dirname, join } from 'node:path';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const VMAIN = readFileSync(join(ROOT, 'views-main.jsx'), 'utf8');
+const UI = readFileSync(join(ROOT, 'ui.jsx'), 'utf8');
+const GAS = readFileSync(join(ROOT, 'appsscript_complete.gs'), 'utf8');
 
 function grab(src, re, label) {
   const m = src.match(re);
@@ -47,7 +49,56 @@ const F_MATCH = grab(
 // eslint-disable-next-line no-new-func
 const { checkMatchTerms } = new Function(F_MATCH + '\nreturn { checkMatchTerms };')();
 
+const F_THAIKEY = grab(UI, /function dmjThaiKey\(s\) \{[\s\S]*?\n\}/, 'dmjThaiKey');
+// eslint-disable-next-line no-new-func
+const { dmjThaiKey } = new Function(F_THAIKEY + '\nreturn { dmjThaiKey };')();
+
 const CATEGORY_VIEW = grabFn(VMAIN, 'CategoryView');
+
+// ดึง "ตัวจับคู่จริง" ของ checkKeywordResult ออกมาเป็นฟังก์ชันเรียกตรงได้ — ไม่ copy ตรรกะ แค่ตัด
+// body ของ uM(() => {...}) ที่ปิดด้วย deps array ตัวเดิมมาห่อเป็นฟังก์ชันพารามิเตอร์ตัวแปรที่มันปิดไว้
+// (checkKeyword/checkBase) + inject checkMatchTerms/dmjThaiKey ที่มันเรียกจริง — วิธีเดียวกับที่
+// tests/mto-group.test.js ห่อฟังก์ชันจริงด้วย new Function ไม่ใช่พิมพ์ตรรกะใหม่
+const F_KEYWORD_BODY = grab(
+  CATEGORY_VIEW,
+  /const checkKeywordResult = uM\(\(\) => \{[\s\S]*?\n  \}, \[checkKeyword, checkBase\]\);/,
+  'checkKeywordResult'
+).replace(/^const checkKeywordResult = uM\(\(\) => \{/, '').replace(/\n  \}, \[checkKeyword, checkBase\]\);$/, '');
+const keywordMatchFn = new Function('checkKeyword', 'checkBase', 'checkMatchTerms', 'dmjThaiKey', F_KEYWORD_BODY);
+function keywordMatch(checkKeyword, checkBase) {
+  return keywordMatchFn(checkKeyword, checkBase, checkMatchTerms, dmjThaiKey);
+}
+
+// เดียวกับ F_KEYWORD_BODY — ห่อ body ของ checkCategoryChips/checkColorChips (Phase 3) เป็น
+// ฟังก์ชันเรียกตรงได้ ไม่ copy ตรรกะ
+const F_CATCHIPS_BODY = grab(
+  CATEGORY_VIEW,
+  /const checkCategoryChips = uM\(\(\) => \{[\s\S]*?\n  \}, \[allCats, checkBase\]\);/,
+  'checkCategoryChips'
+).replace(/^const checkCategoryChips = uM\(\(\) => \{/, '').replace(/\n  \}, \[allCats, checkBase\]\);$/, '');
+const categoryChips = new Function('allCats', 'checkBase', F_CATCHIPS_BODY);
+
+const F_COLORCHIPS_BODY = grab(
+  CATEGORY_VIEW,
+  /const checkColorChips = uM\(\(\) => \{[\s\S]*?\n  \}, \[checkBase\]\);/,
+  'checkColorChips'
+).replace(/^const checkColorChips = uM\(\(\) => \{/, '').replace(/\n  \}, \[checkBase\]\);$/, '');
+const colorChipsFn = new Function('checkBase', 'COLOR_ORDER', F_COLORCHIPS_BODY);
+function colorChips(checkBase) {
+  // COLOR_ORDER ตัวจริงจาก views-main.jsx (top-level const) — ดึงมาเทียบให้ตรงลำดับจริง
+  const F_COLOR_ORDER = grab(VMAIN, /const COLOR_ORDER = \[[\s\S]*?\];/, 'COLOR_ORDER');
+  const order = new Function(F_COLOR_ORDER + '\nreturn COLOR_ORDER;')();
+  return colorChipsFn(checkBase, order);
+}
+
+// checkFinalSkus (union จุดเดียวของทั้งระบบ) — ห่อแบบเดียวกัน เพื่อทดสอบการผสมหลายแหล่งแบบ
+// end-to-end จริง (ไม่ใช่แค่ meta-test สแกน source อย่างเดียว)
+const F_FINAL_BODY = grab(
+  CATEGORY_VIEW,
+  /const checkFinalSkus = uM\(\(\) => \{[\s\S]*?\n  \}, \[checkSupplierSkus, checkPicked, checkExcluded\]\);/,
+  'checkFinalSkus'
+).replace(/^const checkFinalSkus = uM\(\(\) => \{/, '').replace(/\n  \}, \[checkSupplierSkus, checkPicked, checkExcluded\]\);$/, '');
+const finalSkus = new Function('checkSupplierSkus', 'checkPicked', 'checkExcluded', F_FINAL_BODY);
 
 // ── A. checkMatchTerms — behavioral (รันฟังก์ชันจริง) ──────────────────────────
 describe('checkMatchTerms — แยกข้อความค้นชื่อเป็นเทอม (OR) × token (AND)', () => {
@@ -83,6 +134,183 @@ describe('checkMatchTerms — แยกข้อความค้นชื่�
 
   it('ไม่ lowercase/normalize ในตัวมันเอง (เก็บตัวสะกดเดิมไว้ให้ทั้งแสดงผลและจับคู่ที่จุดเรียก)', () => {
     expect(checkMatchTerms('ABC')).toEqual([['ABC']]);
+  });
+});
+
+// ── A2. dmjThaiKey (Phase 2) — behavioral (รันฟังก์ชันจริงจาก ui.jsx) ──────────────────
+describe('dmjThaiKey — คีย์เทียบคำไทยแบบผ่อนการสะกด (ชั้นสำรอง)', () => {
+  it('ครบทั้ง 5 คำของเจ้าของ — คำที่พิมพ์กับคำใน catalog ต้องได้คีย์เดียวกัน', () => {
+    const cases = [
+      ['เบอร์รี่', 'เบอรี่', 'เบอร'],
+      ['คริสต์มาส', 'คริสมาส', 'ครสมาส'],
+      ['ฟาแลนด์', 'ฟาแลน', 'ฟาแลน'],
+      ['ซากุระ', 'ซากุระ', 'ซากระ'],
+      ['โบตั๋น', 'โบตั๋น', 'โบตน'],
+    ];
+    for (const [typed, catalog, key] of cases) {
+      expect(dmjThaiKey(typed)).toBe(key);
+      expect(dmjThaiKey(catalog)).toBe(key);
+    }
+  });
+
+  it('ยุบตัวอักษรซ้ำติดกัน + ตัดช่องว่าง + lowercase', () => {
+    expect(dmjThaiKey('ABC  abc')).toBe('abcabc');
+    expect(dmjThaiKey('aabbcc')).toBe('abc');
+    expect(dmjThaiKey('  ฟาแลน  148 ')).toBe(dmjThaiKey('ฟาแลน148'));
+  });
+
+  it('ค่าว่าง/null/undefined ไม่พัง คืนสตริงว่าง', () => {
+    expect(dmjThaiKey('')).toBe('');
+    expect(dmjThaiKey(null)).toBe('');
+    expect(dmjThaiKey(undefined)).toBe('');
+  });
+
+  it('⚠️ ยอมรับ false positive ที่รู้อยู่แล้วตามที่ Plan ระบุไว้ — "ขาว"/"ข้าว" ยุบเป็นคีย์เดียวกัน (ตัดวรรณยุกต์) — ใช้เป็นชั้นสำรองเท่านั้นจึงยอมรับได้', () => {
+    expect(dmjThaiKey('ขาว')).toBe(dmjThaiKey('ข้าว'));
+  });
+
+  it('ไม่มี \\p{...} (Unicode property escape) ในนิพจน์ — กัน syntax error ทั้งไฟล์บน runtime ที่ไม่รองรับ', () => {
+    expect(F_THAIKEY).not.toMatch(/\\p\{/);
+  });
+});
+
+// ── A3. checkKeywordResult ผลค้นชื่อจริง (Phase 1 strict + Phase 2 fallback) ───────────
+describe('checkKeywordResult — ชั้นสำรอง (loose match) ทำงานเฉพาะเมื่อค้นตรงได้ 0 ทั้งเทอม', () => {
+  const PRODUCTS = [
+    { sku: 'BE001', name: 'เบอรี่แดง 148', cat: 'ดอกไม้' },
+    { sku: 'BE002', name: 'เบอรี่ฟ้า 120', cat: 'ดอกไม้' },
+    { sku: 'PN001', name: 'โบตั๋น ขาว 200', cat: 'ดอกไม้' },
+    { sku: 'PN002', name: 'ไอวี่ 90', cat: 'ใบไม้แขวน' },
+  ];
+
+  it('เทอมที่ค้นตรงเจอผลอยู่แล้ว (spelled ถูก) — ไม่เข้าชั้นสำรองเลย loose:false', () => {
+    const [r] = keywordMatch('โบตั๋น', PRODUCTS);
+    expect(r.skus).toEqual(['PN001']);
+    expect(r.loose).toBe(false);
+  });
+
+  it('เทอมสะกดผิดทั้งเทอม (0 ผลจากการค้นตรง) → ตกไปชั้นสำรอง loose:true', () => {
+    const [r] = keywordMatch('เบอร์รี่แดง', PRODUCTS); // spelled เบอร์รี่ (มี ร์) ผิดจาก catalog เบอรี่
+    expect(r.skus).toEqual(['BE001']);
+    expect(r.loose).toBe(true);
+  });
+
+  it('เคสผสม token ถูก+ผิดในเทอมเดียว ("แดง" สะกดถูก, "เบอร์รี่" สะกดผิด) — ยัง match ได้โดยไม่ต้องมี logic แยกราย token', () => {
+    const [r] = keywordMatch('เบอร์รี่ แดง', PRODUCTS);
+    expect(r.skus).toEqual(['BE001']);
+    expect(r.loose).toBe(true);
+  });
+
+  it('คำที่ normalize แล้วสั้นกว่า 2 ตัวอักษร ไม่เข้าชั้นสำรอง (กว้างเกินจนไร้ความหมาย)', () => {
+    const [r] = keywordMatch('ก', PRODUCTS); // dmjThaiKey('ก') ยาว 1 ตัวอักษร
+    expect(r.skus).toEqual([]);
+    expect(r.loose).toBe(false);
+  });
+
+  it('คำที่ไม่มีจริงแม้ผ่อนการสะกดแล้วก็ยัง 0 ผล → skus ว่าง loose:false (ไม่เดา)', () => {
+    const [r] = keywordMatch('ทุเรียน', PRODUCTS);
+    expect(r.skus).toEqual([]);
+    expect(r.loose).toBe(false);
+  });
+
+  it('หลายเทอมพร้อมกัน — แต่ละเทอมตัดสิน strict/loose อิสระจากกัน', () => {
+    const results = keywordMatch('โบตั๋น\nเบอร์รี่แดง\nทุเรียน', PRODUCTS);
+    expect(results).toHaveLength(3);
+    expect(results[0]).toMatchObject({ skus: ['PN001'], loose: false });
+    expect(results[1]).toMatchObject({ skus: ['BE001'], loose: true });
+    expect(results[2]).toMatchObject({ skus: [], loose: false });
+  });
+});
+
+// ── A4. checkCategoryChips / checkColorChips (Phase 3) — behavioral ───────────────────
+describe('checkCategoryChips / checkColorChips — จับกลุ่ม SKU จาก checkBase ตามหมวด/สี', () => {
+  const ALL_CATS = ['ดอกไม้', 'ใบไม้แขวน', 'บูช'];
+  const PRODUCTS = [
+    { sku: 'A1', cat: 'ดอกไม้', color: { name: 'แดง', hex: '#c5352a' } },
+    { sku: 'A2', cat: 'ดอกไม้', color: { name: 'แดง', hex: '#c5352a' } },
+    { sku: 'A3', cat: 'ดอกไม้', color: null },
+    { sku: 'B1', cat: 'ใบไม้แขวน', color: null },
+  ]; // ไม่มีสินค้าหมวด 'บูช' เลย — ทดสอบว่าหมวดว่างยังโผล่เป็นชิป count/skus = 0 ไม่หายไปจากลิสต์
+
+  it('checkCategoryChips คืนครบทุกหมวดใน allCats พร้อม SKU ที่ถูกต้อง แม้หมวดว่างก็ยังอยู่', () => {
+    const chips = categoryChips(ALL_CATS, PRODUCTS);
+    expect(chips).toEqual([
+      { name: 'ดอกไม้', skus: ['A1', 'A2', 'A3'] },
+      { name: 'ใบไม้แขวน', skus: ['B1'] },
+      { name: 'บูช', skus: [] },
+    ]);
+  });
+
+  it('checkColorChips จับกลุ่มเฉพาะสินค้าที่มี p.color เท่านั้น (ไม่มีสี = ไม่นับ)', () => {
+    const chips = colorChips(PRODUCTS);
+    expect(chips).toEqual([{ name: 'แดง', hex: '#c5352a', skus: ['A1', 'A2'] }]);
+  });
+
+  it('checkColorChips คืน [] เมื่อไม่มีสินค้าตัวไหนมีสีเลย', () => {
+    expect(colorChips([{ sku: 'X1', cat: 'ดอกไม้', color: null }])).toEqual([]);
+  });
+});
+
+// ── A5. ผสมหลายแหล่งแบบ end-to-end จริง (Option B union) — ใช้ฟังก์ชันที่ extract มาทั้งหมด ──
+describe('ผสมหลายแหล่ง (Supplier + Keyword + Category + Color) — union จริง ไม่ใช่แค่สแกน source', () => {
+  const ALL_CATS = ['ดอกไม้', 'ใบไม้แขวน'];
+  const PRODUCTS = [
+    { sku: 'BE001', name: 'เบอรี่แดง 148', cat: 'ดอกไม้', color: { name: 'แดง', hex: '#c5352a' }, vendor: 'DS' },
+    { sku: 'PN001', name: 'โบตั๋น ขาว 200', cat: 'ดอกไม้', color: { name: 'ขาว', hex: '#f4f4f4' }, vendor: 'ACME' },
+    { sku: 'IV001', name: 'ไอวี่ 90', cat: 'ใบไม้แขวน', color: null, vendor: 'ACME' },
+    { sku: 'IV002', name: 'ไอวี่ใหญ่ 120', cat: 'ใบไม้แขวน', color: null, vendor: 'DS' },
+  ];
+
+  it('ผสม Keyword + Category + Color (ไม่มีร้านค้าเลย) — union ครบทุกแหล่ง ไม่ซ้ำ', () => {
+    const checkPicked = new Set();
+    keywordMatch('โบตั๋น', PRODUCTS)[0].skus.forEach(s => checkPicked.add(s)); // PN001
+    categoryChips(ALL_CATS, PRODUCTS).find(c => c.name === 'ใบไม้แขวน').skus.forEach(s => checkPicked.add(s)); // IV001, IV002
+    colorChips(PRODUCTS).find(c => c.name === 'แดง').skus.forEach(s => checkPicked.add(s)); // BE001 (ซ้ำกับ keyword? ไม่ซ้ำ ต่างตัว)
+    const result = finalSkus([], checkPicked, new Set()); // ไม่มี supplier เลือกเลย
+    expect([...result].sort()).toEqual(['BE001', 'IV001', 'IV002', 'PN001']);
+  });
+
+  it('ผสม Supplier + Keyword — ร้านค้า DS (BE001, IV002) + ค้นชื่อ "โบตั๋น" (PN001) รวมกันแบบไม่ผูก provenance', () => {
+    const checkSuppliers = new Set(['DS']);
+    const supplierSkus = PRODUCTS.filter(p => checkSuppliers.has(p.vendor));
+    const checkPicked = new Set(keywordMatch('โบตั๋น', PRODUCTS)[0].skus); // PN001
+    const result = finalSkus(supplierSkus, checkPicked, new Set());
+    expect([...result].sort()).toEqual(['BE001', 'IV002', 'PN001']);
+  });
+
+  it('ผสม Supplier + Category + Color พร้อมกันทั้ง 3 แหล่ง', () => {
+    const checkSuppliers = new Set(['ACME']);
+    const supplierSkus = PRODUCTS.filter(p => checkSuppliers.has(p.vendor)); // PN001, IV001
+    const checkPicked = new Set();
+    categoryChips(ALL_CATS, PRODUCTS).find(c => c.name === 'ใบไม้แขวน').skus.forEach(s => checkPicked.add(s)); // IV001, IV002
+    colorChips(PRODUCTS).find(c => c.name === 'แดง').skus.forEach(s => checkPicked.add(s)); // BE001
+    const result = finalSkus(supplierSkus, checkPicked, new Set());
+    expect([...result].sort()).toEqual(['BE001', 'IV001', 'IV002', 'PN001']);
+  });
+
+  it('SKU ที่มาจากหลายแหล่งพร้อมกัน (เช่น อยู่ทั้งร้านค้าและถูกเลือกจากหมวดด้วย) ถูกส่งครั้งเดียว ไม่ซ้ำ', () => {
+    const checkSuppliers = new Set(['DS']);
+    const supplierSkus = PRODUCTS.filter(p => checkSuppliers.has(p.vendor)); // BE001, IV002
+    const checkPicked = new Set(['BE001', 'IV002']); // ตัวเดียวกันเป๊ะถูกเลือกซ้ำจากแท็บอื่นด้วย
+    const result = finalSkus(supplierSkus, checkPicked, new Set());
+    expect([...result].sort()).toEqual(['BE001', 'IV002']); // ไม่ใช่ 4 ตัว ไม่มีการนับซ้ำเพราะเป็น Set
+  });
+
+  it('ถอนชิปร้านค้าออก (supplierSkus กลายเป็น []) ไม่กระทบ SKU ที่มาจาก checkPicked เลย', () => {
+    const checkPicked = new Set(['PN001', 'IV001']);
+    const before = finalSkus(PRODUCTS.filter(p => p.vendor === 'DS'), checkPicked, new Set());
+    const after = finalSkus([], checkPicked, new Set()); // ถอนร้านค้าออกทั้งหมด
+    expect([...after].sort()).toEqual([...checkPicked].sort());
+    expect([...before].sort()).toContain('BE001'); // ก่อนถอนมี BE001 จากร้าน DS ด้วย
+    expect([...after]).not.toContain('BE001'); // หลังถอนต้องไม่มี BE001 อีก (มาจากร้านค้าล้วน ไม่เคยอยู่ใน checkPicked)
+  });
+
+  it('checkExcluded ตัด SKU ออกจาก union ได้ไม่ว่าจะมาจากแหล่งไหน (ร้านค้า/ตะกร้า)', () => {
+    const checkSuppliers = new Set(['DS']);
+    const supplierSkus = PRODUCTS.filter(p => checkSuppliers.has(p.vendor)); // BE001, IV002
+    const checkPicked = new Set(['PN001']);
+    const result = finalSkus(supplierSkus, checkPicked, new Set(['BE001', 'PN001']));
+    expect([...result].sort()).toEqual(['IV002']); // ตัด BE001 (จากร้าน) และ PN001 (จากตะกร้า) ออกทั้งคู่
   });
 });
 
@@ -133,7 +361,7 @@ describe('โครงตะกร้า + union (Option B) — จุดเช�
   });
 });
 
-describe('Option B — แท็บ 🏭 ร้านค้า กับ 🔍 ค้นชื่อ เป็นคนละแหล่งเด็ดขาด', () => {
+describe('Option B — แท็บ 🏭 ร้านค้า กับ 🔍/🏷️/🎨 (ตะกร้า) เป็นคนละแหล่งเด็ดขาด', () => {
   function extractModeBlock(mode) {
     const marker = `{checkMode === "${mode}" && (`;
     const start = CATEGORY_VIEW.indexOf(marker);
@@ -162,10 +390,35 @@ describe('Option B — แท็บ 🏭 ร้านค้า กับ 🔍 �
     expect(keywordBlock).not.toContain('setCheckSuppliers');
     // เทอมที่ 0 ผลต้องเตือน ห้ามเงียบ
     expect(keywordBlock).toContain('ไม่พบสินค้าที่ตรงกับคำนี้');
+    // ผลที่มาจากชั้นสำรอง (Phase 2) ต้องมี indication แยกจากผลค้นตรง — ห้ามให้ผู้ใช้เข้าใจว่า
+    // เจอแบบตรงเป๊ะทั้งที่จริงเป็นการผ่อนการสะกด
+    expect(keywordBlock).toContain('r.loose &&');
+    expect(keywordBlock).toContain('≈ ค้นแบบผ่อนการสะกด');
   });
 
   it('checkKeywordResult ใช้ multi-token AND-match แบบเดียวกับทั้งแอป (คอนเวนชันเดิม lesson ข้อ 10)', () => {
     expect(CATEGORY_VIEW).toContain('lowerTokens.every(t => hay.includes(t))');
+  });
+
+  it('บล็อกแท็บ 🏷️ หมวด เขียนเข้า checkPicked เท่านั้น ไม่แตะ checkSuppliers', () => {
+    const categoryBlock = extractModeBlock('category');
+    expect(categoryBlock).toContain('setCheckPicked');
+    expect(categoryBlock).not.toContain('setCheckSuppliers');
+    // เลขบนชิปต้องมาจาก checkCategoryChips (อิง checkBase) ไม่ใช่ค่าที่คำนวณแยกที่อื่น
+    expect(categoryBlock).toContain('checkCategoryChips.map');
+  });
+
+  it('บล็อกแท็บ 🎨 สี เขียนเข้า checkPicked เท่านั้น ไม่แตะ checkSuppliers', () => {
+    const colorBlock = extractModeBlock('color');
+    expect(colorBlock).toContain('setCheckPicked');
+    expect(colorBlock).not.toContain('setCheckSuppliers');
+    expect(colorBlock).toContain('checkColorChips.map');
+  });
+
+  it('เลขบนชิปหมวด/สี กับเลขบน checkFinalSkus ต้องมาจากฐานเดียวกัน (checkBase) — ไม่ใช้ refineBase/navCats', () => {
+    expect(CATEGORY_VIEW).toContain('const checkCategoryChips = uM(() => {');
+    expect(CATEGORY_VIEW).toContain('}, [allCats, checkBase]);');
+    expect(CATEGORY_VIEW).toContain('const checkColorChips = uM(() => {');
   });
 
   it('payload ที่ส่งจริงยัง suppliers: Array.from(checkSuppliers) เป๊ะเหมือนเดิม (Option B ไม่ต้องแก้บรรทัดนี้)', () => {
@@ -226,13 +479,146 @@ describe('เพดาน render ของบล็อก "รายการท
   });
 });
 
-describe('ขอบเขต Phase 1 — ต้องไม่มี Phase 2/3/4 หลุดเข้ามาก่อนกำหนด', () => {
-  it('ไม่มี dmjThaiKey ใน views-main.jsx (Thai normalize เป็นงานของ Phase 2)', () => {
-    expect(VMAIN).not.toContain('dmjThaiKey');
+describe('ขอบเขต Phase 1-3 — dmjThaiKey + หมวด/สี ต่อสายครบ', () => {
+  it('dmjThaiKey ถูก export จาก ui.jsx ผ่าน Object.assign(window,...) และ module.exports จริง', () => {
+    expect(UI).toMatch(/Object\.assign\(window, \{[\s\S]*dmjThaiKey[\s\S]*?\}\);/);
+    expect(UI).toContain('module.exports = { resetCatColorMap, catColor, CAT_COLORS, notiAgo, dmjThaiKey };');
   });
-  it('ไม่มีแท็บหมวด/สี (Phase 3) และไม่มี sourceLabel (Phase 4) ในโมดัลนี้', () => {
-    expect(CATEGORY_VIEW).not.toContain('checkMode === "category"');
-    expect(CATEGORY_VIEW).not.toContain('checkMode === "color"');
-    expect(CATEGORY_VIEW).not.toContain('sourceLabel');
+  it('views-main.jsx เรียกใช้ dmjThaiKey จริงใน checkKeywordResult (ไม่ใช่แค่มีแต่ไม่ได้ต่อสาย)', () => {
+    expect(CATEGORY_VIEW).toContain('dmjThaiKey(t)');
+    expect(CATEGORY_VIEW).toContain('dmjThaiKey((p.sku||"") + " " + (p.name||""))');
+  });
+  it('มีแท็บหมวด/สี (Phase 3) แล้วจริง', () => {
+    expect(CATEGORY_VIEW).toContain('checkMode === "category"');
+    expect(CATEGORY_VIEW).toContain('checkMode === "color"');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4 — sourceLabel: ข้อความสรุป "เลือกด้วยวิธีไหน" ให้แจ้งเตือน/การ์ดติดตามคำขอ
+// (docs/PLAN-STOCKCHECK-KEYWORD-SELECT.md Phase 4) — แตะ appsscript_complete.gs (GAS) ด้วย
+// eval ฟังก์ชันจริงจาก .gs เหมือน tests/stockcheck-split.test.js (ไม่ copy ตรรกะ)
+// ─────────────────────────────────────────────────────────────────────────────
+function grabGas(re, label) { return grab(GAS, re, label); }
+
+const F_GAS_PREVIEW = grabGas(
+  /function stockCheckPreviewText_\(suppliers, names, sourceLabel\) \{[\s\S]*?\n\}/,
+  'stockCheckPreviewText_'
+);
+// eslint-disable-next-line no-new-func
+const { stockCheckPreviewText_ } = new Function(F_GAS_PREVIEW + '\nreturn { stockCheckPreviewText_ };')();
+
+// ดึง body ของ checkSourceLabel (uM) ออกมาห่อเป็นฟังก์ชันพารามิเตอร์ตรง — วิธีเดียวกับ
+// checkKeywordResult/checkCategoryChips/checkColorChips ด้านบน
+const F_SOURCE_LABEL_BODY = (() => {
+  const marker = 'const checkSourceLabel = uM(() => {';
+  const i = CATEGORY_VIEW.indexOf(marker);
+  if (i < 0) throw new Error('หา checkSourceLabel ใน CategoryView ไม่เจอ');
+  const bodyStart = i + marker.length;
+  const bodyEnd = CATEGORY_VIEW.indexOf('\n  }, [checkSuppliers, checkKeywordResult, checkCategoryChips, checkColorChips, checkPicked]);', bodyStart);
+  if (bodyEnd < 0) throw new Error('หาจุดจบของ checkSourceLabel ไม่เจอ (deps array เปลี่ยน?)');
+  return CATEGORY_VIEW.slice(bodyStart, bodyEnd);
+})();
+function computeSourceLabel(checkSuppliers, checkKeywordResult, checkCategoryChips, checkColorChips, checkPicked) {
+  // eslint-disable-next-line no-new-func
+  const fn = new Function(
+    'checkSuppliers', 'checkKeywordResult', 'checkCategoryChips', 'checkColorChips', 'checkPicked',
+    F_SOURCE_LABEL_BODY
+  );
+  return fn(checkSuppliers, checkKeywordResult, checkCategoryChips, checkColorChips, checkPicked);
+}
+
+describe('stockCheckPreviewText_ (.gs) — ลำดับ sourceLabel → suppliers → names', () => {
+  it('sourceLabel ชนะทุกอย่าง เมื่อมีค่า', () => {
+    expect(stockCheckPreviewText_(['DS'], ['ของ A'], '🏭 DS · 🔍 โบตั๋น')).toBe('🏭 DS · 🔍 โบตั๋น');
+  });
+  it('sourceLabel ว่าง → ถอยไปใช้ suppliers เหมือน Phase ก่อนหน้า', () => {
+    expect(stockCheckPreviewText_(['DS', 'ACME'], ['ของ A'], '')).toBe('🏭 DS, ACME');
+  });
+  it('sourceLabel และ suppliers ว่างทั้งคู่ → ถอยไปใช้ names (fallback สุดท้าย)', () => {
+    expect(stockCheckPreviewText_([], ['ของ A', 'ของ B'], '')).toBe('ของ A, ของ B');
+  });
+  it('sourceLabel เป็น undefined (client เก่าไม่ส่งมา) ไม่พัง → ทำงานเหมือนก่อน Phase 4', () => {
+    expect(stockCheckPreviewText_(['DS'], ['ของ A'], undefined)).toBe('🏭 DS');
+  });
+});
+
+describe('COL_CHK_SOURCE (.gs) — คอลัมน์ใหม่ต่อท้ายเท่านั้น ไม่ขยับ COL_CHK_SUPPLIERS เดิม', () => {
+  it('COL_CHK_SUPPLIERS ยังเป็น 15 และมี COL_CHK_SOURCE = 16 ต่อท้าย', () => {
+    expect(GAS).toContain('var COL_CHK_SUPPLIERS = 15;');
+    expect(GAS).toContain('var COL_CHK_SOURCE = 16;');
+  });
+  it('STOCK_CHECK_HEADERS_ ยาวขึ้นแบบต่อท้าย — 14 หัวคอลัมน์เดิมยังอยู่ตำแหน่งเดิมก่อน sourceLabel', () => {
+    const m = GAS.match(/var STOCK_CHECK_HEADERS_ = \[[\s\S]*?\];/);
+    expect(m).toBeTruthy();
+    const headerLine = m[0];
+    expect(headerLine.indexOf('"supplierList"')).toBeLessThan(headerLine.indexOf('"sourceLabel"'));
+    expect(headerLine.endsWith('"sourceLabel"];')).toBe(true);
+  });
+  it('createStockCheckRequest_ / completeStockCheckRequest_ ต่างส่ง sourceLabel ให้ stockCheckPreviewText_ ทั้งคู่ (ไม่ใช่แค่จุดสร้าง)', () => {
+    expect(GAS).toContain('stockCheckPreviewText_(supplierList, nameList, srcLabel)');
+    expect(GAS).toContain('stockCheckPreviewText_(suppliersRow, names, sourceLabelRow)');
+  });
+  it('dispatch ส่ง data.sourceLabel เข้า createStockCheckRequest_ เป็น argument ที่ 5', () => {
+    expect(GAS).toContain('createStockCheckRequest_(data.skus, data.names, actor, data.suppliers, data.sourceLabel)');
+  });
+  it('readStockCheckRequests_ คืน sourceLabel ออกไปด้วย (migration-safe — แถวเก่าไม่มีคอลัมน์นี้ = "")', () => {
+    expect(GAS).toContain('sourceLabel: String(r[COL_CHK_SOURCE - 1] || "")');
+  });
+});
+
+describe('checkSourceLabel (views-main.jsx) — ประกอบจากทุกแท็บที่มีส่วนร่วมจริง ไม่ใช่แค่แท็บที่เปิดอยู่', () => {
+  it('เลือกร้านค้าอย่างเดียว → เฉพาะ segment 🏭', () => {
+    const label = computeSourceLabel(
+      new Set(['DS']), [], [{ name: 'ดอกไม้', skus: [] }], [{ name: 'แดง', skus: [] }], new Set()
+    );
+    expect(label).toBe('🏭 DS');
+  });
+  it('ค้นชื่อที่มีผล (ทุก SKU อยู่ใน checkPicked ครบ) → segment 🔍', () => {
+    const label = computeSourceLabel(
+      new Set(), [{ term: 'โบตั๋น', skus: ['A1', 'A2'] }], [], [], new Set(['A1', 'A2'])
+    );
+    expect(label).toBe('🔍 โบตั๋น');
+  });
+  it('เลือกหมวด → segment 🏷️ · เลือกสี → segment 🎨', () => {
+    const catLabel = computeSourceLabel(
+      new Set(), [], [{ name: 'ดอกไม้', skus: ['A1'] }], [], new Set(['A1'])
+    );
+    expect(catLabel).toBe('🏷️ ดอกไม้');
+    const colorLabel = computeSourceLabel(
+      new Set(), [], [], [{ name: 'แดง', skus: ['A1'] }], new Set(['A1'])
+    );
+    expect(colorLabel).toBe('🎨 แดง');
+  });
+  it('ผสมร้านค้า + ค้นชื่อพร้อมกัน (Option B สะสมข้ามแท็บ) → ทั้ง 2 segment ต้องอยู่ครบ ตัวอย่างตรงกับ Plan §Phase 4 ข้อ 6', () => {
+    const label = computeSourceLabel(
+      new Set(['DS']), [{ term: 'โบตั๋น', skus: ['A1'] }], [{ name: 'ดอกไม้', skus: [] }], [], new Set(['A1'])
+    );
+    expect(label).toBe('🏭 DS · 🔍 โบตั๋น');
+  });
+  it('เทอมค้นชื่อที่ยังไม่มีผล (0 SKU) ไม่ถูกนับเป็น segment', () => {
+    const label = computeSourceLabel(
+      new Set(), [{ term: 'ไม่มีจริง', skus: [] }], [], [], new Set()
+    );
+    expect(label).toBe('');
+  });
+  it('หมวดที่เลือกไว้บางส่วน (SKU ในหมวดยังไม่ครบใน checkPicked) → ยังไม่นับเป็น segment ของหมวดนั้น', () => {
+    const label = computeSourceLabel(
+      new Set(), [], [{ name: 'ดอกไม้', skus: ['A1', 'A2'] }], [], new Set(['A1'])
+    );
+    expect(label).toBe('');
+  });
+  it('ไม่มีอะไรถูกเลือกเลย → คืนสตริงว่าง', () => {
+    expect(computeSourceLabel(new Set(), [], [], [], new Set())).toBe('');
+  });
+});
+
+describe('จุดเชื่อมต่อ Phase 4 ใน CategoryView — ปุ่มส่งแนบ sourceLabel จริง', () => {
+  it('body ของ fetch สร้างคำขอมี sourceLabel: checkSourceLabel', () => {
+    expect(CATEGORY_VIEW).toContain('sourceLabel: checkSourceLabel');
+  });
+  it('checkSourceLabel ยังเป็น memo เดียว (uM) ไม่ใช่คำนวณซ้ำหลายจุด', () => {
+    const count = (CATEGORY_VIEW.match(/const checkSourceLabel = uM\(/g) || []).length;
+    expect(count).toBe(1);
   });
 });
