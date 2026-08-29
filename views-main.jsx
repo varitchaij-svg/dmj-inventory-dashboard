@@ -3628,6 +3628,57 @@ function nextModelForPrefix(prefix, products) {
   return String(max + 1).padStart(3, "0");
 }
 
+// ── Prefix ที่ "แช่แข็ง" สำหรับสินค้าใหม่ — ของเดิมไม่กระทบเลย ────────────────
+// L เลิกใช้ตั้งรหัสสินค้าใหม่แล้ว (เจ้าของล็อกไว้) · สินค้า L ที่มีอยู่ยังอยู่ครบ
+// ทุกที่ในระบบ (ขาย/นับ/โอน/รายงาน) — ห้ามนี้มีผลเฉพาะ "การสร้าง SKU ใหม่"
+const PREFIX_FROZEN_NEW = ["L"];
+// หาไม่ได้จริง ๆ (ของใหม่ที่ไม่เคยมีในระบบ) → ใช้ F เป็นตัวตั้งต้น แล้วให้คนแก้เองได้
+const PREFIX_FALLBACK_NEW = "F";
+
+function isFrozenPrefix(pfx) {
+  return PREFIX_FROZEN_NEW.indexOf(String(pfx || "").trim().toUpperCase()) >= 0;
+}
+
+// ── recommendPrefixFor: เดา Prefix ให้อัตโนมัติจาก "ชื่อสินค้า + หมวดที่เลือก" ──
+// ไม่ได้สร้างกฎใหม่ — รวม 2 สัญญาณที่ฟอร์มนี้ใช้อยู่แล้วเข้าด้วยกัน:
+//   ① ชื่อคล้ายของเดิม (multi-token AND-match เหมือนช่องค้นหาทุกหน้า) → prefix ที่ของเดิมใช้
+//   ② หมวดที่เลือก → prefix ที่หมวดนั้นใช้บ่อยสุด
+// ลำดับ: ชื่อ+หมวดตรงกัน > ชื่อตรง > หมวดตรง > F
+// ⚠️ ไม่แนะนำ prefix ที่ถูกแช่แข็ง (L) เด็ดขาด — ของเดิมยังนับเป็นฐานเลข Model ตามปกติ
+// pure function — เทสต์ eval จากไฟล์นี้ตรง ๆ (ไม่ copy)
+function recommendPrefixFor(name, category, products) {
+  const nm = String(name || "").trim().toLowerCase();
+  const cat = String(category || "").trim();
+  const toks = nm.length >= 2 ? nm.split(/\s+/).filter(Boolean) : [];
+  const byName = {}, byNameCat = {}, byCat = {}, sample = {};
+  (products || []).forEach(p => {
+    const m = String((p && p.sku) || "").trim().toUpperCase().match(/^([A-Z]{1,3})\d/);
+    if (!m) return;
+    const pfx = m[1];
+    if (isFrozenPrefix(pfx)) return;                     // L ไม่ถูกแนะนำ
+    const pcat = String((p.category || p.cat || "")).trim();
+    const inCat = !!cat && pcat === cat;
+    if (inCat) byCat[pfx] = (byCat[pfx] || 0) + 1;
+    if (toks.length) {
+      const pname = String(p.name || "").toLowerCase();
+      if (toks.every(t => pname.includes(t))) {
+        byName[pfx] = (byName[pfx] || 0) + 1;
+        if (!sample[pfx]) sample[pfx] = p.name || "";
+        if (inCat) byNameCat[pfx] = (byNameCat[pfx] || 0) + 1;
+      }
+    }
+  });
+  // เรียงตามจำนวนมากสุด · เท่ากันเรียงตามตัวอักษร (ผลลัพธ์ต้องคงที่ ทดสอบได้)
+  const top = (obj) => Object.keys(obj).sort((a, b) => (obj[b] - obj[a]) || a.localeCompare(b))[0];
+  const byBoth = top(byNameCat);
+  if (byBoth) return { prefix: byBoth, source: "name+cat", count: byName[byBoth] || 0, sample: sample[byBoth] || "" };
+  const byNm = top(byName);
+  if (byNm) return { prefix: byNm, source: "name", count: byName[byNm] || 0, sample: sample[byNm] || "" };
+  const byC = top(byCat);
+  if (byC) return { prefix: byC, source: "category", count: byCat[byC] || 0, sample: "" };
+  return { prefix: PREFIX_FALLBACK_NEW, source: "fallback", count: 0, sample: "" };
+}
+
 // Strip "#1", "#10", trailing numbers, etc. from MTO product names
 // "แจกันชุด#1" → "แจกันชุด", "แจกันชุด 5 อะไร" → "แจกันชุด"
 function mtoBase(name) {
@@ -9885,6 +9936,8 @@ function LegacyAddProductView({ data, role, onAdded }) {
   // ── SKU builder ตาม business rule [Prefix][Variant 2 หลัก][Model 3 หลัก] ──
   const [skuMode, setSkuMode]       = uS("new");   // "new"=แบบใหม่ · "color"=สีใหม่ของแบบเดิม
   const [prefix, setPrefix]         = uS("");       // ตัวอักษรนำ (โหมดแบบใหม่)
+  // ผู้ใช้เลือก/พิมพ์ Prefix เองแล้วหรือยัง — ถ้าเลือกเองแล้ว ระบบจะไม่แนะนำทับ
+  const [prefixTouched, setPrefixTouched] = uS(false);
   const [prefixNameSearch, setPrefixNameSearch] = uS(""); // พิมพ์ชื่อสินค้า → หา Prefix (เช่น มะกอก → OL)
   const [baseDesignSku, setBaseDesignSku] = uS(""); // SKU แบบเดิมที่เลือก (โหมดสีใหม่) — ล็อค prefix+model
   const [designSearch, setDesignSearch]   = uS(""); // ค้นหาแบบเดิม
@@ -9912,6 +9965,7 @@ function LegacyAddProductView({ data, role, onAdded }) {
     skuForCode.forEach(p => {
       const m = String(p.sku || "").trim().toUpperCase().match(/^([A-Z]{1,3})\d/);
       if (!m) return;
+      if (isFrozenPrefix(m[1])) return;   // L ไม่ให้เลือกสร้างของใหม่ (ของเดิมไม่กระทบ)
       cnt[m[1]] = (cnt[m[1]] || 0) + 1;
       const c = (p.category || p.cat || "").trim();
       if (c && c === effectiveCat) catCnt[m[1]] = (catCnt[m[1]] || 0) + 1;
@@ -9931,6 +9985,7 @@ function LegacyAddProductView({ data, role, onAdded }) {
     skuForCode.forEach(p => {
       const m = String(p.sku || "").trim().toUpperCase().match(/^([A-Z]{1,3})\d/);
       if (!m) return;
+      if (isFrozenPrefix(m[1])) return;   // L ไม่โผล่เป็นตัวเลือกของใหม่
       const nm = String(p.name || "").toLowerCase();
       if (!toks.every(t => nm.includes(t))) return;
       const pfx = m[1];
@@ -9963,6 +10018,9 @@ function LegacyAddProductView({ data, role, onAdded }) {
     for (const p of skuForCode) {
       const parts = parseSkuParts(p.sku);
       if (!parts) continue;
+      // แบบที่ขึ้นต้นด้วย prefix แช่แข็ง (L) เพิ่ม "สีใหม่" ไม่ได้ (= สร้าง SKU ใหม่)
+      // → ไม่โชว์ในตัวเลือก กันกดเข้าไปแล้วบันทึกไม่ได้ · ของเดิมยังอยู่ครบทุกหน้า
+      if (isFrozenPrefix(parts.prefix)) continue;
       const key = parts.prefix + parts.model;
       if (seen.has(key)) continue;
       const hay = String(p.sku).toLowerCase() + " " + String(p.name || "").toLowerCase();
@@ -10021,7 +10079,21 @@ function LegacyAddProductView({ data, role, onAdded }) {
 
   const dupRemote = serverCheck && !serverCheck.checking && serverCheck.exists;
   const isDup = dupLocal || dupRemote;
-  const canSave = !saving && skuUp !== "" && name.trim() !== "" && effectiveCat !== "" && !isDup && !(serverCheck && serverCheck.checking);
+  // ── แนะนำ Prefix อัตโนมัติจาก "ชื่อ + หมวด" (โหมดแบบใหม่เท่านั้น) ──
+  const prefixRec = uM(
+    () => recommendPrefixFor(name, effectiveCat, skuForCode),
+    [name, effectiveCat, skuForCode]
+  );
+  // เติมให้อัตโนมัติเมื่อผู้ใช้ยังไม่ได้เลือกเอง · ผู้ใช้พิมพ์/กดเองเมื่อไหร่ก็หยุดเติมทันที
+  // ⚠️ ห้ามเติมทับตอนล็อกแบบไว้ (heldDesign) — จะทำให้เลข Model ที่ล็อกไว้หลุด
+  //    (resetItemFields ล้างชื่อหลังพักเข้าคิว → ถ้าเติมทับ prefix จะเปลี่ยนเองกลางคัน)
+  uE(() => {
+    if (skuMode !== "new" || prefixTouched || heldDesign) return;
+    if (prefixRec.prefix && prefixRec.prefix !== prefix) setPrefix(prefixRec.prefix);
+  }, [prefixRec.prefix, skuMode, prefixTouched, heldDesign]);   // eslint-disable-line
+  // L สร้างของใหม่ไม่ได้ (ทั้ง 2 โหมด) — ของเดิมไม่ถูกแตะต้อง
+  const prefixFrozen = isFrozenPrefix(effPrefix);
+  const canSave = !saving && skuUp !== "" && name.trim() !== "" && effectiveCat !== "" && !isDup && !prefixFrozen && !(serverCheck && serverCheck.checking);
 
   // ── ราคา: กรอก "ราคาส่ง" → ช่องราคาขาย (sellprice) = ปลีก = ส่ง × 1.25 (ปัดจำนวนเต็ม) ──
   const RETAIL_MULT = 1.25;
@@ -10199,6 +10271,24 @@ function LegacyAddProductView({ data, role, onAdded }) {
                     1) ตัวอักษรนำ (Prefix) — ประเภทสินค้า เช่น OL=มะกอก, R=กุหลาบ
                   </div>
 
+                  {/* แนะนำอัตโนมัติจาก "ชื่อ + หมวด" — เติมให้แล้ว แก้เองได้ตลอด */}
+                  {!prefixTouched && !held && (
+                    <div data-prefix-rec={prefixRec.prefix}
+                      style={{ marginBottom: 8, padding: "8px 12px", borderRadius: 10,
+                               background: prefixRec.source === "fallback" ? "#fffbeb" : "var(--g-50)",
+                               border: "1.5px solid " + (prefixRec.source === "fallback" ? "#fcd34d" : "var(--g-500)") }}>
+                      <span style={{ fontSize: 12, color: prefixRec.source === "fallback" ? "#b45309" : "var(--g-700)", fontWeight: 600 }}>
+                        {prefixRec.source === "fallback"
+                          ? <>🆕 ไม่พบสินค้าเดิมที่ใกล้เคียง — ตั้งให้เป็น <b style={{ fontFamily: "monospace" }}>{prefixRec.prefix}</b> (ของใหม่) · แก้ได้ด้านล่าง</>
+                          : <>💡 แนะนำ <b style={{ fontFamily: "monospace" }}>{prefixRec.prefix}</b>{
+                              prefixRec.source === "category"
+                                ? <> — หมวด “{effectiveCat}” ใช้ตัวนี้บ่อยสุด ({prefixRec.count} รายการ)</>
+                                : <> — ของเดิมชื่อคล้ายกันใช้ตัวนี้{prefixRec.sample ? " เช่น “" + prefixRec.sample + "”" : ""} ({prefixRec.count} รายการ)</>
+                            }</>}
+                      </span>
+                    </div>
+                  )}
+
                   {/* พิมพ์ชื่อสินค้า → หา Prefix จากของเดิมที่ชื่อคล้ายกัน */}
                   <input type="text" placeholder={`🔍 ${t("พิมพ์ชื่อสินค้าเพื่อหารหัส (เช่น มะกอก → OL)")}`}
                     value={prefixNameSearch} onChange={e => setPrefixNameSearch(e.target.value)}
@@ -10208,7 +10298,7 @@ function LegacyAddProductView({ data, role, onAdded }) {
                                   border: "1.5px solid var(--g-500)", borderRadius: 10, background: "var(--g-50)", padding: 6 }}>
                       {prefixByName.map(pb => (
                         <button key={pb.prefix} type="button"
-                          onClick={() => { setPrefix(pb.prefix); setHeldDesign(null); setPrefixNameSearch(""); }}
+                          onClick={() => { setPrefix(pb.prefix); setPrefixTouched(true); setHeldDesign(null); setPrefixNameSearch(""); }}
                           style={{ display: "flex", alignItems: "center", gap: 8, textAlign: "left",
                                    background: "#fff", border: "1px solid var(--bdr)", borderRadius: 8,
                                    padding: "8px 10px", cursor: "pointer", fontFamily: "inherit", minHeight: 42 }}>
@@ -10229,7 +10319,7 @@ function LegacyAddProductView({ data, role, onAdded }) {
                   {(prefixInfo.inCat.length > 0 || prefixInfo.others.length > 0) && (
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
                       {prefixInfo.inCat.map(px => (
-                        <button key={px} type="button" onClick={() => { setPrefix(px); setHeldDesign(null); }}
+                        <button key={px} type="button" onClick={() => { setPrefix(px); setPrefixTouched(true); setHeldDesign(null); }}
                           style={{
                             minHeight: 40, padding: "6px 12px", borderRadius: 999, cursor: "pointer",
                             fontSize: 13, fontWeight: 700, fontFamily: "monospace",
@@ -10239,7 +10329,7 @@ function LegacyAddProductView({ data, role, onAdded }) {
                           }}>{px}</button>
                       ))}
                       {prefixInfo.others.slice(0, 8).map(px => (
-                        <button key={px} type="button" onClick={() => { setPrefix(px); setHeldDesign(null); }}
+                        <button key={px} type="button" onClick={() => { setPrefix(px); setPrefixTouched(true); setHeldDesign(null); }}
                           style={{
                             minHeight: 40, padding: "6px 12px", borderRadius: 999, cursor: "pointer",
                             fontSize: 13, fontWeight: 700, fontFamily: "monospace",
@@ -10252,9 +10342,18 @@ function LegacyAddProductView({ data, role, onAdded }) {
                   )}
                   <input type="text" placeholder={t("พิมพ์ Prefix เช่น OL")}
                     value={prefix}
-                    onChange={e => { setPrefix(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 3)); setHeldDesign(null); }}
+                    onChange={e => { const v = e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 3); setPrefix(v); setPrefixTouched(v !== ""); setHeldDesign(null); }}
                     style={{ ...inputStyle, fontFamily: "monospace", fontWeight: 700, maxWidth: 200 }} />
-                  {/^[A-Z]{1,3}$/.test(prefix) && (
+                  {prefixFrozen && (
+                    <div data-prefix-frozen style={{ marginTop: 8, padding: "8px 12px", borderRadius: 10,
+                                  background: "#fef2f2", border: "1.5px solid #fca5a5" }}>
+                      <span style={{ fontSize: 12, color: "#b91c1c", fontWeight: 700 }}>
+                        🔒 <b style={{ fontFamily: "monospace" }}>{effPrefix}</b> ใช้ตั้งรหัสสินค้าใหม่ไม่ได้แล้ว — เลือกตัวอื่น
+                        <span style={{ fontWeight: 400 }}> (สินค้า {effPrefix} เดิมที่มีอยู่ยังใช้งานได้ตามปกติทุกอย่าง)</span>
+                      </span>
+                    </div>
+                  )}
+                  {!prefixFrozen && /^[A-Z]{1,3}$/.test(prefix) && (
                     held ? (
                       <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 10, background: "#eff6ff", border: "1.5px solid #93c5fd",
                                     display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>

@@ -969,6 +969,50 @@ function startServer() {
     await page.close();
   }
 
+  // ── (จ2.6a-rec) ฟอร์มเดิม: พิมพ์ชื่อ → ระบบเติม Prefix ให้เอง · L ตั้งรหัสใหม่ไม่ได้ ──
+  // เจ้าของสั่ง: พนักงานไม่ต้องรู้จัก Prefix — ระบบเดาจาก "ชื่อ + หมวด" ของเดิมที่มีอยู่จริง
+  // ⚠️ ต้องรันบนเบราว์เซอร์จริง — unit test เห็นแค่ source ไม่เห็นว่า effect ยิงแล้วช่อง Prefix
+  //    ถูกเติมจริงไหม (เป็นจุดที่พังแล้วเงียบ: ฟอร์มดูปกติ แต่ไม่มีอะไรเกิดขึ้น)
+  {
+    const page = await browser.newPage({ viewport: { width: 900, height: 1200 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=warehouse&tab=newproduct`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, 'warehouse', 'newproduct');
+      await page.waitForTimeout(500);
+      const pfxInput = page.locator('main input[placeholder*="พิมพ์ Prefix"]').first();
+      const nameInput = page.locator('main input[placeholder*="ป๊อปปี้"]').first();
+      if (!navOk) { status = 'NAV_FAIL'; note = 'สลับไปแท็บเพิ่มสินค้าไม่สำเร็จ'; }
+      else if (!(await nameInput.count()) || !(await pfxInput.count())) {
+        status = 'NO_FORM'; note = 'ไม่พบช่องชื่อสินค้า/ช่อง Prefix ในฟอร์มเดิม';
+      } else {
+        // ① พิมพ์ชื่อที่ตรงกับของเดิมในระบบ (FLW002 "ดอกไม้ประดิษฐ์ สีแดง") → ต้องเติม FLW ให้เอง
+        await nameInput.fill('ดอกไม้ประดิษฐ์');
+        await page.waitForTimeout(400);
+        const auto = (await pfxInput.inputValue().catch(() => '')) || '';
+        const recChip = await page.locator('[data-prefix-rec="FLW"]').count();
+        // ② พิมพ์ L เอง → ต้องขึ้นคำเตือนว่าใช้ตั้งรหัสใหม่ไม่ได้
+        await pfxInput.fill('L');
+        await page.waitForTimeout(300);
+        const frozen = await page.locator('[data-prefix-frozen]').count();
+        // ③ กลับไปใช้ prefix ปกติ → คำเตือนต้องหาย (ไม่ค้าง)
+        await pfxInput.fill('FLW');
+        await page.waitForTimeout(300);
+        const frozenGone = await page.locator('[data-prefix-frozen]').count();
+
+        if (auto !== 'FLW') { status = 'NO_AUTOFILL'; note = `พิมพ์ชื่อแล้ว Prefix ไม่ถูกเติมให้ (ได้ "${auto}" ควรเป็น FLW)`; }
+        else if (!recChip) { status = 'NO_REC_BANNER'; note = 'ไม่เห็นแถบอธิบายว่าทำไมแนะนำ Prefix นี้'; }
+        else if (!frozen) { status = 'L_NOT_BLOCKED'; note = 'พิมพ์ L แล้วไม่ขึ้นคำเตือน — สร้างรหัส L ใหม่ได้ (ต้องห้าม)'; }
+        else if (frozenGone) { status = 'WARN_STUCK'; note = 'เปลี่ยนกลับเป็น prefix ปกติแล้วคำเตือน L ยังค้าง'; }
+        else note = 'พิมพ์ชื่อ → เติม Prefix FLW ให้เอง + บอกเหตุผล · พิมพ์ L → เตือนและสร้างไม่ได้';
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'addproduct__prefix-recommend.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'เพิ่มสินค้า — แนะนำ Prefix + กัน L', status, note });
+    await page.close();
+  }
+
   // ── (จ2.6b) ของเข้าใหม่ → บันทึก PDF: กดปุ่ม → โมดัลติ๊กวัน → เอกสาร portal ถูกสร้าง ──
   // เจ้าของสั่ง: การ์ดของเข้าใหม่ต้องพิมพ์ PDF ได้ แยกตามซัพพลายเออร์ + วันที่
   // ยืนยันบนเบราว์เซอร์จริง: ปุ่มโผล่ (owner) → เปิดโมดัล → มีวันให้ติ๊ก → เอกสาร .intake-print-page
