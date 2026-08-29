@@ -3650,15 +3650,14 @@ function recommendPrefixFor(name, category, products) {
   const nm = String(name || "").trim().toLowerCase();
   const cat = String(category || "").trim();
   const toks = nm.length >= 2 ? nm.split(/\s+/).filter(Boolean) : [];
-  const byName = {}, byNameCat = {}, byCat = {}, sample = {};
+  const byName = {}, byNameCat = {}, sample = {};
   (products || []).forEach(p => {
     const m = String((p && p.sku) || "").trim().toUpperCase().match(/^([A-Z]{1,3})\d/);
     if (!m) return;
     const pfx = m[1];
     if (isFrozenPrefix(pfx)) return;                     // L ไม่ถูกแนะนำ
     const pcat = String((p.category || p.cat || "")).trim();
-    const inCat = !!cat && pcat === cat;
-    if (inCat) byCat[pfx] = (byCat[pfx] || 0) + 1;
+    const inCat = !!cat && pcat === cat;   // หมวดใช้ชี้ขาดตอนชื่อตรงหลาย prefix เท่านั้น
     if (toks.length) {
       const pname = String(p.name || "").toLowerCase();
       if (toks.every(t => pname.includes(t))) {
@@ -3674,8 +3673,10 @@ function recommendPrefixFor(name, category, products) {
   if (byBoth) return { prefix: byBoth, source: "name+cat", count: byName[byBoth] || 0, sample: sample[byBoth] || "" };
   const byNm = top(byName);
   if (byNm) return { prefix: byNm, source: "name", count: byName[byNm] || 0, sample: sample[byNm] || "" };
-  const byC = top(byCat);
-  if (byC) return { prefix: byC, source: "category", count: byCat[byC] || 0, sample: "" };
+  // ⚠️ ไม่มีชั้น "เดาจากหมวดอย่างเดียว" โดยเจตนา — ของใหม่ที่ระบบไม่รู้จัก ต้องได้ F
+  //    ไม่ใช่ prefix ที่หมวดนั้นใช้บ่อยสุด (เช่น ของใหม่ในหมวดดอกไม้ จะได้ R = กุหลาบ
+  //    ทั้งที่ไม่ใช่กุหลาบเลย) — เดาผิดแบบเงียบ ๆ แย่กว่าบอกตรง ๆ ว่าไม่รู้จัก
+  //    หมวดยังมีผลอยู่: ใช้ชี้ขาดตอนชื่อตรงกับหลาย prefix (ชั้น name+cat ด้านบน)
   return { prefix: PREFIX_FALLBACK_NEW, source: "fallback", count: 0, sample: "" };
 }
 

@@ -79,11 +79,20 @@ describe('recommendPrefixFor — เดา Prefix จากชื่อ + หม
     expect(r.prefix).toBe('R');
     expect(r.count).toBe(1);
   });
-  it('ชื่อไม่ตรงใคร แต่เลือกหมวดไว้ → ใช้ prefix ที่หมวดนั้นใช้บ่อยสุด', () => {
+  it('★ ชื่อไม่ตรงใคร แม้เลือกหมวดไว้ → F (ห้ามเดาเป็น prefix ยอดนิยมของหมวด)', () => {
+    // เจ้าของสั่ง: "ของใหม่ที่ระบบไม่รู้จัก" ต้องได้ F เท่านั้น
+    // เดิมคืน OL เพราะหมวด "ใบไม้" ใช้ OL บ่อยสุด — ซึ่งไม่เกี่ยวกับตัวสินค้าเลย
     const r = recommendPrefixFor('ของใหม่เอี่ยม', 'ใบไม้', PRODUCTS);
-    expect(r.prefix).toBe('OL');
-    expect(r.source).toBe('category');
-    expect(r.count).toBe(3);   // L01263 ในหมวดเดียวกันต้องไม่ถูกนับ
+    expect(r.prefix).toBe('F');
+    expect(r.source).toBe('fallback');
+  });
+  it('★ ของใหม่จริงในหมวดที่มีของเยอะ → F (เคสที่เจ็บสุด: โคมไฟ ไม่ควรได้ prefix กุหลาบ)', () => {
+    const r = recommendPrefixFor('โคมไฟ LED', 'ดอกไม้', PRODUCTS);
+    expect(r.prefix).toBe('F');
+    expect(r.prefix).not.toBe('R');
+  });
+  it('★ ยังไม่พิมพ์ชื่อ แต่เลือกหมวดแล้ว → F (ไม่เติม prefix ให้ก่อนรู้ว่าเป็นสินค้าอะไร)', () => {
+    expect(recommendPrefixFor('', 'ดอกไม้', PRODUCTS).prefix).toBe('F');
   });
   it('ของใหม่จริง ๆ ไม่มีอะไรใกล้เคียงเลย → fallback F', () => {
     const r = recommendPrefixFor('สินค้าไม่เคยมี', 'หมวดใหม่ที่ไม่เคยมี', PRODUCTS);
@@ -95,21 +104,21 @@ describe('recommendPrefixFor — เดา Prefix จากชื่อ + หม
     expect(recommendPrefixFor('', '', PRODUCTS).prefix).toBe('F');
     expect(recommendPrefixFor('', '', []).prefix).toBe('F');
   });
-  it('🔒 ไม่แนะนำ L เด็ดขาด แม้ชื่อ/หมวดจะตรงที่สุด', () => {
-    // "ของเก่า L" ตรงชื่อเป๊ะ และเป็นตัวเดียวในหมวดนั้นที่ตรง → ต้องไม่คืน L
+  it('🔒 ไม่แนะนำ L เด็ดขาด แม้ชื่อจะตรงเป๊ะที่สุด → ตกไป F', () => {
+    // "ของเก่า L" ตรงชื่อสินค้า L เท่านั้น · L ถูกตัดออกก่อนนับ → ไม่เหลือชื่อที่ตรง → F
     const r = recommendPrefixFor('ของเก่า L', 'ดอกไม้', PRODUCTS);
     expect(r.prefix).not.toBe('L');
-    // ไม่มีตัวอื่นชื่อตรง → ตกไปใช้ prefix ที่หมวด "ดอกไม้" ใช้บ่อยสุด = R (ไม่ใช่ L)
-    expect(r.prefix).toBe('R');
+    expect(r.prefix).toBe('F');
   });
   it('🔒 หมวดที่มีแต่สินค้า L → ไม่คืน L แต่ตกไป fallback F', () => {
     const onlyL = [{ sku: 'L01263', name: 'ของเก่า', category: 'หมวดL' }];
     const r = recommendPrefixFor('อะไรก็ได้', 'หมวดL', onlyL);
     expect(r.prefix).toBe('F');
   });
-  it('ชื่อสั้นกว่า 2 ตัวอักษร → ไม่เดาจากชื่อ (กัน noise เหมือน prefixByName เดิม)', () => {
+  it('ชื่อสั้นกว่า 2 ตัวอักษร → ไม่เดาจากชื่อ (กัน noise เหมือน prefixByName เดิม) → F', () => {
     const r = recommendPrefixFor('ม', 'ใบไม้', PRODUCTS);
-    expect(r.source).toBe('category');
+    expect(r.source).toBe('fallback');
+    expect(r.prefix).toBe('F');
   });
   it('ใช้กฎแยก prefix ตัวเดียวกับชิปเดิม (^[A-Z]{1,3} ตามด้วยตัวเลข)', () => {
     // VAS001 → prefix "VAS" เหมือนที่ prefixInfo/prefixByName เดิมมองเห็น
@@ -136,6 +145,10 @@ describe('recommendPrefixFor — เดา Prefix จากชื่อ + หม
 
 // ── META: จุดเชื่อมต่อในฟอร์มจริง (พังแล้วไม่มี error ให้เห็น) ────────────────
 describe('META — การต่อเข้าฟอร์มเดิม (LegacyAddProductView)', () => {
+  it('★ ต้องไม่มีชั้น "เดาจากหมวดอย่างเดียว" กลับมาอีก (กันถอยกลับเงียบ ๆ)', () => {
+    // เจ้าของตัดชั้นนี้ทิ้งโดยเจตนา — ของที่ระบบไม่รู้จักต้องได้ F ไม่ใช่ prefix ยอดนิยมของหมวด
+    expect(/source: "category"/.test(F_RECOMMEND)).toBe(false);
+  });
   it('เติม Prefix อัตโนมัติเฉพาะตอนผู้ใช้ยังไม่เลือกเอง และไม่ทับตอนล็อกแบบไว้', () => {
     expect(/if \(skuMode !== "new" \|\| prefixTouched \|\| heldDesign\) return;/.test(VIEWS)).toBe(true);
     expect(/if \(prefixRec\.prefix && prefixRec\.prefix !== prefix\) setPrefix\(prefixRec\.prefix\);/.test(VIEWS)).toBe(true);
