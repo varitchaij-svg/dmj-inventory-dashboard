@@ -44,6 +44,7 @@ const PRODUCTS = [
   { sku: 'L01263',  name: 'มะกอกเก่า เลิกใช้', category: 'ใบไม้' },   // L — ห้ามแนะนำ
   { sku: 'L19264',  name: 'ของเก่า L',        category: 'ดอกไม้' },
   { sku: 'VAS001',  name: 'แจกันแก้วใส',      category: 'แจกัน' },     // ไม่เข้ารูป [A-Z]{1,3}\d{5}
+  { sku: 'DEC01099', name: 'กุหลาบพลาสติก',   category: 'ของตกแต่ง' }, // ชื่อชนกับดอกไม้ แต่คนละหมวด — ใช้ทดสอบกันชื่อข้ามหมวด
 ];
 
 describe('isFrozenPrefix — L แช่แข็งสำหรับสินค้าใหม่', () => {
@@ -93,6 +94,26 @@ describe('recommendPrefixFor — เดา Prefix จากชื่อ + หม
   });
   it('★ ยังไม่พิมพ์ชื่อ แต่เลือกหมวดแล้ว → F (ไม่เติม prefix ให้ก่อนรู้ว่าเป็นสินค้าอะไร)', () => {
     expect(recommendPrefixFor('', 'ดอกไม้', PRODUCTS).prefix).toBe('F');
+  });
+  it('หมวด "ดอกไม้" + ชื่อ "กุหลาบ" (ตรงในหมวดที่เลือก) → R', () => {
+    // ตัวอย่างจากเจ้าของตรง ๆ: Category=ดอกไม้ + กุหลาบ → R ถ้าดอกไม้ที่ตรงใช้ R
+    const r = recommendPrefixFor('กุหลาบ', 'ดอกไม้', PRODUCTS);
+    expect(r.prefix).toBe('R');
+    expect(r.source).toBe('name+cat');
+  });
+  it('★★ เลือกหมวดไว้แล้ว + ชื่อดันไปตรงกับสินค้า "คนละหมวด" เป๊ะ → ห้ามข้ามไปใช้ prefix หมวดนั้น ต้อง F', () => {
+    // "กุหลาบพลาสติก" (DEC01099) อยู่หมวด "ของตกแต่ง" — กำลังเพิ่มของหมวด "ดอกไม้"
+    // ชื่อตรงเป๊ะแต่คนละหมวด → ห้ามได้ prefix DEC มา (คนละเรื่องกับสินค้าที่กำลังเพิ่ม)
+    const r = recommendPrefixFor('กุหลาบพลาสติก', 'ดอกไม้', PRODUCTS);
+    expect(r.prefix).toBe('F');
+    expect(r.prefix).not.toBe('DEC');
+  });
+  it('ยังไม่ได้เลือกหมวด (ว่าง) + ชื่อตรงกับของหมวดอื่น → ยังหาข้ามหมวดได้ (ไม่มีขอบเขตให้จำกัด)', () => {
+    // ต่างจากเคสข้างบนตรงที่ "ยังไม่ได้เลือกหมวดเลย" — ไม่มีหมวดให้ห้ามข้าม
+    // จึงยังใช้ชื่อที่ตรงข้ามทั้งระบบได้เหมือนพฤติกรรมเดิม (ก่อนหมวดถูกเลือก)
+    const r = recommendPrefixFor('กุหลาบพลาสติก', '', PRODUCTS);
+    expect(r.prefix).toBe('DEC');
+    expect(r.source).toBe('name');
   });
   it('ของใหม่จริง ๆ ไม่มีอะไรใกล้เคียงเลย → fallback F', () => {
     const r = recommendPrefixFor('สินค้าไม่เคยมี', 'หมวดใหม่ที่ไม่เคยมี', PRODUCTS);
@@ -148,6 +169,16 @@ describe('META — การต่อเข้าฟอร์มเดิม (Le
   it('★ ต้องไม่มีชั้น "เดาจากหมวดอย่างเดียว" กลับมาอีก (กันถอยกลับเงียบ ๆ)', () => {
     // เจ้าของตัดชั้นนี้ทิ้งโดยเจตนา — ของที่ระบบไม่รู้จักต้องได้ F ไม่ใช่ prefix ยอดนิยมของหมวด
     expect(/source: "category"/.test(F_RECOMMEND)).toBe(false);
+  });
+  it('★★ เลือกหมวดไว้แล้ว → ต้อง return F ทันทีก่อนถึงชั้นค้นชื่อข้ามหมวด (byName)', () => {
+    // ล็อกรูปโค้ด: "if (cat) return F" ต้องอยู่ระหว่าง byNameCat กับ byName เท่านั้น
+    // ย้ายผิดที่ = หมวดที่เลือกไว้หลุดไปใช้ชื่อที่ตรงข้ามหมวดได้อีกแบบเงียบ ๆ
+    const order = F_RECOMMEND.indexOf('top(byNameCat)');
+    const guard = F_RECOMMEND.indexOf('if (cat) return');
+    const crossName = F_RECOMMEND.indexOf('top(byName)');
+    expect(order).toBeGreaterThan(-1);
+    expect(guard).toBeGreaterThan(order);
+    expect(crossName).toBeGreaterThan(guard);
   });
   it('เติม Prefix อัตโนมัติเฉพาะตอนผู้ใช้ยังไม่เลือกเอง และไม่ทับตอนล็อกแบบไว้', () => {
     expect(/if \(skuMode !== "new" \|\| prefixTouched \|\| heldDesign\) return;/.test(VIEWS)).toBe(true);

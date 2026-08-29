@@ -3671,12 +3671,15 @@ function recommendPrefixFor(name, category, products) {
   const top = (obj) => Object.keys(obj).sort((a, b) => (obj[b] - obj[a]) || a.localeCompare(b))[0];
   const byBoth = top(byNameCat);
   if (byBoth) return { prefix: byBoth, source: "name+cat", count: byName[byBoth] || 0, sample: sample[byBoth] || "" };
+  // ⚠️ เลือกหมวดไว้แล้ว แต่ไม่มีสินค้า "ในหมวดนั้น" ที่ชื่อตรง → ต้องจบที่ F ทันที
+  //    ห้ามข้ามไปใช้ชื่อที่ตรงในหมวดอื่น (เช่น ค้นหา "กุหลาบพลาสติก" ที่จริงเป็นของ
+  //    หมวดของตกแต่ง แต่กำลังจะเพิ่มของในหมวดดอกไม้ — ต้องไม่ได้ prefix ของของตกแต่งมา)
+  //    ไม่มีชั้น "เดาจากหมวดอย่างเดียว" เช่นกัน (ของใหม่ในหมวดที่มีของเยอะต้องไม่ได้
+  //    prefix ยอดนิยมของหมวดนั้นแบบเดา ๆ) — เจตนาทั้งคู่คือ "ไม่รู้จริง ๆ ต้องบอกว่าไม่รู้"
+  if (cat) return { prefix: PREFIX_FALLBACK_NEW, source: "fallback", count: 0, sample: "" };
+  // ยังไม่ได้เลือกหมวด → ไม่มีขอบเขตให้จำกัด ใช้ชื่อที่ตรงข้ามทั้งระบบได้ตามเดิม
   const byNm = top(byName);
   if (byNm) return { prefix: byNm, source: "name", count: byName[byNm] || 0, sample: sample[byNm] || "" };
-  // ⚠️ ไม่มีชั้น "เดาจากหมวดอย่างเดียว" โดยเจตนา — ของใหม่ที่ระบบไม่รู้จัก ต้องได้ F
-  //    ไม่ใช่ prefix ที่หมวดนั้นใช้บ่อยสุด (เช่น ของใหม่ในหมวดดอกไม้ จะได้ R = กุหลาบ
-  //    ทั้งที่ไม่ใช่กุหลาบเลย) — เดาผิดแบบเงียบ ๆ แย่กว่าบอกตรง ๆ ว่าไม่รู้จัก
-  //    หมวดยังมีผลอยู่: ใช้ชี้ขาดตอนชื่อตรงกับหลาย prefix (ชั้น name+cat ด้านบน)
   return { prefix: PREFIX_FALLBACK_NEW, source: "fallback", count: 0, sample: "" };
 }
 
