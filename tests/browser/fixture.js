@@ -69,6 +69,24 @@
       lastStockInDate: monthKey(1).split('/').reverse().join('-') + '-01',
       threshold: 20, mo: monthlyCompact(1),
     },
+    // ── CLY040/ORN041: คนละหมวด แต่ชื่อสินค้ามีคำร่วม "มินิ" เหมือนกัน ──
+    // ใช้ทดสอบว่าเพิ่มสินค้าใหม่ → หา Prefix จากชื่อ ต้องกรองด้วยหมวดที่เลือกก่อนเสมอ
+    // (ค้น "มินิ" ตอนอยู่หมวด "แจกันเซรามิก" ต้องได้ CLY เท่านั้น ห้ามได้ ORN จากหมวด "ของประดับตกแต่ง"
+    // แม้ชื่อจะมีคำว่า "มินิ" ตรงกันก็ตาม)
+    // ⚠️ ชื่อ CLY040 ห้ามมีคำว่า "แจกัน" — ชนกับ test "ปุ่มลอยส่งคำขอเช็ค…ค้นชื่อ" ที่ค้น "แจกัน"
+    // แล้วคาดว่าได้ VAS001+FLW002 พอดี 2 รายการ (ตั้งใจใช้ "โถ" แทน แม้หมวดจะชื่อ "แจกันเซรามิก")
+    { sku: 'CLY040', name: 'โถเซรามิกมินิ ทรงกลม', cat: 'แจกันเซรามิก', tag: 'POTTERY',
+      qty: 24, qtyStore: 10, qtyWH: 14, price: 60, soldQty: 6, soldRev: 360,
+      isMTO: false, imageUrl: '', vendor: 'POTTERY', lastSupplier: 'POTTERY',
+      lastStockInDate: monthKey(1).split('/').reverse().join('-') + '-01',
+      threshold: 12, mo: monthlyCompact(2),
+    },
+    { sku: 'ORN041', name: 'ของประดับมินิ ระย้า', cat: 'ของประดับตกแต่ง', tag: 'SPARKLE',
+      qty: 30, qtyStore: 12, qtyWH: 18, price: 45, soldQty: 8, soldRev: 360,
+      isMTO: false, imageUrl: '', vendor: 'SPARKLE', lastSupplier: 'SPARKLE',
+      lastStockInDate: monthKey(1).split('/').reverse().join('-') + '-01',
+      threshold: 12, mo: monthlyCompact(2),
+    },
   ];
 
   const orders = [

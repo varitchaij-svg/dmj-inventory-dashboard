@@ -1112,6 +1112,57 @@ function startServer() {
     await page.close();
   }
 
+  // ── (จ2.6a-cat) เพิ่มสินค้าใหม่ — หมวดหมู่ต้องเป็นตัวกรองอันดับแรกของการแนะนำ Prefix จากชื่อ ──
+  // เจ้าของแก้ทิศ (ส.ค. 2026): "กุหลาบ" ในหมวดอื่นห้ามมาเป็นตัวกำหนด Prefix ของหมวดที่กำลังเพิ่ม
+  // fixture มี CLY040 "โถเซรามิกมินิ ทรงกลม" (หมวด แจกันเซรามิก) กับ ORN041 "ของประดับมินิ ระย้า"
+  // (หมวด ของประดับตกแต่ง) — ชื่อมีคำร่วม "มินิ" เหมือนกันแต่คนละหมวด คนละ Prefix
+  //   1) ยังไม่เลือกหมวด + พิมพ์ "มินิ" → ต้องไม่แนะนำอะไรเลย (เตือนให้เลือกหมวดก่อน)
+  //   2) เลือกหมวด "แจกันเซรามิก" + พิมพ์ "มินิ" → ต้องเห็น CLY เท่านั้น ห้ามเห็น ORN
+  //   3) สลับไปหมวด "ของประดับตกแต่ง" (ค้างคำค้นเดิม) → ต้องสลับเป็น ORN เท่านั้น ห้ามเห็น CLY
+  // ⚠️ เช็คด้วย "ชื่อตัวอย่าง" ที่โผล่เฉพาะในกล่องแนะนำ (prefixByName: "{sample} · N รายการ")
+  //   ไม่ใช่ตัวอักษร Prefix เปล่า ๆ — เพราะชิป "Prefix ที่เคยใช้" (prefixInfo, ตัวเลือกมือ) โชว์
+  //   ทุก Prefix ที่เคยมีข้ามหมวดอยู่แล้วโดยตั้งใจ (ข้อ 8: ยังต้องเลือกเองข้ามหมวดได้) ถ้าเช็คแค่
+  //   ตัวอักษร Prefix จะชนกับชิปนั้นเป็น false positive
+  {
+    const page = await browser.newPage({ viewport: { width: 900, height: 1200 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=owner&tab=newproduct`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, 'owner', 'newproduct');
+      await page.waitForTimeout(500);
+      const nameInput = page.locator('input[placeholder*="พิมพ์ชื่อสินค้าเพื่อหารหัส"]').first();
+      await nameInput.fill('มินิ');
+      await page.waitForTimeout(300);
+      const RECO_CLY = 'โถเซรามิกมินิ ทรงกลม';   // sample name ของ CLY040 — โผล่เฉพาะในกล่องแนะนำ
+      const RECO_ORN = 'ของประดับมินิ ระย้า'; // sample name ของ ORN041
+      const beforeCatText = await page.locator('main').innerText().catch(() => '');
+      const noCatHint = /เลือกหมวดหมู่ด้านบนก่อน/.test(beforeCatText);
+      const noRecoBeforeCat = !beforeCatText.includes(RECO_CLY) && !beforeCatText.includes(RECO_ORN);
+
+      const catClyBtn = page.locator('button', { hasText: 'แจกันเซรามิก' }).first();
+      await catClyBtn.click({ timeout: 3000 });
+      await page.waitForTimeout(300);
+      const afterCly = await page.locator('main').innerText().catch(() => '');
+      const clyOk = afterCly.includes(RECO_CLY) && !afterCly.includes(RECO_ORN);
+
+      const catOrnBtn = page.locator('button', { hasText: 'ของประดับตกแต่ง' }).first();
+      await catOrnBtn.click({ timeout: 3000 });
+      await page.waitForTimeout(300);
+      const afterOrn = await page.locator('main').innerText().catch(() => '');
+      const ornOk = afterOrn.includes(RECO_ORN) && !afterOrn.includes(RECO_CLY);
+
+      if (!navOk) { status = 'NAV_FAIL'; note = 'สลับไปแท็บเพิ่มสินค้าไม่สำเร็จ'; }
+      else if (!noCatHint || !noRecoBeforeCat) { status = 'PRECAT_FAIL'; note = 'ยังไม่เลือกหมวด แต่มีคำแนะนำ Prefix โผล่มา (หรือไม่เตือนให้เลือกหมวดก่อน)'; }
+      else if (!clyOk) { status = 'CAT1_LEAK'; note = 'หมวด "แจกันเซรามิก" + ค้น "มินิ" ควรแนะนำ CLY (จาก ' + RECO_CLY + ') เท่านั้น ห้ามมี ' + RECO_ORN; }
+      else if (!ornOk) { status = 'CAT2_LEAK'; note = 'สลับไปหมวด "ของประดับตกแต่ง" ควรแนะนำ ORN เท่านั้น (ต้องไม่เห็นคำแนะนำของหมวดก่อนหน้าค้างอยู่)'; }
+      else note = 'หมวดหมู่เป็นตัวกรองอันดับแรกจริง — ยังไม่เลือกหมวด=ไม่แนะนำ, ข้ามหมวด=ไม่ยืมชื่อ/Prefix กัน';
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 160); }
+    await page.screenshot({ path: path.join(SHOTS, 'addproduct__category-first-prefix.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'เพิ่มสินค้า — หมวดหมู่กรอง Prefix ก่อนชื่อ', status, note });
+    await page.close();
+  }
+
   // ── (จ2.6b) ของเข้าใหม่ → บันทึก PDF: กดปุ่ม → โมดัลติ๊กวัน → เอกสาร portal ถูกสร้าง ──
   // เจ้าของสั่ง: การ์ดของเข้าใหม่ต้องพิมพ์ PDF ได้ แยกตามซัพพลายเออร์ + วันที่
   // ยืนยันบนเบราว์เซอร์จริง: ปุ่มโผล่ (owner) → เปิดโมดัล → มีวันให้ติ๊ก → เอกสาร .intake-print-page
