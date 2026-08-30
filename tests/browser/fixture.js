@@ -47,6 +47,28 @@
       qty: 0, qtyStore: 0, qtyWH: 0, price: 1500, soldQty: 5, soldRev: 7500,
       isMTO: true, imageUrl: '', mo: monthlyCompact(2),
     },
+    // ── PIN010-012: หมวดใหม่ "ต้นไม้ประดิษฐ์" ตั้งใจไม่ทับหมวด/สีที่ทดสอบไว้แล้วข้างบน (แดง=FLW002
+    // ตัวเดียว, ดอกไม้=FLW002 ตัวเดียว) — ใช้ทดสอบ 2 เรื่องที่เจ้าของขอหลัง merge (ส.ค. 2026):
+    // (1) ค้นชื่อ "สน" ต้องขึ้นแค่ PIN010 (ชื่อตรงเป๊ะ) ไม่ใช่ทุกตัวที่สะกดปนคำนี้ (PIN011/PIN012)
+    // (2) กรองต่อด้วยสีจากแท็บ 🏷️ หมวด — หมวดนี้มี 3 SKU แต่มีแค่ PIN012 ที่เป็นสี "เงิน"
+    { sku: 'PIN010', name: 'สน', cat: 'ต้นไม้ประดิษฐ์', tag: 'GREEN',
+      qty: 30, qtyStore: 10, qtyWH: 20, price: 90, soldQty: 10, soldRev: 900,
+      isMTO: false, imageUrl: '', vendor: 'GREEN', lastSupplier: 'GREEN',
+      lastStockInDate: monthKey(1).split('/').reverse().join('-') + '-01',
+      threshold: 20, mo: monthlyCompact(3),
+    },
+    { sku: 'PIN011', name: 'ต้นสนประดิษฐ์', cat: 'ต้นไม้ประดิษฐ์', tag: 'GREEN',
+      qty: 18, qtyStore: 8, qtyWH: 10, price: 150, soldQty: 4, soldRev: 600,
+      isMTO: false, imageUrl: '', vendor: 'GREEN', lastSupplier: 'GREEN',
+      lastStockInDate: monthKey(2).split('/').reverse().join('-') + '-01',
+      threshold: 20, mo: monthlyCompact(1),
+    },
+    { sku: 'PIN012', name: 'สนใบเงิน', cat: 'ต้นไม้ประดิษฐ์', tag: 'GREEN',
+      qty: 12, qtyStore: 4, qtyWH: 8, price: 200, soldQty: 2, soldRev: 400,
+      isMTO: false, imageUrl: '', vendor: 'GREEN', lastSupplier: 'GREEN',
+      lastStockInDate: monthKey(1).split('/').reverse().join('-') + '-01',
+      threshold: 20, mo: monthlyCompact(1),
+    },
   ];
 
   const orders = [

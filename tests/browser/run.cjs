@@ -977,6 +977,77 @@ function startServer() {
     await page.close();
   }
 
+  // ── (จ2.9) ปุ่มลอย 📤 — ค้นชื่อตรงเป๊ะมาก่อน substring ("สน" ไม่โดน "สนิม"/"ต้นสน") +
+  // กรองต่อด้วยสีจากแท็บ 🏷️ หมวด (เจ้าของลองใช้งานจริงหลัง merge แล้วขอ 2 เรื่องนี้ ส.ค. 2026)
+  // fixture: PIN010="สน"(ไม่มีสี) · PIN011="ต้นสนประดิษฐ์"(ไม่มีสี) · PIN012="สนใบเงิน"(สีเงิน)
+  // ทั้ง 3 อยู่หมวดใหม่ "ต้นไม้ประดิษฐ์" ตัวเดียว ไม่ปนกับ "ดอกไม้"/"แดง" ที่เทสต์ก่อนหน้าใช้อยู่
+  // ⚠️ ทั้ง "ต้นไม้ประดิษฐ์" (ชื่อหมวด) และ "เงิน" (ชื่อสี) โดน sidebar "หมวดหมู่"/แถบกรองสีของ
+  // หน้าหลัก (background, harness ไม่มี CSS ซ่อน) ชนซ้ำเหมือนเคส "ดอกไม้" ก่อนหน้า → ต้องใช้ .last()
+  {
+    const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=owner&tab=categories`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, 'owner', 'categories');
+      const fab = page.locator('div', { hasText: /^📤$/ }).first();
+      await fab.click({ timeout: 3000 });
+      await page.waitForTimeout(300);
+
+      // 1) แท็บ 🔍 ค้นชื่อ "สน" → ต้องขึ้นแค่ 1 รายการตรงเป๊ะ (PIN010) + ปุ่มรวมของสะกดคล้ายกันอีก 2
+      await page.locator('button', { hasText: '🔍 ค้นชื่อ' }).first().click({ timeout: 2000 });
+      await page.waitForTimeout(200);
+      await page.locator('textarea').first().fill('สน');
+      await page.waitForTimeout(200);
+      const afterSearch = await page.locator('body').innerText();
+      const exactOk = /พบ\s*1\s*รายการ/.test(afterSearch) && /มีสินค้าอื่นสะกดคล้ายกันอีก\s*2\s*รายการ/.test(afterSearch);
+
+      // 2) กด "เพิ่มเข้ารายการ" → ได้แค่ PIN010 (ไม่ใช่ PIN011/PIN012 ที่แค่สะกดปน)
+      await page.locator('button', { hasText: '➕ เพิ่มเข้ารายการ' }).first().click({ timeout: 2000 });
+      await page.waitForTimeout(200);
+      const afterAdd = await page.locator('body').innerText();
+      const onlyExactOk = /จะส่งไปนับ\s*1\s*รายการ/.test(afterAdd) && afterAdd.includes('PIN010')
+        && !afterAdd.includes('PIN011') && !afterAdd.includes('PIN012');
+
+      // 3) กด "รวมสินค้าที่สะกดคล้ายกัน" แล้วกดเพิ่มอีกครั้ง → ต้องได้ครบ 3 (ไม่ได้ถูกซ่อนถาวร)
+      await page.locator('button', { hasText: 'มีสินค้าอื่นสะกดคล้ายกันอีก' }).first().click({ timeout: 2000 });
+      await page.waitForTimeout(200);
+      await page.locator('button', { hasText: '➕ เพิ่มเข้ารายการ' }).first().click({ timeout: 2000 });
+      await page.waitForTimeout(200);
+      const afterExpand = await page.locator('body').innerText();
+      const expandOk = /จะส่งไปนับ\s*3\s*รายการ/.test(afterExpand)
+        && afterExpand.includes('PIN010') && afterExpand.includes('PIN011') && afterExpand.includes('PIN012');
+
+      // 4) ปิด/เปิดใหม่ (reset) → ไปแท็บ 🏷️ หมวด → เลือกสี "เงิน" ก่อน แล้วกดหมวด "ต้นไม้ประดิษฐ์"
+      //    ต้องได้แค่ PIN012 (ตัวเดียวที่เป็นสีเงินในหมวดนี้) ไม่ใช่ทั้ง 3 ตัว
+      await page.locator('button', { hasText: '✕' }).first().click({ timeout: 2000 }).catch(() => {});
+      await page.waitForTimeout(300);
+      await fab.click({ timeout: 3000 });
+      await page.waitForTimeout(300);
+      await page.locator('button', { hasText: '🏷️ หมวด' }).first().click({ timeout: 2000 });
+      await page.waitForTimeout(200);
+      const colorBarVisible = await page.locator('text=กรองต่อด้วยสี').count();
+      await page.locator('button', { hasText: 'เงิน' }).last().click({ timeout: 2000 });
+      await page.waitForTimeout(200);
+      await page.locator('button', { hasText: 'ต้นไม้ประดิษฐ์' }).last().click({ timeout: 2000 });
+      await page.waitForTimeout(200);
+      const afterCatColor = await page.locator('body').innerText();
+      const catColorOk = /จะส่งไปนับ\s*1\s*รายการ/.test(afterCatColor) && afterCatColor.includes('PIN012')
+        && !afterCatColor.includes('PIN010') && !afterCatColor.includes('PIN011');
+
+      if (!navOk) { status = 'NAV_FAIL'; note = 'สลับไปแท็บสินค้า & สั่งไม่สำเร็จ'; }
+      else if (!exactOk) { status = 'EXACT_FAIL'; note = `ค้น "สน" ควรเจอ 1 รายการตรงเป๊ะ + ปุ่มรวมอีก 2 (${afterSearch.slice(0,160)})`; }
+      else if (!onlyExactOk) { status = 'ADD_EXACT_FAIL'; note = `เพิ่มควรได้แค่ PIN010 ไม่ใช่ PIN011/PIN012 (${afterAdd.slice(0,160)})`; }
+      else if (!expandOk) { status = 'EXPAND_FAIL'; note = `กด "รวม" แล้วเพิ่มควรได้ครบ 3 รายการ (${afterExpand.slice(0,160)})`; }
+      else if (!colorBarVisible) { status = 'COLORBAR_FAIL'; note = 'ไม่เห็นแถบ "กรองต่อด้วยสี" ในแท็บหมวด'; }
+      else if (!catColorOk) { status = 'CATCOLOR_FAIL'; note = `หมวด "ต้นไม้ประดิษฐ์" + กรองสีเงิน ควรได้แค่ PIN012 (${afterCatColor.slice(0,160)})`; }
+      else note = 'ค้นชื่อตรงเป๊ะ (PIN010 ไม่โดน "สนิม/ต้นสน") + กด "รวม" ได้ครบ 3 + หมวด∩สีเงินเหลือ PIN012 ตัวเดียว ครบทุกจุด';
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 160); }
+    await page.screenshot({ path: path.join(SHOTS, 'checksend__exact-match-color-filter.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'ปุ่มลอยส่งคำขอเช็ค — ค้นชื่อตรงเป๊ะ + กรองต่อด้วยสี', status, note });
+    await page.close();
+  }
+
   // ── (จ2.6a-reg) Add Product — staff ใช้ฟอร์มเดิม (Legacy) เสมอ แม้ registry เปิด ──
   // เจ้าของแก้ทิศ (ส.ค. 2026): ระบบทะเบียนเป็นโครงสร้างหลังบ้าน/แอดมิน ไม่ใช่ workflow ของพนักงาน
   //   → dispatcher เรนเดอร์ LegacyAddProductView เสมอ · พนักงานไม่ต้องเลือก/สร้าง Prefix/Family/
