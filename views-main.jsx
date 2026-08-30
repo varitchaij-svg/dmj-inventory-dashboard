@@ -3745,6 +3745,12 @@ function CategoryView({ data, role, onNav }) {
   const [checkPicked, setCheckPicked] = uS(new Set());        // SKU ที่เพิ่มจากแท็บ 🔍 เท่านั้น (ห้ามมี SKU จากแท็บ 🏭 ปนมา)
   const [checkExcluded, setCheckExcluded] = uS(new Set());    // SKU ที่ผู้ใช้ติ๊กออกจากรายการที่จะส่ง — ตัดจาก union ไม่สนแหล่งที่มา
   const [checkShowAll, setCheckShowAll] = uS(false);          // เพดาน render ของ "รายการที่จะส่ง" ถูกกดเปิดดูทั้งหมดหรือยัง
+  // ⭐ กรองต่อด้วยสี (เจ้าของขอ ส.ค. 2026) — ใช้ได้เฉพาะแท็บ 🔍/🏷️ เพื่อ "เลือกชื่อ/หมวดก่อน
+  // แล้วกรองซ้ำด้วยสี" ไม่ใช่แหล่งเพิ่ม SKU แหล่งใหม่ (แท็บ 🎨 เดี่ยว ๆ ยังทำงานแบบเดิมทุกประการ)
+  const [checkColorFilter, setCheckColorFilter] = uS(null);
+  // เทอมค้นชื่อที่ผู้ใช้กด "รวมของที่สะกดคล้ายกัน" แล้ว (เก็บด้วย term string เพราะ index ขยับ
+  // ได้ทุกครั้งที่แก้ข้อความในกล่อง) — ดู checkKeywordResult ข้างล่าง (exact-match tier)
+  const [checkKeywordExpand, setCheckKeywordExpand] = uS(new Set());
   const [orderProduct, setOrderProduct] = uS(null);
   const [localPendingOrders, setLocalPendingOrders] = uS([]); // optimistic update หลังสั่งสำเร็จ
   const [globalVendor, setGlobalVendor] = uS(null); // global supplier filter (all categories)
@@ -4129,10 +4135,29 @@ function CategoryView({ data, role, onNav }) {
   const checkKeywordResult = uM(() => {
     return checkMatchTerms(checkKeyword).map(tokens => {
       const lowerTokens = tokens.map(t => t.toLowerCase());
+      const termJoined = lowerTokens.join(" ");
       const strictSkus = checkBase.filter(p => {
         const hay = ((p.sku||"") + " " + (p.name||"")).toLowerCase();
         return lowerTokens.every(t => hay.includes(t));
       }).map(p => p.sku);
+      // ⚠️ ชื่อ/รหัสที่ตรงคำค้น "เป๊ะทั้งคำ" ต้องมาก่อน substring เสมอ — คำสั้น ๆ ที่เป็นชื่อ
+      // เฉพาะของสินค้าจริง (เช่น "สน" — ยืนยันจากเจ้าของ ส.ค. 2026 ว่าเป็นชื่อสินค้า ไม่ใช่ธีม
+      // ดู Plan Q3) จะไปติด substring ในชื่อสินค้าอื่นที่บังเอิญสะกดคำนี้ปนอยู่ได้ง่ายมาก เพราะ
+      // ภาษาไทยไม่มีช่องว่างคั่นคำ ("สนิม" มี "สน" อยู่ข้างใน) → ถ้ามีสินค้าที่ชื่อ/รหัสตรงคำค้น
+      // เป๊ะอยู่แล้ว ให้ถือว่านั่นคือสิ่งที่ต้องการเป็นค่าเริ่มต้น (แม่นกว่า ไม่ต้องรื้อทีละตัว)
+      // ⚠️ **ไม่ทิ้งตัวที่สะกดคล้ายกันไปเงียบ ๆ** — เก็บไว้ใน broaderSkus ให้ผู้ใช้กด "รวม" เพิ่มเอง
+      // ได้เสมอ (ดูจุด render ที่ CategoryView) กันเคส "หาไม่เจอทั้งที่รู้ว่ามี" ซึ่งแย่กว่าเห็นเกิน
+      const exactSkus = checkBase.filter(p => {
+        const nameNorm = (p.name || "").trim().toLowerCase();
+        const skuNorm = (p.sku || "").trim().toLowerCase();
+        return nameNorm === termJoined || skuNorm === termJoined;
+      }).map(p => p.sku);
+      // exactSkus ⊆ strictSkus เสมอ (ชื่อ/รหัสที่ตรงเป๊ะ ย่อมมีคำค้นเป็น substring อยู่แล้ว) —
+      // ใช้ tier นี้เฉพาะตอนที่มันช่วยตัดของเกินจริง ๆ (มี substring อื่นเพิ่มเติมนอกเหนือจากที่ตรงเป๊ะ)
+      if (exactSkus.length && exactSkus.length < strictSkus.length) {
+        return { term: tokens.join(" "), skus: exactSkus, loose: false, exact: true,
+                 broaderSkus: strictSkus.filter(sku => exactSkus.indexOf(sku) === -1) };
+      }
       if (strictSkus.length) return { term: tokens.join(" "), skus: strictSkus, loose: false };
       // ⚠️ ต้อง normalize ทั้ง token และ hay ด้วย dmjThaiKey ตัวเดียวกันเสมอ — normalize ฝั่งเดียว
       // ไม่มีวันแมตช์ (สตริงสองฝั่งอยู่คนละรูปแบบ) · token ที่ normalize แล้วสั้นกว่า 2 ตัวอักษร
@@ -4168,6 +4193,26 @@ function CategoryView({ data, role, onNav }) {
                      (COLOR_ORDER.indexOf(b.name)===-1?99:COLOR_ORDER.indexOf(b.name)));
   }, [checkBase]);
 
+  // sku → ชื่อสี (เฉพาะที่มีสี) — ใช้กรองต่อจากแท็บ 🔍/🏷️ ด้วย checkColorFilter เท่านั้น
+  // (แท็บ 🎨 เองใช้ checkColorChips ตรง ๆ ไม่ต้องผ่าน map นี้)
+  const checkSkuColorMap = uM(() => {
+    const m = {};
+    checkBase.forEach(p => { if (p.color) m[p.sku] = p.color.name; });
+    return m;
+  }, [checkBase]);
+
+  // ── SKU "จริง" ของแท็บ 🔍/🏷️ หลังกรองด้วย checkColorFilter + toggle รวมของสะกดคล้ายกัน
+  // (checkKeywordExpand) — ใช้จุดเดียวทั้งตอน render ปุ่ม/นับจำนวน และตอนคำนวณ checkSourceLabel
+  // กันสองที่คำนวณคนละสูตรแล้วไม่ตรงกัน (ไม่ใช่ uM เพราะแค่ filter อาร์เรย์สั้น ๆ ตอนถูกเรียก
+  // ไม่คุ้มจะ memo แยก — reference ค่าจาก closure ของ render รอบปัจจุบันเสมอ)
+  function checkKeywordEffSkus(r) {
+    const base = (r.exact && checkKeywordExpand.has(r.term)) ? r.skus.concat(r.broaderSkus || []) : r.skus;
+    return checkColorFilter ? base.filter(function(sku){ return checkSkuColorMap[sku] === checkColorFilter; }) : base;
+  }
+  function checkCategoryEffSkus(c) {
+    return checkColorFilter ? c.skus.filter(function(sku){ return checkSkuColorMap[sku] === checkColorFilter; }) : c.skus;
+  }
+
   // SKU ที่ derive สดจากแท็บ 🏭 ร้านค้า (เหมือนของเดิมทุกประการ — ไม่แตะ checkSuppliers เลย)
   const checkSupplierSkus = uM(() =>
     checkBase.filter(p => checkSuppliers.has(p.vendor || p.lastSupplier))
@@ -4197,23 +4242,27 @@ function CategoryView({ data, role, onNav }) {
   // ⚠️ ไม่ใช่ provenance tracking จริง — Option B ไม่เก็บว่า SKU ไหนมาจากแท็บไหน (กฎเหล็ก Plan §2
   // ข้อ 5) ที่นี่ใช้วิธีเดียวกับที่ชิปโชว์ "✓ เพิ่มแล้ว" อยู่แล้ว: เทอม/หมวด/สีใดที่ "ทุก SKU ของมัน
   // อยู่ใน checkPicked ครบ" ถือว่าเป็นแหล่งที่มีส่วนร่วม (สอดคล้องกับสิ่งที่ผู้ใช้เห็นบนจอ)
+  // ⚠️ ใช้ checkKeywordEffSkus/checkCategoryEffSkus ตัวเดียวกับที่ render ปุ่ม/นับจำนวน — ไม่งั้น
+  // เลือกด้วย "ชื่อ/หมวด + กรองสี" (checkColorFilter) แล้ว sourceLabel จะไม่เห็นว่ามีส่วนร่วมเลย
+  // (เช็ค c.skus/r.skus แบบเดิมที่ไม่ผ่านสีจะไม่มีวัน "ครบทุกตัวใน checkPicked" เพราะเราเพิ่ม
+  // แค่ SKU ที่ตรงสีเข้าไป ไม่ใช่ทั้งกลุ่ม) — เป็นคลาสบั๊กเดียวกับที่ Plan เตือนไว้ตลอดทั้งไฟล์นี้
   const checkSourceLabel = uM(() => {
     const segments = [];
     if (checkSuppliers.size) segments.push("🏭 " + Array.from(checkSuppliers).join(", "));
     const terms = checkKeywordResult
-      .filter(r => r.skus.length > 0 && r.skus.every(sku => checkPicked.has(sku)))
+      .filter(r => { const eff = checkKeywordEffSkus(r); return eff.length > 0 && eff.every(sku => checkPicked.has(sku)); })
       .map(r => r.term);
-    if (terms.length) segments.push("🔍 " + terms.join(", "));
+    if (terms.length) segments.push("🔍 " + terms.join(", ") + (checkColorFilter ? " (สี" + checkColorFilter + ")" : ""));
     const cats = checkCategoryChips
-      .filter(c => c.skus.length > 0 && c.skus.every(sku => checkPicked.has(sku)))
+      .filter(c => { const eff = checkCategoryEffSkus(c); return eff.length > 0 && eff.every(sku => checkPicked.has(sku)); })
       .map(c => c.name);
-    if (cats.length) segments.push("🏷️ " + cats.join(", "));
+    if (cats.length) segments.push("🏷️ " + cats.join(", ") + (checkColorFilter ? " (สี" + checkColorFilter + ")" : ""));
     const colors = checkColorChips
       .filter(c => c.skus.length > 0 && c.skus.every(sku => checkPicked.has(sku)))
       .map(c => c.name);
     if (colors.length) segments.push("🎨 " + colors.join(", "));
     return segments.join(" · ");
-  }, [checkSuppliers, checkKeywordResult, checkCategoryChips, checkColorChips, checkPicked]);
+  }, [checkSuppliers, checkKeywordResult, checkCategoryChips, checkColorChips, checkPicked, checkColorFilter, checkKeywordExpand, checkSkuColorMap]);
 
   // เพดาน render ของบล็อก "รายการที่จะส่ง" — เลือกทั้งหมวด/หลายร้านพร้อมกันอาจได้เป็นร้อย SKU
   // render การ์ดรูปทุกใบพร้อมกันเสี่ยงจอค้างบนมือถือเครื่องพนักงาน (ดู Plan §3 Phase 1 ข้อ 7)
@@ -4221,7 +4270,8 @@ function CategoryView({ data, role, onNav }) {
   const checkPreviewShown = checkShowAll ? checkFinalProducts : checkFinalProducts.slice(0, CHECK_PREVIEW_CAP);
 
   // ปิดโมดัล/ส่งสำเร็จ — reset ตะกร้าใหม่ (checkMode/checkKeyword/checkPicked/checkExcluded/
-  // checkShowAll) ทั้งชุดเสมอ กัน SKU จากคำขอก่อนหน้าค้างมาปนกับคำขอครั้งใหม่โดยไม่มีใครสังเกต
+  // checkShowAll/checkColorFilter/checkKeywordExpand) ทั้งชุดเสมอ กัน SKU/ตัวกรองจากคำขอก่อนหน้า
+  // ค้างมาปนกับคำขอครั้งใหม่โดยไม่มีใครสังเกต
   // ⚠️ ไม่แตะ checkSuppliers/checkSearch — ของเดิมค้างได้ตามพฤติกรรมเดิม (ดู Plan §3 Phase 1 ข้อ 9)
   function resetCheckPicker() {
     setCheckMode("supplier");
@@ -4229,6 +4279,8 @@ function CategoryView({ data, role, onNav }) {
     setCheckPicked(new Set());
     setCheckExcluded(new Set());
     setCheckShowAll(false);
+    setCheckColorFilter(null);
+    setCheckKeywordExpand(new Set());
   }
 
   // Colors in this category for filter chips
@@ -5083,6 +5135,42 @@ function CategoryView({ data, role, onNav }) {
                 🎨 สี
               </button>
             </div>
+            {/* กรองต่อด้วยสี (เจ้าของขอ ส.ค. 2026) — ใช้ได้เฉพาะแท็บ 🔍/🏷️ เพื่อ "เลือกชื่อ/หมวด
+                ก่อน แล้วกรองซ้ำด้วยสี" ก่อนกด "เพิ่มเข้ารายการ" · ไม่ใช่แหล่ง SKU แหล่งใหม่ — แค่
+                narrow ผลของแท็บที่เปิดอยู่ ดู checkColorFilter/checkKeywordEffSkus/checkCategoryEffSkus
+                ด้านบน · แท็บ 🏭/🎨 ไม่ต้องมีตัวนี้ (🎨 คือตัวเลือกสีเองอยู่แล้ว) */}
+            {(checkMode === "keyword" || checkMode === "category") && checkColorChips.length > 0 && (
+              <div style={{padding:"8px 16px 0"}}>
+                <div style={{fontSize:11,color:"#6b7280",marginBottom:4,fontWeight:600}}>
+                  🎨 กรองต่อด้วยสี (ไม่บังคับ)
+                </div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                  <button onClick={function(){ setCheckColorFilter(null); }}
+                    style={{padding:"5px 12px",borderRadius:16,fontSize:12,fontFamily:"inherit",cursor:"pointer",
+                            border: !checkColorFilter ? "2px solid #1f7f44" : "1px solid #e5e7eb",
+                            background: !checkColorFilter ? "#dcf2e2" : "#fff",
+                            color: !checkColorFilter ? "#1f7f44" : "#6b7280",
+                            fontWeight: !checkColorFilter ? 700 : 400}}>
+                    ทั้งหมด
+                  </button>
+                  {checkColorChips.map(function(c) {
+                    var on = checkColorFilter === c.name;
+                    return (
+                      <button key={c.name} onClick={function(){ setCheckColorFilter(on ? null : c.name); }}
+                        style={{padding:"5px 12px",borderRadius:16,fontSize:12,fontFamily:"inherit",cursor:"pointer",
+                                border: on ? "2px solid #1f7f44" : "1px solid #e5e7eb",
+                                background: on ? "#dcf2e2" : "#fff",
+                                color: on ? "#1f7f44" : "#6b7280", fontWeight: on ? 700 : 400}}>
+                        <span style={{width:9,height:9,borderRadius:"50%",background:c.hex,
+                                      border:"1px solid rgba(0,0,0,.1)",display:"inline-block",
+                                      marginRight:4,verticalAlign:"middle"}}/>
+                        {c.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {checkMode === "supplier" && (
               <>
                 {/* ช่องค้นหา supplier — พิมพ์กรองชื่อร้าน */}
@@ -5166,39 +5254,71 @@ function CategoryView({ data, role, onNav }) {
                 ) : (
                   <div style={{display:"flex",flexDirection:"column",gap:6}}>
                     {checkKeywordResult.map(function(r, i) {
-                      var already = r.skus.length > 0 && r.skus.every(function(sku){ return checkPicked.has(sku); });
+                      // effSkus = ผลจริงหลัง (1) toggle "รวมของสะกดคล้ายกัน" ถ้าเป็น exact-tier
+                      // และ (2) กรองด้วยสีถ้าเลือกไว้ — ดู checkKeywordEffSkus ด้านบน (ที่เดียวกับ
+                      // checkSourceLabel ใช้ กันคำนวณสองสูตรไม่ตรงกัน)
+                      var effSkus = checkKeywordEffSkus(r);
+                      var expanded = r.exact && checkKeywordExpand.has(r.term);
+                      var already = effSkus.length > 0 && effSkus.every(function(sku){ return checkPicked.has(sku); });
+                      var noneAtAll = r.skus.length === 0;
+                      var noneAfterColor = !noneAtAll && checkColorFilter && effSkus.length === 0;
                       return (
-                        <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",borderRadius:10,
-                                              border:"1px solid " + (r.skus.length ? "#e5e7eb" : "#fecaca"),
-                                              background:r.skus.length ? "#fff" : "#fef2f2"}}>
-                          <div style={{flex:1,minWidth:0}}>
-                            <div style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                              {r.term}
-                              {r.loose && (
-                                <span style={{marginLeft:6,fontSize:10,fontWeight:700,color:"#b45309",
-                                              background:"#fffbeb",border:"1px solid #fcd34d",
-                                              borderRadius:8,padding:"1px 6px"}}>
-                                  ≈ ค้นแบบผ่อนการสะกด
-                                </span>
-                              )}
+                        <div key={i} style={{display:"flex",flexDirection:"column",gap:4,padding:"8px 10px",borderRadius:10,
+                                              border:"1px solid " + (effSkus.length ? "#e5e7eb" : "#fecaca"),
+                                              background:effSkus.length ? "#fff" : "#fef2f2"}}>
+                          <div style={{display:"flex",alignItems:"center",gap:8}}>
+                            <div style={{flex:1,minWidth:0}}>
+                              <div style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                                {r.term}
+                                {r.loose && (
+                                  <span style={{marginLeft:6,fontSize:10,fontWeight:700,color:"#b45309",
+                                                background:"#fffbeb",border:"1px solid #fcd34d",
+                                                borderRadius:8,padding:"1px 6px"}}>
+                                    ≈ ค้นแบบผ่อนการสะกด
+                                  </span>
+                                )}
+                              </div>
+                              <div style={{fontSize:11,color:effSkus.length ? "#6b7280" : "#dc2626",fontWeight:effSkus.length?400:700}}>
+                                {noneAtAll
+                                  ? "⚠️ ไม่พบสินค้าที่ตรงกับคำนี้"
+                                  : noneAfterColor
+                                    ? "⚠️ พบสินค้าแต่ไม่มีสี" + checkColorFilter
+                                    : "พบ " + effSkus.length + " รายการ" +
+                                      (checkColorFilter && effSkus.length !== (expanded ? r.skus.length + (r.broaderSkus||[]).length : r.skus.length)
+                                        ? " (จากทั้งหมด " + (expanded ? r.skus.length + (r.broaderSkus||[]).length : r.skus.length) + ")" : "")}
+                              </div>
                             </div>
-                            <div style={{fontSize:11,color:r.skus.length ? "#6b7280" : "#dc2626",fontWeight:r.skus.length?400:700}}>
-                              {r.skus.length ? "พบ " + r.skus.length + " รายการ" : "⚠️ ไม่พบสินค้าที่ตรงกับคำนี้"}
-                            </div>
+                            {effSkus.length > 0 && (
+                              <button disabled={already}
+                                onClick={function(){
+                                  setCheckPicked(function(prev){
+                                    var n = new Set(prev);
+                                    effSkus.forEach(function(sku){ n.add(sku); });
+                                    return n;
+                                  });
+                                }}
+                                style={{padding:"6px 12px",borderRadius:20,border:"1px solid #1f7f44",
+                                        background:already?"#f3f4f6":"#1f7f44",color:already?"#9ca3af":"#fff",
+                                        fontSize:12,fontWeight:600,cursor:already?"default":"pointer",flexShrink:0,fontFamily:"inherit"}}>
+                                {already ? "✓ เพิ่มแล้ว" : "➕ เพิ่มเข้ารายการ"}
+                              </button>
+                            )}
                           </div>
-                          {r.skus.length > 0 && (
-                            <button disabled={already}
-                              onClick={function(){
-                                setCheckPicked(function(prev){
+                          {/* ⚠️ ห้ามซ่อน "สินค้าอื่นที่สะกดคล้ายกัน" ถาวร — ตรงเป๊ะ (tier 0) แม่นกว่า
+                              แต่ผู้ใช้ต้องกดเปิดดู/รวมเองได้เสมอ กันเคส "หาไม่เจอทั้งที่รู้ว่ามี" */}
+                          {r.exact && r.broaderSkus && r.broaderSkus.length > 0 && (
+                            <button onClick={function(){
+                                setCheckKeywordExpand(function(prev){
                                   var n = new Set(prev);
-                                  r.skus.forEach(function(sku){ n.add(sku); });
+                                  if (n.has(r.term)) n.delete(r.term); else n.add(r.term);
                                   return n;
                                 });
                               }}
-                              style={{padding:"6px 12px",borderRadius:20,border:"1px solid #1f7f44",
-                                      background:already?"#f3f4f6":"#1f7f44",color:already?"#9ca3af":"#fff",
-                                      fontSize:12,fontWeight:600,cursor:already?"default":"pointer",flexShrink:0,fontFamily:"inherit"}}>
-                              {already ? "✓ เพิ่มแล้ว" : "➕ เพิ่มเข้ารายการ"}
+                              style={{alignSelf:"flex-start",background:"none",border:"none",padding:0,
+                                      fontFamily:"inherit",fontSize:11,color:"#1f7f44",fontWeight:600,cursor:"pointer"}}>
+                              {expanded
+                                ? "✓ รวมสินค้าที่สะกดคล้ายกันแล้ว (ซ่อน)"
+                                : "+ มีสินค้าอื่นสะกดคล้ายกันอีก " + r.broaderSkus.length + " รายการ (แตะเพื่อรวม)"}
                             </button>
                           )}
                         </div>
@@ -5212,22 +5332,25 @@ function CategoryView({ data, role, onNav }) {
               <div style={{overflowY:"auto",flex:1,padding:"8px 16px 4px"}}>
                 <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
                   {checkCategoryChips.map(function(c) {
-                    var already = c.skus.length > 0 && c.skus.every(function(sku){ return checkPicked.has(sku); });
+                    // effSkus = SKU ในหมวดนี้หลังกรองด้วยสี (checkColorFilter) — ตัวเดียวกับที่
+                    // checkSourceLabel ใช้ตัดสิน "หมวดนี้มีส่วนร่วมไหม" (ดู checkCategoryEffSkus)
+                    var effSkus = checkCategoryEffSkus(c);
+                    var already = effSkus.length > 0 && effSkus.every(function(sku){ return checkPicked.has(sku); });
                     return (
-                      <button key={c.name} disabled={already || !c.skus.length}
+                      <button key={c.name} disabled={already || !effSkus.length}
                         onClick={function(){
                           setCheckPicked(function(prev){
                             var n = new Set(prev);
-                            c.skus.forEach(function(sku){ n.add(sku); });
+                            effSkus.forEach(function(sku){ n.add(sku); });
                             return n;
                           });
                         }}
                         style={{padding:"8px 14px",borderRadius:20,fontSize:13,fontWeight:already?600:400,
-                                cursor:(already || !c.skus.length)?"default":"pointer",fontFamily:"inherit",
+                                cursor:(already || !effSkus.length)?"default":"pointer",fontFamily:"inherit",
                                 border: already?"2px solid #1f7f44":"1px solid #e5e7eb",
                                 background:already?"#dcf2e2":"#fff", color:already?"#1f7f44":"#374151",
-                                opacity:c.skus.length?1:.5}}>
-                        {already ? "✓ " : ""}{c.name} <span style={{fontSize:11,opacity:.7}}>({c.skus.length})</span>
+                                opacity:effSkus.length?1:.5}}>
+                        {already ? "✓ " : ""}{c.name} <span style={{fontSize:11,opacity:.7}}>({effSkus.length})</span>
                       </button>
                     );
                   })}

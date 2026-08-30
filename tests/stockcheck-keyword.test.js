@@ -222,6 +222,61 @@ describe('checkKeywordResult — ชั้นสำรอง (loose match) ท�
   });
 });
 
+// ── A3b. checkKeywordResult — ชื่อ/รหัสที่ตรงคำค้นเป๊ะต้องมาก่อน substring (ส.ค. 2026) ─────
+// เจ้าของแจ้งจากการใช้งานจริง: สินค้าชื่อเฉพาะสั้น ๆ อย่าง "สน" พิมพ์ค้นแล้วขึ้นทุกตัวที่สะกด
+// ปนคำนี้อยู่ (เช่น "สนิม") เพราะภาษาไทยไม่มีช่องว่างคั่นคำ ทำให้ substring กว้างเกินไป
+describe('checkKeywordResult — ชื่อ/รหัสตรงเป๊ะมาก่อน substring (กัน "สน" ไปโดน "สนิม")', () => {
+  const PINE_PRODUCTS = [
+    { sku: 'PN100', name: 'สน', cat: 'ต้นไม้' },
+    { sku: 'PN101', name: 'สนิม สีทอง', cat: 'ของตกแต่ง' },
+    { sku: 'PN102', name: 'ต้นสนประดิษฐ์', cat: 'ต้นไม้' },
+  ];
+
+  it('มีสินค้าชื่อตรงคำค้นเป๊ะ + มี substring อื่นปนอยู่ด้วย → เอาเฉพาะตัวที่ตรงเป๊ะเป็นค่าเริ่มต้น', () => {
+    const [r] = keywordMatch('สน', PINE_PRODUCTS);
+    expect(r.exact).toBe(true);
+    expect(r.skus).toEqual(['PN100']);
+    expect(r.broaderSkus).toEqual(['PN101', 'PN102']);
+    expect(r.loose).toBe(false);
+  });
+
+  it('ชื่อสินค้าตรงคำค้นเป๊ะ (ตัดช่องว่าง/ตัวพิมพ์ใหญ่-เล็ก) ก็นับเป็นตรงเป๊ะ', () => {
+    const [r] = keywordMatch('  SN  ', [{ sku: 'X1', name: 'sn', cat: 'ก' }, { sku: 'X2', name: 'snow', cat: 'ก' }]);
+    expect(r.exact).toBe(true);
+    expect(r.skus).toEqual(['X1']);
+    expect(r.broaderSkus).toEqual(['X2']);
+  });
+
+  it('รหัส (sku) ตรงคำค้นเป๊ะก็ใช้ tier นี้ได้เหมือนชื่อ', () => {
+    const [r] = keywordMatch('pn100', [
+      { sku: 'PN100', name: 'สนแคระ', cat: 'ต้นไม้' },
+      { sku: 'PN100B', name: 'สนแคระรุ่นใหญ่', cat: 'ต้นไม้' },
+    ]);
+    expect(r.exact).toBe(true);
+    expect(r.skus).toEqual(['PN100']);
+  });
+
+  it('ไม่มีสินค้าไหนตรงคำค้นเป๊ะเลย → ไม่ติด exact ถอยไปใช้ substring ตามเดิมทุกประการ', () => {
+    const [r] = keywordMatch('สนิม', PINE_PRODUCTS);
+    expect(r.exact).toBeUndefined();
+    expect(r.skus).toEqual(['PN101']);
+  });
+
+  it('ตรงเป๊ะเป็นตัวเดียวที่ match substring ด้วย (ไม่มี noise เพิ่ม) → ไม่ติด exact/broaderSkus (คงรูปแบบเดิมเป๊ะ)', () => {
+    const ONLY_ONE = [{ sku: 'PN001', name: 'โบตั๋น ขาว 200', cat: 'ดอกไม้' }];
+    const [r] = keywordMatch('โบตั๋น ขาว 200', ONLY_ONE); // ตรงกับชื่อเต็มเป๊ะ และเป็นตัวเดียวที่ match
+    expect(r.exact).toBeUndefined();
+    expect(r.broaderSkus).toBeUndefined();
+    expect(r.skus).toEqual(['PN001']);
+    expect(r.loose).toBe(false);
+  });
+
+  it('exactSkus ⊆ strictSkus เสมอ — broaderSkus ไม่ซ้ำกับ skus (dedup โดยธรรมชาติของการ filter ออก)', () => {
+    const [r] = keywordMatch('สน', PINE_PRODUCTS);
+    r.broaderSkus.forEach(sku => expect(r.skus).not.toContain(sku));
+  });
+});
+
 // ── A4. checkCategoryChips / checkColorChips (Phase 3) — behavioral ───────────────────
 describe('checkCategoryChips / checkColorChips — จับกลุ่ม SKU จาก checkBase ตามหมวด/สี', () => {
   const ALL_CATS = ['ดอกไม้', 'ใบไม้แขวน', 'บูช'];
@@ -515,17 +570,26 @@ const F_SOURCE_LABEL_BODY = (() => {
   const i = CATEGORY_VIEW.indexOf(marker);
   if (i < 0) throw new Error('หา checkSourceLabel ใน CategoryView ไม่เจอ');
   const bodyStart = i + marker.length;
-  const bodyEnd = CATEGORY_VIEW.indexOf('\n  }, [checkSuppliers, checkKeywordResult, checkCategoryChips, checkColorChips, checkPicked]);', bodyStart);
+  const bodyEnd = CATEGORY_VIEW.indexOf('\n  }, [checkSuppliers, checkKeywordResult, checkCategoryChips, checkColorChips, checkPicked, checkColorFilter, checkKeywordExpand, checkSkuColorMap]);', bodyStart);
   if (bodyEnd < 0) throw new Error('หาจุดจบของ checkSourceLabel ไม่เจอ (deps array เปลี่ยน?)');
   return CATEGORY_VIEW.slice(bodyStart, bodyEnd);
 })();
-function computeSourceLabel(checkSuppliers, checkKeywordResult, checkCategoryChips, checkColorChips, checkPicked) {
+// checkSourceLabel เรียก checkKeywordEffSkus/checkCategoryEffSkus (ตัวกรองสี + toggle รวมของ
+// สะกดคล้ายกัน) ตรง ๆ โดยชื่อ — ต้อง eval source จริงของทั้งคู่มาประกบไว้ก่อน ไม่ copy ตรรกะ
+const F_KEYWORD_EFF = grab(CATEGORY_VIEW, /function checkKeywordEffSkus\(r\) \{[\s\S]*?\n  \}/, 'checkKeywordEffSkus');
+const F_CATEGORY_EFF = grab(CATEGORY_VIEW, /function checkCategoryEffSkus\(c\) \{[\s\S]*?\n  \}/, 'checkCategoryEffSkus');
+function computeSourceLabel(checkSuppliers, checkKeywordResult, checkCategoryChips, checkColorChips, checkPicked,
+                             checkColorFilter, checkKeywordExpand, checkSkuColorMap) {
   // eslint-disable-next-line no-new-func
   const fn = new Function(
     'checkSuppliers', 'checkKeywordResult', 'checkCategoryChips', 'checkColorChips', 'checkPicked',
-    F_SOURCE_LABEL_BODY
+    'checkColorFilter', 'checkKeywordExpand', 'checkSkuColorMap',
+    F_KEYWORD_EFF + '\n' + F_CATEGORY_EFF + '\n' + F_SOURCE_LABEL_BODY
   );
-  return fn(checkSuppliers, checkKeywordResult, checkCategoryChips, checkColorChips, checkPicked);
+  return fn(checkSuppliers, checkKeywordResult, checkCategoryChips, checkColorChips, checkPicked,
+            checkColorFilter === undefined ? null : checkColorFilter,
+            checkKeywordExpand === undefined ? new Set() : checkKeywordExpand,
+            checkSkuColorMap === undefined ? {} : checkSkuColorMap);
 }
 
 describe('stockCheckPreviewText_ (.gs) — ลำดับ sourceLabel → suppliers → names', () => {
@@ -620,5 +684,133 @@ describe('จุดเชื่อมต่อ Phase 4 ใน CategoryView — �
   it('checkSourceLabel ยังเป็น memo เดียว (uM) ไม่ใช่คำนวณซ้ำหลายจุด', () => {
     const count = (CATEGORY_VIEW.match(/const checkSourceLabel = uM\(/g) || []).length;
     expect(count).toBe(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// งานต่อยอดหลัง merge (ส.ค. 2026) — เจ้าของลองใช้งานจริงแล้วขอ 2 เรื่อง:
+// 1. กรองต่อด้วยสีจากแท็บ 🔍/🏷️ ได้ (ไม่ใช่แค่แท็บ 🎨 เดี่ยว ๆ)
+// 2. "สน" (ชื่อเฉพาะสั้น ๆ) ไม่ควรไปโดน "สนิม"/"ต้นสน" (ดู describe ด้านบน)
+// checkKeywordEffSkus/checkCategoryEffSkus = จุดคำนวณ "ผลจริงหลังกรอง" ที่เดียวที่ทั้ง
+// render และ checkSourceLabel เรียกใช้ร่วมกัน (eval source จริงจาก CategoryView ไม่ copy)
+// ─────────────────────────────────────────────────────────────────────────────
+function keywordEffSkus(r, checkColorFilter, checkKeywordExpand, checkSkuColorMap) {
+  // eslint-disable-next-line no-new-func
+  const fn = new Function('r', 'checkColorFilter', 'checkKeywordExpand', 'checkSkuColorMap',
+    F_KEYWORD_EFF + '\nreturn checkKeywordEffSkus(r);');
+  return fn(r, checkColorFilter, checkKeywordExpand, checkSkuColorMap);
+}
+function categoryEffSkus(c, checkColorFilter, checkSkuColorMap) {
+  // eslint-disable-next-line no-new-func
+  const fn = new Function('c', 'checkColorFilter', 'checkSkuColorMap',
+    F_CATEGORY_EFF + '\nreturn checkCategoryEffSkus(c);');
+  return fn(c, checkColorFilter, checkSkuColorMap);
+}
+
+describe('checkKeywordEffSkus / checkCategoryEffSkus — กรองต่อด้วยสี + toggle รวมของสะกดคล้ายกัน', () => {
+  const SKU_COLOR = { A1: 'แดง', A2: 'แดง', A3: 'ขาว' }; // A4 ไม่มีสี (ไม่อยู่ใน map)
+
+  it('ไม่มีตัวกรองสี + ไม่ได้กด expand → คืน r.skus เดิมเป๊ะ (แท็บ 🔍 ทำงานเหมือนก่อนมี feature นี้)', () => {
+    const r = { term: 'x', skus: ['A1', 'A2'], loose: false };
+    expect(keywordEffSkus(r, null, new Set(), SKU_COLOR)).toEqual(['A1', 'A2']);
+  });
+
+  it('exact tier + ยังไม่กด "รวม" → เห็นแค่ r.skus (exact) ไม่รวม broaderSkus', () => {
+    const r = { term: 'สน', skus: ['A1'], broaderSkus: ['A3', 'A4'], exact: true, loose: false };
+    expect(keywordEffSkus(r, null, new Set(), SKU_COLOR)).toEqual(['A1']);
+  });
+
+  it('exact tier + กด "รวม" แล้ว (checkKeywordExpand มี term นี้) → รวม broaderSkus เข้ามาด้วย', () => {
+    const r = { term: 'สน', skus: ['A1'], broaderSkus: ['A3', 'A4'], exact: true, loose: false };
+    expect(keywordEffSkus(r, null, new Set(['สน']), SKU_COLOR)).toEqual(['A1', 'A3', 'A4']);
+  });
+
+  it('กด "รวม" ของเทอมอื่นไม่กระทบเทอมนี้ (เก็บด้วย term string อิสระต่อกัน)', () => {
+    const r = { term: 'สน', skus: ['A1'], broaderSkus: ['A3'], exact: true, loose: false };
+    expect(keywordEffSkus(r, null, new Set(['คำอื่น']), SKU_COLOR)).toEqual(['A1']);
+  });
+
+  it('ตั้งสีกรอง → เหลือเฉพาะ SKU ที่ตรงสีนั้นจริง (ตัดที่ไม่มีสีออกด้วย)', () => {
+    const r = { term: 'x', skus: ['A1', 'A2', 'A3', 'A4'], loose: false };
+    expect(keywordEffSkus(r, 'แดง', new Set(), SKU_COLOR)).toEqual(['A1', 'A2']);
+  });
+
+  it('ผสม exact+expand+สี พร้อมกัน — กรองสีทำงานบนฐานที่รวม broaderSkus แล้ว', () => {
+    const r = { term: 'สน', skus: ['A1'], broaderSkus: ['A3', 'A4'], exact: true, loose: false };
+    expect(keywordEffSkus(r, 'ขาว', new Set(['สน']), SKU_COLOR)).toEqual(['A3']);
+  });
+
+  it('checkCategoryEffSkus: ไม่มีตัวกรองสี → คืน c.skus เดิมเป๊ะ', () => {
+    expect(categoryEffSkus({ name: 'ดอกไม้', skus: ['A1', 'A3'] }, null, SKU_COLOR)).toEqual(['A1', 'A3']);
+  });
+
+  it('checkCategoryEffSkus: ตั้งสีกรอง → เหลือเฉพาะสีที่ตรง', () => {
+    expect(categoryEffSkus({ name: 'ดอกไม้', skus: ['A1', 'A2', 'A3'] }, 'แดง', SKU_COLOR)).toEqual(['A1', 'A2']);
+  });
+
+  it('checkCategoryEffSkus: กรองแล้วไม่เหลือเลย → array ว่าง (ไม่ throw)', () => {
+    expect(categoryEffSkus({ name: 'ดอกไม้', skus: ['A3'] }, 'แดง', SKU_COLOR)).toEqual([]);
+  });
+});
+
+describe('checkSourceLabel + กรองสี — ต้องยังรายงานว่ามีส่วนร่วมแม้เพิ่มแค่ SKU ที่ตรงสีบางส่วน (บั๊กคลาส "หายเงียบ")', () => {
+  // ⚠️ นี่คือจุดเสี่ยงที่สุดของ feature นี้: ถ้า checkSourceLabel ยังเช็คด้วย c.skus/r.skus แบบเดิม
+  // (ไม่ผ่านสี) การเพิ่มแค่ "หมวด ∩ สี" (ไม่ใช่ทั้งหมวด) จะไม่มีวันถูกนับเป็น segment เลย —
+  // ทำให้แจ้งเตือน/การ์ดติดตามไม่บอกอะไรเลยทั้งที่มีการเลือกจริง (ตรงกับคลาสบั๊กที่ CLAUDE.md เตือนไว้)
+  it('เลือกหมวดแล้วกรองสี เพิ่มแค่ SKU ที่ตรงสี (ไม่ใช่ทั้งหมวด) → segment 🏷️ ต้องยังขึ้น พร้อมบอกสีที่ใช้กรอง', () => {
+    const cats = [{ name: 'ดอกไม้', skus: ['A1', 'A2', 'A3'] }]; // A3 ไม่ใช่สีแดง
+    const skuColor = { A1: 'แดง', A2: 'แดง', A3: 'ขาว' };
+    const picked = new Set(['A1', 'A2']); // เพิ่มแค่ 2 ตัวที่เป็นสีแดง ไม่ใช่ทั้งหมวด (3 ตัว)
+    const label = computeSourceLabel(new Set(), [], cats, [], picked, 'แดง', new Set(), skuColor);
+    expect(label).toBe('🏷️ ดอกไม้ (สีแดง)');
+  });
+
+  it('เลือกค้นชื่อ (exact tier) แล้วกรองสี → segment 🔍 บอกสีที่ใช้กรองด้วย', () => {
+    const results = [{ term: 'สน', skus: ['A1', 'A2'], broaderSkus: [], exact: true, loose: false }];
+    const skuColor = { A1: 'แดง', A2: 'ขาว' };
+    const picked = new Set(['A1']); // เพิ่มแค่ตัวที่ตรงสีแดง
+    const label = computeSourceLabel(new Set(), results, [], [], picked, 'แดง', new Set(), skuColor);
+    expect(label).toBe('🔍 สน (สีแดง)');
+  });
+
+  it('ไม่ได้ตั้งสีกรอง → segment ไม่มีวงเล็บสีต่อท้าย (ไม่กระทบพฤติกรรมเดิม)', () => {
+    const cats = [{ name: 'ดอกไม้', skus: ['A1'] }];
+    const label = computeSourceLabel(new Set(), [], cats, [], new Set(['A1']), null, new Set(), {});
+    expect(label).toBe('🏷️ ดอกไม้');
+  });
+
+  it('กรองสีแล้วยังไม่ครบตามที่กรองได้ (เพิ่มแค่บางส่วนของ effSkus) → ยังไม่นับเป็น segment', () => {
+    const cats = [{ name: 'ดอกไม้', skus: ['A1', 'A2'] }]; // ทั้งคู่สีแดง
+    const skuColor = { A1: 'แดง', A2: 'แดง' };
+    const picked = new Set(['A1']); // ได้แค่ตัวเดียวจาก 2 ตัวที่ตรงสี
+    const label = computeSourceLabel(new Set(), [], cats, [], picked, 'แดง', new Set(), skuColor);
+    expect(label).toBe('');
+  });
+});
+
+describe('meta: UI กรองต่อด้วยสี + toggle รวมของสะกดคล้ายกัน ต่อสายครบใน CategoryView', () => {
+  it('แถบกรองสีโผล่เฉพาะแท็บ 🔍/🏷️ เท่านั้น (ไม่ใช่ 🏭/🎨)', () => {
+    expect(CATEGORY_VIEW).toContain('(checkMode === "keyword" || checkMode === "category") && checkColorChips.length > 0');
+  });
+  it('resetCheckPicker ล้าง checkColorFilter และ checkKeywordExpand ด้วย (กันค้างข้ามการเปิดโมดัลใหม่)', () => {
+    const m = CATEGORY_VIEW.match(/function resetCheckPicker\(\) \{[\s\S]*?\n  \}/);
+    expect(m).toBeTruthy();
+    expect(m[0]).toContain('setCheckColorFilter(null)');
+    expect(m[0]).toContain('setCheckKeywordExpand(new Set())');
+  });
+  it('ปุ่ม "รวมสินค้าที่สะกดคล้ายกัน" มีจริงและผูกกับ checkKeywordExpand', () => {
+    expect(CATEGORY_VIEW).toContain('มีสินค้าอื่นสะกดคล้ายกันอีก');
+    expect(CATEGORY_VIEW).toContain('setCheckKeywordExpand(function(prev){');
+  });
+  it('แถวค้นชื่อและชิปหมวดเรียก checkKeywordEffSkus/checkCategoryEffSkus จริง ไม่ใช่ใช้ r.skus/c.skus ตรง ๆ ในการนับ/เพิ่ม', () => {
+    expect(CATEGORY_VIEW).toContain('var effSkus = checkKeywordEffSkus(r);');
+    expect(CATEGORY_VIEW).toContain('var effSkus = checkCategoryEffSkus(c);');
+  });
+  it('แท็บ 🎨 เดี่ยว ๆ ไม่ถูกแตะ — ยังใช้ c.skus ตรง ๆ เหมือนเดิมทุกประการ (ไม่ผ่าน checkColorFilter)', () => {
+    const m = CATEGORY_VIEW.match(/\{checkMode === "color" && \([\s\S]*?\n            \)\}/);
+    expect(m).toBeTruthy();
+    expect(m[0]).toContain('c.skus.every(function(sku){ return checkPicked.has(sku); })');
+    expect(m[0]).not.toContain('checkColorFilter');
+    expect(m[0]).not.toContain('EffSkus');
   });
 });
