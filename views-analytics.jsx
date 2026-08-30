@@ -13543,6 +13543,23 @@ function stockCheckSideProgress(skusSorted, reqTsMs, checkedAtMap, done) {
   return { checked, total, next, done: false };
 }
 
+// ── สินค้าไว้พิมพ์ PDF ของคำขอเช็คสต็อก 1 ใบ (ส.ค. 2026) ─────────────────────
+// รับเฉพาะ SKU ที่อยู่ใน checkRequest.skus ของคำขอใบนั้น — ห้ามปนกับใบอื่น (แต่ละการ์ดต้อง
+// ดาวน์โหลดของตัวเอง) · SKU ที่หาไม่เจอใน catalog (ถูกลบ/เปลี่ยนรหัสหลังส่งคำขอ) ยังต้องขึ้น
+// PDF ได้ — ประกอบ object ย่อจากชื่อที่บันทึกไว้ตอนส่งคำขอ (namesBySku) แทนที่จะหายไปเงียบ ๆ
+// (หลักเดียวกับ fallback ของ TrackCard ด้านบน) · ใช้กับ downloadSupplierCardsPdf ตัวเดียวกับ
+// ปุ่ม "ดาวน์โหลด PDF" ในหน้า "สินค้า & สั่ง" (views-main.jsx) — ไม่มี PDF engine ใหม่
+function checkReqPdfItems(skus, namesBySku, productMap) {
+  const list = Array.isArray(skus) ? skus : [];
+  const nm = namesBySku || {};
+  return list.map(sku => {
+    const key = String(sku || "").trim().toUpperCase();
+    const found = productMap[sku] || productMap[key];
+    if (found) return found;
+    return { sku: sku, name: nm[sku] || sku, qtyWH: 0, qtyStore: 0, isMTO: false, price: "", imageUrl: "" };
+  }).filter(p => p.sku);
+}
+
 // การ์ด "1 ใบโอน" — หัวหน้าเปิดมาต้องตอบได้ทันทีว่า ใบนี้รับไปกี่/กี่ กี่ชิ้น ขาดไหม ค้างกี่วัน
 // โดยไม่ต้องนับการ์ดรายตัวเอง (เดิมส่ง 75 ตัว = 75 การ์ดเรียงกัน ตรวจไม่ไหว)
 function TrackBatchCard({ batch, productMap, defaultOpen }) {
@@ -13660,6 +13677,10 @@ function TrackingView({ data, role }) {
   const products  = data.products  || [];
   const [filter, setFilter] = uS("all");
   const [q, setQ] = uS("");
+  // ปุ่ม "ดาวน์โหลด PDF" ต่อการ์ดคำขอเช็คสต็อก — reqId ที่กำลังสร้างอยู่ (ตัวเดียวทั่ว view
+  // ก็พอ เพราะ downloadSupplierCardsPdf กิน browser tab เดียวอยู่แล้ว ไม่ควรให้ยิงซ้อนกันหลายใบ)
+  const [checkPdfDl, setCheckPdfDl] = uS(null);
+  const [checkPdfProg, setCheckPdfProg] = uS("");
   // "รายใบโอน" เป็นค่าตั้งต้น — คำถามที่หัวหน้าถามจริงคือ "ใบนี้รับครบหรือยัง"
   // ไม่ใช่ "เมื่อกี้เกิดอะไรขึ้นบ้าง" (ซึ่งคือสิ่งที่ลิสต์เรียงตามเวลาตอบ)
   const [mode, setMode] = uS("batch");
@@ -13709,12 +13730,17 @@ function TrackingView({ data, role }) {
       // string[] ล้วน ส่งตรง ๆ จะได้ a.sku === undefined ทั้งคู่ → เทียบเท่ากันหมด = ไม่ได้เรียงจริง
       // (เงียบสนิท ไม่ throw) ต้องห่อเป็น {sku} ก่อนเทียบเสมอ
       const skusSorted = (req.skus || []).slice().sort((a, b) => compareSku({ sku: a }, { sku: b }));
+      // ชื่อสินค้า ณ ตอนส่งคำขอ ผูกกับ SKU (ไม่ใช่ตำแหน่ง — skusSorted เรียงใหม่แล้ว ตำแหน่งไม่ตรง
+      // กับ req.names อีกต่อไป) ใช้เป็น fallback ตอนสร้าง PDF ถ้า SKU นั้นหลุดจาก catalog ไปแล้ว
+      const namesBySku = {};
+      (req.skus || []).forEach((s, i) => { namesBySku[s] = (req.names || [])[i] || ""; });
       return {
         reqId: req.reqId, timestamp: req.timestamp, requester: req.requester,
         suppliers: req.suppliers || [],
         // ข้อความสรุปวิธีเลือกสินค้า (Phase 4) — ครอบคลุมทุกแท็บที่มีส่วนร่วมจริง (🏭/🔍/🏷️/🎨)
         // ไม่ใช่แค่ suppliers ซึ่งว่างเปล่าเมื่อเลือกด้วยคำค้น/หมวด/สี — คำขอเก่าก่อนมีคอลัมน์นี้ = ""
         sourceLabel: req.sourceLabel || "",
+        skus: skusSorted, namesBySku,
         fs: stockCheckSideProgress(skusSorted, reqTsMs, fsCheckedAtMs, req.fsStatus === "done"),
         wh: stockCheckSideProgress(skusSorted, reqTsMs, whCheckedAtMs, req.whStatus === "done"),
       };
@@ -13864,6 +13890,40 @@ function TrackingView({ data, role }) {
                     </div>
                   ))}
                 </div>
+                {/* ดาวน์โหลด PDF เฉพาะ SKU ของคำขอใบนี้ — ปุ่ม/PDF generator ตัวเดียวกับหน้า
+                    "สินค้า & สั่ง" (downloadSupplierCardsPdf, views-main.jsx) ไม่มี engine ใหม่ */}
+                {cp.skus.length > 0 && (
+                  <div style={{display:"flex", justifyContent:"flex-end", marginTop:8}}>
+                    <button
+                      disabled={checkPdfDl === cp.reqId}
+                      onClick={async () => {
+                        setCheckPdfDl(cp.reqId); setCheckPdfProg('');
+                        try {
+                          const items = checkReqPdfItems(cp.skus, cp.namesBySku, productMap);
+                          await downloadSupplierCardsPdf(
+                            cp.reqId + (cp.sourceLabel ? (' · ' + cp.sourceLabel) : ''),
+                            items, '#16a34a',
+                            (phase, n, tot) => setCheckPdfProg(phase === 'load' ? `โหลดรูป ${n}/${tot}` : `จัดหน้า ${n}/${tot}`)
+                          );
+                        } catch (e) {
+                          alert('สร้าง PDF ไม่สำเร็จ: ' + (e.message || e));
+                        } finally {
+                          setCheckPdfDl(null); setCheckPdfProg('');
+                        }
+                      }}
+                      style={{
+                        padding:'6px 12px', borderRadius:20, border:'1.5px solid var(--g-500)',
+                        background: checkPdfDl === cp.reqId ? '#f0fdf4' : '#fff',
+                        color: checkPdfDl === cp.reqId ? '#16a34a' : '#374151',
+                        cursor: checkPdfDl === cp.reqId ? 'wait' : 'pointer',
+                        fontSize:11.5, fontWeight:700, flexShrink:0,
+                        display:'flex', alignItems:'center', gap:4,
+                        fontFamily:'inherit',
+                      }}>
+                      {checkPdfDl === cp.reqId ? ('⏳ ' + (checkPdfProg || 'กำลังสร้าง…')) : '📥 ดาวน์โหลด PDF'}
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
           </div>
