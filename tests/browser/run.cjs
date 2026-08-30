@@ -635,11 +635,13 @@ function startServer() {
       const nav = await navigateTo(page, 'owner', 'tracking');
       await page.waitForTimeout(500);
       const chk = await hasAllText(page,
-        ['คำขอเช็คสต็อกที่กำลังดำเนินการ', 'GX2312', 'เสร็จแล้ว', 'เช็คแล้ว 1/2', 'ถัดไป', 'FLW002'],
+        ['คำขอเช็คสต็อกที่กำลังดำเนินการ', 'GX2312', 'เสร็จแล้ว', 'เช็คแล้ว 1/2', 'ถัดไป', 'FLW002',
+         // ปุ่มดาวน์โหลด PDF ต่อการ์ด (ส.ค. 2026) — คำขอมี 2 SKU (VAS001/FLW002) → ต้องขึ้นปุ่ม
+         '📥 ดาวน์โหลด PDF'],
         'ความคืบหน้าคำขอเช็คสต็อก');
       if (!nav) { status = 'NAV_FAIL'; note = 'สลับ tab ไม่สำเร็จ'; }
       else if (!chk.ok) { status = 'CONTENT_FAIL'; note = chk.detail; }
-      else note = 'เห็นรหัสร้าน GX2312 + หน้าร้านเสร็จแล้ว + คลังเช็คแล้ว 1/2 · ถัดไป FLW002';
+      else note = 'เห็นรหัสร้าน GX2312 + หน้าร้านเสร็จแล้ว + คลังเช็คแล้ว 1/2 · ถัดไป FLW002 · มีปุ่มดาวน์โหลด PDF';
     } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
     await page.screenshot({ path: path.join(SHOTS, 'checkprogress__owner.png') }).catch(() => {});
     results.push({ role: 'interact', tab: 'ความคืบหน้าคำขอเช็คสต็อก (owner)', status, note });
