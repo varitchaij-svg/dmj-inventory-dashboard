@@ -10385,13 +10385,17 @@ function LegacyAddProductView({ data, role, onAdded }) {
   }, [skuForCode, effectiveCat]);
 
   // พิมพ์ชื่อสินค้า (เช่น "มะกอก") → หา Prefix จากสินค้าเดิมที่ชื่อคล้ายกัน (เช่น OL)
+  //   ⚠️ หมวดหมู่คือตัวกรองอันดับแรกเสมอ — ค้นหาเฉพาะสินค้าในหมวดที่เลือกไว้ (effectiveCat) เท่านั้น
+  //   "กุหลาบ" ในหมวดอื่นห้ามมาเป็นตัวกำหนด Prefix ของหมวดที่กำลังเพิ่มอยู่ (ยังไม่เลือกหมวด = ยังหา Prefix ไม่ได้)
   //   จับคู่ทุก token ในชื่อ · จัดกลุ่มตาม prefix · โชว์ตัวอย่างชื่อ + จำนวน เรียงจากที่ใช้บ่อยสุด
   const prefixByName = uM(() => {
     const q = prefixNameSearch.trim().toLowerCase();
-    if (q.length < 2) return [];
+    if (q.length < 2 || !effectiveCat) return [];
     const toks = q.split(/\s+/).filter(Boolean);
     const byPfx = {}; // prefix → { count, sample }
     skuForCode.forEach(p => {
+      const c = (p.category || p.cat || "").trim();
+      if (c !== effectiveCat) return;   // ข้ามหมวดอื่นเสมอ — ห้ามยืมชื่อจากหมวดอื่นมาแนะนำ Prefix
       const m = String(p.sku || "").trim().toUpperCase().match(/^([A-Z]{1,3})\d/);
       if (!m) return;
       const nm = String(p.name || "").toLowerCase();
@@ -10401,7 +10405,7 @@ function LegacyAddProductView({ data, role, onAdded }) {
       byPfx[pfx].count++;
     });
     return Object.values(byPfx).sort((a, b) => b.count - a.count).slice(0, 6);
-  }, [prefixNameSearch, skuForCode]);
+  }, [prefixNameSearch, skuForCode, effectiveCat]);
 
   // ข้อมูลแบบเดิมที่เลือก (โหมดสีใหม่) — prefix, model + variant/สีที่มีอยู่แล้ว (กันสร้างซ้ำ)
   const designInfo = uM(() => {
@@ -10683,9 +10687,14 @@ function LegacyAddProductView({ data, role, onAdded }) {
                       ))}
                     </div>
                   )}
-                  {prefixNameSearch.trim().length >= 2 && prefixByName.length === 0 && (
+                  {prefixNameSearch.trim().length >= 2 && !effectiveCat && (
                     <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>
-                      ไม่พบสินค้าเดิมที่ชื่อคล้าย “{prefixNameSearch.trim()}” — ถ้าเป็นประเภทใหม่ เลือก/พิมพ์ Prefix เองด้านล่าง
+                      ⚠️ เลือกหมวดหมู่ด้านบนก่อน — ระบบแนะนำ Prefix จากสินค้าในหมวดนั้นเท่านั้น
+                    </div>
+                  )}
+                  {prefixNameSearch.trim().length >= 2 && effectiveCat && prefixByName.length === 0 && (
+                    <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>
+                      ไม่พบสินค้าเดิมในหมวด “{effectiveCat}” ที่ชื่อคล้าย “{prefixNameSearch.trim()}” — ถ้าเป็นประเภทใหม่ เลือก/พิมพ์ Prefix เองด้านล่าง
                     </div>
                   )}
 
