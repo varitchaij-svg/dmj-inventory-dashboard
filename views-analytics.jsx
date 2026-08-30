@@ -13712,6 +13712,9 @@ function TrackingView({ data, role }) {
       return {
         reqId: req.reqId, timestamp: req.timestamp, requester: req.requester,
         suppliers: req.suppliers || [],
+        // ข้อความสรุปวิธีเลือกสินค้า (Phase 4) — ครอบคลุมทุกแท็บที่มีส่วนร่วมจริง (🏭/🔍/🏷️/🎨)
+        // ไม่ใช่แค่ suppliers ซึ่งว่างเปล่าเมื่อเลือกด้วยคำค้น/หมวด/สี — คำขอเก่าก่อนมีคอลัมน์นี้ = ""
+        sourceLabel: req.sourceLabel || "",
         fs: stockCheckSideProgress(skusSorted, reqTsMs, fsCheckedAtMs, req.fsStatus === "done"),
         wh: stockCheckSideProgress(skusSorted, reqTsMs, whCheckedAtMs, req.whStatus === "done"),
       };
@@ -13835,7 +13838,9 @@ function TrackingView({ data, role }) {
               <div key={cp.reqId} style={{border:"1px solid var(--bdr)", borderRadius:10, padding:"10px 12px"}}>
                 <div style={{display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:8, flexWrap:"wrap"}}>
                   <div style={{fontWeight:700, fontSize:13}}>
-                    {cp.suppliers.length ? "🏭 " + cp.suppliers.join(", ") : (cp.requester ? "โดย " + cp.requester : cp.reqId)}
+                    {cp.sourceLabel ? cp.sourceLabel
+                      : cp.suppliers.length ? "🏭 " + cp.suppliers.join(", ")
+                      : (cp.requester ? "โดย " + cp.requester : cp.reqId)}
                   </div>
                   <div style={{fontSize:11, color:"var(--muted)", whiteSpace:"nowrap"}}>{cp.reqId} · {cp.timestamp}</div>
                 </div>

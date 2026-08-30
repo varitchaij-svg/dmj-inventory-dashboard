@@ -3638,6 +3638,20 @@ function mtoBase(name) {
     .trim() || 'งานพิเศษ';
 }
 
+// ── checkMatchTerms: แปลงข้อความค้นชื่อสินค้า (ปุ่มลอย 📤 ส่งคำขอเช็คสต็อก แท็บ 🔍 ค้นชื่อ) ──
+// → รายการเทอม แต่ละเทอมเป็น array ของ token (multi-token AND ระหว่าง token — คอนเวนชันเดิมทั้งแอป)
+// ขึ้นบรรทัดใหม่ / "," / "/" = OR ระหว่างเทอม (คนละอย่างที่ต้องการ) — ตัดเทอมว่างทิ้ง
+// pure function — ตั้งใจไม่ lowercase/normalize ในนี้ (ใช้ทั้งแสดงผล term ตามที่พิมพ์จริง และจับคู่
+// ที่จุดเรียก) ดู docs/PLAN-STOCKCHECK-KEYWORD-SELECT.md §3 Phase 1 ข้อ 3
+// "เบอร์รี่แดง / สน\nโบตั๋น" → [["เบอร์รี่แดง"],["สน"],["โบตั๋น"]] · "ฟาแลน 148" → [["ฟาแลน","148"]]
+function checkMatchTerms(text) {
+  return String(text || "")
+    .split(/[\n,\/]+/)
+    .map(term => term.trim())
+    .filter(Boolean)
+    .map(term => term.split(/\s+/).filter(Boolean));
+}
+
 function CategoryView({ data, role, onNav }) {
   const { products } = data;
   const allCats = uM(() => {
@@ -3723,6 +3737,14 @@ function CategoryView({ data, role, onNav }) {
   const canSendCheck = role === "owner" || role === "saler" || role === "storedevice";
   const [checkSuppliers, setCheckSuppliers] = uS(new Set()); // ชื่อ supplier ที่เลือก
   const [checkSearch, setCheckSearch] = uS("");              // ช่องค้นหา supplier ใน modal
+  // ⭐ วิธีเลือกสินค้าเพิ่มเติมนอกจากร้านค้า (Option B — Union, ดู docs/PLAN-STOCKCHECK-KEYWORD-SELECT.md §2)
+  // แท็บ 🏭 ร้านค้า (checkSuppliers ด้านบน) กับตะกร้าด้านล่างนี้เป็นคนละแหล่งเด็ดขาด ไม่ผสมกัน
+  // รวมกันแค่ตอนคำนวณ checkFinalSkus (union) ตอนจะส่งเท่านั้น
+  const [checkMode, setCheckMode] = uS("supplier");          // 'supplier'|'keyword'|'category'|'color' — แท็บที่เปิดอยู่
+  const [checkKeyword, setCheckKeyword] = uS("");             // ข้อความค้นชื่อสินค้า (แท็บ 🔍 — คนละช่องกับ checkSearch ที่กรองชิปร้านค้า)
+  const [checkPicked, setCheckPicked] = uS(new Set());        // SKU ที่เพิ่มจากแท็บ 🔍 เท่านั้น (ห้ามมี SKU จากแท็บ 🏭 ปนมา)
+  const [checkExcluded, setCheckExcluded] = uS(new Set());    // SKU ที่ผู้ใช้ติ๊กออกจากรายการที่จะส่ง — ตัดจาก union ไม่สนแหล่งที่มา
+  const [checkShowAll, setCheckShowAll] = uS(false);          // เพดาน render ของ "รายการที่จะส่ง" ถูกกดเปิดดูทั้งหมดหรือยัง
   const [orderProduct, setOrderProduct] = uS(null);
   const [localPendingOrders, setLocalPendingOrders] = uS([]); // optimistic update หลังสั่งสำเร็จ
   const [globalVendor, setGlobalVendor] = uS(null); // global supplier filter (all categories)
@@ -4068,16 +4090,146 @@ function CategoryView({ data, role, onNav }) {
       .sort((a,b) => b.count - a.count);
   }, [refineBase]);
 
+  // ── ปุ่มลอย 📤 ส่งคำขอเช็คสต็อก: ฐานสินค้า + union ของ 2 แหล่ง (Option B) ──────────────
+  // ฐานสินค้าของโมดัลนี้ = ทั้งคลังเสมอ ไม่ผูกกับหมวด/คำค้นหน้าหลักที่เปิดค้างอยู่ (ต่างจาก
+  // refineBase ด้านบนโดยตั้งใจ — ปุ่มลอยเป็น action ระดับร้าน ไม่ใช่ของหมวดที่กำลังดูอยู่)
+  const checkBase = uM(() =>
+    products.filter(p => p.cat && p.cat !== "ไม่มีรหัสสินค้า")
+  , [products]);
+
+  const checkSupplierList = uM(() => {
+    const m = {};
+    checkBase.forEach(p => {
+      const s = p.vendor || p.lastSupplier;
+      // กรองชื่อขยะ: array รั่วจาก GAS ("[Ljava.lang.Object;@...") / ว่าง
+      if (s && typeof s === "string" && !s.startsWith("[L")) m[s] = (m[s] || 0) + 1;
+    });
+    return Object.entries(m).map(([name, count]) => ({ name, count }))
+      .sort((a,b) => b.count - a.count);
+  }, [checkBase]);
+
   // กรอง supplier ตามช่องค้นหาใน modal (multi-token AND-match)
+  // ⚠️ อิง checkSupplierList (ทั้งคลัง) ไม่ใช่ supplierList (ผูกหมวด/คำค้นหน้าหลักที่เปิดค้างไว้)
+  // ไม่งั้นชิปในโมดัลส่งคำขอเช็คสต็อกจะโชว์ไม่ตรงกับของที่กดส่งจริง (ดู Plan §0 ข้อ 5-7)
   const checkSupplierFiltered = uM(() => {
     const q = checkSearch.trim().toLowerCase();
-    if (!q) return supplierList;
+    if (!q) return checkSupplierList;
     const tokens = q.split(/\s+/);
-    return supplierList.filter(s => {
+    return checkSupplierList.filter(s => {
       const hay = s.name.toLowerCase();
       return tokens.every(t => hay.includes(t));
     });
-  }, [supplierList, checkSearch]);
+  }, [checkSupplierList, checkSearch]);
+
+  // ผลค้นชื่อสินค้าต่อเทอม (แท็บ 🔍) — แยกผลรายเทอมไว้ (ไม่รวมเป็นก้อนเดียว) เพื่อบอกได้ว่า
+  // เทอมไหน "ไม่เจอ" — ห้ามเงียบ (เจ้าของพิมพ์ 5 คำแล้วเข้าระบบ 4 คำต้องรู้ตัว ไม่ใช่เดาว่าครบ)
+  // ⚠️ ชั้นสำรอง (Phase 2) ทำงานเฉพาะเมื่อค้นตรง ๆ ได้ 0 ผลลัพธ์**ทั้งเทอม** — ไม่ใช่ทำเสมอ
+  // (เช่น "เบอร์รี่แดง" spelled ต่างจาก catalog แค่คำเดียว "แดง" ที่สะกดถูกอยู่แล้วยัง match ได้
+  // ตามปกติหลัง normalize ทั้งคู่ ไม่ต้องแยก logic ระดับ token — ดู Plan §3 Phase 2 ข้อ 2)
+  const checkKeywordResult = uM(() => {
+    return checkMatchTerms(checkKeyword).map(tokens => {
+      const lowerTokens = tokens.map(t => t.toLowerCase());
+      const strictSkus = checkBase.filter(p => {
+        const hay = ((p.sku||"") + " " + (p.name||"")).toLowerCase();
+        return lowerTokens.every(t => hay.includes(t));
+      }).map(p => p.sku);
+      if (strictSkus.length) return { term: tokens.join(" "), skus: strictSkus, loose: false };
+      // ⚠️ ต้อง normalize ทั้ง token และ hay ด้วย dmjThaiKey ตัวเดียวกันเสมอ — normalize ฝั่งเดียว
+      // ไม่มีวันแมตช์ (สตริงสองฝั่งอยู่คนละรูปแบบ) · token ที่ normalize แล้วสั้นกว่า 2 ตัวอักษร
+      // → ทั้งเทอมไม่เข้าชั้นสำรอง (กว้างเกินจนไร้ความหมาย)
+      const normTokens = lowerTokens.map(t => dmjThaiKey(t));
+      if (normTokens.some(t => t.length < 2)) return { term: tokens.join(" "), skus: [], loose: false };
+      const looseSkus = checkBase.filter(p => {
+        const hayNorm = dmjThaiKey((p.sku||"") + " " + (p.name||""));
+        return normTokens.every(t => hayNorm.includes(t));
+      }).map(p => p.sku);
+      return { term: tokens.join(" "), skus: looseSkus, loose: looseSkus.length > 0 };
+    });
+  }, [checkKeyword, checkBase]);
+
+  // ── แท็บ 🏷️ หมวด (Phase 3) — ใช้ allCats (รายชื่อ+ลำดับหมวดที่มีอยู่แล้วในไฟล์นี้) เก็บ SKU
+  // ต่อหมวดจาก checkBase ไว้ในตัวเลย (ทั้งคลังเสมอ เหมือน checkSupplierList) กันการ filter
+  // checkBase ซ้ำต่อชิปตอน render · ไม่ใช้ navCats เพราะนั่นถูกกรองด้วยโหมด ⭐ ของฉันแล้ว
+  const checkCategoryChips = uM(() => {
+    const m = {};
+    checkBase.forEach(p => { if (p.cat) (m[p.cat] || (m[p.cat] = [])).push(p.sku); });
+    return allCats.map(c => ({ name: c, skus: m[c] || [] }));
+  }, [allCats, checkBase]);
+
+  // ── แท็บ 🎨 สี (Phase 3) — pattern เดียวกับ colorChips ที่มีอยู่แล้ว แต่อิง checkBase
+  // (ทั้งคลัง) แทน refineBase (ผูกหมวด/คำค้นหน้าหลัก) ตามกฎเดียวกับ checkSupplierList
+  const checkColorChips = uM(() => {
+    const m = {};
+    checkBase.forEach(p => {
+      if (p.color) { if (!m[p.color.name]) m[p.color.name] = { skus: [], hex: p.color.hex }; m[p.color.name].skus.push(p.sku); }
+    });
+    return Object.entries(m).map(([name, v]) => ({ name, hex: v.hex, skus: v.skus }))
+      .sort((a,b) => (COLOR_ORDER.indexOf(a.name)===-1?99:COLOR_ORDER.indexOf(a.name)) -
+                     (COLOR_ORDER.indexOf(b.name)===-1?99:COLOR_ORDER.indexOf(b.name)));
+  }, [checkBase]);
+
+  // SKU ที่ derive สดจากแท็บ 🏭 ร้านค้า (เหมือนของเดิมทุกประการ — ไม่แตะ checkSuppliers เลย)
+  const checkSupplierSkus = uM(() =>
+    checkBase.filter(p => checkSuppliers.has(p.vendor || p.lastSupplier))
+  , [checkBase, checkSuppliers]);
+
+  // ⚠️ จุดรวม union เดียวของทั้งระบบ (กฎเหล็ก Plan §2 ข้อ 3) — badge/พรีวิว/ปุ่มส่งอ่านจากตัวนี้
+  // ที่เดียว ห้ามมี products.filter(...) ซ้ำที่ไหนอีก · checkSuppliers (🏭) กับ checkPicked (🔍)
+  // เป็นคนละแหล่งเด็ดขาด ไม่ผูกกัน — ถอนชิปร้านค้าจึงไม่กระทบ SKU ที่มาจากแท็บค้นชื่อเลย
+  const checkFinalSkus = uM(() => {
+    const merged = new Set(checkSupplierSkus.map(p => p.sku));
+    checkPicked.forEach(sku => merged.add(sku));
+    checkExcluded.forEach(sku => merged.delete(sku));
+    return merged;
+  }, [checkSupplierSkus, checkPicked, checkExcluded]);
+
+  const checkFinalProducts = uM(() => {
+    if (!checkFinalSkus.size) return [];
+    const bySku = {};
+    checkBase.forEach(p => { bySku[p.sku] = p; });
+    return Array.from(checkFinalSkus).map(sku => bySku[sku]).filter(Boolean);
+  }, [checkFinalSkus, checkBase]);
+
+  // ── sourceLabel (Phase 4) — ข้อความสรุป "เลือกด้วยวิธีไหน" ให้แจ้งเตือน/การ์ดติดตามคำขอ ──────
+  // ประกอบจาก "ทุกแท็บที่มีส่วนร่วมจริง" ไม่ใช่แค่แท็บที่เปิดอยู่ตอนกดส่ง — Option B สะสมข้ามแท็บ
+  // ได้ (เลือกร้าน DS ในแท็บ 🏭 แล้วสลับไปพิมพ์ค้น "โบตั๋น" ในแท็บ 🔍 ต้องเห็นทั้งคู่ในแจ้งเตือน
+  // ไม่ใช่แค่แท็บสุดท้าย — ดู docs/PLAN-STOCKCHECK-KEYWORD-SELECT.md Phase 4 ข้อ 6)
+  // ⚠️ ไม่ใช่ provenance tracking จริง — Option B ไม่เก็บว่า SKU ไหนมาจากแท็บไหน (กฎเหล็ก Plan §2
+  // ข้อ 5) ที่นี่ใช้วิธีเดียวกับที่ชิปโชว์ "✓ เพิ่มแล้ว" อยู่แล้ว: เทอม/หมวด/สีใดที่ "ทุก SKU ของมัน
+  // อยู่ใน checkPicked ครบ" ถือว่าเป็นแหล่งที่มีส่วนร่วม (สอดคล้องกับสิ่งที่ผู้ใช้เห็นบนจอ)
+  const checkSourceLabel = uM(() => {
+    const segments = [];
+    if (checkSuppliers.size) segments.push("🏭 " + Array.from(checkSuppliers).join(", "));
+    const terms = checkKeywordResult
+      .filter(r => r.skus.length > 0 && r.skus.every(sku => checkPicked.has(sku)))
+      .map(r => r.term);
+    if (terms.length) segments.push("🔍 " + terms.join(", "));
+    const cats = checkCategoryChips
+      .filter(c => c.skus.length > 0 && c.skus.every(sku => checkPicked.has(sku)))
+      .map(c => c.name);
+    if (cats.length) segments.push("🏷️ " + cats.join(", "));
+    const colors = checkColorChips
+      .filter(c => c.skus.length > 0 && c.skus.every(sku => checkPicked.has(sku)))
+      .map(c => c.name);
+    if (colors.length) segments.push("🎨 " + colors.join(", "));
+    return segments.join(" · ");
+  }, [checkSuppliers, checkKeywordResult, checkCategoryChips, checkColorChips, checkPicked]);
+
+  // เพดาน render ของบล็อก "รายการที่จะส่ง" — เลือกทั้งหมวด/หลายร้านพร้อมกันอาจได้เป็นร้อย SKU
+  // render การ์ดรูปทุกใบพร้อมกันเสี่ยงจอค้างบนมือถือเครื่องพนักงาน (ดู Plan §3 Phase 1 ข้อ 7)
+  const CHECK_PREVIEW_CAP = 30;
+  const checkPreviewShown = checkShowAll ? checkFinalProducts : checkFinalProducts.slice(0, CHECK_PREVIEW_CAP);
+
+  // ปิดโมดัล/ส่งสำเร็จ — reset ตะกร้าใหม่ (checkMode/checkKeyword/checkPicked/checkExcluded/
+  // checkShowAll) ทั้งชุดเสมอ กัน SKU จากคำขอก่อนหน้าค้างมาปนกับคำขอครั้งใหม่โดยไม่มีใครสังเกต
+  // ⚠️ ไม่แตะ checkSuppliers/checkSearch — ของเดิมค้างได้ตามพฤติกรรมเดิม (ดู Plan §3 Phase 1 ข้อ 9)
+  function resetCheckPicker() {
+    setCheckMode("supplier");
+    setCheckKeyword("");
+    setCheckPicked(new Set());
+    setCheckExcluded(new Set());
+    setCheckShowAll(false);
+  }
 
   // Colors in this category for filter chips
   const colorChips = uM(() => {
@@ -4887,123 +5039,311 @@ function CategoryView({ data, role, onNav }) {
         }}/>}
       <Toast toast={checkToast} onClose={hideCheckToast}/>
 
-      {/* ── Check Send Modal (bottom sheet) — owner เลือก supplier ก่อนส่ง ── */}
+      {/* ── Check Send Modal (bottom sheet) — owner เลือกสินค้าที่จะให้พนักงานนับ ── */}
       {checkSendOpen && (
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",zIndex:900,display:"flex",alignItems:"flex-end"}}
-          onClick={function(e){ if(e.target===e.currentTarget){ setCheckSendOpen(false); setCheckSearch(""); } }}>
+          onClick={function(e){ if(e.target===e.currentTarget){ setCheckSendOpen(false); setCheckSearch(""); resetCheckPicker(); } }}>
           <div style={{background:"#fff",borderRadius:"16px 16px 0 0",width:"100%",maxWidth:480,
-                       margin:"0 auto",maxHeight:"70vh",display:"flex",flexDirection:"column"}}>
+                       margin:"0 auto",maxHeight:"85vh",display:"flex",flexDirection:"column"}}>
             <div style={{padding:"16px",borderBottom:"1px solid #e5e7eb",display:"flex",alignItems:"center",gap:8}}>
               <div style={{flex:1,fontWeight:700,fontSize:16}}>📤 ส่งคำขอเช็คสต็อก</div>
-              <button onClick={function(){ setCheckSendOpen(false); setCheckSearch(""); }}
+              <button onClick={function(){ setCheckSendOpen(false); setCheckSearch(""); resetCheckPicker(); }}
                 style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:"#6b7280"}}>✕</button>
             </div>
-            {/* ช่องค้นหา supplier — พิมพ์กรองชื่อร้าน */}
-            <div style={{padding:"12px 16px 4px"}}>
-              <div style={{position:"relative"}}>
-                <span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",fontSize:15,opacity:.5}}>🔍</span>
-                <input value={checkSearch} onChange={function(e){ setCheckSearch(e.target.value); }}
-                  placeholder="พิมพ์ค้นหาร้านค้า..."
-                  style={{width:"100%",boxSizing:"border-box",padding:"10px 36px 10px 36px",borderRadius:10,
-                          border:"1.5px solid #e5e7eb",fontSize:14,fontFamily:"inherit",outline:"none"}}/>
-                {checkSearch && (
-                  <button onClick={function(){ setCheckSearch(""); }}
-                    style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",
-                            background:"none",border:"none",fontSize:16,cursor:"pointer",color:"#9ca3af",padding:4}}>✕</button>
-                )}
-              </div>
-            </div>
-            {/* Quick-select all / ล้าง */}
-            <div style={{padding:"6px 16px 4px",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-              <button onClick={function(){
-                  // เลือกทั้งหมด = เฉพาะที่ตรงกับคำค้นปัจจุบัน (รวมกับที่เลือกไว้แล้ว)
-                  setCheckSuppliers(function(prev){
-                    var n = new Set(prev);
-                    checkSupplierFiltered.forEach(function(s){ n.add(s.name); });
-                    return n;
-                  });
-                }}
-                style={{padding:"6px 12px",borderRadius:20,border:"1px solid #d1fae5",
-                        background:"#ecfdf5",color:"#065f46",fontSize:13,cursor:"pointer",fontWeight:600}}>
-                เลือกทั้งหมด{checkSearch ? "ที่ค้นหา" : ""}
+            {/* แท็บวิธีเลือกสินค้า — 🏭 ร้านค้า (เดิม) / 🔍 ค้นชื่อ / 🏷️ หมวด / 🎨 สี เป็นคนละแหล่ง
+                กันเด็ดขาด (Option B) รวมกันแค่ตอนคำนวณ checkFinalSkus ตอนกดส่ง — ดู
+                docs/PLAN-STOCKCHECK-KEYWORD-SELECT.md §2 · flexWrap ให้ห่อเป็น 2 แถวบนจอแคบ */}
+            <div style={{padding:"10px 16px 0",display:"flex",flexWrap:"wrap",gap:8}}>
+              <button onClick={function(){ setCheckMode("supplier"); }}
+                style={{flex:"1 1 45%",padding:"8px 0",borderRadius:10,fontFamily:"inherit",cursor:"pointer",
+                        border:checkMode==="supplier"?"2px solid #1f7f44":"1px solid #e5e7eb",
+                        background:checkMode==="supplier"?"#dcf2e2":"#fff",
+                        color:checkMode==="supplier"?"#1f7f44":"#6b7280",fontWeight:700,fontSize:13}}>
+                🏭 ร้านค้า{checkSuppliers.size > 0 ? " (" + checkSuppliers.size + ")" : ""}
               </button>
-              <button onClick={function(){ setCheckSuppliers(new Set()); }}
-                style={{padding:"6px 12px",borderRadius:20,border:"1px solid #e5e7eb",
-                        background:"#f9fafb",color:"#6b7280",fontSize:13,cursor:"pointer"}}>
-                ล้าง
+              <button onClick={function(){ setCheckMode("keyword"); }}
+                style={{flex:"1 1 45%",padding:"8px 0",borderRadius:10,fontFamily:"inherit",cursor:"pointer",
+                        border:checkMode==="keyword"?"2px solid #1f7f44":"1px solid #e5e7eb",
+                        background:checkMode==="keyword"?"#dcf2e2":"#fff",
+                        color:checkMode==="keyword"?"#1f7f44":"#6b7280",fontWeight:700,fontSize:13}}>
+                🔍 ค้นชื่อ{checkPicked.size > 0 ? " (" + checkPicked.size + ")" : ""}
               </button>
-              {checkSuppliers.size > 0 && (
-                <span style={{fontSize:12,color:"#1f7f44",fontWeight:600,marginLeft:"auto"}}>
-                  เลือกแล้ว {checkSuppliers.size} ร้าน
-                </span>
-              )}
+              <button onClick={function(){ setCheckMode("category"); }}
+                style={{flex:"1 1 45%",padding:"8px 0",borderRadius:10,fontFamily:"inherit",cursor:"pointer",
+                        border:checkMode==="category"?"2px solid #1f7f44":"1px solid #e5e7eb",
+                        background:checkMode==="category"?"#dcf2e2":"#fff",
+                        color:checkMode==="category"?"#1f7f44":"#6b7280",fontWeight:700,fontSize:13}}>
+                🏷️ หมวด
+              </button>
+              <button onClick={function(){ setCheckMode("color"); }}
+                style={{flex:"1 1 45%",padding:"8px 0",borderRadius:10,fontFamily:"inherit",cursor:"pointer",
+                        border:checkMode==="color"?"2px solid #1f7f44":"1px solid #e5e7eb",
+                        background:checkMode==="color"?"#dcf2e2":"#fff",
+                        color:checkMode==="color"?"#1f7f44":"#6b7280",fontWeight:700,fontSize:13}}>
+                🎨 สี
+              </button>
             </div>
-            {/* Supplier chips */}
-            <div style={{overflowY:"auto",flex:1,padding:"8px 16px 4px"}}>
-              <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-                {checkSupplierFiltered.length === 0 ? (
-                  <div style={{padding:"20px 0",width:"100%",textAlign:"center",color:"#9ca3af",fontSize:14}}>
-                    ไม่พบร้านค้า "{checkSearch}"
+            {checkMode === "supplier" && (
+              <>
+                {/* ช่องค้นหา supplier — พิมพ์กรองชื่อร้าน */}
+                <div style={{padding:"12px 16px 4px"}}>
+                  <div style={{position:"relative"}}>
+                    <span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",fontSize:15,opacity:.5}}>🔍</span>
+                    <input value={checkSearch} onChange={function(e){ setCheckSearch(e.target.value); }}
+                      placeholder="พิมพ์ค้นหาร้านค้า..."
+                      style={{width:"100%",boxSizing:"border-box",padding:"10px 36px 10px 36px",borderRadius:10,
+                              border:"1.5px solid #e5e7eb",fontSize:14,fontFamily:"inherit",outline:"none"}}/>
+                    {checkSearch && (
+                      <button onClick={function(){ setCheckSearch(""); }}
+                        style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",
+                                background:"none",border:"none",fontSize:16,cursor:"pointer",color:"#9ca3af",padding:4}}>✕</button>
+                    )}
                   </div>
-                ) : checkSupplierFiltered.map(function(s) {
-                  var sel = checkSuppliers.has(s.name);
-                  return (
-                    <button key={s.name} onClick={function(){
+                </div>
+                {/* Quick-select all / ล้าง */}
+                <div style={{padding:"6px 16px 4px",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                  <button onClick={function(){
+                      // เลือกทั้งหมด = เฉพาะที่ตรงกับคำค้นปัจจุบัน (รวมกับที่เลือกไว้แล้ว)
                       setCheckSuppliers(function(prev){
                         var n = new Set(prev);
-                        if(sel) n.delete(s.name); else n.add(s.name);
+                        checkSupplierFiltered.forEach(function(s){ n.add(s.name); });
                         return n;
                       });
-                    }} style={{padding:"8px 14px",borderRadius:20,cursor:"pointer",fontSize:13,fontWeight:sel?600:400,
-                               border: sel?"2px solid #1f7f44":"1px solid #e5e7eb",
-                               background:sel?"#dcf2e2":"#fff", color:sel?"#1f7f44":"#374151"}}>
-                      {s.name} <span style={{fontSize:11,opacity:.7}}>({s.count})</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-            <div style={{padding:"16px",borderTop:"1px solid #e5e7eb"}}>
-              {(function() {
-                var cnt = products.filter(function(p){
-                  var sup = p.vendor || p.lastSupplier;
-                  return checkSuppliers.has(sup) && p.cat && p.cat !== "ไม่มีรหัสสินค้า";
-                }).length;
-                return (
-                  <button disabled={!checkSuppliers.size || sendingCheck}
-                    onClick={async function(){
-                      var ps = products.filter(function(p){
-                        var sup = p.vendor || p.lastSupplier;
-                        return checkSuppliers.has(sup) && p.cat && p.cat !== "ไม่มีรหัสสินค้า";
-                      });
-                      if(!ps.length) return;
-                      setSendingCheck(true);
-                      try {
-                        var res = await dmjFetch(SHEET_DEPLOY_URL, {
-                          method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"},
-                          // suppliers = รหัสร้านที่เลือก (ไม่ใช่ SKU) — backend ใช้แทนรายชื่อสินค้า
-                          // ในแจ้งเตือน (อ่านง่ายกว่ารายชื่อสินค้าเป็นสิบ-ร้อยตัว)
-                          body: JSON.stringify({createStockCheck:true, actor: role,
-                            skus: ps.map(function(p){ return p.sku; }),
-                            names: ps.map(function(p){ return p.name||p.sku; }),
-                            suppliers: Array.from(checkSuppliers)}),
-                        });
-                        var json = await dmjJson(res);
-                        if(json.success){
-                          showCheckToast({type:"success",message:"ส่งคำขอเช็คสต็อก " + ps.length + " รายการแล้ว ✅"});
-                          setCheckSendOpen(false);
-                          setCheckSuppliers(new Set());
-                        } else showCheckToast({type:"error",message:"เกิดข้อผิดพลาด"});
-                      } catch(e){ showCheckToast({type:"error",message:"ส่งไม่สำเร็จ"}); }
-                      setSendingCheck(false);
                     }}
-                    style={{width:"100%",background:checkSuppliers.size?"#1f7f44":"#e5e7eb",
-                            color:checkSuppliers.size?"#fff":"#9ca3af",border:"none",borderRadius:10,
-                            padding:"14px",fontWeight:700,fontSize:16,cursor:checkSuppliers.size?"pointer":"not-allowed"}}>
-                    {sendingCheck ? "กำลังส่ง..." : checkSuppliers.size ? "📤 ส่งขอเช็ค " + cnt + " รายการ" : "เลือกร้านค้าก่อน"}
+                    style={{padding:"6px 12px",borderRadius:20,border:"1px solid #d1fae5",
+                            background:"#ecfdf5",color:"#065f46",fontSize:13,cursor:"pointer",fontWeight:600}}>
+                    เลือกทั้งหมด{checkSearch ? "ที่ค้นหา" : ""}
                   </button>
-                );
-              })()}
+                  <button onClick={function(){ setCheckSuppliers(new Set()); }}
+                    style={{padding:"6px 12px",borderRadius:20,border:"1px solid #e5e7eb",
+                            background:"#f9fafb",color:"#6b7280",fontSize:13,cursor:"pointer"}}>
+                    ล้าง
+                  </button>
+                  {checkSuppliers.size > 0 && (
+                    <span style={{fontSize:12,color:"#1f7f44",fontWeight:600,marginLeft:"auto"}}>
+                      เลือกแล้ว {checkSuppliers.size} ร้าน
+                    </span>
+                  )}
+                </div>
+                {/* Supplier chips */}
+                <div style={{overflowY:"auto",flex:1,padding:"8px 16px 4px"}}>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                    {checkSupplierFiltered.length === 0 ? (
+                      <div style={{padding:"20px 0",width:"100%",textAlign:"center",color:"#9ca3af",fontSize:14}}>
+                        ไม่พบร้านค้า "{checkSearch}"
+                      </div>
+                    ) : checkSupplierFiltered.map(function(s) {
+                      var sel = checkSuppliers.has(s.name);
+                      return (
+                        <button key={s.name} onClick={function(){
+                          setCheckSuppliers(function(prev){
+                            var n = new Set(prev);
+                            if(sel) n.delete(s.name); else n.add(s.name);
+                            return n;
+                          });
+                        }} style={{padding:"8px 14px",borderRadius:20,cursor:"pointer",fontSize:13,fontWeight:sel?600:400,
+                                   border: sel?"2px solid #1f7f44":"1px solid #e5e7eb",
+                                   background:sel?"#dcf2e2":"#fff", color:sel?"#1f7f44":"#374151"}}>
+                          {s.name} <span style={{fontSize:11,opacity:.7}}>({s.count})</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </>
+            )}
+            {checkMode === "keyword" && (
+              <div style={{padding:"12px 16px 4px",display:"flex",flexDirection:"column",gap:10,overflowY:"auto",flex:1}}>
+                <textarea value={checkKeyword} onChange={function(e){ setCheckKeyword(e.target.value); }}
+                  placeholder={"เบอร์รี่แดง\nสน\nโบตั๋น  (ขึ้นบรรทัดใหม่ = คนละอย่าง)"}
+                  rows={3}
+                  style={{width:"100%",boxSizing:"border-box",padding:"10px 12px",borderRadius:10,
+                          border:"1.5px solid #e5e7eb",fontSize:14,fontFamily:"inherit",outline:"none",resize:"vertical"}}/>
+                {checkKeywordResult.length === 0 ? (
+                  <div style={{padding:"12px 0",textAlign:"center",color:"#9ca3af",fontSize:13}}>
+                    พิมพ์ชื่อสินค้าที่ต้องการให้นับ — พิมพ์หลายรายการได้ ขึ้นบรรทัดใหม่ต่อ 1 รายการ
+                  </div>
+                ) : (
+                  <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                    {checkKeywordResult.map(function(r, i) {
+                      var already = r.skus.length > 0 && r.skus.every(function(sku){ return checkPicked.has(sku); });
+                      return (
+                        <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",borderRadius:10,
+                                              border:"1px solid " + (r.skus.length ? "#e5e7eb" : "#fecaca"),
+                                              background:r.skus.length ? "#fff" : "#fef2f2"}}>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                              {r.term}
+                              {r.loose && (
+                                <span style={{marginLeft:6,fontSize:10,fontWeight:700,color:"#b45309",
+                                              background:"#fffbeb",border:"1px solid #fcd34d",
+                                              borderRadius:8,padding:"1px 6px"}}>
+                                  ≈ ค้นแบบผ่อนการสะกด
+                                </span>
+                              )}
+                            </div>
+                            <div style={{fontSize:11,color:r.skus.length ? "#6b7280" : "#dc2626",fontWeight:r.skus.length?400:700}}>
+                              {r.skus.length ? "พบ " + r.skus.length + " รายการ" : "⚠️ ไม่พบสินค้าที่ตรงกับคำนี้"}
+                            </div>
+                          </div>
+                          {r.skus.length > 0 && (
+                            <button disabled={already}
+                              onClick={function(){
+                                setCheckPicked(function(prev){
+                                  var n = new Set(prev);
+                                  r.skus.forEach(function(sku){ n.add(sku); });
+                                  return n;
+                                });
+                              }}
+                              style={{padding:"6px 12px",borderRadius:20,border:"1px solid #1f7f44",
+                                      background:already?"#f3f4f6":"#1f7f44",color:already?"#9ca3af":"#fff",
+                                      fontSize:12,fontWeight:600,cursor:already?"default":"pointer",flexShrink:0,fontFamily:"inherit"}}>
+                              {already ? "✓ เพิ่มแล้ว" : "➕ เพิ่มเข้ารายการ"}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+            {checkMode === "category" && (
+              <div style={{overflowY:"auto",flex:1,padding:"8px 16px 4px"}}>
+                <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                  {checkCategoryChips.map(function(c) {
+                    var already = c.skus.length > 0 && c.skus.every(function(sku){ return checkPicked.has(sku); });
+                    return (
+                      <button key={c.name} disabled={already || !c.skus.length}
+                        onClick={function(){
+                          setCheckPicked(function(prev){
+                            var n = new Set(prev);
+                            c.skus.forEach(function(sku){ n.add(sku); });
+                            return n;
+                          });
+                        }}
+                        style={{padding:"8px 14px",borderRadius:20,fontSize:13,fontWeight:already?600:400,
+                                cursor:(already || !c.skus.length)?"default":"pointer",fontFamily:"inherit",
+                                border: already?"2px solid #1f7f44":"1px solid #e5e7eb",
+                                background:already?"#dcf2e2":"#fff", color:already?"#1f7f44":"#374151",
+                                opacity:c.skus.length?1:.5}}>
+                        {already ? "✓ " : ""}{c.name} <span style={{fontSize:11,opacity:.7}}>({c.skus.length})</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {checkMode === "color" && (
+              <div style={{overflowY:"auto",flex:1,padding:"8px 16px 4px"}}>
+                <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                  {checkColorChips.length === 0 ? (
+                    <div style={{padding:"20px 0",width:"100%",textAlign:"center",color:"#9ca3af",fontSize:14}}>
+                      ไม่พบสีของสินค้า
+                    </div>
+                  ) : checkColorChips.map(function(c) {
+                    var already = c.skus.length > 0 && c.skus.every(function(sku){ return checkPicked.has(sku); });
+                    return (
+                      <button key={c.name} disabled={already}
+                        onClick={function(){
+                          setCheckPicked(function(prev){
+                            var n = new Set(prev);
+                            c.skus.forEach(function(sku){ n.add(sku); });
+                            return n;
+                          });
+                        }}
+                        style={{padding:"8px 14px",borderRadius:20,fontSize:13,fontWeight:already?600:400,
+                                cursor:already?"default":"pointer",fontFamily:"inherit",
+                                border: already?"2px solid #1f7f44":"1px solid #e5e7eb",
+                                background:already?"#dcf2e2":"#fff", color:already?"#1f7f44":"#374151"}}>
+                        <span style={{width:10,height:10,borderRadius:"50%",background:c.hex,
+                                      border:"1px solid rgba(0,0,0,.1)",display:"inline-block",
+                                      marginRight:4,verticalAlign:"middle"}}/>
+                        {already ? "✓ " : ""}{c.name} <span style={{fontSize:11,opacity:.7}}>({c.skus.length})</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {/* รายการที่จะส่ง — union ของทั้ง 2 แหล่ง (checkFinalSkus) ให้เห็นก่อนกดส่งเสมอ ไม่ว่า
+                จะเลือกด้วยวิธีไหน · ห้ามโชว์แค่รหัส+ชื่อ (กติกา UI ของ repo) และต้องมีเพดาน render */}
+            {checkFinalSkus.size > 0 && (
+              <div style={{borderTop:"1px solid #e5e7eb",padding:"10px 16px",overflowY:"auto",maxHeight:"30vh"}}>
+                <div style={{fontSize:13,fontWeight:700,marginBottom:8}}>
+                  📋 จะส่งไปนับ {checkFinalSkus.size} รายการ
+                </div>
+                <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                  {checkPreviewShown.map(function(p) {
+                    return (
+                      <div key={p.sku} style={{display:"flex",alignItems:"center",gap:8}}>
+                        <div style={{width:36,height:36,borderRadius:8,flexShrink:0,overflow:"hidden",
+                                     background:"#f3f4f6",border:"1px solid #e5e7eb",
+                                     display:"flex",alignItems:"center",justifyContent:"center"}}>
+                          {p.imageUrl
+                            ? <img src={p.imageUrl} alt={p.name} loading="lazy"
+                                style={{width:"100%",height:"100%",objectFit:"contain"}}/>
+                            : <span style={{fontSize:16}}>{CAT_EMOJI[p.cat] || "📦"}</span>}
+                        </div>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:11,fontFamily:"monospace",color:"#6b7280"}}>{p.sku}</div>
+                          <div style={{fontSize:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}</div>
+                        </div>
+                        <button onClick={function(){
+                            setCheckExcluded(function(prev){ var n = new Set(prev); n.add(p.sku); return n; });
+                          }}
+                          style={{background:"none",border:"none",fontSize:16,cursor:"pointer",color:"#9ca3af",flexShrink:0}}>✕</button>
+                      </div>
+                    );
+                  })}
+                  {checkFinalProducts.length > CHECK_PREVIEW_CAP && !checkShowAll && (
+                    <button onClick={function(){ setCheckShowAll(true); }}
+                      style={{padding:"8px 0",background:"none",border:"none",color:"#1f7f44",fontSize:12,
+                              fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
+                      และอีก {checkFinalProducts.length - CHECK_PREVIEW_CAP} รายการ (แตะเพื่อดูทั้งหมด)
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+            <div style={{padding:"16px",borderTop:"1px solid #e5e7eb"}}>
+              {/* ⚠️ อ่านจาก checkFinalSkus/checkFinalProducts (union ของ 🏭 ร้านค้า + 🔍 ค้นชื่อ)
+                  ที่เดียว — ห้ามคำนวณ products.filter(...) ซ้ำอีกชุดในนี้ (กฎเหล็ก Plan §2 ข้อ 3) */}
+              <button disabled={!checkFinalSkus.size || sendingCheck}
+                onClick={async function(){
+                  var ps = checkFinalProducts;
+                  if(!ps.length) return;
+                  setSendingCheck(true);
+                  try {
+                    var res = await dmjFetch(SHEET_DEPLOY_URL, {
+                      method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"},
+                      // suppliers = รหัสร้านที่เลือกจากแท็บ 🏭 (ไม่ใช่ SKU) — backend ใช้แทนรายชื่อ
+                      // สินค้าในแจ้งเตือน (อ่านง่ายกว่ารายชื่อสินค้าเป็นสิบ-ร้อยตัว) · ยังเป็น
+                      // Array.from(checkSuppliers) เป๊ะเหมือนเดิม แม้บาง SKU ใน ps จะมาจากแท็บ 🔍
+                      // ก็ตาม (Option B ไม่ผสม 2 แหล่ง ดู Plan §2 กฎเหล็กข้อ 5)
+                      // sourceLabel (Phase 4) = ข้อความสรุปทุกแท็บที่มีส่วนร่วมจริง — backend ให้
+                      // ตัวนี้ชนะ suppliers/names เวลาสร้างข้อความแจ้งเตือน (stockCheckPreviewText_)
+                      body: JSON.stringify({createStockCheck:true, actor: role,
+                        skus: ps.map(function(p){ return p.sku; }),
+                        names: ps.map(function(p){ return p.name||p.sku; }),
+                        suppliers: Array.from(checkSuppliers),
+                        sourceLabel: checkSourceLabel}),
+                    });
+                    var json = await dmjJson(res);
+                    if(json.success){
+                      showCheckToast({type:"success",message:"ส่งคำขอเช็คสต็อก " + ps.length + " รายการแล้ว ✅"});
+                      setCheckSendOpen(false);
+                      setCheckSuppliers(new Set());
+                      resetCheckPicker();
+                    } else showCheckToast({type:"error",message:"เกิดข้อผิดพลาด"});
+                  } catch(e){ showCheckToast({type:"error",message:"ส่งไม่สำเร็จ"}); }
+                  setSendingCheck(false);
+                }}
+                style={{width:"100%",background:checkFinalSkus.size?"#1f7f44":"#e5e7eb",
+                        color:checkFinalSkus.size?"#fff":"#9ca3af",border:"none",borderRadius:10,
+                        padding:"14px",fontWeight:700,fontSize:16,cursor:checkFinalSkus.size?"pointer":"not-allowed"}}>
+                {sendingCheck ? "กำลังส่ง..." : checkFinalSkus.size ? "📤 ส่งขอเช็ค " + checkFinalSkus.size + " รายการ" : "เลือกสินค้าก่อน"}
+              </button>
             </div>
           </div>
         </div>

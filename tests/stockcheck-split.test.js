@@ -24,13 +24,13 @@ function grab(re) {
 
 const COLS     = grab(/const SHEET_STOCK_CHECK = "[^"]*";/) + '\n'
                + grab(/var STOCK_CHECK_HEADERS_ = \[[\s\S]*?\];/) + '\n'
-               + grab(/var COL_CHK_FS_STATUS = 9[\s\S]*?COL_CHK_SUPPLIERS = 15;/);
+               + grab(/var COL_CHK_FS_STATUS = 9[\s\S]*?COL_CHK_SOURCE = 16;/);
 const F_READ    = grab(/function readStockCheckRequests_\(\) \{[\s\S]*?\n\}/);
 const F_DONE    = grab(/function completeStockCheckRequest_\(reqId, actor, side, roleHint\) \{[\s\S]*?\n\}/);
 const F_SUM     = grab(/function stockCheckCountSummary_\(ss, row\) \{[\s\S]*?\n\}/);
-const F_PREVIEW = grab(/function stockCheckPreviewText_\(suppliers, names\) \{[\s\S]*?\n\}/);
+const F_PREVIEW = grab(/function stockCheckPreviewText_\(suppliers, names, sourceLabel\) \{[\s\S]*?\n\}/);
 const F_GETSHEET = grab(/function getOrCreateStockCheckSheet_\(ss\) \{[\s\S]*?\n\}/);
-const F_CREATE  = grab(/function createStockCheckRequest_\(skus, names, actor, suppliers\) \{[\s\S]*?\n\}/);
+const F_CREATE  = grab(/function createStockCheckRequest_\(skus, names, actor, suppliers, sourceLabel\) \{[\s\S]*?\n\}/);
 const C_PROD   = grab(/const SHEET_PRODUCTS  = "[^"]*";/) + '\n'
                + grab(/const COL_PROD_SKU    = 2;/) + '\n'
                + grab(/const COL_PROD_QTYWH  = 8;/);
@@ -325,8 +325,8 @@ describe('จุดเชื่อมต่อในโค้ดจริง (�
     expect(APP).toContain('myPendingChecks.length > 0');
     expect(APP).toContain('setActiveCheckRequest(myPendingChecks[0])');
   });
-  it('dispatch ส่ง data.suppliers เข้า createStockCheckRequest_ (ไม่งั้นแจ้งเตือนไม่มีรหัสร้านให้ใช้)', () => {
-    expect(SRC).toContain('createStockCheckRequest_(data.skus, data.names, actor, data.suppliers)');
+  it('dispatch ส่ง data.suppliers + data.sourceLabel เข้า createStockCheckRequest_ (ไม่งั้นแจ้งเตือนไม่มีรหัสร้าน/ข้อความสรุปให้ใช้)', () => {
+    expect(SRC).toContain('createStockCheckRequest_(data.skus, data.names, actor, data.suppliers, data.sourceLabel)');
   });
   it('ฝั่งที่ส่งคำขอ (views-main.jsx) ส่ง suppliers จริง ไม่ใช่แค่ skus/names', () => {
     expect(VMAIN).toContain('suppliers: Array.from(checkSuppliers)');

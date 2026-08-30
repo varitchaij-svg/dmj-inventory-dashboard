@@ -2792,7 +2792,7 @@ function doPost(e) {
     if (data.assignMtoJob)    return assignMtoJob(ss, data, actor);
 
     // ─── Stock Check Requests ───
-    if (data.createStockCheck) return createStockCheckRequest_(data.skus, data.names, actor, data.suppliers);
+    if (data.createStockCheck) return createStockCheckRequest_(data.skus, data.names, actor, data.suppliers, data.sourceLabel);
     // ⚠️ data.side อาจไม่มา = client เก่าที่ cache .jsx ก่อนฟีเจอร์แยกฝั่ง (fs/wh) → ส่ง roleHint
     //    ที่ server ยืนยันเอง (`_sess.role`) หรือ `data.actor`="frontstore"/"warehouse" ของ client เก่า
     //    ที่ยังไม่ล็อกอิน เพื่อให้ backend เดา side ได้เอง แทนการ "ปิดทั้งใบ" ที่ทำฝั่งที่ยังไม่เสร็จหายเงียบ ๆ
@@ -16142,11 +16142,15 @@ const SHEET_STOCK_CHECK = "คำขอเช็คสินค้า";
 //  1 reqId · 2 timestamp · 3 requester · 4 skuList · 5 nameList · 6 status · 7 completedBy · 8 completedAt
 //  9 fsStatus · 10 fsBy · 11 fsAt · 12 whStatus · 13 whBy · 14 whAt   ← เพิ่ม ส.ค. 2026 (แยก 2 ฝั่ง)
 //  15 supplierList ← เพิ่ม ส.ค. 2026 (รหัสร้านที่เลือกตอนส่งคำขอ — ใช้แทนรายชื่อสินค้าในแจ้งเตือน)
+//  16 sourceLabel ← เพิ่ม ส.ค. 2026 (Phase 4 docs/PLAN-STOCKCHECK-KEYWORD-SELECT.md — ข้อความสรุป
+//     "เลือกด้วยวิธีไหน" ประกอบจากทุกแท็บที่มีส่วนร่วมจริง เช่น "🏭 DS · 🔍 โบตั๋น" ใช้แทน
+//     supplierList เวลาเลือกด้วยคำค้น/หมวด/สี ที่ supplierList จะว่างเปล่า)
 var STOCK_CHECK_HEADERS_ = ["reqId","timestamp","requester","skuList","nameList","status",
-  "completedBy","completedAt","fsStatus","fsBy","fsAt","whStatus","whBy","whAt","supplierList"];
+  "completedBy","completedAt","fsStatus","fsBy","fsAt","whStatus","whBy","whAt","supplierList","sourceLabel"];
 var COL_CHK_FS_STATUS = 9, COL_CHK_FS_BY = 10, COL_CHK_FS_AT = 11;
 var COL_CHK_WH_STATUS = 12, COL_CHK_WH_BY = 13, COL_CHK_WH_AT = 14;
 var COL_CHK_SUPPLIERS = 15;
+var COL_CHK_SOURCE = 16;
 
 function getOrCreateStockCheckSheet_(ss) {
   var sh = ss.getSheetByName(SHEET_STOCK_CHECK);
@@ -16193,6 +16197,9 @@ function readStockCheckRequests_() {
       whAt:        String(r[COL_CHK_WH_AT - 1] || ""),
       // รหัสร้านที่ขอเช็ค — แถวเก่าก่อนมีคอลัมน์นี้ (ก่อน ส.ค. 2026) ไม่มีข้อมูล → [] (migration-safe)
       suppliers: (function () { try { return JSON.parse(r[COL_CHK_SUPPLIERS - 1] || "[]"); } catch (e) { return []; } })(),
+      // ข้อความสรุปวิธีเลือกสินค้า (Phase 4) — แถวเก่าก่อนมีคอลัมน์นี้ = "" (migration-safe →
+      // ฝั่งอ่านถอยไปใช้ suppliers/names ตามลำดับเดิมของ stockCheckPreviewText_)
+      sourceLabel: String(r[COL_CHK_SOURCE - 1] || ""),
     };
   }).filter(function(r){ return r.reqId; });
 }
@@ -16200,7 +16207,10 @@ function readStockCheckRequests_() {
 // ข้อความ preview สำหรับแจ้งเตือนคำขอเช็คสต็อก — โชว์ "รหัสร้าน" แทนรายชื่อสินค้าทีละตัว (เจ้าของสั่ง
 // ส.ค. 2026: รายชื่อสินค้าเป็นสิบ-ร้อยตัวอ่านไม่มีความหมาย รหัสร้านสื่อความหมายกว่าว่าให้ไปเช็คของใคร)
 // ⚠️ migration-safe: คำขอเก่าก่อนมีคอลัมน์ supplierList (ว่าง) → ถอยไปใช้รายชื่อสินค้าแบบเดิม
-function stockCheckPreviewText_(suppliers, names) {
+// ลำดับความสำคัญ (Phase 4): sourceLabel (ครอบคลุมทุกวิธีเลือกจริง — ร้าน/ค้นชื่อ/หมวด/สี ผสมกันได้)
+// → suppliers (🏭 เดิม เผื่อ .jsx เก่ายังไม่ส่ง sourceLabel) → names (fallback สุดท้าย)
+function stockCheckPreviewText_(suppliers, names, sourceLabel) {
+  if (sourceLabel) return sourceLabel;
   var sup = suppliers || [];
   if (sup.length) {
     var sp = sup.slice(0, 3).join(", ");
@@ -16213,7 +16223,7 @@ function stockCheckPreviewText_(suppliers, names) {
   return np;
 }
 
-function createStockCheckRequest_(skus, names, actor, suppliers) {
+function createStockCheckRequest_(skus, names, actor, suppliers, sourceLabel) {
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var sh = getOrCreateStockCheckSheet_(ss);
   var rows = sh.getDataRange().getValues();
@@ -16221,15 +16231,16 @@ function createStockCheckRequest_(skus, names, actor, suppliers) {
   var reqId = "CHK-" + String(seq).padStart(3, "0");
   var ts = Utilities.formatDate(new Date(), "Asia/Bangkok", "yyyy-MM-dd HH:mm");
   var supplierList = Array.isArray(suppliers) ? suppliers.filter(function (s) { return s; }) : [];
-  // คอลัมน์ 9-15 = fsStatus/fsBy/fsAt/whStatus/whBy/whAt/supplierList — เริ่มต้นทั้ง 2 ฝั่ง "pending"
+  var srcLabel = String(sourceLabel || "");
+  // คอลัมน์ 9-16 = fsStatus/fsBy/fsAt/whStatus/whBy/whAt/supplierList/sourceLabel — เริ่มต้นทั้ง 2 ฝั่ง "pending"
   sh.appendRow([reqId, ts, actor || "owner", JSON.stringify(skus || []), JSON.stringify(names || []),
-    "pending", "", "", "pending", "", "", "pending", "", "", JSON.stringify(supplierList)]);
+    "pending", "", "", "pending", "", "", "pending", "", "", JSON.stringify(supplierList), srcLabel]);
   // skipTsUpdate=true — คำขอเช็คสต็อกไม่เปลี่ยน "จำนวนสินค้า" จึงห้าม bump dmj_last_write_ts
   // มิฉะนั้น client ที่โหลดข้อมูลไว้ก่อนจะถูกมองว่า conflict → กดส่งของไม่ได้
   invalidateCache_(true);
   // แจ้งเตือน LINE group — wrap try-catch เพื่อไม่ให้ LINE error พัง endpoint
   var nameList = names || [];
-  var preview = stockCheckPreviewText_(supplierList, nameList);
+  var preview = stockCheckPreviewText_(supplierList, nameList, srcLabel);
   try {
     var lineMsg = "📋 มีคำขอเช็คสต็อก " + nameList.length + " รายการ\n" + preview;
     sendLineGroup_(lineMsg);
@@ -16327,9 +16338,12 @@ function completeStockCheckRequest_(reqId, actor, side, roleHint) {
       try { names = JSON.parse(r[4] || "[]"); } catch (e) {}
       var suppliersRow = [];
       try { suppliersRow = JSON.parse(r[COL_CHK_SUPPLIERS - 1] || "[]"); } catch (e) {}
+      // sourceLabel (Phase 4) — อ่านจาก column ใหม่ตรง ๆ (แถวนี้เป็น row array ดิบ ไม่ผ่าน
+      // readStockCheckRequests_) แถวเก่าก่อนมีคอลัมน์นี้ = "" → stockCheckPreviewText_ ถอยไปใช้ suppliersRow
+      var sourceLabelRow = String(r[COL_CHK_SOURCE - 1] || "");
       // typeof guard: กัน env เทสต์ที่ eval เฉพาะฟังก์ชันนี้โดยไม่มี stockCheckPreviewText_ ให้ (ยังส่ง noti ได้)
       var preview = (typeof stockCheckPreviewText_ === 'function')
-        ? stockCheckPreviewText_(suppliersRow, names)
+        ? stockCheckPreviewText_(suppliersRow, names, sourceLabelRow)
         : names.slice(0, 3).join(", ");
       if (side === 'fs' || side === 'wh') {
         var sideLabel = side === 'fs' ? "หน้าร้าน" : "คลัง";
