@@ -74,26 +74,32 @@ Baseline ที่รันยืนยัน: unit **1671/1671 ผ่าน** (
 
 ---
 
-## 🟠 ยังไม่ได้ทำ — งานที่ต้องสั่งต่อ (idempotency ของ document-emitter)
+## 🟠 idempotency ของ document-emitter — 1/5 เสร็จแล้ว
 
 parser swap ทำให้ error **อ่านออก** ทุกจุดแล้ว และกำจัด false-success หมดแล้ว **แต่ยังไม่กัน
 "retry → เอกสารซ้ำ"** สำหรับ endpoint ที่ออกเอกสาร/สร้างของใน ZORT — พวกนี้ยังไม่มี idempotency
 key (ต่างจาก `createSaleBill` ที่ได้ `billCid` แล้วรอบนี้ · order=`cid` · transfer=`tid`)
 
-| endpoint (.gs) | frontend helper | ผลถ้า retry ตอน GAS ตอบ HTML |
-|---|---|---|
-| `createQuotation` | `syncCreateQuotation` | ใบเสนอราคาซ้ำใน ZORT |
-| `editQuotation` | `syncEditQuotation` | แก้ซ้ำ (เสี่ยงน้อยกว่า create) |
-| `issueFullTaxInvoice` | `syncIssueFullTaxInvoice` | **ออกใบกำกับภาษีจริงซ้ำใบ** (เจ็บสุด) |
-| `addNewProduct` | `syncAddProduct` | สินค้าซ้ำใน ZORT |
-| `addPurchaseIn` | `syncPurchaseIn` | ใบซื้อ (PO) ซ้ำ |
+| endpoint (.gs) | frontend helper | ผลถ้า retry ตอน GAS ตอบ HTML | สถานะ |
+|---|---|---|---|
+| `issueFullTaxInvoice` | `syncIssueFullTaxInvoice` | **ออกใบกำกับภาษีจริงซ้ำใบ** (เจ็บสุด) | ✅ ทำแล้ว (ดู CLAUDE.md) |
+| `createQuotation` | `syncCreateQuotation` | ใบเสนอราคาซ้ำใน ZORT | ยังไม่ทำ |
+| `addNewProduct` | `syncAddProduct` | สินค้าซ้ำใน ZORT | ยังไม่ทำ |
+| `addPurchaseIn` | `syncPurchaseIn` | ใบซื้อ (PO) ซ้ำ | ยังไม่ทำ |
+| `editQuotation` | `syncEditQuotation` | แก้ซ้ำ (เสี่ยงน้อยกว่า create) | ยังไม่ทำ |
 
-**ทำไมไม่ทำรอบนี้**: แต่ละตัวคือการผ่าตัดแบบ `billCid` เต็ม ๆ (คอลัมน์ชีตใหม่ + check endpoint +
-frontend cid ref) บนเส้นทางที่ **เทสต์กับ ZORT จริงไม่ได้ในเซสชันนี้** · ทำ 5 ตัวรวดเดียว = surface
-ใหญ่เกินกว่าจะกล้าปล่อยบน production ที่รันอยู่ · billCid (money path) ทำไปแล้วเพราะความถี่/ผลกระทบ
-สูงสุด · ที่เหลือความถี่ต่ำกว่ามาก
+**`issueFullTaxInvoice` ไม่ได้ใช้ pattern `billCid` ตรง ๆ** — endpoint นี้ไม่เขียนชีตของเราเอง
+(เขียนแค่ Audit Log) จึงไม่มี "ของเราเอง" ให้เก็บ cid ไว้เทียบ · แก้ด้วยการถาม **ZORT ตรง ๆ**
+(`findExistingTaxInvoiceDoc_` ผ่าน `GetDocumentOrders` — ตัวเดียวกับที่ `lookupSaleBill` ใช้เตือน
+อยู่แล้ว) เป็น source of truth แทน ไม่ต้องเพิ่มคอลัมน์ชีต/cache/doGet check endpoint ใหม่เลย
+· รายละเอียดเต็มอยู่ที่ `CLAUDE.md` หัวข้อ "🧾 กันออกใบกำกับภาษีย้อนหลังซ้ำ"
 
-**สั่งต่อยังไง** (เรียงตามความเจ็บ): `issueFullTaxInvoice` → `createQuotation` → `addNewProduct` →
+**ที่เหลือ 4 ตัว** — เขียนชีตของเราเองด้วย (`createQuotation`/`addNewProduct`/`addPurchaseIn`/
+`editQuotation`) จึงต้อง copy pattern `billCid` เต็มรูปแบบจริง ๆ (คอลัมน์ชีตใหม่ + check endpoint +
+frontend cid ref) บนเส้นทางที่ **เทสต์กับ ZORT จริงไม่ได้ในเซสชัน** · ทำทีละตัว ไม่รวด — surface
+ใหญ่เกินกว่าจะกล้าปล่อยบน production ที่รันอยู่พร้อมกันหลายตัว
+
+**สั่งต่อยังไง** (เรียงตามความเจ็บที่เหลือ): `createQuotation` → `addNewProduct` →
 `addPurchaseIn` → `editQuotation` · **ทำทีละตัว copy แพทเทิร์น billCid ตรง ๆ**:
 1. GAS: คอลัมน์ `<x>Cid` ต่อท้ายชีตที่ log endpoint นั้น (ห้ามแทรกกลาง) + เช็คในล็อกก่อนแตะ ZORT
    + cache ผล + doGet `action=<x>Check&cid=`

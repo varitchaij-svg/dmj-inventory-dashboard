@@ -1903,6 +1903,35 @@ SHEET_ATT_SHIFTS = "ตั้งค่ากะ"   // ตำแหน่ง, ว
   ZORT + อยู่ใน immediate gate) · `tests/gasjson.test.js` (บังคับ `dmjJson` + ถาม `billCheck` ก่อนแดง)
   · browser test เคส "ออกบิล GAS ตอบ HTML" (ยิง POST ครั้งเดียว ไม่แดง เข้าหน้าสรุป)
 
+### 🧾 กันออกใบกำกับภาษีย้อนหลังซ้ำ (`issueFullTaxInvoice`) — ตัวแรกในกลุ่ม document-emitter (ส.ค. 2026)
+
+`issueFullTaxInvoice`/`createQuotation`/`editQuotation`/`addNewProduct`/`addPurchaseIn` ถูกระบุไว้
+ใน `docs/HANDOFF-SCRUTINIZE-2026-08-10.md` ว่ายังไม่มี idempotency key เหมือน order/transfer/
+billCid — retry ตอน GAS ตอบ HTML จะสร้างเอกสารซ้ำใน ZORT · `issueFullTaxInvoice` ทำก่อนเพราะ
+เจ็บสุด (ใบกำกับภาษีซ้ำใบ = ปัญหาบัญชี/ภาษีจริง)
+
+- **ต่างจาก `billCid`/`cid`/`tid`**: endpoint นี้ไม่เขียนชีตของเราเองเลย (เขียนแค่ Audit Log)
+  → ไม่มี "ของเราเอง" ให้เก็บ cid ไว้เทียบ ใช้ **ZORT เองเป็น source of truth แทน** —
+  `GetDocumentOrders` บอกได้อยู่แล้วว่า order นี้มีใบกำกับ (documenttype 2) ออกไปหรือยัง
+  (`lookupSaleBill` เดิมก็เรียกอันนี้อยู่แล้วเพื่อเตือนผู้ใช้ก่อนกด — ดึงมาเป็น
+  **`findExistingTaxInvoiceDoc_(orderId)`** ตัวเดียว ใช้ร่วมกัน 2 จุด ไม่มี query ซ้ำ)
+- `issueFullTaxInvoice` เช็คตัวนี้ **ในล็อก ก่อนแตะ `EditOrderInfo`/`AddDocumentOrder`** — เจอ
+  เอกสารเดิม → คืน `ok({...documentNumber, dedup:true})` ไม่ใช่ error (กันทั้ง retry หลังตอบ
+  HTML และกดปุ่มซ้ำสองครั้งเร็ว ๆ ที่คำขอที่สองรอล็อกอยู่)
+- ⚠️ **ไม่ต้องเพิ่ม cid/doGet check endpoint ใหม่** — ต่างจาก order/transfer/bill ตรงที่ ZORT
+  ตอบได้เองอยู่แล้วว่า "มีเอกสารนี้หรือยัง" ไม่ต้องพึ่งชีต/cache ของเรา (เพิ่ม cid ที่นี่จะซ้ำซ้อน)
+  · แลกด้วย GET เพิ่ม 1 ครั้งต่อการออกใบกำกับ (action ความถี่ต่ำ ไม่ใช่ hot path — ไม่กระทบ
+  ความเร็วแอปโดยรวม)
+- ⚠️ **ห้าม copy logic `findExistingTaxInvoiceDoc_` แยกอีกชุด** — สองจุดตอบไม่ตรงกันได้ถ้า drift
+- เทสต์: `tests/tax-invoice-idempotent.test.js` (eval `findExistingTaxInvoiceDoc_` จริงจาก `.gs`
+  ไม่ copy + meta-test คุมลำดับ "เช็คก่อนแตะ ZORT" และ "เช็คหลังคว้าล็อก" + กัน `lookupSaleBill`
+  มี query ซ้ำแยกเอง)
+
+**ที่เหลือในกลุ่มนี้ (ยังไม่ทำ)**: `createQuotation` → `addNewProduct` → `addPurchaseIn` →
+`editQuotation` (เรียงตามความเจ็บ) — endpoint พวกนี้ **เขียนชีตของเราเองด้วย** (ต่างจาก
+`issueFullTaxInvoice`) จึงต้อง copy pattern `billCid` เต็มรูปแบบ (คอลัมน์ cid ต่อท้ายชีต + เช็ค
+ในล็อก + cache + doGet check endpoint) ไม่ใช่ pattern "ถาม ZORT ตรง ๆ" แบบนี้
+
 ### ⚠️ res.json() ดิบ = "Unexpected token '<'" (บทเรียนข้อ 13) — มี SCAN gate แล้ว
 
 `tests/gasjson.test.js` มี **meta-test แบบ SCAN** (ไม่ใช่ allowlist รายฟังก์ชัน) สแกนทุกไฟล์ `.jsx`

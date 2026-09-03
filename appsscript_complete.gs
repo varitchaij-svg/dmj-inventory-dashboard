@@ -15380,6 +15380,26 @@ function findZortOrderByNumber_(orderNumber) {
   return null;
 }
 
+// หาใบกำกับภาษี (documenttype 2) ที่เคยออกให้ order นี้แล้วหรือยัง — คืนเลขที่เอกสารหรือ null
+// ตัวเดียวใช้ทั้ง (1) lookupSaleBill (แจ้งเตือนก่อนกด) และ (2) issueFullTaxInvoice (กันออกซ้ำจริง
+// — ดู comment ที่นั่น) ห้ามแยกเป็น query คนละที่ ไม่งั้นสองจุดตอบไม่ตรงกัน
+function findExistingTaxInvoiceDoc_(orderId) {
+  if (orderId == null || String(orderId).trim() === "") return null;
+  try {
+    var H = zortHeaders_();
+    var docRes = JSON.parse(UrlFetchApp.fetch(ZORT_BASE + "/Document/GetDocumentOrders?id=" + encodeURIComponent(orderId),
+      { method: "get", headers: H, muteHttpExceptions: true }).getContentText() || "{}");
+    var docs = docRes.list || docRes.documents || docRes.data || [];
+    for (var k = 0; k < docs.length; k++) {
+      var dt = String(docs[k].documenttype != null ? docs[k].documenttype : docs[k].type);
+      if (dt === "2" || /tax/i.test(String(docs[k].documenttypename || ""))) {
+        return docs[k].number || docs[k].documentnumber || "(มีแล้ว)";
+      }
+    }
+  } catch (e) { /* ไม่ critical — ปล่อยผ่าน (เดิมเป็น best-effort อยู่แล้ว) */ }
+  return null;
+}
+
 // ดึงบิลขายเดิมจาก ZORT (read-only) → normalize เป็นรูปที่ frontend เอาไปโชว์ + พิมพ์ A4
 function lookupSaleBill(orderNumber) {
   var num = String(orderNumber || "").trim();
@@ -15402,18 +15422,8 @@ function lookupSaleBill(orderNumber) {
   if (!(preVat > 0) || isNaN(preVat)) { preVat = Math.round(grand / 1.07 * 100) / 100; vat = Math.round((grand - preVat) * 100) / 100; }
   var grossUnits = items.reduce(function (s, it) { return s + it.qty; }, 0);
 
-  // เช็คว่ามีใบกำกับภาษี (documenttype 2) ออกไปแล้วหรือยัง — กันออกซ้ำ
-  var existingDoc = null;
-  try {
-    var H = zortHeaders_();
-    var docRes = JSON.parse(UrlFetchApp.fetch(ZORT_BASE + "/Document/GetDocumentOrders?id=" + encodeURIComponent(found.id),
-      { method: "get", headers: H, muteHttpExceptions: true }).getContentText() || "{}");
-    var docs = docRes.list || docRes.documents || docRes.data || [];
-    for (var k = 0; k < docs.length; k++) {
-      var dt = String(docs[k].documenttype != null ? docs[k].documenttype : docs[k].type);
-      if (dt === "2" || /tax/i.test(String(docs[k].documenttypename || ""))) { existingDoc = docs[k].number || docs[k].documentnumber || "(มีแล้ว)"; break; }
-    }
-  } catch (e) { /* ไม่ critical — ปล่อยผ่าน */ }
+  // เช็คว่ามีใบกำกับภาษี (documenttype 2) ออกไปแล้วหรือยัง — กันออกซ้ำ (แจ้งเตือนก่อนกด)
+  var existingDoc = findExistingTaxInvoiceDoc_(found.id);
 
   return ok({
     orderId: found.id,
@@ -15448,6 +15458,18 @@ function issueFullTaxInvoice(orderNumber, customer, actor, orderId) {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return error("ระบบกำลังทำงานอื่นอยู่ ลองใหม่อีกครั้ง");
   try {
+    // ── กันออกใบกำกับซ้ำ — เช็ค "ในล็อก" ก่อนแตะ ZORT ใด ๆ ────────────────────
+    // ต่างจาก createSaleBill (billCid + ชีตของเราเอง) ตรงที่ endpoint นี้ไม่เขียนชีตไหนเลย
+    // (เขียนแค่ Audit Log) → ไม่มี "ของเราเอง" ให้จำผลไว้ ใช้ ZORT ตรง ๆ เป็น source of truth แทน
+    // (GetDocumentOrders ตัวเดียวกับที่ lookupSaleBill ใช้เตือนก่อนหน้านี้) กันทั้ง 2 เคส:
+    // (ก) retry หลัง GAS ตอบ HTML/browser ตัดสายทั้งที่สร้างเอกสารสำเร็จไปแล้ว
+    // (ข) กดปุ่มซ้ำสองครั้งเร็ว ๆ (คำขอที่สองรอล็อกอยู่ พอได้ล็อกจะเห็นเอกสารที่คำขอแรกสร้างแล้ว)
+    var _existingDoc = findExistingTaxInvoiceDoc_(oid);
+    if (_existingDoc) {
+      Logger.log("issueFullTaxInvoice: มีใบกำกับภาษีอยู่แล้ว (" + _existingDoc + ") → ไม่สร้างซ้ำ");
+      return ok({ orderNumber: num, documentNumber: _existingDoc, dedup: true });
+    }
+
     var headers = Object.assign({}, zortHeaders_(), { "Content-Type": "application/json" });
 
     // (1) EditOrderInfo — พยายามใส่/อัปเดตข้อมูลลูกค้าเข้า order (best-effort)
