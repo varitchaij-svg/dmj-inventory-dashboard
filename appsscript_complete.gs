@@ -887,11 +887,16 @@ var ROLE_ACTIONS_ = {
                "voidQuotation", "approveQuotation", "setQuoteSale", "getInvoiceNumber", "attendanceToday", "createStockCheck",
                "saveQuoteFollowup",
                ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
-  frontstore: ["recordUnscannedSale"].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
+  // completeStockCheck (side:'fs') = ปุ่ม "เช็คเสร็จ" ใน FrontStoreView (แท็บ "frontstore")
+  // เดิมหลุดจากตารางนี้ — frontstore เป็น role เดียวที่มีแท็บนี้เป็นงานหลัก แต่กดปิดคำขอ
+  // ฝั่งตัวเองไม่ได้เมื่อเปิด REQUIRE_LOGIN (F03 ในรายงานตรวจระบบ 5 ก.ย. 2026)
+  frontstore: ["completeStockCheck", "recordUnscannedSale"].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
+  // recordUnscannedSale = ปุ่ม "ขายไม่สแกน" ใน StockCountView (แท็บ "stockcount" — เฉพาะ
+  // owner/warehouse/dev) เดิมหลุดจากตารางนี้เช่นกัน — warehouse เข้าแท็บนี้ได้จริงแต่กดปุ่มไม่ได้
   warehouse:  ["deductStock", "confirmStockCount", "startStockCount", "closeStockCount",
                "deleteLockEntry", "addNewProduct", "uploadProductPhoto",
                "addPurchaseIn", "zeroStock", "createStockCheck", "completeStockCheck",
-               "deleteOrder", "deleteOrders", "reserveForm",
+               "deleteOrder", "deleteOrders", "reserveForm", "recordUnscannedSale",
                ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   // employee มีแท็บ frontstore (FrontStoreView) ด้วย → ต้องมี recordUnscannedSale เหมือน frontstore
   employee:   ["deleteLockEntry", "deleteOrder", "deleteOrders", "confirmStockCount",

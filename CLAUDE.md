@@ -1628,19 +1628,49 @@ status ซ้ำ เพราะ resolver ตรวจแล้ว"* ซึ่�
 ไม่เห็นว่าปุ่มเรนเดอร์บนจอจริงไหม** ซึ่งเป็นความพังแบบ "หน้าจอดูปกติ มีแค่ปุ่มหาย" ที่ไม่มีใคร
 รายงานเป็นบั๊ก
 
+### F03 — หน้าจอเรียกคำสั่งที่บทบาทไม่มีสิทธิ์ (แก้แล้ว)
+
+ยืนยันตรงกับรายงานทุกจุด: `frontstore` (role เดียวที่มีแท็บ "เช็คหน้าร้าน" เป็นงานหลัก) ไม่มี
+`completeStockCheck` ใน `ROLE_ACTIONS_` · `warehouse` ไม่มี `recordUnscannedSale` ทั้งที่
+`StockCountView` (แท็บ "stockcount" — owner/warehouse/dev เท่านั้น) แสดงปุ่ม "ขายไม่สแกน" ให้
+ทุกคนที่เข้าแท็บได้กด (component ไม่รับ prop `role` มากรองปุ่มนี้เลย) · **วันนี้ยังเป็น no-op**
+เพราะ `REQUIRE_LOGIN` default ปิด แต่เป็นเงื่อนไขบังคับก่อนวันเปิด flag ไม่งั้นหน้าร้าน/คลังกดปุ่ม
+ที่เห็นอยู่ตรงหน้าไม่ได้ทั้งตำแหน่ง (ปฏิเสธทันทีด้วย "ไม่มีสิทธิ์")
+
+- เติม `completeStockCheck` เข้า `ROLE_ACTIONS_.frontstore` · เติม `recordUnscannedSale` เข้า
+  `ROLE_ACTIONS_.warehouse` (appsscript_complete.gs)
+- ⚠️ **นอกเหนือจากรายงาน — เจอเพิ่มตอนไล่โค้ด**: callback ปิดคำขอใน `app.jsx`
+  (`onCheckComplete` ของทั้ง `StockCountView`/side `wh` และ `FrontStoreView`/side `fs`) เดิม
+  `await dmjFetch(...)` แล้วจบ **ไม่เคยอ่านคำตอบเลย** — บทเรียนข้อ 13 ตรง ๆ · `markCheckSideDone`
+  (optimistic patch) ทำงานไป**ก่อน**ยิง request แล้ว ถ้า server ปฏิเสธ (สิทธิ์ไม่พอ — ตรงเคสนี้เลย
+  ก่อนแก้ ROLE_ACTIONS_ ด้านบน หรือเดา `side` ไม่ได้) จอก็ยังโชว์ "ปิดคำขอสำเร็จ" อยู่ดี — ตรงกับ
+  เกณฑ์ปิดงานที่รายงานเขียนไว้ว่า "API ปฏิเสธแล้วหน้าจอไม่แสดงว่าปิดคำขอสำเร็จ"
+- **`setCheckSideStatus(reqId, side, status)`** = ตัวกลางตัวเดียวแทนที่ `markCheckSideDone`
+  เดิม — ใช้ตั้งเป็น `'done'` (optimistic ก่อนรู้ผล) และถอยกลับเป็น `'pending'` เมื่อ
+  `d.success === false` หรือ request throw · ถอยกลับแล้ว `myPendingChecks` (ผูกกับ `data` ตรง ๆ
+  ไม่ใช่ state แยก) จะคำนวณใหม่และแบนเนอร์กลับมาเตือนเองโดยไม่ต้องเขียน state เพิ่ม
+- ⚠️ **ไม่ได้เพิ่ม toast แจ้งผู้ใช้** — ตรวจแล้วพบว่า `navToast`/`showNavToast` ที่มีอยู่ใน `app.jsx`
+  ไม่เคยถูก render เป็น `<Toast>` เลยสักที่ (state ตายที่มีอยู่ก่อนแล้ว คนละเรื่องกับ F03) — เพิ่ม
+  `showNavToast(...)` เข้าไปตรงนี้จะดูเหมือนแก้แต่ไม่มีผลจริง ไม่รวมเข้ามาเพื่อไม่ให้ scope บวม
+  (แบนเนอร์กลับมาเตือน + `dmj_last_backend_error` ที่ `dmjJson` เขียนให้อัตโนมัติ ก็เพียงพอต่อ
+  เกณฑ์ปิดงานของ F03 แล้ว — ทำ toast จริงเป็นงานแยก)
+- เทสต์: `tests/stockcheck-role-actions.test.js` (10 เคส — เทียบ `ROLE_TABS` (`.jsx`) กับ
+  `ROLE_ACTIONS_` (`.gs`) ไม่ copy ตาราง + สแกน callback ทั้ง 2 จุดใน `app.jsx`) · ผ่าน mutation
+  test แล้วทั้ง 2 ฝั่ง (ถอด ROLE_ACTIONS_ คืน → แดง 2 เคส · ถอดการอ่าน response คืน → แดง 1 เคส)
+
 ### ยังไม่ทำ — งานที่เหลือจากรายงาน (เรียงตามที่ตกลงกับเจ้าของ)
 
 | | เรื่อง | หมายเหตุก่อนลงมือ |
 |---|---|---|
-| **F03** | `frontstore` ไม่มี `completeStockCheck` · `warehouse` ไม่มี `recordUnscannedSale` ใน `ROLE_ACTIONS_` | **วันนี้เป็น no-op** เพราะ `REQUIRE_LOGIN` default ปิด — แต่เป็น**เงื่อนไขบังคับก่อนวันเปิด flag** ไม่งั้นหน้าร้านปิดคำขอเช็คไม่ได้ทั้งตำแหน่ง |
 | **F01** | auto-owner จาก **ชื่อที่โชว์ใน LINE** (`AUTO_OWNER_LINE_NAMES = ["tah","jeed"]`) · แถวที่ `disabled` ถ้าชื่อตรง จะถูกเขียนทับเป็น `owner`/`active` ทันที | ⚠️ **แก้พลาด = เจ้าของเข้าระบบตัวเองไม่ได้** · โค้ดเขียนไว้ชัดว่าเป็น trade-off ที่ *ตั้งใจ* รับความเสี่ยง → **ต้องได้ `providerUserId` จริงของเจ้าของก่อน** แล้วเปลี่ยนไปจับคู่ด้วยรหัสถาวร พร้อมทางกู้บัญชี · **ห้ามขึ้นพร้อมก้อนอื่น** |
 | **F05** | `printFlag=printed` ถูกตั้งทันทีที่เปิดหน้าพิมพ์ ไม่ได้แปลว่าป้ายออกจากเครื่องพิมพ์ | ต้องแยก "เปิดงานพิมพ์" กับ "ผู้ใช้ยืนยันว่าพิมพ์แล้ว" |
 | **F07** | `punchHandler_` จับ error ของ `waitLock` แล้ว **เขียนแถวต่อ** (`_lkOk` ถูกใช้แค่วัด perf) | lock timeout ต้องไม่เขียน — เสี่ยงลงเวลาซ้ำตอนเปิดงานพร้อมกัน |
 | F08–F14 | งานค้างสูญหาย · GPS/ข้อความลงเวลา · หน้าจอ/ศัพท์ · คู่มือ · นิยามตัวเลข · จัดระเบียบ | P2 ทั้งหมด ทำหลังแกนงานถูกต้อง |
 
-⚠️ **ค่าจริงของ Script Property `REQUIRE_LOGIN` อ่านจาก Git ไม่ได้** — เจ้าของต้องเปิดดูเองที่
-GAS editor → Project Settings → Script Properties · มีผลกับความเร่งด่วนของ F03 โดยตรง
-(เปิดอยู่ = F03 กลายเป็น P1 ของจริงทันที)
+⚠️ **ค่าจริงของ Script Property `REQUIRE_LOGIN` อ่านจาก Git ไม่ได้ และเซสชันนี้ไม่มีทางเชื่อม
+ไป GAS project ที่ deploy จริง** (ไม่มี `.clasprc.json`/เครดิต clasp login ในเครื่องนี้ — มีแค่
+`.clasp.json` ที่บอก scriptId) — เจ้าของต้องเปิดดูเองที่ GAS editor → Project Settings →
+Script Properties
 
 ## 🧾 ใบแจ้งหนี้ 3 แบบ + เลขที่เอกสารของเราเอง (ส.ค. 2026)
 
