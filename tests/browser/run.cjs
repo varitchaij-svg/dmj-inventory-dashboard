@@ -909,6 +909,58 @@ function startServer() {
     await page.close();
   }
 
+  // ── (จ2.6ข) F04 — เครื่องร้าน (storedevice) เห็นปุ่มตรงกับสิ่งที่ทำได้จริง ──
+  // รายงานตรวจระบบ 5 ก.ย. 2026: สิทธิ์ปุ่มเดิมเขียนเป็น blacklist (`role !== "frontstore" &&
+  // role !== "saler"`) → storedevice ที่เพิ่มเข้าระบบทีหลังหลุดเข้ามาเห็นปุ่ม ✕ ยกเลิก
+  // ทั้งที่ server (`deleteOrder`) ปฏิเสธ → กดแล้วขึ้นแดงทุกครั้ง · กลับกัน `canConfirm`
+  // เป็น whitelist ที่ลืม storedevice → เครื่องกลางที่ยืนอยู่หน้าร้าน **กดรับของไม่ได้เลย**
+  //
+  // ⚠️ ต้องรันบนเบราว์เซอร์จริง — unit test เห็นแค่ค่าที่ฟังก์ชันคืน ไม่เห็นว่าปุ่มเรนเดอร์บนจอ
+  //    จริงไหม (นี่คือความพังแบบ "หน้าจอดูปกติทุกประการ มีแค่ปุ่มหาย" ที่ไม่มีใครรายงานเป็นบั๊ก)
+  // fixture: S3 (VAS001) receivedAt ว่าง = ยังไม่มีใครกดรับ → ต้องเห็นปุ่ม "ยืนยันรับ"
+  for (const rc of [
+    { role: 'storedevice', receive: true,  cancel: false },  // F04 — เดิมกลับกันทั้งคู่
+    { role: 'frontstore',  receive: true,  cancel: false },  // ของเดิม ต้องไม่เปลี่ยน
+    { role: 'warehouse',   receive: false, cancel: true  },  // ของเดิม ต้องไม่เปลี่ยน
+  ]) {
+    const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=${rc.role}&tab=orders`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, rc.role, 'orders');
+      await page.waitForTimeout(400);
+      if (!navOk) throw new Error('สลับไปแท็บรายการสั่งของไม่สำเร็จ');
+
+      // (1) ตัวกรอง "🚚 ส่งแล้ว" → รายการของที่รอหน้าร้านกดรับ
+      const shippedTab = page.locator('button', { hasText: 'ส่งแล้ว' }).first();
+      if (await shippedTab.count()) await shippedTab.click({ timeout: 2000 }).catch(() => {});
+      await page.waitForTimeout(400);
+      const sawReceive = (await page.locator('button', { hasText: 'ยืนยันรับ' }).count()) > 0;
+
+      // (2) ตัวกรอง "รอดำเนินการ" → ปุ่ม ✕ ยกเลิกจัดของ (title ยาว จับจาก title ตรง ๆ)
+      const pendingTab = page.locator('button', { hasText: 'รอ' }).first();
+      if (await pendingTab.count()) await pendingTab.click({ timeout: 2000 }).catch(() => {});
+      await page.waitForTimeout(400);
+      const sawCancel = (await page.locator('button[title^="ยกเลิกจัดของ"]').count()) > 0;
+
+      const bad = [];
+      if (sawReceive !== rc.receive) {
+        bad.push(rc.receive ? 'ไม่เห็นปุ่ม "ยืนยันรับ" ทั้งที่ควรกดรับของได้'
+                            : 'เห็นปุ่ม "ยืนยันรับ" ทั้งที่ไม่ใช่คนรับของ');
+      }
+      if (sawCancel !== rc.cancel) {
+        bad.push(rc.cancel ? 'ไม่เห็นปุ่มยกเลิกจัดของ ทั้งที่ทำได้จริง'
+                           : 'เห็นปุ่มยกเลิกจัดของ ทั้งที่ server ปฏิเสธ (กดแล้วขึ้นแดง)');
+      }
+      if (bad.length) { status = 'ROLE_BTN_MISMATCH'; note = bad.join(' · '); }
+      else note = `รับของ=${sawReceive} ยกเลิก=${sawCancel} ตรงกับสิทธิ์จริง`;
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, `orderbtn__${rc.role}.png`) }).catch(() => {});
+    results.push({ role: 'interact', tab: `ปุ่มออเดอร์/รับของ (${rc.role})`, status, note });
+    await page.close();
+  }
+
   // ── (จ2.7) ปุ่มลอย 📤 — โหมดหมวด/สี/ค้นชื่อ ผสมกันได้ (Option B union) + dedup + reset ──
   // docs/PLAN-STOCKCHECK-KEYWORD-SELECT.md Phase 3 — unit test เห็นแค่ source/ผลลัพธ์คำนวณ
   // ไม่เห็นว่าคลิกจริงบนจอแล้ว state เดินถูกไหม (โดยเฉพาะ dedup ข้ามแท็บ กับ reset ตอนปิด modal)

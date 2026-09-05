@@ -63,7 +63,20 @@ describe('backend — ผู้สั่ง (handleOrder_)', () => {
   });
 
   it('ยังไม่ล็อกอิน → เว้นว่าง ไม่ใส่ชื่อเดา ๆ', () => {
-    expect(fn).toMatch(/var orderedBy = '';/);
+    // มี session → ชื่อจาก session · ไม่มี → เว้นว่าง (ห้าม fallback ไปชื่อที่ client ส่งมา)
+    expect(fn).toMatch(/var orderedBy = sess \? staffActorName_\(sess\) : '';/);
+  });
+
+  // F02 — action=order เป็น doGet จึงไม่ผ่านด่าน canDoOrNull_ ของ doPost ต้องกันบัญชีที่ถูกระงับเอง
+  // (เส้นทางนี้เขียนชีตจริง ปล่อยผ่าน = คนที่เจ้าของกดระงับแล้วยังสั่งของเข้าคิวคลังได้)
+  it('บัญชีที่ไม่ active สั่งของไม่ได้ — และตัดสินก่อนคว้า ScriptLock', () => {
+    expect(fn).toMatch(/sessionInactiveOrNull_\(sess\)/);
+    const iBlock = fn.indexOf('sessionInactiveOrNull_(sess)');
+    const iLock  = fn.indexOf('lock = LockService.getScriptLock()');
+    expect(iBlock).toBeGreaterThan(-1);
+    expect(iLock).toBeGreaterThan(-1);
+    // คว้าล็อกมาแล้วค่อยปฏิเสธ = ไปกันคนอื่นที่สั่งของถูกต้องอยู่โดยเปล่าประโยชน์
+    expect(iBlock).toBeLessThan(iLock);
   });
 
   it('session พังต้องไม่ทำให้สั่งของไม่ได้ (ห่อ try/catch)', () => {

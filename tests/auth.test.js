@@ -48,11 +48,15 @@ function loadAuth(requireLogin) {
     grab(/var ROLE_ACTIONS_ = \{[\s\S]*?\n\};/),
     grab(/var IMMEDIATE_GATE_ACTIONS_ = \{[\s\S]*?\n\};/),
     grab(/var IMMEDIATE_GATE_STRICT_ACTIONS_ = \{[\s\S]*?\n\};/),
+    // ⚠️ ต้อง grab มาเอง แม้ตอนนี้ regex ของ COMMON_ACTIONS_/MTO_JOB_ACTIONS_ จะกวาดมาให้
+    //    โดยบังเอิญ (`\n *\];` ไม่ non-greedy พอ เลยกินยาวเกินไป ~10KB) — พึ่งความบังเอิญนั้น
+    //    ไม่ได้ ขยับโค้ดเมื่อไหร่ sandbox จะขาดฟังก์ชันนี้แล้วโยน ReferenceError ทั้งไฟล์
+    grab(/function sessionInactiveOrNull_\(sess\) \{[\s\S]*?\n\}/),
     grab(/function canDoOrNull_\(sess, action\) \{[\s\S]*?\n\}/),
     grab(/function forbidden_\(msg\) \{[\s\S]*?\n\}/),
     grab(/var POST_FLAG_ACTIONS_ = \[[\s\S]*?\n\];/),
     grab(/function resolvePostAction_\(data\) \{[\s\S]*?\n\}/),
-    'return { staffActorName_, canDoOrNull_, resolvePostAction_, ROLE_ACTIONS_, POST_FLAG_ACTIONS_, IMMEDIATE_GATE_ACTIONS_, IMMEDIATE_GATE_STRICT_ACTIONS_ };',
+    'return { staffActorName_, canDoOrNull_, sessionInactiveOrNull_, resolvePostAction_, ROLE_ACTIONS_, POST_FLAG_ACTIONS_, IMMEDIATE_GATE_ACTIONS_, IMMEDIATE_GATE_STRICT_ACTIONS_ };',
   ].join('\n');
   // eslint-disable-next-line no-new-func
   return new Function(...Object.keys(ctx), code)(...Object.values(ctx));

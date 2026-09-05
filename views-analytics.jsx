@@ -4557,6 +4557,39 @@ async function syncShipmentReceive(rowId, sku, receivedQty, refNum) {
 // ─────────────────────────────────────────────────────────────────────
 // ORDER LIST VIEW
 // ─────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────
+// สิทธิ์ปุ่มในเส้นทาง "ออเดอร์ → จัดของ → รับของ" — ตั้งชื่อ "การกระทำ" แทนการไล่ยกเว้น role
+// ─────────────────────────────────────────────────────────────────────
+// ⚠️ ของเดิมเขียนเป็น **blacklist** (`role !== "frontstore" && role !== "saler"`) ซึ่งแปลว่า
+//    role ที่เพิ่มเข้าระบบ "ทีหลัง" หลุดเข้ามาเห็นปุ่มเองโดยไม่มีใครตั้งใจ — `storedevice`
+//    (เครื่องกลางประจำร้าน) จึงเห็นปุ่ม ✕ ยกเลิก / ✅ Done ทั้งที่ตามงานจริงไม่ใช่คนจัดของ
+//    และปุ่มยกเลิกถูก server ปฏิเสธด้วย (กดแล้วขึ้นแดงทุกครั้ง)
+//    → **ใช้ whitelist เสมอ** เพิ่ม role ใหม่แล้วต้องมาตัดสินใจที่นี่ ไม่ใช่ได้สิทธิ์ฟรี
+//
+// ⚠️ `canCancelOrder` ต้องตรงกับ `IMMEDIATE_GATE_ACTIONS_.deleteOrder/deleteOrders`
+//    ใน appsscript_complete.gs (`["employee","warehouse"]` + owner/dev) เสมอ
+//    ไม่ตรงเมื่อไหร่ = ปุ่มโชว์แล้วกดโดนปฏิเสธ หรือคนที่ทำได้จริงหาปุ่มไม่เจอ (มีเทสต์เทียบ 2 ไฟล์)
+//
+// ⚠️ `canReceiveShipment` **ไม่ได้** ล้อตาราง .gs — `confirmShipmentReceive` อยู่ใน
+//    COMMON_ACTIONS_ (ทุก role ยิงได้) ตัวนี้จึงเป็น "ใครมีหน้าที่กดรับของ" ตามงานจริง
+//    เดิมไม่มี storedevice → เครื่องกลางที่ยืนอยู่หน้าร้านกดรับของไม่ได้เลย ทั้งที่เป็นเครื่อง
+//    ที่พนักงานหน้าร้านใช้จริง (F04)
+//
+// role ที่ส่งเข้ามาคือ `viewRole` — dev ถูกยุบเป็น "owner" มาแล้วจาก app.jsx
+const ORDER_PREPARE_ROLES    = ["owner", "warehouse", "employee"];
+const ORDER_CANCEL_ROLES     = ["owner", "warehouse", "employee"];
+const SHIPMENT_RECEIVE_ROLES = ["saler", "frontstore", "storedevice"];
+const SHIPMENT_EDIT_ROLES    = ["owner", "employee", "saler", "frontstore", "storedevice"];
+
+// จัดของ: กรอกจำนวนจัด / กด Done / ย้อนกลับเป็นรอ  (action `updateOrderState`)
+function canPrepareOrder(role)     { return ORDER_PREPARE_ROLES.indexOf(role) >= 0; }
+// ยกเลิกจัดของ = ลบแถวออกจากชีตสั่งของ  (action `deleteOrder` / `deleteOrders`)
+function canCancelOrder(role)      { return ORDER_CANCEL_ROLES.indexOf(role) >= 0; }
+// กดรับของที่โอนมาถึงหน้าร้าน  (action `confirmShipmentReceive`)
+function canReceiveShipment(role)  { return SHIPMENT_RECEIVE_ROLES.indexOf(role) >= 0; }
+// แก้จำนวนที่รับย้อนหลัง หลังกดรับไปแล้ว
+function canEditShipment(role)     { return SHIPMENT_EDIT_ROLES.indexOf(role) >= 0; }
+
 function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData }) {
   const isPending = !order.status || order.status === "รอ" || order.status === "pending";
   const [prepQty, setPrepQty] = uS(() => order.preparedQty > 0 ? order.preparedQty : (order.orderQty || 0));
@@ -4595,20 +4628,33 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
     setPrepQtyDraft(String(n));
     if (n !== prepQty) savePrepQty(n);
   };
-  const setPrintFlag = f => {
-    onPatch(order.id, {printFlag: f});
-    syncOrderUpdate(order, {printFlag: f});
+  // ── บันทึกสถานะย่อยแล้ว "ดูผลจริง" ก่อนถือว่าสำเร็จ ─────────────────────────────
+  // ⚠️ เดิม 4 ปุ่มนี้ (PRINT/SKIP · หิ้ว↔ขึ้นรถ · Central · ย้อนกลับเป็นรอ) ยิงแล้ว **ไม่เคยดูผลเลย**
+  //    GAS ตอบหน้า HTML ได้เมื่อ execution ซ้อนกัน/เน็ตร้านกระตุก (บทเรียนข้อ 13) → จอนี้เปลี่ยนแล้ว
+  //    แต่ชีตยังเป็นค่าเดิม → เครื่องอื่นเห็นคนละอย่าง งานถูกส่งต่อผิด **โดยไม่มี error ให้เห็น**
+  //    (`savePrepQty`/`markComplete` ข้างล่างทำถูกอยู่แล้ว — เอารูปแบบเดียวกันมาใช้ ไม่คิดใหม่)
+  // ⚠️ ถอย optimistic patch กลับเมื่อล้มเหลว — "ปุ่มเด้งกลับที่เดิม" คือสัญญาณที่ผู้ใช้เห็นได้จริง
+  //    และคงอยู่ ต่างจาก toast ที่หายไปใน 8 วิ · ปล่อยไว้ = จอโกหกว่าเปลี่ยนแล้วตลอดจนกว่าจะ refetch
+  // ⚠️ **ห้ามยิงซ้ำอัตโนมัติ** — `updateOrderState` ยังไม่ idempotent (ไม่มี cid เหมือน action=order)
+  //    ปล่อยให้ผู้ใช้กดเอง ตามแพทเทิร์นเดียวกับ `savePrepQty`
+  // ⚠️ ไม่แตะ `saveFailed` โดยตั้งใจ — ธงนั้นเป็นของช่อง "จัด" (ขอบแดง + ป้ายยังไม่บันทึก)
+  //    เอามาใช้ร่วมกัน = ปุ่ม PRINT ที่บันทึกผ่านจะไปล้างคำเตือนของจำนวนที่ยังไม่เข้าระบบจริง
+  const saveOrderField = async (updates, prevUpdates, label) => {
+    onPatch(order.id, updates);
+    const res = await syncOrderUpdate(order, updates);
+    if (res && res.success === false) {
+      onPatch(order.id, prevUpdates);
+      showToast("warn", `ยังไม่ได้บันทึก${label ? " " + label : ""} — ${res.error || "เน็ตอาจหลุด"} · กดใหม่อีกครั้ง`, "⚠️", 8000);
+      return false;
+    }
+    return true;
   };
-  const setCarryMode = m => {
-    onPatch(order.id, {carryMode: m});
-    syncOrderUpdate(order, {carryMode: m});
-  };
+
+  const setPrintFlag = f => saveOrderField({printFlag: f}, {printFlag: order.printFlag}, "PRINT/SKIP");
+  const setCarryMode = m => saveOrderField({carryMode: m}, {carryMode: order.carryMode}, "หิ้ว/ขึ้นรถ");
   // ป้ายเสริม "ส่ง Central" — คนละตัวกับ carryMode (หิ้ว/รอขึ้นรถ) ข้างบน ใบเดียวกันติดได้ทั้งคู่
   // (คลัง/หน้าร้าน/เซล กดเองนาน ๆ ครั้ง จึงไม่ยัดเป็นตัวเลือกที่หน้าสร้างออเดอร์ซึ่งใช้บ่อยสุด)
-  const setToCentral = v => {
-    onPatch(order.id, {toCentral: v});
-    syncOrderUpdate(order, {toCentral: v});
-  };
+  const setToCentral = v => saveOrderField({toCentral: v}, {toCentral: order.toCentral}, "Central");
   const markComplete = async () => {
     if (!order.printFlag) {
       showToast("warn", "เลือก PRINT หรือ SKIP ก่อน", "🖨️");
@@ -4635,11 +4681,12 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
   };
 
   // ย้อนกลับ order ที่กด Done ผิด → กลับเป็น "รอ" (เขียนกลับลง Sheet จริงด้วย ไม่ใช่แค่ localStorage)
-  const undoComplete = () => {
+  // ⚠️ เดิมขึ้น "ย้อนกลับแล้ว" ทันทีโดยไม่รอผล — ใบที่ชีตยังเป็น "สำเร็จ" อยู่จะหายจากคิว
+  //    "รอดำเนินการ" บนเครื่องนี้เครื่องเดียว คนอื่นยังเห็นว่าจัดเสร็จแล้ว → ของไม่ถูกจัดซ้ำ
+  const undoComplete = async () => {
     setUndoConfirm(false);
-    onPatch(order.id, { status: "รอ" });
-    syncOrderUpdate(order, { status: "รอ" });
-    showToast("success", "ย้อนกลับเป็นรอดำเนินการแล้ว", "↩️", 2500);
+    const okUndo = await saveOrderField({ status: "รอ" }, { status: order.status }, "การย้อนกลับ");
+    if (okUndo) showToast("success", "ย้อนกลับเป็นรอดำเนินการแล้ว", "↩️", 2500);
   };
 
   // ยกเลิกจัดของ — ลบรายการนี้ออกจากรายการสั่ง เฉย ๆ (ไม่แตะ/ไม่ปรับสต็อกสินค้าเป็น 0)
@@ -4712,7 +4759,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
           <div style={{flex:1,minWidth:0}}>
             <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginBottom:2}}>
               <span style={{fontSize:10,color:"var(--muted)"}}>{order.sku}</span>
-              {!isPending && role !== "frontstore" && role !== "saler" ? (
+              {!isPending && canPrepareOrder(role) ? (
                 <button onClick={() => setUndoConfirm(true)} title="กดเพื่อย้อนกลับเป็นรอดำเนินการ" style={{
                   fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:20,
                   background:"#e8f5e9",color:"#1f7f44",letterSpacing:.3,
@@ -4750,7 +4797,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
           </div>
 
           {/* ✕ ยกเลิกจัดของ — มุมขวาบน (ลบออกจากรายการสั่ง ไม่แตะสต็อก) */}
-          {isPending && !canceled && role !== "frontstore" && role !== "saler" && (
+          {isPending && !canceled && canCancelOrder(role) && (
             <button onClick={() => setCancelConfirm(true)}
               title="ยกเลิกจัดของ — ลบรายการนี้ออกจากรายการสั่ง"
               disabled={canceling}
@@ -4866,7 +4913,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
             )}
 
             {/* Done */}
-            {isPending && role !== "frontstore" && role !== "saler" && (
+            {isPending && canPrepareOrder(role) && (
               <button onClick={markComplete} style={{
                 padding:"10px 16px",borderRadius:10,border:"none",
                 background:pf?"#1b5e20":"#d1d5db",color:"#fff",
@@ -5005,8 +5052,8 @@ function ShipmentRow({ s, role, productMap, onConfirm }) {
   const [editing, setEditing] = uS(false);
   const product = productMap ? productMap[s.sku] : null;
   const imgSrc = s.image || product?.imageUrl || null;
-  const canConfirm = role === "saler" || role === "frontstore";
-  const canEdit = ["owner","employee","saler","frontstore"].includes(role);
+  const canConfirm = canReceiveShipment(role);
+  const canEdit = canEditShipment(role);
 
   const handleConfirm = () => {
     const n = Math.max(0, parseInt(recvQty) || 0);
@@ -5870,6 +5917,12 @@ function OrderSummaryView({ data, onPrintRequest }) {
   const products = data.products || [];
   const [st, setSt]           = uS(getOrdersState);
   const [printed, setPrinted] = uS(getPrintedOrders);
+  // "ส่งเข้าหน้าพิมพ์แล้ว แต่ยังไม่มีใครยืนยันว่าป้ายออกมา" (F05) — เก็บ orderSig ไว้ด้วย
+  // เพื่อไม่ให้คิวค้างข้ามใบเมื่อเลขแถวถูก reuse (บั๊ก row-shift เดิม) · อยู่ในหน่วยความจำ
+  // เท่านั้น ไม่ลง localStorage: ปิดแอปแล้วเปิดใหม่ควรกลับไปเป็น "ยังไม่พิมพ์" ซึ่งปลอดภัยกว่า
+  // ค้างสถานะกลางคันที่ไม่มีใครรู้ว่าจริงหรือเปล่า
+  const [awaitPrint, setAwaitPrint] = uS({});
+  const [printSaving, setPrintSaving] = uS(false);
   const [shipped, setShipped] = uS(() => {
     const raw = getShippedOrders();
     const SIX_H = 6 * 60 * 60 * 1000;
@@ -5995,19 +6048,58 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
   // พิมพ์ Label ของชุด order ที่กำหนด — เลือก Format ให้เองตามหมวด (groupOrdersForLabel)
   //   แล้วส่งเป็น "กลุ่มตาม Format" ให้ LabelPrintView (พนักงานไม่ต้องเลือก Sticker/A4 เอง)
+  // ⚠️ "เปิดหน้าพิมพ์" ≠ "ป้ายออกจากเครื่องพิมพ์แล้ว" (F05 · ผลตรวจระบบ 5 ก.ย. 2026)
+  // ของเดิมตั้ง printFlag="printed" + localStorage ทันทีหลัง onPrintRequest **โดยไม่รอผล**
+  // → แค่เปิดหน้าพิมพ์แล้วกดย้อนกลับ (กระดาษหมด/เลือกผิดใบ/เครื่องพิมพ์ไม่ติด) ก็ขึ้น
+  //   "✓ พิมพ์ Label แล้ว" ค้างถาวร → พนักงานข้ามงานติดป้าย **โดยไม่มีอะไรบอกว่าข้าม**
+  // → และถ้า syncOrderUpdate ล้มเหลว (GAS ตอบ HTML — บทเรียนข้อ 13) เครื่องนี้ขึ้นพิมพ์แล้ว
+  //   แต่เครื่องอื่นยังเห็น "ยังไม่พิมพ์" = คนละความจริงบนสองจอ
+  // ตอนนี้แยกเป็น 2 ขั้น: เปิดงานพิมพ์ → รอผู้ใช้ยืนยัน (confirmPrinted) ถึงจะบันทึกจริง
   const printOrders = (ordersArr) => {
     if (!ordersArr || !ordersArr.length) return;
     const groups = groupOrdersForLabel(ordersArr);
     if (!groups.length) return;
     onPrintRequest({ groups });
-    const p2 = { ...printed };
-    ordersArr.forEach(o => { p2[o.id] = true; });
-    setPrinted(p2);
-    localStorage.setItem(LS_PRINTED_ORDERS, JSON.stringify(p2));
-    ordersArr.forEach(o => {
-      setSt(patchOrderState(o.id, { printFlag: "printed" }, orderSig(o)));
-      syncOrderUpdate(o, { printFlag: "printed" });
+    // จำไว้แค่ว่า "ส่งเข้าหน้าพิมพ์ไปแล้ว" (รอยืนยัน) — ไม่แตะ printFlag ในชีต
+    setAwaitPrint(a => {
+      const n = { ...a };
+      ordersArr.forEach(o => { n[o.id] = orderSig(o); });
+      return n;
     });
+  };
+
+  // ผู้ใช้ยืนยันเองว่า "ป้ายออกมาแล้ว" — ตรงนี้เท่านั้นที่บันทึกลงชีต และต้อง **รอผลจริง**
+  const confirmPrinted = async (ordersArr) => {
+    const list = (ordersArr || []).filter(o => o && !printed[o.id] && o.printFlag !== "printed");
+    if (!list.length) return;
+    setPrintSaving(true);
+    const okIds = [], failIds = [];
+    for (const o of list) {
+      let res = null;
+      try { res = await syncOrderUpdate(o, { printFlag: "printed" }); }
+      catch (e) { res = { success: false, error: dmjErrText ? dmjErrText(e) : String(e) }; }
+      if (res && res.success === false) { failIds.push(o.id); continue; }
+      okIds.push(o.id);
+      setSt(patchOrderState(o.id, { printFlag: "printed" }, orderSig(o)));
+    }
+    if (okIds.length) {
+      const p2 = { ...printed };
+      okIds.forEach(id => { p2[id] = true; });
+      setPrinted(p2);
+      localStorage.setItem(LS_PRINTED_ORDERS, JSON.stringify(p2));
+    }
+    // ✅ ที่บันทึกผ่านแล้วออกจากคิว "รอยืนยัน" · ที่ล้มเหลว **คงไว้** ให้กดยืนยันซ้ำได้
+    setAwaitPrint(a => {
+      const n = { ...a };
+      okIds.forEach(id => { delete n[id]; });
+      return n;
+    });
+    setPrintSaving(false);
+    if (failIds.length) {
+      showToast("warn", `บันทึก "พิมพ์แล้ว" ไม่สำเร็จ ${failIds.length} รายการ — เครื่องอื่นยังเห็นว่ายังไม่พิมพ์ · กดยืนยันอีกครั้ง`, "⚠️", 8000);
+    } else {
+      showToast("success", `บันทึกว่าพิมพ์แล้ว ${okIds.length} รายการ`, "🏷️", 2500);
+    }
   };
 
   // ── การเลือกสินค้า (checkbox) — ทำงานต่อ section (arr = รายการในกลุ่มที่กำลังแสดง) ──
@@ -6378,6 +6470,11 @@ function OrderSummaryView({ data, onPrintRequest }) {
       const ap = printed[o.id] || o.printFlag === "printed";
       return o.printFlag === "print" && !ap && !shipped[o.id];
     });
+    // ส่งเข้าหน้าพิมพ์ไปแล้วแต่ยังไม่มีใครยืนยันว่าป้ายออกมา (F05)
+    // ⚠️ เทียบ orderSig ด้วย — เลขแถวถูก reuse ได้หลังมีคนกดยกเลิกใบอื่น (บั๊ก row-shift)
+    //    ไม่เทียบ = คิว "รอยืนยัน" ของใบเก่าไปโผล่บนใบใหม่ที่ยังไม่เคยสั่งพิมพ์เลย
+    const awaitingOrders = orders.filter(o =>
+      awaitPrint[o.id] === orderSig(o) && !printed[o.id] && o.printFlag !== "printed" && !shipped[o.id]);
     // ✅ ที่เลือกได้ในกลุ่มนี้ = ที่ยังไม่ส่ง (พิมพ์ Label ก่อนส่ง) · นับที่ติ๊กไว้
     const selectable  = orders.filter(o => !shipped[o.id]);
     const selectedArr = selectable.filter(o => selected[o.id]);
@@ -6444,6 +6541,17 @@ function OrderSummaryView({ data, onPrintRequest }) {
                 🖨️ ปริ้นทั้งหมด ({printableOrders.length})
               </button>
             )}
+            {/* F05: ยืนยันหลังป้ายออกจากเครื่องพิมพ์จริง — ตรงนี้เท่านั้นที่บันทึกลงชีต */}
+            {awaitingOrders.length > 0 && (
+              <button onClick={() => confirmPrinted(awaitingOrders)} disabled={printSaving} style={{
+                padding:"6px 14px",borderRadius:8,border:"none",
+                cursor: printSaving ? "wait" : "pointer",
+                background: printSaving ? "#9ca3af" : "#b45309", color:"#fff",
+                fontSize:12,fontWeight:700,fontFamily:"inherit",
+              }}>
+                {printSaving ? "⏳ กำลังบันทึก…" : `✅ ยืนยันว่าพิมพ์แล้ว (${awaitingOrders.length})`}
+              </button>
+            )}
             {readyCount > 0 && (
               <button onClick={() => handleShipAll(orders)} disabled={bulkBusy} style={{
                 padding:"6px 14px",borderRadius:8,border:"none",
@@ -6456,6 +6564,15 @@ function OrderSummaryView({ data, onPrintRequest }) {
             )}
           </div>
         </div>
+
+        {awaitingOrders.length > 0 && (
+          <div style={{fontSize:11,color:"#92400e",background:"#fffbeb",border:"1px solid #fde68a",
+                       borderRadius:8,padding:"8px 10px",margin:"-4px 2px 12px",lineHeight:1.5}}>
+            🖨️ ส่งเข้าหน้าพิมพ์แล้ว <b>{awaitingOrders.length}</b> รายการ — <b>ยังไม่นับว่าพิมพ์เสร็จ</b>
+            {" · "}ป้ายออกจากเครื่องพิมพ์แล้วค่อยกด <b>“✅ ยืนยันว่าพิมพ์แล้ว”</b> ด้านบน
+            {" · "}พิมพ์ไม่ออก/พิมพ์ผิด กด <b>“🖨️ ปริ้น”</b> ซ้ำได้เลย
+          </div>
+        )}
 
         {!isTruck && readyCount > 0 && (
           <div style={{fontSize:11,color:"var(--muted)",margin:"-4px 2px 12px",lineHeight:1.5}}>
@@ -6474,6 +6591,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
             const isMissed  = !!missed[order.id];
             const isSending = sending === order.id;
             const alreadyPrinted = printed[order.id] || order.printFlag === "printed";
+            const awaitingPrint  = !alreadyPrinted && awaitPrint[order.id] === orderSig(order);
             const prepQty = order.preparedQty || order.orderQty || 0;
             const isSelected = !!selected[order.id];
 
@@ -6575,6 +6693,18 @@ function OrderSummaryView({ data, onPrintRequest }) {
                         เหลือแค่ป้ายบอกว่าพิมพ์ไปแล้วหรือยัง */}
                     {alreadyPrinted && (
                       <div style={{textAlign:"center",fontSize:10,color:"var(--g-700)",fontWeight:700}}>✓ พิมพ์ Label แล้ว</div>
+                    )}
+                    {/* F05: "เปิดหน้าพิมพ์แล้ว" ยังไม่ใช่ "พิมพ์เสร็จ" — ต้องเห็นต่างกันบนการ์ด
+                        ไม่งั้นพนักงานอ่านว่างานนี้จบแล้วทั้งที่ป้ายยังไม่ออกจากเครื่อง */}
+                    {awaitingPrint && (
+                      <button onClick={() => confirmPrinted([order])} disabled={printSaving} style={{
+                        padding:"8px 4px",minHeight:40,borderRadius:7,
+                        border:"1.5px solid #fbbf24",background:"#fffbeb",color:"#92400e",
+                        cursor: printSaving ? "wait" : "pointer",
+                        fontSize:10,fontWeight:700,fontFamily:"inherit",lineHeight:1.35,
+                      }}>
+                        🖨️ ส่งเข้าหน้าพิมพ์แล้ว<br/>✅ แตะยืนยันเมื่อป้ายออกมา
+                      </button>
                     )}
 
                     {/* ขึ้นรถ: ปุ่มส่งทีละใบ + 🚫 เหมือนเดิม (ห้ามแตะ)
@@ -7396,6 +7526,13 @@ ${labelsHTML}
                 : printMode === "greenery"
                 ? "Static Template · A4 · 3×17 = 51 ดวง/หน้า · ไม่ต้องเลือกสินค้า พิมพ์ได้ทันที"
                 : "สติ๊กเกอร์ · 50×25mm · gap 3mm · แถวเดียว"}
+            </div>
+            {/* F05 · ขอบเขตของสถานะ "พิมพ์แล้ว": ผูกกับ **ใบสั่งของ** เท่านั้น ไม่ใช่ตัวสินค้า
+                หน้านี้พิมพ์จาก SKU ที่เลือกเองได้ด้วย ซึ่งไม่แตะสถานะใบสั่งของเลย — ถ้าไม่บอก
+                พนักงานจะนึกว่าพิมพ์จากที่ไหนก็ตัดงานในหน้า "สรุปสินค้าออกจากคลัง" ให้เหมือนกัน */}
+            <div className="page-sub" style={{marginTop:4,color:"#92400e"}}>
+              ℹ️ พิมพ์จากหน้านี้ <b>ไม่ตัดสถานะ “พิมพ์แล้ว”</b> ของใบสั่งของ —
+              ต้องไปกดยืนยันที่หน้า <b>“สรุปสินค้าออกจากคลัง”</b>
             </div>
           </div>
           {(isStaticTemplate || (printMode === "card" ? cardList.length : labelList.length) > 0) && (
@@ -12043,6 +12180,34 @@ function RetroTaxInvoiceView({ onBack }) {
   );
 }
 
+// ── งานขายค้าง (POS draft) — F08 · ผลตรวจระบบ 5 ก.ย. 2026 ────────────────────
+// เดิม cart/ลูกค้า/จัดส่ง อยู่ใน useState ล้วน และ App mount เฉพาะ activeTab → กดไปดูสต๊อก
+// แล้วกลับมา = ตะกร้าว่างเปล่า ต้องกรอกใหม่ทั้งใบ (มือถือสลับงานบ่อยมาก)
+//
+// ⚠️ **ไม่กู้คืนอัตโนมัติ** — เกณฑ์ปิดงานของรายงานคือ "ไม่มี draft ของคนก่อนหลงมาบนเครื่องกลาง"
+// เครื่องกลาง (storedevice) เป็นบัญชี LINE เดียวที่หลายคนใช้ ผูก staffId แล้วก็ยังแยกคนไม่ได้
+// → ทางเดียวที่ปลอดภัยกับทุกอุปกรณ์คือ **ให้ผู้ใช้กดกู้เอง** ทุกครั้ง (เห็นก่อนว่าเป็นบิลของใคร/
+//   กี่รายการ/เมื่อไหร่) ที่เหลือกดทิ้งได้ใน 1 แตะ
+const LS_POS_DRAFT = "dmj_pos_draft_v1";
+const POS_DRAFT_TTL_MS = 12 * 60 * 60 * 1000;   // เกิน 12 ชม. = คนละกะแล้ว ไม่ต้องเสนอ
+
+function posDraftRead() {
+  try {
+    const raw = localStorage.getItem(LS_POS_DRAFT);
+    if (!raw) return null;
+    const d = JSON.parse(raw);
+    if (!d || !d.at || !Array.isArray(d.cart) || !d.cart.length) return null;
+    if (Date.now() - Number(d.at) > POS_DRAFT_TTL_MS) return null;
+    return d;
+  } catch { return null; }
+}
+function posDraftWrite(d) {
+  try { localStorage.setItem(LS_POS_DRAFT, JSON.stringify(d)); } catch (e) { /* โควตาเต็ม — ไม่ใช่เหตุให้ขายไม่ได้ */ }
+}
+function posDraftClear() {
+  try { localStorage.removeItem(LS_POS_DRAFT); } catch (e) {}
+}
+
 function PosView({ data, role }) {
   const products = (data && data.products) || [];
   // งาน MTO (จัดพิเศษ) ที่อาจขายผ่าน POS ได้ — Phase 2 "Make existing MTO sellable"
@@ -12097,6 +12262,43 @@ function PosView({ data, role }) {
     }
     return billCidRef.current;
   };
+
+  // ── งานขายค้าง (F08) — เสนอให้กู้ ไม่กู้เอง ──────────────────────────────
+  // อ่านครั้งเดียวตอน mount: มีของค้างไหม (ไม่ผูกกับ state ปัจจุบันเลย)
+  const [draftOffer, setDraftOffer] = uS(posDraftRead);
+  // เขียนทุกครั้งที่ตะกร้า/ลูกค้า/จัดส่งเปลี่ยน — ตะกร้าว่าง = ลบทิ้ง (ไม่เก็บใบเปล่าไว้กวน)
+  uE(() => {
+    if (result) return;                 // ออกบิลไปแล้ว อยู่หน้าสรุป — ไม่ใช่งานค้าง
+    // ⚠️ ตะกร้าว่าง **ทั้งที่ยังมีของค้างรอให้กู้** = เพิ่งเปิดหน้ามา ยังไม่มีใครตัดสินใจอะไร
+    // ล้างตรงนี้ = เปลี่ยนแท็บกลับมาแล้วรีโหลดหน้า งานที่ค้างหายไปเลย (effect รอบ mount
+    // ทำงานก่อนผู้ใช้ทันเห็นแบนเนอร์ด้วยซ้ำ) — ล้างได้เฉพาะตอนผู้ใช้กด "ทิ้ง" หรือปิดบิลแล้ว
+    if (!cart.length) { if (!draftOffer) posDraftClear(); return; }
+    posDraftWrite({
+      at: Date.now(),
+      by: (typeof window !== "undefined" && window._currentUser) || "",
+      saleMode, channel, payMethod, taxInvoice,
+      manualDiscount, cart, cust, ship,
+    });
+  }, [cart, cust, ship, manualDiscount, taxInvoice, channel, payMethod, saleMode, result, draftOffer]);
+
+  const restoreDraft = () => {
+    const d = draftOffer;
+    if (!d) return;
+    setCart(Array.isArray(d.cart) ? d.cart : []);
+    if (d.cust) setCust(d.cust);
+    if (d.ship) setShip(d.ship);
+    if (typeof d.manualDiscount === "string") setManualDiscount(d.manualDiscount);
+    if (typeof d.taxInvoice === "boolean") setTaxInvoice(d.taxInvoice);
+    // โหมด/ช่องทาง/วิธีชำระ ต้องกู้เป็นชุดเดียวกัน — กู้ครึ่ง ๆ = "เงินสด" ค้างมาในโหมดออนไลน์
+    // แล้วบันทึกรับชำระทั้งที่เงินยังไม่เข้า (กับดักเดียวกับตอนสลับโหมด)
+    if (d.saleMode === "online" || d.saleMode === "store") {
+      setSaleMode(d.saleMode);
+      setChannel(d.channel || (d.saleMode === "store" ? "หน้าร้าน" : POS_ONLINE_CHANNELS[0]));
+      setPayMethod(d.payMethod || "");
+    }
+    setDraftOffer(null);
+  };
+  const discardDraft = () => { posDraftClear(); setDraftOffer(null); };
 
   // ⚠️ ProductModal อ่านหมวดจาก `p.cat` (app.jsx มิเรอร์มาจาก p.category) ไม่ใช่ `p.category`
   const detailProduct = uM(() => {
@@ -12337,6 +12539,7 @@ function PosView({ data, role }) {
     setCust({ name: "", taxId: "", branch: "", branchNo: "", address: "", phone: "", email: "" });
     setCustQuery(""); setCustResults(null); setResult(null);
     billCidRef.current = "";   // บิลใบถัดไปต้องได้ billCid ใหม่ (บิลนี้ปิดแล้ว)
+    posDraftClear(); setDraftOffer(null);   // ปิดใบแล้วไม่ใช่ "งานค้าง" อีกต่อไป (F08)
   }
 
   const overStock = cart.filter(it => (Number(it.qty) || 0) > (it.qtyStore || 0));
@@ -12423,6 +12626,31 @@ function PosView({ data, role }) {
           🧾 ใบกำกับย้อนหลัง
         </button>
       </div>
+
+      {/* ── งานขายค้างจากรอบก่อน (F08) — เสนอให้กู้ ไม่กู้เอง ──
+           ⚠️ ห้ามเปลี่ยนเป็น auto-restore: เครื่องกลางใช้บัญชี LINE เดียวกันหลายคน
+           กู้เองเมื่อไหร่ = บิลของคนก่อนโผล่มาบนจอคนถัดไปโดยไม่มีอะไรบอก */}
+      {draftOffer && !cart.length && (
+        <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 12, padding: "10px 12px",
+                      display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+          <div style={{ flex: 1, minWidth: 190, fontSize: 13, color: "#92400e", lineHeight: 1.5 }}>
+            ↩️ มีบิลที่กรอกค้างไว้ <b>{(draftOffer.cart || []).length} รายการ</b>
+            {draftOffer.at ? " · " + new Date(draftOffer.at).toLocaleString("th-TH", { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" }) : ""}
+            {draftOffer.by ? " · โดย " + draftOffer.by : ""}
+            <div style={{ fontSize: 11, opacity: .85 }}>ถ้าไม่ใช่ของคุณ กด “ทิ้ง” ได้เลย — ยังไม่มีอะไรถูกบันทึก</div>
+          </div>
+          <button onClick={restoreDraft}
+            style={{ padding: "8px 14px", minHeight: 40, borderRadius: 8, border: "none", cursor: "pointer",
+                     background: "#b45309", color: "#fff", fontWeight: 700, fontSize: 13, fontFamily: "inherit" }}>
+            ↩️ กู้บิลนี้
+          </button>
+          <button onClick={discardDraft}
+            style={{ padding: "8px 14px", minHeight: 40, borderRadius: 8, border: "1px solid #d1d5db", cursor: "pointer",
+                     background: "#fff", color: "var(--muted)", fontWeight: 700, fontSize: 13, fontFamily: "inherit" }}>
+            🗑️ ทิ้ง
+          </button>
+        </div>
+      )}
 
       {/* ── สลับโหมดขาย — ออนไลน์ (ค่าตั้งต้น) / หน้าร้าน (POS เดิม) ──
            จำไว้ที่เครื่อง (localStorage) เซลออนไลน์จะได้ไม่ต้องกดสลับทุกครั้งที่เปิดแอป */}

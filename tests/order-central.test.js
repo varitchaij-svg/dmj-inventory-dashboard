@@ -110,9 +110,15 @@ describe('meta — จุดเชื่อมต่อที่ถ้าหล�
   });
 
   it('setToCentral ต้อง patch ทั้ง local state (onPatch) และเขียนชีตจริง (syncOrderUpdate)', () => {
-    const fn = grab(VANA, /const setToCentral = v => \{[\s\S]*?\n  \};/, 'setToCentral');
-    expect(fn).toMatch(/onPatch\(order\.id, \{toCentral: v\}\)/);
-    expect(fn).toMatch(/syncOrderUpdate\(order, \{toCentral: v\}\)/);
+    // F06 — เดิมเขียน onPatch + syncOrderUpdate ตรง ๆ แล้ว "ไม่เคยดูผล" · ตอนนี้เดินผ่าน
+    // saveOrderField ตัวกลางที่ await ผลจริงและถอย optimistic กลับเมื่อบันทึกไม่ผ่าน
+    // เช็คทั้ง 2 ชั้น: ปุ่มเรียกตัวกลางจริง และตัวกลางยัง patch+เขียนชีตครบ
+    const call = grab(VANA, /const setToCentral = v => saveOrderField\(.*?\);/, 'setToCentral');
+    expect(call).toMatch(/\{toCentral: v\}/);
+    expect(call).toMatch(/\{toCentral: order\.toCentral\}/);   // ค่าเดิมไว้ถอยกลับ
+    const fn = grab(VANA, /const saveOrderField = async \([\s\S]*?\n  \};/, 'saveOrderField');
+    expect(fn).toMatch(/onPatch\(order\.id, updates\)/);
+    expect(fn).toMatch(/await syncOrderUpdate\(order, updates\)/);
   });
 
   it('ปุ่มกดถูกกั้นด้วย role list (คลัง/หน้าร้าน/เซล/owner) ไม่เปิดให้ทุก role', () => {

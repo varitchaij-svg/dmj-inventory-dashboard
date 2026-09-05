@@ -1744,21 +1744,26 @@ function App() {
   // ⚠️ จำเป็นเพราะ completeStockCheckRequest_ ฝั่ง GAS ใช้ invalidateCache_(true) (skipTsUpdate)
   //    โดยตั้งใจ (ปิดคำขอไม่เปลี่ยนจำนวนสินค้า จึงไม่ bump ts กัน conflict) → fetchFromSheet เห็น ts
   //    เท่าเดิม → ข้ามการโหลด → data.stockCheckRequests ค้างของเก่า → แบนเนอร์ไม่หาย (เจ้าของแจ้ง ส.ค. 2026)
-  const markCheckSideDone = usC((reqId, side) => {
+  // setCheckSideStatus = ตัวกลางตั้งค่าสถานะฝั่งใดฝั่งหนึ่ง — markCheckSideDone ใช้ตอน optimistic
+  // ("done" ก่อนรู้ผลจริง) ส่วน onCheckComplete ข้างล่างใช้ตัวเดียวกันถอยกลับเป็น "pending" เมื่อ
+  // server ปฏิเสธ (F03 ในรายงานตรวจระบบ 5 ก.ย. 2026 — เดิมไม่อ่าน response เลย จึงโชว์
+  // "ปิดคำขอสำเร็จ" ทั้งที่ฝั่ง GAS ปฏิเสธไปแล้ว บทเรียนข้อ 13 "สำเร็จปลอม")
+  const setCheckSideStatus = usC((reqId, side, status) => {
     if (!reqId || (side !== 'fs' && side !== 'wh')) return;
     const key = side === 'fs' ? 'fsStatus' : 'whStatus';
     setData(prev => {
       if (!prev || !Array.isArray(prev.stockCheckRequests)) return prev;
       let changed = false;
       const stockCheckRequests = prev.stockCheckRequests.map(r => {
-        if (String(r.reqId) !== String(reqId) || r[key] === 'done') return r;
+        if (String(r.reqId) !== String(reqId) || r[key] === status) return r;
         changed = true;
-        return Object.assign({}, r, { [key]: 'done' });
+        return Object.assign({}, r, { [key]: status });
       });
       if (!changed) return prev;
       return Object.assign({}, prev, { stockCheckRequests });
     });
   }, []);
+  const markCheckSideDone = usC((reqId, side) => setCheckSideStatus(reqId, side, 'done'), [setCheckSideStatus]);
 
   // expose refetch ให้ child component เรียกได้เมื่อเจอ conflict (จะอัปเดต window._dataLoadedAt ให้สด)
   usE(() => { window._dmjRefetch = fetchFromSheet; return () => { delete window._dmjRefetch; }; }, [fetchFromSheet]);
@@ -2704,11 +2709,15 @@ function App() {
                                               setActiveCheckRequest(null);
                                               try {
                                                 // side:'wh' → ปิดเฉพาะฝั่งคลัง ไม่กระทบคำขอฝั่งหน้าร้าน
-                                                await dmjFetch(SHEET_DEPLOY_URL, {method:"POST",
+                                                const res = await dmjFetch(SHEET_DEPLOY_URL, {method:"POST",
                                                   headers:{"Content-Type":"text/plain;charset=utf-8"},
                                                   body: JSON.stringify({completeStockCheck:true, reqId:reqId, side:'wh', actor:role})});
+                                                // ⚠️ ต้องอ่านคำตอบจริง (บทเรียนข้อ 13) — ปฏิเสธได้ เช่น สิทธิ์ไม่พอ/เดา
+                                                // side ไม่ได้ · ไม่อ่านคำตอบ = โชว์ "ปิดคำขอสำเร็จ" ทั้งที่ยังไม่ปิดจริง (F03)
+                                                const d = await dmjJson(res);
+                                                if (!d || d.success === false) setCheckSideStatus(reqId, 'wh', 'pending');
                                                 fetchFromSheet(); // reconcile เบื้องหลัง (รีเฟรช pendingChecks + ค่าจริง)
-                                              } catch(e){ console.error("completeStockCheck:", e); }
+                                              } catch(e){ console.error("completeStockCheck:", e); setCheckSideStatus(reqId, 'wh', 'pending'); }
                                             }}/></ErrorBoundary>}
         {activeTab === "frontstore"   && <ErrorBoundary key="frontstore"><FrontStoreView data={data} role={viewRole}
                                             checkRequest={activeCheckRequest}
@@ -2719,11 +2728,15 @@ function App() {
                                               setActiveCheckRequest(null);
                                               try {
                                                 // side:'fs' → ปิดเฉพาะฝั่งหน้าร้าน ไม่กระทบคำขอฝั่งคลัง
-                                                await dmjFetch(SHEET_DEPLOY_URL, {method:"POST",
+                                                const res = await dmjFetch(SHEET_DEPLOY_URL, {method:"POST",
                                                   headers:{"Content-Type":"text/plain;charset=utf-8"},
                                                   body: JSON.stringify({completeStockCheck:true, reqId:reqId, side:'fs', actor:role})});
+                                                // ⚠️ ต้องอ่านคำตอบจริง (บทเรียนข้อ 13) — ปฏิเสธได้ เช่น สิทธิ์ไม่พอ/เดา
+                                                // side ไม่ได้ · ไม่อ่านคำตอบ = โชว์ "ปิดคำขอสำเร็จ" ทั้งที่ยังไม่ปิดจริง (F03)
+                                                const d = await dmjJson(res);
+                                                if (!d || d.success === false) setCheckSideStatus(reqId, 'fs', 'pending');
                                                 fetchFromSheet(); // reconcile เบื้องหลัง (รีเฟรช pendingChecks + ค่าจริง)
-                                              } catch(e){ console.error("completeStockCheck:", e); }
+                                              } catch(e){ console.error("completeStockCheck:", e); setCheckSideStatus(reqId, 'fs', 'pending'); }
                                             }}/></ErrorBoundary>}
         {activeTab === "transfers"    && <ErrorBoundary key="transfers"><TransferView data={data}/></ErrorBoundary>}
         {activeTab === "orders"       && <ErrorBoundary key="orders"><OrderListView data={data} role={viewRole}/></ErrorBoundary>}

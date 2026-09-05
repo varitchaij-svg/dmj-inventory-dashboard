@@ -70,17 +70,24 @@ describe('app.jsx: onCheckComplete รับ counts + patch ทันทีก�
 });
 
 describe('app.jsx: markCheckSideDone — ปิดคำขอฝั่งตัวเองในมือทันที (แบนเนอร์หายเลย)', () => {
-  const m = APP.match(/const markCheckSideDone = usC\(\(reqId, side\)[\s\S]*?\n  \}, \[\]\);/);
+  // markCheckSideDone เป็นตัวห่อบาง ๆ เรียก setCheckSideStatus(..., 'done') — ตัวหลังเป็น
+  // ที่เดียวที่แก้ stockCheckRequests จริง (ใช้ร่วมกับการถอย optimistic กลับเป็น 'pending'
+  // ตอน server ปฏิเสธ — F03 ในรายงานตรวจระบบ 5 ก.ย. 2026, ดู tests/stockcheck-role-actions.test.js)
+  const wrap = APP.match(/const markCheckSideDone = usC\([^;]*;/);
+  const wrapFn = wrap ? wrap[0] : '';
+  const m = APP.match(/const setCheckSideStatus = usC\(\(reqId, side, status\)[\s\S]*?\n  \}, \[\]\);/);
   const fn = m ? m[0] : '';
 
   it('มีฟังก์ชัน markCheckSideDone', () => {
-    expect(fn, 'ต้องมี markCheckSideDone ใน app.jsx').toBeTruthy();
+    expect(wrapFn, 'ต้องมี markCheckSideDone ใน app.jsx').toBeTruthy();
+    expect(wrapFn).toMatch(/setCheckSideStatus\(reqId, side, 'done'\)/);
   });
 
-  it('อัปเดตเฉพาะฝั่งที่ปิด (fsStatus/whStatus) ของ reqId นั้น เป็น "done"', () => {
+  it('อัปเดตเฉพาะฝั่งที่ปิด (fsStatus/whStatus) ของ reqId นั้น เป็นสถานะที่สั่ง', () => {
+    expect(fn, 'ต้องมี setCheckSideStatus ใน app.jsx').toBeTruthy();
     expect(fn).toMatch(/side === 'fs' \? 'fsStatus' : 'whStatus'/);
     expect(fn).toContain('stockCheckRequests');
-    expect(fn).toContain("r[key] === 'done'");
+    expect(fn).toContain("r[key] === status");
     // จับคู่ด้วย reqId (ไม่แตะคำขออื่น)
     expect(fn).toMatch(/String\(r\.reqId\) !== String\(reqId\)/);
   });
