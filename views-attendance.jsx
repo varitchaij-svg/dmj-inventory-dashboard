@@ -55,13 +55,19 @@ function attMinLabel(min) {
 }
 
 // ── ขอพิกัด GPS · คืน null ถ้าไม่ได้/ปฏิเสธ (ไม่บล็อกการลงเวลา ตามนโยบายที่เจ้าของเลือก) ──
+// อายุพิกัดที่ยอมรับได้ตอนกดปุ่มลงเวลา (F09) — เกินนี้ขอใหม่เสมอ
+// 90 วิ: นานพอให้ค่าที่ขอไว้ตอนเปิดหน้าใช้ได้ทันทีในกรณีปกติ (กดภายในไม่กี่วินาที)
+// แต่สั้นพอที่คนเปิดหน้าค้างไว้แล้วเดินไปอีกจุดจะไม่ได้พิกัดเดิม
+const ATT_GPS_MAX_AGE_MS = 90 * 1000;
 function attGetPosition(timeoutMs) {
   return new Promise((resolve) => {
     if (!navigator.geolocation) { resolve(null); return; }
     let done = false;
     const finish = (v) => { if (!done) { done = true; resolve(v); } };
     navigator.geolocation.getCurrentPosition(
-      (p) => finish({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }),
+      // ⚠️ ติด `at` (เวลาที่อ่านได้) มาด้วยเสมอ — ตัวเรียกต้องตัดสินได้ว่าพิกัดนี้ "เก่าไปหรือยัง"
+      // (F09) ไม่มีเวลากำกับ = ใช้ค่าเก่าตลอดกาลโดยไม่มีอะไรบอก
+      (p) => finish({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy, at: Date.now() }),
       () => finish(null),
       { enableHighAccuracy: true, timeout: timeoutMs || 12000, maximumAge: 30000 }
     );
@@ -196,8 +202,15 @@ function AttendanceView({ role }) {
     if (type === "in" && !photo) { setToast({ kind: "err", text: "ถ่ายรูปก่อนกดเข้างาน" }); return; }
     setBusy(type); setToast(null);
     try {
-      // ขอพิกัดสด ณ ตอนกด (ค่าที่ขอไว้ตอนเปิดหน้าอาจเก่าแล้ว)
-      const p = gps.state === "ok" ? gps : await attGetPosition(8000);
+      // ── พิกัดต้องสดพอ (F09 · ผลตรวจระบบ 5 ก.ย. 2026) ────────────────────────
+      // เดิมคอมเมนต์เขียนว่า "ขอพิกัดสด ณ ตอนกด" แต่โค้ดจริงหยิบค่าที่ขอไว้ **ตอนเปิดหน้า**
+      // มาใช้เลยถ้า state เป็น ok → ค้างหน้าลงเวลาไว้แล้วเดินไปอีกจุด กดปุ่มได้พิกัดของจุดเดิม
+      // = ระยะห่าง/ชื่อจุดในชีตผิด โดยไม่มี error ให้เห็น (ข้อมูลนี้ใช้ยืนยันว่ามาถึงที่ทำงานจริง)
+      // → ยอมใช้ค่าที่ cache ไว้ได้ไม่เกิน ATT_GPS_MAX_AGE_MS แล้วขอใหม่
+      const fresh = gps.state === "ok" && gps.at && (Date.now() - gps.at) <= ATT_GPS_MAX_AGE_MS;
+      const p = fresh ? gps : await attGetPosition(8000);
+      // ขอใหม่แล้วได้ค่ามา → อัปเดต state ให้จอบอกสถานะตรงกับที่เพิ่งส่งไปจริง
+      if (!fresh && p) setGps({ state: "ok", ...p });
       const d = await attPost({
         action: "punch", type,
         lat: p ? p.lat : null, lng: p ? p.lng : null, accuracy: p ? p.accuracy : null,
@@ -217,9 +230,16 @@ function AttendanceView({ role }) {
         });
       } else {
         setToast({ kind: "err", text: (d && d.error) || "บันทึกไม่สำเร็จ" });
+        // server ตอบว่าคว้าล็อกไม่ได้ (F07) = "ยังไม่ได้เขียนให้" แต่คำขอของ**คนที่ถือล็อกอยู่**
+        // อาจเพิ่งเขียนเสร็จ → ดึงสถานะล่าสุดมาโชว์ ให้พนักงานเห็นด้วยตาก่อนตัดสินใจกดใหม่
+        if (d && d.locked) load();
       }
     } catch (e) {
-      setToast({ kind: "err", text: "บันทึกไม่สำเร็จ: " + e.message });
+      // ⚠️ "อ่านคำตอบไม่ได้" ≠ "ไม่สำเร็จ" (บทเรียนข้อ 13) — GAS เขียนแถวเสร็จแล้วยังตอบหน้า HTML
+      // หรือถูกตัดที่ 90 วิได้ · ขึ้น "บันทึกไม่สำเร็จ" ตรง ๆ = พนักงานกดซ้ำแล้วได้ 2 แถว
+      // → บอกว่า "ยังตรวจผลไม่ได้" แล้วโหลดสถานะจริงมาโชว์ทันที (myToday เป็น read-only ยิงซ้ำได้)
+      setToast({ kind: "err", text: "ยังตรวจผลไม่ได้ (" + (typeof dmjErrText === "function" ? dmjErrText(e) : e.message) + ") — ดูรายการด้านล่างว่าลงเวลาไปแล้วหรือยัง ก่อนกดซ้ำ" });
+      load();
     } finally { setBusy(null); }
   };
 
@@ -321,6 +341,13 @@ function AttendanceView({ role }) {
                 {gps.state === "loading" ? t("กำลังหา…") : gps.state === "ok" ? t("พร้อม (±{acc} ม.)", { acc: Math.round(gps.accuracy) }) : t("ไม่ได้เปิด GPS")}
               </span>
             </div>
+            {/* F09: บอกว่าพิกัดที่ถืออยู่เก่าแล้ว — กดปุ่มลงเวลาระบบจะขอใหม่ให้เอง
+                ไม่บอก = คนเปิดหน้าค้างไว้ทั้งเช้าจะนึกว่าค่าที่โชว์คือตำแหน่งปัจจุบัน */}
+            {gps.state === "ok" && gps.at && (clock.getTime() - gps.at) > ATT_GPS_MAX_AGE_MS && (
+            <div style={{ padding: "8px 14px", fontSize: 11.5, color: "#a07417", background: "#fffbeb", borderBottom: "1px solid var(--bdr)" }}>
+              ⏳ พิกัดนี้อ่านไว้เมื่อ {Math.round((clock.getTime() - gps.at) / 60000)} นาทีที่แล้ว — กดลงเวลาแล้วระบบจะขอตำแหน่งใหม่ให้
+            </div>
+            )}
             <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 14px", fontSize: 13 }}>
               <span style={{ color: "var(--muted)" }}>⏱ {t("ทำงานวันนี้")}</span>
               <span style={{ fontWeight: 700 }}>

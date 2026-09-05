@@ -568,12 +568,83 @@ function revokeSession_(ss, token) {
   }
 }
 
-// รายชื่อ LINE display name ที่ตั้งเป็น owner ให้อัตโนมัติทันทีที่ล็อกอิน (ไม่ต้องรออนุมัติ)
-// ⚠️ จับคู่ด้วย "ชื่อที่โชว์ใน LINE" ซึ่งใครก็เปลี่ยนเองได้ — ยอมรับความเสี่ยงนี้ได้เฉพาะทีมเล็ก
-// ที่ไว้ใจกัน ถ้าอยากปลอดภัยกว่านี้ให้เปลี่ยนไปจับคู่ด้วย providerUserId (คอลัมน์ C ชีต "พนักงาน") แทน
+// ─── auto-owner: ให้สิทธิ์เจ้าของอัตโนมัติตอนล็อกอิน (F01 · ผลตรวจระบบ 5 ก.ย. 2026) ───
+//
+// มี 2 เส้นทาง โดยตั้งใจให้ "เส้นทางถาวร" เป็นตัวหลัก และ "เส้นทางชื่อ" เป็นแค่ทางกู้ที่แคบลง:
+//
+//  ① **AUTO_OWNER_LINE_IDS (Script Property)** = รายการ `providerUserId` ของ LINE คั่นด้วย
+//     จุลภาค/บรรทัดใหม่ — เป็น **รหัสถาวร เปลี่ยนเองไม่ได้** และตั้งได้เฉพาะคนที่เข้า GAS
+//     Script Properties ได้ (= เจ้าของ) → เชื่อถือได้จริง · เส้นทางนี้ให้ owner/active เสมอ
+//     และเป็น **ช่องทางกู้บัญชีเจ้าของ** ที่รายงานเรียกร้อง (ดู `listStaffLineIds()`)
+//
+//  ② **AUTO_OWNER_LINE_NAMES (ชื่อที่โชว์ใน LINE)** = ของเดิม · ⚠️ **ใครก็ตั้งชื่อตามได้**
+//     เดิมให้สิทธิ์แบบไม่มีเงื่อนไข ทั้งแถวใหม่และแถวเดิม — คนนอกตั้งชื่อ LINE ว่า "tah"
+//     แล้วล็อกอิน = ได้ owner ทันที และ **แถวที่เจ้าของกดระงับไว้กลับเป็น active เอง**
+//     ทำให้ขั้นตอน "อนุมัติ/ระงับ" ที่สอนเจ้าของไปเชื่อถือไม่ได้เลย
+//     ตอนนี้บีบเหลือ 2 เงื่อนไขที่ต้องผ่าน **ทั้งคู่**:
+//       · ชื่อนั้นต้องยังไม่ถูกบัญชีอื่นใช้อยู่ (`autoOwnerNameTakenBy_`) — คนที่ 2 ที่ใช้ชื่อซ้ำ
+//         ไม่ได้สิทธิ์ ตกไปรออนุมัติตามปกติ (เกณฑ์ปิดงานข้อ 1)
+//       · แถวเดิมต้องเป็น `pending` เท่านั้น — `disabled` คือการตัดสินใจของเจ้าของ **ห้ามเปิดกลับ
+//         ด้วยชื่อเด็ดขาด** (เกณฑ์ปิดงานข้อ 2) · role อื่นที่ active อยู่ก็ไม่ทับ (เจ้าของตั้งเอง)
+//     ⚠️ ปฏิเสธแล้ว **ห้ามเงียบ** — แจ้งเจ้าของทาง LINE + เขียน audit เสมอ ไม่งั้นคนที่โดน
+//        ปฏิเสธจะกลายเป็น "ล็อกอินแล้วไม่ได้สิทธิ์ ไม่มีใครรู้ว่าทำไม"
+//
+// เจ้าของเดิมที่ role=owner/status=active อยู่แล้ว **ไม่ต้องพึ่งเส้นทางไหนเลย** (เกณฑ์ข้อ 3)
 const AUTO_OWNER_LINE_NAMES = ["tah", "jeed"]; // lower-case ไว้เทียบแบบไม่สนตัวพิมพ์
 function isAutoOwnerLineName_(name) {
   return AUTO_OWNER_LINE_NAMES.indexOf(String(name || "").trim().toLowerCase()) >= 0;
+}
+
+// รหัสถาวรของเจ้าของ — อ่านจาก Script Property (ไม่ hard-code ในไฟล์ที่ push ขึ้น repo)
+function autoOwnerLineIds_() {
+  try {
+    var raw = PropertiesService.getScriptProperties().getProperty('AUTO_OWNER_LINE_IDS') || '';
+    return String(raw).split(/[\s,;]+/).map(function (x) { return x.trim(); }).filter(function (x) { return !!x; });
+  } catch (e) { return []; }
+}
+function isAutoOwnerLineId_(providerUserId) {
+  var id = String(providerUserId || '').trim();
+  if (!id) return false;
+  return autoOwnerLineIds_().indexOf(id) >= 0;
+}
+
+// มีบัญชี **อื่น** ที่ใช้ชื่อ whitelist นี้อยู่แล้วไหม → คืน providerUserId ของบัญชีนั้น (หรือ '')
+// เทียบทั้งคอลัมน์ D (displayName) และ E (lineDisplayName) เพราะเจ้าของแก้ชื่อในชีตเองได้
+function autoOwnerNameTakenBy_(sh, lineDisplayName, providerUserId) {
+  var want = String(lineDisplayName || '').trim().toLowerCase();
+  if (!want) return '';
+  var me = String(providerUserId || '').trim();
+  var last = sh.getLastRow();
+  if (last < 2) return '';
+  var vals = sh.getRange(2, 3, last - 1, 3).getValues();   // C=providerUserId, D=displayName, E=lineDisplayName
+  for (var i = 0; i < vals.length; i++) {
+    var pid = String(vals[i][0] || '').trim();
+    if (!pid || pid === me) continue;                       // แถวของเราเองไม่นับว่า "ถูกใช้"
+    var d = String(vals[i][1] || '').trim().toLowerCase();
+    var l = String(vals[i][2] || '').trim().toLowerCase();
+    if (d === want || l === want) return pid;
+  }
+  return '';
+}
+
+// ── เครื่องมือให้เจ้าของรันเองใน GAS editor (ชื่อไม่มี "_" ต่อท้ายจึงโผล่ใน dropdown — บทเรียนข้อ 1) ──
+// พิมพ์ staffId / ชื่อ / role / status / providerUserId ของทุกแถว เพื่อเอา id ไปใส่
+// Script Property `AUTO_OWNER_LINE_IDS` · **อ่านอย่างเดียว ไม่แก้อะไร**
+function listStaffLineIds() {
+  var ss = SpreadsheetApp.openById(PropertiesService.getScriptProperties().getProperty('SHEET_ID'));
+  var sh = staffSheet_(ss);
+  var last = sh.getLastRow();
+  if (last < 2) { Logger.log('ยังไม่มีพนักงานในชีต'); return; }
+  var vals = sh.getRange(2, 1, last - 1, 7).getValues();
+  var cur = autoOwnerLineIds_();
+  Logger.log('AUTO_OWNER_LINE_IDS ตอนนี้: ' + (cur.length ? cur.join(', ') : '(ยังไม่ตั้ง)'));
+  Logger.log('— รายชื่อพนักงานทั้งหมด —');
+  vals.forEach(function (r) {
+    Logger.log([r[0], r[3] || r[4], 'role=' + (r[5] || '-'), 'status=' + (r[6] || '-'),
+                'id=' + r[2], cur.indexOf(String(r[2]).trim()) >= 0 ? '← อยู่ใน AUTO_OWNER_LINE_IDS แล้ว' : ''].join(' · '));
+  });
+  Logger.log('');
+  Logger.log('วิธีตั้ง: Project Settings → Script Properties → AUTO_OWNER_LINE_IDS = id ของเจ้าของ (หลายคนคั่นด้วย ,)');
 }
 
 // ล็อกอินด้วย LINE — upsert แถวพนักงาน (คนแรกที่เคยล็อกอินในระบบ = owner อัตโนมัติ) + ออก session
@@ -615,7 +686,26 @@ function authLine_(ss, data) {
     const now = new Date();
     let staffObj;
 
-    const autoOwner = isAutoOwnerLineName_(lineDisplayName);
+    // ── ตัดสิน auto-owner (F01) — id ก่อนชื่อเสมอ ────────────────────────────
+    const autoOwnerById = isAutoOwnerLineId_(providerUserId);
+    // ชื่อจะให้สิทธิ์ได้ก็ต่อเมื่อ **ยังไม่มีบัญชีอื่นใช้ชื่อนี้อยู่** (เกณฑ์ปิดงานข้อ 1)
+    const nameTakenBy = isAutoOwnerLineName_(lineDisplayName)
+      ? autoOwnerNameTakenBy_(sh, lineDisplayName, providerUserId) : '';
+    const autoOwnerByName = isAutoOwnerLineName_(lineDisplayName) && !nameTakenBy;
+    const autoOwner = autoOwnerById || autoOwnerByName;
+    // ปฏิเสธเพราะชื่อซ้ำ → ต้องบอกเจ้าของ ไม่ใช่เงียบ
+    if (nameTakenBy) {
+      try {
+        writeAuditLog_(lineDisplayName, "ล็อกอิน LINE", "ปฏิเสธ auto-owner (ชื่อซ้ำ)",
+          auditDetail_({ name: lineDisplayName, id: providerUserId, takenBy: nameTakenBy }));
+        enqueueNoti_({ channel: 'secondary', priority: 5, type: 'text', target: 'user',
+          dedupKey: 'autoowner-dup-' + providerUserId,
+          payload: { text: "⚠️ มีคนตั้งชื่อ LINE ว่า \"" + lineDisplayName + "\" ซ้ำกับเจ้าของ แล้วล็อกอินเข้ามา\n"
+                         + "ระบบ **ไม่ได้** ให้สิทธิ์เจ้าของ — ตกไปรออนุมัติตามปกติ\n"
+                         + "ถ้าเป็นคุณเอง (เปลี่ยนบัญชี LINE) ให้ใส่รหัสนี้ใน Script Property AUTO_OWNER_LINE_IDS:\n"
+                         + providerUserId } });
+      } catch (e) { Logger.log("authLine_ dup-name noti error: " + e); }
+    }
 
     if (rowIdx < 0) {
       const isFirstEver = sh.getLastRow() < 2;
@@ -638,12 +728,28 @@ function authLine_(ss, data) {
       if (!staffObj.pictureUrl && pictureUrl) sh.getRange(rowIdx, 8).setValue(pictureUrl);
       staffObj.lastLoginAt = now;
       staffObj.lineDisplayName = lineDisplayName;
-      // ชื่ออยู่ใน whitelist แต่ยังไม่ใช่ owner/active (เช่นเคยตั้ง role อื่นไว้ หรือค้าง pending) → ยกระดับให้ทันที
-      if (autoOwner && (staffObj.role !== "owner" || staffObj.status !== "active")) {
+      // ── ยกระดับแถวเดิมเป็น owner (F01) ────────────────────────────────────
+      // เดิม: ชื่ออยู่ใน whitelist → เขียนทับ role/status **ทุกกรณี** รวมทั้งแถวที่เจ้าของ
+      // กดระงับไว้ (disabled) และแถวที่เจ้าของตั้ง role อื่นไว้เอง → การกดระงับไม่มีความหมาย
+      // ตอนนี้:
+      //   · เส้นทาง **id ถาวร** ยกระดับได้ทุกสถานะ (เป็นทางกู้บัญชีเจ้าของ ตั้งได้เฉพาะเจ้าของ)
+      //   · เส้นทาง **ชื่อ** ยกระดับได้เฉพาะแถวที่ยัง `pending` เท่านั้น
+      //     (pending = ระบบตั้งเอง ยังไม่มีมนุษย์ตัดสินใจอะไร · disabled/active-role-อื่น
+      //      = เจ้าของตัดสินใจแล้ว **ห้ามทับด้วยชื่อที่ใครก็เปลี่ยนได้**)
+      const canUpgrade = autoOwnerById || (autoOwnerByName && staffObj.status === "pending");
+      if (canUpgrade && (staffObj.role !== "owner" || staffObj.status !== "active")) {
         sh.getRange(rowIdx, 6).setValue("owner");   // role
         sh.getRange(rowIdx, 7).setValue("active");  // status
         staffObj.role = "owner";
         staffObj.status = "active";
+        // เปลี่ยน role/status แล้วต้องล้าง cache ของ resolveSession_ (Phase 7.6 ก้อน D)
+        try { sessionCacheClearForStaff_(ss, staffObj.staffId); } catch (e) {}
+      } else if (autoOwnerByName && staffObj.status === "disabled") {
+        // ปฏิเสธการ "เปิดกลับด้วยชื่อ" — ต้องเห็นได้ ไม่ใช่เงียบ (คนถูกระงับจะงงว่าทำไมเข้าไม่ได้)
+        try {
+          writeAuditLog_(lineDisplayName, "ล็อกอิน LINE", "ปฏิเสธ auto-owner (บัญชีถูกระงับ)",
+            auditDetail_({ staffId: staffObj.staffId, name: lineDisplayName, id: providerUserId }));
+        } catch (e) { Logger.log("authLine_ disabled-autoowner audit: " + e); }
       }
     }
 
@@ -1417,6 +1523,21 @@ function punchHandler_(ss, data) {
     try { lock.waitLock(10000); _lkOk = true; } catch (e) {}
     _lkGot = Date.now();
 
+    // ⚠️ คว้าล็อกไม่ได้ = **ห้ามเขียน** (F07 · ผลตรวจระบบ 5 ก.ย. 2026)
+    // เดิมจับ error ของ waitLock ทิ้งแล้ว appendRow ต่อ — ล็อกตัวนี้เป็น "สิ่งเดียว" ที่กัน
+    // สองเครื่องกดพร้อมกันแล้วได้ 2 แถว ปล่อยผ่าน = ตอนเปิดงานพร้อมกัน (จังหวะที่คนกดพร้อมกัน
+    // มากที่สุดของวัน) การกันซ้ำหายไปเงียบ ๆ → ชั่วโมงทำงานเพี้ยนโดยไม่มี error ให้ใครเห็น
+    // ⚠️ ต้องตัด **ก่อน `saveAttPhoto_`** — บรรทัดนั้นเขียนไฟล์ลง Drive จริง
+    //     ตัดทีหลังจะเหลือรูปค้างที่ไม่มีแถวไหนอ้างถึง (ลบออกก็ต่อเมื่อครบ 90 วัน)
+    // ⚠️ ข้อความต้องบอกให้ "ดูสถานะล่าสุดก่อน" ไม่ใช่ "ลองใหม่" เฉย ๆ — คำขอที่ถูกตัด
+    //     ตรงนี้ยังไม่เขียนก็จริง แต่คำขอ **ของรอบก่อน** ที่กำลังถือล็อกอยู่อาจเขียนสำเร็จแล้ว
+    if (!_lkOk) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false, retryable: true, locked: true,
+        error: "ระบบกำลังบันทึกของอีกคนอยู่ — ยังไม่ได้บันทึกให้ · ดูสถานะล่าสุดด้านล่างก่อน แล้วค่อยกดใหม่",
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
     const now = new Date();
     const dateStr = attDateKey_(now);
     const events = readAttEvents_(ss, s.staffId, dateStr);
@@ -1947,6 +2068,10 @@ const STAFF_PERF_CATEGORIES_ = [
   // เพิ่มจากยอด (ยอดงานจริงยังมาจาก key "count" ข้างบนเหมือนเดิม) แค่ทำให้ meta-test เจอหมวดรองรับ
   { key: "countstart", emoji: "▶️", label: "เริ่มนับสต็อก",       ops: false, unit: "ครั้ง",  skip: true, prefixes: ["เริ่มนับสต็อก"] },
   { key: "countend",   emoji: "⏹️", label: "จบการนับสต็อก",      ops: false, unit: "ครั้ง",  skip: true, prefixes: ["จบการนับสต็อก"] },
+  // เหตุการณ์ความปลอดภัยตอนล็อกอิน (F01 — ปฏิเสธ auto-owner เพราะชื่อซ้ำ/บัญชีถูกระงับ)
+  // ⚠️ `skip: true` เพราะ **ไม่ใช่ "งาน" ที่พนักงานทำ** — เอาไปนับรวมจะทำให้คนที่โดนปฏิเสธ
+  // มีตัวเลข "งาน" ขึ้นมาเฉย ๆ · ยังเห็นได้ในหน้า Audit Log ตามปกติ (ที่นั่นคือที่ของมัน)
+  { key: "login",      emoji: "🔐", label: "เหตุการณ์ล็อกอิน",   ops: false, unit: "ครั้ง",  skip: true, prefixes: ["ล็อกอิน LINE"] },
 ];
 const STAFF_PERF_OTHER_ = { key: "other", emoji: "➖", label: "อื่นๆ", ops: false, unit: "ครั้ง" };
 
