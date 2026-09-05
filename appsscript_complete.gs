@@ -928,14 +928,41 @@ var IMMEDIATE_GATE_STRICT_ACTIONS_ = {
   zeroStock:           ["warehouse"],
 };
 
+// คืน response ปฏิเสธ ถ้า session ที่ยื่นมาผูกกับพนักงานที่ "ไม่ active" (ถูกระงับ/ยังรออนุมัติ)
+// คืน null = ผ่าน (รวมกรณี "ไม่มี session" ซึ่งแปลว่ายังไม่ได้ล็อกอิน ไม่ใช่ถูกระงับ)
+// แยกออกมาเป็นฟังก์ชันเพราะต้องใช้ทั้งด่านกลางของ doPost (canDoOrNull_) และ doGet ที่เขียนข้อมูล
+// (handleOrder_) — เขียนเงื่อนไขซ้ำสองที่แล้วจะหลุดข้างใดข้างหนึ่งโดยไม่มี error ให้เห็น
+function sessionInactiveOrNull_(sess) {
+  if (!sess) return null;                       // ยังไม่ได้ล็อกอิน ≠ ถูกระงับ — ของเดิมทำงานต่อได้
+  var st = String(sess.status == null ? '' : sess.status).trim();
+  // ⚠️ status ว่าง = "ไม่รู้" ไม่ใช่ "ถูกระงับ" → ปล่อยผ่าน (ไม่เปลี่ยนพฤติกรรมเดิม)
+  //    เส้นทางระงับจริงเขียนค่าลงคอลัมน์เสมอ (saveStaffHandler_ เขียนเฉพาะค่าใน VALID_STATUS
+  //    และ authLine_ ตั้ง 'pending'/'active' ให้แถวใหม่) → ไม่มีช่องโหว่จากการปล่อยผ่านตรงนี้
+  //    แต่แถวที่เจ้าของแก้ในชีตเองแล้วเผลอลบค่าทิ้ง จะไม่ถูกล็อกออกจากระบบแบบไม่มีคำอธิบาย
+  if (!st || st === 'active') return null;
+  return forbidden_(st === 'pending'
+    ? "บัญชีนี้ยังรอเจ้าของอนุมัติ — ยังทำรายการไม่ได้"
+    : "บัญชีนี้ถูกระงับการใช้งาน — ติดต่อเจ้าของร้าน");
+}
+
 // คืน null = ผ่าน · คืน response = ถูกปฏิเสธ
 // ยังไม่มี session (REQUIRE_LOGIN ปิด) → ผ่านหมด เพื่อไม่ให้ของเดิมพังตอน rollout
 // ยกเว้น IMMEDIATE_GATE_*_ACTIONS_ (ดู comment ด้านบน) ที่เช็คก่อนเสมอไม่รอ REQUIRE_LOGIN
 function canDoOrNull_(sess, action) {
   if (!action || SESSION_EXEMPT_ACTIONS_[action]) return null;
 
-  // หมายเหตุ: ไม่เช็ค sess.status ซ้ำ — resolveSession_ คืนค่าเฉพาะ session ที่ active อยู่แล้ว
-  // (หมดอายุ/ถูก revoke = คืน null ไปตั้งแต่ต้นทาง) เช็คซ้ำที่นี่จะขัดกับ convention เดิม
+  // ⚠️ บัญชีที่ไม่ active ถูกปฏิเสธทุก action — **ไม่รอ REQUIRE_LOGIN**
+  // เดิมตรงนี้เขียนไว้ว่า "ไม่ต้องเช็ค sess.status ซ้ำ เพราะ resolveSession_ คืนเฉพาะ session
+  // ที่ active อยู่แล้ว" ซึ่ง **ไม่จริง**: resolveSession_ ตรวจแค่ตัว session เอง (หมดอายุ/ถูก
+  // revoke) ไม่เคยดู status ของ "แถวพนักงาน" เลย · และ saveStaffHandler_ ตอนเจ้าของกดระงับ
+  // ก็ล้างแค่ session cache ไม่ได้ revoke token → คนที่ถูกระงับยังสั่งของ/โอนสต็อก/ออกบิลได้
+  // ต่อจนกว่า session จะหมดอายุเอง (30 วัน) ทั้งที่หน้าจอเจ้าของขึ้นว่าระงับแล้ว
+  // ไม่ผูกกับ REQUIRE_LOGIN โดยตั้งใจ — "กดระงับแล้วต้องมีผลทันที" คือความถูกต้องพื้นฐาน
+  // ไม่ใช่ฟีเจอร์ที่รอ rollout · handler ลงเวลา/staff เช็ค status เองอยู่แล้ว ที่ขาดคือด่านกลางนี้
+  // migration-safe: **ไม่มี session เลย → ปล่อยผ่านเหมือนเดิม** (คนที่ยังไม่ล็อกอิน LINE ทำงานต่อได้)
+  var _blocked = sessionInactiveOrNull_(sess);
+  if (_blocked) return _blocked;
+
   var strictRoles = IMMEDIATE_GATE_STRICT_ACTIONS_[action];
   if (strictRoles) {
     if (sess && (isAdminRole_(sess.role) || strictRoles.indexOf(sess.role) >= 0)) return null;
@@ -10913,6 +10940,18 @@ function handleOrder_(params) {
       .createTextOutput(JSON.stringify({ok:false, error:'ไม่พบ Sheet'}))
       .setMimeType(ContentService.MimeType.JSON);
 
+    // ── ตัวตนผู้สั่ง + ด่านบัญชีถูกระงับ ────────────────────────────────────
+    // action=order เป็น doGet จึง **ไม่ผ่าน canDoOrNull_** ที่ต้น doPost — ต้องกันเอง
+    // เส้นทางนี้เขียนชีตจริง ปล่อยผ่าน = คนที่เจ้าของกดระงับแล้วยังสั่งของเข้าคิวคลังได้
+    // ⚠️ ต้องตัดสินใจ "ก่อน" คว้า ScriptLock — ล็อกนี้เป็นตัวเดียวของทั้งสคริปต์
+    //    คว้ามาแล้วค่อยปฏิเสธ = ไปกันคนอื่นที่สั่งของถูกต้องอยู่โดยเปล่าประโยชน์
+    // migration-safe เหมือนด่านกลาง: ไม่ยื่น token มาเลย → ยังสั่งได้เหมือนเดิม
+    var sess = null;
+    try { sess = resolveSession_(ss, params.sessionToken); }
+    catch (e) { /* session พัง → ถือว่าไม่มี ไม่ให้กระทบการสั่งของ */ }
+    var _ordBlocked = sessionInactiveOrNull_(sess);
+    if (_ordBlocked) return _ordBlocked;
+
     // ล็อกคร่อม "หาแถวว่าง → เขียน" — เดิมไม่มีเลย สองเครื่องกดสั่งพร้อมกันได้แถวเดียวกัน
     // แล้วทับกัน (order หายไปเงียบ ๆ) · retryable=true → frontend ลองใหม่ได้ปลอดภัย
     lock = LockService.getScriptLock();
@@ -10941,15 +10980,9 @@ function handleOrder_(params) {
     if (nextRow === -1) nextRow = orderSh.getLastRow() + 1; // C4: fallback ถ้าชีตเต็ม ไม่เขียนทับ row 3
     var productName = (params.name || '').toString().trim();
     var imageUrl = (params.image || '').toString().trim();
-    // ── ผู้สั่ง: เอาจาก session ที่ server ยืนยันเอง ไม่ใช่ชื่อที่ client ส่งมา (ปลอมได้) ──
-    // doGet ไม่ผ่าน doPost จึงไม่มีการ resolve session ให้อัตโนมัติ ต้องทำเองที่นี่
-    // (รับ sessionToken เป็น query param แบบเดียวกับ attendancePhoto/getAuditLog)
+    // ── ผู้สั่ง: ชื่อจาก session ที่ resolve ไว้ก่อนคว้าล็อก (ไม่ใช่ชื่อที่ client ส่งมา ซึ่งปลอมได้) ──
     // ยังไม่ได้ล็อกอิน → เว้นว่างไว้ ดีกว่าใส่ชื่อมั่ว ๆ ที่เชื่อไม่ได้
-    var orderedBy = '';
-    try {
-      var sess = resolveSession_(ss, params.sessionToken);
-      if (sess) orderedBy = staffActorName_(sess);
-    } catch (e) { /* session พัง → ปล่อยว่าง ไม่ให้กระทบการสั่งของ */ }
+    var orderedBy = sess ? staffActorName_(sess) : '';
     ensureOrderPeopleHeaders_(orderSh);
     orderSh.getRange(nextRow, 1, 1, 13).setValues([[orderType, now, 'รอ', 'คลังสินค้าสาย5', 'ดูเหมือนจริง', sku, productName, qty, '', imageUrl, '', orderedBy, '']]);
     if (cid) {

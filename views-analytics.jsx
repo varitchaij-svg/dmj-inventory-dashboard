@@ -4557,6 +4557,39 @@ async function syncShipmentReceive(rowId, sku, receivedQty, refNum) {
 // ─────────────────────────────────────────────────────────────────────
 // ORDER LIST VIEW
 // ─────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────
+// สิทธิ์ปุ่มในเส้นทาง "ออเดอร์ → จัดของ → รับของ" — ตั้งชื่อ "การกระทำ" แทนการไล่ยกเว้น role
+// ─────────────────────────────────────────────────────────────────────
+// ⚠️ ของเดิมเขียนเป็น **blacklist** (`role !== "frontstore" && role !== "saler"`) ซึ่งแปลว่า
+//    role ที่เพิ่มเข้าระบบ "ทีหลัง" หลุดเข้ามาเห็นปุ่มเองโดยไม่มีใครตั้งใจ — `storedevice`
+//    (เครื่องกลางประจำร้าน) จึงเห็นปุ่ม ✕ ยกเลิก / ✅ Done ทั้งที่ตามงานจริงไม่ใช่คนจัดของ
+//    และปุ่มยกเลิกถูก server ปฏิเสธด้วย (กดแล้วขึ้นแดงทุกครั้ง)
+//    → **ใช้ whitelist เสมอ** เพิ่ม role ใหม่แล้วต้องมาตัดสินใจที่นี่ ไม่ใช่ได้สิทธิ์ฟรี
+//
+// ⚠️ `canCancelOrder` ต้องตรงกับ `IMMEDIATE_GATE_ACTIONS_.deleteOrder/deleteOrders`
+//    ใน appsscript_complete.gs (`["employee","warehouse"]` + owner/dev) เสมอ
+//    ไม่ตรงเมื่อไหร่ = ปุ่มโชว์แล้วกดโดนปฏิเสธ หรือคนที่ทำได้จริงหาปุ่มไม่เจอ (มีเทสต์เทียบ 2 ไฟล์)
+//
+// ⚠️ `canReceiveShipment` **ไม่ได้** ล้อตาราง .gs — `confirmShipmentReceive` อยู่ใน
+//    COMMON_ACTIONS_ (ทุก role ยิงได้) ตัวนี้จึงเป็น "ใครมีหน้าที่กดรับของ" ตามงานจริง
+//    เดิมไม่มี storedevice → เครื่องกลางที่ยืนอยู่หน้าร้านกดรับของไม่ได้เลย ทั้งที่เป็นเครื่อง
+//    ที่พนักงานหน้าร้านใช้จริง (F04)
+//
+// role ที่ส่งเข้ามาคือ `viewRole` — dev ถูกยุบเป็น "owner" มาแล้วจาก app.jsx
+const ORDER_PREPARE_ROLES    = ["owner", "warehouse", "employee"];
+const ORDER_CANCEL_ROLES     = ["owner", "warehouse", "employee"];
+const SHIPMENT_RECEIVE_ROLES = ["saler", "frontstore", "storedevice"];
+const SHIPMENT_EDIT_ROLES    = ["owner", "employee", "saler", "frontstore", "storedevice"];
+
+// จัดของ: กรอกจำนวนจัด / กด Done / ย้อนกลับเป็นรอ  (action `updateOrderState`)
+function canPrepareOrder(role)     { return ORDER_PREPARE_ROLES.indexOf(role) >= 0; }
+// ยกเลิกจัดของ = ลบแถวออกจากชีตสั่งของ  (action `deleteOrder` / `deleteOrders`)
+function canCancelOrder(role)      { return ORDER_CANCEL_ROLES.indexOf(role) >= 0; }
+// กดรับของที่โอนมาถึงหน้าร้าน  (action `confirmShipmentReceive`)
+function canReceiveShipment(role)  { return SHIPMENT_RECEIVE_ROLES.indexOf(role) >= 0; }
+// แก้จำนวนที่รับย้อนหลัง หลังกดรับไปแล้ว
+function canEditShipment(role)     { return SHIPMENT_EDIT_ROLES.indexOf(role) >= 0; }
+
 function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData }) {
   const isPending = !order.status || order.status === "รอ" || order.status === "pending";
   const [prepQty, setPrepQty] = uS(() => order.preparedQty > 0 ? order.preparedQty : (order.orderQty || 0));
@@ -4595,20 +4628,33 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
     setPrepQtyDraft(String(n));
     if (n !== prepQty) savePrepQty(n);
   };
-  const setPrintFlag = f => {
-    onPatch(order.id, {printFlag: f});
-    syncOrderUpdate(order, {printFlag: f});
+  // ── บันทึกสถานะย่อยแล้ว "ดูผลจริง" ก่อนถือว่าสำเร็จ ─────────────────────────────
+  // ⚠️ เดิม 4 ปุ่มนี้ (PRINT/SKIP · หิ้ว↔ขึ้นรถ · Central · ย้อนกลับเป็นรอ) ยิงแล้ว **ไม่เคยดูผลเลย**
+  //    GAS ตอบหน้า HTML ได้เมื่อ execution ซ้อนกัน/เน็ตร้านกระตุก (บทเรียนข้อ 13) → จอนี้เปลี่ยนแล้ว
+  //    แต่ชีตยังเป็นค่าเดิม → เครื่องอื่นเห็นคนละอย่าง งานถูกส่งต่อผิด **โดยไม่มี error ให้เห็น**
+  //    (`savePrepQty`/`markComplete` ข้างล่างทำถูกอยู่แล้ว — เอารูปแบบเดียวกันมาใช้ ไม่คิดใหม่)
+  // ⚠️ ถอย optimistic patch กลับเมื่อล้มเหลว — "ปุ่มเด้งกลับที่เดิม" คือสัญญาณที่ผู้ใช้เห็นได้จริง
+  //    และคงอยู่ ต่างจาก toast ที่หายไปใน 8 วิ · ปล่อยไว้ = จอโกหกว่าเปลี่ยนแล้วตลอดจนกว่าจะ refetch
+  // ⚠️ **ห้ามยิงซ้ำอัตโนมัติ** — `updateOrderState` ยังไม่ idempotent (ไม่มี cid เหมือน action=order)
+  //    ปล่อยให้ผู้ใช้กดเอง ตามแพทเทิร์นเดียวกับ `savePrepQty`
+  // ⚠️ ไม่แตะ `saveFailed` โดยตั้งใจ — ธงนั้นเป็นของช่อง "จัด" (ขอบแดง + ป้ายยังไม่บันทึก)
+  //    เอามาใช้ร่วมกัน = ปุ่ม PRINT ที่บันทึกผ่านจะไปล้างคำเตือนของจำนวนที่ยังไม่เข้าระบบจริง
+  const saveOrderField = async (updates, prevUpdates, label) => {
+    onPatch(order.id, updates);
+    const res = await syncOrderUpdate(order, updates);
+    if (res && res.success === false) {
+      onPatch(order.id, prevUpdates);
+      showToast("warn", `ยังไม่ได้บันทึก${label ? " " + label : ""} — ${res.error || "เน็ตอาจหลุด"} · กดใหม่อีกครั้ง`, "⚠️", 8000);
+      return false;
+    }
+    return true;
   };
-  const setCarryMode = m => {
-    onPatch(order.id, {carryMode: m});
-    syncOrderUpdate(order, {carryMode: m});
-  };
+
+  const setPrintFlag = f => saveOrderField({printFlag: f}, {printFlag: order.printFlag}, "PRINT/SKIP");
+  const setCarryMode = m => saveOrderField({carryMode: m}, {carryMode: order.carryMode}, "หิ้ว/ขึ้นรถ");
   // ป้ายเสริม "ส่ง Central" — คนละตัวกับ carryMode (หิ้ว/รอขึ้นรถ) ข้างบน ใบเดียวกันติดได้ทั้งคู่
   // (คลัง/หน้าร้าน/เซล กดเองนาน ๆ ครั้ง จึงไม่ยัดเป็นตัวเลือกที่หน้าสร้างออเดอร์ซึ่งใช้บ่อยสุด)
-  const setToCentral = v => {
-    onPatch(order.id, {toCentral: v});
-    syncOrderUpdate(order, {toCentral: v});
-  };
+  const setToCentral = v => saveOrderField({toCentral: v}, {toCentral: order.toCentral}, "Central");
   const markComplete = async () => {
     if (!order.printFlag) {
       showToast("warn", "เลือก PRINT หรือ SKIP ก่อน", "🖨️");
@@ -4635,11 +4681,12 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
   };
 
   // ย้อนกลับ order ที่กด Done ผิด → กลับเป็น "รอ" (เขียนกลับลง Sheet จริงด้วย ไม่ใช่แค่ localStorage)
-  const undoComplete = () => {
+  // ⚠️ เดิมขึ้น "ย้อนกลับแล้ว" ทันทีโดยไม่รอผล — ใบที่ชีตยังเป็น "สำเร็จ" อยู่จะหายจากคิว
+  //    "รอดำเนินการ" บนเครื่องนี้เครื่องเดียว คนอื่นยังเห็นว่าจัดเสร็จแล้ว → ของไม่ถูกจัดซ้ำ
+  const undoComplete = async () => {
     setUndoConfirm(false);
-    onPatch(order.id, { status: "รอ" });
-    syncOrderUpdate(order, { status: "รอ" });
-    showToast("success", "ย้อนกลับเป็นรอดำเนินการแล้ว", "↩️", 2500);
+    const okUndo = await saveOrderField({ status: "รอ" }, { status: order.status }, "การย้อนกลับ");
+    if (okUndo) showToast("success", "ย้อนกลับเป็นรอดำเนินการแล้ว", "↩️", 2500);
   };
 
   // ยกเลิกจัดของ — ลบรายการนี้ออกจากรายการสั่ง เฉย ๆ (ไม่แตะ/ไม่ปรับสต็อกสินค้าเป็น 0)
@@ -4712,7 +4759,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
           <div style={{flex:1,minWidth:0}}>
             <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginBottom:2}}>
               <span style={{fontSize:10,color:"var(--muted)"}}>{order.sku}</span>
-              {!isPending && role !== "frontstore" && role !== "saler" ? (
+              {!isPending && canPrepareOrder(role) ? (
                 <button onClick={() => setUndoConfirm(true)} title="กดเพื่อย้อนกลับเป็นรอดำเนินการ" style={{
                   fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:20,
                   background:"#e8f5e9",color:"#1f7f44",letterSpacing:.3,
@@ -4750,7 +4797,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
           </div>
 
           {/* ✕ ยกเลิกจัดของ — มุมขวาบน (ลบออกจากรายการสั่ง ไม่แตะสต็อก) */}
-          {isPending && !canceled && role !== "frontstore" && role !== "saler" && (
+          {isPending && !canceled && canCancelOrder(role) && (
             <button onClick={() => setCancelConfirm(true)}
               title="ยกเลิกจัดของ — ลบรายการนี้ออกจากรายการสั่ง"
               disabled={canceling}
@@ -4866,7 +4913,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
             )}
 
             {/* Done */}
-            {isPending && role !== "frontstore" && role !== "saler" && (
+            {isPending && canPrepareOrder(role) && (
               <button onClick={markComplete} style={{
                 padding:"10px 16px",borderRadius:10,border:"none",
                 background:pf?"#1b5e20":"#d1d5db",color:"#fff",
@@ -5005,8 +5052,8 @@ function ShipmentRow({ s, role, productMap, onConfirm }) {
   const [editing, setEditing] = uS(false);
   const product = productMap ? productMap[s.sku] : null;
   const imgSrc = s.image || product?.imageUrl || null;
-  const canConfirm = role === "saler" || role === "frontstore";
-  const canEdit = ["owner","employee","saler","frontstore"].includes(role);
+  const canConfirm = canReceiveShipment(role);
+  const canEdit = canEditShipment(role);
 
   const handleConfirm = () => {
     const n = Math.max(0, parseInt(recvQty) || 0);
