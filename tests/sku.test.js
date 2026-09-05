@@ -1,6 +1,6 @@
 // tests/sku.test.js — ทดสอบ parseSkuParts, nextModelForPrefix (SKU builder ตาม business rule)
 import { describe, it, expect } from 'vitest';
-import { parseSkuParts, nextModelForPrefix } from './helpers.js';
+import { parseSkuParts, nextModelForPrefix, resolveCategoryPrefix, findNameDuplicates } from './helpers.js';
 
 const P = (sku, category) => ({ sku, category: category || 'ดอกไม้' });
 
@@ -127,5 +127,101 @@ describe('composeSku (AddProductView)', () => {
   it('ล็อกใช้เฉพาะ prefix ที่ตรงกัน — เปลี่ยน prefix แล้วล็อกไม่มีผล', () => {
     // heldDesign เป็นของ R แต่ตอนนี้ prefix = OL → ต้องใช้ nextModel ของ OL
     expect(composeSku({ skuMode: 'new', prefix: 'OL', variantCode: '19', products: base, heldDesign: { prefix: 'R', model: '026' } })).toBe('OL19002');
+  });
+});
+
+// ── Feature 2 (Add Product Assistant) ────────────────────────────────────────
+// resolveCategoryPrefix — "Existing Prefix Wins" → CATEGORY_SKU_PREFIX → none (ห้ามเดา)
+describe('resolveCategoryPrefix', () => {
+  const N = (sku, category) => ({ sku, category });
+  const catalog = [
+    N('OL19001', 'มะกอก'), N('OL10001', 'มะกอก'), N('OL01002', 'มะกอก'),
+    N('R01025', 'กุหลาบ'), N('R19025', 'กุหลาบ'),
+    N('X99001', 'มะกอก'),  // prefix ส่วนน้อยในหมวดมะกอก
+  ];
+
+  it('existing prefix wins — คืน prefix เด่นสุดในหมวด', () => {
+    const r = resolveCategoryPrefix('มะกอก', catalog, {});
+    expect(r.prefix).toBe('OL');
+    expect(r.source).toBe('existing');
+    expect(r.count).toBe(3);
+  });
+
+  it('หมวดอื่นได้ prefix ของหมวดตัวเอง', () => {
+    expect(resolveCategoryPrefix('กุหลาบ', catalog, {}).prefix).toBe('R');
+  });
+
+  it('หมวดที่ยังไม่มีของ → ใช้ map ถ้ามี (source:map)', () => {
+    const r = resolveCategoryPrefix('ทานตะวัน', catalog, { 'ทานตะวัน': 'SF' });
+    expect(r).toEqual({ prefix: 'SF', source: 'map', count: 0 });
+  });
+
+  it('หมวดใหม่ไม่มีทั้งของและ map → source:none (ไม่เดา)', () => {
+    const r = resolveCategoryPrefix('ทานตะวัน', catalog, {});
+    expect(r).toEqual({ prefix: '', source: 'none', count: 0 });
+  });
+
+  it('หมวดว่าง → none', () => {
+    expect(resolveCategoryPrefix('', catalog, {}).source).toBe('none');
+    expect(resolveCategoryPrefix('   ', catalog, {}).source).toBe('none');
+  });
+
+  it('existing ชนะ map เสมอ (แม้จะตั้ง map ไว้)', () => {
+    const r = resolveCategoryPrefix('มะกอก', catalog, { 'มะกอก': 'ZZ' });
+    expect(r.source).toBe('existing');
+    expect(r.prefix).toBe('OL');
+  });
+
+  it('map ที่รูปแบบไม่ถูกต้อง (ไม่ใช่ 1–3 ตัวอักษร) → ไม่ใช้ → none', () => {
+    expect(resolveCategoryPrefix('ทานตะวัน', catalog, { 'ทานตะวัน': 'sf1' }).source).toBe('none');
+    expect(resolveCategoryPrefix('ทานตะวัน', catalog, { 'ทานตะวัน': 'ABCD' }).source).toBe('none');
+  });
+
+  it('เสมอกัน → เลือกตามตัวอักษร (ผลคงที่ ไม่สุ่ม)', () => {
+    const tie = [N('AA01001', 'x'), N('BB01001', 'x')];
+    const r1 = resolveCategoryPrefix('x', tie, {});
+    const r2 = resolveCategoryPrefix('x', tie.slice().reverse(), {});
+    expect(r1.prefix).toBe('AA');
+    expect(r2.prefix).toBe('AA');
+  });
+});
+
+// findNameDuplicates — เตือน soft เท่านั้น (multi-token AND-match)
+describe('findNameDuplicates', () => {
+  const catalog = [
+    { sku: 'OL19001', name: 'มะกอก ขาว 68' },
+    { sku: 'OL10001', name: 'มะกอก เหลือง 68' },
+    { sku: 'R01025', name: 'กุหลาบ แดง 120' },
+    { sku: 'X1', name: '' },   // ไม่มีชื่อ — ต้องถูกข้าม
+  ];
+
+  it('จับชื่อคล้าย (token เดียว)', () => {
+    const r = findNameDuplicates('มะกอก', catalog);
+    expect(r.map(x => x.sku)).toEqual(['OL19001', 'OL10001']);
+  });
+
+  it('multi-token AND — ต้องเจอทุก token', () => {
+    expect(findNameDuplicates('มะกอก เหลือง', catalog).map(x => x.sku)).toEqual(['OL10001']);
+    expect(findNameDuplicates('มะกอก ฟ้า', catalog)).toEqual([]);
+  });
+
+  it('น้อยกว่า 2 ตัวอักษร → ไม่เตือน', () => {
+    expect(findNameDuplicates('ม', catalog)).toEqual([]);
+    expect(findNameDuplicates('', catalog)).toEqual([]);
+  });
+
+  it('ข้ามสินค้าที่ไม่มีชื่อ', () => {
+    expect(findNameDuplicates('', catalog)).toEqual([]);
+    // token ที่ไม่ตรงใคร
+    expect(findNameDuplicates('ทานตะวัน', catalog)).toEqual([]);
+  });
+
+  it('เคารพ limit', () => {
+    const many = Array.from({ length: 10 }, (_, i) => ({ sku: 'S' + i, name: 'ดอก ' + i }));
+    expect(findNameDuplicates('ดอก', many, 3)).toHaveLength(3);
+  });
+
+  it('คืน sku ตัวพิมพ์ใหญ่', () => {
+    expect(findNameDuplicates('กุหลาบ', catalog)[0].sku).toBe('R01025');
   });
 });
