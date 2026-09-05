@@ -733,10 +733,15 @@ function authLine_(ss, data) {
       // กดระงับไว้ (disabled) และแถวที่เจ้าของตั้ง role อื่นไว้เอง → การกดระงับไม่มีความหมาย
       // ตอนนี้:
       //   · เส้นทาง **id ถาวร** ยกระดับได้ทุกสถานะ (เป็นทางกู้บัญชีเจ้าของ ตั้งได้เฉพาะเจ้าของ)
-      //   · เส้นทาง **ชื่อ** ยกระดับได้เฉพาะแถวที่ยัง `pending` เท่านั้น
-      //     (pending = ระบบตั้งเอง ยังไม่มีมนุษย์ตัดสินใจอะไร · disabled/active-role-อื่น
-      //      = เจ้าของตัดสินใจแล้ว **ห้ามทับด้วยชื่อที่ใครก็เปลี่ยนได้**)
-      const canUpgrade = autoOwnerById || (autoOwnerByName && staffObj.status === "pending");
+      //   · เส้นทาง **ชื่อ** ยกระดับได้เฉพาะแถวที่ยัง `pending` (หรือ status ว่าง) เท่านั้น
+      //     (pending/ว่าง = ยังไม่มีมนุษย์ตัดสินใจอะไรกับแถวนี้ · `disabled` และ `active` ที่
+      //      role อื่น = เจ้าของตัดสินใจแล้ว **ห้ามทับด้วยชื่อที่ใครก็เปลี่ยนได้**)
+      //     ⚠️ นับ status ว่างเป็น "ยังไม่ตัดสินใจ" ด้วย **โดยตั้งใจ** — เส้นทางเขียนจริงใส่ค่าเสมอ
+      //     (`authLine_` ใส่ active/pending · `saveStaffHandler_` ใส่เฉพาะค่าใน VALID_STATUS)
+      //     ว่างได้ทางเดียวคือมีคนลบค่าในชีตเอง · ไม่นับรวม = เจ้าของที่แถวโดนลบค่าจะยกระดับ
+      //     ตัวเองกลับไม่ได้เลย ซึ่งเป็นความเสี่ยง "เจ้าของเข้าระบบตัวเองไม่ได้" ที่ต้องกันไว้
+      const _st = String(staffObj.status == null ? "" : staffObj.status).trim();
+      const canUpgrade = autoOwnerById || (autoOwnerByName && (_st === "pending" || _st === ""));
       if (canUpgrade && (staffObj.role !== "owner" || staffObj.status !== "active")) {
         sh.getRange(rowIdx, 6).setValue("owner");   // role
         sh.getRange(rowIdx, 7).setValue("active");  // status

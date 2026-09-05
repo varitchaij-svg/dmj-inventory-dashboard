@@ -155,10 +155,24 @@ describe('F01 — เส้นทางตัดสินใน authLine_ (โ�
     expect(AUTH).toMatch(/const autoOwner = autoOwnerById \|\| autoOwnerByName;/);
   });
 
-  it('เกณฑ์ข้อ 2 — แถวเดิมยกระดับด้วย "ชื่อ" ได้เฉพาะตอน pending เท่านั้น', () => {
-    expect(AUTH).toMatch(/const canUpgrade = autoOwnerById \|\| \(autoOwnerByName && staffObj\.status === "pending"\);/);
+  it('เกณฑ์ข้อ 2 — แถวเดิมยกระดับด้วย "ชื่อ" ได้เฉพาะตอน pending (หรือ status ว่าง) เท่านั้น', () => {
+    expect(AUTH).toMatch(/const canUpgrade = autoOwnerById \|\| \(autoOwnerByName && \(_st === "pending" \|\| _st === ""\)\);/);
     // ของเดิมคือ `if (autoOwner && (...))` ซึ่งเปิด disabled กลับได้ — ต้องไม่กลับมา
     expect(AUTH).not.toMatch(/if \(autoOwner && \(staffObj\.role !== "owner"/);
+  });
+
+  it('⚠️ status ว่างนับเป็น "ยังไม่ตัดสินใจ" — กันเจ้าของที่แถวโดนลบค่าในชีตยกระดับตัวเองไม่ได้', () => {
+    // เส้นทางเขียนจริงใส่ค่าเสมอ (authLine_ ใส่ active/pending · saveStaffHandler_ ใส่เฉพาะ
+    // ค่าใน VALID_STATUS) → ว่างได้ทางเดียวคือมีคนลบในชีตเอง · ไม่รวม = ล็อกเจ้าของออกได้จริง
+    expect(AUTH).toMatch(/const _st = String\(staffObj\.status == null \? "" : staffObj\.status\)\.trim\(\);/);
+    expect(AUTH).toMatch(/_st === ""/);
+  });
+
+  it('⚠️ "disabled" และ "active" ไม่อยู่ในเงื่อนไขยกระดับด้วยชื่อ (เกณฑ์ข้อ 2 และ 3)', () => {
+    const m = AUTH.match(/const canUpgrade = [^;]+;/);
+    expect(m).not.toBeNull();
+    expect(m[0], 'ห้ามมี disabled ในเงื่อนไขยกระดับด้วยชื่อ').not.toContain('disabled');
+    expect(m[0], 'ห้ามมี active — เจ้าของตั้ง role เองไว้แล้ว ห้ามทับด้วยชื่อ').not.toContain('"active"');
   });
 
   it('เกณฑ์ข้อ 2 — เขียน role/status ทับได้เฉพาะเมื่อ canUpgrade', () => {
