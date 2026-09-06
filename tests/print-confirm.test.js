@@ -58,8 +58,20 @@ describe('F05 ข้อ 1 — เปิดหน้าพิมพ์แล้�
 
   it('การ์ดแยก "ส่งเข้าหน้าพิมพ์แล้ว" ออกจาก "พิมพ์ Label แล้ว" คนละป้าย', () => {
     expect(VANA).toMatch(/const awaitingPrint\s+= !alreadyPrinted && awaitPrint\[order\.id\] === orderSig\(order\)/);
-    expect(VANA).toContain('✓ พิมพ์ Label แล้ว');
+    expect(VANA).toContain('พิมพ์ Label แล้ว');
     expect(VANA).toContain('แตะยืนยันเมื่อป้ายออกมา');
+  });
+
+  it('ป้าย "พิมพ์แล้ว" ต้องเห็นชัด — มีทั้ง 🖨️ และ ✓ ตัวใหญ่ ไม่ใช่แค่ตัวหนังสือเปล่า ๆ', () => {
+    // เจ้าของขอ (ส.ค. 2026): "ติ๊กถูกเห็นชัดขึ้นและมี emoji 🖨️ ให้เห็นแล้วรู้ว่าปริ้นไปแล้ว"
+    const blk = grab(
+      /\{alreadyPrinted && \(\s*<div style=\{\{[\s\S]*?\n\s*\)\}/,
+      'alreadyPrinted badge'
+    );
+    expect(blk).toContain('🖨️');
+    expect(blk, 'เครื่องหมายถูกต้องเด่นกว่าตัวหนังสือข้างๆ (fontWeight หนักกว่า)').toMatch(/fontWeight:900/);
+    expect(blk, 'ต้องมีพื้นหลัง/กรอบให้เป็น "ป้าย" ไม่ใช่ข้อความลอย').toMatch(/background:"#e8f5e9"/);
+    expect(blk).toContain('พิมพ์ Label แล้ว');
   });
 
   it('awaitingOrders กรองด้วย orderSig + ตัดที่พิมพ์/ส่งไปแล้วออก', () => {
