@@ -6690,9 +6690,19 @@ function OrderSummaryView({ data, onPrintRequest }) {
                 {!isShipped && (
                   <div style={{display:"flex",flexDirection:"column",gap:6,marginTop:2}}>
                     {/* พิมพ์ Label = ติ๊ก checkbox แล้วกด "ปริ้นที่เลือก" ด้านบน (ไม่มีปุ่มพิมพ์ราย Card แล้ว)
-                        เหลือแค่ป้ายบอกว่าพิมพ์ไปแล้วหรือยัง */}
+                        เหลือแค่ป้ายบอกว่าพิมพ์ไปแล้วหรือยัง — ทำเป็น "ป้าย" เขียวเข้มมีกรอบ+พื้นหลัง
+                        แทนตัวหนังสือเปล่า ๆ (เจ้าของขอ: ติ๊กถูกเห็นชัดขึ้น + มี 🖨️ ให้เห็นแล้วรู้ทันที
+                        ไม่ต้องอ่านตัวหนังสือ) */}
                     {alreadyPrinted && (
-                      <div style={{textAlign:"center",fontSize:10,color:"var(--g-700)",fontWeight:700}}>✓ พิมพ์ Label แล้ว</div>
+                      <div style={{
+                        display:"flex",alignItems:"center",justifyContent:"center",gap:5,
+                        background:"#e8f5e9",border:"1.5px solid #4fb472",borderRadius:8,
+                        padding:"6px 4px",
+                      }}>
+                        <span style={{fontSize:15}}>🖨️</span>
+                        <span style={{fontSize:15,fontWeight:900,color:"#1b5e20",lineHeight:1}}>✓</span>
+                        <span style={{fontSize:11,fontWeight:800,color:"var(--g-700)"}}>พิมพ์ Label แล้ว</span>
+                      </div>
                     )}
                     {/* F05: "เปิดหน้าพิมพ์แล้ว" ยังไม่ใช่ "พิมพ์เสร็จ" — ต้องเห็นต่างกันบนการ์ด
                         ไม่งั้นพนักงานอ่านว่างานนี้จบแล้วทั้งที่ป้ายยังไม่ออกจากเครื่อง */}
