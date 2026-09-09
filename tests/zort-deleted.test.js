@@ -65,21 +65,32 @@ describe('meta: ด่านกันซ่อนผิด', () => {
     expect(fn).toMatch(/if \(!json \|\| !json\.list\)[\s\S]*return \{ ok: false/);
   });
 
-  it('hideDeletedFromZort ยกเลิกเมื่อดึง ZORT ไม่ครบ (z.ok เป็นเท็จ)', () => {
-    const fn = grab(/function hideDeletedFromZort\(\) \{[\s\S]*?\n\}/, 'hideDeletedFromZort');
-    expect(fn).toMatch(/if \(!z\.ok\)[\s\S]*return/);
+  // ตรรกะ 3 ด่านย้ายไป zortDeletedDiff_ / applyHideZortDeleted_ (ใช้ร่วมกับ handler บนเว็บ) —
+  // hideDeletedFromZort (dropdown) แค่เรียกสองตัวนี้แล้วตัดสินใจจาก d.ok/d.capped
+
+  it('zortDeletedDiff_ คืน ok:false เมื่อดึง ZORT ไม่ครบ · hideDeletedFromZort เช็ค d.ok ก่อนเสมอ', () => {
+    const diffFn = grab(/function zortDeletedDiff_\(\) \{[\s\S]*?\n\}/, 'zortDeletedDiff_');
+    expect(diffFn).toMatch(/if \(!z\.ok\) return \{ ok: false/);
+    const hideFn = grab(/function hideDeletedFromZort\(\) \{[\s\S]*?\n\}/, 'hideDeletedFromZort');
+    expect(hideFn).toMatch(/if \(!d\.ok\)[\s\S]*return/);
   });
 
-  it('hideDeletedFromZort มีเพดาน HIDE_SAFETY_FRACTION กันซ่อนทั้งร้าน', () => {
-    const fn = grab(/function hideDeletedFromZort\(\) \{[\s\S]*?\n\}/, 'hideDeletedFromZort');
-    expect(fn).toMatch(/frac > HIDE_SAFETY_FRACTION/);
+  it('zortDeletedDiff_ คำนวณเพดาน HIDE_SAFETY_FRACTION · hideDeletedFromZort/handler เช็ค d.capped ก่อนเขียน', () => {
+    const diffFn = grab(/function zortDeletedDiff_\(\) \{[\s\S]*?\n\}/, 'zortDeletedDiff_');
+    expect(diffFn).toMatch(/capped: frac > HIDE_SAFETY_FRACTION/);
     expect(GS).toMatch(/const HIDE_SAFETY_FRACTION\s*=\s*0\.4/);
+    const hideFn = grab(/function hideDeletedFromZort\(\) \{[\s\S]*?\n\}/, 'hideDeletedFromZort');
+    expect(hideFn).toMatch(/if \(d\.capped\)/);
+    const handlerFn = grab(/function hideZortDeletedHandler_\(ss, data, actor\) \{[\s\S]*?\n\}/, 'hideZortDeletedHandler_');
+    expect(handlerFn).toMatch(/if \(d\.capped\)/);
   });
 
-  it('hideDeletedFromZort จับ LockService + invalidateCache_ หลังเขียน', () => {
-    const fn = grab(/function hideDeletedFromZort\(\) \{[\s\S]*?\n\}/, 'hideDeletedFromZort');
+  it('applyHideZortDeleted_ จับ LockService + invalidateCache_ หลังเขียน — ใช้ทั้ง dropdown และ handler บนเว็บ', () => {
+    const fn = grab(/function applyHideZortDeleted_\(ss, del\) \{[\s\S]*?\n\}/, 'applyHideZortDeleted_');
     expect(fn).toMatch(/LockService\.getScriptLock/);
     expect(fn).toMatch(/invalidateCache_\(\)/);
+    expect(GS).toMatch(/const r = applyHideZortDeleted_\(SpreadsheetApp\.openById\(SHEET_ID\), d\.del\)/);
+    expect(GS).toMatch(/const r = applyHideZortDeleted_\(ss, d\.del\)/);
   });
 
   it('readProducts_ กรอง SKU ที่ซ่อนออกทั้ง 2 ลูป (main + SELF-HEAL)', () => {

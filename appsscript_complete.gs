@@ -2067,7 +2067,7 @@ const STAFF_PERF_CATEGORIES_ = [
   { key: "quote",      emoji: "📄", label: "ใบเสนอราคา",         ops: true,  unit: "ใบ",    prefixes: ["สร้างใบเสนอราคา", "แก้ไขใบเสนอราคา", "อนุมัติใบเสนอราคา", "ปิดใบเสนอราคา"] },
   { key: "adjust",     emoji: "⚙️", label: "ปรับ/ลบข้อมูล",      ops: false, unit: "ครั้ง",  prefixes: ["ปรับสต็อก0", "resetNegativeStock", "ลบ order", "ล้างค่าเช็คหน้าร้าน"] },
   { key: "star",       emoji: "⭐", label: "ตั้งผู้ดูแลสินค้า",   ops: false, unit: "ครั้ง",  prefixes: ["setProductOwner", "clearProductOwner"] },
-  { key: "admin",      emoji: "🔧", label: "ตั้งค่าระบบ",        ops: false, unit: "ครั้ง",  prefixes: ["แก้ไขพนักงาน", "แก้ไขการลงเวลา", "saveThresholds", "ตั้งตำแหน่งพนักงาน", "ทะเบียน Prefix", "ทะเบียน Family", "ทะเบียน Form", "ทะเบียน Variant"] },
+  { key: "admin",      emoji: "🔧", label: "ตั้งค่าระบบ",        ops: false, unit: "ครั้ง",  prefixes: ["แก้ไขพนักงาน", "แก้ไขการลงเวลา", "saveThresholds", "ตั้งตำแหน่งพนักงาน", "ทะเบียน Prefix", "ทะเบียน Family", "ทะเบียน Form", "ทะเบียน Variant", "กู้สินค้าที่ซ่อนไว้กลับ", "ซ่อนสินค้าที่ ZORT ลบแล้ว"] },
   { key: "punch",      emoji: "🕐", label: "กดลงเวลา",           ops: false, unit: "ครั้ง",  skip: true, prefixes: ["ลงเวลา"] },
   // marker ของ Counting Session (ดูหัวข้อ "Stock Count Session tracking") — ไม่ใช่ "งาน" ที่นับ
   // เพิ่มจากยอด (ยอดงานจริงยังมาจาก key "count" ข้างบนเหมือนเดิม) แค่ทำให้ meta-test เจอหมวดรองรับ
@@ -2807,6 +2807,17 @@ function doPost(e) {
     if (data.deleteQuotationDraft) {
       return deleteQuotationDraft(ss, data.draftId, actor);
     }
+
+    // ─── 🔧 จัดการสินค้าที่หายไป/ถูกซ่อน (owner/dev, ปุ่มในแท็บ "เชื่อมต่อ") ───
+    // เช็ค/กู้/ซ่อน อยู่เหนือ invalidateCache_(true) เหมือน setProductOwner: ตัวอ่านอย่างเดียว
+    // (checkMissingSku/listHiddenProducts/previewZortDeleted) ไม่ควรล้าง payload cache ทั้งก้อน
+    // แค่เพราะเจ้าของกดเช็ค 1 SKU · ตัวที่เขียนจริง (unhideProduct/hideZortDeleted) ล้าง cache
+    // ของตัวเองอยู่แล้วใน core function ข้างบน
+    if (data.action === 'checkMissingSku')      return checkMissingSkuHandler_(ss, data);
+    if (data.action === 'listHiddenProducts')   return listHiddenProductsHandler_(ss, data);
+    if (data.action === 'unhideProduct')        return unhideProductHandler_(ss, data, actor);
+    if (data.action === 'previewZortDeleted')   return previewZortDeletedHandler_(ss, data);
+    if (data.action === 'hideZortDeleted')      return hideZortDeletedHandler_(ss, data, actor);
 
     // มีการแก้ข้อมูล → ล้าง cache ให้ doGet ครั้งถัดไปคำนวณใหม่ (ข้อมูลไม่ค้าง)
     invalidateCache_(true); // clear payload cache เท่านั้น — ห้าม bump dmj_last_write_ts ก่อน conflict check
@@ -7556,75 +7567,96 @@ function zortDeletedSkusCore_(ourSkuMap, zortSet, hiddenSet) {
   return del;
 }
 
-// อ่านอย่างเดียว — บอกว่าจะซ่อนตัวไหนบ้าง (รันดูก่อนเสมอ)
-function previewZortDeletedProducts() {
+// core (อ่านอย่างเดียว): เทียบ ZORT ↔ ชีตเรา ↔ ที่ซ่อนอยู่แล้ว → รายการที่ "ควรซ่อนเพิ่ม"
+// ใช้ร่วมกันทั้ง preview/apply ฝั่ง dropdown (Logger) และ handler บนเว็บ — กันสองทางคำนวณไม่ตรงกัน
+function zortDeletedDiff_() {
   const z = zortAllSkusComplete_();
-  if (!z.ok) { Logger.log('❌ ' + z.error + '\n→ ยังไม่ทำอะไร (ดึง ZORT ไม่ครบ ห้ามเดาว่าถูกลบ)'); return; }
+  if (!z.ok) return { ok: false, error: z.error };
   const our = ourProductSkus_();
   const hidden = getHiddenSkuSet_();
   const del = zortDeletedSkusCore_(our, z.skus, hidden);
   const totalOur = Object.keys(our).length;
-  Logger.log('ZORT มีสินค้า ' + z.count + ' SKU (ดึงครบ ' + z.pages + ' หน้า)');
-  Logger.log('ชีตเรามี ' + totalOur + ' SKU · ซ่อนอยู่แล้ว ' + Object.keys(hidden).length);
-  Logger.log('พบที่ ZORT ลบแล้วแต่เรายังโชว์: ' + del.length + ' รายการ');
   const frac = totalOur ? (del.length / totalOur) : 0;
-  if (frac > HIDE_SAFETY_FRACTION) {
+  return {
+    ok: true, del: del, totalOur: totalOur,
+    zortCount: z.count, zortPages: z.pages,
+    hiddenCount: Object.keys(hidden).length,
+    frac: frac, capped: frac > HIDE_SAFETY_FRACTION,
+  };
+}
+
+// เขียนจริง (core): ซ่อน SKU ตามรายการที่ zortDeletedDiff_ ให้มา — เพดานปลอดภัยเช็คจากผู้เรียกก่อนแล้ว
+function applyHideZortDeleted_(ss, del) {
+  if (!del || !del.length) return { ok: true, count: 0 };
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(20000); } catch (e) { return { ok: false, error: 'จับล็อกไม่ได้ ลองใหม่อีกครั้ง' }; }
+  try {
+    const sh = hiddenProductsSheet_(ss);
+    const now = new Date().toLocaleString('th-TH');
+    const rows = del.map(function (d) { return [d.sku, 'ลบจาก ZORT', now, 'hideDeletedFromZort']; });
+    sh.getRange(sh.getLastRow() + 1, 1, rows.length, 4).setValues(rows);
+    sh.getRange(2, 1, sh.getLastRow() - 1, 1).setNumberFormat('@');   // SKU เป็น text (บทเรียนข้อ 2)
+    invalidateCache_();
+    return { ok: true, count: rows.length };
+  } finally { lock.releaseLock(); }
+}
+
+// อ่านอย่างเดียว — บอกว่าจะซ่อนตัวไหนบ้าง (รันดูก่อนเสมอ)
+function previewZortDeletedProducts() {
+  const d = zortDeletedDiff_();
+  if (!d.ok) { Logger.log('❌ ' + d.error + '\n→ ยังไม่ทำอะไร (ดึง ZORT ไม่ครบ ห้ามเดาว่าถูกลบ)'); return; }
+  Logger.log('ZORT มีสินค้า ' + d.zortCount + ' SKU (ดึงครบ ' + d.zortPages + ' หน้า)');
+  Logger.log('ชีตเรามี ' + d.totalOur + ' SKU · ซ่อนอยู่แล้ว ' + d.hiddenCount);
+  Logger.log('พบที่ ZORT ลบแล้วแต่เรายังโชว์: ' + d.del.length + ' รายการ');
+  if (d.capped) {
     Logger.log('⚠️ เกิน ' + Math.round(HIDE_SAFETY_FRACTION * 100) + '% ของสินค้าทั้งหมด — ผิดปกติ');
     Logger.log('   ถ้ากด hideDeletedFromZort() จะถูกปฏิเสธ · ตรวจว่า ZORT ดึงครบจริงก่อน');
   }
-  del.slice(0, 100).forEach(d => Logger.log('  • ' + d.sku + '  ' + (d.name || '')));
-  if (del.length > 100) Logger.log('  … อีก ' + (del.length - 100) + ' รายการ');
+  d.del.slice(0, 100).forEach(x => Logger.log('  • ' + x.sku + '  ' + (x.name || '')));
+  if (d.del.length > 100) Logger.log('  … อีก ' + (d.del.length - 100) + ' รายการ');
   Logger.log('\nถ้าถูกต้อง → รัน hideDeletedFromZort() (กู้กลับได้ด้วย unhideProduct/clearHiddenProducts)');
 }
 
 // เขียนจริง — ซ่อนสินค้าที่ ZORT ลบแล้ว (soft-delete)
 function hideDeletedFromZort() {
-  const z = zortAllSkusComplete_();
-  if (!z.ok) { Logger.log('❌ ' + z.error + '\n→ ยกเลิก (ดึง ZORT ไม่ครบ)'); return; }
-  const our = ourProductSkus_();
-  const hidden = getHiddenSkuSet_();
-  const del = zortDeletedSkusCore_(our, z.skus, hidden);
-  const totalOur = Object.keys(our).length;
-  if (!del.length) { Logger.log('✅ ไม่มีสินค้าที่ต้องซ่อน (ทุก SKU ยังมีใน ZORT)'); return; }
-  const frac = totalOur ? (del.length / totalOur) : 0;
-  if (frac > HIDE_SAFETY_FRACTION) {
-    Logger.log('⚠️ จะซ่อน ' + del.length + '/' + totalOur + ' (' + Math.round(frac * 100) + '%) — เกินเพดาน '
+  const d = zortDeletedDiff_();
+  if (!d.ok) { Logger.log('❌ ' + d.error + '\n→ ยกเลิก (ดึง ZORT ไม่ครบ)'); return; }
+  if (!d.del.length) { Logger.log('✅ ไม่มีสินค้าที่ต้องซ่อน (ทุก SKU ยังมีใน ZORT)'); return; }
+  if (d.capped) {
+    Logger.log('⚠️ จะซ่อน ' + d.del.length + '/' + d.totalOur + ' (' + Math.round(d.frac * 100) + '%) — เกินเพดาน '
       + Math.round(HIDE_SAFETY_FRACTION * 100) + '% → ยกเลิกเพื่อความปลอดภัย');
     Logger.log('   น่าจะดึง ZORT พลาด · ตรวจ previewZortDeletedProducts() ก่อน');
     return;
   }
-  const ss = SpreadsheetApp.openById(SHEET_ID);
-  const lock = LockService.getScriptLock();
-  try { lock.waitLock(20000); } catch (e) { Logger.log('❌ จับล็อกไม่ได้'); return; }
-  try {
-    const sh = hiddenProductsSheet_(ss);
-    const now = new Date().toLocaleString('th-TH');
-    const rows = del.map(d => [d.sku, 'ลบจาก ZORT', now, 'hideDeletedFromZort']);
-    sh.getRange(sh.getLastRow() + 1, 1, rows.length, 4).setValues(rows);
-    sh.getRange(2, 1, sh.getLastRow() - 1, 1).setNumberFormat('@');   // SKU เป็น text (บทเรียนข้อ 2)
-    invalidateCache_();
-    Logger.log('✅ ซ่อนแล้ว ' + del.length + ' รายการ (กู้กลับ: clearHiddenProducts / unhideProduct)');
-  } finally { lock.releaseLock(); }
+  const r = applyHideZortDeleted_(SpreadsheetApp.openById(SHEET_ID), d.del);
+  if (!r.ok) { Logger.log('❌ ' + r.error); return; }
+  Logger.log('✅ ซ่อนแล้ว ' + r.count + ' รายการ (กู้กลับ: clearHiddenProducts / unhideProduct)');
+}
+
+// อ่านชีตซ่อน → array ของ {sku, reason, hiddenAt, source}
+function readHiddenProductRows_(ss) {
+  const sh = ss.getSheetByName(SHEET_HIDDEN_PRODUCTS);
+  if (!sh || sh.getLastRow() < 2) return [];
+  const rows = sh.getRange(2, 1, sh.getLastRow() - 1, 4).getDisplayValues();
+  return rows.map(function (r) { return { sku: r[0], reason: r[1], hiddenAt: r[2], source: r[3] }; });
 }
 
 // อ่านอย่างเดียว — ดูว่าซ่อนอะไรอยู่บ้าง
 function listHiddenProducts() {
-  const sh = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_HIDDEN_PRODUCTS);
-  if (!sh || sh.getLastRow() < 2) { Logger.log('ไม่มีสินค้าที่ซ่อนอยู่'); return; }
-  const rows = sh.getRange(2, 1, sh.getLastRow() - 1, 4).getDisplayValues();
+  const rows = readHiddenProductRows_(SpreadsheetApp.openById(SHEET_ID));
+  if (!rows.length) { Logger.log('ไม่มีสินค้าที่ซ่อนอยู่'); return; }
   Logger.log('สินค้าที่ซ่อนอยู่ ' + rows.length + ' รายการ:');
-  rows.forEach(r => Logger.log('  • ' + r[0] + '  (' + r[1] + ', ' + r[2] + ')'));
+  rows.forEach(r => Logger.log('  • ' + r.sku + '  (' + r.reason + ', ' + r.hiddenAt + ')'));
 }
 
-// กู้สินค้าตัวเดียวกลับ (เอาออกจากชีตซ่อน)
-function unhideProduct(sku) {
+// core: กู้สินค้า 1 ตัวกลับจากชีตซ่อน — ใช้ร่วมกันทั้ง dropdown และ handler บนเว็บ
+function unhideProductCore_(ss, sku) {
   const target = String(sku || '').trim().toUpperCase();
-  if (!target) { Logger.log('ใส่ SKU ที่จะกู้: unhideProduct("BK001")'); return; }
-  const ss = SpreadsheetApp.openById(SHEET_ID);
+  if (!target) return { ok: false, error: 'ไม่มี SKU' };
   const sh = ss.getSheetByName(SHEET_HIDDEN_PRODUCTS);
-  if (!sh || sh.getLastRow() < 2) { Logger.log('ไม่มีสินค้าที่ซ่อนอยู่'); return; }
+  if (!sh || sh.getLastRow() < 2) return { ok: true, removed: 0 };
   const lock = LockService.getScriptLock();
-  try { lock.waitLock(20000); } catch (e) { Logger.log('❌ จับล็อกไม่ได้'); return; }
+  try { lock.waitLock(20000); } catch (e) { return { ok: false, error: 'จับล็อกไม่ได้ ลองใหม่อีกครั้ง' }; }
   try {
     const n = sh.getLastRow() - 1;
     const vals = sh.getRange(2, 1, n, 1).getDisplayValues();
@@ -7632,9 +7664,19 @@ function unhideProduct(sku) {
     for (let i = n - 1; i >= 0; i--) {   // ลบจากล่างขึ้นบน
       if (String(vals[i][0] || '').trim().toUpperCase() === target) { sh.deleteRow(i + 2); removed++; }
     }
-    if (removed) { invalidateCache_(); Logger.log('✅ กู้ ' + target + ' กลับแล้ว (' + removed + ' แถว)'); }
-    else Logger.log('ไม่พบ ' + target + ' ในชีตซ่อน');
+    if (removed) invalidateCache_();
+    return { ok: true, removed: removed };
   } finally { lock.releaseLock(); }
+}
+
+// กู้สินค้าตัวเดียวกลับ (เอาออกจากชีตซ่อน)
+function unhideProduct(sku) {
+  const clean = String(sku || '').trim().toUpperCase();
+  if (!clean) { Logger.log('ใส่ SKU ที่จะกู้: unhideProduct("BK001")'); return; }
+  const r = unhideProductCore_(SpreadsheetApp.openById(SHEET_ID), clean);
+  if (!r.ok) { Logger.log('❌ ' + r.error); return; }
+  if (r.removed) Logger.log('✅ กู้ ' + clean + ' กลับแล้ว (' + r.removed + ' แถว)');
+  else Logger.log('ไม่พบ ' + clean + ' ในชีตซ่อน');
 }
 
 // กู้ทั้งหมดกลับ (ล้างชีตซ่อน)
@@ -7647,25 +7689,19 @@ function clearHiddenProducts() {
   Logger.log('✅ กู้สินค้าทั้งหมด ' + n + ' รายการกลับแล้ว');
 }
 
-// อ่านอย่างเดียว — ไล่หาว่า SKU 1 ตัวหายไปจากเว็บเพราะอะไร (พนักงานแจ้ง "หา SKU นี้ไม่เจอ")
+// core (อ่านอย่างเดียว): ไล่หาว่า SKU 1 ตัวหายไปจากเว็บเพราะอะไร (พนักงานแจ้ง "หา SKU นี้ไม่เจอ")
 // เช็คครบ 3 จุดที่ทำให้สินค้าหายจากเว็บได้: (1) อยู่ในชีตเราไหม (2) ถูกซ่อนไว้ไหม (soft-delete)
-// (3) ยังมีอยู่จริงใน ZORT ไหม — แล้วสรุปให้ว่าต้องรันอะไรต่อ ไม่ต้องเดา
-// ชื่อไม่มี `_` ต่อท้าย → โผล่ใน dropdown ของ GAS editor (บทเรียนข้อ 1)
-function checkMissingSku(sku) {
+// (3) ยังมีอยู่จริงใน ZORT ไหม — แล้วสรุปคำแนะนำเป็นข้อความเดียว (`advice`) ให้ทั้ง dropdown/เว็บใช้ร่วมกัน
+function checkMissingSkuCore_(sku) {
   const clean = String(sku || '').trim().toUpperCase();
-  if (!clean) { Logger.log('ใส่ SKU ที่จะเช็ค เช่น checkMissingSku("WC00001")'); return; }
-
-  Logger.log('=== ตรวจสอบ SKU: ' + clean + ' ===');
+  if (!clean) return { ok: false, error: 'ไม่มี SKU' };
 
   const ss = SpreadsheetApp.openById(SHEET_ID);
   const our = collectExistingSkus_(ss);
   const inOurSheet = !!our[clean];
-  Logger.log('1) อยู่ในชีต "อัพเดทจำนวนสินค้า"/"ข้อมูลสินค้า": ' + (inOurSheet ? '✅ มี' : '❌ ไม่มี'));
 
   const hidden = getHiddenSkuSet_();
   const isHidden = !!hidden[clean];
-  Logger.log('2) ถูกซ่อนไว้ (soft-delete เพราะเคยดูเหมือนถูกลบจาก ZORT): '
-    + (isHidden ? '⚠️ ใช่ — นี่คือสาเหตุที่หายจากเว็บ' : 'ไม่ได้ถูกซ่อน'));
 
   // ค้นด้วย keyword ก่อน (เร็ว) — แต่ ZORT keyword ไม่ substring-match กับ sku เสมอไป (เจอมาแล้ว)
   // ถ้าไม่เจอด้วย keyword ต้องถอยไปดึงทั้งหมดแล้วกรองเอง ก่อนจะสรุปว่า "ไม่มีใน ZORT"
@@ -7679,40 +7715,111 @@ function checkMissingSku(sku) {
     foundInZort = list.find(function (p) {
       return String(p.sku || p.barcode || '').trim().toUpperCase() === clean;
     }) || null;
-  } catch (e) { Logger.log('   (ค้นด้วย keyword พลาด: ' + e + ')'); }
+  } catch (e) { /* ถอยไปดึงทั้งหมดด้านล่างอยู่แล้ว ไม่ต้องหยุด */ }
 
-  let inZortConfirmed = !!foundInZort;
-  if (!foundInZort) {
-    Logger.log('   ค้นด้วย keyword ไม่เจอ (อาจเพราะ keyword ไม่ match sku ตรง ๆ) กำลังดึงสินค้าทั้งหมดจาก ZORT เพื่อยืนยัน...');
-    const z = zortAllSkusComplete_();
-    if (!z.ok) {
-      Logger.log('❌ ดึง ZORT ไม่ครบ: ' + z.error + ' → สรุปเรื่อง ZORT ไม่ได้ตอนนี้ ลองใหม่อีกครั้ง');
-      Logger.log('\n=== สรุป ===');
-      Logger.log('ยังสรุปไม่ได้ว่ามีใน ZORT ไหม (ดึงข้อมูลไม่ครบ) — รัน checkMissingSku("' + clean + '") ใหม่อีกครั้ง');
-      return;
-    }
-    inZortConfirmed = !!z.skus[clean];
-    Logger.log('3) มีอยู่จริงใน ZORT (ดึงครบ ' + z.pages + ' หน้า, ' + z.count + ' SKU): '
-      + (inZortConfirmed ? '✅ มี' : '❌ ไม่มี'));
-  } else {
-    Logger.log('3) มีอยู่จริงใน ZORT: ✅ มี — ชื่อ "' + (foundInZort.name || '') + '" หมวด "' + (foundInZort.category || '') + '"');
+  if (foundInZort) {
+    return {
+      ok: true, sku: clean, inOurSheet: inOurSheet, isHidden: isHidden,
+      zortStatus: 'ok', inZort: true, zortName: foundInZort.name || '', zortCategory: foundInZort.category || '',
+      advice: adviceForMissingSku_(inOurSheet, isHidden, true),
+    };
   }
 
-  Logger.log('\n=== สรุป ===');
+  const z = zortAllSkusComplete_();
+  if (!z.ok) {
+    return {
+      ok: true, sku: clean, inOurSheet: inOurSheet, isHidden: isHidden,
+      zortStatus: 'incomplete', zortError: z.error,
+      advice: 'ยังสรุปไม่ได้ว่ามีใน ZORT ไหม (ดึงข้อมูลจาก ZORT ไม่ครบ: ' + z.error + ') — ลองใหม่อีกครั้ง',
+    };
+  }
+  const inZortConfirmed = !!z.skus[clean];
+  return {
+    ok: true, sku: clean, inOurSheet: inOurSheet, isHidden: isHidden,
+    zortStatus: 'ok', inZort: inZortConfirmed,
+    advice: adviceForMissingSku_(inOurSheet, isHidden, inZortConfirmed),
+  };
+}
+
+function adviceForMissingSku_(inOurSheet, isHidden, inZort) {
   if (isHidden) {
-    Logger.log('→ ถูกซ่อนไว้ในเว็บ (อาจซ่อนผิดตอน ZORT ดึงไม่ครบครั้งก่อน) — แก้: รัน unhideProduct("' + clean
-      + '") แล้วกดปุ่ม Sync ในแอป');
-  } else if (!inOurSheet && inZortConfirmed) {
-    Logger.log('→ มีอยู่จริงใน ZORT แต่ยังไม่เข้าชีตเรา — แก้: รัน syncZortBoth() เดี๋ยวนี้เลย '
-      + '(ปกติ trigger รันเองทุก 2 ชม. — syncNewProductsFromZort ในนั้นจะเพิ่ม SKU ที่หายไปให้อัตโนมัติ) '
-      + 'แล้วกดปุ่ม Sync ในแอป');
-  } else if (!inOurSheet && !inZortConfirmed) {
-    Logger.log('→ ไม่พบใน ZORT เลย — เช็คว่าพนักงานพิมพ์ SKU ถูกไหม (ตัวเลข/ตัวอักษรพิมพ์ผิด) '
-      + 'หรือสินค้านี้ยังไม่เคยถูกสร้างใน ZORT จริง ๆ (ต้องไปสร้างใน ZORT ก่อน ถึงจะ sync เข้าเว็บได้)');
-  } else if (inOurSheet && !isHidden) {
-    Logger.log('→ อยู่ในชีตและไม่ได้ถูกซ่อน — ไม่ใช่ปัญหาข้อมูลหาย น่าจะเป็น cache เก่าค้างอยู่ที่เครื่องพนักงาน '
-      + 'ให้ลองกดปุ่ม Sync/ลองใหม่ในแอปก่อน ถ้ายังไม่เจอแจ้งกลับมาอีกที');
+    return 'ถูกซ่อนไว้ในเว็บ (soft-delete — เคยดูเหมือนถูกลบจาก ZORT) — กดปุ่ม "กู้คืน" แล้ว Sync ในแอป';
   }
+  if (!inOurSheet && inZort) {
+    return 'มีอยู่จริงใน ZORT แต่ยังไม่เข้าชีตเรา — กดปุ่ม ⬇️ "ดึงสต็อกจาก ZORT เดี๋ยวนี้" มุมขวาบน แล้วลองค้นหาใหม่';
+  }
+  if (!inOurSheet && !inZort) {
+    return 'ไม่พบใน ZORT เลย — เช็คว่าพิมพ์ SKU ถูกไหม (ตัวเลข/ตัวอักษรพิมพ์ผิด) หรือสินค้านี้ยังไม่เคยถูกสร้างใน ZORT จริง ๆ (ต้องไปสร้างใน ZORT ก่อน ถึงจะ sync เข้าเว็บได้)';
+  }
+  return 'อยู่ในชีตและไม่ได้ถูกซ่อน — ไม่ใช่ปัญหาข้อมูลหาย น่าจะเป็น cache เก่าค้างที่เครื่องพนักงาน ให้ลองกด Sync/ลองใหม่ในแอปก่อน ถ้ายังไม่เจอแจ้งกลับมาอีกที';
+}
+
+// อ่านอย่างเดียว — เวอร์ชัน dropdown ของ checkMissingSkuCore_ (โผล่ใน GAS editor — บทเรียนข้อ 1)
+function checkMissingSku(sku) {
+  const r = checkMissingSkuCore_(sku);
+  if (!r.ok) { Logger.log(r.error || 'พลาด'); return; }
+  Logger.log('=== ตรวจสอบ SKU: ' + r.sku + ' ===');
+  Logger.log('1) อยู่ในชีต "อัพเดทจำนวนสินค้า"/"ข้อมูลสินค้า": ' + (r.inOurSheet ? '✅ มี' : '❌ ไม่มี'));
+  Logger.log('2) ถูกซ่อนไว้ (soft-delete): ' + (r.isHidden ? '⚠️ ใช่ — นี่คือสาเหตุที่หายจากเว็บ' : 'ไม่ได้ถูกซ่อน'));
+  if (r.zortStatus === 'incomplete') {
+    Logger.log('3) ดึง ZORT ไม่ครบ: ' + r.zortError);
+  } else {
+    Logger.log('3) มีอยู่จริงใน ZORT: ' + (r.inZort
+      ? ('✅ มี' + (r.zortName ? (' — ชื่อ "' + r.zortName + '" หมวด "' + r.zortCategory + '"') : ''))
+      : '❌ ไม่มี'));
+  }
+  Logger.log('\n=== สรุป ===\n→ ' + r.advice);
+}
+
+// ─── Web handlers (owner/dev เท่านั้น): จัดการสินค้าที่หายไป/ถูกซ่อนจากในแอปเอง ───
+// เช็ค session + isAdminRole_ เองในแต่ละ handler (ไม่พึ่ง REQUIRE_LOGIN) — ตาม pattern เดียวกับ
+// listStaffHandler_/saveStaffHandler_ เพราะเป็นฟีเจอร์ที่กระทบการมองเห็นสินค้าทั้งร้าน
+function checkMissingSkuHandler_(ss, data) {
+  const s = resolveSession_(ss, data.sessionToken);
+  if (!s || !isAdminRole_(s.role) || s.status !== 'active') return unauthorized_();
+  return ok(checkMissingSkuCore_(data.sku));
+}
+
+function listHiddenProductsHandler_(ss, data) {
+  const s = resolveSession_(ss, data.sessionToken);
+  if (!s || !isAdminRole_(s.role) || s.status !== 'active') return unauthorized_();
+  return ok({ rows: readHiddenProductRows_(ss) });
+}
+
+function unhideProductHandler_(ss, data, actor) {
+  const s = resolveSession_(ss, data.sessionToken);
+  if (!s || !isAdminRole_(s.role) || s.status !== 'active') return unauthorized_();
+  const r = unhideProductCore_(ss, data.sku);
+  if (!r.ok) return error(r.error);
+  if (r.removed) {
+    writeAuditLog_(actor || 'ไม่ระบุ', 'กู้สินค้าที่ซ่อนไว้กลับ',
+      String(data.sku || '').trim().toUpperCase(), 'unhideProduct (เว็บ)');
+  }
+  return ok(r);
+}
+
+function previewZortDeletedHandler_(ss, data) {
+  const s = resolveSession_(ss, data.sessionToken);
+  if (!s || !isAdminRole_(s.role) || s.status !== 'active') return unauthorized_();
+  const d = zortDeletedDiff_();
+  return d.ok ? ok(d) : error(d.error);
+}
+
+function hideZortDeletedHandler_(ss, data, actor) {
+  const s = resolveSession_(ss, data.sessionToken);
+  if (!s || !isAdminRole_(s.role) || s.status !== 'active') return unauthorized_();
+  const d = zortDeletedDiff_();
+  if (!d.ok) return error(d.error);
+  if (d.capped) {
+    return error('จะซ่อนเกิน ' + Math.round(HIDE_SAFETY_FRACTION * 100) + '% ของสินค้าทั้งหมด ('
+      + d.del.length + '/' + d.totalOur + ') — ดูเหมือนดึง ZORT พลาด ปฏิเสธเพื่อความปลอดภัย ลองใหม่อีกครั้ง');
+  }
+  const r = applyHideZortDeleted_(ss, d.del);
+  if (!r.ok) return error(r.error);
+  if (r.count) {
+    writeAuditLog_(actor || 'ไม่ระบุ', 'ซ่อนสินค้าที่ ZORT ลบแล้ว', r.count + ' รายการ', 'hideDeletedFromZort (เว็บ)');
+  }
+  return ok(r);
 }
 
 // cachedProducts: optional — ถ้ามีให้ใช้เลย ถ้าไม่มีจะ fetch เอง (backward compatible)

@@ -7760,6 +7760,232 @@ function UploadView({ onDataLoaded, currentData }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// 🔧 จัดการสินค้าที่หายไป/ถูกซ่อน — owner/dev เท่านั้น (แท็บ "เชื่อมต่อ" เป็นแท็บ admin อยู่แล้ว)
+// เช็ค SKU เดี่ยว / ดูและกู้สินค้าที่ถูกซ่อน (soft-delete) / ล้างสินค้าที่ ZORT ลบไปแล้ว
+// ทั้งหมดเรียก action ที่มีอยู่แล้วฝั่ง .gs (previewZortDeletedProducts/hideDeletedFromZort/
+// unhideProduct/checkMissingSku) ผ่าน handler ที่เช็ค session+isAdminRole_ เอง — ทำเดิมได้
+// ผ่าน GAS editor อยู่แล้ว ตัวนี้แค่เปิดทางให้กดจากในเว็บโดยไม่ต้องเข้า script.google.com
+// ⚠️ ไม่ใช้ showNavToast — ไม่เคยถูก render เป็น <Toast> จริง (ดู CLAUDE.md F03) ใช้ state ในนี้แทน
+// ─────────────────────────────────────────────────────────────────────
+function MissingProductsTools() {
+  const [sku, setSku] = uS("");
+  const [checking, setChecking] = uS(false);
+  const [checkResult, setCheckResult] = uS(null);
+  const [checkErr, setCheckErr] = uS("");
+  const [unhiding, setUnhiding] = uS("");
+  const [unhideErr, setUnhideErr] = uS("");
+
+  const [hidden, setHidden] = uS(null); // null = ยังไม่โหลด
+  const [loadingHidden, setLoadingHidden] = uS(false);
+
+  const [preview, setPreview] = uS(null);
+  const [previewing, setPreviewing] = uS(false);
+  const [previewErr, setPreviewErr] = uS("");
+  const [applying, setApplying] = uS(false);
+  const [applyMsg, setApplyMsg] = uS(null); // {ok:bool, text}
+
+  const doCheck = async () => {
+    const clean = (sku || "").trim().toUpperCase();
+    if (!clean) return;
+    setChecking(true); setCheckResult(null); setCheckErr("");
+    const r = await syncCheckMissingSku(clean);
+    setChecking(false);
+    if (r && r.success !== false && r.data && r.data.ok !== false) setCheckResult(r.data);
+    else setCheckErr((r && r.error) || (r && r.data && r.data.error) || "เช็คไม่สำเร็จ ลองใหม่อีกครั้ง");
+  };
+
+  const applyUnhideLocal = (targetSku) => {
+    if (checkResult && checkResult.sku === targetSku) {
+      setCheckResult(Object.assign({}, checkResult, {
+        isHidden: false, advice: "กู้คืนแล้ว — กดปุ่ม ⬇️ หรือ Sync ในแอปเพื่อดึงข้อมูลใหม่",
+      }));
+    }
+    setHidden(prev => (prev || []).filter(h => h.sku !== targetSku));
+  };
+
+  const doUnhide = async (targetSku) => {
+    setUnhiding(targetSku); setUnhideErr("");
+    const r = await syncUnhideProduct(targetSku);
+    setUnhiding("");
+    if (r && r.success !== false) applyUnhideLocal(targetSku);
+    else setUnhideErr("กู้คืน " + targetSku + " ไม่สำเร็จ: " + ((r && r.error) || "unknown"));
+  };
+
+  const loadHidden = async () => {
+    setLoadingHidden(true);
+    const r = await syncListHiddenProducts();
+    setLoadingHidden(false);
+    setHidden((r && r.success !== false && r.data && r.data.rows) || []);
+  };
+
+  const doPreview = async () => {
+    setPreviewing(true); setPreview(null); setPreviewErr(""); setApplyMsg(null);
+    const r = await syncPreviewZortDeleted();
+    setPreviewing(false);
+    if (r && r.success !== false && r.data && r.data.ok !== false) setPreview(r.data);
+    else setPreviewErr((r && r.error) || "ตรวจสอบไม่สำเร็จ ลองใหม่อีกครั้ง");
+  };
+
+  const doApplyHide = async () => {
+    if (!preview || !preview.del || !preview.del.length) return;
+    if (!window.confirm(`ยืนยันซ่อนสินค้า ${preview.del.length} รายการที่ ZORT ลบไปแล้ว?\nกู้คืนได้ทีหลังเสมอ ไม่ใช่การลบถาวร`)) return;
+    setApplying(true); setApplyMsg(null);
+    const r = await syncHideZortDeleted();
+    setApplying(false);
+    if (r && r.success !== false) {
+      setApplyMsg({ ok: true, text: "✅ ซ่อนแล้ว " + ((r.data && r.data.count) || 0) + " รายการ (กู้คืนได้จากรายการด้านบน)" });
+      setPreview(null);
+      setHidden(null); // บังคับกดรีเฟรชใหม่รอบหน้า แทนการเดารายการที่เพิ่งเพิ่ม
+    } else {
+      setApplyMsg({ ok: false, text: "❌ ซ่อนไม่สำเร็จ: " + ((r && r.error) || "unknown") });
+    }
+  };
+
+  const rowBox = { display:"flex", alignItems:"center", gap:10, padding:"8px 10px",
+                   borderRadius:8, background:"#fafcf7", border:"1px solid var(--bdr)" };
+
+  return (
+    <Card style={{marginBottom:18}} title="🔧 จัดการสินค้าที่หายไป/ถูกซ่อน"
+          sub="ใช้เมื่อพนักงานแจ้งว่าหาสินค้าไม่เจอในแอป — ไม่ต้องเข้า GAS editor อีกต่อไป">
+
+      {/* ── เช็ค SKU เดี่ยว ── */}
+      <div style={{marginBottom:16}}>
+        <div style={{fontSize:12.5,fontWeight:700,marginBottom:8}}>เช็คว่า SKU หายไปเพราะอะไร</div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <input value={sku} onChange={e=>setSku(e.target.value)}
+                 onKeyDown={e => { if (e.key === "Enter") doCheck(); }}
+                 placeholder="เช่น WC00001"
+                 style={{flex:1,minWidth:160,padding:"9px 12px",borderRadius:9,
+                         border:"1px solid var(--bdr)",fontSize:13,fontFamily:"JetBrains Mono, monospace"}}/>
+          <button className="btn" disabled={checking || !sku.trim()} onClick={doCheck}>
+            {checking ? <span className="spin" style={{width:14,height:14,borderWidth:2}}/> : "🔍"}
+            <span>เช็ค</span>
+          </button>
+        </div>
+        {checkErr && <div style={{marginTop:8,fontSize:12,color:"var(--danger)"}}>{checkErr}</div>}
+        {checkResult && (
+          <div style={{marginTop:10,padding:"12px 14px",borderRadius:10,background:"#fafcf7",
+                       border:"1px solid var(--bdr)",fontSize:12.5}}>
+            <div style={{fontWeight:700,marginBottom:6}}>{checkResult.sku}</div>
+            <div style={{display:"flex",flexDirection:"column",gap:3,color:"var(--muted)"}}>
+              <div>อยู่ในชีตเรา: {checkResult.inOurSheet ? "✅ มี" : "❌ ไม่มี"}</div>
+              <div>ถูกซ่อนไว้: {checkResult.isHidden ? "⚠️ ใช่" : "ไม่ได้ซ่อน"}</div>
+              <div>
+                {checkResult.zortStatus === "incomplete"
+                  ? "⚠️ ดึง ZORT ไม่ครบ: " + (checkResult.zortError || "")
+                  : "มีจริงใน ZORT: " + (checkResult.inZort
+                      ? ("✅ มี" + (checkResult.zortName ? (" — " + checkResult.zortName) : ""))
+                      : "❌ ไม่มี")}
+              </div>
+            </div>
+            <div style={{marginTop:8,padding:"8px 10px",borderRadius:8,background:"#eef6ff",
+                         color:"#1d4ed8",fontWeight:600}}>{checkResult.advice}</div>
+            {checkResult.isHidden && (
+              <button className="btn primary" style={{marginTop:10}}
+                      disabled={unhiding === checkResult.sku}
+                      onClick={() => doUnhide(checkResult.sku)}>
+                {unhiding === checkResult.sku
+                  ? <span className="spin" style={{width:14,height:14,borderWidth:2}}/>
+                  : "↩️"}
+                <span>กู้คืน {checkResult.sku}</span>
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      <hr style={{border:"none",borderTop:"1px solid var(--bdr)",margin:"16px 0"}}/>
+
+      {/* ── สินค้าที่ซ่อนอยู่ (soft-delete) ── */}
+      <div style={{marginBottom:16}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,gap:8,flexWrap:"wrap"}}>
+          <div style={{fontSize:12.5,fontWeight:700}}>สินค้าที่ซ่อนอยู่ (soft-delete)</div>
+          <button className="btn ghost" style={{fontSize:11.5,padding:"6px 10px"}}
+                  disabled={loadingHidden} onClick={loadHidden}>
+            {loadingHidden ? <span className="spin" style={{width:12,height:12,borderWidth:2}}/> : "🔄"}
+            <span>{hidden === null ? "ดูรายการ" : "รีเฟรช"}</span>
+          </button>
+        </div>
+        {unhideErr && <div style={{marginBottom:8,fontSize:12,color:"var(--danger)"}}>{unhideErr}</div>}
+        {hidden !== null && hidden.length === 0 && (
+          <div style={{fontSize:12,color:"var(--muted)"}}>ไม่มีสินค้าที่ซ่อนอยู่</div>
+        )}
+        {hidden && hidden.length > 0 && (
+          <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:280,overflowY:"auto"}}>
+            {hidden.map(h => (
+              <div key={h.sku} style={rowBox}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:700,fontSize:12.5}}>{h.sku}</div>
+                  <div style={{fontSize:10.5,color:"var(--muted)"}}>{h.reason} · {h.hiddenAt}</div>
+                </div>
+                <button className="btn ghost" style={{fontSize:11,padding:"5px 10px",flexShrink:0}}
+                        disabled={unhiding === h.sku} onClick={() => doUnhide(h.sku)}>
+                  {unhiding === h.sku ? <span className="spin" style={{width:12,height:12,borderWidth:2}}/> : "↩️ กู้คืน"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <hr style={{border:"none",borderTop:"1px solid var(--bdr)",margin:"16px 0"}}/>
+
+      {/* ── ล้างสินค้าที่ ZORT ลบไปแล้ว ── */}
+      <div>
+        <div style={{fontSize:12.5,fontWeight:700,marginBottom:6}}>ล้างสินค้าที่ถูกลบจาก ZORT แล้ว</div>
+        <div style={{fontSize:11.5,color:"var(--muted)",marginBottom:10}}>
+          เทียบสินค้าทั้งร้านกับ ZORT — ตัวที่ ZORT ไม่มีแล้วจะถูก "ซ่อน" เท่านั้น (ไม่ลบทิ้ง กู้คืนได้เสมอ)
+        </div>
+        <button className="btn" disabled={previewing} onClick={doPreview}>
+          {previewing ? <span className="spin" style={{width:14,height:14,borderWidth:2}}/> : "🔍"}
+          <span>ตรวจสอบ</span>
+        </button>
+        {previewErr && <div style={{marginTop:8,fontSize:12,color:"var(--danger)"}}>{previewErr}</div>}
+        {applyMsg && (
+          <div style={{marginTop:10,padding:"10px 14px",borderRadius:10,fontSize:12.5,
+                       background: applyMsg.ok ? "#dcfce7" : "#fef2f2",
+                       color: applyMsg.ok ? "var(--g-800)" : "#991b1b"}}>{applyMsg.text}</div>
+        )}
+        {preview && (
+          <div style={{marginTop:10}}>
+            <div style={{fontSize:12.5,color:"var(--muted)",marginBottom:8}}>
+              ZORT มี {preview.zortCount} SKU · ชีตเรามี {preview.totalOur} SKU · ซ่อนอยู่แล้ว {preview.hiddenCount}
+            </div>
+            {preview.del.length === 0 ? (
+              <div style={{fontSize:12.5,color:"var(--g-700)"}}>✅ ไม่มีสินค้าที่ต้องซ่อน — ทุก SKU ยังมีใน ZORT</div>
+            ) : preview.capped ? (
+              <div style={{padding:"10px 14px",borderRadius:10,background:"#fef2f2",border:"1px solid #fecaca",
+                           fontSize:12.5,color:"#991b1b"}}>
+                ⚠️ พบ {preview.del.length}/{preview.totalOur} รายการ ({Math.round(preview.frac*100)}%) —
+                เกินเพดานความปลอดภัย น่าจะดึง ZORT พลาด <b>ไม่ซ่อนให้อัตโนมัติ</b> ลองตรวจสอบใหม่อีกครั้ง
+              </div>
+            ) : (
+              <>
+                <div style={{maxHeight:220,overflowY:"auto",display:"flex",flexDirection:"column",gap:5,marginBottom:10}}>
+                  {preview.del.slice(0,200).map(d => (
+                    <div key={d.sku} style={{fontSize:12,padding:"6px 10px",borderRadius:7,
+                                              background:"#fafcf7",border:"1px solid var(--bdr)"}}>
+                      <b>{d.sku}</b>{d.name ? (" — " + d.name) : ""}
+                    </div>
+                  ))}
+                  {preview.del.length > 200 && (
+                    <div style={{fontSize:11.5,color:"var(--muted)"}}>… อีก {preview.del.length-200} รายการ</div>
+                  )}
+                </div>
+                <button className="btn primary" disabled={applying} onClick={doApplyHide}>
+                  {applying ? <span className="spin" style={{width:14,height:14,borderWidth:2}}/> : "🗑️"}
+                  <span>ยืนยันซ่อน {preview.del.length} รายการ</span>
+                </button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // CONNECT — Google Sheets setup
 // ─────────────────────────────────────────────────────────────────────
 function ConnectView({ sheetUrl, sheetViewUrl, syncing, lastSync, source, onSync, onClearLocal,
@@ -7886,6 +8112,8 @@ function ConnectView({ sheetUrl, sheetViewUrl, syncing, lastSync, source, onSync
           </div>
         )}
       </Card>
+
+      <MissingProductsTools/>
 
       <div className="row row-2">
         <Card title="โครงสร้างข้อมูลที่อ่านอัตโนมัติ" sub="ระบบจะหา sheet เหล่านี้ใน Google Sheet">

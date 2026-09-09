@@ -5680,6 +5680,81 @@ async function syncZortSalesNow() {
   } catch(e) { console.warn("syncZortSalesNow error:", e.message); return { success: false, error: dmjErrText(e) }; }
 }
 
+// ─── 🔧 จัดการสินค้าที่หายไป/ถูกซ่อน (owner/dev — แท็บ "เชื่อมต่อ") ───
+// checkMissingSku/previewZortDeleted อาจต้องไล่ดึงสินค้าทั้งร้านจาก ZORT (หลายพัน SKU หลายหน้า)
+// ถ้าค้นด้วย keyword ไม่เจอ → ให้เวลา 120 วิ เหมือน syncZortNow ไม่ใช้ default 60 วิของ dmjFetch
+async function syncCheckMissingSku(sku) {
+  if (!SHEET_DEPLOY_URL) return { success: false };
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120000);
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "checkMissingSku", sku }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    return await dmjJson(res);
+  } catch(e) { console.warn("syncCheckMissingSku error:", e.message); return { success: false, error: dmjErrText(e) }; }
+}
+
+async function syncListHiddenProducts() {
+  if (!SHEET_DEPLOY_URL) return { success: false };
+  try {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "listHiddenProducts" }),
+    });
+    return await dmjJson(res);
+  } catch(e) { console.warn("syncListHiddenProducts error:", e.message); return { success: false, error: dmjErrText(e) }; }
+}
+
+async function syncUnhideProduct(sku) {
+  if (!SHEET_DEPLOY_URL) return { success: false };
+  try {
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "unhideProduct", sku }),
+    });
+    return await dmjJson(res);
+  } catch(e) { console.warn("syncUnhideProduct error:", e.message); return { success: false, error: dmjErrText(e) }; }
+}
+
+async function syncPreviewZortDeleted() {
+  if (!SHEET_DEPLOY_URL) return { success: false };
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120000); // ไล่ดึงสินค้าทั้งร้านจาก ZORT
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "previewZortDeleted" }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    return await dmjJson(res);
+  } catch(e) { console.warn("syncPreviewZortDeleted error:", e.message); return { success: false, error: dmjErrText(e) }; }
+}
+
+async function syncHideZortDeleted() {
+  if (!SHEET_DEPLOY_URL) return { success: false };
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120000);
+    const res = await dmjFetch(SHEET_DEPLOY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "hideZortDeleted" }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    return await dmjJson(res);
+  } catch(e) { console.warn("syncHideZortDeleted error:", e.message); return { success: false, error: dmjErrText(e) }; }
+}
+
 // ─── เบิกวัตถุดิบ MTO — หักคลังหลายรายการ ───
 async function syncDeductMaterials(items) {
   if (!SHEET_DEPLOY_URL || !items.length) return { success: false };
