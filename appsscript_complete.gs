@@ -7925,6 +7925,16 @@ function syncZortToColumn_(warehousecode, colIndex, cachedProducts) {
 }
 
 // cachedWH / cachedFS: optional — ถ้ามีให้ใช้เลย ถ้าไม่มีจะ fetch เอง (backward compatible)
+// A="",B=sku,C=name,D=cat,E=subcat,F=tag,G=qtyStore(seed 0 เสมอ — syncZortToColumn_ แก้ให้ถูกทีหลัง),
+// H=qtyWH(availablestock),I=price — pattern เดียวกับ addNewProduct
+function newProductRowFromZort_(p, sku) {
+  return [
+    "", sku, p.name || "", p.category || "", p.subCategory || "",
+    Array.isArray(p.tag) ? p.tag.join(",") : String(p.tag || "").trim(),
+    0, Number(p.availablestock || 0), Number(p.sellprice || 0),
+  ];
+}
+
 function syncNewProductsFromZort(cachedWH, cachedFS) {
   Logger.log("=== ค้นหาสินค้าใหม่จาก ZORT ===");
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -7956,21 +7966,30 @@ function syncNewProductsFromZort(cachedWH, cachedFS) {
   for (const p of unique) {
     const sku = String(p.sku || p.barcode || "").trim().toUpperCase();
     if (sku && !existingSKUs[sku]) {
-      const newRow = [
-        "",
-        sku,
-        p.name || "",
-        p.category || "",
-        p.subCategory || "",
-        Array.isArray(p.tag) ? p.tag.join(",") : String(p.tag || "").trim(),
-        0,
-        Number(p.availablestock || 0),
-        Number(p.sellprice || 0)
-      ];
-      sheet.appendRow(newRow);
+      sheet.appendRow(newProductRowFromZort_(p, sku));
+      existingSKUs[sku] = true;
       added++;
     }
   }
+
+  // ⚠️ ของที่ไม่มี stock record ในคลังทั้ง WH_SAI5 และ WH_FRONTSTORE เลย (เช่นสินค้าใหม่ที่ยังไม่
+  // ถูกจัดเข้าคลังไหน) จะไม่มีวันโผล่ใน productsWH/productsFS ข้างบนเลย เพราะ GetProducts ที่ใส่
+  // `warehousecode=` กรองเฉพาะ SKU ที่มี stock record ในคลังนั้นจริง (บทเรียนจาก
+  // debugFindMissingSkusByPrefix — เจอจริง ก.ย. 2026: SKU มีใน ZORT แต่กด sync กี่ครั้งก็ไม่เข้าเว็บ)
+  // → ดึงสินค้าทั้งหมดอีกรอบแบบไม่กรอง warehouse (ช้ากว่าแต่ไม่พลาด SKU กลุ่มนี้) เฉพาะตัวที่ยัง
+  // ไม่เจอจาก 2 รอบแรก · ห่อ try เพราะเป็น "ตาข่ายกันพลาด" — พังแล้วต้องไม่ทำให้ทั้ง sync ล้ม
+  try {
+    const allZort = fetchAllZortProducts_();   // ไม่ส่ง warehousecode → เห็นทุก SKU จริง ๆ
+    for (const p of allZort) {
+      const sku = String(p.sku || p.barcode || "").trim().toUpperCase();
+      if (sku && !existingSKUs[sku]) {
+        sheet.appendRow(newProductRowFromZort_(p, sku));
+        existingSKUs[sku] = true;
+        added++;
+      }
+    }
+  } catch (e) { Logger.log("syncNewProductsFromZort: ดึงสินค้าทั้งหมด (ไม่กรองคลัง) พลาด: " + e); }
+
   SpreadsheetApp.flush();
   Logger.log(`เพิ่มสินค้าใหม่: ${added} รายการ`);
 }
