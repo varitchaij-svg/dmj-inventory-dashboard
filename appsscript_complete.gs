@@ -7647,6 +7647,74 @@ function clearHiddenProducts() {
   Logger.log('✅ กู้สินค้าทั้งหมด ' + n + ' รายการกลับแล้ว');
 }
 
+// อ่านอย่างเดียว — ไล่หาว่า SKU 1 ตัวหายไปจากเว็บเพราะอะไร (พนักงานแจ้ง "หา SKU นี้ไม่เจอ")
+// เช็คครบ 3 จุดที่ทำให้สินค้าหายจากเว็บได้: (1) อยู่ในชีตเราไหม (2) ถูกซ่อนไว้ไหม (soft-delete)
+// (3) ยังมีอยู่จริงใน ZORT ไหม — แล้วสรุปให้ว่าต้องรันอะไรต่อ ไม่ต้องเดา
+// ชื่อไม่มี `_` ต่อท้าย → โผล่ใน dropdown ของ GAS editor (บทเรียนข้อ 1)
+function checkMissingSku(sku) {
+  const clean = String(sku || '').trim().toUpperCase();
+  if (!clean) { Logger.log('ใส่ SKU ที่จะเช็ค เช่น checkMissingSku("WC00001")'); return; }
+
+  Logger.log('=== ตรวจสอบ SKU: ' + clean + ' ===');
+
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const our = collectExistingSkus_(ss);
+  const inOurSheet = !!our[clean];
+  Logger.log('1) อยู่ในชีต "อัพเดทจำนวนสินค้า"/"ข้อมูลสินค้า": ' + (inOurSheet ? '✅ มี' : '❌ ไม่มี'));
+
+  const hidden = getHiddenSkuSet_();
+  const isHidden = !!hidden[clean];
+  Logger.log('2) ถูกซ่อนไว้ (soft-delete เพราะเคยดูเหมือนถูกลบจาก ZORT): '
+    + (isHidden ? '⚠️ ใช่ — นี่คือสาเหตุที่หายจากเว็บ' : 'ไม่ได้ถูกซ่อน'));
+
+  // ค้นด้วย keyword ก่อน (เร็ว) — แต่ ZORT keyword ไม่ substring-match กับ sku เสมอไป (เจอมาแล้ว)
+  // ถ้าไม่เจอด้วย keyword ต้องถอยไปดึงทั้งหมดแล้วกรองเอง ก่อนจะสรุปว่า "ไม่มีใน ZORT"
+  let foundInZort = null;
+  try {
+    const res = UrlFetchApp.fetch(
+      ZORT_BASE + '/Product/GetProducts?page=1&limit=200&keyword=' + encodeURIComponent(clean),
+      { method: 'get', headers: zortHeaders_(), muteHttpExceptions: true });
+    const json = JSON.parse(res.getContentText());
+    const list = (json && json.list) || [];
+    foundInZort = list.find(function (p) {
+      return String(p.sku || p.barcode || '').trim().toUpperCase() === clean;
+    }) || null;
+  } catch (e) { Logger.log('   (ค้นด้วย keyword พลาด: ' + e + ')'); }
+
+  let inZortConfirmed = !!foundInZort;
+  if (!foundInZort) {
+    Logger.log('   ค้นด้วย keyword ไม่เจอ (อาจเพราะ keyword ไม่ match sku ตรง ๆ) กำลังดึงสินค้าทั้งหมดจาก ZORT เพื่อยืนยัน...');
+    const z = zortAllSkusComplete_();
+    if (!z.ok) {
+      Logger.log('❌ ดึง ZORT ไม่ครบ: ' + z.error + ' → สรุปเรื่อง ZORT ไม่ได้ตอนนี้ ลองใหม่อีกครั้ง');
+      Logger.log('\n=== สรุป ===');
+      Logger.log('ยังสรุปไม่ได้ว่ามีใน ZORT ไหม (ดึงข้อมูลไม่ครบ) — รัน checkMissingSku("' + clean + '") ใหม่อีกครั้ง');
+      return;
+    }
+    inZortConfirmed = !!z.skus[clean];
+    Logger.log('3) มีอยู่จริงใน ZORT (ดึงครบ ' + z.pages + ' หน้า, ' + z.count + ' SKU): '
+      + (inZortConfirmed ? '✅ มี' : '❌ ไม่มี'));
+  } else {
+    Logger.log('3) มีอยู่จริงใน ZORT: ✅ มี — ชื่อ "' + (foundInZort.name || '') + '" หมวด "' + (foundInZort.category || '') + '"');
+  }
+
+  Logger.log('\n=== สรุป ===');
+  if (isHidden) {
+    Logger.log('→ ถูกซ่อนไว้ในเว็บ (อาจซ่อนผิดตอน ZORT ดึงไม่ครบครั้งก่อน) — แก้: รัน unhideProduct("' + clean
+      + '") แล้วกดปุ่ม Sync ในแอป');
+  } else if (!inOurSheet && inZortConfirmed) {
+    Logger.log('→ มีอยู่จริงใน ZORT แต่ยังไม่เข้าชีตเรา — แก้: รัน syncZortBoth() เดี๋ยวนี้เลย '
+      + '(ปกติ trigger รันเองทุก 2 ชม. — syncNewProductsFromZort ในนั้นจะเพิ่ม SKU ที่หายไปให้อัตโนมัติ) '
+      + 'แล้วกดปุ่ม Sync ในแอป');
+  } else if (!inOurSheet && !inZortConfirmed) {
+    Logger.log('→ ไม่พบใน ZORT เลย — เช็คว่าพนักงานพิมพ์ SKU ถูกไหม (ตัวเลข/ตัวอักษรพิมพ์ผิด) '
+      + 'หรือสินค้านี้ยังไม่เคยถูกสร้างใน ZORT จริง ๆ (ต้องไปสร้างใน ZORT ก่อน ถึงจะ sync เข้าเว็บได้)');
+  } else if (inOurSheet && !isHidden) {
+    Logger.log('→ อยู่ในชีตและไม่ได้ถูกซ่อน — ไม่ใช่ปัญหาข้อมูลหาย น่าจะเป็น cache เก่าค้างอยู่ที่เครื่องพนักงาน '
+      + 'ให้ลองกดปุ่ม Sync/ลองใหม่ในแอปก่อน ถ้ายังไม่เจอแจ้งกลับมาอีกที');
+  }
+}
+
 // cachedProducts: optional — ถ้ามีให้ใช้เลย ถ้าไม่มีจะ fetch เอง (backward compatible)
 function syncZortToColumn_(warehousecode, colIndex, cachedProducts) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
