@@ -82,3 +82,49 @@ describe('meta: syncNewProductsFromZort ต้องไม่พลาด SKU �
     expect(hits).toBe(2);
   });
 });
+
+// ── adviceForMissingSku_ — คำแนะนำที่ checkMissingSku ใช้แยก "บั๊กข้อมูลจริง" ออกจาก
+// "แค่เครื่องพนักงานถือ cache เก่าค้าง" (เจอจริง ก.ย. 2026: sheet มี SKU แล้วแต่แอปยังไม่เจอ
+// — inPayload คือตัวชี้ขาดว่าปัญหาอยู่ฝั่งไหน ไม่ต้องเดา) ──
+const F_ADVICE = grab(/function adviceForMissingSku_\(inOurSheet, isHidden, inZort, inPayload\) \{[\s\S]*?\n\}/, 'adviceForMissingSku_');
+// eslint-disable-next-line no-new-func
+const { adviceForMissingSku_ } = new Function(F_ADVICE + '\nreturn { adviceForMissingSku_ };')();
+
+describe('adviceForMissingSku_ — 4 เหตุผลที่ SKU หายจากเว็บ ต้องแยกกันชัด', () => {
+  it('ถูกซ่อนไว้ (soft-delete) — ชนะทุกเงื่อนไขอื่น บอกให้กู้คืน', () => {
+    expect(adviceForMissingSku_(true, true, true, true)).toMatch(/กู้คืน/);
+  });
+
+  it('ไม่อยู่ในชีต แต่มีจริงใน ZORT — บอกให้กดปุ่ม ⬇️', () => {
+    expect(adviceForMissingSku_(false, false, true, false)).toMatch(/⬇️/);
+  });
+
+  it('ไม่อยู่ในชีต และไม่มีใน ZORT — บอกให้เช็คตัวสะกด/ยังไม่ถูกสร้าง', () => {
+    expect(adviceForMissingSku_(false, false, false, false)).toMatch(/สะกด|ยังไม่เคยถูกสร้าง/);
+  });
+
+  it('อยู่ในชีต ไม่ซ่อน แต่ข้อมูลจริงที่จะส่งให้เว็บ "มี" SKU นี้ — ชี้ไปที่ cache/เครื่องพนักงาน ไม่ใช่บั๊กข้อมูล', () => {
+    const a = adviceForMissingSku_(true, false, true, true);
+    expect(a).toMatch(/ไม่ใช่บั๊กฝั่งข้อมูล/);
+    expect(a).toMatch(/🔄/);
+  });
+
+  it('อยู่ในชีต ไม่ซ่อน แต่ข้อมูลจริงที่จะส่งให้เว็บ "ไม่มี" SKU นี้ — ชี้ว่าเป็นบั๊กข้อมูล ห้ามให้ลองกด Sync ซ้ำ', () => {
+    const a = adviceForMissingSku_(true, false, true, false);
+    expect(a).toMatch(/บั๊กที่ต้นทางข้อมูล/);
+    expect(a).toMatch(/ไม่ต้องลองกด Sync ซ้ำ/);
+  });
+});
+
+describe('meta: checkMissingSkuCore_ เช็คผ่าน readProducts_ จริง (ไม่เกี่ยวกับ cache)', () => {
+  const CORE_FN = grab(/function checkMissingSkuCore_\(sku\) \{[\s\S]*?\n\}/, 'checkMissingSkuCore_');
+
+  it('เรียก readProducts_() ตรง ๆ ห่อ try/catch (พังไม่ควรทำให้ทั้งเช็คพัง)', () => {
+    expect(CORE_FN).toMatch(/try \{[\s\S]*?readProducts_\(\)\.some/);
+  });
+
+  it('ส่ง inPayload ไปกับทุกเส้นทางคืนค่า (found-in-ZORT / incomplete / confirmed)', () => {
+    const hits = (CORE_FN.match(/inPayload:\s*inPayload/g) || []).length;
+    expect(hits).toBeGreaterThanOrEqual(3);
+  });
+});

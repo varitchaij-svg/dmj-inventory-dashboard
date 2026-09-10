@@ -7703,6 +7703,17 @@ function checkMissingSkuCore_(sku) {
   const hidden = getHiddenSkuSet_();
   const isHidden = !!hidden[clean];
 
+  // เช็คผ่าน path จริงที่เว็บใช้สร้างข้อมูล (readProducts_) — อ่านชีตสดทุกครั้ง ไม่เกี่ยวกับ
+  // cache เลย จึงชี้ขาดได้ว่า "ตอนนี้" SKU นี้จะอยู่ใน payload ที่ส่งให้เว็บไหมจริง ๆ
+  // ต่างจาก inOurSheet (เช็คแค่ว่ามีแถวในชีต) — ตัวนี้ผ่านทุกด่านการกรอง/self-heal จริงแล้ว
+  // แยกบั๊กฝั่งข้อมูล (readProducts_ พลาด) ออกจากปัญหา cache/เครื่องพนักงานเก่าค้างได้ชัดเจน
+  let inPayload = false;
+  try {
+    inPayload = readProducts_().some(function (p) {
+      return p.sku && String(p.sku).trim().toUpperCase() === clean;
+    });
+  } catch (e) { /* readProducts_ พังไม่ควรทำให้ทั้งเช็คนี้พังไปด้วย — ถือว่าไม่รู้ */ }
+
   // ค้นด้วย keyword ก่อน (เร็ว) — แต่ ZORT keyword ไม่ substring-match กับ sku เสมอไป (เจอมาแล้ว)
   // ถ้าไม่เจอด้วย keyword ต้องถอยไปดึงทั้งหมดแล้วกรองเอง ก่อนจะสรุปว่า "ไม่มีใน ZORT"
   let foundInZort = null;
@@ -7719,29 +7730,29 @@ function checkMissingSkuCore_(sku) {
 
   if (foundInZort) {
     return {
-      ok: true, sku: clean, inOurSheet: inOurSheet, isHidden: isHidden,
+      ok: true, sku: clean, inOurSheet: inOurSheet, isHidden: isHidden, inPayload: inPayload,
       zortStatus: 'ok', inZort: true, zortName: foundInZort.name || '', zortCategory: foundInZort.category || '',
-      advice: adviceForMissingSku_(inOurSheet, isHidden, true),
+      advice: adviceForMissingSku_(inOurSheet, isHidden, true, inPayload),
     };
   }
 
   const z = zortAllSkusComplete_();
   if (!z.ok) {
     return {
-      ok: true, sku: clean, inOurSheet: inOurSheet, isHidden: isHidden,
+      ok: true, sku: clean, inOurSheet: inOurSheet, isHidden: isHidden, inPayload: inPayload,
       zortStatus: 'incomplete', zortError: z.error,
       advice: 'ยังสรุปไม่ได้ว่ามีใน ZORT ไหม (ดึงข้อมูลจาก ZORT ไม่ครบ: ' + z.error + ') — ลองใหม่อีกครั้ง',
     };
   }
   const inZortConfirmed = !!z.skus[clean];
   return {
-    ok: true, sku: clean, inOurSheet: inOurSheet, isHidden: isHidden,
+    ok: true, sku: clean, inOurSheet: inOurSheet, isHidden: isHidden, inPayload: inPayload,
     zortStatus: 'ok', inZort: inZortConfirmed,
-    advice: adviceForMissingSku_(inOurSheet, isHidden, inZortConfirmed),
+    advice: adviceForMissingSku_(inOurSheet, isHidden, inZortConfirmed, inPayload),
   };
 }
 
-function adviceForMissingSku_(inOurSheet, isHidden, inZort) {
+function adviceForMissingSku_(inOurSheet, isHidden, inZort, inPayload) {
   if (isHidden) {
     return 'ถูกซ่อนไว้ในเว็บ (soft-delete — เคยดูเหมือนถูกลบจาก ZORT) — กดปุ่ม "กู้คืน" แล้ว Sync ในแอป';
   }
@@ -7751,7 +7762,12 @@ function adviceForMissingSku_(inOurSheet, isHidden, inZort) {
   if (!inOurSheet && !inZort) {
     return 'ไม่พบใน ZORT เลย — เช็คว่าพิมพ์ SKU ถูกไหม (ตัวเลข/ตัวอักษรพิมพ์ผิด) หรือสินค้านี้ยังไม่เคยถูกสร้างใน ZORT จริง ๆ (ต้องไปสร้างใน ZORT ก่อน ถึงจะ sync เข้าเว็บได้)';
   }
-  return 'อยู่ในชีตและไม่ได้ถูกซ่อน — ไม่ใช่ปัญหาข้อมูลหาย น่าจะเป็น cache เก่าค้างที่เครื่องพนักงาน ให้ลองกด Sync/ลองใหม่ในแอปก่อน ถ้ายังไม่เจอแจ้งกลับมาอีกที';
+  if (inPayload) {
+    return 'อยู่ในชีต ไม่ได้ถูกซ่อน และเช็คข้อมูลจริงที่เว็บจะส่งให้แล้วก็มี SKU นี้อยู่ — ไม่ใช่บั๊กฝั่งข้อมูล '
+      + 'เป็นเครื่องพนักงานที่ถือข้อมูลเก่าค้างอยู่ → กด 🔄 Sync ใหม่ ถ้ายังไม่เจอให้ปิดแอปจริง ๆ (ไม่ใช่แค่สลับแท็บ) แล้วเปิดใหม่';
+  }
+  return 'อยู่ในชีตและไม่ได้ถูกซ่อน แต่เช็คข้อมูลจริงที่เว็บจะส่งให้แล้ว "ไม่มี" SKU นี้อยู่เลย — เป็นบั๊กที่ต้นทางข้อมูล '
+    + 'ไม่ใช่ cache ไม่ต้องลองกด Sync ซ้ำอีก ต้องให้ทีมพัฒนาตรวจ readProducts_ ต่อ';
 }
 
 // อ่านอย่างเดียว — เวอร์ชัน dropdown ของ checkMissingSkuCore_ (โผล่ใน GAS editor — บทเรียนข้อ 1)

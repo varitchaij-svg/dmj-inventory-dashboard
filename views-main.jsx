@@ -7877,6 +7877,9 @@ function MissingProductsTools() {
                       ? ("✅ มี" + (checkResult.zortName ? (" — " + checkResult.zortName) : ""))
                       : "❌ ไม่มี")}
               </div>
+              {/* เช็คตรงจากข้อมูลจริงที่เว็บจะส่งให้ (ไม่เกี่ยวกับ cache เลย) — แยกบั๊กข้อมูลจริง
+                  ออกจาก "แค่เครื่องพนักงานถือของเก่าค้าง" ได้ชัดเจน ไม่ต้องเดา */}
+              <div>ข้อมูลที่เว็บจะส่งให้ตอนนี้: {checkResult.inPayload ? "✅ มี SKU นี้อยู่" : "❌ ไม่มี"}</div>
             </div>
             <div style={{marginTop:8,padding:"8px 10px",borderRadius:8,background:"#eef6ff",
                          color:"#1d4ed8",fontWeight:600}}>{checkResult.advice}</div>
