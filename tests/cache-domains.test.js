@@ -284,11 +284,17 @@ describe('C. PAYLOAD_SOURCE_SHEETS_ ต้องตรงกับที่ buil
 });
 
 describe('D. จุดเชื่อมต่อ — ใครยังต้องล้าง payload cache / ใครต้องไม่ล้าง', () => {
+  // ⚠️ ตัดที่ปีกกาปิดของฟังก์ชัน (`\n}\n` ที่คอลัมน์ 0 ตามสไตล์ของไฟล์นี้)
+  //    **ห้ามกลับไปตัดที่ `\nfunction ` ตัวถัดไป** — แบบนั้นจะกวาดคอมเมนต์/โค้ดที่อยู่
+  //    *หลัง* ฟังก์ชันเข้ามาด้วยเสมอ และฟังก์ชัน "ตัวสุดท้ายของไฟล์" จะกินไปจนจบไฟล์
+  //    → ทั้ง 2 ทางผิด: MUST_NOT_INVALIDATE แดงทั้งที่โค้ดถูก (แค่คอมเมนต์ข้างล่างเอ่ยถึง)
+  //    และ MUST_INVALIDATE เขียวได้ทั้งที่ฟังก์ชันนั้นไม่ได้ล้าง cache จริง (เก็บของตัวถัดไปมา)
+  //    ซึ่งอันหลังคือทิศทางที่อันตราย — เจอจริง ก.ย. 2026 ตอนต่อ section ใหม่ท้ายไฟล์
   function bodyOf(name) {
     const i = GS.indexOf('function ' + name);
     if (i < 0) throw new Error('ไม่พบฟังก์ชัน ' + name);
-    const j = GS.indexOf('\nfunction ', i + 1);
-    return GS.slice(i, j < 0 ? GS.length : j);
+    const j = GS.indexOf('\n}\n', i);
+    return GS.slice(i, j < 0 ? GS.length : j + 2);
   }
 
   // เขียนชีตที่อยู่ใน payload → ต้องล้าง cache เหมือนเดิม (ห้ามหลุด)

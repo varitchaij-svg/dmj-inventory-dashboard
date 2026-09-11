@@ -789,6 +789,11 @@ function meHandler_(ss, data) {
 }
 
 function logoutHandler_(ss, data) {
+  // ⚠️ ถอน binding แจ้งเตือน **ก่อน** revoke session — ต้องใช้ตัว token คำนวณ sessionRef
+  // ⚠️ ถอนเฉพาะ binding ของ "เครื่อง/session ที่ logout" เท่านั้น ไม่แตะเครื่องอื่นของ
+  //    staffId เดียวกัน (ออกจากระบบเครื่องหนึ่งต้องไม่ทำให้อีกเครื่องเงียบไปด้วย)
+  //    ส่วน "ระงับบัญชี" หยุดทุกเครื่องเองอยู่แล้ว เพราะเส้นทางส่งตรวจ status สดทุกครั้ง
+  try { pushRevokeBindingsForSession_(ss, data.sessionToken, 'logout'); } catch (e) {}
   revokeSession_(ss, data.sessionToken);
   return ContentService.createTextOutput(JSON.stringify({ ok: true })).setMimeType(ContentService.MimeType.JSON);
 }
@@ -981,7 +986,13 @@ var COMMON_ACTIONS_ = ["order", "updateOrderState", "transferStock", "transferSt
                         // 🗂️ อ่านทะเบียน Registry (D06–D09) — Add Product ต้องเลือก prefix/family/form/variant
                         //    ที่ ACTIVE ได้ทุก role ที่มีแท็บเพิ่มสินค้า · write (save*) เป็น Owner/Admin เท่านั้น
                         //    (ไม่อยู่ที่นี่ — ผ่าน isAdminRole_ ใน canDoOrNull_ + self-gate ในแต่ละ handler)
-                        "listPrefixRegistry", "listFamilyRegistry", "listFormRegistry", "listVariantRegistry"];
+                        "listPrefixRegistry", "listFamilyRegistry", "listFormRegistry", "listVariantRegistry",
+                        // 🔔 ถอนอุปกรณ์แจ้งเตือนของตัวเอง — ต้องทำได้ทุก role เสมอ
+                        // (คนที่เพิ่งถูกลด role จาก owner/dev ต้องยังถอนเครื่องตัวเองออกได้
+                        //  ไม่งั้น binding ค้างอยู่โดยเจ้าตัวเอาออกไม่ได้)
+                        // register/sendTestPush ไม่อยู่ที่นี่โดยตั้งใจ — owner/dev ผ่าน
+                        // canDoOrNull_ ด้วย isAdminRole_ อยู่แล้ว และ handler ตรวจซ้ำเอง
+                        "unregisterPushDevice"];
 
 var ROLE_ACTIONS_ = {
   // createStockCheck = ปุ่มลอย 📤 "ส่งคำขอเช็คสต็อก" ในแท็บ "สินค้า & สั่ง" (ดู canSendCheck
@@ -2735,6 +2746,16 @@ function doPost(e) {
     // 📝 บันทึกโน้ตติดตามใบเสนอราคา — เขียนชีตของตัวเอง ไม่แตะสต็อก/ออเดอร์
     // อยู่เหนือ invalidateCache_ ด้วยเหตุผลเดียวกับ markNotiRead/setProductOwner
     if (data.action === 'saveQuoteFollowup') return saveQuoteFollowupHandler_(ss, data);
+
+    // ─── 🔔 PWA Push (Phase 1) — ทะเบียนอุปกรณ์แจ้งเตือน ───
+    // อยู่เหนือ invalidateCache_(true) ด้วยเหตุผลเดียวกับ markNotiRead/setProductOwner —
+    // ชีตอุปกรณ์ไม่ได้อยู่ใน PAYLOAD_SOURCE_SHEETS_ · ล้าง/bump ts = ทุกเครื่องโหลด
+    // payload ก้อนเต็มใหม่ฟรี ๆ ทุกครั้งที่มีคนสมัครอุปกรณ์
+    // ⚠️ ทั้ง 3 ตัว self-gate สิทธิ์เองใน handler (pushGate_) ไม่พึ่ง canDoOrNull_
+    //    ซึ่งยังเป็น no-op ตราบที่ REQUIRE_LOGIN ปิดอยู่
+    if (data.action === 'registerPushDevice')   return registerPushDeviceHandler_(ss, data);
+    if (data.action === 'unregisterPushDevice') return unregisterPushDeviceHandler_(ss, data);
+    if (data.action === 'sendTestPush')         return sendTestPushHandler_(ss, data);
 
     // ─── 🗂️ Product Registry (D06–D09) — อ่าน/เขียนทะเบียน ไม่แตะสต็อก/ออเดอร์ ───
     // list = อ่าน (any session) · save = Owner/Admin เท่านั้น (self-gated ในแต่ละ handler)
@@ -17433,4 +17454,511 @@ function reserveFormHandler_(ss, data, actor) {
     return ok({ created:true, formId:formId, prefix:prefix, model:model,
                 axis:axis, familyId:familyId||null, baseName:baseName });
   } finally { lock.releaseLock(); }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 🔔 PWA Push (FCM) — Phase 1: transport proof เฉพาะ owner/dev
+// ──────────────────────────────────────────────────────────────────────────
+// ขอบเขต Phase 1 (ดู DMJ PWA Push Master Instructions §5):
+//   register device → ตรวจ binding → ส่งข้อความทดสอบเข้าเครื่องของ "ผู้เรียกเอง" → unregister
+//   **ไม่แตะ** pushInappNoti_ / audience ธุรกิจ / LINE queue / trigger ธุรกิจ ใด ๆ ทั้งสิ้น
+//
+// ⚠️ กฎเหล็กของก้อนนี้ (ทุกข้อคือความพังที่ไม่มี error ให้เห็น):
+//  1) **ห้ามเรียก invalidateCache_() จากที่ไหนในไฟล์ส่วนนี้** — ชีตอุปกรณ์ไม่ได้อยู่ใน
+//     PAYLOAD_SOURCE_SHEETS_ การล้าง/bump dmj_last_write_ts จะทำให้ทุกเครื่องที่ถาม
+//     action=ver คิดว่า "ข้อมูลเปลี่ยน" แล้วโหลด payload ก้อนเต็ม (หลายเมกะ) ใหม่ฟรี ๆ
+//     ทุกครั้งที่มีคนสมัครอุปกรณ์ · dispatch จึงต้องอยู่ **เหนือ** invalidateCache_(true)
+//  2) **ห้ามมี UrlFetchApp ในเส้นทางบันทึกงานธุรกิจ** — ก้อนนี้ยิง FCM เฉพาะใน
+//     sendTestPush (ปุ่มทดสอบของ owner/dev) เท่านั้น · Phase 2 ต้องเป็น dispatcher แยก
+//  3) **ห้ามพิมพ์ token/secret เต็มลง log** — ใช้ pushMaskToken_ เสมอ
+//  4) **การรู้ FCM token ไม่ใช่หลักฐานสิทธิ์** — token ที่มี binding active ของคนอื่นอยู่
+//     ต้องถูกปฏิเสธ (tokenOwnedByOther) ห้าม reassign อัตโนมัติเด็ดขาด
+//  5) **status ต้องเป็น 'active' ตรงตัว** — ห้ามใช้ sessionInactiveOrNull_ เป็นด่านเดียว
+//     เพราะตัวนั้นปล่อย status ว่างผ่าน (โดยเจตนา เพื่อ migration ของเดิม) ซึ่งไม่ควรใช้
+//     กับ surface ใหม่ที่ไม่มี caller เก่าให้พัง
+// ══════════════════════════════════════════════════════════════════════════
+
+var SHEET_PUSH_DEVICES = "อุปกรณ์แจ้งเตือน";
+
+// คอลัมน์ 1-indexed — **ต่อท้ายอย่างเดียว ห้ามแทรก/สลับ** (บทเรียนข้อ 5)
+var PUSH_COL = {
+  DEVICE_ID: 1, STAFF_ID: 2, TOKEN_HASH: 3, TOKEN: 4, SESSION_REF: 5,
+  BINDING_VER: 6, ENABLED: 7, REVOKED_AT: 8, REVOKED_REASON: 9,
+  CREATED_AT: 10, UPDATED_AT: 11, LAST_SEEN_AT: 12, PLATFORM: 13, LABEL: 14,
+};
+var PUSH_HEADERS = ["deviceId","staffId","tokenHash","token","sessionRef",
+                    "bindingVersion","enabled","revokedAt","revokedReason",
+                    "createdAt","updatedAt","lastSeenAt","platform","label"];
+
+var PUSH_SCAN_ROWS      = 500;   // อ่านย้อนหลังไม่เกินกี่แถว (กัน getRange โตไม่มีเพดาน)
+var PUSH_TEST_TTL_SEC   = 60;    // TTL สั้นสำหรับข้อความทดสอบ (§5.3) — ปิด flag แล้วของค้างไม่ตามมานาน
+var PUSH_FCM_SCOPE      = 'https://www.googleapis.com/auth/firebase.messaging';
+
+function pushEnabled_() {
+  try {
+    return PropertiesService.getScriptProperties().getProperty('PUSH_ENABLED') === 'true';
+  } catch (e) { return false; }
+}
+
+function pushDeviceSheet_(ss) {
+  return getOrCreateSheet_(ss, SHEET_PUSH_DEVICES, PUSH_HEADERS);
+}
+
+// อ้างอิง session แบบไม่เก็บ raw token ซ้ำในชีต (§5.2)
+function pushSessionRef_(sessionToken) {
+  if (!sessionToken) return '';
+  return sha256Hex_(String(sessionToken)).slice(0, 32);
+}
+function pushTokenHash_(token) {
+  if (!token) return '';
+  return sha256Hex_(String(token));
+}
+// สำหรับ log/รายงานเท่านั้น — ห้ามพิมพ์ token เต็มที่ไหนก็ตาม (§1)
+function pushMaskToken_(token) {
+  var t = String(token || '');
+  if (t.length <= 12) return '***';
+  return t.slice(0, 6) + '…' + t.slice(-4) + ' (len ' + t.length + ')';
+}
+
+// ── ตรวจรูปแบบ input (§5.2 "ตรวจสอบ input lengths/schema") ────────────────
+function pushValidDeviceId_(s) {
+  return typeof s === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(s);
+}
+function pushValidToken_(s) {
+  // FCM registration token: ตัวอักษร/ตัวเลข/-/_/:/. ความยาวจริงราว 140-300 แต่เผื่อไว้
+  return typeof s === 'string' && s.length >= 20 && s.length <= 4096 && /^[A-Za-z0-9_:.\-]+$/.test(s);
+}
+
+function pushOff_() {
+  return ContentService.createTextOutput(JSON.stringify({ ok: false, off: true }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+function pushJson_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ── ด่านสิทธิ์กลาง (§5.2) ────────────────────────────────────────────────────
+// คืน {sess} เมื่อผ่าน · คืน {err: Response} เมื่อถูกปฏิเสธ
+// ⚠️ ตรวจ status === 'active' **ตรงตัว** ไม่ใช้ sessionInactiveOrNull_ (ปล่อย status ว่างผ่าน)
+// ⚠️ requireAdmin เป็นด่านฝั่ง server จริง ไม่ใช่แค่ซ่อนปุ่ม
+function pushGate_(ss, data, opts) {
+  opts = opts || {};
+  if (opts.requireEnabled && !pushEnabled_()) return { err: pushOff_() };
+  var sess = resolveSession_(ss, (data && data.sessionToken) || '');
+  if (!sess) return { err: unauthorized_() };
+  if (String(sess.status == null ? '' : sess.status).trim() !== 'active') {
+    return { err: forbidden_('บัญชีนี้ยังใช้งานแจ้งเตือนไม่ได้ (สถานะไม่ active)') };
+  }
+  if (opts.requireAdmin && !isAdminRole_(sess.role)) {
+    return { err: forbidden_('เฉพาะเจ้าของ/ผู้ดูแลระบบเท่านั้น') };
+  }
+  return { sess: sess };
+}
+
+// ── rate limit ต่อ staff ต่อ action (CacheService — ไม่แตะชีต) ────────────────
+// คืน null = ผ่าน · คืน Response = เกินโควตา
+function pushRateLimitOrNull_(kind, staffId, maxHits, windowSec) {
+  try {
+    var c = CacheService.getScriptCache();
+    var key = 'dmj_pushrl_' + kind + '_' + String(staffId);
+    var n = parseInt(c.get(key) || '0', 10) || 0;
+    if (n >= maxHits) {
+      return pushJson_({ ok: false, rateLimited: true,
+        error: 'ลองบ่อยเกินไป รอสักครู่แล้วลองใหม่' });
+    }
+    c.put(key, String(n + 1), windowSec);
+  } catch (e) { /* cache ใช้ไม่ได้ → ไม่กั้น (ไม่ทำให้ของเดิมพัง) */ }
+  return null;
+}
+
+// ── อ่านแถวอุปกรณ์ (ท้าย ๆ เท่านั้น) ─────────────────────────────────────────
+function pushReadRows_(sh) {
+  var last = sh.getLastRow();
+  if (last < 2) return { from: 2, rows: [] };
+  var from = Math.max(2, last - PUSH_SCAN_ROWS + 1);
+  return { from: from, rows: sh.getRange(from, 1, last - from + 1, PUSH_HEADERS.length).getValues() };
+}
+function pushRowEnabled_(r) {
+  var v = r[PUSH_COL.ENABLED - 1];
+  return v === true || v === 'TRUE' || v === 'true';
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// action=registerPushDevice — สมัคร/ตรวจ binding (idempotent)
+// ──────────────────────────────────────────────────────────────────────────
+// ทำหน้าที่ทั้ง "สมัคร" และ "ตรวจว่า binding ยัง valid ไหม" ในตัวเดียว (§5.2)
+// ⚠️ valid + ไม่เปลี่ยน → คืน {unchanged:true} **โดยไม่เขียนชีต** (ข้อกำหนด T10)
+// ⚠️ token มี binding active ของ staff อื่น → ปฏิเสธ tokenOwnedByOther ห้าม reassign (§5.2)
+function registerPushDeviceHandler_(ss, data) {
+  var g = pushGate_(ss, data, { requireEnabled: true, requireAdmin: true });
+  if (g.err) return g.err;
+  var sess = g.sess;
+
+  var deviceId = String((data && data.deviceId) || '');
+  var token    = String((data && data.pushToken) || '');
+  if (!pushValidDeviceId_(deviceId)) return pushJson_({ ok: false, error: 'deviceId ไม่ถูกต้อง' });
+  if (!pushValidToken_(token))       return pushJson_({ ok: false, error: 'push token ไม่ถูกต้อง' });
+
+  var rl = pushRateLimitOrNull_('reg', sess.staffId, 30, 300);
+  if (rl) return rl;
+
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return pushJson_({ ok: false, retryable: true, error: 'ระบบไม่ว่าง ลองใหม่' });
+  try {
+    var sh = pushDeviceSheet_(ss);
+    var tokenHash = pushTokenHash_(token);
+    var sessionRef = pushSessionRef_(data && data.sessionToken);
+    var now = new Date();
+    var read = pushReadRows_(sh);
+
+    var hitRow = -1, hitVals = null;
+    for (var i = 0; i < read.rows.length; i++) {
+      if (String(read.rows[i][PUSH_COL.TOKEN_HASH - 1]) === tokenHash) { hitRow = read.from + i; hitVals = read.rows[i]; break; }
+    }
+
+    if (hitRow > 0) {
+      var owner = String(hitVals[PUSH_COL.STAFF_ID - 1] || '');
+      var enabled = pushRowEnabled_(hitVals);
+      // ⚠️ token นี้ยังผูกกับ "คนอื่น" อยู่ → ปฏิเสธ ห้ามยึด (ข้อกำหนด T8a)
+      if (enabled && owner && owner !== String(sess.staffId)) {
+        return pushJson_({ ok: false, tokenOwnedByOther: true,
+          error: 'อุปกรณ์นี้ยังผูกกับบัญชีอื่นอยู่ — ให้บัญชีเดิมออกจากระบบก่อน หรือล้าง token แล้วขอใหม่' });
+      }
+      var sameDevice  = String(hitVals[PUSH_COL.DEVICE_ID - 1] || '') === deviceId;
+      var sameSession = String(hitVals[PUSH_COL.SESSION_REF - 1] || '') === sessionRef;
+      if (enabled && owner === String(sess.staffId) && sameDevice && sameSession) {
+        // ── valid + ไม่มีอะไรเปลี่ยน → ไม่เขียนชีตเลย ──
+        return pushJson_({ ok: true, unchanged: true, deviceId: deviceId,
+          bindingVersion: Number(hitVals[PUSH_COL.BINDING_VER - 1]) || 1 });
+      }
+      // เปลี่ยนเครื่อง/เปลี่ยน session/เคยถูก revoke แล้วกลับมา → อัปเดต + bump bindingVersion
+      var ver = (Number(hitVals[PUSH_COL.BINDING_VER - 1]) || 0) + 1;
+      sh.getRange(hitRow, PUSH_COL.DEVICE_ID,   1, 1).setValue(deviceId);
+      sh.getRange(hitRow, PUSH_COL.STAFF_ID,    1, 1).setValue(String(sess.staffId));
+      sh.getRange(hitRow, PUSH_COL.SESSION_REF, 1, 1).setValue(sessionRef);
+      sh.getRange(hitRow, PUSH_COL.BINDING_VER, 1, 1).setValue(ver);
+      sh.getRange(hitRow, PUSH_COL.ENABLED,     1, 1).setValue(true);
+      sh.getRange(hitRow, PUSH_COL.REVOKED_AT,  1, 1).setValue('');
+      sh.getRange(hitRow, PUSH_COL.REVOKED_REASON, 1, 1).setValue('');
+      sh.getRange(hitRow, PUSH_COL.UPDATED_AT,  1, 1).setValue(now);
+      sh.getRange(hitRow, PUSH_COL.LAST_SEEN_AT, 1, 1).setValue(now);
+      return pushJson_({ ok: true, updated: true, deviceId: deviceId, bindingVersion: ver });
+    }
+
+    // ยังไม่มีแถวของ token นี้ → เพิ่มใหม่
+    sh.appendRow([
+      deviceId, String(sess.staffId), tokenHash, token, sessionRef,
+      1, true, '', '',
+      now, now, now,
+      String((data && data.platform) || '').slice(0, 60),
+      String((data && data.label) || '').slice(0, 60),
+    ]);
+    return pushJson_({ ok: true, created: true, deviceId: deviceId, bindingVersion: 1 });
+  } catch (e) {
+    Logger.log('registerPushDeviceHandler_ error: ' + e);
+    return pushJson_({ ok: false, error: 'บันทึกอุปกรณ์ไม่สำเร็จ' });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// action=unregisterPushDevice — ถอน binding ของตัวเอง
+// ──────────────────────────────────────────────────────────────────────────
+// ⚠️ **ไม่ผูกกับ PUSH_ENABLED** — ปิด flag แล้วต้องยังถอนได้ ไม่งั้น binding ค้างถอนไม่ออก
+// ⚠️ **ไม่บังคับ owner/dev** — คนที่เพิ่งถูกลด role ต้องถอนเครื่องตัวเองได้ (§5.2)
+function unregisterPushDeviceHandler_(ss, data) {
+  var g = pushGate_(ss, data, { requireEnabled: false, requireAdmin: false });
+  if (g.err) return g.err;
+  var sess = g.sess;
+
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return pushJson_({ ok: false, retryable: true, error: 'ระบบไม่ว่าง ลองใหม่' });
+  try {
+    var sh = pushDeviceSheet_(ss);
+    var read = pushReadRows_(sh);
+    var deviceId  = String((data && data.deviceId) || '');
+    var tokenHash = (data && data.pushToken) ? pushTokenHash_(String(data.pushToken)) : '';
+    var n = pushRevokeRows_(sh, read, function (r) {
+      if (String(r[PUSH_COL.STAFF_ID - 1] || '') !== String(sess.staffId)) return false;  // เจ้าของเท่านั้น
+      if (deviceId  && String(r[PUSH_COL.DEVICE_ID - 1] || '')  === deviceId)  return true;
+      if (tokenHash && String(r[PUSH_COL.TOKEN_HASH - 1] || '') === tokenHash) return true;
+      return false;
+    }, 'unregister');
+    return pushJson_({ ok: true, revoked: n });
+  } catch (e) {
+    Logger.log('unregisterPushDeviceHandler_ error: ' + e);
+    return pushJson_({ ok: false, error: 'ถอนอุปกรณ์ไม่สำเร็จ' });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ปิดแถวที่ match — ตัวช่วยร่วมของ unregister/logout/revokeSession
+function pushRevokeRows_(sh, read, matchFn, reason) {
+  var now = new Date(), n = 0;
+  for (var i = 0; i < read.rows.length; i++) {
+    var r = read.rows[i];
+    if (!pushRowEnabled_(r)) continue;
+    if (!matchFn(r)) continue;
+    var row = read.from + i;
+    sh.getRange(row, PUSH_COL.ENABLED,        1, 1).setValue(false);
+    sh.getRange(row, PUSH_COL.REVOKED_AT,     1, 1).setValue(now);
+    sh.getRange(row, PUSH_COL.REVOKED_REASON, 1, 1).setValue(String(reason || ''));
+    sh.getRange(row, PUSH_COL.UPDATED_AT,     1, 1).setValue(now);
+    n++;
+  }
+  return n;
+}
+
+// ── logout: ถอนเฉพาะ binding ของ "session ที่ logout" ────────────────────────
+// ⚠️ **ห้ามถอนทุกเครื่องของ staffId เดียวกัน** (§5.3) — ออกจากระบบเครื่องหนึ่ง
+//    ต้องไม่ทำให้อีกเครื่องของคนเดียวกันเงียบไปด้วย
+// ⚠️ ห้าม throw — logout ต้องสำเร็จเสมอแม้ชีตอุปกรณ์มีปัญหา
+function pushRevokeBindingsForSession_(ss, sessionToken, reason) {
+  try {
+    if (!sessionToken) return 0;
+    var sh = ss.getSheetByName(SHEET_PUSH_DEVICES);
+    if (!sh) return 0;                       // ยังไม่เคยมีใครสมัคร → ไม่ต้องสร้างชีตเปล่า
+    var ref = pushSessionRef_(sessionToken);
+    var read = pushReadRows_(sh);
+    return pushRevokeRows_(sh, read, function (r) {
+      return String(r[PUSH_COL.SESSION_REF - 1] || '') === ref;
+    }, reason || 'logout');
+  } catch (e) {
+    Logger.log('pushRevokeBindingsForSession_ error (ข้ามไป): ' + e);
+    return 0;
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// action=sendTestPush — ส่งข้อความทดสอบเข้า "เครื่องของผู้เรียกเอง" เท่านั้น
+// ──────────────────────────────────────────────────────────────────────────
+// ⚠️ **ไม่รับ recipient/staffId/token ปลายทางจาก client เด็ดขาด** (§5.2)
+//    รับได้แค่ deviceId เพื่อ "เลือกเครื่องของตัวเอง" และต้องเป็นของ sess.staffId เท่านั้น
+// ⚠️ **ไม่มี admin override ส่งให้คนอื่น** — endpoint นี้เป็น self-test ล้วน
+function sendTestPushHandler_(ss, data) {
+  var g = pushGate_(ss, data, { requireEnabled: true, requireAdmin: true });
+  if (g.err) return g.err;
+  var sess = g.sess;
+
+  var rl = pushRateLimitOrNull_('test', sess.staffId, 10, 600);
+  if (rl) return rl;
+
+  var sh = ss.getSheetByName(SHEET_PUSH_DEVICES);
+  if (!sh) return pushJson_({ ok: false, noDevice: true, error: 'ยังไม่ได้สมัครอุปกรณ์' });
+  var read = pushReadRows_(sh);
+  var wantDevice = String((data && data.deviceId) || '');
+
+  var target = null;
+  for (var i = 0; i < read.rows.length; i++) {
+    var r = read.rows[i];
+    if (!pushRowEnabled_(r)) continue;
+    if (String(r[PUSH_COL.STAFF_ID - 1] || '') !== String(sess.staffId)) continue;   // ของตัวเองเท่านั้น
+    if (wantDevice && String(r[PUSH_COL.DEVICE_ID - 1] || '') !== wantDevice) continue;
+    target = r;   // เอาแถวล่าสุดที่ตรง
+  }
+  if (!target) return pushJson_({ ok: false, noDevice: true, error: 'ไม่พบอุปกรณ์ที่สมัครไว้ของบัญชีนี้' });
+
+  var res = fcmSendToToken_(String(target[PUSH_COL.TOKEN - 1] || ''), {
+    kind:  'test',
+    title: 'ทดสอบแจ้งเตือน DMJ',
+    body:  'ถ้าเห็นข้อความนี้ แปลว่าการแจ้งเตือนทำงานแล้ว',
+    url:   '/',
+    ts:    String(Date.now()),
+  }, PUSH_TEST_TTL_SEC);
+
+  // invalid token → ปิดอุปกรณ์นั้นทิ้ง (ไม่ปล่อยให้ค้างส่งซ้ำ)
+  if (res.invalidToken) {
+    try {
+      pushRevokeRows_(sh, read, function (r) {
+        return String(r[PUSH_COL.TOKEN_HASH - 1] || '') === String(target[PUSH_COL.TOKEN_HASH - 1] || '');
+      }, 'invalid-token');
+    } catch (e) {}
+  }
+  return pushJson_({
+    ok: !!res.ok, stage: res.stage, reason: res.reason,
+    invalidToken: !!res.invalidToken, retryable: !!res.retryable,
+    error: res.ok ? undefined : (res.message || 'ส่งไม่สำเร็จ'),
+    device: String(target[PUSH_COL.DEVICE_ID - 1] || ''),
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// FCM HTTP v1 sender — service account JWT (RS256) → OAuth → messages:send
+// ──────────────────────────────────────────────────────────────────────────
+// GAS เซ็น RS256 ได้เองด้วย Utilities.computeRsaSha256Signature จึง **ไม่ต้องมี
+// runtime ภายนอก** (ต่างจาก Web Push + VAPID ที่ต้องใช้ ES256/ECDH ซึ่ง Utilities ไม่มี)
+// ⚠️ private key อยู่ใน Script Property เท่านั้น — ห้ามเข้า repo ห้ามพิมพ์ลง log
+// ⚠️ ส่ง **data-only ห้ามใส่ block `notification`** — ไม่งั้น browser แสดงเองซ้อนกับ
+//    showNotification ของ SW = ได้ 2 อัน (ข้อกำหนด "ทางแสดงผลทางเดียว")
+function fcmServiceAccount_() {
+  var raw;
+  try { raw = PropertiesService.getScriptProperties().getProperty('FCM_SERVICE_ACCOUNT_JSON'); }
+  catch (e) { return null; }
+  if (!raw) return null;
+  var sa;
+  try { sa = JSON.parse(raw); } catch (e) { return null; }
+  if (!sa || !sa.client_email || !sa.private_key || !sa.project_id) return null;
+  return sa;
+}
+
+function fcmBase64Url_(bytesOrString) {
+  var b64 = (typeof bytesOrString === 'string')
+    ? Utilities.base64Encode(bytesOrString, Utilities.Charset.UTF_8)
+    : Utilities.base64Encode(bytesOrString);
+  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+// คืน {ok, token} หรือ {ok:false, stage, reason, message}
+function fcmAccessToken_() {
+  var sa = fcmServiceAccount_();
+  if (!sa) return { ok: false, stage: 'config', reason: 'no-service-account',
+                    message: 'ยังไม่ได้ตั้งค่า FCM_SERVICE_ACCOUNT_JSON' };
+  var cache = null, ckey = 'dmj_fcm_at_' + sha256Hex_(sa.client_email).slice(0, 16);
+  try {
+    cache = CacheService.getScriptCache();
+    var hit = cache.get(ckey);
+    if (hit) return { ok: true, token: hit, cached: true };
+  } catch (e) {}
+
+  var now = Math.floor(Date.now() / 1000);
+  var header = fcmBase64Url_(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  var claim  = fcmBase64Url_(JSON.stringify({
+    iss: sa.client_email, scope: PUSH_FCM_SCOPE,
+    aud: sa.token_uri || 'https://oauth2.googleapis.com/token',
+    exp: now + 3600, iat: now,
+  }));
+  var unsigned = header + '.' + claim;
+  var sig;
+  try {
+    sig = fcmBase64Url_(Utilities.computeRsaSha256Signature(unsigned, sa.private_key));
+  } catch (e) {
+    return { ok: false, stage: 'auth', reason: 'sign-failed', message: 'เซ็น JWT ไม่สำเร็จ (private key ไม่ถูกต้อง?)' };
+  }
+
+  var resp;
+  try {
+    resp = UrlFetchApp.fetch(sa.token_uri || 'https://oauth2.googleapis.com/token', {
+      method: 'post', muteHttpExceptions: true,
+      payload: {
+        grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+        assertion: unsigned + '.' + sig,
+      },
+    });
+  } catch (e) {
+    return { ok: false, stage: 'auth', reason: 'network', retryable: true, message: 'ต่อ OAuth ไม่ได้' };
+  }
+  var code = resp.getResponseCode();
+  var body = resp.getContentText() || '';
+  if (code !== 200) {
+    // ⚠️ body ของ OAuth อาจมีข้อมูลบัญชี — log แค่ code/error สั้น ๆ ไม่ dump ทั้งก้อน
+    var short = '';
+    try { short = String((JSON.parse(body) || {}).error || '').slice(0, 60); } catch (e) {}
+    Logger.log('fcmAccessToken_ oauth ' + code + ' ' + short);
+    return { ok: false, stage: 'auth', reason: 'oauth-' + code,
+             retryable: code >= 500, message: 'ขอสิทธิ์ส่งแจ้งเตือนไม่สำเร็จ' };
+  }
+  var at;
+  try { at = (JSON.parse(body) || {}).access_token; } catch (e) {}
+  if (!at) return { ok: false, stage: 'auth', reason: 'no-token', message: 'OAuth ไม่คืน access_token' };
+  try { if (cache) cache.put(ckey, at, 3000); } catch (e) {}   // 50 นาที (token อายุ 60)
+  return { ok: true, token: at };
+}
+
+// คืน {ok, stage, reason, message, invalidToken, retryable}
+// stage: config | auth | send  → แยกสาเหตุได้โดยไม่เปิดเผย secret (§5.5)
+function fcmSendToToken_(token, dataObj, ttlSec) {
+  if (!token) return { ok: false, stage: 'send', reason: 'no-token', message: 'ไม่มี token ปลายทาง' };
+  var sa = fcmServiceAccount_();
+  if (!sa) return { ok: false, stage: 'config', reason: 'no-service-account',
+                    message: 'ยังไม่ได้ตั้งค่า FCM_SERVICE_ACCOUNT_JSON' };
+  var at = fcmAccessToken_();
+  if (!at.ok) return at;
+
+  // ⚠️ data-only เท่านั้น — ไม่มีคีย์ `notification` (ทางแสดงผลทางเดียว)
+  var msg = { message: {
+    token: String(token),
+    data: dataObj || {},
+    webpush: { headers: { TTL: String(ttlSec || PUSH_TEST_TTL_SEC), Urgency: 'normal' } },
+  }};
+
+  var resp;
+  try {
+    resp = UrlFetchApp.fetch(
+      'https://fcm.googleapis.com/v1/projects/' + encodeURIComponent(sa.project_id) + '/messages:send', {
+      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      headers: { Authorization: 'Bearer ' + at.token },
+      payload: JSON.stringify(msg),
+    });
+  } catch (e) {
+    return { ok: false, stage: 'send', reason: 'network', retryable: true, message: 'ต่อ FCM ไม่ได้' };
+  }
+  var code = resp.getResponseCode();
+  var body = resp.getContentText() || '';
+  if (code === 200) return { ok: true, stage: 'send', reason: 'accepted' };
+
+  var status = '';
+  try { status = String(((JSON.parse(body) || {}).error || {}).status || ''); } catch (e) {}
+  // ⚠️ UNREGISTERED/NOT_FOUND = token ตายจริง · INVALID_ARGUMENT **ไม่ได้แปลว่า token เสียเสมอ**
+  //    (payload ผิดก็ได้) → ห้ามปิดอุปกรณ์จากรหัสนี้
+  var dead = (code === 404) || status === 'UNREGISTERED' || status === 'NOT_FOUND';
+  Logger.log('fcmSendToToken_ ' + code + ' ' + status + ' to ' + pushMaskToken_(token));
+  return {
+    ok: false, stage: 'send', reason: status || ('http-' + code),
+    invalidToken: dead,
+    retryable: code === 429 || code >= 500,
+    message: dead ? 'อุปกรณ์นี้ไม่รับแจ้งเตือนแล้ว (สมัครใหม่)'
+           : (code === 429 ? 'ส่งถี่เกินไป รอสักครู่'
+           : (status === 'INVALID_ARGUMENT' ? 'รูปแบบข้อความไม่ถูกต้อง' : 'ส่งไม่สำเร็จ')),
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// เครื่องมือให้เจ้าของรันเองใน GAS editor (ชื่อไม่มี _ ต่อท้าย → โผล่ใน dropdown)
+// ══════════════════════════════════════════════════════════════════════════
+
+// อ่านอย่างเดียว 100% — ไม่เขียน ไม่สร้างชีต ไม่ยิง network
+// ⚠️ ไม่พิมพ์ค่า secret ใด ๆ บอกแค่ "ตั้งแล้ว/ยังไม่ตั้ง"
+function checkPushStatus() {
+  var props = PropertiesService.getScriptProperties();
+  var sa = null, saErr = '';
+  try {
+    var raw = props.getProperty('FCM_SERVICE_ACCOUNT_JSON');
+    if (!raw) saErr = 'ยังไม่ได้ตั้ง';
+    else {
+      try {
+        var o = JSON.parse(raw);
+        if (!o.client_email || !o.private_key || !o.project_id) saErr = 'ตั้งแล้วแต่ขาดฟิลด์ (ต้องมี client_email/private_key/project_id)';
+        else sa = o;
+      } catch (e) { saErr = 'ตั้งแล้วแต่ parse JSON ไม่ได้'; }
+    }
+  } catch (e) { saErr = 'อ่าน property ไม่ได้'; }
+
+  Logger.log('═══ สถานะ PWA Push ═══');
+  Logger.log('PUSH_ENABLED: ' + (pushEnabled_() ? '✅ เปิด' : '❌ ปิด (ค่าเริ่มต้น — ยังไม่ส่งอะไรทั้งสิ้น)'));
+  Logger.log('FCM_SERVICE_ACCOUNT_JSON: ' + (sa ? '✅ ตั้งแล้ว · project_id=' + sa.project_id : '❌ ' + saErr));
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var sh = ss.getSheetByName(SHEET_PUSH_DEVICES);
+  if (!sh) Logger.log('ชีตอุปกรณ์: ยังไม่ถูกสร้าง (ยังไม่มีใครสมัคร)');
+  else {
+    var read = pushReadRows_(sh), on = 0, off = 0;
+    for (var i = 0; i < read.rows.length; i++) { pushRowEnabled_(read.rows[i]) ? on++ : off++; }
+    Logger.log('ชีตอุปกรณ์: ใช้งานอยู่ ' + on + ' · ถูกถอน ' + off + ' (จาก ' + read.rows.length + ' แถวท้าย)');
+  }
+  Logger.log('── ค่าที่ checkSystemStatus() ไม่ได้รายงาน ──');
+  Logger.log('INAPP_NOTI_ENABLED: ' + (props.getProperty('INAPP_NOTI_ENABLED') === 'true' ? 'เปิด' : 'ปิด'));
+  Logger.log('REQUIRE_LOGIN: '      + (props.getProperty('REQUIRE_LOGIN')      === 'true' ? 'เปิด' : 'ปิด'));
+  Logger.log('═══ หมายเหตุ: Phase 1 ไม่ผูกกับ INAPP_NOTI_ENABLED — ทดสอบ transport ได้โดยไม่ต้องเปิด ═══');
+}
+
+function setupPush() {
+  PropertiesService.getScriptProperties().setProperty('PUSH_ENABLED', 'true');
+  Logger.log('✅ setupPush: เปิด PUSH_ENABLED แล้ว (register/test-send ทำงานได้ · ยังไม่ผูก business event ใด ๆ)');
+}
+function disablePush() {
+  PropertiesService.getScriptProperties().setProperty('PUSH_ENABLED', 'false');
+  Logger.log('⏸️ disablePush: ปิดการส่งใหม่ทั้งหมด · unregister ยังทำได้ตามปกติ');
+  Logger.log('   ⚠️ ข้อความที่ FCM รับไปแล้วอาจยังส่งถึงเครื่องได้จนหมด TTL (ทดสอบใช้ ' + PUSH_TEST_TTL_SEC + ' วินาที)');
 }

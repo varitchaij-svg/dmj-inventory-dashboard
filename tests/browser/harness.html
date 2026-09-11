@@ -230,6 +230,18 @@
         return Promise.resolve(new Response(JSON.stringify({ success: true, data: d }),
           { headers: { 'Content-Type': 'application/json' } }));
       }
+      // ─── 🔔 PWA Push (Phase 1) — register / test / unregister ───
+      // ⚠️ ต้องมี branch ครบทั้ง 3 ไม่งั้นตกไป fallback {success:true} ซึ่ง **ไม่มี `ok`**
+      //    → PushTestCard อ่านผลไม่ได้ แล้วขึ้น "ไม่สำเร็จ" ทั้งที่โค้ดจริงถูกต้อง
+      // ค่าที่ตอบปรับได้ด้วย window.__DMJ_PUSH_FIXTURE (เช่นจำลอง tokenOwnedByOther)
+      if (action === 'registerPushDevice' || action === 'sendTestPush' || action === 'unregisterPushDevice') {
+        const pf = window.__DMJ_PUSH_FIXTURE || {};
+        window.__DMJ_PUSH_CALLS = (window.__DMJ_PUSH_CALLS || []).concat([action]);
+        const d = Object.prototype.hasOwnProperty.call(pf, action) ? pf[action]
+                : { ok: true, unchanged: action === 'registerPushDevice' ? true : undefined };
+        return Promise.resolve(new Response(JSON.stringify(d), { headers: { 'Content-Type': 'application/json' } }));
+      }
+
       if (action === 'reserveForm') {
         const rf = window.__DMJ_REGISTRY_FIXTURE || {};
         window.__DMJ_RESERVE_COUNT = (window.__DMJ_RESERVE_COUNT || 0) + 1;

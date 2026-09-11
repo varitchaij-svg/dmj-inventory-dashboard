@@ -480,6 +480,255 @@ function dmjScrollToSku(attr, sku, onResult) {
   setTimeout(tick, 120);
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// 🔔 PWA Push (Phase 1) — client transport
+// ──────────────────────────────────────────────────────────────────────────
+// ⚠️ ทุกฟังก์ชันในก้อนนี้ต้อง **ล้มเหลวแบบเงียบและปลอดภัย** — Push เป็นของเสริม
+//    ถ้า SDK โหลดไม่ได้ / ไม่มี config / เบราว์เซอร์ไม่รองรับ แอปต้องทำงานต่อได้ครบ
+//    (ห้ามอยู่ในเส้นทาง boot · ห้าม throw ออกไปถึงตัวเรียก)
+// ⚠️ ห้าม requestPermission อัตโนมัติตอน boot — ต้องมาจากการกดปุ่มของผู้ใช้เท่านั้น
+
+const DMJ_PUSH_DEVICE_KEY = "dmj_push_device_id";
+const DMJ_PUSH_LAST_KEY   = "dmj_push_last";        // {deviceId, tokenHash8, staffId, at}
+const DMJ_PUSH_PENDING_KEY = "dmj_push_pending_cleanup";  // ถอนค้างไว้ตอนออฟไลน์
+
+// คืน config เมื่อ "เปิดและครบทุกช่อง" เท่านั้น — ค่าว่างแม้ช่องเดียว = ปิด (ห้ามเดา)
+function dmjPushConfig() {
+  try {
+    const c = (typeof DMJ_FCM_CONFIG !== "undefined") ? DMJ_FCM_CONFIG : null;
+    if (!c || c.enabled !== true) return null;
+    const need = ["apiKey", "projectId", "messagingSenderId", "appId", "vapidPublicKey"];
+    for (const k of need) if (!c[k]) return null;
+    return c;
+  } catch (e) { return null; }
+}
+
+// เบราว์เซอร์รองรับไหม — แยกเหตุผลออกมาให้ UI อธิบายผู้ใช้ได้ตรงจุด
+function dmjPushSupport() {
+  try {
+    if (typeof window === "undefined") return { ok: false, reason: "no-window" };
+    if (!("serviceWorker" in navigator))  return { ok: false, reason: "no-sw" };
+    if (!("PushManager" in window))       return { ok: false, reason: "no-push" };
+    if (!("Notification" in window))      return { ok: false, reason: "no-notification" };
+    // iOS/iPadOS: ขอสิทธิ์ได้เฉพาะ PWA ที่ "เพิ่มลงหน้าจอโฮม" แล้วเท่านั้น
+    const standalone = (window.navigator && window.navigator.standalone === true) ||
+      (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+    const ua = String(navigator.userAgent || "");
+    const iOSLike = /iPad|iPhone|iPod/.test(ua) ||
+      (/Macintosh/.test(ua) && typeof document !== "undefined" && "ontouchend" in document);
+    if (iOSLike && !standalone) return { ok: false, reason: "ios-needs-install" };
+    return { ok: true, standalone: !!standalone };
+  } catch (e) { return { ok: false, reason: "error" }; }
+}
+
+const DMJ_PUSH_REASON_TH = {
+  "no-window": "ใช้ในหน้าเว็บนี้ไม่ได้",
+  "no-sw": "เบราว์เซอร์นี้ไม่รองรับ Service Worker",
+  "no-push": "เบราว์เซอร์นี้ไม่รองรับการแจ้งเตือนแบบ Push",
+  "no-notification": "เบราว์เซอร์นี้ไม่รองรับการแจ้งเตือน",
+  "ios-needs-install": "บน iPhone/iPad ต้องกดปุ่มแชร์ → “เพิ่มไปยังหน้าจอโฮม” แล้วเปิดจากไอคอนก่อน จึงจะเปิดแจ้งเตือนได้",
+  "error": "ตรวจสอบเบราว์เซอร์ไม่สำเร็จ",
+  "no-config": "ยังไม่ได้ตั้งค่าการแจ้งเตือน (รอเจ้าของตั้งค่า Firebase)",
+  "sdk-failed": "โหลดตัวช่วยแจ้งเตือนไม่สำเร็จ",
+  "denied": "การแจ้งเตือนถูกปิดไว้ในเครื่องนี้ — เปิดใหม่ได้ที่การตั้งค่าเบราว์เซอร์",
+  "no-registration": "ยังไม่พร้อม (Service Worker ยังไม่ทำงาน)",
+  "token-failed": "ขอรหัสอุปกรณ์ไม่สำเร็จ",
+};
+function dmjPushReasonTh(r) { return DMJ_PUSH_REASON_TH[r] || "ใช้การแจ้งเตือนไม่ได้"; }
+
+// device id แบบ opaque ต่อเครื่อง/เบราว์เซอร์ (ไม่มีข้อมูลระบุตัวตนอยู่ข้างใน)
+function dmjPushDeviceId() {
+  try {
+    let id = localStorage.getItem(DMJ_PUSH_DEVICE_KEY);
+    if (id && /^[A-Za-z0-9_-]{8,64}$/.test(id)) return id;
+    const buf = new Uint8Array(16);
+    (window.crypto || {}).getRandomValues ? window.crypto.getRandomValues(buf)
+      : buf.forEach((_, i) => { buf[i] = Math.floor(Math.random() * 256); });
+    id = Array.from(buf).map(b => b.toString(16).padStart(2, "0")).join("");
+    localStorage.setItem(DMJ_PUSH_DEVICE_KEY, id);
+    return id;
+  } catch (e) { return ""; }
+}
+
+// ── โหลด SDK แบบ lazy — **ห้ามอยู่ในเส้นทาง boot** ──────────────────────────
+// เรียกเมื่อผู้ใช้กดปุ่มเท่านั้น · ล้มเหลว → คืน null ไม่ throw
+let _dmjPushSdk = null;
+function dmjPushLoadSdk() {
+  if (_dmjPushSdk) return _dmjPushSdk;
+  _dmjPushSdk = (async () => {
+    const cfg = dmjPushConfig();
+    if (!cfg) return null;
+    const load = (src) => new Promise((res, rej) => {
+      if (document.querySelector(`script[data-dmj-push="${src}"]`)) return res();
+      const el = document.createElement("script");
+      el.src = src; el.async = true; el.setAttribute("data-dmj-push", src);
+      el.onload = () => res();
+      el.onerror = () => rej(new Error("load failed: " + src));
+      document.head.appendChild(el);
+    });
+    try {
+      await load(cfg.sdkAppUrl);
+      await load(cfg.sdkMessagingUrl);
+      if (typeof firebase === "undefined" || !firebase.messaging) return null;
+      if (!firebase.apps || !firebase.apps.length) {
+        firebase.initializeApp({
+          apiKey: cfg.apiKey, projectId: cfg.projectId,
+          messagingSenderId: cfg.messagingSenderId, appId: cfg.appId,
+        });
+      }
+      return firebase.messaging();
+    } catch (e) {
+      try { console.warn("[push] SDK load failed:", e && e.message); } catch (_) {}
+      _dmjPushSdk = null;    // ให้ลองใหม่ได้ครั้งหน้า
+      return null;
+    }
+  })();
+  return _dmjPushSdk;
+}
+
+// ขอ token จาก FCM โดย **ใช้ service worker registration เดิม**
+// ⚠️ ห้ามปล่อยให้ SDK ไป register firebase-messaging-sw.js เป็น SW ตัวที่ 2 (ชน scope "/")
+async function dmjPushGetToken() {
+  const cfg = dmjPushConfig();
+  if (!cfg) return { ok: false, reason: "no-config" };
+  const sup = dmjPushSupport();
+  if (!sup.ok) return { ok: false, reason: sup.reason };
+  if (Notification.permission === "denied") return { ok: false, reason: "denied" };
+
+  let reg = null;
+  try { reg = await navigator.serviceWorker.getRegistration("/"); } catch (e) {}
+  if (!reg) { try { reg = await navigator.serviceWorker.ready; } catch (e) {} }
+  if (!reg) return { ok: false, reason: "no-registration" };
+
+  const messaging = await dmjPushLoadSdk();
+  if (!messaging) return { ok: false, reason: "sdk-failed" };
+  try {
+    const token = await messaging.getToken({
+      vapidKey: cfg.vapidPublicKey,
+      serviceWorkerRegistration: reg,     // ← สำคัญ: ใช้ registration เดิม
+    });
+    if (!token) return { ok: false, reason: "token-failed" };
+    return { ok: true, token, registration: reg };
+  } catch (e) {
+    try { console.warn("[push] getToken failed:", e && e.message); } catch (_) {}
+    return { ok: false, reason: "token-failed" };
+  }
+}
+
+// ขอสิทธิ์ — **ต้องเรียกจาก user gesture เท่านั้น**
+async function dmjPushRequestPermission() {
+  try {
+    if (!("Notification" in window)) return "unsupported";
+    if (Notification.permission === "granted") return "granted";
+    if (Notification.permission === "denied")  return "denied";
+    return await Notification.requestPermission();
+  } catch (e) { return "error"; }
+}
+
+// ── sync helpers — อ่านคำตอบจริงเสมอผ่าน dmjJson (บทเรียนข้อ 13) ────────────
+function _pushBase() {
+  return (typeof GOOGLE_SHEET_URL !== "undefined") ? GOOGLE_SHEET_URL : null;
+}
+async function _pushPost(body, timeoutMs) {
+  const base = _pushBase();
+  if (!base) return { ok: false, error: "ยังไม่ได้เชื่อมต่อ Sheet" };
+  try {
+    const res = await dmjFetch(base, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(body),
+      dmjTimeoutMs: timeoutMs || 25000,
+    });
+    const d = await dmjJson(res);
+    return d || { ok: false, error: "ไม่มีคำตอบจากเซิร์ฟเวอร์" };
+  } catch (e) {
+    // ⚠️ "อ่านคำตอบไม่ได้" ≠ "ไม่สำเร็จ" — ตัวเรียกต้องไม่ตีความเป็นล้มเหลวถาวร
+    return { ok: false, unreadable: true, error: dmjErrText(e) };
+  }
+}
+
+async function syncRegisterPushDevice(token, platform) {
+  return _pushPost({
+    action: "registerPushDevice",
+    deviceId: dmjPushDeviceId(),
+    pushToken: token,
+    platform: String(platform || "").slice(0, 60),
+  });
+}
+async function syncSendTestPush() {
+  return _pushPost({ action: "sendTestPush", deviceId: dmjPushDeviceId() }, 30000);
+}
+// ⚠️ sessionToken ส่งเข้ามาตรง ๆ ได้ — ตอน logout เราต้องยิงคำขอนี้ "ก่อน" ลบ token
+//    ออกจาก localStorage · dmjFetch จะเติมให้เองเฉพาะเมื่อ body ยังไม่มีค่า
+async function syncUnregisterPushDevice(token, sessionToken) {
+  const body = { action: "unregisterPushDevice", deviceId: dmjPushDeviceId() };
+  if (token) body.pushToken = token;
+  if (sessionToken) body.sessionToken = sessionToken;
+  return _pushPost(body, 15000);
+}
+
+// ── จำสถานะล่าสุดไว้ในเครื่อง เพื่อ "ไม่เขียนซ้ำโดยไม่จำเป็น" ─────────────────
+// ⚠️ นี่เป็นแค่ hint สำหรับลด network — **ไม่ใช่หลักฐานว่า binding ยัง valid**
+//    (server อาจ revoke ไปแล้วโดยเครื่องนี้ไม่รู้) การตัดสินว่ายังใช้ได้ต้องมาจาก
+//    คำตอบของ registerPushDevice เท่านั้น ห้ามเทียบ token string อย่างเดียว
+function dmjPushReadLast() {
+  try { return JSON.parse(localStorage.getItem(DMJ_PUSH_LAST_KEY) || "null"); } catch (e) { return null; }
+}
+function dmjPushWriteLast(obj) {
+  try { localStorage.setItem(DMJ_PUSH_LAST_KEY, JSON.stringify(obj || {})); } catch (e) {}
+}
+function dmjPushClearLast() {
+  try { localStorage.removeItem(DMJ_PUSH_LAST_KEY); } catch (e) {}
+}
+
+// ── ตอนสลับบัญชี/ออกจากระบบ ────────────────────────────────────────────────
+// ⚠️ ห้ามรายงานว่า "server ถอนสำเร็จ" ถ้ายังส่งไม่ถึง — ออฟไลน์ให้จดค้างไว้ทำทีหลัง
+// ⚠️ deleteToken เป็นทางออกได้เมื่อได้ token ใหม่จริง · ไม่ retry ไม่สิ้นสุด
+//    และ **ห้าม fallback เป็นการยึด binding ของบัญชีอื่น**
+async function dmjPushDisableForLogout(sessionToken) {
+  const out = { serverRevoked: false, tokenDeleted: false, pending: false };
+  let token = null;
+  try {
+    const messaging = _dmjPushSdk ? await _dmjPushSdk : null;
+    if (messaging && messaging.getToken) {
+      try { token = await messaging.getToken({ vapidKey: (dmjPushConfig() || {}).vapidPublicKey }); } catch (e) {}
+    }
+  } catch (e) {}
+
+  try {
+    const d = await syncUnregisterPushDevice(token, sessionToken);
+    out.serverRevoked = !!(d && d.ok);
+  } catch (e) {}
+
+  if (!out.serverRevoked) {
+    // จดไว้ทำเมื่อออนไลน์ — ไม่โกหกว่าถอนแล้ว
+    try {
+      localStorage.setItem(DMJ_PUSH_PENDING_KEY, JSON.stringify({ deviceId: dmjPushDeviceId(), at: Date.now() }));
+    } catch (e) {}
+    out.pending = true;
+  }
+
+  try {
+    const messaging = _dmjPushSdk ? await _dmjPushSdk : null;
+    if (messaging && messaging.deleteToken) { await messaging.deleteToken(); out.tokenDeleted = true; }
+  } catch (e) {}
+
+  dmjPushClearLast();
+  return out;
+}
+
+// ทำงานถอนที่ค้างไว้ตอนออฟไลน์ — เรียกได้บ่อย ปลอดภัย ไม่ throw
+async function dmjPushFlushPendingCleanup() {
+  let pend = null;
+  try { pend = JSON.parse(localStorage.getItem(DMJ_PUSH_PENDING_KEY) || "null"); } catch (e) {}
+  if (!pend) return false;
+  try {
+    const d = await syncUnregisterPushDevice(null);
+    if (d && d.ok) { localStorage.removeItem(DMJ_PUSH_PENDING_KEY); return true; }
+  } catch (e) {}
+  return false;
+}
+
 function NotiBell({ onNavigate }) {
   const [items, setItems] = useState([]);
   const [unread, setUnread] = useState(0);
@@ -826,6 +1075,11 @@ Object.assign(window, {
   dmjRequestFocus, useSkuFocus, dmjScrollToSku,
   dmjRequestView, useViewIntent,
   dmjThaiKey,
+  dmjPushConfig, dmjPushSupport, dmjPushReasonTh, dmjPushDeviceId,
+  dmjPushRequestPermission, dmjPushGetToken,
+  syncRegisterPushDevice, syncSendTestPush, syncUnregisterPushDevice,
+  dmjPushReadLast, dmjPushWriteLast, dmjPushClearLast,
+  dmjPushDisableForLogout, dmjPushFlushPendingCleanup,
 });
 
 if (typeof module !== 'undefined') module.exports = { resetCatColorMap, catColor, CAT_COLORS, notiAgo, dmjThaiKey };

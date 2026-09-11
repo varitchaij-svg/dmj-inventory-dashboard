@@ -12,7 +12,7 @@
 // และไม่มี error ให้เห็น** (เจอจริง ส.ค. 2026: หน้าหลักบนมือถือการ์ดไม่มีกรอบ
 // ทั้งที่บนคอมปกติ — ตอนเพิ่ม .home-* แล้วลืม bump)
 // การ bump ทำให้ activate ลบ cache ก้อนเก่าทิ้งทั้งก้อน สำเนาสำรองที่ค้างจึงหายไปด้วย
-const CACHE_NAME = "dmj-v59";
+const CACHE_NAME = "dmj-v60";
 
 // ⚠️ CDN libs (React/ReactDOM/Babel 3MB/Recharts/…) เก็บ cache แยกก้อนนี้ **โดยเจตนา** —
 // ไฟล์พวกนี้ผูกกับ "เวอร์ชันใน URL" (unpkg@18.3.1 …) ไม่มีวันเปลี่ยนเนื้อในโดยไม่เปลี่ยน URL
@@ -68,6 +68,24 @@ self.addEventListener("fetch", (e) => {
     url.hostname.includes("sheets.googleapis.com") ||
     url.pathname.includes("data.json") ||
     url.pathname.includes("data-bundle.js")
+  ) {
+    return;
+  }
+
+  // ①b คำขอที่ **ไม่ใช่ GET** — ไม่ intercept เด็ดขาด
+  //     Cache API เก็บ POST/PUT ไม่ได้ (`cache.put` reject) · ของเดิมรอดมาได้เพราะทุก POST
+  //     วิ่งไป script.google.com ซึ่งถูกกันไว้ที่ ① อยู่แล้ว · พอมี POST ไปโฮสต์อื่น
+  //     (FCM token registration) จะตกมาถึง ④ cache-first แล้ว `cache.put` โยนทิ้งเงียบ ๆ
+  if (e.request.method !== "GET") return;
+
+  // ①c ปลายทางของ Push/OAuth — ห้าม cache คำตอบเด็ดขาด (เป็น token/credential)
+  //     แยกจาก ③ vendor allowlist โดยตั้งใจ: ③ คือไฟล์ไลบรารีที่ผูกเวอร์ชันใน URL
+  //     ส่วนกลุ่มนี้เป็น API ที่คำตอบเปลี่ยนทุกครั้งและอ่อนไหว
+  if (
+    url.hostname === "fcmregistrations.googleapis.com" ||
+    url.hostname === "fcm.googleapis.com" ||
+    url.hostname === "firebaseinstallations.googleapis.com" ||
+    url.hostname === "oauth2.googleapis.com"
   ) {
     return;
   }
@@ -167,4 +185,85 @@ self.addEventListener("fetch", (e) => {
       });
     })
   );
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// 🔔 PWA Push (Phase 1) — รับข้อความจาก FCM แล้วแสดงผล
+// ──────────────────────────────────────────────────────────────────────────
+// ⚠️ **ทางแสดงผลมีทางเดียวคือตรงนี้** — backend ส่ง FCM แบบ *data-only*
+//    (ไม่มีคีย์ `notification` ใน payload) จึงไม่มีใครแสดงให้เองนอกจากบรรทัดนี้
+//    ถ้าวันไหนมีคนใส่ block `notification` กลับเข้าไปใน payload จะได้ **2 อัน**
+//    (ตัวที่ browser แสดงเอง + ตัวนี้) โดยไม่มี error ให้เห็น
+//
+// ⚠️ **แนวทางนี้ยังไม่ผ่านการพิสูจน์บนอุปกรณ์จริง (UNPROVEN)** — เราจงใจไม่ import
+//    Firebase Messaging SDK เข้ามาใน service worker ตัวนี้ แล้วอ่าน `push` event ดิบแทน
+//    เหตุผล: SDK ใน SW จะติดตั้ง push handler ของตัวเองอีกตัว = มีสองทางแสดงผล
+//    (foreground onMessage / background onBackgroundMessage) ซึ่งขัดกับข้อกำหนดข้างบน
+//    ส่วนวิธีนี้ SW เป็นทางเดียวทุกสถานะของแอป · **ต้องพิสูจน์ทั้ง foreground/background
+//    บน iPhone/iPad/Android จริงก่อนรับรอง** ถ้าไม่ผ่าน ให้ถอยไปใช้ official SDK
+//    integration (importScripts + onBackgroundMessage) โดย **ยังคง data-only** และ
+//    ยุบให้เหลือจุดเรียก showNotification จุดเดียวเหมือนเดิม
+//
+// ⚠️ ห้ามใช้ silent push เป็นตัว sync — ทุก push ที่มาถึงต้องแสดงผลที่มองเห็นได้
+//    (เบราว์เซอร์ลงโทษ origin ที่รับ push แล้วไม่แสดงอะไร ด้วยการตัดสิทธิ์ push)
+
+const PUSH_FALLBACK_TITLE = "DMJ";
+
+function dmjPushPayload(event) {
+  // FCM data-only ส่งมาเป็น {data:{...}} · เผื่อ provider/รูปแบบอื่นด้วย
+  try {
+    const raw = event.data ? event.data.json() : null;
+    if (raw && typeof raw === "object") return raw.data && typeof raw.data === "object" ? raw.data : raw;
+  } catch (err) { /* ไม่ใช่ JSON */ }
+  try {
+    const t = event.data ? event.data.text() : "";
+    if (t) return { title: PUSH_FALLBACK_TITLE, body: String(t).slice(0, 200) };
+  } catch (err) {}
+  return {};
+}
+
+self.addEventListener("push", (e) => {
+  const d = dmjPushPayload(e);
+  const title = String(d.title || PUSH_FALLBACK_TITLE).slice(0, 120);
+  const opts = {
+    body: String(d.body || "").slice(0, 300),
+    icon: "/icon-192.png",
+    badge: "/icon-192.png",
+    // tag = ลดการซ้อนบนจอเมื่อ provider ส่งซ้ำ (at-least-once)
+    // ⚠️ ไม่ใช่ตัวกัน duplicate ฝั่ง backend — เป็นแค่การรวมภาพให้ผู้ใช้
+    tag: String(d.tag || d.kind || "dmj"),
+    renotify: true,
+    data: { url: String(d.url || "/"), kind: String(d.kind || ""), ts: String(d.ts || "") },
+  };
+  // ⚠️ ต้อง showNotification เสมอ แม้ payload ว่าง — ห้ามเงียบ (ดูหมายเหตุ silent push)
+  e.waitUntil(self.registration.showNotification(title, opts));
+});
+
+// เปิด/โฟกัสแอป — **ไม่รัน business mutation ใด ๆ** (แตะแจ้งเตือน ≠ รับของ/ปิดงาน)
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  // ⚠️ same-origin allowlist — ปลายทางมาจาก payload ฝั่ง server ก็จริง แต่ห้ามเปิด
+  //    URL ข้าม origin จากข้อมูลที่เดินทางผ่าน provider ภายนอก
+  let target = "/";
+  try {
+    const raw = (e.notification.data && e.notification.data.url) || "/";
+    const u = new URL(raw, self.location.origin);
+    if (u.origin === self.location.origin) target = u.pathname + u.search + u.hash;
+  } catch (err) { target = "/"; }
+
+  e.waitUntil((async () => {
+    const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const c of all) {
+      try {
+        const cu = new URL(c.url);
+        if (cu.origin === self.location.origin && "focus" in c) {
+          // มีหน้าต่างแอปเปิดอยู่แล้ว → โฟกัสตัวเดิม ไม่เปิดใหม่ซ้อน
+          await c.focus();
+          if ("navigate" in c && target !== "/") { try { await c.navigate(target); } catch (err) {} }
+          return;
+        }
+      } catch (err) {}
+    }
+    if (self.clients.openWindow) await self.clients.openWindow(target);
+  })());
 });

@@ -1963,6 +1963,16 @@ function App() {
 
   const logoutClearSession = usC(() => {
     const tok = lsGet(SESSION_TOKEN_KEY);
+    // ⚠️ ถอน binding แจ้งเตือนของ "เครื่องนี้" ก่อนลบ token ออกจาก localStorage —
+    //    คำขอนี้ต้องพก sessionToken ไปด้วย (ส่งตรง ไม่พึ่ง dmjFetch เติมให้ เพราะ
+    //    ค่าใน localStorage กำลังจะถูกลบในบรรทัดถัดไป)
+    // ⚠️ ไม่ await โดยเจตนา — logout ต้องจบทันทีเสมอ · ถ้าส่งไม่ถึง ui.jsx จะจด
+    //    pending cleanup ไว้ทำเมื่อออนไลน์ (ไม่รายงานว่าถอนสำเร็จทั้งที่ยังไม่ถึง)
+    // ⚠️ ฝั่ง server logoutHandler_ ถอน binding ของ session นี้ให้อีกชั้นอยู่แล้ว —
+    //    ชั้น client เป็นการล้าง token ในเครื่อง ไม่ใช่ตัวรับประกันความปลอดภัย
+    if (tok) {
+      try { dmjPushDisableForLogout(tok).catch(() => {}); } catch (e) {}
+    }
     if (tok) { postAuthAction({ action: "logout", sessionToken: tok }).catch(() => {}); }
     lsDel(SESSION_TOKEN_KEY);
     clearLineHandshake();
@@ -2041,6 +2051,39 @@ function App() {
       window.removeEventListener("focus", onWake);
     };
   }, [authPhase, handoffWaiting, claimHandoff]);
+
+  // ── 🔔 ตรวจ binding แจ้งเตือนหลังเข้าแอปสำเร็จ (Phase 1) ────────────────────
+  // ⚠️ **ไม่ requestPermission อัตโนมัติ** — ทำงานเฉพาะเครื่องที่ผู้ใช้เคยกดอนุญาตแล้ว
+  //    เครื่องที่ยังไม่เคยอนุญาตต้องเงียบสนิท (ปุ่มขอสิทธิ์อยู่ในแท็บ "เชื่อมต่อ")
+  // ⚠️ **ตรวจกับ server เสมอ ไม่เทียบ token string ในเครื่องอย่างเดียว** — token เดิม
+  //    อาจถูก revoke ฝั่ง server ไปแล้ว (logout จากอีกเครื่อง / บัญชีถูกระงับ / role เปลี่ยน)
+  //    registerPushDevice เป็น idempotent: binding ยัง valid → คืน unchanged **โดยไม่เขียนชีต**
+  // ⚠️ หน่วงและห่อ try/catch ทั้งก้อน — เครื่องมือแจ้งเตือนต้องไม่มีทางลากการเปิดแอปให้ช้า/ล่ม
+  //    (บทเรียนเดียวกับ dmjMark: รอบก่อนใส่เครื่องมือวัดแล้วแอปเข้าไม่ได้)
+  usE(() => {
+    if (authPhase !== "ready") return;
+    let dead = false;
+    const t = setTimeout(async () => {
+      try {
+        if (dead) return;
+        if (typeof dmjPushConfig !== "function" || !dmjPushConfig()) return;   // ปิดอยู่ = ไม่ทำอะไรเลย
+        if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+        try { await dmjPushFlushPendingCleanup(); } catch (e) {}
+        const t2 = await dmjPushGetToken();          // เงียบ ไม่ prompt (permission granted แล้ว)
+        if (dead || !t2 || !t2.ok) return;
+        const d = await syncRegisterPushDevice(t2.token, navigator.userAgent);
+        if (dead) return;
+        if (d && d.ok) {
+          dmjPushWriteLast({ deviceId: dmjPushDeviceId(), at: Date.now(), v: d.bindingVersion });
+        } else if (d && (d.forbidden || d.tokenOwnedByOther)) {
+          // server ปฏิเสธ (ถูกระงับ / ลด role / อุปกรณ์ผูกบัญชีอื่น) → ล้าง hint ในเครื่อง
+          // ไม่พยายามยึด binding คืนเอง และไม่วน retry
+          dmjPushClearLast();
+        }
+      } catch (e) { /* Push เป็นของเสริม — ห้ามกระทบการเปิดแอป */ }
+    }, 4000);
+    return () => { dead = true; clearTimeout(t); };
+  }, [authPhase]);
 
   // ── ดึง channelId ของ LINE Login มาเตรียมไว้ตั้งแต่เปิดแอป ──
   // ต้องมีค่าพร้อม "ก่อน" ผู้ใช้แตะปุ่ม เพื่อให้ปุ่มเป็นลิงก์ที่ navigate ได้ทันทีในจังหวะแตะ
@@ -2760,6 +2803,7 @@ function App() {
         {activeTab === "margin"       && <ErrorBoundary key="margin"><MarginView data={data}/></ErrorBoundary>}
         {activeTab === "season"       && <ErrorBoundary key="season"><SeasonView data={data}/></ErrorBoundary>}
         {activeTab === "connect"      && <ErrorBoundary key="connect"><ConnectView
+                                    role={role}
                                     sheetUrl={sheetUrl}
                                     sheetViewUrl={sheetViewUrl}
                                     syncing={syncing}

@@ -1829,6 +1829,131 @@ function startServer() {
     await page.close();
   }
 
+  // ── 🔔 PWA Push (Phase 1): การ์ดทดสอบในแท็บ "เชื่อมต่อ" ──────────────────────
+  // ⚠️ ต้องรันบนเบราว์เซอร์จริง 3 เหตุผลที่ unit test แทนไม่ได้:
+  //   1. "ปุ่ม disabled" เห็นได้เฉพาะตอนเรนเดอร์จริง — unit test เห็นแค่ source
+  //   2. พิสูจน์ว่า **ยังไม่ได้ตั้งค่า Firebase แล้วแอปไม่พัง** (ทั้งหน้าไม่ JS error)
+  //   3. พิสูจน์ว่า boot **ไม่ยิง register/ไม่ขอ permission เอง** เมื่อระบบยังปิดอยู่
+  //      (ยิงเองตอน boot = เด้ง prompt ใส่หน้าพนักงานโดยไม่มีใครสั่ง)
+  {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    let status = 'ok', note = '';
+    const bad = [];
+    page.on('pageerror', e => bad.push(String(e.message || e).slice(0, 120)));
+    try {
+      await page.goto(`${base}?role=owner`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      // ⚠️ ต้องใช้ navigateTo — `?tab=` ไม่ได้พาไปแท็บนั้นจริง (owner มี nav 2 ชั้น
+      //    ต้องกดหมวดก่อนเมนูย่อยถึงจะโผล่) · ใส่ ?tab= แล้วเชื่อว่าถึงแล้ว = เทสต์
+      //    ไปวัดหน้า categories แทน แล้วรายงานว่า "ไม่เจอการ์ด" ทั้งที่การ์ดไม่ผิดอะไร
+      if (!(await navigateTo(page, 'owner', 'connect'))) throw new Error('สลับไปแท็บเชื่อมต่อไม่สำเร็จ');
+      // effect ตรวจ binding หน่วง 4 วิ — รอให้เลยจุดนั้นไปก่อนแล้วค่อยยืนยันว่า "ไม่ยิง"
+      await page.waitForTimeout(5200);
+      const card    = await page.locator('text=ทดสอบแจ้งเตือน (เฉพาะเจ้าของ/ผู้ดูแล)').count();
+      const banner  = await page.locator('text=ยังไม่ได้ตั้งค่า Firebase').count();
+      const btnReg  = page.locator('button', { hasText: 'เปิดแจ้งเตือนบนเครื่องนี้' }).first();
+      const btnTest = page.locator('button', { hasText: 'ส่งข้อความทดสอบ' }).first();
+      const btnOff  = page.locator('button', { hasText: 'ถอนอุปกรณ์นี้' }).first();
+      const calls   = await page.evaluate(() => (window.__DMJ_PUSH_CALLS || []).length);
+
+      if (bad.length)      { status = 'JS_ERROR';  note = bad.slice(0, 2).join(' · '); }
+      else if (!card)      { status = 'NO_CARD';   note = 'owner ไม่เห็นการ์ดทดสอบแจ้งเตือนในแท็บเชื่อมต่อ'; }
+      else if (!banner)    { status = 'NO_BANNER'; note = 'ไม่ได้บอกว่ายังไม่ได้ตั้งค่า Firebase'; }
+      else if (!(await btnReg.isDisabled()) || !(await btnTest.isDisabled())) {
+        status = 'NOT_DISABLED'; note = 'ยังไม่ตั้งค่าแต่ปุ่มสมัคร/ส่งกดได้';
+      } else if (await btnOff.isDisabled()) {
+        // ⚠️ เกณฑ์ปิดงาน: ปิดระบบแล้วต้องยัง "ถอนอุปกรณ์" ได้เสมอ
+        status = 'UNREG_DISABLED'; note = 'ปุ่มถอนอุปกรณ์ถูก disable = binding ค้างโดยเจ้าตัวเอาออกไม่ได้';
+      } else if (calls > 0) {
+        status = 'AUTO_CALL'; note = `boot ยิง push API เอง ${calls} ครั้งทั้งที่ระบบปิดอยู่`;
+      } else {
+        note = 'owner เห็นการ์ด · ยังไม่ตั้งค่า→ปุ่มสมัคร/ส่ง disabled แต่ "ถอนอุปกรณ์" ยังกดได้ · boot ไม่ยิง API เอง';
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'push__connect_owner.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'แจ้งเตือน Push — การ์ดทดสอบ (owner, ยังไม่ตั้งค่า)', status, note });
+    await page.close();
+  }
+
+  // ── 🔔 Push: SDK ที่ self-host ต้องโหลดจาก path จริงได้ ─────────────────────
+  // ⚠️ unit test เช็คได้แค่ "ไฟล์มีอยู่" — อันนี้พิสูจน์ว่า **เสิร์ฟได้และรันได้จริง**
+  //    (ไฟล์เสีย/ถูก minify พัง/ทางเดินผิด จะเห็นตรงนี้ที่เดียว)
+  {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    let status = 'ok', note = '';
+    const bad = [];
+    page.on('pageerror', e => bad.push(String(e.message || e).slice(0, 120)));
+    try {
+      await page.goto(`${base}?role=owner`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const r = await page.evaluate(async () => {
+        const cfg = (typeof DMJ_FCM_CONFIG !== 'undefined') ? DMJ_FCM_CONFIG : null;
+        if (!cfg) return { err: 'ไม่มี DMJ_FCM_CONFIG' };
+        const load = (src) => new Promise((res, rej) => {
+          const el = document.createElement('script');
+          el.src = src; el.onload = () => res(true); el.onerror = () => rej(new Error('404 ' + src));
+          document.head.appendChild(el);
+        });
+        try {
+          await load(cfg.sdkAppUrl);
+          await load(cfg.sdkMessagingUrl);
+        } catch (e) { return { err: String(e.message) }; }
+        return {
+          hasFirebase:  typeof window.firebase === 'object' && window.firebase !== null,
+          hasMessaging: !!(window.firebase && typeof window.firebase.messaging === 'function'),
+          hasInit:      !!(window.firebase && typeof window.firebase.initializeApp === 'function'),
+          version:      (window.firebase && window.firebase.SDK_VERSION) || '',
+          appUrl: cfg.sdkAppUrl, msgUrl: cfg.sdkMessagingUrl,
+        };
+      });
+      if (r.err)                 { status = 'LOAD_FAIL'; note = r.err; }
+      else if (!r.hasFirebase)   { status = 'NO_GLOBAL'; note = 'โหลดแล้วแต่ไม่มี global firebase'; }
+      else if (!r.hasInit)       { status = 'NO_INIT';   note = 'ไม่มี firebase.initializeApp'; }
+      else if (!r.hasMessaging)  { status = 'NO_MSG';    note = 'firebase-messaging-compat ไม่ได้ผูก firebase.messaging'; }
+      else if (bad.length)       { status = 'JS_ERROR';  note = bad.slice(0, 2).join(' · '); }
+      else note = `โหลด ${r.appUrl} + ${r.msgUrl} ได้จริง · firebase.messaging พร้อม · SDK_VERSION=${r.version || '(ไม่ประกาศ)'}`;
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    results.push({ role: 'interact', tab: 'แจ้งเตือน Push — SDK จาก /vendor โหลดได้จริง', status, note });
+    await page.close();
+  }
+
+  // ── 🔔 Push: SDK โหลดไม่สำเร็จ → แอปต้องยังทำงานปกติ ────────────────────────
+  // ⚠️ นี่คือเคสที่เกิดจริงบนเน็ตร้าน (ไฟล์โหลดไม่ทัน/ถูกบล็อก) · Push เป็นของเสริม
+  //    ถ้า SDK พังแล้วลากแอปล่ม = ขายของไม่ได้เพราะฟีเจอร์ที่ยังไม่ได้ใช้ด้วยซ้ำ
+  {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    let status = 'ok', note = '';
+    const bad = [];
+    page.on('pageerror', e => bad.push(String(e.message || e).slice(0, 120)));
+    try {
+      await page.goto(`${base}?role=owner`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const r = await page.evaluate(async () => {
+        // เปิด config (mutate ได้เพราะ const ห้ามแค่ rebind) แล้วชี้ SDK ไป path ที่ไม่มีจริง
+        DMJ_FCM_CONFIG.enabled = true;
+        DMJ_FCM_CONFIG.apiKey = 'test'; DMJ_FCM_CONFIG.projectId = 'test';
+        DMJ_FCM_CONFIG.messagingSenderId = 'test'; DMJ_FCM_CONFIG.appId = 'test';
+        DMJ_FCM_CONFIG.vapidPublicKey = 'test';
+        DMJ_FCM_CONFIG.sdkAppUrl = '/vendor/ไม่มีไฟล์นี้-app.js';
+        DMJ_FCM_CONFIG.sdkMessagingUrl = '/vendor/ไม่มีไฟล์นี้-messaging.js';
+        const cfgOn = !!dmjPushConfig();
+        const sdk = await dmjPushLoadSdk();       // ต้องคืน null ไม่ throw
+        return { cfgOn, sdkNull: sdk === null };
+      });
+      const stillWorks = await (async () => {
+        if (!(await navigateTo(page, 'owner', 'stock'))) return false;
+        return (await page.locator('main[data-screen-label="stock"]').count()) > 0;
+      })();
+      if (!r.cfgOn)          { status = 'CFG_FAIL';  note = 'mutate config แล้ว dmjPushConfig ยังคืน null'; }
+      else if (!r.sdkNull)   { status = 'NO_NULL';   note = 'SDK โหลดไม่ได้แต่ dmjPushLoadSdk ไม่คืน null'; }
+      else if (bad.length)   { status = 'JS_ERROR';  note = 'SDK โหลดพังแล้วแอปโยน error: ' + bad.slice(0, 2).join(' · '); }
+      else if (!stillWorks)  { status = 'APP_DEAD';  note = 'SDK โหลดพังแล้วสลับแท็บต่อไม่ได้'; }
+      else note = 'SDK โหลดไม่สำเร็จ → คืน null ไม่ throw · ไม่มี JS error · สลับแท็บใช้งานต่อได้ปกติ';
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    results.push({ role: 'interact', tab: 'แจ้งเตือน Push — SDK โหลดไม่สำเร็จแล้วแอปยังทำงาน', status, note });
+    await page.close();
+  }
+
   // ── รายงานการเข้างาน: เลือกคน → ต้องได้ "รายวัน" จริง และอ่านได้บนจอมือถือ ──
   // ⚠️ ต้องรันบนเบราว์เซอร์จริง 2 เหตุผลที่ unit test แทนไม่ได้:
   //   1. ตารางรายวัน 9 คอลัมน์ถูกสลับเป็นการ์ดที่ ≤700px (useIsMobile) — เห็นได้เฉพาะตอน

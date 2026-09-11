@@ -7762,8 +7762,119 @@ function UploadView({ onDataLoaded, currentData }) {
 // ─────────────────────────────────────────────────────────────────────
 // CONNECT — Google Sheets setup
 // ─────────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════
+// 🔔 PushTestCard — ทดสอบ transport ของแจ้งเตือน (Phase 1, owner/dev เท่านั้น)
+// ──────────────────────────────────────────────────────────────────────────
+// ⚠️ การ์ดนี้ **ไม่เชื่อมกับ business event ใด ๆ** — ส่งข้อความทดสอบเข้าเครื่องของ
+//    ผู้กดเองเท่านั้น (backend ไม่รับ recipient จาก client เลย)
+// ⚠️ ห้ามขอ permission เองตอน mount — ต้องมาจากการกดปุ่มของผู้ใช้เสมอ
+function PushTestCard() {
+  const [state, setState] = uS(() => ({ phase: "idle", msg: "" }));
+  const [perm, setPerm]   = uS(() => {
+    try { return (typeof Notification !== "undefined") ? Notification.permission : "unsupported"; }
+    catch (e) { return "unsupported"; }
+  });
+  const cfg = dmjPushConfig();
+  const sup = dmjPushSupport();
+  const last = dmjPushReadLast();
+
+  const busy = state.phase === "working";
+  const say = (phase, msg) => setState({ phase, msg });
+
+  // สมัคร/ตรวจ binding — ปุ่มเดียวทำทั้งสองอย่าง (backend เป็น idempotent)
+  const doRegister = async () => {
+    say("working", "กำลังเปิดการแจ้งเตือน…");
+    const p = await dmjPushRequestPermission();
+    setPerm(p);
+    if (p !== "granted") {
+      say("error", p === "denied"
+        ? dmjPushReasonTh("denied")
+        : "ยังไม่ได้อนุญาตการแจ้งเตือน");
+      return;
+    }
+    const t = await dmjPushGetToken();
+    if (!t.ok) { say("error", dmjPushReasonTh(t.reason)); return; }
+    const d = await syncRegisterPushDevice(t.token, navigator.userAgent);
+    if (d && d.ok) {
+      dmjPushWriteLast({ deviceId: dmjPushDeviceId(), at: Date.now(), v: d.bindingVersion });
+      say("ok", d.unchanged ? "อุปกรณ์นี้พร้อมใช้งานอยู่แล้ว (ไม่ต้องบันทึกซ้ำ)"
+        : d.created ? "สมัครอุปกรณ์นี้เรียบร้อย" : "อัปเดตอุปกรณ์นี้เรียบร้อย");
+      return;
+    }
+    if (d && d.tokenOwnedByOther) { say("error", d.error || "อุปกรณ์นี้ผูกกับบัญชีอื่นอยู่"); return; }
+    if (d && d.off) { say("error", "ระบบแจ้งเตือนยังปิดอยู่ (PUSH_ENABLED)"); return; }
+    say("error", (d && d.error) || "สมัครอุปกรณ์ไม่สำเร็จ");
+  };
+
+  const doTest = async () => {
+    say("working", "กำลังส่งข้อความทดสอบ…");
+    const d = await syncSendTestPush();
+    if (d && d.ok) { say("ok", "ส่งแล้ว — รอสักครู่ ถ้าไม่เห็นให้ตรวจการตั้งค่าแจ้งเตือนของเครื่อง"); return; }
+    if (d && d.noDevice) { say("error", "ยังไม่ได้สมัครอุปกรณ์นี้ — กด “เปิดแจ้งเตือนบนเครื่องนี้” ก่อน"); return; }
+    if (d && d.off) { say("error", "ระบบแจ้งเตือนยังปิดอยู่ (PUSH_ENABLED)"); return; }
+    if (d && d.unreadable) { say("error", "อ่านคำตอบไม่ได้ — อาจส่งไปแล้ว รอดูที่หน้าจอก่อนกดซ้ำ"); return; }
+    say("error", (d && d.error) || "ส่งไม่สำเร็จ");
+  };
+
+  const doUnregister = async () => {
+    say("working", "กำลังถอนอุปกรณ์…");
+    const r = await dmjPushDisableForLogout();
+    say(r.serverRevoked ? "ok" : "error",
+        r.serverRevoked ? "ถอนอุปกรณ์นี้ออกจากระบบแล้ว"
+                        : "ยังถอนไม่สำเร็จ (จดไว้แล้ว จะลองใหม่เมื่อออนไลน์)");
+  };
+
+  const tone = state.phase === "ok" ? "#1f7f44" : state.phase === "error" ? "#b3261e" : "var(--muted)";
+
+  return (
+    <Card style={{marginBottom: 18}}>
+      <div style={{fontSize:12,fontWeight:700,color:"var(--muted)",marginBottom:10}}>
+        🔔 ทดสอบแจ้งเตือน (เฉพาะเจ้าของ/ผู้ดูแล)
+      </div>
+
+      {!cfg && (
+        <div style={{fontSize:12,background:"#fff8e1",border:"1px solid #f5dec0",color:"#8a6d1f",
+                     borderRadius:10,padding:"10px 12px",marginBottom:10}}>
+          ยังไม่ได้ตั้งค่า Firebase — ปุ่มด้านล่างจะยังใช้ไม่ได้ (ระบบปิดอยู่ ไม่มีการส่งข้อมูลออกไปไหน)
+        </div>
+      )}
+      {cfg && !sup.ok && (
+        <div style={{fontSize:12,background:"#fff8e1",border:"1px solid #f5dec0",color:"#8a6d1f",
+                     borderRadius:10,padding:"10px 12px",marginBottom:10}}>
+          {dmjPushReasonTh(sup.reason)}
+        </div>
+      )}
+
+      <div style={{fontSize:11.5,color:"var(--muted)",marginBottom:10}}>
+        สถานะสิทธิ์ในเครื่องนี้: <b>{perm === "granted" ? "อนุญาตแล้ว" : perm === "denied" ? "ถูกปิดไว้" : "ยังไม่ได้ถาม"}</b>
+        {last && last.at ? <> · สมัครล่าสุด {new Date(last.at).toLocaleString("th-TH")}</> : null}
+      </div>
+
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        <button className="btn" disabled={busy || !cfg || !sup.ok} onClick={doRegister}>
+          <span>เปิดแจ้งเตือนบนเครื่องนี้</span>
+        </button>
+        <button className="btn ghost" disabled={busy || !cfg || !sup.ok} onClick={doTest}>
+          <span>ส่งข้อความทดสอบ</span>
+        </button>
+        {/* ⚠️ ถอนได้เสมอ แม้ระบบปิดอยู่ — ไม่งั้น binding ค้างโดยเจ้าตัวเอาออกไม่ได้ */}
+        <button className="btn ghost" disabled={busy} onClick={doUnregister}>
+          <span>ถอนอุปกรณ์นี้</span>
+        </button>
+      </div>
+
+      {state.msg && (
+        <div style={{marginTop:10,fontSize:12,color:tone}}>
+          {busy && <span className="spin" style={{width:12,height:12,borderWidth:2,marginRight:6,display:"inline-block",verticalAlign:"-1px"}}/>}
+          {state.msg}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function ConnectView({ sheetUrl, sheetViewUrl, syncing, lastSync, source, onSync, onClearLocal,
-                       onSyncZortSales, syncingZortSales, zortSalesLastSync }) {
+                       onSyncZortSales, syncingZortSales, zortSalesLastSync, role }) {
   const [url, setUrl] = uS(sheetViewUrl || "");
 
   const fmtTs = (ts) => {
@@ -7789,6 +7900,11 @@ function ConnectView({ sheetUrl, sheetViewUrl, syncing, lastSync, source, onSync
         <div style={{fontSize:12,fontWeight:700,color:"var(--muted)",marginBottom:10}}>⏱️ เวลาเปิดแอป</div>
         <BootTrace/>
       </Card>
+
+      {/* 🔔 ทดสอบแจ้งเตือน — Phase 1 transport proof
+          ⚠️ owner/dev เท่านั้น และ **backend ตรวจซ้ำเองด้วย** (pushGate_ requireAdmin)
+             การซ่อนปุ่มไม่ใช่การกันสิทธิ์ — ถอดเงื่อนไขตรงนี้ออกก็ยังยิง API ไม่ผ่าน */}
+      {isAdminRole(role) && <PushTestCard/>}
 
       <Card style={{marginBottom: 18}}>
         <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:18,flexWrap:"wrap"}}>
