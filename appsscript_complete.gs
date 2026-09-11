@@ -5716,7 +5716,35 @@ function deleteOrderRows(ss, orderIds, actor, orderSkus) {
 // SECTION 4: ZORT API Integration
 // ───────────────────────────────────────────────────────────
 
+// ══════════════════════════════════════════════════════════════════════════
+// 🧪 STAGING_NO_EXTERNAL — ตัดการยิงออกไปหา "ระบบจริงภายนอก" ก่อนถึง network
+// ──────────────────────────────────────────────────────────────────────────
+// ใช้กับ **โปรเจกต์ทดสอบเท่านั้น** (ดู docs/SETUP-PUSH-STAGING.md)
+//
+// ทำไมต้องมี: การไม่ตั้ง ZORT_*/LINE_* ใน Script Properties **ไม่พอ** — `getSecret_`
+// ถอยไปใช้ค่า `PLACEHOLDER_…` ซึ่งเป็น string ที่ truthy → โค้ดยังเดินต่อไปถึง
+// `UrlFetchApp.fetch` แล้วค่อยโดนปฏิเสธ 401 ที่ปลายทาง · แปลว่า **มีคำขอออกจากสคริปต์
+// ไปหา api.line.me / open-api.zortout.com จริง** ซึ่งเป็นสิ่งที่ staging ต้องไม่ทำ
+// (เผลอตั้ง property ผิดช่องทีเดียว = ยิงเข้าระบบจริงทันที)
+//
+// ⚠️ **ค่าเริ่มต้นคือปิด** — ไม่ตั้ง property = คืน false = พฤติกรรม production เหมือนเดิมทุกประการ
+// ⚠️ **ห้ามตั้งค่านี้ในโปรเจกต์ production เด็ดขาด** (จะทำให้แจ้งเตือน LINE + sync ZORT ตายทั้งระบบ)
+// ⚠️ **ไม่ครอบ LINE Login** (`exchangeLineToken_` / `verifyLineIdToken_`) โดยเจตนา —
+//    สองตัวนั้นคือทางเดียวที่จะล็อกอินเข้า staging ได้ ตัดแล้วทดสอบอะไรไม่ได้เลย
+//    และมันคุยกับ LINE Login API ไม่ใช่ Messaging API จึงไม่ส่งข้อความหาใคร
+function stagingNoExternal_() {
+  try {
+    return PropertiesService.getScriptProperties().getProperty('STAGING_NO_EXTERNAL') === 'true';
+  } catch (e) { return false; }   // อ่าน property ไม่ได้ → คงพฤติกรรมเดิม ไม่ทำให้ของจริงพัง
+}
+
+// ZORT: ทุกฟังก์ชันที่ยิง ZORT (53 ตัว ณ วันที่เพิ่ม) เรียกตัวนี้เพื่อเอา auth header
+// จึงเป็น "คอขวดจุดเดียว" ที่ตัดได้ก่อนถึง fetch ทุกเส้นทาง โดยไม่ต้องไปแก้ 53 ที่
+// ⚠️ ใช้ throw ไม่ใช่ return {} — คืน header เปล่าจะเดินต่อไปยิงจริงแล้วได้ 401 (ไม่ได้ตัด)
 function zortHeaders_() {
+  if (stagingNoExternal_()) {
+    throw new Error('[staging] ZORT ถูกปิดไว้ (STAGING_NO_EXTERNAL=true) — ไม่ยิงออกไปหาระบบจริง');
+  }
   return { storename: ZORT_STORE, apikey: ZORT_APIKEY, apisecret: ZORT_SECRET };
 }
 
@@ -9645,6 +9673,7 @@ function getOrBuildDatabase() {
 }
 
 function replyToLine(replyToken, messagePayload) {
+  if (stagingNoExternal_()) { Logger.log('[staging] ข้าม replyToLine'); return; }
   const url = 'https://api.line.me/v2/bot/message/reply';
   const response = UrlFetchApp.fetch(url, {
     method: "post",
@@ -9662,6 +9691,7 @@ function replyToLine(replyToken, messagePayload) {
 }
 
 function startLoadingAnimation(chatId) {
+  if (stagingNoExternal_()) return;
   try {
     UrlFetchApp.fetch('https://api.line.me/v2/bot/chat/loading/start', {
       method: "post",
@@ -12443,6 +12473,12 @@ function resolveNotiTarget_(channel, target) {
 // low-level push — คืน {ok, code, quota, count}
 // quota=true เมื่อชน 429 หรือ body บอกว่าโควตาเดือนหมด → drainer จะ backoff/ข้าม channel
 function linePush_(channel, messages, target) {
+  // ⚠️ ต้องตัด **ก่อน** อ่าน token/target — LINE_USER_ID ถอยไปเป็นค่า PLACEHOLDER ที่ truthy
+  //    ทำให้เส้นทาง target:'user' ยิงจริงได้แม้ไม่ได้ตั้ง property อะไรเลย
+  if (stagingNoExternal_()) {
+    Logger.log('[staging] ข้าม linePush_ (' + channel + ') — ไม่ยิงออกไปหา LINE จริง');
+    return { ok:false, code:0, quota:false, count:0, blocked:true };
+  }
   var token = lineToken_(channel);
   var to = resolveNotiTarget_(channel, target);
   if (!token || !to) { Logger.log("linePush_: no token/target (" + channel + ")"); return { ok:false, code:0, quota:false, count:0 }; }
@@ -12731,6 +12767,8 @@ function cleanupNotiQueue_() {
 }
 
 function sendLineMessage_(msg) {
+  // ⚠️ ตัวนี้ไม่มี guard อะไรเลยแต่เดิม — ยิงทุกครั้งที่ถูกเรียก
+  if (stagingNoExternal_()) { Logger.log('[staging] ข้าม sendLineMessage_'); return; }
   var res = UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
     method: "post",
     headers: { "Content-Type": "application/json", "Authorization": "Bearer " + LINE_ACCESS_TOKEN },
@@ -12750,6 +12788,7 @@ function debugLineMessage() {
 }
 
 function sendLineGroup_(msg) {
+  if (stagingNoExternal_()) { Logger.log('[staging] ข้าม sendLineGroup_'); return; }
   var groupId = PropertiesService.getScriptProperties().getProperty('LINE_GROUP_ID');
   if (!groupId) return;
   UrlFetchApp.fetch("https://api.line.me/v2/bot/message/push", {
@@ -12761,6 +12800,7 @@ function sendLineGroup_(msg) {
 }
 
 function sendLineGroupMentionAll_(msg) {
+  if (stagingNoExternal_()) { Logger.log('[staging] ข้าม sendLineGroupMentionAll_'); return; }
   var groupId = PropertiesService.getScriptProperties().getProperty('LINE_GROUP_ID');
   if (!groupId) return;
   var fullText = "@All " + msg;
@@ -17947,6 +17987,10 @@ function checkPushStatus() {
     for (var i = 0; i < read.rows.length; i++) { pushRowEnabled_(read.rows[i]) ? on++ : off++; }
     Logger.log('ชีตอุปกรณ์: ใช้งานอยู่ ' + on + ' · ถูกถอน ' + off + ' (จาก ' + read.rows.length + ' แถวท้าย)');
   }
+  var noExt = stagingNoExternal_();
+  Logger.log('STAGING_NO_EXTERNAL: ' + (noExt
+    ? '✅ เปิด — ตัด ZORT/LINE ก่อนยิง network (ถูกต้องสำหรับโปรเจกต์ทดสอบ)'
+    : '❌ ปิด — ZORT/LINE จะยิงออกไปจริงถ้ามีอะไรเรียก (ถูกต้องสำหรับ production เท่านั้น)'));
   Logger.log('── ค่าที่ checkSystemStatus() ไม่ได้รายงาน ──');
   Logger.log('INAPP_NOTI_ENABLED: ' + (props.getProperty('INAPP_NOTI_ENABLED') === 'true' ? 'เปิด' : 'ปิด'));
   Logger.log('REQUIRE_LOGIN: '      + (props.getProperty('REQUIRE_LOGIN')      === 'true' ? 'เปิด' : 'ปิด'));

@@ -54,17 +54,40 @@
 2. คัดลอกเนื้อไฟล์ `appsscript_complete.gs` จาก branch นี้ ไปวางแทนโค้ดในตัวแก้ไข
 3. ⚙️ **Project Settings** → ติ๊ก **"Show appsscript.json"** → กลับไปแท็บ Editor →
    เปิดไฟล์ `appsscript.json` แล้ววางเนื้อจากไฟล์ `appsscript.json` ของ branch นี้
-4. ⚙️ **Project Settings** → **Script Properties** → กด **Add script property** ใส่ **แค่ 3 ตัวนี้**
+4. ⚙️ **Project Settings** → **Script Properties** → กด **Add script property**
+   ใส่ **ครบ 4 ตัวนี้ ไม่ขาดไม่เกิน**
 
-   | ชื่อ | ค่า |
+   | ชื่อ (ก๊อปได้เลย) | ค่า |
    |---|---|
    | `SHEET_ID` | ID ของ**ชีตทดสอบ**จากขั้นที่ 1 |
    | `APP_TOKEN` | พิมพ์อะไรก็ได้ที่เดายาก เช่น `test_` ตามด้วยตัวเลขมั่ว ๆ |
    | `FCM_SERVICE_ACCOUNT_JSON` | เปิดไฟล์ `.json` จากขั้นที่ 2.4 แล้ว **ก๊อปทั้งไฟล์** มาวาง |
+   | `STAGING_NO_EXTERNAL` | พิมพ์ `true` **(ตัวเล็กทั้งหมด)** |
 
-5. **🚫 ห้ามใส่** `ZORT_STORE` `ZORT_APIKEY` `ZORT_SECRET` `LINE_ACCESS_TOKEN`
-   `LINE_USER_ID` `LINE_GROUP_ID` (และตัวที่ลงท้าย `_2`)
-   → ไม่ใส่ = ระบบจะ**ไม่ส่งอะไรออกไปหา LINE กลุ่มจริง** และ**ต่อ ZORT ไม่ได้** ซึ่งเป็นสิ่งที่เราต้องการ
+   > 🔒 **`STAGING_NO_EXTERNAL` = true คือสวิตช์ความปลอดภัยหลักของ staging**
+   > มันตัดการติดต่อ **ZORT และ LINE (ส่งข้อความ)** ทิ้ง **ก่อน** ที่จะมีคำขอออกจากสคริปต์
+   > — ไม่ใช่ปล่อยให้ยิงไปแล้วโดนปฏิเสธที่ปลายทาง
+   >
+   > ทำไมต้องมี: แค่ "ไม่ใส่" ค่า ZORT/LINE **ยังไม่ปลอดภัยพอ** เพราะโค้ดจะถอยไปใช้ค่า
+   > `PLACEHOLDER_…` ซึ่งนับเป็น "มีค่า" → เดินต่อไปยิงจริงแล้วค่อยโดน 401
+   > แปลว่า**มีคำขอวิ่งออกไปหา LINE/ZORT จริง** ซึ่ง staging ต้องไม่ทำ
+   >
+   > ⚠️ **ห้ามใส่ค่านี้ในโปรเจกต์ของจริงเด็ดขาด** — ใส่แล้วแจ้งเตือน LINE กับ sync ZORT
+   > จะหยุดทำงานทั้งระบบ · ⚠️ **การล็อกอินด้วย LINE ยังใช้ได้ปกติ** (คนละส่วนกับการส่งข้อความ)
+
+5. **🚫 ห้ามใส่ property พวกนี้เด็ดขาด** (ถ้าเผลอใส่ = staging อาจไปแตะระบบจริง)
+
+   ```
+   ZORT_STORE   ZORT_APIKEY   ZORT_SECRET
+   LINE_ACCESS_TOKEN   LINE_ACCESS_TOKEN_2
+   LINE_USER_ID        LINE_USER_ID_2
+   LINE_GROUP_ID       LINE_GROUP_ID_2
+   ```
+   → ปล่อยว่างไว้ + มี `STAGING_NO_EXTERNAL=true` = ปลอดภัย 2 ชั้น
+
+   **property ที่ "ใส่ก็ได้ ไม่ใส่ก็ได้" (ปล่อยว่างดีกว่าสำหรับ Phase 1)**
+   `NOTI_QUEUE_ENABLED` · `INAPP_NOTI_ENABLED` · `REQUIRE_LOGIN` · `PRODUCT_OWNER_ENABLED`
+   → Phase 1 ทดสอบ Push ได้โดย**ไม่ต้องเปิดตัวไหนเลย**
 6. **🚫 ห้ามกดรัน** `setupNotiSystem` `setupAttendanceMaintenance` `setupShipmentArchiveTrigger`
    `setupShelfSweepTrigger` หรืออะไรก็ตามที่ขึ้นต้นว่า `setup…` **ยกเว้น `setupPush`**
    → พวกนั้นสร้าง trigger ที่จะวิ่งเองทุกวัน/ทุกนาที ซึ่งในโปรเจกต์ทดสอบไม่ต้องการ
@@ -75,8 +98,44 @@
 8. เลือกฟังก์ชัน **`checkPushStatus`** จาก dropdown ด้านบน → กด ▶ Run → ดูผลที่ **Execution log**
    ควรเห็น `FCM_SERVICE_ACCOUNT_JSON: ✅ ตั้งแล้ว · project_id=…`
    (ฟังก์ชันนี้อ่านอย่างเดียว ไม่เขียนอะไร ไม่มีความลับใน log)
+   ในผลควรเห็น 2 บรรทัดนี้ด้วย — **ถ้าไม่ตรง อย่าไปต่อ**:
+   ```
+   STAGING_NO_EXTERNAL: ✅ เปิด — ตัด ZORT/LINE ก่อนยิง network
+   FCM_SERVICE_ACCOUNT_JSON: ✅ ตั้งแล้ว · project_id=…
+   ```
+
 9. เลือก **`setupPush`** → ▶ Run **หนึ่งครั้ง** (เปิดสวิตช์ `PUSH_ENABLED`)
    ปิดกลับได้ทุกเมื่อด้วย **`disablePush`**
+
+### ✅ ฟังก์ชันที่อนุญาตให้รันในโปรเจกต์ทดสอบ — มีแค่ 3 ตัว
+
+| ฟังก์ชัน | ทำอะไร | รันซ้ำได้ไหม |
+|---|---|---|
+| `checkPushStatus` | อ่านสถานะอย่างเดียว ไม่เขียนอะไร ไม่ยิง network | ได้ไม่จำกัด |
+| `setupPush` | เปิดสวิตช์ `PUSH_ENABLED` | ได้ |
+| `disablePush` | ปิดสวิตช์ (หยุดส่งใหม่) | ได้ |
+
+**🚫 ห้ามรันตัวอื่นทั้งหมด** โดยเฉพาะอะไรที่ขึ้นต้นว่า `setup…` หรือ `sync…` —
+พวกนั้นสร้าง trigger ที่จะวิ่งเองทุกวัน/ทุกนาที หรือดึงข้อมูลจากระบบภายนอก
+
+---
+
+## 📋 สรุปค่าที่ต้องเก็บไว้ (กรอกลงตารางนี้ระหว่างทำ)
+
+| # | ค่า | ได้จากไหน | ความลับ? |
+|---|---|---|---|
+| 1 | `TEST_SHEET_ID` | URL ของชีตสำเนา (ขั้น 1.3) | ไม่ — ส่งได้ |
+| 2 | `apiKey` | Firebase → Project settings → General (ขั้น 2.2) | ไม่ — ส่งได้ |
+| 3 | `projectId` | เดียวกับข้อ 2 | ไม่ — ส่งได้ |
+| 4 | `messagingSenderId` | เดียวกับข้อ 2 | ไม่ — ส่งได้ |
+| 5 | `appId` | เดียวกับข้อ 2 | ไม่ — ส่งได้ |
+| 6 | VAPID public key | Firebase → Cloud Messaging → Web Push certificates (ขั้น 2.3) | ไม่ — ส่งได้ |
+| 7 | `FCM_SERVICE_ACCOUNT_JSON` | ไฟล์ `.json` (ขั้น 2.4) | 🔴 **ความลับ — ใส่เองใน GAS อย่าส่งทางแชท** |
+| 8 | GAS test `/exec` URL | ขั้น 3.7 | ไม่ — ส่งได้ |
+| 9 | GAS deployment ID | ส่วน `AKfycb…` ใน URL ข้อ 8 | ไม่ — ส่งได้ |
+
+ข้อ **1-6 และ 8-9 ส่งมาให้ผมได้** เพื่อเอาไปกรอกใน `config.js` ของ staging
+ข้อ **7 ห้ามส่ง** — ตอบแค่ "ใส่แล้ว"
 
 ---
 
@@ -111,6 +170,7 @@
 | หยุดส่งทันที | GAS ทดสอบ → รัน **`disablePush`** |
 | เลิกใช้ทั้งหมด | ลบโปรเจกต์ Firebase + ลบโปรเจกต์ GAS ทดสอบ + ลบชีตสำเนา |
 | กลัวคีย์รั่ว | Firebase → Service accounts → ลบคีย์เดิม สร้างใหม่ แล้วแก้ Script Property |
+| อยากมั่นใจว่า staging ไม่แตะของจริง | รัน `checkPushStatus` → ต้องเห็น `STAGING_NO_EXTERNAL: ✅ เปิด` |
 
 **ของจริงไม่ถูกแตะเลยในทุกขั้น** — คนละชีต คนละ GAS คนละลิงก์เว็บ คนละ Firebase
 
