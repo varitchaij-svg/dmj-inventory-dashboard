@@ -3652,6 +3652,83 @@ function checkMatchTerms(text) {
     .map(term => term.split(/\s+/).filter(Boolean));
 }
 
+// จับคู่คำค้นกับ SKU/ชื่อสินค้า — ใช้ร่วมกันทั้งแท็บค้นชื่อเดิมและทางลัดวางข้อความ
+// exact tier มาก่อน substring และค่อยผ่อนการสะกดเมื่อ strict ไม่เจอ เหมือน behavior เดิมทุกประการ
+function matchStockCheckTerms(text, base) {
+  return checkMatchTerms(text).map(tokens => {
+    const lowerTokens = tokens.map(t => t.toLowerCase());
+    const termJoined = lowerTokens.join(" ");
+    const strictSkus = base.filter(p => {
+      const hay = ((p.sku||"") + " " + (p.name||"")).toLowerCase();
+      return lowerTokens.every(t => hay.includes(t));
+    }).map(p => p.sku);
+    const exactSkus = base.filter(p => {
+      const nameNorm = (p.name || "").trim().toLowerCase();
+      const skuNorm = (p.sku || "").trim().toLowerCase();
+      return nameNorm === termJoined || skuNorm === termJoined;
+    }).map(p => p.sku);
+    if (exactSkus.length && exactSkus.length < strictSkus.length) {
+      return { term: tokens.join(" "), skus: exactSkus, loose: false, exact: true,
+               broaderSkus: strictSkus.filter(sku => exactSkus.indexOf(sku) === -1) };
+    }
+    if (strictSkus.length) return { term: tokens.join(" "), skus: strictSkus, loose: false };
+    const normTokens = lowerTokens.map(t => dmjThaiKey(t));
+    if (normTokens.some(t => t.length < 2)) return { term: tokens.join(" "), skus: [], loose: false };
+    const looseSkus = base.filter(p => {
+      const hayNorm = dmjThaiKey((p.sku||"") + " " + (p.name||""));
+      return normTokens.every(t => hayNorm.includes(t));
+    }).map(p => p.sku);
+    return { term: tokens.join(" "), skus: looseSkus, loose: looseSkus.length > 0 };
+  });
+}
+
+// แปลงข้อความงาน เช่น "@All ขอยอดสต๊อก ทับทิม K JX2513 ด้วยค่ะ" เป็น Supplier/SKU/ชื่อสินค้า
+// แบบ conservative: คำจะถูกจัดเป็น Supplier/SKU ต่อเมื่อ match รหัสจริงแบบเต็มคำเท่านั้น
+// ถ้ารหัสเดียวกันเป็นทั้ง Supplier และ SKU จะไม่เดา แต่ส่งไปอยู่ ambiguous ให้ผู้ใช้ตรวจเอง
+function parseStockCheckPaste(text, base, supplierList) {
+  const supplierByKey = new Map();
+  (supplierList || []).forEach(s => {
+    const name = typeof s === "string" ? s : s && s.name;
+    if (name) supplierByKey.set(String(name).trim().toUpperCase(), String(name).trim());
+  });
+  const skuByKey = new Map();
+  (base || []).forEach(p => {
+    if (p && p.sku) skuByKey.set(String(p.sku).trim().toUpperCase(), String(p.sku).trim());
+  });
+
+  const suppliers = new Set(), skus = new Set(), ambiguous = new Set(), terms = [];
+  String(text || "")
+    .replace(/@all\b/gi, " ")
+    .replace(/ขอ(?:เช[็๊]?ค)?ยอด\s*สต[๊็]อก/gi, " ")
+    .replace(/ขอเช[็๊]?ค\s*สต[๊็]อก/gi, " ")
+    .replace(/ขอยอด/gi, " ")
+    .replace(/(?:ด้วย|หน่อย)(?:ค่ะ|ครับ|คะ)?/gi, " ")
+    .replace(/(?:ค่ะ|ครับ|คะ)\s*$/gi, " ")
+    .split(/[\n,\/;]+/)
+    .forEach(segment => {
+      let pending = [];
+      const flush = () => {
+        const term = pending.join(" ").trim();
+        if (term) terms.push(term);
+        pending = [];
+      };
+      segment.trim().split(/\s+/).filter(Boolean).forEach(raw => {
+        const clean = raw.replace(/^["'`()\[\]{}]+|["'`()\[\]{}.!?]+$/g, "");
+        const key = clean.toUpperCase();
+        const supplier = supplierByKey.get(key);
+        const sku = skuByKey.get(key);
+        if (supplier || sku) {
+          flush();
+          if (supplier && sku) ambiguous.add(clean);
+          else if (supplier) suppliers.add(supplier);
+          else skus.add(sku);
+        } else if (clean) pending.push(clean);
+      });
+      flush();
+    });
+  return { suppliers: [...suppliers], skus: [...skus], terms, ambiguous: [...ambiguous] };
+}
+
 function CategoryView({ data, role, onNav }) {
   const { products } = data;
   const allCats = uM(() => {
@@ -3740,9 +3817,10 @@ function CategoryView({ data, role, onNav }) {
   // ⭐ วิธีเลือกสินค้าเพิ่มเติมนอกจากร้านค้า (Option B — Union, ดู docs/PLAN-STOCKCHECK-KEYWORD-SELECT.md §2)
   // แท็บ 🏭 ร้านค้า (checkSuppliers ด้านบน) กับตะกร้าด้านล่างนี้เป็นคนละแหล่งเด็ดขาด ไม่ผสมกัน
   // รวมกันแค่ตอนคำนวณ checkFinalSkus (union) ตอนจะส่งเท่านั้น
-  const [checkMode, setCheckMode] = uS("supplier");          // 'supplier'|'keyword'|'category'|'color' — แท็บที่เปิดอยู่
+  const [checkMode, setCheckMode] = uS("supplier");          // 'supplier'|'keyword'|'category'|'color'|'paste'
   const [checkKeyword, setCheckKeyword] = uS("");             // ข้อความค้นชื่อสินค้า (แท็บ 🔍 — คนละช่องกับ checkSearch ที่กรองชิปร้านค้า)
-  const [checkPicked, setCheckPicked] = uS(new Set());        // SKU ที่เพิ่มจากแท็บ 🔍 เท่านั้น (ห้ามมี SKU จากแท็บ 🏭 ปนมา)
+  const [checkPasteText, setCheckPasteText] = uS("");         // ข้อความงานดิบจาก LINE/แชต — แยกก่อนเพิ่ม ไม่ส่งอัตโนมัติ
+  const [checkPicked, setCheckPicked] = uS(new Set());        // SKU จาก 🔍/🏷️/🎨/📋 (ห้ามมี SKU จาก live supplier selection ปนมา)
   const [checkExcluded, setCheckExcluded] = uS(new Set());    // SKU ที่ผู้ใช้ติ๊กออกจากรายการที่จะส่ง — ตัดจาก union ไม่สนแหล่งที่มา
   const [checkShowAll, setCheckShowAll] = uS(false);          // เพดาน render ของ "รายการที่จะส่ง" ถูกกดเปิดดูทั้งหมดหรือยัง
   // ⭐ กรองต่อด้วยสี (เจ้าของขอ ส.ค. 2026) — ใช้ได้เฉพาะแท็บ 🔍/🏷️ เพื่อ "เลือกชื่อ/หมวดก่อน
@@ -4132,45 +4210,22 @@ function CategoryView({ data, role, onNav }) {
   // ⚠️ ชั้นสำรอง (Phase 2) ทำงานเฉพาะเมื่อค้นตรง ๆ ได้ 0 ผลลัพธ์**ทั้งเทอม** — ไม่ใช่ทำเสมอ
   // (เช่น "เบอร์รี่แดง" spelled ต่างจาก catalog แค่คำเดียว "แดง" ที่สะกดถูกอยู่แล้วยัง match ได้
   // ตามปกติหลัง normalize ทั้งคู่ ไม่ต้องแยก logic ระดับ token — ดู Plan §3 Phase 2 ข้อ 2)
-  const checkKeywordResult = uM(() => {
-    return checkMatchTerms(checkKeyword).map(tokens => {
-      const lowerTokens = tokens.map(t => t.toLowerCase());
-      const termJoined = lowerTokens.join(" ");
-      const strictSkus = checkBase.filter(p => {
-        const hay = ((p.sku||"") + " " + (p.name||"")).toLowerCase();
-        return lowerTokens.every(t => hay.includes(t));
-      }).map(p => p.sku);
-      // ⚠️ ชื่อ/รหัสที่ตรงคำค้น "เป๊ะทั้งคำ" ต้องมาก่อน substring เสมอ — คำสั้น ๆ ที่เป็นชื่อ
-      // เฉพาะของสินค้าจริง (เช่น "สน" — ยืนยันจากเจ้าของ ส.ค. 2026 ว่าเป็นชื่อสินค้า ไม่ใช่ธีม
-      // ดู Plan Q3) จะไปติด substring ในชื่อสินค้าอื่นที่บังเอิญสะกดคำนี้ปนอยู่ได้ง่ายมาก เพราะ
-      // ภาษาไทยไม่มีช่องว่างคั่นคำ ("สนิม" มี "สน" อยู่ข้างใน) → ถ้ามีสินค้าที่ชื่อ/รหัสตรงคำค้น
-      // เป๊ะอยู่แล้ว ให้ถือว่านั่นคือสิ่งที่ต้องการเป็นค่าเริ่มต้น (แม่นกว่า ไม่ต้องรื้อทีละตัว)
-      // ⚠️ **ไม่ทิ้งตัวที่สะกดคล้ายกันไปเงียบ ๆ** — เก็บไว้ใน broaderSkus ให้ผู้ใช้กด "รวม" เพิ่มเอง
-      // ได้เสมอ (ดูจุด render ที่ CategoryView) กันเคส "หาไม่เจอทั้งที่รู้ว่ามี" ซึ่งแย่กว่าเห็นเกิน
-      const exactSkus = checkBase.filter(p => {
-        const nameNorm = (p.name || "").trim().toLowerCase();
-        const skuNorm = (p.sku || "").trim().toLowerCase();
-        return nameNorm === termJoined || skuNorm === termJoined;
-      }).map(p => p.sku);
-      // exactSkus ⊆ strictSkus เสมอ (ชื่อ/รหัสที่ตรงเป๊ะ ย่อมมีคำค้นเป็น substring อยู่แล้ว) —
-      // ใช้ tier นี้เฉพาะตอนที่มันช่วยตัดของเกินจริง ๆ (มี substring อื่นเพิ่มเติมนอกเหนือจากที่ตรงเป๊ะ)
-      if (exactSkus.length && exactSkus.length < strictSkus.length) {
-        return { term: tokens.join(" "), skus: exactSkus, loose: false, exact: true,
-                 broaderSkus: strictSkus.filter(sku => exactSkus.indexOf(sku) === -1) };
-      }
-      if (strictSkus.length) return { term: tokens.join(" "), skus: strictSkus, loose: false };
-      // ⚠️ ต้อง normalize ทั้ง token และ hay ด้วย dmjThaiKey ตัวเดียวกันเสมอ — normalize ฝั่งเดียว
-      // ไม่มีวันแมตช์ (สตริงสองฝั่งอยู่คนละรูปแบบ) · token ที่ normalize แล้วสั้นกว่า 2 ตัวอักษร
-      // → ทั้งเทอมไม่เข้าชั้นสำรอง (กว้างเกินจนไร้ความหมาย)
-      const normTokens = lowerTokens.map(t => dmjThaiKey(t));
-      if (normTokens.some(t => t.length < 2)) return { term: tokens.join(" "), skus: [], loose: false };
-      const looseSkus = checkBase.filter(p => {
-        const hayNorm = dmjThaiKey((p.sku||"") + " " + (p.name||""));
-        return normTokens.every(t => hayNorm.includes(t));
-      }).map(p => p.sku);
-      return { term: tokens.join(" "), skus: looseSkus, loose: looseSkus.length > 0 };
-    });
-  }, [checkKeyword, checkBase]);
+  const checkKeywordResult = uM(() => matchStockCheckTerms(checkKeyword, checkBase), [checkKeyword, checkBase]);
+
+  // ทางลัดวางข้อความงาน — วิเคราะห์ให้ดูก่อน และยังไม่แตะ selection จริงจนกด "เพิ่มเข้ารายการ"
+  const checkPasteParsed = uM(() =>
+    parseStockCheckPaste(checkPasteText, checkBase, checkSupplierList)
+  , [checkPasteText, checkBase, checkSupplierList]);
+  const checkPasteKeywordResult = uM(() =>
+    matchStockCheckTerms(checkPasteParsed.terms.join("\n"), checkBase)
+  , [checkPasteParsed, checkBase]);
+  const checkPasteCandidateSkus = uM(() => {
+    const out = new Set(checkPasteParsed.skus);
+    const sups = new Set(checkPasteParsed.suppliers);
+    checkBase.forEach(p => { if (sups.has(p.vendor || p.lastSupplier)) out.add(p.sku); });
+    checkPasteKeywordResult.forEach(r => r.skus.forEach(sku => out.add(sku)));
+    return out;
+  }, [checkPasteParsed, checkPasteKeywordResult, checkBase]);
 
   // ── แท็บ 🏷️ หมวด (Phase 3) — ใช้ allCats (รายชื่อ+ลำดับหมวดที่มีอยู่แล้วในไฟล์นี้) เก็บ SKU
   // ต่อหมวดจาก checkBase ไว้ในตัวเลย (ทั้งคลังเสมอ เหมือน checkSupplierList) กันการ filter
@@ -4276,6 +4331,7 @@ function CategoryView({ data, role, onNav }) {
   function resetCheckPicker() {
     setCheckMode("supplier");
     setCheckKeyword("");
+    setCheckPasteText("");
     setCheckPicked(new Set());
     setCheckExcluded(new Set());
     setCheckShowAll(false);
@@ -5104,7 +5160,8 @@ function CategoryView({ data, role, onNav }) {
             </div>
             {/* แท็บวิธีเลือกสินค้า — 🏭 ร้านค้า (เดิม) / 🔍 ค้นชื่อ / 🏷️ หมวด / 🎨 สี เป็นคนละแหล่ง
                 กันเด็ดขาด (Option B) รวมกันแค่ตอนคำนวณ checkFinalSkus ตอนกดส่ง — ดู
-                docs/PLAN-STOCKCHECK-KEYWORD-SELECT.md §2 · flexWrap ให้ห่อเป็น 2 แถวบนจอแคบ */}
+                docs/PLAN-STOCKCHECK-KEYWORD-SELECT.md §2 · 📋 วางข้อความเป็นเพียงทางลัดเขียนค่า
+                เข้า 2 แหล่งเดิมหลังผู้ใช้กดยืนยัน ไม่สร้าง selection engine ชุดที่สาม */}
             <div style={{padding:"10px 16px 0",display:"flex",flexWrap:"wrap",gap:8}}>
               <button onClick={function(){ setCheckMode("supplier"); }}
                 style={{flex:"1 1 45%",padding:"8px 0",borderRadius:10,fontFamily:"inherit",cursor:"pointer",
@@ -5133,6 +5190,13 @@ function CategoryView({ data, role, onNav }) {
                         background:checkMode==="color"?"#dcf2e2":"#fff",
                         color:checkMode==="color"?"#1f7f44":"#6b7280",fontWeight:700,fontSize:13}}>
                 🎨 สี
+              </button>
+              <button onClick={function(){ setCheckMode("paste"); }}
+                style={{flex:"1 1 100%",padding:"8px 0",borderRadius:10,fontFamily:"inherit",cursor:"pointer",
+                        border:checkMode==="paste"?"2px solid #2563eb":"1px solid #bfdbfe",
+                        background:checkMode==="paste"?"#dbeafe":"#eff6ff",
+                        color:checkMode==="paste"?"#1d4ed8":"#2563eb",fontWeight:700,fontSize:13}}>
+                📋 วางข้อความที่ได้รับ
               </button>
             </div>
             {/* กรองต่อด้วยสี (เจ้าของขอ ส.ค. 2026) — ใช้ได้เฉพาะแท็บ 🔍/🏷️ เพื่อ "เลือกชื่อ/หมวด
@@ -5169,6 +5233,76 @@ function CategoryView({ data, role, onNav }) {
                     );
                   })}
                 </div>
+              </div>
+            )}
+            {checkMode === "paste" && (
+              <div style={{padding:"12px 16px 4px",display:"flex",flexDirection:"column",gap:10,overflowY:"auto",flex:1}}>
+                <div style={{fontSize:12,color:"#475569",lineHeight:1.45}}>
+                  วางข้อความจาก LINE/แชต ระบบจะแยกเฉพาะ Supplier และ SKU ที่ตรงกับข้อมูลจริงแบบเต็มคำ
+                  ส่วนข้อความที่เหลือจะค้นเป็นชื่อสินค้า — ตรวจผลก่อนกดเพิ่มทุกครั้ง
+                </div>
+                <textarea value={checkPasteText} onChange={function(e){ setCheckPasteText(e.target.value); }}
+                  placeholder="@All ขอยอดสต๊อก ทับทิม K JX2513 G1025 YG CA ด้วยค่ะ"
+                  rows={4}
+                  style={{width:"100%",boxSizing:"border-box",padding:"10px 12px",borderRadius:10,
+                          border:"1.5px solid #bfdbfe",fontSize:14,fontFamily:"inherit",outline:"none",resize:"vertical"}}/>
+                {checkPasteText.trim() && (
+                  <div style={{display:"flex",flexDirection:"column",gap:7,padding:"10px 12px",borderRadius:10,
+                               background:"#f8fafc",border:"1px solid #e2e8f0",fontSize:12}}>
+                    {checkPasteParsed.suppliers.length > 0 && (
+                      <div><b style={{color:"#166534"}}>🏭 Supplier:</b> {checkPasteParsed.suppliers.join(", ")}</div>
+                    )}
+                    {checkPasteParsed.skus.length > 0 && (
+                      <div><b style={{color:"#1d4ed8"}}>🏷️ SKU:</b> {checkPasteParsed.skus.join(", ")}</div>
+                    )}
+                    {checkPasteKeywordResult.map(function(r) {
+                      return (
+                        <div key={r.term} style={{color:r.skus.length?"#334155":"#b91c1c"}}>
+                          <b>🔍 {r.term}:</b> {r.skus.length ? "พบ " + r.skus.length + " รายการ" : "⚠️ ไม่พบสินค้า"}
+                          {r.loose ? " · ค้นแบบผ่อนการสะกด" : ""}
+                          {r.exact && r.broaderSkus && r.broaderSkus.length
+                            ? " · มีใกล้เคียงอีก " + r.broaderSkus.length + " รายการ (ยังไม่รวม)" : ""}
+                        </div>
+                      );
+                    })}
+                    {checkPasteParsed.ambiguous.length > 0 && (
+                      <div style={{color:"#b45309",fontWeight:700}}>
+                        ⚠️ กำกวม เป็นทั้ง Supplier และ SKU: {checkPasteParsed.ambiguous.join(", ")} — ระบบยังไม่เพิ่มคำนี้
+                      </div>
+                    )}
+                    {!checkPasteParsed.suppliers.length && !checkPasteParsed.skus.length && !checkPasteParsed.terms.length && (
+                      <div style={{color:"#b91c1c"}}>⚠️ ไม่พบข้อมูลที่นำไปสร้างรายการได้</div>
+                    )}
+                  </div>
+                )}
+                <button disabled={!checkPasteCandidateSkus.size}
+                  onClick={function(){
+                    setCheckSuppliers(function(prev){
+                      var n = new Set(prev);
+                      checkPasteParsed.suppliers.forEach(function(s){ n.add(s); });
+                      return n;
+                    });
+                    setCheckPicked(function(prev){
+                      var n = new Set(prev);
+                      checkPasteParsed.skus.forEach(function(sku){ n.add(sku); });
+                      checkPasteKeywordResult.forEach(function(r){ r.skus.forEach(function(sku){ n.add(sku); }); });
+                      return n;
+                    });
+                    setCheckExcluded(function(prev){
+                      var n = new Set(prev);
+                      checkPasteCandidateSkus.forEach(function(sku){ n.delete(sku); });
+                      return n;
+                    });
+                    setCheckKeyword(checkPasteParsed.terms.join("\n"));
+                  }}
+                  style={{padding:"11px 14px",borderRadius:10,border:"none",fontFamily:"inherit",fontWeight:700,fontSize:14,
+                          cursor:checkPasteCandidateSkus.size?"pointer":"not-allowed",
+                          background:checkPasteCandidateSkus.size?"#2563eb":"#e5e7eb",
+                          color:checkPasteCandidateSkus.size?"#fff":"#9ca3af"}}>
+                  {checkPasteCandidateSkus.size
+                    ? "➕ เพิ่มเข้ารายการ " + checkPasteCandidateSkus.size + " SKU"
+                    : "ยังไม่มีรายการที่เพิ่มได้"}
+                </button>
               </div>
             )}
             {checkMode === "supplier" && (
@@ -11988,4 +12122,3 @@ const FSCard = React.memo(function FSCard({ p, val, isSaved, isTouched, onSetQty
     </div>
   );
 });
-

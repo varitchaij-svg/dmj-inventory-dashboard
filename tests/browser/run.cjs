@@ -1102,6 +1102,49 @@ function startServer() {
     await page.close();
   }
 
+  // ── (จ2.9b) ปุ่มลอย 📤 — วางข้อความงานผสมชื่อสินค้า + Supplier แล้วตรวจผลก่อนเพิ่ม ──
+  // fixture: VAS001=แจกัน/ACME และ FLW002=BLOOM · "แจกัน" ซ้ำกับของ ACME ต้อง dedup เหลือ 2 SKU
+  // จุดนี้พิสูจน์ flow จริงที่เจ้าของได้รับจาก LINE: ไม่ต้องแยกสลับแท็บเอง และยังไม่ส่งอัตโนมัติ
+  {
+    const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=owner&tab=categories`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, 'owner', 'categories');
+      const fab = page.locator('div', { hasText: /^📤$/ }).first();
+      await fab.click({ timeout: 3000 });
+      await page.waitForTimeout(300);
+      await page.locator('button', { hasText: '📋 วางข้อความที่ได้รับ' }).first().click({ timeout: 2000 });
+      await page.waitForTimeout(150);
+      const paste = page.locator('textarea[placeholder*="@All ขอยอดสต๊อก"]').first();
+      await paste.fill('@All ขอยอดสต๊อก แจกัน ACME BLOOM ด้วยค่ะ');
+      await page.waitForTimeout(250);
+      const parsed = await page.locator('body').innerText();
+      const parsedOk = /Supplier:\s*ACME, BLOOM/.test(parsed)
+        && /แจกัน:\s*พบ\s*1\s*รายการ/.test(parsed)
+        && /เพิ่มเข้ารายการ\s*2\s*SKU/.test(parsed);
+
+      // ก่อนกดยืนยันต้องยังไม่มีรายการที่จะส่ง — parser เป็น preview ไม่ใช่ auto-add
+      const noAutoAdd = !/จะส่งไปนับ\s*2\s*รายการ/.test(parsed);
+      await page.locator('button', { hasText: /เพิ่มเข้ารายการ 2 SKU/ }).click({ timeout: 2000 });
+      await page.waitForTimeout(250);
+      const added = await page.locator('body').innerText();
+      const addedOk = /จะส่งไปนับ\s*2\s*รายการ/.test(added)
+        && added.includes('VAS001') && added.includes('FLW002')
+        && /ส่งขอเช็ค\s*2\s*รายการ/.test(added);
+
+      if (!navOk) { status = 'NAV_FAIL'; note = 'สลับไปแท็บสินค้า & สั่งไม่สำเร็จ'; }
+      else if (!parsedOk) { status = 'PARSE_FAIL'; note = `แยกชื่อ/Supplier หรือจำนวน candidate ไม่ตรง (${parsed.slice(0,180)})`; }
+      else if (!noAutoAdd) { status = 'AUTO_ADD_FAIL'; note = 'ข้อความถูกเพิ่มเข้ารายการเองก่อนผู้ใช้ยืนยัน'; }
+      else if (!addedOk) { status = 'ADD_FAIL'; note = `กดเพิ่มแล้ว union/dedup ไม่ได้ VAS001+FLW002 รวม 2 SKU (${added.slice(0,180)})`; }
+      else note = 'วางข้อความ → แยกชื่อแจกัน + Supplier ACME/BLOOM → preview ก่อนเพิ่ม → union/dedup 2 SKU ถูกต้อง';
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 160); }
+    await page.screenshot({ path: path.join(SHOTS, 'checksend__paste-mixed-request.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'ปุ่มลอยส่งคำขอเช็ค — วางข้อความชื่อ+Supplier', status, note });
+    await page.close();
+  }
+
   // ── (จ2.6a-reg) Add Product — staff ใช้ฟอร์มเดิม (Legacy) เสมอ แม้ registry เปิด ──
   // เจ้าของแก้ทิศ (ส.ค. 2026): ระบบทะเบียนเป็นโครงสร้างหลังบ้าน/แอดมิน ไม่ใช่ workflow ของพนักงาน
   //   → dispatcher เรนเดอร์ LegacyAddProductView เสมอ · พนักงานไม่ต้องเลือก/สร้าง Prefix/Family/

@@ -53,20 +53,36 @@ const F_THAIKEY = grab(UI, /function dmjThaiKey\(s\) \{[\s\S]*?\n\}/, 'dmjThaiKe
 // eslint-disable-next-line no-new-func
 const { dmjThaiKey } = new Function(F_THAIKEY + '\nreturn { dmjThaiKey };')();
 
+const F_TERM_MATCH = grab(
+  VMAIN,
+  /function matchStockCheckTerms\(text, base\) \{[\s\S]*?\n\}/,
+  'matchStockCheckTerms'
+);
+const { matchStockCheckTerms } = new Function(
+  'checkMatchTerms', 'dmjThaiKey', F_TERM_MATCH + '\nreturn { matchStockCheckTerms };'
+)(checkMatchTerms, dmjThaiKey);
+
+const F_PASTE = grab(
+  VMAIN,
+  /function parseStockCheckPaste\(text, base, supplierList\) \{[\s\S]*?\n\}/,
+  'parseStockCheckPaste'
+);
+const { parseStockCheckPaste } = new Function(F_PASTE + '\nreturn { parseStockCheckPaste };')();
+
 const CATEGORY_VIEW = grabFn(VMAIN, 'CategoryView');
 
-// ดึง "ตัวจับคู่จริง" ของ checkKeywordResult ออกมาเป็นฟังก์ชันเรียกตรงได้ — ไม่ copy ตรรกะ แค่ตัด
-// body ของ uM(() => {...}) ที่ปิดด้วย deps array ตัวเดิมมาห่อเป็นฟังก์ชันพารามิเตอร์ตัวแปรที่มันปิดไว้
-// (checkKeyword/checkBase) + inject checkMatchTerms/dmjThaiKey ที่มันเรียกจริง — วิธีเดียวกับที่
-// tests/mto-group.test.js ห่อฟังก์ชันจริงด้วย new Function ไม่ใช่พิมพ์ตรรกะใหม่
-const F_KEYWORD_BODY = grab(
+const F_PASTE_CANDIDATE_BODY = grab(
   CATEGORY_VIEW,
-  /const checkKeywordResult = uM\(\(\) => \{[\s\S]*?\n  \}, \[checkKeyword, checkBase\]\);/,
-  'checkKeywordResult'
-).replace(/^const checkKeywordResult = uM\(\(\) => \{/, '').replace(/\n  \}, \[checkKeyword, checkBase\]\);$/, '');
-const keywordMatchFn = new Function('checkKeyword', 'checkBase', 'checkMatchTerms', 'dmjThaiKey', F_KEYWORD_BODY);
+  /const checkPasteCandidateSkus = uM\(\(\) => \{[\s\S]*?\n  \}, \[checkPasteParsed, checkPasteKeywordResult, checkBase\]\);/,
+  'checkPasteCandidateSkus'
+).replace(/^const checkPasteCandidateSkus = uM\(\(\) => \{/, '')
+  .replace(/\n  \}, \[checkPasteParsed, checkPasteKeywordResult, checkBase\]\);$/, '');
+const pasteCandidateSkus = new Function(
+  'checkPasteParsed', 'checkPasteKeywordResult', 'checkBase', F_PASTE_CANDIDATE_BODY
+);
+
 function keywordMatch(checkKeyword, checkBase) {
-  return keywordMatchFn(checkKeyword, checkBase, checkMatchTerms, dmjThaiKey);
+  return matchStockCheckTerms(checkKeyword, checkBase);
 }
 
 // เดียวกับ F_KEYWORD_BODY — ห่อ body ของ checkCategoryChips/checkColorChips (Phase 3) เป็น
@@ -134,6 +150,51 @@ describe('checkMatchTerms — แยกข้อความค้นชื่�
 
   it('ไม่ lowercase/normalize ในตัวมันเอง (เก็บตัวสะกดเดิมไว้ให้ทั้งแสดงผลและจับคู่ที่จุดเรียก)', () => {
     expect(checkMatchTerms('ABC')).toEqual([['ABC']]);
+  });
+});
+
+describe('parseStockCheckPaste — วางข้อความงานแล้วแยก Supplier / SKU / ชื่อสินค้าอย่างปลอดภัย', () => {
+  const BASE = [
+    { sku: 'TB001', name: 'ทับทิมแดง', cat: 'ดอกไม้', vendor: 'K' },
+    { sku: 'ABC123', name: 'แจกันใส', cat: 'แจกันแก้ว', vendor: 'CA' },
+    { sku: 'BOTH1', name: 'สินค้ารหัสชนร้าน', cat: 'ดอกไม้', vendor: 'YG' },
+  ];
+  const SUPPLIERS = [{ name: 'K' }, { name: 'JX2513' }, { name: 'G1025' }, { name: 'YG' }, { name: 'CA' }, { name: 'BOTH1' }];
+
+  it('ข้อความตัวอย่างจริง → ตัดคำขอ/คำสุภาพ แล้วแยกชื่อสินค้า 1 คำ + Supplier 5 ร้าน', () => {
+    expect(parseStockCheckPaste('@All ขอยอด สต๊อก ทับทิม K JX2513 G1025 YG CA ด้วยค่ะ', BASE, SUPPLIERS)).toEqual({
+      suppliers: ['K', 'JX2513', 'G1025', 'YG', 'CA'],
+      skus: [],
+      terms: ['ทับทิม'],
+      ambiguous: [],
+    });
+  });
+
+  it('SKU จริงถูกแยกตรงตัว และคำหลายคำที่อยู่ติดกันยังเป็น term เดียว (AND) ไม่แตกจนกว้างเกิน', () => {
+    const got = parseStockCheckPaste('ขอยอด โบตั๋น ขาว ABC123, ซากุระ', BASE, SUPPLIERS);
+    expect(got.skus).toEqual(['ABC123']);
+    expect(got.terms).toEqual(['โบตั๋น ขาว', 'ซากุระ']);
+  });
+
+  it('token ที่เป็นทั้ง Supplier และ SKU จะถูกเตือน ambiguous และไม่ถูกเพิ่มฝั่งใดเอง', () => {
+    const got = parseStockCheckPaste('BOTH1', BASE, SUPPLIERS);
+    expect(got.ambiguous).toEqual(['BOTH1']);
+    expect(got.suppliers).toEqual([]);
+    expect(got.skus).toEqual([]);
+  });
+
+  it('ไม่เดารหัสคล้าย ๆ — ต้อง match Supplier/SKU แบบเต็มคำและไม่สนตัวพิมพ์ใหญ่เล็ก', () => {
+    const got = parseStockCheckPaste('k JX25130 ABC1234', BASE, SUPPLIERS);
+    expect(got.suppliers).toEqual(['K']);
+    expect(got.skus).toEqual([]);
+    expect(got.terms).toEqual(['JX25130 ABC1234']);
+  });
+
+  it('ข้อความผสมชื่อ+Supplier ใช้ union/dedup จริง — SKU ที่ซ้ำสองแหล่งนับครั้งเดียว', () => {
+    const parsed = parseStockCheckPaste('ขอยอด ทับทิม K CA', BASE, SUPPLIERS);
+    const matched = matchStockCheckTerms(parsed.terms.join('\n'), BASE);
+    // ทับทิม → TB001 และ Supplier K → TB001 ตัวเดียวกัน · CA → ABC123
+    expect([...pasteCandidateSkus(parsed, matched, BASE)]).toEqual(['TB001', 'ABC123']);
   });
 });
 
@@ -452,7 +513,8 @@ describe('Option B — แท็บ 🏭 ร้านค้า กับ 🔍/�
   });
 
   it('checkKeywordResult ใช้ multi-token AND-match แบบเดียวกับทั้งแอป (คอนเวนชันเดิม lesson ข้อ 10)', () => {
-    expect(CATEGORY_VIEW).toContain('lowerTokens.every(t => hay.includes(t))');
+    expect(F_TERM_MATCH).toContain('lowerTokens.every(t => hay.includes(t))');
+    expect(CATEGORY_VIEW).toContain('matchStockCheckTerms(checkKeyword, checkBase)');
   });
 
   it('บล็อกแท็บ 🏷️ หมวด เขียนเข้า checkPicked เท่านั้น ไม่แตะ checkSuppliers', () => {
@@ -487,6 +549,7 @@ describe('Reset state ตอนปิดโมดัล/ส่งสำเร็
     const fn = grab(CATEGORY_VIEW, /function resetCheckPicker\(\) \{[\s\S]*?\n  \}/, 'resetCheckPicker');
     expect(fn).toContain('setCheckMode("supplier");');
     expect(fn).toContain('setCheckKeyword("");');
+    expect(fn).toContain('setCheckPasteText("");');
     expect(fn).toContain('setCheckPicked(new Set());');
     expect(fn).toContain('setCheckExcluded(new Set());');
     expect(fn).toContain('setCheckShowAll(false);');
@@ -540,12 +603,33 @@ describe('ขอบเขต Phase 1-3 — dmjThaiKey + หมวด/สี ต�
     expect(UI).toContain('module.exports = { resetCatColorMap, catColor, CAT_COLORS, notiAgo, dmjThaiKey };');
   });
   it('views-main.jsx เรียกใช้ dmjThaiKey จริงใน checkKeywordResult (ไม่ใช่แค่มีแต่ไม่ได้ต่อสาย)', () => {
-    expect(CATEGORY_VIEW).toContain('dmjThaiKey(t)');
-    expect(CATEGORY_VIEW).toContain('dmjThaiKey((p.sku||"") + " " + (p.name||""))');
+    expect(F_TERM_MATCH).toContain('dmjThaiKey(t)');
+    expect(F_TERM_MATCH).toContain('dmjThaiKey((p.sku||"") + " " + (p.name||""))');
   });
   it('มีแท็บหมวด/สี (Phase 3) แล้วจริง', () => {
     expect(CATEGORY_VIEW).toContain('checkMode === "category"');
     expect(CATEGORY_VIEW).toContain('checkMode === "color"');
+  });
+});
+
+describe('ทางลัด 📋 วางข้อความ — additive เท่านั้น ไม่เปลี่ยน payload/flow เดิม', () => {
+  it('มีแท็บวางข้อความ พร้อม preview และต้องกดยืนยันก่อนเขียน selection จริง', () => {
+    const pasteBlock = CATEGORY_VIEW.slice(
+      CATEGORY_VIEW.indexOf('{checkMode === "paste" && ('),
+      CATEGORY_VIEW.indexOf('{checkMode === "supplier" && (')
+    );
+    expect(pasteBlock).toContain('checkPasteParsed.suppliers');
+    expect(pasteBlock).toContain('checkPasteKeywordResult.map');
+    expect(pasteBlock).toContain('เพิ่มเข้ารายการ');
+    expect(pasteBlock).toContain('setCheckSuppliers');
+    expect(pasteBlock).toContain('setCheckPicked');
+    expect(pasteBlock).toContain('กำกวม เป็นทั้ง Supplier และ SKU');
+  });
+
+  it('candidate ใช้ union ชุดเดิม: supplier ยัง derive ด้วย vendor||lastSupplier และคำค้นเข้า checkPicked', () => {
+    expect(CATEGORY_VIEW).toContain('if (sups.has(p.vendor || p.lastSupplier)) out.add(p.sku);');
+    expect(CATEGORY_VIEW).toContain('checkPasteKeywordResult.forEach(r => r.skus.forEach(sku => out.add(sku)));');
+    expect(VMAIN).toContain('suppliers: Array.from(checkSuppliers)');
   });
 });
 
