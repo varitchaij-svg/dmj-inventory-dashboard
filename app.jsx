@@ -1718,14 +1718,21 @@ function App() {
       const products = prev.products.map(p => {
         const patch = patchMap[String(p.sku || '').toUpperCase()];
         if (!patch) return p;
-        const qtyStore = patch.qtyStore != null ? (Number(patch.qtyStore) || 0) : p.qtyStore;
-        const qtyWH    = patch.qtyWH    != null ? (Number(patch.qtyWH)    || 0) : p.qtyWH;
-        if (p.qtyStore === qtyStore && p.qtyWH === qtyWH) return p;
+        const qtyStore = patch.qtyStore != null ? (Number(patch.qtyStore) || 0) : (Number(p.qtyStore) || 0);
+        const qtyWH    = patch.qtyWH    != null ? (Number(patch.qtyWH)    || 0) : (Number(p.qtyWH) || 0);
+        const frontStoreCheckedQty = patch.frontStoreCheckedQty !== undefined
+          ? (patch.frontStoreCheckedQty == null ? null : Number(patch.frontStoreCheckedQty))
+          : p.frontStoreCheckedQty;
+        const frontStoreCheckedAt = patch.frontStoreCheckedAt !== undefined
+          ? patch.frontStoreCheckedAt : p.frontStoreCheckedAt;
+        if (p.qtyStore === qtyStore && p.qtyWH === qtyWH &&
+            p.frontStoreCheckedQty === frontStoreCheckedQty && p.frontStoreCheckedAt === frontStoreCheckedAt) return p;
         changed = true;
         const total = qtyStore + qtyWH;
         const price = p.price || 0;
         return Object.assign({}, p, {
           qtyStore, qtyWH, warehouseQty: qtyWH,
+          frontStoreCheckedQty, frontStoreCheckedAt,
           qty:        total,
           qtyStatus:  total < 0 ? 'negative' : 'ok',
           isOversold: total < 0,
@@ -2692,12 +2699,12 @@ function App() {
                                                dmjRequestFocus ของกระดิ่งแจ้งเตือน)
                                                การ์ดธรรมดาส่ง view = undefined → ล้างคำขอค้างทิ้ง */
                                             onNav={(t, view) => { dmjRequestView(t, view); handleSetTab(t); }}/></ErrorBoundary>}
-        {activeTab === "overview"     && <ErrorBoundary key="overview"><OverviewView data={data} range={range} setRange={setRange} role={viewRole}/></ErrorBoundary>}
+        {activeTab === "overview"     && <ErrorBoundary key="overview"><OverviewView data={data} range={range} setRange={setRange} role={viewRole} patchProductQtys={patchProductQtys}/></ErrorBoundary>}
         {activeTab === "whhome"       && <ErrorBoundary key="whhome"><WarehouseHomeView data={data} onNav={handleSetTab}/></ErrorBoundary>}
         {activeTab === "categories"   && <ErrorBoundary key="categories"><CategoryView data={data} role={viewRole} onNav={handleSetTab}/></ErrorBoundary>}
-        {activeTab === "trends"       && <ErrorBoundary key="trends"><TrendsView data={data} role={viewRole}/></ErrorBoundary>}
-        {activeTab === "stock"        && <ErrorBoundary key="stock"><StockView data={data} role={viewRole}/></ErrorBoundary>}
-        {activeTab === "newproduct"   && <ErrorBoundary key="newproduct"><AddProductView data={data} role={viewRole} onAdded={fetchFromSheet}/></ErrorBoundary>}
+        {activeTab === "trends"       && <ErrorBoundary key="trends"><TrendsView data={data} role={viewRole} patchProductQtys={patchProductQtys}/></ErrorBoundary>}
+        {activeTab === "stock"        && <ErrorBoundary key="stock"><StockView data={data} role={viewRole} patchProductQtys={patchProductQtys}/></ErrorBoundary>}
+        {activeTab === "newproduct"   && <ErrorBoundary key="newproduct"><AddProductView data={data} role={viewRole} onAdded={fetchFromSheet} patchProductQtys={patchProductQtys}/></ErrorBoundary>}
         {activeTab === "storage"      && <ErrorBoundary key="storage"><StorageView data={data}/></ErrorBoundary>}
         {activeTab === "stockcount"   && <ErrorBoundary key="stockcount"><StockCountView data={data}
                                             checkRequest={activeCheckRequest}
@@ -2719,7 +2726,7 @@ function App() {
                                                 fetchFromSheet(); // reconcile เบื้องหลัง (รีเฟรช pendingChecks + ค่าจริง)
                                               } catch(e){ console.error("completeStockCheck:", e); setCheckSideStatus(reqId, 'wh', 'pending'); }
                                             }}/></ErrorBoundary>}
-        {activeTab === "frontstore"   && <ErrorBoundary key="frontstore"><FrontStoreView data={data} role={viewRole}
+        {activeTab === "frontstore"   && <ErrorBoundary key="frontstore"><FrontStoreView data={data} role={viewRole} patchProductQtys={patchProductQtys}
                                             checkRequest={activeCheckRequest}
                                             onCheckComplete={async function(reqId, counts){
                                               // อัปเดตจำนวนหน้าร้านของ SKU ที่เพิ่งนับเข้าเว็บทันที (ไม่ต้องรอ reload ทั้งก้อน)
