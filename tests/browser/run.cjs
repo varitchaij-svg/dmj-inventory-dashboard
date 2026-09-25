@@ -1550,6 +1550,76 @@ function startServer() {
     await page.close();
   }
 
+  // ── (จ2.10b) แก้จำนวนที่บันทึกแล้ว → ตัวเลขใหม่แทนของเดิมและ save จริง ──────────
+  // พนักงานแจ้งว่าแก้จำนวนไม่ได้: CalcPad เปิดมาพร้อมเลขเดิม แล้วเลขใหม่เคยต่อท้ายค่าเก่า
+  // ตรวจว่าเลขตัวแรกแทนยอดเก่า, + ยังคิดจากยอดเดิมได้, และ auto-save ส่ง qty ใหม่ (mock)
+  {
+    const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=warehouse&tab=stockcount`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, 'warehouse', 'stockcount');
+      await page.waitForTimeout(400);
+      if (!navOk) { status = 'NAV_FAIL'; note = 'ไปแท็บนับ stock คลังไม่สำเร็จ'; }
+      else {
+        await page.fill('input[placeholder*="SKU / ชื่อสินค้า"]', 'DEC003');
+        await page.waitForTimeout(350);
+        const card = page.locator('[data-pf-sku="DEC003"]');
+        const plus5 = card.locator('button', { hasText: /^\+5$/ });
+        if (!(await card.count())) { status = 'NO_CARD'; note = 'ค้นหา DEC003 แล้วไม่เห็นการ์ด'; }
+        else if (!(await plus5.count())) { status = 'NO_COUNT_BTN'; note = 'ไม่พบปุ่ม +5 บนการ์ด'; }
+        else {
+          // ตั้งเลขเดิมเป็น 5 และรอให้บันทึกเสร็จก่อนทดสอบแก้ไข
+          await plus5.click({ timeout: 2000 });
+          await page.waitForTimeout(4200);
+          const oldQty = card.locator('button').filter({ hasText: /^5$/ }).first();
+          if (!(await oldQty.count())) { status = 'INITIAL_SAVE_FAIL'; note = 'ตั้งจำนวน 5 แล้วไม่เห็นปุ่มจำนวนเดิม 5'; }
+          else {
+            await oldQty.click({ timeout: 2000 });
+            const modal = page.locator('div[style*="z-index: 9999"]');
+            if (!(await modal.count())) { status = 'CALC_OPEN_FAIL'; note = 'แตะจำนวนเดิมแล้วเครื่องคิดเลขไม่เปิด'; }
+            else {
+              // ใช้ +2 ก่อน: ต้องได้ 7 (ยังคำนวณต่อจากเลขเดิมได้ ไม่ถูกแทน)
+              await modal.locator('button').filter({ hasText: /^\+$/ }).click({ timeout: 2000 });
+              await modal.locator('button').filter({ hasText: /^2$/ }).click({ timeout: 2000 });
+              await modal.locator('button', { hasText: '✓ ใช้' }).click({ timeout: 2000 });
+              await page.waitForTimeout(4200);
+              const added = (await card.locator('button').filter({ hasText: /^7$/ }).count()) > 0
+                && await page.evaluate(() =>
+                  (window.__DMJ_STOCK_COUNT_WRITES || []).some(e => e.sku === 'DEC003' && Number(e.qty) === 7));
+              if (!added) { status = 'CALC_BASE_FAIL'; note = 'เปิดยอด 5 แล้วกด +2 ไม่ได้บันทึกเป็น 7'; }
+              else {
+                const qty7 = card.locator('button').filter({ hasText: /^7$/ }).first();
+                await qty7.click({ timeout: 2000 });
+                const editModal = page.locator('div[style*="z-index: 9999"]');
+                await editModal.locator('button').filter({ hasText: /^2$/ }).click({ timeout: 2000 });
+                await editModal.locator('button').filter({ hasText: /^3$/ }).click({ timeout: 2000 });
+                await editModal.locator('button', { hasText: '✓ ใช้' }).click({ timeout: 2000 });
+                await page.waitForTimeout(300);
+                const replaced = (await card.locator('button').filter({ hasText: /^23$/ }).count()) > 0;
+                if (!replaced) { status = 'APPEND_FAIL'; note = 'พิมพ์ 23 แล้วไม่แทนจำนวนเดิม'; }
+                else {
+                  await page.waitForTimeout(4200); // auto-save debounce + POST mock
+                  const saved = await page.evaluate(() =>
+                    (window.__DMJ_STOCK_COUNT_WRITES || []).some(e => e.sku === 'DEC003' && Number(e.qty) === 23));
+                  const msg = await card.innerText().catch(() => '');
+                  if (!saved) { status = 'SAVE_PAYLOAD_FAIL'; note = 'แก้เป็น 23 แล้ว แต่ไม่มี POST บันทึก qty=23'; }
+                  else if (!msg.includes('บันทึกแล้ว') || !msg.includes('23')) {
+                    status = 'SAVE_UI_FAIL'; note = `ส่ง qty=23 แล้ว แต่การ์ดยังไม่ยืนยันการบันทึก (${msg.slice(0,120)})`; }
+                  else note = 'ตั้ง 5 → +2 ได้ 7 → พิมพ์ 23 แทนยอดเดิม → auto-save ส่ง DEC003 qty=23 และการ์ดยืนยันแล้ว';
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'stockcount-edit-saved-quantity.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'นับคลัง — แก้จำนวนเดิมและบันทึกค่าใหม่ (warehouse)', status, note });
+    await page.close();
+  }
+
   // ── (จ2.11) Product-first — filter "ไม่มีตำแหน่ง" + "stock = 0" ─────────────────
   {
     const page = await browser.newPage({ viewport: { width: 420, height: 900 } });

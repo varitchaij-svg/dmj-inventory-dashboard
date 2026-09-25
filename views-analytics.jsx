@@ -4126,6 +4126,7 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
                       </button>
                       <input type="number" min="0" inputMode="numeric"
                         value={val != null ? val : ''}
+                        onFocus={function(e){ e.target.select(); }}
                         onChange={function(e){
                           const newVal = e.target.value===''?'':String(Math.max(0,parseInt(e.target.value)||0));
                           const ck = ctxKeyOf(selSupplier, selLockKey);
@@ -8118,12 +8119,15 @@ function CalcPadModal({ open, name, initialVal, onConfirm, onClose }) {
   const [expr, setExpr]     = uS('');
   const [result, setResult] = uS(null);
   const [justOp, setJustOp] = uS(false);
+  const [replaceOnNextDigit, setReplaceOnNextDigit] = uS(false);
 
   // Reset when opened
   uE(() => {
     if (open) {
       const init = (initialVal != null && initialVal !== '') ? String(initialVal) : '';
       setExpr(init); setResult(null); setJustOp(false);
+      // ถ้าเปิดมาพร้อมเลขเดิม เลขตัวแรกแทนค่าเดิมทั้งก้อน; กดเครื่องหมายก่อนเพื่อคำนวณต่อได้
+      setReplaceOnNextDigit(init !== '');
     }
   }, [open, initialVal]);
 
@@ -8154,13 +8158,15 @@ function CalcPadModal({ open, name, initialVal, onConfirm, onClose }) {
     if (key === 'DEL') {
       if (result !== null) { setExpr(String(result)); setResult(null); setJustOp(false); }
       else { setExpr(p => p.length > 1 ? p.slice(0,-1) : ''); setJustOp(false); }
+      setReplaceOnNextDigit(false);
       return;
     }
-    if (key === 'C') { setExpr(''); setResult(null); setJustOp(false); return; }
+    if (key === 'C') { setExpr(''); setResult(null); setJustOp(false); setReplaceOnNextDigit(false); return; }
     if (key === '=') {
       const base = result !== null ? String(result) : expr;
       const v = evalExpr(base);
       if (v !== null) { setResult(v); setJustOp(false); }
+      setReplaceOnNextDigit(false);
       return;
     }
     const isOp = ['+','-','*','/'].includes(key);
@@ -8168,10 +8174,13 @@ function CalcPadModal({ open, name, initialVal, onConfirm, onClose }) {
       const base = result !== null ? String(result) : expr;
       setExpr(base.replace(/[+\-*\/]$/, '') + key);
       setResult(null); setJustOp(true);
+      setReplaceOnNextDigit(false);
       return;
     }
     // digit / dot
-    if (result !== null && !justOp) { setExpr(key); setResult(null); setJustOp(false); }
+    if ((result !== null && !justOp) || replaceOnNextDigit) {
+      setExpr(key); setResult(null); setJustOp(false); setReplaceOnNextDigit(false);
+    }
     else { setExpr(p => p.length >= 16 ? p : p + key); setResult(null); setJustOp(false); }
   };
 
@@ -8211,6 +8220,11 @@ function CalcPadModal({ open, name, initialVal, onConfirm, onClose }) {
                      textAlign:'center',marginBottom:10,
                      overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>
           🧮 {name || ''}
+        </div>
+        <div style={{fontSize:11,color:'var(--muted)',textAlign:'center',marginBottom:10}}>
+          {initialVal != null && initialVal !== ''
+            ? 'พิมพ์เลขใหม่เพื่อแทนค่าเดิม · ใช้ +/− เพื่อคำนวณต่อ'
+            : 'กรอกจำนวนที่นับได้'}
         </div>
         <div style={{background:'#0f172a',borderRadius:14,padding:'12px 18px 8px',
                      marginBottom:12,minHeight:76,
