@@ -1102,6 +1102,49 @@ function startServer() {
     await page.close();
   }
 
+  // ── (จ2.9b) ปุ่มลอย 📤 — วางข้อความงานผสมชื่อสินค้า + Supplier แล้วตรวจผลก่อนเพิ่ม ──
+  // fixture: VAS001=แจกัน/ACME และ FLW002=BLOOM · "แจกัน" ซ้ำกับของ ACME ต้อง dedup เหลือ 2 SKU
+  // จุดนี้พิสูจน์ flow จริงที่เจ้าของได้รับจาก LINE: ไม่ต้องแยกสลับแท็บเอง และยังไม่ส่งอัตโนมัติ
+  {
+    const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=owner&tab=categories`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, 'owner', 'categories');
+      const fab = page.locator('div', { hasText: /^📤$/ }).first();
+      await fab.click({ timeout: 3000 });
+      await page.waitForTimeout(300);
+      await page.locator('button', { hasText: '📋 วางข้อความที่ได้รับ' }).first().click({ timeout: 2000 });
+      await page.waitForTimeout(150);
+      const paste = page.locator('textarea[placeholder*="@All ขอยอดสต๊อก"]').first();
+      await paste.fill('@All ขอยอดสต๊อก แจกัน ACME BLOOM ด้วยค่ะ');
+      await page.waitForTimeout(250);
+      const parsed = await page.locator('body').innerText();
+      const parsedOk = /Supplier:\s*ACME, BLOOM/.test(parsed)
+        && /แจกัน:\s*พบ\s*1\s*รายการ/.test(parsed)
+        && /เพิ่มเข้ารายการ\s*2\s*SKU/.test(parsed);
+
+      // ก่อนกดยืนยันต้องยังไม่มีรายการที่จะส่ง — parser เป็น preview ไม่ใช่ auto-add
+      const noAutoAdd = !/จะส่งไปนับ\s*2\s*รายการ/.test(parsed);
+      await page.locator('button', { hasText: /เพิ่มเข้ารายการ 2 SKU/ }).click({ timeout: 2000 });
+      await page.waitForTimeout(250);
+      const added = await page.locator('body').innerText();
+      const addedOk = /จะส่งไปนับ\s*2\s*รายการ/.test(added)
+        && added.includes('VAS001') && added.includes('FLW002')
+        && /ส่งขอเช็ค\s*2\s*รายการ/.test(added);
+
+      if (!navOk) { status = 'NAV_FAIL'; note = 'สลับไปแท็บสินค้า & สั่งไม่สำเร็จ'; }
+      else if (!parsedOk) { status = 'PARSE_FAIL'; note = `แยกชื่อ/Supplier หรือจำนวน candidate ไม่ตรง (${parsed.slice(0,180)})`; }
+      else if (!noAutoAdd) { status = 'AUTO_ADD_FAIL'; note = 'ข้อความถูกเพิ่มเข้ารายการเองก่อนผู้ใช้ยืนยัน'; }
+      else if (!addedOk) { status = 'ADD_FAIL'; note = `กดเพิ่มแล้ว union/dedup ไม่ได้ VAS001+FLW002 รวม 2 SKU (${added.slice(0,180)})`; }
+      else note = 'วางข้อความ → แยกชื่อแจกัน + Supplier ACME/BLOOM → preview ก่อนเพิ่ม → union/dedup 2 SKU ถูกต้อง';
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 160); }
+    await page.screenshot({ path: path.join(SHOTS, 'checksend__paste-mixed-request.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'ปุ่มลอยส่งคำขอเช็ค — วางข้อความชื่อ+Supplier', status, note });
+    await page.close();
+  }
+
   // ── (จ2.6a-reg) Add Product — staff ใช้ฟอร์มเดิม (Legacy) เสมอ แม้ registry เปิด ──
   // เจ้าของแก้ทิศ (ส.ค. 2026): ระบบทะเบียนเป็นโครงสร้างหลังบ้าน/แอดมิน ไม่ใช่ workflow ของพนักงาน
   //   → dispatcher เรนเดอร์ LegacyAddProductView เสมอ · พนักงานไม่ต้องเลือก/สร้าง Prefix/Family/
@@ -1504,6 +1547,76 @@ function startServer() {
     } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
     await page.screenshot({ path: path.join(SHOTS, 'stockcount-product-zero.png') }).catch(() => {});
     results.push({ role: 'interact', tab: 'Product-first — qty=0 save ได้ (warehouse)', status, note });
+    await page.close();
+  }
+
+  // ── (จ2.10b) แก้จำนวนที่บันทึกแล้ว → ตัวเลขใหม่แทนของเดิมและ save จริง ──────────
+  // พนักงานแจ้งว่าแก้จำนวนไม่ได้: CalcPad เปิดมาพร้อมเลขเดิม แล้วเลขใหม่เคยต่อท้ายค่าเก่า
+  // ตรวจว่าเลขตัวแรกแทนยอดเก่า, + ยังคิดจากยอดเดิมได้, และ auto-save ส่ง qty ใหม่ (mock)
+  {
+    const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
+    let status = 'ok', note = '';
+    try {
+      await page.goto(`${base}?role=warehouse&tab=stockcount`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      const navOk = await navigateTo(page, 'warehouse', 'stockcount');
+      await page.waitForTimeout(400);
+      if (!navOk) { status = 'NAV_FAIL'; note = 'ไปแท็บนับ stock คลังไม่สำเร็จ'; }
+      else {
+        await page.fill('input[placeholder*="SKU / ชื่อสินค้า"]', 'DEC003');
+        await page.waitForTimeout(350);
+        const card = page.locator('[data-pf-sku="DEC003"]');
+        const plus5 = card.locator('button', { hasText: /^\+5$/ });
+        if (!(await card.count())) { status = 'NO_CARD'; note = 'ค้นหา DEC003 แล้วไม่เห็นการ์ด'; }
+        else if (!(await plus5.count())) { status = 'NO_COUNT_BTN'; note = 'ไม่พบปุ่ม +5 บนการ์ด'; }
+        else {
+          // ตั้งเลขเดิมเป็น 5 และรอให้บันทึกเสร็จก่อนทดสอบแก้ไข
+          await plus5.click({ timeout: 2000 });
+          await page.waitForTimeout(4200);
+          const oldQty = card.locator('button').filter({ hasText: /^5$/ }).first();
+          if (!(await oldQty.count())) { status = 'INITIAL_SAVE_FAIL'; note = 'ตั้งจำนวน 5 แล้วไม่เห็นปุ่มจำนวนเดิม 5'; }
+          else {
+            await oldQty.click({ timeout: 2000 });
+            const modal = page.locator('div[style*="z-index: 9999"]');
+            if (!(await modal.count())) { status = 'CALC_OPEN_FAIL'; note = 'แตะจำนวนเดิมแล้วเครื่องคิดเลขไม่เปิด'; }
+            else {
+              // ใช้ +2 ก่อน: ต้องได้ 7 (ยังคำนวณต่อจากเลขเดิมได้ ไม่ถูกแทน)
+              await modal.locator('button').filter({ hasText: /^\+$/ }).click({ timeout: 2000 });
+              await modal.locator('button').filter({ hasText: /^2$/ }).click({ timeout: 2000 });
+              await modal.locator('button', { hasText: '✓ ใช้' }).click({ timeout: 2000 });
+              await page.waitForTimeout(4200);
+              const added = (await card.locator('button').filter({ hasText: /^7$/ }).count()) > 0
+                && await page.evaluate(() =>
+                  (window.__DMJ_STOCK_COUNT_WRITES || []).some(e => e.sku === 'DEC003' && Number(e.qty) === 7));
+              if (!added) { status = 'CALC_BASE_FAIL'; note = 'เปิดยอด 5 แล้วกด +2 ไม่ได้บันทึกเป็น 7'; }
+              else {
+                const qty7 = card.locator('button').filter({ hasText: /^7$/ }).first();
+                await qty7.click({ timeout: 2000 });
+                const editModal = page.locator('div[style*="z-index: 9999"]');
+                await editModal.locator('button').filter({ hasText: /^2$/ }).click({ timeout: 2000 });
+                await editModal.locator('button').filter({ hasText: /^3$/ }).click({ timeout: 2000 });
+                await editModal.locator('button', { hasText: '✓ ใช้' }).click({ timeout: 2000 });
+                await page.waitForTimeout(300);
+                const replaced = (await card.locator('button').filter({ hasText: /^23$/ }).count()) > 0;
+                if (!replaced) { status = 'APPEND_FAIL'; note = 'พิมพ์ 23 แล้วไม่แทนจำนวนเดิม'; }
+                else {
+                  await page.waitForTimeout(4200); // auto-save debounce + POST mock
+                  const saved = await page.evaluate(() =>
+                    (window.__DMJ_STOCK_COUNT_WRITES || []).some(e => e.sku === 'DEC003' && Number(e.qty) === 23));
+                  const msg = await card.innerText().catch(() => '');
+                  if (!saved) { status = 'SAVE_PAYLOAD_FAIL'; note = 'แก้เป็น 23 แล้ว แต่ไม่มี POST บันทึก qty=23'; }
+                  else if (!msg.includes('บันทึกแล้ว') || !msg.includes('23')) {
+                    status = 'SAVE_UI_FAIL'; note = `ส่ง qty=23 แล้ว แต่การ์ดยังไม่ยืนยันการบันทึก (${msg.slice(0,120)})`; }
+                  else note = 'ตั้ง 5 → +2 ได้ 7 → พิมพ์ 23 แทนยอดเดิม → auto-save ส่ง DEC003 qty=23 และการ์ดยืนยันแล้ว';
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
+    await page.screenshot({ path: path.join(SHOTS, 'stockcount-edit-saved-quantity.png') }).catch(() => {});
+    results.push({ role: 'interact', tab: 'นับคลัง — แก้จำนวนเดิมและบันทึกค่าใหม่ (warehouse)', status, note });
     await page.close();
   }
 
