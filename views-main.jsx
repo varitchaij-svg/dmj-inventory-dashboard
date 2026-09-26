@@ -1597,7 +1597,7 @@ function IntakePdfModal({ purchases, prodBySku, onClose, labelMode }) {
   );
 }
 
-function OverviewView({ data, range, setRange, role }) {
+function OverviewView({ data, range, setRange, role, patchProductQtys }) {
   const rechartsReady = useRechartsReady(); // gate กราฟจนกว่า Recharts (defer) จะพร้อม
   // ⚠️ default `monthlyByCat`/`dailyByCat` เป็น {} — snapshot ที่ถูก trimForStorage_ ตัด (โควตา
   // localStorage แน่นบนมือถือ) คง `monthLabels` ไว้แต่ตัดสองคีย์นี้ทิ้ง · ก้อน boot ก็ไม่มีทั้งคู่
@@ -3359,7 +3359,7 @@ function OverviewView({ data, range, setRange, role }) {
         </Card>
       )}
 
-      {overviewModalP && <ProductModal p={overviewModalP} onClose={() => setOverviewModalP(null)} allCats={allCats}/>}
+      {overviewModalP && <ProductModal p={overviewModalP} onClose={() => setOverviewModalP(null)} allCats={allCats} patchProductQtys={patchProductQtys}/>}
       {intakePdfOpen && <IntakePdfModal purchases={(data && data.purchases) || []} prodBySku={prodBySku} onClose={() => setIntakePdfOpen(false)}/>}
       {exportProgress && <ExportProgressOverlay {...exportProgress}/>}
       {exportReady && (
@@ -5743,8 +5743,14 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
       setFsSaving(true);
       const res = await syncFrontStoreData([{ sku: product.sku, qty: n }]);
       setFsSaving(false);
+      patchFrontStoreProductFromResult_(patchProductQtys, res, product.sku);
       if (res && res.success === false) {
         fsErrRef.current = res.error || "";
+        setFsSaveFailed(true);
+        return false;
+      }
+      if (res && res.data && (res.data.zortSynced === false || res.data.stockUpdated === false)) {
+        fsErrRef.current = res.data.warning || "บันทึกผลนับแล้ว แต่ยอดหน้าร้านยังไม่ครบ — ตรวจสถานะก่อน";
         setFsSaveFailed(true);
         return false;
       }
@@ -5775,7 +5781,9 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
       const p = (fsInflightRef.current || Promise.resolve()).catch(() => {});
       p.then(() => {
         if (fsSavedRef.current === f.qty) return;   // คิวก่อนหน้าบันทึกให้แล้ว
-        syncFrontStoreData([{ sku: f.sku, qty: f.qty }]);
+        syncFrontStoreData([{ sku: f.sku, qty: f.qty }])
+          .then(res => patchFrontStoreProductFromResult_(patchProductQtys, res, f.sku))
+          .catch(() => {});
       });
     }
   }, []);
@@ -6587,7 +6595,7 @@ function StatusBadge({ p, filter }) {
   return null;
 }
 
-function StockView({ data, role }) {
+function StockView({ data, role, patchProductQtys }) {
   const { products, thresholds: dataThresholds } = data;
   // จำนวนเดือนเต็มที่ระบบมีข้อมูลขาย — ใช้เป็นตัวหารตอน fallback (ดู avgMonthly ด้านล่าง)
   // อย่างน้อย 1 กันหารศูนย์ตอนเพิ่งเริ่มใช้ระบบ
@@ -7084,7 +7092,7 @@ function StockView({ data, role }) {
         </div>
       )}
 
-      {modalP && <ProductModal p={modalP} onClose={() => setModalP(null)} allCats={allCats}/>}
+      {modalP && <ProductModal p={modalP} onClose={() => setModalP(null)} allCats={allCats} patchProductQtys={patchProductQtys}/>}
       {orderProduct && <OrderModal product={orderProduct} onClose={() => setOrderProduct(null)}
                                     role={role}
                                     defaultQty={orderProduct.suggestedQty}/>}
@@ -7095,7 +7103,7 @@ function StockView({ data, role }) {
 // ─────────────────────────────────────────────────────────────────────
 // TRENDS — สินค้าเสี่ยงหาย / ใหม่น่าจับตา / มาแรง / ไม่ขายเลย
 // ─────────────────────────────────────────────────────────────────────
-function TrendsView({ data }) {
+function TrendsView({ data, patchProductQtys }) {
   const { products } = data;
   // จำนวนเดือนเต็มที่มีข้อมูล — ใช้เขียนคำอธิบายให้ตรงความจริง
   // (เดิมเขียนตายตัวว่า "ตลอด 5 เดือน" ตั้งแต่ตอนข้อมูลยังมีแค่ 5 เดือน ตอนนี้ยาวกว่านั้นมาก)
@@ -7325,13 +7333,13 @@ function TrendsView({ data }) {
         </div>
       )}
 
-      {modalP && <ProductModal p={modalP} onClose={() => setModalP(null)} allCats={allCats}/>}
+      {modalP && <ProductModal p={modalP} onClose={() => setModalP(null)} allCats={allCats} patchProductQtys={patchProductQtys}/>}
     </div>
   );
 }
 
 // ────────────── Product detail modal ──────────────
-function ProductModal({ p, onClose, allCats }) {
+function ProductModal({ p, onClose, allCats, patchProductQtys }) {
   useBackHandler(onClose); // Android back = ปิด product detail modal
   const hasImg = !!p.imageUrl;
   return (
@@ -9880,6 +9888,26 @@ async function syncFrontStoreData(entries) {
   } catch (err) { return { success: false, error: dmjErrText(err) }; }
 }
 
+// Patch only values confirmed by updateFrontStore. A failed ZORT write updates
+// the check record but must not make the app claim that available stock changed.
+function patchFrontStoreProductFromResult_(patchProductQtys, result, sku) {
+  if (typeof patchProductQtys !== "function" || !result || result.success === false ||
+      !result.data || !Array.isArray(result.data.items)) return false;
+  const skuUpper = String(sku || "").trim().toUpperCase();
+  if (!skuUpper) return false;
+  const item = result.data.items.find(function(x) {
+    return x && String(x.sku || "").trim().toUpperCase() === skuUpper;
+  });
+  if (!item || item.qty == null || !Number.isFinite(Number(item.qty))) return false;
+  const patch = {
+    frontStoreCheckedQty: Number(item.qty),
+    frontStoreCheckedAt: item.at || null,
+  };
+  if (item.stockUpdated === true) patch.qtyStore = Number(item.qty);
+  patchProductQtys({ [skuUpper]: patch });
+  return true;
+}
+
 // ─── ล้างค่านับหน้าร้านเก่าที่ไม่ตรงกับระบบ (ไม่แตะสต็อก/ZORT) ───
 async function syncClearFrontStoreChecks(skus) {
   if (!SHEET_DEPLOY_URL) { console.warn("SHEET_DEPLOY_URL not set"); return { success: false, error: "ไม่พบ URL" }; }
@@ -10215,7 +10243,7 @@ function RegistryAdminPanel({ reg, onChanged, showToast, onClose }) {
 }
 
 // ── RegistryAddProduct — ฟอร์มเพิ่มสินค้าใหม่ 2 เส้นทาง (Track 1 แบบใหม่ · Track 2 สีใหม่) ──
-function RegistryAddProduct({ data, reg, onAdded, showToast, reloadRegistries }) {
+function RegistryAddProduct({ data, reg, onAdded, showToast, reloadRegistries, patchProductQtys }) {
   const products = data.products || [];
   const isAdmin = !!(reg.me && reg.me.admin);
   const [showAdmin, setShowAdmin] = uS(false);
@@ -10398,7 +10426,7 @@ function RegistryAddProduct({ data, reg, onAdded, showToast, reloadRegistries })
         ))}
       </div>
 
-      {topMode === "buy" && <PurchaseInPanel data={data} showToast={showToast} onDone={onAdded} />}
+      {topMode === "buy" && <PurchaseInPanel data={data} showToast={showToast} onDone={onAdded} patchProductQtys={patchProductQtys} />}
 
       {topMode === "add" && isAdmin && (
         <button type="button" onClick={() => setShowAdmin(s => !s)}
@@ -10651,14 +10679,14 @@ function RegistryAddProduct({ data, reg, onAdded, showToast, reloadRegistries })
 //    ไม่ต้องกดจองแบบ · handler/ชีต/variant master ฝั่ง .gs ยังอยู่ครบ ทำงานเงียบ ๆ ได้
 //    (RegistryAddProduct/RegistryAdminPanel คงไว้ในซอร์สแบบ dormant เผื่อทำหน้าแอดมินแยกภายหลัง —
 //     ห้ามนำกลับมาเป็นเส้นทางของพนักงานโดยไม่มีการตัดสินใจใหม่จากเจ้าของ)
-function AddProductView({ data, role, onAdded }) {
-  return <LegacyAddProductView data={data} role={role} onAdded={onAdded} />;
+function AddProductView({ data, role, onAdded, patchProductQtys }) {
+  return <LegacyAddProductView data={data} role={role} onAdded={onAdded} patchProductQtys={patchProductQtys} />;
 }
 
 // ─── LegacyAddProductView — ฟอร์มเพิ่มสินค้าใหม่ (client-side SKU builder เดิม) ───
 // ✅ เส้นทางของพนักงานเสมอ — `AddProductView` ด้านบนเรนเดอร์ตัวนี้ทุกกรณี
 //    (ระบบทะเบียน/reserveForm เป็นโครงสร้างหลังบ้าน ไม่แทนที่ฟอร์มนี้)
-function LegacyAddProductView({ data, role, onAdded }) {
+function LegacyAddProductView({ data, role, onAdded, patchProductQtys }) {
   const products = data.products || [];
   const [toast, showToast, hideToast] = useToast();
   const [topMode, setTopMode] = uS("add");   // "add"=เพิ่มสินค้าใหม่ · "buy"=ซื้อเข้า/เติมสต็อก
@@ -10975,7 +11003,7 @@ function LegacyAddProductView({ data, role, onAdded }) {
         </div>
 
         {topMode === "buy" && (
-          <PurchaseInPanel data={data} showToast={showToast} onDone={onAdded} />
+          <PurchaseInPanel data={data} showToast={showToast} onDone={onAdded} patchProductQtys={patchProductQtys} />
         )}
 
         {topMode === "add" && (
@@ -11436,7 +11464,7 @@ function LegacyAddProductView({ data, role, onAdded }) {
 
 // ─── PurchaseInPanel — ซื้อสินค้าเข้า/เติมสต็อก (สร้าง PO จริงใน ZORT) ───
 // ค้นหาสินค้าที่มีอยู่ → ใส่ลงตะกร้า (จำนวน+ราคาต่อหน่วย) → เลือกซัพพลายเออร์+คลัง+วันที่ → บันทึก
-function PurchaseInPanel({ data, showToast, onDone }) {
+function PurchaseInPanel({ data, showToast, onDone, patchProductQtys }) {
   const products = data.products || [];
   const [search, setSearch]     = uS("");
   const [cart, setCart]         = uS([]);   // [{ sku, name, qty, unitPrice }]
@@ -11827,7 +11855,7 @@ function PurchaseInPanel({ data, showToast, onDone }) {
           บันทึกแล้วจะสร้างใบสั่งซื้อใน ZORT + เพิ่มสต็อกเข้าคลังทันที
         </div>
       </div>
-      {modalP && <ProductModal p={modalP} onClose={() => setModalP(null)} />}
+      {modalP && <ProductModal p={modalP} onClose={() => setModalP(null)} patchProductQtys={patchProductQtys} />}
     </Card>
   );
 }
