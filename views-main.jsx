@@ -5739,6 +5739,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
   //    execution ที่ซ้อนกันด้วย **หน้า HTML** (ไม่ใช่ JSON) = ต้นตอ "Unexpected token '<'"
   //    ที่พนักงานเจอ · คิวเดียวจบ ทั้งเร็วกว่าและไม่ต้องแย่ง lock
   const saveFsQty = (n) => {
+    if (isTrainingSafeMode()) return Promise.resolve(false);
     const run = async () => {
       if (fsSavedRef.current === n) return true;   // มีคนบันทึกค่านี้ไปแล้วระหว่างรอคิว
       setFsSaving(true);
@@ -5761,6 +5762,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
 
   uE(() => {
     // fsSaveFailed = หยุด auto-retry (กันยิงรัวตอนเน็ตหลุด) — แก้เลขใหม่/กดสั่ง ค่อยลองอีกที
+    if (isTrainingSafeMode()) return;
     if (!fsDirty || fsSaving || loading || fsSaveFailed) return;
     const t = setTimeout(() => { saveFsQty(fsQtyNum); }, 2000);
     return () => clearTimeout(t);
@@ -5768,11 +5770,13 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
 
   // ปิด modal ก่อน debounce ครบ → ยิงบันทึกทิ้งไว้ (fire-and-forget) ไม่ให้ยอดที่นับหาย
   const fsFlushRef = React.useRef({});
-  fsFlushRef.current = { sku: product.sku, qty: fsQtyNum, saved: fsSavedQty, dirty: fsDirty };
+  fsFlushRef.current = { sku: product.sku, qty: fsQtyNum, saved: fsSavedQty, dirty: fsDirty, trainingSafe: isTrainingSafeMode() };
   uE(() => () => {
     const f = fsFlushRef.current;
+    if (f.trainingSafe) return;
     // เช็คกับ ref ไม่ใช่ state — กันยิงซ้ำกับงานที่เพิ่งบันทึกค่าเดียวกันไปแล้ว
     if (f.dirty && f.qty != null && fsSavedRef.current !== f.qty) {
+      if (isTrainingSafeMode()) return;
       const p = (fsInflightRef.current || Promise.resolve()).catch(() => {});
       p.then(() => {
         if (fsSavedRef.current === f.qty) return;   // คิวก่อนหน้าบันทึกให้แล้ว
@@ -5928,6 +5932,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
 
   // คลังหมด → สั่งไม่ได้ แต่ยังนับหน้าร้านได้ (auto-save ยิงเองอยู่แล้ว ปุ่มนี้คือบันทึกทันทีแล้วปิด)
   const handleSaveAndClose = async () => {
+    if (isTrainingSafeMode()) return;
     if (!fsDirty) { onClose(); return; }
     setLoading(true); setErr(null);
     const ok = await saveFsQty(fsQtyNum);
@@ -5937,6 +5942,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
   };
 
   const handleSubmit = async (skipFsSave) => {
+    if (isTrainingSafeMode()) return;
     if (outOfStock) return;
     if (!sheetUrl) { setErr('ไม่พบ GOOGLE_SHEET_URL'); return; }
     if (qty < 1) { setErr('กรุณาระบุจำนวน'); return; }

@@ -114,7 +114,43 @@ function tabText(tab) { const { emoji, name } = splitTabLabel(tab.label); return
 
 // รายการบทฝึกตามสิทธิ์ที่มีอยู่จริงใน ROLE_TABS — เปิดให้จากหน้าหลักของแต่ละตำแหน่ง
 const TRAINING_COURSES = {
-  frontstore: { title:"หน้าร้าน", desc:"พาไปกดหน้าสั่งสินค้าจริงทีละจุด · ต้นแบบฝึกปลอดภัย" },
+  frontstore: [
+    { id:"frontstore_order", title:"หน้าร้าน · สั่งสินค้า", desc:"ค้นสินค้า → เลือกจำนวน → ส่งคำขอให้คลัง" },
+    { id:"frontstore_receive", title:"หน้าร้าน · รับของ", desc:"ดูใบโอน → เทียบจำนวน → จุดยืนยันรับ" },
+  ],
+  warehouse: [{ id:"warehouse", title:"คลัง · จัดและส่ง", desc:"ดูคำขอ → จัดสินค้า → ส่งให้หน้าร้าน" }],
+  owner: [{ id:"owner", title:"เจ้าของ · ติดตาม", desc:"ดูสถานะตั้งแต่สั่งจนรับครบหรือรับไม่ครบ" }],
+};
+
+const TRAINING_STEPS = {
+  frontstore_order: [
+    {tab:"categories",target:"product-search",title:"ค้นหาสินค้าที่ต้องการ",body:"ลองพิมพ์ SKU หรือชื่อสินค้าในช่องค้นหาจริง แล้วตรวจชื่อและรหัสให้ตรง",action:"search"},
+    {tab:"categories",target:"product-order",title:"เปิดหน้าสั่งของสินค้านั้น",body:"ลองกด «สั่งไปขาย» บนการ์ดที่ตรวจรหัสแล้ว ระบบจะเปิดใบสั่งจริง",action:"click"},
+    {tab:"categories",target:"order-fs-count",title:"ตรวจยอดหน้าร้าน",body:"ดูตำแหน่งช่องนับยอดก่อนสั่ง · ขั้นนี้ดูอย่างเดียว เพราะตัวเลขบันทึกอัตโนมัติหลัง 2 วินาที",action:"next"},
+    {tab:"categories",target:"order-quick-qty",title:"เลือกจำนวนที่ต้องการ",body:"ลองกดปุ่มจำนวนจริง การเลือกยังไม่ส่งคำขอ",action:"click"},
+    {tab:"categories",target:"order-type",title:"เลือกวิธีรับสินค้า",body:"ลองกด «หิ้ว» หรือ «รอขึ้นรถ» การเลือกยังไม่บันทึกคำขอ",action:"click"},
+    {tab:"categories",target:"order-submit",title:"ตรวจจุดยืนยันคำขอ",body:"ดูปุ่มยืนยันอย่างเดียว · เมื่อกดในงานจริง คลังจะเห็นคำขอใน «รายการสั่งของ» สถานะ «รอ» แล้วจัดสินค้า บทฝึกจบโดยไม่ส่งคำขอ",action:"finish"},
+  ],
+  warehouse: [
+    {tab:"orders",target:"orders-pending-filter",title:"เปิดคิวที่รอจัด",body:"ลองกดตัวกรอง «รอ» คลังจะเห็นใบที่หน้าร้านส่งคำขอจริงไว้ที่นี่",action:"click"},
+    {tab:"orders",target:"warehouse-order-row",title:"ตรวจใบสั่ง",body:"ดู SKU ชื่อสินค้า จำนวนที่สั่ง และผู้สั่งบนใบจริง · ขั้นนี้ดูอย่างเดียว",action:"next"},
+    {tab:"orders",target:"warehouse-prep-qty",title:"จำนวนที่จัดได้",body:"ดูช่อง «จัด» · กรอกหรือออกจากช่องนี้ในงานจริงจะบันทึกจำนวน บทฝึกจึงไม่ให้แก้เลข",action:"next"},
+    {tab:"orders",target:"warehouse-print-flag",title:"เลือก PRINT หรือ SKIP",body:"ดูปุ่ม QR/PRINT/SKIP · การกดเปลี่ยนสถานะในชีตจริง ขั้นนี้ดูอย่างเดียว",action:"next"},
+    {tab:"orders",target:"warehouse-done",title:"ปิดงานจัด",body:"ดูปุ่ม Done · งานจริงต้องเลือก PRINT/SKIP ก่อน แล้วกดเพื่อส่งงานไปหน้า «สรุปสินค้าออกจากคลัง» ขั้นนี้ไม่บันทึก",action:"next"},
+    {tab:"ordersummary",target:"warehouse-ready-list",title:"ตรวจของที่จัดเสร็จ",body:"เมื่อกด Done จริง ใบจะมาอยู่หน้านี้ คลังตรวจจำนวนและป้ายก่อนส่ง · ขั้นนี้ดูอย่างเดียว",action:"next"},
+    {tab:"ordersummary",target:"warehouse-ship",title:"จุดส่งออกจากคลัง",body:"ดูปุ่มส่ง · เมื่อกดจริง ระบบสร้างใบโอนและหน้าร้านจะเห็นใน «รายการสั่งของ → ส่งแล้ว» เพื่อกดรับ บทฝึกหยุดก่อนส่ง",action:"finish"},
+  ],
+  frontstore_receive: [
+    {tab:"orders",target:"orders-shipped-filter",title:"เปิดรายการที่คลังส่งแล้ว",body:"ลองกดตัวกรอง «ส่งแล้ว» เพื่อดูใบโอนที่หน้าร้านต้องรับ",action:"click"},
+    {tab:"orders",target:"receive-shipment-row",title:"ตรวจใบโอนและสินค้า",body:"ดูเลขใบโอน SKU ชื่อสินค้า และจำนวน «ส่ง» บนรายการจริง · ขั้นนี้ดูอย่างเดียว",action:"next"},
+    {tab:"orders",target:"receive-qty",title:"เทียบจำนวนที่ได้รับ",body:"ดูช่อง «รับจริง» · ต้องนับของจริงก่อนกรอก ถ้าได้น้อยกว่าที่ส่ง ระบบจะระบุว่า «รับไม่ครบ» บทฝึกไม่แก้เลข",action:"next"},
+    {tab:"orders",target:"receive-confirm",title:"จุดยืนยันรับ",body:"ดูปุ่มยืนยันรับ · เมื่อกดจริง เจ้าของจะเห็น «รับครบ» หรือ «รับไม่ครบ» ในหน้าติดตามสถานะ บทฝึกหยุดก่อนบันทึก",action:"finish"},
+  ],
+  owner: [
+    {tab:"tracking",target:"tracking-status-tiles",title:"ดูภาพรวมสถานะ",body:"ไทล์นับเป็นรายการ: รอจัด → จัดแล้ว → รอรับ → รับครบ/รับไม่ครบ · ลองกด «รอรับ» เพื่อกรอง",action:"click"},
+    {tab:"tracking",target:"tracking-search",title:"ค้นใบหรือสินค้า",body:"ลองพิมพ์ SKU ชื่อสินค้า หรือเลขใบโอนในช่องค้นหา เพื่อเจาะงานที่ต้องติดตาม",action:"search"},
+    {tab:"tracking",target:"tracking-batch",title:"ตรวจยอดรายใบโอน",body:"ดูรายการในใบและยอดส่ง/รับจริง ถ้ายังไม่กดรับจะขึ้นรอรับ; ถ้ารับน้อยกว่าส่งจะขึ้นรับไม่ครบ · ขั้นนี้ดูอย่างเดียว",action:"finish"},
+  ],
 };
 
 // ── หน้าหลัก / เมนูทั้งหมด ─────────────────────────────────────────────────────
@@ -152,14 +188,14 @@ function HomeMenuView({ groups, roleLabel, staffName, tabBadge, onNav, onStartTr
         </div>
       </div>
 
-      {TRAINING_COURSES[roleId] && <button data-training="entry" className="home-card" onClick={onStartTraining}
+      {(TRAINING_COURSES[roleId] || []).map((course, i) => <button key={course.id} data-training={i === 0 && roleId === "frontstore" ? "entry" : "entry-" + course.id} className="home-card" onClick={() => onStartTraining(course.id)}
               style={{width:"100%",marginBottom:16,textAlign:"left",border:"1.5px solid var(--g-300)"}}>
         <span className="home-card-emoji">🎓</span>
         <span className="home-card-body">
-          <span className="home-card-name">สอนใช้งาน · {TRAINING_COURSES[roleId].title}</span>
-          <span className="home-card-desc">{TRAINING_COURSES[roleId].desc}</span>
+          <span className="home-card-name">สอนใช้งาน · {course.title}</span>
+          <span className="home-card-desc">{course.desc}</span>
         </span>
-      </button>}
+      </button>)}
 
       {quick.length > 0 && (
         <div className="home-quick">
@@ -202,25 +238,25 @@ function HomeMenuView({ groups, roleLabel, staffName, tabBadge, onNav, onStartTr
   );
 }
 
-// บทต้นแบบพากดบนหน้าจริงของหน้าร้าน: ขั้นที่เขียนข้อมูลจริงถูกล็อกไว้เสมอ
-function TrainingView({ onClose, onNavigate, activeTab }) {
+// บทพากดบนหน้าจริงตามตำแหน่ง: ขั้นที่เขียนข้อมูลจริงถูกล็อกไว้เสมอ
+function TrainingView({ onClose, onNavigate, activeTab, courseId }) {
   const [step, setStep] = usS(-1);
   const [spot, setSpot] = usS(null);
-  const steps = [
-    {target:"product-search", title:"ค้นหาสินค้าที่ต้องการ", body:"พิมพ์ SKU หรือชื่อสินค้าในช่องค้นหาจริง แล้วตรวจชื่อและรหัสให้ตรง ก่อนกด «ค้นแล้ว ไปต่อ»", action:"search"},
-    {target:"product-order", title:"เปิดหน้าสั่งของสินค้านั้น", body:"กดปุ่ม «สั่งไปขาย» บนการ์ดสินค้าที่ตรวจรหัสแล้ว ระบบจะเปิดหน้าสั่งของจริง", action:"click"},
-    {target:"order-fs-count", title:"ตรวจยอดหน้าร้าน", body:"ตรงนี้ใช้กรอกยอดที่นับได้จริง แต่ช่องนี้บันทึกอัตโนมัติหลัง 2 วินาที บทฝึกปลอดภัยจึงชี้ให้ดูโดยไม่ให้กรอก", action:"next"},
-    {target:"order-quick-qty", title:"เลือกจำนวนที่ต้องการ", body:"ลองกดจำนวนในปุ่มลัดจริง การเลือกจำนวนยังไม่ส่งคำขอ และย้อนกลับได้", action:"click"},
-    {target:"order-type", title:"เลือกวิธีรับสินค้า", body:"กด «หิ้ว» หรือ «รอขึ้นรถ» ตามงานที่กำลังฝึก การเลือกตรงนี้ยังไม่บันทึกคำขอ", action:"click"},
-    {target:"order-submit", title:"ตรวจจุดยืนยันคำขอ", body:"ปุ่มนี้จะสร้างคำขอจริง และยอดหน้าร้านอาจถูกบันทึกก่อนหน้านั้น บทฝึกหยุดตรงนี้โดยไม่กดยืนยัน", action:"finish"},
-  ];
+  const steps = TRAINING_STEPS[courseId] || TRAINING_STEPS.frontstore_order;
   const current = steps[step];
   const [searchReady, setSearchReady] = usS(false);
   const closeSafely = () => { onNavigate(HOME_TAB); onClose(); };
-  const start = () => { setStep(0); onNavigate("categories"); };
+  const goToStep = n => { if (steps[n]) { setStep(n); onNavigate(steps[n].tab); } };
+  const start = () => goToStep(0);
+
+  // ชั้นกันการเขียนข้อมูลที่คำสั่งส่งเครือข่ายจริง · cleanup ทั้งตอนจบและออกกลางทาง
+  usE(() => {
+    window.__dmjTrainingSafeMode = true;
+    return () => { window.__dmjTrainingSafeMode = false; };
+  }, []);
 
   usE(() => {
-    if (step < 0 || activeTab !== "categories") { setSpot(null); return; }
+    if (step < 0 || activeTab !== current.tab) { setSpot(null); return; }
     let lastTarget = null;
     const refresh = () => {
       const candidates = Array.from(document.querySelectorAll(`[data-training="${current.target}"]`));
@@ -244,7 +280,7 @@ function TrainingView({ onClose, onNavigate, activeTab }) {
   usE(() => {
     if (step < 0 || !current || current.action !== "click") return;
     const onClick = e => {
-      if (e.target.closest(`[data-training="${current.target}"]`)) setStep(v => v + 1);
+      if (e.target.closest(`[data-training="${current.target}"]`)) goToStep(step + 1);
     };
     document.addEventListener("click", onClick, true);
     return () => document.removeEventListener("click", onClick, true);
@@ -266,9 +302,9 @@ function TrainingView({ onClose, onNavigate, activeTab }) {
   if (step < 0) return (
     <div role="dialog" aria-modal="true" aria-label="สอนสั่งสินค้า" style={{position:"fixed",inset:0,zIndex:5000,background:"#0009",display:"grid",placeItems:"center",padding:16}}>
       <div style={{background:"var(--paper)",borderRadius:16,padding:22,maxWidth:420,width:"100%",lineHeight:1.6,boxShadow:"0 16px 50px #0004"}}>
-        <h2 style={{margin:"0 0 8px",fontSize:20}}>🎓 สั่งสินค้าเข้าหน้าร้าน</h2>
-        <p>บทต้นแบบนี้จะพาไปกดที่หน้าจริงทีละจุด เริ่มจากค้นสินค้า ไปจนถึงปุ่มยืนยันคำขอ</p>
-        <p style={{padding:10,background:"#ecfdf5",borderRadius:8}}>โหมดฝึกปลอดภัย: จะไม่ให้กรอกยอดที่บันทึกอัตโนมัติ และไม่กดยืนยันคำขอจริง</p>
+        <h2 style={{margin:"0 0 8px",fontSize:20}}>🎓 {Object.values(TRAINING_COURSES).flat().find(c => c.id === courseId)?.title || "สั่งสินค้าเข้าหน้าร้าน"}</h2>
+        <p>พาไปกดหน้าจริงทีละจุด หากยังไม่มีรายการงานจริง ขั้นที่เกี่ยวข้องจะรอจนมีข้อมูล</p>
+        <p style={{padding:10,background:"#ecfdf5",borderRadius:8}}>โหมดฝึกปลอดภัย: จุดที่บันทึกข้อมูลให้ดูอย่างเดียว และคำสั่งเขียนข้อมูลถูกล็อกตลอดบท</p>
         <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}><button className="btn ghost" onClick={onClose}>ยกเลิก</button><button className="btn" onClick={start}>เริ่มพาไปหน้าจริง</button></div>
       </div>
     </div>
@@ -290,31 +326,31 @@ function TrainingView({ onClose, onNavigate, activeTab }) {
         border:"3px solid #f59e0b",borderRadius:10,boxSizing:"border-box",pointerEvents:canClickTarget?"none":"auto"}}/>}
       <div style={{position:"fixed",left:12,right:12,[spot && spot.top > h*0.55 ? "top" : "bottom"]:12,maxWidth:460,margin:"0 auto",
         background:"var(--paper)",border:"2px solid #f59e0b",borderRadius:14,padding:16,boxShadow:"0 10px 40px #0005",pointerEvents:"auto",lineHeight:1.55}}>
-        <div style={{fontSize:12,color:"var(--muted)"}}>บทสั่งสินค้า · ขั้น {step+1}/{steps.length} · หน้าจริง</div>
+        <div style={{fontSize:12,color:"var(--muted)"}}>บท {courseId === "warehouse" ? "คลัง" : courseId === "owner" ? "ติดตาม" : courseId === "frontstore_receive" ? "รับของ" : "สั่งสินค้า"} · ขั้น {step+1}/{steps.length} · หน้าจริง · {canClickTarget ? "ลองกดได้" : "ดูอย่างเดียว"}</div>
         <strong style={{fontSize:17}}>{current.title}</strong>
         <p style={{margin:"6px 0 12px",fontSize:13}}>{current.body}</p>
-        {!spot && <p role="status" style={{fontSize:12,color:"#b45309"}}>กำลังรอจุดนี้บนหน้าจอ หากไม่มีสินค้าให้ลองค้นคำอื่นหรือย้อนกลับ</p>}
+        {!spot && <p role="status" style={{fontSize:12,color:"#b45309"}}>ยังไม่พบจุดนี้บนหน้าจอ อาจไม่มีรายการในสถานะนี้ ลอง Sync ข้อมูลภายหลังหรือออกจากบทฝึก</p>}
         <div style={{display:"flex",gap:8,justifyContent:"space-between",flexWrap:"wrap"}}>
           <button className="btn ghost" onClick={closeSafely}>ออกจากบทฝึก</button>
           <div style={{display:"flex",gap:8}}>
-            {step > 0 && <button className="btn ghost" onClick={() => setStep(v => v-1)}>ย้อนกลับ</button>}
-            {current.action === "search" && <button className="btn" disabled={!searchReady} onClick={() => setStep(1)}>ค้นแล้ว ไปต่อ</button>}
-            {current.action === "next" && <button className="btn" onClick={() => setStep(v => v+1)}>เข้าใจแล้ว ไปต่อ</button>}
+            {step > 0 && <button className="btn ghost" onClick={() => goToStep(step-1)}>ย้อนกลับ</button>}
+            {current.action === "search" && <button className="btn" disabled={!searchReady} onClick={() => goToStep(step+1)}>ค้นแล้ว ไปต่อ</button>}
+            {current.action === "next" && <button className="btn" disabled={!spot} onClick={() => goToStep(step+1)}>เข้าใจแล้ว ไปต่อ</button>}
             {current.action === "finish" && <button className="btn" onClick={closeSafely}>จบบทโดยไม่บันทึก</button>}
           </div>
         </div>
       </div>
-      {step === 0 && <TrainingSearchWatcher onReady={setSearchReady}/>}
+      {current.action === "search" && <TrainingSearchWatcher target={current.target} onReady={setSearchReady}/>}
     </div>
   );
 }
 
-function TrainingSearchWatcher({ onReady }) {
+function TrainingSearchWatcher({ target, onReady }) {
   usE(() => {
-    const update = () => onReady(!!document.querySelector('[data-training="product-search"]')?.value.trim());
+    const update = () => onReady(!!document.querySelector(`[data-training="${target}"]`)?.value.trim());
     update(); document.addEventListener("input", update);
     return () => document.removeEventListener("input", update);
-  }, []);
+  }, [target]);
   return null;
 }
 
@@ -1413,6 +1449,7 @@ async function postAuthAction(body) {
 function App() {
   // ── ALL hooks first (no early returns before this block) ──
   const [trainingOpen, setTrainingOpen] = usS(false);
+  const [trainingCourse, setTrainingCourse] = usS(null);
   // ภาษาปัจจุบัน — subscribe ที่ App ตัวเดียว เปลี่ยนภาษาแล้ว re-render ทั้งต้นไม้
   // → ทุก t() ทั้งแอปอ่านค่าใหม่ (ไม่ต้องเพิ่ม useLang ในทุก component)
   const _lang = useLang();
@@ -2438,7 +2475,8 @@ function App() {
 
   return (
     <div style={{maxWidth:"100vw", overflowX:"hidden", position:"relative"}}>
-      {trainingOpen && <TrainingView activeTab={activeTab} onNavigate={handleSetTab} onClose={() => setTrainingOpen(false)}/>}
+      {trainingOpen && <TrainingView activeTab={activeTab} courseId={trainingCourse || TRAINING_COURSES[role]?.[0]?.id}
+        onNavigate={handleSetTab} onClose={() => setTrainingOpen(false)}/>}
       {crossNoteEl}
       {/* ─── Confirm modals ─── */}
       <ConfirmModal
@@ -2612,7 +2650,7 @@ function App() {
           </div>
 
           <div className="nav-right">
-            {role === "frontstore" && <button className="btn ghost" title="สอนสั่งสินค้าบนหน้าจริง" onClick={() => setTrainingOpen(true)}
+            {TRAINING_COURSES[role] && <button className="btn ghost" title="สอนใช้งานบนหน้าจริง" onClick={() => { setTrainingCourse(null); setTrainingOpen(true); }}
               style={{whiteSpace:"nowrap",fontSize:12,padding:"8px 9px"}}>🎓 สอน</button>}
             <span className="nav-status" title={source==="upload" ? "ใช้ข้อมูลจากไฟล์ที่อัปโหลด" : "ใช้ข้อมูลจาก Google Sheet"}>
               <span className="nav-dot" style={{background: source==="upload" ? "#a07417" : "var(--g-500)"}}></span>
@@ -2821,7 +2859,7 @@ function App() {
                                             roleLabel={ROLE_LABELS[role] || role}
                                             staffName={staff ? staff.name : ""}
                                             tabBadge={tabBadge}
-                                            onStartTraining={() => setTrainingOpen(true)}
+                                            onStartTraining={id => { setTrainingCourse(id); setTrainingOpen(true); }}
                                             /* ⚠️ ตั้งคำขอ "เปิดมุมมองไหน" **ก่อน** สลับแท็บเสมอ —
                                                สลับก่อน = view ปลายทาง mount ไปแล้วตอนที่ยังไม่มี
                                                คำขอให้อ่าน แล้วไม่มีใครยิงซ้ำให้อีก (หลักเดียวกับ
