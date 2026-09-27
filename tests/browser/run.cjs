@@ -753,12 +753,12 @@ function startServer() {
       if (!(await page.locator('main[data-screen-label="home"]').count())) {
         status = 'HOME_FAIL'; note = 'กดโลโก้แล้วไม่เข้าหน้าหลัก';
       } else {
-        const cards = await page.locator('.home-card').count();
+        const cards = await page.locator('.home-grp .home-card').count();
         const expected = ROLE_TABS[hmRole].length;
         if (cards !== expected) {
           status = 'MENU_COUNT'; note = `การ์ด ${cards} ใบ (คาด ${expected} ตาม ROLE_TABS)`;
         } else {
-          await page.locator('.home-card', { hasText: TAB_LABEL.orders }).first().click({ timeout: 2000 });
+          await page.locator('.home-grp .home-card', { hasText: TAB_LABEL.orders }).first().click({ timeout: 2000 });
           await page.waitForTimeout(500);
           if (!(await page.locator('main[data-screen-label="orders"]').count())) {
             status = 'CARD_NAV_FAIL'; note = 'กดการ์ดแล้วไม่เข้าเมนูปลายทาง';
@@ -2038,10 +2038,12 @@ function startServer() {
     let status = 'ok', note = '';
     const writes = [];
     try {
-      await page.goto(base + '?role=frontstore&tab=home', { timeout: 15000 });
+      await page.goto(base + '?role=frontstore&tab=stock', { timeout: 15000 });
       await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      await page.locator('.brand').first().click({ timeout: 3000 });
+      await page.locator('main[data-screen-label="home"]').waitFor({ state: 'visible' });
       page.on('request', req => { if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method())) writes.push(req.method() + ' ' + req.url()); });
-      await page.locator('.home-card', { hasText: 'สอนใช้งาน · หน้าร้าน' }).click({ timeout: 2000 });
+      await page.locator('[data-training="entry"]').click({ timeout: 3000 });
       await page.getByRole('button', { name: 'เริ่มพาไปหน้าจริง' }).click();
       await page.locator('main[data-screen-label="categories"]').waitFor({ state: 'visible' });
       await page.locator('[data-training="product-search"]').fill('FLW002');

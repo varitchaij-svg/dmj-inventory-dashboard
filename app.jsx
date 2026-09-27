@@ -152,7 +152,7 @@ function HomeMenuView({ groups, roleLabel, staffName, tabBadge, onNav, onStartTr
         </div>
       </div>
 
-      {TRAINING_COURSES[roleId] && <button className="home-card" onClick={onStartTraining}
+      {TRAINING_COURSES[roleId] && <button data-training="entry" className="home-card" onClick={onStartTraining}
               style={{width:"100%",marginBottom:16,textAlign:"left",border:"1.5px solid var(--g-300)"}}>
         <span className="home-card-emoji">🎓</span>
         <span className="home-card-body">
