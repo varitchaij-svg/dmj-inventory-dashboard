@@ -4423,6 +4423,7 @@ function CategoryView({ data, role, onNav }) {
             <Icon d={["M11 19 A8 8 0 1 0 11 3 a8 8 0 0 0 0 16 Z","M21 21 L16.65 16.65"]} size={17}/>
           </span>
           <input
+            data-training="product-search"
             value={globalSearch}
             onChange={e => setGlobalSearch(e.target.value)}
             placeholder={t("ค้นหาสินค้าทั้งหมด (SKU / ชื่อ)...")}
@@ -4992,7 +4993,7 @@ function CategoryView({ data, role, onNav }) {
                     </div>
                     {/* Order button */}
                     {setOrderProduct && !purchasePlanMode && (
-                      <button onClick={() => !outOfStock && setOrderProduct(p)}
+                      <button data-training="product-order" onClick={() => !outOfStock && setOrderProduct(p)}
                         disabled={outOfStock}
                         style={{flexShrink:0,padding:'8px 12px',borderRadius:8,border:'none',
                                 background: outOfStock ? 'var(--g-100)' : '#1b5e20',
@@ -6081,7 +6082,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
 
               {/* ① เช็คของหน้าร้าน — บังคับสำหรับหน้าร้าน/พนักงาน · saler/storedevice นับได้แต่ไม่บังคับ */}
               {canFsCheck && !fsSkipped && (
-                <div style={{
+                <div data-training="order-fs-count" style={{
                   marginBottom:16, borderRadius:12, padding:14,
                   // สีเตือน (ส้ม) = "ยังกดสั่งไม่ได้จนกว่าจะกรอก" เท่านั้น — ผูกกับ fsBlocked ไม่ใช่
                   // "ยังไม่กรอก" เฉย ๆ ไม่งั้น role ที่ไม่ได้ถูกบังคับจะเห็นกรอบส้มเตือนทั้งที่กดสั่งได้ปกติ
@@ -6173,7 +6174,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
                 </div>
                 <div style={{display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:6, marginBottom:8}}>
                   {QUICK_QTYS.map(q => (
-                    <button key={q} onClick={() => { setQty(q); setQtyDraft(String(q)); setCustomMode(false); }}
+                    <button key={q} data-training="order-quick-qty" onClick={() => { setQty(q); setQtyDraft(String(q)); setCustomMode(false); }}
                             style={{...btnBase,
                               background: !customMode && qty===q ? "var(--g-700)" : "#fff",
                               color: !customMode && qty===q ? "#fff" : "var(--text)",
@@ -6216,7 +6217,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
                 <div style={{fontSize:12, fontWeight:600, color:"var(--muted)", marginBottom:8}}>{t("ประเภทการรับ")}</div>
                 <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8}}>
                   {[{v:'หิ้ว',icon:'🚶',sub:'รับที่ร้าน/หิ้วไปเลย'},{v:'รอขึ้นรถ',icon:'🚛',sub:'รอจัดส่งทีหลัง'}].map(opt => (
-                    <button key={opt.v} onClick={() => setOrderType(opt.v)}
+                    <button key={opt.v} data-training="order-type" onClick={() => setOrderType(opt.v)}
                             style={{...btnBase, padding:"10px 8px", textAlign:"center",
                               background: orderType===opt.v ? "var(--g-700)" : "#fff",
                               color: orderType===opt.v ? "#fff" : "var(--text)",
@@ -6253,7 +6254,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
 
               {/* qty < 1 = ยังไม่ได้เลือกจำนวน (หรือลบช่องกรอกเองจนว่าง) — กันสั่งด้วยเลขที่
                   ระบบเดาให้ ซึ่งเป็นสิ่งที่ทำให้สั่งผิดจำนวนมาก่อน */}
-              <button onClick={() => handleSubmit(false)} disabled={loading || fsBlocked || qty < 1}
+              <button data-training="order-submit" onClick={() => handleSubmit(false)} disabled={loading || fsBlocked || qty < 1}
                       style={{...btnBase, width:"100%", padding:"12px", fontSize:14,
                               background: (fsBlocked || qty < 1) ? "var(--g-100)" : "var(--g-700)",
                               color: (fsBlocked || qty < 1) ? "var(--muted)" : "#fff",
@@ -6547,7 +6548,7 @@ function ProductCard({ p, rank, accent, allCats, reasonTags, onOrder, role, pend
       {/* Order button */}
       {onOrder && (
         <div className="pcard-order" style={{padding:"0 12px 12px", marginTop:"auto"}}>
-          <button onClick={() => !orderBtnDisabled && onOrder(p)}
+          <button data-training="product-order" onClick={() => !orderBtnDisabled && onOrder(p)}
                   disabled={orderBtnDisabled}
                   style={{width:"100%", padding:"9px 12px", borderRadius:8,
                           background: outOfStock ? "var(--g-100)" : "var(--g-700)",

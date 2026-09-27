@@ -2032,55 +2032,33 @@ function startServer() {
     await page.close();
   }
 
-  // ── โหมดฝึก: มีคอร์สทุก role และจำลองส่งต่อข้ามฝ่ายได้โดยไม่เรียก backend ──
-  // ตรวจ CTA จากหน้าหลักของทุก role และรันสถานการณ์รับของไม่ครบ end-to-end
+  // ── บทพากดบนหน้าจริง: หน้าร้านค้น→เปิดใบสั่ง→เลือกจำนวน/วิธีรับ→หยุดก่อนบันทึก ──
   {
-    const roles = [
-      ['owner', 'เจ้าของร้าน'], ['employee', 'พนักงาน'], ['warehouse', 'คลังสินค้า'],
-      ['frontstore', 'หน้าร้าน'], ['saler', 'พนักงานขาย'], ['storedevice', 'เครื่องร้าน'], ['dev', 'DEV'],
-    ];
-    for (const [role, title] of roles) {
-      const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-      let status = 'ok', note = '';
-      try {
-        await page.goto(`${base}?role=${role}&tab=home`, { timeout: 15000 });
-        await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
-        await page.waitForTimeout(250);
-        const card = page.locator('.home-card', { hasText: 'ฝึกใช้งาน' });
-        if (!(await card.count())) throw new Error(`${role}: ไม่มีการ์ดฝึกใช้งาน`);
-        await card.first().click({ timeout: 2000 });
-        await page.waitForTimeout(150);
-        if (!(await page.locator('[role="dialog"] h1', { hasText: title }).count())) throw new Error(`${role}: ชื่อคอร์สไม่ตรง`);
-        if (!(await page.locator('[role="dialog"] .home-card').count())) throw new Error(`${role}: ไม่มีบทเรียน`);
-        note = `${title}: มีคอร์สและบทเรียน`;
-      } catch (e) { status = 'TRAINING_FAIL'; note = String(e.message || e).slice(0, 180); }
-      results.push({ role, tab: 'โหมดฝึก', status, note });
-      await page.close();
-    }
-
-    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     let status = 'ok', note = '';
     const writes = [];
-    page.on('request', req => { if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method())) writes.push(req.method() + ' ' + req.url()); });
     try {
-      await page.goto(`${base}?role=frontstore&tab=home`, { timeout: 15000 });
+      await page.goto(base + '?role=frontstore&tab=home', { timeout: 15000 });
       await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
-      await page.locator('.home-card', { hasText: 'ฝึกใช้งาน' }).first().click({ timeout: 2000 });
-      const dialog = page.locator('[role="dialog"]');
-      await dialog.locator('.home-card', { hasText: 'ตามงานส่งต่อระหว่างฝ่าย' }).click({ timeout: 2000 });
-      await dialog.locator('#training-availability').selectOption('3');
-      await dialog.getByRole('button', { name: /จำลองส่งคำขอ/ }).click();
-      await dialog.locator('#training-picked').fill('2');
-      await dialog.getByRole('button', { name: /ยืนยันจำนวนที่จัดได้/ }).click();
-      await dialog.getByRole('button', { name: /จำลองยืนยันส่ง/ }).click();
-      await dialog.locator('#training-received').fill('1');
-      await dialog.getByRole('button', { name: /ยืนยันจำนวนรับจริง/ }).click();
-      const body = await dialog.innerText();
-      if (!body.includes('รับไม่ครบ 1 ชิ้น') || !body.includes('ขอ 5 · คลังจัด/ส่ง 2 · หน้าร้านรับ 1')) throw new Error('ผลส่งต่อ/รับไม่ครบไม่ครบถ้วน');
-      if (writes.length) throw new Error('โหมดฝึกเรียก request ที่ไม่ใช่ read: ' + writes.join(', '));
-      note = 'จำลองขอ→จัด→ส่ง→รับไม่ครบ→เจ้าของตรวจ ผ่าน และไม่มี write request';
-    } catch (e) { status = 'TRAINING_FLOW_FAIL'; note = String(e.message || e).slice(0, 200); }
-    results.push({ role: 'interact', tab: 'โหมดฝึกส่งต่อข้ามฝ่าย', status, note });
+      page.on('request', req => { if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method())) writes.push(req.method() + ' ' + req.url()); });
+      await page.locator('.home-card', { hasText: 'สอนใช้งาน · หน้าร้าน' }).click({ timeout: 2000 });
+      await page.getByRole('button', { name: 'เริ่มพาไปหน้าจริง' }).click();
+      await page.locator('main[data-screen-label="categories"]').waitFor({ state: 'visible' });
+      await page.locator('[data-training="product-search"]').fill('FLW002');
+      await page.getByRole('button', { name: 'ค้นแล้ว ไปต่อ' }).click();
+      await page.locator('[data-training="product-order"]:not([disabled])').first().click();
+      await page.getByRole('button', { name: 'เข้าใจแล้ว ไปต่อ' }).click();
+      await page.locator('[data-training="order-quick-qty"]').first().click();
+      await page.locator('[data-training="order-type"]').first().click();
+      const guide = page.getByRole('dialog', { name: 'ตัวช่วยพากดหน้าจริง' });
+      const finalText = await guide.innerText();
+      if (!finalText.includes('ตรวจจุดยืนยันคำขอ') || !finalText.includes('ไม่กดยืนยัน')) throw new Error('ไม่ถึงขั้นปลอดภัยก่อนยืนยัน');
+      await guide.getByRole('button', { name: 'จบบทโดยไม่บันทึก' }).click();
+      if (!(await page.locator('main[data-screen-label="home"]').count())) throw new Error('จบบทแล้วไม่กลับหน้าหลัก');
+      if (writes.length) throw new Error('บทฝึกยิง write request: ' + writes.join(', '));
+      note = 'พากดบนหน้าจริงครบ 6 ขั้นบนมือถือ; ไม่เขียนข้อมูลและกลับหน้าหลัก';
+    } catch (e) { status = 'GUIDE_FAIL'; note = String(e.message || e).slice(0, 220); }
+    results.push({ role: 'frontstore', tab: 'บทพากดสั่งสินค้า', status, note });
     await page.close();
   }
 
