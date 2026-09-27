@@ -143,6 +143,7 @@ function Seg({ value, onChange, options }) {
     <div className="seg">
       {options.map(o => (
         <button key={o.value}
+                data-training={o.training}
                 className={`seg-btn${value===o.value?' active':''}`}
                 onClick={() => onChange(o.value)}>
           {o.label}
@@ -215,7 +216,14 @@ function WhoDidIt({ orderedBy, preparedBy, receivedBy, size, style }) {
 //
 // ปลอดภัยแบบ no-op: ถ้าไม่มี token / body ไม่ใช่ JSON object / ไม่ใช่ POST /
 // มี sessionToken อยู่แล้ว → ส่งต่อของเดิมไม่แตะเลย
+function isTrainingSafeMode() {
+  return typeof window !== "undefined" && window.__dmjTrainingSafeMode === true;
+}
 function dmjFetch(url, opts) {
+  // บทฝึกพากดบนหน้าจริง: หยุดคำสั่งเขียนก่อนถึง fetch แม้มีทางกดที่หลุดจาก spotlight
+  if (typeof window !== "undefined" && window.__dmjTrainingSafeMode === true && opts && opts.method && !["GET", "HEAD", "OPTIONS"].includes(String(opts.method).toUpperCase())) {
+    return Promise.reject(new Error("โหมดฝึกไม่บันทึกข้อมูลจริง"));
+  }
   try {
     if (opts && opts.method === "POST" && typeof opts.body === "string") {
       const tok = localStorage.getItem("dmj_session_token");

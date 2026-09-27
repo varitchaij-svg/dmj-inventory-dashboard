@@ -4613,6 +4613,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
   // แต่ต้อง **บอกให้รู้ว่ายังไม่เข้าระบบ** ไม่งั้นเดินจากไปแล้วรอบ sync ถัดมาเลขเด้งกลับค่าเก่า
   const [saveFailed, setSaveFailed] = uS(false);
   const savePrepQty = async v => {
+    if (isTrainingSafeMode()) return;
     const n = Math.max(0, parseInt(v)||0);
     setPrepQty(n);
     onPatch(order.id, {preparedQty: n});
@@ -4641,6 +4642,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
   // ⚠️ ไม่แตะ `saveFailed` โดยตั้งใจ — ธงนั้นเป็นของช่อง "จัด" (ขอบแดง + ป้ายยังไม่บันทึก)
   //    เอามาใช้ร่วมกัน = ปุ่ม PRINT ที่บันทึกผ่านจะไปล้างคำเตือนของจำนวนที่ยังไม่เข้าระบบจริง
   const saveOrderField = async (updates, prevUpdates, label) => {
+    if (isTrainingSafeMode()) return false;
     onPatch(order.id, updates);
     const res = await syncOrderUpdate(order, updates);
     if (res && res.success === false) {
@@ -4657,6 +4659,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
   // (คลัง/หน้าร้าน/เซล กดเองนาน ๆ ครั้ง จึงไม่ยัดเป็นตัวเลือกที่หน้าสร้างออเดอร์ซึ่งใช้บ่อยสุด)
   const setToCentral = v => saveOrderField({toCentral: v}, {toCentral: order.toCentral}, "Central");
   const markComplete = async () => {
+    if (isTrainingSafeMode()) return;
     if (!order.printFlag) {
       showToast("warn", "เลือก PRINT หรือ SKIP ก่อน", "🖨️");
       return;
@@ -4727,7 +4730,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
       {/* data-order-sku = จุดจอดของการ "กดแจ้งเตือนแล้วพามาที่ของชิ้นนี้" (dmjScrollToSku)
           ⚠️ ใช้ attribute ไม่ใช่ id — SKU เดียวกันสั่งซ้ำได้หลายใบ id ซ้ำใน DOM ไม่ถูกต้อง
           (ตัวแรกที่เจอ = ใบบนสุด ซึ่งหลังเรียงใหม่คือใบที่ต้องจัดก่อน — ตรงกับที่ต้องการพอดี) */}
-      <div className="order-item-row" data-order-sku={order.sku || ""} style={{
+      <div className="order-item-row" data-order-sku={order.sku || ""} data-training={isPending ? "warehouse-order-row" : undefined} style={{
         background:"#fff", borderRadius:12, marginBottom:8,
         border:`1.5px solid ${isPending?"var(--bdr)":"#4fb472"}`,
         overflow:"hidden", opacity: isPending ? 1 : 0.75,
@@ -4841,7 +4844,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
               <div style={{fontSize:10,color: saveFailed ? "var(--dang)" : "var(--muted)"}}>
                 {saveFailed ? `⚠️ ${t("ยังไม่บันทึก")}` : `📦 ${t("จัด")}`}
               </div>
-              <input type="number" value={prepQtyDraft} min={0} max={9999}
+              <input type="number" value={prepQtyDraft} data-training={isPending ? "warehouse-prep-qty" : undefined} min={0} max={9999}
                 onFocus={e => e.target.select()}
                 onChange={e => setPrepQtyDraft(e.target.value)}
                 onBlur={commitPrepQtyDraft}
@@ -4866,7 +4869,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
             <div style={{flex:1}}/>
 
             {/* QR toggle */}
-            <button className="order-action-btn" title={pf==="print"?"Print ✓":pf==="no-print"?"Skip ✕":"Tap to set print"}
+            <button className="order-action-btn" data-training={isPending ? "warehouse-print-flag" : undefined} title={pf==="print"?"Print ✓":pf==="no-print"?"Skip ✕":"Tap to set print"}
               onClick={() => { if(!pf) setPrintFlag("print"); else if(pf==="print") setPrintFlag("no-print"); else setPrintFlag("print"); }}
               style={{
                 width:44,height:44,borderRadius:10,cursor:"pointer",padding:0,
@@ -4915,7 +4918,7 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
 
             {/* Done */}
             {isPending && canPrepareOrder(role) && (
-              <button onClick={markComplete} style={{
+              <button data-training="warehouse-done" onClick={markComplete} style={{
                 padding:"10px 16px",borderRadius:10,border:"none",
                 background:pf?"#1b5e20":"#d1d5db",color:"#fff",
                 cursor:pf?"pointer":"not-allowed",fontSize:14,fontWeight:800,
@@ -5063,7 +5066,7 @@ function ShipmentRow({ s, role, productMap, onConfirm }) {
   };
 
   return (
-    <div style={{
+    <div data-training={!s.receivedAt ? "receive-shipment-row" : undefined} style={{
       background:"#fff", borderRadius:12, marginBottom:8,
       border:`1.5px solid ${s.receivedAt ? "#4fb472" : "var(--bdr)"}`,
       overflow:"hidden",
@@ -5145,7 +5148,7 @@ function ShipmentRow({ s, role, productMap, onConfirm }) {
           <>
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
               <div style={{fontSize:10,color:"var(--muted)"}}>📥 {editing ? t("แก้ไข") : t("รับจริง")}</div>
-              <input type="number" value={recvQty} min={0} max={9999}
+              <input type="number" value={recvQty} data-training={!s.receivedAt ? "receive-qty" : undefined} min={0} max={9999}
                 onFocus={e => e.target.select()}
                 onChange={e => setRecvQty(Math.max(0,parseInt(e.target.value)||0))}
                 style={{
@@ -5162,7 +5165,7 @@ function ShipmentRow({ s, role, productMap, onConfirm }) {
                 color:"var(--muted)",minHeight:44,
               }}>ยกเลิก</button>
             )}
-            <button onClick={handleConfirm} style={{
+            <button data-training={!s.receivedAt ? "receive-confirm" : undefined} onClick={handleConfirm} style={{
               padding:"10px 16px",borderRadius:10,border:"none",
               background:"#1b5e20",color:"#fff",
               cursor:"pointer",fontSize:14,fontWeight:800,
@@ -5262,6 +5265,7 @@ function ShipmentReceiveList({ data, role, productMap }) {
   // คำตอบเลย ("สำเร็จปลอม") พอบันทึกไม่ผ่านจริง (เลขแถวเลื่อน/เน็ตหลุด) จอยังบอกว่ารับแล้ว
   // แต่ชีตไม่มีอะไรเปลี่ยน → เปิดแอปใหม่รายการเด้งกลับมาเป็น "ยังไม่รับ" ให้กดซ้ำอีก 2-3 รอบ
   const handleConfirm = async (s, n) => {
+    if (isTrainingSafeMode()) return;
     const status = n >= s.qty ? "รับครบ" : "รับไม่ครบ";
     setConfirmed(prev => ({ ...prev, [s.id]: { receivedQty:n, receivedStatus:status, receivedAt:new Date().toISOString() } }));
     const r = await syncShipmentReceive(s.id, s.sku, n, s.refNum);
@@ -5443,9 +5447,9 @@ function OrderListView({ data, role }) {
         </div>
         <Seg value={effectiveFilter} onChange={setFilter} options={[
           {value:"all",      label:`🗂️ ${t("ทั้งหมด")}`},
-          {value:"pending",  label:`🟡 ${t("รอ")}`},
+          {value:"pending",  label:`🟡 ${t("รอ")}`,training:"orders-pending-filter"},
           {value:"completed",label:`✅ ${t("สำเร็จ")}`},
-          {value:"shipped",  label:`🚚 ${t("ส่งแล้ว")}`},
+          {value:"shipped",  label:`🚚 ${t("ส่งแล้ว")}`,training:"orders-shipped-filter"},
         ]}/>
       </div>
 
@@ -6193,6 +6197,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
 
   // ทำการส่งสินค้าจริง (หลังผ่าน confirm และ material draw แล้ว)
   const finalizeShip = async (order, matItems) => {
+    if (isTrainingSafeMode()) return;
     // ⚠️ กันยิงซ้ำสำหรับ order เดียวกัน — ตัดทันทีถ้ากำลังโอนอยู่ (ref = synchronous)
     //    ถ้าปล่อยผ่าน = transferStock ถูกเรียก 2 ครั้ง → TF ซ้ำ + สต็อกหักซ้ำ (ไม่มี tid กันฝั่ง GAS)
     if (shipInflightRef.current.has(order.id)) return;
@@ -6283,6 +6288,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
     setShipAllConfirm(ready);
   };
   const doShipAll = async () => {
+    if (isTrainingSafeMode()) return;
     const ready = shipAllConfirm;
     setShipAllConfirm(null);
     if (!ready || !ready.length) return;
@@ -6564,7 +6570,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
     return (
       <div style={{marginBottom:28}}>
         {/* Section header */}
-        <div style={{
+        <div data-training="warehouse-ready-list" style={{
           display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8,
           padding:"8px 14px",background: theme.bg,
           borderRadius:10,marginBottom:12,
@@ -6629,7 +6635,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
               </button>
             )}
             {readyCount > 0 && (
-              <button onClick={() => handleShipAll(orders)} disabled={bulkBusy} style={{
+              <button data-training="warehouse-ship" onClick={() => handleShipAll(orders)} disabled={bulkBusy} style={{
                 padding:"6px 14px",borderRadius:8,border:"none",
                 cursor: bulkBusy ? "wait" : "pointer",
                 background: bulkBusy ? "#9ca3af" : theme.btn,color:"#fff",
@@ -6804,7 +6810,7 @@ function OrderSummaryView({ data, onPrintRequest }) {
                                        fontWeight:600,marginBottom:2}}>⚠️ ไม่มีอินเทอร์เน็ต</div>
                         )}
                         <div style={{display:"flex",gap:5}}>
-                          <button onClick={() => handleShip(order)} disabled={isSending || isMissed || !isOnline}
+                          <button data-training="warehouse-ship" onClick={() => handleShip(order)} disabled={isSending || isMissed || !isOnline}
                             style={{
                               flex:1,padding:"10px 4px",minHeight:44,borderRadius:7,border:"none",
                               background: (isMissed||!isOnline)?"var(--g-100)":"var(--g-700)",
@@ -13905,7 +13911,7 @@ function TrackBatchCard({ batch, productMap, defaultOpen }) {
       background:"#fff", borderRadius:12, marginBottom:8, overflow:"hidden",
       border:"1.5px solid var(--bdr)", borderLeft:`4px solid ${edge}`,
     }}>
-      <div onClick={() => setOpen(o => !o)} style={{padding:"10px 12px", cursor:"pointer"}}>
+      <div data-training="tracking-batch" onClick={() => setOpen(o => !o)} style={{padding:"10px 12px", cursor:"pointer"}}>
         <div style={{display:"flex", justifyContent:"space-between", gap:8, alignItems:"flex-start"}}>
           <div style={{minWidth:0}}>
             <div style={{fontWeight:800, fontSize:14, lineHeight:1.25}}>
@@ -14275,7 +14281,7 @@ function TrackingView({ data, role }) {
         {TRACK_STAGES.map(s => {
           const active = filter === s.key;
           return (
-            <button key={s.key} onClick={() => setFilter(active ? "all" : s.key)} style={{
+            <button key={s.key} data-training={s.key === "in_transit" ? "tracking-status-tiles" : undefined} onClick={() => setFilter(active ? "all" : s.key)} style={{
               background: active ? s.color : s.bg, color: active ? "#fff" : s.color,
               border:`1.5px solid ${active ? s.color : s.color + "40"}`, borderRadius:10,
               padding:"7px 4px", cursor:"pointer", textAlign:"center", minWidth:0,
@@ -14322,7 +14328,7 @@ function TrackingView({ data, role }) {
 
       {/* search + reset filter */}
       <div style={{display:"flex", gap:6, marginBottom:8, alignItems:"center"}}>
-        <input value={q} onChange={e => setQ(e.target.value)} placeholder="🔍 ค้นหา ชื่อ / SKU / เลขที่ใบโอน / คนจัด / คนรับ"
+        <input data-training="tracking-search" value={q} onChange={e => setQ(e.target.value)} placeholder="🔍 ค้นหา ชื่อ / SKU / เลขที่ใบโอน / คนจัด / คนรับ"
           style={{flex:1, minWidth:0, padding:"9px 11px", border:"1px solid var(--bdr)", borderRadius:9, fontSize:13.5}}/>
         {filter !== "all" && (
           <button onClick={() => setFilter("all")} style={{

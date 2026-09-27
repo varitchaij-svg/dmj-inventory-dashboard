@@ -753,12 +753,12 @@ function startServer() {
       if (!(await page.locator('main[data-screen-label="home"]').count())) {
         status = 'HOME_FAIL'; note = 'กดโลโก้แล้วไม่เข้าหน้าหลัก';
       } else {
-        const cards = await page.locator('.home-card').count();
+        const cards = await page.locator('.home-grp .home-card').count();
         const expected = ROLE_TABS[hmRole].length;
         if (cards !== expected) {
           status = 'MENU_COUNT'; note = `การ์ด ${cards} ใบ (คาด ${expected} ตาม ROLE_TABS)`;
         } else {
-          await page.locator('.home-card', { hasText: TAB_LABEL.orders }).first().click({ timeout: 2000 });
+          await page.locator('.home-grp .home-card', { hasText: TAB_LABEL.orders }).first().click({ timeout: 2000 });
           await page.waitForTimeout(500);
           if (!(await page.locator('main[data-screen-label="orders"]').count())) {
             status = 'CARD_NAV_FAIL'; note = 'กดการ์ดแล้วไม่เข้าเมนูปลายทาง';
@@ -2029,6 +2029,90 @@ function startServer() {
     } catch (e) { status = 'EXCEPTION'; note = String(e.message || e).slice(0, 140); }
     await page.screenshot({ path: path.join(SHOTS, `lang-switch.png`) }).catch(() => {});
     results.push({ role: 'interact', tab: 'เปลี่ยนภาษา 🌐 (EN)', status, note });
+    await page.close();
+  }
+
+  // ── บทพากดบนหน้าจริง: หน้าร้านค้น→เปิดใบสั่ง→เลือกจำนวน/วิธีรับ→หยุดก่อนบันทึก ──
+  {
+    const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    let status = 'ok', note = '';
+    const writes = [];
+    try {
+      await page.goto(base + '?role=frontstore&tab=stock', { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      await page.locator('.brand').first().click({ timeout: 3000 });
+      await page.locator('main[data-screen-label="home"]').waitFor({ state: 'visible' });
+      page.on('request', req => { if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method())) writes.push(req.method() + ' ' + req.url()); });
+      await page.locator('[data-training="entry"]').click({ timeout: 3000 });
+      await page.getByRole('button', { name: 'เริ่มพาไปหน้าจริง' }).click();
+      await page.locator('main[data-screen-label="categories"]').waitFor({ state: 'visible' });
+      await page.locator('[data-training="product-search"]').fill('FLW002');
+      await page.getByRole('button', { name: 'ค้นแล้ว ไปต่อ' }).click();
+      await page.locator('[data-training="product-order"]:not([disabled])').first().click();
+      await page.getByRole('button', { name: 'เข้าใจแล้ว ไปต่อ' }).click();
+      await page.locator('[data-training="order-quick-qty"]').first().click();
+      await page.locator('[data-training="order-type"]').first().click();
+      const guide = page.getByRole('dialog', { name: 'ตัวช่วยพากดหน้าจริง' });
+      const finalText = await guide.innerText();
+      if (!finalText.includes('ตรวจจุดยืนยันคำขอ') || !finalText.includes('จบโดยไม่ส่งคำขอ')) throw new Error('ไม่ถึงขั้นปลอดภัยก่อนยืนยัน');
+      const writeBlocked = await page.evaluate(async () => {
+        try { await dmjFetch('/training-write-check', { method:'POST', body:'{}' }); return false; }
+        catch (e) { return String(e.message).includes('โหมดฝึกไม่บันทึกข้อมูลจริง'); }
+      });
+      if (!writeBlocked) throw new Error('คำสั่งเขียนข้อมูลไม่ถูกล็อก');
+      await guide.getByRole('button', { name: 'จบบทโดยไม่บันทึก' }).click();
+      if (!(await page.locator('main[data-screen-label="home"]').count())) throw new Error('จบบทแล้วไม่กลับหน้าหลัก');
+      if (await page.evaluate(() => window.__dmjTrainingSafeMode === true)) throw new Error('ออกจากบทแล้วโหมดปลอดภัยไม่ถูกปิด');
+      if (writes.length) throw new Error('บทฝึกยิง write request: ' + writes.join(', '));
+      note = 'พากดบนหน้าจริงครบ 6 ขั้นบนมือถือ; ไม่เขียนข้อมูลและกลับหน้าหลัก';
+    } catch (e) { status = 'GUIDE_FAIL'; note = String(e.message || e).slice(0, 220); }
+    results.push({ role: 'frontstore', tab: 'บทพากดสั่งสินค้า', status, note });
+    await page.close();
+  }
+
+  // ── บทส่งต่องานบนจอจริง: คลังจัด/ส่ง → หน้าร้านรับ → เจ้าของติดตาม ──
+  for (const course of [
+    {role:'warehouse', entry:'entry-warehouse', steps:[
+      ['orders-pending-filter','click'], ['warehouse-order-row','next'], ['warehouse-prep-qty','next'],
+      ['warehouse-print-flag','next'], ['warehouse-done','next'], ['warehouse-ready-list','next'],
+      ['warehouse-ship','finish']], final:'จุดส่งออกจากคลัง'},
+    {role:'frontstore', entry:'entry-frontstore_receive', steps:[
+      ['orders-shipped-filter','click'], ['receive-shipment-row','next'], ['receive-qty','next'],
+      ['receive-confirm','finish']], final:'จุดยืนยันรับ'},
+    {role:'owner', entry:'entry-owner', steps:[
+      ['tracking-status-tiles','click'], ['tracking-search','search'], ['tracking-batch','finish']], final:'ตรวจยอดรายใบโอน'},
+  ]) {
+    const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    let status = 'ok', note = '';
+    const writes = [];
+    try {
+      await page.goto(`${base}?role=${course.role}&tab=stock`, { timeout: 15000 });
+      await page.waitForFunction(() => window.__BOOTED === true || window.__BOOT_ERR, { timeout: 15000 });
+      page.on('request', req => { if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method())) writes.push(req.method() + ' ' + req.url()); });
+      await page.locator('.brand').first().click({ timeout: 3000 });
+      await page.locator('main[data-screen-label="home"]').waitFor({ state:'visible' });
+      await page.locator(`[data-training="${course.entry}"]`).click({ timeout: 3000 });
+      await page.getByRole('button', { name:'เริ่มพาไปหน้าจริง' }).click();
+      for (const [target, action] of course.steps) {
+        const point = page.locator(`[data-training="${target}"]`).first();
+        await point.waitFor({ state:'visible', timeout: 4000 });
+        if (action === 'click') await point.click({ timeout: 4000 });
+        else if (action === 'search') {
+          await point.fill('VAS001');
+          await page.getByRole('button', { name:'ค้นแล้ว ไปต่อ' }).click();
+        } else if (action === 'next') await page.getByRole('button', { name:'เข้าใจแล้ว ไปต่อ' }).click();
+        else {
+          const guide = page.getByRole('dialog', { name:'ตัวช่วยพากดหน้าจริง' });
+          if (!(await guide.innerText()).includes(course.final)) throw new Error('บทไม่ถึงขั้นสุดท้าย');
+          await guide.getByRole('button', { name:'จบบทโดยไม่บันทึก' }).click();
+        }
+      }
+      if (!(await page.locator('main[data-screen-label="home"]').count())) throw new Error('จบบทแล้วไม่กลับหน้าหลัก');
+      if (await page.evaluate(() => window.__dmjTrainingSafeMode === true)) throw new Error('ออกจากบทแล้วโหมดปลอดภัยไม่ถูกปิด');
+      if (writes.length) throw new Error('บทฝึกยิง write request: ' + writes.join(', '));
+      note = `พากด ${course.steps.length} ขั้นบนมือถือ; ไม่เขียนข้อมูล`;
+    } catch (e) { status = 'GUIDE_FAIL'; note = String(e.message || e).slice(0, 250); }
+    results.push({ role:course.role, tab:`บทสอน ${course.final}`, status, note });
     await page.close();
   }
 
