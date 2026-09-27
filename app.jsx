@@ -264,7 +264,7 @@ function TrainingView({ onClose, onNavigate, activeTab }) {
   }, [step]);
 
   if (step < 0) return (
-    <div role="dialog" aria-modal="true" aria-label="สอนสั่งสินค้า" style={{position:"fixed",inset:0,zIndex:1500,background:"#0009",display:"grid",placeItems:"center",padding:16}}>
+    <div role="dialog" aria-modal="true" aria-label="สอนสั่งสินค้า" style={{position:"fixed",inset:0,zIndex:5000,background:"#0009",display:"grid",placeItems:"center",padding:16}}>
       <div style={{background:"var(--paper)",borderRadius:16,padding:22,maxWidth:420,width:"100%",lineHeight:1.6,boxShadow:"0 16px 50px #0004"}}>
         <h2 style={{margin:"0 0 8px",fontSize:20}}>🎓 สั่งสินค้าเข้าหน้าร้าน</h2>
         <p>บทต้นแบบนี้จะพาไปกดที่หน้าจริงทีละจุด เริ่มจากค้นสินค้า ไปจนถึงปุ่มยืนยันคำขอ</p>
@@ -284,7 +284,7 @@ function TrainingView({ onClose, onNavigate, activeTab }) {
   ] : [{left:0,top:0,width:w,height:h}];
   const canClickTarget = current.action === "search" || current.action === "click";
   return (
-    <div role="dialog" aria-modal="true" aria-label="ตัวช่วยพากดหน้าจริง" style={{position:"fixed",inset:0,zIndex:1500,pointerEvents:"none"}}>
+    <div role="dialog" aria-modal="true" aria-label="ตัวช่วยพากดหน้าจริง" style={{position:"fixed",inset:0,zIndex:5000,pointerEvents:"none"}}>
       {panes.map((p,i) => <div key={i} style={{...dim,...p}}/>)}
       {spot && <div style={{position:"fixed",left:spot.left,top:spot.top,width:spot.right-spot.left,height:spot.bottom-spot.top,
         border:"3px solid #f59e0b",borderRadius:10,boxSizing:"border-box",pointerEvents:canClickTarget?"none":"auto"}}/>}
