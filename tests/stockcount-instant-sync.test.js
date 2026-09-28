@@ -199,10 +199,15 @@ describe('immediate UI stock patches', () => {
     expect(APP).toMatch(/<FrontStoreView[^>]*[\s\S]*?patchProductQtys=\{patchProductQtys\}/);
     expect(APP).toMatch(/<StockCountView[^>]*[\s\S]*?patchProductQtys=\{patchProductQtys\}/);
     expect(APP).toMatch(/<OverviewView[^>]*patchProductQtys=\{patchProductQtys\}/);
+    expect(APP).toMatch(/<CategoryView[^>]*patchProductQtys=\{patchProductQtys\}/);
     expect(APP).toMatch(/<StockView[^>]*patchProductQtys=\{patchProductQtys\}/);
     expect(APP).toMatch(/<TrendsView[^>]*patchProductQtys=\{patchProductQtys\}/);
     expect(APP).toMatch(/<AddProductView[^>]*patchProductQtys=\{patchProductQtys\}/);
-    expect(MAIN).toContain('patchProductQtys={patchProductQtys}');
+    expect(MAIN).toMatch(/function CategoryView\(\{ data, role, onNav, patchProductQtys \}\)/);
+    expect(MAIN).toMatch(/function OrderModal\(\{[^}]*patchProductQtys[^}]*\}\)/);
+    const orderModalUses = MAIN.match(/<OrderModal product=\{orderProduct\}[\s\S]*?\/>/g) || [];
+    expect(orderModalUses).toHaveLength(2);
+    orderModalUses.forEach(use => expect(use).toContain('patchProductQtys={patchProductQtys}'));
     expect(MAIN).toContain('patchFrontStoreProductFromResult_(patchProductQtys, res, product.sku)');
     expect(MAIN).toContain('.then(res => patchFrontStoreProductFromResult_(patchProductQtys, res, f.sku))');
   });

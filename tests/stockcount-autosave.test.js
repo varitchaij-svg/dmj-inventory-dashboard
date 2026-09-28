@@ -31,6 +31,7 @@ function grabFn(src, name) {
 }
 
 const SCV = grabFn(VANALYTICS, 'StockCountView');
+const CALCPAD = grabFn(VANALYTICS, 'CalcPadModal');
 
 describe('StockCountView — ทุกวิธีกรอกจำนวนต้องลง localEditsRef', () => {
   it('มีจุด commit เครื่องคิดเลข (o[calcPad.sku]=qty) อยู่จริงในหลายโหมด', () => {
@@ -79,5 +80,24 @@ describe('StockCountView — ทุกวิธีกรอกจำนวนต
     expect(m).toContain('saving');
     expect(m).toContain('scSavableCount === 0');
     expect(m).toContain('lastSavedSnap');
+  });
+});
+
+describe('แก้จำนวนเดิมได้ตรงตัว — calculator และช่องกรอกตำแหน่ง', () => {
+  it('เครื่องคิดเลข: ถ้าเปิดมาพร้อมจำนวนเดิม เลขตัวแรกแทนค่าเดิมทั้งก้อน', () => {
+    expect(CALCPAD).toContain('const [replaceOnNextDigit, setReplaceOnNextDigit] = uS(false);');
+    expect(CALCPAD).toContain("setReplaceOnNextDigit(init !== '');");
+    expect(CALCPAD).toMatch(/if \(\(result !== null && !justOp\) \|\| replaceOnNextDigit\)/);
+  });
+
+  it('เครื่องคิดเลข: ยังบวก/ลบต่อจากค่าเดิมได้ และมีคำแนะนำสั้น ๆ บนจอ', () => {
+    expect(CALCPAD).toContain('setReplaceOnNextDigit(false);');
+    expect(CALCPAD).toContain('พิมพ์เลขใหม่เพื่อแทนค่าเดิม · ใช้ +/− เพื่อคำนวณต่อ');
+  });
+
+  it('ช่องกรอกจำนวนแบบพิมพ์ตรง เลือกค่าเดิมทั้งช่องตอนโฟกัสเพื่อพิมพ์ทับได้', () => {
+    const quantityInput = SCV.match(/<input type="number" min="0" inputMode="numeric"[\s\S]*?\/>/);
+    expect(quantityInput, 'ไม่พบช่องกรอกจำนวนใน StockCountView').toBeTruthy();
+    expect(quantityInput[0]).toContain('e.target.select()');
   });
 });

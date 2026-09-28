@@ -192,6 +192,12 @@
       // ได้แต่ "—" กับยอด 0 = เทสต์เขียวโดยไม่ได้ทดสอบตัวเลขที่ลูกค้าจะเห็นจริงเลย
       let posted = {};
       try { posted = JSON.parse(body) || {}; } catch (e) {}
+      // Expose mock quantity writes for stock-count edit/save browser regressions.
+      if (posted.confirmStockCount) {
+        window.__DMJ_STOCK_COUNT_WRITES = (window.__DMJ_STOCK_COUNT_WRITES || []).concat(
+          (posted.entries || []).map(function (e) { return { sku: e.sku, qty: e.qty }; })
+        );
+      }
       if (posted.createSaleBill) {
         // โหมดจำลอง "GAS เขียนบิลเสร็จแล้วแต่ตอบเป็นหน้า HTML" (execution ซ้อนกัน / ลิงก์ตัดสาย)
         // — เส้นทางที่ res.json() ดิบเคยโยน "Unexpected token '<'" แล้วผู้ขายกดซ้ำ = บิลซ้ำ

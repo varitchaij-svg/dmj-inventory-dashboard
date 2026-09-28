@@ -2701,7 +2701,7 @@ function App() {
                                             onNav={(t, view) => { dmjRequestView(t, view); handleSetTab(t); }}/></ErrorBoundary>}
         {activeTab === "overview"     && <ErrorBoundary key="overview"><OverviewView data={data} range={range} setRange={setRange} role={viewRole} patchProductQtys={patchProductQtys}/></ErrorBoundary>}
         {activeTab === "whhome"       && <ErrorBoundary key="whhome"><WarehouseHomeView data={data} onNav={handleSetTab}/></ErrorBoundary>}
-        {activeTab === "categories"   && <ErrorBoundary key="categories"><CategoryView data={data} role={viewRole} onNav={handleSetTab}/></ErrorBoundary>}
+        {activeTab === "categories"   && <ErrorBoundary key="categories"><CategoryView data={data} role={viewRole} onNav={handleSetTab} patchProductQtys={patchProductQtys}/></ErrorBoundary>}
         {activeTab === "trends"       && <ErrorBoundary key="trends"><TrendsView data={data} role={viewRole} patchProductQtys={patchProductQtys}/></ErrorBoundary>}
         {activeTab === "stock"        && <ErrorBoundary key="stock"><StockView data={data} role={viewRole} patchProductQtys={patchProductQtys}/></ErrorBoundary>}
         {activeTab === "newproduct"   && <ErrorBoundary key="newproduct"><AddProductView data={data} role={viewRole} onAdded={fetchFromSheet} patchProductQtys={patchProductQtys}/></ErrorBoundary>}
