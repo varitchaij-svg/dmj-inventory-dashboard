@@ -175,7 +175,7 @@ describe('meta — product-first เป็น default + save เดินผ่�
   });
 
   it('R1 filter ยัง = 3 จุด · ไม่มี localEditsRef.clear', () => {
-    const n = (VANA.match(/\.filter\(e => e\.qty !== savedQtys\[e\.sku\]\)/g) || []).length;
+    const n = (VANA.match(/\.filter\(e => e\.qty !== savedQtys\[e\.sku\] \|\|\s*zortRetrySkus\.has\(String\(e\.sku\)\.toUpperCase\(\)\)\)/g) || []).length;
     expect(n).toBe(3);
     expect(VANA.includes('localEditsRef.current.clear()')).toBe(false);
   });
