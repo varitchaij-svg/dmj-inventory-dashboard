@@ -89,7 +89,7 @@ describe('F05 ข้อ 2/3 — ต้องรอผลจริง ล้ม�
   });
 
   it('ผลเป็น success===false → ไม่เข้ากอง okIds (ไม่บันทึกว่าพิมพ์แล้ว)', () => {
-    expect(CONFIRM_PRINTED).toMatch(/if \(res && res\.success === false\) \{ failIds\.push\(o\.id\); continue; \}/);
+    expect(CONFIRM_PRINTED).toMatch(/if \(res && res\.success === false\) \{[\s\S]*?failIds\.push\(o\.id\); continue;\s*\}/);
   });
 
   it('throw (เน็ตหลุด/GAS ตอบ HTML) ก็นับเป็นล้มเหลว ไม่ใช่สำเร็จ', () => {

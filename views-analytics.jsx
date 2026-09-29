@@ -4636,7 +4636,7 @@ function reconcileOrderState(order, localEntry, nowMs) {
   const now = nowMs == null ? Date.now() : nowMs;
   const SIX_H = 6 * 60 * 60 * 1000;
   const DONE_ST = new Set(["สำเร็จ","completed","ส่งแล้ว","shipped"]);
-  const local = localEntry || {};
+  const local = { ...(localEntry || {}) };
   // ไม่มี local state → ไม่มีอะไรต้อง apply
   if (!Object.keys(local).length) return {};
 
@@ -4646,6 +4646,27 @@ function reconcileOrderState(order, localEntry, nowMs) {
   // กรณี row reuse: local มี sig แต่ไม่ตรงกับ order ปัจจุบัน → state นี้เป็นของ order อื่น
   // (แถวถูก reuse) → ทิ้งทั้งหมด ไม่ให้เลอะข้าม order
   if (local.sig && local.sig !== sig) return {};
+
+  // ค่า local ที่ server ตอบยืนยันแล้วจะอยู่เป็น overlay จนกว่าจะเห็น snapshot
+  // ที่ใหม่กว่าคำตอบนั้น หรือ snapshot ปัจจุบันมีค่าเดียวกันอยู่แล้ว.
+  const confirmedAt = { ...(local.serverConfirmedAt || {}) };
+  const snapshotAt = Number(order._ordersServerAt) || 0;
+  let confirmedChanged = false;
+  ["status", "preparedQty", "printFlag", "carryMode", "toCentral"].forEach(field => {
+    if (!Object.prototype.hasOwnProperty.call(confirmedAt, field) || !Object.prototype.hasOwnProperty.call(local, field)) return;
+    const writtenAt = typeof confirmedAt[field] === "number" ? confirmedAt[field] : Date.parse(confirmedAt[field] || "");
+    if (order[field] === local[field] || (snapshotAt && Number.isFinite(writtenAt) && snapshotAt >= writtenAt)) {
+      delete local[field];
+      delete confirmedAt[field];
+      confirmedChanged = true;
+    }
+  });
+  if (confirmedChanged) {
+    if (Object.keys(confirmedAt).length) local.serverConfirmedAt = confirmedAt;
+    else delete local.serverConfirmedAt;
+  }
+  const stateFields = ["status", "preparedQty", "printFlag", "carryMode", "toCentral"];
+  if (!stateFields.some(field => Object.prototype.hasOwnProperty.call(local, field))) return {};
 
   // local terminal status (สำเร็จ/ส่งแล้ว ฯลฯ) ทับ sheet ที่บอกว่ายังรอ
   const localTerminal = DONE_ST.has(local.status);
@@ -4664,7 +4685,7 @@ function reconcileOrderState(order, localEntry, nowMs) {
   return local;
 }
 
-function patchOrderState(id, updates, sig) {
+function patchOrderState(id, updates, sig, serverTime) {
   const s = getOrdersState();
   // ถ้า entry เดิมมี sig แต่ไม่ตรงกับ order ปัจจุบัน = state ค้างของ order อื่น (row reuse)
   // → ทิ้งทั้ง entry ก่อน merge มิฉะนั้น status เก่า (เช่น "ส่งแล้ว") จะถูก adopt มาทับ
@@ -4673,6 +4694,14 @@ function patchOrderState(id, updates, sig) {
   s[id] = { ...prev, ...updates };
   // แนบ sig (content signature) ลงไปเสมอ เพื่อกัน row-reuse เลอะข้าม order
   if (sig != null) s[id].sig = sig;
+  if (serverTime) {
+    const confirmedAt = { ...(s[id].serverConfirmedAt || {}) };
+    const stamp = typeof serverTime === "number" ? serverTime : new Date(serverTime).toISOString();
+    ["status", "preparedQty", "printFlag", "carryMode", "toCentral"].forEach(field => {
+      if (Object.prototype.hasOwnProperty.call(updates || {}, field)) confirmedAt[field] = stamp;
+    });
+    s[id].serverConfirmedAt = confirmedAt;
+  }
   // record when status was changed so we can detect ID collisions with new orders
   if ('status' in updates) s[id].markedAt = new Date().toISOString();
   localStorage.setItem(LS_ORDERS_STATE, JSON.stringify(s)); return s;
@@ -4700,9 +4729,15 @@ function cleanupOrdersState(orders) {
 // ไม่เคยดูว่า GAS ตอบอะไรกลับมา · GAS ตอบ **หน้า HTML** ได้เมื่อ execution ซ้อนกัน/เน็ตร้าน
 // กระตุก → จำนวนที่จัดไม่ถูกบันทึกเลย แต่หน้าจอขึ้น "บันทึกแล้ว" → พนักงานเดินจากไป
 // แล้วรอบ sync ถัดมาเลขเด้งกลับเป็นค่าเก่า (= อาการ "ระบบเด้งจำนวนอื่น" ที่เจ้าของแจ้ง)
-// คืน { success, error, data } ให้ผู้เรียกตัดสินใจ — **ห้ามยิงซ้ำอัตโนมัติ** (ยังไม่ idempotent)
+// คืน { success, error, data } ให้ผู้เรียกตัดสินใจ — client ไม่ retry เอง;
+// server รองรับคำขอซ้ำที่ผลถูกบันทึกแล้วแบบ idempotent และตอบ conflict เมื่อ baseline เก่า
 async function syncOrderUpdate(order, updates) {
   if (!SHEET_DEPLOY_URL) return { success: false, error: "ไม่พบ URL ปลายทาง" };
+  const expectedState = {};
+  ["status", "preparedQty", "printFlag", "carryMode", "toCentral"].forEach(field => {
+    if (Object.prototype.hasOwnProperty.call(updates || {}, field)) expectedState[field] = order[field];
+  });
+  dmjMutationStart();
   try {
     const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method: "POST",
@@ -4713,6 +4748,9 @@ async function syncOrderUpdate(order, updates) {
         // sku/date = ตัวยืนยันว่าแถวที่ orderId ชี้ไปยังเป็นใบเดิม (กันแถวเลื่อนหลังมีคนลบ order)
         sku:         order.sku,
         date:        order.date,
+        cid:         order.cid || "",
+        orderQty:    order.orderQty,
+        expectedState,
         status:      updates.status,
         preparedQty: updates.preparedQty,
         printFlag:   updates.printFlag,
@@ -4723,6 +4761,13 @@ async function syncOrderUpdate(order, updates) {
     });
     // ⚠️ ต้องอ่านคำตอบจริงเสมอ (บทเรียนข้อ 13 ใน CLAUDE.md) — เดิม await แล้วจบเลย
     const d = await dmjJson(res);
+    if (d && d.conflict) {
+      const conflictData = d.data || {};
+      dmjMutationMarkWrite(conflictData.serverTime);
+      return { success:false, conflict:true, error:d.error || "ข้อมูลเปลี่ยนจากเครื่องอื่นแล้ว",
+        currentState:conflictData.currentState || null, serverTime:conflictData.serverTime || null,
+        conflictFields:conflictData.conflictFields || [] };
+    }
     // notFound = ทั้ง orderId และ sku+date หาแถวไม่เจอ (ใบถูกลบไปแล้ว) — ไม่ใช่ "สำเร็จ"
     if (d && d.success !== false && d.data && d.data.notFound)
       return { success: false, error: "ไม่พบรายการนี้ในชีตแล้ว (อาจถูกลบไป) — กดซิงค์" };
@@ -4730,23 +4775,27 @@ async function syncOrderUpdate(order, updates) {
       console.warn("syncOrderUpdate: GAS ปฏิเสธ", { orderId: order.id, error: d && d.error });
       return { success:false, error:(d && d.error) || "บันทึกไม่สำเร็จ" };
     }
-    return { success:true };
+    const result = d.data || {};
+    dmjMutationMarkWrite(result.serverTime);
+    return { success:true, currentState:result.currentState || null, serverTime:result.serverTime || null,
+      idempotent:!!result.idempotent };
   } catch(e) {
     console.warn("syncOrderUpdate failed:", e.message);
     return { success: false, error: dmjErrText(e) };
-  }
+  } finally { dmjMutationEnd(); }
 }
 
 // ยืนยันรับของจากชีต "รายการโอนสินค้า" (sync ข้ามเครื่อง)
 // ส่ง refNum (เลขใบโอน TF-...) ไปด้วยเสมอ — ฝั่ง GAS ใช้หาแถวที่ถูกต้องเมื่อ `rowId`
 // (= เลขแถวในชีต) ที่เครื่องนี้ถืออยู่เก่าไปแล้วเพราะมีแถวถูกลบออกไประหว่างนั้น
-async function syncShipmentReceive(rowId, sku, receivedQty, refNum) {
+async function syncShipmentReceive(rowId, sku, receivedQty, refNum, expectedReceipt) {
   if (!SHEET_DEPLOY_URL) return { success:false, error:"ยังไม่ได้ตั้งค่าที่อยู่เซิร์ฟเวอร์" };
+  dmjMutationStart();
   try {
     const res = await dmjFetch(SHEET_DEPLOY_URL, {
       method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"},
       body: JSON.stringify({
-        confirmShipmentReceive:true, rowId, sku, receivedQty, refNum,
+        confirmShipmentReceive:true, rowId, sku, receivedQty, refNum, expectedReceipt,
         actor: window._currentUser || sessionStorage.getItem("dmj_role") || "พนักงาน",
       }),
     });
@@ -4754,9 +4803,19 @@ async function syncShipmentReceive(rowId, sku, receivedQty, refNum) {
     // กลืนหน้า HTML ของ GAS ทิ้งเป็น success:false เปล่า ๆ ไม่มีข้อความบอกสาเหตุ
     // แล้วตัวเรียกก็ไม่เคยอ่านค่าที่คืนอยู่ดี → จอขึ้น "รับครบ ✅" ทั้งที่ไม่มีอะไรถูกบันทึก
     const j = await dmjJson(res);
+    if (j && j.conflict) {
+      const conflictData = j.data || {};
+      dmjMutationMarkWrite(conflictData.serverTime);
+      return { success:false, conflict:true, error:j.error || "ข้อมูลรับของเปลี่ยนจากเครื่องอื่นแล้ว",
+        currentState:conflictData.currentState || null, serverTime:conflictData.serverTime || null,
+        conflictFields:conflictData.conflictFields || [] };
+    }
     if (!j || j.success === false) return { success:false, error:(j && j.error) || "บันทึกไม่สำเร็จ" };
-    return { success:true, data:(j && j.data) || null };
+    const result = (j && j.data) || null;
+    dmjMutationMarkWrite(result && result.serverTime);
+    return { success:true, data:result };
   } catch(e){ return { success:false, error: dmjErrText(e) }; }
+  finally { dmjMutationEnd(); }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -4816,14 +4875,28 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
   // saveFailed = บันทึกลงชีตไม่ผ่าน · เลขบนจอยังเป็นค่าที่พนักงานกรอก (ไม่ทิ้งงานที่นับมา)
   // แต่ต้อง **บอกให้รู้ว่ายังไม่เข้าระบบ** ไม่งั้นเดินจากไปแล้วรอบ sync ถัดมาเลขเด้งกลับค่าเก่า
   const [saveFailed, setSaveFailed] = uS(false);
+  const applyServerOrderState = res => {
+    if (!res || !res.currentState) return false;
+    onPatch(order.id, res.currentState, { serverTime:res.serverTime });
+    if (res.currentState.preparedQty != null) {
+      const n = Number(res.currentState.preparedQty) || 0;
+      setPrepQty(n);
+      setPrepQtyDraft(String(n));
+    }
+    return true;
+  };
   const savePrepQty = async v => {
     const n = Math.max(0, parseInt(v)||0);
     setPrepQty(n);
     onPatch(order.id, {preparedQty: n});
     const res = await syncOrderUpdate(order, {preparedQty: n});
+    if (res && res.conflict) applyServerOrderState(res);
+    else if (res && res.success) applyServerOrderState(res);
     const bad = res && res.success === false;
     setSaveFailed(!!bad);
-    if (bad) showToast("warn", `ยังไม่ได้บันทึกจำนวน — ${res.error || "เน็ตอาจหลุด"} · กรอกใหม่อีกครั้ง`, "⚠️", 8000);
+    if (bad) showToast("warn", res.conflict
+      ? `ข้อมูลออเดอร์เปลี่ยนจากเครื่องอื่นแล้ว — ใช้ค่าล่าสุดจากเซิร์ฟเวอร์${res.error ? ` · ${res.error}` : ""}`
+      : `ยังไม่ได้บันทึกจำนวน — ${res.error || "เน็ตอาจหลุด"} · กรอกใหม่อีกครั้ง`, "⚠️", 8000);
   };
   // commit ค่าจาก draft ตอน blur/Enter เท่านั้น — ระหว่างพิมพ์ไม่ save ค่ากลาง (เช่น ว่างชั่วคราว)
   // (แทนที่ setPrepQtyLocal ของ branch นี้ — เป้าหมายเดียวกัน: ไม่ยิง POST/audit ทุก keystroke
@@ -4848,10 +4921,14 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
     onPatch(order.id, updates);
     const res = await syncOrderUpdate(order, updates);
     if (res && res.success === false) {
-      onPatch(order.id, prevUpdates);
-      showToast("warn", `ยังไม่ได้บันทึก${label ? " " + label : ""} — ${res.error || "เน็ตอาจหลุด"} · กดใหม่อีกครั้ง`, "⚠️", 8000);
+      if (res.conflict) applyServerOrderState(res);
+      else onPatch(order.id, prevUpdates);
+      showToast("warn", res.conflict
+        ? `ข้อมูลออเดอร์เปลี่ยนจากเครื่องอื่นแล้ว — ใช้ค่าล่าสุดจากเซิร์ฟเวอร์${res.error ? ` · ${res.error}` : ""}`
+        : `ยังไม่ได้บันทึก${label ? " " + label : ""} — ${res.error || "เน็ตอาจหลุด"} · กดใหม่อีกครั้ง`, "⚠️", 8000);
       return false;
     }
+    applyServerOrderState(res);
     return true;
   };
 
@@ -4876,11 +4953,15 @@ function OrderItemRow({ order, onPatch, productMap, role, skuLocks, storageData 
     if (res && res.success === false) {
       // ถอย optimistic patch กลับเป็น "รอ" — ปล่อยไว้ = แถวหายจากคิว "รอดำเนินการ" บนเครื่องนี้
       // ทั้งที่ชีตยังค้างอยู่ → คนอื่นเห็นว่ายังไม่จัด แต่คนจัดคิดว่าจัดเสร็จแล้ว
-      onPatch(order.id, { status: "รอ" });
+      if (res.conflict) applyServerOrderState(res);
+      else onPatch(order.id, { status: order.status || "รอ", preparedQty: order.preparedQty });
       setSaveFailed(true);
-      showToast("warn", `ยังไม่ได้บันทึก — ${res.error || "เน็ตอาจหลุด"} · กดใหม่อีกครั้ง`, "⚠️", 8000);
+      showToast("warn", res.conflict
+        ? `ข้อมูลออเดอร์เปลี่ยนจากเครื่องอื่นแล้ว — ใช้ค่าล่าสุดจากเซิร์ฟเวอร์${res.error ? ` · ${res.error}` : ""}`
+        : `ยังไม่ได้บันทึก — ${res.error || "เน็ตอาจหลุด"} · กดใหม่อีกครั้ง`, "⚠️", 8000);
       return;
     }
+    applyServerOrderState(res);
     setSaveFailed(false);
     showToast("success", t("บันทึกแล้ว"), "✅", 2500);
   };
@@ -5255,6 +5336,9 @@ function ShipmentRow({ s, role, productMap, onConfirm }) {
   const [imgOpen, setImgOpen] = uS(false);
   const [recvQty, setRecvQty] = uS(() => s.receivedQty != null ? s.receivedQty : (s.qty || 0));
   const [editing, setEditing] = uS(false);
+  uE(() => {
+    setRecvQty(s.receivedQty != null ? s.receivedQty : (s.qty || 0));
+  }, [s.id, s.receivedQty, s.receivedAt, s.qty]);
   const product = productMap ? productMap[s.sku] : null;
   const imgSrc = s.image || product?.imageUrl || null;
   const canConfirm = canReceiveShipment(role);
@@ -5420,8 +5504,10 @@ function ShipmentReceiveList({ data, role, productMap }) {
   const shipments = data.shipments || [];
   const [confirmed, setConfirmed] = uS({}); // { [id]: {receivedQty, receivedStatus, receivedAt} }
   const [toast, showToast, hideToast] = useToast();
+  const shipmentsServerAt = Number(data.shipmentsServerAt) || 0;
 
-  // เมื่อ backend ยืนยัน receivedAt มาแล้ว → ล้าง overlay ตัวนั้นทิ้ง ใช้ค่าจริง (receivedBy ฯลฯ)
+  // เคลียร์ overlay เฉพาะเมื่อ snapshot ตรงกับค่าที่เพิ่งบันทึก หรือ snapshot ใหม่กว่า
+  // timestamp จาก write response; แค่เห็น receivedAt ไม่พอ เพราะ payload อาจเป็นของเก่า.
   uE(() => {
     setConfirmed(prev => {
       if (!Object.keys(prev).length) return prev;
@@ -5430,12 +5516,18 @@ function ShipmentReceiveList({ data, role, productMap }) {
       const real = {};
       shipments.forEach(s => { real[s.id] = s; });
       Object.keys(prev).forEach(id => {
-        if (real[id] && real[id].receivedAt) { changed = true; return; } // มีค่าจริงแล้ว ทิ้ง overlay
+        const live = real[id], overlay = prev[id];
+        if (!live) { next[id] = overlay; return; }
+        const matches = String(live.receivedAt || "") === String(overlay.receivedAt || "")
+          && live.receivedQty === overlay.receivedQty
+          && String(live.receivedStatus || "") === String(overlay.receivedStatus || "");
+        const newer = overlay.serverTime && shipmentsServerAt >= Date.parse(overlay.serverTime);
+        if (matches || newer) { changed = true; return; }
         next[id] = prev[id];
       });
       return changed ? next : prev;
     });
-  }, [shipments]);
+  }, [shipments, shipmentsServerAt]);
 
   // merge overlay (optimistic) กับข้อมูลจริง
   const rows = uM(() =>
@@ -5467,9 +5559,27 @@ function ShipmentReceiveList({ data, role, productMap }) {
   // แต่ชีตไม่มีอะไรเปลี่ยน → เปิดแอปใหม่รายการเด้งกลับมาเป็น "ยังไม่รับ" ให้กดซ้ำอีก 2-3 รอบ
   const handleConfirm = async (s, n) => {
     const status = n >= s.qty ? "รับครบ" : "รับไม่ครบ";
-    setConfirmed(prev => ({ ...prev, [s.id]: { receivedQty:n, receivedStatus:status, receivedAt:new Date().toISOString() } }));
-    const r = await syncShipmentReceive(s.id, s.sku, n, s.refNum);
+    const optimistic = { receivedQty:n, receivedStatus:status, receivedAt:new Date().toISOString(), receivedBy:"" };
+    setConfirmed(prev => ({ ...prev, [s.id]: optimistic }));
+    const expectedReceipt = {
+      sentQty: s.qty,
+      receivedAt: s.receivedAt || "",
+      receivedQty: s.receivedQty == null ? null : s.receivedQty,
+      receivedStatus: s.receivedStatus || "",
+    };
+    const r = await syncShipmentReceive(s.id, s.sku, n, s.refNum, expectedReceipt);
+    if (r && r.conflict) {
+      if (r.currentState) setConfirmed(prev => ({ ...prev, [s.id]: { ...r.currentState, serverTime:r.serverTime } }));
+      else setConfirmed(prev => { const next = { ...prev }; delete next[s.id]; return next; });
+      showToast("warn", `ข้อมูลรับของเปลี่ยนจากเครื่องอื่นแล้ว — แสดงค่าล่าสุดจากเซิร์ฟเวอร์${r.error ? ` · ${r.error}` : ""}`, "⚠️", 8000);
+      return;
+    }
     if (r && r.success) {
+      const serverState = r.data && r.data.currentState;
+      setConfirmed(prev => ({ ...prev, [s.id]: {
+        ...(serverState || { ...optimistic, receivedAt:new Date().toISOString() }),
+        serverTime: (r.data && r.data.serverTime) || null,
+      } }));
       showToast("success", status==="รับครบ" ? `${t("รับครบ")} ✅` : `รับ ${n}/${s.qty} pcs ⚠️`, "📦", 3000);
       return;
     }
@@ -5541,6 +5651,7 @@ function OrderGroupHead({ carry, n }) {
 
 function OrderListView({ data, role }) {
   const orders = data.orders || [];
+  const ordersServerAt = Number(data.ordersServerAt) || 0;
   const [filter, setFilter] = uS("all");
   const [st, setSt] = uS(getOrdersState);
 
@@ -5568,12 +5679,13 @@ function OrderListView({ data, role }) {
   const enriched = uM(() => {
     return orders.map((o, i) => {
       const id = stableOrderId(o, i);
+      const serverOrder = ordersServerAt ? { ...o, _ordersServerAt:ordersServerAt } : o;
       // reconcileOrderState ตัดสินใจว่าจะ apply localStorage state นี้หรือไม่
       // (กัน row-reuse เลอะข้าม order + auto-heal state ค้างเดิมที่ไม่มี sig)
-      const applied = reconcileOrderState(o, st[id]);
-      return { ...o, id, ...applied };
+      const applied = reconcileOrderState(serverOrder, st[id]);
+      return { ...serverOrder, id, ...applied };
     });
-  }, [orders, st]);
+  }, [orders, ordersServerAt, st]);
 
   // ลำดับบนจอ — ที่เดียวที่ตัดสินว่าอะไรอยู่บน (หัวข้อคั่นกลุ่มด้านล่างอ่านจากลำดับนี้ ไม่จัดเรียงเอง)
   // ① ของหิ้วขึ้นก่อนเสมอ — ลูกค้ายืนรออยู่หน้าร้าน ต่างจากของขึ้นรถที่รอรอบส่งทีหลังได้
@@ -5597,9 +5709,9 @@ function OrderListView({ data, role }) {
   }, [sorted, filter]);
 
   // แนบ sig ของ order ที่กำลัง patch เสมอ (lookup จาก enriched ด้วย id) เพื่อกัน row-reuse เลอะข้าม
-  const patch = (id, updates) => {
+  const patch = (id, updates, meta) => {
     const o = enriched.find(x => x.id === id);
-    setSt(patchOrderState(id, updates, o ? orderSig(o) : undefined));
+    setSt(patchOrderState(id, updates, o ? orderSig(o) : undefined, meta && meta.serverTime));
   };
 
   const pendingCount = sorted.filter(isPendingOrder).length;
@@ -5770,7 +5882,7 @@ async function syncTransferCheck(tid) {
   const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
   try {
     const d = await dmjJson(await fetch(
-      `${SHEET_DEPLOY_URL}${sep}action=transferCheck&tid=${encodeURIComponent(tid)}&_t=${Date.now()}`,
+      dmjSessionUrl(`${SHEET_DEPLOY_URL}${sep}action=transferCheck&tid=${encodeURIComponent(tid)}&_t=${Date.now()}`),
       { cache: "no-store" }));
     return (d && d.ok === true && typeof d.found === "boolean") ? d : null;
   } catch(e) { console.warn("syncTransferCheck error:", e.message); return null; }
@@ -5784,7 +5896,7 @@ async function syncRecentTransfers(days) {
   const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
   try {
     const d = await dmjJson(await fetch(
-      `${SHEET_DEPLOY_URL}${sep}action=recentTransfers&days=${days || 3}&_t=${Date.now()}`,
+      dmjSessionUrl(`${SHEET_DEPLOY_URL}${sep}action=recentTransfers&days=${days || 3}&_t=${Date.now()}`),
       { cache: "no-store" }));
     return (d && d.ok === true && Array.isArray(d.list)) ? d.list : null;
   } catch(e) { console.warn("syncRecentTransfers error:", e.message); return null; }
@@ -5797,7 +5909,7 @@ async function syncRecentIntake(days) {
   const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
   try {
     const d = await dmjJson(await fetch(
-      `${SHEET_DEPLOY_URL}${sep}action=recentIntake&days=${days || 90}&_t=${Date.now()}`,
+      dmjSessionUrl(`${SHEET_DEPLOY_URL}${sep}action=recentIntake&days=${days || 90}&_t=${Date.now()}`),
       { cache: "no-store" }));
     return (d && d.ok === true && Array.isArray(d.purchases)) ? d.purchases : null;
   } catch(e) { console.warn("syncRecentIntake error:", e.message); return null; }
@@ -5812,7 +5924,7 @@ async function syncZortTransferLookup(number) {
   const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
   try {
     const d = await dmjJson(await fetch(
-      `${SHEET_DEPLOY_URL}${sep}action=zortTransfer&number=${encodeURIComponent(number)}&_t=${Date.now()}`,
+      dmjSessionUrl(`${SHEET_DEPLOY_URL}${sep}action=zortTransfer&number=${encodeURIComponent(number)}&_t=${Date.now()}`),
       { cache: "no-store" }));
     if (!d || d.ok !== true) return null;
     return d.found ? { list: d.list || [], transfer: d.transfer, sheetLogged: !!d.sheetLogged } : { found: false };
@@ -6194,6 +6306,7 @@ function parseShipDateMs(s) {
 // ─────────────────────────────────────────────────────────────────────
 function OrderSummaryView({ data, onPrintRequest }) {
   const orders   = data.orders   || [];
+  const ordersServerAt = Number(data.ordersServerAt) || 0;
   const products = data.products || [];
   const [st, setSt]           = uS(getOrdersState);
   const [printed, setPrinted] = uS(getPrintedOrders);
@@ -6289,12 +6402,13 @@ function OrderSummaryView({ data, onPrintRequest }) {
     return orders.map((o, i) => {
       const id = stableOrderId(o, i);
       const skuKey = (o.sku || '').trim().toUpperCase();
+      const serverOrder = ordersServerAt ? { ...o, _ordersServerAt:ordersServerAt } : o;
       // ใช้ reconcileOrderState เดียวกับ OrderListView → กัน row-reuse เลอะข้าม order
       // (sig ไม่ตรง = state ของ order อื่น → ทิ้ง) + auto-heal state ค้างเดิมที่ไม่มี sig
-      const applied = reconcileOrderState(o, st[id]);
-      return { ...o, id, ...applied, product: productMap[o.sku] || productMap[skuKey] };
+      const applied = reconcileOrderState(serverOrder, st[id]);
+      return { ...serverOrder, id, ...applied, product: productMap[o.sku] || productMap[skuKey] };
     });
-  }, [orders, st, productMap]);
+  }, [orders, ordersServerAt, st, productMap]);
 
   // แสดงเฉพาะที่กด Done แล้ว
   const isDone = o => o.status === "สำเร็จ" || o.status === "completed" || o.status === "done";
@@ -6358,9 +6472,13 @@ function OrderSummaryView({ data, onPrintRequest }) {
       let res = null;
       try { res = await syncOrderUpdate(o, { printFlag: "printed" }); }
       catch (e) { res = { success: false, error: dmjErrText ? dmjErrText(e) : String(e) }; }
-      if (res && res.success === false) { failIds.push(o.id); continue; }
+      if (res && res.success === false) {
+        if (res.conflict && res.currentState)
+          setSt(patchOrderState(o.id, res.currentState, orderSig(o), res.serverTime));
+        failIds.push(o.id); continue;
+      }
       okIds.push(o.id);
-      setSt(patchOrderState(o.id, { printFlag: "printed" }, orderSig(o)));
+      setSt(patchOrderState(o.id, (res && res.currentState) || { printFlag: "printed" }, orderSig(o), res && res.serverTime));
     }
     if (okIds.length) {
       const p2 = { ...printed };
@@ -12131,7 +12249,7 @@ async function syncBillCheck(billCid) {
   try {
     const sep = GOOGLE_SHEET_URL.includes("?") ? "&" : "?";
     const res = await dmjFetch(
-      `${GOOGLE_SHEET_URL}${sep}action=billCheck&cid=${encodeURIComponent(billCid)}&_t=${Date.now()}`,
+      dmjSessionUrl(`${GOOGLE_SHEET_URL}${sep}action=billCheck&cid=${encodeURIComponent(billCid)}&_t=${Date.now()}`),
       { cache: "no-store", dmjTimeoutMs: 20000 });
     const d = await dmjJson(res);
     // รูปแบบต้องตรงเป๊ะถึงจะเชื่อ — ขาด ok/found = ไม่ใช่คำตอบของ endpoint นี้

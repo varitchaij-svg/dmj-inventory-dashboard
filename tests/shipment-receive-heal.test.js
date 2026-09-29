@@ -202,13 +202,13 @@ describe('meta-test — จุดเชื่อมต่อที่หลุ�
   it('doPost ส่ง refNum เข้า confirmShipmentReceive', () => {
     // ไม่ส่ง = ตกไปใช้การเดาจาก SKU อย่างเดียว ซึ่งจะปฏิเสธทันทีเมื่อมีของค้าง SKU ซ้ำ
     expect(codeOnly(SRC)).toMatch(
-      /confirmShipmentReceive\(ss, data\.rowId, data\.sku, Number\(data\.receivedQty\) \|\| 0, actor, data\.refNum\)/
+      /confirmShipmentReceive\(ss, data\.rowId, data\.sku, Number\(data\.receivedQty\) \|\| 0, actor, data\.refNum, data\.expectedReceipt\)/
     );
   });
 
   it('ฝั่งเว็บส่ง refNum ไปด้วย', () => {
     expect(ANALYTICS).toMatch(/confirmShipmentReceive:true, rowId, sku, receivedQty, refNum/);
-    expect(ANALYTICS).toMatch(/syncShipmentReceive\(s\.id, s\.sku, n, s\.refNum\)/);
+    expect(ANALYTICS).toMatch(/syncShipmentReceive\(s\.id, s\.sku, n, s\.refNum, expectedReceipt\)/);
   });
 
   it('syncShipmentReceive อ่านคำตอบจริงด้วย dmjJson (ห้ามกลับไป res.json().catch)', () => {
@@ -229,6 +229,6 @@ describe('meta-test — จุดเชื่อมต่อที่หลุ�
   it('syncOrderUpdate ก็อ่านคำตอบจริงแล้วเหมือนกัน', () => {
     const fn = grab(ANALYTICS, /async function syncOrderUpdate\([\s\S]*?\n\}/);
     expect(fn).toContain('dmjJson(res)');
-    expect(fn).toMatch(/return \{ success:true \}/);
+    expect(fn).toMatch(/return \{ success:true, currentState:result\.currentState/);
   });
 });

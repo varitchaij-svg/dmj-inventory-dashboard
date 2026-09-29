@@ -903,6 +903,34 @@ function f07Guard_(e, allowedRoles) {
   return null;
 }
 
+// Session gate for the order / receiving GET routes. A missing token remains
+// migration-compatible while REQUIRE_LOGIN is off, but a supplied bad or
+// inactive token is never silently treated as an anonymous request.
+var ORDER_GET_COMMON_ROLES_ = ["saler", "storedevice", "frontstore", "warehouse", "employee"];
+function authorizeOrderGet_(params, allowedRoles, requireSession) {
+  var token = String((params && params.sessionToken) || "").trim();
+  var sess = null;
+  if (token) {
+    try { sess = resolveSession_(SpreadsheetApp.openById(SHEET_ID), token); }
+    catch (e) { return unauthorized_(); }
+    if (!sess || sess.status !== "active") return unauthorized_();
+    if (!isAdminRole_(sess.role) && allowedRoles && allowedRoles.indexOf(sess.role) < 0)
+      return forbidden_("ไม่มีสิทธิ์ดูข้อมูลนี้");
+    return null;
+  }
+  if (requireSession || requireLoginEnabled_())
+    return forbidden_("ต้องล็อกอินก่อนใช้งาน");
+  return null;
+}
+
+function orderGetGate_(params, action) {
+  var adminOnly = ["repairTransferLog", "previewTransferReceipts", "applyTransferReceipts"];
+  if (adminOnly.indexOf(action) >= 0) return authorizeOrderGet_(params, [], true);
+  if (action === "billCheck") return authorizeOrderGet_(params, ["saler", "storedevice"], false);
+  if (action === "recentIntake") return authorizeOrderGet_(params, ["warehouse", "saler", "storedevice"], false);
+  return authorizeOrderGet_(params, ORDER_GET_COMMON_ROLES_, false);
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 //  เฟส 4 ของระบบล็อกอิน — ตัวตนที่ server ยืนยันเอง (ไม่เชื่อ actor จาก client)
 // ══════════════════════════════════════════════════════════════════════════
@@ -968,7 +996,8 @@ var MTO_JOB_ACTIONS_ = ["createMtoJob", "closeMtoJob", "saveMtoJobItems", "delet
 // ⚠️ บทเรียน 2026-07-30: เปิด REQUIRE_LOGIN='true' ครั้งแรกแล้วทั้งร้านใช้งานไม่ได้ เพราะ
 // ROLE_ACTIONS_ เดิมเขียนจาก "เดาว่า role นี้น่าจะทำอะไร" ไม่ได้ไล่จาก ROLE_TABS + view จริง
 // เวลาเพิ่ม role หรือแท็บใหม่ ให้ไล่จาก ROLE_TABS → view → action ที่ view นั้นเรียกจริงเสมอ
-var COMMON_ACTIONS_ = ["order", "updateOrderState", "transferStock", "transferStockBatch", "transferStockBatchCentral",
+var COMMON_ACTIONS_ = ["order", "orderCheck", "orders", "transferCheck", "recentTransfers", "zortTransfer",
+                        "updateOrderState", "transferStock", "transferStockBatch", "transferStockBatchCentral",
                         "confirmShipmentReceive", "updateFrontStore", "clearFrontStoreChecks", "fetchProductImage",
                         "checkSkuExists", "updateLockData",
                         "punch", "myToday", "myAttendanceSummary",
@@ -986,14 +1015,14 @@ var COMMON_ACTIONS_ = ["order", "updateOrderState", "transferStock", "transferSt
 var ROLE_ACTIONS_ = {
   // createStockCheck = ปุ่มลอย 📤 "ส่งคำขอเช็คสต็อก" ในแท็บ "สินค้า & สั่ง" (ดู canSendCheck
   // ใน CategoryView) — saler/storedevice ยืนหน้าร้าน สั่งเช็คสต็อกร้านที่ตัวเองดูแลได้ (ส.ค. 2026)
-  saler:      ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
+  saler:      ["billCheck", "recentIntake", "createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
                "getContactDetail", "createQuotation", "editQuotation", "saveQuotationDraft", "deleteQuotationDraft",
                "voidQuotation", "approveQuotation", "setQuoteSale", "getInvoiceNumber", "createStockCheck",
                "saveQuoteFollowup",
                ].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   // storedevice = บัญชี LINE กลางประจำเครื่อง/แท็บเล็ตร้าน — สิทธิ์ API เท่า saler ทุกอย่าง
   // + attendanceToday (ดู "ใครเข้างานวันนี้" — เหตุผลที่มี role นี้อยู่เลย ต้องเปิดให้)
-  storedevice: ["createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
+  storedevice: ["billCheck", "recentIntake", "createSaleBill", "issueFullTaxInvoice", "lookupSaleBill", "searchContact",
                "getContactDetail", "createQuotation", "editQuotation", "saveQuotationDraft", "deleteQuotationDraft",
                "voidQuotation", "approveQuotation", "setQuoteSale", "getInvoiceNumber", "attendanceToday", "createStockCheck",
                "saveQuoteFollowup",
@@ -1004,7 +1033,7 @@ var ROLE_ACTIONS_ = {
   frontstore: ["completeStockCheck", "recordUnscannedSale"].concat(COMMON_ACTIONS_, MTO_JOB_ACTIONS_),
   // recordUnscannedSale = ปุ่ม "ขายไม่สแกน" ใน StockCountView (แท็บ "stockcount" — เฉพาะ
   // owner/warehouse/dev) เดิมหลุดจากตารางนี้เช่นกัน — warehouse เข้าแท็บนี้ได้จริงแต่กดปุ่มไม่ได้
-  warehouse:  ["deductStock", "confirmStockCount", "startStockCount", "closeStockCount",
+  warehouse:  ["recentIntake", "deductStock", "confirmStockCount", "startStockCount", "closeStockCount",
                "deleteLockEntry", "addNewProduct", "uploadProductPhoto",
                "addPurchaseIn", "zeroStock", "createStockCheck", "completeStockCheck",
                "deleteOrder", "deleteOrders", "reserveForm", "recordUnscannedSale",
@@ -2865,7 +2894,7 @@ function doPost(e) {
     // ─── Confirm Shipment Receive (sale/FS ยืนยันรับของจากชีตรายการโอนสินค้า) ───
     if (data.confirmShipmentReceive) {
       // refNum = ใบโอน (TF-...) ใช้หาแถวที่ถูกต้องเมื่อเลขแถวที่เครื่องผู้ใช้ถืออยู่เลื่อนไปแล้ว
-      return confirmShipmentReceive(ss, data.rowId, data.sku, Number(data.receivedQty) || 0, actor, data.refNum);
+      return confirmShipmentReceive(ss, data.rowId, data.sku, Number(data.receivedQty) || 0, actor, data.refNum, data.expectedReceipt);
     }
 
     // ─── Lock Data ───
@@ -2991,6 +3020,13 @@ function doGet(e) {
   perfReqBegin_('doGet', (e && e.parameter && e.parameter.action) || 'payload');
   try {
     if (!checkToken_(e && e.parameter && e.parameter.token)) return unauthorized_();
+    var _getAction = String((e && e.parameter && e.parameter.action) || "");
+    var _orderGetActions = ["orderCheck", "transferCheck", "billCheck", "recentTransfers", "recentIntake",
+      "zortTransfer", "repairTransferLog", "previewTransferReceipts", "applyTransferReceipts", "orders"];
+    if (_orderGetActions.indexOf(_getAction) >= 0) {
+      var _orderGetDenied = orderGetGate_(e.parameter, _getAction);
+      if (_orderGetDenied) return _orderGetDenied;
+    }
     // ตัวแยกสาเหตุ: เส้นทางเดียวกันเป๊ะกับ payload แต่คำตอบจิ๋วและไม่แตะชีตเลย
     // ยิงพร้อมกัน 15 แล้วได้ JSON ครบ = คอขวดอยู่ที่ "ขนาดคำตอบตอนส่งกลับ" ไม่ใช่ "จำนวนคนพร้อมกัน"
     // (5 ส.ค. 2026: Executions บอกว่า doGet เสร็จใน 2-5 วิ ทุกอัน แต่ browser ได้ HTML ที่ 23-49 วิ
@@ -5061,128 +5097,163 @@ function orderRowMatchesSku_(sheet, rowNum, sku) {
   return rowSku === want;
 }
 
+function normalizeOrderStateField_(field, value) {
+  if (field === "status") return String(value || "รอ");
+  if (field === "preparedQty") return Number(value) || 0;
+  if (field === "printFlag") return value == null || String(value) === "" ? null : String(value);
+  if (field === "carryMode") return String(value || "") === "carry" || String(value || "").indexOf("หิ้ว") >= 0 ? "carry" : "truck";
+  if (field === "toCentral") return value === true || String(value) === "1" || String(value).toLowerCase() === "true";
+  return value;
+}
+
+function readOrderState_(sheet, row) {
+  return {
+    status: normalizeOrderStateField_("status", sheet.getRange(row, COL_ORD_STATUS).getDisplayValue()),
+    preparedQty: normalizeOrderStateField_("preparedQty", sheet.getRange(row, COL_ORD_PREPQTY).getDisplayValue()),
+    printFlag: normalizeOrderStateField_("printFlag", sheet.getRange(row, COL_ORD_PRINTFLAG).getDisplayValue()),
+    carryMode: normalizeOrderStateField_("carryMode", sheet.getRange(row, COL_ORD_TYPE).getDisplayValue()),
+    toCentral: normalizeOrderStateField_("toCentral", sheet.getRange(row, COL_ORD_CENTRAL).getDisplayValue()),
+  };
+}
+
+function orderStateFields_(body) {
+  var fields = [];
+  if (body.status != null && body.status !== "") fields.push("status");
+  if (body.preparedQty != null) fields.push("preparedQty");
+  if (body.printFlag != null) fields.push("printFlag");
+  if (body.carryMode != null) fields.push("carryMode");
+  if (body.toCentral != null) fields.push("toCentral");
+  return fields;
+}
+
+function checkOrderStateBaseline_(current, body, fields) {
+  var expected = body && body.expectedState;
+  var missing = [], changed = [];
+  fields.forEach(function (field) {
+    if (!expected || !Object.prototype.hasOwnProperty.call(expected, field)) {
+      missing.push(field);
+      return;
+    }
+    if (normalizeOrderStateField_(field, expected[field]) !== current[field]) changed.push(field);
+  });
+  return { ok: !missing.length && !changed.length, missing: missing, changed: changed };
+}
+
+function requestedOrderStateMatches_(current, body, fields) {
+  return fields.every(function (field) {
+    return normalizeOrderStateField_(field, body[field]) === current[field];
+  });
+}
+
+function orderStateConflict_(message, currentState, fields) {
+  var now = new Date().toISOString();
+  return ContentService.createTextOutput(JSON.stringify({
+    success: false, conflict: true, error: message,
+    data: { currentState: currentState, conflictFields: fields || [], serverTime: now },
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function orderRowIdentityMatches_(sheet, row, body) {
+  if (body.cid) {
+    if (String(sheet.getRange(row, COL_ORD_CID).getDisplayValue() || "").trim() !== String(body.cid).trim()) return false;
+  }
+  if (body.date) {
+    var date = String(sheet.getRange(row, COL_ORD_DATE).getDisplayValue() || "").trim();
+    if (!date.includes(String(body.date).trim())) return false;
+  }
+  if (body.orderQty != null) {
+    var qty = Number(String(sheet.getRange(row, 8).getDisplayValue() || "").replace(/,/g, "")) || 0;
+    if (qty !== (Number(body.orderQty) || 0)) return false;
+  }
+  return true;
+}
+
 function updateOrderState(ss, body) {
   const sheet = ss.getSheetByName(SHEET_ORDERS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_ORDERS);
   const actor = body.actor || "ไม่ระบุ";
+  const fields = orderStateFields_(body);
+  if (!fields.length) return error("ไม่มีข้อมูลสถานะที่ต้องบันทึก");
 
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(8000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
 
+  var didWrite = false;
   try {
-    // Try direct row match via orderId ("R3" = sheet row 3, readOrders_ uses id:`R${i+1}` where i is 0-indexed)
-    if (body.orderId) {
-      const rowNum = parseInt(String(body.orderId).replace(/[^0-9]/g, ""));
-      if (rowNum >= 1 && orderRowMatchesSku_(sheet, rowNum, body.sku)) {
-        const sheetRow = rowNum; // id already encodes 1-indexed sheet row
-        // 1) อ่าน before-state ก่อนเขียน (เฉพาะ field ที่จะถูกแก้)
-        const before = {
-          status: sheet.getRange(sheetRow, COL_ORD_STATUS).getValue() || "",
-          preparedQty: sheet.getRange(sheetRow, COL_ORD_PREPQTY).getValue() || "",
-          printFlag: sheet.getRange(sheetRow, COL_ORD_PRINTFLAG).getValue() || "",
-          carryMode: sheet.getRange(sheetRow, COL_ORD_TYPE).getValue() || "",
-          toCentral: sheet.getRange(sheetRow, COL_ORD_CENTRAL).getValue() || "",
-        };
-        // 2) เขียนจริง
-        if (body.status)              sheet.getRange(sheetRow, COL_ORD_STATUS).setValue(body.status);
-        if (body.preparedQty != null) sheet.getRange(sheetRow, COL_ORD_PREPQTY).setValue(body.preparedQty);
-        // ผู้จัด = คนที่ลงมือจัดของจริง (กรอกจำนวนที่จัด หรือกดเปลี่ยนสถานะเป็นสำเร็จ)
-        // actor ตัวนี้ doPost ทับด้วยชื่อจาก session มาแล้ว (เฟส 4) — เชื่อถือได้
-        // ไม่นับการกด "พิมพ์ label" (printFlag อย่างเดียว) ว่าเป็นการจัดของ
-        if (body.preparedQty != null || body.status)
-          sheet.getRange(sheetRow, COL_ORD_PREPBY).setValue(actor);
-        if (body.printFlag != null)    sheet.getRange(sheetRow, COL_ORD_PRINTFLAG).setValue(body.printFlag); // M2: != null กัน false ถูกข้าม
-        if (body.carryMode != null) {
-          sheet.getRange(sheetRow, COL_ORD_TYPE).setValue(body.carryMode === "carry" ? "หิ้ว" : "รอขึ้นรถ");
-          if (body.carryMode === "carry") {
-            try {
-              const productName = body.name || body.sku || "(ไม่ทราบชื่อ)";
-              // orderQty อยู่ col H (index 7 / column 8) — อ่านจากชีตเป็นค่าจริง
-              const orderQty = Number(sheet.getRange(sheetRow, 8).getValue()) || Number(body.qty) || 0;
-              sendLineGroupOrderCard_(productName, body.sku||"", body.date||"", body.image||"", orderQty);
-            } catch(e) {}
-          }
+    var targetRow = 0;
+    var expectRow = parseInt(String(body.orderId || "").replace(/[^0-9]/g, "")) || 0;
+    if (expectRow >= 1 && orderRowMatchesSku_(sheet, expectRow, body.sku) && orderRowIdentityMatches_(sheet, expectRow, body))
+      targetRow = expectRow;
+
+    // If the row shifted, recover by the order's stable cid when available; older
+    // rows fall back to SKU/date/quantity and still require a state baseline below.
+    if (!targetRow) {
+      const data = sheet.getDataRange().getDisplayValues();
+      const wantSku = String(body.sku || "").trim().toUpperCase();
+      let bestI = -1, bestDist = Infinity;
+      if (wantSku) {
+        for (let i = 1; i < data.length; i++) {
+          const rowSku = String(data[i][COL_ORD_SKU - 1] || "").trim().toUpperCase();
+          const rowDate = String(data[i][COL_ORD_DATE - 1] || "").trim();
+          const rowCid = String(data[i][COL_ORD_CID - 1] || "").trim();
+          if (rowSku !== wantSku) continue;
+          if (body.cid && rowCid !== String(body.cid).trim()) continue;
+          if (body.date && !rowDate.includes(String(body.date).trim())) continue;
+          if (body.orderQty != null && (Number(String(data[i][7] || "").replace(/,/g, "")) || 0) !== (Number(body.orderQty) || 0)) continue;
+          const dist = expectRow ? Math.abs((i + 1) - expectRow) : i;
+          if (dist < bestDist) { bestDist = dist; bestI = i; }
         }
-        // ป้ายเสริม "ส่ง Central" — คนละตัวกับ carryMode ข้างบน ไม่แตะ COL_ORD_TYPE
-        if (body.toCentral != null) sheet.getRange(sheetRow, COL_ORD_CENTRAL).setValue(body.toCentral ? 1 : "");
-        SpreadsheetApp.flush();
-        // 3) ถึงจุดนี้ = เขียนสำเร็จ → 4) เขียน audit log เฉพาะตอนสำเร็จเท่านั้น
-        writeAuditLog_(actor, "อัปเดต order", body.orderId, auditDetail_({
-          before: before,
-          after: { status: body.status, preparedQty: body.preparedQty, printFlag: body.printFlag, carryMode: body.carryMode, toCentral: body.toCentral },
-          note: "อัปเดต order (" + (body.sku || "") + ")",
-        }));
-        return ok({ updated: body.orderId, row: sheetRow });
       }
+      if (bestI >= 1) targetRow = bestI + 1;
+    }
+    if (!targetRow) return ok({ notFound: body.orderId || body.sku });
+
+    const current = readOrderState_(sheet, targetRow);
+    const baseline = checkOrderStateBaseline_(current, body, fields);
+    if (!baseline.ok) {
+      // A response can be lost after a successful write. Treat an already-applied
+      // request as idempotent, without repeating audit/LINE side effects.
+      if (!baseline.missing.length && requestedOrderStateMatches_(current, body, fields))
+        return ok({ updated: body.orderId || body.sku, row: targetRow, idempotent: true,
+          currentState: current, serverTime: new Date().toISOString() });
+      const conflicts = baseline.missing.concat(baseline.changed);
+      return orderStateConflict_(baseline.missing.length
+        ? "ข้อมูลออเดอร์ชุดนี้เก่าเกินไป — ซิงค์ข้อมูลก่อนบันทึกอีกครั้ง"
+        : "มีคนอื่นเปลี่ยนข้อมูลออเดอร์แล้ว — ใช้ค่าล่าสุดจากเซิร์ฟเวอร์", current, conflicts);
     }
 
-    // Fallback: match by sku + date — ใช้เมื่อ orderId ชี้ไปแถวที่ SKU ไม่ตรงแล้ว
-    // (แถวเลื่อนขึ้นเพราะมีคนลบ order อื่นทิ้ง ระหว่างที่เครื่องนี้ถือข้อมูลชุดเก่าอยู่)
-    // ⚠️ เลือกแถวที่ "ใกล้เลขแถวเดิมที่สุด" ไม่ใช่แถวแรกที่เจอ — สินค้าตัวเดียวกันสั่งซ้ำ
-    //    วันเดียวกันได้ (2 แถว sku+date เหมือนกันเป๊ะ) การหยิบแถวแรกเสมอจะแก้ผิดใบเงียบ ๆ
-    //    ส่วนการเลื่อนแถวจากการลบมักห่างจากเดิมไม่กี่แถว ระยะห่างจึงเป็นตัวชี้ที่แม่นที่สุดที่มี
-    const data = sheet.getDataRange().getValues();
-    const wantSku = String(body.sku || "").trim().toUpperCase();
-    const expectRow = parseInt(String(body.orderId || "").replace(/[^0-9]/g, "")) || 0;
-    let bestI = -1, bestDist = Infinity;
-    if (wantSku) {
-      for (let i = 1; i < data.length; i++) {
-        const rowSku  = String(data[i][COL_ORD_SKU - 1]).trim().toUpperCase();
-        const rowDate = String(data[i][COL_ORD_DATE - 1]).trim();
-        if (rowSku !== wantSku) continue;
-        if (body.date && !rowDate.includes(String(body.date).trim())) continue;
-        const dist = expectRow ? Math.abs((i + 1) - expectRow) : i;
-        if (dist < bestDist) { bestDist = dist; bestI = i; }
+    const before = current;
+    if (body.status != null && body.status !== "") sheet.getRange(targetRow, COL_ORD_STATUS).setValue(body.status);
+    if (body.preparedQty != null) sheet.getRange(targetRow, COL_ORD_PREPQTY).setValue(body.preparedQty);
+    if (body.preparedQty != null || (body.status != null && body.status !== ""))
+      sheet.getRange(targetRow, COL_ORD_PREPBY).setValue(actor);
+    if (body.printFlag != null) sheet.getRange(targetRow, COL_ORD_PRINTFLAG).setValue(body.printFlag);
+    if (body.carryMode != null) {
+      sheet.getRange(targetRow, COL_ORD_TYPE).setValue(body.carryMode === "carry" ? "หิ้ว" : "รอขึ้นรถ");
+      if (body.carryMode === "carry") {
+        try {
+          const productName = body.name || body.sku || "(ไม่ทราบชื่อ)";
+          const orderQty = Number(sheet.getRange(targetRow, 8).getValue()) || Number(body.qty) || 0;
+          sendLineGroupOrderCard_(productName, body.sku || "", body.date || "", body.image || "", orderQty);
+        } catch (e) {}
       }
     }
-    {
-      const i = bestI;
-      if (i >= 1) {
-        const row = i + 1;
-        // 1) อ่าน before-state จาก data ที่โหลดไว้แล้ว (ไม่ต้องอ่านซ้ำ)
-        const before = {
-          status: data[i][COL_ORD_STATUS - 1] || "",
-          preparedQty: data[i][COL_ORD_PREPQTY - 1] || "",
-          printFlag: data[i][COL_ORD_PRINTFLAG - 1] || "",
-          carryMode: data[i][COL_ORD_TYPE - 1] || "",
-          toCentral: data[i][COL_ORD_CENTRAL - 1] || "",
-        };
-        // 2) เขียนจริง
-        if (body.status)              sheet.getRange(row, COL_ORD_STATUS).setValue(body.status);
-        if (body.preparedQty != null) sheet.getRange(row, COL_ORD_PREPQTY).setValue(body.preparedQty);
-        // ผู้จัด — ต้องบันทึกทั้ง 2 เส้นทาง (orderId และ match by sku+date) ไม่งั้นชื่อหายเป็นบางแถว
-        if (body.preparedQty != null || body.status)
-          sheet.getRange(row, COL_ORD_PREPBY).setValue(actor);
-        if (body.printFlag != null)    sheet.getRange(row, COL_ORD_PRINTFLAG).setValue(body.printFlag); // M2: != null กัน false ถูกข้าม
-        if (body.carryMode != null) {
-          sheet.getRange(row, COL_ORD_TYPE).setValue(body.carryMode === "carry" ? "หิ้ว" : "รอขึ้นรถ");
-          if (body.carryMode === "carry") {
-            try {
-              const productName = body.name || body.sku || "(ไม่ทราบชื่อ)";
-              // orderQty อยู่ col H (index 7) — อ่านจาก data ที่โหลดไว้แล้ว
-              const orderQty = Number(data[i][7]) || Number(body.qty) || 0;
-              sendLineGroupOrderCard_(productName, body.sku||"", body.date||"", body.image||"", orderQty);
-            } catch(e) {}
-          }
-        }
-        // ป้ายเสริม "ส่ง Central" — เส้นทางกู้แถวเลื่อนก็ต้องรองรับ ไม่งั้นหลังแถวเลื่อนกดติดป้ายไม่ได้
-        if (body.toCentral != null) sheet.getRange(row, COL_ORD_CENTRAL).setValue(body.toCentral ? 1 : "");
-        SpreadsheetApp.flush();
-        // 3) ถึงจุดนี้ = เขียนสำเร็จ → 4) เขียน audit log เฉพาะตอนสำเร็จเท่านั้น
-        writeAuditLog_(actor, "อัปเดต order", body.sku, auditDetail_({
-          before: before,
-          after: { status: body.status, preparedQty: body.preparedQty, printFlag: body.printFlag, carryMode: body.carryMode, toCentral: body.toCentral },
-          note: "อัปเดต order (กู้แถวเลื่อน: orderId=" + (body.orderId || "-") +
-                " → row " + row + ", match by sku+date)",
-        }));
-        // shifted → บอก client ว่าแถวเลื่อน (ไม่ใช่ error — เขียนถูกใบแล้ว) เผื่อเอาไปเตือน/รีเฟรช
-        return ok({ updated: body.sku, row, shifted: expectRow > 0 && expectRow !== row });
-      }
-    }
-    return ok({ notFound: body.orderId || body.sku });
+    if (body.toCentral != null) sheet.getRange(targetRow, COL_ORD_CENTRAL).setValue(body.toCentral ? 1 : "");
+    SpreadsheetApp.flush();
+    didWrite = true;
+
+    const currentState = readOrderState_(sheet, targetRow);
+    const shifted = expectRow > 0 && expectRow !== targetRow;
+    writeAuditLog_(actor, "อัปเดต order", body.orderId || body.sku, auditDetail_({
+      before: before,
+      after: currentState,
+      note: "อัปเดต order (" + (body.sku || "") + (shifted ? ", กู้แถวเลื่อน" : "") + ")",
+    }));
+    return ok({ updated: body.orderId || body.sku, row: targetRow, shifted: shifted,
+      currentState: currentState, serverTime: new Date().toISOString() });
   } finally {
     lock.releaseLock();
-    invalidateCache_();
+    invalidateCache_(didWrite ? false : true);
   }
 }
 
@@ -5231,13 +5302,48 @@ function findShipmentRow_(sheet, rowNum, refNum, sku) {
   return { row: 0, reason: 'เจอหลายรายการที่ตรงกัน เลือกให้อัตโนมัติไม่ได้ — กด Sync แล้วลองใหม่' };
 }
 
-function confirmShipmentReceive(ss, rowId, sku, receivedQty, actor, refNum) {
+function shipmentReceiveState_(sheet, row) {
+  const receivedAt = String(sheet.getRange(row, COL_SHIP_RECVAT).getDisplayValue() || "").trim();
+  return {
+    sentQty: parseInt(String(sheet.getRange(row, COL_SHIP_QTY).getDisplayValue() || "").replace(/,/g, "")) || 0,
+    receivedQty: receivedAt ? (parseInt(sheet.getRange(row, COL_SHIP_RECVQTY).getDisplayValue()) || 0) : null,
+    receivedStatus: String(sheet.getRange(row, COL_SHIP_RECVSTATUS).getDisplayValue() || "").trim(),
+    receivedAt: receivedAt,
+    receivedBy: String(sheet.getRange(row, COL_SHIP_RECVBY).getDisplayValue() || "").trim(),
+  };
+}
+
+function checkShipmentReceiveBaseline_(current, expected) {
+  const fields = ["sentQty", "receivedAt", "receivedQty", "receivedStatus"];
+  const missing = [], changed = [];
+  fields.forEach(function (field) {
+    if (!expected || !Object.prototype.hasOwnProperty.call(expected, field)) {
+      missing.push(field);
+      return;
+    }
+    const want = field === "sentQty" || field === "receivedQty"
+      ? (expected[field] == null ? null : (Number(expected[field]) || 0))
+      : String(expected[field] || "").trim();
+    if (want !== current[field]) changed.push(field);
+  });
+  return { ok: !missing.length && !changed.length, missing: missing, changed: changed };
+}
+
+function shipmentReceiveConflict_(message, currentState, fields) {
+  return ContentService.createTextOutput(JSON.stringify({
+    success: false, conflict: true, error: message,
+    data: { currentState: currentState, conflictFields: fields || [], serverTime: new Date().toISOString() },
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function confirmShipmentReceive(ss, rowId, sku, receivedQty, actor, refNum, expectedReceipt) {
   const sheet = ss.getSheetByName(SHEET_TRANSFERS);
   if (!sheet) return error("ไม่พบชีต: " + SHEET_TRANSFERS);
 
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(8000)) return error("ระบบกำลังบันทึกข้อมูลอื่นอยู่");
 
+  var didWrite = false;
   try {
     const askedRow = parseInt(String(rowId).replace(/[^0-9]/g, ""));
     const found = findShipmentRow_(sheet, askedRow, refNum, sku);
@@ -5245,15 +5351,32 @@ function confirmShipmentReceive(ss, rowId, sku, receivedQty, actor, refNum) {
     const rowNum = found.row;
     const rowSku = String(sheet.getRange(rowNum, COL_SHIP_SKU).getDisplayValue()).trim().toUpperCase();
 
+    const current = shipmentReceiveState_(sheet, rowNum);
+    const baseline = checkShipmentReceiveBaseline_(current, expectedReceipt);
     const sentQty = parseInt(sheet.getRange(rowNum, COL_SHIP_QTY).getDisplayValue()) || 0;
-    const recv    = Math.max(0, receivedQty || 0);
-    const status  = recv >= sentQty ? "รับครบ" : "รับไม่ครบ";
+    const recv = Math.max(0, receivedQty || 0);
+    const status = recv >= sentQty ? "รับครบ" : "รับไม่ครบ";
+    if (!baseline.ok) {
+      const expectedSentQty = expectedReceipt && expectedReceipt.sentQty != null
+        ? (Number(expectedReceipt.sentQty) || 0) : null;
+      if (!baseline.missing.length && expectedSentQty === current.sentQty
+          && current.receivedAt && current.receivedQty === recv && current.receivedStatus === status)
+        return ok({ row: rowNum, receivedQty: recv, status, healed: !!found.healed, askedRow: askedRow,
+          idempotent: true, currentState: current, serverTime: new Date().toISOString() });
+      const conflicts = baseline.missing.concat(baseline.changed);
+      return shipmentReceiveConflict_(baseline.missing.length
+        ? "ข้อมูลการรับของชุดนี้เก่าเกินไป — ซิงค์ข้อมูลก่อนบันทึกอีกครั้ง"
+        : "มีคนอื่นบันทึกการรับของรายการนี้แล้ว — ใช้ค่าล่าสุดจากเซิร์ฟเวอร์", current, conflicts);
+    }
+
     const nowStr  = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm");
 
     sheet.getRange(rowNum, COL_SHIP_RECVQTY).setValue(recv);
     sheet.getRange(rowNum, COL_SHIP_RECVSTATUS).setValue(status);
     sheet.getRange(rowNum, COL_SHIP_RECVAT).setValue(nowStr);
     sheet.getRange(rowNum, COL_SHIP_RECVBY).setValue(actor || "");
+    SpreadsheetApp.flush();
+    didWrite = true;
 
     try { writeAuditLog_(actor, "รับสินค้า", rowSku, status + " " + recv + "/" + sentQty); } catch (e) {}
     // "รับไม่ครบ" คือเรื่องที่คลังต้องรู้เดี๋ยวนั้น (ของหาย/นับพลาด) — รับครบไม่ต้องกวน
@@ -5269,10 +5392,11 @@ function confirmShipmentReceive(ss, rowId, sku, receivedQty, actor, refNum) {
       });
     }
     // healed = เลขแถวที่เครื่องผู้ใช้ส่งมาชี้ผิด แต่เราหาแถวที่ถูกเจอเองแล้ว (ไม่ต้องให้กดซ้ำ)
-    return ok({ row: rowNum, receivedQty: recv, status, healed: !!found.healed, askedRow: askedRow });
+    return ok({ row: rowNum, receivedQty: recv, status, healed: !!found.healed, askedRow: askedRow,
+      currentState: shipmentReceiveState_(sheet, rowNum), serverTime: new Date().toISOString() });
   } finally {
     lock.releaseLock();
-    try { invalidateCache_(); } catch(e) {}
+    try { invalidateCache_(didWrite ? false : true); } catch(e) {}
   }
 }
 
@@ -11156,6 +11280,7 @@ function readOrders_(rowsOpt) {
       orderedBy:   String(r[11] || "").trim(),
       preparedBy:  String(r[12] || "").trim(),
       printFlag:   r[13] || null,
+      cid:         String(r[14] || "").trim(), // O — stable cid when created through action=order
       // P (index 15) — ป้ายเสริม "ส่ง Central" (คนละตัวกับ carryMode คอลัมน์ A) · แถวเก่าว่าง = false
       toCentral:   String(r[15] || "").trim() === "1",
     });
@@ -11324,9 +11449,13 @@ function handleOrder_(params) {
     // ⚠️ ต้องตัดสินใจ "ก่อน" คว้า ScriptLock — ล็อกนี้เป็นตัวเดียวของทั้งสคริปต์
     //    คว้ามาแล้วค่อยปฏิเสธ = ไปกันคนอื่นที่สั่งของถูกต้องอยู่โดยเปล่าประโยชน์
     // migration-safe เหมือนด่านกลาง: ไม่ยื่น token มาเลย → ยังสั่งได้เหมือนเดิม
+    var _gate = authorizeOrderGet_(params, ORDER_GET_COMMON_ROLES_, false);
+    if (_gate) return _gate;
     var sess = null;
-    try { sess = resolveSession_(ss, params.sessionToken); }
-    catch (e) { /* session พัง → ถือว่าไม่มี ไม่ให้กระทบการสั่งของ */ }
+    try { if (params.sessionToken) sess = resolveSession_(ss, params.sessionToken); }
+    catch (e) { return unauthorized_(); }
+    if (params.sessionToken && (!sess || sess.status !== "active")) return unauthorized_();
+    if (!params.sessionToken && requireLoginEnabled_()) return forbidden_("ต้องล็อกอินก่อนใช้งาน");
     var _ordBlocked = sessionInactiveOrNull_(sess);
     if (_ordBlocked) return _ordBlocked;
 

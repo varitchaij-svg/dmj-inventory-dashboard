@@ -95,13 +95,13 @@ describe('orderRowMatchesSku_ — แถวนี้ยังเป็นสิ�
 describe('meta: updateOrderState ต้องตรวจ SKU ก่อนเขียนตามเลขแถว', () => {
   const fn = grab(/function updateOrderState\(ss, body\) \{[\s\S]*?\n\}\n/);
 
-  it('เส้นทาง orderId ต้องผ่าน orderRowMatchesSku_ ก่อนเขียน', () => {
-    expect(fn).toMatch(/if\s*\(\s*rowNum >= 1 && orderRowMatchesSku_\(sheet, rowNum, body\.sku\)\s*\)/);
+  it('เส้นทาง orderId ต้องตรวจ SKU และตัวตนของใบก่อนเขียน', () => {
+    expect(fn).toMatch(/expectRow >= 1 && orderRowMatchesSku_\(sheet, expectRow, body\.sku\) && orderRowIdentityMatches_\(sheet, expectRow, body\)/);
   });
 
   it('ห้ามกลับไปเขียนทับด้วยเงื่อนไข rowNum อย่างเดียว', () => {
     // เงื่อนไขเดิมที่เป็นต้นเหตุ: `if (rowNum >= 1) {` แล้วเขียนเลย
-    expect(fn).not.toMatch(/if\s*\(\s*rowNum >= 1\s*\)\s*\{/);
+    expect(fn).not.toMatch(/if\s*\(\s*expectRow >= 1\s*\)\s*\{/);
   });
 
   it('fallback เลือกแถวที่ใกล้เลขแถวเดิมที่สุด (ไม่ใช่แถวแรกที่เจอ)', () => {
@@ -111,10 +111,11 @@ describe('meta: updateOrderState ต้องตรวจ SKU ก่อนเข
     expect(fn).toMatch(/Math\.abs\(\(i \+ 1\) - expectRow\)/);
   });
 
-  it('ยังมีเส้นทาง fallback อยู่จริง (ไม่ได้ตัดทิ้งจนแก้จำนวนไม่ได้เลยหลังแถวเลื่อน)', () => {
+  it('ยังมีเส้นทาง fallback อยู่จริง และใช้ cid หรือ sku/date/quantity เพื่อหาใบเดิม', () => {
     // ถ้าตัด fallback ทิ้ง พนักงานจะกรอกจำนวนไม่ได้เลยทุกครั้งที่มีคนลบ order —
     // "ปลอดภัยแต่ใช้งานไม่ได้" ไม่ใช่คำตอบที่ยอมรับได้
-    expect(fn).toMatch(/match by sku\+date/);
+    expect(fn).toMatch(/rowDate\.includes\(String\(body\.date\)/);
+    expect(fn).toMatch(/rowCid !== String\(body\.cid\)/);
   });
 });
 

@@ -209,6 +209,53 @@ function WhoDidIt({ orderedBy, preparedBy, receivedBy, size, style }) {
   );
 }
 
+// ────────────── session + mutation helpers shared by GAS requests ────────────
+function dmjSessionUrl(url) {
+  const raw = String(url || "");
+  if (!raw) return raw;
+  try {
+    const tok = localStorage.getItem("dmj_session_token");
+    if (!tok || /[?&]sessionToken=/.test(raw)) return raw;
+    const hashAt = raw.indexOf("#");
+    const base = hashAt >= 0 ? raw.slice(0, hashAt) : raw;
+    const hash = hashAt >= 0 ? raw.slice(hashAt) : "";
+    return base + (base.includes("?") ? "&" : "?") + "sessionToken=" + encodeURIComponent(tok) + hash;
+  } catch (e) { return raw; }
+}
+
+function dmjMutationState() {
+  try {
+    const s = window._dmjOrderMutationState;
+    return s ? { revision: Number(s.revision) || 0, pending: Number(s.pending) || 0, lastWriteAt: Number(s.lastWriteAt) || 0 }
+      : { revision: 0, pending: 0, lastWriteAt: 0 };
+  } catch (e) { return { revision: 0, pending: 0, lastWriteAt: 0 }; }
+}
+function dmjMutationStart() {
+  try {
+    const s = window._dmjOrderMutationState || { revision: 0, pending: 0, lastWriteAt: 0 };
+    s.revision = (Number(s.revision) || 0) + 1;
+    s.pending = (Number(s.pending) || 0) + 1;
+    window._dmjOrderMutationState = s;
+    return s.revision;
+  } catch (e) { return 0; }
+}
+function dmjMutationEnd() {
+  try {
+    const s = window._dmjOrderMutationState || { revision: 0, pending: 0, lastWriteAt: 0 };
+    s.pending = Math.max(0, (Number(s.pending) || 0) - 1);
+    window._dmjOrderMutationState = s;
+  } catch (e) {}
+}
+function dmjMutationMarkWrite(serverTime) {
+  try {
+    const ms = typeof serverTime === "number" ? serverTime : Date.parse(serverTime || "");
+    if (!Number.isFinite(ms)) return;
+    const s = window._dmjOrderMutationState || { revision: 0, pending: 0, lastWriteAt: 0 };
+    s.lastWriteAt = Math.max(Number(s.lastWriteAt) || 0, ms);
+    window._dmjOrderMutationState = s;
+  } catch (e) {}
+}
+
 // ────────────── dmjFetch — แนบ sessionToken ให้ทุก POST ที่ยิงไป GAS ──────────
 // เฟส 4 ของระบบล็อกอิน: server ต้องยืนยัน "ใครทำ" เองจาก session ไม่ใช่เชื่อ actor
 // ที่ client ส่งมา (ซึ่งปลอมได้) · ทำที่เดียวจบ ไม่ต้องไล่แก้ payload ทีละจุด (39 จุด/4 ไฟล์)
