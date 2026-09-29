@@ -256,6 +256,25 @@ function dmjMutationMarkWrite(serverTime) {
   } catch (e) {}
 }
 
+// Track writes made through the app so a stock-lite poll that overlaps one cannot
+// replace a newer server-confirmed stock patch with an older cached response.
+function dmjStockLiteMutationState() {
+  const s = window._dmjStockLiteMutationState || { revision: 0, pending: 0 };
+  return { revision: Number(s.revision) || 0, pending: Number(s.pending) || 0 };
+}
+function dmjStockLiteMutationStart() {
+  const s = dmjStockLiteMutationState();
+  s.revision++;
+  s.pending++;
+  window._dmjStockLiteMutationState = s;
+}
+function dmjStockLiteMutationEnd() {
+  const s = dmjStockLiteMutationState();
+  s.revision++;
+  s.pending = Math.max(0, s.pending - 1);
+  window._dmjStockLiteMutationState = s;
+}
+
 // ────────────── dmjFetch — แนบ sessionToken ให้ทุก POST ที่ยิงไป GAS ──────────
 // เฟส 4 ของระบบล็อกอิน: server ต้องยืนยัน "ใครทำ" เองจาก session ไม่ใช่เชื่อ actor
 // ที่ client ส่งมา (ซึ่งปลอมได้) · ทำที่เดียวจบ ไม่ต้องไล่แก้ payload ทีละจุด (39 จุด/4 ไฟล์)
@@ -276,6 +295,22 @@ function dmjFetch(url, opts) {
     }
   } catch (e) { /* body ไม่ใช่ JSON (เช่น FormData) → ปล่อยผ่านตามเดิม */ }
 
+  // All app POSTs go through the Apps Script backend; track their full in-flight
+  // window because several legacy stock actions do not return a server timestamp.
+  const isPost = !!(opts && String(opts.method || "GET").toUpperCase() === "POST");
+  const trackedFetch = requestOpts => {
+    if (isPost) dmjStockLiteMutationStart();
+    let request;
+    try { request = fetch(url, requestOpts); }
+    catch (e) {
+      if (isPost) dmjStockLiteMutationEnd();
+      return Promise.reject(e);
+    }
+    return Promise.resolve(request).finally(() => {
+      if (isPost) dmjStockLiteMutationEnd();
+    });
+  };
+
   // ── เพดานเวลา (บังคับทุกจุด) ──────────────────────────────────────────────
   // `fetch` **ไม่มี timeout ในตัว** — คำขอที่ไปถึง Google แล้วแต่ไม่มีคำตอบกลับมา
   // (ลิงก์ดาวน์โหลดตาย / เน็ตร้านหลุดกลางคัน / GAS ค้าง) จะ **ค้าง pending ข้ามนาที**
@@ -285,12 +320,12 @@ function dmjFetch(url, opts) {
   // ⚠️ "ตัดเวลา" ไม่ได้แปลว่า "ไม่สำเร็จ" — GAS เขียนชีตเสร็จแล้วยังตอบไม่ทันได้ (บทเรียนข้อ 13)
   //    ตัวเรียกที่เขียนข้อมูลต้องเช็คของจริงก่อนขึ้นแดงเสมอ เหมือนที่ทำกับ `action=order` (cid)
   // ตั้งค่าเองได้ด้วย opts.dmjTimeoutMs · ตัวเรียกที่ส่ง signal มาเองถือว่าคุมเวลาเองแล้ว
-  if (opts && opts.signal) return fetch(url, opts);
-  if (typeof AbortController === "undefined") return fetch(url, opts);
+  if (opts && opts.signal) return trackedFetch(opts);
+  if (typeof AbortController === "undefined") return trackedFetch(opts);
   const ms = (opts && opts.dmjTimeoutMs) || 60000;
   const ctl = new AbortController();
   const to = setTimeout(() => { try { ctl.abort(); } catch (e) {} }, ms);
-  return fetch(url, Object.assign({}, opts, { signal: ctl.signal }))
+  return trackedFetch(Object.assign({}, opts, { signal: ctl.signal }))
     .finally(() => clearTimeout(to));
 }
 

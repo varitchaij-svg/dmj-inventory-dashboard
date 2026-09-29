@@ -1293,7 +1293,11 @@ function shouldApplyOrdersSnapshot(meta) {
   return true;
 }
 
-function shouldApplyStockLiteSnapshot(incomingTs, latestTs) {
+function shouldApplyStockLiteSnapshot(incomingTs, latestTs, mutationAtStart, mutationNow) {
+  const started = mutationAtStart || {};
+  const current = mutationNow || {};
+  if (Number(started.pending || 0) > 0 || Number(current.pending || 0) > 0) return false;
+  if (mutationAtStart && mutationNow && Number(started.revision || 0) !== Number(current.revision || 0)) return false;
   const incoming = Number(incomingTs) || 0;
   const latest = Number(latestTs) || 0;
   return incoming > 0 && (!latest || incoming >= latest);
@@ -1663,6 +1667,8 @@ function App() {
   // qty เดิมไว้คือบั๊กเดียวกับเคส WL (ก.ค. 2026) ที่สินค้ามีของจริงแต่โชว์ "หมด" ทั้งระบบ
   // โดยไม่มี error ให้เห็น · สูตรตรงนี้ต้องตรงกับ `applyQtyLocToProduct_` ฝั่ง GAS เสมอ
   const fetchStockLite = usC(() => {
+    const stockMutationAtStart = typeof dmjStockLiteMutationState === 'function'
+      ? dmjStockLiteMutationState() : { revision: 0, pending: 0 };
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 20000);
     const sep = sheetUrl.includes('?') ? '&' : '?';
@@ -1674,7 +1680,10 @@ function App() {
         // ไม่ทำอะไรเลยดีกว่าเดา — poll รอบหน้าค่อยว่ากัน (แท็บพวกนี้ยังใช้งานได้ปกติ)
         if (!d || !Array.isArray(d.items)) return;
         const stockLiteTs = Number(d.ts) || 0;
-        if (!shouldApplyStockLiteSnapshot(stockLiteTs, window._dataLoadedAt)) return;
+        const stockMutationNow = typeof dmjStockLiteMutationState === 'function'
+          ? dmjStockLiteMutationState() : { revision: 0, pending: 0 };
+        if (!shouldApplyStockLiteSnapshot(stockLiteTs, window._dataLoadedAt,
+          stockMutationAtStart, stockMutationNow)) return;
         const m = {};
         d.items.forEach(row => { if (row && row[0]) m[row[0]] = row; });
         setData(prev => {

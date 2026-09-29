@@ -147,7 +147,36 @@ describe('frontend snapshot ordering', () => {
     expect(shouldApplyStockLiteSnapshot(499, 500)).toBe(false);
     expect(shouldApplyStockLiteSnapshot(0, 500)).toBe(false);
     const stockPoll = APP.slice(APP.indexOf('const fetchStockLite'), APP.indexOf('const fetchOrdersOnly'));
-    expect(stockPoll).toMatch(/shouldApplyStockLiteSnapshot\(stockLiteTs, window\._dataLoadedAt\)/);
+    expect(stockPoll).toMatch(/shouldApplyStockLiteSnapshot\(stockLiteTs, window\._dataLoadedAt,/);
+  });
+
+  it('drops stock-lite polls that start during or cross an app write', () => {
+    const stable = { revision:8, pending:0 };
+    expect(shouldApplyStockLiteSnapshot(501, 500, stable, stable)).toBe(true);
+    expect(shouldApplyStockLiteSnapshot(501, 500,
+      { revision:8, pending:0 }, { revision:10, pending:0 })).toBe(false);
+    expect(shouldApplyStockLiteSnapshot(501, 500,
+      { revision:9, pending:1 }, { revision:9, pending:1 })).toBe(false);
+    expect(shouldApplyStockLiteSnapshot(501, 500,
+      { revision:8, pending:0 }, { revision:9, pending:1 })).toBe(false);
+
+    const stockPoll = APP.slice(APP.indexOf('const fetchStockLite'), APP.indexOf('const fetchOrdersOnly'));
+    expect(stockPoll).toMatch(/const stockMutationAtStart = .*dmjStockLiteMutationState/);
+    expect(stockPoll).toMatch(/stockMutationAtStart, stockMutationNow/);
+    const fetcher = sourceFunction(UI, 'dmjFetch');
+    expect(fetcher).toMatch(/dmjStockLiteMutationStart\(\)/);
+    expect(fetcher).toMatch(/dmjStockLiteMutationEnd\(\)/);
+  });
+
+  it('tracks pending writes and advances the stock snapshot revision at both edges', () => {
+    const mockWindow = {};
+    const { dmjStockLiteMutationState, dmjStockLiteMutationStart, dmjStockLiteMutationEnd } =
+      loadFunctions(UI, ['dmjStockLiteMutationState', 'dmjStockLiteMutationStart', 'dmjStockLiteMutationEnd'],
+        ['window'], [mockWindow]);
+    dmjStockLiteMutationStart();
+    expect(dmjStockLiteMutationState()).toEqual({ revision:1, pending:1 });
+    dmjStockLiteMutationEnd();
+    expect(dmjStockLiteMutationState()).toEqual({ revision:2, pending:0 });
   });
 
   it('keeps newer order and shipment sections when an older full payload arrives', () => {
