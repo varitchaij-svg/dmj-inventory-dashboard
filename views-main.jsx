@@ -116,38 +116,53 @@ async function loadImgSafe(url) {
 
 // ── loadImgForCard: โหลดรูปผ่าน GAS proxy เพื่อหลีกเลี่ยง CORS tainted canvas ──
 // ใช้กับ downloadSupplierCardsPdf เพื่อให้ canvas.toDataURL() ทำงานได้จริง
-// fallback คืน null (canvas จะใช้ gradient placeholder แทน)
-// ⚠️ proxy 1 คำขอ = 1 GAS execution + UrlFetchApp (ช้า) — เดิมยิงพร้อมกัน 59 ใบ (Promise.all)
-// GAS รับ execution พร้อมกันได้จำกัด (executeAs USER_DEPLOYING = user เดียวกันทั้งหมด) →
-// หลายใบ timeout/ถูกปฏิเสธ → รูปหายเป็นกระดาน · แก้: (1) จำกัด concurrency (downloadSupplierCardsPdf)
-// (2) มี timeout จริงที่ fetch เอง (fetch ไม่มี timeout ในตัว — ค้างได้ตลอดกาล) (3) retry 1 ครั้ง
+// คืน null เมื่อโหลดไม่สำเร็จ; ตัวสร้างแคตตาล็อกจะหยุดก่อนเซฟถ้ารูปที่ระบุไว้ยังโหลดไม่ได้
+// GAS proxy ใช้ 1 execution ต่อรูป จึงจำกัด concurrency + retry แบบเว้นจังหวะสำหรับ timeout/429/5xx
 async function loadImgForCard(imageUrl, attempt) {
   if (!imageUrl) return null;
   var base = (typeof GOOGLE_SHEET_URL !== 'undefined') ? GOOGLE_SHEET_URL : null;
   if (!base) return null;
+  attempt = Number.isInteger(attempt) && attempt >= 0 ? attempt : 0;
+  var retryable = true;
+  var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  var to = ctrl ? setTimeout(function() { ctrl.abort(); }, 20000) : null;
   try {
     var proxyUrl = new URL(base);
     proxyUrl.searchParams.set('action', 'imgProxy');
     proxyUrl.searchParams.set('u', imageUrl);
-    // AbortController: ตัดคำขอที่ค้างเกิน 20 วิ (proxy ดึงรูปจาก ZORT + base64 encode อาจนาน)
-    var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-    var to = ctrl ? setTimeout(function() { ctrl.abort(); }, 20000) : null;
     var resp = await fetch(proxyUrl.toString(), ctrl ? { signal: ctrl.signal } : {});
-    if (to) clearTimeout(to);
+    if (!resp || !resp.ok) {
+      // 4xx มักเป็น URL เสีย/ไม่มีสิทธิ์ ไม่ควรยิงซ้ำ; 429 และ 5xx อาจเป็นภาระชั่วคราว
+      retryable = !resp || resp.status === 429 || resp.status >= 500;
+      if (!retryable) return null;
+      throw new Error('image proxy HTTP ' + (resp && resp.status));
+    }
     var data = await dmjJson(resp);
-    if (data && data.d) {
+    if (data && data.err === 'not_found') { retryable = false; return null; }
+    if (data && typeof data.d === 'string' && /^data:image\/[a-z0-9.+-]+;base64,/i.test(data.d)) {
       var img = await new Promise(function(resolve) {
         var im = new window.Image();
-        var t = setTimeout(function() { resolve(null); }, 10000);
-        im.onload = function() { clearTimeout(t); resolve(im); };
-        im.onerror = function() { clearTimeout(t); resolve(null); };
+        var settled = false;
+        var t = setTimeout(function() { settled = true; resolve(null); }, 10000);
+        function done(result) {
+          if (settled) return;
+          settled = true;
+          clearTimeout(t);
+          resolve(result);
+        }
+        im.onload = function() { done(im.naturalWidth > 0 ? im : null); };
+        im.onerror = function() { done(null); };
         im.src = data.d;
       });
-      if (img) return img;
+      if (img) { retryable = false; return img; }
     }
-  } catch(e) { /* proxy/เน็ตพลาด → ลองใหม่/placeholder */ }
-  // retry 1 ครั้ง (ส่วนใหญ่ที่พลาดคือ timeout ตอน GAS แน่น — รอบสองมักผ่าน)
-  if (!attempt) return loadImgForCard(imageUrl, 1);
+  } catch(e) { /* proxy/เน็ตพลาด → ลองใหม่ตามจำนวนครั้งที่กำหนด */ }
+  finally { if (to) clearTimeout(to); }
+  // ลองทั้งหมด 3 ครั้ง โดยเว้นช่วงให้ GAS/CDN ฟื้นจากช่วงที่ติด rate limit หรือหน่วง
+  if (retryable && attempt < 2) {
+    await new Promise(function(resolve) { setTimeout(resolve, attempt === 0 ? 450 : 1100); });
+    return loadImgForCard(imageUrl, attempt + 1);
+  }
   return null;
 }
 
@@ -654,11 +669,10 @@ async function downloadSupplierCardsPdf(groupName, items, accentColor, onProgres
   var acc = accentColor || '#16a34a';
 
   // ── โหลดรูปผ่าน GAS proxy แบบจำกัด concurrency ──
-  // ⚠️ เดิม Promise.all ยิงทุกใบพร้อมกัน (59 คำขอ) → GAS แน่น → รูปหายเป็นกระดาน (เจอจริง)
-  // จำกัดทีละ POOL ใบ + retry (ใน loadImgForCard) → รูปโหลดครบขึ้นมาก แลกกับช้าลงนิด
+  // ลดคำขอพร้อมกันเพื่อไม่ให้ execution ของ Apps Script/CDN สะดุด · รูปที่พลาดจะ retry แบบเว้นจังหวะ
   var imgMap = {};
   var withImg = items.filter(function(p) { return p.imageUrl; });
-  var loaded = 0, cursor = 0, POOL = 4;
+  var loaded = 0, cursor = 0, POOL = 2;
   async function imgWorker() {
     while (cursor < withImg.length) {
       var p = withImg[cursor++];
@@ -670,6 +684,18 @@ async function downloadSupplierCardsPdf(groupName, items, accentColor, onProgres
   var workers = [];
   for (var w = 0; w < Math.min(POOL, withImg.length); w++) workers.push(imgWorker());
   await Promise.all(workers);
+
+  // ห้ามเซฟ PDF ที่มีรูปหายแบบเงียบ ๆ — แจ้ง SKU ให้แก้ URL/ลองดาวน์โหลดใหม่ก่อน
+  var missingImages = withImg.filter(function(p) {
+    var img = imgMap[p.sku];
+    return !img || !(img.naturalWidth > 0);
+  });
+  if (missingImages.length) {
+    var missingSkus = missingImages.map(function(p) { return String(p.sku || p.name || 'ไม่ทราบ SKU'); });
+    var shown = missingSkus.slice(0, 8).join(', ');
+    var more = missingSkus.length > 8 ? ' และอีก ' + (missingSkus.length - 8) + ' รายการ' : '';
+    throw new Error('โหลดรูปสินค้าไม่ครบ ' + missingSkus.length + '/' + withImg.length + ' รายการ จึงยังไม่ได้บันทึก PDF กรุณาลองใหม่หรือตรวจรูปของ SKU: ' + shown + more);
+  }
 
   // ── เรขาคณิตหน้า A4 (มม.) — 9 การ์ด/หน้า (3 คอลัมน์ × 3 แถว) ──
   var PAGE_W = 210, PAGE_H = 297;
