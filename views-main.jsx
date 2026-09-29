@@ -755,7 +755,10 @@ async function downloadSupplierCardsPdf(groupName, items, accentColor, onProgres
       dataUrl = canvas.toDataURL('image/jpeg', 0.94);
       if (!dataUrl || dataUrl === 'data:,') throw new Error('tainted');
     } catch (e) {
-      // canvas tainted (CORS) → วาดใหม่โดยไม่ใส่รูป (เหมือนพฤติกรรมเดิมของ ZIP)
+      if (imgForCard) {
+        throw new Error('เตรียมรูปสำหรับ PDF ของ SKU ' + String(p.sku || 'ไม่ทราบ SKU') + ' ไม่สำเร็จ จึงยังไม่ได้บันทึก PDF');
+      }
+      // สินค้าที่ไม่มี URL รูปยังพิมพ์เป็นการ์ดข้อความได้; รูปที่โหลดแล้วต้องไม่ถูกตัดออกเงียบ ๆ
       var c2 = drawSupplierPdfCard(p, null, acc, cardWpx, cardHpx);
       dataUrl = c2.toDataURL('image/jpeg', 0.94);
     }

@@ -77,6 +77,31 @@ describe('catalog PDF image loading', () => {
     expect(save).not.toHaveBeenCalled();
   });
 
+  it('stops without saving when a loaded image cannot be rendered into its SKU card', async () => {
+    const image = { naturalWidth: 640 };
+    const loader = vi.fn(async () => image);
+    const save = vi.fn();
+    const doc = { addImage: vi.fn(), addPage: vi.fn(), save };
+    const canvas = { toDataURL: vi.fn(() => 'data:image/jpeg;base64,card') };
+    const drawCard = vi.fn((product, loadedImage) => {
+      if (loadedImage) throw new Error('canvas failed');
+      return canvas;
+    });
+    const exportPdf = new Function(
+      'ensureJsPDF', 'loadImgForCard', 'window', 'drawSupplierPdfCard', 'drawPdfHeaderCanvas', 'drawPdfFooterCanvas',
+      EXPORT_PDF + '\nreturn downloadSupplierCardsPdf;'
+    )(
+      async () => {}, loader, { jspdf: { jsPDF: vi.fn(() => doc) } }, drawCard,
+      () => canvas, () => canvas
+    );
+
+    await expect(exportPdf('K', [
+      { sku: 'DRAWFAIL003', imageUrl: 'https://cdn.example/product.jpg' },
+    ])).rejects.toThrow(/DRAWFAIL003/);
+    expect(drawCard).toHaveBeenCalledWith(expect.objectContaining({ sku: 'DRAWFAIL003' }), image, expect.any(String), expect.any(Number), expect.any(Number));
+    expect(save).not.toHaveBeenCalled();
+  });
+
   it('bumps the PWA cache so mobile devices receive the updated exporter immediately', () => {
     const match = SERVICE_WORKER.match(/const CACHE_NAME = "dmj-v(\d+)"/);
     expect(match).not.toBeNull();
