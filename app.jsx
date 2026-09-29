@@ -1293,6 +1293,12 @@ function shouldApplyOrdersSnapshot(meta) {
   return true;
 }
 
+function shouldApplyStockLiteSnapshot(incomingTs, latestTs) {
+  const incoming = Number(incomingTs) || 0;
+  const latest = Number(latestTs) || 0;
+  return incoming > 0 && (!latest || incoming >= latest);
+}
+
 function protectFullSnapshotSections(incoming, current, options) {
   const next = { ...(incoming || {}) };
   const live = current || {};
@@ -1667,6 +1673,8 @@ function App() {
         // GAS ยังเป็นโค้ดเก่า (ไม่รู้จัก action นี้) → คืน payload เต็ม/HTML → ไม่มี items
         // ไม่ทำอะไรเลยดีกว่าเดา — poll รอบหน้าค่อยว่ากัน (แท็บพวกนี้ยังใช้งานได้ปกติ)
         if (!d || !Array.isArray(d.items)) return;
+        const stockLiteTs = Number(d.ts) || 0;
+        if (!shouldApplyStockLiteSnapshot(stockLiteTs, window._dataLoadedAt)) return;
         const m = {};
         d.items.forEach(row => { if (row && row[0]) m[row[0]] = row; });
         setData(prev => {
@@ -1714,7 +1722,7 @@ function App() {
         // ⚠️ ต่างจาก poll เดิมตรงที่ก้อนนี้รีเฟรช **เฉพาะจำนวนสต็อก** — ล็อค/ออเดอร์/โอน ยังเป็น
         // ชุดจากการโหลดเต็มครั้งล่าสุด · ยอมรับได้เพราะสองแท็บนี้เขียนงานที่อิงจำนวนสต็อกเป็นหลัก
         // แต่ถ้าวันหนึ่งมีแท็บอื่นมาใช้ poll ตัวนี้ ต้องทบทวนข้อนี้ก่อนเสมอ
-        if (d.ts) window._dataLoadedAt = d.ts;
+        window._dataLoadedAt = stockLiteTs;
       })
       .catch(() => {})   // เงียบ — เป็น background polling ไม่ต้องรบกวนผู้ใช้
       .finally(() => clearTimeout(timeout));

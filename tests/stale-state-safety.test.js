@@ -129,8 +129,8 @@ describe('GET session authorization', () => {
 });
 
 describe('frontend snapshot ordering', () => {
-  const { shouldApplyOrdersSnapshot, protectFullSnapshotSections } =
-    loadFunctions(APP, ['shouldApplyOrdersSnapshot', 'protectFullSnapshotSections']);
+  const { shouldApplyOrdersSnapshot, shouldApplyStockLiteSnapshot, protectFullSnapshotSections } =
+    loadFunctions(APP, ['shouldApplyOrdersSnapshot', 'shouldApplyStockLiteSnapshot', 'protectFullSnapshotSections']);
 
   it('drops out-of-order, mutation-crossing, pending-write, and older-than-write polls', () => {
     const base = { requestSeq:3, appliedSeq:2, pendingAtStart:0, pendingNow:0,
@@ -142,6 +142,14 @@ describe('frontend snapshot ordering', () => {
     expect(shouldApplyOrdersSnapshot({ ...base, generatedAt:249 })).toBe(false);
   });
 
+  it('rejects stock-lite snapshots older than the version already loaded by this client', () => {
+    expect(shouldApplyStockLiteSnapshot(501, 500)).toBe(true);
+    expect(shouldApplyStockLiteSnapshot(499, 500)).toBe(false);
+    expect(shouldApplyStockLiteSnapshot(0, 500)).toBe(false);
+    const stockPoll = APP.slice(APP.indexOf('const fetchStockLite'), APP.indexOf('const fetchOrdersOnly'));
+    expect(stockPoll).toMatch(/shouldApplyStockLiteSnapshot\(stockLiteTs, window\._dataLoadedAt\)/);
+  });
+
   it('keeps newer order and shipment sections when an older full payload arrives', () => {
     const live = { orders:[{ id:'R8', status:'สำเร็จ' }], ordersServerAt:400, ordersFetchedAt:99,
       shipments:[{ id:'S9', receivedQty:2 }], shipmentsServerAt:450 };
@@ -151,6 +159,14 @@ describe('frontend snapshot ordering', () => {
     expect(merged.ordersServerAt).toBe(400);
     expect(merged.shipments).toBe(live.shipments);
     expect(merged.shipmentsServerAt).toBe(450);
+  });
+});
+
+describe('session-token logging safety', () => {
+  const POST = sourceFunction(GAS, 'doPost');
+
+  it('does not write session-resolution exception contents to logs', () => {
+    expect(POST).toMatch(/try \{ _sess = resolveSession_\(ss, data\.sessionToken\); \} catch \(e\) \{ Logger\.log\("resolveSession_ failed"\); \}/);
   });
 });
 

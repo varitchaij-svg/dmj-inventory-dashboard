@@ -2709,7 +2709,7 @@ function doPost(e) {
     //   (คนที่ยังไม่ได้ล็อกอิน LINE ยังทำงานได้ จนกว่าจะเปิด REQUIRE_LOGIN)
     var actor = data.actor || "ไม่ระบุ";
     var _sess = null;
-    try { _sess = resolveSession_(ss, data.sessionToken); } catch (e) { Logger.log("resolveSession_ error: " + e); }
+    try { _sess = resolveSession_(ss, data.sessionToken); } catch (e) { Logger.log("resolveSession_ failed"); }
     if (_sess) {
       actor = staffActorName_(_sess) || actor;
       // ⚠️ ต้องทับ data.actor ด้วย ไม่ใช่แค่ตัวแปร actor — handler ที่รับ `data` ทั้งก้อน
