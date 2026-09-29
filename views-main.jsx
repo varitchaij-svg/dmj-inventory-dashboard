@@ -5832,7 +5832,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
       // dmjFetch (มี timeout ในตัว) แทน fetch ดิบ — เดิมไม่มีเพดานเวลาเลย เน็ตไม่นิ่งแล้ว
       // ค้างได้ไม่จบ ยิ่งทำให้ผู้ใช้ทนรอไม่ไหวจนไปปิด modal เอง (ต้นตอที่แท้จริงของสั่งซ้ำ)
       const d = await dmjJson(await dmjFetch(
-        `${sheetUrl}${_sep}action=orderCheck&cid=${encodeURIComponent(cid)}&_t=${Date.now()}`,
+        dmjSessionUrl(`${sheetUrl}${_sep}action=orderCheck&cid=${encodeURIComponent(cid)}&_t=${Date.now()}`),
         { cache: 'no-store', dmjTimeoutMs: 20000 }));
       return (d && d.ok === true && typeof d.found === 'boolean') ? d.found : null;
     } catch (e) { return null; }
@@ -5852,7 +5852,7 @@ function OrderModal({ product, onClose, pendingOrderQty, pendingOrderBy, whReady
   const verifyOrderLanded = async (before) => {
     const _sep = sheetUrl.includes('?') ? '&' : '?';
     try {
-      const d = await dmjJson(await dmjFetch(`${sheetUrl}${_sep}action=orders&_t=${Date.now()}`,
+      const d = await dmjJson(await dmjFetch(dmjSessionUrl(`${sheetUrl}${_sep}action=orders&_t=${Date.now()}`),
                                           { cache: 'no-store', dmjTimeoutMs: 20000 }));
       if (!d || !Array.isArray(d.orders)) return false;
       const key = String(product.sku || '').trim().toUpperCase();

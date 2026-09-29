@@ -83,10 +83,8 @@ describe('backend — readOrders_ อ่าน toCentral จาก col P (index 
 describe('backend — updateOrderState เขียน toCentral ลง COL_ORD_CENTRAL โดยไม่แตะ COL_ORD_TYPE', () => {
   const fn = grab(GS, /function updateOrderState\(ss, body\) \{[\s\S]*?\n\}\n/, 'updateOrderState');
 
-  it('เขียนก็ต่อเมื่อ toCentral != null (M2 pattern — กัน false ถูกข้าม) ทั้ง 2 เส้นทาง', () => {
-    const hits = fn.match(/if \(body\.toCentral != null\) sheet\.getRange\((?:sheetRow|row), COL_ORD_CENTRAL\)\.setValue\(body\.toCentral \? 1 : ""\);/g) || [];
-    // orderId ตรง + fallback match by sku+date (เหมือน carryMode/printFlag ข้างบน)
-    expect(hits.length).toBe(2);
+  it('เขียนก็ต่อเมื่อ toCentral != null และใช้คอลัมน์กลางที่แยกจาก carryMode', () => {
+    expect(fn).toMatch(/if \(body\.toCentral != null\) sheet\.getRange\(targetRow, COL_ORD_CENTRAL\)\.setValue\(body\.toCentral \? 1 : ""\);/);
   });
 
   it('ไม่ปนกับ COL_ORD_TYPE (carryMode) — เขียนคนละคอลัมน์กันเด็ดขาด', () => {
@@ -95,10 +93,8 @@ describe('backend — updateOrderState เขียน toCentral ลง COL_ORD_
   });
 
   it('before/after audit เก็บ toCentral ด้วย ไม่ใช่แค่เขียนเงียบ ๆ', () => {
-    const beforeHits = fn.match(/toCentral: (?:sheet\.getRange\([^)]*COL_ORD_CENTRAL\)\.getValue\(\) \|\| ""|data\[i\]\[COL_ORD_CENTRAL - 1\] \|\| "")/g) || [];
-    expect(beforeHits.length).toBe(2);
-    const afterHits = fn.match(/carryMode: body\.carryMode, toCentral: body\.toCentral/g) || [];
-    expect(afterHits.length).toBe(2);
+    expect(GS).toMatch(/function readOrderState_\(sheet, row\)[\s\S]*?toCentral: normalizeOrderStateField_\("toCentral", sheet\.getRange\(row, COL_ORD_CENTRAL\)/);
+    expect(fn).toMatch(/before: before,[\s\S]*?after: currentState/);
   });
 });
 

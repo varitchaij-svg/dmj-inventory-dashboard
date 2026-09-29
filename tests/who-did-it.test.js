@@ -92,14 +92,14 @@ describe('backend — ผู้สั่ง (handleOrder_)', () => {
 describe('backend — ผู้จัด (updateOrderState)', () => {
   const fn = grab(GS, /function updateOrderState\(ss, body\) \{[\s\S]*?\n\}\n/, 'updateOrderState');
 
-  it('บันทึกผู้จัดทั้ง 2 เส้นทาง (orderId และ match by sku+date)', () => {
+  it('บันทึกผู้จัดในเส้นทางเขียนร่วม หลังตรวจหาใบที่ตรงแล้ว', () => {
     const hits = fn.match(/COL_ORD_PREPBY\)\.setValue\(actor\)/g) || [];
-    expect(hits.length).toBe(2);
+    expect(hits.length).toBe(1);
   });
 
   it('กด "พิมพ์ label" อย่างเดียวไม่นับว่าเป็นคนจัด', () => {
     // เงื่อนไขต้องผูกกับ preparedQty/status เท่านั้น ไม่ใช่ printFlag
-    expect(fn).toMatch(/if \(body\.preparedQty != null \|\| body\.status\)/);
+    expect(fn).toMatch(/if \(body\.preparedQty != null \|\| \(body\.status != null && body\.status !== ""\)\)/);
     expect(fn).not.toMatch(/body\.printFlag[^)]*\)\s*\n?\s*sheet\.getRange\([^)]*COL_ORD_PREPBY/);
   });
 });

@@ -418,7 +418,8 @@ describe('meta — ป้าย "สั่งแล้ว" ต้องมาจ
   });
 
   it('fetchFromSheet ก็ประทับ ordersFetchedAt ด้วย (ไม่งั้น optimistic entry ค้างค้ำ)', () => {
-    expect(APP).toMatch(/ordersFetchedAt: Date\.now\(\)[\s\S]{0,80}setData\(enriched\)/);
+    expect(APP).toMatch(/ordersFetchedAt:\s*enriched\.ordersFetchedAt\s*\|\|\s*Date\.now\(\)/);
+    expect(APP).toMatch(/ordersServerAt:\s*Number\(d\.ordersServerAt\)/);
   });
 
   it('pendingOrderQtyMap ตัด optimistic entry ที่ชีตตามมาทันแล้ว (กันนับซ้ำ 2 เด้ง)', () => {

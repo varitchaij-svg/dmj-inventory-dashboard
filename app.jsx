@@ -1280,6 +1280,45 @@ async function postAuthAction(body) {
   }
 }
 
+function shouldApplyOrdersSnapshot(meta) {
+  if (!meta) return false;
+  if (Number(meta.requestSeq) < Number(meta.appliedSeq || 0)) return false;
+  if (Number(meta.pendingAtStart || 0) > 0 || Number(meta.pendingNow || 0) > 0) return false;
+  if (Number(meta.revisionAtStart || 0) !== Number(meta.revisionNow || 0)) return false;
+  const generatedAt = Number(meta.generatedAt) || 0;
+  const latestServerAt = Number(meta.latestServerAt) || 0;
+  const lastWriteAt = Number(meta.lastWriteAt) || 0;
+  if (generatedAt && latestServerAt && generatedAt < latestServerAt) return false;
+  if (generatedAt && lastWriteAt && generatedAt < lastWriteAt) return false;
+  return true;
+}
+
+function shouldApplyStockLiteSnapshot(incomingTs, latestTs, mutationAtStart, mutationNow) {
+  const started = mutationAtStart || {};
+  const current = mutationNow || {};
+  if (Number(started.pending || 0) > 0 || Number(current.pending || 0) > 0) return false;
+  if (mutationAtStart && mutationNow && Number(started.revision || 0) !== Number(current.revision || 0)) return false;
+  const incoming = Number(incomingTs) || 0;
+  const latest = Number(latestTs) || 0;
+  return incoming > 0 && (!latest || incoming >= latest);
+}
+
+function protectFullSnapshotSections(incoming, current, options) {
+  const next = { ...(incoming || {}) };
+  const live = current || {};
+  const keep = options || {};
+  if (keep.preserveOrders && Array.isArray(live.orders)) {
+    next.orders = live.orders;
+    next.ordersServerAt = Number(live.ordersServerAt) || 0;
+    next.ordersFetchedAt = live.ordersFetchedAt || 0;
+  }
+  if (keep.preserveShipments && Array.isArray(live.shipments)) {
+    next.shipments = live.shipments;
+    next.shipmentsServerAt = Number(live.shipmentsServerAt) || 0;
+  }
+  return next;
+}
+
 function App() {
   // ── ALL hooks first (no early returns before this block) ──
   // ภาษาปัจจุบัน — subscribe ที่ App ตัวเดียว เปลี่ยนภาษาแล้ว re-render ทั้งต้นไม้
@@ -1314,6 +1353,8 @@ function App() {
   // "ตอนนี้เราถือ *ของสำรอง* (Phase 7.3) อยู่หรือเปล่า" — ต้องเป็น ref ด้วยเหตุผลเดียวกับ hasDataRef
   const staleRef = React.useRef(0);
   const [data, setData] = usS(null);
+  const dataRef = React.useRef(null);
+  dataRef.current = data;
   // แอป mount สำเร็จแล้ว (React commit รอบแรก) → ยกเลิก boot watchdog + ซ่อนแถบกู้จอขาว
   // (ดู __dmjBootRecover ใน "Doomuenjing Dashboard.html") · effect นี้ยิงเฉพาะเมื่อ render ผ่าน
   // ถ้า App โยน error ตอน render แรก effect จะไม่ยิง → watchdog โผล่แถบกู้ให้เอง
@@ -1351,6 +1392,17 @@ function App() {
   const [navToast, showNavToast, hideNavToast] = useToast(); // toast สำหรับ nav-level errors
   const tabHistoryRef = React.useRef([]); // track tab navigation for Android back
   const fetchingRef = React.useRef(false); // guard against concurrent fetchFromSheet calls
+  const ordersRequestSeqRef = React.useRef(0);
+  const ordersAppliedSeqRef = React.useRef(0);
+  const ordersSnapshotRef = React.useRef(null);
+  usE(() => {
+    if (!data || !Array.isArray(data.orders)) return;
+    const serverAt = Number(data.ordersServerAt) || 0;
+    const prior = ordersSnapshotRef.current;
+    if (!prior || serverAt >= (Number(prior.serverAt) || 0)) {
+      ordersSnapshotRef.current = { orders:data.orders, serverAt:serverAt, fetchedAt:data.ordersFetchedAt || 0 };
+    }
+  }, [data]);
   // Phase B: ก้อนเต็มมาถึงหรือยัง — ก้อน boot ที่มาทีหลังห้ามเขียนทับ (มันไม่มีข้อมูลยอดขาย)
   const fullAppliedRef = React.useRef(false);
   const bootAppliedRef = React.useRef(false);
@@ -1369,6 +1421,8 @@ function App() {
   const fetchFromSheet = usC((retryLeft, force) => {
     if (fetchingRef.current) return;
     fetchingRef.current = true;
+    const fullOrdersAppliedAtStart = ordersAppliedSeqRef.current;
+    const fullMutationAtStart = dmjMutationState();
     // clamp ด้วย — จุดเรียก "ลองใหม่" หลายที่ส่งเลขเดิม (3) มาตรง ๆ
     retryLeft = (typeof retryLeft === 'number' && retryLeft >= 0) ? Math.min(retryLeft, PAYLOAD_MAX_RETRY) : PAYLOAD_MAX_RETRY;
     const isFirstAttempt = retryLeft === PAYLOAD_MAX_RETRY;
@@ -1449,6 +1503,31 @@ function App() {
         // ก้อนโตขึ้นไหม · หมายเหตุ: นี่คือไบต์หลังคลายบีบอัด ไม่ใช่ไบต์บนสาย (ดู Finding 3)
         window.dmjMark('payload:ครบ' + (_gotBytes ? ' (' + Math.round(_gotBytes / 1024) + 'KB)' : ''));
         if (d && d.lastModified) window._dataLoadedAt = d.lastModified;
+        const latestOrders = ordersSnapshotRef.current;
+        const currentData = dataRef.current || {};
+        const mutationNow = dmjMutationState();
+        const payloadServerAt = Number(d && d.lastModified) || 0;
+        const latestOrdersAt = Math.max(Number(latestOrders && latestOrders.serverAt) || 0, Number(currentData.ordersServerAt) || 0);
+        const hasInterveningMutation = fullMutationAtStart.revision !== mutationNow.revision
+          || fullMutationAtStart.pending > 0 || mutationNow.pending > 0;
+        const keepOrders = !!(d && d.stale)
+          || ordersAppliedSeqRef.current !== fullOrdersAppliedAtStart
+          || hasInterveningMutation
+          || (payloadServerAt && latestOrdersAt > payloadServerAt)
+          || (payloadServerAt && mutationNow.lastWriteAt > payloadServerAt);
+        const currentForMerge = { ...currentData };
+        if (latestOrders && (!Array.isArray(currentForMerge.orders)
+            || (Number(latestOrders.serverAt) || 0) >= (Number(currentForMerge.ordersServerAt) || 0))) {
+          currentForMerge.orders = latestOrders.orders;
+          currentForMerge.ordersServerAt = latestOrders.serverAt;
+          currentForMerge.ordersFetchedAt = latestOrders.fetchedAt;
+        }
+        const keepShipments = !!(d && d.stale) || hasInterveningMutation
+          || (payloadServerAt && (Number(currentData.shipmentsServerAt) || 0) > payloadServerAt)
+          || (payloadServerAt && mutationNow.lastWriteAt > payloadServerAt);
+        d = protectFullSnapshotSections(d, currentForMerge, { preserveOrders:keepOrders, preserveShipments:keepShipments });
+        if (!keepOrders && Array.isArray(d.orders)) d.ordersServerAt = payloadServerAt || Date.now();
+        if (!keepShipments && Array.isArray(d.shipments)) d.shipmentsServerAt = payloadServerAt || Date.now();
         if (typeof resetCatColorMap === 'function') resetCatColorMap();
         // Phase 7.3: server ติดธง `stale` มาเมื่อมีคนอื่นกำลังสร้างข้อมูลชุดใหม่อยู่
         // แล้วเราได้ "ชุดสำรอง" (ก่อนการบันทึกล่าสุด) กลับมาทันทีแทนการต่อคิวรอ ~10 วิ
@@ -1472,7 +1551,22 @@ function App() {
         // Phase B: ตั้ง **ก่อน** setData — ก้อน boot ที่กำลังเดินทางอยู่จะได้ไม่เขียนทับ
         // ข้อมูลยอดขายที่เพิ่งมาถึง (boot ไม่มีคีย์พวกนั้น = ถอยหลังโดยไม่มี error ให้เห็น)
         fullAppliedRef.current = true;
-        enriched = Object.assign({}, enriched, { ordersFetchedAt: Date.now() });
+        enriched = Object.assign({}, enriched, {
+          ordersFetchedAt: enriched.ordersFetchedAt || Date.now(),
+          ordersServerAt: Number(d.ordersServerAt) || 0,
+          shipmentsServerAt: Number(d.shipmentsServerAt) || 0,
+        });
+        if (Array.isArray(enriched.orders)) {
+          const nextOrderSnapshot = {
+            orders:enriched.orders,
+            serverAt:Number(enriched.ordersServerAt) || 0,
+            fetchedAt:enriched.ordersFetchedAt,
+          };
+          const priorOrderSnapshot = ordersSnapshotRef.current;
+          if (!priorOrderSnapshot || nextOrderSnapshot.serverAt >= (Number(priorOrderSnapshot.serverAt) || 0))
+            ordersSnapshotRef.current = nextOrderSnapshot;
+        }
+        dataRef.current = enriched;
         setData(enriched);
         saveToStorage(compactStr || enriched, "sheet");
         setSource("sheet");
@@ -1573,6 +1667,8 @@ function App() {
   // qty เดิมไว้คือบั๊กเดียวกับเคส WL (ก.ค. 2026) ที่สินค้ามีของจริงแต่โชว์ "หมด" ทั้งระบบ
   // โดยไม่มี error ให้เห็น · สูตรตรงนี้ต้องตรงกับ `applyQtyLocToProduct_` ฝั่ง GAS เสมอ
   const fetchStockLite = usC(() => {
+    const stockMutationAtStart = typeof dmjStockLiteMutationState === 'function'
+      ? dmjStockLiteMutationState() : { revision: 0, pending: 0 };
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 20000);
     const sep = sheetUrl.includes('?') ? '&' : '?';
@@ -1583,6 +1679,11 @@ function App() {
         // GAS ยังเป็นโค้ดเก่า (ไม่รู้จัก action นี้) → คืน payload เต็ม/HTML → ไม่มี items
         // ไม่ทำอะไรเลยดีกว่าเดา — poll รอบหน้าค่อยว่ากัน (แท็บพวกนี้ยังใช้งานได้ปกติ)
         if (!d || !Array.isArray(d.items)) return;
+        const stockLiteTs = Number(d.ts) || 0;
+        const stockMutationNow = typeof dmjStockLiteMutationState === 'function'
+          ? dmjStockLiteMutationState() : { revision: 0, pending: 0 };
+        if (!shouldApplyStockLiteSnapshot(stockLiteTs, window._dataLoadedAt,
+          stockMutationAtStart, stockMutationNow)) return;
         const m = {};
         d.items.forEach(row => { if (row && row[0]) m[row[0]] = row; });
         setData(prev => {
@@ -1630,7 +1731,7 @@ function App() {
         // ⚠️ ต่างจาก poll เดิมตรงที่ก้อนนี้รีเฟรช **เฉพาะจำนวนสต็อก** — ล็อค/ออเดอร์/โอน ยังเป็น
         // ชุดจากการโหลดเต็มครั้งล่าสุด · ยอมรับได้เพราะสองแท็บนี้เขียนงานที่อิงจำนวนสต็อกเป็นหลัก
         // แต่ถ้าวันหนึ่งมีแท็บอื่นมาใช้ poll ตัวนี้ ต้องทบทวนข้อนี้ก่อนเสมอ
-        if (d.ts) window._dataLoadedAt = d.ts;
+        window._dataLoadedAt = stockLiteTs;
       })
       .catch(() => {})   // เงียบ — เป็น background polling ไม่ต้องรบกวนผู้ใช้
       .finally(() => clearTimeout(timeout));
@@ -1639,14 +1740,30 @@ function App() {
   // Lightweight fetch: ดึงเฉพาะรายการสั่งของ (เบา/เร็ว) — ใช้ polling หน้า orders จะได้ไม่โหลดทั้งก้อน
   // คืน promise ด้วย — ตัวเรียก (เช่นหลังสั่งของสำเร็จ) จะได้รู้ว่าดึงเสร็จเมื่อไหร่
   const fetchOrdersOnly = usC(() => {
+    const requestSeq = ++ordersRequestSeqRef.current;
+    const mutationAtStart = dmjMutationState();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 20000);
     const sep = sheetUrl.includes('?') ? '&' : '?';
-    const url = `${sheetUrl}${sep}action=orders&_t=${Date.now()}`;
+    const url = dmjSessionUrl(`${sheetUrl}${sep}action=orders&_t=${Date.now()}`);
     return fetch(url, { signal: controller.signal, cache: 'no-store' })
       .then(r => (typeof dmjJson === 'function' ? dmjJson(r) : r.json()))
       .then(d => {
         if (!d || d.error || !Array.isArray(d.orders)) return; // d.error = sheet_not_found → skip
+        const mutationNow = dmjMutationState();
+        const generatedAt = Date.parse(d.generatedAt || "") || Date.now();
+        const latest = ordersSnapshotRef.current || {};
+        if (!shouldApplyOrdersSnapshot({
+          requestSeq:requestSeq,
+          appliedSeq:ordersAppliedSeqRef.current,
+          pendingAtStart:mutationAtStart.pending,
+          pendingNow:mutationNow.pending,
+          revisionAtStart:mutationAtStart.revision,
+          revisionNow:mutationNow.revision,
+          generatedAt:generatedAt,
+          latestServerAt:latest.serverAt,
+          lastWriteAt:mutationNow.lastWriteAt,
+        })) return;
         // ถ้า GAS คืน date เป็น Date object string ("Thu Jun 06 2026...") แทน "dd/mm/yyyy"
         // (เกิดเมื่อ GAS ยังไม่ได้ redeploy) → normalize ให้เป็น dd/mm/yyyy ก่อนอัปเดต state
         d.orders = d.orders.map(function(o) {
@@ -1664,11 +1781,13 @@ function App() {
           }
           return o;
         });
+        ordersAppliedSeqRef.current = requestSeq;
+        ordersSnapshotRef.current = { orders:d.orders, serverAt:generatedAt, fetchedAt:Date.now() };
         setData(prev => {
           if (!prev) return prev;
           // ไม่มี guard 0-orders แล้ว: ถ้า orders ถูกลบจริงๆ ควร clear ได้
           // GAS มี retry อยู่แล้ว ถ้า response ว่างเพราะ error จะถูก retry รอบถัดไป
-          return { ...prev, orders: d.orders, ordersFetchedAt: Date.now() };
+          return { ...prev, orders: d.orders, ordersFetchedAt: Date.now(), ordersServerAt:generatedAt };
         });
         const now = new Date().toISOString();
         localStorage.setItem("dmj_last_sync", now);
