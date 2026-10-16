@@ -30,7 +30,7 @@ const ROLE_TABS = {
 const TAB_LABEL = {
   overview:"ภาพรวม", whhome:"งานคลัง", categories:"สินค้า & สั่ง", trends:"เทรนด์",
   stock:"สต๊อก & แจ้งเตือน", storage:"ตำแหน่งคลัง", stockcount:"นับ stock คลัง",
-  newproduct:"เพิ่มสินค้าใหม่", frontstore:"เช็คหน้าร้าน", transfers:"โอน/ปรับ/ยกมา",
+  newproduct:"เพิ่มสินค้าใหม่", frontstore:"เช็คหน้าร้าน", transfers:"ประวัติโอนสินค้า",
   orders:"รายการสั่งของ", tracking:"ติดตามสถานะ", ordersummary:"สรุปสินค้าออกจากคลัง",
   mtojobs:"งานจัดพิเศษ", upload:"อัปโหลด Zort", connect:"Google Sheet", labels:"พิมพ์ Label",
   // ⚠️ staff ต้องใส่อิโมจินำหน้าด้วย — คลิกด้วย substring และ "พนักงาน" ไปตรงกับ
@@ -52,10 +52,8 @@ const ASSERT = {
     const marks = await page.locator('.recharts-rectangle, .recharts-line-curve, .recharts-sector').count();
     return { ok: svg >= 1 && marks >= 1, detail: `recharts svg=${svg} marks=${marks}` };
   },
-  transfers: async (page) => {
-    const svg = await page.locator('svg.recharts-surface').count();
-    return { ok: svg >= 1, detail: `recharts svg=${svg}` };
-  },
+  transfers: async (page) => hasAllText(page,
+    ['ประวัติโอนสินค้า', 'ยังไม่ได้ค้นหา', 'ค้นประวัติ'], 'หน้า history เริ่มโดยไม่ดึงข้อมูล'),
   // categories: สินค้า + การ์ด "งานของฉัน" (MyJobsCard) ที่มาจากงาน MTO ของ STF001 ใน fixture
   // นับเฉพาะงานที่ยังไม่เสร็จ → ต้องได้ 1 งาน (อีกงานปิดแล้ว + เป็นของ STF002)
   categories: async (page) => {

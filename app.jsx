@@ -14,7 +14,7 @@ const TABS = [
   { id: "stockcount",    label: "📊 นับ stock คลัง",         icon: I.alert,     desc: "นับของจริงในคลังทีละล็อค · คิวควรนับก่อน" },
   { id: "newproduct",    label: "➕ เพิ่มสินค้าใหม่",         icon: I.plus,      desc: "สร้างรหัสสินค้าใหม่เข้าระบบ + ZORT" },
   { id: "frontstore",    label: "🏪 เช็คหน้าร้าน",           icon: I.store,     desc: "นับของหน้าร้าน · คิวควรเช็คก่อน" },
-  { id: "transfers",     label: "🔄 โอน/ปรับ/ยกมา",        icon: I.arrowR,    desc: "โอนของคลัง ↔ หน้าร้าน · ปรับยอดคงเหลือ" },
+  { id: "transfers",     label: "📜 ประวัติโอนสินค้า",      icon: I.arrowR,    desc: "ค้นรหัสสินค้า/วันที่ · ดูจำนวนส่งและสถานะรับ" },
   { id: "orders",        label: "📋 รายการสั่งของ",         icon: I.cart,      desc: "ใบสั่งที่ต้องจัด · กรอกจำนวนที่จัดได้" },
   { id: "tracking",      label: "📡 ติดตามสถานะ",           icon: I.arrowR,    desc: "ของส่งไปถึงไหน · ใบไหนยังไม่มีคนรับ" },
   { id: "ordersummary",  label: "📦 สรุปสินค้าออกจากคลัง",  icon: I.store,     desc: "ของจัดเสร็จแล้ว รอกดส่งออกจากคลัง" },
@@ -2219,30 +2219,21 @@ function App() {
     secondaryTabs = [];
   }
 
-  // ── ทางด่วนลงเวลา ────────────────────────────────────────────────────────
-  // AttendanceView / AttendanceTodayView **ไม่ได้ใช้ `data` เลยแม้แต่ฟิลด์เดียว**
-  // (views-attendance.jsx — รับแค่ role/canEdit แล้วยิง endpoint ของตัวเองผ่าน attPost
-  //  ซึ่งแนบ sessionToken เอง ไม่พึ่ง payload หลัก)
-  // แต่เดิมทั้งคู่ถูกกั้นหลัง `if (!data)` ข้างล่าง = พนักงานที่มาสแกนเข้า-ออกงาน
-  // ต้องรอ payload หลายเมกะที่ตัวเองไม่ได้ใช้ ก่อนจะเห็นปุ่มลงเวลา
-  // → ปล่อยให้ 2 แท็บนี้เรนเดอร์ได้ทันทีที่รู้ว่าเป็นใคร ส่วนข้อมูลก้อนใหญ่โหลดอยู่เบื้องหลัง
+  // ── ทางด่วนสำหรับหน้าที่ไม่พึ่ง payload หลัก ─────────────────────────────
+  // AttendanceView / AttendanceTodayView ยิง endpoint ของตัวเอง ส่วน TransferView
+  // อ่านประวัติจากชีตเมื่อผู้ใช้กดค้นหา — ไม่มีแท็บใดอ่าน data.products/data.orders
+  // จึงเปิดได้ทันทีขณะที่ payload หลักกำลังโหลด
   //
-  // ⚠️ **ห้ามขยายรายชื่อนี้โดยไม่เปิดดู view จริงก่อน** — แท็บอื่นทุกตัวอ่าน `data` จริง
-  //    ปล่อยผ่านมาที่นี่ = จอขาว (อ่าน property ของ null) ซึ่งไม่มี error ให้ผู้ใช้เห็นเลย
-  // ⚠️ ตั้งใจ**ไม่**ทำเป็นจอแยก/early-return — ถ้าแยกจอ พอข้อมูลมาถึงแล้วสลับกลับเข้า shell
-  //    ปกติ ตำแหน่งของ <AttendanceView> ในต้นไม้จะเปลี่ยน → React unmount แล้ว mount ใหม่
-  //    = state ข้างในหายกลางคัน (คนที่กำลังถ่ายรูป/รอ GPS อยู่ต้องเริ่มใหม่โดยไม่รู้สาเหตุ)
-  //    การใช้ shell เดียวกันทำให้ตำแหน่งคงที่ ข้อมูลมาถึงแล้วหน้าที่เปิดอยู่ไม่สะดุด
-  // "home" อยู่ในรายชื่อนี้ด้วยเพราะ HomeMenuView ไม่แตะ `data` เลย (รับแค่รายการเมนู + ตัวเลข
-  // สำเร็จรูปที่กัน null แล้ว) — และเป็นทางเข้าหลักของแท็บลงเวลา ถ้าหน้าหลักติดจอโหลดไปด้วย
-  // ทางด่วนลงเวลาก็เสียความหมายไปครึ่งหนึ่ง (กดโลโก้แล้วเจอสปินเนอร์ กดต่อไปไหนไม่ได้)
-  const NO_DATA_TABS = ["attendance", "atttoday", HOME_TAB];
-  const attFastPath = !data && NO_DATA_TABS.includes(activeTab);
+  // ⚠️ **ห้ามขยายรายชื่อนี้โดยไม่เปิดดู view จริงก่อน** — ทุก view ที่อยู่ในรายการต้อง
+  //    ทำงานได้เมื่อ data เป็น null ไม่เช่นนั้นจะจอขาวโดยไม่มี error ให้ผู้ใช้เห็น
+  // ⚠️ ใช้ shell เดียวกันเพื่อให้ตำแหน่ง component คงที่เมื่อ payload มาถึง
+  const NO_DATA_TABS = ["attendance", "atttoday", "transfers", HOME_TAB];
+  const noDataFastPath = !data && NO_DATA_TABS.includes(activeTab);
+  const fastPathReadyLabel = activeTab === HOME_TAB ? "เลือกเมนูได้เลย"
+    : activeTab === "transfers" ? "ค้นประวัติการโอนได้เลย" : "ลงเวลาได้เลย";
 
-  // จอ "ยังไม่มีข้อมูลก้อนใหญ่" — เดิมเป็น early return ทั้งหน้า **แถบเมนูจึงหายไปด้วย**
-  // พอมีทางด่วนลงเวลาแล้ว อันนั้นกลายเป็นกับดัก: ลงเวลาเสร็จ กดแท็บอื่นดูสักที
-  // แล้วกลับมาแท็บลงเวลาไม่ได้อีกเลยจนกว่าข้อมูลจะมาครบ (ไม่มีปุ่มอะไรให้กดเลย)
-  // → ย้ายมาเรนเดอร์ "ข้างใน <main>" แทน แถบเมนูอยู่ครบเสมอ เดินกลับได้ตลอด
+  // จอ "ยังไม่มีข้อมูลก้อนใหญ่" — แสดงใน <main> เพื่อให้แถบเมนูอยู่ครบ
+  // หน้าที่อยู่ใน NO_DATA_TABS ใช้งานได้ระหว่างโหลด ส่วนแท็บอื่นกดกลับมาได้ทันที
   const dataPane = (
     <div className="loading-screen">
       {error ? (
@@ -2280,8 +2271,8 @@ function App() {
   })();
 
   // ── ตัวเลขเตือนบนหมวด owner (จาก payload ที่เชื่อถือได้) ──
-  // `data` เป็น null ได้เมื่ออยู่บนทางด่วนลงเวลา (ข้อมูลก้อนใหญ่ยังโหลดไม่เสร็จ) —
-  // ตัวเลขบนป้ายเตือนยังไม่รู้ ก็แค่ไม่ต้องโชว์ ห้ามอ่าน property ของ null (จอขาวทั้งแอป)
+  // `data` เป็น null ได้บนหน้าไม่พึ่ง payload (ข้อมูลก้อนใหญ่ยังโหลดไม่เสร็จ) —
+  // ตัวเลขบนป้ายเตือนยังไม่รู้ ก็แค่ไม่ต้องโชว์ ห้ามอ่าน property ของ null
   const pendingOrders = ((data && data.orders) || []).filter(o => o.status === "รอ").length;    // ออเดอร์ค้าง (status "รอ")
   const pendingRecv   = ((data && data.shipments) || []).filter(s => !s.receivedAt).length;      // ของโอนแล้วรอรับ
 
@@ -2636,26 +2627,25 @@ function App() {
         </div>
       )}
 
-      {/* ─── ทางด่วนลงเวลา: บอกว่าหน้านี้ใช้ได้แล้ว ส่วนที่เหลือยังตามมา ───
-           ต้องมี ไม่งั้นพนักงานกดแท็บอื่นแล้วเจอจอโหลดจะนึกว่าแอปพัง/ค้าง
-           ทั้งที่ตั้งใจให้ลงเวลาได้ก่อน · โชว์ไบต์ที่โหลดมาแล้วด้วยเพื่อให้เห็นว่ามันเดินอยู่จริง */}
-      {attFastPath && !error && (
+      {/* ─── ทางด่วนหน้าไม่พึ่ง payload: บอกว่าเปิดหน้าได้แล้ว ส่วนที่เหลือยังตามมา ───
+           โชว์สถานะให้ผู้ใช้เห็นว่าข้อมูลส่วนอื่นกำลังโหลดอยู่เบื้องหลัง */}
+      {noDataFastPath && !error && (
         <div className="no-print" style={{
           background:"#e8f5e9", color:"#1b5e20", padding:"6px 16px",
           fontSize:12, display:"flex", alignItems:"center", gap:8,
           borderBottom:"1px solid #a5d6a7",
         }}>
           <span className="spin" style={{width:12,height:12,borderWidth:2,flexShrink:0}}></span>
-          <span>{activeTab === HOME_TAB ? "เลือกเมนูได้เลย" : "ลงเวลาได้เลย"} — ข้อมูลสินค้ากำลังโหลดอยู่เบื้องหลัง</span>
+          <span>{fastPathReadyLabel} — ข้อมูลส่วนอื่นกำลังโหลดอยู่เบื้องหลัง</span>
         </div>
       )}
-      {attFastPath && error && (
+      {noDataFastPath && error && (
         <div className="no-print" style={{
           background:"#fff3cd", color:"#856404", padding:"6px 16px",
           fontSize:12, display:"flex", alignItems:"center", justifyContent:"space-between",
           gap:8, borderBottom:"1px solid #ffc107",
         }}>
-          <span>⚠️ โหลดข้อมูลสินค้าไม่สำเร็จ — แต่{activeTab === HOME_TAB ? "เมนูลงเวลายัง" : "ลงเวลา"}ใช้ได้ตามปกติ</span>
+          <span>⚠️ โหลดข้อมูลสินค้าไม่สำเร็จ — แต่{activeTab === HOME_TAB ? "เมนู" : activeTab === "transfers" ? "การค้นประวัติโอน" : "การลงเวลา"}ยังใช้ได้ตามปกติ</span>
           <button className="btn ghost" style={{fontSize:12,padding:"2px 8px"}}
                   onClick={()=>fetchFromSheet(3,true)}>ลองใหม่</button>
         </div>
@@ -2677,8 +2667,8 @@ function App() {
 
       {/* ─── Main ─── */}
       <main className="main" data-screen-label={activeTab}>
-        {/* ⚠️ ด่านเดียวที่กัน view ที่ต้องใช้ `data` ไม่ให้เจอ null — ทุก view ข้างล่างนี้
-            (ยกเว้น 2 แท็บลงเวลา + หน้าหลัก) อ่าน data.products/data.orders ตรง ๆ เจอ null = จอขาว
+        {/* ⚠️ ด่านเดียวที่กัน view ที่ต้องใช้ `data` ไม่ให้เจอ null
+            (ยกเว้นแท็บลงเวลา / ประวัติโอน / หน้าหลัก) อ่าน data.products/data.orders ตรง ๆ แล้วจะจอขาว
             เงื่อนไขต้องตรงกับ NO_DATA_TABS ข้างบนเป๊ะ ๆ */}
         {!data && !NO_DATA_TABS.includes(activeTab) ? dataPane : (<>
         {activeTab === HOME_TAB       && <ErrorBoundary key="home"><HomeMenuView
@@ -2738,7 +2728,7 @@ function App() {
                                                 fetchFromSheet(); // reconcile เบื้องหลัง (รีเฟรช pendingChecks + ค่าจริง)
                                               } catch(e){ console.error("completeStockCheck:", e); setCheckSideStatus(reqId, 'fs', 'pending'); }
                                             }}/></ErrorBoundary>}
-        {activeTab === "transfers"    && <ErrorBoundary key="transfers"><TransferView data={data}/></ErrorBoundary>}
+        {activeTab === "transfers"    && <ErrorBoundary key="transfers"><TransferView/></ErrorBoundary>}
         {activeTab === "orders"       && <ErrorBoundary key="orders"><OrderListView data={data} role={viewRole}/></ErrorBoundary>}
         {activeTab === "tracking"     && <ErrorBoundary key="tracking"><TrackingView data={data} role={viewRole}/></ErrorBoundary>}
         {activeTab === "ordersummary" && <ErrorBoundary key="ordersummary"><OrderSummaryView data={data} onPrintRequest={handleOrderPrint}/></ErrorBoundary>}

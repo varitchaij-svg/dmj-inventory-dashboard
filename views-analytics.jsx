@@ -4261,143 +4261,223 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
   );
 }
 
-function TransferView({ data }) {
-  const rechartsReady = useRechartsReady(); // gate กราฟจนกว่า Recharts (defer) จะพร้อม
-  const transfers = data.transfers || [];
-  const stats = data.transferStats || { 'โอน': {count:0,qty:0}, 'ปรับ': {count:0,qty:0}, 'ยกมา': {count:0,qty:0} };
-  const products = data.products || [];
+function parseTransferHistorySkus(raw) {
+  return Array.from(new Set(String(raw || "").toUpperCase().split(/[\s,;]+/)
+    .map(s => s.trim()).filter(Boolean)));
+}
 
-  const [filterType, setFilterType] = uS('all');
-  const [search, setSearch] = uS('');
+// อ่านประวัติจากชีตจริงเฉพาะตอนผู้ใช้กดค้นหา — ไม่แนบประวัติทั้งก้อนไปกับ payload เปิดแอป
+async function syncGetTransferHistory(filters, page) {
+  if (typeof SHEET_DEPLOY_URL === "undefined" || !SHEET_DEPLOY_URL) {
+    return { ok: false, error: "ยังไม่ได้เชื่อมต่อ Google Sheet" };
+  }
+  let tok = "";
+  try { tok = localStorage.getItem("dmj_session_token") || ""; } catch (e) {}
+  if (!tok) return { ok: false, error: "ไม่พบ session กรุณาเข้าสู่ระบบใหม่" };
 
-  const productMap = uM(() => {
-    const m = {};
-    products.forEach(p => { m[p.sku] = p; });
-    return m;
-  }, [products]);
+  const sep = SHEET_DEPLOY_URL.includes("?") ? "&" : "?";
+  const params = {
+    action: "transferHistory",
+    skus: (filters.skus || []).join(","),
+    from: filters.fromDate || "",
+    to: filters.toDate || "",
+    status: filters.status || "all",
+    location: filters.location || "",
+    page: page || 1,
+    pageSize: 50,
+    sessionToken: tok,
+    _t: Date.now(),
+  };
+  const query = Object.keys(params).map(k => encodeURIComponent(k) + "=" + encodeURIComponent(params[k])).join("&");
+  try {
+    const res = await dmjFetch(SHEET_DEPLOY_URL + sep + query, { cache: "no-store", dmjTimeoutMs: 30000 });
+    const d = await dmjJson(res);
+    if (d && d.ok === true && Array.isArray(d.list)) return d;
+    return { ok: false, error: (d && d.error) || "โหลดประวัติโอนไม่สำเร็จ" };
+  } catch (e) {
+    return { ok: false, error: typeof dmjErrText === "function" ? dmjErrText(e) : String(e) };
+  }
+}
 
-  const filtered = uM(() => {
-    let list = transfers;
-    if (filterType !== 'all') list = list.filter(t => t.type === filterType);
-    const sq = search.trim().toUpperCase();
-    if (sq) {
-      const tokens = sq.split(/\s+/).filter(Boolean);
-      list = list.filter(t => {
-        const hay = ((t.sku||'') + ' ' + (t.name||'')).toUpperCase();
-        return tokens.every(tk => hay.includes(tk));
-      });
+function TransferView() {
+  const [skuInput, setSkuInput] = uS("");
+  const [fromDate, setFromDate] = uS("");
+  const [toDate, setToDate] = uS("");
+  const [status, setStatus] = uS("all");
+  const [location, setLocation] = uS("");
+  const [loading, setLoading] = uS(false);
+  const [error, setError] = uS("");
+  const [result, setResult] = uS(null);
+  const [submitted, setSubmitted] = uS(null);
+  const requestId = React.useRef(0);
+
+  uE(() => () => { requestId.current += 1; }, []);
+
+  const runSearch = async (filters, page) => {
+    const id = ++requestId.current;
+    setLoading(true);
+    setError("");
+    setResult(null);
+    const res = await syncGetTransferHistory(filters, page);
+    if (id !== requestId.current) return;
+    if (!res || res.ok !== true) {
+      setError((res && res.error) || "โหลดประวัติโอนไม่สำเร็จ");
+      setLoading(false);
+      return;
     }
-    return list;
-  }, [transfers, filterType, search]);
+    setResult(res);
+    setLoading(false);
+  };
 
-  const transferByType = uM(() => {
-    const map = { 'โอน': [], 'ปรับ': [], 'ยกมา': [] };
-    transfers.forEach(t => { if (map[t.type]) map[t.type].push(t); });
-    return map;
-  }, [transfers]);
+  const handleSearch = async e => {
+    e.preventDefault();
+    const skus = parseTransferHistorySkus(skuInput);
+    if (!skus.length) {
+      requestId.current += 1; setLoading(false); setError("กรอกรหัสสินค้าอย่างน้อย 1 รหัส"); setResult(null); return;
+    }
+    if (skus.length > 50) {
+      requestId.current += 1; setLoading(false); setError("ค้นหาได้ครั้งละไม่เกิน 50 รหัส"); setResult(null); return;
+    }
+    if (fromDate && toDate && fromDate > toDate) {
+      requestId.current += 1; setLoading(false); setError("วันที่เริ่มต้นต้องไม่อยู่หลังวันที่สิ้นสุด"); setResult(null); return;
+    }
+    const filters = { skus, fromDate, toDate, status, location: location.trim() };
+    setSubmitted(filters);
+    await runSearch(filters, 1);
+  };
 
-  const transferByMonth = uM(() => {
-    const map = {};
-    transfers.forEach(t => {
-      const d = (t.date || '').substring(0, 7);
-      if (!d) return;
-      map[d] = map[d] || { 'โอน': 0, 'ปรับ': 0, 'ยกมา': 0 };
-      map[d][t.type] = (map[d][t.type] || 0) + (t.qty || 0);
-    });
-    return Object.entries(map).sort((a,b) => a[0].localeCompare(b[0])).map(([m, v]) => ({month: m, ...v}));
-  }, [transfers]);
+  const clearSearch = () => {
+    requestId.current += 1;
+    setSkuInput(""); setFromDate(""); setToDate(""); setStatus("all"); setLocation("");
+    setSubmitted(null); setResult(null); setError(""); setLoading(false);
+  };
 
-  const totalQty = transfers.reduce((s, t) => s + (t.qty || 0), 0);
-  const totalCount = transfers.length;
+  const statusLabels = { all: "ทุกสถานะ", pending: "รอรับ", received: "รับแล้ว", complete: "รับครบ", short: "รับไม่ครบ" };
+  const inputStyle = { width: "100%", minHeight: 40, boxSizing: "border-box", padding: "8px 10px",
+    border: "1px solid var(--bdr)", borderRadius: 8, background: "var(--card,#fff)", color: "var(--text,#222)", fontSize: 13 };
+  const labelStyle = { display: "flex", flexDirection: "column", gap: 6, color: "var(--muted)", fontSize: 12 };
+
+  const printResults = () => {
+    if (!result || !result.list || !result.list.length || typeof window === "undefined") return;
+    document.body.classList.add("print-transfer-history");
+    const cleanup = () => document.body.classList.remove("print-transfer-history");
+    window.addEventListener("afterprint", cleanup, { once: true });
+    window.print();
+    window.setTimeout(cleanup, 5000);
+  };
+
+  const querySummary = submitted ? [
+    "รหัส " + submitted.skus.join(", "),
+    "วันที่ " + (submitted.fromDate || "ทั้งหมด") + " ถึง " + (submitted.toDate || "ทั้งหมด"),
+    "สถานะรับ " + (statusLabels[submitted.status] || statusLabels.all),
+    submitted.location ? "สถานที่ " + submitted.location : "",
+    "ค้นเมื่อ " + new Date().toLocaleString("th-TH"),
+  ].filter(Boolean).join(" · ") : "";
 
   return (
-    <div className="transfer-view">
-      <div className="row row-3" style={{marginBottom:16}}>
-        <KPI label="โอน (Transfer)" value={`${fmtN(stats['โอน']?.count || 0)}`}
-             sub={`${fmtN(stats['โอน']?.qty || 0)} ชิ้น`}
-             accent="#2196F3" icon={I.arrowR}/>
-        <KPI label="ปรับ (Adjust)" value={`${fmtN(stats['ปรับ']?.count || 0)}`}
-             sub={`${fmtN(stats['ปรับ']?.qty || 0)} ชิ้น`}
-             accent="#FF9800" icon={I.filter}/>
-        <KPI label="ยกมา (Import)" value={`${fmtN(stats['ยกมา']?.count || 0)}`}
-             sub={`${fmtN(stats['ยกมา']?.qty || 0)} ชิ้น`}
-             accent="#4CAF50" icon={I.upload}/>
-      </div>
-
-      <Card title="📊 ปริมาณโอน/ปรับ/ยกมารายเดือน"
-            sub="Trend ของการเคลื่อนย้ายสินค้า">
-        {rechartsReady ? <ResponsiveContainer width="100%" height={280}>
-          <BarChart data={transferByMonth}>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--bdr)" />
-            <XAxis dataKey="month" fontSize={12} />
-            <YAxis fontSize={12} />
-            <Tooltip contentStyle={{background:'#fff',border:'1px solid var(--bdr)',borderRadius:8}} />
-            <Legend />
-            <Bar dataKey="โอน" fill="#2196F3" name="โอน" />
-            <Bar dataKey="ปรับ" fill="#FF9800" name="ปรับ" />
-            <Bar dataKey="ยกมา" fill="#4CAF50" name="ยกมา" />
-          </BarChart>
-        </ResponsiveContainer> : <ChartLoading height={280}/>}
-      </Card>
-
-      <Card title="📋 รายการโอน/ปรับ/ยกมา"
-            sub={`ทั้งหมด ${fmtN(totalCount)} รายการ · ${fmtN(totalQty)} ชิ้น`}
-            action={
-              <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                <input type="text" placeholder="🔍 ค้นหา SKU..."
-                       value={search} onChange={e => setSearch(e.target.value)}
-                       style={{padding:"6px 10px",border:"1px solid var(--bdr)",
-                              borderRadius:8,fontSize:12,width:130}}/>
-                <ScanButton size={36} onScan={sku => setSearch(sku)}/>
-                <Seg value={filterType} onChange={setFilterType} options={[
-                  {value:'all',label:'ทั้งหมด'},{value:'โอน',label:'โอน'},{value:'ปรับ',label:'ปรับ'},{value:'ยกมา',label:'ยกมา'},
-                ]}/>
+    <div className="transfer-history-view">
+      <Card title="📜 ประวัติโอนสินค้า" sub="ค้นจากรหัสสินค้าได้หลายรหัส · รวมทั้งรายการปัจจุบันและประวัติที่เก็บไว้">
+        <form onSubmit={handleSearch}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12}}>
+            <label style={{...labelStyle,gridColumn:"1 / -1"}}>
+              รหัสสินค้า (ใส่ได้หลายรหัส คั่นด้วยเว้นวรรค จุลภาค หรือขึ้นบรรทัดใหม่)
+              <div style={{display:"flex",gap:8,alignItems:"stretch"}}>
+                <textarea value={skuInput} onChange={e=>setSkuInput(e.target.value)} rows={3}
+                  placeholder={"เช่น DEC00022, DEC01022"} style={{...inputStyle,minHeight:72,resize:"vertical"}}/>
+                <ScanButton size={40} onScan={sku=>setSkuInput(prev=>prev ? prev+"\n"+sku : sku)}/>
               </div>
-            }
-            style={{marginTop:16}}>
-        {filtered.length === 0 ? (
-          <div style={{padding:"20px 0"}}>
-            <Empty title="ไม่พบข้อมูล" sub={search ? `ไม่พบ "${search}" · ลองค้นหาใหม่` : "ลองเลือก filter อื่น"}/>
+            </label>
+            <label style={labelStyle}>ตั้งแต่วันที่
+              <input type="date" value={fromDate} onChange={e=>setFromDate(e.target.value)} style={inputStyle}/>
+            </label>
+            <label style={labelStyle}>ถึงวันที่
+              <input type="date" value={toDate} onChange={e=>setToDate(e.target.value)} style={inputStyle}/>
+            </label>
+            <label style={labelStyle}>สถานะรับของ
+              <select value={status} onChange={e=>setStatus(e.target.value)} style={inputStyle}>
+                <option value="all">ทุกสถานะ</option>
+                <option value="pending">รอรับ</option>
+                <option value="received">รับแล้ว (รวมรับไม่ครบ)</option>
+                <option value="complete">รับครบ</option>
+                <option value="short">รับไม่ครบ</option>
+              </select>
+            </label>
+            <label style={labelStyle}>สถานที่ (ตรงกับต้นทางหรือปลายทาง)
+              <input type="text" value={location} onChange={e=>setLocation(e.target.value)}
+                placeholder="เช่น ดูเหมือนจริง" style={inputStyle}/>
+            </label>
           </div>
-        ) : (
-          <div className="t-transfer-wrap" style={{maxHeight:600,overflowY:'auto',overflowX:'auto',WebkitOverflowScrolling:'touch',maxWidth:'100%'}}>
-            <table className="t" style={{minWidth:560}}>
-              <thead><tr>
-                <th>ประเภท</th>
-                <th>วันที่</th>
-                <th>SKU</th>
-                <th>สินค้า</th>
-                <th className="num">จำนวน</th>
-                <th>จาก</th>
-                <th>ไป</th>
-                <th>สถานะ</th>
-              </tr></thead>
-              <tbody>
-                {filtered.map((t, i) => {
-                  const p = productMap[t.sku];
-                  const typeColor = t.type === 'โอน' ? '#2196F3' : t.type === 'ปรับ' ? '#FF9800' : '#4CAF50';
-                  return (
-                    <tr key={i} style={{borderLeft:`3px solid ${typeColor}`,paddingLeft:8}}>
-                      <td style={{fontWeight:600,color:typeColor}}>{t.type}</td>
-                      <td style={{fontSize:11,color:'var(--muted)'}}>{t.date}</td>
-                      <td><span className="skucode" style={{fontSize:10}}>{t.sku}</span></td>
-                      <td style={{fontSize:12}}>{p ? p.name : t.name || '—'}</td>
-                      <td className="num" style={{fontWeight:600}}>{fmtN(t.qty)}</td>
-                      <td style={{fontSize:11,color:'var(--muted)'}}>{t.from || '—'}</td>
-                      <td style={{fontSize:11,color:'var(--muted)'}}>{t.to || '—'}</td>
-                      <td style={{fontSize:11,color: t.status?.includes('สำเร็จ') ? 'var(--g-700)' : 'var(--muted)'}}>{t.status || '—'}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div className="no-print" style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:14}}>
+            <button className="btn" type="submit" disabled={loading}
+              style={{minHeight:42,padding:"0 18px",opacity:loading?0.65:1}}>
+              {loading ? "กำลังค้นหา…" : "🔍 ค้นประวัติ"}
+            </button>
+            <button className="btn ghost" type="button" onClick={clearSearch}
+              style={{minHeight:42,padding:"0 16px"}}>ล้างตัวกรอง</button>
           </div>
-        )}
+        </form>
+        {error && <div role="alert" style={{marginTop:12,padding:12,borderRadius:8,background:"#fff3cd",color:"#7a4b00",fontSize:13}}>
+          ⚠️ {error}
+        </div>}
       </Card>
 
-      <style>{`
-        .transfer-view { padding: 0; }
-      `}</style>
+      <Card title="ผลการค้นหา" sub={result ? "พบ " + fmtN(result.total) + " รายการ · ส่งรวม " + fmtN(result.totalQty) + " ชิ้น" : "พิมพ์รหัสสินค้าแล้วกดค้นหาเพื่ออ่านประวัติจากชีต"}>
+        <div className="transfer-history-print">
+          <h2 style={{margin:"0 0 6px",fontSize:18}}>ประวัติการโอนสินค้า</h2>
+          {submitted && <div style={{fontSize:11,color:"var(--muted)",marginBottom:8}}>{querySummary}</div>}
+          {result && <div style={{fontSize:12,fontWeight:600,marginBottom:12}}>
+            รวมทั้งหมด {fmtN(result.total)} รายการ · ส่งรวม {fmtN(result.totalQty)} ชิ้น · หน้านี้ {fmtN(result.list.length)} รายการ ({fmtN(result.page)}/{fmtN(result.totalPages)})
+          </div>}
+          <div className="no-print" style={{marginBottom:10}}>
+            {result && result.list && result.list.length > 0 && <button className="btn" type="button" onClick={printResults}>🖨️ พิมพ์ผลค้นหา</button>}
+          </div>
+          {loading ? (
+            <div style={{padding:"24px 0",textAlign:"center",color:"var(--muted)"}}><span className="spin" style={{display:"inline-block",verticalAlign:"middle",marginRight:8}}/>กำลังค้นประวัติ…</div>
+          ) : !result ? (
+            <Empty title="ยังไม่ได้ค้นหา" sub="กรอกรหัสสินค้าอย่างน้อยหนึ่งรหัส แล้วกด “ค้นประวัติ”"/>
+          ) : result.list.length === 0 ? (
+            <Empty title="ไม่พบประวัติ" sub="ลองตรวจรหัสสินค้า ช่วงวันที่ สถานะรับ หรือสถานที่"/>
+          ) : (
+            <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch",maxWidth:"100%"}}>
+              <table className="t" style={{minWidth:980}}>
+                <thead><tr>
+                  <th>วันที่โอน</th><th>เลขที่ใบโอน</th><th>SKU</th><th>สินค้า</th>
+                  <th className="num">ส่ง</th><th>จาก → ไป</th><th>สถานะโอน</th>
+                  <th className="num">รับ</th><th>สถานะรับ</th><th>จัด/รับโดย</th><th>แหล่งข้อมูล</th>
+                </tr></thead>
+                <tbody>
+                  {result.list.map((t,i) => {
+                    const recv = t.receivedStatus || (t.receivedAt ? "รับแล้ว" : "รอรับ");
+                    const recvColor = recv === "รับครบ" ? "var(--g-700)" : recv === "รับไม่ครบ" ? "#c62828" : "var(--muted)";
+                    const recvQty = t.receivedQty == null ? "—" : fmtN(t.receivedQty);
+                    return <tr key={(t.source||"") + ":" + (t.rowNum||i)}>
+                      <td style={{whiteSpace:"nowrap",fontSize:11}}>{t.date || "—"}</td>
+                      <td><span className="skucode" style={{fontSize:10}}>{t.refNum || "—"}</span></td>
+                      <td><span className="skucode" style={{fontSize:10}}>{t.sku}</span></td>
+                      <td style={{fontSize:12}}>{t.name || "—"}</td>
+                      <td className="num" style={{fontWeight:700}}>{fmtN(t.qty)}</td>
+                      <td style={{fontSize:11,whiteSpace:"nowrap"}}>{(t.from || "—") + " → " + (t.to || "—")}</td>
+                      <td style={{fontSize:11}}>{t.status || "—"}</td>
+                      <td className="num">{recvQty}</td>
+                      <td style={{fontSize:11,color:recvColor}}>{recv}</td>
+                      <td style={{fontSize:10,minWidth:110}}>{(t.preparedBy || "—") + " / " + (t.receivedBy || "—")}</td>
+                      <td style={{fontSize:10,color:"var(--muted)"}}>{t.source === "archive" ? "ประวัติ" : "ปัจจุบัน"}</td>
+                    </tr>;
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {result && <div className="no-print" style={{display:"flex",alignItems:"center",justifyContent:"center",gap:12,marginTop:14}}>
+            <button className="btn ghost" type="button" disabled={loading || result.page <= 1}
+              onClick={()=>runSearch(submitted,result.page-1)}>‹ ก่อนหน้า</button>
+            <span style={{fontSize:12,color:"var(--muted)"}}>หน้า {fmtN(result.page)} / {fmtN(result.totalPages)}</span>
+            <button className="btn ghost" type="button" disabled={loading || result.page >= result.totalPages}
+              onClick={()=>runSearch(submitted,result.page+1)}>ถัดไป ›</button>
+          </div>}
+        </div>
+      </Card>
+      <style>{'@media print { @page { size: A4 landscape; margin: 10mm; } body.print-transfer-history * { visibility: hidden !important; } body.print-transfer-history .transfer-history-print, body.print-transfer-history .transfer-history-print * { visibility: visible !important; } body.print-transfer-history .transfer-history-print { position: fixed !important; inset: 0 !important; overflow: visible !important; width: 100% !important; padding: 14px !important; background: #fff !important; color: #111 !important; } body.print-transfer-history .transfer-history-print .no-print { display: none !important; } body.print-transfer-history .transfer-history-print table { width: 100%; border-collapse: collapse; font-size: 9px; } body.print-transfer-history .transfer-history-print th, body.print-transfer-history .transfer-history-print td { border: 1px solid #aaa; padding: 4px; color: #111 !important; } }'}</style>
     </div>
   );
 }
