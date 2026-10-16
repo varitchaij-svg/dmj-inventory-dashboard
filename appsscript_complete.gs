@@ -3052,6 +3052,13 @@ function doGet(e) {
     if (e && e.parameter && e.parameter.action === 'recentTransfers') {
       return recentTransfersHandler_(Number(e.parameter.days) || 3);
     }
+    // ค้นประวัติใบส่งของเมื่อผู้ใช้เปิดหน้าและกดค้นหาเท่านั้น — ตรวจ session ฝั่ง server
+    if (e && e.parameter && e.parameter.action === 'transferHistory') {
+      const ssTH = SpreadsheetApp.openById(SHEET_ID);
+      const sessionTH = resolveSession_(ssTH, e.parameter.sessionToken);
+      if (!transferHistoryCanRead_(sessionTH)) return unauthorized_();
+      return transferHistoryHandler_(e.parameter, ssTH);
+    }
     // ของเข้าใหม่ (PO) N วันล่าสุด — เปิดให้ warehouse/saler ทำเอกสาร/พิมพ์ป้าย (ตัดต้นทุนออก)
     if (e && e.parameter && e.parameter.action === 'recentIntake') {
       return recentIntakeHandler_(e.parameter.days);
@@ -3465,7 +3472,7 @@ function buildFullData_() {
     //  ซึ่ง batchGet คืนวันที่เป็นเลข serial ไม่ใช่ Date object → parse เพี้ยน)
     const B = batchReadFormatted_([
       SHEET_PRODUCTS, SHEET_PRODUCT_META, SHEET_MONTHLY_SALES, SHEET_DAILY_SALES,
-      SHEET_TRANSFERS_HIST, SHEET_TRANSFERS, SHEET_LOCKS, SHEET_ORDERS,
+      SHEET_TRANSFERS, SHEET_LOCKS, SHEET_ORDERS,
       SHEET_FRONTSTORE_QTY,
     ]);
     _mark('batchGet');
@@ -3476,7 +3483,8 @@ function buildFullData_() {
     const sysQtyMap = readSysQty_(stockRows);                      _mark('sysQty');
     const monthly   = readMonthlySales_(B[SHEET_MONTHLY_SALES]);   _mark('monthlySales');
     const daily     = readDailySales_(B[SHEET_DAILY_SALES]);       _mark('dailySales');
-    const transfers = readTransfers_(B[SHEET_TRANSFERS_HIST]);     _mark('transfers');
+    // ประวัติ ZORT แบบเก่าไม่อยู่ใน payload แล้ว — หน้าโอนค้นจากชีตส่งของเมื่อผู้ใช้กดค้นหา
+    const transfers = [];                                 _mark('transfers');
     const shipments = readShipments_(B[SHEET_TRANSFERS]);          _mark('shipments');
     const purchases = readPurchases_();           _mark('purchases');
     const storage   = readStorage_(B[SHEET_LOCKS]);                _mark('storage');
@@ -3489,7 +3497,7 @@ function buildFullData_() {
 
     const whRatio = wholesaleRatio_();  // ปลีก→ขายส่ง (อ่านครั้งเดียวต่อ build)
 
-    // ── PERF: index purchases/transfers ต่อ SKU ครั้งเดียวก่อนเข้า loop ──
+    // ── PERF: index purchases ต่อ SKU ครั้งเดียวก่อนเข้า loop ──
     // เดิม loop สินค้าเรียก purchases.filter()/transfers.filter() สแกน array ทั้งก้อนใหม่ทุกตัว
     // = O(สินค้า × รายการ) ซึ่งกับสินค้า 5,600+ ตัวคือหลายสิบล้านรอบต่อการ build payload 1 ครั้ง
     // เปลี่ยนเป็น O(สินค้า + รายการ) — ผลลัพธ์เหมือนเดิมทุกประการ
@@ -3508,14 +3516,6 @@ function buildFullData_() {
       purchasesBySku[k] = sortPurchasesLatestFirst_(purchasesBySku[k]);
     });
 
-    // รวมยอด "ปรับ" ต่อ SKU ครั้งเดียว (เดิม filter transfers ใหม่ทุกสินค้า)
-    const adjustBySku = Object.create(null);
-    transfers.forEach(t => {
-      if (t.type !== 'ปรับ') return;
-      const a = adjustBySku[t.sku] || (adjustBySku[t.sku] = { count: 0, qty: 0 });
-      a.count++;
-      a.qty += t.qty;
-    });
     _mark('index');
 
     products.forEach(p => {
@@ -3586,11 +3586,6 @@ function buildFullData_() {
       const th = transferHist[(p.sku || "").toUpperCase()];
       if (th) p.lastTransferDate = th;
 
-      const adj = adjustBySku[p.sku];
-      if (adj) {
-        p.adjustments    = adj.count;
-        p.adjustmentQty  = adj.qty;
-      }
     });
 
     _mark('enrich');
@@ -3615,9 +3610,6 @@ function buildFullData_() {
     });
 
     const transferStats = { 'โอน':{count:0,qty:0}, 'ปรับ':{count:0,qty:0}, 'ยกมา':{count:0,qty:0} };
-    transfers.forEach(t => {
-      if (transferStats[t.type]) { transferStats[t.type].count++; transferStats[t.type].qty += t.qty; }
-    });
 
     const data = {
       generatedAt: new Date().toISOString(),
@@ -4416,6 +4408,162 @@ function recentTransfersHandler_(days) {
 // เปิดให้ warehouse/saler ใช้ทำเอกสารส่งเจ้าของ + พิมพ์ป้ายสินค้าใหม่ (data.purchases เต็มก้อน
 // เป็น owner/dev เท่านั้นเพราะมีต้นทุน — ตัวนี้ **ตัด unitPrice (ต้นทุน) ออก** จึงเปิดให้ role อื่นได้)
 // อ่านสด ไม่ผ่าน cache · date เป็น ISO yyyy-MM-dd จาก readPurchases_ (เทียบ string ได้)
+// ── ประวัติใบส่งของ — อ่านชีตปัจจุบัน + archive เฉพาะเมื่อผู้ใช้ค้นหา ──
+function transferHistoryCanRead_(session) {
+  return !!(session && session.status === "active" &&
+    (isAdminRole_(session.role) || session.role === "employee"));
+}
+
+function transferHistoryDayStartMs_(raw) {
+  const m = String(raw || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+  const date = new Date(y, mo - 1, d);
+  if (date.getFullYear() !== y || date.getMonth() !== mo - 1 || date.getDate() !== d) return null;
+  return date.getTime();
+}
+
+function transferHistoryBuildQuery_(params) {
+  const p = params || {};
+  const skus = Array.from(new Set(String(p.skus || "").toUpperCase().split(/[\s,;]+/)
+    .map(s => s.trim()).filter(Boolean)));
+  if (!skus.length) return { ok: false, error: "กรอกรหัสสินค้าอย่างน้อย 1 รหัส" };
+  if (skus.length > 50) return { ok: false, error: "ค้นหาได้ครั้งละไม่เกิน 50 รหัส" };
+
+  const fromRaw = String(p.from || "").trim();
+  const toRaw = String(p.to || "").trim();
+  const fromMs = fromRaw ? transferHistoryDayStartMs_(fromRaw) : null;
+  const toMs = toRaw ? transferHistoryDayStartMs_(toRaw) : null;
+  if (fromRaw && fromMs == null) return { ok: false, error: "รูปแบบวันที่เริ่มต้นไม่ถูกต้อง" };
+  if (toRaw && toMs == null) return { ok: false, error: "รูปแบบวันที่สิ้นสุดไม่ถูกต้อง" };
+  if (fromMs != null && toMs != null && fromMs > toMs) return { ok: false, error: "วันที่เริ่มต้นต้องไม่อยู่หลังวันที่สิ้นสุด" };
+
+  const status = String(p.status || "all").trim().toLowerCase();
+  if (["all", "pending", "received", "complete", "short"].indexOf(status) < 0) {
+    return { ok: false, error: "สถานะรับของไม่ถูกต้อง" };
+  }
+  const location = String(p.location || "").trim().toLowerCase();
+  if (location.length > 100) return { ok: false, error: "สถานที่ค้นหาได้ไม่เกิน 100 ตัวอักษร" };
+
+  const skuSet = Object.create(null);
+  skus.forEach(sku => { skuSet[sku] = true; });
+  const rawPage = parseInt(p.page, 10);
+  const rawPageSize = parseInt(p.pageSize, 10);
+  return {
+    ok: true,
+    skus,
+    skuSet,
+    fromMs,
+    toExclusiveMs: toMs == null ? null : toMs + 24 * 60 * 60 * 1000,
+    status,
+    location,
+    page: Number.isFinite(rawPage) ? Math.max(1, rawPage) : 1,
+    pageSize: Number.isFinite(rawPageSize) ? Math.max(1, Math.min(100, rawPageSize)) : 50,
+  };
+}
+
+function transferHistorySearchRows_(mainRows, archiveRows, query) {
+  if (!query || query.ok !== true) return query || { ok: false, error: "ตัวกรองไม่ถูกต้อง" };
+  const matches = [];
+  const mainKeys = Object.create(null);
+
+  function collect(rows, source, firstSheetRow, duplicateKeys, rememberKeys) {
+    (rows || []).forEach((r, i) => {
+      const sku = String(r[COL_SHIP_SKU - 1] || "").trim();
+      if (!sku || !query.skuSet[sku.toUpperCase()]) return;
+
+      const date = String(r[COL_SHIP_DATE - 1] || "").trim();
+      const dateMs = parseShipDayMs_(date);
+      if (query.fromMs != null && (dateMs == null || dateMs < query.fromMs)) return;
+      if (query.toExclusiveMs != null && (dateMs == null || dateMs >= query.toExclusiveMs)) return;
+
+      const from = String(r[COL_SHIP_FROM - 1] || "").trim();
+      const to = String(r[COL_SHIP_TO - 1] || "").trim();
+      if (query.location && (from + " " + to).toLowerCase().indexOf(query.location) < 0) return;
+
+      const recvAt = String(r[COL_SHIP_RECVAT - 1] || "").trim();
+      const receivedStatus = String(r[COL_SHIP_RECVSTATUS - 1] || "").trim();
+      const hasReceived = !!recvAt || receivedStatus === "รับครบ" || receivedStatus === "รับไม่ครบ";
+      if (query.status === "pending" && hasReceived) return;
+      if (query.status === "received" && !hasReceived) return;
+      if (query.status === "complete" && receivedStatus !== "รับครบ") return;
+      if (query.status === "short" && receivedStatus !== "รับไม่ครบ") return;
+
+      const key = shipDedupKey_(r);
+      if (duplicateKeys && key && duplicateKeys[key]) return;
+      if (rememberKeys && key) rememberKeys[key] = true;
+
+      const qtyRaw = String(r[COL_SHIP_QTY - 1] || "0").replace(/,/g, "").trim();
+      const receivedRaw = String(r[COL_SHIP_RECVQTY - 1] || "").replace(/,/g, "").trim();
+      matches.push({
+        source,
+        rowNum: firstSheetRow + i,
+        refNum: String(r[COL_SHIP_REF - 1] || "").trim(),
+        date,
+        sku,
+        name: String(r[COL_SHIP_NAME - 1] || "").trim(),
+        qty: parseInt(qtyRaw, 10) || 0,
+        preparedQty: parseInt(String(r[COL_SHIP_PREPARED - 1] || "").replace(/,/g, ""), 10) || 0,
+        status: String(r[COL_SHIP_STATUS - 1] || "").trim(),
+        from,
+        to,
+        receivedQty: receivedRaw ? (parseInt(receivedRaw, 10) || 0) : null,
+        receivedStatus,
+        receivedAt: recvAt,
+        receivedBy: String(r[COL_SHIP_RECVBY - 1] || "").trim(),
+        preparedBy: String(r[COL_SHIP_PREPAREDBY - 1] || "").trim(),
+        _sortMs: dateMs == null ? 0 : dateMs,
+      });
+    });
+  }
+
+  // ชีตหลักมีหัวตาราง 2 แถวและส่งข้อมูลเริ่มแถว 3; archive มีหัวตาราง 1 แถวและเริ่มแถว 2
+  collect(mainRows, "main", 3, null, mainKeys);
+  collect(archiveRows, "archive", 2, mainKeys, null);
+
+  matches.sort((a, b) => (b._sortMs - a._sortMs)
+    || String(b.refNum).localeCompare(String(a.refNum))
+    || String(a.sku).localeCompare(String(b.sku)));
+
+  const total = matches.length;
+  const totalQty = matches.reduce((sum, row) => sum + row.qty, 0);
+  const totalPages = Math.max(1, Math.ceil(total / query.pageSize));
+  const page = Math.min(query.page, totalPages);
+  const start = (page - 1) * query.pageSize;
+  const list = matches.slice(start, start + query.pageSize).map(row => {
+    const out = Object.assign({}, row);
+    delete out._sortMs;
+    return out;
+  });
+  return { ok: true, page, pageSize: query.pageSize, total, totalQty, totalPages, list };
+}
+
+function readTransferHistorySheet_(ss, name, firstDataRow) {
+  const sh = ss.getSheetByName(name);
+  if (!sh) return [];
+  const last = sh.getLastRow();
+  if (last < firstDataRow) return [];
+  return sh.getRange(firstDataRow, 1, last - firstDataRow + 1, COL_SHIP_PREPAREDBY).getDisplayValues();
+}
+
+function transferHistoryHandler_(params, ssOpt) {
+  try {
+    const query = transferHistoryBuildQuery_(params);
+    if (!query.ok) return ContentService.createTextOutput(JSON.stringify(query))
+      .setMimeType(ContentService.MimeType.JSON);
+    const ss = ssOpt || SpreadsheetApp.openById(SHEET_ID);
+    const mainRows = readTransferHistorySheet_(ss, SHEET_TRANSFERS, 3);
+    const archiveRows = readTransferHistorySheet_(ss, SHEET_SHIP_ARCHIVE, 2);
+    const result = transferHistorySearchRows_(mainRows, archiveRows, query);
+    return ContentService.createTextOutput(JSON.stringify(result))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    Logger.log("transferHistoryHandler_ error: " + (err && err.message ? err.message : err));
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: "โหลดประวัติโอนไม่สำเร็จ" }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
 function recentIntakeHandler_(daysRaw) {
   try {
     const days = Math.min(180, Math.max(1, Number(daysRaw) || 90));
@@ -13899,7 +14047,7 @@ function _cacheKeyPart_(variant) {
 // ที่มา: ไล่ดูจริงว่าแต่ละก้อนถูกใช้ใน view ไหน แล้วเทียบกับ ROLE_TABS (app.jsx)
 //   monthlyByCat/dailyByCat/dayLabels → OverviewView, UploadView, MarginView, SeasonView
 //   purchases                         → OverviewView, CustomerView, MarginView
-//   transfers/transferStats           → TransferView (แท็บ "transfers")
+//   transferHistory                  → doGet action เมื่อผู้ใช้ค้นหา (ไม่อยู่ใน payload เปิดแอป)
 // ⚠️ `products[].mo` (ยอดรายเดือน) **ตัดไม่ได้ทุก role** — CategoryView (ป้าย "กำลังมาแรง")
 //    และ StockView (คำนวณ "ควรสั่ง" จากเฉลี่ย 3 เดือนหลัง) ใช้ด้วย ซึ่งเกือบทุก role มีสองแท็บนี้
 //    เช่นเดียวกับ monthLabels ที่เป็นฐานดัชนีของ `mo` — ต้องส่งเสมอ

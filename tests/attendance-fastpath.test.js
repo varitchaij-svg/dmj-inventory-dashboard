@@ -18,6 +18,7 @@ import { dirname, join } from 'node:path';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const APP  = readFileSync(join(ROOT, 'app.jsx'), 'utf8');
+const ANA  = readFileSync(join(ROOT, 'views-analytics.jsx'), 'utf8');
 const UI   = readFileSync(join(ROOT, 'ui.jsx'), 'utf8');
 const ATT  = readFileSync(join(ROOT, 'views-attendance.jsx'), 'utf8');
 const HTML = readFileSync(join(ROOT, 'Doomuenjing Dashboard.html'), 'utf8');
@@ -33,8 +34,8 @@ describe('ทางด่วนลงเวลา — รายชื่อแ�
       .map(s => (s === 'HOME_TAB' ? 'home' : s)).filter(Boolean);
   })();
 
-  it('มีแค่ attendance / atttoday / home', () => {
-    expect(fastTabs.slice().sort()).toEqual(['attendance', 'atttoday', 'home']);
+  it('มีเฉพาะหน้าไม่ใช้ data: attendance / atttoday / home / transfers', () => {
+    expect(fastTabs.slice().sort()).toEqual(['attendance', 'atttoday', 'home', 'transfers']);
   });
 
   // นี่คือข้อที่กันจอขาว: ถ้ามีคนเพิ่มแท็บเข้า NO_DATA_TABS โดยไม่ดู view จริง
@@ -49,7 +50,17 @@ describe('ทางด่วนลงเวลา — รายชื่อแ�
     expect(m[1]).not.toMatch(/\bdata\b/);
   });
 
-  it('จุดเรียก view เหล่านี้ใน app.jsx ต้องไม่ส่ง data= เข้าไป', () => {
+  it('TransferView ทำงานได้เมื่อ payload หลักยังไม่มา', () => {
+    const view = ANA.match(/function TransferView\(\)[\s\S]*?\n\}/);
+    expect(view).toBeTruthy();
+    expect(view[0]).not.toMatch(/\bdata\./);
+    expect(view[0]).toMatch(/onSubmit=\{handleSearch\}/);
+    const call = APP.match(/<TransferView[^>]*>/);
+    expect(call).toBeTruthy();
+    expect(call[0]).not.toMatch(/\bdata=/);
+  });
+
+  it('จุดเรียก attendance/home ต้องไม่ส่ง data= เข้าไป', () => {
     for (const name of ['AttendanceView', 'AttendanceTodayView', 'HomeMenuView']) {
       const call = APP.match(new RegExp(`<${name}[^>]*>`));
       expect(call, `หาจุดเรียก ${name} ไม่เจอ`).toBeTruthy();
