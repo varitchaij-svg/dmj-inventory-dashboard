@@ -2728,7 +2728,7 @@ function App() {
                                                 fetchFromSheet(); // reconcile เบื้องหลัง (รีเฟรช pendingChecks + ค่าจริง)
                                               } catch(e){ console.error("completeStockCheck:", e); setCheckSideStatus(reqId, 'fs', 'pending'); }
                                             }}/></ErrorBoundary>}
-        {activeTab === "transfers"    && <ErrorBoundary key="transfers"><TransferView/></ErrorBoundary>}
+        {activeTab === "transfers"    && <ErrorBoundary key="transfers"><TransferView data={data}/></ErrorBoundary>}
         {activeTab === "orders"       && <ErrorBoundary key="orders"><OrderListView data={data} role={viewRole}/></ErrorBoundary>}
         {activeTab === "tracking"     && <ErrorBoundary key="tracking"><TrackingView data={data} role={viewRole}/></ErrorBoundary>}
         {activeTab === "ordersummary" && <ErrorBoundary key="ordersummary"><OrderSummaryView data={data} onPrintRequest={handleOrderPrint}/></ErrorBoundary>}
