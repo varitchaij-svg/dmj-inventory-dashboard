@@ -4299,7 +4299,19 @@ async function syncGetTransferHistory(filters, page) {
   }
 }
 
-function TransferView() {
+function transferStockAtCurrentLocation(product, location) {
+  if (!product) return null;
+  const label = String(location || "").trim().toLowerCase();
+  if (label.includes("ดูเหมือนจริง") || label.includes("หน้าร้าน") || /\bw0001\b/.test(label)) {
+    return product.qtyStore == null ? null : Number(product.qtyStore);
+  }
+  if (label.includes("สาย5") || label.includes("คลัง") || /\bw0002\b/.test(label)) {
+    return product.qtyWH == null ? null : Number(product.qtyWH);
+  }
+  return null;
+}
+
+function TransferView({data}) {
   const [skuInput, setSkuInput] = uS("");
   const [fromDate, setFromDate] = uS("");
   const [toDate, setToDate] = uS("");
@@ -4310,6 +4322,9 @@ function TransferView() {
   const [result, setResult] = uS(null);
   const [submitted, setSubmitted] = uS(null);
   const requestId = React.useRef(0);
+  const productBySku = React.useMemo(() => new Map(
+    ((data && data.products) || []).map(p => [String(p.sku || "").trim().toUpperCase(), p])
+  ), [data]);
 
   uE(() => () => { requestId.current += 1; }, []);
 
@@ -4428,6 +4443,9 @@ function TransferView() {
           {result && <div style={{fontSize:12,fontWeight:600,marginBottom:12}}>
             รวมทั้งหมด {fmtN(result.total)} รายการ · ส่งรวม {fmtN(result.totalQty)} ชิ้น · หน้านี้ {fmtN(result.list.length)} รายการ ({fmtN(result.page)}/{fmtN(result.totalPages)})
           </div>}
+          {result && <div role="note" style={{fontSize:11,color:"var(--muted)",marginBottom:10}}>
+            รูปจากรายการโอน · ประวัติเดิมไม่ได้บันทึกยอดก่อนโอน ณ วันนั้น · ยอดคงเหลือต้นทางที่แสดงเป็นยอดปัจจุบันจากข้อมูลสินค้า
+          </div>}
           <div className="no-print" style={{marginBottom:10}}>
             {result && result.list && result.list.length > 0 && <button className="btn" type="button" onClick={printResults}>🖨️ พิมพ์ผลค้นหา</button>}
           </div>
@@ -4439,10 +4457,11 @@ function TransferView() {
             <Empty title="ไม่พบประวัติ" sub="ลองตรวจรหัสสินค้า ช่วงวันที่ สถานะรับ หรือสถานที่"/>
           ) : (
             <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch",maxWidth:"100%"}}>
-              <table className="t" style={{minWidth:980}}>
+              <table className="t" style={{minWidth:1120}}>
                 <thead><tr>
-                  <th>วันที่โอน</th><th>เลขที่ใบโอน</th><th>SKU</th><th>สินค้า</th>
-                  <th className="num">ส่ง</th><th>จาก → ไป</th><th>สถานะโอน</th>
+                  <th>รูป</th><th>วันที่โอน</th><th>เลขที่ใบโอน</th><th>SKU</th><th>สินค้า</th>
+                  <th className="num">ก่อนโอน*</th><th className="num">ส่ง</th><th className="num">คงเหลือต้นทางตอนนี้</th>
+                  <th>จาก → ไป</th><th>สถานะโอน</th>
                   <th className="num">รับ</th><th>สถานะรับ</th><th>จัด/รับโดย</th><th>แหล่งข้อมูล</th>
                 </tr></thead>
                 <tbody>
@@ -4450,12 +4469,24 @@ function TransferView() {
                     const recv = t.receivedStatus || (t.receivedAt ? "รับแล้ว" : "รอรับ");
                     const recvColor = recv === "รับครบ" ? "var(--g-700)" : recv === "รับไม่ครบ" ? "#c62828" : "var(--muted)";
                     const recvQty = t.receivedQty == null ? "—" : fmtN(t.receivedQty);
+                    const product = productBySku.get(String(t.sku || "").trim().toUpperCase());
+                    const imageSrc = t.image || (product && product.imageUrl) || "";
+                    const currentFromQty = transferStockAtCurrentLocation(product, t.from);
                     return <tr key={(t.source||"") + ":" + (t.rowNum||i)}>
+                      <td style={{width:54,textAlign:"center"}}>
+                        {imageSrc
+                          ? <img src={imageSrc} alt={t.name || t.sku} loading="lazy"
+                              style={{width:42,height:42,objectFit:"contain",borderRadius:6,background:"#fff",border:"1px solid var(--bdr)"}}
+                              onError={e=>{e.currentTarget.style.display="none";}}/>
+                          : <span aria-label="ไม่มีรูปสินค้า" title="ไม่มีรูปสินค้า" style={{fontSize:22}}>🪴</span>}
+                      </td>
                       <td style={{whiteSpace:"nowrap",fontSize:11}}>{t.date || "—"}</td>
                       <td><span className="skucode" style={{fontSize:10}}>{t.refNum || "—"}</span></td>
                       <td><span className="skucode" style={{fontSize:10}}>{t.sku}</span></td>
                       <td style={{fontSize:12}}>{t.name || "—"}</td>
+                      <td className="num" title="ประวัติเดิมไม่ได้บันทึกยอดก่อนโอน ณ เวลานั้น" style={{fontSize:10,color:"var(--muted)"}}>ไม่บันทึก</td>
                       <td className="num" style={{fontWeight:700}}>{fmtN(t.qty)}</td>
+                      <td className="num" title="ยอดปัจจุบัน ไม่ใช่ยอดย้อนหลัง">{currentFromQty == null ? "—" : fmtN(currentFromQty)}</td>
                       <td style={{fontSize:11,whiteSpace:"nowrap"}}>{(t.from || "—") + " → " + (t.to || "—")}</td>
                       <td style={{fontSize:11}}>{t.status || "—"}</td>
                       <td className="num">{recvQty}</td>
