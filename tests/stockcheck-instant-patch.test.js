@@ -129,7 +129,7 @@ describe('StockCountView (คลัง): กดเสร็จ → flush ก่�
   });
 
   it('handleSave คืน { success, saved } (ให้ finishCheck ได้ค่าที่เพิ่งเซฟทันที ไม่ต้องรอ state)', () => {
-    expect(STOCKCOUNT).toContain('return { success: true, saved: entries };');
+    expect(STOCKCOUNT).toMatch(/return \{ success: true, saved: entries, zortSynced:/);
     expect(STOCKCOUNT).toContain('return { success: false, saved: [] };');
   });
 
@@ -158,7 +158,7 @@ describe('FrontStoreView (หน้าร้าน): กดเสร็จ → f
   });
 
   it('handleSave ของ FrontStoreView คืน { success, saved }', () => {
-    expect(FRONTSTORE).toContain('return { success: true, saved: entries };');
+    expect(FRONTSTORE).toMatch(/return \{ success: true, saved: entries, zortSynced:/);
     expect(FRONTSTORE).toContain('return { success: false, saved: [] };');
   });
 

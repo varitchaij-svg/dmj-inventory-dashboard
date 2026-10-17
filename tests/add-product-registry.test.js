@@ -97,7 +97,7 @@ describe('META — SAFE ROLLOUT + wiring', () => {
   it('dispatcher AddProductView เรนเดอร์ LegacyAddProductView เสมอ (staff ใช้ฟอร์มเดิมทุกกรณี)', () => {
     // แก้ ส.ค. 2026: ระบบทะเบียนเป็นโครงสร้างหลังบ้าน ไม่ใช่ workflow ของพนักงาน →
     // dispatcher คืน Legacy ตรง ๆ ไม่มีการสลับเข้า RegistryAddProduct อีก
-    expect(/function AddProductView\(\{ data, role, onAdded \}\) \{\s*return <LegacyAddProductView data=\{data\} role=\{role\} onAdded=\{onAdded\}\s*\/>;\s*\}/.test(VIEWS)).toBe(true);
+    expect(/function AddProductView\(\{ data, role, onAdded, patchProductQtys \}\) \{\s*return <LegacyAddProductView data=\{data\} role=\{role\} onAdded=\{onAdded\} patchProductQtys=\{patchProductQtys\}\s*\/>;\s*\}/.test(VIEWS)).toBe(true);
   });
   it('staff path ไม่เรนเดอร์ RegistryAddProduct (registry ไม่โผล่ให้พนักงานเลย)', () => {
     // RegistryAddProduct/RegistryAdminPanel ยังอยู่ในซอร์ส (dormant infra) แต่ต้องไม่ถูกเรนเดอร์

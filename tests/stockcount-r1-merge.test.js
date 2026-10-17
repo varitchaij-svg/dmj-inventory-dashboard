@@ -74,7 +74,7 @@ describe('R1 — confirmEntries ส่งเฉพาะ SKU ที่ qty !== s
 
 describe('R1 — meta: จุดเชื่อมต่อในต้นทางไม่ drift', () => {
   it('ทั้ง 3 handler กรองด้วย qty !== savedQtys[sku]', () => {
-    const n = (VANA.match(/\.filter\(e => e\.qty !== savedQtys\[e\.sku\]\)/g) || []).length;
+    const n = (VANA.match(/\.filter\(e => e\.qty !== savedQtys\[e\.sku\] \|\|\s*zortRetrySkus\.has\(String\(e\.sku\)\.toUpperCase\(\)\)\)/g) || []).length;
     expect(n, 'ต้องมี 3 จุด (handleSave/handleConfirm/handleSavePreShelf)').toBe(3);
   });
 

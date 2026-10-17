@@ -218,7 +218,25 @@ function useProductOwners(showToast) {
   return { owners: owners, me: me, off: off, toggle: toggle, reload: reload };
 }
 
-function FrontStoreView({ data, role, checkRequest, onCheckComplete }) {
+function retainUnsavedFrontStoreEdits_(touched, savedRevisions, currentRevisions) {
+  const next = new Set(touched || []);
+  Object.keys(savedRevisions || {}).forEach(sku => {
+    if (savedRevisions[sku] === ((currentRevisions || {})[sku] || 0)) next.delete(sku);
+  });
+  return next;
+}
+function frontStorePatchFromSave_(items) {
+  const patch = {};
+  (Array.isArray(items) ? items : []).forEach(item => {
+    if (!item || !item.sku || item.qty == null || !Number.isFinite(Number(item.qty))) return;
+    const sku = String(item.sku).trim().toUpperCase();
+    patch[sku] = { frontStoreCheckedQty: Number(item.qty), frontStoreCheckedAt: item.at || null };
+    if (item.stockUpdated === true) patch[sku].qtyStore = Number(item.qty);
+  });
+  return patch;
+}
+
+function FrontStoreView({ data, role, checkRequest, onCheckComplete, patchProductQtys }) {
   // ถ้ามี checkRequest (เจ้าของกด "ส่งคำขอเช็คสต็อก") → กรองสินค้าเฉพาะ SKU ที่ขอมา
   // เหมือน StockCountView เป๊ะ — ไม่งั้นกด "ดูรายการ" แล้วสลับแท็บมาเฉย ๆ ไม่มีอะไรบอกว่า
   // ต้องเช็คตัวไหน (เดิมแค่ตั้ง supplierFilter เมื่อ SKU มาจาก supplier เดียว → คำขอที่มี
@@ -286,6 +304,9 @@ function FrontStoreView({ data, role, checkRequest, onCheckComplete }) {
   });
   const [touched, setTouched] = uS(new Set());
   const touchedRef = React.useRef(new Set());
+  const editRevisionRef = React.useRef({});
+  const saveInFlightRef = React.useRef(false);
+  const [zortRetrySkus, setZortRetrySkus] = uS(new Set());
   uE(() => { touchedRef.current = touched; }, [touched]);
   const [lastSavedTime, setLastSavedTime] = uS(null); // timestamp of last successful save
   const [fsCalcPad, setFsCalcPad] = uS(null); // {sku, name, val} for CalcPadModal
@@ -309,6 +330,7 @@ function FrontStoreView({ data, role, checkRequest, onCheckComplete }) {
   }, [products]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setQty = uC((sku, val) => {
+    editRevisionRef.current[sku] = (editRevisionRef.current[sku] || 0) + 1;
     setCheckedQtys(prev => ({ ...prev, [sku]: val === "" ? "" : parseInt(val) || 0 }));
     setTouched(prev => new Set([...prev, sku]));
   }, []);
@@ -395,12 +417,14 @@ function FrontStoreView({ data, role, checkRequest, onCheckComplete }) {
   }, [products, checkedQtys]);
   const handleClearMismatch = async () => {
     if (!mismatchSkus.length) { setConfirmClearChecks(false); return; }
+    if (saveInFlightRef.current) { showToast("warn", "กำลังบันทึกอยู่ รอสักครู่แล้วลองล้างอีกครั้ง", "⏳"); return; }
     setClearingChecks(true);
     const result = await syncClearFrontStoreChecks(mismatchSkus);
     setClearingChecks(false);
     setConfirmClearChecks(false);
     if (result.success !== false) {
       const gone = new Set(mismatchSkus);
+      gone.forEach(sku => { editRevisionRef.current[sku] = (editRevisionRef.current[sku] || 0) + 1; });
       // ล้าง state ในเครื่องทันที + ใส่ลง touched กัน sync-merge ดึงค่าเก่ากลับมาก่อน refetch เสร็จ
       setCheckedQtys(prev => { const n = { ...prev }; gone.forEach(s => { delete n[s]; }); return n; });
       setTouched(prev => { const n = new Set(prev); gone.forEach(s => n.add(s)); return n; });
@@ -472,25 +496,57 @@ function FrontStoreView({ data, role, checkRequest, onCheckComplete }) {
     return () => clearTimeout(t);
   }, [scrollToSku]);
 
+  const applyFrontStoreServerPatch = (data) => {
+    if (typeof patchProductQtys !== "function" || !data || !Array.isArray(data.items)) return;
+    const patch = frontStorePatchFromSave_(data.items);
+    if (Object.keys(patch).length) patchProductQtys(patch);
+  };
+
   const handleSave = async (isAuto = false) => {
-    const entries = [...touched]
-      .filter(sku => checkedQtys[sku] !== "" && checkedQtys[sku] != null)
-      .map(sku => ({ sku, qty: parseInt(checkedQtys[sku]) || 0 }));
-    if (entries.length === 0) {
+    const skuSet = new Set([...touched].filter(sku => checkedQtys[sku] !== "" && checkedQtys[sku] != null));
+    zortRetrySkus.forEach(sku => { if (checkedQtys[sku] !== "" && checkedQtys[sku] != null) skuSet.add(sku); });
+    const entries = [...skuSet].map(sku => ({ sku, qty: parseInt(checkedQtys[sku]) || 0 }));
+    if (!entries.length) {
       if (!isAuto) showToast("warn", t("ยังไม่ได้กรอกจำนวน"), "✏️");
-      return { success: true, saved: [] };
+      return { success: true, saved: [], zortSynced: zortRetrySkus.size === 0 };
     }
+    if (saveInFlightRef.current) {
+      if (!isAuto) showToast("warn", "กำลังบันทึกอยู่ รอสักครู่แล้วกดอีกครั้ง", "⏳");
+      return { success: false, saved: [], busy: true };
+    }
+    saveInFlightRef.current = true;
+    const savedRevisions = {};
+    entries.forEach(e => { savedRevisions[e.sku] = editRevisionRef.current[e.sku] || 0; });
     setSaving(true);
-    const result = await syncFrontStoreData(entries);
-    setSaving(false);
+    let result;
+    try { result = await syncFrontStoreData(entries); }
+    catch (e) { result = { success: false, error: String(e) }; }
+    finally { setSaving(false); saveInFlightRef.current = false; }
     if (result.success !== false) {
+      applyFrontStoreServerPatch(result.data);
+      const zortSynced = !(result.data && result.data.zortSynced === false);
+      const stockUpdated = !(result.data && result.data.stockUpdated === false);
+      const items = result.data && Array.isArray(result.data.items) ? result.data.items : null;
+      const failedSkus = zortSynced ? [] : (items
+        ? items.filter(item => item && item.sku).map(item => String(item.sku).toUpperCase())
+        : entries.map(e => String(e.sku).toUpperCase()));
+      const submitted = new Set(entries.map(e => String(e.sku).toUpperCase()));
+      const queuedNotSubmitted = [...zortRetrySkus].some(sku => !submitted.has(String(sku).toUpperCase()));
+      setZortRetrySkus(prev => {
+        const next = new Set(prev);
+        submitted.forEach(sku => next.delete(sku));
+        failedSkus.forEach(sku => next.add(sku));
+        return next;
+      });
       setSavedSkus(prev => new Set([...prev, ...entries.map(e => e.sku)]));
-      setTouched(new Set());
+      setTouched(prev => retainUnsavedFrontStoreEdits_(prev, savedRevisions, editRevisionRef.current));
       setLastSavedTime(new Date());
-      showToast("success", `บันทึก ${entries.length} รายการ`, "💾");
-      return { success: true, saved: entries };
+      if (!zortSynced || !stockUpdated || queuedNotSubmitted)
+        showToast("warn", (result.data && result.data.warning) || "บันทึกค่านับแล้ว แต่ยอดหน้าร้านยังไม่ครบ — แตะตรวจสถานะ", "⚠️", 8000);
+      else showToast("success", `บันทึก ${entries.length} รายการ`, "💾");
+      return { success: true, saved: entries, zortSynced: zortSynced && !queuedNotSubmitted,
+        stockUpdated, data: result.data };
     }
-    // auto-save ที่ fail จะเงียบ + retry เอง (FAB ยังแสดง "รอบันทึก") กัน toast เด้งซ้ำทุก 3 วิ
     if (!isAuto) showToast("error", "บันทึกไม่สำเร็จ", "❌");
     return { success: false, saved: [] };
   };
@@ -511,6 +567,10 @@ function FrontStoreView({ data, role, checkRequest, onCheckComplete }) {
     const res = await handleSave(true);
     if (res && res.success === false) {
       showToast("error", "ยังบันทึกไม่สำเร็จ — แตะบันทึกให้ครบก่อนกดเสร็จ", "⚠️");
+      return;
+    }
+    if (res && res.zortSynced === false) {
+      showToast("warn", "ยังปิดคำขอไม่ได้ — ยอดหน้าร้านยังไม่ยืนยันใน ZORT กดส่งซ้ำก่อน", "⚠️", 8000);
       return;
     }
     const counts = {};
@@ -574,6 +634,7 @@ function FrontStoreView({ data, role, checkRequest, onCheckComplete }) {
       initialVal={fsCalcPad ? fsCalcPad.val : ''}
       onConfirm={function(qty){
         if (fsCalcPad) {
+          editRevisionRef.current[fsCalcPad.sku] = (editRevisionRef.current[fsCalcPad.sku] || 0) + 1;
           setCheckedQtys(prev => ({ ...prev, [fsCalcPad.sku]: qty === '' ? '' : parseInt(qty)||0 }));
           setTouched(prev => new Set([...prev, fsCalcPad.sku]));
         }
@@ -582,6 +643,20 @@ function FrontStoreView({ data, role, checkRequest, onCheckComplete }) {
       onClose={function(){ setFsCalcPad(null); }}
     />
     <div style={{display:"flex", flexDirection:"column", gap:12}}>
+      {zortRetrySkus.size > 0 && (
+        <div style={{background:"#fff7ed",border:"1px solid #fdba74",borderRadius:10,
+                     padding:"10px 12px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <span style={{flex:1,minWidth:180,fontSize:12.5,color:"#9a3412",fontWeight:600}}>
+            ยอดหน้าร้าน {zortRetrySkus.size} รายการยังไม่ยืนยันใน ZORT
+          </span>
+          <button onClick={() => handleSave(false)} disabled={saving}
+            style={{minHeight:40,padding:"6px 12px",border:0,borderRadius:8,
+                    background:saving?"#fdba74":"#ea580c",color:"#fff",fontWeight:700,
+                    cursor:saving?"not-allowed":"pointer",fontFamily:"inherit"}}>
+            {saving ? "กำลังส่ง..." : "↻ ส่งยอดซ้ำ"}
+          </button>
+        </div>
+      )}
       {/* ── Check Request banner — โชว์เฉพาะ SKU ที่เจ้าของขอให้เช็ค + ปุ่มปิดคำขอ ── */}
       {checkRequest && (
         <div style={{background:"#fffbeb",border:"1px solid #fcd34d",borderRadius:12,
@@ -630,13 +705,13 @@ function FrontStoreView({ data, role, checkRequest, onCheckComplete }) {
         )}
         <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2,flexShrink:0}}>
           <button onClick={() => handleSave()}
-            disabled={saving || touchedWithValue === 0}
+            disabled={saving || (touchedWithValue === 0 && zortRetrySkus.size === 0)}
             className="btn primary"
             style={{padding:"9px 18px", fontWeight:700,
-                    opacity: (saving || touchedWithValue === 0) ? 0.45 : 1}}>
-            {saving
-              ? <><span className="spin" style={{width:13,height:13,borderWidth:2,marginRight:6}}/> บันทึก...</>
-              : touchedWithValue > 0 ? `💾 บันทึก (${touchedWithValue})` : "💾 บันทึก"}
+                    opacity: (saving || (touchedWithValue === 0 && zortRetrySkus.size === 0)) ? 0.45 : 1}}>
+            {saving ? <><span className="spin" style={{width:13,height:13,borderWidth:2,marginRight:6}}/> บันทึก...</>
+              : zortRetrySkus.size > 0 ? "↻ ส่ง ZORT ซ้ำ"
+                : touchedWithValue > 0 ? `💾 บันทึก (${touchedWithValue})` : "💾 บันทึก"}
           </button>
           {lastSavedTime && (
             <div style={{fontSize:10,color:"var(--g-600)",fontWeight:600}}>
@@ -1796,6 +1871,7 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
   // sku ที่ "พยายามบันทึกแล้วล้มเหลว" — ต้องโชว์บนการ์ดให้เห็นชัด (ไม่ปล่อยค้าง "⏳ กำลังบันทึก…"
   // ตลอดไปทั้งที่จริง ๆ save พลาด = จอโกหก · เจ้าของแจ้ง ส.ค. 2026: "ขึ้นกำลังบันทึกแต่ไม่เซฟ/ไม่เข้า ZORT")
   const [failedSkus, setFailedSkus]         = uS(new Set());
+  const [zortRetrySkus, setZortRetrySkus]   = uS(new Set());
   const [saveErr, setSaveErr]               = uS(''); // เหตุผลจริงจาก GAS (โชว์ให้เห็น + ไล่สาเหตุได้)
   const [unscanRec, setUnscanRec]           = uS({}); // { sku: จำนวนที่บันทึกว่า "ขายไม่สแกน" }
   const [unscanBusy, setUnscanBusy]         = uS(null); // sku ที่กำลังบันทึก
@@ -1840,7 +1916,7 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
     setCheckedQtys(saved);
     localEditsRef.current = new Set(Object.keys(saved));
     setSavedSkus(new Set()); setSavedQtys({}); setLastSavedTime(null);
-    setFailedSkus(new Set()); setSaveErr('');
+    setFailedSkus(new Set()); setZortRetrySkus(new Set()); setSaveErr('');
     setLastSavedSnap(JSON.stringify(saved)); // กัน auto-save เด้งทันทีหลัง restore
     setStockSearch(''); setSaveStatus("idle"); setCountFilter('all');
     setFoundSkus([]); setFoundAddOpen(false); setFoundSearch('');
@@ -2097,6 +2173,10 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
       showToast('error', 'ยังบันทึกไม่สำเร็จ — แตะ 💾 บันทึก ให้ครบก่อนกดเสร็จ', '⚠️');
       return;
     }
+    if (res && res.zortSynced === false) {
+      showToast('warn', 'ยังปิดคำขอไม่ได้ — ยอดคลังยังไม่ยืนยันใน ZORT กดส่งซ้ำก่อน', '⚠️', 8000);
+      return;
+    }
     const counts = {};
     Object.keys(savedQtys).forEach(sku => { counts[String(sku).toUpperCase()] = { qtyWH: savedQtys[sku] }; });
     ((res && res.saved) || []).forEach(e => { counts[String(e.sku).toUpperCase()] = { qtyWH: e.qty }; });
@@ -2108,10 +2188,14 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
     const entries = Object.entries(checkedQtys)
       .filter(([sku, v]) => v !== '' && v != null && localEditsRef.current.has(sku))
       .map(([sku, qty]) => ({ sku, qty: parseInt(qty)||0 }));
-    if (!entries.length) { if (!isAuto) showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️'); return { success: true, saved: [] }; }
-    // กันดับเบิลแท็บ (UX เท่านั้น — ดู submitInFlightRef ด้านบน) · auto-save ที่ยิงซ้อนกับคนกดปุ่มเอง
-    // ก็ถูกกันด้วยเหตุผลเดียวกัน ไม่ต้องแยก branch isAuto
-    if (submitInFlightRef.current) return { success: true, saved: [] };
+    if (!entries.length) {
+      if (!isAuto) showToast('warn', 'ยังไม่ได้กรอกจำนวน', '✏️');
+      return { success: true, saved: [], zortSynced: zortRetrySkus.size === 0 };
+    }
+    if (submitInFlightRef.current) {
+      if (!isAuto) showToast('warn', 'กำลังบันทึกอยู่ รอสักครู่แล้วลองอีกครั้ง', '⏳');
+      return { success: false, saved: [], busy: true };
+    }
     submitInFlightRef.current = true;
     setSaveStatus("saving");
     const snap = JSON.stringify(checkedQtys);
@@ -2127,7 +2211,8 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
     // · qty=0 ส่งได้ (0 !== undefined ครั้งแรก) · หลัง save ค่าเดิม → ไม่ส่งซ้ำ · แก้ค่าใหม่ → ส่งใหม่
     // · save ล้มเหลว = savedQtys ไม่ถูกตั้ง → รอบถัดไปยังส่งซ้ำ (ไม่ทิ้งของที่ยังไม่เข้าจริง)
     // ⚠️ ไม่แตะ localEditsRef (merge-guard ของ stocklite) · absolute-set semantics เหมือนเดิม
-    const confirmEntries = confirmAll.filter(e => e.qty !== savedQtys[e.sku]);
+    const confirmEntries = confirmAll.filter(e => e.qty !== savedQtys[e.sku] ||
+      zortRetrySkus.has(String(e.sku).toUpperCase()));
     // ⭐ commit "ยอดคลัง + ZORT" ก่อน (ส่วนสำคัญที่สุดที่ผู้ใช้รอเห็นเข้า ZORT) — การบันทึก "ตำแหน่ง"
     //    (syncLockData) เป็น bookkeeping รอง · ทำตำแหน่งก่อนแล้ว POST ตำแหน่งค้าง/ล้ม (GAS ตอบ HTML
     //    ตอน execution ซ้อนกัน) จะ **หน่วง/บัง** confirmStockCount ที่เป็นตัวเข้า ZORT จริง → จอค้าง
@@ -2168,22 +2253,29 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
     } catch (_) { /* ตำแหน่งเป็นเรื่องรอง — ของเข้า ZORT แล้ว ไม่ถือว่าล้มเหลว */ }
     // patch data.products ให้เห็นเลขใหม่ทันที (requirement B) — ใช้ค่าที่ server ยืนยันแล้วเท่านั้น
     applyServerPatch(result, confirmEntries);
+    const zortSynced = !(result.data && result.data.zortSynced === false);
+    const queuedNotSubmitted = [...zortRetrySkus].some(sku =>
+      !confirmEntries.some(e => String(e.sku).toUpperCase() === sku));
+    const zortReady = zortSynced && !queuedNotSubmitted;
+    markZortRetry(confirmEntries, zortSynced);
     // session tracking นับ SKU ที่นับในรอบนี้ (confirmAll) ไม่ใช่เฉพาะที่เปลี่ยน (confirmEntries)
     confirmAll.forEach(e => sessionSkuSetRef.current.add(String(e.sku).toUpperCase()));
     setSavedSkus(new Set(entries.map(e => e.sku)));
     setSavedQtys(prev => { const n = { ...prev }; entries.forEach(e => { n[e.sku] = e.qty; }); return n; });
     setFailedSkus(prev => { const n = new Set(prev); entries.forEach(e => n.delete(e.sku)); return n; });
-    setSaveErr('');
+    if (zortReady) setSaveErr('');
+    else setSaveErr((result.data && result.data.warning) || 'บันทึกในชีตแล้ว แต่ ZORT ยังไม่ยืนยัน — กดส่งซ้ำก่อนปิดงาน');
     setLastSavedTime(new Date());
     setLastSavedSnap(snap); // กัน auto-save วนซ้ำ
     setSaveStatus("saved");
     setTimeout(() => setSaveStatus("idle"), 3000);
     // nFound = "เจอในล็อค" (บันทึกตำแหน่งอย่างเดียว) — อิง confirmAll ไม่ใช่ confirmEntries ที่ R1 กรองแล้ว
     const nFound = entries.length - confirmAll.length;
-    showToast('success', 'บันทึก ' + entries.length + ' รายการ' +
+    if (zortReady) showToast('success', 'บันทึก ' + entries.length + ' รายการ' +
       (nFound > 0 ? ' (🆕 ' + nFound + ' บันทึกตำแหน่งอย่างเดียว)' : ' — อัปเดตคลัง + ZORT'), '✅');
+    else showToast('warn', (result.data && result.data.warning) || 'บันทึกในชีตแล้ว แต่ ZORT ยังไม่ยืนยัน — กดส่งซ้ำก่อนปิดงาน', '⚠️', 8000);
     submitInFlightRef.current = false;
-    return { success: true, saved: entries };
+    return { success: true, saved: entries, zortSynced: zortReady };
   };
 
   // Auto-save with 3-second debounce — save เฉพาะเมื่อค่าต่างจากที่ save ล่าสุด (กัน loop)
@@ -2237,7 +2329,8 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
     const snap = JSON.stringify(checkedQtys);
     const { lockEntries, confirmEntries: confirmAll } = splitFoundEntries(entries);
     // R1: ส่งเฉพาะ SKU ที่ค่าเปลี่ยน (qty !== savedQtys[sku]) — ดูคำอธิบายใน handleSave
-    const confirmEntries = confirmAll.filter(e => e.qty !== savedQtys[e.sku]);
+    const confirmEntries = confirmAll.filter(e => e.qty !== savedQtys[e.sku] ||
+      zortRetrySkus.has(String(e.sku).toUpperCase()));
     if (selLockKey) await syncLockData(selLockKey, lockEntries);
     const result = confirmEntries.length
       ? await confirmStockCount(confirmEntries, sessionIdRef.current) : { success: true };
@@ -2250,18 +2343,22 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
       showToast('error', 'ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด', '⚠️');
     } else if (result.success !== false) {
       applyServerPatch(result, confirmEntries);
+      const zortSynced = !(result.data && result.data.zortSynced === false);
+      markZortRetry(confirmEntries, zortSynced);
       confirmAll.forEach(e => sessionSkuSetRef.current.add(String(e.sku).toUpperCase()));
       setSavedSkus(new Set(entries.map(e => e.sku)));
       setSavedQtys(prev => { const n = { ...prev }; entries.forEach(e => { n[e.sku] = e.qty; }); return n; });
       setFailedSkus(prev => { const n = new Set(prev); entries.forEach(e => n.delete(e.sku)); return n; });
-      setSaveErr('');
+      if (zortSynced) setSaveErr('');
+      else setSaveErr((result.data && result.data.warning) || 'บันทึกในชีตแล้ว แต่ ZORT ยังไม่ยืนยัน — กดส่งซ้ำก่อนปิดงาน');
       setLastSavedTime(new Date());
       setLastSavedSnap(snap); // กัน auto-save commit ซ้ำหลังกดยืนยันเอง
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 3000);
       const nFound = entries.length - confirmAll.length;
-      showToast('success', 'ยืนยันผลนับแล้ว ' + entries.length + ' รายการ' +
+      if (zortSynced) showToast('success', 'ยืนยันผลนับแล้ว ' + entries.length + ' รายการ' +
         (nFound > 0 ? ' (🆕 ' + nFound + ' บันทึกตำแหน่งอย่างเดียว)' : ' — อัปเดตคลัง + ZORT'), '✅');
+      else showToast('warn', (result.data && result.data.warning) || 'บันทึกในชีตแล้ว แต่ ZORT ยังไม่ยืนยัน — กดส่งซ้ำก่อนปิดงาน', '⚠️', 8000);
     } else {
       setSaveStatus("error");
       setSaveErr(result.error || 'ยืนยันไม่สำเร็จ');
@@ -2445,6 +2542,17 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
     updated.forEach(e => { if (e && e.sku) patch[String(e.sku).toUpperCase()] = { qtyWH: e.qty }; });
     patchProductQtys(patch);
   };
+  const markZortRetry = (entries, synced) => {
+    setZortRetrySkus(prev => {
+      const next = new Set(prev);
+      (entries || []).forEach(e => {
+        const sku = String((e && e.sku) || '').toUpperCase();
+        if (!sku) return;
+        if (synced) next.delete(sku); else next.add(sku);
+      });
+      return next;
+    });
+  };
 
   // สลับโหมดหน้าจอ — product-first (ค้น/สแกน) ⟷ location-first (เดินตามซอย/ชั้น)
   // ⚠️ ล้าง selLockKey/selSupplier ตอนกลับ product เพื่อให้ session ตรงกับหน้าจอ (กัน lock/supplier
@@ -2604,7 +2712,8 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
     setSaveStatus("saving");
     // R1: ส่งเฉพาะ SKU ที่ค่าเปลี่ยน (qty !== savedQtys[sku]) — ดูคำอธิบายใน handleSave
     // bookkeeping (savedSkus/savedQtys/session/toast) ยังอิง allEntries (ทั้งรายการที่นับ) เสมอ
-    const entries = allEntries.filter(e => e.qty !== savedQtys[e.sku]);
+    const entries = allEntries.filter(e => e.qty !== savedQtys[e.sku] ||
+      zortRetrySkus.has(String(e.sku).toUpperCase()));
     // บันทึกยอดคลังตรง ๆ (absolute set) + push ZORT — ไม่แตะตำแหน่งล็อค
     const result = entries.length
       ? await confirmStockCount(entries, sessionIdRef.current) : { success: true };
@@ -2614,13 +2723,18 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
       showToast('error', 'ข้อมูลถูกแก้ไขโดยคนอื่น กด 🔄 Reload เพื่อดูข้อมูลล่าสุด', '⚠️');
     } else if (result.success !== false) {
       applyServerPatch(result, entries);
+      const zortSynced = !(result.data && result.data.zortSynced === false);
+      markZortRetry(entries, zortSynced);
       allEntries.forEach(e => sessionSkuSetRef.current.add(String(e.sku).toUpperCase()));
       setSavedSkus(new Set(allEntries.map(e => e.sku)));
       setSavedQtys(prev => { const n = { ...prev }; allEntries.forEach(e => { n[e.sku] = e.qty; }); return n; });
       setLastSavedTime(new Date());
+      if (zortSynced) setSaveErr('');
+      else setSaveErr((result.data && result.data.warning) || 'บันทึกในชีตแล้ว แต่ ZORT ยังไม่ยืนยัน — กดส่งซ้ำ');
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 3000);
-      showToast('success', 'บันทึกยอดคลัง ' + allEntries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
+      if (zortSynced) showToast('success', 'บันทึกยอดคลัง ' + allEntries.length + ' รายการ — อัปเดตคลัง + ZORT', '✅');
+      else showToast('warn', (result.data && result.data.warning) || 'บันทึกในชีตแล้ว แต่ ZORT ยังไม่ยืนยัน — กดส่งซ้ำ', '⚠️', 8000);
     } else {
       setSaveStatus("error");
       showToast('error', 'บันทึกไม่สำเร็จ', '❌');
@@ -2632,6 +2746,21 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
     return (
       <>
         <Toast toast={toast} onClose={hideToast}/>
+      {zortRetrySkus.size > 0 && (
+        <div style={{background:"#fff7ed",border:"1px solid #fdba74",borderRadius:10,
+                     padding:"10px 12px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <span style={{flex:1,minWidth:180,fontSize:12.5,color:"#9a3412",fontWeight:600}}>
+            ยอดคลัง {zortRetrySkus.size} รายการยังไม่ยืนยันใน ZORT
+          </span>
+          <button onClick={() => handleSave(false)} disabled={saving || confirming}
+            style={{minHeight:40,padding:"6px 12px",border:0,borderRadius:8,
+                    background:(saving || confirming)?"#fdba74":"#ea580c",color:"#fff",fontWeight:700,
+                    cursor:(saving || confirming)?"not-allowed":"pointer",fontFamily:"inherit"}}>
+            {(saving || confirming) ? "กำลังส่ง..." : "↻ ส่ง ZORT ซ้ำ"}
+          </button>
+        </div>
+      )}
+
         <CalcPadModal
           open={!!calcPad}
           name={calcPad ? (calcPad.name || calcPad.sku) : ''}
@@ -2824,6 +2953,21 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
     return (
       <>
         <Toast toast={toast} onClose={hideToast}/>
+      {zortRetrySkus.size > 0 && (
+        <div style={{background:"#fff7ed",border:"1px solid #fdba74",borderRadius:10,
+                     padding:"10px 12px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <span style={{flex:1,minWidth:180,fontSize:12.5,color:"#9a3412",fontWeight:600}}>
+            ยอดคลัง {zortRetrySkus.size} รายการยังไม่ยืนยันใน ZORT
+          </span>
+          <button onClick={() => handleSave(false)} disabled={saving || confirming}
+            style={{minHeight:40,padding:"6px 12px",border:0,borderRadius:8,
+                    background:(saving || confirming)?"#fdba74":"#ea580c",color:"#fff",fontWeight:700,
+                    cursor:(saving || confirming)?"not-allowed":"pointer",fontFamily:"inherit"}}>
+            {(saving || confirming) ? "กำลังส่ง..." : "↻ ส่ง ZORT ซ้ำ"}
+          </button>
+        </div>
+      )}
+
         <CalcPadModal
           open={!!calcPad}
           name={calcPad ? (calcPad.name || calcPad.sku) : ''}
@@ -3165,6 +3309,21 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
     return (
       <>
         <Toast toast={toast} onClose={hideToast}/>
+      {zortRetrySkus.size > 0 && (
+        <div style={{background:"#fff7ed",border:"1px solid #fdba74",borderRadius:10,
+                     padding:"10px 12px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <span style={{flex:1,minWidth:180,fontSize:12.5,color:"#9a3412",fontWeight:600}}>
+            ยอดคลัง {zortRetrySkus.size} รายการยังไม่ยืนยันใน ZORT
+          </span>
+          <button onClick={() => handleSave(false)} disabled={saving || confirming}
+            style={{minHeight:40,padding:"6px 12px",border:0,borderRadius:8,
+                    background:(saving || confirming)?"#fdba74":"#ea580c",color:"#fff",fontWeight:700,
+                    cursor:(saving || confirming)?"not-allowed":"pointer",fontFamily:"inherit"}}>
+            {(saving || confirming) ? "กำลังส่ง..." : "↻ ส่ง ZORT ซ้ำ"}
+          </button>
+        </div>
+      )}
+
         <CalcPadModal
           open={!!calcPad}
           name={calcPad ? (calcPad.name || calcPad.sku) : ''}
@@ -3462,6 +3621,21 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
   if (step === 1) return (
     <>
       <Toast toast={toast} onClose={hideToast}/>
+      {zortRetrySkus.size > 0 && (
+        <div style={{background:"#fff7ed",border:"1px solid #fdba74",borderRadius:10,
+                     padding:"10px 12px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <span style={{flex:1,minWidth:180,fontSize:12.5,color:"#9a3412",fontWeight:600}}>
+            ยอดคลัง {zortRetrySkus.size} รายการยังไม่ยืนยันใน ZORT
+          </span>
+          <button onClick={() => handleSave(false)} disabled={saving || confirming}
+            style={{minHeight:40,padding:"6px 12px",border:0,borderRadius:8,
+                    background:(saving || confirming)?"#fdba74":"#ea580c",color:"#fff",fontWeight:700,
+                    cursor:(saving || confirming)?"not-allowed":"pointer",fontFamily:"inherit"}}>
+            {(saving || confirming) ? "กำลังส่ง..." : "↻ ส่ง ZORT ซ้ำ"}
+          </button>
+        </div>
+      )}
+
       {/* ── Check Request banner ── */}
       {checkRequest && (
         <div style={{background:"#fffbeb",borderBottom:"1px solid #fcd34d",
@@ -3765,6 +3939,21 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
   if (step === 2) return (
     <>
       <Toast toast={toast} onClose={hideToast}/>
+      {zortRetrySkus.size > 0 && (
+        <div style={{background:"#fff7ed",border:"1px solid #fdba74",borderRadius:10,
+                     padding:"10px 12px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <span style={{flex:1,minWidth:180,fontSize:12.5,color:"#9a3412",fontWeight:600}}>
+            ยอดคลัง {zortRetrySkus.size} รายการยังไม่ยืนยันใน ZORT
+          </span>
+          <button onClick={() => handleSave(false)} disabled={saving || confirming}
+            style={{minHeight:40,padding:"6px 12px",border:0,borderRadius:8,
+                    background:(saving || confirming)?"#fdba74":"#ea580c",color:"#fff",fontWeight:700,
+                    cursor:(saving || confirming)?"not-allowed":"pointer",fontFamily:"inherit"}}>
+            {(saving || confirming) ? "กำลังส่ง..." : "↻ ส่ง ZORT ซ้ำ"}
+          </button>
+        </div>
+      )}
+
       {/* ── Check Request banner ── */}
       {checkRequest && (
         <div style={{background:"#fffbeb",borderBottom:"1px solid #fcd34d",
@@ -3839,6 +4028,21 @@ function StockCountView({ data, checkRequest, onCheckComplete, patchProductQtys 
   return (
     <>
       <Toast toast={toast} onClose={hideToast}/>
+      {zortRetrySkus.size > 0 && (
+        <div style={{background:"#fff7ed",border:"1px solid #fdba74",borderRadius:10,
+                     padding:"10px 12px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <span style={{flex:1,minWidth:180,fontSize:12.5,color:"#9a3412",fontWeight:600}}>
+            ยอดคลัง {zortRetrySkus.size} รายการยังไม่ยืนยันใน ZORT
+          </span>
+          <button onClick={() => handleSave(false)} disabled={saving || confirming}
+            style={{minHeight:40,padding:"6px 12px",border:0,borderRadius:8,
+                    background:(saving || confirming)?"#fdba74":"#ea580c",color:"#fff",fontWeight:700,
+                    cursor:(saving || confirming)?"not-allowed":"pointer",fontFamily:"inherit"}}>
+            {(saving || confirming) ? "กำลังส่ง..." : "↻ ส่ง ZORT ซ้ำ"}
+          </button>
+        </div>
+      )}
+
       {/* ── Check Request banner ── */}
       {checkRequest && (
         <div style={{background:"#fffbeb",borderBottom:"1px solid #fcd34d",
