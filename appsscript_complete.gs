@@ -4502,6 +4502,7 @@ function transferHistorySearchRows_(mainRows, archiveRows, query) {
         date,
         sku,
         name: String(r[COL_SHIP_NAME - 1] || "").trim(),
+        image: String(r[COL_SHIP_IMAGE - 1] || "").trim(),
         qty: parseInt(qtyRaw, 10) || 0,
         preparedQty: parseInt(String(r[COL_SHIP_PREPARED - 1] || "").replace(/,/g, ""), 10) || 0,
         status: String(r[COL_SHIP_STATUS - 1] || "").trim(),
