@@ -51,13 +51,13 @@ describe('ทางด่วนลงเวลา — รายชื่อแ�
   });
 
   it('TransferView ทำงานได้เมื่อ payload หลักยังไม่มา', () => {
-    const view = ANA.match(/function TransferView\(\)[\s\S]*?\n\}/);
+    const view = ANA.match(/function TransferView\(\{data\}\)[\s\S]*?\n\}/);
     expect(view).toBeTruthy();
-    expect(view[0]).not.toMatch(/\bdata\./);
+    expect(view[0]).toMatch(/\(\(data && data\.products\) \|\| \[\]\)/);
     expect(view[0]).toMatch(/onSubmit=\{handleSearch\}/);
     const call = APP.match(/<TransferView[^>]*>/);
     expect(call).toBeTruthy();
-    expect(call[0]).not.toMatch(/\bdata=/);
+    expect(call[0]).toMatch(/\bdata=\{data\}/);
   });
 
   it('จุดเรียก attendance/home ต้องไม่ส่ง data= เข้าไป', () => {
