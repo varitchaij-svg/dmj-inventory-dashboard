@@ -30,11 +30,11 @@ const M = new Function([
   'function isAdminRole_(role) { return role === "owner" || role === "dev"; }',
   'return { COL_SHIP_REF, COL_SHIP_DATE, COL_SHIP_STATUS, COL_SHIP_FROM, COL_SHIP_TO,',
   'COL_SHIP_SKU, COL_SHIP_NAME, COL_SHIP_QTY, COL_SHIP_PREPARED, COL_SHIP_RECVQTY,',
-  'COL_SHIP_RECVSTATUS, COL_SHIP_RECVAT, COL_SHIP_RECVBY, COL_SHIP_PREPAREDBY,',
+  'COL_SHIP_RECVSTATUS, COL_SHIP_RECVAT, COL_SHIP_RECVBY, COL_SHIP_PREPAREDBY, COL_SHIP_IMAGE,',
   'parseShipDayMs_, shipDedupKey_, transferHistoryBuildQuery_, transferHistorySearchRows_, readTransferHistorySheet_, transferHistoryCanRead_ };',
 ].join('\n'))();
 
-function shipRow({ ref, date, sku, qty, to = 'ดูเหมือนจริง', recvQty = '', recvStatus = '', recvAt = '' }) {
+function shipRow({ ref, date, sku, qty, to = 'ดูเหมือนจริง', recvQty = '', recvStatus = '', recvAt = '', image = '' }) {
   const r = new Array(15).fill('');
   r[M.COL_SHIP_REF - 1] = ref;
   r[M.COL_SHIP_DATE - 1] = date;
@@ -44,6 +44,7 @@ function shipRow({ ref, date, sku, qty, to = 'ดูเหมือนจริ�
   r[M.COL_SHIP_SKU - 1] = sku;
   r[M.COL_SHIP_NAME - 1] = 'ตัวอย่างสินค้า';
   r[M.COL_SHIP_QTY - 1] = qty;
+  r[M.COL_SHIP_IMAGE - 1] = image;
   r[M.COL_SHIP_PREPARED - 1] = qty;
   r[M.COL_SHIP_RECVQTY - 1] = recvQty;
   r[M.COL_SHIP_RECVSTATUS - 1] = recvStatus;
@@ -73,7 +74,7 @@ describe('transferHistoryBuildQuery_ — ตรวจตัวกรองก่
 });
 
 describe('transferHistorySearchRows_ — รวมชีตหลักกับ archive และกรองจริง', () => {
-  const jul14 = shipRow({ ref: 'TF-202607047', date: '14/07/2026', sku: 'DEC00022', qty: 20 });
+  const jul14 = shipRow({ ref: 'TF-202607047', date: '14/07/2026', sku: 'DEC00022', qty: 20, image: 'https://example.test/dec00022.jpg' });
   const jul23 = shipRow({ ref: 'TF-202607079', date: '23/07/2026 15:00', sku: 'DEC01022', qty: 30,
     recvQty: 12, recvStatus: 'รับไม่ครบ', recvAt: '23/07/2026 16:00' });
   const aug01 = shipRow({ ref: 'TF-202608001', date: '01/08/2026', sku: 'DEC00022', qty: 5, to: 'Central' });
@@ -89,6 +90,7 @@ describe('transferHistorySearchRows_ — รวมชีตหลักกับ
     expect(result.list.map(x => x.sku)).toEqual(['DEC01022', 'DEC00022']);
     expect(result.list[0].source).toBe('main');
     expect(result.list[0].receivedQty).toBe(12);
+    expect(result.list[1].image).toBe('https://example.test/dec00022.jpg');
   });
 
   it('กรองตามช่วงวันและสถานะรับไม่ครบ', () => {
@@ -158,7 +160,9 @@ describe('page integration — ไม่โหลดประวัติตอ�
     expect(view).toMatch(/runSearch\(filters, 1\)/);
     const effects = view.match(/\buE\([\s\S]*?\);/g) || [];
     expect(effects.join('\n')).not.toContain('syncGetTransferHistory');
-    expect(view).not.toMatch(/\bdata\./);
+    expect(view).toMatch(/t\.image \|\| \(product && product\.imageUrl\)/);
+    expect(view).toMatch(/ก่อนโอน\*/);
+    expect(view).toMatch(/transferStockAtCurrentLocation/);
   });
 
   it('ใช้ GET ที่แนบ sessionToken และฝั่ง GAS ตรวจ session จาก server', () => {
@@ -174,6 +178,6 @@ describe('page integration — ไม่โหลดประวัติตอ�
     expect(batch).not.toContain('SHEET_TRANSFERS_HIST');
     expect(BACKEND).not.toMatch(/const transfers = readTransfers_\(B\[SHEET_TRANSFERS_HIST\]\)/);
     expect(APP).toMatch(/const NO_DATA_TABS = \[[^\]]*"transfers"/);
-    expect(APP).toMatch(/<TransferView\/>/);
+    expect(APP).toMatch(/<TransferView data=\{data\}\/>/);
   });
 });
