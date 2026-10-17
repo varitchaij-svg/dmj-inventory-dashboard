@@ -148,7 +148,7 @@ describe('transferHistoryCanRead_ — session จริงและ role ที�
 });
 
 describe('page integration — ไม่โหลดประวัติตอนเข้าแท็บ', () => {
-  const view = grab(/function TransferView\(\)[\s\S]*?\n\}/, UI);
+  const view = grab(/function TransferView\(\{data\}\)[\s\S]*?\n\}/, UI);
   const parser = new Function(
     grab(/function parseTransferHistorySkus\(raw\) \{[\s\S]*?\n\}/, UI) +
     '\nreturn parseTransferHistorySkus;'
