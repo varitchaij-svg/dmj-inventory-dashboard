@@ -12,7 +12,7 @@
 // และไม่มี error ให้เห็น** (เจอจริง ส.ค. 2026: หน้าหลักบนมือถือการ์ดไม่มีกรอบ
 // ทั้งที่บนคอมปกติ — ตอนเพิ่ม .home-* แล้วลืม bump)
 // การ bump ทำให้ activate ลบ cache ก้อนเก่าทิ้งทั้งก้อน สำเนาสำรองที่ค้างจึงหายไปด้วย
-const CACHE_NAME = "dmj-v61";
+const CACHE_NAME = "dmj-v65";
 
 // ⚠️ CDN libs (React/ReactDOM/Babel 3MB/Recharts/…) เก็บ cache แยกก้อนนี้ **โดยเจตนา** —
 // ไฟล์พวกนี้ผูกกับ "เวอร์ชันใน URL" (unpkg@18.3.1 …) ไม่มีวันเปลี่ยนเนื้อในโดยไม่เปลี่ยน URL
@@ -23,7 +23,7 @@ const VENDOR_CACHE = "dmj-vendor-v1";
 
 const PRECACHE_ASSETS = [
   "/manifest.json",
-  "/logo.png",
+  "/logo-small.webp",
 ];
 
 self.addEventListener("install", (e) => {
@@ -39,13 +39,17 @@ self.addEventListener("install", (e) => {
 // ใหม่หมดทุกรอบ ทั้งที่ตัวโค้ด .jsx เองอาจไม่ได้เปลี่ยนเลย (ETag เหมือนเดิม = compile ซ้ำเปล่าๆ)
 self.addEventListener("activate", (e) => {
   e.waitUntil(
-    caches.keys().then((keys) =>
-      // เก็บไว้: CACHE_NAME ปัจจุบัน · dmj-babel* (ผล compile) · VENDOR_CACHE (lib ภายนอก)
-      // ที่เหลือลบทิ้ง — สามก้อนนี้ผูกกับ "เวอร์ชัน/ETag" ในตัวเองแล้ว bust เองเมื่อจำเป็น
-      Promise.all(keys.filter((k) =>
-        k !== CACHE_NAME && k !== VENDOR_CACHE && !k.startsWith("dmj-babel")
+    caches.keys().then((keys) => {
+      // An old controller can still be caching the current boot while this worker
+      // activates. Retain one prior app cache so an immediate offline reload can
+      // recover those exact versioned URLs; remove it on the following release.
+      const previous = keys.filter((k) => k !== CACHE_NAME && /^dmj-v\d+$/.test(k))
+        .sort((a, b) => Number(b.slice(5)) - Number(a.slice(5)))[0];
+      // เก็บรุ่นปัจจุบัน + app cache ก่อนหน้า 1 รุ่น รวมกับ compiled/vendor cache ที่แยกเวอร์ชันไว้
+      return Promise.all(keys.filter((k) =>
+        k !== CACHE_NAME && k !== previous && k !== VENDOR_CACHE && !k.startsWith("dmj-babel")
       ).map((k) => caches.delete(k)))
-    )
+    })
   );
   self.clients.claim();
 });
@@ -113,6 +117,24 @@ self.addEventListener("fetch", (e) => {
      // dist/manifest.json — ให้ stale-while-revalidate เหมือน dist/*.js (สดใน background +
      // ใช้ได้ออฟไลน์) · ถ้าปล่อยตกไป cache-first ④ จะค้างเวอร์ชันเก่าตลอดหลัง rebuild/disable
      url.pathname.indexOf("/dist/manifest.json") >= 0);
+
+  // Boot URLs carry the HTML release version. Network first keeps an online boot
+  // current; offline fallback uses only the same release URL, including under an old SW.
+  if (isAppFile && url.searchParams.has("dmj-boot")) {
+    const cacheP = caches.open(CACHE_NAME);
+    const networkFetch = fetch(e.request);
+    e.waitUntil(networkFetch.then((res) => {
+      if (res.ok && !(res.headers.get("content-type") || "").includes("text/html")) {
+        return cacheP.then((cache) => cache.put(e.request, res.clone()));
+      }
+    }).catch(() => {}));
+    e.respondWith(
+      networkFetch.catch(() => caches.match(e.request).then((hit) =>
+        hit || new Response("", { status: 503 })
+      ))
+    );
+    return;
+  }
 
   if (isAppFile) {
     // stale-while-revalidate — iOS-safe: e.waitUntil + e.respondWith ต้องเรียก synchronously

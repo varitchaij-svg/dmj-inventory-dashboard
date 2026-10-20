@@ -288,7 +288,7 @@ function LoginScreen({ onLineLogin, onLegacyLogin, lineError, lineChannelId,
         <LangSwitcher/>
       </div>
       <div style={{marginBottom:8}}>
-        <img src="logo.png" alt="Doomuenjing"
+        <img src="logo-small.webp" alt="Doomuenjing"
              style={{height:56, objectFit:"contain"}}
              onError={e => e.target.style.display="none"}/>
       </div>
@@ -604,7 +604,7 @@ function LegacyLoginScreen({ onLogin, onBack }) {
         }}>← กลับ</button>
       )}
       <div style={{marginBottom:8}}>
-        <img src="logo.png" alt="Doomuenjing"
+        <img src="logo-small.webp" alt="Doomuenjing"
              style={{height:56, objectFit:"contain"}}
              onError={e => e.target.style.display="none"}/>
       </div>
@@ -2330,7 +2330,7 @@ function App() {
                   aria-current={activeTab === HOME_TAB ? "page" : undefined}
                   onClick={() => { setMoreOpen(false); handleSetTab(HOME_TAB); }}>
             {navLogoOk ? (
-              <img src="logo.png" alt="Doomuenjing"
+              <img src="logo-small.webp" alt="Doomuenjing"
                    style={{height:38, width:"auto", objectFit:"contain"}}
                    onError={() => setNavLogoOk(false)}/>
             ) : (

@@ -47,13 +47,17 @@ for (const src of FILES) {
     compact: false,
   }).code;
 
-  const outName = src.replace(/\.jsx$/, '.js');
-  writeFileSync(join(DIST, outName), out);
   // hash ของ "source" ไว้ผูกกับ .js — ให้ frontend/ตัวตรวจรู้ว่า .js นี้มาจาก .jsx เวอร์ชันไหน
   const hash = createHash('sha1').update(code).digest('hex').slice(0, 12);
-  manifest.files[src] = { out: outName, srcHash: hash, bytes: out.length };
-  total += out.length;
-  console.log(`  ✓ ${src.padEnd(22)} → dist/${outName}  (${Math.round(out.length / 1024)}KB)`);
+  const outName = src.replace(/\.jsx$/, '.' + hash + '.js');
+  writeFileSync(join(DIST, outName), out);
+  // Older cached HTML ignores manifest.out and requests dist/<name>.js.
+  // Keep aliases for rollout/rollback; the new loader fetches only the hashed file.
+  writeFileSync(join(DIST, src.replace(/\.jsx$/, '.js')), out);
+  const bytes = Buffer.byteLength(out);
+  manifest.files[src] = { out: outName, srcHash: hash, bytes };
+  total += bytes;
+  console.log(`  ✓ ${src.padEnd(22)} → dist/${outName}  (${Math.round(bytes / 1024)}KB)`);
 }
 
 writeFileSync(join(DIST, 'manifest.json'), JSON.stringify(manifest, null, 2));

@@ -50,6 +50,39 @@ job `browser` ติดตั้ง Chromium ผ่าน playwright-core CLI �
 - **ZORT sync / LINE bot / GAS write** จริง (mock ตอบ success หมด)
 - touch/กล้องสแกนบนมือถือจริง
 
+## ตรวจเส้นทางเปิดเว็บจริง (startup)
+
+`harness.html` ข้าม HTML loader จึงใช้ผล smoke ข้างบนยืนยัน precompile/fallback ไม่ได้
+หลัง `npm ci`, `bash tests/browser/setup.sh` และ `npm run build` ให้รัน:
+
+```bash
+npm run test:startup
+node tests/browser/startup.cjs --measure
+```
+
+ชุด startup ใช้ HTML loader จริง, mobile viewport 390×844 และ mock API ทั้งหมด
+ตรวจ precompile ไม่โหลด Babel/JSX ซ้ำ, fallback พร้อมกันโหลด Babel ครั้งเดียว, HTTP 200 ที่เป็น
+HTML แทน JS, headers มาแต่ body ค้าง, Babel ล้มเหลว/ค้าง, source คนละรุ่น, PIN/LINE callback
+และออฟไลน์หลังอัปเดตจาก Service Worker เก่า ไม่มีการรีโหลดแทนพนักงานหรือล้าง localStorage
+`DMJ_CHROMIUM` ระบุ browser ในเครื่องได้; CI ใช้ Chromium ที่ Playwright ติดตั้ง
+การอ่าน baseline จาก git ต้องมี commit `82ded3e` (CI checkout แบบ full history)
+
+โหมด `--measure` รัน cold/warm อย่างละ 3 รอบ: production source baseline ที่ไม่มี build,
+baseline เมื่อเปิด build, และ loader ใหม่พร้อม build ใช้ CPU 4×, 150ms latency, download
+200 KiB/s และ gzip + conditional ETag บน local mirror ฟอนต์ถูกแทนด้วย CSS ว่าง
+QR/scanner ไม่ถูกเรียกใช้งาน; mirror จะใช้ `vendor/qrcode.js`/`vendor/scanner.js` ถ้ามี
+หรือ stub ว่างถ้าไม่มี จึงต้องระบุว่าใช้แบบใดเมื่อนำผลมาเปรียบเทียบ
+ผลใน `.cache/startup-*.json` เป็น lab result ไม่ใช่ PageSpeed หรือผล production หลัง deploy
+warm หมายถึง HTTP/compiled cache ใน context เดิม; benchmark block SW เพื่อแยกการวัด
+ออกจากการทดสอบ PWA อีกเคสหนึ่ง
+
+`production-baseline.cjs` เป็นเครื่องมือ manual อ่านเฉพาะหน้า login โดยใช้ proxy/CA ของ
+environment ไม่รันใน CI ไม่ล็อกอิน และปฏิเสธ fetch ที่ไม่ใช่ GET หรือไม่ใช่ login metadata
+บน GAS ไม่เก็บ HAR, headers หรือ URL ที่มี query/token ถ้า TLS/browser ใช้ไม่ได้ต้องรายงาน
+ข้อจำกัดแทนการปิดการตรวจ TLS
+
+ชุดเหล่านี้เป็นเครื่องมือพัฒนา ไม่ถูก include ในหน้าเว็บหรือ output ของ build JSX
+
 ## เมื่อแก้ ROLE_TABS ใน app.jsx
 
 อัปเดต `ROLE_TABS` + `TAB_LABEL` ใน `run.cjs` ให้ตรงด้วย (มี comment กำกับไว้)

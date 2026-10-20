@@ -14,6 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 } # startup regression reads the inspected pre-change HTML/SW
       - uses: actions/setup-node@v4
         with: { node-version: '20' }
       # ดึง lib UMD + playwright-core ลง tests/browser/.cache (self-host, ไม่พึ่ง CDN)
@@ -22,6 +23,9 @@ jobs:
       - run: node tests/browser/.cache/node_modules/playwright-core/cli.js install --with-deps chromium
       # smoke ทุก role×tab + assert เนื้อหา + interaction (OrderModal เปิด/ปิด)
       - run: node tests/browser/run.cjs
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:startup
       - uses: actions/upload-artifact@v4
         if: always()
         with:

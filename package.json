@@ -6,7 +6,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:browser": "bash tests/browser/setup.sh && node tests/browser/run.cjs"
+    "test:browser": "bash tests/browser/setup.sh && node tests/browser/run.cjs",
+    "test:startup": "node tests/browser/startup.cjs"
   },
   "devDependencies": {
     "@babel/core": "^7.25.0",
