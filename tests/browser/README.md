@@ -65,6 +65,19 @@ node tests/browser/startup.cjs --measure
 HTML แทน JS, headers มาแต่ body ค้าง, Babel ล้มเหลว/ค้าง, source คนละรุ่น, PIN/LINE callback
 และออฟไลน์หลังอัปเดตจาก Service Worker เก่า ไม่มีการรีโหลดแทนพนักงานหรือล้าง localStorage
 `DMJ_CHROMIUM` ระบุ browser ในเครื่องได้; CI ใช้ Chromium ที่ Playwright ติดตั้ง
+`npm run build` อัปเดต `_dmjBuildId`/`_dmjSourceHashes` ใน HTML ให้ตรงกับ source ทั้ง 7 ไฟล์
+หากแก้ JSX ต้องรัน build และเก็บ HTML ที่อัปเดตไว้ด้วย แม้ deploy แบบ source fallback
+manifest คนละ release/build หรือชื่อ output ไม่ตรง hash จะหยุดที่ recovery โดยไม่โหลด JSX ข้ามรุ่น
+legacy aliases `dist/<name>.js` ยังเก็บไว้ให้ HTML เก่า และ fixture ตรวจ bytes กับ build ของ HEAD ทุกไฟล์
+
+PWA รัน 3 รอบคงที่ในชุด startup: อัปเกรด v61, เปิดสองแท็บ, เก็บ draft ข้าม controller change,
+ตรวจรุ่นจริงจากทั้ง active/controller ของสองแท็บผ่าน MessageChannel แล้วเปิดออฟไลน์ (fixture ปิด network ฝั่ง server ด้วย)
+ใช้ URL ลงทะเบียน SW คงที่ `/service-worker.js` กับ `updateViaCache: "none"` และรอ registration ของหน้าเว็บ
+ไม่เรียก `registration.update()` แข่งกัน ไม่เพิ่ม timeout และไม่ reload แทนผู้ใช้
+ผล lifecycle ทุกครั้งอยู่ใน `.cache/startup-lifecycle.json`; ใช้ `DMJ_LIFECYCLE_LOG` เปลี่ยนปลายทางได้
+รอ baseline registration ของทั้งสองแท็บเสร็จก่อนเปลี่ยน release ใน fixture
+รุ่น HTML/SW เป็น v66 ต้องเก็บเลขเดินหน้าเมื่อต่อยอด/รวม PR #122 ซึ่งใช้ v64
+
 การอ่าน baseline จาก git ต้องมี commit `82ded3e` (CI checkout แบบ full history)
 
 โหมด `--measure` รัน cold/warm อย่างละ 3 รอบ: production source baseline ที่ไม่มี build,

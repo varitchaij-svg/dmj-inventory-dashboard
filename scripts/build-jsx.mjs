@@ -33,7 +33,18 @@ const FILES = [
 
 mkdirSync(DIST, { recursive: true });
 
-const manifest = { enabled: true, builtAt: new Date().toISOString(), files: {} };
+// Embed exact source identity in HTML, so even a missing dist cannot mix releases.
+const htmlPath = join(ROOT, 'Doomuenjing Dashboard.html');
+let html = readFileSync(htmlPath, 'utf8');
+const release = html.match(/_dmjBootVersion = '([^']+)'/)[1];
+const sourceHashes = Object.fromEntries(FILES.map(src => [src,
+  createHash('sha1').update(readFileSync(join(ROOT, src))).digest('hex').slice(0, 12)]));
+const buildId = createHash('sha256').update(JSON.stringify(sourceHashes)).digest('hex').slice(0, 16);
+if (!html.includes('window._dmjSourceHashes = ') || !html.includes('window._dmjBuildId = ')) throw new Error('Missing HTML build identity markers');
+html = html.replace(/window\._dmjBuildId = '[^']*';/, "window._dmjBuildId = '" + buildId + "';")
+  .replace(/window\._dmjSourceHashes = \{[^\n]*\};/, 'window._dmjSourceHashes = ' + JSON.stringify(sourceHashes) + ';');
+writeFileSync(htmlPath, html);
+const manifest = { enabled: true, release, buildId, builtAt: new Date().toISOString(), files: {} };
 let total = 0;
 
 for (const src of FILES) {

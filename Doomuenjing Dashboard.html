@@ -1559,8 +1559,20 @@
   /* (2) ใช้ manifest ตัดสินเส้นทางเดียวก่อน prefetch เพื่อไม่โหลด JSX/dist ซ้ำ */
   window._jsxSrcList = ['i18n.jsx', 'ui.jsx', 'views-main.jsx', 'views-analytics.jsx', 'views-quote.jsx', 'views-attendance.jsx', 'app.jsx'];
   // ต้องตรงกับ CACHE_NAME ใน service-worker.js (มี regression test ตรวจคู่กัน)
-  window._dmjBootVersion = 'dmj-v65';
+  window._dmjBootVersion = 'dmj-v66';
+  // Updated by scripts/build-jsx.mjs; also identifies source-only fallback.
+  window._dmjBuildId = 'a869d10d819d2cd4';
+  window._dmjSourceHashes = {"i18n.jsx":"c46f7bd88f05","ui.jsx":"50387a3e8540","views-main.jsx":"054e0d799e48","views-analytics.jsx":"b0de45814bb8","views-quote.jsx":"07598f626738","views-attendance.jsx":"98846fbd42d5","app.jsx":"f27f48cd4677"};
   window._dmjBootAssetUrl = function (src) { return src + '?dmj-boot=' + window._dmjBootVersion; };
+  window._dmjValidBootAsset = function validBootAsset(path, type, text) {
+    type = (type || '').split(';')[0].trim().toLowerCase();
+    if (!text || /^\s*(?:<!--[\s\S]*?-->\s*)*(?:<!doctype\s+html\b|<(?:html|head|body)\b)/i.test(text)) return false;
+    if (/\/dist\/manifest\.json$/.test('/' + path.replace(/^\//, ''))) {
+      if (type !== 'application/json') return false;
+      try { var m = JSON.parse(text); return !!m && !Array.isArray(m) && typeof m === 'object' && typeof m.enabled === 'boolean'; } catch (_) { return false; }
+    }
+    return /^(?:application|text)\/(?:javascript|ecmascript|jsx)$/.test(type);
+  };
   /* timeout ครอบคลุม body ด้วย; คืน null เสมอเมื่อพัง เพื่อไม่เกิด unhandled prefetch rejection */
   window._dmjReadBootAsset = function (src) {
     return new Promise(function (resolve) {
@@ -1579,7 +1591,7 @@
           if (!r || !r.ok) { finish(null); return; }
           return r.text().then(function (text) {
             // Pages อาจตอบ SPA HTML + status 200 เมื่อไฟล์หาย — ห้าม inject เป็น JavaScript
-            if (!text || /text\/html/i.test(r.headers.get('content-type') || '') || /^\s*(?:<!doctype\s+html|<html[\s>])/i.test(text)) {
+            if (!window._dmjValidBootAsset(src, r.headers.get('content-type'), text)) {
               finish(null); return;
             }
             finish({ text: text, etag: r.headers.get('etag') || r.headers.get('last-modified') || '' });
@@ -1589,16 +1601,21 @@
   };
   window._jsxPre = {}; window._jsxPreUrl = {};
   window._distManifestPre = window._dmjReadBootAsset('dist/manifest.json').then(function (asset) {
-    try {
-      var m = asset ? JSON.parse(asset.text) : null;
-      var valid = m && m.enabled === true && m.files && window._jsxSrcList.every(function (src) {
-        return m.files[src] && /^[a-z0-9._-]+\.js$/i.test(m.files[src].out) && /^[a-f0-9]{12}$/i.test(m.files[src].srcHash);
-      });
-      window._dmjDistManifest = valid ? m : null;
-      return window._dmjDistManifest;
-    } catch (_) { return null; }
+    if (!asset) return null; // Build absent/unavailable: verified source fallback is supported.
+    var m = JSON.parse(asset.text);
+    var valid = m.release === window._dmjBootVersion && m.buildId === window._dmjBuildId;
+    if (m.enabled === false && !m.release && !m.buildId) return null; // Legacy no-build marker.
+    if (m.enabled === true) valid = valid && m.files && window._jsxSrcList.every(function (src) {
+      var entry = m.files[src], hash = window._dmjSourceHashes[src];
+      return entry && /^[a-f0-9]{12}$/.test(hash) && entry.srcHash === hash &&
+        entry.out === src.replace(/\.jsx$/, '.' + hash + '.js');
+    });
+    if (!valid) { window._dmjManifestError = 'Build manifest does not match this page'; return null; }
+    window._dmjDistManifest = m.enabled ? m : null;
+    return window._dmjDistManifest;
   });
   window._jsxPreReady = window._distManifestPre.then(function (m) {
+    if (window._dmjManifestError) return; // Never prefetch another release or bypass via fallback.
     window._jsxSrcList.forEach(function (src) {
       var url = m ? 'dist/' + m.files[src].out : src;
       window._jsxPreUrl[src] = url;
@@ -1796,14 +1813,12 @@
     var pre = takePrefetch(src, src);
     var asset = await (pre || window._dmjReadBootAsset(src));
     if (!asset) throw new Error('Unable to load app source: ' + src);
-    // A missing old build must not fall back to newer JSX during a deployment overlap.
-    if (window._USE_DIST) {
-      if (!window.crypto || !crypto.subtle || typeof TextEncoder === 'undefined') throw new Error('Cannot verify fallback source version');
-      var digest = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(asset.text));
-      var hash = Array.from(new Uint8Array(digest)).map(function (b) { return b.toString(16).padStart(2, '0'); }).join('').slice(0, 12);
-      if (hash !== window._dmjDistManifest.files[src].srcHash) throw new Error('App source version changed: ' + src);
-    }
-    var etag = asset.etag;
+    // Every fallback, including an absent dist, must belong to this exact HTML build.
+    if (!window.crypto || !crypto.subtle || typeof TextEncoder === 'undefined') throw new Error('Cannot verify fallback source version');
+    var digest = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(asset.text));
+    var hash = Array.from(new Uint8Array(digest)).map(function (b) { return b.toString(16).padStart(2, '0'); }).join('').slice(0, 12);
+    if (hash !== window._dmjSourceHashes[src]) throw new Error('App source version changed: ' + src);
+    var etag = hash; // Compiled cache identity must not rely on a reused server ETag.
 
     /* ── Cache API: ไม่มี size limit, ออกแบบสำหรับไฟล์ใหญ่ ── */
     if (etag && typeof caches !== 'undefined') {
@@ -1864,6 +1879,7 @@
   async function loadDistManifest() {
     var m = await window._distManifestPre;
     await window._jsxPreReady;
+    if (window._dmjManifestError) throw new Error(window._dmjManifestError);
     return !!m;
   }
 
@@ -1904,7 +1920,9 @@
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
-        navigator.serviceWorker.register("/" + window._dmjBootAssetUrl('service-worker.js'))
+        // Keep the registration URL stable across old/new HTML. Versioned script URLs
+        // create competing update jobs; freshness comes from the script bytes, not a query.
+        navigator.serviceWorker.register("/service-worker.js", { updateViaCache: "none" })
           .catch(err => console.warn("SW register failed:", err));
       });
     }
