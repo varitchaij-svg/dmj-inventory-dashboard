@@ -40,6 +40,8 @@ describe('startup asset policy parity', () => {
     ['/app.js', 'Application/JavaScript; charset=utf-8', 'window.ok=1;', true],
     ['/app.jsx', 'Text/JSX', 'const App = () => <div/>;', true],
     ['/app.js', 'application/javascript', '<!DOCTYPE html><html/>', false],
+    ['/app.js', 'application/javascript', '<main>SPA fragment</main>', false],
+    ['/app.jsx', 'text/jsx', '<script>SPA fragment</script>', false],
     ['/app.jsx', 'text/jsx', '\uFEFF <!-- fallback --> <HTML>wrong</HTML>', false],
     ['/app.js', 'Text/HTML', 'window.ok=1;', false],
     ['/app.js', 'application/json', '{}', false],

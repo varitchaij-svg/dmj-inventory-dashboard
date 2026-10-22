@@ -68,6 +68,7 @@ const server = http.createServer(async (req, res) => {
   if (u.searchParams.has('probe')) {
     const kind = u.searchParams.get('probe');
     if (kind === 'html-as-js') reply(res, '<!doctype html><html>SPA</html>', 'application/javascript');
+    else if (kind === 'fragment-as-js') reply(res, '<main>SPA fragment</main>', 'application/javascript');
     else if (kind === 'mixed-html') reply(res, 'window.probe = true;', 'Text/HTML');
     else if (kind === 'bad-json') reply(res, '{"enabled":', 'application/json');
     else if (p.endsWith('.json')) reply(res, '{"enabled":false}', 'Application/JSON');
@@ -271,7 +272,7 @@ async function main() {
           const results = [];
           for (const file of ['/probe.js', '/probe.jsx', '/dist/manifest.json']) {
             for (const tagged of [false, true]) {
-              for (const kind of ['html-as-js', 'mixed-html', ...(file.endsWith('.json') ? ['bad-json'] : [])]) {
+              for (const kind of ['html-as-js', 'fragment-as-js', 'mixed-html', ...(file.endsWith('.json') ? ['bad-json'] : [])]) {
                 const url = file + '?probe=' + kind + (tagged ? '&dmj-boot=' + version : '');
                 const response = await fetch(url);
                 const body = await response.text();

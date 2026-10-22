@@ -59,7 +59,8 @@ self.addEventListener("message", (e) => {
 
 function validBootAsset(path, type, text) {
     type = (type || '').split(';')[0].trim().toLowerCase();
-    if (!text || /^\s*(?:<!--[\s\S]*?-->\s*)*(?:<!doctype\s+html\b|<(?:html|head|body)\b)/i.test(text)) return false;
+    // These seven boot files are classic global scripts; opening markup is never a valid bundle/source prefix.
+    if (!text || /^\s*</.test(text)) return false;
     if (/\/dist\/manifest\.json$/.test('/' + path.replace(/^\//, ''))) {
       if (type !== 'application/json') return false;
       try { var m = JSON.parse(text); return !!m && !Array.isArray(m) && typeof m === 'object' && typeof m.enabled === 'boolean'; } catch (_) { return false; }
