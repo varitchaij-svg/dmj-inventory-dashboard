@@ -23,15 +23,16 @@ const BUILD_QUERY = grab(/function transferHistoryBuildQuery_\(params\) \{[\s\S]
 const SEARCH_ROWS = grab(/function transferHistorySearchRows_\(mainRows, archiveRows, query\) \{[\s\S]*?\n\}/);
 const READ_SHEET = grab(/function readTransferHistorySheet_\(ss, name, firstDataRow\) \{[\s\S]*?\n\}/);
 const CAN_READ = grab(/function transferHistoryCanRead_\(session\) \{[\s\S]*?\n\}/);
+const LEDGER = grab(/function transferHistoryLocation_\([\s\S]*?(?=\nfunction transferHistoryHandler_)/);
 
 // eval ฟังก์ชันจริงจาก Apps Script พร้อมคอลัมน์และ parser วันที่ที่ใช้จริง
 const M = new Function([
-  COLS, PARSE_DAY, DEDUP, QUERY_DAY, BUILD_QUERY, SEARCH_ROWS, READ_SHEET, CAN_READ,
+  COLS, PARSE_DAY, DEDUP, QUERY_DAY, BUILD_QUERY, SEARCH_ROWS, READ_SHEET, CAN_READ, LEDGER,
   'function isAdminRole_(role) { return role === "owner" || role === "dev"; }',
   'return { COL_SHIP_REF, COL_SHIP_DATE, COL_SHIP_STATUS, COL_SHIP_FROM, COL_SHIP_TO,',
   'COL_SHIP_SKU, COL_SHIP_NAME, COL_SHIP_QTY, COL_SHIP_PREPARED, COL_SHIP_RECVQTY,',
   'COL_SHIP_RECVSTATUS, COL_SHIP_RECVAT, COL_SHIP_RECVBY, COL_SHIP_PREPAREDBY, COL_SHIP_IMAGE,',
-  'parseShipDayMs_, shipDedupKey_, transferHistoryBuildQuery_, transferHistorySearchRows_, readTransferHistorySheet_, transferHistoryCanRead_ };',
+  'parseShipDayMs_, shipDedupKey_, transferHistoryBuildQuery_, transferHistorySearchRows_, readTransferHistorySheet_, transferHistoryCanRead_, transferHistoryReceiptLedger_, transferHistoryWithBalances_ };',
 ].join('\n'))();
 
 function shipRow({ ref, date, sku, qty, to = 'ดูเหมือนจริง', recvQty = '', recvStatus = '', recvAt = '', image = '' }) {
@@ -160,9 +161,11 @@ describe('page integration — ไม่โหลดประวัติตอ�
     expect(view).toMatch(/runSearch\(filters, 1\)/);
     const effects = view.match(/\buE\([\s\S]*?\);/g) || [];
     expect(effects.join('\n')).not.toContain('syncGetTransferHistory');
-    expect(view).toMatch(/t\.image \|\| \(product && product\.imageUrl\)/);
-    expect(view).toMatch(/ก่อนโอน\*/);
-    expect(view).toMatch(/transferStockAtCurrentLocation/);
+    expect(view).toMatch(/product && product\.imageUrl/);
+    expect(view).toMatch(/groupTransferHistoryRows/);
+    expect(view).toMatch(/setLightbox\(\{url:imageSrc/);
+    expect(view).toMatch(/<ImageLightbox/);
+    expect(view).not.toMatch(/<table|minWidth:1120/);
   });
 
   it('ใช้ GET ที่แนบ sessionToken และฝั่ง GAS ตรวจ session จาก server', () => {
@@ -181,3 +184,96 @@ describe('page integration — ไม่โหลดประวัติตอ�
     expect(APP).toMatch(/<TransferView data=\{data\}\/>/);
   });
 });
+
+describe('receipt ledger — ยอดตามประวัติ ไม่ใช่ stock snapshot', () => {
+  const receipt = (qty, date = '2026-07-01', extra = {}) => ({
+    sku: 'TEST-A', qty, date, warehouse: 'W0002', status: 'Success', poNum: 'PO-TEST', ...extra,
+  });
+  const transfer = (ref, date, qty, extra = {}) => ({
+    source: 'main', rowNum: ref, refNum: 'TF-' + ref, sku: 'TEST-A', date, qty,
+    from: 'คลังสินค้าสาย5', to: 'ดูเหมือนจริง', status: 'สำเร็จ', ...extra,
+  });
+  const calc = (rows, receipts) => M.transferHistoryReceiptLedger_(rows, receipts, ['TEST-A']);
+
+  it('รับเข้าแล้วหักโอนตามเวลาจริง ไม่ใช้ยอดปัจจุบันซ้ำทุกแถว', () => {
+    const r = calc([transfer(1,'02/07/2026',20), transfer(2,'04/07/2026',30)],
+      [receipt(100), receipt(50,'2026-07-03')]);
+    expect(r.byRow['main:1']).toMatchObject({ beforeQty:100, afterQty:80 });
+    expect(r.byRow['main:2']).toMatchObject({ beforeQty:130, afterQty:100 });
+  });
+  it('โอนกลับเข้าเพิ่มยอดคลัง แม้ปลายทางเดิมไม่มีฐาน PO', () => {
+    const r = calc([transfer(1,'02/07/2026',20),
+      transfer(2,'03/07/2026',10,{from:'ดูเหมือนจริง',to:'W0002'}),
+      transfer(3,'04/07/2026',5)], [receipt(100)]);
+    expect(r.byRow['main:3']).toMatchObject({beforeQty:90,afterQty:85});
+  });
+  it('เก็บยอดติดลบและไม่เดายอดตั้งต้นเมื่อไม่มีรับเข้า', () => {
+    expect(calc([transfer(1,'02/07/2026',120)],[receipt(100)]).byRow['main:1'].afterQty).toBe(-20);
+    expect(calc([transfer(1,'02/07/2026',20)],[]).byRow['main:1'].beforeQty).toBeNull();
+  });
+  it('รับเข้าในอนาคตไม่ย้อนมาบวกให้ใบโอนก่อนหน้า', () => {
+    const r=calc([transfer(1,'02/07/2026',20)],[receipt(100),receipt(50,'2026-08-01')]);
+    expect(r.byRow['main:1'].beforeQty).toBe(100);
+  });
+  it('ไม่รวม PO ที่ยังไม่รับ/ยกเลิก/คืน/คลังว่าง/วันที่ผิด', () => {
+    const bad=[receipt(20,'2026-07-01',{status:'Pending'}),receipt(20,'2026-07-01',{status:'Cancelled'}),
+      receipt(20,'2026-07-01',{type:'คืนสินค้า'}),receipt(20,'2026-07-01',{warehouse:''}),receipt(20,'bad')];
+    const r=calc([transfer(1,'02/07/2026',20)],bad);
+    expect(r.bySku['TEST-A'].excludedReceipts).toBe(5);
+    expect(r.byRow['main:1'].afterQty).toBeNull();
+  });
+  it('ไม่หักใบโอนยกเลิก/จำนวนผิด/วันที่ผิด', () => {
+    const r=calc([transfer(1,'02/07/2026',20,{status:'Cancelled'}),
+      transfer(2,'bad',20),transfer(3,'03/07/2026',-5)], [receipt(100)]);
+    expect(r.bySku['TEST-A'].locations[0].remainingQty).toBe(100);
+    expect(r.bySku['TEST-A'].excludedTransfers).toBe(3);
+  });
+  it('ฐานแยกคลัง ไม่เอารับเข้าหน้าร้านมาบวกคลังสาย5', () => {
+    const r=calc([transfer(1,'02/07/2026',20)],[receipt(100),receipt(500,'2026-07-01',{warehouse:'W0001'})]);
+    expect(r.byRow['main:1'].beforeQty).toBe(100);
+  });
+  it('วันเดียวกันรับเข้าก่อน แล้วเรียงใบโอนตามเลขอ้างอิง', () => {
+    const r=calc([transfer(2,'01/07/2026',10),transfer(1,'01/07/2026',20)],[receipt(100)]);
+    expect(r.byRow['main:1'].afterQty).toBe(80);
+    expect(r.byRow['main:2'].beforeQty).toBe(80);
+  });
+  it('โอนก่อนรับเข้าแรกแสดงว่าไม่ทราบ และเตือนรายการนอกฐาน', () => {
+    const r=calc([transfer(1,'01/06/2026',20),transfer(2,'02/07/2026',10)],[receipt(100)]);
+    expect(r.byRow['main:1'].afterQty).toBeNull();
+    expect(r.byRow['main:2'].beforeQty).toBe(100);
+    expect(r.bySku['TEST-A'].locations[0].transfersBeforeBase).toBe(1);
+  });
+  it('ไม่หักเมื่อโอนระหว่างชื่อที่เป็นคลังเดียวกัน', () => {
+    const r=calc([transfer(1,'02/07/2026',20,{to:'W0002'})],[receipt(100)]);
+    expect(r.byRow['main:1']).toMatchObject({beforeQty:100,afterQty:100});
+  });
+  it('กรองวัน/สถานะรับ/แบ่งหน้าแล้ว ยอดเดินยังใช้รายการก่อนหน้าและไม่บวก archive ซ้ำ', () => {
+    const a=shipRow({ref:'TF1',date:'02/07/2026',sku:'TEST-A',qty:20});
+    const b=shipRow({ref:'TF2',date:'03/07/2026',sku:'TEST-A',qty:30,recvStatus:'รับครบ'});
+    const q=M.transferHistoryBuildQuery_({skus:'TEST-A',from:'2026-07-03',status:'complete',pageSize:1});
+    const r=M.transferHistoryWithBalances_([a,b],[a],[receipt(100)],q);
+    expect(r.list[0].balance).toMatchObject({beforeQty:80,afterQty:50});
+    expect(r.summaries[0].filteredQty).toBe(30);
+    expect(r.summaries[0].locations[0].transferOutQty).toBe(50);
+  });
+  it('ไม่ส่งต้นทุนหรือข้อมูล SKU อื่นให้ client', () => {
+    const r=calc([],[receipt(100,'2026-07-01',{unitPrice:999,cost:123}),receipt(900,'2026-07-01',{sku:'PRIVATE-B'})]);
+    expect(JSON.stringify(r)).not.toMatch(/unitPrice|cost|PRIVATE-B/);
+  });
+});
+
+describe('groupTransferHistoryRows — รูปหนึ่งครั้งต่อ SKU', () => {
+  it('รวมรหัสเดียวกันแม้แถวไม่ติดกัน และเรียงเหตุการณ์ตามยอดเดิน', () => {
+    const group = new Function(grab(/function groupTransferHistoryRows\([\s\S]*?\n\}/, UI) +
+      '\nreturn groupTransferHistoryRows;')();
+    const result=group([
+      {sku:'A',image:'one.jpg',balance:{sequence:2}},
+      {sku:'B',image:'two.jpg',balance:{sequence:1}},
+      {sku:'a',image:'repeat.jpg',balance:{sequence:1}},
+    ], []);
+    expect(result).toHaveLength(2);
+    expect(result[0].image).toBe('one.jpg');
+    expect(result[0].rows.map(r=>r.balance.sequence)).toEqual([1,2]);
+  });
+});
+

@@ -4547,6 +4547,113 @@ function readTransferHistorySheet_(ss, name, firstDataRow) {
   return sh.getRange(firstDataRow, 1, last - firstDataRow + 1, COL_SHIP_PREPAREDBY).getDisplayValues();
 }
 
+// Read-only reconstruction: a zero opening at the first confirmed intake, NOT an audited stock snapshot.
+// Sales, manual adjustments and opening stock outside this ledger are deliberately not invented.
+function transferHistoryLocation_(raw) {
+  const s = String(raw || "").trim();
+  const compact = s.toLowerCase().replace(/\s+/g, "");
+  if (/^(w0002|คลังสินค้าสาย5|คลังสาย5|สาย5)$/.test(compact)) return "คลังสินค้าสาย5";
+  if (/^(w0001|ดูเหมือนจริง|หน้าร้าน)$/.test(compact)) return "ดูเหมือนจริง";
+  return s;
+}
+
+function transferHistorySuccessful_(raw) {
+  return /^(success|successful|completed|complete|สำเร็จ|รับแล้ว|รับครบ|โอนแล้ว|ส่งแล้ว)$/i.test(String(raw || "").trim());
+}
+
+function transferHistoryReceiptLedger_(transfers, purchases, skus) {
+  const bySku = Object.create(null), byRow = Object.create(null), events = [];
+  (skus || []).forEach(sku => {
+    bySku[sku] = { sku, receipts: [], locations: [], excludedReceipts: 0, excludedTransfers: 0,
+      undatedTransfers: 0, openingAssumedZero: true, basis: "receipt-net-transfers" };
+  });
+  (purchases || []).forEach((p, index) => {
+    const sku = String(p.sku || "").trim().toUpperCase(), info = bySku[sku];
+    if (!info) return;
+    const ms = transferHistoryDayStartMs_(p.date), qty = Number(p.qty);
+    const warehouse = transferHistoryLocation_(p.warehouse);
+    if (ms == null || !warehouse || !Number.isFinite(qty) || qty <= 0 ||
+        !transferHistorySuccessful_(p.status) || /คืน|return/i.test(String(p.type || ""))) {
+      info.excludedReceipts++; return;
+    }
+    // Explicit whitelist: never expose purchase prices/costs to employee sessions.
+    const receipt = { date: p.date, qty, warehouse, poNum: String(p.poNum || ""), status: String(p.status || "") };
+    info.receipts.push(receipt);
+    events.push({ kind: "receipt", sku, ms, qty, warehouse, index, receipt });
+  });
+  (transfers || []).forEach((t, index) => {
+    const sku = String(t.sku || "").trim().toUpperCase(), info = bySku[sku];
+    if (!info) return;
+    const id = t.source + ":" + t.rowNum, ms = parseShipDayMs_(t.date), qty = Number(t.qty);
+    byRow[id] = { beforeQty: null, afterQty: null, reason: "ไม่มีฐานรับเข้าของต้นทาง", sequence: index };
+    if (ms == null || !Number.isFinite(qty) || qty <= 0 || !transferHistorySuccessful_(t.status)) {
+      info.excludedTransfers++;
+      if (ms == null) info.undatedTransfers++;
+      byRow[id].reason = "ไม่นำรายการวันที่/จำนวน/สถานะไม่ชัดเจนมาหักยอด";
+      return;
+    }
+    events.push({ kind: "transfer", sku, ms, qty, index, id, transfer: t });
+  });
+  // Purchase dates have no time. On the same day, intake precedes shipments;
+  // equal-time shipments use reference/row order. UI states this convention.
+  events.sort((a, b) => a.ms - b.ms || (a.kind === b.kind ? 0 : a.kind === "receipt" ? -1 : 1)
+    || String(a.transfer && a.transfer.refNum || "").localeCompare(String(b.transfer && b.transfer.refNum || ""))
+    || a.index - b.index);
+  const states = Object.create(null), earlier = Object.create(null);
+  let sequence = 0;
+  const keyOf = (sku, loc) => JSON.stringify([sku, loc]);
+  events.forEach(e => {
+    const info = bySku[e.sku];
+    if (e.kind === "receipt") {
+      const key = keyOf(e.sku, e.warehouse);
+      let state = states[key];
+      if (!state) {
+        state = states[key] = { warehouse: e.warehouse, since: e.receipt.date, receivedQty: 0,
+          transferInQty: 0, transferOutQty: 0, remainingQty: 0, transfersBeforeBase: earlier[key] || 0 };
+        info.locations.push(state);
+      }
+      state.receivedQty += e.qty; state.remainingQty += e.qty;
+      return;
+    }
+    const from = transferHistoryLocation_(e.transfer.from), to = transferHistoryLocation_(e.transfer.to);
+    const key = keyOf(e.sku, from), source = states[key], target = states[keyOf(e.sku, to)];
+    const before = source ? source.remainingQty : null;
+    if (from !== to) {
+      if (source) { source.transferOutQty += e.qty; source.remainingQty -= e.qty; }
+      else earlier[key] = (earlier[key] || 0) + 1;
+      if (target) { target.transferInQty += e.qty; target.remainingQty += e.qty; }
+    }
+    byRow[e.id] = { beforeQty: before, afterQty: source ? source.remainingQty : null,
+      since: source ? source.since : null, warehouse: from, sequence: ++sequence,
+      reason: source ? "" : "ไม่มีฐานรับเข้าของต้นทาง" };
+  });
+  Object.keys(bySku).forEach(sku => {
+    bySku[sku].receipts.sort((a, b) => a.date.localeCompare(b.date));
+  });
+  return { bySku, byRow };
+}
+
+function transferHistoryWithBalances_(mainRows, archiveRows, purchases, query) {
+  if (!query || !query.ok) return query;
+  const allQuery = Object.assign({}, query, { fromMs: null, toExclusiveMs: null,
+    status: "all", location: "", page: 1, pageSize: Number.MAX_SAFE_INTEGER });
+  const all = transferHistorySearchRows_(mainRows, archiveRows, allQuery);
+  const ledger = transferHistoryReceiptLedger_(all.list, purchases, query.skus);
+  const result = transferHistorySearchRows_(mainRows, archiveRows, query);
+  const filtered = transferHistorySearchRows_(mainRows, archiveRows,
+    Object.assign({}, query, { page: 1, pageSize: Number.MAX_SAFE_INTEGER }));
+  result.list = result.list.map(t => Object.assign({}, t, { balance: ledger.byRow[t.source + ":" + t.rowNum] }));
+  const visible = result.list.length
+    ? Array.from(new Set(result.list.map(t => String(t.sku).trim().toUpperCase()))) : query.skus;
+  result.summaries = visible.map(sku => {
+    const rows = filtered.list.filter(t => String(t.sku).trim().toUpperCase() === sku);
+    const any = all.list.find(t => String(t.sku).trim().toUpperCase() === sku) || {};
+    return Object.assign({}, ledger.bySku[sku], { name: any.name || "", image: any.image || "",
+      filteredCount: rows.length, filteredQty: rows.reduce((sum, t) => sum + t.qty, 0) });
+  });
+  return result;
+}
+
 function transferHistoryHandler_(params, ssOpt) {
   try {
     const query = transferHistoryBuildQuery_(params);
@@ -4555,7 +4662,9 @@ function transferHistoryHandler_(params, ssOpt) {
     const ss = ssOpt || SpreadsheetApp.openById(SHEET_ID);
     const mainRows = readTransferHistorySheet_(ss, SHEET_TRANSFERS, 3);
     const archiveRows = readTransferHistorySheet_(ss, SHEET_SHIP_ARCHIVE, 2);
-    const result = transferHistorySearchRows_(mainRows, archiveRows, query);
+    // Called only after Search and behind the existing server-side session/role guard.
+    const purchases = readPurchases_();
+    const result = transferHistoryWithBalances_(mainRows, archiveRows, purchases, query);
     return ContentService.createTextOutput(JSON.stringify(result))
       .setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
@@ -17793,3 +17902,4 @@ function reserveFormHandler_(ss, data, actor) {
                 axis:axis, familyId:familyId||null, baseName:baseName });
   } finally { lock.releaseLock(); }
 }
+

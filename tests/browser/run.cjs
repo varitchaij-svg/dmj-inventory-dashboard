@@ -52,8 +52,59 @@ const ASSERT = {
     const marks = await page.locator('.recharts-rectangle, .recharts-line-curve, .recharts-sector').count();
     return { ok: svg >= 1 && marks >= 1, detail: `recharts svg=${svg} marks=${marks}` };
   },
-  transfers: async (page) => hasAllText(page,
-    ['ประวัติโอนสินค้า', 'ยังไม่ได้ค้นหา', 'ค้นประวัติ'], 'หน้า history เริ่มโดยไม่ดึงข้อมูล'),
+  transfers: async (page) => {
+    const initial = await hasAllText(page, ['ประวัติโอนสินค้า','ยังไม่ได้ค้นหา','ค้นประวัติ'], 'history starts without a query');
+    if (!initial.ok) return initial;
+    // Test data only: no production endpoint or live Sheet is queried.
+    await page.evaluate(() => {
+      const image = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><rect width="120" height="120" fill="#c8e6c9"/></svg>');
+      const rows = Array.from({length:5},(_,i)=>({sku:'TEST-A',name:'สินค้าทดสอบชื่อยาวสำหรับจอมือถือ',
+        image,source:'main',rowNum:i+3,refNum:'TF-TEST-'+i,date:(i+2)+'/07/2026',qty:20,
+        from:'คลังสินค้าสาย5',to:'ดูเหมือนจริง',status:'สำเร็จ',
+        balance:{beforeQty:200-i*20,afterQty:180-i*20,sequence:i+1}}));
+      rows.push({sku:'TEST-B',name:'สินค้าอีกชนิด',image,source:'archive',rowNum:2,refNum:'TF-TEST-B',
+        date:'03/07/2026',qty:10,from:'คลังสินค้าสาย5',to:'ดูเหมือนจริง',status:'สำเร็จ',
+        balance:{beforeQty:50,afterQty:40,sequence:1}});
+      window.__TH_CALLS=0;
+      window.syncGetTransferHistory=async()=>{
+        window.__TH_CALLS++;
+        return {ok:true,list:rows,total:6,totalQty:110,page:1,totalPages:1,summaries:[
+          {sku:'TEST-A',image,name:rows[0].name,filteredCount:5,filteredQty:100,
+            receipts:[{date:'2026-07-01',qty:200,warehouse:'คลังสินค้าสาย5',poNum:'PO-TEST-A'}],
+            locations:[{warehouse:'คลังสินค้าสาย5',since:'2026-07-01',receivedQty:200,transferInQty:0,transferOutQty:100,remainingQty:100}]},
+          {sku:'TEST-B',image,name:'สินค้าอีกชนิด',filteredCount:1,filteredQty:10,receipts:[],
+            locations:[{warehouse:'คลังสินค้าสาย5',since:'2026-07-01',receivedQty:50,transferInQty:0,transferOutQty:10,remainingQty:40}]}
+        ]};
+      };
+    });
+    try {
+      await page.locator('.transfer-history-view textarea').fill('TEST-A, TEST-B');
+      if (await page.evaluate(()=>window.__TH_CALLS)!==0) return {ok:false,detail:'history queried while editing'};
+      await page.getByRole('button',{name:'🔍 ค้นประวัติ',exact:true}).click();
+      await page.locator('.th-product').first().waitFor();
+      if (await page.locator('.th-product').count()!==2 || await page.locator('.th-product-photo img').count()!==2 ||
+          await page.locator('.th-event').count()!==6) return {ok:false,detail:'SKU grouping/images/events mismatch'};
+      if (await page.locator('.transfer-history-view table').count()) return {ok:false,detail:'wide history table remains'};
+      for (const width of [320,375,390,430,768,1280]) {
+        await page.setViewportSize({width,height:900});
+        const bounds=await page.evaluate(()=>{
+          const root=document.querySelector('.transfer-history-view');
+          return {viewport:innerWidth,page:document.documentElement.scrollWidth,local:root.scrollWidth,client:root.clientWidth};
+        });
+        if(bounds.page>width+1||bounds.local>bounds.client+1) return {ok:false,detail:'horizontal overflow '+width+' '+JSON.stringify(bounds)};
+        if(width===390) await page.screenshot({path:path.join(SHOTS,'transfer-history__390.png'),fullPage:true});
+      }
+      await page.setViewportSize({width:390,height:900});
+      await page.getByRole('button',{name:'ดูรูปใหญ่ TEST-A',exact:true}).click();
+      const large=page.locator('img[alt="สินค้าทดสอบชื่อยาวสำหรับจอมือถือ"]');
+      if(await large.count()!==2) return {ok:false,detail:'image lightbox not open'};
+      await page.getByRole('button',{name:'×',exact:true}).last().click();
+      if(await large.count()!==1) return {ok:false,detail:'image lightbox did not close'};
+      return {ok:true,detail:'2 SKU cards, 1 image each, 6 events, 320–1280px no overflow, lightbox open/close'};
+    } finally {
+      await page.setViewportSize({width:1400,height:1000});
+    }
+  },
   // categories: สินค้า + การ์ด "งานของฉัน" (MyJobsCard) ที่มาจากงาน MTO ของ STF001 ใน fixture
   // นับเฉพาะงานที่ยังไม่เสร็จ → ต้องได้ 1 งาน (อีกงานปิดแล้ว + เป็นของ STF002)
   categories: async (page) => {
@@ -2043,3 +2094,4 @@ function startServer() {
   console.log(`\n${results.length - fails.length}/${results.length} ผ่าน · screenshots: tests/browser/screenshots/`);
   process.exit(fails.length ? 1 : 0);
 })();
+
