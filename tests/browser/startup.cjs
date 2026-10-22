@@ -365,6 +365,9 @@ async function main() {
         await page.reload(); await login(page);
         await page.waitForFunction(() => !!window.__pageRegistration);
         await page.evaluate(() => window.__pageRegistration);
+        // register() may resolve to the existing registration during an update check.
+        // Observe the actual takeover first; v61 cannot answer identity messages.
+        await second.waitForFunction(n => (window.__controllerChanges || 0) > n, oldDocument);
         // Ask BOTH actual controlling and active worker bodies, not just scriptURL.
         for (const tab of [page, second]) await tab.evaluate(expected => new Promise((resolve, reject) => {
           const sw = navigator.serviceWorker;

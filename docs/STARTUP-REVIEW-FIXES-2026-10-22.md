@@ -79,8 +79,9 @@ cache version. The test observes and awaits the page's own registration, ensures
 baseline registrations are activated before changing the served release, and does not
 enqueue `registration.update()`. Another race was found in the new identity observer:
 it sent identity messages to v61 (which has no handler) while its replacement was still
-installing/waiting. The observer now waits for registration to settle before sending
-any identity message; this avoids restarting/holding the legacy worker during activation.
+installing/waiting. Checking installing/waiting alone was insufficient while an update check still held
+the existing registration (snapshot-startup16: 26/27). The observer now waits for the
+old tab's actual controllerchange before sending any identity message; this avoids restarting/holding the legacy worker during activation.
 The exact browser-internal effect of that unsupported message remains unconfirmed.
 It requires actual matching active/controller versions
 on both tabs, activation, controller change with a draft preserved, and the same actual
@@ -137,6 +138,9 @@ TEST-RESULTS.json associates final-source tests with the new local HEAD.
 | stable-startup11 (stable URL, Chromium 129) | 27/27 | PASS, PASS, PASS |
 | stable-startup12-system (before observer settling fix) | 26/27 | PASS, PASS, FAIL |
 | settled-startup13-system (settled observer, Chromium 154) | 27/27 | PASS, PASS, PASS |
+| head-startup14 (e75182d, Chromium 129) | 27/27 | PASS, PASS, PASS |
+| head-startup15-system (e75182d, lifecycle only) | 3/3 | PASS, PASS, PASS |
+| snapshot-startup16 (d83c9e9, before controllerchange barrier) | 26/27 | FAIL, PASS, PASS |
 
 The later system-browser and committed-HEAD runs are recorded in TEST-RESULTS.json and
 retained raw logs. Attempts interrupted before execution/without test output are recorded
