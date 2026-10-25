@@ -1556,23 +1556,73 @@
     if (sessionStorage.getItem('dmj_role')) window._prefetchData();
   } catch (_) {}
 
-  /* (2) โค้ดแอป — ยิงพร้อมกันตั้งแต่ต้นหน้า พอพร้อมก็ inject ได้เลยไม่ต้องรอ network
-         · ปกติ (มี precompile): โหลด dist/*.js ตรง ๆ ไม่ต้อง Babel เลย
-         · fallback (ยังไม่ตั้ง build): โหลด .jsx แล้ว compile ในเบราว์เซอร์เหมือนเดิม
-         ใช้ hint localStorage 'dmj_use_dist' (ตั้งจาก boot หลังอ่าน manifest สำเร็จรอบก่อน)
-         เพื่อ prefetch ให้ตรงเส้นทางตั้งแต่ต้น — รอบแรกสุดเดาพลาดได้ boot จะแก้ให้เอง */
+  /* (2) ใช้ manifest ตัดสินเส้นทางเดียวก่อน prefetch เพื่อไม่โหลด JSX/dist ซ้ำ */
   window._jsxSrcList = ['i18n.jsx', 'ui.jsx', 'views-main.jsx', 'views-analytics.jsx', 'views-quote.jsx', 'views-attendance.jsx', 'app.jsx'];
-  try {
-    /* manifest เล็ก — ยิงคู่ไปด้วยเสมอ ให้ boot ตัดสินว่า dist ใช้ได้จริงไหม */
-    try { window._distManifestPre = fetch('dist/manifest.json'); } catch (_) { window._distManifestPre = null; }
-    var _useDistHint = false;
-    try { _useDistHint = localStorage.getItem('dmj_use_dist') === '1'; } catch (_) {}
-    window._jsxPre = {}; window._jsxPreUrl = {};
-    window._jsxSrcList.forEach(function (s) {
-      var url = _useDistHint ? ('dist/' + s.replace(/\.jsx$/, '.js')) : s;
-      try { window._jsxPre[s] = fetch(url); window._jsxPreUrl[s] = url; } catch (_) {}
+  // ต้องตรงกับ CACHE_NAME ใน service-worker.js (มี regression test ตรวจคู่กัน)
+  window._dmjBootVersion = 'dmj-v66';
+  // Updated by scripts/build-jsx.mjs; also identifies source-only fallback.
+  window._dmjBuildId = 'a869d10d819d2cd4';
+  window._dmjSourceHashes = {"i18n.jsx":"c46f7bd88f05","ui.jsx":"50387a3e8540","views-main.jsx":"054e0d799e48","views-analytics.jsx":"b0de45814bb8","views-quote.jsx":"07598f626738","views-attendance.jsx":"98846fbd42d5","app.jsx":"f27f48cd4677"};
+  window._dmjBootAssetUrl = function (src) { return src + '?dmj-boot=' + window._dmjBootVersion; };
+  window._dmjValidBootAsset = function validBootAsset(path, type, text) {
+    type = (type || '').split(';')[0].trim().toLowerCase();
+    // These seven boot files are classic global scripts; opening markup is never a valid bundle/source prefix.
+    if (!text || /^\s*</.test(text)) return false;
+    if (/\/dist\/manifest\.json$/.test('/' + path.replace(/^\//, ''))) {
+      if (type !== 'application/json') return false;
+      try { var m = JSON.parse(text); return !!m && !Array.isArray(m) && typeof m === 'object' && typeof m.enabled === 'boolean'; } catch (_) { return false; }
+    }
+    return /^(?:application|text)\/(?:javascript|ecmascript|jsx)$/.test(type);
+  };
+  /* timeout ครอบคลุม body ด้วย; คืน null เสมอเมื่อพัง เพื่อไม่เกิด unhandled prefetch rejection */
+  window._dmjReadBootAsset = function (src) {
+    return new Promise(function (resolve) {
+      var ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      var settled = false;
+      function finish(value) {
+        if (settled) return;
+        settled = true; clearTimeout(timer); resolve(value);
+      }
+      var timer = setTimeout(function () {
+        try { if (ctl) ctl.abort(); } catch (_) {}
+        finish(null);
+      }, window._dmjBootAssetTimeout || 20000);
+      fetch(window._dmjBootAssetUrl(src), { cache: 'no-cache', signal: ctl ? ctl.signal : undefined })
+        .then(function (r) {
+          if (!r || !r.ok) { finish(null); return; }
+          return r.text().then(function (text) {
+            // Pages อาจตอบ SPA HTML + status 200 เมื่อไฟล์หาย — ห้าม inject เป็น JavaScript
+            if (!window._dmjValidBootAsset(src, r.headers.get('content-type'), text)) {
+              finish(null); return;
+            }
+            finish({ text: text, etag: r.headers.get('etag') || r.headers.get('last-modified') || '' });
+          });
+        }).catch(function () { finish(null); });
     });
-  } catch (_) {}
+  };
+  window._jsxPre = {}; window._jsxPreUrl = {};
+  window._distManifestPre = window._dmjReadBootAsset('dist/manifest.json').then(function (asset) {
+    if (!asset) return null; // Build absent/unavailable: verified source fallback is supported.
+    var m = JSON.parse(asset.text);
+    var valid = m.release === window._dmjBootVersion && m.buildId === window._dmjBuildId;
+    if (m.enabled === false && !m.release && !m.buildId) return null; // Legacy no-build marker.
+    if (m.enabled === true) valid = valid && m.files && window._jsxSrcList.every(function (src) {
+      var entry = m.files[src], hash = window._dmjSourceHashes[src];
+      return entry && /^[a-f0-9]{12}$/.test(hash) && entry.srcHash === hash &&
+        entry.out === src.replace(/\.jsx$/, '.' + hash + '.js');
+    });
+    if (!valid) { window._dmjManifestError = 'Build manifest does not match this page'; return null; }
+    window._dmjDistManifest = m.enabled ? m : null;
+    return window._dmjDistManifest;
+  });
+  window._jsxPreReady = window._distManifestPre.then(function (m) {
+    if (window._dmjManifestError) return; // Never prefetch another release or bypass via fallback.
+    window._jsxSrcList.forEach(function (src) {
+      var url = m ? 'dist/' + m.files[src].out : src;
+      window._jsxPreUrl[src] = url;
+      window._jsxPre[src] = window._dmjReadBootAsset(url);
+    });
+  });
 }());
 </script>
 </head>
@@ -1685,7 +1735,6 @@
        เดิมโหลดจาก CDN แต่ไม่เสถียรบน iPad/เน็ตร้าน (โหลดไม่ทัน → พิมพ์ Bluetooth พัง) → เก็บไฟล์เองใน repo
        fallback CDN ถ้าไฟล์ local หาย -->
   <script defer src="/html2canvas.min.js" onerror="var s=document.createElement('script');s.defer=true;s.src='https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';document.head.appendChild(s);"></script>
-  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 
   <script>
 (function () {
@@ -1695,16 +1744,45 @@
   function injectCode(code) {
     var s = document.createElement('script');
     s.textContent = code;
-    document.head.appendChild(s);
+    var failure = null;
+    function onError(event) { failure = event.error || new Error('App script failed'); }
+    window.addEventListener('error', onError);
+    try { document.head.appendChild(s); }
+    finally { window.removeEventListener('error', onError); }
+    if (failure) throw failure;
   }
 
   var BC = 'dmj-babel-v2'; // bump เมื่อ format เปลี่ยน
+  var babelLoadPromise = null;
 
-  function distUrl(src) { return 'dist/' + src.replace(/\.jsx$/, '.js'); }
+  /* Babel ใช้เฉพาะตอน precompile/compiled-cache ใช้ไม่ได้ โหลดครั้งเดียวเมื่อถึง fallback */
+  function ensureBabel() {
+    if (window.Babel && typeof window.Babel.transform === 'function') return Promise.resolve(window.Babel);
+    if (babelLoadPromise) return babelLoadPromise;
+    babelLoadPromise = new Promise(function (resolve, reject) {
+      var script = document.createElement('script');
+      var timer = setTimeout(function () { finish(new Error('Babel load timed out')); }, window._dmjBootAssetTimeout || 20000);
+      function finish(error) {
+        clearTimeout(timer); script.onload = null; script.onerror = null;
+        if (error) { script.remove(); reject(error); }
+        else resolve(window.Babel);
+      }
+      script.src = 'https://unpkg.com/@babel/standalone@7.29.0/babel.min.js';
+      script.integrity = 'sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y';
+      script.crossOrigin = 'anonymous';
+      script.onload = function () {
+        finish(window.Babel && typeof window.Babel.transform === 'function' ? null : new Error('Babel loaded without transform'));
+      };
+      script.onerror = function () { finish(new Error('Babel failed to load')); };
+      document.head.appendChild(script);
+    });
+    return babelLoadPromise;
+  }
+
+  function distUrl(src) { return 'dist/' + window._dmjDistManifest.files[src].out; }
 
   /* หยิบ prefetch ของ src — **เฉพาะเมื่อมันถูก prefetch ด้วย URL ที่เราต้องการจริง**
-     head เดา dist/jsx จาก hint · ถ้าเดาคนละทางกับที่ manifest บอก ต้อง fetch ใหม่
-     ไม่ใช้ของเดา (ป้อน dist ให้ Babel = compile ซ้ำ · ป้อน jsx ให้ dist path = ผิด)
+     URL ต้องตรงกับ manifest ที่ใช้บูต เพื่อไม่ส่ง dist ให้ Babel compile ซ้ำ
      body อ่านได้ครั้งเดียว จึงเคลียร์ทิ้งเสมอหลังตัดสิน (ใช้/ไม่ใช้ก็ตาม) */
   function takePrefetch(src, wantUrl) {
     var p = null;
@@ -1722,12 +1800,10 @@
      ล้มเหลว (ไฟล์หาย/partial deploy) → คืน null ให้ตกไป compile .jsx เองเฉพาะไฟล์นี้ */
   async function loadDistCode(src) {
     var want = distUrl(src);
-    var pre = takePrefetch(src, want);
-    try {
-      var resp = await (pre || fetch(want));
-      if (resp && resp.ok) { window.dmjMark('dist:' + src); return await resp.text(); }
-    } catch (_) {}
-    return null;
+    var asset = await (takePrefetch(src, want) || window._dmjReadBootAsset(want));
+    if (!asset) return null;
+    window.dmjMark('dist:' + src);
+    return asset.text;
   }
 
   /* fetch + cache check + compile → คืน code string (ไม่ inject)
@@ -1736,9 +1812,14 @@
     /* ใช้ response ที่เริ่มโหลดไว้ตั้งแต่ต้นหน้า (ดู script ใน <head>) ถ้ามี
        (เฉพาะที่ prefetch เป็น .jsx จริง — ดู takePrefetch) */
     var pre = takePrefetch(src, src);
-    var resp = await (pre || fetch(src));
-    /* ETag หรือ Last-Modified จาก Cloudflare — อ่านได้โดยไม่ต้องอ่าน body */
-    var etag = resp.headers.get('etag') || resp.headers.get('last-modified') || '';
+    var asset = await (pre || window._dmjReadBootAsset(src));
+    if (!asset) throw new Error('Unable to load app source: ' + src);
+    // Every fallback, including an absent dist, must belong to this exact HTML build.
+    if (!window.crypto || !crypto.subtle || typeof TextEncoder === 'undefined') throw new Error('Cannot verify fallback source version');
+    var digest = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(asset.text));
+    var hash = Array.from(new Uint8Array(digest)).map(function (b) { return b.toString(16).padStart(2, '0'); }).join('').slice(0, 12);
+    if (hash !== window._dmjSourceHashes[src]) throw new Error('App source version changed: ' + src);
+    var etag = hash; // Compiled cache identity must not rely on a reused server ETag.
 
     /* ── Cache API: ไม่มี size limit, ออกแบบสำหรับไฟล์ใหญ่ ── */
     if (etag && typeof caches !== 'undefined') {
@@ -1757,9 +1838,10 @@
     /* วัดแยก hit/miss เพราะราคาต่างกันคนละโลก: hit ≈ อ่านไฟล์, miss = Babel ต้อง
        แปลง JSX ครึ่งเมกะบนซีพียูมือถือ · deploy ที่แตะ .jsx ทำให้ ETag เปลี่ยน =
        ทุกเครื่องจ่ายค่า compile ใหม่รอบหนึ่ง ซึ่งเป็นค่าที่เรามองไม่เห็นมาตลอด */
-    var text = await resp.text();
+    var text = asset.text;
+    var babel = await ensureBabel();
     window.dmjMark('compile:' + src);
-    var compiled = Babel.transform(text, {
+    var compiled = babel.transform(text, {
       presets: ['react'],
       sourceType: 'script',
       filename: src,
@@ -1796,14 +1878,10 @@
      ไม่มี/อ่านไม่ได้/enabled:false → false → เดินเส้นทางเดิม compile .jsx ในเบราว์เซอร์
      (= deploy โค้ดนี้โดยยังไม่ตั้ง build ก็ไม่มีอะไรเปลี่ยน — ปลอดภัย) */
   async function loadDistManifest() {
-    try {
-      var p = window._distManifestPre || fetch('dist/manifest.json');
-      window._distManifestPre = null;
-      var r = await p;
-      if (!r || !r.ok) return false;
-      var m = await r.json();
-      return !!(m && m.enabled && m.files);
-    } catch (_) { return false; }
+    var m = await window._distManifestPre;
+    await window._jsxPreReady;
+    if (window._dmjManifestError) throw new Error(window._dmjManifestError);
+    return !!m;
   }
 
   /* โหลด ui ก่อน จากนั้นเตรียม views-main/analytics/quote/attendance พร้อมกัน
@@ -1812,7 +1890,7 @@
   window._appBoot = loadDistManifest()
     .then(function (useDist) {
       window._USE_DIST = useDist;
-      /* จำ hint ให้ head รอบหน้า prefetch ตรงเส้นทางตั้งแต่ต้น (dist ↔ jsx) */
+      /* คง hint เดิมเพื่อความเข้ากันได้กับเครื่องที่มี localStorage รุ่นก่อน */
       try {
         if (useDist) localStorage.setItem('dmj_use_dist', '1');
         else localStorage.removeItem('dmj_use_dist');
@@ -1843,7 +1921,9 @@
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
-        navigator.serviceWorker.register("/service-worker.js")
+        // Keep the registration URL stable across old/new HTML. Versioned script URLs
+        // create competing update jobs; freshness comes from the script bytes, not a query.
+        navigator.serviceWorker.register("/service-worker.js", { updateViaCache: "none" })
           .catch(err => console.warn("SW register failed:", err));
       });
     }

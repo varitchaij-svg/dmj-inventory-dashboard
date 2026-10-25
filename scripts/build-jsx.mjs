@@ -33,7 +33,18 @@ const FILES = [
 
 mkdirSync(DIST, { recursive: true });
 
-const manifest = { enabled: true, builtAt: new Date().toISOString(), files: {} };
+// Embed exact source identity in HTML, so even a missing dist cannot mix releases.
+const htmlPath = join(ROOT, 'Doomuenjing Dashboard.html');
+let html = readFileSync(htmlPath, 'utf8');
+const release = html.match(/_dmjBootVersion = '([^']+)'/)[1];
+const sourceHashes = Object.fromEntries(FILES.map(src => [src,
+  createHash('sha1').update(readFileSync(join(ROOT, src))).digest('hex').slice(0, 12)]));
+const buildId = createHash('sha256').update(JSON.stringify(sourceHashes)).digest('hex').slice(0, 16);
+if (!html.includes('window._dmjSourceHashes = ') || !html.includes('window._dmjBuildId = ')) throw new Error('Missing HTML build identity markers');
+html = html.replace(/window\._dmjBuildId = '[^']*';/, "window._dmjBuildId = '" + buildId + "';")
+  .replace(/window\._dmjSourceHashes = \{[^\n]*\};/, 'window._dmjSourceHashes = ' + JSON.stringify(sourceHashes) + ';');
+writeFileSync(htmlPath, html);
+const manifest = { enabled: true, release, buildId, builtAt: new Date().toISOString(), files: {} };
 let total = 0;
 
 for (const src of FILES) {
@@ -47,13 +58,17 @@ for (const src of FILES) {
     compact: false,
   }).code;
 
-  const outName = src.replace(/\.jsx$/, '.js');
-  writeFileSync(join(DIST, outName), out);
   // hash ของ "source" ไว้ผูกกับ .js — ให้ frontend/ตัวตรวจรู้ว่า .js นี้มาจาก .jsx เวอร์ชันไหน
   const hash = createHash('sha1').update(code).digest('hex').slice(0, 12);
-  manifest.files[src] = { out: outName, srcHash: hash, bytes: out.length };
-  total += out.length;
-  console.log(`  ✓ ${src.padEnd(22)} → dist/${outName}  (${Math.round(out.length / 1024)}KB)`);
+  const outName = src.replace(/\.jsx$/, '.' + hash + '.js');
+  writeFileSync(join(DIST, outName), out);
+  // Older cached HTML ignores manifest.out and requests dist/<name>.js.
+  // Keep aliases for rollout/rollback; the new loader fetches only the hashed file.
+  writeFileSync(join(DIST, src.replace(/\.jsx$/, '.js')), out);
+  const bytes = Buffer.byteLength(out);
+  manifest.files[src] = { out: outName, srcHash: hash, bytes };
+  total += bytes;
+  console.log(`  ✓ ${src.padEnd(22)} → dist/${outName}  (${Math.round(bytes / 1024)}KB)`);
 }
 
 writeFileSync(join(DIST, 'manifest.json'), JSON.stringify(manifest, null, 2));

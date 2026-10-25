@@ -1,0 +1,290 @@
+[
+  {
+    "variant": "before-fallback",
+    "round": 1,
+    "cache": "cold",
+    "ready": 16467.700000000186,
+    "fcp": 512,
+    "lcp": {
+      "time": 16464,
+      "tag": "DIV",
+      "text": "Doomuenjing"
+    },
+    "blocking": 7393,
+    "bytes": 1791181,
+    "compileCount": 7,
+    "babelRequests": 1
+  },
+  {
+    "variant": "before-fallback",
+    "round": 1,
+    "cache": "warm",
+    "ready": 994.7000000001863,
+    "fcp": 400,
+    "lcp": {
+      "time": 848,
+      "tag": "DIV",
+      "text": "Doomuenjing"
+    },
+    "blocking": 134,
+    "bytes": 6300,
+    "compileCount": 0,
+    "babelRequests": 1
+  },
+  {
+    "variant": "before-fallback",
+    "round": 2,
+    "cache": "cold",
+    "ready": 16350.599999999627,
+    "fcp": 500,
+    "lcp": {
+      "time": 15992,
+      "tag": "DIV",
+      "text": "Doomuenjing"
+    },
+    "blocking": 6940,
+    "bytes": 1791181,
+    "compileCount": 7,
+    "babelRequests": 1
+  },
+  {
+    "variant": "before-fallback",
+    "round": 2,
+    "cache": "warm",
+    "ready": 909.2999999998137,
+    "fcp": 408,
+    "lcp": {
+      "time": 932,
+      "tag": "DIV",
+      "text": "Doomuenjing"
+    },
+    "blocking": 181,
+    "bytes": 6300,
+    "compileCount": 0,
+    "babelRequests": 1
+  },
+  {
+    "variant": "before-fallback",
+    "round": 3,
+    "cache": "cold",
+    "ready": 16859,
+    "fcp": 524,
+    "lcp": {
+      "time": 16868,
+      "tag": "DIV",
+      "text": "Doomuenjing"
+    },
+    "blocking": 7699,
+    "bytes": 1791181,
+    "compileCount": 7,
+    "babelRequests": 1
+  },
+  {
+    "variant": "before-fallback",
+    "round": 3,
+    "cache": "warm",
+    "ready": 923.6000000005588,
+    "fcp": 420,
+    "lcp": {
+      "time": 952,
+      "tag": "DIV",
+      "text": "Doomuenjing"
+    },
+    "blocking": 194,
+    "bytes": 6300,
+    "compileCount": 0,
+    "babelRequests": 1
+  },
+  {
+    "variant": "before-dist",
+    "round": 1,
+    "cache": "cold",
+    "ready": 12234.700000000186,
+    "fcp": 480,
+    "lcp": {
+      "time": 12236,
+      "tag": "DIV",
+      "text": "Doomuenjing"
+    },
+    "blocking": 637,
+    "bytes": 2319095,
+    "compileCount": 0,
+    "babelRequests": 1
+  },
+  {
+    "variant": "before-dist",
+    "round": 1,
+    "cache": "warm",
+    "ready": 980.2999999998137,
+    "fcp": 408,
+    "lcp": {
+      "time": 844,
+      "tag": "DIV",
+      "text": "Doomuenjing"
+    },
+    "blocking": 128,
+    "bytes": 6300,
+    "compileCount": 0,
+    "babelRequests": 1
+  },
+  {
+    "variant": "before-dist",
+    "round": 2,
+    "cache": "cold",
+    "ready": 12236.600000000559,
+    "fcp": 492,
+    "lcp": {
+      "time": 12240,
+      "tag": "DIV",
+      "text": "Doomuenjing"
+    },
+    "blocking": 621,
+    "bytes": 2319095,
+    "compileCount": 0,
+    "babelRequests": 1
+  },
+  {
+    "variant": "before-dist",
+    "round": 2,
+    "cache": "warm",
+    "ready": 913.5,
+    "fcp": 388,
+    "lcp": {
+      "time": 932,
+      "tag": "DIV",
+      "text": "Doomuenjing"
+    },
+    "blocking": 142,
+    "bytes": 6300,
+    "compileCount": 0,
+    "babelRequests": 1
+  },
+  {
+    "variant": "before-dist",
+    "round": 3,
+    "cache": "cold",
+    "ready": 12317.099999999627,
+    "fcp": 516,
+    "lcp": {
+      "time": 12248,
+      "tag": "DIV",
+      "text": "Doomuenjing"
+    },
+    "blocking": 648,
+    "bytes": 2319095,
+    "compileCount": 0,
+    "babelRequests": 1
+  },
+  {
+    "variant": "before-dist",
+    "round": 3,
+    "cache": "warm",
+    "ready": 882.2000000001863,
+    "fcp": 388,
+    "lcp": {
+      "time": 908,
+      "tag": "DIV",
+      "text": "Doomuenjing"
+    },
+    "blocking": 174,
+    "bytes": 6300,
+    "compileCount": 0,
+    "babelRequests": 1
+  },
+  {
+    "variant": "after-dist",
+    "round": 1,
+    "cache": "cold",
+    "ready": 5232.299999999814,
+    "fcp": 464,
+    "lcp": {
+      "time": 5044,
+      "tag": "DIV",
+      "text": "Doomuenjing"
+    },
+    "blocking": 84,
+    "bytes": 920393,
+    "compileCount": 0,
+    "babelRequests": 0
+  },
+  {
+    "variant": "after-dist",
+    "round": 1,
+    "cache": "warm",
+    "ready": 882.3999999994412,
+    "fcp": 376,
+    "lcp": {
+      "time": 892,
+      "tag": "DIV",
+      "text": "Doomuenjing"
+    },
+    "blocking": 0,
+    "bytes": 6000,
+    "compileCount": 0,
+    "babelRequests": 0
+  },
+  {
+    "variant": "after-dist",
+    "round": 2,
+    "cache": "cold",
+    "ready": 5245.100000000559,
+    "fcp": 476,
+    "lcp": {
+      "time": 5040,
+      "tag": "DIV",
+      "text": "Doomuenjing"
+    },
+    "blocking": 72,
+    "bytes": 920393,
+    "compileCount": 0,
+    "babelRequests": 0
+  },
+  {
+    "variant": "after-dist",
+    "round": 2,
+    "cache": "warm",
+    "ready": 891.7999999998137,
+    "fcp": 380,
+    "lcp": {
+      "time": 896,
+      "tag": "DIV",
+      "text": "Doomuenjing"
+    },
+    "blocking": 0,
+    "bytes": 6000,
+    "compileCount": 0,
+    "babelRequests": 0
+  },
+  {
+    "variant": "after-dist",
+    "round": 3,
+    "cache": "cold",
+    "ready": 5219,
+    "fcp": 488,
+    "lcp": {
+      "time": 5008,
+      "tag": "DIV",
+      "text": "Doomuenjing"
+    },
+    "blocking": 71,
+    "bytes": 920393,
+    "compileCount": 0,
+    "babelRequests": 0
+  },
+  {
+    "variant": "after-dist",
+    "round": 3,
+    "cache": "warm",
+    "ready": 871.3999999994412,
+    "fcp": 380,
+    "lcp": {
+      "time": 880,
+      "tag": "DIV",
+      "text": "Doomuenjing"
+    },
+    "blocking": 0,
+    "bytes": 6000,
+    "compileCount": 0,
+    "babelRequests": 0
+  }
+]

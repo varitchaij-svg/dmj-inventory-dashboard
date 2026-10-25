@@ -1,0 +1,1787 @@
+[
+  {
+    "round": 1,
+    "cache": "cold",
+    "ready": 24241,
+    "fcp": 1088,
+    "lcp": {
+      "time": 23196,
+      "tag": "DIV",
+      "text": "\n          โหลดนานผิดปกติ 🥲ข้อมูลแอปที่เก็บไว้ในเครื่องอาจเสียหายกดปุ่มด้านล่าง"
+    },
+    "blocking": 7610,
+    "marks": [
+      [
+        "html",
+        0
+      ],
+      [
+        "compile:i18n.jsx",
+        15354
+      ],
+      [
+        "compiled:i18n.jsx",
+        15534
+      ],
+      [
+        "compile:ui.jsx",
+        15608
+      ],
+      [
+        "compiled:ui.jsx",
+        15880
+      ],
+      [
+        "compile:views-main.jsx",
+        15946
+      ],
+      [
+        "compiled:views-main.jsx",
+        18905
+      ],
+      [
+        "compile:views-quote.jsx",
+        18969
+      ],
+      [
+        "compiled:views-quote.jsx",
+        19263
+      ],
+      [
+        "compile:views-attendance.jsx",
+        19264
+      ],
+      [
+        "compiled:views-attendance.jsx",
+        19511
+      ],
+      [
+        "compile:views-analytics.jsx",
+        19514
+      ],
+      [
+        "compiled:views-analytics.jsx",
+        22483
+      ],
+      [
+        "boot-recover:timeout",
+        22488
+      ],
+      [
+        "compile:app.jsx",
+        22735
+      ],
+      [
+        "compiled:app.jsx",
+        23077
+      ],
+      [
+        "jsx-ready",
+        23106
+      ]
+    ],
+    "resources": [
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 210.352,
+        "sw": false,
+        "duration": 336.0579999998663,
+        "bytes": 26402
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 203.643,
+        "sw": false,
+        "duration": 220.00799999932497,
+        "bytes": 1941
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 299.973,
+        "sw": false,
+        "duration": 304.61099999956787,
+        "bytes": 895
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 306.918,
+        "sw": false,
+        "duration": 336.6120000000592,
+        "bytes": 4445
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 297.78,
+        "sw": false,
+        "duration": 1434.1990000002625,
+        "bytes": 43488
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 179.586,
+        "sw": false,
+        "duration": 180.41100000027654,
+        "bytes": 1372
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 171.749,
+        "sw": false,
+        "duration": 6060.29800000033,
+        "bytes": 122654
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 215.005,
+        "sw": false,
+        "duration": 837.507000000187,
+        "bytes": 6761
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 281.128,
+        "sw": false,
+        "duration": 5722.396000000117,
+        "bytes": 107955
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 354.125,
+        "sw": false,
+        "duration": 1408.4060000004683,
+        "bytes": 11942
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 177.717,
+        "sw": false,
+        "duration": 3027.405999999246,
+        "bytes": 46201
+      },
+      {
+        "group": "babel",
+        "status": 200,
+        "ttfb": 353.08,
+        "sw": false,
+        "duration": 14408.824000000095,
+        "bytes": 656235
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 163.577,
+        "sw": false,
+        "duration": 164.41699999995762,
+        "bytes": 857
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 393.279,
+        "sw": false,
+        "duration": 3441.1229999996067,
+        "bytes": 54381
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 341.443,
+        "sw": false,
+        "duration": 3469.9749999999767,
+        "bytes": 56896
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 685.32,
+        "sw": false,
+        "duration": 15377.400999999736,
+        "bytes": 773151
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 252.446,
+        "sw": false,
+        "duration": 16461.929000000055,
+        "bytes": 1001028
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 407.101,
+        "sw": false,
+        "duration": 5885.738999999376,
+        "bytes": 120604
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 318.148,
+        "sw": false,
+        "duration": 5511.948000000302,
+        "bytes": 108187
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 222.642,
+        "sw": false,
+        "duration": 7943.387000000257,
+        "bytes": 230421
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 386.859,
+        "sw": false,
+        "duration": 975.0099999992017,
+        "bytes": 8393
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 378.822,
+        "sw": false,
+        "duration": 1251.2299999998504,
+        "bytes": 13367
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 170.938,
+        "sw": false,
+        "duration": 174.19599999993807,
+        "bytes": 983
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 162.589,
+        "sw": true,
+        "duration": 163.923000000068,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 173.925,
+        "sw": true,
+        "duration": 174.27700000007462,
+        "bytes": 0
+      },
+      {
+        "group": "api-meta"
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 1.032,
+        "sw": true,
+        "duration": 1.4000000001033186,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 171.327,
+        "sw": true,
+        "duration": 172.4369999992632,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 150.24,
+        "sw": true,
+        "duration": 152.896999999939,
+        "bytes": 0
+      }
+    ]
+  },
+  {
+    "round": 1,
+    "cache": "warm",
+    "ready": 793.5,
+    "fcp": 436,
+    "lcp": {
+      "time": 760,
+      "tag": "DIV",
+      "text": "Doomuenjing"
+    },
+    "blocking": 43,
+    "marks": [
+      [
+        "html",
+        0
+      ],
+      [
+        "cachehit:i18n.jsx",
+        411
+      ],
+      [
+        "cachehit:ui.jsx",
+        481
+      ],
+      [
+        "cachehit:views-main.jsx",
+        508
+      ],
+      [
+        "cachehit:views-analytics.jsx",
+        508
+      ],
+      [
+        "cachehit:views-quote.jsx",
+        508
+      ],
+      [
+        "cachehit:views-attendance.jsx",
+        508
+      ],
+      [
+        "cachehit:app.jsx",
+        545
+      ],
+      [
+        "jsx-ready",
+        553
+      ]
+    ],
+    "resources": [
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 63.431,
+        "sw": true,
+        "duration": 118.68000000049506,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 174.28,
+        "sw": true,
+        "duration": 176.08500000005733,
+        "bytes": 0
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 95.348,
+        "sw": true,
+        "duration": 95.86999999919499,
+        "bytes": 0
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 5.341,
+        "sw": true,
+        "duration": 6.127999999989697,
+        "bytes": 0
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 5.185,
+        "sw": true,
+        "duration": 8.672000000842672,
+        "bytes": 0
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 7.068,
+        "sw": true,
+        "duration": 7.372000000032131,
+        "bytes": 0
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 4.951,
+        "sw": true,
+        "duration": 103.37799999979325,
+        "bytes": 0
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 2.582,
+        "sw": true,
+        "duration": 122.31900000006135,
+        "bytes": 0
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 2.677,
+        "sw": true,
+        "duration": 126.72000000020489,
+        "bytes": 0
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 98.601,
+        "sw": true,
+        "duration": 236.46699999972043,
+        "bytes": 0
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 125.229,
+        "sw": true,
+        "duration": 280.5109999999331,
+        "bytes": 0
+      },
+      {
+        "group": "babel",
+        "status": 200,
+        "ttfb": 5.994,
+        "sw": true,
+        "duration": 50.326000000495696,
+        "bytes": 0
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 139.586,
+        "sw": true,
+        "duration": 141.37699999992037,
+        "bytes": 0
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 56.358,
+        "sw": true,
+        "duration": 59.07999999999447,
+        "bytes": 0
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 59.14,
+        "sw": true,
+        "duration": 59.8439999994298,
+        "bytes": 0
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 68.904,
+        "sw": true,
+        "duration": 233.85699999926146,
+        "bytes": 0
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 50.438,
+        "sw": true,
+        "duration": 258.64199999978155,
+        "bytes": 0
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 109.585,
+        "sw": true,
+        "duration": 182.99500000011903,
+        "bytes": 0
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 69.653,
+        "sw": true,
+        "duration": 180.55999999978667,
+        "bytes": 0
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 50.699,
+        "sw": true,
+        "duration": 180.46099999992293,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 54.605,
+        "sw": true,
+        "duration": 60.671000000183994,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 158.386,
+        "sw": true,
+        "duration": 160.75400000045192,
+        "bytes": 0
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 41.647,
+        "sw": true,
+        "duration": 42.46100000000297,
+        "bytes": 0
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 342.588,
+        "sw": false,
+        "duration": 343.3070000000953,
+        "bytes": 2366
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 1.1,
+        "sw": true,
+        "duration": 5.6539999995948165,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 59.318,
+        "sw": true,
+        "duration": 59.68600000051083,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 168.956,
+        "sw": true,
+        "duration": 177.30200000005425,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 60.707,
+        "sw": true,
+        "duration": 62.316999999893596,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 39.554,
+        "sw": true,
+        "duration": 46.604999999544816,
+        "bytes": 0
+      }
+    ]
+  },
+  {
+    "round": 2,
+    "cache": "cold",
+    "ready": 23773.700000000186,
+    "fcp": 796,
+    "lcp": {
+      "time": 22844,
+      "tag": "DIV",
+      "text": "\n          โหลดนานผิดปกติ 🥲ข้อมูลแอปที่เก็บไว้ในเครื่องอาจเสียหายกดปุ่มด้านล่าง"
+    },
+    "blocking": 7314,
+    "marks": [
+      [
+        "html",
+        0
+      ],
+      [
+        "compile:i18n.jsx",
+        15320
+      ],
+      [
+        "compiled:i18n.jsx",
+        15499
+      ],
+      [
+        "compile:ui.jsx",
+        15556
+      ],
+      [
+        "compiled:ui.jsx",
+        15819
+      ],
+      [
+        "compile:views-main.jsx",
+        15893
+      ],
+      [
+        "compiled:views-main.jsx",
+        18722
+      ],
+      [
+        "compile:views-quote.jsx",
+        18732
+      ],
+      [
+        "compiled:views-quote.jsx",
+        19126
+      ],
+      [
+        "compile:views-attendance.jsx",
+        19127
+      ],
+      [
+        "compiled:views-attendance.jsx",
+        19384
+      ],
+      [
+        "compile:views-analytics.jsx",
+        19421
+      ],
+      [
+        "compiled:views-analytics.jsx",
+        22226
+      ],
+      [
+        "boot-recover:timeout",
+        22260
+      ],
+      [
+        "compile:app.jsx",
+        22450
+      ],
+      [
+        "compiled:app.jsx",
+        22760
+      ],
+      [
+        "jsx-ready",
+        22796
+      ]
+    ],
+    "resources": [
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 203.909,
+        "sw": false,
+        "duration": 329.37099999981,
+        "bytes": 26255
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 189.37,
+        "sw": false,
+        "duration": 198.5499999991589,
+        "bytes": 1941
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 160.536,
+        "sw": false,
+        "duration": 167.5070000001142,
+        "bytes": 916
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 173.965,
+        "sw": false,
+        "duration": 225.29500000018743,
+        "bytes": 4811
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 180.67,
+        "sw": false,
+        "duration": 1704.569999999876,
+        "bytes": 43111
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 186.947,
+        "sw": false,
+        "duration": 188.77299999985553,
+        "bytes": 1372
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 305.364,
+        "sw": false,
+        "duration": 6069.344999999885,
+        "bytes": 122612
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 393.09,
+        "sw": false,
+        "duration": 1022.1249999995052,
+        "bytes": 6767
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 230.738,
+        "sw": false,
+        "duration": 5598.51400000025,
+        "bytes": 107913
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 326.656,
+        "sw": false,
+        "duration": 1284.6770000005563,
+        "bytes": 11882
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 215.869,
+        "sw": false,
+        "duration": 3085.8050000006187,
+        "bytes": 46427
+      },
+      {
+        "group": "babel",
+        "status": 200,
+        "ttfb": 426.479,
+        "sw": false,
+        "duration": 14393.833000000086,
+        "bytes": 656225
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 163.959,
+        "sw": false,
+        "duration": 166.20100000000093,
+        "bytes": 980
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 199.216,
+        "sw": false,
+        "duration": 3349.258000000191,
+        "bytes": 54379
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 168.788,
+        "sw": false,
+        "duration": 3385.41400000031,
+        "bytes": 56886
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 176.128,
+        "sw": false,
+        "duration": 15359.446999999818,
+        "bytes": 773159
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 183.148,
+        "sw": false,
+        "duration": 16486.78099999961,
+        "bytes": 1001046
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 189.133,
+        "sw": false,
+        "duration": 5815.75200000043,
+        "bytes": 120664
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 202.548,
+        "sw": false,
+        "duration": 5418.759000000136,
+        "bytes": 107997
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 290.67,
+        "sw": false,
+        "duration": 8018.292000000656,
+        "bytes": 230439
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 388.014,
+        "sw": false,
+        "duration": 1002.0189999995637,
+        "bytes": 8394
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 358.975,
+        "sw": false,
+        "duration": 1268.6699999994744,
+        "bytes": 13367
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 163.43,
+        "sw": false,
+        "duration": 166.06900000078895,
+        "bytes": 853
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 154.489,
+        "sw": true,
+        "duration": 156.50600000026316,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 168.478,
+        "sw": true,
+        "duration": 169.83799999979965,
+        "bytes": 0
+      },
+      {
+        "group": "api-meta"
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 1.888,
+        "sw": true,
+        "duration": 3.3690000000206055,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 150.735,
+        "sw": true,
+        "duration": 152.05100000002858,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 182.137,
+        "sw": true,
+        "duration": 184.7410000000309,
+        "bytes": 0
+      }
+    ]
+  },
+  {
+    "round": 2,
+    "cache": "warm",
+    "ready": 686.7999999998137,
+    "fcp": 384,
+    "lcp": {
+      "time": 716,
+      "tag": "DIV",
+      "text": "Doomuenjing"
+    },
+    "blocking": 32,
+    "marks": [
+      [
+        "html",
+        0
+      ],
+      [
+        "cachehit:i18n.jsx",
+        386
+      ],
+      [
+        "cachehit:ui.jsx",
+        396
+      ],
+      [
+        "cachehit:views-main.jsx",
+        417
+      ],
+      [
+        "cachehit:views-analytics.jsx",
+        417
+      ],
+      [
+        "cachehit:views-quote.jsx",
+        417
+      ],
+      [
+        "cachehit:views-attendance.jsx",
+        418
+      ],
+      [
+        "cachehit:app.jsx",
+        452
+      ],
+      [
+        "jsx-ready",
+        456
+      ]
+    ],
+    "resources": [
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 133.314,
+        "sw": true,
+        "duration": 172.09699999966688,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 62.507,
+        "sw": true,
+        "duration": 63.75500000012835,
+        "bytes": 0
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 65.675,
+        "sw": true,
+        "duration": 66.06900000042515,
+        "bytes": 0
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 9.675,
+        "sw": true,
+        "duration": 12.72900000003574,
+        "bytes": 0
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 10.465,
+        "sw": true,
+        "duration": 15.83200000004581,
+        "bytes": 0
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 10.481,
+        "sw": true,
+        "duration": 10.880999999244523,
+        "bytes": 0
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 4.312,
+        "sw": true,
+        "duration": 79.06000000002678,
+        "bytes": 0
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 24.461,
+        "sw": true,
+        "duration": 117.6290000003064,
+        "bytes": 0
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 24.855,
+        "sw": true,
+        "duration": 120.63000000034663,
+        "bytes": 0
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 173.84,
+        "sw": true,
+        "duration": 265.0649999995949,
+        "bytes": 0
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 105.999,
+        "sw": true,
+        "duration": 198.9530000000741,
+        "bytes": 0
+      },
+      {
+        "group": "babel",
+        "status": 200,
+        "ttfb": 8.094,
+        "sw": true,
+        "duration": 65.15500000023167,
+        "bytes": 0
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 59.35,
+        "sw": true,
+        "duration": 60.61099999988073,
+        "bytes": 0
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 180.35,
+        "sw": true,
+        "duration": 187.41700000009587,
+        "bytes": 0
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 170.345,
+        "sw": true,
+        "duration": 173.4599999999773,
+        "bytes": 0
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 47.425,
+        "sw": true,
+        "duration": 202.4860000001354,
+        "bytes": 0
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 109.198,
+        "sw": true,
+        "duration": 222.8159999995114,
+        "bytes": 0
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 101.216,
+        "sw": true,
+        "duration": 194.89700000031007,
+        "bytes": 0
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 102.648,
+        "sw": true,
+        "duration": 194.8370000000068,
+        "bytes": 0
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 96.315,
+        "sw": true,
+        "duration": 194.78199999957724,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 50.75,
+        "sw": true,
+        "duration": 57.071999999607215,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 170.144,
+        "sw": true,
+        "duration": 173.54799999975512,
+        "bytes": 0
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 63.909,
+        "sw": true,
+        "duration": 64.21200000022509,
+        "bytes": 0
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 356.553,
+        "sw": false,
+        "duration": 357.80999999951746,
+        "bytes": 2372
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 1.241,
+        "sw": true,
+        "duration": 4.973000000063621,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 51.075,
+        "sw": true,
+        "duration": 52.8889999995954,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 188.511,
+        "sw": true,
+        "duration": 191.5049999997791,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 52.492,
+        "sw": true,
+        "duration": 54.38700000013341,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 184.774,
+        "sw": true,
+        "duration": 193.47500000003492,
+        "bytes": 0
+      }
+    ]
+  },
+  {
+    "round": 3,
+    "cache": "cold",
+    "ready": 22989,
+    "fcp": 724,
+    "lcp": {
+      "time": 22252,
+      "tag": "DIV",
+      "text": "\n          โหลดนานผิดปกติ 🥲ข้อมูลแอปที่เก็บไว้ในเครื่องอาจเสียหายกดปุ่มด้านล่าง"
+    },
+    "blocking": 7064,
+    "marks": [
+      [
+        "html",
+        0
+      ],
+      [
+        "compile:i18n.jsx",
+        15313
+      ],
+      [
+        "compiled:i18n.jsx",
+        15480
+      ],
+      [
+        "compile:ui.jsx",
+        15518
+      ],
+      [
+        "compiled:ui.jsx",
+        15747
+      ],
+      [
+        "compile:views-main.jsx",
+        15806
+      ],
+      [
+        "compiled:views-main.jsx",
+        18245
+      ],
+      [
+        "compile:views-quote.jsx",
+        18317
+      ],
+      [
+        "compiled:views-quote.jsx",
+        18634
+      ],
+      [
+        "compile:views-attendance.jsx",
+        18635
+      ],
+      [
+        "compiled:views-attendance.jsx",
+        18900
+      ],
+      [
+        "compile:views-analytics.jsx",
+        18902
+      ],
+      [
+        "compiled:views-analytics.jsx",
+        21752
+      ],
+      [
+        "boot-recover:timeout",
+        21757
+      ],
+      [
+        "compile:app.jsx",
+        22006
+      ],
+      [
+        "compiled:app.jsx",
+        22411
+      ],
+      [
+        "jsx-ready",
+        22439
+      ]
+    ],
+    "resources": [
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 152.464,
+        "sw": false,
+        "duration": 277.1739999998317,
+        "bytes": 26254
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 194.502,
+        "sw": false,
+        "duration": 203.9279999999053,
+        "bytes": 1941
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 182.751,
+        "sw": false,
+        "duration": 188.31200000022363,
+        "bytes": 886
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 246.393,
+        "sw": false,
+        "duration": 263.4089999992284,
+        "bytes": 4519
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 393.22,
+        "sw": false,
+        "duration": 3061.040000000503,
+        "bytes": 43117
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 173.237,
+        "sw": false,
+        "duration": 175.15499999990425,
+        "bytes": 1372
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 220.126,
+        "sw": false,
+        "duration": 6180.304000000433,
+        "bytes": 122662
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 344.203,
+        "sw": false,
+        "duration": 1002.0469999999477,
+        "bytes": 6763
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 263.56,
+        "sw": false,
+        "duration": 5770.0110000005225,
+        "bytes": 107955
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 277.483,
+        "sw": false,
+        "duration": 1256.5940000004048,
+        "bytes": 11885
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 240.38,
+        "sw": false,
+        "duration": 3255.5959999999686,
+        "bytes": 46429
+      },
+      {
+        "group": "babel",
+        "status": 200,
+        "ttfb": 179.07,
+        "sw": false,
+        "duration": 14322.161000000051,
+        "bytes": 656624
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 163.762,
+        "sw": false,
+        "duration": 165.71700000076817,
+        "bytes": 832
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 166.481,
+        "sw": false,
+        "duration": 3441.026999999849,
+        "bytes": 54354
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 186.727,
+        "sw": false,
+        "duration": 3535.498999999618,
+        "bytes": 56864
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 179.42,
+        "sw": false,
+        "duration": 15414.381999999932,
+        "bytes": 773219
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 201.312,
+        "sw": false,
+        "duration": 16534.151000000747,
+        "bytes": 1001067
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 193.478,
+        "sw": false,
+        "duration": 5943.2510000006005,
+        "bytes": 120787
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 215.007,
+        "sw": false,
+        "duration": 5547.862999999779,
+        "bytes": 107989
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 228.426,
+        "sw": false,
+        "duration": 8109.934000000067,
+        "bytes": 230443
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 350.183,
+        "sw": false,
+        "duration": 969.9780000000828,
+        "bytes": 8830
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 401.741,
+        "sw": false,
+        "duration": 1298.135999999431,
+        "bytes": 12929
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 168.967,
+        "sw": false,
+        "duration": 171.86299999957555,
+        "bytes": 858
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 147.704,
+        "sw": true,
+        "duration": 148.72200000081648,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 156.035,
+        "sw": true,
+        "duration": 157.04999999979918,
+        "bytes": 0
+      },
+      {
+        "group": "api-meta"
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 1.945,
+        "sw": true,
+        "duration": 2.283999999235675,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 161.18,
+        "sw": true,
+        "duration": 161.9510000000446,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 35.621,
+        "sw": true,
+        "duration": 38.3879999999408,
+        "bytes": 0
+      }
+    ]
+  },
+  {
+    "round": 3,
+    "cache": "warm",
+    "ready": 754.4000000003725,
+    "fcp": 428,
+    "lcp": {
+      "time": 720,
+      "tag": "DIV",
+      "text": "Doomuenjing"
+    },
+    "blocking": 35,
+    "marks": [
+      [
+        "html",
+        0
+      ],
+      [
+        "cachehit:i18n.jsx",
+        396
+      ],
+      [
+        "cachehit:ui.jsx",
+        410
+      ],
+      [
+        "cachehit:views-main.jsx",
+        455
+      ],
+      [
+        "cachehit:views-analytics.jsx",
+        456
+      ],
+      [
+        "cachehit:views-quote.jsx",
+        456
+      ],
+      [
+        "cachehit:views-attendance.jsx",
+        457
+      ],
+      [
+        "cachehit:app.jsx",
+        528
+      ],
+      [
+        "jsx-ready",
+        533
+      ]
+    ],
+    "resources": [
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 58.345,
+        "sw": true,
+        "duration": 108.07799999929557,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 185.888,
+        "sw": true,
+        "duration": 187.91799999962677,
+        "bytes": 0
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 34.758,
+        "sw": true,
+        "duration": 35.08499999952619,
+        "bytes": 0
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 2.129,
+        "sw": true,
+        "duration": 3.034000000297965,
+        "bytes": 0
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 2.179,
+        "sw": true,
+        "duration": 6.035999999767228,
+        "bytes": 0
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 8.294,
+        "sw": true,
+        "duration": 10.561999999481486,
+        "bytes": 0
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 5.616,
+        "sw": true,
+        "duration": 74.6610000005603,
+        "bytes": 0
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 2.035,
+        "sw": true,
+        "duration": 96.3529999999082,
+        "bytes": 0
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 1.174,
+        "sw": true,
+        "duration": 103.49700000006123,
+        "bytes": 0
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 37.777,
+        "sw": true,
+        "duration": 147.03199999985372,
+        "bytes": 0
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 82.219,
+        "sw": true,
+        "duration": 232.67300000043178,
+        "bytes": 0
+      },
+      {
+        "group": "babel",
+        "status": 200,
+        "ttfb": 4.322,
+        "sw": true,
+        "duration": 50.80699999962235,
+        "bytes": 0
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 62.11,
+        "sw": true,
+        "duration": 63.03300000035961,
+        "bytes": 0
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 47.121,
+        "sw": true,
+        "duration": 52.34100000052422,
+        "bytes": 0
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 76.906,
+        "sw": true,
+        "duration": 78.05300000018178,
+        "bytes": 0
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 78.23,
+        "sw": true,
+        "duration": 229.15000000011787,
+        "bytes": 0
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 78.289,
+        "sw": true,
+        "duration": 298.7330000005386,
+        "bytes": 0
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 47.638,
+        "sw": true,
+        "duration": 170.28299999947194,
+        "bytes": 0
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 101.277,
+        "sw": true,
+        "duration": 189.89400000009482,
+        "bytes": 0
+      },
+      {
+        "group": "jsx",
+        "status": 200,
+        "ttfb": 41.735,
+        "sw": true,
+        "duration": 185.37100000048667,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 44.856,
+        "sw": true,
+        "duration": 47.40600000059203,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 175.35,
+        "sw": true,
+        "duration": 178.5280000003695,
+        "bytes": 0
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 97.727,
+        "sw": true,
+        "duration": 98.08400000019901,
+        "bytes": 0
+      },
+      {
+        "group": "vendor",
+        "status": 200,
+        "ttfb": 319.464,
+        "sw": false,
+        "duration": 321.3019999993776,
+        "bytes": 2359
+      },
+      {
+        "group": "site",
+        "status": 200,
+        "ttfb": 2.103,
+        "sw": true,
+        "duration": 7.2820000004867325,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 178.099,
+        "sw": true,
+        "duration": 180.1370000002862,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 47.817,
+        "sw": true,
+        "duration": 65.23699999979726,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 152.844,
+        "sw": true,
+        "duration": 154.0530000002036,
+        "bytes": 0
+      },
+      {
+        "group": "font",
+        "status": 200,
+        "ttfb": 59.922,
+        "sw": true,
+        "duration": 60.676000000057684,
+        "bytes": 0
+      }
+    ]
+  }
+]

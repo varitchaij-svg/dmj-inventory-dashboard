@@ -12,7 +12,7 @@
 // และไม่มี error ให้เห็น** (เจอจริง ส.ค. 2026: หน้าหลักบนมือถือการ์ดไม่มีกรอบ
 // ทั้งที่บนคอมปกติ — ตอนเพิ่ม .home-* แล้วลืม bump)
 // การ bump ทำให้ activate ลบ cache ก้อนเก่าทิ้งทั้งก้อน สำเนาสำรองที่ค้างจึงหายไปด้วย
-const CACHE_NAME = "dmj-v61";
+const CACHE_NAME = "dmj-v66";
 
 // ⚠️ CDN libs (React/ReactDOM/Babel 3MB/Recharts/…) เก็บ cache แยกก้อนนี้ **โดยเจตนา** —
 // ไฟล์พวกนี้ผูกกับ "เวอร์ชันใน URL" (unpkg@18.3.1 …) ไม่มีวันเปลี่ยนเนื้อในโดยไม่เปลี่ยน URL
@@ -23,14 +23,13 @@ const VENDOR_CACHE = "dmj-vendor-v1";
 
 const PRECACHE_ASSETS = [
   "/manifest.json",
-  "/logo.png",
+  "/logo-small.webp",
 ];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_ASSETS))
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_ASSETS)).then(() => self.skipWaiting())
   );
-  self.skipWaiting();
 });
 
 // ⚠️ "dmj-babel-*" (ตั้งใน BC ของ "Doomuenjing Dashboard.html") = cache แยกต่างหากที่เก็บ
@@ -39,16 +38,54 @@ self.addEventListener("install", (e) => {
 // ใหม่หมดทุกรอบ ทั้งที่ตัวโค้ด .jsx เองอาจไม่ได้เปลี่ยนเลย (ETag เหมือนเดิม = compile ซ้ำเปล่าๆ)
 self.addEventListener("activate", (e) => {
   e.waitUntil(
-    caches.keys().then((keys) =>
-      // เก็บไว้: CACHE_NAME ปัจจุบัน · dmj-babel* (ผล compile) · VENDOR_CACHE (lib ภายนอก)
-      // ที่เหลือลบทิ้ง — สามก้อนนี้ผูกกับ "เวอร์ชัน/ETag" ในตัวเองแล้ว bust เองเมื่อจำเป็น
-      Promise.all(keys.filter((k) =>
-        k !== CACHE_NAME && k !== VENDOR_CACHE && !k.startsWith("dmj-babel")
+    caches.keys().then((keys) => {
+      // An old controller can still be caching the current boot while this worker
+      // activates. Retain one prior app cache so an immediate offline reload can
+      // recover those exact versioned URLs; remove it on the following release.
+      const previous = keys.filter((k) => k !== CACHE_NAME && /^dmj-v\d+$/.test(k))
+        .sort((a, b) => Number(b.slice(5)) - Number(a.slice(5)))[0];
+      // เก็บรุ่นปัจจุบัน + app cache ก่อนหน้า 1 รุ่น รวมกับ compiled/vendor cache ที่แยกเวอร์ชันไว้
+      return Promise.all(keys.filter((k) =>
+        k !== CACHE_NAME && k !== previous && k !== VENDOR_CACHE && !k.startsWith("dmj-babel")
       ).map((k) => caches.delete(k)))
-    )
+    }).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
+
+// Read-only lifecycle identity. No credentials, user data, or reload command.
+self.addEventListener("message", (e) => {
+  if (e.data && e.data.type === "DMJ_BOOT_VERSION" && e.ports[0]) e.ports[0].postMessage({ version: CACHE_NAME });
+});
+
+function validBootAsset(path, type, text) {
+    type = (type || '').split(';')[0].trim().toLowerCase();
+    // These seven boot files are classic global scripts; opening markup is never a valid bundle/source prefix.
+    if (!text || /^\s*</.test(text)) return false;
+    if (/\/dist\/manifest\.json$/.test('/' + path.replace(/^\//, ''))) {
+      if (type !== 'application/json') return false;
+      try { var m = JSON.parse(text); return !!m && !Array.isArray(m) && typeof m === 'object' && typeof m.enabled === 'boolean'; } catch (_) { return false; }
+    }
+    return /^(?:application|text)\/(?:javascript|ecmascript|jsx)$/.test(type);
+  }
+
+async function validResponse(request, response) {
+  if (!response || !response.ok) return false;
+  try { return validBootAsset(new URL(request.url).pathname, response.headers.get('content-type'), await response.clone().text()); }
+  catch (_) { return false; }
+}
+
+// Reject only poisoned app entries, including retained caches; never clear user storage.
+async function cachedApp(request) {
+  const names = await caches.keys();
+  names.sort((a, b) => (b === CACHE_NAME) - (a === CACHE_NAME));
+  for (const name of names) {
+    if (!/^dmj-v\d+$/.test(name)) continue;
+    const cache = await caches.open(name), hit = await cache.match(request);
+    if (!hit) continue;
+    if (await validResponse(request, hit)) return hit;
+    await cache.delete(request);
+  }
+}
 
 // Fetch strategy:
 //
@@ -115,19 +152,23 @@ self.addEventListener("fetch", (e) => {
      url.pathname.indexOf("/dist/manifest.json") >= 0);
 
   if (isAppFile) {
-    // stale-while-revalidate — iOS-safe: e.waitUntil + e.respondWith ต้องเรียก synchronously
-    const cacheP = caches.open(CACHE_NAME);
-    const networkFetch = fetch(e.request).then((res) => {
-      if (res.ok) cacheP.then((c) => c.put(e.request, res.clone()));
+    // Validation and cache writes share the event lifetime. Invalid online responses
+    // become 503 and are never executed; offline can use only validated exact URLs.
+    const cached = cachedApp(e.request).catch(() => undefined);
+    const networkFetch = (async () => {
+      const res = await fetch(e.request);
+      if (!await validResponse(e.request, res)) return new Response("", { status: 503 });
+      await cached; // Finish selective deletion before replacing the same cache entry.
+      try {
+        const cache = await caches.open(CACHE_NAME);
+        await cache.put(e.request, res.clone());
+      } catch (_) {} // Cache availability/quota must not hide a valid network response.
       return res;
-    });
-    e.waitUntil(networkFetch.catch(() => {})); // keep SW alive, ไม่ให้ error propagate
-    e.respondWith(
-      cacheP
-        .then((cache) => cache.match(e.request))
-        .then((cached) => cached || networkFetch)
-        .catch(() => caches.match(e.request))  // offline fallback
-    );
+    })();
+    e.waitUntil(Promise.all([networkFetch, cached]).catch(() => {}));
+    e.respondWith(url.searchParams.has("dmj-boot")
+      ? networkFetch.catch(() => cached.then(hit => hit || new Response("", { status: 503 })))
+      : cached.then(hit => hit || networkFetch).catch(() => new Response("", { status: 503 })));
     return;
   }
 
