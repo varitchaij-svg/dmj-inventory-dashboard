@@ -193,6 +193,47 @@ function nextModelForPrefix(prefix, products) {
   return String(max + 1).padStart(3, "0");
 }
 
+// ── resolveCategoryPrefix: Prefix ตั้งต้นของหมวด "Existing Prefix Wins" (จาก views-main.jsx) ──
+// ① prefix เด่นสุดจากของจริงในหมวด ② CATEGORY_SKU_PREFIX map ③ ไม่รู้ → source:"none" (ห้ามเดา)
+function resolveCategoryPrefix(category, skuForCode, catMap) {
+  const cat = String(category || "").trim();
+  if (!cat) return { prefix: "", source: "none", count: 0 };
+  const cnt = {};
+  (skuForCode || []).forEach(p => {
+    const c = String((p && (p.category || p.cat)) || "").trim();
+    if (c !== cat) return;
+    const m = String((p && p.sku) || "").trim().toUpperCase().match(/^([A-Z]{1,3})\d/);
+    if (m) cnt[m[1]] = (cnt[m[1]] || 0) + 1;
+  });
+  const keys = Object.keys(cnt);
+  if (keys.length) {
+    keys.sort((a, b) => cnt[b] - cnt[a] || a.localeCompare(b));
+    return { prefix: keys[0], source: "existing", count: cnt[keys[0]] };
+  }
+  const mapped = catMap && catMap[cat];
+  if (mapped && /^[A-Z]{1,3}$/.test(mapped)) return { prefix: mapped, source: "map", count: 0 };
+  return { prefix: "", source: "none", count: 0 };
+}
+
+// ── findNameDuplicates: ชื่อคล้ายของเดิม (soft warning, จาก views-main.jsx) ──
+// multi-token AND-match บนชื่อ · ต้องพิมพ์ ≥2 ตัวอักษร
+function findNameDuplicates(name, products, limit) {
+  const q = String(name || "").trim().toLowerCase();
+  if (q.length < 2) return [];
+  const toks = q.split(/\s+/).filter(Boolean);
+  const cap = limit || 6;
+  const out = [];
+  for (const p of (products || [])) {
+    const nm = String((p && p.name) || "").toLowerCase();
+    if (!nm) continue;
+    if (toks.every(t => nm.includes(t))) {
+      out.push({ sku: String((p && p.sku) || "").toUpperCase(), name: (p && p.name) || "" });
+      if (out.length >= cap) break;
+    }
+  }
+  return out;
+}
+
 // ── attBuildTs: "yyyy-MM-dd" + "HH:mm(:ss)" → { ms, time } (จาก appsscript_complete.gs) ──
 // ใช้ตอนเจ้าของแก้เวลาลงเวลาย้อนหลัง — ms ที่ได้คือ serverTs ที่ทุกการคำนวณชั่วโมง/สาย/พัก
 // ใช้ต่อ ถ้าเพี้ยน ตัวเลขทั้งเดือนเพี้ยนตาม จึงต้องมี test คุมไว้
@@ -918,6 +959,7 @@ module.exports = {
   buildYoYSeries, abcClassify, abcRevWindow_, ABC_WINDOW_MONTHS, sanitizeThresholds, THRESHOLDS_DEFAULT,
   parseCheckDateMs, suggestNextSku,
   parseSkuParts, nextModelForPrefix,
+  resolveCategoryPrefix, findNameDuplicates,
   attBuildTs, attSequenceWarning, attSummarize, attMonthRange, attAllowedNext,
   attLatestSiteName, attSiteBucket,
   computeBillTotals, wholesaleTierRate, isBillExcludedCat, BILL_EXCLUDE_CAT_KEYWORDS,
